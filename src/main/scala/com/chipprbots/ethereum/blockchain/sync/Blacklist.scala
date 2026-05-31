@@ -350,14 +350,26 @@ final case class CacheBasedBlacklist(cache: Cache[BlacklistId, BlacklistReasonTy
       case "RegularSyncBlacklistGroup" => NetworkMetrics.BlacklistedReasonsRegularSyncGroup.increment()
       case "P2PBlacklistGroup"         => NetworkMetrics.BlacklistedReasonsP2PGroup.increment()
     }
+    // Top-level total counter — increments on every blacklist event, regardless of group.
+    // Dashboards key off this to compute blacklists/min via rate(). The per-group counters
+    // above remain for cause attribution. The snapsync-domain duplicate kept for the SNAP
+    // dashboard panel that scopes itself to snapsync.* metrics.
+    com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncMetrics.incrementPeerBlacklisted()
     cache.policy().expireVariably().toScala match {
       case Some(varExpiration) => varExpiration.put(id, reason.reasonType, duration.toJava)
       case None =>
         log.warn(customExpirationError(id))
         cache.put(id, reason.reasonType)
     }
+    // Refresh the size gauge after the new entry settles in cache. Without this, the gauge
+    // only updates when PeerManagerActor's periodic peer-discovery cycle calls keys.size,
+    // which on high-churn nets can lag the actual blacklist by 10s+ and undercount peaks.
+    NetworkMetrics.BlacklistedPeersSize.set(cache.underlying.estimatedSize())
   }
-  override def remove(id: BlacklistId): Unit = cache.invalidate(id)
+  override def remove(id: BlacklistId): Unit = {
+    cache.invalidate(id)
+    NetworkMetrics.BlacklistedPeersSize.set(cache.underlying.estimatedSize())
+  }
 
   override def keys: Set[BlacklistId] = {
     cache.cleanUp() // Remove expired entries before returning keys

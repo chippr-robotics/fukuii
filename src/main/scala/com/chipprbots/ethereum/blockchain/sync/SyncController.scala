@@ -6,6 +6,7 @@ import org.apache.pekko.actor.ActorRef
 import org.apache.pekko.actor.PoisonPill
 import org.apache.pekko.actor.Props
 import org.apache.pekko.actor.Scheduler
+import org.apache.pekko.actor.Terminated
 
 import scala.concurrent.ExecutionContext.Implicits.global
 import scala.concurrent.duration._
@@ -15,10 +16,12 @@ import com.chipprbots.ethereum.blockchain.sync.regular.RegularSync
 import com.chipprbots.ethereum.blockchain.sync.snap.{SNAPSyncController, SNAPSyncConfig}
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController.{
   StartRegularSyncBootstrap,
+  StartRegularSyncBootstrapByHash,
   BootstrapComplete,
   PivotBootstrapFailed
 }
 import com.chipprbots.ethereum.consensus.ConsensusAdapter
+import com.chipprbots.ethereum.consensus.engine.ForkChoiceManager
 import com.chipprbots.ethereum.consensus.mess.MESSConfig
 import com.chipprbots.ethereum.consensus.validators.Validators
 import com.chipprbots.ethereum.db.storage.AppStateStorage
@@ -57,6 +60,7 @@ class SyncController(
     syncConfig: SyncConfig,
     configBuilder: BlockchainConfigBuilder,
     messConfig: Option[MESSConfig] = None,
+    forkChoiceManagerOpt: Option[ForkChoiceManager] = None,
     externalSchedulerOpt: Option[Scheduler] = None
 ) extends Actor
     with ActorLogging {
@@ -71,6 +75,37 @@ class SyncController(
 
   // SNAP<->Fast sync bounce cycle counter, persisted across restarts.
   private var snapFastCycleCount: Int = appStateStorage.getSnapFastCycleCount()
+
+  // Latest CL-driven head hint received from ForkChoiceManager. Buffered so that when SNAP
+  // sync starts (which may happen after the CL has already pushed several FCUs), the freshest
+  // head is available as the pivot target. Only populated on post-merge chains where TTD is
+  // configured AND a ForkChoiceManager was supplied — ETC mainnet leaves this `None` forever
+  // and the existing TD-based pivot path is unaffected. Closes #1207.
+  private var latestBeaconHead: Option[ForkChoiceManager.BeaconHead] = None
+
+  // Whether SNAP should consume CL-driven pivot selection. Captured once at construction
+  // because both `syncConfig` and the chain config are stable for the actor's lifetime.
+  private val isPostMergeChain: Boolean = configBuilder.blockchainConfig.terminalTotalDifficulty.isDefined
+  private val clPivotEnabled: Boolean = isPostMergeChain && forkChoiceManagerOpt.isDefined
+
+  override def preStart(): Unit = {
+    super.preStart()
+    if (clPivotEnabled) {
+      forkChoiceManagerOpt.foreach { fcm =>
+        fcm.setListener(self)
+        log.info(
+          "Registered SyncController as ForkChoiceManager listener (post-merge chain TTD={}); " +
+            "SNAP pivot will be CL-driven once first forkchoiceUpdated arrives.",
+          configBuilder.blockchainConfig.terminalTotalDifficulty.get
+        )
+      }
+    }
+  }
+
+  override def postStop(): Unit = {
+    forkChoiceManagerOpt.foreach(_.clearListener())
+    super.postStop()
+  }
 
   private def stopSyncChildren(): Unit = {
     // Stop all sync-related child actors. Names may have generation suffixes
@@ -167,6 +202,9 @@ class SyncController(
       handleRestartFastSync()
     case RestartFastSyncNow =>
       doRestartFastSyncNow()
+    case bh: ForkChoiceManager.BeaconHead =>
+      // Buffer for the eventual SNAP startup; idle predates startSnapSync().
+      handleBeaconHead(bh, snapSyncOpt = None)
   }
 
   def runningFastSync(fastSync: ActorRef): Receive = {
@@ -226,9 +264,52 @@ class SyncController(
 
       context.become(runningPivotHeaderBootstrap(peersClient, headerBootstrap, targetBlock, snapSync))
 
+    case StartRegularSyncBootstrapByHash(headHash) =>
+      // CL-driven bootstrap path (#1207): fetch the head header by hash from peers.
+      // The block number isn't known until the header arrives.
+      log.info(
+        "SNAP requested by-hash pivot header bootstrap for {}",
+        com.chipprbots.ethereum.utils.ByteStringUtils.hash2string(headHash)
+      )
+      bootstrapGeneration += 1
+      val gen = bootstrapGeneration
+      val peersClient =
+        context.actorOf(
+          PeersClient.props(networkPeerManager, peerEventBus, blacklist, syncConfig, scheduler),
+          s"peers-client-bootstrap-$gen"
+        )
+      val headerBootstrap =
+        context.actorOf(
+          PivotHeaderBootstrap
+            .propsByHash(peersClient, blockchainWriter, headHash, syncConfig, scheduler, preferSnapPeers = false),
+          s"pivot-header-bootstrap-$gen"
+        )
+      // We pass `targetBlock = 0` as a placeholder — the bootstrap reply carries the
+      // resolved `header.number`. The runningPivotHeaderBootstrap state's matching on
+      // `block == targetBlock` is bypassed in by-hash mode by using a wildcard handler;
+      // the resolved Completed.targetBlock is preserved when handed to SNAP via
+      // BootstrapComplete.
+      context.become(
+        runningPivotHeaderBootstrap(peersClient, headerBootstrap, targetBlock = BigInt(0), snapSync)
+      )
+
+    case com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController.SnapSyncFinalized(pivot) =>
+      log.info(
+        s"SNAP state finalised at pivot=$pivot. Starting regular sync; chain backfill continues in background."
+      )
+      resetSnapFastCycleCount()
+      // SNAPSyncController already owns the live ChainDownloader child via its
+      // `completedWithBackfill` state — don't spawn a duplicate standalone resumer (#1169).
+      val regularSync = startRegularSync(resumeBackfill = false)
+      context.watch(snapSync)
+      context.become(runningRegularSyncWithBackfill(regularSync, snapSync))
+
     case com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController.Done =>
+      // Defensive fallback: with the post-#1162 handshake, SnapSyncFinalized always precedes Done,
+      // so this branch should not normally be reached. If it is (e.g., unexpected message ordering),
+      // treat as a legacy "SNAP done" signal.
       snapSync ! PoisonPill
-      log.info("SNAP sync completed, transitioning to regular sync")
+      log.info("SNAP sync completed (legacy Done path), transitioning to regular sync")
       resetSnapFastCycleCount()
       startRegularSync()
 
@@ -242,8 +323,20 @@ class SyncController(
         startFastSync()
       }
 
+    case SyncProtocol.HealingImpossible =>
+      snapSync ! PoisonPill
+      log.warning(
+        "SNAP finalization aborted (state root mismatch). Clearing sync state and restarting SNAP with a fresh pivot."
+      )
+      appStateStorage.clearSnapSyncDone().commit()
+      appStateStorage.clearFastSyncDone().commit()
+      startSnapSync()
+
     case SyncProtocol.Status.Progress(_, _) =>
       log.debug("SNAP sync in progress")
+
+    case bh: ForkChoiceManager.BeaconHead =>
+      handleBeaconHead(bh, snapSyncOpt = Some(snapSync))
 
     case msg =>
       snapSync.forward(msg)
@@ -251,6 +344,9 @@ class SyncController(
 
   def runningRegularSync(regularSync: ActorRef): Receive = { case other =>
     other match {
+      case Terminated(actor) if actor == regularSync =>
+        log.error("RegularSync actor terminated unexpectedly — restarting regular sync.")
+        startRegularSync(resumeBackfill = false)
       case SyncProtocol.ResetFastSync =>
         handleResetFastSync()
       case SyncProtocol.RestartFastSync =>
@@ -273,10 +369,56 @@ class SyncController(
         regularSync ! PoisonPill
         appStateStorage.clearSnapSyncDone().commit()
         appStateStorage.clearFastSyncDone().commit()
-        startSnapSync()
+        startSnapSync(minPivotBlock = Some(blockNumber))
       case msg =>
         regularSync.forward(msg)
     }
+  }
+
+  /** Receive used between `SnapSyncFinalized` and `Done` from the lingering SNAPSyncController.
+    *
+    * Regular sync is the primary owner of peer slots; SNAP backfill runs at low priority in the background. This
+    * Receive lets `SNAPSyncController.Done` arrive (so we can poison-pill the SNAP actor) and intercepts restart paths
+    * so the lingering backfill actor is cleaned up before a new sync mode takes over. Everything else is delegated to
+    * `runningRegularSync(regularSync)`.
+    */
+  def runningRegularSyncWithBackfill(regularSync: ActorRef, snapSync: ActorRef): Receive = {
+    case com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController.Done =>
+      log.info("SNAP background backfill complete; shutting down SNAPSyncController.")
+      context.unwatch(snapSync)
+      snapSync ! PoisonPill
+      context.become(runningRegularSync(regularSync))
+
+    case Terminated(actor) if actor == snapSync =>
+      log.warning("SNAPSyncController died while regular sync was running; chain backfill aborted.")
+      context.become(runningRegularSync(regularSync))
+
+    case Terminated(actor) if actor == regularSync =>
+      log.error("RegularSync actor terminated unexpectedly during backfill — restarting regular sync.")
+      context.unwatch(snapSync)
+      snapSync ! PoisonPill
+      startRegularSync(resumeBackfill = false)
+
+    case msg if isRestartTrigger(msg) =>
+      log.info("Restart triggered while SNAP backfill was running; poison-pilling SNAP backfill actor first.")
+      context.unwatch(snapSync)
+      snapSync ! PoisonPill
+      context.become(runningRegularSync(regularSync))
+      self ! msg // Re-deliver so the new state handles it.
+
+    case msg =>
+      runningRegularSync(regularSync).apply(msg)
+  }
+
+  /** Restart-style messages that mean the current sync strategy is being abandoned. Used by
+    * `runningRegularSyncWithBackfill` to detect when it must terminate the lingering backfill actor before delegating.
+    */
+  private def isRestartTrigger(msg: Any): Boolean = msg match {
+    case SyncProtocol.ResetFastSync       => true
+    case SyncProtocol.RestartFastSync     => true
+    case RestartFastSyncNow               => true
+    case _: SyncProtocol.RegularSyncStuck => true
+    case _                                => false
   }
 
   def runningRegularSyncBootstrap(
@@ -335,8 +477,12 @@ class SyncController(
     case RestartFastSyncNow =>
       doRestartFastSyncNow()
 
-    case PivotHeaderBootstrap.Completed(block, header) if block == targetBlock =>
-      log.info(s"Pivot header bootstrap complete for block $targetBlock - notifying SNAP sync")
+    case PivotHeaderBootstrap.Completed(block, header) if block == targetBlock || targetBlock == 0 =>
+      // `targetBlock == 0` is the sentinel for by-hash bootstrap (#1207): the actual
+      // block number is unknown at request time and resolved from the returned header.
+      log.info(
+        s"Pivot header bootstrap complete for block ${header.number} (requested $targetBlock) - notifying SNAP sync"
+      )
       headerBootstrap ! PoisonPill
       peersClient ! PoisonPill
       originalSnapSyncRef ! BootstrapComplete(Some(header))
@@ -394,6 +540,18 @@ class SyncController(
         startFastSync()
       }
 
+    case com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController.SnapSyncFinalized(pivot) =>
+      log.info(
+        s"Received SnapSyncFinalized(pivot=$pivot) during pivot header bootstrap. Stopping bootstrap and transitioning to regular sync."
+      )
+      headerBootstrap ! PoisonPill
+      peersClient ! PoisonPill
+      // SNAP finalised mid-bootstrap is an exceptional path; tear down the SNAP actor cleanly
+      // (no chain-backfill watch, since the bootstrap state is already racy).
+      originalSnapSyncRef ! PoisonPill
+      resetSnapFastCycleCount()
+      startRegularSync()
+
     case com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController.Done =>
       log.info(
         "Received Done from SNAP sync during pivot header bootstrap. Stopping bootstrap and transitioning to regular sync."
@@ -404,10 +562,38 @@ class SyncController(
       resetSnapFastCycleCount()
       startRegularSync()
 
+    case bh: ForkChoiceManager.BeaconHead =>
+      handleBeaconHead(bh, snapSyncOpt = Some(originalSnapSyncRef))
+
     case msg =>
       // Forward coordinator and protocol messages to SNAP sync during the brief bootstrap.
       // This keeps coordinators functional while we fetch the pivot header (~1-5 seconds).
       originalSnapSyncRef.forward(msg)
+  }
+
+  /** Buffer the latest CL-driven head and, when SNAP is currently running, forward it as a `CLPivotHint` so the pivot
+    * can be re-anchored on the freshest CL head. Called from the receive handler in every state where a `BeaconHead`
+    * can arrive. No-op on chains without TTD or where `forkChoiceManagerOpt` is `None`.
+    */
+  private def handleBeaconHead(
+      bh: ForkChoiceManager.BeaconHead,
+      snapSyncOpt: Option[ActorRef]
+  ): Unit = {
+    if (!clPivotEnabled) return
+    val isNew = !latestBeaconHead.exists(_.headHash == bh.headHash)
+    latestBeaconHead = Some(bh)
+    if (isNew)
+      log.info(
+        "Received CL-driven beacon head {} (knownHeader={})",
+        com.chipprbots.ethereum.utils.ByteStringUtils.hash2string(bh.headHash),
+        bh.knownHeader.map(_.number).getOrElse("unknown")
+      )
+    snapSyncOpt.foreach { snapSync =>
+      snapSync ! com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController.CLPivotHint(
+        bh.headHash,
+        bh.knownHeader
+      )
+    }
   }
 
   /** Check if the SNAP<->Fast bounce cycle count has exceeded the configured threshold. If so, mark both sync modes as
@@ -534,6 +720,59 @@ class SyncController(
       }
     }
 
+    // Checkpoint sync: bootstrap a fresh datadir by importing a `.checkpoint` archive instead
+    // of running SNAP. Only fires when DB is fresh (best-block == 0 and SNAP not already done).
+    // Resolution order:
+    //   1. `checkpoint-sync-file` if set — use the local path directly.
+    //   2. else `checkpoint-sync-url` if set — download to `${datadir}/checkpoint.bin`
+    //      (resumable via HTTP Range) and import.
+    // On success the importer marks SNAP/bytecode/storage as done; the match below routes to
+    // RegularSync. On failure we log and fall through to the normal SNAP/Fast/Regular path.
+    if (appStateStorage.getBestBlockNumber() == 0 && !appStateStorage.isSnapSyncDone()) {
+      val fileOpt: Option[java.nio.file.Path] = syncConfig.checkpointSyncFile.orElse {
+        syncConfig.checkpointSyncUrl.flatMap { url =>
+          val datadir = java.nio.file.Paths.get(System.getProperty("fukuii.datadir", "."))
+          val target = datadir.resolve("checkpoint.bin")
+          log.info("[CHECKPOINT DOWNLOAD] {} -> {}", url, target)
+          val downloader = new com.chipprbots.ethereum.blockchain.checkpoint.CheckpointDownloader()
+          downloader.download(url, target) match {
+            case Right(_) => Some(target)
+            case Left(err) =>
+              log.error("[CHECKPOINT DOWNLOAD] failed: {} — falling through to SNAP/Fast/Regular", err)
+              None
+          }
+        }
+      }
+      fileOpt.foreach { path =>
+        val chainIdBig = configBuilder.blockchainConfig.chainId
+        log.info("[CHECKPOINT IMPORT] starting from {} (chainId={})", path, chainIdBig)
+        val importer = new com.chipprbots.ethereum.blockchain.checkpoint.CheckpointImporter(
+          blockchainWriter,
+          stateStorage,
+          evmCodeStorage,
+          appStateStorage
+        )
+        importer.importFromFile(path, Some(chainIdBig.toLong)) match {
+          case Right(result) =>
+            log.info(
+              "[CHECKPOINT IMPORT] success: block={} nodes={} bytecodes={} elapsed={}s",
+              result.blockNumber,
+              result.nodesImported,
+              result.bytecodesImported,
+              result.elapsedMs / 1000
+            )
+          case Left(err) =>
+            log.error("[CHECKPOINT IMPORT] failed: {} — falling through to SNAP/Fast/Regular", err)
+        }
+      }
+    } else if (syncConfig.checkpointSyncFile.isDefined || syncConfig.checkpointSyncUrl.isDefined) {
+      log.info(
+        "Checkpoint sync configured but DB already initialized (bestBlock={}, snapDone={}); skipping import",
+        appStateStorage.getBestBlockNumber(),
+        appStateStorage.isSnapSyncDone()
+      )
+    }
+
     // If fast sync is desired but the circuit-breaker is open, start regular sync for now and
     // schedule an in-process restart of fast sync once the cool-off expires.
     if (doFastSync && appStateStorage.isFastSyncCoolingOff(nowMillis)) {
@@ -547,6 +786,15 @@ class SyncController(
       startRegularSync()
       scheduler.scheduleOnce(delay, self, RestartFastSyncNow)
       return
+    }
+
+    // Recovery flag: -Dfukuii.snap.clearDoneOnStart=true clears SnapSyncDone to re-enter healing.
+    // Use when healing completed prematurely (BUG-006: root mismatch) to resume without a full re-sync.
+    if (doSnapSync && System.getProperty("fukuii.snap.clearDoneOnStart", "false").toBoolean) {
+      if (appStateStorage.isSnapSyncDone()) {
+        log.warning("fukuii.snap.clearDoneOnStart=true: clearing SnapSyncDone to re-enter SNAP healing")
+        appStateStorage.clearSnapSyncDone().commit()
+      }
     }
 
     (appStateStorage.isSnapSyncDone(), appStateStorage.isFastSyncDone(), doSnapSync, doFastSync) match {
@@ -610,6 +858,32 @@ class SyncController(
                   header.stateRoot.take(8).toArray.map("%02x".format(_)).mkString
                 )
             }
+          } else {
+            // Symmetric case (Run-26): pivot root EXISTS in MPT but differs from snapStateRoot.
+            // The downloaded account trie is stored under snapStateRoot; update the pivot header
+            // to match so the startup diagnostic passes and regular sync reads the correct trie.
+            snapStateRoot.foreach { snapRoot =>
+              if (snapRoot != header.stateRoot) {
+                val snapRootExists =
+                  try { mptStorage.get(snapRoot.toArray); true }
+                  catch { case _: Exception => false }
+                log.info(
+                  "snapStateRoot({}) availability: {}",
+                  snapRoot.take(8).toArray.map("%02x".format(_)).mkString,
+                  if (snapRootExists) "EXISTS" else "MISSING"
+                )
+                if (snapRootExists) {
+                  log.warning(
+                    "snapStateRoot({}) differs from pivotHeader.stateRoot({}) — " +
+                      "updating pivot block header to use downloaded state root.",
+                    snapRoot.take(8).toArray.map("%02x".format(_)).mkString,
+                    header.stateRoot.take(8).toArray.map("%02x".format(_)).mkString
+                  )
+                  val updatedHeader = header.copy(stateRoot = snapRoot)
+                  blockchainWriter.storeBlockHeader(updatedHeader).commit()
+                }
+              }
+            }
           }
         }
         val needBytecode = !appStateStorage.isBytecodeRecoveryDone()
@@ -664,7 +938,7 @@ class SyncController(
     context.become(runningFastSync(fastSync))
   }
 
-  def startSnapSync(): Unit = {
+  def startSnapSync(minPivotBlock: Option[BigInt] = None): Unit = {
     log.info("Starting SNAP sync mode")
     syncGeneration += 1
 
@@ -692,11 +966,28 @@ class SyncController(
     // Register SNAPSyncController with NetworkPeerManagerActor for message routing
     networkPeerManager ! com.chipprbots.ethereum.network.NetworkPeerManagerActor.RegisterSnapSyncController(snapSync)
 
+    // If a CL-driven head arrived before SNAP started (post-merge chains), prime the new
+    // SNAP actor with it so pivot selection skips the TD-based path entirely.
+    if (clPivotEnabled) {
+      latestBeaconHead.foreach { bh =>
+        log.info(
+          "Priming SNAP sync with buffered CL beacon head {} (knownHeader={})",
+          com.chipprbots.ethereum.utils.ByteStringUtils.hash2string(bh.headHash),
+          bh.knownHeader.map(_.number).getOrElse("unknown")
+        )
+        snapSync ! SNAPSyncController.CLPivotHint(bh.headHash, bh.knownHeader)
+      }
+    }
+
+    minPivotBlock.foreach { minBlock =>
+      log.info("Sending MinPivotBlock({}) to new SNAP sync actor", minBlock)
+      snapSync ! SNAPSyncController.MinPivotBlock(minBlock)
+    }
     snapSync ! SNAPSyncController.Start
     context.become(runningSnapSync(snapSync))
   }
 
-  def startRegularSync(): Unit = {
+  def startRegularSync(resumeBackfill: Boolean = true): ActorRef = {
     syncGeneration += 1
     val peersClient =
       context.actorOf(
@@ -728,7 +1019,91 @@ class SyncController(
       s"regular-sync-$syncGeneration"
     )
     regularSync ! SyncProtocol.Start
+    context.watch(regularSync)
     context.become(runningRegularSync(regularSync))
+    // After SNAP completes, chain backfill (#1162) writes headers / bodies / receipts in the
+    // background. If the node was killed mid-backfill, persisted cursors (#1169) tell us how
+    // far it got — spawn a standalone ChainDownloader to finish the job alongside regular sync.
+    // Suppressed when called from the SnapSyncFinalized path: SNAPSyncController already owns
+    // the live backfill actor in that flow.
+    if (resumeBackfill) maybeStartBackfillResume(regularSync)
+    regularSync
+  }
+
+  /** Spawn a standalone `ChainDownloader` to resume background chain backfill from persisted cursors. No-op when SNAP
+    * has not completed, when no `BackfillTarget` was persisted, or when all cursors have already reached the target.
+    * Issues #1162 (background backfill) + #1169 (resume across restarts).
+    */
+  private def maybeStartBackfillResume(regularSync: ActorRef): Unit =
+    if (appStateStorage.needsBackfillResume()) {
+      val target = appStateStorage.getBackfillTarget()
+      val headerCursor = appStateStorage.getBackfillBestHeader()
+      val bodyCursor = appStateStorage.getBackfillBestBody()
+      val receiptCursor = appStateStorage.getBackfillBestReceipt()
+      log.info(
+        "Resuming background chain backfill: target={}, header={}, body={}, receipt={}",
+        target,
+        headerCursor,
+        bodyCursor,
+        receiptCursor
+      )
+      val snapSyncConfig = loadSnapSyncConfig()
+      syncGeneration += 1
+      import com.chipprbots.ethereum.blockchain.sync.snap.ChainDownloader
+      val resumer = context.actorOf(
+        ChainDownloader
+          .props(
+            blockchainReader,
+            blockchainWriter,
+            appStateStorage,
+            networkPeerManager,
+            peerEventBus,
+            syncConfig,
+            scheduler,
+            snapSyncConfig.chainBackfillConcurrentRequests,
+            snapSyncConfig.chainDownloadTimeout
+          )
+          .withDispatcher("sync-dispatcher"),
+        s"backfill-resumer-$syncGeneration"
+      )
+      context.watch(resumer)
+      resumer ! ChainDownloader.Start(target)
+      context.become(runningRegularSyncWithStandaloneBackfill(regularSync, resumer))
+    }
+
+  /** Receive while regular sync runs alongside a standalone backfill resumer (#1169). Mirrors
+    * `runningRegularSyncWithBackfill` but for the post-restart case where we own the backfill actor directly instead of
+    * routing through a lingering `SNAPSyncController`.
+    */
+  def runningRegularSyncWithStandaloneBackfill(regularSync: ActorRef, resumer: ActorRef): Receive = {
+    case com.chipprbots.ethereum.blockchain.sync.snap.ChainDownloader.Done =>
+      log.info("Standalone chain backfill resume complete.")
+      context.unwatch(resumer)
+      resumer ! PoisonPill
+      context.become(runningRegularSync(regularSync))
+
+    case progress: com.chipprbots.ethereum.blockchain.sync.snap.ChainDownloader.Progress =>
+      log.debug(
+        "Standalone backfill progress: headers={} bodies={} receipts={} target={}",
+        progress.headersDownloaded,
+        progress.bodiesDownloaded,
+        progress.receiptsDownloaded,
+        progress.targetBlock
+      )
+
+    case Terminated(actor) if actor == resumer =>
+      log.warning("Standalone backfill resumer died; chain backfill aborted (cursors persist for next restart).")
+      context.become(runningRegularSync(regularSync))
+
+    case msg if isRestartTrigger(msg) =>
+      log.info("Restart triggered while standalone backfill was running; poison-pilling backfill resumer first.")
+      context.unwatch(resumer)
+      resumer ! PoisonPill
+      context.become(runningRegularSync(regularSync))
+      self ! msg // Re-deliver so the new state handles it.
+
+    case msg =>
+      runningRegularSync(regularSync).apply(msg)
   }
 
   def startRecovery(needBytecode: Boolean, needStorage: Boolean): Unit = {
@@ -743,6 +1118,8 @@ class SyncController(
             s"stateRoot=${stateRoot.take(4).toArray.map("%02x".format(_)).mkString}..., pivotBlock=$pivotBlock)"
         )
 
+        val snapSyncConfig = loadSnapSyncConfig()
+
         val bytecodeActor = if (needBytecode) {
           Some(
             context.actorOf(
@@ -754,7 +1131,8 @@ class SyncController(
                   appStateStorage = appStateStorage,
                   networkPeerManager = networkPeerManager,
                   syncController = self,
-                  pivotBlockNumber = pivotBlock
+                  pivotBlockNumber = pivotBlock,
+                  snapSyncConfig = snapSyncConfig
                 )
                 .withDispatcher("sync-dispatcher"),
               s"bytecode-recovery-$syncGeneration"
@@ -763,7 +1141,6 @@ class SyncController(
         } else None
 
         val storageActor = if (needStorage) {
-          val snapSyncConfig = loadSnapSyncConfig()
           Some(
             context.actorOf(
               StorageRecoveryActor
@@ -782,6 +1159,9 @@ class SyncController(
             )
           )
         } else None
+
+        bytecodeActor.foreach(context.watch)
+        storageActor.foreach(context.watch)
 
         // Register self for SNAP message routing so responses reach coordinators
         networkPeerManager ! com.chipprbots.ethereum.network.NetworkPeerManagerActor.RegisterSnapSyncController(self)
@@ -853,12 +1233,40 @@ class SyncController(
       networkPeerManager ! com.chipprbots.ethereum.network.NetworkPeerManagerActor.GetHandshakedPeers
 
     case com.chipprbots.ethereum.network.NetworkPeerManagerActor.HandshakedPeers(peers) =>
-      val snapPeers = peers.filter { case (_, peerInfo) => peerInfo.remoteStatus.supportsSnap }
+      val snapPeers = peers.filter { case (_, peerInfo) => peerInfo.remoteStatus.supportsSnap && peerInfo.forkAccepted }
       if (snapPeers.nonEmpty) {
         snapPeers.foreach { case (peer, _) =>
           bytecodeActor.foreach(_ ! snap.actors.Messages.ByteCodePeerAvailable(peer))
           storageActor.foreach(_ ! snap.actors.Messages.StoragePeerAvailable(peer))
         }
+      }
+
+    case Terminated(actor) if bytecodeActor.contains(actor) =>
+      log.error("BytecodeRecoveryActor terminated unexpectedly. Treating as complete to unblock sync.")
+      if (storageComplete) {
+        peerPoller.cancel()
+        networkPeerManager ! com.chipprbots.ethereum.network.NetworkPeerManagerActor.RegisterSnapSyncController(
+          context.system.deadLetters
+        )
+        startRegularSync()
+      } else {
+        context.become(
+          runningRecovery(bytecodeActor = None, storageActor, bytecodeComplete = true, storageComplete, peerPoller)
+        )
+      }
+
+    case Terminated(actor) if storageActor.contains(actor) =>
+      log.error("StorageRecoveryActor terminated unexpectedly. Treating as complete to unblock sync.")
+      if (bytecodeComplete) {
+        peerPoller.cancel()
+        networkPeerManager ! com.chipprbots.ethereum.network.NetworkPeerManagerActor.RegisterSnapSyncController(
+          context.system.deadLetters
+        )
+        startRegularSync()
+      } else {
+        context.become(
+          runningRecovery(bytecodeActor, storageActor = None, bytecodeComplete, storageComplete = true, peerPoller)
+        )
       }
 
     case msg =>
@@ -923,7 +1331,8 @@ object SyncController {
       blacklist: Blacklist,
       syncConfig: SyncConfig,
       configBuilder: BlockchainConfigBuilder,
-      messConfig: Option[MESSConfig] = None
+      messConfig: Option[MESSConfig] = None,
+      forkChoiceManagerOpt: Option[ForkChoiceManager] = None
   ): Props =
     Props(
       new SyncController(
@@ -946,7 +1355,8 @@ object SyncController {
         blacklist,
         syncConfig,
         configBuilder,
-        messConfig
+        messConfig,
+        forkChoiceManagerOpt
       )
     )
 }

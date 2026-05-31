@@ -364,8 +364,6 @@ try {
 - [SNAP Protocol Specification](https://github.com/ethereum/devp2p/blob/master/caps/snap.md)
 - [EIP-170: Contract Code Size Limit](https://eips.ethereum.org/EIPS/eip-170)
 - Core-Geth SNAP Implementation: `eth/protocols/snap/sync.go`
-- Fukuii SNAP Sync TODO: `docs/architecture/SNAP_SYNC_TODO.md`
-- Fukuii SNAP Sync Status: `docs/architecture/SNAP_SYNC_STATUS.md`
 
 ## Contributors
 

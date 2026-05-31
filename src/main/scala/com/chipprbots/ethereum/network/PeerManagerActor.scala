@@ -88,6 +88,28 @@ class PeerManagerActor(
     */
   private val pendingMaintainedConnections: mutable.Map[ActorRef, URI] = mutable.Map.empty
 
+  /** Consecutive pre-handshake TCP failures per remote IP. After 5 failures the IP is blacklisted with exponential
+    * backoff (5→10→20→30 min). Cleared on successful handshake to avoid blacklisting peers that recovered.
+    */
+  private val consecutiveTcpFailures: mutable.Map[String, Int] = mutable.Map.empty
+
+  /** Hosts (remote IP strings) of peers that have completed an ETH handshake advertising snap/1 capability. On
+    * peer-scarce networks (ETC mainnet: 1-3 snap servers) snap peers are the only source of state, yet they get
+    * timed-blacklisted for soft, peer-initiated reasons (`TooManyPeers`, `UselessPeer`, `TcpSubsystemError`) exactly
+    * like any other peer — one disconnect locks out ~50% of state-download capacity for `shortBlacklistDuration`. We
+    * remember which hosts are snap-capable so the blacklist path can give them a much shorter fixed backoff instead of
+    * exiling them. Protocol violations (`BreachOfProtocol` etc.) still get the permanent ban — the snap exemption only
+    * relaxes the *soft* tier, never swallows a genuine breach.
+    */
+  private val snapCapableHosts: mutable.Set[String] = mutable.Set.empty
+
+  /** Per-host count of lenient (snap-exempt) soft blacklists applied since the last successful handshake. Caps the flap
+    * rate: a snap host that keeps soft-disconnecting gets the short backoff up to
+    * [[PeerManagerActor.MaxSnapLenientBlacklists]] times, after which it falls back to the normal short duration. Reset
+    * to 0 whenever the host completes a fresh handshake (it proved itself useful again).
+    */
+  private val snapLenientBlacklists: mutable.Map[String, Int] = mutable.Map.empty
+
   /** Runtime max-outgoing-peers override set by admin_maxPeers. core-geth reference: eth/api_admin.go MaxPeers — sets
     * handler.maxPeers + p2pServer.MaxPeers.
     */
@@ -265,14 +287,11 @@ class PeerManagerActor(
 
   private def handleConnections(connectedPeers: ConnectedPeers): Receive = {
     case PeerClosedConnection(peerAddress, reason) =>
-      val isMaintainedPeer = connectedPeers.peers.values
-        .find(_.remoteAddress.getHostString == peerAddress)
-        .flatMap(_.nodeId)
-        .exists(nid => maintainedPeersByNodeId.contains(Hex.toHexString(nid.toArray)))
+      val isMaintainedPeer = maintainedPeersByNodeId.values.exists(_.getHost == peerAddress)
       if (!isMaintainedPeer) {
         blacklist.add(
           PeerAddress(peerAddress),
-          getBlacklistDuration(reason),
+          getBlacklistDuration(reason, peerAddress),
           Blacklist.BlacklistReason.getP2PBlacklistReasonByDescription(Disconnect.reasonToString(reason))
         )
       }
@@ -288,10 +307,12 @@ class PeerManagerActor(
       val wasAdded = !maintainedPeersByNodeId.contains(nodeId)
       maintainedPeersByNodeId = maintainedPeersByNodeId + (nodeId -> uri)
       sender() ! AddMaintainedPeerResponse(wasAdded)
+      peerEventBus ! Publish(PeerEvent.MaintainedPeersChanged(maintainedPeersByNodeId.keySet))
       connectWith(uri, connectedPeers)
 
     case RemoveMaintainedPeer(nodeId) =>
       maintainedPeersByNodeId = maintainedPeersByNodeId - nodeId
+      peerEventBus ! Publish(PeerEvent.MaintainedPeersChanged(maintainedPeersByNodeId.keySet))
 
     // ── Geth-compatible trusted peer / max-peers management ───────────────
     // core-geth references: node/api.go AddTrustedPeer/RemoveTrustedPeer, eth/api_admin.go MaxPeers
@@ -315,27 +336,30 @@ class PeerManagerActor(
       sender() ! SetMaxPeersResponse(success = true)
   }
 
-  private def getBlacklistDuration(reason: Long): FiniteDuration = {
-    import Disconnect.Reasons._
-    reason match {
-      case TooManyPeers | AlreadyConnected | ClientQuitting => peerConfiguration.shortBlacklistDuration
-      // Use short blacklist for 0x10 (Other) disconnects - these are often due to peer selection
-      // policies (e.g., rejecting nodes at genesis) rather than actual protocol issues.
-      // Peers may be willing to connect later once we've synced past genesis.
-      case Other => peerConfiguration.shortBlacklistDuration
-      // TcpSubsystemError (0x01) may indicate temporary network issues or peer-side problems
-      // Use short blacklist to allow quick reconnection attempts
-      case TcpSubsystemError | DisconnectRequested | TimeoutOnReceivingAMessage =>
-        peerConfiguration.shortBlacklistDuration
-      // Permanent blacklist for protocol violations.
-      // Besu: PeerDenylistManager.java triggers denylist on BREACH_OF_PROTOCOL and
-      // INCOMPATIBLE_P2P_PROTOCOL_VERSION (maintained peers are exempt in Besu, but we
-      // apply permanent duration here — maintained peers are reconnected anyway via the
-      // Terminated handler regardless of IP blacklist state).
-      case BreachOfProtocol | IncompatibleP2pProtocolVersion | NullNodeIdentityReceived =>
-        DefaultPermanentBlacklistDuration
-      case _ => peerConfiguration.longBlacklistDuration
-    }
+  private def getBlacklistDuration(reason: Long, peerAddress: String): FiniteDuration = {
+    val baseDuration = PeerManagerActor.blacklistDurationForDisconnect(
+      reason,
+      shortBlacklistDuration = peerConfiguration.shortBlacklistDuration,
+      longBlacklistDuration = peerConfiguration.longBlacklistDuration
+    )
+    // Peer-retention for scarce snap pools: when a snap-capable host disconnects us for a SOFT reason (it maps to the
+    // short tier above — never a protocol breach, which stays permanent), give it a brief fixed backoff instead of the
+    // full short duration so we can re-dial it within seconds. Bounded by MaxSnapLenientBlacklists to stop a misbehaving
+    // peer from flap-looping. Permanent (BreachOfProtocol-tier) bans are left untouched — the exemption must never
+    // swallow a genuine breach.
+    val isSoftTier = baseDuration == peerConfiguration.shortBlacklistDuration
+    if (isSoftTier && snapCapableHosts.contains(peerAddress)) {
+      val lenientCount = snapLenientBlacklists.getOrElse(peerAddress, 0)
+      if (lenientCount < PeerManagerActor.MaxSnapLenientBlacklists) {
+        snapLenientBlacklists(peerAddress) = lenientCount + 1
+        val snapBackoff = PeerManagerActor.SnapPeerSoftBlacklistDuration
+        log.debug(
+          s"Snap-capable host $peerAddress soft-disconnected (reason $reason) — lenient backoff $snapBackoff " +
+            s"(#${lenientCount + 1}/${PeerManagerActor.MaxSnapLenientBlacklists}) instead of $baseDuration"
+        )
+        snapBackoff
+      } else baseDuration
+    } else baseDuration
   }
 
   private def handleConnection(
@@ -345,6 +369,12 @@ class PeerManagerActor(
   ): Unit = {
     val alreadyConnectedToPeer = connectedPeers.isConnectionHandled(remoteAddress)
     val isPendingPeersNotMaxValue = connectedPeers.incomingPendingPeersCount < peerConfiguration.maxPendingPeers
+    // Reject inbound dials from blacklisted addresses. Previously the blacklist was only
+    // honored on the outbound (`canConnectTo`) path, so a peer we disconnected for chronic
+    // lag would simply re-dial us inbound seconds later and rejoin the handshaked set —
+    // making PR #1242's 30-min hold ineffective. Sepolia 2026-05-14: same peer IPs
+    // re-connected 25s after being blacklisted for 30 min.
+    val isNotBlacklisted = !blacklist.isBlacklisted(PeerAddress(remoteAddress.getHostString))
 
     val validConnection = for {
       validHandler <- validateConnection(
@@ -357,12 +387,17 @@ class PeerManagerActor(
         MaxIncomingPendingConnections(connection),
         isPendingPeersNotMaxValue
       )
+      _ <- validateConnection(
+        validNumber,
+        IncomingConnectionBlacklisted(remoteAddress, connection),
+        isNotBlacklisted
+      )
     } yield validNumber
 
     validConnection match {
       case Right(address) =>
         log.debug(
-          "[P2P] Accepting incoming connection from {} (pending={}/{})",
+          "Accepting incoming connection from {} (pending={}/{})",
           remoteAddress,
           connectedPeers.incomingPendingPeersCount,
           peerConfiguration.maxPendingPeers
@@ -372,7 +407,7 @@ class PeerManagerActor(
         context.become(listening(newConnectedPeers))
 
       case Left(error) =>
-        log.debug("[P2P] Rejecting incoming connection from {}: {}", remoteAddress, error)
+        log.debug("Rejecting incoming connection from {}: {}", remoteAddress, error)
         handleConnectionErrors(error)
     }
   }
@@ -383,10 +418,14 @@ class PeerManagerActor(
     val remoteAddress = new InetSocketAddress(uri.getHost, uri.getPort)
 
     val alreadyConnectedToPeer =
-      connectedPeers.hasHandshakedWith(nodeId) || connectedPeers.isConnectionHandled(remoteAddress)
-    // Trusted peers bypass the max peer limit (core-geth: trustedConn flag skips maxPeers check)
-    val isTrusted = trustedPeersByNodeId.contains(nodeIdHex)
-    val isOutgoingPeersNotMaxValue = isTrusted || connectedPeers.outgoingPeersCount < effectiveMaxOutgoing
+      connectedPeers.hasHandshakedWith(nodeId) ||
+        connectedPeers.isConnectionHandled(remoteAddress) ||
+        connectedPeers.hasIncomingPendingFromHost(uri.getHost)
+    // Trusted + maintained peers bypass the max outgoing limit.
+    // Besu: DefaultPeerPrivileges.canExceedConnectionLimits checks maintainedPeers set.
+    // go-ethereum: trustedConn flag skips maxPeers for trusted only; Fukuii extends this to maintained peers.
+    val isMaintainedOrTrusted = trustedPeersByNodeId.contains(nodeIdHex) || maintainedPeersByNodeId.contains(nodeIdHex)
+    val isOutgoingPeersNotMaxValue = isMaintainedOrTrusted || connectedPeers.outgoingPeersCount < effectiveMaxOutgoing
 
     val validConnection = for {
       validHandler <- validateConnection(remoteAddress, OutgoingConnectionAlreadyHandled(uri), !alreadyConnectedToPeer)
@@ -463,23 +502,76 @@ class PeerManagerActor(
       // Pre-handshake path: if a maintained peer's TCP actor dies before the ETH handshake
       // completes, no PeerId was assigned — the post-handshake reconnect path won't fire.
       pendingMaintainedConnections.remove(ref).foreach { uri =>
-        log.debug(
-          "Maintained peer {} TCP connection failed pre-handshake — scheduling retry in {}",
-          uri,
-          peerConfiguration.connectRetryDelay
-        )
-        context.system.scheduler.scheduleOnce(peerConfiguration.connectRetryDelay, self, ConnectToPeer(uri))(
-          context.dispatcher
-        )
+        val nodeIdHex = uri.getUserInfo.toLowerCase
+        val nodeIdBytes = ByteString(Hex.decode(nodeIdHex))
+        if (connectedPeers.hasHandshakedWith(nodeIdBytes)) {
+          log.debug("Maintained peer {} already connected via inbound — skipping pre-handshake reconnect", uri)
+        } else {
+          log.debug(
+            "Maintained peer {} TCP connection failed pre-handshake — scheduling retry in {}",
+            uri,
+            peerConfiguration.connectRetryDelay
+          )
+          context.system.scheduler.scheduleOnce(peerConfiguration.connectRetryDelay, self, ConnectToPeer(uri))(
+            context.dispatcher
+          )
+        }
+      }
+      // Track TCP-level pre-handshake failures for non-maintained outgoing peers.
+      // pendingMaintainedConnections already consumed the ref if it was maintained, so any
+      // peer still in outgoingPendingPeers here is a non-maintained discovery peer that failed
+      // before the ETH handshake completed (TCP unreachable, TLS failure, etc.).
+      connectedPeers.peers.get(PeerId.fromRef(ref)).foreach { peer =>
+        if (!peer.incomingConnection) {
+          val ip = peer.remoteAddress.getHostString
+          val count = consecutiveTcpFailures.getOrElse(ip, 0) + 1
+          consecutiveTcpFailures(ip) = count
+          if (count >= 5) {
+            // Peer-retention: a previously snap-capable host that now flaps at the TCP layer (NAT churn, transient
+            // unreachability) must NOT be exiled for 5-30 min — on a 2-snap-peer pool that drops state capacity to
+            // zero. Cap its backoff to a short fixed duration so it re-enters the dial rotation quickly. Non-snap
+            // hosts keep the full exponential escalation.
+            val backoff: FiniteDuration =
+              if (snapCapableHosts.contains(ip)) PeerManagerActor.SnapPeerSoftBlacklistDuration
+              else math.min(30, 5 * (1 << (count - 5))).minutes
+            log.warning("TCP failure #{} for {} — blacklisting for {}", count, ip, backoff)
+            blacklist.add(PeerAddress(ip), backoff, Blacklist.BlacklistReason.TcpSubsystemError)
+            consecutiveTcpFailures.remove(ip)
+          }
+        }
       }
       val (terminatedPeersIds, newConnectedPeers) = connectedPeers.removeTerminatedPeer(ref)
       terminatedPeersIds.foreach { peerId =>
         peerStatusCache = peerStatusCache - peerId
-        peerEventBus ! Publish(PeerEvent.PeerDisconnected(peerId))
-        // Reconnect maintained peers — mirrors Besu's checkMaintainedConnectionPeers scheduler.
+        // Pending peers have path-based IDs (non-hex). Only handshaked peers have real hex node
+        // IDs so we can check whether the winner is still alive in connectedPeers.
+        // Gate PeerDisconnected on stillConnected — mirrors Besu's registerDisconnect guard
+        // (peer.getConnection().equals(connection)) and go-ethereum's d.peers[id] tracking:
+        // when a duplicate connection (the loser of a simultaneous-dial collision) terminates,
+        // the winner is still alive in connectedPeers so stillConnected=true. Publishing
+        // PeerDisconnected unconditionally was causing NetworkPeerManagerActor to evict the
+        // live winner entry, creating an infinite reconnect cycle with core-geth.
+        val stillConnected = scala.util
+          .Try(ByteString(Hex.decode(peerId.value)))
+          .map(newConnectedPeers.hasHandshakedWith)
+          .getOrElse(false)
+        if (stillConnected) {
+          log.info(
+            "DUPLICATE_TERMINATED: suppressing PeerDisconnected for {} — winner still connected, loser ref={} dropped",
+            peerId,
+            ref
+          )
+        } else {
+          log.debug("GENUINE_DISCONNECT: publishing PeerDisconnected for {} ref={}", peerId, ref)
+          peerEventBus ! Publish(PeerEvent.PeerDisconnected(peerId))
+        }
         maintainedPeersByNodeId.get(peerId.value).foreach { uri =>
-          log.debug("Maintained peer {} disconnected — scheduling reconnect in 30s", uri)
-          context.system.scheduler.scheduleOnce(30.seconds, self, ConnectToPeer(uri))(context.dispatcher)
+          if (stillConnected) {
+            log.debug("Maintained peer {} already connected via winner — skipping reconnect", uri)
+          } else {
+            log.debug("Maintained peer {} disconnected — scheduling reconnect in 5s", uri)
+            context.system.scheduler.scheduleOnce(5.seconds, self, ConnectToPeer(uri))(context.dispatcher)
+          }
         }
       }
       // Try to replace a lost connection with another one.
@@ -489,7 +581,17 @@ class PeerManagerActor(
       context.unwatch(ref)
       context.become(listening(newConnectedPeers))
 
-    case PeerEvent.PeerHandshakeSuccessful(handshakedPeer, _) =>
+    case PeerEvent.PeerHandshakeSuccessful(handshakedPeer, handshakeResult) =>
+      val host = handshakedPeer.remoteAddress.getHostString
+      consecutiveTcpFailures.remove(host)
+      // Track snap-capability per host so the blacklist paths can retain scarce snap peers (see snapCapableHosts).
+      // A fresh handshake also proves the host is useful again, so reset its lenient-blacklist flap counter.
+      handshakeResult match {
+        case info: NetworkPeerManagerActor.PeerInfo if info.remoteStatus.supportsSnap =>
+          snapCapableHosts += host
+          snapLenientBlacklists.remove(host)
+        case _ =>
+      }
       val isMaintained =
         handshakedPeer.nodeId.exists(nid => maintainedPeersByNodeId.contains(Hex.toHexString(nid.toArray)))
       if (
@@ -503,12 +605,23 @@ class PeerManagerActor(
         context.become(listening(connectedPeers))
 
       } else if (handshakedPeer.nodeId.exists(connectedPeers.hasHandshakedWith)) {
-        // Even though we do already validations for this, we might have missed it someone tried connecting to us at the
-        // same time as we do
-        log.debug(s"Disconnecting from ${handshakedPeer.remoteAddress} as we are already connected to them")
-        handshakedPeer.ref ! PeerActor.DisconnectPeer(Disconnect.Reasons.AlreadyConnected)
-        // Keep the current connectedPeers state; the Terminated message will clean up the peer
-        context.become(listening(connectedPeers))
+        val nodeId = handshakedPeer.nodeId.get
+        val existingOutboundOpt = connectedPeers.peers.values
+          .find(p => p.nodeId.contains(nodeId) && !p.incomingConnection)
+        if (handshakedPeer.incomingConnection && isMaintained && existingOutboundOpt.isDefined) {
+          // Inbound wins for maintained peers — drop the outbound, keep the inbound.
+          // Mirrors go-ethereum's static-pool removal when a peer connects either direction,
+          // preventing core-geth's static-dial timer from firing a new outbound every 30-45s.
+          log.debug("Maintained peer {} inbound wins tiebreak — dropping outbound", handshakedPeer.remoteAddress)
+          existingOutboundOpt.foreach(_.ref ! PeerActor.DisconnectPeer(Disconnect.Reasons.AlreadyConnected))
+          pendingMaintainedConnections.remove(handshakedPeer.ref)
+          peerStatusCache = peerStatusCache + (handshakedPeer.id -> PeerActor.Status.Handshaked)
+          context.become(listening(connectedPeers.promotePeerToHandshaked(handshakedPeer)))
+        } else {
+          log.debug(s"Disconnecting from ${handshakedPeer.remoteAddress} as we are already connected to them")
+          handshakedPeer.ref ! PeerActor.DisconnectPeer(Disconnect.Reasons.AlreadyConnected)
+          context.become(listening(connectedPeers))
+        }
       } else {
         pendingMaintainedConnections.remove(handshakedPeer.ref)
         peerStatusCache = peerStatusCache + (handshakedPeer.id -> PeerActor.Status.Handshaked)
@@ -644,6 +757,10 @@ class PeerManagerActor(
 
     case IncomingConnectionAlreadyHandled(remoteAddress, connection) =>
       log.debug("Another connection with {} is already opened. Disconnecting", remoteAddress)
+      connection ! PoisonPill
+
+    case IncomingConnectionBlacklisted(remoteAddress, connection) =>
+      log.debug("Rejecting incoming connection from blacklisted address {}", remoteAddress)
       connection ! PoisonPill
 
     case MaxOutgoingConnections =>
@@ -810,11 +927,59 @@ object PeerManagerActor {
     */
   val DefaultPermanentBlacklistDuration: FiniteDuration = 365.days
 
+  /** Short fixed backoff applied to snap-capable hosts in place of the soft-tier short blacklist (and the 5-30 min TCP
+    * escalation). Long enough to avoid a hot reconnect loop, short enough that a scarce snap peer re-enters the dial
+    * rotation almost immediately. See `snapCapableHosts`.
+    */
+  val SnapPeerSoftBlacklistDuration: FiniteDuration = 20.seconds
+
+  /** Cap on consecutive lenient (snap-exempt) soft blacklists for one host before it falls back to the normal short
+    * duration. Bounds the flap rate of a snap host that keeps soft-disconnecting; reset on a fresh handshake.
+    */
+  val MaxSnapLenientBlacklists: Int = 20
+
+  /** Translate an inbound `Disconnect.Reasons.*` code into the blacklist duration we apply when the peer initiated the
+    * disconnect. Extracted from the actor instance so it's directly unit-testable without spinning up a TestActorRef.
+    *
+    * Policy tiers (longest-first for readability):
+    *   - **Permanent** for protocol violations (`BreachOfProtocol`, `IncompatibleP2pProtocolVersion`,
+    *     `NullNodeIdentityReceived`). Besu's PeerDenylistManager does the same.
+    *   - **Short** for soft "peer selection policy" rejections — the peer disconnected us because of how they pick
+    *     counterparties, not because we did anything wrong. Covers `Other`, `UselessPeer`, `TooManyPeers`,
+    *     `AlreadyConnected`, `ClientQuitting`, `TcpSubsystemError`, `DisconnectRequested`,
+    *     `TimeoutOnReceivingAMessage`. Long blacklist on these classes destroys the peer pool during initial sync:
+    *     peers reject us as uninteresting (we're at genesis / mid-SNAP-sync), we IP-blacklist them, and by the time
+    *     they'd accept us again we still can't re-dial. Sepolia 2026-05-13: 100+ peers blacklisted within 5 min, pool
+    *     collapsed to one peer; ETC mainnet has the same pattern.
+    *   - **Long** for anything else (catch-all).
+    *
+    * The classification of `UselessPeer` as a SHORT-tier rejection (was: LONG, via the `_` wildcard) is the substantive
+    * change. `UselessPeer` is a *the-peer-rejected-us* signal, not a protocol violation, and our state is highly
+    * dynamic during initial sync — fast re-dials are the right policy.
+    */
+  private[network] def blacklistDurationForDisconnect(
+      reason: Long,
+      shortBlacklistDuration: FiniteDuration,
+      longBlacklistDuration: FiniteDuration
+  ): FiniteDuration = {
+    import Disconnect.Reasons._
+    reason match {
+      case BreachOfProtocol | IncompatibleP2pProtocolVersion | NullNodeIdentityReceived =>
+        DefaultPermanentBlacklistDuration
+      case TooManyPeers | AlreadyConnected | ClientQuitting | Other | UselessPeer | TcpSubsystemError |
+          DisconnectRequested | TimeoutOnReceivingAMessage =>
+        shortBlacklistDuration
+      case _ => longBlacklistDuration
+    }
+  }
+
   sealed abstract class ConnectionError
 
   case class MaxIncomingPendingConnections(connection: ActorRef) extends ConnectionError
 
   case class IncomingConnectionAlreadyHandled(address: InetSocketAddress, connection: ActorRef) extends ConnectionError
+
+  case class IncomingConnectionBlacklisted(address: InetSocketAddress, connection: ActorRef) extends ConnectionError
 
   case object MaxOutgoingConnections extends ConnectionError
 

@@ -35,13 +35,7 @@ Performed comprehensive analysis of:
   - Protocol-specific message support (ETH68 GetNodeData deprecation)
 
 #### Documentation
-1. **ETC64_REMOVAL_VALIDATION.md** - Technical validation report
-   - Background and context
-   - Detailed findings
-   - Test coverage analysis
-   - Recommendations
-
-2. **P2P_COMMUNICATION_VALIDATION_GUIDE.md** - Operational testing guide
+1. **P2P_COMMUNICATION_VALIDATION_GUIDE.md** - Operational testing guide
    - 5 test scenarios for Gorgoroth network
    - Automated validation scripts
    - Expected log patterns
@@ -212,10 +206,8 @@ The ETC64 removal has been **successfully validated through code analysis and co
 
 ## References
 
-- **Validation Report:** `/docs/validation/ETC64_REMOVAL_VALIDATION.md`
 - **P2P Testing Guide:** `/docs/validation/P2P_COMMUNICATION_VALIDATION_GUIDE.md`
 - **Test Suite:** `/src/test/scala/com/chipprbots/ethereum/network/p2p/MessageRoutingValidationSpec.scala`
-- **ADR CON-007:** ETC64 RLP Encoding Fix (archived)
 - **ADR CON-005:** ETH66 Protocol-Aware Message Formatting
 
 ---

@@ -248,7 +248,6 @@ class SyncStateSchedulerActor(
             val initStats = ProcessingStatistics().addSaved(result.writtenElements)
             startSyncing(startSignal.stateRoot, startSignal.blockNumber, initStats, sender)
           case Some((RestartRequested, sender)) =>
-            // TODO: are we testing this path?
             sender ! WaitingForNewTargetBlock
             context.become(idle(ProcessingStatistics().addSaved(result.writtenElements)))
           case _ =>
@@ -270,7 +269,6 @@ class SyncStateSchedulerActor(
     consecutiveUselessResponses = 0
     uselessResponseRetryState = uselessResponseRetryState.reset
     log.info("Starting state sync to root {} on block {}", ByteStringUtils.hash2string(root), bn)
-    // TODO handle case when we already have root i.e state is synced up to this point
     val initState = sync.initState(root).getOrElse {
       throw new IllegalStateException(s"Failed to initialize state sync for root ${ByteStringUtils.hash2string(root)}")
     }
@@ -507,8 +505,6 @@ class SyncStateSchedulerActor(
         err match {
           case Critical(er) =>
             log.error("Critical error while state syncing {}, stopping state sync", er)
-            // TODO we should probably start sync again from new target block, as current trie is malformed or declare
-            // fast sync as failure and start normal sync from scratch
             context.stop(self)
           case DownloaderError(newDownloaderState, peer, blacklistWithReason) =>
             log.debug("Downloader error by peer {}", peer)

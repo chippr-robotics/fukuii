@@ -1,5 +1,7 @@
 # Vendored Modules Integration Plan
 
+> **Status: Not implemented.** This plan was drafted but never executed. The vendored modules (`bytes/`, `crypto/`, `rlp/`, `scalanet/`) remain as separate SBT subprojects in `build.sbt`. Treat this document as a proposal to revisit, not as a record of completed work.
+
 ## Executive Summary
 
 This document outlines the effort required to fully incorporate Fukuii's vendored modules (bytes, crypto, rlp, scalanet) into the main application codebase, eliminating them as independent SBT subprojects.

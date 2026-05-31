@@ -24,6 +24,7 @@ import com.chipprbots.ethereum.blockchain.sync.regular.BlockFetcherState.Awaitin
 import com.chipprbots.ethereum.blockchain.sync.regular.BlockFetcherState.AwaitingHeadersToBeIgnored
 import com.chipprbots.ethereum.blockchain.sync.regular.BlockFetcherState.HeadersNotFormingSeq
 import com.chipprbots.ethereum.blockchain.sync.regular.BlockFetcherState.HeadersNotMatchingReadyBlocks
+import com.chipprbots.ethereum.blockchain.sync.regular.BlockFetcherState.HeadersNotMatchingWaitingHeaders
 import com.chipprbots.ethereum.blockchain.sync.regular.BlockImporter.ImportNewBlock
 import com.chipprbots.ethereum.blockchain.sync.regular.RegularSync.ProgressProtocol
 import com.chipprbots.ethereum.consensus.validators.BlockValidator
@@ -42,6 +43,7 @@ import com.chipprbots.ethereum.network.p2p.messages.ETH62._
 import com.chipprbots.ethereum.network.p2p.messages.ETH62.{BlockHeaders => ETH62BlockHeaders}
 import com.chipprbots.ethereum.network.p2p.messages.ETH63.NodeData
 import com.chipprbots.ethereum.network.p2p.messages.ETH66.{BlockHeaders => ETH66BlockHeaders}
+import com.chipprbots.ethereum.network.p2p.messages.ETH69
 import com.chipprbots.ethereum.utils.ByteStringUtils
 import com.chipprbots.ethereum.utils.Config.SyncConfig
 import com.chipprbots.ethereum.utils.FunctorOps._
@@ -98,7 +100,7 @@ class BlockFetcher(
         peerEventBus.tell(
           Subscribe(
             MessageClassifier(
-              Set(Codes.NewBlockCode, Codes.NewBlockHashesCode, Codes.BlockHeadersCode),
+              Set(Codes.NewBlockCode, Codes.NewBlockHashesCode, Codes.BlockHeadersCode, Codes.BlockRangeUpdateCode),
               PeerSelector.AllPeers
             )
           ),
@@ -115,7 +117,12 @@ class BlockFetcher(
   private def processFetchCommands(state: BlockFetcherState): Behavior[FetchCommand] =
     Behaviors.receiveMessage {
       case PrintStatus =>
-        log.info("BlockFetcher status: {}", state.status)
+        log.info(
+          "BlockFetcher: readyBlocks={} knownTop={} onTop={}",
+          state.readyBlocks.size,
+          state.knownTop,
+          state.isOnTop
+        )
         log.debug("BlockFetcher detailed status: {}", state.statusDetailed)
         log.debug(
           "Current state - last block: {}, known top: {}, is on top: {}, ready blocks: {}, waiting headers: {}",
@@ -125,7 +132,13 @@ class BlockFetcher(
           state.readyBlocks.size,
           state.waitingHeaders.size
         )
-        Behaviors.same
+        // Defense-in-depth: if stuck at chain head with no peer gossip (e.g., ETH/69 peers that
+        // sent BlockRangeUpdate before we subscribed, or a quiet period), probe speculatively.
+        // withPossibleNewTopAt(knownTop + 1) exits isOnTop and triggers tryFetchHeaders.
+        if (state.isOnTop) {
+          log.debug("BlockFetcher: isOnTop at knownTop={}, probing for next block", state.knownTop)
+          fetchBlocks(state.withPossibleNewTopAt(state.knownTop + 1))
+        } else Behaviors.same
 
       case PickBlocks(amount, replyTo) =>
         log.debug("PickBlocks request for {} blocks (ready blocks: {})", amount, state.readyBlocks.size)
@@ -202,7 +215,8 @@ class BlockFetcher(
                   headers.lastOption.map(_.number),
                   headers.size
                 )
-                peersClient ! BlacklistPeer(peer.id, BlacklistReason.HeadersNotFormingChain)
+                // No blacklist: valid peers on a different fork branch can trigger this during reorgs.
+                // Only blacklist on cryptographic invalidity (PoW failure, bad signature) — Besu AbstractPeerTask pattern.
                 state.withHeaderFetchReceived.recordHeaderRejection()
               case Left(HeadersNotMatchingReadyBlocks) =>
                 log.info(
@@ -212,26 +226,30 @@ class BlockFetcher(
                   state.readyBlocks.lastOption.map(_.number),
                   headers.headOption.map(_.number)
                 )
-                peersClient ! BlacklistPeer(peer.id, BlacklistReason.HeadersDontExtendReadyBlocks)
+                // No blacklist: during a fork reorg, honest peers on the reorg chain will not extend our ready blocks.
                 state.withHeaderFetchReceived.recordHeaderRejection()
-              case Left(err) =>
-                log.info(
-                  "Dismissed received headers: {} (peer={}, waitingTip={}, respFirst={})",
-                  err.description,
-                  peer.id,
+              case Left(HeadersNotMatchingWaitingHeaders) =>
+                log.debug(
+                  "Dismissed received headers due to: {} (peer: {})",
+                  HeadersNotMatchingWaitingHeaders.description,
+                  peer.id
+                )
+                log.debug(
+                  "Header validation failed: headers do not chain to waiting headers. Last waiting: {}, Headers first: {}",
                   state.waitingHeaders.lastOption.map(_.number),
                   headers.headOption.map(_.number)
                 )
-                peersClient ! BlacklistPeer(peer.id, BlacklistReason.HeadersDontExtendWaitingQueue)
-                state.withHeaderFetchReceived.recordHeaderRejection()
+                // No blacklist: honest peers on an alternative chain head trigger this during reorgs.
+                state.withHeaderFetchReceived
               case Right(updatedState) =>
                 log.debug(
                   "Successfully validated and appended {} headers. New waiting headers count: {}",
                   headers.size,
                   updatedState.waitingHeaders.size
                 )
-                // If we received a full batch, the peer likely has more blocks.
-                // Bump knownTop to force another fetch cycle (prevents premature isOnTop).
+                // Full batch only: peer likely has more blocks — eagerly advance knownTop to
+                // prevent premature isOnTop. Partial batch = chain tip; leave knownTop at
+                // lastHeader.number so isOnTop fires correctly.
                 val finalState = if (headers.size.toLong >= syncConfig.blockHeadersPerRequest) {
                   val lastHeader = headers.maxBy(_.number)
                   updatedState.withPossibleNewTopAt(lastHeader.number + 1)
@@ -390,6 +408,12 @@ class BlockFetcher(
             )
             state.withPossibleNewTopAt(validHashes.lastOption.map(_.number))
         }
+        supervisor ! ProgressProtocol.GotNewBlock(newState.knownTop)
+        fetchBlocks(newState)
+
+      case AdaptedMessageFromEventBus(msg: ETH69.BlockRangeUpdate, _) =>
+        log.debug("Received BlockRangeUpdate earliest={} latest={}", msg.earliestBlock, msg.latestBlock)
+        val newState = state.withPossibleNewTopAt(msg.latestBlock)
         supervisor ! ProgressProtocol.GotNewBlock(newState.knownTop)
         fetchBlocks(newState)
 

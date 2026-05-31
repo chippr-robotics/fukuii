@@ -5,7 +5,6 @@ import cats.effect.unsafe.IORuntime
 import scala.concurrent.duration._
 
 import com.typesafe.config.ConfigValueFactory
-import io.prometheus.client.CollectorRegistry
 import org.scalatest.BeforeAndAfterAll
 import org.scalatest.matchers.should.Matchers
 
@@ -22,8 +21,8 @@ class RegularSyncItSpec extends FreeSpecBase with Matchers with BeforeAndAfterAl
   implicit val testRuntime: IORuntime = IORuntime.global
 
   override def beforeAll(): Unit = {
-    // Clear metrics registry to prevent pollution from previous test runs
-    CollectorRegistry.defaultRegistry.clear()
+    // Close any previous metrics instance so the new one starts with a clean registry
+    Metrics.closeInstance("default")
     Metrics.configure(
       MetricsConfig(Config.config.withValue("metrics.enabled", ConfigValueFactory.fromAnyRef(true)))
     )
@@ -135,8 +134,8 @@ class RegularSyncItSpec extends FreeSpecBase with Matchers with BeforeAndAfterAl
   ) { case (peer1, peer2) =>
     import MetricsHelper._
 
-    val minedMetricBefore = sampleMetric(TimerCountMetric, MinedBlockPropagation)
-    val defaultMetricBefore = sampleMetric(TimerCountMetric, DefaultBlockPropagation)
+    val minedMetricBefore = sampleMetric(MinedBlockPropagation)
+    val defaultMetricBefore = sampleMetric(DefaultBlockPropagation)
 
     for {
       _ <- peer1.startRegularSync()
@@ -147,8 +146,8 @@ class RegularSyncItSpec extends FreeSpecBase with Matchers with BeforeAndAfterAl
       _ <- peer2.waitForRegularSyncLoadLastBlock(1)
     } yield {
 
-      val minedMetricAfter = sampleMetric(TimerCountMetric, MinedBlockPropagation).doubleValue()
-      val defaultMetricAfter = sampleMetric(TimerCountMetric, DefaultBlockPropagation).doubleValue()
+      val minedMetricAfter = sampleMetric(MinedBlockPropagation)
+      val defaultMetricAfter = sampleMetric(DefaultBlockPropagation)
 
       minedMetricAfter shouldBe minedMetricBefore + 1.0d
       defaultMetricAfter shouldBe defaultMetricBefore + 1.0d
@@ -156,16 +155,20 @@ class RegularSyncItSpec extends FreeSpecBase with Matchers with BeforeAndAfterAl
   }
 
   object MetricsHelper {
-    val TimerCountMetric = "app_regularsync_blocks_propagation_timer_seconds_count"
     val DefaultBlockPropagation = "DefaultBlockPropagation"
     val MinedBlockPropagation = "MinedBlockPropagation"
-    def sampleMetric(metricName: String, blockType: String): Double = {
-      val value = CollectorRegistry.defaultRegistry.getSampleValue(
-        metricName,
-        Array("blocktype"),
-        Array(blockType)
-      )
-      if (value == null) 0.0 else value
-    }
+    def sampleMetric(blockType: String): Double =
+      scala.util
+        .Try {
+          Metrics
+            .get()
+            .registry
+            .get("app.regularsync.blocks.propagation.timer")
+            .tag("blocktype", blockType)
+            .timer()
+            .count()
+            .toDouble
+        }
+        .getOrElse(0.0)
   }
 }

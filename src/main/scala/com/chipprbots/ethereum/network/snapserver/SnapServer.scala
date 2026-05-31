@@ -2,6 +2,7 @@ package com.chipprbots.ethereum.network.snapserver
 
 import org.apache.pekko.util.ByteString
 
+import com.chipprbots.ethereum.db.storage.EvmCodeStorage
 import com.chipprbots.ethereum.db.storage.MptStorage
 import com.chipprbots.ethereum.domain.Account
 import com.chipprbots.ethereum.mpt._
@@ -265,13 +266,14 @@ object SnapServer extends Logger {
     val effectiveLimit = if (isReversed) ByteString(Array.fill[Byte](32)(0xff.toByte)) else limitHash
     val originNibbles = hashToNibbles(startingHash)
     val limitNibbles = hashToNibbles(effectiveLimit)
-    val maxBytes = math.max(responseBytes.toInt, 0)
+    val maxBytes = responseBytes.min(BigInt(2 * 1024 * 1024)).max(BigInt(0)).toInt
+    val deadline = System.currentTimeMillis() + 4000
 
     import com.chipprbots.ethereum.network.p2p.messages.ETH63.AccountImplicits._
     val collected = scala.collection.mutable.ArrayBuffer.empty[(ByteString, com.chipprbots.ethereum.domain.Account)]
     var accumulated = 0
     // Visit-style walk: visitor returns false to stop traversal as soon as the byte
-    // budget is hit. Match go-ethereum's accounting: only (hash + slim-leaf bytes) count
+    // budget or time budget is hit. Match go-ethereum's accounting: only (hash + slim-leaf bytes) count
     // toward the budget — slim format is what we'll emit on the wire (see
     // `toSlimAccountRlp`). Proofs aren't counted (they're a separate response header).
     walkRangeVisit(rootNode, storage, originNibbles, limitNibbles) { (keyHash, accountRlp) =>
@@ -283,7 +285,7 @@ object SnapServer extends Logger {
       // budget; the first item is always emitted (the visitor only sees this branch
       // after we add to `collected`).
       if (isReversed) false
-      else accumulated < maxBytes
+      else accumulated < maxBytes && System.currentTimeMillis() < deadline
     }
 
     // Build proof per SNAP/1 spec (geth eth/protocols/snap/handler.go:336-356):
@@ -326,13 +328,14 @@ object SnapServer extends Logger {
   ): StorageRanges = {
     if (isEmptyRoot(rootHash)) return StorageRanges(requestId, Seq.empty, Seq.empty)
 
-    val maxBytes = math.max(responseBytes.toInt, 0)
+    val maxBytes = responseBytes.min(BigInt(2 * 1024 * 1024)).max(BigInt(0)).toInt
+    val deadline = System.currentTimeMillis() + 4000
     var accumulated = 0
     val perAccount = scala.collection.mutable.ArrayBuffer.empty[Seq[(ByteString, ByteString)]]
     var firstProof: Seq[ByteString] = Seq.empty
     var done = false
     val it = accountHashes.iterator
-    while (it.hasNext && !done) {
+    while (it.hasNext && !done && System.currentTimeMillis() < deadline) {
       val accountHash = it.next()
       accountRoot(accountHash) match {
         case None =>
@@ -365,7 +368,8 @@ object SnapServer extends Logger {
               walkRangeVisit(rootNode, storage, originN, limitN) { (k, v) =>
                 collected += ((k, v))
                 accumulated += k.size + v.size
-                accumulated < maxBytes || (isFirst && collected.size == 1)
+                (accumulated < maxBytes || (isFirst && collected.size == 1)) &&
+                System.currentTimeMillis() < deadline
               }
               val truncated = accumulated >= maxBytes
               if (isFirst) {
@@ -406,7 +410,8 @@ object SnapServer extends Logger {
       responseBytes: BigInt,
       storage: MptStorage
   ): TrieNodes = {
-    val maxBytes = math.max(responseBytes.toInt, 0)
+    val maxBytes = responseBytes.min(BigInt(2 * 1024 * 1024)).max(BigInt(0)).toInt
+    val deadline = System.currentTimeMillis() + 4000
     var accumulated: Int = 0
 
     // Per geth (handler.go:522-525), a zero-item pathset anywhere in the request
@@ -417,16 +422,13 @@ object SnapServer extends Logger {
     val collected = scala.collection.mutable.ArrayBuffer.empty[ByteString]
 
     if (rootNode == NullNode) {
-      // Root not found — return one empty entry per request, truncated to budget.
-      var idx = 0
-      while (idx < paths.size && (accumulated < maxBytes || collected.isEmpty)) {
-        collected += ByteString.empty
-        accumulated = accumulated + 1
-        idx += 1
-      }
+      // Root not found — return empty (sparse), matching go-ethereum's handler.go behaviour.
+      return TrieNodes(requestId, Seq.empty)
     } else {
       var idx = 0
-      while (idx < paths.size && (accumulated < maxBytes || collected.isEmpty)) {
+      while (
+        idx < paths.size && (accumulated < maxBytes || collected.isEmpty) && System.currentTimeMillis() < deadline
+      ) {
         val pathSet = paths(idx)
         if (pathSet.size == 1) {
           // Single-element path: account-trie node lookup (HP-encoded partial path).
@@ -460,11 +462,13 @@ object SnapServer extends Logger {
                     }
                   }
                 }
+              } else {
+                // Storage root not in our DB — skip (sparse), matching go-ethereum.
+                // TrieNodeHealingCoordinator matches by keccak256 hash, not position,
+                // so sparse responses are handled correctly.
               }
-            // Account missing, empty storage, or storage root unresolvable —
-            // geth does NOT emit placeholders here (handler.go:546-547 breaks
-            // out before appending). Move on to the next pathset entry.
-            case _ => ()
+            // Account missing or has no storage — skip (sparse), matching go-ethereum.
+            case _ =>
           }
         }
         idx += 1
@@ -531,6 +535,39 @@ object SnapServer extends Logger {
       Array(((b >>> 4) & 0x0f).toByte, (b & 0x0f).toByte)
     }
     firstNibble ++ rest.drop(skipFirst - 1).take(rest.length - (skipFirst - 1))
+  }
+
+  /** Serve an incoming `GetByteCodes` request (SNAP/1).
+    *
+    * Looks up each requested code hash in `storage`, collecting bytecodes until the 2 MB byte budget is exhausted or
+    * all hashes have been processed. At most 1024 hashes are processed regardless of request size (go-ethereum
+    * `maxCodeLookups` defence). The empty-code hash (`Account.EmptyCodeHash`) is returned as `ByteString.empty` without
+    * a DB lookup, matching go-ethereum's `handlers.go:360-361` special case. Missing hashes are silently skipped (not
+    * inserted as empty placeholders) — there is no positional alignment requirement for bytecodes.
+    */
+  def serveByteCodes(
+      requestId: BigInt,
+      hashes: Seq[ByteString],
+      responseBytes: BigInt,
+      storage: EvmCodeStorage
+  ): ByteCodes = {
+    val maxBytes = responseBytes.min(BigInt(2 * 1024 * 1024)).max(BigInt(0)).toInt
+    val collected = scala.collection.mutable.ListBuffer.empty[ByteString]
+    var totalBytes = 0
+    val it = hashes.take(1024).iterator
+    while (it.hasNext && (totalBytes < maxBytes || collected.isEmpty)) {
+      val codeHash = it.next()
+      if (codeHash == Account.EmptyCodeHash) {
+        collected += ByteString.empty
+        // empty code contributes 0 bytes; do not count toward budget
+      } else {
+        storage.get(codeHash).foreach { code =>
+          collected += code
+          totalBytes += code.size
+        }
+      }
+    }
+    ByteCodes(requestId = requestId, codes = collected.toList)
   }
 
   /** Walk the trie following `nibbles` and return the encoded node found at that exact path (as a raw MPT node), or

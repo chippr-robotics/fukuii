@@ -43,9 +43,6 @@ class InstanceConfig(val config: TypesafeConfig, val instanceId: String = "defau
 
   import com.chipprbots.ethereum.network.p2p.messages.Capability
   val supportedCapabilities: List[Capability] = List(
-    Capability.ETH65,
-    Capability.ETH66,
-    Capability.ETH67,
     Capability.ETH68,
     Capability.ETH69,
     Capability.SNAP1
@@ -132,6 +129,12 @@ class InstanceConfig(val config: TypesafeConfig, val instanceId: String = "defau
       override val levelCompaction: Boolean = rocksDbConfig.getBoolean("level-compaction-dynamic-level-bytes")
       override val blockSize: Long = rocksDbConfig.getLong("block-size")
       override val blockCacheSize: Long = rocksDbConfig.getLong("block-cache-size")
+      override val dbWriteBufferSize: Long =
+        if (rocksDbConfig.hasPath("db-write-buffer-size")) rocksDbConfig.getLong("db-write-buffer-size")
+        else 512L * 1024 * 1024
+      override val maxTotalWalSize: Long =
+        if (rocksDbConfig.hasPath("max-total-wal-size")) rocksDbConfig.getLong("max-total-wal-size")
+        else 512L * 1024 * 1024
     }
   }
 

@@ -50,7 +50,6 @@ Welcome to the Fukuii JSON-RPC API documentation. This directory contains compre
 
 - **[Interactive API Reference](./interactive-api-reference.md)** - Browse all endpoints with Swagger UI
 - **[Insomnia Guide](INSOMNIA_WORKSPACE_GUIDE.md)** - How to use the Insomnia API collection
-- **[Maintaining API Reference](MAINTAINING_API_REFERENCE.md)** - Guide for updating the API spec
 - **[Runbooks](../runbooks/README.md)** - Operational documentation
 - **[Documentation Home](../index.md)** - Project overview and getting started
 
@@ -101,7 +100,6 @@ Fukuii organizes JSON-RPC methods into namespaces:
 | **QA** | 3 | Testing utilities | ❌ Testing only |
 | **FUKUII** | 1 | Custom extensions | ✅ Yes |
 | **TEST** | 7 | Test harness | ❌ Testing only |
-| **IELE** | 2 | IELE VM support | ⚠️ If IELE enabled |
 | **MCP** | 7 | Model Context Protocol | ✅ Yes |
 | **RPC** | 1 | RPC metadata | ✅ Yes |
 | **TOTAL** | 97 | All namespaces | Mixed |

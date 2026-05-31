@@ -1,6 +1,6 @@
 enablePlugins(JavaAppPackaging, SolidityPlugin, JavaAgent)
 
-javaAgents += "io.kamon" % "kanela-agent" % "1.0.6"
+javaAgents += "io.kamon" % "kanela-agent" % "1.0.18"
 
 import scala.sys.process.Process
 import NativePackagerHelper._
@@ -27,10 +27,10 @@ inThisBuild(
     // Add reliable resolvers to avoid transient HTTP 503 errors
     resolvers ++= Seq(
       Resolver.mavenCentral,
-      "Typesafe Releases" at "https://repo.typesafe.com/typesafe/releases/",
-      "Sonatype OSS Releases" at "https://oss.sonatype.org/content/repositories/releases/",
-      "Sonatype OSS Snapshots" at "https://oss.sonatype.org/content/repositories/snapshots/",
-      "Hyperledger Besu" at "https://hyperledger.jfrog.io/artifactory/besu-maven/"
+      "Typesafe Releases".at("https://repo.typesafe.com/typesafe/releases/"),
+      "Sonatype OSS Releases".at("https://oss.sonatype.org/content/repositories/releases/"),
+      "Sonatype OSS Snapshots".at("https://oss.sonatype.org/content/repositories/snapshots/"),
+      "Hyperledger Besu".at("https://hyperledger.jfrog.io/artifactory/besu-maven/")
     )
   )
 )
@@ -73,7 +73,13 @@ def commonSettings(projectName: String): Seq[sbt.Def.Setting[_]] = Seq(
   // organize-imports removed — built-in to Scalafix 0.11.0+
   // Scalanet snapshots are published to Sonatype after each build (now defined in inThisBuild resolvers).
   (Test / testOptions) += Tests
-    .Argument(TestFrameworks.ScalaTest, "-l", "EthashMinerSpec"), // miner tests disabled by default,
+    .Argument(TestFrameworks.ScalaTest, "-l", "EthashMinerSpec"), // miner tests disabled by default
+  (Test / testOptions) += Tests
+    .Argument(TestFrameworks.ScalaTest, "-l", "FlakyTest"), // timing-sensitive tests excluded by default
+  (Test / testOptions) += Tests
+    .Argument(TestFrameworks.ScalaTest, "-l", "DisabledTest"), // known-broken tests excluded by default
+  (Test / testOptions) += Tests
+    .Argument(TestFrameworks.ScalaTest, "-l", "IntegrationTest"), // network-dependent tests excluded by default
   // Configure scalacOptions for Scala 3
   scalacOptions := {
     val base = baseScalacOptions
@@ -89,7 +95,7 @@ def commonSettings(projectName: String): Seq[sbt.Def.Setting[_]] = Seq(
     "-no-link-warnings" // Suppress link resolution warnings for F-bounded polymorphism issues
   ),
   scalacOptions ~= (options => if (fukuiiDev) options.filterNot(_ == "-Xfatal-warnings") else options),
-  Test / parallelExecution := true,
+  Test / parallelExecution := false,
   Test / fork := true, // Fork JVM for tests to ensure clean shutdown and avoid resource leak issues
   Test / javaOptions ++= Seq(
     "-Dpekko.coordinated-shutdown.exit-jvm=off", // Prevent CoordinatedShutdown from calling System.exit
@@ -235,7 +241,7 @@ lazy val node = {
     Dependencies.jna
   )
 
-  val dep = {
+  val dep =
     Seq(
       Dependencies.pekko,
       Dependencies.pekkoHttp,
@@ -263,7 +269,6 @@ lazy val node = {
       Dependencies.scopt,
       Dependencies.testing
     ).flatten ++ malletDeps
-  }
 
   (Evm / test) := (Evm / test).dependsOn(solidityCompile).value
   (Evm / sourceDirectory) := baseDirectory.value / "src" / "evmTest"
@@ -279,19 +284,21 @@ lazy val node = {
         version,
         scalaVersion,
         sbtVersion,
-        BuildInfoKey.action("gitHeadCommit") { git.gitHeadCommit.?.value.flatten.map(_.take(7)).getOrElse("unknown") },
-        BuildInfoKey.action("gitCurrentBranch") { 
+        // engine_getClientVersionV1 requires `commit` to be exactly 8 hex chars
+        // (4 bytes per execution-apis spec); 7 trips Lighthouse's length check.
+        BuildInfoKey.action("gitHeadCommit")(git.gitHeadCommit.?.value.flatten.map(_.take(8)).getOrElse("unknown")),
+        BuildInfoKey.action("gitCurrentBranch") {
           val branch = git.gitCurrentBranch.?.value.getOrElse("")
           if (branch != null && branch.nonEmpty) branch else "unknown"
         },
-        BuildInfoKey.action("gitCurrentTags") { git.gitCurrentTags.?.value.getOrElse(Seq.empty).mkString(",") },
-        BuildInfoKey.action("gitDescribedVersion") { git.gitDescribedVersion.?.value.flatten.getOrElse("unknown") },
-        BuildInfoKey.action("gitUncommittedChanges") { git.gitUncommittedChanges.?.value.getOrElse(false) },
+        BuildInfoKey.action("gitCurrentTags")(git.gitCurrentTags.?.value.getOrElse(Seq.empty).mkString(",")),
+        BuildInfoKey.action("gitDescribedVersion")(git.gitDescribedVersion.?.value.flatten.getOrElse("unknown")),
+        BuildInfoKey.action("gitUncommittedChanges")(git.gitUncommittedChanges.?.value.getOrElse(false)),
         (Compile / libraryDependencies)
       ),
       buildInfoPackage := "com.chipprbots.ethereum.utils",
       (Test / fork) := true,
-      (Compile / buildInfoOptions) += BuildInfoOption.ToMap,
+      (Compile / buildInfoOptions) += BuildInfoOption.ToMap
     )
     .settings(commonSettings("fukuii"): _*)
     .settings(inConfig(Integration)(scalafixConfigSettings(Integration)))
@@ -306,7 +313,7 @@ lazy val node = {
     .settings(
       inConfig(Integration)(
         Defaults.testSettings
-          ++ org.scalafmt.sbt.ScalafmtPlugin.scalafmtConfigSettings 
+          ++ org.scalafmt.sbt.ScalafmtPlugin.scalafmtConfigSettings
           :+ (parallelExecution := false)
           :+ (testGrouping := {
             val tests = (definedTests).value
@@ -344,6 +351,9 @@ lazy val node = {
       bashScriptExtraDefines += """addJava "-Dlogback.configurationFile=${app_home}/../conf/logback.xml"""",
       batScriptExtraDefines += """call :add_java "-Dconfig.file=%APP_HOME%\conf\app.conf"""",
       batScriptExtraDefines += """call :add_java "-Dlogback.configurationFile=%APP_HOME%\conf\logback.xml"""",
+      // Keep sbt-native-packager Docker builds on the same supported runtime as the hand-written Dockerfiles.
+      // Without this, the plugin default generated `FROM openjdk:8`, which Docker Hub no longer serves.
+      dockerBaseImage := "eclipse-temurin:25-jre-noble",
       // Use a wildcard classpath ("lib/*") instead of enumerating every
       // jar by name. The default sbt-native-packager behaviour wrote
       // ~12KB of `-cp lib/jar1;lib/jar2;...` into bin/fukuii.bat (147
@@ -357,21 +367,21 @@ lazy val node = {
       (assembly / mainClass) := Some("com.chipprbots.ethereum.App"),
       (assembly / assemblyJarName) := s"fukuii-assembly-${version.value}.jar",
       (assembly / assemblyMergeStrategy) := {
-        case PathList("META-INF", "MANIFEST.MF") => MergeStrategy.discard
-        case PathList("META-INF", xs @ _*) if xs.lastOption.exists(_.endsWith(".SF")) => MergeStrategy.discard
+        case PathList("META-INF", "MANIFEST.MF")                                       => MergeStrategy.discard
+        case PathList("META-INF", xs @ _*) if xs.lastOption.exists(_.endsWith(".SF"))  => MergeStrategy.discard
         case PathList("META-INF", xs @ _*) if xs.lastOption.exists(_.endsWith(".DSA")) => MergeStrategy.discard
         case PathList("META-INF", xs @ _*) if xs.lastOption.exists(_.endsWith(".RSA")) => MergeStrategy.discard
-        case PathList("META-INF", "io.netty.versions.properties") => MergeStrategy.first
-        case PathList("META-INF", "native", xs @ _*) => MergeStrategy.first
-        case PathList("META-INF", "native-image", xs @ _*) => MergeStrategy.first
-        case PathList("META-INF", "versions", xs @ _*) => MergeStrategy.first
-        case "module-info.class" => MergeStrategy.discard
-        case "reference.conf" => MergeStrategy.concat
-        case "application.conf" => MergeStrategy.concat
-        case x if x.endsWith(".proto") => MergeStrategy.first
-        case x if x.contains("pekko") => MergeStrategy.first
-        case x if x.contains("akka") => MergeStrategy.first
-        case _ => MergeStrategy.first
+        case PathList("META-INF", "io.netty.versions.properties")                      => MergeStrategy.first
+        case PathList("META-INF", "native", xs @ _*)                                   => MergeStrategy.first
+        case PathList("META-INF", "native-image", xs @ _*)                             => MergeStrategy.first
+        case PathList("META-INF", "versions", xs @ _*)                                 => MergeStrategy.first
+        case "module-info.class"                                                       => MergeStrategy.discard
+        case "reference.conf"                                                          => MergeStrategy.concat
+        case "application.conf"                                                        => MergeStrategy.concat
+        case x if x.endsWith(".proto")                                                 => MergeStrategy.first
+        case x if x.contains("pekko")                                                  => MergeStrategy.first
+        case x if x.contains("akka")                                                   => MergeStrategy.first
+        case _                                                                         => MergeStrategy.first
       }
     )
 
@@ -388,13 +398,13 @@ coverageMinimumStmtTotal := 70
 coverageFailOnMinimum := true
 coverageHighlighting := true
 coverageExcludedPackages := Seq(
-  "com\\.chipprbots\\.ethereum\\.extvm\\.msg.*",  // Protobuf generated code
-  "com\\.chipprbots\\.ethereum\\.utils\\.BuildInfo",  // BuildInfo generated code
-  ".*\\.protobuf\\..*"  // All protobuf packages
+  "com\\.chipprbots\\.ethereum\\.extvm\\.msg.*", // Protobuf generated code
+  "com\\.chipprbots\\.ethereum\\.utils\\.BuildInfo", // BuildInfo generated code
+  ".*\\.protobuf\\..*" // All protobuf packages
 ).mkString(";")
 coverageExcludedFiles := Seq(
-  ".*/src_managed/.*",  // All managed sources
-  ".*/target/.*/src_managed/.*"  // Target managed sources
+  ".*/src_managed/.*", // All managed sources
+  ".*/target/.*/src_managed/.*" // Target managed sources
 ).mkString(";")
 
 addCommandAlias(

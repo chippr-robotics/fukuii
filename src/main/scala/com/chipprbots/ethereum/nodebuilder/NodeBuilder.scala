@@ -131,10 +131,26 @@ trait StorageBuilder {
     }
 }
 
-trait DiscoveryConfigBuilder extends BlockchainConfigBuilder {
-  self: InstanceConfigProvider =>
-  lazy val discoveryConfig: DiscoveryConfig =
-    DiscoveryConfig(instanceConfig.config, blockchainConfig.bootstrapNodes, blockchainConfig.dnsDiscoveryDomains)
+trait DiscoveryConfigBuilder extends BlockchainConfigBuilder with StorageBuilder {
+  self: InstanceConfigProvider with ActorSystemBuilder =>
+  // Built lazily so blockchain storage is initialized before genesisHeader is read.
+  // The filter rejects ENRs with `eth` key fork IDs that don't match the local chain —
+  // stops cross-network peers (BSC, mainnet, etc.) from burning outbound dial slots when
+  // shared DNS trees include mis-tagged entries. See PR #1249. Mirrors ForkIdTag (discv4).
+  lazy val discoveryConfig: DiscoveryConfig = {
+    val reader = com.chipprbots.ethereum.domain.BlockchainReader(storagesInstance.storages)
+    val enrFilter = new com.chipprbots.ethereum.network.discovery.DnsDiscovery.EnrForkIdFilter(
+      genesisHash = () => reader.genesisHeader.hash,
+      blockchainConfig = blockchainConfig,
+      currentBestBlock = () => reader.getBestBlockNumber()
+    )
+    DiscoveryConfig(
+      instanceConfig.config,
+      blockchainConfig.bootstrapNodes,
+      blockchainConfig.dnsDiscoveryDomains,
+      enrForkIdFilter = Some(enrFilter)
+    )
+  }
 }
 
 trait KnownNodesManagerBuilder {
@@ -155,6 +171,7 @@ trait PeerDiscoveryManagerBuilder {
     with DiscoveryConfigBuilder
     with DiscoveryServiceBuilder
     with StorageBuilder
+    with BlockchainBuilder
     with InstanceConfigProvider =>
 
   implicit lazy val ioRuntime: IORuntime = IORuntime.global
@@ -168,7 +185,14 @@ trait PeerDiscoveryManagerBuilder {
         discoveryConfig,
         tcpPort = instanceConfig.Network.Server.port,
         nodeStatusHolder,
-        storagesInstance.storages.knownNodesStorage
+        storagesInstance.storages.knownNodesStorage,
+        forkIdTag = Some(
+          new com.chipprbots.ethereum.network.discovery.ForkIdTag(
+            genesisHash = () => blockchainReader.genesisHeader.hash,
+            blockchainConfig = blockchainConfig,
+            currentBestBlock = () => blockchainReader.getBestBlockNumber()
+          )
+        )
       ),
       randomNodeBufferSize = instanceConfig.Network.peer.maxOutgoingPeers
     ),
@@ -347,7 +371,8 @@ trait NetworkPeerManagerActorBuilder {
     with PeerEventBusBuilder
     with ForkResolverBuilder
     with StorageBuilder
-    with BlockchainBuilder =>
+    with BlockchainBuilder
+    with BlockchainConfigBuilder =>
 
   lazy val networkPeerManager: ActorRef = system.actorOf(
     NetworkPeerManagerActor
@@ -356,9 +381,10 @@ trait NetworkPeerManagerActorBuilder {
         peerEventBus,
         storagesInstance.storages.appStateStorage,
         forkResolverOpt,
-        evmCodeStorage = Some(storagesInstance.storages.evmCodeStorage),
+        evmCodeStorageOpt = Some(storagesInstance.storages.evmCodeStorage),
         mptStorageOpt = Some(storagesInstance.storages.stateStorage.getReadOnlyStorage),
-        blockchainReader = Some(blockchainReader)
+        blockchainReader = Some(blockchainReader),
+        isPoWChain = blockchainConfig.terminalTotalDifficulty.isEmpty
       ),
     "network-peer-manager"
   )
@@ -394,11 +420,12 @@ trait ServerActorBuilder {
     with NodeStatusBuilder
     with BlockchainBuilder
     with PeerManagerActorBuilder
+    with BlacklistBuilder
     with InstanceConfigProvider =>
 
   lazy val networkConfig = instanceConfig.Network
 
-  lazy val server: ActorRef = system.actorOf(ServerActor.props(nodeStatusHolder, peerManager), "server")
+  lazy val server: ActorRef = system.actorOf(ServerActor.props(nodeStatusHolder, peerManager, blacklist), "server")
 
 }
 
@@ -679,7 +706,6 @@ trait ApisBuilder extends ApisBase {
     val Debug = "debug"
     val Rpc = "rpc"
     val Test = "test"
-    val Iele = "iele"
     val Qa = "qa"
     val Admin = "admin"
     val TxPool = "txpool"
@@ -689,7 +715,7 @@ trait ApisBuilder extends ApisBase {
 
   import Apis._
   override def available: List[String] =
-    List(Eth, Web3, Net, Personal, Fukuii, Mcp, Debug, Test, Iele, Qa, Admin, TxPool, Trace, Subscribe)
+    List(Eth, Web3, Net, Personal, Fukuii, Mcp, Debug, Test, Qa, Admin, TxPool, Trace, Subscribe)
 }
 
 trait AdminServiceBuilder {
@@ -1006,6 +1032,11 @@ trait SyncControllerBuilder extends SyncControllerRefBuilder {
     with BlacklistBuilder
     with MESSBuilder =>
 
+  /** Override in concrete builders that also mix in [[EngineApiBuilder]] to enable CL-driven SNAP pivot selection.
+    * Defaults to `None` for setups without an Engine API (e.g. ETC mainnet pre-merge wiring). Closes #1207.
+    */
+  def forkChoiceManagerForSync: Option[com.chipprbots.ethereum.consensus.engine.ForkChoiceManager] = None
+
   lazy val syncController: ActorRef = system.actorOf(
     SyncController.props(
       blockchain,
@@ -1027,7 +1058,8 @@ trait SyncControllerBuilder extends SyncControllerRefBuilder {
       blacklist,
       syncConfig,
       this,
-      messConfigOpt
+      messConfigOpt,
+      forkChoiceManagerForSync
     ),
     "sync-controller"
   )
@@ -1206,5 +1238,10 @@ trait Node
 
   // Wire ForkChoiceManager to RPC services for "safe"/"finalized" block tag resolution
   override def forkChoiceManagerForRpc: Option[com.chipprbots.ethereum.consensus.engine.ForkChoiceManager] =
+    Some(forkChoiceManager)
+
+  // Wire ForkChoiceManager to the sync layer so SNAP can pivot off CL-driven heads on
+  // post-merge chains. Closes #1207.
+  override def forkChoiceManagerForSync: Option[com.chipprbots.ethereum.consensus.engine.ForkChoiceManager] =
     Some(forkChoiceManager)
 }

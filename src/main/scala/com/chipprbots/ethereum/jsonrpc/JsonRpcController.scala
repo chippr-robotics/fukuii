@@ -68,7 +68,6 @@ case class JsonRpcController(
   import EthTxJsonMethodsImplicits._
   import EthUserJsonMethodsImplicits._
   import EthFilterJsonMethodsImplicits._
-  import IeleJsonMethodsImplicits._
   import EthProofJsonMethodsImplicits._
   import JsonMethodsImplicits._
   import QAJsonMethodsImplicits._
@@ -86,7 +85,6 @@ case class JsonRpcController(
     Apis.Rpc -> handleRpcRequest,
     Apis.Debug -> (handleDebugRequest.orElse(handleDebugTracingRequest)),
     Apis.Test -> handleTestRequest,
-    Apis.Iele -> handleIeleRequest,
     Apis.Qa -> handleQARequest,
     Apis.Admin -> handleAdminRequest,
     Apis.TxPool -> handleTxPoolRequest,
@@ -419,13 +417,6 @@ case class JsonRpcController(
       handle[AccountsInRangeRequest, AccountsInRangeResponse](testService.getAccountsInRange, req)
     case req @ JsonRpcRequest(_, "debug_storageRangeAt", _, _) =>
       handle[StorageRangeRequest, StorageRangeResponse](testService.storageRangeAt, req)
-  }
-
-  private def handleIeleRequest: PartialFunction[JsonRpcRequest, IO[JsonRpcResponse]] = {
-    case req @ JsonRpcRequest(_, "iele_sendTransaction", _, _) =>
-      handle[SendIeleTransactionRequest, SendTransactionResponse](personalService.sendIeleTransaction, req)
-    case req @ JsonRpcRequest(_, "iele_call", _, _) =>
-      handle[IeleCallRequest, IeleCallResponse](ethInfoService.ieleCall, req)
   }
 
   private def handlePersonalRequest: PartialFunction[JsonRpcRequest, IO[JsonRpcResponse]] = {

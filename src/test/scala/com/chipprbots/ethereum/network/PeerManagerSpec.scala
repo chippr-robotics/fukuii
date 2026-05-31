@@ -362,6 +362,339 @@ class PeerManagerSpec
     peerAsOutgoingProbe.expectMsg(PeerActor.DisconnectPeer(Disconnect.Reasons.AlreadyConnected))
   }
 
+  // ── Suite 5: NB-8 — 5s reconnect + inbound-suppression (Fix-C) ──────────────────────────────
+
+  behavior.of("maintained peer reconnect (NB-8 Fix-C)")
+
+  it should "schedule a 5s reconnect when a maintained peer's outgoing connection terminates" taggedAs (
+    UnitTest,
+    NetworkTest
+  ) in new TestSetup {
+    val hexNodeId = "aa" * 64 // 64-byte node ID as 128-char hex
+    val nodeIdBytes = ByteString(Hex.decode(hexNodeId))
+    val maintainedUri = new URI(s"enode://$hexNodeId@127.0.0.5:30303")
+
+    start()
+
+    peerManager ! PeerManagerActor.AddMaintainedPeer(maintainedUri)
+    createdPeers(0).probe.expectMsgType[ConnectTo](3.seconds)
+
+    // Complete ETH handshake so the peer is promoted from pending → handshaked
+    createdPeers(0).probe.reply(
+      PeerEvent.PeerHandshakeSuccessful(
+        Peer(
+          PeerId(hexNodeId),
+          new InetSocketAddress("127.0.0.5", 30303),
+          createdPeers(0).probe.ref,
+          incomingConnection = false,
+          nodeId = Some(nodeIdBytes)
+        ),
+        initialPeerInfo
+      )
+    )
+
+    // Kill the outgoing actor — peerManager receives Terminated and schedules the 5s retry
+    createdPeers(0).probe.ref ! PoisonPill
+
+    // PeerDisconnected is published inside the Terminated handler, so receiving it
+    // guarantees the 5s scheduleOnce has already been registered on testScheduler.
+    peerEventBus.fishForMessage(3.seconds, "waiting for PeerDisconnected") {
+      case Publish(PeerDisconnected(_)) => true
+      case _                            => false
+    }
+
+    testScheduler.timePasses(5.seconds)
+
+    // connectWith should have created a second peer and sent ConnectTo(maintainedUri)
+    createdPeers(1).probe.expectMsgType[ConnectTo](3.seconds).uri shouldBe maintainedUri
+  }
+
+  it should "suppress the 5s reconnect when an inbound from the same nodeId fills the slot before the timer fires" taggedAs (
+    UnitTest,
+    NetworkTest
+  ) in new TestSetup {
+    val hexNodeId = "bb" * 64
+    val nodeIdBytes = ByteString(Hex.decode(hexNodeId))
+    val maintainedUri = new URI(s"enode://$hexNodeId@127.0.0.5:30303")
+
+    start()
+
+    // Register and handshake the maintained peer (outgoing)
+    peerManager ! PeerManagerActor.AddMaintainedPeer(maintainedUri)
+    createdPeers(0).probe.expectMsgType[ConnectTo](3.seconds)
+    createdPeers(0).probe.reply(
+      PeerEvent.PeerHandshakeSuccessful(
+        Peer(
+          PeerId(hexNodeId),
+          new InetSocketAddress("127.0.0.5", 30303),
+          createdPeers(0).probe.ref,
+          incomingConnection = false,
+          nodeId = Some(nodeIdBytes)
+        ),
+        initialPeerInfo
+      )
+    )
+
+    // Terminate outgoing → 5s reconnect timer is scheduled inside the Terminated handler
+    createdPeers(0).probe.ref ! PoisonPill
+    peerEventBus.fishForMessage(3.seconds, "waiting for PeerDisconnected") {
+      case Publish(PeerDisconnected(_)) => true
+      case _                            => false
+    }
+
+    // Inbound from the same nodeId arrives before the 5s timer fires
+    peerManager ! PeerManagerActor.HandlePeerConnection(incomingConnection1.ref, incomingPeerAddress1)
+    createdPeers(1).probe.expectMsg(PeerActor.HandleConnection(incomingConnection1.ref, incomingPeerAddress1))
+    createdPeers(1).probe.reply(
+      PeerEvent.PeerHandshakeSuccessful(
+        Peer(
+          PeerId(hexNodeId),
+          incomingPeerAddress1,
+          createdPeers(1).probe.ref,
+          incomingConnection = true,
+          nodeId = Some(nodeIdBytes)
+        ),
+        initialPeerInfo
+      )
+    )
+
+    // Fire the 5s timer — connectWith sees hasHandshakedWith(nodeId)=true and aborts silently
+    testScheduler.timePasses(5.seconds)
+
+    // No third peer should have been created
+    createdPeers.size shouldBe 2
+  }
+
+  // ── Suite 6: Static/maintained peer collision fixes (RC1/RC2/RC3) ──────────────────────────────
+
+  behavior.of("maintained peer collision handling (RC1/RC2/RC3)")
+
+  it should "not blacklist a maintained peer when PeerClosedConnection arrives while the outbound is pre-handshake (RC1)" taggedAs (
+    UnitTest,
+    NetworkTest
+  ) in new TestSetup {
+    val hexNodeId = "cc" * 64
+    val maintainedUri = new URI(s"enode://$hexNodeId@127.0.0.6:30303")
+
+    start()
+
+    peerManager ! PeerManagerActor.AddMaintainedPeer(maintainedUri)
+    createdPeers(0).probe.expectMsgType[ConnectTo](3.seconds)
+    // Outbound actor is pending (nodeId = None in connectedPeers).
+    // Bug: connectedPeers lookup finds the pre-handshake peer with nodeId=None → isMaintainedPeer=false → blacklist.
+    // Fix: checks maintainedPeersByNodeId by host directly → isMaintainedPeer=true → no blacklist.
+    peerManager ! PeerClosedConnection("127.0.0.6", Disconnect.Reasons.AlreadyConnected)
+
+    eventually {
+      peerManager.underlyingActor.blacklist.isBlacklisted(PeerAddress("127.0.0.6")) shouldBe false
+    }
+  }
+
+  it should "not schedule a pre-handshake reconnect when the inbound from the same maintained nodeId is already handshaked (RC2)" taggedAs (
+    UnitTest,
+    NetworkTest
+  ) in new TestSetup {
+    val hexNodeId = "dd" * 64
+    val nodeIdBytes = ByteString(Hex.decode(hexNodeId))
+    val maintainedUri = new URI(s"enode://$hexNodeId@127.0.0.7:30303")
+
+    start()
+
+    peerManager ! PeerManagerActor.AddMaintainedPeer(maintainedUri)
+    createdPeers(0).probe.expectMsgType[ConnectTo](3.seconds)
+
+    // Inbound from the same maintained peer arrives and fully handshakes
+    peerManager ! PeerManagerActor.HandlePeerConnection(incomingConnection1.ref, incomingPeerAddress1)
+    createdPeers(1).probe.expectMsg(PeerActor.HandleConnection(incomingConnection1.ref, incomingPeerAddress1))
+    createdPeers(1).probe.reply(
+      PeerEvent.PeerHandshakeSuccessful(
+        Peer(
+          PeerId(hexNodeId),
+          incomingPeerAddress1,
+          createdPeers(1).probe.ref,
+          incomingConnection = true,
+          nodeId = Some(nodeIdBytes)
+        ),
+        initialPeerInfo
+      )
+    )
+
+    // Kill the outgoing pre-handshake actor (TCP rejected or AlreadyConnected)
+    createdPeers(0).probe.ref ! PoisonPill
+    peerEventBus.fishForMessage(3.seconds, "waiting for PeerDisconnected after outbound kill") {
+      case Publish(PeerDisconnected(_)) => true
+      case _                            => false
+    }
+
+    // Advance past the pre-handshake retry delay — no reconnect timer should have been scheduled
+    testScheduler.timePasses(peerConfiguration.connectRetryDelay + 1.second)
+    createdPeers.size shouldBe 2
+  }
+
+  it should "block a ConnectToPeer for a maintained peer when an inbound from the same host is in incomingPendingPeers (RC3)" taggedAs (
+    UnitTest,
+    NetworkTest
+  ) in new TestSetup {
+    val hexNodeId = "ee" * 64
+    val maintainedUri = new URI(s"enode://$hexNodeId@127.0.0.8:30303")
+    val maintainedHost = "127.0.0.8"
+
+    start()
+
+    // Outbound actor created, pending in pendingMaintainedConnections
+    peerManager ! PeerManagerActor.AddMaintainedPeer(maintainedUri)
+    createdPeers(0).probe.expectMsgType[ConnectTo](3.seconds)
+
+    // Terminate outbound pre-handshake (no inbound yet) → RC2 schedules a retry timer
+    createdPeers(0).probe.ref ! PoisonPill
+    peerEventBus.fishForMessage(3.seconds, "waiting for PeerDisconnected after outbound kill") {
+      case Publish(PeerDisconnected(_)) => true
+      case _                            => false
+    }
+
+    // Inbound from the maintained peer host arrives (ephemeral port — different from 30303)
+    val inboundTcp = TestProbe()
+    val inboundAddress = new InetSocketAddress(maintainedHost, 54321)
+    peerManager ! PeerManagerActor.HandlePeerConnection(inboundTcp.ref, inboundAddress)
+    createdPeers(1).probe.expectMsg(PeerActor.HandleConnection(inboundTcp.ref, inboundAddress))
+    // Not yet handshaked — peer sits in incomingPendingPeers
+
+    // Fire the retry timer → connectWith sees hasIncomingPendingFromHost(maintainedHost) = true → blocked
+    testScheduler.timePasses(peerConfiguration.connectRetryDelay + 1.second)
+    createdPeers.size shouldBe 2
+  }
+
+  // ── Suite 7: Inbound-wins tiebreaker (Fix-A — run-17 issue A) ─────────────────────────────────
+
+  behavior.of("maintained peer inbound-wins tiebreaker (Fix-A)")
+
+  it should "drop the outbound and keep the inbound when a maintained peer's inbound handshakes while outbound is already handshaked" taggedAs (
+    UnitTest,
+    NetworkTest
+  ) in new TestSetup {
+    val hexNodeId = "ff" * 64
+    val nodeIdBytes = ByteString(Hex.decode(hexNodeId))
+    val maintainedUri = new URI(s"enode://$hexNodeId@127.0.0.9:30303")
+
+    start()
+
+    // Step 1: outbound initiated for the maintained peer
+    peerManager ! PeerManagerActor.AddMaintainedPeer(maintainedUri)
+    createdPeers(0).probe.expectMsgType[ConnectTo](3.seconds)
+
+    // Step 2: outbound handshakes — enters handshakedPeers
+    createdPeers(0).probe.reply(
+      PeerEvent.PeerHandshakeSuccessful(
+        Peer(
+          PeerId(hexNodeId),
+          new InetSocketAddress("127.0.0.9", 30303),
+          createdPeers(0).probe.ref,
+          incomingConnection = false,
+          nodeId = Some(nodeIdBytes)
+        ),
+        initialPeerInfo
+      )
+    )
+
+    // Step 3: inbound from the same maintained peer host arrives simultaneously
+    val inboundTcp = TestProbe()
+    val inboundAddress = new InetSocketAddress("127.0.0.9", 55555)
+    peerManager ! PeerManagerActor.HandlePeerConnection(inboundTcp.ref, inboundAddress)
+    createdPeers(1).probe.expectMsg(PeerActor.HandleConnection(inboundTcp.ref, inboundAddress))
+
+    // Step 4: inbound handshakes with same nodeId — tiebreaker: inbound wins
+    createdPeers(1).probe.reply(
+      PeerEvent.PeerHandshakeSuccessful(
+        Peer(
+          PeerId(hexNodeId),
+          inboundAddress,
+          createdPeers(1).probe.ref,
+          incomingConnection = true,
+          nodeId = Some(nodeIdBytes)
+        ),
+        initialPeerInfo
+      )
+    )
+
+    // Outbound should receive DisconnectPeer(AlreadyConnected) — inbound wins, outbound dropped
+    createdPeers(0).probe.expectMsg(PeerActor.DisconnectPeer(Disconnect.Reasons.AlreadyConnected))
+
+    // After outbound Terminated fires, no new outbound should be scheduled
+    // (maintained peer is now held by the stable inbound)
+    createdPeers(0).probe.ref ! PoisonPill
+    testScheduler.timePasses(peerConfiguration.connectRetryDelay + 1.second)
+    createdPeers.size shouldBe 2
+  }
+
+  // Regression for Issue 6: when a maintained peer's outbound actor terminates after
+  // inbound-wins, PMA used to publish Publish(PeerDisconnected(peerId)) unconditionally.
+  // That caused NPMA to evict the still-live inbound entry, creating an infinite
+  // reconnect loop with core-geth. The fix (DUPLICATE_TERMINATED) suppresses the
+  // PeerDisconnected when the winner nodeId is still handshaked in connectedPeers.
+  it should "not publish PeerDisconnected when the terminated outbound's nodeId is still alive via the inbound winner (DUPLICATE_TERMINATED)" taggedAs (
+    UnitTest,
+    NetworkTest
+  ) in new TestSetup {
+    val hexNodeId = "ff" * 64
+    val nodeIdBytes = ByteString(Hex.decode(hexNodeId))
+    val maintainedUri = new URI(s"enode://$hexNodeId@127.0.0.9:30303")
+
+    start()
+
+    // Step 1: outbound dials out for the maintained peer.
+    // AddMaintainedPeer publishes MaintainedPeersChanged to peerEventBus — drain it so
+    // the final expectNoMessage assertion does not see a stale message.
+    peerManager ! PeerManagerActor.AddMaintainedPeer(maintainedUri)
+    peerEventBus.fishForMessage(3.seconds, "waiting for MaintainedPeersChanged") {
+      case Publish(PeerEvent.MaintainedPeersChanged(_)) => true
+      case _                                            => false
+    }
+    createdPeers(0).probe.expectMsgType[ConnectTo](3.seconds)
+
+    // Step 2: outbound handshakes
+    createdPeers(0).probe.reply(
+      PeerEvent.PeerHandshakeSuccessful(
+        Peer(
+          PeerId(hexNodeId),
+          new InetSocketAddress("127.0.0.9", 30303),
+          createdPeers(0).probe.ref,
+          incomingConnection = false,
+          nodeId = Some(nodeIdBytes)
+        ),
+        initialPeerInfo
+      )
+    )
+
+    // Step 3: inbound from the same maintained peer host
+    val inboundTcp = TestProbe()
+    val inboundAddress = new InetSocketAddress("127.0.0.9", 55555)
+    peerManager ! PeerManagerActor.HandlePeerConnection(inboundTcp.ref, inboundAddress)
+    createdPeers(1).probe.expectMsg(PeerActor.HandleConnection(inboundTcp.ref, inboundAddress))
+
+    // Step 4: inbound handshakes with same nodeId — inbound wins, outbound gets DisconnectPeer
+    createdPeers(1).probe.reply(
+      PeerEvent.PeerHandshakeSuccessful(
+        Peer(
+          PeerId(hexNodeId),
+          inboundAddress,
+          createdPeers(1).probe.ref,
+          incomingConnection = true,
+          nodeId = Some(nodeIdBytes)
+        ),
+        initialPeerInfo
+      )
+    )
+    createdPeers(0).probe.expectMsg(PeerActor.DisconnectPeer(Disconnect.Reasons.AlreadyConnected))
+
+    // Step 5: terminate the outbound — DUPLICATE_TERMINATED must suppress PeerDisconnected
+    createdPeers(0).probe.ref ! PoisonPill
+    peerEventBus.expectNoMessage(500.millis)
+
+    // No reconnect is scheduled (winner still alive) — createdPeers stays at 2
+    testScheduler.timePasses(6000.millis)
+    createdPeers.size shouldBe 2
+  }
+
   behavior.of("outgoingConnectionDemand")
 
   it should "try to connect to at least min-outgoing-peers but no more than max-outgoing-peers" taggedAs (
@@ -575,8 +908,14 @@ class PeerManagerSpec
       val replenished = newIncoming.foldLeft(pruned) { case (ps, p) =>
         ps.addNewPendingPeer(p).promotePeerToHandshaked(p)
       }
-      // Incoming connections should be maxed out now, can prune again.
-      PeerManagerActor.numberOfIncomingConnectionsToPrune(replenished, peerConfiguration) shouldBe >(0)
+      // Replenishment only restores prunability when it pushes incoming peers back ABOVE the prune
+      // floor (minIncomingPeers). When the arbitrary pool already started saturated
+      // (incomingHandshakedPeersCount == maxIncomingPeers), newIncoming is empty, so pruning drains
+      // the pool to exactly minIncomingPeers and there is correctly nothing left to prune.
+      val minIncomingPeers = peerConfiguration.maxIncomingPeers - peerConfiguration.pruneIncomingPeers
+      whenever(replenished.incomingHandshakedPeersCount > minIncomingPeers) {
+        PeerManagerActor.numberOfIncomingConnectionsToPrune(replenished, peerConfiguration) shouldBe >(0)
+      }
     }
   }
 
@@ -719,6 +1058,64 @@ class PeerManagerSpec
       knownNodesManager.expectMsg(KnownNodesManager.GetKnownNodes)
       knownNodesManager.reply(KnownNodesManager.KnownNodes(knownNodes))
     }
+  }
+
+  // ── Regression tests for blacklistDurationForDisconnect ────────────────────
+  // Sepolia 2026-05-13: when SNAP-syncing from genesis, ~40+ peers per minute were
+  // sending us Disconnect(UselessPeer) at handshake (they didn't want us as a
+  // counterparty because we had nothing to offer them yet). The old policy mapped
+  // UselessPeer through the `_` wildcard to longBlacklistDuration (30 min) — the
+  // peer pool collapsed to a single peer within ~5 min of startup. The fix moves
+  // UselessPeer into the short-tier alongside `Other`, which already had the
+  // exact same reasoning documented for it. ETC mainnet hit the same wall.
+  import com.chipprbots.ethereum.network.p2p.messages.WireProtocol.Disconnect.Reasons
+  private val ShortDur = 2.minutes
+  private val LongDur = 30.minutes
+
+  "PeerManagerActor.blacklistDurationForDisconnect" should "use short duration for UselessPeer (regression for sepolia peer-pool collapse)" in {
+    PeerManagerActor.blacklistDurationForDisconnect(
+      reason = Reasons.UselessPeer,
+      shortBlacklistDuration = ShortDur,
+      longBlacklistDuration = LongDur
+    ) shouldBe ShortDur
+  }
+
+  it should "use short duration for Other (peer-selection-policy rejection)" in {
+    PeerManagerActor.blacklistDurationForDisconnect(Reasons.Other, ShortDur, LongDur) shouldBe ShortDur
+  }
+
+  it should "use short duration for the other soft-rejection reasons" in {
+    val softReasons = Seq(
+      Reasons.TooManyPeers,
+      Reasons.AlreadyConnected,
+      Reasons.ClientQuitting,
+      Reasons.TcpSubsystemError,
+      Reasons.DisconnectRequested,
+      Reasons.TimeoutOnReceivingAMessage
+    )
+    softReasons.foreach { r =>
+      withClue(s"reason=0x${r.toHexString}: ") {
+        PeerManagerActor.blacklistDurationForDisconnect(r, ShortDur, LongDur) shouldBe ShortDur
+      }
+    }
+  }
+
+  it should "use permanent duration for protocol violations" in {
+    val permanentReasons = Seq(
+      Reasons.BreachOfProtocol,
+      Reasons.IncompatibleP2pProtocolVersion,
+      Reasons.NullNodeIdentityReceived
+    )
+    permanentReasons.foreach { r =>
+      withClue(s"reason=0x${r.toHexString}: ") {
+        PeerManagerActor.blacklistDurationForDisconnect(r, ShortDur, LongDur) shouldBe
+          PeerManagerActor.DefaultPermanentBlacklistDuration
+      }
+    }
+  }
+
+  it should "fall back to long duration for unknown reason codes" in {
+    PeerManagerActor.blacklistDurationForDisconnect(0xff, ShortDur, LongDur) shouldBe LongDur
   }
 
   implicit val arbPeer: Arbitrary[Peer] = Arbitrary {

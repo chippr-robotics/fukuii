@@ -410,7 +410,6 @@ Added tests in `AppStateStorageSpec`:
      - Added tests for SNAP sync progress persistence
 
 7. **Documentation:**
-   - `docs/architecture/SNAP_SYNC_TODO.md` - Updated to mark items as complete
    - `docs/architecture/SNAP_SYNC_CLEANUP_IMPLEMENTATION.md` - This document
 
 ## Summary
@@ -446,7 +445,6 @@ These implementations move SNAP sync closer to production readiness by:
 ## References
 
 - [SNAP Protocol Specification](https://github.com/ethereum/devp2p/blob/master/caps/snap.md)
-- [SNAP_SYNC_TODO.md](./SNAP_SYNC_TODO.md)
 - [SNAP_SYNC_ERROR_HANDLING.md](./SNAP_SYNC_ERROR_HANDLING.md)
 - [SNAP_SYNC_IMPLEMENTATION.md](./SNAP_SYNC_IMPLEMENTATION.md)
 

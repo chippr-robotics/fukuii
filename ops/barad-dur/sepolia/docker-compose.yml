@@ -14,12 +14,38 @@ networks:
   sepolia-network:
     driver: bridge
 
+# Shared JVM defaults reused across services. Anchored once here so every
+# fukuii compose service in this file inherits a consistent envelope.
+# Composes in sibling directories should mirror this value — once the runtime
+# image bakes JAVA_TOOL_OPTIONS into ENV (or `application.ini` lands via the
+# proper sbt-native-packager Dockerfile), this block becomes redundant.
+x-fukuii-jvm-defaults: &fukuii-jvm-defaults
+  JAVA_TOOL_OPTIONS: >-
+    -Xmx3g -Xms1g -Xss1M
+    -XX:MaxDirectMemorySize=512M
+    -XX:+UseG1GC -XX:MaxGCPauseMillis=200
+    -XX:+HeapDumpOnOutOfMemoryError
+    -XX:HeapDumpPath=/app/data/logs/heapdump.hprof
+    -XX:+ExitOnOutOfMemoryError
+
 services:
   # Fukuii Execution Layer — Sepolia testnet
   fukuii-sepolia:
     image: chipprbots/fukuii:latest
     container_name: fukuii-sepolia
     restart: unless-stopped
+    # 3g heap + ~3 GB native (RocksDB 512MB block cache, memtables, G1,
+    # DeferredWriteMpt/StackTrie buffers, JNI). Reduced 4g→3g (2026-05-14) to
+    # cut host-wide RocksDB page-cache churn — systemd-oomd was killing the
+    # GNOME session even though the container itself had headroom (PSI-based
+    # eviction triggered by fukuii's I/O pattern, not actual memory exhaustion).
+    # 8g cgroup gives ~2g native overhead headroom.
+    mem_limit: 8g
+    memswap_limit: 8g
+    # JVM flags live in JAVA_TOOL_OPTIONS (anchor above) — picked up
+    # automatically by the JVM regardless of how it's invoked.
+    environment:
+      <<: *fukuii-jvm-defaults
     ports:
       - "8555:8545"       # JSON-RPC HTTP
       - "8556:8546"       # JSON-RPC WebSocket
@@ -32,12 +58,12 @@ services:
       - ./fukuii-conf:/app/conf:ro
       - ./jwt.hex:/app/jwt/jwt.hex:ro
       - ./fukuii-conf/static-nodes.json:/app/data/static-nodes.json:ro
+    # Image ENTRYPOINT is just `java` — overriding here to be explicit so a
+    # future image change (e.g. baking in `-jar`) doesn't silently break the
+    # arg order. JVM tuning itself comes from JAVA_TOOL_OPTIONS, not from
+    # this list.
+    entrypoint: ["java"]
     command:
-      - "-Xmx4g"
-      - "-Xms2g"
-      - "-Xss10M"
-      - "-XX:+UseG1GC"
-      - "-XX:MaxGCPauseMillis=200"
       - "-Dconfig.file=/app/conf/sepolia.conf"
       - "-Dfukuii.datadir=/app/data"
       - "-jar"
@@ -76,6 +102,11 @@ services:
       - "--http-port=5052"
       - "--http-allow-origin=*"
       - "--port=9000"
+      # Advertise the externally-reachable port (Docker maps host 9100 → container 9000).
+      # Without these, ENR advertises :9000 which is unreachable from outside the bridge,
+      # so peer-discovery dials never complete and Lighthouse can't sync the head.
+      - "--enr-tcp-port=9100"
+      - "--enr-udp-port=9100"
       - "--target-peers=50"
       - "--checkpoint-sync-url=https://sepolia.beaconstate.info"
     depends_on:

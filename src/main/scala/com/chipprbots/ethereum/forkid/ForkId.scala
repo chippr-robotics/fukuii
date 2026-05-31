@@ -14,10 +14,21 @@ import RLPImplicitConversions._
 import RLPImplicits.given
 
 case class ForkId(hash: BigInt, next: Option[BigInt]) {
-  override def toString(): String = s"ForkId(0x${Hex.toHexString(hash.toUnsignedByteArray)}, $next)"
+
+  def nextDisplay: String = next match {
+    case None    => "None"
+    case Some(n) => ForkId.knownSentinels.get(n).fold(n.toString)(name => s"$n ($name)")
+  }
+
+  override def toString(): String =
+    s"ForkId(0x${Hex.toHexString(hash.toUnsignedByteArray)}, next=${nextDisplay})"
 }
 
 object ForkId {
+
+  val knownSentinels: Map[BigInt, String] = Map(
+    BigInt("1000000000000000000") -> "Olympia"
+  )
 
   def create(genesisHash: ByteString, config: BlockchainConfig)(head: BigInt): ForkId =
     create(genesisHash, config)(head, 0L)
@@ -45,7 +56,16 @@ object ForkId {
     new ForkId(crc.getValue(), next.map(_._1))
   }
 
-  val noFork: BigInt = BigInt("1000000000000000000")
+  // Long.MaxValue is the in-code fallback when a fork config key is missing
+  // (BlockchainConfig.fromRawConfig and ForkBlockNumbers.Empty). It must be filtered
+  // out of the EIP-2124 fork-id checksum chain as it is not a real fork block.
+  // 10^18 is the genesis JSON "not yet scheduled" sentinel. Many ETH-specific fork
+  // fields in the ETC config also sit at 10^18 (forks ETC never activated); filtering
+  // all 10^18 values from forkBlockNumbers.all prevents those from polluting the fork
+  // list. Olympia is re-appended explicitly below when olympiaBlockNumber itself is
+  // the sentinel, ensuring ETC/Mordor advertise Olympia as the next fork.
+  private val maxBlockSentinel: BigInt = BigInt(Long.MaxValue)
+  private val olympiaSentinel: BigInt = BigInt("1000000000000000000")
 
   def gatherForks(config: BlockchainConfig): List[BigInt] =
     (gatherBlockForks(config) ++ gatherTimestampForks(config)).distinct.sorted
@@ -55,10 +75,14 @@ object ForkId {
       if (daoConf.includeOnForkIdList) Some(daoConf.forkBlockNumber)
       else None
     }
-    (maybeDaoBlock.toList ++ config.forkBlockNumbers.all)
-      .filterNot(v => v == 0 || v == noFork)
+    val realForks = (maybeDaoBlock.toList ++ config.forkBlockNumbers.all)
+      .filterNot(v => v == 0 || v == olympiaSentinel || v == maxBlockSentinel)
       .distinct
       .sorted
+    // Advertise Olympia sentinel as the next fork when not yet scheduled
+    val olympiaNext =
+      if (config.forkBlockNumbers.olympiaBlockNumber == olympiaSentinel) List(olympiaSentinel) else Nil
+    realForks ++ olympiaNext
   }
 
   /** EIP-6122: Timestamp-based forks for post-Merge chains. */
@@ -66,7 +90,10 @@ object ForkId {
     List(
       config.forkTimestamps.shanghaiTimestamp.map(BigInt(_)),
       config.forkTimestamps.cancunTimestamp.map(BigInt(_)),
-      config.forkTimestamps.pragueTimestamp.map(BigInt(_))
+      config.forkTimestamps.pragueTimestamp.map(BigInt(_)),
+      config.forkTimestamps.osakaTimestamp.map(BigInt(_)),
+      config.forkTimestamps.bpo1Timestamp.map(BigInt(_)),
+      config.forkTimestamps.bpo2Timestamp.map(BigInt(_))
     ).flatten.filterNot(_ == 0).distinct.sorted
 
   implicit class ForkIdEnc(forkId: ForkId) extends RLPSerializable {

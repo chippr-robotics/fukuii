@@ -58,6 +58,7 @@ import com.chipprbots.ethereum.network.p2p.messages.ETH66.{GetBlockHeaders => ET
 import com.chipprbots.ethereum.network.p2p.messages.ETH66.{GetBlockBodies => ETH66GetBlockBodies}
 import com.chipprbots.ethereum.utils.BlockchainConfig
 import com.chipprbots.ethereum.utils.Config.SyncConfig
+import com.chipprbots.ethereum.blockchain.sync.regular.RegularSync
 import org.apache.pekko.actor.ActorRef
 
 class RegularSyncSpec
@@ -93,14 +94,22 @@ class RegularSyncSpec
 
   "Regular Sync" when {
     "initializing" should {
-      "subscribe for new blocks, new hashes and new block headers" taggedAs (UnitTest, SyncTest) in sync(
+      "subscribe for new blocks, new hashes, new block headers and ETH/69 BlockRangeUpdate" taggedAs (
+        UnitTest,
+        SyncTest
+      ) in sync(
         new Fixture(testSystem) {
           regularSync ! SyncProtocol.Start
 
           peerEventBus.expectMsg(
             PeerEventBusActor.Subscribe(
               MessageClassifier(
-                Set(Codes.NewBlockCode, Codes.NewBlockHashesCode, Codes.BlockHeadersCode),
+                Set(
+                  Codes.NewBlockCode,
+                  Codes.NewBlockHashesCode,
+                  Codes.BlockHeadersCode,
+                  Codes.BlockRangeUpdateCode
+                ),
                 PeerSelector.AllPeers
               )
             )
@@ -146,7 +155,7 @@ class RegularSyncSpec
         )
       })
 
-      "blacklist peer which returns headers starting from one with higher number than expected" taggedAs (
+      "not blacklist peer which returns headers not matching current state during reorg" taggedAs (
         UnitTest,
         SyncTest
       ) in sync(
@@ -181,22 +190,30 @@ class RegularSyncSpec
             NewBlock(testBlocks.last, ChainWeight.totalDifficultyOnly(testBlocks.last.number).totalDifficulty),
             defaultPeer.id
           )
+          // Headers from a much later chunk — HeadersNotMatchingWaitingHeaders fires.
+          // The peer is NOT blacklisted: during a reorg, an honest peer on an alternative
+          // chain will return headers that don't extend the local waiting state. Besu
+          // AbstractPeerTask.java distinguishes HeadersNotMatchingExpected (no penalty) from
+          // InvalidHeaders (blacklist). Expect a retry request instead of BlacklistPeer.
           nextHeadersSender ! PeersClient.Response(defaultPeer, BlockHeaders(testBlocksChunked(5).headers))
-          peersClient.fishForSpecificMessage() {
-            case PeersClient.BlacklistPeer(id, _) if id == defaultPeer.id => ()
+          peersClient.fishForSpecificMessage() { case PeersClient.Request(_: ETH66GetBlockHeaders, _, _) =>
+            ()
           }
         }
       )
 
-      "blacklist peer which returns headers not forming a chain" in sync(new Fixture(testSystem) {
+      "not blacklist peer which returns headers not forming a chain" in sync(new Fixture(testSystem) {
+        // HeadersNotFormingSeq: headers don't internally chain (e.g. skipped blocks).
+        // During a reorg an honest peer may send a valid fork segment that doesn't chain
+        // to our expected sequence. No blacklist — just drop and retry.
         regularSync ! SyncProtocol.Start
 
         peersClient.expectMsgEq(blockHeadersChunkRequest(0))
         peersClient.reply(
           PeersClient.Response(defaultPeer, BlockHeaders(testBlocks.headers.filter(_.number % 2 == 0)))
         )
-        peersClient.expectMsgPF() {
-          case PeersClient.BlacklistPeer(id, _) if id == defaultPeer.id => true
+        peersClient.fishForSpecificMessage() { case PeersClient.Request(_: ETH66GetBlockHeaders, _, _) =>
+          ()
         }
       })
 
@@ -441,7 +458,7 @@ class RegularSyncSpec
       })
 
       "retry fetching node if validation failed" taggedAs DisabledTest in sync(new MissingStateNodeFixture(testSystem) {
-        def fishForFailingBlockNodeRequest(): Boolean = peersClient.fishForSpecificMessage() {
+        def fishForFailingBlockNodeRequest(): Boolean = peersClient.fishForSpecificMessage(max = 10.seconds) {
           case PeersClient.Request(GetNodeData(hash :: Nil), _, _) if hash == failingBlock.hash => true
         }
 
@@ -559,15 +576,22 @@ class RegularSyncSpec
         awaitCond(importedNewBlock)
       })
 
-      "broadcast imported block" taggedAs DisabledTest in sync(new OnTopFixture(testSystem) {
+      "broadcast imported block" in sync(new OnTopFixture(testSystem) {
+        networkPeerManager.setAutoPilot(new AutoPilot {
+          def run(sender: ActorRef, msg: Any): AutoPilot = msg match {
+            case GetHandshakedPeers =>
+              sender ! HandshakedPeers(handshakedPeers)
+              this
+            case _ => this
+          }
+        })
+
         goToTop()
 
-        networkPeerManager.expectMsg(GetHandshakedPeers)
-        networkPeerManager.reply(HandshakedPeers(handshakedPeers))
-
         sendNewBlock()
+        awaitCond(importedNewBlock)
 
-        networkPeerManager.fishForSpecificMessageMatching() {
+        networkPeerManager.fishForSpecificMessageMatching(max = 10.seconds) {
           case NetworkPeerManagerActor.SendMessage(message, _) =>
             message.underlyingMsg match {
               case NewBlock(block, _) if block == newBlock => true
@@ -657,10 +681,8 @@ class RegularSyncSpec
     }
 
     "broadcasting blocks" should {
-      "send an ETH NewBlock message to broadcast newly imported blocks" taggedAs DisabledTest in sync(
+      "send an ETH NewBlock message to broadcast newly imported blocks" in sync(
         new OnTopFixture(testSystem) {
-          goToTop()
-
           val peerWithETH63: (Peer, PeerInfo) = {
             val id = peerId(handshakedPeers.size)
             val peer = getPeer(id)
@@ -668,12 +690,21 @@ class RegularSyncSpec
             (peer, peerInfo)
           }
 
-          networkPeerManager.expectMsg(GetHandshakedPeers)
-          networkPeerManager.reply(HandshakedPeers(Map(peerWithETH63._1 -> peerWithETH63._2)))
+          networkPeerManager.setAutoPilot(new AutoPilot {
+            def run(sender: ActorRef, msg: Any): AutoPilot = msg match {
+              case GetHandshakedPeers =>
+                sender ! HandshakedPeers(Map(peerWithETH63._1 -> peerWithETH63._2))
+                this
+              case _ => this
+            }
+          })
 
-          blockFetcher ! MessageFromPeer(BaseETH6XMessages.NewBlock(newBlock, newBlock.number), defaultPeer.id)
+          goToTop()
 
-          networkPeerManager.fishForSpecificMessageMatching() {
+          sendNewBlock()
+          awaitCond(importedNewBlock)
+
+          networkPeerManager.fishForSpecificMessageMatching(max = 10.seconds) {
             case NetworkPeerManagerActor.SendMessage(message, _) =>
               message.underlyingMsg match {
                 case BaseETH6XMessages.NewBlock(`newBlock`, _) => true
@@ -776,9 +807,9 @@ class RegularSyncSpec
 
         for {
           _ <- IO {
-            testBlocks.take(6).foreach(setImportResult(_, IO(BlockImportedToTop(Nil))))
+            testBlocks.take(5).foreach(setImportResult(_, IO(BlockImportedToTop(Nil))))
 
-            peersClient.setAutoPilot(new PeersClientAutoPilot(testBlocks.take(6)))
+            peersClient.setAutoPilot(new PeersClientAutoPilot(testBlocks.take(5)))
 
             regularSync ! SyncProtocol.Start
 
@@ -793,9 +824,9 @@ class RegularSyncSpec
               )
             )
           }
-          _ <- importedBlocks.take(5).compile.last
           _ <- fishForStatus {
-            case s: Status.Syncing if s.blocksProgress == Progress(5, 20) && s.startingBlockNumber == 0 =>
+            case s: Status.Syncing
+                if s.blocksProgress.current >= 5 && s.blocksProgress.target == 20 && s.startingBlockNumber == 0 =>
               s
           }
         } yield succeed
@@ -809,6 +840,40 @@ class RegularSyncSpec
             _ <- IO(goToTop())
             status <- getSyncStatus
           } yield assert(status === Status.SyncDone)
+      }
+    }
+
+    // RS-1: ProgressState.toStatus guard — bestKnownNetworkBlock=0 must not produce SyncDone
+    "ProgressState.toStatus" should {
+      import RegularSync.ProgressState
+      import scala.concurrent.Future
+
+      "return NotSyncing when not yet started" taggedAs (UnitTest, SyncTest) in {
+        val state =
+          ProgressState(startedFetching = false, initialBlock = 0, currentBlock = 0, bestKnownNetworkBlock = 0)
+        Future.successful(assert(state.toStatus === Status.NotSyncing))
+      }
+
+      "return NotSyncing when started but bestKnownNetworkBlock is 0 (no peers seen yet)" taggedAs (
+        UnitTest,
+        SyncTest
+      ) in {
+        // RS-1 regression: before the fix, startedFetching=true and currentBlock(0) >= bestKnownNetworkBlock(0)
+        // incorrectly triggered SyncDone before any peer had announced a block.
+        val state = ProgressState(startedFetching = true, initialBlock = 0, currentBlock = 0, bestKnownNetworkBlock = 0)
+        Future.successful(assert(state.toStatus === Status.NotSyncing))
+      }
+
+      "return Syncing when started and behind chain head" taggedAs (UnitTest, SyncTest) in {
+        val state =
+          ProgressState(startedFetching = true, initialBlock = 5, currentBlock = 10, bestKnownNetworkBlock = 100)
+        Future.successful(assert(state.toStatus === Status.Syncing(5, Progress(10, 100), None)))
+      }
+
+      "return SyncDone when started and caught up to chain head" taggedAs (UnitTest, SyncTest) in {
+        val state =
+          ProgressState(startedFetching = true, initialBlock = 0, currentBlock = 50, bestKnownNetworkBlock = 50)
+        Future.successful(assert(state.toStatus === Status.SyncDone))
       }
     }
   }

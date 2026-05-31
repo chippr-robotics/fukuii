@@ -214,6 +214,221 @@ class AppStateStorageSpec extends AnyWordSpec with ScalaCheckPropertyChecks with
       assert(storage.isSnapSyncInProgress())
       assert(!storage.isSnapSyncDone())
     }
+
+    // ---- J10: SNAP phase completion flag round-trips ----------------------------
+
+    "round-trip isSnapSyncAccountsComplete flag" taggedAs (UnitTest, DatabaseTest) in new Fixtures {
+      val storage = newAppStateStorage()
+      assert(!storage.isSnapSyncAccountsComplete())
+      storage.putSnapSyncAccountsComplete(true).commit()
+      assert(storage.isSnapSyncAccountsComplete())
+      storage.putSnapSyncAccountsComplete(false).commit()
+      assert(!storage.isSnapSyncAccountsComplete())
+    }
+
+    "round-trip isSnapSyncStorageComplete flag" taggedAs (UnitTest, DatabaseTest) in new Fixtures {
+      val storage = newAppStateStorage()
+      assert(!storage.isSnapSyncStorageComplete())
+      storage.putSnapSyncStorageComplete(true).commit()
+      assert(storage.isSnapSyncStorageComplete())
+    }
+
+    "round-trip isSnapSyncBytecodeComplete flag" taggedAs (UnitTest, DatabaseTest) in new Fixtures {
+      val storage = newAppStateStorage()
+      assert(!storage.isSnapSyncBytecodeComplete())
+      storage.putSnapSyncBytecodeComplete(true).commit()
+      assert(storage.isSnapSyncBytecodeComplete())
+    }
+
+    "phase completion flags are independent — setting one does not affect the others" taggedAs (
+      UnitTest,
+      DatabaseTest
+    ) in new Fixtures {
+      val storage = newAppStateStorage()
+      storage.putSnapSyncAccountsComplete(true).commit()
+      assert(storage.isSnapSyncAccountsComplete())
+      assert(!storage.isSnapSyncStorageComplete())
+      assert(!storage.isSnapSyncBytecodeComplete())
+
+      storage.putSnapSyncStorageComplete(true).commit()
+      assert(storage.isSnapSyncAccountsComplete())
+      assert(storage.isSnapSyncStorageComplete())
+      assert(!storage.isSnapSyncBytecodeComplete())
+    }
+
+    "persist and retrieve codeHashes file path" taggedAs (UnitTest, DatabaseTest) in new Fixtures {
+      val storage = newAppStateStorage()
+      assert(storage.getSnapSyncCodeHashesPath().isEmpty)
+      storage.putSnapSyncCodeHashesPath("/data/tmp/snap-code-hashes-abc123.bin").commit()
+      assert(storage.getSnapSyncCodeHashesPath() == Some("/data/tmp/snap-code-hashes-abc123.bin"))
+    }
+
+    "persist and retrieve storage file path" taggedAs (UnitTest, DatabaseTest) in new Fixtures {
+      val storage = newAppStateStorage()
+      assert(storage.getSnapSyncStorageFilePath().isEmpty)
+      storage.putSnapSyncStorageFilePath("/data/tmp/contract-storage.bin").commit()
+      assert(storage.getSnapSyncStorageFilePath() == Some("/data/tmp/contract-storage.bin"))
+    }
+
+    "persist and retrieve finalized state root" taggedAs (UnitTest, DatabaseTest) in new Fixtures {
+      val storage = newAppStateStorage()
+      val root = ByteString(Array.fill[Byte](32)(0xde.toByte))
+      assert(storage.getSnapSyncFinalizedRoot().isEmpty)
+      storage.putSnapSyncFinalizedRoot(root).commit()
+      assert(storage.getSnapSyncFinalizedRoot() == Some(root))
+    }
+
+    // J10: full lifecycle regression — models crash-recovery restart detection.
+    // SNAPSyncController uses isSnapSyncInProgress() at startup to determine whether
+    // to resume (resume path) or start fresh (clean path). This test locks the lifecycle
+    // so a storage refactor cannot silently break the recovery guard.
+    "SNAP lifecycle: fresh → pivot → progress → done → cleared" taggedAs (UnitTest, DatabaseTest) in new Fixtures {
+      val storage = newAppStateStorage()
+      val root = ByteString(Array.fill[Byte](32)(0xca.toByte))
+
+      // Fresh: nothing persisted → not in-progress, not done
+      assert(!storage.isSnapSyncInProgress())
+      assert(!storage.isSnapSyncDone())
+
+      // Pivot chosen (before first AccountRangeProgress message) → in-progress
+      storage.putSnapSyncPivotBlock(BigInt(18_000_000)).commit()
+      assert(storage.isSnapSyncInProgress())
+      assert(!storage.isSnapSyncDone())
+
+      // Progress accumulated — pivot + state-root + progress all present
+      storage
+        .putSnapSyncStateRoot(root)
+        .and(
+          storage.putSnapSyncProgress("""{"phase":"AccountRangeSync","accountsSynced":500000}""")
+        )
+        .commit()
+      assert(storage.isSnapSyncInProgress())
+      assert(!storage.isSnapSyncDone())
+
+      // Phase completions written
+      storage
+        .putSnapSyncAccountsComplete(true)
+        .and(storage.putSnapSyncStorageComplete(true))
+        .and(storage.putSnapSyncBytecodeComplete(true))
+        .commit()
+      assert(storage.isSnapSyncInProgress()) // still in-progress until Done flag
+
+      // Healing finishes → SnapSyncDone flag set
+      storage.snapSyncDone().commit()
+      assert(!storage.isSnapSyncInProgress()) // Done wins
+      assert(storage.isSnapSyncDone())
+
+      // Bug-30 escape: clear both Done flags so SyncController re-enters SNAP from scratch
+      storage.clearSnapSyncDone().and(storage.clearFastSyncDone()).commit()
+      assert(!storage.isSnapSyncDone())
+      // pivotBlock + stateRoot still present → still in-progress (resume path, not fresh path)
+      assert(storage.isSnapSyncInProgress())
+    }
+
+    // ========================================
+    // Backfill cursors (#1169)
+    // ========================================
+
+    "round-trip backfill target / header / body / receipt cursors" taggedAs (UnitTest, DatabaseTest) in new Fixtures {
+      val storage = newAppStateStorage()
+
+      // Empty storage — every getter returns 0.
+      assert(storage.getBackfillTarget() == 0)
+      assert(storage.getBackfillBestHeader() == 0)
+      assert(storage.getBackfillBestBody() == 0)
+      assert(storage.getBackfillBestReceipt() == 0)
+
+      storage
+        .putBackfillTarget(BigInt(19_250_000))
+        .and(storage.putBackfillBestHeader(BigInt(8_000_000)))
+        .and(storage.putBackfillBestBody(BigInt(7_500_000)))
+        .and(storage.putBackfillBestReceipt(BigInt(7_000_000)))
+        .commit()
+
+      assert(storage.getBackfillTarget() == BigInt(19_250_000))
+      assert(storage.getBackfillBestHeader() == BigInt(8_000_000))
+      assert(storage.getBackfillBestBody() == BigInt(7_500_000))
+      assert(storage.getBackfillBestReceipt() == BigInt(7_000_000))
+    }
+
+    "clearBackfillCursors removes all four backfill keys" taggedAs (UnitTest, DatabaseTest) in new Fixtures {
+      val storage = newAppStateStorage()
+      storage
+        .putBackfillTarget(BigInt(100))
+        .and(storage.putBackfillBestHeader(BigInt(50)))
+        .and(storage.putBackfillBestBody(BigInt(40)))
+        .and(storage.putBackfillBestReceipt(BigInt(30)))
+        .commit()
+
+      storage.clearBackfillCursors().commit()
+
+      assert(storage.getBackfillTarget() == 0)
+      assert(storage.getBackfillBestHeader() == 0)
+      assert(storage.getBackfillBestBody() == 0)
+      assert(storage.getBackfillBestReceipt() == 0)
+    }
+
+    "needsBackfillResume — false when SNAP is not done" taggedAs (UnitTest, DatabaseTest) in new Fixtures {
+      val storage = newAppStateStorage()
+      // Even with cursors set, no SNAP-done flag means no resume.
+      storage.putBackfillTarget(BigInt(100)).commit()
+      assert(!storage.needsBackfillResume())
+    }
+
+    "needsBackfillResume — false when no target was persisted" taggedAs (UnitTest, DatabaseTest) in new Fixtures {
+      val storage = newAppStateStorage()
+      storage.snapSyncDone().commit()
+      assert(!storage.needsBackfillResume())
+    }
+
+    "needsBackfillResume — false when all cursors have reached target" taggedAs (
+      UnitTest,
+      DatabaseTest
+    ) in new Fixtures {
+      val storage = newAppStateStorage()
+      storage.snapSyncDone().commit()
+      val target = BigInt(1000)
+      storage
+        .putBackfillTarget(target)
+        .and(storage.putBackfillBestHeader(target))
+        .and(storage.putBackfillBestBody(target))
+        .and(storage.putBackfillBestReceipt(target))
+        .commit()
+      assert(!storage.needsBackfillResume())
+    }
+
+    "needsBackfillResume — true when any cursor lags target" taggedAs (UnitTest, DatabaseTest) in new Fixtures {
+      val storage = newAppStateStorage()
+      storage.snapSyncDone().commit()
+      val target = BigInt(1000)
+
+      // Header behind.
+      storage
+        .putBackfillTarget(target)
+        .and(storage.putBackfillBestHeader(BigInt(500)))
+        .and(storage.putBackfillBestBody(target))
+        .and(storage.putBackfillBestReceipt(target))
+        .commit()
+      assert(storage.needsBackfillResume())
+
+      // Now header caught up but body behind.
+      storage
+        .putBackfillBestHeader(target)
+        .and(storage.putBackfillBestBody(BigInt(800)))
+        .commit()
+      assert(storage.needsBackfillResume())
+
+      // Body caught up but receipt behind.
+      storage
+        .putBackfillBestBody(target)
+        .and(storage.putBackfillBestReceipt(BigInt(600)))
+        .commit()
+      assert(storage.needsBackfillResume())
+
+      // All three caught up.
+      storage.putBackfillBestReceipt(target).commit()
+      assert(!storage.needsBackfillResume())
+    }
   }
 
   trait Fixtures {

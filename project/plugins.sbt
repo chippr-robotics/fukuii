@@ -11,8 +11,8 @@ ThisBuild / dependencyOverrides ++= Seq(
 
 // Add required plugin resolvers
 resolvers += Resolver.sbtPluginRepo("releases")
-resolvers += "Sonatype OSS Releases" at "https://oss.sonatype.org/content/repositories/releases/"
-resolvers += "scalasbt" at "https://repo.scala-sbt.org/scalasbt/sbt-plugin-releases/"
+resolvers += "Sonatype OSS Releases".at("https://oss.sonatype.org/content/repositories/releases/")
+resolvers += "scalasbt".at("https://repo.scala-sbt.org/scalasbt/sbt-plugin-releases/")
 
 addSbtPlugin("com.eed3si9n" % "sbt-buildinfo" % "0.12.0")
 addSbtPlugin("com.lightbend.sbt" % "sbt-javaagent" % "0.1.6")

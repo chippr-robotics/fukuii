@@ -242,7 +242,6 @@ class SNAPRequestTracker(implicit scheduler: Scheduler) extends Logger {
       return Left(s"Expected ${RequestType.GetByteCodes} but got response for ${pending.requestType}")
     }
 
-    // TODO: Validate bytecode hashes match requested hashes
     Right(response)
   }
 

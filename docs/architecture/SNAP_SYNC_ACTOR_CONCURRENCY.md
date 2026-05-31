@@ -1,7 +1,7 @@
 # SNAP Sync Actor-Based Concurrency Design
 
-**Date**: 2025-12-15  
-**Status**: Implementation in Progress  
+**Date**: 2025-12-15
+**Status**: Implemented. Coordinators and workers live in `src/main/scala/com/chipprbots/ethereum/blockchain/sync/snap/actors/`; the legacy synchronized-block code path and `use-actor-concurrency` feature flag have been removed.
 **Requirement**: Use Pekko actor system for concurrency in SNAP requests from peers
 
 ## Overview

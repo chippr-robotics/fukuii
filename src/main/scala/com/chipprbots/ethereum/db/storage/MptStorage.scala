@@ -44,8 +44,8 @@ class SerializingMptStorage(storage: NodesKeyValueStorage) extends MptStorage {
 }
 
 object MptStorage {
-  def collapseNode(node: Option[MptNode]): (Option[MptNode], List[(ByteString, Array[Byte])]) =
-    node.fold[(Option[MptNode], List[(ByteString, Array[Byte])])]((None, List.empty)) { n =>
+  def collapseNode(node: Option[MptNode]): (Option[MptNode], Seq[(ByteString, Array[Byte])]) =
+    node.fold[(Option[MptNode], Seq[(ByteString, Array[Byte])])]((None, Seq.empty)) { n =>
       val (hashNode, newNodes) = MptTraversals.collapseTrie(n)
       (Some(hashNode), newNodes)
     }

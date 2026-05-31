@@ -79,7 +79,10 @@ services:
       - "9098:9095"
     volumes:
       # Configuration files
-      - ./conf/etc.conf:/app/conf/etc.conf:ro
+      # Mount as mordor.conf so App.setNetworkConfig("mordor") picks it up via
+      # its $network.conf filesystem lookup (otherwise it falls back to the
+      # JAR-bundled classpath conf/mordor.conf and clears our -Dconfig.file).
+      - ./conf/etc.conf:/app/conf/mordor.conf:ro
       - ./conf/logback.xml:/app/conf/logback.xml:ro
       # Custom JVM settings: 6GB heap + G1GC for SNAP sync trie finalization
       - ./conf/application.ini:/app/fukuii/conf/application.ini:ro
@@ -110,7 +113,7 @@ services:
       - "-Xss10M"
       - "-XX:+UseG1GC"
       - "-XX:MaxGCPauseMillis=200"
-      - "-Dconfig.file=/app/conf/etc.conf"
+      - "-Dconfig.file=/app/conf/mordor.conf"
       - "-Dfukuii.datadir=/app/data"
       - "-Dfukuii.network.rpc.http.port=8545"
       - "-Dfukuii.metrics.enabled=true"

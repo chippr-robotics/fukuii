@@ -6,16 +6,17 @@ This guide documents the migration from custom test fixtures to the official eth
 
 ## Current Status
 
-### Phase 1-2: ✅ Complete
+> **Note:** This document is historical. The gas-calculation blockers it references have been resolved (see [Gas Calculation Reference](../troubleshooting/GAS_CALCULATION_ISSUES.md)). The ethereum/tests integration is wired up via `src/it/scala/com/chipprbots/ethereum/ethtest/` and runs nightly through `.github/workflows/ethereum-tests-nightly.yml`. Retained for context on the migration approach.
+
+### Phase 1-2: Complete
 - JSON parsing infrastructure implemented
 - Test execution framework working
-- 4 initial validation tests passing
+- Initial validation tests passing
 
-### Phase 3: ⏳ In Progress - BLOCKED
-- **84 tests passing** from ethereum/tests
-- 35 tests failing (mostly gas calculation issues)
-- Gas calculation discrepancies identified and documented
-- **BLOCKED** on EIP-2929 gas calculation fixes
+### Phase 3: Implemented
+- GeneralStateTests, BlockchainTests, TransactionTests, VMTests, ExecutionSpecsStateTests, and ComprehensiveBlockchainTests spec files exist under `src/it/scala/com/chipprbots/ethereum/ethtest/`
+- Nightly CI workflow exercises the suite
+- Gas-calculation discrepancies that previously blocked Phase 3 have been resolved (EIP-2929 compliant)
 
 ## Test Categories
 
@@ -181,7 +182,7 @@ Tests for these networks are automatically filtered out:
 
 ## Known Issues
 
-### 🔴 Critical: Gas Calculation
+### Gas Calculation
 **Status:** RESOLVED
 
 See [Gas Calculation Reference](../troubleshooting/GAS_CALCULATION_ISSUES.md) for full details.
@@ -201,12 +202,12 @@ Some tests show state root mismatches. May be related to:
 
 ## Test Coverage Goals
 
-### Minimum (Current - BLOCKED)
-- ✅ 50+ tests passing - **ACHIEVED: 84 tests**
-- 🔴 No gas calculation errors - **NOT MET**
-- ✅ Multiple test categories - **ACHIEVED**
+### Minimum
+- 50+ tests passing — Achieved
+- No gas calculation errors — Resolved (EIP-2929 compliant)
+- Multiple test categories — Achieved
 
-### Target (After gas fixes)
+### Target
 - 100+ tests passing
 - < 5% failure rate
 - All critical path scenarios covered
@@ -216,9 +217,9 @@ Some tests show state root mismatches. May be related to:
 - < 1% failure rate
 - Full ethereum/tests coverage for supported networks
 
-## CI Integration (Blocked)
+## CI Integration
 
-**Status:** Cannot proceed until gas calculation is fixed
+**Status:** Live. See `.github/workflows/ethereum-tests-nightly.yml`.
 
 **Planned:**
 ```yaml
@@ -268,6 +269,5 @@ jobs:
 
 ---
 
-**Last Updated:** November 15, 2025  
-**Status:** Phase 3 In Progress - BLOCKED on gas calculation fixes  
-**Next Action:** Fix EIP-2929 gas calculation issues
+**Last Updated:** November 15, 2025 (status notes added during 2026 docs cleanup)
+**Status:** Phase 3 implemented; nightly CI live; gas-calculation blockers resolved.

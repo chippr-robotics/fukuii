@@ -1,6 +1,6 @@
 # Fukuii Codebase Map
 
-Quick-reference for navigating the Fukuii Ethereum Classic client. Designed for LLM context windows — scan this file to locate any component without searching.
+Quick-reference for navigating the Fukuii Ethereum execution client. Designed for LLM context windows — scan this file to locate any component without searching.
 
 ## Project Root
 

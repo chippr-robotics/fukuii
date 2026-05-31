@@ -21,7 +21,7 @@
 - ✅ State roots matching expected values
 - 🚀 Ready for Phase 3: broader test suite execution
 
-**Verification Report**: See [Testing Tags Verification Report](../../testing/TESTING_TAGS_VERIFICATION_REPORT.md)
+<!-- Verification report removed; see commit history and PR notes for the testing tags implementation review. -->
 
 ## Context
 

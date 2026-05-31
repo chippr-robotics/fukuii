@@ -37,6 +37,7 @@ object StdSignedTransactionValidator extends SignedTransactionValidator {
       accumGasUsed: BigInt
   )(implicit blockchainConfig: BlockchainConfig): Either[SignedTransactionError, SignedTransactionValid] =
     for {
+      _ <- validateBlobTransactionSupport(stx, blockHeader)
       _ <- checkSyntacticValidity(stx)
       _ <- validateInitCodeSize(stx, blockHeader.number)
       _ <- validateSignature(stx, blockHeader.number)
@@ -47,6 +48,23 @@ object StdSignedTransactionValidator extends SignedTransactionValidator {
       _ <- validateAccountHasEnoughGasToPayUpfrontCost(senderAccount.balance, upfrontGasCost)
       _ <- validateBlockHasEnoughGasLimitForTx(stx, accumGasUsed, blockHeader.gasLimit)
     } yield SignedTransactionValid
+
+  /** EIP-4844 Type-3 (blob) transactions require Cancun activation. ETC never activates Cancun, so blob transactions
+    * are always rejected on ETC networks.
+    */
+  private def validateBlobTransactionSupport(
+      stx: SignedTransaction,
+      blockHeader: BlockHeader
+  )(implicit blockchainConfig: BlockchainConfig): Either[SignedTransactionError, SignedTransactionValid] =
+    stx.tx match {
+      case _: BlobTransaction if !blockchainConfig.isCancunTimestamp(blockHeader.unixTimestamp) =>
+        Left(
+          SignedTransactionError.TransactionSyntaxError(
+            "TYPE_3_TX_NOT_SUPPORTED: blob transactions require Cancun activation (not enabled on this network)"
+          )
+        )
+      case _ => Right(SignedTransactionValid)
+    }
 
   /** EIP-1559: reject txs whose maxFeePerGas cannot cover the block's baseFee, and reject txs where
     * maxPriorityFeePerGas > maxFeePerGas. Applies to all dynamic-fee transaction variants (type 2 / 3 / 4). Legacy and

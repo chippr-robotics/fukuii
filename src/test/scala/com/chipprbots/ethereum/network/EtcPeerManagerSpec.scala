@@ -121,6 +121,57 @@ class EtcPeerManagerSpec extends AnyFlatSpec with Matchers {
     )
   }
 
+  it should "update max peer block when receiving ETH69 BlockRangeUpdate" taggedAs (
+    UnitTest,
+    NetworkTest
+  ) in new TestSetup {
+    // ETH/69 peers send BlockRangeUpdate instead of NewBlock to announce their chain tip.
+    // NetworkPeerManagerActor must update peerInfo.maxBlockNumber from BlockRangeUpdate.latestBlock.
+    import com.chipprbots.ethereum.network.p2p.messages.ETH69
+
+    expectInitialSubscriptions()
+    setupNewPeer(peer1, peer1Probe, peer1Info)
+
+    val newLatestBlock = peer1Info.maxBlockNumber + 7
+    val newLatestBlockHash = ByteString(Array.fill(32)(0xab.toByte))
+    val blockRangeUpdate = ETH69.BlockRangeUpdate(
+      earliestBlock = BigInt(0),
+      latestBlock = newLatestBlock,
+      latestBlockHash = newLatestBlockHash
+    )
+
+    peersInfoHolder ! MessageFromPeer(blockRangeUpdate, peer1.id)
+
+    requestSender.send(peersInfoHolder, PeerInfoRequest(peer1.id))
+    requestSender.expectMsg(
+      PeerInfoResponse(Some(peer1Info.withBestBlockData(newLatestBlock, newLatestBlockHash)))
+    )
+  }
+
+  it should "ignore ETH69 BlockRangeUpdate when latestBlock is not higher than current" taggedAs (
+    UnitTest,
+    NetworkTest
+  ) in new TestSetup {
+    import com.chipprbots.ethereum.network.p2p.messages.ETH69
+
+    expectInitialSubscriptions()
+    setupNewPeer(peer1, peer1Probe, peer1Info)
+
+    // Send a BlockRangeUpdate with a lower block number — peer info should not regress
+    val staleLatestBlock = peer1Info.maxBlockNumber - 1
+    val blockRangeUpdate = ETH69.BlockRangeUpdate(
+      earliestBlock = BigInt(0),
+      latestBlock = staleLatestBlock,
+      latestBlockHash = ByteString(Array.fill(32)(0xcc.toByte))
+    )
+
+    peersInfoHolder ! MessageFromPeer(blockRangeUpdate, peer1.id)
+
+    requestSender.send(peersInfoHolder, PeerInfoRequest(peer1.id))
+    // maxBlockNumber should remain unchanged
+    requestSender.expectMsg(PeerInfoResponse(Some(peer1Info)))
+  }
+
   it should "update the peer total difficulty when receiving a NewBlock" taggedAs (
     UnitTest,
     NetworkTest
@@ -216,6 +267,8 @@ class EtcPeerManagerSpec extends AnyFlatSpec with Matchers {
     // Freshly handshaked peer without best block determined
     setupNewPeer(freshPeer, freshPeerProbe, freshPeerInfo.copy(maxBlockNumber = 0))
 
+    // All handshaked peers are now returned immediately (peerHasUpdatedBestBlock = always true,
+    // Besu-aligned: ETH/68 peers always have maxBlockNumber=0 at handshake; gating deadlocks them)
     requestSender.send(peersInfoHolder, GetHandshakedPeers)
     requestSender.expectMsg(HandshakedPeers(Map(freshPeer -> freshPeerInfo.copy(maxBlockNumber = 0))))
 
@@ -296,10 +349,82 @@ class EtcPeerManagerSpec extends AnyFlatSpec with Matchers {
     // Verify NO GetBlockHeaders request is sent to avoid disconnect with reason 0x10 (Other)
     // Many peers disconnect genesis-only nodes as a peer selection policy
     peer1Probe.expectNoMessage()
+    peerManager.expectNoMessage(100.millis)
 
     // Verify peer is still added to handshaked peers
     requestSender.send(peersInfoHolder, PeerInfoRequest(peer1.id))
     requestSender.expectMsg(PeerInfoResponse(Some(genesisInfo)))
+  }
+
+  it should "send a best-block probe (GetBlockHeaders by bestHash) after handshake on ETH/64-/68" taggedAs (
+    UnitTest,
+    NetworkTest
+  ) in new TestSetup {
+    expectInitialSubscriptions()
+
+    // peer1Info is built with capability = ETH63 above; override to ETH68 (modern peer)
+    // and pin maxBlockNumber to 0 so we exercise the not-yet-known-number path.
+    val eth68Status = peer1Info.remoteStatus.copy(capability = Capability.ETH68)
+    val eth68Info = peer1Info.copy(remoteStatus = eth68Status, maxBlockNumber = 0)
+
+    peersInfoHolder ! PeerHandshakeSuccessful(peer1, eth68Info)
+
+    // Drain the two subscriptions that always follow handshake.
+    peerEventBus.expectMsg(Subscribe(PeerDisconnectedClassifier(PeerSelector.WithId(peer1.id))))
+    peerEventBus.expectMsgClass(classOf[Subscribe])
+
+    // The probe should land on the peerManager TestProbe as a SendMessage to peer1.
+    val sent = peerManager.expectMsgClass(classOf[PeerManagerActor.SendMessage])
+    sent.peerId shouldBe peer1.id
+    sent.message.code shouldBe Codes.GetBlockHeadersCode
+    // ETH/66+ uses request-id-prefixed envelope.
+    sent.message.underlyingMsg shouldBe a[com.chipprbots.ethereum.network.p2p.messages.ETH66.GetBlockHeaders]
+    val gbh =
+      sent.message.underlyingMsg.asInstanceOf[com.chipprbots.ethereum.network.p2p.messages.ETH66.GetBlockHeaders]
+    gbh.block shouldBe Right(eth68Info.remoteStatus.bestHash)
+    gbh.maxHeaders shouldBe BigInt(1)
+    gbh.skip shouldBe BigInt(0)
+    gbh.reverse shouldBe false
+  }
+
+  it should "skip the best-block probe on ETH/69 (number is in STATUS)" taggedAs (
+    UnitTest,
+    NetworkTest
+  ) in new TestSetup {
+    expectInitialSubscriptions()
+
+    val eth69Status = peer1Info.remoteStatus.copy(capability = Capability.ETH69)
+    val eth69Info = peer1Info.copy(remoteStatus = eth69Status)
+
+    peersInfoHolder ! PeerHandshakeSuccessful(peer1, eth69Info)
+
+    // Drain the two subscriptions and assert no probe.
+    peerEventBus.expectMsg(Subscribe(PeerDisconnectedClassifier(PeerSelector.WithId(peer1.id))))
+    peerEventBus.expectMsgClass(classOf[Subscribe])
+    peerManager.expectNoMessage(100.millis)
+  }
+
+  it should "discover peer block number from probe response on ETH/64-/68" taggedAs (
+    UnitTest,
+    NetworkTest
+  ) in new TestSetup {
+    expectInitialSubscriptions()
+
+    // ETH/68 peer with no known block number yet.
+    val eth68Status = peer1Info.remoteStatus.copy(capability = Capability.ETH68)
+    val eth68Info = peer1Info.copy(remoteStatus = eth68Status, maxBlockNumber = 0)
+
+    setupNewPeer(peer1, peer1Probe, eth68Info)
+
+    // Probe response arrives via the existing BlockHeadersCode subscription. The
+    // header carries the bestHash from STATUS and a real block number; updateMaxBlock
+    // should pick up the number and write it into PeerInfo.maxBlockNumber.
+    val probeReply = baseBlockHeader.copy(number = 24463116)
+    peersInfoHolder ! MessageFromPeer(BlockHeaders(Seq(probeReply)), peer1.id)
+
+    requestSender.send(peersInfoHolder, PeerInfoRequest(peer1.id))
+    val resp = requestSender.expectMsgType[PeerInfoResponse]
+    resp.peerInfo.map(_.maxBlockNumber) shouldBe Some(BigInt(24463116))
   }
 
   it should "route SNAP protocol messages to registered SNAPSyncController" taggedAs (
@@ -511,12 +636,20 @@ class EtcPeerManagerSpec extends AnyFlatSpec with Matchers {
         )
       )
 
-      // NetworkPeerManagerActor intentionally does NOT send a GetBlockHeaders on
-      // handshake success — the sync engine pulls what it needs through the
-      // normal PeersClient polling path. Sending unsolicited GetBlockHeaders
-      // deviates from geth's devp2p behavior and caused peers implementing
-      // strict handshake expectations to disconnect with reason 0x10.
+      // After handshake completes, NetworkPeerManagerActor issues a Besu-style
+      // best-block probe (GetBlockHeaders by bestHash, count=1) on ETH/64-/68 so the
+      // peer's block number can be discovered — STATUS doesn't carry it on those
+      // protocol versions. The probe is routed via `peerManagerActor ! SendMessage`,
+      // so it lands on the `peerManager` TestProbe, never on the per-peer `peerProbe`.
+      // Genesis peers and ETH/69 peers are skipped (see dedicated tests below).
       peerProbe.expectNoMessage(100.millis)
+      val nonGenesis = peerInfo.remoteStatus.bestHash != peerInfo.remoteStatus.genesisHash
+      val notEth69 = peerInfo.remoteStatus.capability != Capability.ETH69
+      if (nonGenesis && notEth69) {
+        val probe = peerManager.expectMsgClass(classOf[PeerManagerActor.SendMessage])
+        probe.peerId shouldBe peer.id
+        probe.message.code shouldBe Codes.GetBlockHeadersCode
+      }
     }
   }
 

@@ -20,8 +20,21 @@ class ForkIdSpec extends AnyWordSpec with Matchers {
     }
     "gatherForks for the etc chain correctly" in {
       val res = config.blockchains.map { case (name, conf) => (name, gatherForks(conf)) }
-      res("etc") shouldBe List(1150000, 2500000, 3000000, 5000000, 5900000, 8772000, 9573000, 10500839, 11700000,
-        13189133, 14525000, 19250000)
+      res("etc") shouldBe List(
+        1150000,
+        2500000,
+        3000000,
+        5000000,
+        5900000,
+        8772000,
+        9573000,
+        10500839,
+        11700000,
+        13189133,
+        14525000,
+        19250000,
+        BigInt("1000000000000000000")
+      )
     }
 
     "create correct ForkId for ETC mainnet blocks" in {
@@ -54,7 +67,7 @@ class ForkIdSpec extends AnyWordSpec with Matchers {
       create(14525000 - 1) shouldBe ForkId(0x0f6bf187L, Some(14525000))
       create(14525000) shouldBe ForkId(0x7fd1bb25L, Some(19250000)) // First Mystique block
       create(19250000 - 1) shouldBe ForkId(0x7fd1bb25L, Some(19250000))
-      create(19250000) shouldBe ForkId(0xbe46d57cL, None) // First Spiral block
+      create(19250000) shouldBe ForkId(0xbe46d57cL, Some(BigInt("1000000000000000000"))) // First Spiral block
     }
 
     "create correct ForkId for mordor blocks" in {
@@ -75,13 +88,13 @@ class ForkIdSpec extends AnyWordSpec with Matchers {
       create(5520000 - 1) shouldBe ForkId(0x92b323e0L, Some(5520000))
       create(5520000) shouldBe ForkId(0x8c9b1797L, Some(9957000)) // First Mystique block
       create(9957000 - 1) shouldBe ForkId(0x8c9b1797L, Some(9957000))
-      // Spiral is the latest activated fork on Mordor today. Olympia is not
-      // scheduled on Mordor yet (mordor-chain.conf leaves olympia-block-number
-      // at the sentinel 10^18). Update this assertion when Olympia's Mordor
-      // block is set — the expected shape is then
-      // `ForkId(0x3a6b00d7L, Some(<olympia-block>))` here.
-      create(9957000) shouldBe ForkId(0x3a6b00d7L, None)
-      create(20000000) shouldBe ForkId(0x3a6b00d7L, None)
+      // Spiral is the latest activated fork on Mordor. Olympia is not yet
+      // scheduled (mordor-chain.conf leaves olympia-block-number at sentinel
+      // 10^18), so next=Some(1000000000000000000) is advertised per EIP-2124.
+      // Update this assertion to `ForkId(0x3a6b00d7L, Some(<olympia-block>))`
+      // when Olympia's real Mordor block is set.
+      create(9957000) shouldBe ForkId(0x3a6b00d7L, Some(BigInt("1000000000000000000")))
+      create(20000000) shouldBe ForkId(0x3a6b00d7L, Some(BigInt("1000000000000000000")))
     }
 
     "follow EIP-2124 specification for ForkId at all block heights" in {
@@ -100,9 +113,9 @@ class ForkIdSpec extends AnyWordSpec with Matchers {
       create(1149999) shouldBe ForkId(0xfc64ec04L, Some(1150000))
       create(1150000) shouldBe ForkId(0x97c2c34cL, Some(2500000))
 
-      // Latest fork should have None for next
-      create(19250000) shouldBe ForkId(0xbe46d57cL, None)
-      create(20000000) shouldBe ForkId(0xbe46d57cL, None)
+      // Spiral is the latest activated fork; Olympia sentinel advertised as next
+      create(19250000) shouldBe ForkId(0xbe46d57cL, Some(BigInt("1000000000000000000")))
+      create(20000000) shouldBe ForkId(0xbe46d57cL, Some(BigInt("1000000000000000000")))
     }
 
     // Here's a couple of tests to verify the proper RLP encoding (since FORK_HASH is a 4 byte binary but FORK_NEXT is an 8 byte quantity):

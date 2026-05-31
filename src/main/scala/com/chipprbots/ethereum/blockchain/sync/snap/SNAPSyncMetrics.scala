@@ -201,6 +201,54 @@ object SNAPSyncMetrics extends MetricsContainer {
   final private val MalformedResponsesCounter =
     metrics.counter("snapsync.responses.malformed.total")
 
+  // ===== Queue Backpressure Metrics (PR #1233, #1241) =====
+
+  /** Storage coordinator pending-task queue depth */
+  final private val StorageQueueDepthGauge =
+    metrics.registry.gauge("snapsync.storage.queue.depth.gauge", new AtomicLong(0L))
+
+  /** Storage coordinator backpressure state (1=engaged, 0=released) */
+  final private val StorageBackpressureGauge =
+    metrics.registry.gauge("snapsync.storage.backpressure.gauge", new AtomicLong(0L))
+
+  /** Number of per-account streaming storage tries currently held in memory. Each instance is bounded to ~8 MiB by
+    * `SnapHashTrie.DefaultBatchSizeBytes`, so this × 8 MiB is the worst-case storage-processing heap footprint.
+    */
+  final private val StoragePendingTriesGauge =
+    metrics.registry.gauge("snapsync.storage.pending_tries.size.gauge", new AtomicLong(0L))
+
+  /** Bytecode coordinator pending-task queue depth */
+  final private val ByteCodeQueueDepthGauge =
+    metrics.registry.gauge("snapsync.bytecode.queue.depth.gauge", new AtomicLong(0L))
+
+  /** Bytecode coordinator backpressure state (1=engaged, 0=released) */
+  final private val ByteCodeBackpressureGauge =
+    metrics.registry.gauge("snapsync.bytecode.backpressure.gauge", new AtomicLong(0L))
+
+  /** Counter for total pivot refreshes since SNAP sync start */
+  final private val PivotRefreshedCounter =
+    metrics.counter("snapsync.pivot.refreshed.total")
+
+  /** Counter for lagging-peer evictions (NetworkPeerManagerActor.CheckLaggingPeers) */
+  final private val LaggingPeerEvictedCounter =
+    metrics.counter("network.lagging_peer.evicted.total")
+
+  /** Counter for peers with confirmed snapless demotion (after 3 strikes) */
+  final private val SnaplessPeersConfirmedCounter =
+    metrics.counter("snapsync.peers.snapless.confirmed.total")
+
+  /** Counter for peers with confirmed stateless demotion (after 3 strikes) */
+  final private val StatelessPeersConfirmedCounter =
+    metrics.counter("snapsync.peers.stateless.confirmed.total")
+
+  /** Active SNAP peers per coordinator (knownAvailable - stateless - snapless - coolingDown) */
+  final private val AccountActivePeersGauge =
+    metrics.registry.gauge("snapsync.accounts.active_peers.gauge", new AtomicLong(0L))
+  final private val StorageActivePeersGauge =
+    metrics.registry.gauge("snapsync.storage.active_peers.gauge", new AtomicLong(0L))
+  final private val ByteCodeActivePeersGauge =
+    metrics.registry.gauge("snapsync.bytecode.active_peers.gauge", new AtomicLong(0L))
+
   // ===== Public API for Metrics Updates =====
 
   /** Update current sync phase (0-6 as defined in documentation) */
@@ -226,6 +274,7 @@ object SNAPSyncMetrics extends MetricsContainer {
       case SNAPSyncController.StateValidation         => 6
       case SNAPSyncController.ChainDownloadCompletion => 7
       case SNAPSyncController.Completed               => 8
+      case SNAPSyncController.Dormant                 => 9
     }
     setCurrentPhase(phaseValue)
 
@@ -295,4 +344,22 @@ object SNAPSyncMetrics extends MetricsContainer {
   def incrementInvalidProof(): Unit = InvalidProofsCounter.increment()
   def incrementMalformedResponse(): Unit = MalformedResponsesCounter.increment()
   def setMissingNodesDetected(count: Long): Unit = MissingNodesDetectedGauge.set(count)
+
+  // ===== Backpressure / Pivot / Peer-Pool Metrics (PR #1233, #1237, #1239, #1241, #1242) =====
+
+  def setStorageQueueDepth(depth: Long): Unit = StorageQueueDepthGauge.set(depth)
+  def setStorageBackpressure(engaged: Boolean): Unit = StorageBackpressureGauge.set(if (engaged) 1L else 0L)
+  def setStoragePendingTries(count: Long): Unit = StoragePendingTriesGauge.set(count)
+
+  def setByteCodeQueueDepth(depth: Long): Unit = ByteCodeQueueDepthGauge.set(depth)
+  def setByteCodeBackpressure(engaged: Boolean): Unit = ByteCodeBackpressureGauge.set(if (engaged) 1L else 0L)
+
+  def incrementPivotRefreshed(): Unit = PivotRefreshedCounter.increment()
+  def incrementLaggingPeerEvicted(): Unit = LaggingPeerEvictedCounter.increment()
+  def incrementSnaplessPeerConfirmed(): Unit = SnaplessPeersConfirmedCounter.increment()
+  def incrementStatelessPeerConfirmed(): Unit = StatelessPeersConfirmedCounter.increment()
+
+  def setAccountActivePeers(count: Int): Unit = AccountActivePeersGauge.set(count.toLong)
+  def setStorageActivePeers(count: Int): Unit = StorageActivePeersGauge.set(count.toLong)
+  def setByteCodeActivePeers(count: Int): Unit = ByteCodeActivePeersGauge.set(count.toLong)
 }

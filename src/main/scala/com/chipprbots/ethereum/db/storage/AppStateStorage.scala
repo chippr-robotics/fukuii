@@ -278,6 +278,22 @@ class AppStateStorage(val dataSource: DataSource) extends TransactionalKeyValueS
   def putSnapSyncAccountsComplete(complete: Boolean): DataSourceBatchUpdate =
     put(Keys.SnapSyncAccountsComplete, complete.toString)
 
+  /** Check if SNAP sync storage download phase has completed. Used to skip storage re-download on restart. */
+  def isSnapSyncStorageComplete(): Boolean =
+    get(Keys.SnapSyncStorageComplete).exists(_.toBoolean)
+
+  /** Mark SNAP sync storage download as complete (or incomplete on full restart). */
+  def putSnapSyncStorageComplete(complete: Boolean): DataSourceBatchUpdate =
+    put(Keys.SnapSyncStorageComplete, complete.toString)
+
+  /** Check if SNAP sync bytecode download phase has completed. Used to skip bytecode re-download on restart. */
+  def isSnapSyncBytecodeComplete(): Boolean =
+    get(Keys.SnapSyncBytecodeComplete).exists(_.toBoolean)
+
+  /** Mark SNAP sync bytecode download as complete (or incomplete on full restart). */
+  def putSnapSyncBytecodeComplete(complete: Boolean): DataSourceBatchUpdate =
+    put(Keys.SnapSyncBytecodeComplete, complete.toString)
+
   /** Get the persisted path to the unique codeHashes file for bytecode sync recovery. */
   def getSnapSyncCodeHashesPath(): Option[String] =
     get(Keys.SnapSyncCodeHashesPath)
@@ -303,6 +319,79 @@ class AppStateStorage(val dataSource: DataSource) extends TransactionalKeyValueS
   /** Store the finalized account trie root hash from finalizeTrie(). */
   def putSnapSyncFinalizedRoot(root: ByteString): DataSourceBatchUpdate =
     put(Keys.SnapSyncFinalizedRoot, Hex.toHexString(root.toArray))
+
+  // ========================================
+  // Background chain backfill cursors (#1169)
+  // ========================================
+  //
+  // After SNAP completes, `ChainDownloader` continues to backfill genesis→pivot in the background
+  // (#1162). If the node is killed mid-backfill we want regular sync to come back up immediately
+  // and *also* resume backfill from where it stopped. These cursors give us:
+  //
+  //   1. A fast skip-to-current path on resume (no full binary search across the chain).
+  //   2. A predicate (`needsBackfillResume`) for `SyncController.start()` to decide whether to
+  //      spawn a standalone `ChainDownloader` alongside regular sync.
+  //
+  // Three separate cursors because `ChainDownloader` writes headers, bodies, and receipts on
+  // independent commit paths — they don't all advance in lockstep and must be tracked
+  // separately. Each cursor is updated atomically with its corresponding storage commit so a
+  // crash mid-write never leaves the cursor ahead of the data on disk.
+
+  /** Highest backfill target the node was working toward when it last saved progress. Set when `ChainDownloader`
+    * starts; cleared after `Done` so future startups don't spuriously resume.
+    */
+  def getBackfillTarget(): BigInt =
+    getBigInt(Keys.BackfillTarget)
+
+  def putBackfillTarget(target: BigInt): DataSourceBatchUpdate =
+    put(Keys.BackfillTarget, target.toString)
+
+  /** Highest header number whose `storeBlockHeader` commit has succeeded. */
+  def getBackfillBestHeader(): BigInt =
+    getBigInt(Keys.BackfillBestHeader)
+
+  def putBackfillBestHeader(n: BigInt): DataSourceBatchUpdate =
+    put(Keys.BackfillBestHeader, n.toString)
+
+  /** Highest block number whose `storeBlockBody` commit has succeeded. May lag the header cursor. */
+  def getBackfillBestBody(): BigInt =
+    getBigInt(Keys.BackfillBestBody)
+
+  def putBackfillBestBody(n: BigInt): DataSourceBatchUpdate =
+    put(Keys.BackfillBestBody, n.toString)
+
+  /** Highest block number whose `storeReceipts` commit has succeeded. May lag the body cursor. */
+  def getBackfillBestReceipt(): BigInt =
+    getBigInt(Keys.BackfillBestReceipt)
+
+  def putBackfillBestReceipt(n: BigInt): DataSourceBatchUpdate =
+    put(Keys.BackfillBestReceipt, n.toString)
+
+  /** Clear all backfill cursors + target. Called on `ChainDownloader.Done` so the next startup doesn't try to resume an
+    * already-completed backfill.
+    */
+  def clearBackfillCursors(): DataSourceBatchUpdate =
+    update(
+      toRemove = Seq(
+        Keys.BackfillTarget,
+        Keys.BackfillBestHeader,
+        Keys.BackfillBestBody,
+        Keys.BackfillBestReceipt
+      ),
+      toUpsert = Nil
+    )
+
+  /** True iff SNAP is done AND a backfill target was previously persisted AND any of the three cursors is below the
+    * target. `SyncController.start()` uses this to spawn a standalone `ChainDownloader` alongside regular sync.
+    */
+  def needsBackfillResume(): Boolean = {
+    if (!isSnapSyncDone()) return false
+    val target = getBackfillTarget()
+    if (target <= 0) return false
+    getBackfillBestHeader() < target ||
+    getBackfillBestBody() < target ||
+    getBackfillBestReceipt() < target
+  }
 }
 
 object AppStateStorage {
@@ -327,9 +416,15 @@ object AppStateStorage {
     val BytecodeRecoveryDone = "BytecodeRecoveryDone"
     val StorageRecoveryDone = "StorageRecoveryDone"
     val SnapSyncAccountsComplete = "SnapSyncAccountsComplete"
+    val SnapSyncStorageComplete = "SnapSyncStorageComplete"
+    val SnapSyncBytecodeComplete = "SnapSyncBytecodeComplete"
     val SnapSyncCodeHashesPath = "SnapSyncCodeHashesPath"
     val SnapSyncStorageFilePath = "SnapSyncStorageFilePath"
     val SnapSyncFinalizedRoot = "SnapSyncFinalizedRoot"
+    val BackfillTarget = "BackfillTarget"
+    val BackfillBestHeader = "BackfillBestHeader"
+    val BackfillBestBody = "BackfillBestBody"
+    val BackfillBestReceipt = "BackfillBestReceipt"
   }
 
 }

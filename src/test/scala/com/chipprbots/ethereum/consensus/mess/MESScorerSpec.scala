@@ -77,6 +77,115 @@ class MESSConfigSpec extends AnyFlatSpec with Matchers {
     config.isActiveAtBlock(19249999) shouldBe true
     config.isActiveAtBlock(19250000) shouldBe false
   }
+
+  // ── Olympia re-activation (second MESS window) ────────────────────────────
+
+  it should "be inactive at reactivationBlock-1 (deactivated gap)" taggedAs (UnitTest, ConsensusTest) in {
+    val config = MESSConfig(
+      enabled = true,
+      activationBlock = Some(100),
+      deactivationBlock = Some(200),
+      reactivationBlock = Some(300)
+    )
+    config.isActiveAtBlock(299) shouldBe false
+  }
+
+  it should "be active at reactivationBlock (inclusive)" taggedAs (UnitTest, ConsensusTest) in {
+    val config = MESSConfig(
+      enabled = true,
+      activationBlock = Some(100),
+      deactivationBlock = Some(200),
+      reactivationBlock = Some(300)
+    )
+    config.isActiveAtBlock(300) shouldBe true
+  }
+
+  it should "remain active arbitrarily far past reactivationBlock" taggedAs (UnitTest, ConsensusTest) in {
+    val config = MESSConfig(
+      enabled = true,
+      activationBlock = Some(100),
+      deactivationBlock = Some(200),
+      reactivationBlock = Some(300)
+    )
+    config.isActiveAtBlock(300) shouldBe true
+    config.isActiveAtBlock(1000000) shouldBe true
+    config.isActiveAtBlock(BigInt("99999999999")) shouldBe true
+  }
+
+  it should "not activate the second window when reactivationBlock is None" taggedAs (UnitTest, ConsensusTest) in {
+    val config = MESSConfig(
+      enabled = true,
+      activationBlock = Some(100),
+      deactivationBlock = Some(200),
+      reactivationBlock = None
+    )
+    config.isActiveAtBlock(200) shouldBe false
+    config.isActiveAtBlock(500) shouldBe false
+  }
+
+  it should "keep reactivationBlock inactive when enabled=false" taggedAs (UnitTest, ConsensusTest) in {
+    val config = MESSConfig(
+      enabled = false,
+      activationBlock = Some(100),
+      deactivationBlock = Some(200),
+      reactivationBlock = Some(300)
+    )
+    config.isActiveAtBlock(300) shouldBe false
+    config.isActiveAtBlock(1000000) shouldBe false
+  }
+
+  // ── ETC mainnet full MESS lifecycle (ECBP-1100 + Olympia re-activation) ──
+
+  it should "trace the full ETC mainnet MESS lifecycle through Olympia" taggedAs (UnitTest, ConsensusTest) in {
+    // Hypothetical Olympia block — actual value TBD before mainnet activation.
+    val OlympiaBlock = BigInt("25000000")
+    val config = MESSConfig(
+      enabled = true,
+      activationBlock = Some(11380000),
+      deactivationBlock = Some(19250000),
+      reactivationBlock = Some(OlympiaBlock)
+    )
+
+    // Pre-ECBP-1100: inactive
+    config.isActiveAtBlock(BigInt(0)) shouldBe false
+    config.isActiveAtBlock(BigInt("11379999")) shouldBe false
+
+    // ECBP-1100 active window: [11,380,000, 19,250,000)
+    config.isActiveAtBlock(BigInt("11380000")) shouldBe true
+    config.isActiveAtBlock(BigInt("15000000")) shouldBe true
+    config.isActiveAtBlock(BigInt("19249999")) shouldBe true
+
+    // Deactivated gap: [19,250,000, OlympiaBlock)
+    config.isActiveAtBlock(BigInt("19250000")) shouldBe false
+    config.isActiveAtBlock(BigInt("22000000")) shouldBe false
+    config.isActiveAtBlock(OlympiaBlock - 1) shouldBe false
+
+    // Olympia re-activation: [OlympiaBlock, ∞)
+    config.isActiveAtBlock(OlympiaBlock) shouldBe true
+    config.isActiveAtBlock(OlympiaBlock + 1) shouldBe true
+    config.isActiveAtBlock(BigInt("99999999999")) shouldBe true
+  }
+
+  // ── Mordor full MESS lifecycle (ECBP-1100 + Olympia re-activation) ───────
+
+  it should "trace the full Mordor MESS lifecycle through Olympia" taggedAs (UnitTest, ConsensusTest) in {
+    val OlympiaBlockMordor = BigInt("12000000")
+    val config = MESSConfig(
+      enabled = true,
+      activationBlock = Some(2380000),
+      deactivationBlock = Some(10400000),
+      reactivationBlock = Some(OlympiaBlockMordor)
+    )
+
+    config.isActiveAtBlock(BigInt("2379999")) shouldBe false
+    config.isActiveAtBlock(BigInt("2380000")) shouldBe true
+    config.isActiveAtBlock(BigInt("6000000")) shouldBe true
+    config.isActiveAtBlock(BigInt("10399999")) shouldBe true
+    config.isActiveAtBlock(BigInt("10400000")) shouldBe false
+    config.isActiveAtBlock(OlympiaBlockMordor - 1) shouldBe false
+    config.isActiveAtBlock(OlympiaBlockMordor) shouldBe true
+    config.isActiveAtBlock(OlympiaBlockMordor + 1000) shouldBe true
+  }
 }
 
 /** Tests for ArtificialFinality (ECIP-1100 cubic polynomial).

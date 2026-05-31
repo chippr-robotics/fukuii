@@ -215,9 +215,16 @@ class BlockchainHostActor(
           startBlockNumber to (startBlockNumber + (skip + 1) * headersCount - 1) by (skip + 1)
         }
 
-        val blockHeaders: Seq[BlockHeader] = range.flatMap { (a: BigInt) =>
-          blockchainReader.getBlockHeaderByNumber(a)
-        }
+        // Stop at first missing header (contiguous prefix — matches Besu EthServer.java break behavior)
+        val blockHeaders: Seq[BlockHeader] =
+          LazyList.from(range).map(a => blockchainReader.getBlockHeaderByNumber(a)).takeWhile(_.isDefined).flatten.toSeq
+
+        log.debug(
+          "GetBlockHeaders: start={} maxReq={} → returning {} headers",
+          startBlockNumber,
+          headersCount,
+          blockHeaders.size
+        )
 
         // Return ETH66+ format if requestId is provided, otherwise ETH62 format
         requestIdOpt match {
@@ -226,14 +233,19 @@ class BlockchainHostActor(
         }
 
       case _ =>
+        // Starting block not found in DB — respond with empty list (matches Besu EthServer.java:158-160).
+        // Never leave the requester waiting with no response; timeouts cause immediate peer drops.
         log.warning(
-          "got request for block headers with invalid block hash/number: block={}, maxHeaders={}, skip={}, reverse={}",
+          "GetBlockHeaders: starting block not found (block={} maxHeaders={} skip={} reverse={}) — responding empty",
           block.fold(_.toString, h => s"0x${h.toArray.map("%02x".format(_)).mkString}"),
           maxHeaders,
           skip,
           reverse
         )
-        None
+        requestIdOpt match {
+          case Some(requestId) => Some(ETH66.BlockHeaders(requestId, Seq.empty))
+          case None            => Some(ETH62.BlockHeaders(Seq.empty))
+        }
     }
   }
 

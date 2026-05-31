@@ -519,8 +519,6 @@ Potential improvements for consideration:
 
 ## References
 
-- [SNAP Sync TODO](./SNAP_SYNC_TODO.md)
-- [SNAP Sync Status](./SNAP_SYNC_STATUS.md)
 - [SNAP Sync Implementation](./SNAP_SYNC_IMPLEMENTATION.md)
 - [Circuit Breaker Pattern](https://martinfowler.com/bliki/CircuitBreaker.html)
 - [Exponential Backoff](https://en.wikipedia.org/wiki/Exponential_backoff)

@@ -6,7 +6,6 @@ This directory contains comprehensive testing documentation for the Fukuii Ether
 
 ### Gorgoroth Multi-Client Testing
 - **[GORGOROTH_COMPATIBILITY_TESTING.md](GORGOROTH_COMPATIBILITY_TESTING.md)** - Complete testing procedures for multi-client validation
-- **[GORGOROTH_FAUCET_TESTING.md](GORGOROTH_FAUCET_TESTING.md)** - Faucet service validation procedures
 - **[FAST_SYNC_TESTING_PLAN.md](FAST_SYNC_TESTING_PLAN.md)** - Fast sync testing plan for 6-node Gorgoroth network
 
 ### Cirith Ungol Real-World Sync Testing
@@ -21,10 +20,6 @@ This directory contains comprehensive testing documentation for the Fukuii Ether
 ### Architecture Decision Records (ADRs)
 - **[TEST-001](../adr/testing/TEST-001-ethereum-tests-adapter.md)** - Ethereum/Tests Adapter Implementation
 - **[TEST-002](../adr/testing/TEST-002-test-suite-strategy-and-kpis.md)** - Test Suite Strategy, KPIs, and Execution Benchmarks
-
-### Implementation Verification
-- **[TESTING_TAGS_VERIFICATION_REPORT.md](TESTING_TAGS_VERIFICATION_REPORT.md)** - Comprehensive verification report for testing tags ADR implementation (November 17, 2025)
-- **[NEXT_STEPS.md](NEXT_STEPS.md)** - Action plan for completing remaining testing tags work (35% remaining)
 
 ### KPI Baseline Documentation
 - **[KPI_BASELINES.md](KPI_BASELINES.md)** - Comprehensive KPI baseline definitions and targets

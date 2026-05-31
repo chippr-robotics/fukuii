@@ -4,9 +4,9 @@ import io.micrometer.core.instrument._
 import io.micrometer.core.instrument.composite.CompositeMeterRegistry
 import io.micrometer.core.instrument.config.MeterFilter
 import io.micrometer.jmx.JmxMeterRegistry
-import io.micrometer.prometheus.PrometheusConfig
-import io.micrometer.prometheus.PrometheusMeterRegistry
-import io.prometheus.client.CollectorRegistry
+import io.micrometer.prometheusmetrics.PrometheusConfig
+import io.micrometer.prometheusmetrics.PrometheusMeterRegistry
+import io.prometheus.metrics.model.registry.PrometheusRegistry
 
 import com.chipprbots.ethereum.utils.Logger
 import com.chipprbots.ethereum.utils.LoggingUtils.getClassName
@@ -27,12 +27,13 @@ object MeterRegistryBuilder extends Logger {
 
     log.info(s"Build JMX Meter Registry: ${jmxMeterRegistry}")
 
+    // Wire Micrometer's PrometheusMeterRegistry to share the prometheus-1.x default
+    // registry that `Metrics.start()`'s `PrometheusHTTPServer` serves. Without this, the
+    // default-arg constructor creates an isolated registry, and every Counter/Gauge/Timer
+    // written via Micrometer is stranded — only JVM metrics from `JvmMetrics.builder().register()`
+    // (which writes directly to the default registry) ever reach /metrics.
     val prometheusMeterRegistry =
-      new PrometheusMeterRegistry(
-        PrometheusConfig.DEFAULT,
-        CollectorRegistry.defaultRegistry,
-        StdMetricsClock
-      );
+      new PrometheusMeterRegistry(PrometheusConfig.DEFAULT, PrometheusRegistry.defaultRegistry, StdMetricsClock)
 
     log.info(s"Build Prometheus Meter Registry: ${prometheusMeterRegistry}")
 

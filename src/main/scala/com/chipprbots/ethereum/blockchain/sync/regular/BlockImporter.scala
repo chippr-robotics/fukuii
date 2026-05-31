@@ -64,20 +64,23 @@ class BlockImporter(
 
   context.setReceiveTimeout(syncConfig.syncRetryInterval)
 
-  // Counts consecutive state-node-fetch exhausts since the last successful state-node delivery.
-  // Don't key on block number: branch resolution walks the chain back one block per backoff
-  // cycle (24428221 → 24428220 → ...), so per-block tracking would never reach the threshold.
-  // After [[StuckEscapeThreshold]] consecutive exhausts anywhere, regular sync is deemed
-  // terminally stuck and we signal SyncController to re-trigger SNAP from a recent pivot.
-  private var consecutiveExhausts: Int = 0
   private var pendingStateNodeHash: Option[ByteString] = None
+
+  // Reset the companion-object exhaust counter on fresh actor creation.
+  // On Pekko Restart, only postRestart() fires — preStart() is skipped — so
+  // survivedExhausts is preserved across restarts and only zeroed for a new
+  // BlockImporter actor (new regular-sync session).
+  override def preStart(): Unit = {
+    super.preStart()
+    BlockImporter.survivedExhausts = 0
+  }
 
   override def receive: Receive = idle
 
-  override def postRestart(reason: Throwable): Unit = {
-    super.postRestart(reason)
+  override def postRestart(reason: Throwable): Unit =
+    // Intentionally skip super.postRestart() — that would call preStart() and
+    // reset survivedExhausts, defeating its purpose of surviving Pekko Restarts.
     start()
-  }
 
   private def idle: Receive = { case Start =>
     start()
@@ -139,10 +142,10 @@ class BlockImporter(
       // can serve it via SNAP GetTrieNodes (typical: pivot fell out of the 128-block serve window
       // on every connected peer).
       val blockNum = blocksToRetry.head.number
-      consecutiveExhausts += 1
+      BlockImporter.survivedExhausts += 1
       val missingHashStr = pendingStateNodeHash.map(ByteStringUtils.hash2string).getOrElse("<unknown>")
 
-      if (consecutiveExhausts >= BlockImporter.StuckEscapeThreshold) {
+      if (BlockImporter.survivedExhausts >= BlockImporter.StuckEscapeThreshold) {
         // Multiple consecutive exhausts mean peers genuinely don't have our parent state and
         // never will (we're far behind their snap-serve window). The only recovery is to re-pivot
         // via SNAP. Reset our local counter so we don't re-fire if SyncController bounces us back
@@ -150,10 +153,10 @@ class BlockImporter(
         log.error(
           "Regular sync stuck on block {} after {} consecutive state-node exhausts (missing {}); requesting SNAP re-sync",
           blockNum,
-          consecutiveExhausts,
+          BlockImporter.survivedExhausts,
           missingHashStr
         )
-        consecutiveExhausts = 0
+        BlockImporter.survivedExhausts = 0
         pendingStateNodeHash = None
         supervisor ! SyncProtocol.RegularSyncStuck(blockNum, missingHashStr)
         // Don't transition further — SyncController will PoisonPill regular sync.
@@ -161,7 +164,7 @@ class BlockImporter(
         log.error(
           "State node recovery failed after max retries for block {} (consecutive exhausts: {}/{}) — backing off {}s before retry",
           blockNum,
-          consecutiveExhausts,
+          BlockImporter.survivedExhausts,
           BlockImporter.StuckEscapeThreshold,
           5.minutes.toSeconds
         )
@@ -190,7 +193,7 @@ class BlockImporter(
       catch { case _: Exception => () }
       // Successful state-node delivery — reset stuck-counter so a later transient failure on a
       // different block doesn't escalate to SNAP re-sync prematurely.
-      consecutiveExhausts = 0
+      BlockImporter.survivedExhausts = 0
       pendingStateNodeHash = None
       importBlocks(blocksToRetry, blockImportType)(state)
 
@@ -199,241 +202,12 @@ class BlockImporter(
       // Retry the same blocks directly — don't PickBlocks, which would fetch from wherever the
       // fetcher is now (potentially far beyond the pivot). After SNAP sync, only the pivot header
       // has a number→hash mapping, so branch resolution would fail for any other starting point.
+      BlockImporter.survivedExhausts += 1
       importBlocks(blocksToRetry, blockImportType)(state)
   }
 
   private def resolvingBranch(from: BigInt)(state: ImporterState): Receive =
     running(state.resolvingBranch(from))
-
-  /** Walk the local trie from stateRoot to find the HP-encoded path to a missing node. Returns the pathset suitable for
-    * SNAP GetTrieNodes: single-element for account trie nodes, two-element [accountHash, storagePath] for storage trie
-    * nodes. Limited to MaxTrieVisits node reads to avoid multi-minute DFS on large tries.
-    */
-  private val MaxTrieVisits = 50000
-
-  /** Walk the specific path through the account trie for the given account hash. Instead of DFS over millions of nodes,
-    * this follows the exact key path — O(depth) = ~12 hops. Returns the HP-encoded SNAP pathset for the missing node.
-    */
-  private def walkAccountPath(
-      stateRoot: ByteString,
-      accountHash: ByteString,
-      targetHash: ByteString
-  ): Option[Seq[ByteString]] =
-    try {
-      val mptStorage = stateStorage.getReadOnlyStorage
-      if (mptStorage == null) return None
-      val keyNibbles = HexPrefix.bytesToNibbles(accountHash.toArray)
-      walkPath(mptStorage, stateRoot, keyNibbles, 0, targetHash)
-    } catch {
-      case _: Exception => None
-    }
-
-  /** Walk the trie following keyNibbles, checking each HashNode for the target hash. */
-  private def walkPath(
-      storage: com.chipprbots.ethereum.db.storage.MptStorage,
-      nodeHash: ByteString,
-      keyNibbles: Array[Byte],
-      offset: Int,
-      targetHash: ByteString
-  ): Option[Seq[ByteString]] = {
-    if (nodeHash == targetHash) {
-      // This hash reference IS the missing node — return path up to current offset
-      val path = keyNibbles.take(offset)
-      val compactPath = ByteString(HexPrefix.encode(path, isLeaf = false))
-      return Some(Seq(compactPath))
-    }
-    try {
-      val node = storage.get(nodeHash.toArray)
-      walkNode(storage, node, keyNibbles, offset, targetHash)
-    } catch {
-      case e: MissingNodeException if e.hash == targetHash =>
-        val path = keyNibbles.take(offset)
-        val compactPath = ByteString(HexPrefix.encode(path, isLeaf = false))
-        Some(Seq(compactPath))
-      case _: Exception => None
-    }
-  }
-
-  private def walkNode(
-      storage: com.chipprbots.ethereum.db.storage.MptStorage,
-      node: MptNode,
-      keyNibbles: Array[Byte],
-      offset: Int,
-      targetHash: ByteString
-  ): Option[Seq[ByteString]] =
-    node match {
-      case ext: ExtensionNode =>
-        val sharedKey = ext.sharedKey.toArray
-        val remaining = keyNibbles.drop(offset)
-        if (remaining.length >= sharedKey.length && remaining.take(sharedKey.length).sameElements(sharedKey)) {
-          walkNodeChild(storage, ext.next, keyNibbles, offset + sharedKey.length, targetHash)
-        } else None
-
-      case branch: BranchNode =>
-        if (offset < keyNibbles.length) {
-          val childIdx = keyNibbles(offset)
-          val child = branch.children(childIdx)
-          walkNodeChild(storage, child, keyNibbles, offset + 1, targetHash)
-        } else None
-
-      case _: LeafNode => None // Reached the leaf without finding the missing node
-      case NullNode    => None
-      case hash: HashNode =>
-        walkPath(storage, ByteString(hash.hash), keyNibbles, offset, targetHash)
-    }
-
-  private def walkNodeChild(
-      storage: com.chipprbots.ethereum.db.storage.MptStorage,
-      child: MptNode,
-      keyNibbles: Array[Byte],
-      offset: Int,
-      targetHash: ByteString
-  ): Option[Seq[ByteString]] =
-    child match {
-      case hash: HashNode =>
-        walkPath(storage, ByteString(hash.hash), keyNibbles, offset, targetHash)
-      case node => walkNode(storage, node, keyNibbles, offset, targetHash)
-    }
-
-  private def findPathForMissingNode(stateRoot: ByteString, targetHash: ByteString): Option[Seq[ByteString]] =
-    try {
-      val mptStorage = stateStorage.getReadOnlyStorage
-      if (mptStorage == null) return None
-      val visits = new java.util.concurrent.atomic.AtomicInteger(0)
-      try {
-        val rootNode = mptStorage.get(stateRoot.toArray)
-        findInAccountTrie(rootNode, mptStorage, Array.empty[Byte], targetHash, visits)
-      } catch {
-        case e: MissingNodeException if ByteString(e.hash) == targetHash =>
-          // The root itself is the missing node — return empty path
-          val compactPath = ByteString(HexPrefix.encode(Array.empty[Byte], isLeaf = false))
-          Some(Seq(compactPath))
-        case _: Exception => None
-      }
-    } catch {
-      case _: Exception => None
-    }
-
-  private def findInAccountTrie(
-      node: MptNode,
-      storage: com.chipprbots.ethereum.db.storage.MptStorage,
-      currentNibblePath: Array[Byte],
-      targetHash: ByteString,
-      visits: java.util.concurrent.atomic.AtomicInteger
-  ): Option[Seq[ByteString]] = {
-    if (visits.incrementAndGet() > MaxTrieVisits) return None
-    node match {
-      case ext: ExtensionNode =>
-        val newPath = currentNibblePath ++ ext.sharedKey.toArray
-        findInAccountTrie(ext.next, storage, newPath, targetHash, visits)
-
-      case branch: BranchNode =>
-        var result: Option[Seq[ByteString]] = None
-        var i = 0
-        while (i < 16 && result.isEmpty) {
-          val child = branch.children(i)
-          if (!child.isNull) {
-            val newPath = currentNibblePath :+ i.toByte
-            result = findInAccountTrie(child, storage, newPath, targetHash, visits)
-          }
-          i += 1
-        }
-        result
-
-      case hash: HashNode =>
-        val nodeHash = ByteString(hash.hash)
-        if (nodeHash == targetHash) {
-          // Found the missing node — return its path as HP-encoded compact path
-          val compactPath = ByteString(HexPrefix.encode(currentNibblePath, isLeaf = false))
-          Some(Seq(compactPath))
-        } else {
-          try {
-            val resolvedNode = storage.get(hash.hash)
-            findInAccountTrie(resolvedNode, storage, currentNibblePath, targetHash, visits)
-          } catch {
-            case _: MissingNodeException => None // Different missing node, skip
-          }
-        }
-
-      case leaf: LeafNode =>
-        // Check storage tries for this account
-        try {
-          import com.chipprbots.ethereum.domain.Account.accountSerializer
-          val account = accountSerializer.fromBytes(leaf.value.toArray)
-          if (account.storageRoot != com.chipprbots.ethereum.domain.Account.EmptyStorageRootHash) {
-            val leafKeyNibbles = leaf.key.toArray
-            val fullNibblePath = currentNibblePath ++ leafKeyNibbles
-            val accountHashBytes = HexPrefix.nibblesToBytes(fullNibblePath)
-            try {
-              val storageRoot = storage.get(account.storageRoot.toArray)
-              findInStorageTrie(
-                storageRoot,
-                storage,
-                Array.empty[Byte],
-                ByteString(accountHashBytes),
-                targetHash,
-                visits
-              )
-            } catch {
-              case e: MissingNodeException if ByteString(e.hash) == targetHash =>
-                val compactPath = ByteString(HexPrefix.encode(Array.empty[Byte], isLeaf = false))
-                Some(Seq(ByteString(accountHashBytes), compactPath))
-              case _: Exception => None
-            }
-          } else None
-        } catch {
-          case _: Exception => None
-        }
-
-      case NullNode => None
-    }
-  }
-
-  private def findInStorageTrie(
-      node: MptNode,
-      storage: com.chipprbots.ethereum.db.storage.MptStorage,
-      currentNibblePath: Array[Byte],
-      accountHash: ByteString,
-      targetHash: ByteString,
-      visits: java.util.concurrent.atomic.AtomicInteger
-  ): Option[Seq[ByteString]] = {
-    if (visits.incrementAndGet() > MaxTrieVisits) return None
-    node match {
-      case ext: ExtensionNode =>
-        val newPath = currentNibblePath ++ ext.sharedKey.toArray
-        findInStorageTrie(ext.next, storage, newPath, accountHash, targetHash, visits)
-
-      case branch: BranchNode =>
-        var result: Option[Seq[ByteString]] = None
-        var i = 0
-        while (i < 16 && result.isEmpty) {
-          val child = branch.children(i)
-          if (!child.isNull) {
-            val newPath = currentNibblePath :+ i.toByte
-            result = findInStorageTrie(child, storage, newPath, accountHash, targetHash, visits)
-          }
-          i += 1
-        }
-        result
-
-      case hash: HashNode =>
-        val nodeHash = ByteString(hash.hash)
-        if (nodeHash == targetHash) {
-          val compactPath = ByteString(HexPrefix.encode(currentNibblePath, isLeaf = false))
-          Some(Seq(accountHash, compactPath))
-        } else {
-          try {
-            val resolvedNode = storage.get(hash.hash)
-            findInStorageTrie(resolvedNode, storage, currentNibblePath, accountHash, targetHash, visits)
-          } catch {
-            case _: MissingNodeException => None
-          }
-        }
-
-      case _: LeafNode => None
-      case NullNode    => None
-    }
-  }
 
   private def start(): Unit = {
     log.info("Starting Regular Sync, current best block is {}", bestKnownBlockNumber)
@@ -473,8 +247,16 @@ class BlockImporter(
         val (importedBlocks, errorOpt) = value
         importedBlocks.size match {
           case 0 => log.debug("Imported no blocks")
-          case 1 => log.info("Imported block {}", importedBlocks.head.number)
-          case _ => log.info("Imported blocks {} - {}", importedBlocks.head.number, importedBlocks.last.number)
+          case 1 =>
+            val b = importedBlocks.head
+            log.info(
+              "Imported block {} ({}) txs={} gas={}",
+              b.number,
+              b.header.hashAsHexString.take(10),
+              b.body.transactionList.size,
+              b.header.gasUsed
+            )
+          case _ => log.info("Imported blocks {} - {}", importedBlocks.last.number, importedBlocks.head.number)
         }
 
         errorOpt match {
@@ -485,7 +267,6 @@ class BlockImporter(
 
             err match {
               case e: MissingAccountNodeException =>
-                // Account trie node missing — walk the specific account path to find the node (O(12) hops)
                 val failedBlock = notImportedBlocks.head
                 val parentStateRoot =
                   try
@@ -496,33 +277,27 @@ class BlockImporter(
                       log.warning("Failed to get parent state root during node recovery: {}", ex.getMessage); None
                   }
                 val accountHash = kec256(e.accountAddress)
-                // Try local trie walk first; if that fails (deferred merkleization — no local trie),
-                // construct multi-depth pathsets from the account hash directly.
-                val paths: Option[Seq[Seq[ByteString]]] = parentStateRoot
-                  .flatMap { root =>
-                    walkAccountPath(root, accountHash, e.hash).map(p => Seq(p))
+                val paths: Option[Seq[Seq[ByteString]]] = e.location
+                  .map { loc =>
+                    Seq(Seq(loc))
                   }
                   .orElse {
-                    // Deferred merkleization fallback: request nodes at nibble prefix depths 1-16.
-                    // Each prefix is a 1-element pathset group (account trie, not storage).
-                    // The SNAP server walks its own trie and returns the node at each depth.
                     val nibbles = accountHash.toArray.flatMap(b => Array(((b >> 4) & 0xf).toByte, (b & 0xf).toByte))
                     Some((1 to 16).map { depth =>
                       Seq(ByteString(HexPrefix.encode(nibbles.take(depth), isLeaf = false)))
                     })
                   }
                 log.info(
-                  "Missing account trie node {} for account {} during import of block {}, pathFound={}",
+                  "Missing account trie node {} for account {} during import of block {}, locationKnown={}",
                   ByteStringUtils.hash2string(e.hash),
                   ByteStringUtils.hash2string(e.accountAddress),
                   failedBlock.number,
-                  paths.isDefined
+                  e.location.isDefined
                 )
                 pendingStateNodeHash = Some(e.hash)
                 fetcher ! BlockFetcher.FetchStateNode(e.hash, self, parentStateRoot, paths)
                 ResolvingMissingNode(NonEmptyList(notImportedBlocks.head, notImportedBlocks.tail))
               case e: MissingStorageNodeException =>
-                // Storage trie node missing — we know the account address, construct SNAP pathset directly
                 val failedBlock = notImportedBlocks.head
                 val parentStateRoot =
                   try
@@ -533,14 +308,20 @@ class BlockImporter(
                       log.warning("Failed to get parent state root during node recovery: {}", ex.getMessage); None
                   }
                 val accountHash = kec256(e.accountAddress)
-                val emptyPath = ByteString(HexPrefix.encode(Array.empty[Byte], isLeaf = false))
-                val paths = Some(Seq(Seq(accountHash, emptyPath)))
+                val paths: Option[Seq[Seq[ByteString]]] = e.location
+                  .map { loc =>
+                    Seq(Seq(accountHash, loc))
+                  }
+                  .orElse {
+                    val emptyStoragePath = ByteString(HexPrefix.encode(Array.empty[Byte], isLeaf = false))
+                    Some(Seq(Seq(accountHash, emptyStoragePath)))
+                  }
                 log.info(
-                  "Missing storage node {} for account {} during import of block {}, stateRoot={}",
+                  "Missing storage node {} for account {} during import of block {}, locationKnown={}",
                   ByteStringUtils.hash2string(e.hash),
                   ByteStringUtils.hash2string(e.accountAddress),
                   failedBlock.number,
-                  parentStateRoot.map(ByteStringUtils.hash2string)
+                  e.location.isDefined
                 )
                 pendingStateNodeHash = Some(e.hash)
                 fetcher ! BlockFetcher.FetchStateNode(e.hash, self, parentStateRoot, paths)
@@ -555,15 +336,12 @@ class BlockImporter(
                     case ex: Exception =>
                       log.warning("Failed to get parent state root during node recovery: {}", ex.getMessage); None
                   }
-                val paths: Option[Seq[Seq[ByteString]]] = parentStateRoot.flatMap { root =>
-                  findPathForMissingNode(root, e.hash).map(p => Seq(p))
-                }
+                val paths: Option[Seq[Seq[ByteString]]] = e.location.map(loc => Seq(Seq(loc)))
                 log.info(
-                  "Missing state node {} during import of block {}, stateRoot={}, pathFound={}",
+                  "Missing state node {} during import of block {}, locationKnown={}",
                   ByteStringUtils.hash2string(e.hash),
                   failedBlock.number,
-                  parentStateRoot.map(ByteStringUtils.hash2string),
-                  paths.isDefined
+                  e.location.isDefined
                 )
                 pendingStateNodeHash = Some(e.hash)
                 fetcher ! BlockFetcher.FetchStateNode(e.hash, self, parentStateRoot, paths)
@@ -824,6 +602,11 @@ object BlockImporter {
   // is deemed terminally stuck and we escalate to SNAP re-sync via SyncProtocol.RegularSyncStuck.
   // 3 × 5-min backoff = ~15 minutes of bounded retry before invoking the escape valve.
   val StuckEscapeThreshold: Int = 3
+
+  // Exhaust counter that outlives individual actor instances so Pekko Restarts don't reset
+  // the progress toward StuckEscapeThreshold. Zeroed by preStart() (fresh regular-sync session)
+  // but NOT by postRestart() (same logical actor restarted after a crash).
+  private[regular] var survivedExhausts: Int = 0
 
   // scalastyle:off parameter.number
   def props(

@@ -90,25 +90,16 @@ class ENRCodecsSpec extends AnyFlatSpec with Matchers {
         // Ignoring the signature, taking items up to where "tcp" would be.
         compare(list.items.drop(1).take(7), enrRLP.items.drop(1).take(7))
 
-        // The example is encoded differently because it uses the minimum
-        // length for the port, whereas the one in Scalanet just converts the
-        // Int to BigEndian bytes and includes them in the attributes.
-        //
-        // This should be fine from signature checking perspective as
-        // that is still carried out on the byte content of the attribute map,
-        // and nodes should be able to deserialize what we send.
-        //
-        // We might have problems if someone sends 0 for port as that
-        // would serialize to an empty byte array in RLP. But we can't
-        // address such nodes anyway, so it should be enough to check
-        // that we can deal with the shorter bytes (done below in a test).
+        // Ports are now encoded with RLP minimal length (no leading zero bytes),
+        // matching the ENR reference example and standard RLP encoding rules.
+        // tcp=0 → empty byte array; udp=30303 → 2-byte minimal (0x765f).
         compare(
           list.items.drop(8),
           RLPList(
             "tcp",
-            hex"00000000",
+            hex"",
             "udp",
-            hex"0000765f"
+            hex"765f"
           ).items
         )
 

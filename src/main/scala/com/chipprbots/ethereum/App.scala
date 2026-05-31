@@ -264,8 +264,18 @@ object App extends Logger {
       case Some(`faucet`)       => Faucet.main(argsWithoutModifiers.tail)
       case Some(`sigValidator`) => SignatureValidator.main(argsWithoutModifiers.tail)
       case Some(`cli`)          => CliLauncher.main(argsWithoutModifiers.tail)
+      case Some("checkpoint")   =>
+        // `fukuii [network] checkpoint <subcommand>`. The network arg (if present) was already
+        // applied by setNetworkConfig; strip it from the args we forward so decline only sees
+        // `checkpoint export ...`.
+        com.chipprbots.ethereum.blockchain.checkpoint.CheckpointCli.main(argsWithoutModifiers.tail)
       case Some(network) if isNetwork(network) =>
-        Fukuii.main(argsWithoutModifiers.tail)
+        val tail = argsWithoutModifiers.tail
+        tail.headOption match {
+          case Some("checkpoint") =>
+            com.chipprbots.ethereum.blockchain.checkpoint.CheckpointCli.main(tail.tail)
+          case _ => Fukuii.main(tail)
+        }
       case Some(arg) if isOptionFlag(arg) =>
         // Option flags (starting with -) are passed directly to Fukuii
         Fukuii.main(argsWithoutModifiers)

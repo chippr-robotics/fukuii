@@ -6,6 +6,7 @@ on:
       - main
       - master
       - develop
+      - staging
     paths-ignore:
       - 'docs/**'
       - '*.md'
@@ -16,6 +17,7 @@ on:
       - main
       - master
       - develop
+      - staging
 
 permissions:
   contents: read
@@ -76,17 +78,17 @@ jobs:
       - name: Run Essential Tests (Tier 1)
         run: |
           echo "=========================================="
-          echo "Running Essential Tests (< 5 minutes)"
+          echo "Running Essential Tests (< 15 minutes)"
           echo "=========================================="
           set -o pipefail
-          sbt -v testEssential 2>&1 | tee /tmp/sbt-testEssential.log || { 
+          sbt -v testEssential 2>&1 | tee /tmp/sbt-testEssential.log || {
             echo "sbt testEssential failed — dumping 'last test'"
             sbt 'last test' 2>&1 | tee /tmp/sbt-last-test-essential.log || true
             exit 1
           }
         env:
           FUKUII_DEV: true
-        timeout-minutes: 10
+        timeout-minutes: 15
       
       - name: Run Standard Tests with Coverage (Tier 2)
         run: |

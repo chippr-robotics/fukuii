@@ -73,12 +73,16 @@ trait BlockHeaderValidatorSkeleton extends BlockHeaderValidator {
     (blockHeader.blobGasUsed, blockHeader.excessBlobGas) match {
       case (Some(used), Some(excess)) =>
         val maxBlobGas = BlobGasUtils.maxBlobGasPerBlock(blockHeader.unixTimestamp, blockchainConfig)
-        val target =
-          if (blockchainConfig.isPragueTimestamp(blockHeader.unixTimestamp)) BlobGasUtils.PRAGUE_TARGET_BLOB_GAS
-          else BlobGasUtils.CANCUN_TARGET_BLOB_GAS
         val parentExcess = parentHeader.excessBlobGas.getOrElse(BigInt(0))
         val parentUsed = parentHeader.blobGasUsed.getOrElse(BigInt(0))
-        val expectedExcess = BlobGasUtils.calcExcessBlobGas(parentExcess, parentUsed, target)
+        val parentBaseFee = parentHeader.baseFee.getOrElse(BigInt(0))
+        val expectedExcess = BlobGasUtils.expectedExcessBlobGas(
+          parentExcess,
+          parentUsed,
+          parentBaseFee,
+          blockHeader.unixTimestamp,
+          blockchainConfig
+        )
         if (used > maxBlobGas)
           Left(HeaderBlobGasError(s"blobGasUsed $used exceeds max $maxBlobGas"))
         else if (used % BlobGasUtils.GAS_PER_BLOB != 0)

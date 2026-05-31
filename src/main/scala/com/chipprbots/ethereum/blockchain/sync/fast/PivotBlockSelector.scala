@@ -283,8 +283,15 @@ class PivotBlockSelector(
   }
 
   private def collectVoters(previousBestBlockNumber: Option[BigInt] = None): ElectionDetails = {
+    // Require maxBlockNumber > 0. ETH/64-/68 STATUS doesn't carry the peer's
+    // best block number; Bug 32's eager probe in NetworkPeerManagerActor populates
+    // it once the peer replies to GetBlockHeaders(bestHash, 1). Until that reply
+    // arrives, maxBlockNumber stays at 0 and the peer must not vote — otherwise
+    // the highest-known-number is 0, expectedPivotBlock collapses to 0, and the
+    // selector asks for genesis. Equivalent to the `peer.maxBlockNumber > 0`
+    // filters SNAPSyncController applies in three sites for the same reason.
     val peersUsedToChooseTarget = peersToDownloadFrom.collect {
-      case (_, PeerWithInfo(peer, PeerInfo(_, _, true, maxBlockNumber, _))) =>
+      case (_, PeerWithInfo(peer, PeerInfo(_, _, true, maxBlockNumber, _))) if maxBlockNumber > 0 =>
         (peer, maxBlockNumber)
     }
 

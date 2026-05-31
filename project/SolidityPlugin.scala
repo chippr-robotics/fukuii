@@ -28,7 +28,8 @@ object SolidityPlugin extends AutoPlugin {
         abisLines.foreach { abiLines =>
           val contractName = abiLines(1)
             .replace(f.getPath, "")
-            .dropWhile(_ != ':').drop(1)
+            .dropWhile(_ != ':')
+            .drop(1)
             .takeWhile(_ != ' ')
           new PrintWriter(outDir / s"$contractName.abi") {
             write(abiLines.drop(3).mkString); close()

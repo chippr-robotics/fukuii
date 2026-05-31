@@ -252,6 +252,7 @@ class PortForwardingBuilderSpec extends AnyFlatSpec with Matchers with BeforeAnd
       simulateDelay: Long = 0
   ) extends PortForwardingBuilder
       with DiscoveryConfigBuilder
+      with ActorSystemBuilder
       with com.chipprbots.ethereum.TestInstanceConfigProvider {
 
     implicit override lazy val ioRuntime: IORuntime = IORuntime.global

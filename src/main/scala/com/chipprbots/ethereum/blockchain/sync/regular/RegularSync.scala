@@ -26,6 +26,8 @@ import com.chipprbots.ethereum.ledger.BranchResolution
 import com.chipprbots.ethereum.nodebuilder.BlockchainConfigBuilder
 import com.chipprbots.ethereum.utils.Config.SyncConfig
 
+import scala.concurrent.duration._
+
 class RegularSync(
     peersClient: ActorRef,
     networkPeerManager: ActorRef,
@@ -92,6 +94,14 @@ class RegularSync(
       BlockFetcher.PrintStatus
     )(context.dispatcher, self)
 
+  val printStatusSchedule: Cancellable =
+    scheduler.scheduleWithFixedDelay(
+      60.seconds,
+      60.seconds,
+      self,
+      RegularSync.PrintStatus
+    )(context.dispatcher, self)
+
   override def receive: Receive = running(
     ProgressState(startedFetching = false, initialBlock = 0, currentBlock = 0, bestKnownNetworkBlock = 0)
   )
@@ -139,6 +149,15 @@ class RegularSync(
         msg.missingHash
       )
       context.parent ! msg
+
+    case RegularSync.PrintStatus =>
+      val lag = progressState.bestKnownNetworkBlock - progressState.currentBlock
+      log.info(
+        "RegularSync following head: current={} best={} lag={}",
+        progressState.currentBlock,
+        progressState.bestKnownNetworkBlock,
+        lag
+      )
   }
 
   override def supervisorStrategy: SupervisorStrategy = AllForOneStrategy()(SupervisorStrategy.defaultDecider)
@@ -146,9 +165,12 @@ class RegularSync(
   override def postStop(): Unit = {
     log.info("Regular Sync stopped")
     printFetcherSchedule.cancel()
+    printStatusSchedule.cancel()
   }
 }
 object RegularSync {
+  private[regular] case object PrintStatus
+
   // scalastyle:off parameter.number
   def props(
       peersClient: ActorRef,
@@ -196,7 +218,7 @@ object RegularSync {
     def toStatus: SyncProtocol.Status =
       if (startedFetching && bestKnownNetworkBlock != 0 && currentBlock < bestKnownNetworkBlock) {
         Status.Syncing(initialBlock, Progress(currentBlock, bestKnownNetworkBlock), None)
-      } else if (startedFetching && currentBlock >= bestKnownNetworkBlock) {
+      } else if (startedFetching && bestKnownNetworkBlock != 0 && currentBlock >= bestKnownNetworkBlock) {
         Status.SyncDone
       } else {
         Status.NotSyncing

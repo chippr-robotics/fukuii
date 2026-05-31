@@ -75,7 +75,28 @@ object Config extends InstanceConfig(ConfigFactory.load().getConfig("fukuii"), "
       maxBodyFetchRetries: Int,
       maxSnapFastCycleTransitions: Int,
       useBootstrapCheckpoints: Boolean,
-      bootstrapCheckpoints: Seq[(BigInt, String)] // (blockNumber, blockHash)
+      bootstrapCheckpoints: Seq[(BigInt, String)], // (blockNumber, blockHash)
+      // Post-merge SNAP behavior. When the chain has TerminalTotalDifficulty configured
+      // (Sepolia, mainnet) the EL must wait for the consensus layer to push a head via
+      // engine_forkchoiceUpdated before SNAP can pick a sane pivot — TD is frozen at
+      // TTD on these chains so peer-best-by-TD is unreliable. If `engineApiRequired` is
+      // true (default for chains with TTD), SNAP waits indefinitely for the CL hint.
+      // If false, SNAP falls back to peer-best-by-block-number after `clWaitTimeout`.
+      // ETC mainnet (TTD = None) is unaffected: the listener is never registered,
+      // `clPivotHint` is never set, and the existing TD-based path runs unchanged.
+      // Closes #1207.
+      engineApiRequired: Boolean,
+      clWaitTimeout: FiniteDuration,
+      // Checkpoint sync: bootstrap a fresh datadir by importing a pre-built `.checkpoint`
+      // archive instead of running SNAP. The file is read once at startup when best-block == 0 and
+      // SNAP isn't already done; on success, RegularSync resumes from `checkpoint.number + 1`.
+      // All three fields default to None (disabled). Optional `.gz` decompression is automatic.
+      //
+      // - `checkpointSyncFile`: local path. Wins over URL when both are set.
+      // - `checkpointSyncUrl`: remote URL fetched into `${datadir}/checkpoint.bin` (resumable).
+      // - `checkpointSyncDownloadDir`: where to place the downloaded archive. Defaults to datadir.
+      checkpointSyncFile: Option[java.nio.file.Path],
+      checkpointSyncUrl: Option[String]
   )
 
   object SyncConfig {
@@ -151,6 +172,14 @@ object Config extends InstanceConfig(ConfigFactory.load().getConfig("fukuii"), "
           if (syncConfig.hasPath("use-bootstrap-checkpoints"))
             syncConfig.getBoolean("use-bootstrap-checkpoints")
           else false,
+        engineApiRequired =
+          if (syncConfig.hasPath("engine-api-required"))
+            syncConfig.getBoolean("engine-api-required")
+          else true,
+        clWaitTimeout =
+          if (syncConfig.hasPath("cl-wait-timeout"))
+            syncConfig.getDuration("cl-wait-timeout").toMillis.millis
+          else 5.minutes,
         bootstrapCheckpoints = if (syncConfig.hasPath("bootstrap-checkpoints")) {
           import scala.jdk.CollectionConverters._
           syncConfig.getStringList("bootstrap-checkpoints").asScala.toSeq.flatMap { entry =>
@@ -167,7 +196,15 @@ object Config extends InstanceConfig(ConfigFactory.load().getConfig("fukuii"), "
               case _ => None
             }
           }
-        } else Seq.empty
+        } else Seq.empty,
+        checkpointSyncFile = if (syncConfig.hasPath("checkpoint-sync-file")) {
+          val raw = syncConfig.getString("checkpoint-sync-file").trim
+          if (raw.isEmpty) None else Some(java.nio.file.Paths.get(raw))
+        } else None,
+        checkpointSyncUrl = if (syncConfig.hasPath("checkpoint-sync-url")) {
+          val raw = syncConfig.getString("checkpoint-sync-url").trim
+          if (raw.isEmpty) None else Some(raw)
+        } else None
       )
     }
   }
@@ -346,8 +383,6 @@ object BlockchainsConfig extends Logger {
           f.isFile && f.getName.endsWith("-chain.conf")
         }
 
-        // TODO: Future optimization - cache parsed configurations and check file modification
-        // times to avoid re-parsing unchanged files on restart
         chainFiles.flatMap { chainFile =>
           val result = Try {
             val chainName = chainFile.getName.stripSuffix("-chain.conf")
@@ -442,12 +477,10 @@ object VmConfig {
   }
 
   object ExternalConfig {
-    val VmTypeIele = "iele"
-    val VmTypeKevm = "kevm"
     val VmTypeFukuii = "fukuii"
     val VmTypeNone = "none"
 
-    val supportedVmTypes: Set[String] = Set(VmTypeIele, VmTypeKevm, VmTypeFukuii, VmTypeNone)
+    val supportedVmTypes: Set[String] = Set(VmTypeFukuii, VmTypeNone)
   }
 
   case class ExternalConfig(vmType: String, executablePath: Option[String], host: String, port: Int)

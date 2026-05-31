@@ -579,6 +579,35 @@ class DiscoveryNetworkSpec extends AsyncFlatSpec with Matchers {
     }
   }
 
+  // Regression for #1221: pre-fix, an empty handler result silently dropped the FindNode —
+  // `nodes.grouped(...).traverse(...)` is a no-op on an empty list. go-ethereum's
+  // `handleFindnode` (eth/p2p/discover/v4_udp.go) sends Neighbors even when empty. Without
+  // this, fresh fukuii nodes with empty kBuckets never respond to FindNode, breaking
+  // inbound peer discovery (geth/besu peer routing tables drop fukuii) and hive's
+  // `ethereum/sync` test 5 (sync go-ethereum from fukuii).
+  it should "respond with an empty Neighbors when the handler returns Some(Nil) (regression for #1221)" in test {
+    new Fixture {
+      override val test = for {
+        _ <- network.startHandling {
+          StubDiscoveryRPC(
+            findNode = _ => _ => IO.pure(Some(Nil))
+          )
+        }
+        channel <- peerGroup.createServerChannel(from = remoteAddress)
+        findNode = FindNode(remotePublicKey, validExpiration)
+        _ <- channel.sendPayloadToSUT(findNode, remotePrivateKey)
+        msg <- channel.nextMessageFromSUT()
+      } yield {
+        msg should not be empty
+        assertMessageFrom(publicKey, msg) {
+          case Neighbors(nodes, expiration) =>
+            nodes shouldBe empty
+            assertExpirationSet(expiration)
+        }
+      }
+    }
+  }
+
   it should "respond with an ENRResponse with the correct hash if the handler returns Some ENR" in test {
     new Fixture {
       override val test = for {

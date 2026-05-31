@@ -1,7 +1,7 @@
 # Fukuii Application Architecture Overview
 
 **Document Status:** Living Document  
-**Last Updated:** 2025-10-25  
+**Last Updated:** 2026-05-03  
 **Version:** 1.0
 
 ## Table of Contents
@@ -17,7 +17,7 @@
 
 ## Introduction
 
-Fukuii is an EVM-compliant Ethereum execution layer (EL) client written in Scala 3. It originated as a continuation and re-branding of the Mantis client (Input Output HK) for Ethereum Classic, and is now maintained by Chippr Robotics LLC as a general-purpose EVM engine capable of driving multiple networks through a pluggable consensus architecture. Fukuii retains native PoW/Ethash support for Ethereum Classic while operating as a full post-Merge execution layer for Ethereum mainnet and testnets via the Engine API (V1–V4, through Prague/Electra) when paired with any standard consensus-layer client (Lighthouse, Prysm, Teku, Lodestar, Nimbus).
+Fukuii is an EVM-compliant Ethereum execution layer (EL) client written in Scala 3. It originated as a continuation and re-branding of the Mantis client (Input Output HK) for Ethereum Classic, and is now maintained by Chippr Robotics LLC as a general-purpose EVM engine capable of driving multiple networks through a pluggable consensus architecture. Fukuii retains native PoW/Ethash support for Ethereum Classic while operating as a full post-Merge execution layer for Ethereum mainnet and testnets via the Engine API when paired with any standard consensus-layer client (Lighthouse, Prysm, Teku, Lodestar, Nimbus).
 
 This document provides a comprehensive overview of Fukuii's current architecture, identifying major systems, subsystems, and their interactions. It serves as a reference for developers, architects, and contributors to understand the system's design and structure. The longer-term direction — a three-layer `fukuii-core` / `fukuii-env` / consensus-module split — is described in the [Pluggable Consensus Vision](pluggable-consensus-vision.md).
 
@@ -26,11 +26,11 @@ This document provides a comprehensive overview of Fukuii's current architecture
 Fukuii is a full EVM execution layer implementation that:
 
 - **Maintains an EVM blockchain**: Stores and validates blocks, headers, receipts, and transaction data for ETC or any Engine-API-driven network
-- **Executes the EVM through Prague/Electra**: Runs the Ethereum Virtual Machine with support for EIP-1559 (base fee), EIP-3855 (PUSH0), EIP-4844 (blob transactions), EIP-4895 (withdrawals), EIP-4788 (beacon root), EIP-7685 (execution requests), EIP-1153 (transient storage), and the full ECIP-1066 ETC fork schedule through Olympia
+- **Executes the EVM**: Runs the Ethereum Virtual Machine with support for the full current EIP set (base fee, blob transactions, withdrawals, beacon root, execution requests, transient storage) and the full ETC fork schedule
 - **Synchronizes with the network**: SNAP / fast / regular sync over devp2p for PoW chains; optimistic block import via Engine API `engine_newPayload` for PoS chains
 - **Supports pluggable consensus**: Ethash PoW for ETC mainnet and Mordor; Engine API-driven PoS for Ethereum mainnet and Sepolia; architected for future PoA, OP-style derivation, ZK verification, and checkpoint-based sidechains
 - **Provides JSON-RPC API**: Exposes standard Ethereum JSON-RPC (`eth_*`, `net_*`, `web3_*`, `debug_*`, `trace_*`, `admin_*`, `txpool_*`, `personal_*`) plus the Engine API (`engine_*` on JWT-authenticated authrpc, default port 8551) and MCP 2025-11-25 for agentic AI control
-- **Manages peer connections**: Discovers, connects to, and communicates with other nodes via RLPx over devp2p, with `eth/63`, `eth/66`, `eth/68`, and `snap/1` capability support
+- **Manages peer connections**: Discovers, connects to, and communicates with other nodes via RLPx over devp2p, with current ETH wire protocol and SNAP capability support
 
 ### Supported Networks
 
@@ -38,8 +38,8 @@ Fukuii is a full EVM execution layer implementation that:
 |------------------|-----------|------------------|---------------------------------------------|
 | Ethereum Classic | 61        | PoW (Ethash)     | Full sync (SNAP / fast / regular)           |
 | Mordor           | 63        | PoW (Ethash)     | Full sync (SNAP / fast / regular)           |
-| Sepolia          | 11155111  | PoS (Engine API) | Validated — 21+ EL peers, Lighthouse CL     |
-| Ethereum Mainnet | 1         | PoS (Engine API) | Configuration available                     |
+| Sepolia          | 11155111  | PoS (Engine API) | Full sync                                   |
+| Ethereum Mainnet | 1         | PoS (Engine API) | Full sync                                   |
 
 ## High-Level Architecture
 
@@ -56,7 +56,7 @@ graph TB
 
     subgraph "External Peers"
         CL[Consensus Layer Client<br/>Lighthouse / Prysm / Teku / Lodestar / Nimbus]
-        ELPEERS[EL Peers<br/>eth/63 · eth/66 · eth/68 · snap/1]
+        ELPEERS[EL Peers<br/>ETH wire protocol · SNAP]
     end
 
     subgraph "Application Layer"
@@ -957,10 +957,10 @@ This section documents significant architectural decisions made during the devel
 **Date:** 2025
 **Status:** Accepted
 **Context:** Fukuii's original consensus was ETC-specific (Ethash PoW). Adopting the Ethereum Engine API — the standard EL/CL boundary since the Merge — gives the execution engine a well-defined seam over which any consensus driver can be connected, without forking or rewriting the EVM core.
-**Decision:** Implement Engine API V1–V4 (through Prague/Electra) as the primary consensus-driver interface, and treat it as the architectural boundary for the three-layer `fukuii-core` / `fukuii-env` / consensus-module design described in [pluggable-consensus-vision.md](pluggable-consensus-vision.md).
+**Decision:** Implement the full Engine API specification as the primary consensus-driver interface, and treat it as the architectural boundary for the three-layer `fukuii-core` / `fukuii-env` / consensus-module design described in [pluggable-consensus-vision.md](pluggable-consensus-vision.md).
 **Consequences:**
 - Fukuii operates as a full EVM execution layer for post-Merge Ethereum networks paired with any CL client (Lighthouse, Prysm, Teku, Lodestar, Nimbus)
-- Sepolia validated with 21+ EL peers and a Lighthouse CL; Ethereum mainnet configuration is available
+- Sepolia and Ethereum mainnet run via Engine API; ETC mainnet and Mordor run via native PoW
 - ETC PoW (Ethash) is retained as a first-class consensus module, not a special case
 - Opens the door to future consensus modules: PoA/Clique, OP-style derivation, ZK proof verification, and checkpoint-based sidechains (Orbita)
 - Introduces an additional attack surface (JWT-authenticated authrpc); requires operators to manage and protect the shared JWT secret

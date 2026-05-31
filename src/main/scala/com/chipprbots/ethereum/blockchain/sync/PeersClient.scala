@@ -7,11 +7,16 @@ import org.apache.pekko.actor.Cancellable
 import org.apache.pekko.actor.Props
 import org.apache.pekko.actor.Scheduler
 
+import scala.collection.mutable
 import scala.concurrent.ExecutionContext
 import scala.reflect.ClassTag
 
 import com.chipprbots.ethereum.blockchain.sync.Blacklist.BlacklistReason
 import com.chipprbots.ethereum.blockchain.sync.PeerListSupportNg.PeerWithInfo
+import com.chipprbots.ethereum.network.PeerEventBusActor.PeerEvent.MaintainedPeersChanged
+import com.chipprbots.ethereum.network.PeerEventBusActor.PeerEvent.PeerDisconnected
+import com.chipprbots.ethereum.network.PeerEventBusActor.Subscribe
+import com.chipprbots.ethereum.network.PeerEventBusActor.SubscriptionClassifier.MaintainedPeersClassifier
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor.PeerInfo
 import com.chipprbots.ethereum.network.Peer
 import com.chipprbots.ethereum.network.PeerId
@@ -53,6 +58,25 @@ class PeersClient(
 
   implicit val ec: ExecutionContext = context.dispatcher
 
+  // Besu alignment: PeerDenylistManager.java:56 skips maintained peers at add() call site.
+  // Subscribe at startup so updates are received before any BlacklistPeer message can arrive.
+  peerEventBus ! Subscribe(MaintainedPeersClassifier)
+  private var _maintainedNodeIdHexes: Set[String] = Set.empty
+  override protected def maintainedNodeIdHexes: Set[String] = _maintainedNodeIdHexes
+
+  // Tracks GetNodeData capability per peer via observed behavior (not advertised capability).
+  // Shared across all StateNodeFetcher actors so the first failure protects all concurrent requests.
+  private val nodeDataCooldownUntilMs = mutable.Map.empty[PeerId, Long]
+  private val nodeDataConsecutiveFailures = mutable.Map.empty[PeerId, Int]
+
+  override def handlePeerListMessages: Receive = ({ case PeerDisconnected(peerId) =>
+    // Intentionally do NOT clear nodeData cooldown on disconnect. A peer that closes
+    // the connection when asked for GetNodeData (e.g. BONSAI Besu) will immediately
+    // reconnect and repeat the same failure if we reset its state here. The time-based
+    // cooldown must be allowed to expire naturally so the peer stays suppressed.
+    super.handlePeerListMessages(PeerDisconnected(peerId))
+  }: Receive).orElse(super.handlePeerListMessages)
+
   val statusSchedule: Cancellable =
     scheduler.scheduleWithFixedDelay(syncConfig.printStatusInterval, syncConfig.printStatusInterval, self, PrintStatus)
 
@@ -65,8 +89,17 @@ class PeersClient(
 
   def running(requesters: Requesters): Receive =
     handlePeerListMessages.orElse {
+      case MaintainedPeersChanged(nodeIds) =>
+        _maintainedNodeIdHexes = nodeIds
+        log.debug("Updated maintained peer node IDs: {} peers", nodeIds.size)
       case PrintStatus                   => printStatus(requesters: Requesters)
       case BlacklistPeer(peerId, reason) => blacklistIfHandshaked(peerId, syncConfig.blacklistDuration, reason)
+      case RecordNodeDataFailure(peerId) =>
+        val count = nodeDataConsecutiveFailures.getOrElse(peerId, 0) + 1
+        nodeDataConsecutiveFailures(peerId) = count
+        val cooldownMs = if (count >= 3) 3_600_000L else count * 30_000L
+        nodeDataCooldownUntilMs(peerId) = System.currentTimeMillis() + cooldownMs
+        log.debug("Peer {} GetNodeData failure #{} — cooldown {}ms", peerId, count, cooldownMs)
       case Request(message, peerSelector, toSerializable) =>
         val requester = sender()
         log.debug(
@@ -166,16 +199,15 @@ class PeersClient(
         bestPeer(snapPeers, log)
 
       case BestNodeDataPeer =>
-        val nodeDataPeers = peersToDownloadFrom.filter { case (_, peerWithInfo) =>
-          peerWithInfo.peerInfo.remoteStatus.capability match {
-            case Capability.ETH68 => false // ETH68 removed GetNodeData
-            case _                => true
-          }
+        val now = System.currentTimeMillis()
+        val nodeDataPeers = peersToDownloadFrom.filter { case (peerId, _) =>
+          !nodeDataCooldownUntilMs.get(peerId).exists(_ > now)
         }
         log.debug(
-          "Selecting best GetNodeData-capable peer from {} available peers ({} capable)",
+          "Selecting best GetNodeData-capable peer from {} available peers ({} capable, {} on cooldown)",
           peersToDownloadFrom.size,
-          nodeDataPeers.size
+          nodeDataPeers.size,
+          nodeDataCooldownUntilMs.count { case (_, exp) => exp > now }
         )
         bestPeer(nodeDataPeers, log)
 
@@ -188,6 +220,111 @@ class PeersClient(
           filteredPeers.size
         )
         bestPeer(filteredPeers, log)
+
+      case BestPeerWithMinBlock(minBlock) =>
+        // Two-tier selection: peers with known maxBlockNumber >= minBlock are
+        // strictly better than peers with maxBlockNumber == 0 (unknown chain
+        // state). Try the known-good tier first; if empty, fall back to the
+        // unknown tier — which is correct behaviour for ETH/64-68 peers whose
+        // maxBlockNumber stays at 0 because their STATUS doesn't carry a
+        // block number and we don't receive block messages from them post-merge.
+        val knownAheadPeers = peersToDownloadFrom.filter { case (_, peerWithInfo) =>
+          peerWithInfo.peerInfo.maxBlockNumber >= minBlock
+        }
+        if (knownAheadPeers.nonEmpty) {
+          log.debug(
+            "BestPeerWithMinBlock({}): {} peers have known maxBlockNumber >= target",
+            minBlock,
+            knownAheadPeers.size
+          )
+          bestPeer(knownAheadPeers, log)
+        } else {
+          val unknownChainHeadPeers = peersToDownloadFrom.filter { case (_, peerWithInfo) =>
+            peerWithInfo.peerInfo.maxBlockNumber == 0
+          }
+          log.debug(
+            s"BestPeerWithMinBlock($minBlock): no peer with known maxBlockNumber >= target; " +
+              s"falling back to ${unknownChainHeadPeers.size} peer(s) with maxBlockNumber=0 (chain state unknown)"
+          )
+          bestPeer(unknownChainHeadPeers, log)
+        }
+
+      case BestPeerWithMinBlockExcluding(minBlock, exclude) =>
+        val eligible = peersToDownloadFrom.filterNot { case (peerId, _) => exclude.contains(peerId) }
+        val knownAheadPeers = eligible.filter { case (_, peerWithInfo) =>
+          peerWithInfo.peerInfo.maxBlockNumber >= minBlock
+        }
+        if (knownAheadPeers.nonEmpty) {
+          log.debug(
+            "BestPeerWithMinBlockExcluding({}): {} eligible after excluding {} tried peer(s)",
+            minBlock,
+            knownAheadPeers.size,
+            exclude.size
+          )
+          bestPeer(knownAheadPeers, log)
+        } else {
+          val unknownHeadPeers = eligible.filter { case (_, peerWithInfo) =>
+            peerWithInfo.peerInfo.maxBlockNumber == 0
+          }
+          log.debug(
+            "BestPeerWithMinBlockExcluding({}): no known-ahead peers after exclusion; {} unknown-chain-state remain",
+            minBlock,
+            unknownHeadPeers.size
+          )
+          bestPeer(unknownHeadPeers, log)
+        }
+
+      case BestSnapPeerExcluding(exclude) =>
+        val snapPeers = peersToDownloadFrom.filter { case (peerId, peerWithInfo) =>
+          !exclude.contains(peerId) && peerWithInfo.peerInfo.remoteStatus.supportsSnap
+        }
+        log.debug(
+          "Selecting best SNAP peer excluding {} tried peers ({} SNAP remaining)",
+          exclude.size,
+          snapPeers.size
+        )
+        bestPeer(snapPeers, log)
+
+      case BestSnapPeerWithMinBlockExcluding(minBlock, exclude) =>
+        val eligible = peersToDownloadFrom.filter { case (peerId, peerWithInfo) =>
+          !exclude.contains(peerId) && peerWithInfo.peerInfo.remoteStatus.supportsSnap
+        }
+        val knownAheadPeers = eligible.filter { case (_, peerWithInfo) =>
+          peerWithInfo.peerInfo.maxBlockNumber >= minBlock
+        }
+        if (knownAheadPeers.nonEmpty) {
+          log.debug(
+            "BestSnapPeerWithMinBlockExcluding({}): {} SNAP peers at target after excluding {} tried",
+            minBlock,
+            knownAheadPeers.size,
+            exclude.size
+          )
+          bestPeer(knownAheadPeers, log)
+        } else {
+          val unknownHeadPeers = eligible.filter { case (_, peerWithInfo) =>
+            peerWithInfo.peerInfo.maxBlockNumber == 0
+          }
+          log.debug(
+            "BestSnapPeerWithMinBlockExcluding({}): no known-ahead SNAP peers; {} with unknown chain state remain",
+            minBlock,
+            unknownHeadPeers.size
+          )
+          bestPeer(unknownHeadPeers, log)
+        }
+
+      case BestNodeDataPeerExcluding(exclude) =>
+        val now = System.currentTimeMillis()
+        val nodeDataPeers = peersToDownloadFrom.filter { case (peerId, _) =>
+          !exclude.contains(peerId) &&
+          !nodeDataCooldownUntilMs.get(peerId).exists(_ > now)
+        }
+        log.debug(
+          "Selecting best GetNodeData peer excluding {} tried peers ({} capable remaining)",
+          exclude.size,
+          nodeDataPeers.size
+        )
+        bestPeer(nodeDataPeers, log)
+
     }
 
   /** Adapts message format based on peer's negotiated capability. ETH66+ peers use RequestId wrapper, earlier versions
@@ -292,6 +429,7 @@ object PeersClient {
 
   sealed trait PeersClientMessage
   case class BlacklistPeer(peerId: PeerId, reason: BlacklistReason) extends PeersClientMessage
+  case class RecordNodeDataFailure(peerId: PeerId) extends PeersClientMessage
   case class Request[RequestMsg <: Message](
       message: RequestMsg,
       peerSelector: PeerSelector,
@@ -326,6 +464,30 @@ object PeersClient {
   case object BestSnapPeer extends PeerSelector
   case object BestNodeDataPeer extends PeerSelector
   case class ExcludingPeers(exclude: Set[PeerId]) extends PeerSelector
+  case class BestSnapPeerExcluding(exclude: Set[PeerId]) extends PeerSelector
+  case class BestNodeDataPeerExcluding(exclude: Set[PeerId]) extends PeerSelector
+
+  /** Pick a peer whose advertised chain head is at least `minBlock`. Use this for absolute-block-number requests (e.g.
+    * PivotHeaderBootstrap targeting a specific pivot) where peers behind that height literally have nothing to return.
+    *
+    * ETH/69 peers report `latestBlock` in STATUS, so `maxBlockNumber` reflects their true chain head. ETH/64-68 peers
+    * don't carry a block number in STATUS and their `maxBlockNumber` stays at `0` post-merge (no incoming block
+    * messages to update it via `peerHasUpdatedBestBlock`). We therefore include `maxBlockNumber == 0` peers as a
+    * fallback — they MAY have the block but we can't tell.
+    */
+  case class BestPeerWithMinBlock(minBlock: BigInt) extends PeerSelector
+
+  /** Like BestPeerWithMinBlock but skips peers in `exclude`. Used by PivotHeaderBootstrap to rotate through the peer
+    * pool across attempts, modelling Besu's `waitForPeer((p) -> !peersUsed.contains(p))` predicate and go-ethereum's
+    * idle-pool exclusion in `skeleton.assignTasks()`.
+    */
+  case class BestPeerWithMinBlockExcluding(minBlock: BigInt, exclude: Set[PeerId]) extends PeerSelector
+
+  /** Like BestPeerWithMinBlockExcluding but restricted to SNAP-capable peers. Mirrors Besu's two-stage pivot pattern:
+    * `PivotSelectorFromPeers` pre-filters by `estimatedChainHeight >= pivot`, then `PivotBlockConfirmer` excludes used
+    * peers. Fukuii combines both concerns here since PivotHeaderBootstrap has no upstream height pre-filter.
+    */
+  case class BestSnapPeerWithMinBlockExcluding(minBlock: BigInt, exclude: Set[PeerId]) extends PeerSelector
 
   def bestPeer(
       peersToDownloadFrom: Map[PeerId, PeerWithInfo],
@@ -333,23 +495,29 @@ object PeersClient {
   ): Option[Peer] = {
     log.debug("Evaluating {} peers to find best peer", peersToDownloadFrom.size)
 
+    // Filter out peers whose bestHash == genesisHash. These peers have nothing to
+    // serve and silently return empty responses to GetBlockHeaders, GetBlockBodies,
+    // GetReceipts etc. — masking sync wedges as transient timeouts.
+    //
+    // Bug #1201 (Sepolia): half the post-fork-fix peer pool was Sepolia bootnodes
+    // sitting at genesis (`bestHash == genesisHash`, TD=131072). PivotHeaderBootstrap's
+    // BestPeer selection round-robined into them and reported "no header returned"
+    // for blocks they literally don't have. forkAccepted=true is necessary but not
+    // sufficient — the peer must also have advanced past genesis.
     val peersToUse = peersToDownloadFrom.values
       .map { case PeerWithInfo(peer, peerInfo) =>
-        val isReady = peerInfo.forkAccepted
+        val isReady = peerInfo.forkAccepted && !peerInfo.isAtGenesis
         log.debug(
-          "Peer {} ({}) - ready: {}, maxBlock: {}",
-          peer.id,
-          peer.remoteAddress,
-          isReady,
-          peerInfo.maxBlockNumber
+          s"Peer ${peer.id} (${peer.remoteAddress}) - ready: $isReady, " +
+            s"maxBlock: ${peerInfo.maxBlockNumber}, atGenesis: ${peerInfo.isAtGenesis}"
         )
         log.debug("Peer {} chainWeight: {}", peer.id, peerInfo.chainWeight)
         (peer, peerInfo, isReady)
       }
-      .collect { case (peer, PeerInfo(_, chainWeight, true, _, _), _) =>
+      .collect { case (peer, peerInfo, true) =>
         log.debug("Peer {} is ready and eligible for selection", peer.id)
-        log.debug("Peer {} chainWeight: {}", peer.id, chainWeight)
-        (peer, chainWeight)
+        log.debug("Peer {} chainWeight: {}", peer.id, peerInfo.chainWeight)
+        (peer, peerInfo.chainWeight)
       }
 
     if (peersToUse.nonEmpty) {
@@ -362,11 +530,13 @@ object PeersClient {
     }
   }
 
-  // Legacy method for backward compatibility
+  // Legacy method for backward compatibility — kept in sync with the logger-aware
+  // overload above: skip forkRejected peers AND skip peers stuck at genesis.
   def bestPeer(peersToDownloadFrom: Map[PeerId, PeerWithInfo]): Option[Peer] = {
     val peersToUse = peersToDownloadFrom.values
-      .collect { case PeerWithInfo(peer, PeerInfo(_, chainWeight, true, _, _)) =>
-        (peer, chainWeight)
+      .collect {
+        case PeerWithInfo(peer, peerInfo) if peerInfo.forkAccepted && !peerInfo.isAtGenesis =>
+          (peer, peerInfo.chainWeight)
       }
 
     if (peersToUse.nonEmpty) {
@@ -375,5 +545,34 @@ object PeersClient {
     } else {
       None
     }
+  }
+
+  /** Static helper mirroring the BestPeerWithMinBlock selector for unit testing. */
+  def bestPeerWithMinBlock(
+      peersToDownloadFrom: Map[PeerId, PeerWithInfo],
+      minBlock: BigInt
+  ): Option[Peer] = {
+    val knownAheadPeers = peersToDownloadFrom.filter { case (_, peerWithInfo) =>
+      peerWithInfo.peerInfo.maxBlockNumber >= minBlock
+    }
+    if (knownAheadPeers.nonEmpty) bestPeer(knownAheadPeers)
+    else
+      bestPeer(peersToDownloadFrom.filter { case (_, peerWithInfo) =>
+        peerWithInfo.peerInfo.maxBlockNumber == 0
+      })
+  }
+
+  /** Static helper mirroring the BestPeerWithMinBlockExcluding selector for unit testing. */
+  def bestPeerWithMinBlockExcluding(
+      peersToDownloadFrom: Map[PeerId, PeerWithInfo],
+      minBlock: BigInt,
+      exclude: Set[PeerId]
+  ): Option[Peer] = {
+    val eligible = peersToDownloadFrom.filterNot { case (peerId, _) => exclude.contains(peerId) }
+    val knownAheadPeers = eligible.filter { case (_, peerWithInfo) =>
+      peerWithInfo.peerInfo.maxBlockNumber >= minBlock
+    }
+    if (knownAheadPeers.nonEmpty) bestPeer(knownAheadPeers)
+    else bestPeer(eligible.filter { case (_, peerWithInfo) => peerWithInfo.peerInfo.maxBlockNumber == 0 })
   }
 }

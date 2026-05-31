@@ -20,7 +20,8 @@ import com.chipprbots.ethereum.network.p2p.messages.WireProtocol.Disconnect
   *   - Status message reorders fields: [version, networkId, genesis, forkId, earliestBlock, latestBlock,
   *     latestBlockHash]
   *   - ForkId validation is still performed
-  *   - RemoteStatus is constructed without TD (uses latestBlock number instead)
+  *   - TD is recovered from local ChainWeightStorage via latestBlockHash when the peer's block is already in our chain;
+  *     falls back to block-number proxy otherwise
   */
 case class EthNodeStatus69ExchangeState(
     handshakerConfiguration: NetworkHandshakerConfiguration,
@@ -33,7 +34,7 @@ case class EthNodeStatus69ExchangeState(
 
   def applyResponseMessage: PartialFunction[Message, HandshakerState[PeerInfo]] = { case status: ETH69.Status =>
     import ForkIdValidator.syncIoLogger
-    log.info(
+    log.debug(
       "ETH69_STATUS: Received - protocolVersion={}, networkId={}, genesis={}, forkId={}, earliest={}, latest={}, latestHash={}",
       status.protocolVersion,
       status.networkId,
@@ -72,9 +73,26 @@ case class EthNodeStatus69ExchangeState(
         validationResult match {
           case Connect =>
             log.info("ETH69_STATUS: ForkId validation passed - accepting peer")
+            val (resolvedChainWeight, resolvedSource) = blockchainReader.resolveETH69ChainWeight(
+              status.latestBlockHash,
+              status.latestBlock,
+              isPoWChain = blockchainConfig.terminalTotalDifficulty.isEmpty
+            )
+            log.info(
+              "ETH69_STATUS: TD resolved - totalDifficulty={}, latestBlock={}, source={}",
+              resolvedChainWeight.totalDifficulty,
+              status.latestBlock,
+              resolvedSource
+            )
             ConnectedState(
               PeerInfo.withForkAccepted(
-                RemoteStatus.fromETH69Status(status, negotiatedCapability, supportsSnap, peerCapabilities)
+                RemoteStatus.fromETH69Status(
+                  status,
+                  negotiatedCapability,
+                  supportsSnap,
+                  peerCapabilities,
+                  resolvedChainWeight
+                )
               )
             )
           case other =>
@@ -106,7 +124,7 @@ case class EthNodeStatus69ExchangeState(
       latestBlockHash = bestBlockHeader.hash
     )
 
-    log.info(
+    log.debug(
       "ETH69_STATUS: Sending - networkId={}, genesis={}, forkId={}, earliest={}, latest={}, latestHash={}",
       status.networkId,
       genesisHash,
