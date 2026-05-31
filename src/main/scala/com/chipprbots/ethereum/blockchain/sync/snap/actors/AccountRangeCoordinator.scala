@@ -465,6 +465,20 @@ class AccountRangeCoordinator(
   // Peer cooldown (best-effort): used for transient errors (timeouts, verification failures).
   private val peerCooldownUntilMs = mutable.Map[String, Long]()
   private val peerCooldownDefault = 30.seconds
+  // Peer-scarcity threshold and the shorter cooldown applied below it. On a 1-3 peer pool a fixed 30s cooldown after a
+  // single timeout benches ~half the usable peers; two near-simultaneous timeouts can zero the eligible set for 30s.
+  // Scaling the cooldown down to a few seconds when peers are scarce keeps the pipe fed without giving up the
+  // back-off's purpose (briefly resting a peer that just failed). Abundant pools keep the full 30s.
+  private val peerScarcityThreshold = 3
+  private val peerCooldownScarce = 8.seconds
+  private def effectivePeerCooldown: FiniteDuration =
+    if (knownAvailablePeers.size <= peerScarcityThreshold) peerCooldownScarce else peerCooldownDefault
+  // Short cooldown for "empty-without-proof" responses. These mean "I can't serve this
+  // state root" — the peer is healthy, just doesn't have a snapshot at our pivot. 30s
+  // was over-punitive here: in production we saw `cooling=5 eligible=11` snapshots,
+  // i.e. ~30 % of the otherwise-eligible pool parked in cooldown most of the time.
+  // A pivot refresh is what unsticks these peers, not waiting.
+  private val peerCooldownNoProof = 5.seconds
 
   // FIFO fairness within same in-flight tier: tracks last dispatch time per peer so that
   // ties in inFlightForPeer sort are broken by least-recently-served order rather than
@@ -474,10 +488,10 @@ class AccountRangeCoordinator(
   private def isPeerCoolingDown(peer: Peer): Boolean =
     peerCooldownUntilMs.get(peer.id.value).exists(_ > System.currentTimeMillis())
 
-  private def recordPeerCooldown(peer: Peer, reason: String): Unit = {
-    val until = System.currentTimeMillis() + peerCooldownDefault.toMillis
+  private def recordPeerCooldown(peer: Peer, reason: String, duration: FiniteDuration): Unit = {
+    val until = System.currentTimeMillis() + duration.toMillis
     peerCooldownUntilMs.put(peer.id.value, until)
-    log.debug(s"Cooling down peer ${peer.id.value} for ${peerCooldownDefault.toSeconds}s: $reason")
+    log.debug(s"Cooling down peer ${peer.id.value} for ${duration.toSeconds}s: $reason")
   }
 
   // Pivot refresh backoff: prevents rapid-fire pivot refresh requests when all peers are stateless.
@@ -1039,7 +1053,14 @@ class AccountRangeCoordinator(
               tryRedispatchPendingTasks()
             } else {
               // Defensive fallback: the verifier should reject this as a stateless-peer signal.
-              recordPeerCooldown(peer, "empty account range without proof — peer snapshot may not cover this root")
+              // Use the short proof-less cooldown — the peer is healthy, just doesn't hold a
+              // snapshot at our current pivot. Parking it for 30s gains nothing; a pivot
+              // refresh is what unsticks it.
+              recordPeerCooldown(
+                peer,
+                "empty account range without proof — peer snapshot may not cover this root",
+                peerCooldownNoProof
+              )
               requeueOrEscalate(task, "empty range without proof")
             }
           } else {
@@ -1174,7 +1195,7 @@ class AccountRangeCoordinator(
       // Apply cooldown and reduce byte budget for protocol failures; skip for network-level
       // disconnects since the peer is already gone and will reconnect fresh.
       if (!reason.contains("Missing proof for empty account range") && !reason.contains("Peer disconnected")) {
-        recordPeerCooldown(peer, reason)
+        recordPeerCooldown(peer, reason, effectivePeerCooldown)
         adjustResponseBytesOnFailure(peer, reason)
       }
 
@@ -1212,11 +1233,35 @@ class AccountRangeCoordinator(
 
   private def tryRedispatchPendingTasks(): Unit = {
     if (pendingTasks.isEmpty) return
-    val eligiblePeers = knownAvailablePeers
+    var eligiblePeers = knownAvailablePeers
       .filterNot(isPeerStateless)
       .filterNot(isPeerSnapless)
       .filterNot(isPeerCoolingDown)
       .toList
+    // Eligible-set floor (peer-retention): whenever at least one peer is neither stateless nor snapless but the only
+    // thing excluding it is a cooldown, never let the download stall at zero dispatchable peers — revive the
+    // soonest-to-expire cooling peer so the pipe keeps moving. On abundant pools this never fires (eligiblePeers is
+    // non-empty); on a 1-2 snap-peer pool it is the difference between forward progress and a 30s dead stall. We only
+    // override cooldown — confirmed-stateless / snapless peers stay excluded, so we never re-dispatch to a peer that
+    // genuinely cannot serve the current root.
+    if (eligiblePeers.isEmpty) {
+      val cooldownOnlyPeers = knownAvailablePeers
+        .filterNot(isPeerStateless)
+        .filterNot(isPeerSnapless)
+        .filter(isPeerCoolingDown)
+        .toList
+      cooldownOnlyPeers
+        .sortBy(p => peerCooldownUntilMs.getOrElse(p.id.value, 0L))
+        .headOption
+        .foreach { peer =>
+          peerCooldownUntilMs.remove(peer.id.value)
+          log.info(
+            s"[ACCOUNT-FLOOR] All ${cooldownOnlyPeers.size} servable peers were cooling and none eligible — " +
+              s"reviving ${peer.id.value.take(8)} to keep the pipe fed (peer-scarce floor)"
+          )
+          eligiblePeers = List(peer)
+        }
+    }
     val now = System.currentTimeMillis()
     val shouldLog = now - lastStateLogMs >= StateLogIntervalMs
     if (shouldLog) {
@@ -1706,10 +1751,11 @@ class AccountRangeCoordinator(
 object AccountRangeCoordinator {
 
   /** Hard cap on consecutive re-queues for a single account task before the coordinator escalates to the controller via
-    * `PivotStateUnservable`. The cap is high enough that legitimate transient peer churn (cooldowns, network blips)
-    * won't trip it, but low enough that a wedged trailing range can't loop forever.
+    * `PivotStateUnservable`. On ETC mainnet with 1-5 SNAP peers, serve-window gaps can last 5-10 minutes. At 5s cooldown
+    * (empty-without-proof) 20 requeues covers ~100s; at 30s timeout, ~10 minutes. Previously 8 — too tight for
+    * peer-scarce networks where transient statelessness is the norm, not the exception.
     */
-  val MaxRequeuesPerTask: Int = 8
+  val MaxRequeuesPerTask: Int = 20
 
   /** Async trie-finalisation result. `generation` matches the value of `trieFlushGeneration` at spawn time so stale
     * completions (after a state transition / restart) can be dropped without applying against the wrong assumption.

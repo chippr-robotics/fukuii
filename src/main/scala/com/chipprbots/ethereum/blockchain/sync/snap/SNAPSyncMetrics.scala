@@ -274,6 +274,7 @@ object SNAPSyncMetrics extends MetricsContainer {
       case SNAPSyncController.StateValidation         => 6
       case SNAPSyncController.ChainDownloadCompletion => 7
       case SNAPSyncController.Completed               => 8
+      case SNAPSyncController.Dormant                 => 9
     }
     setCurrentPhase(phaseValue)
 

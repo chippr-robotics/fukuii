@@ -93,6 +93,23 @@ class PeerManagerActor(
     */
   private val consecutiveTcpFailures: mutable.Map[String, Int] = mutable.Map.empty
 
+  /** Hosts (remote IP strings) of peers that have completed an ETH handshake advertising snap/1 capability. On
+    * peer-scarce networks (ETC mainnet: 1-3 snap servers) snap peers are the only source of state, yet they get
+    * timed-blacklisted for soft, peer-initiated reasons (`TooManyPeers`, `UselessPeer`, `TcpSubsystemError`) exactly
+    * like any other peer — one disconnect locks out ~50% of state-download capacity for `shortBlacklistDuration`. We
+    * remember which hosts are snap-capable so the blacklist path can give them a much shorter fixed backoff instead of
+    * exiling them. Protocol violations (`BreachOfProtocol` etc.) still get the permanent ban — the snap exemption only
+    * relaxes the *soft* tier, never swallows a genuine breach.
+    */
+  private val snapCapableHosts: mutable.Set[String] = mutable.Set.empty
+
+  /** Per-host count of lenient (snap-exempt) soft blacklists applied since the last successful handshake. Caps the
+    * flap rate: a snap host that keeps soft-disconnecting gets the short backoff up to
+    * [[PeerManagerActor.MaxSnapLenientBlacklists]] times, after which it falls back to the normal short duration. Reset
+    * to 0 whenever the host completes a fresh handshake (it proved itself useful again).
+    */
+  private val snapLenientBlacklists: mutable.Map[String, Int] = mutable.Map.empty
+
   /** Runtime max-outgoing-peers override set by admin_maxPeers. core-geth reference: eth/api_admin.go MaxPeers — sets
     * handler.maxPeers + p2pServer.MaxPeers.
     */
@@ -274,7 +291,7 @@ class PeerManagerActor(
       if (!isMaintainedPeer) {
         blacklist.add(
           PeerAddress(peerAddress),
-          getBlacklistDuration(reason),
+          getBlacklistDuration(reason, peerAddress),
           Blacklist.BlacklistReason.getP2PBlacklistReasonByDescription(Disconnect.reasonToString(reason))
         )
       }
@@ -319,12 +336,31 @@ class PeerManagerActor(
       sender() ! SetMaxPeersResponse(success = true)
   }
 
-  private def getBlacklistDuration(reason: Long): FiniteDuration =
-    PeerManagerActor.blacklistDurationForDisconnect(
+  private def getBlacklistDuration(reason: Long, peerAddress: String): FiniteDuration = {
+    val baseDuration = PeerManagerActor.blacklistDurationForDisconnect(
       reason,
       shortBlacklistDuration = peerConfiguration.shortBlacklistDuration,
       longBlacklistDuration = peerConfiguration.longBlacklistDuration
     )
+    // Peer-retention for scarce snap pools: when a snap-capable host disconnects us for a SOFT reason (it maps to the
+    // short tier above — never a protocol breach, which stays permanent), give it a brief fixed backoff instead of the
+    // full short duration so we can re-dial it within seconds. Bounded by MaxSnapLenientBlacklists to stop a misbehaving
+    // peer from flap-looping. Permanent (BreachOfProtocol-tier) bans are left untouched — the exemption must never
+    // swallow a genuine breach.
+    val isSoftTier = baseDuration == peerConfiguration.shortBlacklistDuration
+    if (isSoftTier && snapCapableHosts.contains(peerAddress)) {
+      val lenientCount = snapLenientBlacklists.getOrElse(peerAddress, 0)
+      if (lenientCount < PeerManagerActor.MaxSnapLenientBlacklists) {
+        snapLenientBlacklists(peerAddress) = lenientCount + 1
+        val snapBackoff = PeerManagerActor.SnapPeerSoftBlacklistDuration
+        log.debug(
+          s"Snap-capable host $peerAddress soft-disconnected (reason $reason) — lenient backoff $snapBackoff " +
+            s"(#${lenientCount + 1}/${PeerManagerActor.MaxSnapLenientBlacklists}) instead of $baseDuration"
+        )
+        snapBackoff
+      } else baseDuration
+    } else baseDuration
+  }
 
   private def handleConnection(
       connection: ActorRef,
@@ -491,9 +527,15 @@ class PeerManagerActor(
           val count = consecutiveTcpFailures.getOrElse(ip, 0) + 1
           consecutiveTcpFailures(ip) = count
           if (count >= 5) {
-            val backoffMinutes = math.min(30, 5 * (1 << (count - 5)))
-            log.warning("TCP failure #{} for {} — blacklisting for {} min", count, ip, backoffMinutes)
-            blacklist.add(PeerAddress(ip), backoffMinutes.minutes, Blacklist.BlacklistReason.TcpSubsystemError)
+            // Peer-retention: a previously snap-capable host that now flaps at the TCP layer (NAT churn, transient
+            // unreachability) must NOT be exiled for 5-30 min — on a 2-snap-peer pool that drops state capacity to
+            // zero. Cap its backoff to a short fixed duration so it re-enters the dial rotation quickly. Non-snap
+            // hosts keep the full exponential escalation.
+            val backoff: FiniteDuration =
+              if (snapCapableHosts.contains(ip)) PeerManagerActor.SnapPeerSoftBlacklistDuration
+              else math.min(30, 5 * (1 << (count - 5))).minutes
+            log.warning("TCP failure #{} for {} — blacklisting for {}", count, ip, backoff)
+            blacklist.add(PeerAddress(ip), backoff, Blacklist.BlacklistReason.TcpSubsystemError)
             consecutiveTcpFailures.remove(ip)
           }
         }
@@ -539,8 +581,17 @@ class PeerManagerActor(
       context.unwatch(ref)
       context.become(listening(newConnectedPeers))
 
-    case PeerEvent.PeerHandshakeSuccessful(handshakedPeer, _) =>
-      consecutiveTcpFailures.remove(handshakedPeer.remoteAddress.getHostString)
+    case PeerEvent.PeerHandshakeSuccessful(handshakedPeer, handshakeResult) =>
+      val host = handshakedPeer.remoteAddress.getHostString
+      consecutiveTcpFailures.remove(host)
+      // Track snap-capability per host so the blacklist paths can retain scarce snap peers (see snapCapableHosts).
+      // A fresh handshake also proves the host is useful again, so reset its lenient-blacklist flap counter.
+      handshakeResult match {
+        case info: NetworkPeerManagerActor.PeerInfo if info.remoteStatus.supportsSnap =>
+          snapCapableHosts += host
+          snapLenientBlacklists.remove(host)
+        case _ =>
+      }
       val isMaintained =
         handshakedPeer.nodeId.exists(nid => maintainedPeersByNodeId.contains(Hex.toHexString(nid.toArray)))
       if (
@@ -875,6 +926,17 @@ object PeerManagerActor {
     * duration.
     */
   val DefaultPermanentBlacklistDuration: FiniteDuration = 365.days
+
+  /** Short fixed backoff applied to snap-capable hosts in place of the soft-tier short blacklist (and the 5-30 min TCP
+    * escalation). Long enough to avoid a hot reconnect loop, short enough that a scarce snap peer re-enters the dial
+    * rotation almost immediately. See `snapCapableHosts`.
+    */
+  val SnapPeerSoftBlacklistDuration: FiniteDuration = 20.seconds
+
+  /** Cap on consecutive lenient (snap-exempt) soft blacklists for one host before it falls back to the normal short
+    * duration. Bounds the flap rate of a snap host that keeps soft-disconnecting; reset on a fresh handshake.
+    */
+  val MaxSnapLenientBlacklists: Int = 20
 
   /** Translate an inbound `Disconnect.Reasons.*` code into the blacklist duration we apply when the peer initiated the
     * disconnect. Extracted from the actor instance so it's directly unit-testable without spinning up a TestActorRef.
