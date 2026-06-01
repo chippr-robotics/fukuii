@@ -117,11 +117,12 @@ class AccountRangeWorker(
           // not task.rootHash — the coordinator may have mutated it during a pivot refresh.
           val proofVerifier = MerkleProofVerifier(expectedRoot)
           val proofOk = validated.flatMap { validResponse =>
+            val endHash = validResponse.accounts.lastOption.map(_._1).getOrElse(task.last)
             proofVerifier.verifyAccountRange(
               accounts = validResponse.accounts,
               proof = validResponse.proof,
               startHash = task.next,
-              endHash = task.last
+              endHash = endHash
             )
           }
 

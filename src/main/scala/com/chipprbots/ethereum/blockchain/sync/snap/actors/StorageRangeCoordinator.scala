@@ -1186,7 +1186,8 @@ class StorageRangeCoordinator(
       task.proof = proofForThisTask
 
       val verifier = MerkleProofVerifier(task.storageRoot)
-      verifier.verifyStorageRange(accountSlots, proofForThisTask, task.next, task.last) match {
+      val storageEndHash = accountSlots.lastOption.map(_._1).getOrElse(task.last)
+      verifier.verifyStorageRange(accountSlots, proofForThisTask, task.next, storageEndHash) match {
         case Left(error) =>
           log.warning(s"Storage proof verification failed for account ${task.accountString}: $error")
           recordPeerCooldown(peer, s"verification failed: $error")
