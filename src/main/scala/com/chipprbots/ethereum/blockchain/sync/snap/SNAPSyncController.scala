@@ -3548,7 +3548,9 @@ class SNAPSyncController(
       // → they re-escalated forever and the node wedged. Re-arm them against the current root so
       // stateless tracking clears and dispatch resumes. PivotRefreshed is idempotent on an
       // unchanged root (the handler's `stateRoot = root` is a no-op), so no state is destroyed.
-      log.info(s"Pivot refresh produced same root ($newRoot): $reason. Re-arming coordinators to clear stateless peers.")
+      log.info(
+        s"Pivot refresh produced same root ($newRoot): $reason. Re-arming coordinators to clear stateless peers."
+      )
       accountRangeCoordinator.foreach(_ ! actors.Messages.PivotRefreshed(newStateRoot))
       storageRangeCoordinator.foreach(_ ! actors.Messages.StoragePivotRefreshed(newStateRoot))
       return
