@@ -16,7 +16,7 @@ class MerkleProofVerifierSpec extends AnyFlatSpec with Matchers {
   // ── Helpers ─────────────────────────────────────────────────────────────────
 
   private val ZeroKey = ByteString(Array.fill(32)(0x00.toByte))
-  private val MaxKey  = ByteString(Array.fill(32)(0xff.toByte))
+  private val MaxKey = ByteString(Array.fill(32)(0xff.toByte))
 
   /** Generate proper SNAP boundary proofs from an MPT by walking both edge paths. */
   private def generateBoundaryProof[K, V](
@@ -25,7 +25,7 @@ class MerkleProofVerifierSpec extends AnyFlatSpec with Matchers {
       lastKey: K
   ): Seq[ByteString] = {
     val firstProof = trie.getProof(firstKey).getOrElse(Vector.empty)
-    val lastProof  = trie.getProof(lastKey).getOrElse(Vector.empty)
+    val lastProof = trie.getProof(lastKey).getOrElse(Vector.empty)
     (firstProof ++ lastProof)
       .distinctBy(node => ByteString(node.hash))
       .map(node => ByteString(MptTraversals.encodeNode(node)))
@@ -43,16 +43,20 @@ class MerkleProofVerifierSpec extends AnyFlatSpec with Matchers {
   "MerkleProofVerifier" should "accept terminal empty account range for non-empty state root" taggedAs UnitTest in {
     val verifier = MerkleProofVerifier(kec256(ByteString("test-root")))
     verifier.verifyAccountRange(
-      accounts = Seq.empty, proof = Seq.empty,
-      startHash = ZeroKey, endHash = MaxKey
+      accounts = Seq.empty,
+      proof = Seq.empty,
+      startHash = ZeroKey,
+      endHash = MaxKey
     ) shouldBe Right(())
   }
 
   it should "accept empty proof for empty account list when trie is empty" taggedAs UnitTest in {
     val verifier = MerkleProofVerifier(ByteString(MerklePatriciaTrie.EmptyRootHash))
     verifier.verifyAccountRange(
-      accounts = Seq.empty, proof = Seq.empty,
-      startHash = ZeroKey, endHash = MaxKey
+      accounts = Seq.empty,
+      proof = Seq.empty,
+      startHash = ZeroKey,
+      endHash = MaxKey
     ) shouldBe Right(())
   }
 
@@ -77,7 +81,8 @@ class MerkleProofVerifierSpec extends AnyFlatSpec with Matchers {
     val result = verifier.verifyAccountRange(
       accounts = Seq(ByteString.fromArray(Array.fill(32)(0x01.toByte)) -> Account(nonce = 1)),
       proof = Seq.empty,
-      startHash = ZeroKey, endHash = MaxKey
+      startHash = ZeroKey,
+      endHash = MaxKey
     )
     result shouldBe a[Left[_, _]]
   }
@@ -89,7 +94,10 @@ class MerkleProofVerifierSpec extends AnyFlatSpec with Matchers {
     val storageRoot = computeStorageRoot(slots)
 
     MerkleProofVerifier(storageRoot).verifyStorageRange(
-      slots = slots, proof = Seq.empty, startHash = ZeroKey, endHash = MaxKey
+      slots = slots,
+      proof = Seq.empty,
+      startHash = ZeroKey,
+      endHash = MaxKey
     ) shouldBe Right(())
   }
 
@@ -100,7 +108,10 @@ class MerkleProofVerifierSpec extends AnyFlatSpec with Matchers {
     val wrongRoot = kec256(ByteString("wrong"))
 
     MerkleProofVerifier(wrongRoot).verifyStorageRange(
-      slots = slots, proof = Seq.empty, startHash = ZeroKey, endHash = MaxKey
+      slots = slots,
+      proof = Seq.empty,
+      startHash = ZeroKey,
+      endHash = MaxKey
     ) shouldBe a[Left[_, _]]
   }
 
@@ -111,7 +122,8 @@ class MerkleProofVerifierSpec extends AnyFlatSpec with Matchers {
     verifier.verifyAccountRange(
       accounts = Seq(ByteString.fromArray(Array.fill(32)(0x01.toByte)) -> Account(nonce = 1)),
       proof = Seq(ByteString("not-a-valid-rlp-node")),
-      startHash = ZeroKey, endHash = MaxKey
+      startHash = ZeroKey,
+      endHash = MaxKey
     ) shouldBe a[Left[_, _]]
   }
 
@@ -120,7 +132,8 @@ class MerkleProofVerifierSpec extends AnyFlatSpec with Matchers {
     verifier.verifyStorageRange(
       slots = Seq(ByteString(Array.fill(32)(0x10.toByte)) -> ByteString("value")),
       proof = Seq(ByteString("not-valid-rlp-xxxxxxxxxx")),
-      startHash = ZeroKey, endHash = MaxKey
+      startHash = ZeroKey,
+      endHash = MaxKey
     ) shouldBe a[Left[_, _]]
   }
 
@@ -129,7 +142,8 @@ class MerkleProofVerifierSpec extends AnyFlatSpec with Matchers {
     verifier.verifyAccountRange(
       accounts = Seq(ByteString(Array.fill(32)(0x01.toByte)) -> Account(nonce = 1)),
       proof = Seq(ByteString(Array.fill(32)(0xde.toByte)), ByteString(Array[Byte](0x01, 0x02, 0x03))),
-      startHash = ZeroKey, endHash = MaxKey
+      startHash = ZeroKey,
+      endHash = MaxKey
     ) shouldBe a[Left[_, _]]
   }
 
@@ -137,7 +151,10 @@ class MerkleProofVerifierSpec extends AnyFlatSpec with Matchers {
 
   it should "accept empty storage proof for empty slots" taggedAs UnitTest in {
     MerkleProofVerifier(ByteString(MerklePatriciaTrie.EmptyRootHash)).verifyStorageRange(
-      slots = Seq.empty, proof = Seq.empty, startHash = ZeroKey, endHash = MaxKey
+      slots = Seq.empty,
+      proof = Seq.empty,
+      startHash = ZeroKey,
+      endHash = MaxKey
     ) shouldBe Right(())
   }
 
@@ -145,7 +162,10 @@ class MerkleProofVerifierSpec extends AnyFlatSpec with Matchers {
     val storage = new TestMptStorage()
     val storageTrie = MerklePatriciaTrie[ByteString, ByteString](storage)
     MerkleProofVerifier(ByteString(storageTrie.getRootHash)).verifyStorageRange(
-      slots = Seq.empty, proof = Seq.empty, startHash = ZeroKey, endHash = MaxKey
+      slots = Seq.empty,
+      proof = Seq.empty,
+      startHash = ZeroKey,
+      endHash = MaxKey
     ) shouldBe Right(())
   }
 
@@ -156,7 +176,9 @@ class MerkleProofVerifierSpec extends AnyFlatSpec with Matchers {
     val slot2 = ByteString(Array.fill(31)(0x00.toByte) :+ 0x10.toByte) // slot2 < slot1
     MerkleProofVerifier(kec256(ByteString("storage-root"))).verifyStorageRange(
       slots = Seq(slot1 -> ByteString("v1"), slot2 -> ByteString("v2")),
-      proof = Seq.empty, startHash = ZeroKey, endHash = MaxKey
+      proof = Seq.empty,
+      startHash = ZeroKey,
+      endHash = MaxKey
     ) shouldBe a[Left[_, _]]
   }
 
@@ -164,39 +186,46 @@ class MerkleProofVerifierSpec extends AnyFlatSpec with Matchers {
     val sameSlot = ByteString(Array.fill(32)(0x55.toByte))
     MerkleProofVerifier(kec256(ByteString("storage-root"))).verifyStorageRange(
       slots = Seq(sameSlot -> ByteString("v1"), sameSlot -> ByteString("v2")),
-      proof = Seq.empty, startHash = ZeroKey, endHash = MaxKey
+      proof = Seq.empty,
+      startHash = ZeroKey,
+      endHash = MaxKey
     ) shouldBe a[Left[_, _]]
   }
 
   // ── Valid proof with reconstruction ─────────────────────────────────────────
 
   it should "verify account range with valid boundary proof" taggedAs UnitTest in {
-    val storage  = new TestMptStorage()
-    val acct1    = Account(nonce = 1, balance = 100)
-    val acct2    = Account(nonce = 2, balance = 200)
-    val key1     = ByteString(Array.fill(32)(0x10.toByte))
-    val key2     = ByteString(Array.fill(32)(0x20.toByte))
-    val trie     = MerklePatriciaTrie[ByteString, Account](storage).put(key1, acct1).put(key2, acct2)
-    val proof    = generateBoundaryProof(trie, key1, key2)
+    val storage = new TestMptStorage()
+    val acct1 = Account(nonce = 1, balance = 100)
+    val acct2 = Account(nonce = 2, balance = 200)
+    val key1 = ByteString(Array.fill(32)(0x10.toByte))
+    val key2 = ByteString(Array.fill(32)(0x20.toByte))
+    val trie = MerklePatriciaTrie[ByteString, Account](storage).put(key1, acct1).put(key2, acct2)
+    val proof = generateBoundaryProof(trie, key1, key2)
     val verifier = MerkleProofVerifier(ByteString(trie.getRootHash))
 
     verifier.verifyAccountRange(
       accounts = Seq(key1 -> acct1, key2 -> acct2),
-      proof = proof, startHash = key1, endHash = key2
+      proof = proof,
+      startHash = key1,
+      endHash = key2
     ) shouldBe Right(())
   }
 
   it should "verify storage range with valid boundary proof" taggedAs UnitTest in {
-    val storage  = new TestMptStorage()
-    val key1     = ByteString(Array.fill(32)(0x10.toByte))
-    val key2     = ByteString(Array.fill(32)(0x20.toByte))
-    val trie     = MerklePatriciaTrie[ByteString, ByteString](storage).put(key1, ByteString("v1")).put(key2, ByteString("v2"))
-    val proof    = generateBoundaryProof(trie, key1, key2)
+    val storage = new TestMptStorage()
+    val key1 = ByteString(Array.fill(32)(0x10.toByte))
+    val key2 = ByteString(Array.fill(32)(0x20.toByte))
+    val trie =
+      MerklePatriciaTrie[ByteString, ByteString](storage).put(key1, ByteString("v1")).put(key2, ByteString("v2"))
+    val proof = generateBoundaryProof(trie, key1, key2)
     val verifier = MerkleProofVerifier(ByteString(trie.getRootHash))
 
     verifier.verifyStorageRange(
       slots = Seq(key1 -> ByteString("v1"), key2 -> ByteString("v2")),
-      proof = proof, startHash = key1, endHash = key2
+      proof = proof,
+      startHash = key1,
+      endHash = key2
     ) shouldBe Right(())
   }
 
@@ -209,14 +238,18 @@ class MerkleProofVerifierSpec extends AnyFlatSpec with Matchers {
     val key2 = ByteString(Array.fill(32)(0x30.toByte))
     val acct = Account(nonce = 1)
     val trie = MerklePatriciaTrie[ByteString, Account](storage)
-      .put(key0, acct).put(key1, acct).put(key2, acct)
-    val proof    = generateBoundaryProof(trie, key0, key2)
+      .put(key0, acct)
+      .put(key1, acct)
+      .put(key2, acct)
+    val proof = generateBoundaryProof(trie, key0, key2)
     val verifier = MerkleProofVerifier(ByteString(trie.getRootHash))
 
     // Omit key1 — creates a gap that must be detected via hash mismatch
     verifier.verifyAccountRange(
       accounts = Seq(key0 -> acct, key2 -> acct),
-      proof = proof, startHash = key0, endHash = key2
+      proof = proof,
+      startHash = key0,
+      endHash = key2
     ) shouldBe a[Left[_, _]]
   }
 
@@ -224,46 +257,53 @@ class MerkleProofVerifierSpec extends AnyFlatSpec with Matchers {
     val storage = new TestMptStorage()
     val key0 = ByteString(Array.fill(32)(0x10.toByte))
     val key1 = ByteString(Array.fill(32)(0x20.toByte))
-    val realAcct  = Account(nonce = 1, balance = 100)
+    val realAcct = Account(nonce = 1, balance = 100)
     val wrongAcct = Account(nonce = 999, balance = 0)
-    val trie  = MerklePatriciaTrie[ByteString, Account](storage).put(key0, realAcct).put(key1, realAcct)
+    val trie = MerklePatriciaTrie[ByteString, Account](storage).put(key0, realAcct).put(key1, realAcct)
     val proof = generateBoundaryProof(trie, key0, key1)
     val verifier = MerkleProofVerifier(ByteString(trie.getRootHash))
 
     // Peer returns wrong value for key1
     verifier.verifyAccountRange(
       accounts = Seq(key0 -> realAcct, key1 -> wrongAcct),
-      proof = proof, startHash = key0, endHash = key1
+      proof = proof,
+      startHash = key0,
+      endHash = key1
     ) shouldBe a[Left[_, _]]
   }
 
   // ── Single-element and edge-proof variants ───────────────────────────────────
 
   it should "handle proof with single account correctly" taggedAs UnitTest in {
-    val storage  = new TestMptStorage()
-    val acct     = Account(nonce = 1, balance = 100)
-    val key      = ByteString(Array.fill(32)(0x42.toByte))
-    val trie     = MerklePatriciaTrie[ByteString, Account](storage).put(key, acct)
-    val proof    = generateBoundaryProof(trie, key, key)
+    val storage = new TestMptStorage()
+    val acct = Account(nonce = 1, balance = 100)
+    val key = ByteString(Array.fill(32)(0x42.toByte))
+    val trie = MerklePatriciaTrie[ByteString, Account](storage).put(key, acct)
+    val proof = generateBoundaryProof(trie, key, key)
     val verifier = MerkleProofVerifier(ByteString(trie.getRootHash))
 
     // Single-element with exact boundary proof (firstKey == lastKey)
     verifier.verifyAccountRange(
       accounts = Seq(key -> acct),
-      proof = proof, startHash = key, endHash = key
+      proof = proof,
+      startHash = key,
+      endHash = key
     ) shouldBe Right(())
   }
 
   it should "handle proof with multiple storage slots correctly" taggedAs UnitTest in {
-    val storage  = new TestMptStorage()
-    val keys     = (1 to 5).map(i => ByteString(Array.fill(31)(0x00.toByte) :+ i.toByte))
-    val slots    = keys.map(_ -> ByteString("v"))
-    val trie     = slots.foldLeft(MerklePatriciaTrie[ByteString, ByteString](storage)) { case (t, (k, v)) => t.put(k, v) }
-    val proof    = generateBoundaryProof(trie, keys.head, keys.last)
+    val storage = new TestMptStorage()
+    val keys = (1 to 5).map(i => ByteString(Array.fill(31)(0x00.toByte) :+ i.toByte))
+    val slots = keys.map(_ -> ByteString("v"))
+    val trie = slots.foldLeft(MerklePatriciaTrie[ByteString, ByteString](storage)) { case (t, (k, v)) => t.put(k, v) }
+    val proof = generateBoundaryProof(trie, keys.head, keys.last)
     val verifier = MerkleProofVerifier(ByteString(trie.getRootHash))
 
     verifier.verifyStorageRange(
-      slots = slots, proof = proof, startHash = keys.head, endHash = keys.last
+      slots = slots,
+      proof = proof,
+      startHash = keys.head,
+      endHash = keys.last
     ) shouldBe Right(())
   }
 
@@ -271,30 +311,34 @@ class MerkleProofVerifierSpec extends AnyFlatSpec with Matchers {
 
   it should "reject account proof where proof root hash does not match state root" taggedAs UnitTest in {
     val realStateRoot = kec256(ByteString("real-state-root"))
-    val verifier      = MerkleProofVerifier(realStateRoot)
-    val wrongNode     = LeafNode(ByteString(0x42.toByte), ByteString("some-value"))
-    val wrongProof    = Seq(ByteString(MptTraversals.encodeNode(wrongNode)))
-    val key           = ByteString(Array.fill(32)(0x42.toByte))
+    val verifier = MerkleProofVerifier(realStateRoot)
+    val wrongNode = LeafNode(ByteString(0x42.toByte), ByteString("some-value"))
+    val wrongProof = Seq(ByteString(MptTraversals.encodeNode(wrongNode)))
+    val key = ByteString(Array.fill(32)(0x42.toByte))
 
     // Wrong proof → root node hash ≠ realStateRoot → Left
     verifier.verifyAccountRange(
       accounts = Seq(key -> Account(nonce = 1)),
-      proof = wrongProof, startHash = ZeroKey, endHash = MaxKey
+      proof = wrongProof,
+      startHash = ZeroKey,
+      endHash = MaxKey
     ) shouldBe a[Left[_, _]]
   }
 
   // ── Adversarial / crash-safety ───────────────────────────────────────────────
 
   it should "accept proof for non-existent key without crashing" taggedAs UnitTest in {
-    val storage     = new TestMptStorage()
+    val storage = new TestMptStorage()
     val realAccount = Account(nonce = 1, balance = 100)
-    val trie        = MerklePatriciaTrie[ByteString, Account](storage).put(ByteString("real-key"), realAccount)
-    val verifier    = MerkleProofVerifier(ByteString(trie.getRootHash))
-    val proof       = Seq(ByteString(trie.getRootHash)) // raw hash bytes, not valid RLP
+    val trie = MerklePatriciaTrie[ByteString, Account](storage).put(ByteString("real-key"), realAccount)
+    val verifier = MerkleProofVerifier(ByteString(trie.getRootHash))
+    val proof = Seq(ByteString(trie.getRootHash)) // raw hash bytes, not valid RLP
 
     val result = verifier.verifyAccountRange(
       accounts = Seq(ByteString(Array.fill(32)(0x99.toByte)) -> realAccount),
-      proof = proof, startHash = ZeroKey, endHash = MaxKey
+      proof = proof,
+      startHash = ZeroKey,
+      endHash = MaxKey
     )
     // Must not throw; either outcome acceptable
     result match {
@@ -304,17 +348,19 @@ class MerkleProofVerifierSpec extends AnyFlatSpec with Matchers {
   }
 
   it should "accept bloated proof with extra irrelevant nodes without crashing" taggedAs UnitTest in {
-    val storage    = new TestMptStorage()
-    val acct       = Account(nonce = 5, balance = 500)
-    val key        = ByteString(Array.fill(32)(0x55.toByte))
-    val trie       = MerklePatriciaTrie[ByteString, Account](storage).put(key, acct)
+    val storage = new TestMptStorage()
+    val acct = Account(nonce = 5, balance = 500)
+    val key = ByteString(Array.fill(32)(0x55.toByte))
+    val trie = MerklePatriciaTrie[ByteString, Account](storage).put(key, acct)
     val validProof = generateBoundaryProof(trie, key, key)
-    val bloated    = validProof ++ Seq(ByteString("irrelevant-node-aaa"), ByteString("irrelevant-node-bbb"))
-    val verifier   = MerkleProofVerifier(ByteString(trie.getRootHash))
+    val bloated = validProof ++ Seq(ByteString("irrelevant-node-aaa"), ByteString("irrelevant-node-bbb"))
+    val verifier = MerkleProofVerifier(ByteString(trie.getRootHash))
 
     val result = verifier.verifyAccountRange(
       accounts = Seq(key -> acct),
-      proof = bloated, startHash = key, endHash = key
+      proof = bloated,
+      startHash = key,
+      endHash = key
     )
     result match {
       case Right(_)    => succeed
@@ -326,7 +372,10 @@ class MerkleProofVerifierSpec extends AnyFlatSpec with Matchers {
 
   it should "accept account with zero-value fields (default/deleted account)" taggedAs UnitTest in {
     MerkleProofVerifier(ByteString(MerklePatriciaTrie.EmptyRootHash)).verifyAccountRange(
-      accounts = Seq.empty, proof = Seq.empty, startHash = ZeroKey, endHash = MaxKey
+      accounts = Seq.empty,
+      proof = Seq.empty,
+      startHash = ZeroKey,
+      endHash = MaxKey
     ) shouldBe Right(())
   }
 
@@ -337,7 +386,9 @@ class MerkleProofVerifierSpec extends AnyFlatSpec with Matchers {
     val storageRoot = kec256(ByteString("storage-root"))
     val result = MerkleProofVerifier(storageRoot).verifyStorageRange(
       slots = Seq(slotHash -> ByteString.empty),
-      proof = Seq.empty, startHash = ZeroKey, endHash = MaxKey
+      proof = Seq.empty,
+      startHash = ZeroKey,
+      endHash = MaxKey
     )
     // Should fail — either due to hash mismatch or SnapHashTrie rejecting empty value
     result shouldBe a[Left[_, _]]
