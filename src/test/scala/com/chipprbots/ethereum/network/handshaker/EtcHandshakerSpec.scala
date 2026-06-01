@@ -182,12 +182,16 @@ class NetworkHandshakerSpec extends AnyFlatSpec with Matchers {
 
     blockchainWriter.save(firstBlock, Nil, newChainWeight, saveAsBestBlock = true)
 
+    val spiralBlock = blockchainConfig.forkBlockNumbers.spiralBlockNumber
+    val effectiveBlock =
+      if (spiralBlock < Long.MaxValue) firstBlock.header.number.max(spiralBlock) else firstBlock.header.number
+    val expectedForkId = ForkId.create(genesisBlock.header.hash, blockchainConfig)(effectiveBlock)
     val newLocalStatusMsg =
       localStatusMsg
         .copy(
           bestHash = firstBlock.header.hash,
           totalDifficulty = newChainWeight.totalDifficulty,
-          forkId = ForkId(0xfc64ec04L, Some(1150000))
+          forkId = expectedForkId
         )
 
     initHandshakerWithoutResolver.nextMessage.map(_.messageToSend) shouldBe Right(localHello: HelloEnc)
@@ -219,12 +223,16 @@ class NetworkHandshakerSpec extends AnyFlatSpec with Matchers {
 
     blockchainWriter.save(firstBlock, Nil, newChainWeight, saveAsBestBlock = true)
 
+    val spiralBlock = blockchainConfig.forkBlockNumbers.spiralBlockNumber
+    val effectiveBlock =
+      if (spiralBlock < Long.MaxValue) firstBlock.header.number.max(spiralBlock) else firstBlock.header.number
+    val expectedForkId = ForkId.create(genesisBlock.header.hash, blockchainConfig)(effectiveBlock)
     val newLocalStatusMsg =
       localStatusMsg
         .copy(
           bestHash = firstBlock.header.hash,
           totalDifficulty = newChainWeight.totalDifficulty,
-          forkId = ForkId(0xfc64ec04L, Some(1150000))
+          forkId = expectedForkId
         )
 
     initHandshakerWithoutResolver.nextMessage.map(_.messageToSend) shouldBe Right(localHello: HelloEnc)
