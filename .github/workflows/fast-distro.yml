@@ -151,12 +151,28 @@ jobs:
             3. Run the application
             
             For more information, see the [main repository](https://github.com/chippr-robotics/fukuii).
-          draft: false
+          # Create as a DRAFT so assets can be attached. This repo has immutable
+          # releases enabled, which reject asset uploads to an already-published
+          # release — the prior `draft: false` published the prerelease before the
+          # JARs could attach, failing every run. Assets upload fine to a draft;
+          # the "Publish nightly release" step below flips it live afterward.
+          draft: true
           prerelease: true
           files: fast-distro-artifacts/*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      
+
+      - name: Publish nightly release
+        if: github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && github.event.inputs.release_type == 'nightly')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Publish the draft created above (assets are already attached). On an
+          # immutable-release repo this is the supported path: upload-to-draft, then publish.
+          gh release edit "nightly-${{ steps.prepare.outputs.timestamp }}" \
+            --repo "${{ github.repository }}" \
+            --draft=false
+
       - name: Summary
         run: |
           echo "## Fast Distro Build Complete 🚀" >> $GITHUB_STEP_SUMMARY
