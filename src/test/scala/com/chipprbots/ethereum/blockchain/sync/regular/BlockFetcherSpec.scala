@@ -256,22 +256,23 @@ class BlockFetcherSpec extends AnyFreeSpecLike with Matchers with BeforeAndAfter
       val firstGetBlockBodiesResponse: ETH66BlockBodies = ETH66BlockBodies(0, firstBlocksBatch.map(_.body))
       refForAnswerFirstBodiesReq ! PeersClient.Response(fakePeer, firstGetBlockBodiesResponse)
 
-      // Third headers + second bodies requests should now be in flight.
-      peersClient.expectMsgPF() { case PeersClient.Request(_: ETH66GetBlockHeaders, _, _) =>
-        peersClient.lastSender
-      }
-
-      val refForAnswerSecondBodiesReq: org.apache.pekko.actor.ActorRef = peersClient.expectMsgPF() {
-        case PeersClient.Request(_: ETH66GetBlockBodies, _, _) =>
-          peersClient.lastSender
-      }
+      // Third headers + second bodies requests are both in flight; their arrival order is
+      // non-deterministic (two independent ask -> IO -> pipeToSelf hops on the shared IORuntime),
+      // so a bare expectMsgPF expecting the headers request first raced the order and flaked in
+      // release CI — when bodies arrived first the headers PF hit a MatchError. We only need the
+      // bodies sender (to answer it); the prefetch headers request is incidental here (never
+      // answered), so fish for the bodies request specifically and tolerate it in any position.
+      val refForAnswerSecondBodiesReq: org.apache.pekko.actor.ActorRef =
+        peersClient.fishForSpecificMessage(Timeouts.normalTimeout) {
+          case PeersClient.Request(_: ETH66GetBlockBodies, _, _) => peersClient.lastSender
+        }
       peersClient.send(
         refForAnswerSecondBodiesReq,
         PeersClient.Response(fakePeer, ETH66BlockBodies(0, alternativeSecondBlocksBatch.drop(6).map(_.body)))
       )
 
       importer.send(blockFetcher.toClassic, PickBlocks(syncConfig.blocksBatchSize, importer.ref))
-      importer.expectMsgPF() { case BlockFetcher.PickedBlocks(blocks) =>
+      importer.expectMsgPF(Timeouts.normalTimeout) { case BlockFetcher.PickedBlocks(blocks) =>
         val headers = blocks.map(_.header).toList
         assert(HeadersSeq.areChain(headers))
       }
