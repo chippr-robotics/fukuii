@@ -330,6 +330,56 @@ class MerkleProofVerifierSpec extends AnyFlatSpec with Matchers {
     ) shouldBe Right(())
   }
 
+  // ── Deep trie / HashNode path ──────────────────────────────────────────────
+
+  it should "verify account range when boundary proof traverses multiple HashNode levels" taggedAs UnitTest in {
+    // 16 accounts at distinct first nibbles forces a full-width root BranchNode.
+    // Each child subtrie's RLP is >= 32 bytes → stored as HashNode references in the root.
+    // This exercises the resolveEdgePath HashNode lookup path that the 2-account tests miss.
+    val storage = new TestMptStorage()
+    val accts = (0 until 16).map { i =>
+      val key = ByteString(Array(i.toByte) ++ Array.fill(31)(0x00.toByte))
+      key -> Account(nonce = i.toLong)
+    }
+    val trie = accts.foldLeft(MerklePatriciaTrie[ByteString, Account](storage)) {
+      case (t, (k, a)) => t.put(k, a)
+    }
+    val firstKey = accts.head._1
+    val lastKey  = accts.last._1
+    val proof    = generateBoundaryProof(trie, firstKey, lastKey)
+    val verifier = MerkleProofVerifier(ByteString(trie.getRootHash))
+
+    verifier.verifyAccountRange(
+      accounts  = accts,
+      proof     = proof,
+      startHash = firstKey,
+      endHash   = lastKey
+    ) shouldBe Right(())
+  }
+
+  it should "detect missing account in multi-level trie" taggedAs UnitTest in {
+    val storage = new TestMptStorage()
+    val accts = (0 until 16).map { i =>
+      val key = ByteString(Array(i.toByte) ++ Array.fill(31)(0x00.toByte))
+      key -> Account(nonce = i.toLong)
+    }
+    val trie = accts.foldLeft(MerklePatriciaTrie[ByteString, Account](storage)) {
+      case (t, (k, a)) => t.put(k, a)
+    }
+    val firstKey = accts.head._1
+    val lastKey  = accts.last._1
+    val proof    = generateBoundaryProof(trie, firstKey, lastKey)
+    val verifier = MerkleProofVerifier(ByteString(trie.getRootHash))
+
+    val gapped = accts.filterNot(_._1.head == 0x08.toByte)
+    verifier.verifyAccountRange(
+      accounts  = gapped,
+      proof     = proof,
+      startHash = firstKey,
+      endHash   = lastKey
+    ) shouldBe a[Left[_, _]]
+  }
+
   it should "reject nil-proof storage range with empty (zeroed) slot value" taggedAs UnitTest in {
     // Storage slots with empty values are deletions — the nil-proof hash check will fail
     // because the SnapHashTrie either panics or computes a different hash

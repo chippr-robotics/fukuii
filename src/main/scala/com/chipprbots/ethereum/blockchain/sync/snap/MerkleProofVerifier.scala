@@ -5,6 +5,7 @@ import org.apache.pekko.util.ByteString
 import com.chipprbots.ethereum.domain.Account
 import com.chipprbots.ethereum.mpt.MptNode
 import com.chipprbots.ethereum.mpt.MptTraversals
+import com.chipprbots.ethereum.mpt.Node
 import com.chipprbots.ethereum.mpt.LeafNode
 import com.chipprbots.ethereum.mpt.ExtensionNode
 import com.chipprbots.ethereum.mpt.BranchNode
@@ -41,7 +42,7 @@ class MerkleProofVerifier(rootHash: ByteString) extends Logger {
         // Nil proof: full trie response, verify by streaming hash (geth: StackTrie path)
         return verifyCompleteRange(leaves)
       }
-      val proofMap = buildProofMap(decodeProofNodes(proof))
+      val proofMap = buildProofMap(proof)
       verifyRangeProofByReconstruction(startHash, endHash, leaves, proofMap)
     } catch {
       case e: Exception =>
@@ -61,7 +62,7 @@ class MerkleProofVerifier(rootHash: ByteString) extends Logger {
       if (proof.isEmpty) {
         return verifyCompleteRange(slots)
       }
-      val proofMap = buildProofMap(decodeProofNodes(proof))
+      val proofMap = buildProofMap(proof)
       verifyRangeProofByReconstruction(startHash, endHash, slots, proofMap)
     } catch {
       case e: Exception =>
@@ -552,17 +553,17 @@ class MerkleProofVerifier(rootHash: ByteString) extends Logger {
     aa.length - bb.length
   }
 
-  private def decodeProofNodes(proof: Seq[ByteString]): Seq[MptNode] =
+  private def buildProofMap(proof: Seq[ByteString]): Map[ByteString, MptNode] =
     proof.map { nodeBytes =>
-      try MptTraversals.decodeNode(nodeBytes.toArray)
-      catch {
+      try {
+        val key  = ByteString(Node.hashFn(nodeBytes.toArray))
+        val node = MptTraversals.decodeNode(nodeBytes.toArray)
+        key -> node
+      } catch {
         case e: Exception =>
           throw new IllegalArgumentException(s"Failed to decode proof node: ${e.getMessage}", e)
       }
-    }
-
-  private def buildProofMap(nodes: Seq[MptNode]): Map[ByteString, MptNode] =
-    nodes.map { node => ByteString(node.hash) -> node }.toMap
+    }.toMap
 
   // ─── Legacy traversal methods (dead code — kept for reference, not called) ──
 
