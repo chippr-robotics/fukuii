@@ -56,11 +56,19 @@ abstract class BaseNode extends Node {
     startPeerManager()
     startDiscoveryManager()
 
-    // Phase 3: API servers (user-facing, ready as early as possible)
+    // Phase 3: API servers (user-facing, ready as early as possible).
+    // Bind the Engine API (8551) BEFORE the ETH JSON-RPC (8545). Hive's client-readiness
+    // check (and a real CL) probes the ETH RPC, then immediately drives sync via the Engine
+    // API. The Engine API runs on an isolated ActorSystem and `startEngineApiServer()` Await-
+    // blocks until 8551 is actually bound — so binding it first guarantees 8551 is listening
+    // by the time 8545 (the readiness signal) comes up. With the old order, hive declared the
+    // node ready on 8545 and the sim's engine_newPayloadV3 hit 8551 before it had bound →
+    // "connection refused" → instant sync failure (hive ethereum/sync "sync fukuii from
+    // go-ethereum", 2026-06-01). No-op when the Engine API is disabled (e.g. ETC mainnet).
+    startEngineApiServer()
     startJsonRpcHttpServer()
     startJsonRpcWsServer()
     startJsonRpcIpcServer()
-    startEngineApiServer()
 
     // Phase 5: Background work
     startSyncController()
