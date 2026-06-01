@@ -146,8 +146,12 @@ case class EthNodeStatus64ExchangeState(
     // disconnections at genesis, but this creates a mismatch with core-geth behavior
     // where ForkId and bestHash refer to different blocks.
     //
-    // To align with core-geth: Use actual bestBlockNumber for ForkId calculation.
-    val forkIdBlockNumber = bestBlockNumber
+    // Floor forkId at Spiral so a fresh datadir (bestBlockNumber=0) advertises the current
+    // post-Spiral forkId instead of the genesis forkId. Only applied when spiralBlockNumber is
+    // configured (ETC networks); ETH-only chains leave spiralBlockNumber = Long.MaxValue.
+    val spiralBlock = blockchainConfig.forkBlockNumbers.spiralBlockNumber
+    val forkIdBlockNumber =
+      if (spiralBlock < Long.MaxValue) bestBlockNumber.max(spiralBlock) else bestBlockNumber
     // Use system time when at genesis to correctly advertise post-merge fork status
     val forkIdTimestamp =
       if (bestBlockHeader.unixTimestamp == 0L) System.currentTimeMillis() / 1000 else bestBlockHeader.unixTimestamp

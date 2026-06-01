@@ -489,9 +489,9 @@ class SNAPSyncController(
         p.peerInfo.remoteStatus.supportsSnap
       }
       if (snapPeerCount > 0) {
-        val effectiveConcurrency = math.min(snapSyncConfig.accountConcurrency, snapPeerCount).max(1)
+        val effectiveConcurrency = snapSyncConfig.accountConcurrency.max(1)
         log.info(
-          s"Found $snapPeerCount snap-capable peer(s) during grace period, starting account range sync (concurrency=$effectiveConcurrency)"
+          s"Found $snapPeerCount snap-capable peer(s) during grace period, starting account range sync (concurrency=$effectiveConcurrency, peers=$snapPeerCount)"
         )
         stateRoot.foreach(launchAccountRangeWorkers(_, effectiveConcurrency))
       } else {

@@ -108,10 +108,16 @@ case class EthNodeStatus69ExchangeState(
     val bestBlockNumber = blockchainReader.getBestBlockNumber()
     val genesisHash = blockchainReader.genesisHeader.hash
 
-    // Compute ForkId from current block (same as ETH64-68)
+    // Floor forkId at Spiral so a fresh datadir (bestBlockNumber=0) advertises the current
+    // post-Spiral forkId instead of the genesis forkId (0xfc64ec04). Besu's ETH/69 handler
+    // disconnects on unrecognized pre-Spiral forkIds. Only applied when spiralBlockNumber is
+    // configured (ETC networks); ETH-only chains leave spiralBlockNumber = Long.MaxValue.
+    val spiralBlock = blockchainConfig.forkBlockNumbers.spiralBlockNumber
+    val forkIdBlock =
+      if (spiralBlock < Long.MaxValue) bestBlockNumber.max(spiralBlock) else bestBlockNumber
     val forkIdTimestamp =
       if (bestBlockHeader.unixTimestamp == 0L) System.currentTimeMillis() / 1000 else bestBlockHeader.unixTimestamp
-    val forkId = ForkId.create(genesisHash, blockchainConfig)(bestBlockNumber, forkIdTimestamp)
+    val forkId = ForkId.create(genesisHash, blockchainConfig)(forkIdBlock, forkIdTimestamp)
 
     // ETH/69: no TD, use block range instead
     val status = ETH69.Status(

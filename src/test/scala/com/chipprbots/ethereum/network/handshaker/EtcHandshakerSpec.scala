@@ -417,42 +417,33 @@ class NetworkHandshakerSpec extends AnyFlatSpec with Matchers {
     )
   }
 
-  it should "use actual block number for ForkId (core-geth alignment)" taggedAs (
+  it should "floor ForkId at Spiral for pre-Spiral datadirs to prevent Besu disconnect" taggedAs (
     UnitTest,
     NetworkTest
   ) in new LocalPeerETH64Setup with RemotePeerETH64Setup {
-    // ALIGNMENT WITH CORE-GETH: ForkId should always use the actual current block number
-    // Core-geth implementation (eth/handler.go):
-    //   head = h.chain.CurrentHeader()
-    //   number = head.Number.Uint64()
-    //   forkID := forkid.NewID(h.chain.Config(), genesis, number, head.Time)
-    //
-    // Core-geth does NOT use checkpoints or pivot blocks for ForkId calculation.
-    // It always uses the actual current block for both bestHash and ForkId calculation.
-    //
-    // This test verifies our implementation matches core-geth behavior.
+    // A node at a low block number (e.g. freshly started, pre-SNAP pivot) must advertise the
+    // post-Spiral forkId, not the genesis forkId. Besu's ETH/69 handler disconnects on
+    // unrecognized pre-Spiral forkIds (0xfc64ec04). bestHash still reflects the actual best
+    // block; only forkId is floored so peers can identify us as a compatible ETC node.
 
-    // Advance blockchain to a low block number
     val lowBlockNumber = BigInt(1000)
     val lowBlock = firstBlock.copy(header = firstBlock.header.copy(number = lowBlockNumber))
     val lowBlockWeight: ChainWeight = genesisWeight.increase(lowBlock.header)
     blockchainWriter.save(lowBlock, Nil, lowBlockWeight, saveAsBestBlock = true)
 
-    // Perform handshake
     val handshakerAfterHelloOpt: Option[Handshaker[PeerInfo]] = initHandshakerWithoutResolver.applyMessage(remoteHello)
     assert(handshakerAfterHelloOpt.isDefined)
 
-    // The status message should use the actual block number for ForkId calculation
-    // This matches core-geth behavior where ForkId and bestHash use the same block
     handshakerAfterHelloOpt.get.nextMessage match {
       case Right(nextMsg) =>
         nextMsg.messageToSend match {
           case statusEnc: ETH64.Status.StatusEnc =>
             val statusMsg = statusEnc.underlyingMsg
-            // Best block should be the low block
             statusMsg.bestHash shouldBe lowBlock.header.hash
-            // ForkId should be calculated using actual block number (1000), matching core-geth
-            val expectedForkId = ForkId.create(genesisBlock.header.hash, blockchainConfig)(lowBlockNumber)
+            // ForkId is floored at spiralBlockNumber for ETC configs — block 1000 < Spiral
+            val spiralBlock = blockchainConfig.forkBlockNumbers.spiralBlockNumber
+            val effectiveBlock = if (spiralBlock < Long.MaxValue) lowBlockNumber.max(spiralBlock) else lowBlockNumber
+            val expectedForkId = ForkId.create(genesisBlock.header.hash, blockchainConfig)(effectiveBlock)
             statusMsg.forkId shouldBe expectedForkId
           case other =>
             fail(s"Expected ETH64.Status.StatusEnc message but got: $other")
@@ -465,7 +456,6 @@ class NetworkHandshakerSpec extends AnyFlatSpec with Matchers {
       handshakerAfterHelloOpt.get.applyMessage(remoteStatusMsg)
     assert(handshakerAfterStatusOpt.isDefined)
 
-    // Should successfully connect
     handshakerAfterStatusOpt.get.nextMessage match {
       case Left(HandshakeSuccess(peerInfo)) =>
         peerInfo.remoteStatus.capability shouldBe localStatus.capability
@@ -474,33 +464,29 @@ class NetworkHandshakerSpec extends AnyFlatSpec with Matchers {
     }
   }
 
-  it should "use actual block number for ForkId at high block numbers (core-geth alignment)" taggedAs (
+  it should "floor ForkId at Spiral for block numbers just below Spiral activation" taggedAs (
     UnitTest,
     NetworkTest
   ) in new LocalPeerETH64Setup with RemotePeerETH64Setup {
-    // ALIGNMENT WITH CORE-GETH: ForkId should always use the actual current block number
-    // This test verifies the behavior at high block numbers matches core-geth.
+    // Block 19,200,000 is below Spiral (19,250,000) — ForkId is floored to post-Spiral.
 
-    // Advance blockchain to a high block number
     val highBlockNumber = BigInt(19200000)
     val highBlock = firstBlock.copy(header = firstBlock.header.copy(number = highBlockNumber))
     val highBlockWeight: ChainWeight = genesisWeight.increase(highBlock.header)
     blockchainWriter.save(highBlock, Nil, highBlockWeight, saveAsBestBlock = true)
 
-    // Perform handshake
     val handshakerAfterHelloOpt: Option[Handshaker[PeerInfo]] = initHandshakerWithoutResolver.applyMessage(remoteHello)
     assert(handshakerAfterHelloOpt.isDefined)
 
-    // The status message should use the actual block number for ForkId
-    // This matches core-geth behavior where ForkId and bestHash use the same block
     handshakerAfterHelloOpt.get.nextMessage match {
       case Right(nextMsg) =>
         nextMsg.messageToSend match {
           case statusEnc: ETH64.Status.StatusEnc =>
             val statusMsg = statusEnc.underlyingMsg
             statusMsg.bestHash shouldBe highBlock.header.hash
-            // ForkId should be calculated using actual block number (19,200,000), matching core-geth
-            val expectedForkId = ForkId.create(genesisBlock.header.hash, blockchainConfig)(highBlockNumber)
+            val spiralBlock = blockchainConfig.forkBlockNumbers.spiralBlockNumber
+            val effectiveBlock = if (spiralBlock < Long.MaxValue) highBlockNumber.max(spiralBlock) else highBlockNumber
+            val expectedForkId = ForkId.create(genesisBlock.header.hash, blockchainConfig)(effectiveBlock)
             statusMsg.forkId shouldBe expectedForkId
           case other =>
             fail(s"Expected ETH64.Status.StatusEnc message but got: $other")
