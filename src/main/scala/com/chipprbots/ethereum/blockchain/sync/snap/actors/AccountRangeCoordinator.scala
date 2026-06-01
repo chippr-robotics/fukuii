@@ -1220,11 +1220,19 @@ class AccountRangeCoordinator(
       // Reset the counter so the next pivot has a fresh budget; preserve task position.
       task.requeueCount = 0
       pendingTasks.enqueue(task)
-      snapSyncController ! PivotStateUnservable(
-        rootHash = stateRoot,
-        reason = s"task ${task.rangeString} hit MaxRequeuesPerTask: $reason",
-        consecutiveEmptyResponses = AccountRangeCoordinator.MaxRequeuesPerTask
-      )
+      // Gate the escalation on pivotRefreshRequested so only the FIRST task to exhaust its
+      // budget escalates per pivot cycle. Without this, all ~16 ranges escalate at once when a
+      // serve window expires, producing a PivotStateUnservable burst (observed ~50 in one log).
+      // pivotRefreshRequested is cleared in the PivotRefreshed handler, so each fresh pivot
+      // gets a fresh escalation.
+      if (!pivotRefreshRequested) {
+        pivotRefreshRequested = true
+        snapSyncController ! PivotStateUnservable(
+          rootHash = stateRoot,
+          reason = s"task ${task.rangeString} hit MaxRequeuesPerTask: $reason",
+          consecutiveEmptyResponses = AccountRangeCoordinator.MaxRequeuesPerTask
+        )
+      }
     } else {
       pendingTasks.enqueue(task)
     }
