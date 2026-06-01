@@ -1326,7 +1326,13 @@ class SNAPSyncController(
       accountsComplete && bytecodePhaseComplete && storagePhaseComplete &&
       currentPhase != StateHealing && currentPhase != ChainDownloadCompletion && currentPhase != Completed
     ) {
-      if (SNAPSyncController.shouldSkipHealingAfterDownloads(snapSyncConfig, storagePhaseForceCompleted, resumedStaleCursors)) {
+      if (
+        SNAPSyncController.shouldSkipHealingAfterDownloads(
+          snapSyncConfig,
+          storagePhaseForceCompleted,
+          resumedStaleCursors
+        )
+      ) {
         // With deferred merkleization, trie nodes were never constructed during download —
         // only flat storage was written. A trie walk would find the entire internal trie "missing",
         // taking hours to scan and failing to heal (peers can't serve the full trie via GetTrieNodes).

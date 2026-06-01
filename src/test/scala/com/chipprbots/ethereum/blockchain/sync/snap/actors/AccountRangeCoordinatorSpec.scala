@@ -1317,7 +1317,7 @@ class AccountRangeCoordinatorSpec
     val pending = ua.pendingTasks.toList
     pending should have size 1
     pending.head.next shouldEqual pristineStart
-    pending.head.next should not equal resumedNext
+    (pending.head.next should not).equal(resumedNext)
     pending.head.last shouldEqual rangeLast
 
     // No SnapHashTrie has been instantiated yet (lazy creation on first chunk).
