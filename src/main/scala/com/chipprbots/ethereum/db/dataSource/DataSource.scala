@@ -48,6 +48,13 @@ trait DataSource {
     */
   def update(dataSourceUpdates: Seq[DataUpdate]): Unit
 
+  /** Fsync-backed variant of [[update]]: flushes the OS write buffer to disk before returning. Used for critical
+    * one-time writes (e.g. SNAP finalization) where losing the write on power-loss would force an expensive recovery.
+    * Default implementation falls back to [[update]] for non-RocksDB backends (e.g. ephemeral in-memory stores used in
+    * tests).
+    */
+  def updateSync(dataSourceUpdates: Seq[DataUpdate]): Unit = update(dataSourceUpdates)
+
   /** This function updates the DataSource by deleting all the (key-value) pairs in it.
     */
   def clear(): Unit
