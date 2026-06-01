@@ -23,6 +23,7 @@ import com.chipprbots.ethereum.mpt.BranchNode
 import com.chipprbots.ethereum.mpt.ExtensionNode
 import com.chipprbots.ethereum.mpt.HashNode
 import com.chipprbots.ethereum.mpt.LeafNode
+import com.chipprbots.ethereum.mpt.MerklePatriciaTrie
 import com.chipprbots.ethereum.mpt.MptNode
 import com.chipprbots.ethereum.network.p2p.messages.ETH63._
 import com.chipprbots.ethereum.utils.Config
@@ -204,6 +205,15 @@ object FixtureProvider {
           .toMap
       )
 
+    // Self-consistency guard (ForksTest follow-up, PR #1294): every block header's stateRoot must
+    // resolve to a node present in stateTree.txt. A corrupted/truncated stateTree.txt (the failure
+    // mode that silently broke ForksTest for ~6 months) leaves a header pointing at a stateRoot that
+    // never appears as a node key, so `prepareStorages.traverse(header.stateRoot)` walks into the
+    // `case _ =>` no-op and the chain executes against an empty/partial trie. Fail loudly here, at
+    // load time, with the exact missing root and block number, instead of producing a confusing
+    // downstream MissingNode/validation error.
+    assertStateTreeConsistent(path, headers, stateTree, contractTrees)
+
     // Match headers and bodies by their hash keys to create blocks
     // Note: We keep both the original hash key and the block for later lookup
     val blocksByOriginalHash = headers.flatMap { case (originalHash, header) =>
@@ -227,4 +237,40 @@ object FixtureProvider {
   private def withClose[A, B <: Closeable](closeable: B)(f: B => A): A =
     try f(closeable)
     finally closeable.close()
+
+  /** Fail fast if any block header references a state root that cannot be resolved to a dumped node.
+    *
+    * This mirrors [[prepareStorages]]'s `traverse` lookup exactly: the root node is resolvable iff it appears as a key
+    * in stateTree.txt or contractTrees.txt. The genesis header (number 0) is exempt because the empty-trie /
+    * pre-allocation root is synthesised by the node rather than dumped.
+    *
+    * A header whose stateRoot is unresolvable means stateTree.txt is truncated or out of sync with headers.txt — the
+    * failure mode that silently broke ForksTest for ~6 months (PR #1294). Catching it here turns a confusing downstream
+    * MissingNode/validation error into an explicit fixture-corruption report naming the offending block number and
+    * root.
+    */
+  private def assertStateTreeConsistent(
+      path: String,
+      headers: Map[ByteString, BlockHeader],
+      stateTree: Map[ByteString, MptNode],
+      contractTrees: Map[ByteString, MptNode]
+  ): Unit = {
+    val emptyRoot = ByteString(MerklePatriciaTrie.EmptyRootHash)
+    val missing = headers.values
+      .filter(_.number > 0)
+      .filterNot(_.stateRoot == emptyRoot) // an all-empty state needs no dumped node
+      .filterNot(header => stateTree.contains(header.stateRoot) || contractTrees.contains(header.stateRoot))
+      .map(header => header.number -> Hex.toHexString(header.stateRoot.toArray))
+      .toSeq
+      .sortBy(_._1)
+
+    if (missing.nonEmpty) {
+      val details = missing.map { case (number, root) => s"  block $number -> stateRoot 0x$root" }.mkString("\n")
+      throw new IllegalStateException(
+        s"Corrupt txExecTest fixture at '$path': ${missing.size} block header(s) reference a stateRoot " +
+          s"with no matching node in stateTree.txt. The fixture is truncated or out of sync with " +
+          s"headers.txt and cannot reproduce the chain:\n$details"
+      )
+    }
+  }
 }

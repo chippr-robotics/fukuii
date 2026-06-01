@@ -9,7 +9,8 @@ import com.chipprbots.ethereum.testing.Tags._
 
 /** Test suite for ethereum/tests VMTests category
   *
-  * Runs tests from the GeneralStateTests/VMTests directory of the ethereum/tests repository. These tests validate:
+  * Runs tests from the BlockchainTests/GeneralStateTests/VMTests directory of the ethereum/tests repository (the
+  * blockchain-test-formatted variant of the state VMTests). These tests validate:
   *   - EVM opcode execution
   *   - Stack operations
   *   - Memory operations
@@ -28,10 +29,19 @@ import com.chipprbots.ethereum.testing.Tags._
 class VMTestsSpec extends EthereumTestsSpec {
 
   // Base path for VM tests - configurable via system property or environment variable
+  //
+  // IMPORTANT: point at BlockchainTests/GeneralStateTests/VMTests, NOT GeneralStateTests/VMTests.
+  // The GeneralStateTests/* fixtures are in the *state-test* format (env/post/pre/transaction, with
+  // network encoded as keys of the `post` map and NO top-level `network` field). The BlockchainTest
+  // decoder used here (and the rest of this spec, e.g. test.network) requires the *blockchain-test*
+  // format, which lives under BlockchainTests/GeneralStateTests/VMTests (top-level `network`, `blocks`,
+  // `postState`). Same EVM coverage, correct shape. See GeneralStateTestsSpec for the same rationale.
   private val vmTestsBasePath = sys.props
     .get("vmtests.basePath")
     .orElse(sys.env.get("VMTESTS_BASEPATH"))
-    .getOrElse(new File(System.getProperty("user.dir"), "ets/tests/GeneralStateTests/VMTests").getPath)
+    .getOrElse(
+      new File(System.getProperty("user.dir"), "ets/tests/BlockchainTests/GeneralStateTests/VMTests").getPath
+    )
 
   // Supported networks (pre-Spiral fork only)
   val supportedNetworks = Set(

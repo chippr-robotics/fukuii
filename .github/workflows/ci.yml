@@ -126,18 +126,36 @@ jobs:
         env:
           FUKUII_DEV: true
       
-      - name: Run Ethereum/Tests Integration Tests
+      - name: Run Gating Integration Tests (deterministic subset)
         run: |
-          echo "Running ethereum/tests integration test suite..."
-          sbt "IntegrationTest / testOnly *SimpleEthereumTest *BlockchainTestsSpec"
-          
+          echo "Running the deterministic, gate-able slice of the it/ suite..."
+          # IMPORTANT: enumerate specs explicitly. Only fast, fully-deterministic IT specs belong in
+          # the PR gate. The real-socket networking specs (E2EHandshakeSpec, E2ESyncSpec,
+          # RegularSyncItSpec, FastSyncItSpec, …) bind TCP ports and depend on RLPx/handshake timing
+          # that flakes on shared CI runners — they stay in the nightly only (nightly.yml
+          # `IntegrationTest / testOnly`), never in this gate.
+          #
+          #   ethtest:    SimpleEthereumTest, BlockchainTestsSpec, VMTestsSpec  (EVM compliance)
+          #   txExecTest: ForksTest, ContractTest, ECIP1017Test                 (block exec vs fixtures)
+          #
+          # SlowTest is NOT excluded here: ForksTest/VMTestsSpec are tagged SlowTest but each runs in
+          # well under a minute, and excluding it would skip exactly the specs this gate exists to guard.
+          sbt "IntegrationTest / testOnly \
+            com.chipprbots.ethereum.ethtest.SimpleEthereumTest \
+            com.chipprbots.ethereum.ethtest.BlockchainTestsSpec \
+            com.chipprbots.ethereum.ethtest.VMTestsSpec \
+            com.chipprbots.ethereum.txExecTest.ForksTest \
+            com.chipprbots.ethereum.txExecTest.ContractTest \
+            com.chipprbots.ethereum.txExecTest.ECIP1017Test"
+
           echo ""
-          echo "=== Ethereum/Tests Integration Results ==="
-          echo "Tests validate EVM compliance against official ethereum/tests repository"
+          echo "=== Gating Integration Results ==="
+          echo "EVM compliance (ethereum/tests) + block-execution fixtures (txExecTest) validated."
+          echo "Real-socket networking IT specs run in the nightly only — see nightly.yml."
           echo "See test artifacts for detailed results"
         env:
           FUKUII_DEV: true
-        timeout-minutes: 10
+        timeout-minutes: 15
       
       - name: Upload coverage reports to Codecov
         if: always()
