@@ -240,14 +240,14 @@ object FixtureProvider {
 
   /** Fail fast if any block header references a state root that cannot be resolved to a dumped node.
     *
-    * This mirrors [[prepareStorages]]'s `traverse` lookup exactly: the root node is resolvable iff it
-    * appears as a key in stateTree.txt or contractTrees.txt. The genesis header (number 0) is exempt
-    * because the empty-trie / pre-allocation root is synthesised by the node rather than dumped.
+    * This mirrors [[prepareStorages]]'s `traverse` lookup exactly: the root node is resolvable iff it appears as a key
+    * in stateTree.txt or contractTrees.txt. The genesis header (number 0) is exempt because the empty-trie /
+    * pre-allocation root is synthesised by the node rather than dumped.
     *
-    * A header whose stateRoot is unresolvable means stateTree.txt is truncated or out of sync with
-    * headers.txt — the failure mode that silently broke ForksTest for ~6 months (PR #1294). Catching
-    * it here turns a confusing downstream MissingNode/validation error into an explicit fixture-corruption
-    * report naming the offending block number and root.
+    * A header whose stateRoot is unresolvable means stateTree.txt is truncated or out of sync with headers.txt — the
+    * failure mode that silently broke ForksTest for ~6 months (PR #1294). Catching it here turns a confusing downstream
+    * MissingNode/validation error into an explicit fixture-corruption report naming the offending block number and
+    * root.
     */
   private def assertStateTreeConsistent(
       path: String,

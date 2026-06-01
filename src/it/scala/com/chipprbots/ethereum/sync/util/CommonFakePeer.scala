@@ -331,14 +331,14 @@ abstract class CommonFakePeer(peerName: String, fakePeerCustomConfig: FakePeerCu
       _ <- IO(storagesInstance.dataSource.destroy())
     } yield ()
 
-  /** Ask the PeerManager to dial the given nodes and block until every requested node has been
-    * persisted as a known node (which only happens after a successful *outgoing* handshake).
+  /** Ask the PeerManager to dial the given nodes and block until every requested node has been persisted as a known
+    * node (which only happens after a successful *outgoing* handshake).
     *
     * @param maxRetries
-    *   number of 1s poll attempts before failing. Defaults to 15 (~15s) rather than the old 5 (~5s):
-    *   under CI the test forks a fresh JVM per test with metrics enabled, and the RLPx + ETH status
-    *   exchange routinely needs more than 5s to complete and flush through the 1s known-node persist
-    *   interval. The old budget made genesis/slow handshakes time out non-deterministically.
+    *   number of 1s poll attempts before failing. Defaults to 15 (~15s) rather than the old 5 (~5s): under CI the test
+    *   forks a fresh JVM per test with metrics enabled, and the RLPx + ETH status exchange routinely needs more than 5s
+    *   to complete and flush through the 1s known-node persist interval. The old budget made genesis/slow handshakes
+    *   time out non-deterministically.
     */
   def connectToPeers(nodes: Set[Node], maxRetries: Int = 15): IO[Unit] =
     for {
@@ -353,12 +353,11 @@ abstract class CommonFakePeer(peerName: String, fakePeerCustomConfig: FakePeerCu
       }
     } yield ()
 
-  /** Best-effort variant of [[connectToPeers]] for redundant/reverse dials. When both peers dial
-    * each other simultaneously, the PeerManager's connection de-duplication (`canConnectTo` /
-    * `hasIncomingPendingFromHost`) intentionally suppresses one side's *outgoing* dial in favour of
-    * the inbound connection that already exists. The suppressed side therefore never persists a
-    * known-node entry for that peer — that is correct production behaviour, not a failure. This
-    * helper sends the dial and swallows the resulting timeout so a bidirectional attempt can be
+  /** Best-effort variant of [[connectToPeers]] for redundant/reverse dials. When both peers dial each other
+    * simultaneously, the PeerManager's connection de-duplication (`canConnectTo` / `hasIncomingPendingFromHost`)
+    * intentionally suppresses one side's *outgoing* dial in favour of the inbound connection that already exists. The
+    * suppressed side therefore never persists a known-node entry for that peer — that is correct production behaviour,
+    * not a failure. This helper sends the dial and swallows the resulting timeout so a bidirectional attempt can be
     * exercised without asserting an outbound registration that dedup may legitimately prevent.
     */
   def connectToPeersBestEffort(nodes: Set[Node], maxRetries: Int = 15): IO[Unit] =
