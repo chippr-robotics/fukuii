@@ -1284,21 +1284,18 @@ class AccountRangeCoordinatorSpec
     system.stop(coord)
   }
 
-  it should "honour resumeProgress on the StackTrie path (Step 6 — restart durability)" taggedAs UnitTest in {
-    // Step 6 of the snap-stacktrie-port plan: verify resume cursors work with
-    // useStackTrie = true. The existing `AccountRangeProgress` →
-    // `putSnapSyncProgress` flow already journals per-task cursors to RocksDB;
-    // on restart, the controller passes `resumeProgress` into the coordinator
-    // and each task's `next` is advanced past where the prior session left off.
-    // For the StackTrie path this is sufficient: SnapHashTrie instances are
-    // re-created from scratch (content-addressed nodes on disk remain valid),
-    // and sort enforcement is satisfied because resumed `next` is monotonically
-    // ascending vs. any prior in-memory state (there is none after restart).
+  it should "re-download a PARTIAL range from start on the StackTrie path (2026-06-01 restart-durability fix)" taggedAs UnitTest in {
+    // A partial range's saved mid-range cursor is NOT safe to resume on the StackTrie path:
+    // the per-task SnapHashTrie is in-memory + write-only and lost on restart, so a fresh trie
+    // resuming from `next` would cover only [next, last), orphaning the already-downloaded prefix
+    // (root/right-spine never persisted) and seaming an old-root prefix to a new-root suffix.
+    // The coordinator therefore re-downloads partial ranges from their pristine start; the healing
+    // walk from the new pivot root reconciles any delta across the COMPLETE ranges.
     val root = kec256(ByteString("stacktrie-resume-root"))
-    // With concurrency = 1 the single AccountTask covers the entire 32-byte
-    // hash space, so its `last` boundary is the maximum 32-byte value.
+    // With concurrency = 1 the single AccountTask covers the entire 32-byte hash space.
     val rangeLast = AccountTask.MaxHash32
-    val resumedNext = ByteString(Array.fill[Byte](32)(0x77.toByte)) // mid-range
+    val resumedNext = ByteString(Array.fill[Byte](32)(0x77.toByte)) // mid-range (partial)
+    val pristineStart = AccountTask.createInitialTasks(root, 1).head.next
 
     val coord = TestActorRef[AccountRangeCoordinator](
       AccountRangeCoordinator.props(
@@ -1315,15 +1312,44 @@ class AccountRangeCoordinatorSpec
     )
     val ua = coord.underlyingActor
 
-    // The single range's task.next must have been advanced to `resumedNext`,
-    // not the canonical zero-start; sort-enforcement on the per-task
-    // SnapHashTrie will work because every future insert is > resumedNext.
+    // The partial range is re-queued from its pristine start (NOT the mid-range cursor),
+    // so a fresh SnapHashTrie covers the full [start, last) range with a real left boundary.
     val pending = ua.pendingTasks.toList
     pending should have size 1
-    pending.head.next shouldEqual resumedNext
+    pending.head.next shouldEqual pristineStart
+    (pending.head.next should not).equal(resumedNext)
     pending.head.last shouldEqual rangeLast
 
     // No SnapHashTrie has been instantiated yet (lazy creation on first chunk).
+    ua.taskStackTries shouldBe empty
+
+    system.stop(coord)
+  }
+
+  it should "SKIP a fully-complete range on resume (committed last session, valid across any drift)" taggedAs UnitTest in {
+    // A range whose saved cursor reached its `last` boundary had commit() called last session,
+    // so its full subtrie is on disk as correct content-addressed nodes — valid across any pivot
+    // drift. It is skipped (not re-downloaded), leaving nothing pending for a single-range coord.
+    val root = kec256(ByteString("stacktrie-resume-complete-root"))
+    val rangeLast = AccountTask.MaxHash32
+
+    val coord = TestActorRef[AccountRangeCoordinator](
+      AccountRangeCoordinator.props(
+        stateRoot = root,
+        networkPeerManager = TestProbe().ref,
+        requestTracker = new SNAPRequestTracker()(system.scheduler),
+        mptStorage = new TestMptStorage(),
+        concurrency = 1,
+        snapSyncController = TestProbe().ref,
+        resumeProgress = Map(rangeLast -> rangeLast), // savedNext == last => fully complete
+        accountTrieEcOverride = Some(system.dispatcher),
+        useStackTrie = true
+      )
+    )
+    val ua = coord.underlyingActor
+
+    // The completed range is skipped, so nothing remains to download.
+    ua.pendingTasks.toList shouldBe empty
     ua.taskStackTries shouldBe empty
 
     system.stop(coord)

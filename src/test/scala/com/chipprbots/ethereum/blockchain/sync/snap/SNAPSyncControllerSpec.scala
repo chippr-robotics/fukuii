@@ -165,7 +165,8 @@ class SNAPSyncControllerSpec extends AnyFlatSpec with Matchers {
 
     SNAPSyncController.shouldSkipHealingAfterDownloads(
       snapSyncConfig = config,
-      storagePhaseForceCompleted = false
+      storagePhaseForceCompleted = false,
+      resumedStaleCursors = false
     ) shouldBe true
   }
 
@@ -174,7 +175,21 @@ class SNAPSyncControllerSpec extends AnyFlatSpec with Matchers {
 
     SNAPSyncController.shouldSkipHealingAfterDownloads(
       snapSyncConfig = config,
-      storagePhaseForceCompleted = true
+      storagePhaseForceCompleted = true,
+      resumedStaleCursors = false
+    ) shouldBe false
+  }
+
+  it should "force healing when account cursors were resumed, even with clean deferred merkleization" taggedAs UnitTest in {
+    val config = SNAPSyncConfig(deferredMerkleization = true)
+
+    // A resume of saved cursors (possibly against a drifted pivot root) must never take the
+    // skip-healing fast path — otherwise the changed-account delta is handed off unwalked =
+    // silent state corruption. The healing walk from the new root re-fetches the delta.
+    SNAPSyncController.shouldSkipHealingAfterDownloads(
+      snapSyncConfig = config,
+      storagePhaseForceCompleted = false,
+      resumedStaleCursors = true
     ) shouldBe false
   }
 
@@ -924,27 +939,27 @@ class SNAPSyncControllerSpec extends AnyFlatSpec with Matchers {
   }
 
   // -----------------------------------------------------------------------
-  // Category 2b: 256-Block Safety Valve — AccountRangeProgress preservation
+  // Category 2b: Account-range cursor preservation across pivot drift
   // -----------------------------------------------------------------------
-  // SNAPSyncController stores AccountRangeProgress on coordinator shutdown and
-  // re-passes it when spawning the next coordinator — BUT only if the pivot hasn't
-  // drifted more than MaxPreservedPivotDistance (256) blocks.  Stale progress would
-  // point workers into keyspace that no longer represents the current state root,
-  // so it must be discarded when the chain has moved significantly.
-  // Reference: SNAPSyncController.scala startAccountRangeCoordinator() lines 2041-2086
-  // Cross-reference: Bitcoin headers_sync_chainwork_tests.cpp too_little_work (stale-progress rejection)
+  // SNAPSyncController stores AccountRangeProgress on coordinator shutdown and re-passes it
+  // when spawning the next coordinator IF the pivot drifted ≤ MaxPreservedPivotDistance.
+  // Raised from 256 to 50_000 on 2026-06-01: FULLY-COMPLETE ranges are content-addressed and
+  // valid across ANY drift, and the healing walk from the new root reconciles the changed-account
+  // delta (forced via `resumedStaleCursors`). The cap is now a perf heuristic, NOT a correctness
+  // boundary. Partial ranges are re-downloaded from start (the StackTrie cannot resume mid-range —
+  // see AccountRangeCoordinator). Beyond the cap, the whole saved map is discarded (cold re-walk).
+  // Reference: SNAPSyncController.scala launchAccountRangeWorkers()
 
-  "AccountRangeProgress 256-block safety valve" should "honor saved progress when pivot advances ≤ 256 blocks" taggedAs UnitTest in {
-    // MaxPreservedPivotDistance is a private val = 256 inside SNAPSyncController.
-    // Its value is established here as the preservation semantics test.
-    val MaxPreservedPivotDistance: BigInt = 256
+  "Account-range cursor preservation" should "honor saved progress when pivot drift ≤ MaxPreservedPivotDistance" taggedAs UnitTest in {
+    // MaxPreservedPivotDistance is a private val = 50_000 inside SNAPSyncController.
+    val MaxPreservedPivotDistance: BigInt = 50_000
     val prevPivot: BigInt = BigInt(1_000_000)
     val savedProgress: Map[ByteString, ByteString] = Map(
       ByteString("last1") -> ByteString("next1"),
       ByteString("last2") -> ByteString("next2")
     )
 
-    val currentPivot: BigInt = prevPivot + 100
+    val currentPivot: BigInt = prevPivot + 404 // the 2026-06-01 stall drift — now preserved, not re-walked
     val drift = (currentPivot - prevPivot).abs
     drift should be <= MaxPreservedPivotDistance
 
@@ -955,33 +970,33 @@ class SNAPSyncControllerSpec extends AnyFlatSpec with Matchers {
     resumeProgress shouldBe savedProgress
   }
 
-  it should "discard saved progress and restart from task.last when pivot advances > 256 blocks" taggedAs UnitTest in {
-    val MaxPreservedPivotDistance: BigInt = 256
+  it should "discard saved progress (cold re-walk) when pivot drift > MaxPreservedPivotDistance" taggedAs UnitTest in {
+    val MaxPreservedPivotDistance: BigInt = 50_000
     val prevPivot: BigInt = BigInt(1_000_000)
     val savedProgress: Map[ByteString, ByteString] = Map(
       ByteString("last1") -> ByteString("next1"),
       ByteString("last2") -> ByteString("next2")
     )
 
-    val currentPivot: BigInt = prevPivot + 300
+    val currentPivot: BigInt = prevPivot + 60_000
     val drift = (currentPivot - prevPivot).abs
     drift should be > MaxPreservedPivotDistance
 
-    // Controller discards progress — coordinator restarts each range from task.last
+    // Controller discards progress — coordinator restarts each range from its start
     val resumeProgress =
       if (drift <= MaxPreservedPivotDistance) savedProgress
       else Map.empty[ByteString, ByteString]
     resumeProgress shouldBe Map.empty[ByteString, ByteString]
   }
 
-  it should "treat exactly 256 blocks drift as within the window and 257 as outside" taggedAs UnitTest in {
-    val MaxPreservedPivotDistance: BigInt = 256
+  it should "treat exactly MaxPreservedPivotDistance drift as within the window and one beyond as outside" taggedAs UnitTest in {
+    val MaxPreservedPivotDistance: BigInt = 50_000
     val prevPivot: BigInt = BigInt(5_000_000)
 
-    // Boundary: exactly 256 is still preserved
-    ((prevPivot + 256 - prevPivot).abs <= MaxPreservedPivotDistance) shouldBe true
+    // Boundary: exactly 50_000 is still preserved
+    ((prevPivot + 50_000 - prevPivot).abs <= MaxPreservedPivotDistance) shouldBe true
     // One beyond boundary: discarded
-    ((prevPivot + 257 - prevPivot).abs <= MaxPreservedPivotDistance) shouldBe false
+    ((prevPivot + 50_001 - prevPivot).abs <= MaxPreservedPivotDistance) shouldBe false
   }
 
   // -----------------------------------------------------------------------
