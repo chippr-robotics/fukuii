@@ -97,9 +97,14 @@ class E2EHandshakeSpec extends FreeSpecBase with Matchers with BeforeAndAfterAll
           _ <- peer1.startRegularSync()
           _ <- peer2.startRegularSync()
 
-          // Both peers try to connect to each other
+          // Both peers try to connect to each other. The first dial must establish an outgoing
+          // handshake (and persist a known node). The reverse dial is best-effort: the PeerManager
+          // de-duplicates simultaneous connections (canConnectTo / hasIncomingPendingFromHost), so
+          // the reverse outgoing dial is legitimately suppressed once the inbound connection from
+          // the first dial already exists. Asserting a known-node registration for the reverse
+          // direction would be asserting behaviour that correct dedup prevents.
           _ <- peer1.connectToPeers(Set(peer2.node))
-          _ <- peer2.connectToPeers(Set(peer1.node))
+          _ <- peer2.connectToPeersBestEffort(Set(peer1.node))
           _ <- IO.sleep(3.seconds)
         } yield
         // Should handle duplicate connection attempts gracefully
