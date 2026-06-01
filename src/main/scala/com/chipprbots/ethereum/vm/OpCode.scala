@@ -159,12 +159,15 @@ object OpCodes {
   val SpiralOpCodes: List[OpCode] =
     PUSH0 +: PhoenixOpCodes
 
+  /** EIP-7939 / ECIP-1121: CLZ included in Olympia for ETC's block-based fork path.
+    * ETC uses forBlock() → OlympiaConfigBuilder; Osaka uses forTimestamp() (ETH only).
+    * Besu ClassicEVMs.olympiaOperations() confirms CLZ is required here for ETC.
+    */
   val OlympiaOpCodes: List[OpCode] =
-    List(BASEFEE, BLOBHASH, BLOBBASEFEE, TLOAD, TSTORE, MCOPY) ++ SpiralOpCodes
+    CLZ :: (List(BASEFEE, BLOBHASH, BLOBBASEFEE, TLOAD, TSTORE, MCOPY) ++ SpiralOpCodes)
 
-  /** Osaka (EIP-7939) adds CLZ — count leading zeros. */
-  val OsakaOpCodes: List[OpCode] =
-    CLZ +: OlympiaOpCodes
+  /** ETH Osaka (timestamp-based); CLZ already present via OlympiaOpCodes. */
+  val OsakaOpCodes: List[OpCode] = OlympiaOpCodes
 }
 
 object OpCode {
