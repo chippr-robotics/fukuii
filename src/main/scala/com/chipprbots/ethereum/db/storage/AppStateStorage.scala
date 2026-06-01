@@ -381,6 +381,22 @@ class AppStateStorage(val dataSource: DataSource) extends TransactionalKeyValueS
       toUpsert = Nil
     )
 
+  // ====================================================
+  // ETH68 bootstrap TD inflation repair gate (Group B)
+  // ====================================================
+
+  /** True once ChainWeightRepair has successfully corrected inflated TDs from a SNAP pivot. One-shot: cleared only by
+    * explicit operator action (system property `fukuii.reset-chain-weight-repair=true`).
+    */
+  def isEth68ChainWeightRepairDone(): Boolean =
+    get(Keys.Eth68ChainWeightRepairDone).contains("true")
+
+  def setEth68ChainWeightRepairDone(): DataSourceBatchUpdate =
+    put(Keys.Eth68ChainWeightRepairDone, "true")
+
+  def clearEth68ChainWeightRepairDone(): DataSourceBatchUpdate =
+    remove(Keys.Eth68ChainWeightRepairDone)
+
   /** True iff SNAP is done AND a backfill target was previously persisted AND any of the three cursors is below the
     * target. `SyncController.start()` uses this to spawn a standalone `ChainDownloader` alongside regular sync.
     */
@@ -425,6 +441,8 @@ object AppStateStorage {
     val BackfillBestHeader = "BackfillBestHeader"
     val BackfillBestBody = "BackfillBestBody"
     val BackfillBestReceipt = "BackfillBestReceipt"
+    // ETH68 bootstrap TD inflation repair
+    val Eth68ChainWeightRepairDone = "Eth68ChainWeightRepairDone"
   }
 
 }

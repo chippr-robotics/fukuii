@@ -909,6 +909,50 @@ class SyncController(
     }
   }
 
+  /** Attempt to correct ETH68-inflated chain weights before starting regular sync.
+    *
+    * The ETH68 STATUS handshake seeds the SNAP pivot block's TD from the peer's advertised best-block TD, which
+    * includes blocks the pivot has not yet reached. This inflated TD propagates to every subsequent block import. The
+    * repair walks forward from the pre-pivot block (whose TD was computed correctly by block processing) and rewrites
+    * TDs through `bestBlockNumber`. If pre-pivot headers are not yet available (backfill in progress) the repair is
+    * deferred to the next restart.
+    *
+    * Operator escape hatch: set system property `fukuii.reset-chain-weight-repair=true` to clear the done flag and
+    * re-run the repair.
+    */
+  private def runChainWeightRepairIfNeeded(): Unit = {
+    if (sys.props.get("fukuii.reset-chain-weight-repair").contains("true")) {
+      appStateStorage.clearEth68ChainWeightRepairDone().commit()
+      log.info("[CHAIN-WEIGHT-REPAIR] Done flag cleared by operator — will re-run repair")
+    }
+    if (appStateStorage.isEth68ChainWeightRepairDone()) return
+
+    appStateStorage.getSnapSyncPivotBlock() match {
+      case None =>
+        // No SNAP pivot — fast sync path, no ETH68 inflation possible
+        appStateStorage.setEth68ChainWeightRepairDone().commit()
+
+      case Some(pivotBlock) =>
+        val bestBlock = blockchainReader.getBestBlockNumber()
+        val repair = new ChainWeightRepair(blockchainReader, blockchainWriter)
+        repair.repairFrom(pivotBlock, bestBlock) match {
+          case Right(0) =>
+            log.info("[CHAIN-WEIGHT-REPAIR] No blocks needed correction (pivot=genesis or no inflation)")
+            appStateStorage.setEth68ChainWeightRepairDone().commit()
+          case Right(count) =>
+            log.info(
+              "[CHAIN-WEIGHT-REPAIR] Corrected {} block TDs from pivot {} to best {}",
+              count,
+              pivotBlock,
+              bestBlock
+            )
+            appStateStorage.setEth68ChainWeightRepairDone().commit()
+          case Left(reason) =>
+            log.warning("[CHAIN-WEIGHT-REPAIR] Deferred: {} — will retry on next restart", reason)
+        }
+    }
+  }
+
   def startFastSync(): Unit = {
     syncGeneration += 1
     val fastSync = context.actorOf(
@@ -988,6 +1032,7 @@ class SyncController(
   }
 
   def startRegularSync(resumeBackfill: Boolean = true): ActorRef = {
+    runChainWeightRepairIfNeeded()
     syncGeneration += 1
     val peersClient =
       context.actorOf(
