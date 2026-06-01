@@ -671,10 +671,20 @@ class SNAPSyncController(
       // are ~99.9% valid across pivot changes) and avoids the download-stall-restart loop.
       val now = System.currentTimeMillis()
       if (now - lastPivotRestartMs < MinPivotRestartInterval.toMillis) {
-        log.warning(
-          s"Ignoring PivotStateUnservable due to restart guard " +
-            s"(phase=$currentPhase, emptyResponses=$emptyResponses, reason=$reason)"
+        // Within the debounce window a pivot refresh is already in flight (or just produced a
+        // same-root no-op). Do NOT swallow the escalation — that left the coordinators' stateless
+        // set full so they re-escalated forever and the node wedged on a dead pivot. Re-arm them
+        // against the current root so stateless tracking clears and dispatch resumes.
+        // INVARIANT: do not increment consecutivePivotRefreshes and do not call any destructive
+        // path here — only the consecutivePivotRefreshes>=Max branch may reach restart/dormant.
+        log.info(
+          s"Debouncing PivotStateUnservable (refresh in flight, phase=$currentPhase, " +
+            s"emptyResponses=$emptyResponses, reason=$reason) — re-arming coordinators"
         )
+        stateRoot.foreach { root =>
+          accountRangeCoordinator.foreach(_ ! actors.Messages.PivotRefreshed(root))
+          storageRangeCoordinator.foreach(_ ! actors.Messages.StoragePivotRefreshed(root))
+        }
       } else if (currentPhase == AccountRangeSync || currentPhase == ByteCodeAndStorageSync) {
         lastPivotRestartMs = now
         consecutivePivotRefreshes += 1
@@ -3532,7 +3542,17 @@ class SNAPSyncController(
       // A same-root "refresh" is information-free for the coordinator (their data for this
       // root is unchanged) but does not warrant destroying state. Strikes and snapless have
       // already been cleared at coordinator level via PR #1255; nothing further to do.
-      log.info(s"Pivot refresh produced same root ($newRoot): $reason. No-op — preserving accumulated state.")
+      // BUG fix: when the serve window expired and peers can no longer serve THIS root but the
+      // refresh resolved to the same root (e.g. a scarce snap-peer pool with no newer servable
+      // pivot), returning without notifying the coordinators left their statelessPeers set full
+      // → they re-escalated forever and the node wedged. Re-arm them against the current root so
+      // stateless tracking clears and dispatch resumes. PivotRefreshed is idempotent on an
+      // unchanged root (the handler's `stateRoot = root` is a no-op), so no state is destroyed.
+      log.info(
+        s"Pivot refresh produced same root ($newRoot): $reason. Re-arming coordinators to clear stateless peers."
+      )
+      accountRangeCoordinator.foreach(_ ! actors.Messages.PivotRefreshed(newStateRoot))
+      storageRangeCoordinator.foreach(_ ! actors.Messages.StoragePivotRefreshed(newStateRoot))
       return
     }
 
@@ -3580,6 +3600,21 @@ class SNAPSyncController(
 
     // Update internal state
     pivotBlock = Some(newPivotBlock)
+    // BUG fix: advance the preserved-progress anchor with the live pivot so on-disk range
+    // cursors stay within MaxPreservedPivotDistance of the pivot we restart at. The anchor was
+    // latched once to the ORIGINAL pivot and never advanced, so after many in-place refreshes a
+    // restart found the saved pivot thousands of blocks stale, failed the drift check, and wiped
+    // ~10M accounts of cursors (full keyspace re-scan). Account-trie nodes are content-addressed
+    // (keccak256-keyed), so a traversal cursor is valid across any pivot jump; healing reconciles
+    // the per-leaf delta against the new root.
+    if (preservedAtPivotBlock.isDefined) {
+      preservedAtPivotBlock = Some(newPivotBlock)
+      if (preservedRangeProgress.nonEmpty) {
+        appStateStorage
+          .putSnapSyncProgress(serializeSnapProgress(preservedRangeProgress, newPivotBlock))
+          .commit()
+      }
+    }
     stateRoot = Some(newStateRoot)
     // Bump validationGeneration so any in-flight validation Future's result
     // is dropped on arrival rather than applied against the stale root. The
