@@ -270,13 +270,22 @@ class AccountRangeCoordinator(
           task.next = task.last
           task.done = true
           task
-        case Some(savedNext) if savedNext != task.next =>
-          log.info(
-            s"Resuming range ${task.rangeString} from saved position ${savedNext.take(4).toArray.map("%02x".format(_)).mkString}"
-          )
-          task.next = savedNext
+        case Some(savedNext) =>
+          // Partial range: the mid-range cursor is NOT safe to resume on the StackTrie path.
+          // The per-task SnapHashTrie is in-memory + write-only and was lost on restart; a fresh
+          // StackTrie resuming from `savedNext` would cover only [savedNext, last), orphaning the
+          // already-downloaded prefix (whose root/right-spine were never persisted — only the
+          // 8MiB-flushed left subtrees survived) and seaming an old-root prefix to a new-root
+          // suffix. Re-download the whole range from its pristine start (task.next is left
+          // untouched). Cheap — only the few in-flight ranges, not the completed ones. The
+          // healing walk from the new pivot reconciles any delta across the COMPLETE ranges.
+          if (savedNext != task.next)
+            log.info(
+              s"Re-downloading partial range ${task.rangeString} from start " +
+                "(saved mid-range cursor is not StackTrie-safe to resume)"
+            )
           task
-        case _ => task
+        case None => task
       }
     }
     val (done, todo) = resumed.partition(_.done)

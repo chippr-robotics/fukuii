@@ -101,7 +101,23 @@ class SNAPSyncController(
   // hasn't drifted too far (within MaxPreservedPivotDistance blocks).
   private var preservedRangeProgress: Map[ByteString, ByteString] = Map.empty
   private var preservedAtPivotBlock: Option[BigInt] = None
-  private val MaxPreservedPivotDistance: BigInt = 256
+  // Resume saved account-range cursors across this much pivot drift before falling back to a
+  // full re-walk. Raised from 256 (~55 min ETC) to 50_000 (~1 week ETC) on 2026-06-01: the 256
+  // cap forced a full re-walk of ~16.8M accounts after a 404-block drift, even though FULLY-
+  // COMPLETE ranges are content-addressed and valid across ANY drift and the healing walk from
+  // the new pivot root reconciles the changed-account delta. The cap is now only a perf heuristic
+  // (very large drift => large healing delta where a cold re-walk may be comparable), NOT a
+  // correctness boundary. Correctness comes from: (a) only FULLY-COMPLETE ranges are resumed —
+  // partial ranges re-download from start because the StackTrie cannot resume mid-range (see
+  // AccountRangeCoordinator); and (b) `resumedStaleCursors` forces the healing walk even under
+  // deferred-merkleization.
+  private val MaxPreservedPivotDistance: BigInt = 50_000
+
+  // Set true whenever account-range cursors were resumed from a prior session (resumeProgress
+  // non-empty). Forces StateHealing to run at completion (overriding the deferred-merkleization
+  // skip-healing fast path) so a delta downloaded against a drifted root is never handed off
+  // unwalked. This is the single load-bearing anti-corruption guard for cursor resume.
+  private var resumedStaleCursors: Boolean = false
 
   // Geth-aligned: all 3 coordinators run concurrently from first account response.
   // accountsComplete is set when AccountRangeSyncComplete arrives and NoMore sentinels are sent.
@@ -176,6 +192,15 @@ class SNAPSyncController(
   // Rolling proactively at 100 blocks preserves all downloaded state (unlike go-ethereum).
   private var lastProactivePivotBlock: Option[BigInt] = None
   private val SnapServeWindowBlocks: BigInt = BigInt(100)
+
+  // Roll target margin: a proactive/reactive roll picks networkBest - max(pivotBlockOffset,
+  // SnapServeWindowMargin) so the new root lands INSIDE peers' indexed snapshot window.
+  // Rolling to the live tip (pivot-block-offset=0) probes a root core-geth peers haven't
+  // indexed yet (their snapshot lags head by ~128 blocks) → readiness probe returns
+  // "not indexed" forever → the pivot freezes (observed 2026-06-01: ETC stalled 70+ min
+  // at 16.8M accounts). Margin ≈ half the serve window keeps the new pivot servable with
+  // ~50 blocks of runway before it ages past the 100-block roll trigger.
+  private val SnapServeWindowMargin: BigInt = BigInt(50)
 
   // Pivot readiness probe: before committing a proactive pivot roll, we probe one peer with
   // the candidate root. Only if the peer's snapshot is indexed (returns ≥1 account) do we
@@ -1301,7 +1326,7 @@ class SNAPSyncController(
       accountsComplete && bytecodePhaseComplete && storagePhaseComplete &&
       currentPhase != StateHealing && currentPhase != ChainDownloadCompletion && currentPhase != Completed
     ) {
-      if (SNAPSyncController.shouldSkipHealingAfterDownloads(snapSyncConfig, storagePhaseForceCompleted)) {
+      if (SNAPSyncController.shouldSkipHealingAfterDownloads(snapSyncConfig, storagePhaseForceCompleted, resumedStaleCursors)) {
         // With deferred merkleization, trie nodes were never constructed during download —
         // only flat storage was written. A trie walk would find the entire internal trie "missing",
         // taking hours to scan and failing to heal (peers can't serve the full trie via GetTrieNodes).
@@ -2673,6 +2698,10 @@ class SNAPSyncController(
         Map.empty
     }
 
+    // Resuming cursors from a prior session ⇒ force the healing walk at completion (see flag decl).
+    // Latch: once set, never cleared for the life of this process.
+    if (resumeProgress.nonEmpty) resumedStaleCursors = true
+
     val storage = getOrCreateMptStorage(currentPivot)
 
     accountRangeCoordinator = Some(
@@ -2902,7 +2931,10 @@ class SNAPSyncController(
         currentNetworkBestFromSnapPeers().foreach { networkBest =>
           val pivotAge = networkBest - pivotBlock.get
           val recentlyRolled = lastProactivePivotBlock.exists(last => (networkBest - last) <= BigInt(50))
-          if (pivotAge > SnapServeWindowBlocks && !recentlyRolled && pivotProbeRequestId.isEmpty) {
+          if (
+            pivotAge > SnapServeWindowBlocks && !recentlyRolled &&
+            pivotProbeRequestId.isEmpty && pendingProbeCommit.isEmpty
+          ) {
             val now = System.currentTimeMillis
             if (now - lastProbeAttemptMs >= ProbeCooldownMs) {
               // Mark that this refresh needs a readiness probe before notifying coordinators.
@@ -2913,7 +2945,13 @@ class SNAPSyncController(
                   s"network=$networkBest age=$pivotAge — readiness probe will fire after header fetch"
               )
               proactiveRollNeedsProbe = true
-              probeAttemptCount = 0 // fresh probe cycle for this roll
+              // Do NOT reset probeAttemptCount here. This branch re-enters every
+              // ProbeCooldownMs to re-probe after a deferral; resetting the counter each
+              // time pinned it at "attempt 1/5" forever, so the force-roll valve in the
+              // probe-response (line ~518) and timeout (line ~786) handlers never fired and
+              // a transient probe failure became a permanent stall (observed 2026-06-01).
+              // The counter is already reset to 0 at the end of every cycle (success or
+              // forced roll), so a genuinely new roll still starts fresh.
               lastProbeAttemptMs = now
               refreshPivotInPlace("proactive pivot roll")
             }
@@ -3422,7 +3460,13 @@ class SNAPSyncController(
                 false
             }
           }
-          .map(networkBest => networkBest - snapSyncConfig.pivotBlockOffset)
+          // Back the roll target off the live tip by at least SnapServeWindowMargin so the
+          // new root is one peers have actually indexed. pivotBlockOffset stays a floor (a
+          // larger configured offset still wins). Rolling to networkBest exactly (offset=0)
+          // froze the ETC pivot on 2026-06-01 — peers return "not indexed" for the tip root.
+          // NOTE: the post-merge (CL-anchored) branch above has the same latent issue at
+          // offset=0; deferred — it fires rarely and has its own freshness-floor handling.
+          .map(networkBest => networkBest - BigInt(snapSyncConfig.pivotBlockOffset).max(SnapServeWindowMargin))
           .filter(_ > 0)
     }
 
@@ -3622,7 +3666,8 @@ class SNAPSyncController(
     // any code path that mutates pivot/root from a different phase.
     validationGeneration += 1
     lastProactivePivotBlock =
-      pivotBlock.map(_ + 64) // approximate networkBest at roll time; pivotBlock = networkBest-64
+      // approximate networkBest at roll time; pivotBlock = networkBest - max(offset, margin)
+      pivotBlock.map(_ + BigInt(snapSyncConfig.pivotBlockOffset).max(SnapServeWindowMargin))
     // Note: mptStorage stays the same — content-addressed nodes don't need re-tagging.
     // The backing storage was already created for the original pivot block number,
     // but since nodes are keyed by hash, they're valid for any root.
@@ -4279,9 +4324,15 @@ object SNAPSyncController {
 
   private[snap] def shouldSkipHealingAfterDownloads(
       snapSyncConfig: SNAPSyncConfig,
-      storagePhaseForceCompleted: Boolean
+      storagePhaseForceCompleted: Boolean,
+      resumedStaleCursors: Boolean
   ): Boolean =
-    snapSyncConfig.deferredMerkleization && !storagePhaseForceCompleted
+    // The deferred-merkleization fast path (skip healing, lazy-heal during block execution) is
+    // ONLY safe when the trie was built fresh this session. If any account-range cursor was
+    // resumed from a prior session (against a possibly drifted root), the delta MUST be walked
+    // and re-fetched from the current pivot root before completion — otherwise the state is
+    // handed off with silent holes. So a resume forces the full healing walk.
+    snapSyncConfig.deferredMerkleization && !storagePhaseForceCompleted && !resumedStaleCursors
 
   /** Freshness gate for `refreshPivotInPlace`: reject candidate pivots whose source peer is more than `maxStaleness`
     * blocks behind the CL-driven head.
