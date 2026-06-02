@@ -284,18 +284,20 @@ class ETH65PlusMessagesSpec extends AnyWordSpec with Matchers {
 
     "encoding and decoding Status" should {
       "return same result" in {
-        val msg = ETH64.Status(1, 2, 3, ByteString("HASH"), ByteString("HASH2"), ForkId(1L, None))
-        verify(msg, (m: ETH64.Status) => m.toBytes, Codes.StatusCode, version)
+        import ETHPackets.Status68.Status68._
+        val msg = ETHPackets.Status68.Status68(1, 2, 3, ByteString("HASH"), ByteString("HASH2"), ForkId(1L, None))
+        verify(msg, (m: ETHPackets.Status68.Status68) => m.toBytes, Codes.StatusCode, version)
       }
     }
 
     "encoding and decoding NewPooledTransactionHashes with types and sizes" should {
       "return same result" in {
+        import ETHPackets.NewPooledTransactionHashes._
         val types = Seq[Byte](0, 1, 2)
         val sizes = Seq[BigInt](100, 200, 300)
         val hashes = Seq(ByteString("hash1"), ByteString("hash2"), ByteString("hash3"))
-        val msg = ETH67.NewPooledTransactionHashes(types, sizes, hashes)
-        verify(msg, (m: ETH67.NewPooledTransactionHashes) => m.toBytes, Codes.NewPooledTransactionHashesCode, version)
+        val msg = ETHPackets.NewPooledTransactionHashes(types, sizes, hashes)
+        verify(msg, (m: ETHPackets.NewPooledTransactionHashes) => m.toBytes, Codes.NewPooledTransactionHashesCode, version)
       }
     }
 
@@ -304,16 +306,13 @@ class ETH65PlusMessagesSpec extends AnyWordSpec with Matchers {
         import com.chipprbots.ethereum.rlp._
         import com.chipprbots.ethereum.rlp.RLPImplicits.given
         import com.chipprbots.ethereum.rlp.RLPImplicitConversions._
-        import com.chipprbots.ethereum.network.p2p.messages.ETH67.NewPooledTransactionHashes._
+        import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.NewPooledTransactionHashes._
 
-        // Encode in legacy ETH65 format: [hash1, hash2, hash3]
         val hashes = Seq(ByteString("hash1"), ByteString("hash2"), ByteString("hash3"))
         val legacyEncoded = encode(toRlpList(hashes))
 
-        // Decode as ETH68 message (uses ETH67 decoder)
         val decoded = legacyEncoded.toNewPooledTransactionHashes
 
-        // Should decode successfully with default types and sizes
         decoded.hashes shouldBe hashes
         decoded.types shouldBe Seq[Byte](0, 0, 0)
         decoded.sizes shouldBe Seq(BigInt(0), BigInt(0), BigInt(0))
@@ -325,7 +324,7 @@ class ETH65PlusMessagesSpec extends AnyWordSpec with Matchers {
         val payload = Array[Byte](0x01, 0x02, 0x03)
         val result = messageDecoder(version).fromBytes(Codes.GetNodeDataCode, payload)
         result.isLeft shouldBe true
-        result.left.map(_.getMessage) shouldBe Left("GetNodeData (0x0d) is not supported in eth/68")
+        result.left.map(_.getMessage) shouldBe Left("GetNodeData (0x0d) not supported in eth/68 (EIP-4938)")
       }
     }
 
@@ -334,7 +333,7 @@ class ETH65PlusMessagesSpec extends AnyWordSpec with Matchers {
         val payload = Array[Byte](0x01, 0x02, 0x03)
         val result = messageDecoder(version).fromBytes(Codes.NodeDataCode, payload)
         result.isLeft shouldBe true
-        result.left.map(_.getMessage) shouldBe Left("NodeData (0x0e) is not supported in eth/68")
+        result.left.map(_.getMessage) shouldBe Left("NodeData (0x0e) not supported in eth/68 (EIP-4938)")
       }
     }
   }
