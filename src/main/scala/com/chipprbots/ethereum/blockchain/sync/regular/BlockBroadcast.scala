@@ -4,6 +4,8 @@ import org.apache.pekko.actor.ActorRef
 
 import scala.util.Random
 
+import org.slf4j.LoggerFactory
+
 import com.chipprbots.ethereum.blockchain.sync.PeerListSupportNg.PeerWithInfo
 import com.chipprbots.ethereum.blockchain.sync.regular.BlockBroadcast.BlockToBroadcast
 import com.chipprbots.ethereum.domain.Block
@@ -17,8 +19,10 @@ import com.chipprbots.ethereum.network.p2p.messages.BaseETH6XMessages
 import com.chipprbots.ethereum.network.p2p.messages.Capability
 import com.chipprbots.ethereum.network.p2p.messages.ETH62
 import com.chipprbots.ethereum.network.p2p.messages.ETH62.BlockHash
+import com.chipprbots.ethereum.network.p2p.messages.ETH69
 
 class BlockBroadcast(val networkPeerManager: ActorRef) {
+  private val log = LoggerFactory.getLogger(getClass)
 
   /** Broadcasts various NewBlock's messages to handshaked peers, considering that a block should not be sent to a peer
     * that is thought to know it. The hash of the block is sent to all of those peers while the block itself is only
@@ -37,6 +41,20 @@ class BlockBroadcast(val networkPeerManager: ActorRef) {
     broadcastNewBlock(blockToBroadcast, peersWithoutBlock)
 
     broadcastNewBlockHash(blockToBroadcast, peersWithoutBlock.values.map(_.peer).toSet)
+
+    // ETH/69 (EIP-7642): send BlockRangeUpdate to ETH69 peers (replaces NewBlock).
+    val newHeader = blockToBroadcast.block.header
+    val bru = ETH69.BlockRangeUpdate(BigInt(0), newHeader.number, newHeader.hash)
+    val eth69Peers = peersWithoutBlock.filter { case (_, PeerWithInfo(_, info)) =>
+      info.remoteStatus.capability == Capability.ETH69
+    }
+    if (eth69Peers.nonEmpty) {
+      log.info("ETH69_BRU_BROADCAST: block={} hash={} to {} ETH69 peers",
+        newHeader.number, newHeader.hash, eth69Peers.size)
+      eth69Peers.foreach { case (_, PeerWithInfo(peer, _)) =>
+        networkPeerManager ! NetworkPeerManagerActor.SendMessage(bru, peer.id)
+      }
+    }
   }
 
   private def shouldSendNewBlock(newBlock: BlockToBroadcast, peerInfo: PeerInfo): Boolean = {

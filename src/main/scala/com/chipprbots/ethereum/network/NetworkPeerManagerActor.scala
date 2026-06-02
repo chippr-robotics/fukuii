@@ -30,6 +30,7 @@ import com.chipprbots.ethereum.network.p2p.messages.ETH66
 import com.chipprbots.ethereum.network.p2p.messages.ETH66.{BlockHeaders => ETH66BlockHeaders}
 import com.chipprbots.ethereum.network.p2p.messages.ETH64
 import com.chipprbots.ethereum.network.p2p.messages.ETH69
+import com.chipprbots.ethereum.network.p2p.messages.ETHPackets
 import com.chipprbots.ethereum.network.p2p.messages.SNAP
 import com.chipprbots.ethereum.network.p2p.messages.SNAP._
 import com.chipprbots.ethereum.network.p2p.messages.WireProtocol.Disconnect
@@ -350,8 +351,15 @@ class NetworkPeerManagerActor(
       // Track per-peer block-height signals so the periodic re-probe (RefreshPeerBestBlocks)
       // can skip ETH/69 peers that are actively pushing BlockRangeUpdate.
       message match {
-        case _: ETH69.BlockRangeUpdate | _: ETH62BlockHeaders | _: ETH66BlockHeaders | _: BaseETH6XMessages.NewBlock |
-            _: NewBlockHashes =>
+        case bru: ETHPackets.BlockRangeUpdate =>
+          log.info("ETH69_BRU_RECEIVED: peer={} earliest={} latest={} latestHash={}",
+            peerId, bru.earliestBlock, bru.latestBlock, bru.latestBlockHash)
+          lastBlockSignalMs(peerId) = System.currentTimeMillis()
+        case bru: ETH69.BlockRangeUpdate =>  // legacy path (Phase 3 cleanup)
+          log.info("ETH69_BRU_RECEIVED: peer={} earliest={} latest={} latestHash={}",
+            peerId, bru.earliestBlock, bru.latestBlock, bru.latestBlockHash)
+          lastBlockSignalMs(peerId) = System.currentTimeMillis()
+        case _: ETH62BlockHeaders | _: ETH66BlockHeaders | _: BaseETH6XMessages.NewBlock | _: NewBlockHashes =>
           lastBlockSignalMs(peerId) = System.currentTimeMillis()
         case _ => // not a block-height signal
       }
@@ -447,6 +455,13 @@ class NetworkPeerManagerActor(
             ByteStringUtils.hash2string(bestHash)
           )
           peerManagerActor ! PeerManagerActor.SendMessage(probe, peer.id)
+        } else if (peerInfo.remoteStatus.capability == Capability.ETH69) {
+          // ETH/69 (EIP-7642): announce our block range immediately after STATUS so the remote peer
+          // can resolve our PoW chain weight and promote us from its incomplete-connections cache.
+          val bestInfo = appStateStorage.getBestBlockInfo()
+          val bru = ETH69.BlockRangeUpdate(BigInt(0), bestInfo.number, bestInfo.hash)
+          log.info("ETH69_BRU_POST_HANDSHAKE: peer={} latestBlock={} latestHash={}", peer.id, bestInfo.number, bestInfo.hash)
+          peerManagerActor ! PeerManagerActor.SendMessage(bru, peer.id)
         }
         NetworkMetrics.registerAddHandshakedPeer(peer)
         PeerTelemetry.registerPeer(peer, peerInfo)
@@ -685,7 +700,9 @@ class NetworkPeerManagerActor(
         update(Seq((m.block.header.number, m.block.header.hash)))
       case m: NewBlockHashes =>
         update(m.hashes.map(h => (h.number, h.hash)))
-      case m: ETH69.BlockRangeUpdate =>
+      case m: ETHPackets.BlockRangeUpdate =>
+        update(Seq((m.latestBlock, m.latestBlockHash)))
+      case m: ETH69.BlockRangeUpdate =>  // legacy path (Phase 3 cleanup)
         update(Seq((m.latestBlock, m.latestBlockHash)))
       case _ => initialPeerInfo
     }

@@ -11,6 +11,7 @@ import com.chipprbots.ethereum.network.p2p.Message
 import com.chipprbots.ethereum.network.p2p.MessageSerializable
 import com.chipprbots.ethereum.network.p2p.messages.Capability
 import com.chipprbots.ethereum.network.p2p.messages.ETH69
+import com.chipprbots.ethereum.network.p2p.messages.ETHPackets
 import com.chipprbots.ethereum.network.p2p.messages.WireProtocol.Disconnect
 
 /** ETH/69 status exchange handler (EIP-7642).
@@ -29,45 +30,53 @@ case class EthNodeStatus69ExchangeState(
     supportsSnap: Boolean = false,
     peerCapabilities: List[Capability] = List.empty,
     clientId: String = ""
-) extends EtcNodeStatusExchangeState[ETH69.Status] {
+) extends EtcNodeStatusExchangeState[ETHPackets.Status69.Status69] {
 
+  import ETHPackets.Status69.Status69._  // toBytes for createStatusMsg
   import handshakerConfiguration._
 
-  def applyResponseMessage: PartialFunction[Message, HandshakerState[PeerInfo]] = { case status: ETH69.Status =>
+  def applyResponseMessage: PartialFunction[Message, HandshakerState[PeerInfo]] = {
+    // ETH69MessageDecoder path: ETHPackets.Status69 (Phase 2b)
+    case status: ETHPackets.Status69.Status69 =>
+      handleStatus69Fields(status.protocolVersion, status.networkId, status.genesisHash,
+        status.forkId, status.earliestBlock, status.latestBlock, status.latestBlockHash)
+
+    // Legacy path: ETH69.Status (old decoder, for backward compat until Phase 3 cap retirement)
+    case legacy: ETH69.Status =>
+      handleStatus69Fields(legacy.protocolVersion, legacy.networkId, legacy.genesisHash,
+        legacy.forkId, legacy.earliestBlock, legacy.latestBlock, legacy.latestBlockHash)
+  }
+
+  private def handleStatus69Fields(
+      protocolVersion: Int, networkId: Long, genesisHash: org.apache.pekko.util.ByteString,
+      forkId: ForkId, earliestBlock: BigInt, latestBlock: BigInt,
+      latestBlockHash: org.apache.pekko.util.ByteString
+  ): HandshakerState[PeerInfo] = {
     import ForkIdValidator.syncIoLogger
-    log.debug(
+    log.info(
       "ETH69_STATUS: Received - protocolVersion={}, networkId={}, genesis={}, forkId={}, earliest={}, latest={}, latestHash={}",
-      status.protocolVersion,
-      status.networkId,
-      status.genesisHash,
-      status.forkId,
-      status.earliestBlock,
-      status.latestBlock,
-      status.latestBlockHash
+      protocolVersion, networkId, genesisHash, forkId, earliestBlock, latestBlock, latestBlockHash
     )
 
     val localGenesisHash = blockchainReader.genesisHeader.hash
 
-    if (status.networkId != peerConfiguration.networkId) {
+    if (networkId != peerConfiguration.networkId) {
       log.debug(
-        "ETH69_STATUS: NetworkId mismatch! Local: {}, Remote: {} - disconnecting (SUBPROTOCOL_TRIGGERED_MISMATCHED_NETWORK)",
-        peerConfiguration.networkId,
-        status.networkId
+        "ETH69_STATUS: NetworkId mismatch! Local: {}, Remote: {} - disconnecting",
+        peerConfiguration.networkId, networkId
       )
       DisconnectedState[PeerInfo](Disconnect.Reasons.UselessPeer)
-    } else if (status.genesisHash != localGenesisHash) {
+    } else if (genesisHash != localGenesisHash) {
       log.debug(
         "ETH69_STATUS: Genesis hash mismatch! Local: {}, Remote: {} - disconnecting",
-        localGenesisHash,
-        status.genesisHash
+        localGenesisHash, genesisHash
       )
       DisconnectedState[PeerInfo](Disconnect.Reasons.UselessPeer)
     } else {
       (for {
         validationResult <-
           ForkIdValidator.validatePeer[SyncIO](blockchainReader.genesisHeader.hash, blockchainConfig)(
-            blockchainReader.getBestBlockNumber(),
-            status.forkId
+            blockchainReader.getBestBlockNumber(), forkId
           )
       } yield {
         log.debug("ETH69_STATUS: ForkId validation result: {}", validationResult)
@@ -75,27 +84,20 @@ case class EthNodeStatus69ExchangeState(
           case Connect =>
             log.info("ETH69_STATUS: ForkId validation passed - accepting peer")
             val (resolvedChainWeight, resolvedSource) = blockchainReader.resolveETH69ChainWeight(
-              status.latestBlockHash,
-              status.latestBlock,
+              latestBlockHash, latestBlock,
               isPoWChain = blockchainConfig.terminalTotalDifficulty.isEmpty
             )
             log.info(
               "ETH69_STATUS: TD resolved - totalDifficulty={}, latestBlock={}, source={}",
-              resolvedChainWeight.totalDifficulty,
-              status.latestBlock,
-              resolvedSource
+              resolvedChainWeight.totalDifficulty, latestBlock, resolvedSource
             )
             ConnectedState(
-              PeerInfo.withForkAccepted(
-                RemoteStatus.fromETH69Status(
-                  status,
-                  negotiatedCapability,
-                  supportsSnap,
-                  peerCapabilities,
-                  resolvedChainWeight,
-                  clientId
-                )
-              )
+              PeerInfo.withForkAccepted(RemoteStatus(
+                negotiatedCapability, networkId, resolvedChainWeight,
+                latestBlockHash, genesisHash, supportsSnap, peerCapabilities,
+                latestBlock = Some(latestBlock),
+                remoteClientId = clientId
+              ))
             )
           case other =>
             log.debug("ETH69_STATUS: ForkId validation failed: {} - disconnecting", other)
@@ -115,8 +117,8 @@ case class EthNodeStatus69ExchangeState(
       if (bestBlockHeader.unixTimestamp == 0L) System.currentTimeMillis() / 1000 else bestBlockHeader.unixTimestamp
     val forkId = ForkId.create(genesisHash, blockchainConfig)(bestBlockNumber, forkIdTimestamp)
 
-    // ETH/69: no TD, use block range instead
-    val status = ETH69.Status(
+    // ETH/69: no TD, use block range instead. Use ETHPackets.Status69.Status69 (canonical type).
+    val status = ETHPackets.Status69.Status69(
       protocolVersion = negotiatedCapability.version,
       networkId = peerConfiguration.networkId,
       genesisHash = genesisHash,
@@ -126,7 +128,7 @@ case class EthNodeStatus69ExchangeState(
       latestBlockHash = bestBlockHeader.hash
     )
 
-    log.debug(
+    log.info(
       "ETH69_STATUS: Sending - networkId={}, genesis={}, forkId={}, earliest={}, latest={}, latestHash={}",
       status.networkId,
       genesisHash,

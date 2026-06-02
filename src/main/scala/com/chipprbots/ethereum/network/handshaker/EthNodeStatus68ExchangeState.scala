@@ -52,7 +52,7 @@ case class EthNodeStatus68ExchangeState(
       forkId: ForkId
   ): HandshakerState[PeerInfo] = {
     import ForkIdValidator.syncIoLogger
-    log.debug(
+    log.info(
       "ETH{}_STATUS: Received - totalDifficulty={}, networkId={}, bestHash={}, genesisHash={}, forkId={}",
       protocolVersion, totalDifficulty, networkId, bestHash, genesisHash, forkId
     )
@@ -160,7 +160,7 @@ case class EthNodeStatus68ExchangeState(
       forkId = forkId
     )
 
-    log.debug(
+    log.info(
       "ETH{}_STATUS: Sending - totalDifficulty={}, networkId={}, bestBlock={}, bestHash={}, genesisHash={}, forkId={}",
       status.protocolVersion,
       status.totalDifficulty,

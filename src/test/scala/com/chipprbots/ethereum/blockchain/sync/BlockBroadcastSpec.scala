@@ -28,6 +28,7 @@ import com.chipprbots.ethereum.network.p2p.messages.BaseETH6XMessages
 import com.chipprbots.ethereum.network.p2p.messages.Capability
 import com.chipprbots.ethereum.network.p2p.messages.ETH62
 import com.chipprbots.ethereum.network.p2p.messages.ETH62.NewBlockHashes
+import com.chipprbots.ethereum.network.p2p.messages.ETH69
 
 class BlockBroadcastSpec
     extends TestKit(ActorSystem("BlockBroadcastSpec_System"))
@@ -262,8 +263,10 @@ class BlockBroadcastSpec
       Map(peer.id -> PeerWithInfo(peer, eth69PeerInfo))
     )
 
+    val expectedBru = ETH69.BlockRangeUpdate(BigInt(0), blockHeader.number, blockHeader.hash)
     networkPeerManagerProbe.expectMsg(NetworkPeerManagerActor.SendMessage(newBlockMsg, peer.id))
     networkPeerManagerProbe.expectMsg(NetworkPeerManagerActor.SendMessage(newBlockHashes, peer.id))
+    networkPeerManagerProbe.expectMsg(NetworkPeerManagerActor.SendMessage(expectedBru, peer.id))
     networkPeerManagerProbe.expectNoMessage()
   }
 
@@ -425,10 +428,11 @@ class BlockBroadcastSpec
       )
     )
 
-    // With 2 peers: sqrt(2)=1 random peer gets NewBlock, both get NewBlockHashes.
-    // Collect all 3 messages (order non-deterministic for hash messages).
+    // With 2 peers: sqrt(2)=1 random peer gets NewBlock, both get NewBlockHashes,
+    // and the ETH69 peer gets a BlockRangeUpdate — 4 messages total.
+    // Collect all 4 messages (order non-deterministic).
     import scala.concurrent.duration._
-    val messages = (1 to 3).map(_ => networkPeerManagerProbe.receiveOne(3.seconds)).toSet
+    val messages = (1 to 4).map(_ => networkPeerManagerProbe.receiveOne(3.seconds)).toSet
 
     // One NewBlock to either peer
     messages.count {
@@ -444,6 +448,14 @@ class BlockBroadcastSpec
     }
     hashRecipients should contain(peer.id)
     hashRecipients should contain(peer2.id)
+
+    // BlockRangeUpdate to the ETH69 peer only
+    val expectedBru = ETH69.BlockRangeUpdate(BigInt(0), ourBlockHdr.number, ourBlockHdr.hash)
+    val bruRecipients = messages.collect {
+      case NetworkPeerManagerActor.SendMessage(msg, id) if msg.underlyingMsg == expectedBru => id
+    }
+    bruRecipients should contain(peer2.id)
+    bruRecipients should have size 1
 
     networkPeerManagerProbe.expectNoMessage()
   }
