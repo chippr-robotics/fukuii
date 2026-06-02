@@ -40,13 +40,9 @@ import com.chipprbots.ethereum.network.Peer
 import com.chipprbots.ethereum.network.PeerEventBusActor.PeerEvent.MessageFromPeer
 import com.chipprbots.ethereum.network.PeerId
 import com.chipprbots.ethereum.network.p2p.messages.Capability
-import com.chipprbots.ethereum.network.p2p.messages.ETH62.{
-  BlockHeaders => ETH62BlockHeaders,
-  GetBlockHeaders => ETH62GetBlockHeaders
-}
-import com.chipprbots.ethereum.network.p2p.messages.ETH66.{
-  BlockHeaders => ETH66BlockHeaders,
-  GetBlockHeaders => ETH66GetBlockHeaders
+import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.{
+  BlockHeaders => ETHBlockHeaders,
+  GetBlockHeaders => ETHGetBlockHeaders
 }
 import com.chipprbots.ethereum.utils.Logger
 
@@ -357,14 +353,10 @@ object FastSyncBranchResolverActorSpec extends Logger {
           peersConnected.complete(()).handleError(_ => ()).unsafeRunSync()
         case NetworkPeerManagerActor.SendMessage(rawMsg, peerId) =>
           val response = rawMsg.underlyingMsg match {
-            case req: ETH66GetBlockHeaders if !req.reverse =>
+            case req: ETHGetBlockHeaders if !req.reverse =>
               if (blockIndex < blocksSetSize)
                 blockIndex += 1
-              ETH66BlockHeaders(req.requestId, blocks.get(blockIndex).map(_.map(_.header)).getOrElse(Nil))
-            case req: ETH62GetBlockHeaders if !req.reverse =>
-              if (blockIndex < blocksSetSize)
-                blockIndex += 1
-              ETH62BlockHeaders(blocks.get(blockIndex).map(_.map(_.header)).getOrElse(Nil))
+              ETHBlockHeaders(req.requestId, blocks.get(blockIndex).map(_.map(_.header)).getOrElse(Nil))
             case other =>
               throw new RuntimeException(s"Unexpected message sent to NetworkPeerManagerAutoPilot: $other")
           }

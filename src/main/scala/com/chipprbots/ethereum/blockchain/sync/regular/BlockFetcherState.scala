@@ -17,7 +17,7 @@ import com.chipprbots.ethereum.domain.BlockBody
 import com.chipprbots.ethereum.domain.BlockHeader
 import com.chipprbots.ethereum.domain.HeadersSeq
 import com.chipprbots.ethereum.network.PeerId
-import com.chipprbots.ethereum.network.p2p.messages.ETH62.BlockHash
+import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.NewBlockHashes.BlockHash
 
 // scalastyle:off number.of.methods
 /** State used by the BlockFetcher

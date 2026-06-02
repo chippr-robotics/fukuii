@@ -40,8 +40,9 @@ import com.chipprbots.ethereum.network.Peer
 import com.chipprbots.ethereum.network.PeerEventBusActor.PeerEvent.MessageFromPeer
 import com.chipprbots.ethereum.network.PeerId
 import com.chipprbots.ethereum.network.p2p.messages.Capability
-import com.chipprbots.ethereum.network.p2p.messages.ETH63.GetNodeData.GetNodeDataEnc
-import com.chipprbots.ethereum.network.p2p.messages.ETH63.NodeData
+import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.GetNodeData.GetNodeDataEnc
+import com.chipprbots.ethereum.network.p2p.messages.ETHPackets
+import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.NodeData
 import com.chipprbots.ethereum.utils.Config
 import com.chipprbots.ethereum.testing.Tags._
 

@@ -366,7 +366,7 @@ class EthBlocksService(
   }
 
   def getRawReceipts(req: GetRawReceiptsRequest): ServiceResponse[GetRawReceiptsResponse] = IO {
-    import com.chipprbots.ethereum.network.p2p.messages.ETH63.ReceiptImplicits.given
+    import com.chipprbots.ethereum.blockchain.sync.codec.ReceiptCodecs._
     val raw = resolveBlock(req.block).toOption.flatMap { case ResolvedBlock(block, _) =>
       blockchainReader.getReceiptsByHash(block.header.hash).map { receipts =>
         receipts.map(r => ByteString(r.toBytes))

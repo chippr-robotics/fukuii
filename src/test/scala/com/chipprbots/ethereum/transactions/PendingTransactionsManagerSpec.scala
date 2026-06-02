@@ -30,13 +30,13 @@ import com.chipprbots.ethereum.network.Peer
 import com.chipprbots.ethereum.network.PeerEventBusActor.PeerEvent
 import com.chipprbots.ethereum.network.PeerId
 import com.chipprbots.ethereum.network.handshaker.Handshaker.HandshakeResult
-import com.chipprbots.ethereum.network.p2p.messages.BaseETH6XMessages.SignedTransactions
-import com.chipprbots.ethereum.network.p2p.messages.ETH67
+import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.SignedTransactions
 import com.chipprbots.ethereum.security.SecureRandomBuilder
 import com.chipprbots.ethereum.transactions.PendingTransactionsManager._
 import com.chipprbots.ethereum.transactions.SignedTransactionsFilterActor.ProperSignedTransactions
 import com.chipprbots.ethereum.utils.TxPoolConfig
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor.SendMessage
+import com.chipprbots.ethereum.network.p2p.messages.ETHPackets
 import com.chipprbots.ethereum.testing.Tags._
 
 /** Test suite for PendingTransactionsManager actor.
@@ -208,12 +208,12 @@ class PendingTransactionsManagerSpec
     val announcements: Seq[SendMessage] =
       etcPeerManager.receiveWhile(Timeouts.normalTimeout, messages = 3) {
         case m @ NetworkPeerManagerActor.SendMessage(enc, _)
-            if enc.underlyingMsg.isInstanceOf[ETH67.NewPooledTransactionHashes] =>
+            if enc.underlyingMsg.isInstanceOf[ETHPackets.NewPooledTransactionHashes] =>
           m
       }
     announcements.map(_.peerId).toSet shouldBe Set(peer1.id, peer2.id, peer3.id)
     announcements.foreach { a =>
-      a.message.underlyingMsg.asInstanceOf[ETH67.NewPooledTransactionHashes].hashes shouldBe Seq(stx.tx.hash)
+      a.message.underlyingMsg.asInstanceOf[ETHPackets.NewPooledTransactionHashes].hashes shouldBe Seq(stx.tx.hash)
     }
 
     val pendingTxs: PendingTransactionsResponse =
@@ -239,7 +239,7 @@ class PendingTransactionsManagerSpec
     }
     (resps1.map(_.peerId).toSet should contain).allOf(peer2.id, peer3.id)
     resps1.map(_.message.underlyingMsg).foreach {
-      case ETH67.NewPooledTransactionHashes(_, _, hashes) => hashes.toSet shouldEqual msg1.map(_.tx.hash)
+      case ETHPackets.NewPooledTransactionHashes(_, _, hashes) => hashes.toSet shouldEqual msg1.map(_.tx.hash)
       case SignedTransactions(txs)                        => txs.toSet shouldEqual msg1.map(_.tx)
       case other                                          => fail(s"Unexpected message: $other")
     }
@@ -253,7 +253,7 @@ class PendingTransactionsManagerSpec
     }
     (resps2.map(_.peerId).toSet should contain).allOf(peer1.id, peer3.id)
     resps2.map(_.message.underlyingMsg).foreach {
-      case ETH67.NewPooledTransactionHashes(_, _, hashes) => hashes.toSet shouldEqual msg2.map(_.tx.hash)
+      case ETHPackets.NewPooledTransactionHashes(_, _, hashes) => hashes.toSet shouldEqual msg2.map(_.tx.hash)
       case SignedTransactions(txs)                        => txs.toSet shouldEqual msg2.map(_.tx)
       case other                                          => fail(s"Unexpected message: $other")
     }
@@ -328,7 +328,7 @@ class PendingTransactionsManagerSpec
     announces.foreach(_.peerId shouldBe peer1.id)
     val announcedHashes = announces
       .flatMap(_.message.underlyingMsg match {
-        case ETH67.NewPooledTransactionHashes(_, _, hashes) => hashes
+        case ETHPackets.NewPooledTransactionHashes(_, _, hashes) => hashes
         case SignedTransactions(txs)                        => txs.map(_.hash)
         case _                                              => Nil
       })
@@ -352,7 +352,7 @@ class PendingTransactionsManagerSpec
     val replayed = etcPeerManager.expectMsgType[NetworkPeerManagerActor.SendMessage]
     replayed.peerId shouldBe peer1.id
     replayed.message.underlyingMsg match {
-      case ETH67.NewPooledTransactionHashes(_, _, hashes) => hashes shouldBe Seq(stx.tx.hash)
+      case ETHPackets.NewPooledTransactionHashes(_, _, hashes) => hashes shouldBe Seq(stx.tx.hash)
       case SignedTransactions(txs)                        => txs shouldBe Seq(stx.tx)
       case other                                          => fail(s"Unexpected: $other")
     }

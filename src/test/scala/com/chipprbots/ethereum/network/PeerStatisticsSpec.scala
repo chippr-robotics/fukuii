@@ -11,7 +11,7 @@ import org.scalatest.matchers.should.Matchers
 
 import com.chipprbots.ethereum.WithActorSystemShutDown
 import com.chipprbots.ethereum.network.PeerEventBusActor._
-import com.chipprbots.ethereum.network.p2p.messages.ETH61.NewBlockHashes
+import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.NewBlockHashes.{NewBlockHashes, BlockHash}
 import com.chipprbots.ethereum.utils.MockClock
 import com.chipprbots.ethereum.testing.Tags._
 

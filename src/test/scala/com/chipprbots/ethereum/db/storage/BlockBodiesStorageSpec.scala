@@ -6,8 +6,8 @@ import org.scalatestplus.scalacheck.ScalaCheckPropertyChecks
 
 import com.chipprbots.ethereum.ObjectGenerators
 import com.chipprbots.ethereum.db.dataSource.EphemDataSource
-import com.chipprbots.ethereum.network.p2p.messages.BaseETH6XMessages
-import com.chipprbots.ethereum.network.p2p.messages.BaseETH6XMessages.NewBlock
+import com.chipprbots.ethereum.network.p2p.messages.ETHPackets
+import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.NewBlock
 import com.chipprbots.ethereum.security.SecureRandomBuilder
 import com.chipprbots.ethereum.testing.Tags._
 
@@ -40,7 +40,7 @@ class BlockBodiesStorageSpec
         // Mapping of block bodies is deleted
         val (toDelete, toLeave) = blocks.splitAt(Gen.choose(0, blocks.size).sample.get)
 
-        val batchUpdates = toDelete.foldLeft(storage.emptyBatchUpdate) { case (updates, NewBlock(block, _)) =>
+        val batchUpdates = toDelete.foldLeft(storage.emptyBatchUpdate) { case (updates, ETHPackets.NewBlock(block, _)) =>
           updates.and(storage.remove(block.header.hash))
         }
 
@@ -53,10 +53,10 @@ class BlockBodiesStorageSpec
       }
     }
 
-    def insertBlockBodiesMapping(newBlocks: Seq[BaseETH6XMessages.NewBlock]): BlockBodiesStorage = {
+    def insertBlockBodiesMapping(newBlocks: Seq[ETHPackets.NewBlock]): BlockBodiesStorage = {
       val storage = new BlockBodiesStorage(EphemDataSource())
 
-      val batchUpdates = newBlocks.foldLeft(storage.emptyBatchUpdate) { case (updates, NewBlock(block, _)) =>
+      val batchUpdates = newBlocks.foldLeft(storage.emptyBatchUpdate) { case (updates, ETHPackets.NewBlock(block, _)) =>
         updates.and(storage.put(block.header.hash, block.body))
       }
 

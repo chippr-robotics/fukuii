@@ -244,7 +244,7 @@ class EngineApiServiceSpec extends AnyWordSpec with Matchers {
       }
 
       def blockToPayload(block: Block): ExecutionPayload = {
-        import com.chipprbots.ethereum.network.p2p.messages.BaseETH6XMessages.SignedTransactions._
+        import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.SignedTransactions._
         import com.chipprbots.ethereum.rlp.{encode => rlpEncode}
 
         ExecutionPayload(

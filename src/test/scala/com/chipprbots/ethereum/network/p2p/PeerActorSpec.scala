@@ -42,13 +42,14 @@ import com.chipprbots.ethereum.network._
 import com.chipprbots.ethereum.testing.Tags._
 import com.chipprbots.ethereum.network.handshaker.NetworkHandshaker
 import com.chipprbots.ethereum.network.handshaker.NetworkHandshakerConfiguration
-import com.chipprbots.ethereum.network.p2p.messages.BaseETH6XMessages.Status
-import com.chipprbots.ethereum.network.p2p.messages.BaseETH6XMessages.Status.StatusEnc
-import com.chipprbots.ethereum.network.p2p.messages.ETH64
-import com.chipprbots.ethereum.network.p2p.messages.ETH64.Status.{StatusEnc => ETH64StatusEnc}
+import com.chipprbots.ethereum.network.p2p.messages.ETHPackets
+import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.Status68.Status68.Status68Enc
+import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.Status68.{Status68 => Status}
+import com.chipprbots.ethereum.forkid.ForkId
 import com.chipprbots.ethereum.network.p2p.messages.Capability
-import com.chipprbots.ethereum.network.p2p.messages.ETH62.GetBlockHeaders.GetBlockHeadersEnc
-import com.chipprbots.ethereum.network.p2p.messages.ETH62._
+import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.GetBlockHeaders.GetBlockHeadersEnc
+import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.{BlockHeaders, GetBlockHeaders}
+import com.chipprbots.ethereum.network.p2p.messages.ETHPackets
 import com.chipprbots.ethereum.network.p2p.messages.WireProtocol.Disconnect.DisconnectEnc
 import com.chipprbots.ethereum.network.p2p.messages.WireProtocol.Disconnect.Reasons
 import com.chipprbots.ethereum.network.p2p.messages.WireProtocol.Hello.HelloEnc
@@ -165,7 +166,8 @@ class PeerActorSpec
       networkId = peerConf.networkId,
       totalDifficulty = daoForkBlockChainTotalDifficulty + 100000, // remote is after the fork
       bestHash = ByteString("blockhash"),
-      genesisHash = genesisHash
+      genesisHash = genesisHash,
+      forkId = ForkId(0, None)
     )
 
     // Node status exchange
@@ -174,7 +176,7 @@ class PeerActorSpec
 
     // Fork block exchange
     rlpxConnection.expectMsgPF() { case RLPxConnectionHandler.SendMessage(_: GetBlockHeadersEnc) => () }
-    rlpxConnection.send(peer, RLPxConnectionHandler.MessageReceived(BlockHeaders(Seq(etcForkBlockHeader))))
+    rlpxConnection.send(peer, RLPxConnectionHandler.MessageReceived(BlockHeaders(BigInt(0), Seq(etcForkBlockHeader))))
 
     // Check that peer is connected
     rlpxConnection.send(peer, RLPxConnectionHandler.MessageReceived(Ping()))
@@ -203,7 +205,8 @@ class PeerActorSpec
       networkId = peerConf.networkId,
       totalDifficulty = daoForkBlockChainTotalDifficulty + 100000, // remote is after the fork
       bestHash = ByteString("blockhash"),
-      genesisHash = genesisHash.drop(2)
+      genesisHash = genesisHash.drop(2),
+      forkId = ForkId(0, None)
     )
 
     // Node status exchange
@@ -213,8 +216,8 @@ class PeerActorSpec
     rlpxConnection.expectMsgPF() { case RLPxConnectionHandler.SendMessage(_: DisconnectEnc) => () }
   }
 
-  it should "successfully connect to ETH peer with protocol 64" taggedAs (UnitTest, NetworkTest) in new TestSetup {
-    override def protocol: Capability = Capability.ETH64
+  it should "successfully connect to ETH peer with protocol 68" taggedAs (UnitTest, NetworkTest) in new TestSetup {
+    override def protocol: Capability = Capability.ETH68
     val uri = new URI(s"enode://${Hex.toHexString(remoteNodeId.toArray[Byte])}@localhost:9000")
     val completeUri = new URI(s"enode://${Hex.toHexString(remoteNodeId.toArray[Byte])}@127.0.0.1:9000?discport=9000")
 
@@ -235,12 +238,12 @@ class PeerActorSpec
 
     // Hello exchange
     val remoteHello: Hello =
-      Hello(4, "test-client", Seq(Capability.ETH64, Capability.ETH63), 9000, ByteString("unused"))
+      Hello(4, "test-client", Seq(Capability.ETH68), 9000, ByteString("unused"))
     rlpxConnection.expectMsgPF() { case RLPxConnectionHandler.SendMessage(_: HelloEnc) => () }
     rlpxConnection.send(peer, RLPxConnectionHandler.MessageReceived(remoteHello))
 
-    val remoteStatus: ETH64.Status = ETH64.Status(
-      protocolVersion = Capability.ETH64.version,
+    val remoteStatus: ETHPackets.Status68.Status68 = ETHPackets.Status68.Status68(
+      protocolVersion = Capability.ETH68.version,
       networkId = peerConf.networkId,
       totalDifficulty = daoForkBlockChainTotalDifficulty + 100000, // remote is after the fork
       bestHash = ByteString("blockhash"),
@@ -280,7 +283,8 @@ class PeerActorSpec
       networkId = peerConf.networkId,
       totalDifficulty = daoForkBlockChainTotalDifficulty + 100000, // remote is after the fork
       bestHash = ByteString("blockhash"),
-      genesisHash = genesisHash
+      genesisHash = genesisHash,
+      forkId = ForkId(0, None)
     )
     // Node status exchange
     expectStatusMessage()
@@ -288,7 +292,7 @@ class PeerActorSpec
 
     // Fork block exchange
     rlpxConnection.expectMsgPF() { case RLPxConnectionHandler.SendMessage(_: GetBlockHeadersEnc) => () }
-    rlpxConnection.send(peer, RLPxConnectionHandler.MessageReceived(BlockHeaders(Seq(etcForkBlockHeader))))
+    rlpxConnection.send(peer, RLPxConnectionHandler.MessageReceived(BlockHeaders(BigInt(0), Seq(etcForkBlockHeader))))
 
     // Check that peer is connected
     rlpxConnection.send(peer, RLPxConnectionHandler.MessageReceived(Ping()))
@@ -322,13 +326,14 @@ class PeerActorSpec
       networkId = peerConf.networkId,
       totalDifficulty = daoForkBlockChainTotalDifficulty + 100000, // remote is after the fork
       bestHash = ByteString("blockhash"),
-      genesisHash = genesisHash
+      genesisHash = genesisHash,
+      forkId = ForkId(0, None)
     )
     expectStatusMessage()
     rlpxConnection.send(peer, RLPxConnectionHandler.MessageReceived(remoteStatus))
 
     rlpxConnection.expectMsgPF() { case RLPxConnectionHandler.SendMessage(_: GetBlockHeadersEnc) => () }
-    rlpxConnection.send(peer, RLPxConnectionHandler.MessageReceived(BlockHeaders(Seq(nonEtcForkBlockHeader))))
+    rlpxConnection.send(peer, RLPxConnectionHandler.MessageReceived(BlockHeaders(BigInt(0), Seq(nonEtcForkBlockHeader))))
     rlpxConnection.expectMsg(RLPxConnectionHandler.SendMessage(Disconnect(Disconnect.Reasons.UselessPeer)))
   }
 
@@ -350,13 +355,14 @@ class PeerActorSpec
       networkId = peerConf.networkId,
       totalDifficulty = daoForkBlockChainTotalDifficulty + 100000, // remote is after the fork
       bestHash = ByteString("blockhash"),
-      genesisHash = genesisHash
+      genesisHash = genesisHash,
+      forkId = ForkId(0, None)
     )
     expectStatusMessage()
     rlpxConnection.send(peer, RLPxConnectionHandler.MessageReceived(remoteStatus))
 
     rlpxConnection.expectMsgPF() { case RLPxConnectionHandler.SendMessage(_: GetBlockHeadersEnc) => () }
-    rlpxConnection.send(peer, RLPxConnectionHandler.MessageReceived(BlockHeaders(Seq(nonEtcForkBlockHeader))))
+    rlpxConnection.send(peer, RLPxConnectionHandler.MessageReceived(BlockHeaders(BigInt(0), Seq(nonEtcForkBlockHeader))))
 
     rlpxConnection.expectMsg(RLPxConnectionHandler.SendMessage(Disconnect(Disconnect.Reasons.UselessPeer)))
   }
@@ -396,7 +402,8 @@ class PeerActorSpec
       networkId = peerConf.networkId,
       totalDifficulty = daoForkBlockChainTotalDifficulty + 100000, // remote is after the fork
       bestHash = ByteString("blockhash"),
-      genesisHash = genesisHash
+      genesisHash = genesisHash,
+      forkId = ForkId(0, None)
     )
     expectStatusMessage()
     rlpxConnection.send(peer, RLPxConnectionHandler.MessageReceived(remoteStatus))
@@ -406,9 +413,9 @@ class PeerActorSpec
     // Request dao fork block from the peer
     rlpxConnection.send(
       peer,
-      RLPxConnectionHandler.MessageReceived(GetBlockHeaders(Left(daoForkBlockNumber), 1, 0, false))
+      RLPxConnectionHandler.MessageReceived(GetBlockHeaders(BigInt(0), Left(daoForkBlockNumber), 1, 0, false))
     )
-    rlpxConnection.expectMsg(RLPxConnectionHandler.SendMessage(BlockHeaders(Seq(Fixtures.Blocks.DaoForkBlock.header))))
+    rlpxConnection.expectMsg(RLPxConnectionHandler.SendMessage(BlockHeaders(BigInt(0), Seq(Fixtures.Blocks.DaoForkBlock.header))))
   }
 
   it should "stash disconnect message until handshaked" taggedAs (UnitTest, NetworkTest) in new TestSetup {
@@ -427,13 +434,14 @@ class PeerActorSpec
       networkId = peerConf.networkId,
       totalDifficulty = daoForkBlockChainTotalDifficulty + 100000, // remote is after the fork
       bestHash = ByteString("blockhash"),
-      genesisHash = genesisHash
+      genesisHash = genesisHash,
+      forkId = ForkId(0, None)
     )
     expectStatusMessage()
     rlpxConnection.send(peer, RLPxConnectionHandler.MessageReceived(remoteStatus))
 
     rlpxConnection.expectMsgPF() { case RLPxConnectionHandler.SendMessage(_: GetBlockHeadersEnc) => () }
-    rlpxConnection.send(peer, RLPxConnectionHandler.MessageReceived(BlockHeaders(Seq(etcForkBlockHeader))))
+    rlpxConnection.send(peer, RLPxConnectionHandler.MessageReceived(BlockHeaders(BigInt(0), Seq(etcForkBlockHeader))))
 
     rlpxConnection.expectMsg(RLPxConnectionHandler.SendMessage(Disconnect(Disconnect.Reasons.TooManyPeers)))
   }
@@ -488,14 +496,15 @@ class PeerActorSpec
       networkId = peerConf.networkId,
       totalDifficulty = daoForkBlockChainTotalDifficulty + 100000, // remote is after the fork
       bestHash = ByteString("blockhash"),
-      genesisHash = genesisHash
+      genesisHash = genesisHash,
+      forkId = ForkId(0, None)
     )
 
     expectStatusMessage()
     rlpxConnection.send(peer, RLPxConnectionHandler.MessageReceived(remoteStatus))
 
     rlpxConnection.expectMsgPF() { case RLPxConnectionHandler.SendMessage(_: GetBlockHeadersEnc) => () }
-    rlpxConnection.send(peer, RLPxConnectionHandler.MessageReceived(BlockHeaders(Seq(etcForkBlockHeader))))
+    rlpxConnection.send(peer, RLPxConnectionHandler.MessageReceived(BlockHeaders(BigInt(0), Seq(etcForkBlockHeader))))
 
     // Test that the handshake succeeded
     val sender: TestProbe = TestProbe()(system)
@@ -671,8 +680,8 @@ class PeerActorSpec
 
     def expectStatusMessage(): Unit =
       rlpxConnection.expectMsgPF() {
-        case RLPxConnectionHandler.SendMessage(_: StatusEnc)      => ()
-        case RLPxConnectionHandler.SendMessage(_: ETH64StatusEnc) => ()
+        case RLPxConnectionHandler.SendMessage(_: ETHPackets.Status68.Status68.Status68Enc)      => ()
+        case RLPxConnectionHandler.SendMessage(_: Status68Enc) => ()
       }
   }
 

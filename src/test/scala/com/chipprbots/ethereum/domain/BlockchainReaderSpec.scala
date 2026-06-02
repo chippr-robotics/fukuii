@@ -9,7 +9,7 @@ import org.scalatestplus.scalacheck.ScalaCheckPropertyChecks
 import com.chipprbots.ethereum.Fixtures
 import com.chipprbots.ethereum.ObjectGenerators
 import com.chipprbots.ethereum.blockchain.sync.EphemBlockchainTestSetup
-import com.chipprbots.ethereum.network.p2p.messages.BaseETH6XMessages.NewBlock
+import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.NewBlock
 import com.chipprbots.ethereum.security.SecureRandomBuilder
 import com.chipprbots.ethereum.testing.Tags._
 

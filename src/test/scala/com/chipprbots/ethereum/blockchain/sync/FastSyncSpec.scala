@@ -29,7 +29,8 @@ import com.chipprbots.ethereum.domain.Transaction
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor
 import com.chipprbots.ethereum.network.Peer
 import com.chipprbots.ethereum.blockchain.sync.PeerRequestHandler.ResponseReceived
-import com.chipprbots.ethereum.network.p2p.messages.ETH66.Receipts as ETH66Receipts
+import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.{Receipts68 => ETH66Receipts}
+import com.chipprbots.ethereum.network.p2p.messages.ETHPackets
 import com.chipprbots.ethereum.rlp.RLPValue
 import com.chipprbots.ethereum.rlp.RLPList
 import com.chipprbots.ethereum.rlp.encode
@@ -182,7 +183,7 @@ class FastSyncSpec
             )
           )
 
-          val msg = ETH66Receipts(requestId = 1, receiptsForBlocks = receiptsForBlocks)
+          val msg = ETHPackets.Receipts68(requestId = 1, receiptsForBlocks = receiptsForBlocks)
 
           val watcher = TestProbe()
           watcher.watch(fastSync)

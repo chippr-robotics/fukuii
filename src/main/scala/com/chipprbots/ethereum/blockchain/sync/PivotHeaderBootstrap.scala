@@ -9,9 +9,7 @@ import scala.concurrent.duration._
 
 import com.chipprbots.ethereum.domain.BlockHeader
 import com.chipprbots.ethereum.domain.BlockchainWriter
-import com.chipprbots.ethereum.network.p2p.messages.ETH62
-import com.chipprbots.ethereum.network.p2p.messages.ETH66
-import com.chipprbots.ethereum.network.p2p.messages.ETH66.{BlockHeaders => ETH66BlockHeaders}
+import com.chipprbots.ethereum.network.p2p.messages.ETHPackets
 import com.chipprbots.ethereum.blockchain.sync.PeersClient.{
   BestPeer,
   BestPeerWithMinBlockExcluding,
@@ -130,7 +128,7 @@ final class PivotHeaderBootstrap(
   private def fetchOnce(): Unit = {
     // Build the GetBlockHeaders request — Right(hash) for by-hash mode, Left(number) for by-number.
     val target: Either[BigInt, ByteString] = targetHash.toRight(targetBlock)
-    val msg = ETH66.GetBlockHeaders(ETH66.nextRequestId, target, maxHeaders = 1, skip = 0, reverse = false)
+    val msg = ETHPackets.GetBlockHeaders(ETHPackets.nextRequestId, target, maxHeaders = 1, skip = 0, reverse = false)
 
     // Peer selection:
     //   By-number with preferSnapPeers (standard SNAP pivot bootstrap): BestSnapPeerWithMinBlockExcluding
@@ -146,7 +144,7 @@ final class PivotHeaderBootstrap(
       else if (preferSnapPeers) BestSnapPeer
       else if (byHashMode) BestPeer
       else BestPeerWithMinBlockExcluding(targetBlock, triedPeers.toSet)
-    val req = Request[ETH66.GetBlockHeaders](msg, selector, (m: ETH66.GetBlockHeaders) => m)
+    val req = Request[ETHPackets.GetBlockHeaders](msg, selector, (m: ETHPackets.GetBlockHeaders) => m)
 
     (peersClient ? req)
       .flatMap {
@@ -154,20 +152,18 @@ final class PivotHeaderBootstrap(
           // No SNAP peer available — try any peer with the target as fallback
           log.debug("No SNAP-capable peer for pivot header, falling back")
           val fallbackMsg =
-            ETH66.GetBlockHeaders(ETH66.nextRequestId, target, maxHeaders = 1, skip = 0, reverse = false)
+            ETHPackets.GetBlockHeaders(ETHPackets.nextRequestId, target, maxHeaders = 1, skip = 0, reverse = false)
           val fallbackSelector =
             if (byHashMode) BestPeer else BestPeerWithMinBlockExcluding(targetBlock, triedPeers.toSet)
           val fallbackReq =
-            Request[ETH66.GetBlockHeaders](fallbackMsg, fallbackSelector, (m: ETH66.GetBlockHeaders) => m)
+            Request[ETHPackets.GetBlockHeaders](fallbackMsg, fallbackSelector, (m: ETHPackets.GetBlockHeaders) => m)
           peersClient ? fallbackReq
         case other =>
           scala.concurrent.Future.successful(other)
       }
       .map {
-        case PeersClient.Response(peer, eth66: ETH66BlockHeaders) =>
-          (Some(peer), eth66.headers.headOption, false)
-        case PeersClient.Response(peer, eth62: ETH62.BlockHeaders) =>
-          (Some(peer), eth62.headers.headOption, false)
+        case PeersClient.Response(peer, headers: ETHPackets.BlockHeaders) =>
+          (Some(peer), headers.headers.headOption, false)
         case NoSuitablePeer =>
           (None, None, false)
         case RequestFailed(peer, reason) =>

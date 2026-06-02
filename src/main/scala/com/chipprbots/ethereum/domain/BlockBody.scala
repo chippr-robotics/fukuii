@@ -31,7 +31,7 @@ object BlockBody {
 
   val empty: BlockBody = BlockBody(Seq.empty, Seq.empty)
 
-  import com.chipprbots.ethereum.network.p2p.messages.BaseETH6XMessages.TypedTransaction._
+  import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.TypedTransaction._
 
   def blockBodyToRlpEncodable(
       blockBody: BlockBody,
@@ -61,7 +61,7 @@ object BlockBody {
 
   implicit class BlockBodyEnc(msg: BlockBody) extends RLPSerializable {
     override def toRLPEncodable: RLPEncodeable = {
-      import com.chipprbots.ethereum.network.p2p.messages.BaseETH6XMessages.SignedTransactions._
+      import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.SignedTransactions._
 
       blockBodyToRlpEncodable(
         msg,
@@ -99,7 +99,7 @@ object BlockBody {
 
   implicit class BlockBodyRLPEncodableDec(val rlpEncodeable: RLPEncodeable) {
     def toBlockBody: BlockBody = {
-      import com.chipprbots.ethereum.network.p2p.messages.BaseETH6XMessages.SignedTransactions._
+      import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.SignedTransactions._
 
       rlpEncodableToBlockBody(
         rlpEncodeable,

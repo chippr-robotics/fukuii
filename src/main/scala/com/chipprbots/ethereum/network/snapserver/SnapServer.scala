@@ -5,6 +5,7 @@ import org.apache.pekko.util.ByteString
 import com.chipprbots.ethereum.db.storage.EvmCodeStorage
 import com.chipprbots.ethereum.db.storage.MptStorage
 import com.chipprbots.ethereum.domain.Account
+import com.chipprbots.ethereum.domain.Account._
 import com.chipprbots.ethereum.mpt._
 import com.chipprbots.ethereum.network.p2p.messages.SNAP._
 import com.chipprbots.ethereum.rlp
@@ -269,7 +270,6 @@ object SnapServer extends Logger {
     val maxBytes = responseBytes.min(BigInt(2 * 1024 * 1024)).max(BigInt(0)).toInt
     val deadline = System.currentTimeMillis() + 4000
 
-    import com.chipprbots.ethereum.network.p2p.messages.ETH63.AccountImplicits._
     val collected = scala.collection.mutable.ArrayBuffer.empty[(ByteString, com.chipprbots.ethereum.domain.Account)]
     var accumulated = 0
     // Visit-style walk: visitor returns false to stop traversal as soon as the byte
@@ -486,7 +486,6 @@ object SnapServer extends Logger {
       storage: MptStorage,
       nibbles: Array[Byte]
   ): Option[Account] = {
-    import com.chipprbots.ethereum.network.p2p.messages.ETH63.AccountImplicits._
 
     def descend(node: MptNode, remaining: Array[Byte]): Option[Account] = {
       val resolved = resolve(node, storage)

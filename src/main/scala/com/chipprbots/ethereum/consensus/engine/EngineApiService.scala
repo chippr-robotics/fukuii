@@ -14,7 +14,7 @@ import com.chipprbots.ethereum.domain.BlockHeader.HeaderExtraFields._
 import com.chipprbots.ethereum.domain.Withdrawal._
 import com.chipprbots.ethereum.ledger.BlockExecution
 import com.chipprbots.ethereum.mpt.ByteArraySerializable
-import com.chipprbots.ethereum.network.p2p.messages.BaseETH6XMessages.SignedTransactions._
+import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.SignedTransactions._
 import com.chipprbots.ethereum.rlp.{encode => rlpEncode}
 import com.chipprbots.ethereum.utils.BlockchainConfig
 import com.chipprbots.ethereum.utils.Logger

@@ -24,11 +24,9 @@ import com.chipprbots.ethereum.domain.BlockchainReader
 import com.chipprbots.ethereum.network.Peer
 import com.chipprbots.ethereum.network.p2p.messages.Capability
 import com.chipprbots.ethereum.network.p2p.messages.Codes
-import com.chipprbots.ethereum.network.p2p.messages.ETH62.{BlockHeaders => ETH62BlockHeaders}
-import com.chipprbots.ethereum.network.p2p.messages.ETH62.{GetBlockHeaders => ETH62GetBlockHeaders}
-import com.chipprbots.ethereum.network.p2p.messages.ETH66
-import com.chipprbots.ethereum.network.p2p.messages.ETH66.{BlockHeaders => ETH66BlockHeaders}
-import com.chipprbots.ethereum.network.p2p.messages.ETH66.{GetBlockHeaders => ETH66GetBlockHeaders}
+import com.chipprbots.ethereum.network.p2p.messages.ETHPackets
+import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.{BlockHeaders => ETH68BlockHeaders}
+import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.{GetBlockHeaders => ETH68GetBlockHeaders}
 import com.chipprbots.ethereum.utils.Config.SyncConfig
 
 class FastSyncBranchResolverActor(
@@ -78,14 +76,14 @@ class FastSyncBranchResolverActor(
       requestHandler: ActorRef
   ): Receive =
     handlePeerListMessages.orElse {
-      case ResponseReceived(peer, ETH62BlockHeaders(headers), timeTaken) if peer == masterPeer =>
+      case ResponseReceived(peer, ETH68BlockHeaders(_, headers), timeTaken) if peer == masterPeer =>
         if (headers.size == recentHeadersSize) {
           log.debug("Received {} block headers from peer {} in {} ms", headers.size, masterPeer.id, timeTaken)
           handleRecentBlockHeadersResponse(headers, masterPeer, bestBlockNumber)
         } else {
           handleInvalidResponse(peer, requestHandler)
         }
-      case ResponseReceived(peer, ETH66BlockHeaders(_, headers), timeTaken) if peer == masterPeer =>
+      case ResponseReceived(peer, ETH68BlockHeaders(_, headers), timeTaken) if peer == masterPeer =>
         if (headers.size == recentHeadersSize) {
           log.debug("Received {} block headers from peer {} in {} ms", headers.size, masterPeer.id, timeTaken)
           handleRecentBlockHeadersResponse(headers, masterPeer, bestBlockNumber)
@@ -102,7 +100,7 @@ class FastSyncBranchResolverActor(
       requestHandler: ActorRef
   ): Receive =
     handlePeerListMessages.orElse {
-      case ResponseReceived(peer, ETH62BlockHeaders(headers), durationMs) if peer == searchState.masterPeer =>
+      case ResponseReceived(peer, ETH68BlockHeaders(_, headers), durationMs) if peer == searchState.masterPeer =>
         context.unwatch(requestHandler)
         headers.toList match {
           case childHeader :: Nil if childHeader.number == blockHeaderNumberToSearch =>
@@ -111,7 +109,7 @@ class FastSyncBranchResolverActor(
           case _ =>
             handleInvalidResponse(peer, requestHandler)
         }
-      case ResponseReceived(peer, ETH66BlockHeaders(_, headers), durationMs) if peer == searchState.masterPeer =>
+      case ResponseReceived(peer, ETH68BlockHeaders(_, headers), durationMs) if peer == searchState.masterPeer =>
         context.unwatch(requestHandler)
         headers.toList match {
           case childHeader :: Nil if childHeader.number == blockHeaderNumberToSearch =>
@@ -197,23 +195,24 @@ class FastSyncBranchResolverActor(
 
     val handler = if (usesRequestId) {
       context.actorOf(
-        PeerRequestHandler.props[ETH66GetBlockHeaders, ETH66BlockHeaders](
+        PeerRequestHandler.props[ETH68GetBlockHeaders, ETH68BlockHeaders](
           peer,
           syncConfig.peerResponseTimeout,
           networkPeerManager,
           peerEventBus,
-          requestMsg = ETH66GetBlockHeaders(ETH66.nextRequestId, Left(fromBlock), amount, skip = 0, reverse = false),
+          requestMsg = ETH68GetBlockHeaders(ETHPackets.nextRequestId, Left(fromBlock), amount, skip = 0, reverse = false),
           responseMsgCode = Codes.BlockHeadersCode
         )
       )
     } else {
+      // ETH68+ always uses request-id; fallback uses requestId=0
       context.actorOf(
-        PeerRequestHandler.props[ETH62GetBlockHeaders, ETH62BlockHeaders](
+        PeerRequestHandler.props[ETH68GetBlockHeaders, ETH68BlockHeaders](
           peer,
           syncConfig.peerResponseTimeout,
           networkPeerManager,
           peerEventBus,
-          requestMsg = ETH62GetBlockHeaders(Left(fromBlock), amount, skip = 0, reverse = false),
+          requestMsg = ETH68GetBlockHeaders(ETHPackets.nextRequestId, Left(fromBlock), amount, skip = 0, reverse = false),
           responseMsgCode = Codes.BlockHeadersCode
         )
       )

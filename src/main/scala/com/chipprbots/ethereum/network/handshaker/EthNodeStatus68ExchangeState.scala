@@ -10,7 +10,6 @@ import com.chipprbots.ethereum.network.NetworkPeerManagerActor.RemoteStatus
 import com.chipprbots.ethereum.network.p2p.Message
 import com.chipprbots.ethereum.network.p2p.MessageSerializable
 import com.chipprbots.ethereum.network.p2p.messages.Capability
-import com.chipprbots.ethereum.network.p2p.messages.ETH64
 import com.chipprbots.ethereum.network.p2p.messages.ETHPackets
 import com.chipprbots.ethereum.network.p2p.messages.WireProtocol.Disconnect
 
@@ -34,16 +33,10 @@ case class EthNodeStatus68ExchangeState(
   import handshakerConfiguration._
 
   def applyResponseMessage: PartialFunction[Message, HandshakerState[PeerInfo]] = {
-    // ETH68 decoder path: ETHPackets.Status68 (ETH68MessageDecoder returns this)
+    // ETH68MessageDecoder returns ETHPackets.Status68.Status68
     case status: ETHPackets.Status68.Status68 =>
       handleStatus68Fields(status.protocolVersion, status.networkId.toLong, status.totalDifficulty,
         status.bestHash, status.genesisHash, status.forkId)
-
-    // Legacy decoder path: ETH64.Status (ETH64-67 decoders still return this)
-    // Phase 3 (cap retirement) will remove this arm.
-    case legacyStatus: ETH64.Status =>
-      handleStatus68Fields(legacyStatus.protocolVersion, legacyStatus.networkId, legacyStatus.totalDifficulty,
-        legacyStatus.bestHash, legacyStatus.genesisHash, legacyStatus.forkId)
   }
 
   private def handleStatus68Fields(

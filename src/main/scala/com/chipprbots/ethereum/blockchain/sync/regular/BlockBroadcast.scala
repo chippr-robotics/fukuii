@@ -15,10 +15,9 @@ import com.chipprbots.ethereum.network.NetworkPeerManagerActor.PeerInfo
 import com.chipprbots.ethereum.network.Peer
 import com.chipprbots.ethereum.network.PeerId
 import com.chipprbots.ethereum.network.p2p.MessageSerializable
-import com.chipprbots.ethereum.network.p2p.messages.BaseETH6XMessages
 import com.chipprbots.ethereum.network.p2p.messages.Capability
-import com.chipprbots.ethereum.network.p2p.messages.ETH62
-import com.chipprbots.ethereum.network.p2p.messages.ETH62.BlockHash
+import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.NewBlockHashes.BlockHash
+import com.chipprbots.ethereum.network.p2p.messages.ETHPackets
 import com.chipprbots.ethereum.network.p2p.messages.ETH69
 
 class BlockBroadcast(val networkPeerManager: ActorRef) {
@@ -88,7 +87,7 @@ class BlockBroadcast(val networkPeerManager: ActorRef) {
   private def broadcastNewBlockHash(blockToBroadcast: BlockToBroadcast, peers: Set[Peer]): Unit = peers.foreach {
     peer =>
       val newBlockHeader = blockToBroadcast.block.header
-      val newBlockHashMsg = ETH62.NewBlockHashes(Seq(BlockHash(newBlockHeader.hash, newBlockHeader.number)))
+      val newBlockHashMsg = ETHPackets.NewBlockHashes.NewBlockHashes(Seq(BlockHash(newBlockHeader.hash, newBlockHeader.number)))
       networkPeerManager ! NetworkPeerManagerActor.SendMessage(newBlockHashMsg, peer.id)
   }
 
@@ -110,6 +109,6 @@ object BlockBroadcast {
     * versions of NewBlock msg)
     */
   case class BlockToBroadcast(block: Block, chainWeight: ChainWeight) {
-    def as63: BaseETH6XMessages.NewBlock = BaseETH6XMessages.NewBlock(block, chainWeight.totalDifficulty)
+    def as63: ETHPackets.NewBlock = ETHPackets.NewBlock(block, chainWeight.totalDifficulty)
   }
 }

@@ -30,10 +30,13 @@ import com.chipprbots.ethereum.network.PeerEventBusActor.PeerEvent.PeerHandshake
 import com.chipprbots.ethereum.network.PeerEventBusActor.PeerSelector
 import com.chipprbots.ethereum.network.PeerEventBusActor.Subscribe
 import com.chipprbots.ethereum.network.PeerEventBusActor.SubscriptionClassifier._
-import com.chipprbots.ethereum.network.p2p.messages.BaseETH6XMessages.NewBlock
+import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.NewBlock
 import com.chipprbots.ethereum.network.p2p.messages.Capability
 import com.chipprbots.ethereum.network.p2p.messages.Codes
-import com.chipprbots.ethereum.network.p2p.messages.ETH62._
+import com.chipprbots.ethereum.network.p2p.messages.ETHPackets
+import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.NewBlockHashes.NewBlockHashes
+import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.NewBlockHashes.BlockHash
+import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.{BlockHeaders, BlockBodies}
 import com.chipprbots.ethereum.network.p2p.messages.WireProtocol.Disconnect
 import com.chipprbots.ethereum.testing.Tags._
 import com.chipprbots.ethereum.utils.Config
@@ -58,7 +61,7 @@ class EtcPeerManagerSpec extends AnyFlatSpec with Matchers {
     requestSender.expectMsg(HandshakedPeers(Map(peer1 -> peer1Info, peer2 -> peer2Info)))
   }
 
-  it should "update max peer when receiving new block ETH63" taggedAs (UnitTest, NetworkTest) in new TestSetup {
+  it should "update max peer when receiving new block (ETH68)" taggedAs (UnitTest, NetworkTest) in new TestSetup {
     expectInitialSubscriptions()
     setupNewPeer(peer1, peer1Probe, peer1Info)
 
@@ -92,7 +95,7 @@ class EtcPeerManagerSpec extends AnyFlatSpec with Matchers {
 
     // when
     peersInfoHolder ! MessageFromPeer(
-      BlockHeaders(Seq(firstHeader, secondHeader, blockchainReader.genesisHeader)),
+      BlockHeaders(BigInt(0), Seq(firstHeader, secondHeader, blockchainReader.genesisHeader)),
       peer1.id
     )
 
@@ -197,7 +200,7 @@ class EtcPeerManagerSpec extends AnyFlatSpec with Matchers {
     setupNewPeer(peer1, peer1Probe, peer1Info)
 
     // given
-    val blockHeaders: BlockHeaders = BlockHeaders(Seq(DaoForkBlock.header))
+    val blockHeaders: BlockHeaders = BlockHeaders(BigInt(0), Seq(DaoForkBlock.header))
 
     // when
     peersInfoHolder ! MessageFromPeer(blockHeaders, peer1.id)
@@ -213,7 +216,7 @@ class EtcPeerManagerSpec extends AnyFlatSpec with Matchers {
 
     // given
     val blockHeaders: BlockHeaders =
-      BlockHeaders(Seq(Genesis.header.copy(number = Fixtures.Blocks.DaoForkBlock.header.number)))
+      BlockHeaders(BigInt(0), Seq(Genesis.header.copy(number = Fixtures.Blocks.DaoForkBlock.header.number)))
 
     // when
     peersInfoHolder ! MessageFromPeer(blockHeaders, peer1.id)
@@ -276,7 +279,7 @@ class EtcPeerManagerSpec extends AnyFlatSpec with Matchers {
     val firstHeader: BlockHeader = baseBlockHeader.copy(number = newMaxBlock)
 
     // Fresh peer received best block
-    peersInfoHolder ! MessageFromPeer(BlockHeaders(Seq(firstHeader)), freshPeer.id)
+    peersInfoHolder ! MessageFromPeer(BlockHeaders(BigInt(0), Seq(firstHeader)), freshPeer.id)
 
     // After receiving peer best block number, peer should be provided as handshaked peer
     requestSender.send(peersInfoHolder, GetHandshakedPeers)
@@ -301,7 +304,7 @@ class EtcPeerManagerSpec extends AnyFlatSpec with Matchers {
     requestSender.expectMsg(HandshakedPeers(Map(freshPeer -> genesisInfo)))
 
     // Fresh peer received best block
-    peersInfoHolder ! MessageFromPeer(BlockHeaders(Seq(Fixtures.Blocks.Genesis.header)), freshPeer.id)
+    peersInfoHolder ! MessageFromPeer(BlockHeaders(BigInt(0), Seq(Fixtures.Blocks.Genesis.header)), freshPeer.id)
 
     // receiving best block does not change a thing, as peer best block is it genesis
     requestSender.send(peersInfoHolder, GetHandshakedPeers)
@@ -378,9 +381,9 @@ class EtcPeerManagerSpec extends AnyFlatSpec with Matchers {
     sent.peerId shouldBe peer1.id
     sent.message.code shouldBe Codes.GetBlockHeadersCode
     // ETH/66+ uses request-id-prefixed envelope.
-    sent.message.underlyingMsg shouldBe a[com.chipprbots.ethereum.network.p2p.messages.ETH66.GetBlockHeaders]
+    sent.message.underlyingMsg shouldBe a[com.chipprbots.ethereum.network.p2p.messages.ETHPackets.GetBlockHeaders]
     val gbh =
-      sent.message.underlyingMsg.asInstanceOf[com.chipprbots.ethereum.network.p2p.messages.ETH66.GetBlockHeaders]
+      sent.message.underlyingMsg.asInstanceOf[com.chipprbots.ethereum.network.p2p.messages.ETHPackets.GetBlockHeaders]
     gbh.block shouldBe Right(eth68Info.remoteStatus.bestHash)
     gbh.maxHeaders shouldBe BigInt(1)
     gbh.skip shouldBe BigInt(0)
@@ -423,7 +426,7 @@ class EtcPeerManagerSpec extends AnyFlatSpec with Matchers {
     // header carries the bestHash from STATUS and a real block number; updateMaxBlock
     // should pick up the number and write it into PeerInfo.maxBlockNumber.
     val probeReply = baseBlockHeader.copy(number = 24463116)
-    peersInfoHolder ! MessageFromPeer(BlockHeaders(Seq(probeReply)), peer1.id)
+    peersInfoHolder ! MessageFromPeer(BlockHeaders(BigInt(0), Seq(probeReply)), peer1.id)
 
     requestSender.send(peersInfoHolder, PeerInfoRequest(peer1.id))
     val resp = requestSender.expectMsgType[PeerInfoResponse]

@@ -27,10 +27,8 @@ import com.chipprbots.ethereum.network.PeerId
 import com.chipprbots.ethereum.network.PeerManagerActor
 import com.chipprbots.ethereum.jsonrpc.NewPendingTransaction
 import com.chipprbots.ethereum.network.p2p.messages.Codes
-import com.chipprbots.ethereum.network.p2p.messages.ETH66
-import com.chipprbots.ethereum.network.p2p.messages.ETH66.GetPooledTransactions._
-import com.chipprbots.ethereum.network.p2p.messages.ETH67
-import com.chipprbots.ethereum.network.p2p.messages.ETH67.NewPooledTransactionHashes._
+import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.GetPooledTransactions._
+import com.chipprbots.ethereum.network.p2p.messages.ETHPackets
 import com.chipprbots.ethereum.transactions.SignedTransactionsFilterActor.ProperSignedTransactions
 import com.chipprbots.ethereum.utils.BlockchainConfig
 import com.chipprbots.ethereum.utils.ByteStringUtils.ByteStringOps
@@ -247,38 +245,38 @@ class PendingTransactionsManager(
 
     // ETH67+ NewPooledTransactionHashes — request unknown tx hashes via GetPooledTransactions
     case com.chipprbots.ethereum.network.PeerEventBusActor.PeerEvent
-          .MessageFromPeer(msg: ETH67.NewPooledTransactionHashes, peerId) =>
+          .MessageFromPeer(msg: ETHPackets.NewPooledTransactionHashes, peerId) =>
       val unknownHashes = msg.hashes.filterNot(h => pendingTransactions.asMap().containsKey(h))
       if (unknownHashes.nonEmpty) {
         // Track announced types/sizes for validation when PooledTransactions arrives
         msg.hashes.zip(msg.types).zip(msg.sizes).foreach { case ((hash, txType), size) =>
           pendingAnnouncements = pendingAnnouncements.updated(hash, (txType, size, peerId))
         }
-        val requestId = ETH66.nextRequestId
+        val requestId = ETHPackets.nextRequestId
         networkPeerManager ! NetworkPeerManagerActor.SendMessage(
-          ETH66.GetPooledTransactions(requestId, unknownHashes),
+          ETHPackets.GetPooledTransactions(requestId, unknownHashes),
           peerId
         )
       }
 
-    // ETH65 NewPooledTransactionHashes (legacy format — list of hashes only)
+    // ETH68/67 NewPooledTransactionHashes (hash+types+sizes format; also handles ETH65 hash-only via backward-compat decode)
     case com.chipprbots.ethereum.network.PeerEventBusActor.PeerEvent.MessageFromPeer(
-          msg: com.chipprbots.ethereum.network.p2p.messages.ETH65.NewPooledTransactionHashes,
+          msg: com.chipprbots.ethereum.network.p2p.messages.ETHPackets.NewPooledTransactionHashes,
           peerId
         ) =>
-      val unknownHashes = msg.txHashes.filterNot(h => pendingTransactions.asMap().containsKey(h))
+      val unknownHashes = msg.hashes.filterNot(h => pendingTransactions.asMap().containsKey(h))
       if (unknownHashes.nonEmpty) {
         log.debug("Requesting {} unknown pooled transactions from peer {}", unknownHashes.size, peerId)
-        val requestId = ETH66.nextRequestId
+        val requestId = ETHPackets.nextRequestId
         networkPeerManager ! NetworkPeerManagerActor.SendMessage(
-          ETH66.GetPooledTransactions(requestId, unknownHashes),
+          ETHPackets.GetPooledTransactions(requestId, unknownHashes),
           peerId
         )
       }
 
     // ETH66+ PooledTransactions response — add received txs to pool
     case com.chipprbots.ethereum.network.PeerEventBusActor.PeerEvent
-          .MessageFromPeer(msg: ETH66.PooledTransactions, peerId) =>
+          .MessageFromPeer(msg: ETHPackets.PooledTransactions, peerId) =>
       // Validate received txs against their announcements (type/size mismatch = blob violation)
       import com.chipprbots.ethereum.domain._
       val announcementViolation = msg.txs.zipWithIndex.exists { case (stx, idx) =>
@@ -356,7 +354,7 @@ class PendingTransactionsManager(
           }
         }
         val sizes = txsToNotify.map(stx => BigInt(SignedTransaction.byteArraySerializable.toBytes(stx).length))
-        val announcement = ETH67.NewPooledTransactionHashes(types, sizes, hashes)
+        val announcement = ETHPackets.NewPooledTransactionHashes(types, sizes, hashes)
         networkPeerManager ! NetworkPeerManagerActor.SendMessage(announcement, peer.id)
         txsToNotify.foreach(stx => setTxKnown(stx, peer.id))
       }

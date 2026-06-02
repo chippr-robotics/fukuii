@@ -71,9 +71,7 @@ case class EtcHelloExchangeState(handshakerConfiguration: NetworkHandshakerConfi
     )
 
     negotiationResult match {
-      case Some(Capability.ETH63) =>
-        log.debug("PROTOCOL_NEGOTIATED: clientId={}, protocol=eth/63, usesRequestId=false", hello.clientId)
-        EthNodeStatus63ExchangeState(handshakerConfiguration, supportsSnap, peerCapabilities, hello.clientId)
+
       case Some(Capability.ETH69) =>
         log.info(
           "PROTOCOL_NEGOTIATED: clientId={}, protocol=eth/69, supportsSnap={} (snap/1 explicit={})",
@@ -81,8 +79,6 @@ case class EtcHelloExchangeState(handshakerConfiguration: NetworkHandshakerConfi
           supportsSnap,
           peerCapabilities.contains(Capability.SNAP1)
         )
-        // ETH/69 and SNAP/1 are independent protocols. A peer can negotiate ETH/69 without
-        // advertising snap/1 in Hello. Use the actual negotiated value, same as ETH64-68.
         EthNodeStatus69ExchangeState(
           handshakerConfiguration,
           Capability.ETH69,
@@ -90,22 +86,12 @@ case class EtcHelloExchangeState(handshakerConfiguration: NetworkHandshakerConfi
           peerCapabilities,
           hello.clientId
         )
-      case Some(
-            negotiated @ (Capability.ETH64 | Capability.ETH65 | Capability.ETH66 | Capability.ETH67 | Capability.ETH68)
-          ) =>
+      case Some(Capability.ETH68) =>
         log.debug(
-          "PROTOCOL_NEGOTIATED: clientId={}, protocol={}, usesRequestId={}",
-          hello.clientId,
-          negotiated,
-          Capability.usesRequestId(negotiated)
-        )
-        EthNodeStatus68ExchangeState(
-          handshakerConfiguration,
-          negotiated,
-          supportsSnap,
-          peerCapabilities,
+          "PROTOCOL_NEGOTIATED: clientId={}, protocol=eth/68, usesRequestId=true",
           hello.clientId
         )
+        EthNodeStatus68ExchangeState(handshakerConfiguration, Capability.ETH68, supportsSnap, peerCapabilities, hello.clientId)
       case _ =>
         log.warn(
           "PROTOCOL_NEGOTIATION_FAILED: clientId={}, peerCaps=[{}], ourCaps=[{}], reason=IncompatibleP2pProtocolVersion",

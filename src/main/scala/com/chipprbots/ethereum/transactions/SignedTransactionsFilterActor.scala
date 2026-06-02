@@ -16,7 +16,7 @@ import com.chipprbots.ethereum.network.PeerEventBusActor.PeerSelector
 import com.chipprbots.ethereum.network.PeerEventBusActor.Subscribe
 import com.chipprbots.ethereum.network.PeerEventBusActor.SubscriptionClassifier.MessageClassifier
 import com.chipprbots.ethereum.network.PeerId
-import com.chipprbots.ethereum.network.p2p.messages.BaseETH6XMessages.SignedTransactions
+import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.SignedTransactions
 import com.chipprbots.ethereum.network.p2p.messages.Codes
 import com.chipprbots.ethereum.transactions.PendingTransactionsManager.AnnounceTransactions
 import com.chipprbots.ethereum.transactions.SignedTransactionsFilterActor.ProperSignedTransactions

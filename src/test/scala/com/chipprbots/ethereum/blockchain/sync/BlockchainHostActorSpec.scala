@@ -34,9 +34,15 @@ import com.chipprbots.ethereum.network.PeerId
 import com.chipprbots.ethereum.network.PeerManagerActor.FastSyncHostConfiguration
 import com.chipprbots.ethereum.network.PeerManagerActor.PeerConfiguration
 import com.chipprbots.ethereum.network.p2p.messages.Codes
-import com.chipprbots.ethereum.network.p2p.messages.ETH62._
-import com.chipprbots.ethereum.network.p2p.messages.ETH63.MptNodeEncoders._
-import com.chipprbots.ethereum.network.p2p.messages.ETH63._
+import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.GetNodeData
+import com.chipprbots.ethereum.blockchain.sync.codec.MptNodeCodecs._
+import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.NodeData
+import com.chipprbots.ethereum.blockchain.sync.codec.ReceiptCodecs._
+import com.chipprbots.ethereum.network.p2p.messages.ETHPackets
+import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.GetBlockHeaders
+import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.BlockHeaders
+import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.GetBlockBodies
+import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.BlockBodies
 import com.chipprbots.ethereum.network.rlpx.RLPxConnectionHandler.RLPxConfiguration
 import com.chipprbots.ethereum.utils.Config
 
@@ -72,10 +78,11 @@ class BlockchainHostActorSpec extends AnyFlatSpec with Matchers {
       .commit()
 
     // when
-    blockchainHost ! MessageFromPeer(GetReceipts(receiptsHashes), peerId)
+    blockchainHost ! MessageFromPeer(ETHPackets.GetReceipts(BigInt(0), receiptsHashes), peerId)
 
     // then
-    networkPeerManager.expectMsg(NetworkPeerManagerActor.SendMessage(Receipts(receipts), peerId))
+    networkPeerManager.expectMsg(NetworkPeerManagerActor.SendMessage(
+      ETHPackets.Receipts68(BigInt(0), com.chipprbots.ethereum.rlp.RLPList(receipts.map(rs => com.chipprbots.ethereum.rlp.RLPList(rs.map(_.toRLPEncodable): _*)): _*)), peerId))
   }
 
   it should "return BlockBodies for block hashes" taggedAs (UnitTest, SyncTest) in new TestSetup {
@@ -93,10 +100,10 @@ class BlockchainHostActorSpec extends AnyFlatSpec with Matchers {
       .commit()
 
     // when
-    blockchainHost ! MessageFromPeer(GetBlockBodies(blockBodiesHashes), peerId)
+    blockchainHost ! MessageFromPeer(ETHPackets.GetBlockBodies(BigInt(0), blockBodiesHashes), peerId)
 
     // then
-    networkPeerManager.expectMsg(NetworkPeerManagerActor.SendMessage(BlockBodies(blockBodies), peerId))
+    networkPeerManager.expectMsg(NetworkPeerManagerActor.SendMessage(ETHPackets.BlockBodies(BigInt(0), blockBodies), peerId))
   }
 
   it should "return block headers by block number" taggedAs (UnitTest, SyncTest) in new TestSetup {
@@ -112,11 +119,11 @@ class BlockchainHostActorSpec extends AnyFlatSpec with Matchers {
       .commit()
 
     // when
-    blockchainHost ! MessageFromPeer(GetBlockHeaders(Left(3), 2, 0, reverse = false), peerId)
+    blockchainHost ! MessageFromPeer(GetBlockHeaders(BigInt(0), Left(3), 2, 0, reverse = false), peerId)
 
     // then
     networkPeerManager.expectMsg(
-      NetworkPeerManagerActor.SendMessage(BlockHeaders(Seq(firstHeader, secondHeader)), peerId)
+      NetworkPeerManagerActor.SendMessage(BlockHeaders(BigInt(0), Seq(firstHeader, secondHeader)), peerId)
     )
   }
 
@@ -134,11 +141,11 @@ class BlockchainHostActorSpec extends AnyFlatSpec with Matchers {
       .commit()
 
     // when
-    blockchainHost ! MessageFromPeer(GetBlockHeaders(Left(3), 3, 0, reverse = false), peerId)
+    blockchainHost ! MessageFromPeer(GetBlockHeaders(BigInt(0), Left(3), 3, 0, reverse = false), peerId)
 
     // then
     networkPeerManager.expectMsg(
-      NetworkPeerManagerActor.SendMessage(BlockHeaders(Seq(firstHeader, secondHeader)), peerId)
+      NetworkPeerManagerActor.SendMessage(BlockHeaders(BigInt(0), Seq(firstHeader, secondHeader)), peerId)
     )
   }
 
@@ -154,11 +161,11 @@ class BlockchainHostActorSpec extends AnyFlatSpec with Matchers {
       .commit()
 
     // when
-    blockchainHost ! MessageFromPeer(GetBlockHeaders(Left(3), 2, 0, reverse = true), peerId)
+    blockchainHost ! MessageFromPeer(GetBlockHeaders(BigInt(0), Left(3), 2, 0, reverse = true), peerId)
 
     // then
     networkPeerManager.expectMsg(
-      NetworkPeerManagerActor.SendMessage(BlockHeaders(Seq(firstHeader, secondHeader)), peerId)
+      NetworkPeerManagerActor.SendMessage(BlockHeaders(BigInt(0), Seq(firstHeader, secondHeader)), peerId)
     )
   }
 
@@ -175,11 +182,11 @@ class BlockchainHostActorSpec extends AnyFlatSpec with Matchers {
       .commit()
 
     // when
-    blockchainHost ! MessageFromPeer(GetBlockHeaders(Right(firstHeader.hash), 2, 0, reverse = false), peerId)
+    blockchainHost ! MessageFromPeer(GetBlockHeaders(BigInt(0), Right(firstHeader.hash), 2, 0, reverse = false), peerId)
 
     // then
     networkPeerManager.expectMsg(
-      NetworkPeerManagerActor.SendMessage(BlockHeaders(Seq(firstHeader, secondHeader)), peerId)
+      NetworkPeerManagerActor.SendMessage(BlockHeaders(BigInt(0), Seq(firstHeader, secondHeader)), peerId)
     )
   }
 
@@ -198,13 +205,13 @@ class BlockchainHostActorSpec extends AnyFlatSpec with Matchers {
 
     // when
     blockchainHost ! MessageFromPeer(
-      GetBlockHeaders(Right(firstHeader.hash), maxHeaders = 2, skip = 1, reverse = false),
+      ETHPackets.GetBlockHeaders(BigInt(0), Right(firstHeader.hash), maxHeaders = 2, skip = 1, reverse = false),
       peerId
     )
 
     // then
     networkPeerManager.expectMsg(
-      NetworkPeerManagerActor.SendMessage(BlockHeaders(Seq(firstHeader, secondHeader)), peerId)
+      NetworkPeerManagerActor.SendMessage(BlockHeaders(BigInt(0), Seq(firstHeader, secondHeader)), peerId)
     )
   }
 
@@ -222,11 +229,11 @@ class BlockchainHostActorSpec extends AnyFlatSpec with Matchers {
       .commit()
 
     // when
-    blockchainHost ! MessageFromPeer(GetBlockHeaders(Right(firstHeader.hash), 2, 1, reverse = true), peerId)
+    blockchainHost ! MessageFromPeer(GetBlockHeaders(BigInt(0), Right(firstHeader.hash), 2, 1, reverse = true), peerId)
 
     // then
     networkPeerManager.expectMsg(
-      NetworkPeerManagerActor.SendMessage(BlockHeaders(Seq(firstHeader, secondHeader)), peerId)
+      NetworkPeerManagerActor.SendMessage(BlockHeaders(BigInt(0), Seq(firstHeader, secondHeader)), peerId)
     )
   }
 
@@ -244,11 +251,11 @@ class BlockchainHostActorSpec extends AnyFlatSpec with Matchers {
       .commit()
 
     // when
-    blockchainHost ! MessageFromPeer(GetBlockHeaders(Right(firstHeader.hash), 3, 1, reverse = true), peerId)
+    blockchainHost ! MessageFromPeer(GetBlockHeaders(BigInt(0), Right(firstHeader.hash), 3, 1, reverse = true), peerId)
 
     // then
     networkPeerManager.expectMsg(
-      NetworkPeerManagerActor.SendMessage(BlockHeaders(Seq(firstHeader, secondHeader)), peerId)
+      NetworkPeerManagerActor.SendMessage(BlockHeaders(BigInt(0), Seq(firstHeader, secondHeader)), peerId)
     )
   }
 
@@ -266,12 +273,12 @@ class BlockchainHostActorSpec extends AnyFlatSpec with Matchers {
       .commit()
 
     // when
-    blockchainHost ! MessageFromPeer(GetBlockHeaders(Right(firstHeader.hash), 4, 1, reverse = true), peerId)
+    blockchainHost ! MessageFromPeer(GetBlockHeaders(BigInt(0), Right(firstHeader.hash), 4, 1, reverse = true), peerId)
 
     // then
     networkPeerManager.expectMsg(
       NetworkPeerManagerActor.SendMessage(
-        BlockHeaders(Seq(firstHeader, secondHeader, blockchainReader.genesisHeader)),
+        BlockHeaders(BigInt(0), Seq(firstHeader, secondHeader, blockchainReader.genesisHeader)),
         peerId
       )
     )

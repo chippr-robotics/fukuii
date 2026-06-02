@@ -37,12 +37,10 @@ import com.chipprbots.ethereum.network.PeerEventBusActor.Subscribe
 import com.chipprbots.ethereum.network.PeerEventBusActor.SubscriptionClassifier.MessageClassifier
 import com.chipprbots.ethereum.network.PeerId
 import com.chipprbots.ethereum.network.p2p.Message
-import com.chipprbots.ethereum.network.p2p.messages.BaseETH6XMessages
 import com.chipprbots.ethereum.network.p2p.messages.Codes
-import com.chipprbots.ethereum.network.p2p.messages.ETH62._
-import com.chipprbots.ethereum.network.p2p.messages.ETH62.{BlockHeaders => ETH62BlockHeaders}
-import com.chipprbots.ethereum.network.p2p.messages.ETH63.NodeData
-import com.chipprbots.ethereum.network.p2p.messages.ETH66.{BlockHeaders => ETH66BlockHeaders}
+import com.chipprbots.ethereum.network.p2p.messages.ETHPackets
+import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.NewBlockHashes.NewBlockHashes
+import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.NewBlockHashes.BlockHash
 import com.chipprbots.ethereum.network.p2p.messages.ETH69
 import com.chipprbots.ethereum.utils.ByteStringUtils
 import com.chipprbots.ethereum.utils.Config.SyncConfig
@@ -417,7 +415,7 @@ class BlockFetcher(
         supervisor ! ProgressProtocol.GotNewBlock(newState.knownTop)
         fetchBlocks(newState)
 
-      case AdaptedMessageFromEventBus(BaseETH6XMessages.NewBlock(block, _), peerId) =>
+      case AdaptedMessageFromEventBus(ETHPackets.NewBlock(block, _), peerId) =>
         handleNewBlock(block, peerId, state)
 
       case BlockImportFailed(blockNr, reason) =>
@@ -429,15 +427,7 @@ class BlockFetcher(
         }
         fetchBlocks(newState)
 
-      case AdaptedMessageFromEventBus(ETH62BlockHeaders(headers), _) =>
-        headers.lastOption
-          .map { bh =>
-            log.debug("Candidate for new top at block {}, current known top {}", bh.number, state.knownTop)
-            val newState = state.withPossibleNewTopAt(bh.number)
-            fetchBlocks(newState)
-          }
-          .getOrElse(processFetchCommands(state))
-      case AdaptedMessageFromEventBus(ETH66BlockHeaders(_, headers), _) =>
+      case AdaptedMessageFromEventBus(ETHPackets.BlockHeaders(_, headers), _) =>
         headers.lastOption
           .map { bh =>
             log.debug("Candidate for new top at block {}, current known top {}", bh.number, state.knownTop)
@@ -672,5 +662,5 @@ object BlockFetcher {
 
   sealed trait FetchResponse
   final case class PickedBlocks(blocks: NonEmptyList[Block]) extends FetchResponse
-  final case class FetchedStateNode(stateNode: NodeData) extends FetchResponse
+  final case class FetchedStateNode(stateNode: ETHPackets.NodeData) extends FetchResponse
 }

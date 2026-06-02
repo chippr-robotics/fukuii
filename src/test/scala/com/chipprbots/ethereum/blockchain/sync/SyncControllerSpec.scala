@@ -39,30 +39,18 @@ import com.chipprbots.ethereum.network.NetworkPeerManagerActor
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor.HandshakedPeers
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor.SendMessage
 import com.chipprbots.ethereum.network.PeerEventBusActor.PeerEvent.MessageFromPeer
-import com.chipprbots.ethereum.network.p2p.messages.ETH62.{BlockBodies, GetBlockBodies => ETH62GetBlockBodies}
-import com.chipprbots.ethereum.network.p2p.messages.ETH62.{BlockHeaders => ETH62BlockHeaders}
-import com.chipprbots.ethereum.network.p2p.messages.ETH62.GetBlockBodies.GetBlockBodiesEnc
-import com.chipprbots.ethereum.network.p2p.messages.ETH62.GetBlockHeaders.{
+import com.chipprbots.ethereum.network.p2p.messages.ETHPackets
+import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.{BlockBodies, GetBlockBodies}
+import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.{BlockHeaders => ETH62BlockHeaders}
+import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.GetBlockBodies.GetBlockBodiesEnc
+import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.GetBlockHeaders.{
   GetBlockHeadersEnc => ETH62GetBlockHeadersEnc
 }
-import com.chipprbots.ethereum.network.p2p.messages.ETH62.{GetBlockHeaders => ETH62GetBlockHeaders}
-import com.chipprbots.ethereum.network.p2p.messages.ETH63.GetNodeData.{GetNodeDataEnc => ETH63GetNodeDataEnc}
-import com.chipprbots.ethereum.network.p2p.messages.ETH63.GetReceipts.{GetReceiptsEnc => ETH63GetReceiptsEnc}
-import com.chipprbots.ethereum.network.p2p.messages.ETH63.{GetReceipts => ETH63GetReceipts}
-import com.chipprbots.ethereum.network.p2p.messages.ETH63.{NodeData => ETH63NodeData}
-import com.chipprbots.ethereum.network.p2p.messages.ETH63.{Receipts => ETH63Receipts}
-import com.chipprbots.ethereum.network.p2p.messages.ETH66.{BlockBodies => ETH66BlockBodies}
-import com.chipprbots.ethereum.network.p2p.messages.ETH66.{BlockHeaders => ETH66BlockHeaders}
-import com.chipprbots.ethereum.network.p2p.messages.ETH66.GetBlockBodies.{GetBlockBodiesEnc => ETH66GetBlockBodiesEnc}
-import com.chipprbots.ethereum.network.p2p.messages.ETH66.GetBlockHeaders.{
-  GetBlockHeadersEnc => ETH66GetBlockHeadersEnc
-}
-import com.chipprbots.ethereum.network.p2p.messages.ETH66.{GetBlockHeaders => ETH66GetBlockHeaders}
-import com.chipprbots.ethereum.network.p2p.messages.ETH66.GetNodeData.{GetNodeDataEnc => ETH66GetNodeDataEnc}
-import com.chipprbots.ethereum.network.p2p.messages.ETH66.GetReceipts.{GetReceiptsEnc => ETH66GetReceiptsEnc}
-import com.chipprbots.ethereum.network.p2p.messages.ETH66.{GetNodeData => ETH66GetNodeData}
-import com.chipprbots.ethereum.network.p2p.messages.ETH66.{NodeData => ETH66NodeData}
-import com.chipprbots.ethereum.network.p2p.messages.ETH66.{Receipts => ETH66Receipts}
+import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.{GetBlockHeaders => ETH62GetBlockHeaders}
+import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.GetNodeData.{GetNodeDataEnc => ETH63GetNodeDataEnc}
+import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.GetReceipts.{GetReceiptsEnc => ETH63GetReceiptsEnc}
+import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.{GetReceipts => ETH63GetReceipts}
+import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.{NodeData => ETH63NodeData}
 import com.chipprbots.ethereum.rlp.RLPList
 import com.chipprbots.ethereum.rlp.RLPValue
 import com.chipprbots.ethereum.utils.BlockchainConfig
@@ -277,7 +265,7 @@ class SyncControllerSpec
 
       // Send block that is way forward, we should ignore that block and blacklist that peer
       val futureHeaders = Seq(defaultPivotBlockHeader.copy(number = defaultPivotBlockHeader.number + 20))
-      val futureHeadersMessage = PeerRequestHandler.ResponseReceived(peer2, ETH66BlockHeaders(0, futureHeaders), 2L)
+      val futureHeadersMessage = PeerRequestHandler.ResponseReceived(peer2, ETHPackets.BlockHeaders(BigInt(0), futureHeaders), 2L)
       implicit val ec = system.dispatcher
       system.scheduler.scheduleAtFixedRate(0.seconds, 0.5.seconds, fast, futureHeadersMessage)
 
@@ -877,92 +865,67 @@ class SyncControllerSpec
             this
 
           // Handle ETH66 GetBlockHeaders (with requestId)
-          case SendMessage(msg: ETH66GetBlockHeadersEnc, peer) =>
+          case SendMessage(msg: ETHPackets.GetBlockHeaders.GetBlockHeadersEnc, peer) =>
             val underlyingMessage = msg.underlyingMsg
             val requestId = underlyingMessage.requestId
             val requestedBlockNumber = underlyingMessage.block.swap.toOption.get
             if (requestedBlockNumber == pivotHeader.number) {
               // pivot block
-              sender ! MessageFromPeer(ETH66BlockHeaders(requestId, Seq(pivotHeader)), peer)
+              sender ! MessageFromPeer(ETHPackets.BlockHeaders(requestId, Seq(pivotHeader)), peer)
             } else {
               val headers = generateBlockHeaders66(underlyingMessage, blockchainData)
-              sender ! MessageFromPeer(ETH66BlockHeaders(requestId, headers), peer)
+              sender ! MessageFromPeer(ETHPackets.BlockHeaders(requestId, headers), peer)
             }
             this
 
-          // Handle ETH62 GetBlockHeaders (without requestId)
-          case SendMessage(msg: ETH62GetBlockHeadersEnc, peer) =>
-            val underlyingMessage = msg.underlyingMsg
-            val requestedBlockNumber = underlyingMessage.block.swap.toOption.get
-            if (requestedBlockNumber == pivotHeader.number) {
-              // pivot block
-              sender ! MessageFromPeer(ETH62BlockHeaders(Seq(pivotHeader)), peer)
-            } else {
-              val headers = generateBlockHeaders62(underlyingMessage, blockchainData)
-              sender ! MessageFromPeer(ETH62BlockHeaders(headers), peer)
-            }
-            this
-
-          // Handle ETH66 GetReceipts (with requestId)
-          case SendMessage(msg: ETH66GetReceiptsEnc, peer) if !onlyPivot =>
+          // Handle ETH68/69 GetReceipts (with requestId)
+          case SendMessage(msg: ETHPackets.GetReceipts.GetReceiptsEnc, peer) if !onlyPivot =>
             val requestId = msg.underlyingMsg.requestId
             if (failedReceiptsTries > 0) {
-              sender ! MessageFromPeer(ETH66Receipts(requestId, RLPList()), peer)
+              sender ! MessageFromPeer(ETHPackets.Receipts68(requestId, RLPList()), peer)
               this.copy(failedReceiptsTries = failedReceiptsTries - 1)
             } else {
               val rec = msg.underlyingMsg.blockHashes.flatMap(h => blockchainData.receipts.get(h))
               // For empty receipts, create an RLPList with empty receipt sequences
               val receiptsRlp = RLPList(rec.map(_ => RLPList()): _*)
-              sender ! MessageFromPeer(ETH66Receipts(requestId, receiptsRlp), peer)
+              sender ! MessageFromPeer(ETHPackets.Receipts68(requestId, receiptsRlp), peer)
               this
             }
 
-          // Handle ETH63 GetReceipts (without requestId)
-          case SendMessage(msg: ETH63GetReceiptsEnc, peer) if !onlyPivot =>
-            if (failedReceiptsTries > 0) {
-              sender ! MessageFromPeer(ETH63Receipts(Seq()), peer)
-              this.copy(failedReceiptsTries = failedReceiptsTries - 1)
-            } else {
-              val rec = msg.underlyingMsg.blockHashes.flatMap(h => blockchainData.receipts.get(h))
-              sender ! MessageFromPeer(ETH63Receipts(rec), peer)
-              this
-            }
-
-          case SendMessage(msg: ETH66GetBlockBodiesEnc, peer) if !onlyPivot =>
+          case SendMessage(msg: ETHPackets.GetBlockBodies.GetBlockBodiesEnc, peer) if !onlyPivot =>
             val requestId = msg.underlyingMsg.requestId
             if (failedBodiesTries > 0) {
-              sender ! MessageFromPeer(ETH66BlockBodies(requestId, Seq.empty), peer)
+              sender ! MessageFromPeer(ETHPackets.BlockBodies(requestId, Seq.empty), peer)
               this.copy(failedBodiesTries = failedBodiesTries - 1)
             } else {
               val bod = msg.underlyingMsg.hashes.flatMap(h => blockchainData.bodies.get(h))
-              sender ! MessageFromPeer(ETH66BlockBodies(requestId, bod), peer)
+              sender ! MessageFromPeer(ETHPackets.BlockBodies(requestId, bod), peer)
               this
             }
 
           case SendMessage(msg: GetBlockBodiesEnc, peer) if !onlyPivot =>
+            val requestId = msg.underlyingMsg.requestId
             if (failedBodiesTries > 0) {
-              sender ! MessageFromPeer(BlockBodies(Seq()), peer)
+              sender ! MessageFromPeer(BlockBodies(requestId, Seq.empty), peer)
               this.copy(failedBodiesTries = failedBodiesTries - 1)
             } else {
               val bod = msg.underlyingMsg.hashes.flatMap(h => blockchainData.bodies.get(h))
-              sender ! MessageFromPeer(BlockBodies(bod), peer)
+              sender ! MessageFromPeer(BlockBodies(requestId, bod), peer)
               this
             }
 
-          // Handle ETH66 GetNodeData (with requestId)
-          case SendMessage(msg: ETH66GetNodeDataEnc, peer) if !onlyPivot =>
-            val requestId = msg.underlyingMsg.requestId
+          // Handle GetNodeData (EIP-4938: rejected in ETH68, but still handled for legacy)
+          case SendMessage(msg: ETHPackets.GetNodeData.GetNodeDataEnc, peer) if !onlyPivot =>
             stateDownloadStarted = true
             if (!failedNodeRequest) {
               sender ! MessageFromPeer(
-                ETH66NodeData(requestId, RLPList(RLPValue(defaultStateMptLeafWithAccount.toArray))),
+                ETHPackets.NodeData(Seq(ByteString(defaultStateMptLeafWithAccount.toArray))),
                 peer
               )
             }
             this
 
-          // Handle ETH63 GetNodeData (without requestId)
-          case SendMessage(_: ETH63GetNodeDataEnc, peer) if !onlyPivot =>
+
             stateDownloadStarted = true
             if (!failedNodeRequest) {
               sender ! MessageFromPeer(ETH63NodeData(Seq(defaultStateMptLeafWithAccount)), peer)
@@ -1004,7 +967,7 @@ class SyncControllerSpec
     }
 
     private def generateBlockHeaders66(
-        underlyingMessage: ETH66GetBlockHeaders,
+        underlyingMessage: ETHPackets.GetBlockHeaders,
         blockchainData: BlockchainData
     ): Seq[BlockHeader] = {
       val start = underlyingMessage.block.swap.toOption.get

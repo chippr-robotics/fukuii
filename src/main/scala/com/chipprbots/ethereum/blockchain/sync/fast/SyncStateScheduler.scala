@@ -31,7 +31,7 @@ import com.chipprbots.ethereum.mpt.LeafNode
 import com.chipprbots.ethereum.mpt.HexPrefix
 import com.chipprbots.ethereum.mpt.MerklePatriciaTrie
 import com.chipprbots.ethereum.mpt.MptNode
-import com.chipprbots.ethereum.network.p2p.messages.ETH63.MptNodeEncoders.MptNodeDec
+import com.chipprbots.ethereum.blockchain.sync.codec.MptNodeCodecs.MptNodeDec
 
 /** Scheduler which traverses Merkle patricia trie in DFS fashion, while also creating requests for nodes missing in
   * traversed trie. Traversal example: Merkle Patricia Trie with 2 leaf child nodes, each with non empty code value.

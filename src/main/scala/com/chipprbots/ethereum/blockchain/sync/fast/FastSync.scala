@@ -41,17 +41,9 @@ import com.chipprbots.ethereum.domain._
 import com.chipprbots.ethereum.mpt.MerklePatriciaTrie
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor.PeerInfo
 import com.chipprbots.ethereum.network.Peer
-import com.chipprbots.ethereum.network.p2p.messages.BaseETH6XMessages
 import com.chipprbots.ethereum.network.p2p.messages.Capability
 import com.chipprbots.ethereum.network.p2p.messages.Codes
-import com.chipprbots.ethereum.network.p2p.messages.ETH62._
-import com.chipprbots.ethereum.network.p2p.messages.ETH62.{BlockHeaders => ETH62BlockHeaders}
-import com.chipprbots.ethereum.network.p2p.messages.ETH63
-import com.chipprbots.ethereum.network.p2p.messages.ETH63._
-import com.chipprbots.ethereum.network.p2p.messages.ETH66
-import com.chipprbots.ethereum.network.p2p.messages.ETH66.{BlockBodies => ETH66BlockBodies}
-import com.chipprbots.ethereum.network.p2p.messages.ETH66.{BlockHeaders => ETH66BlockHeaders}
-import com.chipprbots.ethereum.network.p2p.messages.ETH66.{Receipts => ETH66Receipts}
+import com.chipprbots.ethereum.network.p2p.messages.ETHPackets
 import com.chipprbots.ethereum.nodebuilder.BlockchainConfigBuilder
 import com.chipprbots.ethereum.rlp.RLPList
 import com.chipprbots.ethereum.utils.ByteStringUtils
@@ -300,7 +292,7 @@ class FastSync(
     }
 
     private def handleResponses: Receive = {
-      case ResponseReceived(peer, ETH62BlockHeaders(blockHeaders), timeTaken) =>
+      case ResponseReceived(peer, ETHPackets.BlockHeaders(_, blockHeaders), timeTaken) =>
         log.debug(
           "Received {} block headers from peer [{}] in {} ms",
           blockHeaders.size,
@@ -319,26 +311,8 @@ class FastSync(
           else
             blacklist.add(peer.id, blacklistDuration, WrongBlockHeaders)
         }
-      case ResponseReceived(peer, ETH66BlockHeaders(_, blockHeaders), timeTaken) =>
-        log.debug(
-          "Received {} block headers from peer [{}] in {} ms",
-          blockHeaders.size,
-          peer.id,
-          timeTaken
-        )
-        FastSyncMetrics.setBlockHeadersDownloadTime(timeTaken)
 
-        requestedHeaders.get(peer).foreach { requestedNum =>
-          removeRequestHandler(sender())
-          requestedHeaders -= peer
-          if (
-            blockHeaders.nonEmpty && blockHeaders.size <= requestedNum && blockHeaders.head.number == syncState.bestBlockHeaderNumber + 1
-          )
-            handleBlockHeaders(peer, blockHeaders)
-          else
-            blacklist.add(peer.id, blacklistDuration, WrongBlockHeaders)
-        }
-      case ResponseReceived(peer, BlockBodies(blockBodies), timeTaken) =>
+      case ResponseReceived(peer, ETHPackets.BlockBodies(_, blockBodies), timeTaken) =>
         log.debug("Received {} block bodies from peer [{}] in {} ms", blockBodies.size, peer.id, timeTaken)
         FastSyncMetrics.setBlockBodiesDownloadTime(timeTaken)
 
@@ -346,30 +320,14 @@ class FastSync(
         requestedBlockBodies -= sender()
         removeRequestHandler(sender())
         handleBlockBodies(peer, requestedBodies, blockBodies)
-      case ResponseReceived(peer, ETH66BlockBodies(_, blockBodies), timeTaken) =>
-        log.debug("Received {} block bodies (ETH66) from peer [{}] in {} ms", blockBodies.size, peer.id, timeTaken)
-        FastSyncMetrics.setBlockBodiesDownloadTime(timeTaken)
-
-        val requestedBodies = requestedBlockBodies.getOrElse(sender(), Nil)
-        requestedBlockBodies -= sender()
-        removeRequestHandler(sender())
-        handleBlockBodies(peer, requestedBodies, blockBodies)
-      case ResponseReceived(peer, Receipts(receipts), timeTaken) =>
-        log.debug("Received {} receipts from peer [{}] in {} ms", receipts.size, peer.id, timeTaken)
-        FastSyncMetrics.setBlockReceiptsDownloadTime(timeTaken)
-
-        val requestedHashes = requestedReceipts.getOrElse(sender(), Nil)
-        requestedReceipts -= sender()
-        removeRequestHandler(sender())
-        handleReceipts(peer, requestedHashes, receipts)
-      case ResponseReceived(peer, eth66Receipts: ETH66Receipts, timeTaken) =>
+      case ResponseReceived(peer, receipts68: ETHPackets.Receipts68, timeTaken) =>
         // Convert ETH66 RLPList format to Seq[Seq[Receipt]] expected by handleReceipts.
         // NOTE: Typed receipts (EIP-2718-style) can arrive on the wire as
         //   RLPValue(typeByte || rlp(payload))
         // so we must expand them before calling toTypedRLPEncodables/toReceipt.
         val receipts: Seq[Seq[Receipt]] = {
-          import ETH63.ReceiptImplicits._
-          import BaseETH6XMessages.TypedTransaction._
+          import com.chipprbots.ethereum.blockchain.sync.codec.ReceiptCodecs._
+          import ETHPackets.TypedTransaction._
           import com.chipprbots.ethereum.rlp.{RLPEncodeable, RLPException, RLPValue, rawDecode}
 
           def expandTypedReceipts(items: Seq[RLPEncodeable]): Seq[RLPEncodeable] =
@@ -394,12 +352,12 @@ class FastSync(
               case other => Seq(other)
             }
 
-          eth66Receipts.receiptsForBlocks.items.flatMap {
+          receipts68.receiptsForBlocks.items.flatMap {
             case r: RLPList =>
               Some(expandTypedReceipts(r.items).toTypedRLPEncodables.map(_.toReceipt))
             case other =>
               log.warning(
-                "Unexpected RLP item type in ETH66Receipts from peer [{}]: {}",
+                "Unexpected RLP item type in Receipts68 from peer [{}]: {}",
                 peer.id,
                 other.getClass.getSimpleName
               )
@@ -1134,38 +1092,17 @@ class FastSync(
 
       log.debug("Requesting [{}] receipts from peer [{}]", receiptsToGet.size, peer.id.value)
 
-      // Create message in correct format based on peer's negotiated capability
-      val usesRequestId = handshakedPeers
-        .get(peer.id)
-        .exists(peerWithInfo => Capability.usesRequestId(peerWithInfo.peerInfo.remoteStatus.capability))
-
-      val handler = if (usesRequestId) {
-        // Use ETH66 format for ETH66+ peers
-        context.actorOf(
-          PeerRequestHandler.props[ETH66.GetReceipts, ETH66Receipts](
-            peer,
-            peerResponseTimeout,
-            networkPeerManager,
-            peerEventBus,
-            requestMsg = ETH66.GetReceipts(ETH66.nextRequestId, receiptsToGet),
-            responseMsgCode = Codes.ReceiptsCode
-          ),
-          s"$countActor-peer-request-handler-receipts"
-        )
-      } else {
-        // Use ETH63 format for older peers
-        context.actorOf(
-          PeerRequestHandler.props[GetReceipts, Receipts](
-            peer,
-            peerResponseTimeout,
-            networkPeerManager,
-            peerEventBus,
-            requestMsg = GetReceipts(receiptsToGet),
-            responseMsgCode = Codes.ReceiptsCode
-          ),
-          s"$countActor-peer-request-handler-receipts"
-        )
-      }
+      val handler = context.actorOf(
+        PeerRequestHandler.props[ETHPackets.GetReceipts, ETHPackets.Receipts68](
+          peer,
+          peerResponseTimeout,
+          networkPeerManager,
+          peerEventBus,
+          requestMsg = ETHPackets.GetReceipts(ETHPackets.nextRequestId, receiptsToGet),
+          responseMsgCode = Codes.ReceiptsCode
+        ),
+        s"$countActor-peer-request-handler-receipts"
+      )
 
       context.watch(handler)
       assignedHandlers += (handler -> peer)
@@ -1179,38 +1116,17 @@ class FastSync(
 
       log.debug("Requesting [{}] block bodies from peer [{}]", blockBodiesToGet.size, peer.id.value)
 
-      // Create message in correct format based on peer's negotiated capability
-      val usesRequestId = handshakedPeers
-        .get(peer.id)
-        .exists(peerWithInfo => Capability.usesRequestId(peerWithInfo.peerInfo.remoteStatus.capability))
-
-      val handler = if (usesRequestId) {
-        // Use ETH66 format for ETH66+ peers
-        context.actorOf(
-          PeerRequestHandler.props[ETH66.GetBlockBodies, ETH66BlockBodies](
-            peer,
-            peerResponseTimeout,
-            networkPeerManager,
-            peerEventBus,
-            requestMsg = ETH66.GetBlockBodies(ETH66.nextRequestId, blockBodiesToGet),
-            responseMsgCode = Codes.BlockBodiesCode
-          ),
-          s"$countActor-peer-request-handler-block-bodies"
-        )
-      } else {
-        // Use ETH62 format for older peers
-        context.actorOf(
-          PeerRequestHandler.props[GetBlockBodies, BlockBodies](
-            peer,
-            peerResponseTimeout,
-            networkPeerManager,
-            peerEventBus,
-            requestMsg = GetBlockBodies(blockBodiesToGet),
-            responseMsgCode = Codes.BlockBodiesCode
-          ),
-          s"$countActor-peer-request-handler-block-bodies"
-        )
-      }
+      val handler = context.actorOf(
+        PeerRequestHandler.props[ETHPackets.GetBlockBodies, ETHPackets.BlockBodies](
+          peer,
+          peerResponseTimeout,
+          networkPeerManager,
+          peerEventBus,
+          requestMsg = ETHPackets.GetBlockBodies(ETHPackets.nextRequestId, blockBodiesToGet),
+          responseMsgCode = Codes.BlockBodiesCode
+        ),
+        s"$countActor-peer-request-handler-block-bodies"
+      )
 
       context.watch(handler)
       assignedHandlers += (handler -> peer)
@@ -1234,33 +1150,18 @@ class FastSync(
       if (usesRequestId) {
         // Use ETH66 format for ETH66+ peers
         val handler = context.actorOf(
-          PeerRequestHandler.props[ETH66.GetBlockHeaders, ETH66BlockHeaders](
+          PeerRequestHandler.props[ETHPackets.GetBlockHeaders, ETHPackets.BlockHeaders](
             peer,
             peerResponseTimeout,
             networkPeerManager,
             peerEventBus,
-            requestMsg = ETH66.GetBlockHeaders(
-              ETH66.nextRequestId,
+            requestMsg = ETHPackets.GetBlockHeaders(
+              ETHPackets.nextRequestId,
               Left(syncState.bestBlockHeaderNumber + 1),
               limit,
               skip = 0,
               reverse = false
             ),
-            responseMsgCode = Codes.BlockHeadersCode
-          ),
-          BlockHeadersHandlerName
-        )
-        context.watch(handler)
-        assignedHandlers += (handler -> peer)
-      } else {
-        // Use ETH62 format for ETH63-65 peers
-        val handler = context.actorOf(
-          PeerRequestHandler.props[GetBlockHeaders, BlockHeaders](
-            peer,
-            peerResponseTimeout,
-            networkPeerManager,
-            peerEventBus,
-            requestMsg = GetBlockHeaders(Left(syncState.bestBlockHeaderNumber + 1), limit, skip = 0, reverse = false),
             responseMsgCode = Codes.BlockHeadersCode
           ),
           BlockHeadersHandlerName

@@ -59,6 +59,10 @@ object ETHPackets {
   // Replaces ETH66.HasRequestId once ETH66 is deleted.
   trait HasRequestId { def requestId: BigInt }
 
+  // Replaces ETHPackets.nextRequestId once ETH66 is deleted.
+  private val requestIdCounter = new java.util.concurrent.atomic.AtomicLong(1L)
+  def nextRequestId: BigInt = BigInt(requestIdCounter.getAndIncrement())
+
   // ── RLP CODECS (copied from BaseETH6XMessages — needed for AccessListItem, SetCodeAuthorization) ──
 
   implicit val addressCodec: RLPCodec[Address] =
@@ -94,7 +98,7 @@ object ETHPackets {
     )
 
   // ── TYPED TRANSACTION HELPERS ────────────────────────────────────────────────
-  // Copied from BaseETH6XMessages.TypedTransaction — needed by SignedTransactions and PooledTransactions.
+  // Copied from ETHPackets.TypedTransaction — needed by SignedTransactions and PooledTransactions.
 
   object TypedTransaction {
     implicit class TypedTransactionsRLPAggregator(val encodables: Seq[RLPEncodeable]) extends AnyVal {
@@ -314,7 +318,7 @@ object ETHPackets {
   }
 
   // ── SIGNED TRANSACTIONS ───────────────────────────────────────────────────────
-  // Source: BaseETH6XMessages.SignedTransactions (full copy, standalone)
+  // Source: ETHPackets.SignedTransactions (full copy, standalone)
 
   object SignedTransactions {
 
@@ -500,6 +504,25 @@ object ETHPackets {
           case _                  => rawDecode(bytes)
         }).toSignedTransaction
       }
+
+      /** Decode a signed transaction, preserving raw bytes for network-wrapped EIP-4844 blob txs.
+        * Returns (SignedTransaction, Some(rawBytes)) for Type-3 in network-wrapped form, else (stx, None).
+        */
+      def toSignedTransactionWithSidecar: (SignedTransaction, Option[Array[Byte]]) = {
+        val first = bytes(0)
+        first match {
+          case Transaction.Type03 =>
+            val decoded = rawDecode(bytes.tail)
+            decoded match {
+              case outer: RLPList if outer.items.size == 4 && outer.items.head.isInstanceOf[RLPList] =>
+                val stx = PrefixedRLPEncodable(Transaction.Type03, outer.items.head).toSignedTransaction
+                (stx, Some(bytes))
+              case _ =>
+                (PrefixedRLPEncodable(Transaction.Type03, decoded).toSignedTransaction, None)
+            }
+          case _ => (bytes.toSignedTransaction, None)
+        }
+      }
     }
 
     implicit class SignedTransactionsEnc(val underlyingMsg: SignedTransactions)
@@ -526,7 +549,7 @@ object ETHPackets {
   }
 
   // ── NEW BLOCK ─────────────────────────────────────────────────────────────────
-  // Source: BaseETH6XMessages.NewBlock
+  // Source: ETHPackets.NewBlock
 
   object NewBlock {
     implicit class NewBlockEnc(val underlyingMsg: NewBlock)
@@ -1071,5 +1094,49 @@ object ETHPackets {
   case class BlockRangeUpdate(earliestBlock: BigInt, latestBlock: BigInt, latestBlockHash: ByteString) extends Message {
     override val code: Int             = Codes.BlockRangeUpdateCode
     override def toShortString: String = s"BlockRangeUpdate(earliest=$earliestBlock, latest=$latestBlock)"
+  }
+
+  // ── LEGACY TYPES: GetNodeData / NodeData (EIP-4938: removed in ETH68) ──────────────────
+  // Retained so BlockchainHostActor can respond to legacy peers and StateNodeFetcher can
+  // attempt fallback requests. ETH68MessageDecoder REJECTS these on inbound — they are
+  // outbound-only on Fukuii's modern peer set (all ETH68/69 peers will reject them).
+
+  object GetNodeData {
+    implicit class GetNodeDataEnc(val underlyingMsg: GetNodeData)
+        extends MessageSerializableImplicit[GetNodeData](underlyingMsg)
+        with RLPSerializable {
+      override def code: Int = Codes.GetNodeDataCode
+      override def toRLPEncodable: RLPEncodeable = toRlpList(msg.mptElementsHashes)
+    }
+  }
+
+  case class GetNodeData(mptElementsHashes: Seq[ByteString]) extends Message {
+    override def code: Int             = Codes.GetNodeDataCode
+    override def toShortString: String = s"GetNodeData{ hashes: <${mptElementsHashes.size} state tree hashes> }"
+  }
+
+  object NodeData {
+    implicit class NodeDataEnc(val underlyingMsg: NodeData)
+        extends MessageSerializableImplicit[NodeData](underlyingMsg)
+        with RLPSerializable {
+      override def code: Int             = Codes.NodeDataCode
+      override def toRLPEncodable: RLPEncodeable = RLPList(msg.values.map(v => RLPValue(v.toArray[Byte])): _*)
+    }
+
+    implicit class NodeDataDec(val bytes: Array[Byte]) extends AnyVal {
+      def toNodeData: NodeData = rawDecode(bytes) match {
+        case rlpList: RLPList =>
+          NodeData(rlpList.items.map {
+            case RLPValue(bytes) => ByteString(bytes)
+            case _               => throw new RuntimeException("Cannot decode NodeData item")
+          })
+        case _ => throw new RuntimeException("Cannot decode NodeData")
+      }
+    }
+  }
+
+  case class NodeData(values: Seq[ByteString]) extends Message {
+    override def code: Int             = Codes.NodeDataCode
+    override def toShortString: String = s"NodeData{ values: <${values.size} nodes> }"
   }
 }

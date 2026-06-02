@@ -15,7 +15,7 @@ import com.chipprbots.ethereum.crypto
 import com.chipprbots.ethereum.crypto.ECDSASignature
 import com.chipprbots.ethereum.crypto.kec256
 import com.chipprbots.ethereum.mpt.ByteArraySerializable
-import com.chipprbots.ethereum.network.p2p.messages.BaseETH6XMessages.SignedTransactions._
+import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.SignedTransactions._
 import com.chipprbots.ethereum.rlp.RLPImplicitConversions._
 import com.chipprbots.ethereum.rlp.RLPImplicits.given
 import com.chipprbots.ethereum.rlp.{encode => rlpEncode, _}
@@ -453,7 +453,7 @@ object SignedTransaction {
     *   the transaction payload to sign for Transaction with access list
     */
   private def getTWALBytesToSign(tx: TransactionWithAccessList): Array[Byte] = {
-    import com.chipprbots.ethereum.network.p2p.messages.BaseETH6XMessages.accessListItemCodec
+    import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.accessListItemCodec
     val receivingAddressAsArray: Array[Byte] = tx.receivingAddress.map(_.toArray).getOrElse(Array.empty[Byte])
     crypto.kec256(
       rlpEncode(
@@ -475,7 +475,7 @@ object SignedTransaction {
   }
 
   private def getTWDFBytesToSign(tx: TransactionWithDynamicFee): Array[Byte] = {
-    import com.chipprbots.ethereum.network.p2p.messages.BaseETH6XMessages.accessListItemCodec
+    import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.accessListItemCodec
     val receivingAddressAsArray: Array[Byte] = tx.receivingAddress.map(_.toArray).getOrElse(Array.empty[Byte])
     crypto.kec256(
       rlpEncode(
@@ -498,7 +498,7 @@ object SignedTransaction {
   }
 
   private def getBlobTxBytesToSign(tx: BlobTransaction): Array[Byte] = {
-    import com.chipprbots.ethereum.network.p2p.messages.BaseETH6XMessages.accessListItemCodec
+    import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.accessListItemCodec
     val receivingAddressAsArray: Array[Byte] = tx.receivingAddress.map(_.toArray).getOrElse(Array.empty[Byte])
     crypto.kec256(
       rlpEncode(
@@ -523,8 +523,8 @@ object SignedTransaction {
   }
 
   private def getSCTBytesToSign(tx: SetCodeTransaction): Array[Byte] = {
-    import com.chipprbots.ethereum.network.p2p.messages.BaseETH6XMessages.accessListItemCodec
-    import com.chipprbots.ethereum.network.p2p.messages.BaseETH6XMessages.setCodeAuthorizationCodec
+    import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.accessListItemCodec
+    import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.setCodeAuthorizationCodec
     val receivingAddressAsArray: Array[Byte] = tx.receivingAddress.map(_.toArray).getOrElse(Array.empty[Byte])
     crypto.kec256(
       rlpEncode(
