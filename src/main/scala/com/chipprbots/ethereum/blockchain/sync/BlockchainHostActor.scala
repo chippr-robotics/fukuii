@@ -35,6 +35,7 @@ import com.chipprbots.ethereum.network.p2p.messages.ETH63.NodeData
 import com.chipprbots.ethereum.network.p2p.messages.ETH63.ReceiptImplicits._
 import com.chipprbots.ethereum.network.p2p.messages.ETH63.Receipts
 import com.chipprbots.ethereum.network.p2p.messages.ETH66
+import com.chipprbots.ethereum.network.p2p.messages.ETHPackets
 import com.chipprbots.ethereum.rlp.RLPList
 import com.chipprbots.ethereum.transactions.PendingTransactionsManager
 import com.chipprbots.ethereum.transactions.PendingTransactionsManager.PendingTransactionsResponse
@@ -142,15 +143,34 @@ class BlockchainHostActor(
 
       Some(Receipts(receipts))
 
-    // ETH66+ GetReceipts with request ID
+    // ETH66+ GetReceipts with request ID (bloom-inclusive — ETH66-68)
     case ETH66.GetReceipts(requestId, blockHashes) =>
       val receipts = blockHashes
         .take(peerConfiguration.fastSyncHostConfiguration.maxReceiptsPerMessage)
         .flatMap(hash => blockchainReader.getReceiptsByHash(hash))
-
-      // Convert receipts to RLPList for ETH66 format
       val receiptsRLP = RLPList(receipts.map(rs => RLPList(rs.map(_.toRLPEncodable): _*)): _*)
+      log.debug("HOST_RECEIPTS_ETH66: requestId={} blocks={}", requestId, receipts.size)
       Some(ETH66.Receipts(requestId, receiptsRLP))
+
+    // ETH68 GetReceipts — same wire format as ETH66, bloom-inclusive response
+    case ETHPackets.GetReceipts(requestId, blockHashes) =>
+      import ETHPackets.ReceiptBloomEnc
+      val receipts = blockHashes
+        .take(peerConfiguration.fastSyncHostConfiguration.maxReceiptsPerMessage)
+        .flatMap(hash => blockchainReader.getReceiptsByHash(hash))
+      val receiptsRLP = RLPList(receipts.map(rs => RLPList(rs.map(_.toRLPEncodable): _*)): _*)
+      log.info("HOST_RECEIPTS_ETH68: requestId={} blocks={}", requestId, receipts.size)
+      Some(ETHPackets.Receipts68(requestId, receiptsRLP))
+
+    // ETH69 GetReceipts — bloom-ABSENT response per EIP-7642
+    case ETHPackets.GetReceipts69(requestId, blockHashes) =>
+      import ETHPackets.ReceiptBloomFreeEnc
+      val receipts = blockHashes
+        .take(peerConfiguration.fastSyncHostConfiguration.maxReceiptsPerMessage)
+        .flatMap(hash => blockchainReader.getReceiptsByHash(hash))
+      val receiptsRLP = RLPList(receipts.map(rs => RLPList(rs.map(_.toRLPEncodable): _*)): _*)
+      log.info("HOST_RECEIPTS_ETH69: requestId={} blocks={} (bloom-absent, EIP-7642)", requestId, receipts.size)
+      Some(ETHPackets.Receipts69(requestId, receiptsRLP))
 
     // ETH62 GetBlockBodies
     case request: GetBlockBodies =>
@@ -165,8 +185,18 @@ class BlockchainHostActor(
       val blockBodies = hashes
         .take(peerConfiguration.fastSyncHostConfiguration.maxBlocksBodiesPerMessage)
         .flatMap(hash => blockchainReader.getBlockBodyByHash(hash))
-
+      log.debug("HOST_BLOCK_BODIES: requestId={} requested={} returning={}",
+        requestId, hashes.size, blockBodies.size)
       Some(ETH66.BlockBodies(requestId, blockBodies))
+
+    // ETH68 GetBlockBodies (via ETHPackets)
+    case ETHPackets.GetBlockBodies(requestId, hashes) =>
+      val blockBodies = hashes
+        .take(peerConfiguration.fastSyncHostConfiguration.maxBlocksBodiesPerMessage)
+        .flatMap(hash => blockchainReader.getBlockBodyByHash(hash))
+      log.debug("HOST_BLOCK_BODIES_ETH68: requestId={} requested={} returning={}",
+        requestId, hashes.size, blockBodies.size)
+      Some(ETHPackets.BlockBodies(requestId, blockBodies))
 
     // ETH62 GetBlockHeaders
     case request: GetBlockHeaders =>
@@ -174,6 +204,10 @@ class BlockchainHostActor(
 
     // ETH66+ GetBlockHeaders with request ID
     case ETH66.GetBlockHeaders(requestId, block, maxHeaders, skip, reverse) =>
+      handleGetBlockHeadersRequest(block, maxHeaders, skip, reverse, Some(requestId))
+
+    // ETH68 GetBlockHeaders (via ETHPackets)
+    case ETHPackets.GetBlockHeaders(requestId, block, maxHeaders, skip, reverse) =>
       handleGetBlockHeadersRequest(block, maxHeaders, skip, reverse, Some(requestId))
 
     case _ => None

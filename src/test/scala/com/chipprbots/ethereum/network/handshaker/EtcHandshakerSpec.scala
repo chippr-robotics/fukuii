@@ -27,6 +27,7 @@ import com.chipprbots.ethereum.network.p2p.messages.ETH62.GetBlockHeaders
 import com.chipprbots.ethereum.network.p2p.messages.ETH62.GetBlockHeaders.GetBlockHeadersEnc
 import com.chipprbots.ethereum.network.p2p.messages.ETH64
 import com.chipprbots.ethereum.network.p2p.messages.ETH69
+import com.chipprbots.ethereum.network.p2p.messages.ETHPackets
 import com.chipprbots.ethereum.network.p2p.messages.WireProtocol.Disconnect
 import com.chipprbots.ethereum.network.p2p.messages.WireProtocol.Hello
 import com.chipprbots.ethereum.network.p2p.messages.WireProtocol.Hello.HelloEnc
@@ -447,7 +448,7 @@ class NetworkHandshakerSpec extends AnyFlatSpec with Matchers {
     handshakerAfterHelloOpt.get.nextMessage match {
       case Right(nextMsg) =>
         nextMsg.messageToSend match {
-          case statusEnc: ETH64.Status.StatusEnc =>
+          case statusEnc: ETHPackets.Status68.Status68.Status68Enc =>
             val statusMsg = statusEnc.underlyingMsg
             // Best block should be the low block
             statusMsg.bestHash shouldBe lowBlock.header.hash
@@ -455,7 +456,7 @@ class NetworkHandshakerSpec extends AnyFlatSpec with Matchers {
             val expectedForkId = ForkId.create(genesisBlock.header.hash, blockchainConfig)(lowBlockNumber)
             statusMsg.forkId shouldBe expectedForkId
           case other =>
-            fail(s"Expected ETH64.Status.StatusEnc message but got: $other")
+            fail(s"Expected ETHPackets.Status68.Status68Enc message but got: $other")
         }
       case other =>
         fail(s"Expected status message but got: $other")
@@ -496,14 +497,14 @@ class NetworkHandshakerSpec extends AnyFlatSpec with Matchers {
     handshakerAfterHelloOpt.get.nextMessage match {
       case Right(nextMsg) =>
         nextMsg.messageToSend match {
-          case statusEnc: ETH64.Status.StatusEnc =>
+          case statusEnc: ETHPackets.Status68.Status68.Status68Enc =>
             val statusMsg = statusEnc.underlyingMsg
             statusMsg.bestHash shouldBe highBlock.header.hash
             // ForkId should be calculated using actual block number (19,200,000), matching core-geth
             val expectedForkId = ForkId.create(genesisBlock.header.hash, blockchainConfig)(highBlockNumber)
             statusMsg.forkId shouldBe expectedForkId
           case other =>
-            fail(s"Expected ETH64.Status.StatusEnc message but got: $other")
+            fail(s"Expected ETHPackets.Status68.Status68Enc message but got: $other")
         }
       case other =>
         fail(s"Expected status message but got: $other")
@@ -598,7 +599,7 @@ class NetworkHandshakerSpec extends AnyFlatSpec with Matchers {
   }
 
   trait LocalPeerETH64Setup extends LocalPeerSetup {
-    val localStatusMsg: ETH64.Status = ETH64.Status(
+    val localStatusMsg: ETHPackets.Status68.Status68 = ETHPackets.Status68.Status68(
       protocolVersion = Capability.ETH64.version,
       networkId = Config.Network.peer.networkId,
       totalDifficulty = genesisBlock.header.difficulty,
@@ -606,7 +607,15 @@ class NetworkHandshakerSpec extends AnyFlatSpec with Matchers {
       genesisHash = genesisBlock.header.hash,
       forkId = ForkId(1L, None)
     )
-    val localStatus: RemoteStatus = RemoteStatus(localStatusMsg)
+    val localStatus: RemoteStatus = RemoteStatus(
+      Capability.ETH64,
+      localStatusMsg.networkId,
+      ChainWeight.totalDifficultyOnly(localStatusMsg.totalDifficulty),
+      localStatusMsg.bestHash,
+      localStatusMsg.genesisHash,
+      false,
+      List.empty
+    )
   }
 
   trait RemotePeerSetup extends TestSetup {

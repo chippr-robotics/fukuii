@@ -24,7 +24,7 @@ case class EthNodeStatus63ExchangeState(
   override protected def createStatusMsg(): MessageSerializable = {
     val bestBlockHeader = getBestBlockHeader()
 
-    // See EthNodeStatus64ExchangeState. Falls back to TTD on post-merge chains,
+    // See EthNodeStatus68ExchangeState. Falls back to TTD on post-merge chains,
     // ChainWeight.zero on pre-merge chains. ETH/63 doesn't really exist on post-merge
     // networks (sepolia/mainnet are ETH/68+ only), so this is primarily for ETC.
     val chainWeight = blockchainReader

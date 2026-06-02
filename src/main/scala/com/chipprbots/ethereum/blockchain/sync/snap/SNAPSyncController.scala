@@ -3517,7 +3517,7 @@ class SNAPSyncController(
     *
     * Without this, getBestBlockNumber() returns 0 (genesis) during SNAP sync, causing peers to reject us with
     * incompatible forkId (e.g. Frontier vs Spiral). This stores the pivot header, chain weight, and best block info so
-    * that createStatusMsg() in EthNodeStatus64ExchangeState can build a valid status message referencing the pivot.
+    * that createStatusMsg() in EthNodeStatus68ExchangeState can build a valid status message referencing the pivot.
     */
   private def updateBestBlockForPivot(
       header: BlockHeader,

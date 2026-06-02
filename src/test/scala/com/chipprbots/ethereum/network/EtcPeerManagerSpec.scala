@@ -398,9 +398,12 @@ class EtcPeerManagerSpec extends AnyFlatSpec with Matchers {
 
     peersInfoHolder ! PeerHandshakeSuccessful(peer1, eth69Info)
 
-    // Drain the two subscriptions and assert no probe.
+    // Drain the two subscriptions.
     peerEventBus.expectMsg(Subscribe(PeerDisconnectedClassifier(PeerSelector.WithId(peer1.id))))
     peerEventBus.expectMsgClass(classOf[Subscribe])
+    // ETH/69: no GetBlockHeaders probe (latestBlock is in STATUS),
+    // but a BlockRangeUpdate is sent immediately so the remote peer knows our chain range.
+    peerManager.expectMsgClass(classOf[PeerManagerActor.SendMessage])
     peerManager.expectNoMessage(100.millis)
   }
 

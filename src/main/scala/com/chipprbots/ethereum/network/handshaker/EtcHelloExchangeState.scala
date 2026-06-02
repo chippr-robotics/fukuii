@@ -99,7 +99,7 @@ case class EtcHelloExchangeState(handshakerConfiguration: NetworkHandshakerConfi
           negotiated,
           Capability.usesRequestId(negotiated)
         )
-        EthNodeStatus64ExchangeState(
+        EthNodeStatus68ExchangeState(
           handshakerConfiguration,
           negotiated,
           supportsSnap,

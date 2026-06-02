@@ -880,6 +880,90 @@ object ETHPackets {
     override def toShortString: String = s"GetReceipts { requestId: $requestId, count: ${blockHashes.size} }"
   }
 
+  /** ETH69 GetReceipts — same wire format as GetReceipts, distinct type so BlockchainHostActor
+    * can serve bloom-absent Receipts69 in response (EIP-7642).
+    * ETH69MessageDecoder decodes GetReceiptsCode to this type.
+    */
+  object GetReceipts69 {
+    implicit class GetReceipts69Enc(val underlyingMsg: GetReceipts69)
+        extends MessageSerializableImplicit[GetReceipts69](underlyingMsg)
+        with RLPSerializable {
+      override def code: Int = Codes.GetReceiptsCode
+      override def toRLPEncodable: RLPEncodeable =
+        RLPList(RLPValue(ByteUtils.bigIntToUnsignedByteArray(msg.requestId)), toRlpList(msg.blockHashes))
+    }
+
+    implicit class GetReceipts69Dec(val bytes: Array[Byte]) extends AnyVal {
+      def toGetReceipts69: GetReceipts69 = rawDecode(bytes) match {
+        case rlpList: RLPList if rlpList.items.size == 2 =>
+          rlpList.items match {
+            case Seq(RLPValue(requestIdBytes), hashesList: RLPList) =>
+              GetReceipts69(ByteUtils.bytesToBigInt(requestIdBytes), fromRlpList[ByteString](hashesList))
+            case _ => GetReceipts69(0, fromRlpList[ByteString](rlpList))
+          }
+        case rlpList: RLPList => GetReceipts69(0, fromRlpList[ByteString](rlpList))
+        case _                => throw new RuntimeException("Cannot decode GetReceipts69")
+      }
+    }
+  }
+
+  case class GetReceipts69(requestId: BigInt, blockHashes: Seq[ByteString]) extends Message with HasRequestId {
+    override def code: Int             = Codes.GetReceiptsCode
+    override def toShortString: String = s"GetReceipts69 { requestId: $requestId, count: ${blockHashes.size} }"
+  }
+
+  // ── RECEIPT ENCODING IMPLICITS ────────────────────────────────────────────────
+  // Inline log + receipt encoders so ETHPackets is standalone (no ETH63 import needed).
+  // Used by BlockchainHostActor when serving receipts to ETH68 and ETH69 peers.
+
+  /** RLP encoding for a single TxLogEntry. Same as ETH63.TxLogEntryImplicits.TxLogEntryEnc. */
+  implicit class TxLogEntryRLPEnc(logEntry: TxLogEntry) extends RLPSerializable {
+    override def toRLPEncodable: RLPEncodeable =
+      RLPList(
+        RLPValue(logEntry.loggerAddress.bytes.toArray[Byte]),
+        RLPList(logEntry.logTopics.map(t => RLPValue(t.toArray[Byte])): _*),
+        RLPValue(logEntry.data.toArray[Byte])
+      )
+  }
+
+  private def receiptStateHash(r: Receipt): RLPEncodeable = r.postTransactionStateHash match {
+    case HashOutcome(hash) => RLPValue(hash.toArray[Byte])
+    case SuccessOutcome    => 1.toByte
+    case _                 => 0.toByte
+  }
+
+  private def wrapTypedReceipt(r: Receipt, legacyRLP: RLPList): RLPEncodeable = r match {
+    case _: LegacyReceipt      => legacyRLP
+    case _: Type01Receipt      => PrefixedRLPEncodable(Transaction.Type01, legacyRLP)
+    case _: Type02Receipt      => PrefixedRLPEncodable(Transaction.Type02, legacyRLP)
+    case _: Type03Receipt      => PrefixedRLPEncodable(Transaction.Type03, legacyRLP)
+    case _: Type04Receipt      => PrefixedRLPEncodable(Transaction.Type04, legacyRLP)
+    case _: TypedLegacyReceipt => legacyRLP
+  }
+
+  /** Encode a Receipt with bloom (ETH68 serving). Same as ETH63.ReceiptImplicits.ReceiptEnc. */
+  implicit class ReceiptBloomEnc(r: Receipt) extends RLPSerializable {
+    override def toRLPEncodable: RLPEncodeable =
+      wrapTypedReceipt(r, RLPList(
+        receiptStateHash(r),
+        RLPValue(ByteUtils.bigIntToUnsignedByteArray(r.cumulativeGasUsed)),
+        RLPValue(r.logsBloomFilter.toArray[Byte]),
+        RLPList(r.logs.map(_.toRLPEncodable): _*)
+      ))
+  }
+
+  /** Encode a Receipt WITHOUT bloom (ETH69 serving, EIP-7642).
+    * Wire: [stateHash, gasUsed, [logs]] — no logsBloomFilter field.
+    */
+  implicit class ReceiptBloomFreeEnc(r: Receipt) extends RLPSerializable {
+    override def toRLPEncodable: RLPEncodeable =
+      wrapTypedReceipt(r, RLPList(
+        receiptStateHash(r),
+        RLPValue(ByteUtils.bigIntToUnsignedByteArray(r.cumulativeGasUsed)),
+        RLPList(r.logs.map(_.toRLPEncodable): _*)
+      ))
+  }
+
   // ── RECEIPTS — version-suffixed: EIP-7642 removes bloom in ETH69 ─────────────
   //
   // Reference: Reth receipts.rs: Receipts / Receipts69
@@ -889,11 +973,6 @@ object ETHPackets {
   // Wire format difference:
   //   ETH68: [requestId, [[stateHash, gasUsed, logsBloom, [logs]], ...]]
   //   ETH69: [requestId, [[stateHash, gasUsed, [logs]], ...]]  ← no bloom (EIP-7642)
-  //
-  // Both types store receiptsForBlocks as raw RLPList. The semantic difference
-  // (bloom present vs absent) is encoded in the type name for calling code.
-  // When serving receipts to ETH69 peers, the ENCODING side must strip bloom —
-  // that is a separate concern handled by the request handler.
 
   /** ETH68 receipts: bloom-inclusive. Source: ETH66.Receipts + ETH63.ReceiptEnc. */
   object Receipts68 {

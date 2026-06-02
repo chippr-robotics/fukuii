@@ -517,7 +517,7 @@ object ETH69MessageDecoder extends MessageDecoder {
   import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.BlockBodies._
   import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.GetPooledTransactions._
   import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.PooledTransactions._
-  import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.GetReceipts._
+  import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.GetReceipts69._  // distinct ETH69 type → bloom-absent response
   import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.Receipts69._   // EIP-7642: bloom-absent
   import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.BlockRangeUpdate._
 
@@ -574,7 +574,7 @@ object ETH69MessageDecoder extends MessageDecoder {
       case Codes.GetNodeDataCode => Left(MalformedMessageError("GetNodeData (0x0d) not supported in eth/69 (EIP-4938)"))
       case Codes.NodeDataCode    => Left(MalformedMessageError("NodeData (0x0e) not supported in eth/69 (EIP-4938)"))
       case Codes.GetReceiptsCode =>
-        Try(payload.toGetReceipts).toEither.left.map(ex =>
+        Try(payload.toGetReceipts69).toEither.left.map(ex =>  // ETH69 type → bloom-absent serving
           MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex))
         )
       case Codes.ReceiptsCode =>

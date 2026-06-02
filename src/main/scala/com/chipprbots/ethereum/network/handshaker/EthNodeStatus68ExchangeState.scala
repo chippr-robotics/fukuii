@@ -11,91 +11,99 @@ import com.chipprbots.ethereum.network.p2p.Message
 import com.chipprbots.ethereum.network.p2p.MessageSerializable
 import com.chipprbots.ethereum.network.p2p.messages.Capability
 import com.chipprbots.ethereum.network.p2p.messages.ETH64
+import com.chipprbots.ethereum.network.p2p.messages.ETHPackets
 import com.chipprbots.ethereum.network.p2p.messages.WireProtocol.Disconnect
 
-case class EthNodeStatus64ExchangeState(
+/** Handles ETH/64-68 STATUS handshake.
+  *
+  * Wire format: [version, networkId, td, bestHash, genesis, forkId] (6 fields, TD present).
+  * ETC is PoW — TD is permanent, not a legacy field.
+  *
+  * Renamed from EthNodeStatus64ExchangeState to reflect actual minimum version support (ETH68).
+  * Uses ETHPackets.Status68 to match what ETH68MessageDecoder decodes (no ETH64 import needed).
+  */
+case class EthNodeStatus68ExchangeState(
     handshakerConfiguration: NetworkHandshakerConfiguration,
     negotiatedCapability: Capability,
     supportsSnap: Boolean = false,
     peerCapabilities: List[Capability] = List.empty,
     clientId: String = ""
-) extends EtcNodeStatusExchangeState[ETH64.Status] {
+) extends EtcNodeStatusExchangeState[ETHPackets.Status68.Status68] {
 
+  import ETHPackets.Status68.Status68._  // toBytes for createStatusMsg
   import handshakerConfiguration._
 
-  def applyResponseMessage: PartialFunction[Message, HandshakerState[PeerInfo]] = { case status: ETH64.Status =>
+  def applyResponseMessage: PartialFunction[Message, HandshakerState[PeerInfo]] = {
+    // ETH68 decoder path: ETHPackets.Status68 (ETH68MessageDecoder returns this)
+    case status: ETHPackets.Status68.Status68 =>
+      handleStatus68Fields(status.protocolVersion, status.networkId.toLong, status.totalDifficulty,
+        status.bestHash, status.genesisHash, status.forkId)
+
+    // Legacy decoder path: ETH64.Status (ETH64-67 decoders still return this)
+    // Phase 3 (cap retirement) will remove this arm.
+    case legacyStatus: ETH64.Status =>
+      handleStatus68Fields(legacyStatus.protocolVersion, legacyStatus.networkId, legacyStatus.totalDifficulty,
+        legacyStatus.bestHash, legacyStatus.genesisHash, legacyStatus.forkId)
+  }
+
+  private def handleStatus68Fields(
+      protocolVersion: Int, networkId: Long, totalDifficulty: BigInt,
+      bestHash: org.apache.pekko.util.ByteString, genesisHash: org.apache.pekko.util.ByteString,
+      forkId: ForkId
+  ): HandshakerState[PeerInfo] = {
     import ForkIdValidator.syncIoLogger
     log.debug(
       "ETH{}_STATUS: Received - totalDifficulty={}, networkId={}, bestHash={}, genesisHash={}, forkId={}",
-      status.protocolVersion,
-      status.totalDifficulty,
-      status.networkId,
-      status.bestHash,
-      status.genesisHash,
-      status.forkId
+      protocolVersion, totalDifficulty, networkId, bestHash, genesisHash, forkId
     )
 
     val localBestBlock = blockchainReader.getBestBlockNumber()
     val localGenesisHash = blockchainReader.genesisHeader.hash
-    // Use current system time if best block is genesis (timestamp 0) — this happens at startup
-    // before Engine API imports any blocks. Without this, ForkID incorrectly reports pre-Shanghai
-    // and all post-merge peers reject us.
     val storedTimestamp = blockchainReader.getBlockHeaderByNumber(localBestBlock).map(_.unixTimestamp).getOrElse(0L)
     val localBestTimestamp = if (storedTimestamp == 0L) System.currentTimeMillis() / 1000 else storedTimestamp
     val localForkId = ForkId.create(localGenesisHash, blockchainConfig)(localBestBlock, localBestTimestamp)
 
     log.debug(
       "ETH{}_STATUS: Local state - bestBlock={}, genesisHash={}, localForkId={}",
-      status.protocolVersion,
-      localBestBlock,
-      localGenesisHash,
-      localForkId
+      protocolVersion, localBestBlock, localGenesisHash, localForkId
     )
 
-    if (status.networkId != peerConfiguration.networkId) {
-      log.debug(
-        "ETH{}_STATUS: NetworkId mismatch - local={}, remote={} - disconnecting",
-        status.protocolVersion,
-        peerConfiguration.networkId,
-        status.networkId
-      )
+    if (networkId != peerConfiguration.networkId) {
+      log.debug("ETH{}_STATUS: NetworkId mismatch - local={}, remote={} - disconnecting",
+        protocolVersion, peerConfiguration.networkId, networkId)
       DisconnectedState[PeerInfo](Disconnect.Reasons.UselessPeer)
-    } else if (status.genesisHash != localGenesisHash) {
-      log.debug(
-        "ETH{}_STATUS: Genesis mismatch - local={}, remote={} - disconnecting",
-        status.protocolVersion,
-        localGenesisHash,
-        status.genesisHash
-      )
+    } else if (genesisHash != localGenesisHash) {
+      log.debug("ETH{}_STATUS: Genesis mismatch - local={}, remote={} - disconnecting",
+        protocolVersion, localGenesisHash, genesisHash)
       DisconnectedState[PeerInfo](Disconnect.Reasons.UselessPeer)
     } else {
       (for {
         validationResult <-
           ForkIdValidator.validatePeer[SyncIO](blockchainReader.genesisHeader.hash, blockchainConfig)(
-            blockchainReader.getBestBlockNumber(),
-            status.forkId
+            blockchainReader.getBestBlockNumber(), forkId
           )
       } yield {
         log.debug("STATUS_EXCHANGE: ForkId validation result: {}", validationResult)
         validationResult match {
           case Connect =>
-            log.info(
-              "ETH{}_STATUS: Accepted - totalDifficulty={}, latestBlock={} (forkId ok)",
-              status.protocolVersion,
-              status.totalDifficulty,
-              status.bestHash
-            )
+            log.info("ETH{}_STATUS: Accepted - totalDifficulty={}, latestBlock={} (forkId ok)",
+              protocolVersion, totalDifficulty, bestHash)
             ConnectedState(
-              PeerInfo.withForkAccepted(
-                RemoteStatus(status, negotiatedCapability, supportsSnap, peerCapabilities, clientId)
-              )
+              PeerInfo.withForkAccepted(RemoteStatus(
+                negotiatedCapability,
+                networkId,
+                com.chipprbots.ethereum.domain.ChainWeight.totalDifficultyOnly(totalDifficulty),
+                bestHash,
+                genesisHash,
+                supportsSnap,
+                peerCapabilities,
+                remoteClientId = clientId
+              ))
             )
           case other =>
             log.debug(
-              "STATUS_EXCHANGE: ForkId validation failed with result: {} - disconnecting peer as UselessPeer. Local ForkId: {}, Remote ForkId: {}",
-              other,
-              localForkId,
-              status.forkId
+              "STATUS_EXCHANGE: ForkId validation failed: {} - disconnecting. Local: {}, Remote: {}",
+              other, localForkId, forkId
             )
             DisconnectedState[PeerInfo](Disconnect.Reasons.UselessPeer)
         }
@@ -129,34 +137,21 @@ case class EthNodeStatus64ExchangeState(
           .getOrElse(com.chipprbots.ethereum.domain.ChainWeight.zero)
         log.debug(
           s"Chain weight not stored for best block ${bestBlockHeader.hash} (SNAP-sync state); " +
-            s"advertising fallback TD=${ttdFallback.totalDifficulty} in ETH/64-68 STATUS"
+            s"advertising fallback TD=${ttdFallback.totalDifficulty} in ETH/68 STATUS"
         )
         ttdFallback
       }
 
     val genesisHash = blockchainReader.genesisHeader.hash
 
-    // ALIGNMENT WITH CORE-GETH: Use actual current block number for ForkId calculation
-    // Core-geth implementation (eth/handler.go):
-    //   head = h.chain.CurrentHeader()
-    //   number = head.Number.Uint64()
-    //   forkID := forkid.NewID(h.chain.Config(), genesis, number, head.Time)
-    //
-    // Core-geth does NOT use checkpoints or pivot blocks for status messages.
-    // It always uses the actual current block for both bestHash and ForkId calculation.
-    //
-    // Previous implementation used bootstrap pivot block for ForkId to avoid peer
-    // disconnections at genesis, but this creates a mismatch with core-geth behavior
-    // where ForkId and bestHash refer to different blocks.
-    //
-    // To align with core-geth: Use actual bestBlockNumber for ForkId calculation.
+    // ALIGNMENT WITH CORE-GETH: Use actual current block number for ForkId calculation.
+    // Core-geth uses head.Number.Uint64() and head.Time for forkID — not checkpoints.
     val forkIdBlockNumber = bestBlockNumber
-    // Use system time when at genesis to correctly advertise post-merge fork status
     val forkIdTimestamp =
       if (bestBlockHeader.unixTimestamp == 0L) System.currentTimeMillis() / 1000 else bestBlockHeader.unixTimestamp
     val forkId = ForkId.create(genesisHash, blockchainConfig)(forkIdBlockNumber, forkIdTimestamp)
 
-    val status = ETH64.Status(
+    val status = ETHPackets.Status68.Status68(
       protocolVersion = negotiatedCapability.version,
       networkId = peerConfiguration.networkId,
       totalDifficulty = chainWeight.totalDifficulty,
@@ -176,8 +171,6 @@ case class EthNodeStatus64ExchangeState(
       forkId
     )
 
-    // Debug: Log the raw RLP-encoded message bytes for protocol analysis
-    // Only compute hex encoding when debug logging is enabled to avoid overhead
     if (log.underlying.isDebugEnabled()) {
       val encodedBytes = status.toBytes
       val hexBytes = org.bouncycastle.util.encoders.Hex.toHexString(encodedBytes)
