@@ -446,7 +446,7 @@ class AccountRangeCoordinator(
   // as PR #1250's [STORAGE-STATE] (subsequently switched from modulo to time-based for the
   // same reason).
   private var lastStateLogMs: Long = 0L
-  private val StateLogIntervalMs: Long = 30_000L
+  private val StateLogIntervalMs: Long = 10_000L
 
   // Per-peer adaptive byte budgeting (ported from StorageRangeCoordinator).
   // Geth's snap handler supports up to 2MB responses. Starting at 512KB and probing upward
@@ -509,7 +509,7 @@ class AccountRangeCoordinator(
   private def recordPeerCooldown(peer: Peer, reason: String, duration: FiniteDuration): Unit = {
     val until = System.currentTimeMillis() + duration.toMillis
     peerCooldownUntilMs.put(peer.id.value, until)
-    log.debug(s"Cooling down peer ${peer.id.value} for ${duration.toSeconds}s: $reason")
+    log.info(s"[ACCOUNT-COOLDOWN] peer ${peer.id.value.take(8)} cooling ${duration.toSeconds}s: $reason")
   }
 
   // Pivot refresh backoff: prevents rapid-fire pivot refresh requests when all peers are stateless.
@@ -793,6 +793,18 @@ class AccountRangeCoordinator(
         // `lastDispatchOrResponseMs` resets on every drain (peer cycling) so the time-based
         // check above is blind to this condition. Use a tick counter instead.
         pendingButIdleTicks += 1
+        val nowMs = System.currentTimeMillis()
+        val soonestCooldownSec = peerCooldownUntilMs.values.minOption
+          .map(t => math.max(0L, (t - nowMs) / 1000))
+          .getOrElse(-1L)
+        log.warning(
+          s"[ACCOUNT-IDLE] tick $pendingButIdleTicks/3: ${pendingTasks.size} tasks pending, " +
+            s"0 active. Pool: ${knownAvailablePeers.size} known, " +
+            s"${statelessPeers.size} stateless, ${snaplessPeers.size} snapless, " +
+            s"${peerCooldownUntilMs.size} cooling" +
+            (if (soonestCooldownSec >= 0) s" (soonest ready in ${soonestCooldownSec}s)" else "") +
+            s". root=${stateRoot.take(4).toHex}"
+        )
         if (pendingButIdleTicks >= 3) {
           // 3 × 30 s = 90 s of consecutive ticks with pending tasks and zero dispatches.
           log.warning(
@@ -1290,6 +1302,10 @@ class AccountRangeCoordinator(
         )
       }
     } else {
+      log.info(
+        s"[ACCOUNT-REQUEUE] task ${task.rangeString} requeued " +
+          s"(${task.requeueCount}/${AccountRangeCoordinator.MaxRequeuesPerTask}): $reason"
+      )
       pendingTasks.enqueue(task)
     }
     tryRedispatchPendingTasks()
@@ -1343,10 +1359,17 @@ class AccountRangeCoordinator(
       // is visible. Sharing `shouldLog` with the STATE snapshot above keeps total
       // log volume from this method ≤ 2 lines / 30 s — robust against call-rate spikes.
       if (shouldLog) {
+        val nowMs2 = System.currentTimeMillis()
+        val soonestReadySec = peerCooldownUntilMs.values.minOption
+          .map(t => math.max(0L, (t - nowMs2) / 1000))
+        val coolingSuffix = soonestReadySec match {
+          case Some(s) => s" (soonest cooling peer ready in ${s}s)"
+          case None    => ""
+        }
         log.info(
           s"[ACCOUNT-REDISPATCH] No eligible peers — ${knownAvailablePeers.size} known, " +
             s"${statelessPeers.size} stateless, ${snaplessPeers.size} snapless, " +
-            s"${peerCooldownUntilMs.size} cooling. pending: ${pendingTasks.size}"
+            s"${peerCooldownUntilMs.size} cooling${coolingSuffix}. pending: ${pendingTasks.size}"
         )
       }
       return
@@ -1457,6 +1480,9 @@ class AccountRangeCoordinator(
         } else {
           // Need more requests for the same interval; re-queue with updated `next`.
           pendingTasks.enqueue(task)
+          // Trigger immediate redispatch so the re-queued task is picked up without
+          // waiting up to 1s for the next PeerAvailable message (BUG-DISPATCH-001).
+          tryRedispatchPendingTasks()
           // Persist partial range position so a crash mid-range resumes from here,
           // not the beginning of the range (go-ethereum saveSyncStatus() parity).
           sendProgressSnapshot()
