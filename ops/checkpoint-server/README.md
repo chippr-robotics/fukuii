@@ -77,16 +77,17 @@ cosign verify-blob --key checkpoints.pub --signature \
 #    (block explorer, your own synced node) BEFORE trusting the archive.
 
 # 3. Verify the download against the manifest sha256
-sha256sum etc-21070000.checkpoint.gz   # compare to manifest entry
+sha256sum 21070000-0x9f8e7d.checkpoint.gz   # compare to manifest entry
 ```
 
 For production nodes, set both keys for the same block so the trusted hash is
-in config:
+in config. Bootstrap checkpoints live under `fukuii.sync` (parsed from the
+`sync` section in `Config.scala`), the same namespace as `checkpoint-sync-url`:
 
 ```hocon
 fukuii.sync.checkpoint-sync-url = "https://checkpoints.chipprbots.com/etc/21070000-0x9f8e7d.checkpoint.gz"
-fukuii.blockchain.use-bootstrap-checkpoints = true
-fukuii.blockchain.bootstrap-checkpoints = ["21070000:0x9f8e7d…"]
+fukuii.sync.use-bootstrap-checkpoints = true
+fukuii.sync.bootstrap-checkpoints = ["21070000:0x9f8e7d…"]
 ```
 
 ## Monitoring

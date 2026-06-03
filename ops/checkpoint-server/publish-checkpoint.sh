@@ -19,7 +19,7 @@
 set -euo pipefail
 
 CHAIN=""
-BLOCK=""                       # empty -> exporter uses current best block
+BLOCK=""                       # required: a reorg-safe block, so the name/manifest are deterministic
 BUCKET="gs://chipprbots-checkpoints"
 DATADIR=""
 KEEP=4
@@ -29,10 +29,11 @@ trap 'rm -rf "$WORKDIR"' EXIT
 
 usage() {
   cat <<EOF
-Usage: $0 --chain <etc|mordor|sepolia|eth> [--block N] --bucket gs://... [--datadir DIR] [--keep N]
+Usage: $0 --chain <etc|mordor|sepolia|eth> --block N --bucket gs://... [--datadir DIR] [--keep N]
 
   --chain    Chain selector passed to the fukuii launcher (required)
-  --block    Block number to export; reorg-safe (finalized / tip-margin). Omit = best block.
+  --block    Block number to export; reorg-safe (finalized / tip-margin) (required).
+             Required so the published object name and manifest are deterministic.
   --bucket   Destination GCS bucket root (default: $BUCKET)
   --datadir  fukuii datadir for this chain (sets -Dfukuii.datadir)
   --keep     How many versioned archives to retain per chain (default: $KEEP)
@@ -53,7 +54,10 @@ while [[ $# -gt 0 ]]; do
     *) echo "unknown arg: $1" >&2; usage 1 ;;
   esac
 done
+# Fail fast on missing required args — before the (potentially multi-GiB) export.
 [[ -n "$CHAIN" ]] || { echo "--chain is required" >&2; usage 1; }
+[[ -n "$BLOCK" ]] || { echo "--block is required (pick a reorg-safe block)" >&2; usage 1; }
+[[ "$BLOCK" =~ ^[0-9]+$ ]] || { echo "--block must be a non-negative integer" >&2; usage 1; }
 
 JVM_OPTS=()
 [[ -n "$DATADIR" ]] && JVM_OPTS+=("-Dfukuii.datadir=$DATADIR")
@@ -72,15 +76,16 @@ GZ_OUT="${RAW_OUT}.gz"   # exporter auto-appends .gz when --gzip is set
 # Block number + hash come from the manifest the exporter logs; in this template
 # we re-read them via the JSON-RPC of the same node. Adjust to your environment.
 : "${RPC_URL:=http://127.0.0.1:8546}"
-hexblock=$(printf '0x%x' "${BLOCK:-0}")
-if [[ -n "$BLOCK" ]]; then
-  BLOCK_HASH=$(curl -fsS -X POST --data \
-    "{\"jsonrpc\":\"2.0\",\"method\":\"eth_getBlockByNumber\",\"params\":[\"$hexblock\",false],\"id\":1}" \
-    "$RPC_URL" | jq -r '.result.hash')
-else
-  echo "!! --block not given; set BLOCK explicitly so the published name/manifest is deterministic" >&2
+hexblock=$(printf '0x%x' "$BLOCK")
+BLOCK_HASH=$(curl -fsS -X POST --data \
+  "{\"jsonrpc\":\"2.0\",\"method\":\"eth_getBlockByNumber\",\"params\":[\"$hexblock\",false],\"id\":1}" \
+  "$RPC_URL" | jq -r '.result.hash // empty')
+# A failed RPC / unknown block yields empty here; refuse rather than publishing a
+# `null`-named object or recording an invalid hash in the manifest.
+[[ "$BLOCK_HASH" =~ ^0x[0-9a-fA-F]{64}$ ]] || {
+  echo "!! could not resolve a valid block hash for block $BLOCK from $RPC_URL (got: '${BLOCK_HASH:-<empty>}')" >&2
   exit 1
-fi
+}
 SHORT_HASH="${BLOCK_HASH:0:8}"
 SHA256=$(sha256sum "$GZ_OUT" | cut -d' ' -f1)
 SIZE=$(stat -c%s "$GZ_OUT")
@@ -118,14 +123,22 @@ else
 fi
 
 # --- 5. flip latest LAST --------------------------------------------------
-# Implemented as a redirect object; the LB/CDN can also do this via URL map.
-echo ">> pointing latest -> $OBJ_NAME"
+# Two correct options; this template uses (a) because it is self-contained and
+# works with the existing client (plain GET, no redirect needed):
+#
+#   (a) Server-side copy of the just-published object to `latest.checkpoint.gz`.
+#       `gsutil cp gs://src gs://dst` copies within GCS — it does NOT re-upload
+#       the multi-GiB body from this host. `latest` is then a real, downloadable
+#       archive (short TTL so a new publish is picked up quickly).
+#
+#   (b) PREFERRED AT SCALE: leave `latest` out of the bucket entirely and serve
+#       `…/latest.checkpoint.gz` as an HTTP 302 to the versioned object via a
+#       CDN/LB URL-map rewrite. The client follows redirects, and `latest` never
+#       becomes a mutable large object. Configure this in your LB, not here.
+echo ">> pointing latest -> $OBJ_NAME (server-side copy)"
 gsutil -h "Cache-Control:public, max-age=300" \
-       -h "x-goog-meta-redirect:$PUBLIC_BASE/$OBJ_NAME" \
-       cp "$GZ_OUT" "$BUCKET/$CHAIN/latest.checkpoint.gz"
-# NOTE: a metadata header alone does not redirect. In production prefer a CDN/LB
-# URL rewrite for `latest`, or store latest as a tiny object served with a 302
-# by the edge. Kept simple here; adapt to your LB config.
+       -h "Content-Type:application/octet-stream" \
+       cp "$DEST" "$BUCKET/$CHAIN/latest.checkpoint.gz"
 
 # --- 6. prune -------------------------------------------------------------
 echo ">> pruning to newest $KEEP versions"
