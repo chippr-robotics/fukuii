@@ -935,8 +935,9 @@ class SNAPSyncController(
         bytecodeCoordinator.foreach(_ ! actors.Messages.ByteCodePivotRefreshed)
         requestByteCodes()
 
-        // Cancel account stagnation checks (no longer relevant)
+        // Cancel account-phase schedulers (no longer relevant)
         accountStagnationCheckTask.foreach(_.cancel()); accountStagnationCheckTask = None
+        accountRangeRequestTask.foreach(_.cancel()); accountRangeRequestTask = None
 
         // Start storage + bytecode stagnation watchdogs now that accounts are done
         lastStorageProgressMs = System.currentTimeMillis()

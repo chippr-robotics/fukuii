@@ -318,6 +318,13 @@ class AccountRangeCoordinator(
   private val noActivityTimeoutMs: Long = 90_000L
   private val dispatchStallCheckInterval: FiniteDuration = 30.seconds
   private var stallCheckTask: Option[Cancellable] = None
+  // Counts consecutive CheckDispatchStalled ticks where pendingTasks.nonEmpty && activeTasks.isEmpty.
+  // The standard `lastDispatchOrResponseMs` timer resets on every drain (peer cycling) and response,
+  // making it blind to the "tasks pending but no eligible peers" stall. A tick counter is immune to
+  // timer resets: if 3 consecutive 30s ticks (90s) pass without any dispatch, we escalate.
+  // Reset to 0 whenever a dispatch succeeds (activeTasks.nonEmpty after tryRedispatch) or the
+  // queue drains naturally (pendingTasks.isEmpty).
+  private var pendingButIdleTicks: Int = 0
 
   /** Count in-flight requests for a given peer (pipelining support). */
   private def inFlightForPeer(peer: Peer): Int =
@@ -769,6 +776,7 @@ class AccountRangeCoordinator(
       val now = System.currentTimeMillis()
       val stalled = activeTasks.nonEmpty && (now - lastDispatchOrResponseMs) > noActivityTimeoutMs
       if (stalled) {
+        pendingButIdleTicks = 0
         val idleSec = (now - lastDispatchOrResponseMs) / 1000
         log.warning(
           s"Account dispatch stalled: ${activeTasks.size} active, ${pendingTasks.size} pending, " +
@@ -780,6 +788,40 @@ class AccountRangeCoordinator(
         // next time anyway.
         lastDispatchOrResponseMs = System.currentTimeMillis()
         tryRedispatchPendingTasks()
+      } else if (pendingTasks.nonEmpty && activeTasks.isEmpty) {
+        // Tasks are pending but nothing is in-flight — no eligible peers to dispatch to.
+        // `lastDispatchOrResponseMs` resets on every drain (peer cycling) so the time-based
+        // check above is blind to this condition. Use a tick counter instead.
+        pendingButIdleTicks += 1
+        if (pendingButIdleTicks >= 3) {
+          // 3 × 30 s = 90 s of consecutive ticks with pending tasks and zero dispatches.
+          log.warning(
+            s"[ACCOUNT-STALL] ${pendingTasks.size} tasks pending, no active dispatches for " +
+              s"$pendingButIdleTicks watchdog ticks " +
+              s"(${dispatchStallCheckInterval.toSeconds * pendingButIdleTicks}s). " +
+              s"Attempting floor recovery then pivot refresh if needed."
+          )
+          pendingButIdleTicks = 0
+          tryRedispatchPendingTasks()
+          // If floor revival also couldn't dispatch anything, escalate.
+          if (activeTasks.isEmpty && !pivotRefreshRequested) {
+            pivotRefreshRequested = true
+            lastPivotRefreshTimeMs = System.currentTimeMillis()
+            consecutiveUnproductiveRefreshes += 1
+            log.warning(
+              s"[ACCOUNT-STALL] Floor revival exhausted — ${knownAvailablePeers.size} known peers, " +
+                s"${statelessPeers.size} stateless, ${peerCooldownUntilMs.size} cooling. " +
+                s"Requesting pivot refresh (attempt=$consecutiveUnproductiveRefreshes)."
+            )
+            snapSyncController ! PivotStateUnservable(
+              rootHash = stateRoot,
+              reason = s"tasks pending but no eligible peers after ${consecutiveUnproductiveRefreshes} stall cycles",
+              consecutiveEmptyResponses = knownAvailablePeers.size
+            )
+          }
+        }
+      } else {
+        pendingButIdleTicks = 0
       }
 
     case TaskComplete(requestId, result) =>
