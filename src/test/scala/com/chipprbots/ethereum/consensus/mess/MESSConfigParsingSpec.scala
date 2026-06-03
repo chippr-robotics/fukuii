@@ -68,6 +68,7 @@ class MESSConfigParsingSpec extends AnyFlatSpec with Matchers {
   ) in {
     val rawNoOlympia = etcRaw
       .withoutPath("olympia-block-number")
+      .withoutPath("mess.ecbp1100-reactivate-block-number")
     val config = BlockchainConfig.fromRawConfig(rawNoOlympia)
     config.messConfig.reactivationBlock shouldBe None
   }

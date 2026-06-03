@@ -45,7 +45,7 @@ class NetworkPeerManagerActor(
     evmCodeStorageOpt: Option[com.chipprbots.ethereum.db.storage.EvmCodeStorage] = None,
     mptStorageOpt: Option[com.chipprbots.ethereum.db.storage.MptStorage] = None,
     blockchainReader: Option[com.chipprbots.ethereum.domain.BlockchainReader] = None,
-    isPoWChain: Boolean = true
+    isPoWChain: Boolean = false
 ) extends Actor
     with ActorLogging {
 
@@ -57,6 +57,11 @@ class NetworkPeerManagerActor(
   private var snapSyncControllerOpt: Option[ActorRef] = initialSnapSyncControllerOpt
 
   private var emptyHeaderResponses: Int = 0
+
+  // Tracks whether our chain tip has advanced past block 0 for the first time. Used to trigger
+  // a one-shot chain weight refresh for ETH69 peers whose weight was stuck at COLD_START (TD=0)
+  // because `resolveETH69ChainWeight` had no anchor when they connected.
+  private var coldStartCompleted = false
 
   // Last time we observed each peer pushing or replying with a block-height signal. Used by
   // the periodic best-block re-probe to skip peers whose ETH/69 `BlockRangeUpdate` arrived
@@ -237,6 +242,43 @@ class NetworkPeerManagerActor(
       }
       if (probed > 0) {
         log.debug(s"BEST_BLOCK_REPROBE: probed $probed/${peersWithInfo.size} peers for current head")
+      }
+
+      // One-shot: once our chain tip advances past genesis, re-evaluate ETH69 peers that are
+      // still at COLD_START (TD=0 because ourBestNum was 0 when they connected). Without this,
+      // those peers stay de-prioritised until the next NewBlock arrives (~13s on ETC) or we
+      // accidentally re-probe them. On future go-ethereum-style ETH69 (no NewBlock), this fix
+      // becomes the primary correction path.
+      if (!coldStartCompleted) {
+        blockchainReader.foreach { reader =>
+          if (reader.getBestBlockNumber() > 0) {
+            coldStartCompleted = true
+            var updatedPeers = peersWithInfo
+            var refreshCount  = 0
+            peersWithInfo.foreach { case (peerId, PeerWithInfo(_, peerInfo)) =>
+              if (peerInfo.remoteStatus.capability == Capability.ETH69 && peerInfo.maxBlockNumber > 0) {
+                val (cw, source) = reader.resolveETH69ChainWeight(
+                  peerInfo.bestBlockHash, peerInfo.maxBlockNumber, isPoWChain
+                )
+                if (source != "COLD_START") {
+                  log.info(
+                    "ETH69_COLD_START_RESOLVED: peer={} newTD={} source={}",
+                    peerId, cw.totalDifficulty, source
+                  )
+                  updatedPeers = updatedPeers.updated(
+                    peerId,
+                    updatedPeers(peerId).copy(peerInfo = peerInfo.withChainWeight(cw))
+                  )
+                  refreshCount += 1
+                }
+              }
+            }
+            if (refreshCount > 0) {
+              log.info("ETH69_COLD_START_RESOLVED: chain weights refreshed for {} ETH69 peers", refreshCount)
+              context.become(handleMessages(updatedPeers))
+            }
+          }
+        }
       }
 
     case NetworkPeerManagerActor.UpdateClHead(blockNumber) =>
@@ -1240,7 +1282,7 @@ object NetworkPeerManagerActor {
       evmCodeStorageOpt: Option[com.chipprbots.ethereum.db.storage.EvmCodeStorage] = None,
       mptStorageOpt: Option[com.chipprbots.ethereum.db.storage.MptStorage] = None,
       blockchainReader: Option[com.chipprbots.ethereum.domain.BlockchainReader] = None,
-      isPoWChain: Boolean = true
+      isPoWChain: Boolean = false
   ): Props =
     Props(
       new NetworkPeerManagerActor(

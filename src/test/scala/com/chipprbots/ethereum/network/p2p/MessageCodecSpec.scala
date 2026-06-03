@@ -76,7 +76,7 @@ class MessageCodecSpec extends AnyFlatSpec with Matchers {
     lazy val remoteAdvertisedVersion: Int = 5
 
     val status: Status = Status(
-      protocolVersion = Capability.ETH63.version,
+      protocolVersion = Capability.ETH68.version,
       networkId = Config.Network.peer.networkId,
       totalDifficulty = 1,
       bestHash = ByteString(1),
@@ -85,7 +85,7 @@ class MessageCodecSpec extends AnyFlatSpec with Matchers {
     )
 
     val decoder: MessageDecoder =
-      NetworkMessageDecoder.orElse(EthereumMessageDecoder.ethMessageDecoder(Capability.ETH63))
+      NetworkMessageDecoder.orElse(EthereumMessageDecoder.ethMessageDecoder(Capability.ETH68))
 
     lazy val remoteClientId: String = "TestClient/v1.0.0"
     lazy val localClientId: String = Config.clientId

@@ -220,10 +220,10 @@ class BlockchainReader(
               val ourCurrentDiff = bestHeaderOpt.map(_.difficulty).getOrElse(BigInt(1))
               val gap = (latestBlock - ourBestNum).max(BigInt(0))
               // Marginal-rate estimate: uses current difficulty instead of the historical average.
-              // Historical avg ~582 TH/block for ETC; current era ~2000–4300 TH → old formula
-              // underestimates each gap block's TD contribution by 70-86%.
+              // Historical avg ~994 TH/block for ETC (as of 2026); current era ~2500 TH.
+              // Formula underestimates by 0-95% when anchor is far from peer tip (early sync) — safe direction.
               // 9999/10000 guarantees a slight underestimate for constant-difficulty chains (< 0.01% error).
-              // Peer is never mistakenly assigned higher priority than deserved for stable chains.
+              // Self-corrects: Tier 1/2 take over as sync reaches peer's reported height.
               val estimatedTD = ourBestTD + ourCurrentDiff * gap * 9999 / 10000
               (ChainWeight.totalDifficultyOnly(estimatedTD), "POW_SCALING")
             } else {

@@ -32,11 +32,20 @@ import com.chipprbots.ethereum.network.PeerEventBusActor.SubscriptionClassifier.
 import com.chipprbots.ethereum.network.PeerManagerActor
 import com.chipprbots.ethereum.network.PeerManagerActor.GetPeers
 import com.chipprbots.ethereum.network.PeerManagerActor.Peers
+import com.chipprbots.ethereum.blockchain.sync.codec.MptNodeCodecs._
+import com.chipprbots.ethereum.blockchain.sync.codec.ReceiptCodecs._
 import com.chipprbots.ethereum.network.p2p.messages.Codes
-import com.chipprbots.ethereum.network.p2p.messages.ETH62._
-import com.chipprbots.ethereum.network.p2p.messages.ETH63.MptNodeEncoders._
-import com.chipprbots.ethereum.network.p2p.messages.ETH63.ReceiptImplicits._
-import com.chipprbots.ethereum.network.p2p.messages.ETH63._
+import com.chipprbots.ethereum.network.p2p.messages.ETHPackets
+import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.TypedTransaction._
+import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.BlockBodies
+import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.BlockHeaders
+import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.GetBlockBodies
+import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.GetBlockHeaders
+import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.GetNodeData
+import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.GetReceipts
+import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.NodeData
+import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.Receipts68
+import com.chipprbots.ethereum.rlp.RLPList
 import com.chipprbots.ethereum.txExecTest.util.DumpChainActor._
 
 /** Actor used for obtaining all the blockchain data (blocks, receipts, nodes) from the blocks [startBlock, maxBlocks]
@@ -121,9 +130,12 @@ class DumpChainActor(
       }
       blockBodiesRequested = Nil
 
-    case MessageFromPeer(m: Receipts, _) =>
-      println(s"Received ${m.receiptsForBlocks.size} receipts lists")
-      m.receiptsForBlocks.zip(receiptsRequested).foreach { case (r, h) =>
+    case MessageFromPeer(m: Receipts68, _) =>
+      val receiptsByBlock: Seq[Seq[Receipt]] = m.receiptsForBlocks.items.collect {
+        case blockReceipts: RLPList => blockReceipts.items.toTypedRLPEncodables.map(_.toLegacyReceipt)
+      }
+      println(s"Received ${receiptsByBlock.size} receipts lists")
+      receiptsByBlock.zip(receiptsRequested).foreach { case (r, h) =>
         blockReceiptsStorage = blockReceiptsStorage + (h -> r)
       }
       receiptsRequested = Nil
@@ -133,7 +145,7 @@ class DumpChainActor(
       val contractNodes = m.values.filter(node => contractNodesHashes.contains(kec256(node)))
       val evmCode = m.values.filter(node => evmCodeHashes.contains(kec256(node)))
 
-      val nodes = NodeData(stateNodes).values.indices.map(i => NodeData(stateNodes).getMptNode(i))
+      val nodes = stateNodes.map(v => v.toArray[Byte].toMptNode)
 
       val children = nodes.flatMap {
         case n: BranchNode                          => n.children.collect { case HashNode(h) => ByteString(h) }
@@ -147,7 +159,7 @@ class DumpChainActor(
 
       nodes.foreach {
         case n: LeafNode =>
-          import AccountImplicits._
+          import com.chipprbots.ethereum.domain.Account._
           val account = n.value.toArray[Byte].toAccount
 
           if (account.codeHash != DumpChainActor.emptyEvm) {
@@ -165,7 +177,7 @@ class DumpChainActor(
         case _ =>
       }
 
-      val cNodes = NodeData(contractNodes).values.indices.map(i => NodeData(contractNodes).getMptNode(i))
+      val cNodes = contractNodes.map(v => v.toArray[Byte].toMptNode)
       contractChildren = contractChildren ++ cNodes.flatMap {
         case n: BranchNode                          => n.children.collect { case HashNode(h) => ByteString(h) }
         case ExtensionNode(_, HashNode(h), _, _, _) => Seq(ByteString(h))
@@ -209,6 +221,7 @@ class DumpChainActor(
           val headersRemaining = maxBlocks - blockHeaderToRequest
           peerToRequest.ref ! SendMessage(
             GetBlockHeaders(
+              requestId = ETHPackets.nextRequestId,
               block = Left(blockHeaderToRequest),
               maxHeaders = headersRemaining.max(MaxHeadersPerRequest),
               skip = 0,
@@ -227,13 +240,13 @@ class DumpChainActor(
             blockBodiesToRequest.splitAt(MaxBodiesPerRequest)
           blockBodiesToRequest = remainingBodiesToRequest
           blockBodiesRequested = currentBlockBodiesToRequest
-          peerToRequest.ref ! SendMessage(GetBlockBodies(currentBlockBodiesToRequest))
+          peerToRequest.ref ! SendMessage(GetBlockBodies(ETHPackets.nextRequestId, currentBlockBodiesToRequest))
 
         } else if (receiptsToRequest.nonEmpty) {
           val (currentReceiptsToRequest, remainingReceiptsToRequest) = receiptsToRequest.splitAt(MaxReceiptsPerRequest)
           receiptsToRequest = remainingReceiptsToRequest
           receiptsRequested = currentReceiptsToRequest
-          peerToRequest.ref ! SendMessage(GetReceipts(currentReceiptsToRequest))
+          peerToRequest.ref ! SendMessage(GetReceipts(ETHPackets.nextRequestId, currentReceiptsToRequest))
         }
       }
     }

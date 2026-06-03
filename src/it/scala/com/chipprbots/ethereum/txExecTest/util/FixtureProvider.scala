@@ -25,11 +25,9 @@ import com.chipprbots.ethereum.mpt.HashNode
 import com.chipprbots.ethereum.mpt.LeafNode
 import com.chipprbots.ethereum.mpt.MerklePatriciaTrie
 import com.chipprbots.ethereum.mpt.MptNode
-import com.chipprbots.ethereum.network.p2p.messages.ETH63._
+import com.chipprbots.ethereum.blockchain.sync.codec.MptNodeCodecs._
+import com.chipprbots.ethereum.blockchain.sync.codec.ReceiptCodecs._
 import com.chipprbots.ethereum.utils.Config
-
-import MptNodeEncoders._
-import ReceiptImplicits._
 
 object FixtureProvider {
 

@@ -58,7 +58,7 @@ class RegularSync(
   val broadcaster: ActorRef = context.actorOf(
     BlockBroadcasterActor
       .props(
-        new BlockBroadcast(networkPeerManager),
+        new BlockBroadcast(networkPeerManager, isPoWChain = configBuilder.blockchainConfig.terminalTotalDifficulty.isEmpty),
         peerEventBus,
         networkPeerManager,
         blacklist,

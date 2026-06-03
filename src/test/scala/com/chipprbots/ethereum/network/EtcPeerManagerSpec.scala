@@ -579,7 +579,8 @@ class EtcPeerManagerSpec extends AnyFlatSpec with Matchers {
           peerManager.ref,
           peerEventBus.ref,
           storagesInstance.storages.appStateStorage,
-          Some(forkResolver)
+          Some(forkResolver),
+          isPoWChain = true
         )
       )
     )

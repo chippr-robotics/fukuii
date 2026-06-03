@@ -283,4 +283,83 @@ class ETH69ComplianceSpec extends AnyWordSpec with Matchers {
       }
     }
   }
+
+  // ── Receipts69 bloom ABSENT — regression test for the EIP-7642 bloom bug ────
+  //
+  // The bug: ETHPackets.Receipts69 was encoded using bloom-inclusive ReceiptEnc
+  // (from ReceiptCodecs), producing 4-field receipts. The fix uses ReceiptBloomFreeEnc
+  // which produces 3-field receipts: [stateHash, gasUsed, logs] — no logsBloomFilter.
+  //
+  // This test uses the production encoding path (ReceiptBloomFreeEnc) to prove that
+  // a LegacyReceipt with a real non-zero bloom does NOT include that bloom on the wire.
+
+  "ETH69 Receipts69 bloom regression" when {
+    import ETHPackets.Receipts69._
+    import ETHPackets.ReceiptBloomFreeEnc
+    import com.chipprbots.ethereum.rlp._
+    import com.chipprbots.ethereum.domain._
+
+    "encoding a LegacyReceipt via ReceiptBloomFreeEnc" should {
+
+      "produce 3-field receipt RLP (no bloom field)" taggedAs UnitTest in {
+        val bloom256 = ByteString(Array.fill(256)(0xff.toByte))
+        val receipt = LegacyReceipt(
+          SuccessOutcome,
+          cumulativeGasUsed = BigInt(21000),
+          logsBloomFilter = bloom256,
+          logs = Seq.empty
+        )
+        val receiptRLP = new ReceiptBloomFreeEnc(receipt).toRLPEncodable
+        receiptRLP match {
+          case r: RLPList =>
+            r.items.size shouldEqual 3  // stateHash, gasUsed, logs — NO bloom
+          case _ => fail("Expected RLPList for receipt")
+        }
+      }
+
+      "not include the 256-byte bloom in Receipts69 wire bytes" taggedAs UnitTest in {
+        val bloom256 = ByteString(Array.fill(256)(0xff.toByte))
+        val receipt = LegacyReceipt(
+          SuccessOutcome,
+          cumulativeGasUsed = BigInt(21000),
+          logsBloomFilter = bloom256,
+          logs = Seq.empty
+        )
+        // Build Receipts69 using the production bloom-free path
+        val receiptRLP = new ReceiptBloomFreeEnc(receipt).toRLPEncodable
+        val receiptsForBlocks = RLPList(RLPList(receiptRLP))
+        val msg = ETHPackets.Receipts69(BigInt(1), receiptsForBlocks)
+        val wireBytes = msg.toBytes
+
+        // The 256-byte all-0xff bloom must not appear anywhere in the wire encoding.
+        // We slide a 256-byte window over the bytes and check no run of 0xff x256 exists.
+        val bloomBytes = bloom256.toArray[Byte]
+        val hasBloom = wireBytes.sliding(256).exists(window => window.sameElements(bloomBytes))
+        hasBloom shouldBe false
+      }
+
+      "round-trip via ETH69 decoder and preserve field count = 3" taggedAs UnitTest in {
+        val bloom256 = ByteString(Array.fill(256)(0xab.toByte))
+        val receipt = LegacyReceipt(
+          HashOutcome(ByteString(Array.fill(32)(0x11.toByte))),
+          cumulativeGasUsed = BigInt(50000),
+          logsBloomFilter = bloom256,
+          logs = Seq.empty
+        )
+        val receiptRLP = new ReceiptBloomFreeEnc(receipt).toRLPEncodable
+        val receiptsForBlocks = RLPList(RLPList(receiptRLP))
+        val msg = ETHPackets.Receipts69(BigInt(5), receiptsForBlocks)
+        val wireBytes = msg.toBytes
+
+        decoder(Capability.ETH69).fromBytes(Codes.ReceiptsCode, wireBytes) match {
+          case Right(r: ETHPackets.Receipts69) =>
+            r.requestId shouldEqual BigInt(5)
+            val blockReceipts = r.receiptsForBlocks.items.head.asInstanceOf[RLPList]
+            val innerReceipt = blockReceipts.items.head.asInstanceOf[RLPList]
+            innerReceipt.items.size shouldEqual 3  // no bloom
+          case other => fail(s"Expected Receipts69, got $other")
+        }
+      }
+    }
+  }
 }
