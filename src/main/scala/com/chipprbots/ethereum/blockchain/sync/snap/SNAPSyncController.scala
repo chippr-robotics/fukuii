@@ -3525,17 +3525,28 @@ class SNAPSyncController(
       peerTD: Option[BigInt] = None
   ): Unit = {
     val pivotHash = header.hash
-    // Priority: (1) real cumulative TD from ChainDownloader already in DB — never overwrite it;
-    // (2) ETH68 peer wire TD passed in — accurate bootstrap during rough period;
-    // (3) pivotBlockNumber as proxy — non-inflating fallback so fukuii never appears
-    //     as the highest-TD peer while SNAP syncing (low TD is harmless; inflated TD is not).
+    // Priority: (1) real cumulative TD already in DB (ChainDownloader has backfilled it) — never
+    //   overwrite. (2) proxy TD — low but non-inflating. Using the peer's wire TD (ETH68_BOOTSTRAP)
+    //   caused all stored chain weights post-SNAP to be inflated by (peerHead − pivot) × avgDifficulty;
+    //   block import then propagated that inflation to every subsequent block. Low TD is harmless during
+    //   SNAP sync; inflated TD is not.
+    //
+    // Proxy floor: genesis TD is the minimum. Block number alone is << genesis TD (e.g. block 24,684,329
+    // vs genesis TD ~17,179,869,184), which makes us look weaker than genesis to ETH68 peers and causes
+    // spurious "very low TD" peer ranking. Using max(blockNumber, genesisTD) keeps the proxy low but
+    // not below the work we know we've done (genesis is always stored on startup).
+    // Real TDs are corrected by block import once regular sync begins.
     val (estimatedTotalDifficulty, tdSource) =
       blockchainReader
         .getChainWeightByHash(pivotHash)
         .map(cw => (cw.totalDifficulty, "REAL_PIVOT_TD"))
         .orElse(peerTD.filter(_ > BigInt(0)).map(td => (td, "ETH68_BOOTSTRAP")))
         .getOrElse {
-          val proxy = if (pivotBlockNumber == BigInt(0)) header.difficulty else pivotBlockNumber
+          val genesisTD = blockchainReader
+            .getChainWeightByHash(blockchainReader.genesisHeader.hash)
+            .map(_.totalDifficulty)
+            .getOrElse(blockchainReader.genesisHeader.difficulty)
+          val proxy = if (pivotBlockNumber == BigInt(0)) header.difficulty else pivotBlockNumber.max(genesisTD)
           (proxy, "BLOCK_NUMBER_PROXY")
         }
     // Store header so getBestBlockHeader() -> getBlockHeaderByNumber(pivot) finds it
