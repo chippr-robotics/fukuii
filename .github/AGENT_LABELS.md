@@ -242,6 +242,6 @@ The agent label patterns are defined in `.github/labeler.yml`. If you need to up
 ## Related Documentation
 
 - [Creating Agent Labels](CREATE_LABELS.md): Step-by-step guide to create labels
-- [Agent Definitions](.github/agents/): Individual agent instruction files
+- [Claude Subagents](../.claude/agents/): Specialist subagent definitions — `forge`, `eye`, `wraith`, `herald`, `mithril`. The Morgoth (process discipline) and ICE (migration methodology) roles now live in [CLAUDE.md](../CLAUDE.md), since Claude subagents are orchestrated by the main session rather than by another agent.
 - [Workflow Documentation](workflows/README.md): GitHub Actions workflows
 - [PR Management Workflow](workflows/pr-management.yml): Auto-labeling implementation

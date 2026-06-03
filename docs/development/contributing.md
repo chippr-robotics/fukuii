@@ -558,7 +558,7 @@ We have specialized agents with different areas of expertise:
 - **herald 🧭**: Fixes network protocol and peer communication issues
 - **Morgoth 🎯**: Shepherds all agents with process discipline and quality verification
 
-See [Agent Labels](https://github.com/chippr-robotics/fukuii/blob/develop/.github/AGENT_LABELS.md) for detailed descriptions and [Agent Definitions](https://github.com/chippr-robotics/fukuii/tree/develop/.github/agents/) for full agent instructions.
+See [Agent Labels](https://github.com/chippr-robotics/fukuii/blob/develop/.github/AGENT_LABELS.md) for detailed descriptions. The agents are implemented as [Claude subagents](https://github.com/chippr-robotics/fukuii/tree/develop/.claude/agents/) (`forge`, `eye`, `wraith`, `herald`, `mithril`); the Morgoth and ICE coordination roles are documented in [CLAUDE.md](https://github.com/chippr-robotics/fukuii/blob/develop/CLAUDE.md), which the main session uses to orchestrate them.
 
 ### Core Principles (Guided by Morgoth)
 
