@@ -155,11 +155,24 @@ class RegularSync(
 
     case RegularSync.PrintStatus =>
       val lag = progressState.bestKnownNetworkBlock - progressState.currentBlock
+      val now = System.currentTimeMillis()
+      val dtSecs =
+        if (progressState.lastPrintTimeMs > 0) (now - progressState.lastPrintTimeMs) / 1000.0 else 0.0
+      val deltaBlocks = progressState.currentBlock - progressState.lastPrintBlock
+      val rate =
+        if (dtSecs > 0 && progressState.lastPrintTimeMs > 0) deltaBlocks.toDouble / dtSecs else 0.0
+      val etaStr =
+        if (rate > 0.1 && lag > 0) f"${lag.toDouble / rate / 3600}%.1fh"
+        else if (lag == 0) "at head"
+        else "unknown"
       log.info(
-        "RegularSync following head: current={} best={} lag={}",
-        progressState.currentBlock,
-        progressState.bestKnownNetworkBlock,
-        lag
+        s"RegularSync: current=${progressState.currentBlock} best=${progressState.bestKnownNetworkBlock} " +
+          s"lag=$lag rate=${f"$rate%.1f"}/s eta=$etaStr"
+      )
+      context.become(
+        running(
+          progressState.copy(lastPrintBlock = progressState.currentBlock, lastPrintTimeMs = now)
+        )
       )
   }
 
@@ -216,7 +229,9 @@ object RegularSync {
       startedFetching: Boolean,
       initialBlock: BigInt,
       currentBlock: BigInt,
-      bestKnownNetworkBlock: BigInt
+      bestKnownNetworkBlock: BigInt,
+      lastPrintBlock: BigInt = BigInt(0),
+      lastPrintTimeMs: Long = 0L
   ) {
     def toStatus: SyncProtocol.Status =
       if (startedFetching && bestKnownNetworkBlock != 0 && currentBlock < bestKnownNetworkBlock) {

@@ -115,28 +115,27 @@ class BlockFetcher(
   private def processFetchCommands(state: BlockFetcherState): Behavior[FetchCommand] =
     Behaviors.receiveMessage {
       case PrintStatus =>
+        val now = System.currentTimeMillis()
+        val dt = if (state.lastPrintTimeMs > 0) (now - state.lastPrintTimeMs) / 1000.0 else 0.0
+        val delta = state.lastBlock - state.lastPrintBlock
+        val rate = if (dt > 0 && state.lastPrintTimeMs > 0) delta.toDouble / dt else 0.0
         log.info(
-          "BlockFetcher: readyBlocks={} knownTop={} onTop={}",
-          state.readyBlocks.size,
-          state.knownTop,
-          state.isOnTop
-        )
-        log.debug("BlockFetcher detailed status: {}", state.statusDetailed)
-        log.debug(
-          "Current state - last block: {}, known top: {}, is on top: {}, ready blocks: {}, waiting headers: {}",
+          "BlockFetcher: lastBlock={} knownTop={} readyBlocks={} waitingHeaders={} rate={}/s",
           state.lastBlock,
           state.knownTop,
-          state.isOnTop,
           state.readyBlocks.size,
-          state.waitingHeaders.size
+          state.waitingHeaders.size,
+          f"$rate%.1f"
         )
+        log.debug("BlockFetcher detailed status: {}", state.statusDetailed)
+        val updatedState = state.copy(lastPrintBlock = state.lastBlock, lastPrintTimeMs = now)
         // Defense-in-depth: if stuck at chain head with no peer gossip (e.g., ETH/69 peers that
         // sent BlockRangeUpdate before we subscribed, or a quiet period), probe speculatively.
         // withPossibleNewTopAt(knownTop + 1) exits isOnTop and triggers tryFetchHeaders.
         if (state.isOnTop) {
           log.debug("BlockFetcher: isOnTop at knownTop={}, probing for next block", state.knownTop)
-          fetchBlocks(state.withPossibleNewTopAt(state.knownTop + 1))
-        } else Behaviors.same
+          fetchBlocks(updatedState.withPossibleNewTopAt(state.knownTop + 1))
+        } else fetchBlocks(updatedState)
 
       case PickBlocks(amount, replyTo) =>
         log.debug("PickBlocks request for {} blocks (ready blocks: {})", amount, state.readyBlocks.size)

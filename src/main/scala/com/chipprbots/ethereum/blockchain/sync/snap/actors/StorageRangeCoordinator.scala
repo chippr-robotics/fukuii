@@ -361,6 +361,7 @@ class StorageRangeCoordinator(
   // Completion is only reported after this is set AND pending+active tasks drain.
   // Geth-aligned: coordinators run from start, tasks arrive inline during account download.
   private var noMoreTasksExpected: Boolean = false
+  private var storageMilestonePct: Int = -1
 
   // Statistics
   private var slotsDownloaded: Long = 0
@@ -1355,12 +1356,25 @@ class StorageRangeCoordinator(
     val shouldLog = now - lastStateLogMs >= StateLogIntervalMs
     if (shouldLog) {
       lastStateLogMs = now
+      val pctInt = (progress * 100).toInt
       log.info(
-        s"[STORAGE-STATE] pending=${tasks.size} active=${activeTasks.size} " +
+        s"[STORAGE-STATE] $pctInt% | pending=${tasks.size} active=${activeTasks.size} " +
+          s"completed=$completedTaskCount " +
           s"workers-known=${knownAvailablePeers.size} stateless=${statelessPeers.size} " +
           s"cooling=${knownAvailablePeers.count(isPeerCoolingDown)} eligible=${eligiblePeers.size} " +
           s"strikes=${emptyResponseStrikes.size} root=${stateRoot.take(4).toHex}"
       )
+      if (noMoreTasksExpected) {
+        val activeCount = activeTasks.values.map(_._2.size).sum
+        val total = completedTaskCount + activeCount + tasks.size
+        val (newM, crossed) =
+          com.chipprbots.ethereum.blockchain.sync.ProgressMilestones
+            .crossed(completedTaskCount, total, storageMilestonePct)
+        storageMilestonePct = newM
+        crossed.foreach { m =>
+          log.info(s"[SNAP-PROGRESS] STORAGE-COORD MILESTONE $m% — $completedTaskCount / $total tasks complete")
+        }
+      }
     }
     if (eligiblePeers.isEmpty) {
       if (shouldLog) {

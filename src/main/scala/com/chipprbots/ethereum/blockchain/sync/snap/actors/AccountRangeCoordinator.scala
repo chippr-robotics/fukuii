@@ -28,6 +28,7 @@ import com.chipprbots.ethereum.network.Peer
 import com.chipprbots.ethereum.mpt.MerklePatriciaTrie
 import com.chipprbots.ethereum.utils.ByteStringUtils.ByteStringOps
 import com.google.common.hash.{BloomFilter, Funnel, PrimitiveSink}
+import com.chipprbots.ethereum.blockchain.sync.ProgressMilestones
 
 /** AccountRangeCoordinator manages account range download workers.
   *
@@ -377,6 +378,7 @@ class AccountRangeCoordinator(
   private val startTime = System.currentTimeMillis()
   private var lastProgressLogAt: Long = 0 // accounts count at last periodic log
   private val ProgressLogInterval: Long = 100_000 // log every 100K accounts
+  private var lastFlatMilestonePct: Int = -1
   private val totalKeyspace: BigInt = BigInt(2).pow(256)
   // Cumulative keyspace consumed: incremented each time a task's `next` advances.
   // On restart, derive from restored task positions so progress % and ETA are accurate.
@@ -820,6 +822,9 @@ class AccountRangeCoordinator(
       }
       if (isComplete) {
         log.info("Account range sync complete!")
+        log.info(
+          s"[SNAP-PROGRESS] ACCOUNT-RANGE 100% — $accountsDownloaded accounts downloaded — COMPLETE"
+        )
 
         // Signal controller IMMEDIATELY so storage+bytecode phases can start in parallel
         // with trie finalization. These phases don't need the finalized account trie —
@@ -1365,6 +1370,14 @@ class AccountRangeCoordinator(
         )
         com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncMetrics.setAccountActivePeers(activePeerCount)
         lastProgressLogAt = accountsDownloaded
+        val pctInt = pct.toInt
+        val (newM, crossed) = ProgressMilestones.crossed(pctInt.toLong, 100L, lastFlatMilestonePct)
+        lastFlatMilestonePct = newM
+        crossed.foreach { m =>
+          log.info(
+            s"[SNAP-PROGRESS] ACCOUNT-RANGE $m% keyspace covered | $accountsDownloaded accounts | $rate accts/s"
+          )
+        }
       }
 
       if (rest.nonEmpty) {

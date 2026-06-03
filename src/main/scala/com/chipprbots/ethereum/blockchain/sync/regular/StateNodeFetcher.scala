@@ -52,6 +52,8 @@ class StateNodeFetcher(
   override def makeAdaptedMessage[T <: Message](peer: Peer, msg: T): StateNodeFetcherCommand = AdaptedMessage(peer, msg)
 
   private var requester: Option[StateNodeRequester] = None
+  private var totalNodesFetched: Long = 0L
+  private val nodesFetchStartMs: Long = System.currentTimeMillis()
 
   override def onMessage(message: StateNodeFetcherCommand): Behavior[StateNodeFetcherCommand] =
     message match {
@@ -91,11 +93,21 @@ class StateNodeFetcher(
       // SNAP TrieNodes response
       case AdaptedMessage(peer, TrieNodes(_, nodes)) if requester.isDefined =>
         log.info("Received SNAP TrieNodes response from peer {} with {} nodes", peer, nodes.size)
+        totalNodesFetched += 1
+        if (totalNodesFetched % 1000 == 0) {
+          val rate = totalNodesFetched * 1000L / (System.currentTimeMillis() - nodesFetchStartMs).max(1)
+          log.info("StateNodeFetcher: {} nodes fetched | {} nodes/s", totalNodesFetched, rate)
+        }
         handleTrieNodesValues(peer, nodes)
 
       // SNAP ByteCodes response
       case AdaptedMessage(peer, ByteCodes(_, codes)) if requester.isDefined =>
         log.info("Received SNAP ByteCodes response from peer {} with {} codes", peer, codes.size)
+        totalNodesFetched += 1
+        if (totalNodesFetched % 1000 == 0) {
+          val rate = totalNodesFetched * 1000L / (System.currentTimeMillis() - nodesFetchStartMs).max(1)
+          log.info("StateNodeFetcher: {} nodes fetched | {} nodes/s", totalNodesFetched, rate)
+        }
         handleByteCodesValues(peer, codes)
 
       case StateNodeFetcher.RetryStateNodeRequest =>

@@ -201,8 +201,11 @@ class NetworkPeerManagerActor(
       val emptyHeaders = emptyHeaderResponses; emptyHeaderResponses = 0
       val active = peersWithInfo.size
       val snapPeers = peersWithInfo.values.count(_.peerInfo.remoteStatus.supportsSnap)
+      val inbound = peersWithInfo.values.count(_.peer.incomingConnection)
+      val outbound = active - inbound
       log.info(
-        s"Network [60s]: active=$active peers ($snapPeers snap-capable), +$tcpFailed tcp-failed, +$authFailed auth-failed, +$authTimeout auth-timeout, +$emptyHeaders empty-headers"
+        s"Network [60s]: active=$active ($snapPeers snap) in=$inbound out=$outbound | " +
+          s"+$tcpFailed tcp-fail +$authFailed auth-fail +$authTimeout auth-timeout +$emptyHeaders empty-hdrs"
       )
 
     case NetworkPeerManagerActor.RefreshPeerBestBlocks =>

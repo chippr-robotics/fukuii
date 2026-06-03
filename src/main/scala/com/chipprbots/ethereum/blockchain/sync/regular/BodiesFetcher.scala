@@ -37,6 +37,8 @@ class BodiesFetcher(
 
   import BodiesFetcher._
   private type Command = BodiesFetcher.BodiesFetcherCommand
+  private var totalBodiesFetched: Long = 0L
+  private val bodiesFetchStartMs: Long = System.currentTimeMillis()
 
   override def makeAdaptedMessage[T <: Message](peer: Peer, msg: T): Command = AdaptedMessage(peer, msg)
 
@@ -71,7 +73,13 @@ class BodiesFetcher(
       protocolLabel: String
   ): Behavior[Command] = {
     log.debug("Received {} block bodies from peer {} via {}", bodies.size, peer.id, protocolLabel)
-    if (bodies.isEmpty) {
+    if (bodies.nonEmpty) {
+      totalBodiesFetched += bodies.size
+      if (totalBodiesFetched % 1000 == 0) {
+        val rate = totalBodiesFetched * 1000L / (System.currentTimeMillis() - bodiesFetchStartMs).max(1)
+        log.info("BodiesFetcher: {} bodies fetched | {} bodies/s", totalBodiesFetched, rate)
+      }
+    } else {
       log.debug("Received empty bodies response from peer {}", peer.id)
     }
     // Always forward bodies to supervisor to ensure state is cleared

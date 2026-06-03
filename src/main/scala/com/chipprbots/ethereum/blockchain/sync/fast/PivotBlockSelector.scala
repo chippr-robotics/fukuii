@@ -258,7 +258,13 @@ class PivotBlockSelector(
 
   private def sendResponseAndCleanup(pivotBlockHeader: BlockHeader): Unit = {
     pivotRetryState = pivotRetryState.reset
-    log.info("Found pivot block: {} hash: {}", pivotBlockHeader.number, pivotBlockHeader.hashAsHexString)
+    val attempts = pivotRetryState.attempt
+    log.info(
+      "[PIVOT] Selected block={} hash={} after {} attempt(s)",
+      pivotBlockHeader.number,
+      pivotBlockHeader.hashAsHexString,
+      attempts
+    )
     fastSync ! Result(pivotBlockHeader)
     peerEventBus ! Unsubscribe()
     context.stop(self)

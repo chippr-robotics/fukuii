@@ -877,6 +877,7 @@ class SNAPSyncController(
         log.info("Ignoring duplicate AccountRangeSyncComplete")
       } else {
         accountsComplete = true
+        progressMonitor.startPhase(AccountRangeSync)
         log.info("Account range sync complete. Signaling NoMore to bytecode/storage coordinators.")
 
         // Persist accounts-complete flag for crash recovery (Step 7)
@@ -1006,6 +1007,7 @@ class SNAPSyncController(
       refreshPivotInPlace("healing-stagnated")
 
     case StateHealingComplete =>
+      progressMonitor.startPhase(StateHealing)
       log.info("Healing coordinator signaled complete (no pending tasks, no active requests).")
       if (trieWalkInProgress) {
         // A trie walk is already running — its result will determine next step

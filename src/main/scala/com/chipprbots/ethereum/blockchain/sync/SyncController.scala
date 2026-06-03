@@ -1129,8 +1129,8 @@ class SyncController(
     (stateRootOpt, pivotBlockOpt) match {
       case (Some(stateRoot), Some(pivotBlock)) =>
         log.info(
-          s"Starting SNAP recovery (bytecode=$needBytecode, storage=$needStorage, " +
-            s"stateRoot=${stateRoot.take(4).toArray.map("%02x".format(_)).mkString}..., pivotBlock=$pivotBlock)"
+          s"[SNAP-RECOVERY] Phase starting — bytecodeNeeded=$needBytecode storageNeeded=$needStorage " +
+            s"generation=$syncGeneration — polling for snap-capable peers every 5s"
         )
 
         val snapSyncConfig = loadSnapSyncConfig()
@@ -1332,7 +1332,7 @@ class SyncController(
       peerPoller: org.apache.pekko.actor.Cancellable = org.apache.pekko.actor.Cancellable.alreadyCancelled
   ): Receive = {
     case BytecodeRecoveryActor.RecoveryComplete =>
-      log.info(s"Bytecode recovery complete. Storage complete: $storageComplete")
+      log.info(s"[SNAP-RECOVERY] bytecode recovery complete (storage done: $storageComplete)")
       if (storageComplete) {
         completeRecovery(peerPoller)
       } else {
@@ -1342,7 +1342,7 @@ class SyncController(
       }
 
     case StorageRecoveryActor.RecoveryComplete =>
-      log.info(s"Storage recovery complete. Bytecode complete: $bytecodeComplete")
+      log.info(s"[SNAP-RECOVERY] storage recovery complete (bytecode done: $bytecodeComplete)")
       if (bytecodeComplete) {
         completeRecovery(peerPoller)
       } else {

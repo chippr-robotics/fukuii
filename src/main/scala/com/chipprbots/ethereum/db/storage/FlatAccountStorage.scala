@@ -69,6 +69,12 @@ class FlatAccountStorage(val dataSource: DataSource) extends TransactionalKeyVal
         Stream.empty
     }
 
+  def approximateKeyCount(): Long =
+    dataSource match {
+      case rdb: RocksDbDataSource => rdb.approximateKeyCount(namespace)
+      case _                      => 0L
+    }
+
   override def storageContent: Stream[IO, Either[IterationError, (ByteString, ByteString)]] =
     dataSource.iterate(namespace).map { result =>
       result.map { case (key, value) => (ByteString.fromArrayUnsafe(key), ByteString.fromArrayUnsafe(value)) }

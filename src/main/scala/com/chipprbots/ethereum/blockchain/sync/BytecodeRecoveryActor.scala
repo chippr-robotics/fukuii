@@ -106,6 +106,10 @@ class BytecodeRecoveryActor(
     var abandonTimer: Option[Cancellable] = Some(
       context.system.scheduler.scheduleOnce(abandonAfter, self, CheckAbandon(0L))
     )
+    var downloadedCount = 0L
+    var lastBytecodeRecoveryMilestone: Int = -1
+    var lastRateNanos = System.nanoTime()
+    var lastRateDownloaded = 0L
 
     def recordProgress(): Unit = {
       progressSeq += 1
@@ -126,7 +130,9 @@ class BytecodeRecoveryActor(
         coordinator ! snap.actors.Messages.ByteCodePeerAvailable(peer)
 
       case snap.SNAPSyncController.ByteCodeSyncComplete =>
-        log.info(s"Bytecode recovery complete: downloaded bytecodes for $expectedCount missing codeHashes")
+        log.info(
+          s"[SNAP-PROGRESS] BYTECODE-RECOVERY 100% — $expectedCount / $expectedCount bytecodes recovered — COMPLETE"
+        )
         RecoveryMetrics.setBytecodeDownloaded(expectedCount.toLong)
         RecoveryMetrics.setBytecodePhase(RecoveryMetrics.PhaseComplete)
         finishRecovery()
@@ -135,6 +141,21 @@ class BytecodeRecoveryActor(
         downloadedCount += 1
         RecoveryMetrics.setBytecodeDownloaded(downloadedCount)
         recordProgress()
+        downloadedCount += 1
+        val (newM, crossed) =
+          ProgressMilestones.crossed(downloadedCount, expectedCount.toLong, lastBytecodeRecoveryMilestone)
+        lastBytecodeRecoveryMilestone = newM
+        crossed.foreach { m =>
+          val elapsedSecs = (System.nanoTime() - lastRateNanos) / 1e9
+          val rate = if (elapsedSecs > 0) ((downloadedCount - lastRateDownloaded) / elapsedSecs).toLong else 0L
+          if (m % 10 == 0 || m <= 5 || m >= 95) {
+            lastRateNanos = System.nanoTime()
+            lastRateDownloaded = downloadedCount
+          }
+          log.info(
+            s"[SNAP-PROGRESS] BYTECODE-RECOVERY $m% — $downloadedCount / $expectedCount bytecodes | $rate bytecodes/s"
+          )
+        }
 
       case CheckAbandon(progressAtSchedule) =>
         if (progressAtSchedule == progressSeq) {
