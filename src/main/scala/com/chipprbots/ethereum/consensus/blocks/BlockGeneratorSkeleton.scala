@@ -59,7 +59,7 @@ abstract class BlockGeneratorSkeleton(
       logsBloom = ByteString.empty,
       difficulty = difficultyCalc.calculateDifficulty(blockNumber, blockTimestamp, parent.header),
       number = blockNumber,
-      gasLimit = calculateGasLimit(parent.header.gasLimit),
+      gasLimit = calculateGasLimit(parent.header.gasLimit, blockNumber),
       gasUsed = 0,
       unixTimestamp = blockTimestamp,
       extraData = blockchainConfig.daoForkConfig
@@ -162,23 +162,26 @@ abstract class BlockGeneratorSkeleton(
     transactionsForBlock
   }
 
-  /** Calculates the gas limit for the next block, converging toward the configured target at ±1/1024 per block. This
-    * mirrors the consensus-enforced bound: each block's gas limit may change by at most parent/GasLimitBoundDivisor - 1
-    * relative to the parent. The algorithm matches core-geth's CalcGasLimit() and besu's
-    * OlympiaTargetingGasLimitCalculator.
+  /** Calculates the gas limit for the next block, converging toward the target at ±1/1024 per block.
+    *
+    * The target is resolved via the fork-embedded gas schedule (ForkBlockNumbers.gasLimitAdjustmentStartAt). When the
+    * schedule returns Some(target), it is authoritative — the operator's gas-limit-target config is ignored entirely
+    * for this fork era. When None, falls back to miningConfig.gasLimitTarget (existing behavior).
+    *
+    * This guarantees that a Fukuii miner with a stale operator config (e.g. gas-limit-target = 8M) will automatically
+    * begin converging toward 60M at Olympia activation without any config change. The algorithm matches core-geth's
+    * CalcGasLimit() and besu's OlympiaTargetingGasLimitCalculator.
     */
-  protected def calculateGasLimit(parentGas: BigInt): BigInt = {
-    val target = miningConfig.gasLimitTarget
+  protected def calculateGasLimit(parentGas: BigInt, blockNumber: BigInt)(implicit
+      blockchainConfig: BlockchainConfig
+  ): BigInt = {
+    val target = blockchainConfig.forkBlockNumbers
+      .gasLimitAdjustmentStartAt(blockNumber)
+      .getOrElse(miningConfig.gasLimitTarget)
     val delta = parentGas / BlockHeaderValidator.GasLimitBoundDivisor - 1
-    if (parentGas < target) {
-      val next = parentGas + delta
-      if (next > target) target else next
-    } else if (parentGas > target) {
-      val next = parentGas - delta
-      if (next < target) target else next
-    } else {
-      parentGas
-    }
+    if (parentGas < target) { val n = parentGas + delta; if (n > target) target else n }
+    else if (parentGas > target) { val n = parentGas - delta; if (n < target) target else n }
+    else parentGas
   }
 
   protected def buildMpt[K](entities: Seq[K], vSerializable: ByteArraySerializable[K]): ByteString = {

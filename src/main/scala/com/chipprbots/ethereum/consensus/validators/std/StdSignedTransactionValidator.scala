@@ -37,6 +37,7 @@ object StdSignedTransactionValidator extends SignedTransactionValidator {
       accumGasUsed: BigInt
   )(implicit blockchainConfig: BlockchainConfig): Either[SignedTransactionError, SignedTransactionValid] =
     for {
+      _ <- validateOlympiaTxTypes(stx, blockHeader)
       _ <- validateBlobTransactionSupport(stx, blockHeader)
       _ <- checkSyntacticValidity(stx)
       _ <- validateInitCodeSize(stx, blockHeader.number)
@@ -52,6 +53,35 @@ object StdSignedTransactionValidator extends SignedTransactionValidator {
   /** EIP-4844 Type-3 (blob) transactions require Cancun activation. ETC never activates Cancun, so blob transactions
     * are always rejected on ETC networks.
     */
+  /** EIP-1559 Type-2 and EIP-7702 Type-4 transactions are only valid on ETC from Olympia onwards. Pre-Olympia, the fee
+    * market is not active on ETC and these transaction formats must be rejected. ETH is exempted — it gates these types
+    * via London (Type-2) and Prague (Type-4) activation.
+    */
+  private def validateOlympiaTxTypes(
+      stx: SignedTransaction,
+      blockHeader: BlockHeader
+  )(implicit blockchainConfig: BlockchainConfig): Either[SignedTransactionError, SignedTransactionValid] = {
+    if (blockchainConfig.networkType == com.chipprbots.ethereum.utils.NetworkType.ETH)
+      return Right(SignedTransactionValid)
+    if (blockHeader.number >= blockchainConfig.forkBlockNumbers.olympiaBlockNumber)
+      return Right(SignedTransactionValid)
+    stx.tx match {
+      case _: TransactionWithDynamicFee =>
+        Left(
+          SignedTransactionError.TransactionSyntaxError(
+            "TYPE_2_TX_NOT_SUPPORTED: EIP-1559 dynamic-fee transactions require Olympia activation"
+          )
+        )
+      case _: SetCodeTransaction =>
+        Left(
+          SignedTransactionError.TransactionSyntaxError(
+            "TYPE_4_TX_NOT_SUPPORTED: EIP-7702 set-code transactions require Olympia activation"
+          )
+        )
+      case _ => Right(SignedTransactionValid)
+    }
+  }
+
   private def validateBlobTransactionSupport(
       stx: SignedTransaction,
       blockHeader: BlockHeader
