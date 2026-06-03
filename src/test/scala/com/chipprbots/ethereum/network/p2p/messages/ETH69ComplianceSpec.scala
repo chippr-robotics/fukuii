@@ -13,8 +13,8 @@ import com.chipprbots.ethereum.testing.Tags._
 
 /** Wire-format compliance tests for ETH68 and ETH69.
   *
-  * Verifies that our packet encoding/decoding matches the EIP-7642 spec and the
-  * reference client implementations (go-ethereum, Besu, Nethermind, Reth, Erigon).
+  * Verifies that our packet encoding/decoding matches the EIP-7642 spec and the reference client implementations
+  * (go-ethereum, Besu, Nethermind, Reth, Erigon).
   *
   * Run before every JAR build targeted at live peer testing.
   */
@@ -54,10 +54,10 @@ class ETH69ComplianceSpec extends AnyWordSpec with Matchers {
           case RLPList(
                 RLPValue(vBytes),
                 RLPValue(netIdBytes),
-                RLPValue(tdBytes),   // field 3 = TD (not genesis)
-                RLPValue(_),         // bestHash
-                RLPValue(_),         // genesisHash
-                _                    // forkId list
+                RLPValue(tdBytes), // field 3 = TD (not genesis)
+                RLPValue(_), // bestHash
+                RLPValue(_), // genesisHash
+                _ // forkId list
               ) =>
             import com.chipprbots.ethereum.utils.ByteUtils
             ByteUtils.bytesToBigInt(tdBytes) shouldEqual td
@@ -89,8 +89,15 @@ class ETH69ComplianceSpec extends AnyWordSpec with Matchers {
       }
 
       "have NO totalDifficulty field (ETH69 is TD-free)" in {
-        val msg = ETHPackets.Status69.Status69(69, 61L, ByteString("genesis"),
-          ForkId(1L, None), BigInt(0), BigInt(100), ByteString("hash"))
+        val msg = ETHPackets.Status69.Status69(
+          69,
+          61L,
+          ByteString("genesis"),
+          ForkId(1L, None),
+          BigInt(0),
+          BigInt(100),
+          ByteString("hash")
+        )
         val encoded = msg.toBytes
         import com.chipprbots.ethereum.rlp._
         val rlpDecoded = rawDecode(encoded)
@@ -100,7 +107,7 @@ class ETH69ComplianceSpec extends AnyWordSpec with Matchers {
             // Field 3 (index 2) should be genesisHash (32-byte ByteString), NOT a BigInt TD
             rlpList.items(2) match {
               case RLPValue(bytes) => bytes.length shouldEqual 7 // "genesis".getBytes
-              case _ => fail("Field 3 should be genesisHash RLPValue")
+              case _               => fail("Field 3 should be genesisHash RLPValue")
             }
           case _ => fail("Expected RLPList for Status69")
         }
@@ -110,8 +117,15 @@ class ETH69ComplianceSpec extends AnyWordSpec with Matchers {
         val genesisHash = ByteString(Array.fill(32)(0x11.toByte))
         val latestHash = ByteString(Array.fill(32)(0x22.toByte))
         val latestBlock = BigInt(12345678)
-        val msg = ETHPackets.Status69.Status69(69, 61L, genesisHash,
-          ForkId(0xbe46d57cL, None), BigInt(0), latestBlock, latestHash)
+        val msg = ETHPackets.Status69.Status69(
+          69,
+          61L,
+          genesisHash,
+          ForkId(0xbe46d57cL, None),
+          BigInt(0),
+          latestBlock,
+          latestHash
+        )
         val encoded = msg.toBytes
         // Decode as ETH69 — should give back same fields
         val decoded = decoder(Capability.ETH69).fromBytes(Codes.StatusCode, encoded)
@@ -133,8 +147,7 @@ class ETH69ComplianceSpec extends AnyWordSpec with Matchers {
 
     "encoding and decoding" should {
       "round-trip correctly" in {
-        val msg = ETHPackets.BlockRangeUpdate(BigInt(0), BigInt(21000000),
-          ByteString(Array.fill(32)(0xab.toByte)))
+        val msg = ETHPackets.BlockRangeUpdate(BigInt(0), BigInt(21000000), ByteString(Array.fill(32)(0xab.toByte)))
         val encoded = msg.toBytes
         val decoded = decoder(Capability.ETH69).fromBytes(Codes.BlockRangeUpdateCode, encoded)
         decoded shouldEqual Right(msg)
@@ -160,9 +173,9 @@ class ETH69ComplianceSpec extends AnyWordSpec with Matchers {
         val bloom256 = Array.fill(256)(0xff.toByte)
         val receiptRLP = RLPList(
           RLPValue(Array.fill(32)(0xaa.toByte)), // stateHash
-          RLPValue(Array(0x01.toByte)),           // gasUsed
-          RLPValue(bloom256),                     // logsBloom (256 bytes) ← present in ETH68
-          RLPList()                               // logs
+          RLPValue(Array(0x01.toByte)), // gasUsed
+          RLPValue(bloom256), // logsBloom (256 bytes) ← present in ETH68
+          RLPList() // logs
         )
         val receiptsForBlocks = RLPList(RLPList(receiptRLP))
         val msg = ETHPackets.Receipts68(requestId = BigInt(42), receiptsForBlocks)
@@ -171,9 +184,8 @@ class ETH69ComplianceSpec extends AnyWordSpec with Matchers {
           case Right(r: ETHPackets.Receipts68) =>
             r.requestId shouldEqual BigInt(42)
             // Verify bloom field is present (4 fields per receipt)
-            val firstReceipt = r.receiptsForBlocks.items.head.asInstanceOf[RLPList]
-              .items.head.asInstanceOf[RLPList]
-            firstReceipt.items.size shouldEqual 4  // stateHash, gasUsed, bloom, logs
+            val firstReceipt = r.receiptsForBlocks.items.head.asInstanceOf[RLPList].items.head.asInstanceOf[RLPList]
+            firstReceipt.items.size shouldEqual 4 // stateHash, gasUsed, bloom, logs
           case other => fail(s"Expected Receipts68, got $other")
         }
       }
@@ -184,7 +196,7 @@ class ETH69ComplianceSpec extends AnyWordSpec with Matchers {
         val encoded = msg.toBytes
         decoder(Capability.ETH68).fromBytes(Codes.ReceiptsCode, encoded) match {
           case Right(_: ETHPackets.Receipts68) => succeed
-          case other => fail(s"Expected Receipts68, got $other")
+          case other                           => fail(s"Expected Receipts68, got $other")
         }
       }
     }
@@ -201,8 +213,8 @@ class ETH69ComplianceSpec extends AnyWordSpec with Matchers {
         // ETH69 receipt: only 3 fields — [stateHash, gasUsed, logs] — NO bloom (EIP-7642)
         val receiptRLP = RLPList(
           RLPValue(Array.fill(32)(0xaa.toByte)), // stateHash
-          RLPValue(Array(0x01.toByte)),           // gasUsed
-          RLPList()                               // logs — NO logsBloomFilter field
+          RLPValue(Array(0x01.toByte)), // gasUsed
+          RLPList() // logs — NO logsBloomFilter field
         )
         val receiptsForBlocks = RLPList(RLPList(receiptRLP))
         val msg = ETHPackets.Receipts69(requestId = BigInt(42), receiptsForBlocks)
@@ -211,9 +223,8 @@ class ETH69ComplianceSpec extends AnyWordSpec with Matchers {
           case Right(r: ETHPackets.Receipts69) =>
             r.requestId shouldEqual BigInt(42)
             // Verify bloom field is ABSENT (3 fields per receipt, not 4)
-            val firstReceipt = r.receiptsForBlocks.items.head.asInstanceOf[RLPList]
-              .items.head.asInstanceOf[RLPList]
-            firstReceipt.items.size shouldEqual 3  // stateHash, gasUsed, logs — NO bloom
+            val firstReceipt = r.receiptsForBlocks.items.head.asInstanceOf[RLPList].items.head.asInstanceOf[RLPList]
+            firstReceipt.items.size shouldEqual 3 // stateHash, gasUsed, logs — NO bloom
           case other => fail(s"Expected Receipts69, got $other")
         }
       }
@@ -224,7 +235,7 @@ class ETH69ComplianceSpec extends AnyWordSpec with Matchers {
         val encoded = msg.toBytes
         decoder(Capability.ETH69).fromBytes(Codes.ReceiptsCode, encoded) match {
           case Right(_: ETHPackets.Receipts69) => succeed
-          case other => fail(s"Expected Receipts69, got $other")
+          case other                           => fail(s"Expected Receipts69, got $other")
         }
       }
 
@@ -233,17 +244,17 @@ class ETH69ComplianceSpec extends AnyWordSpec with Matchers {
         // Bloom-absent receipt has 3 fields
         val bloomAbsentReceipt = RLPList(
           RLPValue(Array.fill(32)(0xaa.toByte)), // stateHash
-          RLPValue(Array(0x64.toByte)),           // gasUsed = 100
-          RLPList()                               // logs
+          RLPValue(Array(0x64.toByte)), // gasUsed = 100
+          RLPList() // logs
         )
         // Verify this is indeed 3 fields (not 4 with bloom)
         bloomAbsentReceipt.items.size shouldEqual 3
         // A bloom-inclusive receipt would have 4 fields
         val bloomReceipt = RLPList(
           RLPValue(Array.fill(32)(0xaa.toByte)), // stateHash
-          RLPValue(Array(0x64.toByte)),           // gasUsed
-          RLPValue(Array.fill(256)(0x00.toByte)),// logsBloom  ← present in ETH68
-          RLPList()                               // logs
+          RLPValue(Array(0x64.toByte)), // gasUsed
+          RLPValue(Array.fill(256)(0x00.toByte)), // logsBloom  ← present in ETH68
+          RLPList() // logs
         )
         bloomReceipt.items.size shouldEqual 4
       }
@@ -261,7 +272,7 @@ class ETH69ComplianceSpec extends AnyWordSpec with Matchers {
         val encoded = msg.toBytes
         decoder(Capability.ETH68).fromBytes(Codes.GetReceiptsCode, encoded) match {
           case Right(_: ETHPackets.GetReceipts) => succeed
-          case other => fail(s"Expected GetReceipts, got $other")
+          case other                            => fail(s"Expected GetReceipts, got $other")
         }
       }
     }
@@ -278,7 +289,7 @@ class ETH69ComplianceSpec extends AnyWordSpec with Matchers {
         val encoded = msg.toBytes
         decoder(Capability.ETH69).fromBytes(Codes.GetReceiptsCode, encoded) match {
           case Right(_: ETHPackets.GetReceipts69) => succeed
-          case other => fail(s"Expected GetReceipts69, got $other")
+          case other                              => fail(s"Expected GetReceipts69, got $other")
         }
       }
     }
@@ -312,7 +323,7 @@ class ETH69ComplianceSpec extends AnyWordSpec with Matchers {
         val receiptRLP = new ReceiptBloomFreeEnc(receipt).toRLPEncodable
         receiptRLP match {
           case r: RLPList =>
-            r.items.size shouldEqual 3  // stateHash, gasUsed, logs — NO bloom
+            r.items.size shouldEqual 3 // stateHash, gasUsed, logs — NO bloom
           case _ => fail("Expected RLPList for receipt")
         }
       }
@@ -356,7 +367,7 @@ class ETH69ComplianceSpec extends AnyWordSpec with Matchers {
             r.requestId shouldEqual BigInt(5)
             val blockReceipts = r.receiptsForBlocks.items.head.asInstanceOf[RLPList]
             val innerReceipt = blockReceipts.items.head.asInstanceOf[RLPList]
-            innerReceipt.items.size shouldEqual 3  // no bloom
+            innerReceipt.items.size shouldEqual 3 // no bloom
           case other => fail(s"Expected Receipts69, got $other")
         }
       }

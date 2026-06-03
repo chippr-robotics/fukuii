@@ -265,7 +265,8 @@ class SyncControllerSpec
 
       // Send block that is way forward, we should ignore that block and blacklist that peer
       val futureHeaders = Seq(defaultPivotBlockHeader.copy(number = defaultPivotBlockHeader.number + 20))
-      val futureHeadersMessage = PeerRequestHandler.ResponseReceived(peer2, ETHPackets.BlockHeaders(BigInt(0), futureHeaders), 2L)
+      val futureHeadersMessage =
+        PeerRequestHandler.ResponseReceived(peer2, ETHPackets.BlockHeaders(BigInt(0), futureHeaders), 2L)
       implicit val ec = system.dispatcher
       system.scheduler.scheduleAtFixedRate(0.seconds, 0.5.seconds, fast, futureHeadersMessage)
 
@@ -924,7 +925,6 @@ class SyncControllerSpec
               )
             }
             this
-
 
             stateDownloadStarted = true
             if (!failedNodeRequest) {

@@ -53,8 +53,13 @@ class BlockBroadcast(val networkPeerManager: ActorRef, val isPoWChain: Boolean =
         info.remoteStatus.capability == Capability.ETH69
       }
       if (eth69Peers.nonEmpty) {
-        log.info("ETH69_BRU_BROADCAST: block={} hash={} to {} ETH69 peers (isPoW={})",
-          newHeader.number, newHeader.hash, eth69Peers.size, isPoWChain)
+        log.info(
+          "ETH69_BRU_BROADCAST: block={} hash={} to {} ETH69 peers (isPoW={})",
+          newHeader.number,
+          newHeader.hash,
+          eth69Peers.size,
+          isPoWChain
+        )
         eth69Peers.foreach { case (_, PeerWithInfo(peer, _)) =>
           networkPeerManager ! NetworkPeerManagerActor.SendMessage(bru, peer.id)
         }
@@ -77,13 +82,13 @@ class BlockBroadcast(val networkPeerManager: ActorRef, val isPoWChain: Boolean =
       val remoteStatus = peers(peer.id).peerInfo.remoteStatus
 
       val messageOpt: Option[MessageSerializable] = remoteStatus.capability match {
-        case Capability.ETH63 |
-            Capability.ETH64 | Capability.ETH65 | Capability.ETH66 | Capability.ETH67 | Capability.ETH68 =>
+        case Capability.ETH63 | Capability.ETH64 | Capability.ETH65 | Capability.ETH66 | Capability.ETH67 |
+            Capability.ETH68 =>
           Some(blockToBroadcast.as63)
         case Capability.ETH69 if isPoWChain =>
           Some(blockToBroadcast.as63) // PoW: send NewBlock with TD — ECBP-1100 chain weight signal
         case Capability.ETH69 =>
-          None                        // PoS: no NewBlock — go-ethereum aligned
+          None // PoS: no NewBlock — go-ethereum aligned
         case Capability.SNAP1 =>
           Some(blockToBroadcast.as63)
         case _ =>
@@ -96,7 +101,8 @@ class BlockBroadcast(val networkPeerManager: ActorRef, val isPoWChain: Boolean =
   private def broadcastNewBlockHash(blockToBroadcast: BlockToBroadcast, peers: Set[Peer]): Unit = peers.foreach {
     peer =>
       val newBlockHeader = blockToBroadcast.block.header
-      val newBlockHashMsg = ETHPackets.NewBlockHashes.NewBlockHashes(Seq(BlockHash(newBlockHeader.hash, newBlockHeader.number)))
+      val newBlockHashMsg =
+        ETHPackets.NewBlockHashes.NewBlockHashes(Seq(BlockHash(newBlockHeader.hash, newBlockHeader.number)))
       networkPeerManager ! NetworkPeerManagerActor.SendMessage(newBlockHashMsg, peer.id)
   }
 

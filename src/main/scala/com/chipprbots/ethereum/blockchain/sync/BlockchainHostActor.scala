@@ -85,8 +85,9 @@ class BlockchainHostActor(
         // Include blob tx sidecar bytes for EIP-4844 network wrapping in PooledTransactions
         val matchingBlobBytes = response.blobTxNetworkBytes.filter { case (hash, _) => hashSet.contains(hash) }
         val responseMsg: MessageSerializable = requestIdOpt match {
-          case Some(requestId) => ETHPackets.PooledTransactions(requestId, matchingTxs, blobTxRawBytes = matchingBlobBytes)
-          case None            => ETHPackets.PooledTransactions(0, matchingTxs)  // requestId=0 for no-requestId case
+          case Some(requestId) =>
+            ETHPackets.PooledTransactions(requestId, matchingTxs, blobTxRawBytes = matchingBlobBytes)
+          case None => ETHPackets.PooledTransactions(0, matchingTxs) // requestId=0 for no-requestId case
         }
         networkPeerManagerActor ! NetworkPeerManagerActor.SendMessage(responseMsg, peerId)
       }
@@ -151,8 +152,12 @@ class BlockchainHostActor(
       val blockBodies = hashes
         .take(peerConfiguration.fastSyncHostConfiguration.maxBlocksBodiesPerMessage)
         .flatMap(hash => blockchainReader.getBlockBodyByHash(hash))
-      log.debug("HOST_BLOCK_BODIES_ETH68: requestId={} requested={} returning={}",
-        requestId, hashes.size, blockBodies.size)
+      log.debug(
+        "HOST_BLOCK_BODIES_ETH68: requestId={} requested={} returning={}",
+        requestId,
+        hashes.size,
+        blockBodies.size
+      )
       Some(ETHPackets.BlockBodies(requestId, blockBodies))
 
     // ETH68 GetBlockHeaders (via ETHPackets)

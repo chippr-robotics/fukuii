@@ -6,16 +6,16 @@ import com.chipprbots.ethereum.rlp._
 
 /** RLP codecs for Merkle Patricia Trie nodes.
   *
-  * Moved from ETH63.MptNodeEncoders (network message layer) to the sync codec package.
-  * Matches the Besu `ethereum/core/encoding/` pattern: codec infrastructure separate from protocol definitions.
+  * Moved from ETH63.MptNodeEncoders (network message layer) to the sync codec package. Matches the Besu
+  * `ethereum/core/encoding/` pattern: codec infrastructure separate from protocol definitions.
   */
 object MptNodeCodecs {
-  val BranchNodeChildLength  = 16
+  val BranchNodeChildLength = 16
   val BranchNodeIndexOfValue = 16
-  val ExtensionNodeLength    = 2
-  val LeafNodeLength         = 2
-  val MaxNodeValueSize       = 31
-  val HashLength             = 32
+  val ExtensionNodeLength = 2
+  val LeafNodeLength = 2
+  val MaxNodeValueSize = 31
+  val HashLength = 32
 
   implicit class MptNodeEnc(obj: MptNode) extends RLPSerializable {
     def toRLPEncodable: RLPEncodeable = MptTraversals.encode(obj)

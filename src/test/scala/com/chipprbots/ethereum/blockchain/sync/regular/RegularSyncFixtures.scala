@@ -339,8 +339,6 @@ trait RegularSyncFixtures { self: Matchers with AsyncMockFactory =>
       case (b1: ETHGetBlockBodies, b2: ETHGetBlockBodies) =>
         b1.hashes == b2.hashes
 
-
-
       case _ => x == y
     }
 

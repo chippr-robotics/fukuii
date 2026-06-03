@@ -13,7 +13,7 @@ import com.chipprbots.ethereum.utils.Config
 import com.chipprbots.ethereum.utils.Logger
 import com.chipprbots.ethereum.utils.ServerStatus
 
-case class EtcHelloExchangeState(handshakerConfiguration: NetworkHandshakerConfiguration)
+case class HelloExchangeState(handshakerConfiguration: NetworkHandshakerConfiguration)
     extends InProgressState[PeerInfo]
     with Logger {
 
@@ -52,11 +52,11 @@ case class EtcHelloExchangeState(handshakerConfiguration: NetworkHandshakerConfi
 
     // Log compression decision based on p2p version
     val compressionPolicy =
-      CompressionPolicy.fromHandshake(EtcHelloExchangeState.P2pVersion, hello.p2pVersion)
+      CompressionPolicy.fromHandshake(HelloExchangeState.P2pVersion, hello.p2pVersion)
     log.debug(
       "COMPRESSION_CONFIG: peerP2pVersion={}, ourP2pVersion={}, compressOutbound={}, expectInboundCompressed={}",
       hello.p2pVersion,
-      EtcHelloExchangeState.P2pVersion,
+      HelloExchangeState.P2pVersion,
       compressionPolicy.compressOutbound,
       compressionPolicy.expectInboundCompressed
     )
@@ -120,7 +120,7 @@ case class EtcHelloExchangeState(handshakerConfiguration: NetworkHandshakerConfi
         Config.Network.Server.port
     }
     Hello(
-      p2pVersion = EtcHelloExchangeState.P2pVersion,
+      p2pVersion = HelloExchangeState.P2pVersion,
       clientId = Config.clientId,
       capabilities = Config.supportedCapabilities,
       listenPort = listenPort,
@@ -129,7 +129,7 @@ case class EtcHelloExchangeState(handshakerConfiguration: NetworkHandshakerConfi
   }
 }
 
-object EtcHelloExchangeState {
+object HelloExchangeState {
   // Allow p2pVersion to be configured via fukuii.network.peer.p2p-version.
   // Default remains 5 (Snappy-capable), but can be overridden per environment for investigations.
   lazy val P2pVersion: Int = Config.Network.peer.p2pVersion

@@ -313,7 +313,10 @@ class PeerActorSpec
 
   }
 
-  it should "be fully connected and respond to pings after ETH68 handshake (replaces ETH63 fork-block exchange)" taggedAs (UnitTest, NetworkTest) in new TestSetup {
+  it should "be fully connected and respond to pings after ETH68 handshake (replaces ETH63 fork-block exchange)" taggedAs (
+    UnitTest,
+    NetworkTest
+  ) in new TestSetup {
     // ETH68+: ForkId validation replaces the ETH63 fork-block exchange. After the Status
     // exchange completes, the peer is immediately in Handshaked state.
     saveEtcChainAtDaoFork()
@@ -579,8 +582,8 @@ class PeerActorSpec
 
     def expectStatusMessage(): Unit =
       rlpxConnection.expectMsgPF() {
-        case RLPxConnectionHandler.SendMessage(_: ETHPackets.Status68.Status68.Status68Enc)      => ()
-        case RLPxConnectionHandler.SendMessage(_: Status68Enc) => ()
+        case RLPxConnectionHandler.SendMessage(_: ETHPackets.Status68.Status68.Status68Enc) => ()
+        case RLPxConnectionHandler.SendMessage(_: Status68Enc)                              => ()
       }
 
     /** Advance our chain to the DAO fork block so ForkId validation succeeds for ETC mainnet peers. */

@@ -16,8 +16,8 @@ import com.chipprbots.ethereum.testing.Tags._
 
 /** Verifies that EthereumMessageDecoder dispatches to ETH68/ETH69 decoders.
   *
-  * ETH61-67 decoders were removed when Fukuii retired pre-ETH68 capability negotiation.
-  * This spec replaces the old per-version decoder tests with ETH68/ETH69-only coverage.
+  * ETH61-67 decoders were removed when Fukuii retired pre-ETH68 capability negotiation. This spec replaces the old
+  * per-version decoder tests with ETH68/ETH69-only coverage.
   */
 class MessageDecodersSpec extends AnyFlatSpec with Matchers with SecureRandomBuilder {
 

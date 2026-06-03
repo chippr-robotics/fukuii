@@ -75,7 +75,7 @@ object Capability {
         if (commonVersions.isEmpty) None
         else {
           val maxCommon = commonVersions.max
-          ethVersions1.find(_.version == maxCommon)  // always from our side — we have the decoder
+          ethVersions1.find(_.version == maxCommon) // always from our side — we have the decoder
         }
       } else None,
       // SNAP: exact match required

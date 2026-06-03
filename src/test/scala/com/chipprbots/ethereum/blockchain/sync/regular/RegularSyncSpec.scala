@@ -692,7 +692,7 @@ class RegularSyncSpec
             case NetworkPeerManagerActor.SendMessage(message, _) =>
               message.underlyingMsg match {
                 case ETHPackets.NewBlock(`newBlock`, _) => true
-                case _                                         => false
+                case _                                  => false
               }
             case _ => false
           }
@@ -751,7 +751,9 @@ class RegularSyncSpec
             )
 
             peersClient.expectMsgEq(blockHeadersRequest(6))
-            peersClient.reply(PeersClient.Response(defaultPeer, BlockHeaders(BigInt(0), testBlocksChunked.head.headers)))
+            peersClient.reply(
+              PeersClient.Response(defaultPeer, BlockHeaders(BigInt(0), testBlocksChunked.head.headers))
+            )
           }
           status <- pollForStatus(_.syncing)
         } yield {
@@ -779,7 +781,9 @@ class RegularSyncSpec
             )
 
             peersClient.expectMsgEq(blockHeadersChunkRequest(0))
-            peersClient.reply(PeersClient.Response(defaultPeer, BlockHeaders(BigInt(0), testBlocksChunked.head.headers)))
+            peersClient.reply(
+              PeersClient.Response(defaultPeer, BlockHeaders(BigInt(0), testBlocksChunked.head.headers))
+            )
           }
           status <- pollForStatus(_.syncing)
           lastBlock = testBlocks.last.number

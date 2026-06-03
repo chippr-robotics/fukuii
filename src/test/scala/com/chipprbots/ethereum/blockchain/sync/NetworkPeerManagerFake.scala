@@ -21,12 +21,12 @@ import com.chipprbots.ethereum.network.NetworkPeerManagerActor.SendMessage
 import com.chipprbots.ethereum.network.Peer
 import com.chipprbots.ethereum.network.PeerEventBusActor.PeerEvent.MessageFromPeer
 import com.chipprbots.ethereum.network.p2p.messages.ETHPackets
-import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.{BlockBodies}
-import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.{GetReceipts}
-import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.{Receipts68}
-import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.{BlockHeaders}
-import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.{GetBlockBodies}
-import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.{GetBlockHeaders}
+import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.BlockBodies
+import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.GetReceipts
+import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.Receipts68
+import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.BlockHeaders
+import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.GetBlockBodies
+import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.GetBlockHeaders
 import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.GetNodeData
 import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.NodeData
 import com.chipprbots.ethereum.utils.Config.SyncConfig
@@ -63,8 +63,8 @@ class NetworkPeerManagerFake(
   val responses: Stream[IO, MessageFromPeer] = responsesTopic.subscribe(100)
   val onPeersConnected: IO[Unit] = peersConnectedDeferred.get
   val pivotBlockSelected: Stream[IO, BlockHeader] = responses
-    .collect {
-      case MessageFromPeer(BlockHeaders(_, Seq(header)), peer) => (header, peer)
+    .collect { case MessageFromPeer(BlockHeaders(_, Seq(header)), peer) =>
+      (header, peer)
     }
     .chunkN(peers.size)
     .flatMap { headersFromPeersChunk =>
@@ -82,14 +82,14 @@ class NetworkPeerManagerFake(
     case MessageFromPeer(BlockHeaders(_, headers), _) if headers.size == syncConfig.blockHeadersPerRequest =>
       headers
   }
-  val fetchedBodies: Stream[IO, Seq[BlockBody]] = responses.collect {
-    case MessageFromPeer(BlockBodies(_, bodies), _) => bodies
+  val fetchedBodies: Stream[IO, Seq[BlockBody]] = responses.collect { case MessageFromPeer(BlockBodies(_, bodies), _) =>
+    bodies
   }
   val requestedReceipts: Stream[IO, Seq[ByteString]] = requests.collect(
     Function.unlift(msg =>
       msg.message.underlyingMsg match {
-        case GetReceipts(_, hashes)         => Some(hashes)
-        case _                            => None
+        case GetReceipts(_, hashes) => Some(hashes)
+        case _                      => None
       }
     )
   )

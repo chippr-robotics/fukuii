@@ -12,7 +12,6 @@ import com.chipprbots.ethereum.network.p2p.NetworkMessageDecoder
 
 class ETH68MessagesSpec extends AnyWordSpec with Matchers {
 
-
   "ETH68" when {
     val version = Capability.ETH68
 
@@ -31,7 +30,12 @@ class ETH68MessagesSpec extends AnyWordSpec with Matchers {
         val sizes = Seq[BigInt](100, 200, 300)
         val hashes = Seq(ByteString("hash1"), ByteString("hash2"), ByteString("hash3"))
         val msg = ETHPackets.NewPooledTransactionHashes(types, sizes, hashes)
-        verify(msg, (m: ETHPackets.NewPooledTransactionHashes) => m.toBytes, Codes.NewPooledTransactionHashesCode, version)
+        verify(
+          msg,
+          (m: ETHPackets.NewPooledTransactionHashes) => m.toBytes,
+          Codes.NewPooledTransactionHashesCode,
+          version
+        )
       }
     }
 

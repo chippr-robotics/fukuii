@@ -17,7 +17,7 @@ import scala.util.Try
 
 import org.bouncycastle.util.encoders.Hex
 
-import com.chipprbots.ethereum.network.handshaker.EtcHelloExchangeState
+import com.chipprbots.ethereum.network.handshaker.HelloExchangeState
 import com.chipprbots.ethereum.network.p2p.EthereumMessageDecoder
 import com.chipprbots.ethereum.network.p2p.Message
 import com.chipprbots.ethereum.network.p2p.MessageDecoder
@@ -537,7 +537,7 @@ class RLPxConnectionHandler(
     ): Option[(MessageCodec, Capability, InboundTranslator)] =
       Capability.negotiate(hello.capabilities.toList, capabilities).map { negotiated =>
         val compressionPolicy =
-          CompressionPolicy.fromHandshake(EtcHelloExchangeState.P2pVersion, hello.p2pVersion)
+          CompressionPolicy.fromHandshake(HelloExchangeState.P2pVersion, hello.p2pVersion)
         val supportsSnap =
           capabilities.contains(Capability.SNAP1) && hello.capabilities.contains(Capability.SNAP1)
         if (supportsSnap) {

@@ -13,10 +13,9 @@ import com.chipprbots.ethereum.utils.ByteUtils
 
 /** RLP codecs for Receipt and TxLogEntry (storage and wire format).
   *
-  * Moved from ETH63.ReceiptImplicits / ETH63.TxLogEntryImplicits.
-  * Lives here (sync/codec) rather than in domain because the decode path imports
-  * ETHPackets.TypedTransaction for EIP-2718 typed receipt dispatch, and domain
-  * cannot import from the network message layer without creating a circular dependency.
+  * Moved from ETH63.ReceiptImplicits / ETH63.TxLogEntryImplicits. Lives here (sync/codec) rather than in domain because
+  * the decode path imports ETHPackets.TypedTransaction for EIP-2718 typed receipt dispatch, and domain cannot import
+  * from the network message layer without creating a circular dependency.
   *
   * Matches the Besu `ethereum/core/encoding/` pattern.
   *
@@ -116,7 +115,7 @@ object ReceiptCodecs {
         val stateHash = postTransactionStateHash match {
           case RLPValue(bytes) if bytes.length > 1                     => HashOutcome(ByteString(bytes))
           case RLPValue(bytes) if bytes.length == 1 && bytes.head == 1 => SuccessOutcome
-          case _                                                        => FailureOutcome
+          case _                                                       => FailureOutcome
         }
         LegacyReceipt(
           stateHash,

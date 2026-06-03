@@ -240,8 +240,8 @@ class PendingTransactionsManagerSpec
     (resps1.map(_.peerId).toSet should contain).allOf(peer2.id, peer3.id)
     resps1.map(_.message.underlyingMsg).foreach {
       case ETHPackets.NewPooledTransactionHashes(_, _, hashes) => hashes.toSet shouldEqual msg1.map(_.tx.hash)
-      case SignedTransactions(txs)                        => txs.toSet shouldEqual msg1.map(_.tx)
-      case other                                          => fail(s"Unexpected message: $other")
+      case SignedTransactions(txs)                             => txs.toSet shouldEqual msg1.map(_.tx)
+      case other                                               => fail(s"Unexpected message: $other")
     }
 
     val tx2: Seq[SignedTransactionWithSender] = Seq.fill(5)(newStx())
@@ -254,8 +254,8 @@ class PendingTransactionsManagerSpec
     (resps2.map(_.peerId).toSet should contain).allOf(peer1.id, peer3.id)
     resps2.map(_.message.underlyingMsg).foreach {
       case ETHPackets.NewPooledTransactionHashes(_, _, hashes) => hashes.toSet shouldEqual msg2.map(_.tx.hash)
-      case SignedTransactions(txs)                        => txs.toSet shouldEqual msg2.map(_.tx)
-      case other                                          => fail(s"Unexpected message: $other")
+      case SignedTransactions(txs)                             => txs.toSet shouldEqual msg2.map(_.tx)
+      case other                                               => fail(s"Unexpected message: $other")
     }
 
     pendingTransactionsManager ! RemoveTransactions(tx1.dropRight(4).map(_.tx))
@@ -329,8 +329,8 @@ class PendingTransactionsManagerSpec
     val announcedHashes = announces
       .flatMap(_.message.underlyingMsg match {
         case ETHPackets.NewPooledTransactionHashes(_, _, hashes) => hashes
-        case SignedTransactions(txs)                        => txs.map(_.hash)
-        case _                                              => Nil
+        case SignedTransactions(txs)                             => txs.map(_.hash)
+        case _                                                   => Nil
       })
       .toSet
     (announcedHashes should contain).allOf(otherTx.tx.hash, overrideTx.tx.hash)
@@ -353,8 +353,8 @@ class PendingTransactionsManagerSpec
     replayed.peerId shouldBe peer1.id
     replayed.message.underlyingMsg match {
       case ETHPackets.NewPooledTransactionHashes(_, _, hashes) => hashes shouldBe Seq(stx.tx.hash)
-      case SignedTransactions(txs)                        => txs shouldBe Seq(stx.tx)
-      case other                                          => fail(s"Unexpected: $other")
+      case SignedTransactions(txs)                             => txs shouldBe Seq(stx.tx)
+      case other                                               => fail(s"Unexpected: $other")
     }
   }
 

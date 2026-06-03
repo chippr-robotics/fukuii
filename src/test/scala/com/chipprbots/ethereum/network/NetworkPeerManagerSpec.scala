@@ -41,7 +41,7 @@ import com.chipprbots.ethereum.network.p2p.messages.WireProtocol.Disconnect
 import com.chipprbots.ethereum.testing.Tags._
 import com.chipprbots.ethereum.utils.Config
 
-class EtcPeerManagerSpec extends AnyFlatSpec with Matchers {
+class NetworkPeerManagerSpec extends AnyFlatSpec with Matchers {
 
   it should "start with the peers initial info as provided" taggedAs (UnitTest, NetworkTest) in new TestSetup {
     expectInitialSubscriptions()

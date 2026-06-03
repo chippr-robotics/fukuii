@@ -81,8 +81,16 @@ class BlockchainHostActorSpec extends AnyFlatSpec with Matchers {
     blockchainHost ! MessageFromPeer(ETHPackets.GetReceipts(BigInt(0), receiptsHashes), peerId)
 
     // then
-    networkPeerManager.expectMsg(NetworkPeerManagerActor.SendMessage(
-      ETHPackets.Receipts68(BigInt(0), com.chipprbots.ethereum.rlp.RLPList(receipts.map(rs => com.chipprbots.ethereum.rlp.RLPList(rs.map(_.toRLPEncodable): _*)): _*)), peerId))
+    networkPeerManager.expectMsg(
+      NetworkPeerManagerActor.SendMessage(
+        ETHPackets.Receipts68(
+          BigInt(0),
+          com.chipprbots.ethereum.rlp
+            .RLPList(receipts.map(rs => com.chipprbots.ethereum.rlp.RLPList(rs.map(_.toRLPEncodable): _*)): _*)
+        ),
+        peerId
+      )
+    )
   }
 
   it should "return BlockBodies for block hashes" taggedAs (UnitTest, SyncTest) in new TestSetup {
@@ -103,7 +111,9 @@ class BlockchainHostActorSpec extends AnyFlatSpec with Matchers {
     blockchainHost ! MessageFromPeer(ETHPackets.GetBlockBodies(BigInt(0), blockBodiesHashes), peerId)
 
     // then
-    networkPeerManager.expectMsg(NetworkPeerManagerActor.SendMessage(ETHPackets.BlockBodies(BigInt(0), blockBodies), peerId))
+    networkPeerManager.expectMsg(
+      NetworkPeerManagerActor.SendMessage(ETHPackets.BlockBodies(BigInt(0), blockBodies), peerId)
+    )
   }
 
   it should "return block headers by block number" taggedAs (UnitTest, SyncTest) in new TestSetup {

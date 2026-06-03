@@ -32,7 +32,13 @@ case class EtcForkBlockExchangeState(
           reverse = false
         )
       else
-        ETHPackets.GetBlockHeaders(ETHPackets.nextRequestId, Left(forkResolver.forkBlockNumber), maxHeaders = 1, skip = 0, reverse = false)
+        ETHPackets.GetBlockHeaders(
+          ETHPackets.nextRequestId,
+          Left(forkResolver.forkBlockNumber),
+          maxHeaders = 1,
+          skip = 0,
+          reverse = false
+        )
 
     NextMessage(
       messageToSend = getBlockHeadersMsg,
@@ -65,7 +71,7 @@ case class EtcForkBlockExchangeState(
   }
 
   def applyResponseMessage: PartialFunction[Message, HandshakerState[PeerInfo]] = {
-    case ETHPackets.BlockHeaders(_, blockHeaders)    => processForkBlockHeaders(blockHeaders)
+    case ETHPackets.BlockHeaders(_, blockHeaders) => processForkBlockHeaders(blockHeaders)
     case ETHPackets.BlockHeaders(_, blockHeaders) => processForkBlockHeaders(blockHeaders)
   }
 

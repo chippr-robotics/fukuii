@@ -131,8 +131,8 @@ class DumpChainActor(
       blockBodiesRequested = Nil
 
     case MessageFromPeer(m: Receipts68, _) =>
-      val receiptsByBlock: Seq[Seq[Receipt]] = m.receiptsForBlocks.items.collect {
-        case blockReceipts: RLPList => blockReceipts.items.toTypedRLPEncodables.map(_.toLegacyReceipt)
+      val receiptsByBlock: Seq[Seq[Receipt]] = m.receiptsForBlocks.items.collect { case blockReceipts: RLPList =>
+        blockReceipts.items.toTypedRLPEncodables.map(_.toLegacyReceipt)
       }
       println(s"Received ${receiptsByBlock.size} receipts lists")
       receiptsByBlock.zip(receiptsRequested).foreach { case (r, h) =>

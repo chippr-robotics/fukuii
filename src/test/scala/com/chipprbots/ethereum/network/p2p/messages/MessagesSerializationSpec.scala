@@ -21,8 +21,8 @@ import com.chipprbots.ethereum.network.p2p.messages.WireProtocol._
 
 /** Serialization round-trip tests for ETH68+ wire messages.
   *
-  * ETH61-67 serialization tests removed with those protocol files.
-  * ETH68 is Fukuii's minimum supported version (EIP-4938).
+  * ETH61-67 serialization tests removed with those protocol files. ETH68 is Fukuii's minimum supported version
+  * (EIP-4938).
   */
 class MessagesSerializationSpec extends AnyWordSpec with Matchers {
 

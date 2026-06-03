@@ -7,11 +7,11 @@ import com.chipprbots.ethereum.testing.Tags._
 
 /** Regression tests for the Capability.negotiate strict-intersection fix (commit e674303aa).
   *
-  * The bug: negotiate() could return a capability from the REMOTE peer's set (e.g. ETH67)
-  * that Fukuii has no decoder for, causing a MatchError in production.
+  * The bug: negotiate() could return a capability from the REMOTE peer's set (e.g. ETH67) that Fukuii has no decoder
+  * for, causing a MatchError in production.
   *
-  * The fix: always return a capability from OUR set (the first argument) — we guarantee
-  * we have a decoder for everything we advertise.
+  * The fix: always return a capability from OUR set (the first argument) — we guarantee we have a decoder for
+  * everything we advertise.
   */
 class CapabilityNegotiateSpec extends AnyWordSpec with Matchers {
 

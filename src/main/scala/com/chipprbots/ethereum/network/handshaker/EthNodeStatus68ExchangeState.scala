@@ -15,11 +15,11 @@ import com.chipprbots.ethereum.network.p2p.messages.WireProtocol.Disconnect
 
 /** Handles ETH/64-68 STATUS handshake.
   *
-  * Wire format: [version, networkId, td, bestHash, genesis, forkId] (6 fields, TD present).
-  * ETC is PoW — TD is permanent, not a legacy field.
+  * Wire format: [version, networkId, td, bestHash, genesis, forkId] (6 fields, TD present). ETC is PoW — TD is
+  * permanent, not a legacy field.
   *
-  * Renamed from EthNodeStatus64ExchangeState to reflect actual minimum version support (ETH68).
-  * Uses ETHPackets.Status68 to match what ETH68MessageDecoder decodes (no ETH64 import needed).
+  * Renamed from EthNodeStatus64ExchangeState to reflect actual minimum version support (ETH68). Uses
+  * ETHPackets.Status68 to match what ETH68MessageDecoder decodes (no ETH64 import needed).
   */
 case class EthNodeStatus68ExchangeState(
     handshakerConfiguration: NetworkHandshakerConfiguration,
@@ -27,27 +27,41 @@ case class EthNodeStatus68ExchangeState(
     supportsSnap: Boolean = false,
     peerCapabilities: List[Capability] = List.empty,
     clientId: String = ""
-) extends EtcNodeStatusExchangeState[ETHPackets.Status68.Status68] {
+) extends NodeStatusExchangeState[ETHPackets.Status68.Status68] {
 
-  import ETHPackets.Status68.Status68._  // toBytes for createStatusMsg
+  import ETHPackets.Status68.Status68._ // toBytes for createStatusMsg
   import handshakerConfiguration._
 
   def applyResponseMessage: PartialFunction[Message, HandshakerState[PeerInfo]] = {
     // ETH68MessageDecoder returns ETHPackets.Status68.Status68
     case status: ETHPackets.Status68.Status68 =>
-      handleStatus68Fields(status.protocolVersion, status.networkId.toLong, status.totalDifficulty,
-        status.bestHash, status.genesisHash, status.forkId)
+      handleStatus68Fields(
+        status.protocolVersion,
+        status.networkId.toLong,
+        status.totalDifficulty,
+        status.bestHash,
+        status.genesisHash,
+        status.forkId
+      )
   }
 
   private def handleStatus68Fields(
-      protocolVersion: Int, networkId: Long, totalDifficulty: BigInt,
-      bestHash: org.apache.pekko.util.ByteString, genesisHash: org.apache.pekko.util.ByteString,
+      protocolVersion: Int,
+      networkId: Long,
+      totalDifficulty: BigInt,
+      bestHash: org.apache.pekko.util.ByteString,
+      genesisHash: org.apache.pekko.util.ByteString,
       forkId: ForkId
   ): HandshakerState[PeerInfo] = {
     import ForkIdValidator.syncIoLogger
     log.info(
       "ETH{}_STATUS: Received - totalDifficulty={}, networkId={}, bestHash={}, genesisHash={}, forkId={}",
-      protocolVersion, totalDifficulty, networkId, bestHash, genesisHash, forkId
+      protocolVersion,
+      totalDifficulty,
+      networkId,
+      bestHash,
+      genesisHash,
+      forkId
     )
 
     val localBestBlock = blockchainReader.getBestBlockNumber()
@@ -58,45 +72,65 @@ case class EthNodeStatus68ExchangeState(
 
     log.debug(
       "ETH{}_STATUS: Local state - bestBlock={}, genesisHash={}, localForkId={}",
-      protocolVersion, localBestBlock, localGenesisHash, localForkId
+      protocolVersion,
+      localBestBlock,
+      localGenesisHash,
+      localForkId
     )
 
     if (networkId != peerConfiguration.networkId) {
-      log.debug("ETH{}_STATUS: NetworkId mismatch - local={}, remote={} - disconnecting",
-        protocolVersion, peerConfiguration.networkId, networkId)
+      log.debug(
+        "ETH{}_STATUS: NetworkId mismatch - local={}, remote={} - disconnecting",
+        protocolVersion,
+        peerConfiguration.networkId,
+        networkId
+      )
       DisconnectedState[PeerInfo](Disconnect.Reasons.UselessPeer)
     } else if (genesisHash != localGenesisHash) {
-      log.debug("ETH{}_STATUS: Genesis mismatch - local={}, remote={} - disconnecting",
-        protocolVersion, localGenesisHash, genesisHash)
+      log.debug(
+        "ETH{}_STATUS: Genesis mismatch - local={}, remote={} - disconnecting",
+        protocolVersion,
+        localGenesisHash,
+        genesisHash
+      )
       DisconnectedState[PeerInfo](Disconnect.Reasons.UselessPeer)
     } else {
       (for {
         validationResult <-
           ForkIdValidator.validatePeer[SyncIO](blockchainReader.genesisHeader.hash, blockchainConfig)(
-            blockchainReader.getBestBlockNumber(), forkId
+            blockchainReader.getBestBlockNumber(),
+            forkId
           )
       } yield {
         log.debug("STATUS_EXCHANGE: ForkId validation result: {}", validationResult)
         validationResult match {
           case Connect =>
-            log.info("ETH{}_STATUS: Accepted - totalDifficulty={}, latestBlock={} (forkId ok)",
-              protocolVersion, totalDifficulty, bestHash)
+            log.info(
+              "ETH{}_STATUS: Accepted - totalDifficulty={}, latestBlock={} (forkId ok)",
+              protocolVersion,
+              totalDifficulty,
+              bestHash
+            )
             ConnectedState(
-              PeerInfo.withForkAccepted(RemoteStatus(
-                negotiatedCapability,
-                networkId,
-                com.chipprbots.ethereum.domain.ChainWeight.totalDifficultyOnly(totalDifficulty),
-                bestHash,
-                genesisHash,
-                supportsSnap,
-                peerCapabilities,
-                remoteClientId = clientId
-              ))
+              PeerInfo.withForkAccepted(
+                RemoteStatus(
+                  negotiatedCapability,
+                  networkId,
+                  com.chipprbots.ethereum.domain.ChainWeight.totalDifficultyOnly(totalDifficulty),
+                  bestHash,
+                  genesisHash,
+                  supportsSnap,
+                  peerCapabilities,
+                  remoteClientId = clientId
+                )
+              )
             )
           case other =>
             log.debug(
               "STATUS_EXCHANGE: ForkId validation failed: {} - disconnecting. Local: {}, Remote: {}",
-              other, localForkId, forkId
+              other,
+              localForkId,
+              forkId
             )
             DisconnectedState[PeerInfo](Disconnect.Reasons.UselessPeer)
         }

@@ -254,16 +254,20 @@ class NetworkPeerManagerActor(
           if (reader.getBestBlockNumber() > 0) {
             coldStartCompleted = true
             var updatedPeers = peersWithInfo
-            var refreshCount  = 0
+            var refreshCount = 0
             peersWithInfo.foreach { case (peerId, PeerWithInfo(_, peerInfo)) =>
               if (peerInfo.remoteStatus.capability == Capability.ETH69 && peerInfo.maxBlockNumber > 0) {
                 val (cw, source) = reader.resolveETH69ChainWeight(
-                  peerInfo.bestBlockHash, peerInfo.maxBlockNumber, isPoWChain
+                  peerInfo.bestBlockHash,
+                  peerInfo.maxBlockNumber,
+                  isPoWChain
                 )
                 if (source != "COLD_START") {
                   log.info(
                     "ETH69_COLD_START_RESOLVED: peer={} newTD={} source={}",
-                    peerId, cw.totalDifficulty, source
+                    peerId,
+                    cw.totalDifficulty,
+                    source
                   )
                   updatedPeers = updatedPeers.updated(
                     peerId,
@@ -389,12 +393,22 @@ class NetworkPeerManagerActor(
       // can skip ETH/69 peers that are actively pushing BlockRangeUpdate.
       message match {
         case bru: ETHPackets.BlockRangeUpdate =>
-          log.info("ETH69_BRU_RECEIVED: peer={} earliest={} latest={} latestHash={}",
-            peerId, bru.earliestBlock, bru.latestBlock, bru.latestBlockHash)
+          log.info(
+            "ETH69_BRU_RECEIVED: peer={} earliest={} latest={} latestHash={}",
+            peerId,
+            bru.earliestBlock,
+            bru.latestBlock,
+            bru.latestBlockHash
+          )
           lastBlockSignalMs(peerId) = System.currentTimeMillis()
-        case bru: ETH69.BlockRangeUpdate =>  // legacy path (Phase 3 cleanup)
-          log.info("ETH69_BRU_RECEIVED: peer={} earliest={} latest={} latestHash={}",
-            peerId, bru.earliestBlock, bru.latestBlock, bru.latestBlockHash)
+        case bru: ETH69.BlockRangeUpdate => // legacy path (Phase 3 cleanup)
+          log.info(
+            "ETH69_BRU_RECEIVED: peer={} earliest={} latest={} latestHash={}",
+            peerId,
+            bru.earliestBlock,
+            bru.latestBlock,
+            bru.latestBlockHash
+          )
           lastBlockSignalMs(peerId) = System.currentTimeMillis()
         case _: ETHPackets.BlockHeaders | _: ETHPackets.NewBlock | _: NewBlockHashes =>
           lastBlockSignalMs(peerId) = System.currentTimeMillis()
@@ -497,7 +511,12 @@ class NetworkPeerManagerActor(
           // can resolve our PoW chain weight and promote us from its incomplete-connections cache.
           val bestInfo = appStateStorage.getBestBlockInfo()
           val bru = ETH69.BlockRangeUpdate(BigInt(0), bestInfo.number, bestInfo.hash)
-          log.info("ETH69_BRU_POST_HANDSHAKE: peer={} latestBlock={} latestHash={}", peer.id, bestInfo.number, bestInfo.hash)
+          log.info(
+            "ETH69_BRU_POST_HANDSHAKE: peer={} latestBlock={} latestHash={}",
+            peer.id,
+            bestInfo.number,
+            bestInfo.hash
+          )
           peerManagerActor ! PeerManagerActor.SendMessage(bru, peer.id)
         }
         NetworkMetrics.registerAddHandshakedPeer(peer)
@@ -681,7 +700,7 @@ class NetworkPeerManagerActor(
         }
       newPeerInfoOpt.getOrElse(initialPeerInfo)
 
-case ETHPackets.BlockHeaders(_, blockHeaders) =>
+    case ETHPackets.BlockHeaders(_, blockHeaders) =>
       val newPeerInfoOpt: Option[PeerInfo] =
         for {
           forkResolver <- forkResolverOpt
@@ -761,7 +780,7 @@ case ETHPackets.BlockHeaders(_, blockHeaders) =>
         update(m.hashes.map(h => (h.number, h.hash)))
       case m: ETHPackets.BlockRangeUpdate =>
         update(Seq((m.latestBlock, m.latestBlockHash)))
-      case m: ETH69.BlockRangeUpdate =>  // legacy path (Phase 3 cleanup)
+      case m: ETH69.BlockRangeUpdate => // legacy path (Phase 3 cleanup)
         update(Seq((m.latestBlock, m.latestBlockHash)))
       case _ => initialPeerInfo
     }

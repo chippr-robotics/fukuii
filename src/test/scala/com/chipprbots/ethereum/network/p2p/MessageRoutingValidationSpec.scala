@@ -11,8 +11,8 @@ import com.chipprbots.ethereum.network.p2p.messages.Codes
 import com.chipprbots.ethereum.network.p2p.messages.ETHPackets
 import com.chipprbots.ethereum.testing.Tags._
 
-/** Validates that ETH68 and ETH69 messages are correctly routed to their decoders.
-  * ETH62-67 decoder routing removed: Fukuii only negotiates ETH68 and ETH69.
+/** Validates that ETH68 and ETH69 messages are correctly routed to their decoders. ETH62-67 decoder routing removed:
+  * Fukuii only negotiates ETH68 and ETH69.
   */
 class MessageRoutingValidationSpec extends AnyFlatSpec with Matchers {
 

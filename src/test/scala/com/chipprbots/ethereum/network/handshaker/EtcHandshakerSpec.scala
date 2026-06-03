@@ -20,8 +20,8 @@ import com.chipprbots.ethereum.network.PeerManagerActor.PeerConfiguration
 import com.chipprbots.ethereum.network.handshaker.Handshaker.HandshakeComplete.HandshakeFailure
 import com.chipprbots.ethereum.network.handshaker.Handshaker.HandshakeComplete.HandshakeSuccess
 import com.chipprbots.ethereum.network.p2p.messages.Capability
-import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.{BlockHeaders}
-import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.{GetBlockHeaders}
+import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.BlockHeaders
+import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.GetBlockHeaders
 import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.GetBlockHeaders.GetBlockHeadersEnc
 import com.chipprbots.ethereum.network.p2p.messages.ETH69
 import com.chipprbots.ethereum.network.p2p.messages.ETHPackets
@@ -97,8 +97,6 @@ class NetworkHandshakerSpec extends AnyFlatSpec with Matchers {
         fail(s"Invalid handshaker state: $other")
     }
   }
-
-
 
   it should "connect correctly after validating fork id when peer supports ETH68" taggedAs (
     UnitTest,
@@ -220,7 +218,6 @@ class NetworkHandshakerSpec extends AnyFlatSpec with Matchers {
     }
   }
 
-
   it should "set supportsSnap=false for ETH69 peers when snap/1 is absent from Hello" taggedAs (
     UnitTest,
     NetworkTest
@@ -290,7 +287,6 @@ class NetworkHandshakerSpec extends AnyFlatSpec with Matchers {
       HandshakeFailure(Disconnect.Reasons.TimeoutOnReceivingAMessage)
     )
   }
-
 
   it should "fail if a status msg is received with invalid network id" taggedAs (
     UnitTest,
@@ -477,7 +473,7 @@ class NetworkHandshakerSpec extends AnyFlatSpec with Matchers {
 
   trait LocalPeerSetup extends TestSetup {
     val localHello: Hello = Hello(
-      p2pVersion = EtcHelloExchangeState.P2pVersion,
+      p2pVersion = HelloExchangeState.P2pVersion,
       clientId = Config.clientId,
       capabilities = Config.supportedCapabilities,
       listenPort = Config.Network.Server.port,
@@ -497,7 +493,7 @@ class NetworkHandshakerSpec extends AnyFlatSpec with Matchers {
       totalDifficulty = genesisBlock.header.difficulty,
       bestHash = genesisBlock.header.hash,
       genesisHash = genesisBlock.header.hash,
-      forkId = ForkId(0xfc64ec04L, Some(1150000))  // ETC genesis forkId (block 0)
+      forkId = ForkId(0xfc64ec04L, Some(1150000)) // ETC genesis forkId (block 0)
     )
     val localStatus: RemoteStatus = RemoteStatus(
       Capability.ETH68,
@@ -542,7 +538,7 @@ class NetworkHandshakerSpec extends AnyFlatSpec with Matchers {
   // Formerly RemotePeerETH63Setup — updated to ETH68 since ETH62-67 are retired
   trait RemotePeerETH63Setup extends RemotePeerSetup {
     val remoteHello: Hello = Hello(
-      p2pVersion = EtcHelloExchangeState.P2pVersion,
+      p2pVersion = HelloExchangeState.P2pVersion,
       clientId = "remote-peer",
       capabilities = Seq(Capability.ETH68),
       listenPort = remotePort,
@@ -572,7 +568,7 @@ class NetworkHandshakerSpec extends AnyFlatSpec with Matchers {
   // RemotePeerETH64Setup: updated to ETH68 (ETH64 retired)
   trait RemotePeerETH64Setup extends RemotePeerSetup {
     val remoteHello: Hello = Hello(
-      p2pVersion = EtcHelloExchangeState.P2pVersion,
+      p2pVersion = HelloExchangeState.P2pVersion,
       clientId = "remote-peer",
       capabilities = Seq(Capability.ETH68),
       listenPort = remotePort,
@@ -602,7 +598,7 @@ class NetworkHandshakerSpec extends AnyFlatSpec with Matchers {
   trait RemotePeerETH69Setup extends RemotePeerSetup {
     // ETH/69 peers never advertise snap/1 in Hello — snap is implicit per EIP-7642.
     val remoteHello: Hello = Hello(
-      p2pVersion = EtcHelloExchangeState.P2pVersion,
+      p2pVersion = HelloExchangeState.P2pVersion,
       clientId = "remote-peer-eth69",
       capabilities = Seq(Capability.ETH69), // No SNAP1
       listenPort = remotePort,

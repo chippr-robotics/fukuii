@@ -314,29 +314,28 @@ class PeersClient(
 
     }
 
-  /** Adapts message format based on peer's negotiated capability.
-    * ETH68+ always uses request-id — no adaptation needed.
+  /** Adapts message format based on peer's negotiated capability. ETH68+ always uses request-id — no adaptation needed.
     */
   private def adaptMessageForPeer[RequestMsg <: Message](peer: Peer, message: RequestMsg): Message = message
 
   private def responseClassTag[RequestMsg <: Message](requestMsg: RequestMsg): ClassTag[_ <: Message] =
     requestMsg match {
-      case _: ETHPackets.GetBlockHeaders    => implicitly[ClassTag[ETHPackets.BlockHeaders]]
-      case _: ETHPackets.GetBlockBodies     => implicitly[ClassTag[ETHPackets.BlockBodies]]
-      case _: ETHPackets.GetReceipts        => implicitly[ClassTag[ETHPackets.Receipts68]]
+      case _: ETHPackets.GetBlockHeaders       => implicitly[ClassTag[ETHPackets.BlockHeaders]]
+      case _: ETHPackets.GetBlockBodies        => implicitly[ClassTag[ETHPackets.BlockBodies]]
+      case _: ETHPackets.GetReceipts           => implicitly[ClassTag[ETHPackets.Receipts68]]
       case _: ETHPackets.GetPooledTransactions => implicitly[ClassTag[ETHPackets.PooledTransactions]]
-      case _: GetTrieNodes                  => implicitly[ClassTag[TrieNodes]]
-      case _: GetByteCodes                  => implicitly[ClassTag[ByteCodes]]
+      case _: GetTrieNodes                     => implicitly[ClassTag[TrieNodes]]
+      case _: GetByteCodes                     => implicitly[ClassTag[ByteCodes]]
     }
 
   private def responseMsgCode[RequestMsg <: Message](requestMsg: RequestMsg): Int =
     requestMsg match {
-      case _: ETHPackets.GetBlockHeaders    => Codes.BlockHeadersCode
-      case _: ETHPackets.GetBlockBodies     => Codes.BlockBodiesCode
-      case _: ETHPackets.GetReceipts        => Codes.ReceiptsCode
+      case _: ETHPackets.GetBlockHeaders       => Codes.BlockHeadersCode
+      case _: ETHPackets.GetBlockBodies        => Codes.BlockBodiesCode
+      case _: ETHPackets.GetReceipts           => Codes.ReceiptsCode
       case _: ETHPackets.GetPooledTransactions => Codes.PooledTransactionsCode
-      case _: GetTrieNodes                  => SNAP.Codes.TrieNodesCode
-      case _: GetByteCodes                  => SNAP.Codes.ByteCodesCode
+      case _: GetTrieNodes                     => SNAP.Codes.TrieNodesCode
+      case _: GetByteCodes                     => SNAP.Codes.ByteCodesCode
     }
 
   private def printStatus(requesters: Requesters): Unit = {

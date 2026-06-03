@@ -10,7 +10,7 @@ import com.chipprbots.ethereum.network.p2p.messages.WireProtocol.Disconnect
 import com.chipprbots.ethereum.network.p2p.messages.WireProtocol.Disconnect.Reasons
 import com.chipprbots.ethereum.utils.Logger
 
-trait EtcNodeStatusExchangeState[T <: Message] extends InProgressState[PeerInfo] with Logger {
+trait NodeStatusExchangeState[T <: Message] extends InProgressState[PeerInfo] with Logger {
 
   val handshakerConfiguration: NetworkHandshakerConfiguration
 

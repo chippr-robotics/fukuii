@@ -15,10 +15,9 @@ import com.chipprbots.ethereum.testing.Tags._
 
 /** ETHPackets.NodeData encode/decode tests.
   *
-  * ETH63's NodeData had getMptNode() for decoding MPT nodes from raw bytes.
-  * ETHPackets.NodeData stores raw bytes (Seq[ByteString]) for lazy decoding.
-  * The ETH68 message decoder rejects GetNodeData/NodeData (EIP-4938).
-  * These tests verify the raw encode/decode round-trip only.
+  * ETH63's NodeData had getMptNode() for decoding MPT nodes from raw bytes. ETHPackets.NodeData stores raw bytes
+  * (Seq[ByteString]) for lazy decoding. The ETH68 message decoder rejects GetNodeData/NodeData (EIP-4938). These tests
+  * verify the raw encode/decode round-trip only.
   */
 class NodeDataSpec extends AnyFlatSpec with Matchers {
 

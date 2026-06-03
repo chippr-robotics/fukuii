@@ -40,7 +40,7 @@ class PeerRequestHandler[RequestMsg <: Message, ResponseMsg <: Message: ClassTag
 
   private val expectedRequestId: Option[BigInt] = requestMsg match {
     case hasId: ETHPackets.HasRequestId => Some(hasId.requestId)
-    case _                         => None
+    case _                              => None
   }
 
   private def subscribeMessageClassifier = MessageClassifier(Set(responseMsgCode), PeerSelector.WithId(peer.id))

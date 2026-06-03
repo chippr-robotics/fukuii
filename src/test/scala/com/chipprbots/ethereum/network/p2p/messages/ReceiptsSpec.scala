@@ -23,8 +23,8 @@ import com.chipprbots.ethereum.testing.Tags._
 
 /** Receipt encoding/decoding tests.
   *
-  * ETH68 uses Receipts68 (requestId + raw RLP) — decoded lazily by FastSync.
-  * ETH63.Receipts (domain-decoded) was removed with ETH63 deletion.
+  * ETH68 uses Receipts68 (requestId + raw RLP) — decoded lazily by FastSync. ETH63.Receipts (domain-decoded) was
+  * removed with ETH63 deletion.
   */
 class ReceiptsSpec extends AnyFlatSpec with Matchers {
 
@@ -54,23 +54,31 @@ class ReceiptsSpec extends AnyFlatSpec with Matchers {
   )
 
   val encodedLegacyReceiptsList: RLPList =
-    RLPList(RLPList(RLPList(
-      RLPValue(exampleHash.toArray[Byte]),
-      cumulativeGas,
-      RLPValue(exampleLogsBloom.toArray[Byte]),
-      RLPList(encodedLogEntry)
-    )))
+    RLPList(
+      RLPList(
+        RLPList(
+          RLPValue(exampleHash.toArray[Byte]),
+          cumulativeGas,
+          RLPValue(exampleLogsBloom.toArray[Byte]),
+          RLPList(encodedLogEntry)
+        )
+      )
+    )
 
   val encodedType01ReceiptsList: RLPList =
-    RLPList(RLPList(PrefixedRLPEncodable(
-      Transaction.Type01,
+    RLPList(
       RLPList(
-        RLPValue(exampleHash.toArray[Byte]),
-        cumulativeGas,
-        RLPValue(exampleLogsBloom.toArray[Byte]),
-        RLPList(encodedLogEntry)
+        PrefixedRLPEncodable(
+          Transaction.Type01,
+          RLPList(
+            RLPValue(exampleHash.toArray[Byte]),
+            cumulativeGas,
+            RLPValue(exampleLogsBloom.toArray[Byte]),
+            RLPList(encodedLogEntry)
+          )
+        )
       )
-    )))
+    )
 
   // ── ETH68 Receipts68 round-trip (requestId + raw RLP) ──────────────────────────
   // Use bytes comparison to avoid Queue vs ArraySeq collection type mismatch in RLPList.items.

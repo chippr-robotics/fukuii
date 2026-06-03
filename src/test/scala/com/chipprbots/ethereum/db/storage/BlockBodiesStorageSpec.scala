@@ -40,8 +40,9 @@ class BlockBodiesStorageSpec
         // Mapping of block bodies is deleted
         val (toDelete, toLeave) = blocks.splitAt(Gen.choose(0, blocks.size).sample.get)
 
-        val batchUpdates = toDelete.foldLeft(storage.emptyBatchUpdate) { case (updates, ETHPackets.NewBlock(block, _)) =>
-          updates.and(storage.remove(block.header.hash))
+        val batchUpdates = toDelete.foldLeft(storage.emptyBatchUpdate) {
+          case (updates, ETHPackets.NewBlock(block, _)) =>
+            updates.and(storage.remove(block.header.hash))
         }
 
         batchUpdates.commit()

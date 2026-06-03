@@ -200,7 +200,8 @@ class FastSyncBranchResolverActor(
           syncConfig.peerResponseTimeout,
           networkPeerManager,
           peerEventBus,
-          requestMsg = ETH68GetBlockHeaders(ETHPackets.nextRequestId, Left(fromBlock), amount, skip = 0, reverse = false),
+          requestMsg =
+            ETH68GetBlockHeaders(ETHPackets.nextRequestId, Left(fromBlock), amount, skip = 0, reverse = false),
           responseMsgCode = Codes.BlockHeadersCode
         )
       )
@@ -212,7 +213,8 @@ class FastSyncBranchResolverActor(
           syncConfig.peerResponseTimeout,
           networkPeerManager,
           peerEventBus,
-          requestMsg = ETH68GetBlockHeaders(ETHPackets.nextRequestId, Left(fromBlock), amount, skip = 0, reverse = false),
+          requestMsg =
+            ETH68GetBlockHeaders(ETHPackets.nextRequestId, Left(fromBlock), amount, skip = 0, reverse = false),
           responseMsgCode = Codes.BlockHeadersCode
         )
       )
