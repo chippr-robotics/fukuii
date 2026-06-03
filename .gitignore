@@ -64,7 +64,9 @@ ops/*/captured-logs/
 *.conf.backup.*
 
 # Claude Code
-.claude/
+# Ignore local Claude settings/state, but track the project's shared subagents.
+.claude/*
+!.claude/agents/
 
 # Planning & internal docs
 SESSION_NOTES.md
