@@ -6,8 +6,8 @@ import com.chipprbots.ethereum.db.storage.MptStorage
 
 /** Splits a state trie into disjoint, exhaustive shards so the post-SNAP recovery scan can walk it in parallel.
   *
-  * A [[Shard]] is a subtree rooted at the node reached by consuming `pathPrefix` nibbles from the state root. The set of
-  * shards partitions the trie's account leaves: every leaf belongs to exactly one shard, and the union of all shard
+  * A [[Shard]] is a subtree rooted at the node reached by consuming `pathPrefix` nibbles from the state root. The set
+  * of shards partitions the trie's account leaves: every leaf belongs to exactly one shard, and the union of all shard
   * subtrees is the whole trie. Because account keys are `keccak256(address)` (uniform), the state root is a 16-way
   * BranchNode, so `depth = 1` yields up to 16 shards (one per populated first nibble) — the natural parallel unit.
   *
@@ -29,8 +29,8 @@ object ShardEnumerator {
     */
   final case class Shard(pathPrefix: ByteString, root: MptNode)
 
-  /** Resolve `rootHash` and split into shards by descending `depth` branch levels (default 1 = up to 16 shards).
-    * An empty trie (`EmptyRootHash`, never stored) yields no shards.
+  /** Resolve `rootHash` and split into shards by descending `depth` branch levels (default 1 = up to 16 shards). An
+    * empty trie (`EmptyRootHash`, never stored) yields no shards.
     */
   def enumShards(rootHash: ByteString, storage: MptStorage, depth: Int = 1): Vector[Shard] =
     if (java.util.Arrays.equals(rootHash.toArray, MerklePatriciaTrie.EmptyRootHash)) Vector.empty
@@ -43,9 +43,9 @@ object ShardEnumerator {
 
   private def expand(prefix: ByteString, node: MptNode, storage: MptStorage, depth: Int): Vector[Shard] =
     node match {
-      case NullNode        => Vector.empty
-      case _ if depth <= 0 => Vector(Shard(prefix, node))
-      case _: LeafNode     => Vector(Shard(prefix, node)) // a single account — can't split further
+      case NullNode           => Vector.empty
+      case _ if depth <= 0    => Vector(Shard(prefix, node))
+      case _: LeafNode        => Vector(Shard(prefix, node)) // a single account — can't split further
       case ext: ExtensionNode =>
         // The extension consumes shared nibbles without branching, so it does NOT spend a shard level.
         expand(prefix ++ ext.sharedKey, resolve(ext.next, storage), storage, depth)

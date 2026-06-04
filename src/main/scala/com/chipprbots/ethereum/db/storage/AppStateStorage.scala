@@ -173,8 +173,8 @@ class AppStateStorage(val dataSource: DataSource) extends TransactionalKeyValueS
   def putRecoveryProgress(progress: RecoveryProgress): DataSourceBatchUpdate =
     put(Keys.RecoveryProgress, RecoveryProgress.serialize(progress))
 
-  /** Read persisted recovery-scan progress, or None if absent or unparseable (a torn/corrupt write degrades to a
-    * fresh scan rather than a silently-incomplete gap set).
+  /** Read persisted recovery-scan progress, or None if absent or unparseable (a torn/corrupt write degrades to a fresh
+    * scan rather than a silently-incomplete gap set).
     */
   def getRecoveryProgress(): Option[RecoveryProgress] =
     get(Keys.RecoveryProgress).flatMap(RecoveryProgress.deserialize)

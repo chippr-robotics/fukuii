@@ -17,12 +17,13 @@ import com.chipprbots.ethereum.mpt.MptVisitors.PathTrackingLeafWalkVisitor
 import com.chipprbots.ethereum.testing.Tags._
 
 /** ShardEnumerator must split the state trie into DISJOINT and EXHAUSTIVE shards: every account leaf belongs to exactly
-  * one shard, and the union of all shard subtrees is the whole trie. This is the correctness foundation for the parallel
-  * recovery scan — a shard that double-counts or skips a leaf = a silently wrong gap set = a corrupt checkpoint.
+  * one shard, and the union of all shard subtrees is the whole trie. This is the correctness foundation for the
+  * parallel recovery scan — a shard that double-counts or skips a leaf = a silently wrong gap set = a corrupt
+  * checkpoint.
   *
-  * Strategy: build tries with distinct leaf VALUES, walk every shard's subtree, and assert the multiset of leaves across
-  * shards equals the full-trie leaf set. A separate test seeds PathTrackingLeafWalkVisitor with each shard's prefix and
-  * asserts the reconstructed account keys (prefix + subtree path) exactly match the originals.
+  * Strategy: build tries with distinct leaf VALUES, walk every shard's subtree, and assert the multiset of leaves
+  * across shards equals the full-trie leaf set. A separate test seeds PathTrackingLeafWalkVisitor with each shard's
+  * prefix and asserts the reconstructed account keys (prefix + subtree path) exactly match the originals.
   */
 class ShardEnumeratorSpec extends AnyFunSuite with ScalaCheckPropertyChecks {
 
@@ -100,12 +101,16 @@ class ShardEnumeratorSpec extends AnyFunSuite with ScalaCheckPropertyChecks {
   }
 
   test("depth=2 → finer shards, still disjoint+exhaustive", UnitTest, MPTTest) {
-    assertPartition((0 until 80).map(i => (Array[Byte](i.toByte, (i * 7 % 256).toByte), Array[Byte](i.toByte))), depth = 2)
+    assertPartition(
+      (0 until 80).map(i => (Array[Byte](i.toByte, (i * 7 % 256).toByte), Array[Byte](i.toByte))),
+      depth = 2
+    )
   }
 
   test("shard prefixes reconstruct the exact original account keys", UnitTest, MPTTest) {
     // 2-byte keys ⇒ even nibble count ⇒ unambiguous reconstruction.
-    val entries = (0 until 24).map(i => (Array[Byte]((i * 11 % 256).toByte, (i * 7 % 256).toByte), Array[Byte](i.toByte)))
+    val entries =
+      (0 until 24).map(i => (Array[Byte]((i * 11 % 256).toByte, (i * 7 % 256).toByte), Array[Byte](i.toByte)))
     val (root, storage) = build(entries)
     val shards = ShardEnumerator.enumShards(root, storage)
     val reconstructed = shardKeys(shards, storage).map(_.toSeq).toSet

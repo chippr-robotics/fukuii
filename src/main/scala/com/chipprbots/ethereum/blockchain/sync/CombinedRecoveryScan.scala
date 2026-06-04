@@ -52,7 +52,10 @@ final class CombinedRecoveryScan(mptStorage: MptStorage, evmCodeStorage: EvmCode
 
   /** Walk the whole account trie at `rootHash` (resolving the root via storage). */
   def scanFrom(rootHash: ByteString): Unit =
-    MptTraversals.dispatch(HashNode(rootHash.toArray), new PathTrackingLeafWalkVisitor(mptStorage, ByteString.empty, onLeaf))
+    MptTraversals.dispatch(
+      HashNode(rootHash.toArray),
+      new PathTrackingLeafWalkVisitor(mptStorage, ByteString.empty, onLeaf)
+    )
 
   /** Walk the (already-resolved) subtree `root`, with `pathPrefix` the nibbles consumed to reach it (for sharding). */
   def scanShard(root: MptNode, pathPrefix: ByteString): Unit =

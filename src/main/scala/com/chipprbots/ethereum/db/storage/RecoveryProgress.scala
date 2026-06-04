@@ -6,14 +6,14 @@ import scala.util.Try
 
 import com.chipprbots.ethereum.utils.Hex
 
-/** Resumable progress for the post-SNAP recovery scan, persisted so a crash/OOM mid-scan resumes from the last completed
-  * shard instead of re-walking the whole ~86M-account ETC state trie from account 0.
+/** Resumable progress for the post-SNAP recovery scan, persisted so a crash/OOM mid-scan resumes from the last
+  * completed shard instead of re-walking the whole ~86M-account ETC state trie from account 0.
   *
-  * The scan partitions the state trie into disjoint shards (see
-  * [[com.chipprbots.ethereum.mpt.ShardEnumerator]]); each shard, on completion, atomically records its index into
-  * [[completedShards]] together with the gaps it found in [[missingBytecodes]]/[[missingStorageTries]]. Because both go
-  * into a single value under a single key, a crash can never leave a shard "marked done" with its gaps lost (or vice
-  * versa) — the persisted state is always self-consistent.
+  * The scan partitions the state trie into disjoint shards (see [[com.chipprbots.ethereum.mpt.ShardEnumerator]]); each
+  * shard, on completion, atomically records its index into [[completedShards]] together with the gaps it found in
+  * [[missingBytecodes]]/[[missingStorageTries]]. Because both go into a single value under a single key, a crash can
+  * never leave a shard "marked done" with its gaps lost (or vice versa) — the persisted state is always
+  * self-consistent.
   *
   * @param scanRoot
   *   the state root being scanned (the on-disk SNAP-finalized/pivot root). Forms half the resume tag: re-enumerating
@@ -65,7 +65,7 @@ object RecoveryProgress {
   private val PairSep = ":"
 
   /** Serialise to a single string value for [[AppStateStorage]]. Six newline-separated fields:
-    * {{{ v1 \n <scanRootHex> \n <shardCount> \n <completedIdxCsv> \n <bytecodeHexCsv> \n <accountHex:storageHex csv> }}}
+    * {{{v1 \n <scanRootHex> \n <shardCount> \n <completedIdxCsv> \n <bytecodeHexCsv> \n <accountHex:storageHex csv>}}}
     * Empty lists serialise to an empty field (not a stray token), so an all-empty progress round-trips faithfully.
     */
   def serialize(p: RecoveryProgress): String = {
@@ -81,8 +81,9 @@ object RecoveryProgress {
   /** Total inverse of [[serialize]]: ANY malformed, truncated, wrong-version, or invariant-violating input yields None
     * so the caller falls back to a fresh (always-correct) scan rather than trusting a partially-written or corrupt
     * checkpoint. The strict per-field validation below is deliberate defense-in-depth: it turns a value that would
-    * otherwise deserialise to a *wrong-but-plausible* RecoveryProgress (a sub-32-byte hash, an out-of-range shard index,
-    * shardCount 0 → spuriously "complete") into a clean None, so corruption can never masquerade as a finished scan.
+    * otherwise deserialise to a *wrong-but-plausible* RecoveryProgress (a sub-32-byte hash, an out-of-range shard
+    * index, shardCount 0 → spuriously "complete") into a clean None, so corruption can never masquerade as a finished
+    * scan.
     */
   def deserialize(s: String): Option[RecoveryProgress] = Try {
     // -1 keeps trailing empty fields (e.g. an empty storage list as the last field).

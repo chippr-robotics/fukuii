@@ -58,7 +58,11 @@ class CombinedRecoveryScanSpec extends AnyFunSuite {
       acctHash(3) -> Account(nonce = UInt256.Zero, storageRoot = a3Stor, codeHash = Account.EmptyCodeHash),
       acctHash(4) -> Account(nonce = UInt256.Zero, storageRoot = a4Stor, codeHash = presentCode(4)),
       acctHash(5) -> Account(nonce = UInt256.Zero, storageRoot = presentStorageRoot(5), codeHash = a5Code),
-      acctHash(6) -> Account(nonce = UInt256.Zero, storageRoot = presentStorageRoot(6), codeHash = Account.EmptyCodeHash),
+      acctHash(6) -> Account(
+        nonce = UInt256.Zero,
+        storageRoot = presentStorageRoot(6),
+        codeHash = Account.EmptyCodeHash
+      ),
       acctHash(7) -> Account.empty()
     )
 
@@ -100,7 +104,10 @@ class CombinedRecoveryScanSpec extends AnyFunSuite {
 
     val stateRoot = ByteString(
       MerklePatriciaTrie[Array[Byte], Array[Byte]](mpt)
-        .put(Array.fill[Byte](32)(0xaa.toByte), Account(nonce = UInt256.Zero, storageRoot = storageRoot, codeHash = codeHash).toBytes)
+        .put(
+          Array.fill[Byte](32)(0xaa.toByte),
+          Account(nonce = UInt256.Zero, storageRoot = storageRoot, codeHash = codeHash).toBytes
+        )
         .put(Array.fill[Byte](32)(0xbb.toByte), Account.empty().toBytes)
         .getRootHash
     )
