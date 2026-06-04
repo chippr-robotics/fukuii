@@ -44,9 +44,11 @@ class MerkleProofVerifier(rootHash: ByteString) extends Logger {
       val proofMap = buildProofMap(proof)
       verifyRangeProofByReconstruction(startHash, endHash, leaves, proofMap)
     } catch {
-      case e: Exception =>
-        log.warn(s"Merkle proof verification error: ${e.getMessage}")
-        Left(s"Verification error: ${e.getMessage}")
+      case e: Throwable =>
+        // Catch Throwable (not just Exception) — StackOverflowError from deep recursive insertion
+        // must be surfaced as a verification failure rather than silently hanging the caller.
+        log.warn(s"Merkle proof verification error: ${e.getClass.getSimpleName}: ${e.getMessage}")
+        Left(s"Verification error: ${e.getClass.getSimpleName}: ${e.getMessage}")
     }
   }
 
@@ -64,9 +66,9 @@ class MerkleProofVerifier(rootHash: ByteString) extends Logger {
       val proofMap = buildProofMap(proof)
       verifyRangeProofByReconstruction(startHash, endHash, slots, proofMap)
     } catch {
-      case e: Exception =>
-        log.warn(s"Storage Merkle proof verification error: ${e.getMessage}")
-        Left(s"Storage verification error: ${e.getMessage}")
+      case e: Throwable =>
+        log.warn(s"Storage Merkle proof verification error: ${e.getClass.getSimpleName}: ${e.getMessage}")
+        Left(s"Storage verification error: ${e.getClass.getSimpleName}: ${e.getMessage}")
     }
   }
 
@@ -133,6 +135,7 @@ class MerkleProofVerifier(rootHash: ByteString) extends Logger {
     val trie = new PartialProofTrie(rootNode, proofMap)
 
     // Phase 1: resolve both edge paths into the partial trie
+    log.debug(s"[PROOF] Phase 1: resolving edge paths (${leaves.size} leaves, ${proofMap.size} proof nodes)")
     trie.resolveEdge(firstNibbles, allowNonExistent = true) match {
       case Left(err) => return Left(err)
       case Right(()) => ()
@@ -143,15 +146,18 @@ class MerkleProofVerifier(rootHash: ByteString) extends Logger {
     }
 
     // Phase 2: prune internal nodes between boundaries
+    log.debug(s"[PROOF] Phase 2: pruning internal nodes between boundaries")
     trie.pruneInternals(firstNibbles, lastNibbles) match {
       case Left(err) => return Left(err)
       case Right(()) => ()
     }
 
     // Phase 3: insert all leaves
+    log.debug(s"[PROOF] Phase 3: inserting ${leaves.size} leaves")
     leaves.foreach { case (k, v) => trie.insertLeaf(hashToNibbles(k), v) }
 
     // Phase 4: verify root hash
+    log.debug(s"[PROOF] Phase 4: computing root hash")
     val computed = trie.computeHash()
     if (computed == rootHash) Right(())
     else Left(s"range proof hash mismatch")
@@ -334,6 +340,10 @@ class MerkleProofVerifier(rootHash: ByteString) extends Logger {
     private def pruneOneSide(child: MptNode, key: Seq[Int], pos: Int, removeLeft: Boolean): Either[String, MptNode] =
       child match {
         case branch: BranchNode =>
+          // go-ethereum unset() equivalent: clear children on one side then recurse.
+          // Bounds check: pos must be within the key (64 nibbles). At pos >= key.length
+          // we've consumed the full path — no more children to prune.
+          if (pos >= key.length) return Right(branch)
           // Null children on the side being removed
           var b = branch
           if (removeLeft) {

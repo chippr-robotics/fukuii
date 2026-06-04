@@ -136,11 +136,15 @@ class AccountRangeWorker(
                 )
               }
             catch {
-              case ex: Exception =>
+              case ex: Throwable =>
+                // Catch Throwable (not just Exception) so that StackOverflowError and other JVM
+                // Errors don't escape to the actor system. Under Pekko's Resume supervisor strategy
+                // an uncaught Error leaves the actor alive but stuck — the coordinator never gets
+                // TaskFailed/TaskComplete and the task is lost.
                 log.warning(
                   s"[WORKER] Proof verification threw for reqId=$reqId range=${task.rangeString}: ${ex.getClass.getSimpleName}: ${ex.getMessage}"
                 )
-                Left(s"proof verification exception: ${ex.getMessage}")
+                Left(s"proof verification exception: ${ex.getClass.getSimpleName}: ${ex.getMessage}")
             }
 
           proofOk match {

@@ -96,6 +96,7 @@ class ConsensusAdapterSpec
     (blockchain.getBackingMptStorage _)
       .expects(*)
       .returning(storagesInstance.storages.stateStorage.getBackingStorage(6))
+    (blockchain.saveBlockState _).expects(*).anyNumberOfTimes().returning(())
 
     whenReady(blockImportNotFailingAfterExecValidation.evaluateBranchBlock(block).unsafeToFuture()) {
       _ shouldEqual BlockImportedToTop(List(blockData))
