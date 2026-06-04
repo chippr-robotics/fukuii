@@ -1139,6 +1139,14 @@ class SyncController(
           // Combined path: ONE parallel, resumable single-pass scan finds both gap sets; downloads start
           // once it reports (in `runningCombinedScan`).
           log.info("Recovery: combined parallel scan enabled — one pass finds bytecode + storage gaps.")
+          // Phase gauges are need-aware: a phase already done in a prior run shows Complete (not idle) while the
+          // combined scan re-verifies it in the same pass.
+          RecoveryMetrics.setBytecodePhase(
+            if (needBytecode) RecoveryMetrics.PhaseScanning else RecoveryMetrics.PhaseComplete
+          )
+          RecoveryMetrics.setStoragePhase(
+            if (needStorage) RecoveryMetrics.PhaseScanning else RecoveryMetrics.PhaseComplete
+          )
           context.actorOf(
             CombinedRecoveryScanActor
               .props(stateRoot, stateStorage, evmCodeStorage, appStateStorage, self, pivotBlock, snapSyncConfig)
@@ -1264,6 +1272,10 @@ class SyncController(
             )
           )
         else None
+      // A phase with no download actor is finished (no gaps / already done) — show Complete, not idle. Phases that
+      // will download have their phase set to Downloading by the recovery actor.
+      if (bytecodeActor.isEmpty) RecoveryMetrics.setBytecodePhase(RecoveryMetrics.PhaseComplete)
+      if (storageActor.isEmpty) RecoveryMetrics.setStoragePhase(RecoveryMetrics.PhaseComplete)
       beginRecoveryDownloads(
         bytecodeActor,
         storageActor,

@@ -49,7 +49,6 @@ class CombinedRecoveryScanActor(
 
   override def receive: Receive = {
     case StartScan =>
-      RecoveryMetrics.setStoragePhase(RecoveryMetrics.PhaseScanning)
       Future {
         val scanner = new CombinedRecoveryScanner(
           scanRoot = stateRoot,
