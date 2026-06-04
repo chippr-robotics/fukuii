@@ -161,9 +161,21 @@ isolation before integration — a wrong partition or a missed gap = a corrupt a
 | 1 | `ShardEnumerator` — disjoint+exhaustive trie partition | ✅ done | 8 (partition multiset equality, root-extension edge, prefix reconstruction, property) |
 | 2 | `CombinedRecoveryScan` — single-pass bytecode+storage check | ✅ done | 2 (equivalence across 7 present/missing combos, no-gaps) |
 | 3 | `RecoveryProgress` + `AppStateStorage` resumable progress | ✅ done | 16 (round-trip, tag invalidation, corruption→None, atomic `recoveryDone`) |
-| 4 | `CombinedRecoveryActor` — parallel-by-shard driver + flag | pending | — |
+| 4 | `CombinedRecoveryScanner` — parallel-by-shard, resumable driver | ✅ done | 6 (equivalence seq+parallel vs single-pass, crash-resume, cross-shard dedup, download-resume, empty) |
 | 5 | Recent-root roll (the correctness fix, addendum above) | pending | — |
-| 6 | Wire `SyncController` + build + validate | pending | — |
+| 6 | Wire `SyncController` + flag + actor wrapper + build + validate | pending | — |
+
+### Phase 1+2 outcome — the cohesive scan unit (`CombinedRecoveryScanner`)
+
+`CombinedRecoveryScanner(scanRoot, storageForShard, evmCodeStorage, appStateStorage, concurrency, shardDepth)`
+ties #1+#2+#3 together: `ShardEnumerator` partitions → each not-yet-completed shard is walked by a
+`CombinedRecoveryScan` (optionally on a bounded pool) → gaps merged with cross-shard dedup → per-shard
+progress persisted atomically. All five audit obligations are met in code and pinned by tests:
+remaining-shards-only, cross-shard storage-root dedup, one atomic commit per shard, complete-checkpoint
+fast-path (download resume), fixed shard depth. Proven: **parallel(=4) == sequential == single whole-trie
+pass**, and a crash mid-scan resumes without re-walking done shards and yields the identical final gap set.
+The `parallel-recovery-scan` flag + thin actor wrapper + `SyncController` wiring move to #6 (where the
+scanner is instantiated and the download path consumes its gaps).
 
 ### Phase 0 outcome — resumable progress (implemented + audit-hardened)
 
