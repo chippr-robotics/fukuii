@@ -77,11 +77,13 @@ class StorageRecoveryActor(
     case ScanResult(missing) =>
       if (missing.isEmpty) {
         log.info("Storage recovery: all contract storage tries present. Marking recovery complete.")
+        RecoveryMetrics.setStoragePhase(RecoveryMetrics.PhaseComplete)
         appStateStorage.storageRecoveryDone().commit()
         syncController ! RecoveryComplete
         context.stop(self)
       } else {
         log.warning(s"Storage recovery: found ${missing.size} contracts with missing storage. Starting download...")
+        RecoveryMetrics.setStoragePhase(RecoveryMetrics.PhaseDownloading)
         implicit val scheduler: org.apache.pekko.actor.Scheduler = context.system.scheduler
 
         val coordinator = coordinatorForTesting.getOrElse {
@@ -131,6 +133,7 @@ class StorageRecoveryActor(
     // ms (then the CheckAbandon equality check would false-fire), and wall-clock jumps
     // would make stalledForSeconds misleading. Counter + nanoTime covers both axes.
     var progressSeq = 0L
+    var downloadedCount = 0L
     var lastProgressNanos = System.nanoTime()
     var unservableCount = 0
     var abandonTimer: Option[Cancellable] = None
@@ -158,11 +161,15 @@ class StorageRecoveryActor(
       case SNAPSyncController.StorageRangeSyncComplete =>
         log.info(s"Storage recovery complete: downloaded storage for $expectedCount contracts")
         abandonTimer.foreach(_.cancel())
+        RecoveryMetrics.setStorageDownloaded(expectedCount.toLong)
+        RecoveryMetrics.setStoragePhase(RecoveryMetrics.PhaseComplete)
         appStateStorage.storageRecoveryDone().commit()
         syncController ! RecoveryComplete
         context.stop(self)
 
       case SNAPSyncController.ProgressStorageSlotsSynced(_) =>
+        downloadedCount += 1
+        RecoveryMetrics.setStorageDownloaded(downloadedCount)
         recordProgress()
 
       // Bug 30b: coordinator reports every peer stateless for the stored pivot root. In SNAP
@@ -194,6 +201,7 @@ class StorageRecoveryActor(
             abandonAfter.toSeconds,
             unservableCount
           )
+          RecoveryMetrics.setStoragePhase(RecoveryMetrics.PhaseComplete)
           appStateStorage.storageRecoveryDone().commit()
           syncController ! RecoveryComplete
           context.stop(self)
@@ -205,6 +213,7 @@ class StorageRecoveryActor(
       case Terminated(`coordinator`) =>
         log.error("StorageRangeCoordinator crashed unexpectedly. Marking storage recovery done to unblock sync.")
         abandonTimer.foreach(_.cancel())
+        RecoveryMetrics.setStoragePhase(RecoveryMetrics.PhaseComplete)
         appStateStorage.storageRecoveryDone().commit()
         syncController ! RecoveryComplete
         context.stop(self)
@@ -217,6 +226,7 @@ class StorageRecoveryActor(
     * MptStorage.
     */
   private def scanForMissingStorage(): Seq[(ByteString, ByteString)] = {
+    RecoveryMetrics.setStoragePhase(RecoveryMetrics.PhaseScanning)
     val mptStorage = stateStorage.getBackingStorage(pivotBlockNumber)
     val rootNode = mptStorage.get(stateRoot.toArray)
 
@@ -228,6 +238,11 @@ class StorageRecoveryActor(
 
     val onLeaf: (ByteString, LeafNode) => Unit = { (accountHash, leafNode) =>
       accountCount += 1
+      // Publish scan progress to the node-health dashboard every 100K accounts (cheap volatile
+      // writes); the per-1M log line stays for log-only visibility.
+      if (accountCount % 100_000 == 0) {
+        RecoveryMetrics.setStorageScanProgress(accountCount, contractCount, missing.size.toLong)
+      }
       if (accountCount % 1_000_000 == 0) {
         log.info(
           s"Storage recovery scan: $accountCount accounts, $contractCount contracts, " +
@@ -271,6 +286,7 @@ class StorageRecoveryActor(
       s"Storage recovery scan complete: $accountCount accounts, $contractCount contracts, " +
         s"$checkedCount unique storage roots checked, ${missing.size} missing"
     )
+    RecoveryMetrics.setStorageScanProgress(accountCount, contractCount, missing.size.toLong)
     missing.toSeq
   }
 }
