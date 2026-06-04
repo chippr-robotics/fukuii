@@ -4452,6 +4452,13 @@ case class SNAPSyncConfig(
     // rejects the saved root for this long with no slot progress, abandon recovery and
     // let regular sync's on-demand GetTrieNodes pick up missing subtrees.
     storageRecoveryAbandonTimeout: FiniteDuration = 10.minutes,
+    // Recent-root roll: before abandoning, post-SNAP storage recovery rolls its download root onto a
+    // recent canonical root that peers can still serve (the aged pivot's ~128-block / ~27-min serve
+    // window has long expired by the time a multi-hour recovery scan finishes). Cold contracts —
+    // storage unchanged since the pivot, i.e. ~all the randomly SNAP-skipped roots — fill identically
+    // because trie nodes are content-addressed. This bounds the number of rolls so a peerless or
+    // hot-only residue still terminates into the abandon path instead of rolling forever.
+    storageRecoveryMaxRootRolls: Int = 8,
     // Static SNAP server peers: addresses to always maintain a connection with during SNAP sync.
     // Use for local SNAP-serving nodes (e.g. Besu with --snapsync-server-enabled) that may
     // disconnect after storage phase but are needed for trie node healing.
@@ -4578,6 +4585,10 @@ object SNAPSyncConfig {
         if (snapConfig.hasPath("storage-recovery-abandon-timeout"))
           snapConfig.getDuration("storage-recovery-abandon-timeout").toMillis.millis
         else 10.minutes,
+      storageRecoveryMaxRootRolls =
+        if (snapConfig.hasPath("storage-recovery-max-root-rolls"))
+          snapConfig.getInt("storage-recovery-max-root-rolls")
+        else 8,
       snapServerPeers =
         if (snapConfig.hasPath("snap-server-peers"))
           snapConfig
