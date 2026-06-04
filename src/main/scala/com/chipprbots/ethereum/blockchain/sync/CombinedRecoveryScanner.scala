@@ -110,11 +110,15 @@ final class CombinedRecoveryScanner(
       }
       missingStorageCount.set(accStorage.size.toLong)
       completed += idx
+      // commitSync (fsync) not commit: the per-shard checkpoint is the resumability anchor, so it must survive a hard
+      // host crash (this box has hit a memory-pressure thrash-lock), not just a clean OOM exit — otherwise the OS
+      // write-back window can lose the last shards' progress and force a full re-scan. ~16-256 fsyncs over a multi-hour
+      // scan is negligible. (commitSync infra from PR #1305.)
       appStateStorage
         .putRecoveryProgress(
           RecoveryProgress(scanRoot, shardCount, completed.toSet, accBytecodes.toVector, accStorage.toVector)
         )
-        .commit()
+        .commitSync()
       onShardPersisted(completed.size)
     }
 

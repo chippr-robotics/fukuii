@@ -78,11 +78,21 @@ class RocksDbDataSource(
     } finally dbLock.readLock().unlock()
   }
 
-  override def update(dataSourceUpdates: Seq[DataUpdate]): Unit = {
+  override def update(dataSourceUpdates: Seq[DataUpdate]): Unit =
+    doWrite(dataSourceUpdates, sync = false)
+
+  /** Fsync-backed write: flushes the OS write buffer to disk before returning. Used for critical one-time commits (SNAP
+    * finalization) to prevent spurious SNAP-RECOVERY on crash. Slightly slower than [[update]] due to the fsync system
+    * call; only use where durability is required and frequency is low.
+    */
+  override def updateSync(dataSourceUpdates: Seq[DataUpdate]): Unit =
+    doWrite(dataSourceUpdates, sync = true)
+
+  private def doWrite(dataSourceUpdates: Seq[DataUpdate], sync: Boolean): Unit = {
     dbLock.writeLock().lock()
     try {
       assureNotClosed()
-      withResources(new WriteOptions()) { writeOptions =>
+      withResources(new WriteOptions().setSync(sync)) { writeOptions =>
         withResources(new WriteBatch()) { batch =>
           dataSourceUpdates.foreach {
             case DataSourceUpdate(namespace, toRemove, toUpsert) =>

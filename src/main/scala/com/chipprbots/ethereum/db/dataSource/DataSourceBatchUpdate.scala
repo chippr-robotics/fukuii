@@ -15,4 +15,10 @@ case class DataSourceBatchUpdate(dataSource: DataSource, updates: Array[DataUpda
   def commit(): Unit =
     dataSource.update(ArraySeq.unsafeWrapArray(updates))
 
+  /** Fsync-backed commit: calls [[DataSource.updateSync]] to flush the OS write buffer to disk. Use only for critical
+    * one-time writes where durability matters more than throughput.
+    */
+  def commitSync(): Unit =
+    dataSource.updateSync(ArraySeq.unsafeWrapArray(updates))
+
 }
