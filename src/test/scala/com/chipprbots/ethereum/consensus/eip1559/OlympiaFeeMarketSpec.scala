@@ -33,9 +33,9 @@ class OlympiaFeeMarketSpec
 
   private val olympiaBlock: BigInt = BigInt(100)
 
-  implicit val config: BlockchainConfig = blockchainConfig.withUpdatedForkBlocks(
-    _.copy(olympiaBlockNumber = olympiaBlock, olympiaGasTarget = Some(BigInt(60_000_000)))
-  )
+  implicit val config: BlockchainConfig = blockchainConfig
+    .withUpdatedForkBlocks(_.copy(olympiaBlockNumber = olympiaBlock, olympiaGasTarget = Some(BigInt(60_000_000))))
+    .copy(baseFeeFloor = BaseFeeCalculator.InitialBaseFee)
 
   private val InitialBaseFee: BigInt = BaseFeeCalculator.InitialBaseFee
 
@@ -194,20 +194,20 @@ class OlympiaFeeMarketSpec
       }
     }
 
-    "baseFee floor alignment with ETH EIP-1559" should {
+    "baseFee floor per ECIP-1111 (1 gwei minimum)" should {
 
-      "baseFee floors at 0 (aligned with ETH go-ethereum .max(0), not .max(1))" taggedAs (
+      "baseFee floors at InitialBaseFee (1 gwei) for ETC/Mordor chains" taggedAs (
         UnitTest,
         OlympiaTest
       ) in {
         val tinyBaseFee = BigInt(1)
         val emptyParent = olympiaParent(gasLimit = BigInt(30_000_000), gasUsed = 0, baseFee = tinyBaseFee)
         val next = BaseFeeCalculator.calcBaseFee(emptyParent, config)
-        next should be >= BigInt(0)
-        next shouldBe BigInt(0)
+        next should be >= InitialBaseFee
+        next shouldBe InitialBaseFee
       }
 
-      "baseFee does not go negative (arithmetic invariant over sustained empty blocks)" taggedAs (
+      "baseFee never falls below InitialBaseFee over sustained empty blocks" taggedAs (
         UnitTest,
         OlympiaTest
       ) in {
@@ -215,7 +215,7 @@ class OlympiaFeeMarketSpec
         for (_ <- 1 to 100) {
           val emptyParent = olympiaParent(gasLimit = BigInt(30_000_000), gasUsed = 0, baseFee = fee)
           fee = BaseFeeCalculator.calcBaseFee(emptyParent, config)
-          fee should be >= BigInt(0)
+          fee should be >= InitialBaseFee
         }
       }
     }

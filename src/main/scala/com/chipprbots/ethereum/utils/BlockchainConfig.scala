@@ -53,6 +53,7 @@ case class BlockchainConfig(
     allowedMinersPublicKeys: Set[ByteString] = Set.empty,
     messConfig: MESSConfig = MESSConfig(),
     treasuryAddress: Address = Address(0),
+    baseFeeFloor: BigInt = BigInt(0),
     networkType: NetworkType = NetworkType.ETC,
     terminalTotalDifficulty: Option[BigInt] = None,
     forkTimestamps: ForkTimestamps = ForkTimestamps()
@@ -249,6 +250,9 @@ object BlockchainConfig {
     val treasuryAddress: Address =
       Try(Address(blockchainConfig.getString("treasury-address"))).getOrElse(Address(0))
 
+    val baseFeeFloor: BigInt =
+      Try(BigInt(blockchainConfig.getString("base-fee-floor"))).getOrElse(BigInt(0))
+
     val networkType: NetworkType =
       Try(NetworkType.fromString(blockchainConfig.getString("network-type"))).getOrElse(NetworkType.ETC)
 
@@ -321,6 +325,7 @@ object BlockchainConfig {
       allowedMinersPublicKeys = allowedMinersPublicKeys,
       messConfig = messConfig,
       treasuryAddress = treasuryAddress,
+      baseFeeFloor = baseFeeFloor,
       networkType = networkType,
       terminalTotalDifficulty = terminalTotalDifficulty,
       forkTimestamps = forkTimestamps

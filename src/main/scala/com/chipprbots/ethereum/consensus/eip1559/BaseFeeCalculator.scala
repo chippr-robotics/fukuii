@@ -39,11 +39,10 @@ object BaseFeeCalculator {
       parentBaseFee + baseFeeDelta
     } else {
       // Parent used less gas than target — baseFee decreases.
-      // Matches go-ethereum: baseFeeDelta = max(1, ...) so any non-zero baseFee will always
-      // decrease by at least 1 wei per block when underutilized, eventually reaching 0.
+      // Floor at baseFeeFloor from chain config (1 gwei for ETC/Mordor per ECIP-1111).
       val gasUsedDelta = parentGasTarget - parent.gasUsed
       val baseFeeDelta = (parentBaseFee * gasUsedDelta / parentGasTarget / BaseFeeChangeDenominator).max(1)
-      (parentBaseFee - baseFeeDelta).max(0)
+      (parentBaseFee - baseFeeDelta).max(blockchainConfig.baseFeeFloor)
     }
   }
 }

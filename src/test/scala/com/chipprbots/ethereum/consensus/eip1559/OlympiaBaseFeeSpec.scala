@@ -24,9 +24,9 @@ class OlympiaBaseFeeSpec
 
   private val olympiaBlock: BigInt = BigInt(100)
 
-  implicit val config: BlockchainConfig = blockchainConfig.withUpdatedForkBlocks(
-    _.copy(olympiaBlockNumber = olympiaBlock)
-  )
+  implicit val config: BlockchainConfig = blockchainConfig
+    .withUpdatedForkBlocks(_.copy(olympiaBlockNumber = olympiaBlock))
+    .copy(baseFeeFloor = BaseFeeCalculator.InitialBaseFee)
 
   private val InitialBaseFee: BigInt = BaseFeeCalculator.InitialBaseFee
 
@@ -106,17 +106,18 @@ class OlympiaBaseFeeSpec
         val emptyParent = header(olympiaBlock, gasLimit = gasLimit, gasUsed = 0, HefPostOlympia(baseFee))
         val next = BaseFeeCalculator.calcBaseFee(emptyParent, config)
         next should be < baseFee
-        next should be >= BigInt(0)
+        next should be >= InitialBaseFee
       }
     }
 
-    "baseFee floors at zero" should {
-      "not go negative when baseFee is very small" taggedAs (UnitTest, OlympiaTest) in {
+    "baseFee floors at InitialBaseFee (1 gwei) per ECIP-1111" should {
+      "clamp to InitialBaseFee when computed value would be below floor" taggedAs (UnitTest, OlympiaTest) in {
         val gasLimit = BigInt(30_000_000)
-        val tinyBaseFee = BigInt(1) // 1 wei
+        val tinyBaseFee = BigInt(1) // 1 wei — would decay to 0 without floor
         val emptyParent = header(olympiaBlock, gasLimit = gasLimit, gasUsed = 0, HefPostOlympia(tinyBaseFee))
         val next = BaseFeeCalculator.calcBaseFee(emptyParent, config)
-        next should be >= BigInt(0)
+        next should be >= InitialBaseFee
+        next shouldBe InitialBaseFee
       }
     }
   }
