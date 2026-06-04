@@ -67,11 +67,25 @@ class SyncController(
 
   private case object RestartFastSyncNow
   private case object PollRecoveryPeers
+  // Self-ping: the recovery recent-root header bootstrap for this generation took too long → decline the roll.
+  private case class RecentRootTimeout(generation: Int)
 
   // Generation counters for actor names to prevent Pekko name collisions
   // (context.stop is async — new actors can race with still-stopping ones).
   private var bootstrapGeneration: Long = 0
   private var syncGeneration: Long = 0
+
+  // Recovery recent-root roll (Task #5/#6): post-SNAP storage recovery asks for a recent canonical root
+  // when the saved pivot has aged out of peers' serve window. We fetch a recent header via
+  // PivotHeaderBootstrap (inline in `runningRecovery` — no transition into the deadlock-prone bootstrap
+  // state) and reply with StorageRecoveryActor.RecentRoot. Only one request is serviced at a time.
+  private var recentRootRequester: Option[ActorRef] = None
+  private var recentRootBootstrap: Option[(ActorRef, ActorRef)] = None // (peersClient, headerBootstrap)
+  private var recentRootGeneration: Int = 0
+  // Roll the download root this many blocks back from the network head — comfortably inside core-geth's
+  // ~128-block snapshot serve window so peers can serve the recent root, yet recent enough that ~all
+  // cold contracts' storage is unchanged since the original pivot (and thus content-identical).
+  private val RecentRootMarginBlocks: BigInt = BigInt(64)
 
   // SNAP<->Fast sync bounce cycle counter, persisted across restarts.
   private var snapFastCycleCount: Int = appStateStorage.getSnapFastCycleCount()
@@ -1240,6 +1254,41 @@ class SyncController(
           storageActor.foreach(_ ! snap.actors.Messages.StoragePeerAvailable(peer))
         }
       }
+      // If storage recovery is waiting for a recent root and no header fetch is in flight, start one
+      // now using the freshest peer height in this snapshot.
+      if (recentRootRequester.isDefined && recentRootBootstrap.isEmpty) {
+        maybeStartRecentRootBootstrap(peers)
+      }
+
+    // Storage recovery: the saved pivot root has aged out of every peer's serve window. Fetch a recent
+    // canonical root so the download can roll onto something peers can still serve, instead of wedging.
+    case StorageRecoveryActor.RequestRecentRoot =>
+      if (recentRootRequester.isEmpty && recentRootBootstrap.isEmpty) {
+        recentRootRequester = Some(sender())
+        log.info("Recovery requested a recent root to roll off the aged pivot. Polling peers for the network head.")
+        networkPeerManager ! com.chipprbots.ethereum.network.NetworkPeerManagerActor.GetHandshakedPeers
+      } else {
+        log.debug("Recovery recent-root request already in flight; ignoring duplicate.")
+      }
+
+    case PivotHeaderBootstrap.Completed(block, header) if recentRootRequester.isDefined =>
+      val rootHex = header.stateRoot.take(4).toArray.map("%02x".format(_)).mkString
+      log.info(s"Recovery recent-root: fetched header for block $block (root $rootHex). Replying.")
+      stopRecentRootBootstrap()
+      recentRootRequester.foreach(_ ! StorageRecoveryActor.RecentRoot(block, Some(header.stateRoot)))
+      recentRootRequester = None
+
+    case PivotHeaderBootstrap.Failed(reason) if recentRootRequester.isDefined =>
+      log.warning(s"Recovery recent-root bootstrap failed ($reason). Declining the roll; abandon path will run.")
+      stopRecentRootBootstrap()
+      recentRootRequester.foreach(_ ! StorageRecoveryActor.RecentRoot(0, None))
+      recentRootRequester = None
+
+    case RecentRootTimeout(gen) if gen == recentRootGeneration && recentRootRequester.isDefined =>
+      log.warning("Recovery recent-root bootstrap timed out. Declining the roll; abandon path will run.")
+      stopRecentRootBootstrap()
+      recentRootRequester.foreach(_ ! StorageRecoveryActor.RecentRoot(0, None))
+      recentRootRequester = None
 
     case Terminated(actor) if bytecodeActor.contains(actor) =>
       log.error("BytecodeRecoveryActor terminated unexpectedly. Treating as complete to unblock sync.")
@@ -1273,6 +1322,45 @@ class SyncController(
       // Forward SNAP protocol responses to both active recovery actors
       bytecodeActor.foreach(_.forward(msg))
       storageActor.foreach(_.forward(msg))
+  }
+
+  /** Start a one-shot header bootstrap for a recent block (margin back from the network head) and arm a timeout. On
+    * `Completed` we reply [[StorageRecoveryActor.RecentRoot]] to the waiting recovery actor; if no peer height is known
+    * yet, decline immediately so the actor's abandon path still runs.
+    */
+  private def maybeStartRecentRootBootstrap(
+      peers: Map[com.chipprbots.ethereum.network.Peer, com.chipprbots.ethereum.network.NetworkPeerManagerActor.PeerInfo]
+  ): Unit = {
+    val snapHeights = peers.values.filter(_.remoteStatus.supportsSnap).map(_.maxBlockNumber)
+    SyncController.recentRootTarget(snapHeights, RecentRootMarginBlocks) match {
+      case Some(recentBlock) =>
+        recentRootGeneration += 1
+        val gen = recentRootGeneration
+        val peersClient = context.actorOf(
+          PeersClient.props(networkPeerManager, peerEventBus, blacklist, syncConfig, scheduler),
+          s"recovery-recent-root-peers-$gen"
+        )
+        val bootstrap = context.actorOf(
+          PivotHeaderBootstrap
+            .props(peersClient, blockchainWriter, recentBlock, syncConfig, scheduler, preferSnapPeers = true),
+          s"recovery-recent-root-bootstrap-$gen"
+        )
+        recentRootBootstrap = Some((peersClient, bootstrap))
+        log.info(s"Recovery recent-root: fetching header for recent block $recentBlock.")
+        scheduler.scheduleOnce(20.seconds, self, RecentRootTimeout(gen))(context.dispatcher, self)
+      case None =>
+        log.info("Recovery recent-root: no usable peer height yet; declining the roll.")
+        recentRootRequester.foreach(_ ! StorageRecoveryActor.RecentRoot(0, None))
+        recentRootRequester = None
+    }
+  }
+
+  private def stopRecentRootBootstrap(): Unit = {
+    recentRootBootstrap.foreach { case (peersClient, bootstrap) =>
+      bootstrap ! PoisonPill
+      peersClient ! PoisonPill
+    }
+    recentRootBootstrap = None
   }
 
   def startRegularSyncForBootstrap(): ActorRef = {
@@ -1310,6 +1398,14 @@ class SyncController(
 }
 
 object SyncController {
+
+  /** Pick the block to roll the recovery storage download onto: `margin` blocks back from the highest known
+    * SNAP-capable peer head (so the target is inside peers' snapshot serve window), clamped to >= 1. Returns None when
+    * no peer height is known yet, so the caller declines the roll and lets the abandon path run. Pure for testability.
+    */
+  private[sync] def recentRootTarget(snapPeerHeights: Iterable[BigInt], margin: BigInt): Option[BigInt] =
+    snapPeerHeights.filter(_ > 0).maxOption.map(best => (best - margin).max(1))
+
   // scalastyle:off parameter.number
   def props(
       blockchain: Blockchain,
