@@ -422,4 +422,32 @@ object StorageRecoveryActor {
         snapSyncConfig
       )
     )
+
+  /** Download-only variant: skip the scan and go straight to downloading the supplied missing storage tries (produced
+    * by the combined parallel scan). Used by `SyncController` when `parallel-recovery-scan` is on.
+    */
+  def propsPreloaded(
+      stateRoot: ByteString,
+      stateStorage: StateStorage,
+      appStateStorage: AppStateStorage,
+      flatSlotStorage: FlatSlotStorage,
+      networkPeerManager: ActorRef,
+      syncController: ActorRef,
+      pivotBlockNumber: BigInt,
+      snapSyncConfig: SNAPSyncConfig,
+      missing: Seq[(ByteString, ByteString)]
+  ): Props =
+    Props(
+      new StorageRecoveryActor(
+        stateRoot,
+        stateStorage,
+        appStateStorage,
+        flatSlotStorage,
+        networkPeerManager,
+        syncController,
+        pivotBlockNumber,
+        snapSyncConfig,
+        preloadedMissingForTesting = Some(missing)
+      )
+    )
 }

@@ -7,6 +7,7 @@ import org.apache.pekko.actor.PoisonPill
 import org.apache.pekko.actor.Props
 import org.apache.pekko.actor.Scheduler
 import org.apache.pekko.actor.Terminated
+import org.apache.pekko.util.ByteString
 
 import scala.concurrent.ExecutionContext.Implicits.global
 import scala.concurrent.duration._
@@ -1134,69 +1135,66 @@ class SyncController(
 
         val snapSyncConfig = loadSnapSyncConfig()
 
-        val bytecodeActor = if (needBytecode) {
-          Some(
-            context.actorOf(
-              BytecodeRecoveryActor
-                .props(
-                  stateRoot = stateRoot,
-                  stateStorage = stateStorage,
-                  evmCodeStorage = evmCodeStorage,
-                  appStateStorage = appStateStorage,
-                  networkPeerManager = networkPeerManager,
-                  syncController = self,
-                  pivotBlockNumber = pivotBlock,
-                  snapSyncConfig = snapSyncConfig
-                )
-                .withDispatcher("sync-dispatcher"),
-              s"bytecode-recovery-$syncGeneration"
-            )
+        if (snapSyncConfig.parallelRecoveryScan) {
+          // Combined path: ONE parallel, resumable single-pass scan finds both gap sets; downloads start
+          // once it reports (in `runningCombinedScan`).
+          log.info("Recovery: combined parallel scan enabled — one pass finds bytecode + storage gaps.")
+          context.actorOf(
+            CombinedRecoveryScanActor
+              .props(stateRoot, stateStorage, evmCodeStorage, appStateStorage, self, pivotBlock, snapSyncConfig)
+              .withDispatcher("sync-dispatcher"),
+            s"combined-recovery-scan-$syncGeneration"
           )
-        } else None
-
-        val storageActor = if (needStorage) {
-          Some(
-            context.actorOf(
-              StorageRecoveryActor
-                .props(
-                  stateRoot = stateRoot,
-                  stateStorage = stateStorage,
-                  appStateStorage = appStateStorage,
-                  flatSlotStorage = flatSlotStorage,
-                  networkPeerManager = networkPeerManager,
-                  syncController = self,
-                  pivotBlockNumber = pivotBlock,
-                  snapSyncConfig = snapSyncConfig
+          context.become(runningCombinedScan(needBytecode, needStorage, stateRoot, pivotBlock, snapSyncConfig))
+        } else {
+          // Legacy path: each phase scans the full trie independently, then downloads.
+          val bytecodeActor =
+            if (needBytecode)
+              Some(
+                context.actorOf(
+                  BytecodeRecoveryActor
+                    .props(
+                      stateRoot,
+                      stateStorage,
+                      evmCodeStorage,
+                      appStateStorage,
+                      networkPeerManager,
+                      self,
+                      pivotBlock,
+                      snapSyncConfig
+                    )
+                    .withDispatcher("sync-dispatcher"),
+                  s"bytecode-recovery-$syncGeneration"
                 )
-                .withDispatcher("sync-dispatcher"),
-              s"storage-recovery-$syncGeneration"
-            )
-          )
-        } else None
-
-        bytecodeActor.foreach(context.watch)
-        storageActor.foreach(context.watch)
-
-        // Register self for SNAP message routing so responses reach coordinators
-        networkPeerManager ! com.chipprbots.ethereum.network.NetworkPeerManagerActor.RegisterSnapSyncController(self)
-
-        // Poll for snap-capable peers every 5 seconds to feed coordinators
-        val peerPoller = context.system.scheduler.scheduleWithFixedDelay(
-          2.seconds,
-          5.seconds,
-          self,
-          PollRecoveryPeers
-        )
-
-        context.become(
-          runningRecovery(
-            bytecodeActor = bytecodeActor,
-            storageActor = storageActor,
+              )
+            else None
+          val storageActor =
+            if (needStorage)
+              Some(
+                context.actorOf(
+                  StorageRecoveryActor
+                    .props(
+                      stateRoot,
+                      stateStorage,
+                      appStateStorage,
+                      flatSlotStorage,
+                      networkPeerManager,
+                      self,
+                      pivotBlock,
+                      snapSyncConfig
+                    )
+                    .withDispatcher("sync-dispatcher"),
+                  s"storage-recovery-$syncGeneration"
+                )
+              )
+            else None
+          beginRecoveryDownloads(
+            bytecodeActor,
+            storageActor,
             bytecodeComplete = !needBytecode,
-            storageComplete = !needStorage,
-            peerPoller = peerPoller
+            storageComplete = !needStorage
           )
-        )
+        }
 
       case _ =>
         log.warning("Cannot run recovery: missing stateRoot or pivotBlock. Marking done and proceeding.")
@@ -1204,6 +1202,114 @@ class SyncController(
         if (needStorage) appStateStorage.storageRecoveryDone().commit()
         startRegularSync()
     }
+  }
+
+  /** Wait for the combined scan to report both gap sets, then spawn download-only recovery actors for whichever phases
+    * still have gaps. Phases the scan found already complete are marked done immediately.
+    */
+  def runningCombinedScan(
+      needBytecode: Boolean,
+      needStorage: Boolean,
+      stateRoot: ByteString,
+      pivotBlock: BigInt,
+      snapSyncConfig: com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncConfig
+  ): Receive = {
+    case CombinedRecoveryScanActor.CombinedScanComplete(byteGaps, storGaps) =>
+      val effByte = if (needBytecode) byteGaps else Nil
+      val effStor = if (needStorage) storGaps else Nil
+      log.info(s"Combined recovery scan reported ${effByte.size} bytecode gaps, ${effStor.size} storage gaps.")
+      // Phases the combined scan found complete (no gaps) are done right now.
+      if (needBytecode && effByte.isEmpty) appStateStorage.bytecodeRecoveryDone().commit()
+      if (needStorage && effStor.isEmpty) appStateStorage.storageRecoveryDone().commit()
+
+      val bytecodeActor =
+        if (needBytecode && effByte.nonEmpty)
+          Some(
+            context.actorOf(
+              BytecodeRecoveryActor
+                .propsPreloaded(
+                  stateRoot,
+                  stateStorage,
+                  evmCodeStorage,
+                  appStateStorage,
+                  networkPeerManager,
+                  self,
+                  pivotBlock,
+                  snapSyncConfig,
+                  effByte
+                )
+                .withDispatcher("sync-dispatcher"),
+              s"bytecode-recovery-dl-$syncGeneration"
+            )
+          )
+        else None
+      val storageActor =
+        if (needStorage && effStor.nonEmpty)
+          Some(
+            context.actorOf(
+              StorageRecoveryActor
+                .propsPreloaded(
+                  stateRoot,
+                  stateStorage,
+                  appStateStorage,
+                  flatSlotStorage,
+                  networkPeerManager,
+                  self,
+                  pivotBlock,
+                  snapSyncConfig,
+                  effStor
+                )
+                .withDispatcher("sync-dispatcher"),
+              s"storage-recovery-dl-$syncGeneration"
+            )
+          )
+        else None
+      beginRecoveryDownloads(
+        bytecodeActor,
+        storageActor,
+        bytecodeComplete = bytecodeActor.isEmpty,
+        storageComplete = storageActor.isEmpty
+      )
+
+    case bh: ForkChoiceManager.BeaconHead =>
+      handleBeaconHead(bh, snapSyncOpt = None)
+
+    case other =>
+      log.debug("Ignoring message during combined recovery scan: {}", other.getClass.getSimpleName)
+  }
+
+  /** Wire up download-only recovery: register for SNAP routing, start the peer poller, and enter `runningRecovery`. If
+    * there is nothing to download (no gaps), clear the resumable checkpoint and go straight to regular sync.
+    */
+  private def beginRecoveryDownloads(
+      bytecodeActor: Option[ActorRef],
+      storageActor: Option[ActorRef],
+      bytecodeComplete: Boolean,
+      storageComplete: Boolean
+  ): Unit =
+    if (bytecodeActor.isEmpty && storageActor.isEmpty) {
+      log.info("Recovery: no gaps to download. Transitioning to regular sync.")
+      appStateStorage.clearRecoveryProgress().commit()
+      startRegularSync()
+    } else {
+      bytecodeActor.foreach(context.watch)
+      storageActor.foreach(context.watch)
+      networkPeerManager ! com.chipprbots.ethereum.network.NetworkPeerManagerActor.RegisterSnapSyncController(self)
+      val peerPoller = context.system.scheduler.scheduleWithFixedDelay(2.seconds, 5.seconds, self, PollRecoveryPeers)
+      context.become(runningRecovery(bytecodeActor, storageActor, bytecodeComplete, storageComplete, peerPoller))
+    }
+
+  /** Centralised recovery teardown: stop the peer poller, deregister SNAP routing, clear the resumable checkpoint, and
+    * start regular sync. Called from every "all recovery complete" path.
+    */
+  private def completeRecovery(peerPoller: org.apache.pekko.actor.Cancellable): Unit = {
+    peerPoller.cancel()
+    networkPeerManager ! com.chipprbots.ethereum.network.NetworkPeerManagerActor.RegisterSnapSyncController(
+      context.system.deadLetters
+    )
+    appStateStorage.clearRecoveryProgress().commit()
+    log.info("All recovery complete. Transitioning to regular sync.")
+    startRegularSync()
   }
 
   def runningRecovery(
@@ -1216,12 +1322,7 @@ class SyncController(
     case BytecodeRecoveryActor.RecoveryComplete =>
       log.info(s"Bytecode recovery complete. Storage complete: $storageComplete")
       if (storageComplete) {
-        peerPoller.cancel()
-        networkPeerManager ! com.chipprbots.ethereum.network.NetworkPeerManagerActor.RegisterSnapSyncController(
-          context.system.deadLetters
-        )
-        log.info("All recovery complete. Transitioning to regular sync.")
-        startRegularSync()
+        completeRecovery(peerPoller)
       } else {
         context.become(
           runningRecovery(bytecodeActor = None, storageActor, bytecodeComplete = true, storageComplete, peerPoller)
@@ -1231,12 +1332,7 @@ class SyncController(
     case StorageRecoveryActor.RecoveryComplete =>
       log.info(s"Storage recovery complete. Bytecode complete: $bytecodeComplete")
       if (bytecodeComplete) {
-        peerPoller.cancel()
-        networkPeerManager ! com.chipprbots.ethereum.network.NetworkPeerManagerActor.RegisterSnapSyncController(
-          context.system.deadLetters
-        )
-        log.info("All recovery complete. Transitioning to regular sync.")
-        startRegularSync()
+        completeRecovery(peerPoller)
       } else {
         context.become(
           runningRecovery(bytecodeActor, storageActor = None, bytecodeComplete, storageComplete = true, peerPoller)
@@ -1293,11 +1389,7 @@ class SyncController(
     case Terminated(actor) if bytecodeActor.contains(actor) =>
       log.error("BytecodeRecoveryActor terminated unexpectedly. Treating as complete to unblock sync.")
       if (storageComplete) {
-        peerPoller.cancel()
-        networkPeerManager ! com.chipprbots.ethereum.network.NetworkPeerManagerActor.RegisterSnapSyncController(
-          context.system.deadLetters
-        )
-        startRegularSync()
+        completeRecovery(peerPoller)
       } else {
         context.become(
           runningRecovery(bytecodeActor = None, storageActor, bytecodeComplete = true, storageComplete, peerPoller)
@@ -1307,11 +1399,7 @@ class SyncController(
     case Terminated(actor) if storageActor.contains(actor) =>
       log.error("StorageRecoveryActor terminated unexpectedly. Treating as complete to unblock sync.")
       if (bytecodeComplete) {
-        peerPoller.cancel()
-        networkPeerManager ! com.chipprbots.ethereum.network.NetworkPeerManagerActor.RegisterSnapSyncController(
-          context.system.deadLetters
-        )
-        startRegularSync()
+        completeRecovery(peerPoller)
       } else {
         context.become(
           runningRecovery(bytecodeActor, storageActor = None, bytecodeComplete, storageComplete = true, peerPoller)

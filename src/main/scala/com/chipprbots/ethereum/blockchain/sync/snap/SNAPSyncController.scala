@@ -4459,6 +4459,17 @@ case class SNAPSyncConfig(
     // because trie nodes are content-addressed. This bounds the number of rolls so a peerless or
     // hot-only residue still terminates into the abandon path instead of rolling forever.
     storageRecoveryMaxRootRolls: Int = 8,
+    // Post-SNAP recovery scan: when true (default), one combined parallel single-pass scan
+    // (CombinedRecoveryScanner) walks the trie checking BOTH bytecode and storage per account, sharded
+    // across `recoveryScanConcurrency` workers, persisting per-shard progress so a crash resumes from the
+    // last completed shard. Replaces the two legacy single-threaded full-trie walks. Set false to fall
+    // back to the legacy per-phase scan actors.
+    parallelRecoveryScan: Boolean = true,
+    // Worker count for the combined scan. Default 3 — reserve a core + memory for the live node/GC on a
+    // 4-core box (the scan runs read-only against the on-disk trie; the node is otherwise idle during it).
+    recoveryScanConcurrency: Int = 3,
+    // Branch levels to descend when partitioning the trie into shards (1 ⇒ up to 16 shards).
+    recoveryScanShardDepth: Int = 1,
     // Static SNAP server peers: addresses to always maintain a connection with during SNAP sync.
     // Use for local SNAP-serving nodes (e.g. Besu with --snapsync-server-enabled) that may
     // disconnect after storage phase but are needed for trie node healing.
@@ -4589,6 +4600,18 @@ object SNAPSyncConfig {
         if (snapConfig.hasPath("storage-recovery-max-root-rolls"))
           snapConfig.getInt("storage-recovery-max-root-rolls")
         else 8,
+      parallelRecoveryScan =
+        if (snapConfig.hasPath("parallel-recovery-scan"))
+          snapConfig.getBoolean("parallel-recovery-scan")
+        else true,
+      recoveryScanConcurrency =
+        if (snapConfig.hasPath("recovery-scan-concurrency"))
+          snapConfig.getInt("recovery-scan-concurrency")
+        else 3,
+      recoveryScanShardDepth =
+        if (snapConfig.hasPath("recovery-scan-shard-depth"))
+          snapConfig.getInt("recovery-scan-shard-depth")
+        else 1,
       snapServerPeers =
         if (snapConfig.hasPath("snap-server-peers"))
           snapConfig
