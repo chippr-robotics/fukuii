@@ -22,7 +22,14 @@ import com.chipprbots.ethereum.mpt.MptVisitors.PathTrackingLeafWalkVisitor
   * One instance accumulates one shard's gaps; the parallel driver merges per-shard results (storage-root dedup must be
   * re-applied across shards, since the same storageRoot can be referenced by accounts in different shards).
   */
-final class CombinedRecoveryScan(mptStorage: MptStorage, evmCodeStorage: EvmCodeStorage) {
+final class CombinedRecoveryScan(
+    mptStorage: MptStorage,
+    evmCodeStorage: EvmCodeStorage,
+    // Fired once per decoded account leaf with `isContract` (storageRoot != empty). The driver uses it to publish
+    // live scan-progress gauges; default no-op keeps the unit tests metric-free. Must be cheap + thread-safe (it runs
+    // inside parallel shard walks).
+    onAccount: Boolean => Unit = _ => ()
+) {
 
   private val seenCodeHashes = mutable.HashSet.empty[ByteString]
   private val seenStorageRoots = mutable.HashSet.empty[ByteString]
@@ -40,13 +47,15 @@ final class CombinedRecoveryScan(mptStorage: MptStorage, evmCodeStorage: EvmCode
           if (evmCodeStorage.get(account.codeHash).isEmpty) missingCode += account.codeHash
         }
         // Storage: a contract whose storage-root node is referenced but absent from MptStorage.
-        if (account.storageRoot != Account.EmptyStorageRootHash && seenStorageRoots.add(account.storageRoot)) {
+        val isContract = account.storageRoot != Account.EmptyStorageRootHash
+        if (isContract && seenStorageRoots.add(account.storageRoot)) {
           try {
             val _ = mptStorage.get(account.storageRoot.toArray)
           } catch {
             case _: MerklePatriciaTrie.MPTException => missingStorage += ((accountHash, account.storageRoot))
           }
         }
+        onAccount(isContract)
       case _ => () // skip malformed account RLP, as both legacy scans do
     }
 

@@ -89,6 +89,18 @@ final class CombinedRecoveryScanner(
     val remaining = (0 until shardCount).filterNot(completed)
     val lock = new Object
 
+    // Live progress gauges for the node-health dashboard. Counts accounts walked THIS session (resumed shards are not
+    // re-walked); the missing count is seeded from the resumed checkpoint so it stays cumulative. Atomics because the
+    // per-leaf callback fires from parallel shard walks.
+    val accountsScanned = new java.util.concurrent.atomic.AtomicLong(0L)
+    val contractsFound = new java.util.concurrent.atomic.AtomicLong(0L)
+    val missingStorageCount = new java.util.concurrent.atomic.AtomicLong(accStorage.size.toLong)
+    val onAccount: Boolean => Unit = { isContract =>
+      val n = accountsScanned.incrementAndGet()
+      if (isContract) contractsFound.incrementAndGet()
+      if (n % 100000 == 0) RecoveryMetrics.setStorageScanProgress(n, contractsFound.get(), missingStorageCount.get())
+    }
+
     // Merge one shard's gaps (cross-shard dedup) and atomically persist completion + accumulated gaps. Serialized so
     // the shared accumulators/dedup-sets and the single-key write are consistent under parallel walks.
     def mergeAndPersist(idx: Int, scan: CombinedRecoveryScan): Unit = lock.synchronized {
@@ -96,6 +108,7 @@ final class CombinedRecoveryScanner(
       scan.missingStorageTries.foreach { case (acct, root) =>
         if (seenStorageRoots.add(root)) accStorage += ((acct, root))
       }
+      missingStorageCount.set(accStorage.size.toLong)
       completed += idx
       appStateStorage
         .putRecoveryProgress(
@@ -107,7 +120,7 @@ final class CombinedRecoveryScanner(
 
     def scanOne(idx: Int): Unit = {
       onShardScanStart(idx)
-      val scan = new CombinedRecoveryScan(storageForShard(), evmCodeStorage)
+      val scan = new CombinedRecoveryScan(storageForShard(), evmCodeStorage, onAccount)
       scan.scanShard(shards(idx).root, shards(idx).pathPrefix)
       mergeAndPersist(idx, scan)
     }
@@ -121,6 +134,8 @@ final class CombinedRecoveryScanner(
       finally pool.shutdown()
     }
 
+    // Final progress publish so the dashboard reflects the completed totals.
+    RecoveryMetrics.setStorageScanProgress(accountsScanned.get(), contractsFound.get(), missingStorageCount.get())
     RecoveryScanResult(accBytecodes.toVector, accStorage.toVector)
   }
 }
