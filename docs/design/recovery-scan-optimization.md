@@ -162,8 +162,22 @@ isolation before integration — a wrong partition or a missed gap = a corrupt a
 | 2 | `CombinedRecoveryScan` — single-pass bytecode+storage check | ✅ done | 2 (equivalence across 7 present/missing combos, no-gaps) |
 | 3 | `RecoveryProgress` + `AppStateStorage` resumable progress | ✅ done | 16 (round-trip, tag invalidation, corruption→None, atomic `recoveryDone`) |
 | 4 | `CombinedRecoveryScanner` — parallel-by-shard, resumable driver | ✅ done | 6 (equivalence seq+parallel vs single-pass, crash-resume, cross-shard dedup, download-resume, empty) |
-| 5 | Recent-root roll (the correctness fix, addendum above) | pending | — |
-| 6 | Wire `SyncController` + flag + actor wrapper + build + validate | pending | — |
+| 5 | Recent-root roll — recovery-actor side (the correctness fix, addendum above) | ✅ done (actor side) | 5 (roll-on-recent-root, no-op same root, bounded→abandon, abandon-when-no-root, progress-no-premature-abandon) |
+| 6 | Wire `SyncController` (incl. `RequestRecentRoot` responder) + flag + actor wrapper + build + validate | pending | — |
+
+### Phase (recent-root roll) outcome — `StorageRecoveryActor` rolls instead of wedging
+
+On `PivotStateUnservable` the actor now asks its parent for a recent servable root (`RequestRecentRoot`)
+and, on `RecentRoot(block, Some(root))`, sends `StoragePivotRefreshed(root)` to the coordinator (which
+swaps the root, re-queues tasks, clears stateless peers, resumes). Cold contracts fill identically
+(content-addressed nodes). Rolls are bounded by `storage-recovery-max-root-rolls` (default 8); a hot-only
+or peerless residue still terminates into the abandon path, and a residual-gap re-scan logs what's left
+for regular sync's on-demand `GetTrieNodes`.
+
+**Activation note:** the roll is inert until `SyncController` answers `RequestRecentRoot` with a real
+recent root (fetched via the `PivotHeaderBootstrap` path, in the `runningRecovery` state). That responder
+is the **first item of #6**. Until then no `RecentRoot` arrives and the existing abandon timer fires
+exactly as before — so #5 cannot regress current behaviour, it just isn't yet live.
 
 ### Phase 1+2 outcome — the cohesive scan unit (`CombinedRecoveryScanner`)
 
