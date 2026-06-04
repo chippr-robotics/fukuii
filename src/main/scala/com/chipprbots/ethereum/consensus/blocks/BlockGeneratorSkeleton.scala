@@ -91,7 +91,11 @@ abstract class BlockGeneratorSkeleton(
 
     val blockTimestamp = blockTimestampProvider.getEpochSecond
     val header = prepareHeader(blockNumber, parent, beneficiary, blockTimestamp, x)
-    val transactionsForBlock = prepareTransactions(transactions, header.gasLimit)
+    val nextBlockBaseFee = com.chipprbots.ethereum.consensus.eip1559.BaseFeeCalculator.calcBaseFee(
+      parent.header,
+      blockchainConfig
+    )
+    val transactionsForBlock = prepareTransactions(transactions, header.gasLimit, nextBlockBaseFee)
     val body = newBlockBody(transactionsForBlock, x)
     val block = Block(header, body)
 
@@ -122,10 +126,18 @@ abstract class BlockGeneratorSkeleton(
 
   protected def prepareTransactions(
       transactions: Seq[SignedTransaction],
-      blockGasLimit: BigInt
+      blockGasLimit: BigInt,
+      blockBaseFee: BigInt = BigInt(0)
   )(implicit blockchainConfig: BlockchainConfig): Seq[SignedTransaction] = {
 
-    val sortedTransactions: Seq[SignedTransaction] = transactions
+    // ECIP-1122: filter out txs with effectiveTip < minTip before sorting.
+    val eligibleTransactions = transactions.filter { tx =>
+      val effectiveTip =
+        com.chipprbots.ethereum.domain.Transaction.effectiveGasPrice(tx.tx, Some(blockBaseFee)) - blockBaseFee
+      effectiveTip >= blockchainConfig.minTip
+    }
+
+    val sortedTransactions: Seq[SignedTransaction] = eligibleTransactions
       // should be safe to call get as we do not insert improper transactions to pool.
       .flatMap(tx => SignedTransaction.getSender(tx).map(sender => (sender, tx)))
       .groupBy(_._1)

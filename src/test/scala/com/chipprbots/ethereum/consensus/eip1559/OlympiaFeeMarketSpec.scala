@@ -9,6 +9,8 @@ import com.chipprbots.ethereum.Fixtures
 import com.chipprbots.ethereum.domain._
 import com.chipprbots.ethereum.domain.BlockHeader.HeaderExtraFields.HefEmpty
 import com.chipprbots.ethereum.domain.BlockHeader.HeaderExtraFields.HefPostOlympia
+import com.chipprbots.ethereum.domain.LegacyTransaction
+import com.chipprbots.ethereum.domain.TransactionWithDynamicFee
 import com.chipprbots.ethereum.nodebuilder.BlockchainConfigBuilder
 import com.chipprbots.ethereum.testing.Tags._
 import com.chipprbots.ethereum.utils.BlockchainConfig
@@ -35,7 +37,7 @@ class OlympiaFeeMarketSpec
 
   implicit val config: BlockchainConfig = blockchainConfig
     .withUpdatedForkBlocks(_.copy(olympiaBlockNumber = olympiaBlock, olympiaGasTarget = Some(BigInt(60_000_000))))
-    .copy(baseFeeFloor = BaseFeeCalculator.InitialBaseFee)
+    .copy(baseFeeFloor = BaseFeeCalculator.InitialBaseFee, minTip = BaseFeeCalculator.InitialBaseFee)
 
   private val InitialBaseFee: BigInt = BaseFeeCalculator.InitialBaseFee
 
@@ -217,6 +219,63 @@ class OlympiaFeeMarketSpec
           fee = BaseFeeCalculator.calcBaseFee(emptyParent, config)
           fee should be >= InitialBaseFee
         }
+      }
+    }
+
+    "ECIP-1122 effective miner tip (MIN_MINER_TIP = 1 gwei)" should {
+
+      "compute zero effectiveTip for Type 2 tx with maxFee = baseFee and tip = 0" taggedAs (UnitTest, OlympiaTest) in {
+        val baseFee = InitialBaseFee
+        val tx2ZeroTip = TransactionWithDynamicFee(
+          chainId = BigInt(61),
+          nonce = BigInt(0),
+          maxPriorityFeePerGas = BigInt(0),
+          maxFeePerGas = baseFee,
+          gasLimit = BigInt(21_000),
+          receivingAddress = None,
+          value = BigInt(0),
+          payload = ByteString.empty,
+          accessList = Nil
+        )
+        val effectiveTip = Transaction.effectiveGasPrice(tx2ZeroTip, Some(baseFee)) - baseFee
+        effectiveTip shouldBe BigInt(0)
+        effectiveTip should be < InitialBaseFee
+      }
+
+      "compute 1 gwei effectiveTip for Type 2 tx with maxFee = 2 gwei and tip = 1 gwei" taggedAs (
+        UnitTest,
+        OlympiaTest
+      ) in {
+        val baseFee = InitialBaseFee
+        val tx2ValidTip = TransactionWithDynamicFee(
+          chainId = BigInt(61),
+          nonce = BigInt(0),
+          maxPriorityFeePerGas = InitialBaseFee,
+          maxFeePerGas = InitialBaseFee * 2,
+          gasLimit = BigInt(21_000),
+          receivingAddress = None,
+          value = BigInt(0),
+          payload = ByteString.empty,
+          accessList = Nil
+        )
+        val effectiveTip = Transaction.effectiveGasPrice(tx2ValidTip, Some(baseFee)) - baseFee
+        effectiveTip shouldBe InitialBaseFee
+        effectiveTip should be >= InitialBaseFee
+      }
+
+      "compute zero effectiveTip for legacy tx with gasPrice = baseFee" taggedAs (UnitTest, OlympiaTest) in {
+        val baseFee = InitialBaseFee
+        val legacyTx = LegacyTransaction(
+          nonce = BigInt(0),
+          gasPrice = baseFee,
+          gasLimit = BigInt(21_000),
+          receivingAddress = None,
+          value = BigInt(0),
+          payload = ByteString.empty
+        )
+        val effectiveTip = Transaction.effectiveGasPrice(legacyTx, Some(baseFee)) - baseFee
+        effectiveTip shouldBe BigInt(0)
+        effectiveTip should be < InitialBaseFee
       }
     }
   }

@@ -381,7 +381,29 @@ class PendingTransactionsManager(
       }
     }
 
-    if (blockchainReader == null || stateStorage == null) return afterPendingNonceCheck
+    // 2. ECIP-1122: reject if effectiveTip < minTip.
+    // With baseFeeFloor = 1 gwei, a tx with tip = 0 can never be included — reject at admission
+    // to protect the sender from a permanent nonce-queue deadlock.
+    val currentBaseFee = blockchainReader
+      .getBestBlock()
+      .flatMap(_.header.baseFee)
+      .getOrElse(blockchainConfig.baseFeeFloor)
+    val afterTipCheck = afterPendingNonceCheck.filter { stx =>
+      val effectiveTip =
+        com.chipprbots.ethereum.domain.Transaction.effectiveGasPrice(stx.tx.tx, Some(currentBaseFee)) - currentBaseFee
+      if (effectiveTip < blockchainConfig.minTip) {
+        log.debug(
+          "Rejecting tx {} from {}: effectiveTip {} < minTip {}",
+          stx.tx.hash.toHex,
+          stx.senderAddress,
+          effectiveTip,
+          blockchainConfig.minTip
+        )
+        false
+      } else true
+    }
+
+    if (blockchainReader == null || stateStorage == null) return afterTipCheck
     try {
       import com.chipprbots.ethereum.domain.Account
       import com.chipprbots.ethereum.mpt.MerklePatriciaTrie
@@ -396,7 +418,7 @@ class PendingTransactionsManager(
             Account.accountSerializer
           )
 
-          val accountsBySender = afterPendingNonceCheck
+          val accountsBySender = afterTipCheck
             .map(_.senderAddress)
             .map { senderAddress =>
               val addressHash = com.chipprbots.ethereum.crypto.kec256(senderAddress.toArray)
@@ -404,7 +426,7 @@ class PendingTransactionsManager(
             }
             .toMap
 
-          afterPendingNonceCheck.filter { stx =>
+          afterTipCheck.filter { stx =>
             accountsBySender.get(stx.senderAddress).flatten.exists { account =>
               val tx = stx.tx.tx
               val nonceValid = tx.nonce >= account.nonce.toBigInt && tx.nonce < account.nonce.toBigInt + 1024
@@ -416,13 +438,13 @@ class PendingTransactionsManager(
           }
         case None =>
           // No best block — only accept txs from senders we've already seen
-          afterPendingNonceCheck.filter(stx => pendingNonces.contains(stx.senderAddress))
+          afterTipCheck.filter(stx => pendingNonces.contains(stx.senderAddress))
       }
     } catch {
       case _: Exception =>
         // MPT failed — only accept txs from senders with established pending nonces
         // (unknown senders can't be validated without state)
-        afterPendingNonceCheck.filter(stx => pendingNonces.contains(stx.senderAddress))
+        afterTipCheck.filter(stx => pendingNonces.contains(stx.senderAddress))
     }
   }
 
