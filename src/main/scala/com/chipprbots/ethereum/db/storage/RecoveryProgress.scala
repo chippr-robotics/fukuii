@@ -29,6 +29,13 @@ import com.chipprbots.ethereum.utils.Hex
   * @param missingStorageTries
   *   accumulated missing contract storage tries as (accountHash, storageRoot) pairs. May contain the same storageRoot
   *   for accounts in different shards; cross-shard dedup is the driver's job, not the codec's.
+  *
+  * Invariants a persisted progress always satisfies (enforced by [[RecoveryProgress.deserialize]] — a value violating
+  * any of them is treated as corrupt and read back as None, forcing a fresh scan):
+  *   - `shardCount >= 1` — a checkpoint is only written for a non-empty trie; an empty trie has nothing to scan and is
+  *     marked done directly, never via a checkpoint.
+  *   - every hash (`scanRoot`, each bytecode, each account/storageRoot) is exactly 32 bytes.
+  *   - `completedShards ⊆ [0, shardCount)`.
   */
 final case class RecoveryProgress(
     scanRoot: ByteString,
@@ -71,26 +78,40 @@ object RecoveryProgress {
       .mkString(FieldSep)
   }
 
-  /** Total inverse of [[serialize]]: ANY malformed, truncated, or wrong-version input yields None so the caller falls
-    * back to a fresh (always-correct) scan rather than trusting a partially-written or corrupt checkpoint.
+  /** Total inverse of [[serialize]]: ANY malformed, truncated, wrong-version, or invariant-violating input yields None
+    * so the caller falls back to a fresh (always-correct) scan rather than trusting a partially-written or corrupt
+    * checkpoint. The strict per-field validation below is deliberate defense-in-depth: it turns a value that would
+    * otherwise deserialise to a *wrong-but-plausible* RecoveryProgress (a sub-32-byte hash, an out-of-range shard index,
+    * shardCount 0 → spuriously "complete") into a clean None, so corruption can never masquerade as a finished scan.
     */
   def deserialize(s: String): Option[RecoveryProgress] = Try {
     // -1 keeps trailing empty fields (e.g. an empty storage list as the last field).
     val fields = s.split(FieldSep, -1)
     require(fields.length == 6, "wrong field count")
     require(fields(0) == Version, "version mismatch")
-    val scanRoot = ByteString(Hex.decode(fields(1)))
+    val scanRoot = decodeHash(fields(1))
     val shardCount = fields(2).toInt
-    require(shardCount >= 0, "negative shardCount")
+    require(shardCount >= 1, "shardCount must be >= 1 (a checkpoint is only persisted for a non-empty trie)")
     val completed = splitList(fields(3)).iterator.map(_.toInt).toSet
-    val bytecodes = splitList(fields(4)).iterator.map(h => ByteString(Hex.decode(h))).toVector
+    require(completed.forall(i => i >= 0 && i < shardCount), "completed shard index out of range")
+    val bytecodes = splitList(fields(4)).iterator.map(decodeHash).toVector
     val storage = splitList(fields(5)).iterator.map { pair =>
       val parts = pair.split(PairSep, -1)
       require(parts.length == 2, "malformed storage pair")
-      (ByteString(Hex.decode(parts(0))), ByteString(Hex.decode(parts(1))))
+      (decodeHash(parts(0)), decodeHash(parts(1)))
     }.toVector
     RecoveryProgress(scanRoot, shardCount, completed, bytecodes, storage)
   }.toOption
+
+  /** Decode a 32-byte hash field, rejecting anything that isn't EXACTLY 64 hex chars. The length check is on the hex
+    * string (not the decoded byte count) on purpose: `Hex.decode` parses a lone trailing nibble rather than dropping
+    * it, so a 63-char field would still produce 32 bytes with a corrupted final byte and slip past a byte-length check.
+    * Non-hex chars throw inside `Hex.decode` → caught by deserialize's `Try` → None.
+    */
+  private def decodeHash(hex: String): ByteString = {
+    require(hex.length == 64, "hash field must be exactly 64 hex chars (32 bytes)")
+    ByteString(Hex.decode(hex))
+  }
 
   /** Split a CSV field, treating "" as the empty list (Java's `"".split(",")` returns `Array("")`, not `Array()`). */
   private def splitList(s: String): Array[String] = if (s.isEmpty) Array.empty else s.split(ListSep)

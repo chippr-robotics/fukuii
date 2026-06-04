@@ -82,6 +82,42 @@ class RecoveryProgressSpec extends AnyFunSuite with ScalaCheckPropertyChecks {
     assert(RecoveryProgress.deserialize(corrupted).isEmpty)
   }
 
+  // --- defense-in-depth: a corrupt value that parses into 6 fields must still deserialise to None,
+  // not to a wrong-but-plausible progress that a driver would trust as a finished scan. ---
+
+  private val root = "ab" * 32 // a valid 64-char (32-byte) hash field
+
+  test("rejects a hash field that is not exactly 64 hex chars", UnitTest, DatabaseTest) {
+    assert(RecoveryProgress.deserialize(s"v1\n${"ab" * 31}\n16\n\n\n").isEmpty) // 62-char scanRoot
+    // a 63-char field still sliding(2,2)-decodes to 32 bytes (corrupted last byte) — must be rejected by length, not bytes
+    assert(RecoveryProgress.deserialize(s"v1\n${"ab" * 31}c\n16\n\n\n").isEmpty)
+  }
+
+  test("rejects shardCount < 1 (would spuriously read as complete)", UnitTest, DatabaseTest) {
+    assert(RecoveryProgress.deserialize(s"v1\n$root\n0\n\n\n").isEmpty)
+    assert(RecoveryProgress.deserialize(s"v1\n$root\n-1\n\n\n").isEmpty)
+  }
+
+  test("rejects a completed shard index outside [0, shardCount)", UnitTest, DatabaseTest) {
+    assert(RecoveryProgress.deserialize(s"v1\n$root\n16\n0,99\n\n").isEmpty)
+    assert(RecoveryProgress.deserialize(s"v1\n$root\n16\n-1\n\n").isEmpty)
+  }
+
+  test("rejects a torn storage pair with empty hash fields", UnitTest, DatabaseTest) {
+    assert(RecoveryProgress.deserialize(s"v1\n$root\n16\n\n\n:").isEmpty) // lone separator → ('','')
+    assert(RecoveryProgress.deserialize(s"v1\n$root\n16\n\n\n${root}:").isEmpty) // missing storage root
+    assert(RecoveryProgress.deserialize(s"v1\n$root\n16\n\n\n:$root").isEmpty) // missing account hash
+  }
+
+  test("accepts a hand-built well-formed value (sanity for the corruption tests above)", UnitTest, DatabaseTest) {
+    val ok = RecoveryProgress.deserialize(s"v1\n$root\n16\n0,15\n$root\n$root:$root")
+    assert(ok.isDefined)
+    assert(ok.get.shardCount == 16)
+    assert(ok.get.completedShards == Set(0, 15))
+    assert(ok.get.missingBytecodes.size == 1)
+    assert(ok.get.missingStorageTries.size == 1)
+  }
+
   test("isComplete and remainingShards reflect the completed set", UnitTest, DatabaseTest) {
     val partial = RecoveryProgress(hash(1), 4, Set(0, 2), Vector.empty, Vector.empty)
     assert(!partial.isComplete)
@@ -96,8 +132,8 @@ class RecoveryProgressSpec extends AnyFunSuite with ScalaCheckPropertyChecks {
     val genHash: Gen[ByteString] = Gen.listOfN(32, Arbitrary.arbitrary[Byte]).map(bs => ByteString(bs.toArray))
     val gen: Gen[RecoveryProgress] = for {
       root <- genHash
-      shardCount <- Gen.chooseNum(0, 256)
-      completed <- Gen.someOf(0 until math.max(shardCount, 1)).map(_.toSet)
+      shardCount <- Gen.chooseNum(1, 256)
+      completed <- Gen.someOf(0 until shardCount).map(_.toSet)
       bytecodes <- Gen.listOf(genHash).map(_.toVector)
       storage <- Gen.listOf(Gen.zip(genHash, genHash)).map(_.toVector)
     } yield RecoveryProgress(root, shardCount, completed, bytecodes, storage)

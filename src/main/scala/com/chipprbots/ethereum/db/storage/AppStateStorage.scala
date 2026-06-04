@@ -190,6 +190,18 @@ class AppStateStorage(val dataSource: DataSource) extends TransactionalKeyValueS
   def clearRecoveryProgress(): DataSourceBatchUpdate =
     remove(Keys.RecoveryProgress)
 
+  /** Atomically mark BOTH recovery scans done AND clear the resumable checkpoint, in a single batch.
+    *
+    * The combined recovery driver calls this once the single-pass scan + gap download finishes. Doing it as one atomic
+    * write closes the crash window that separate commits would open: there is never a restart that sees a done-flag set
+    * with a stale checkpoint still lingering, nor a cleared checkpoint with the done-flag unset (→ a needless full
+    * re-scan). Either the whole "recovery is finished and the checkpoint is gone" fact is durable, or none of it is.
+    */
+  def recoveryDone(): DataSourceBatchUpdate =
+    put(Keys.BytecodeRecoveryDone, true.toString)
+      .and(put(Keys.StorageRecoveryDone, true.toString))
+      .and(remove(Keys.RecoveryProgress))
+
   /** Get the SNAP sync pivot block number
     * @return
     *   SNAP sync pivot block number, or None if not set

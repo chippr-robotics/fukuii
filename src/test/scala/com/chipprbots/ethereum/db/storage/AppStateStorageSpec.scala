@@ -489,6 +489,25 @@ class AppStateStorageSpec extends AnyWordSpec with ScalaCheckPropertyChecks with
       storage.put(AppStateStorage.Keys.RecoveryProgress, "garbage-not-a-real-progress-blob").commit()
       assert(storage.getRecoveryProgress().isEmpty)
     }
+
+    // The atomic completion primitive: marks both recovery phases done AND clears the checkpoint in one
+    // batch, so there is no restart window with a done-flag set but a stale checkpoint still present.
+    "recoveryDone marks both recovery flags done and clears progress atomically" taggedAs (
+      UnitTest,
+      DatabaseTest
+    ) in new Fixtures {
+      val storage = newAppStateStorage()
+      val root = ByteString(Array.fill[Byte](32)(0x22.toByte))
+      storage.putRecoveryProgress(RecoveryProgress(root, 16, Set(0, 1), Vector.empty, Vector.empty)).commit()
+      assert(!storage.isBytecodeRecoveryDone())
+      assert(!storage.isStorageRecoveryDone())
+      assert(storage.getRecoveryProgress().isDefined)
+
+      storage.recoveryDone().commit()
+      assert(storage.isBytecodeRecoveryDone())
+      assert(storage.isStorageRecoveryDone())
+      assert(storage.getRecoveryProgress().isEmpty)
+    }
   }
 
   trait Fixtures {
