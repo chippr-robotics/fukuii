@@ -113,6 +113,20 @@ scrape_configs:
           role: 'monitoring'
     metrics_path: '/metrics'
 
+  # Peer geo exporter (host sidecar) — feeds the Grafana peer node-map.
+  # Reads peer IPs from fukuii-primary's logs, geo-locates via ip-api, exposes
+  # fukuii_peer_location{latitude,longitude,country,...}. Runs on the host; scraped via gateway.
+  - job_name: 'fukuii-peer-geo'
+    scrape_interval: 30s
+    scrape_timeout: 20s
+    metrics_path: '/metrics'
+    static_configs:
+      - targets: ['172.21.0.1:9099']
+        labels:
+          instance: 'peer-geo'
+          role: 'peer-map'
+          environment: 'production'
+
 # Remote write configuration (optional - for long-term storage)
 # remote_write:
 #   - url: "http://remote-storage:9009/api/v1/write"
