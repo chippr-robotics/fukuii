@@ -429,6 +429,85 @@ class AppStateStorageSpec extends AnyWordSpec with ScalaCheckPropertyChecks with
       storage.putBackfillBestReceipt(target).commit()
       assert(!storage.needsBackfillResume())
     }
+
+    // ========================================
+    // Resumable recovery scan progress
+    // ========================================
+
+    "get None for recovery progress when storage is empty" taggedAs (UnitTest, DatabaseTest) in new Fixtures {
+      assert(newAppStateStorage().getRecoveryProgress().isEmpty)
+    }
+
+    "round-trip recovery progress (completed shards + gaps)" taggedAs (UnitTest, DatabaseTest) in new Fixtures {
+      val storage = newAppStateStorage()
+      val root = ByteString(Array.fill[Byte](32)(0xab.toByte))
+      val progress = RecoveryProgress(
+        scanRoot = root,
+        shardCount = 16,
+        completedShards = Set(0, 5, 9),
+        missingBytecodes = Vector(ByteString(Array.fill[Byte](32)(1)), ByteString(Array.fill[Byte](32)(2))),
+        missingStorageTries = Vector(
+          ByteString(Array.fill[Byte](32)(3)) -> ByteString(Array.fill[Byte](32)(4))
+        )
+      )
+      storage.putRecoveryProgress(progress).commit()
+      assert(storage.getRecoveryProgress().contains(progress))
+    }
+
+    // The resume tag (scanRoot + shardCount) must invalidate stale checkpoints: after a pivot
+    // refresh (new root) or a partition reconfig (new shardCount), prior shard indices are
+    // meaningless, so the tag-validated read returns None to force a correct fresh scan.
+    "getRecoveryProgressFor returns Some only on a matching scanRoot + shardCount tag" taggedAs (
+      UnitTest,
+      DatabaseTest
+    ) in new Fixtures {
+      val storage = newAppStateStorage()
+      val root = ByteString(Array.fill[Byte](32)(0xcd.toByte))
+      val other = ByteString(Array.fill[Byte](32)(0xef.toByte))
+      val progress = RecoveryProgress(root, 16, Set(1, 2), Vector.empty, Vector.empty)
+      storage.putRecoveryProgress(progress).commit()
+
+      assert(storage.getRecoveryProgressFor(root, 16).contains(progress)) // matching tag
+      assert(storage.getRecoveryProgressFor(other, 16).isEmpty) // wrong root (pivot refreshed)
+      assert(storage.getRecoveryProgressFor(root, 32).isEmpty) // wrong shard count (reconfig)
+    }
+
+    "clearRecoveryProgress removes the persisted progress" taggedAs (UnitTest, DatabaseTest) in new Fixtures {
+      val storage = newAppStateStorage()
+      val root = ByteString(Array.fill[Byte](32)(0x11.toByte))
+      storage.putRecoveryProgress(RecoveryProgress(root, 16, Set(0), Vector.empty, Vector.empty)).commit()
+      assert(storage.getRecoveryProgress().isDefined)
+
+      storage.clearRecoveryProgress().commit()
+      assert(storage.getRecoveryProgress().isEmpty)
+    }
+
+    // Flaky-system resilience: a torn/corrupt write must NOT surface as a wrong (partial) gap set —
+    // it must read back as None so the caller falls through to a correct fresh scan.
+    "getRecoveryProgress returns None for a corrupt stored value" taggedAs (UnitTest, DatabaseTest) in new Fixtures {
+      val storage = newAppStateStorage()
+      storage.put(AppStateStorage.Keys.RecoveryProgress, "garbage-not-a-real-progress-blob").commit()
+      assert(storage.getRecoveryProgress().isEmpty)
+    }
+
+    // The atomic completion primitive: marks both recovery phases done AND clears the checkpoint in one
+    // batch, so there is no restart window with a done-flag set but a stale checkpoint still present.
+    "recoveryDone marks both recovery flags done and clears progress atomically" taggedAs (
+      UnitTest,
+      DatabaseTest
+    ) in new Fixtures {
+      val storage = newAppStateStorage()
+      val root = ByteString(Array.fill[Byte](32)(0x22.toByte))
+      storage.putRecoveryProgress(RecoveryProgress(root, 16, Set(0, 1), Vector.empty, Vector.empty)).commit()
+      assert(!storage.isBytecodeRecoveryDone())
+      assert(!storage.isStorageRecoveryDone())
+      assert(storage.getRecoveryProgress().isDefined)
+
+      storage.recoveryDone().commit()
+      assert(storage.isBytecodeRecoveryDone())
+      assert(storage.isStorageRecoveryDone())
+      assert(storage.getRecoveryProgress().isEmpty)
+    }
   }
 
   trait Fixtures {

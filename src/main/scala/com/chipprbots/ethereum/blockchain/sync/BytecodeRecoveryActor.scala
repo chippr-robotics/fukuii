@@ -242,4 +242,32 @@ object BytecodeRecoveryActor {
         snapSyncConfig
       )
     )
+
+  /** Download-only variant: skip the scan and go straight to downloading the supplied missing codeHashes (produced by
+    * the combined parallel scan). Used by `SyncController` when `parallel-recovery-scan` is on.
+    */
+  def propsPreloaded(
+      stateRoot: ByteString,
+      stateStorage: StateStorage,
+      evmCodeStorage: EvmCodeStorage,
+      appStateStorage: AppStateStorage,
+      networkPeerManager: ActorRef,
+      syncController: ActorRef,
+      pivotBlockNumber: BigInt,
+      snapSyncConfig: SNAPSyncConfig,
+      missing: Seq[ByteString]
+  ): Props =
+    Props(
+      new BytecodeRecoveryActor(
+        stateRoot,
+        stateStorage,
+        evmCodeStorage,
+        appStateStorage,
+        networkPeerManager,
+        syncController,
+        pivotBlockNumber,
+        snapSyncConfig,
+        preloadedMissingForTesting = Some(missing)
+      )
+    )
 }

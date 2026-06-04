@@ -499,7 +499,365 @@
         {"expr": "app_snapsync_healing_timer_seconds_max{instance=~\"$instance\"}", "refId": "D", "legendFormat": "{{instance}} healing"}
       ],
       "fieldConfig": {"defaults": {"unit": "s"}}
+    },
+    {
+      "type": "row",
+      "title": "Post-SNAP State Recovery (bytecode + storage scan)",
+      "id": 253,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 58
+      },
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "type": "stat",
+      "title": "Storage Recovery Phase",
+      "id": 254,
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 0,
+        "y": 59
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "expr": "app_recovery_storage_phase_gauge{instance=~\"$instance\"}",
+          "refId": "A",
+          "legendFormat": "phase"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "0": {
+                  "text": "Idle",
+                  "color": "text"
+                },
+                "1": {
+                  "text": "Scanning",
+                  "color": "yellow"
+                },
+                "2": {
+                  "text": "Downloading",
+                  "color": "blue"
+                },
+                "3": {
+                  "text": "Complete",
+                  "color": "green"
+                }
+              }
+            }
+          ],
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "text"
+          }
+        }
+      },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "textMode": "value",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Bytecode Recovery Phase",
+      "id": 255,
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 4,
+        "y": 59
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "expr": "app_recovery_bytecode_phase_gauge{instance=~\"$instance\"}",
+          "refId": "A",
+          "legendFormat": "phase"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "0": {
+                  "text": "Idle",
+                  "color": "text"
+                },
+                "1": {
+                  "text": "Scanning",
+                  "color": "yellow"
+                },
+                "2": {
+                  "text": "Downloading",
+                  "color": "blue"
+                },
+                "3": {
+                  "text": "Complete",
+                  "color": "green"
+                }
+              }
+            }
+          ],
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "text"
+          }
+        }
+      },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "textMode": "value",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Missing Storage Tries",
+      "id": 256,
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 8,
+        "y": 59
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "expr": "app_recovery_storage_missing_gauge{instance=~\"$instance\"}",
+          "refId": "A",
+          "legendFormat": "missing"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "decimals": 0,
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 1
+              }
+            ]
+          }
+        }
+      },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "area",
+        "textMode": "value_and_name",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Missing Bytecodes",
+      "id": 257,
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 12,
+        "y": 59
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "expr": "app_recovery_bytecode_missing_gauge{instance=~\"$instance\"}",
+          "refId": "A",
+          "legendFormat": "missing"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "decimals": 0,
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 1
+              }
+            ]
+          }
+        }
+      },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "area",
+        "textMode": "value_and_name",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Recovery Scan Progress (accounts walked)",
+      "id": 258,
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 59
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "expr": "app_recovery_storage_accountsScanned_gauge{instance=~\"$instance\"}",
+          "refId": "A",
+          "legendFormat": "storage scan"
+        },
+        {
+          "expr": "app_recovery_bytecode_accountsScanned_gauge{instance=~\"$instance\"}",
+          "refId": "B",
+          "legendFormat": "bytecode scan"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "decimals": 0,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "showPoints": "never"
+          }
+        }
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        }
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Recovery: contracts found & gaps",
+      "id": 259,
+      "gridPos": {
+        "h": 4,
+        "w": 16,
+        "x": 0,
+        "y": 63
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "expr": "app_recovery_storage_contractsFound_gauge{instance=~\"$instance\"}",
+          "refId": "A",
+          "legendFormat": "storage contracts"
+        },
+        {
+          "expr": "app_recovery_storage_missing_gauge{instance=~\"$instance\"}",
+          "refId": "B",
+          "legendFormat": "storage missing"
+        },
+        {
+          "expr": "app_recovery_bytecode_missing_gauge{instance=~\"$instance\"}",
+          "refId": "C",
+          "legendFormat": "bytecode missing"
+        },
+        {
+          "expr": "app_recovery_storage_downloaded_gauge{instance=~\"$instance\"}",
+          "refId": "D",
+          "legendFormat": "storage downloaded"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "decimals": 0,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "showPoints": "never"
+          }
+        }
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        }
+      }
     }
+
   ],
   "refresh": "10s",
   "schemaVersion": 38,

@@ -7,6 +7,7 @@ import org.apache.pekko.actor.PoisonPill
 import org.apache.pekko.actor.Props
 import org.apache.pekko.actor.Scheduler
 import org.apache.pekko.actor.Terminated
+import org.apache.pekko.util.ByteString
 
 import scala.concurrent.ExecutionContext.Implicits.global
 import scala.concurrent.duration._
@@ -67,11 +68,25 @@ class SyncController(
 
   private case object RestartFastSyncNow
   private case object PollRecoveryPeers
+  // Self-ping: the recovery recent-root header bootstrap for this generation took too long → decline the roll.
+  private case class RecentRootTimeout(generation: Int)
 
   // Generation counters for actor names to prevent Pekko name collisions
   // (context.stop is async — new actors can race with still-stopping ones).
   private var bootstrapGeneration: Long = 0
   private var syncGeneration: Long = 0
+
+  // Recovery recent-root roll (Task #5/#6): post-SNAP storage recovery asks for a recent canonical root
+  // when the saved pivot has aged out of peers' serve window. We fetch a recent header via
+  // PivotHeaderBootstrap (inline in `runningRecovery` — no transition into the deadlock-prone bootstrap
+  // state) and reply with StorageRecoveryActor.RecentRoot. Only one request is serviced at a time.
+  private var recentRootRequester: Option[ActorRef] = None
+  private var recentRootBootstrap: Option[(ActorRef, ActorRef)] = None // (peersClient, headerBootstrap)
+  private var recentRootGeneration: Int = 0
+  // Roll the download root this many blocks back from the network head — comfortably inside core-geth's
+  // ~128-block snapshot serve window so peers can serve the recent root, yet recent enough that ~all
+  // cold contracts' storage is unchanged since the original pivot (and thus content-identical).
+  private val RecentRootMarginBlocks: BigInt = BigInt(64)
 
   // SNAP<->Fast sync bounce cycle counter, persisted across restarts.
   private var snapFastCycleCount: Int = appStateStorage.getSnapFastCycleCount()
@@ -1120,69 +1135,74 @@ class SyncController(
 
         val snapSyncConfig = loadSnapSyncConfig()
 
-        val bytecodeActor = if (needBytecode) {
-          Some(
-            context.actorOf(
-              BytecodeRecoveryActor
-                .props(
-                  stateRoot = stateRoot,
-                  stateStorage = stateStorage,
-                  evmCodeStorage = evmCodeStorage,
-                  appStateStorage = appStateStorage,
-                  networkPeerManager = networkPeerManager,
-                  syncController = self,
-                  pivotBlockNumber = pivotBlock,
-                  snapSyncConfig = snapSyncConfig
-                )
-                .withDispatcher("sync-dispatcher"),
-              s"bytecode-recovery-$syncGeneration"
-            )
+        if (snapSyncConfig.parallelRecoveryScan) {
+          // Combined path: ONE parallel, resumable single-pass scan finds both gap sets; downloads start
+          // once it reports (in `runningCombinedScan`).
+          log.info("Recovery: combined parallel scan enabled — one pass finds bytecode + storage gaps.")
+          // Phase gauges are need-aware: a phase already done in a prior run shows Complete (not idle) while the
+          // combined scan re-verifies it in the same pass.
+          RecoveryMetrics.setBytecodePhase(
+            if (needBytecode) RecoveryMetrics.PhaseScanning else RecoveryMetrics.PhaseComplete
           )
-        } else None
-
-        val storageActor = if (needStorage) {
-          Some(
-            context.actorOf(
-              StorageRecoveryActor
-                .props(
-                  stateRoot = stateRoot,
-                  stateStorage = stateStorage,
-                  appStateStorage = appStateStorage,
-                  flatSlotStorage = flatSlotStorage,
-                  networkPeerManager = networkPeerManager,
-                  syncController = self,
-                  pivotBlockNumber = pivotBlock,
-                  snapSyncConfig = snapSyncConfig
-                )
-                .withDispatcher("sync-dispatcher"),
-              s"storage-recovery-$syncGeneration"
-            )
+          RecoveryMetrics.setStoragePhase(
+            if (needStorage) RecoveryMetrics.PhaseScanning else RecoveryMetrics.PhaseComplete
           )
-        } else None
-
-        bytecodeActor.foreach(context.watch)
-        storageActor.foreach(context.watch)
-
-        // Register self for SNAP message routing so responses reach coordinators
-        networkPeerManager ! com.chipprbots.ethereum.network.NetworkPeerManagerActor.RegisterSnapSyncController(self)
-
-        // Poll for snap-capable peers every 5 seconds to feed coordinators
-        val peerPoller = context.system.scheduler.scheduleWithFixedDelay(
-          2.seconds,
-          5.seconds,
-          self,
-          PollRecoveryPeers
-        )
-
-        context.become(
-          runningRecovery(
-            bytecodeActor = bytecodeActor,
-            storageActor = storageActor,
+          context.actorOf(
+            CombinedRecoveryScanActor
+              .props(stateRoot, stateStorage, evmCodeStorage, appStateStorage, self, pivotBlock, snapSyncConfig)
+              .withDispatcher("sync-dispatcher"),
+            s"combined-recovery-scan-$syncGeneration"
+          )
+          context.become(runningCombinedScan(needBytecode, needStorage, stateRoot, pivotBlock, snapSyncConfig))
+        } else {
+          // Legacy path: each phase scans the full trie independently, then downloads.
+          val bytecodeActor =
+            if (needBytecode)
+              Some(
+                context.actorOf(
+                  BytecodeRecoveryActor
+                    .props(
+                      stateRoot,
+                      stateStorage,
+                      evmCodeStorage,
+                      appStateStorage,
+                      networkPeerManager,
+                      self,
+                      pivotBlock,
+                      snapSyncConfig
+                    )
+                    .withDispatcher("sync-dispatcher"),
+                  s"bytecode-recovery-$syncGeneration"
+                )
+              )
+            else None
+          val storageActor =
+            if (needStorage)
+              Some(
+                context.actorOf(
+                  StorageRecoveryActor
+                    .props(
+                      stateRoot,
+                      stateStorage,
+                      appStateStorage,
+                      flatSlotStorage,
+                      networkPeerManager,
+                      self,
+                      pivotBlock,
+                      snapSyncConfig
+                    )
+                    .withDispatcher("sync-dispatcher"),
+                  s"storage-recovery-$syncGeneration"
+                )
+              )
+            else None
+          beginRecoveryDownloads(
+            bytecodeActor,
+            storageActor,
             bytecodeComplete = !needBytecode,
-            storageComplete = !needStorage,
-            peerPoller = peerPoller
+            storageComplete = !needStorage
           )
-        )
+        }
 
       case _ =>
         log.warning("Cannot run recovery: missing stateRoot or pivotBlock. Marking done and proceeding.")
@@ -1190,6 +1210,118 @@ class SyncController(
         if (needStorage) appStateStorage.storageRecoveryDone().commit()
         startRegularSync()
     }
+  }
+
+  /** Wait for the combined scan to report both gap sets, then spawn download-only recovery actors for whichever phases
+    * still have gaps. Phases the scan found already complete are marked done immediately.
+    */
+  def runningCombinedScan(
+      needBytecode: Boolean,
+      needStorage: Boolean,
+      stateRoot: ByteString,
+      pivotBlock: BigInt,
+      snapSyncConfig: com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncConfig
+  ): Receive = {
+    case CombinedRecoveryScanActor.CombinedScanComplete(byteGaps, storGaps) =>
+      val effByte = if (needBytecode) byteGaps else Nil
+      val effStor = if (needStorage) storGaps else Nil
+      log.info(s"Combined recovery scan reported ${effByte.size} bytecode gaps, ${effStor.size} storage gaps.")
+      // Phases the combined scan found complete (no gaps) are done right now.
+      if (needBytecode && effByte.isEmpty) appStateStorage.bytecodeRecoveryDone().commit()
+      if (needStorage && effStor.isEmpty) appStateStorage.storageRecoveryDone().commit()
+
+      val bytecodeActor =
+        if (needBytecode && effByte.nonEmpty)
+          Some(
+            context.actorOf(
+              BytecodeRecoveryActor
+                .propsPreloaded(
+                  stateRoot,
+                  stateStorage,
+                  evmCodeStorage,
+                  appStateStorage,
+                  networkPeerManager,
+                  self,
+                  pivotBlock,
+                  snapSyncConfig,
+                  effByte
+                )
+                .withDispatcher("sync-dispatcher"),
+              s"bytecode-recovery-dl-$syncGeneration"
+            )
+          )
+        else None
+      val storageActor =
+        if (needStorage && effStor.nonEmpty)
+          Some(
+            context.actorOf(
+              StorageRecoveryActor
+                .propsPreloaded(
+                  stateRoot,
+                  stateStorage,
+                  appStateStorage,
+                  flatSlotStorage,
+                  networkPeerManager,
+                  self,
+                  pivotBlock,
+                  snapSyncConfig,
+                  effStor
+                )
+                .withDispatcher("sync-dispatcher"),
+              s"storage-recovery-dl-$syncGeneration"
+            )
+          )
+        else None
+      // A phase with no download actor is finished (no gaps / already done) — show Complete, not idle. Phases that
+      // will download have their phase set to Downloading by the recovery actor.
+      if (bytecodeActor.isEmpty) RecoveryMetrics.setBytecodePhase(RecoveryMetrics.PhaseComplete)
+      if (storageActor.isEmpty) RecoveryMetrics.setStoragePhase(RecoveryMetrics.PhaseComplete)
+      beginRecoveryDownloads(
+        bytecodeActor,
+        storageActor,
+        bytecodeComplete = bytecodeActor.isEmpty,
+        storageComplete = storageActor.isEmpty
+      )
+
+    case bh: ForkChoiceManager.BeaconHead =>
+      handleBeaconHead(bh, snapSyncOpt = None)
+
+    case other =>
+      log.debug("Ignoring message during combined recovery scan: {}", other.getClass.getSimpleName)
+  }
+
+  /** Wire up download-only recovery: register for SNAP routing, start the peer poller, and enter `runningRecovery`. If
+    * there is nothing to download (no gaps), clear the resumable checkpoint and go straight to regular sync.
+    */
+  private def beginRecoveryDownloads(
+      bytecodeActor: Option[ActorRef],
+      storageActor: Option[ActorRef],
+      bytecodeComplete: Boolean,
+      storageComplete: Boolean
+  ): Unit =
+    if (bytecodeActor.isEmpty && storageActor.isEmpty) {
+      log.info("Recovery: no gaps to download. Transitioning to regular sync.")
+      appStateStorage.clearRecoveryProgress().commit()
+      startRegularSync()
+    } else {
+      bytecodeActor.foreach(context.watch)
+      storageActor.foreach(context.watch)
+      networkPeerManager ! com.chipprbots.ethereum.network.NetworkPeerManagerActor.RegisterSnapSyncController(self)
+      val peerPoller = context.system.scheduler.scheduleWithFixedDelay(2.seconds, 5.seconds, self, PollRecoveryPeers)
+      context.become(runningRecovery(bytecodeActor, storageActor, bytecodeComplete, storageComplete, peerPoller))
+    }
+
+  /** Centralised recovery teardown: stop the peer poller, deregister SNAP routing, clear the resumable checkpoint, and
+    * start regular sync. Called from every "all recovery complete" path.
+    */
+  private def completeRecovery(peerPoller: org.apache.pekko.actor.Cancellable): Unit = {
+    peerPoller.cancel()
+    networkPeerManager ! com.chipprbots.ethereum.network.NetworkPeerManagerActor.RegisterSnapSyncController(
+      context.system.deadLetters
+    )
+    appStateStorage.clearRecoveryProgress().commit()
+    log.info("All recovery complete. Transitioning to regular sync.")
+    startRegularSync()
   }
 
   def runningRecovery(
@@ -1202,12 +1334,7 @@ class SyncController(
     case BytecodeRecoveryActor.RecoveryComplete =>
       log.info(s"Bytecode recovery complete. Storage complete: $storageComplete")
       if (storageComplete) {
-        peerPoller.cancel()
-        networkPeerManager ! com.chipprbots.ethereum.network.NetworkPeerManagerActor.RegisterSnapSyncController(
-          context.system.deadLetters
-        )
-        log.info("All recovery complete. Transitioning to regular sync.")
-        startRegularSync()
+        completeRecovery(peerPoller)
       } else {
         context.become(
           runningRecovery(bytecodeActor = None, storageActor, bytecodeComplete = true, storageComplete, peerPoller)
@@ -1217,12 +1344,7 @@ class SyncController(
     case StorageRecoveryActor.RecoveryComplete =>
       log.info(s"Storage recovery complete. Bytecode complete: $bytecodeComplete")
       if (bytecodeComplete) {
-        peerPoller.cancel()
-        networkPeerManager ! com.chipprbots.ethereum.network.NetworkPeerManagerActor.RegisterSnapSyncController(
-          context.system.deadLetters
-        )
-        log.info("All recovery complete. Transitioning to regular sync.")
-        startRegularSync()
+        completeRecovery(peerPoller)
       } else {
         context.become(
           runningRecovery(bytecodeActor, storageActor = None, bytecodeComplete, storageComplete = true, peerPoller)
@@ -1240,15 +1362,46 @@ class SyncController(
           storageActor.foreach(_ ! snap.actors.Messages.StoragePeerAvailable(peer))
         }
       }
+      // If storage recovery is waiting for a recent root and no header fetch is in flight, start one
+      // now using the freshest peer height in this snapshot.
+      if (recentRootRequester.isDefined && recentRootBootstrap.isEmpty) {
+        maybeStartRecentRootBootstrap(peers)
+      }
+
+    // Storage recovery: the saved pivot root has aged out of every peer's serve window. Fetch a recent
+    // canonical root so the download can roll onto something peers can still serve, instead of wedging.
+    case StorageRecoveryActor.RequestRecentRoot =>
+      if (recentRootRequester.isEmpty && recentRootBootstrap.isEmpty) {
+        recentRootRequester = Some(sender())
+        log.info("Recovery requested a recent root to roll off the aged pivot. Polling peers for the network head.")
+        networkPeerManager ! com.chipprbots.ethereum.network.NetworkPeerManagerActor.GetHandshakedPeers
+      } else {
+        log.debug("Recovery recent-root request already in flight; ignoring duplicate.")
+      }
+
+    case PivotHeaderBootstrap.Completed(block, header) if recentRootRequester.isDefined =>
+      val rootHex = header.stateRoot.take(4).toArray.map("%02x".format(_)).mkString
+      log.info(s"Recovery recent-root: fetched header for block $block (root $rootHex). Replying.")
+      stopRecentRootBootstrap()
+      recentRootRequester.foreach(_ ! StorageRecoveryActor.RecentRoot(block, Some(header.stateRoot)))
+      recentRootRequester = None
+
+    case PivotHeaderBootstrap.Failed(reason) if recentRootRequester.isDefined =>
+      log.warning(s"Recovery recent-root bootstrap failed ($reason). Declining the roll; abandon path will run.")
+      stopRecentRootBootstrap()
+      recentRootRequester.foreach(_ ! StorageRecoveryActor.RecentRoot(0, None))
+      recentRootRequester = None
+
+    case RecentRootTimeout(gen) if gen == recentRootGeneration && recentRootRequester.isDefined =>
+      log.warning("Recovery recent-root bootstrap timed out. Declining the roll; abandon path will run.")
+      stopRecentRootBootstrap()
+      recentRootRequester.foreach(_ ! StorageRecoveryActor.RecentRoot(0, None))
+      recentRootRequester = None
 
     case Terminated(actor) if bytecodeActor.contains(actor) =>
       log.error("BytecodeRecoveryActor terminated unexpectedly. Treating as complete to unblock sync.")
       if (storageComplete) {
-        peerPoller.cancel()
-        networkPeerManager ! com.chipprbots.ethereum.network.NetworkPeerManagerActor.RegisterSnapSyncController(
-          context.system.deadLetters
-        )
-        startRegularSync()
+        completeRecovery(peerPoller)
       } else {
         context.become(
           runningRecovery(bytecodeActor = None, storageActor, bytecodeComplete = true, storageComplete, peerPoller)
@@ -1258,11 +1411,7 @@ class SyncController(
     case Terminated(actor) if storageActor.contains(actor) =>
       log.error("StorageRecoveryActor terminated unexpectedly. Treating as complete to unblock sync.")
       if (bytecodeComplete) {
-        peerPoller.cancel()
-        networkPeerManager ! com.chipprbots.ethereum.network.NetworkPeerManagerActor.RegisterSnapSyncController(
-          context.system.deadLetters
-        )
-        startRegularSync()
+        completeRecovery(peerPoller)
       } else {
         context.become(
           runningRecovery(bytecodeActor, storageActor = None, bytecodeComplete, storageComplete = true, peerPoller)
@@ -1273,6 +1422,45 @@ class SyncController(
       // Forward SNAP protocol responses to both active recovery actors
       bytecodeActor.foreach(_.forward(msg))
       storageActor.foreach(_.forward(msg))
+  }
+
+  /** Start a one-shot header bootstrap for a recent block (margin back from the network head) and arm a timeout. On
+    * `Completed` we reply [[StorageRecoveryActor.RecentRoot]] to the waiting recovery actor; if no peer height is known
+    * yet, decline immediately so the actor's abandon path still runs.
+    */
+  private def maybeStartRecentRootBootstrap(
+      peers: Map[com.chipprbots.ethereum.network.Peer, com.chipprbots.ethereum.network.NetworkPeerManagerActor.PeerInfo]
+  ): Unit = {
+    val snapHeights = peers.values.filter(_.remoteStatus.supportsSnap).map(_.maxBlockNumber)
+    SyncController.recentRootTarget(snapHeights, RecentRootMarginBlocks) match {
+      case Some(recentBlock) =>
+        recentRootGeneration += 1
+        val gen = recentRootGeneration
+        val peersClient = context.actorOf(
+          PeersClient.props(networkPeerManager, peerEventBus, blacklist, syncConfig, scheduler),
+          s"recovery-recent-root-peers-$gen"
+        )
+        val bootstrap = context.actorOf(
+          PivotHeaderBootstrap
+            .props(peersClient, blockchainWriter, recentBlock, syncConfig, scheduler, preferSnapPeers = true),
+          s"recovery-recent-root-bootstrap-$gen"
+        )
+        recentRootBootstrap = Some((peersClient, bootstrap))
+        log.info(s"Recovery recent-root: fetching header for recent block $recentBlock.")
+        scheduler.scheduleOnce(20.seconds, self, RecentRootTimeout(gen))(context.dispatcher, self)
+      case None =>
+        log.info("Recovery recent-root: no usable peer height yet; declining the roll.")
+        recentRootRequester.foreach(_ ! StorageRecoveryActor.RecentRoot(0, None))
+        recentRootRequester = None
+    }
+  }
+
+  private def stopRecentRootBootstrap(): Unit = {
+    recentRootBootstrap.foreach { case (peersClient, bootstrap) =>
+      bootstrap ! PoisonPill
+      peersClient ! PoisonPill
+    }
+    recentRootBootstrap = None
   }
 
   def startRegularSyncForBootstrap(): ActorRef = {
@@ -1310,6 +1498,14 @@ class SyncController(
 }
 
 object SyncController {
+
+  /** Pick the block to roll the recovery storage download onto: `margin` blocks back from the highest known
+    * SNAP-capable peer head (so the target is inside peers' snapshot serve window), clamped to >= 1. Returns None when
+    * no peer height is known yet, so the caller declines the roll and lets the abandon path run. Pure for testability.
+    */
+  private[sync] def recentRootTarget(snapPeerHeights: Iterable[BigInt], margin: BigInt): Option[BigInt] =
+    snapPeerHeights.filter(_ > 0).maxOption.map(best => (best - margin).max(1))
+
   // scalastyle:off parameter.number
   def props(
       blockchain: Blockchain,

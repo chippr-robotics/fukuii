@@ -158,6 +158,50 @@ class AppStateStorage(val dataSource: DataSource) extends TransactionalKeyValueS
   def storageRecoveryDone(): DataSourceBatchUpdate =
     put(Keys.StorageRecoveryDone, true.toString)
 
+  // ========================================
+  // Resumable recovery scan progress
+  // ========================================
+  //
+  // The post-SNAP recovery scan walks the full state trie to find missing bytecode/storage. On a
+  // large chain (ETC ~86M accounts) that scan runs for hours, and an OOM/restart used to discard
+  // ALL of it — the next startup re-scanned from account 0. These methods persist per-shard
+  // progress (which shards are done) together with the gaps found so far, so a restart resumes from
+  // the last completed shard. The whole progress is one value under one key, so a shard's
+  // completion and its found-gaps always commit atomically — a crash can't desync them.
+
+  /** Persist recovery-scan progress (completed shards + accumulated gaps). One atomic value. */
+  def putRecoveryProgress(progress: RecoveryProgress): DataSourceBatchUpdate =
+    put(Keys.RecoveryProgress, RecoveryProgress.serialize(progress))
+
+  /** Read persisted recovery-scan progress, or None if absent or unparseable (a torn/corrupt write degrades to a fresh
+    * scan rather than a silently-incomplete gap set).
+    */
+  def getRecoveryProgress(): Option[RecoveryProgress] =
+    get(Keys.RecoveryProgress).flatMap(RecoveryProgress.deserialize)
+
+  /** Tag-validated read: returns persisted progress ONLY if it was recorded for the same scan root and shard fanout. A
+    * pivot/finalized-root change or a partition reconfig makes prior shard indices meaningless, so a tag mismatch is
+    * treated as "no progress" — forcing a correct fresh scan instead of trusting stale, possibly-incomplete state.
+    */
+  def getRecoveryProgressFor(scanRoot: ByteString, shardCount: Int): Option[RecoveryProgress] =
+    getRecoveryProgress().filter(p => p.scanRoot == scanRoot && p.shardCount == shardCount)
+
+  /** Clear persisted recovery progress. Called once recovery completes so the next startup starts clean. */
+  def clearRecoveryProgress(): DataSourceBatchUpdate =
+    remove(Keys.RecoveryProgress)
+
+  /** Atomically mark BOTH recovery scans done AND clear the resumable checkpoint, in a single batch.
+    *
+    * The combined recovery driver calls this once the single-pass scan + gap download finishes. Doing it as one atomic
+    * write closes the crash window that separate commits would open: there is never a restart that sees a done-flag set
+    * with a stale checkpoint still lingering, nor a cleared checkpoint with the done-flag unset (→ a needless full
+    * re-scan). Either the whole "recovery is finished and the checkpoint is gone" fact is durable, or none of it is.
+    */
+  def recoveryDone(): DataSourceBatchUpdate =
+    put(Keys.BytecodeRecoveryDone, true.toString)
+      .and(put(Keys.StorageRecoveryDone, true.toString))
+      .and(remove(Keys.RecoveryProgress))
+
   /** Get the SNAP sync pivot block number
     * @return
     *   SNAP sync pivot block number, or None if not set
@@ -415,6 +459,7 @@ object AppStateStorage {
     val SnapFastCycleCount = "SnapFastCycleCount"
     val BytecodeRecoveryDone = "BytecodeRecoveryDone"
     val StorageRecoveryDone = "StorageRecoveryDone"
+    val RecoveryProgress = "RecoveryProgress"
     val SnapSyncAccountsComplete = "SnapSyncAccountsComplete"
     val SnapSyncStorageComplete = "SnapSyncStorageComplete"
     val SnapSyncBytecodeComplete = "SnapSyncBytecodeComplete"
