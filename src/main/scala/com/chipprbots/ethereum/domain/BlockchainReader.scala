@@ -93,6 +93,8 @@ class BlockchainReader(
 
   def getBestBlockNumber(): BigInt = appStateStorage.getBestBlockNumber()
 
+  def getSnapSyncPivotBlock(): Option[BigInt] = appStateStorage.getSnapSyncPivotBlock()
+
   // returns the best known block if it's available in the storage
   def getBestBlock(): Option[Block] = {
     val bestKnownBlockinfo = appStateStorage.getBestBlockInfo()

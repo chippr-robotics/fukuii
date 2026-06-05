@@ -276,6 +276,7 @@ class RegularSyncSpec
           override lazy val blockchain: BlockchainImpl = stub[BlockchainImpl]
           override lazy val blockchainReader: BlockchainReader = stub[BlockchainReader]
           (blockchainReader.getBestBlockNumber _).when().onCall(() => bestBlock.number)
+          (blockchainReader.getSnapSyncPivotBlock _).when().returns(None) // no SNAP sync pivot
           override lazy val consensusAdapter: ConsensusAdapter = stub[ConsensusAdapter]
           (consensusAdapter
             .evaluateBranchBlock(_: Block)(_: IORuntime, _: BlockchainConfig))
@@ -339,6 +340,7 @@ class RegularSyncSpec
         override lazy val blockchainReader: BlockchainReader = stub[BlockchainReader]
         override lazy val blockchain: BlockchainImpl = stub[BlockchainImpl]
         (blockchainReader.getBestBlockNumber _).when().onCall(() => bestBlock.number)
+        (blockchainReader.getSnapSyncPivotBlock _).when().returns(None) // no SNAP sync pivot
         override lazy val consensusAdapter: ConsensusAdapter = stub[ConsensusAdapter]
         (consensusAdapter
           .evaluateBranchBlock(_: Block)(_: IORuntime, _: BlockchainConfig))
@@ -478,6 +480,7 @@ class RegularSyncSpec
         peersClient.setAutoPilot(new PeersClientAutoPilot)
         override lazy val branchResolution: BranchResolution = stub[BranchResolution]
         (blockchainReader.getBestBlockNumber _).when().returns(0)
+        (blockchainReader.getSnapSyncPivotBlock _).when().returns(None) // no SNAP sync pivot
         (branchResolution.resolveBranch _).when(*).returns(NewBetterBranch(Nil)).atLeastOnce()
         (consensusAdapter
           .evaluateBranchBlock(_: Block)(_: IORuntime, _: BlockchainConfig))

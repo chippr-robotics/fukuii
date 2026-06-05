@@ -507,8 +507,12 @@ class BlockImporter(
         Right(Nil)
       case UnknownBranch =>
         val currentBlock = blocks.head.number.min(bestKnownBlockNumber)
-        // Floor at best block number (SNAP pivot) — no headers exist below that after SNAP sync.
-        val floor = blockchainReader.getBestBlockNumber()
+        // Use the stored SNAP sync pivot as the reorg floor, matching go-ethereum's
+        // ReadLastPivotNumber() pattern (core/rawdb/accessors_chain.go). The pivot is
+        // written once during SNAP sync and never cleared; reorgs above the pivot are
+        // safe (state exists for all blocks above it). getOrElse(0) covers non-SNAP nodes,
+        // giving genesis as the floor — the same fallback geth uses.
+        val floor = blockchainReader.getSnapSyncPivotBlock().getOrElse(BigInt(0))
         val goingBackTo = (currentBlock - syncConfig.branchResolutionRequestSize).max(floor)
         if (goingBackTo >= currentBlock) {
           // At the pivot floor after SNAP sync — skip branch resolution and import directly.
