@@ -168,10 +168,13 @@ class BranchResolutionSpec
 
   "BranchResolution without MESS config (ETH / Sepolia — no MESS)" should {
 
-    "accept a branch with higher TD when no MESS config is set" taggedAs (UnitTest, StateTest) in new BranchResolutionTestSetupImpl {
+    "accept a branch with higher TD when no MESS config is set" taggedAs (
+      UnitTest,
+      StateTest
+    ) in new BranchResolutionTestSetupImpl {
       val commonParentHash = randomHash()
-      val oldBlock         = getBlock(number = 10, difficulty = 100, parent = commonParentHash)
-      val newHeader        = getBlock(number = 10, difficulty = 200, parent = commonParentHash).header
+      val oldBlock = getBlock(number = 10, difficulty = 100, parent = commonParentHash)
+      val newHeader = getBlock(number = 10, difficulty = 200, parent = commonParentHash).header
 
       setBestBlockNumber(10)
       setHeaderInChain(commonParentHash)
@@ -185,7 +188,10 @@ class BranchResolutionSpec
 
   "BranchResolution with MESS enabled (ETC / Mordor)" should {
 
-    "reject a reorg when proposed subchain TD is below the antigravity threshold" taggedAs (UnitTest, StateTest) in new MessTestSetup {
+    "reject a reorg when proposed subchain TD is below the antigravity threshold" taggedAs (
+      UnitTest,
+      StateTest
+    ) in new MessTestSetup {
       setBestBlockNumber(10)
       setChainWeightByHash(commonParentHash, ChainWeight.zero)
       setBlockByNumber(10, Some(oldBlock))
@@ -197,7 +203,10 @@ class BranchResolutionSpec
       branchResolution.compareBranch(NonEmptyList.one(newHeader)) shouldEqual NoChainSwitch
     }
 
-    "accept a reorg when proposed subchain TD meets the antigravity threshold" taggedAs (UnitTest, StateTest) in new MessTestSetup {
+    "accept a reorg when proposed subchain TD meets the antigravity threshold" taggedAs (
+      UnitTest,
+      StateTest
+    ) in new MessTestSetup {
       setBestBlockNumber(10)
       setChainWeightByHash(commonParentHash, ChainWeight.zero)
       setBlockByNumber(10, Some(oldBlock))
@@ -209,14 +218,22 @@ class BranchResolutionSpec
       branchResolution.compareBranch(NonEmptyList.one(newHeader)) shouldEqual NewBetterBranch(List(oldBlock))
     }
 
-    "not activate when block number is below the activation window" taggedAs (UnitTest, StateTest) in new MessTestSetup {
+    "not activate when block number is below the activation window" taggedAs (
+      UnitTest,
+      StateTest
+    ) in new MessTestSetup {
       setBestBlockNumber(5)
       setChainWeightByHash(commonParentHash, ChainWeight.zero)
       val earlyBlock = Block(oldBlock.header.copy(number = 5), oldBlock.body)
       setBlockByNumber(5, Some(earlyBlock))
       // Activation at block 1000 — block 5 is before it, so MESS should not fire
       branchResolution.messConfig = Some(
-        MESSConfig(enabled = true, activationBlock = Some(BigInt(1000)), deactivationBlock = None, reactivationBlock = None)
+        MESSConfig(
+          enabled = true,
+          activationBlock = Some(BigInt(1000)),
+          deactivationBlock = None,
+          reactivationBlock = None
+        )
       )
 
       // proposedTD=200 would be rejected IF MESS were active, but it isn't
@@ -224,11 +241,14 @@ class BranchResolutionSpec
       branchResolution.compareBranch(NonEmptyList.one(newHeader)) shouldEqual NewBetterBranch(List(earlyBlock))
     }
 
-    "not activate when block number is in the Spiral deactivation window" taggedAs (UnitTest, StateTest) in new MessTestSetup {
+    "not activate when block number is in the Spiral deactivation window" taggedAs (
+      UnitTest,
+      StateTest
+    ) in new MessTestSetup {
       // ETC mainnet: MESS deactivated at block 19,250,000 (Spiral fork)
       val deactivatedConfig = MESSConfig(
-        enabled           = true,
-        activationBlock   = Some(BigInt(11_380_000)),
+        enabled = true,
+        activationBlock = Some(BigInt(11_380_000)),
         deactivationBlock = Some(BigInt(19_250_000)),
         reactivationBlock = None
       )
@@ -246,10 +266,10 @@ class BranchResolutionSpec
 
     "reactivate in the Olympia window" taggedAs (UnitTest, StateTest) in new MessTestSetup {
       val olympiaConfig = MESSConfig(
-        enabled           = true,
-        activationBlock   = Some(BigInt(11_380_000)),
+        enabled = true,
+        activationBlock = Some(BigInt(11_380_000)),
         deactivationBlock = Some(BigInt(19_250_000)),
-        reactivationBlock = Some(BigInt(25_000_000))  // Olympia reactivation
+        reactivationBlock = Some(BigInt(25_000_000)) // Olympia reactivation
       )
       val olympiaBlock = Block(
         oldBlock.header.copy(number = BigInt(25_000_001), unixTimestamp = headTs),
@@ -278,7 +298,10 @@ class BranchResolutionSpec
       branchResolution.compareBranch(NonEmptyList.one(newHeader)) shouldEqual NewBetterBranch(List(oldBlock))
     }
 
-    "accept a small reorg (≤ 2 blocks) without requiring MESS log output" taggedAs (UnitTest, StateTest) in new MessTestSetup {
+    "accept a small reorg (≤ 2 blocks) without requiring MESS log output" taggedAs (
+      UnitTest,
+      StateTest
+    ) in new MessTestSetup {
       // 1-block reorg: currentHead.number - commonAncestorNumber = 10 - 9 = 1 ≤ 2
       // MESS increments accepted counter but does NOT emit an info log for trivial reorgs
       setBestBlockNumber(10)
@@ -304,10 +327,14 @@ class BranchResolutionSpec
 
   "BranchResolution with PoS zero-difficulty blocks" should {
 
-    "accept a chain extension with zero-difficulty blocks (ETH post-merge sync)" taggedAs (UnitTest, StateTest) in new BranchResolutionTestSetupImpl {
+    "accept a chain extension with zero-difficulty blocks (ETH post-merge sync)" taggedAs (
+      UnitTest,
+      StateTest
+    ) in new BranchResolutionTestSetupImpl {
       val parentHash = randomHash()
       // Best block is 5; new header extends at 6 — no old blocks displaced
-      val newHeader = Block(defaultHeader.copy(number = 6, difficulty = 0, parentHash = parentHash), BlockBody(Nil, Nil)).header
+      val newHeader =
+        Block(defaultHeader.copy(number = 6, difficulty = 0, parentHash = parentHash), BlockBody(Nil, Nil)).header
       val parentWeight = ChainWeight.totalDifficultyOnly(1000)
 
       setBestBlockNumber(5)
@@ -318,7 +345,10 @@ class BranchResolutionSpec
       branchResolution.resolveBranch(NonEmptyList.one(newHeader)) shouldEqual NewBetterBranch(Nil)
     }
 
-    "not switch chain when a zero-difficulty branch conflicts with existing canonical blocks" taggedAs (UnitTest, StateTest) in new BranchResolutionTestSetupImpl {
+    "not switch chain when a zero-difficulty branch conflicts with existing canonical blocks" taggedAs (
+      UnitTest,
+      StateTest
+    ) in new BranchResolutionTestSetupImpl {
       val parentHash = randomHash()
       val existingBlock = getBlock(number = 10, difficulty = 0, parent = parentHash)
       val competingHeader = getBlock(number = 10, difficulty = 0, parent = parentHash).header
@@ -420,8 +450,8 @@ class BranchResolutionSpec
 
     /** Standard ETC/Mordor MESS config: active from block 10, no deactivation. */
     val ETCMessConfig: MESSConfig = MESSConfig(
-      enabled           = true,
-      activationBlock   = Some(BigInt(10)),
+      enabled = true,
+      activationBlock = Some(BigInt(10)),
       deactivationBlock = None,
       reactivationBlock = None
     )

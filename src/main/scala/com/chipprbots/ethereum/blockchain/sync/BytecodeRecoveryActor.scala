@@ -106,7 +106,6 @@ class BytecodeRecoveryActor(
     var abandonTimer: Option[Cancellable] = Some(
       context.system.scheduler.scheduleOnce(abandonAfter, self, CheckAbandon(0L))
     )
-    var downloadedCount = 0L
     var lastBytecodeRecoveryMilestone: Int = -1
     var lastRateNanos = System.nanoTime()
     var lastRateDownloaded = 0L

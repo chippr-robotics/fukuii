@@ -562,7 +562,7 @@ class NetworkHandshakerSpec extends AnyFlatSpec with Matchers {
       remoteStatusMsg.genesisHash,
       false,
       Seq(Capability.ETH68).toList,
-      clientId = "remote-peer"
+      remoteClientId = "remote-peer"
     )
   }
 
@@ -593,7 +593,7 @@ class NetworkHandshakerSpec extends AnyFlatSpec with Matchers {
       remoteStatusMsg.genesisHash,
       false,
       List.empty,
-      clientId = "remote-peer"
+      remoteClientId = "remote-peer"
     )
   }
 

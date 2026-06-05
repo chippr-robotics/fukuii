@@ -16,7 +16,6 @@ import com.chipprbots.ethereum.domain.Account
 import com.chipprbots.ethereum.domain.UInt256
 import com.chipprbots.ethereum.mpt.MerklePatriciaTrie
 import com.chipprbots.ethereum.mpt.MerklePatriciaTrie.defaultByteArraySerializable
-import com.chipprbots.ethereum.network.p2p.messages.ETH63.AccountImplicits.AccountEnc
 import com.chipprbots.ethereum.testing.Tags._
 
 /** CombinedRecoveryScanner is the cohesive integration of ShardEnumerator (#1) + CombinedRecoveryScan (#2) +

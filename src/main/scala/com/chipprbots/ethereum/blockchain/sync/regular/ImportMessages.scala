@@ -28,7 +28,7 @@ sealed abstract class ImportMessages(block: Block) {
       case BlockEnqueued                             => enqueued()
       case DuplicateBlock                            => duplicated()
       case UnknownParent                             => orphaned()
-      case ChainReorganised(oldBranch, newBranch, _)  => reorganisedChain(oldBranch, newBranch)
+      case ChainReorganised(oldBranch, newBranch, _) => reorganisedChain(oldBranch, newBranch)
       case BlockImportFailed(error)                  => importFailed(error)
       case BlockImportFailedDueToMissingNode(reason) => missingStateNode(reason)
     }
@@ -59,10 +59,12 @@ class NewBlockImportMessages(block: Block, peerId: PeerId) extends ImportMessage
   import ImportMessages._
   override def preImport(): LogEntry = (DebugLevel, s"Handling NewBlock message for block (${block.idTag})")
   override def importedToTheTop(): LogEntry =
-    (InfoLevel,
+    (
+      InfoLevel,
       s"Added new block number=$number hash=${hash2string(hash).take(8)} " +
         s"txs=${block.body.numberOfTxs} gas=${block.header.gasUsed} uncles=${block.body.numberOfUncles} " +
-        s"peer=$peerId")
+        s"peer=$peerId"
+    )
   override def enqueued(): LogEntry = (DebugLevel, s"Block $number ($hash) from $peerId added to queue")
   override def duplicated(): LogEntry =
     (DebugLevel, s"Ignoring duplicate block $number ($hash) from $peerId")
@@ -75,13 +77,17 @@ class NewBlockImportMessages(block: Block, peerId: PeerId) extends ImportMessage
     val dropfrom = oldBranch.headOption.map(_.header.number).getOrElse(number)
     val addfrom = newBranch.headOption.map(_.header.number).getOrElse(number)
     if (dropped > 63)
-      (WarningLevel,
+      (
+        WarningLevel,
         s"Large chain reorg detected number=$ancestorNumber hash=$ancestorHash " +
-          s"drop=$dropped dropfrom=$dropfrom add=$added addfrom=$addfrom peer=$peerId")
+          s"drop=$dropped dropfrom=$dropfrom add=$added addfrom=$addfrom peer=$peerId"
+      )
     else
-      (InfoLevel,
+      (
+        InfoLevel,
         s"Chain reorg detected number=$ancestorNumber hash=$ancestorHash " +
-          s"drop=$dropped dropfrom=$dropfrom add=$added addfrom=$addfrom peer=$peerId")
+          s"drop=$dropped dropfrom=$dropfrom add=$added addfrom=$addfrom peer=$peerId"
+      )
   }
   override def importFailed(error: String): LogEntry =
     (DebugLevel, s"Failed to import block ${block.idTag} from $peerId")

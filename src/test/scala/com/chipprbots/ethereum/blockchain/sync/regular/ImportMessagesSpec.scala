@@ -44,7 +44,7 @@ class ImportMessagesSpec extends AnyWordSpec with Matchers {
 
     "report non-zero tx and uncle counts from block body" taggedAs (UnitTest, StateTest) in {
       val uncle = BlockHelpers.defaultHeader.copy(number = BigInt(41))
-      val stx    = BlockHelpers.generateBlock(BlockHelpers.genesis).body.transactionList.head
+      val stx = BlockHelpers.generateBlock(BlockHelpers.genesis).body.transactionList.head
       val block = Block(
         BlockHelpers.defaultHeader.copy(number = BigInt(42)),
         BlockBody(List(stx), List(uncle))
@@ -61,14 +61,14 @@ class ImportMessagesSpec extends AnyWordSpec with Matchers {
   "NewBlockImportMessages.reorganisedChain" should {
 
     "produce InfoLevel 'Chain reorg detected' for small reorg (≤ 63 dropped blocks)" taggedAs (UnitTest, StateTest) in {
-      val oldBranch = (10 to 19).map(blockAt).toList   // 10 dropped blocks
-      val newBranch = (10 to 15).map(blockAt).toList   // 6 added blocks
+      val oldBranch = (10 to 19).map(blockAt).toList // 10 dropped blocks
+      val newBranch = (10 to 15).map(blockAt).toList // 6 added blocks
 
       val (level, msg) = messages().reorganisedChain(oldBranch, newBranch)
 
       level shouldBe InfoLevel
       msg should startWith("Chain reorg detected")
-      msg should include("number=9")      // ancestorNumber = 10 - 1
+      msg should include("number=9") // ancestorNumber = 10 - 1
       msg should include("drop=10")
       msg should include("dropfrom=10")
       msg should include("add=6")
@@ -76,8 +76,11 @@ class ImportMessagesSpec extends AnyWordSpec with Matchers {
       msg should include(s"peer=$testPeer")
     }
 
-    "produce WarningLevel 'Large chain reorg detected' for large reorg (> 63 dropped blocks)" taggedAs (UnitTest, StateTest) in {
-      val oldBranch = (10 to 73).map(blockAt).toList   // 64 dropped blocks — crosses the 63-block threshold
+    "produce WarningLevel 'Large chain reorg detected' for large reorg (> 63 dropped blocks)" taggedAs (
+      UnitTest,
+      StateTest
+    ) in {
+      val oldBranch = (10 to 73).map(blockAt).toList // 64 dropped blocks — crosses the 63-block threshold
       val newBranch = (10 to 12).map(blockAt).toList
 
       val (level, msg) = messages().reorganisedChain(oldBranch, newBranch)
@@ -99,7 +102,7 @@ class ImportMessagesSpec extends AnyWordSpec with Matchers {
     }
 
     "treat exactly 63 dropped blocks as a small reorg (InfoLevel)" taggedAs (UnitTest, StateTest) in {
-      val oldBranch = (10 to 72).map(blockAt).toList   // 63 blocks — just below the large-reorg threshold
+      val oldBranch = (10 to 72).map(blockAt).toList // 63 blocks — just below the large-reorg threshold
       val newBranch = (10 to 10).map(blockAt).toList
 
       val (level, _) = messages().reorganisedChain(oldBranch, newBranch)
@@ -108,7 +111,7 @@ class ImportMessagesSpec extends AnyWordSpec with Matchers {
     }
 
     "treat exactly 64 dropped blocks as a large reorg (WarningLevel)" taggedAs (UnitTest, StateTest) in {
-      val oldBranch = (10 to 73).map(blockAt).toList   // 64 blocks — first value above the threshold
+      val oldBranch = (10 to 73).map(blockAt).toList // 64 blocks — first value above the threshold
       val newBranch = (10 to 10).map(blockAt).toList
 
       val (level, _) = messages().reorganisedChain(oldBranch, newBranch)
