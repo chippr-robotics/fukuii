@@ -24,6 +24,15 @@ case object BlockMetrics extends MetricsContainer {
   final private[this] val TimeBetweenParentGauge =
     metrics.registry.gauge("sync.block.timeBetweenParent.seconds.gauge", new AtomicDouble(0d))
 
+  // ECBP-1100 MESS decision counters — incremented on each antigravity evaluation
+  final private[this] val MessRejectedCounter =
+    metrics.registry.counter("chain.mess.rejected.total")
+  final private[this] val MessAcceptedCounter =
+    metrics.registry.counter("chain.mess.accepted.total")
+  // Last tdr/gravity ratio at decision time (< 1.0 = rejected, >= 1.0 = accepted)
+  final private[this] val MessGravityGauge =
+    metrics.registry.gauge("chain.mess.gravity.gauge", new AtomicDouble(0d))
+
   def measure(block: Block, getBlockByHashFn: ByteString => Option[Block]): Unit = {
     BlockNumberGauge.set(block.number.toDouble)
     BlockGasLimitGauge.set(block.header.gasLimit.toDouble)
@@ -40,5 +49,9 @@ case object BlockMetrics extends MetricsContainer {
       case None => ()
     }
   }
+
+  def incrementMessRejected(): Unit = MessRejectedCounter.increment()
+  def incrementMessAccepted(): Unit = MessAcceptedCounter.increment()
+  def setMessGravity(ratio: Double): Unit = MessGravityGauge.set(ratio)
 
 }

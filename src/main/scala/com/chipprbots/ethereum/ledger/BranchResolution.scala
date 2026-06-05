@@ -8,6 +8,7 @@ import com.chipprbots.ethereum.domain.Block
 import com.chipprbots.ethereum.domain.BlockHeader
 import com.chipprbots.ethereum.domain.BlockchainReader
 import com.chipprbots.ethereum.domain.ChainWeight
+import com.chipprbots.ethereum.utils.ByteStringUtils.hash2string
 import com.chipprbots.ethereum.utils.Logger
 
 class BranchResolution(blockchainReader: BlockchainReader) extends Logger {
@@ -70,10 +71,6 @@ class BranchResolution(blockchainReader: BlockchainReader) extends Logger {
         if (newWeight > oldWeight) {
           // New branch has higher TD — check MESS anti-reorg protection
           if (shouldMessReject(oldBlocks, newHeaders)) {
-            log.info(
-              s"MESS rejected reorg: proposed branch (${newHeaders.size} blocks) " +
-                s"rejected by antigravity check despite higher TD"
-            )
             NoChainSwitch
           } else {
             NewBetterBranch(oldBlocks)
@@ -109,27 +106,59 @@ class BranchResolution(blockchainReader: BlockchainReader) extends Logger {
   ): Boolean =
     messConfig match {
       case Some(config) if oldBlocks.nonEmpty =>
-        // Check if MESS is active at the current head block number
         val currentHeadNumber = oldBlocks.last.header.number
         if (!config.isActiveAtBlock(currentHeadNumber)) return false
 
-        // Common ancestor is the parent of the first diverging block
         val commonAncestorTimestamp = blockchainReader
           .getBlockHeaderByHash(oldBlocks.head.header.parentHash)
           .map(_.unixTimestamp)
           .getOrElse(0L)
 
-        // Current head timestamp
         val currentHeadTimestamp = oldBlocks.last.header.unixTimestamp
-
-        // Time delta in seconds (block timestamps, per ECIP-1100 spec)
         val timeDeltaSeconds = math.max(0L, currentHeadTimestamp - commonAncestorTimestamp)
 
-        // Subchain total difficulties
         val localSubchainTD = oldBlocks.map(_.header.difficulty).foldLeft(BigInt(0))(_ + _)
         val proposedSubchainTD = newHeaders.map(_.difficulty).foldLeft(BigInt(0))(_ + _)
 
-        ArtificialFinality.shouldRejectReorg(timeDeltaSeconds, localSubchainTD, proposedSubchainTD)
+        val shouldReject = ArtificialFinality.shouldRejectReorg(timeDeltaSeconds, localSubchainTD, proposedSubchainTD)
+
+        // Compute tdr/gravity ratio for logging: got/want where got=proposedTD*128, want=polyVal*localTD
+        val polyVal = ArtificialFinality.polynomialV(BigInt(timeDeltaSeconds))
+        val want = polyVal * localSubchainTD
+        val got = proposedSubchainTD * BigInt(128)
+        val tdrRatio = if (want > 0) got.toDouble / want.toDouble else 0.0
+
+        val commonAncestorNumber = oldBlocks.head.header.number - 1
+        val commonAncestorHash = oldBlocks.head.header.parentHash
+        val currentHead = oldBlocks.last.header
+        val proposedTip = newHeaders.last
+        val proposedSpanSeconds = math.max(0L, proposedTip.unixTimestamp - commonAncestorTimestamp)
+
+        BlockMetrics.setMessGravity(tdrRatio)
+        if (shouldReject) {
+          BlockMetrics.incrementMessRejected()
+          log.warn(
+            s"ECBP1100-MESS status=rejected age=${timeDeltaSeconds}s span.proposed=${proposedSpanSeconds}s " +
+              s"tdr/gravity=${f"$tdrRatio%.4f"} " +
+              s"common.bno=$commonAncestorNumber common.hash=${hash2string(commonAncestorHash).take(8)} " +
+              s"current.bno=${currentHead.number} current.hash=${hash2string(currentHead.hash).take(8)} " +
+              s"proposed.bno=${proposedTip.number} proposed.hash=${hash2string(proposedTip.hash).take(8)}"
+          )
+        } else if (currentHead.number - commonAncestorNumber > 2) {
+          // Log MESS acceptance only for non-trivial reorgs (> 2 blocks), matching core-geth forkchoice.go:177
+          BlockMetrics.incrementMessAccepted()
+          log.info(
+            s"ECBP1100-MESS status=accepted age=${timeDeltaSeconds}s span.proposed=${proposedSpanSeconds}s " +
+              s"tdr/gravity=${f"$tdrRatio%.4f"} " +
+              s"common.bno=$commonAncestorNumber common.hash=${hash2string(commonAncestorHash).take(8)} " +
+              s"current.bno=${currentHead.number} current.hash=${hash2string(currentHead.hash).take(8)} " +
+              s"proposed.bno=${proposedTip.number} proposed.hash=${hash2string(proposedTip.hash).take(8)}"
+          )
+        } else {
+          BlockMetrics.incrementMessAccepted()
+        }
+
+        shouldReject
 
       case _ => false
     }
