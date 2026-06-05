@@ -66,9 +66,10 @@ class BlockImporter(
 
   private var pendingStateNodeHash: Option[ByteString] = None
 
-  // Consecutive UnknownParent failures per block hash — for FORK-DETECT escalation.
+  // Consecutive UnknownParent failures per block hash — for FORK-DETECT / bad-block eviction.
   private var unknownParentStrikes: Map[ByteString, Int] = Map.empty
-  private val ForkDetectThreshold = 5
+  private val BadBlockEvictionThreshold = 3 // blacklist the delivering peer
+  private val ForkDetectThreshold = 5 // escalate to WARN (must be >= eviction threshold)
 
   // Reset the companion-object exhaust counter on fresh actor creation.
   // On Pekko Restart, only postRestart() fires — preStart() is skipped — so
@@ -431,12 +432,26 @@ class BlockImporter(
               failedBlock.header.hashAsHexString,
               ByteStringUtils.hash2string(failedBlock.header.parentHash)
             )
-            // FORK-DETECT: escalate to WARN after ForkDetectThreshold consecutive
-            // failures on the same block hash — this indicates we're on a fork
-            // (repeated UnknownParent on the same block means no peer has a parent
-            // matching our chain tip, not a transient gap).
+            // FORK-DETECT / bad-block eviction: track consecutive UnknownParent per hash.
+            //   At BadBlockEvictionThreshold (3): blacklist the delivering peer — it has
+            //   sent us a block we can't connect N times; rotate to a different peer.
+            //   At ForkDetectThreshold (5): escalate to WARN — if we're still stalled
+            //   after evicting the first peer, we may be on an orphan fork.
             val strikes = unknownParentStrikes.getOrElse(failedBlock.hash, 0) + 1
             unknownParentStrikes = unknownParentStrikes + (failedBlock.hash -> strikes)
+            if (strikes == BadBlockEvictionThreshold) {
+              log.warning(
+                "BAD-BLOCK-EVICT: block {} (hash={}) UnknownParent x{} — evicting delivering peer",
+                failedBlock.number,
+                failedBlock.header.hashAsHexString,
+                strikes
+              )
+              fetcher ! BlockFetcher.BlockImportFailed(
+                failedBlock.number,
+                BlacklistReason
+                  .BlockImportError(s"UnknownParent x$strikes on block ${failedBlock.header.hashAsHexString}")
+              )
+            }
             if (strikes >= ForkDetectThreshold) {
               val ourHashAtHeight = blockchainReader
                 .getBlockHeaderByNumber(failedBlock.number)
