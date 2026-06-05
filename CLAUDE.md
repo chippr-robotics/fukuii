@@ -106,3 +106,25 @@ For comprehensive changes, cycle through:
 - Run `sbt scalafmtAll` (or `sbt pp`) before pushing.
 - Refer to the human as **user**; be authentic, surface disagreement rather than
   burying it.
+
+## Spec-Driven Development (Spec Kit)
+
+New features are built through the Spec Kit workflow, not ad hoc:
+`/speckit-specify` → `/speckit-plan` → `/speckit-tasks` → `/speckit-implement`
+(use `/speckit-clarify` and `/speckit-analyze` to de-risk). Spec artifacts live
+under `specs/<NNN-feature-name>/`.
+
+**The project constitution at `.specify/memory/constitution.md` is binding.**
+Read it before planning or implementing. Highlights:
+
+- Consensus-critical code (EVM/gas, state roots, hashes, RLP, Ethash, rewards,
+  hard forks) MUST be byte-for-byte deterministic and ETC-spec compliant — design
+  before implementing; follow the `forge` protocol in `.github/agents/forge.md`.
+- Scala 3.3.7 LTS only; code MUST pass `scalafmt` + `scalafix`.
+- Tests MUST be deterministic (no `Thread.sleep`); keep statement coverage ≥ 70%.
+- Run `sbt pp` before opening a PR; CI gates and review must be green to merge.
+
+<!-- SPECKIT START -->
+For additional context about technologies to be used, project structure,
+shell commands, and other important information, read the current plan
+<!-- SPECKIT END -->
