@@ -384,8 +384,9 @@ class PendingTransactionsManager(
     // 2. ECIP-1122: reject if effectiveTip < minTip.
     // With baseFeeFloor = 1 gwei, a tx with tip = 0 can never be included — reject at admission
     // to protect the sender from a permanent nonce-queue deadlock.
-    val currentBaseFee = blockchainReader
-      .getBestBlock()
+    // Use Option() to guard against null blockchainReader (permitted in tests; falls back to baseFeeFloor).
+    val currentBaseFee = Option(blockchainReader)
+      .flatMap(_.getBestBlock())
       .flatMap(_.header.baseFee)
       .getOrElse(blockchainConfig.baseFeeFloor)
     val afterTipCheck = afterPendingNonceCheck.filter { stx =>
