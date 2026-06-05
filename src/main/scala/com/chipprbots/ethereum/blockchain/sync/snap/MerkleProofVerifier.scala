@@ -5,6 +5,7 @@ import org.apache.pekko.util.ByteString
 import com.chipprbots.ethereum.domain.Account
 import com.chipprbots.ethereum.mpt.MptNode
 import com.chipprbots.ethereum.mpt.MptTraversals
+import com.chipprbots.ethereum.mpt.ProofTrieInserter
 import com.chipprbots.ethereum.mpt.Node
 import com.chipprbots.ethereum.mpt.LeafNode
 import com.chipprbots.ethereum.mpt.ExtensionNode
@@ -152,7 +153,7 @@ class MerkleProofVerifier(rootHash: ByteString) extends Logger {
       case Right(()) => ()
     }
 
-    // Phase 3: insert all leaves
+    // Phase 3: insert all leaves (mutable StackTrie-based, O(N) allocations — see ProofTrieInserter)
     log.debug(s"[PROOF] Phase 3: inserting ${leaves.size} leaves")
     leaves.foreach { case (k, v) => trie.insertLeaf(hashToNibbles(k), v) }
 
@@ -197,10 +198,14 @@ class MerkleProofVerifier(rootHash: ByteString) extends Logger {
         case Left(err)      => Left(err)
       }
 
-    def insertLeaf(keyNibbles: Seq[Int], value: ByteString): Unit =
-      root = doInsertLeaf(root, keyNibbles, value)
+    // Lazily initialised after Phase 1+2 have finalised `root` — converts the pruned MptNode tree to StackTrie's
+    // mutable StNode representation for O(N) Phase 3 insertion (vs O(N×depth) with the old doInsertLeaf).
+    private lazy val inserter: ProofTrieInserter = new ProofTrieInserter(root)
 
-    def computeHash(): ByteString = ByteString(root.hash)
+    def insertLeaf(keyNibbles: Seq[Int], value: ByteString): Unit =
+      inserter.insert(keyNibbles.map(_.toByte).toArray, value.toArray)
+
+    def computeHash(): ByteString = inserter.computeHash()
 
     // ── Phase 1: resolveEdgePath ─────────────────────────────────────────────
 
@@ -408,113 +413,6 @@ class MerkleProofVerifier(rootHash: ByteString) extends Logger {
 
     // ── Phase 3: insertLeaf ─────────────────────────────────────────────────
 
-    private def doInsertLeaf(node: MptNode, keyNibbles: Seq[Int], value: ByteString, depth: Int = 0): MptNode = {
-      // Depth guard: max legitimate trie depth for a 32-byte key is 64 nibbles. Exceeding 128
-      // means a cycle exists in the node graph (Phase 1/2 bug, not a key-length issue).
-      // Throws immediately so any future regression surfaces as a caught exception rather than
-      // an indefinite hang — matches go-ethereum's design intent where cycles cannot form.
-      if (depth > 128)
-        throw new IllegalStateException(
-          s"doInsertLeaf exceeded max trie depth ($depth) — node graph cycle detected. " +
-            s"keyNibbles.size=${keyNibbles.size}"
-        )
-      node match {
-        case NullNode =>
-          LeafNode(ByteString(keyNibbles.map(_.toByte).toArray), value)
-
-        case leaf: LeafNode =>
-          insertIntoLeaf(leaf, keyNibbles, value, depth)
-
-        case branch: BranchNode =>
-          if (keyNibbles.isEmpty) {
-            BranchNode(branch.children.clone(), Some(value))
-          } else {
-            val nibble = keyNibbles.head
-            val newChild = doInsertLeaf(branch.children(nibble), keyNibbles.tail, value, depth + 1)
-            branch.updateChild(nibble, newChild)
-          }
-
-        case ext: ExtensionNode =>
-          insertIntoExtension(ext, keyNibbles, value, depth)
-
-        case HashNode(_) =>
-          throw new IllegalStateException("HashNode in range during leaf insertion — pruneInternals incomplete")
-
-        case _ => node
-      }
-    }
-
-    // Port of MerklePatriciaTrie.putInLeafNode (stripped of NodeInsertResult / storage)
-    private def insertIntoLeaf(leaf: LeafNode, keyNibbles: Seq[Int], value: ByteString, depth: Int = 0): MptNode = {
-      val existingNibbles = toNibbleSeq(leaf.key)
-      val ml = matchingLength(existingNibbles, keyNibbles)
-
-      if (ml == existingNibbles.length && ml == keyNibbles.length) {
-        // Exact key match: replace value
-        LeafNode(leaf.key, value)
-
-      } else if (ml == 0) {
-        // No common prefix: create branch with both leaves under their first nibbles
-        val b0 =
-          if (existingNibbles.isEmpty) BranchNode.withValueOnly(leaf.value.toArray)
-          else {
-            val existingLeaf = LeafNode(ByteString(existingNibbles.tail.map(_.toByte).toArray), leaf.value)
-            BranchNode.withSingleChild(existingNibbles.head.toByte, existingLeaf, None)
-          }
-        doInsertLeaf(b0, keyNibbles, value, depth + 1)
-
-      } else {
-        // Common prefix of length ml: wrap in extension → branch
-        val prefix = keyNibbles.take(ml)
-        val existingSuffix = existingNibbles.drop(ml)
-        val newKeySuffix = keyNibbles.drop(ml)
-        val b0 =
-          if (existingSuffix.isEmpty) BranchNode.withValueOnly(leaf.value.toArray)
-          else {
-            val existingLeaf = LeafNode(ByteString(existingSuffix.tail.map(_.toByte).toArray), leaf.value)
-            BranchNode.withSingleChild(existingSuffix.head.toByte, existingLeaf, None)
-          }
-        val b1 = doInsertLeaf(b0, newKeySuffix, value, depth + 1)
-        ExtensionNode(ByteString(prefix.map(_.toByte).toArray), b1)
-      }
-    }
-
-    // Port of MerklePatriciaTrie.putInExtensionNode (stripped of NodeInsertResult / storage)
-    private def insertIntoExtension(
-        ext: ExtensionNode,
-        keyNibbles: Seq[Int],
-        value: ByteString,
-        depth: Int = 0
-    ): MptNode = {
-      val sharedNibbles = toNibbleSeq(ext.sharedKey)
-      val ml = matchingLength(sharedNibbles, keyNibbles)
-
-      if (ml == 0) {
-        // No common prefix: convert extension to branch
-        val sharedHead = sharedNibbles.head
-        val extChild =
-          if (sharedNibbles.length == 1) ext.next
-          else ExtensionNode(ByteString(sharedNibbles.tail.map(_.toByte).toArray), ext.next)
-        val b0 = BranchNode.withSingleChild(sharedHead.toByte, extChild, None)
-        doInsertLeaf(b0, keyNibbles, value, depth + 1)
-
-      } else if (ml == sharedNibbles.length) {
-        // Extension key fully matches: recurse into next
-        ExtensionNode(ext.sharedKey, doInsertLeaf(ext.next, keyNibbles.drop(ml), value, depth + 1))
-
-      } else {
-        // Partial match at ml: split extension into prefix + branch
-        val commonPrefix = sharedNibbles.take(ml)
-        val extSuffix = sharedNibbles.drop(ml)
-        val newKeySuffix = keyNibbles.drop(ml)
-        val extTailChild =
-          if (extSuffix.length == 1) ext.next
-          else ExtensionNode(ByteString(extSuffix.tail.map(_.toByte).toArray), ext.next)
-        val b0 = BranchNode.withSingleChild(extSuffix.head.toByte, extTailChild, None)
-        val b1 = doInsertLeaf(b0, newKeySuffix, value, depth + 1)
-        ExtensionNode(ByteString(commonPrefix.map(_.toByte).toArray), b1)
-      }
-    }
   }
 
   // ─── hasRightElement ────────────────────────────────────────────────────────
