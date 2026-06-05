@@ -870,7 +870,7 @@ class NetworkPeerManagerActor(
           AccountRange(msg.requestId, Seq.empty, Seq.empty)
       }
     peerManagerActor ! PeerManagerActor.SendMessage(response, peerId)
-    log.info(
+    log.debug(
       "SNAP-SERVE: GetAccountRange peer={} accounts={} proofs={}",
       peerId,
       response.accounts.size,
@@ -1005,7 +1005,7 @@ class NetworkPeerManagerActor(
         StorageRanges(msg.requestId, Seq.empty, Seq.empty)
     }
     peerManagerActor ! PeerManagerActor.SendMessage(response, peerId)
-    log.info(
+    log.debug(
       "SNAP-SERVE: GetStorageRanges peer={} slots={} proofs={}",
       peerId,
       response.slots.size,
@@ -1054,7 +1054,7 @@ class NetworkPeerManagerActor(
           TrieNodes(msg.requestId, Seq.empty)
       }
     peerManagerActor ! PeerManagerActor.SendMessage(response, peerId)
-    log.info(
+    log.debug(
       "SNAP-SERVE: GetTrieNodes peer={} nodes={}",
       peerId,
       response.nodes.size
@@ -1101,7 +1101,7 @@ class NetworkPeerManagerActor(
           ByteCodes(msg.requestId, Seq.empty)
       }
     peerManagerActor ! PeerManagerActor.SendMessage(response, peerId)
-    log.info(
+    log.debug(
       "SNAP-SERVE: GetByteCodes peer={} codes={}",
       peerId,
       response.codes.size

@@ -49,7 +49,7 @@ class StorageRangeWorker(
     case StorageCheckIdle =>
       // If still working after timeout, go back to idle
       if (currentRequestId.isEmpty) {
-        log.info("[STORAGE-WORKER] idle check: no active request — worker idle, awaiting assignment")
+        log.debug("[STORAGE-WORKER] idle check: no active request — worker idle, awaiting assignment")
         context.become(idle)
       }
 

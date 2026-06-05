@@ -77,7 +77,7 @@ class BlockchainHostActor(
             case ETHPackets.GetReceipts69(_, hashes)  => s"GetReceipts69(${hashes.size})"
             case other                                => other.getClass.getSimpleName
           }
-          log.info("BLOCK-SERVE: peer={} req={}", peerId, reqLabel)
+          log.debug("BLOCK-SERVE: peer={} req={}", peerId, reqLabel)
         }
     }
   }
