@@ -432,8 +432,10 @@ class NetworkPeerManagerActor(
       // forkAccepted) of every peer that completes handshake. Critical for diagnosing
       // bootstrap failures where most inbound peers are wrong-chain DHT noise — the
       // INBOUND_CAP_OFFSETS log only proves capability negotiation, not chain membership.
+      val clientType = NodeClientType.recognize(peerInfo.remoteStatus.clientId)
       log.info(
         s"PEER_HANDSHAKE_SUCCESS: Peer ${peer.id} cap=${peerInfo.remoteStatus.capability} " +
+          s"client=${clientType.name} " +
           s"networkId=${peerInfo.remoteStatus.networkId} " +
           s"bestHash=${ByteStringUtils.hash2string(peerInfo.remoteStatus.bestHash)} " +
           s"$chainInfoDisplay forkAccepted=${peerInfo.forkAccepted} " +
