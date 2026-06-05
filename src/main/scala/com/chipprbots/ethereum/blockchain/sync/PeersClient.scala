@@ -447,12 +447,17 @@ object PeersClient {
     // BestPeer selection round-robined into them and reported "no header returned"
     // for blocks they literally don't have. forkAccepted=true is necessary but not
     // sufficient — the peer must also have advanced past genesis.
+    //
+    // Use maxBlockNumber > 0 rather than !isAtGenesis (bestHash == genesisHash): ETC and
+    // ETH mainnet share genesis hash d4e56740..., so isAtGenesis is unreliable as a
+    // cross-chain discriminator. Block-number-based filtering matches go-ethereum and Besu
+    // peer selection semantics (both filter by peerHeadBlockHeader.getNumber() > 0).
     val peersToUse = peersToDownloadFrom.values
       .map { case PeerWithInfo(peer, peerInfo) =>
-        val isReady = peerInfo.forkAccepted && !peerInfo.isAtGenesis
+        val isReady = peerInfo.forkAccepted && peerInfo.maxBlockNumber > 0
         log.debug(
           s"Peer ${peer.id} (${peer.remoteAddress}) - ready: $isReady, " +
-            s"maxBlock: ${peerInfo.maxBlockNumber}, atGenesis: ${peerInfo.isAtGenesis}"
+            s"maxBlock: ${peerInfo.maxBlockNumber}"
         )
         log.debug("Peer {} chainWeight: {}", peer.id, peerInfo.chainWeight)
         (peer, peerInfo, isReady)
@@ -475,6 +480,9 @@ object PeersClient {
 
   // Legacy method for backward compatibility — kept in sync with the logger-aware
   // overload above: skip forkRejected peers AND skip peers stuck at genesis.
+  // NOTE: used as a utility by bestPeerWithMinBlock which explicitly passes maxBlockNumber==0
+  // peers as a fallback for ETH/68 peers whose block height is unknown. Do NOT add a
+  // maxBlockNumber > 0 guard here — that would silently break the ETH/68 fallback path.
   def bestPeer(peersToDownloadFrom: Map[PeerId, PeerWithInfo]): Option[Peer] = {
     val peersToUse = peersToDownloadFrom.values
       .collect {
