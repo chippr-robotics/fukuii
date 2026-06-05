@@ -439,6 +439,43 @@ class NetworkPeerManagerActor(
           s"$chainInfoDisplay forkAccepted=${peerInfo.forkAccepted} " +
           s"supportsSnap=${peerInfo.remoteStatus.supportsSnap}"
       )
+
+      // PEER-CHAIN-DIVERGE: ETH/69 peers carry a block number — check if our stored hash
+      // at that height matches their bestHash. A mismatch means we're on different forks.
+      blockchainReader.foreach { reader =>
+        peerInfo.remoteStatus.latestBlock.foreach { peerBlockNum =>
+          reader.getBlockHeaderByNumber(peerBlockNum).foreach { ourHeader =>
+            if (ourHeader.hash != peerInfo.remoteStatus.bestHash)
+              log.warning(
+                "PEER-CHAIN-DIVERGE: Peer {} reports hash={} at block {}; our hash={}. " +
+                  "One of us may be on a fork.",
+                peer.id,
+                ByteStringUtils.hash2string(peerInfo.remoteStatus.bestHash),
+                peerBlockNum,
+                ByteStringUtils.hash2string(ourHeader.hash)
+              )
+          }
+        }
+        // TD-DIVERGE: ETH/68 peers carry actual TD. If peer has higher TD at a comparable
+        // height, we may be on a lighter fork. Use our best block's TD for comparison.
+        if (peerInfo.remoteStatus.capability != com.chipprbots.ethereum.network.p2p.messages.Capability.ETH69) {
+          val peerTD = peerInfo.remoteStatus.chainWeight.totalDifficulty
+          reader.getBestBlock().foreach { ourBest =>
+            reader.getChainWeightByHash(ourBest.header.hash).foreach { ourWeight =>
+              if (peerTD > ourWeight.totalDifficulty)
+                log.warning(
+                  "TD-DIVERGE: Peer {} TD={} > our TD={} at our best block {}. " +
+                    "We may be on a lighter fork or behind.",
+                  peer.id,
+                  peerTD,
+                  ourWeight.totalDifficulty,
+                  ourBest.header.number
+                )
+            }
+          }
+        }
+      }
+
       if (peersWithInfo.contains(peer.id)) {
         val old = peersWithInfo(peer.id)
         val newIsInbound = peer.incomingConnection

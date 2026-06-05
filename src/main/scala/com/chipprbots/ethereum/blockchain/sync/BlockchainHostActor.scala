@@ -15,6 +15,7 @@ import com.chipprbots.ethereum.db.storage.EvmCodeStorage
 import com.chipprbots.ethereum.domain.BlockHeader
 import com.chipprbots.ethereum.domain.BlockchainReader
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor
+import com.chipprbots.ethereum.utils.ByteStringUtils
 import com.chipprbots.ethereum.network.PeerEventBusActor.PeerEvent.MessageFromPeer
 import com.chipprbots.ethereum.network.PeerEventBusActor.PeerSelector
 import com.chipprbots.ethereum.network.PeerEventBusActor.Subscribe
@@ -66,6 +67,17 @@ class BlockchainHostActor(
         val responseOpt = handleBlockFastDownload(message).orElse(handleEvmCodeMptFastDownload(message))
         responseOpt.foreach { response =>
           networkPeerManagerActor ! NetworkPeerManagerActor.SendMessage(response, peerId)
+          // BLOCK-SERVE: INFO log so we can see which peers are requesting our chain
+          // data — useful for detecting when we're serving from an orphan fork.
+          val reqLabel = message match {
+            case ETHPackets.GetBlockHeaders(_, block, max, _, _) =>
+              s"GetBlockHeaders(start=${block.fold(_.toString, h => ByteStringUtils.hash2string(h).take(8))} max=$max)"
+            case ETHPackets.GetBlockBodies(_, hashes) => s"GetBlockBodies(${hashes.size})"
+            case ETHPackets.GetReceipts(_, hashes)    => s"GetReceipts(${hashes.size})"
+            case ETHPackets.GetReceipts69(_, hashes)  => s"GetReceipts69(${hashes.size})"
+            case other                                => other.getClass.getSimpleName
+          }
+          log.info("BLOCK-SERVE: peer={} req={}", peerId, reqLabel)
         }
     }
   }

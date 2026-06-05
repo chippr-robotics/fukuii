@@ -66,6 +66,10 @@ class BlockImporter(
 
   private var pendingStateNodeHash: Option[ByteString] = None
 
+  // Consecutive UnknownParent failures per block hash — for FORK-DETECT escalation.
+  private var unknownParentStrikes: Map[ByteString, Int] = Map.empty
+  private val ForkDetectThreshold = 5
+
   // Reset the companion-object exhaust counter on fresh actor creation.
   // On Pekko Restart, only postRestart() fires — preStart() is skipped — so
   // survivedExhausts is preserved across restarts and only zeroed for a new
@@ -403,9 +407,11 @@ class BlockImporter(
         .evaluateBranchBlock(blocks.head)
         .flatMap {
           case BlockImportedToTop(_) =>
+            unknownParentStrikes -= blocks.head.hash // reset on success
             tryImportBlocks(restOfBlocks, blocks.head :: importedBlocks)
 
           case ChainReorganised(_, newBranch, _) =>
+            unknownParentStrikes -= blocks.head.hash
             tryImportBlocks(restOfBlocks, newBranch.reverse ::: importedBlocks)
 
           case DuplicateBlock | BlockEnqueued =>
@@ -418,12 +424,32 @@ class BlockImporter(
             IO.raiseError(missingNodeException)
 
           case err @ (UnknownParent | BlockImportFailed(_)) =>
+            val failedBlock = blocks.head
             log.error(
               "Block {} import failed, with hash {} and parent hash {}",
-              blocks.head.number,
-              blocks.head.header.hashAsHexString,
-              ByteStringUtils.hash2string(blocks.head.header.parentHash)
+              failedBlock.number,
+              failedBlock.header.hashAsHexString,
+              ByteStringUtils.hash2string(failedBlock.header.parentHash)
             )
+            // FORK-DETECT: escalate to WARN after ForkDetectThreshold consecutive
+            // failures on the same block hash — this indicates we're on a fork
+            // (repeated UnknownParent on the same block means no peer has a parent
+            // matching our chain tip, not a transient gap).
+            val strikes = unknownParentStrikes.getOrElse(failedBlock.hash, 0) + 1
+            unknownParentStrikes = unknownParentStrikes + (failedBlock.hash -> strikes)
+            if (strikes >= ForkDetectThreshold) {
+              val ourHashAtHeight = blockchainReader
+                .getBlockHeaderByNumber(failedBlock.number)
+                .map(h => ByteStringUtils.hash2string(h.hash))
+                .getOrElse("<not found>")
+              log.warning(
+                s"FORK-DETECT: block ${failedBlock.number} (hash=${failedBlock.header.hashAsHexString}) " +
+                  s"has failed $strikes consecutive times with UnknownParent. " +
+                  s"Our stored hash at height ${failedBlock.number}: $ourHashAtHeight. " +
+                  s"Received parent hash: ${ByteStringUtils.hash2string(failedBlock.header.parentHash)}. " +
+                  "Fukuii may be on an orphan fork — check peer chain tips."
+              )
+            }
             IO.pure((importedBlocks, Some(err)))
         }
     }
