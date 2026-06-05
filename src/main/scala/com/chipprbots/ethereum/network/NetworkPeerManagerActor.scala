@@ -870,6 +870,12 @@ class NetworkPeerManagerActor(
           AccountRange(msg.requestId, Seq.empty, Seq.empty)
       }
     peerManagerActor ! PeerManagerActor.SendMessage(response, peerId)
+    log.info(
+      "SNAP-SERVE: GetAccountRange peer={} accounts={} proofs={}",
+      peerId,
+      response.accounts.size,
+      response.proof.size
+    )
   }
 
   // Cache of recent canonical state roots, refreshed lazily when the chain advances. The
@@ -999,6 +1005,12 @@ class NetworkPeerManagerActor(
         StorageRanges(msg.requestId, Seq.empty, Seq.empty)
     }
     peerManagerActor ! PeerManagerActor.SendMessage(response, peerId)
+    log.info(
+      "SNAP-SERVE: GetStorageRanges peer={} slots={} proofs={}",
+      peerId,
+      response.slots.size,
+      response.proof.size
+    )
   }
 
   /** Handle incoming GetTrieNodes request from a peer (server-side)
@@ -1042,6 +1054,11 @@ class NetworkPeerManagerActor(
           TrieNodes(msg.requestId, Seq.empty)
       }
     peerManagerActor ! PeerManagerActor.SendMessage(response, peerId)
+    log.info(
+      "SNAP-SERVE: GetTrieNodes peer={} nodes={}",
+      peerId,
+      response.nodes.size
+    )
   }
 
   /** Handle incoming GetByteCodes request from a peer (server-side)
@@ -1084,6 +1101,11 @@ class NetworkPeerManagerActor(
           ByteCodes(msg.requestId, Seq.empty)
       }
     peerManagerActor ! PeerManagerActor.SendMessage(response, peerId)
+    log.info(
+      "SNAP-SERVE: GetByteCodes peer={} codes={}",
+      peerId,
+      response.codes.size
+    )
   }
 
 }
