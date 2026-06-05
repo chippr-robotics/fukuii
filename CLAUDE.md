@@ -106,3 +106,8 @@ For comprehensive changes, cycle through:
 - Run `sbt scalafmtAll` (or `sbt pp`) before pushing.
 - Refer to the human as **user**; be authentic, surface disagreement rather than
   burying it.
+
+<!-- SPECKIT START -->
+For additional context about technologies to be used, project structure,
+shell commands, and other important information, read the current plan
+<!-- SPECKIT END -->
