@@ -22,6 +22,7 @@ import com.chipprbots.ethereum.consensus.ConsensusAdapter
 import com.chipprbots.ethereum.consensus.validators.BlockValidator
 import com.chipprbots.ethereum.db.storage.{EvmCodeStorage, StateStorage}
 import com.chipprbots.ethereum.domain.BlockchainReader
+import com.chipprbots.ethereum.domain.BlockchainWriter
 import com.chipprbots.ethereum.ledger.BranchResolution
 import com.chipprbots.ethereum.nodebuilder.BlockchainConfigBuilder
 import com.chipprbots.ethereum.utils.Config.SyncConfig
@@ -34,6 +35,7 @@ class RegularSync(
     peerEventBus: ActorRef,
     consensus: ConsensusAdapter,
     blockchainReader: BlockchainReader,
+    blockchainWriter: BlockchainWriter,
     stateStorage: StateStorage,
     evmCodeStorage: EvmCodeStorage,
     branchResolution: BranchResolution,
@@ -76,6 +78,7 @@ class RegularSync(
         fetcher.toClassic,
         consensus,
         blockchainReader,
+        blockchainWriter,
         stateStorage,
         evmCodeStorage,
         branchResolution,
@@ -194,6 +197,7 @@ object RegularSync {
       peerEventBus: ActorRef,
       consensus: ConsensusAdapter,
       blockchainReader: BlockchainReader,
+      blockchainWriter: BlockchainWriter,
       stateStorage: StateStorage,
       evmCodeStorage: EvmCodeStorage,
       branchResolution: BranchResolution,
@@ -212,6 +216,7 @@ object RegularSync {
         peerEventBus,
         consensus,
         blockchainReader,
+        blockchainWriter,
         stateStorage,
         evmCodeStorage,
         branchResolution,

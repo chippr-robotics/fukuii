@@ -92,6 +92,7 @@ trait RegularSyncFixtures { self: Matchers with AsyncMockFactory =>
           peerEventBus.ref,
           consensusAdapter,
           blockchainReader,
+          blockchainWriter,
           stateStorage,
           evmCodeStorage,
           branchResolution,

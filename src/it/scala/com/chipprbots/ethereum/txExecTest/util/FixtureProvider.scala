@@ -16,6 +16,7 @@ import com.chipprbots.ethereum.db.storage.NodeStorage.NodeHash
 import com.chipprbots.ethereum.db.storage._
 import com.chipprbots.ethereum.db.storage.pruning.ArchivePruning
 import com.chipprbots.ethereum.db.storage.pruning.PruningMode
+import com.chipprbots.ethereum.domain.Account._
 import com.chipprbots.ethereum.domain.BlockBody._
 import com.chipprbots.ethereum.domain.BlockHeaderImplicits._
 import com.chipprbots.ethereum.domain._
@@ -106,7 +107,6 @@ object FixtureProvider {
                 }
 
               case Some(m: LeafNode) =>
-                import AccountImplicits._
                 storages.stateStorage.saveNode(ByteString(m.hash), m.toBytes, header.number)
                 Try(m.value.toArray[Byte].toAccount).toOption.foreach { account =>
                   // Note: We've already saved all EVM code above, so this check is now redundant

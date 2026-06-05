@@ -25,6 +25,7 @@ import com.chipprbots.ethereum.consensus.ConsensusAdapter
 import com.chipprbots.ethereum.crypto.kec256
 import com.chipprbots.ethereum.db.storage.{EvmCodeStorage, StateStorage}
 import com.chipprbots.ethereum.domain._
+import com.chipprbots.ethereum.domain.BlockchainWriter
 import com.chipprbots.ethereum.ledger._
 import com.chipprbots.ethereum.mpt._
 import com.chipprbots.ethereum.mpt.MerklePatriciaTrie.MissingAccountNodeException
@@ -45,6 +46,7 @@ class BlockImporter(
     fetcher: ActorRef,
     consensus: ConsensusAdapter,
     blockchainReader: BlockchainReader,
+    blockchainWriter: BlockchainWriter,
     stateStorage: StateStorage,
     evmCodeStorage: EvmCodeStorage,
     branchResolution: BranchResolution,
@@ -137,6 +139,36 @@ class BlockImporter(
       // Also save as contract code in case this was a bytecode fetch
       try evmCodeStorage.put(hash, node).commit()
       catch { case _: Exception => () }
+
+    case StartForkRecovery(failedBlockNumber) =>
+      val currentBest = bestKnownBlockNumber
+      val snapPivot = blockchainReader.getSnapSyncPivotBlock().getOrElse(BigInt(0))
+      val floor = (currentBest - MaxForkAncestryDepth).max(snapPivot)
+      blockchainReader.getBlockHeaderByNumber(floor) match {
+        case Some(floorHeader) =>
+          log.warning(
+            "SYNC-FORK: repeated UnknownParent on block {} — rolling back canonical chain from {} to {} (snapPivot={})",
+            failedBlockNumber,
+            currentBest,
+            floor,
+            snapPivot
+          )
+          blockchainWriter.setCanonicalChainHead(floor, floorHeader.hash, currentBest)
+          unknownParentStrikes = Map.empty
+          log.info(
+            "SYNC-FORK: chain rewound to bno={} hash={} — restarting header sync from {}",
+            floor,
+            ByteStringUtils.hash2string(floorHeader.hash).take(8),
+            floor + 1
+          )
+          fetcher ! BlockFetcher.InvalidateBlocksFrom(floor + 1, "SYNC-FORK rollback", shouldBlacklist = false)
+        case None =>
+          log.warning(
+            "SYNC-FORK: no header at fork recovery floor bno={} — escalating to SNAP re-sync",
+            floor
+          )
+          supervisor ! SyncProtocol.RegularSyncStuck(failedBlockNumber, s"no header at fork recovery floor $floor")
+      }
   }
 
   private def resolvingMissingNode(blocksToRetry: NonEmptyList[Block], blockImportType: BlockImportType)(
@@ -460,10 +492,14 @@ class BlockImporter(
               log.warning(
                 s"FORK-DETECT: block ${failedBlock.number} (hash=${failedBlock.header.hashAsHexString}) " +
                   s"has failed $strikes consecutive times with UnknownParent. " +
-                  s"Our stored hash at height ${failedBlock.number}: $ourHashAtHeight. " +
+                  s"Our canonical hash at height ${failedBlock.number}: $ourHashAtHeight. " +
                   s"Received parent hash: ${ByteStringUtils.hash2string(failedBlock.header.parentHash)}. " +
-                  "Fukuii may be on an orphan fork — check peer chain tips."
+                  "Triggering chain rollback and header re-sync."
               )
+              // Trigger fork recovery: roll back canonical chain index and restart header sync.
+              // Context.become cannot be called inside IO, so fire a message to self — the actor
+              // processes it after this IO completes and returns to the running receive loop.
+              self ! StartForkRecovery(failedBlock.number)
             }
             IO.pure((importedBlocks, Some(err)))
         }
@@ -648,6 +684,11 @@ object BlockImporter {
   // 3 × 5-min backoff = ~15 minutes of bounded retry before invoking the escape valve.
   val StuckEscapeThreshold: Int = 3
 
+  // How far back to rewind the canonical chain index during fork recovery (SYNC-FORK path).
+  // 128 blocks provides enough depth to cover common shallow forks without resyncing the
+  // entire chain; deeper forks fall back to SNAP re-sync via RegularSyncStuck.
+  val MaxForkAncestryDepth: Int = 128
+
   // Exhaust counter that outlives individual actor instances so Pekko Restarts don't reset
   // the progress toward StuckEscapeThreshold. Zeroed by preStart() (fresh regular-sync session)
   // but NOT by postRestart() (same logical actor restarted after a crash).
@@ -658,6 +699,7 @@ object BlockImporter {
       fetcher: ActorRef,
       consensus: ConsensusAdapter,
       blockchainReader: BlockchainReader,
+      blockchainWriter: BlockchainWriter,
       stateStorage: StateStorage,
       evmCodeStorage: EvmCodeStorage,
       branchResolution: BranchResolution,
@@ -673,6 +715,7 @@ object BlockImporter {
         fetcher,
         consensus,
         blockchainReader,
+        blockchainWriter,
         stateStorage,
         evmCodeStorage,
         branchResolution,
@@ -695,6 +738,7 @@ object BlockImporter {
   case class ImportDone(newBehavior: NewBehavior, blockImportType: BlockImportType) extends ImporterMsg
   case object PickBlocks extends ImporterMsg
   case object PrintStatus extends ImporterMsg with NotInfluenceReceiveTimeout
+  case class StartForkRecovery(failedBlockNumber: BigInt) extends ImporterMsg
 
   sealed trait NewBehavior
   case object Running extends NewBehavior
