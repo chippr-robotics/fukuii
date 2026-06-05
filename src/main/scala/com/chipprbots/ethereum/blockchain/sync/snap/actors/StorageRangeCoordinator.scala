@@ -123,6 +123,12 @@ class StorageRangeCoordinator(
   private[actors] var consecutiveTaskFailures: Int = 0
   private val maxConsecutiveTaskFailures: Int = 100
 
+  // Idempotency guard: ForceCompleteStorage may arrive 10× simultaneously if SNAPSyncController
+  // queues multiple stagnation-check responses before the first ForceCompleted reply comes back.
+  // The handler does not clear `tasks`/`activeTasks`, so all duplicates would see identical state
+  // and log the same WARN. Execute at most once per coordinator lifetime.
+  private var forceCompleteExecuted: Boolean = false
+
   // Peer cooldown (best-effort): used for transient errors (timeouts, verification failures).
   // This is separate from stateless peer detection — cooldowns are short and per-error-type.
   // 5 s (was 10 s) — storage shares the peer pool with the account coordinator and we
@@ -776,21 +782,26 @@ class StorageRangeCoordinator(
       }
 
     case ForceCompleteStorage =>
-      val abandoned = tasks.size + activeTasks.size
-      val abandonedTries = pendingAccountTries.size
-      log.warning(
-        s"Force-completing storage sync: $slotsDownloaded slots downloaded, " +
-          s"abandoning $abandoned remaining tasks, $abandonedTries in-flight per-account tries " +
-          s"(healing phase will recover missing data)"
-      )
-      // Discard in-flight streaming tries — already-flushed nodes stay on disk; healing reconciles.
-      pendingAccountTries.values.foreach(_.reset())
-      pendingAccountTries.clear()
-      com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncMetrics.setStoragePendingTries(0L)
-      // Hand off any flat-slot tail still in the accumulator.
-      flushPendingFlatBatch()
-      log.info("Storage range sync force-completed (promoting to healing phase)")
-      snapSyncController ! SNAPSyncController.StorageRangeSyncForceCompleted
+      if (forceCompleteExecuted) {
+        log.debug("ForceCompleteStorage: already executed — ignoring duplicate")
+      } else {
+        forceCompleteExecuted = true
+        val abandoned = tasks.size + activeTasks.size
+        val abandonedTries = pendingAccountTries.size
+        log.warning(
+          s"Force-completing storage sync: $slotsDownloaded slots downloaded, " +
+            s"abandoning $abandoned remaining tasks, $abandonedTries in-flight per-account tries " +
+            s"(healing phase will recover missing data)"
+        )
+        // Discard in-flight streaming tries — already-flushed nodes stay on disk; healing reconciles.
+        pendingAccountTries.values.foreach(_.reset())
+        pendingAccountTries.clear()
+        com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncMetrics.setStoragePendingTries(0L)
+        // Hand off any flat-slot tail still in the accumulator.
+        flushPendingFlatBatch()
+        log.info("Storage range sync force-completed (promoting to healing phase)")
+        snapSyncController ! SNAPSyncController.StorageRangeSyncForceCompleted
+      }
 
     case StoragePivotRefreshed(newStateRoot) =>
       log.info(s"Storage pivot refreshed: ${stateRoot.take(4).toHex} -> ${newStateRoot.take(4).toHex}")

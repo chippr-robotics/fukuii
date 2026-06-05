@@ -243,6 +243,11 @@ class SNAPSyncController(
   private var healingRequestTask: Option[Cancellable] = None
   private var snapServerPeersScheduler: Option[Cancellable] = None
   private var storageStagnationRefreshAttempted: Boolean = false
+  // Prevent sending ForceCompleteStorage more than once per coordinator lifecycle.
+  // SNAPSyncController can queue 10+ StorageCoordinatorProgress responses before the first
+  // StorageRangeSyncForceCompleted reply arrives, causing storagePhaseComplete to still be false
+  // for all of them. Without this guard, each one sends a duplicate ForceCompleteStorage.
+  private var forceCompleteStorageSent: Boolean = false
   private var trieWalkInProgress: Boolean = false
   private var healingRoundCount: Int = 0
   // Suppress duplicate ConnectToPeer for snap-server-peers for 60s after a send attempt.
@@ -439,6 +444,7 @@ class SNAPSyncController(
     bytecodeCoordinator = None
     storageRangeCoordinator.foreach(context.stop)
     storageRangeCoordinator = None
+    forceCompleteStorageSent = false
     trieNodeHealingCoordinator.foreach(context.stop)
     trieNodeHealingCoordinator = None
   }
@@ -1261,7 +1267,10 @@ class SNAPSyncController(
             s"(stalled ${stalledForMs / 1000}s). Trie construction likely stuck. Force-completing."
         )
         storageRangeRequestTask.foreach(_.cancel()); storageRangeRequestTask = None
-        storageRangeCoordinator.foreach(_ ! actors.Messages.ForceCompleteStorage)
+        if (!forceCompleteStorageSent) {
+          forceCompleteStorageSent = true
+          storageRangeCoordinator.foreach(_ ! actors.Messages.ForceCompleteStorage)
+        }
       }
       return
     }
@@ -1292,7 +1301,10 @@ class SNAPSyncController(
           s"Promoting to healing phase (preserving downloaded state)."
       )
       storageRangeRequestTask.foreach(_.cancel()); storageRangeRequestTask = None
-      storageRangeCoordinator.foreach(_ ! actors.Messages.ForceCompleteStorage)
+      if (!forceCompleteStorageSent) {
+        forceCompleteStorageSent = true
+        storageRangeCoordinator.foreach(_ ! actors.Messages.ForceCompleteStorage)
+      }
     }
   }
 
@@ -1732,6 +1744,7 @@ class SNAPSyncController(
             }
 
             if (!storageAlreadyDone) {
+              forceCompleteStorageSent = false
               storageRangeCoordinator = Some(
                 context.actorOf(
                   actors.StorageRangeCoordinator
@@ -2472,6 +2485,7 @@ class SNAPSyncController(
     bytecodePhaseComplete = false
     storagePhaseComplete = false
     storagePhaseForceCompleted = false
+    forceCompleteStorageSent = false
     bytecodesEstimatedTotal = 0L
     healingValidatedRoot = None
 
@@ -2780,6 +2794,7 @@ class SNAPSyncController(
     if (storageRangeCoordinator.isEmpty) {
       val storage = getOrCreateMptStorage(currentPivot)
 
+      forceCompleteStorageSent = false
       storageRangeCoordinator = Some(
         context.actorOf(
           actors.StorageRangeCoordinator
@@ -3762,6 +3777,7 @@ class SNAPSyncController(
     bytecodePhaseComplete = false
     storagePhaseComplete = false
     storagePhaseForceCompleted = false
+    forceCompleteStorageSent = false
     // Reset bytecode-estimate counter so it stays in sync with progressMonitor.reset()
     // (called below). IncrementalContractData will repopulate as accounts are re-identified.
     bytecodesEstimatedTotal = 0L
