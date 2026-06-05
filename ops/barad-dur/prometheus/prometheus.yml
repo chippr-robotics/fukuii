@@ -82,6 +82,18 @@ scrape_configs:
           network: 'sepolia'
           environment: 'staging'
 
+  # Peer-geo exporter — fukuii_peer_geo (geolocated connected peers)
+  - job_name: 'peer-geo'
+    scrape_interval: 30s
+    scrape_timeout: 15s
+    metrics_path: '/metrics'
+    static_configs:
+      - targets: ['peer-geo:9099']
+        labels:
+          instance: 'peer-geo'
+          role: 'exporter'
+          environment: 'production'
+
   # Kong API Gateway metrics
   - job_name: 'kong'
     scrape_interval: 10s

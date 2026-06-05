@@ -635,11 +635,14 @@ class NetworkHandshakerSpec extends AnyFlatSpec with Matchers {
       genesisHash = genesisBlock.header.hash
     )
 
+    // remoteClientId mirrors remoteHello.clientId: the handshake threads the Hello's clientId into
+    // the resulting RemoteStatus, so the expected fixture must carry it for `initialStatus shouldBe remoteStatus`.
     val remoteStatus: RemoteStatus = RemoteStatus(
       remoteStatusMsg,
       Capability.ETH63,
       false,
-      Seq(Capability.ETH63).toList
+      Seq(Capability.ETH63).toList,
+      "remote-peer"
     )
   }
 

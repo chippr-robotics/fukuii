@@ -246,13 +246,44 @@ services:
     volumes:
       - ${GRAFANA_DATA_DIR:-./data/grafana}:/var/lib/grafana
       - ./grafana/provisioning:/etc/grafana/provisioning:ro
-      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+      # Mount the real dashboards dir, not the ./grafana/dashboards symlink — Docker doesn't
+      # dereference a symlink bind-mount source, so the symlink mounted an empty dir and broke
+      # provisioning (readdirent .../dashboards: no such file or directory).
+      - ../grafana:/var/lib/grafana/dashboards:ro
     networks:
       - fukuii-network
     depends_on:
       - prometheus
     healthcheck:
       test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:3000/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Peer-geo exporter — geolocates connected peers from the node's native app_network_peer_info
+  # metric (PeerTelemetry) and re-exports fukuii_peer_geo for the Network → Nodes Geomap.
+  peer-geo:
+    build:
+      context: ./peer-geo
+    image: chipprbots/fukuii-peer-geo:latest
+    container_name: fukuii-peer-geo
+    restart: unless-stopped
+    environment:
+      # job=url pairs; the node's /metrics is reachable by container DNS on the fukuii-network.
+      - NODE_TARGETS=${PEER_GEO_TARGETS:-etc-mainnet=http://fukuii-primary:9095/metrics}
+      - LISTEN_PORT=9099
+      - REFRESH_INTERVAL=30
+    ports:
+      - "${PEER_GEO_PORT:-9099}:9099"
+    volumes:
+      # Reuse the persistent ip->geo cache (CACHE_FILE=/data/peer_geo_cache.json).
+      - ./peer-geo:/data
+    networks:
+      - fukuii-network
+    depends_on:
+      - fukuii-primary
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request;urllib.request.urlopen('http://localhost:9099/metrics',timeout=5)"]
       interval: 30s
       timeout: 10s
       retries: 3

@@ -17,7 +17,8 @@ case class EthNodeStatus64ExchangeState(
     handshakerConfiguration: NetworkHandshakerConfiguration,
     negotiatedCapability: Capability,
     supportsSnap: Boolean = false,
-    peerCapabilities: List[Capability] = List.empty
+    peerCapabilities: List[Capability] = List.empty,
+    clientId: String = ""
 ) extends EtcNodeStatusExchangeState[ETH64.Status] {
 
   import handshakerConfiguration._
@@ -85,7 +86,9 @@ case class EthNodeStatus64ExchangeState(
               status.bestHash
             )
             ConnectedState(
-              PeerInfo.withForkAccepted(RemoteStatus(status, negotiatedCapability, supportsSnap, peerCapabilities))
+              PeerInfo.withForkAccepted(
+                RemoteStatus(status, negotiatedCapability, supportsSnap, peerCapabilities, clientId)
+              )
             )
           case other =>
             log.debug(

@@ -27,7 +27,8 @@ case class EthNodeStatus69ExchangeState(
     handshakerConfiguration: NetworkHandshakerConfiguration,
     negotiatedCapability: Capability,
     supportsSnap: Boolean = false,
-    peerCapabilities: List[Capability] = List.empty
+    peerCapabilities: List[Capability] = List.empty,
+    clientId: String = ""
 ) extends EtcNodeStatusExchangeState[ETH69.Status] {
 
   import handshakerConfiguration._
@@ -91,7 +92,8 @@ case class EthNodeStatus69ExchangeState(
                   negotiatedCapability,
                   supportsSnap,
                   peerCapabilities,
-                  resolvedChainWeight
+                  resolvedChainWeight,
+                  clientId
                 )
               )
             )
