@@ -772,11 +772,10 @@ class TrieNodeHealingCoordinator(
 
     if (healedCount > 0) {
       snapSyncController ! SNAPSyncController.ProgressNodesHealed(healedCount.toLong)
-
-      // Periodic async flush of raw node buffer
-      if (rawNodeBuffer.size >= rawFlushThreshold) {
-        flushRawNodesAsync()
-      }
+      // Flush immediately after every response rather than waiting for the 1000-node threshold.
+      // Sparse healing runs (small gap counts) would otherwise stall writes in the buffer
+      // indefinitely if they never hit the count gate.
+      flushRawNodesAsync()
     }
 
     // Dispatch more work to this peer if available (pipeline multiple requests)
