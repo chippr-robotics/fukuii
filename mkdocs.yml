@@ -204,6 +204,8 @@ nav:
         - MESS Implementation: adr/consensus/CON-004-mess-implementation.md
         - ETH66 Formatting: adr/consensus/CON-005-eth66-protocol-aware-message-formatting.md
         - ForkID Compatibility: adr/consensus/CON-006-forkid-compatibility-during-initial-sync.md
+        - ETC64 RLP Encoding Fix: adr/consensus/CON-007-etc64-rlp-encoding-fix.md
+        - Checkpoint Distribution Server: adr/consensus/CON-008-checkpoint-distribution-server.md
       - VM:
         - adr/vm/README.md
         - EIP-3541: adr/vm/VM-001-eip-3541-implementation.md
