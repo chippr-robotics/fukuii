@@ -449,6 +449,7 @@ class NetworkPeerManagerActor(
           peerManagerActor ! PeerManagerActor.SendMessage(probe, peer.id)
         }
         NetworkMetrics.registerAddHandshakedPeer(peer)
+        PeerTelemetry.registerPeer(peer, peerInfo)
         context.become(handleMessages(peersWithInfo + (peer.id -> PeerWithInfo(peer, peerInfo))))
       }
 
@@ -477,6 +478,7 @@ class NetworkPeerManagerActor(
       peerEventBusActor ! Unsubscribe(PeerDisconnectedClassifier(PeerSelector.WithId(peerId)))
       peerEventBusActor ! Unsubscribe(MessageClassifier(msgCodesWithInfo, PeerSelector.WithId(peerId)))
       NetworkMetrics.registerRemoveHandshakedPeer(peersWithInfo(peerId).peer)
+      PeerTelemetry.deregisterPeer(peerId)
       lastBlockSignalMs.remove(peerId)
       laggingPeerSince.remove(peerId)
       context.become(handleMessages(peersWithInfo - peerId))
@@ -985,7 +987,11 @@ object NetworkPeerManagerActor {
       genesisHash: ByteString,
       supportsSnap: Boolean = false,
       capabilities: List[Capability] = List.empty,
-      latestBlock: Option[BigInt] = None
+      latestBlock: Option[BigInt] = None,
+      // clientId advertised by the peer in its Hello message (e.g. "CoreGeth/v1.12.20-stable/...").
+      // Threaded from EtcHelloExchangeState through the status-exchange states for peer telemetry.
+      // Defaults to "" so callers that don't have it (tests, legacy paths) stay source-compatible.
+      remoteClientId: String = ""
   ) {
     override def toString: String =
       s"RemoteStatus { " +
@@ -996,7 +1002,8 @@ object NetworkPeerManagerActor {
         s"genesisHash: ${ByteStringUtils.hash2string(genesisHash)}, " +
         s"supportsSnap: $supportsSnap, " +
         s"capabilities: ${capabilities.mkString("[", ", ", "]")}" +
-        s"latestBlock: $latestBlock" +
+        s"latestBlock: $latestBlock, " +
+        s"remoteClientId: $remoteClientId" +
         s"}"
   }
 
@@ -1005,7 +1012,8 @@ object NetworkPeerManagerActor {
         status: ETH64.Status,
         negotiatedCapability: Capability,
         supportsSnap: Boolean,
-        capabilities: List[Capability]
+        capabilities: List[Capability],
+        remoteClientId: String
     ): RemoteStatus =
       RemoteStatus(
         negotiatedCapability,
@@ -1014,7 +1022,8 @@ object NetworkPeerManagerActor {
         status.bestHash,
         status.genesisHash,
         supportsSnap,
-        capabilities
+        capabilities,
+        remoteClientId = remoteClientId
       )
 
     def apply(status: ETH64.Status): RemoteStatus =
@@ -1032,7 +1041,8 @@ object NetworkPeerManagerActor {
         status: BaseETH6XMessages.Status,
         negotiatedCapability: Capability,
         supportsSnap: Boolean,
-        capabilities: List[Capability]
+        capabilities: List[Capability],
+        remoteClientId: String
     ): RemoteStatus =
       RemoteStatus(
         negotiatedCapability,
@@ -1041,7 +1051,8 @@ object NetworkPeerManagerActor {
         status.bestHash,
         status.genesisHash,
         supportsSnap,
-        capabilities
+        capabilities,
+        remoteClientId = remoteClientId
       )
 
     def apply(status: BaseETH6XMessages.Status): RemoteStatus =
@@ -1065,7 +1076,8 @@ object NetworkPeerManagerActor {
         negotiatedCapability: Capability,
         supportsSnap: Boolean,
         capabilities: List[Capability],
-        resolvedChainWeight: ChainWeight
+        resolvedChainWeight: ChainWeight,
+        remoteClientId: String = ""
     ): RemoteStatus =
       RemoteStatus(
         negotiatedCapability,
@@ -1075,7 +1087,8 @@ object NetworkPeerManagerActor {
         status.genesisHash,
         supportsSnap,
         capabilities,
-        latestBlock = Some(status.latestBlock)
+        latestBlock = Some(status.latestBlock),
+        remoteClientId = remoteClientId
       )
   }
 

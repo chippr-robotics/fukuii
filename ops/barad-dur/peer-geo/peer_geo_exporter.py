@@ -1,153 +1,261 @@
 #!/usr/bin/env python3
-"""Peer geo exporter for the barad-dur Grafana node-map.
+"""Fukuii peer-geo exporter — geolocates connected peers from the node's own /metrics.
 
-Reads peer IPs the fukuii node logs during discovery/connection, geo-locates them
-(ip-api.com batch, free, cached on disk), and exposes a Prometheus /metrics endpoint:
+The fukuii node now publishes per-peer telemetry natively as `app_network_peer_info`
+(see PeerTelemetry.scala), so this exporter no longer scrapes docker logs. It:
 
-  fukuii_peer_location{ip,country,cc,city,latitude,longitude} 1   # one series per active peer
-  fukuii_peers_by_country{country,cc} N
-  fukuii_peer_total N
-  fukuii_peer_located N
+  1. Scrapes `app_network_peer_info{remote_address,client_name,direction,network_id,...}`
+     from one or more fukuii nodes' /metrics endpoints.
+  2. Geolocates each distinct peer IP (persistent cache first, ip-api.com batch for misses).
+  3. Re-exports `fukuii_peer_geo{ip,country,country_code,city,lat,lon,client,direction,network,job}=1`
+     for a Grafana Geomap + per-peer table.
 
-Runs on the HOST (so it can `docker logs fukuii-primary` without touching the node). Prometheus
-scrapes it at the docker-network gateway 172.21.0.1:9099. Entirely outside the node — safe to run
-during the recovery scan.
+Stdlib only (urllib + http.server) so the container needs no pip install. Robust by design:
+a scrape or geo-lookup failure never crashes the loop — it serves the last-known snapshot.
+
+Env:
+  NODE_TARGETS      comma list of `job=url`, e.g. "etc-mainnet=http://fukuii-primary:9095/metrics"
+                    (default: etc-mainnet=http://fukuii-primary:9095/metrics)
+  LISTEN_PORT       port to serve /metrics on (default 9099)
+  CACHE_FILE        persistent ip->geo cache (default /data/peer_geo_cache.json)
+  REFRESH_INTERVAL  seconds between refreshes (default 30)
 """
+
+import ipaddress
 import json
 import os
 import re
-import subprocess
 import threading
 import time
 import urllib.request
-from http.server import BaseHTTPRequestHandler, HTTPServer
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-PORT = 9099
-CONTAINER = "fukuii-primary"
-LOG_WINDOW = "15m"        # peers seen within this window are "active"
-ACTIVE_TTL = 1800         # drop a peer from the map this many seconds after last sighting
-POLL_INTERVAL = 60
-CACHE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "peer_geo_cache.json")
+NODE_TARGETS = os.environ.get(
+    "NODE_TARGETS", "etc-mainnet=http://fukuii-primary:9095/metrics"
+)
+LISTEN_PORT = int(os.environ.get("LISTEN_PORT", "9099"))
+CACHE_FILE = os.environ.get("CACHE_FILE", "/data/peer_geo_cache.json")
+REFRESH_INTERVAL = int(os.environ.get("REFRESH_INTERVAL", "30"))
 
-# PeerAddress(1.2.3.4) and peer=1.2.3.4:port
-IP_RE = re.compile(r"PeerAddress\((\d{1,3}(?:\.\d{1,3}){3})\)|peer=(\d{1,3}(?:\.\d{1,3}){3}):")
-_geo = {}            # ip -> {country, cc, city, lat, lon} or None (unlocatable)
-_active = {}         # ip -> last_seen epoch
-_lock = threading.Lock()
+# app_network_peer_info{label="val",...} 1
+_INFO_LINE = re.compile(r'^app_network_peer_info\{(?P<labels>.*)\}\s+[\d.eE+-]+\s*$')
+_LABEL = re.compile(r'(\w+)="((?:[^"\\]|\\.)*)"')
 
 
-def _private(ip):
-    return ip.startswith(("10.", "127.", "192.168.", "169.254.", "0.")) or \
-        ip.startswith("172.") and 16 <= int(ip.split(".")[1]) <= 31
+def parse_targets(spec):
+    targets = []
+    for chunk in spec.split(","):
+        chunk = chunk.strip()
+        if not chunk:
+            continue
+        if "=" in chunk:
+            job, url = chunk.split("=", 1)
+        else:
+            job, url = "fukuii", chunk
+        targets.append((job.strip(), url.strip()))
+    return targets
 
 
 def load_cache():
-    global _geo
     try:
-        _geo = json.load(open(CACHE))
-    except Exception:
-        _geo = {}
+        with open(CACHE_FILE) as fh:
+            return json.load(fh)
+    except (OSError, ValueError):
+        return {}
 
 
-def save_cache():
+def save_cache(cache):
     try:
-        json.dump(_geo, open(CACHE, "w"))
-    except Exception:
-        pass
+        tmp = CACHE_FILE + ".tmp"
+        with open(tmp, "w") as fh:
+            json.dump(cache, fh)
+        os.replace(tmp, CACHE_FILE)
+    except OSError as exc:
+        print(f"[peer-geo] cache save failed: {exc}", flush=True)
 
 
-def geolocate(ips):
-    todo = [ip for ip in ips if ip not in _geo]
-    for i in range(0, len(todo), 100):
-        batch = todo[i:i + 100]
+def parse_labels(label_str):
+    return {m.group(1): m.group(2).replace('\\"', '"') for m in _LABEL.finditer(label_str)}
+
+
+def ip_from_remote_address(remote_address):
+    # "ip:port"; rsplit so IPv4 is clean and IPv6 keeps its colons.
+    if not remote_address:
+        return None
+    host = remote_address.rsplit(":", 1)[0].strip("[]")
+    try:
+        ipaddress.ip_address(host)
+        return host
+    except ValueError:
+        return None
+
+
+def is_public(ip):
+    try:
+        return ipaddress.ip_address(ip).is_global
+    except ValueError:
+        return False
+
+
+def scrape_node(url):
+    """Return list of label dicts for each app_network_peer_info series, or [] on failure."""
+    try:
+        with urllib.request.urlopen(url, timeout=10) as resp:
+            body = resp.read().decode("utf-8", "replace")
+    except Exception as exc:  # noqa: BLE001 — never let a scrape error kill the loop
+        print(f"[peer-geo] scrape {url} failed: {exc}", flush=True)
+        return []
+    out = []
+    for line in body.splitlines():
+        m = _INFO_LINE.match(line)
+        if m:
+            out.append(parse_labels(m.group("labels")))
+    return out
+
+
+def geolocate_batch(ips, cache):
+    """Fill `cache` for any uncached public IPs via ip-api.com batch (<=100/request)."""
+    missing = [ip for ip in ips if ip not in cache and is_public(ip)]
+    if not missing:
+        return
+    for i in range(0, len(missing), 100):
+        batch = missing[i : i + 100]
+        payload = json.dumps(
+            [{"query": ip, "fields": "status,country,countryCode,city,lat,lon,query"} for ip in batch]
+        ).encode()
         try:
             req = urllib.request.Request(
-                "http://ip-api.com/batch?fields=query,status,country,countryCode,city,lat,lon",
-                data=json.dumps([{"query": ip} for ip in batch]).encode(),
-                headers={"Content-Type": "application/json"},
+                "http://ip-api.com/batch", data=payload, headers={"Content-Type": "application/json"}
             )
-            for r in json.load(urllib.request.urlopen(req, timeout=20)):
-                if r.get("status") == "success":
-                    _geo[r["query"]] = {"country": r.get("country", ""), "cc": r.get("countryCode", ""),
-                                        "city": r.get("city", ""), "lat": r.get("lat"), "lon": r.get("lon")}
-                else:
-                    _geo[r["query"]] = None
-            time.sleep(4)  # ip-api batch limit ~15/min
-        except Exception as e:
-            print("geo error:", e, flush=True)
-            break
-    save_cache()
+            with urllib.request.urlopen(req, timeout=20) as resp:
+                results = json.load(resp)
+        except Exception as exc:  # noqa: BLE001
+            print(f"[peer-geo] geo batch failed: {exc}", flush=True)
+            return
+        for r in results:
+            if r.get("status") == "success":
+                cache[r["query"]] = {
+                    "country": r.get("country", ""),
+                    "cc": r.get("countryCode", ""),
+                    "city": r.get("city", ""),
+                    "lat": r.get("lat", 0.0),
+                    "lon": r.get("lon", 0.0),
+                }
+        # ip-api free tier: 15 req/min. One batch covers 100 IPs; pace if we loop again.
+        if i + 100 < len(missing):
+            time.sleep(4)
 
 
-def poller():
+def esc(v):
+    return str(v).replace("\\", "\\\\").replace('"', '\\"').replace("\n", " ")
+
+
+def build_metrics(snapshots, cache):
+    """snapshots: list of (job, [label dicts]). Returns Prometheus text exposition."""
+    lines = [
+        "# HELP fukuii_peer_geo Geolocated peer this node is connected to (value always 1).",
+        "# TYPE fukuii_peer_geo gauge",
+    ]
+    seen = set()
+    counts = {}
+    for job, series in snapshots:
+        counts[job] = 0
+        for labels in series:
+            ip = ip_from_remote_address(labels.get("remote_address", ""))
+            if not ip:
+                continue
+            counts[job] += 1
+            geo = cache.get(ip, {})
+            # one series per (job, peer) so reconnects on a new port don't collide
+            key = (job, labels.get("peer", ip))
+            if key in seen:
+                continue
+            seen.add(key)
+            tags = {
+                "node": job,
+                "ip": ip,
+                "peer": labels.get("peer", ""),
+                "client": labels.get("client_name", "unknown"),
+                "direction": labels.get("direction", ""),
+                "capability": labels.get("capability", ""),
+                "network": labels.get("network_id", ""),
+                "snap": labels.get("snap", ""),
+                "country": geo.get("country", "Unknown"),
+                "country_code": geo.get("cc", ""),
+                "city": geo.get("city", ""),
+                "lat": geo.get("lat", 0.0),
+                "lon": geo.get("lon", 0.0),
+            }
+            label_str = ",".join(f'{k}="{esc(v)}"' for k, v in tags.items())
+            lines.append(f"fukuii_peer_geo{{{label_str}}} 1")
+    lines.append("# HELP fukuii_peer_geo_count Connected peers seen per scraped node.")
+    lines.append("# TYPE fukuii_peer_geo_count gauge")
+    for job, n in counts.items():
+        lines.append(f'fukuii_peer_geo_count{{node="{esc(job)}"}} {n}')
+    lines.append("# HELP fukuii_peer_geo_cache_size Geolocations cached.")
+    lines.append("# TYPE fukuii_peer_geo_cache_size gauge")
+    lines.append(f"fukuii_peer_geo_cache_size {len(cache)}")
+    return "\n".join(lines) + "\n"
+
+
+class State:
+    def __init__(self):
+        self.lock = threading.Lock()
+        self.metrics = "# peer-geo exporter starting\n"
+
+
+STATE = State()
+
+
+def refresh_loop(targets):
+    cache = load_cache()
     while True:
         try:
-            p = subprocess.run(["docker", "logs", CONTAINER, "--since", LOG_WINDOW],
-                               capture_output=True, text=True, timeout=45)
-            ips = set()
-            for m in IP_RE.finditer((p.stdout or "") + (p.stderr or "")):
-                ip = m.group(1) or m.group(2)
-                if ip and not _private(ip):
-                    ips.add(ip)
-            geolocate(list(ips))
-            now = time.time()
-            with _lock:
-                for ip in ips:
-                    _active[ip] = now
-                for ip in [k for k, v in _active.items() if now - v > ACTIVE_TTL]:
-                    del _active[ip]
-            print(f"poll: {len(ips)} active peers, {sum(1 for ip in ips if _geo.get(ip))} located", flush=True)
-        except Exception as e:
-            print("poll error:", e, flush=True)
-        time.sleep(POLL_INTERVAL)
-
-
-def render():
-    with _lock:
-        ips = list(_active)
-    out = ["# HELP fukuii_peer_location Active peer with geo (value always 1).",
-           "# TYPE fukuii_peer_location gauge"]
-    by_cc, located = {}, 0
-
-    def esc(s):
-        return str(s).replace("\\", "\\\\").replace('"', '\\"')
-    for ip in ips:
-        g = _geo.get(ip)
-        if not g:
-            continue
-        located += 1
-        out.append(
-            f'fukuii_peer_location{{ip="{ip}",country="{esc(g["country"])}",cc="{g["cc"]}",'
-            f'city="{esc(g["city"])}",latitude="{g["lat"]}",longitude="{g["lon"]}"}} 1')
-        key = (g["country"], g["cc"])
-        by_cc[key] = by_cc.get(key, 0) + 1
-    out += ["# HELP fukuii_peers_by_country Active peer count per country.",
-            "# TYPE fukuii_peers_by_country gauge"]
-    for (country, cc), n in sorted(by_cc.items(), key=lambda x: -x[1]):
-        out.append(f'fukuii_peers_by_country{{country="{esc(country)}",cc="{cc}"}} {n}')
-    out += [f"fukuii_peer_total {len(ips)}", f"fukuii_peer_located {located}"]
-    return ("\n".join(out) + "\n").encode()
+            snapshots = [(job, scrape_node(url)) for job, url in targets]
+            all_ips = {
+                ip
+                for _, series in snapshots
+                for ip in (ip_from_remote_address(s.get("remote_address", "")) for s in series)
+                if ip
+            }
+            before = len(cache)
+            geolocate_batch(sorted(all_ips), cache)
+            if len(cache) != before:
+                save_cache(cache)
+            text = build_metrics(snapshots, cache)
+            with STATE.lock:
+                STATE.metrics = text
+            total = sum(len(s) for _, s in snapshots)
+            print(f"[peer-geo] refreshed: {total} peers, {len(cache)} cached geos", flush=True)
+        except Exception as exc:  # noqa: BLE001
+            print(f"[peer-geo] refresh error: {exc}", flush=True)
+        time.sleep(REFRESH_INTERVAL)
 
 
 class Handler(BaseHTTPRequestHandler):
-    def do_GET(self):
-        if self.path == "/metrics":
-            body = render()
-            self.send_response(200)
-            self.send_header("Content-Type", "text/plain; version=0.0.4")
-            self.send_header("Content-Length", str(len(body)))
-            self.end_headers()
-            self.wfile.write(body)
-        else:
+    def do_GET(self):  # noqa: N802
+        if self.path not in ("/metrics", "/"):
             self.send_response(404)
             self.end_headers()
+            return
+        with STATE.lock:
+            body = STATE.metrics.encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "text/plain; version=0.0.4")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
 
-    def log_message(self, *a):
+    def log_message(self, *_args):  # silence per-request logging
         pass
 
 
+def main():
+    targets = parse_targets(NODE_TARGETS)
+    print(f"[peer-geo] targets={targets} port={LISTEN_PORT} cache={CACHE_FILE}", flush=True)
+    threading.Thread(target=refresh_loop, args=(targets,), daemon=True).start()
+    ThreadingHTTPServer(("0.0.0.0", LISTEN_PORT), Handler).serve_forever()
+
+
 if __name__ == "__main__":
-    load_cache()
-    threading.Thread(target=poller, daemon=True).start()
-    print(f"peer_geo_exporter on :{PORT} (cache: {CACHE})", flush=True)
-    HTTPServer(("0.0.0.0", PORT), Handler).serve_forever()
+    main()
