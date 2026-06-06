@@ -8,6 +8,7 @@ import org.bouncycastle.util.encoders.Hex
 import scala.collection.mutable
 import scala.concurrent.ExecutionContext
 import scala.concurrent.duration._
+import scala.jdk.CollectionConverters._
 
 import com.chipprbots.ethereum.blockchain.sync.snap._
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController
@@ -122,6 +123,25 @@ class TrieNodeHealingCoordinator(
   // Crash-recovery DFS: emit frontier in batches so healing starts before traversal completes.
   // go-ethereum trie.Sync.Missing() alignment — bounded working set rather than full upfront BFS.
   private val FrontierBatchSize = 1000
+
+  // Cap on the frontier-rebuild DFS `visited` set. The DFS walks the full state trie (accounts +
+  // every storage trie — tens of millions of nodes on ETC mainnet); an unbounded visited set grew
+  // to ~2.9 GB and OOM-looped the node. A fixed-capacity LRU (insertion-order eviction) bounds it
+  // to ~cap × 80 B ≈ 320 MB. Completeness is preserved: any missing node re-discovered after an
+  // eviction is de-duplicated by `pendingHashSet`, and an evicted present node is only re-walked
+  // if reached again via a shared reference. See docs/design/healing-frontier-scale.md.
+  private val HealingVisitedCap: Int = 4_000_000
+
+  /** Heap-bounded `visited` set for the frontier-rebuild DFS: a LinkedHashMap-backed LRU that evicts the
+    * earliest-inserted (already-completed) subtries once it exceeds [[HealingVisitedCap]].
+    */
+  private def newBoundedVisitedSet(): mutable.Set[ByteString] = {
+    val lru = new java.util.LinkedHashMap[ByteString, java.lang.Boolean](1024, 0.75f, false) {
+      override def removeEldestEntry(eldest: java.util.Map.Entry[ByteString, java.lang.Boolean]): Boolean =
+        size() > HealingVisitedCap
+    }
+    java.util.Collections.newSetFromMap[ByteString](lru).asScala
+  }
 
   // Track last known available peers for re-dispatch after failures
   private val knownAvailablePeers = mutable.Set[Peer]()
@@ -267,7 +287,7 @@ class TrieNodeHealingCoordinator(
         import scala.concurrent.Future
         Future {
           val frontier = mutable.Buffer.empty[HealingEntry]
-          val visited = mutable.Set.empty[ByteString]
+          val visited = newBoundedVisitedSet()
           rebuildFrontierDFS(
             root,
             Seq(emptyPath),
