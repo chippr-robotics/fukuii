@@ -71,6 +71,7 @@ class HealingFrontierResumeSpec
   private def withResumeFixture(
       persistence: Boolean,
       prePopulate: Seq[(ByteString, Seq[ByteString])] = Nil,
+      markComplete: Boolean = false,
       rootInStorage: Boolean = true
   )(body: (ActorRef, ByteString, HealingFrontierStorage) => Unit): Unit = {
     val pool = Executors.newSingleThreadExecutor()
@@ -92,6 +93,7 @@ class HealingFrontierResumeSpec
     )
     val store = new HealingFrontierStorage(dataSource)
     if (prePopulate.nonEmpty) store.update(Nil, prePopulate).commit()
+    if (markComplete) store.markComplete() // simulate a prior rebuild DFS that ran to completion
 
     val storage = new TestMptStorage()
     val root = if (rootInStorage) storedRoot(storage) else kec256(ByteString("write-on-queue-root"))
@@ -128,14 +130,25 @@ class HealingFrontierResumeSpec
   }
 
   "TrieNodeHealingCoordinator (Layer 2)" should
-    "resume from a non-empty persisted frontier and skip the full-state DFS" taggedAs UnitTest in {
+    "resume from a COMPLETE persisted frontier and skip the full-state DFS" taggedAs UnitTest in {
       val entries = (0 until 7).map(i => hash(i) -> pathset(i))
-      withResumeFixture(persistence = true, prePopulate = entries) { (coordinator, root, _) =>
+      withResumeFixture(persistence = true, prePopulate = entries, markComplete = true) { (coordinator, root, _) =>
         coordinator ! Messages.StartTrieNodeHealing(root)
         // Resume loads the 7 persisted entries (a childless-leaf-root DFS would have found 0).
         awaitAssert(pendingTasks(coordinator) shouldBe entries.size, 3.seconds, 100.millis)
       }
     }
+
+  it should "NOT resume a partial frontier with no completeness marker — re-runs the full-state DFS" taggedAs UnitTest in {
+    // A frontier persisted by an interrupted rebuild has entries but no marker. Resuming it would skip the
+    // un-walked region and leave gaps; the coordinator must fall back to the full DFS instead.
+    val partial = (0 until 5).map(i => hash(i) -> pathset(i))
+    withResumeFixture(persistence = true, prePopulate = partial, markComplete = false) { (coordinator, root, _) =>
+      coordinator ! Messages.StartTrieNodeHealing(root)
+      // No resume of the 5 partial entries; the childless-leaf-root DFS finds nothing → pendingTasks stays 0.
+      awaitAssert(pendingTasks(coordinator) shouldBe 0, 2.seconds, 100.millis)
+    }
+  }
 
   it should "fall back to the full-state DFS when persistence is disabled (Layer-1 parity)" taggedAs UnitTest in {
     // Store HAS entries, but the coordinator is wired with None — they must be ignored.

@@ -174,7 +174,15 @@ class TrieNodeHealingCoordinator(
       val outstanding =
         pendingTasks.iterator.map(_.hash).toSeq ++ activeRequests.values.iterator.flatMap(_.tasks.iterator.map(_.hash))
       if (outstanding.nonEmpty) store.update(outstanding, Nil).commit()
+      // The snapshot is no longer valid/complete — drop the marker so a restart re-walks rather than resuming stale.
+      store.clearComplete()
     }
+
+  /** Publish the live healing backlog/in-flight gauges for the Grafana healing-analytics section. */
+  private def emitHealingFrontierGauges(): Unit = {
+    SNAPSyncMetrics.setHealingFrontierPending(pendingTasks.size.toLong)
+    SNAPSyncMetrics.setHealingActiveRequests(activeRequests.size.toLong)
+  }
 
   // Track last known available peers for re-dispatch after failures
   private val knownAvailablePeers = mutable.Set[Peer]()
@@ -259,6 +267,10 @@ class TrieNodeHealingCoordinator(
   // Internal message for async frontier rebuild completion (crash-recovery BFS)
   private case class FrontierRebuilt(entries: Seq[HealingEntry])
 
+  // Layer 2: the full-state rebuild DFS finished — the persisted frontier is now a COMPLETE snapshot.
+  // Sent after the final FrontierRebuilt so the completeness marker is set only once every node is persisted.
+  private case object FrontierRebuildComplete
+
   /** Synchronous flush — used only for final completion flush (small buffer, safe to block). */
   private def flushRawNodesSync(): Unit =
     if (rawNodeBuffer.nonEmpty) {
@@ -329,11 +341,21 @@ class TrieNodeHealingCoordinator(
           val resumed: Option[Seq[HealingEntry]] = frontierStore.flatMap { store =>
             try {
               val loaded = store.loadAll().map { case (h, ps) => HealingEntry(pathset = ps, hash = h) }
-              if (loaded.nonEmpty) {
+              if (loaded.nonEmpty && store.isComplete) {
+                // COMPLETE snapshot (the prior rebuild DFS finished) — safe to skip the full-state walk.
                 log.info(
-                  s"[HEAL-RESTART] Resumed ${loaded.size} frontier entries from persisted store — skipping full-state DFS"
+                  s"[HEAL-RESTART] Resumed ${loaded.size} frontier entries from a complete persisted snapshot — skipping full-state DFS"
                 )
                 Some(loaded)
+              } else if (loaded.nonEmpty) {
+                // PARTIAL frontier: the prior rebuild DFS was interrupted before completion, so the un-walked
+                // region's missing nodes are not yet recorded. Skipping the DFS would silently leave gaps —
+                // re-run the full walk (it re-persists idempotently and sets the marker on completion).
+                log.warning(
+                  s"[HEAL-RESTART] Persisted frontier has ${loaded.size} entries but no completeness marker " +
+                    s"(prior rebuild interrupted) — re-running full-state DFS to avoid skipping un-walked nodes"
+                )
+                None
               } else {
                 log.info("[HEAL-RESTART] Persisted frontier empty — falling back to full-state DFS")
                 None
@@ -359,6 +381,9 @@ class TrieNodeHealingCoordinator(
                 batch => selfRef ! FrontierRebuilt(batch)
               )
               if (frontier.nonEmpty) selfRef ! FrontierRebuilt(frontier.toSeq)
+              // Mark the persisted frontier authoritative ONLY now that the full walk has completed. Sent after the
+              // final FrontierRebuilt so the marker is set after every discovered node has been queued + persisted.
+              selfRef ! FrontierRebuildComplete
           }
         }(ec)
       } else {
@@ -383,6 +408,14 @@ class TrieNodeHealingCoordinator(
       queueNodes(entries.map(e => (e.pathset, e.hash)))
       lastHealedAtMs = System.currentTimeMillis()
       tryRedispatchPendingTasks()
+
+    case FrontierRebuildComplete =>
+      // The full-state rebuild DFS walked the entire trie; every still-missing node is now persisted.
+      // Mark the snapshot complete so a future restart may resume it instead of re-walking (Layer 2).
+      healingFrontierStorage.foreach { store =>
+        store.markComplete()
+        log.info("[HEAL-RESTART] Full-state rebuild complete — persisted frontier marked as a complete snapshot")
+      }
 
     case QueueMissingNodes(nodes) =>
       log.info(s"Queuing ${nodes.size} missing nodes for healing")
@@ -520,6 +553,7 @@ class TrieNodeHealingCoordinator(
       trieWalkInProgress = inProgress
 
     case HealingStagnationCheck =>
+      emitHealingFrontierGauges() // refresh backlog/in-flight gauges even when idle
       val recentHealed = totalNodesHealed - lastPulseHealedCount
       val healTotal = completedTaskCount.toLong + pendingTasks.size.toLong + activeRequests.size.toLong
       val healPct = if (healTotal > 0) ((completedTaskCount.toDouble / healTotal) * 100).toInt else 0
@@ -642,6 +676,7 @@ class TrieNodeHealingCoordinator(
     persistFrontier(entries) // Layer 2: mirror new frontier entries to the persisted CF
     val dedupStr = if (deduped > 0) s" ($deduped duplicates filtered)" else ""
     log.info(s"Queued ${entries.size} nodes for healing$dedupStr. Total pending: ${pendingTasks.size}")
+    emitHealingFrontierGauges()
   }
 
   /** Update healing rate EMA and adjust throttle (geth p2p/msgrate alignment).
@@ -687,6 +722,7 @@ class TrieNodeHealingCoordinator(
       }
       lastThrottleAdjustMs = now
     }
+    emitHealingFrontierGauges()
   }
 
   /** Calculate effective batch size after applying throttle divisor. Returns at least 1 node per request.
@@ -986,11 +1022,13 @@ class TrieNodeHealingCoordinator(
       if (!visited.contains(hash)) {
         visited += hash
         visitedCount += 1
-        if (visitedCount % 10000 == 0)
+        if (visitedCount % 10000 == 0) {
           log.info(
             s"[HEAL-RESTART-DFS] Progress: $visitedCount nodes visited, $frontierCount frontier nodes found, " +
               s"stack depth ${stack.size}"
           )
+          SNAPSyncMetrics.setHealingRebuildVisited(visitedCount.toLong) // dashboard: frontier-rebuild activity
+        }
 
         val nodeOpt =
           try Some(mptStorage.get(hash.toArray))

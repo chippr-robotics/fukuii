@@ -34,9 +34,9 @@ class HealingFrontierStorage(val dataSource: DataSource)
   def valueSerializer: Seq[ByteString] => IndexedSeq[Byte] = ps => ArraySeq.unsafeWrapArray(rlp.encode(ps))
   def valueDeserializer: IndexedSeq[Byte] => Seq[ByteString] = bytes => rlp.decode[Seq[ByteString]](bytes.toArray)
 
-  /** Drain the entire persisted frontier (hash -> pathset). Called once on `[HEAL-RESTART]` to resume healing without
-    * the full-state DFS. Throws if iteration errors or a stored value fails to RLP-decode — the caller treats any
-    * failure as a corrupt frontier and falls back to the provably-complete full-state walk.
+  /** Drain the entire persisted frontier (hash -> pathset), excluding the completeness sentinel. Called once on
+    * `[HEAL-RESTART]` to resume healing without the full-state DFS. Throws if iteration errors or a stored value fails
+    * to RLP-decode — the caller treats any failure as a corrupt frontier and falls back to the provably-complete walk.
     */
   def loadAll(): Seq[(ByteString, Seq[ByteString])] =
     storageContent.compile.toList
@@ -45,4 +45,26 @@ class HealingFrontierStorage(val dataSource: DataSource)
         case Right(entry) => entry
         case Left(err)    => throw new RuntimeException(s"HealingFrontierStorage iteration error: $err")
       }
+      .filterNot { case (k, _) => k == HealingFrontierStorage.CompleteMarkerKey }
+
+  /** Mark the persisted frontier as a COMPLETE snapshot — set only when the frontier-rebuild DFS has walked the entire
+    * state. Resume is gated on this: a *partial* frontier (DFS interrupted before completion) must NOT short-circuit
+    * the walk, or missing nodes in the un-walked region would be silently skipped. See
+    * docs/design/healing-frontier-scale.md.
+    */
+  def markComplete(): Unit = put(HealingFrontierStorage.CompleteMarkerKey, Seq(ByteString(Array[Byte](1)))).commit()
+
+  /** Clear the completeness sentinel (the persisted frontier is no longer a trustworthy complete snapshot). */
+  def clearComplete(): Unit = remove(HealingFrontierStorage.CompleteMarkerKey).commit()
+
+  /** True iff a complete-snapshot marker is present. */
+  def isComplete: Boolean = get(HealingFrontierStorage.CompleteMarkerKey).isDefined
+}
+
+object HealingFrontierStorage {
+
+  /** Reserved sentinel key for the completeness marker. 21 bytes — deliberately NOT 32, so it can never collide with a
+    * keccak-256 node hash, and `loadAll` filters it out of the frontier.
+    */
+  val CompleteMarkerKey: ByteString = ByteString("__frontier_complete__")
 }

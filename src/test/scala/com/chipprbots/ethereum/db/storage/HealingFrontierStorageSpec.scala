@@ -96,6 +96,18 @@ class HealingFrontierStorageSpec extends AnyFlatSpec with Matchers {
     storage.loadAll() shouldBe empty
   }
 
+  it should "track the completeness marker and exclude it from loadAll" taggedAs UnitTest in withStorage { storage =>
+    storage.isComplete shouldBe false
+    storage.update(Nil, (0 until 3).map(i => hash(i) -> pathset(1))).commit()
+    storage.markComplete()
+    storage.isComplete shouldBe true
+    // The sentinel must not surface as a frontier entry.
+    val loaded = storage.loadAll()
+    loaded.map(_._1).toSet shouldBe (0 until 3).map(hash).toSet
+    storage.clearComplete()
+    storage.isComplete shouldBe false
+  }
+
   it should "apply batched upserts and removes atomically" taggedAs UnitTest in withStorage { storage =>
     storage.update(Nil, Seq(hash(1) -> pathset(1), hash(2) -> pathset(1), hash(3) -> pathset(1))).commit()
     // Remove one, add one, in a single batch.

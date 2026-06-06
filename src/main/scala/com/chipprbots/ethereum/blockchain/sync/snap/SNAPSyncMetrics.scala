@@ -165,6 +165,20 @@ object SNAPSyncMetrics extends MetricsContainer {
   final private val MissingNodesDetectedGauge =
     metrics.registry.gauge("snapsync.validation.missing.nodes.gauge", new AtomicLong(0L))
 
+  /** Current healing frontier backlog — missing nodes queued and awaiting fetch (pendingTasks). */
+  final private val HealingFrontierPendingGauge =
+    metrics.registry.gauge("snapsync.healing.frontier.pending.gauge", new AtomicLong(0L))
+
+  /** In-flight GetTrieNodes healing requests. */
+  final private val HealingActiveRequestsGauge =
+    metrics.registry.gauge("snapsync.healing.active.requests.gauge", new AtomicLong(0L))
+
+  /** Nodes visited so far by the post-SNAP frontier-rebuild DFS (`[HEAL-RESTART-DFS]`). Climbs during the one-time
+    * full-state walk on restart; flat/zero once healing is steady-state or resumed from a persisted frontier.
+    */
+  final private val HealingRebuildVisitedGauge =
+    metrics.registry.gauge("snapsync.healing.rebuild.visited.gauge", new AtomicLong(0L))
+
   // ===== Peer Performance Metrics =====
 
   /** Number of SNAP-capable peers currently connected */
@@ -329,6 +343,9 @@ object SNAPSyncMetrics extends MetricsContainer {
 
   def incrementHealingRequests(): Unit = HealingRequestsCounter.increment()
   def incrementHealingFailures(): Unit = HealingFailuresCounter.increment()
+  def setHealingFrontierPending(count: Long): Unit = HealingFrontierPendingGauge.set(count)
+  def setHealingActiveRequests(count: Long): Unit = HealingActiveRequestsGauge.set(count)
+  def setHealingRebuildVisited(count: Long): Unit = HealingRebuildVisitedGauge.set(count)
 
   // ===== Peer and Network Metrics =====
 
