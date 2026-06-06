@@ -72,9 +72,10 @@ class OlympiaBaseFeeSpec
         val firstOlympiaBlock =
           header(olympiaBlock, gasLimit = BigInt(16_000_000), gasUsed = 0, HefPostOlympia(InitialBaseFee))
         val result = BaseFeeCalculator.calcBaseFee(firstOlympiaBlock, config)
-        // gasTarget = 16M / 2 = 8M; gasUsed = 0 < 8M → decrease
-        // delta = 1_000_000_000 * 8_000_000 / 8_000_000 / 8 = 125_000_000
-        result shouldBe InitialBaseFee - BigInt(125_000_000)
+        // gasTarget = 16M / 2 = 8M; gasUsed = 0 < 8M → would decrease by
+        // 1_000_000_000 * 8_000_000 / 8_000_000 / 8 = 125_000_000, but the ECIP-1111 floor
+        // clamps the result back up to InitialBaseFee (1 gwei) — matching this test's name.
+        result shouldBe InitialBaseFee
       }
     }
 
@@ -102,7 +103,9 @@ class OlympiaBaseFeeSpec
     "parent gasUsed is below gas target" should {
       "decrease baseFee" taggedAs (UnitTest, OlympiaTest) in {
         val gasLimit = BigInt(30_000_000)
-        val baseFee = BigInt(1_000_000_000)
+        // 2 gwei — above the 1-gwei ECIP-1111 floor — so the 1/8 decrease to 1.75 gwei is
+        // observable rather than being clamped back up to the floor.
+        val baseFee = BigInt(2_000_000_000)
         val emptyParent = header(olympiaBlock, gasLimit = gasLimit, gasUsed = 0, HefPostOlympia(baseFee))
         val next = BaseFeeCalculator.calcBaseFee(emptyParent, config)
         next should be < baseFee

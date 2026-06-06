@@ -95,7 +95,7 @@ abstract class BlockGeneratorSkeleton(
       parent.header,
       blockchainConfig
     )
-    val transactionsForBlock = prepareTransactions(transactions, header.gasLimit, nextBlockBaseFee)
+    val transactionsForBlock = prepareTransactions(transactions, header.gasLimit, nextBlockBaseFee, blockNumber)
     val body = newBlockBody(transactionsForBlock, x)
     val block = Block(header, body)
 
@@ -127,15 +127,24 @@ abstract class BlockGeneratorSkeleton(
   protected def prepareTransactions(
       transactions: Seq[SignedTransaction],
       blockGasLimit: BigInt,
-      blockBaseFee: BigInt = BigInt(0)
+      blockBaseFee: BigInt = BigInt(0),
+      blockNumber: BigInt = BigInt(0)
   )(implicit blockchainConfig: BlockchainConfig): Seq[SignedTransaction] = {
 
-    // ECIP-1122: filter out txs with effectiveTip < minTip before sorting.
-    val eligibleTransactions = transactions.filter { tx =>
-      val effectiveTip =
-        com.chipprbots.ethereum.domain.Transaction.effectiveGasPrice(tx.tx, Some(blockBaseFee)) - blockBaseFee
-      effectiveTip >= blockchainConfig.minTip
-    }
+    // ECIP-1122: filter out txs with effectiveTip < minTip before sorting — but only from
+    // Olympia. Pre-Olympia ETC has no base fee; legacy txs are priced by gasPrice alone, and
+    // calcBaseFee returns the 1 gwei floor even before Olympia, so an un-gated filter would
+    // (a) drop legitimate sub-(floor+minTip) legacy txs and (b) in block production, desync the
+    // tx list from a pre-sealed header (→ HeaderPoWError). Gate on the Olympia activation block.
+    val isOlympia = blockNumber >= blockchainConfig.forkBlockNumbers.olympiaBlockNumber
+    val eligibleTransactions =
+      if (!isOlympia) transactions
+      else
+        transactions.filter { tx =>
+          val effectiveTip =
+            com.chipprbots.ethereum.domain.Transaction.effectiveGasPrice(tx.tx, Some(blockBaseFee)) - blockBaseFee
+          effectiveTip >= blockchainConfig.minTip
+        }
 
     val sortedTransactions: Seq[SignedTransaction] = eligibleTransactions
       // should be safe to call get as we do not insert improper transactions to pool.

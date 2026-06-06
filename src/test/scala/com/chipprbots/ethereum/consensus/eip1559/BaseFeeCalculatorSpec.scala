@@ -83,7 +83,9 @@ class BaseFeeCalculatorSpec
 
   it should "decrease baseFee when parent gasUsed is below target" taggedAs (OlympiaTest, ConsensusTest) in {
     val gasLimit = BigInt(8000000)
-    val parentBaseFee = BigInt(1000000000)
+    // Start at 2 gwei (above the ECIP-1111 1-gwei floor `config` sets) so the 1/8 decrease to
+    // 1.75 gwei is actually observable rather than being clamped to the floor.
+    val parentBaseFee = BigInt(2000000000)
 
     val parent = makeHeader(
       number = olympiaBlock,
