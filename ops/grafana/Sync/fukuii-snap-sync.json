@@ -856,8 +856,112 @@
           "showLegend": true
         }
       }
+    },
+    {
+      "type": "row",
+      "title": "State Healing — frontier rebuild + heal (PR #1319)",
+      "id": 110,
+      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 64},
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "type": "stat",
+      "title": "Nodes Healed",
+      "id": 311,
+      "gridPos": {"h": 4, "w": 6, "x": 0, "y": 65},
+      "description": "Total trie nodes fetched + stored during the post-SNAP healing phase.",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"expr": "app_snapsync_healing_nodes_healed_gauge{instance=~\"$instance\"}", "refId": "A", "legendFormat": "{{instance}}"}],
+      "fieldConfig": {"defaults": {"unit": "short", "color": {"mode": "fixed", "fixedColor": "green"}}},
+      "options": {"colorMode": "value", "graphMode": "area", "textMode": "value_and_name", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}}
+    },
+    {
+      "type": "stat",
+      "title": "Frontier Backlog (pending)",
+      "id": 312,
+      "gridPos": {"h": 4, "w": 6, "x": 6, "y": 65},
+      "description": "Missing nodes queued and awaiting fetch (pendingTasks). Drains to 0 as healing completes.",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"expr": "app_snapsync_healing_frontier_pending_gauge{instance=~\"$instance\"}", "refId": "A", "legendFormat": "{{instance}}"}],
+      "fieldConfig": {"defaults": {"unit": "short", "color": {"mode": "thresholds"}, "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "yellow", "value": 1000}, {"color": "orange", "value": 50000}]}}},
+      "options": {"colorMode": "background", "graphMode": "area", "textMode": "value_and_name", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}}
+    },
+    {
+      "type": "stat",
+      "title": "Active Heal Requests",
+      "id": 313,
+      "gridPos": {"h": 4, "w": 6, "x": 12, "y": 65},
+      "description": "In-flight GetTrieNodes requests to peers.",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"expr": "app_snapsync_healing_active_requests_gauge{instance=~\"$instance\"}", "refId": "A", "legendFormat": "{{instance}}"}],
+      "fieldConfig": {"defaults": {"unit": "short", "color": {"mode": "fixed", "fixedColor": "blue"}}},
+      "options": {"colorMode": "value", "graphMode": "area", "textMode": "value_and_name", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}}
+    },
+    {
+      "type": "stat",
+      "title": "Frontier-Rebuild DFS Visited",
+      "id": 314,
+      "gridPos": {"h": 4, "w": 6, "x": 18, "y": 65},
+      "description": "Nodes walked by the one-time [HEAL-RESTART-DFS] full-state rebuild on restart. Climbs only during the rebuild; flat/0 once healing is steady-state or resumed from a complete persisted frontier (Layer 2, PR #1319).",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"expr": "app_snapsync_healing_rebuild_visited_gauge{instance=~\"$instance\"}", "refId": "A", "legendFormat": "{{instance}}"}],
+      "fieldConfig": {"defaults": {"unit": "short", "color": {"mode": "fixed", "fixedColor": "purple"}}},
+      "options": {"colorMode": "value", "graphMode": "area", "textMode": "value_and_name", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}}
+    },
+    {
+      "type": "timeseries",
+      "title": "Healing Throughput (nodes/s)",
+      "id": 315,
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 69},
+      "description": "Overall and recent (last-60s) node-heal rate. Recent dropping toward 0 with a non-empty backlog signals a stall (peer-starved or stagnation).",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [
+        {"expr": "app_snapsync_healing_throughput_overall_gauge{instance=~\"$instance\"}", "refId": "A", "legendFormat": "{{instance}} overall"},
+        {"expr": "app_snapsync_healing_throughput_recent_gauge{instance=~\"$instance\"}", "refId": "B", "legendFormat": "{{instance}} recent"}
+      ],
+      "fieldConfig": {"defaults": {"unit": "ops", "custom": {"drawStyle": "line", "lineWidth": 2, "fillOpacity": 10}}},
+      "options": {"legend": {"displayMode": "list", "placement": "bottom", "showLegend": true}}
+    },
+    {
+      "type": "timeseries",
+      "title": "Frontier Backlog & In-flight",
+      "id": 316,
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 69},
+      "description": "Pending frontier (backlog) vs in-flight requests. Backlog trending down = healing converging.",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [
+        {"expr": "app_snapsync_healing_frontier_pending_gauge{instance=~\"$instance\"}", "refId": "A", "legendFormat": "{{instance}} pending"},
+        {"expr": "app_snapsync_healing_active_requests_gauge{instance=~\"$instance\"}", "refId": "B", "legendFormat": "{{instance}} in-flight"}
+      ],
+      "fieldConfig": {"defaults": {"unit": "short", "custom": {"drawStyle": "line", "lineWidth": 2, "fillOpacity": 10}}},
+      "options": {"legend": {"displayMode": "list", "placement": "bottom", "showLegend": true}}
+    },
+    {
+      "type": "timeseries",
+      "title": "Frontier-Rebuild DFS Progress (nodes visited)",
+      "id": 317,
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 77},
+      "description": "Progress of the one-time full-state rebuild walk. A monotonic climb that then flattens = walk completed; bounded memory (Layer 1) means it no longer OOM-loops. 0/flat = resumed from a complete persisted frontier (Layer 2).",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"expr": "app_snapsync_healing_rebuild_visited_gauge{instance=~\"$instance\"}", "refId": "A", "legendFormat": "{{instance}} visited"}],
+      "fieldConfig": {"defaults": {"unit": "short", "custom": {"drawStyle": "line", "lineWidth": 2, "fillOpacity": 10}}},
+      "options": {"legend": {"displayMode": "list", "placement": "bottom", "showLegend": true}}
+    },
+    {
+      "type": "timeseries",
+      "title": "Healing Request Rate (req/s)",
+      "id": 318,
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 77},
+      "description": "GetTrieNodes request and failure rates. A rising failure rate indicates peers without the requested state (stateless) — expect a pivot refresh.",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [
+        {"expr": "rate(app_snapsync_healing_requests_total{instance=~\"$instance\"}[5m])", "refId": "A", "legendFormat": "{{instance}} requests/s"},
+        {"expr": "rate(app_snapsync_healing_requests_failed_total{instance=~\"$instance\"}[5m])", "refId": "B", "legendFormat": "{{instance}} failures/s"}
+      ],
+      "fieldConfig": {"defaults": {"unit": "ops", "custom": {"drawStyle": "line", "lineWidth": 2, "fillOpacity": 5}}},
+      "options": {"legend": {"displayMode": "list", "placement": "bottom", "showLegend": true}}
     }
-
   ],
   "refresh": "10s",
   "schemaVersion": 38,
