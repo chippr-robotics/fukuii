@@ -12,6 +12,7 @@ import scala.jdk.CollectionConverters._
 
 import com.chipprbots.ethereum.blockchain.sync.snap._
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController
+import com.chipprbots.ethereum.db.storage.HealingFrontierStorage
 import com.chipprbots.ethereum.db.storage.MptStorage
 import com.chipprbots.ethereum.network.Peer
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor
@@ -34,6 +35,8 @@ class TrieNodeHealingCoordinator(
     batchSize: Int,
     snapSyncController: ActorRef,
     concurrency: Int,
+    visitedCap: Int = TrieNodeHealingCoordinator.DefaultVisitedCap,
+    healingFrontierStorage: Option[HealingFrontierStorage] = None,
     healingWriterEcOverride: Option[ExecutionContext] = None
 ) extends Actor
     with ActorLogging {
@@ -130,18 +133,48 @@ class TrieNodeHealingCoordinator(
   // to ~cap × 80 B ≈ 320 MB. Completeness is preserved: any missing node re-discovered after an
   // eviction is de-duplicated by `pendingHashSet`, and an evicted present node is only re-walked
   // if reached again via a shared reference. See docs/design/healing-frontier-scale.md.
-  private val HealingVisitedCap: Int = 4_000_000
+  // Operator-tunable via `sync.snap-sync.healing-visited-cap`; defaults to DefaultVisitedCap.
+  private val HealingVisitedCap: Int = visitedCap
 
-  /** Heap-bounded `visited` set for the frontier-rebuild DFS: a LinkedHashMap-backed LRU that evicts the
-    * earliest-inserted (already-completed) subtries once it exceeds [[HealingVisitedCap]].
+  /** Heap-bounded `visited` set for the frontier-rebuild DFS. Delegates to the companion factory so the eviction
+    * contract is unit-testable without standing up the actor (see FrontierRebuildSpec).
     */
-  private def newBoundedVisitedSet(): mutable.Set[ByteString] = {
-    val lru = new java.util.LinkedHashMap[ByteString, java.lang.Boolean](1024, 0.75f, false) {
-      override def removeEldestEntry(eldest: java.util.Map.Entry[ByteString, java.lang.Boolean]): Boolean =
-        size() > HealingVisitedCap
+  private def newBoundedVisitedSet(): mutable.Set[ByteString] =
+    TrieNodeHealingCoordinator.boundedVisitedSet(HealingVisitedCap)
+
+  // --- Layer 2: persisted frontier (sync.snap-sync.healing-frontier-persistence) ---
+  // When `healingFrontierStorage` is defined, the outstanding frontier is mirrored to a dedicated RocksDB
+  // CF so a restart resumes (O(frontier)) instead of re-walking the full state. Invariant: the persisted
+  // set equals `pendingTasks ∪ in-flight` — write on every new enqueue (queueNodes / inline child discovery
+  // / pivot reseed), delete on heal-flush (NOT on dispatch), clear on force-complete / pivot-refresh.
+  // See docs/design/healing-frontier-scale.md. No-ops when persistence is disabled (the common default).
+
+  /** Persist newly-queued frontier entries (hash -> pathset). Idempotent: re-persisting an existing entry overwrites it
+    * identically, so re-queues and resume-loads are harmless.
+    */
+  private def persistFrontier(entries: Seq[HealingEntry]): Unit =
+    healingFrontierStorage.foreach { store =>
+      if (entries.nonEmpty) store.update(Nil, entries.map(e => e.hash -> e.pathset)).commit()
     }
-    java.util.Collections.newSetFromMap[ByteString](lru).asScala
-  }
+
+  /** Delete healed nodes from the persisted frontier. Safe to call from the healing-writer thread (touches only the
+    * immutable storage handle + thread-safe RocksDB). Removing an absent key is a no-op.
+    */
+  private def unpersistFrontier(hashes: Seq[ByteString]): Unit =
+    healingFrontierStorage.foreach { store =>
+      if (hashes.nonEmpty) store.update(hashes, Nil).commit()
+    }
+
+  /** Clear the entire persisted frontier by deleting every outstanding hash. Because the persisted set equals
+    * `pendingTasks ∪ in-flight`, deleting those hashes empties the CF without a namespace-wipe primitive. MUST be
+    * called BEFORE the in-memory `pendingTasks`/`activeRequests` are cleared.
+    */
+  private def clearPersistedFrontier(): Unit =
+    healingFrontierStorage.foreach { store =>
+      val outstanding =
+        pendingTasks.iterator.map(_.hash).toSeq ++ activeRequests.values.iterator.flatMap(_.tasks.iterator.map(_.hash))
+      if (outstanding.nonEmpty) store.update(outstanding, Nil).commit()
+    }
 
   // Track last known available peers for re-dispatch after failures
   private val knownAvailablePeers = mutable.Set[Peer]()
@@ -229,9 +262,11 @@ class TrieNodeHealingCoordinator(
   /** Synchronous flush — used only for final completion flush (small buffer, safe to block). */
   private def flushRawNodesSync(): Unit =
     if (rawNodeBuffer.nonEmpty) {
-      mptStorage.storeRawNodes(rawNodeBuffer.toSeq)
+      val flushed = rawNodeBuffer.toSeq
+      mptStorage.storeRawNodes(flushed)
       mptStorage.persist()
-      val count = rawNodeBuffer.size
+      unpersistFrontier(flushed.map(_._1)) // Layer 2: healed nodes leave the persisted frontier
+      val count = flushed.size
       rawNodeBuffer.clear()
       log.info(s"Flushed $count healed nodes to disk (total: $totalNodesHealed)")
     }
@@ -251,6 +286,7 @@ class TrieNodeHealingCoordinator(
         blocking {
           mptStorage.storeRawNodes(nodes)
           mptStorage.persist()
+          unpersistFrontier(nodes.map(_._1)) // Layer 2: healed nodes leave the persisted frontier (post-durable-write)
           nodes.size
         }
       }(ec).foreach(n => selfRef ! FlushComplete(n))(ec)
@@ -284,19 +320,46 @@ class TrieNodeHealingCoordinator(
         )
         val selfRef = self
         val ec = healingWriterEc
+        val frontierStore = healingFrontierStorage
         import scala.concurrent.Future
+        import scala.util.control.NonFatal
         Future {
-          val frontier = mutable.Buffer.empty[HealingEntry]
-          val visited = newBoundedVisitedSet()
-          rebuildFrontierDFS(
-            root,
-            Seq(emptyPath),
-            isStor = false,
-            frontier,
-            visited,
-            batch => selfRef ! FrontierRebuilt(batch)
-          )
-          if (frontier.nonEmpty) selfRef ! FrontierRebuilt(frontier.toSeq)
+          // Layer 2: if a persisted frontier exists, resume from it (O(frontier)) and skip the full-state walk.
+          // Empty / absent / unreadable ⇒ fail-safe fallback to the provably-complete DFS (logged loudly).
+          val resumed: Option[Seq[HealingEntry]] = frontierStore.flatMap { store =>
+            try {
+              val loaded = store.loadAll().map { case (h, ps) => HealingEntry(pathset = ps, hash = h) }
+              if (loaded.nonEmpty) {
+                log.info(
+                  s"[HEAL-RESTART] Resumed ${loaded.size} frontier entries from persisted store — skipping full-state DFS"
+                )
+                Some(loaded)
+              } else {
+                log.info("[HEAL-RESTART] Persisted frontier empty — falling back to full-state DFS")
+                None
+              }
+            } catch {
+              case NonFatal(e) =>
+                log.error(e, "[HEAL-RESTART] Failed to load persisted frontier — falling back to full-state DFS")
+                None
+            }
+          }
+          resumed match {
+            case Some(entries) =>
+              selfRef ! FrontierRebuilt(entries)
+            case None =>
+              val frontier = mutable.Buffer.empty[HealingEntry]
+              val visited = newBoundedVisitedSet()
+              rebuildFrontierDFS(
+                root,
+                Seq(emptyPath),
+                isStor = false,
+                frontier,
+                visited,
+                batch => selfRef ! FrontierRebuilt(batch)
+              )
+              if (frontier.nonEmpty) selfRef ! FrontierRebuilt(frontier.toSeq)
+          }
         }(ec)
       } else {
         // ARCH-ROOT-SEED: Fresh start — seed root and let inline discovery populate the queue.
@@ -376,6 +439,7 @@ class TrieNodeHealingCoordinator(
           s"clearing ${pendingTasks.size} pending tasks + ${activeRequests.size} in-flight. " +
           s"Signaling completion with $totalNodesHealed healed nodes."
       )
+      clearPersistedFrontier() // Layer 2: healing abandoned — drop the persisted frontier so a restart won't resume it
       activeRequests.keys.foreach(requestTracker.completeRequest(_, 0))
       activeRequests.clear()
       pendingTasks.clear()
@@ -392,6 +456,7 @@ class TrieNodeHealingCoordinator(
       )
       stateRoot = newStateRoot
       flushRawNodesSync() // Flush any buffered nodes before clearing state
+      clearPersistedFrontier() // Layer 2: old-root frontier is stale after refresh — reseed (below) repopulates it
       pendingTasks.clear() // Will be re-populated by root reseed + inline discovery / trie walk from controller
       pendingHashSet.clear()
       statelessPeers.clear()
@@ -410,8 +475,10 @@ class TrieNodeHealingCoordinator(
       // top-down traversal of the updated trie.
       val pivotReseedPath = ByteString(com.chipprbots.ethereum.mpt.HexPrefix.encode(Array.empty[Byte], isLeaf = false))
       if (!pendingHashSet.contains(newStateRoot) && !isNodeInStorage(newStateRoot)) {
-        pendingTasks += HealingEntry(Seq(pivotReseedPath), newStateRoot)
+        val reseedEntry = HealingEntry(Seq(pivotReseedPath), newStateRoot)
+        pendingTasks += reseedEntry
         pendingHashSet += newStateRoot
+        persistFrontier(Seq(reseedEntry)) // Layer 2: the new pivot root is a new frontier entry
         log.info(
           s"[HEAL] Re-seeded with new root ${Hex.toHexString(newStateRoot.take(4).toArray)} " +
             s"for inline discovery of pivot delta"
@@ -572,6 +639,7 @@ class TrieNodeHealingCoordinator(
     }
     val deduped = pathsAndHashes.size - entries.size
     pendingTasks ++= entries
+    persistFrontier(entries) // Layer 2: mirror new frontier entries to the persisted CF
     val dedupStr = if (deduped > 0) s" ($deduped duplicates filtered)" else ""
     log.info(s"Queued ${entries.size} nodes for healing$dedupStr. Total pending: ${pendingTasks.size}")
   }
@@ -1093,6 +1161,7 @@ class TrieNodeHealingCoordinator(
       if (newEntries.nonEmpty) {
         newEntries.foreach(e => pendingHashSet += e.hash)
         pendingTasks ++= newEntries
+        persistFrontier(newEntries.toSeq) // Layer 2: inline-discovered children are new frontier entries
         childrenDiscoveredTotal += newEntries.size
         if (childrenDiscoveredTotal % 100 == 0 || childrenDiscoveredTotal <= 20)
           log.info(
@@ -1115,6 +1184,25 @@ class TrieNodeHealingCoordinator(
 }
 
 object TrieNodeHealingCoordinator {
+
+  /** Default cap on the frontier-rebuild DFS `visited` LRU: 4M entries ≈ 320 MB. Used when
+    * `sync.snap-sync.healing-visited-cap` is unset. See docs/design/healing-frontier-scale.md.
+    */
+  val DefaultVisitedCap: Int = 4_000_000
+
+  /** Heap-bounded `visited` set for the frontier-rebuild DFS: a `LinkedHashMap`-backed LRU that evicts the
+    * earliest-inserted (already-completed) subtries once it exceeds `cap` (insertion-order eviction). Exposed on the
+    * companion so the eviction contract (size never exceeds `cap`; eldest dropped first) is unit-testable without
+    * instantiating the actor.
+    */
+  def boundedVisitedSet(cap: Int): mutable.Set[ByteString] = {
+    val lru = new java.util.LinkedHashMap[ByteString, java.lang.Boolean](1024, 0.75f, false) {
+      override def removeEldestEntry(eldest: java.util.Map.Entry[ByteString, java.lang.Boolean]): Boolean =
+        size() > cap
+    }
+    java.util.Collections.newSetFromMap[ByteString](lru).asScala
+  }
+
   def props(
       stateRoot: ByteString,
       networkPeerManager: ActorRef,
@@ -1123,6 +1211,8 @@ object TrieNodeHealingCoordinator {
       batchSize: Int,
       snapSyncController: ActorRef,
       concurrency: Int = 16,
+      visitedCap: Int = DefaultVisitedCap,
+      healingFrontierStorage: Option[HealingFrontierStorage] = None,
       healingWriterEcOverride: Option[ExecutionContext] = None
   ): Props =
     Props(
@@ -1134,6 +1224,8 @@ object TrieNodeHealingCoordinator {
         batchSize,
         snapSyncController,
         concurrency,
+        visitedCap,
+        healingFrontierStorage,
         healingWriterEcOverride
       )
     )
