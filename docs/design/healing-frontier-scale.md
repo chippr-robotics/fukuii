@@ -73,3 +73,30 @@ documented for the recovery scan ([[snap_etc_host_freeze_oversubscription]]).
 separate change (new CF + constructor wiring + tests). 3 is an optimization if the first walk
 is still too slow after 1+2. Operationally, checkpoint import remains the fast unblock for an
 already-wedged node.
+
+## Status (as built — 2026-06-06)
+
+Spec/plan/tasks: `specs/001-healing-frontier-scale/`.
+
+**Layer 1 — DONE.** Bounded `visited` LRU in `TrieNodeHealingCoordinator` (commit `d04b24703`),
+with the cap extracted to the testable companion seam `TrieNodeHealingCoordinator.boundedVisitedSet(cap)`
+and made operator-tunable via `sync.snap-sync.healing-visited-cap` (default
+`TrieNodeHealingCoordinator.DefaultVisitedCap = 4_000_000`), threaded through `SNAPSyncConfig`.
+Unit-tested in `FrontierRebuildSpec` (eviction bound, insertion-order eviction, set semantics).
+
+**Layer 2 — DONE, default-off.** Persisted frontier in a dedicated column family
+(`Namespaces.HealingFrontierNamespace = 'g'`, `hash → RLP(pathset)`) via `HealingFrontierStorage`,
+wired from `SNAPSyncController` (`flatSlotStorage.dataSource`, gated by
+`sync.snap-sync.healing-frontier-persistence`, default `false`). Write-on-enqueue at all three
+growth sites (`queueNodes`, inline child discovery, pivot reseed); delete-on-heal-flush (never on
+dispatch); clear on force-complete / pivot-refresh; resume on `[HEAL-RESTART]` loads the frontier
+and skips the DFS, with a fail-safe fallback to the full walk on empty/absent/corrupt. No datadir
+migration (`setCreateMissingColumnFamilies(true)`). Tested in `HealingFrontierStorageSpec` (storage
+round-trip) and `HealingFrontierResumeSpec` (resume / fallback / write-on-queue). Ships dark; flip
+`healing-frontier-persistence = true` after operational validation on a large-state node.
+
+**Layer 3 — NOT STARTED (gated).** Measure the first-walk throughput on a large-state node first
+(`tasks.md` T021); pursue `multiGet` batching only if the one-time full walk is still too slow.
+
+Remaining before merge: `sbt pp`, and operational validation of L1 (no OOM loop) and L2 (resume in
+minutes, CF auto-creates) on a large-state node — both require a live node, out of the build session.
