@@ -103,6 +103,7 @@ def commonSettings(projectName: String): Seq[sbt.Def.Setting[_]] = Seq(
     "-Dpekko.jvm-shutdown-hooks=off" // Disable Pekko JVM shutdown hooks that may interfere with test cleanup
   ),
   Test / testForkedParallel := false, // Run tests sequentially in the forked JVM to avoid resource contention
+  Test / logBuffered := false, // Stream forked JVM test output immediately rather than buffering per-suite
   (Test / testOptions) += Tests.Argument("-oDG"),
   // Only publish selected libraries.
   (publish / skip) := true

@@ -204,6 +204,14 @@ class RocksDbDataSource(
     this.isClosed = false
   }
 
+  def approximateKeyCount(namespace: Namespace): Long =
+    handles
+      .get(namespace)
+      .flatMap { handle =>
+        scala.util.Try(db.getLongProperty(handle, "rocksdb.estimate-num-keys")).toOption
+      }
+      .getOrElse(0L)
+
   /** This function closes the DataSource, without deleting the files used by it.
     */
   override def close(): Unit = {

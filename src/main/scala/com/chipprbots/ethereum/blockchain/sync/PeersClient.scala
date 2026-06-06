@@ -24,20 +24,7 @@ import com.chipprbots.ethereum.network.p2p.Message
 import com.chipprbots.ethereum.network.p2p.MessageSerializable
 import com.chipprbots.ethereum.network.p2p.messages.Capability
 import com.chipprbots.ethereum.network.p2p.messages.Codes
-import com.chipprbots.ethereum.network.p2p.messages.ETH62
-import com.chipprbots.ethereum.network.p2p.messages.ETH62._
-import com.chipprbots.ethereum.network.p2p.messages.ETH63
-import com.chipprbots.ethereum.network.p2p.messages.ETH63.GetNodeData
-import com.chipprbots.ethereum.network.p2p.messages.ETH63.NodeData
-import com.chipprbots.ethereum.network.p2p.messages.ETH66
-import com.chipprbots.ethereum.network.p2p.messages.ETH66.{BlockBodies => ETH66BlockBodies}
-import com.chipprbots.ethereum.network.p2p.messages.ETH66.{BlockHeaders => ETH66BlockHeaders}
-import com.chipprbots.ethereum.network.p2p.messages.ETH66.{GetBlockBodies => ETH66GetBlockBodies}
-import com.chipprbots.ethereum.network.p2p.messages.ETH66.{GetBlockHeaders => ETH66GetBlockHeaders}
-import com.chipprbots.ethereum.network.p2p.messages.ETH66.{GetNodeData => ETH66GetNodeData}
-import com.chipprbots.ethereum.network.p2p.messages.ETH66.{GetReceipts => ETH66GetReceipts}
-import com.chipprbots.ethereum.network.p2p.messages.ETH66.{NodeData => ETH66NodeData}
-import com.chipprbots.ethereum.network.p2p.messages.ETH66.{Receipts => ETH66Receipts}
+import com.chipprbots.ethereum.network.p2p.messages.ETHPackets
 import com.chipprbots.ethereum.network.p2p.messages.SNAP
 import com.chipprbots.ethereum.network.p2p.messages.SNAP.ByteCodes
 import com.chipprbots.ethereum.network.p2p.messages.SNAP.GetByteCodes
@@ -327,72 +314,28 @@ class PeersClient(
 
     }
 
-  /** Adapts message format based on peer's negotiated capability. ETH66+ peers use RequestId wrapper, earlier versions
-    * use ETH62/ETH63 format.
+  /** Adapts message format based on peer's negotiated capability. ETH68+ always uses request-id — no adaptation needed.
     */
-  private def adaptMessageForPeer[RequestMsg <: Message](peer: Peer, message: RequestMsg): Message =
-    handshakedPeers.get(peer.id) match {
-      case Some(peerWithInfo) =>
-        val usesRequestId = Capability.usesRequestId(peerWithInfo.peerInfo.remoteStatus.capability)
-        message match {
-          // GetBlockHeaders adaptation
-          case eth66: ETH66GetBlockHeaders if !usesRequestId =>
-            // Convert ETH66 format to ETH62 format for older peers
-            ETH62.GetBlockHeaders(eth66.block, eth66.maxHeaders, eth66.skip, eth66.reverse)
-          case eth62: ETH62.GetBlockHeaders if usesRequestId =>
-            // Convert ETH62 format to ETH66 format for newer peers
-            ETH66GetBlockHeaders(ETH66.nextRequestId, eth62.block, eth62.maxHeaders, eth62.skip, eth62.reverse)
-          // GetBlockBodies adaptation
-          case eth66: ETH66GetBlockBodies if !usesRequestId =>
-            // Convert ETH66 format to ETH62 format for older peers
-            ETH62.GetBlockBodies(eth66.hashes)
-          case eth62: ETH62.GetBlockBodies if usesRequestId =>
-            // Convert ETH62 format to ETH66 format for newer peers
-            ETH66GetBlockBodies(ETH66.nextRequestId, eth62.hashes)
-          // GetReceipts adaptation
-          case eth66: ETH66GetReceipts if !usesRequestId =>
-            // Convert ETH66 format to ETH63 format for older peers
-            ETH63.GetReceipts(eth66.blockHashes)
-          case eth63: ETH63.GetReceipts if usesRequestId =>
-            // Convert ETH63 format to ETH66 format for newer peers
-            ETH66GetReceipts(ETH66.nextRequestId, eth63.blockHashes)
-          // GetNodeData adaptation
-          case eth66: ETH66GetNodeData if !usesRequestId =>
-            // Convert ETH66 format to ETH63 format for older peers
-            GetNodeData(eth66.mptElementsHashes)
-          case eth63: GetNodeData if usesRequestId =>
-            // Convert ETH63 format to ETH66 format for newer peers
-            ETH66GetNodeData(ETH66.nextRequestId, eth63.mptElementsHashes)
-          case _ => message // Already in correct format
-        }
-      case None =>
-        log.warning("Peer {} not found in handshaked peers, using message as-is", peer.id)
-        message
-    }
+  private def adaptMessageForPeer[RequestMsg <: Message](peer: Peer, message: RequestMsg): Message = message
 
   private def responseClassTag[RequestMsg <: Message](requestMsg: RequestMsg): ClassTag[_ <: Message] =
     requestMsg match {
-      case _: ETH66GetBlockHeaders  => implicitly[ClassTag[ETH66BlockHeaders]]
-      case _: ETH62.GetBlockHeaders => implicitly[ClassTag[ETH62.BlockHeaders]]
-      case _: ETH66GetBlockBodies   => implicitly[ClassTag[ETH66BlockBodies]]
-      case _: ETH62.GetBlockBodies  => implicitly[ClassTag[ETH62.BlockBodies]]
-      case _: ETH66GetReceipts      => implicitly[ClassTag[ETH66Receipts]]
-      case _: ETH63.GetReceipts     => implicitly[ClassTag[ETH63.Receipts]]
-      case _: GetNodeData           => implicitly[ClassTag[NodeData]]
-      case _: ETH66GetNodeData      => implicitly[ClassTag[ETH66NodeData]]
-      case _: GetTrieNodes          => implicitly[ClassTag[TrieNodes]]
-      case _: GetByteCodes          => implicitly[ClassTag[ByteCodes]]
+      case _: ETHPackets.GetBlockHeaders       => implicitly[ClassTag[ETHPackets.BlockHeaders]]
+      case _: ETHPackets.GetBlockBodies        => implicitly[ClassTag[ETHPackets.BlockBodies]]
+      case _: ETHPackets.GetReceipts           => implicitly[ClassTag[ETHPackets.Receipts68]]
+      case _: ETHPackets.GetPooledTransactions => implicitly[ClassTag[ETHPackets.PooledTransactions]]
+      case _: GetTrieNodes                     => implicitly[ClassTag[TrieNodes]]
+      case _: GetByteCodes                     => implicitly[ClassTag[ByteCodes]]
     }
 
   private def responseMsgCode[RequestMsg <: Message](requestMsg: RequestMsg): Int =
     requestMsg match {
-      case _: ETH66GetBlockHeaders | _: ETH62.GetBlockHeaders => Codes.BlockHeadersCode
-      case _: ETH66GetBlockBodies | _: ETH62.GetBlockBodies   => Codes.BlockBodiesCode
-      case _: ETH66GetReceipts | _: ETH63.GetReceipts         => Codes.ReceiptsCode
-      case _: GetNodeData                                     => Codes.NodeDataCode
-      case _: ETH66GetNodeData                                => Codes.NodeDataCode
-      case _: GetTrieNodes                                    => SNAP.Codes.TrieNodesCode
-      case _: GetByteCodes                                    => SNAP.Codes.ByteCodesCode
+      case _: ETHPackets.GetBlockHeaders       => Codes.BlockHeadersCode
+      case _: ETHPackets.GetBlockBodies        => Codes.BlockBodiesCode
+      case _: ETHPackets.GetReceipts           => Codes.ReceiptsCode
+      case _: ETHPackets.GetPooledTransactions => Codes.PooledTransactionsCode
+      case _: GetTrieNodes                     => SNAP.Codes.TrieNodesCode
+      case _: GetByteCodes                     => SNAP.Codes.ByteCodesCode
     }
 
   private def printStatus(requesters: Requesters): Unit = {
@@ -504,12 +447,17 @@ object PeersClient {
     // BestPeer selection round-robined into them and reported "no header returned"
     // for blocks they literally don't have. forkAccepted=true is necessary but not
     // sufficient — the peer must also have advanced past genesis.
+    //
+    // Use maxBlockNumber > 0 rather than !isAtGenesis (bestHash == genesisHash): ETC and
+    // ETH mainnet share genesis hash d4e56740..., so isAtGenesis is unreliable as a
+    // cross-chain discriminator. Block-number-based filtering matches go-ethereum and Besu
+    // peer selection semantics (both filter by peerHeadBlockHeader.getNumber() > 0).
     val peersToUse = peersToDownloadFrom.values
       .map { case PeerWithInfo(peer, peerInfo) =>
-        val isReady = peerInfo.forkAccepted && !peerInfo.isAtGenesis
+        val isReady = peerInfo.forkAccepted && peerInfo.maxBlockNumber > 0
         log.debug(
           s"Peer ${peer.id} (${peer.remoteAddress}) - ready: $isReady, " +
-            s"maxBlock: ${peerInfo.maxBlockNumber}, atGenesis: ${peerInfo.isAtGenesis}"
+            s"maxBlock: ${peerInfo.maxBlockNumber}"
         )
         log.debug("Peer {} chainWeight: {}", peer.id, peerInfo.chainWeight)
         (peer, peerInfo, isReady)
@@ -532,6 +480,9 @@ object PeersClient {
 
   // Legacy method for backward compatibility — kept in sync with the logger-aware
   // overload above: skip forkRejected peers AND skip peers stuck at genesis.
+  // NOTE: used as a utility by bestPeerWithMinBlock which explicitly passes maxBlockNumber==0
+  // peers as a fallback for ETH/68 peers whose block height is unknown. Do NOT add a
+  // maxBlockNumber > 0 guard here — that would silently break the ETH/68 fallback path.
   def bestPeer(peersToDownloadFrom: Map[PeerId, PeerWithInfo]): Option[Peer] = {
     val peersToUse = peersToDownloadFrom.values
       .collect {

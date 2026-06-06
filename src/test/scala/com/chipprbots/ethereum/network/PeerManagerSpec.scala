@@ -53,7 +53,7 @@ import com.chipprbots.ethereum.network.PeerManagerActor.SendMessage
 import com.chipprbots.ethereum.network.discovery.DiscoveryConfig
 import com.chipprbots.ethereum.network.discovery.Node
 import com.chipprbots.ethereum.network.discovery.PeerDiscoveryManager
-import com.chipprbots.ethereum.network.p2p.messages.BaseETH6XMessages.NewBlock
+import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.NewBlock
 import com.chipprbots.ethereum.network.p2p.messages.Capability
 import com.chipprbots.ethereum.network.p2p.messages.WireProtocol.Disconnect
 import com.chipprbots.ethereum.testing.Tags._

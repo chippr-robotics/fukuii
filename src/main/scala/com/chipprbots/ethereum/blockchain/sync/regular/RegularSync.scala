@@ -22,6 +22,7 @@ import com.chipprbots.ethereum.consensus.ConsensusAdapter
 import com.chipprbots.ethereum.consensus.validators.BlockValidator
 import com.chipprbots.ethereum.db.storage.{EvmCodeStorage, StateStorage}
 import com.chipprbots.ethereum.domain.BlockchainReader
+import com.chipprbots.ethereum.domain.BlockchainWriter
 import com.chipprbots.ethereum.ledger.BranchResolution
 import com.chipprbots.ethereum.nodebuilder.BlockchainConfigBuilder
 import com.chipprbots.ethereum.utils.Config.SyncConfig
@@ -34,6 +35,7 @@ class RegularSync(
     peerEventBus: ActorRef,
     consensus: ConsensusAdapter,
     blockchainReader: BlockchainReader,
+    blockchainWriter: BlockchainWriter,
     stateStorage: StateStorage,
     evmCodeStorage: EvmCodeStorage,
     branchResolution: BranchResolution,
@@ -58,7 +60,10 @@ class RegularSync(
   val broadcaster: ActorRef = context.actorOf(
     BlockBroadcasterActor
       .props(
-        new BlockBroadcast(networkPeerManager),
+        new BlockBroadcast(
+          networkPeerManager,
+          isPoWChain = configBuilder.blockchainConfig.terminalTotalDifficulty.isEmpty
+        ),
         peerEventBus,
         networkPeerManager,
         blacklist,
@@ -73,6 +78,7 @@ class RegularSync(
         fetcher.toClassic,
         consensus,
         blockchainReader,
+        blockchainWriter,
         stateStorage,
         evmCodeStorage,
         branchResolution,
@@ -152,11 +158,24 @@ class RegularSync(
 
     case RegularSync.PrintStatus =>
       val lag = progressState.bestKnownNetworkBlock - progressState.currentBlock
+      val now = System.currentTimeMillis()
+      val dtSecs =
+        if (progressState.lastPrintTimeMs > 0) (now - progressState.lastPrintTimeMs) / 1000.0 else 0.0
+      val deltaBlocks = progressState.currentBlock - progressState.lastPrintBlock
+      val rate =
+        if (dtSecs > 0 && progressState.lastPrintTimeMs > 0) deltaBlocks.toDouble / dtSecs else 0.0
+      val etaStr =
+        if (rate > 0.1 && lag > 0) f"${lag.toDouble / rate / 3600}%.1fh"
+        else if (lag == 0) "at head"
+        else "unknown"
       log.info(
-        "RegularSync following head: current={} best={} lag={}",
-        progressState.currentBlock,
-        progressState.bestKnownNetworkBlock,
-        lag
+        s"RegularSync: current=${progressState.currentBlock} best=${progressState.bestKnownNetworkBlock} " +
+          s"lag=$lag rate=${f"$rate%.1f"}/s eta=$etaStr"
+      )
+      context.become(
+        running(
+          progressState.copy(lastPrintBlock = progressState.currentBlock, lastPrintTimeMs = now)
+        )
       )
   }
 
@@ -178,6 +197,7 @@ object RegularSync {
       peerEventBus: ActorRef,
       consensus: ConsensusAdapter,
       blockchainReader: BlockchainReader,
+      blockchainWriter: BlockchainWriter,
       stateStorage: StateStorage,
       evmCodeStorage: EvmCodeStorage,
       branchResolution: BranchResolution,
@@ -196,6 +216,7 @@ object RegularSync {
         peerEventBus,
         consensus,
         blockchainReader,
+        blockchainWriter,
         stateStorage,
         evmCodeStorage,
         branchResolution,
@@ -213,7 +234,9 @@ object RegularSync {
       startedFetching: Boolean,
       initialBlock: BigInt,
       currentBlock: BigInt,
-      bestKnownNetworkBlock: BigInt
+      bestKnownNetworkBlock: BigInt,
+      lastPrintBlock: BigInt = BigInt(0),
+      lastPrintTimeMs: Long = 0L
   ) {
     def toStatus: SyncProtocol.Status =
       if (startedFetching && bestKnownNetworkBlock != 0 && currentBlock < bestKnownNetworkBlock) {

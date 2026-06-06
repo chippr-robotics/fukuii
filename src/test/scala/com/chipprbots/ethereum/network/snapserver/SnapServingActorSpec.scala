@@ -65,7 +65,8 @@ class SnapServingActorSpec extends AnyFlatSpec with Matchers with MockFactory wi
       snapSyncControllerOpt = None,
       evmCodeStorageOpt = evmCodeStorageOpt,
       mptStorageOpt = mptStorageOpt,
-      blockchainReader = blockchainReader
+      blockchainReader = blockchainReader,
+      isPoWChain = false
     )
   )
 

@@ -33,8 +33,20 @@ object EthJsonMethodsImplicits extends JsonMethodsImplicits {
   implicit val eth_syncing: NoParamsMethodDecoder[SyncingRequest] with JsonEncoder[SyncingResponse] =
     new NoParamsMethodDecoder(SyncingRequest()) with JsonEncoder[SyncingResponse] {
       def encodeJson(t: SyncingResponse): JValue = t.syncStatus match {
-        case Some(syncStatus) => Extraction.decompose(syncStatus)
-        case None             => false
+        case Some(s) =>
+          val base: JObject =
+            ("startingBlock" -> encodeAsHex(s.startingBlock)) ~
+              ("currentBlock" -> encodeAsHex(s.currentBlock)) ~
+              ("highestBlock" -> encodeAsHex(s.highestBlock))
+          // knownStates/pulledStates are legacy ETH/63 fast-sync fields. After SNAP sync
+          // completes they are 0 (no active trie progress) — reporting 0 falsely implies
+          // the state was never downloaded. Omit them when not meaningful, matching
+          // go-ethereum's behaviour post-SNAP (which drops these fields entirely).
+          if (s.knownStates == BigInt(0) && s.pulledStates == BigInt(0)) base
+          else
+            base ~ ("knownStates" -> encodeAsHex(s.knownStates)) ~
+              ("pulledStates" -> encodeAsHex(s.pulledStates))
+        case None => false
       }
     }
 

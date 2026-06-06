@@ -44,8 +44,13 @@ class AccountRangeWorker(
   override def preStart(): Unit =
     log.debug(s"AccountRangeWorker ${self.path.name} started")
 
-  override def postStop(): Unit =
-    log.debug(s"AccountRangeWorker ${self.path.name} stopped")
+  override def postStop(): Unit = {
+    // INFO so worker lifecycle is visible in production logs — essential for detecting
+    // unexpected worker deaths (BUG-R03-001: silent crash leaves task stuck in activeTasks).
+    val taskDesc =
+      currentTask.map { case (t, _, reqId, _) => s" (mid-task ${t.rangeString} reqId=$reqId)" }.getOrElse("")
+    log.info(s"[WORKER] AccountRangeWorker ${self.path.name} stopped$taskDesc")
+  }
 
   override def receive: Receive = idle
 
@@ -116,14 +121,31 @@ class AccountRangeWorker(
           // Verify Merkle proof against the snapshotted pivot state root (expectedRoot),
           // not task.rootHash — the coordinator may have mutated it during a pivot refresh.
           val proofVerifier = MerkleProofVerifier(expectedRoot)
-          val proofOk = validated.flatMap { validResponse =>
-            proofVerifier.verifyAccountRange(
-              accounts = validResponse.accounts,
-              proof = validResponse.proof,
-              startHash = task.next,
-              endHash = task.last
-            )
-          }
+          // Guard: proof verification can throw (e.g., malformed proof, unexpected node type).
+          // Without this try/catch the worker crashes silently — the coordinator never gets
+          // TaskFailed/TaskComplete and the task stays stuck in activeTasks forever (BUG-R03-001).
+          val proofOk =
+            try
+              validated.flatMap { validResponse =>
+                val endHash = validResponse.accounts.lastOption.map(_._1).getOrElse(task.last)
+                proofVerifier.verifyAccountRange(
+                  accounts = validResponse.accounts,
+                  proof = validResponse.proof,
+                  startHash = task.next,
+                  endHash = endHash
+                )
+              }
+            catch {
+              case ex: Throwable =>
+                // Catch Throwable (not just Exception) so that StackOverflowError and other JVM
+                // Errors don't escape to the actor system. Under Pekko's Resume supervisor strategy
+                // an uncaught Error leaves the actor alive but stuck — the coordinator never gets
+                // TaskFailed/TaskComplete and the task is lost.
+                log.warning(
+                  s"[WORKER] Proof verification threw for reqId=$reqId range=${task.rangeString}: ${ex.getClass.getSimpleName}: ${ex.getMessage}"
+                )
+                Left(s"proof verification exception: ${ex.getClass.getSimpleName}: ${ex.getMessage}")
+            }
 
           proofOk match {
             case Left(error) =>

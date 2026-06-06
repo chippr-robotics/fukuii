@@ -45,6 +45,7 @@ class TrieNodeHealingCoordinator(
   private case class HealingEntry(pathset: Seq[ByteString], hash: ByteString)
   private val pendingTasks: mutable.ArrayDeque[HealingEntry] = mutable.ArrayDeque.empty
   private var completedTaskCount: Int = 0
+  private var healingMilestonePct: Int = -1
 
   /** Dedicated dispatcher for the batched raw-node RocksDB flush. Tests inject their own EC; production looks up
     * `healing-writer-dispatcher` from the actor system. Keeps the blocking write off `sync-dispatcher` so other sync
@@ -433,11 +434,22 @@ class TrieNodeHealingCoordinator(
 
     case HealingStagnationCheck =>
       val recentHealed = totalNodesHealed - lastPulseHealedCount
+      val healTotal = completedTaskCount.toLong + pendingTasks.size.toLong + activeRequests.size.toLong
+      val healPct = if (healTotal > 0) ((completedTaskCount.toDouble / healTotal) * 100).toInt else 0
       log.info(
-        s"[HEAL-PULSE] healed=$totalNodesHealed (+$recentHealed last 2min) | " +
+        s"[HEAL-PULSE] $healPct% (est) | healed=$totalNodesHealed (+$recentHealed last 2min) | " +
           s"pending=${pendingTasks.size} active=${activeRequests.size} peers=${knownAvailablePeers.size} | " +
-          s"walkRunning=$trieWalkInProgress pivotRefreshPending=$pivotRefreshRequested"
+          s"rate=${healRate.toInt} nodes/s walkRunning=$trieWalkInProgress pivotRefreshPending=$pivotRefreshRequested"
       )
+      val (newM, crossed) =
+        com.chipprbots.ethereum.blockchain.sync.ProgressMilestones
+          .crossed(completedTaskCount.toLong, healTotal, healingMilestonePct)
+      healingMilestonePct = newM
+      crossed.foreach { m =>
+        log.info(
+          s"[HEAL-MILESTONE] $m% (est) — ${completedTaskCount} healed | ${healRate.toInt} nodes/s"
+        )
+      }
       lastPulseHealedCount = totalNodesHealed
 
       // BUG-S4 watchdog: if pivotRefreshRequested=true for >15 min, SNAPSyncController is stuck
@@ -760,11 +772,10 @@ class TrieNodeHealingCoordinator(
 
     if (healedCount > 0) {
       snapSyncController ! SNAPSyncController.ProgressNodesHealed(healedCount.toLong)
-
-      // Periodic async flush of raw node buffer
-      if (rawNodeBuffer.size >= rawFlushThreshold) {
-        flushRawNodesAsync()
-      }
+      // Flush immediately after every response rather than waiting for the 1000-node threshold.
+      // Sparse healing runs (small gap counts) would otherwise stall writes in the buffer
+      // indefinitely if they never hit the count gate.
+      flushRawNodesAsync()
     }
 
     // Dispatch more work to this peer if available (pipeline multiple requests)

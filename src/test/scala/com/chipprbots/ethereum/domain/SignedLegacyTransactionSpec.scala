@@ -7,7 +7,7 @@ import org.scalatestplus.scalacheck.ScalaCheckPropertyChecks
 
 import com.chipprbots.ethereum.crypto
 import com.chipprbots.ethereum.domain.SignedTransaction.getSender
-import com.chipprbots.ethereum.network.p2p.messages.BaseETH6XMessages.SignedTransactions
+import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.SignedTransactions
 import com.chipprbots.ethereum.testing.Tags._
 import com.chipprbots.ethereum.utils.Config
 import com.chipprbots.ethereum.utils.Hex

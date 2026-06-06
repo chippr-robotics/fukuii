@@ -27,10 +27,8 @@ import com.chipprbots.ethereum.network.PeerId
 import com.chipprbots.ethereum.network.PeerManagerActor
 import com.chipprbots.ethereum.jsonrpc.NewPendingTransaction
 import com.chipprbots.ethereum.network.p2p.messages.Codes
-import com.chipprbots.ethereum.network.p2p.messages.ETH66
-import com.chipprbots.ethereum.network.p2p.messages.ETH66.GetPooledTransactions._
-import com.chipprbots.ethereum.network.p2p.messages.ETH67
-import com.chipprbots.ethereum.network.p2p.messages.ETH67.NewPooledTransactionHashes._
+import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.GetPooledTransactions._
+import com.chipprbots.ethereum.network.p2p.messages.ETHPackets
 import com.chipprbots.ethereum.transactions.SignedTransactionsFilterActor.ProperSignedTransactions
 import com.chipprbots.ethereum.utils.BlockchainConfig
 import com.chipprbots.ethereum.utils.ByteStringUtils.ByteStringOps
@@ -247,38 +245,38 @@ class PendingTransactionsManager(
 
     // ETH67+ NewPooledTransactionHashes — request unknown tx hashes via GetPooledTransactions
     case com.chipprbots.ethereum.network.PeerEventBusActor.PeerEvent
-          .MessageFromPeer(msg: ETH67.NewPooledTransactionHashes, peerId) =>
+          .MessageFromPeer(msg: ETHPackets.NewPooledTransactionHashes, peerId) =>
       val unknownHashes = msg.hashes.filterNot(h => pendingTransactions.asMap().containsKey(h))
       if (unknownHashes.nonEmpty) {
         // Track announced types/sizes for validation when PooledTransactions arrives
         msg.hashes.zip(msg.types).zip(msg.sizes).foreach { case ((hash, txType), size) =>
           pendingAnnouncements = pendingAnnouncements.updated(hash, (txType, size, peerId))
         }
-        val requestId = ETH66.nextRequestId
+        val requestId = ETHPackets.nextRequestId
         networkPeerManager ! NetworkPeerManagerActor.SendMessage(
-          ETH66.GetPooledTransactions(requestId, unknownHashes),
+          ETHPackets.GetPooledTransactions(requestId, unknownHashes),
           peerId
         )
       }
 
-    // ETH65 NewPooledTransactionHashes (legacy format — list of hashes only)
+    // ETH68/67 NewPooledTransactionHashes (hash+types+sizes format; also handles ETH65 hash-only via backward-compat decode)
     case com.chipprbots.ethereum.network.PeerEventBusActor.PeerEvent.MessageFromPeer(
-          msg: com.chipprbots.ethereum.network.p2p.messages.ETH65.NewPooledTransactionHashes,
+          msg: com.chipprbots.ethereum.network.p2p.messages.ETHPackets.NewPooledTransactionHashes,
           peerId
         ) =>
-      val unknownHashes = msg.txHashes.filterNot(h => pendingTransactions.asMap().containsKey(h))
+      val unknownHashes = msg.hashes.filterNot(h => pendingTransactions.asMap().containsKey(h))
       if (unknownHashes.nonEmpty) {
         log.debug("Requesting {} unknown pooled transactions from peer {}", unknownHashes.size, peerId)
-        val requestId = ETH66.nextRequestId
+        val requestId = ETHPackets.nextRequestId
         networkPeerManager ! NetworkPeerManagerActor.SendMessage(
-          ETH66.GetPooledTransactions(requestId, unknownHashes),
+          ETHPackets.GetPooledTransactions(requestId, unknownHashes),
           peerId
         )
       }
 
     // ETH66+ PooledTransactions response — add received txs to pool
     case com.chipprbots.ethereum.network.PeerEventBusActor.PeerEvent
-          .MessageFromPeer(msg: ETH66.PooledTransactions, peerId) =>
+          .MessageFromPeer(msg: ETHPackets.PooledTransactions, peerId) =>
       // Validate received txs against their announcements (type/size mismatch = blob violation)
       import com.chipprbots.ethereum.domain._
       val announcementViolation = msg.txs.zipWithIndex.exists { case (stx, idx) =>
@@ -356,7 +354,7 @@ class PendingTransactionsManager(
           }
         }
         val sizes = txsToNotify.map(stx => BigInt(SignedTransaction.byteArraySerializable.toBytes(stx).length))
-        val announcement = ETH67.NewPooledTransactionHashes(types, sizes, hashes)
+        val announcement = ETHPackets.NewPooledTransactionHashes(types, sizes, hashes)
         networkPeerManager ! NetworkPeerManagerActor.SendMessage(announcement, peer.id)
         txsToNotify.foreach(stx => setTxKnown(stx, peer.id))
       }
@@ -383,7 +381,30 @@ class PendingTransactionsManager(
       }
     }
 
-    if (blockchainReader == null || stateStorage == null) return afterPendingNonceCheck
+    // 2. ECIP-1122: reject if effectiveTip < minTip.
+    // With baseFeeFloor = 1 gwei, a tx with tip = 0 can never be included — reject at admission
+    // to protect the sender from a permanent nonce-queue deadlock.
+    // Use Option() to guard against null blockchainReader (permitted in tests; falls back to baseFeeFloor).
+    val currentBaseFee = Option(blockchainReader)
+      .flatMap(_.getBestBlock())
+      .flatMap(_.header.baseFee)
+      .getOrElse(blockchainConfig.baseFeeFloor)
+    val afterTipCheck = afterPendingNonceCheck.filter { stx =>
+      val effectiveTip =
+        com.chipprbots.ethereum.domain.Transaction.effectiveGasPrice(stx.tx.tx, Some(currentBaseFee)) - currentBaseFee
+      if (effectiveTip < blockchainConfig.minTip) {
+        log.debug(
+          "Rejecting tx {} from {}: effectiveTip {} < minTip {}",
+          stx.tx.hash.toHex,
+          stx.senderAddress,
+          effectiveTip,
+          blockchainConfig.minTip
+        )
+        false
+      } else true
+    }
+
+    if (blockchainReader == null || stateStorage == null) return afterTipCheck
     try {
       import com.chipprbots.ethereum.domain.Account
       import com.chipprbots.ethereum.mpt.MerklePatriciaTrie
@@ -398,7 +419,7 @@ class PendingTransactionsManager(
             Account.accountSerializer
           )
 
-          val accountsBySender = afterPendingNonceCheck
+          val accountsBySender = afterTipCheck
             .map(_.senderAddress)
             .map { senderAddress =>
               val addressHash = com.chipprbots.ethereum.crypto.kec256(senderAddress.toArray)
@@ -406,7 +427,7 @@ class PendingTransactionsManager(
             }
             .toMap
 
-          afterPendingNonceCheck.filter { stx =>
+          afterTipCheck.filter { stx =>
             accountsBySender.get(stx.senderAddress).flatten.exists { account =>
               val tx = stx.tx.tx
               val nonceValid = tx.nonce >= account.nonce.toBigInt && tx.nonce < account.nonce.toBigInt + 1024
@@ -418,13 +439,13 @@ class PendingTransactionsManager(
           }
         case None =>
           // No best block — only accept txs from senders we've already seen
-          afterPendingNonceCheck.filter(stx => pendingNonces.contains(stx.senderAddress))
+          afterTipCheck.filter(stx => pendingNonces.contains(stx.senderAddress))
       }
     } catch {
       case _: Exception =>
         // MPT failed — only accept txs from senders with established pending nonces
         // (unknown senders can't be validated without state)
-        afterPendingNonceCheck.filter(stx => pendingNonces.contains(stx.senderAddress))
+        afterTipCheck.filter(stx => pendingNonces.contains(stx.senderAddress))
     }
   }
 

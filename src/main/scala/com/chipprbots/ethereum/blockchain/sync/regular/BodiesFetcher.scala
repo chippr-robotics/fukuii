@@ -21,12 +21,7 @@ import com.chipprbots.ethereum.domain.BlockBody
 import com.chipprbots.ethereum.network.Peer
 import com.chipprbots.ethereum.network.PeerId
 import com.chipprbots.ethereum.network.p2p.Message
-import com.chipprbots.ethereum.network.p2p.messages.ETH62.{BlockBodies => Eth62BlockBodies}
-import com.chipprbots.ethereum.network.p2p.messages.ETH66
-import com.chipprbots.ethereum.network.p2p.messages.ETH66.{
-  BlockBodies => Eth66BlockBodies,
-  GetBlockBodies => Eth66GetBlockBodies
-}
+import com.chipprbots.ethereum.network.p2p.messages.ETHPackets
 import com.chipprbots.ethereum.utils.Config.SyncConfig
 
 class BodiesFetcher(
@@ -42,6 +37,8 @@ class BodiesFetcher(
 
   import BodiesFetcher._
   private type Command = BodiesFetcher.BodiesFetcherCommand
+  private var totalBodiesFetched: Long = 0L
+  private val bodiesFetchStartMs: Long = System.currentTimeMillis()
 
   override def makeAdaptedMessage[T <: Message](peer: Peer, msg: T): Command = AdaptedMessage(peer, msg)
 
@@ -59,10 +56,8 @@ class BodiesFetcher(
         }
         requestBodies(hashes, triedPeers, retryCount)
         Behaviors.same
-      case AdaptedMessage(peer, eth62Bodies: Eth62BlockBodies) =>
-        handleBodiesResponse(peer, eth62Bodies.bodies, protocolLabel = "ETH62")
-      case AdaptedMessage(peer, eth66Bodies: Eth66BlockBodies) =>
-        handleBodiesResponse(peer, eth66Bodies.bodies, protocolLabel = "ETH66")
+      case AdaptedMessage(peer, blockBodies: ETHPackets.BlockBodies) =>
+        handleBodiesResponse(peer, blockBodies.bodies, protocolLabel = "ETH68")
       case BodiesFetcher.RetryBodiesRequest(failedPeerId, triedPeers, retryCount) =>
         log.debug("Retrying bodies request (tried: {}, retry: {})", triedPeers.size, retryCount)
         supervisor ! BlockFetcher.RetryBodiesRequest(failedPeerId, triedPeers, retryCount)
@@ -78,7 +73,13 @@ class BodiesFetcher(
       protocolLabel: String
   ): Behavior[Command] = {
     log.debug("Received {} block bodies from peer {} via {}", bodies.size, peer.id, protocolLabel)
-    if (bodies.isEmpty) {
+    if (bodies.nonEmpty) {
+      totalBodiesFetched += bodies.size
+      if (totalBodiesFetched % 1000 == 0) {
+        val rate = totalBodiesFetched * 1000L / (System.currentTimeMillis() - bodiesFetchStartMs).max(1)
+        log.info("BodiesFetcher: {} bodies fetched | {} bodies/s", totalBodiesFetched, rate)
+      }
+    } else {
       log.debug("Received empty bodies response from peer {}", peer.id)
     }
     // Always forward bodies to supervisor to ensure state is cleared
@@ -88,7 +89,7 @@ class BodiesFetcher(
 
   private def requestBodies(hashes: Seq[ByteString], triedPeers: Set[PeerId], retryCount: Int): Unit = {
     log.debug("Requesting {} block bodies (excluding {} tried peers)", hashes.size, triedPeers.size)
-    val msg = Eth66GetBlockBodies(ETH66.nextRequestId, hashes)
+    val msg = ETHPackets.GetBlockBodies(ETHPackets.nextRequestId, hashes)
     val peerSelector = if (triedPeers.nonEmpty) ExcludingPeers(triedPeers) else BestPeer
     val fallback = BodiesFetcher.RetryBodiesRequest(failedPeerId = None, triedPeers, retryCount)
     val resp = makeRequest(Request.create(msg, peerSelector), fallback, triedPeers, retryCount)

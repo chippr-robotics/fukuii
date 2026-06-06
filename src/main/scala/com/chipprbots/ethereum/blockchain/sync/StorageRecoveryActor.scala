@@ -15,6 +15,7 @@ import com.chipprbots.ethereum.mpt._
 import com.chipprbots.ethereum.mpt.MptVisitors._
 import com.chipprbots.ethereum.blockchain.sync.snap.{SNAPSyncConfig, SNAPSyncController, StorageTask}
 import com.chipprbots.ethereum.blockchain.sync.snap.actors
+import com.chipprbots.ethereum.blockchain.sync.ProgressMilestones
 
 /** Storage recovery actor for Bug 20 hardening.
   *
@@ -164,6 +165,10 @@ class StorageRecoveryActor(
     var unservableCount = 0
     var abandonTimer: Option[Cancellable] = None
     val abandonAfter: FiniteDuration = snapSyncConfig.storageRecoveryAbandonTimeout
+    var recoveredCount = 0L
+    var lastStorageRecoveryMilestone: Int = -1
+    var lastRateNanos = System.nanoTime()
+    var lastRateRecovered = 0L
 
     // Recent-root roll state. `currentRoot` is the root the coordinator is currently downloading
     // against (starts at the saved pivot root). When peers can no longer serve it (the pivot has
@@ -210,6 +215,9 @@ class StorageRecoveryActor(
         coordinator ! actors.Messages.StoragePeerAvailable(peer)
 
       case SNAPSyncController.StorageRangeSyncComplete =>
+        log.info(
+          s"[SNAP-PROGRESS] STORAGE-RECOVERY 100% — $expectedCount / $expectedCount storage roots recovered — COMPLETE"
+        )
         RecoveryMetrics.setStorageDownloaded(expectedCount.toLong)
         finishRecovery(s"downloaded storage for $expectedCount contracts")
 
@@ -217,6 +225,21 @@ class StorageRecoveryActor(
         downloadedCount += 1
         RecoveryMetrics.setStorageDownloaded(downloadedCount)
         recordProgress()
+        recoveredCount += 1
+        val (newM, crossed) =
+          ProgressMilestones.crossed(recoveredCount, expectedCount.toLong, lastStorageRecoveryMilestone)
+        lastStorageRecoveryMilestone = newM
+        crossed.foreach { m =>
+          val elapsedSecs = (System.nanoTime() - lastRateNanos) / 1e9
+          val rate = if (elapsedSecs > 0) ((recoveredCount - lastRateRecovered) / elapsedSecs).toLong else 0L
+          if (m % 10 == 0 || m <= 5 || m >= 95) {
+            lastRateNanos = System.nanoTime()
+            lastRateRecovered = recoveredCount
+          }
+          log.info(
+            s"[SNAP-PROGRESS] STORAGE-RECOVERY $m% — $recoveredCount / $expectedCount storage roots | $rate roots/s"
+          )
+        }
 
       // The coordinator reports every peer stateless for the current download root: the pivot has
       // aged out of peers' snapshot serve window. Rather than only counting down to abandon (Bug

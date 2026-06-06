@@ -62,6 +62,13 @@ object V5DemuxResponder extends LazyLogging {
       }
     }
 
-    result
+    // Convert Reply → ClaimedReply so channelRead sends the v5 reply but does NOT also
+    // feed the v5-format bytes into the v4 async decode path, which would produce spurious
+    // "Invalid hash" / "low port" errors for every geth/besu discv4 peer that reaches us.
+    result match {
+      case StaticUDPPeerGroup.SyncResult.Reply(bits) =>
+        StaticUDPPeerGroup.SyncResult.ClaimedReply(bits)
+      case other => other
+    }
   }
 }

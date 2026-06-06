@@ -64,16 +64,19 @@ object Capability {
 
     // For each protocol family, find the highest common version
     val negotiatedCapabilities = List(
-      // ETH: if both support ETH, use the minimum of their maximum versions
+      // ETH: find the highest version that BOTH sides advertise (strict intersection).
+      // We only return a capability from our own set (ethVersions1) to guarantee we have
+      // a decoder for it. The .orElse(ethVersions2...) fallback was a bug: it could
+      // return a peer cap we don't support (e.g. ETH67 when we only have ETH68/69).
       if (ethVersions1.nonEmpty && ethVersions2.nonEmpty) {
-        val maxVersion = math.min(
-          ethVersions1.maxBy(_.version).version,
-          ethVersions2.maxBy(_.version).version
-        )
-        // Find the capability with that version number from either side
-        ethVersions1
-          .find(_.version == maxVersion)
-          .orElse(ethVersions2.find(_.version == maxVersion))
+        val versions1 = ethVersions1.map(_.version).toSet
+        val versions2 = ethVersions2.map(_.version).toSet
+        val commonVersions = versions1.intersect(versions2)
+        if (commonVersions.isEmpty) None
+        else {
+          val maxCommon = commonVersions.max
+          ethVersions1.find(_.version == maxCommon) // always from our side — we have the decoder
+        }
       } else None,
       // SNAP: exact match required
       if (snapVersions1.intersect(snapVersions2).nonEmpty) Some(SNAP1) else None

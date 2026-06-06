@@ -37,7 +37,7 @@ class MessageCodecMalformedInputSpec
   private def frameCodec = new FrameCodec(secrets)
 
   private val decoder: MessageDecoder =
-    NetworkMessageDecoder.orElse(EthereumMessageDecoder.ethMessageDecoder(Capability.ETH63))
+    NetworkMessageDecoder.orElse(EthereumMessageDecoder.ethMessageDecoder(Capability.ETH68))
 
   private val noCompressionCodec: MessageCodec = new MessageCodec(
     frameCodec,

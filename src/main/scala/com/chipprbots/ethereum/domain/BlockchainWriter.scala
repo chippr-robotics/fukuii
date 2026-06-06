@@ -89,6 +89,23 @@ class BlockchainWriter(
   ): Unit =
     appStateStorage.putBestBlockInfo(BlockInfo(bestBlockHash, bestBlockNumber)).commit()
 
+  /** Roll back the canonical chain index to `targetNumber`, removing number→hash entries for all blocks above
+    * `targetNumber`. Used by fork recovery (SYNC-FORK) to truncate stale canonical chain entries before re-syncing from
+    * the fork point.
+    *
+    * Only the number→hash index is modified — block headers/bodies/receipts are kept in storage. Orphaned header
+    * entries are benign in RocksDB and will be compacted away in time.
+    *
+    * No-op if `currentBest <= targetNumber`.
+    */
+  def setCanonicalChainHead(targetNumber: BigInt, targetHash: ByteString, currentBest: BigInt): Unit =
+    if (currentBest > targetNumber) {
+      val batch = ((targetNumber + 1) to currentBest).foldLeft(blockNumberMappingStorage.emptyBatchUpdate) { (acc, n) =>
+        acc.and(blockNumberMappingStorage.remove(n))
+      }
+      batch.and(appStateStorage.putBestBlockInfo(BlockInfo(targetHash, targetNumber))).commit()
+    }
+
   /** Promote a block previously stored by hash only (sidechain) to the canonical chain. Walks back from `headHash`
     * along parent pointers until it meets the current canonical chain (i.e. finds a header whose number→hash mapping
     * already points to it) and rewrites number→hash for every block on the new branch. Receipts are already indexed by

@@ -19,14 +19,12 @@ import com.chipprbots.ethereum.network.ForkResolver
 import com.chipprbots.ethereum.network.PeerManagerActor.PeerConfiguration
 import com.chipprbots.ethereum.network.handshaker.Handshaker.HandshakeComplete.HandshakeFailure
 import com.chipprbots.ethereum.network.handshaker.Handshaker.HandshakeComplete.HandshakeSuccess
-import com.chipprbots.ethereum.network.p2p.messages.BaseETH6XMessages
-import com.chipprbots.ethereum.network.p2p.messages.BaseETH6XMessages.Status.StatusEnc
 import com.chipprbots.ethereum.network.p2p.messages.Capability
-import com.chipprbots.ethereum.network.p2p.messages.ETH62.BlockHeaders
-import com.chipprbots.ethereum.network.p2p.messages.ETH62.GetBlockHeaders
-import com.chipprbots.ethereum.network.p2p.messages.ETH62.GetBlockHeaders.GetBlockHeadersEnc
-import com.chipprbots.ethereum.network.p2p.messages.ETH64
+import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.BlockHeaders
+import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.GetBlockHeaders
+import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.GetBlockHeaders.GetBlockHeadersEnc
 import com.chipprbots.ethereum.network.p2p.messages.ETH69
+import com.chipprbots.ethereum.network.p2p.messages.ETHPackets
 import com.chipprbots.ethereum.network.p2p.messages.WireProtocol.Disconnect
 import com.chipprbots.ethereum.network.p2p.messages.WireProtocol.Hello
 import com.chipprbots.ethereum.network.p2p.messages.WireProtocol.Hello.HelloEnc
@@ -37,7 +35,7 @@ import com.chipprbots.ethereum.utils._
 
 class NetworkHandshakerSpec extends AnyFlatSpec with Matchers {
 
-  it should "correctly connect during an appropriate handshake if no fork resolver is used" taggedAs (
+  it should "correctly connect during an ETH68 handshake if no fork resolver is used" taggedAs (
     UnitTest,
     NetworkTest
   ) in new LocalPeerETH63Setup with RemotePeerETH63Setup {
@@ -45,7 +43,7 @@ class NetworkHandshakerSpec extends AnyFlatSpec with Matchers {
     initHandshakerWithoutResolver.nextMessage.map(_.messageToSend) shouldBe Right(localHello: HelloEnc)
     val handshakerAfterHelloOpt: Option[Handshaker[PeerInfo]] = initHandshakerWithoutResolver.applyMessage(remoteHello)
     assert(handshakerAfterHelloOpt.isDefined)
-    handshakerAfterHelloOpt.get.nextMessage.map(_.messageToSend) shouldBe Right(localStatusMsg: StatusEnc)
+    handshakerAfterHelloOpt.get.nextMessage.map(_.messageToSend.underlyingMsg) shouldBe Right(localStatusMsg)
     val handshakerAfterStatusOpt: Option[Handshaker[PeerInfo]] =
       handshakerAfterHelloOpt.get.applyMessage(remoteStatusMsg)
     assert(handshakerAfterStatusOpt.isDefined)
@@ -71,7 +69,7 @@ class NetworkHandshakerSpec extends AnyFlatSpec with Matchers {
     }
   }
 
-  it should "send status with total difficulty for ETH63 peers" taggedAs (
+  it should "send ETH68 status with updated total difficulty on block advance" taggedAs (
     UnitTest,
     NetworkTest
   ) in new LocalPeerETH63Setup with RemotePeerETH63Setup {
@@ -100,80 +98,7 @@ class NetworkHandshakerSpec extends AnyFlatSpec with Matchers {
     }
   }
 
-  it should "correctly connect during an appropriate handshake if a fork resolver is used and the remote peer has the DAO block" taggedAs (
-    UnitTest,
-    NetworkTest
-  ) in new LocalPeerSetup with RemotePeerETH63Setup {
-
-    val handshakerAfterHelloOpt: Option[Handshaker[PeerInfo]] = initHandshakerWithResolver.applyMessage(remoteHello)
-    val handshakerAfterStatusOpt: Option[Handshaker[PeerInfo]] =
-      handshakerAfterHelloOpt.get.applyMessage(remoteStatusMsg)
-    assert(handshakerAfterStatusOpt.isDefined)
-    handshakerAfterStatusOpt.get.nextMessage.map(_.messageToSend) shouldBe Right(
-      localGetBlockHeadersRequest: GetBlockHeadersEnc
-    )
-    val handshakerAfterForkOpt: Option[Handshaker[PeerInfo]] =
-      handshakerAfterStatusOpt.get.applyMessage(BlockHeaders(Seq(forkBlockHeader)))
-    assert(handshakerAfterForkOpt.isDefined)
-
-    handshakerAfterForkOpt.get.nextMessage match {
-      case Left(
-            HandshakeSuccess(
-              PeerInfo(
-                initialStatus,
-                chainWeight,
-                forkAccepted,
-                currentMaxBlockNumber,
-                bestBlockHash
-              )
-            )
-          ) =>
-        initialStatus shouldBe remoteStatus
-        chainWeight shouldBe remoteStatus.chainWeight
-        bestBlockHash shouldBe remoteStatus.bestHash
-        currentMaxBlockNumber shouldBe 0
-        forkAccepted shouldBe true
-      case _ => fail()
-    }
-  }
-
-  it should "correctly connect during an appropriate handshake if a fork resolver is used and the remote peer doesn't have the DAO block" taggedAs (
-    UnitTest,
-    NetworkTest
-  ) in new LocalPeerSetup with RemotePeerETH63Setup {
-
-    val handshakerAfterHelloOpt: Option[Handshaker[PeerInfo]] = initHandshakerWithResolver.applyMessage(remoteHello)
-    val handshakerAfterStatusOpt: Option[Handshaker[PeerInfo]] =
-      handshakerAfterHelloOpt.get.applyMessage(remoteStatusMsg)
-    assert(handshakerAfterStatusOpt.isDefined)
-    handshakerAfterStatusOpt.get.nextMessage.map(_.messageToSend) shouldBe Right(
-      localGetBlockHeadersRequest: GetBlockHeadersEnc
-    )
-    val handshakerAfterFork: Option[Handshaker[PeerInfo]] = handshakerAfterStatusOpt.get.applyMessage(BlockHeaders(Nil))
-    assert(handshakerAfterStatusOpt.isDefined)
-
-    handshakerAfterFork.get.nextMessage match {
-      case Left(
-            HandshakeSuccess(
-              PeerInfo(
-                initialStatus,
-                chainWeight,
-                forkAccepted,
-                currentMaxBlockNumber,
-                bestBlockHash
-              )
-            )
-          ) =>
-        initialStatus shouldBe remoteStatus
-        chainWeight shouldBe remoteStatus.chainWeight
-        bestBlockHash shouldBe remoteStatus.bestHash
-        currentMaxBlockNumber shouldBe 0
-        forkAccepted shouldBe false
-      case _ => fail()
-    }
-  }
-
-  it should "connect correctly after validating fork id when peer supports ETH64" taggedAs (
+  it should "connect correctly after validating fork id when peer supports ETH68" taggedAs (
     UnitTest,
     NetworkTest
   ) in new LocalPeerETH64Setup with RemotePeerETH64Setup {
@@ -210,7 +135,7 @@ class NetworkHandshakerSpec extends AnyFlatSpec with Matchers {
     }
   }
 
-  it should "disconnect from a useless peer after validating fork id when peer supports ETH64" taggedAs (
+  it should "disconnect from a useless peer after validating fork id when peer supports ETH68" taggedAs (
     UnitTest,
     NetworkTest
   ) in new LocalPeerETH64Setup with RemotePeerETH64Setup {
@@ -363,19 +288,6 @@ class NetworkHandshakerSpec extends AnyFlatSpec with Matchers {
     )
   }
 
-  it should "fail if a timeout happened during fork block exchange" taggedAs (
-    UnitTest,
-    NetworkTest
-  ) in new RemotePeerETH63Setup {
-    val handshakerAfterHelloOpt: Option[Handshaker[PeerInfo]] = initHandshakerWithResolver.applyMessage(remoteHello)
-    val handshakerAfterStatusOpt: Option[Handshaker[PeerInfo]] =
-      handshakerAfterHelloOpt.get.applyMessage(remoteStatusMsg)
-    val handshakerAfterTimeout = handshakerAfterStatusOpt.get.processTimeout
-    handshakerAfterTimeout.nextMessage.map(_.messageToSend) shouldBe Left(
-      HandshakeFailure(Disconnect.Reasons.TimeoutOnReceivingAMessage)
-    )
-  }
-
   it should "fail if a status msg is received with invalid network id" taggedAs (
     UnitTest,
     NetworkTest
@@ -386,7 +298,7 @@ class NetworkHandshakerSpec extends AnyFlatSpec with Matchers {
     val handshakerAfterStatusOpt: Option[Handshaker[PeerInfo]] =
       handshakerAfterHelloOpt.get.applyMessage(remoteStatusMsg.copy(networkId = wrongNetworkId))
     handshakerAfterStatusOpt.get.nextMessage.map(_.messageToSend) shouldBe Left(
-      HandshakeFailure(Disconnect.Reasons.DisconnectRequested)
+      HandshakeFailure(Disconnect.Reasons.UselessPeer)
     )
   }
 
@@ -401,11 +313,11 @@ class NetworkHandshakerSpec extends AnyFlatSpec with Matchers {
     val handshakerAfterStatusOpt: Option[Handshaker[PeerInfo]] =
       handshakerAfterHelloOpt.get.applyMessage(remoteStatusMsg.copy(genesisHash = wrongGenesisHash))
     handshakerAfterStatusOpt.get.nextMessage.map(_.messageToSend) shouldBe Left(
-      HandshakeFailure(Disconnect.Reasons.DisconnectRequested)
+      HandshakeFailure(Disconnect.Reasons.UselessPeer)
     )
   }
 
-  it should "fail if the remote peer doesn't support ETH63+" taggedAs (
+  it should "fail if the remote peer doesn't support ETH68+" taggedAs (
     UnitTest,
     NetworkTest
   ) in new RemotePeerETH63Setup {
@@ -417,7 +329,7 @@ class NetworkHandshakerSpec extends AnyFlatSpec with Matchers {
     )
   }
 
-  it should "use actual block number for ForkId (core-geth alignment)" taggedAs (
+  it should "use actual block number for ETH68 ForkId (core-geth alignment)" taggedAs (
     UnitTest,
     NetworkTest
   ) in new LocalPeerETH64Setup with RemotePeerETH64Setup {
@@ -447,7 +359,7 @@ class NetworkHandshakerSpec extends AnyFlatSpec with Matchers {
     handshakerAfterHelloOpt.get.nextMessage match {
       case Right(nextMsg) =>
         nextMsg.messageToSend match {
-          case statusEnc: ETH64.Status.StatusEnc =>
+          case statusEnc: ETHPackets.Status68.Status68.Status68Enc =>
             val statusMsg = statusEnc.underlyingMsg
             // Best block should be the low block
             statusMsg.bestHash shouldBe lowBlock.header.hash
@@ -455,7 +367,7 @@ class NetworkHandshakerSpec extends AnyFlatSpec with Matchers {
             val expectedForkId = ForkId.create(genesisBlock.header.hash, blockchainConfig)(lowBlockNumber)
             statusMsg.forkId shouldBe expectedForkId
           case other =>
-            fail(s"Expected ETH64.Status.StatusEnc message but got: $other")
+            fail(s"Expected ETHPackets.Status68.Status68Enc message but got: $other")
         }
       case other =>
         fail(s"Expected status message but got: $other")
@@ -496,32 +408,18 @@ class NetworkHandshakerSpec extends AnyFlatSpec with Matchers {
     handshakerAfterHelloOpt.get.nextMessage match {
       case Right(nextMsg) =>
         nextMsg.messageToSend match {
-          case statusEnc: ETH64.Status.StatusEnc =>
+          case statusEnc: ETHPackets.Status68.Status68.Status68Enc =>
             val statusMsg = statusEnc.underlyingMsg
             statusMsg.bestHash shouldBe highBlock.header.hash
             // ForkId should be calculated using actual block number (19,200,000), matching core-geth
             val expectedForkId = ForkId.create(genesisBlock.header.hash, blockchainConfig)(highBlockNumber)
             statusMsg.forkId shouldBe expectedForkId
           case other =>
-            fail(s"Expected ETH64.Status.StatusEnc message but got: $other")
+            fail(s"Expected ETHPackets.Status68.Status68Enc message but got: $other")
         }
       case other =>
         fail(s"Expected status message but got: $other")
     }
-  }
-
-  it should "fail if a fork resolver is used and the block from the remote peer isn't accepted" taggedAs (
-    UnitTest,
-    NetworkTest
-  ) in new RemotePeerETH63Setup {
-    val handshakerAfterHelloOpt: Option[Handshaker[PeerInfo]] = initHandshakerWithResolver.applyMessage(remoteHello)
-    val handshakerAfterStatusOpt: Option[Handshaker[PeerInfo]] =
-      handshakerAfterHelloOpt.get.applyMessage(remoteStatusMsg)
-    val handshakerAfterForkBlockOpt: Option[Handshaker[PeerInfo]] = handshakerAfterStatusOpt.get.applyMessage(
-      BlockHeaders(Seq(genesisBlock.header.copy(number = forkBlockHeader.number)))
-    )
-    assert(handshakerAfterForkBlockOpt.isDefined)
-    handshakerAfterForkBlockOpt.get.nextMessage.leftSide shouldBe Left(HandshakeFailure(Disconnect.Reasons.UselessPeer))
   }
 
   trait TestSetup extends SecureRandomBuilder with EphemBlockchainTestSetup {
@@ -564,7 +462,7 @@ class NetworkHandshakerSpec extends AnyFlatSpec with Matchers {
       }
 
     val initHandshakerWithoutResolver: NetworkHandshaker = NetworkHandshaker(
-      new MockNetworkHandshakerConfiguration(List(Capability.ETH63, Capability.ETH64))
+      new MockNetworkHandshakerConfiguration(List(Capability.ETH68, Capability.ETH69))
     )
 
     val initHandshakerWithResolver: NetworkHandshaker = NetworkHandshaker(networkHandshakerConfigurationWithResolver)
@@ -575,7 +473,7 @@ class NetworkHandshakerSpec extends AnyFlatSpec with Matchers {
 
   trait LocalPeerSetup extends TestSetup {
     val localHello: Hello = Hello(
-      p2pVersion = EtcHelloExchangeState.P2pVersion,
+      p2pVersion = HelloExchangeState.P2pVersion,
       clientId = Config.clientId,
       capabilities = Config.supportedCapabilities,
       listenPort = Config.Network.Server.port,
@@ -583,30 +481,49 @@ class NetworkHandshakerSpec extends AnyFlatSpec with Matchers {
     )
 
     val localGetBlockHeadersRequest: GetBlockHeaders =
-      GetBlockHeaders(Left(forkBlockHeader.number), maxHeaders = 1, skip = 0, reverse = false)
+      GetBlockHeaders(BigInt(0), Left(forkBlockHeader.number), maxHeaders = 1, skip = 0, reverse = false)
   }
 
+  // Formerly LocalPeerETH63Setup — updated to ETH68 since ETH62-67 are retired
+  // Formerly LocalPeerETH63Setup — updated to ETH68 since ETH62-67 are retired
   trait LocalPeerETH63Setup extends LocalPeerSetup {
-    val localStatusMsg: BaseETH6XMessages.Status = BaseETH6XMessages.Status(
-      protocolVersion = Capability.ETH63.version,
+    val localStatusMsg: ETHPackets.Status68.Status68 = ETHPackets.Status68.Status68(
+      protocolVersion = Capability.ETH68.version,
       networkId = Config.Network.peer.networkId,
       totalDifficulty = genesisBlock.header.difficulty,
       bestHash = genesisBlock.header.hash,
-      genesisHash = genesisBlock.header.hash
+      genesisHash = genesisBlock.header.hash,
+      forkId = ForkId(0xfc64ec04L, Some(1150000)) // ETC genesis forkId (block 0)
     )
-    val localStatus: RemoteStatus = RemoteStatus(localStatusMsg)
+    val localStatus: RemoteStatus = RemoteStatus(
+      Capability.ETH68,
+      localStatusMsg.networkId,
+      ChainWeight.totalDifficultyOnly(localStatusMsg.totalDifficulty),
+      localStatusMsg.bestHash,
+      localStatusMsg.genesisHash,
+      false,
+      List.empty
+    )
   }
 
   trait LocalPeerETH64Setup extends LocalPeerSetup {
-    val localStatusMsg: ETH64.Status = ETH64.Status(
-      protocolVersion = Capability.ETH64.version,
+    val localStatusMsg: ETHPackets.Status68.Status68 = ETHPackets.Status68.Status68(
+      protocolVersion = Capability.ETH68.version,
       networkId = Config.Network.peer.networkId,
       totalDifficulty = genesisBlock.header.difficulty,
       bestHash = genesisBlock.header.hash,
       genesisHash = genesisBlock.header.hash,
       forkId = ForkId(1L, None)
     )
-    val localStatus: RemoteStatus = RemoteStatus(localStatusMsg)
+    val localStatus: RemoteStatus = RemoteStatus(
+      Capability.ETH68,
+      localStatusMsg.networkId,
+      ChainWeight.totalDifficultyOnly(localStatusMsg.totalDifficulty),
+      localStatusMsg.bestHash,
+      localStatusMsg.genesisHash,
+      false,
+      List.empty
+    )
   }
 
   trait RemotePeerSetup extends TestSetup {
@@ -618,45 +535,18 @@ class NetworkHandshakerSpec extends AnyFlatSpec with Matchers {
     val remotePort = 8545
   }
 
+  // Formerly RemotePeerETH63Setup — updated to ETH68 since ETH62-67 are retired
   trait RemotePeerETH63Setup extends RemotePeerSetup {
     val remoteHello: Hello = Hello(
-      p2pVersion = EtcHelloExchangeState.P2pVersion,
+      p2pVersion = HelloExchangeState.P2pVersion,
       clientId = "remote-peer",
-      capabilities = Seq(Capability.ETH63),
+      capabilities = Seq(Capability.ETH68),
       listenPort = remotePort,
       nodeId = ByteString(remoteNodeStatus.nodeId)
     )
 
-    val remoteStatusMsg: BaseETH6XMessages.Status = BaseETH6XMessages.Status(
-      protocolVersion = Capability.ETH63.version,
-      networkId = Config.Network.peer.networkId,
-      totalDifficulty = 0,
-      bestHash = genesisBlock.header.hash,
-      genesisHash = genesisBlock.header.hash
-    )
-
-    // remoteClientId mirrors remoteHello.clientId: the handshake threads the Hello's clientId into
-    // the resulting RemoteStatus, so the expected fixture must carry it for `initialStatus shouldBe remoteStatus`.
-    val remoteStatus: RemoteStatus = RemoteStatus(
-      remoteStatusMsg,
-      Capability.ETH63,
-      false,
-      Seq(Capability.ETH63).toList,
-      "remote-peer"
-    )
-  }
-
-  trait RemotePeerETH64Setup extends RemotePeerSetup {
-    val remoteHello: Hello = Hello(
-      p2pVersion = EtcHelloExchangeState.P2pVersion,
-      clientId = "remote-peer",
-      capabilities = Seq(Capability.ETH64),
-      listenPort = remotePort,
-      nodeId = ByteString(remoteNodeStatus.nodeId)
-    )
-
-    val remoteStatusMsg: ETH64.Status = ETH64.Status(
-      protocolVersion = Capability.ETH64.version,
+    val remoteStatusMsg: ETHPackets.Status68.Status68 = ETHPackets.Status68.Status68(
+      protocolVersion = Capability.ETH68.version,
       networkId = Config.Network.peer.networkId,
       totalDifficulty = 0,
       bestHash = genesisBlock.header.hash,
@@ -664,13 +554,53 @@ class NetworkHandshakerSpec extends AnyFlatSpec with Matchers {
       forkId = ForkId(0xfc64ec04L, Some(1150000))
     )
 
-    val remoteStatus: RemoteStatus = RemoteStatus(remoteStatusMsg)
+    val remoteStatus: RemoteStatus = RemoteStatus(
+      Capability.ETH68,
+      remoteStatusMsg.networkId,
+      ChainWeight.totalDifficultyOnly(remoteStatusMsg.totalDifficulty),
+      remoteStatusMsg.bestHash,
+      remoteStatusMsg.genesisHash,
+      false,
+      Seq(Capability.ETH68).toList,
+      remoteClientId = "remote-peer"
+    )
+  }
+
+  // RemotePeerETH64Setup: updated to ETH68 (ETH64 retired)
+  trait RemotePeerETH64Setup extends RemotePeerSetup {
+    val remoteHello: Hello = Hello(
+      p2pVersion = HelloExchangeState.P2pVersion,
+      clientId = "remote-peer",
+      capabilities = Seq(Capability.ETH68),
+      listenPort = remotePort,
+      nodeId = ByteString(remoteNodeStatus.nodeId)
+    )
+
+    val remoteStatusMsg: ETHPackets.Status68.Status68 = ETHPackets.Status68.Status68(
+      protocolVersion = Capability.ETH68.version,
+      networkId = Config.Network.peer.networkId,
+      totalDifficulty = 0,
+      bestHash = genesisBlock.header.hash,
+      genesisHash = genesisBlock.header.hash,
+      forkId = ForkId(0xfc64ec04L, Some(1150000))
+    )
+
+    val remoteStatus: RemoteStatus = RemoteStatus(
+      Capability.ETH68,
+      remoteStatusMsg.networkId,
+      ChainWeight.totalDifficultyOnly(remoteStatusMsg.totalDifficulty),
+      remoteStatusMsg.bestHash,
+      remoteStatusMsg.genesisHash,
+      false,
+      List.empty,
+      remoteClientId = "remote-peer"
+    )
   }
 
   trait RemotePeerETH69Setup extends RemotePeerSetup {
     // ETH/69 peers never advertise snap/1 in Hello — snap is implicit per EIP-7642.
     val remoteHello: Hello = Hello(
-      p2pVersion = EtcHelloExchangeState.P2pVersion,
+      p2pVersion = HelloExchangeState.P2pVersion,
       clientId = "remote-peer-eth69",
       capabilities = Seq(Capability.ETH69), // No SNAP1
       listenPort = remotePort,

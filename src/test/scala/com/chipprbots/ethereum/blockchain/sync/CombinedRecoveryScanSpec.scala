@@ -12,7 +12,6 @@ import com.chipprbots.ethereum.domain.Account
 import com.chipprbots.ethereum.domain.UInt256
 import com.chipprbots.ethereum.mpt.MerklePatriciaTrie
 import com.chipprbots.ethereum.mpt.MerklePatriciaTrie.defaultByteArraySerializable
-import com.chipprbots.ethereum.network.p2p.messages.ETH63.AccountImplicits.AccountEnc
 import com.chipprbots.ethereum.testing.Tags._
 
 /** Equivalence test for the combined single-pass recovery scan: one walk that checks BOTH bytecode and storage per

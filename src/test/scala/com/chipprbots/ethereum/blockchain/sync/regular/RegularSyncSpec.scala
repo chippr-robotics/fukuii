@@ -47,15 +47,16 @@ import com.chipprbots.ethereum.network.PeerEventBusActor.PeerEvent.MessageFromPe
 import com.chipprbots.ethereum.network.PeerEventBusActor.PeerSelector
 import com.chipprbots.ethereum.network.PeerEventBusActor.Subscribe
 import com.chipprbots.ethereum.network.PeerEventBusActor.SubscriptionClassifier.MessageClassifier
-import com.chipprbots.ethereum.network.p2p.messages.BaseETH6XMessages
-import com.chipprbots.ethereum.network.p2p.messages.BaseETH6XMessages.NewBlock
+import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.NewBlock
 import com.chipprbots.ethereum.network.p2p.messages.Capability
 import com.chipprbots.ethereum.network.p2p.messages.Codes
-import com.chipprbots.ethereum.network.p2p.messages.ETH62._
-import com.chipprbots.ethereum.network.p2p.messages.ETH63.GetNodeData
-import com.chipprbots.ethereum.network.p2p.messages.ETH63.NodeData
-import com.chipprbots.ethereum.network.p2p.messages.ETH66.{GetBlockHeaders => ETH66GetBlockHeaders}
-import com.chipprbots.ethereum.network.p2p.messages.ETH66.{GetBlockBodies => ETH66GetBlockBodies}
+import com.chipprbots.ethereum.network.p2p.messages.ETHPackets
+import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.NewBlockHashes.{NewBlockHashes, BlockHash}
+import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.GetNodeData
+import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.NodeData
+import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.{GetBlockHeaders => ETHGetBlockHeaders}
+import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.{GetBlockBodies => ETHGetBlockBodies}
+import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.{BlockHeaders, BlockBodies}
 import com.chipprbots.ethereum.utils.BlockchainConfig
 import com.chipprbots.ethereum.utils.Config.SyncConfig
 import com.chipprbots.ethereum.blockchain.sync.regular.RegularSync
@@ -136,17 +137,17 @@ class RegularSyncSpec
         )
 
         peersClient.expectMsgEq(blockHeadersChunkRequest(0))
-        peersClient.reply(PeersClient.Response(defaultPeer, BlockHeaders(testBlocksChunked.head.headers)))
+        peersClient.reply(PeersClient.Response(defaultPeer, BlockHeaders(BigInt(0), testBlocksChunked.head.headers)))
         peersClient.expectMsgAllOfEq(
           blockHeadersChunkRequest(1),
-          PeersClient.Request.create(GetBlockBodies(testBlocksChunked.head.hashes), PeersClient.BestPeer)
+          PeersClient.Request.create(ETHGetBlockBodies(BigInt(0), testBlocksChunked.head.hashes), PeersClient.BestPeer)
         )
       })
 
       "blacklist peer which caused failed request" taggedAs (UnitTest, SyncTest) in sync(new Fixture(testSystem) {
         regularSync ! SyncProtocol.Start
 
-        peersClient.expectMsgType[PeersClient.Request[GetBlockHeaders]]
+        peersClient.expectMsgType[PeersClient.Request[ETHGetBlockHeaders]]
         peersClient.reply(
           PeersClient.RequestFailed(defaultPeer, BlacklistReason.RegularSyncRequestFailed("a random reason"))
         )
@@ -167,7 +168,7 @@ class RegularSyncSpec
           blockFetcher = peerEventBus.sender()
 
           peersClient.expectMsgEq(blockHeadersChunkRequest(0))
-          peersClient.reply(PeersClient.Response(defaultPeer, BlockHeaders(testBlocksChunked.head.headers)))
+          peersClient.reply(PeersClient.Response(defaultPeer, BlockHeaders(BigInt(0), testBlocksChunked.head.headers)))
 
           // Full-sized first batch bumps knownTop, so the fetcher emits the
           // bodies request AND the next-chunk headers prefetch in parallel.
@@ -175,16 +176,16 @@ class RegularSyncSpec
           var bodiesSender: org.apache.pekko.actor.ActorRef = null
           var nextHeadersSender: org.apache.pekko.actor.ActorRef = null
           def classifyNext(): Unit = peersClient.expectMsgPF() {
-            case PeersClient.Request(msg: ETH66GetBlockBodies, _, _)
+            case PeersClient.Request(msg: ETHGetBlockBodies, _, _)
                 if msg.hashes == testBlocksChunked.head.headers.map(_.hash) =>
               bodiesSender = peersClient.lastSender
-            case PeersClient.Request(_: ETH66GetBlockHeaders, _, _) =>
+            case PeersClient.Request(_: ETHGetBlockHeaders, _, _) =>
               nextHeadersSender = peersClient.lastSender
           }
           classifyNext()
           classifyNext()
 
-          bodiesSender ! PeersClient.Response(defaultPeer, BlockBodies(testBlocksChunked.head.bodies))
+          bodiesSender ! PeersClient.Response(defaultPeer, BlockBodies(BigInt(0), testBlocksChunked.head.bodies))
 
           blockFetcher ! MessageFromPeer(
             NewBlock(testBlocks.last, ChainWeight.totalDifficultyOnly(testBlocks.last.number).totalDifficulty),
@@ -195,8 +196,8 @@ class RegularSyncSpec
           // chain will return headers that don't extend the local waiting state. Besu
           // AbstractPeerTask.java distinguishes HeadersNotMatchingExpected (no penalty) from
           // InvalidHeaders (blacklist). Expect a retry request instead of BlacklistPeer.
-          nextHeadersSender ! PeersClient.Response(defaultPeer, BlockHeaders(testBlocksChunked(5).headers))
-          peersClient.fishForSpecificMessage() { case PeersClient.Request(_: ETH66GetBlockHeaders, _, _) =>
+          nextHeadersSender ! PeersClient.Response(defaultPeer, BlockHeaders(BigInt(0), testBlocksChunked(5).headers))
+          peersClient.fishForSpecificMessage() { case PeersClient.Request(_: ETHGetBlockHeaders, _, _) =>
             ()
           }
         }
@@ -210,9 +211,9 @@ class RegularSyncSpec
 
         peersClient.expectMsgEq(blockHeadersChunkRequest(0))
         peersClient.reply(
-          PeersClient.Response(defaultPeer, BlockHeaders(testBlocks.headers.filter(_.number % 2 == 0)))
+          PeersClient.Response(defaultPeer, BlockHeaders(BigInt(0), testBlocks.headers.filter(_.number % 2 == 0)))
         )
-        peersClient.fishForSpecificMessage() { case PeersClient.Request(_: ETH66GetBlockHeaders, _, _) =>
+        peersClient.fishForSpecificMessage() { case PeersClient.Request(_: ETHGetBlockHeaders, _, _) =>
           ()
         }
       })
@@ -254,15 +255,15 @@ class RegularSyncSpec
         )
 
         peersClient.expectMsgEq(blockHeadersChunkRequest(0))
-        peersClient.reply(PeersClient.Response(defaultPeer, BlockHeaders(testBlocksChunked.head.headers)))
+        peersClient.reply(PeersClient.Response(defaultPeer, BlockHeaders(BigInt(0), testBlocksChunked.head.headers)))
 
         // Now expects ETH66 GetBlockBodies with requestId
         // requestId is dynamic (generated per request) so we ignore it with _
         val expectedHashes = testBlocksChunked.head.hashes.toSet
         peersClient.expectMsgPF() {
-          case PeersClient.Request(ETH66GetBlockBodies(_, hashes), _, _) if hashes.toSet == expectedHashes => ()
+          case PeersClient.Request(ETHGetBlockBodies(_, hashes), _, _) if hashes.toSet == expectedHashes => ()
         }
-        peersClient.reply(PeersClient.Response(defaultPeer, BlockBodies(testBlocksChunked.head.bodies)))
+        peersClient.reply(PeersClient.Response(defaultPeer, BlockBodies(BigInt(0), testBlocksChunked.head.bodies)))
 
         peersClient.expectNoMessage()
       })
@@ -275,6 +276,7 @@ class RegularSyncSpec
           override lazy val blockchain: BlockchainImpl = stub[BlockchainImpl]
           override lazy val blockchainReader: BlockchainReader = stub[BlockchainReader]
           (blockchainReader.getBestBlockNumber _).when().onCall(() => bestBlock.number)
+          (blockchainReader.getSnapSyncPivotBlock _).when().returns(None) // no SNAP sync pivot
           override lazy val consensusAdapter: ConsensusAdapter = stub[ConsensusAdapter]
           (consensusAdapter
             .evaluateBranchBlock(_: Block)(_: IORuntime, _: BlockchainConfig))
@@ -298,31 +300,18 @@ class RegularSyncSpec
           class BranchResolutionAutoPilot(didResponseWithNewBranch: Boolean, blocks: List[Block])
               extends PeersClientAutoPilot(blocks) {
             override def overrides(sender: ActorRef): PartialFunction[Any, Option[AutoPilot]] = {
-              // Handle ETH62 GetBlockHeaders
-              case PeersClient.Request(GetBlockHeaders(Left(nr), maxHeaders, _, _), _, _)
+              // Handle ETH68/69 GetBlockHeaders
+              case PeersClient.Request(ETHGetBlockHeaders(_, Left(nr), maxHeaders, _, _), _, _)
                   if nr >= alternativeBranch.numberAtUnsafe(syncConfig.blocksBatchSize) && !didResponseWithNewBranch =>
                 val responseHeaders = alternativeBranch.headers.filter(_.number >= nr).take(maxHeaders.toInt)
-                sender ! PeersClient.Response(defaultPeer, BlockHeaders(responseHeaders))
+                sender ! PeersClient.Response(defaultPeer, BlockHeaders(BigInt(0), responseHeaders))
                 Some(new BranchResolutionAutoPilot(true, alternativeBlocks))
-              // Handle ETH66 GetBlockHeaders
-              case PeersClient.Request(ETH66GetBlockHeaders(_, Left(nr), maxHeaders, _, _), _, _)
-                  if nr >= alternativeBranch.numberAtUnsafe(syncConfig.blocksBatchSize) && !didResponseWithNewBranch =>
-                val responseHeaders = alternativeBranch.headers.filter(_.number >= nr).take(maxHeaders.toInt)
-                sender ! PeersClient.Response(defaultPeer, BlockHeaders(responseHeaders))
-                Some(new BranchResolutionAutoPilot(true, alternativeBlocks))
-              // Handle ETH62 GetBlockBodies
-              case PeersClient.Request(GetBlockBodies(hashes), _, _)
+              // Handle ETH68/69 GetBlockBodies
+              case PeersClient.Request(ETHGetBlockBodies(_, hashes), _, _)
                   if !hashes.toSet.subsetOf(blocks.hashes.toSet) &&
                     hashes.toSet.subsetOf(testBlocks.hashes.toSet) =>
                 val matchingBodies = hashes.flatMap(hash => testBlocks.find(_.hash == hash)).map(_.body)
-                sender ! PeersClient.Response(defaultPeer, BlockBodies(matchingBodies))
-                None
-              // Handle ETH66 GetBlockBodies
-              case PeersClient.Request(ETH66GetBlockBodies(_, hashes), _, _)
-                  if !hashes.toSet.subsetOf(blocks.hashes.toSet) &&
-                    hashes.toSet.subsetOf(testBlocks.hashes.toSet) =>
-                val matchingBodies = hashes.flatMap(hash => testBlocks.find(_.hash == hash)).map(_.body)
-                sender ! PeersClient.Response(defaultPeer, BlockBodies(matchingBodies))
+                sender ! PeersClient.Response(defaultPeer, BlockBodies(BigInt(0), matchingBodies))
                 None
             }
           }
@@ -351,6 +340,7 @@ class RegularSyncSpec
         override lazy val blockchainReader: BlockchainReader = stub[BlockchainReader]
         override lazy val blockchain: BlockchainImpl = stub[BlockchainImpl]
         (blockchainReader.getBestBlockNumber _).when().onCall(() => bestBlock.number)
+        (blockchainReader.getSnapSyncPivotBlock _).when().returns(None) // no SNAP sync pivot
         override lazy val consensusAdapter: ConsensusAdapter = stub[ConsensusAdapter]
         (consensusAdapter
           .evaluateBranchBlock(_: Block)(_: IORuntime, _: BlockchainConfig))
@@ -374,11 +364,7 @@ class RegularSyncSpec
         class ForkingAutoPilot(blocksToRespond: List[Block], forkedBlocks: Option[List[Block]])
             extends PeersClientAutoPilot(blocksToRespond) {
           override def overrides(sender: ActorRef): PartialFunction[Any, Option[AutoPilot]] = {
-            // Handle both ETH62 and ETH66 GetBlockBodies for transition compatibility
-            // The base autopilot handles both formats, but we need custom fork logic
-            case req @ PeersClient.Request(GetBlockBodies(hashes), _, _) =>
-              handleForkLogic(hashes, req, sender)
-            case req @ PeersClient.Request(ETH66GetBlockBodies(_, hashes), _, _) =>
+            case req @ PeersClient.Request(ETHGetBlockBodies(_, hashes), _, _) =>
               handleForkLogic(hashes, req, sender)
           }
 
@@ -494,6 +480,7 @@ class RegularSyncSpec
         peersClient.setAutoPilot(new PeersClientAutoPilot)
         override lazy val branchResolution: BranchResolution = stub[BranchResolution]
         (blockchainReader.getBestBlockNumber _).when().returns(0)
+        (blockchainReader.getSnapSyncPivotBlock _).when().returns(None) // no SNAP sync pivot
         (branchResolution.resolveBranch _).when(*).returns(NewBetterBranch(Nil)).atLeastOnce()
         (consensusAdapter
           .evaluateBranchBlock(_: Block)(_: IORuntime, _: BlockchainConfig))
@@ -607,7 +594,7 @@ class RegularSyncSpec
         blockFetcher !
           MessageFromPeer(NewBlockHashes(List(BlockHash(newBlock.hash, newBlock.number))), defaultPeer.id)
 
-        peersClient.expectMsgPF() { case PeersClient.Request(ETH66GetBlockHeaders(_, _, _, _, _), _, _) =>
+        peersClient.expectMsgPF() { case PeersClient.Request(ETHGetBlockHeaders(_, _, _, _, _), _, _) =>
           true
         }
       })
@@ -707,8 +694,8 @@ class RegularSyncSpec
           networkPeerManager.fishForSpecificMessageMatching(max = 10.seconds) {
             case NetworkPeerManagerActor.SendMessage(message, _) =>
               message.underlyingMsg match {
-                case BaseETH6XMessages.NewBlock(`newBlock`, _) => true
-                case _                                         => false
+                case ETHPackets.NewBlock(`newBlock`, _) => true
+                case _                                  => false
               }
             case _ => false
           }
@@ -767,7 +754,9 @@ class RegularSyncSpec
             )
 
             peersClient.expectMsgEq(blockHeadersRequest(6))
-            peersClient.reply(PeersClient.Response(defaultPeer, BlockHeaders(testBlocksChunked.head.headers)))
+            peersClient.reply(
+              PeersClient.Response(defaultPeer, BlockHeaders(BigInt(0), testBlocksChunked.head.headers))
+            )
           }
           status <- pollForStatus(_.syncing)
         } yield {
@@ -795,7 +784,9 @@ class RegularSyncSpec
             )
 
             peersClient.expectMsgEq(blockHeadersChunkRequest(0))
-            peersClient.reply(PeersClient.Response(defaultPeer, BlockHeaders(testBlocksChunked.head.headers)))
+            peersClient.reply(
+              PeersClient.Response(defaultPeer, BlockHeaders(BigInt(0), testBlocksChunked.head.headers))
+            )
           }
           status <- pollForStatus(_.syncing)
           lastBlock = testBlocks.last.number

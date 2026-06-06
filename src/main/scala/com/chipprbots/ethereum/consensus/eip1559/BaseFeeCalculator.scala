@@ -38,11 +38,11 @@ object BaseFeeCalculator {
       val baseFeeDelta = (parentBaseFee * gasUsedDelta / parentGasTarget / BaseFeeChangeDenominator).max(1)
       parentBaseFee + baseFeeDelta
     } else {
-      // Parent used less gas than target — baseFee decreases
-      // max(0, parentBaseFee - parentBaseFee * gasUsedDelta / parentGasTarget / baseFeeChangeDenominator)
+      // Parent used less gas than target — baseFee decreases.
+      // Floor at baseFeeFloor from chain config (1 gwei for ETC/Mordor per ECIP-1111).
       val gasUsedDelta = parentGasTarget - parent.gasUsed
-      val baseFeeDelta = parentBaseFee * gasUsedDelta / parentGasTarget / BaseFeeChangeDenominator
-      (parentBaseFee - baseFeeDelta).max(0)
+      val baseFeeDelta = (parentBaseFee * gasUsedDelta / parentGasTarget / BaseFeeChangeDenominator).max(1)
+      (parentBaseFee - baseFeeDelta).max(blockchainConfig.baseFeeFloor)
     }
   }
 }

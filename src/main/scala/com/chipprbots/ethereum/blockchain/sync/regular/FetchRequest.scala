@@ -105,6 +105,17 @@ trait FetchRequest[A] {
       case PeersClient.Response(peer, msg) =>
         log.debug("Successfully received response from peer {} - type: {}", peer.id, msg.getClass.getSimpleName)
         IO.pure(makeAdaptedMessage(peer, msg))
+      case other =>
+        // Guard against MatchError on unexpected response types (e.g. actor Status.Failure,
+        // timeout signals). Without this case, the MatchError propagates to handleError which
+        // returns fallback with no delay — causing rapid retry loops.
+        val delay = retryBackoffDelay(retryCount)
+        log.debug(
+          "Unexpected response type {}, applying {}ms backoff",
+          other.getClass.getSimpleName,
+          delay.toMillis
+        )
+        IO.pure(fallback).delayBy(delay)
     }
 
   /** Computes exponential backoff delay: min(syncRetryInterval * 2^retryCount, maxRetryDelay) */

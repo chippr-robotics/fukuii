@@ -26,7 +26,8 @@ import com.chipprbots.ethereum.jsonrpc.client.RpcClient.ConnectionError
 import com.chipprbots.ethereum.keystore.KeyStore
 import com.chipprbots.ethereum.keystore.KeyStore.DecryptionFailed
 import com.chipprbots.ethereum.keystore.Wallet
-import com.chipprbots.ethereum.network.p2p.messages.BaseETH6XMessages.SignedTransactions.SignedTransactionEnc
+import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.SignedTransactions.SignedTransactionEnc
+import com.chipprbots.ethereum.network.p2p.messages.ETHPackets
 import com.chipprbots.ethereum.rlp
 import com.chipprbots.ethereum.domain.SignedTransactionWithSender
 import com.chipprbots.ethereum.jsonrpc.client.RpcClient.RpcError

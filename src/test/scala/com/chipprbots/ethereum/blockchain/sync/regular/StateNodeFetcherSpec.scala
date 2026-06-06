@@ -19,7 +19,7 @@ import com.chipprbots.ethereum.blockchain.sync.PeersClient.BestSnapPeerExcluding
 import com.chipprbots.ethereum.blockchain.sync.TestSyncConfig
 import com.chipprbots.ethereum.blockchain.sync.regular.BlockFetcher.FetchCommand
 import com.chipprbots.ethereum.blockchain.sync.regular.BlockFetcher.FetchedStateNode
-import com.chipprbots.ethereum.network.p2p.messages.ETH63.NodeData
+import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.NodeData
 import com.chipprbots.ethereum.network.p2p.messages.SNAP.GetByteCodes
 import com.chipprbots.ethereum.network.p2p.messages.SNAP.GetTrieNodes
 import com.chipprbots.ethereum.testing.Tags._

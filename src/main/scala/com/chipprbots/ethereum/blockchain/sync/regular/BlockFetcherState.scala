@@ -17,7 +17,7 @@ import com.chipprbots.ethereum.domain.BlockBody
 import com.chipprbots.ethereum.domain.BlockHeader
 import com.chipprbots.ethereum.domain.HeadersSeq
 import com.chipprbots.ethereum.network.PeerId
-import com.chipprbots.ethereum.network.p2p.messages.ETH62.BlockHash
+import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.NewBlockHashes.BlockHash
 
 // scalastyle:off number.of.methods
 /** State used by the BlockFetcher
@@ -61,7 +61,9 @@ case class BlockFetcherState(
     // blocks behind tip) for any SNAP peer to serve from. Trie nodes are content-addressed,
     // so the same nibble path against a recent root usually leads to the same node — provided
     // the account's subtree hasn't been touched in the gap.
-    recentCanonicalStateRoot: Option[ByteString] = None
+    recentCanonicalStateRoot: Option[ByteString] = None,
+    lastPrintBlock: BigInt = BigInt(0),
+    lastPrintTimeMs: Long = 0L
 ) {
 
   def isFetching: Boolean = isFetchingHeaders || isFetchingBodies

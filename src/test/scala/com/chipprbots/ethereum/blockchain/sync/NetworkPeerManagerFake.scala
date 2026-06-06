@@ -20,15 +20,15 @@ import com.chipprbots.ethereum.network.NetworkPeerManagerActor.PeerInfo
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor.SendMessage
 import com.chipprbots.ethereum.network.Peer
 import com.chipprbots.ethereum.network.PeerEventBusActor.PeerEvent.MessageFromPeer
-import com.chipprbots.ethereum.network.p2p.messages.ETH62.BlockBodies
-import com.chipprbots.ethereum.network.p2p.messages.ETH62.BlockHeaders
-import com.chipprbots.ethereum.network.p2p.messages.ETH62.GetBlockBodies
-import com.chipprbots.ethereum.network.p2p.messages.ETH62.GetBlockHeaders
-import com.chipprbots.ethereum.network.p2p.messages.ETH63.GetNodeData
-import com.chipprbots.ethereum.network.p2p.messages.ETH63.GetReceipts
-import com.chipprbots.ethereum.network.p2p.messages.ETH63.NodeData
-import com.chipprbots.ethereum.network.p2p.messages.ETH63.Receipts
-import com.chipprbots.ethereum.network.p2p.messages.ETH66
+import com.chipprbots.ethereum.network.p2p.messages.ETHPackets
+import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.BlockBodies
+import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.GetReceipts
+import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.Receipts68
+import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.BlockHeaders
+import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.GetBlockBodies
+import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.GetBlockHeaders
+import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.GetNodeData
+import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.NodeData
 import com.chipprbots.ethereum.utils.Config.SyncConfig
 import com.chipprbots.ethereum.rlp.RLPList
 import com.chipprbots.ethereum.rlp.RLPValue
@@ -63,9 +63,8 @@ class NetworkPeerManagerFake(
   val responses: Stream[IO, MessageFromPeer] = responsesTopic.subscribe(100)
   val onPeersConnected: IO[Unit] = peersConnectedDeferred.get
   val pivotBlockSelected: Stream[IO, BlockHeader] = responses
-    .collect {
-      case MessageFromPeer(BlockHeaders(Seq(header)), peer)          => (header, peer)
-      case MessageFromPeer(ETH66.BlockHeaders(_, Seq(header)), peer) => (header, peer)
+    .collect { case MessageFromPeer(BlockHeaders(_, Seq(header)), peer) =>
+      (header, peer)
     }
     .chunkN(peers.size)
     .flatMap { headersFromPeersChunk =>
@@ -80,21 +79,17 @@ class NetworkPeerManagerFake(
     }
 
   val fetchedHeaders: Stream[IO, Seq[BlockHeader]] = responses.collect {
-    case MessageFromPeer(BlockHeaders(headers), _) if headers.size == syncConfig.blockHeadersPerRequest =>
-      headers
-    case MessageFromPeer(ETH66.BlockHeaders(_, headers), _) if headers.size == syncConfig.blockHeadersPerRequest =>
+    case MessageFromPeer(BlockHeaders(_, headers), _) if headers.size == syncConfig.blockHeadersPerRequest =>
       headers
   }
-  val fetchedBodies: Stream[IO, Seq[BlockBody]] = responses.collect {
-    case MessageFromPeer(BlockBodies(bodies), _)          => bodies
-    case MessageFromPeer(ETH66.BlockBodies(_, bodies), _) => bodies
+  val fetchedBodies: Stream[IO, Seq[BlockBody]] = responses.collect { case MessageFromPeer(BlockBodies(_, bodies), _) =>
+    bodies
   }
   val requestedReceipts: Stream[IO, Seq[ByteString]] = requests.collect(
     Function.unlift(msg =>
       msg.message.underlyingMsg match {
-        case GetReceipts(hashes)          => Some(hashes)
-        case ETH66.GetReceipts(_, hashes) => Some(hashes)
-        case _                            => None
+        case GetReceipts(_, hashes) => Some(hashes)
+        case _                      => None
       }
     )
   )
@@ -110,8 +105,7 @@ class NetworkPeerManagerFake(
     list.items.collect { case RLPValue(bytes) => ByteString(bytes) }
 
   val fetchedState: Stream[IO, Seq[ByteString]] = responses.collect {
-    case MessageFromPeer(NodeData(values), _)          => values
-    case MessageFromPeer(ETH66.NodeData(_, values), _) => rlpListToByteStrings(values)
+    case MessageFromPeer(ETHPackets.NodeData(values), _) => values
   }
 
 }
@@ -133,29 +127,17 @@ object NetworkPeerManagerFake {
         case sendMsg @ NetworkPeerManagerActor.SendMessage(rawMsg, peerId) =>
           requests.publish1(sendMsg).unsafeRunSync()
           val response = rawMsg.underlyingMsg match {
-            case GetBlockHeaders(startingBlock, maxHeaders, skip, reverse) =>
-              BlockHeaders(headersFor(startingBlock, maxHeaders, skip, reverse))
+            case GetBlockHeaders(requestId, startingBlock, maxHeaders, skip, reverse) =>
+              BlockHeaders(requestId, headersFor(startingBlock, maxHeaders, skip, reverse))
 
-            case ETH66.GetBlockHeaders(requestId, startingBlock, maxHeaders, skip, reverse) =>
-              ETH66.BlockHeaders(requestId, headersFor(startingBlock, maxHeaders, skip, reverse))
+            case GetBlockBodies(requestId, hashes) =>
+              BlockBodies(requestId, bodiesFor(hashes))
 
-            case GetBlockBodies(hashes) =>
-              BlockBodies(bodiesFor(hashes))
+            case ETHPackets.GetReceipts(requestId, blockHashes) =>
+              ETHPackets.Receipts68(requestId, emptyReceiptsRlp(blockHashes.size))
 
-            case ETH66.GetBlockBodies(requestId, hashes) =>
-              ETH66.BlockBodies(requestId, bodiesFor(hashes))
-
-            case GetReceipts(blockHashes) =>
-              Receipts(blockHashes.map(_ => Nil))
-
-            case ETH66.GetReceipts(requestId, blockHashes) =>
-              ETH66.Receipts(requestId, emptyReceiptsRlp(blockHashes.size))
-
-            case GetNodeData(mptElementsHashes) =>
-              NodeData(getMptNodes(mptElementsHashes.toList))
-
-            case ETH66.GetNodeData(requestId, mptElementsHashes) =>
-              ETH66.NodeData(requestId, nodeDataRlp(getMptNodes(mptElementsHashes.toList)))
+            case ETHPackets.GetNodeData(mptElementsHashes) =>
+              ETHPackets.NodeData(Seq.empty)
           }
           val theResponse = MessageFromPeer(response, peerId)
           sender ! theResponse

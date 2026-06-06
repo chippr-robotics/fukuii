@@ -86,12 +86,12 @@ object GraphQLSchema {
   }
 
   private def rlpEncodeReceipt(r: Receipt): ByteString = {
-    import com.chipprbots.ethereum.network.p2p.messages.ETH63.ReceiptImplicits.given
+    import com.chipprbots.ethereum.blockchain.sync.codec.ReceiptCodecs._
     ByteString(r.toBytes)
   }
 
   private def rlpEncodeTransaction(stx: SignedTransaction): ByteString = {
-    import com.chipprbots.ethereum.network.p2p.messages.BaseETH6XMessages.SignedTransactions.SignedTransactionEnc
+    import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.SignedTransactions.SignedTransactionEnc
     ByteString(SignedTransactionEnc(stx).toBytes)
   }
 
@@ -1121,7 +1121,7 @@ object GraphQLSchema {
         Bytes32Type,
         arguments = List(RawDataArg),
         resolve = { c =>
-          import com.chipprbots.ethereum.network.p2p.messages.BaseETH6XMessages.SignedTransactions.SignedTransactionDec
+          import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.SignedTransactions.SignedTransactionDec
 
           val raw = c.arg(RawDataArg)
           // Parse and classify errors locally so hive sees the right errorCode / message. The

@@ -25,7 +25,7 @@ import com.chipprbots.ethereum.blockchain.sync.fast.SyncStateSchedulerActor.Usef
 import com.chipprbots.ethereum.crypto.kec256
 import com.chipprbots.ethereum.network.Peer
 import com.chipprbots.ethereum.network.PeerId
-import com.chipprbots.ethereum.network.p2p.messages.ETH63.NodeData
+import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.NodeData
 
 class SyncStateDownloaderStateSpec
     extends TestKit(ActorSystem("SyncStateDownloaderStateSpec_System"))

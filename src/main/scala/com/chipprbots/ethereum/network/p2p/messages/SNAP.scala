@@ -3,6 +3,7 @@ package com.chipprbots.ethereum.network.p2p.messages
 import org.apache.pekko.util.ByteString
 
 import com.chipprbots.ethereum.domain.Account
+import com.chipprbots.ethereum.domain.Account._
 import com.chipprbots.ethereum.network.p2p.Message
 import com.chipprbots.ethereum.network.p2p.MessageSerializableImplicit
 import com.chipprbots.ethereum.rlp
@@ -150,7 +151,6 @@ object SNAP {
   }
 
   object AccountRange {
-    import com.chipprbots.ethereum.network.p2p.messages.ETH63.AccountImplicits._
 
     implicit class AccountRangeEnc(val underlyingMsg: AccountRange)
         extends MessageSerializableImplicit[AccountRange](underlyingMsg)

@@ -26,7 +26,7 @@ object Receipt {
 
   val byteArraySerializable: ByteArraySerializable[Receipt] = new ByteArraySerializable[Receipt] {
 
-    import com.chipprbots.ethereum.network.p2p.messages.ETH63.ReceiptImplicits.given
+    import com.chipprbots.ethereum.blockchain.sync.codec.ReceiptCodecs._
 
     override def fromBytes(bytes: Array[Byte]): Receipt = bytes.toReceipt
 

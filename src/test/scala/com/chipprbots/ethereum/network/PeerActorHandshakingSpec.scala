@@ -28,11 +28,13 @@ import com.chipprbots.ethereum.network.PeerActor.StatusResponse
 import com.chipprbots.ethereum.network.handshaker.Handshaker.NextMessage
 import com.chipprbots.ethereum.network.handshaker._
 import com.chipprbots.ethereum.network.p2p.Message
-import com.chipprbots.ethereum.network.p2p.messages.BaseETH6XMessages.Status
 import com.chipprbots.ethereum.network.p2p.messages.Capability
 import com.chipprbots.ethereum.network.p2p.messages.WireProtocol.Disconnect
 import com.chipprbots.ethereum.network.p2p.messages.WireProtocol.Hello
 import com.chipprbots.ethereum.network.p2p.messages.WireProtocol.Pong
+import com.chipprbots.ethereum.network.p2p.messages.ETHPackets
+import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.Status68.{Status68 => Status}
+import com.chipprbots.ethereum.forkid.ForkId
 import com.chipprbots.ethereum.network.rlpx.RLPxConnectionHandler
 import com.chipprbots.ethereum.testing.Tags._
 import com.chipprbots.ethereum.utils.Config
@@ -203,7 +205,8 @@ class PeerActorHandshakingSpec extends AnyFlatSpec with Matchers {
       networkId = 1,
       totalDifficulty = Fixtures.Blocks.Genesis.header.difficulty,
       bestHash = Fixtures.Blocks.Genesis.header.hash,
-      genesisHash = Fixtures.Blocks.Genesis.header.hash
+      genesisHash = Fixtures.Blocks.Genesis.header.hash,
+      forkId = ForkId(0, None)
     )
     val defaultStatus: RemoteStatus = RemoteStatus(defaultStatusMsg)
     val defaultBlockNumber = 1000

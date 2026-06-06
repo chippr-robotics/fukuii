@@ -166,7 +166,10 @@ object ETH69 {
   }
 
   object BlockRangeUpdate {
-    implicit class BlockRangeUpdateEnc(val msg: BlockRangeUpdate) extends RLPSerializable {
+    implicit class BlockRangeUpdateEnc(val underlyingMsg: BlockRangeUpdate)
+        extends MessageSerializableImplicit[BlockRangeUpdate](underlyingMsg)
+        with RLPSerializable {
+      override def code: Int = Codes.BlockRangeUpdateCode
       override def toRLPEncodable: RLPEncodeable = RLPList(
         RLPValue(ByteUtils.bigIntToUnsignedByteArray(msg.earliestBlock)),
         RLPValue(ByteUtils.bigIntToUnsignedByteArray(msg.latestBlock)),

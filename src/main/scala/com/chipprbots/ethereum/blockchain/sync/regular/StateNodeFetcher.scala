@@ -23,10 +23,9 @@ import com.chipprbots.ethereum.crypto.kec256
 import com.chipprbots.ethereum.network.Peer
 import com.chipprbots.ethereum.network.PeerId
 import com.chipprbots.ethereum.network.p2p.Message
-import com.chipprbots.ethereum.network.p2p.messages.ETH63.GetNodeData
-import com.chipprbots.ethereum.network.p2p.messages.ETH63.NodeData
-import com.chipprbots.ethereum.network.p2p.messages.ETH66
-import com.chipprbots.ethereum.network.p2p.messages.ETH66.{NodeData => ETH66NodeData}
+import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.GetNodeData
+import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.NodeData
+import com.chipprbots.ethereum.network.p2p.messages.ETHPackets
 import com.chipprbots.ethereum.network.p2p.messages.SNAP.ByteCodes
 import com.chipprbots.ethereum.network.p2p.messages.SNAP.GetByteCodes
 import com.chipprbots.ethereum.network.p2p.messages.SNAP.GetByteCodes.GetByteCodesEnc
@@ -53,6 +52,8 @@ class StateNodeFetcher(
   override def makeAdaptedMessage[T <: Message](peer: Peer, msg: T): StateNodeFetcherCommand = AdaptedMessage(peer, msg)
 
   private var requester: Option[StateNodeRequester] = None
+  private var totalNodesFetched: Long = 0L
+  private val nodesFetchStartMs: Long = System.currentTimeMillis()
 
   override def onMessage(message: StateNodeFetcherCommand): Behavior[StateNodeFetcherCommand] =
     message match {
@@ -84,25 +85,29 @@ class StateNodeFetcher(
         }
         Behaviors.same
 
-      // ETH63/64/65 NodeData response (no requestId)
-      case AdaptedMessage(peer, NodeData(values)) if requester.isDefined =>
-        log.debug("Received ETH63 state node response from peer {}", peer)
-        handleNodeDataValues(peer, values)
-
-      // ETH66/67 NodeData response (with requestId)
-      case AdaptedMessage(peer, ETH66NodeData(_, rlpValues)) if requester.isDefined =>
-        log.debug("Received ETH66 state node response from peer {}", peer)
-        val values = rlpValues.items.collect { case RLPValue(bytes) => ByteString(bytes) }
+      // NodeData response (ETHPackets.NodeData.values is Seq[ByteString] directly)
+      case AdaptedMessage(peer, ETHPackets.NodeData(values)) if requester.isDefined =>
+        log.debug("Received state node response from peer {}", peer)
         handleNodeDataValues(peer, values)
 
       // SNAP TrieNodes response
       case AdaptedMessage(peer, TrieNodes(_, nodes)) if requester.isDefined =>
         log.info("Received SNAP TrieNodes response from peer {} with {} nodes", peer, nodes.size)
+        totalNodesFetched += 1
+        if (totalNodesFetched % 1000 == 0) {
+          val rate = totalNodesFetched * 1000L / (System.currentTimeMillis() - nodesFetchStartMs).max(1)
+          log.info("StateNodeFetcher: {} nodes fetched | {} nodes/s", totalNodesFetched, rate)
+        }
         handleTrieNodesValues(peer, nodes)
 
       // SNAP ByteCodes response
       case AdaptedMessage(peer, ByteCodes(_, codes)) if requester.isDefined =>
         log.info("Received SNAP ByteCodes response from peer {} with {} codes", peer, codes.size)
+        totalNodesFetched += 1
+        if (totalNodesFetched % 1000 == 0) {
+          val rate = totalNodesFetched * 1000L / (System.currentTimeMillis() - nodesFetchStartMs).max(1)
+          log.info("StateNodeFetcher: {} nodes fetched | {} nodes/s", totalNodesFetched, rate)
+        }
         handleByteCodesValues(peer, codes)
 
       case StateNodeFetcher.RetryStateNodeRequest =>
@@ -338,7 +343,7 @@ class StateNodeFetcher(
       excludePeers.size
     )
     val request = GetTrieNodes(
-      requestId = ETH66.nextRequestId,
+      requestId = ETHPackets.nextRequestId,
       rootHash = root,
       paths = pathGroups,
       responseBytes = BigInt(512 * 1024)
@@ -365,7 +370,7 @@ class StateNodeFetcher(
       excludePeers.size
     )
     val request = GetByteCodes(
-      requestId = ETH66.nextRequestId,
+      requestId = ETHPackets.nextRequestId,
       hashes = Seq(codeHash),
       responseBytes = BigInt(512 * 1024)
     )

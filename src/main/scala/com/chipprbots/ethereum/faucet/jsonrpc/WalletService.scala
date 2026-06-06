@@ -12,7 +12,7 @@ import com.chipprbots.ethereum.jsonrpc.client.RpcClient.RpcError
 import com.chipprbots.ethereum.keystore.KeyStore
 import com.chipprbots.ethereum.keystore.KeyStore.KeyStoreError
 import com.chipprbots.ethereum.keystore.Wallet
-import com.chipprbots.ethereum.network.p2p.messages.BaseETH6XMessages.SignedTransactions.SignedTransactionEnc
+import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.SignedTransactions.SignedTransactionEnc
 import com.chipprbots.ethereum.rlp
 import com.chipprbots.ethereum.utils.ByteStringUtils
 import com.chipprbots.ethereum.utils.Logger

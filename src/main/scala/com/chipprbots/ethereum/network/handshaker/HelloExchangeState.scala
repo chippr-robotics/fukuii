@@ -13,7 +13,7 @@ import com.chipprbots.ethereum.utils.Config
 import com.chipprbots.ethereum.utils.Logger
 import com.chipprbots.ethereum.utils.ServerStatus
 
-case class EtcHelloExchangeState(handshakerConfiguration: NetworkHandshakerConfiguration)
+case class HelloExchangeState(handshakerConfiguration: NetworkHandshakerConfiguration)
     extends InProgressState[PeerInfo]
     with Logger {
 
@@ -52,11 +52,11 @@ case class EtcHelloExchangeState(handshakerConfiguration: NetworkHandshakerConfi
 
     // Log compression decision based on p2p version
     val compressionPolicy =
-      CompressionPolicy.fromHandshake(EtcHelloExchangeState.P2pVersion, hello.p2pVersion)
+      CompressionPolicy.fromHandshake(HelloExchangeState.P2pVersion, hello.p2pVersion)
     log.debug(
       "COMPRESSION_CONFIG: peerP2pVersion={}, ourP2pVersion={}, compressOutbound={}, expectInboundCompressed={}",
       hello.p2pVersion,
-      EtcHelloExchangeState.P2pVersion,
+      HelloExchangeState.P2pVersion,
       compressionPolicy.compressOutbound,
       compressionPolicy.expectInboundCompressed
     )
@@ -71,9 +71,7 @@ case class EtcHelloExchangeState(handshakerConfiguration: NetworkHandshakerConfi
     )
 
     negotiationResult match {
-      case Some(Capability.ETH63) =>
-        log.debug("PROTOCOL_NEGOTIATED: clientId={}, protocol=eth/63, usesRequestId=false", hello.clientId)
-        EthNodeStatus63ExchangeState(handshakerConfiguration, supportsSnap, peerCapabilities, hello.clientId)
+
       case Some(Capability.ETH69) =>
         log.info(
           "PROTOCOL_NEGOTIATED: clientId={}, protocol=eth/69, supportsSnap={} (snap/1 explicit={})",
@@ -81,30 +79,24 @@ case class EtcHelloExchangeState(handshakerConfiguration: NetworkHandshakerConfi
           supportsSnap,
           peerCapabilities.contains(Capability.SNAP1)
         )
-        // ETH/69 and SNAP/1 are independent protocols. A peer can negotiate ETH/69 without
-        // advertising snap/1 in Hello. Use the actual negotiated value, same as ETH64-68.
         EthNodeStatus69ExchangeState(
           handshakerConfiguration,
           Capability.ETH69,
           supportsSnap = supportsSnap,
           peerCapabilities,
+          clientId = hello.clientId
+        )
+      case Some(Capability.ETH68) =>
+        log.debug(
+          "PROTOCOL_NEGOTIATED: clientId={}, protocol=eth/68, usesRequestId=true",
           hello.clientId
         )
-      case Some(
-            negotiated @ (Capability.ETH64 | Capability.ETH65 | Capability.ETH66 | Capability.ETH67 | Capability.ETH68)
-          ) =>
-        log.debug(
-          "PROTOCOL_NEGOTIATED: clientId={}, protocol={}, usesRequestId={}",
-          hello.clientId,
-          negotiated,
-          Capability.usesRequestId(negotiated)
-        )
-        EthNodeStatus64ExchangeState(
+        EthNodeStatus68ExchangeState(
           handshakerConfiguration,
-          negotiated,
+          Capability.ETH68,
           supportsSnap,
           peerCapabilities,
-          hello.clientId
+          clientId = hello.clientId
         )
       case _ =>
         log.warn(
@@ -134,7 +126,7 @@ case class EtcHelloExchangeState(handshakerConfiguration: NetworkHandshakerConfi
         Config.Network.Server.port
     }
     Hello(
-      p2pVersion = EtcHelloExchangeState.P2pVersion,
+      p2pVersion = HelloExchangeState.P2pVersion,
       clientId = Config.clientId,
       capabilities = Config.supportedCapabilities,
       listenPort = listenPort,
@@ -143,7 +135,7 @@ case class EtcHelloExchangeState(handshakerConfiguration: NetworkHandshakerConfi
   }
 }
 
-object EtcHelloExchangeState {
+object HelloExchangeState {
   // Allow p2pVersion to be configured via fukuii.network.peer.p2p-version.
   // Default remains 5 (Snappy-capable), but can be overridden per environment for investigations.
   lazy val P2pVersion: Int = Config.Network.peer.p2pVersion
