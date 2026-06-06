@@ -5376,6 +5376,17 @@
   
 </li>
       
+        <li class="md-nav__item">
+  <a href="#status-as-built-2026-06-06" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Status (as built — 2026-06-06)
+      
+    </span>
+  </a>
+  
+</li>
+      
     </ul>
   
 </nav>
@@ -5470,6 +5481,27 @@ documented for the recovery scan ([[snap_etc_host_freeze_oversubscription]]).</p
 separate change (new CF + constructor wiring + tests). 3 is an optimization if the first walk
 is still too slow after 1+2. Operationally, checkpoint import remains the fast unblock for an
 already-wedged node.</p>
+<h2 id="status-as-built-2026-06-06">Status (as built — 2026-06-06)<a class="headerlink" href="#status-as-built-2026-06-06" title="Permanent link">&para;</a></h2>
+<p>Spec/plan/tasks: <code>specs/001-healing-frontier-scale/</code>.</p>
+<p><strong>Layer 1 — DONE.</strong> Bounded <code>visited</code> LRU in <code>TrieNodeHealingCoordinator</code> (commit <code>d04b24703</code>),
+with the cap extracted to the testable companion seam <code>TrieNodeHealingCoordinator.boundedVisitedSet(cap)</code>
+and made operator-tunable via <code>sync.snap-sync.healing-visited-cap</code> (default
+<code>TrieNodeHealingCoordinator.DefaultVisitedCap = 4_000_000</code>), threaded through <code>SNAPSyncConfig</code>.
+Unit-tested in <code>FrontierRebuildSpec</code> (eviction bound, insertion-order eviction, set semantics).</p>
+<p><strong>Layer 2 — DONE, default-off.</strong> Persisted frontier in a dedicated column family
+(<code>Namespaces.HealingFrontierNamespace = 'g'</code>, <code>hash → RLP(pathset)</code>) via <code>HealingFrontierStorage</code>,
+wired from <code>SNAPSyncController</code> (<code>flatSlotStorage.dataSource</code>, gated by
+<code>sync.snap-sync.healing-frontier-persistence</code>, default <code>false</code>). Write-on-enqueue at all three
+growth sites (<code>queueNodes</code>, inline child discovery, pivot reseed); delete-on-heal-flush (never on
+dispatch); clear on force-complete / pivot-refresh; resume on <code>[HEAL-RESTART]</code> loads the frontier
+and skips the DFS, with a fail-safe fallback to the full walk on empty/absent/corrupt. No datadir
+migration (<code>setCreateMissingColumnFamilies(true)</code>). Tested in <code>HealingFrontierStorageSpec</code> (storage
+round-trip) and <code>HealingFrontierResumeSpec</code> (resume / fallback / write-on-queue). Ships dark; flip
+<code>healing-frontier-persistence = true</code> after operational validation on a large-state node.</p>
+<p><strong>Layer 3 — NOT STARTED (gated).</strong> Measure the first-walk throughput on a large-state node first
+(<code>tasks.md</code> T021); pursue <code>multiGet</code> batching only if the one-time full walk is still too slow.</p>
+<p>Remaining before merge: <code>sbt pp</code>, and operational validation of L1 (no OOM loop) and L2 (resume in
+minutes, CF auto-creates) on a large-state node — both require a live node, out of the build session.</p>
 
 
 
