@@ -165,9 +165,9 @@ object Dependencies {
     "org.xerial.snappy" % "snappy-java" % "1.1.10.8",
     "org.web3j" % "core" % "4.14.0" % Test,
     "io.vavr" % "vavr" % "1.0.1",
-    "org.jupnp" % "org.jupnp" % "2.7.1",
-    "org.jupnp" % "org.jupnp.support" % "2.7.1",
-    "org.jupnp" % "org.jupnp.tool" % "2.7.1",
+    "org.jupnp" % "org.jupnp" % "3.0.4",
+    "org.jupnp" % "org.jupnp.support" % "3.0.4",
+    "org.jupnp" % "org.jupnp.tool" % "3.0.4",
     "javax.servlet" % "javax.servlet-api" % "4.0.1",
     "com.thesamet.scalapb" %% "scalapb-runtime" % "0.11.20"
   )

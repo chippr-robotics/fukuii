@@ -41,8 +41,21 @@ class ServerActor(nodeStatusHolder: AtomicReference[NodeStatus], peerManager: Ac
     case Bound(localAddress) =>
       val nodeStatus = nodeStatusHolder.get()
       val advertisedHost: InetAddress = advertisedAddressOverride.getOrElse {
-        if (localAddress.getAddress.isAnyLocalAddress) InetAddress.getLocalHost
-        else localAddress.getAddress
+        if (localAddress.getAddress.isAnyLocalAddress) {
+          ExternalIPDetector.detect() match {
+            case Some(ip) =>
+              log.info("External IP detected for advertisement: {}", ip.getHostAddress)
+              ip
+            case None =>
+              log.warning(
+                "External IP detection failed (STUN/HTTP/interface all unavailable); " +
+                  "advertising loopback — inbound peers on other hosts may not reach this node"
+              )
+              InetAddress.getLoopbackAddress
+          }
+        } else {
+          localAddress.getAddress
+        }
       }
       val advertisedAddress = new InetSocketAddress(advertisedHost, localAddress.getPort)
       log.info("Listening on {}", localAddress)
