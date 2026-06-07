@@ -212,7 +212,10 @@ class EtcDiscoveryConfigSpec extends AnyFlatSpec with Matchers {
 
   // ===== Mordor DNS Discovery =====
 
-  "Mordor config" should "reference the live etcdisco.net discovery domain as primary" taggedAs (UnitTest, NetworkTest) in {
+  "Mordor config" should "reference the live etcdisco.net discovery domain as primary" taggedAs (
+    UnitTest,
+    NetworkTest
+  ) in {
     mordorConfig.dnsDiscoveryDomains should contain("all.mordor.etcdisco.net")
   }
 

@@ -641,14 +641,16 @@ trait PersonalServiceBuilder {
     with BlockchainConfigBuilder
     with PendingTransactionsManagerBuilder
     with StorageBuilder
-    with TxPoolConfigBuilder =>
+    with TxPoolConfigBuilder
+    with EthTxServiceBuilder =>
 
   lazy val personalService: PersonalServiceAPI = new PersonalService(
     keyStore,
     blockchainReader,
     pendingTransactionsManager,
     txPoolConfig,
-    this
+    this,
+    ethTxService
   )
 }
 

@@ -199,9 +199,14 @@ class EthTxServiceSpec
     response shouldEqual Right(RawTransactionResponse(Some(txToRequest)))
   }
 
-  it should "return 0 gas price if there are no transactions" taggedAs (UnitTest, RPCTest) in new TestSetup {
+  it should "return minimum 1 wei gas price when there are no transactions" taggedAs (
+    UnitTest,
+    RPCTest
+  ) in new TestSetup {
+    // Pre-EIP-1559 chain with empty block window: oracle falls back to minimumGasPrice().
+    // minimumGasPrice() returns max(0, 1) = 1 wei — never 0.
     val response: ServiceResponse[GetGasPriceResponse] = ethTxService.getGetGasPrice(GetGasPriceRequest())
-    response.unsafeRunSync() shouldEqual Right(GetGasPriceResponse(0))
+    response.unsafeRunSync() shouldEqual Right(GetGasPriceResponse(1))
   }
 
   it should "return average gas price" taggedAs (UnitTest, RPCTest) in new TestSetup {

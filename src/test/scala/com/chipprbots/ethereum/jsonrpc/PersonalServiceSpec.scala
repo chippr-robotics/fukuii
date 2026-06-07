@@ -31,6 +31,8 @@ import com.chipprbots.ethereum.domain.branch.EmptyBranch
 import com.chipprbots.ethereum.testing.Tags._
 import com.chipprbots.ethereum.jsonrpc.JsonRpcError._
 import com.chipprbots.ethereum.jsonrpc.PersonalService._
+import com.chipprbots.ethereum.consensus.mining.Mining
+import com.chipprbots.ethereum.db.storage.TransactionMappingStorage
 import com.chipprbots.ethereum.keystore.KeyStore
 import com.chipprbots.ethereum.keystore.KeyStore.DecryptionFailed
 import com.chipprbots.ethereum.keystore.KeyStore.IOError
@@ -39,6 +41,7 @@ import com.chipprbots.ethereum.mpt.MerklePatriciaTrie.MissingNodeException
 import com.chipprbots.ethereum.nodebuilder.BlockchainConfigBuilder
 import com.chipprbots.ethereum.transactions.PendingTransactionsManager._
 import com.chipprbots.ethereum.utils.BlockchainConfig
+import com.chipprbots.ethereum.utils.Config
 import com.chipprbots.ethereum.utils.ForkBlockNumbers
 import com.chipprbots.ethereum.utils.MonetaryPolicyConfig
 import com.chipprbots.ethereum.utils.TxPoolConfig
@@ -524,6 +527,24 @@ class PersonalServiceSpec
     val blockchainReader: BlockchainReader = mock[BlockchainReader]
     (blockchainReader.getBestBranch _).expects().returning(EmptyBranch).anyNumberOfTimes()
     val blockchain: BlockchainImpl = mock[BlockchainImpl]
+
+    // suggestGasPrice() is private[jsonrpc] — ScalaMock generates its proxy outside the package
+    // and cannot intercept package-private methods.  Use an anonymous subclass override instead.
+    val probe2: TestProbe = TestProbe()
+    implicit val oracleCfg: BlockchainConfig = Config.blockchains.blockchainConfig
+    val ethTxService: EthTxService = new EthTxService(
+      blockchain,
+      stub[BlockchainReader],
+      stub[Mining],
+      probe2.ref,
+      Timeouts.normalTimeout,
+      stub[TransactionMappingStorage]
+    ) {
+      // Return defaultGasPrice (20 gwei) so stx/chainSpecificStx fixture hashes match.
+      // tx.toTransaction(nonce) uses 2 * 10^10 as the gas-price fallback.
+      override private[jsonrpc] def suggestGasPrice(): BigInt = 2 * BigInt(10).pow(10)
+    }
+
     val personal =
       new PersonalService(
         keyStore,
@@ -546,7 +567,8 @@ class PersonalServiceSpec
             gasTieBreaker = false,
             ethCompatibleStorage = true
           )
-        }
+        },
+        ethTxService
       )
 
     def array[T](arr: Array[T])(implicit ev: ClassTag[Array[T]]): MatcherBase =
