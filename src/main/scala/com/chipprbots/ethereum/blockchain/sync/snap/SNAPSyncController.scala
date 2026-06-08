@@ -1672,10 +1672,29 @@ class SNAPSyncController(
         case (Some(pivot), Some(rootBs)) if pivot > 0 =>
           log.info(s"Recovery: accounts previously completed at pivot $pivot. Checking freshness...")
 
-          // Check if pivot is still fresh enough
+          // FIX-BUG2-ESCALATION: saved pivot < RegularSync escalation hint → force fresh selection.
+          // minPivotHint is the block number where RegularSync got stuck; re-using the saved pivot
+          // (whose state trie is incomplete at that block) wastes time presenting a root that peers
+          // have already evicted from their serve window. minPivotHint == 0 in non-escalation
+          // restarts (crash recovery, normal restart) so this never fires spuriously.
+          val belowEscalationHint = minPivotHint > 0 && pivot < minPivotHint
+          if (belowEscalationHint) {
+            log.warning(
+              s"Recovery: saved pivot $pivot < RegularSync escalation hint $minPivotHint " +
+                s"— clearing accounts-complete flag and forcing fresh pivot selection"
+            )
+            appStateStorage
+              .putSnapSyncAccountsComplete(false)
+              .and(appStateStorage.putSnapSyncStorageComplete(false))
+              .and(appStateStorage.putSnapSyncBytecodeComplete(false))
+              .commit()
+            // Fall through to normal startup (same path as drift-exceeded + phases incomplete)
+          }
+
+          // Check if pivot is still fresh enough (skipped when belowEscalationHint forced clear)
           val networkBest = currentNetworkBestFromSnapPeers().getOrElse(BigInt(0))
           val drift = if (networkBest > 0) (networkBest - pivot).abs else BigInt(0)
-          if (networkBest > 0 && drift > snapSyncConfig.maxPivotStalenessBlocks) {
+          if (!belowEscalationHint && networkBest > 0 && drift > snapSyncConfig.maxPivotStalenessBlocks) {
             val storageAlreadyDone = appStateStorage.isSnapSyncStorageComplete()
             val bytecodeAlreadyDone = appStateStorage.isSnapSyncBytecodeComplete()
             if (storageAlreadyDone && bytecodeAlreadyDone) {
@@ -1702,7 +1721,7 @@ class SNAPSyncController(
                 .commit()
               // Fall through to normal startup
             }
-          } else {
+          } else if (!belowEscalationHint) {
             // Pivot is fresh enough — recover bytecodes + storage only
             pivotBlock = Some(pivot)
             stateRoot = Some(rootBs)

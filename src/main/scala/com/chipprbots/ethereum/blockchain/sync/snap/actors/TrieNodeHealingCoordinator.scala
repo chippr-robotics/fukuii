@@ -74,6 +74,13 @@ class TrieNodeHealingCoordinator(
   private var consecutiveStagnations: Int = 0
   private val MaxConsecutiveStagnations: Int = 3
   private var trieWalkInProgress: Boolean = false
+  // Verification DFS state: gates StateHealingComplete and catches storage sub-trie gaps (Fix BUG-1/BUG-2).
+  // verificationPassComplete = true only after a DFS traversal finds zero missing nodes.
+  // verificationDFSRunning = true while the DFS Future is executing on healingWriterEc.
+  private var verificationPassComplete: Boolean = false
+  private var verificationDFSRunning: Boolean = false
+  // Dead-loop watchdog (Fix BUG-2): consecutive HEAL-PULSE cycles with no walk/pending/active/healed.
+  private var consecutiveDeadPulses: Int = 0
   // Inline child discovery counter (Besu-aligned scheduler approach)
   private var childrenDiscoveredTotal: Long = 0
 
@@ -203,8 +210,10 @@ class TrieNodeHealingCoordinator(
   // Internal message for async flush completion
   private case class FlushComplete(count: Int)
 
-  // Internal message for async frontier rebuild completion (crash-recovery BFS)
+  // Internal message for async frontier rebuild completion (crash-recovery BFS or verification DFS)
   private case class FrontierRebuilt(entries: Seq[HealingEntry])
+  // Sent by startVerificationDFS when the DFS Future completes — gates verificationPassComplete.
+  private case object VerificationDFSComplete
 
   /** Synchronous flush — used only for final completion flush (small buffer, safe to block). */
   private def flushRawNodesSync(): Unit =
@@ -289,14 +298,12 @@ class TrieNodeHealingCoordinator(
       }
 
     case FrontierRebuilt(entries) =>
-      log.info(
-        s"[HEAL-RESTART] Frontier rebuild complete: ${entries.size} missing nodes identified " +
-          s"— resuming healing from crash-recovery frontier"
-      )
       if (entries.isEmpty)
         log.warning(
-          "[HEAL-RESTART] Frontier is empty after BFS — trie may already be fully healed or storage is corrupt"
+          "[HEAL-FRONTIER] Empty frontier batch received — trie may already be fully healed or storage is corrupt"
         )
+      else
+        log.info(s"[HEAL-FRONTIER] ${entries.size} missing nodes identified — queuing for healing")
       queueNodes(entries.map(e => (e.pathset, e.hash)))
       lastHealedAtMs = System.currentTimeMillis()
       tryRedispatchPendingTasks()
@@ -383,6 +390,8 @@ class TrieNodeHealingCoordinator(
       pivotRefreshRequested = false
       consecutiveIdleChecks = 0
       consecutiveStagnations = 0
+      consecutiveDeadPulses = 0
+      verificationPassComplete = false // new pivot root → must re-verify trie completeness
       lastPulseHealedCount = totalNodesHealed
       lastHealedAtMs = System.currentTimeMillis() // BUG-4: give fresh pivot a full stagnation window
       // ARCH-PIVOT-RESEED: Re-seed with new root for top-down discovery of trie delta.
@@ -397,7 +406,16 @@ class TrieNodeHealingCoordinator(
             s"for inline discovery of pivot delta"
         )
       } else {
-        log.info(s"[HEAL] New root already in storage or pending — skipping pivot reseed")
+        // FIX-BUG2-PIVOT: Root already in local storage — run a verification DFS to discover
+        // any missing children instead of dead-looping with zero pending tasks.
+        // Without this, walkRunning stays false and pending stays 0 → 316-pulse dead loop (RUN10).
+        // discoverMissingChildren skips locally-held storage roots without recursing into their
+        // children, so the new pivot root may be local yet have gaps in storage sub-tries.
+        log.info(
+          s"[HEAL] New root ${Hex.toHexString(newStateRoot.take(4).toArray)} already in storage " +
+            s"— starting verification DFS to find missing children"
+        )
+        startVerificationDFS(newStateRoot, pivotReseedPath)
       }
 
     case TrieNodesResponseMsg(response) =>
@@ -423,10 +441,46 @@ class TrieNodeHealingCoordinator(
       }
 
     case HealingCheckCompletion =>
-      if (isComplete && !flushing && !trieWalkInProgress) {
-        flushRawNodesSync()
-        log.info(s"Healing round complete: $totalNodesHealed total nodes healed. Notifying controller.")
-        snapSyncController ! SNAPSyncController.StateHealingComplete
+      if (isComplete && !flushing && !trieWalkInProgress && !verificationDFSRunning) {
+        // FIX-BUG1-VERIFY: gate: skip verification when no inline healing was done.
+        // If totalNodesHealed == 0 the coordinator was never given nodes to heal (idle case) OR
+        // all nodes were already in local storage — either way the trie is complete from our
+        // perspective. The BUG 2 pivot-reseed path (root held locally) is handled separately by
+        // HealingPivotRefreshed calling startVerificationDFS directly, not through this gate.
+        if (verificationPassComplete || totalNodesHealed == 0) {
+          flushRawNodesSync()
+          log.info(s"Healing round complete: $totalNodesHealed total nodes healed. Notifying controller.")
+          snapSyncController ! SNAPSyncController.StateHealingComplete
+        } else {
+          // Inline tasks done with actual healing work — run a full DFS to catch storage sub-trie
+          // gaps that discoverMissingChildren silently skips when the storage root is in storage.
+          // Analogous to go-ethereum's trie.Sync.Missing() depth-first traversal.
+          val emptyPath = ByteString(com.chipprbots.ethereum.mpt.HexPrefix.encode(Array.empty[Byte], isLeaf = false))
+          log.info(
+            s"[HEAL-VERIFY] All inline tasks done ($totalNodesHealed healed). " +
+              s"Starting verification DFS on locally-held trie to catch storage sub-trie gaps..."
+          )
+          startVerificationDFS(stateRoot, emptyPath)
+        }
+      }
+
+    case VerificationDFSComplete =>
+      verificationDFSRunning = false
+      if (isComplete) {
+        // DFS traversed all locally-held nodes and found zero missing descendants — trie is complete.
+        verificationPassComplete = true
+        log.info(
+          s"[HEAL-VERIFY] Verification DFS complete — no missing nodes found. " +
+            s"Trie is fully healed ($totalNodesHealed nodes). Declaring completion."
+        )
+        self ! HealingCheckCompletion
+      } else {
+        // DFS found missing nodes queued via FrontierRebuilt — healing needs to continue.
+        log.info(
+          s"[HEAL-VERIFY] Verification DFS found additional missing nodes " +
+            s"(pending=${pendingTasks.size} active=${activeRequests.size}) — resuming healing."
+        )
+        tryRedispatchPendingTasks()
       }
 
     case WalkStateChanged(inProgress) =>
@@ -451,6 +505,33 @@ class TrieNodeHealingCoordinator(
         )
       }
       lastPulseHealedCount = totalNodesHealed
+
+      // FIX-BUG2-WATCHDOG: Dead-loop safety net — fires when the coordinator has no walk, no
+      // verification DFS, no pending tasks, no active requests, and zero healing progress.
+      // Primary fix is startVerificationDFS in HealingCheckCompletion and HealingPivotRefreshed;
+      // this watchdog catches any residual edge case (e.g. stale state after pivot race).
+      if (
+        !trieWalkInProgress && !verificationDFSRunning &&
+        pendingTasks.isEmpty && activeRequests.isEmpty &&
+        recentHealed == 0 && !pivotRefreshRequested && !verificationPassComplete
+      ) {
+        consecutiveDeadPulses += 1
+        log.warning(
+          s"[HEAL-WATCHDOG] Dead pulse $consecutiveDeadPulses/3: " +
+            s"walkRunning=false verifyRunning=false pending=0 active=0 healed=0 in last 2min"
+        )
+        if (consecutiveDeadPulses >= 3) {
+          log.warning("[HEAL-WATCHDOG] 3 consecutive dead pulses — force-starting verification DFS")
+          consecutiveDeadPulses = 0
+          val emptyPath = ByteString(com.chipprbots.ethereum.mpt.HexPrefix.encode(Array.empty[Byte], isLeaf = false))
+          startVerificationDFS(stateRoot, emptyPath)
+        }
+      } else if (
+        recentHealed > 0 || pendingTasks.nonEmpty || activeRequests.nonEmpty ||
+        trieWalkInProgress || verificationDFSRunning
+      ) {
+        consecutiveDeadPulses = 0
+      }
 
       // BUG-S4 watchdog: if pivotRefreshRequested=true for >15 min, SNAPSyncController is stuck
       // in refreshPivotInPlace's no-peer retry loop (Path A: 30s interval, HealingPivotRefreshed
@@ -988,6 +1069,40 @@ class TrieNodeHealingCoordinator(
     log.info(
       s"[HEAL-RESTART-DFS] Complete: $visitedCount nodes traversed, $frontierCount missing nodes identified"
     )
+  }
+
+  /** Start a verification DFS Future on `healingWriterEc`.
+    *
+    * Traverses all locally-held trie nodes starting at `root` / `rootPath` and queues any missing descendants as
+    * `FrontierRebuilt` messages. Sends `VerificationDFSComplete` when done.
+    *
+    * Needed because `discoverMissingChildren` skips storage roots that are already in local storage without recursing
+    * into their children — a storage sub-trie with a locally-held root can still have gaps deeper in the tree (RUN10:
+    * account 888157b2 had 11 missing storage nodes after StateHeal declared completion). This DFS catches every missing
+    * descendant.
+    *
+    * Reuses `rebuildFrontierDFS` which was already designed for crash-recovery (go-ethereum `trie.Sync.Missing()`
+    * depth-first analogue). Sets `verificationDFSRunning = true` before spawning so callers can gate on it.
+    */
+  private def startVerificationDFS(root: ByteString, rootPath: ByteString): Unit = {
+    import scala.concurrent.Future
+    verificationDFSRunning = true
+    val selfRef = self
+    val ec = healingWriterEc
+    Future {
+      val frontier = mutable.Buffer.empty[HealingEntry]
+      val visited = mutable.Set.empty[ByteString]
+      rebuildFrontierDFS(
+        root,
+        Seq(rootPath),
+        isStor = false,
+        frontier,
+        visited,
+        batch => selfRef ! FrontierRebuilt(batch)
+      )
+      if (frontier.nonEmpty) selfRef ! FrontierRebuilt(frontier.toSeq)
+      selfRef ! VerificationDFSComplete
+    }(ec)
   }
 
   /** Inline child discovery after each healed node — Besu/geth scheduler-driven alignment. Decodes the healed node,
