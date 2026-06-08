@@ -337,7 +337,10 @@ class EthBlocksService(
 
   def maxPriorityFeePerGas(@unused req: MaxPriorityFeePerGasRequest): ServiceResponse[MaxPriorityFeePerGasResponse] =
     IO {
-      Right(MaxPriorityFeePerGasResponse(BigInt(1000000000)))
+      // Return the per-chain minimum tip from config rather than a hardcoded 1 gwei literal.
+      // On ETC/Mordor post-Olympia: blockchainConfig.minTip = 1 gwei (ECIP-1112).
+      // On ETH/Sepolia: minTip defaults to 1 gwei. Both match the reference client stub behaviour.
+      Right(MaxPriorityFeePerGasResponse(blockchainConfig.minTip))
     }
 
   def blobBaseFee(@unused req: BlobBaseFeeRequest): ServiceResponse[BlobBaseFeeResponse] = IO {

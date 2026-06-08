@@ -71,7 +71,7 @@ case class EthNodeStatus69ExchangeState(
       latestBlockHash: org.apache.pekko.util.ByteString
   ): HandshakerState[PeerInfo] = {
     import ForkIdValidator.syncIoLogger
-    log.info(
+    log.debug(
       "ETH69_STATUS: Received - protocolVersion={}, networkId={}, genesis={}, forkId={}, earliest={}, latest={}, latestHash={}",
       protocolVersion,
       networkId,
@@ -115,7 +115,7 @@ case class EthNodeStatus69ExchangeState(
               latestBlock,
               isPoWChain = blockchainConfig.terminalTotalDifficulty.isEmpty
             )
-            log.info(
+            log.debug(
               "ETH69_STATUS: TD resolved - totalDifficulty={}, latestBlock={}, source={}",
               resolvedChainWeight.totalDifficulty,
               latestBlock,
@@ -165,7 +165,7 @@ case class EthNodeStatus69ExchangeState(
       latestBlockHash = bestBlockHeader.hash
     )
 
-    log.info(
+    log.debug(
       "ETH69_STATUS: Sending - networkId={}, genesis={}, forkId={}, earliest={}, latest={}, latestHash={}",
       status.networkId,
       genesisHash,

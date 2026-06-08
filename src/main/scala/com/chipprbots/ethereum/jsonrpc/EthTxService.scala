@@ -182,33 +182,66 @@ class EthTxService(
       } yield TransactionData(transaction, Some(blockWithTx.header), Some(transactionIndex.toInt))
     }
 
-  def getGetGasPrice(@unused req: GetGasPriceRequest): ServiceResponse[GetGasPriceResponse] = {
-    val blockDifference = 30
-    val bestBlock = blockchainReader.getBestBlockNumber()
+  private val GasPriceMaxCap: BigInt = BigInt(500) * BigInt(10).pow(9) // 500 gwei — matches go-ethereum
+  private val GasPriceCheckBlocks = 20 // matches go-ethereum default
+  private val GasPriceTxsPerBlock = 3 // matches go-ethereum default
 
-    IO {
-      val bestBranch = blockchainReader.getBestBranch()
-      val gasPrice = ((bestBlock - blockDifference) to bestBlock)
-        .flatMap(nb => blockchainReader.getBlockByNumber(bestBranch, nb))
-        .flatMap(_.body.transactionList)
-        .map(_.tx.gasPrice)
-      if (gasPrice.nonEmpty) {
-        // Median, not mean. A single Type-2 / blob tx with `maxFeePerGas = 1 gwei` reads out
-        // through `tx.gasPrice` as ~10^9, which drags the arithmetic mean into the tens of
-        // millions and fails hive's graphql test 07 (accepts 0x10 or 0x1 — both low). geth
-        // and besu both use the median of the recent-blocks sample for the same reason.
-        val sorted = gasPrice.sorted
-        val midIndex = sorted.length / 2
-        val median =
-          if (sorted.length % 2 == 0 && sorted.length >= 2)
-            (sorted(midIndex - 1) + sorted(midIndex)) / 2
-          else sorted(midIndex)
-        Right(GetGasPriceResponse(median))
-      } else {
-        Right(GetGasPriceResponse(0))
+  // Network-aware minimum viable gas price. Derives from current network state — works on all
+  // Fukuii-supported chains (ETC mainnet/Mordor and ETH/Sepolia) without any per-chain flag.
+  //
+  //   Pre-EIP-1559 (baseFee absent): 1 wei — smallest non-zero price on any legacy chain.
+  //   Post-EIP-1559: max(currentBaseFee, baseFeeFloor) + minTip, minimum 1 wei.
+  //     ETC/Mordor post-Olympia: max(≥1 gwei, 1 gwei) + 1 gwei = ≥ 2 gwei
+  //     ETH post-London:         baseFee (dynamic) + 1 gwei (minTip default)
+  private[jsonrpc] def minimumGasPrice(): BigInt = {
+    val minViable = blockchainReader
+      .getBestBlock()
+      .flatMap(_.header.baseFee) match {
+      case Some(baseFee) => baseFee.max(blockchainConfig.baseFeeFloor) + blockchainConfig.minTip
+      case None          => BigInt(0) // floor set by .max(1) below
+    }
+    minViable.max(BigInt(1)) // always non-zero on every network
+  }
+
+  // Synchronous gas price oracle — used by both eth_gasPrice RPC and PersonalService.sendTransaction.
+  //
+  // Algorithm matches go-ethereum and core-geth:
+  //   - Sample up to GasPriceCheckBlocks recent blocks, at most GasPriceTxsPerBlock txs each.
+  //   - Exclude transactions sent by the block's coinbase (miner self-txs drag the percentile down).
+  //   - Take the 60th percentile of effective gas prices (not median — geth uses 60th).
+  //   - Clamp to [minimumGasPrice(), GasPriceMaxCap].
+  //   - Fall back to minimumGasPrice() when no transactions are available (never returns 0).
+  private[jsonrpc] def suggestGasPrice(): BigInt = {
+    val floor = minimumGasPrice()
+    val bestBlock = blockchainReader.getBestBlockNumber()
+    val bestBranch = blockchainReader.getBestBranch()
+
+    val gasPrices = ((bestBlock - GasPriceCheckBlocks + 1).max(BigInt(0)) to bestBlock)
+      .flatMap(nb => blockchainReader.getBlockByNumber(bestBranch, nb))
+      .flatMap { block =>
+        val coinbase = block.header.beneficiary
+        // Exclude miner self-transactions — matches go-ethereum, core-geth, erigon, Besu, Nethermind.
+        // A PoW miner can self-include 0-tip transactions; excluding them prevents the oracle
+        // from suggesting a price below the actual market clearing rate.
+        block.body.transactionList
+          .filterNot(stx => SignedTransaction.getSender(stx).exists(_.bytes == coinbase))
+          .take(GasPriceTxsPerBlock)
+          .map(_.tx.gasPrice)
       }
+
+    if (gasPrices.nonEmpty) {
+      val sorted = gasPrices.sorted
+      // 60th percentile — matches go-ethereum/core-geth default (configurable there, fixed here).
+      // Biases slightly above the median to reduce stuck-transaction risk during fee spikes.
+      val idx = math.min((sorted.length * 60) / 100, sorted.length - 1)
+      sorted(idx).max(floor).min(GasPriceMaxCap)
+    } else {
+      floor // no transactions in window: return floor, never 0
     }
   }
+
+  def getGetGasPrice(@unused req: GetGasPriceRequest): ServiceResponse[GetGasPriceResponse] =
+    IO(Right(GetGasPriceResponse(suggestGasPrice())))
 
   def sendRawTransaction(req: SendRawTransactionRequest): ServiceResponse[SendRawTransactionResponse] = {
     import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.SignedTransactions.SignedTransactionDec
