@@ -210,7 +210,7 @@ class PersonalService(
       val maybeNextTxNonce = maybeLatestPendingTxNonce.map(_ + 1).orElse(maybeCurrentNonce)
       val tx = request.toTransaction(
         maybeNextTxNonce.getOrElse(blockchainConfig.accountStartNonce),
-        ethTxService.suggestGasPrice()
+        request.gasPrice.getOrElse(ethTxService.suggestGasPrice())
       )
 
       val stx = if (blockchainReader.getBestBlockNumber() >= blockchainConfig.forkBlockNumbers.eip155BlockNumber) {

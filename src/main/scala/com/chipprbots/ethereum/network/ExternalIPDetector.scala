@@ -73,8 +73,9 @@ object ExternalIPDetector {
                       ipFuture.complete(ip)
 
                     @SuppressWarnings(Array("rawtypes"))
-                    def failure(inv: ActionInvocation[?], resp: UpnpResponse, msg: String): Unit =
-                      if (!ipFuture.isDone) ipFuture.completeExceptionally(new Exception(msg))
+                    def failure(inv: ActionInvocation[?], resp: UpnpResponse, msg: String): Unit = ()
+                    // Don't completeExceptionally here — on multi-IGD networks a later device may
+                    // succeed. Total UPnP failure is handled by the ipFuture.get() timeout below.
                   })
             for (sub <- d.getEmbeddedDevices())
               walkDevice(sub)
@@ -108,28 +109,38 @@ object ExternalIPDetector {
   private def stunProbe(host: String, port: Int): Try[InetAddress] = Try {
     Using.resource(new DatagramSocket()) { socket =>
       socket.setSoTimeout(StunTimeoutMs)
-      // RFC 5389 Binding Request: 20-byte header, no attributes
+      // RFC 5389 Binding Request: 20-byte header, no attributes.
+      // Layout: type(2) | length(2) | magic(4) | txId(12)
       val req = new Array[Byte](20)
       val hdr = ByteBuffer.wrap(req)
       hdr.putShort(0x0001.toShort) // Binding Request
       hdr.putShort(0x0000.toShort) // Message Length = 0 (no body attributes)
       hdr.putInt(0x2112a442) // Magic Cookie (required by RFC 5389)
-      // Transaction ID: 12 zero bytes (we don't validate it in the response)
+      val txId = new Array[Byte](12)
+      new java.security.SecureRandom().nextBytes(txId) // RFC 5389 §6: random 96-bit
+      hdr.put(txId)
       socket.send(new DatagramPacket(req, 20, InetAddress.getByName(host), port))
       val buf = new Array[Byte](1024)
       val recv = new DatagramPacket(buf, buf.length)
       socket.receive(recv)
-      parseXorMappedAddress(buf, recv.getLength)
+      parseXorMappedAddress(buf, recv.getLength, txId)
     }
   }
 
-  private def parseXorMappedAddress(buf: Array[Byte], len: Int): InetAddress = {
+  private def parseXorMappedAddress(buf: Array[Byte], len: Int, txId: Array[Byte]): InetAddress = {
     val resp = ByteBuffer.wrap(buf, 0, len)
     val msgType = resp.getShort() & 0xffff
     if (msgType != 0x0101)
       throw new IllegalStateException(s"Expected Binding Response (0x0101), got 0x${msgType.toHexString}")
     val msgLen = resp.getShort() & 0xffff
-    resp.position(20) // skip magic cookie (4) + transaction ID (12), land at attribute section
+    resp.position(4) // skip type(2) + length(2), land at magic cookie
+    if ((resp.getInt() & 0xffffffffL) != 0x2112a442L)
+      throw new IllegalStateException("STUN response: unexpected magic cookie")
+    val echoed = new Array[Byte](12)
+    resp.get(echoed)
+    if (!java.util.Arrays.equals(echoed, txId))
+      throw new IllegalStateException("STUN response transaction ID mismatch — possible spoofing or server reuse")
+    // position is now at 20 — start of attribute section
     val bodyEnd = 20 + msgLen
     var result: Option[InetAddress] = None
     while (resp.position() < bodyEnd && result.isEmpty) {

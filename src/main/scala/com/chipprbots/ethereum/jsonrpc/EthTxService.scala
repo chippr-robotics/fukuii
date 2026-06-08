@@ -216,7 +216,7 @@ class EthTxService(
     val bestBlock = blockchainReader.getBestBlockNumber()
     val bestBranch = blockchainReader.getBestBranch()
 
-    val gasPrices = ((bestBlock - GasPriceCheckBlocks).max(BigInt(0)) to bestBlock)
+    val gasPrices = ((bestBlock - GasPriceCheckBlocks + 1).max(BigInt(0)) to bestBlock)
       .flatMap(nb => blockchainReader.getBlockByNumber(bestBranch, nb))
       .flatMap { block =>
         val coinbase = block.header.beneficiary

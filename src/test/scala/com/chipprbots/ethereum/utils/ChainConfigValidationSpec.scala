@@ -199,7 +199,7 @@ class EtcDiscoveryConfigSpec extends AnyFlatSpec with Matchers {
     UnitTest,
     NetworkTest
   ) in {
-    etcConfig.dnsDiscoveryDomains should contain("all.classic.etcdisco.net")
+    etcConfig.dnsDiscoveryDomains.head shouldBe "all.classic.etcdisco.net"
   }
 
   it should "include blockd.info as a fallback discovery domain for resilience" taggedAs (UnitTest, NetworkTest) in {
@@ -216,7 +216,7 @@ class EtcDiscoveryConfigSpec extends AnyFlatSpec with Matchers {
     UnitTest,
     NetworkTest
   ) in {
-    mordorConfig.dnsDiscoveryDomains should contain("all.mordor.etcdisco.net")
+    mordorConfig.dnsDiscoveryDomains.head shouldBe "all.mordor.etcdisco.net"
   }
 
   it should "include blockd.info as a fallback discovery domain for resilience" taggedAs (UnitTest, NetworkTest) in {
