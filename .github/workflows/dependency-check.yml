@@ -64,7 +64,10 @@ jobs:
           retention-days: 30
       
       - name: Comment on PR with dependency info
-        if: github.event_name == 'pull_request'
+        # Skip on fork PRs — createComment needs a write token forks don't get (read-only
+        # GITHUB_TOKEN → "Resource not accessible by integration"). The dependency report is
+        # still uploaded as an artifact above, so no information is lost for fork PRs.
+        if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
         uses: actions/github-script@v8
         with:
           script: |
