@@ -8,6 +8,10 @@ jobs:
   label-pr:
     name: Auto-label PR
     runs-on: ubuntu-latest
+    # Fork PRs (e.g. from contributor forks merging into staging) get a read-only GITHUB_TOKEN, so
+    # actions/labeler can't write labels — it fails with "Resource not accessible by integration".
+    # Only run on same-repo PRs; fork PRs are labeled manually by a maintainer.
+    if: github.event.pull_request.head.repo.full_name == github.repository
     permissions:
       contents: read
       pull-requests: write
@@ -46,7 +50,8 @@ jobs:
   link-issue:
     name: Check Issue Linking
     runs-on: ubuntu-latest
-    if: github.event_name == 'pull_request' && github.event.action == 'opened'
+    # Skip on fork PRs — posting the reminder comment needs a write token forks don't get.
+    if: github.event_name == 'pull_request' && github.event.action == 'opened' && github.event.pull_request.head.repo.full_name == github.repository
     permissions:
       pull-requests: write
     

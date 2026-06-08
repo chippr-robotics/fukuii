@@ -126,5 +126,7 @@ Read it before planning or implementing. Highlights:
 
 <!-- SPECKIT START -->
 For additional context about technologies to be used, project structure,
-shell commands, and other important information, read the current plan
+shell commands, and other important information, read the current plan:
+`specs/001-healing-frontier-scale/plan.md` (post-SNAP healing frontier-rebuild
+scalability — L1 bounded visited set, L2 persisted frontier + resume, L3 throughput).
 <!-- SPECKIT END -->

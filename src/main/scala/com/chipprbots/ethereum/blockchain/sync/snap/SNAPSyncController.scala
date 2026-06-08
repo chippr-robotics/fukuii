@@ -9,7 +9,14 @@ import scala.collection.mutable
 import scala.util.Try
 
 import com.chipprbots.ethereum.blockchain.sync.{Blacklist, CacheBasedBlacklist, PeerListSupportNg, SyncProtocol}
-import com.chipprbots.ethereum.db.storage.{AppStateStorage, EvmCodeStorage, FlatSlotStorage, MptStorage, StateStorage}
+import com.chipprbots.ethereum.db.storage.{
+  AppStateStorage,
+  EvmCodeStorage,
+  FlatSlotStorage,
+  HealingFrontierStorage,
+  MptStorage,
+  StateStorage
+}
 import com.chipprbots.ethereum.domain.{Block, BlockBody, BlockHeader, BlockchainReader, BlockchainWriter, ChainWeight}
 import com.chipprbots.ethereum.network.p2p.messages.SNAP
 import com.chipprbots.ethereum.network.p2p.messages.SNAP._
@@ -3134,6 +3141,14 @@ class SNAPSyncController(
     }
   }
 
+  /** Layer 2: shared, lazily-built persisted-frontier handle for the healing coordinator. `None` (the default,
+    * `healing-frontier-persistence = false`) keeps Layer-1 behaviour — no CF writes, always full DFS on restart. Reuses
+    * the node's existing RocksDB DataSource (via `flatSlotStorage`); the CF auto-creates on open.
+    */
+  private lazy val healingFrontierStorageOpt: Option[HealingFrontierStorage] =
+    if (snapSyncConfig.healingFrontierPersistence) Some(new HealingFrontierStorage(flatSlotStorage.dataSource))
+    else None
+
   private def startStateHealing(): Unit = {
     // Guard: prevent duplicate healing coordinator creation (Bug 27).
     // Can happen when ByteCodeSyncComplete and StorageRangeSyncComplete arrive in quick
@@ -3161,7 +3176,9 @@ class SNAPSyncController(
               mptStorage = storage,
               batchSize = snapSyncConfig.healingBatchSize,
               snapSyncController = self,
-              concurrency = snapSyncConfig.healingConcurrency
+              concurrency = snapSyncConfig.healingConcurrency,
+              visitedCap = snapSyncConfig.healingVisitedCap,
+              healingFrontierStorage = healingFrontierStorageOpt
             )
             .withDispatcher("sync-dispatcher"),
           s"trie-node-healing-coordinator-$coordinatorGeneration"
@@ -3214,7 +3231,9 @@ class SNAPSyncController(
                   mptStorage = storage,
                   batchSize = snapSyncConfig.healingBatchSize,
                   snapSyncController = self,
-                  concurrency = snapSyncConfig.healingConcurrency
+                  concurrency = snapSyncConfig.healingConcurrency,
+                  visitedCap = snapSyncConfig.healingVisitedCap,
+                  healingFrontierStorage = healingFrontierStorageOpt
                 )
                 .withDispatcher("sync-dispatcher"),
               s"trie-node-healing-coordinator-$coordinatorGeneration"
@@ -4470,6 +4489,13 @@ case class SNAPSyncConfig(
     healingBatchSize: Int = 16,
     healingConcurrency: Int = 16,
     healingMaxInFlightPerPeer: Int = 1,
+    // Cap on the post-SNAP frontier-rebuild DFS `visited` LRU (entries). Bounds heap during the
+    // full-state walk (≈ cap × 80 B; 4,000,000 ≈ 320 MB) so the walk completes instead of OOM-looping.
+    // Completeness is independent of this value. See docs/design/healing-frontier-scale.md.
+    healingVisitedCap: Int = actors.TrieNodeHealingCoordinator.DefaultVisitedCap,
+    // Layer 2: persist the outstanding healing frontier so a restart resumes (O(frontier)) instead of
+    // re-walking the full state. Default false (ships dark). See docs/design/healing-frontier-scale.md.
+    healingFrontierPersistence: Boolean = false,
     stateValidationEnabled: Boolean = true,
     maxRetries: Int = 3,
     timeout: FiniteDuration = 30.seconds,
@@ -4573,6 +4599,12 @@ object SNAPSyncConfig {
         if (snapConfig.hasPath("healing-max-inflight-per-peer"))
           snapConfig.getInt("healing-max-inflight-per-peer")
         else 1,
+      healingVisitedCap =
+        if (snapConfig.hasPath("healing-visited-cap"))
+          snapConfig.getInt("healing-visited-cap")
+        else actors.TrieNodeHealingCoordinator.DefaultVisitedCap,
+      healingFrontierPersistence = snapConfig.hasPath("healing-frontier-persistence") &&
+        snapConfig.getBoolean("healing-frontier-persistence"),
       stateValidationEnabled = snapConfig.getBoolean("state-validation-enabled"),
       maxRetries = snapConfig.getInt("max-retries"),
       timeout = snapConfig.getDuration("timeout").toMillis.millis,

@@ -112,8 +112,11 @@ services:
     image: ${FUKUII_IMAGE:-chipprbots/fukuii:latest}
     container_name: fukuii-primary
     restart: unless-stopped
-    mem_limit: 8g
-    memswap_limit: 8g
+    # 10g cgroup to give the 5g heap (below) off-heap headroom for RocksDB (block cache + per-CF
+    # memtables) + Netty direct buffers, so a -Xmx bump doesn't re-trigger the cgroup OOM (Exited 137)
+    # seen at 8g. Kept below the ~12g that previously swapped the host desktop (15g box).
+    mem_limit: 10g
+    memswap_limit: 10g
     ports:
       - "${FUKUII_PRIMARY_RPC_PORT:-8545}:8545"       # JSON-RPC HTTP (internal)
       - "${FUKUII_PRIMARY_WS_PORT:-8546}:8546"         # JSON-RPC WebSocket (internal)
@@ -130,14 +133,13 @@ services:
     # our -X / -D flags as program args. We need JVM args BEFORE -jar, so
     # invoke `java` directly here.
     entrypoint: ["java"]
-    # JVM args aligned with PR #1244 sepolia standard: 3g heap, 1M thread stacks,
-    # capped direct memory, fail-fast on OOM. Previous config (-Xmx6g -Xss10M with
-    # no direct-mem cap) burned 7.4/8 GiB cgroup with no headroom — Netty buffer
-    # spike or peer-pool growth would trigger cgroup OOM. 76 threads × 10M = 760 MiB
-    # of stacks alone was needless waste.
+    # JVM args: 5g heap (bumped from 3g for faster ETC-mainnet healing/sync progress; the L1 fix
+    # bounds the healing visited-set so the heap headroom now goes to sync throughput, not OOM
+    # avoidance), 1M thread stacks, capped direct memory, fail-fast on OOM. Paired with the 10g
+    # cgroup above so off-heap RocksDB has room.
     command:
-      - "-Xmx3g"
-      - "-Xms1g"
+      - "-Xmx5g"
+      - "-Xms2g"
       - "-Xss1M"
       - "-XX:MaxDirectMemorySize=512M"
       - "-XX:+UseG1GC"
