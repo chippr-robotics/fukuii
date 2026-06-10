@@ -43,6 +43,13 @@ trait DataSource {
     */
   def getOptimized(namespace: Namespace, key: Array[Byte]): Option[Array[Byte]]
 
+  /** Batch point-lookup for multiple keys in the same namespace. Returns one `Option` per key — `None` for a cache
+    * miss. The default implementation calls [[getOptimized]] sequentially; [[RocksDbDataSource]] overrides with a
+    * single `multiGetAsList` JNI call, amortising per-call overhead and bloom-filter evaluation across the batch.
+    */
+  def multiGetOptimized(namespace: Namespace, keys: Seq[Array[Byte]]): Seq[Option[Array[Byte]]] =
+    keys.map(k => getOptimized(namespace, k))
+
   /** This function updates the DataSource by deleting, updating and inserting new (key-value) pairs. Implementations
     * should guarantee that the whole operation is atomic.
     */

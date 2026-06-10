@@ -12,6 +12,7 @@ import org.scalatest.matchers.should.Matchers
 
 import com.chipprbots.ethereum.blockchain.sync.snap._
 import com.chipprbots.ethereum.crypto.kec256
+import com.chipprbots.ethereum.db.storage.InMemoryBfsQueueStorage
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor
 import com.chipprbots.ethereum.network.p2p.messages.SNAP
 import com.chipprbots.ethereum.testing.Tags._
@@ -662,5 +663,207 @@ class TrieNodeHealingCoordinatorSpec
     // Peer is no longer stateless — HealingPeerAvailable should trigger dispatch for the new root
     coordinator ! Messages.HealingPeerAvailable(peer)
     networkPeerManager.expectMsgType[NetworkPeerManagerActor.SendMessage](3.seconds)
+  }
+
+  it should "discover all missing children via BFS when state root is a BranchNode (BFS smoke)" taggedAs UnitTest in {
+    import com.chipprbots.ethereum.mpt.{BranchNode, HashNode, NullNode, MptNode}
+
+    // Synthetic trie: root is a BranchNode with 3 HashNode children at positions 0, 3, 7.
+    // The children are NOT in storage — BFS level 0 = {root} (present), level 1 = {c0, c3, c7} (all missing).
+    val missingHash0 = kec256(ByteString("bfs-smoke-missing-0"))
+    val missingHash3 = kec256(ByteString("bfs-smoke-missing-3"))
+    val missingHash7 = kec256(ByteString("bfs-smoke-missing-7"))
+
+    val children: Array[MptNode] = Array.fill[MptNode](16)(NullNode)
+    children(0) = HashNode(missingHash0.toArray)
+    children(3) = HashNode(missingHash3.toArray)
+    children(7) = HashNode(missingHash7.toArray)
+    val branch = BranchNode(children, None)
+
+    val storage = new TestMptStorage()
+    storage.putNode(branch)
+    val root = ByteString(branch.hash)
+
+    val coordinator = system.actorOf(
+      TrieNodeHealingCoordinator.props(
+        stateRoot = root,
+        networkPeerManager = TestProbe().ref,
+        requestTracker = new SNAPRequestTracker()(system.scheduler),
+        mptStorage = storage,
+        batchSize = 16,
+        snapSyncController = TestProbe().ref,
+        healingWriterEcOverride = Some(system.dispatcher)
+      )
+    )
+
+    coordinator ! Messages.StartTrieNodeHealing(root)
+
+    // All 3 missing children should be queued once BFS completes.
+    awaitAssert(
+      {
+        coordinator ! Messages.HealingGetProgress
+        expectMsgType[HealingStatistics](2.seconds).pendingTasks shouldBe 3
+      },
+      max = 5.seconds,
+      interval = 100.millis
+    )
+  }
+
+  it should "traverse multiple BFS levels and find frontier nodes deep in the trie" taggedAs UnitTest in {
+    import com.chipprbots.ethereum.mpt.{BranchNode, HashNode, NullNode, MptNode}
+
+    // Level 0: root BranchNode with 2 children (c0, c1) — both present in storage
+    // Level 1: c0 is BranchNode with 1 missing child; c1 is BranchNode with 1 missing child
+    // Level 2: m0, m1 — both missing → these are the frontier nodes BFS should find
+
+    val missingL2a = kec256(ByteString("bfs-multilevel-missing-L2a"))
+    val missingL2b = kec256(ByteString("bfs-multilevel-missing-L2b"))
+
+    val childrenC0: Array[MptNode] = Array.fill[MptNode](16)(NullNode)
+    childrenC0(5) = HashNode(missingL2a.toArray)
+    val branchC0 = BranchNode(childrenC0, None)
+
+    val childrenC1: Array[MptNode] = Array.fill[MptNode](16)(NullNode)
+    childrenC1(10) = HashNode(missingL2b.toArray)
+    val branchC1 = BranchNode(childrenC1, None)
+
+    val rootChildren: Array[MptNode] = Array.fill[MptNode](16)(NullNode)
+    rootChildren(0) = HashNode(branchC0.hash)
+    rootChildren(1) = HashNode(branchC1.hash)
+    val rootBranch = BranchNode(rootChildren, None)
+
+    val storage = new TestMptStorage()
+    storage.putNode(rootBranch)
+    storage.putNode(branchC0)
+    storage.putNode(branchC1)
+    val root = ByteString(rootBranch.hash)
+
+    val coordinator = system.actorOf(
+      TrieNodeHealingCoordinator.props(
+        stateRoot = root,
+        networkPeerManager = TestProbe().ref,
+        requestTracker = new SNAPRequestTracker()(system.scheduler),
+        mptStorage = storage,
+        batchSize = 16,
+        snapSyncController = TestProbe().ref,
+        healingWriterEcOverride = Some(system.dispatcher)
+      )
+    )
+
+    coordinator ! Messages.StartTrieNodeHealing(root)
+
+    // Both deep frontier nodes (missingL2a, missingL2b) should be found across 3 BFS levels.
+    awaitAssert(
+      {
+        coordinator ! Messages.HealingGetProgress
+        expectMsgType[HealingStatistics](2.seconds).pendingTasks shouldBe 2
+      },
+      max = 5.seconds,
+      interval = 100.millis
+    )
+  }
+
+  it should "deduplicate shared child hashes across BFS levels" taggedAs UnitTest in {
+    import com.chipprbots.ethereum.mpt.{BranchNode, HashNode, NullNode, MptNode}
+
+    // Two BranchNodes at level 1 (c0 and c1) share the same missing child hash.
+    // BFS should add the shared child to nextLevel exactly once (visited at enqueue time).
+    val sharedMissingHash = kec256(ByteString("bfs-dedup-shared-missing"))
+
+    val childrenC0: Array[MptNode] = Array.fill[MptNode](16)(NullNode)
+    childrenC0(0) = HashNode(sharedMissingHash.toArray)
+    val branchC0 = BranchNode(childrenC0, None)
+
+    val childrenC1: Array[MptNode] = Array.fill[MptNode](16)(NullNode)
+    childrenC1(0) = HashNode(sharedMissingHash.toArray) // same hash as c0's child
+    val branchC1 = BranchNode(childrenC1, None)
+
+    val rootChildren: Array[MptNode] = Array.fill[MptNode](16)(NullNode)
+    rootChildren(0) = HashNode(branchC0.hash)
+    rootChildren(1) = HashNode(branchC1.hash)
+    val rootBranch = BranchNode(rootChildren, None)
+
+    val storage = new TestMptStorage()
+    storage.putNode(rootBranch)
+    storage.putNode(branchC0)
+    storage.putNode(branchC1)
+    val root = ByteString(rootBranch.hash)
+
+    val coordinator = system.actorOf(
+      TrieNodeHealingCoordinator.props(
+        stateRoot = root,
+        networkPeerManager = TestProbe().ref,
+        requestTracker = new SNAPRequestTracker()(system.scheduler),
+        mptStorage = storage,
+        batchSize = 16,
+        snapSyncController = TestProbe().ref,
+        healingWriterEcOverride = Some(system.dispatcher)
+      )
+    )
+
+    coordinator ! Messages.StartTrieNodeHealing(root)
+
+    // Shared missing child should appear in the frontier exactly once, not twice.
+    awaitAssert(
+      {
+        coordinator ! Messages.HealingGetProgress
+        expectMsgType[HealingStatistics](2.seconds).pendingTasks shouldBe 1
+      },
+      max = 5.seconds,
+      interval = 100.millis
+    )
+  }
+
+  it should "process all BFS levels through InMemoryBfsQueueStorage without accumulating the full level in heap (spill-scale)" taggedAs UnitTest in {
+    import com.chipprbots.ethereum.mpt.{BranchNode, HashNode, NullNode, MptNode}
+
+    // Build a 3-level wide trie: root → 4 branch nodes (L1) → each with 4 missing children (L2).
+    // Total frontier = 16 missing L2 hashes. Exercises multi-level CF-backed queue drain.
+    val missingL2: Seq[Array[Byte]] = (0 until 16).map(i => kec256(ByteString(s"spill-missing-$i")).toArray)
+
+    val l1Branches: Seq[BranchNode] = (0 until 4).map { i =>
+      val children: Array[MptNode] = Array.fill[MptNode](16)(NullNode)
+      (0 until 4).foreach(j => children(j) = HashNode(missingL2(i * 4 + j)))
+      BranchNode(children, None)
+    }
+
+    val rootChildren: Array[MptNode] = Array.fill[MptNode](16)(NullNode)
+    l1Branches.zipWithIndex.foreach { case (b, i) => rootChildren(i) = HashNode(b.hash) }
+    val rootBranch = BranchNode(rootChildren, None)
+
+    val storage = new TestMptStorage()
+    storage.putNode(rootBranch)
+    l1Branches.foreach(storage.putNode)
+    // missingL2 hashes are intentionally NOT in storage — they form the frontier.
+    val root = ByteString(rootBranch.hash)
+
+    val bfsQueue = new InMemoryBfsQueueStorage()
+    val coordinator = system.actorOf(
+      TrieNodeHealingCoordinator.props(
+        stateRoot = root,
+        networkPeerManager = TestProbe().ref,
+        requestTracker = new SNAPRequestTracker()(system.scheduler),
+        mptStorage = storage,
+        batchSize = 16,
+        snapSyncController = TestProbe().ref,
+        healingWriterEcOverride = Some(system.dispatcher),
+        bfsQueueStorageOpt = Some(bfsQueue)
+      )
+    )
+
+    coordinator ! Messages.StartTrieNodeHealing(root)
+
+    // All 16 missing L2 hashes must land in the pending frontier.
+    awaitAssert(
+      {
+        coordinator ! Messages.HealingGetProgress
+        expectMsgType[HealingStatistics](2.seconds).pendingTasks shouldBe 16
+      },
+      max = 10.seconds,
+      interval = 200.millis
+    )
+
+    // After BFS completes the queue counter resets to 0 (clear() called at end of rebuildFrontierBFS).
+    bfsQueue.counter shouldBe 0L
   }
 }

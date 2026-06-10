@@ -65,6 +65,7 @@ class ByteCodeCoordinator(
     with ActorLogging {
 
   import Messages._
+  implicit private val ec: scala.concurrent.ExecutionContext = context.dispatcher
 
   // Per-peer concurrency budget — dynamically adjusted by SNAPSyncController via UpdateMaxInFlightPerPeer.
   // Shadows cooldownConfig.maxInFlightPerPeer so budget updates don't require config mutation.
@@ -194,10 +195,9 @@ class ByteCodeCoordinator(
   override def preStart(): Unit = {
     bytecodeStartMs = System.currentTimeMillis()
     statusTimer = Some(
-      context.system.scheduler
-        .scheduleWithFixedDelay(30.seconds, 30.seconds, self, ByteCodeCoordinator.ByteCodeStatusPulse)(
-          context.dispatcher
-        )
+      context.system.scheduler.scheduleWithFixedDelay(30.seconds, 30.seconds)(() =>
+        self ! ByteCodeCoordinator.ByteCodeStatusPulse
+      )
     )
     log.info("ByteCodeCoordinator starting")
   }

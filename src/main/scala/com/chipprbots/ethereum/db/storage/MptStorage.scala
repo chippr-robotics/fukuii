@@ -13,6 +13,14 @@ trait MptStorage {
   def updateNodesInStorage(newRoot: Option[MptNode], toRemove: Seq[MptNode]): Option[MptNode]
   def persist(): Unit
 
+  /** Batch point-lookup: returns one `Option[MptNode]` per hash. `None` means the node is not locally held (a healing
+    * target). The default delegates to sequential [[get]] calls; [[SerializingMptStorage]] overrides via
+    * [[NodesKeyValueStorage.multiGet]] which in turn hits RocksDB `multiGetAsList` when backed by
+    * [[RocksDbDataSource]].
+    */
+  def multiGetNodes(hashes: Seq[Array[Byte]]): Seq[Option[MptNode]] =
+    hashes.map(h => scala.util.Try(get(h)).toOption)
+
   /** Store pre-encoded trie nodes directly by hash, bypassing trie collapse. Used by state healing to insert individual
     * nodes fetched from peers.
     */
@@ -38,6 +46,14 @@ class SerializingMptStorage(storage: NodesKeyValueStorage) extends MptStorage {
 
   override def persist(): Unit =
     storage.persist()
+
+  override def multiGetNodes(hashes: Seq[Array[Byte]]): Seq[Option[MptNode]] = {
+    if (hashes.isEmpty) return Seq.empty
+    storage
+      .multiGet(hashes.map(ByteString(_)))
+      .zip(hashes)
+      .map { case (rawOpt, hash) => rawOpt.map(enc => MptStorage.decodeNode(enc, hash)) }
+  }
 
   override def storeRawNodes(nodes: Seq[(ByteString, Array[Byte])]): Unit =
     storage.update(Seq.empty, nodes)

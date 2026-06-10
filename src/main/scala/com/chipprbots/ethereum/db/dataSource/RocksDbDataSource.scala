@@ -78,6 +78,26 @@ class RocksDbDataSource(
     } finally dbLock.readLock().unlock()
   }
 
+  /** Batch point-lookup via a single JNI call. Amortises per-call overhead and bloom-filter evaluation across the
+    * batch; up to 16 keys per branch node in the healing DFS. Null entries in the result list indicate a cache miss.
+    */
+  override def multiGetOptimized(namespace: Namespace, keys: Seq[Array[Byte]]): Seq[Option[Array[Byte]]] = {
+    if (keys.isEmpty) return Seq.empty
+    import scala.jdk.CollectionConverters._
+    dbLock.readLock().lock()
+    try {
+      assureNotClosed()
+      val handle = handles(namespace)
+      val cfList = java.util.Collections.nCopies(keys.size, handle)
+      val keyList = keys.asJava
+      db.multiGetAsList(cfList, keyList).asScala.map(Option(_)).toSeq
+    } catch {
+      case error: RocksDbDataSourceClosedException => throw error
+      case NonFatal(error) =>
+        throw RocksDbDataSourceException(s"multiGetOptimized failed for namespace $namespace", error)
+    } finally dbLock.readLock().unlock()
+  }
+
   override def update(dataSourceUpdates: Seq[DataUpdate]): Unit =
     doWrite(dataSourceUpdates, sync = false)
 
