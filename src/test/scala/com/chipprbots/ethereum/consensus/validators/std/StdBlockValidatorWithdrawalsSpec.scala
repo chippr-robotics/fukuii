@@ -3,6 +3,7 @@ package com.chipprbots.ethereum.consensus.validators.std
 import org.bouncycastle.util.encoders.Hex
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
+import org.scalatest.ParallelTestExecution
 
 import com.chipprbots.ethereum.Fixtures
 import com.chipprbots.ethereum.consensus.validators.std.StdBlockValidator._
@@ -21,7 +22,7 @@ import com.chipprbots.ethereum.testing.Tags._
   * (`twoIdenticalIndex`, `differentValidatorToTheSameAddress`, etc.) explicitly exercise this — they ship blocks with
   * non-monotonic / duplicate indices and `expectException: None`, expecting the block to be accepted.
   */
-class StdBlockValidatorWithdrawalsSpec extends AnyFlatSpec with Matchers {
+class StdBlockValidatorWithdrawalsSpec extends AnyFlatSpec with Matchers with ParallelTestExecution {
 
   // Pre-Shanghai header (no withdrawalsRoot). Transactions + ommers roots are correct for
   // Fixtures.Blocks.ValidBlock.body, so the earlier checks in validateHeaderAndBody pass.

@@ -89,6 +89,12 @@ class ConsensusAdapter(
     }
   }
 
+  def evaluateBranch(blocks: NonEmptyList[Block])(implicit
+      blockExecutionScheduler: IORuntime,
+      blockchainConfig: BlockchainConfig
+  ): IO[BlockImportResult] =
+    forwardAndTranslateConsensusResult(blocks)
+
   private def forwardAndTranslateConsensusResult(
       newBranch: NonEmptyList[Block]
   )(implicit blockExecutionScheduler: IORuntime, blockchainConfig: BlockchainConfig) =
@@ -131,7 +137,7 @@ class ConsensusAdapter(
       .flatTap {
         case Left(error) =>
           IO(
-            log.error(
+            log.debug(
               "Error while validating block with hash {} before execution: {}",
               Hex.toHexString(block.hash.toArray),
               error.reason.toString

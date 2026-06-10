@@ -215,7 +215,7 @@ trait BlockHeaderValidatorSkeleton extends BlockHeaderValidator {
   private def validateGasLimit(
       blockHeader: BlockHeader,
       parentHeader: BlockHeader
-  )(implicit blockchainConfig: BlockchainConfig): Either[BlockHeaderError, BlockHeaderValid] =
+  )(implicit _blockchainConfig: BlockchainConfig): Either[BlockHeaderError, BlockHeaderValid] =
     // 2^63 - 1 is the protocol-wide gasLimit cap (cannot fit in an int64). It applies
     // regardless of EIP-106 activation — any block with gasLimit >= 2^63 is malformed.
     if (blockHeader.gasLimit > MaxGasLimit)

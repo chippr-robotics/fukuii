@@ -265,10 +265,16 @@ class ConsensusAdapterSpec
     val blockData2 = BlockData(newBlock2, Seq.empty[Receipt], newWeight2)
 
     val mockExecution = mock[BlockExecution]
+    // simulate execute-first: the mock must persist newBlock2 (the block that succeeds)
+    // exactly as real executeAndValidateBlocks does — otherwise saveBestKnownBlocks updates
+    // the chain pointer to a hash that isn't in the DB and getBestBlock() returns None
     (mockExecution
       .executeAndValidateBlocks(_: List[Block], _: ChainWeight)(_: BlockchainConfig))
       .expects(newBranch, *, *)
-      .returning((List(blockData2), Some(execError)))
+      .onCall { (_, _, _) =>
+        blockchainWriter.save(newBlock2, Seq.empty[Receipt], newWeight2, saveAsBestBlock = false)
+        (List(blockData2), Some(execError))
+      }
 
     val withMockedBlockExecution = blockImportWithMockedBlockExecution(mockExecution)
     whenReady(withMockedBlockExecution.evaluateBranchBlock(newBlock3).unsafeToFuture())(
@@ -278,8 +284,9 @@ class ConsensusAdapterSpec
       _ shouldBe a[BlockImportFailed]
     }
 
-    blockchainReader.getBestBlock().get shouldEqual oldBlock3
-    blockchainReader.getChainWeightByHash(oldBlock3.header.hash) shouldEqual Some(oldWeight3)
+    // execute-first: chain advances to the last successfully executed block, not reverted
+    blockchainReader.getBestBlock().get shouldEqual newBlock2
+    blockchainReader.getChainWeightByHash(newBlock2.header.hash) shouldEqual Some(newWeight2)
 
     blockQueue.isQueued(newBlock2.header.hash) shouldBe true
     blockQueue.isQueued(newBlock3.header.hash) shouldBe false

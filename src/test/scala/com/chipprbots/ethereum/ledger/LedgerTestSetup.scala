@@ -389,7 +389,6 @@ trait TestSetupWithVmAndValidators extends EphemBlockchainTestSetup {
     val testMining = mining.withValidators(NotFailAfterExecValidation).withVM(new Mocks.MockVM())
     val blockValidation = new BlockValidation(testMining, blockchainReader, blockQueue)
     val consensus = new ConsensusImpl(
-      blockchain,
       blockchainReader,
       blockchainWriter,
       new BlockExecution(

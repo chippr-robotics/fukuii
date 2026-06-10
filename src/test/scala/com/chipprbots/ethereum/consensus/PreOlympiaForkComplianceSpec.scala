@@ -2,6 +2,7 @@ package com.chipprbots.ethereum.consensus
 
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
+import org.scalatest.ParallelTestExecution
 
 import com.chipprbots.ethereum.vm.BlockchainConfigForEvm
 import com.chipprbots.ethereum.vm.BlockchainConfigForEvm.EtcForks
@@ -18,7 +19,7 @@ import com.chipprbots.ethereum.testing.Tags._
   *
   * Reference: Besu ClassicProtocolSpecsTest (15 tests validating fork dispatch)
   */
-class PreOlympiaForkComplianceSpec extends AnyFlatSpec with Matchers {
+class PreOlympiaForkComplianceSpec extends AnyFlatSpec with Matchers with ParallelTestExecution {
 
   /** Helper: create a BlockchainConfigForEvm with all forks at Long.MaxValue (inactive), then selectively activate
     * specific forks.
@@ -49,146 +50,126 @@ class PreOlympiaForkComplianceSpec extends AnyFlatSpec with Matchers {
       )
     )
 
-  // ===== Frontier Fork =====
+  private case class ForkCase(
+      label: String,
+      blockNumber: Long,
+      configFn: BlockchainConfigForEvm => BlockchainConfigForEvm,
+      assertFn: EvmConfig => Unit
+  )
 
-  "Pre-Olympia fork compliance" should "select FrontierFeeSchedule for Frontier blocks" taggedAs (
-    UnitTest,
-    ConsensusTest
-  ) in {
-    val cfg = cfgWith(_.copy(frontierBlockNumber = 0))
-    val evm = EvmConfig.forBlock(0, cfg)
+  // ===== Fork Dispatch Table =====
 
-    evm.feeSchedule shouldBe a[FeeSchedule.FrontierFeeSchedule]
-    evm.opCodeList shouldBe EvmConfig.FrontierOpCodes
-  }
-
-  // ===== Homestead Fork =====
-
-  it should "select HomesteadFeeSchedule for Homestead blocks" taggedAs (UnitTest, ConsensusTest) in {
-    val cfg = cfgWith(_.copy(frontierBlockNumber = 0, homesteadBlockNumber = 10))
-    val evm = EvmConfig.forBlock(10, cfg)
-
-    evm.feeSchedule shouldBe a[FeeSchedule.HomesteadFeeSchedule]
-    evm.opCodeList shouldBe EvmConfig.HomesteadOpCodes
-    evm.exceptionalFailedCodeDeposit shouldBe true
-  }
-
-  // ===== Atlantis Fork (ETC-specific) =====
-
-  it should "select AtlantisFeeSchedule for Atlantis blocks" taggedAs (UnitTest, ConsensusTest) in {
-    val cfg = cfgWith(
-      _.copy(
+  private val forkCases: Seq[ForkCase] = Seq(
+    ForkCase(
+      label = "select FrontierFeeSchedule for Frontier blocks",
+      blockNumber = 0,
+      configFn = _.copy(frontierBlockNumber = 0),
+      assertFn = evm => {
+        evm.feeSchedule shouldBe a[FeeSchedule.FrontierFeeSchedule]
+        evm.opCodeList shouldBe EvmConfig.FrontierOpCodes
+      }
+    ),
+    ForkCase(
+      label = "select HomesteadFeeSchedule for Homestead blocks",
+      blockNumber = 10,
+      configFn = _.copy(frontierBlockNumber = 0, homesteadBlockNumber = 10),
+      assertFn = evm => {
+        evm.feeSchedule shouldBe a[FeeSchedule.HomesteadFeeSchedule]
+        evm.opCodeList shouldBe EvmConfig.HomesteadOpCodes
+        evm.exceptionalFailedCodeDeposit shouldBe true
+      }
+    ),
+    ForkCase(
+      label = "select AtlantisFeeSchedule for Atlantis blocks",
+      blockNumber = 100,
+      configFn = _.copy(
         frontierBlockNumber = 0,
         homesteadBlockNumber = 10,
         eip150BlockNumber = 20,
         eip160BlockNumber = 30,
         atlantisBlockNumber = 100
-      )
-    )
-    val evm = EvmConfig.forBlock(100, cfg)
-
-    evm.feeSchedule shouldBe a[FeeSchedule.AtlantisFeeSchedule]
-    evm.opCodeList shouldBe EvmConfig.AtlantisOpCodes
-    evm.noEmptyAccounts shouldBe true
-  }
-
-  // ===== Atlantis preferred over Byzantium at same height =====
-
-  it should "prefer Atlantis over Byzantium when both activated at same height" taggedAs (
-    UnitTest,
-    ConsensusTest
-  ) in {
-    val cfg = cfgWith(
-      _.copy(
+      ),
+      assertFn = evm => {
+        evm.feeSchedule shouldBe a[FeeSchedule.AtlantisFeeSchedule]
+        evm.opCodeList shouldBe EvmConfig.AtlantisOpCodes
+        evm.noEmptyAccounts shouldBe true
+      }
+    ),
+    ForkCase(
+      label = "prefer Atlantis over Byzantium when both activated at same height",
+      blockNumber = 0,
+      configFn = _.copy(
         frontierBlockNumber = 0,
         byzantiumBlockNumber = 0,
         atlantisBlockNumber = 0
-      )
-    )
-    val evm = EvmConfig.forBlock(0, cfg)
-
-    evm.feeSchedule shouldBe a[FeeSchedule.AtlantisFeeSchedule]
-    evm.opCodeList shouldBe EvmConfig.AtlantisOpCodes
-  }
-
-  // ===== Agharta Fork =====
-
-  it should "select ConstantionopleFeeSchedule for Agharta blocks" taggedAs (UnitTest, ConsensusTest) in {
-    val cfg = cfgWith(
-      _.copy(
+      ),
+      assertFn = evm => {
+        evm.feeSchedule shouldBe a[FeeSchedule.AtlantisFeeSchedule]
+        evm.opCodeList shouldBe EvmConfig.AtlantisOpCodes
+      }
+    ),
+    ForkCase(
+      label = "select ConstantionopleFeeSchedule for Agharta blocks",
+      blockNumber = 100,
+      configFn = _.copy(
         frontierBlockNumber = 0,
         atlantisBlockNumber = 10,
         aghartaBlockNumber = 100
-      )
-    )
-    val evm = EvmConfig.forBlock(100, cfg)
-
-    evm.feeSchedule shouldBe a[FeeSchedule.ConstantionopleFeeSchedule]
-    evm.opCodeList shouldBe EvmConfig.AghartaOpCodes
-  }
-
-  // ===== Phoenix Fork =====
-
-  it should "select PhoenixFeeSchedule for Phoenix blocks" taggedAs (UnitTest, ConsensusTest) in {
-    val cfg = cfgWith(
-      _.copy(
+      ),
+      assertFn = evm => {
+        evm.feeSchedule shouldBe a[FeeSchedule.ConstantionopleFeeSchedule]
+        evm.opCodeList shouldBe EvmConfig.AghartaOpCodes
+      }
+    ),
+    ForkCase(
+      label = "select PhoenixFeeSchedule for Phoenix blocks",
+      blockNumber = 100,
+      configFn = _.copy(
         frontierBlockNumber = 0,
         atlantisBlockNumber = 10,
         aghartaBlockNumber = 20,
         phoenixBlockNumber = 100
-      )
-    )
-    val evm = EvmConfig.forBlock(100, cfg)
-
-    evm.feeSchedule shouldBe a[FeeSchedule.PhoenixFeeSchedule]
-    evm.opCodeList shouldBe EvmConfig.PhoenixOpCodes
-  }
-
-  // ===== Magneto Fork =====
-
-  it should "select MagnetoFeeSchedule for Magneto blocks" taggedAs (UnitTest, ConsensusTest) in {
-    val cfg = cfgWith(
-      _.copy(
+      ),
+      assertFn = evm => {
+        evm.feeSchedule shouldBe a[FeeSchedule.PhoenixFeeSchedule]
+        evm.opCodeList shouldBe EvmConfig.PhoenixOpCodes
+      }
+    ),
+    ForkCase(
+      label = "select MagnetoFeeSchedule for Magneto blocks",
+      blockNumber = 100,
+      configFn = _.copy(
         frontierBlockNumber = 0,
         atlantisBlockNumber = 10,
         aghartaBlockNumber = 20,
         phoenixBlockNumber = 30,
         magnetoBlockNumber = 100
-      )
-    )
-    val evm = EvmConfig.forBlock(100, cfg)
-
-    evm.feeSchedule shouldBe a[FeeSchedule.MagnetoFeeSchedule]
-    evm.opCodeList shouldBe EvmConfig.MagnetoOpCodes
-  }
-
-  // ===== Mystique Fork =====
-
-  it should "select MystiqueFeeSchedule for Mystique blocks" taggedAs (UnitTest, ConsensusTest) in {
-    val cfg = cfgWith(
-      _.copy(
+      ),
+      assertFn = evm => {
+        evm.feeSchedule shouldBe a[FeeSchedule.MagnetoFeeSchedule]
+        evm.opCodeList shouldBe EvmConfig.MagnetoOpCodes
+      }
+    ),
+    ForkCase(
+      label = "select MystiqueFeeSchedule for Mystique blocks",
+      blockNumber = 100,
+      configFn = _.copy(
         frontierBlockNumber = 0,
         atlantisBlockNumber = 10,
         aghartaBlockNumber = 20,
         phoenixBlockNumber = 30,
         magnetoBlockNumber = 40,
         mystiqueBlockNumber = 100
-      )
-    )
-    val evm = EvmConfig.forBlock(100, cfg)
-
-    evm.feeSchedule shouldBe a[FeeSchedule.MystiqueFeeSchedule]
-    evm.eip3541Enabled shouldBe true
-  }
-
-  // ===== Spiral Fork =====
-
-  it should "select MystiqueFeeSchedule with Spiral opcodes for Spiral blocks" taggedAs (
-    UnitTest,
-    ConsensusTest
-  ) in {
-    val cfg = cfgWith(
-      _.copy(
+      ),
+      assertFn = evm => {
+        evm.feeSchedule shouldBe a[FeeSchedule.MystiqueFeeSchedule]
+        evm.eip3541Enabled shouldBe true
+      }
+    ),
+    ForkCase(
+      label = "select MystiqueFeeSchedule with Spiral opcodes for Spiral blocks",
+      blockNumber = 100,
+      configFn = _.copy(
         frontierBlockNumber = 0,
         atlantisBlockNumber = 10,
         aghartaBlockNumber = 20,
@@ -196,16 +177,24 @@ class PreOlympiaForkComplianceSpec extends AnyFlatSpec with Matchers {
         magnetoBlockNumber = 40,
         mystiqueBlockNumber = 50,
         spiralBlockNumber = 100
-      )
+      ),
+      assertFn = evm => {
+        // Spiral uses MystiqueFeeSchedule (no new fee schedule class)
+        evm.feeSchedule shouldBe a[FeeSchedule.MystiqueFeeSchedule]
+        evm.opCodeList shouldBe EvmConfig.SpiralOpCodes
+        evm.eip3651Enabled shouldBe true
+        evm.eip3860Enabled shouldBe true
+        evm.eip6049DeprecationEnabled shouldBe true
+      }
     )
-    val evm = EvmConfig.forBlock(100, cfg)
+  )
 
-    // Spiral uses MystiqueFeeSchedule (no new fee schedule class)
-    evm.feeSchedule shouldBe a[FeeSchedule.MystiqueFeeSchedule]
-    evm.opCodeList shouldBe EvmConfig.SpiralOpCodes
-    evm.eip3651Enabled shouldBe true
-    evm.eip3860Enabled shouldBe true
-    evm.eip6049DeprecationEnabled shouldBe true
+  forkCases.foreach { fc =>
+    "Pre-Olympia fork compliance" should fc.label taggedAs (UnitTest, ConsensusTest) in {
+      val cfg = cfgWith(fc.configFn)
+      val evm = EvmConfig.forBlock(fc.blockNumber, cfg)
+      fc.assertFn(evm)
+    }
   }
 
   // ===== PUSH0 Gating at Spiral =====
