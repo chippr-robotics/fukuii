@@ -36,7 +36,7 @@ trait NodeStatusExchangeState[T <: Message] extends InProgressState[PeerInfo] wi
     if (validNetworkID && validGenesisHash) {
       forkResolverOpt match {
         case Some(forkResolver) =>
-          EtcForkBlockExchangeState(handshakerConfiguration, forkResolver, status)
+          IrregularStateChangeDaoForkBlockExchangeState(handshakerConfiguration, forkResolver, status)
         case None =>
           ConnectedState(PeerInfo.withForkAccepted(status))
       }

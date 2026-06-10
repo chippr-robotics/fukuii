@@ -182,7 +182,7 @@
     <!-- RLPX - Encrypted transport protocol (ERROR only)                    -->
     <!-- =================================================================== -->
     <logger name="com.chipprbots.ethereum.network.rlpx" level="ERROR" />
-    <logger name="com.chipprbots.ethereum.network.rlpx.RLPxConnectionHandler" level="INFO" />
+    <logger name="com.chipprbots.ethereum.network.rlpx.RLPxConnectionHandler" level="WARN" />
     <logger name="com.chipprbots.ethereum.network.rlpx.FrameCodec" level="ERROR" />
     <logger name="com.chipprbots.ethereum.network.rlpx.MessageCodec" level="ERROR" />
     <logger name="com.chipprbots.ethereum.network.rlpx.AuthHandshaker" level="ERROR" />

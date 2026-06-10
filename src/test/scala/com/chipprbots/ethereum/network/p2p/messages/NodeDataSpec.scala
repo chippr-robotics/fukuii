@@ -9,8 +9,6 @@ import org.scalatest.matchers.should.Matchers
 import com.chipprbots.ethereum.crypto._
 import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.NodeData
 import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.NodeData._
-import com.chipprbots.ethereum.rlp._
-import com.chipprbots.ethereum.rlp.encode
 import com.chipprbots.ethereum.testing.Tags._
 
 /** ETHPackets.NodeData encode/decode tests.

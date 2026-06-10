@@ -259,7 +259,9 @@ object ETHPackets {
               ByteUtils.bytesToBigInt(latestBlockBytes),
               ByteString(latestBlockHashBytes)
             )
-          case other => throw new RuntimeException(s"Cannot decode Status69 from: $other")
+          case other =>
+            val fieldCount = other match { case RLPList(items @ _*) => items.length; case _ => -1 }
+            throw new RuntimeException(s"Cannot decode Status69 (got $fieldCount fields): $other")
         }
       }
     }

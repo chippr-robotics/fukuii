@@ -44,11 +44,14 @@ class ServerActorSpec
   ) in {
     val holder = freshHolder()
     val pm = TestProbe()
-    val actor = system.actorOf(ServerActor.props(holder, pm.ref, blacklist))
+    // TCP probe absorbs the Bind request so no real socket binding happens.
+    val tcpProbe = TestProbe()
+    val actor = system.actorOf(ServerActor.testProps(holder, pm.ref, blacklist, tcpProbe.ref))
 
     val explicit = InetAddress.getByName("1.2.3.4")
     val localAddr = new InetSocketAddress("0.0.0.0", 30303)
     actor ! ServerActor.StartServer(localAddr, Some(explicit))
+    tcpProbe.expectMsgType[Tcp.Bind]
     actor ! Tcp.Bound(localAddr)
 
     awaitCond(
@@ -69,11 +72,13 @@ class ServerActorSpec
   ) in {
     val holder = freshHolder()
     val pm = TestProbe()
-    val actor = system.actorOf(ServerActor.props(holder, pm.ref, blacklist))
+    val tcpProbe = TestProbe()
+    val actor = system.actorOf(ServerActor.testProps(holder, pm.ref, blacklist, tcpProbe.ref))
 
     val localAddr = new InetSocketAddress("0.0.0.0", 30304)
     val detectedIp = InetAddress.getByName("5.6.7.8")
     actor ! ServerActor.StartServer(localAddr, None)
+    tcpProbe.expectMsgType[Tcp.Bind]
     actor ! Tcp.Bound(localAddr)
 
     // Simulate the Future result returning from the async IP detection
@@ -94,10 +99,12 @@ class ServerActorSpec
   it should "fall back to loopback when DetectedIP carries None" taggedAs (UnitTest, NetworkTest) in {
     val holder = freshHolder()
     val pm = TestProbe()
-    val actor = system.actorOf(ServerActor.props(holder, pm.ref, blacklist))
+    val tcpProbe = TestProbe()
+    val actor = system.actorOf(ServerActor.testProps(holder, pm.ref, blacklist, tcpProbe.ref))
 
     val localAddr = new InetSocketAddress("0.0.0.0", 30305)
     actor ! ServerActor.StartServer(localAddr, None)
+    tcpProbe.expectMsgType[Tcp.Bind]
     actor ! Tcp.Bound(localAddr)
     actor ! ServerActor.DetectedIP(None)
 

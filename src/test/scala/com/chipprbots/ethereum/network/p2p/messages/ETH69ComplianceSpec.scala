@@ -52,8 +52,8 @@ class ETH69ComplianceSpec extends AnyWordSpec with Matchers {
         val rlpDecoded = rawDecode(encoded)
         rlpDecoded match {
           case RLPList(
-                RLPValue(vBytes),
-                RLPValue(netIdBytes),
+                RLPValue(_),
+                RLPValue(_),
                 RLPValue(tdBytes), // field 3 = TD (not genesis)
                 RLPValue(_), // bestHash
                 RLPValue(_), // genesisHash

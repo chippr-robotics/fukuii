@@ -201,7 +201,6 @@ class DnsDiscoveryEnrSpec extends AnyFlatSpec with Matchers {
     // Construct an ENR whose base64 encoding naturally contains + or / (→ - and _)
     // by trying multiple seq values. Any valid ENR is sufficient.
     val enr = buildEnr()
-    val withPadding = enr.replace('-', '+').replace('_', '/')
     // Standard base64 should not parse (DnsDiscovery expects URL-safe)
     // but our ENR should still parse fine (the URL-safe one)
     DnsDiscovery.parseEnrToEnode(enr).toOption shouldBe defined
