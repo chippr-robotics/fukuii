@@ -121,8 +121,13 @@ class BlockImporter(
     case ImportDone(newBehavior, importType) =>
       val newState = state.notImportingBlocks().branchResolved()
       val behavior: Behavior = getBehavior(newBehavior, importType)
-      if (newBehavior == Running) {
-        self ! PickBlocks
+      newBehavior match {
+        case Running =>
+          self ! PickBlocks
+        case r: ResolvingBranch =>
+          log.info("Branch resolution dispatch: StrictPickBlocks from={} bestKnown={}", r.from, bestKnownBlockNumber)
+          self ! PickBlocks
+        case _ =>
       }
       context.become(behavior(newState))
 
@@ -429,26 +434,29 @@ class BlockImporter(
       blocks: List[Block],
       importedBlocks: List[Block] = Nil
   ): IO[(List[Block], Option[Any])] =
-    if (blocks.isEmpty) {
-      importedBlocks.headOption.foreach(block =>
-        supervisor ! ProgressProtocol.ImportedBlock(block.number, internally = false)
-      )
-      IO.pure((importedBlocks, None))
-    } else {
-      val restOfBlocks = blocks.tail
-      consensus
-        .evaluateBranchBlock(blocks.head)
-        .flatMap {
-          case BlockImportedToTop(_) =>
-            unknownParentStrikes -= blocks.head.hash // reset on success
-            tryImportBlocks(restOfBlocks, blocks.head :: importedBlocks)
+    NonEmptyList.fromList(blocks) match {
+      case None =>
+        importedBlocks.headOption.foreach(block =>
+          supervisor ! ProgressProtocol.ImportedBlock(block.number, internally = false)
+        )
+        IO.pure((importedBlocks, None))
+      case Some(nel) =>
+        consensus.evaluateBranch(nel).flatMap {
+          case BlockImportedToTop(blockImportData) =>
+            val importedNow = blockImportData.map(_.block)
+            importedNow.foreach(b => unknownParentStrikes -= b.hash)
+            val imported = importedNow.reverse ::: importedBlocks
+            imported.headOption.foreach(b => supervisor ! ProgressProtocol.ImportedBlock(b.number, internally = false))
+            IO.pure((imported, None))
 
           case ChainReorganised(_, newBranch, _) =>
-            unknownParentStrikes -= blocks.head.hash
-            tryImportBlocks(restOfBlocks, newBranch.reverse ::: importedBlocks)
+            newBranch.foreach(b => unknownParentStrikes -= b.hash)
+            val imported = newBranch.reverse ::: importedBlocks
+            imported.headOption.foreach(b => supervisor ! ProgressProtocol.ImportedBlock(b.number, internally = false))
+            IO.pure((imported, None))
 
           case DuplicateBlock | BlockEnqueued =>
-            tryImportBlocks(restOfBlocks, importedBlocks)
+            IO.pure((importedBlocks, None))
 
           case BlockImportFailedDueToMissingNode(missingNodeException) if syncConfig.redownloadMissingStateNodes =>
             IO.pure((importedBlocks, Some(missingNodeException)))
@@ -457,23 +465,18 @@ class BlockImporter(
             IO.raiseError(missingNodeException)
 
           case err @ (UnknownParent | BlockImportFailed(_)) =>
-            val failedBlock = blocks.head
+            val failedBlock = nel.head
             log.error(
-              "Block {} import failed, with hash {} and parent hash {}",
+              "Block {} batch import failed, hash {} parent {}",
               failedBlock.number,
               failedBlock.header.hashAsHexString,
               ByteStringUtils.hash2string(failedBlock.header.parentHash)
             )
-            // FORK-DETECT / bad-block eviction: track consecutive UnknownParent per hash.
-            //   At BadBlockEvictionThreshold (3): blacklist the delivering peer — it has
-            //   sent us a block we can't connect N times; rotate to a different peer.
-            //   At ForkDetectThreshold (5): escalate to WARN — if we're still stalled
-            //   after evicting the first peer, we may be on an orphan fork.
             val strikes = unknownParentStrikes.getOrElse(failedBlock.hash, 0) + 1
             unknownParentStrikes = unknownParentStrikes + (failedBlock.hash -> strikes)
             if (strikes == BadBlockEvictionThreshold) {
               log.warning(
-                "BAD-BLOCK-EVICT: block {} (hash={}) UnknownParent x{} — evicting delivering peer",
+                "BAD-BLOCK-EVICT: block {} (hash={}) import failure x{} — evicting peer",
                 failedBlock.number,
                 failedBlock.header.hashAsHexString,
                 strikes
@@ -481,7 +484,7 @@ class BlockImporter(
               fetcher ! BlockFetcher.BlockImportFailed(
                 failedBlock.number,
                 BlacklistReason
-                  .BlockImportError(s"UnknownParent x$strikes on block ${failedBlock.header.hashAsHexString}")
+                  .BlockImportError(s"import failure x$strikes on block ${failedBlock.header.hashAsHexString}")
               )
             }
             if (strikes >= ForkDetectThreshold) {
@@ -491,14 +494,11 @@ class BlockImporter(
                 .getOrElse("<not found>")
               log.warning(
                 s"FORK-DETECT: block ${failedBlock.number} (hash=${failedBlock.header.hashAsHexString}) " +
-                  s"has failed $strikes consecutive times with UnknownParent. " +
+                  s"has failed $strikes consecutive times. " +
                   s"Our canonical hash at height ${failedBlock.number}: $ourHashAtHeight. " +
                   s"Received parent hash: ${ByteStringUtils.hash2string(failedBlock.header.parentHash)}. " +
                   "Triggering chain rollback and header re-sync."
               )
-              // Trigger fork recovery: roll back canonical chain index and restart header sync.
-              // Context.become cannot be called inside IO, so fire a message to self — the actor
-              // processes it after this IO completes and returns to the running receive loop.
               self ! StartForkRecovery(failedBlock.number)
             }
             IO.pure((importedBlocks, Some(err)))
@@ -573,6 +573,17 @@ class BlockImporter(
   private def resolveBranch(blocks: NonEmptyList[Block]): Either[BigInt, List[Block]] =
     branchResolution.resolveBranch(blocks.map(_.header)) match {
       case NewBetterBranch(oldBranch) =>
+        val depth = oldBranch.size
+        if (depth > 0) {
+          log.info(
+            "Chain reorg: evicting {} minority-fork blocks, importing {} canonical (depth={})",
+            depth,
+            blocks.size,
+            depth
+          )
+          RegularSyncMetrics.incrementReorgTotal()
+          RegularSyncMetrics.setLastReorgDepth(depth)
+        }
         val transactionsToAdd = oldBranch.flatMap(_.body.transactionList)
         pendingTransactionsManager ! PendingTransactionsManager.AddUncheckedTransactions(transactionsToAdd)
         // Add first block from branch as an ommer
@@ -608,6 +619,7 @@ class BlockImporter(
         } else {
           val msg = s"Unknown branch, going back to block nr $goingBackTo in order to resolve branches"
           log.warning(msg)
+          RegularSyncMetrics.incrementBranchResolutionRounds()
           fetcher ! BlockFetcher.InvalidateBlocksFrom(goingBackTo, msg, shouldBlacklist = false)
           Left(goingBackTo)
         }
