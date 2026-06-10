@@ -158,20 +158,6 @@ class PivotBlockSelector(
             blacklist.add(peerId, blacklistDuration, InvalidPivotBlockElectionResponse)
             votingProcess(updatedPeersToAsk, waitingPeers, pivotBlockNumber, timeout, headers)
         }
-      case MessageFromPeer(blockHeaders: ETHPackets.BlockHeaders, peerId) =>
-        peerEventBus ! Unsubscribe(MessageClassifier(Set(Codes.BlockHeadersCode), PeerSelector.WithId(peerId)))
-        val updatedPeersToAsk = peersToAsk - peerId
-        val targetBlockHeaderOpt = blockHeaders.headers.find(header => header.number == pivotBlockNumber)
-        targetBlockHeaderOpt match {
-          case Some(targetBlockHeader) =>
-            val newValue =
-              headers.get(targetBlockHeader.hash).map(_.vote).getOrElse(BlockHeaderWithVotes(targetBlockHeader))
-            val updatedHeaders = headers.updated(targetBlockHeader.hash, newValue)
-            votingProcess(updatedPeersToAsk, waitingPeers, pivotBlockNumber, timeout, updatedHeaders)
-          case None =>
-            blacklist.add(peerId, blacklistDuration, InvalidPivotBlockElectionResponse)
-            votingProcess(updatedPeersToAsk, waitingPeers, pivotBlockNumber, timeout, headers)
-        }
       case ElectionPivotBlockTimeout =>
         peersToAsk.foreach { peerId =>
           blacklist.add(peerId, blacklistDuration, PivotBlockElectionTimeout)

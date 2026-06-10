@@ -32,6 +32,13 @@ object SyncProtocol {
     */
   case object HealingImpossible extends SyncProtocolMsg
 
+  /** Sent by NetworkPeerManagerActor to SyncController when a TD-PROXY-GAP is detected at peer handshake.
+    * SyncController uses the peer's STATUS-message TD and block number to interpolate and write the correct cumulative
+    * TD for the current best block, replacing the genesis-proxy value stored by SNAP finalization when no ETH68 peers
+    * were available. Only fired when peerMaxBlock > 0.
+    */
+  final case class CalibrateChainWeightFromPeer(peerTD: BigInt, peerMaxBlock: BigInt) extends SyncProtocolMsg
+
   sealed trait Status {
     def syncing: Boolean = this match {
       case Status.Syncing(_, _, _) => true

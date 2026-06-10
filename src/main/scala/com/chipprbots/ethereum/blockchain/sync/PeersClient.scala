@@ -17,12 +17,10 @@ import com.chipprbots.ethereum.network.PeerEventBusActor.PeerEvent.MaintainedPee
 import com.chipprbots.ethereum.network.PeerEventBusActor.PeerEvent.PeerDisconnected
 import com.chipprbots.ethereum.network.PeerEventBusActor.Subscribe
 import com.chipprbots.ethereum.network.PeerEventBusActor.SubscriptionClassifier.MaintainedPeersClassifier
-import com.chipprbots.ethereum.network.NetworkPeerManagerActor.PeerInfo
 import com.chipprbots.ethereum.network.Peer
 import com.chipprbots.ethereum.network.PeerId
 import com.chipprbots.ethereum.network.p2p.Message
 import com.chipprbots.ethereum.network.p2p.MessageSerializable
-import com.chipprbots.ethereum.network.p2p.messages.Capability
 import com.chipprbots.ethereum.network.p2p.messages.Codes
 import com.chipprbots.ethereum.network.p2p.messages.ETHPackets
 import com.chipprbots.ethereum.network.p2p.messages.SNAP
@@ -138,7 +136,14 @@ class PeersClient(
             )
             requester ! NoSuitablePeer
         }
-      case PeerRequestHandler.ResponseReceived(peer, message, _) =>
+      case PeerRequestHandler.ResponseReceived(peer, message, timeTaken) =>
+        val (msgType, itemCount) = message match {
+          case ETHPackets.BlockHeaders(_, headers) => (PeerRateTracker.MsgGetBlockHeaders, headers.size)
+          case ETHPackets.BlockBodies(_, bodies)   => (PeerRateTracker.MsgGetBlockBodies, bodies.size)
+          case ETHPackets.Receipts68(_, receipts)  => (PeerRateTracker.MsgGetReceipts, receipts.items.size)
+          case _                                   => (-1, 0)
+        }
+        if (msgType >= 0) ethRateTracker.update(peer.id.value, msgType, timeTaken, itemCount)
         handleResponse(requesters, Response(peer, message.asInstanceOf[Message]))
       case PeerRequestHandler.RequestFailed(peer, reason) =>
         log.warning(s"Request to peer ${peer.remoteAddress} failed - reason: $reason")
@@ -316,7 +321,7 @@ class PeersClient(
 
   /** Adapts message format based on peer's negotiated capability. ETH68+ always uses request-id — no adaptation needed.
     */
-  private def adaptMessageForPeer[RequestMsg <: Message](peer: Peer, message: RequestMsg): Message = message
+  private def adaptMessageForPeer[RequestMsg <: Message](_peer: Peer, message: RequestMsg): Message = message
 
   private def responseClassTag[RequestMsg <: Message](requestMsg: RequestMsg): ClassTag[_ <: Message] =
     requestMsg match {

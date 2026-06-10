@@ -50,7 +50,7 @@ class StorageRecoveryActorSpec
   private val fakeStorageRoot: ByteString = ByteString(Array.fill[Byte](32)(0x33))
   private val missingOne: Seq[(ByteString, ByteString)] = Seq((fakeAccountHash, fakeStorageRoot))
 
-  private def newConfig(abandonAfter: FiniteDuration, maxRolls: Int = 8): SNAPSyncConfig =
+  private def newConfig(abandonAfter: FiniteDuration, maxRolls: Int): SNAPSyncConfig =
     SNAPSyncConfig(storageRecoveryAbandonTimeout = abandonAfter, storageRecoveryMaxRootRolls = maxRolls)
 
   private def pivotUnservable(): SNAPSyncController.PivotStateUnservable =

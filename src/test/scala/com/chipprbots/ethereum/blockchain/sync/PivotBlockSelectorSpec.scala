@@ -39,7 +39,6 @@ import com.chipprbots.ethereum.network.p2p.Message
 import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.NewBlock
 import com.chipprbots.ethereum.network.p2p.messages.Capability
 import com.chipprbots.ethereum.network.p2p.messages.Codes
-import com.chipprbots.ethereum.network.p2p.messages.ETHPackets
 import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.{BlockHeaders, GetBlockHeaders}
 import com.chipprbots.ethereum.utils.Config.SyncConfig
 import com.chipprbots.ethereum.testing.Tags._

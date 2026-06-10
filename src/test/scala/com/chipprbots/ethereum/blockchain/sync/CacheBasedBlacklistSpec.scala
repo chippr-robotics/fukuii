@@ -8,11 +8,12 @@ import com.github.blemale.scaffeine.Scaffeine
 import com.google.common.testing.FakeTicker
 import org.scalatest.matchers.must.Matchers
 import org.scalatest.wordspec.AnyWordSpecLike
+import org.scalatest.ParallelTestExecution
 
 import com.chipprbots.ethereum.testing.Tags._
 import com.chipprbots.ethereum.network.PeerId
 
-class CacheBasedBlacklistSpec extends AnyWordSpecLike with Matchers {
+class CacheBasedBlacklistSpec extends AnyWordSpecLike with Matchers with ParallelTestExecution {
   import Blacklist._
 
   private val peer1 = PeerId("1")
