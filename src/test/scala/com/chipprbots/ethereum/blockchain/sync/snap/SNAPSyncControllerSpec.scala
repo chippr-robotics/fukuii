@@ -929,7 +929,6 @@ class SNAPSyncControllerSpec extends AnyFlatSpec with Matchers {
   }
 
   it should "lock MaxConsecutivePivotRefreshes=3 and default maxSnapSyncFailures=5 as threshold constants" taggedAs UnitTest in {
-    import SNAPSyncController._
     // Verify the config default that controls escalation cadence.
     // Changing these values is a deliberate operational decision, not an accident.
     val config = SNAPSyncConfig()
