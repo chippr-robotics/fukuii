@@ -84,9 +84,15 @@ class TrieNodeHealingCoordinator(
   private var trieWalkInProgress: Boolean = false
   // Verification DFS state: gates StateHealingComplete and catches storage sub-trie gaps (Fix BUG-1/BUG-2).
   // verificationPassComplete = true only after a DFS traversal finds zero missing nodes.
-  // verificationDFSRunning = true while the DFS Future is executing on healingWriterEc.
+  // verificationDFSRunning = true while ANY frontier walk Future (crash-recovery rebuild OR
+  // verification) is executing on healingWriterEc. Set inside startFrontierBFS so both walk kinds
+  // are covered — the crash-recovery rebuild previously set NO flag, so HEAL-PULSE reported
+  // walkRunning=false and the dead-pulse watchdog force-started a verification walk 6 minutes into
+  // a running rebuild (observed live 2026-06-11): two walks interleaving on the shared bfsQueue,
+  // both producing garbage coverage. @volatile: set from the walk's EC thread, read on the actor
+  // thread by the watchdog/completion/pivot gates.
   private var verificationPassComplete: Boolean = false
-  private var verificationDFSRunning: Boolean = false
+  @volatile private var verificationDFSRunning: Boolean = false
   // Dead-loop watchdog (Fix BUG-2): consecutive HEAL-PULSE cycles with no walk/pending/active/healed.
   private var consecutiveDeadPulses: Int = 0
   // Inline child discovery counter (Besu-aligned scheduler approach)
@@ -279,6 +285,12 @@ class TrieNodeHealingCoordinator(
   // Sent after the final FrontierRebuilt so the completeness marker is set only once every node is persisted.
   private case object FrontierRebuildComplete
 
+  // A frontier walk Future died with an exception. Resets the walk flags WITHOUT setting any
+  // completion marker, so the watchdog / HealingCheckCompletion gates can start a fresh walk.
+  // Without this, an exception skips onComplete() and verificationDFSRunning stays true forever,
+  // permanently blocking every future walk (including the watchdog) until restart.
+  private case object FrontierWalkFailed
+
   /** Synchronous flush — used only for final completion flush (small buffer, safe to block). */
   private def flushRawNodesSync(): Unit =
     if (rawNodeBuffer.nonEmpty) {
@@ -407,10 +419,19 @@ class TrieNodeHealingCoordinator(
     case FrontierRebuildComplete =>
       // The full-state rebuild DFS walked the entire trie; every still-missing node is now persisted.
       // Mark the snapshot complete so a future restart may resume it instead of re-walking (Layer 2).
+      verificationDFSRunning = false // rebuild walk finished — release the single-flight gate
       healingFrontierStorage.foreach { store =>
         store.markComplete()
         log.info("[HEAL-RESTART] Full-state rebuild complete — persisted frontier marked as a complete snapshot")
       }
+
+    case FrontierWalkFailed =>
+      verificationDFSRunning = false
+      trieWalkInProgress = false
+      log.warning(
+        "[HEAL-BFS] Frontier walk failed — flags reset; verification will be retried by " +
+          "HealingCheckCompletion or the dead-pulse watchdog (no completion marker was set)"
+      )
 
     case QueueMissingNodes(nodes) =>
       log.info(s"Queuing ${nodes.size} missing nodes for healing")
@@ -519,11 +540,22 @@ class TrieNodeHealingCoordinator(
         // Without this, walkRunning stays false and pending stays 0 → 316-pulse dead loop (RUN10).
         // discoverMissingChildren skips locally-held storage roots without recursing into their
         // children, so the new pivot root may be local yet have gaps in storage sub-tries.
-        log.info(
-          s"[HEAL] New root ${Hex.toHexString(newStateRoot.take(4).toArray)} already in storage " +
-            s"— starting verification DFS to find missing children"
-        )
-        startVerificationDFS(newStateRoot, pivotReseedPath)
+        if (trieWalkInProgress || verificationDFSRunning) {
+          // A walk is already running on the SHARED bfsQueue — rebuildFrontierBFS clears the queue
+          // on entry, so starting a second walk here would corrupt the running one. The pivot's
+          // verificationPassComplete=false (set above) guarantees HealingCheckCompletion starts a
+          // fresh verification once the current walk's flags clear.
+          log.info(
+            s"[HEAL] New root ${Hex.toHexString(newStateRoot.take(4).toArray)} already in storage, " +
+              s"but a frontier walk is running — verification deferred until it completes"
+          )
+        } else {
+          log.info(
+            s"[HEAL] New root ${Hex.toHexString(newStateRoot.take(4).toArray)} already in storage " +
+              s"— starting verification DFS to find missing children"
+          )
+          startVerificationDFS(newStateRoot, pivotReseedPath)
+        }
       }
 
     case TrieNodesResponseMsg(response) =>
@@ -1077,15 +1109,23 @@ class TrieNodeHealingCoordinator(
     import com.chipprbots.ethereum.domain.Account
     import scala.util.control.NonFatal
 
-    // ConcurrentHashMap for visited: thread-safe putIfAbsent prevents duplicate queue entries
-    // under parallel sub-range processing. Bounded by approximate cap — no LRU eviction, but
-    // additions stop at HealingVisitedCap to keep heap bounded.
-    val visitedCHM = new java.util.concurrent.ConcurrentHashMap[ByteString, java.lang.Boolean](
-      math.min(HealingVisitedCap, 4_000_000),
-      0.75f,
-      effectiveParallelism
-    )
-    visitedCHM.put(startHash, java.lang.Boolean.TRUE)
+    // LRU-bounded visited set (companion boundedVisitedSet): at the cap the ELDEST entry is
+    // evicted instead of refusing new entries. Refusing (the previous ConcurrentHashMap gate)
+    // silently TRUNCATED the traversal on tries larger than the cap — children past the cap were
+    // never enqueued, the queue drained early, and the walk reported "Complete" (and set the
+    // Layer-2 completeness marker) having covered only `cap` of the trie. Eviction trades that
+    // correctness hole for bounded re-walks of shared subtries (de-duplicated downstream by
+    // pendingHashSet). Access is synchronized: worker threads only touch it via markIfNew, and
+    // per-check lock cost is negligible against the 50K-node multiGet I/O per chunk.
+    val visitedLru = TrieNodeHealingCoordinator.boundedVisitedSet(HealingVisitedCap)
+    def markIfNew(h: ByteString): Boolean = visitedLru.synchronized {
+      if (visitedLru.contains(h)) false
+      else {
+        visitedLru += h
+        true
+      }
+    }
+    markIfNew(startHash)
 
     val visitedCount = new java.util.concurrent.atomic.AtomicLong(0L)
     val frontierCount = new java.util.concurrent.atomic.AtomicLong(0L)
@@ -1123,10 +1163,7 @@ class TrieNodeHealingCoordinator(
                     for (i <- 0 until 16) branch.children(i) match {
                       case hashChild: HashNode =>
                         val childHash = ByteString(hashChild.hashNode)
-                        if (
-                          visitedCHM.size() < HealingVisitedCap &&
-                          visitedCHM.putIfAbsent(childHash, java.lang.Boolean.TRUE) == null
-                        ) {
+                        if (markIfNew(childHash)) {
                           val childNibbles = nibbles :+ i.toByte
                           val childCompact = ByteString(HexPrefix.encode(childNibbles, isLeaf = false))
                           val childPathset =
@@ -1141,10 +1178,7 @@ class TrieNodeHealingCoordinator(
                     ext.next match {
                       case hashChild: HashNode =>
                         val childHash = ByteString(hashChild.hashNode)
-                        if (
-                          visitedCHM.size() < HealingVisitedCap &&
-                          visitedCHM.putIfAbsent(childHash, java.lang.Boolean.TRUE) == null
-                        ) {
+                        if (markIfNew(childHash)) {
                           val childNibbles = nibbles ++ ext.sharedKey.toArray
                           val childCompact = ByteString(HexPrefix.encode(childNibbles, isLeaf = false))
                           val childPathset =
@@ -1159,8 +1193,7 @@ class TrieNodeHealingCoordinator(
                     Account(leaf.value).foreach { account =>
                       if (
                         account.storageRoot != Account.EmptyStorageRootHash &&
-                        visitedCHM.size() < HealingVisitedCap &&
-                        visitedCHM.putIfAbsent(account.storageRoot, java.lang.Boolean.TRUE) == null
+                        markIfNew(account.storageRoot)
                       ) {
                         val allNibbles = nibbles ++ leaf.key.toArray
                         if (allNibbles.length == 64) {
@@ -1259,9 +1292,23 @@ class TrieNodeHealingCoordinator(
       HealingTraversalParallelism,
       math.max(1, Runtime.getRuntime.availableProcessors() - 2)
     )
+    // Guard BOTH walk kinds (rebuild + verification): the watchdog, HealingCheckCompletion and the
+    // pivot-refresh path gate on this flag, and the bfsQueue is shared (cleared on walk entry), so
+    // a second concurrent walk corrupts the first. Cleared by FrontierRebuildComplete /
+    // VerificationDFSComplete / FrontierWalkFailed.
+    verificationDFSRunning = true
     Future {
-      rebuildFrontierBFS(root, Seq(rootPath), isStor, selfRef, bfsQueue, effectiveParallelism)
-      onComplete()
+      try {
+        rebuildFrontierBFS(root, Seq(rootPath), isStor, selfRef, bfsQueue, effectiveParallelism)
+        onComplete()
+      } catch {
+        case scala.util.control.NonFatal(e) =>
+          // Never call onComplete() on failure — for the crash-recovery rebuild that would set the
+          // Layer-2 completeness marker on a walk that did NOT cover the full state. Reset flags
+          // through the actor instead so a fresh walk can be started.
+          log.error(e, "[HEAL-BFS] Frontier walk FAILED before completion — sending FrontierWalkFailed")
+          selfRef ! FrontierWalkFailed
+      }
     }(healingWriterEc)
   }
 
