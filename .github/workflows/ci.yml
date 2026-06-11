@@ -30,6 +30,11 @@ concurrency:
 jobs:
   test:
     name: Test and Build (JDK 25, Scala 3.3.7)
+    # Skip pure version-bump pushes (auto-version) — the merge that caused the bump already
+    # ran full CI. pull_request events are unaffected (head_commit is empty there).
+    if: >-
+      github.event_name != 'push' ||
+      !startsWith(github.event.head_commit.message, 'chore: bump version to')
     runs-on: ubuntu-latest
     
     steps:
