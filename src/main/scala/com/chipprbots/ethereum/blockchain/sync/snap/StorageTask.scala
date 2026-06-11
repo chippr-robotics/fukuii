@@ -5,8 +5,8 @@ import org.apache.pekko.util.ByteString
 /** Storage range task for SNAP sync
   *
   * Represents a range of storage slots to download for a specific account. Follows core-geth patterns from
-  * eth/protocols/snap/sync.go (storageTask). Serves double duty as the subtask unit for large-storage contracts: when
-  * a contract has too many slots to fit in one SNAP response, StorageRangeCoordinator creates N StorageTask objects
+  * eth/protocols/snap/sync.go (storageTask). Serves double duty as the subtask unit for large-storage contracts: when a
+  * contract has too many slots to fit in one SNAP response, StorageRangeCoordinator creates N StorageTask objects
   * covering disjoint slot ranges and dispatches them in parallel (spec 005). See `StorageTask.createSubTasks()`.
   *
   * Unlike AccountTask which covers the full account space, StorageTask is per-account and tracks the storage trie for a
@@ -127,9 +127,9 @@ object StorageTask {
 
   /** Divide the slot range [from, to] into numChunks equal subtasks for parallel download.
     *
-    * Mirrors go-ethereum's `newHashRange` + subtask-creation loop (sync.go:2144-2193). Used by
-    * StorageRangeCoordinator when the first SNAP response for an account reveals more slots exist than fit in one
-    * packet, indicating a large-storage contract that benefits from parallel download.
+    * Mirrors go-ethereum's `newHashRange` + subtask-creation loop (sync.go:2144-2193). Used by StorageRangeCoordinator
+    * when the first SNAP response for an account reveals more slots exist than fit in one packet, indicating a
+    * large-storage contract that benefits from parallel download.
     *
     * @param accountHash
     *   Hash of the contract account whose storage is being split
@@ -154,11 +154,11 @@ object StorageTask {
     require(numChunks > 0, s"numChunks must be positive, got $numChunks")
     if (numChunks == 1) return Seq(StorageTask(accountHash, storageRoot, from, to))
     val fromBig = BigInt(1, from.toArray.padTo(32, 0.toByte))
-    val toBig   = BigInt(1, to.toArray.padTo(32, 0.toByte))
-    val step    = (toBig - fromBig) / numChunks
+    val toBig = BigInt(1, to.toArray.padTo(32, 0.toByte))
+    val step = (toBig - fromBig) / numChunks
     (0 until numChunks).map { i =>
       val start = if (i == 0) from else bigIntTo32(fromBig + step * i)
-      val end   = if (i == numChunks - 1) to else bigIntTo32(fromBig + step * (i + 1) - 1)
+      val end = if (i == numChunks - 1) to else bigIntTo32(fromBig + step * (i + 1) - 1)
       StorageTask(accountHash, storageRoot, start, end)
     }
   }
@@ -178,7 +178,7 @@ object StorageTask {
   }
 
   private def bigIntTo32(bi: BigInt): ByteString = {
-    val raw      = bi.toByteArray
+    val raw = bi.toByteArray
     val unsigned = if (raw.nonEmpty && raw(0) == 0) raw.drop(1) else raw
     ByteString(Array.fill((32 - unsigned.length).max(0))(0.toByte) ++ unsigned.takeRight(32))
   }

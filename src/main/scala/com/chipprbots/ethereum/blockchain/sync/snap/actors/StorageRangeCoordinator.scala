@@ -1487,10 +1487,10 @@ class StorageRangeCoordinator(
 
   /** Split a large-storage account's remaining slot range into parallel subtasks.
     *
-    * Called on first continuation detection — when a SNAP response has a proof but doesn't cover
-    * `task.last`, indicating the contract has more slots than fit in one 512 KB packet. Creates N
-    * parallel StorageTask objects covering consecutive disjoint ranges. Mirrors go-ethereum's subtask
-    * creation in `assignStorageTasks()` (sync.go:2118-2197) and `newHashRange()` (sync.go:2144-2193).
+    * Called on first continuation detection — when a SNAP response has a proof but doesn't cover `task.last`,
+    * indicating the contract has more slots than fit in one 512 KB packet. Creates N parallel StorageTask objects
+    * covering consecutive disjoint ranges. Mirrors go-ethereum's subtask creation in `assignStorageTasks()`
+    * (sync.go:2118-2197) and `newHashRange()` (sync.go:2144-2193).
     *
     * @param task
     *   The original task that triggered the continuation (covers [task.next, task.last])
@@ -1503,13 +1503,13 @@ class StorageRangeCoordinator(
     // Dynamic downsampling: ensure each subtask has enough slots to fill ≥2 full 512KB packets.
     // Mirrors go-ethereum lines 2136-2143. maxSlotsPerPacket ≈ 512KB / 64 bytes per slot.
     val maxSlotsPerPacket = maxRequestBytes / 64
-    val chunks            = storageConcurrency
+    val chunks = storageConcurrency
     StorageTask.createSubTasks(
       accountHash = task.accountHash,
       storageRoot = task.storageRoot,
-      from        = StorageTask.incrementHash32(lastSlotReceived),
-      to          = task.last,
-      numChunks   = chunks
+      from = StorageTask.incrementHash32(lastSlotReceived),
+      to = task.last,
+      numChunks = chunks
     )
   }
 

@@ -826,7 +826,7 @@ class StorageRangeCoordinatorSpec
 
   it should "start with empty accountSubtaskCounters (no subtask tracking before any response)" taggedAs UnitTest in {
     val stateRoot = kec256(ByteString("subtask-init-root"))
-    val storage   = new TestMptStorage()
+    val storage = new TestMptStorage()
     val requestTracker = new SNAPRequestTracker()(system.scheduler)
     val networkPeerManager = TestProbe()
     val snapSyncController = TestProbe()
@@ -851,7 +851,7 @@ class StorageRangeCoordinatorSpec
 
   it should "increment completedAccountCount only once when all subtasks for an account complete" taggedAs UnitTest in {
     val stateRoot = kec256(ByteString("subtask-complete-root"))
-    val storage   = new TestMptStorage()
+    val storage = new TestMptStorage()
     val requestTracker = new SNAPRequestTracker()(system.scheduler)
     val networkPeerManager = TestProbe()
     val snapSyncController = TestProbe()
@@ -897,7 +897,7 @@ class StorageRangeCoordinatorSpec
 
   it should "increment completedAccountCount directly (no subtasks) when no counter entry exists" taggedAs UnitTest in {
     val stateRoot = kec256(ByteString("subtask-nosplit-root"))
-    val storage   = new TestMptStorage()
+    val storage = new TestMptStorage()
     val requestTracker = new SNAPRequestTracker()(system.scheduler)
     val networkPeerManager = TestProbe()
     val snapSyncController = TestProbe()
@@ -931,7 +931,7 @@ class StorageRangeCoordinatorSpec
 
   it should "handle independent subtask completions for two large-storage contracts without cross-contamination" taggedAs UnitTest in {
     val stateRoot = kec256(ByteString("subtask-two-accts-root"))
-    val storage   = new TestMptStorage()
+    val storage = new TestMptStorage()
     val requestTracker = new SNAPRequestTracker()(system.scheduler)
     val networkPeerManager = TestProbe()
     val snapSyncController = TestProbe()

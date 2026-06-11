@@ -133,7 +133,7 @@ class StorageTaskSpec extends AnyFlatSpec with Matchers {
   it should "cover full keyspace with no gaps and no overlap on boundary values" taggedAs UnitTest in {
     // Partial range: from=0x00...01, to=0x00...10
     val from = ByteString(Array.fill(31)(0x00.toByte) :+ 0x01.toByte)
-    val to   = ByteString(Array.fill(31)(0x00.toByte) :+ 0x10.toByte)
+    val to = ByteString(Array.fill(31)(0x00.toByte) :+ 0x10.toByte)
     val subtasks = StorageTask.createSubTasks(accountHash, storageRoot, from, to, 4)
     subtasks.size shouldBe 4
     subtasks.head.next shouldBe from
