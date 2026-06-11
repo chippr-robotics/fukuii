@@ -84,9 +84,15 @@ class TrieNodeHealingCoordinator(
   private var trieWalkInProgress: Boolean = false
   // Verification DFS state: gates StateHealingComplete and catches storage sub-trie gaps (Fix BUG-1/BUG-2).
   // verificationPassComplete = true only after a DFS traversal finds zero missing nodes.
-  // verificationDFSRunning = true while the DFS Future is executing on healingWriterEc.
+  // verificationDFSRunning = true while ANY frontier walk Future (crash-recovery rebuild OR
+  // verification) is executing on healingWriterEc. Set inside startFrontierBFS so both walk kinds
+  // are covered — the crash-recovery rebuild previously set NO flag, so HEAL-PULSE reported
+  // walkRunning=false and the dead-pulse watchdog force-started a verification walk 6 minutes into
+  // a running rebuild (observed live 2026-06-11): two walks interleaving on the shared bfsQueue,
+  // both producing garbage coverage. @volatile: set from the walk's EC thread, read on the actor
+  // thread by the watchdog/completion/pivot gates.
   private var verificationPassComplete: Boolean = false
-  private var verificationDFSRunning: Boolean = false
+  @volatile private var verificationDFSRunning: Boolean = false
   // Dead-loop watchdog (Fix BUG-2): consecutive HEAL-PULSE cycles with no walk/pending/active/healed.
   private var consecutiveDeadPulses: Int = 0
   // Inline child discovery counter (Besu-aligned scheduler approach)
@@ -413,6 +419,7 @@ class TrieNodeHealingCoordinator(
     case FrontierRebuildComplete =>
       // The full-state rebuild DFS walked the entire trie; every still-missing node is now persisted.
       // Mark the snapshot complete so a future restart may resume it instead of re-walking (Layer 2).
+      verificationDFSRunning = false // rebuild walk finished — release the single-flight gate
       healingFrontierStorage.foreach { store =>
         store.markComplete()
         log.info("[HEAL-RESTART] Full-state rebuild complete — persisted frontier marked as a complete snapshot")
@@ -1285,6 +1292,11 @@ class TrieNodeHealingCoordinator(
       HealingTraversalParallelism,
       math.max(1, Runtime.getRuntime.availableProcessors() - 2)
     )
+    // Guard BOTH walk kinds (rebuild + verification): the watchdog, HealingCheckCompletion and the
+    // pivot-refresh path gate on this flag, and the bfsQueue is shared (cleared on walk entry), so
+    // a second concurrent walk corrupts the first. Cleared by FrontierRebuildComplete /
+    // VerificationDFSComplete / FrontierWalkFailed.
+    verificationDFSRunning = true
     Future {
       try {
         rebuildFrontierBFS(root, Seq(rootPath), isStor, selfRef, bfsQueue, effectiveParallelism)
