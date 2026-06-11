@@ -8,17 +8,20 @@ import scala.concurrent.ExecutionContext
 import scala.collection.mutable
 import scala.util.Try
 
-import com.chipprbots.ethereum.blockchain.sync.{Blacklist, CacheBasedBlacklist, PeerListSupportNg, SyncProtocol}
+import com.chipprbots.ethereum.blockchain.sync.{Blacklist, PeerListSupportNg, SyncProtocol}
 import com.chipprbots.ethereum.db.storage.{
   AppStateStorage,
+  BfsQueueStorage,
   EvmCodeStorage,
   FlatSlotStorage,
   HealingFrontierStorage,
   MptStorage,
+  Namespaces,
+  RocksDbBfsQueueStorage,
   StateStorage
 }
 import com.chipprbots.ethereum.domain.{Block, BlockBody, BlockHeader, BlockchainReader, BlockchainWriter, ChainWeight}
-import com.chipprbots.ethereum.network.p2p.messages.SNAP
+import com.chipprbots.ethereum.network.p2p.messages.{Capability, SNAP}
 import com.chipprbots.ethereum.network.p2p.messages.SNAP._
 import com.chipprbots.ethereum.utils.Hex
 import com.chipprbots.ethereum.utils.Config.SyncConfig
@@ -36,6 +39,7 @@ class SNAPSyncController(
     val syncConfig: SyncConfig,
     snapSyncConfig: SNAPSyncConfig,
     val scheduler: Scheduler,
+    val blacklist: Blacklist,
     // Factory for `StateValidator` so unit tests can inject a fake. Production
     // default is a thin `new StateValidator(_)` wrapper; tests can supply a
     // `FakeStateValidator` that returns canned results, delays, or throws.
@@ -52,8 +56,7 @@ class SNAPSyncController(
 
   import SNAPSyncController._
 
-  // Blacklist for PeerListSupportNg trait
-  val blacklist: Blacklist = CacheBasedBlacklist.empty(1000)
+  log.info("SNAPSyncController started with shared blacklist (cross-mode penalty propagation enabled)")
 
   // Writable MptStorage, lazily created when pivot block number is known.
   // Uses getBackingStorage(pivotBlockNumber) to ensure nodes are tagged with the
@@ -282,6 +285,37 @@ class SNAPSyncController(
   private var fruitlessEvictionCycles: Int = 0
   private var lastEvictionSnapCount: Int = -1
   private val MaxFruitlessEvictionCycles: Int = 5
+
+  // Best ETH68 peer (TD, maxBlockNumber) seen at any point during this SNAP session.
+  // Preserved across peer disconnects so calibratePivotTD can use it at finalization even
+  // if those peers have long since disconnected. Only updated when maxBlockNumber > 0
+  // (eager probe has fired) — guards against the ETH68_BOOTSTRAP inflation pattern where
+  // peerTD used directly without knowing peerBlock.
+  private var bestEth68PeerForCalibration: Option[(BigInt, BigInt)] = None
+
+  override protected def onPeerListUpdated(
+      currentPeers: Iterable[PeerListSupportNg.PeerWithInfo]
+  ): Unit =
+    currentPeers
+      .filter { p =>
+        p.peerInfo.forkAccepted &&
+        p.peerInfo.remoteStatus.capability != Capability.ETH69 &&
+        p.peerInfo.maxBlockNumber > BigInt(0) // Wait for eager probe; peerBlock=0 → ETH68_BOOTSTRAP risk
+      }
+      .foreach { p =>
+        val td = p.peerInfo.remoteStatus.chainWeight.totalDifficulty
+        val block = p.peerInfo.maxBlockNumber
+        if (bestEth68PeerForCalibration.forall { case (best, _) => td > best }) {
+          val prevBestTD = bestEth68PeerForCalibration.map(_._1).getOrElse(BigInt(0))
+          bestEth68PeerForCalibration = Some((td, block))
+          log.info(
+            "SNAP_CALIBRATION_PEER: new best ETH68 peer td={} block={} prevBestTD={}",
+            td,
+            block,
+            prevBestTD
+          )
+        }
+      }
 
   /** Like handlePeerListMessagesWithRateTracking, but also reactively triggers a bootstrap retry when new SNAP-capable
     * peers arrive during the bootstrapping state. Without this, the node waits for the full exponential backoff timer
@@ -764,7 +798,7 @@ class SNAPSyncController(
                   DelayedRestart(
                     s"consecutive stateless pivots ($consecutivePivotRefreshes): $reason"
                   )
-                )(ec)
+                )(ec, ActorRef.noSender)
               } else {
                 restartSnapSync(s"consecutive stateless pivots ($consecutivePivotRefreshes): $reason")
               }
@@ -1176,7 +1210,10 @@ class SNAPSyncController(
           // Schedule on context.dispatcher (the actor's own scheduler), not
           // snapValidationEc — the retry message is cheap and shouldn't be
           // tied to the long-running pool's lifecycle.
-          scheduler.scheduleOnce(ValidationRetryDelay, self, ValidationRetry(gen))(context.dispatcher)
+          scheduler.scheduleOnce(ValidationRetryDelay, self, ValidationRetry(gen))(
+            context.dispatcher,
+            ActorRef.noSender
+          )
         }
       } else {
         log.error("Recovering through healing phase")
@@ -1788,7 +1825,6 @@ class SNAPSyncController(
                       initialResponseBytes = snapSyncConfig.storageInitialResponseBytes,
                       minResponseBytes = snapSyncConfig.storageMinResponseBytes,
                       deferredMerkleization = snapSyncConfig.deferredMerkleization,
-                      useStackTrie = snapSyncConfig.useStackTrie,
                       maxConcurrentStorageAccounts = snapSyncConfig.maxConcurrentStorageAccounts
                     )
                     .withDispatcher("sync-dispatcher"),
@@ -2496,7 +2532,7 @@ class SNAPSyncController(
     )
 
     dormantWakeUpTask.foreach(_.cancel())
-    dormantWakeUpTask = Some(scheduler.scheduleOnce(backoff, self, DormantWakeUp)(ec))
+    dormantWakeUpTask = Some(scheduler.scheduleOnce(backoff, self, DormantWakeUp)(ec, ActorRef.noSender))
 
     context.become(dormantRetry)
   }
@@ -2846,7 +2882,6 @@ class SNAPSyncController(
               initialResponseBytes = snapSyncConfig.storageInitialResponseBytes,
               minResponseBytes = snapSyncConfig.storageMinResponseBytes,
               deferredMerkleization = snapSyncConfig.deferredMerkleization,
-              useStackTrie = snapSyncConfig.useStackTrie,
               maxConcurrentStorageAccounts = snapSyncConfig.maxConcurrentStorageAccounts
             )
             .withDispatcher("sync-dispatcher"),
@@ -3149,6 +3184,9 @@ class SNAPSyncController(
     if (snapSyncConfig.healingFrontierPersistence) Some(new HealingFrontierStorage(flatSlotStorage.dataSource))
     else None
 
+  private lazy val bfsQueueStorage: BfsQueueStorage =
+    new RocksDbBfsQueueStorage(flatSlotStorage.dataSource, Namespaces.BfsQueueNamespace)
+
   private def startStateHealing(): Unit = {
     // Guard: prevent duplicate healing coordinator creation (Bug 27).
     // Can happen when ByteCodeSyncComplete and StorageRangeSyncComplete arrive in quick
@@ -3178,7 +3216,9 @@ class SNAPSyncController(
               snapSyncController = self,
               concurrency = snapSyncConfig.healingConcurrency,
               visitedCap = snapSyncConfig.healingVisitedCap,
-              healingFrontierStorage = healingFrontierStorageOpt
+              healingFrontierStorage = healingFrontierStorageOpt,
+              traversalParallelism = snapSyncConfig.healingTraversalParallelism,
+              bfsQueueStorageOpt = Some(bfsQueueStorage)
             )
             .withDispatcher("sync-dispatcher"),
           s"trie-node-healing-coordinator-$coordinatorGeneration"
@@ -3233,7 +3273,9 @@ class SNAPSyncController(
                   snapSyncController = self,
                   concurrency = snapSyncConfig.healingConcurrency,
                   visitedCap = snapSyncConfig.healingVisitedCap,
-                  healingFrontierStorage = healingFrontierStorageOpt
+                  healingFrontierStorage = healingFrontierStorageOpt,
+                  traversalParallelism = snapSyncConfig.healingTraversalParallelism,
+                  bfsQueueStorageOpt = Some(bfsQueueStorage)
                 )
                 .withDispatcher("sync-dispatcher"),
               s"trie-node-healing-coordinator-$coordinatorGeneration"
@@ -3274,7 +3316,10 @@ class SNAPSyncController(
   private def startSnapServerPeersScheduler(): Unit =
     if (snapSyncConfig.snapServerPeers.nonEmpty && snapServerPeersScheduler.isEmpty) {
       snapServerPeersScheduler = Some(
-        scheduler.scheduleWithFixedDelay(15.seconds, 30.seconds, self, EnsureSnapServerPeersConnected)(ec)
+        scheduler.scheduleWithFixedDelay(15.seconds, 30.seconds, self, EnsureSnapServerPeersConnected)(
+          ec,
+          ActorRef.noSender
+        )
       )
     }
 
@@ -3563,6 +3608,56 @@ class SNAPSyncController(
     completePivotRefreshWithStateRoot(newPivotBlock, newPivotHeaderOpt.get, reason)
   }
 
+  /** Estimate the cumulative TD at `pivotBlockNumber` using linear interpolation over connected ETH68 peers.
+    *
+    * ETH68 peers carry their real cumulative TD in the STATUS wire message. ETH69 peers do not (TD was removed from
+    * their STATUS). For each ETH68 peer whose reported head is above the pivot, we interpolate: pivotTD ≈ peerTipTD ×
+    * (pivotNumber / peerTipNumber) The gap between our pivot and the peer's tip is typically ≤ 128 blocks, giving an
+    * error ≤ 0.0005% — negligible compared to the ~1.4-billion× error of the genesis-proxy fallback.
+    *
+    * Returns None when no qualified ETH68 peers are connected (e.g. very early in startup before any handshakes). The
+    * caller falls back to the block-number proxy in that case.
+    */
+  private def calibratePivotTD(pivotBlockNumber: BigInt): Option[BigInt] = {
+    val genesisBlockTD = blockchainReader
+      .getChainWeightByHash(blockchainReader.genesisHeader.hash)
+      .map(_.totalDifficulty)
+      .getOrElse(blockchainReader.genesisHeader.difficulty)
+
+    // Current peers + best peer seen historically this session (fallback when all ETH68
+    // peers have disconnected by the time finalization runs, which is common on long syncs).
+    // Both peerBlock > 0 and peerBlock > pivotBlockNumber are ETH68_BOOTSTRAP safeguards:
+    //   peerBlock > 0: prevents division-by-zero / direct-peerTD use before probe fires
+    //   peerBlock > pivot: ensures interpolation (peerTD * pivot / peerBlock) scales correctly
+    val currentPeerCandidates: Seq[(BigInt, BigInt)] = handshakedPeers.values
+      .filter { p =>
+        p.peerInfo.forkAccepted &&
+        p.peerInfo.remoteStatus.capability != Capability.ETH69 &&
+        p.peerInfo.maxBlockNumber > pivotBlockNumber
+      }
+      .map(p => (p.peerInfo.remoteStatus.chainWeight.totalDifficulty, p.peerInfo.maxBlockNumber))
+      .toSeq
+
+    val historicalCandidate: Seq[(BigInt, BigInt)] =
+      bestEth68PeerForCalibration.filter(_._2 > pivotBlockNumber).toSeq
+
+    val source = if (currentPeerCandidates.nonEmpty) "CURRENT_PEER" else "HISTORICAL_PEER"
+    val allCandidates = currentPeerCandidates ++ historicalCandidate
+
+    if (allCandidates.nonEmpty) {
+      val histTD = bestEth68PeerForCalibration.map(_._1).getOrElse(BigInt(0))
+      val histBlock = bestEth68PeerForCalibration.map(_._2).getOrElse(BigInt(0))
+      log.info(
+        s"SNAP_CALIBRATION_STATS: pivot=$pivotBlockNumber currentPeers=${currentPeerCandidates.size} historicalPeer=(td=$histTD block=$histBlock) source=$source"
+      )
+    }
+
+    allCandidates
+      .map { case (peerTD, peerBlock) => peerTD * pivotBlockNumber / peerBlock }
+      .filter(_ > genesisBlockTD * BigInt(1000))
+      .maxOption
+  }
+
   /** Update best block info and chain weight so ETH status handshake advertises the correct forkId.
     *
     * Without this, getBestBlockNumber() returns 0 (genesis) during SNAP sync, causing peers to reject us with
@@ -3574,21 +3669,18 @@ class SNAPSyncController(
       pivotBlockNumber: BigInt
   ): Unit = {
     val pivotHash = header.hash
-    // Priority: (1) real cumulative TD already in DB (ChainDownloader has backfilled it) — never
-    //   overwrite. (2) pivotBlockNumber as a neutral proxy — low but non-inflating. Using the
-    //   peer's wire TD (ETH68_BOOTSTRAP) caused all stored chain weights post-SNAP to be inflated
-    //   by (peerHead − pivot) × avgDifficulty; block import then propagated that inflation to every
-    //   subsequent block. Low TD is harmless during SNAP sync; inflated TD is not.
-    //
-    // Proxy floor: genesis TD is the minimum. Block number alone is << genesis TD (e.g. block 24,684,329
-    // vs genesis TD ~17,179,869,184), making us look weaker than genesis to ETH68 peers. Using
-    // max(blockNumber, genesisTD) keeps the proxy low but not below the work we know we've done.
-    // Real TDs are corrected by block import once regular sync begins, and by ChainWeightRepair
-    // on nodes upgrading from a version that used ETH68_BOOTSTRAP.
+    // Priority:
+    //   (1) Real cumulative TD already in DB (ChainDownloader has backfilled it) — never overwrite.
+    //   (2) Peer-interpolated TD from a connected ETH68 peer — accurate to <0.0005% for typical gaps.
+    //       The old ETH68_BOOTSTRAP approach stored the peer's tip TD directly, inflating every
+    //       subsequent block by (peerHead − pivot) × avgDifficulty. Interpolation avoids that by
+    //       scaling to the pivot height.
+    //   (3) Block-number proxy — last resort when no ETH68 peers are connected yet (very early startup).
     val (estimatedTotalDifficulty, tdSource) =
       blockchainReader
         .getChainWeightByHash(pivotHash)
         .map(cw => (cw.totalDifficulty, "REAL_PIVOT_TD"))
+        .orElse(calibratePivotTD(pivotBlockNumber).map(td => (td, "PEER_INTERPOLATED_TD")))
         .getOrElse {
           val genesisTD = blockchainReader
             .getChainWeightByHash(blockchainReader.genesisHeader.hash)
@@ -3602,8 +3694,7 @@ class SNAPSyncController(
       .storeChainWeight(pivotHash, ChainWeight.totalDifficultyOnly(estimatedTotalDifficulty))
       .commit()
     // Always advance the self-reported best-block pointer so STATUS messages show the correct
-    // pivot block number. The proxy TD in chainWeightStorage is intentionally low — peers know
-    // we are SNAP syncing and do not rely on our TD for chain selection.
+    // pivot block number.
     appStateStorage
       .putBestBlockInfo(com.chipprbots.ethereum.domain.appstate.BlockInfo(pivotHash, pivotBlockNumber))
       .commit()
@@ -4086,13 +4177,23 @@ class SNAPSyncController(
           blockchainWriter.storeBlock(Block(pivotHeader, BlockBody.empty)).commit()
 
           // Store a ChainWeight so compareBranch() can evaluate new blocks.
-          // Prefer real cumulative TD from ChainDownloader if already in DB;
-          // fall to pivot block number as a non-inflating proxy otherwise.
-          val finalTD =
+          // Priority: (1) real cumulative TD from ChainDownloader — only accepted if it exceeds
+          // 1000× genesis TD (rejects genesis-proxy values written by earlier updateBestBlockForPivot
+          // calls). (2) Peer-interpolated TD from a connected ETH68 peer. (3) Block-number proxy as
+          // last resort (no ETH68 peers at all — rare but possible in isolated test environments).
+          val genesisBlockTD = blockchainReader
+            .getChainWeightByHash(blockchainReader.genesisHeader.hash)
+            .map(_.totalDifficulty)
+            .getOrElse(blockchainReader.genesisHeader.difficulty)
+          val (finalTD, tdSource) =
             blockchainReader
               .getChainWeightByHash(pivotHash)
               .map(_.totalDifficulty)
-              .getOrElse(pivot)
+              .filter(_ > genesisBlockTD * BigInt(1000))
+              .map(td => (td, "REAL_DB_TD"))
+              .orElse(calibratePivotTD(pivot).map(td => (td, "PEER_INTERPOLATED_TD")))
+              .getOrElse((pivot.max(genesisBlockTD), "BLOCK_NUMBER_PROXY"))
+          log.info("SNAP finalize pivot TD: block={} td={} source={}", pivot, finalTD, tdSource)
           blockchainWriter
             .storeChainWeight(
               pivotHash,
@@ -4453,6 +4554,7 @@ object SNAPSyncController {
       syncConfig: SyncConfig,
       snapSyncConfig: SNAPSyncConfig,
       scheduler: Scheduler,
+      blacklist: Blacklist,
       validatorFactory: MptStorage => StateValidator = new StateValidator(_)
   )(implicit ec: ExecutionContext): Props =
     Props(
@@ -4468,6 +4570,7 @@ object SNAPSyncController {
         syncConfig,
         snapSyncConfig,
         scheduler,
+        blacklist,
         validatorFactory
       )
     )
@@ -4496,6 +4599,8 @@ case class SNAPSyncConfig(
     // Layer 2: persist the outstanding healing frontier so a restart resumes (O(frontier)) instead of
     // re-walking the full state. Default false (ships dark). See docs/design/healing-frontier-scale.md.
     healingFrontierPersistence: Boolean = false,
+    // Operator ceiling for BFS level parallelism. Effective = min(this, availableProcessors - 2).
+    healingTraversalParallelism: Int = actors.TrieNodeHealingCoordinator.DefaultDfsParallelism,
     stateValidationEnabled: Boolean = true,
     maxRetries: Int = 3,
     timeout: FiniteDuration = 30.seconds,
@@ -4605,6 +4710,10 @@ object SNAPSyncConfig {
         else actors.TrieNodeHealingCoordinator.DefaultVisitedCap,
       healingFrontierPersistence = snapConfig.hasPath("healing-frontier-persistence") &&
         snapConfig.getBoolean("healing-frontier-persistence"),
+      healingTraversalParallelism =
+        if (snapConfig.hasPath("healing-traversal-parallelism"))
+          snapConfig.getInt("healing-traversal-parallelism")
+        else actors.TrieNodeHealingCoordinator.DefaultDfsParallelism,
       stateValidationEnabled = snapConfig.getBoolean("state-validation-enabled"),
       maxRetries = snapConfig.getInt("max-retries"),
       timeout = snapConfig.getDuration("timeout").toMillis.millis,

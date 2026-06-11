@@ -287,8 +287,6 @@ class ETH69TDSpec extends AnyFlatSpec with Matchers {
   // as `Useless peer`, which is the correct behaviour for wrong-chain interop.
   it should "decode ETH/68-shape STATUS sent on ETH/69 channel by non-spec peers (Holesky-style payload)" taggedAs UnitTest in {
     import com.chipprbots.ethereum.network.p2p.messages.ETH69.Status._
-    import com.chipprbots.ethereum.network.p2p.messages.ETHPackets
-    import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.Status68.Status68._
     import com.chipprbots.ethereum.rlp.{RLPList, RLPValue, encode}
     import com.chipprbots.ethereum.utils.ByteUtils
     import com.chipprbots.ethereum.forkid.ForkId._

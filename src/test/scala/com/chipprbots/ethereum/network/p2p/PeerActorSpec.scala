@@ -31,7 +31,6 @@ import com.chipprbots.ethereum.blockchain.sync.EphemBlockchainTestSetup
 import com.chipprbots.ethereum.crypto.generateKeyPair
 import com.chipprbots.ethereum.db.storage.AppStateStorage
 import com.chipprbots.ethereum.domain._
-import com.chipprbots.ethereum.forkid.ForkId
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor.RemoteStatus
 import com.chipprbots.ethereum.network.PeerActor.GetStatus
 import com.chipprbots.ethereum.network.PeerActor.Status.Handshaked
@@ -42,13 +41,10 @@ import com.chipprbots.ethereum.network._
 import com.chipprbots.ethereum.testing.Tags._
 import com.chipprbots.ethereum.network.handshaker.NetworkHandshaker
 import com.chipprbots.ethereum.network.handshaker.NetworkHandshakerConfiguration
-import com.chipprbots.ethereum.network.p2p.messages.ETHPackets
 import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.Status68.Status68.Status68Enc
 import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.Status68.{Status68 => Status}
 import com.chipprbots.ethereum.forkid.ForkId
 import com.chipprbots.ethereum.network.p2p.messages.Capability
-import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.GetBlockHeaders.GetBlockHeadersEnc
-import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.{BlockHeaders, GetBlockHeaders}
 import com.chipprbots.ethereum.network.p2p.messages.ETHPackets
 import com.chipprbots.ethereum.network.p2p.messages.WireProtocol.Disconnect.DisconnectEnc
 import com.chipprbots.ethereum.network.p2p.messages.WireProtocol.Disconnect.Reasons
@@ -534,7 +530,7 @@ class PeerActorSpec
 
     val handshakerConfiguration: NetworkHandshakerConfiguration = new NetworkHandshakerConfiguration {
       override val forkResolverOpt: Option[ForkResolver] = Some(
-        new ForkResolver.EtcForkResolver(self.blockchainConfig.daoForkConfig.get)
+        new ForkResolver.IrregularStateChangeDaoForkResolver(self.blockchainConfig.daoForkConfig.get)
       )
       override val nodeStatusHolder: AtomicReference[NodeStatus] = self.nodeStatusHolder
       override val peerConfiguration: PeerConfiguration = self.peerConf
@@ -581,9 +577,8 @@ class PeerActorSpec
     )
 
     def expectStatusMessage(): Unit =
-      rlpxConnection.expectMsgPF() {
-        case RLPxConnectionHandler.SendMessage(_: ETHPackets.Status68.Status68.Status68Enc) => ()
-        case RLPxConnectionHandler.SendMessage(_: Status68Enc)                              => ()
+      rlpxConnection.expectMsgPF() { case RLPxConnectionHandler.SendMessage(_: Status68Enc) =>
+        ()
       }
 
     /** Advance our chain to the DAO fork block so ForkId validation succeeds for ETC mainnet peers. */

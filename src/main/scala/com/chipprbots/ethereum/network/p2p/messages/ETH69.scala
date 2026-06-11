@@ -115,7 +115,7 @@ object ETH69 {
         case RLPList(
               RLPValue(protocolVersionBytes),
               RLPValue(networkIdBytes),
-              RLPValue(_totalDifficultyBytes),
+              RLPValue(_),
               RLPValue(bestHashBytes),
               RLPValue(genesisHashBytes),
               forkIdRlp: RLPList

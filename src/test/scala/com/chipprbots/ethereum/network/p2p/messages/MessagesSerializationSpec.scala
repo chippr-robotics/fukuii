@@ -16,7 +16,6 @@ import com.chipprbots.ethereum.network.p2p.messages.ETHPackets._
 import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.NewBlockHashes.{NewBlockHashes, BlockHash}
 import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.SignedTransactions._
 import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.Status68.{Status68 => Status68Class}
-import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.Status68.Status68.{Status68Enc, Status68Dec}
 import com.chipprbots.ethereum.network.p2p.messages.WireProtocol._
 
 /** Serialization round-trip tests for ETH68+ wire messages.

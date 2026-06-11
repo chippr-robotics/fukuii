@@ -23,7 +23,7 @@ class ExternalIPDetectorSpec extends AnyFlatSpec with Matchers {
 
   private def buildStunResponse(
       msgType: Short = 0x0101,
-      txId: Array[Byte] = new Array[Byte](12),
+      txId: Array[Byte],
       xorIp: Int = 0
   ): (Array[Byte], Int) = {
     // Attribute: XOR-MAPPED-ADDRESS (type=0x0020, len=8): reserved + family + port + ip

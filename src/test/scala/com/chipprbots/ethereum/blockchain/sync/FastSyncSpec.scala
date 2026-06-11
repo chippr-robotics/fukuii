@@ -29,7 +29,6 @@ import com.chipprbots.ethereum.domain.Transaction
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor
 import com.chipprbots.ethereum.network.Peer
 import com.chipprbots.ethereum.blockchain.sync.PeerRequestHandler.ResponseReceived
-import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.{Receipts68 => ETH66Receipts}
 import com.chipprbots.ethereum.network.p2p.messages.ETHPackets
 import com.chipprbots.ethereum.rlp.RLPValue
 import com.chipprbots.ethereum.rlp.RLPList
@@ -81,8 +80,7 @@ class FastSyncSpec
       new NetworkPeerManagerFake(
         syncConfig,
         testPeers,
-        testBlocks,
-        req => trieProvider.getNodes(req).map(_.data)
+        testBlocks
       )
     lazy val peerEventBus: TestProbe = TestProbe("peer_event-bus")
     lazy val fastSync: ActorRef = system.actorOf(

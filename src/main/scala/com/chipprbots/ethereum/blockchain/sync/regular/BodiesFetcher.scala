@@ -40,6 +40,16 @@ class BodiesFetcher(
   private var totalBodiesFetched: Long = 0L
   private val bodiesFetchStartMs: Long = System.currentTimeMillis()
 
+  // Fan-out coordinator state. Only active when bodiesFetchConcurrency > 1.
+  private var pendingSlices: Int = 0
+  private var collectedBodies: Seq[BlockBody] = Seq.empty
+  private var sliceRepresentativePeer: Option[Peer] = None
+  // Monotonically increasing batch generation: stamps outgoing worker spawns and validates
+  // incoming SliceComplete/SliceFailed to discard orphans from aborted batches.
+  private var currentBatchGen: Long = 0L
+  // Monotonic counter for unique worker actor names within this supervisor's child namespace.
+  private var sliceIdCounter: Long = 0L
+
   override def makeAdaptedMessage[T <: Message](peer: Peer, msg: T): Command = AdaptedMessage(peer, msg)
 
   override def onMessage(message: Command): Behavior[Command] =
@@ -54,14 +64,81 @@ class BodiesFetcher(
         if (hashes.isEmpty) {
           log.warn("FetchBodies called with empty hashes list")
         }
-        requestBodies(hashes, triedPeers, retryCount)
+        val concurrency = syncConfig.bodiesFetchConcurrency
+        if (concurrency <= 1 || hashes.size <= syncConfig.blockBodiesPerRequest) {
+          requestBodies(hashes, triedPeers, retryCount)
+        } else {
+          fanOutBodies(hashes, triedPeers, retryCount, concurrency)
+        }
         Behaviors.same
+
       case AdaptedMessage(peer, blockBodies: ETHPackets.BlockBodies) =>
         handleBodiesResponse(peer, blockBodies.bodies, protocolLabel = "ETH68")
+
       case BodiesFetcher.RetryBodiesRequest(failedPeerId, triedPeers, retryCount) =>
         log.debug("Retrying bodies request (tried: {}, retry: {})", triedPeers.size, retryCount)
         supervisor ! BlockFetcher.RetryBodiesRequest(failedPeerId, triedPeers, retryCount)
         Behaviors.same
+
+      case SliceComplete(bodies, peer, gen) =>
+        if (gen != currentBatchGen) {
+          log.debug("Discarding stale SliceComplete gen={} current={}", gen, currentBatchGen)
+        } else {
+          collectedBodies = collectedBodies ++ bodies
+          if (sliceRepresentativePeer.isEmpty) sliceRepresentativePeer = Some(peer)
+          pendingSlices -= 1
+          if (bodies.nonEmpty && bodies.size < syncConfig.blockBodiesPerRequest) {
+            log.warn(
+              "[RegularSync] slice truncated: got {} bodies from {} — server likely hit softResponseLimit",
+              bodies.size,
+              peer.id
+            )
+          }
+          if (pendingSlices == 0) {
+            val mergedCount = collectedBodies.size
+            log.info(
+              "[RegularSync] bodies={} merged from fan-out, peer={}",
+              mergedCount,
+              sliceRepresentativePeer.map(_.id).getOrElse("-")
+            )
+            totalBodiesFetched += mergedCount
+            supervisor ! BlockFetcher.ReceivedBodies(sliceRepresentativePeer.get, collectedBodies)
+            collectedBodies = Seq.empty
+            sliceRepresentativePeer = None
+          }
+        }
+        Behaviors.same
+
+      case SliceFailed(hashes, failedPeerId, triedPeers, retryCount, gen) =>
+        if (gen != currentBatchGen) {
+          log.debug("Discarding stale SliceFailed gen={} current={}", gen, currentBatchGen)
+        } else {
+          pendingSlices -= 1
+          if (retryCount < syncConfig.maxBodyFetchRetries) {
+            val updatedTried = triedPeers ++ failedPeerId.toSet
+            sliceIdCounter += 1
+            val worker = context.spawn(
+              BodiesSliceFetcher(peersClient, syncConfig, context.self, gen),
+              s"bodies-slice-$sliceIdCounter"
+            )
+            worker ! BodiesSliceFetcher.FetchSlice(hashes, updatedTried, retryCount + 1)
+            pendingSlices += 1
+          } else {
+            log.warn(
+              "[RegularSync] slice exhausted {} retries, aborting batch gen={}",
+              retryCount,
+              gen
+            )
+            // Invalidate the batch so orphan SliceComplete/SliceFailed from remaining workers are ignored.
+            currentBatchGen = -1L
+            pendingSlices = 0
+            collectedBodies = Seq.empty
+            sliceRepresentativePeer = None
+            supervisor ! BlockFetcher.RetryBodiesRequest(failedPeerId, triedPeers, retryCount)
+          }
+        }
+        Behaviors.same
+
       case other =>
         log.warn("BodiesFetcher received unhandled message of type: {}", other.getClass.getSimpleName)
         Behaviors.unhandled
@@ -72,19 +149,54 @@ class BodiesFetcher(
       bodies: Seq[BlockBody],
       protocolLabel: String
   ): Behavior[Command] = {
-    log.debug("Received {} block bodies from peer {} via {}", bodies.size, peer.id, protocolLabel)
     if (bodies.nonEmpty) {
       totalBodiesFetched += bodies.size
-      if (totalBodiesFetched % 1000 == 0) {
-        val rate = totalBodiesFetched * 1000L / (System.currentTimeMillis() - bodiesFetchStartMs).max(1)
-        log.info("BodiesFetcher: {} bodies fetched | {} bodies/s", totalBodiesFetched, rate)
-      }
+      val rate = totalBodiesFetched * 1000L / (System.currentTimeMillis() - bodiesFetchStartMs).max(1)
+      log.info(
+        "[RegularSync] bodies={} from={} via={} total={} rate={}/s",
+        bodies.size,
+        peer.id,
+        protocolLabel,
+        totalBodiesFetched,
+        rate
+      )
     } else {
-      log.debug("Received empty bodies response from peer {}", peer.id)
+      log.debug("[RegularSync] empty bodies response from {}", peer.id)
     }
     // Always forward bodies to supervisor to ensure state is cleared
     supervisor ! BlockFetcher.ReceivedBodies(peer, bodies)
     Behaviors.same
+  }
+
+  private def fanOutBodies(
+      hashes: Seq[ByteString],
+      triedPeers: Set[PeerId],
+      retryCount: Int,
+      concurrency: Int
+  ): Unit = {
+    currentBatchGen += 1
+    val gen = currentBatchGen
+    pendingSlices = 0
+    collectedBodies = Seq.empty
+    sliceRepresentativePeer = None
+    val sliceSize = math.ceil(hashes.size.toDouble / concurrency).toInt
+    val slices = hashes.grouped(sliceSize).toVector
+    slices.foreach { slice =>
+      sliceIdCounter += 1
+      val worker = context.spawn(
+        BodiesSliceFetcher(peersClient, syncConfig, context.self, gen),
+        s"bodies-slice-$sliceIdCounter"
+      )
+      worker ! BodiesSliceFetcher.FetchSlice(slice, triedPeers, retryCount)
+      pendingSlices += 1
+    }
+    log.info(
+      "[RegularSync] fan-out: {} slice workers × ~{} hashes each, total={}, gen={}",
+      slices.size,
+      sliceSize,
+      hashes.size,
+      gen
+    )
   }
 
   private def requestBodies(hashes: Seq[ByteString], triedPeers: Set[PeerId], retryCount: Int): Unit = {
@@ -128,4 +240,17 @@ object BodiesFetcher {
       retryCount: Int
   ) extends BodiesFetcherCommand
   final private case class AdaptedMessage[T <: Message](peer: Peer, msg: T) extends BodiesFetcherCommand
+  // Sent by BodiesSliceFetcher workers back to the coordinator.
+  final private[regular] case class SliceComplete(
+      bodies: Seq[BlockBody],
+      peer: Peer,
+      batchGen: Long
+  ) extends BodiesFetcherCommand
+  final private[regular] case class SliceFailed(
+      hashes: Seq[ByteString],
+      failedPeerId: Option[PeerId],
+      triedPeers: Set[PeerId],
+      retryCount: Int,
+      batchGen: Long
+  ) extends BodiesFetcherCommand
 }

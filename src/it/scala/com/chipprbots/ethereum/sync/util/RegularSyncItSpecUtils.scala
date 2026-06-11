@@ -98,7 +98,6 @@ object RegularSyncItSpecUtils {
       )
     lazy val consensus: Consensus =
       new ConsensusImpl(
-        bl,
         blockchainReader,
         blockchainWriter,
         blockExecution

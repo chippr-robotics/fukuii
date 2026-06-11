@@ -12,7 +12,6 @@ import org.apache.pekko.util.ByteString
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.Messages
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor
 import com.chipprbots.ethereum.network.Peer
-import com.chipprbots.ethereum.network.PeerId
 import com.chipprbots.ethereum.network.p2p.messages.SNAP._
 import com.chipprbots.ethereum.testing.PeerTestHelpers
 

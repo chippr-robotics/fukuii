@@ -24,6 +24,13 @@ object RegularSyncMetrics extends MetricsContainer {
   final private val BlocksImportedCounter =
     metrics.registry.counter("regularsync.blocks.imported.total")
 
+  final private val BranchReorgTotalCounter =
+    metrics.registry.counter("regularsync.reorg.total")
+  final private val BranchResolutionRoundsCounter =
+    metrics.registry.counter("regularsync.branch.resolution.rounds.total")
+  final private val ReorgLastDepth = new AtomicDouble(0d)
+  metrics.registry.gauge("regularsync.reorg.last.depth.gauge", ReorgLastDepth)
+
   def recordMinedBlockPropagationTimer(nanos: Long): Unit = MinedBlockPropagationTimer.record(nanos, NANOSECONDS)
   def recordImportNewBlockPropagationTimer(nanos: Long): Unit = NewBlockPropagationTimer.record(nanos, NANOSECONDS)
   def recordDefaultBlockPropagationTimer(nanos: Long): Unit = DefaultBlockPropagationTimer.record(nanos, NANOSECONDS)
@@ -31,4 +38,7 @@ object RegularSyncMetrics extends MetricsContainer {
   def setCurrentBlock(blockNumber: BigInt): Unit = CurrentBlockGauge.set(blockNumber.toDouble)
   def setBestKnownNetworkBlock(blockNumber: BigInt): Unit = BestKnownNetworkBlockGauge.set(blockNumber.toDouble)
   def incrementBlocksImported(): Unit = BlocksImportedCounter.increment()
+  def incrementReorgTotal(): Unit = BranchReorgTotalCounter.increment()
+  def incrementBranchResolutionRounds(): Unit = BranchResolutionRoundsCounter.increment()
+  def setLastReorgDepth(n: Int): Unit = ReorgLastDepth.set(n.toDouble)
 }

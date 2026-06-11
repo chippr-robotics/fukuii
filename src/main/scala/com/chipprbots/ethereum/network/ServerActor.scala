@@ -25,18 +25,26 @@ import com.chipprbots.ethereum.blockchain.sync.Blacklist
 import com.chipprbots.ethereum.utils.NodeStatus
 import com.chipprbots.ethereum.utils.ServerStatus
 
-class ServerActor(nodeStatusHolder: AtomicReference[NodeStatus], peerManager: ActorRef, blacklist: Blacklist)
-    extends Actor
+class ServerActor(
+    nodeStatusHolder: AtomicReference[NodeStatus],
+    peerManager: ActorRef,
+    blacklist: Blacklist,
+    tcpManagerRef: Option[ActorRef] = None
+) extends Actor
     with ActorLogging {
 
   import ServerActor._
   import context.system
 
+  // Lazy so the context is available at first use rather than at construction time.
+  // Tests supply their own ActorRef (TestProbe) to avoid real port binding.
+  private lazy val tcpManager: ActorRef = tcpManagerRef.getOrElse(IO(Tcp))
+
   private var advertisedAddressOverride: Option[InetAddress] = None
 
   override def receive: Receive = { case StartServer(address, advertisedAddress) =>
     advertisedAddressOverride = advertisedAddress
-    IO(Tcp) ! Bind(self, address)
+    tcpManager ! Bind(self, address)
     context.become(waitingForBindingResult)
   }
 
@@ -105,6 +113,14 @@ class ServerActor(nodeStatusHolder: AtomicReference[NodeStatus], peerManager: Ac
 object ServerActor {
   def props(nodeStatusHolder: AtomicReference[NodeStatus], peerManager: ActorRef, blacklist: Blacklist): Props =
     Props(new ServerActor(nodeStatusHolder, peerManager, blacklist))
+
+  def testProps(
+      nodeStatusHolder: AtomicReference[NodeStatus],
+      peerManager: ActorRef,
+      blacklist: Blacklist,
+      tcpManager: ActorRef
+  ): Props =
+    Props(new ServerActor(nodeStatusHolder, peerManager, blacklist, Some(tcpManager)))
 
   case class StartServer(address: InetSocketAddress, advertisedAddress: Option[InetAddress] = None)
   private[network] case class DetectedIP(ip: Option[InetAddress])

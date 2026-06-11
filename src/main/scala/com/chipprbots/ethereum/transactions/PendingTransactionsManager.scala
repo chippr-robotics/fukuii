@@ -259,21 +259,6 @@ class PendingTransactionsManager(
         )
       }
 
-    // ETH68/67 NewPooledTransactionHashes (hash+types+sizes format; also handles ETH65 hash-only via backward-compat decode)
-    case com.chipprbots.ethereum.network.PeerEventBusActor.PeerEvent.MessageFromPeer(
-          msg: com.chipprbots.ethereum.network.p2p.messages.ETHPackets.NewPooledTransactionHashes,
-          peerId
-        ) =>
-      val unknownHashes = msg.hashes.filterNot(h => pendingTransactions.asMap().containsKey(h))
-      if (unknownHashes.nonEmpty) {
-        log.debug("Requesting {} unknown pooled transactions from peer {}", unknownHashes.size, peerId)
-        val requestId = ETHPackets.nextRequestId
-        networkPeerManager ! NetworkPeerManagerActor.SendMessage(
-          ETHPackets.GetPooledTransactions(requestId, unknownHashes),
-          peerId
-        )
-      }
-
     // ETH66+ PooledTransactions response — add received txs to pool
     case com.chipprbots.ethereum.network.PeerEventBusActor.PeerEvent
           .MessageFromPeer(msg: ETHPackets.PooledTransactions, peerId) =>

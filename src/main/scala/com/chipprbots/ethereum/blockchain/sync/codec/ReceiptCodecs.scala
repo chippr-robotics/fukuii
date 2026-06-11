@@ -3,7 +3,6 @@ package com.chipprbots.ethereum.blockchain.sync.codec
 import org.apache.pekko.util.ByteString
 
 import com.chipprbots.ethereum.domain._
-import com.chipprbots.ethereum.domain.Transaction.ByteArrayTransactionTypeValidator
 import com.chipprbots.ethereum.domain.Transaction.TransactionTypeValidator
 import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.TypedTransaction._
 import com.chipprbots.ethereum.rlp.RLPImplicitConversions._

@@ -12,7 +12,7 @@ import com.chipprbots.ethereum.network.p2p.messages.ETHPackets
 import com.chipprbots.ethereum.network.p2p.messages.WireProtocol.Disconnect
 import com.chipprbots.ethereum.utils.Logger
 
-case class EtcForkBlockExchangeState(
+case class IrregularStateChangeDaoForkBlockExchangeState(
     handshakerConfiguration: NetworkHandshakerConfiguration,
     forkResolver: ForkResolver,
     remoteStatus: RemoteStatus
@@ -71,7 +71,6 @@ case class EtcForkBlockExchangeState(
   }
 
   def applyResponseMessage: PartialFunction[Message, HandshakerState[PeerInfo]] = {
-    case ETHPackets.BlockHeaders(_, blockHeaders) => processForkBlockHeaders(blockHeaders)
     case ETHPackets.BlockHeaders(_, blockHeaders) => processForkBlockHeaders(blockHeaders)
   }
 

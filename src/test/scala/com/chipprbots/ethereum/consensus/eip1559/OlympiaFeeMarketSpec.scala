@@ -7,7 +7,6 @@ import org.scalatest.wordspec.AnyWordSpec
 
 import com.chipprbots.ethereum.Fixtures
 import com.chipprbots.ethereum.domain._
-import com.chipprbots.ethereum.domain.BlockHeader.HeaderExtraFields.HefEmpty
 import com.chipprbots.ethereum.domain.BlockHeader.HeaderExtraFields.HefPostOlympia
 import com.chipprbots.ethereum.domain.LegacyTransaction
 import com.chipprbots.ethereum.domain.TransactionWithDynamicFee

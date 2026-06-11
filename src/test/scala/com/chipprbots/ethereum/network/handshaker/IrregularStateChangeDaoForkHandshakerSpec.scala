@@ -20,9 +20,7 @@ import com.chipprbots.ethereum.network.PeerManagerActor.PeerConfiguration
 import com.chipprbots.ethereum.network.handshaker.Handshaker.HandshakeComplete.HandshakeFailure
 import com.chipprbots.ethereum.network.handshaker.Handshaker.HandshakeComplete.HandshakeSuccess
 import com.chipprbots.ethereum.network.p2p.messages.Capability
-import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.BlockHeaders
 import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.GetBlockHeaders
-import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.GetBlockHeaders.GetBlockHeadersEnc
 import com.chipprbots.ethereum.network.p2p.messages.ETH69
 import com.chipprbots.ethereum.network.p2p.messages.ETHPackets
 import com.chipprbots.ethereum.network.p2p.messages.WireProtocol.Disconnect
@@ -33,7 +31,7 @@ import com.chipprbots.ethereum.testing.Tags._
 import com.chipprbots.ethereum.utils.ByteStringUtils._
 import com.chipprbots.ethereum.utils._
 
-class NetworkHandshakerSpec extends AnyFlatSpec with Matchers {
+class IrregularStateChangeDaoForkHandshakerSpec extends AnyFlatSpec with Matchers {
 
   it should "correctly connect during an ETH68 handshake if no fork resolver is used" taggedAs (
     UnitTest,
@@ -457,7 +455,7 @@ class NetworkHandshakerSpec extends AnyFlatSpec with Matchers {
     val networkHandshakerConfigurationWithResolver: MockNetworkHandshakerConfiguration =
       new MockNetworkHandshakerConfiguration {
         override val forkResolverOpt: Option[ForkResolver] = Some(
-          new ForkResolver.EtcForkResolver(blockchainConfig.daoForkConfig.get)
+          new ForkResolver.IrregularStateChangeDaoForkResolver(blockchainConfig.daoForkConfig.get)
         )
       }
 

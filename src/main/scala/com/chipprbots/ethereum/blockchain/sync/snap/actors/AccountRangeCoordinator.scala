@@ -1437,10 +1437,9 @@ class AccountRangeCoordinator(
         // Inserts are O(depth) memory + O(1) amortised compute; emitted nodes
         // batch-flush to RocksDB inside SnapHashTrie at the 8 MiB threshold,
         // so we never accumulate a multi-GiB in-memory pivot trie.
-        import com.chipprbots.ethereum.domain.Account.accountSerializer
         val trie = getOrCreateTaskStackTrie(task)
         chunk.foreach { case (accountHash, account) =>
-          trie.update(accountHash.toArray, accountSerializer.toBytes(account))
+          trie.update(accountHash.toArray, Account.accountSerializer.toBytes(account))
         }
       } else {
         // Legacy MPT path: single global trie over DeferredWriteMptStorage.

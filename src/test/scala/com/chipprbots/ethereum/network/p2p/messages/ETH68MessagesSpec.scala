@@ -5,7 +5,6 @@ import org.apache.pekko.util.ByteString
 import org.scalatest.matchers.should.Matchers
 import org.scalatest.wordspec.AnyWordSpec
 
-import com.chipprbots.ethereum.Fixtures
 import com.chipprbots.ethereum.forkid.ForkId
 import com.chipprbots.ethereum.network.p2p.EthereumMessageDecoder
 import com.chipprbots.ethereum.network.p2p.NetworkMessageDecoder

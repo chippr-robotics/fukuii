@@ -51,6 +51,11 @@ object Config extends InstanceConfig(ConfigFactory.load().getConfig("fukuii"), "
       persistStateSnapshotInterval: FiniteDuration,
       blocksBatchSize: Int,
       maxFetcherQueueSize: Int,
+      // Import backpressure threshold (readyBlocks queue). Decoupled from maxFetcherQueueSize
+      // so the two signals (header pre-fetch depth vs. importer falling behind) tune independently.
+      maxReadyBlocksQueueSize: Int = 512,
+      // Concurrent slice-fetcher workers for body fan-out. 1 = single-peer path (no fan-out).
+      bodiesFetchConcurrency: Int = 1,
       checkForNewBlockInterval: FiniteDuration,
       branchResolutionRequestSize: Int,
       blockChainOnlyPeersPoolSize: Int,
@@ -136,6 +141,14 @@ object Config extends InstanceConfig(ConfigFactory.load().getConfig("fukuii"), "
         persistStateSnapshotInterval = syncConfig.getDuration("persist-state-snapshot-interval").toMillis.millis,
         blocksBatchSize = syncConfig.getInt("blocks-batch-size"),
         maxFetcherQueueSize = syncConfig.getInt("max-fetcher-queue-size"),
+        maxReadyBlocksQueueSize =
+          if (syncConfig.hasPath("max-ready-blocks-queue-size"))
+            syncConfig.getInt("max-ready-blocks-queue-size")
+          else 512,
+        bodiesFetchConcurrency =
+          if (syncConfig.hasPath("bodies-fetch-concurrency"))
+            syncConfig.getInt("bodies-fetch-concurrency")
+          else 1,
         checkForNewBlockInterval = syncConfig.getDuration("check-for-new-block-interval").toMillis.millis,
         branchResolutionRequestSize = syncConfig.getInt("branch-resolution-request-size"),
         blockChainOnlyPeersPoolSize = syncConfig.getInt("fastsync-block-chain-only-peers-pool"),

@@ -55,7 +55,7 @@ class PeerScoreFeedbackSpec extends AnyFlatSpec with Matchers with ScalaCheckPro
     (UnitTest, NetworkTest) in {
       // Degrade the peer with timeouts, then recover with responses.
       val degraded = (1 to 10).foldLeft(PeerScore.initial)((s, _) => s.recordTimeout)
-      val recovered = (1 to 20).foldLeft(degraded)((s, i) => s.recordResponse(1024, latencyMs = 50))
+      val recovered = (1 to 20).foldLeft(degraded)((s, _) => s.recordResponse(1024, latencyMs = 50))
 
       recovered.score should be > degraded.score
     }
