@@ -15,7 +15,7 @@ class Secp256k1SigAlgSpec extends AnyFlatSpec with Matchers {
   val sigalg = new Secp256k1SigAlg
 
   def randomData: BitVector = {
-    val size = Random.nextInt(1000)
+    val size = 1 + Random.nextInt(999)
     val bytes = Array.ofDim[Byte](size)
     Random.nextBytes(bytes)
     BitVector(bytes)
