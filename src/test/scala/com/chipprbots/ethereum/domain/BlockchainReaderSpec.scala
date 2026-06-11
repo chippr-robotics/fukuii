@@ -9,7 +9,7 @@ import org.scalatestplus.scalacheck.ScalaCheckPropertyChecks
 import com.chipprbots.ethereum.Fixtures
 import com.chipprbots.ethereum.ObjectGenerators
 import com.chipprbots.ethereum.blockchain.sync.EphemBlockchainTestSetup
-import com.chipprbots.ethereum.network.p2p.messages.BaseETH6XMessages.NewBlock
+import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.NewBlock
 import com.chipprbots.ethereum.security.SecureRandomBuilder
 import com.chipprbots.ethereum.testing.Tags._
 
@@ -101,12 +101,12 @@ class BlockchainReaderSpec extends AnyFlatSpec with Matchers with ScalaCheckProp
     val (cw, source) = blockchainReader.resolveETH69ChainWeight(unknownHash, peerBlockNum, isPoWChain = true)
     source shouldBe "POW_SCALING"
     cw.totalDifficulty should be > BigInt(0)
-    // POW_SCALING = ourBestTD + ourCurrentDiff * gap * 9999/10000 (marginal-rate estimate)
+    // head.number=1 < 10000 → insufficient-history fallback: rate = headTd / headNumber
     val ourBestTD = block1Weight.totalDifficulty
     val ourBestNum = block1.header.number
-    val ourCurrentDiff = block1.header.difficulty
     val gap = (peerBlockNum - ourBestNum).max(BigInt(0))
-    cw.totalDifficulty shouldBe ourBestTD + ourCurrentDiff * gap * 9999 / 10000
+    val rate = ourBestTD / ourBestNum
+    cw.totalDifficulty shouldBe ourBestTD + rate * gap
   }
 
   it should "return POS_PROXY block number for post-merge peers (isPoWChain = false)" taggedAs (

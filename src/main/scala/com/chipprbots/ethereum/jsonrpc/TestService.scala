@@ -467,7 +467,7 @@ class TestService(
   }
 
   def getLogHash(request: GetLogHashRequest): ServiceResponse[GetLogHashResponse] = {
-    import com.chipprbots.ethereum.network.p2p.messages.ETH63.TxLogEntryImplicits.TxLogEntryEnc
+    import com.chipprbots.ethereum.blockchain.sync.codec.ReceiptCodecs.TxLogEntryEnc
 
     val result = for {
       transactionLocation <- transactionMappingStorage.get(request.transactionHash)

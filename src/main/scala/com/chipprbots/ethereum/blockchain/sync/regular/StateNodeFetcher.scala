@@ -21,18 +21,17 @@ import com.chipprbots.ethereum.blockchain.sync.regular.BlockFetcher.FetchCommand
 import com.chipprbots.ethereum.blockchain.sync.regular.BlockFetcher.FetchedStateNode
 import com.chipprbots.ethereum.crypto.kec256
 import com.chipprbots.ethereum.network.Peer
+import com.chipprbots.ethereum.network.PeerId
 import com.chipprbots.ethereum.network.p2p.Message
-import com.chipprbots.ethereum.network.p2p.messages.ETH63.GetNodeData
-import com.chipprbots.ethereum.network.p2p.messages.ETH63.NodeData
-import com.chipprbots.ethereum.network.p2p.messages.ETH66
-import com.chipprbots.ethereum.network.p2p.messages.ETH66.{NodeData => ETH66NodeData}
+import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.GetNodeData
+import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.NodeData
+import com.chipprbots.ethereum.network.p2p.messages.ETHPackets
 import com.chipprbots.ethereum.network.p2p.messages.SNAP.ByteCodes
 import com.chipprbots.ethereum.network.p2p.messages.SNAP.GetByteCodes
 import com.chipprbots.ethereum.network.p2p.messages.SNAP.GetByteCodes.GetByteCodesEnc
 import com.chipprbots.ethereum.network.p2p.messages.SNAP.GetTrieNodes
 import com.chipprbots.ethereum.network.p2p.messages.SNAP.GetTrieNodes.GetTrieNodesEnc
 import com.chipprbots.ethereum.network.p2p.messages.SNAP.TrieNodes
-import com.chipprbots.ethereum.rlp.RLPValue
 import com.chipprbots.ethereum.utils.ByteStringUtils
 import com.chipprbots.ethereum.utils.Config.SyncConfig
 
@@ -52,6 +51,8 @@ class StateNodeFetcher(
   override def makeAdaptedMessage[T <: Message](peer: Peer, msg: T): StateNodeFetcherCommand = AdaptedMessage(peer, msg)
 
   private var requester: Option[StateNodeRequester] = None
+  private var totalNodesFetched: Long = 0L
+  private val nodesFetchStartMs: Long = System.currentTimeMillis()
 
   override def onMessage(message: StateNodeFetcherCommand): Behavior[StateNodeFetcherCommand] =
     message match {
@@ -79,36 +80,43 @@ class StateNodeFetcher(
             requester = Some(
               StateNodeRequester(hash, sender, stateRoot, paths, attempts = 0, isByteCode, fallbackRoot)
             )
-            requestStateNode(hash, stateRoot, paths, isByteCode)
+            requestStateNode(hash, stateRoot, paths, isByteCode, Set.empty)
         }
         Behaviors.same
 
-      // ETH63/64/65 NodeData response (no requestId)
-      case AdaptedMessage(peer, NodeData(values)) if requester.isDefined =>
-        log.debug("Received ETH63 state node response from peer {}", peer)
-        handleNodeDataValues(peer, values)
-
-      // ETH66/67 NodeData response (with requestId)
-      case AdaptedMessage(peer, ETH66NodeData(_, rlpValues)) if requester.isDefined =>
-        log.debug("Received ETH66 state node response from peer {}", peer)
-        val values = rlpValues.items.collect { case RLPValue(bytes) => ByteString(bytes) }
+      // NodeData response (ETHPackets.NodeData.values is Seq[ByteString] directly)
+      case AdaptedMessage(peer, ETHPackets.NodeData(values)) if requester.isDefined =>
+        log.debug("Received state node response from peer {}", peer)
         handleNodeDataValues(peer, values)
 
       // SNAP TrieNodes response
       case AdaptedMessage(peer, TrieNodes(_, nodes)) if requester.isDefined =>
         log.info("Received SNAP TrieNodes response from peer {} with {} nodes", peer, nodes.size)
+        totalNodesFetched += 1
+        if (totalNodesFetched % 1000 == 0) {
+          val rate = totalNodesFetched * 1000L / (System.currentTimeMillis() - nodesFetchStartMs).max(1)
+          log.info("StateNodeFetcher: {} nodes fetched | {} nodes/s", totalNodesFetched, rate)
+        }
         handleTrieNodesValues(peer, nodes)
 
       // SNAP ByteCodes response
       case AdaptedMessage(peer, ByteCodes(_, codes)) if requester.isDefined =>
         log.info("Received SNAP ByteCodes response from peer {} with {} codes", peer, codes.size)
+        totalNodesFetched += 1
+        if (totalNodesFetched % 1000 == 0) {
+          val rate = totalNodesFetched * 1000L / (System.currentTimeMillis() - nodesFetchStartMs).max(1)
+          log.info("StateNodeFetcher: {} nodes fetched | {} nodes/s", totalNodesFetched, rate)
+        }
         handleByteCodesValues(peer, codes)
 
       case StateNodeFetcher.RetryStateNodeRequest =>
         // The peer request resolved to NoSuitablePeer / RequestFailed and FetchRequest piped this
-        // fallback to us. Count it as a failed attempt and either schedule another fire or signal
-        // exhaustion to BlockImporter (which has a 5-minute backoff handler for empty responses).
-        requester.foreach(retryOrExhaust)
+        // fallback to us. This also fires when every snap peer is already in triedPeers (no
+        // un-tried server left this round), so reset the rotation set to re-cycle through the whole
+        // snap pool — peers that were busy or briefly blacklisted earlier may now serve this root.
+        // Then count a failed attempt and either schedule another fire or signal exhaustion to
+        // BlockImporter (which has a 5-minute backoff handler for empty responses).
+        requester.foreach(req => retryOrExhaust(req.copy(triedPeers = Set.empty)))
         Behaviors.same
 
       case StateNodeFetcher.FireRequest =>
@@ -120,7 +128,7 @@ class StateNodeFetcher(
             ByteStringUtils.hash2string(req.hash),
             req.attempts
           )
-          requestStateNode(req.hash, req.stateRoot, req.paths, req.isByteCode)
+          requestStateNode(req.hash, req.stateRoot, req.paths, req.isByteCode, req.triedPeers)
         }
         Behaviors.same
 
@@ -186,12 +194,16 @@ class StateNodeFetcher(
                 updated.stateRoot.map(r => ByteStringUtils.hash2string(r.take(4))).getOrElse("<none>")
               )
               requester = Some(updated)
-              requestStateNode(updated.hash, updated.stateRoot, updated.paths, updated.isByteCode)
+              requestStateNode(updated.hash, updated.stateRoot, updated.paths, updated.isByteCode, updated.triedPeers)
               Behaviors.same[StateNodeFetcherCommand]
             case None =>
-              log.warn("SNAP TrieNodes response was empty, retrying")
+              // This peer doesn't serve the node at this root. Record it so the next retry rotates
+              // to a DIFFERENT snap peer (peers index different block windows), then retry. Empty
+              // here is a correct "I don't have this root" answer, not misbehaviour — a short
+              // rotation exclusion is enough without a long blacklist.
+              log.warn("SNAP TrieNodes response was empty, rotating to a different snap peer")
               peersClient ! BlacklistPeer(peer.id, BlacklistReason.EmptyStateNodeResponse)
-              retryOrExhaust(stateNodeRequester)
+              retryOrExhaust(stateNodeRequester.copy(triedPeers = stateNodeRequester.triedPeers + peer.id))
               Behaviors.same[StateNodeFetcherCommand]
           }
         } else {
@@ -217,12 +229,18 @@ class StateNodeFetcher(
                     updated.stateRoot.map(r => ByteStringUtils.hash2string(r.take(4))).getOrElse("<none>")
                   )
                   requester = Some(updated)
-                  requestStateNode(updated.hash, updated.stateRoot, updated.paths, updated.isByteCode)
+                  requestStateNode(
+                    updated.hash,
+                    updated.stateRoot,
+                    updated.paths,
+                    updated.isByteCode,
+                    updated.triedPeers
+                  )
                   Behaviors.same[StateNodeFetcherCommand]
                 case None =>
-                  log.warn("SNAP TrieNodes: got {} nodes but none matched target hash, retrying", nodes.size)
+                  log.warn("SNAP TrieNodes: got {} nodes but none matched target hash, rotating peer", nodes.size)
                   peersClient ! BlacklistPeer(peer.id, BlacklistReason.WrongStateNodeResponse)
-                  retryOrExhaust(stateNodeRequester)
+                  retryOrExhaust(stateNodeRequester.copy(triedPeers = stateNodeRequester.triedPeers + peer.id))
                   Behaviors.same[StateNodeFetcherCommand]
               }
           }
@@ -238,7 +256,9 @@ class StateNodeFetcher(
     req.fallbackStateRoot
       .filter(fallback => !req.stateRoot.contains(fallback))
       .map { fallback =>
-        req.copy(stateRoot = Some(fallback), fallbackStateRoot = None)
+        // New root ⇒ a different set of peers may be able to serve it, so reset the rotation
+        // exclusion and re-evaluate the whole snap pool against the fallback root.
+        req.copy(stateRoot = Some(fallback), fallbackStateRoot = None, triedPeers = Set.empty)
       }
 
   private def handleByteCodesValues(peer: Peer, codes: Seq[ByteString]): Behavior[StateNodeFetcherCommand] =
@@ -247,9 +267,9 @@ class StateNodeFetcher(
         if (codes.isEmpty) {
           // Per SNAP/1, an empty ByteCodes response means the server doesn't have any of the
           // requested codes — equivalent to a stateless response. Retry against another peer.
-          log.warn("SNAP ByteCodes response was empty, retrying")
+          log.warn("SNAP ByteCodes response was empty, rotating to a different snap peer")
           peersClient ! BlacklistPeer(peer.id, BlacklistReason.EmptyStateNodeResponse)
-          retryOrExhaust(stateNodeRequester)
+          retryOrExhaust(stateNodeRequester.copy(triedPeers = stateNodeRequester.triedPeers + peer.id))
           Behaviors.same[StateNodeFetcherCommand]
         } else {
           // Codes are returned in the same order as requested hashes; we only request one hash
@@ -265,9 +285,9 @@ class StateNodeFetcher(
               requester = None
               Behaviors.same[StateNodeFetcherCommand]
             case None =>
-              log.warn("SNAP ByteCodes: got {} codes but none matched target codeHash, retrying", codes.size)
+              log.warn("SNAP ByteCodes: got {} codes but none matched target codeHash, rotating peer", codes.size)
               peersClient ! BlacklistPeer(peer.id, BlacklistReason.WrongStateNodeResponse)
-              retryOrExhaust(stateNodeRequester)
+              retryOrExhaust(stateNodeRequester.copy(triedPeers = stateNodeRequester.triedPeers + peer.id))
               Behaviors.same[StateNodeFetcherCommand]
           }
         }
@@ -283,17 +303,18 @@ class StateNodeFetcher(
       hash: ByteString,
       stateRoot: Option[ByteString],
       paths: Option[Seq[Seq[ByteString]]],
-      isByteCode: Boolean
+      isByteCode: Boolean,
+      excludePeers: Set[PeerId]
   ): Unit =
     if (isByteCode) {
-      sendGetByteCodes(hash)
+      sendGetByteCodes(hash, excludePeers)
     } else {
       (stateRoot, paths) match {
         case (Some(root), Some(pathGroups)) if pathGroups.nonEmpty =>
           // Use SNAP GetTrieNodes with the SAME root the paths were computed from.
           // The paths are HP-encoded nibble prefixes from a trie walk against this root.
           // Using a different root would make paths invalid — the trie structure differs.
-          sendGetTrieNodes(root, pathGroups)
+          sendGetTrieNodes(root, pathGroups, excludePeers)
 
         case _ =>
           // Fallback to GetNodeData (pre-ETH68 peers only)
@@ -309,20 +330,25 @@ class StateNodeFetcher(
       }
     }
 
-  private def sendGetTrieNodes(root: ByteString, pathGroups: Seq[Seq[ByteString]]): Unit = {
+  private def sendGetTrieNodes(
+      root: ByteString,
+      pathGroups: Seq[Seq[ByteString]],
+      excludePeers: Set[PeerId]
+  ): Unit = {
     log.info(
-      "Requesting missing state node via SNAP GetTrieNodes ({} path groups, root={})",
+      "Requesting missing state node via SNAP GetTrieNodes ({} path groups, root={}, excluding {} tried peer(s))",
       pathGroups.size,
-      root.take(4).toArray.map("%02x".format(_)).mkString
+      root.take(4).toArray.map("%02x".format(_)).mkString,
+      excludePeers.size
     )
     val request = GetTrieNodes(
-      requestId = ETH66.nextRequestId,
+      requestId = ETHPackets.nextRequestId,
       rootHash = root,
       paths = pathGroups,
       responseBytes = BigInt(512 * 1024)
     )
     val resp = makeRequest(
-      Request(request, BestSnapPeer, (msg: GetTrieNodes) => new GetTrieNodesEnc(msg)),
+      Request(request, BestSnapPeerExcluding(excludePeers), (msg: GetTrieNodes) => new GetTrieNodesEnc(msg)),
       StateNodeFetcher.RetryStateNodeRequest
     )
     context.pipeToSelf(resp.unsafeToFuture()) {
@@ -336,18 +362,19 @@ class StateNodeFetcher(
     * is served by every snap-capable peer regardless of their ETH version, so this works even when the entire peer set
     * is ETH68+ (no GetNodeData).
     */
-  private def sendGetByteCodes(codeHash: ByteString): Unit = {
+  private def sendGetByteCodes(codeHash: ByteString, excludePeers: Set[PeerId]): Unit = {
     log.info(
-      "Requesting missing bytecode via SNAP GetByteCodes (codeHash={})",
-      ByteStringUtils.hash2string(codeHash)
+      "Requesting missing bytecode via SNAP GetByteCodes (codeHash={}, excluding {} tried peer(s))",
+      ByteStringUtils.hash2string(codeHash),
+      excludePeers.size
     )
     val request = GetByteCodes(
-      requestId = ETH66.nextRequestId,
+      requestId = ETHPackets.nextRequestId,
       hashes = Seq(codeHash),
       responseBytes = BigInt(512 * 1024)
     )
     val resp = makeRequest(
-      Request(request, BestSnapPeer, (msg: GetByteCodes) => new GetByteCodesEnc(msg)),
+      Request(request, BestSnapPeerExcluding(excludePeers), (msg: GetByteCodes) => new GetByteCodesEnc(msg)),
       StateNodeFetcher.RetryStateNodeRequest
     )
     context.pipeToSelf(resp.unsafeToFuture()) {
@@ -366,11 +393,14 @@ object StateNodeFetcher {
   ): Behavior[StateNodeFetcherCommand] =
     Behaviors.setup(context => new StateNodeFetcher(peersClient, syncConfig, supervisor, context))
 
-  // Bounded retry budget: 10 attempts × 5s backoff ≈ 50s per missing node before signaling
-  // exhaustion to BlockImporter. Without a bound, the resolvingMissingNode loop could spin forever
-  // when peers keep returning empty TrieNodes (Bug 30 — peers outside the SNAP serve window
-  // disconnect on every GetTrieNodes request).
-  val MaxStateNodeFetchRetries: Int = 10
+  // Bounded retry budget: 30 attempts × 5s backoff ≈ 150s per missing node before signaling
+  // exhaustion to BlockImporter. Each retry rotates to a different snap peer (BestSnapPeerExcluding
+  // over StateNodeRequester.triedPeers), so 30 attempts cycle the whole ~10-peer ETC snap pool ~3×
+  // — enough to reach a peer whose block window covers the parent root. (Was 10 / ≈50s, which on
+  // ETC mainnet exhausted before a serving peer was sampled and stalled regular sync ~14 min on a
+  // single post-pivot storage node, observed 2026-06-02.) Kept well under BlockImporter's ~15 min
+  // StuckEscapeThreshold so a slow fetch can't trip an unwanted SNAP re-sync.
+  val MaxStateNodeFetchRetries: Int = 30
   val BackoffInterval: FiniteDuration = 5.seconds
 
   sealed trait StateNodeFetcherCommand
@@ -398,6 +428,10 @@ object StateNodeFetcher {
       isByteCode: Boolean = false,
       // One-shot fallback root: cleared the moment we switch to it, so we only attempt the
       // root-swap once per recovery (no flip-flop between primary and fallback).
-      fallbackStateRoot: Option[ByteString] = None
+      fallbackStateRoot: Option[ByteString] = None,
+      // Snap peers already tried for the CURRENT root that returned empty/wrong responses.
+      // Excluded from the next GetTrieNodes/GetByteCodes peer selection so each retry samples a
+      // different server. Reset when we switch roots or cycle through the whole pool.
+      triedPeers: Set[PeerId] = Set.empty
   )
 }

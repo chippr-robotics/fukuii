@@ -53,6 +53,8 @@ case class BlockchainConfig(
     allowedMinersPublicKeys: Set[ByteString] = Set.empty,
     messConfig: MESSConfig = MESSConfig(),
     treasuryAddress: Address = Address(0),
+    baseFeeFloor: BigInt = BigInt(0),
+    minTip: BigInt = BigInt(1),
     networkType: NetworkType = NetworkType.ETC,
     terminalTotalDifficulty: Option[BigInt] = None,
     forkTimestamps: ForkTimestamps = ForkTimestamps()
@@ -115,11 +117,27 @@ case class ForkBlockNumbers(
     // must be in the EIP-2124 fork-id checksum chain — go-ethereum's params/config.go
     // lists this for Sepolia. Without it, our forkId hashes for Shanghai+ are off by
     // one CRC32 round and ForkIdValidator.checkSuperset rejects all chain-head peers.
-    mergeNetsplitBlockNumber: BigInt = Long.MaxValue
+    mergeNetsplitBlockNumber: BigInt = Long.MaxValue,
+    // Gas limit targets embedded in the fork schedule (EIP-7935 / ECIP-1121).
+    // When Some(target), the miner converges toward that target from the fork activation
+    // block onward via the standard ±1/1024 mechanism — the schedule is authoritative
+    // regardless of operator config. None → fall back to miningConfig.gasLimitTarget.
+    spiralGasTarget: Option[BigInt] = None,
+    olympiaGasTarget: Option[BigInt] = None
 ) {
   def all: List[BigInt] = this.productIterator.toList.collect { case i: BigInt =>
     i
   }
+
+  /** Returns the convergence target that
+    * [[com.chipprbots.ethereum.consensus.blocks.BlockGeneratorSkeleton.calculateGasLimit]] should aim for at the given
+    * block number, based on the fork-embedded gas schedule. None means no fork schedule opinion for this era — caller
+    * falls back to miningConfig.gasLimitTarget.
+    */
+  def gasLimitAdjustmentStartAt(blockNumber: BigInt): Option[BigInt] =
+    if (blockNumber >= olympiaBlockNumber) olympiaGasTarget
+    else if (blockNumber >= spiralBlockNumber) spiralGasTarget
+    else None
 }
 
 object ForkBlockNumbers {
@@ -225,9 +243,19 @@ object BlockchainConfig {
       Try(BigInt(blockchainConfig.getString("olympia-block-number"))).getOrElse(BigInt(Long.MaxValue))
     val mergeNetsplitBlockNumber: BigInt =
       Try(BigInt(blockchainConfig.getString("merge-netsplit-block-number"))).getOrElse(BigInt(Long.MaxValue))
+    val spiralGasTarget: Option[BigInt] =
+      Try(BigInt(blockchainConfig.getString("spiral-gas-target"))).toOption
+    val olympiaGasTarget: Option[BigInt] =
+      Try(BigInt(blockchainConfig.getString("olympia-gas-target"))).toOption
 
     val treasuryAddress: Address =
       Try(Address(blockchainConfig.getString("treasury-address"))).getOrElse(Address(0))
+
+    val baseFeeFloor: BigInt =
+      Try(BigInt(blockchainConfig.getString("base-fee-floor"))).getOrElse(BigInt(0))
+
+    val minTip: BigInt =
+      Try(BigInt(blockchainConfig.getString("min-tip"))).getOrElse(BigInt(1))
 
     val networkType: NetworkType =
       Try(NetworkType.fromString(blockchainConfig.getString("network-type"))).getOrElse(NetworkType.ETC)
@@ -282,7 +310,9 @@ object BlockchainConfig {
         mystiqueBlockNumber = mystiqueBlockNumber,
         spiralBlockNumber = spiralBlockNumber,
         olympiaBlockNumber = olympiaBlockNumber,
-        mergeNetsplitBlockNumber = mergeNetsplitBlockNumber
+        mergeNetsplitBlockNumber = mergeNetsplitBlockNumber,
+        spiralGasTarget = spiralGasTarget,
+        olympiaGasTarget = olympiaGasTarget
       ),
       maxCodeSize = maxCodeSize,
       customGenesisFileOpt = customGenesisFileOpt,
@@ -299,6 +329,8 @@ object BlockchainConfig {
       allowedMinersPublicKeys = allowedMinersPublicKeys,
       messConfig = messConfig,
       treasuryAddress = treasuryAddress,
+      baseFeeFloor = baseFeeFloor,
+      minTip = minTip,
       networkType = networkType,
       terminalTotalDifficulty = terminalTotalDifficulty,
       forkTimestamps = forkTimestamps

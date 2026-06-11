@@ -1,0 +1,1964 @@
+{
+  "annotations": {
+    "list": [
+      {
+        "builtIn": 1,
+        "datasource": {
+          "type": "grafana",
+          "uid": "-- Grafana --"
+        },
+        "enable": true,
+        "hide": true,
+        "iconColor": "rgba(0, 211, 255, 1)",
+        "name": "Annotations & Alerts",
+        "type": "dashboard"
+      },
+      {
+        "datasource": {
+          "type": "prometheus",
+          "uid": "prometheus"
+        },
+        "enable": true,
+        "expr": "changes(app_snapsync_phase_current_gauge{instance=~\"$instance\"}[1m]) > 0",
+        "iconColor": "orange",
+        "name": "Phase Transition",
+        "step": "1m",
+        "titleFormat": "Phase change",
+        "useValueForTime": false
+      },
+      {
+        "datasource": {
+          "type": "prometheus",
+          "uid": "prometheus"
+        },
+        "enable": true,
+        "expr": "changes(app_snapsync_pivot_refreshed_total{instance=~\"$instance\"}[1m]) > 0",
+        "iconColor": "purple",
+        "name": "Pivot Refresh",
+        "step": "1m",
+        "titleFormat": "Pivot refresh",
+        "useValueForTime": false
+      },
+      {
+        "datasource": {
+          "type": "prometheus",
+          "uid": "prometheus"
+        },
+        "enable": true,
+        "expr": "changes(app_network_lagging_peer_evicted_total{instance=~\"$instance\"}[1m]) > 0",
+        "iconColor": "red",
+        "name": "Lagging Peer Evicted",
+        "step": "1m",
+        "titleFormat": "Lagging peer evicted",
+        "useValueForTime": false
+      }
+    ]
+  },
+  "description": "SNAP sync \u2014 phases, throughput, backpressure (PR #1233/#1241), pivot refresh (PR #1234/#1236), peer-pool hygiene (PR #1237/#1238/#1239/#1240/#1242).",
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [
+    {
+      "asDropdown": false,
+      "icon": "external link",
+      "includeVars": true,
+      "keepTime": true,
+      "tags": [
+        "fukuii"
+      ],
+      "targetBlank": false,
+      "title": "Fukuii dashboards",
+      "type": "dashboards"
+    }
+  ],
+  "liveNow": false,
+  "panels": [
+    {
+      "type": "row",
+      "title": "Phase & Pivot",
+      "id": 100,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      },
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "type": "stat",
+      "title": "Current Phase",
+      "id": 1,
+      "gridPos": {
+        "h": 5,
+        "w": 5,
+        "x": 0,
+        "y": 1
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "expr": "app_snapsync_phase_current_gauge{instance=~\"$instance\"}",
+          "refId": "A",
+          "legendFormat": "{{instance}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "0": {
+                  "text": "Idle",
+                  "color": "grey"
+                },
+                "1": {
+                  "text": "AccountRange",
+                  "color": "blue"
+                },
+                "3": {
+                  "text": "ByteCode + Storage",
+                  "color": "purple"
+                },
+                "5": {
+                  "text": "Healing",
+                  "color": "yellow"
+                },
+                "6": {
+                  "text": "Validation",
+                  "color": "orange"
+                },
+                "7": {
+                  "text": "Chain Download",
+                  "color": "cyan"
+                },
+                "8": {
+                  "text": "Completed",
+                  "color": "green"
+                }
+              }
+            }
+          ],
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "blue"
+          }
+        }
+      },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "textMode": "value_and_name",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Time in Phase",
+      "id": 2,
+      "gridPos": {
+        "h": 5,
+        "w": 5,
+        "x": 5,
+        "y": 1
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "expr": "app_snapsync_phase_time_seconds_gauge{instance=~\"$instance\"}",
+          "refId": "A",
+          "legendFormat": "{{instance}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 600
+              },
+              {
+                "color": "orange",
+                "value": 1800
+              }
+            ]
+          }
+        }
+      },
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "textMode": "value_and_name",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Total Sync Time",
+      "id": 3,
+      "gridPos": {
+        "h": 5,
+        "w": 4,
+        "x": 10,
+        "y": 1
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "expr": "app_snapsync_totaltime_minutes_gauge{instance=~\"$instance\"}",
+          "refId": "A",
+          "legendFormat": "{{instance}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "m",
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "light-blue"
+          }
+        }
+      },
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "textMode": "value_and_name",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Pivot Block",
+      "id": 4,
+      "gridPos": {
+        "h": 5,
+        "w": 5,
+        "x": 14,
+        "y": 1
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "expr": "app_snapsync_pivot_block_number_gauge{instance=~\"$instance\"}",
+          "refId": "A",
+          "legendFormat": "{{instance}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "semi-dark-purple"
+          }
+        }
+      },
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "textMode": "value_and_name",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Pivot Refreshes (total)",
+      "id": 5,
+      "gridPos": {
+        "h": 5,
+        "w": 5,
+        "x": 19,
+        "y": 1
+      },
+      "description": "Total pivot refreshes since SNAP sync start. Rising during long account-phase runs is normal (snap serve window ~28min). Each refresh releases storage backpressure if engaged (PR #1241).",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "expr": "app_snapsync_pivot_refreshed_total{instance=~\"$instance\"}",
+          "refId": "A",
+          "legendFormat": "{{instance}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "purple"
+          }
+        }
+      },
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "textMode": "value_and_name",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      }
+    },
+    {
+      "type": "row",
+      "title": "Backpressure (PR #1233 / #1241) \u2014 what's blocking the account phase",
+      "id": 101,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 6
+      },
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "type": "stat",
+      "title": "Storage Backpressure",
+      "id": 60,
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 0,
+        "y": 7
+      },
+      "description": "1 = ENGAGED (storage queue exceeded high-water 100K). Account dispatch is paused until pivot refresh releases (PR #1241) or queue drains below low-water 50K.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "expr": "app_snapsync_storage_backpressure_gauge{instance=~\"$instance\"}",
+          "refId": "A",
+          "legendFormat": "{{instance}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "0": {
+                  "text": "RELEASED",
+                  "color": "green"
+                },
+                "1": {
+                  "text": "ENGAGED",
+                  "color": "red"
+                }
+              }
+            }
+          ],
+          "color": {
+            "mode": "fixed"
+          }
+        }
+      },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "textMode": "value_and_name",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      }
+    },
+    {
+      "type": "stat",
+      "title": "ByteCode Backpressure",
+      "id": 61,
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 4,
+        "y": 7
+      },
+      "description": "1 = ENGAGED (bytecode queue exceeded high-water 50K). Account dispatch is paused. Similar release semantics to storage (PR #1233/#1241).",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "expr": "app_snapsync_bytecode_backpressure_gauge{instance=~\"$instance\"}",
+          "refId": "A",
+          "legendFormat": "{{instance}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "0": {
+                  "text": "RELEASED",
+                  "color": "green"
+                },
+                "1": {
+                  "text": "ENGAGED",
+                  "color": "red"
+                }
+              }
+            }
+          ],
+          "color": {
+            "mode": "fixed"
+          }
+        }
+      },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "textMode": "value_and_name",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Storage Queue Depth (with watermarks)",
+      "id": 62,
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 7
+      },
+      "description": "Pending storage tasks in the coordinator queue. Crossing 100K engages backpressure; dropping to 50K releases it. Pivot refresh also force-releases (PR #1241).",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "expr": "app_snapsync_storage_queue_depth_gauge{instance=~\"$instance\"}",
+          "refId": "A",
+          "legendFormat": "{{instance}} depth"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 10
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 50000
+              },
+              {
+                "color": "red",
+                "value": 100000
+              }
+            ]
+          },
+          "custom.thresholdsStyle": {
+            "mode": "line"
+          }
+        }
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "ByteCode Queue Depth (with watermarks)",
+      "id": 63,
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 7
+      },
+      "description": "Pending bytecode tasks. Watermarks: 50K engage, 25K release.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "expr": "app_snapsync_bytecode_queue_depth_gauge{instance=~\"$instance\"}",
+          "refId": "A",
+          "legendFormat": "{{instance}} depth"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 10
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 25000
+              },
+              {
+                "color": "red",
+                "value": 50000
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Backpressure State (timeseries \u2014 engage/release cycles)",
+      "id": 64,
+      "gridPos": {
+        "h": 4,
+        "w": 8,
+        "x": 0,
+        "y": 11
+      },
+      "description": "Stepped state changes. Each step-up corresponds to a queue overflow, each step-down to a pivot refresh release.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "expr": "app_snapsync_storage_backpressure_gauge{instance=~\"$instance\"}",
+          "refId": "A",
+          "legendFormat": "{{instance}} storage"
+        },
+        {
+          "expr": "app_snapsync_bytecode_backpressure_gauge{instance=~\"$instance\"}",
+          "refId": "B",
+          "legendFormat": "{{instance}} bytecode"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bool",
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "stepAfter",
+            "lineWidth": 2,
+            "fillOpacity": 30
+          }
+        }
+      }
+    },
+    {
+      "type": "row",
+      "title": "Progress",
+      "id": 102,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 15
+      },
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "type": "gauge",
+      "title": "Accounts Progress",
+      "id": 10,
+      "gridPos": {
+        "h": 6,
+        "w": 6,
+        "x": 0,
+        "y": 16
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "expr": "100 * app_snapsync_accounts_synced_gauge{instance=~\"$instance\"} / clamp_min(app_snapsync_accounts_estimated_total_gauge{instance=~\"$instance\"}, 1)",
+          "refId": "A",
+          "legendFormat": "{{instance}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "min": 0,
+          "max": 100,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              },
+              {
+                "color": "green",
+                "value": 100
+              }
+            ]
+          }
+        }
+      },
+      "options": {
+        "orientation": "auto",
+        "showThresholdLabels": false,
+        "showThresholdMarkers": true,
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      }
+    },
+    {
+      "type": "gauge",
+      "title": "Bytecodes Progress",
+      "id": 11,
+      "gridPos": {
+        "h": 6,
+        "w": 6,
+        "x": 6,
+        "y": 16
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "expr": "100 * app_snapsync_bytecodes_downloaded_gauge{instance=~\"$instance\"} / clamp_min(app_snapsync_bytecodes_estimated_total_gauge{instance=~\"$instance\"}, 1)",
+          "refId": "A",
+          "legendFormat": "{{instance}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "min": 0,
+          "max": 100,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "purple",
+                "value": null
+              },
+              {
+                "color": "green",
+                "value": 100
+              }
+            ]
+          }
+        }
+      },
+      "options": {
+        "orientation": "auto",
+        "showThresholdMarkers": true,
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      }
+    },
+    {
+      "type": "gauge",
+      "title": "Storage Slots Progress",
+      "id": 12,
+      "gridPos": {
+        "h": 6,
+        "w": 6,
+        "x": 12,
+        "y": 16
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "expr": "100 * app_snapsync_storage_slots_synced_gauge{instance=~\"$instance\"} / clamp_min(app_snapsync_storage_slots_estimated_total_gauge{instance=~\"$instance\"}, 1)",
+          "refId": "A",
+          "legendFormat": "{{instance}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "min": 0,
+          "max": 100,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "orange",
+                "value": null
+              },
+              {
+                "color": "green",
+                "value": 100
+              }
+            ]
+          }
+        }
+      },
+      "options": {
+        "orientation": "auto",
+        "showThresholdMarkers": true,
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Nodes Healed",
+      "id": 13,
+      "gridPos": {
+        "h": 6,
+        "w": 6,
+        "x": 18,
+        "y": 16
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "expr": "app_snapsync_healing_nodes_healed_gauge{instance=~\"$instance\"}",
+          "refId": "A",
+          "legendFormat": "{{instance}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "yellow"
+          }
+        }
+      },
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "textMode": "value_and_name",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Accounts Synced (cumulative)",
+      "id": 20,
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 22
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "expr": "app_snapsync_accounts_synced_gauge{instance=~\"$instance\"}",
+          "refId": "A",
+          "legendFormat": "{{instance}} synced"
+        },
+        {
+          "expr": "app_snapsync_accounts_estimated_total_gauge{instance=~\"$instance\"}",
+          "refId": "B",
+          "legendFormat": "{{instance}} estimated"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 10
+          }
+        }
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Throughput \u2014 Accounts / Bytecodes / Storage / Healing (recent)",
+      "id": 21,
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 22
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "expr": "app_snapsync_accounts_throughput_recent_gauge{instance=~\"$instance\"}",
+          "refId": "A",
+          "legendFormat": "{{instance}} accounts/s"
+        },
+        {
+          "expr": "app_snapsync_bytecodes_throughput_recent_gauge{instance=~\"$instance\"}",
+          "refId": "B",
+          "legendFormat": "{{instance}} bytecodes/s"
+        },
+        {
+          "expr": "app_snapsync_storage_throughput_recent_gauge{instance=~\"$instance\"}",
+          "refId": "C",
+          "legendFormat": "{{instance}} storage/s"
+        },
+        {
+          "expr": "app_snapsync_healing_throughput_recent_gauge{instance=~\"$instance\"}",
+          "refId": "D",
+          "legendFormat": "{{instance}} healing/s"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 5
+          }
+        }
+      }
+    },
+    {
+      "type": "row",
+      "title": "Peer Pool Health (PR #1237 / #1238 / #1239 / #1240 / #1242)",
+      "id": 103,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 30
+      },
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "type": "stat",
+      "title": "Active Account Peers",
+      "id": 70,
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 0,
+        "y": 31
+      },
+      "description": "Peers eligible to serve account ranges right now: knownAvailable - stateless - snapless - cooling. The number to watch \u2014 when this drops below 2 we're peer-bottlenecked.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "expr": "app_snapsync_accounts_active_peers_gauge{instance=~\"$instance\"}",
+          "refId": "A",
+          "legendFormat": "{{instance}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 2
+              },
+              {
+                "color": "yellow",
+                "value": 3
+              },
+              {
+                "color": "green",
+                "value": 5
+              }
+            ]
+          }
+        }
+      },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "area",
+        "textMode": "value_and_name",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      }
+    },
+    {
+      "type": "stat",
+      "title": "SNAP-Capable Peers",
+      "id": 71,
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 4,
+        "y": 31
+      },
+      "description": "Peers that negotiated SNAP/1 (regardless of demotion state). The pool from which active peers are drawn.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "expr": "app_snapsync_peers_capable_gauge{instance=~\"$instance\"}",
+          "refId": "A",
+          "legendFormat": "{{instance}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "blue"
+          }
+        }
+      },
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "textMode": "value_and_name",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Lagging Peers Evicted (total)",
+      "id": 72,
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 8,
+        "y": 31
+      },
+      "description": "PR #1239 chronic-laggard evictions. Each is a peer that lagged >4096 blocks behind CL head for 10 min. Held in blacklist 30 min (PR #1242) so they don't immediately re-evict.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "expr": "app_network_lagging_peer_evicted_total{instance=~\"$instance\"}",
+          "refId": "A",
+          "legendFormat": "{{instance}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "red"
+          }
+        }
+      },
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "textMode": "value_and_name",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Snapless Demoted (total)",
+      "id": 73,
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 12,
+        "y": 31
+      },
+      "description": "PR #1237 strike-counted demotions. A peer that returned empty proof-of-absence 3 times is moved to snapless (no longer dispatched account-range tasks).",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "expr": "app_snapsync_peers_snapless_confirmed_total{instance=~\"$instance\"}",
+          "refId": "A",
+          "legendFormat": "{{instance}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "orange"
+          }
+        }
+      },
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "textMode": "value_and_name",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Stateless Demoted (total)",
+      "id": 74,
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 16,
+        "y": 31
+      },
+      "description": "PR #1237 strike-counted demotions. A peer that responded with empty 3 times (no state for our root) is moved to stateless. Cleared on pivot refresh.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "expr": "app_snapsync_peers_stateless_confirmed_total{instance=~\"$instance\"}",
+          "refId": "A",
+          "legendFormat": "{{instance}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "yellow"
+          }
+        }
+      },
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "textMode": "value_and_name",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Blacklisted Peers (live)",
+      "id": 75,
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 20,
+        "y": 31
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "expr": "app_network_peers_blacklisted_gauge{instance=~\"$instance\"}",
+          "refId": "A",
+          "legendFormat": "{{instance}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "dark-red"
+          }
+        }
+      },
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "textMode": "value_and_name",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Peer Pool \u2014 capacity vs active vs handshaked",
+      "id": 76,
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 35
+      },
+      "description": "The gap between handshaked and active is peer waste \u2014 peers we maintain a connection to but can't dispatch work to (stateless/snapless/cooling). PR #1237+#1239 narrow this gap.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "expr": "app_snapsync_accounts_active_peers_gauge{instance=~\"$instance\"}",
+          "refId": "A",
+          "legendFormat": "{{instance}} active"
+        },
+        {
+          "expr": "app_snapsync_peers_capable_gauge{instance=~\"$instance\"}",
+          "refId": "B",
+          "legendFormat": "{{instance}} snap-capable"
+        },
+        {
+          "expr": "app_network_peers_outgoing_handshaked_gauge{instance=~\"$instance\"}",
+          "refId": "C",
+          "legendFormat": "{{instance}} outgoing handshaked"
+        },
+        {
+          "expr": "app_network_peers_incoming_handshaked_gauge{instance=~\"$instance\"}",
+          "refId": "D",
+          "legendFormat": "{{instance}} incoming handshaked"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 5
+          }
+        }
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Demotion + Eviction Rate (per min)",
+      "id": 77,
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 35
+      },
+      "description": "Rate of peer demotions/evictions. A steady non-zero rate of lagging-peer evictions indicates the chronic-laggard recycler (PR #1239) is doing its job. Snapless/stateless transitions should be rare with the strike threshold (PR #1237).",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "expr": "60 * rate(app_network_lagging_peer_evicted_total{instance=~\"$instance\"}[5m])",
+          "refId": "A",
+          "legendFormat": "{{instance}} lagging/min"
+        },
+        {
+          "expr": "60 * rate(app_snapsync_peers_snapless_confirmed_total{instance=~\"$instance\"}[5m])",
+          "refId": "B",
+          "legendFormat": "{{instance}} snapless/min"
+        },
+        {
+          "expr": "60 * rate(app_snapsync_peers_stateless_confirmed_total{instance=~\"$instance\"}[5m])",
+          "refId": "C",
+          "legendFormat": "{{instance}} stateless/min"
+        },
+        {
+          "expr": "60 * rate(app_snapsync_peers_blacklisted_total{instance=~\"$instance\"}[5m])",
+          "refId": "D",
+          "legendFormat": "{{instance}} blacklists/min"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        }
+      }
+    },
+    {
+      "type": "row",
+      "title": "Request Health",
+      "id": 104,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 43
+      },
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "type": "timeseries",
+      "title": "Request Health \u2014 timeouts / retries / failures",
+      "id": 30,
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 0,
+        "y": 44
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "expr": "rate(app_snapsync_requests_timeouts_total{instance=~\"$instance\"}[1m])",
+          "refId": "A",
+          "legendFormat": "{{instance}} timeouts"
+        },
+        {
+          "expr": "rate(app_snapsync_requests_retries_total{instance=~\"$instance\"}[1m])",
+          "refId": "B",
+          "legendFormat": "{{instance}} retries"
+        },
+        {
+          "expr": "rate(app_snapsync_accounts_requests_failed_total{instance=~\"$instance\"}[1m])",
+          "refId": "C",
+          "legendFormat": "{{instance}} account fails"
+        },
+        {
+          "expr": "rate(app_snapsync_bytecodes_requests_failed_total{instance=~\"$instance\"}[1m])",
+          "refId": "D",
+          "legendFormat": "{{instance}} bytecode fails"
+        },
+        {
+          "expr": "rate(app_snapsync_storage_requests_failed_total{instance=~\"$instance\"}[1m])",
+          "refId": "E",
+          "legendFormat": "{{instance}} storage fails"
+        },
+        {
+          "expr": "rate(app_snapsync_healing_requests_failed_total{instance=~\"$instance\"}[1m])",
+          "refId": "F",
+          "legendFormat": "{{instance}} healing fails"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops"
+        }
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Data Integrity \u2014 proofs / validation / missing nodes",
+      "id": 31,
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 12,
+        "y": 44
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "expr": "rate(app_snapsync_proofs_invalid_total{instance=~\"$instance\"}[1m])",
+          "refId": "A",
+          "legendFormat": "{{instance}} invalid proofs"
+        },
+        {
+          "expr": "rate(app_snapsync_validation_failures_total{instance=~\"$instance\"}[1m])",
+          "refId": "B",
+          "legendFormat": "{{instance}} validation fails"
+        },
+        {
+          "expr": "rate(app_snapsync_responses_malformed_total{instance=~\"$instance\"}[1m])",
+          "refId": "C",
+          "legendFormat": "{{instance}} malformed"
+        },
+        {
+          "expr": "app_snapsync_validation_missing_nodes_gauge{instance=~\"$instance\"}",
+          "refId": "D",
+          "legendFormat": "{{instance}} missing nodes"
+        },
+        {
+          "expr": "rate(app_snapsync_errors_total{instance=~\"$instance\"}[1m])",
+          "refId": "E",
+          "legendFormat": "{{instance}} errors"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops"
+        }
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Request Latency \u2014 max download timer (s)",
+      "id": 41,
+      "gridPos": {
+        "h": 7,
+        "w": 24,
+        "x": 0,
+        "y": 51
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "expr": "app_snapsync_accounts_download_timer_seconds_max{instance=~\"$instance\"}",
+          "refId": "A",
+          "legendFormat": "{{instance}} accounts"
+        },
+        {
+          "expr": "app_snapsync_bytecodes_download_timer_seconds_max{instance=~\"$instance\"}",
+          "refId": "B",
+          "legendFormat": "{{instance}} bytecodes"
+        },
+        {
+          "expr": "app_snapsync_storage_download_timer_seconds_max{instance=~\"$instance\"}",
+          "refId": "C",
+          "legendFormat": "{{instance}} storage"
+        },
+        {
+          "expr": "app_snapsync_healing_timer_seconds_max{instance=~\"$instance\"}",
+          "refId": "D",
+          "legendFormat": "{{instance}} healing"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        }
+      }
+    },
+    {
+      "type": "row",
+      "title": "State Healing \u2014 BFS frontier rebuild + heal (PR #1319 / #1323)",
+      "id": 110,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 64
+      },
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "type": "stat",
+      "title": "Nodes Healed",
+      "id": 311,
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 0,
+        "y": 65
+      },
+      "description": "Total trie nodes fetched + stored during the post-SNAP healing phase.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "expr": "app_snapsync_healing_nodes_healed_gauge{instance=~\"$instance\"}",
+          "refId": "A",
+          "legendFormat": "{{instance}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "green"
+          }
+        }
+      },
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "textMode": "value_and_name",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Frontier Backlog (pending)",
+      "id": 312,
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 6,
+        "y": 65
+      },
+      "description": "Missing nodes discovered but not yet healed (pending heal tasks). Pulses with each \"[HEAL-FRONTIER]\" batch; drains to 0 as peers serve GetTrieNodes. Watchdog: 3 dead HEAL-PULSE cycles with this at 0 force-starts a verification walk.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "expr": "app_snapsync_healing_frontier_pending_gauge{instance=~\"$instance\"}",
+          "refId": "A",
+          "legendFormat": "{{instance}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 1000
+              },
+              {
+                "color": "orange",
+                "value": 50000
+              }
+            ]
+          }
+        }
+      },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "area",
+        "textMode": "value_and_name",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Active Heal Requests",
+      "id": 313,
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 12,
+        "y": 65
+      },
+      "description": "In-flight GetTrieNodes requests to peers.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "expr": "app_snapsync_healing_active_requests_gauge{instance=~\"$instance\"}",
+          "refId": "A",
+          "legendFormat": "{{instance}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "blue"
+          }
+        }
+      },
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "textMode": "value_and_name",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Frontier-Rebuild BFS Visited",
+      "id": 314,
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 18,
+        "y": 65
+      },
+      "description": "Nodes visited by the level-order BFS frontier rebuild/verification walk (logs: \"[HEAL-BFS] Level N complete: ...\"). Counter resets when a new walk starts. Compare against ~119M total trie nodes on ETC mainnet.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "expr": "app_snapsync_healing_rebuild_visited_gauge{instance=~\"$instance\"}",
+          "refId": "A",
+          "legendFormat": "{{instance}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "purple"
+          }
+        }
+      },
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "textMode": "value_and_name",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      }
+    },
+    {
+      "id": 319,
+      "type": "stat",
+      "title": "BFS Walk Progress (est. % of ~119M nodes)",
+      "description": "healing_rebuild_visited / 119M (June-2026 estimate of total ETC-mainnet trie nodes from the last full walk: 118.75M). Estimate only \u2014 resets to 0 when a new walk starts. Level-by-level detail is log-only for now: grep '[HEAL-BFS] Level'.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "min": 0,
+          "max": 100,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 50
+              },
+              {
+                "color": "green",
+                "value": 95
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "area"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "100 * app_snapsync_healing_rebuild_visited_gauge / 119000000",
+          "legendFormat": "walk progress (est %)",
+          "refId": "A"
+        }
+      ],
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 0,
+        "y": 65
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Healing Throughput (nodes/s)",
+      "id": 315,
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 60
+      },
+      "description": "Healing download throughput (nodes healed/s, recent vs overall). Bursty by design: idle while the BFS walk discovers, bursts when frontier batches dispatch (logs: \"[HEAL-FRONTIER] N missing nodes identified\").",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "expr": "app_snapsync_healing_throughput_overall_gauge{instance=~\"$instance\"}",
+          "refId": "A",
+          "legendFormat": "{{instance}} overall"
+        },
+        {
+          "expr": "app_snapsync_healing_throughput_recent_gauge{instance=~\"$instance\"}",
+          "refId": "B",
+          "legendFormat": "{{instance}} recent"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 10
+          }
+        }
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        }
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Frontier Backlog & In-flight",
+      "id": 316,
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 60
+      },
+      "description": "Pending frontier (backlog) vs in-flight requests. Backlog trending down = healing converging.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "expr": "app_snapsync_healing_frontier_pending_gauge{instance=~\"$instance\"}",
+          "refId": "A",
+          "legendFormat": "{{instance}} pending"
+        },
+        {
+          "expr": "app_snapsync_healing_active_requests_gauge{instance=~\"$instance\"}",
+          "refId": "B",
+          "legendFormat": "{{instance}} in-flight"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 10
+          }
+        }
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        }
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Frontier-Rebuild BFS Progress & Rate",
+      "id": 317,
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 68
+      },
+      "description": "Raw visited count plus its 5m derivative (nodes/s). The BFS issues one multiGet per 50K-node chunk \u2014 sustained rate is the headline number for the PR #1323 speedup (serial DFS baseline was ~600-1,100 nodes/s).",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "expr": "app_snapsync_healing_rebuild_visited_gauge{instance=~\"$instance\"}",
+          "refId": "A",
+          "legendFormat": "{{instance}} visited"
+        },
+        {
+          "datasource": null,
+          "expr": "deriv(app_snapsync_healing_rebuild_visited_gauge[5m])",
+          "legendFormat": "visit rate (nodes/s, 5m deriv)",
+          "refId": "B"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 10
+          }
+        }
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        }
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Healing Request Rate (req/s)",
+      "id": 318,
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 68
+      },
+      "description": "GetTrieNodes request and failure rates. A rising failure rate indicates peers without the requested state (stateless) \u2014 expect a pivot refresh.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "expr": "rate(app_snapsync_healing_requests_total{instance=~\"$instance\"}[5m])",
+          "refId": "A",
+          "legendFormat": "{{instance}} requests/s"
+        },
+        {
+          "expr": "rate(app_snapsync_healing_requests_failed_total{instance=~\"$instance\"}[5m])",
+          "refId": "B",
+          "legendFormat": "{{instance}} failures/s"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 5
+          }
+        }
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        }
+      }
+    }
+  ],
+  "refresh": "10s",
+  "schemaVersion": 38,
+  "style": "dark",
+  "tags": [
+    "fukuii",
+    "snap",
+    "sync"
+  ],
+  "templating": {
+    "list": [
+      {
+        "name": "instance",
+        "label": "Instance",
+        "type": "query",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "prometheus"
+        },
+        "query": {
+          "query": "label_values(up{job=~\".*fukuii.*\"}, instance)",
+          "refId": "Prometheus-instance-Variable-Query"
+        },
+        "refresh": 1,
+        "sort": 1,
+        "includeAll": true,
+        "allValue": ".*",
+        "multi": true,
+        "current": {
+          "selected": false,
+          "text": "All",
+          "value": "$__all"
+        },
+        "options": [],
+        "hide": 0
+      }
+    ]
+  },
+  "time": {
+    "from": "now-30m",
+    "to": "now"
+  },
+  "timepicker": {},
+  "timezone": "",
+  "title": "Fukuii SNAP Sync",
+  "uid": "fukuii-snap-sync",
+  "version": 4,
+  "weekStart": ""
+}

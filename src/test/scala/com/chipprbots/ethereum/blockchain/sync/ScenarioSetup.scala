@@ -99,7 +99,6 @@ trait ScenarioSetup
 
     new ConsensusAdapter(
       new ConsensusImpl(
-        blockchain,
         blockchainReader,
         blockchainWriter,
         blockExecutionOpt.getOrElse(mkBlockExecution(validators))

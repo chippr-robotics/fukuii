@@ -21,7 +21,7 @@ import com.chipprbots.ethereum.mpt.HexPrefix.bytesToNibbles
 import com.chipprbots.ethereum.mpt.LeafNode
 import com.chipprbots.ethereum.mpt.MptNode
 import com.chipprbots.ethereum.mpt.MptTraversals
-import com.chipprbots.ethereum.network.p2p.messages.BaseETH6XMessages.NewBlock
+import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.NewBlock
 
 // scalastyle:off number.of.methods
 trait ObjectGenerators {

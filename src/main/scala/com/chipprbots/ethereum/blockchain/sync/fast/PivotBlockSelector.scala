@@ -31,11 +31,7 @@ import com.chipprbots.ethereum.network.PeerId
 import com.chipprbots.ethereum.network.p2p.MessageSerializable
 import com.chipprbots.ethereum.network.p2p.messages.Capability
 import com.chipprbots.ethereum.network.p2p.messages.Codes
-import com.chipprbots.ethereum.network.p2p.messages.ETH62.{BlockHeaders => ETH62BlockHeaders}
-import com.chipprbots.ethereum.network.p2p.messages.ETH62.{GetBlockHeaders => ETH62GetBlockHeaders}
-import com.chipprbots.ethereum.network.p2p.messages.ETH66
-import com.chipprbots.ethereum.network.p2p.messages.ETH66.{BlockHeaders => ETH66BlockHeaders}
-import com.chipprbots.ethereum.network.p2p.messages.ETH66.{GetBlockHeaders => ETH66GetBlockHeaders}
+import com.chipprbots.ethereum.network.p2p.messages.ETHPackets
 import com.chipprbots.ethereum.utils.Config.SyncConfig
 
 class PivotBlockSelector(
@@ -148,21 +144,7 @@ class PivotBlockSelector(
       headers: Map[ByteString, BlockHeaderWithVotes]
   ): Receive =
     handlePeerListMessages.orElse {
-      case MessageFromPeer(blockHeaders: ETH62BlockHeaders, peerId) =>
-        peerEventBus ! Unsubscribe(MessageClassifier(Set(Codes.BlockHeadersCode), PeerSelector.WithId(peerId)))
-        val updatedPeersToAsk = peersToAsk - peerId
-        val targetBlockHeaderOpt = blockHeaders.headers.find(header => header.number == pivotBlockNumber)
-        targetBlockHeaderOpt match {
-          case Some(targetBlockHeader) =>
-            val newValue =
-              headers.get(targetBlockHeader.hash).map(_.vote).getOrElse(BlockHeaderWithVotes(targetBlockHeader))
-            val updatedHeaders = headers.updated(targetBlockHeader.hash, newValue)
-            votingProcess(updatedPeersToAsk, waitingPeers, pivotBlockNumber, timeout, updatedHeaders)
-          case None =>
-            blacklist.add(peerId, blacklistDuration, InvalidPivotBlockElectionResponse)
-            votingProcess(updatedPeersToAsk, waitingPeers, pivotBlockNumber, timeout, headers)
-        }
-      case MessageFromPeer(blockHeaders: ETH66BlockHeaders, peerId) =>
+      case MessageFromPeer(blockHeaders: ETHPackets.BlockHeaders, peerId) =>
         peerEventBus ! Unsubscribe(MessageClassifier(Set(Codes.BlockHeadersCode), PeerSelector.WithId(peerId)))
         val updatedPeersToAsk = peersToAsk - peerId
         val targetBlockHeaderOpt = blockHeaders.headers.find(header => header.number == pivotBlockNumber)
@@ -262,7 +244,13 @@ class PivotBlockSelector(
 
   private def sendResponseAndCleanup(pivotBlockHeader: BlockHeader): Unit = {
     pivotRetryState = pivotRetryState.reset
-    log.info("Found pivot block: {} hash: {}", pivotBlockHeader.number, pivotBlockHeader.hashAsHexString)
+    val attempts = pivotRetryState.attempt
+    log.info(
+      "[PIVOT] Selected block={} hash={} after {} attempt(s)",
+      pivotBlockHeader.number,
+      pivotBlockHeader.hashAsHexString,
+      attempts
+    )
     fastSync ! Result(pivotBlockHeader)
     peerEventBus ! Unsubscribe()
     context.stop(self)
@@ -274,9 +262,9 @@ class PivotBlockSelector(
     // Get peer info to determine message format based on negotiated capability
     val getBlockHeadersMsg: MessageSerializable = handshakedPeers.get(peer) match {
       case Some(peerWithInfo) if Capability.usesRequestId(peerWithInfo.peerInfo.remoteStatus.capability) =>
-        ETH66GetBlockHeaders(ETH66.nextRequestId, Left(blockNumber), 1, 0, reverse = false)
+        ETHPackets.GetBlockHeaders(ETHPackets.nextRequestId, Left(blockNumber), 1, 0, reverse = false)
       case _ =>
-        ETH62GetBlockHeaders(Left(blockNumber), 1, 0, reverse = false)
+        ETHPackets.GetBlockHeaders(ETHPackets.nextRequestId, Left(blockNumber), 1, 0, reverse = false)
     }
 
     networkPeerManager ! NetworkPeerManagerActor.SendMessage(getBlockHeadersMsg, peer)

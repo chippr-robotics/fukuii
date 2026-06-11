@@ -44,13 +44,13 @@ import com.chipprbots.ethereum.network.PeerEventBusActor.Subscribe
 import com.chipprbots.ethereum.network.PeerEventBusActor.SubscriptionClassifier.MessageClassifier
 import com.chipprbots.ethereum.network.PeerId
 import com.chipprbots.ethereum.network.p2p.Message
-import com.chipprbots.ethereum.network.p2p.messages.BaseETH6XMessages
 import com.chipprbots.ethereum.network.p2p.messages.Capability
-import com.chipprbots.ethereum.network.p2p.messages.ETH62._
-import com.chipprbots.ethereum.network.p2p.messages.ETH63.GetNodeData
-import com.chipprbots.ethereum.network.p2p.messages.ETH63.NodeData
-import com.chipprbots.ethereum.network.p2p.messages.ETH66.{GetBlockHeaders => ETH66GetBlockHeaders}
-import com.chipprbots.ethereum.network.p2p.messages.ETH66.{GetBlockBodies => ETH66GetBlockBodies}
+import com.chipprbots.ethereum.network.p2p.messages.ETHPackets
+import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.GetNodeData
+import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.NodeData
+import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.{GetBlockHeaders => ETHGetBlockHeaders}
+import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.{GetBlockBodies => ETHGetBlockBodies}
+import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.{BlockHeaders, BlockBodies}
 import com.chipprbots.ethereum.ommers.OmmersPool
 import com.chipprbots.ethereum.security.SecureRandomBuilder
 import com.chipprbots.ethereum.transactions.PendingTransactionsManager
@@ -92,6 +92,7 @@ trait RegularSyncFixtures { self: Matchers with AsyncMockFactory =>
           peerEventBus.ref,
           consensusAdapter,
           blockchainReader,
+          blockchainWriter,
           stateStorage,
           evmCodeStorage,
           branchResolution,
@@ -113,6 +114,7 @@ trait RegularSyncFixtures { self: Matchers with AsyncMockFactory =>
 
     override lazy val consensusAdapter: ConsensusAdapter = {
       val adapter = stub[ConsensusAdapter]
+      // Per-block path: mined/broadcast blocks via importBlock
       (adapter
         .evaluateBranchBlock(_: Block)(_: IORuntime, _: BlockchainConfig))
         .when(*, *, *)
@@ -121,6 +123,27 @@ trait RegularSyncFixtures { self: Matchers with AsyncMockFactory =>
           results
             .getOrElse(block.header.hash, IO.pure(BlockEnqueued))
             .flatTap(_ => importedBlocksSubject.publish1(block).void)
+        }
+      // Batch path: regular sync blocks via tryImportBlocks
+      (adapter
+        .evaluateBranch(_: NonEmptyList[Block])(_: IORuntime, _: BlockchainConfig))
+        .when(*, *, *)
+        .onCall { case (nel: NonEmptyList[Block], _, _) =>
+          def go(remaining: List[Block], acc: List[BlockData]): IO[BlockImportResult] =
+            remaining match {
+              case Nil => IO.pure(BlockImportedToTop(acc.reverse))
+              case block :: rest =>
+                importedBlocksSet.add(block)
+                results
+                  .getOrElse(block.header.hash, IO.pure(BlockImportedToTop(Nil)))
+                  .flatTap(_ => importedBlocksSubject.publish1(block).void)
+                  .flatMap {
+                    case BlockImportedToTop(data)       => go(rest, data.reverse ::: acc)
+                    case DuplicateBlock | BlockEnqueued => go(rest, acc)
+                    case other                          => IO.pure(other)
+                  }
+            }
+          go(nel.toList, Nil)
         }
       adapter
     }
@@ -164,13 +187,13 @@ trait RegularSyncFixtures { self: Matchers with AsyncMockFactory =>
 
     def peerByNumber(number: Int): Peer = handshakedPeers.keys.toList.sortBy(_.id.value).apply(number)
 
-    def blockHeadersChunkRequest(fromChunk: Int): PeersClient.Request[ETH66GetBlockHeaders] = {
+    def blockHeadersChunkRequest(fromChunk: Int): PeersClient.Request[ETHGetBlockHeaders] = {
       val block = testBlocksChunked(fromChunk).headNumberUnsafe
       blockHeadersRequest(block)
     }
 
-    def blockHeadersRequest(fromBlock: BigInt): PeersClient.Request[ETH66GetBlockHeaders] = PeersClient.Request.create(
-      ETH66GetBlockHeaders(
+    def blockHeadersRequest(fromBlock: BigInt): PeersClient.Request[ETHGetBlockHeaders] = PeersClient.Request.create(
+      ETHGetBlockHeaders(
         requestId = 0,
         Left(fromBlock),
         syncConfig.blockHeadersPerRequest,
@@ -234,8 +257,8 @@ trait RegularSyncFixtures { self: Matchers with AsyncMockFactory =>
         PartialFunction.empty
 
       def defaultHandlers(sender: ActorRef): PartialFunction[Any, Option[AutoPilot]] = {
-        // Handle ETH62 GetBlockHeaders (without requestId)
-        case PeersClient.Request(GetBlockHeaders(Left(minBlock), amount, _, _), _, _) =>
+        // Handle ETH68/69 GetBlockHeaders (with requestId)
+        case PeersClient.Request(ETHGetBlockHeaders(_, Left(minBlock), amount, _, _), _, _) =>
           val maxBlock = minBlock + amount
           val matchingHeaders = blocks
             .filter { b =>
@@ -244,31 +267,13 @@ trait RegularSyncFixtures { self: Matchers with AsyncMockFactory =>
             }
             .map(_.header)
             .sortBy(_.number)
-          sender ! PeersClient.Response(defaultPeer, BlockHeaders(matchingHeaders))
+          sender ! PeersClient.Response(defaultPeer, BlockHeaders(BigInt(0), matchingHeaders))
           None
-        // Handle ETH66 GetBlockHeaders (with requestId)
-        case PeersClient.Request(ETH66GetBlockHeaders(_, Left(minBlock), amount, _, _), _, _) =>
-          val maxBlock = minBlock + amount
-          val matchingHeaders = blocks
-            .filter { b =>
-              val nr = b.number
-              minBlock <= nr && nr < maxBlock
-            }
-            .map(_.header)
-            .sortBy(_.number)
-          sender ! PeersClient.Response(defaultPeer, BlockHeaders(matchingHeaders))
-          None
-        // Handle ETH62 GetBlockBodies (without requestId)
-        case PeersClient.Request(GetBlockBodies(hashes), _, _) =>
+        // Handle ETH68/69 GetBlockBodies (with requestId)
+        case PeersClient.Request(ETHGetBlockBodies(_, hashes), _, _) =>
           val matchingBodies = hashes.flatMap(hash => blocks.find(_.hash == hash)).map(_.body)
 
-          sender ! PeersClient.Response(defaultPeer, BlockBodies(matchingBodies))
-          None
-        // Handle ETH66 GetBlockBodies (with requestId)
-        case PeersClient.Request(ETH66GetBlockBodies(_, hashes), _, _) =>
-          val matchingBodies = hashes.flatMap(hash => blocks.find(_.hash == hash)).map(_.body)
-
-          sender ! PeersClient.Response(defaultPeer, BlockBodies(matchingBodies))
+          sender ! PeersClient.Response(defaultPeer, BlockBodies(BigInt(0), matchingBodies))
           None
         case PeersClient.Request(GetNodeData(hash :: Nil), _, _) =>
           sender ! PeersClient.Response(
@@ -352,20 +357,10 @@ trait RegularSyncFixtures { self: Matchers with AsyncMockFactory =>
     // GetNodeData, and GetReceipts are not used in RegularSync tests.
     private def messagesEqualIgnoringRequestId(x: Message, y: Message): Boolean = (x, y) match {
       // ETH66 to ETH66 comparison
-      case (h1: ETH66GetBlockHeaders, h2: ETH66GetBlockHeaders) =>
+      case (h1: ETHGetBlockHeaders, h2: ETHGetBlockHeaders) =>
         h1.block == h2.block && h1.maxHeaders == h2.maxHeaders && h1.skip == h2.skip && h1.reverse == h2.reverse
-      case (b1: ETH66GetBlockBodies, b2: ETH66GetBlockBodies) =>
+      case (b1: ETHGetBlockBodies, b2: ETHGetBlockBodies) =>
         b1.hashes == b2.hashes
-
-      // ETH65 to ETH66 comparison (and vice versa)
-      case (b1: GetBlockBodies, b2: ETH66GetBlockBodies) =>
-        b1.hashes.toSeq == b2.hashes.toSeq
-      case (b1: ETH66GetBlockBodies, b2: GetBlockBodies) =>
-        b1.hashes.toSeq == b2.hashes.toSeq
-      case (h1: GetBlockHeaders, h2: ETH66GetBlockHeaders) =>
-        h1.block == h2.block && h1.maxHeaders == h2.maxHeaders && h1.skip == h2.skip && h1.reverse == h2.reverse
-      case (h1: ETH66GetBlockHeaders, h2: GetBlockHeaders) =>
-        h1.block == h2.block && h1.maxHeaders == h2.maxHeaders && h1.skip == h2.skip && h1.reverse == h2.reverse
 
       case _ => x == y
     }
@@ -391,6 +386,20 @@ trait RegularSyncFixtures { self: Matchers with AsyncMockFactory =>
       }
 
       IO.pure(result)
+    }
+
+    def fakeEvaluateBatch(nel: NonEmptyList[Block]): IO[BlockImportResult] = {
+      def go(remaining: List[Block], acc: List[BlockData]): IO[BlockImportResult] =
+        remaining match {
+          case Nil => IO.pure(BlockImportedToTop(acc.reverse))
+          case block :: rest =>
+            fakeEvaluateBlock(block).flatMap {
+              case BlockImportedToTop(data)       => go(rest, data.reverse ::: acc)
+              case DuplicateBlock | BlockEnqueued => go(rest, acc)
+              case other                          => IO.pure(other)
+            }
+        }
+      go(nel.toList, Nil)
     }
 
     class FakeBranchResolution extends BranchResolution(stub[BlockchainReader]) {
@@ -448,6 +457,15 @@ trait RegularSyncFixtures { self: Matchers with AsyncMockFactory =>
         }
       }
 
+    (consensusAdapter
+      .evaluateBranch(_: NonEmptyList[Block])(_: IORuntime, _: BlockchainConfig))
+      .when(*, *, *)
+      .onCall { case (nel: NonEmptyList[Block], _, _) =>
+        if (nel.toList.contains(testBlocks.last)) importedLastTestBlock = true
+        val blockData = nel.toList.map(b => BlockData(b, Nil, ChainWeight.totalDifficultyOnly(b.header.difficulty)))
+        IO.pure(BlockImportedToTop(blockData))
+      }
+
     peersClient.setAutoPilot(new PeersClientAutoPilot(testBlocks))
 
     // Set up AutoPilot for ommersPool to respond to GetOmmers messages
@@ -482,7 +500,7 @@ trait RegularSyncFixtures { self: Matchers with AsyncMockFactory =>
 
     def sendNewBlock(block: Block = newBlock, peer: Peer = defaultPeer): Unit =
       blockFetcher ! MessageFromPeer(
-        BaseETH6XMessages.NewBlock(block, ChainWeight.totalDifficultyOnly(block.number).totalDifficulty),
+        ETHPackets.NewBlock(block, ChainWeight.totalDifficultyOnly(block.number).totalDifficulty),
         peer.id
       )
 

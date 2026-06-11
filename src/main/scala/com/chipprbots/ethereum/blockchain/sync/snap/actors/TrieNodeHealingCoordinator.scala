@@ -8,10 +8,14 @@ import org.bouncycastle.util.encoders.Hex
 import scala.collection.mutable
 import scala.concurrent.ExecutionContext
 import scala.concurrent.duration._
+import scala.jdk.CollectionConverters._
+
+import scala.concurrent.{Await, Future}
+import scala.concurrent.duration.Duration
 
 import com.chipprbots.ethereum.blockchain.sync.snap._
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController
-import com.chipprbots.ethereum.db.storage.MptStorage
+import com.chipprbots.ethereum.db.storage.{BfsQueueStorage, HealingFrontierStorage, InMemoryBfsQueueStorage, MptStorage}
 import com.chipprbots.ethereum.network.Peer
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor
 import com.chipprbots.ethereum.network.p2p.messages.SNAP.{GetTrieNodes, TrieNodes}
@@ -33,7 +37,11 @@ class TrieNodeHealingCoordinator(
     batchSize: Int,
     snapSyncController: ActorRef,
     concurrency: Int,
-    healingWriterEcOverride: Option[ExecutionContext] = None
+    visitedCap: Int = TrieNodeHealingCoordinator.DefaultVisitedCap,
+    healingFrontierStorage: Option[HealingFrontierStorage] = None,
+    healingWriterEcOverride: Option[ExecutionContext] = None,
+    traversalParallelism: Int = TrieNodeHealingCoordinator.DefaultDfsParallelism,
+    bfsQueueStorageOpt: Option[BfsQueueStorage] = None
 ) extends Actor
     with ActorLogging {
 
@@ -45,6 +53,7 @@ class TrieNodeHealingCoordinator(
   private case class HealingEntry(pathset: Seq[ByteString], hash: ByteString)
   private val pendingTasks: mutable.ArrayDeque[HealingEntry] = mutable.ArrayDeque.empty
   private var completedTaskCount: Int = 0
+  private var healingMilestonePct: Int = -1
 
   /** Dedicated dispatcher for the batched raw-node RocksDB flush. Tests inject their own EC; production looks up
     * `healing-writer-dispatcher` from the actor system. Keeps the blocking write off `sync-dispatcher` so other sync
@@ -73,6 +82,19 @@ class TrieNodeHealingCoordinator(
   private var consecutiveStagnations: Int = 0
   private val MaxConsecutiveStagnations: Int = 3
   private var trieWalkInProgress: Boolean = false
+  // Verification DFS state: gates StateHealingComplete and catches storage sub-trie gaps (Fix BUG-1/BUG-2).
+  // verificationPassComplete = true only after a DFS traversal finds zero missing nodes.
+  // verificationDFSRunning = true while ANY frontier walk Future (crash-recovery rebuild OR
+  // verification) is executing on healingWriterEc. Set inside startFrontierBFS so both walk kinds
+  // are covered — the crash-recovery rebuild previously set NO flag, so HEAL-PULSE reported
+  // walkRunning=false and the dead-pulse watchdog force-started a verification walk 6 minutes into
+  // a running rebuild (observed live 2026-06-11): two walks interleaving on the shared bfsQueue,
+  // both producing garbage coverage. @volatile: set from the walk's EC thread, read on the actor
+  // thread by the watchdog/completion/pivot gates.
+  private var verificationPassComplete: Boolean = false
+  @volatile private var verificationDFSRunning: Boolean = false
+  // Dead-loop watchdog (Fix BUG-2): consecutive HEAL-PULSE cycles with no walk/pending/active/healed.
+  private var consecutiveDeadPulses: Int = 0
   // Inline child discovery counter (Besu-aligned scheduler approach)
   private var childrenDiscoveredTotal: Long = 0
 
@@ -121,6 +143,58 @@ class TrieNodeHealingCoordinator(
   // Crash-recovery DFS: emit frontier in batches so healing starts before traversal completes.
   // go-ethereum trie.Sync.Missing() alignment — bounded working set rather than full upfront BFS.
   private val FrontierBatchSize = 1000
+
+  // Cap on the frontier-rebuild DFS `visited` set. The DFS walks the full state trie (accounts +
+  // every storage trie — tens of millions of nodes on ETC mainnet); an unbounded visited set grew
+  // to ~2.9 GB and OOM-looped the node. A fixed-capacity LRU (insertion-order eviction) bounds it
+  // to ~cap × 80 B ≈ 320 MB. Completeness is preserved: any missing node re-discovered after an
+  // eviction is de-duplicated by `pendingHashSet`, and an evicted present node is only re-walked
+  // if reached again via a shared reference. See docs/design/healing-frontier-scale.md.
+  // Operator-tunable via `sync.snap-sync.healing-visited-cap`; defaults to DefaultVisitedCap.
+  private val HealingVisitedCap: Int = visitedCap
+  private val HealingTraversalParallelism: Int = traversalParallelism
+  private val bfsQueue: BfsQueueStorage = bfsQueueStorageOpt.getOrElse(new InMemoryBfsQueueStorage())
+// --- Layer 2: persisted frontier (sync.snap-sync.healing-frontier-persistence) ---
+  // When `healingFrontierStorage` is defined, the outstanding frontier is mirrored to a dedicated RocksDB
+  // CF so a restart resumes (O(frontier)) instead of re-walking the full state. Invariant: the persisted
+  // set equals `pendingTasks ∪ in-flight` — write on every new enqueue (queueNodes / inline child discovery
+  // / pivot reseed), delete on heal-flush (NOT on dispatch), clear on force-complete / pivot-refresh.
+  // See docs/design/healing-frontier-scale.md. No-ops when persistence is disabled (the common default).
+
+  /** Persist newly-queued frontier entries (hash -> pathset). Idempotent: re-persisting an existing entry overwrites it
+    * identically, so re-queues and resume-loads are harmless.
+    */
+  private def persistFrontier(entries: Seq[HealingEntry]): Unit =
+    healingFrontierStorage.foreach { store =>
+      if (entries.nonEmpty) store.update(Nil, entries.map(e => e.hash -> e.pathset)).commit()
+    }
+
+  /** Delete healed nodes from the persisted frontier. Safe to call from the healing-writer thread (touches only the
+    * immutable storage handle + thread-safe RocksDB). Removing an absent key is a no-op.
+    */
+  private def unpersistFrontier(hashes: Seq[ByteString]): Unit =
+    healingFrontierStorage.foreach { store =>
+      if (hashes.nonEmpty) store.update(hashes, Nil).commit()
+    }
+
+  /** Clear the entire persisted frontier by deleting every outstanding hash. Because the persisted set equals
+    * `pendingTasks ∪ in-flight`, deleting those hashes empties the CF without a namespace-wipe primitive. MUST be
+    * called BEFORE the in-memory `pendingTasks`/`activeRequests` are cleared.
+    */
+  private def clearPersistedFrontier(): Unit =
+    healingFrontierStorage.foreach { store =>
+      val outstanding =
+        pendingTasks.iterator.map(_.hash).toSeq ++ activeRequests.values.iterator.flatMap(_.tasks.iterator.map(_.hash))
+      if (outstanding.nonEmpty) store.update(outstanding, Nil).commit()
+      // The snapshot is no longer valid/complete — drop the marker so a restart re-walks rather than resuming stale.
+      store.clearComplete()
+    }
+
+  /** Publish the live healing backlog/in-flight gauges for the Grafana healing-analytics section. */
+  private def emitHealingFrontierGauges(): Unit = {
+    SNAPSyncMetrics.setHealingFrontierPending(pendingTasks.size.toLong)
+    SNAPSyncMetrics.setHealingActiveRequests(activeRequests.size.toLong)
+  }
 
   // Track last known available peers for re-dispatch after failures
   private val knownAvailablePeers = mutable.Set[Peer]()
@@ -202,15 +276,29 @@ class TrieNodeHealingCoordinator(
   // Internal message for async flush completion
   private case class FlushComplete(count: Int)
 
-  // Internal message for async frontier rebuild completion (crash-recovery BFS)
+  // Internal message for async frontier rebuild completion (crash-recovery BFS or verification DFS)
   private case class FrontierRebuilt(entries: Seq[HealingEntry])
+  // Sent by startVerificationDFS when the DFS Future completes — gates verificationPassComplete.
+  private case object VerificationDFSComplete
+
+  // Layer 2: the full-state rebuild DFS finished — the persisted frontier is now a COMPLETE snapshot.
+  // Sent after the final FrontierRebuilt so the completeness marker is set only once every node is persisted.
+  private case object FrontierRebuildComplete
+
+  // A frontier walk Future died with an exception. Resets the walk flags WITHOUT setting any
+  // completion marker, so the watchdog / HealingCheckCompletion gates can start a fresh walk.
+  // Without this, an exception skips onComplete() and verificationDFSRunning stays true forever,
+  // permanently blocking every future walk (including the watchdog) until restart.
+  private case object FrontierWalkFailed
 
   /** Synchronous flush — used only for final completion flush (small buffer, safe to block). */
   private def flushRawNodesSync(): Unit =
     if (rawNodeBuffer.nonEmpty) {
-      mptStorage.storeRawNodes(rawNodeBuffer.toSeq)
+      val flushed = rawNodeBuffer.toSeq
+      mptStorage.storeRawNodes(flushed)
       mptStorage.persist()
-      val count = rawNodeBuffer.size
+      unpersistFrontier(flushed.map(_._1)) // Layer 2: healed nodes leave the persisted frontier
+      val count = flushed.size
       rawNodeBuffer.clear()
       log.info(s"Flushed $count healed nodes to disk (total: $totalNodesHealed)")
     }
@@ -230,6 +318,7 @@ class TrieNodeHealingCoordinator(
         blocking {
           mptStorage.storeRawNodes(nodes)
           mptStorage.persist()
+          unpersistFrontier(nodes.map(_._1)) // Layer 2: healed nodes leave the persisted frontier (post-durable-write)
           nodes.size
         }
       }(ec).foreach(n => selfRef ! FlushComplete(n))(ec)
@@ -238,7 +327,8 @@ class TrieNodeHealingCoordinator(
   override def preStart(): Unit = {
     log.info(s"TrieNodeHealingCoordinator starting (concurrency=$concurrency)")
     context.system.scheduler.scheduleWithFixedDelay(2.minutes, 2.minutes, self, HealingStagnationCheck)(
-      context.dispatcher
+      context.dispatcher,
+      ActorRef.noSender
     )
   }
 
@@ -263,19 +353,47 @@ class TrieNodeHealingCoordinator(
         )
         val selfRef = self
         val ec = healingWriterEc
+        val frontierStore = healingFrontierStorage
         import scala.concurrent.Future
+        import scala.util.control.NonFatal
         Future {
-          val frontier = mutable.Buffer.empty[HealingEntry]
-          val visited = mutable.Set.empty[ByteString]
-          rebuildFrontierDFS(
-            root,
-            Seq(emptyPath),
-            isStor = false,
-            frontier,
-            visited,
-            batch => selfRef ! FrontierRebuilt(batch)
-          )
-          if (frontier.nonEmpty) selfRef ! FrontierRebuilt(frontier.toSeq)
+          // Layer 2: if a persisted frontier exists, resume from it (O(frontier)) and skip the full-state walk.
+          // Empty / absent / unreadable ⇒ fail-safe fallback to the provably-complete DFS (logged loudly).
+          val resumed: Option[Seq[HealingEntry]] = frontierStore.flatMap { store =>
+            try {
+              val loaded = store.loadAll().map { case (h, ps) => HealingEntry(pathset = ps, hash = h) }
+              if (loaded.nonEmpty && store.isComplete) {
+                // COMPLETE snapshot (the prior rebuild DFS finished) — safe to skip the full-state walk.
+                log.info(
+                  s"[HEAL-RESTART] Resumed ${loaded.size} frontier entries from a complete persisted snapshot — skipping full-state DFS"
+                )
+                Some(loaded)
+              } else if (loaded.nonEmpty) {
+                // PARTIAL frontier: the prior rebuild DFS was interrupted before completion, so the un-walked
+                // region's missing nodes are not yet recorded. Skipping the DFS would silently leave gaps —
+                // re-run the full walk (it re-persists idempotently and sets the marker on completion).
+                log.warning(
+                  s"[HEAL-RESTART] Persisted frontier has ${loaded.size} entries but no completeness marker " +
+                    s"(prior rebuild interrupted) — re-running full-state DFS to avoid skipping un-walked nodes"
+                )
+                None
+              } else {
+                log.info("[HEAL-RESTART] Persisted frontier empty — falling back to full-state DFS")
+                None
+              }
+            } catch {
+              case NonFatal(e) =>
+                log.error(e, "[HEAL-RESTART] Failed to load persisted frontier — falling back to full-state DFS")
+                None
+            }
+          }
+          resumed match {
+            case Some(entries) =>
+              selfRef ! FrontierRebuilt(entries)
+            case None =>
+              // Mark the persisted frontier authoritative when the full walk is done (all workers complete).
+              startFrontierBFS(root, emptyPath, isStor = false, () => selfRef ! FrontierRebuildComplete)
+          }
         }(ec)
       } else {
         // ARCH-ROOT-SEED: Fresh start — seed root and let inline discovery populate the queue.
@@ -288,17 +406,32 @@ class TrieNodeHealingCoordinator(
       }
 
     case FrontierRebuilt(entries) =>
-      log.info(
-        s"[HEAL-RESTART] Frontier rebuild complete: ${entries.size} missing nodes identified " +
-          s"— resuming healing from crash-recovery frontier"
-      )
       if (entries.isEmpty)
         log.warning(
-          "[HEAL-RESTART] Frontier is empty after BFS — trie may already be fully healed or storage is corrupt"
+          "[HEAL-FRONTIER] Empty frontier batch received — trie may already be fully healed or storage is corrupt"
         )
+      else
+        log.info(s"[HEAL-FRONTIER] ${entries.size} missing nodes identified — queuing for healing")
       queueNodes(entries.map(e => (e.pathset, e.hash)))
       lastHealedAtMs = System.currentTimeMillis()
       tryRedispatchPendingTasks()
+
+    case FrontierRebuildComplete =>
+      // The full-state rebuild DFS walked the entire trie; every still-missing node is now persisted.
+      // Mark the snapshot complete so a future restart may resume it instead of re-walking (Layer 2).
+      verificationDFSRunning = false // rebuild walk finished — release the single-flight gate
+      healingFrontierStorage.foreach { store =>
+        store.markComplete()
+        log.info("[HEAL-RESTART] Full-state rebuild complete — persisted frontier marked as a complete snapshot")
+      }
+
+    case FrontierWalkFailed =>
+      verificationDFSRunning = false
+      trieWalkInProgress = false
+      log.warning(
+        "[HEAL-BFS] Frontier walk failed — flags reset; verification will be retried by " +
+          "HealingCheckCompletion or the dead-pulse watchdog (no completion marker was set)"
+      )
 
     case QueueMissingNodes(nodes) =>
       log.info(s"Queuing ${nodes.size} missing nodes for healing")
@@ -355,6 +488,7 @@ class TrieNodeHealingCoordinator(
           s"clearing ${pendingTasks.size} pending tasks + ${activeRequests.size} in-flight. " +
           s"Signaling completion with $totalNodesHealed healed nodes."
       )
+      clearPersistedFrontier() // Layer 2: healing abandoned — drop the persisted frontier so a restart won't resume it
       activeRequests.keys.foreach(requestTracker.completeRequest(_, 0))
       activeRequests.clear()
       pendingTasks.clear()
@@ -371,6 +505,7 @@ class TrieNodeHealingCoordinator(
       )
       stateRoot = newStateRoot
       flushRawNodesSync() // Flush any buffered nodes before clearing state
+      clearPersistedFrontier() // Layer 2: old-root frontier is stale after refresh — reseed (below) repopulates it
       pendingTasks.clear() // Will be re-populated by root reseed + inline discovery / trie walk from controller
       pendingHashSet.clear()
       statelessPeers.clear()
@@ -382,6 +517,8 @@ class TrieNodeHealingCoordinator(
       pivotRefreshRequested = false
       consecutiveIdleChecks = 0
       consecutiveStagnations = 0
+      consecutiveDeadPulses = 0
+      verificationPassComplete = false // new pivot root → must re-verify trie completeness
       lastPulseHealedCount = totalNodesHealed
       lastHealedAtMs = System.currentTimeMillis() // BUG-4: give fresh pivot a full stagnation window
       // ARCH-PIVOT-RESEED: Re-seed with new root for top-down discovery of trie delta.
@@ -389,14 +526,36 @@ class TrieNodeHealingCoordinator(
       // top-down traversal of the updated trie.
       val pivotReseedPath = ByteString(com.chipprbots.ethereum.mpt.HexPrefix.encode(Array.empty[Byte], isLeaf = false))
       if (!pendingHashSet.contains(newStateRoot) && !isNodeInStorage(newStateRoot)) {
-        pendingTasks += HealingEntry(Seq(pivotReseedPath), newStateRoot)
+        val reseedEntry = HealingEntry(Seq(pivotReseedPath), newStateRoot)
+        pendingTasks += reseedEntry
         pendingHashSet += newStateRoot
+        persistFrontier(Seq(reseedEntry)) // Layer 2: the new pivot root is a new frontier entry
         log.info(
           s"[HEAL] Re-seeded with new root ${Hex.toHexString(newStateRoot.take(4).toArray)} " +
             s"for inline discovery of pivot delta"
         )
       } else {
-        log.info(s"[HEAL] New root already in storage or pending — skipping pivot reseed")
+        // FIX-BUG2-PIVOT: Root already in local storage — run a verification DFS to discover
+        // any missing children instead of dead-looping with zero pending tasks.
+        // Without this, walkRunning stays false and pending stays 0 → 316-pulse dead loop (RUN10).
+        // discoverMissingChildren skips locally-held storage roots without recursing into their
+        // children, so the new pivot root may be local yet have gaps in storage sub-tries.
+        if (trieWalkInProgress || verificationDFSRunning) {
+          // A walk is already running on the SHARED bfsQueue — rebuildFrontierBFS clears the queue
+          // on entry, so starting a second walk here would corrupt the running one. The pivot's
+          // verificationPassComplete=false (set above) guarantees HealingCheckCompletion starts a
+          // fresh verification once the current walk's flags clear.
+          log.info(
+            s"[HEAL] New root ${Hex.toHexString(newStateRoot.take(4).toArray)} already in storage, " +
+              s"but a frontier walk is running — verification deferred until it completes"
+          )
+        } else {
+          log.info(
+            s"[HEAL] New root ${Hex.toHexString(newStateRoot.take(4).toArray)} already in storage " +
+              s"— starting verification DFS to find missing children"
+          )
+          startVerificationDFS(newStateRoot, pivotReseedPath)
+        }
       }
 
     case TrieNodesResponseMsg(response) =>
@@ -422,23 +581,98 @@ class TrieNodeHealingCoordinator(
       }
 
     case HealingCheckCompletion =>
-      if (isComplete && !flushing && !trieWalkInProgress) {
-        flushRawNodesSync()
-        log.info(s"Healing round complete: $totalNodesHealed total nodes healed. Notifying controller.")
-        snapSyncController ! SNAPSyncController.StateHealingComplete
+      if (isComplete && !flushing && !trieWalkInProgress && !verificationDFSRunning) {
+        // FIX-BUG1-VERIFY: gate: skip verification when no inline healing was done.
+        // If totalNodesHealed == 0 the coordinator was never given nodes to heal (idle case) OR
+        // all nodes were already in local storage — either way the trie is complete from our
+        // perspective. The BUG 2 pivot-reseed path (root held locally) is handled separately by
+        // HealingPivotRefreshed calling startVerificationDFS directly, not through this gate.
+        if (verificationPassComplete || totalNodesHealed == 0) {
+          flushRawNodesSync()
+          log.info(s"Healing round complete: $totalNodesHealed total nodes healed. Notifying controller.")
+          snapSyncController ! SNAPSyncController.StateHealingComplete
+        } else {
+          // Inline tasks done with actual healing work — run a full DFS to catch storage sub-trie
+          // gaps that discoverMissingChildren silently skips when the storage root is in storage.
+          // Analogous to go-ethereum's trie.Sync.Missing() depth-first traversal.
+          val emptyPath = ByteString(com.chipprbots.ethereum.mpt.HexPrefix.encode(Array.empty[Byte], isLeaf = false))
+          log.info(
+            s"[HEAL-VERIFY] All inline tasks done ($totalNodesHealed healed). " +
+              s"Starting verification DFS on locally-held trie to catch storage sub-trie gaps..."
+          )
+          startVerificationDFS(stateRoot, emptyPath)
+        }
+      }
+
+    case VerificationDFSComplete =>
+      verificationDFSRunning = false
+      if (isComplete) {
+        // DFS traversed all locally-held nodes and found zero missing descendants — trie is complete.
+        verificationPassComplete = true
+        log.info(
+          s"[HEAL-VERIFY] Verification DFS complete — no missing nodes found. " +
+            s"Trie is fully healed ($totalNodesHealed nodes). Declaring completion."
+        )
+        self ! HealingCheckCompletion
+      } else {
+        // DFS found missing nodes queued via FrontierRebuilt — healing needs to continue.
+        log.info(
+          s"[HEAL-VERIFY] Verification DFS found additional missing nodes " +
+            s"(pending=${pendingTasks.size} active=${activeRequests.size}) — resuming healing."
+        )
+        tryRedispatchPendingTasks()
       }
 
     case WalkStateChanged(inProgress) =>
       trieWalkInProgress = inProgress
 
     case HealingStagnationCheck =>
+      emitHealingFrontierGauges() // refresh backlog/in-flight gauges even when idle
       val recentHealed = totalNodesHealed - lastPulseHealedCount
+      val healTotal = completedTaskCount.toLong + pendingTasks.size.toLong + activeRequests.size.toLong
+      val healPct = if (healTotal > 0) ((completedTaskCount.toDouble / healTotal) * 100).toInt else 0
       log.info(
-        s"[HEAL-PULSE] healed=$totalNodesHealed (+$recentHealed last 2min) | " +
+        s"[HEAL-PULSE] $healPct% (est) | healed=$totalNodesHealed (+$recentHealed last 2min) | " +
           s"pending=${pendingTasks.size} active=${activeRequests.size} peers=${knownAvailablePeers.size} | " +
-          s"walkRunning=$trieWalkInProgress pivotRefreshPending=$pivotRefreshRequested"
+          s"rate=${healRate.toInt} nodes/s walkRunning=$trieWalkInProgress pivotRefreshPending=$pivotRefreshRequested"
       )
+      val (newM, crossed) =
+        com.chipprbots.ethereum.blockchain.sync.ProgressMilestones
+          .crossed(completedTaskCount.toLong, healTotal, healingMilestonePct)
+      healingMilestonePct = newM
+      crossed.foreach { m =>
+        log.info(
+          s"[HEAL-MILESTONE] $m% (est) — ${completedTaskCount} healed | ${healRate.toInt} nodes/s"
+        )
+      }
       lastPulseHealedCount = totalNodesHealed
+
+      // FIX-BUG2-WATCHDOG: Dead-loop safety net — fires when the coordinator has no walk, no
+      // verification DFS, no pending tasks, no active requests, and zero healing progress.
+      // Primary fix is startVerificationDFS in HealingCheckCompletion and HealingPivotRefreshed;
+      // this watchdog catches any residual edge case (e.g. stale state after pivot race).
+      if (
+        !trieWalkInProgress && !verificationDFSRunning &&
+        pendingTasks.isEmpty && activeRequests.isEmpty &&
+        recentHealed == 0 && !pivotRefreshRequested && !verificationPassComplete
+      ) {
+        consecutiveDeadPulses += 1
+        log.warning(
+          s"[HEAL-WATCHDOG] Dead pulse $consecutiveDeadPulses/3: " +
+            s"walkRunning=false verifyRunning=false pending=0 active=0 healed=0 in last 2min"
+        )
+        if (consecutiveDeadPulses >= 3) {
+          log.warning("[HEAL-WATCHDOG] 3 consecutive dead pulses — force-starting verification DFS")
+          consecutiveDeadPulses = 0
+          val emptyPath = ByteString(com.chipprbots.ethereum.mpt.HexPrefix.encode(Array.empty[Byte], isLeaf = false))
+          startVerificationDFS(stateRoot, emptyPath)
+        }
+      } else if (
+        recentHealed > 0 || pendingTasks.nonEmpty || activeRequests.nonEmpty ||
+        trieWalkInProgress || verificationDFSRunning
+      ) {
+        consecutiveDeadPulses = 0
+      }
 
       // BUG-S4 watchdog: if pivotRefreshRequested=true for >15 min, SNAPSyncController is stuck
       // in refreshPivotInPlace's no-peer retry loop (Path A: 30s interval, HealingPivotRefreshed
@@ -540,8 +774,10 @@ class TrieNodeHealingCoordinator(
     }
     val deduped = pathsAndHashes.size - entries.size
     pendingTasks ++= entries
+    persistFrontier(entries) // Layer 2: mirror new frontier entries to the persisted CF
     val dedupStr = if (deduped > 0) s" ($deduped duplicates filtered)" else ""
     log.info(s"Queued ${entries.size} nodes for healing$dedupStr. Total pending: ${pendingTasks.size}")
+    emitHealingFrontierGauges()
   }
 
   /** Update healing rate EMA and adjust throttle (geth p2p/msgrate alignment).
@@ -587,6 +823,7 @@ class TrieNodeHealingCoordinator(
       }
       lastThrottleAdjustMs = now
     }
+    emitHealingFrontierGauges()
   }
 
   /** Calculate effective batch size after applying throttle divisor. Returns at least 1 node per request.
@@ -760,11 +997,10 @@ class TrieNodeHealingCoordinator(
 
     if (healedCount > 0) {
       snapSyncController ! SNAPSyncController.ProgressNodesHealed(healedCount.toLong)
-
-      // Periodic async flush of raw node buffer
-      if (rawNodeBuffer.size >= rawFlushThreshold) {
-        flushRawNodesAsync()
-      }
+      // Flush immediately after every response rather than waiting for the 1000-node threshold.
+      // Sparse healing runs (small gap counts) would otherwise stall writes in the buffer
+      // indefinitely if they never hit the count gate.
+      flushRawNodesAsync()
     }
 
     // Dispatch more work to this peer if available (pipeline multiple requests)
@@ -850,138 +1086,254 @@ class TrieNodeHealingCoordinator(
   private def isComplete: Boolean =
     pendingTasks.isEmpty && activeRequests.isEmpty
 
-  /** Rebuild the healing frontier from locally-stored trie nodes after a crash/restart.
+  /** Rebuild the healing frontier from locally-stored trie nodes using level-order BFS.
     *
-    * Iterative DFS (depth-first via ArrayDeque stack). Mirrors go-ethereum trie.Sync's depth-prioritized queue:
-    * drilling deep finds frontier nodes immediately, keeping the working stack O(depth × branching_factor) ≈ O(1024)
-    * rather than the O(frontier_width) growth that a BFS queue exhibits on ETC mainnet. Runs on healingWriterEc.
+    * Issues one `multiGetNodes` per chunk (BfsChunkSize = 50K) instead of one get per node. Level queue is persisted to
+    * the `BfsQueueNamespace` CF so memory is O(chunk_size) ≈ 4 MB, eliminating the OOM that the previous ArrayBuffer
+    * caused at L7 (~73M entries × 175 B/tuple).
     *
-    * For each node hash:
-    *   - in local storage → already healed; push children onto the DFS stack
-    *   - not in storage → missing; buffer and emit via onBatch every FrontierBatchSize entries
-    *
-    * onBatch is called inline whenever the buffer reaches FrontierBatchSize. The caller is responsible for emitting any
-    * remaining buffered entries after this method returns.
+    * For large levels (> BfsChunkSize) the level is split into N sub-ranges processed in parallel on `healingWriterEc`
+    * (N = min(HealingTraversalParallelism, available processors - 2)). Each sub-range enqueues its children directly
+    * into the shared CF queue (AtomicLong counter assigns unique keys). Runs entirely on healingWriterEc.
     */
-  private def rebuildFrontierDFS(
+  private def rebuildFrontierBFS(
       startHash: ByteString,
       startPathset: Seq[ByteString],
       isStor: Boolean,
-      frontier: mutable.Buffer[HealingEntry],
-      visited: mutable.Set[ByteString],
-      onBatch: Seq[HealingEntry] => Unit
+      selfRef: ActorRef,
+      queue: BfsQueueStorage,
+      effectiveParallelism: Int
   ): Unit = {
     import com.chipprbots.ethereum.mpt.{BranchNode, ExtensionNode, HashNode, LeafNode}
     import com.chipprbots.ethereum.mpt.HexPrefix
     import com.chipprbots.ethereum.domain.Account
     import scala.util.control.NonFatal
 
-    // DFS stack — bounded to O(depth × branching_factor) ≈ 1024 entries vs BFS O(frontier_width).
-    val stack = mutable.ArrayDeque[(ByteString, Seq[ByteString], Boolean)]()
-    stack.append((startHash, startPathset, isStor))
-    var visitedCount = 0
-    var frontierCount = 0
+    // LRU-bounded visited set (companion boundedVisitedSet): at the cap the ELDEST entry is
+    // evicted instead of refusing new entries. Refusing (the previous ConcurrentHashMap gate)
+    // silently TRUNCATED the traversal on tries larger than the cap — children past the cap were
+    // never enqueued, the queue drained early, and the walk reported "Complete" (and set the
+    // Layer-2 completeness marker) having covered only `cap` of the trie. Eviction trades that
+    // correctness hole for bounded re-walks of shared subtries (de-duplicated downstream by
+    // pendingHashSet). Access is synchronized: worker threads only touch it via markIfNew, and
+    // per-check lock cost is negligible against the 50K-node multiGet I/O per chunk.
+    val visitedLru = TrieNodeHealingCoordinator.boundedVisitedSet(HealingVisitedCap)
+    def markIfNew(h: ByteString): Boolean = visitedLru.synchronized {
+      if (visitedLru.contains(h)) false
+      else {
+        visitedLru += h
+        true
+      }
+    }
+    markIfNew(startHash)
 
-    while (stack.nonEmpty) {
-      val (hash, pathset, isStorageTrie) = stack.removeLast()
-      if (!visited.contains(hash)) {
-        visited += hash
-        visitedCount += 1
-        if (visitedCount % 10000 == 0)
-          log.info(
-            s"[HEAL-RESTART-DFS] Progress: $visitedCount nodes visited, $frontierCount frontier nodes found, " +
-              s"stack depth ${stack.size}"
-          )
+    val visitedCount = new java.util.concurrent.atomic.AtomicLong(0L)
+    val frontierCount = new java.util.concurrent.atomic.AtomicLong(0L)
 
-        val nodeOpt =
-          try Some(mptStorage.get(hash.toArray))
-          catch { case _: Exception => None }
-        nodeOpt match {
-          case None =>
-            // Not in storage — missing node, buffer for healing
-            frontier += HealingEntry(pathset, hash)
-            frontierCount += 1
-            if (frontier.size >= FrontierBatchSize) {
-              onBatch(frontier.toSeq)
-              frontier.clear()
-            }
+    // Process a sub-range [subFrom, subTo) of the current level; returns frontier entries.
+    def processSubRange(subFrom: Long, subTo: Long, levelIndex: Int): Seq[HealingEntry] = {
+      val subFrontier = mutable.Buffer.empty[HealingEntry]
 
-          case Some(node) =>
-            // Already healed — push children onto the DFS stack
-            val compact = pathset.last.toArray
-            val nibbles = HexPrefix.decode(compact)._1
-            try
-              node match {
-                case branch: BranchNode =>
-                  for (i <- 0 until 16)
-                    branch.children(i) match {
+      queue.iterateRange(subFrom, subTo).foreach { chunk =>
+        val results = mptStorage.multiGetNodes(chunk.map(_.hash))
+        val nextBuf = mutable.ArrayBuffer[(Array[Byte], Seq[Array[Byte]], Boolean)]()
+
+        chunk.zip(results).foreach { case (entry, nodeOpt) =>
+          val v = visitedCount.incrementAndGet()
+          if (v % 100_000 == 0) {
+            log.info(
+              s"[HEAL-BFS] Level $levelIndex: $v nodes visited, ${frontierCount.get()} frontier found, " +
+                s"${queue.counter - subTo} L${levelIndex + 1} queued"
+            )
+            SNAPSyncMetrics.setHealingRebuildVisited(v)
+          }
+
+          val pathset = entry.pathset.map(ByteString(_))
+          val nibbles = HexPrefix.decode(pathset.last.toArray)._1
+
+          nodeOpt match {
+            case None =>
+              subFrontier += HealingEntry(pathset, ByteString(entry.hash))
+              frontierCount.incrementAndGet()
+
+            case Some(node) =>
+              try
+                node match {
+                  case branch: BranchNode =>
+                    for (i <- 0 until 16) branch.children(i) match {
                       case hashChild: HashNode =>
                         val childHash = ByteString(hashChild.hashNode)
-                        if (!visited.contains(childHash)) {
+                        if (markIfNew(childHash)) {
                           val childNibbles = nibbles :+ i.toByte
                           val childCompact = ByteString(HexPrefix.encode(childNibbles, isLeaf = false))
                           val childPathset =
-                            if (isStorageTrie) Seq(pathset.head, childCompact) else Seq(childCompact)
-                          stack.append((childHash, childPathset, isStorageTrie))
+                            if (entry.isStorage) Seq(pathset.head.toArray, childCompact.toArray)
+                            else Seq(childCompact.toArray)
+                          nextBuf += ((hashChild.hashNode, childPathset, entry.isStorage))
                         }
-                      case _ => // inline-encoded child — already resolved
+                      case _ =>
                     }
 
-                case ext: ExtensionNode =>
-                  ext.next match {
-                    case hashChild: HashNode =>
-                      val childHash = ByteString(hashChild.hashNode)
-                      if (!visited.contains(childHash)) {
-                        val childNibbles = nibbles ++ ext.sharedKey.toArray
-                        val childCompact = ByteString(HexPrefix.encode(childNibbles, isLeaf = false))
-                        val childPathset =
-                          if (isStorageTrie) Seq(pathset.head, childCompact) else Seq(childCompact)
-                        stack.append((childHash, childPathset, isStorageTrie))
-                      }
-                    case _ =>
-                  }
+                  case ext: ExtensionNode =>
+                    ext.next match {
+                      case hashChild: HashNode =>
+                        val childHash = ByteString(hashChild.hashNode)
+                        if (markIfNew(childHash)) {
+                          val childNibbles = nibbles ++ ext.sharedKey.toArray
+                          val childCompact = ByteString(HexPrefix.encode(childNibbles, isLeaf = false))
+                          val childPathset =
+                            if (entry.isStorage) Seq(pathset.head.toArray, childCompact.toArray)
+                            else Seq(childCompact.toArray)
+                          nextBuf += ((hashChild.hashNode, childPathset, entry.isStorage))
+                        }
+                      case _ =>
+                    }
 
-                case leaf: LeafNode if !isStorageTrie =>
-                  // Account trie leaf — seed storage trie root if not yet healed
-                  Account(leaf.value).foreach { account =>
-                    if (
-                      account.storageRoot != Account.EmptyStorageRootHash &&
-                      !visited.contains(account.storageRoot)
-                    ) {
-                      val leafNibbles = leaf.key.toArray
-                      val allNibbles = nibbles ++ leafNibbles
-                      if (allNibbles.length == 64) {
-                        val accountHashBytes =
-                          allNibbles.grouped(2).map(g => ((g(0) << 4) | g(1)).toByte).toArray
-                        val accountHash = ByteString(accountHashBytes)
-                        val emptyStoragePath =
-                          ByteString(HexPrefix.encode(Array.empty[Byte], isLeaf = false))
-                        stack.append((account.storageRoot, Seq(accountHash, emptyStoragePath), true))
+                  case leaf: LeafNode if !entry.isStorage =>
+                    Account(leaf.value).foreach { account =>
+                      if (
+                        account.storageRoot != Account.EmptyStorageRootHash &&
+                        markIfNew(account.storageRoot)
+                      ) {
+                        val allNibbles = nibbles ++ leaf.key.toArray
+                        if (allNibbles.length == 64) {
+                          val accountHashBytes =
+                            allNibbles.grouped(2).map(g => ((g(0) << 4) | g(1)).toByte).toArray
+                          val accountHash = ByteString(accountHashBytes)
+                          val emptyStoragePath = ByteString(HexPrefix.encode(Array.empty[Byte], isLeaf = false))
+                          nextBuf += (
+                            (
+                              account.storageRoot.toArray,
+                              Seq(accountHash.toArray, emptyStoragePath.toArray),
+                              true
+                            )
+                          )
+                        }
                       }
                     }
-                  }
 
-                case _ => // storage trie leaf, NullNode, HashNode inline — no children to traverse
+                  case _ => // storage trie leaf, NullNode, inline HashNode
+                }
+              catch {
+                case NonFatal(e) =>
+                  log.debug(
+                    s"[HEAL-BFS] Cannot traverse ${Hex.toHexString(entry.hash.take(4))}: ${e.getMessage} — skipping"
+                  )
               }
-            catch {
-              case NonFatal(e) =>
-                log.debug(
-                  s"[HEAL-RESTART-DFS] Cannot traverse stored node ${Hex.toHexString(hash.take(4).toArray)}: " +
-                    s"${e.getMessage} — skipping"
-                )
-            }
+          }
         }
+        if (nextBuf.nonEmpty) queue.enqueueBatch(nextBuf.toSeq)
       }
+      subFrontier.toSeq
     }
 
+    queue.clear()
+    queue.enqueueBatch(Seq((startHash.toArray, startPathset.map(_.toArray), isStor)))
+    var levelStart = 0L
+    var levelEnd = queue.counter // = 1L after root enqueued
+    var levelIndex = 0
+
+    while (levelStart < levelEnd) {
+      val levelSize = levelEnd - levelStart
+
+      val allFrontier: Seq[HealingEntry] =
+        if (effectiveParallelism <= 1 || levelSize <= TrieNodeHealingCoordinator.BfsChunkSize.toLong) {
+          processSubRange(levelStart, levelEnd, levelIndex)
+        } else {
+          val rangeSize = math.ceil(levelSize.toDouble / effectiveParallelism).toLong
+          val subRanges = (0 until effectiveParallelism)
+            .map { i =>
+              val from = levelStart + i * rangeSize
+              val to = math.min(levelEnd, from + rangeSize)
+              (from, to)
+            }
+            .filter { case (from, to) => from < to }
+
+          val futures = subRanges.map { case (from, to) =>
+            Future(processSubRange(from, to, levelIndex))(healingWriterEc)
+          }
+          futures.flatMap(f => Await.result(f, Duration.Inf))
+        }
+
+      allFrontier.grouped(FrontierBatchSize).foreach(batch => selfRef ! FrontierRebuilt(batch))
+
+      val fc = frontierCount.get()
+      val queued = queue.counter - levelEnd
+      log.info(
+        s"[HEAL-BFS] Level $levelIndex complete: $levelSize processed, $fc frontier total, $queued queued for L${levelIndex + 1}"
+      )
+      SNAPSyncMetrics.setHealingRebuildVisited(visitedCount.get())
+
+      levelStart = levelEnd
+      levelEnd = queue.counter
+      levelIndex += 1
+    }
+
+    queue.clear()
+
     log.info(
-      s"[HEAL-RESTART-DFS] Complete: $visitedCount nodes traversed, $frontierCount missing nodes identified"
+      s"[HEAL-BFS] Complete: ${visitedCount.get()} nodes across $levelIndex levels, ${frontierCount.get()} missing nodes identified"
     )
+  }
+
+  /** Launch a frontier rebuild or verification BFS on the healing writer executor.
+    *
+    * Replaces startParallelFrontierDFS. A single Future on healingWriterEc is sufficient — BFS naturally maximises I/O
+    * batching per level without needing keyspace splitting.
+    */
+  private def startFrontierBFS(
+      root: ByteString,
+      rootPath: ByteString,
+      isStor: Boolean,
+      onComplete: () => Unit
+  ): Unit = {
+    val selfRef = self
+    val effectiveParallelism = math.min(
+      HealingTraversalParallelism,
+      math.max(1, Runtime.getRuntime.availableProcessors() - 2)
+    )
+    // Guard BOTH walk kinds (rebuild + verification): the watchdog, HealingCheckCompletion and the
+    // pivot-refresh path gate on this flag, and the bfsQueue is shared (cleared on walk entry), so
+    // a second concurrent walk corrupts the first. Cleared by FrontierRebuildComplete /
+    // VerificationDFSComplete / FrontierWalkFailed.
+    verificationDFSRunning = true
+    Future {
+      try {
+        rebuildFrontierBFS(root, Seq(rootPath), isStor, selfRef, bfsQueue, effectiveParallelism)
+        onComplete()
+      } catch {
+        case scala.util.control.NonFatal(e) =>
+          // Never call onComplete() on failure — for the crash-recovery rebuild that would set the
+          // Layer-2 completeness marker on a walk that did NOT cover the full state. Reset flags
+          // through the actor instead so a fresh walk can be started.
+          log.error(e, "[HEAL-BFS] Frontier walk FAILED before completion — sending FrontierWalkFailed")
+          selfRef ! FrontierWalkFailed
+      }
+    }(healingWriterEc)
+  }
+
+  /** Start a verification BFS (see [[startFrontierBFS]]).
+    *
+    * Traverses all locally-held trie nodes starting at `root` / `rootPath` and queues any missing descendants as
+    * `FrontierRebuilt` messages. Sends `VerificationDFSComplete` when done.
+    *
+    * Needed because `discoverMissingChildren` skips storage roots that are already in local storage without recursing
+    * into their children — a storage sub-trie with a locally-held root can still have gaps deeper in the tree (RUN10:
+    * account 888157b2 had 11 missing storage nodes after StateHeal declared completion). BFS catches every missing
+    * descendant in O(levels × chunk_reads) instead of O(total_nodes) point-reads.
+    */
+  private def startVerificationDFS(root: ByteString, rootPath: ByteString): Unit = {
+    verificationDFSRunning = true
+    val selfRef = self
+    startFrontierBFS(root, rootPath, isStor = false, () => selfRef ! VerificationDFSComplete)
   }
 
   /** Inline child discovery after each healed node — Besu/geth scheduler-driven alignment. Decodes the healed node,
     * discovers child hashes, checks storage, queues missing children. Makes healing self-feeding: root → children →
     * grandchildren top-down without trie walk.
+    *
+    * B3 FIX: branch children are checked with a single multiGetNodes call instead of up to 16 serial isNodeInStorage
+    * calls on the actor thread. Extension child uses the same pattern for consistency.
     */
   private def discoverMissingChildren(nodeData: ByteString, pathset: Seq[ByteString]): Unit = {
     import com.chipprbots.ethereum.mpt.{MptTraversals, BranchNode, ExtensionNode, HashNode, LeafNode}
@@ -1001,28 +1353,37 @@ class TrieNodeHealingCoordinator(
 
       decoded match {
         case branch: BranchNode =>
-          for (i <- 0 until 16)
-            branch.children(i) match {
-              case hash: HashNode =>
-                val childHash = ByteString(hash.hashNode)
-                if (!pendingHashSet.contains(childHash) && !isNodeInStorage(childHash)) {
-                  val childNibbles = parentNibbles :+ i.toByte
-                  val childCompact = ByteString(HexPrefix.encode(childNibbles, isLeaf = false))
-                  val childPathset = if (isStorageTrie) Seq(pathset.head, childCompact) else Seq(childCompact)
-                  newEntries += HealingEntry(childPathset, childHash)
-                }
-              case _ => // Inline-encoded or null — already resolved
+          // Collect all non-pending HashNode children, then check storage in one multiGetNodes call.
+          val toCheck = (0 until 16)
+            .collect {
+              case i if branch.children(i).isInstanceOf[HashNode] =>
+                (i, ByteString(branch.children(i).asInstanceOf[HashNode].hashNode))
             }
+            .filterNot { case (_, h) => pendingHashSet.contains(h) }
+          if (toCheck.nonEmpty) {
+            val storageResults = mptStorage.multiGetNodes(toCheck.map(_._2.toArray))
+            toCheck.zip(storageResults).foreach { case ((i, childHash), nodeOpt) =>
+              if (nodeOpt.isEmpty) {
+                val childNibbles = parentNibbles :+ i.toByte
+                val childCompact = ByteString(HexPrefix.encode(childNibbles, isLeaf = false))
+                val childPathset = if (isStorageTrie) Seq(pathset.head, childCompact) else Seq(childCompact)
+                newEntries += HealingEntry(childPathset, childHash)
+              }
+            }
+          }
 
         case ext: ExtensionNode =>
           ext.next match {
             case hash: HashNode =>
               val childHash = ByteString(hash.hashNode)
-              if (!pendingHashSet.contains(childHash) && !isNodeInStorage(childHash)) {
-                val childNibbles = parentNibbles ++ ext.sharedKey.toArray
-                val childCompact = ByteString(HexPrefix.encode(childNibbles, isLeaf = false))
-                val childPathset = if (isStorageTrie) Seq(pathset.head, childCompact) else Seq(childCompact)
-                newEntries += HealingEntry(childPathset, childHash)
+              if (!pendingHashSet.contains(childHash)) {
+                val storageResults = mptStorage.multiGetNodes(Seq(childHash.toArray))
+                if (storageResults.headOption.flatten.isEmpty) {
+                  val childNibbles = parentNibbles ++ ext.sharedKey.toArray
+                  val childCompact = ByteString(HexPrefix.encode(childNibbles, isLeaf = false))
+                  val childPathset = if (isStorageTrie) Seq(pathset.head, childCompact) else Seq(childCompact)
+                  newEntries += HealingEntry(childPathset, childHash)
+                }
               }
             case _ => // Already inline-encoded — no missing child
           }
@@ -1062,6 +1423,7 @@ class TrieNodeHealingCoordinator(
       if (newEntries.nonEmpty) {
         newEntries.foreach(e => pendingHashSet += e.hash)
         pendingTasks ++= newEntries
+        persistFrontier(newEntries.toSeq) // Layer 2: inline-discovered children are new frontier entries
         childrenDiscoveredTotal += newEntries.size
         if (childrenDiscoveredTotal % 100 == 0 || childrenDiscoveredTotal <= 20)
           log.info(
@@ -1084,6 +1446,36 @@ class TrieNodeHealingCoordinator(
 }
 
 object TrieNodeHealingCoordinator {
+
+  /** Default cap on the frontier-rebuild DFS `visited` LRU: 4M entries ≈ 320 MB. Used when
+    * `sync.snap-sync.healing-visited-cap` is unset. See docs/design/healing-frontier-scale.md.
+    */
+  val DefaultVisitedCap: Int = 4_000_000
+
+  /** Operator-configurable ceiling for BFS level parallelism. Effective parallelism is `min(DefaultDfsParallelism,
+    * max(1, availableProcessors - 2))` so large levels are split across sub-ranges on `healingWriterEc`. See
+    * `healing-traversal-parallelism` in `sync.conf`.
+    */
+  val DefaultDfsParallelism: Int = 4
+
+  /** Maximum number of node hashes per `multiGetNodes` call inside `rebuildFrontierBFS`. Keeps each Java list under
+    * ~1.6 MB (50K × 32B) and prevents a single enormous call when a trie level spans hundreds of thousands of nodes.
+    */
+  val BfsChunkSize: Int = 50_000
+
+  /** Heap-bounded `visited` set for the frontier-rebuild DFS: a `LinkedHashMap`-backed LRU that evicts the
+    * earliest-inserted (already-completed) subtries once it exceeds `cap` (insertion-order eviction). Exposed on the
+    * companion so the eviction contract (size never exceeds `cap`; eldest dropped first) is unit-testable without
+    * instantiating the actor.
+    */
+  def boundedVisitedSet(cap: Int): mutable.Set[ByteString] = {
+    val lru = new java.util.LinkedHashMap[ByteString, java.lang.Boolean](1024, 0.75f, false) {
+      override def removeEldestEntry(eldest: java.util.Map.Entry[ByteString, java.lang.Boolean]): Boolean =
+        size() > cap
+    }
+    java.util.Collections.newSetFromMap[ByteString](lru).asScala
+  }
+
   def props(
       stateRoot: ByteString,
       networkPeerManager: ActorRef,
@@ -1092,7 +1484,11 @@ object TrieNodeHealingCoordinator {
       batchSize: Int,
       snapSyncController: ActorRef,
       concurrency: Int = 16,
-      healingWriterEcOverride: Option[ExecutionContext] = None
+      visitedCap: Int = DefaultVisitedCap,
+      healingFrontierStorage: Option[HealingFrontierStorage] = None,
+      healingWriterEcOverride: Option[ExecutionContext] = None,
+      traversalParallelism: Int = DefaultDfsParallelism,
+      bfsQueueStorageOpt: Option[BfsQueueStorage] = None
   ): Props =
     Props(
       new TrieNodeHealingCoordinator(
@@ -1103,7 +1499,11 @@ object TrieNodeHealingCoordinator {
         batchSize,
         snapSyncController,
         concurrency,
-        healingWriterEcOverride
+        visitedCap,
+        healingFrontierStorage,
+        healingWriterEcOverride,
+        traversalParallelism,
+        bfsQueueStorageOpt
       )
     )
 }

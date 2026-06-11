@@ -5,535 +5,560 @@ import org.apache.pekko.util.ByteString
 import com.chipprbots.ethereum.domain.Account
 import com.chipprbots.ethereum.mpt.MptNode
 import com.chipprbots.ethereum.mpt.MptTraversals
+import com.chipprbots.ethereum.mpt.ProofTrieInserter
+import com.chipprbots.ethereum.mpt.Node
 import com.chipprbots.ethereum.mpt.LeafNode
 import com.chipprbots.ethereum.mpt.ExtensionNode
 import com.chipprbots.ethereum.mpt.BranchNode
 import com.chipprbots.ethereum.mpt.HashNode
+import com.chipprbots.ethereum.mpt.NullNode
 import com.chipprbots.ethereum.utils.Logger
 import scala.annotation.unused
 
-/** Merkle proof verifier for SNAP sync
+/** Merkle proof verifier for SNAP sync.
   *
-  * Verifies Merkle Patricia Trie proofs for account ranges and storage ranges received during SNAP sync. Follows
-  * core-geth implementation patterns from eth/protocols/snap/sync.go
-  *
-  * The verification process:
-  *   1. Decode proof nodes from their RLP-encoded form 2. Build a partial trie from the proof nodes 3. Verify that
-  *      accounts/storage slots exist in the trie at expected paths 4. Verify the trie root matches the expected root
-  *      (state root or storage root)
+  * Verifies SNAP range proofs using trie reconstruction (go-ethereum VerifyRangeProof algorithm):
+  *   1. Build a partial trie by resolving both boundary key paths from proof nodes. 2. Prune internal nodes between the
+  *      boundaries (unsetInternal equivalent). 3. Re-insert all response leaves and hash the result. 4. Compare the
+  *      reconstructed root hash with the expected root.
   *
   * @param rootHash
-  *   Expected root hash to verify against (state root or storage root)
+  *   Expected root hash (state root for accounts, storage root for slots).
   */
 class MerkleProofVerifier(rootHash: ByteString) extends Logger {
 
-  /** Verify an account range response with Merkle proof
-    *
-    * This method verifies that:
-    *   1. The proof is valid and forms a proper Merkle Patricia Trie path 2. All accounts in the range are present in
-    *      the proof 3. The proof root matches the expected state root
-    *
-    * @param accounts
-    *   Accounts to verify (hash -> account)
-    * @param proof
-    *   Merkle proof nodes (RLP-encoded)
-    * @param startHash
-    *   Starting hash of the range
-    * @param endHash
-    *   Ending hash of the range
-    * @return
-    *   Either error message or Unit on success
-    */
+  // ─── Public API ────────────────────────────────────────────────────────────
+
   def verifyAccountRange(
       accounts: Seq[(ByteString, Account)],
       proof: Seq[ByteString],
-      @unused startHash: ByteString,
-      @unused endHash: ByteString
+      startHash: ByteString,
+      endHash: ByteString
   ): Either[String, Unit] = {
-
-    if (proof.isEmpty && accounts.isEmpty) {
-      return Right(())
-    }
-
-    // If we have accounts, we need a proof
-    if (proof.isEmpty && accounts.nonEmpty) {
-      return Left(s"Missing proof for ${accounts.size} accounts")
-    }
-
+    if (proof.isEmpty && accounts.isEmpty) return Right(())
     try {
-      // Decode proof nodes
-      val proofNodes = decodeProofNodes(proof)
-
-      // Build proof map: hash -> node
-      val proofMap = buildProofMap(proofNodes)
-
-      // Verify each account is in the proof
-      val verificationResults = accounts.map { case (accountHash, account) =>
-        verifyAccountInProof(accountHash, account, proofMap) match {
-          case Left(error) =>
-            Left(s"Account ${accountHash.take(4).toArray.map("%02x".format(_)).mkString} verification failed: $error")
-          case Right(_) => Right(())
-        }
+      val leaves = accounts.map { case (h, a) => h -> ByteString(Account.accountSerializer.toBytes(a)) }
+      if (proof.isEmpty) {
+        // Nil proof: full trie response, verify by streaming hash (geth: StackTrie path)
+        return verifyCompleteRange(leaves)
       }
-
-      // Check if any verification failed
-      verificationResults.collectFirst { case Left(error) => error } match {
-        case Some(error) => return Left(error)
-        case None        => // Continue
-      }
-
-      // Verify the proof forms a valid path to the state root
-      verifyProofRoot(proofNodes) match {
-        case Left(error) => Left(s"Proof root verification failed: $error")
-        case Right(_)    => Right(())
-      }
-
+      val proofRawMap = buildProofRawMap(proof)
+      verifyRangeProofByReconstruction(startHash, endHash, leaves, proofRawMap)
     } catch {
-      case e: Exception =>
-        log.warn(s"Merkle proof verification error: ${e.getMessage}")
-        Left(s"Verification error: ${e.getMessage}")
+      case e: Throwable =>
+        // Catch Throwable (not just Exception) — StackOverflowError from deep recursive insertion
+        // must be surfaced as a verification failure rather than silently hanging the caller.
+        log.warn(s"Merkle proof verification error: ${e.getClass.getSimpleName}: ${e.getMessage}")
+        Left(s"Verification error: ${e.getClass.getSimpleName}: ${e.getMessage}")
     }
   }
 
-  /** Decode RLP-encoded proof nodes
-    *
-    * @param proof
-    *   Sequence of RLP-encoded nodes
-    * @return
-    *   Decoded MPT nodes
-    */
-  private def decodeProofNodes(proof: Seq[ByteString]): Seq[MptNode] =
-    proof.map { nodeBytes =>
-      try
-        MptTraversals.decodeNode(nodeBytes.toArray)
-      catch {
-        case e: Exception =>
-          throw new IllegalArgumentException(s"Failed to decode proof node: ${e.getMessage}", e)
-      }
-    }
-
-  /** Build a map of node hash -> node for quick lookup
-    *
-    * @param nodes
-    *   Proof nodes
-    * @return
-    *   Map of hash to node
-    */
-  private def buildProofMap(nodes: Seq[MptNode]): Map[ByteString, MptNode] =
-    nodes.map { node =>
-      ByteString(node.hash) -> node
-    }.toMap
-
-  /** Verify an account exists in the proof
-    *
-    * @param accountHash
-    *   Hash of the account
-    * @param account
-    *   Account data
-    * @param proofMap
-    *   Map of node hashes to nodes
-    * @return
-    *   Either error or success
-    */
-  private def verifyAccountInProof(
-      accountHash: ByteString,
-      account: Account,
-      proofMap: Map[ByteString, MptNode]
-  ): Either[String, Unit] = {
-
-    // For now, we do a simplified verification:
-    // Just check that we can find a path in the proof nodes
-    // A full implementation would traverse the trie path
-
-    // Convert account hash to nibbles (path in the trie)
-    val path = hashToNibbles(accountHash)
-
-    // Start from the root (use stateRoot for account verification)
-    val root = rootHash
-
-    // Traverse the proof following the path
-    traversePath(root, path, proofMap, account)
-  }
-
-  /** Traverse the trie path to find the account
-    *
-    * @param currentHash
-    *   Hash of current node to look up
-    * @param path
-    *   Remaining path (nibbles) to traverse
-    * @param proofMap
-    *   Map of node hashes to nodes
-    * @param expectedAccount
-    *   Expected account at the end of path
-    * @return
-    *   Either error or success
-    */
-  private def traversePath(
-      currentHash: ByteString,
-      path: Seq[Int],
-      proofMap: Map[ByteString, MptNode],
-      expectedAccount: Account
-  ): Either[String, Unit] =
-    // Look up the node in the proof
-    proofMap.get(currentHash) match {
-      case None =>
-        // Node not in proof - this is acceptable for partial proofs
-        // The proof only needs to cover the range being verified
-        Right(())
-
-      case Some(leafNode: LeafNode) =>
-        // Found a leaf - verify it matches the expected account
-        verifyLeafAccount(leafNode, expectedAccount)
-
-      case Some(branchNode: BranchNode) =>
-        // Branch node - follow the path
-        if (path.isEmpty) {
-          // We're at the end of the path
-          branchNode.terminator match {
-            case Some(value) => verifyAccountValue(value, expectedAccount)
-            case None        => Left("Path ended at branch without terminator")
-          }
-        } else {
-          // Continue traversal
-          val nextIndex = path.head
-          branchNode.children.lift(nextIndex) match {
-            case Some(nextNode: HashNode) =>
-              traversePath(ByteString(nextNode.hash), path.tail, proofMap, expectedAccount)
-            case Some(nextNode) =>
-              traversePath(ByteString(nextNode.hash), path.tail, proofMap, expectedAccount)
-            case None =>
-              Left(s"No child at index $nextIndex")
-          }
-        }
-
-      case Some(extensionNode: ExtensionNode) =>
-        // Extension node - match the shared key
-        // NOTE: MptTraversals.decodeNode already HexPrefix-decodes the compact path encoding,
-        // so `sharedKey` here is already a sequence of nibbles (0-15), one nibble per byte.
-        val sharedNibbles = extensionNode.sharedKey.map(_.toInt)
-        if (path.startsWith(sharedNibbles)) {
-          extensionNode.next match {
-            case hashNode: HashNode =>
-              traversePath(ByteString(hashNode.hash), path.drop(sharedNibbles.length), proofMap, expectedAccount)
-            case nextNode =>
-              traversePath(ByteString(nextNode.hash), path.drop(sharedNibbles.length), proofMap, expectedAccount)
-          }
-        } else {
-          Left("Path doesn't match extension node")
-        }
-
-      case Some(_) =>
-        Left("Unexpected node type")
-    }
-
-  /** Verify leaf node contains expected account
-    *
-    * @param leaf
-    *   Leaf node from proof
-    * @param expectedAccount
-    *   Expected account
-    * @return
-    *   Either error or success
-    */
-  private def verifyLeafAccount(leaf: LeafNode, expectedAccount: Account): Either[String, Unit] =
-    verifyAccountValue(leaf.value, expectedAccount)
-
-  /** Verify account value matches expected account
-    *
-    * Decodes the RLP-encoded account and compares key fields to expected values. This ensures the account data in the
-    * proof matches what we expect.
-    *
-    * @param value
-    *   RLP-encoded account value
-    * @param expectedAccount
-    *   The account we expect to find
-    * @return
-    *   Either error or success
-    */
-  private def verifyAccountValue(value: ByteString, expectedAccount: Account): Either[String, Unit] =
-    try {
-      // Decode the account from RLP using the standard Account serializer
-      val decoded = Account.accountSerializer.fromBytes(value.toArray)
-
-      // Compare key fields to ensure account data matches
-      if (decoded.nonce != expectedAccount.nonce) {
-        Left(s"Account nonce mismatch: expected ${expectedAccount.nonce}, got ${decoded.nonce}")
-      } else if (decoded.balance != expectedAccount.balance) {
-        Left(s"Account balance mismatch: expected ${expectedAccount.balance}, got ${decoded.balance}")
-      } else if (decoded.storageRoot != expectedAccount.storageRoot) {
-        Left(s"Account storageRoot mismatch: expected ${expectedAccount.storageRoot}, got ${decoded.storageRoot}")
-      } else if (decoded.codeHash != expectedAccount.codeHash) {
-        Left(s"Account codeHash mismatch: expected ${expectedAccount.codeHash}, got ${decoded.codeHash}")
-      } else {
-        Right(())
-      }
-    } catch {
-      case e: Exception =>
-        Left(s"Failed to decode account value: ${e.getMessage}")
-    }
-
-  /** Verify the proof root matches the expected state root
-    *
-    * @param proofNodes
-    *   Decoded proof nodes
-    * @return
-    *   Either error or success
-    */
-  private def verifyProofRoot(proofNodes: Seq[MptNode]): Either[String, Unit] = {
-    if (proofNodes.isEmpty) {
-      return Left("Empty proof")
-    }
-
-    // The first node should be the root or a node that hashes to the root
-    val firstNode = proofNodes.head
-    val firstNodeHash = ByteString(firstNode.hash)
-
-    // For AccountRange proofs we expect the first node to be the root (core-geth behavior).
-    if (firstNodeHash != rootHash) {
-      Left(
-        s"Proof root mismatch: got ${firstNodeHash.take(4).toArray.map("%02x".format(_)).mkString}..., " +
-          s"expected ${rootHash.take(4).toArray.map("%02x".format(_)).mkString}..."
-      )
-    } else Right(())
-  }
-
-  /** Convert hash to nibbles (hex digits) for trie path
-    *
-    * @param hash
-    *   Hash bytes
-    * @return
-    *   Sequence of nibbles (0-15)
-    */
-  private def hashToNibbles(hash: ByteString): Seq[Int] =
-    hash
-      .flatMap { byte =>
-        Seq((byte >> 4) & 0x0f, byte & 0x0f)
-      }
-      .map(_.toInt)
-
-  /** Verify a storage range response with Merkle proof
-    *
-    * This method verifies storage slots against an account's storage root. Similar to account verification but operates
-    * on storage tries.
-    *
-    * The verification process:
-    *   1. Decode proof nodes from their RLP-encoded form 2. Build a partial storage trie from the proof nodes 3. Verify
-    *      that storage slots exist in the trie at expected paths 4. Verify the proof root matches the expected storage
-    *      root
-    *
-    * Note: The rootHash of this verifier should be the account's storageRoot when verifying storage ranges.
-    *
-    * @param slots
-    *   Storage slots to verify (slotHash -> slotValue)
-    * @param proof
-    *   Merkle proof nodes (RLP-encoded)
-    * @param startHash
-    *   Starting hash of the range
-    * @param endHash
-    *   Ending hash of the range
-    * @return
-    *   Either error message or Unit on success
-    */
   def verifyStorageRange(
       slots: Seq[(ByteString, ByteString)],
       proof: Seq[ByteString],
       startHash: ByteString,
       endHash: ByteString
   ): Either[String, Unit] = {
-
-    if (slots.isEmpty && proof.isEmpty) {
-      return Right(())
-    }
-
-    // Without proofs, we can still validate basic invariants (ordering + bounds) and accept.
-    if (proof.isEmpty && slots.nonEmpty) {
-      return validateStorageSlotsBasic(slots, startHash, endHash)
-    }
-
-    // If we have proofs but no slots, this can be a valid proof-of-absence for sparse tries.
-    if (slots.isEmpty && proof.nonEmpty) {
-      try {
-        val proofNodes = decodeProofNodes(proof)
-        return verifyProofRoot(proofNodes).left.map(err => s"Storage proof root verification failed: $err")
-      } catch {
-        case e: Exception =>
-          log.warn(s"Storage Merkle proof verification error: ${e.getMessage}")
-          return Left(s"Storage verification error: ${e.getMessage}")
-      }
-    }
-
+    if (proof.isEmpty && slots.isEmpty) return Right(())
     try {
-      // Decode proof nodes
-      val proofNodes = decodeProofNodes(proof)
-
-      // Build proof map: hash -> node
-      val proofMap = buildProofMap(proofNodes)
-
-      // Verify each storage slot is in the proof
-      val verificationResults = slots.map { case (slotHash, slotValue) =>
-        verifyStorageSlotInProof(slotHash, slotValue, proofMap) match {
-          case Left(error) =>
-            Left(s"Storage slot ${slotHash.take(4).toArray.map("%02x".format(_)).mkString} verification failed: $error")
-          case Right(_) => Right(())
-        }
+      if (proof.isEmpty) {
+        return verifyCompleteRange(slots)
       }
-
-      // Check if any verification failed
-      verificationResults.collectFirst { case Left(error) => error } match {
-        case Some(error) => return Left(error)
-        case None        => // Continue
-      }
-
-      // Verify the proof forms a valid path to the storage root
-      verifyProofRoot(proofNodes) match {
-        case Left(error) => Left(s"Storage proof root verification failed: $error")
-        case Right(_)    => Right(())
-      }
-
+      val proofRawMap = buildProofRawMap(proof)
+      verifyRangeProofByReconstruction(startHash, endHash, slots, proofRawMap)
     } catch {
-      case e: Exception =>
-        log.warn(s"Storage Merkle proof verification error: ${e.getMessage}")
-        Left(s"Storage verification error: ${e.getMessage}")
+      case e: Throwable =>
+        log.warn(s"Storage Merkle proof verification error: ${e.getClass.getSimpleName}: ${e.getMessage}")
+        Left(s"Storage verification error: ${e.getClass.getSimpleName}: ${e.getMessage}")
     }
   }
 
-  private def validateStorageSlotsBasic(
-      slots: Seq[(ByteString, ByteString)],
-      startHash: ByteString,
-      endHash: ByteString
+  // ─── Reconstruction algorithm ───────────────────────────────────────────────
+
+  private def verifyCompleteRange(leaves: Seq[(ByteString, ByteString)]): Either[String, Unit] = {
+    val snapTrie = new SnapHashTrie(_ => ())
+    leaves.foreach { case (k, v) => snapTrie.update(k.toArray, v.toArray) }
+    val computed = snapTrie.commit()
+    if (computed == rootHash) Right(())
+    else Left(s"complete-range hash mismatch")
+  }
+
+  private def verifyRangeProofByReconstruction(
+      firstKey: ByteString,
+      lastKey: ByteString,
+      leaves: Seq[(ByteString, ByteString)],
+      proofRawMap: Map[ByteString, Array[Byte]]
   ): Either[String, Unit] = {
-    def cmp(a: ByteString, b: ByteString): Int = {
-      val aa = a.toArray
-      val bb = b.toArray
-      var i = 0
-      while (i < math.min(aa.length, bb.length)) {
-        val ai = aa(i) & 0xff
-        val bi = bb(i) & 0xff
-        if (ai != bi) return ai - bi
-        i += 1
+    // Validate: monotonically strictly increasing keys, no empty values
+    if ((0 until leaves.length - 1).exists(i => cmpBytes(leaves(i)._1, leaves(i + 1)._1) >= 0))
+      return Left("range is not monotonically increasing")
+    if (leaves.exists(_._2.isEmpty))
+      return Left("range contains deletion (empty value)")
+
+    // Edge case B: proof present, zero leaves — proof of absence
+    if (leaves.isEmpty) {
+      val rootNode = decodeProofNode(proofRawMap, rootHash) match {
+        case None    => return Left("root node missing from proof")
+        case Some(n) => n
       }
-      aa.length - bb.length
+      val trie = new PartialProofTrie(rootNode, proofRawMap)
+      trie.resolveEdge(hashToNibbles(firstKey), allowNonExistent = true) match {
+        case Left(err) => return Left(err)
+        case Right(()) => ()
+      }
+      return if (hasRightElement(trie.root, hashToNibbles(firstKey)))
+        Left("more entries available")
+      else Right(())
     }
 
-    // Monotonic strictly increasing
-    var i = 1
-    while (i < slots.size) {
-      val prev = slots(i - 1)._1
-      val cur = slots(i)._1
-      if (cmp(prev, cur) >= 0) {
-        return Left("Storage slots not monotonically increasing")
+    // Validate: firstKey <= leaves.head
+    if (cmpBytes(firstKey, leaves.head._1) > 0)
+      return Left("unexpected key-value pairs preceding the requested range")
+
+    // Special case: single element where firstKey == lastKey (existent proof)
+    if (leaves.length == 1 && firstKey == lastKey) {
+      val rootNode = decodeProofNode(proofRawMap, rootHash) match {
+        case None    => return Left("root node missing from proof")
+        case Some(n) => n
       }
+      val trie = new PartialProofTrie(rootNode, proofRawMap)
+      trie.resolveEdge(hashToNibbles(firstKey), allowNonExistent = false) match {
+        case Left(err) => return Left(err)
+        case Right(()) => ()
+      }
+      trie.insertLeaf(hashToNibbles(leaves.head._1), leaves.head._2)
+      val computed = trie.computeHash()
+      return if (computed == rootHash) Right(())
+      else Left(s"single-element range proof hash mismatch")
+    }
+
+    if (cmpBytes(firstKey, lastKey) >= 0) return Left("invalid edge keys")
+    if (firstKey.length != lastKey.length) return Left("inconsistent edge key lengths")
+
+    val firstNibbles = hashToNibbles(firstKey)
+    val lastNibbles = hashToNibbles(lastKey)
+    val rootNode = decodeProofNode(proofRawMap, rootHash).getOrElse(return Left("root node missing from proof"))
+    val trie = new PartialProofTrie(rootNode, proofRawMap)
+
+    // Phase 1: resolve both edge paths into the partial trie
+    log.debug(s"[PROOF] Phase 1: resolving edge paths (${leaves.size} leaves, ${proofRawMap.size} proof nodes)")
+    trie.resolveEdge(firstNibbles, allowNonExistent = true) match {
+      case Left(err) => return Left(err)
+      case Right(()) => ()
+    }
+    trie.resolveEdge(lastNibbles, allowNonExistent = true) match {
+      case Left(err) => return Left(err)
+      case Right(()) => ()
+    }
+
+    // Phase 2: prune internal nodes between boundaries
+    log.debug(s"[PROOF] Phase 2: pruning internal nodes between boundaries")
+    trie.pruneInternals(firstNibbles, lastNibbles) match {
+      case Left(err) => return Left(err)
+      case Right(()) => ()
+    }
+
+    // Phase 3: insert all leaves (mutable StackTrie-based, O(N) allocations — see ProofTrieInserter)
+    log.debug(s"[PROOF] Phase 3: inserting ${leaves.size} leaves")
+    leaves.foreach { case (k, v) => trie.insertLeaf(hashToNibbles(k), v) }
+
+    // Phase 4: verify root hash
+    log.debug(s"[PROOF] Phase 4: computing root hash")
+    val computed = trie.computeHash()
+    if (computed == rootHash) Right(())
+    else Left(s"range proof hash mismatch")
+  }
+
+  // ─── PartialProofTrie ───────────────────────────────────────────────────────
+
+  /** Mutable-state wrapper around an immutable MptNode tree.
+    *
+    * Implements the three phases of geth VerifyRangeProof:
+    *   - resolveEdge → proofToPath
+    *   - pruneInternals → unsetInternal + unset
+    *   - insertLeaf → MPT put (without storage)
+    */
+  // Decode a proof node fresh from raw bytes — mirrors go-ethereum's resolveNode which calls
+  // decodeNode(hash, buf) and returns a new allocation each time. Never returns a cached object.
+  private def decodeProofNode(proofRawMap: Map[ByteString, Array[Byte]], hash: ByteString): Option[MptNode] =
+    proofRawMap.get(hash).map { rawBytes =>
+      try MptTraversals.decodeNode(rawBytes)
+      catch {
+        case e: Exception => throw new IllegalArgumentException(s"Failed to decode proof node: ${e.getMessage}", e)
+      }
+    }
+
+  private class PartialProofTrie(initialRoot: MptNode, proofRawMap: Map[ByteString, Array[Byte]]) {
+    var root: MptNode = initialRoot
+
+    def resolveEdge(keyNibbles: Seq[Int], allowNonExistent: Boolean): Either[String, Unit] =
+      resolveEdgePath(root, keyNibbles, allowNonExistent) match {
+        case Right(newRoot) => root = newRoot; Right(())
+        case Left(err)      => Left(err)
+      }
+
+    def pruneInternals(leftNibbles: Seq[Int], rightNibbles: Seq[Int]): Either[String, Unit] =
+      findForkAndPrune(root, leftNibbles, rightNibbles, 0) match {
+        case Right(newRoot) => root = newRoot; Right(())
+        case Left(err)      => Left(err)
+      }
+
+    // Lazily initialised after Phase 1+2 have finalised `root` — converts the pruned MptNode tree to StackTrie's
+    // mutable StNode representation for O(N) Phase 3 insertion (vs O(N×depth) with the old doInsertLeaf).
+    private lazy val inserter: ProofTrieInserter = new ProofTrieInserter(root)
+
+    def insertLeaf(keyNibbles: Seq[Int], value: ByteString): Unit =
+      inserter.insert(keyNibbles.map(_.toByte).toArray, value.toArray)
+
+    def computeHash(): ByteString = inserter.computeHash()
+
+    // ── Phase 1: resolveEdgePath ─────────────────────────────────────────────
+
+    private def resolveEdgePath(
+        node: MptNode,
+        remaining: Seq[Int],
+        allowNonExistent: Boolean
+    ): Either[String, MptNode] = {
+      val resolved = node match {
+        case HashNode(bytes) =>
+          // Decode fresh on every lookup — mirrors go-ethereum's resolveNode which calls
+          // decodeNode(hash, buf) and returns a new Go struct each time. This ensures
+          // both boundary paths (firstKey, lastKey) get INDEPENDENT node objects even
+          // when they share a proof node by hash. Without fresh decoding, both paths
+          // reference the same cached MptNode object, allowing a child pointer to become
+          // an ancestor reference — forming a cycle that Phase 3 traverses forever.
+          proofRawMap.get(ByteString(bytes)) match {
+            case Some(rawBytes) =>
+              try MptTraversals.decodeNode(rawBytes)
+              catch {
+                case e: Exception =>
+                  return Left(
+                    s"Failed to decode proof node ${bytes.take(4).map("%02x".format(_)).mkString}: ${e.getMessage}"
+                  )
+              }
+            case None => return Left(s"proof node missing: ${bytes.take(4).map("%02x".format(_)).mkString}...")
+          }
+        case other => other
+      }
+      resolved match {
+        case NullNode =>
+          if (allowNonExistent) Right(NullNode)
+          else Left("node not in trie (null at boundary)")
+
+        case leaf: LeafNode => Right(leaf)
+
+        case branch: BranchNode if remaining.isEmpty => Right(branch)
+
+        case branch: BranchNode =>
+          val nibble = remaining.head
+          val child = branch.children(nibble)
+          child match {
+            case NullNode if allowNonExistent => Right(branch)
+            case NullNode                     => Left("node not in trie (null child at boundary path)")
+            case _ =>
+              resolveEdgePath(child, remaining.tail, allowNonExistent).map { newChild =>
+                branch.updateChild(nibble, newChild)
+              }
+          }
+
+        case ext: ExtensionNode =>
+          val sharedNibbles = toNibbleSeq(ext.sharedKey)
+          if (remaining.startsWith(sharedNibbles)) {
+            resolveEdgePath(ext.next, remaining.drop(sharedNibbles.length), allowNonExistent).map { newNext =>
+              ExtensionNode(ext.sharedKey, newNext)
+            }
+          } else if (allowNonExistent) {
+            Right(ext)
+          } else {
+            Left("extension key mismatch in proof")
+          }
+
+        case other => Right(other)
+      }
+    }
+
+    // ── Phase 2: pruneInternals ──────────────────────────────────────────────
+
+    private def findForkAndPrune(node: MptNode, left: Seq[Int], right: Seq[Int], pos: Int): Either[String, MptNode] =
+      node match {
+        case ext: ExtensionNode =>
+          val sharedNibbles = toNibbleSeq(ext.sharedKey)
+          val forkLeft = comparePrefix(left, pos, sharedNibbles)
+          val forkRight = comparePrefix(right, pos, sharedNibbles)
+          if (forkLeft == 0 && forkRight == 0) {
+            findForkAndPrune(ext.next, left, right, pos + sharedNibbles.length).map { newNext =>
+              ExtensionNode(ext.sharedKey, newNext)
+            }
+          } else {
+            handleExtensionFork(ext, sharedNibbles, left, right, pos, forkLeft, forkRight)
+          }
+
+        case branch: BranchNode =>
+          if (left(pos) == right(pos)) {
+            val nibble = left(pos)
+            findForkAndPrune(branch.children(nibble), left, right, pos + 1).map { newChild =>
+              branch.updateChild(nibble, newChild)
+            }
+          } else {
+            handleBranchFork(branch, left, right, pos)
+          }
+
+        case other => Right(other)
+      }
+
+    private def handleBranchFork(
+        branch: BranchNode,
+        left: Seq[Int],
+        right: Seq[Int],
+        pos: Int
+    ): Either[String, MptNode] = {
+      val leftNibble = left(pos)
+      val rightNibble = right(pos)
+      // Null out all children strictly between the two boundary nibbles
+      var b = branch
+      for (i <- leftNibble + 1 until rightNibble)
+        b = b.updateChild(i, NullNode)
+      for {
+        newLeftChild <- pruneOneSide(b.children(leftNibble), left, pos + 1, removeLeft = false)
+        b2 = b.updateChild(leftNibble, newLeftChild)
+        newRightChild <- pruneOneSide(b2.children(rightNibble), right, pos + 1, removeLeft = true)
+      } yield b2.updateChild(rightNibble, newRightChild)
+    }
+
+    private def handleExtensionFork(
+        ext: ExtensionNode,
+        sharedNibbles: Seq[Int],
+        left: Seq[Int],
+        right: Seq[Int],
+        pos: Int,
+        forkLeft: Int,
+        forkRight: Int
+    ): Either[String, MptNode] = {
+      val sl = math.signum(forkLeft)
+      val sr = math.signum(forkRight)
+      (sl, sr) match {
+        case (-1, -1) => Left("empty range: both boundaries below extension key")
+        case (1, 1)   => Left("empty range: both boundaries above extension key")
+
+        case (fl, fr) if fl != 0 && fr != 0 =>
+          Right(NullNode) // extension entirely in range (one side < ext, other side > ext)
+
+        case (0, fr) if fr != 0 =>
+          // Left matches extension, right is larger → prune right side of extension's subtree
+          ext.next match {
+            case _: LeafNode => Right(NullNode)
+            case _ =>
+              pruneOneSide(ext.next, left, pos + sharedNibbles.length, removeLeft = false).map { newNext =>
+                if (newNext.isNull) NullNode else ExtensionNode(ext.sharedKey, newNext)
+              }
+          }
+
+        case (fl, 0) if fl != 0 =>
+          // Right matches extension, left is smaller → prune left side
+          ext.next match {
+            case _: LeafNode => Right(NullNode)
+            case _ =>
+              pruneOneSide(ext.next, right, pos + sharedNibbles.length, removeLeft = true).map { newNext =>
+                if (newNext.isNull) NullNode else ExtensionNode(ext.sharedKey, newNext)
+              }
+          }
+
+        case _ => Right(ext)
+      }
+    }
+
+    // Prune one side of a boundary path. Returns the updated subtree, or NullNode to remove it.
+    // removeLeft=false: remove subtrees to the RIGHT of the key (used for left boundary).
+    // removeLeft=true:  remove subtrees to the LEFT  of the key (used for right boundary).
+    private def pruneOneSide(child: MptNode, key: Seq[Int], pos: Int, removeLeft: Boolean): Either[String, MptNode] =
+      child match {
+        case branch: BranchNode =>
+          // go-ethereum unset() equivalent: clear children on one side then recurse.
+          // Bounds check: pos must be within the key (64 nibbles). At pos >= key.length
+          // we've consumed the full path — no more children to prune.
+          if (pos >= key.length) return Right(branch)
+          // Null children on the side being removed
+          var b = branch
+          if (removeLeft) {
+            for (i <- 0 until key(pos)) b = b.updateChild(i, NullNode)
+          } else {
+            for (i <- key(pos) + 1 until 16) b = b.updateChild(i, NullNode)
+          }
+          pruneOneSide(b.children(key(pos)), key, pos + 1, removeLeft).map { newKeyChild =>
+            b.updateChild(key(pos), newKeyChild)
+          }
+
+        case ext: ExtensionNode =>
+          val sharedNibbles = toNibbleSeq(ext.sharedKey)
+          val keySlice = key.drop(pos).take(sharedNibbles.length)
+          if (keySlice != sharedNibbles) {
+            // Extension's path diverges from boundary key: sibling check
+            val cmp = compareNibbleSeqs(sharedNibbles, keySlice)
+            Right(if ((removeLeft && cmp < 0) || (!removeLeft && cmp > 0)) NullNode else child)
+          } else {
+            pruneOneSide(ext.next, key, pos + sharedNibbles.length, removeLeft).map { newNext =>
+              if (newNext.isNull) NullNode else ExtensionNode(ext.sharedKey, newNext)
+            }
+          }
+
+        case leaf: LeafNode =>
+          // Either the boundary leaf itself (remove → will be re-inserted) or a sibling
+          val leafNibbles = toNibbleSeq(leaf.key)
+          val remaining = key.drop(pos)
+          if (leafNibbles == remaining) {
+            Right(NullNode) // boundary leaf: remove and re-insert in phase 3
+          } else {
+            val cmp = compareNibbleSeqs(leafNibbles, remaining)
+            Right(if ((removeLeft && cmp < 0) || (!removeLeft && cmp > 0)) NullNode else child)
+          }
+
+        case NullNode => Right(NullNode)
+        case _        => Right(child)
+      }
+
+    // ── Phase 3: insertLeaf ─────────────────────────────────────────────────
+
+  }
+
+  // ─── hasRightElement ────────────────────────────────────────────────────────
+
+  // Port of go-ethereum hasRightElement: true if any trie element exists lexicographically
+  // after keyNibbles in the resolved partial trie.
+  private def hasRightElement(node: MptNode, keyNibbles: Seq[Int]): Boolean = {
+    var current = node
+    var remaining = keyNibbles
+    var found = false
+    while (current != null && !found)
+      current match {
+        case branch: BranchNode =>
+          if (remaining.nonEmpty) {
+            val n = remaining.head
+            if ((n + 1 until 16).exists(!branch.children(_).isNull)) {
+              found = true
+            } else {
+              current = branch.children(n)
+              remaining = remaining.tail
+            }
+          } else {
+            current = null
+          }
+
+        case ext: ExtensionNode =>
+          val sharedNibbles = toNibbleSeq(ext.sharedKey)
+          if (!remaining.startsWith(sharedNibbles)) {
+            found = compareNibbleSeqs(sharedNibbles, remaining.take(sharedNibbles.length)) > 0
+            current = null
+          } else {
+            current = ext.next
+            remaining = remaining.drop(sharedNibbles.length)
+          }
+
+        case _: LeafNode => current = null
+
+        case _ => current = null
+      }
+    found
+  }
+
+  // ─── Shared utilities ────────────────────────────────────────────────────────
+
+  private def toNibbleSeq(bs: ByteString): Seq[Int] =
+    bs.toArray.toSeq.map(_ & 0xff)
+
+  private def hashToNibbles(hash: ByteString): Seq[Int] =
+    hash.flatMap(byte => Seq((byte >> 4) & 0x0f, byte & 0x0f)).map(_.toInt)
+
+  // comparePrefix: compare key.drop(pos).take(len) vs ref nibbles.
+  // Returns 0 if equal, negative if key-slice < ref or too short, positive if key-slice > ref.
+  private def comparePrefix(key: Seq[Int], pos: Int, ref: Seq[Int]): Int = {
+    val slice = key.drop(pos).take(ref.length)
+    if (slice.length < ref.length) {
+      // Truncated slice — compare what we have then treat as smaller
+      val partial = compareNibbleSeqs(slice, ref.take(slice.length))
+      if (partial != 0) partial else -1
+    } else {
+      compareNibbleSeqs(slice, ref)
+    }
+  }
+
+  private def compareNibbleSeqs(a: Seq[Int], b: Seq[Int]): Int = {
+    val len = math.min(a.length, b.length)
+    var i = 0
+    while (i < len) {
+      val d = a(i) - b(i)
+      if (d != 0) return d
       i += 1
     }
-
-    // Bounds (best-effort; endHash is treated as an exclusive upper bound when provided)
-    if (slots.nonEmpty) {
-      val first = slots.head._1
-      if (startHash.nonEmpty && cmp(first, startHash) < 0) {
-        return Left("First storage slot is before requested start")
-      }
-      val last = slots.last._1
-      if (endHash.nonEmpty && cmp(last, endHash) >= 0) {
-        return Left("Last storage slot is at/after requested limit")
-      }
-    }
-
-    Right(())
+    a.length - b.length
   }
 
-  /** Verify a storage slot exists in the proof
-    *
-    * Similar to verifyAccountInProof but for storage slots.
-    *
-    * @param slotHash
-    *   Hash of the storage slot
-    * @param slotValue
-    *   Value of the storage slot
-    * @param proofMap
-    *   Map of node hashes to nodes
-    * @return
-    *   Either error or success
-    */
-  private def verifyStorageSlotInProof(
+  private def cmpBytes(a: ByteString, b: ByteString): Int = {
+    val aa = a.toArray
+    val bb = b.toArray
+    var i = 0
+    while (i < math.min(aa.length, bb.length)) {
+      val d = (aa(i) & 0xff) - (bb(i) & 0xff)
+      if (d != 0) return d
+      i += 1
+    }
+    aa.length - bb.length
+  }
+
+  // Store raw bytes keyed by hash — matches go-ethereum's proof db (read-only, decode-per-lookup).
+  // Never stores decoded MptNode objects: both boundary paths must get independent allocations.
+  private def buildProofRawMap(proof: Seq[ByteString]): Map[ByteString, Array[Byte]] =
+    proof.map { nodeBytes =>
+      val key = ByteString(Node.hashFn(nodeBytes.toArray))
+      key -> nodeBytes.toArray
+    }.toMap
+
+  @unused private def verifyProofRoot(proofNodes: Seq[MptNode]): Either[String, Unit] = {
+    if (proofNodes.isEmpty) return Left("Empty proof")
+    val firstNodeHash = ByteString(proofNodes.head.hash)
+    if (firstNodeHash != rootHash)
+      Left(
+        s"Proof root mismatch: got ${firstNodeHash.take(4).toArray.map("%02x".format(_)).mkString}... expected ${rootHash.take(4).toArray.map("%02x".format(_)).mkString}..."
+      )
+    else Right(())
+  }
+
+  @unused private def verifyStorageSlotInProof(
       slotHash: ByteString,
       slotValue: ByteString,
       proofMap: Map[ByteString, MptNode]
-  ): Either[String, Unit] = {
+  ): Either[String, Unit] =
+    traverseStoragePath(rootHash, hashToNibbles(slotHash), proofMap, slotValue)
 
-    // Convert slot hash to nibbles (path in the trie)
-    val path = hashToNibbles(slotHash)
-
-    // Start from the storage root
-    val root = rootHash
-
-    // Traverse the proof following the path
-    traverseStoragePath(root, path, proofMap, slotValue)
-  }
-
-  /** Traverse the storage trie path to find the slot
-    *
-    * Similar to traversePath but for storage slots.
-    *
-    * @param currentHash
-    *   Hash of current node to look up
-    * @param path
-    *   Remaining path (nibbles) to traverse
-    * @param proofMap
-    *   Map of node hashes to nodes
-    * @param expectedValue
-    *   Expected slot value at the end of path
-    * @return
-    *   Either error or success
-    */
-  private def traverseStoragePath(
+  @unused private def traverseStoragePath(
       currentHash: ByteString,
       path: Seq[Int],
       proofMap: Map[ByteString, MptNode],
       expectedValue: ByteString
   ): Either[String, Unit] =
-    // Look up the node in the proof
     proofMap.get(currentHash) match {
       case None =>
-        // Node not in proof - this is acceptable for partial proofs
         Right(())
-
       case Some(leafNode: LeafNode) =>
-        // Found a leaf - verify it matches the expected value
-        if (leafNode.value == expectedValue) {
-          Right(())
-        } else {
-          Left(
-            s"Storage value mismatch: expected ${expectedValue.take(4).toArray.map("%02x".format(_)).mkString}, got ${leafNode.value.take(4).toArray.map("%02x".format(_)).mkString}"
-          )
-        }
-
+        if (leafNode.value == expectedValue) Right(())
+        else Left(s"Storage value mismatch")
       case Some(branchNode: BranchNode) =>
-        // Branch node - follow the path
         if (path.isEmpty) {
-          // We're at the end of the path
           branchNode.terminator match {
             case Some(value) =>
-              if (value == expectedValue) Right(())
-              else Left(s"Storage value mismatch at branch terminator")
+              if (value == expectedValue) Right(()) else Left("Storage value mismatch at branch terminator")
             case None => Left("Path ended at branch without terminator")
           }
         } else {
-          // Continue traversal
           val nextIndex = path.head
           branchNode.children.lift(nextIndex) match {
             case Some(nextNode: HashNode) =>
               traverseStoragePath(ByteString(nextNode.hash), path.tail, proofMap, expectedValue)
             case Some(nextNode) =>
               traverseStoragePath(ByteString(nextNode.hash), path.tail, proofMap, expectedValue)
-            case None =>
-              Left(s"No child at index $nextIndex")
+            case None => Left(s"No child at index $nextIndex")
           }
         }
-
       case Some(extensionNode: ExtensionNode) =>
-        // Extension node - match the shared key
-        // NOTE: MptTraversals.decodeNode already HexPrefix-decodes the compact path encoding,
-        // so `sharedKey` here is already a sequence of nibbles (0-15), one nibble per byte.
         val sharedNibbles = extensionNode.sharedKey.map(_.toInt)
         if (path.startsWith(sharedNibbles)) {
           extensionNode.next match {
@@ -542,24 +567,24 @@ class MerkleProofVerifier(rootHash: ByteString) extends Logger {
             case nextNode =>
               traverseStoragePath(ByteString(nextNode.hash), path.drop(sharedNibbles.length), proofMap, expectedValue)
           }
-        } else {
-          Left("Path doesn't match extension node")
-        }
-
-      case Some(_) =>
-        Left("Unexpected node type")
+        } else Left("Path doesn't match extension node")
+      case Some(_) => Left("Unexpected node type")
     }
+
+  @unused private def validateStorageSlotsBasic(
+      slots: Seq[(ByteString, ByteString)],
+      @unused startHash: ByteString,
+      @unused endHash: ByteString
+  ): Either[String, Unit] = {
+    var i = 1
+    while (i < slots.size) {
+      if (cmpBytes(slots(i - 1)._1, slots(i)._1) >= 0) return Left("Storage slots not monotonically increasing")
+      i += 1
+    }
+    Right(())
+  }
 }
 
 object MerkleProofVerifier {
-
-  /** Create a new verifier for a given root hash
-    *
-    * @param rootHash
-    *   Root hash (state root or storage root)
-    * @return
-    *   New verifier instance
-    */
-  def apply(rootHash: ByteString): MerkleProofVerifier =
-    new MerkleProofVerifier(rootHash)
+  def apply(rootHash: ByteString): MerkleProofVerifier = new MerkleProofVerifier(rootHash)
 }

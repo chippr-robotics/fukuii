@@ -29,7 +29,7 @@ import com.chipprbots.ethereum.domain.Address
 import com.chipprbots.ethereum.jsonrpc.TransactionRequest
 import com.chipprbots.ethereum.keystore.KeyStoreImpl
 import com.chipprbots.ethereum.keystore.Wallet
-import com.chipprbots.ethereum.network.p2p.messages.BaseETH6XMessages.SignedTransactions.SignedTransactionEnc
+import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.SignedTransactions.SignedTransactionEnc
 import com.chipprbots.ethereum.network.p2p.messages.Capability
 import com.chipprbots.ethereum.rlp
 import com.chipprbots.ethereum.rpcTest.Tags.MainNet

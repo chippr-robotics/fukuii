@@ -15,8 +15,8 @@ import com.chipprbots.ethereum.blockchain.sync.Blacklist.BlacklistReason
 import com.chipprbots.ethereum.db.dataSource.{DataSourceBatchUpdate, EphemDataSource}
 import com.chipprbots.ethereum.domain.{BlockHeader, BlockchainWriter}
 import com.chipprbots.ethereum.network.{Peer, PeerId}
-import com.chipprbots.ethereum.network.p2p.messages.ETH66
 import com.chipprbots.ethereum.testing.Tags._
+import com.chipprbots.ethereum.network.p2p.messages.ETHPackets
 
 class PivotHeaderBootstrapSpec
     extends TestKit(ActorSystem("PivotHeaderBootstrapSpec"))
@@ -83,8 +83,8 @@ class PivotHeaderBootstrapSpec
     val parent = TestProbe()
     mkBootstrap(peersClient, parent)
 
-    peersClient.expectMsgType[PeersClient.Request[ETH66.GetBlockHeaders]](3.seconds)
-    peersClient.reply(PeersClient.Response(testPeer, ETH66.BlockHeaders(0, Seq(correctHeader))))
+    peersClient.expectMsgType[PeersClient.Request[ETHPackets.GetBlockHeaders]](3.seconds)
+    peersClient.reply(PeersClient.Response(testPeer, ETHPackets.BlockHeaders(BigInt(0), Seq(correctHeader))))
 
     parent.expectMsg(3.seconds, PivotHeaderBootstrap.Completed(targetBlock, correctHeader))
   }
@@ -94,8 +94,8 @@ class PivotHeaderBootstrapSpec
     val parent = TestProbe()
     mkBootstrap(peersClient, parent)
 
-    peersClient.expectMsgType[PeersClient.Request[ETH66.GetBlockHeaders]](3.seconds)
-    peersClient.reply(PeersClient.Response(testPeer, ETH66.BlockHeaders(0, Seq(wrongHeader))))
+    peersClient.expectMsgType[PeersClient.Request[ETHPackets.GetBlockHeaders]](3.seconds)
+    peersClient.reply(PeersClient.Response(testPeer, ETHPackets.BlockHeaders(BigInt(0), Seq(wrongHeader))))
 
     parent.expectMsgType[PivotHeaderBootstrap.Failed](3.seconds)
   }
@@ -108,8 +108,8 @@ class PivotHeaderBootstrapSpec
     val parent = TestProbe()
     mkBootstrap(peersClient, parent, waitForPeerDelay = 50.millis)
 
-    peersClient.expectMsgType[PeersClient.Request[ETH66.GetBlockHeaders]](3.seconds)
-    peersClient.reply(PeersClient.Response(testPeer, ETH66.BlockHeaders(0, Seq.empty)))
+    peersClient.expectMsgType[PeersClient.Request[ETHPackets.GetBlockHeaders]](3.seconds)
+    peersClient.reply(PeersClient.Response(testPeer, ETHPackets.BlockHeaders(BigInt(0), Seq.empty)))
 
     // Empty headers → WaitForPeer; no attempt consumed → Failed must NOT arrive yet
     parent.expectNoMessage(200.millis)
@@ -120,7 +120,7 @@ class PivotHeaderBootstrapSpec
     val parent = TestProbe()
     mkBootstrap(peersClient, parent)
 
-    peersClient.expectMsgType[PeersClient.Request[ETH66.GetBlockHeaders]](3.seconds)
+    peersClient.expectMsgType[PeersClient.Request[ETHPackets.GetBlockHeaders]](3.seconds)
     peersClient.reply(PeersClient.RequestFailed(testPeer, BlacklistReason.RegularSyncRequestFailed("timeout")))
 
     parent.expectMsgType[PivotHeaderBootstrap.Failed](3.seconds)
@@ -135,13 +135,13 @@ class PivotHeaderBootstrapSpec
     mkBootstrap(peersClient, parent, preferSnapPeers = true)
 
     // First request uses BestSnapPeerWithMinBlockExcluding(target, {}) — no SNAP peer available at all
-    val req1 = peersClient.expectMsgType[PeersClient.Request[ETH66.GetBlockHeaders]](3.seconds)
+    val req1 = peersClient.expectMsgType[PeersClient.Request[ETHPackets.GetBlockHeaders]](3.seconds)
     req1.peerSelector shouldBe PeersClient.BestSnapPeerWithMinBlockExcluding(targetBlock, Set.empty)
     peersClient.reply(PeersClient.NoSuitablePeer)
 
     // Fallback request uses BestPeerWithMinBlockExcluding — peer responds with the correct header
-    peersClient.expectMsgType[PeersClient.Request[ETH66.GetBlockHeaders]](3.seconds)
-    peersClient.reply(PeersClient.Response(testPeer, ETH66.BlockHeaders(0, Seq(correctHeader))))
+    peersClient.expectMsgType[PeersClient.Request[ETHPackets.GetBlockHeaders]](3.seconds)
+    peersClient.reply(PeersClient.Response(testPeer, ETHPackets.BlockHeaders(BigInt(0), Seq(correctHeader))))
 
     parent.expectMsg(3.seconds, PivotHeaderBootstrap.Completed(targetBlock, correctHeader))
   }
@@ -157,19 +157,19 @@ class PivotHeaderBootstrapSpec
 
     // Attempt 1: BestSnapPeerWithMinBlockExcluding(target, {}) picks testPeer (e.g. Besu with synthetic high TD).
     // testPeer returns empty headers → testPeer added to triedPeers, WaitForPeer issued.
-    val req1 = peersClient.expectMsgType[PeersClient.Request[ETH66.GetBlockHeaders]](3.seconds)
+    val req1 = peersClient.expectMsgType[PeersClient.Request[ETHPackets.GetBlockHeaders]](3.seconds)
     req1.peerSelector shouldBe PeersClient.BestSnapPeerWithMinBlockExcluding(targetBlock, Set.empty)
-    peersClient.reply(PeersClient.Response(testPeer, ETH66.BlockHeaders(0, Seq.empty)))
+    peersClient.reply(PeersClient.Response(testPeer, ETHPackets.BlockHeaders(BigInt(0), Seq.empty)))
 
     // WaitForPeer fires → retry: BestSnapPeerWithMinBlockExcluding(target, {testPeer}) → no SNAP peers left → NoSuitablePeer.
     // flatMap catches NoSuitablePeer and issues fallback: BestPeerWithMinBlockExcluding(target, {testPeer}).
-    val req2 = peersClient.expectMsgType[PeersClient.Request[ETH66.GetBlockHeaders]](3.seconds)
+    val req2 = peersClient.expectMsgType[PeersClient.Request[ETHPackets.GetBlockHeaders]](3.seconds)
     req2.peerSelector shouldBe PeersClient.BestSnapPeerWithMinBlockExcluding(targetBlock, Set(testPeer.id))
     peersClient.reply(PeersClient.NoSuitablePeer)
 
     // Fallback: testPeer2 (e.g. core-geth, non-SNAP or lower-TD SNAP) returns the correct header.
-    peersClient.expectMsgType[PeersClient.Request[ETH66.GetBlockHeaders]](3.seconds)
-    peersClient.reply(PeersClient.Response(testPeer2, ETH66.BlockHeaders(0, Seq(correctHeader))))
+    peersClient.expectMsgType[PeersClient.Request[ETHPackets.GetBlockHeaders]](3.seconds)
+    peersClient.reply(PeersClient.Response(testPeer2, ETHPackets.BlockHeaders(BigInt(0), Seq(correctHeader))))
 
     parent.expectMsg(3.seconds, PivotHeaderBootstrap.Completed(targetBlock, correctHeader))
   }
@@ -182,8 +182,8 @@ class PivotHeaderBootstrapSpec
     val parent = TestProbe()
     mkBootstrap(peersClient, parent, writer = throwingWriter)
 
-    peersClient.expectMsgType[PeersClient.Request[ETH66.GetBlockHeaders]](3.seconds)
-    peersClient.reply(PeersClient.Response(testPeer, ETH66.BlockHeaders(0, Seq(correctHeader))))
+    peersClient.expectMsgType[PeersClient.Request[ETHPackets.GetBlockHeaders]](3.seconds)
+    peersClient.reply(PeersClient.Response(testPeer, ETHPackets.BlockHeaders(BigInt(0), Seq(correctHeader))))
 
     parent.expectMsgType[PivotHeaderBootstrap.Failed](3.seconds)
   }
@@ -197,12 +197,12 @@ class PivotHeaderBootstrapSpec
     mkBootstrap(peersClient, parent, maxAttempts = 2)
 
     // Attempt 1 — testPeer returns wrong header (added to triedPeers)
-    peersClient.expectMsgType[PeersClient.Request[ETH66.GetBlockHeaders]](3.seconds)
-    peersClient.reply(PeersClient.Response(testPeer, ETH66.BlockHeaders(0, Seq(wrongHeader))))
+    peersClient.expectMsgType[PeersClient.Request[ETHPackets.GetBlockHeaders]](3.seconds)
+    peersClient.reply(PeersClient.Response(testPeer, ETHPackets.BlockHeaders(BigInt(0), Seq(wrongHeader))))
 
     // Attempt 2 — testPeer2 (testPeer excluded by BestPeerWithMinBlockExcluding) returns correct header
-    peersClient.expectMsgType[PeersClient.Request[ETH66.GetBlockHeaders]](3.seconds)
-    peersClient.reply(PeersClient.Response(testPeer2, ETH66.BlockHeaders(0, Seq(correctHeader))))
+    peersClient.expectMsgType[PeersClient.Request[ETHPackets.GetBlockHeaders]](3.seconds)
+    peersClient.reply(PeersClient.Response(testPeer2, ETHPackets.BlockHeaders(BigInt(0), Seq(correctHeader))))
 
     parent.expectMsg(3.seconds, PivotHeaderBootstrap.Completed(targetBlock, correctHeader))
   }
@@ -217,15 +217,15 @@ class PivotHeaderBootstrapSpec
     mkBootstrap(peersClient, parent, maxAttempts = 1, waitForPeerDelay = 50.millis)
 
     // First request returns NoSuitablePeer → WaitForPeer scheduled, NOT Failed
-    peersClient.expectMsgType[PeersClient.Request[ETH66.GetBlockHeaders]](3.seconds)
+    peersClient.expectMsgType[PeersClient.Request[ETHPackets.GetBlockHeaders]](3.seconds)
     peersClient.reply(PeersClient.NoSuitablePeer)
 
     // Must not send Failed during the WaitForPeer window
     parent.expectNoMessage(200.millis)
 
     // WaitForPeer fires, bootstrap retries — a fresh peer is now available
-    peersClient.expectMsgType[PeersClient.Request[ETH66.GetBlockHeaders]](3.seconds)
-    peersClient.reply(PeersClient.Response(testPeer, ETH66.BlockHeaders(0, Seq(correctHeader))))
+    peersClient.expectMsgType[PeersClient.Request[ETHPackets.GetBlockHeaders]](3.seconds)
+    peersClient.reply(PeersClient.Response(testPeer, ETHPackets.BlockHeaders(BigInt(0), Seq(correctHeader))))
 
     parent.expectMsg(3.seconds, PivotHeaderBootstrap.Completed(targetBlock, correctHeader))
   }

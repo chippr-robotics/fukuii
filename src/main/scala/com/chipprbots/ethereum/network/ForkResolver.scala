@@ -15,7 +15,8 @@ object ForkResolver {
 
   trait Fork
 
-  class EtcForkResolver(daoForkConfig: DaoForkConfig) extends ForkResolver {
+  // ETC-specific: DAO irregular state change at block 1,920,000 — ETC rejected it (original chain), ETH mainnet accepted it.
+  class IrregularStateChangeDaoForkResolver(daoForkConfig: DaoForkConfig) extends ForkResolver {
     sealed trait Fork extends ForkResolver.Fork
     case object AcceptedFork extends Fork
     case object RejectedFork extends Fork

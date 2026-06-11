@@ -16,6 +16,7 @@ import com.chipprbots.ethereum.domain.Address
 import com.chipprbots.ethereum.domain.BlockBody
 import com.chipprbots.ethereum.domain.BlockHeader
 import com.chipprbots.ethereum.domain.SignedTransaction
+import com.chipprbots.ethereum.nodebuilder.BlockchainConfigBuilder
 import com.chipprbots.ethereum.testing.Tags._
 import com.chipprbots.ethereum.utils.BlockchainConfig
 
@@ -25,7 +26,14 @@ import com.chipprbots.ethereum.utils.BlockchainConfig
   * Verifies that the miner's gas limit calculation converges toward the configured target at ±1/1024 per block,
   * matching core-geth's CalcGasLimit() and besu's OlympiaTargetingGasLimitCalculator.
   */
-class GasLimitCalculationSpec extends AnyFlatSpec with Matchers {
+class GasLimitCalculationSpec
+    extends AnyFlatSpec
+    with Matchers
+    with BlockchainConfigBuilder
+    with com.chipprbots.ethereum.TestInstanceConfigProvider {
+
+  // Use sentinel olympiaBlockNumber (1e18) from test-chain.conf so all block-0 calls are pre-Olympia.
+  implicit val config: BlockchainConfig = blockchainConfig
 
   private val GasLimitBoundDivisor = BlockHeaderValidator.GasLimitBoundDivisor
 
@@ -63,8 +71,9 @@ class GasLimitCalculationSpec extends AnyFlatSpec with Matchers {
     def withBlockTimestampProvider(btp: BlockTimestampProvider): TestBlockGenerator =
       throw new UnsupportedOperationException("not needed for gas limit tests")
 
-    // Expose the protected method for testing
-    def calcGasLimit(parentGas: BigInt): BigInt = calculateGasLimit(parentGas)
+    // Expose the protected method for testing; blockNumber=0 keeps all existing tests pre-Olympia.
+    def calcGasLimit(parentGas: BigInt)(implicit bc: BlockchainConfig): BigInt =
+      calculateGasLimit(parentGas, BigInt(0))
   }
 
   private def makeGenerator(target: BigInt): TestableBlockGenerator =

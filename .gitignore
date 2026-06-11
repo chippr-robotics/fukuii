@@ -64,7 +64,12 @@ ops/*/captured-logs/
 *.conf.backup.*
 
 # Claude Code
-.claude/
+# Ignore local Claude settings/state, but track the project's shared subagents,
+# operations skills, and the Spec Kit slash-command skills (.specify/ holds the
+# shared spec-driven infra).
+.claude/*
+!.claude/agents/
+!.claude/skills/
 
 # Planning & internal docs
 SESSION_NOTES.md

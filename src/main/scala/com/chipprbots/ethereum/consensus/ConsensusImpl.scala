@@ -11,13 +11,11 @@ import scala.annotation.tailrec
 import com.chipprbots.ethereum.consensus.Consensus._
 import com.chipprbots.ethereum.domain.Block
 import com.chipprbots.ethereum.domain.BlockHeader
-import com.chipprbots.ethereum.domain.BlockchainImpl
 import com.chipprbots.ethereum.domain.BlockchainReader
 import com.chipprbots.ethereum.domain.BlockchainWriter
 import com.chipprbots.ethereum.domain.ChainWeight
 import com.chipprbots.ethereum.ledger.BlockData
 import com.chipprbots.ethereum.ledger.BlockExecution
-import com.chipprbots.ethereum.ledger.BlockExecutionError
 import com.chipprbots.ethereum.ledger.BlockExecutionError.MPTError
 import com.chipprbots.ethereum.ledger.BlockMetrics
 import com.chipprbots.ethereum.mpt.MerklePatriciaTrie.MissingNodeException
@@ -27,7 +25,6 @@ import com.chipprbots.ethereum.utils.Hex
 import com.chipprbots.ethereum.utils.Logger
 
 class ConsensusImpl(
-    blockchain: BlockchainImpl,
     blockchainReader: BlockchainReader,
     blockchainWriter: BlockchainWriter,
     blockExecution: BlockExecution
@@ -141,6 +138,13 @@ class ConsensusImpl(
     )
   )
 
+  // Execute-first reorganise — reference client pattern (go-ethereum/Besu/Nethermind).
+  // Old canonical blocks are NOT deleted before execution. On failure, the old canonical
+  // state is completely untouched — no revertChainReorganisation needed or possible.
+  // executeAndValidateBlocks writes blockNumberMappingStorage[N] = new_hash for each
+  // successfully executed block, so canonical pointers are updated atomically by execution.
+  // On partial failure the chain advances to the last successful block; old stale entries
+  // remain in DB (same as reference clients — GC'd by RocksDB compaction).
   private def reorganise(
       bestBlockNumber: BigInt,
       newBranch: NonEmptyList[Block],
@@ -149,34 +153,51 @@ class ConsensusImpl(
   )(implicit
       blockchainConfig: BlockchainConfig
   ): ConsensusResult = {
-
     log.debug(
-      "Removing blocks starting from number {} and parent {}",
-      bestBlockNumber,
-      ByteStringUtils.hash2string(parentHash)
+      "Reorganise: collecting old block(s) from parent {} up to {}",
+      ByteStringUtils.hash2string(parentHash),
+      bestBlockNumber
     )
-    val oldBlocksData = removeBlocksUntil(parentHash, bestBlockNumber)
 
-    handleBlockExecResult(newBranch.toList, parentWeight, oldBlocksData).fold(
-      {
-        case (executedBlocks, MPTError(reason: MissingNodeException)) =>
-          ConsensusErrorDueToMissingNode(executedBlocks.map(_.block), reason)
-        case (executedBlocks, err) =>
-          BranchExecutionFailure(
-            executedBlocks.map(_.block),
-            newBranch.toList.drop(executedBlocks.length).head.hash,
-            s"Error while trying to reorganise chain: $err"
-          )
-      },
-      { case (oldBranch, newBranch, weights) => SelectedNewBestBranch(oldBranch, newBranch, weights) }
-    )
+    // Read old branch data without modifying DB — populate SelectedNewBestBranch return value
+    val oldBlocksData = collectOldBranch(parentHash, bestBlockNumber)
+
+    // Execute new branch against the unchanged parent canonical state
+    val (executedBlocks, maybeError) = blockExecution.executeAndValidateBlocks(newBranch.toList, parentWeight)
+
+    // Advance bestKnown to furthest successfully executed block (even on partial failure)
+    executedBlocks.lastOption.foreach(b => blockchainWriter.saveBestKnownBlocks(b.block.hash, b.block.number))
+
+    maybeError match {
+      case None =>
+        SelectedNewBestBranch(oldBlocksData.map(_.block), executedBlocks.map(_.block), executedBlocks.map(_.weight))
+
+      case Some(MPTError(reason)) if reason.isInstanceOf[MissingNodeException] =>
+        log.error(
+          "REORG-EXEC-FAIL blocks [{}-{}]: MissingNode({})",
+          newBranch.head.number,
+          newBranch.last.number,
+          reason.getMessage
+        )
+        ConsensusErrorDueToMissingNode(executedBlocks.map(_.block), reason.asInstanceOf[MissingNodeException])
+
+      case Some(error) =>
+        log.error(
+          "REORG-EXEC-FAIL blocks [{}-{}]: {}",
+          newBranch.head.number,
+          newBranch.last.number,
+          error
+        )
+        BranchExecutionFailure(
+          executedBlocks.map(_.block),
+          newBranch.toList.drop(executedBlocks.length).head.hash,
+          s"Error while trying to reorganise chain: $error"
+        )
+    }
   }
 
   private def newBranchWeight(newBranch: NonEmptyList[Block], parentWeight: ChainWeight) =
     newBranch.foldLeft(parentWeight)((w, b) => w.increase(b.header))
-
-  private def returnNoTotalDifficulty(bestBlock: Block): IO[ConsensusError] =
-    returnNoTotalDifficultyForHeader(bestBlock.header)
 
   private def returnNoTotalDifficultyForHeader(bestHeader: BlockHeader): IO[ConsensusError] = {
     log.error(
@@ -205,95 +226,27 @@ class ConsensusImpl(
       case _ => ()
     }
 
-  private def handleBlockExecResult(
-      newBranch: List[Block],
-      parentWeight: ChainWeight,
-      oldBlocksData: List[BlockData]
-  )(implicit
-      blockchainConfig: BlockchainConfig
-  ): Either[(List[BlockData], BlockExecutionError), (List[Block], List[Block], List[ChainWeight])] = {
-    val (executedBlocks, maybeError) = blockExecution.executeAndValidateBlocks(newBranch, parentWeight)
-    executedBlocks.lastOption.foreach(b =>
-      blockchainWriter.saveBestKnownBlocks(
-        b.block.hash,
-        b.block.number
-      )
-    )
-
-    maybeError match {
-      case None =>
-        executedBlocks.lastOption.foreach(b =>
-          blockchainWriter.saveBestKnownBlocks(
-            b.block.hash,
-            b.block.number
-          )
-        )
-
-        Right((oldBlocksData.map(_.block), executedBlocks.map(_.block), executedBlocks.map(_.weight)))
-
-      case Some(error) =>
-        revertChainReorganisation(oldBlocksData, executedBlocks)
-        Left((executedBlocks, error))
-    }
-  }
-
-  /** Reverts chain reorganisation in the event that one of the blocks from new branch fails to execute
-    *
-    * @param oldBranch
-    *   old blocks along with corresponding receipts and totalDifficulties
-    * @param executedBlocks
-    *   sub-sequence of new branch that was executed correctly
-    */
-  private def revertChainReorganisation(
-      oldBranch: List[BlockData],
-      executedBlocks: List[BlockData]
-  ): Unit = {
-    if (executedBlocks.nonEmpty) {
-      removeBlocksUntil(executedBlocks.head.block.header.parentHash, executedBlocks.last.block.header.number)
-    }
-
-    oldBranch.foreach { case BlockData(block, receipts, weight) =>
-      blockchainWriter.save(block, receipts, weight, saveAsBestBlock = false)
-    }
-
-    val bestHeader = oldBranch.last.block.header
-    blockchainWriter.saveBestKnownBlocks(bestHeader.hash, bestHeader.number)
-  }
-
-  /** Removes blocks from the [[Blockchain]] along with receipts and total difficulties.
-    *
-    * @param parent
-    *   remove blocks until this hash (exclusive)
-    * @param fromNumber
-    *   start removing from this number (downwards)
-    *
-    * @return
-    *   the list of removed blocks along with receipts and total difficulties
-    */
-  private def removeBlocksUntil(parent: ByteString, fromNumber: BigInt): List[BlockData] = {
+  // Read-only traversal of the current canonical chain from fromNumber down to (exclusive) parent.
+  // Does NOT delete or modify any DB state — used solely to populate SelectedNewBestBranch.
+  private def collectOldBranch(parent: ByteString, fromNumber: BigInt): List[BlockData] = {
     @tailrec
-    def removeBlocksUntil(parent: ByteString, fromNumber: BigInt, acc: List[BlockData]): List[BlockData] =
+    def go(parent: ByteString, fromNumber: BigInt, acc: List[BlockData]): List[BlockData] =
       blockchainReader.getBlockByNumber(blockchainReader.getBestBranch(), fromNumber) match {
         case Some(block) if block.header.hash == parent || fromNumber == 0 =>
           acc
 
         case Some(block) =>
           val hash = block.header.hash
-
           val blockDataOpt = for {
             receipts <- blockchainReader.getReceiptsByHash(hash)
             weight <- blockchainReader.getChainWeightByHash(hash)
           } yield BlockData(block, receipts, weight)
-
-          blockchain.removeBlock(hash)
-
-          removeBlocksUntil(parent, fromNumber - 1, blockDataOpt.map(_ :: acc).getOrElse(acc))
+          go(parent, fromNumber - 1, blockDataOpt.map(_ :: acc).getOrElse(acc))
 
         case None =>
-          log.error(s"Unexpected missing block number: $fromNumber")
+          log.error(s"collectOldBranch: unexpected missing block at number $fromNumber")
           acc
       }
-
-    removeBlocksUntil(parent, fromNumber, Nil)
+    go(parent, fromNumber, Nil)
   }
 }

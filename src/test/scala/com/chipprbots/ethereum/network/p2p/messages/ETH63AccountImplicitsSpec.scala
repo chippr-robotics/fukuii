@@ -5,15 +5,15 @@ import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
 
 import com.chipprbots.ethereum.domain.Account
+import com.chipprbots.ethereum.domain.Account._
 import com.chipprbots.ethereum.domain.UInt256
-import com.chipprbots.ethereum.network.p2p.messages.ETH63.AccountImplicits._
 import com.chipprbots.ethereum.rlp
 import com.chipprbots.ethereum.rlp.{RLPList, RLPValue}
 import com.chipprbots.ethereum.testing.Tags._
 
 class ETH63AccountImplicitsSpec extends AnyFlatSpec with Matchers {
 
-  "ETH63.AccountImplicits.AccountDec" should "normalize empty storageRoot/codeHash to canonical empty hashes" taggedAs (UnitTest) in {
+  "Account.AccountDec" should "normalize empty storageRoot/codeHash to canonical empty hashes" taggedAs (UnitTest) in {
     // RLP([nonce, balance, storageRoot, codeHash])
     // Here storageRoot/codeHash are encoded as empty byte strings by some peers.
     val encoded = rlp.encode(

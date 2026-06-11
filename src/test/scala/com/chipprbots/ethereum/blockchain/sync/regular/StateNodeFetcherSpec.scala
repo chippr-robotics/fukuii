@@ -15,11 +15,11 @@ import org.scalatest.freespec.AnyFreeSpecLike
 import org.scalatest.matchers.should.Matchers
 
 import com.chipprbots.ethereum.blockchain.sync.PeersClient
-import com.chipprbots.ethereum.blockchain.sync.PeersClient.BestSnapPeer
+import com.chipprbots.ethereum.blockchain.sync.PeersClient.BestSnapPeerExcluding
 import com.chipprbots.ethereum.blockchain.sync.TestSyncConfig
 import com.chipprbots.ethereum.blockchain.sync.regular.BlockFetcher.FetchCommand
 import com.chipprbots.ethereum.blockchain.sync.regular.BlockFetcher.FetchedStateNode
-import com.chipprbots.ethereum.network.p2p.messages.ETH63.NodeData
+import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.NodeData
 import com.chipprbots.ethereum.network.p2p.messages.SNAP.GetByteCodes
 import com.chipprbots.ethereum.network.p2p.messages.SNAP.GetTrieNodes
 import com.chipprbots.ethereum.testing.Tags._
@@ -30,8 +30,10 @@ import com.chipprbots.ethereum.testing.Tags._
   *     supervisor instead of looping forever.
   *   - In-flight de-dup: a second FetchStateNode for the same hash updates replyTo only — no parallel SNAP request gets
   *     fired.
-  *   - Bytecode path: FetchStateNode with isByteCode=true routes to SNAP GetByteCodes (BestSnapPeer), not GetNodeData.
-  *     This unblocks contract bytecode recovery on ETH68-only peer sets where GetNodeData is unavailable.
+  *   - Bytecode path: FetchStateNode with isByteCode=true routes to SNAP GetByteCodes (BestSnapPeerExcluding), not
+  *     GetNodeData. This unblocks contract bytecode recovery on ETH68-only peer sets where GetNodeData is unavailable.
+  *   - Peer rotation: every SNAP request selects via BestSnapPeerExcluding(triedPeers); the first attempt excludes the
+  *     empty set, and empty/wrong responses add the responding peer so each retry samples a different snap server.
   */
 class StateNodeFetcherSpec
     extends TestKit(ActorSystem("StateNodeFetcherSpec"))
@@ -74,7 +76,7 @@ class StateNodeFetcherSpec
 
   "StateNodeFetcher" - {
 
-    "with isByteCode=true, routes the request to SNAP GetByteCodes via BestSnapPeer" taggedAs UnitTest in new TestSetup {
+    "with isByteCode=true, routes the request to SNAP GetByteCodes via BestSnapPeerExcluding" taggedAs UnitTest in new TestSetup {
       fetcher ! StateNodeFetcher.FetchStateNode(
         hash = targetHash,
         originalSender = replyToProbe.ref,
@@ -92,7 +94,9 @@ class StateNodeFetcherSpec
       val req = peersClientProbe.expectMsgClass(3.seconds, classOf[PeersClient.Request[_]])
       req.message shouldBe a[GetByteCodes]
       req.message.asInstanceOf[GetByteCodes].hashes shouldBe Seq(targetHash)
-      req.peerSelector shouldBe BestSnapPeer
+      // First attempt excludes nothing; on empty/wrong responses the responding peer is added to
+      // triedPeers so the next retry rotates to a different snap server (no more single-peer hammer).
+      req.peerSelector shouldBe BestSnapPeerExcluding(Set.empty)
     }
 
     "with stateRoot + paths, routes the request to SNAP GetTrieNodes (not GetByteCodes)" taggedAs UnitTest in new TestSetup {
@@ -110,7 +114,7 @@ class StateNodeFetcherSpec
       val req = peersClientProbe.expectMsgClass(3.seconds, classOf[PeersClient.Request[_]])
       req.message shouldBe a[GetTrieNodes]
       req.message.asInstanceOf[GetTrieNodes].rootHash shouldBe stateRoot
-      req.peerSelector shouldBe BestSnapPeer
+      req.peerSelector shouldBe BestSnapPeerExcluding(Set.empty)
     }
 
     "de-duplicates a second FetchStateNode for the in-flight hash (no parallel request)" taggedAs UnitTest in new TestSetup {
@@ -165,9 +169,10 @@ class StateNodeFetcherSpec
       )
       peersClientProbe.expectMsgClass(3.seconds, classOf[PeersClient.Request[_]])
 
-      // Drive the retry counter directly — each RetryStateNodeRequest increments attempts via
-      // retryOrExhaust. The 10th call (MaxStateNodeFetchRetries) hits the exhaust branch and
-      // sends an empty FetchedStateNode to BlockImporter, triggering its 5-min backoff handler.
+      // Drive the retry counter directly — each RetryStateNodeRequest resets the rotation set and
+      // increments attempts via retryOrExhaust. The MaxStateNodeFetchRetries-th call hits the
+      // exhaust branch and sends an empty FetchedStateNode to BlockImporter, triggering its 5-min
+      // backoff handler.
       (1 to StateNodeFetcher.MaxStateNodeFetchRetries).foreach { _ =>
         fetcher ! StateNodeFetcher.RetryStateNodeRequest
       }

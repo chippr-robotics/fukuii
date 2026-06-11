@@ -95,7 +95,7 @@ def commonSettings(projectName: String): Seq[sbt.Def.Setting[_]] = Seq(
     "-no-link-warnings" // Suppress link resolution warnings for F-bounded polymorphism issues
   ),
   scalacOptions ~= (options => if (fukuiiDev) options.filterNot(_ == "-Xfatal-warnings") else options),
-  Test / parallelExecution := false,
+  Test / parallelExecution := true,
   Test / fork := true, // Fork JVM for tests to ensure clean shutdown and avoid resource leak issues
   Test / javaOptions ++= Seq(
     "-Dpekko.coordinated-shutdown.exit-jvm=off", // Prevent CoordinatedShutdown from calling System.exit
@@ -103,7 +103,13 @@ def commonSettings(projectName: String): Seq[sbt.Def.Setting[_]] = Seq(
     "-Dpekko.jvm-shutdown-hooks=off" // Disable Pekko JVM shutdown hooks that may interfere with test cleanup
   ),
   Test / testForkedParallel := false, // Run tests sequentially in the forked JVM to avoid resource contention
+  Test / logBuffered := false, // Stream forked JVM test output immediately rather than buffering per-suite
   (Test / testOptions) += Tests.Argument("-oDG"),
+  // Ensure JUnit XML report directory exists after `sbt clean` deletes it (forked JVM writes there)
+  (Test / testOptions) += {
+    val reportsDir = (Test / target).value / "test-reports"
+    Tests.Setup(_ => IO.createDirectory(reportsDir))
+  },
   // Only publish selected libraries.
   (publish / skip) := true
 )

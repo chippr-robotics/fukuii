@@ -18,6 +18,8 @@ Examples:
 - [CON-004: MESS (Modified Exponential Subjective Scoring) Implementation](CON-004-mess-implementation.md) - Accepted
 - [CON-005: ETH66 Protocol Aware Message Formatting](CON-005-eth66-protocol-aware-message-formatting.md) - Accepted
 - [CON-006: ForkId Compatibility During Initial Sync](CON-006-forkid-compatibility-during-initial-sync.md) - Accepted
+- [CON-007: ETC64 RLP Encoding Fix](CON-007-etc64-rlp-encoding-fix.md) - Accepted
+- [CON-008: Checkpoint Distribution Server](CON-008-checkpoint-distribution-server.md) - Proposed
 
 ## Creating a New Consensus ADR
 

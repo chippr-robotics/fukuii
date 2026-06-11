@@ -65,12 +65,45 @@ final class StackTrie(onTrieNode: (Array[Byte], ByteString, Array[Byte]) => Unit
     last = Array.emptyByteArray
   }
 
+  // ---- package-private API for ProofTrieInserter ----
+
+  /** Insert `keyNibbles` (0–15 per byte, length 64 for 32-byte keys) into an externally-supplied StNode tree. Used by
+    * ProofTrieInserter to perform mutable Phase-3 leaf insertion without the ascending-order guard of `update`.
+    */
+  private[mpt] def insertInto(node: StNode, keyNibbles: Array[Byte], value: Array[Byte]): StNode =
+    insert(node, keyNibbles, value, EmptyPath)
+
+  /** Like insertInto but handles exact key match by updating the leaf value in-place rather than throwing.
+    *
+    * Required for SNAP proof verification: Phase 1 resolves the boundary leaf into the StNode tree, and Phase 3
+    * re-inserts the same key with the peer's claimed value. The normal `insert` (used by StackTrie.update) throws on
+    * duplicate keys because SNAP sync never re-inserts; proof verification does.
+    */
+  private[mpt] def insertOrUpdateInto(node: StNode, keyNibbles: Array[Byte], value: Array[Byte]): StNode =
+    insert(node, keyNibbles, value, EmptyPath, allowUpdate = true)
+
+  /** Hash an externally-supplied StNode tree, emitting finalised nodes via this instance's callback. Used by
+    * ProofTrieInserter to compute the Phase-4 root hash.
+    */
+  private[mpt] def hashExternal(node: StNode): ByteString = {
+    hashNode(node, EmptyPath)
+    if (node.typ == Hashed && node.value.length == 32) ByteString(node.value)
+    else if (node.typ == Empty) ByteString(crypto.kec256(EmptyTrieRlp))
+    else ByteString(crypto.kec256(node.value))
+  }
+
   // ---- internals ----
 
   /** Recursive descent insertion. Returns the (possibly new) node that should replace `node` at this position. Always
     * returns either `node` (mutated in place) or a fresh node; never returns Empty unless `node` was Empty.
     */
-  private def insert(node: StNode, key: Array[Byte], value: Array[Byte], path: Array[Byte]): StNode = {
+  private def insert(
+      node: StNode,
+      key: Array[Byte],
+      value: Array[Byte],
+      path: Array[Byte],
+      allowUpdate: Boolean = false
+  ): StNode = {
     node.typ match {
       case Empty =>
         StNode.newLeaf(key, value)
@@ -79,9 +112,15 @@ final class StackTrie(onTrieNode: (Array[Byte], ByteString, Array[Byte]) => Unit
         val origKey = node.key
         val diff = diffIndex(origKey, key)
         if (diff >= origKey.length) {
-          // Either duplicate key (diff == both lengths) or our key extends past
-          // existing leaf's terminator. SNAP sync keys are all 64 hex nibbles
-          // (32-byte hashes), so both cases imply a duplicate insert.
+          if (allowUpdate && diff >= key.length) {
+            // Exact key match: update value in-place. Mirrors go-ethereum's Trie.insert which replaces the valueNode
+            // rather than throwing. Required for SNAP proof verification where Phase 1 resolves a boundary leaf into
+            // the tree and Phase 3 re-inserts the same key with the peer's claimed value.
+            node.value = value
+            return node
+          }
+          // Either duplicate key or our key extends past the existing leaf's terminator.
+          // SNAP sync keys are all 64 hex nibbles (32-byte hashes), so both imply a duplicate insert.
           throw new IllegalStateException(
             s"StackTrie: duplicate or extending key at path ${hexStr(path)} (existing key=${hexStr(origKey)}, new key=${hexStr(key)})"
           )
@@ -116,7 +155,7 @@ final class StackTrie(onTrieNode: (Array[Byte], ByteString, Array[Byte]) => Unit
           // Full ext key consumed — descend into the child.
           val keyTail = sliceFrom(key, extKey.length)
           val newPath = appendNibbles(path, extKey, 0, extKey.length)
-          node.children(0) = insert(node.children(0), keyTail, value, newPath)
+          node.children(0) = insert(node.children(0), keyTail, value, newPath, allowUpdate)
           node
         } else if (diff == 0) {
           // No shared prefix: ext becomes a branch (or a branch directly if extKey.length == 1).
@@ -166,7 +205,7 @@ final class StackTrie(onTrieNode: (Array[Byte], ByteString, Array[Byte]) => Unit
         if (existing == null || existing.typ == Empty)
           node.children(idx) = StNode.newLeaf(keyTail, value)
         else
-          node.children(idx) = insert(existing, keyTail, value, childPath)
+          node.children(idx) = insert(existing, keyTail, value, childPath, allowUpdate)
         node
 
       case Hashed =>

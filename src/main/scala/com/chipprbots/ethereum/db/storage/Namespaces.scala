@@ -17,6 +17,10 @@ object Namespaces {
     IndexedSeq[Byte]('d'.toByte) // Flat storage slot data (Besu: ACCOUNT_STORAGE_STORAGE)
   val FlatAccountNamespace: IndexedSeq[Byte] =
     IndexedSeq[Byte]('a'.toByte) // Flat account data (Besu: ACCOUNT_INFO_STATE, geth 'a' convention)
+  val HealingFrontierNamespace: IndexedSeq[Byte] =
+    IndexedSeq[Byte]('g'.toByte) // Post-SNAP healing frontier (node hash -> pathset), Layer-2 resume
+  val BfsQueueNamespace: IndexedSeq[Byte] =
+    IndexedSeq[Byte]('q'.toByte) // BFS level queue (streaming frontier rebuild — OOM-safe at L7+)
 
   val nsSeq: Seq[IndexedSeq[Byte]] = Seq(
     ReceiptsNamespace,
@@ -32,6 +36,8 @@ object Namespaces {
     TransactionMappingNamespace,
     BlockFirstSeenNamespace,
     FlatSlotNamespace,
-    FlatAccountNamespace
+    FlatAccountNamespace,
+    HealingFrontierNamespace,
+    BfsQueueNamespace
   )
 }

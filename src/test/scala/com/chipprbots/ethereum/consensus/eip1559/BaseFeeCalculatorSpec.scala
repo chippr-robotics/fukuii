@@ -2,6 +2,7 @@ package com.chipprbots.ethereum.consensus.eip1559
 
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
+import org.scalatest.ParallelTestExecution
 
 import com.chipprbots.ethereum.Fixtures
 import com.chipprbots.ethereum.domain.BlockHeader
@@ -14,13 +15,14 @@ class BaseFeeCalculatorSpec
     extends AnyFlatSpec
     with Matchers
     with BlockchainConfigBuilder
-    with com.chipprbots.ethereum.TestInstanceConfigProvider {
+    with com.chipprbots.ethereum.TestInstanceConfigProvider
+    with ParallelTestExecution {
 
   val olympiaBlock: BigInt = 10
 
-  val config: BlockchainConfig = blockchainConfig.withUpdatedForkBlocks(
-    _.copy(olympiaBlockNumber = olympiaBlock)
-  )
+  val config: BlockchainConfig = blockchainConfig
+    .withUpdatedForkBlocks(_.copy(olympiaBlockNumber = olympiaBlock))
+    .copy(baseFeeFloor = BaseFeeCalculator.InitialBaseFee)
 
   def makeHeader(
       number: BigInt,
@@ -83,7 +85,9 @@ class BaseFeeCalculatorSpec
 
   it should "decrease baseFee when parent gasUsed is below target" taggedAs (OlympiaTest, ConsensusTest) in {
     val gasLimit = BigInt(8000000)
-    val parentBaseFee = BigInt(1000000000)
+    // Start at 2 gwei (above the ECIP-1111 1-gwei floor `config` sets) so the 1/8 decrease to
+    // 1.75 gwei is actually observable rather than being clamped to the floor.
+    val parentBaseFee = BigInt(2000000000)
 
     val parent = makeHeader(
       number = olympiaBlock,
@@ -112,9 +116,9 @@ class BaseFeeCalculatorSpec
     result shouldBe parentBaseFee + 1
   }
 
-  it should "never decrease baseFee below 0" taggedAs (OlympiaTest, ConsensusTest) in {
+  it should "never decrease baseFee below InitialBaseFee" taggedAs (OlympiaTest, ConsensusTest) in {
     val gasLimit = BigInt(8000000)
-    val parentBaseFee = BigInt(1)
+    val parentBaseFee = BaseFeeCalculator.InitialBaseFee
 
     val parent = makeHeader(
       number = olympiaBlock,
@@ -124,6 +128,24 @@ class BaseFeeCalculatorSpec
     )
 
     val result = BaseFeeCalculator.calcBaseFee(parent, config)
-    result should be >= BigInt(0)
+    result should be >= BaseFeeCalculator.InitialBaseFee
+  }
+
+  it should "floor at InitialBaseFee after 1000 consecutive empty blocks" taggedAs (OlympiaTest, ConsensusTest) in {
+    val gasLimit = BigInt(8000000)
+    var currentBaseFee = BaseFeeCalculator.InitialBaseFee
+
+    (1 to 1000).foreach { i =>
+      val parent = makeHeader(
+        number = olympiaBlock + i,
+        gasLimit = gasLimit,
+        gasUsed = 0,
+        baseFee = Some(currentBaseFee)
+      )
+      currentBaseFee = BaseFeeCalculator.calcBaseFee(parent, config)
+      withClue(s"block $i: ") {
+        currentBaseFee should be >= BaseFeeCalculator.InitialBaseFee
+      }
+    }
   }
 }

@@ -253,7 +253,6 @@ trait ConsensusBuilder {
 
   lazy val consensus: Consensus =
     new ConsensusImpl(
-      blockchain,
       blockchainReader,
       blockchainWriter,
       blockExecution
@@ -275,8 +274,8 @@ trait ConsensusBuilder {
 trait ForkResolverBuilder {
   self: BlockchainConfigBuilder =>
 
-  lazy val forkResolverOpt: Option[ForkResolver.EtcForkResolver] =
-    blockchainConfig.daoForkConfig.map(new ForkResolver.EtcForkResolver(_))
+  lazy val forkResolverOpt: Option[ForkResolver.IrregularStateChangeDaoForkResolver] =
+    blockchainConfig.daoForkConfig.map(new ForkResolver.IrregularStateChangeDaoForkResolver(_))
 
 }
 
@@ -641,14 +640,16 @@ trait PersonalServiceBuilder {
     with BlockchainConfigBuilder
     with PendingTransactionsManagerBuilder
     with StorageBuilder
-    with TxPoolConfigBuilder =>
+    with TxPoolConfigBuilder
+    with EthTxServiceBuilder =>
 
   lazy val personalService: PersonalServiceAPI = new PersonalService(
     keyStore,
     blockchainReader,
     pendingTransactionsManager,
     txPoolConfig,
-    this
+    this,
+    ethTxService
   )
 }
 

@@ -157,11 +157,16 @@ if [ -n "$HIVE_MINER" ]; then
     FLAGS="$FLAGS -Dfukuii.mining.coinbase=$HIVE_MINER"
 fi
 
+# Hive clients are ephemeral: one short sync run, then discarded. Cap JIT at C1
+# (-XX:TieredStopAtLevel=1) so the JVM reaches readiness fast — full C2 optimization
+# never pays off in a single 3000-block sync and only lengthens cold-start, which is
+# what tips slow fukuii-sink sync tests over hive's --client.checktimelimit.
 exec java \
     -Xmx512m \
     -Xms128m \
     -Xss2M \
     -XX:+UseG1GC \
+    -XX:TieredStopAtLevel=1 \
     -XX:MaxMetaspaceSize=256m \
     -XX:+ExitOnOutOfMemoryError \
     $FLAGS \

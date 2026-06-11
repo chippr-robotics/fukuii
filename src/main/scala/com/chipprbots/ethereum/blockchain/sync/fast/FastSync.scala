@@ -1,6 +1,5 @@
 package com.chipprbots.ethereum.blockchain.sync.fast
 
-import java.time.Instant
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 
@@ -11,6 +10,7 @@ import cats.data.NonEmptyList
 import cats.implicits._
 
 import scala.annotation.tailrec
+import scala.collection.mutable
 import scala.concurrent.ExecutionContext.Implicits.global
 import scala.concurrent.duration._
 import scala.util.Random
@@ -24,6 +24,7 @@ import com.chipprbots.ethereum.blockchain.sync.PeerListSupportNg.PeerWithInfo
 import com.chipprbots.ethereum.blockchain.sync.PeerRequestHandler.ResponseReceived
 import com.chipprbots.ethereum.blockchain.sync.SyncProtocol.Status.Progress
 import com.chipprbots.ethereum.blockchain.sync._
+import com.chipprbots.ethereum.blockchain.sync.PeerRateTracker
 import com.chipprbots.ethereum.blockchain.sync.fast.ReceiptsValidator.ReceiptsValidationResult
 import com.chipprbots.ethereum.blockchain.sync.fast.SyncBlocksValidator.BlockBodyValidationResult
 import com.chipprbots.ethereum.blockchain.sync.fast.SyncStateSchedulerActor.RestartRequested
@@ -41,17 +42,8 @@ import com.chipprbots.ethereum.domain._
 import com.chipprbots.ethereum.mpt.MerklePatriciaTrie
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor.PeerInfo
 import com.chipprbots.ethereum.network.Peer
-import com.chipprbots.ethereum.network.p2p.messages.BaseETH6XMessages
-import com.chipprbots.ethereum.network.p2p.messages.Capability
 import com.chipprbots.ethereum.network.p2p.messages.Codes
-import com.chipprbots.ethereum.network.p2p.messages.ETH62._
-import com.chipprbots.ethereum.network.p2p.messages.ETH62.{BlockHeaders => ETH62BlockHeaders}
-import com.chipprbots.ethereum.network.p2p.messages.ETH63
-import com.chipprbots.ethereum.network.p2p.messages.ETH63._
-import com.chipprbots.ethereum.network.p2p.messages.ETH66
-import com.chipprbots.ethereum.network.p2p.messages.ETH66.{BlockBodies => ETH66BlockBodies}
-import com.chipprbots.ethereum.network.p2p.messages.ETH66.{BlockHeaders => ETH66BlockHeaders}
-import com.chipprbots.ethereum.network.p2p.messages.ETH66.{Receipts => ETH66Receipts}
+import com.chipprbots.ethereum.network.p2p.messages.ETHPackets
 import com.chipprbots.ethereum.nodebuilder.BlockchainConfigBuilder
 import com.chipprbots.ethereum.rlp.RLPList
 import com.chipprbots.ethereum.utils.ByteStringUtils
@@ -190,19 +182,21 @@ class FastSync(
   // scalastyle:off number.of.methods
   private class SyncingHandler(initialSyncState: SyncState, var masterPeer: Option[Peer] = None) {
 
-    private val BlockHeadersHandlerName = "block-headers-request-handler"
     // not part of syncstate as we do not want to persist is.
     private var stateSyncRestartRequested = false
     private var stateSyncStarted = false
 
-    private var requestedHeaders: Map[Peer, BigInt] = Map.empty
-
     private var syncState = initialSyncState
 
     private var assignedHandlers: Map[ActorRef, Peer] = Map.empty
-    private var peerRequestsTime: Map[Peer, Instant] = Map.empty
     private var requestedBlockBodies: Map[ActorRef, Seq[ByteString]] = Map.empty
     private var requestedReceipts: Map[ActorRef, Seq[ByteString]] = Map.empty
+
+    private var bodiesFetcherQueue = new BodiesFetcherQueue(ethRateTracker)
+    private var receiptsFetcherQueue = new ReceiptsFetcherQueue(ethRateTracker)
+    private var headersFetcherQueue = new HeadersFetcherQueue(ethRateTracker)
+    private val headerResponseBuffer = mutable.SortedMap.empty[BigInt, Seq[BlockHeader]]
+    private var headerQueueHighWatermark: BigInt = syncState.bestBlockHeaderNumber
 
     private val syncStateStorageActor = context.actorOf(Props[StateStorageActor](), s"$countActor-state-storage")
     syncStateStorageActor ! fastSyncStateStorage
@@ -242,6 +236,10 @@ class FastSync(
     private var lastProgressLogMs: Long = startTime
     private var lastLoggedFullBlock: BigInt = initialSyncState.lastFullBlockNumber
     private var lastLoggedStateNodes: Long = initialSyncState.downloadedNodesCount
+
+    // Initialize fetcher queues from persisted sync state
+    bodiesFetcherQueue.enqueue(syncState.blockBodiesQueue)
+    receiptsFetcherQueue.enqueue(syncState.receiptsQueue)
 
     def handleStatus: Receive = {
       case SyncProtocol.GetStatus => sender() ! currentSyncingStatus
@@ -300,76 +298,72 @@ class FastSync(
     }
 
     private def handleResponses: Receive = {
-      case ResponseReceived(peer, ETH62BlockHeaders(blockHeaders), timeTaken) =>
+      case ResponseReceived(peer, blockHeadersMsg: ETHPackets.BlockHeaders, timeTaken) =>
         log.debug(
           "Received {} block headers from peer [{}] in {} ms",
-          blockHeaders.size,
+          blockHeadersMsg.headers.size,
           peer.id,
           timeTaken
         )
         FastSyncMetrics.setBlockHeadersDownloadTime(timeTaken)
-
-        requestedHeaders.get(peer).foreach { requestedNum =>
-          removeRequestHandler(sender())
-          requestedHeaders -= peer
-          if (
-            blockHeaders.nonEmpty && blockHeaders.size <= requestedNum && blockHeaders.head.number == syncState.bestBlockHeaderNumber + 1
-          )
-            handleBlockHeaders(peer, blockHeaders)
-          else
-            blacklist.add(peer.id, blacklistDuration, WrongBlockHeaders)
+        handshakedPeers.get(peer.id) match {
+          case Some(peerWithInfo) =>
+            headersFetcherQueue.deliver(peerWithInfo, blockHeadersMsg, timeTaken) match {
+              case DeliveryResult.Delivered(_) =>
+                removeRequestHandler(sender())
+                if (blockHeadersMsg.headers.nonEmpty) {
+                  headerResponseBuffer.put(blockHeadersMsg.headers.head.number, blockHeadersMsg.headers)
+                  drainOrderedHeaders(peer)
+                } else {
+                  blacklist.add(peer.id, blacklistDuration, WrongBlockHeaders)
+                }
+              case DeliveryResult.Invalid(reason) =>
+                removeRequestHandler(sender())
+                log.warning("Header delivery rejected for peer [{}]: {}", peer.id, reason)
+                blacklist.add(peer.id, blacklistDuration, WrongBlockHeaders)
+              case DeliveryResult.Duplicate =>
+                log.debug("Duplicate/stale header response from peer [{}], ignoring", peer.id)
+            }
+          case None =>
+            log.debug("Received block headers from unknown peer [{}], ignoring", peer.id)
         }
-      case ResponseReceived(peer, ETH66BlockHeaders(_, blockHeaders), timeTaken) =>
-        log.debug(
-          "Received {} block headers from peer [{}] in {} ms",
-          blockHeaders.size,
-          peer.id,
-          timeTaken
-        )
-        FastSyncMetrics.setBlockHeadersDownloadTime(timeTaken)
 
-        requestedHeaders.get(peer).foreach { requestedNum =>
-          removeRequestHandler(sender())
-          requestedHeaders -= peer
-          if (
-            blockHeaders.nonEmpty && blockHeaders.size <= requestedNum && blockHeaders.head.number == syncState.bestBlockHeaderNumber + 1
-          )
-            handleBlockHeaders(peer, blockHeaders)
-          else
-            blacklist.add(peer.id, blacklistDuration, WrongBlockHeaders)
+      case ResponseReceived(peer, blockBodiesMsg: ETHPackets.BlockBodies, timeTaken) =>
+        handshakedPeers.get(peer.id) match {
+          case Some(peerWithInfo) => bodiesFetcherQueue.deliver(peerWithInfo, blockBodiesMsg, timeTaken)
+          case None =>
+            ethRateTracker.update(
+              peer.id.value,
+              PeerRateTracker.MsgGetBlockBodies,
+              timeTaken,
+              blockBodiesMsg.bodies.size
+            )
         }
-      case ResponseReceived(peer, BlockBodies(blockBodies), timeTaken) =>
-        log.debug("Received {} block bodies from peer [{}] in {} ms", blockBodies.size, peer.id, timeTaken)
+        log.debug("Received {} block bodies from peer [{}] in {} ms", blockBodiesMsg.bodies.size, peer.id, timeTaken)
         FastSyncMetrics.setBlockBodiesDownloadTime(timeTaken)
 
         val requestedBodies = requestedBlockBodies.getOrElse(sender(), Nil)
         requestedBlockBodies -= sender()
         removeRequestHandler(sender())
-        handleBlockBodies(peer, requestedBodies, blockBodies)
-      case ResponseReceived(peer, ETH66BlockBodies(_, blockBodies), timeTaken) =>
-        log.debug("Received {} block bodies (ETH66) from peer [{}] in {} ms", blockBodies.size, peer.id, timeTaken)
-        FastSyncMetrics.setBlockBodiesDownloadTime(timeTaken)
-
-        val requestedBodies = requestedBlockBodies.getOrElse(sender(), Nil)
-        requestedBlockBodies -= sender()
-        removeRequestHandler(sender())
-        handleBlockBodies(peer, requestedBodies, blockBodies)
-      case ResponseReceived(peer, Receipts(receipts), timeTaken) =>
-        log.debug("Received {} receipts from peer [{}] in {} ms", receipts.size, peer.id, timeTaken)
-        FastSyncMetrics.setBlockReceiptsDownloadTime(timeTaken)
-
-        val requestedHashes = requestedReceipts.getOrElse(sender(), Nil)
-        requestedReceipts -= sender()
-        removeRequestHandler(sender())
-        handleReceipts(peer, requestedHashes, receipts)
-      case ResponseReceived(peer, eth66Receipts: ETH66Receipts, timeTaken) =>
+        handleBlockBodies(peer, requestedBodies, blockBodiesMsg.bodies)
+      case ResponseReceived(peer, receipts68: ETHPackets.Receipts68, timeTaken) =>
+        handshakedPeers.get(peer.id) match {
+          case Some(peerWithInfo) => receiptsFetcherQueue.deliver(peerWithInfo, receipts68, timeTaken)
+          case None =>
+            ethRateTracker.update(
+              peer.id.value,
+              PeerRateTracker.MsgGetReceipts,
+              timeTaken,
+              receipts68.receiptsForBlocks.items.size
+            )
+        }
         // Convert ETH66 RLPList format to Seq[Seq[Receipt]] expected by handleReceipts.
         // NOTE: Typed receipts (EIP-2718-style) can arrive on the wire as
         //   RLPValue(typeByte || rlp(payload))
         // so we must expand them before calling toTypedRLPEncodables/toReceipt.
         val receipts: Seq[Seq[Receipt]] = {
-          import ETH63.ReceiptImplicits._
-          import BaseETH6XMessages.TypedTransaction._
+          import com.chipprbots.ethereum.blockchain.sync.codec.ReceiptCodecs._
+          import ETHPackets.TypedTransaction._
           import com.chipprbots.ethereum.rlp.{RLPEncodeable, RLPException, RLPValue, rawDecode}
 
           def expandTypedReceipts(items: Seq[RLPEncodeable]): Seq[RLPEncodeable] =
@@ -394,12 +388,12 @@ class FastSync(
               case other => Seq(other)
             }
 
-          eth66Receipts.receiptsForBlocks.items.flatMap {
+          receipts68.receiptsForBlocks.items.flatMap {
             case r: RLPList =>
               Some(expandTypedReceipts(r.items).toTypedRLPEncodables.map(_.toReceipt))
             case other =>
               log.warning(
-                "Unexpected RLP item type in ETH66Receipts from peer [{}]: {}",
+                "Unexpected RLP item type in Receipts68 from peer [{}]: {}",
                 peer.id,
                 other.getClass.getSimpleName
               )
@@ -610,6 +604,8 @@ class FastSync(
       syncState = syncState
         .enqueueBlockBodies(Seq(header.hash))
         .enqueueReceipts(Seq(header.hash))
+      bodiesFetcherQueue.enqueue(Seq(header.hash))
+      receiptsFetcherQueue.enqueue(Seq(header.hash))
     }
 
     private def updateValidationState(header: BlockHeader): Unit = {
@@ -703,6 +699,7 @@ class FastSync(
         val knownHashes = requestedHashes.map(ByteStringUtils.hash2string)
         blacklist.add(peer.id, blacklistDuration, EmptyBlockBodies(knownHashes))
         syncState = syncState.enqueueBlockBodies(requestedHashes)
+        bodiesFetcherQueue.enqueue(requestedHashes)
       } else {
         validateBlocks(requestedHashes, blockBodies) match {
           case BlockBodyValidationResult.Valid =>
@@ -710,6 +707,7 @@ class FastSync(
           case BlockBodyValidationResult.Invalid =>
             blacklist.add(peer.id, blacklistDuration, BlockBodiesNotMatchingHeaders)
             syncState = syncState.enqueueBlockBodies(requestedHashes)
+            bodiesFetcherQueue.enqueue(requestedHashes)
           case BlockBodyValidationResult.DbError =>
             redownloadBlockchain()
         }
@@ -723,6 +721,7 @@ class FastSync(
         val knownHashes = requestedHashes.map(ByteStringUtils.hash2string)
         blacklist.add(peer.id, blacklistDuration, EmptyReceipts(knownHashes))
         syncState = syncState.enqueueReceipts(requestedHashes)
+        receiptsFetcherQueue.enqueue(requestedHashes)
       } else {
         validateReceipts(requestedHashes, receipts) match {
           case ReceiptsValidationResult.Valid(blockHashesWithReceipts) =>
@@ -746,12 +745,14 @@ class FastSync(
             val remainingReceipts = requestedHashes.drop(receipts.size)
             if (remainingReceipts.nonEmpty) {
               syncState = syncState.enqueueReceipts(remainingReceipts)
+              receiptsFetcherQueue.enqueue(remainingReceipts)
             }
 
           case ReceiptsValidationResult.Invalid(error) =>
             val knownHashes = requestedHashes.map(h => Hex.toHexString(h.toArray[Byte]))
             blacklist.add(peer.id, blacklistDuration, InvalidReceipts(knownHashes, error))
             syncState = syncState.enqueueReceipts(requestedHashes)
+            receiptsFetcherQueue.enqueue(requestedHashes)
 
           case ReceiptsValidationResult.DbError =>
             redownloadBlockchain()
@@ -764,11 +765,26 @@ class FastSync(
     private def handleRequestFailure(peer: Peer, handler: ActorRef, reason: BlacklistReason): Unit = {
       removeRequestHandler(handler)
 
-      syncState = syncState
-        .enqueueBlockBodies(requestedBlockBodies.getOrElse(handler, Nil))
-        .enqueueReceipts(requestedReceipts.getOrElse(handler, Nil))
+      val failedBodies = requestedBlockBodies.getOrElse(handler, Nil)
+      val failedReceipts = requestedReceipts.getOrElse(handler, Nil)
 
-      requestedHeaders -= peer
+      syncState = syncState
+        .enqueueBlockBodies(failedBodies)
+        .enqueueReceipts(failedReceipts)
+
+      // Return items to fetcher queues: unreserve if the peer is still tracked in-flight,
+      // otherwise enqueue directly (handles post-redownloadBlockchain orphaned handlers).
+      if (bodiesFetcherQueue.inFlight(peer.id).isDefined)
+        bodiesFetcherQueue.unreserve(peer.id)
+      else if (failedBodies.nonEmpty)
+        bodiesFetcherQueue.enqueue(failedBodies)
+
+      if (receiptsFetcherQueue.inFlight(peer.id).isDefined)
+        receiptsFetcherQueue.unreserve(peer.id)
+      else if (failedReceipts.nonEmpty)
+        receiptsFetcherQueue.enqueue(failedReceipts)
+
+      headersFetcherQueue.unreserve(peer.id)
       requestedBlockBodies = requestedBlockBodies - handler
       requestedReceipts = requestedReceipts - handler
 
@@ -790,6 +806,12 @@ class FastSync(
         // todo adjust the formula to minimize redownloaded block headers
         bestBlockHeaderNumber = (syncState.bestBlockHeaderNumber - 2 * blockHeadersPerRequest).max(0)
       )
+      // Drop all in-flight + pending items; orphaned handler failures will enqueue to fresh queues.
+      bodiesFetcherQueue = new BodiesFetcherQueue(ethRateTracker)
+      receiptsFetcherQueue = new ReceiptsFetcherQueue(ethRateTracker)
+      headersFetcherQueue = new HeadersFetcherQueue(ethRateTracker)
+      headerResponseBuffer.clear()
+      headerQueueHighWatermark = syncState.bestBlockHeaderNumber
       log.debug("Missing block header for known hash")
     }
 
@@ -910,6 +932,7 @@ class FastSync(
       val remainingBlockBodies = requestedHashes.drop(blockBodies.size)
       if (remainingBlockBodies.nonEmpty) {
         syncState = syncState.enqueueBlockBodies(remainingBlockBodies)
+        bodiesFetcherQueue.enqueue(remainingBlockBodies)
       }
     }
 
@@ -1078,7 +1101,6 @@ class FastSync(
       cleanup()
       appStateStorage.fastSyncDone().commit()
       context.become(idle)
-      peerRequestsTime = Map.empty
       scheduler.scheduleOnce(syncSwitchDelay, syncController, Done)
     }
 
@@ -1090,192 +1112,127 @@ class FastSync(
       fastSyncStateStorage.purge()
     }
 
-    def processDownloads(): Unit =
-      if (unassignedPeers.isEmpty) {
-        if (assignedHandlers.nonEmpty) {
+    def processDownloads(): Unit = {
+      // Self-heal: if syncState has items but fetcher queues are empty (e.g., post-restart), re-sync them
+      if (
+        syncState.blockBodiesQueue.nonEmpty && bodiesFetcherQueue.pending == 0 && bodiesFetcherQueue.inFlightCount == 0
+      )
+        bodiesFetcherQueue.enqueue(syncState.blockBodiesQueue)
+      if (
+        syncState.receiptsQueue.nonEmpty && receiptsFetcherQueue.pending == 0 && receiptsFetcherQueue.inFlightCount == 0
+      )
+        receiptsFetcherQueue.enqueue(syncState.receiptsQueue)
+
+      val hasWork = bodiesFetcherQueue.pending > 0 || receiptsFetcherQueue.pending > 0 ||
+        headersFetcherQueue.pending > 0 || headersFetcherQueue.inFlightCount > 0 ||
+        syncState.bestBlockHeaderNumber < syncState.safeDownloadTarget
+
+      if (handshakedPeers.isEmpty) {
+        if (assignedHandlers.nonEmpty)
           log.debug("There are no available peers, waiting for [{}] responses.", assignedHandlers.size)
-        } else {
-          scheduler.scheduleOnce(syncRetryInterval, self, ProcessSyncing)
-        }
-      } else {
-        val now = Instant.now()
-        val peers = unassignedPeers
-          .filter(p => peerRequestsTime.get(p.peer).forall(d => d.plusMillis(fastSyncThrottle.toMillis).isBefore(now)))
-        peers
-          .take(maxConcurrentRequests - assignedHandlers.size)
-          .sortBy(_.peerInfo.maxBlockNumber)(bigIntReverseOrdering)
-          .foreach(assignBlockchainWork)
-      }
-
-    def assignBlockchainWork(peerWithInfo: PeerWithInfo): Unit = {
-      val PeerWithInfo(peer, peerInfo) = peerWithInfo
-      log.debug(s"Assigning blockchain work for peer [{}]", peer.id.value)
-      if (syncState.receiptsQueue.nonEmpty) {
-        requestReceipts(peer)
-      } else if (syncState.blockBodiesQueue.nonEmpty) {
-        requestBlockBodies(peer)
-      } else if (
-        requestedHeaders.isEmpty &&
-        context.child(BlockHeadersHandlerName).isEmpty &&
-        syncState.bestBlockHeaderNumber < syncState.safeDownloadTarget &&
-        peerInfo.maxBlockNumber >= syncState.pivotBlock.number
-      ) {
-        requestBlockHeaders(peer)
-      } else {
-        log.debug(
-          "Nothing to request. Waiting for responses from: {}",
-          assignedHandlers.keys
-        )
-      }
-    }
-
-    private def requestReceipts(peer: Peer): Unit = {
-      val (receiptsToGet, remainingReceipts) = syncState.receiptsQueue.splitAt(receiptsPerRequest)
-
-      log.debug("Requesting [{}] receipts from peer [{}]", receiptsToGet.size, peer.id.value)
-
-      // Create message in correct format based on peer's negotiated capability
-      val usesRequestId = handshakedPeers
-        .get(peer.id)
-        .exists(peerWithInfo => Capability.usesRequestId(peerWithInfo.peerInfo.remoteStatus.capability))
-
-      val handler = if (usesRequestId) {
-        // Use ETH66 format for ETH66+ peers
-        context.actorOf(
-          PeerRequestHandler.props[ETH66.GetReceipts, ETH66Receipts](
-            peer,
-            peerResponseTimeout,
-            networkPeerManager,
-            peerEventBus,
-            requestMsg = ETH66.GetReceipts(ETH66.nextRequestId, receiptsToGet),
-            responseMsgCode = Codes.ReceiptsCode
-          ),
-          s"$countActor-peer-request-handler-receipts"
-        )
-      } else {
-        // Use ETH63 format for older peers
-        context.actorOf(
-          PeerRequestHandler.props[GetReceipts, Receipts](
-            peer,
-            peerResponseTimeout,
-            networkPeerManager,
-            peerEventBus,
-            requestMsg = GetReceipts(receiptsToGet),
-            responseMsgCode = Codes.ReceiptsCode
-          ),
-          s"$countActor-peer-request-handler-receipts"
-        )
-      }
-
-      context.watch(handler)
-      assignedHandlers += (handler -> peer)
-      peerRequestsTime += (peer -> Instant.now())
-      syncState = syncState.copy(receiptsQueue = remainingReceipts)
-      requestedReceipts += handler -> receiptsToGet
-    }
-
-    private def requestBlockBodies(peer: Peer): Unit = {
-      val (blockBodiesToGet, remainingBlockBodies) = syncState.blockBodiesQueue.splitAt(blockBodiesPerRequest)
-
-      log.debug("Requesting [{}] block bodies from peer [{}]", blockBodiesToGet.size, peer.id.value)
-
-      // Create message in correct format based on peer's negotiated capability
-      val usesRequestId = handshakedPeers
-        .get(peer.id)
-        .exists(peerWithInfo => Capability.usesRequestId(peerWithInfo.peerInfo.remoteStatus.capability))
-
-      val handler = if (usesRequestId) {
-        // Use ETH66 format for ETH66+ peers
-        context.actorOf(
-          PeerRequestHandler.props[ETH66.GetBlockBodies, ETH66BlockBodies](
-            peer,
-            peerResponseTimeout,
-            networkPeerManager,
-            peerEventBus,
-            requestMsg = ETH66.GetBlockBodies(ETH66.nextRequestId, blockBodiesToGet),
-            responseMsgCode = Codes.BlockBodiesCode
-          ),
-          s"$countActor-peer-request-handler-block-bodies"
-        )
-      } else {
-        // Use ETH62 format for older peers
-        context.actorOf(
-          PeerRequestHandler.props[GetBlockBodies, BlockBodies](
-            peer,
-            peerResponseTimeout,
-            networkPeerManager,
-            peerEventBus,
-            requestMsg = GetBlockBodies(blockBodiesToGet),
-            responseMsgCode = Codes.BlockBodiesCode
-          ),
-          s"$countActor-peer-request-handler-block-bodies"
-        )
-      }
-
-      context.watch(handler)
-      assignedHandlers += (handler -> peer)
-      peerRequestsTime += (peer -> Instant.now())
-      syncState = syncState.copy(blockBodiesQueue = remainingBlockBodies)
-      requestedBlockBodies += handler -> blockBodiesToGet
-    }
-
-    private def requestBlockHeaders(peer: Peer): Unit = {
-      val limit: BigInt =
-        if (blockHeadersPerRequest < (syncState.safeDownloadTarget - syncState.bestBlockHeaderNumber))
-          blockHeadersPerRequest
         else
-          syncState.safeDownloadTarget - syncState.bestBlockHeaderNumber
-
-      // Create message in correct format based on peer's negotiated capability
-      val usesRequestId = handshakedPeers
-        .get(peer.id)
-        .exists(peerWithInfo => Capability.usesRequestId(peerWithInfo.peerInfo.remoteStatus.capability))
-
-      if (usesRequestId) {
-        // Use ETH66 format for ETH66+ peers
-        val handler = context.actorOf(
-          PeerRequestHandler.props[ETH66.GetBlockHeaders, ETH66BlockHeaders](
-            peer,
-            peerResponseTimeout,
-            networkPeerManager,
-            peerEventBus,
-            requestMsg = ETH66.GetBlockHeaders(
-              ETH66.nextRequestId,
-              Left(syncState.bestBlockHeaderNumber + 1),
-              limit,
-              skip = 0,
-              reverse = false
-            ),
-            responseMsgCode = Codes.BlockHeadersCode
-          ),
-          BlockHeadersHandlerName
-        )
-        context.watch(handler)
-        assignedHandlers += (handler -> peer)
+          scheduler.scheduleOnce(syncRetryInterval, self, ProcessSyncing)
+      } else if (hasWork) {
+        dispatchWork()
+      } else if (assignedHandlers.nonEmpty) {
+        log.debug("No pending work; waiting for [{}] in-flight responses.", assignedHandlers.size)
       } else {
-        // Use ETH62 format for ETH63-65 peers
-        val handler = context.actorOf(
-          PeerRequestHandler.props[GetBlockHeaders, BlockHeaders](
-            peer,
-            peerResponseTimeout,
-            networkPeerManager,
-            peerEventBus,
-            requestMsg = GetBlockHeaders(Left(syncState.bestBlockHeaderNumber + 1), limit, skip = 0, reverse = false),
-            responseMsgCode = Codes.BlockHeadersCode
-          ),
-          BlockHeadersHandlerName
-        )
-        context.watch(handler)
-        assignedHandlers += (handler -> peer)
+        scheduler.scheduleOnce(syncRetryInterval, self, ProcessSyncing)
       }
-
-      requestedHeaders += (peer -> limit)
-      peerRequestsTime += (peer -> Instant.now())
     }
 
-    private def unassignedPeers: List[PeerWithInfo] = {
-      val assignedPeers = assignedHandlers.values.map(_.id).toList
-      peersToDownloadFrom.removedAll(assignedPeers).values.toList
+    private def dispatchWork(): Unit = {
+      val allPeers = handshakedPeers.values
+      val targetRtt = globalMedianRttMs
+
+      // Bodies: dispatch to all idle-for-bodies peers simultaneously (mirrors go-ethereum fetchBodies goroutine)
+      val bodyAssignments = ConcurrentFetch.dispatchTo(bodiesFetcherQueue, allPeers, targetRtt, "bodies", log)
+      bodyAssignments.foreach { case (peerWithInfo, req) =>
+        val handler = context.actorOf(
+          PeerRequestHandler.props[ETHPackets.GetBlockBodies, ETHPackets.BlockBodies](
+            peerWithInfo.peer,
+            peerResponseTimeout,
+            networkPeerManager,
+            peerEventBus,
+            requestMsg = req,
+            responseMsgCode = Codes.BlockBodiesCode
+          ),
+          s"$countActor-peer-request-handler-block-bodies"
+        )
+        context.watch(handler)
+        assignedHandlers += (handler -> peerWithInfo.peer)
+        requestedBlockBodies += handler -> req.hashes
+        syncState = syncState.copy(blockBodiesQueue = syncState.blockBodiesQueue.diff(req.hashes))
+      }
+
+      // Receipts: dispatch to all idle-for-receipts peers simultaneously (mirrors go-ethereum fetchReceipts goroutine)
+      val receiptAssignments = ConcurrentFetch.dispatchTo(receiptsFetcherQueue, allPeers, targetRtt, "receipts", log)
+      receiptAssignments.foreach { case (peerWithInfo, req) =>
+        val handler = context.actorOf(
+          PeerRequestHandler.props[ETHPackets.GetReceipts, ETHPackets.Receipts68](
+            peerWithInfo.peer,
+            peerResponseTimeout,
+            networkPeerManager,
+            peerEventBus,
+            requestMsg = req,
+            responseMsgCode = Codes.ReceiptsCode
+          ),
+          s"$countActor-peer-request-handler-receipts"
+        )
+        context.watch(handler)
+        assignedHandlers += (handler -> peerWithInfo.peer)
+        requestedReceipts += handler -> req.blockHashes
+        syncState = syncState.copy(receiptsQueue = syncState.receiptsQueue.diff(req.blockHashes))
+      }
+
+      // Headers: concurrent dispatch to all eligible peers (mirrors go-ethereum skeleton.assignTasks)
+      enqueueHeadersIfNeeded()
+      val eligibleHeaderPeers = allPeers.filter(_.peerInfo.maxBlockNumber >= syncState.pivotBlock.number).toSeq
+      val headerAssignments =
+        ConcurrentFetch.dispatchTo(headersFetcherQueue, eligibleHeaderPeers, targetRtt, "headers", log)
+      headerAssignments.foreach { case (peerWithInfo, req) =>
+        val handler = context.actorOf(
+          PeerRequestHandler.props[ETHPackets.GetBlockHeaders, ETHPackets.BlockHeaders](
+            peerWithInfo.peer,
+            peerResponseTimeout,
+            networkPeerManager,
+            peerEventBus,
+            requestMsg = req,
+            responseMsgCode = Codes.BlockHeadersCode
+          ),
+          s"$countActor-fast-headers-${req.requestId}"
+        )
+        context.watch(handler)
+        assignedHandlers += (handler -> peerWithInfo.peer)
+      }
+    }
+
+    private def enqueueHeadersIfNeeded(): Unit = {
+      val fillTarget = (headerQueueHighWatermark + FastSync.HeaderQueueLookahead).min(syncState.safeDownloadTarget)
+      if (fillTarget > headerQueueHighWatermark) {
+        val nums = (headerQueueHighWatermark + 1 to fillTarget).toSeq
+        headersFetcherQueue.enqueue(nums)
+        headerQueueHighWatermark = fillTarget
+        log.debug("Enqueued {} header block numbers [{}-{}]", nums.size, nums.head, nums.last)
+      }
+    }
+
+    private def drainOrderedHeaders(peer: Peer): Unit = {
+      // Prune anything superseded by a redownloadBlockchain reset
+      while (headerResponseBuffer.nonEmpty && headerResponseBuffer.firstKey <= syncState.bestBlockHeaderNumber)
+        headerResponseBuffer.remove(headerResponseBuffer.firstKey)
+
+      // Drain the contiguous run from bestBlockHeaderNumber + 1
+      var continue = true
+      while (continue)
+        headerResponseBuffer.headOption match {
+          case Some((blockNum, headers)) if blockNum == syncState.bestBlockHeaderNumber + 1 =>
+            headerResponseBuffer.remove(blockNum)
+            handleBlockHeaders(peer, headers)
+          case _ =>
+            continue = false
+        }
+      enqueueHeadersIfNeeded()
     }
 
     private def blockchainDataToDownload: Boolean =
@@ -1311,6 +1268,12 @@ class FastSync(
 }
 
 object FastSync {
+
+  /** Number of block numbers to keep ahead of bestBlockHeaderNumber in the header fetch queue. Ensures peers always
+    * have work to do without enqueuing the entire chain at once. Mirrors go-ethereum skeleton scratchHeaders (131,072)
+    * in spirit; tuned for actor-model dispatch.
+    */
+  val HeaderQueueLookahead: Int = 4096
 
   // scalastyle:off parameter.number
   def props(

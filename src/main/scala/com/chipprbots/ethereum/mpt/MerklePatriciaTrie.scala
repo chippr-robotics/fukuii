@@ -92,6 +92,7 @@ object MerklePatriciaTrie {
 
 trait NodesKeyValueStorage extends SimpleMap[NodeHash, NodeEncoded, NodesKeyValueStorage] {
   def persist(): Unit
+  def multiGet(keys: Seq[NodeHash]): Seq[Option[NodeEncoded]] = keys.map(get)
 }
 
 class MerklePatriciaTrie[K, V] private (private[mpt] val rootNode: Option[MptNode], val nodeStorage: MptStorage)(
@@ -161,11 +162,6 @@ class MerklePatriciaTrie[K, V] private (private[mpt] val rootNode: Option[MptNod
           }
           .getOrElse(Vector.empty)
     }
-  }
-
-  private def resolveIfHash(node: MptNode): MptNode = node match {
-    case HashNode(bytes) => getFromHash(bytes, nodeStorage)
-    case other           => other
   }
 
   /** Traverse given path from the root to value and accumulate data. Only nodes which are significant for searching for

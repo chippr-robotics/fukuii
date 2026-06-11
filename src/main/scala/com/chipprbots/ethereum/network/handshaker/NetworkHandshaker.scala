@@ -24,7 +24,7 @@ case class NetworkHandshaker private (
 object NetworkHandshaker {
 
   def apply(handshakerConfiguration: NetworkHandshakerConfiguration): NetworkHandshaker = {
-    val initialState = EtcHelloExchangeState(handshakerConfiguration)
+    val initialState = HelloExchangeState(handshakerConfiguration)
     NetworkHandshaker(initialState, handshakerConfiguration)
   }
 

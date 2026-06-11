@@ -78,11 +78,41 @@ class RocksDbDataSource(
     } finally dbLock.readLock().unlock()
   }
 
-  override def update(dataSourceUpdates: Seq[DataUpdate]): Unit = {
+  /** Batch point-lookup via a single JNI call. Amortises per-call overhead and bloom-filter evaluation across the
+    * batch; up to 16 keys per branch node in the healing DFS. Null entries in the result list indicate a cache miss.
+    */
+  override def multiGetOptimized(namespace: Namespace, keys: Seq[Array[Byte]]): Seq[Option[Array[Byte]]] = {
+    if (keys.isEmpty) return Seq.empty
+    import scala.jdk.CollectionConverters._
+    dbLock.readLock().lock()
+    try {
+      assureNotClosed()
+      val handle = handles(namespace)
+      val cfList = java.util.Collections.nCopies(keys.size, handle)
+      val keyList = keys.asJava
+      db.multiGetAsList(cfList, keyList).asScala.map(Option(_)).toSeq
+    } catch {
+      case error: RocksDbDataSourceClosedException => throw error
+      case NonFatal(error) =>
+        throw RocksDbDataSourceException(s"multiGetOptimized failed for namespace $namespace", error)
+    } finally dbLock.readLock().unlock()
+  }
+
+  override def update(dataSourceUpdates: Seq[DataUpdate]): Unit =
+    doWrite(dataSourceUpdates, sync = false)
+
+  /** Fsync-backed write: flushes the OS write buffer to disk before returning. Used for critical one-time commits (SNAP
+    * finalization) to prevent spurious SNAP-RECOVERY on crash. Slightly slower than [[update]] due to the fsync system
+    * call; only use where durability is required and frequency is low.
+    */
+  override def updateSync(dataSourceUpdates: Seq[DataUpdate]): Unit =
+    doWrite(dataSourceUpdates, sync = true)
+
+  private def doWrite(dataSourceUpdates: Seq[DataUpdate], sync: Boolean): Unit = {
     dbLock.writeLock().lock()
     try {
       assureNotClosed()
-      withResources(new WriteOptions()) { writeOptions =>
+      withResources(new WriteOptions().setSync(sync)) { writeOptions =>
         withResources(new WriteBatch()) { batch =>
           dataSourceUpdates.foreach {
             case DataSourceUpdate(namespace, toRemove, toUpsert) =>
@@ -193,6 +223,14 @@ class RocksDbDataSource(
     this.cfOptions = cfOptions
     this.isClosed = false
   }
+
+  def approximateKeyCount(namespace: Namespace): Long =
+    handles
+      .get(namespace)
+      .flatMap { handle =>
+        scala.util.Try(db.getLongProperty(handle, "rocksdb.estimate-num-keys")).toOption
+      }
+      .getOrElse(0L)
 
   /** This function closes the DataSource, without deleting the files used by it.
     */

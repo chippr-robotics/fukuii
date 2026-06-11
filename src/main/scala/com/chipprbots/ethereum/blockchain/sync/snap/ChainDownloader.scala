@@ -25,13 +25,13 @@ import com.chipprbots.ethereum.domain.BlockHeader
 import com.chipprbots.ethereum.network.Peer
 import com.chipprbots.ethereum.network.PeerId
 import com.chipprbots.ethereum.network.p2p.messages.Codes
-import com.chipprbots.ethereum.network.p2p.messages.ETH66
-import com.chipprbots.ethereum.network.p2p.messages.ETH66.GetBlockHeaders.GetBlockHeadersEnc
-import com.chipprbots.ethereum.network.p2p.messages.ETH66.GetBlockBodies.GetBlockBodiesEnc
-import com.chipprbots.ethereum.network.p2p.messages.ETH66.GetReceipts.GetReceiptsEnc
+import com.chipprbots.ethereum.network.p2p.messages.ETHPackets
+import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.GetBlockHeaders.GetBlockHeadersEnc
+import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.GetBlockBodies.GetBlockBodiesEnc
+import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.GetReceipts.GetReceiptsEnc
 import com.chipprbots.ethereum.rlp._
 import com.chipprbots.ethereum.domain.Receipt
-import com.chipprbots.ethereum.network.p2p.messages.ETH63.ReceiptImplicits._
+import com.chipprbots.ethereum.blockchain.sync.codec.ReceiptCodecs._
 import com.chipprbots.ethereum.utils.Config.SyncConfig
 
 /** Downloads block headers, bodies, and receipts from genesis to a target block in parallel with SNAP state sync.
@@ -184,7 +184,7 @@ class ChainDownloader(
       sender() ! Progress(headersDownloaded, bodiesDownloaded, receiptsDownloaded, targetBlock)
 
     // --- Header responses ---
-    case ResponseReceived(peer, ETH66.BlockHeaders(_, headers), _) =>
+    case ResponseReceived(peer, ETHPackets.BlockHeaders(_, headers), _) =>
       headerRequestPeers -= peer.id
       if (headers.nonEmpty) {
         emptyHeaderPeers -= peer.id
@@ -208,7 +208,7 @@ class ChainDownloader(
       dispatchRequests()
 
     // --- Body responses ---
-    case ResponseReceived(peer, ETH66.BlockBodies(_, bodies), _) =>
+    case ResponseReceived(peer, ETHPackets.BlockBodies(_, bodies), _) =>
       bodyRequestPeers.get(sender()).foreach { case (_, requestedHashes) =>
         bodyRequestPeers -= sender()
         handleBodies(peer, requestedHashes, bodies)
@@ -216,7 +216,7 @@ class ChainDownloader(
       dispatchRequests()
 
     // --- Receipt responses ---
-    case ResponseReceived(peer, eth66Receipts: ETH66.Receipts, _) =>
+    case ResponseReceived(peer, eth66Receipts: ETHPackets.Receipts68, _) =>
       receiptRequestPeers.get(sender()).foreach { case (_, requestedHashes) =>
         receiptRequestPeers -= sender()
         handleReceipts(peer, requestedHashes, eth66Receipts)
@@ -309,8 +309,8 @@ class ChainDownloader(
 
     headerRequestPeers += peer.id
 
-    val requestMsg = ETH66.GetBlockHeaders(
-      ETH66.nextRequestId,
+    val requestMsg = ETHPackets.GetBlockHeaders(
+      ETHPackets.nextRequestId,
       Left(bestHeaderNumber + 1),
       limit,
       skip = 0,
@@ -319,7 +319,7 @@ class ChainDownloader(
 
     context.actorOf(
       PeerRequestHandler
-        .props[ETH66.GetBlockHeaders, ETH66.BlockHeaders](
+        .props[ETHPackets.GetBlockHeaders, ETHPackets.BlockHeaders](
           peer,
           requestTimeout,
           networkPeerManager,
@@ -337,11 +337,11 @@ class ChainDownloader(
 
     bodiesQueue = bodiesQueue.drop(batch.size)
 
-    val requestMsg = ETH66.GetBlockBodies(ETH66.nextRequestId, batch)
+    val requestMsg = ETHPackets.GetBlockBodies(ETHPackets.nextRequestId, batch)
 
     val handler = context.actorOf(
       PeerRequestHandler
-        .props[ETH66.GetBlockBodies, ETH66.BlockBodies](
+        .props[ETHPackets.GetBlockBodies, ETHPackets.BlockBodies](
           peer,
           requestTimeout,
           networkPeerManager,
@@ -361,11 +361,11 @@ class ChainDownloader(
 
     receiptsQueue = receiptsQueue.drop(batch.size)
 
-    val requestMsg = ETH66.GetReceipts(ETH66.nextRequestId, batch)
+    val requestMsg = ETHPackets.GetReceipts(ETHPackets.nextRequestId, batch)
 
     val handler = context.actorOf(
       PeerRequestHandler
-        .props[ETH66.GetReceipts, ETH66.Receipts](
+        .props[ETHPackets.GetReceipts, ETHPackets.Receipts68](
           peer,
           requestTimeout,
           networkPeerManager,
@@ -510,9 +510,9 @@ class ChainDownloader(
   private def handleReceipts(
       peer: Peer,
       requestedHashes: Seq[ByteString],
-      eth66Receipts: ETH66.Receipts
+      eth66Receipts: ETHPackets.Receipts68
   ): Unit = {
-    import com.chipprbots.ethereum.network.p2p.messages.BaseETH6XMessages.TypedTransaction._
+    import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.TypedTransaction._
 
     val hashStrings = requestedHashes.map(h => s"0x${h.toArray.map("%02x".format(_)).mkString}")
     val receiptsRlp = eth66Receipts.receiptsForBlocks

@@ -258,7 +258,12 @@ jobs:
             --client "$CLIENTS"
             --sim.parallelism "$PARALLELISM"
             --sim.timelimit "$SIM_TIMELIMIT"
-            --client.checktimelimit=60s
+            # 120s (was 60s): fukuii is a JVM client whose cold class-load + JIT
+            # warmup can consume most of a 60s budget before the sink reaches the
+            # sync target, tipping slow fukuii-sink sync tests over the deadline.
+            # Benign for native clients (geth/nethermind respond well within 60s);
+            # the timeout only matters when a client is genuinely slow to get ready.
+            --client.checktimelimit=120s
             --loglevel 3
           )
           [ -n "$SIM_LIMIT" ]   && args+=(--sim.limit   "$SIM_LIMIT")

@@ -205,15 +205,15 @@ object DnsDiscovery extends Logger {
           // ENRs without an `eth` key are accepted optimistically (handshake STATUS will decide).
           forkIdFilter match {
             case Some(filter) =>
-              attrs.get("eth").foreach { ethBytes =>
-                val maybeForkId =
+              attrs
+                .get("eth")
+                .flatMap { ethBytes =>
                   try Some(decode[ForkId](rawDecode(ethBytes)))
                   catch { case _: Exception => None }
-                maybeForkId.foreach { remoteForkId =>
-                  if (!filter.accepts(remoteForkId)) {
-                    return Left(s"fork-id mismatch: $remoteForkId")
-                  }
                 }
+                .filter(id => !filter.accepts(id)) match {
+                case Some(id) => return Left(s"fork-id mismatch: $id")
+                case None     =>
               }
             case None =>
           }

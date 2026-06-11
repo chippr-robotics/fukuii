@@ -22,10 +22,6 @@ import com.chipprbots.ethereum.jsonrpc.PersonalService._
 import com.chipprbots.ethereum.keystore.KeyStore
 import com.chipprbots.ethereum.keystore.Wallet
 import com.chipprbots.ethereum.nodebuilder.BlockchainConfigBuilder
-import com.chipprbots.ethereum.rlp
-import com.chipprbots.ethereum.rlp.RLPImplicitConversions._
-import com.chipprbots.ethereum.rlp.RLPImplicits.given
-import com.chipprbots.ethereum.rlp.RLPList
 import com.chipprbots.ethereum.transactions.PendingTransactionsManager
 import com.chipprbots.ethereum.transactions.PendingTransactionsManager.AddOrOverrideTransaction
 import com.chipprbots.ethereum.transactions.PendingTransactionsManager.PendingTransactionsResponse
@@ -94,7 +90,8 @@ class PersonalService(
     blockchainReader: BlockchainReader,
     txPool: ActorRef,
     txPoolConfig: TxPoolConfig,
-    configBuilder: BlockchainConfigBuilder
+    configBuilder: BlockchainConfigBuilder,
+    ethTxService: EthTxService
 ) extends PersonalServiceAPI
     with Logger {
   import configBuilder._
@@ -211,7 +208,10 @@ class PersonalService(
     latestPendingTxNonceFuture.map { maybeLatestPendingTxNonce =>
       val maybeCurrentNonce = getCurrentAccount(request.from).map(_.nonce.toBigInt)
       val maybeNextTxNonce = maybeLatestPendingTxNonce.map(_ + 1).orElse(maybeCurrentNonce)
-      val tx = request.toTransaction(maybeNextTxNonce.getOrElse(blockchainConfig.accountStartNonce))
+      val tx = request.toTransaction(
+        maybeNextTxNonce.getOrElse(blockchainConfig.accountStartNonce),
+        request.gasPrice.getOrElse(ethTxService.suggestGasPrice())
+      )
 
       val stx = if (blockchainReader.getBestBlockNumber() >= blockchainConfig.forkBlockNumbers.eip155BlockNumber) {
         wallet.signTx(tx, Some(blockchainConfig.chainId))

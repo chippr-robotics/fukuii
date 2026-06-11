@@ -9,6 +9,7 @@ import org.scalatest.matchers.should.Matchers
 import com.chipprbots.ethereum.consensus.difficulty.DifficultyCalculator
 import com.chipprbots.ethereum.consensus.validators.BlockHeaderError._
 import com.chipprbots.ethereum.domain.BlockHeader
+import com.chipprbots.ethereum.domain.BlockHeader.HeaderExtraFields.HefPostOlympia
 import com.chipprbots.ethereum.domain.UInt256
 import com.chipprbots.ethereum.utils.BlockchainConfig
 import com.chipprbots.ethereum.utils.ForkBlockNumbers
@@ -196,6 +197,117 @@ class GasLimitValidationSpec extends AnyFlatSpec with Matchers {
       difficulty = largeParent.difficulty
     )
     GasLimitTestValidator.validate(child, largeParent) shouldBe Left(HeaderGasLimitError)
+  }
+
+  // ===== ECIP-1122 Gas Limit Target SHOULD Warning =====
+  // The gas limit target check is SHOULD (non-blocking): validation must still return Right
+  // even when gasLimit < target.  Warning-side verification requires log capture
+  // and is deferred to integration-level log inspection.
+
+  // ETC config: Spiral from block 0, Olympia from block 500.
+  private val etcForkBlockNumbers = ForkBlockNumbers.Empty.copy(
+    frontierBlockNumber = 0,
+    homesteadBlockNumber = 0,
+    eip106BlockNumber = 0,
+    difficultyBombRemovalBlockNumber = 0,
+    spiralBlockNumber = 0,
+    olympiaBlockNumber = 500,
+    spiralGasTarget = Some(BigInt(8_000_000)),
+    olympiaGasTarget = Some(BigInt(60_000_000))
+  )
+  private val etcBlockchainConfig: BlockchainConfig = blockchainConfig.copy(
+    forkBlockNumbers = etcForkBlockNumbers
+  )
+
+  // Parent at 8M for Spiral-epoch tests — bound = 8M/1024 = 7812.
+  private val spiralParent = parentHeader.copy(gasLimit = 8_000_000, number = 100)
+
+  private def validateEtc(child: BlockHeader): Either[BlockHeaderError, BlockHeaderValid] = {
+    implicit val cfg: BlockchainConfig = etcBlockchainConfig
+    GasLimitTestValidator.validate(child, spiralParent)
+  }
+
+  it should "accept (SHOULD) peer block 1 below Spiral gas limit target — block still valid" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in {
+    // gasLimit = 7_999_999: 1 below 8M target but within ±7812 bound → Right (with warn)
+    val child = spiralParent.copy(
+      parentHash = spiralParent.hash,
+      number = 101,
+      gasLimit = 7_999_999,
+      unixTimestamp = spiralParent.unixTimestamp + 13,
+      difficulty = spiralParent.difficulty
+    )
+    validateEtc(child) shouldBe Right(BlockHeaderValid)
+  }
+
+  it should "accept peer block at exactly the Spiral gas limit target — no warning expected" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in {
+    // gasLimit = 8_000_000: exactly at target, within bounds → Right (no warn)
+    val child = spiralParent.copy(
+      parentHash = spiralParent.hash,
+      number = 101,
+      gasLimit = 8_000_000,
+      unixTimestamp = spiralParent.unixTimestamp + 13,
+      difficulty = spiralParent.difficulty
+    )
+    validateEtc(child) shouldBe Right(BlockHeaderValid)
+  }
+
+  // Parent at 60M for Olympia-epoch tests — bound = 60M/1024 = 58593.
+  // Block 600 > olympiaBlockNumber(500): extraFields = HefPostOlympia required.
+  // gasUsed = gasLimit/2 (= gas target) so EIP-1559 baseFee stays constant across parent→child.
+  private val olympiaParent = parentHeader.copy(
+    gasLimit = 60_000_000,
+    number = 600,
+    gasUsed = 30_000_000,
+    extraFields = HefPostOlympia(BigInt(1_000_000_000))
+  )
+
+  private def validateEtcOlympia(child: BlockHeader): Either[BlockHeaderError, BlockHeaderValid] = {
+    implicit val cfg: BlockchainConfig = etcBlockchainConfig
+    GasLimitTestValidator.validate(child, olympiaParent)
+  }
+
+  it should "accept (SHOULD) peer block 1 below Olympia gas limit target — block still valid" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in {
+    // gasLimit = 59_999_999: 1 below 60M target but within ±58593 bound → Right (with warn)
+    val child = olympiaParent.copy(
+      parentHash = olympiaParent.hash,
+      number = 601,
+      gasLimit = 59_999_999,
+      unixTimestamp = olympiaParent.unixTimestamp + 13,
+      difficulty = olympiaParent.difficulty
+    )
+    validateEtcOlympia(child) shouldBe Right(BlockHeaderValid)
+  }
+
+  it should "accept peer block at exactly the Olympia gas limit target — no warning expected" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in {
+    // gasLimit = 60_000_000: at target, within bounds → Right (no warn)
+    val child = olympiaParent.copy(
+      parentHash = olympiaParent.hash,
+      number = 601,
+      gasLimit = 60_000_000,
+      unixTimestamp = olympiaParent.unixTimestamp + 13,
+      difficulty = olympiaParent.difficulty
+    )
+    validateEtcOlympia(child) shouldBe Right(BlockHeaderValid)
+  }
+
+  it should "not trigger gas limit target warning on non-ETC network (no gas schedule configured)" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in {
+    // Default blockchainConfig has no spiralGasTarget / olympiaGasTarget → no warning, Right
+    validate(childWithGasLimit(1024000)) shouldBe Right(BlockHeaderValid)
   }
 }
 // scalastyle:on magic.number

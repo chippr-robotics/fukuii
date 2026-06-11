@@ -1,5 +1,7 @@
 package com.chipprbots.ethereum.blockchain.sync.snap
 
+import com.chipprbots.ethereum.network.p2p.messages.ETHPackets
+
 import org.apache.pekko.actor.ActorSystem
 import org.apache.pekko.testkit.TestActorRef
 import org.apache.pekko.testkit.TestKit
@@ -22,7 +24,6 @@ import com.chipprbots.ethereum.domain.BlockchainReader
 import com.chipprbots.ethereum.domain.BlockchainWriter
 import com.chipprbots.ethereum.network.Peer
 import com.chipprbots.ethereum.network.PeerId
-import com.chipprbots.ethereum.network.p2p.messages.ETH66
 import com.chipprbots.ethereum.testing.Tags._
 
 class ChainDownloaderSpec
@@ -205,12 +206,12 @@ class ChainDownloaderSpec
     downloader.underlyingActor.isHeaderExcluded(peer.id) shouldBe false
 
     // First empty response — peer should be excluded
-    downloader ! ResponseReceived(peer, ETH66.BlockHeaders(requestId = 1, headers = Seq.empty), 100L)
+    downloader ! ResponseReceived(peer, ETHPackets.BlockHeaders(BigInt(1), Seq.empty), 100L)
     downloader.underlyingActor.isHeaderExcluded(peer.id) shouldBe true
 
     // Recovery: non-empty response clears the exclusion
     val fakeHeader = mock[com.chipprbots.ethereum.domain.BlockHeader]
-    downloader ! ResponseReceived(peer, ETH66.BlockHeaders(requestId = 2, headers = Seq(fakeHeader)), 100L)
+    downloader ! ResponseReceived(peer, ETHPackets.BlockHeaders(BigInt(2), Seq(fakeHeader)), 100L)
     downloader.underlyingActor.isHeaderExcluded(peer.id) shouldBe false
 
     system.stop(downloader)

@@ -208,7 +208,7 @@ class ETH69TDSpec extends AnyFlatSpec with Matchers {
     import com.chipprbots.ethereum.rlp.{RLPList, rawDecode}
 
     val status = eth69Status(latestBlockNr, latestHash)
-    val encoded: Array[Byte] = new StatusEnc(status).toBytes
+    val encoded: Array[Byte] = status.toBytes
     val decoded = rawDecode(encoded)
 
     decoded shouldBe a[RLPList]
@@ -220,7 +220,7 @@ class ETH69TDSpec extends AnyFlatSpec with Matchers {
     import com.chipprbots.ethereum.network.p2p.messages.ETH69.Status._
 
     val original = eth69Status(latestBlockNr, latestHash).copy(earliestBlock = BigInt(0))
-    val encoded: Array[Byte] = new StatusEnc(original).toBytes
+    val encoded: Array[Byte] = original.toBytes
     val decoded = encoded.toETH69Status
 
     decoded.protocolVersion shouldBe original.protocolVersion
@@ -236,7 +236,7 @@ class ETH69TDSpec extends AnyFlatSpec with Matchers {
     import com.chipprbots.ethereum.network.p2p.messages.ETH69.Status._
 
     val original = eth69Status(latestBlockNr, latestHash).copy(earliestBlock = BigInt(123))
-    val encoded: Array[Byte] = new StatusEnc(original).toBytes
+    val encoded: Array[Byte] = original.toBytes
     val decoded = encoded.toETH69Status
 
     decoded.earliestBlock shouldBe BigInt(123)

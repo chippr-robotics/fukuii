@@ -48,7 +48,6 @@ import com.chipprbots.ethereum.ommers.OmmersPool.Ommers
 import com.chipprbots.ethereum.testing.ActorsTesting.simpleAutoPilot
 import com.chipprbots.ethereum.testing.Tags._
 import com.chipprbots.ethereum.transactions.PendingTransactionsManager
-import com.chipprbots.ethereum.utils.BlockchainConfig
 import org.scalatest.prop.TableFor1
 
 // scalastyle:off magic.number

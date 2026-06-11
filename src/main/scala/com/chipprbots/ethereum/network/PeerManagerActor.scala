@@ -52,6 +52,8 @@ class PeerManagerActor(
     with ActorLogging
     with Stash {
 
+  implicit private val ec: scala.concurrent.ExecutionContext = context.dispatcher
+
   /** Maximum number of blacklisted nodes will never be larger than number of peers provided by discovery Discovery
     * provides remote nodes from all networks (ETC,ETH, Mordor etc.) only during handshake we learn that some of the
     * remote nodes are not compatible that's why we mark them as useless (blacklist them).
@@ -165,25 +167,14 @@ class PeerManagerActor(
       stash()
   }
 
-  private def scheduleNodesUpdate(): Unit = {
-    implicit val ec = context.dispatcher
+  private def scheduleNodesUpdate(): Unit =
     scheduler.scheduleWithFixedDelay(
       peerConfiguration.updateNodesInitialDelay,
-      peerConfiguration.updateNodesInterval,
-      peerDiscoveryManager,
-      PeerDiscoveryManager.GetDiscoveredNodesInfo
-    )
-  }
+      peerConfiguration.updateNodesInterval
+    )(() => peerDiscoveryManager ! PeerDiscoveryManager.GetDiscoveredNodesInfo)
 
-  private def schedulePeerStatusRefresh(): Unit = {
-    implicit val ec = context.dispatcher
-    scheduler.scheduleWithFixedDelay(
-      10.seconds,
-      10.seconds,
-      self,
-      RefreshPeerStatuses
-    )
-  }
+  private def schedulePeerStatusRefresh(): Unit =
+    scheduler.scheduleWithFixedDelay(10.seconds, 10.seconds)(() => self ! RefreshPeerStatuses)
 
   private def listening(connectedPeers: ConnectedPeers): Receive =
     handleCommonMessages(connectedPeers)
@@ -512,9 +503,9 @@ class PeerManagerActor(
             uri,
             peerConfiguration.connectRetryDelay
           )
-          context.system.scheduler.scheduleOnce(peerConfiguration.connectRetryDelay, self, ConnectToPeer(uri))(
-            context.dispatcher
-          )
+          context.system.scheduler.scheduleOnce(peerConfiguration.connectRetryDelay) {
+            self ! ConnectToPeer(uri)
+          }
         }
       }
       // Track TCP-level pre-handshake failures for non-maintained outgoing peers.
@@ -534,7 +525,7 @@ class PeerManagerActor(
             val backoff: FiniteDuration =
               if (snapCapableHosts.contains(ip)) PeerManagerActor.SnapPeerSoftBlacklistDuration
               else math.min(30, 5 * (1 << (count - 5))).minutes
-            log.warning("TCP failure #{} for {} — blacklisting for {}", count, ip, backoff)
+            log.info("TCP failure #{} for {} — blacklisting for {}", count, ip, backoff)
             blacklist.add(PeerAddress(ip), backoff, Blacklist.BlacklistReason.TcpSubsystemError)
             consecutiveTcpFailures.remove(ip)
           }
@@ -570,7 +561,7 @@ class PeerManagerActor(
             log.debug("Maintained peer {} already connected via winner — skipping reconnect", uri)
           } else {
             log.debug("Maintained peer {} disconnected — scheduling reconnect in 5s", uri)
-            context.system.scheduler.scheduleOnce(5.seconds, self, ConnectToPeer(uri))(context.dispatcher)
+            context.system.scheduler.scheduleOnce(5.seconds)(self ! ConnectToPeer(uri))
           }
         }
       }

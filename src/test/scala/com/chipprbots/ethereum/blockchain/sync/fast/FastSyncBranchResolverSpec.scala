@@ -8,6 +8,7 @@ import org.apache.pekko.util.ByteString
 import org.scalamock.scalatest.MockFactory
 import org.scalatest.matchers.must.Matchers
 import org.scalatest.wordspec.AnyWordSpec
+import org.scalatest.ParallelTestExecution
 
 import com.chipprbots.ethereum.BlockHelpers
 import com.chipprbots.ethereum.Fixtures
@@ -20,8 +21,9 @@ import com.chipprbots.ethereum.domain.BlockchainImpl
 import com.chipprbots.ethereum.domain.BlockchainReader
 import com.chipprbots.ethereum.network.Peer
 import com.chipprbots.ethereum.network.PeerId
+import com.chipprbots.ethereum.testing.Tags._
 
-class FastSyncBranchResolverSpec extends AnyWordSpec with Matchers with MockFactory {
+class FastSyncBranchResolverSpec extends AnyWordSpec with Matchers with MockFactory with ParallelTestExecution {
 
   import Fixtures.Blocks.ValidBlock
 
@@ -35,16 +37,16 @@ class FastSyncBranchResolverSpec extends AnyWordSpec with Matchers with MockFact
     blocksMap.values.map(_.header).toList
 
   "FastSyncBranchResolver" must {
-    "calculate childOf block number" in {
+    "calculate childOf block number" taggedAs (UnitTest) in {
       import FastSyncBranchResolver.childOf
       assert(childOf(0) === 1)
       assert(childOf(6) === 7)
     }
-    "calculate parentOf block number" in {
+    "calculate parentOf block number" taggedAs (UnitTest) in {
       import FastSyncBranchResolver.parentOf
       assert(parentOf(7) === 6)
     }
-    "correctly discard all blocks after a certain block number" in {
+    "correctly discard all blocks after a certain block number" taggedAs (UnitTest) in {
       val mockedBlockchain = mock[BlockchainImpl]
       val mockedBlockchainReader = mock[BlockchainReader]
 
@@ -70,7 +72,7 @@ class FastSyncBranchResolverSpec extends AnyWordSpec with Matchers with MockFact
 
   "RecentBlocksSearch" must {
     "find highest common block header" when {
-      "it's at the very end of the search range" in {
+      "it's at the very end of the search range" taggedAs (UnitTest) in {
         val mockedBlockchainReader = mock[BlockchainReader]
 
         // our: [..., 97, 98, 99, *100*]
@@ -86,7 +88,7 @@ class FastSyncBranchResolverSpec extends AnyWordSpec with Matchers with MockFact
           recentBlocksSearch.getHighestCommonBlock(peerBlocks.values.map(_.header).toList, 100) === Some(BigInt(100))
         )
       }
-      "it's at the very beginning of the search range" in {
+      "it's at the very beginning of the search range" taggedAs (UnitTest) in {
         val mockedBlockchainReader = mock[BlockchainReader]
 
         val ourBestBlock = 100
@@ -114,7 +116,7 @@ class FastSyncBranchResolverSpec extends AnyWordSpec with Matchers with MockFact
           )
         )
       }
-      "it's somewhere in the middle" in {
+      "it's somewhere in the middle" taggedAs (UnitTest) in {
         val mockedBlockchainReader = mock[BlockchainReader]
 
         val ourBestBlock = 100
@@ -139,7 +141,7 @@ class FastSyncBranchResolverSpec extends AnyWordSpec with Matchers with MockFact
         assert(recentBlocksSearch.getHighestCommonBlock(headersList(peerBlocks), ourBestBlock) === Some(BigInt(98)))
       }
     }
-    "return None if there's no common block header" in {
+    "return None if there's no common block header" taggedAs (UnitTest) in {
       val mockedBlockchainReader = mock[BlockchainReader]
 
       val ourBestBlock = 100
@@ -163,7 +165,7 @@ class FastSyncBranchResolverSpec extends AnyWordSpec with Matchers with MockFact
   }
 
   "BinarySearch" must {
-    "determine correct block number to request" in {
+    "determine correct block number to request" taggedAs (UnitTest) in {
       // we are requesting the child block header of the middle block header, so we're expecting (middle + 1)
       assert(BinarySearchSupport.blockHeaderNumberToRequest(3, 7) === 6)
       // if there is no "middle", we take the lower number
@@ -171,7 +173,7 @@ class FastSyncBranchResolverSpec extends AnyWordSpec with Matchers with MockFact
       assert(BinarySearchSupport.blockHeaderNumberToRequest(3, 4) === 4)
       assert(BinarySearchSupport.blockHeaderNumberToRequest(4, 4) === 5)
     }
-    "complete search with highest common block number" in {
+    "complete search with highest common block number" taggedAs (UnitTest) in {
       val ourBestBlock = 10
       val highestCommonBlock = 6
 
@@ -252,7 +254,7 @@ class FastSyncBranchResolverSpec extends AnyWordSpec with Matchers with MockFact
       }
       assert(res === BigInt(6))
     }
-    "complete search with no match" in {
+    "complete search with no match" taggedAs (UnitTest) in {
 
       val blocksSaved: List[Block] = BlockHelpers.generateChain(8, BlockHelpers.genesis)
       val blocksSavedInPeer: List[Block] = BlockHelpers.generateChain(8, BlockHelpers.genesis)

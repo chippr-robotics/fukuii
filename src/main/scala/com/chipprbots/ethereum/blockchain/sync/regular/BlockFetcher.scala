@@ -5,6 +5,7 @@ import org.apache.pekko.actor.typed.Behavior
 import org.apache.pekko.actor.typed.scaladsl.AbstractBehavior
 import org.apache.pekko.actor.typed.scaladsl.ActorContext
 import org.apache.pekko.actor.typed.scaladsl.Behaviors
+import org.apache.pekko.actor.typed.scaladsl.TimerScheduler
 import org.apache.pekko.actor.typed.scaladsl.adapter._
 import org.apache.pekko.actor.{ActorRef => ClassicActorRef}
 import org.apache.pekko.util.ByteString
@@ -21,10 +22,10 @@ import mouse.all._
 import com.chipprbots.ethereum.blockchain.sync.Blacklist.BlacklistReason
 import com.chipprbots.ethereum.blockchain.sync.PeersClient._
 import com.chipprbots.ethereum.blockchain.sync.regular.BlockFetcherState.AwaitingBodiesToBeIgnored
-import com.chipprbots.ethereum.blockchain.sync.regular.BlockFetcherState.AwaitingHeadersToBeIgnored
 import com.chipprbots.ethereum.blockchain.sync.regular.BlockFetcherState.HeadersNotFormingSeq
 import com.chipprbots.ethereum.blockchain.sync.regular.BlockFetcherState.HeadersNotMatchingReadyBlocks
 import com.chipprbots.ethereum.blockchain.sync.regular.BlockFetcherState.HeadersNotMatchingWaitingHeaders
+import com.chipprbots.ethereum.blockchain.sync.regular.BlockFetcherState.MaxConcurrentHeaderSlots
 import com.chipprbots.ethereum.blockchain.sync.regular.BlockImporter.ImportNewBlock
 import com.chipprbots.ethereum.blockchain.sync.regular.RegularSync.ProgressProtocol
 import com.chipprbots.ethereum.consensus.validators.BlockValidator
@@ -37,12 +38,9 @@ import com.chipprbots.ethereum.network.PeerEventBusActor.Subscribe
 import com.chipprbots.ethereum.network.PeerEventBusActor.SubscriptionClassifier.MessageClassifier
 import com.chipprbots.ethereum.network.PeerId
 import com.chipprbots.ethereum.network.p2p.Message
-import com.chipprbots.ethereum.network.p2p.messages.BaseETH6XMessages
 import com.chipprbots.ethereum.network.p2p.messages.Codes
-import com.chipprbots.ethereum.network.p2p.messages.ETH62._
-import com.chipprbots.ethereum.network.p2p.messages.ETH62.{BlockHeaders => ETH62BlockHeaders}
-import com.chipprbots.ethereum.network.p2p.messages.ETH63.NodeData
-import com.chipprbots.ethereum.network.p2p.messages.ETH66.{BlockHeaders => ETH66BlockHeaders}
+import com.chipprbots.ethereum.network.p2p.messages.ETHPackets
+import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.NewBlockHashes.NewBlockHashes
 import com.chipprbots.ethereum.network.p2p.messages.ETH69
 import com.chipprbots.ethereum.utils.ByteStringUtils
 import com.chipprbots.ethereum.utils.Config.SyncConfig
@@ -54,7 +52,8 @@ class BlockFetcher(
     val supervisor: ClassicActorRef,
     val syncConfig: SyncConfig,
     val blockValidator: BlockValidator,
-    context: ActorContext[BlockFetcher.FetchCommand]
+    context: ActorContext[BlockFetcher.FetchCommand],
+    timers: TimerScheduler[BlockFetcher.FetchCommand]
 ) extends AbstractBehavior[BlockFetcher.FetchCommand](context) {
 
   import BlockFetcher._
@@ -107,6 +106,9 @@ class BlockFetcher(
           sa.toClassic
         )
         log.debug("BlockFetcher subscribed to peer events")
+        // 500ms stall-recovery heartbeat: fills open header slots if the primary reactive
+        // triggers (BRU, response received) were missed or headersToIgnore just drained.
+        timers.startTimerWithFixedDelay("tick-fetch", TickFetch, 500.millis)
         BlockFetcherState.initial(importer, blockValidator, fromBlock) |> fetchBlocks
       case msg =>
         log.debug("Fetcher subscribe adapter received unhandled message {}", msg)
@@ -117,28 +119,34 @@ class BlockFetcher(
   private def processFetchCommands(state: BlockFetcherState): Behavior[FetchCommand] =
     Behaviors.receiveMessage {
       case PrintStatus =>
+        val now = System.currentTimeMillis()
+        val dt = if (state.lastPrintTimeMs > 0) (now - state.lastPrintTimeMs) / 1000.0 else 0.0
+        val delta = state.lastBlock - state.lastPrintBlock
+        val rate = if (dt > 0 && state.lastPrintTimeMs > 0) delta.toDouble / dt else 0.0
+        val behind = (state.knownTop - state.lastBlock).max(0)
+        val etaStr =
+          if (rate > 0 && behind > 0) f"eta=${behind.toDouble / rate / 60.0}%.1fmin"
+          else if (behind == 0) "caught-up"
+          else "eta=?"
         log.info(
-          "BlockFetcher: readyBlocks={} knownTop={} onTop={}",
-          state.readyBlocks.size,
-          state.knownTop,
-          state.isOnTop
-        )
-        log.debug("BlockFetcher detailed status: {}", state.statusDetailed)
-        log.debug(
-          "Current state - last block: {}, known top: {}, is on top: {}, ready blocks: {}, waiting headers: {}",
+          "[RegularSync] block={} top={} behind={} rate={}/s {} ready={} waiting={}",
           state.lastBlock,
           state.knownTop,
-          state.isOnTop,
+          behind,
+          f"$rate%.1f",
+          etaStr,
           state.readyBlocks.size,
           state.waitingHeaders.size
         )
+        log.debug("[RegularSync] detailed: {}", state.statusDetailed)
+        val updatedState = state.copy(lastPrintBlock = state.lastBlock, lastPrintTimeMs = now)
         // Defense-in-depth: if stuck at chain head with no peer gossip (e.g., ETH/69 peers that
         // sent BlockRangeUpdate before we subscribed, or a quiet period), probe speculatively.
         // withPossibleNewTopAt(knownTop + 1) exits isOnTop and triggers tryFetchHeaders.
         if (state.isOnTop) {
           log.debug("BlockFetcher: isOnTop at knownTop={}, probing for next block", state.knownTop)
-          fetchBlocks(state.withPossibleNewTopAt(state.knownTop + 1))
-        } else Behaviors.same
+          fetchBlocks(updatedState.withPossibleNewTopAt(state.knownTop + 1))
+        } else fetchBlocks(updatedState)
 
       case PickBlocks(amount, replyTo) =>
         log.debug("PickBlocks request for {} blocks (ready blocks: {})", amount, state.readyBlocks.size)
@@ -176,16 +184,17 @@ class BlockFetcher(
 
       case ReceivedHeaders(peer, headers) if state.isFetchingHeaders =>
         // First successful fetch
-        if (state.waitingHeaders.isEmpty) {
+        if (state.waitingHeaders.isEmpty && state.headersToIgnore == 0) {
           log.debug("First successful header fetch, notifying supervisor to start fetching")
           supervisor ! ProgressProtocol.StartedFetching
         }
         val newState =
-          if (state.fetchingHeadersState == AwaitingHeadersToBeIgnored) {
+          if (state.headersToIgnore > 0) {
             log.debug(
-              "Received {} headers starting from block {} that will be ignored",
+              "Received {} headers starting from block {} that will be ignored (headersToIgnore: {})",
               headers.size,
-              headers.headOption.map(_.number)
+              headers.headOption.map(_.number),
+              state.headersToIgnore
             )
             state.withHeaderFetchReceived
           } else {
@@ -205,57 +214,99 @@ class BlockFetcher(
                 state.lastBlock
               )
             }
-            val afterAppend = state.appendHeaders(headers) match {
-              case Left(HeadersNotFormingSeq) =>
-                log.info(
-                  "Dismissed received headers: {} (peer={}, first={}, last={}, count={})",
-                  HeadersNotFormingSeq.description,
-                  peer.id,
-                  headers.headOption.map(_.number),
-                  headers.lastOption.map(_.number),
-                  headers.size
-                )
-                // No blacklist: valid peers on a different fork branch can trigger this during reorgs.
-                // Only blacklist on cryptographic invalidity (PoW failure, bad signature) — Besu AbstractPeerTask pattern.
-                state.withHeaderFetchReceived.recordHeaderRejection()
-              case Left(HeadersNotMatchingReadyBlocks) =>
-                log.info(
-                  "Dismissed received headers: {} (peer={}, readyTip={}, respFirst={})",
-                  HeadersNotMatchingReadyBlocks.description,
-                  peer.id,
-                  state.readyBlocks.lastOption.map(_.number),
-                  headers.headOption.map(_.number)
-                )
-                // No blacklist: during a fork reorg, honest peers on the reorg chain will not extend our ready blocks.
-                state.withHeaderFetchReceived.recordHeaderRejection()
-              case Left(HeadersNotMatchingWaitingHeaders) =>
-                log.debug(
-                  "Dismissed received headers due to: {} (peer: {})",
-                  HeadersNotMatchingWaitingHeaders.description,
-                  peer.id
-                )
-                log.debug(
-                  "Header validation failed: headers do not chain to waiting headers. Last waiting: {}, Headers first: {}",
-                  state.waitingHeaders.lastOption.map(_.number),
-                  headers.headOption.map(_.number)
-                )
-                // No blacklist: honest peers on an alternative chain head trigger this during reorgs.
-                state.withHeaderFetchReceived
-              case Right(updatedState) =>
-                log.debug(
-                  "Successfully validated and appended {} headers. New waiting headers count: {}",
-                  headers.size,
-                  updatedState.waitingHeaders.size
-                )
-                // Full batch only: peer likely has more blocks — eagerly advance knownTop to
-                // prevent premature isOnTop. Partial batch = chain tip; leave knownTop at
-                // lastHeader.number so isOnTop fires correctly.
-                val finalState = if (headers.size.toLong >= syncConfig.blockHeadersPerRequest) {
-                  val lastHeader = headers.maxBy(_.number)
-                  updatedState.withPossibleNewTopAt(lastHeader.number + 1)
-                } else updatedState
-                finalState.withHeaderFetchReceived
-            }
+            // Decrement the in-flight counter, then route through the buffer when multiple
+            // slots are in flight so concurrent responses are processed in ascending order.
+            // With a single slot (current MaxConcurrentHeaderSlots=1) pass headers directly
+            // to appendHeaders — no gap is possible, buffering would break rejection handling.
+            val afterReceive = state.withHeaderFetchReceived
+            val (orderedHeaders, baseState) =
+              if (state.inFlightHeaders > 1) {
+                afterReceive.bufferHeaders(headers).drainOrderedHeaders
+              } else {
+                (headers, afterReceive)
+              }
+
+            val afterAppend: BlockFetcherState =
+              if (orderedHeaders.isEmpty && headers.nonEmpty) {
+                // Multiple slots in flight; a gap exists — waiting for earlier slot's response.
+                baseState
+              } else {
+                baseState.appendHeaders(orderedHeaders) match {
+                  case Left(HeadersNotFormingSeq) =>
+                    log.info(
+                      "Dismissed received headers: {} (peer={}, first={}, last={}, count={})",
+                      HeadersNotFormingSeq.description,
+                      peer.id,
+                      headers.headOption.map(_.number),
+                      headers.lastOption.map(_.number),
+                      headers.size
+                    )
+                    // No blacklist: valid peers on a different fork branch can trigger this during reorgs.
+                    // Only blacklist on cryptographic invalidity (PoW failure, bad signature) — Besu AbstractPeerTask pattern.
+                    // Reset nextDispatchBlock: it was advanced at dispatch time but nothing was appended to the queue,
+                    // so the next dispatch must retry from the current queue tail (nextBlockToFetch), not the window end.
+                    baseState
+                      .recordHeaderRejection()
+                      .copy(nextDispatchBlock = baseState.nextBlockToFetch)
+                  case Left(HeadersNotMatchingReadyBlocks) =>
+                    log.info(
+                      "Dismissed received headers: {} (peer={}, readyTip={}, respFirst={})",
+                      HeadersNotMatchingReadyBlocks.description,
+                      peer.id,
+                      state.readyBlocks.lastOption.map(_.number),
+                      headers.headOption.map(_.number)
+                    )
+                    // No blacklist: during a fork reorg, honest peers on the reorg chain will not extend our ready blocks.
+                    baseState
+                      .recordHeaderRejection()
+                      .copy(nextDispatchBlock = baseState.nextBlockToFetch)
+                  case Left(HeadersNotMatchingWaitingHeaders) =>
+                    log.debug(
+                      "Dismissed received headers due to: {} (peer: {})",
+                      HeadersNotMatchingWaitingHeaders.description,
+                      peer.id
+                    )
+                    log.debug(
+                      "Header validation failed: headers do not chain to waiting headers. Last waiting: {}, Headers first: {}",
+                      state.waitingHeaders.lastOption.map(_.number),
+                      headers.headOption.map(_.number)
+                    )
+                    // No blacklist: honest peers on an alternative chain head trigger this during reorgs.
+                    baseState
+                      .copy(nextDispatchBlock = baseState.nextBlockToFetch)
+                  case Right(updatedState) =>
+                    log.debug(
+                      "Successfully validated and appended {} headers. New waiting headers count: {}",
+                      orderedHeaders.size,
+                      updatedState.waitingHeaders.size
+                    )
+                    // Full batch: peer likely has more blocks — eagerly advance knownTop.
+                    // Partial batch (chain tip): reset nextDispatchBlock so the next fetch
+                    // resumes from lastHeader+1, not from the pre-dispatch window. For
+                    // concurrent slots, also drain any other in-flight windows (they'd fail
+                    // chain validation anyway since the chain ends at lastHeader).
+                    val finalState = if (orderedHeaders.size.toLong >= syncConfig.blockHeadersPerRequest) {
+                      val lastHeader = orderedHeaders.maxBy(_.number)
+                      updatedState.withPossibleNewTopAt(lastHeader.number + 1)
+                    } else {
+                      val lastHeader = orderedHeaders.lastOption.map(_.number).getOrElse(updatedState.lastBlock)
+                      updatedState.copy(
+                        nextDispatchBlock = lastHeader + 1,
+                        headersToIgnore = updatedState.headersToIgnore + (updatedState.inFlightHeaders - 1).max(0),
+                        inFlightHeaders = math.min(updatedState.inFlightHeaders, 1)
+                      )
+                    }
+                    log.info(
+                      "[RegularSync] headers={} from={} range=[{}-{}] waiting={}",
+                      orderedHeaders.size,
+                      peer.id,
+                      orderedHeaders.headOption.map(_.number).getOrElse("-"),
+                      orderedHeaders.lastOption.map(_.number).getOrElse("-"),
+                      finalState.waitingHeaders.size
+                    )
+                    finalState
+                }
+              }
 
             // Stale-tip recovery (Bug 31): when enough independent peers reject our queue
             // state in a row, assume the waitingHeaders/readyBlocks tip is orphaned and
@@ -283,12 +334,33 @@ class BlockFetcher(
         fetchBlocks(state)
 
       case RetryHeadersRequest if state.isFetchingHeaders =>
-        log.debug("Retrying headers request (likely due to no suitable peer available)")
-        fetchBlocks(state.withHeaderFetchReceived)
+        log.debug(
+          "Retrying headers request (likely no suitable peer): inFlight={} toIgnore={}",
+          state.inFlightHeaders,
+          state.headersToIgnore
+        )
+        val baseRetry = state.withHeaderFetchReceived
+        // When draining the ignore bucket (headersToIgnore > 0), nextDispatchBlock was already
+        // correctly set by clearQueues() + invalidateBlocksFrom fix. Otherwise, reset it to the
+        // queue tail so the retry dispatches from the right position.
+        val retryState =
+          if (state.headersToIgnore > 0) baseRetry
+          else baseRetry.copy(nextDispatchBlock = state.nextBlockToFetch)
+        fetchBlocks(retryState)
 
       case RetryHeadersRequest if !state.isFetchingHeaders =>
-        log.warn("Received late/duplicate RetryHeadersRequest (not fetching). Clearing state and retrying fetch.")
-        // Ensure state is cleared and attempt to fetch if needed
+        log.warn("Received late RetryHeadersRequest (no in-flight headers). Triggering fetch.")
+        fetchBlocks(state)
+
+      case TickFetch =>
+        // 500ms stall-recovery: re-evaluate dispatch in case state advanced without a reactive trigger
+        log.debug(
+          "[RegularSync] TickFetch: inFlight={} toIgnore={} nextDispatch={} top={}",
+          state.inFlightHeaders,
+          state.headersToIgnore,
+          state.nextDispatchBlock,
+          state.knownTop
+        )
         fetchBlocks(state)
 
       case ReceivedBodies(peer, bodies) if state.isFetchingBodies =>
@@ -417,7 +489,7 @@ class BlockFetcher(
         supervisor ! ProgressProtocol.GotNewBlock(newState.knownTop)
         fetchBlocks(newState)
 
-      case AdaptedMessageFromEventBus(BaseETH6XMessages.NewBlock(block, _), peerId) =>
+      case AdaptedMessageFromEventBus(ETHPackets.NewBlock(block, _), peerId) =>
         handleNewBlock(block, peerId, state)
 
       case BlockImportFailed(blockNr, reason) =>
@@ -429,15 +501,7 @@ class BlockFetcher(
         }
         fetchBlocks(newState)
 
-      case AdaptedMessageFromEventBus(ETH62BlockHeaders(headers), _) =>
-        headers.lastOption
-          .map { bh =>
-            log.debug("Candidate for new top at block {}, current known top {}", bh.number, state.knownTop)
-            val newState = state.withPossibleNewTopAt(bh.number)
-            fetchBlocks(newState)
-          }
-          .getOrElse(processFetchCommands(state))
-      case AdaptedMessageFromEventBus(ETH66BlockHeaders(_, headers), _) =>
+      case AdaptedMessageFromEventBus(ETHPackets.BlockHeaders(_, headers), _) =>
         headers.lastOption
           .map { bh =>
             log.debug("Candidate for new top at block {}, current known top {}", bh.number, state.knownTop)
@@ -514,49 +578,83 @@ class BlockFetcher(
       .fold(state)(_._2)
 
   private def fetchBlocks(state: BlockFetcherState): Behavior[FetchCommand] = {
-    val newState = state |> tryFetchHeaders |> tryFetchBodies
-    processFetchCommands(newState)
+    log.debug(
+      "[RegularSync] state=ready:{} waiting:{} inFlight:{} toIgnore:{} fetchingBodies:{} nextDispatch:{}",
+      state.readyBlocks.size,
+      state.waitingHeaders.size,
+      state.inFlightHeaders,
+      state.headersToIgnore,
+      state.isFetchingBodies,
+      state.nextDispatchBlock
+    )
+    // Fill all available concurrent header slots, then dispatch bodies once.
+    var s = state |> tryFetchBodies
+    val slotsAvailable = MaxConcurrentHeaderSlots - s.inFlightHeaders
+    var dispatched = 0
+    while (dispatched < slotsAvailable) {
+      val before = s
+      s = s |> tryFetchHeaders
+      if (s eq before) dispatched = slotsAvailable // no progress — stop trying
+      else dispatched += 1
+    }
+    processFetchCommands(s)
   }
 
   private def tryFetchHeaders(fetcherState: BlockFetcherState): BlockFetcherState =
     Some(fetcherState)
       .filter { state =>
-        val canFetch = !state.isFetchingHeaders
-        if (!canFetch) log.debug("Skipping header fetch: already fetching headers")
-        canFetch
+        val canDispatch = state.canDispatchHeaders
+        if (!canDispatch)
+          log.debug(
+            "Skipping header fetch: inFlight={} toIgnore={} maxSlots={}",
+            state.inFlightHeaders,
+            state.headersToIgnore,
+            MaxConcurrentHeaderSlots
+          )
+        canDispatch
       }
       .filter { state =>
-        val notAtTop = !state.hasFetchedTopHeader
+        val notAtTop = state.nextDispatchBlock <= state.knownTop
         if (!notAtTop)
           log.debug(
-            "Skipping header fetch: already at top (next block: {}, known top: {})",
-            state.nextBlockToFetch,
+            "Skipping header fetch: dispatch window at top (nextDispatch: {}, known top: {})",
+            state.nextDispatchBlock,
             state.knownTop
           )
         notAtTop
       }
       .filter { state =>
-        val hasSpace = !state.hasReachedSize(syncConfig.maxFetcherQueueSize)
-        if (!hasSpace)
+        val backpressure = state.hasImporterBackpressure(syncConfig.maxReadyBlocksQueueSize)
+        if (backpressure)
+          log.warn(
+            "[RegularSync] import backpressure: readyBlocks={} >= threshold={}, pausing header fetch",
+            state.readyBlocks.size,
+            syncConfig.maxReadyBlocksQueueSize
+          )
+        !backpressure
+      }
+      .filter { state =>
+        val headersQueueFull = state.hasEnoughWaitingHeaders(syncConfig.maxFetcherQueueSize)
+        if (headersQueueFull)
           log.debug(
-            "Skipping header fetch: queue full (size: {}, max: {})",
-            state.readyBlocks.size + state.waitingHeaders.size,
+            "Skipping header fetch: waiting headers queue at depth {} (max: {})",
+            state.waitingHeaders.size,
             syncConfig.maxFetcherQueueSize
           )
-        hasSpace
+        !headersQueueFull
       }
       .tap(fetchHeaders)
-      .map(_.withNewHeadersFetch)
+      .map(s => s.withNewHeadersFetch(syncConfig.blockHeadersPerRequest))
       .getOrElse(fetcherState)
 
   private def fetchHeaders(state: BlockFetcherState): Unit = {
-    val blockNr = state.nextBlockToFetch
+    val blockNr = state.nextDispatchBlock
     val amount = syncConfig.blockHeadersPerRequest
     log.debug(
-      "Initiating header fetch: block number {} for {} headers (last block: {}, known top: {})",
+      "Initiating header fetch: block number {} for {} headers (inFlight: {}, known top: {})",
       blockNr,
       amount,
-      state.lastBlock,
+      state.inFlightHeaders,
       state.knownTop
     )
     headersFetcher ! HeadersFetcher.FetchHeadersByNumber(blockNr, amount)
@@ -626,7 +724,9 @@ object BlockFetcher {
       blockValidator: BlockValidator
   ): Behavior[FetchCommand] =
     Behaviors.setup(context =>
-      new BlockFetcher(peersClient, peerEventBus, supervisor, syncConfig, blockValidator, context)
+      Behaviors.withTimers(timers =>
+        new BlockFetcher(peersClient, peerEventBus, supervisor, syncConfig, blockValidator, context, timers)
+      )
     )
 
   sealed trait FetchCommand
@@ -666,11 +766,14 @@ object BlockFetcher {
       retryCount: Int = 0
   ) extends FetchCommand
   case object RetryHeadersRequest extends FetchCommand
+  // 500ms stall-recovery heartbeat — re-evaluates dispatch slots in case a state
+  // transition (BRU, invalidation, peer change) happened without a reactive trigger.
+  case object TickFetch extends FetchCommand
   final case class AdaptedMessageFromEventBus(message: Message, peerId: PeerId) extends FetchCommand
   final case class ReceivedHeaders(peer: Peer, headers: Seq[BlockHeader]) extends FetchCommand
   final case class ReceivedBodies(peer: Peer, bodies: Seq[BlockBody]) extends FetchCommand
 
   sealed trait FetchResponse
   final case class PickedBlocks(blocks: NonEmptyList[Block]) extends FetchResponse
-  final case class FetchedStateNode(stateNode: NodeData) extends FetchResponse
+  final case class FetchedStateNode(stateNode: ETHPackets.NodeData) extends FetchResponse
 }

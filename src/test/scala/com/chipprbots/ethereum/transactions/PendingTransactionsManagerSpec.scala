@@ -21,23 +21,30 @@ import org.scalatest.matchers.should.Matchers
 import com.chipprbots.ethereum.NormalPatience
 import com.chipprbots.ethereum.Timeouts
 import com.chipprbots.ethereum.crypto
+import com.chipprbots.ethereum.consensus.eip1559.BaseFeeCalculator
 import com.chipprbots.ethereum.domain.Address
+import com.chipprbots.ethereum.domain.Block
+import com.chipprbots.ethereum.domain.BlockBody
+import com.chipprbots.ethereum.domain.BlockHeader.HeaderExtraFields.HefPostOlympia
+import com.chipprbots.ethereum.domain.BlockchainReader
 import com.chipprbots.ethereum.domain.LegacyTransaction
 import com.chipprbots.ethereum.domain.SignedTransaction
 import com.chipprbots.ethereum.domain.SignedTransactionWithSender
+import com.chipprbots.ethereum.domain.TransactionWithDynamicFee
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor
 import com.chipprbots.ethereum.network.Peer
 import com.chipprbots.ethereum.network.PeerEventBusActor.PeerEvent
 import com.chipprbots.ethereum.network.PeerId
 import com.chipprbots.ethereum.network.handshaker.Handshaker.HandshakeResult
-import com.chipprbots.ethereum.network.p2p.messages.BaseETH6XMessages.SignedTransactions
-import com.chipprbots.ethereum.network.p2p.messages.ETH67
+import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.SignedTransactions
 import com.chipprbots.ethereum.security.SecureRandomBuilder
 import com.chipprbots.ethereum.transactions.PendingTransactionsManager._
 import com.chipprbots.ethereum.transactions.SignedTransactionsFilterActor.ProperSignedTransactions
 import com.chipprbots.ethereum.utils.TxPoolConfig
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor.SendMessage
-import com.chipprbots.ethereum.testing.Tags._
+import com.chipprbots.ethereum.network.p2p.messages.ETHPackets
+import com.chipprbots.ethereum.testing.Tags.OlympiaTest
+import com.chipprbots.ethereum.testing.Tags.UnitTest
 
 /** Test suite for PendingTransactionsManager actor.
   *
@@ -208,12 +215,12 @@ class PendingTransactionsManagerSpec
     val announcements: Seq[SendMessage] =
       etcPeerManager.receiveWhile(Timeouts.normalTimeout, messages = 3) {
         case m @ NetworkPeerManagerActor.SendMessage(enc, _)
-            if enc.underlyingMsg.isInstanceOf[ETH67.NewPooledTransactionHashes] =>
+            if enc.underlyingMsg.isInstanceOf[ETHPackets.NewPooledTransactionHashes] =>
           m
       }
     announcements.map(_.peerId).toSet shouldBe Set(peer1.id, peer2.id, peer3.id)
     announcements.foreach { a =>
-      a.message.underlyingMsg.asInstanceOf[ETH67.NewPooledTransactionHashes].hashes shouldBe Seq(stx.tx.hash)
+      a.message.underlyingMsg.asInstanceOf[ETHPackets.NewPooledTransactionHashes].hashes shouldBe Seq(stx.tx.hash)
     }
 
     val pendingTxs: PendingTransactionsResponse =
@@ -239,9 +246,9 @@ class PendingTransactionsManagerSpec
     }
     (resps1.map(_.peerId).toSet should contain).allOf(peer2.id, peer3.id)
     resps1.map(_.message.underlyingMsg).foreach {
-      case ETH67.NewPooledTransactionHashes(_, _, hashes) => hashes.toSet shouldEqual msg1.map(_.tx.hash)
-      case SignedTransactions(txs)                        => txs.toSet shouldEqual msg1.map(_.tx)
-      case other                                          => fail(s"Unexpected message: $other")
+      case ETHPackets.NewPooledTransactionHashes(_, _, hashes) => hashes.toSet shouldEqual msg1.map(_.tx.hash)
+      case SignedTransactions(txs)                             => txs.toSet shouldEqual msg1.map(_.tx)
+      case other                                               => fail(s"Unexpected message: $other")
     }
 
     val tx2: Seq[SignedTransactionWithSender] = Seq.fill(5)(newStx())
@@ -253,9 +260,9 @@ class PendingTransactionsManagerSpec
     }
     (resps2.map(_.peerId).toSet should contain).allOf(peer1.id, peer3.id)
     resps2.map(_.message.underlyingMsg).foreach {
-      case ETH67.NewPooledTransactionHashes(_, _, hashes) => hashes.toSet shouldEqual msg2.map(_.tx.hash)
-      case SignedTransactions(txs)                        => txs.toSet shouldEqual msg2.map(_.tx)
-      case other                                          => fail(s"Unexpected message: $other")
+      case ETHPackets.NewPooledTransactionHashes(_, _, hashes) => hashes.toSet shouldEqual msg2.map(_.tx.hash)
+      case SignedTransactions(txs)                             => txs.toSet shouldEqual msg2.map(_.tx)
+      case other                                               => fail(s"Unexpected message: $other")
     }
 
     pendingTransactionsManager ! RemoveTransactions(tx1.dropRight(4).map(_.tx))
@@ -328,9 +335,9 @@ class PendingTransactionsManagerSpec
     announces.foreach(_.peerId shouldBe peer1.id)
     val announcedHashes = announces
       .flatMap(_.message.underlyingMsg match {
-        case ETH67.NewPooledTransactionHashes(_, _, hashes) => hashes
-        case SignedTransactions(txs)                        => txs.map(_.hash)
-        case _                                              => Nil
+        case ETHPackets.NewPooledTransactionHashes(_, _, hashes) => hashes
+        case SignedTransactions(txs)                             => txs.map(_.hash)
+        case _                                                   => Nil
       })
       .toSet
     (announcedHashes should contain).allOf(otherTx.tx.hash, overrideTx.tx.hash)
@@ -352,9 +359,9 @@ class PendingTransactionsManagerSpec
     val replayed = etcPeerManager.expectMsgType[NetworkPeerManagerActor.SendMessage]
     replayed.peerId shouldBe peer1.id
     replayed.message.underlyingMsg match {
-      case ETH67.NewPooledTransactionHashes(_, _, hashes) => hashes shouldBe Seq(stx.tx.hash)
-      case SignedTransactions(txs)                        => txs shouldBe Seq(stx.tx)
-      case other                                          => fail(s"Unexpected: $other")
+      case ETHPackets.NewPooledTransactionHashes(_, _, hashes) => hashes shouldBe Seq(stx.tx.hash)
+      case SignedTransactions(txs)                             => txs shouldBe Seq(stx.tx)
+      case other                                               => fail(s"Unexpected: $other")
     }
   }
 
@@ -387,6 +394,186 @@ class PendingTransactionsManagerSpec
         (pendingTransactionsManager ? GetPendingTransactions).mapTo[PendingTransactionsResponse].futureValue
       pendingTxsAfter.pendingTransactions.map(_.stx).toSet shouldBe Set.empty
     }
+  }
+
+  // ── ECIP-1122 pool admission integration tests ──────────────────────────────
+  //
+  // These tests exercise the validateAgainstState rejection path for zero/low
+  // effective tip — the integration coverage missing from OlympiaFeeMarketSpec
+  // (which only tests the effectiveTip math, not the actual admission gate).
+  //
+  // Pattern matches core-geth TestMinGasPriceEnforced, Besu
+  // shouldRejectNoPriorityTxsWhenMaxFeePerGasBelowMinGasPrice, and Nethermind
+  // TxPoolTests.should_handle_zero_MaxFeePerGas_1559_tx.
+
+  // TestSetup with null blockchainReader: baseFee falls back to baseFeeFloor=0.
+  // minTip defaults to BigInt(1) (1 wei). Tests basic rejection of zero-tip txs.
+  it should "reject zero-tip legacy tx at pool admission (ECIP-1122, null reader)" taggedAs (
+    UnitTest,
+    OlympiaTest
+  ) in new TestSetup {
+    val zeroTipLegacy = LegacyTransaction(
+      nonce = BigInt(0),
+      gasPrice = BigInt(0), // tip = gasPrice - baseFee = 0 - 0 = 0 < minTip(1)
+      gasLimit = BigInt(21_000),
+      receivingAddress = Some(Address(42)),
+      value = BigInt(0),
+      payload = ByteString.empty
+    )
+    val stx = newStx(0, zeroTipLegacy)
+    pendingTransactionsManager ! AddTransactions(stx)
+    eventually {
+      val resp = (pendingTransactionsManager ? GetPendingTransactions).mapTo[PendingTransactionsResponse].futureValue
+      resp.pendingTransactions shouldBe empty
+    }
+  }
+
+  it should "accept 1-wei-tip legacy tx at pool admission (ECIP-1122, null reader)" taggedAs (
+    UnitTest,
+    OlympiaTest
+  ) in new TestSetup {
+    val validLegacy = LegacyTransaction(
+      nonce = BigInt(0),
+      gasPrice = BigInt(1), // tip = 1 - 0 = 1 >= minTip(1)
+      gasLimit = BigInt(21_000),
+      receivingAddress = Some(Address(42)),
+      value = BigInt(0),
+      payload = ByteString.empty
+    )
+    val stx = newStx(0, validLegacy)
+    pendingTransactionsManager ! AddTransactions(stx)
+    eventually {
+      val resp = (pendingTransactionsManager ? GetPendingTransactions).mapTo[PendingTransactionsResponse].futureValue
+      resp.pendingTransactions.map(_.stx).toSet shouldBe Set(stx)
+    }
+  }
+
+  // TestSetup with a fake BlockchainReader returning baseFee = 1 gwei.
+  // minTip = 1 wei (default). Tests rejection of zero-effectiveTip EIP-1559 txs
+  // when baseFee is at the ETC floor — the realistic Olympia scenario.
+  it should "reject Type-2 tx with zero effectiveTip at pool admission (ECIP-1122, 1 gwei baseFee)" taggedAs (
+    UnitTest,
+    OlympiaTest
+  ) in new TestSetupWithBaseFee {
+    val zeroTipType2 = TransactionWithDynamicFee(
+      chainId = BigInt(61),
+      nonce = BigInt(0),
+      maxPriorityFeePerGas = BigInt(0), // tip = 0 < minTip(1)
+      maxFeePerGas = BaseFeeCalculator.InitialBaseFee, // = 1 gwei
+      gasLimit = BigInt(21_000),
+      receivingAddress = Some(Address(42)),
+      value = BigInt(0),
+      payload = ByteString.empty,
+      accessList = Nil
+    )
+    val stx = newDynamicStx(BigInt(0), zeroTipType2)
+    pendingTransactionsManager ! AddTransactions(stx)
+    eventually {
+      val resp = (pendingTransactionsManager ? GetPendingTransactions).mapTo[PendingTransactionsResponse].futureValue
+      resp.pendingTransactions shouldBe empty
+    }
+  }
+
+  it should "accept Type-2 tx with 1-wei effectiveTip at pool admission (ECIP-1122, 1 gwei baseFee)" taggedAs (
+    UnitTest,
+    OlympiaTest
+  ) in new TestSetupWithBaseFee {
+    val validType2 = TransactionWithDynamicFee(
+      chainId = BigInt(61),
+      nonce = BigInt(0),
+      maxPriorityFeePerGas = BigInt(1), // effectiveTip = min(1, 1gwei+1 - 1gwei) = 1 >= minTip(1)
+      maxFeePerGas = BaseFeeCalculator.InitialBaseFee + 1, // baseFee + 1 wei
+      gasLimit = BigInt(21_000),
+      receivingAddress = Some(Address(42)),
+      value = BigInt(0),
+      payload = ByteString.empty,
+      accessList = Nil
+    )
+    val stx = newDynamicStx(BigInt(0), validType2)
+    pendingTransactionsManager ! AddTransactions(stx)
+    eventually {
+      val resp = (pendingTransactionsManager ? GetPendingTransactions).mapTo[PendingTransactionsResponse].futureValue
+      resp.pendingTransactions.map(_.stx).toSet shouldBe Set(stx)
+    }
+  }
+
+  it should "protect nonce queue: rejected zero-tip tx does not block same-nonce valid tx" taggedAs (
+    UnitTest,
+    OlympiaTest
+  ) in new TestSetupWithBaseFee {
+    val baseFee = BaseFeeCalculator.InitialBaseFee
+    val zeroTip = TransactionWithDynamicFee(
+      chainId = BigInt(61),
+      nonce = BigInt(0),
+      maxPriorityFeePerGas = BigInt(0),
+      maxFeePerGas = baseFee,
+      gasLimit = BigInt(21_000),
+      receivingAddress = Some(Address(42)),
+      value = BigInt(0),
+      payload = ByteString.empty,
+      accessList = Nil
+    )
+    val validTip = TransactionWithDynamicFee(
+      chainId = BigInt(61),
+      nonce = BigInt(0),
+      maxPriorityFeePerGas = BigInt(1),
+      maxFeePerGas = baseFee + 1,
+      gasLimit = BigInt(21_000),
+      receivingAddress = Some(Address(42)),
+      value = BigInt(0),
+      payload = ByteString.empty,
+      accessList = Nil
+    )
+    val keyPair = crypto.generateKeyPair(secureRandom)
+    val rejectedStx =
+      SignedTransactionWithSender(SignedTransaction.sign(zeroTip, keyPair, Some(0x3d)), Address(keyPair))
+    val acceptedStx =
+      SignedTransactionWithSender(SignedTransaction.sign(validTip, keyPair, Some(0x3d)), Address(keyPair))
+
+    pendingTransactionsManager ! AddTransactions(rejectedStx)
+    eventually {
+      val resp = (pendingTransactionsManager ? GetPendingTransactions).mapTo[PendingTransactionsResponse].futureValue
+      resp.pendingTransactions shouldBe empty // zero-tip tx rejected, nonce NOT held
+    }
+
+    pendingTransactionsManager ! AddTransactions(acceptedStx)
+    eventually {
+      val resp = (pendingTransactionsManager ? GetPendingTransactions).mapTo[PendingTransactionsResponse].futureValue
+      resp.pendingTransactions.map(_.stx.tx.hash) shouldBe Seq(acceptedStx.tx.hash) // same nonce accepted
+    }
+  }
+
+  /** TestSetup variant with a fake BlockchainReader that returns baseFee = 1 gwei. */
+  trait TestSetupWithBaseFee extends TestSetup {
+    private val blockWithBaseFee: Block = Block(
+      header = com.chipprbots.ethereum.Fixtures.Blocks.ValidBlock.header.copy(
+        extraFields = HefPostOlympia(BaseFeeCalculator.InitialBaseFee)
+      ),
+      body = BlockBody(transactionList = Nil, uncleNodesList = Nil)
+    )
+
+    private val fakeBlockchainReader: BlockchainReader =
+      new BlockchainReader(null, null, null, null, null, null, null) {
+        override def getBestBlock(): Option[Block] = Some(blockWithBaseFee)
+      }
+
+    override val pendingTransactionsManager: ActorRef = system.actorOf(
+      PendingTransactionsManager.props(
+        txPoolConfig,
+        peerManager.ref,
+        etcPeerManager.ref,
+        peerMessageBus.ref,
+        blockchainReader = fakeBlockchainReader,
+        stateStorage = null
+      )
+    )
+
+    def newDynamicStx(
+        @scala.annotation.unused nonce: BigInt,
+        tx: TransactionWithDynamicFee,
+        keyPair: AsymmetricCipherKeyPair = crypto.generateKeyPair(secureRandom)
+    ): SignedTransactionWithSender =
+      SignedTransactionWithSender(SignedTransaction.sign(tx, keyPair, Some(0x3d)), Address(keyPair))
   }
 
   trait TestSetup extends SecureRandomBuilder {

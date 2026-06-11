@@ -98,7 +98,6 @@ object RegularSyncItSpecUtils {
       )
     lazy val consensus: Consensus =
       new ConsensusImpl(
-        bl,
         blockchainReader,
         blockchainWriter,
         blockExecution
@@ -144,6 +143,7 @@ object RegularSyncItSpecUtils {
         fetcher.toClassic,
         consensusAdapter,
         blockchainReader,
+        blockchainWriter,
         storagesInstance.storages.stateStorage,
         storagesInstance.storages.evmCodeStorage,
         new BranchResolution(blockchainReader),
@@ -163,6 +163,7 @@ object RegularSyncItSpecUtils {
         peerEventBus,
         consensusAdapter,
         blockchainReader,
+        blockchainWriter,
         storagesInstance.storages.stateStorage,
         storagesInstance.storages.evmCodeStorage,
         new BranchResolution(blockchainReader),

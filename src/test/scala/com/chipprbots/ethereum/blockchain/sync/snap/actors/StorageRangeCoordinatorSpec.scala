@@ -685,7 +685,7 @@ class StorageRangeCoordinatorSpec
   // `trieBuilderEc` (a separate thread pool); end-to-end verification of the
   // node emissions is exercised by the Sepolia test run that follows Step 5.
 
-  it should "construct successfully with useStackTrie = true" taggedAs UnitTest in {
+  it should "construct and accept lifecycle messages" taggedAs UnitTest in {
     val stateRoot = kec256(ByteString("storage-stacktrie-construct-root"))
     val storage = new TestMptStorage()
     val requestTracker = new SNAPRequestTracker()(system.scheduler)
@@ -702,8 +702,7 @@ class StorageRangeCoordinatorSpec
         maxAccountsPerBatch = 8,
         maxInFlightRequests = 8,
         requestTimeout = 30.seconds,
-        snapSyncController = snapSyncController.ref,
-        useStackTrie = true
+        snapSyncController = snapSyncController.ref
       )
     )
 

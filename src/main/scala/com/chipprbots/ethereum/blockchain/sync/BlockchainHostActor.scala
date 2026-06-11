@@ -15,6 +15,7 @@ import com.chipprbots.ethereum.db.storage.EvmCodeStorage
 import com.chipprbots.ethereum.domain.BlockHeader
 import com.chipprbots.ethereum.domain.BlockchainReader
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor
+import com.chipprbots.ethereum.utils.ByteStringUtils
 import com.chipprbots.ethereum.network.PeerEventBusActor.PeerEvent.MessageFromPeer
 import com.chipprbots.ethereum.network.PeerEventBusActor.PeerSelector
 import com.chipprbots.ethereum.network.PeerEventBusActor.Subscribe
@@ -23,18 +24,10 @@ import com.chipprbots.ethereum.network.PeerManagerActor.PeerConfiguration
 import com.chipprbots.ethereum.network.p2p.Message
 import com.chipprbots.ethereum.network.p2p.MessageSerializable
 import com.chipprbots.ethereum.network.p2p.messages.Codes
-import com.chipprbots.ethereum.network.p2p.messages.ETH62
-import com.chipprbots.ethereum.network.p2p.messages.ETH62.BlockBodies
-import com.chipprbots.ethereum.network.p2p.messages.ETH62.BlockHeaders
-import com.chipprbots.ethereum.network.p2p.messages.ETH62.GetBlockBodies
-import com.chipprbots.ethereum.network.p2p.messages.ETH62.GetBlockHeaders
-import com.chipprbots.ethereum.network.p2p.messages.ETH63.GetNodeData
-import com.chipprbots.ethereum.network.p2p.messages.ETH63.GetReceipts
-import com.chipprbots.ethereum.network.p2p.messages.ETH63.MptNodeEncoders._
-import com.chipprbots.ethereum.network.p2p.messages.ETH63.NodeData
-import com.chipprbots.ethereum.network.p2p.messages.ETH63.ReceiptImplicits._
-import com.chipprbots.ethereum.network.p2p.messages.ETH63.Receipts
-import com.chipprbots.ethereum.network.p2p.messages.ETH66
+import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.GetNodeData
+import com.chipprbots.ethereum.blockchain.sync.codec.MptNodeCodecs._
+import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.NodeData
+import com.chipprbots.ethereum.network.p2p.messages.ETHPackets
 import com.chipprbots.ethereum.rlp.RLPList
 import com.chipprbots.ethereum.transactions.PendingTransactionsManager
 import com.chipprbots.ethereum.transactions.PendingTransactionsManager.PendingTransactionsResponse
@@ -68,12 +61,23 @@ class BlockchainHostActor(
   override def receive: Receive = { case MessageFromPeer(message, peerId) =>
     // Handle GetPooledTransactions asynchronously (requires ask to PendingTransactionsManager)
     message match {
-      case ETH66.GetPooledTransactions(requestId, txHashes) =>
+      case ETHPackets.GetPooledTransactions(requestId, txHashes) =>
         handleGetPooledTransactions(txHashes, Some(requestId), peerId)
       case _ =>
         val responseOpt = handleBlockFastDownload(message).orElse(handleEvmCodeMptFastDownload(message))
         responseOpt.foreach { response =>
           networkPeerManagerActor ! NetworkPeerManagerActor.SendMessage(response, peerId)
+          // BLOCK-SERVE: INFO log so we can see which peers are requesting our chain
+          // data — useful for detecting when we're serving from an orphan fork.
+          val reqLabel = message match {
+            case ETHPackets.GetBlockHeaders(_, block, max, _, _) =>
+              s"GetBlockHeaders(start=${block.fold(_.toString, h => ByteStringUtils.hash2string(h).take(8))} max=$max)"
+            case ETHPackets.GetBlockBodies(_, hashes) => s"GetBlockBodies(${hashes.size})"
+            case ETHPackets.GetReceipts(_, hashes)    => s"GetReceipts(${hashes.size})"
+            case ETHPackets.GetReceipts69(_, hashes)  => s"GetReceipts69(${hashes.size})"
+            case other                                => other.getClass.getSimpleName
+          }
+          log.debug("BLOCK-SERVE: peer={} req={}", peerId, reqLabel)
         }
     }
   }
@@ -93,8 +97,9 @@ class BlockchainHostActor(
         // Include blob tx sidecar bytes for EIP-4844 network wrapping in PooledTransactions
         val matchingBlobBytes = response.blobTxNetworkBytes.filter { case (hash, _) => hashSet.contains(hash) }
         val responseMsg: MessageSerializable = requestIdOpt match {
-          case Some(requestId) => ETH66.PooledTransactions(requestId, matchingTxs, blobTxRawBytes = matchingBlobBytes)
-          case None            => com.chipprbots.ethereum.network.p2p.messages.ETH65.PooledTransactions(matchingTxs)
+          case Some(requestId) =>
+            ETHPackets.PooledTransactions(requestId, matchingTxs, blobTxRawBytes = matchingBlobBytes)
+          case None => ETHPackets.PooledTransactions(0, matchingTxs) // requestId=0 for no-requestId case
         }
         networkPeerManagerActor ! NetworkPeerManagerActor.SendMessage(responseMsg, peerId)
       }
@@ -134,46 +139,41 @@ class BlockchainHostActor(
     *   message response if message is a request for block data or None if not
     */
   private def handleBlockFastDownload(message: Message): Option[MessageSerializable] = message match {
-    // ETH63 GetReceipts
-    case request: GetReceipts =>
-      val receipts = request.blockHashes
-        .take(peerConfiguration.fastSyncHostConfiguration.maxReceiptsPerMessage)
-        .flatMap(hash => blockchainReader.getReceiptsByHash(hash))
-
-      Some(Receipts(receipts))
-
-    // ETH66+ GetReceipts with request ID
-    case ETH66.GetReceipts(requestId, blockHashes) =>
+    // ETH68 GetReceipts — bloom-inclusive response
+    case ETHPackets.GetReceipts(requestId, blockHashes) =>
+      import ETHPackets.ReceiptBloomEnc
       val receipts = blockHashes
         .take(peerConfiguration.fastSyncHostConfiguration.maxReceiptsPerMessage)
         .flatMap(hash => blockchainReader.getReceiptsByHash(hash))
-
-      // Convert receipts to RLPList for ETH66 format
       val receiptsRLP = RLPList(receipts.map(rs => RLPList(rs.map(_.toRLPEncodable): _*)): _*)
-      Some(ETH66.Receipts(requestId, receiptsRLP))
+      log.info("HOST_RECEIPTS_ETH68: requestId={} blocks={}", requestId, receipts.size)
+      Some(ETHPackets.Receipts68(requestId, receiptsRLP))
 
-    // ETH62 GetBlockBodies
-    case request: GetBlockBodies =>
-      val blockBodies = request.hashes
-        .take(peerConfiguration.fastSyncHostConfiguration.maxBlocksBodiesPerMessage)
-        .flatMap(hash => blockchainReader.getBlockBodyByHash(hash))
+    // ETH69 GetReceipts — bloom-ABSENT response per EIP-7642
+    case ETHPackets.GetReceipts69(requestId, blockHashes) =>
+      import ETHPackets.ReceiptBloomFreeEnc
+      val receipts = blockHashes
+        .take(peerConfiguration.fastSyncHostConfiguration.maxReceiptsPerMessage)
+        .flatMap(hash => blockchainReader.getReceiptsByHash(hash))
+      val receiptsRLP = RLPList(receipts.map(rs => RLPList(rs.map(_.toRLPEncodable): _*)): _*)
+      log.info("HOST_RECEIPTS_ETH69: requestId={} blocks={} (bloom-absent, EIP-7642)", requestId, receipts.size)
+      Some(ETHPackets.Receipts69(requestId, receiptsRLP))
 
-      Some(BlockBodies(blockBodies))
-
-    // ETH66+ GetBlockBodies with request ID
-    case ETH66.GetBlockBodies(requestId, hashes) =>
+    // ETH68 GetBlockBodies (via ETHPackets)
+    case ETHPackets.GetBlockBodies(requestId, hashes) =>
       val blockBodies = hashes
         .take(peerConfiguration.fastSyncHostConfiguration.maxBlocksBodiesPerMessage)
         .flatMap(hash => blockchainReader.getBlockBodyByHash(hash))
+      log.debug(
+        "HOST_BLOCK_BODIES_ETH68: requestId={} requested={} returning={}",
+        requestId,
+        hashes.size,
+        blockBodies.size
+      )
+      Some(ETHPackets.BlockBodies(requestId, blockBodies))
 
-      Some(ETH66.BlockBodies(requestId, blockBodies))
-
-    // ETH62 GetBlockHeaders
-    case request: GetBlockHeaders =>
-      handleGetBlockHeadersRequest(request.block, request.maxHeaders, request.skip, request.reverse, None)
-
-    // ETH66+ GetBlockHeaders with request ID
-    case ETH66.GetBlockHeaders(requestId, block, maxHeaders, skip, reverse) =>
+    // ETH68 GetBlockHeaders (via ETHPackets)
+    case ETHPackets.GetBlockHeaders(requestId, block, maxHeaders, skip, reverse) =>
       handleGetBlockHeadersRequest(block, maxHeaders, skip, reverse, Some(requestId))
 
     case _ => None
@@ -226,11 +226,9 @@ class BlockchainHostActor(
           blockHeaders.size
         )
 
-        // Return ETH66+ format if requestId is provided, otherwise ETH62 format
-        requestIdOpt match {
-          case Some(requestId) => Some(ETH66.BlockHeaders(requestId, blockHeaders))
-          case None            => Some(ETH62.BlockHeaders(blockHeaders))
-        }
+        // Return with requestId (ETH68+ always uses request-id; fallback to 0)
+        val requestId = requestIdOpt.getOrElse(BigInt(0))
+        Some(ETHPackets.BlockHeaders(requestId, blockHeaders))
 
       case _ =>
         // Starting block not found in DB — respond with empty list (matches Besu EthServer.java:158-160).
@@ -242,10 +240,8 @@ class BlockchainHostActor(
           skip,
           reverse
         )
-        requestIdOpt match {
-          case Some(requestId) => Some(ETH66.BlockHeaders(requestId, Seq.empty))
-          case None            => Some(ETH62.BlockHeaders(Seq.empty))
-        }
+        val requestId = requestIdOpt.getOrElse(BigInt(0))
+        Some(ETHPackets.BlockHeaders(requestId, Seq.empty))
     }
   }
 

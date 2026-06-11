@@ -4,10 +4,11 @@ import scala.concurrent.duration._
 
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
+import org.scalatest.ParallelTestExecution
 
 import com.chipprbots.ethereum.testing.Tags._
 
-class RetryStrategySpec extends AnyFlatSpec with Matchers {
+class RetryStrategySpec extends AnyFlatSpec with Matchers with ParallelTestExecution {
 
   "RetryStrategy" should "calculate exponential backoff correctly" taggedAs (UnitTest, SyncTest) in {
     val strategy = RetryStrategy(

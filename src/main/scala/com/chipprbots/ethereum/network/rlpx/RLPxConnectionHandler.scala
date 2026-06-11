@@ -17,7 +17,7 @@ import scala.util.Try
 
 import org.bouncycastle.util.encoders.Hex
 
-import com.chipprbots.ethereum.network.handshaker.EtcHelloExchangeState
+import com.chipprbots.ethereum.network.handshaker.HelloExchangeState
 import com.chipprbots.ethereum.network.p2p.EthereumMessageDecoder
 import com.chipprbots.ethereum.network.p2p.Message
 import com.chipprbots.ethereum.network.p2p.MessageDecoder
@@ -109,7 +109,7 @@ class RLPxConnectionHandler(
 
     case CommandFailed(_: Connect) =>
       RLPxConnectionHandler.tcpFailedCount.incrementAndGet()
-      log.warning("[Stopping Connection] TCP connection failed for peer {}", peerId)
+      log.debug("[Stopping Connection] TCP connection failed for peer {}", peerId)
       context.parent ! ConnectionFailed
       gracefulStop()
   }
@@ -241,7 +241,6 @@ class RLPxConnectionHandler(
 
     private var helloAckPending: Boolean = false
     private var helloWriteAcknowledged: Boolean = false
-    private var activeMessageCodec: Option[MessageCodec] = None
 
     private def markHelloAsSent(): Unit = {
       helloAckPending = true
@@ -260,8 +259,7 @@ class RLPxConnectionHandler(
         log.debug("[RLPx] Hello write acknowledged for peer {} - deferring compression enable", peerId)
       }
 
-    private def registerMessageCodec(messageCodec: MessageCodec): Unit = {
-      activeMessageCodec = Some(messageCodec)
+    private def registerMessageCodec(messageCodec: MessageCodec): Unit =
       // CRITICAL FIX: Enable inbound compression when MessageCodec is registered
       // This happens after Hello exchange is complete, matching Core-Geth behavior
       // where SetSnappy is called after doProtoHandshake completes.
@@ -269,7 +267,6 @@ class RLPxConnectionHandler(
         messageCodec.enableInboundCompression("handshake-complete")
         log.debug("[RLPx] Enabled inbound compression for peer {} after handshake complete", peerId)
       }
-    }
 
     /** Write a Hello message directly without compression. This is used to handle late Hello messages that arrive after
       * handshake completion, preventing them from being compressed via MessageCodec. Matches HelloCodec.writeHello
@@ -517,7 +514,7 @@ class RLPxConnectionHandler(
                 )
               )
             case None =>
-              log.warning(
+              log.debug(
                 "[Stopping Connection] Unable to negotiate protocol with peer {} — peerCaps=[{}], ourCaps=[{}]",
                 peerId,
                 hello.capabilities.mkString(", "),
@@ -537,7 +534,7 @@ class RLPxConnectionHandler(
     ): Option[(MessageCodec, Capability, InboundTranslator)] =
       Capability.negotiate(hello.capabilities.toList, capabilities).map { negotiated =>
         val compressionPolicy =
-          CompressionPolicy.fromHandshake(EtcHelloExchangeState.P2pVersion, hello.p2pVersion)
+          CompressionPolicy.fromHandshake(HelloExchangeState.P2pVersion, hello.p2pVersion)
         val supportsSnap =
           capabilities.contains(Capability.SNAP1) && hello.capabilities.contains(Capability.SNAP1)
         if (supportsSnap) {
@@ -643,8 +640,8 @@ class RLPxConnectionHandler(
         messageCodec: MessageCodec,
         inboundTranslator: InboundTranslator,
         messagesNotSent: Queue[MessageSerializable] = Queue.empty,
-        cancellableAckTimeout: Option[CancellableAckTimeout] = None,
-        seqNumber: Int = 0
+        cancellableAckTimeout: Option[CancellableAckTimeout],
+        seqNumber: Int
     ): Receive =
       handleConnectionTerminated.orElse(handleWriteFailed).orElse(handleConnectionClosed).orElse {
         case SendMessage(h: HelloEnc) =>

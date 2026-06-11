@@ -176,11 +176,15 @@ class PeersClientSpec extends AnyFlatSpec with Matchers with ScalaCheckPropertyC
     /** A peer that has handshaked but is stuck at genesis — bestHash == genesisHash. Common on Sepolia where bootnodes
       * are fresh-state and on ETC where some peers advertise SNAP/1 but never advance past genesis. They literally have
       * no chain data to serve.
+      *
+      * maxBlockNumber = 0: genesis peers have not processed any blocks beyond block 0, so no block number is known.
+      * ETH/69 sets latestBlock=0 from STATUS; ETH/68 stays at the default 0 (no block number in STATUS).
       */
     def peerInfoAtGenesis(td: Int): PeerInfo =
       peerInfo(td).copy(
         remoteStatus = peerStatus.copy(bestHash = genesisHash),
-        bestBlockHash = genesisHash
+        bestBlockHash = genesisHash,
+        maxBlockNumber = 0
       )
   }
 }

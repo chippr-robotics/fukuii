@@ -1,6 +1,15 @@
 package com.chipprbots.ethereum.blockchain.sync.snap.actors
 
-import org.apache.pekko.actor.{Actor, ActorLogging, ActorRef, Props, SupervisorStrategy, OneForOneStrategy, Terminated}
+import org.apache.pekko.actor.{
+  Actor,
+  ActorLogging,
+  ActorRef,
+  Cancellable,
+  Props,
+  SupervisorStrategy,
+  OneForOneStrategy,
+  Terminated
+}
 import org.apache.pekko.actor.SupervisorStrategy._
 import org.apache.pekko.util.ByteString
 
@@ -56,6 +65,7 @@ class ByteCodeCoordinator(
     with ActorLogging {
 
   import Messages._
+  implicit private val ec: scala.concurrent.ExecutionContext = context.dispatcher
 
   // Per-peer concurrency budget — dynamically adjusted by SNAPSyncController via UpdateMaxInFlightPerPeer.
   // Shadows cooldownConfig.maxInFlightPerPeer so budget updates don't require config mutation.
@@ -138,6 +148,9 @@ class ByteCodeCoordinator(
   // Completion is only reported after this is set AND pending+active tasks drain.
   // Geth-aligned: coordinators run from start, tasks arrive inline during account download.
   private var noMoreTasksExpected: Boolean = false
+  private var bytecodeMilestonePct: Int = -1
+  private var bytecodeStartMs: Long = 0L
+  private var statusTimer: Option[Cancellable] = None
 
   // Statistics
   private var bytecodesDownloaded: Long = 0
@@ -179,14 +192,23 @@ class ByteCodeCoordinator(
   private def inFlightForPeer(peer: Peer): Int =
     activeTasks.values.count(_.peer.id == peer.id)
 
-  override def preStart(): Unit =
+  override def preStart(): Unit = {
+    bytecodeStartMs = System.currentTimeMillis()
+    statusTimer = Some(
+      context.system.scheduler.scheduleWithFixedDelay(30.seconds, 30.seconds)(() =>
+        self ! ByteCodeCoordinator.ByteCodeStatusPulse
+      )
+    )
     log.info("ByteCodeCoordinator starting")
+  }
 
-  override def postStop(): Unit =
+  override def postStop(): Unit = {
+    statusTimer.foreach(_.cancel())
     log.info(
       s"ByteCodeCoordinator stopped. Downloaded $bytecodesDownloaded bytecodes" +
         (if (bytecodesAbandoned > 0) s", abandoned $bytecodesAbandoned via force-complete" else "")
     )
+  }
 
   override val supervisorStrategy: SupervisorStrategy =
     OneForOneStrategy(maxNrOfRetries = 3, withinTimeRange = 1.minute) { case _: Exception =>
@@ -390,6 +412,33 @@ class ByteCodeCoordinator(
       val total = completedTaskCount + activeTasks.size.toLong + pendingTasks.size.toLong
       val progress = if (total == 0) 1.0 else completedTaskCount.toDouble / total
       sender() ! ByteCodeProgress(progress, bytecodesDownloaded, bytesDownloaded)
+
+    case ByteCodeCoordinator.ByteCodeStatusPulse =>
+      val total = completedTaskCount + activeTasks.size.toLong + pendingTasks.size.toLong
+      val elapsedSecs = (System.currentTimeMillis() - bytecodeStartMs) / 1000.0
+      val rate = if (elapsedSecs > 0) (bytecodesDownloaded / elapsedSecs).toLong else 0L
+      if (noMoreTasksExpected) {
+        val pct = if (total > 0) ((completedTaskCount.toDouble / total) * 100).toInt else 0
+        log.info(
+          s"[SNAP-PROGRESS] BYTECODE-COORD $pct% — completed=$completedTaskCount total=$total " +
+            s"pending=${pendingTasks.size} active=${activeTasks.size} " +
+            s"workers=${workers.size} rate=$rate bytecodes/s"
+        )
+        val (newM, crossed) =
+          com.chipprbots.ethereum.blockchain.sync.ProgressMilestones
+            .crossed(completedTaskCount, total, bytecodeMilestonePct)
+        bytecodeMilestonePct = newM
+        crossed.foreach { m =>
+          log.info(
+            s"[SNAP-PROGRESS] BYTECODE-COORD MILESTONE $m% — $completedTaskCount / $total bytecodes | $rate bytecodes/s"
+          )
+        }
+      } else {
+        log.info(
+          s"[SNAP-PROGRESS] BYTECODE-COORD accumulating — pending=${pendingTasks.size} active=${activeTasks.size} " +
+            s"completed=$completedTaskCount workers=${workers.size}"
+        )
+      }
   }
 
   /** Emit a ByteCodeBackpressureChanged transition when the pending-task queue depth crosses a watermark. Forwarded by
@@ -730,6 +779,8 @@ class ByteCodeCoordinator(
 }
 
 object ByteCodeCoordinator {
+
+  private[actors] case object ByteCodeStatusPulse
 
   final case class ByteCodePeerCooldownConfig(
       baseEmpty: FiniteDuration,

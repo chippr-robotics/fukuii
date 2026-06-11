@@ -27,7 +27,7 @@ import org.jupnp.transport.spi.StreamServerConfiguration
 
 import com.chipprbots.ethereum.utils.Logger
 
-private class ClientOnlyUpnpServiceConfiguration extends DefaultUpnpServiceConfiguration() {
+private[network] class ClientOnlyUpnpServiceConfiguration extends DefaultUpnpServiceConfiguration() {
   final private val THREAD_POOL_SIZE = 4 // seemingly the minimum required to perform port mapping
 
   override def createDefaultExecutorService(): ExecutorService =
@@ -52,7 +52,7 @@ private class ClientOnlyUpnpServiceConfiguration extends DefaultUpnpServiceConfi
     NoStreamServer // prevent a StreamServer from running needlessly
 }
 
-private object NoStreamServer extends StreamServer[StreamServerConfiguration] {
+private[network] object NoStreamServer extends StreamServer[StreamServerConfiguration] {
   def run(): Unit = ()
   def init(_1: InetAddress, _2: Router): Unit = ()
   def getPort(): Int = 0

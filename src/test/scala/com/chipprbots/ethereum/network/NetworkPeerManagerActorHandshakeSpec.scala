@@ -69,7 +69,8 @@ class NetworkPeerManagerActorHandshakeSpec
         pm.ref,
         bus.ref,
         new AppStateStorage(EphemDataSource()),
-        forkResolverOpt = None
+        forkResolverOpt = None,
+        isPoWChain = false
       )
     )
     (ref, pm, bus)

@@ -17,6 +17,7 @@ sealed trait NodesStorage {
   def get(key: NodeHash): Option[NodeEncoded]
   def update(toRemove: Seq[NodeHash], toUpsert: Seq[(NodeHash, NodeEncoded)]): NodesStorage
   def updateCond(toRemove: Seq[NodeHash], toUpsert: Seq[(NodeHash, NodeEncoded)], inMemory: Boolean): NodesStorage
+  def multiGet(keys: Seq[NodeHash]): Seq[Option[NodeEncoded]] = keys.map(get)
 }
 
 /** This class is used to store Nodes (defined in mpt/Node.scala), by using: Key: hash of the RLP encoded node Value:
@@ -33,6 +34,9 @@ class NodeStorage(val dataSource: DataSource)
   def valueDeserializer: IndexedSeq[Byte] => NodeEncoded = _.toArray
 
   override def get(key: NodeHash): Option[NodeEncoded] = dataSource.getOptimized(namespace, key.toArray)
+
+  override def multiGet(keys: Seq[NodeHash]): Seq[Option[NodeEncoded]] =
+    dataSource.multiGetOptimized(namespace, keys.map(_.toArray))
 
   /** This function updates the KeyValueStorage by deleting, updating and inserting new (key-value) pairs in the current
     * namespace.

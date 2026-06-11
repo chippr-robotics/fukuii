@@ -1,0 +1,142 @@
+package com.chipprbots.ethereum.network.handshaker
+
+import org.apache.pekko.util.ByteString
+
+import com.chipprbots.ethereum.network.NetworkPeerManagerActor.PeerInfo
+import com.chipprbots.ethereum.network.handshaker.Handshaker.NextMessage
+import com.chipprbots.ethereum.network.p2p.Message
+import com.chipprbots.ethereum.network.p2p.messages.Capability
+import com.chipprbots.ethereum.network.p2p.messages.WireProtocol.Disconnect
+import com.chipprbots.ethereum.network.p2p.messages.WireProtocol.Hello
+import com.chipprbots.ethereum.network.rlpx.MessageCodec.CompressionPolicy
+import com.chipprbots.ethereum.utils.Config
+import com.chipprbots.ethereum.utils.Logger
+import com.chipprbots.ethereum.utils.ServerStatus
+
+case class HelloExchangeState(handshakerConfiguration: NetworkHandshakerConfiguration)
+    extends InProgressState[PeerInfo]
+    with Logger {
+
+  import handshakerConfiguration._
+
+  override def nextMessage: NextMessage = {
+    log.debug("RLPx connection established, sending Hello")
+    NextMessage(
+      messageToSend = createHelloMsg(),
+      timeout = peerConfiguration.waitForHelloTimeout
+    )
+  }
+
+  override def applyResponseMessage: PartialFunction[Message, HandshakerState[PeerInfo]] = { case hello: Hello =>
+    log.debug("Protocol handshake finished with peer ({})", hello)
+    // Store full capability list from peer
+    val peerCapabilities = hello.capabilities.toList
+
+    // Enhanced logging for peer capabilities and protocol version
+    log.debug(
+      "PEER_CAPABILITIES: clientId={}, p2pVersion={}, capabilities=[{}]",
+      hello.clientId,
+      hello.p2pVersion,
+      peerCapabilities.mkString(", ")
+    )
+
+    // Log our advertised capabilities for comparison
+    log.debug(
+      "OUR_CAPABILITIES: capabilities=[{}]",
+      Config.supportedCapabilities.mkString(", ")
+    )
+
+    // Check if peer supports SNAP/1 protocol
+    val supportsSnap = peerCapabilities.contains(Capability.SNAP1)
+    log.debug("PEER_SNAP_SUPPORT: supportsSnap={}, p2pVersion={}", supportsSnap, hello.p2pVersion)
+
+    // Log compression decision based on p2p version
+    val compressionPolicy =
+      CompressionPolicy.fromHandshake(HelloExchangeState.P2pVersion, hello.p2pVersion)
+    log.debug(
+      "COMPRESSION_CONFIG: peerP2pVersion={}, ourP2pVersion={}, compressOutbound={}, expectInboundCompressed={}",
+      hello.p2pVersion,
+      HelloExchangeState.P2pVersion,
+      compressionPolicy.compressOutbound,
+      compressionPolicy.expectInboundCompressed
+    )
+
+    // Negotiate protocol capability
+    val negotiationResult = Capability.negotiate(peerCapabilities, Config.supportedCapabilities)
+    log.debug(
+      "CAPABILITY_NEGOTIATION: peerCaps=[{}], ourCaps=[{}], negotiated={}",
+      peerCapabilities.mkString(", "),
+      Config.supportedCapabilities.mkString(", "),
+      negotiationResult.map(_.toString).getOrElse("NONE")
+    )
+
+    negotiationResult match {
+
+      case Some(Capability.ETH69) =>
+        log.debug(
+          "PROTOCOL_NEGOTIATED: clientId={}, protocol=eth/69, supportsSnap={} (snap/1 explicit={})",
+          hello.clientId,
+          supportsSnap,
+          peerCapabilities.contains(Capability.SNAP1)
+        )
+        EthNodeStatus69ExchangeState(
+          handshakerConfiguration,
+          Capability.ETH69,
+          supportsSnap = supportsSnap,
+          peerCapabilities,
+          clientId = hello.clientId
+        )
+      case Some(Capability.ETH68) =>
+        log.debug(
+          "PROTOCOL_NEGOTIATED: clientId={}, protocol=eth/68, usesRequestId=true",
+          hello.clientId
+        )
+        EthNodeStatus68ExchangeState(
+          handshakerConfiguration,
+          Capability.ETH68,
+          supportsSnap,
+          peerCapabilities,
+          clientId = hello.clientId
+        )
+      case _ =>
+        log.debug(
+          "PROTOCOL_NEGOTIATION_FAILED: clientId={}, peerCaps=[{}], ourCaps=[{}], reason=IncompatibleP2pProtocolVersion",
+          hello.clientId,
+          peerCapabilities.mkString(", "),
+          Config.supportedCapabilities.mkString(", ")
+        )
+        DisconnectedState(Disconnect.Reasons.IncompatibleP2pProtocolVersion)
+    }
+  }
+
+  override def processTimeout: HandshakerState[PeerInfo] = {
+    log.debug("Timeout while waiting for Hello")
+    DisconnectedState(Disconnect.Reasons.TimeoutOnReceivingAMessage)
+  }
+
+  private def createHelloMsg(): Hello = {
+    val nodeStatus = nodeStatusHolder.get()
+    val listenPort = nodeStatus.serverStatus match {
+      case ServerStatus.Listening(address) => address.getPort
+      case ServerStatus.NotListening =>
+        log.debug(
+          "Server not yet listening when constructing Hello — using configured port {}",
+          Config.Network.Server.port
+        )
+        Config.Network.Server.port
+    }
+    Hello(
+      p2pVersion = HelloExchangeState.P2pVersion,
+      clientId = Config.clientId,
+      capabilities = Config.supportedCapabilities,
+      listenPort = listenPort,
+      nodeId = ByteString(nodeStatus.nodeId)
+    )
+  }
+}
+
+object HelloExchangeState {
+  // Allow p2pVersion to be configured via fukuii.network.peer.p2p-version.
+  // Default remains 5 (Snappy-capable), but can be overridden per environment for investigations.
+  lazy val P2pVersion: Int = Config.Network.peer.p2pVersion
+}

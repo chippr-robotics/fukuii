@@ -4,7 +4,6 @@ import org.apache.pekko.util.ByteString
 
 import org.scalatest.matchers.should.Matchers
 import org.scalatest.wordspec.AnyWordSpec
-import org.scalatestplus.scalacheck.ScalaCheckPropertyChecks
 
 import com.chipprbots.ethereum.Fixtures
 import com.chipprbots.ethereum.crypto.ECDSASignature
@@ -13,22 +12,30 @@ import com.chipprbots.ethereum.domain.SignedTransaction
 import com.chipprbots.ethereum.forkid.ForkId
 import com.chipprbots.ethereum.network.p2p.EthereumMessageDecoder
 import com.chipprbots.ethereum.network.p2p.NetworkMessageDecoder
-import com.chipprbots.ethereum.network.p2p.messages.BaseETH6XMessages._
-import com.chipprbots.ethereum.network.p2p.messages.ETH61.BlockHashesFromNumber
-import com.chipprbots.ethereum.network.p2p.messages.ETH62._
+import com.chipprbots.ethereum.network.p2p.messages.ETHPackets._
+import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.NewBlockHashes.{NewBlockHashes, BlockHash}
+import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.SignedTransactions._
+import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.Status68.{Status68 => Status68Class}
 import com.chipprbots.ethereum.network.p2p.messages.WireProtocol._
 
-class MessagesSerializationSpec extends AnyWordSpec with ScalaCheckPropertyChecks with Matchers {
+/** Serialization round-trip tests for ETH68+ wire messages.
+  *
+  * ETH61-67 serialization tests removed with those protocol files. ETH68 is Fukuii's minimum supported version
+  * (EIP-4938).
+  */
+class MessagesSerializationSpec extends AnyWordSpec with Matchers {
+
+  val version: Capability = Capability.ETH68
 
   "Wire Protocol" when {
 
     "encoding and decoding Hello" should {
       "return same result" in {
         verify(
-          Hello(1, "teest", Seq(Capability.ETH63, Capability.ETH64), 1, ByteString("Id")),
+          Hello(1, "fukuii", Seq(Capability.ETH68, Capability.ETH69), 30303, ByteString("Id")),
           (m: Hello) => m.toBytes,
           Hello.code,
-          Capability.ETH63
+          version
         )
       }
     }
@@ -39,32 +46,52 @@ class MessagesSerializationSpec extends AnyWordSpec with ScalaCheckPropertyCheck
           Disconnect(Disconnect.Reasons.AlreadyConnected),
           (m: Disconnect) => m.toBytes,
           Disconnect.code,
-          Capability.ETH63
+          version
         )
       }
     }
 
     "encoding and decoding Ping" should {
       "return same result" in {
-        verify(Ping(), (m: Ping) => m.toBytes, Ping.code, Capability.ETH63)
+        verify(Ping(), (m: Ping) => m.toBytes, Ping.code, version)
       }
     }
 
     "encoding and decoding Pong" should {
       "return same result" in {
-        verify(Pong(), (m: Pong) => m.toBytes, Pong.code, Capability.ETH63)
+        verify(Pong(), (m: Pong) => m.toBytes, Pong.code, version)
       }
     }
   }
 
-  "Common Messages" when {
+  "ETH68" when {
+
+    "encoding and decoding Status68" should {
+      "return same result" in {
+        val msg = Status68Class(68, 1L, BigInt(100), ByteString("HASH"), ByteString("HASH2"), ForkId(1L, None))
+        verify(msg, (m: Status68Class) => m.toBytes, Codes.StatusCode, version)
+      }
+
+      "handle values >= 128 correctly (two's complement edge case)" in {
+        val msg = Status68Class(
+          protocolVersion = 128,
+          networkId = 256,
+          totalDifficulty = BigInt("8000000000000000", 16),
+          bestHash = ByteString("HASH"),
+          genesisHash = ByteString("HASH2"),
+          forkId = ForkId(1L, None)
+        )
+        verify(msg, (m: Status68Class) => m.toBytes, Codes.StatusCode, version)
+      }
+    }
+
     "encoding and decoding SignedTransactions" should {
       "return same result" in {
         val msg = SignedTransactions(Fixtures.Blocks.Block3125369.body.transactionList)
-        verify(msg, (m: SignedTransactions) => m.toBytes, Codes.SignedTransactionsCode, Capability.ETH63)
+        verify(msg, (m: SignedTransactions) => m.toBytes, Codes.SignedTransactionsCode, version)
       }
 
-      "return same result for typed transaction wire encoding" in {
+      "return same result for typed (EIP-2930) transaction wire encoding" in {
         val typedTx = TransactionWithAccessList(
           chainId = 1,
           nonce = 1,
@@ -77,132 +104,71 @@ class MessagesSerializationSpec extends AnyWordSpec with ScalaCheckPropertyCheck
         )
         val signedTypedTx = SignedTransaction(typedTx, ECDSASignature(r = 1, s = 2, v = 1))
         val msg = SignedTransactions(Seq(signedTypedTx))
-        verify(msg, (m: SignedTransactions) => m.toBytes, Codes.SignedTransactionsCode, Capability.ETH63)
+        verify(msg, (m: SignedTransactions) => m.toBytes, Codes.SignedTransactionsCode, version)
       }
     }
 
     "encoding and decoding NewBlock" should {
-      "return same result for NewBlock v63" in {
+      "return same result" in {
         val msg = NewBlock(Fixtures.Blocks.Block3125369.block, 2323)
-        verify(msg, (m: NewBlock) => m.toBytes, Codes.NewBlockCode, Capability.ETH63)
+        verify(msg, (m: NewBlock) => m.toBytes, Codes.NewBlockCode, version)
       }
 
-      // Test with totalDifficulty >= 128 to verify RLP encoding handles high-bit values correctly
       "handle totalDifficulty >= 128 correctly (two's complement edge case)" in {
         val msg = NewBlock(
           Fixtures.Blocks.Block3125369.block,
-          totalDifficulty = BigInt("8000000000000000", 16) // Tests high bit in large value
+          totalDifficulty = BigInt("8000000000000000", 16)
         )
-        verify(msg, (m: NewBlock) => m.toBytes, Codes.NewBlockCode, Capability.ETH63)
+        verify(msg, (m: NewBlock) => m.toBytes, Codes.NewBlockCode, version)
       }
     }
-  }
 
-  "ETH63" when {
-    val version = Capability.ETH63
-    "encoding and decoding Status" should {
-      "return same result for Status v63" in {
-        val msg = Status(1, 2, 2, ByteString("HASH"), ByteString("HASH2"))
-        verify(msg, (m: Status) => m.toBytes, Codes.StatusCode, Capability.ETH63)
-      }
-
-      // Test with values >= 128 to verify RLP encoding handles high-bit values correctly
-      // BigInt.toByteArray uses two's complement which adds leading 0x00 for values with high bit set
-      // (e.g., 128 -> [0x00, 0x80] instead of [0x80]). This tests the fix using bigIntToUnsignedByteArray.
-      "handle values >= 128 correctly (two's complement edge case)" in {
-        val msg = Status(
-          protocolVersion = 128, // Tests high bit in single byte
-          networkId = 256, // Tests value requiring 2 bytes
-          totalDifficulty = BigInt("8000000000000000", 16), // Tests high bit in large value
-          bestHash = ByteString("HASH"),
-          genesisHash = ByteString("HASH2")
-        )
-        verify(msg, (m: Status) => m.toBytes, Codes.StatusCode, Capability.ETH63)
-      }
-    }
-    commonEthAssertions(version)
-  }
-
-  "ETH64" when {
-    val version = Capability.ETH64
-    "encoding and decoding Status" should {
+    "encoding and decoding NewBlockHashes" should {
       "return same result" in {
-        val msg = ETH64.Status(1, 2, 3, ByteString("HASH"), ByteString("HASH2"), ForkId(1L, None))
-        verify(msg, (m: ETH64.Status) => m.toBytes, Codes.StatusCode, Capability.ETH64)
-      }
-
-      // Test with values >= 128 to verify RLP encoding handles high-bit values correctly
-      "handle values >= 128 correctly (two's complement edge case)" in {
-        val msg = ETH64.Status(
-          protocolVersion = 128, // Tests high bit in single byte
-          networkId = 256, // Tests value requiring 2 bytes
-          totalDifficulty = BigInt("8000000000000000", 16), // Tests high bit in large value
-          bestHash = ByteString("HASH"),
-          genesisHash = ByteString("HASH2"),
-          forkId = ForkId(1L, None)
-        )
-        verify(msg, (m: ETH64.Status) => m.toBytes, Codes.StatusCode, Capability.ETH64)
-      }
-    }
-    commonEthAssertions(version)
-  }
-
-  // scalastyle:off method.length
-  def commonEthAssertions(version: Capability): Unit = {
-    "encoding and decoding ETH61.NewBlockHashes" should {
-      "throw for unsupported message version" in {
-        val msg = ETH61.NewBlockHashes(Seq(ByteString("23"), ByteString("10"), ByteString("36")))
-        assertThrows[RuntimeException] {
-          verify(msg, (m: ETH61.NewBlockHashes) => m.toBytes, Codes.NewBlockHashesCode, version)
-        }
-      }
-    }
-
-    "encoding and decoding BlockHashesFromNumber" should {
-      "return same result" in {
-        val msg = BlockHashesFromNumber(1, 2)
-        verify(msg, (m: BlockHashesFromNumber) => m.toBytes, Codes.BlockHashesFromNumberCode, version)
-      }
-    }
-
-    "encoding and decoding ETH62.NewBlockHashes" should {
-      "return same result" in {
-        val msg = ETH62.NewBlockHashes(Seq(BlockHash(ByteString("hash1"), 1), BlockHash(ByteString("hash2"), 2)))
-        verify(msg, (m: ETH62.NewBlockHashes) => m.toBytes, Codes.NewBlockHashesCode, version)
+        val msg = NewBlockHashes(Seq(BlockHash(ByteString("hash1"), 1), BlockHash(ByteString("hash2"), 2)))
+        verify(msg, (m: NewBlockHashes) => m.toBytes, Codes.NewBlockHashesCode, version)
       }
     }
 
     "encoding and decoding BlockBodies" should {
       "return same result" in {
-        val msg = BlockBodies(Seq(Fixtures.Blocks.Block3125369.body, Fixtures.Blocks.DaoForkBlock.body))
+        val msg = BlockBodies(BigInt(1), Seq(Fixtures.Blocks.Block3125369.body, Fixtures.Blocks.DaoForkBlock.body))
         verify(msg, (m: BlockBodies) => m.toBytes, Codes.BlockBodiesCode, version)
       }
     }
 
     "encoding and decoding GetBlockBodies" should {
       "return same result" in {
-        val msg = GetBlockBodies(Seq(ByteString("111"), ByteString("2222")))
+        val msg = GetBlockBodies(BigInt(1), Seq(ByteString("111"), ByteString("2222")))
         verify(msg, (m: GetBlockBodies) => m.toBytes, Codes.GetBlockBodiesCode, version)
       }
     }
 
     "encoding and decoding BlockHeaders" should {
       "return same result" in {
-        val msg = BlockHeaders(Seq(Fixtures.Blocks.Block3125369.header, Fixtures.Blocks.DaoForkBlock.header))
+        val msg = BlockHeaders(
+          BigInt(1),
+          Seq(Fixtures.Blocks.Block3125369.header, Fixtures.Blocks.DaoForkBlock.header)
+        )
         verify(msg, (m: BlockHeaders) => m.toBytes, Codes.BlockHeadersCode, version)
       }
     }
 
-    "encoding and decoding GetBlockHeaders" should {
+    "encoding and decoding GetBlockHeaders (by number)" should {
       "return same result" in {
         verify(
-          GetBlockHeaders(Left(1), 1, 1, false),
+          GetBlockHeaders(BigInt(1), Left(1), 1, 0, false),
           (m: GetBlockHeaders) => m.toBytes,
           Codes.GetBlockHeadersCode,
           version
         )
+      }
+    }
+
+    "encoding and decoding GetBlockHeaders (by hash)" should {
+      "return same result" in {
         verify(
-          GetBlockHeaders(Right(ByteString("1" * 32)), 1, 1, true),
+          GetBlockHeaders(BigInt(1), Right(ByteString("1" * 32)), 1, 0, true),
           (m: GetBlockHeaders) => m.toBytes,
           Codes.GetBlockHeadersCode,
           version
@@ -210,11 +176,10 @@ class MessagesSerializationSpec extends AnyWordSpec with ScalaCheckPropertyCheck
       }
     }
   }
-  // scalastyle:on
 
   def verify[T](msg: T, encode: T => Array[Byte], code: Int, version: Capability): Unit =
     messageDecoder(version).fromBytes(code, encode(msg)) shouldEqual Right(msg)
 
-  private def messageDecoder(version: Capability) =
-    NetworkMessageDecoder.orElse(EthereumMessageDecoder.ethMessageDecoder(version))
+  private def messageDecoder(v: Capability) =
+    NetworkMessageDecoder.orElse(EthereumMessageDecoder.ethMessageDecoder(v))
 }

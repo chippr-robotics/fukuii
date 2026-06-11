@@ -93,6 +93,8 @@ class BlockchainReader(
 
   def getBestBlockNumber(): BigInt = appStateStorage.getBestBlockNumber()
 
+  def getSnapSyncPivotBlock(): Option[BigInt] = appStateStorage.getSnapSyncPivotBlock()
+
   // returns the best known block if it's available in the storage
   def getBestBlock(): Option[Block] = {
     val bestKnownBlockinfo = appStateStorage.getBestBlockInfo()
@@ -217,14 +219,9 @@ class BlockchainReader(
               .map(_.totalDifficulty)
               .getOrElse(BigInt(1))
             if (ourBestNum > 0) {
-              val ourCurrentDiff = bestHeaderOpt.map(_.difficulty).getOrElse(BigInt(1))
+              val rate = bestHeaderOpt.map(h => rollingWindowDiff(h, ourBestTD)).getOrElse(BigInt(1))
               val gap = (latestBlock - ourBestNum).max(BigInt(0))
-              // Marginal-rate estimate: uses current difficulty instead of the historical average.
-              // Historical avg ~582 TH/block for ETC; current era ~2000–4300 TH → old formula
-              // underestimates each gap block's TD contribution by 70-86%.
-              // 9999/10000 guarantees a slight underestimate for constant-difficulty chains (< 0.01% error).
-              // Peer is never mistakenly assigned higher priority than deserved for stable chains.
-              val estimatedTD = ourBestTD + ourCurrentDiff * gap * 9999 / 10000
+              val estimatedTD = ourBestTD + rate * gap
               (ChainWeight.totalDifficultyOnly(estimatedTD), "POW_SCALING")
             } else {
               // DB not yet bootstrapped — TD=0 gives peer lowest priority rather than a
@@ -232,6 +229,26 @@ class BlockchainReader(
               (ChainWeight.totalDifficultyOnly(BigInt(0)), "COLD_START")
             }
         }
+    }
+
+  private val Tier3RollingWindow: BigInt = BigInt(10_000)
+
+  /** Mean block difficulty over a rolling window for ETH69 Tier-3 POW_SCALING estimates.
+    *
+    * Avoids two failure modes: (1) all-time average (headTd/headNumber) is contaminated by ETC's pre-merge low-hashrate
+    * era (~5-30 TH/s before block 15.4M); (2) point-in-time head.difficulty rides 25-35% weekly hashrate swings. The
+    * 10K-block window (~36h) stays within the current difficulty regime and transitions naturally. Falls back to
+    * head.difficulty when the window start block is not in our DB (evicted or not yet synced).
+    */
+  private def rollingWindowDiff(head: BlockHeader, headTd: BigInt): BigInt =
+    if (head.number == 0) head.difficulty
+    else if (head.number < Tier3RollingWindow) headTd / head.number
+    else {
+      val windowStart = head.number - Tier3RollingWindow
+      getBlockHeaderByNumber(windowStart)
+        .flatMap(h => getChainWeightByHash(h.hash))
+        .map(w => (headTd - w.totalDifficulty) / Tier3RollingWindow)
+        .getOrElse(head.difficulty)
     }
 
   /** Allows to query for a block based on it's number

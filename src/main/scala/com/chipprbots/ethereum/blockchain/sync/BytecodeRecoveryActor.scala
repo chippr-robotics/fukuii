@@ -70,11 +70,13 @@ class BytecodeRecoveryActor(
     case ScanResult(missing) =>
       if (missing.isEmpty) {
         log.info("Bytecode recovery: all contract bytecodes present. Marking recovery complete.")
+        RecoveryMetrics.setBytecodePhase(RecoveryMetrics.PhaseComplete)
         appStateStorage.bytecodeRecoveryDone().commit()
         syncController ! RecoveryComplete
         context.stop(self)
       } else {
         log.warning(s"Bytecode recovery: found ${missing.size} missing bytecodes. Starting download...")
+        RecoveryMetrics.setBytecodePhase(RecoveryMetrics.PhaseDownloading)
         implicit val scheduler: org.apache.pekko.actor.Scheduler = context.system.scheduler
         val coordinator = coordinatorForTesting.getOrElse {
           val requestTracker = new snap.SNAPRequestTracker()
@@ -99,10 +101,14 @@ class BytecodeRecoveryActor(
 
   private def downloading(coordinator: ActorRef, expectedCount: Int): Receive = {
     var progressSeq = 0L
+    var downloadedCount = 0L
     val abandonAfter: FiniteDuration = snapSyncConfig.storageRecoveryAbandonTimeout
     var abandonTimer: Option[Cancellable] = Some(
       context.system.scheduler.scheduleOnce(abandonAfter, self, CheckAbandon(0L))
     )
+    var lastBytecodeRecoveryMilestone: Int = -1
+    var lastRateNanos = System.nanoTime()
+    var lastRateDownloaded = 0L
 
     def recordProgress(): Unit = {
       progressSeq += 1
@@ -112,6 +118,7 @@ class BytecodeRecoveryActor(
 
     def finishRecovery(): Unit = {
       abandonTimer.foreach(_.cancel())
+      RecoveryMetrics.setBytecodePhase(RecoveryMetrics.PhaseComplete)
       appStateStorage.bytecodeRecoveryDone().commit()
       syncController ! RecoveryComplete
       context.stop(self)
@@ -122,11 +129,32 @@ class BytecodeRecoveryActor(
         coordinator ! snap.actors.Messages.ByteCodePeerAvailable(peer)
 
       case snap.SNAPSyncController.ByteCodeSyncComplete =>
-        log.info(s"Bytecode recovery complete: downloaded bytecodes for $expectedCount missing codeHashes")
+        log.info(
+          s"[SNAP-PROGRESS] BYTECODE-RECOVERY 100% — $expectedCount / $expectedCount bytecodes recovered — COMPLETE"
+        )
+        RecoveryMetrics.setBytecodeDownloaded(expectedCount.toLong)
+        RecoveryMetrics.setBytecodePhase(RecoveryMetrics.PhaseComplete)
         finishRecovery()
 
       case snap.SNAPSyncController.ProgressBytecodesDownloaded(_) =>
+        downloadedCount += 1
+        RecoveryMetrics.setBytecodeDownloaded(downloadedCount)
         recordProgress()
+        downloadedCount += 1
+        val (newM, crossed) =
+          ProgressMilestones.crossed(downloadedCount, expectedCount.toLong, lastBytecodeRecoveryMilestone)
+        lastBytecodeRecoveryMilestone = newM
+        crossed.foreach { m =>
+          val elapsedSecs = (System.nanoTime() - lastRateNanos) / 1e9
+          val rate = if (elapsedSecs > 0) ((downloadedCount - lastRateDownloaded) / elapsedSecs).toLong else 0L
+          if (m % 10 == 0 || m <= 5 || m >= 95) {
+            lastRateNanos = System.nanoTime()
+            lastRateDownloaded = downloadedCount
+          }
+          log.info(
+            s"[SNAP-PROGRESS] BYTECODE-RECOVERY $m% — $downloadedCount / $expectedCount bytecodes | $rate bytecodes/s"
+          )
+        }
 
       case CheckAbandon(progressAtSchedule) =>
         if (progressAtSchedule == progressSeq) {
@@ -150,6 +178,7 @@ class BytecodeRecoveryActor(
 
   /** Walk the state trie and collect codeHashes of contracts missing from evmCodeStorage. */
   private def scanForMissingBytecodes(): Seq[ByteString] = {
+    RecoveryMetrics.setBytecodePhase(RecoveryMetrics.PhaseScanning)
     val mptStorage = stateStorage.getBackingStorage(pivotBlockNumber)
     val rootNode = mptStorage.get(stateRoot.toArray)
 
@@ -160,6 +189,11 @@ class BytecodeRecoveryActor(
 
     val onLeaf: LeafNode => Unit = { leafNode =>
       accountCount += 1
+      // Publish scan progress to the node-health dashboard every 100K accounts (cheap volatile
+      // writes); the per-1M log line stays for log-only visibility.
+      if (accountCount % 100_000 == 0) {
+        RecoveryMetrics.setBytecodeScanProgress(accountCount, contractCount, missing.size.toLong)
+      }
       if (accountCount % 1_000_000 == 0) {
         log.info(
           s"Bytecode recovery scan: $accountCount accounts, $contractCount contracts, ${missing.size} missing"
@@ -193,6 +227,7 @@ class BytecodeRecoveryActor(
     log.info(
       s"Bytecode recovery scan complete: $accountCount accounts, $contractCount contracts, ${missing.size} missing bytecodes"
     )
+    RecoveryMetrics.setBytecodeScanProgress(accountCount, contractCount, missing.size.toLong)
     missing.toSeq
   }
 }
@@ -225,6 +260,34 @@ object BytecodeRecoveryActor {
         syncController,
         pivotBlockNumber,
         snapSyncConfig
+      )
+    )
+
+  /** Download-only variant: skip the scan and go straight to downloading the supplied missing codeHashes (produced by
+    * the combined parallel scan). Used by `SyncController` when `parallel-recovery-scan` is on.
+    */
+  def propsPreloaded(
+      stateRoot: ByteString,
+      stateStorage: StateStorage,
+      evmCodeStorage: EvmCodeStorage,
+      appStateStorage: AppStateStorage,
+      networkPeerManager: ActorRef,
+      syncController: ActorRef,
+      pivotBlockNumber: BigInt,
+      snapSyncConfig: SNAPSyncConfig,
+      missing: Seq[ByteString]
+  ): Props =
+    Props(
+      new BytecodeRecoveryActor(
+        stateRoot,
+        stateStorage,
+        evmCodeStorage,
+        appStateStorage,
+        networkPeerManager,
+        syncController,
+        pivotBlockNumber,
+        snapSyncConfig,
+        preloadedMissingForTesting = Some(missing)
       )
     )
 }
