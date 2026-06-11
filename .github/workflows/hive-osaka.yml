@@ -257,7 +257,7 @@ jobs:
           exit 1
 
       - name: Fail if under threshold
-        if: ${{ steps.tab.outputs.sim_failed == 'false' && steps.tab.outputs.passed < env.PASS_THRESHOLD }}
+        if: ${{ steps.tab.outputs.sim_failed == 'false' && fromJSON(steps.tab.outputs.passed) < fromJSON(env.PASS_THRESHOLD) }}
         run: |
           echo "::error::Hive Osaka sweep only passed ${{ steps.tab.outputs.passed }} tests (threshold ${{ env.PASS_THRESHOLD }})."
           exit 1
