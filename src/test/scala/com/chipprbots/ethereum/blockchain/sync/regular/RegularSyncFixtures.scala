@@ -114,6 +114,7 @@ trait RegularSyncFixtures { self: Matchers with AsyncMockFactory =>
 
     override lazy val consensusAdapter: ConsensusAdapter = {
       val adapter = stub[ConsensusAdapter]
+      // Per-block path: mined/broadcast blocks via importBlock
       (adapter
         .evaluateBranchBlock(_: Block)(_: IORuntime, _: BlockchainConfig))
         .when(*, *, *)
@@ -122,6 +123,27 @@ trait RegularSyncFixtures { self: Matchers with AsyncMockFactory =>
           results
             .getOrElse(block.header.hash, IO.pure(BlockEnqueued))
             .flatTap(_ => importedBlocksSubject.publish1(block).void)
+        }
+      // Batch path: regular sync blocks via tryImportBlocks
+      (adapter
+        .evaluateBranch(_: NonEmptyList[Block])(_: IORuntime, _: BlockchainConfig))
+        .when(*, *, *)
+        .onCall { case (nel: NonEmptyList[Block], _, _) =>
+          def go(remaining: List[Block], acc: List[BlockData]): IO[BlockImportResult] =
+            remaining match {
+              case Nil => IO.pure(BlockImportedToTop(acc.reverse))
+              case block :: rest =>
+                importedBlocksSet.add(block)
+                results
+                  .getOrElse(block.header.hash, IO.pure(BlockImportedToTop(Nil)))
+                  .flatTap(_ => importedBlocksSubject.publish1(block).void)
+                  .flatMap {
+                    case BlockImportedToTop(data)       => go(rest, data.reverse ::: acc)
+                    case DuplicateBlock | BlockEnqueued => go(rest, acc)
+                    case other                          => IO.pure(other)
+                  }
+            }
+          go(nel.toList, Nil)
         }
       adapter
     }
@@ -366,6 +388,20 @@ trait RegularSyncFixtures { self: Matchers with AsyncMockFactory =>
       IO.pure(result)
     }
 
+    def fakeEvaluateBatch(nel: NonEmptyList[Block]): IO[BlockImportResult] = {
+      def go(remaining: List[Block], acc: List[BlockData]): IO[BlockImportResult] =
+        remaining match {
+          case Nil => IO.pure(BlockImportedToTop(acc.reverse))
+          case block :: rest =>
+            fakeEvaluateBlock(block).flatMap {
+              case BlockImportedToTop(data)       => go(rest, data.reverse ::: acc)
+              case DuplicateBlock | BlockEnqueued => go(rest, acc)
+              case other                          => IO.pure(other)
+            }
+        }
+      go(nel.toList, Nil)
+    }
+
     class FakeBranchResolution extends BranchResolution(stub[BlockchainReader]) {
       override def resolveBranch(headers: NonEmptyList[BlockHeader]): BranchResolutionResult = {
         val importedHashes = importedBlocksSet.map(_.hash).toSet
@@ -419,6 +455,15 @@ trait RegularSyncFixtures { self: Matchers with AsyncMockFactory =>
           }
           IO.pure(BlockImportedToTop(Nil))
         }
+      }
+
+    (consensusAdapter
+      .evaluateBranch(_: NonEmptyList[Block])(_: IORuntime, _: BlockchainConfig))
+      .when(*, *, *)
+      .onCall { case (nel: NonEmptyList[Block], _, _) =>
+        if (nel.toList.contains(testBlocks.last)) importedLastTestBlock = true
+        val blockData = nel.toList.map(b => BlockData(b, Nil, ChainWeight.totalDifficultyOnly(b.header.difficulty)))
+        IO.pure(BlockImportedToTop(blockData))
       }
 
     peersClient.setAutoPilot(new PeersClientAutoPilot(testBlocks))

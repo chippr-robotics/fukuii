@@ -90,15 +90,17 @@ class MerkleProofVerifier(rootHash: ByteString) extends Logger {
       proofRawMap: Map[ByteString, Array[Byte]]
   ): Either[String, Unit] = {
     // Validate: monotonically strictly increasing keys, no empty values
-    for (i <- 0 until leaves.length - 1)
-      if (cmpBytes(leaves(i)._1, leaves(i + 1)._1) >= 0)
-        return Left("range is not monotonically increasing")
+    if ((0 until leaves.length - 1).exists(i => cmpBytes(leaves(i)._1, leaves(i + 1)._1) >= 0))
+      return Left("range is not monotonically increasing")
     if (leaves.exists(_._2.isEmpty))
       return Left("range contains deletion (empty value)")
 
     // Edge case B: proof present, zero leaves — proof of absence
     if (leaves.isEmpty) {
-      val rootNode = decodeProofNode(proofRawMap, rootHash).getOrElse(return Left("root node missing from proof"))
+      val rootNode = decodeProofNode(proofRawMap, rootHash) match {
+        case None    => return Left("root node missing from proof")
+        case Some(n) => n
+      }
       val trie = new PartialProofTrie(rootNode, proofRawMap)
       trie.resolveEdge(hashToNibbles(firstKey), allowNonExistent = true) match {
         case Left(err) => return Left(err)
@@ -115,7 +117,10 @@ class MerkleProofVerifier(rootHash: ByteString) extends Logger {
 
     // Special case: single element where firstKey == lastKey (existent proof)
     if (leaves.length == 1 && firstKey == lastKey) {
-      val rootNode = decodeProofNode(proofRawMap, rootHash).getOrElse(return Left("root node missing from proof"))
+      val rootNode = decodeProofNode(proofRawMap, rootHash) match {
+        case None    => return Left("root node missing from proof")
+        case Some(n) => n
+      }
       val trie = new PartialProofTrie(rootNode, proofRawMap)
       trie.resolveEdge(hashToNibbles(firstKey), allowNonExistent = false) match {
         case Left(err) => return Left(err)
@@ -487,12 +492,6 @@ class MerkleProofVerifier(rootHash: ByteString) extends Logger {
     a.length - b.length
   }
 
-  private def matchingLength(a: Seq[Int], b: Seq[Int]): Int = {
-    var i = 0
-    while (i < math.min(a.length, b.length) && a(i) == b(i)) i += 1
-    i
-  }
-
   private def cmpBytes(a: ByteString, b: ByteString): Int = {
     val aa = a.toArray
     val bb = b.toArray
@@ -512,68 +511,6 @@ class MerkleProofVerifier(rootHash: ByteString) extends Logger {
       val key = ByteString(Node.hashFn(nodeBytes.toArray))
       key -> nodeBytes.toArray
     }.toMap
-
-  // ─── Legacy traversal methods (dead code — kept for reference, not called) ──
-
-  @unused private def verifyAccountInProof(
-      accountHash: ByteString,
-      account: Account,
-      proofMap: Map[ByteString, MptNode]
-  ): Either[String, Unit] =
-    traversePath(rootHash, hashToNibbles(accountHash), proofMap, account)
-
-  @unused private def traversePath(
-      currentHash: ByteString,
-      path: Seq[Int],
-      proofMap: Map[ByteString, MptNode],
-      expectedAccount: Account
-  ): Either[String, Unit] =
-    proofMap.get(currentHash) match {
-      case None                     => Right(())
-      case Some(leafNode: LeafNode) => verifyLeafAccount(leafNode, expectedAccount)
-      case Some(branchNode: BranchNode) =>
-        if (path.isEmpty) {
-          branchNode.terminator match {
-            case Some(value) => verifyAccountValue(value, expectedAccount)
-            case None        => Left("Path ended at branch without terminator")
-          }
-        } else {
-          val nextIndex = path.head
-          branchNode.children.lift(nextIndex) match {
-            case Some(nextNode: HashNode) =>
-              traversePath(ByteString(nextNode.hash), path.tail, proofMap, expectedAccount)
-            case Some(nextNode) =>
-              traversePath(ByteString(nextNode.hash), path.tail, proofMap, expectedAccount)
-            case None => Left(s"No child at index $nextIndex")
-          }
-        }
-      case Some(extensionNode: ExtensionNode) =>
-        val sharedNibbles = extensionNode.sharedKey.map(_.toInt)
-        if (path.startsWith(sharedNibbles)) {
-          extensionNode.next match {
-            case hashNode: HashNode =>
-              traversePath(ByteString(hashNode.hash), path.drop(sharedNibbles.length), proofMap, expectedAccount)
-            case nextNode =>
-              traversePath(ByteString(nextNode.hash), path.drop(sharedNibbles.length), proofMap, expectedAccount)
-          }
-        } else Left("Path doesn't match extension node")
-      case Some(_) => Left("Unexpected node type")
-    }
-
-  @unused private def verifyLeafAccount(leaf: LeafNode, expectedAccount: Account): Either[String, Unit] =
-    verifyAccountValue(leaf.value, expectedAccount)
-
-  @unused private def verifyAccountValue(value: ByteString, expectedAccount: Account): Either[String, Unit] =
-    try {
-      val decoded = Account.accountSerializer.fromBytes(value.toArray)
-      if (decoded.nonce != expectedAccount.nonce) Left(s"Account nonce mismatch")
-      else if (decoded.balance != expectedAccount.balance) Left(s"Account balance mismatch")
-      else if (decoded.storageRoot != expectedAccount.storageRoot) Left(s"Account storageRoot mismatch")
-      else if (decoded.codeHash != expectedAccount.codeHash) Left(s"Account codeHash mismatch")
-      else Right(())
-    } catch {
-      case e: Exception => Left(s"Failed to decode account value: ${e.getMessage}")
-    }
 
   @unused private def verifyProofRoot(proofNodes: Seq[MptNode]): Either[String, Unit] = {
     if (proofNodes.isEmpty) return Left("Empty proof")

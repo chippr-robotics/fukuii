@@ -52,7 +52,7 @@ class SnapServerSpec extends AnyFlatSpec with Matchers {
   }
 
   /** 10 deterministic account keys spread across the keyspace. */
-  private def sampleKeys(n: Int = 10): Seq[ByteString] =
+  private def sampleKeys(n: Int): Seq[ByteString] =
     (0 until n).map(i => kec256(ByteString(s"account-$i")))
 
   /** Simple EOA (no storage, no code). */
@@ -62,10 +62,6 @@ class SnapServerSpec extends AnyFlatSpec with Matchers {
   /** Account with a given storage root. */
   private def accountWithStorage(storageRoot: ByteString): Account =
     Account(nonce = 1, balance = 500, storageRoot = storageRoot)
-
-  /** Account with a given code hash. */
-  private def accountWithCode(codeHash: ByteString): Account =
-    Account(nonce = 0, balance = 0, codeHash = codeHash)
 
   /** HP-encoded empty path — asks serveTrieNodes for the root node of the trie. */
   private val hpRootPath: ByteString = ByteString(Array(0x00.toByte))

@@ -37,6 +37,10 @@ trait PeerListSupportNg { self: Actor with ActorLogging =>
 
   protected var handshakedPeers: Map[PeerId, PeerWithInfo] = Map.empty
 
+  protected val ethRateTracker: PeerRateTracker = new PeerRateTracker()
+
+  def globalMedianRttMs: Long = ethRateTracker.currentMedianRTT
+
   scheduler.scheduleWithFixedDelay(
     0.seconds,
     syncConfig.peersScanInterval,
@@ -45,8 +49,10 @@ trait PeerListSupportNg { self: Actor with ActorLogging =>
   )(ec, context.self)
 
   def handlePeerListMessages: Receive = {
-    case NetworkPeerManagerActor.HandshakedPeers(peers) => updatePeers(peers)
-    case PeerDisconnected(peerId)                       => removePeerById(peerId)
+    case NetworkPeerManagerActor.HandshakedPeers(peers) =>
+      updatePeers(peers)
+      ethRateTracker.tune()
+    case PeerDisconnected(peerId) => removePeerById(peerId)
   }
 
   def peersToDownloadFrom: Map[PeerId, PeerWithInfo] = {
@@ -83,16 +89,19 @@ trait PeerListSupportNg { self: Actor with ActorLogging =>
         val isMaintained = peerWithInfo.peer.nodeId.exists { nodeId =>
           maintainedNodeIdHexes.contains(Hex.toHexString(nodeId.toArray))
         }
-        if (isMaintained) {
+        val skipBlacklist = isMaintained && !reason.isInstanceOf[BlacklistReason.RegularSyncRequestFailed]
+        if (skipBlacklist) {
           log.debug("Skipping blacklist for maintained peer {} (reason: {})", peerId, reason)
         } else {
-          log.debug(
-            "Blacklisting peer {} ({}) for {} ms. Reason: {}",
-            peerId,
-            peerWithInfo.peer.remoteAddress,
-            duration.toMillis,
-            reason
-          )
+          if (isMaintained) log.warning("Blacklisting maintained peer {} (will reconnect). Reason: {}", peerId, reason)
+          else
+            log.debug(
+              "Blacklisting peer {} ({}) for {} ms. Reason: {}",
+              peerId,
+              peerWithInfo.peer.remoteAddress,
+              duration.toMillis,
+              reason
+            )
           blacklist.add(peerId, duration, reason)
         }
       case None =>
@@ -124,14 +133,26 @@ trait PeerListSupportNg { self: Actor with ActorLogging =>
       log.debug("Handshaked peers changed: {} -> {} peers", handshakedPeers.size, updated.size)
     }
 
+    val newPeerIds = updated.keySet -- handshakedPeers.keySet
+    val removedPeerIds = handshakedPeers.keySet -- updated.keySet
+    newPeerIds.foreach(id => ethRateTracker.addPeer(id.value))
+    removedPeerIds.foreach(id => ethRateTracker.removePeer(id.value))
+
     handshakedPeers = updated
+    onPeerListUpdated(updated.values)
   }
+
+  /** Called after `handshakedPeers` is refreshed. Default is a no-op; subclasses may override to track peer metadata
+    * across the full SNAP session (e.g. historical max TD for calibration).
+    */
+  protected def onPeerListUpdated(currentPeers: Iterable[PeerListSupportNg.PeerWithInfo]): Unit = ()
 
   private def removePeerById(peerId: PeerId): Unit =
     if (handshakedPeers.keySet.contains(peerId)) {
       val peerInfo = handshakedPeers(peerId)
       log.debug("Removing disconnected peer {} ({})", peerId, peerInfo.peer.remoteAddress)
       peerEventBus ! Unsubscribe(PeerDisconnectedClassifier(PeerSelector.WithId(peerId)))
+      ethRateTracker.removePeer(peerId.value)
       blacklist.remove(peerId)
       log.debug("Removed peer {} from blacklist", peerId)
       handshakedPeers = handshakedPeers - peerId

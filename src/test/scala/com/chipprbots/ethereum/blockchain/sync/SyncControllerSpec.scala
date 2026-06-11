@@ -41,18 +41,11 @@ import com.chipprbots.ethereum.network.NetworkPeerManagerActor.SendMessage
 import com.chipprbots.ethereum.network.PeerEventBusActor.PeerEvent.MessageFromPeer
 import com.chipprbots.ethereum.network.p2p.messages.ETHPackets
 import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.{BlockBodies, GetBlockBodies}
-import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.{BlockHeaders => ETH62BlockHeaders}
 import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.GetBlockBodies.GetBlockBodiesEnc
-import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.GetBlockHeaders.{
-  GetBlockHeadersEnc => ETH62GetBlockHeadersEnc
-}
 import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.{GetBlockHeaders => ETH62GetBlockHeaders}
-import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.GetNodeData.{GetNodeDataEnc => ETH63GetNodeDataEnc}
-import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.GetReceipts.{GetReceiptsEnc => ETH63GetReceiptsEnc}
 import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.{GetReceipts => ETH63GetReceipts}
 import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.{NodeData => ETH63NodeData}
 import com.chipprbots.ethereum.rlp.RLPList
-import com.chipprbots.ethereum.rlp.RLPValue
 import com.chipprbots.ethereum.utils.BlockchainConfig
 import com.chipprbots.ethereum.utils.Config.SyncConfig
 
@@ -916,7 +909,7 @@ class SyncControllerSpec
             }
 
           // Handle GetNodeData (EIP-4938: rejected in ETH68, but still handled for legacy)
-          case SendMessage(msg: ETHPackets.GetNodeData.GetNodeDataEnc, peer) if !onlyPivot =>
+          case SendMessage(_: ETHPackets.GetNodeData.GetNodeDataEnc, peer) if !onlyPivot =>
             stateDownloadStarted = true
             if (!failedNodeRequest) {
               sender ! MessageFromPeer(
@@ -924,9 +917,6 @@ class SyncControllerSpec
                 peer
               )
             }
-            this
-
-            stateDownloadStarted = true
             if (!failedNodeRequest) {
               sender ! MessageFromPeer(ETH63NodeData(Seq(defaultStateMptLeafWithAccount)), peer)
             }
@@ -968,19 +958,6 @@ class SyncControllerSpec
 
     private def generateBlockHeaders66(
         underlyingMessage: ETHPackets.GetBlockHeaders,
-        blockchainData: BlockchainData
-    ): Seq[BlockHeader] = {
-      val start = underlyingMessage.block.swap.toOption.get
-      val stop = start + underlyingMessage.maxHeaders * (underlyingMessage.skip + 1)
-
-      (start until stop)
-        .flatMap(i => blockchainData.headers.get(i))
-        .zipWithIndex
-        .collect { case (header, index) if index % (underlyingMessage.skip + 1) == 0 => header }
-    }
-
-    private def generateBlockHeaders62(
-        underlyingMessage: ETH62GetBlockHeaders,
         blockchainData: BlockchainData
     ): Seq[BlockHeader] = {
       val start = underlyingMessage.block.swap.toOption.get

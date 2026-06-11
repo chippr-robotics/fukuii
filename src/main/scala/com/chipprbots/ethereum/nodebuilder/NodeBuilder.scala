@@ -253,7 +253,6 @@ trait ConsensusBuilder {
 
   lazy val consensus: Consensus =
     new ConsensusImpl(
-      blockchain,
       blockchainReader,
       blockchainWriter,
       blockExecution
@@ -275,8 +274,8 @@ trait ConsensusBuilder {
 trait ForkResolverBuilder {
   self: BlockchainConfigBuilder =>
 
-  lazy val forkResolverOpt: Option[ForkResolver.EtcForkResolver] =
-    blockchainConfig.daoForkConfig.map(new ForkResolver.EtcForkResolver(_))
+  lazy val forkResolverOpt: Option[ForkResolver.IrregularStateChangeDaoForkResolver] =
+    blockchainConfig.daoForkConfig.map(new ForkResolver.IrregularStateChangeDaoForkResolver(_))
 
 }
 

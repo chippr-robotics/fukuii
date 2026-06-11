@@ -73,7 +73,7 @@ case class HelloExchangeState(handshakerConfiguration: NetworkHandshakerConfigur
     negotiationResult match {
 
       case Some(Capability.ETH69) =>
-        log.info(
+        log.debug(
           "PROTOCOL_NEGOTIATED: clientId={}, protocol=eth/69, supportsSnap={} (snap/1 explicit={})",
           hello.clientId,
           supportsSnap,
@@ -99,7 +99,7 @@ case class HelloExchangeState(handshakerConfiguration: NetworkHandshakerConfigur
           clientId = hello.clientId
         )
       case _ =>
-        log.warn(
+        log.debug(
           "PROTOCOL_NEGOTIATION_FAILED: clientId={}, peerCaps=[{}], ourCaps=[{}], reason=IncompatibleP2pProtocolVersion",
           hello.clientId,
           peerCapabilities.mkString(", "),

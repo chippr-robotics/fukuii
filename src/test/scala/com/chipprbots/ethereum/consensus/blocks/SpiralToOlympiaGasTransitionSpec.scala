@@ -62,7 +62,6 @@ class SpiralToOlympiaGasTransitionSpec
   // 1/1024 step sizes from the activation parent onward:
   //   delta = parentGas / 1024 - 1
   private val StepOneGasLimit: BigInt = SpiralGasLimit + SpiralGasLimit / 1024 - 1 // 8,007,811
-  private val StepTwoGasLimit: BigInt = StepOneGasLimit + StepOneGasLimit / 1024 - 1 // 8,015,630
 
   private val legacyMiner = new TestableGen(SpiralGasLimit)
 

@@ -103,6 +103,16 @@ class SyncController(
   private val isPostMergeChain: Boolean = configBuilder.blockchainConfig.terminalTotalDifficulty.isDefined
   private val clPivotEnabled: Boolean = isPostMergeChain && forkChoiceManagerOpt.isDefined
 
+  // TD calibration stats — updated by CalibrateChainWeightFromPeer handler.
+  // calibrationSucceeded and networkBestTD are read by the TD_CALIBRATION_STATS periodic log
+  // (future enhancement) — suppress unused warnings.
+  private var tdCalibrationAttempt: Int = 0 // number of tier-3 (local chain) attempts
+  @annotation.unused
+  private var calibrationSucceeded: Boolean = false
+  private var lastCalibrationSource: String = "NONE"
+  @annotation.unused
+  private var networkBestTD: BigInt = BigInt(0) // last peerTD pushed by NPA
+
   override def preStart(): Unit = {
     super.preStart()
     if (clPivotEnabled) {
@@ -385,6 +395,64 @@ class SyncController(
         appStateStorage.clearSnapSyncDone().commit()
         appStateStorage.clearFastSyncDone().commit()
         startSnapSync(minPivotBlock = Some(blockNumber))
+      case SyncProtocol.CalibrateChainWeightFromPeer(peerTD, peerMaxBlock) =>
+        // Three-tier calibration cascade:
+        //   Tier 1 (peerTD > 0, peerMaxBlock > 0): exact interpolation from NewBlock TD+blockNum
+        //   Tier 2 (peerTD > 0, peerMaxBlock = 0): ETH68 STATUS only — peerTD direct (<0.05% over)
+        //   Tier 3 (peerTD = 0): pure ETH69 sentinel — compute from local chain DB via parentHash traversal
+        if (peerTD > BigInt(0)) {
+          // Tier 1 or 2: ETH68 peer TD available
+          blockchainReader.getBestBlock().foreach { bestBlock =>
+            val genesisWeight = blockchainReader
+              .getChainWeightByHash(blockchainReader.genesisHeader.hash)
+              .map(_.totalDifficulty)
+              .getOrElse(blockchainReader.genesisHeader.difficulty)
+            val calibratedTD =
+              if (peerMaxBlock > BigInt(0))
+                peerTD * bestBlock.header.number / peerMaxBlock
+              else
+                peerTD
+            if (calibratedTD > genesisWeight * BigInt(1000)) {
+              val storedTD = blockchainReader
+                .getChainWeightByHash(bestBlock.header.hash)
+                .map(_.totalDifficulty)
+                .getOrElse(BigInt(0))
+              blockchainWriter
+                .storeChainWeight(
+                  bestBlock.header.hash,
+                  com.chipprbots.ethereum.domain.ChainWeight.totalDifficultyOnly(calibratedTD)
+                )
+                .commit()
+              networkBestTD = peerTD
+              calibrationSucceeded = true
+              lastCalibrationSource = if (peerMaxBlock > BigInt(0)) "NEWBLOCK_EXACT" else "ETH68_STATUS"
+              log.info(
+                "CHAIN_WEIGHT_CALIBRATED_ON_RESUME: bestBlock={} storedTD={} calibratedTD={} source={}",
+                bestBlock.header.number,
+                storedTD,
+                calibratedTD,
+                lastCalibrationSource
+              )
+              val ratio = if (storedTD > BigInt(0)) (calibratedTD / storedTD).toString else "∞"
+              log.info(
+                s"TD_CALIBRATION_SUMMARY: block=${bestBlock.header.number} before=$storedTD after=$calibratedTD ratio=$ratio source=$lastCalibrationSource attempt=$tdCalibrationAttempt"
+              )
+            }
+          }
+        } else {
+          // Tier 3: pure ETH69 sentinel (0, 0) — no ETH68 peer TD seen at T+30s (or retry).
+          // Walk backward via parentHash to find a ChainDownloader anchor with plausible TD,
+          // accumulate forward. Retry every 30min until success or ETH68 peers appear.
+          tdCalibrationAttempt += 1
+          val succeeded = calibrateTDFromLocalChain()
+          if (succeeded) {
+            calibrationSucceeded = true
+            lastCalibrationSource = "LOCAL_CHAIN"
+          } else {
+            scheduleTDCalibrationRetry()
+          }
+        }
+
       case msg =>
         regularSync.forward(msg)
     }
@@ -972,7 +1040,8 @@ class SyncController(
           peerEventBus,
           syncConfig,
           snapSyncConfig,
-          scheduler
+          scheduler,
+          blacklist
         )
         .withDispatcher("sync-dispatcher"),
       s"snap-sync-$syncGeneration"
@@ -1004,6 +1073,45 @@ class SyncController(
 
   def startRegularSync(resumeBackfill: Boolean = true): ActorRef = {
     syncGeneration += 1
+
+    // Operator escape hatch: seed exact chain-weight values before RegularSync starts.
+    // Used when a node finished SNAP sync with a proxy TD (e.g. no ETH68 peers at finalize
+    // time) and needs correcting without a full re-sync.
+    // Format: -Dfukuii.seed-chain-weights=HASH1:TD1,HASH2:TD2 (hash hex, TD decimal)
+    // Get canonical values from a trusted local client:
+    //   curl -s localhost:8545 -d '{"method":"eth_getBlockByNumber","params":["latest",false],"id":1}' \
+    //     | jq -r '.result | "\(.hash):\(.totalDifficulty | ltrimstr("0x") | tonumber)"'
+    Option(System.getProperty("fukuii.seed-chain-weights")).foreach { seeds =>
+      seeds.split(",").foreach { seed =>
+        seed.trim.split(":") match {
+          case Array(hashHex, tdStr) =>
+            val hash = ByteString(com.chipprbots.ethereum.utils.Hex.decode(hashHex.stripPrefix("0x")))
+            val td = BigInt(tdStr.trim)
+            blockchainWriter
+              .storeChainWeight(hash, com.chipprbots.ethereum.domain.ChainWeight.totalDifficultyOnly(td))
+              .commit()
+            log.warning("seed-chain-weights: wrote TD={} for hash={}...", td, hashHex.take(16))
+          case _ =>
+            log.warning("seed-chain-weights: invalid entry '{}' (expected HASH:TD)", seed.trim)
+        }
+      }
+    }
+
+    // Register self as calibration target so NetworkPeerManagerActor can push the correct
+    // cumulative TD when it detects a TD-PROXY-GAP at peer handshake (stale genesis-proxy TD
+    // stored by SNAP finalization when no ETH68 peers were available at that time).
+    networkPeerManager ! com.chipprbots.ethereum.network.NetworkPeerManagerActor
+      .RegisterChainWeightCalibrationTarget(self)
+
+    // Unconditional timed calibration: fire CalibrateChainWeightNow 30s after RegularSync starts.
+    // NPA forwards bestNetworkTip (best ETH68 peer TD seen since startup) to this actor.
+    // Handles multi-restart TD drift that falls below the TD-PROXY-GAP 10,000× threshold
+    // (e.g. Restart #7 ratio=7,411×). For pure ETH69 networks, NPA sends a (0,0) sentinel
+    // and tier-3 local chain computation fires instead.
+    context.system.scheduler.scheduleOnce(30.seconds) {
+      networkPeerManager ! com.chipprbots.ethereum.network.NetworkPeerManagerActor.CalibrateChainWeightNow
+    }(context.dispatcher)
+
     val peersClient =
       context.actorOf(
         PeersClient
@@ -1462,6 +1570,141 @@ class SyncController(
       peersClient ! PoisonPill
     }
     recentRootBootstrap = None
+  }
+
+  /** Walk backward from bestBlock via parentHash until a header with a plausible stored TD is found (ChainDownloader
+    * anchor), then accumulate forward to produce the correct cumulative TD for bestBlock. Writes the result to DB if
+    * plausible.
+    *
+    * MUST NOT use getBlockHeaderByNumber: SNAP-synced nodes lack the number→hash canonical index for pre-pivot blocks.
+    * Returns None silently for most such blocks, causing silent TD undercount. Uses parentHash traversal exclusively
+    * (same approach as ChainWeightRepair).
+    *
+    * Returns true if calibration wrote a value; false if deferred (caller schedules retry).
+    */
+  private def calibrateTDFromLocalChain(): Boolean = {
+    val MaxWalkBlocks = 10000
+    // Conservative ETC lower bound: ~10^13 difficulty per block.
+    // Rejects BLOCK_NUMBER_PROXY (blockNum ≈ 24.7M << correct TD ≈ 24.64×10^21) and
+    // RegularSync wrong TDs built on a proxy base.
+    val MinTDPerBlock = BigInt("10000000000000")
+
+    blockchainReader.getBestBlockHeader() match {
+      case None =>
+        log.warning("TIMED_CALIBRATION_LOCAL: no best block header — skipping (attempt={})", tdCalibrationAttempt)
+        false
+
+      case Some(bestHeader) =>
+        log.info(
+          "TIMED_CALIBRATION_LOCAL: tier3 triggered (attempt={}), bestBlock={}, walking up to {} blocks",
+          tdCalibrationAttempt,
+          bestHeader.number,
+          MaxWalkBlocks
+        )
+
+        // Phase 1: walk backward via parentHash collecting headers above the anchor.
+        // headersAboveAnchor is DESCENDING (bestBlock first); reversed in Phase 2.
+        val headersAboveAnchor = scala.collection.mutable.ArrayBuffer.empty[com.chipprbots.ethereum.domain.BlockHeader]
+        var cur = bestHeader
+        var anchorTD = BigInt(0)
+        var anchorFound = false
+        var abort = false
+
+        while (!anchorFound && !abort)
+          blockchainReader.getChainWeightByHash(cur.hash) match {
+            case Some(cw) if cw.totalDifficulty > cur.number * MinTDPerBlock =>
+              anchorTD = cw.totalDifficulty
+              anchorFound = true
+              log.debug(
+                "TIMED_CALIBRATION_LOCAL: anchor found at block={} anchorTD={} (walked {} headers)",
+                cur.number,
+                anchorTD,
+                headersAboveAnchor.size
+              )
+            case _ =>
+              if (headersAboveAnchor.size >= MaxWalkBlocks) {
+                abort = true
+              } else {
+                headersAboveAnchor += cur
+                blockchainReader.getBlockHeaderByHash(cur.parentHash) match {
+                  case Some(parent) => cur = parent
+                  case None =>
+                    log.warning(
+                      "TIMED_CALIBRATION_LOCAL: parentHash chain broken at block={} hash={} — aborting (attempt={})",
+                      cur.number,
+                      cur.hash,
+                      tdCalibrationAttempt
+                    )
+                    abort = true
+                }
+              }
+          }
+
+        if (abort) {
+          log.warning(
+            "TIMED_CALIBRATION_LOCAL: no plausible anchor within {} blocks of bestBlock={} — deferring (attempt={})",
+            MaxWalkBlocks,
+            bestHeader.number,
+            tdCalibrationAttempt
+          )
+          false
+        } else {
+          // Phase 2: accumulate forward from anchorTD over headers collected above anchor.
+          // All headers guaranteed present (collected via parentHash traversal — no silent skips).
+          var td = anchorTD
+          headersAboveAnchor.reverseIterator.foreach(h => td += h.difficulty)
+
+          val genesisWeight = blockchainReader
+            .getChainWeightByHash(blockchainReader.genesisHeader.hash)
+            .map(_.totalDifficulty)
+            .getOrElse(blockchainReader.genesisHeader.difficulty)
+
+          if (td > genesisWeight * BigInt(1000)) {
+            val storedTD = blockchainReader
+              .getChainWeightByHash(bestHeader.hash)
+              .map(_.totalDifficulty)
+              .getOrElse(BigInt(0))
+            blockchainWriter
+              .storeChainWeight(bestHeader.hash, com.chipprbots.ethereum.domain.ChainWeight.totalDifficultyOnly(td))
+              .commit()
+            log.info(
+              "CHAIN_WEIGHT_CALIBRATED_LOCAL: anchor={} gap={} calibratedTD={} source=LOCAL_CHAIN_ACCUMULATION attempt={}",
+              cur.number,
+              headersAboveAnchor.size,
+              td,
+              tdCalibrationAttempt
+            )
+            val tdRatio = if (storedTD > BigInt(0)) (td / storedTD).toString else "∞"
+            log.info(
+              s"TD_CALIBRATION_SUMMARY: block=${bestHeader.number} before=$storedTD after=$td ratio=$tdRatio source=LOCAL_CHAIN attempt=$tdCalibrationAttempt"
+            )
+            true
+          } else {
+            log.warning(
+              "TIMED_CALIBRATION_LOCAL: computed td={} below plausibility threshold (genesisWeight={}) — aborting write (attempt={})",
+              td,
+              genesisWeight,
+              tdCalibrationAttempt
+            )
+            false
+          }
+        }
+    }
+  }
+
+  /** Schedule a retry of CalibrateChainWeightNow in 30 minutes. Called when tier-3 calibration defers (ChainDownloader
+    * gap > 10K blocks). The retry loop continues until calibration succeeds or ETH68 peers appear.
+    */
+  private def scheduleTDCalibrationRetry(): Unit = {
+    context.system.scheduler.scheduleOnce(30.minutes) {
+      networkPeerManager ! com.chipprbots.ethereum.network.NetworkPeerManagerActor.CalibrateChainWeightNow
+    }(context.dispatcher)
+    val bestBlockNum = blockchainReader.getBestBlockHeader().map(_.number).getOrElse(BigInt(0))
+    log.info(
+      "TIMED_CALIBRATION_LOCAL: retry #{} scheduled in 30min (ChainDownloader advancing, current bestBlock={})",
+      tdCalibrationAttempt + 1,
+      bestBlockNum
+    )
   }
 
   def startRegularSyncForBootstrap(): ActorRef = {

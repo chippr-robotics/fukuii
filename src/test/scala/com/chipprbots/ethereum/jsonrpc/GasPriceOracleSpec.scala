@@ -83,8 +83,8 @@ class GasPriceOracleSpec
   /** Create a BlockHeader at the given number, with optional coinbase and baseFee. */
   private def hdr(
       number: BigInt,
-      coinbase: ByteString = zeroAddr,
-      baseFeeOpt: Option[BigInt] = None
+      coinbase: ByteString,
+      baseFeeOpt: Option[BigInt]
   ): BlockHeader =
     fixtureHeader.copy(
       number = number,
@@ -131,8 +131,8 @@ class GasPriceOracleSpec
     */
   private def mockReader(
       bestNum: BigInt,
-      window: Map[BigInt, Option[Block]] = Map.empty,
-      bestBlock: Option[Block] = None
+      window: Map[BigInt, Option[Block]],
+      bestBlock: Option[Block]
   ): BlockchainReader = {
     val r = mock[BlockchainReader]
     val branch = if (bestNum > 0) BestBranch(zeroHash, bestNum) else EmptyBranch

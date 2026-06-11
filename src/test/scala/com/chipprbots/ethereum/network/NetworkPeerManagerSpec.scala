@@ -31,12 +31,11 @@ import com.chipprbots.ethereum.network.PeerEventBusActor.PeerSelector
 import com.chipprbots.ethereum.network.PeerEventBusActor.Subscribe
 import com.chipprbots.ethereum.network.PeerEventBusActor.SubscriptionClassifier._
 import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.NewBlock
+import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.BlockHeaders
 import com.chipprbots.ethereum.network.p2p.messages.Capability
 import com.chipprbots.ethereum.network.p2p.messages.Codes
-import com.chipprbots.ethereum.network.p2p.messages.ETHPackets
 import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.NewBlockHashes.NewBlockHashes
 import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.NewBlockHashes.BlockHash
-import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.{BlockHeaders, BlockBodies}
 import com.chipprbots.ethereum.network.p2p.messages.WireProtocol.Disconnect
 import com.chipprbots.ethereum.testing.Tags._
 import com.chipprbots.ethereum.utils.Config
@@ -516,7 +515,7 @@ class NetworkPeerManagerSpec extends AnyFlatSpec with Matchers {
     blockchainWriter.storeBlockHeader(Fixtures.Blocks.Genesis.header).commit()
 
     override lazy val blockchainConfig = Config.blockchains.blockchainConfig
-    val forkResolver = new ForkResolver.EtcForkResolver(blockchainConfig.daoForkConfig.get)
+    val forkResolver = new ForkResolver.IrregularStateChangeDaoForkResolver(blockchainConfig.daoForkConfig.get)
 
     val peerStatus: RemoteStatus = RemoteStatus(
       capability = Capability.ETH63,

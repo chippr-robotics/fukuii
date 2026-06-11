@@ -569,7 +569,7 @@ class PendingTransactionsManagerSpec
     )
 
     def newDynamicStx(
-        nonce: BigInt,
+        @scala.annotation.unused nonce: BigInt,
         tx: TransactionWithDynamicFee,
         keyPair: AsymmetricCipherKeyPair = crypto.generateKeyPair(secureRandom)
     ): SignedTransactionWithSender =

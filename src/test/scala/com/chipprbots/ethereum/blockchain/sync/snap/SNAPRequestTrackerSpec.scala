@@ -10,6 +10,7 @@ import org.scalatest.matchers.should.Matchers
 
 import scala.concurrent.duration._
 
+import com.chipprbots.ethereum.blockchain.sync.PeerRateTracker
 import com.chipprbots.ethereum.domain.Account
 import com.chipprbots.ethereum.network.Peer
 import com.chipprbots.ethereum.network.p2p.messages.SNAP._
@@ -283,7 +284,6 @@ class SNAPRequestTrackerSpec
     val tracker = new SNAPRequestTracker()
     // Even with confidence near the floor and minimum medianRTT, the upper bound is hard-capped.
     // Drive confidence as low as possible by adding many peers (detune is multiplicative).
-    val testProbe = TestProbe()
     (1 to 100).foreach(i => tracker.rateTracker.addPeer(s"peer-$i"))
     val capped = tracker.rateTracker.targetTimeout()
     capped should be <= 60.seconds

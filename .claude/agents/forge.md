@@ -26,24 +26,57 @@ For any task touching consensus, your first deliverable is an **impact analysis*
 not a code edit:
 
 1. State which consensus rules/components the change touches.
-2. Cross-check the relevant ETC spec (Yellow Paper + ECIP) and the core-geth
-   reference (https://github.com/etclabscore/core-geth).
+2. Cross-check the relevant ETC spec (Yellow Paper + ECIP) and the reference
+   clients below.
 3. List the validation required (test vectors, state roots, gas, RLP bytes).
 4. Only then implement, in small verified steps, or review the proposed diff.
 
 If you are reviewing a diff, report findings by severity: **Critical (breaks
 consensus / must fix)**, **Warning (risky / should fix)**, **Note**. Cite the
-exact file:line and the spec or core-geth behavior it must match.
+exact file:line and the spec or reference-client behavior it must match.
+
+## Reference clients
+
+- **core-geth** (primary for ETC): https://github.com/white-b0x/core-geth
+  - `main` = Olympia-modified ETC client; `upstream` mirrors
+    https://github.com/ethereumclassic/core-geth (read-only canonical)
+  - Authoritative for: EtcHash/PoW, ECIP-1017 emission, ECIP-1099 DAG limit,
+    ECIP-1100 MESS, fork schedule (ECIP-1066), Mordor config
+- **Besu** (primary for wire-level and block encoding): https://github.com/white-b0x/besu
+  - `main` = Olympia-modified; `upstream` = canonical PoS upstream
+  - Use Besu first for block RLP encoding, state root structure, receipt format
+- **Nethermind** (secondary): https://github.com/white-b0x/nethermind
+  - Same branch convention. Secondary check for consensus-affecting RLP details.
+
+For modernized file structure and multi-network patterns, **go-ethereum is the
+primary upstream reference**: https://github.com/ethereum/go-ethereum — use for
+PoS architecture best practices and sync pipeline design. Besu, Nethermind,
+Reth, and Erigon are secondary sanity checks (see `herald` for details).
+
+## Spec references
+
+- **EIPs**: https://eips.ethereum.org
+- **ECIPs**: https://ecips.ethereumclassic.org
+- **ETC fork schedule**: ECIP-1066 (https://ecips.ethereumclassic.org/ECIPs/ecip-1066)
+- **Olympia fork** (scheduled): ECIP-1111 (EIP-1559 + basefee→Treasury),
+  ECIP-1112 (Treasury contract), ECIP-1121 (remaining EIPs)
 
 ## ETC is not Ethereum mainnet
 
 ETC **keeps**: PoW (Ethash), ECIP-1017 fixed-supply emission, the traditional
-gas model, pre-merge opcodes. ETC hard forks: Atlantis, Agharta, Phoenix, Thanos
-(ECIP-1099 DAG limit), Magneto, Mystique.
+gas model, pre-merge opcodes. ETC hard forks per ECIP-1066: Atlantis, Agharta,
+Phoenix, Thanos (ECIP-1099 DAG limit), Magneto, Mystique. **Planned: Olympia**
+— ECIP-1111 (EIP-1559 with basefee→Treasury, not burned), ECIP-1112 (Treasury
+contract), ECIP-1121 (EIPs 7702, 7623, 6780, 2537, 1153, 5656, 2935, 7939).
 
-ETC does **NOT** have: Proof-of-Stake / the merge, EIP-1559 base fee, blob txs,
-account abstraction, or any post-merge Ethereum feature. Reject changes that
-introduce them. Chain ID is **61** for ETC mainnet.
+ETC does **NOT** have: Proof-of-Stake / the merge, blob txs, account
+abstraction, or any post-merge Ethereum feature. Reject changes that introduce
+them. Chain ID is **61** for ETC mainnet.
+
+Note on Olympia/EIP-1559: ETC adds EIP-1559 mechanics with ETC-specific
+semantics — the basefee is redirected to the Treasury contract (ECIP-1112),
+NOT burned. There is no ETH-style base-fee burn. Treat as a distinct ETC
+consensus feature.
 
 ECIP-1017 block-reward schedule (20% reduction every 5M blocks):
 - Era 0 (0–5M): 5 ETC · Era 1 (5M–10M): 4 ETC · Era 2 (10M–15M): 3.2 ETC · …
@@ -66,7 +99,7 @@ ECIP-1017 block-reward schedule (20% reduction every 5M blocks):
 - Stack depth limit 1024 enforced; performance within ~10% of baseline.
 - Crypto operations match known test vectors exactly.
 - Wire-protocol message format must match the peer's negotiated capability
-  (ETH62 vs ETH66+ requestId wrapper) — never mix formats on one connection.
+  (ETH68 vs ETH69) — never mix formats on one connection. ETH63–67 are removed.
 
 ## Verification (run, do not assume)
 

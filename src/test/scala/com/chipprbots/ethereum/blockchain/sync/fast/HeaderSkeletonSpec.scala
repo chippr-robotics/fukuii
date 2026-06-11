@@ -2,13 +2,16 @@ package com.chipprbots.ethereum.blockchain.sync.fast
 
 import org.scalatest.matchers.should.Matchers
 import org.scalatest.wordspec.AnyWordSpec
+import org.scalatest.ParallelTestExecution
 
-class HeaderSkeletonSpec extends AnyWordSpec with Matchers {
+import com.chipprbots.ethereum.testing.Tags._
+
+class HeaderSkeletonSpec extends AnyWordSpec with Matchers with ParallelTestExecution {
 
   // [] <- skeleton boundary
   // *x* <- skeleton header
   "HeaderSkeleton" should {
-    "calculate its properties correctly" in {
+    "calculate its properties correctly" taggedAs (UnitTest) in {
       val skeleton = HeaderSkeleton(from = 11, to = 20, maxSkeletonHeaders = 4)
       // [11, 12, 13, *14*, 15, 16, 17, *18*] [19, 20, ...]
       assert(skeleton.batchSize === BigInt(4))
@@ -17,7 +20,7 @@ class HeaderSkeletonSpec extends AnyWordSpec with Matchers {
       assert(skeleton.lastSkeletonHeaderNumber === BigInt(18))
       assert(skeleton.limit === BigInt(2))
     }
-    "calculate its properties correctly when headers in range don't fit into single skeleton" in {
+    "calculate its properties correctly when headers in range don't fit into single skeleton" taggedAs (UnitTest) in {
       // maxSkeletonHeaders is defined by blockHeadersPerRequest which is also the maximum num for our batch size
       // so the maximum number of headers we can fit into one skeleton (given that we only make one request per batch) is
       // maxSkeletonHeaders * maxSkeletonHeaders
@@ -29,7 +32,7 @@ class HeaderSkeletonSpec extends AnyWordSpec with Matchers {
       assert(skeleton.lastSkeletonHeaderNumber === BigInt(9))
       assert(skeleton.limit === BigInt(3))
     }
-    "calculate its properties correctly when num of remaining headers is smaller than maxSkeletonHeaders" in {
+    "calculate its properties correctly when num of remaining headers is smaller than maxSkeletonHeaders" taggedAs (UnitTest) in {
       val skeleton = HeaderSkeleton(from = 11, to = 20, maxSkeletonHeaders = 100)
       // [11, 12, 13, 14, 15, 16, 17, 18, 19, *20*]
       assert(skeleton.batchSize === BigInt(10))

@@ -8,6 +8,7 @@ import cats.implicits._
 
 import scala.annotation.tailrec
 import scala.collection.immutable.Queue
+import scala.collection.immutable.SortedMap
 
 import com.chipprbots.ethereum.blockchain.sync.Blacklist.BlacklistReason
 import com.chipprbots.ethereum.blockchain.sync.regular.BlockFetcherState._
@@ -26,11 +27,14 @@ import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.NewBlockHashes.Bl
   *   the BlockImporter actor reference
   * @param readyBlocks
   * @param waitingHeaders
-  * @param fetchingHeadersState
-  *   the current state of the headers fetching, whether we
-  *   - haven't fetched any yet
-  *   - are awaiting a response
-  *   - are awaiting a response but it should be ignored due to blocks being invalidated
+  * @param inFlightHeaders
+  *   number of header requests currently outstanding (replies expected and will be processed)
+  * @param headersToIgnore
+  *   number of outstanding header requests whose replies must be discarded (dispatched before an invalidation event; we
+  *   must drain them before dispatching new requests)
+  * @param nextDispatchBlock
+  *   the block number to use as the start of the NEXT header dispatch — advanced by blockHeadersPerRequest on each
+  *   dispatch so concurrent requests cover disjoint ranges
   * @param fetchingBodiesState
   *   the current state of the bodies fetching, whether we
   *   - haven't fetched any yet
@@ -45,7 +49,9 @@ case class BlockFetcherState(
     blockValidator: BlockValidator,
     readyBlocks: Queue[Block],
     waitingHeaders: Queue[BlockHeader],
-    fetchingHeadersState: FetchingHeadersState,
+    inFlightHeaders: Int,
+    headersToIgnore: Int,
+    nextDispatchBlock: BigInt,
     fetchingBodiesState: FetchingBodiesState,
     lastBlock: BigInt,
     knownTop: BigInt,
@@ -63,10 +69,21 @@ case class BlockFetcherState(
     // the account's subtree hasn't been touched in the gap.
     recentCanonicalStateRoot: Option[ByteString] = None,
     lastPrintBlock: BigInt = BigInt(0),
-    lastPrintTimeMs: Long = 0L
+    lastPrintTimeMs: Long = 0L,
+    // Out-of-order header responses from concurrent slots, keyed by the first block number
+    // in each response. Drained in ascending order by drainOrderedHeaders before appendHeaders
+    // is called, so waitingHeaders always grows monotonically even when slot responses arrive
+    // out of sequence. Cleared by clearQueues() on any invalidation.
+    responseBuffer: SortedMap[BigInt, Seq[BlockHeader]] = SortedMap.empty
 ) {
 
   def isFetching: Boolean = isFetchingHeaders || isFetchingBodies
+
+  // true if at least one header request is outstanding (either live or pending discard)
+  def isFetchingHeaders: Boolean = inFlightHeaders > 0 || headersToIgnore > 0
+
+  // true if we can dispatch a new header request right now
+  def canDispatchHeaders: Boolean = headersToIgnore == 0 && inFlightHeaders < MaxConcurrentHeaderSlots
 
   private def hasEmptyBuffer: Boolean = readyBlocks.isEmpty && waitingHeaders.isEmpty
 
@@ -75,6 +92,12 @@ case class BlockFetcherState(
   def isOnTop: Boolean = hasFetchedTopHeader && hasEmptyBuffer
 
   def hasReachedSize(size: Int): Boolean = (readyBlocks.size + waitingHeaders.size) >= size
+
+  // Import backpressure: importer can't keep up — pause the whole pipeline.
+  def hasImporterBackpressure(maxReady: Int): Boolean = readyBlocks.size >= maxReady
+
+  // Header pre-fetch depth: enough headers are already queued ahead of body fetching.
+  def hasEnoughWaitingHeaders(maxWaiting: Int): Boolean = waitingHeaders.size >= maxWaiting
 
   def lowestBlock: BigInt =
     readyBlocks.headOption
@@ -113,6 +136,37 @@ case class BlockFetcherState(
     */
   def recordHeaderRejection(): BlockFetcherState =
     copy(consecutiveHeaderRejections = consecutiveHeaderRejections + 1)
+
+  /** Add a header response to the out-of-order buffer, keyed by the first block number in the batch. */
+  def bufferHeaders(headers: Seq[BlockHeader]): BlockFetcherState =
+    headers.headOption.fold(this)(h => copy(responseBuffer = responseBuffer.updated(h.number, headers)))
+
+  /** Drain all contiguous buffered header batches whose first block immediately follows the current waitingHeaders tail
+    * (or lastBlock+1 if waitingHeaders is empty). Returns the drained headers and the new state with those entries
+    * removed from the buffer.
+    */
+  def drainOrderedHeaders: (Seq[BlockHeader], BlockFetcherState) = {
+    val nextExpected = waitingHeaders.lastOption
+      .map(_.number + 1)
+      .orElse(readyBlocks.lastOption.map(_.number + 1))
+      .getOrElse(lastBlock + 1)
+
+    @tailrec
+    def collect(
+        expected: BigInt,
+        buf: SortedMap[BigInt, Seq[BlockHeader]],
+        acc: Seq[BlockHeader]
+    ): (Seq[BlockHeader], SortedMap[BigInt, Seq[BlockHeader]]) =
+      buf.headOption match {
+        case Some((startNr, hdrs)) if startNr == expected =>
+          val nextEnd = hdrs.lastOption.map(_.number + 1).getOrElse(expected)
+          collect(nextEnd, buf.tail, acc ++ hdrs)
+        case _ => (acc, buf)
+      }
+
+    val (drained, newBuf) = collect(nextExpected, responseBuffer, Seq.empty)
+    (drained, copy(responseBuffer = newBuf))
+  }
 
   /** True when enough independent peers have rejected the current queue state to conclude our waitingHeaders /
     * readyBlocks tip is stale (e.g. orphaned after a tip reorg, or seeded wrong at the fast-sync → regular-sync
@@ -240,32 +294,42 @@ case class BlockFetcherState(
   }
 
   def clearQueues(): BlockFetcherState = {
-    // We can't start completely from scratch as requests could be in progress, we have to keep special track of them
-    val newFetchingHeadersState =
-      if (fetchingHeadersState == AwaitingHeaders) AwaitingHeadersToBeIgnored else fetchingHeadersState
+    // We can't start completely from scratch as requests could be in progress; keep special
+    // track of them so their responses are discarded rather than applied to the new state.
+    // Move all live in-flight headers to the "ignore" bucket; new dispatches are blocked
+    // until headersToIgnore drains to zero.
     val newFetchingBodiesState =
       if (fetchingBodiesState == AwaitingBodies) AwaitingBodiesToBeIgnored else fetchingBodiesState
-
     copy(
       readyBlocks = Queue(),
       waitingHeaders = Queue(),
-      fetchingHeadersState = newFetchingHeadersState,
+      responseBuffer = SortedMap.empty,
+      headersToIgnore = headersToIgnore + inFlightHeaders,
+      inFlightHeaders = 0,
+      // Reset the dispatch window to after lastBlock so when dispatching resumes
+      // it starts from the right position.
+      nextDispatchBlock = lastBlock + 1,
       fetchingBodiesState = newFetchingBodiesState
     )
   }
 
   def invalidateBlocksFrom(nr: BigInt): (Option[PeerId], BlockFetcherState) = invalidateBlocksFrom(nr, Some(nr))
 
-  def invalidateBlocksFrom(nr: BigInt, toBlacklist: Option[BigInt]): (Option[PeerId], BlockFetcherState) =
+  def invalidateBlocksFrom(nr: BigInt, toBlacklist: Option[BigInt]): (Option[PeerId], BlockFetcherState) = {
+    val newLastBlock = (nr - 2).max(0)
     (
       toBlacklist.flatMap(blockProviders.get),
       this
         .clearQueues()
         .copy(
-          lastBlock = (nr - 2).max(0),
+          lastBlock = newLastBlock,
+          // clearQueues() sets nextDispatchBlock = old lastBlock + 1; override it to match the new lastBlock
+          // so the next dispatch starts from the correct position after invalidation.
+          nextDispatchBlock = newLastBlock + 1,
           blockProviders = blockProviders - nr
         )
     )
+  }
 
   def exists(hash: ByteString): Boolean = existsInReadyBlocks(hash) || existsInWaitingHeaders(hash)
 
@@ -288,9 +352,17 @@ case class BlockFetcherState(
   def withPeerForBlocks(peerId: PeerId, blocks: Seq[BigInt]): BlockFetcherState =
     copy(blockProviders = blockProviders ++ blocks.map(block => block -> peerId))
 
-  def isFetchingHeaders: Boolean = fetchingHeadersState != NotFetchingHeaders
-  def withNewHeadersFetch: BlockFetcherState = copy(fetchingHeadersState = AwaitingHeaders)
-  def withHeaderFetchReceived: BlockFetcherState = copy(fetchingHeadersState = NotFetchingHeaders)
+  // Advance the dispatch window for one new request of the given size.
+  def withNewHeadersFetch(requestSize: BigInt): BlockFetcherState =
+    copy(
+      inFlightHeaders = inFlightHeaders + 1,
+      nextDispatchBlock = nextDispatchBlock + requestSize
+    )
+
+  // Called when a header response arrives — decrements the appropriate counter.
+  def withHeaderFetchReceived: BlockFetcherState =
+    if (headersToIgnore > 0) copy(headersToIgnore = headersToIgnore - 1)
+    else copy(inFlightHeaders = (inFlightHeaders - 1).max(0))
 
   def isFetchingBodies: Boolean = fetchingBodiesState != NotFetchingBodies
   def withNewBodiesFetch: BlockFetcherState = copy(fetchingBodiesState = AwaitingBodies)
@@ -304,7 +376,9 @@ case class BlockFetcherState(
 
   def statusDetailed: Map[String, Any] = Map(
     "fetched headers" -> waitingHeaders.size,
-    "fetching headers" -> isFetchingHeaders,
+    "inFlightHeaders" -> inFlightHeaders,
+    "headersToIgnore" -> headersToIgnore,
+    "nextDispatchBlock" -> nextDispatchBlock,
     "fetching bodies" -> isFetchingBodies,
     "fetched top header" -> hasFetchedTopHeader,
     "first header" -> waitingHeaders.headOption.map(_.number),
@@ -316,27 +390,28 @@ case class BlockFetcherState(
 object BlockFetcherState {
   case class StateNodeFetcher(hash: ByteString, replyTo: ActorRef)
 
+  // Maximum number of concurrent in-flight header requests per sync session.
+  // Each slot dispatches to the best available peer for a disjoint block range.
+  // go-ethereum uses dynamic capacity per peer; 3 is a conservative static limit
+  // that already eliminates the single-slot bottleneck without risking bandwidth waste.
+  // Concurrency limit for parallel header fetch slots. Set to 1 until the sync tests
+  // are updated for the multi-slot model in TEST-001c ([15]).
+  val MaxConcurrentHeaderSlots: Int = 1
+
   def initial(importer: ActorRef, blockValidator: BlockValidator, lastBlock: BigInt): BlockFetcherState =
     BlockFetcherState(
       importer = importer,
       blockValidator = blockValidator,
       readyBlocks = Queue(),
       waitingHeaders = Queue(),
-      fetchingHeadersState = NotFetchingHeaders,
+      inFlightHeaders = 0,
+      headersToIgnore = 0,
+      nextDispatchBlock = lastBlock + 1,
       fetchingBodiesState = NotFetchingBodies,
       lastBlock = lastBlock,
       knownTop = lastBlock + 1,
       blockProviders = Map()
     )
-
-  trait FetchingHeadersState
-  case object NotFetchingHeaders extends FetchingHeadersState
-  case object AwaitingHeaders extends FetchingHeadersState
-
-  /** Headers request in progress but will be ignored due to invalidation State used to keep track of pending request to
-    * prevent multiple requests in parallel
-    */
-  case object AwaitingHeadersToBeIgnored extends FetchingHeadersState
 
   trait FetchingBodiesState
   case object NotFetchingBodies extends FetchingBodiesState

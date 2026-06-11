@@ -91,8 +91,6 @@ class BlockBroadcast(val networkPeerManager: ActorRef, val isPoWChain: Boolean =
           None // PoS: no NewBlock — go-ethereum aligned
         case Capability.SNAP1 =>
           Some(blockToBroadcast.as63)
-        case _ =>
-          None
       }
 
       messageOpt.foreach(msg => networkPeerManager ! NetworkPeerManagerActor.SendMessage(msg, peer.id))

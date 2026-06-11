@@ -32,7 +32,6 @@ import com.chipprbots.ethereum.network.p2p.messages.Capability
 import com.chipprbots.ethereum.network.p2p.messages.WireProtocol.Disconnect
 import com.chipprbots.ethereum.network.p2p.messages.WireProtocol.Hello
 import com.chipprbots.ethereum.network.p2p.messages.WireProtocol.Pong
-import com.chipprbots.ethereum.network.p2p.messages.ETHPackets
 import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.Status68.{Status68 => Status}
 import com.chipprbots.ethereum.forkid.ForkId
 import com.chipprbots.ethereum.network.rlpx.RLPxConnectionHandler

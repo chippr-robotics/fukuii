@@ -1053,7 +1053,7 @@ class AccountRangeCoordinatorSpec
     coordinator ! Messages.StartAccountRangeSync(root)
     coordinator ! Messages.PeerAvailable(peer1)
     networkPeerManager.expectMsgType[NetworkPeerManagerActor.SendMessage](2.seconds)
-    val worker = networkPeerManager.lastSender
+    val _ = networkPeerManager.lastSender
 
     // Peer1 disconnects mid-flight:
     // coordinator sends WorkerPeerDisconnected to the worker; worker fires TaskFailed back;
@@ -1175,7 +1175,7 @@ class AccountRangeCoordinatorSpec
 
   /** Construct a TestActorRef coordinator with `useStackTrie = true`. */
   private def newStackTrieCoordinator(
-      stateRoot: ByteString = kec256(ByteString("stacktrie-test-root")),
+      stateRoot: ByteString,
       controller: TestProbe = TestProbe(),
       storage: TestMptStorage = new TestMptStorage(),
       concurrency: Int = 4

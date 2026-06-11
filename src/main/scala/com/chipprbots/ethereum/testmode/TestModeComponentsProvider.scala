@@ -47,7 +47,6 @@ class TestModeComponentsProvider(
 
     new ConsensusAdapter(
       new ConsensusImpl(
-        blockchain,
         blockchainReader,
         blockchainWriter,
         blockExecution

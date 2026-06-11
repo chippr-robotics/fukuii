@@ -1,4 +1,4 @@
-package com.chipprbots.ethereum.blockchain.sync.snap
+package com.chipprbots.ethereum.blockchain.sync
 
 import scala.collection.mutable
 import scala.concurrent.duration._
@@ -144,6 +144,10 @@ class PeerRateTracker extends Logger {
         confidence = (confidence * (n - 1).toDouble / n).max(RttMinConfidence)
       }
       // If n >= TuningConfidenceCap (10), don't detune (stable network)
+
+      log.debug(
+        s"PeerRateTracker cold-start: peer=$peerId registered, totalPeers=$n, confidence=${"%.3f".format(confidence)}"
+      )
     }
   }
 
@@ -206,8 +210,13 @@ object PeerRateTracker {
   val MsgGetByteCodes: Int = 2
   val MsgGetTrieNodes: Int = 3
 
+  // ETH message type ordinals (for ETH-layer capacity tracking)
+  val MsgGetBlockHeaders: Int = 4
+  val MsgGetBlockBodies: Int = 5
+  val MsgGetReceipts: Int = 6
+
   /** Per-peer statistics */
-  private[snap] case class PeerStats(
+  private[sync] case class PeerStats(
       capacity: mutable.Map[Int, Double] = mutable.Map.empty,
       var roundtripMs: Long = RttMinEstimateMs * 2 // Start at 4s (conservative)
   )

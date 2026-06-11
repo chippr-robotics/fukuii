@@ -2,6 +2,7 @@ package com.chipprbots.ethereum.consensus.eip1559
 
 import org.scalatest.matchers.should.Matchers
 import org.scalatest.wordspec.AnyWordSpec
+import org.scalatest.ParallelTestExecution
 
 import com.chipprbots.ethereum.Fixtures
 import com.chipprbots.ethereum.domain.BlockHeader
@@ -20,7 +21,8 @@ class OlympiaBaseFeeSpec
     extends AnyWordSpec
     with Matchers
     with BlockchainConfigBuilder
-    with com.chipprbots.ethereum.TestInstanceConfigProvider {
+    with com.chipprbots.ethereum.TestInstanceConfigProvider
+    with ParallelTestExecution {
 
   private val olympiaBlock: BigInt = BigInt(100)
 

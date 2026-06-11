@@ -1,7 +1,7 @@
 package com.chipprbots.ethereum.blockchain.sync.snap
 
 import org.apache.pekko.actor.ActorSystem
-import org.apache.pekko.testkit.{TestKit, TestProbe, ImplicitSender}
+import org.apache.pekko.testkit.{TestKit, ImplicitSender}
 import org.apache.pekko.util.ByteString
 
 import scala.concurrent.duration._

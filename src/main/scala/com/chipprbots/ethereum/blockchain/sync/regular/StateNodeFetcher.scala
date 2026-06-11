@@ -32,7 +32,6 @@ import com.chipprbots.ethereum.network.p2p.messages.SNAP.GetByteCodes.GetByteCod
 import com.chipprbots.ethereum.network.p2p.messages.SNAP.GetTrieNodes
 import com.chipprbots.ethereum.network.p2p.messages.SNAP.GetTrieNodes.GetTrieNodesEnc
 import com.chipprbots.ethereum.network.p2p.messages.SNAP.TrieNodes
-import com.chipprbots.ethereum.rlp.RLPValue
 import com.chipprbots.ethereum.utils.ByteStringUtils
 import com.chipprbots.ethereum.utils.Config.SyncConfig
 

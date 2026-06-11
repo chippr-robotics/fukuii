@@ -2,10 +2,11 @@ package com.chipprbots.ethereum.consensus.mess
 
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
+import org.scalatest.ParallelTestExecution
 
 import com.chipprbots.ethereum.testing.Tags._
 
-class MESSConfigSpec extends AnyFlatSpec with Matchers {
+class MESSConfigSpec extends AnyFlatSpec with Matchers with ParallelTestExecution {
 
   "MESSConfig" should "have valid default values" taggedAs (UnitTest, ConsensusTest) in {
     val config = MESSConfig()
@@ -193,7 +194,7 @@ class MESSConfigSpec extends AnyFlatSpec with Matchers {
   * Verifies the polynomial curve and reorg rejection logic against the ECIP-1100 specification and cross-client
   * reference implementations (core-geth, Besu).
   */
-class ArtificialFinalitySpec extends AnyFlatSpec with Matchers {
+class ArtificialFinalitySpec extends AnyFlatSpec with Matchers with ParallelTestExecution {
 
   // Constants from ECIP-1100 spec
   private val Denominator = BigInt(128)

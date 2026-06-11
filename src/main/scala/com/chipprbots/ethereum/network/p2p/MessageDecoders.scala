@@ -231,6 +231,7 @@ object EthereumMessageDecoder {
       case Capability.ETH68 => ETH68MessageDecoder
       case Capability.ETH69 => ETH69MessageDecoder
       case Capability.SNAP1 => SNAPMessageDecoder
+      case unsupported      => throw new IllegalArgumentException(s"Unsupported protocol version: $unsupported")
     }
 }
 

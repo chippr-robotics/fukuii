@@ -112,11 +112,25 @@ services:
     image: ${FUKUII_IMAGE:-chipprbots/fukuii:latest}
     container_name: fukuii-primary
     restart: unless-stopped
-    # 10g cgroup to give the 5g heap (below) off-heap headroom for RocksDB (block cache + per-CF
-    # memtables) + Netty direct buffers, so a -Xmx bump doesn't re-trigger the cgroup OOM (Exited 137)
-    # seen at 8g. Kept below the ~12g that previously swapped the host desktop (15g box).
-    mem_limit: 10g
-    memswap_limit: 10g
+    # ==========================================================================
+    # MEMORY BUDGET — read before adjusting heap size.
+    #
+    # Fukuii is RocksDB-heavy. mem_limit must cover three separate pools:
+    #   1. JVM heap         (-Xmx, below)
+    #   2. RocksDB native   (block cache + per-CF memtables — NOT bounded by -XX:MaxDirectMemorySize)
+    #   3. Netty + OS       (-XX:MaxDirectMemorySize=512M + ~0.5g OS overhead)
+    #
+    # DO NOT replace -Xmx with -XX:MaxRAMPercentage=75 + UseContainerSupport.
+    # That pattern is for JVM-only microservices. At 75% of 10g = 7.5g heap,
+    # only 2.5g remains for RocksDB native + OS → cgroup OOM kill (Exited 137).
+    # Empirical on ETC mainnet: 5g heap + 5g RocksDB native = stable at chain head.
+    #
+    # Scale formula:  heap = max(FLOOR=3g, min(50% of mem_limit, CEILING=6g))
+    # Examples:       10g limit → 5g heap  |  8g → 4g  |  6g → 3g (floor)
+    # Override:       set FUKUII_HEAP_PRIMARY and FUKUII_MEM_LIMIT_PRIMARY in .env
+    # ==========================================================================
+    mem_limit: ${FUKUII_MEM_LIMIT_PRIMARY:-10g}
+    memswap_limit: ${FUKUII_MEM_LIMIT_PRIMARY:-10g}
     ports:
       - "${FUKUII_PRIMARY_RPC_PORT:-8545}:8545"       # JSON-RPC HTTP (internal)
       - "${FUKUII_PRIMARY_WS_PORT:-8546}:8546"         # JSON-RPC WebSocket (internal)
@@ -133,13 +147,9 @@ services:
     # our -X / -D flags as program args. We need JVM args BEFORE -jar, so
     # invoke `java` directly here.
     entrypoint: ["java"]
-    # JVM args: 5g heap (bumped from 3g for faster ETC-mainnet healing/sync progress; the L1 fix
-    # bounds the healing visited-set so the heap headroom now goes to sync throughput, not OOM
-    # avoidance), 1M thread stacks, capped direct memory, fail-fast on OOM. Paired with the 10g
-    # cgroup above so off-heap RocksDB has room.
     command:
-      - "-Xmx5g"
-      - "-Xms2g"
+      - "-Xmx${FUKUII_HEAP_PRIMARY:-5g}"
+      - "-Xms${FUKUII_HEAP_INIT_PRIMARY:-2g}"
       - "-Xss1M"
       - "-XX:MaxDirectMemorySize=512M"
       - "-XX:+UseG1GC"
@@ -166,6 +176,11 @@ services:
     image: ${FUKUII_IMAGE:-chipprbots/fukuii:latest}
     container_name: fukuii-secondary
     restart: unless-stopped
+    # Mordor state is tiny (5.2M txns, 0.09% utilization, June 2026).
+    # Heap formula: max(FLOOR=1.5g, min(50% of mem_limit, CEILING=2g)) → 2g on any reasonable host.
+    # Override: FUKUII_HEAP_SECONDARY and FUKUII_MEM_LIMIT_SECONDARY in .env
+    mem_limit: ${FUKUII_MEM_LIMIT_SECONDARY:-4g}
+    memswap_limit: ${FUKUII_MEM_LIMIT_SECONDARY:-4g}
     ports:
       # Secondary's mordor.conf binds HTTP RPC on container:8546 (not 8545
       # like the primary), so the host->container map skips 8545 entirely.
@@ -177,13 +192,10 @@ services:
       - ${FUKUII_SECONDARY_DATA_DIR:-./data/fukuii-secondary}:/app/data
       - ./fukuii-conf-2:/app/conf:ro
     # See fukuii-primary for the entrypoint-override rationale.
-    # JVM args aligned with PR #1244 standard — 1M stacks, capped direct mem,
-    # fail-fast on OOM. Was -Xss10M with no direct-mem cap; same risk profile
-    # as primary's old config.
     entrypoint: ["java"]
     command:
-      - "-Xmx3g"
-      - "-Xms1g"
+      - "-Xmx${FUKUII_HEAP_SECONDARY:-2g}"
+      - "-Xms${FUKUII_HEAP_INIT_SECONDARY:-1g}"
       - "-Xss1M"
       - "-XX:MaxDirectMemorySize=512M"
       - "-XX:+UseG1GC"

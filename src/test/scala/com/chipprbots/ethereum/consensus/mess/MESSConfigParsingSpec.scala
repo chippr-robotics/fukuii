@@ -2,6 +2,7 @@ package com.chipprbots.ethereum.consensus.mess
 
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
+import org.scalatest.ParallelTestExecution
 
 import com.typesafe.config.{ConfigFactory, ConfigValueFactory}
 
@@ -19,7 +20,7 @@ import com.chipprbots.ethereum.utils.BlockchainConfig
   * olympia-block-number needs updating.
   */
 // scalastyle:off magic.number
-class MESSConfigParsingSpec extends AnyFlatSpec with Matchers {
+class MESSConfigParsingSpec extends AnyFlatSpec with Matchers with ParallelTestExecution {
 
   private val fullConfig = ConfigFactory.load()
   private val etcRaw = fullConfig.getConfig("fukuii.blockchains.etc")

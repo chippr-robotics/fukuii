@@ -96,11 +96,11 @@
     <logger name="com.chipprbots.ethereum.forkid" level="WARN" />
 
     <!-- =================================================================== -->
-    <!-- RLPX — OFF (floods console with peer handshake noise: "Did not     -->
-    <!-- find Hello", "Unable to negotiate", "Auth handshake timeout" —     -->
-    <!-- all expected and non-actionable)                                    -->
+    <!-- RLPX — ERROR only. Routine churn messages (TCP failure, Unable to  -->
+    <!-- negotiate, PROTOCOL_NEGOTIATION_FAILED) are demoted at source to   -->
+    <!-- DEBUG/INFO so they no longer need OFF suppression here.            -->
     <!-- =================================================================== -->
-    <logger name="com.chipprbots.ethereum.network.rlpx" level="OFF" />
+    <logger name="com.chipprbots.ethereum.network.rlpx" level="ERROR" />
 
     <!-- =================================================================== -->
     <!-- SYNC CORE — INFO for phase transitions and progress                 -->

@@ -57,12 +57,6 @@ class StorageRangeCoordinator(
     deferredMerkleization: Boolean = true,
     flatBatchEntryThreshold: Int = 1000,
     flatBatchEcOverride: Option[ExecutionContext] = None,
-    /** Legacy toggle retained for source compatibility — the streaming `SnapHashTrie` path is now unconditional, with
-      * `deferredMerkleization` controlling whether per-contract tries are built at all. The field exists so callers
-      * (`SNAPSyncController`, tests) keep compiling without churn while the storage path is finalised; the value itself
-      * is no longer read.
-      */
-    @annotation.unused useStackTrie: Boolean = false,
     // Back-pressure watermarks — overridable in tests so we don't have to enqueue 100K StorageTasks
     // just to verify the pause/resume transition. Production defaults match the values quoted in
     // the design discussion.
@@ -1470,7 +1464,6 @@ object StorageRangeCoordinator {
       deferredMerkleization: Boolean = true,
       flatBatchEntryThreshold: Int = 1000,
       flatBatchEcOverride: Option[ExecutionContext] = None,
-      useStackTrie: Boolean = false,
       backpressureHighWatermark: Int = 100000,
       backpressureLowWatermark: Int = 50000,
       maxConcurrentStorageAccounts: Int = 256
@@ -1492,7 +1485,6 @@ object StorageRangeCoordinator {
         deferredMerkleization = deferredMerkleization,
         flatBatchEntryThreshold = flatBatchEntryThreshold,
         flatBatchEcOverride = flatBatchEcOverride,
-        useStackTrie = useStackTrie,
         backpressureHighWatermark = backpressureHighWatermark,
         backpressureLowWatermark = backpressureLowWatermark,
         maxConcurrentStorageAccounts = maxConcurrentStorageAccounts

@@ -337,7 +337,7 @@ class StateValidator(mptStorage: MptStorage) {
       rootNode: MptNode,
       accountHash: ByteString,
       result: mutable.ArrayBuffer[(Seq[ByteString], ByteString)],
-      flushIfFull: () => Unit = () => ()
+      flushIfFull: () => Unit
   ): Unit = {
     val stack = mutable.ArrayDeque[(MptNode, Array[Byte])]()
     val visited = mutable.Set[ByteString]()

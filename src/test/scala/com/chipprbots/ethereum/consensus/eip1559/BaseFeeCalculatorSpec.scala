@@ -2,6 +2,7 @@ package com.chipprbots.ethereum.consensus.eip1559
 
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
+import org.scalatest.ParallelTestExecution
 
 import com.chipprbots.ethereum.Fixtures
 import com.chipprbots.ethereum.domain.BlockHeader
@@ -14,7 +15,8 @@ class BaseFeeCalculatorSpec
     extends AnyFlatSpec
     with Matchers
     with BlockchainConfigBuilder
-    with com.chipprbots.ethereum.TestInstanceConfigProvider {
+    with com.chipprbots.ethereum.TestInstanceConfigProvider
+    with ParallelTestExecution {
 
   val olympiaBlock: BigInt = 10
 

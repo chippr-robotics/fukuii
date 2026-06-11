@@ -3,8 +3,10 @@ package com.chipprbots.ethereum.blockchain.sync.regular
 import org.apache.pekko.actor.ActorSystem
 import org.apache.pekko.testkit.TestActor.AutoPilot
 import org.apache.pekko.testkit.TestKit
+import org.apache.pekko.testkit.TestProbe
 import org.apache.pekko.util.ByteString
 
+import cats.data.NonEmptyList
 import cats.effect.IO
 import cats.effect.Resource
 import cats.effect.unsafe.IORuntime
@@ -239,6 +241,7 @@ class RegularSyncSpec
         override lazy val syncConfig: SyncConfig = defaultSyncConfig.copy(
           syncRetryInterval = testKitSettings.DefaultTimeout.duration,
           maxFetcherQueueSize = 1,
+          maxReadyBlocksQueueSize = 1,
           blockBodiesPerRequest = 2,
           blockHeadersPerRequest = 2,
           blocksBatchSize = 2
@@ -271,6 +274,59 @@ class RegularSyncSpec
 
     "resolving branches" should {
 
+      // Regression: before the fix, ImportDone(ResolvingBranch(n)) never dispatched PickBlocks,
+      // leaving BlockFetcher's waiting headers stranded and causing an infinite loop.
+      "dispatch StrictPickBlocks after ImportDone(ResolvingBranch(n)), preventing infinite branch-resolution loop" taggedAs (
+        UnitTest,
+        SyncTest
+      ) in sync(
+        new Fixture(testSystem) {
+          override lazy val blockchainReader: BlockchainReader = stub[BlockchainReader]
+          (blockchainReader.getBestBlockNumber _).when().returns(BigInt(1000))
+          (blockchainReader.getSnapSyncPivotBlock _).when().returns(None)
+
+          val importerFetcher = TestProbe("importerFetcher")
+          val importerSupervisor = TestProbe("importerSupervisor")
+          val importerBroadcaster = TestProbe("importerBroadcaster")
+
+          for (depth <- List(1, 5, 64, 128)) {
+            val lca = BigInt(depth)
+            val importer = system.actorOf(
+              BlockImporter.props(
+                importerFetcher.ref,
+                consensusAdapter,
+                blockchainReader,
+                blockchainWriter,
+                stateStorage,
+                evmCodeStorage,
+                branchResolution,
+                syncConfig,
+                ommersPool.ref,
+                importerBroadcaster.ref,
+                pendingTransactionsManager.ref,
+                importerSupervisor.ref,
+                this
+              ),
+              s"test-importer-depth-$depth"
+            )
+
+            importer ! BlockImporter.Start
+            importerFetcher.expectMsgClass(3.seconds, classOf[BlockFetcher.Start])
+            importerSupervisor.expectMsgClass(3.seconds, classOf[RegularSync.ProgressProtocol.StartingFrom])
+
+            importer ! BlockImporter.ImportDone(BlockImporter.ResolvingBranch(lca), BlockImporter.DefaultBlockImport)
+
+            val msg = importerFetcher.fishForSpecificMessage(5.seconds) {
+              case m: BlockFetcher.StrictPickBlocks if m.from == lca => m
+            }
+            assert(msg.from == lca, s"StrictPickBlocks.from mismatch for depth=$depth")
+
+            system.stop(importer)
+            importerFetcher.expectNoMessage(200.millis)
+          }
+        }
+      )
+
       "go back to earlier block in order to find a common parent with new branch" in sync(
         new Fixture(testSystem) {
           override lazy val blockchain: BlockchainImpl = stub[BlockchainImpl]
@@ -282,6 +338,10 @@ class RegularSyncSpec
             .evaluateBranchBlock(_: Block)(_: IORuntime, _: BlockchainConfig))
             .when(*, *, *)
             .onCall((block, _, _) => fakeEvaluateBlock(block))
+          (consensusAdapter
+            .evaluateBranch(_: NonEmptyList[Block])(_: IORuntime, _: BlockchainConfig))
+            .when(*, *, *)
+            .onCall((nel, _, _) => fakeEvaluateBatch(nel))
           override lazy val branchResolution: BranchResolution = new FakeBranchResolution()
           override lazy val syncConfig: SyncConfig = defaultSyncConfig.copy(
             blockHeadersPerRequest = 5,
@@ -346,6 +406,10 @@ class RegularSyncSpec
           .evaluateBranchBlock(_: Block)(_: IORuntime, _: BlockchainConfig))
           .when(*, *, *)
           .onCall((block, _, _) => fakeEvaluateBlock(block))
+        (consensusAdapter
+          .evaluateBranch(_: NonEmptyList[Block])(_: IORuntime, _: BlockchainConfig))
+          .when(*, *, *)
+          .onCall((nel, _, _) => fakeEvaluateBatch(nel))
         override lazy val branchResolution: BranchResolution = new FakeBranchResolution()
         override lazy val syncConfig: SyncConfig = defaultSyncConfig.copy(
           syncRetryInterval = 1.second,

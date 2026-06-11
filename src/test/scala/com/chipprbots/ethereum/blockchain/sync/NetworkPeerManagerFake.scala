@@ -23,7 +23,6 @@ import com.chipprbots.ethereum.network.PeerEventBusActor.PeerEvent.MessageFromPe
 import com.chipprbots.ethereum.network.p2p.messages.ETHPackets
 import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.BlockBodies
 import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.GetReceipts
-import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.Receipts68
 import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.BlockHeaders
 import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.GetBlockBodies
 import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.GetBlockHeaders
@@ -31,13 +30,11 @@ import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.GetNodeData
 import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.NodeData
 import com.chipprbots.ethereum.utils.Config.SyncConfig
 import com.chipprbots.ethereum.rlp.RLPList
-import com.chipprbots.ethereum.rlp.RLPValue
 
 class NetworkPeerManagerFake(
     syncConfig: SyncConfig,
     peers: Map[Peer, PeerInfo],
-    blocks: List[Block],
-    getMptNodes: List[ByteString] => List[ByteString]
+    blocks: List[Block]
 )(implicit system: ActorSystem, ioRuntime: IORuntime) {
   private val responsesTopicIO: IO[Topic[IO, MessageFromPeer]] = Topic[IO, MessageFromPeer]
   private val requestsTopicIO: IO[Topic[IO, SendMessage]] = Topic[IO, SendMessage]
@@ -52,8 +49,7 @@ class NetworkPeerManagerFake(
       responsesTopic,
       peersConnectedDeferred,
       peers,
-      blocks,
-      getMptNodes
+      blocks
     )
   probe.setAutoPilot(autoPilot)
 
@@ -101,9 +97,6 @@ class NetworkPeerManagerFake(
     .zip(requestedReceipts)
     .map { case (blocks, _) => blocks } // a big simplification, but should be sufficient here
 
-  private def rlpListToByteStrings(list: RLPList): Seq[ByteString] =
-    list.items.collect { case RLPValue(bytes) => ByteString(bytes) }
-
   val fetchedState: Stream[IO, Seq[ByteString]] = responses.collect {
     case MessageFromPeer(ETHPackets.NodeData(values), _) => values
   }
@@ -115,8 +108,7 @@ object NetworkPeerManagerFake {
       responses: Topic[IO, MessageFromPeer],
       peersConnected: Deferred[IO, Unit],
       peers: Map[Peer, PeerInfo],
-      blocks: List[Block],
-      getMptNodes: List[ByteString] => List[ByteString]
+      blocks: List[Block]
   )(implicit ioRuntime: IORuntime)
       extends AutoPilot {
     def run(sender: ActorRef, msg: Any): NetworkPeerManagerAutoPilot = {
@@ -169,9 +161,6 @@ object NetworkPeerManagerFake {
 
     private def emptyReceiptsRlp(count: Int): RLPList =
       RLPList(List.fill(count)(RLPList()): _*)
-
-    private def nodeDataRlp(values: Seq[ByteString]): RLPList =
-      RLPList(values.map(bs => RLPValue(bs.toArray[Byte])): _*)
 
     def blockMatchesStart(block: Block, startingBlock: Either[BigInt, ByteString]): Boolean =
       startingBlock.fold(nr => block.number == nr, hash => block.hash == hash)
