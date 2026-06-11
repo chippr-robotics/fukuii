@@ -240,7 +240,13 @@ object ETHPackets {
       }
 
       implicit class Status69Dec(val bytes: Array[Byte]) extends AnyVal {
+        // Tolerant 3-arm decode (restored from ETH69.Status.StatusDec.toETH69Status — PR #1316
+        // regressed this to a single canonical arm, which threw DECODE_ERROR on every peer that
+        // announces eth/69 but emits an ETH/68-shaped or legacy STATUS — chiefly off-network
+        // peers, who should be rejected cleanly as UselessPeer at the networkId/genesis check
+        // rather than crash the codec).
         def toStatus69: Status69 = rawDecode(bytes) match {
+          // (1) Canonical 7-field EIP-7642 — geth/besu/reth/nethermind on a real eth/69 chain.
           case RLPList(
                 RLPValue(protocolVersionBytes),
                 RLPValue(networkIdBytes),
@@ -258,6 +264,44 @@ object ETHPackets {
               ByteUtils.bytesToBigInt(earliestBlockBytes),
               ByteUtils.bytesToBigInt(latestBlockBytes),
               ByteString(latestBlockHashBytes)
+            )
+          // (2) 6-field ETH/68-shape on the eth/69 channel (forkId at idx 5): peers that
+          // announce eth/69 but send an ETH/68 STATUS. Accept so the genesis/networkId check
+          // can reject them as UselessPeer instead of emitting a noisy DECODE_ERROR.
+          case RLPList(
+                RLPValue(protocolVersionBytes),
+                RLPValue(networkIdBytes),
+                RLPValue(_totalDifficultyBytes),
+                RLPValue(bestHashBytes),
+                RLPValue(genesisHashBytes),
+                forkIdRlp: RLPList
+              ) =>
+            Status69(
+              ByteUtils.bytesToBigInt(protocolVersionBytes).toInt,
+              ByteUtils.bytesToBigInt(networkIdBytes).toLong,
+              ByteString(genesisHashBytes),
+              decode[ForkId](forkIdRlp),
+              earliestBlock = BigInt(0),
+              latestBlock = BigInt(0),
+              latestBlockHash = ByteString(bestHashBytes)
+            )
+          // (3) 6-field legacy fukuii shape (forkId at idx 3, no earliestBlock).
+          case RLPList(
+                RLPValue(protocolVersionBytes),
+                RLPValue(networkIdBytes),
+                RLPValue(genesisHashBytes),
+                forkIdRlp: RLPList,
+                RLPValue(latestBlockBytes),
+                RLPValue(latestBlockHashBytes)
+              ) =>
+            Status69(
+              ByteUtils.bytesToBigInt(protocolVersionBytes).toInt,
+              ByteUtils.bytesToBigInt(networkIdBytes).toLong,
+              ByteString(genesisHashBytes),
+              decode[ForkId](forkIdRlp),
+              earliestBlock = BigInt(0),
+              latestBlock = ByteUtils.bytesToBigInt(latestBlockBytes),
+              latestBlockHash = ByteString(latestBlockHashBytes)
             )
           case other => throw new RuntimeException(s"Cannot decode Status69 from: $other")
         }
