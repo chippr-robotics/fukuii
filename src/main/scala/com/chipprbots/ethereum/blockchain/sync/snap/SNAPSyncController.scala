@@ -437,8 +437,7 @@ class SNAPSyncController(
   override def preStart(): Unit = {
     log.info("SNAP Sync Controller initialized")
     log.info(
-      s"SNAPSyncConfig: useStackTrie=${snapSyncConfig.useStackTrie}, " +
-        s"accountConcurrency=${snapSyncConfig.accountConcurrency}, " +
+      s"SNAPSyncConfig: accountConcurrency=${snapSyncConfig.accountConcurrency}, " +
         s"storageBatchSize=${snapSyncConfig.storageBatchSize}, " +
         s"pivotBlockOffset=${snapSyncConfig.pivotBlockOffset}"
     )
@@ -2801,10 +2800,8 @@ class SNAPSyncController(
             resumeProgress = resumeProgress,
             initialMaxInFlightPerPeer =
               5, // Full per-peer budget during AccountRangeSync (storage+bytecode deferred to 0)
-            trieFlushThreshold = snapSyncConfig.accountTrieFlushThreshold,
             initialResponseBytes = snapSyncConfig.accountInitialResponseBytes,
-            minResponseBytes = snapSyncConfig.accountMinResponseBytes,
-            useStackTrie = snapSyncConfig.useStackTrie
+            minResponseBytes = snapSyncConfig.accountMinResponseBytes
           )
           .withDispatcher("sync-dispatcher"),
         s"account-range-coordinator-$coordinatorGeneration"
@@ -4618,7 +4615,6 @@ case class SNAPSyncConfig(
     // non-snap peers faster.
     accountStagnationTimeout: FiniteDuration = 10.minutes,
     maxInFlightPerPeer: Int = 5,
-    accountTrieFlushThreshold: Int = 50000,
     accountInitialResponseBytes: Int = 524288,
     accountMinResponseBytes: Int = 102400,
     chainDownloadEnabled: Boolean = true,
@@ -4659,16 +4655,6 @@ case class SNAPSyncConfig(
     // disconnect after storage phase but are needed for trie node healing.
     // Format: enode://PUBKEY@HOST:PORT
     snapServerPeers: List[java.net.URI] = Nil,
-    /** Phase 2 of the SNAP rewrite (`snap-stacktrie-port` plan).
-      *
-      * When `true`, the SNAP write path uses streaming `SnapHashTrie` (one per AccountTask, one per storage contract)
-      * instead of the legacy `MerklePatriciaTrie` + `DeferredWriteMptStorage` approach. Memory is bounded by trie depth
-      * rather than account count; the multi-GiB in-memory pivot trie and its 13.6-minute collapse are eliminated.
-      *
-      * Default `false` — opt in via `sync.snap-sync.use-stack-trie = true` in sync.conf for testing. Will become the
-      * default once Sepolia + Mordor validation completes (Step 5 of the plan).
-      */
-    useStackTrie: Boolean = false,
     /** Cap on per-account streaming storage tries held in memory at once. Each `SnapHashTrie` wrapper bounds its own
       * working set to ~8 MiB (`SnapHashTrie.DefaultBatchSizeBytes`), so the worst-case storage-processing footprint is
       * `maxConcurrentStorageAccounts × 8 MiB`. Default 256 → ~2 GiB ceiling, independent of chain size. Storage
@@ -4738,10 +4724,6 @@ object SNAPSyncConfig {
         if (snapConfig.hasPath("max-inflight-per-peer"))
           snapConfig.getInt("max-inflight-per-peer")
         else 5,
-      accountTrieFlushThreshold =
-        if (snapConfig.hasPath("account-trie-flush-threshold"))
-          snapConfig.getInt("account-trie-flush-threshold")
-        else 50000,
       accountInitialResponseBytes =
         if (snapConfig.hasPath("account-initial-response-bytes"))
           snapConfig.getInt("account-initial-response-bytes")
@@ -4817,10 +4799,6 @@ object SNAPSyncConfig {
               catch { case _: Exception => None }
             }
         else Nil,
-      useStackTrie =
-        if (snapConfig.hasPath("use-stack-trie"))
-          snapConfig.getBoolean("use-stack-trie")
-        else false,
       maxConcurrentStorageAccounts =
         if (snapConfig.hasPath("max-concurrent-storage-accounts"))
           snapConfig.getInt("max-concurrent-storage-accounts")

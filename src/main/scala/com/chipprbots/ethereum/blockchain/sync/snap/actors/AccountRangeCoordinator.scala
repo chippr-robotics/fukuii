@@ -23,7 +23,7 @@ import scala.concurrent.duration._
 import scala.util.{Success, Failure}
 
 import com.chipprbots.ethereum.blockchain.sync.snap._
-import com.chipprbots.ethereum.db.storage.{DeferredWriteMptStorage, MptStorage}
+import com.chipprbots.ethereum.db.storage.MptStorage
 import com.chipprbots.ethereum.domain.Account
 import com.chipprbots.ethereum.network.Peer
 import com.chipprbots.ethereum.mpt.MerklePatriciaTrie
@@ -68,22 +68,9 @@ class AccountRangeCoordinator(
     snapSyncController: ActorRef,
     resumeProgress: Map[ByteString, ByteString] = Map.empty,
     initialMaxInFlightPerPeer: Int = 5,
-    trieFlushThreshold: Int = 50000,
     initialResponseBytesConfig: Int = 524288,
     minResponseBytesConfig: Int = 102400,
-    accountTrieEcOverride: Option[ExecutionContext] = None,
-    /** Phase 2 of the SNAP rewrite (Step 3 of `snap-stacktrie-port` plan).
-      *
-      * When `true`, accounts arriving in each `AccountTask` are inserted into a per-task
-      * [[com.chipprbots.ethereum.blockchain.sync.snap.SnapHashTrie]] (which wraps a streaming `StackTrie`) rather than
-      * into the shared `MerklePatriciaTrie` over `DeferredWriteMptStorage`. The single 4 GiB in-memory pivot trie and
-      * its multi-minute flush are eliminated; memory is bounded to ~8 MiB write batches per task.
-      *
-      * When `false` (default), the legacy MPT-put-then-deferred-flush path is used unchanged. This gives operators an
-      * opt-in migration path; the legacy path will be removed in Step 5 of the plan once the StackTrie path is
-      * validated on Sepolia + Mordor.
-      */
-    useStackTrie: Boolean = false
+    accountTrieEcOverride: Option[ExecutionContext] = None
 ) extends Actor
     with ActorLogging {
 
@@ -144,7 +131,6 @@ class AccountRangeCoordinator(
   // Nethermind's threshold; lines up with the bumped storage threshold.
   private val EmptyResponseStrikeThreshold: Int = 5
   private var pivotRefreshRequested = false
-  private var pivotWasRefreshed = false
 
   private def isPeerStateless(peer: Peer): Boolean =
     statelessPeers.contains(peer.id)
@@ -520,44 +506,22 @@ class AccountRangeCoordinator(
   private val minRefreshIntervalMs: Long = 60000L // 60s minimum between refreshes
   private val maxRefreshIntervalMs: Long = 300000L // 5min ceiling
 
-  // Threshold-based trie flush: accumulate nodes in memory and only flush to RocksDB
-  // when the threshold is reached. With pipelining, per-response flushing becomes a
-  // bottleneck (50-200ms per flush × 5 concurrent responses = constant blocking).
-  private var accountsSinceLastFlush: Long = 0
-
-  // Dedicated dispatcher for trie flush + finalisation. Tests inject their own
+  // Dedicated dispatcher for trie finalisation. Tests inject their own
   // `ExecutionContext`; production looks up `account-trie-dispatcher` from `pekko.conf`.
-  // Both `flushTrieToStorage` (50-200ms bursts) and `finalizeTrie` (10+ minutes on
-  // mainnet) run here so they don't tie up `sync-dispatcher` or the global pool.
+  // `finalizeTrie` (10+ minutes on mainnet) runs here so it can't squeeze the global pool or
+  // sync-dispatcher.
   private val accountTrieEc: ExecutionContext =
     accountTrieEcOverride.getOrElse(context.system.dispatchers.lookup("account-trie-dispatcher"))
 
-  // Generation token. Bumped at every fresh async flush spawn, on `PivotRefreshed`,
-  // and at finalisation. Async result messages carry the generation they were spawned
-  // under and are ignored if it no longer matches — defensive guard so a stale
-  // completion (e.g., from before a state transition) can't apply against the wrong
-  // assumption. Mirrors the validateState() async pattern (PR #1163).
+  // Generation token. Bumped at finalisation spawn. Async result messages carry the generation
+  // they were spawned under and are ignored if it no longer matches — defensive guard so a stale
+  // completion can't apply against the wrong assumption. Mirrors the validateState() async pattern.
   // Package-private so unit tests can verify generation behaviour.
   private[actors] var trieFlushGeneration: Long = 0L
 
-  import AccountRangeCoordinator.{TrieFlushAsyncComplete, TrieFlushAsyncFailed, TrieFlushComplete}
+  import AccountRangeCoordinator.TrieFlushComplete
 
-  // Deferred-write storage wrapper: makes updateNodesInStorage() a no-op during bulk insertion,
-  // keeping all trie nodes in memory. This avoids the per-put collapse (RLP encode + Keccak-256 hash)
-  // and database write that was causing insertion to degrade from ~300/s to ~20/s.
-  // Nodes are flushed to RocksDB after each response batch via flushTrieToStorage().
-  private val deferredStorage = new DeferredWriteMptStorage(mptStorage)
-
-  // State trie for storing accounts.
-  // In SNAP, we start with an empty local DB and rebuild the state trie from downloaded ranges.
-  // ONLY used when `useStackTrie == false` (legacy path). When `useStackTrie == true`, each
-  // AccountTask owns its own `SnapHashTrie` in `taskStackTries` below.
-  private var stateTrie: MerklePatriciaTrie[ByteString, Account] = {
-    import com.chipprbots.ethereum.mpt.byteStringSerializer
-    MerklePatriciaTrie[ByteString, Account](deferredStorage)
-  }
-
-  // Per-task StackTrie state (only populated when `useStackTrie == true`).
+  // Per-task StackTrie state.
   // Keyed by `task.last` — each AccountTask has a unique end-of-range boundary.
   // The 16 ranges produce 16 fragment roots; the SNAP healing phase reconciles
   // them against the pivot's actual root. This matches go-ethereum's per-task
@@ -645,7 +609,6 @@ class AccountRangeCoordinator(
     case PivotRefreshed(newStateRoot) =>
       log.info(s"Pivot refreshed: ${stateRoot.take(4).toHex} -> ${newStateRoot.take(4).toHex}")
       stateRoot = newStateRoot
-      pivotWasRefreshed = true
 
       // #1184: drain unconditionally instead of relying on the worker → TaskFailed cascade
       // that misses silent peers. Drain BEFORE re-applying the root so all drained tasks
@@ -929,9 +892,8 @@ class AccountRangeCoordinator(
       }
   }
 
-  /** Receive state during async trie finalization. The in-memory trie is being collapsed and written to RocksDB on a
-    * background thread. No message should touch stateTrie or deferredStorage during this phase. Package-private so
-    * tests can `become(finalizing)` directly without driving the heavy finalisation work.
+  /** Receive state during async trie finalization. The StackTrie finalize is running on `account-trie-dispatcher`.
+    * Package-private so tests can `become(finalizing)` directly without driving the heavy finalisation work.
     */
   private[actors] def finalizing: Receive = {
     // Stale-generation drop. A completion arriving for a generation that's been bumped
@@ -1101,14 +1063,8 @@ class AccountRangeCoordinator(
   }
 
   // How many accounts to insert per chunk before yielding to the actor mailbox.
-  // With DeferredWriteMptStorage, puts are purely in-memory (~1-10μs each), so we can
-  // process much larger chunks. 2000 accounts takes ~2-20ms in-memory.
+  // SnapHashTrie inserts are O(depth) memory + O(1) amortised compute (~2-20ms per 2000 accounts).
   private val storeChunkSize = 2000
-
-  // Accounts are inserted in-memory via DeferredWriteMptStorage, then flushed to RocksDB
-  // after each response batch (~32K accounts). This bounds memory to ~one batch (~13MB)
-  // instead of accumulating all accounts in the trie (~420 bytes/account, OOM at ~9.5M/4GB).
-  // Each flush collapses the current in-memory nodes and rebuilds from persisted root.
 
   private def handleTaskComplete(
       requestId: BigInt,
@@ -1419,9 +1375,8 @@ class AccountRangeCoordinator(
       dispatchIfPossible(peer)
   }
 
-  /** Handle a chunk of account storage, inserting a batch into the in-memory trie and yielding back to the actor
-    * mailbox between chunks. With DeferredWriteMptStorage, puts are purely in-memory (no collapse, no encoding, no
-    * hashing, no DB writes). The trie is flushed to RocksDB in a single batch when all chunks for a response are done.
+  /** Handle a chunk of account storage, inserting a batch into the per-task SnapHashTrie and yielding back to the actor
+    * mailbox between chunks. Nodes batch-flush to RocksDB inside SnapHashTrie at the 8 MiB threshold.
     */
   private def handleStoreAccountChunk(
       task: AccountTask,
@@ -1433,23 +1388,12 @@ class AccountRangeCoordinator(
     val (chunk, rest) = remaining.splitAt(storeChunkSize)
 
     try {
-      if (useStackTrie) {
-        // StackTrie path: route accounts to this task's per-range StackTrie.
-        // Inserts are O(depth) memory + O(1) amortised compute; emitted nodes
-        // batch-flush to RocksDB inside SnapHashTrie at the 8 MiB threshold,
-        // so we never accumulate a multi-GiB in-memory pivot trie.
-        val trie = getOrCreateTaskStackTrie(task)
-        chunk.foreach { case (accountHash, account) =>
-          trie.update(accountHash.toArray, Account.accountSerializer.toBytes(account))
-        }
-      } else {
-        // Legacy MPT path: single global trie over DeferredWriteMptStorage.
-        // Buffers everything in memory until threshold-based flush.
-        var currentTrie = stateTrie
-        chunk.foreach { case (accountHash, account) =>
-          currentTrie = currentTrie.put(accountHash, account)
-        }
-        stateTrie = currentTrie
+      // Route accounts to this task's per-range StackTrie. Inserts are O(depth) memory + O(1)
+      // amortised compute; emitted nodes batch-flush to RocksDB inside SnapHashTrie at the 8 MiB
+      // threshold, so we never accumulate a multi-GiB in-memory pivot trie.
+      val trie = getOrCreateTaskStackTrie(task)
+      chunk.foreach { case (accountHash, account) =>
+        trie.update(accountHash.toArray, Account.accountSerializer.toBytes(account))
       }
 
       val newStored = storedSoFar + chunk.size
@@ -1496,19 +1440,12 @@ class AccountRangeCoordinator(
           // remaining pending batch to RocksDB. The fragment root is logged for diagnostics
           // — it does NOT match the pivot's claimed root (each task produces only a
           // partial trie); healing reconciles fragments against the pivot root.
-          if (useStackTrie) {
-            taskStackTries.remove(task.last).foreach { trie =>
-              val fragmentRoot = trie.commit()
-              log.info(
-                s"Account range COMPLETE: ${task.rangeString} " +
-                  s"(${completedTasks.size}/$concurrency ranges done, $accountsDownloaded accounts total, " +
-                  s"fragment root ${fragmentRoot.take(4).toArray.map("%02x".format(_)).mkString})"
-              )
-            }
-          } else {
+          taskStackTries.remove(task.last).foreach { trie =>
+            val fragmentRoot = trie.commit()
             log.info(
               s"Account range COMPLETE: ${task.rangeString} " +
-                s"(${completedTasks.size}/$concurrency ranges done, $accountsDownloaded accounts total)"
+                s"(${completedTasks.size}/$concurrency ranges done, $accountsDownloaded accounts total, " +
+                s"fragment root ${fragmentRoot.take(4).toArray.map("%02x".format(_)).mkString})"
             )
           }
           // Send progress snapshot so controller can resume from saved positions
@@ -1524,30 +1461,10 @@ class AccountRangeCoordinator(
           sendProgressSnapshot()
         }
 
-        if (useStackTrie) {
-          // StackTrie path: no global flush required. Each task's SnapHashTrie
-          // batches its emissions and flushes to RocksDB at the 8 MiB threshold
-          // (or on task-complete commit). Just check whether all tasks are done.
-          log.debug(s"Stored all $totalCount accounts via StackTrie ($accountsDownloaded total)")
-          self ! CheckCompletion
-        } else {
-          // Legacy MPT path — threshold-based global flush.
-          //
-          // With pipelining, per-response flushing (50-200ms each) blocks the coordinator
-          // and becomes the throughput bottleneck. Threshold-based flushing amortises the cost.
-          accountsSinceLastFlush += totalCount
-          if (accountsSinceLastFlush >= trieFlushThreshold) {
-            accountsSinceLastFlush = 0
-            spawnFlushTrieAsync()
-            // CheckCompletion is sent from the flush completion handler.
-          } else {
-            log.debug(
-              s"Stored all $totalCount accounts in-memory ($accountsDownloaded total, ${accountsSinceLastFlush} since last flush)"
-            )
-            // Check if all tasks are complete
-            self ! CheckCompletion
-          }
-        }
+        // Each task's SnapHashTrie batches its emissions and flushes to RocksDB at the 8 MiB
+        // threshold (or on task-complete commit). No global flush required.
+        log.debug(s"Stored all $totalCount accounts via StackTrie ($accountsDownloaded total)")
+        self ! CheckCompletion
       }
     } catch {
       case e: Exception =>
@@ -1569,85 +1486,6 @@ class AccountRangeCoordinator(
       task.last,
       new SnapHashTrie(batch => mptStorage.storeRawNodes(batch))
     )
-
-  /** Flush all in-memory trie nodes to RocksDB in a single batch. This collapses the entire in-memory trie (RLP-encode
-    * + Keccak-256 hash all nodes), then writes everything to RocksDB via one WriteBatch. After flush, the trie is
-    * rebuilt from the persisted root hash so old in-memory nodes can be garbage collected.
-    *
-    * Used directly only from `finalizeTrie` (where the actor is in `finalizing` and no concurrent puts can race).
-    * Periodic flushes during account download go through `spawnFlushTrieAsync`.
-    *
-    * NOTE: legacy MPT path only. The StackTrie path flushes per-task at task completion via `SnapHashTrie.commit()`; no
-    * global flush is needed.
-    */
-  private def flushTrieToStorage(): Unit =
-    deferredStorage.flush().foreach { rootHash =>
-      import com.chipprbots.ethereum.mpt.byteStringSerializer
-      stateTrie = MerklePatriciaTrie[ByteString, Account](rootHash, deferredStorage)
-      log.info(s"Flushed trie to storage, root=${rootHash.take(8).map("%02x".format(_)).mkString}...")
-    }
-
-  /** Async variant of `flushTrieToStorage` for the periodic-flush path. Switches the actor to the `flushing` receive
-    * state (so no message touches `stateTrie` or `deferredStorage` during the flush), spawns the collapse + RocksDB
-    * write on `account-trie-dispatcher`, then returns to the normal receive on completion. Generation-tagged so a stale
-    * completion (from before a state transition) is dropped.
-    */
-  private def spawnFlushTrieAsync(): Unit = {
-    trieFlushGeneration += 1
-    val gen = trieFlushGeneration
-    context.become(flushing)
-
-    val selfRef = self
-    val storage = deferredStorage
-    Future {
-      blocking {
-        val startMs = System.currentTimeMillis()
-        val rootHash = storage.flush().map(rh => ByteString(rh))
-        val elapsedMs = System.currentTimeMillis() - startMs
-        (rootHash, elapsedMs)
-      }
-    }(accountTrieEc).onComplete {
-      case Success((root, elapsedMs)) =>
-        selfRef ! TrieFlushAsyncComplete(gen, root, elapsedMs)
-      case Failure(ex) =>
-        selfRef ! TrieFlushAsyncFailed(gen, ex.getMessage)
-    }(context.dispatcher)
-  }
-
-  /** Receive state during async periodic trie flush. The flush is collapsing the in-memory trie + writing to RocksDB on
-    * `account-trie-dispatcher`; no message should touch `stateTrie` or `deferredStorage` until it completes. Other
-    * messages (peer availability, AccountRange responses, store-chunk continuations) stay in the mailbox and process in
-    * order once the flush returns to the normal receive. Package-private so tests can drive stale-completion paths.
-    */
-  private[actors] def flushing: Receive = {
-    // Stale-generation drop — happens only if generation got bumped while a flush
-    // was in flight (e.g., transition into finalisation). Data is durable either way.
-    case TrieFlushAsyncComplete(gen, _, _) if gen != trieFlushGeneration =>
-      log.debug(s"Dropping stale TrieFlushAsyncComplete (gen=$gen, current=$trieFlushGeneration)")
-      context.become(receive)
-      self ! CheckCompletion
-
-    case TrieFlushAsyncFailed(gen, _) if gen != trieFlushGeneration =>
-      log.debug(s"Dropping stale TrieFlushAsyncFailed (gen=$gen, current=$trieFlushGeneration)")
-      context.become(receive)
-      self ! CheckCompletion
-
-    case TrieFlushAsyncComplete(_, persistedRoot, elapsedMs) =>
-      persistedRoot.foreach { rootHash =>
-        import com.chipprbots.ethereum.mpt.byteStringSerializer
-        stateTrie = MerklePatriciaTrie[ByteString, Account](rootHash.toArray, deferredStorage)
-        log.info(
-          s"Flushed trie to storage in ${elapsedMs}ms, root=${rootHash.take(8).map("%02x".format(_)).mkString}..."
-        )
-      }
-      context.become(receive)
-      self ! CheckCompletion
-
-    case TrieFlushAsyncFailed(_, error) =>
-      log.error(s"Async trie flush failed: $error. Continuing with in-memory trie; healing will recover.")
-      context.become(receive)
-      self ! CheckCompletion
-  }
 
   /** Identify contract accounts (those with non-empty code hash)
     *
@@ -1717,68 +1555,30 @@ class AccountRangeCoordinator(
   private def finalizeTrie(): Either[String, ByteString] =
     try {
       log.info("Finalizing state trie...")
-
-      if (useStackTrie) {
-        // StackTrie path: each task's SnapHashTrie was committed on task-complete in
-        // `handleStoreAccountChunk`, flushing its right boundary + remaining batch to
-        // RocksDB. Defensively commit any stragglers (should be empty unless a task
-        // finished after its `isTaskRangeComplete` branch was missed).
-        if (taskStackTries.nonEmpty) {
-          log.warning(s"Finalising ${taskStackTries.size} uncommitted task StackTries (unexpected)")
-          taskStackTries.values.foreach { trie =>
-            val _ = trie.commit()
-          }
-          taskStackTries.clear()
+      // StackTrie path: each task's SnapHashTrie was committed on task-complete in
+      // `handleStoreAccountChunk`, flushing its right boundary + remaining batch to
+      // RocksDB. Defensively commit any stragglers (should be empty unless a task
+      // finished after its `isTaskRangeComplete` branch was missed).
+      if (taskStackTries.nonEmpty) {
+        log.warning(s"Finalising ${taskStackTries.size} uncommitted task StackTries (unexpected)")
+        taskStackTries.values.foreach { trie =>
+          val _ = trie.commit()
         }
-        // Use the pivot's claimed root as the "finalized root". With per-task fragments
-        // there is no single computed root; healing reconciles the on-disk trie against
-        // `stateRoot` regardless. This matches what `pivotWasRefreshed` mode does on
-        // the legacy MPT path (returns the computed root which doesn't match pivot,
-        // controller persists it, healing reconciles).
-        log.info(
-          s"State trie finalization complete (StackTrie path, 16 fragments). " +
-            s"Reported root: ${stateRoot.take(8).toArray.map("%02x".format(_)).mkString}..."
-        )
-        return Right(stateRoot)
+        taskStackTries.clear()
       }
-
-      // Flush any remaining deferred writes to RocksDB
-      flushTrieToStorage()
-
-      val currentRootHash = ByteString(stateTrie.getRootHash)
-      log.info(s"Final state root: ${currentRootHash.take(8).toArray.map("%02x".format(_)).mkString}")
-
-      // After pivot refresh(es), root mismatch is expected — the healing phase
-      // will reconcile. Only fail on root mismatch if NO pivot refresh occurred.
-      if (
-        !pivotWasRefreshed &&
-        stateRoot.nonEmpty &&
-        stateRoot != ByteString(MerklePatriciaTrie.EmptyRootHash) &&
-        currentRootHash != stateRoot
-      ) {
-        val expected = stateRoot.take(8).toArray.map("%02x".format(_)).mkString
-        val actual = currentRootHash.take(8).toArray.map("%02x".format(_)).mkString
-        Left(s"Root mismatch: expected=$expected..., actual=$actual...")
-      } else {
-        if (pivotWasRefreshed && currentRootHash != stateRoot) {
-          log.info("Root mismatch expected after pivot refresh - healing phase will reconcile")
-        }
-        log.info("State trie finalization complete")
-        Right(currentRootHash)
-      }
+      // Use the pivot's claimed root as the "finalized root". With per-task fragments
+      // there is no single computed root; healing reconciles the on-disk trie against
+      // `stateRoot` regardless.
+      log.info(
+        s"State trie finalization complete (StackTrie path, 16 fragments). " +
+          s"Reported root: ${stateRoot.take(8).toArray.map("%02x".format(_)).mkString}..."
+      )
+      Right(stateRoot)
     } catch {
       case e: Exception =>
         log.error(e, s"Failed to finalize trie: ${e.getMessage}")
         Left(s"Trie finalization error: ${e.getMessage}")
     }
-
-  /** Get the current state root hash from the trie
-    *
-    * @return
-    *   Current state root hash
-    */
-  def getStateRoot: ByteString =
-    ByteString(stateTrie.getRootHash)
 
   /** Read all contract account entries from a temporary file. Each entry is 64 bytes: 32-byte key + 32-byte value.
     * Flushes the output stream first to ensure all data is written.
@@ -1891,22 +1691,10 @@ object AccountRangeCoordinator {
     */
   val MaxRequeuesPerTask: Int = 20
 
-  /** Async trie-finalisation result. `generation` matches the value of `trieFlushGeneration` at spawn time so stale
-    * completions (after a state transition / restart) can be dropped without applying against the wrong assumption.
+  /** Async trie-finalisation result. `generation` matches `trieFlushGeneration` at spawn time so stale completions
+    * (after a state transition / restart) can be dropped without applying against the wrong assumption.
     */
   private[actors] case class TrieFlushComplete(generation: Long, result: Either[String, ByteString])
-
-  /** Async periodic flush completed. `persistedRoot` is the root hash returned by `deferredStorage.flush()` — used to
-    * rebuild `stateTrie` so old in-memory nodes can be garbage collected.
-    */
-  private[actors] case class TrieFlushAsyncComplete(
-      generation: Long,
-      persistedRoot: Option[ByteString],
-      elapsedMs: Long
-  )
-
-  /** Async periodic flush failed. Healing phase will recover any missing nodes. */
-  private[actors] case class TrieFlushAsyncFailed(generation: Long, error: String)
 
   def props(
       stateRoot: ByteString,
@@ -1917,11 +1705,9 @@ object AccountRangeCoordinator {
       snapSyncController: ActorRef,
       resumeProgress: Map[ByteString, ByteString] = Map.empty,
       initialMaxInFlightPerPeer: Int = 5,
-      trieFlushThreshold: Int = 50000,
       initialResponseBytes: Int = 524288,
       minResponseBytes: Int = 102400,
-      accountTrieEcOverride: Option[ExecutionContext] = None,
-      useStackTrie: Boolean = false
+      accountTrieEcOverride: Option[ExecutionContext] = None
   ): Props =
     Props(
       new AccountRangeCoordinator(
@@ -1933,11 +1719,9 @@ object AccountRangeCoordinator {
         snapSyncController,
         resumeProgress,
         initialMaxInFlightPerPeer,
-        trieFlushThreshold,
         initialResponseBytes,
         minResponseBytes,
-        accountTrieEcOverride,
-        useStackTrie
+        accountTrieEcOverride
       )
     )
 }
