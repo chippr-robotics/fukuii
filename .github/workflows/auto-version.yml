@@ -32,6 +32,19 @@ concurrency:
 jobs:
   auto-version:
     name: Auto Increment Version
+    # Guards (2026-06-11, the 0.7.0 promotion postmortem):
+    #  - head-commit guard: replaces the old `[skip ci]` in the bump commit message as loop
+    #    prevention. `[skip ci]` at a branch HEAD also suppresses ALL pull_request-event
+    #    workflows for PRs whose head is that branch, which permanently blocked the
+    #    staging->main promotion PR's required checks.
+    #  - forced/created guards: a branch reset (force-push) or branch (re)creation is not a
+    #    code merge — bumping+tagging+dispatching a release off it minted a spurious v0.7.1
+    #    while v0.7.0 was being released.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (!startsWith(github.event.head_commit.message, 'chore: bump version to') &&
+       github.event.forced != true &&
+       github.event.created != true)
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -154,7 +167,10 @@ jobs:
             exit 0
           fi
 
-          git commit -m "chore: bump version to $NEW_VERSION [skip ci]"
+          # No [skip ci]: it poisons the branch HEAD for pull_request-event workflows (see job
+          # guard above). The duplicate-CI cost is avoided by the bump-commit guards in ci.yml /
+          # autofix.yml / this workflow instead.
+          git commit -m "chore: bump version to $NEW_VERSION"
           git push
 
           echo "version_changed=true" >> $GITHUB_OUTPUT
