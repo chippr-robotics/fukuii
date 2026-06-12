@@ -15,7 +15,13 @@ import scala.concurrent.duration.Duration
 
 import com.chipprbots.ethereum.blockchain.sync.snap._
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController
-import com.chipprbots.ethereum.db.storage.{BfsQueueStorage, HealingFrontierStorage, InMemoryBfsQueueStorage, MptStorage}
+import com.chipprbots.ethereum.db.storage.{
+  BfsQueueStorage,
+  HealingFrontierStorage,
+  InMemoryBfsQueueStorage,
+  MptStorage,
+  PathNodeStorage
+}
 import com.chipprbots.ethereum.network.Peer
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor
 import com.chipprbots.ethereum.network.p2p.messages.SNAP.{GetTrieNodes, TrieNodes}
@@ -41,7 +47,9 @@ class TrieNodeHealingCoordinator(
     healingFrontierStorage: Option[HealingFrontierStorage] = None,
     healingWriterEcOverride: Option[ExecutionContext] = None,
     traversalParallelism: Int = TrieNodeHealingCoordinator.DefaultDfsParallelism,
-    bfsQueueStorageOpt: Option[BfsQueueStorage] = None
+    bfsQueueStorageOpt: Option[BfsQueueStorage] = None,
+    storageScheme: StorageScheme = StorageScheme.Hash,
+    pathNodeStorageOpt: Option[PathNodeStorage] = None
 ) extends Actor
     with ActorLogging {
 
@@ -939,7 +947,22 @@ class TrieNodeHealingCoordinator(
         keccak.reset()
         val nodeHash = ByteString(keccak.digest(nodeData.toArray))
         if (taskByHash.contains(nodeHash)) {
-          rawNodeBuffer += ((nodeHash, nodeData.toArray))
+          storageScheme match {
+            case StorageScheme.Hash =>
+              rawNodeBuffer += ((nodeHash, nodeData.toArray))
+            case StorageScheme.Path =>
+              // PathScheme: write directly by nibble path (no batching needed — healing is low-volume).
+              // pathset = [HP-path] for account trie, [accountHash32, HP-path] for storage trie.
+              pathNodeStorageOpt.foreach { pns =>
+                taskByHash.get(nodeHash).foreach { task =>
+                  val nibbles = com.chipprbots.ethereum.mpt.HexPrefix.decode(task.pathset.last.toArray)._1
+                  if (task.pathset.size > 1)
+                    pns.writeStorageNode(ByteString(task.pathset.head), nibbles, nodeHash, nodeData.toArray)
+                  else
+                    pns.writeAccountNode(nibbles, nodeHash, nodeData.toArray)
+                }
+              }
+          }
           healedCount += 1
           totalNodesHealed += 1
           receivedBytes += nodeData.length
@@ -1467,8 +1490,21 @@ class TrieNodeHealingCoordinator(
   }
 
   private def isNodeInStorage(hash: ByteString): Boolean =
-    try { mptStorage.get(hash.toArray); true }
-    catch { case _: Exception => false }
+    storageScheme match {
+      case StorageScheme.Hash =>
+        try { mptStorage.get(hash.toArray); true }
+        catch { case _: Exception => false }
+      case StorageScheme.Path =>
+        // PathScheme: nodes are path-keyed. Verify by reading the state root at the empty
+        // nibble path and hashing it. For non-root nodes we lack path context here — return
+        // false so healing re-requests them (idempotent: writes are safe to repeat).
+        pathNodeStorageOpt.exists { pns =>
+          pns.readAccountNode(Array.empty[Byte]).exists { rlp =>
+            val digest = new org.bouncycastle.jcajce.provider.digest.Keccak.Digest256()
+            ByteString(digest.digest(rlp)) == hash
+          }
+        }
+    }
 }
 
 object TrieNodeHealingCoordinator {
@@ -1514,7 +1550,9 @@ object TrieNodeHealingCoordinator {
       healingFrontierStorage: Option[HealingFrontierStorage] = None,
       healingWriterEcOverride: Option[ExecutionContext] = None,
       traversalParallelism: Int = DefaultDfsParallelism,
-      bfsQueueStorageOpt: Option[BfsQueueStorage] = None
+      bfsQueueStorageOpt: Option[BfsQueueStorage] = None,
+      storageScheme: StorageScheme = StorageScheme.Hash,
+      pathNodeStorageOpt: Option[PathNodeStorage] = None
   ): Props =
     Props(
       new TrieNodeHealingCoordinator(
@@ -1529,7 +1567,9 @@ object TrieNodeHealingCoordinator {
         healingFrontierStorage,
         healingWriterEcOverride,
         traversalParallelism,
-        bfsQueueStorageOpt
+        bfsQueueStorageOpt,
+        storageScheme,
+        pathNodeStorageOpt
       )
     )
 }

@@ -7,6 +7,7 @@ import scala.concurrent.duration._
 import com.typesafe.config.{Config => TypesafeConfig}
 
 import com.chipprbots.ethereum.db.dataSource.RocksDbConfig
+import com.chipprbots.ethereum.network.NetworkProtocolConfig
 import com.chipprbots.ethereum.network.PeerManagerActor.FastSyncHostConfiguration
 import com.chipprbots.ethereum.network.PeerManagerActor.PeerConfiguration
 import com.chipprbots.ethereum.network.rlpx.RLPxConnectionHandler.RLPxConfiguration
@@ -24,7 +25,7 @@ import com.chipprbots.ethereum.network.rlpx.RLPxConnectionHandler.RLPxConfigurat
   * @param instanceId
   *   optional instance identifier for multi-instance mode (e.g., "etc", "mordor", "sepolia")
   */
-class InstanceConfig(val config: TypesafeConfig, val instanceId: String = "default") {
+class InstanceConfig(val config: TypesafeConfig, val instanceId: String = "default") extends LazyLogger {
 
   val testmode: Boolean = config.getBoolean("testmode")
 
@@ -42,11 +43,46 @@ class InstanceConfig(val config: TypesafeConfig, val instanceId: String = "defau
     else None
 
   import com.chipprbots.ethereum.network.p2p.messages.Capability
-  val supportedCapabilities: List[Capability] = List(
-    Capability.ETH68,
-    Capability.ETH69,
-    Capability.SNAP1
-  )
+
+  val networkProtocols: NetworkProtocolConfig =
+    NetworkProtocolConfig.fromConfig(config.getConfig("network.protocols"))
+
+  val supportedCapabilities: List[Capability] = {
+    val p = networkProtocols
+    List(
+      Option.when(p.eth68)(Capability.ETH68),
+      Option.when(p.eth69)(Capability.ETH69),
+      Option.when(p.eth70)(Capability.ETH70),
+      // ETH71 slot wired here by spec-007
+      Option.when(p.snap1)(Capability.SNAP1)
+      // SNAP2 slot wired here by spec-008
+    ).flatten
+  }
+
+  // Startup validation — runs at construction; warns on misconfigured combinations but does not abort.
+  locally {
+    val p = networkProtocols
+    val networkName =
+      if (config.hasPath("blockchains.network")) config.getString("blockchains.network") else instanceId
+    if (!p.eth68)
+      log.warn("[InstanceConfig] eth68 disabled; this node cannot communicate with legacy peers")
+    if (p.eth70 && !p.eth69)
+      log.warn("[InstanceConfig] eth70 requires eth69; both should be enabled")
+    if (p.eth71 && !p.eth70)
+      log.warn("[InstanceConfig] eth71 requires eth70; both should be enabled")
+    if (p.snap2 && !p.snap1)
+      log.warn("[InstanceConfig] snap2 requires snap1; both should be enabled")
+    val disabled = List(
+      Option.unless(p.eth70)("eth70"),
+      Option.unless(p.eth71)("eth71"),
+      Option.unless(p.snap2)("snap2")
+    ).flatten
+    val disabledNote = if (disabled.nonEmpty) s"; ${disabled.mkString("/")} disabled by config" else ""
+    log.info(
+      s"[InstanceConfig] Protocol capabilities: [${supportedCapabilities.mkString(", ")}]" +
+        s" (network=$networkName$disabledNote)"
+    )
+  }
 
   val blockchains: BlockchainsConfig = BlockchainsConfig(config.getConfig("blockchains"))
 

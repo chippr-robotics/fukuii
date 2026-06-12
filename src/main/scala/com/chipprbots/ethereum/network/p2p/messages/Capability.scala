@@ -30,6 +30,7 @@ object Capability {
   case object ETH67 extends Capability(ProtocolFamily.ETH, 67) // scalastyle:ignore magic.number
   case object ETH68 extends Capability(ProtocolFamily.ETH, 68) // scalastyle:ignore magic.number
   case object ETH69 extends Capability(ProtocolFamily.ETH, 69) // scalastyle:ignore magic.number
+  case object ETH70 extends Capability(ProtocolFamily.ETH, 70) // scalastyle:ignore magic.number
   case object SNAP1 extends Capability(ProtocolFamily.SNAP, 1) // scalastyle:ignore magic.number
 
   def parse(s: String): Option[Capability] = s match {
@@ -40,6 +41,7 @@ object Capability {
     case "eth/67" => Some(ETH67)
     case "eth/68" => Some(ETH68)
     case "eth/69" => Some(ETH69)
+    case "eth/70" => Some(ETH70)
     case "snap/1" => Some(SNAP1)
     case _        => None
   }
@@ -52,10 +54,10 @@ object Capability {
     // If we advertise ETH68 and peer advertises ETH64, we should negotiate ETH64
     // This means we need to find the highest common version for each protocol family
 
-    val ethVersions1 = c1.collect { case cap @ (ETH63 | ETH64 | ETH65 | ETH66 | ETH67 | ETH68 | ETH69) =>
+    val ethVersions1 = c1.collect { case cap @ (ETH63 | ETH64 | ETH65 | ETH66 | ETH67 | ETH68 | ETH69 | ETH70) =>
       cap
     }
-    val ethVersions2 = c2.collect { case cap @ (ETH63 | ETH64 | ETH65 | ETH66 | ETH67 | ETH68 | ETH69) =>
+    val ethVersions2 = c2.collect { case cap @ (ETH63 | ETH64 | ETH65 | ETH66 | ETH67 | ETH68 | ETH69 | ETH70) =>
       cap
     }
 
@@ -94,8 +96,8 @@ object Capability {
   def best(capabilities: List[Capability]): Capability =
     capabilities
       .groupBy {
-        case ETH63 | ETH64 | ETH65 | ETH66 | ETH67 | ETH68 | ETH69 => "ETH"
-        case SNAP1                                                 => "SNAP"
+        case ETH63 | ETH64 | ETH65 | ETH66 | ETH67 | ETH68 | ETH69 | ETH70 => "ETH"
+        case SNAP1                                                         => "SNAP"
       }
       .toList
       .sortBy {
@@ -113,8 +115,8 @@ object Capability {
     * RequestId wrapper ETH63, ETH64, ETH65 do not use RequestId wrapper
     */
   def usesRequestId(capability: Capability): Boolean = capability match {
-    case ETH66 | ETH67 | ETH68 | ETH69 | SNAP1 => true
-    case _                                     => false
+    case ETH66 | ETH67 | ETH68 | ETH69 | ETH70 | SNAP1 => true
+    case _                                             => false
   }
 
   implicit class CapabilityEnc(val msg: Capability) extends RLPSerializable {

@@ -329,12 +329,12 @@ class BlockFetcherSpec extends AnyFreeSpecLike with Matchers with BeforeAndAfter
         peersClient.lastSender
       }
       bodiesSender ! PeersClient.Response(fakePeer, ETHPackets.BlockBodies(BigInt(0), List(singleBlock.body)))
-      // Importer picks the block; this advances lastBlock to 6 so isOnTop becomes true
-      Thread.sleep(300L)
+      // Importer picks the block; this advances lastBlock to 6 so isOnTop becomes true.
+      // expectNoMessage gives BlockFetcher time to process the bodies and update state.
+      peersClient.expectNoMessage(300.millis)
       importer.send(blockFetcher.toClassic, PickBlocks(1, importer.ref))
       importer.expectMsgPF() { case BlockFetcher.PickedBlocks(_) => () }
-      Thread.sleep(100L)
-      // isOnTop=true now; PrintStatus should probe for block 7
+      // isOnTop=true now (set during PickBlocks processing above); PrintStatus should probe for block 7
       blockFetcher ! BlockFetcher.PrintStatus
       // Use fishForSpecificMessage to tolerate any intermediate messages (e.g. status logs)
       peersClient.fishForSpecificMessage() {

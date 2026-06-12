@@ -29,7 +29,16 @@ case class AccountTask(
     // coordinator re-queues this task on failure or proof-less empty response. When
     // it crosses MaxRequeuesPerTask the coordinator escalates via PivotStateUnservable
     // instead of looping forever.
-    var requeueCount: Int = 0
+    var requeueCount: Int = 0,
+    // Storage subtask tracking for large-storage contracts (spec 005).
+    // Maps accountHash → in-flight StorageTask subtasks for parallel slot-range download.
+    // Populated by StorageRangeCoordinator when continuation detected on first response.
+    // Analogous to go-ethereum accountTask.SubTasks (sync.go:303).
+    var storageSubs: Map[ByteString, Seq[StorageTask]] = Map.empty,
+    // Count of in-flight storage subtasks across all contracts in this account range.
+    // Decremented per subtask completion; when 0 the task is ready to forward.
+    // Analogous to go-ethereum accountTask.pend (sync.go:316).
+    var pend: Int = 0
 ) {
 
   /** Check if this task is completed */

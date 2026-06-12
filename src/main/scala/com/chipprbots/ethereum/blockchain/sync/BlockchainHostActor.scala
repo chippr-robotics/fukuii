@@ -28,7 +28,9 @@ import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.GetNodeData
 import com.chipprbots.ethereum.blockchain.sync.codec.MptNodeCodecs._
 import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.NodeData
 import com.chipprbots.ethereum.network.p2p.messages.ETHPackets
+import com.chipprbots.ethereum.rlp.RLPEncodeable
 import com.chipprbots.ethereum.rlp.RLPList
+import com.chipprbots.ethereum.rlp.encode
 import com.chipprbots.ethereum.transactions.PendingTransactionsManager
 import com.chipprbots.ethereum.transactions.PendingTransactionsManager.PendingTransactionsResponse
 
@@ -72,10 +74,11 @@ class BlockchainHostActor(
           val reqLabel = message match {
             case ETHPackets.GetBlockHeaders(_, block, max, _, _) =>
               s"GetBlockHeaders(start=${block.fold(_.toString, h => ByteStringUtils.hash2string(h).take(8))} max=$max)"
-            case ETHPackets.GetBlockBodies(_, hashes) => s"GetBlockBodies(${hashes.size})"
-            case ETHPackets.GetReceipts(_, hashes)    => s"GetReceipts(${hashes.size})"
-            case ETHPackets.GetReceipts69(_, hashes)  => s"GetReceipts69(${hashes.size})"
-            case other                                => other.getClass.getSimpleName
+            case ETHPackets.GetBlockBodies(_, hashes)          => s"GetBlockBodies(${hashes.size})"
+            case ETHPackets.GetReceipts(_, hashes)             => s"GetReceipts(${hashes.size})"
+            case ETHPackets.GetReceipts69(_, hashes)           => s"GetReceipts69(${hashes.size})"
+            case ETHPackets.GetReceipts70(_, firstIdx, hashes) => s"GetReceipts70(${hashes.size} firstIdx=$firstIdx)"
+            case other                                         => other.getClass.getSimpleName
           }
           log.debug("BLOCK-SERVE: peer={} req={}", peerId, reqLabel)
         }
@@ -158,6 +161,49 @@ class BlockchainHostActor(
       val receiptsRLP = RLPList(receipts.map(rs => RLPList(rs.map(_.toRLPEncodable): _*)): _*)
       log.info("HOST_RECEIPTS_ETH69: requestId={} blocks={} (bloom-absent, EIP-7642)", requestId, receipts.size)
       Some(ETHPackets.Receipts69(requestId, receiptsRLP))
+
+    // ETH70 GetReceipts — partial receipt delivery per EIP-7706.
+    // firstBlockReceiptIndex: skip already-received receipts in the first block (client resume).
+    // Applies 2 MiB soft limit per-receipt; sets lastBlockIncomplete=true when a block is truncated.
+    case ETHPackets.GetReceipts70(requestId, firstBlockReceiptIndex, blockHashes) =>
+      import ETHPackets.ReceiptBloomFreeEnc
+      val MaxResponseBytes = 2L * 1024 * 1024 // 2 MiB soft limit per EIP-7706
+
+      // State: (accumulated per-block RLP lists, lastBlockIncomplete, cumulative bytes, done flag)
+      val (blockReceiptLists, lastBlockIncomplete, _, _) =
+        blockHashes
+          .take(peerConfiguration.fastSyncHostConfiguration.maxReceiptsPerMessage)
+          .zipWithIndex
+          .foldLeft((Vector.empty[RLPList], false, 0L, false)) {
+            case (acc @ (_, _, _, true), _) => acc // already truncated mid-block — skip remaining
+            case ((lists, _, cumBytes, false), (hash, blockIdx)) =>
+              blockchainReader.getReceiptsByHash(hash) match {
+                case None => (lists, false, cumBytes, false) // unknown block — skip silently
+                case Some(receipts) =>
+                  val toServe = if (blockIdx == 0) receipts.drop(firstBlockReceiptIndex.toInt) else receipts
+                  // Encode per receipt, truncate at 2 MiB, track whether we finished the block
+                  val (fittingEncs, incomplete, newBytes) =
+                    toServe.foldLeft((Vector.empty[RLPEncodeable], false, cumBytes)) {
+                      case (acc2 @ (_, true, _), _) => acc2
+                      case ((encs, false, cb), receipt) =>
+                        val enc = receipt.toRLPEncodable
+                        val encBytes = encode(enc).length.toLong
+                        if (cb + encBytes > MaxResponseBytes) (encs, true, cb)
+                        else (encs :+ enc, false, cb + encBytes)
+                    }
+                  val blockRLP = RLPList(fittingEncs.map(e => e): _*)
+                  (lists :+ blockRLP, incomplete, newBytes, incomplete)
+              }
+          }
+
+      val receiptsRLP = RLPList(blockReceiptLists: _*)
+      log.info(
+        "HOST_RECEIPTS_ETH70: requestId={} blocks={} incomplete={}",
+        requestId,
+        blockReceiptLists.size,
+        lastBlockIncomplete
+      )
+      Some(ETHPackets.Receipts70(requestId, lastBlockIncomplete, receiptsRLP))
 
     // ETH68 GetBlockBodies (via ETHPackets)
     case ETHPackets.GetBlockBodies(requestId, hashes) =>

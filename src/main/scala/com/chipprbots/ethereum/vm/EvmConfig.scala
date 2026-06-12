@@ -110,6 +110,7 @@ object EvmConfig {
   val MagnetoOpCodes: OpCodeList = PhoenixOpCodes
   val SpiralOpCodes: OpCodeList = OpCodeList(OpCodes.SpiralOpCodes)
   val OlympiaOpCodes: OpCodeList = OpCodeList(OpCodes.OlympiaOpCodes)
+  val EtcOlympiaOpCodes: OpCodeList = OpCodeList(OpCodes.EtcOlympiaOpCodes)
   val OsakaOpCodes: OpCodeList = OpCodeList(OpCodes.OsakaOpCodes)
 
   val FrontierConfigBuilder: EvmConfigBuilder = config =>
@@ -215,7 +216,7 @@ object EvmConfig {
 
   val OlympiaConfigBuilder: EvmConfigBuilder = config =>
     SpiralConfigBuilder(config).copy(
-      opCodeList = OlympiaOpCodes,
+      opCodeList = EtcOlympiaOpCodes,
       feeSchedule = new FeeSchedule.OlympiaFeeSchedule,
       eip6780Enabled = true
     )

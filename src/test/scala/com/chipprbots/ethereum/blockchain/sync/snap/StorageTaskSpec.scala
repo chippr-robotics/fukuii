@@ -95,6 +95,60 @@ class StorageTaskSpec extends AnyFlatSpec with Matchers {
     cont.next shouldBe expected
   }
 
+  // ---- createSubTasks ---------------------------------------------------
+
+  "StorageTask.createSubTasks" should "return a single task when numChunks=1" taggedAs UnitTest in {
+    val subtasks = StorageTask.createSubTasks(accountHash, storageRoot, zeros32, maxHash32, 1)
+    subtasks.size shouldBe 1
+    subtasks.head.next shouldBe zeros32
+    subtasks.head.last shouldBe maxHash32
+  }
+
+  it should "produce 16 non-overlapping consecutive ranges covering [from, to]" taggedAs UnitTest in {
+    val subtasks = StorageTask.createSubTasks(accountHash, storageRoot, zeros32, maxHash32, 16)
+    subtasks.size shouldBe 16
+
+    // First task starts at from
+    subtasks.head.next shouldBe zeros32
+    // Last task ends at to
+    subtasks.last.last shouldBe maxHash32
+
+    // Each consecutive pair: previous.last + 1 == next.next
+    subtasks.sliding(2).foreach {
+      case Seq(a, b) =>
+        val aLastPlusOne = StorageTask.incrementHash32(a.last)
+        aLastPlusOne shouldBe b.next
+      case _ => // single element
+    }
+  }
+
+  it should "bind accountHash and storageRoot on every subtask" taggedAs UnitTest in {
+    val subtasks = StorageTask.createSubTasks(accountHash, storageRoot, zeros32, maxHash32, 4)
+    subtasks.foreach { st =>
+      st.accountHash shouldBe accountHash
+      st.storageRoot shouldBe storageRoot
+    }
+  }
+
+  it should "cover full keyspace with no gaps and no overlap on boundary values" taggedAs UnitTest in {
+    // Partial range: from=0x00...01, to=0x00...10
+    val from = ByteString(Array.fill(31)(0x00.toByte) :+ 0x01.toByte)
+    val to = ByteString(Array.fill(31)(0x00.toByte) :+ 0x10.toByte)
+    val subtasks = StorageTask.createSubTasks(accountHash, storageRoot, from, to, 4)
+    subtasks.size shouldBe 4
+    subtasks.head.next shouldBe from
+    subtasks.last.last shouldBe to
+    subtasks.sliding(2).foreach {
+      case Seq(a, b) => StorageTask.incrementHash32(a.last) shouldBe b.next
+      case _         =>
+    }
+  }
+
+  it should "require numChunks > 0" taggedAs UnitTest in {
+    an[IllegalArgumentException] should be thrownBy
+      StorageTask.createSubTasks(accountHash, storageRoot, zeros32, maxHash32, 0)
+  }
+
   // ---- progress / status ------------------------------------------------
 
   "StorageTask.progress" should "return 0.0 initially" taggedAs UnitTest in {

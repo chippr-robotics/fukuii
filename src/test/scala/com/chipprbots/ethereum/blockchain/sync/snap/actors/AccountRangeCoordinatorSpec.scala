@@ -321,47 +321,6 @@ class AccountRangeCoordinatorSpec
     controller.expectMsg(2.seconds, SNAPSyncController.ProgressAccountsTrieFinalized)
   }
 
-  it should "drop a stale TrieFlushAsyncComplete (periodic flush) and return to normal receive" taggedAs UnitTest in {
-    val controller = TestProbe()
-    val coord = newCoordinator(controller = controller)
-
-    coord.underlyingActor.trieFlushGeneration = 4L
-    coord.underlyingActor.context.become(coord.underlyingActor.flushing)
-
-    val staleGen = 2L
-
-    coord ! AccountRangeCoordinator.TrieFlushAsyncComplete(staleGen, persistedRoot = None, elapsedMs = 5L)
-
-    // The handler self-sends CheckCompletion, which can produce a ProgressAccountEstimate when
-    // tasks exist — for a fresh coordinator with empty tasks no message is emitted.
-    controller.expectNoMessage(300.millis)
-
-    // After dropping the stale completion the actor must be back on the normal receive,
-    // i.e. ready to handle a regular query.
-    coord ! Messages.GetProgress
-    expectMsgType[AccountRangeStats](2.seconds)
-
-    system.stop(coord)
-  }
-
-  it should "drop a stale TrieFlushAsyncFailed and return to normal receive" taggedAs UnitTest in {
-    val controller = TestProbe()
-    val coord = newCoordinator(controller = controller)
-
-    coord.underlyingActor.trieFlushGeneration = 9L
-    coord.underlyingActor.context.become(coord.underlyingActor.flushing)
-
-    coord ! AccountRangeCoordinator.TrieFlushAsyncFailed(generation = 8L, error = "stale failure")
-
-    controller.expectNoMessage(300.millis)
-
-    // Confirm we left `flushing` and are back on normal receive.
-    coord ! Messages.GetProgress
-    expectMsgType[AccountRangeStats](2.seconds)
-
-    system.stop(coord)
-  }
-
   it should "ignore Status.Failure during finalisation by stopping the actor" taggedAs UnitTest in {
     val controller = TestProbe()
     val coord = newCoordinator(controller = controller)
@@ -1163,17 +1122,14 @@ class AccountRangeCoordinatorSpec
   }
 
   // -----------------------------------------------------------------------
-  // StackTrie write-path (Step 3 of `snap-stacktrie-port` plan)
+  // StackTrie write-path
   // -----------------------------------------------------------------------
-  // The legacy MPT path stays the default and is exercised by every other
-  // test above. These tests opt-in via `useStackTrie = true` and verify:
+  // All coordinators now use the StackTrie path unconditionally. These tests verify:
   //   - per-task SnapHashTrie instances are created lazily on first chunk store
-  //   - accounts are routed through the StackTrie (writes hit mptStorage via
-  //     storeRawNodes; the legacy `stateTrie` field stays empty)
+  //   - accounts are routed through the StackTrie (writes hit mptStorage via storeRawNodes)
   //   - on task completion the StackTrie is committed and removed from the
   //     per-task map (no leaks across tasks)
 
-  /** Construct a TestActorRef coordinator with `useStackTrie = true`. */
   private def newStackTrieCoordinator(
       stateRoot: ByteString,
       controller: TestProbe = TestProbe(),
@@ -1188,8 +1144,7 @@ class AccountRangeCoordinatorSpec
         mptStorage = storage,
         concurrency = concurrency,
         snapSyncController = controller.ref,
-        accountTrieEcOverride = Some(system.dispatcher),
-        useStackTrie = true
+        accountTrieEcOverride = Some(system.dispatcher)
       )
     )
     (ref, storage)
@@ -1213,7 +1168,7 @@ class AccountRangeCoordinatorSpec
     }
   }
 
-  it should "route account inserts through per-task SnapHashTrie when useStackTrie is enabled" taggedAs UnitTest in {
+  it should "route account inserts through per-task SnapHashTrie" taggedAs UnitTest in {
     val root = kec256(ByteString("stacktrie-test-root"))
     val (coord, storage) = newStackTrieCoordinator(stateRoot = root)
     val ua = coord.underlyingActor
@@ -1223,9 +1178,7 @@ class AccountRangeCoordinatorSpec
       rootHash = root
     )
     val accounts = stackTrieFixtureAccounts(task, 8)
-    val nodesBefore = storage.synchronized { /* peek size via decode-then-count */
-      0
-    }
+    val _ = storage // suppress unused warning
 
     // Drive the chunk-store path directly. isTaskRangeComplete = false (more responses
     // could follow for this range), so the per-task SnapHashTrie should remain in the map.
@@ -1234,9 +1187,6 @@ class AccountRangeCoordinatorSpec
     expectMsgType[AccountRangeStats](2.seconds)
 
     (ua.taskStackTries should contain).key(task.last)
-    // No global stateTrie touch — its root should still be the empty-root hash.
-    ByteString(ua.getStateRoot.toArray) shouldEqual ByteString(MerklePatriciaTrie.EmptyRootHash)
-    val _ = nodesBefore // suppress unused warning while the storage poking is a no-op
 
     system.stop(coord)
   }
@@ -1263,27 +1213,6 @@ class AccountRangeCoordinatorSpec
     system.stop(coord)
   }
 
-  it should "not touch legacy stateTrie or accountsSinceLastFlush on the StackTrie path" taggedAs UnitTest in {
-    val root = kec256(ByteString("stacktrie-isolation-root"))
-    val (coord, _) = newStackTrieCoordinator(stateRoot = root)
-    val ua = coord.underlyingActor
-    val task = AccountTask(
-      next = ByteString(Array.fill[Byte](32)(0x00)),
-      last = ByteString(Array.fill[Byte](32)(0xff.toByte)),
-      rootHash = root
-    )
-    val accounts = stackTrieFixtureAccounts(task, 12)
-
-    coord ! Messages.StoreAccountChunk(task, accounts, accounts.size, storedSoFar = 0, isTaskRangeComplete = false)
-    coord ! Messages.GetProgress
-    expectMsgType[AccountRangeStats](2.seconds)
-
-    // Legacy stateTrie root stays at the empty-root hash.
-    ByteString(ua.getStateRoot.toArray) shouldEqual ByteString(MerklePatriciaTrie.EmptyRootHash)
-
-    system.stop(coord)
-  }
-
   it should "re-download a PARTIAL range from start on the StackTrie path (2026-06-01 restart-durability fix)" taggedAs UnitTest in {
     // A partial range's saved mid-range cursor is NOT safe to resume on the StackTrie path:
     // the per-task SnapHashTrie is in-memory + write-only and lost on restart, so a fresh trie
@@ -1306,8 +1235,7 @@ class AccountRangeCoordinatorSpec
         concurrency = 1, // single range so we can predict task.last
         snapSyncController = TestProbe().ref,
         resumeProgress = Map(rangeLast -> resumedNext),
-        accountTrieEcOverride = Some(system.dispatcher),
-        useStackTrie = true
+        accountTrieEcOverride = Some(system.dispatcher)
       )
     )
     val ua = coord.underlyingActor
@@ -1342,8 +1270,7 @@ class AccountRangeCoordinatorSpec
         concurrency = 1,
         snapSyncController = TestProbe().ref,
         resumeProgress = Map(rangeLast -> rangeLast), // savedNext == last => fully complete
-        accountTrieEcOverride = Some(system.dispatcher),
-        useStackTrie = true
+        accountTrieEcOverride = Some(system.dispatcher)
       )
     )
     val ua = coord.underlyingActor

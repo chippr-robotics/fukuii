@@ -17,7 +17,9 @@ import com.chipprbots.ethereum.db.storage.{
   HealingFrontierStorage,
   MptStorage,
   Namespaces,
+  PathNodeStorage,
   RocksDbBfsQueueStorage,
+  SnapSyncProgressStorage,
   StateStorage
 }
 import com.chipprbots.ethereum.domain.{Block, BlockBody, BlockHeader, BlockchainReader, BlockchainWriter, ChainWeight}
@@ -56,12 +58,25 @@ class SNAPSyncController(
 
   import SNAPSyncController._
 
+  // SNAP download progress storage (namespace 'p'). Shares the same RocksDB DataSource as
+  // AppStateStorage but uses a dedicated namespace so progress survives crash-restart without
+  // interfering with other state. Replaces AppStateStorage's plain-text SnapSyncProgress entry
+  // (namespace 's', account-only). Storage cursor persistence is new.
+  private val snapProgressStorage = new SnapSyncProgressStorage(appStateStorage.dataSource)
+
   log.info("SNAPSyncController started with shared blacklist (cross-mode penalty propagation enabled)")
 
   // Writable MptStorage, lazily created when pivot block number is known.
   // Uses getBackingStorage(pivotBlockNumber) to ensure nodes are tagged with the
   // correct block number for proper reference counting in pruning modes.
   private var mptStorage: Option[MptStorage] = None
+
+  // PathScheme: create PathNodeStorage backed by the same RocksDB data source as flat storage.
+  // None for HashScheme (default/ETC). Shared across coordinator restarts (data source is long-lived).
+  private val pathNodeStorageOpt: Option[PathNodeStorage] =
+    if (snapSyncConfig.storageScheme == StorageScheme.Path)
+      Some(new PathNodeStorage(flatSlotStorage.dataSource))
+    else None
 
   private def getOrCreateMptStorage(pivotBlockNumber: BigInt): MptStorage =
     mptStorage.getOrElse {
@@ -435,14 +450,37 @@ class SNAPSyncController(
   private var lastAccountsDownloaded: Long = 0
 
   override def preStart(): Unit = {
+    checkStorageSchemeMismatch()
     log.info("SNAP Sync Controller initialized")
     log.info(
-      s"SNAPSyncConfig: useStackTrie=${snapSyncConfig.useStackTrie}, " +
-        s"accountConcurrency=${snapSyncConfig.accountConcurrency}, " +
+      s"SNAPSyncConfig: accountConcurrency=${snapSyncConfig.accountConcurrency}, " +
         s"storageBatchSize=${snapSyncConfig.storageBatchSize}, " +
-        s"pivotBlockOffset=${snapSyncConfig.pivotBlockOffset}"
+        s"pivotBlockOffset=${snapSyncConfig.pivotBlockOffset}, " +
+        s"storageScheme=${snapSyncConfig.storageScheme}"
     )
     progressMonitor.startPeriodicLogging()
+  }
+
+  /** Guard: fail fast if the DB was written with PathScheme but config says HashScheme (or vice versa).
+    *
+    * Path-scheme data lives in [[Namespaces.StateTriePathNamespace]] (namespace 't'). We check for the root node at
+    * empty nibble path — HP([]) = 0x20. If it exists, a PathScheme SNAP sync was performed on this datadir. A
+    * HashScheme config at that point would silently ignore all path-keyed nodes, so we throw immediately.
+    *
+    * The reverse (HashScheme data + PathScheme config) is safe: PathScheme simply ignores the existing hash-keyed nodes
+    * and starts fresh. No silent data loss — just wasted disk space.
+    */
+  private def checkStorageSchemeMismatch(): Unit = {
+    val emptyHp = com.chipprbots.ethereum.mpt.HexPrefix.encode(Array.empty[Byte], isLeaf = false)
+    val hasPathRoot = flatSlotStorage.dataSource
+      .getOptimized(Namespaces.StateTriePathNamespace, emptyHp)
+      .isDefined
+    if (hasPathRoot && snapSyncConfig.storageScheme == StorageScheme.Hash)
+      throw new IllegalStateException(
+        "Storage scheme mismatch: DB contains path-scheme account trie data (root at empty path) " +
+          "but config has storage-scheme = hash. " +
+          "Either set storage-scheme = path in snap-sync config, or wipe the datadir and resync."
+      )
   }
 
   override def postStop(): Unit = {
@@ -666,9 +704,16 @@ class SNAPSyncController(
       log.info(
         s"Preserved account range progress: ${progress.size} ranges ($completedCount fully complete)"
       )
-      // Persist to disk for crash recovery
+      // Persist to disk for crash recovery. writeAccountCursors preserves any storage cursors
+      // written concurrently by StorageRangeCoordinator (read-modify-write on the same JSON blob).
       val effectivePivot = preservedAtPivotBlock.getOrElse(BigInt(0))
-      appStateStorage.putSnapSyncProgress(serializeSnapProgress(progress, effectivePivot)).commit()
+      stateRoot.foreach { sr =>
+        snapProgressStorage.writeAccountCursors(
+          sr,
+          effectivePivot.toLong,
+          progress.map { case (k, v) => k.toHex -> v.toHex }
+        )
+      }
 
     case ProgressAccountsFinalizingTrie =>
       progressMonitor.setFinalizingTrie(true)
@@ -955,7 +1000,7 @@ class SNAPSyncController(
         }
 
         // Clear persisted range progress — account phase is done, no need to resume it
-        appStateStorage.putSnapSyncProgress("").commit()
+        stateRoot.foreach(snapProgressStorage.clearProgress)
         preservedRangeProgress = Map.empty
         preservedAtPivotBlock = None
 
@@ -1829,7 +1874,10 @@ class SNAPSyncController(
                       initialResponseBytes = snapSyncConfig.storageInitialResponseBytes,
                       minResponseBytes = snapSyncConfig.storageMinResponseBytes,
                       deferredMerkleization = snapSyncConfig.deferredMerkleization,
-                      maxConcurrentStorageAccounts = snapSyncConfig.maxConcurrentStorageAccounts
+                      maxConcurrentStorageAccounts = snapSyncConfig.maxConcurrentStorageAccounts,
+                      snapProgressStorage = Some(snapProgressStorage),
+                      storageScheme = snapSyncConfig.storageScheme,
+                      pathNodeStorage = pathNodeStorageOpt
                     )
                     .withDispatcher("sync-dispatcher"),
                   s"storage-range-coordinator-$coordinatorGeneration"
@@ -2465,7 +2513,7 @@ class SNAPSyncController(
     progressMonitor.stopPeriodicLogging()
 
     // Clear persisted SNAP progress — fast sync will start fresh
-    appStateStorage.putSnapSyncProgress("").commit()
+    stateRoot.foreach(snapProgressStorage.clearProgress)
     appStateStorage
       .putSnapSyncAccountsComplete(false)
       .and(appStateStorage.putSnapSyncStorageComplete(false))
@@ -2739,24 +2787,57 @@ class SNAPSyncController(
     // but large drift means the state may have changed significantly.
     val currentPivot = pivotBlock.getOrElse(BigInt(0))
 
-    // Try disk recovery first (cross-process restart), then fall back to in-memory
+    // Try disk recovery first (cross-process restart), then fall back to in-memory.
+    // Primary source: SnapSyncProgressStorage (namespace 'p', JSON, account + storage cursors).
+    // Migration fallback: AppStateStorage plain-text (namespace 's', account-only, written by older builds).
     if (preservedRangeProgress.isEmpty) {
-      appStateStorage.getSnapSyncProgress().foreach { saved =>
-        deserializeSnapProgress(saved).foreach { case (savedPivot, savedRanges) =>
-          if (savedRanges.nonEmpty && (currentPivot - savedPivot).abs <= MaxPreservedPivotDistance) {
+      snapProgressStorage.readProgress(rootHash) match {
+        case Some(saved) if saved.accountCursors.nonEmpty =>
+          val savedPivot = BigInt(saved.pivotBlock)
+          if ((currentPivot - savedPivot).abs <= MaxPreservedPivotDistance) {
+            val ranges = saved.accountCursors.flatMap { case (lastHex, nextHex) =>
+              for {
+                lastBs <- Try(ByteString(Hex.decode(lastHex))).toOption
+                nextBs <- Try(ByteString(Hex.decode(nextHex))).toOption
+              } yield lastBs -> nextBs
+            }
             log.info(
-              s"Recovered ${savedRanges.size} account ranges from disk " +
+              s"Recovered ${ranges.size} account ranges from SnapSyncProgressStorage " +
                 s"(saved pivot=$savedPivot, current=$currentPivot, drift=${(currentPivot - savedPivot).abs})"
             )
-            preservedRangeProgress = savedRanges
+            preservedRangeProgress = ranges
             preservedAtPivotBlock = Some(savedPivot)
-          } else if (savedRanges.nonEmpty) {
+          } else if (saved.accountCursors.nonEmpty) {
             log.info(
-              s"Discarding stale disk progress: pivot drifted ${(currentPivot - savedPivot).abs} blocks " +
+              s"Discarding stale SnapSyncProgressStorage: pivot drifted ${(currentPivot - savedPivot).abs} blocks " +
                 s"(>${MaxPreservedPivotDistance})"
             )
           }
-        }
+        case _ =>
+          // Migration fallback: read legacy AppStateStorage plain-text format (one-time, older builds)
+          appStateStorage.getSnapSyncProgress().foreach { saved =>
+            deserializeSnapProgress(saved).foreach { case (savedPivot, savedRanges) =>
+              if (savedRanges.nonEmpty && (currentPivot - savedPivot).abs <= MaxPreservedPivotDistance) {
+                log.info(
+                  s"Migrated ${savedRanges.size} account ranges from legacy AppStateStorage " +
+                    s"(saved pivot=$savedPivot, current=$currentPivot, drift=${(currentPivot - savedPivot).abs})"
+                )
+                preservedRangeProgress = savedRanges
+                preservedAtPivotBlock = Some(savedPivot)
+                // Write to new storage immediately so subsequent restarts use the new format
+                snapProgressStorage.writeAccountCursors(
+                  rootHash,
+                  savedPivot.toLong,
+                  savedRanges.map { case (k, v) => k.toHex -> v.toHex }
+                )
+              } else if (savedRanges.nonEmpty) {
+                log.info(
+                  s"Discarding stale legacy AppStateStorage progress: pivot drifted " +
+                    s"${(currentPivot - savedPivot).abs} blocks (>${MaxPreservedPivotDistance})"
+                )
+              }
+            }
+          }
       }
     }
 
@@ -2776,7 +2857,7 @@ class SNAPSyncController(
         )
         preservedRangeProgress = Map.empty
         preservedAtPivotBlock = None
-        appStateStorage.putSnapSyncProgress("").commit()
+        snapProgressStorage.clearProgress(rootHash)
         Map.empty
       case None =>
         Map.empty
@@ -2801,10 +2882,10 @@ class SNAPSyncController(
             resumeProgress = resumeProgress,
             initialMaxInFlightPerPeer =
               5, // Full per-peer budget during AccountRangeSync (storage+bytecode deferred to 0)
-            trieFlushThreshold = snapSyncConfig.accountTrieFlushThreshold,
             initialResponseBytes = snapSyncConfig.accountInitialResponseBytes,
             minResponseBytes = snapSyncConfig.accountMinResponseBytes,
-            useStackTrie = snapSyncConfig.useStackTrie
+            storageScheme = snapSyncConfig.storageScheme,
+            pathNodeStorage = pathNodeStorageOpt
           )
           .withDispatcher("sync-dispatcher"),
         s"account-range-coordinator-$coordinatorGeneration"
@@ -2887,7 +2968,10 @@ class SNAPSyncController(
               initialResponseBytes = snapSyncConfig.storageInitialResponseBytes,
               minResponseBytes = snapSyncConfig.storageMinResponseBytes,
               deferredMerkleization = snapSyncConfig.deferredMerkleization,
-              maxConcurrentStorageAccounts = snapSyncConfig.maxConcurrentStorageAccounts
+              maxConcurrentStorageAccounts = snapSyncConfig.maxConcurrentStorageAccounts,
+              snapProgressStorage = Some(snapProgressStorage),
+              storageScheme = snapSyncConfig.storageScheme,
+              pathNodeStorage = pathNodeStorageOpt
             )
             .withDispatcher("sync-dispatcher"),
           s"storage-range-coordinator-$coordinatorGeneration"
@@ -3223,7 +3307,9 @@ class SNAPSyncController(
               visitedCap = snapSyncConfig.healingVisitedCap,
               healingFrontierStorage = healingFrontierStorageOpt,
               traversalParallelism = snapSyncConfig.healingTraversalParallelism,
-              bfsQueueStorageOpt = Some(bfsQueueStorage)
+              bfsQueueStorageOpt = Some(bfsQueueStorage),
+              storageScheme = snapSyncConfig.storageScheme,
+              pathNodeStorageOpt = pathNodeStorageOpt
             )
             .withDispatcher("sync-dispatcher"),
           s"trie-node-healing-coordinator-$coordinatorGeneration"
@@ -3280,7 +3366,9 @@ class SNAPSyncController(
                   visitedCap = snapSyncConfig.healingVisitedCap,
                   healingFrontierStorage = healingFrontierStorageOpt,
                   traversalParallelism = snapSyncConfig.healingTraversalParallelism,
-                  bfsQueueStorageOpt = Some(bfsQueueStorage)
+                  bfsQueueStorageOpt = Some(bfsQueueStorage),
+                  storageScheme = snapSyncConfig.storageScheme,
+                  pathNodeStorageOpt = pathNodeStorageOpt
                 )
                 .withDispatcher("sync-dispatcher"),
               s"trie-node-healing-coordinator-$coordinatorGeneration"
@@ -3811,9 +3899,11 @@ class SNAPSyncController(
     if (preservedAtPivotBlock.isDefined) {
       preservedAtPivotBlock = Some(newPivotBlock)
       if (preservedRangeProgress.nonEmpty) {
-        appStateStorage
-          .putSnapSyncProgress(serializeSnapProgress(preservedRangeProgress, newPivotBlock))
-          .commit()
+        snapProgressStorage.writeAccountCursors(
+          newStateRoot,
+          newPivotBlock.toLong,
+          preservedRangeProgress.map { case (k, v) => k.toHex -> v.toHex }
+        )
       }
     }
     stateRoot = Some(newStateRoot)
@@ -4338,23 +4428,7 @@ class SNAPSyncController(
 
   // --- SNAP progress persistence helpers ---
 
-  /** Serialize range progress + pivot block to a simple key=value format for AppStateStorage. Format:
-    * "pivotBlock=<N>\n<hexLast>=<hexNext>\n..." Deliberately simple — no JSON library dependency needed for 4-16
-    * entries.
-    */
-  private def serializeSnapProgress(
-      progress: Map[ByteString, ByteString],
-      pivot: BigInt
-  ): String = {
-    val sb = new StringBuilder
-    sb.append("pivotBlock=").append(pivot.toString).append('\n')
-    progress.foreach { case (last, next) =>
-      sb.append(last.toHex).append('=').append(next.toHex).append('\n')
-    }
-    sb.toString
-  }
-
-  /** Deserialize range progress from AppStateStorage format.
+  /** Deserialize range progress from legacy AppStateStorage plain-text format (migration fallback).
     * @return
     *   (pivotBlock, rangeProgress) or None if parsing fails
     */
@@ -4618,7 +4692,6 @@ case class SNAPSyncConfig(
     // non-snap peers faster.
     accountStagnationTimeout: FiniteDuration = 10.minutes,
     maxInFlightPerPeer: Int = 5,
-    accountTrieFlushThreshold: Int = 50000,
     accountInitialResponseBytes: Int = 524288,
     accountMinResponseBytes: Int = 102400,
     chainDownloadEnabled: Boolean = true,
@@ -4659,23 +4732,20 @@ case class SNAPSyncConfig(
     // disconnect after storage phase but are needed for trie node healing.
     // Format: enode://PUBKEY@HOST:PORT
     snapServerPeers: List[java.net.URI] = Nil,
-    /** Phase 2 of the SNAP rewrite (`snap-stacktrie-port` plan).
-      *
-      * When `true`, the SNAP write path uses streaming `SnapHashTrie` (one per AccountTask, one per storage contract)
-      * instead of the legacy `MerklePatriciaTrie` + `DeferredWriteMptStorage` approach. Memory is bounded by trie depth
-      * rather than account count; the multi-GiB in-memory pivot trie and its 13.6-minute collapse are eliminated.
-      *
-      * Default `false` — opt in via `sync.snap-sync.use-stack-trie = true` in sync.conf for testing. Will become the
-      * default once Sepolia + Mordor validation completes (Step 5 of the plan).
-      */
-    useStackTrie: Boolean = false,
     /** Cap on per-account streaming storage tries held in memory at once. Each `SnapHashTrie` wrapper bounds its own
       * working set to ~8 MiB (`SnapHashTrie.DefaultBatchSizeBytes`), so the worst-case storage-processing footprint is
       * `maxConcurrentStorageAccounts × 8 MiB`. Default 256 → ~2 GiB ceiling, independent of chain size. Storage
       * dispatch defers new-account requests when at the cap; continuations for in-flight accounts still proceed. Raise
       * via `sync.snap-sync.max-concurrent-storage-accounts` for larger peer pools.
       */
-    maxConcurrentStorageAccounts: Int = 256
+    maxConcurrentStorageAccounts: Int = 256,
+    /** Trie node storage scheme. `Hash` (default) for ETC — nodes keyed by keccak256, no pruning needed. `Path` for ETH
+      * full nodes — nodes keyed by nibble path, enabling inline pruning.
+      *
+      * Override via `sync.snap-sync.storage-scheme = "path"` in the HOCON config. Do NOT add an explicit `= "hash"` to
+      * ETC configs; the default is Hash and the DB is scheme-locked on first write (startup guard enforces this).
+      */
+    storageScheme: StorageScheme = StorageScheme.Hash
 )
 
 object SNAPSyncConfig {
@@ -4738,10 +4808,6 @@ object SNAPSyncConfig {
         if (snapConfig.hasPath("max-inflight-per-peer"))
           snapConfig.getInt("max-inflight-per-peer")
         else 5,
-      accountTrieFlushThreshold =
-        if (snapConfig.hasPath("account-trie-flush-threshold"))
-          snapConfig.getInt("account-trie-flush-threshold")
-        else 50000,
       accountInitialResponseBytes =
         if (snapConfig.hasPath("account-initial-response-bytes"))
           snapConfig.getInt("account-initial-response-bytes")
@@ -4817,14 +4883,14 @@ object SNAPSyncConfig {
               catch { case _: Exception => None }
             }
         else Nil,
-      useStackTrie =
-        if (snapConfig.hasPath("use-stack-trie"))
-          snapConfig.getBoolean("use-stack-trie")
-        else false,
       maxConcurrentStorageAccounts =
         if (snapConfig.hasPath("max-concurrent-storage-accounts"))
           snapConfig.getInt("max-concurrent-storage-accounts")
-        else 256
+        else 256,
+      storageScheme =
+        if (snapConfig.hasPath("storage-scheme"))
+          StorageScheme.fromString(snapConfig.getString("storage-scheme"))
+        else StorageScheme.Hash
     )
   }
 }

@@ -11,7 +11,7 @@ import scala.math.Ordered.orderingToOrdered
 
 import com.chipprbots.ethereum.blockchain.sync.snap._
 import com.chipprbots.ethereum.db.dataSource.DataSourceBatchUpdate
-import com.chipprbots.ethereum.db.storage.{FlatSlotStorage, MptStorage}
+import com.chipprbots.ethereum.db.storage.{FlatSlotStorage, MptStorage, PathNodeStorage, SnapSyncProgressStorage}
 import com.chipprbots.ethereum.network.Peer
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor
 import com.chipprbots.ethereum.network.p2p.MessageSerializable
@@ -67,7 +67,10 @@ class StorageRangeCoordinator(
     // worst-case storage-processing footprint is `maxConcurrentStorageAccounts × 8 MiB`. Default
     // 256 → ~2 GiB ceiling, independent of chain size. Raise via sync.conf if the peer pool
     // can justify a larger working set; lower if running with smaller `-Xmx`.
-    maxConcurrentStorageAccounts: Int = 256
+    maxConcurrentStorageAccounts: Int = 256,
+    snapProgressStorage: Option[SnapSyncProgressStorage] = None,
+    storageScheme: StorageScheme = StorageScheme.Hash,
+    pathNodeStorage: Option[PathNodeStorage] = None
 ) extends Actor
     with ActorLogging {
 
@@ -97,7 +100,27 @@ class StorageRangeCoordinator(
   // continuations expected" transition, so this is bounded by the number of contracts in the snapshot
   // rather than the number of range requests issued — replaces the previously unbounded
   // `completedAccountHashes: Set[ByteString]` and its O(N²) progress-rebuild.
-  private var completedAccountCount: Long = 0L
+  private[actors] var completedAccountCount: Long = 0L
+
+  // ========================================
+  // Large-storage subtask parallelism (spec 005)
+  // ========================================
+  // When a contract's first SNAP response returns a continuation proof (more slots exist),
+  // StorageRangeCoordinator splits the remaining slot range into N parallel subtasks.
+  // Mirrors go-ethereum accountTask.SubTasks / cleanStorageTasks() (sync.go:299-330, 982-1015).
+  //
+  // accountSubtaskCounters: accountHash → (totalSubtasks, completedSubtasks).
+  // completedAccountCount is only incremented once ALL subtasks for an account finish.
+  private[actors] val accountSubtaskCounters: scala.collection.mutable.Map[ByteString, (Int, Int)] =
+    scala.collection.mutable.Map.empty
+
+  // Number of parallel subtasks to create per large-storage contract.
+  // Matches go-ethereum storageConcurrency = 16 (sync.go:108).
+  private val storageConcurrency: Int = 16
+
+  // Maximum SNAP request payload (bytes). Used for downsampling N when slots are few.
+  // Matches go-ethereum maxRequestSize = 512 KB (sync.go:56).
+  private val maxRequestBytes: Int = 512 * 1024
 
   // ========================================
   // Storage Queue Backpressure (#1232 follow-up — sepolia OOM)
@@ -422,16 +445,30 @@ class StorageRangeCoordinator(
     * response (no continuation), reset on abort. Bounded by `maxConcurrentStorageAccounts` via the dispatch gate in
     * `requestNextRanges`.
     */
-  private[actors] val pendingAccountTries: mutable.Map[ByteString, SnapHashTrie] = mutable.Map.empty
+  private[actors] val pendingAccountTries: mutable.Map[ByteString, SnapTrie] = mutable.Map.empty
 
-  /** Get-or-create the per-account `SnapHashTrie`. Each contract's trie streams emitted nodes through
-    * `mptStorage.storeRawNodes`, which routes via `FastSyncNodeStorage` to pick up pivot-block-number tagging for
-    * pruning. Modelled on `AccountRangeCoordinator.getOrCreateTaskStackTrie`.
+  /** Get-or-create the per-account [[SnapTrie]]. Each contract's trie streams emitted nodes to storage.
+    *
+    * HashScheme (default): nodes flush to `mptStorage` via `storeRawNodes`. PathScheme: nodes written path-keyed to
+    * `PathNodeStorage`, scoped by `accountHash` (so multiple storage tries don't collide on path keys).
     */
-  private def getOrCreateAccountTrie(accountHash: ByteString): SnapHashTrie =
+  private def getOrCreateAccountTrie(accountHash: ByteString): SnapTrie =
     pendingAccountTries.getOrElseUpdate(
       accountHash,
-      new SnapHashTrie(batch => mptStorage.storeRawNodes(batch))
+      storageScheme match {
+        case StorageScheme.Hash =>
+          new SnapHashTrie(batch => mptStorage.storeRawNodes(batch))
+        case StorageScheme.Path =>
+          val pns = pathNodeStorage.getOrElse(
+            throw new IllegalStateException("PathScheme requires pathNodeStorage to be set")
+          )
+          new SnapPathTrie(
+            owner = accountHash,
+            skipLeftBoundary = false, // storage tasks are always fresh (no per-slot resume cursor)
+            writePath = (path, hash, blob) => pns.writeStorageNode(accountHash, path, hash, blob),
+            deleteExact = path => pns.deleteStorageNode(accountHash, path)
+          )
+      }
     )
 
   /** Commit a fully-downloaded contract trie. Compares the computed root against the task's claimed `storageRoot`;
@@ -1242,9 +1279,27 @@ class StorageRangeCoordinator(
 
             if (needsContinuation) {
               val lastSlot = accountSlots.last._1
-              val continuationTask = StorageTask.createContinuation(task, lastSlot)
-              this.tasks.enqueue(continuationTask)
-              log.debug(s"Created continuation task for account ${task.accountString} (partial range, proof present)")
+              if (accountSubtaskCounters.contains(task.accountHash)) {
+                // Already split into subtasks — this is a within-subtask continuation.
+                val cont = StorageTask.createContinuation(task, lastSlot)
+                this.tasks.enqueue(cont)
+                log.debug(s"Within-subtask continuation for account ${task.accountString}")
+              } else {
+                // First continuation for this account → split into N parallel subtasks.
+                val subtasks = createStorageSubTasks(task, lastSlot)
+                subtasks.foreach(st => this.tasks.enqueue(st))
+                accountSubtaskCounters(task.accountHash) = (subtasks.size, 0)
+                log.debug(
+                  s"Large-storage account ${task.accountString}: " +
+                    s"split into ${subtasks.size} parallel subtasks"
+                )
+              }
+              // Persist the advancing storage cursor for crash recovery. Best-effort: concurrent
+              // subtask writes for the same account may race, but worst case is a partial
+              // re-download on resume, never data corruption.
+              snapProgressStorage.foreach(
+                _.writeStorageCursor(stateRoot, task.accountHash, StorageTask.incrementHash32(lastSlot))
+              )
             } else {
               // Account fully downloaded — commit the streaming trie if one exists.
               // For deferred-merkleization mode no trie was built; flat-slot writes alone
@@ -1261,7 +1316,11 @@ class StorageRangeCoordinator(
                     s"root=${computedRoot.take(4).toHex}"
                 )
               }
-              completedAccountCount += 1
+              if (accountSubtaskCounters.contains(task.accountHash)) {
+                recordSubtaskCompletion(task.accountHash)
+              } else {
+                completedAccountCount += 1
+              }
             }
 
             task.done = true
@@ -1448,6 +1507,61 @@ class StorageRangeCoordinator(
     peerCooldownUntilMs.put(peer.id.value, until)
     log.debug(s"Cooling down peer ${peer.id.value} for ${peerCooldownDefault.toSeconds}s: $reason")
   }
+
+  /** Split a large-storage account's remaining slot range into parallel subtasks.
+    *
+    * Called on first continuation detection — when a SNAP response has a proof but doesn't cover `task.last`,
+    * indicating the contract has more slots than fit in one 512 KB packet. Creates N parallel StorageTask objects
+    * covering consecutive disjoint ranges. Mirrors go-ethereum's subtask creation in `assignStorageTasks()`
+    * (sync.go:2118-2197) and `newHashRange()` (sync.go:2144-2193).
+    *
+    * @param task
+    *   The original task that triggered the continuation (covers [task.next, task.last])
+    * @param lastSlotReceived
+    *   The last slot hash in the partial response (split starts at `incrementHash32(lastSlotReceived)`)
+    * @return
+    *   Sequence of StorageTask objects covering [lastSlotReceived+1, task.last] in equal segments
+    */
+  private def createStorageSubTasks(task: StorageTask, lastSlotReceived: ByteString): Seq[StorageTask] = {
+    // Dynamic downsampling: ensure each subtask has enough slots to fill ≥2 full 512KB packets.
+    // Mirrors go-ethereum lines 2136-2143. maxSlotsPerPacket ≈ 512KB / 64 bytes per slot.
+    val maxSlotsPerPacket = maxRequestBytes / 64
+    val chunks = storageConcurrency
+    StorageTask.createSubTasks(
+      accountHash = task.accountHash,
+      storageRoot = task.storageRoot,
+      from = StorageTask.incrementHash32(lastSlotReceived),
+      to = task.last,
+      numChunks = chunks
+    )
+  }
+
+  /** Record completion of one subtask and increment completedAccountCount when all done.
+    *
+    * Mirrors go-ethereum's `cleanStorageTasks()` (sync.go:982-1015) pend-decrement logic.
+    *
+    * @param accountHash
+    *   Hash of the account whose subtask just completed
+    */
+  private[actors] def recordSubtaskCompletion(accountHash: ByteString): Unit =
+    accountSubtaskCounters.get(accountHash) match {
+      case None => completedAccountCount += 1
+      case Some((total, done)) =>
+        val newDone = done + 1
+        if (newDone >= total) {
+          completedAccountCount += 1
+          accountSubtaskCounters.remove(accountHash)
+          log.debug(
+            s"All $total storage subtasks complete for account ${accountHash.take(4).toHex} — " +
+              s"advancing completedAccountCount to $completedAccountCount"
+          )
+        } else {
+          accountSubtaskCounters(accountHash) = (total, newDone)
+          log.debug(
+            s"Storage subtask $newDone/$total done for account ${accountHash.take(4).toHex}"
+          )
+        }
+    }
 }
 
 object StorageRangeCoordinator {
@@ -1469,7 +1583,10 @@ object StorageRangeCoordinator {
       flatBatchEcOverride: Option[ExecutionContext] = None,
       backpressureHighWatermark: Int = 100000,
       backpressureLowWatermark: Int = 50000,
-      maxConcurrentStorageAccounts: Int = 256
+      maxConcurrentStorageAccounts: Int = 256,
+      snapProgressStorage: Option[SnapSyncProgressStorage] = None,
+      storageScheme: StorageScheme = StorageScheme.Hash,
+      pathNodeStorage: Option[PathNodeStorage] = None
   ): Props =
     Props(
       new StorageRangeCoordinator(
@@ -1490,7 +1607,10 @@ object StorageRangeCoordinator {
         flatBatchEcOverride = flatBatchEcOverride,
         backpressureHighWatermark = backpressureHighWatermark,
         backpressureLowWatermark = backpressureLowWatermark,
-        maxConcurrentStorageAccounts = maxConcurrentStorageAccounts
+        maxConcurrentStorageAccounts = maxConcurrentStorageAccounts,
+        snapProgressStorage = snapProgressStorage,
+        storageScheme = storageScheme,
+        pathNodeStorage = pathNodeStorage
       )
     )
 

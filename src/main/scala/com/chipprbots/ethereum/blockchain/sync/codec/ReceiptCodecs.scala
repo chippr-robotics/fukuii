@@ -105,6 +105,7 @@ object ReceiptCodecs {
     }
 
     def toLegacyReceipt: LegacyReceipt = rlpEncodeable match {
+      // 4-field: ETH68 bloom-inclusive  [stateHash, gasUsed, logsBloom, logs]
       case RLPList(
             postTransactionStateHash,
             RLPValue(cumulativeGasUsedBytes),
@@ -122,8 +123,27 @@ object ReceiptCodecs {
           ByteString(logsBloomFilterBytes),
           logs.items.map(_.toTxLogEntry)
         )
+      // 3-field: ETH69/70 bloom-absent (EIP-7642)  [stateHash, gasUsed, logs]
+      // Bloom stored as 256 zero bytes — correct bloom recomputation from logs is a future
+      // concern (not required for block storage correctness on ETC where ETH70 defaults off).
+      case RLPList(
+            postTransactionStateHash,
+            RLPValue(cumulativeGasUsedBytes),
+            logs: RLPList
+          ) =>
+        val stateHash = postTransactionStateHash match {
+          case RLPValue(bytes) if bytes.length > 1                     => HashOutcome(ByteString(bytes))
+          case RLPValue(bytes) if bytes.length == 1 && bytes.head == 1 => SuccessOutcome
+          case _                                                       => FailureOutcome
+        }
+        LegacyReceipt(
+          stateHash,
+          ByteUtils.bytesToBigInt(cumulativeGasUsedBytes),
+          ByteString(Array.fill(256)(0.toByte)),
+          logs.items.map(_.toTxLogEntry)
+        )
       case RLPList(items @ _*) =>
-        throw new RuntimeException(s"Cannot decode Receipt: expected 4 items in RLPList, got ${items.length}")
+        throw new RuntimeException(s"Cannot decode Receipt: expected 3 or 4 items in RLPList, got ${items.length}")
       case RLPValue(bytes) if bytes.nonEmpty && bytes.head.isValidTransactionType && bytes.length > 1 =>
         rawDecode(bytes.tail).toLegacyReceipt
       case other =>

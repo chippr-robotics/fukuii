@@ -820,6 +820,168 @@ class StorageRangeCoordinatorSpec
   // for a single contract: even with thousands of slots, the in-memory batch never crosses
   // the 8 MiB flush threshold (it auto-flushes), and `commit()` returns a stable root.
 
+  // ========================================
+  // Spec 005 — Storage subtask parallelism
+  // ========================================
+
+  it should "start with empty accountSubtaskCounters (no subtask tracking before any response)" taggedAs UnitTest in {
+    val stateRoot = kec256(ByteString("subtask-init-root"))
+    val storage = new TestMptStorage()
+    val requestTracker = new SNAPRequestTracker()(system.scheduler)
+    val networkPeerManager = TestProbe()
+    val snapSyncController = TestProbe()
+
+    val coordinator = TestActorRef[StorageRangeCoordinator](
+      StorageRangeCoordinator.props(
+        stateRoot = stateRoot,
+        networkPeerManager = networkPeerManager.ref,
+        requestTracker = requestTracker,
+        mptStorage = storage,
+        flatSlotStorage = new FlatSlotStorage(EphemDataSource()),
+        maxAccountsPerBatch = 8,
+        maxInFlightRequests = 8,
+        requestTimeout = 30.seconds,
+        snapSyncController = snapSyncController.ref
+      )
+    )
+
+    coordinator.underlyingActor.accountSubtaskCounters shouldBe empty
+    coordinator.underlyingActor.completedAccountCount shouldBe 0L
+  }
+
+  it should "increment completedAccountCount only once when all subtasks for an account complete" taggedAs UnitTest in {
+    val stateRoot = kec256(ByteString("subtask-complete-root"))
+    val storage = new TestMptStorage()
+    val requestTracker = new SNAPRequestTracker()(system.scheduler)
+    val networkPeerManager = TestProbe()
+    val snapSyncController = TestProbe()
+    val accountHash = kec256(ByteString("large-contract"))
+
+    val coordinator = TestActorRef[StorageRangeCoordinator](
+      StorageRangeCoordinator.props(
+        stateRoot = stateRoot,
+        networkPeerManager = networkPeerManager.ref,
+        requestTracker = requestTracker,
+        mptStorage = storage,
+        flatSlotStorage = new FlatSlotStorage(EphemDataSource()),
+        maxAccountsPerBatch = 8,
+        maxInFlightRequests = 8,
+        requestTimeout = 30.seconds,
+        snapSyncController = snapSyncController.ref
+      )
+    )
+
+    coordinator ! Messages.StartStorageRangeSync(stateRoot)
+
+    val actor = coordinator.underlyingActor
+
+    // Simulate: 3 subtasks registered for a large-storage account
+    actor.accountSubtaskCounters(accountHash) = (3, 0)
+    actor.completedAccountCount shouldBe 0L
+
+    // First subtask completes — still 2 remaining; count must NOT advance
+    actor.recordSubtaskCompletion(accountHash)
+    actor.completedAccountCount shouldBe 0L
+    actor.accountSubtaskCounters.get(accountHash) shouldBe Some((3, 1))
+
+    // Second subtask completes — 1 remaining
+    actor.recordSubtaskCompletion(accountHash)
+    actor.completedAccountCount shouldBe 0L
+    actor.accountSubtaskCounters.get(accountHash) shouldBe Some((3, 2))
+
+    // Third (final) subtask completes — all done; count advances and entry is removed
+    actor.recordSubtaskCompletion(accountHash)
+    actor.completedAccountCount shouldBe 1L
+    actor.accountSubtaskCounters.get(accountHash) shouldBe None
+  }
+
+  it should "increment completedAccountCount directly (no subtasks) when no counter entry exists" taggedAs UnitTest in {
+    val stateRoot = kec256(ByteString("subtask-nosplit-root"))
+    val storage = new TestMptStorage()
+    val requestTracker = new SNAPRequestTracker()(system.scheduler)
+    val networkPeerManager = TestProbe()
+    val snapSyncController = TestProbe()
+    val accountHash = kec256(ByteString("small-contract"))
+
+    val coordinator = TestActorRef[StorageRangeCoordinator](
+      StorageRangeCoordinator.props(
+        stateRoot = stateRoot,
+        networkPeerManager = networkPeerManager.ref,
+        requestTracker = requestTracker,
+        mptStorage = storage,
+        flatSlotStorage = new FlatSlotStorage(EphemDataSource()),
+        maxAccountsPerBatch = 8,
+        maxInFlightRequests = 8,
+        requestTimeout = 30.seconds,
+        snapSyncController = snapSyncController.ref
+      )
+    )
+
+    coordinator ! Messages.StartStorageRangeSync(stateRoot)
+
+    val actor = coordinator.underlyingActor
+
+    // No subtask entry for this account — small contract, single task, no split
+    actor.accountSubtaskCounters shouldBe empty
+
+    actor.recordSubtaskCompletion(accountHash)
+    actor.completedAccountCount shouldBe 1L
+    actor.accountSubtaskCounters shouldBe empty
+  }
+
+  it should "handle independent subtask completions for two large-storage contracts without cross-contamination" taggedAs UnitTest in {
+    val stateRoot = kec256(ByteString("subtask-two-accts-root"))
+    val storage = new TestMptStorage()
+    val requestTracker = new SNAPRequestTracker()(system.scheduler)
+    val networkPeerManager = TestProbe()
+    val snapSyncController = TestProbe()
+    val acctA = kec256(ByteString("contract-A"))
+    val acctB = kec256(ByteString("contract-B"))
+
+    val coordinator = TestActorRef[StorageRangeCoordinator](
+      StorageRangeCoordinator.props(
+        stateRoot = stateRoot,
+        networkPeerManager = networkPeerManager.ref,
+        requestTracker = requestTracker,
+        mptStorage = storage,
+        flatSlotStorage = new FlatSlotStorage(EphemDataSource()),
+        maxAccountsPerBatch = 8,
+        maxInFlightRequests = 8,
+        requestTimeout = 30.seconds,
+        snapSyncController = snapSyncController.ref
+      )
+    )
+
+    coordinator ! Messages.StartStorageRangeSync(stateRoot)
+
+    val actor = coordinator.underlyingActor
+
+    // Register 2 subtasks for A, 3 for B
+    actor.accountSubtaskCounters(acctA) = (2, 0)
+    actor.accountSubtaskCounters(acctB) = (3, 0)
+
+    // Complete A subtask 1 → A not done; B not done
+    actor.recordSubtaskCompletion(acctA)
+    actor.completedAccountCount shouldBe 0L
+    actor.accountSubtaskCounters.get(acctA) shouldBe Some((2, 1))
+
+    // Complete B subtask 1 → nothing done
+    actor.recordSubtaskCompletion(acctB)
+    actor.completedAccountCount shouldBe 0L
+
+    // Complete A subtask 2 → A done; count=1; B still incomplete
+    actor.recordSubtaskCompletion(acctA)
+    actor.completedAccountCount shouldBe 1L
+    actor.accountSubtaskCounters.get(acctA) shouldBe None
+    actor.accountSubtaskCounters.get(acctB).isDefined shouldBe true
+
+    // Complete B subtasks 2 and 3 → B done; count=2
+    actor.recordSubtaskCompletion(acctB)
+    actor.recordSubtaskCompletion(acctB)
+    actor.completedAccountCount shouldBe 2L
+    actor.accountSubtaskCounters.get(acctB) shouldBe None
+  }
+
   it should "bound per-account streaming trie memory across continuation responses" taggedAs UnitTest in {
     import com.chipprbots.ethereum.blockchain.sync.snap.SnapHashTrie
 

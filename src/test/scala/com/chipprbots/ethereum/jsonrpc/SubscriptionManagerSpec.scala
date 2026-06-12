@@ -70,9 +70,9 @@ class SubscriptionManagerSpec
     val mgr = makeManager()
     val (queue, _) = makeQueue()
     mgr ! RegisterConnection("conn-1", queue)
-    // No assertion needed — the actor would log an error if this failed
-    // Just confirm the message is processed without exception
-    Thread.sleep(50)
+    // No assertion needed — the actor would log an error if this failed.
+    // Actor mailbox is FIFO: any subsequent ask will queue after this tell,
+    // so no sleep is required to confirm delivery.
     succeed
   }
 
@@ -88,9 +88,10 @@ class SubscriptionManagerSpec
     )
     subResp.result.isRight shouldBe true
 
-    // Close connection — subscription should be removed
+    // Close connection — subscription should be removed.
+    // Actor mailbox is FIFO: the subsequent Unsubscribe ask will only be processed
+    // after ConnectionClosed, so no sleep is needed for synchronisation.
     mgr ! ConnectionClosed(connId)
-    Thread.sleep(50)
 
     // Unsubscribe after close returns false (not found)
     val subId = subResp.result.toOption.get

@@ -28,7 +28,10 @@ import com.chipprbots.ethereum.network.p2p.messages.Codes
 import com.chipprbots.ethereum.network.p2p.messages.ETHPackets
 import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.GetBlockHeaders.GetBlockHeadersEnc
 import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.GetBlockBodies.GetBlockBodiesEnc
+import com.chipprbots.ethereum.network.p2p.messages.Capability
 import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.GetReceipts.GetReceiptsEnc
+import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.GetReceipts70.GetReceipts70Enc
+import com.chipprbots.ethereum.blockchain.sync.PeerListSupportNg.PeerWithInfo
 import com.chipprbots.ethereum.rlp._
 import com.chipprbots.ethereum.domain.Receipt
 import com.chipprbots.ethereum.blockchain.sync.codec.ReceiptCodecs._
@@ -81,6 +84,11 @@ class ChainDownloader(
   // go-ethereum behavioural backoff: peers that returned empty headers are excluded from
   // header dispatch (capacity-to-zero equivalent). Bodies/receipts/SNAP unaffected.
   private var emptyHeaderPeers: Set[PeerId] = Set.empty
+
+  // ETH70 partial receipt tracking: hash → next resume index (receipts already received)
+  private var partialReceiptState: Map[ByteString, Long] = Map.empty
+  // ETH70 partial receipt buffer: hash → RLP-encoded receipts accumulated so far
+  private var partialReceiptBuffer: Map[ByteString, Seq[RLPEncodeable]] = Map.empty
 
   // Stats
   private var headersDownloaded: BigInt = 0
@@ -222,6 +230,14 @@ class ChainDownloader(
         handleReceipts(peer, requestedHashes, eth66Receipts)
       }
       dispatchRequests()
+
+    // ETH70 partial receipt delivery
+    case ResponseReceived(peer, receipts70: ETHPackets.Receipts70, _) =>
+      receiptRequestPeers.get(sender()).foreach { case (_, requestedHashes) =>
+        receiptRequestPeers -= sender()
+        handleReceipts70(peer, requestedHashes, receipts70)
+      }
+      dispatchRequests()
   }
 
   private def dispatchRequests(): Unit = {
@@ -281,7 +297,7 @@ class ChainDownloader(
         !bodyRequestPeers.values.exists(_._1.id == peerId) &&
         !receiptRequestPeers.values.exists(_._1.id == peerId)
       ) {
-        requestReceipts(peerWithInfo.peer)
+        requestReceipts(peerWithInfo)
         slotsLeft -= 1
       }
       peerIdx += 1
@@ -355,26 +371,46 @@ class ChainDownloader(
     bodyRequestPeers += (handler -> (peer, batch))
   }
 
-  private def requestReceipts(peer: Peer): Unit = {
+  private def requestReceipts(peerWithInfo: PeerWithInfo): Unit = {
     val batch = receiptsQueue.take(syncConfig.receiptsPerRequest)
     if (batch.isEmpty) return
 
     receiptsQueue = receiptsQueue.drop(batch.size)
 
-    val requestMsg = ETHPackets.GetReceipts(ETHPackets.nextRequestId, batch)
+    val peer = peerWithInfo.peer
+    val isEth70 = peerWithInfo.peerInfo.remoteStatus.capability == Capability.ETH70
 
-    val handler = context.actorOf(
-      PeerRequestHandler
-        .props[ETHPackets.GetReceipts, ETHPackets.Receipts68](
-          peer,
-          requestTimeout,
-          networkPeerManager,
-          peerEventBus,
-          requestMsg,
-          Codes.ReceiptsCode
-        ),
-      s"chain-receipts-${System.nanoTime()}"
-    )
+    val handler = if (isEth70) {
+      // ETH70: resume partial delivery from the buffered index for the first block in batch
+      val firstBlockResumeIdx = partialReceiptState.getOrElse(batch.head, 0L)
+      val requestMsg = ETHPackets.GetReceipts70(ETHPackets.nextRequestId, firstBlockResumeIdx, batch)
+      context.actorOf(
+        PeerRequestHandler
+          .props[ETHPackets.GetReceipts70, ETHPackets.Receipts70](
+            peer,
+            requestTimeout,
+            networkPeerManager,
+            peerEventBus,
+            requestMsg,
+            Codes.ReceiptsCode
+          ),
+        s"chain-receipts-eth70-${System.nanoTime()}"
+      )
+    } else {
+      val requestMsg = ETHPackets.GetReceipts(ETHPackets.nextRequestId, batch)
+      context.actorOf(
+        PeerRequestHandler
+          .props[ETHPackets.GetReceipts, ETHPackets.Receipts68](
+            peer,
+            requestTimeout,
+            networkPeerManager,
+            peerEventBus,
+            requestMsg,
+            Codes.ReceiptsCode
+          ),
+        s"chain-receipts-${System.nanoTime()}"
+      )
+    }
 
     receiptRequestPeers += (handler -> (peer, batch))
   }
@@ -573,6 +609,118 @@ class ChainDownloader(
           peer.id,
           syncConfig.blacklistDuration,
           FastSyncRequestFailed(s"Invalid receipts: ${ex.getMessage}")
+        )
+    }
+  }
+
+  // Self-contained ETH70 receipt handler — does NOT delegate to handleReceipts.
+  // Handles partial delivery (lastBlockIncomplete=true) via partialReceiptState/Buffer.
+  private def handleReceipts70(
+      peer: Peer,
+      requestedHashes: Seq[ByteString],
+      receipts70: ETHPackets.Receipts70
+  ): Unit = {
+    import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.TypedTransaction._
+
+    val hashStrings = requestedHashes.map(h => s"0x${h.toArray.map("%02x".format(_)).mkString}")
+    val receiptsRlp = receipts70.receiptsForBlocks
+    val lastBlockIncomplete = receipts70.lastBlockIncomplete
+
+    if (receiptsRlp.items.isEmpty && !lastBlockIncomplete) {
+      receiptsQueue = requestedHashes.toVector ++ receiptsQueue
+      blacklist.add(peer.id, syncConfig.blacklistDuration, EmptyReceipts(hashStrings))
+      // Peer can no longer serve these — clear partial state so we don't re-request with a stale index
+      requestedHashes.foreach { h =>
+        partialReceiptState -= h; partialReceiptBuffer -= h
+      }
+      return
+    }
+
+    try {
+      val responseItems: Seq[RLPList] = receiptsRlp.items.collect { case rl: RLPList => rl }
+      val responseCount = responseItems.size
+
+      // Decode typed-tx prefixes from a bloom-absent block RLP (same logic as handleReceipts)
+      def decodeEncs(blockRlp: RLPList): Seq[RLPEncodeable] =
+        blockRlp.items.flatMap {
+          case v: RLPValue =>
+            val receiptBytes = v.bytes
+            if (receiptBytes.nonEmpty && (receiptBytes(0) & 0xff) < 0x7f && receiptBytes.length > 1) {
+              try Seq(RLPValue(Array(receiptBytes(0))), rawDecode(receiptBytes.tail))
+              catch { case _: Exception => Seq(v) }
+            } else Seq(v)
+          case other => Seq(other)
+        }
+
+      // Split: complete blocks vs. the possibly-truncated last block
+      val (completeItems, incompleteItemOpt) =
+        if (lastBlockIncomplete && responseItems.nonEmpty)
+          (responseItems.init, Some(responseItems.last))
+        else
+          (responseItems, None)
+
+      // Build (hash, receipts) pairs for all complete blocks, merging any buffered partial data
+      val completeByHash: Seq[(ByteString, Seq[Receipt])] =
+        completeItems.zipWithIndex.map { case (blockRlp, idx) =>
+          val hash = requestedHashes(idx)
+          val existing = partialReceiptBuffer.getOrElse(hash, Seq.empty)
+          val decoded = (existing ++ decodeEncs(blockRlp)).toTypedRLPEncodables.map(_.toReceipt)
+          partialReceiptState -= hash
+          partialReceiptBuffer -= hash
+          (hash, decoded)
+        }
+
+      // Store complete receipts + advance backfill cursor (#1169 pattern)
+      if (completeByHash.nonEmpty) {
+        val highestReceiptNumber = completeByHash
+          .flatMap { case (h, _) => blockchainReader.getBlockHeaderByHash(h).map(_.number) }
+          .maxOption
+          .getOrElse(BigInt(0))
+
+        completeByHash.zipWithIndex.foreach { case ((hash, receipts), idx) =>
+          val storeUpdate = blockchainWriter.storeReceipts(hash, receipts)
+          val withCursor =
+            if (idx == completeByHash.size - 1 && highestReceiptNumber > appStateStorage.getBackfillBestReceipt())
+              storeUpdate.and(appStateStorage.putBackfillBestReceipt(highestReceiptNumber))
+            else
+              storeUpdate
+          withCursor.commit()
+        }
+        receiptsDownloaded += completeByHash.size
+      }
+
+      // Accumulate partial receipts for the truncated last block and re-queue it
+      incompleteItemOpt.foreach { blockRlp =>
+        val incompleteHashIdx = completeItems.size
+        val hash = requestedHashes(incompleteHashIdx)
+        val existing = partialReceiptBuffer.getOrElse(hash, Seq.empty)
+        val accumulated = existing ++ decodeEncs(blockRlp)
+        partialReceiptBuffer = partialReceiptBuffer.updated(hash, accumulated)
+        partialReceiptState = partialReceiptState.updated(hash, accumulated.size.toLong)
+        // Push back at front of queue so the next dispatch resumes this block first
+        receiptsQueue = hash +: receiptsQueue
+        log.debug(
+          "RECEIPTS_ETH70_PARTIAL: hash={} buffered={} receipts, resumeIdx={}",
+          s"0x${hash.toArray.take(4).map("%02x".format(_)).mkString}",
+          accumulated.size,
+          accumulated.size
+        )
+      }
+
+      // Re-queue any hashes the server didn't return at all (beyond responseCount)
+      val remaining = requestedHashes.drop(responseCount)
+      if (remaining.nonEmpty) {
+        receiptsQueue = remaining.toVector ++ receiptsQueue
+      }
+
+    } catch {
+      case ex: Exception =>
+        log.warning("Chain download ETH70: failed to decode receipts from peer {}: {}", peer.id, ex.getMessage)
+        receiptsQueue = requestedHashes.toVector ++ receiptsQueue
+        blacklist.add(
+          peer.id,
+          syncConfig.blacklistDuration,
+          FastSyncRequestFailed(s"Invalid receipts (ETH70): ${ex.getMessage}")
         )
     }
   }
