@@ -58,7 +58,7 @@
   "timepicker": {},
   "title": "Fukuii Network Nodes",
   "uid": "fukuii-network-nodes",
-  "version": 2,
+  "version": 3,
   "panels": [
     {
       "id": 1,
@@ -589,6 +589,12 @@
           "refId": "A",
           "legendFormat": "{{capability}}",
           "instant": true
+        },
+        {
+          "datasource": null,
+          "expr": "count by(snap)(app_network_peer_info{job=\"$job\"})",
+          "legendFormat": "snap={{snap}}",
+          "refId": "B"
         }
       ],
       "options": {

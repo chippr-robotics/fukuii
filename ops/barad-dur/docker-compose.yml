@@ -282,6 +282,9 @@ services:
     image: chipprbots/fukuii-peer-geo:latest
     container_name: fukuii-peer-geo
     restart: unless-stopped
+    # Small scraper — cap it so host memory pressure can't OOM-kill it as collateral
+    # (Exited 137 on 2026-06-07 took the geo panels down for 5 days unnoticed).
+    mem_limit: 256m
     environment:
       # job=url pairs; the node's /metrics is reachable by container DNS on the fukuii-network.
       - NODE_TARGETS=${PEER_GEO_TARGETS:-etc-mainnet=http://fukuii-primary:9095/metrics}
