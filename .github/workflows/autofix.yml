@@ -45,7 +45,10 @@ jobs:
     name: Apply scalafmt
     # Skip PRs from forks — GITHUB_TOKEN is read-only on fork branches, so the fix
     # cannot be pushed back. The ci.yml scalafmtCheckAll gate still catches those.
-    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
+    # Bump-commit clause: skip pure auto-version pushes (no [skip ci] in those anymore).
+    if: >-
+      (github.event_name == 'push' && !startsWith(github.event.head_commit.message, 'chore: bump version to'))
+      || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
