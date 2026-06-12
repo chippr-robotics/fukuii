@@ -92,4 +92,20 @@ class SnapSyncProgressStorageSpec extends AnyFlatSpec with Matchers {
       storage.readProgress(root1) shouldBe None
       storage.readProgress(root2) shouldBe Some(p2)
     }
+
+  // go-ethereum reference: snap/sync_test.go TestSyncAccountRangePivotMigration —
+  // writing new progress for the same stateRoot must fully overwrite the prior entry
+  // (pivot-change: when SNAP controller switches to a new pivot block, the old partial
+  // cursor state is replaced, not merged, by the new progress write).
+  it should "overwrite a prior progress entry when writeProgress is called twice for the same stateRoot" taggedAs UnitTest in
+    withStorage { storage =>
+      val stateRoot = root(6)
+      val initial = SnapSyncProgress(600L, Map(cursor(1) -> cursor(2)), Map(cursor(3) -> cursor(4)))
+      storage.writeProgress(stateRoot, initial)
+
+      val updated = SnapSyncProgress(601L, Map(cursor(5) -> cursor(6)), Map.empty)
+      storage.writeProgress(stateRoot, updated)
+
+      storage.readProgress(stateRoot) shouldBe Some(updated)
+    }
 }

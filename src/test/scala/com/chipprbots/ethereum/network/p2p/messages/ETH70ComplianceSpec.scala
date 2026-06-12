@@ -316,6 +316,55 @@ class ETH70ComplianceSpec extends AnyWordSpec with Matchers {
           case other => fail(s"Expected Receipts70, got $other")
         }
       }
+
+      // go-ethereum reference: eth/protocols/eth/handler_test.go TestGetBlockPartialReceipts —
+      // a Receipts70 response may contain multiple blocks where some blocks have no receipts
+      // (empty transaction list). The decoder must handle the empty inner list without error.
+      "round-trip with multiple blocks where one block has no receipts (empty block)" taggedAs UnitTest in {
+        import com.chipprbots.ethereum.rlp._
+        import ETHPackets.ReceiptBloomFreeEnc
+        import com.chipprbots.ethereum.domain._
+        val receipt = LegacyReceipt(
+          SuccessOutcome,
+          cumulativeGasUsed = BigInt(21000),
+          logsBloomFilter = ByteString(Array.fill(256)(0.toByte)),
+          logs = Seq.empty
+        )
+        val receiptRLP = new ReceiptBloomFreeEnc(receipt).toRLPEncodable
+        // Block 0: one receipt; block 1: no receipts (empty transaction block)
+        val receiptsForBlocks = RLPList(RLPList(receiptRLP), RLPList())
+        val msg = ETHPackets.Receipts70(BigInt(30), lastBlockIncomplete = false, receiptsForBlocks)
+        val encoded = msg.toBytes
+
+        decoder(Capability.ETH70).fromBytes(Codes.ReceiptsCode, encoded) match {
+          case Right(r: ETHPackets.Receipts70) =>
+            r.requestId shouldEqual BigInt(30)
+            r.lastBlockIncomplete shouldBe false
+            r.receiptsForBlocks.items.size shouldEqual 2
+            r.receiptsForBlocks.items(1).asInstanceOf[RLPList].items shouldBe empty
+          case other => fail(s"Expected Receipts70, got $other")
+        }
+      }
+
+      // go-ethereum reference: eth/protocols/eth/handler_test.go TestGetBlockPartialReceipts —
+      // GetReceipts70 with an empty block-hash list is a valid edge case (peer may send
+      // a request for 0 hashes if the chain tip is unknown or empty range is requested).
+      "GetReceipts70 round-trips with empty block-hash list" taggedAs UnitTest in {
+        val msg = ETHPackets.GetReceipts70(
+          requestId = BigInt(31),
+          firstBlockReceiptIndex = 0L,
+          blockHashes = Seq.empty
+        )
+        val encoded = msg.toBytes
+
+        decoder(Capability.ETH70).fromBytes(Codes.GetReceiptsCode, encoded) match {
+          case Right(r: ETHPackets.GetReceipts70) =>
+            r.requestId shouldEqual BigInt(31)
+            r.firstBlockReceiptIndex shouldEqual 0L
+            r.blockHashes shouldBe empty
+          case other => fail(s"Expected GetReceipts70, got $other")
+        }
+      }
     }
   }
 
@@ -328,7 +377,6 @@ class ETH70ComplianceSpec extends AnyWordSpec with Matchers {
 
     "the ETH70 decoder handles GetReceipts70" should {
       "return ETH70's own GetReceipts70 type (not GetReceipts69)" taggedAs UnitTest in {
-        import ETHPackets.GetReceipts70._
         val msg = ETHPackets.GetReceipts70(BigInt(1), 0L, Seq(ByteString(Array.fill(32)(0xde.toByte))))
         val encoded = msg.toBytes
         decoder(Capability.ETH70).fromBytes(Codes.GetReceiptsCode, encoded) match {

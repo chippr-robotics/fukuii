@@ -2,6 +2,8 @@ package com.chipprbots.ethereum.vm
 
 import org.scalatest.funsuite.AnyFunSuite
 
+import com.chipprbots.ethereum.testing.Tags._
+
 class EvmConfigEtcForkSelectionSpec extends AnyFunSuite {
 
   val allMaxCfg: BlockchainConfigForEvm = BlockchainConfigForEvm(
@@ -27,7 +29,7 @@ class EvmConfigEtcForkSelectionSpec extends AnyFunSuite {
     chainId = 0x3f
   )
 
-  test("EvmConfig.forBlock prefers Atlantis over Byzantium when activated at same height") {
+  test("EvmConfig.forBlock prefers Atlantis over Byzantium when activated at same height", UnitTest, VMTest) {
     val cfg = allMaxCfg.copy(byzantiumBlockNumber = 0, atlantisBlockNumber = 0)
 
     val evmConfig = EvmConfig.forBlock(0, cfg)
@@ -36,7 +38,7 @@ class EvmConfigEtcForkSelectionSpec extends AnyFunSuite {
     assert(evmConfig.opCodeList == EvmConfig.AtlantisOpCodes)
   }
 
-  test("EvmConfig selects OlympiaConfigBuilder at olympia block") {
+  test("EvmConfig selects OlympiaConfigBuilder at olympia block", UnitTest, VMTest) {
     val olympiaBlock = 100L
     val cfg = allMaxCfg.copy(
       byzantiumBlockNumber = 0,
@@ -60,7 +62,7 @@ class EvmConfigEtcForkSelectionSpec extends AnyFunSuite {
     assert(evmConfig.opCodeList == EvmConfig.EtcOlympiaOpCodes)
   }
 
-  test("EvmConfig selects SpiralConfigBuilder just before olympia block") {
+  test("EvmConfig selects SpiralConfigBuilder just before olympia block", UnitTest, VMTest) {
     val olympiaBlock = 100L
     val cfg = allMaxCfg.copy(
       byzantiumBlockNumber = 0,
@@ -84,7 +86,7 @@ class EvmConfigEtcForkSelectionSpec extends AnyFunSuite {
     assert(!evmConfig.feeSchedule.isInstanceOf[FeeSchedule.OlympiaFeeSchedule])
   }
 
-  test("EtcForks.Olympia is highest enum value") {
+  test("EtcForks.Olympia is highest enum value", UnitTest, VMTest) {
     assert(BlockchainConfigForEvm.EtcForks.Olympia > BlockchainConfigForEvm.EtcForks.Spiral)
   }
 }

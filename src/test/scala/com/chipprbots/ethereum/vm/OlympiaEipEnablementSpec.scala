@@ -103,6 +103,30 @@ class OlympiaEipEnablementSpec extends AnyWordSpec with Matchers {
     }
   }
 
+  "ETC Olympia precompile dispatch (ECIP-1121)" when {
+
+    "osakaContracts (ETC Olympia / ETH Osaka set)" should {
+      "include P256VERIFY at address 0x100" taggedAs (UnitTest, OlympiaTest) in {
+        // Both ETC Olympia (block-based) and ETH Osaka (timestamp-based) route to osakaContracts.
+        // Regression guard: previously the etcFork >= Olympia branch routed to olympiaContracts
+        // (BLS-only), missing P256VERIFY per ECIP-1121 / EIP-7951.
+        (PrecompiledContracts.osakaContracts should contain).key(PrecompiledContracts.P256VerifyAddr)
+      }
+    }
+
+    "olympiaContracts (ETH Prague / BLS-only set)" should {
+      "NOT include P256VERIFY (EIP-7951 is Osaka-only on ETH)" taggedAs (UnitTest, OlympiaTest) in {
+        PrecompiledContracts.olympiaContracts should not contain key(PrecompiledContracts.P256VerifyAddr)
+      }
+    }
+
+    "P256VerifyAddr" should {
+      "be Address(0x100) per EIP-7951" taggedAs (UnitTest, OlympiaTest) in {
+        PrecompiledContracts.P256VerifyAddr shouldEqual Address(0x100)
+      }
+    }
+  }
+
   "EIP-2935 constants" when {
 
     "history storage contract" should {
