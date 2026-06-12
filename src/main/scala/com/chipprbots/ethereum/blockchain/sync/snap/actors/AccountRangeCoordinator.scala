@@ -1315,6 +1315,7 @@ class AccountRangeCoordinator(
     */
   private def requeueOrEscalate(task: AccountTask, reason: String): Unit = {
     task.requeueCount += 1
+    com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncMetrics.incrementRequestRetry()
     if (task.requeueCount > AccountRangeCoordinator.MaxRequeuesPerTask) {
       log.error(
         s"Account task ${task.rangeString} exhausted requeue budget " +

@@ -29,6 +29,12 @@ class MerkleProofVerifier(rootHash: ByteString) extends Logger {
 
   // ─── Public API ────────────────────────────────────────────────────────────
 
+  /** Emit the invalid-proof counter for any verification failure surfaced to callers. */
+  private def counted(result: Either[String, Unit]): Either[String, Unit] = {
+    if (result.isLeft) SNAPSyncMetrics.incrementInvalidProof()
+    result
+  }
+
   def verifyAccountRange(
       accounts: Seq[(ByteString, Account)],
       proof: Seq[ByteString],
@@ -40,16 +46,16 @@ class MerkleProofVerifier(rootHash: ByteString) extends Logger {
       val leaves = accounts.map { case (h, a) => h -> ByteString(Account.accountSerializer.toBytes(a)) }
       if (proof.isEmpty) {
         // Nil proof: full trie response, verify by streaming hash (geth: StackTrie path)
-        return verifyCompleteRange(leaves)
+        return counted(verifyCompleteRange(leaves))
       }
       val proofRawMap = buildProofRawMap(proof)
-      verifyRangeProofByReconstruction(startHash, endHash, leaves, proofRawMap)
+      counted(verifyRangeProofByReconstruction(startHash, endHash, leaves, proofRawMap))
     } catch {
       case e: Throwable =>
         // Catch Throwable (not just Exception) — StackOverflowError from deep recursive insertion
         // must be surfaced as a verification failure rather than silently hanging the caller.
         log.warn(s"Merkle proof verification error: ${e.getClass.getSimpleName}: ${e.getMessage}")
-        Left(s"Verification error: ${e.getClass.getSimpleName}: ${e.getMessage}")
+        counted(Left(s"Verification error: ${e.getClass.getSimpleName}: ${e.getMessage}"))
     }
   }
 
@@ -62,14 +68,14 @@ class MerkleProofVerifier(rootHash: ByteString) extends Logger {
     if (proof.isEmpty && slots.isEmpty) return Right(())
     try {
       if (proof.isEmpty) {
-        return verifyCompleteRange(slots)
+        return counted(verifyCompleteRange(slots))
       }
       val proofRawMap = buildProofRawMap(proof)
-      verifyRangeProofByReconstruction(startHash, endHash, slots, proofRawMap)
+      counted(verifyRangeProofByReconstruction(startHash, endHash, slots, proofRawMap))
     } catch {
       case e: Throwable =>
         log.warn(s"Storage Merkle proof verification error: ${e.getClass.getSimpleName}: ${e.getMessage}")
-        Left(s"Storage verification error: ${e.getClass.getSimpleName}: ${e.getMessage}")
+        counted(Left(s"Storage verification error: ${e.getClass.getSimpleName}: ${e.getMessage}"))
     }
   }
 

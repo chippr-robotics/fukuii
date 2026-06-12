@@ -565,6 +565,9 @@ class StorageRangeCoordinator(
   private def notifyBackpressureIfChanged(): Unit = {
     val pending = tasks.size
     com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncMetrics.setStorageQueueDepth(pending.toLong)
+    com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncMetrics.setStorageActivePeers(
+      (knownAvailablePeers.size - statelessPeers.size).max(0)
+    )
     if (!backpressureActive && pending >= backpressureHighWatermark) {
       backpressureActive = true
       com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncMetrics.setStorageBackpressure(true)

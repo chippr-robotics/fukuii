@@ -1178,11 +1178,13 @@ class SNAPSyncController(
         log.warning(
           s"Account trie validation found ${missing.size} missing nodes — triggering healing"
         )
+        SNAPSyncMetrics.setMissingNodesDetected(missing.size.toLong)
         validationInProgress = false
         triggerHealingForMissingNodes(missing)
       }
 
     case ValidateAccountTrieResult(_, Left(error), _) if currentPhase == StateValidation =>
+      SNAPSyncMetrics.incrementValidationFailure()
       log.error(s"Account trie validation failed: $error")
       if (error.contains("Missing root node")) {
         validationRetryCount += 1
@@ -1225,6 +1227,7 @@ class SNAPSyncController(
     // Storage trie validation result handlers.
     case ValidateStorageTriesResult(_, Right(missing), elapsedMs) if currentPhase == StateValidation =>
       validationInProgress = false
+      SNAPSyncMetrics.setMissingNodesDetected(missing.size.toLong)
       if (missing.isEmpty) {
         log.info(s"Storage trie validation successful - no missing nodes (${elapsedMs}ms)")
         log.info("✅ State validation COMPLETE - all tries are intact")
@@ -1237,6 +1240,7 @@ class SNAPSyncController(
       }
 
     case ValidateStorageTriesResult(_, Left(error), _) if currentPhase == StateValidation =>
+      SNAPSyncMetrics.incrementValidationFailure()
       log.error(s"Storage trie validation failed: $error. Recovering through healing phase")
       validationInProgress = false
       currentPhase = StateHealing
@@ -2428,6 +2432,7 @@ class SNAPSyncController(
     *   true if we should fallback to fast sync
     */
   private def recordCriticalFailure(reason: String): Boolean = {
+    SNAPSyncMetrics.incrementSyncError()
     criticalFailureCount += 1
     accountsAtLastCriticalFailure = progressMonitor.currentProgress.accountsSynced
     log.warning(s"Critical SNAP sync failure ($criticalFailureCount/${snapSyncConfig.maxSnapSyncFailures}): $reason")

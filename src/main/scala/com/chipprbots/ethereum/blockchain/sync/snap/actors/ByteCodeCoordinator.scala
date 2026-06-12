@@ -448,6 +448,7 @@ class ByteCodeCoordinator(
   private def notifyBackpressureIfChanged(): Unit = {
     val pending = pendingTasks.size
     com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncMetrics.setByteCodeQueueDepth(pending.toLong)
+    com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncMetrics.setByteCodeActivePeers(knownAvailablePeers.size)
     if (!backpressureActive && pending >= backpressureHighWatermark) {
       backpressureActive = true
       com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncMetrics.setByteCodeBackpressure(true)
