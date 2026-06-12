@@ -49,7 +49,7 @@ import com.chipprbots.ethereum.mpt.StackTrie
 final class SnapHashTrie(
     writeBatch: Seq[(ByteString, Array[Byte])] => Unit,
     val batchSizeThreshold: Int = SnapHashTrie.DefaultBatchSizeBytes
-) {
+) extends SnapTrie {
 
   private val pending = mutable.ArrayBuffer.empty[(ByteString, Array[Byte])]
   private var pendingBytes: Long = 0L
@@ -59,14 +59,14 @@ final class SnapHashTrie(
   /** Insert `value` under `key`. Keys must arrive in strictly-ascending hex-nibble order (after
     * `HexPrefix.bytesToNibbles`). The underlying StackTrie enforces this; violations throw.
     */
-  def update(key: Array[Byte], value: Array[Byte]): Unit =
+  override def update(key: Array[Byte], value: Array[Byte]): Unit =
     stackTrie.update(key, value)
 
   /** Finalise the right-boundary path and flush any pending batch.
     *
     * Returns the 32-byte trie root hash. After commit, the wrapper must be `reset()` before any further `update` calls.
     */
-  def commit(): ByteString = {
+  override def commit(): ByteString = {
     val root = stackTrie.hash()
     flush()
     root
@@ -77,7 +77,7 @@ final class SnapHashTrie(
     * Note: emissions already flushed to disk during the doomed run are NOT rolled back — they're still valid
     * hash-content-addressed trie nodes and will simply be unreferenced until pruning cleans them up.
     */
-  def reset(): Unit = {
+  override def reset(): Unit = {
     stackTrie.reset()
     pending.clear()
     pendingBytes = 0L

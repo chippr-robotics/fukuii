@@ -11,7 +11,7 @@ import scala.math.Ordered.orderingToOrdered
 
 import com.chipprbots.ethereum.blockchain.sync.snap._
 import com.chipprbots.ethereum.db.dataSource.DataSourceBatchUpdate
-import com.chipprbots.ethereum.db.storage.{FlatSlotStorage, MptStorage, SnapSyncProgressStorage}
+import com.chipprbots.ethereum.db.storage.{FlatSlotStorage, MptStorage, PathNodeStorage, SnapSyncProgressStorage}
 import com.chipprbots.ethereum.network.Peer
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor
 import com.chipprbots.ethereum.network.p2p.MessageSerializable
@@ -68,7 +68,9 @@ class StorageRangeCoordinator(
     // 256 → ~2 GiB ceiling, independent of chain size. Raise via sync.conf if the peer pool
     // can justify a larger working set; lower if running with smaller `-Xmx`.
     maxConcurrentStorageAccounts: Int = 256,
-    snapProgressStorage: Option[SnapSyncProgressStorage] = None
+    snapProgressStorage: Option[SnapSyncProgressStorage] = None,
+    storageScheme: StorageScheme = StorageScheme.Hash,
+    pathNodeStorage: Option[PathNodeStorage] = None
 ) extends Actor
     with ActorLogging {
 
@@ -443,16 +445,30 @@ class StorageRangeCoordinator(
     * response (no continuation), reset on abort. Bounded by `maxConcurrentStorageAccounts` via the dispatch gate in
     * `requestNextRanges`.
     */
-  private[actors] val pendingAccountTries: mutable.Map[ByteString, SnapHashTrie] = mutable.Map.empty
+  private[actors] val pendingAccountTries: mutable.Map[ByteString, SnapTrie] = mutable.Map.empty
 
-  /** Get-or-create the per-account `SnapHashTrie`. Each contract's trie streams emitted nodes through
-    * `mptStorage.storeRawNodes`, which routes via `FastSyncNodeStorage` to pick up pivot-block-number tagging for
-    * pruning. Modelled on `AccountRangeCoordinator.getOrCreateTaskStackTrie`.
+  /** Get-or-create the per-account [[SnapTrie]]. Each contract's trie streams emitted nodes to storage.
+    *
+    * HashScheme (default): nodes flush to `mptStorage` via `storeRawNodes`. PathScheme: nodes written path-keyed to
+    * `PathNodeStorage`, scoped by `accountHash` (so multiple storage tries don't collide on path keys).
     */
-  private def getOrCreateAccountTrie(accountHash: ByteString): SnapHashTrie =
+  private def getOrCreateAccountTrie(accountHash: ByteString): SnapTrie =
     pendingAccountTries.getOrElseUpdate(
       accountHash,
-      new SnapHashTrie(batch => mptStorage.storeRawNodes(batch))
+      storageScheme match {
+        case StorageScheme.Hash =>
+          new SnapHashTrie(batch => mptStorage.storeRawNodes(batch))
+        case StorageScheme.Path =>
+          val pns = pathNodeStorage.getOrElse(
+            throw new IllegalStateException("PathScheme requires pathNodeStorage to be set")
+          )
+          new SnapPathTrie(
+            owner = accountHash,
+            skipLeftBoundary = false, // storage tasks are always fresh (no per-slot resume cursor)
+            writePath = (path, hash, blob) => pns.writeStorageNode(accountHash, path, hash, blob),
+            deleteExact = path => pns.deleteStorageNode(accountHash, path)
+          )
+      }
     )
 
   /** Commit a fully-downloaded contract trie. Compares the computed root against the task's claimed `storageRoot`;
@@ -1568,7 +1584,9 @@ object StorageRangeCoordinator {
       backpressureHighWatermark: Int = 100000,
       backpressureLowWatermark: Int = 50000,
       maxConcurrentStorageAccounts: Int = 256,
-      snapProgressStorage: Option[SnapSyncProgressStorage] = None
+      snapProgressStorage: Option[SnapSyncProgressStorage] = None,
+      storageScheme: StorageScheme = StorageScheme.Hash,
+      pathNodeStorage: Option[PathNodeStorage] = None
   ): Props =
     Props(
       new StorageRangeCoordinator(
@@ -1590,7 +1608,9 @@ object StorageRangeCoordinator {
         backpressureHighWatermark = backpressureHighWatermark,
         backpressureLowWatermark = backpressureLowWatermark,
         maxConcurrentStorageAccounts = maxConcurrentStorageAccounts,
-        snapProgressStorage = snapProgressStorage
+        snapProgressStorage = snapProgressStorage,
+        storageScheme = storageScheme,
+        pathNodeStorage = pathNodeStorage
       )
     )
 

@@ -17,6 +17,7 @@ import com.chipprbots.ethereum.db.storage.{
   HealingFrontierStorage,
   MptStorage,
   Namespaces,
+  PathNodeStorage,
   RocksDbBfsQueueStorage,
   SnapSyncProgressStorage,
   StateStorage
@@ -69,6 +70,13 @@ class SNAPSyncController(
   // Uses getBackingStorage(pivotBlockNumber) to ensure nodes are tagged with the
   // correct block number for proper reference counting in pruning modes.
   private var mptStorage: Option[MptStorage] = None
+
+  // PathScheme: create PathNodeStorage backed by the same RocksDB data source as flat storage.
+  // None for HashScheme (default/ETC). Shared across coordinator restarts (data source is long-lived).
+  private val pathNodeStorageOpt: Option[PathNodeStorage] =
+    if (snapSyncConfig.storageScheme == StorageScheme.Path)
+      Some(new PathNodeStorage(flatSlotStorage.dataSource))
+    else None
 
   private def getOrCreateMptStorage(pivotBlockNumber: BigInt): MptStorage =
     mptStorage.getOrElse {
@@ -442,13 +450,37 @@ class SNAPSyncController(
   private var lastAccountsDownloaded: Long = 0
 
   override def preStart(): Unit = {
+    checkStorageSchemeMismatch()
     log.info("SNAP Sync Controller initialized")
     log.info(
       s"SNAPSyncConfig: accountConcurrency=${snapSyncConfig.accountConcurrency}, " +
         s"storageBatchSize=${snapSyncConfig.storageBatchSize}, " +
-        s"pivotBlockOffset=${snapSyncConfig.pivotBlockOffset}"
+        s"pivotBlockOffset=${snapSyncConfig.pivotBlockOffset}, " +
+        s"storageScheme=${snapSyncConfig.storageScheme}"
     )
     progressMonitor.startPeriodicLogging()
+  }
+
+  /** Guard: fail fast if the DB was written with PathScheme but config says HashScheme (or vice versa).
+    *
+    * Path-scheme data lives in [[Namespaces.StateTriePathNamespace]] (namespace 't'). We check for the root node at
+    * empty nibble path — HP([]) = 0x20. If it exists, a PathScheme SNAP sync was performed on this datadir. A
+    * HashScheme config at that point would silently ignore all path-keyed nodes, so we throw immediately.
+    *
+    * The reverse (HashScheme data + PathScheme config) is safe: PathScheme simply ignores the existing hash-keyed nodes
+    * and starts fresh. No silent data loss — just wasted disk space.
+    */
+  private def checkStorageSchemeMismatch(): Unit = {
+    val emptyHp = com.chipprbots.ethereum.mpt.HexPrefix.encode(Array.empty[Byte], isLeaf = false)
+    val hasPathRoot = flatSlotStorage.dataSource
+      .getOptimized(Namespaces.StateTriePathNamespace, emptyHp)
+      .isDefined
+    if (hasPathRoot && snapSyncConfig.storageScheme == StorageScheme.Hash)
+      throw new IllegalStateException(
+        "Storage scheme mismatch: DB contains path-scheme account trie data (root at empty path) " +
+          "but config has storage-scheme = hash. " +
+          "Either set storage-scheme = path in snap-sync config, or wipe the datadir and resync."
+      )
   }
 
   override def postStop(): Unit = {
@@ -1843,7 +1875,9 @@ class SNAPSyncController(
                       minResponseBytes = snapSyncConfig.storageMinResponseBytes,
                       deferredMerkleization = snapSyncConfig.deferredMerkleization,
                       maxConcurrentStorageAccounts = snapSyncConfig.maxConcurrentStorageAccounts,
-                      snapProgressStorage = Some(snapProgressStorage)
+                      snapProgressStorage = Some(snapProgressStorage),
+                      storageScheme = snapSyncConfig.storageScheme,
+                      pathNodeStorage = pathNodeStorageOpt
                     )
                     .withDispatcher("sync-dispatcher"),
                   s"storage-range-coordinator-$coordinatorGeneration"
@@ -2849,7 +2883,9 @@ class SNAPSyncController(
             initialMaxInFlightPerPeer =
               5, // Full per-peer budget during AccountRangeSync (storage+bytecode deferred to 0)
             initialResponseBytes = snapSyncConfig.accountInitialResponseBytes,
-            minResponseBytes = snapSyncConfig.accountMinResponseBytes
+            minResponseBytes = snapSyncConfig.accountMinResponseBytes,
+            storageScheme = snapSyncConfig.storageScheme,
+            pathNodeStorage = pathNodeStorageOpt
           )
           .withDispatcher("sync-dispatcher"),
         s"account-range-coordinator-$coordinatorGeneration"
@@ -2933,7 +2969,9 @@ class SNAPSyncController(
               minResponseBytes = snapSyncConfig.storageMinResponseBytes,
               deferredMerkleization = snapSyncConfig.deferredMerkleization,
               maxConcurrentStorageAccounts = snapSyncConfig.maxConcurrentStorageAccounts,
-              snapProgressStorage = Some(snapProgressStorage)
+              snapProgressStorage = Some(snapProgressStorage),
+              storageScheme = snapSyncConfig.storageScheme,
+              pathNodeStorage = pathNodeStorageOpt
             )
             .withDispatcher("sync-dispatcher"),
           s"storage-range-coordinator-$coordinatorGeneration"
@@ -3269,7 +3307,9 @@ class SNAPSyncController(
               visitedCap = snapSyncConfig.healingVisitedCap,
               healingFrontierStorage = healingFrontierStorageOpt,
               traversalParallelism = snapSyncConfig.healingTraversalParallelism,
-              bfsQueueStorageOpt = Some(bfsQueueStorage)
+              bfsQueueStorageOpt = Some(bfsQueueStorage),
+              storageScheme = snapSyncConfig.storageScheme,
+              pathNodeStorageOpt = pathNodeStorageOpt
             )
             .withDispatcher("sync-dispatcher"),
           s"trie-node-healing-coordinator-$coordinatorGeneration"
@@ -3326,7 +3366,9 @@ class SNAPSyncController(
                   visitedCap = snapSyncConfig.healingVisitedCap,
                   healingFrontierStorage = healingFrontierStorageOpt,
                   traversalParallelism = snapSyncConfig.healingTraversalParallelism,
-                  bfsQueueStorageOpt = Some(bfsQueueStorage)
+                  bfsQueueStorageOpt = Some(bfsQueueStorage),
+                  storageScheme = snapSyncConfig.storageScheme,
+                  pathNodeStorageOpt = pathNodeStorageOpt
                 )
                 .withDispatcher("sync-dispatcher"),
               s"trie-node-healing-coordinator-$coordinatorGeneration"
@@ -4696,7 +4738,14 @@ case class SNAPSyncConfig(
       * dispatch defers new-account requests when at the cap; continuations for in-flight accounts still proceed. Raise
       * via `sync.snap-sync.max-concurrent-storage-accounts` for larger peer pools.
       */
-    maxConcurrentStorageAccounts: Int = 256
+    maxConcurrentStorageAccounts: Int = 256,
+    /** Trie node storage scheme. `Hash` (default) for ETC — nodes keyed by keccak256, no pruning needed. `Path` for ETH
+      * full nodes — nodes keyed by nibble path, enabling inline pruning.
+      *
+      * Override via `sync.snap-sync.storage-scheme = "path"` in the HOCON config. Do NOT add an explicit `= "hash"` to
+      * ETC configs; the default is Hash and the DB is scheme-locked on first write (startup guard enforces this).
+      */
+    storageScheme: StorageScheme = StorageScheme.Hash
 )
 
 object SNAPSyncConfig {
@@ -4837,7 +4886,11 @@ object SNAPSyncConfig {
       maxConcurrentStorageAccounts =
         if (snapConfig.hasPath("max-concurrent-storage-accounts"))
           snapConfig.getInt("max-concurrent-storage-accounts")
-        else 256
+        else 256,
+      storageScheme =
+        if (snapConfig.hasPath("storage-scheme"))
+          StorageScheme.fromString(snapConfig.getString("storage-scheme"))
+        else StorageScheme.Hash
     )
   }
 }

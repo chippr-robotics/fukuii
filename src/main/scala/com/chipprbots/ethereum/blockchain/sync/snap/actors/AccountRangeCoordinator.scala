@@ -23,7 +23,7 @@ import scala.concurrent.duration._
 import scala.util.{Success, Failure}
 
 import com.chipprbots.ethereum.blockchain.sync.snap._
-import com.chipprbots.ethereum.db.storage.MptStorage
+import com.chipprbots.ethereum.db.storage.{MptStorage, PathNodeStorage}
 import com.chipprbots.ethereum.domain.Account
 import com.chipprbots.ethereum.network.Peer
 import com.chipprbots.ethereum.mpt.MerklePatriciaTrie
@@ -70,7 +70,9 @@ class AccountRangeCoordinator(
     initialMaxInFlightPerPeer: Int = 5,
     initialResponseBytesConfig: Int = 524288,
     minResponseBytesConfig: Int = 102400,
-    accountTrieEcOverride: Option[ExecutionContext] = None
+    accountTrieEcOverride: Option[ExecutionContext] = None,
+    storageScheme: StorageScheme = StorageScheme.Hash,
+    pathNodeStorage: Option[PathNodeStorage] = None
 ) extends Actor
     with ActorLogging {
 
@@ -528,7 +530,7 @@ class AccountRangeCoordinator(
   // `genTrie *StackTrie` pattern in `eth/protocols/snap/sync.go`.
   //
   // `private[actors]` so the test spec can verify the per-task lifecycle.
-  private[actors] val taskStackTries: mutable.Map[ByteString, SnapHashTrie] = mutable.Map.empty
+  private[actors] val taskStackTries: mutable.Map[ByteString, SnapTrie] = mutable.Map.empty
 
   override def preStart(): Unit = {
     if (skippedTasks.nonEmpty) {
@@ -1476,15 +1478,31 @@ class AccountRangeCoordinator(
     }
   }
 
-  /** Get-or-create the per-task `SnapHashTrie` for the StackTrie path. Each task gets its own streaming trie keyed by
-    * `task.last` (the end-of-range boundary, unique per task). Nodes emitted by the wrapper flush to `mptStorage` via
-    * `storeRawNodes` — which routes through the existing `FastSyncNodeStorage` and picks up pivot-block-number tagging
-    * for pruning automatically.
+  /** Get-or-create the per-task [[SnapTrie]] for the StackTrie path. Each task gets its own streaming trie keyed by
+    * `task.last` (the end-of-range boundary, unique per task).
+    *
+    * HashScheme (default): nodes flush to `mptStorage` via `storeRawNodes`, routing through `FastSyncNodeStorage` with
+    * pivot-block-number tagging for pruning. PathScheme: nodes are written path-keyed to `PathNodeStorage`, with
+    * left-boundary skip when `resumeProgress` has a cursor for this task.
     */
-  private def getOrCreateTaskStackTrie(task: AccountTask): SnapHashTrie =
+  private def getOrCreateTaskStackTrie(task: AccountTask): SnapTrie =
     taskStackTries.getOrElseUpdate(
       task.last,
-      new SnapHashTrie(batch => mptStorage.storeRawNodes(batch))
+      storageScheme match {
+        case StorageScheme.Hash =>
+          new SnapHashTrie(batch => mptStorage.storeRawNodes(batch))
+        case StorageScheme.Path =>
+          val pns = pathNodeStorage.getOrElse(
+            throw new IllegalStateException("PathScheme requires pathNodeStorage to be set")
+          )
+          val skipLeft = resumeProgress.contains(task.last)
+          new SnapPathTrie(
+            owner = ByteString.empty,
+            skipLeftBoundary = skipLeft,
+            writePath = (path, hash, blob) => pns.writeAccountNode(path, hash, blob),
+            deleteExact = path => pns.deleteAccountNode(path)
+          )
+      }
     )
 
   /** Identify contract accounts (those with non-empty code hash)
@@ -1707,7 +1725,9 @@ object AccountRangeCoordinator {
       initialMaxInFlightPerPeer: Int = 5,
       initialResponseBytes: Int = 524288,
       minResponseBytes: Int = 102400,
-      accountTrieEcOverride: Option[ExecutionContext] = None
+      accountTrieEcOverride: Option[ExecutionContext] = None,
+      storageScheme: StorageScheme = StorageScheme.Hash,
+      pathNodeStorage: Option[PathNodeStorage] = None
   ): Props =
     Props(
       new AccountRangeCoordinator(
@@ -1721,7 +1741,9 @@ object AccountRangeCoordinator {
         initialMaxInFlightPerPeer,
         initialResponseBytes,
         minResponseBytes,
-        accountTrieEcOverride
+        accountTrieEcOverride,
+        storageScheme = storageScheme,
+        pathNodeStorage = pathNodeStorage
       )
     )
 }
