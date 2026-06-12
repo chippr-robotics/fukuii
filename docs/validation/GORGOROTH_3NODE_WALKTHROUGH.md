@@ -1,3 +1,6 @@
+> **📁 Historical document** — archived 2026-06-12 during the post-0.7.0 documentation audit.
+> Point-in-time record kept for reference; not maintained and may not reflect the current implementation.
+
 # Gorgoroth 3-Node E2E Validation Walkthrough
 
 **Purpose**: Complete step-by-step guide for validating Fukuii self-consistency in a 3-node test network. This test validates that Fukuii is functional and self-consistent by testing Fukuii nodes against themselves, covering mining, syncing, and block propagation.

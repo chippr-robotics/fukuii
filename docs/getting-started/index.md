@@ -61,7 +61,7 @@ Get up and running with Fukuii quickly. Choose the installation method that best
 | Port | Protocol | Purpose |
 |------|----------|---------|
 | 30303 | UDP | Discovery protocol |
-| 9076 | TCP | Ethereum P2P |
+| 30303 | TCP | Ethereum P2P |
 | 8546 | TCP | JSON-RPC (internal only!) |
 
 !!! warning "Security Notice"
@@ -81,7 +81,7 @@ docker volume create fukuii-conf
 docker run -d \
   --name fukuii \
   --restart unless-stopped \
-  -p 9076:9076 \
+  -p 30303:30303 \
   -p 30303:30303/udp \
   -v fukuii-data:/app/data \
   -v fukuii-conf:/app/conf \

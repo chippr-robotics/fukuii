@@ -1,3 +1,6 @@
+> **📁 Historical document** — archived 2026-06-12 during the post-0.7.0 documentation audit.
+> Point-in-time record kept for reference; not maintained and may not reflect the current implementation.
+
 # Cirith Ungol E2E Validation Walkthrough
 
 **Purpose**: Real-world validation of Fukuii using public ETC mainnet and Mordor testnet for SNAP/Fast sync testing with diverse node types and network traffic.

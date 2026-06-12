@@ -9,7 +9,7 @@ The problem statement requested:
 
 Fukuii was only advertising **ETH68** and **SNAP1** as supported capabilities, based on an incorrect assumption that only the highest protocol version should be advertised. This caused several issues:
 
-1. **Incompatible with Geth's behavior**: Geth advertises multiple versions (eth/66, eth/67, eth/68, snap/1)
+1. **Incompatible with Geth's behavior**: Geth advertised multiple versions (at the time, eth/66, eth/67, eth/68, snap/1; current releases advertise eth/68, eth/69, snap/1)
 2. **Negotiation failures**: When peers advertised only ETH65 or ETH66, negotiation would fail or produce unexpected results
 3. **Unclear protocol selection**: Without proper logging, it was unclear why certain protocol versions were being selected
 
@@ -25,15 +25,13 @@ val supportedCapabilities: List[Capability] = List(Capability.ETH68, Capability.
 **After:**
 ```scala
 val supportedCapabilities: List[Capability] = List(
-  Capability.ETH65,
-  Capability.ETH66,
-  Capability.ETH67,
   Capability.ETH68,
+  Capability.ETH69,
   Capability.SNAP1
 )
 ```
 
-This aligns with Geth's approach and ensures proper negotiation with peers supporting any of these protocol versions.
+This aligns with Geth's approach (current Geth releases advertise `eth/68`, `eth/69`, `snap/1`) and ensures proper negotiation with peers supporting any of these protocol versions. ETH63-67 are no longer advertised: the live peer set negotiates ETH68+, and ETH68 removed `GetNodeData`/`NodeData` in favour of SNAP.
 
 ### 2. Enhanced Protocol Negotiation Logging
 
@@ -55,24 +53,26 @@ Created two comprehensive documents:
 - **docs/architecture/PROTOCOL_CAPABILITY_NEGOTIATION.md**: Explains the negotiation algorithm, protocol differences, and how RequestId wrapping works
 - **docs/troubleshooting/PROTOCOL_VERSION_SELECTION.md**: Quick reference guide for understanding why specific protocol versions are selected
 
-## Why ETH 65 Might Be Selected
+## Why ETH 65 Was Being Selected (historical)
 
-When you see "eth/65 is being selected", it's because:
+When "eth/65 is being selected" was observed, it was because:
 
-1. The peer only advertises support for ETH65 (or lower)
-2. Negotiation correctly selects the highest common version
-3. Both sides can communicate using ETH65
+1. The peer only advertised support for ETH65 (or lower)
+2. Negotiation correctly selected the highest common version
+3. Both sides could communicate using ETH65
 
-This is **expected and correct behavior** when connecting to older peers.
+That was expected behavior **while ETH65-67 were still advertised**. With the current
+capability set (ETH68, ETH69, SNAP1), peers advertising only eth/67 or below have no common
+version with us and are disconnected during negotiation instead.
 
 ## Protocol Compatibility Matrix
 
 | Our Version | Peer Versions | Negotiated | RequestId | Notes |
 |-------------|---------------|------------|-----------|-------|
-| ETH65-68 | eth/65 | eth/65 | No | Older peer, no request tracking |
-| ETH65-68 | eth/66, eth/67 | eth/67 | Yes | Modern peer, request tracking enabled |
-| ETH65-68 | eth/66, eth/67, eth/68 | eth/68 | Yes | Latest protocol, optimal |
-| ETH65-68 | eth/63 | eth/63 | No | Very old peer, no ForkId |
+| ETH68-69 | eth/68 | eth/68 | Yes | Highest common version |
+| ETH68-69 | eth/68, eth/69 | eth/69 | Yes | Latest protocol, optimal |
+| ETH68-69 | eth/66, eth/67 | — | — | No common version, peer disconnected |
+| ETH68-69 | eth/63 | — | — | Very old peer, no common version, disconnected |
 
 ## Decode Flow Verification
 
@@ -87,7 +87,7 @@ All protocol decoders (ETH63-ETH68) were verified to be correctly implemented:
 
 ### Benefits
 - ✅ Better compatibility with Geth and other Ethereum clients
-- ✅ Proper negotiation with peers supporting ETH65, ETH66, or ETH67
+- ✅ Proper negotiation with modern peers (eth/68, eth/69, snap/1)
 - ✅ Enhanced debugging through comprehensive logging
 - ✅ Clear documentation for operators
 
@@ -98,8 +98,8 @@ All protocol decoders (ETH63-ETH68) were verified to be correctly implemented:
 
 ## Testing Recommendations
 
-1. **Test with Geth nodes**: Verify negotiation selects ETH68 when both sides support it
-2. **Test with older clients**: Verify negotiation falls back to ETH65/66 gracefully
+1. **Test with Geth nodes**: Verify negotiation selects ETH69 when both sides support it (ETH68 with eth/68-only peers)
+2. **Test with older clients**: Verify peers advertising only eth/67 or below are cleanly disconnected (`IncompatibleP2pProtocolVersion`)
 3. **Review logs**: Check that CAPABILITY_NEGOTIATION logs show expected behavior
 4. **Monitor block sync**: Ensure different protocol versions all sync correctly
 

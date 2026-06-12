@@ -856,7 +856,7 @@ WARN  [ServerActor] - No incoming connections
 
 #### Root Cause
 
-Firewall blocking required ports (9076/TCP, 30303/UDP).
+Firewall blocking required ports (30303/TCP, 30303/UDP).
 
 #### Fix
 

@@ -43,7 +43,7 @@ Fukuii uses two network protocols:
    - Protocol: Ethereum Node Discovery Protocol v4
 
 2. **Ethereum Protocol** (TCP)
-   - Port: 9076 (default)
+   - Port: 30303 (default)
    - Purpose: Exchange blockchain data
    - Protocol: RLPx with ETH/66 capability
 
@@ -172,7 +172,7 @@ INFO  [PeerDiscoveryManager] - Discovered X peers
 ```
 WARN  [PeerManagerActor] - Disconnected from peer: reason=...
 WARN  [PeerActor] - Handshake timeout with peer
-ERROR [ServerActor] - Failed to bind to port 9076
+ERROR [ServerActor] - Failed to bind to port 30303
 ```
 
 ### Check Network Connectivity
@@ -185,7 +185,7 @@ Verify your node is reachable from the internet:
 nc -zvu <your-public-ip> 30303
 
 # Check if P2P port is open
-nc -zv <your-public-ip> 9076
+nc -zv <your-public-ip> 30303
 ```
 
 Online port checkers:
@@ -219,13 +219,13 @@ Online port checkers:
 3. **Check ports are not blocked**
    ```bash
    # Check locally if ports are listening
-   sudo netstat -tulpn | grep -E "30303|9076"
+   sudo netstat -tulpn | grep -E "30303|30303"
    ```
    
    Expected output:
    ```
    udp6       0      0 :::30303              :::*                  <pid>/java
-   tcp6       0      0 :::9076               :::*                  <pid>/java
+   tcp6       0      0 :::30303               :::*                  <pid>/java
    ```
 
 4. **Check firewall rules**
@@ -251,11 +251,11 @@ fukuii.network.discovery.discovery-enabled = true
 ```bash
 # Ubuntu/Debian with ufw
 sudo ufw allow 30303/udp
-sudo ufw allow 9076/tcp
+sudo ufw allow 30303/tcp
 
 # RHEL/CentOS with firewalld
 sudo firewall-cmd --permanent --add-port=30303/udp
-sudo firewall-cmd --permanent --add-port=9076/tcp
+sudo firewall-cmd --permanent --add-port=30303/tcp
 sudo firewall-cmd --reload
 ```
 
@@ -265,7 +265,7 @@ If behind NAT/router:
 
 1. Log in to your router admin interface
 2. Forward port 30303 (UDP) to your node's internal IP
-3. Forward port 9076 (TCP) to your node's internal IP
+3. Forward port 30303 (TCP) to your node's internal IP
 4. Or enable UPnP in Fukuii config:
    ```hocon
    fukuii.network.automatic-port-forwarding = true

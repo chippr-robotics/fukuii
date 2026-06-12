@@ -26,7 +26,7 @@ docker volume create fukuii-conf
 docker run -d \
   --name fukuii \
   --restart unless-stopped \
-  -p 9076:9076 \
+  -p 30303:30303 \
   -p 30303:30303/udp \
   -v fukuii-data:/app/data \
   -v fukuii-conf:/app/conf \

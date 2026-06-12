@@ -1,3 +1,6 @@
+> **📁 Historical document** — archived 2026-06-12 during the post-0.7.0 documentation audit.
+> Point-in-time record kept for reference; not maintained and may not reflect the current implementation.
+
 # Core-Geth SNAP Sync Genesis Starting Sequence Analysis
 
 **Date**: 2025-12-15  

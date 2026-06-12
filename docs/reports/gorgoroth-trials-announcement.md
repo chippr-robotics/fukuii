@@ -1,3 +1,6 @@
+> **📁 Historical document** — archived 2026-06-12 during the post-0.7.0 documentation audit.
+> Point-in-time record kept for reference; not maintained and may not reflect the current implementation.
+
 # Welcome to the Gorgoroth Trials - Fukuii Alpha Testing Campaign
 
 **December 8, 2025**  

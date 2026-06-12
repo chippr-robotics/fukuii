@@ -119,7 +119,7 @@ fukuii {
 docker run -d \
   --name fukuii-full \
   --restart unless-stopped \
-  -p 9076:9076 \
+  -p 30303:30303 \
   -p 30303:30303/udp \
   -v fukuii-data:/app/data \
   ghcr.io/chippr-robotics/fukuii:latest
@@ -248,7 +248,7 @@ fukuii {
 docker run -d \
   --name fukuii-archive \
   --restart unless-stopped \
-  -p 9076:9076 \
+  -p 30303:30303 \
   -p 30303:30303/udp \
   -v fukuii-archive-data:/app/data \
   -v fukuii-archive-conf:/app/conf \
@@ -431,7 +431,7 @@ docker run -d \
   --name fukuii-bootnode \
   --restart unless-stopped \
   -p 30303:30303/udp \
-  -p 9076:9076 \
+  -p 30303:30303 \
   -v fukuii-bootnode-data:/app/data \
   -v $(pwd)/conf:/app/conf:ro \
   ghcr.io/chippr-robotics/fukuii:latest \
@@ -444,7 +444,7 @@ docker run -d \
   --name fukuii-bootnode \
   --restart unless-stopped \
   -p 30303:30303/udp \
-  -p 9076:9076 \
+  -p 30303:30303 \
   -v fukuii-bootnode-data:/app/data \
   -e JAVA_OPTS="-Xms2g -Xmx4g" \
   ghcr.io/chippr-robotics/fukuii:latest \
@@ -1139,7 +1139,7 @@ services:
     container_name: fukuii-full
     restart: unless-stopped
     ports:
-      - "9076:9076"
+      - "30303:30303"
       - "30303:30303/udp"
       - "127.0.0.1:8546:8546"
     volumes:
@@ -1154,7 +1154,7 @@ services:
     container_name: fukuii-archive
     restart: unless-stopped
     ports:
-      - "9077:9076"
+      - "9077:30303"
       - "30304:30303/udp"
       - "127.0.0.1:8547:8546"
     volumes:
@@ -1175,7 +1175,7 @@ services:
     restart: unless-stopped
     ports:
       - "30305:30303/udp"
-      - "9078:9076"
+      - "9078:30303"
     volumes:
       - fukuii-boot-data:/app/data
       - ./conf:/app/conf:ro  # Mount config directory
@@ -1363,7 +1363,7 @@ Expected: `"result": "0x14"` (20 peers or more)
 2. **Verify network ports:**
 ```bash
 # Check if ports are open
-netstat -tulpn | grep -E "9076|30303"
+netstat -tulpn | grep -E "30303|30303"
 ```
 
 3. **Check logs for errors:**

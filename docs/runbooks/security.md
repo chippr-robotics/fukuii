@@ -54,7 +54,7 @@ Fukuii uses three main ports:
 | Port | Protocol | Purpose | Exposure |
 |------|----------|---------|----------|
 | 30303 | UDP | Discovery | Public (required for peer discovery) |
-| 9076 | TCP | P2P Ethereum | Public (required for full participation) |
+| 30303 | TCP | P2P Ethereum | Public (required for full participation) |
 | 8546 | TCP | JSON-RPC HTTP | **PRIVATE** (internal only) |
 
 **Critical**: Never expose RPC ports (8546, 8545) to the public internet.
@@ -67,7 +67,7 @@ Fukuii uses three main ports:
 Internet
     │
     ├─── Port 30303 (UDP) ──→ Fukuii Discovery
-    ├─── Port 9076 (TCP) ──→ Fukuii P2P
+    ├─── Port 30303 (TCP) ──→ Fukuii P2P
     │
 Internal Network
     │
@@ -100,7 +100,7 @@ Internet
 # AWS Security Group example
 # Public subnet: Discovery + P2P
 Inbound: 30303/UDP from 0.0.0.0/0
-Inbound: 9076/TCP from 0.0.0.0/0
+Inbound: 30303/TCP from 0.0.0.0/0
 
 # Private subnet: RPC
 Inbound: 8546/TCP from 10.0.0.0/16 (internal only)
@@ -130,7 +130,7 @@ sudo ufw allow from YOUR_IP_ADDRESS to any port 22 proto tcp
 sudo ufw allow 30303/udp comment 'Fukuii discovery'
 
 # Allow Fukuii P2P (required for full node operation)
-sudo ufw allow 9076/tcp comment 'Fukuii P2P'
+sudo ufw allow 30303/tcp comment 'Fukuii P2P'
 
 # DO NOT allow RPC from internet
 # sudo ufw deny 8546/tcp comment 'Fukuii RPC blocked'
@@ -154,7 +154,7 @@ Status: active
      --                         ------      ----
 [ 1] 22/tcp                     ALLOW IN    YOUR_IP_ADDRESS
 [ 2] 30303/udp                  ALLOW IN    Anywhere
-[ 3] 9076/tcp                   ALLOW IN    Anywhere
+[ 3] 30303/tcp                   ALLOW IN    Anywhere
 [ 4] 8546/tcp                   ALLOW IN    10.0.1.5
 [ 5] 8546/tcp                   ALLOW IN    10.0.1.6
 ```
@@ -175,7 +175,7 @@ sudo firewall-cmd --permanent --add-service=ssh
 
 # Allow Fukuii ports
 sudo firewall-cmd --permanent --add-port=30303/udp
-sudo firewall-cmd --permanent --add-port=9076/tcp
+sudo firewall-cmd --permanent --add-port=30303/tcp
 
 # Restrict RPC to specific source IPs
 sudo firewall-cmd --permanent --add-rich-rule='
@@ -230,7 +230,7 @@ iptables -A INPUT -p tcp --dport 22 -s YOUR_IP_ADDRESS -j ACCEPT
 iptables -A INPUT -p udp --dport 30303 -j ACCEPT
 
 # Allow Fukuii P2P (TCP)
-iptables -A INPUT -p tcp --dport 9076 -j ACCEPT
+iptables -A INPUT -p tcp --dport 30303 -j ACCEPT
 
 # Allow RPC only from internal network
 iptables -A INPUT -p tcp --dport 8546 -s 10.0.0.0/16 -j ACCEPT
@@ -254,7 +254,7 @@ When running Fukuii in Docker, configure firewall on the host:
 docker run -d \
   --name fukuii \
   -p 30303:30303/udp \
-  -p 9076:9076/tcp \
+  -p 30303:30303/tcp \
   ghcr.io/chippr-robotics/fukuii:v1.0.0
 
 # INSECURE: Do NOT do this
@@ -286,7 +286,7 @@ iptables -I DOCKER-USER -i eth0 -s 10.0.1.0/24 -p tcp --dport 8546 -j ACCEPT
 # Public node group
 Inbound:
   - Type: Custom UDP, Port: 30303, Source: 0.0.0.0/0
-  - Type: Custom TCP, Port: 9076, Source: 0.0.0.0/0
+  - Type: Custom TCP, Port: 30303, Source: 0.0.0.0/0
   - Type: SSH, Port: 22, Source: YOUR_IP/32
 
 Outbound:
@@ -303,7 +303,7 @@ gcloud compute firewall-rules create fukuii-discovery \
 
 # Allow P2P
 gcloud compute firewall-rules create fukuii-p2p \
-  --allow tcp:9076 \
+  --allow tcp:30303 \
   --source-ranges 0.0.0.0/0 \
   --target-tags fukuii-node
 ```
@@ -870,7 +870,7 @@ sudo grep "sudo:" /var/log/auth.log
 **Monitor connections:**
 ```bash
 # Active connections to Fukuii
-sudo netstat -antp | grep -E "9076|30303|8546"
+sudo netstat -antp | grep -E "30303|30303|8546"
 
 # Detect unauthorized RPC access
 sudo tcpdump -i eth0 port 8546 -n
@@ -950,7 +950,7 @@ Schedule with cron:
 ### Pre-Deployment
 
 - [ ] Operating system hardened and updated
-- [ ] Firewall configured (allow only 30303/UDP and 9076/TCP)
+- [ ] Firewall configured (allow only 30303/UDP and 30303/TCP)
 - [ ] RPC not exposed to public internet
 - [ ] SSH hardened (key-based auth, no root login)
 - [ ] Dedicated user account created for Fukuii

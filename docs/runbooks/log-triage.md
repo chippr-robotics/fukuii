@@ -207,7 +207,7 @@ INFO  [NodeBuilder] - Fixing database...
 INFO  [GenesisDataLoader] - Loading genesis data...
 INFO  [GenesisDataLoader] - Genesis data loaded successfully
 INFO  [NodeBuilder] - Starting peer manager...
-INFO  [ServerActor] - Server bound to /0.0.0.0:9076
+INFO  [ServerActor] - Server bound to /0.0.0.0:30303
 INFO  [NodeBuilder] - Starting server...
 INFO  [DiscoveryService] - Discovery service started on port 30303
 INFO  [NodeBuilder] - Starting sync controller...
@@ -238,7 +238,7 @@ WARN  [PeerActor] - Received unknown message type from peer
 ### Error Indicators (Immediate Action Needed)
 
 ```
-ERROR [ServerActor] - Failed to bind to port 9076: Address already in use
+ERROR [ServerActor] - Failed to bind to port 30303: Address already in use
 ERROR [RocksDbDataSource] - Database corruption detected
 ERROR [BlockImporter] - Failed to execute block: insufficient gas
 ERROR [Fukuii] - Fatal error during startup
@@ -252,15 +252,15 @@ ERROR [Fukuii] - Fatal error during startup
 
 **Log pattern**:
 ```
-ERROR [ServerActor] - Failed to bind to port 9076
+ERROR [ServerActor] - Failed to bind to port 30303
 java.net.BindException: Address already in use
 ```
 
 **Diagnosis**:
 ```bash
 # Check what's using the port
-sudo lsof -i :9076
-sudo netstat -tulpn | grep 9076
+sudo lsof -i :30303
+sudo netstat -tulpn | grep 30303
 ```
 
 **Solution**:

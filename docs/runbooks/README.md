@@ -58,7 +58,7 @@ tail -f ~/.fukuii/etc/logs/fukuii.log
 - **Database**: `~/.fukuii/<network>/rocksdb/` - RocksDB blockchain database
 
 ### Essential Ports
-- **9076** - Ethereum protocol (P2P)
+- **30303** - Ethereum protocol (P2P)
 - **30303** - Discovery protocol (UDP)
 - **8545** - JSON-RPC HTTP API
 - **8546** - Alternative JSON-RPC port (WebSocket, configurable)

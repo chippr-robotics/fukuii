@@ -48,7 +48,7 @@ This runbook guides you through the initial setup and first-time startup of a Fu
 
 Ensure the following ports are accessible:
 - **30303/UDP** - Discovery protocol (inbound/outbound)
-- **9076/TCP** - Ethereum P2P protocol (inbound/outbound)
+- **30303/TCP** - Ethereum P2P protocol (inbound/outbound)
 - **8546/TCP** - JSON-RPC HTTP API (inbound, if exposing API)
 
 ## Installation Methods
@@ -86,7 +86,7 @@ docker volume create fukuii-conf
 docker run -d \
   --name fukuii \
   --restart unless-stopped \
-  -p 9076:9076 \
+  -p 30303:30303 \
   -p 30303:30303/udp \
   -v fukuii-data:/app/data \
   -v fukuii-conf:/app/conf \
@@ -212,7 +212,7 @@ fukuii {
   
   network {
     server-address {
-      port = 9076
+      port = 30303
     }
     
     discovery {
@@ -458,7 +458,7 @@ See the [Docker Deployment Guide](../deployment/docker.md) for a complete monito
 ```bash
 # Ubuntu/Debian with ufw
 sudo ufw allow 30303/udp comment "Fukuii discovery"
-sudo ufw allow 9076/tcp comment "Fukuii P2P"
+sudo ufw allow 30303/tcp comment "Fukuii P2P"
 
 # Optional: Allow RPC (only if needed externally - SECURITY RISK)
 # sudo ufw allow 8546/tcp comment "Fukuii RPC"
@@ -477,7 +477,7 @@ sudo ufw allow 9076/tcp comment "Fukuii P2P"
 1. **Port already in use**
    ```bash
    # Check what's using the port
-   sudo lsof -i :9076
+   sudo lsof -i :30303
    sudo lsof -i :30303
    ```
    Solution: Stop conflicting service or change Fukuii ports

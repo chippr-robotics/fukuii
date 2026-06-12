@@ -14,7 +14,7 @@ Welcome to the Fukuii JSON-RPC API documentation. This directory contains compre
    - **Use this for**: Exploring the API interactively, testing endpoints, integration planning
 
 2. **[JSON-RPC API Reference](./JSON_RPC_API_REFERENCE.md)**
-   - Complete reference for all JSON-RPC endpoints
+   - Reference for the JSON-RPC API (97 endpoints cataloged, 77 with full reference documentation)
    - Request/response examples for each method
    - Parameter descriptions and validation rules
    - Error codes and handling
