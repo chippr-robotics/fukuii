@@ -73,7 +73,7 @@ class HealingFrontierResumeSpec
       prePopulate: Seq[(ByteString, Seq[ByteString])] = Nil,
       markComplete: Boolean = false,
       rootInStorage: Boolean = true
-  )(body: (ActorRef, ByteString, HealingFrontierStorage) => Unit): Unit = {
+  )(body: (ActorRef, ByteString, HealingFrontierStorage, TestProbe) => Unit): Unit = {
     val pool = Executors.newSingleThreadExecutor()
     val ec = ExecutionContext.fromExecutorService(pool)
     val dbPath = Files.createTempDirectory("healing-frontier-resume-rocksdb").toAbsolutePath.toString
@@ -95,6 +95,7 @@ class HealingFrontierResumeSpec
     if (prePopulate.nonEmpty) store.update(Nil, prePopulate).commit()
     if (markComplete) store.markComplete() // simulate a prior rebuild DFS that ran to completion
 
+    val controllerProbe = TestProbe()
     val storage = new TestMptStorage()
     val root = if (rootInStorage) storedRoot(storage) else kec256(ByteString("write-on-queue-root"))
     val coordinator = system.actorOf(
@@ -104,14 +105,14 @@ class HealingFrontierResumeSpec
         requestTracker = new SNAPRequestTracker()(system.scheduler),
         mptStorage = storage,
         batchSize = 16,
-        snapSyncController = TestProbe().ref,
+        snapSyncController = controllerProbe.ref,
         healingFrontierStorage = if (persistence) Some(store) else None,
         healingWriterEcOverride = Some(ec)
       )
     )
     val death = TestProbe()
     death.watch(coordinator)
-    try body(coordinator, root, store)
+    try body(coordinator, root, store, controllerProbe)
     finally {
       // 1) No more actor-thread RocksDB ops. 2) Drain the EC so the resume `loadAll` iterator is closed.
       system.stop(coordinator)
@@ -125,14 +126,18 @@ class HealingFrontierResumeSpec
   }
 
   private def pendingTasks(coordinator: ActorRef): Int = {
-    coordinator ! Messages.HealingGetProgress
-    expectMsgType[HealingStatistics](2.seconds).pendingTasks
+    // Dedicated probe per query: the shared ImplicitSender inbox steals replies across tests when
+    // the suite runs with test parallelism — one test's awaitAssert can consume another test's
+    // HealingStatistics (observed as a deterministic-looking "0 was not equal to 7").
+    val probe = TestProbe()
+    coordinator.tell(Messages.HealingGetProgress, probe.ref)
+    probe.expectMsgType[HealingStatistics](2.seconds).pendingTasks
   }
 
   "TrieNodeHealingCoordinator (Layer 2)" should
     "resume from a COMPLETE persisted frontier and skip the full-state DFS" taggedAs UnitTest in {
       val entries = (0 until 7).map(i => hash(i) -> pathset(i))
-      withResumeFixture(persistence = true, prePopulate = entries, markComplete = true) { (coordinator, root, _) =>
+      withResumeFixture(persistence = true, prePopulate = entries, markComplete = true) { (coordinator, root, _, _) =>
         coordinator ! Messages.StartTrieNodeHealing(root)
         // Resume loads the 7 persisted entries (a childless-leaf-root DFS would have found 0).
         awaitAssert(pendingTasks(coordinator) shouldBe entries.size, 3.seconds, 100.millis)
@@ -143,7 +148,7 @@ class HealingFrontierResumeSpec
     // A frontier persisted by an interrupted rebuild has entries but no marker. Resuming it would skip the
     // un-walked region and leave gaps; the coordinator must fall back to the full DFS instead.
     val partial = (0 until 5).map(i => hash(i) -> pathset(i))
-    withResumeFixture(persistence = true, prePopulate = partial, markComplete = false) { (coordinator, root, _) =>
+    withResumeFixture(persistence = true, prePopulate = partial, markComplete = false) { (coordinator, root, _, _) =>
       coordinator ! Messages.StartTrieNodeHealing(root)
       // No resume of the 5 partial entries; the childless-leaf-root DFS finds nothing → pendingTasks stays 0.
       awaitAssert(pendingTasks(coordinator) shouldBe 0, 2.seconds, 100.millis)
@@ -153,7 +158,7 @@ class HealingFrontierResumeSpec
   it should "fall back to the full-state DFS when persistence is disabled (Layer-1 parity)" taggedAs UnitTest in {
     // Store HAS entries, but the coordinator is wired with None — they must be ignored.
     withResumeFixture(persistence = false, prePopulate = (0 until 5).map(i => hash(i) -> pathset(i))) {
-      (coordinator, root, _) =>
+      (coordinator, root, _, _) =>
         coordinator ! Messages.StartTrieNodeHealing(root)
         // No resume; the childless-leaf-root DFS finds nothing. Contrast with the resume test (reaches 7).
         awaitAssert(pendingTasks(coordinator) shouldBe 0, 2.seconds, 100.millis)
@@ -161,13 +166,25 @@ class HealingFrontierResumeSpec
   }
 
   it should "fall back to the full-state DFS when the persisted frontier is empty" taggedAs UnitTest in
-    withResumeFixture(persistence = true) { (coordinator, root, _) =>
+    withResumeFixture(persistence = true) { (coordinator, root, _, _) =>
       coordinator ! Messages.StartTrieNodeHealing(root)
       awaitAssert(pendingTasks(coordinator) shouldBe 0, 2.seconds, 100.millis)
     }
 
+  it should "skip the walk and complete via verification when the snapshot is complete and the frontier empty" taggedAs UnitTest in {
+    // Marker set + zero entries = the prior rebuild finished AND everything it found was healed
+    // (entries are unpersisted on heal). The old gate required loaded.nonEmpty and fell through to a
+    // full re-walk (~24-36h at mainnet scale). The fix skips the rebuild and runs the verification
+    // pass directly; on the childless-leaf root it finds nothing and completion flows to the
+    // controller — under the old behavior nothing reaches the controller until the watchdog era.
+    withResumeFixture(persistence = true, markComplete = true) { (coordinator, root, _, controller) =>
+      coordinator ! Messages.StartTrieNodeHealing(root)
+      controller.expectMsg(10.seconds, SNAPSyncController.StateHealingComplete)
+    }
+  }
+
   it should "mirror newly-queued nodes into the persisted frontier (write-on-queue)" taggedAs UnitTest in
-    withResumeFixture(persistence = true, rootInStorage = false) { (coordinator, _, store) =>
+    withResumeFixture(persistence = true, rootInStorage = false) { (coordinator, _, store, _) =>
       val queued = (10 until 16).map(i => pathset(i) -> hash(i))
       coordinator ! Messages.QueueMissingNodes(queued)
       // queueNodes persists synchronously on the actor thread; the store should gain the queued hashes.

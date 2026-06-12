@@ -362,12 +362,25 @@ class TrieNodeHealingCoordinator(
           val resumed: Option[Seq[HealingEntry]] = frontierStore.flatMap { store =>
             try {
               val loaded = store.loadAll().map { case (h, ps) => HealingEntry(pathset = ps, hash = h) }
-              if (loaded.nonEmpty && store.isComplete) {
+              if (store.isComplete && loaded.nonEmpty) {
                 // COMPLETE snapshot (the prior rebuild DFS finished) — safe to skip the full-state walk.
                 log.info(
                   s"[HEAL-RESTART] Resumed ${loaded.size} frontier entries from a complete persisted snapshot — skipping full-state DFS"
                 )
                 Some(loaded)
+              } else if (store.isComplete) {
+                // COMPLETE snapshot with an EMPTY frontier: the prior rebuild ran to completion AND every
+                // node it discovered was healed (entries are unpersisted as they heal). This is the
+                // best-possible restart state, but the old `loaded.nonEmpty && isComplete` gate fell
+                // through to a ~119M-node full re-walk (~24-36h on ETC mainnet) that can discover
+                // nothing new. Nothing to re-queue — skip the rebuild and run the verification pass,
+                // which still gates StateHealingComplete. (A pivot refresh clears the marker, so the
+                // marker being set implies the current root is the one the completed walk covered.)
+                log.info(
+                  "[HEAL-RESTART] Complete persisted snapshot with empty frontier (all discovered nodes " +
+                    "healed) — skipping full-state walk, running verification pass directly"
+                )
+                Some(Seq.empty)
               } else if (loaded.nonEmpty) {
                 // PARTIAL frontier: the prior rebuild DFS was interrupted before completion, so the un-walked
                 // region's missing nodes are not yet recorded. Skipping the DFS would silently leave gaps —
@@ -388,8 +401,11 @@ class TrieNodeHealingCoordinator(
             }
           }
           resumed match {
-            case Some(entries) =>
+            case Some(entries) if entries.nonEmpty =>
               selfRef ! FrontierRebuilt(entries)
+            case Some(_) =>
+              // Complete-and-empty: rebuild already proven done; verification alone decides completion.
+              startVerificationDFS(root, emptyPath)
             case None =>
               // Mark the persisted frontier authoritative when the full walk is done (all workers complete).
               startFrontierBFS(root, emptyPath, isStor = false, () => selfRef ! FrontierRebuildComplete)
