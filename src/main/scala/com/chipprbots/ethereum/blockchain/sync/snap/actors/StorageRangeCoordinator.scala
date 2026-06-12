@@ -11,7 +11,7 @@ import scala.math.Ordered.orderingToOrdered
 
 import com.chipprbots.ethereum.blockchain.sync.snap._
 import com.chipprbots.ethereum.db.dataSource.DataSourceBatchUpdate
-import com.chipprbots.ethereum.db.storage.{FlatSlotStorage, MptStorage}
+import com.chipprbots.ethereum.db.storage.{FlatSlotStorage, MptStorage, SnapSyncProgressStorage}
 import com.chipprbots.ethereum.network.Peer
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor
 import com.chipprbots.ethereum.network.p2p.MessageSerializable
@@ -67,7 +67,8 @@ class StorageRangeCoordinator(
     // worst-case storage-processing footprint is `maxConcurrentStorageAccounts × 8 MiB`. Default
     // 256 → ~2 GiB ceiling, independent of chain size. Raise via sync.conf if the peer pool
     // can justify a larger working set; lower if running with smaller `-Xmx`.
-    maxConcurrentStorageAccounts: Int = 256
+    maxConcurrentStorageAccounts: Int = 256,
+    snapProgressStorage: Option[SnapSyncProgressStorage] = None
 ) extends Actor
     with ActorLogging {
 
@@ -1277,6 +1278,12 @@ class StorageRangeCoordinator(
                     s"split into ${subtasks.size} parallel subtasks"
                 )
               }
+              // Persist the advancing storage cursor for crash recovery. Best-effort: concurrent
+              // subtask writes for the same account may race, but worst case is a partial
+              // re-download on resume, never data corruption.
+              snapProgressStorage.foreach(
+                _.writeStorageCursor(stateRoot, task.accountHash, StorageTask.incrementHash32(lastSlot))
+              )
             } else {
               // Account fully downloaded — commit the streaming trie if one exists.
               // For deferred-merkleization mode no trie was built; flat-slot writes alone
@@ -1560,7 +1567,8 @@ object StorageRangeCoordinator {
       flatBatchEcOverride: Option[ExecutionContext] = None,
       backpressureHighWatermark: Int = 100000,
       backpressureLowWatermark: Int = 50000,
-      maxConcurrentStorageAccounts: Int = 256
+      maxConcurrentStorageAccounts: Int = 256,
+      snapProgressStorage: Option[SnapSyncProgressStorage] = None
   ): Props =
     Props(
       new StorageRangeCoordinator(
@@ -1581,7 +1589,8 @@ object StorageRangeCoordinator {
         flatBatchEcOverride = flatBatchEcOverride,
         backpressureHighWatermark = backpressureHighWatermark,
         backpressureLowWatermark = backpressureLowWatermark,
-        maxConcurrentStorageAccounts = maxConcurrentStorageAccounts
+        maxConcurrentStorageAccounts = maxConcurrentStorageAccounts,
+        snapProgressStorage = snapProgressStorage
       )
     )
 

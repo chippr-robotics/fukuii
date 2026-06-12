@@ -18,6 +18,7 @@ import com.chipprbots.ethereum.db.storage.{
   MptStorage,
   Namespaces,
   RocksDbBfsQueueStorage,
+  SnapSyncProgressStorage,
   StateStorage
 }
 import com.chipprbots.ethereum.domain.{Block, BlockBody, BlockHeader, BlockchainReader, BlockchainWriter, ChainWeight}
@@ -55,6 +56,12 @@ class SNAPSyncController(
     context.system.dispatchers.lookup("snap-validation-dispatcher")
 
   import SNAPSyncController._
+
+  // SNAP download progress storage (namespace 'p'). Shares the same RocksDB DataSource as
+  // AppStateStorage but uses a dedicated namespace so progress survives crash-restart without
+  // interfering with other state. Replaces AppStateStorage's plain-text SnapSyncProgress entry
+  // (namespace 's', account-only). Storage cursor persistence is new.
+  private val snapProgressStorage = new SnapSyncProgressStorage(appStateStorage.dataSource)
 
   log.info("SNAPSyncController started with shared blacklist (cross-mode penalty propagation enabled)")
 
@@ -665,9 +672,16 @@ class SNAPSyncController(
       log.info(
         s"Preserved account range progress: ${progress.size} ranges ($completedCount fully complete)"
       )
-      // Persist to disk for crash recovery
+      // Persist to disk for crash recovery. writeAccountCursors preserves any storage cursors
+      // written concurrently by StorageRangeCoordinator (read-modify-write on the same JSON blob).
       val effectivePivot = preservedAtPivotBlock.getOrElse(BigInt(0))
-      appStateStorage.putSnapSyncProgress(serializeSnapProgress(progress, effectivePivot)).commit()
+      stateRoot.foreach { sr =>
+        snapProgressStorage.writeAccountCursors(
+          sr,
+          effectivePivot.toLong,
+          progress.map { case (k, v) => k.toHex -> v.toHex }
+        )
+      }
 
     case ProgressAccountsFinalizingTrie =>
       progressMonitor.setFinalizingTrie(true)
@@ -954,7 +968,7 @@ class SNAPSyncController(
         }
 
         // Clear persisted range progress — account phase is done, no need to resume it
-        appStateStorage.putSnapSyncProgress("").commit()
+        stateRoot.foreach(snapProgressStorage.clearProgress)
         preservedRangeProgress = Map.empty
         preservedAtPivotBlock = None
 
@@ -1828,7 +1842,8 @@ class SNAPSyncController(
                       initialResponseBytes = snapSyncConfig.storageInitialResponseBytes,
                       minResponseBytes = snapSyncConfig.storageMinResponseBytes,
                       deferredMerkleization = snapSyncConfig.deferredMerkleization,
-                      maxConcurrentStorageAccounts = snapSyncConfig.maxConcurrentStorageAccounts
+                      maxConcurrentStorageAccounts = snapSyncConfig.maxConcurrentStorageAccounts,
+                      snapProgressStorage = Some(snapProgressStorage)
                     )
                     .withDispatcher("sync-dispatcher"),
                   s"storage-range-coordinator-$coordinatorGeneration"
@@ -2464,7 +2479,7 @@ class SNAPSyncController(
     progressMonitor.stopPeriodicLogging()
 
     // Clear persisted SNAP progress — fast sync will start fresh
-    appStateStorage.putSnapSyncProgress("").commit()
+    stateRoot.foreach(snapProgressStorage.clearProgress)
     appStateStorage
       .putSnapSyncAccountsComplete(false)
       .and(appStateStorage.putSnapSyncStorageComplete(false))
@@ -2738,24 +2753,57 @@ class SNAPSyncController(
     // but large drift means the state may have changed significantly.
     val currentPivot = pivotBlock.getOrElse(BigInt(0))
 
-    // Try disk recovery first (cross-process restart), then fall back to in-memory
+    // Try disk recovery first (cross-process restart), then fall back to in-memory.
+    // Primary source: SnapSyncProgressStorage (namespace 'p', JSON, account + storage cursors).
+    // Migration fallback: AppStateStorage plain-text (namespace 's', account-only, written by older builds).
     if (preservedRangeProgress.isEmpty) {
-      appStateStorage.getSnapSyncProgress().foreach { saved =>
-        deserializeSnapProgress(saved).foreach { case (savedPivot, savedRanges) =>
-          if (savedRanges.nonEmpty && (currentPivot - savedPivot).abs <= MaxPreservedPivotDistance) {
+      snapProgressStorage.readProgress(rootHash) match {
+        case Some(saved) if saved.accountCursors.nonEmpty =>
+          val savedPivot = BigInt(saved.pivotBlock)
+          if ((currentPivot - savedPivot).abs <= MaxPreservedPivotDistance) {
+            val ranges = saved.accountCursors.flatMap { case (lastHex, nextHex) =>
+              for {
+                lastBs <- Try(ByteString(Hex.decode(lastHex))).toOption
+                nextBs <- Try(ByteString(Hex.decode(nextHex))).toOption
+              } yield lastBs -> nextBs
+            }
             log.info(
-              s"Recovered ${savedRanges.size} account ranges from disk " +
+              s"Recovered ${ranges.size} account ranges from SnapSyncProgressStorage " +
                 s"(saved pivot=$savedPivot, current=$currentPivot, drift=${(currentPivot - savedPivot).abs})"
             )
-            preservedRangeProgress = savedRanges
+            preservedRangeProgress = ranges
             preservedAtPivotBlock = Some(savedPivot)
-          } else if (savedRanges.nonEmpty) {
+          } else if (saved.accountCursors.nonEmpty) {
             log.info(
-              s"Discarding stale disk progress: pivot drifted ${(currentPivot - savedPivot).abs} blocks " +
+              s"Discarding stale SnapSyncProgressStorage: pivot drifted ${(currentPivot - savedPivot).abs} blocks " +
                 s"(>${MaxPreservedPivotDistance})"
             )
           }
-        }
+        case _ =>
+          // Migration fallback: read legacy AppStateStorage plain-text format (one-time, older builds)
+          appStateStorage.getSnapSyncProgress().foreach { saved =>
+            deserializeSnapProgress(saved).foreach { case (savedPivot, savedRanges) =>
+              if (savedRanges.nonEmpty && (currentPivot - savedPivot).abs <= MaxPreservedPivotDistance) {
+                log.info(
+                  s"Migrated ${savedRanges.size} account ranges from legacy AppStateStorage " +
+                    s"(saved pivot=$savedPivot, current=$currentPivot, drift=${(currentPivot - savedPivot).abs})"
+                )
+                preservedRangeProgress = savedRanges
+                preservedAtPivotBlock = Some(savedPivot)
+                // Write to new storage immediately so subsequent restarts use the new format
+                snapProgressStorage.writeAccountCursors(
+                  rootHash,
+                  savedPivot.toLong,
+                  savedRanges.map { case (k, v) => k.toHex -> v.toHex }
+                )
+              } else if (savedRanges.nonEmpty) {
+                log.info(
+                  s"Discarding stale legacy AppStateStorage progress: pivot drifted " +
+                    s"${(currentPivot - savedPivot).abs} blocks (>${MaxPreservedPivotDistance})"
+                )
+              }
+            }
+          }
       }
     }
 
@@ -2775,7 +2823,7 @@ class SNAPSyncController(
         )
         preservedRangeProgress = Map.empty
         preservedAtPivotBlock = None
-        appStateStorage.putSnapSyncProgress("").commit()
+        snapProgressStorage.clearProgress(rootHash)
         Map.empty
       case None =>
         Map.empty
@@ -2884,7 +2932,8 @@ class SNAPSyncController(
               initialResponseBytes = snapSyncConfig.storageInitialResponseBytes,
               minResponseBytes = snapSyncConfig.storageMinResponseBytes,
               deferredMerkleization = snapSyncConfig.deferredMerkleization,
-              maxConcurrentStorageAccounts = snapSyncConfig.maxConcurrentStorageAccounts
+              maxConcurrentStorageAccounts = snapSyncConfig.maxConcurrentStorageAccounts,
+              snapProgressStorage = Some(snapProgressStorage)
             )
             .withDispatcher("sync-dispatcher"),
           s"storage-range-coordinator-$coordinatorGeneration"
@@ -3808,9 +3857,11 @@ class SNAPSyncController(
     if (preservedAtPivotBlock.isDefined) {
       preservedAtPivotBlock = Some(newPivotBlock)
       if (preservedRangeProgress.nonEmpty) {
-        appStateStorage
-          .putSnapSyncProgress(serializeSnapProgress(preservedRangeProgress, newPivotBlock))
-          .commit()
+        snapProgressStorage.writeAccountCursors(
+          newStateRoot,
+          newPivotBlock.toLong,
+          preservedRangeProgress.map { case (k, v) => k.toHex -> v.toHex }
+        )
       }
     }
     stateRoot = Some(newStateRoot)
@@ -4335,23 +4386,7 @@ class SNAPSyncController(
 
   // --- SNAP progress persistence helpers ---
 
-  /** Serialize range progress + pivot block to a simple key=value format for AppStateStorage. Format:
-    * "pivotBlock=<N>\n<hexLast>=<hexNext>\n..." Deliberately simple — no JSON library dependency needed for 4-16
-    * entries.
-    */
-  private def serializeSnapProgress(
-      progress: Map[ByteString, ByteString],
-      pivot: BigInt
-  ): String = {
-    val sb = new StringBuilder
-    sb.append("pivotBlock=").append(pivot.toString).append('\n')
-    progress.foreach { case (last, next) =>
-      sb.append(last.toHex).append('=').append(next.toHex).append('\n')
-    }
-    sb.toString
-  }
-
-  /** Deserialize range progress from AppStateStorage format.
+  /** Deserialize range progress from legacy AppStateStorage plain-text format (migration fallback).
     * @return
     *   (pivotBlock, rangeProgress) or None if parsing fails
     */

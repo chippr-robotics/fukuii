@@ -21,6 +21,8 @@ object Namespaces {
     IndexedSeq[Byte]('g'.toByte) // Post-SNAP healing frontier (node hash -> pathset), Layer-2 resume
   val BfsQueueNamespace: IndexedSeq[Byte] =
     IndexedSeq[Byte]('q'.toByte) // BFS level queue (streaming frontier rebuild — OOM-safe at L7+)
+  val SnapSyncProgressNamespace: IndexedSeq[Byte] =
+    IndexedSeq[Byte]('p'.toByte) // SNAP download progress (stateRoot -> JSON cursors, account + storage)
 
   val nsSeq: Seq[IndexedSeq[Byte]] = Seq(
     ReceiptsNamespace,
@@ -38,6 +40,7 @@ object Namespaces {
     FlatSlotNamespace,
     FlatAccountNamespace,
     HealingFrontierNamespace,
-    BfsQueueNamespace
+    BfsQueueNamespace,
+    SnapSyncProgressNamespace
   )
 }
