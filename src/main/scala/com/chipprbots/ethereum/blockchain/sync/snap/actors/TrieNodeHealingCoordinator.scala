@@ -631,10 +631,15 @@ class TrieNodeHealingCoordinator(
       val recentHealed = totalNodesHealed - lastPulseHealedCount
       val healTotal = completedTaskCount.toLong + pendingTasks.size.toLong + activeRequests.size.toLong
       val healPct = if (healTotal > 0) ((completedTaskCount.toDouble / healTotal) * 100).toInt else 0
+      // walkRunning must reflect ANY active frontier walk (inline trie walk OR the BFS
+      // rebuild/verification Future) — the same OR the watchdog gates use. Rendering only
+      // trieWalkInProgress reported walkRunning=false during a live BFS rebuild, which misled
+      // operators (and matched the pre-fix watchdog bug that double-started walks).
+      val anyWalkRunning = trieWalkInProgress || verificationDFSRunning
       log.info(
         s"[HEAL-PULSE] $healPct% (est) | healed=$totalNodesHealed (+$recentHealed last 2min) | " +
           s"pending=${pendingTasks.size} active=${activeRequests.size} peers=${knownAvailablePeers.size} | " +
-          s"rate=${healRate.toInt} nodes/s walkRunning=$trieWalkInProgress pivotRefreshPending=$pivotRefreshRequested"
+          s"rate=${healRate.toInt} nodes/s walkRunning=$anyWalkRunning pivotRefreshPending=$pivotRefreshRequested"
       )
       val (newM, crossed) =
         com.chipprbots.ethereum.blockchain.sync.ProgressMilestones
