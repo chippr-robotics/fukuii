@@ -367,23 +367,23 @@ class PendingTransactionsManager(
     }
 
     // 2. ECIP-1122: reject if effectiveTip < minTip.
-    // With baseFeeFloor = 1 gwei, a tx with tip = 0 can never be included — reject at admission
-    // to protect the sender from a permanent nonce-queue deadlock.
-    // Use Option() to guard against null blockchainReader (permitted in tests; falls back to baseFeeFloor).
-    val currentBaseFee = Option(blockchainReader)
-      .flatMap(_.getBestBlock())
-      .flatMap(_.header.baseFee)
-      .getOrElse(blockchainConfig.baseFeeFloor)
+    // Pre-Olympia (Spiral): 1 wei floor — matches core-geth txpool.pricelimit default.
+    // At/after Olympia: blockchainConfig.minTip (1 gwei per ECIP-1122).
+    val bestBlockOpt = Option(blockchainReader).flatMap(_.getBestBlock())
+    val currentBaseFee = bestBlockOpt.flatMap(_.header.baseFee).getOrElse(blockchainConfig.baseFeeFloor)
+    val isOlympiaActive =
+      bestBlockOpt.exists(_.header.number >= blockchainConfig.forkBlockNumbers.olympiaBlockNumber)
+    val effectiveMinTip = if (isOlympiaActive) blockchainConfig.minTip else BigInt(1)
     val afterTipCheck = afterPendingNonceCheck.filter { stx =>
       val effectiveTip =
         com.chipprbots.ethereum.domain.Transaction.effectiveGasPrice(stx.tx.tx, Some(currentBaseFee)) - currentBaseFee
-      if (effectiveTip < blockchainConfig.minTip) {
+      if (effectiveTip < effectiveMinTip) {
         log.debug(
           "Rejecting tx {} from {}: effectiveTip {} < minTip {}",
           stx.tx.hash.toHex,
           stx.senderAddress,
           effectiveTip,
-          blockchainConfig.minTip
+          effectiveMinTip
         )
         false
       } else true

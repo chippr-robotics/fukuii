@@ -64,24 +64,23 @@ class BlockPreparator(
     val minerAddress = Address(block.header.beneficiary)
 
     val minerReward = minerRewardForOmmers + minerRewardForBlock
-    val worldAfterPayingBlockReward = increaseAccountBalance(minerAddress, UInt256(minerReward))(worldStateProxy)
+
+    // ECIP-1111: Treasury credit BEFORE miner/ommer rewards (spec order per ECIP-1111)
+    val worldAfterTreasury = creditBaseFeeToTreasury(block.header, blockchainConfig.treasuryAddress, worldStateProxy)
+
+    val worldAfterPayingBlockReward = increaseAccountBalance(minerAddress, UInt256(minerReward))(worldAfterTreasury)
     log.debug("Paying block {} reward of {} to miner with address {}", blockNumber, minerReward, minerAddress)
 
-    val worldAfterOmmers = block.body.uncleNodesList.foldLeft(worldAfterPayingBlockReward) { (ws, ommer) =>
+    block.body.uncleNodesList.foldLeft(worldAfterPayingBlockReward) { (ws, ommer) =>
       val ommerAddress = Address(ommer.beneficiary)
       val ommerReward = blockRewardCalculator.calculateOmmerRewardForInclusion(blockNumber, ommer.number)
 
       log.debug("Paying block {} reward of {} to ommer with account address {}", blockNumber, ommerReward, ommerAddress)
       increaseAccountBalance(ommerAddress, UInt256(ommerReward))(ws)
     }
-
-    // ECIP-1111: After Olympia activation, credit baseFee * gasUsed to treasury
-    creditBaseFeeToTreasury(block.header, blockchainConfig.treasuryAddress, worldAfterOmmers)
   }
 
-  /** ECIP-1111: Credit baseFee revenue to the treasury address. This runs AFTER block rewards and ommer rewards,
-    * matching core-geth's Finalize() order.
-    */
+  /** ECIP-1111: Credit baseFee * gasUsed to treasury. Applied BEFORE miner and ommer rewards per ECIP-1111 spec. */
   private def creditBaseFeeToTreasury(
       blockHeader: BlockHeader,
       treasuryAddress: Address,
@@ -89,6 +88,13 @@ class BlockPreparator(
   )(implicit blockchainConfig: BlockchainConfig): InMemoryWorldStateProxy = {
     val isOlympiaActivated = blockHeader.number >= blockchainConfig.forkBlockNumbers.olympiaBlockNumber
     if (!isOlympiaActivated) return world
+
+    if (treasuryAddress == Address(0)) {
+      log.error(
+        "Olympia is active at block {} but treasury address is zero — baseFee revenue will not be credited",
+        blockHeader.number
+      )
+    }
 
     blockHeader.baseFee match {
       case Some(baseFee) if baseFee > 0 && blockHeader.gasUsed > 0 && treasuryAddress != Address(0) =>

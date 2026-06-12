@@ -70,9 +70,7 @@ object PrecompiledContracts {
     KzgPointEvalAddr -> KzgPointEvaluation
   )
 
-  /** ETC Olympia precompiles: BLS12-381 suite (EIP-2537). Does NOT include P256VERIFY — EIP-7951 activates at Osaka
-    * timestamp on ETH chains, not at Olympia block on ETC.
-    */
+  /** BLS12-381 precompiles (EIP-2537). Active at ETH Prague and ETC Olympia base set. */
   val olympiaContracts: Map[Address, PrecompiledContract] = cancunContracts ++ Map(
     BlsG1AddAddr -> BlsG1Add,
     BlsG1MultiExpAddr -> BlsG1MultiExp,
@@ -83,7 +81,7 @@ object PrecompiledContracts {
     BlsMapG2Addr -> BlsMapG2
   )
 
-  /** EIP-7951 P256VERIFY activates at Osaka timestamp on ETH chains. */
+  /** ETC Olympia (block-based) and ETH Osaka (timestamp-based): BLS12-381 + P256VERIFY (EIP-7951, ECIP-1121). */
   val osakaContracts: Map[Address, PrecompiledContract] = olympiaContracts ++ Map(
     P256VerifyAddr -> P256Verify
   )
@@ -139,11 +137,10 @@ object PrecompiledContracts {
     if (isOsaka) {
       osakaContracts
     } else if (etcFork >= EtcForks.Olympia) {
-      olympiaContracts
+      // ETC Olympia activates BLS12-381 + P256VERIFY (ECIP-1121). Same set as ETH Osaka.
+      osakaContracts
     } else if (isPrague) {
-      // EIP-2537 adds BLS12-381 precompiles at 0x0b-0x11 on ETH Prague.
-      // The olympiaContracts set already contains exactly this superset
-      // (Cancun KZG + BLS12-381), without Osaka's P256VERIFY.
+      // ETH Prague activates BLS12-381 (EIP-2537) but NOT P256VERIFY (that is Osaka-only).
       olympiaContracts
     } else if (isCancun) {
       cancunContracts
