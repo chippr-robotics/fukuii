@@ -108,6 +108,21 @@ class RocksDbDataSource(
   override def updateSync(dataSourceUpdates: Seq[DataUpdate]): Unit =
     doWrite(dataSourceUpdates, sync = true)
 
+  override def deleteRange(namespace: Namespace, fromKey: Array[Byte], toKeyExclusive: Array[Byte]): Unit = {
+    dbLock.writeLock().lock()
+    try {
+      assureNotClosed()
+      // One native range tombstone for the whole interval — O(1) write, lazily reclaimed by
+      // compaction. Never expand a range into per-key deletes here (see DataSource.deleteRange).
+      db.deleteRange(handles(namespace), fromKey, toKeyExclusive)
+    } catch {
+      case error: RocksDbDataSourceClosedException =>
+        throw error
+      case NonFatal(error) =>
+        throw RocksDbDataSourceException(s"DataSource error while deleting range", error)
+    } finally dbLock.writeLock().unlock()
+  }
+
   private def doWrite(dataSourceUpdates: Seq[DataUpdate], sync: Boolean): Unit = {
     dbLock.writeLock().lock()
     try {

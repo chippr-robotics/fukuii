@@ -50,6 +50,15 @@ trait DataSource {
   def multiGetOptimized(namespace: Namespace, keys: Seq[Array[Byte]]): Seq[Option[Array[Byte]]] =
     keys.map(k => getOptimized(namespace, k))
 
+  /** Delete every key in `[fromKey, toKeyExclusive)` (lexicographic byte order) within `namespace`.
+    *
+    * Implementations should prefer a storage-native range delete over per-key tombstones: RocksDB writes a SINGLE range
+    * tombstone and reclaims space during compaction, whereas deleting N keys point-by-point writes N tombstones —
+    * observed live at ~140M keys this ground for ~30 minutes at full CPU and drove the container to the edge of its
+    * memory cgroup before the BFS healing walk could start.
+    */
+  def deleteRange(namespace: Namespace, fromKey: Array[Byte], toKeyExclusive: Array[Byte]): Unit
+
   /** This function updates the DataSource by deleting, updating and inserting new (key-value) pairs. Implementations
     * should guarantee that the whole operation is atomic.
     */

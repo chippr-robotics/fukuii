@@ -1269,6 +1269,11 @@ class TrieNodeHealingCoordinator(
       )
       SNAPSyncMetrics.setHealingRebuildVisited(visitedCount.get())
 
+      // Free the consumed level immediately (one range tombstone). Levels are processed exactly
+      // once and never re-read, and on ETC mainnet the live queue otherwise accumulates the whole
+      // walk (~140M entries, >10 GB) until the end-of-walk clear().
+      queue.deleteRange(levelStart, levelEnd)
+
       levelStart = levelEnd
       levelEnd = queue.counter
       levelIndex += 1
