@@ -1,3 +1,6 @@
+> **📁 Historical document** — archived 2026-06-12 during the post-0.7.0 documentation audit.
+> Point-in-time record kept for reference; not maintained and may not reflect the current implementation.
+
 # Gorgoroth Multi-Client Validation Walkthrough (6/9-node)
 
 **Last Updated**: December 21, 2025

@@ -132,7 +132,7 @@ The main production-ready image for running Fukuii.
 
 **Features:**
 - Multi-stage build for optimal size and security
-- Based on `eclipse-temurin:17-jre-jammy` (slim JRE)
+- Based on `eclipse-temurin:25-jre-noble` (slim JRE)
 - Runs as non-root user (`fukuii:fukuii`, UID/GID 1000)
 - Includes built-in healthcheck script
 - Exposes standard Ethereum ports (8545, 8546, 30303)
@@ -319,7 +319,7 @@ Pre-configured as a bootnode for peer discovery and network health.
 - Minimal resource footprint (2-4GB RAM, ~5GB disk)
 - No RPC endpoints (reduced attack surface)
 - In-memory pruning for minimal disk usage
-- Exposes only P2P ports (30303/udp, 9076/tcp)
+- Exposes only P2P ports (30303/udp, 30303/tcp)
 
 **Purpose:**
 Bootnodes serve as network infrastructure, helping new nodes discover peers and join the network faster. They focus exclusively on:
@@ -342,7 +342,7 @@ Bootnodes serve as network infrastructure, helping new nodes discover peers and 
 docker run -d \
   --name fukuii-bootnode \
   -p 30303:30303/udp \
-  -p 9076:9076/tcp \
+  -p 30303:30303/tcp \
   -v fukuii-bootnode-data:/app/data \
   -e JAVA_OPTS="-Xmx2g -Xms2g" \
   chipprbots/fukuii-bootnode:latest
@@ -351,7 +351,7 @@ docker run -d \
 docker run -d \
   --name fukuii-bootnode \
   -p 30303:30303/udp \
-  -p 9076:9076/tcp \
+  -p 30303:30303/tcp \
   -v fukuii-bootnode-data:/app/data \
   -e JAVA_OPTS="-Xmx2g -Xms2g" \
   ghcr.io/chippr-robotics/fukuii-bootnode:latest
@@ -373,7 +373,7 @@ services:
     restart: unless-stopped
     ports:
       - "30303:30303/udp"  # P2P discovery
-      - "9076:9076/tcp"    # P2P networking
+      - "30303:30303/tcp"    # P2P networking
     volumes:
       - bootnode-data:/app/data
     environment:
@@ -408,12 +408,12 @@ After starting the bootnode, you can share its enode URL with others:
 
 Ensure these ports are open:
 - UDP 30303 (discovery protocol) - REQUIRED
-- TCP 9076 (P2P connections) - REQUIRED
+- TCP 30303 (P2P connections) - REQUIRED
 
 Example firewall rules:
 ```bash
 sudo ufw allow 30303/udp
-sudo ufw allow 9076/tcp
+sudo ufw allow 30303/tcp
 ```
 
 **Monitoring Your Bootnode:**

@@ -194,7 +194,7 @@ const advancedConfigSections = {
     description: 'P2P networking, peer management, and discovery settings',
     fields: {
       'fukuii.network.server-address.interface': { label: 'P2P Interface', type: 'text', default: '0.0.0.0', description: 'Network interface for P2P connections' },
-      'fukuii.network.server-address.port': { label: 'P2P Port', type: 'number', default: 9076, description: 'Port for Ethereum P2P protocol' },
+      'fukuii.network.server-address.port': { label: 'P2P Port', type: 'number', default: 30303, description: 'Port for Ethereum P2P protocol' },
       'fukuii.network.discovery.discovery-enabled': { label: 'Enable Discovery', type: 'boolean', default: true, description: 'Enable peer discovery protocol' },
       'fukuii.network.discovery.port': { label: 'Discovery Port', type: 'number', default: 30303, description: 'UDP port for peer discovery' },
       'fukuii.network.automatic-port-forwarding': { label: 'UPnP Port Forwarding', type: 'boolean', default: true, description: 'Automatically configure router port forwarding' }

@@ -6,11 +6,12 @@ This document provides technical reference for network protocol compatibility. A
 
 | Protocol | Status | Notes |
 |----------|--------|-------|
-| ETH63 | ✅ Supported | Legacy support |
-| ETH64/65 | ✅ Supported | Full compatibility |
-| ETH66 | ✅ Supported | Request-id wrapped messages |
-| ETH67 | ✅ Supported | NewPooledTransactionHashes v2 |
-| ETH68 | ✅ Supported | Current production version |
+| ETH68 | ✅ Advertised | Production version |
+| ETH69 | ✅ Advertised | Latest ETH protocol version |
+| SNAP1 | ✅ Advertised | SNAP state sync |
+| ETH63–ETH67 | ❌ Not advertised | Removed from `supportedCapabilities`; legacy message codecs/adaptation code remain in the codebase but these versions are no longer negotiated with peers |
+
+Advertised capabilities are defined in `supportedCapabilities` in `src/main/scala/com/chipprbots/ethereum/utils/InstanceConfig.scala`.
 
 ---
 

@@ -161,13 +161,13 @@ kamon.instrumentation.pekko.filters {
 
 ### Loading the Dashboard
 
-A pre-configured Grafana dashboard is available at `/ops/grafana/fukuii-snap-sync-dashboard.json`.
+A pre-configured Grafana dashboard is available at `ops/grafana/Sync/fukuii-snap-sync.json`.
 
 **Import Steps:**
 
 1. Open Grafana UI (typically `http://localhost:3000`)
 2. Click **+** → **Import**
-3. Upload `/ops/grafana/fukuii-snap-sync-dashboard.json`
+3. Upload `ops/grafana/Sync/fukuii-snap-sync.json`
 4. Select your Prometheus datasource
 5. Click **Import**
 

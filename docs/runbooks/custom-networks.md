@@ -803,8 +803,8 @@ curl -X POST --data '{"jsonrpc":"2.0","method":"net_version","params":[],"id":1}
 
 4. Check firewall rules allow P2P traffic:
    ```bash
-   # Ensure ports 9076 (TCP) and 30303 (UDP/TCP) are open
-   sudo ufw allow 9076/tcp
+   # Ensure ports 30303 (TCP) and 30303 (UDP/TCP) are open
+   sudo ufw allow 30303/tcp
    sudo ufw allow 30303/tcp
    sudo ufw allow 30303/udp
    ```

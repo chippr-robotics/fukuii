@@ -1,3 +1,6 @@
+> **📁 Historical document** — archived 2026-06-12 during the post-0.7.0 documentation audit.
+> Point-in-time record kept for reference; not maintained and may not reflect the current implementation.
+
 # Gorgoroth 3-Node Snap Sync Validation Plan
 
 **Objective:** Prove that a late-joining Fukuii node can snap-sync to an in-flight 3-node Gorgoroth network while only node1 is mining. The plan enforces DAG creation, sustained mining, follower validation, and snap-sync log capture using the `ops/tools/fukuii-cli.sh` helper.

@@ -36,13 +36,19 @@ val pivotBlockNumber = networkBestBlock - snapSyncConfig.pivotBlockOffset
 - Reduces catch-up time after SNAP sync completes
 
 ### 3. Genesis Start Support
+When the network height is confirmed to be at or below the pivot offset (64 blocks), SNAP sync uses genesis (block 0) as the pivot and syncs from the genesis state root — effectively a full sync for the early chain (`SNAPSyncController.startSnapSync`):
+
 ```scala
-// If chain height <= 64 blocks, use genesis as pivot
+// If chain height <= pivot offset (64), consider using genesis as pivot
 if (baseBlockForPivot <= snapSyncConfig.pivotBlockOffset) {
-  // Use genesis (block 0) as pivot
-  // SNAP sync effectively performs full sync for early blocks
+  // Guarded: only commit to genesis when peers genuinely confirm low network height
 }
 ```
+
+**Important guards** (added after the original fix) prevent committing to a genesis pivot when heights are merely uninitialized:
+- **No peers connected** (local pivot source): the network height is unknown — the controller schedules a retry instead of assuming the network is at genesis.
+- **Peers connected but all report height 0**: heights have not been populated by the ETH status exchange yet — treated as "heights unknown" and retried rather than committing to genesis.
+- Only when connected peers genuinely confirm a low network height does the node set pivot = block 0 and start account-range sync from the genesis state root; if the genesis header is unavailable it falls back to fast sync.
 
 ### 4. Extended Bootstrap
 - If pivot header not available locally, continue syncing to reach it

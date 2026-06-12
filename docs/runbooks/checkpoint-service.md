@@ -1059,7 +1059,7 @@ iftop -i eth0
 ```bash
 # 1. Increase peer count
 # Add more bootnodes to conf/fukuii.conf
-network.server-address.port = 9076
+network.server-address.port = 30303
 network.discovery.bootstrap-nodes = [
   "enode://...",
   "enode://..."
@@ -1075,8 +1075,8 @@ sync.snap-sync.storage-concurrency = 12  # Default: 8
 # - Use 8+ CPU cores
 
 # 4. Check network connectivity
-# Ensure ports 9076 (TCP) and 30303 (UDP) are open
-sudo ufw allow 9076/tcp
+# Ensure ports 30303 (TCP) and 30303 (UDP) are open
+sudo ufw allow 30303/tcp
 sudo ufw allow 30303/udp
 ```
 

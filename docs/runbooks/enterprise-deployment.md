@@ -303,7 +303,7 @@ fukuii enterprise -Dconfig.file=/opt/fukuii/enterprise-node.conf
 1. **Firewall Configuration**:
    ```bash
    # Allow P2P only from trusted network
-   sudo ufw allow from 192.168.1.0/24 to any port 9076 proto tcp
+   sudo ufw allow from 192.168.1.0/24 to any port 30303 proto tcp
    sudo ufw allow from 192.168.1.0/24 to any port 30303 proto udp
    sudo ufw allow from 192.168.1.0/24 to any port 30303 proto tcp
    

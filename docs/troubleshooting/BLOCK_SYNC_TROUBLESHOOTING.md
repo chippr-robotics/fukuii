@@ -8,7 +8,7 @@ This document provides solutions for block synchronization. All documented issue
 
 | Scenario | Solution | Status |
 |----------|----------|--------|
-| ForkId mismatch at block 0 | Automatic — uses latest fork in ForkId | ✅ Fixed |
+| ForkId mismatch at block 0 | Pure EIP-2124 validation — genesis ForkId is spec-correct | ✅ Resolved |
 | Peers disconnect after handshake | Automatic — bootstrap checkpoints enabled | ✅ Fixed |
 | Zero stable peers | Check firewall + manual connections available | ✅ Documented |
 
@@ -93,7 +93,7 @@ Since our ForkId is correct for block 0, investigate why peers reject us:
 
 1. **Check Peer Implementation**: Verify the peer software versions accepting connections
 2. **Network Conditions**: Ensure stable network connectivity to bootstrap nodes
-3. **Firewall Rules**: Verify TCP/UDP ports 30303 and 9076 are properly configured
+3. **Firewall Rules**: Verify TCP/UDP ports 30303 and 30303 are properly configured
 4. **DNS Resolution**: Ensure bootstrap node addresses resolve correctly
 
 ### Option 3: Alternative Bootstrap Strategy
@@ -119,7 +119,7 @@ After updating configuration:
    ```bash
    ./bin/fukuii etc 2>&1 | grep -A 2 "Sending status"
    ```
-   Should show: `forkId=ForkId(0xbe46d57c, None)` or similar valid ForkId
+   At block 0, should show: `forkId=ForkId(0xfc64ec04, Some(1150000))` for ETC mainnet; the ForkId advances per EIP-2124 as the node syncs
 
 2. **Monitor Peer Connections**:
    ```bash
@@ -169,33 +169,15 @@ Full fork list comparison with core-geth `params/config_classic.go`:
 
 **Result**: Configuration matches core-geth perfectly. ForkId calculation is correct.
 
-## Solution Implemented (Default Behavior)
+## Current Behavior: Pure EIP-2124 ForkId Validation
 
-### ForkId Reporting at Block 0
+Fukuii implements **pure EIP-2124 ForkId validation** with no workarounds. The ForkId is always calculated from the node's actual chain head (`ForkId.create()` in `src/main/scala/com/chipprbots/ethereum/forkid/ForkId.scala`):
 
-**As of this version**, Fukuii now implements a practical workaround to match core-geth behavior:
+- At block 0 (unsynced), ETC mainnet reports `ForkId(0xfc64ec04, Some(1150000))` — the CRC32 of the genesis hash, with Homestead (1,150,000) as the next fork. This matches core-geth's expected value for an unsynced node.
+- As the node syncs past each fork block, the ForkId hash and `next` value advance per EIP-2124.
+- A fully synced ETC mainnet node (past Spiral at 19,250,000) reports `ForkId(0xbe46d57c, None)`.
 
-When a node is at block 0, it reports the **latest known fork** in its ForkId instead of the genesis fork. This prevents peer rejections while maintaining protocol compatibility.
-
-**Implementation:**
-- At block 0: Reports `ForkId(0xbe46d57c, None)` (Spiral fork for ETC mainnet)
-- At block 1+: Reports correct ForkId based on actual block height per EIP-2124
-
-**Why this works:**
-1. Peers running Core-Geth v1.12.20+ expect modern ForkId values
-2. Reporting the latest fork prevents immediate disconnection (error 0x10)
-3. Once the node syncs past block 0, normal ForkId reporting resumes
-4. This matches core-geth's practical approach to initial peer connections
-
-**Code changes:**
-- Modified `ForkId.create()` in `src/main/scala/com/chipprbots/ethereum/forkid/ForkId.scala`
-- Updated test cases to verify the new behavior
-
-### No Configuration Required
-
-This is now the **default behavior** - no configuration flags or changes needed. The workaround is applied automatically when:
-- Node is at block 0 (unsynced)
-- Fork list is available from blockchain configuration
+Per EIP-2124, remote peers must accept a node advertising the genesis ForkId as a stale-but-compatible peer that can still sync. No configuration is required.
 
 ### Understanding the Issue (Historical Context)
 
@@ -204,11 +186,11 @@ The ForkId mismatch issue occurred because:
 2. **Peer nodes** (at block 19,250,000+) report ForkId `0xbe46d57c, next: None`
 3. **Peers disconnected** with reason code 0x10 due to perceived incompatibility
 
-This was a **peer-side strictness issue**. While our original ForkId was technically correct per EIP-2124, it was practically incompatible with modern peer implementations.
+This was a **peer-side strictness issue**. Our ForkId was (and is) correct per EIP-2124; some peer implementations were observed disconnecting nodes that were far behind, despite the spec requiring acceptance of stale-but-compatible peers.
 
-### Previous Workarounds (No Longer Needed)
+### Optional Measures
 
-The following workarounds are no longer necessary with the implemented fix, but may still be useful in some situations:
+The following measures are not required for ForkId compatibility, but may still be useful in some situations:
 
 #### Bootstrap Checkpoints
 
@@ -227,8 +209,8 @@ If you experience connection issues, you can still add known-stable peers:
 # In application.conf
 fukuii.network.peer {
   manual-connections = [
-    "enode://fbcd6fc04fa7ea897558c3f5edf1cd192e3b2c3b5b9b3d00be179b2e9d04e623e017ed6ce6a1369fff126661afa1c5caa12febce92dcb70ff1352b86e9ebb44f@18.193.251.235:9076?discport=30303",
-    "enode://1619217a01fb87a745bb104872aa84314a2d42d99c7b915cd187245bfd898d679cbf78b3ea950c32051db860e2c4e3fe7d6329107587be33ab37541ca65046f91@18.198.165.189:9076?discport=30303",
+    "enode://fbcd6fc04fa7ea897558c3f5edf1cd192e3b2c3b5b9b3d00be179b2e9d04e623e017ed6ce6a1369fff126661afa1c5caa12febce92dcb70ff1352b86e9ebb44f@18.193.251.235:30303?discport=30303",
+    "enode://1619217a01fb87a745bb104872aa84314a2d42d99c7b915cd187245bfd898d679cbf78b3ea950c32051db860e2c4e3fe7d6329107587be33ab37541ca65046f91@18.198.165.189:30303?discport=30303",
   ]
 }
 ```
@@ -237,17 +219,17 @@ fukuii.network.peer {
 
 **Issue: RESOLVED** ✅
 
-Nodes starting from block 0 now report the latest fork in their ForkId, matching core-geth behavior and preventing peer rejections. No configuration changes required.
+Fukuii reports the spec-correct EIP-2124 ForkId at every block height, including block 0. No configuration changes required.
 
 ### Verification
 
-To verify the fix is working:
+To verify ForkId reporting:
 
 1. **Check ForkId at Startup**:
    ```bash
    ./bin/fukuii etc 2>&1 | grep "Sending status"
    ```
-   At block 0, should show: `forkId=ForkId(0xbe46d57c, None)` for ETC mainnet
+   At block 0, should show: `forkId=ForkId(0xfc64ec04, Some(1150000))` for ETC mainnet (the genesis ForkId per EIP-2124)
 
 2. **Monitor Peer Connections**:
    ```bash

@@ -8,45 +8,39 @@ This document explains how Fukuii negotiates protocol capabilities with peers, p
 
 ### Current Support (as of this update)
 
-Fukuii supports the following protocol capabilities:
+Fukuii advertises the following protocol capabilities (`src/main/scala/com/chipprbots/ethereum/utils/InstanceConfig.scala`):
 
 ```scala
 val supportedCapabilities: List[Capability] = List(
-  Capability.ETH66,  // ETH protocol version 66
-  Capability.ETH67,  // ETH protocol version 67
-  Capability.ETH68,  // ETH protocol version 68 (latest)
+  Capability.ETH68,  // ETH protocol version 68
+  Capability.ETH69,  // ETH protocol version 69 (latest)
   Capability.SNAP1   // SNAP/1 protocol (satellite protocol for state sync)
 )
 ```
 
-### Legacy Support
+### Legacy Versions (not advertised)
 
-While not actively advertised, Fukuii can also decode messages from:
-- **ETH63**: Legacy protocol without ForkId support
-- **ETH64**: Adds ForkId support
-- **ETH65**: Adds transaction pool messages
-
-These are supported for backward compatibility during the negotiation phase but are not advertised in the Hello message.
+ETH63 through ETH67 are **not advertised** in the Hello message. Message definitions for
+those versions still exist in the codebase (e.g. for parsing peer capability strings), but
+Fukuii will not negotiate them. Note that **ETH68 removed `GetNodeData`/`NodeData`** — those
+messages do not exist in ETH68+; state retrieval uses the SNAP/1 satellite protocol instead.
 
 ## Why Advertise Multiple Versions?
 
-### Incorrect Previous Approach
+### Why a version list at all?
 
-Previously, Fukuii only advertised `ETH68` and `SNAP1`, based on a misunderstanding that:
-> "Per DevP2P spec: advertise only the highest version of each protocol family"
+The DevP2P Hello message carries a *list* of capabilities, and clients advertise every
+version they actively support so both sides can find the highest common one. Current Geth
+releases advertise `eth/68`, `eth/69`, `snap/1` — exactly the set Fukuii advertises.
 
-This was **incorrect** and caused negotiation failures with peers that only supported older protocol versions.
-
-### Correct Approach (Aligned with Geth)
-
-**Geth and other Ethereum clients advertise ALL supported protocol versions**, not just the highest one. For example:
-- Geth advertises: `eth/66`, `eth/67`, `eth/68`, `snap/1`
-- Besu advertises: `eth/66`, `eth/67`, `eth/68`, `snap/1`
-
-This approach ensures:
+Advertising the full supported set ensures:
 1. **Maximum compatibility** with peers supporting different protocol versions
 2. **Proper negotiation** where both sides can find a common version
-3. **Backward compatibility** with older clients that may only support ETH65 or ETH66
+3. **Graceful coexistence** with peers that have not yet adopted the newest version (e.g. an
+   eth/68-only peer still negotiates `eth/68` with us)
+
+Versions older than ETH68 are deliberately excluded: the live ETC peer set negotiates
+ETH68+/SNAP1, and carrying decoders for retired versions adds surface area without benefit.
 
 ## Protocol Negotiation Algorithm
 
@@ -54,24 +48,17 @@ The negotiation algorithm in `Capability.negotiate()` works as follows:
 
 ```scala
 def negotiate(c1: List[Capability], c2: List[Capability]): Option[Capability] = {
-  // ETH protocol versions are backward compatible
-  // If we advertise ETH68 and peer advertises ETH64, we should negotiate ETH64
-  // This means we need to find the highest common version for each protocol family
-
-  val ethVersions1 = c1.collect { case cap @ (ETH63 | ETH64 | ETH65 | ETH66 | ETH67 | ETH68) => cap }
-  val ethVersions2 = c2.collect { case cap @ (ETH63 | ETH64 | ETH65 | ETH66 | ETH67 | ETH68) => cap }
+  val ethVersions1 = c1.collect { case cap @ (ETH63 | ETH64 | ETH65 | ETH66 | ETH67 | ETH68 | ETH69) => cap }
+  val ethVersions2 = c2.collect { case cap @ (ETH63 | ETH64 | ETH65 | ETH66 | ETH67 | ETH68 | ETH69) => cap }
 
   // For each protocol family, find the highest common version
   val negotiatedCapabilities = List(
-    // ETH: if both support ETH, use the minimum of their maximum versions
+    // ETH: find the highest version that BOTH sides advertise (strict intersection).
+    // We only return a capability from our own set to guarantee we have a decoder for it.
     if (ethVersions1.nonEmpty && ethVersions2.nonEmpty) {
-      val maxVersion = math.min(
-        ethVersions1.maxBy(_.version).version,
-        ethVersions2.maxBy(_.version).version
-      )
-      // Find the capability with that version number from either side
-      ethVersions1.find(_.version == maxVersion)
-        .orElse(ethVersions2.find(_.version == maxVersion))
+      val commonVersions = ethVersions1.map(_.version).toSet.intersect(ethVersions2.map(_.version).toSet)
+      if (commonVersions.isEmpty) None
+      else ethVersions1.find(_.version == commonVersions.max) // always from our side — we have the decoder
     } else None,
     // SNAP: exact match required
     if (snapVersions1.intersect(snapVersions2).nonEmpty) Some(SNAP1) else None
@@ -86,33 +73,31 @@ def negotiate(c1: List[Capability], c2: List[Capability]): Option[Capability] = 
 
 ### Negotiation Examples
 
-#### Example 1: Peer with ETH65 only
-- **Peer advertises**: `eth/65`
-- **We advertise**: `eth/66`, `eth/67`, `eth/68`, `snap/1`
+#### Example 1: Peer with ETH68 only
+- **Peer advertises**: `eth/68`, `snap/1`
+- **We advertise**: `eth/68`, `eth/69`, `snap/1`
 - **Negotiation**:
-  - Our max: 68, Peer max: 65
-  - Common version: min(68, 65) = 65
-  - Find 65 in peer's list: ✓ Found
-- **Result**: `eth/65` (no RequestId wrapper)
-
-#### Example 2: Geth peer with multiple versions
-- **Peer advertises**: `eth/66`, `eth/67`, `eth/68`, `snap/1`
-- **We advertise**: `eth/66`, `eth/67`, `eth/68`, `snap/1`
-- **Negotiation**:
-  - Our max: 68, Peer max: 68
-  - Common version: min(68, 68) = 68
+  - Common ETH versions: {68}
+  - Highest common: 68
   - Find 68 in our list: ✓ Found
 - **Result**: `eth/68` and `snap/1` (both use RequestId wrapper)
 
-#### Example 3: Legacy peer with ETH64 only
-- **Peer advertises**: `eth/64`
-- **We advertise**: `eth/66`, `eth/67`, `eth/68`, `snap/1`
+#### Example 2: Geth peer with multiple versions
+- **Peer advertises**: `eth/68`, `eth/69`, `snap/1`
+- **We advertise**: `eth/68`, `eth/69`, `snap/1`
 - **Negotiation**:
-  - Our max: 68, Peer max: 64
-  - Common version: min(68, 64) = 64
-  - Find 64 in our list: ✗ Not found
-  - Find 64 in peer's list: ✓ Found
-- **Result**: `eth/64` (no RequestId wrapper)
+  - Common ETH versions: {68, 69}
+  - Highest common: 69
+  - Find 69 in our list: ✓ Found
+- **Result**: `eth/69` and `snap/1` (both use RequestId wrapper)
+
+#### Example 3: Legacy peer with ETH66 or older
+- **Peer advertises**: `eth/66`
+- **We advertise**: `eth/68`, `eth/69`, `snap/1`
+- **Negotiation**:
+  - Common ETH versions: ∅ (we do not advertise anything below 68)
+  - No common version
+- **Result**: negotiation fails — the peer is disconnected with `IncompatibleP2pProtocolVersion`
 
 ## Protocol Differences
 
@@ -127,15 +112,16 @@ A critical difference between protocol versions is the use of RequestId wrapper:
 | ETH65    | ❌ No     | Adds tx pool messages, no request tracking |
 | ETH66    | ✅ Yes    | Adds RequestId to all request/response pairs |
 | ETH67    | ✅ Yes    | Enhanced tx announcements with types/sizes |
-| ETH68    | ✅ Yes    | Removes GetNodeData/NodeData (use SNAP instead) |
+| ETH68    | ✅ Yes    | **Removes GetNodeData/NodeData** — these messages no longer exist; state is fetched via SNAP instead |
+| ETH69    | ✅ Yes    | No total difficulty in Status — chain weight is derived via calibration instead |
 | SNAP1    | ✅ Yes    | State sync protocol (satellite to ETH) |
 
 The code checks this using `Capability.usesRequestId()`:
 
 ```scala
 def usesRequestId(capability: Capability): Boolean = capability match {
-  case ETH66 | ETH67 | ETH68 | SNAP1 => true
-  case _                             => false
+  case ETH66 | ETH67 | ETH68 | ETH69 | SNAP1 => true
+  case _                                     => false
 }
 ```
 
@@ -163,28 +149,28 @@ Enhanced logging has been added to help diagnose protocol negotiation issues:
 
 ### Capability Exchange
 ```
-[INFO] PEER_CAPABILITIES: clientId=Geth/v1.13.5, p2pVersion=5, capabilities=[eth/66, eth/67, eth/68, snap/1]
-[INFO] OUR_CAPABILITIES: capabilities=[ETH66, ETH67, ETH68, SNAP1]
+[INFO] PEER_CAPABILITIES: clientId=Geth/v1.16.1, p2pVersion=5, capabilities=[eth/68, eth/69, snap/1]
+[INFO] OUR_CAPABILITIES: capabilities=[ETH68, ETH69, SNAP1]
 ```
 
 ### Negotiation Result
 ```
-[INFO] CAPABILITY_NEGOTIATION: peerCaps=[eth/66, eth/67, eth/68, snap/1], ourCaps=[ETH66, ETH67, ETH68, SNAP1], negotiated=ETH68
-[INFO] PROTOCOL_NEGOTIATED: clientId=Geth/v1.13.5, protocol=ETH68, usesRequestId=true
+[INFO] CAPABILITY_NEGOTIATION: peerCaps=[eth/68, eth/69, snap/1], ourCaps=[ETH68, ETH69, SNAP1], negotiated=ETH69
+[INFO] PROTOCOL_NEGOTIATED: clientId=Geth/v1.16.1, protocol=ETH69, usesRequestId=true
 ```
 
 ### Negotiation Failure
 ```
-[WARN] PROTOCOL_NEGOTIATION_FAILED: clientId=OldClient, peerCaps=[eth/62], ourCaps=[ETH66, ETH67, ETH68, SNAP1], reason=IncompatibleP2pProtocolVersion
+[WARN] PROTOCOL_NEGOTIATION_FAILED: clientId=OldClient, peerCaps=[eth/62], ourCaps=[ETH68, ETH69, SNAP1], reason=IncompatibleP2pProtocolVersion
 ```
 
 ## Troubleshooting
 
-### Symptom: "eth/65 is being selected" when expecting eth/68
+### Symptom: peer disconnects with IncompatibleP2pProtocolVersion
 
-**Cause**: The peer only advertises `eth/65`, so negotiation correctly selects the highest common version.
+**Cause**: The peer only advertises versions below `eth/68` (e.g. `eth/65`). Fukuii advertises `eth/68`, `eth/69`, `snap/1` only, so there is no common version and negotiation fails.
 
-**Solution**: This is expected behavior. The peer needs to be upgraded to support newer protocols.
+**Solution**: This is expected behavior. The peer needs to be upgraded to support eth/68 or newer.
 
 **Verification**: Check the logs:
 ```bash
