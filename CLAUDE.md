@@ -1,16 +1,26 @@
 # CLAUDE.md — Working in fukuii
 
-`fukuii` is an **Ethereum Classic (ETC)** client (forked from IOHK Mantis,
-repackaged under `com.chipprbots`), running on **Scala 3.3.7 LTS** with Akka
-actors and PoW (Ethash) mining. This file orients Claude and any subagents.
+`fukuii` is a **multi-network EVM client** (forked from IOHK Mantis, repackaged
+under `com.chipprbots`), running on **Scala 3.3.7 LTS** with Akka actors.
+It supports two independent chain families:
 
-## ETC ≠ Ethereum mainnet (read this first)
+- **Ethereum Classic (ETC/Mordor)** — PoW/Ethash, ECIP-1017 fixed-supply
+  emission, block-number fork dispatch. Chain ID 61 (mainnet), 63 (Mordor).
+- **Ethereum (ETH/Sepolia)** — PoS (post-merge), timestamp fork dispatch.
+  Chain ID 1 (mainnet), 11155111 (Sepolia).
 
-ETC **keeps**: PoW/Ethash mining, ECIP-1017 fixed-supply emission, the
-traditional gas model, pre-merge opcodes. Chain ID is **61** (mainnet).
-ETC hard forks: Atlantis → Agharta → Phoenix → Thanos (ECIP-1099) → Magneto →
-Mystique. ETC does **NOT** have Proof-of-Stake/the merge, EIP-1559, blob
-transactions, or account abstraction. Never add ETH-mainnet-only features.
+## ETC vs ETH — read this first
+
+**ETC keeps**: PoW/Ethash, ECIP-1017 fixed-supply emission, traditional gas
+model, pre-merge opcodes, block-number fork dispatch. Hard forks: Atlantis →
+Agharta → Phoenix → Thanos (ECIP-1099) → Magneto → Mystique → **Olympia**
+(planned: ECIP-1111/1112/1121).
+
+**ETH/Sepolia has**: PoS consensus, timestamp fork dispatch, EIP-1559 base-fee
+burned, validator withdrawals, blob transactions (EIP-4844), Osaka fork.
+
+**Do not mix these code paths.** ETC fork config uses `OlympiaOpCodes` /
+`forBlock()`; ETH fork config uses `OsakaOpCodes` / `forTimestamp()`.
 
 ## Build & test commands
 
@@ -41,10 +51,11 @@ session is the orchestrator** — subagents cannot spawn other subagents, so you
 
 | Agent     | Use it for | Proactive? |
 | :-------- | :--------- | :--------- |
-| `forge`   | Consensus-critical code: EVM, mining, crypto, state, block rewards, hard forks, any EIP/ECIP | **Before** any consensus change |
-| `eye`     | Validation: compile + run the right test tier, check ETC compatibility, report pass/fail | **After** code changes |
+| `forge`   | **ETC/Mordor** consensus: EVM, Ethash mining, crypto, state, block rewards, hard forks, EIP/ECIP | **Before** any ETC consensus change |
+| `beacon`  | **ETH/Sepolia** consensus: PoS, timestamp forks, Osaka EIPs, withdrawals, blobs, execution payload | **Before** any ETH consensus change |
+| `eye`     | Validation: compile + run the right test tier, check chain compatibility, report pass/fail | **After** code changes |
 | `wraith`  | Scala 3 compile errors / build failures | On compile failures |
-| `herald`  | P2P / RLPx / ETH wire protocol, Snappy, handshakes, core-geth interop | On networking issues |
+| `herald`  | P2P / RLPx / ETH wire protocol, Snappy, handshakes, multi-client interop | On networking issues |
 | `mithril` | Idiomatic Scala 3 modernization (opaque types, enums, given/using) | On-demand |
 
 ### Consensus-Critical Change Protocol (mandatory)
@@ -53,11 +64,13 @@ Any change to consensus — EIP/ECIP, chain ID, gas costs, state roots, block
 rewards, transaction validation/signing, hard-fork config, mining/PoW, crypto —
 **must** follow this order. Do not hand-edit consensus code reactively.
 
+0. **Identify the chain**: ETC/Mordor → use `forge`. ETH/Sepolia → use `beacon`.
+   Both chains affected → use both in sequence.
 1. **Plan** (main session): read the spec completely, identify every affected
    component, map side effects.
-2. **`forge`** — consult *before* implementing for impact analysis, then let it
-   implement/review with byte-perfect validation against core-geth.
-3. **`wraith`** — fix any compilation errors without altering forge's semantics.
+2. **`forge` or `beacon`** — consult *before* implementing for impact analysis,
+   then implement/review with byte-perfect validation against the reference client.
+3. **`wraith`** — fix any compilation errors without altering consensus semantics.
 4. **`eye`** — validate: tests, consensus compliance, performance.
 
 Triggers: PR/diff mentions "EIP"/"ECIP"; changes under `consensus/`, `vm/`,
