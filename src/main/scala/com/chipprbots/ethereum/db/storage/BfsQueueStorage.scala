@@ -120,20 +120,19 @@ class RocksDbBfsQueueStorage(dataSource: DataSource, namespace: Namespace) exten
     }
   }
 
-  def deleteRange(from: Long, to: Long): Unit = {
-    val BatchSize = 10_000
-    var i = from
-    while (i < to) {
-      val end = math.min(to, i + BatchSize)
-      val keys = (i until end).map(longToBytes)
-      dataSource.update(Seq(DataSourceUpdateOptimized(namespace, toRemove = keys, toUpsert = Seq.empty)))
-      i = end
-    }
-  }
+  def deleteRange(from: Long, to: Long): Unit =
+    // Single native range tombstone — O(1) regardless of (to - from). The previous
+    // implementation expanded the range into 10K-key point-delete batches; clearing the
+    // ~140M-entry queue after a full ETC-mainnet walk wrote ~140M tombstones over ~30 minutes
+    // at full CPU (observed live 2026-06-12) while the next walk waited.
+    if (from < to) dataSource.deleteRange(namespace, longToBytes(from), longToBytes(to))
 
   def clear(): Unit = {
-    val current = writeCounter.get()
-    if (current > 0) deleteRange(0L, current)
+    // Tombstone the ENTIRE keyspace, not just [0, counter): the counter is in-memory only, so
+    // after a crash-restart it reads 0 while the column family still holds the dead walk's
+    // entries. The old `if (counter > 0)` guard skipped deletion entirely in that state,
+    // leaving the garbage on disk forever. Long.MaxValue exceeds any key ever assigned.
+    dataSource.deleteRange(namespace, longToBytes(0L), longToBytes(Long.MaxValue))
     writeCounter.set(0L)
   }
 }
