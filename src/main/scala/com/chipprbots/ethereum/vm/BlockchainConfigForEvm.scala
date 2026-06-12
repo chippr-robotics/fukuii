@@ -47,6 +47,8 @@ case class BlockchainConfigForEvm(
     // Timestamp-based ETH forks (post-merge)
     pragueTimestamp: Option[Long] = None,
     osakaTimestamp: Option[Long] = None,
+    bpo1Timestamp: Option[Long] = None,
+    bpo2Timestamp: Option[Long] = None,
     // Network type — true for Ethereum chains, false for Ethereum Classic.
     // Needed to distinguish ECIP Olympia (enables EIP-7883 MODEXP gas) from ETH London
     // which hive also maps to olympiaBlockNumber but must NOT enable EIP-7883 before Osaka.
@@ -64,6 +66,14 @@ case class BlockchainConfigForEvm(
     */
   def isOsakaTimestamp(timestamp: Long): Boolean =
     osakaTimestamp.exists(ts => timestamp >= ts)
+
+  /** BPO1 (Blob Parameter Override 1) — changes blob update fraction to 8346193. */
+  def isBpo1Timestamp(timestamp: Long): Boolean =
+    bpo1Timestamp.exists(ts => timestamp >= ts)
+
+  /** BPO2 (Blob Parameter Override 2) — changes blob update fraction to 11684671. */
+  def isBpo2Timestamp(timestamp: Long): Boolean =
+    bpo2Timestamp.exists(ts => timestamp >= ts)
 
   def etcForkForBlockNumber(blockNumber: BigInt): EtcFork = blockNumber match {
     case _ if blockNumber < atlantisBlockNumber => BeforeAtlantis
@@ -170,6 +180,8 @@ object BlockchainConfigForEvm {
       chainId = chainId,
       pragueTimestamp = forkTimestamps.pragueTimestamp,
       osakaTimestamp = forkTimestamps.osakaTimestamp,
+      bpo1Timestamp = forkTimestamps.bpo1Timestamp,
+      bpo2Timestamp = forkTimestamps.bpo2Timestamp,
       isEthereum = isEth
     )
   }

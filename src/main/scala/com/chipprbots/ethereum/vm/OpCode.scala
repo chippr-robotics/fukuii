@@ -166,6 +166,13 @@ object OpCodes {
   val OlympiaOpCodes: List[OpCode] =
     CLZ :: (List(BASEFEE, BLOBHASH, BLOBBASEFEE, TLOAD, TSTORE, MCOPY) ++ SpiralOpCodes)
 
+  /** ETC Olympia opcode list (ECIP-1121 via block-based fork). Excludes EIP-4844 (BLOBHASH) and EIP-7516 (BLOBBASEFEE)
+    * which are ETH-only: core-geth ETC Olympia config has no EIP4844FBlock or EIP7516FBlock. Besu
+    * ClassicEVMs.olympiaOperations() confirms these are absent for ETC.
+    */
+  val EtcOlympiaOpCodes: List[OpCode] =
+    CLZ :: (List(BASEFEE, TLOAD, TSTORE, MCOPY) ++ SpiralOpCodes)
+
   /** ETH Osaka (timestamp-based); CLZ already present via OlympiaOpCodes. */
   val OsakaOpCodes: List[OpCode] = OlympiaOpCodes
 }
@@ -1517,15 +1524,41 @@ case object BLOBHASH extends OpCode(0x49, 1, 1, _.G_verylow) with ConstGas {
   }
 }
 
-/** EIP-7516: BLOBBASEFEE opcode — returns the current block's blob base fee. */
+/** EIP-7516: BLOBBASEFEE opcode — returns the current block's blob base fee per EIP-4844 CalcBlobFee. Fork-aware update
+  * fraction matching BlobGasUtils.updateFractionFor: BPO2 (11684671) → BPO1 (8346193) → Prague (5007716) → Cancun
+  * (3338477). Formula inlined from BlobGasUtils.fakeExponential to avoid a vm→consensus.engine import cycle.
+  */
 case object BLOBBASEFEE extends OpCode(0x4a, 0, 1, _.G_base) with ConstGas {
+  private val MinBlobBaseFee: BigInt = BigInt(1)
+  private val CancunUpdateFraction: BigInt = BigInt(3338477)
+  private val PragueUpdateFraction: BigInt = BigInt(5007716)
+  private val Bpo1UpdateFraction: BigInt = BigInt(8346193)
+  private val Bpo2UpdateFraction: BigInt = BigInt(11684671)
+
+  // EIP-4844 fake_exponential: factor * e^(numerator/denominator) via Taylor series.
+  private def calcBlobFee(excessBlobGas: BigInt, updateFraction: BigInt): BigInt = {
+    var i = BigInt(1)
+    var output = BigInt(0)
+    var accum = MinBlobBaseFee * updateFraction
+    while (accum > 0) {
+      output += accum
+      accum = (accum * excessBlobGas) / (updateFraction * i)
+      i += 1
+    }
+    output / updateFraction
+  }
+
   protected def exec[S <: Storage[S], W <: WorldStateProxy[W, S]](state: ProgramState[W, S]): ProgramState[W, S] = {
-    // Blob base fee from the block header's excessBlobGas
-    val blobBaseFee = state.env.blockHeader.excessBlobGas
-      .map(_ => BigInt(1)) // Simplified: for now return 1 (minimum blob base fee)
-      .getOrElse(BigInt(0))
-    val stack1 = state.stack.push(UInt256(blobBaseFee))
-    state.withStack(stack1).step()
+    val timestamp = state.env.blockHeader.unixTimestamp
+    val bcConfig = state.env.evmConfig.blockchainConfig
+    val excessBlobGas = state.env.blockHeader.excessBlobGas.getOrElse(BigInt(0))
+    val fraction =
+      if (bcConfig.isBpo2Timestamp(timestamp)) Bpo2UpdateFraction
+      else if (bcConfig.isBpo1Timestamp(timestamp)) Bpo1UpdateFraction
+      else if (bcConfig.isPragueTimestamp(timestamp)) PragueUpdateFraction
+      else CancunUpdateFraction
+    val fee = calcBlobFee(excessBlobGas, fraction)
+    state.withStack(state.stack.push(UInt256(fee))).step()
   }
 }
 
