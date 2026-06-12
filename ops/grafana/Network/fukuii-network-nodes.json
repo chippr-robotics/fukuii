@@ -58,7 +58,7 @@
   "timepicker": {},
   "title": "Fukuii Network Nodes",
   "uid": "fukuii-network-nodes",
-  "version": 1,
+  "version": 3,
   "panels": [
     {
       "id": 1,
@@ -373,6 +373,153 @@
       }
     },
     {
+      "id": 13,
+      "type": "stat",
+      "title": "Known Nodes (discovery)",
+      "description": "Current size of the discovery layer's node table \u2014 all nodes known via devp2p discovery + DNS trees, connected or not. The best live estimate of how many nodes exist on this network (PeerManagerActor: 'Total number of discovered nodes').",
+      "datasource": "Prometheus",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "colorMode": "value",
+        "graphMode": "area",
+        "textMode": "auto"
+      },
+      "targets": [
+        {
+          "datasource": "Prometheus",
+          "expr": "app_network_discovery_foundPeers_gauge",
+          "refId": "A"
+        }
+      ],
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 0,
+        "y": 4
+      }
+    },
+    {
+      "id": 14,
+      "type": "stat",
+      "title": "Tried Since Start",
+      "description": "Cumulative distinct connection attempts since the node started (PeerManagerActor triedNodes). Grows with churn; an upper-bound view of nodes seen over the process lifetime.",
+      "datasource": "Prometheus",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "purple",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "colorMode": "value",
+        "graphMode": "area",
+        "textMode": "auto"
+      },
+      "targets": [
+        {
+          "datasource": "Prometheus",
+          "expr": "app_network_tried_peers_gauge",
+          "refId": "A"
+        }
+      ],
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 0,
+        "y": 8
+      }
+    },
+    {
+      "id": 15,
+      "type": "timeseries",
+      "title": "Network size \u2014 known vs tried vs connected",
+      "description": "Known (discovery table) estimates the live network size; Tried accumulates every node we attempted since start; Connected is the active peer set (same number as the stat above). Gap between Known and Connected = headroom of reachable-but-unused peers.",
+      "datasource": "Prometheus",
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 8,
+            "lineWidth": 2
+          },
+          "unit": "none"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "right",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "targets": [
+        {
+          "datasource": "Prometheus",
+          "expr": "app_network_discovery_foundPeers_gauge",
+          "legendFormat": "known (discovery)",
+          "refId": "A"
+        },
+        {
+          "datasource": "Prometheus",
+          "expr": "app_network_tried_peers_gauge",
+          "legendFormat": "tried since start",
+          "refId": "B"
+        },
+        {
+          "datasource": "Prometheus",
+          "expr": "app_network_peers_incoming_handshaked_gauge + app_network_peers_outgoing_handshaked_gauge",
+          "legendFormat": "connected",
+          "refId": "C"
+        }
+      ],
+      "gridPos": {
+        "h": 8,
+        "w": 20,
+        "x": 4,
+        "y": 4
+      }
+    },
+    {
       "id": 7,
       "type": "piechart",
       "title": "Client diversity",
@@ -381,7 +528,7 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 4
+        "y": 12
       },
       "targets": [
         {
@@ -434,7 +581,7 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 4
+        "y": 12
       },
       "targets": [
         {
@@ -442,6 +589,12 @@
           "refId": "A",
           "legendFormat": "{{capability}}",
           "instant": true
+        },
+        {
+          "datasource": null,
+          "expr": "count by(snap)(app_network_peer_info{job=\"$job\"})",
+          "legendFormat": "snap={{snap}}",
+          "refId": "B"
         }
       ],
       "options": {
@@ -484,7 +637,7 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 4
+        "y": 12
       },
       "targets": [
         {
@@ -537,7 +690,7 @@
         "h": 12,
         "w": 14,
         "x": 0,
-        "y": 12
+        "y": 20
       },
       "targets": [
         {
@@ -638,7 +791,7 @@
         "h": 12,
         "w": 10,
         "x": 14,
-        "y": 12
+        "y": 20
       },
       "targets": [
         {
@@ -688,7 +841,7 @@
         "h": 12,
         "w": 24,
         "x": 0,
-        "y": 24
+        "y": 32
       },
       "targets": [
         {
