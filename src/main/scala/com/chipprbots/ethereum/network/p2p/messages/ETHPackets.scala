@@ -311,6 +311,120 @@ object ETHPackets {
     }
   }
 
+  // ── Status70 — ETH70 Status message ─────────────────────────────────────────
+  //
+  // ETH70 does not change the Status wire format vs ETH69 (still 7 fields, no TD).
+  // A separate type keeps ETH70's decoder self-contained: if ETH69 is deprecated and
+  // Status69 is removed, ETH70 continues to compile without modification.
+  //
+  // Wire: [protocolVersion, networkId, genesisHash, forkId, earliestBlock, latestBlock, latestBlockHash]
+  // Reference: EIP-7706 — Status format unchanged from EIP-7642.
+
+  object Status70 {
+    case class Status70(
+        protocolVersion: Int,
+        networkId: Long,
+        genesisHash: ByteString,
+        forkId: ForkId,
+        earliestBlock: BigInt,
+        latestBlock: BigInt,
+        latestBlockHash: ByteString
+    ) extends Message {
+      override val code: Int = Codes.StatusCode
+      override def toShortString: String = toString
+      override def toString: String =
+        s"Status70(v=$protocolVersion, net=$networkId, genesis=${genesisHash.take(4).toHex}..., " +
+          s"forkId=$forkId, earliest=$earliestBlock, latest=$latestBlock, " +
+          s"latestHash=${latestBlockHash.take(4).toHex}...)"
+    }
+
+    object Status70 {
+      implicit class Status70Enc(val underlyingMsg: Status70)
+          extends MessageSerializableImplicit[Status70](underlyingMsg)
+          with RLPSerializable {
+        override def code: Int = Codes.StatusCode
+        override def toRLPEncodable: RLPEncodeable = {
+          import msg._
+          RLPList(
+            RLPValue(ByteUtils.bigIntToUnsignedByteArray(protocolVersion)),
+            RLPValue(ByteUtils.bigIntToUnsignedByteArray(networkId)),
+            RLPValue(genesisHash.toArray[Byte]),
+            forkId.toRLPEncodable,
+            RLPValue(ByteUtils.bigIntToUnsignedByteArray(earliestBlock)),
+            RLPValue(ByteUtils.bigIntToUnsignedByteArray(latestBlock)),
+            RLPValue(latestBlockHash.toArray[Byte])
+          )
+        }
+      }
+
+      implicit class Status70Dec(val bytes: Array[Byte]) extends AnyVal {
+        // Tolerant 3-arm decode matching Status69Dec — accepts canonical 7-field, ETH68-shaped,
+        // and legacy 6-field fukuii-shaped status from peers that announce eth/70 but emit an
+        // older STATUS shape. Rejects via RuntimeException; callers map that to MalformedMessageError.
+        def toStatus70: Status70 = rawDecode(bytes) match {
+          // (1) Canonical 7-field EIP-7706 shape.
+          case RLPList(
+                RLPValue(protocolVersionBytes),
+                RLPValue(networkIdBytes),
+                RLPValue(genesisHashBytes),
+                forkIdRlp: RLPList,
+                RLPValue(earliestBlockBytes),
+                RLPValue(latestBlockBytes),
+                RLPValue(latestBlockHashBytes)
+              ) =>
+            Status70(
+              ByteUtils.bytesToBigInt(protocolVersionBytes).toInt,
+              ByteUtils.bytesToBigInt(networkIdBytes).toLong,
+              ByteString(genesisHashBytes),
+              decode[ForkId](forkIdRlp),
+              ByteUtils.bytesToBigInt(earliestBlockBytes),
+              ByteUtils.bytesToBigInt(latestBlockBytes),
+              ByteString(latestBlockHashBytes)
+            )
+          // (2) 6-field ETH68-shaped STATUS sent on eth/70 channel — accept for clean UselessPeer rejection.
+          case RLPList(
+                RLPValue(protocolVersionBytes),
+                RLPValue(networkIdBytes),
+                RLPValue(_totalDifficultyBytes),
+                RLPValue(bestHashBytes),
+                RLPValue(genesisHashBytes),
+                forkIdRlp: RLPList
+              ) =>
+            Status70(
+              ByteUtils.bytesToBigInt(protocolVersionBytes).toInt,
+              ByteUtils.bytesToBigInt(networkIdBytes).toLong,
+              ByteString(genesisHashBytes),
+              decode[ForkId](forkIdRlp),
+              earliestBlock = BigInt(0),
+              latestBlock = BigInt(0),
+              latestBlockHash = ByteString(bestHashBytes)
+            )
+          // (3) 6-field legacy fukuii shape (forkId at idx 3, no earliestBlock).
+          case RLPList(
+                RLPValue(protocolVersionBytes),
+                RLPValue(networkIdBytes),
+                RLPValue(genesisHashBytes),
+                forkIdRlp: RLPList,
+                RLPValue(latestBlockBytes),
+                RLPValue(latestBlockHashBytes)
+              ) =>
+            Status70(
+              ByteUtils.bytesToBigInt(protocolVersionBytes).toInt,
+              ByteUtils.bytesToBigInt(networkIdBytes).toLong,
+              ByteString(genesisHashBytes),
+              decode[ForkId](forkIdRlp),
+              earliestBlock = BigInt(0),
+              latestBlock = ByteUtils.bytesToBigInt(latestBlockBytes),
+              latestBlockHash = ByteString(latestBlockHashBytes)
+            )
+          case other =>
+            val fieldCount = other match { case RLPList(items @ _*) => items.length; case _ => -1 }
+            throw new RuntimeException(s"Cannot decode Status70 (got $fieldCount fields): $other")
+        }
+      }
+    }
+  }
+
   // ── NO-SUFFIX MESSAGES (wire format unchanged ETH68-71) ──────────────────────
 
   object NewBlockHashes {
@@ -1286,6 +1400,88 @@ object ETHPackets {
     override def code: Int = Codes.ReceiptsCode
     override def toShortString: String =
       s"Receipts69 { requestId: $requestId, blocks: ${receiptsForBlocks.items.size} }"
+  }
+
+  // ── ETH70 RECEIPTS — partial delivery (EIP-7706) ─────────────────────────────
+  //
+  // ETH70 adds two fields enabling chunked receipt delivery for large blocks:
+  //   Server: can truncate at the 2 MiB soft limit and set LastBlockIncomplete=true
+  //   Client: can retry with FirstBlockReceiptIndex to skip already-received receipts
+  //
+  // Wire format:
+  //   GetReceipts70: [requestId, firstBlockReceiptIndex, [blockHashes]]
+  //   Receipts70:    [requestId, lastBlockIncomplete, [[receipts...], ...]]
+  //
+  // Reference: go-ethereum eth/protocols/eth/protocol.go GetReceiptsPacket70 / ReceiptsPacket70
+
+  /** ETH70 GetReceipts — adds firstBlockReceiptIndex for partial receipt resume. */
+  object GetReceipts70 {
+    implicit class GetReceipts70Enc(val underlyingMsg: GetReceipts70)
+        extends MessageSerializableImplicit[GetReceipts70](underlyingMsg)
+        with RLPSerializable {
+      override def code: Int = Codes.GetReceiptsCode
+      override def toRLPEncodable: RLPEncodeable =
+        RLPList(
+          RLPValue(ByteUtils.bigIntToUnsignedByteArray(msg.requestId)),
+          RLPValue(ByteUtils.bigIntToUnsignedByteArray(msg.firstBlockReceiptIndex)),
+          toRlpList(msg.blockHashes)
+        )
+    }
+
+    implicit class GetReceipts70Dec(val bytes: Array[Byte]) extends AnyVal {
+      def toGetReceipts70: GetReceipts70 = rawDecode(bytes) match {
+        case RLPList(RLPValue(requestIdBytes), RLPValue(firstBlockBytes), hashesList: RLPList) =>
+          GetReceipts70(
+            ByteUtils.bytesToBigInt(requestIdBytes),
+            ByteUtils.bytesToBigInt(firstBlockBytes).toLong,
+            fromRlpList[ByteString](hashesList)
+          )
+        case _ => throw new RuntimeException("Cannot decode GetReceipts70")
+      }
+    }
+  }
+
+  case class GetReceipts70(requestId: BigInt, firstBlockReceiptIndex: Long, blockHashes: Seq[ByteString])
+      extends Message
+      with HasRequestId {
+    override def code: Int = Codes.GetReceiptsCode
+    override def toShortString: String =
+      s"GetReceipts70 { requestId: $requestId, firstBlockReceiptIndex: $firstBlockReceiptIndex, count: ${blockHashes.size} }"
+  }
+
+  /** ETH70 Receipts — adds lastBlockIncomplete flag for partial receipt responses. */
+  object Receipts70 {
+    implicit class Receipts70Enc(val underlyingMsg: Receipts70)
+        extends MessageSerializableImplicit[Receipts70](underlyingMsg)
+        with RLPSerializable {
+      override def code: Int = Codes.ReceiptsCode
+      override def toRLPEncodable: RLPEncodeable =
+        RLPList(
+          RLPValue(ByteUtils.bigIntToUnsignedByteArray(msg.requestId)),
+          if (msg.lastBlockIncomplete) RLPValue(Array[Byte](1)) else RLPValue(Array.emptyByteArray),
+          msg.receiptsForBlocks
+        )
+    }
+
+    implicit class Receipts70Dec(val bytes: Array[Byte]) extends AnyVal {
+      def toReceipts70: Receipts70 = rawDecode(bytes) match {
+        case RLPList(RLPValue(requestIdBytes), RLPValue(lastBlockBytes), receiptsList: RLPList) =>
+          Receipts70(
+            ByteUtils.bytesToBigInt(requestIdBytes),
+            lastBlockBytes.nonEmpty && lastBlockBytes(0) != 0,
+            receiptsList
+          )
+        case _ => throw new RuntimeException("Cannot decode Receipts70")
+      }
+    }
+  }
+
+  case class Receipts70(requestId: BigInt, lastBlockIncomplete: Boolean, receiptsForBlocks: RLPList)
+      extends Message
+      with HasRequestId {
+    override def code: Int = Codes.ReceiptsCode
+    override def toShortString: String =
+      s"Receipts70 { requestId: $requestId, lastBlockIncomplete: $lastBlockIncomplete, blocks: ${receiptsForBlocks.items.size} }"
   }
 
   // ── ETH69+ NEW MESSAGES ───────────────────────────────────────────────────────

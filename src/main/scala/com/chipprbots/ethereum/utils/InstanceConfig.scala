@@ -52,7 +52,7 @@ class InstanceConfig(val config: TypesafeConfig, val instanceId: String = "defau
     List(
       Option.when(p.eth68)(Capability.ETH68),
       Option.when(p.eth69)(Capability.ETH69),
-      // ETH70 slot wired here by spec-006 when Capability.ETH70 is added
+      Option.when(p.eth70)(Capability.ETH70),
       // ETH71 slot wired here by spec-007
       Option.when(p.snap1)(Capability.SNAP1)
       // SNAP2 slot wired here by spec-008

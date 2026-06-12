@@ -156,9 +156,24 @@ object ETH69MessageDecoder extends MessageDecoder {
   import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.Receipts69._ // EIP-7642: bloom-absent
   import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.BlockRangeUpdate._
 
-  // ETH69 adds BlockRangeUpdate (0x11) over ETH68's 13 messages = 14 total.
-  val supportedMessages: Set[Int] =
-    ETH68MessageDecoder.supportedMessages + Codes.BlockRangeUpdateCode
+  // ETH69 adds BlockRangeUpdate (0x11) = 14 messages total. Explicit set (not delegating to
+  // ETH68MessageDecoder) so this decoder stays self-contained if ETH68 is ever retired.
+  val supportedMessages: Set[Int] = Set(
+    Codes.StatusCode,
+    Codes.NewBlockHashesCode,
+    Codes.SignedTransactionsCode,
+    Codes.GetBlockHeadersCode,
+    Codes.BlockHeadersCode,
+    Codes.GetBlockBodiesCode,
+    Codes.BlockBodiesCode,
+    Codes.NewBlockCode,
+    Codes.NewPooledTransactionHashesCode,
+    Codes.GetPooledTransactionsCode,
+    Codes.PooledTransactionsCode,
+    Codes.GetReceiptsCode,
+    Codes.ReceiptsCode,
+    Codes.BlockRangeUpdateCode
+  )
 
   def fromBytes(msgCode: Int, payload: Array[Byte]): Either[DecodingError, Message] =
     msgCode match {
@@ -224,12 +239,117 @@ object ETH69MessageDecoder extends MessageDecoder {
     }
 }
 
+/** ETH/70 decoder. ETH70 adds partial receipt delivery via firstBlockReceiptIndex (GetReceipts70) and
+  * lastBlockIncomplete (Receipts70). All other message types are identical to ETH69.
+  *
+  * Reference: EIP-7706 / go-ethereum eth/protocols/eth/protocol.go
+  */
+object ETH70MessageDecoder extends MessageDecoder {
+  import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.Status70.Status70._ // ETH70-owned Status type
+  import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.NewBlockHashes.NewBlockHashes._
+  import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.SignedTransactions._
+  import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.NewBlock._
+  import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.NewPooledTransactionHashes._
+  import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.GetBlockHeaders._
+  import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.BlockHeaders._
+  import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.GetBlockBodies._
+  import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.BlockBodies._
+  import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.GetPooledTransactions._
+  import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.PooledTransactions._
+  import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.GetReceipts70._ // ETH70: partial receipt resume
+  import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.Receipts70._ // ETH70: lastBlockIncomplete flag
+  import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.BlockRangeUpdate._ // introduced in ETH69, still present
+
+  // Explicit set — no cross-decoder delegation. Self-contained if ETH68 or ETH69 decoders are retired.
+  // ETH70 message set = ETH68 base (13) + BlockRangeUpdate (ETH69 addition) = 14 messages.
+  val supportedMessages: Set[Int] = Set(
+    Codes.StatusCode,
+    Codes.NewBlockHashesCode,
+    Codes.SignedTransactionsCode,
+    Codes.GetBlockHeadersCode,
+    Codes.BlockHeadersCode,
+    Codes.GetBlockBodiesCode,
+    Codes.BlockBodiesCode,
+    Codes.NewBlockCode,
+    Codes.NewPooledTransactionHashesCode,
+    Codes.GetPooledTransactionsCode,
+    Codes.PooledTransactionsCode,
+    Codes.GetReceiptsCode,
+    Codes.ReceiptsCode,
+    Codes.BlockRangeUpdateCode
+  )
+
+  def fromBytes(msgCode: Int, payload: Array[Byte]): Either[DecodingError, Message] =
+    msgCode match {
+      case Codes.StatusCode =>
+        Try(payload.toStatus70).toEither.left.map(ex =>
+          MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex))
+        )
+      case Codes.NewBlockHashesCode =>
+        Try(payload.toNewBlockHashes).toEither.left.map(ex =>
+          MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex))
+        )
+      case Codes.SignedTransactionsCode =>
+        Try(payload.toSignedTransactions).toEither.left.map(ex =>
+          MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex))
+        )
+      case Codes.GetBlockHeadersCode =>
+        Try(payload.toGetBlockHeaders).toEither.left.map(ex =>
+          MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex))
+        )
+      case Codes.BlockHeadersCode =>
+        Try(payload.toBlockHeaders).toEither.left.map(ex =>
+          MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex))
+        )
+      case Codes.GetBlockBodiesCode =>
+        Try(payload.toGetBlockBodies).toEither.left.map(ex =>
+          MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex))
+        )
+      case Codes.BlockBodiesCode =>
+        Try(payload.toBlockBodies).toEither.left.map(ex =>
+          MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex))
+        )
+      case Codes.NewBlockCode =>
+        Try(payload.toNewBlock).toEither.left.map(ex =>
+          MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex))
+        )
+      case Codes.NewPooledTransactionHashesCode =>
+        Try(payload.toNewPooledTransactionHashes).toEither.left.map(ex =>
+          MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex))
+        )
+      case Codes.GetPooledTransactionsCode =>
+        Try(payload.toGetPooledTransactions).toEither.left.map(ex =>
+          MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex))
+        )
+      case Codes.PooledTransactionsCode =>
+        Try(payload.toPooledTransactions).toEither.left.map(ex =>
+          MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex))
+        )
+      case Codes.GetNodeDataCode => Left(MalformedMessageError("GetNodeData (0x0d) not supported in eth/70 (EIP-4938)"))
+      case Codes.NodeDataCode    => Left(MalformedMessageError("NodeData (0x0e) not supported in eth/70 (EIP-4938)"))
+      case Codes.GetReceiptsCode =>
+        Try(payload.toGetReceipts70).toEither.left.map(ex =>
+          MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex))
+        )
+      case Codes.ReceiptsCode =>
+        Try(payload.toReceipts70).toEither.left.map(ex =>
+          MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex))
+        )
+      case Codes.BlockRangeUpdateCode =>
+        Try(payload.toBlockRangeUpdate).toEither.left.map(ex =>
+          MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex))
+        )
+      case _ => Left(UnknownMessageTypeError(msgCode, s"Unknown eth/70 message type: $msgCode"))
+    }
+}
+
 // scalastyle:off
 object EthereumMessageDecoder {
   def ethMessageDecoder(protocolVersion: Capability): MessageDecoder =
     protocolVersion match {
       case Capability.ETH68 => ETH68MessageDecoder
       case Capability.ETH69 => ETH69MessageDecoder
+      case Capability.ETH70 => ETH70MessageDecoder
       case Capability.SNAP1 => SNAPMessageDecoder
       case unsupported      => throw new IllegalArgumentException(s"Unsupported protocol version: $unsupported")
     }
