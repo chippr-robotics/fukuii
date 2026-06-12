@@ -173,8 +173,9 @@ object SNAPSyncMetrics extends MetricsContainer {
   final private val HealingActiveRequestsGauge =
     metrics.registry.gauge("snapsync.healing.active.requests.gauge", new AtomicLong(0L))
 
-  /** Nodes visited so far by the post-SNAP frontier-rebuild DFS (`[HEAL-RESTART-DFS]`). Climbs during the one-time
-    * full-state walk on restart; flat/zero once healing is steady-state or resumed from a persisted frontier.
+  /** Nodes visited so far by the post-SNAP frontier-rebuild BFS walk (`[HEAL-BFS]` log lines). Climbs during a
+    * full-state walk (resets when a new walk starts); flat once healing is steady-state or resumed from a complete
+    * persisted frontier.
     */
   final private val HealingRebuildVisitedGauge =
     metrics.registry.gauge("snapsync.healing.rebuild.visited.gauge", new AtomicLong(0L))

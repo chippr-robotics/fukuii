@@ -33,6 +33,32 @@ class SNAPRequestTracker(implicit scheduler: Scheduler) extends Logger {
   /** Per-peer adaptive rate tracker (geth msgrate port) */
   val rateTracker: PeerRateTracker = new PeerRateTracker()
 
+  // ── Prometheus wiring ────────────────────────────────────────────────────────────────────
+  // The tracker sees every SNAP request (dispatch, completion, timeout) with its type, so the
+  // per-phase request counters, download timers, and the timeout counter are emitted here in
+  // one place instead of in each coordinator. Validation methods below emit the malformed-
+  // response counter on structural violations (late responses are NOT counted as malformed).
+  private def recordDispatchMetric(t: RequestType): Unit = t match {
+    case RequestType.GetAccountRange  => SNAPSyncMetrics.incrementAccountRangeRequests()
+    case RequestType.GetStorageRanges => SNAPSyncMetrics.incrementStorageRangeRequests()
+    case RequestType.GetByteCodes     => SNAPSyncMetrics.incrementBytecodeRequests()
+    case RequestType.GetTrieNodes     => SNAPSyncMetrics.incrementHealingRequests()
+  }
+
+  private def recordFailureMetric(t: RequestType): Unit = t match {
+    case RequestType.GetAccountRange  => SNAPSyncMetrics.incrementAccountRangeFailures()
+    case RequestType.GetStorageRanges => SNAPSyncMetrics.incrementStorageRangeFailures()
+    case RequestType.GetByteCodes     => SNAPSyncMetrics.incrementBytecodeFailures()
+    case RequestType.GetTrieNodes     => SNAPSyncMetrics.incrementHealingFailures()
+  }
+
+  private def recordDownloadTime(t: RequestType, elapsedMs: Long): Unit = t match {
+    case RequestType.GetAccountRange  => SNAPSyncMetrics.recordAccountRangeDownloadTime(elapsedMs)
+    case RequestType.GetStorageRanges => SNAPSyncMetrics.recordStorageRangeDownloadTime(elapsedMs)
+    case RequestType.GetByteCodes     => SNAPSyncMetrics.recordBytecodeDownloadTime(elapsedMs)
+    case RequestType.GetTrieNodes     => SNAPSyncMetrics.recordStateHealingTime(elapsedMs)
+  }
+
   private def compareUnsignedLexicographically(a: ByteString, b: ByteString): Int = {
     val minLen = math.min(a.length, b.length)
     var i = 0
@@ -84,6 +110,7 @@ class SNAPRequestTracker(implicit scheduler: Scheduler) extends Logger {
       timeout: FiniteDuration = Duration.Zero // Zero = use adaptive
   )(onTimeout: => Unit): PendingRequest = synchronized {
     val effectiveTimeout = if (timeout == Duration.Zero) rateTracker.targetTimeout() else timeout
+    recordDispatchMetric(requestType)
     val request = PendingRequest(
       requestId = requestId,
       peer = peer,
@@ -103,6 +130,8 @@ class SNAPRequestTracker(implicit scheduler: Scheduler) extends Logger {
           // Record timeout in rate tracker (items=0 slashes capacity to zero)
           val msgType = requestTypeToMsgType(req.requestType)
           rateTracker.update(peer.id.value, msgType, elapsed, items = 0)
+          SNAPSyncMetrics.incrementRequestTimeout()
+          recordFailureMetric(req.requestType)
           pendingRequests.remove(requestId)
           onTimeout
         }
@@ -153,6 +182,7 @@ class SNAPRequestTracker(implicit scheduler: Scheduler) extends Logger {
       // Record measurement in rate tracker
       val msgType = requestTypeToMsgType(request.requestType)
       rateTracker.update(request.peer.id.value, msgType, elapsed, responseItems)
+      recordDownloadTime(request.requestType, elapsed)
 
       log.debug(
         s"SNAP request ${request.requestType} completed for request ID $requestId " +
@@ -178,6 +208,7 @@ class SNAPRequestTracker(implicit scheduler: Scheduler) extends Logger {
 
       // Verify it's the expected type
       if (pending.requestType != RequestType.GetAccountRange) {
+        SNAPSyncMetrics.incrementMalformedResponse()
         Left(s"Expected ${RequestType.GetAccountRange} but got response for ${pending.requestType}")
       } else {
         // Check accounts are monotonically increasing
@@ -187,8 +218,10 @@ class SNAPRequestTracker(implicit scheduler: Scheduler) extends Logger {
           compareUnsignedLexicographically(prevHash, currHash) >= 0
         }
         violation match {
-          case Some(i) => Left(s"Accounts not monotonically increasing at index $i")
-          case None    => Right(response)
+          case Some(i) =>
+            SNAPSyncMetrics.incrementMalformedResponse()
+            Left(s"Accounts not monotonically increasing at index $i")
+          case None => Right(response)
         }
       }
     }
@@ -206,6 +239,7 @@ class SNAPRequestTracker(implicit scheduler: Scheduler) extends Logger {
     } else {
       val pending = getPendingRequest(response.requestId).get
       if (pending.requestType != RequestType.GetStorageRanges) {
+        SNAPSyncMetrics.incrementMalformedResponse()
         Left(s"Expected ${RequestType.GetStorageRanges} but got response for ${pending.requestType}")
       } else {
         // Validate storage slots are monotonically increasing within each account
@@ -220,6 +254,7 @@ class SNAPRequestTracker(implicit scheduler: Scheduler) extends Logger {
         }.flatten
         violation match {
           case Some((accountIdx, i)) =>
+            SNAPSyncMetrics.incrementMalformedResponse()
             Left(s"Storage slots not monotonically increasing for account $accountIdx at index $i")
           case None => Right(response)
         }
@@ -240,6 +275,7 @@ class SNAPRequestTracker(implicit scheduler: Scheduler) extends Logger {
 
     val pending = getPendingRequest(response.requestId).get
     if (pending.requestType != RequestType.GetByteCodes) {
+      SNAPSyncMetrics.incrementMalformedResponse()
       return Left(s"Expected ${RequestType.GetByteCodes} but got response for ${pending.requestType}")
     }
 
@@ -260,6 +296,7 @@ class SNAPRequestTracker(implicit scheduler: Scheduler) extends Logger {
 
     val pending = getPendingRequest(response.requestId).get
     if (pending.requestType != RequestType.GetTrieNodes) {
+      SNAPSyncMetrics.incrementMalformedResponse()
       return Left(s"Expected ${RequestType.GetTrieNodes} but got response for ${pending.requestType}")
     }
 
