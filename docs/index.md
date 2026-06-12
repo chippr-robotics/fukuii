@@ -81,6 +81,9 @@ This documentation is organized by audience:
 - **[Getting Started](getting-started/index.md)** — Installation and first-run guides
 - **[For Node Operators](for-node-operators/index.md)** — Day-to-day node operation
 - **[For Operators/SRE](for-operators/index.md)** — Production deployment and monitoring
+- **[Sync Lifecycle](operations/sync-lifecycle.md)** — Phase-by-phase guide from empty datadir to chain tip
+- **[State Healing Guide](operations/state-healing-operations.md)** — Operating the post-SNAP healing phase
+- **[Metrics Reference](operations/metrics-reference.md)** — Prometheus metric catalog
 - **[For Developers](for-developers/index.md)** — Architecture, contributing, and API docs
 - **[Reference](specifications/README.md)** — Specifications, ADRs, and technical details
 - **[Troubleshooting](troubleshooting/README.md)** — Common issues and solutions

@@ -7,6 +7,9 @@ This section contains guides for deploying, monitoring, and managing Fukuii in p
 1. **[Docker Compose](../deployment/docker.md)** — Deploy Fukuii with Docker
 2. **[Metrics & Monitoring](../operations/metrics-and-monitoring.md)** — Set up Prometheus and Grafana
 3. **[Log Triage](../runbooks/log-triage.md)** — Understand log messages and alerts
+4. **[Sync Lifecycle](../operations/sync-lifecycle.md)** — What a syncing node does, phase by phase, and what "normal" looks like
+5. **[State Healing — Operator's Guide](../operations/state-healing-operations.md)** — The long post-SNAP phase: logs, knobs, dashboards, healthy-vs-stuck
+6. **[Metrics Reference](../operations/metrics-reference.md)** — Every exported Prometheus metric and what it means
 
 ## Deployment Options
 

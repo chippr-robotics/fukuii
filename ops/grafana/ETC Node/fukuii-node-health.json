@@ -657,7 +657,7 @@
       },
       "targets": [
         {
-          "expr": "jvm_memory_bytes_used{area=\"heap\",instance=~\"$instance\"}",
+          "expr": "jvm_memory_used_bytes{area=\"heap\",instance=~\"$instance\"}",
           "refId": "A",
           "legendFormat": "{{instance}} used"
         },
