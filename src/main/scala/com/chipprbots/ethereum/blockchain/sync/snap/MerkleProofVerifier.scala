@@ -143,7 +143,10 @@ class MerkleProofVerifier(rootHash: ByteString) extends Logger {
 
     val firstNibbles = hashToNibbles(firstKey)
     val lastNibbles = hashToNibbles(lastKey)
-    val rootNode = decodeProofNode(proofRawMap, rootHash).getOrElse(return Left("root node missing from proof"))
+    val rootNode = decodeProofNode(proofRawMap, rootHash) match {
+      case Some(node) => node
+      case None       => return Left("root node missing from proof")
+    }
     val trie = new PartialProofTrie(rootNode, proofRawMap)
 
     // Phase 1: resolve both edge paths into the partial trie
