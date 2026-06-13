@@ -194,6 +194,41 @@ class RocksDbDataSource(
     }
   }
 
+  /** Synchronous forward scan of values in [fromKey, toKeyExcl) within namespace.
+    *
+    * Uses scanReadOptions (fillCache=false) — the correct read path for dense sequential keys stored
+    * in sorted SST files. Avoids per-key bloom filter evaluation and issues sequential block reads
+    * rather than the batch of random point lookups that multiGetAsList performs.
+    *
+    * The returned iterator is NOT thread-safe. It closes the underlying RocksDB iterator when
+    * hasNext returns false (exhaustion or end-of-range). The iterator must be consumed to completion
+    * or explicitly closed by the caller; failing to do so leaks the native iterator until GC.
+    *
+    * Concurrent-write safety: callers must only scan ranges whose upper bound is fixed before
+    * scan creation (i.e., no concurrent writer advances keys into [fromKey, toKeyExcl)).
+    */
+  def iterateSyncRange(
+      namespace: Namespace,
+      fromKey: Array[Byte],
+      toKeyExcl: Array[Byte]
+  ): Iterator[Array[Byte]] = {
+    val it = db.newIterator(handles(namespace), scanReadOptions)
+    it.seek(fromKey)
+    new Iterator[Array[Byte]] {
+      private var closed = false
+      def hasNext: Boolean = {
+        val alive = !closed && it.isValid && java.util.Arrays.compare(it.key(), toKeyExcl) < 0
+        if (!alive && !closed) { it.close(); closed = true }
+        alive
+      }
+      def next(): Array[Byte] = {
+        val v = it.value()
+        it.next()
+        v
+      }
+    }
+  }
+
   private def dbIterator: Resource[IO, RocksIterator] =
     Resource.fromAutoCloseable(IO(db.newIterator()))
 
