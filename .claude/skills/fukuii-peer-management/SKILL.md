@@ -22,11 +22,17 @@ add/remove/trust/maxPeers calls are 🟡 (confirm before executing).
 ## Inputs to gather first
 Network, RPC port, datadir. Target peer enode URI(s) for any write. CONVENTIONS §1.
 
-## Background (ETC defaults)
+## Background
 - Both discovery (UDP, devp2p v4) and the Ethereum wire protocol (TCP/RLPx)
   default to port **30303** (`network.server-address.port` /
   `network.discovery.port` in `base/network.conf`) — confirm from config; some
-  older runbooks quote `9076`, which is stale. Healthy node: ~20–40 peers.
+  older runbooks quote `9076`, which is stale.
+- Healthy EL peer count: **~20–40 peers** — `min-outgoing-peers = 20`,
+  `max-outgoing-peers = 50` in `base/network.conf` applies to all networks (no
+  chain-specific override). Sepolia is a smaller testnet, so you may see fewer
+  connected peers in practice. CL beacon peers are managed by the CL client
+  separately and are not visible via `net_peerCount`. **< 3 peers = degraded**
+  on any chain.
 - Known peers persist in `~/.fukuii/<network>/knownNodes.json`.
 - `admin_*` peer methods have `net_*` equivalents that also exist
   (`net_listPeers`, `net_connectToPeer`, `net_disconnectPeer`) — use whichever

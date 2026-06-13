@@ -1,6 +1,32 @@
 <!--
 SYNC IMPACT REPORT
 ==================
+Version change: 1.0.0 → 1.1.0
+Rationale: Fukuii is now a multi-network client: ETC/Mordor (PoW, chain-ID 61/63)
+AND ETH/Sepolia (PoS, chain-ID 1/11155111). Principle I was ETC-only and incorrectly
+prohibited all post-Merge Ethereum features. Updated to recognize both chain families
+and assign the correct specialist agent per chain.
+
+Changes:
+  - Preamble: updated from "ETC full node" to "multi-network EVM client"
+  - Principle I: now covers both ETC and ETH/Sepolia consensus domains; added
+    OlympiaOpCodes/forBlock() vs OsakaOpCodes/forTimestamp() code path rule;
+    added beacon agent for ETH consensus; added herald for P2P wire changes
+  - Development Workflow step 7: updated from forge-only to forge/beacon/herald routing
+  - Version bumped to 1.1.0; Last Amended updated
+
+Templates & artifacts reviewed for alignment:
+  ✅ .specify/templates/plan-template.md  (Constitution Check gate — no structural change)
+  ✅ .specify/templates/spec-template.md  (no mandatory-section changes required)
+  ✅ .specify/templates/tasks-template.md (no mandatory-section changes required)
+  ✅ .specify/templates/checklist-template.md (generic; no change required)
+
+Last Amended: 2026-06-13
+-->
+
+<!--
+SYNC IMPACT REPORT
+==================
 Version change: (template) → 1.0.0
 Rationale: Initial ratification. First concrete constitution derived from the
 repository's existing, tool-enforced standards (build.sbt, .scalafmt.conf,
@@ -32,8 +58,18 @@ Follow-up TODOs: none. RATIFICATION_DATE set to first adoption (2026-06-05).
 
 # Fukuii Constitution
 
-Fukuii is an Ethereum Classic (ETC) full node, written in Scala 3 and descended
-from IOHK Mantis. It participates in a live, adversarial, value-bearing network.
+Fukuii is a multi-network EVM client written in Scala 3, descended from IOHK
+Mantis. It supports two independent chain families:
+
+- **ETC/Mordor** — Ethereum Classic mainnet (chain-ID 61) and Mordor testnet
+  (chain-ID 63). Proof-of-Work (Ethash), block-number fork dispatch, ECIP-1017
+  fixed-supply emission. Fork schedule: Atlantis → Agharta → Phoenix → Thanos
+  (ECIP-1099) → Magneto → Mystique → Spiral → **Olympia** (ECIP-1111/1112/1121/1122).
+- **ETH/Sepolia** — Ethereum mainnet (chain-ID 1) and Sepolia testnet
+  (chain-ID 11155111). Proof-of-Stake (post-Merge), timestamp fork dispatch, Engine
+  API-driven block production. Active fork: Osaka.
+
+Fukuii participates in live, adversarial, value-bearing networks on both chains.
 This constitution defines the non-negotiable standards every change MUST uphold
 so that contributions remain safe, repeatable, and reviewable. It applies to all
 contributors, human and automated.
@@ -42,25 +78,36 @@ contributors, human and automated.
 
 ### I. Consensus Determinism Is Sacred (NON-NEGOTIABLE)
 
-Consensus-critical code MUST be byte-for-byte deterministic and compliant with
-the Ethereum Classic specification. This covers the EVM and opcode/gas semantics,
-state and Merkle Patricia Trie roots, block and transaction hashing, RLP
-serialization, signature verification, Ethash PoW and DAG generation, block
-reward schedules (ECIP-1017), chain-ID handling (EIP-155), and ETC hard-fork
-activation (Atlantis, Agharta, Phoenix, Thanos, Magneto, Mystique, Spiral, and
-later).
+Consensus-critical code on BOTH chains MUST be byte-for-byte deterministic and
+compliant with the governing specification for that chain.
+
+**ETC consensus domain**: EVM and opcode/gas semantics, state and Merkle Patricia
+Trie roots, block and transaction hashing, RLP serialization, signature verification,
+Ethash PoW and DAG generation, block reward schedules (ECIP-1017), chain-ID handling
+(EIP-155), and ETC hard-fork activation (Atlantis → Agharta → Phoenix → Thanos →
+Magneto → Mystique → Spiral → Olympia).
+
+**ETH/Sepolia consensus domain**: PoS validator correctness via Engine API
+(`engine_forkchoiceUpdated`, `engine_newPayload`), EIP-4844 blob transaction
+validation, execution payload semantics, timestamp-based fork activation, and
+Osaka-era EIPs (withdrawals, blob gas, EIP-7939 CLZ, etc.).
 
 Rules:
-- State roots, block hashes, and gas costs MUST match the reference/ETC
-  specification exactly. "Close enough" is a consensus bug.
+- State roots, block hashes, and gas costs MUST match the governing specification
+  exactly for each chain. "Close enough" is a consensus bug.
 - Any change touching the domains above MUST be designed and reviewed BEFORE
-  implementation — never patched reactively after a failure. The `forge` agent
-  protocol in `.github/agents/forge.md` is the authoritative workflow for this.
-- ETC is and remains Proof-of-Work. Post-Merge Ethereum features (PoS, beacon
-  chain, EIP-1559 base fee, account abstraction) MUST NOT be introduced.
+  implementation — never patched reactively after a failure. Use the chain-appropriate
+  specialist agent: `forge` (`.github/agents/forge.md`) for ETC/Mordor consensus;
+  `beacon` (`.github/agents/beacon.md`) for ETH/Sepolia consensus.
+- Do NOT mix ETC and ETH code paths. ETC fork dispatch uses
+  `OlympiaOpCodes` / `forBlock()`; ETH fork dispatch uses
+  `OsakaOpCodes` / `forTimestamp()`. A change to one MUST NOT silently affect the other.
+- ETC is and remains Proof-of-Work. PoS validator logic MUST NOT enter the ETC code path.
+- ETH/Sepolia is post-Merge PoS. ETC-specific PoW assumptions (Ethash DAG, mining
+  rewards, ECIP-1017) MUST NOT enter the ETH/Sepolia code path.
 - Wire-protocol messages MUST be formatted for the negotiated peer capability
   (e.g. ETH66+ requestId framing vs. ETH62 framing); formats MUST NOT be mixed
-  on a connection.
+  on a connection. Use `herald` (`.github/agents/herald.md`) for P2P wire changes.
 
 Rationale: A single non-deterministic line can split the chain. This principle
 outranks all others; when it conflicts with convenience, convenience loses.
@@ -182,7 +229,7 @@ trust that a version number and changelog accurately describe what changed.
 
 ## Technology & Architecture Constraints
 
-- **Language/Runtime**: Scala 3.3.7 LTS on JDK 25 (Temurin); build with sbt
+- **Language/Runtime**: Scala 3.3.7 LTS on JDK 25 (OpenJDK); build with sbt
   1.10.7+. No Scala 2 and no cross-build.
 - **Core libraries**: Apache Pekko (actors/HTTP), Cats Effect (`IO`), Monix,
   RocksDB for storage, BouncyCastle for crypto. New dependencies MUST be Scala 3
@@ -212,8 +259,10 @@ trust that a version number and changelog accurately describe what changed.
    approach, and any breaking-change callouts; link the spec/ADR.
 6. CI gates (Principle V) and at least one review MUST pass; all conversations
    resolved before merge.
-7. Consensus-critical work additionally follows the `forge` consultation
-   protocol and ethereum/tests validation before merge.
+7. Consensus-critical work follows the chain-appropriate specialist agent before
+   merge: `forge` for ETC/Mordor consensus, `beacon` for ETH/Sepolia consensus,
+   `herald` for P2P wire protocol changes. Both consensus chains require
+   ethereum/tests validation before merge. Agent files are in `.github/agents/`.
 
 ## Governance
 
@@ -236,4 +285,4 @@ provide operational detail.
   plan for execution context; this file defines the standards those plans must
   satisfy.
 
-**Version**: 1.0.0 | **Ratified**: 2026-06-05 | **Last Amended**: 2026-06-05
+**Version**: 1.1.0 | **Ratified**: 2026-06-05 | **Last Amended**: 2026-06-13

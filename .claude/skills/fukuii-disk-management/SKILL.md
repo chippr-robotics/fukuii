@@ -2,10 +2,11 @@
 name: fukuii-disk-management
 description: >-
   Triage and manage Fukuii's disk usage — understand the datadir layout, measure
-  RocksDB growth, free space safely, and size storage for ETC's large chain. Use
-  when disk is filling up, the node warns about space, you're planning capacity,
-  or sync is slow due to I/O. Measurement is read-only; any deletion/relocation
-  of the database is an irreversible action under the guarded-write protocol.
+  RocksDB growth, free space safely, and size storage for the supported chains.
+  Use when disk is filling up, the node warns about space, you're planning
+  capacity, or sync is slow due to I/O. Measurement is read-only; any
+  deletion/relocation of the database is an irreversible action under the
+  guarded-write protocol.
 ---
 
 # Fukuii disk management
@@ -16,14 +17,15 @@ first.
 
 ## When to use
 - Low free space / "no space left on device" in logs.
-- Planning storage for a new ETC node (the DB is large — hundreds of GB).
+- Planning storage for a new node (ETC/Mordor chains are large — hundreds of GB;
+  ETH/Sepolia mainnet is larger still).
 - I/O-bound sync (often a disk-type/space problem, not a sync bug).
 
 ## Datadir layout (`~/.fukuii/<network>/`)
-| Path | Typical size (ETC) | Prunable? |
+| Path | Typical size | Prunable? |
 | :-- | :-- | :-- |
 | `node.key`, `keystore/` | tiny | never delete |
-| `rocksdb/` | hundreds of GB (bulk) | regenerable by re-sync only |
+| `rocksdb/` | hundreds of GB (bulk; ETC) / 1+ TB (ETH mainnet) | regenerable by re-sync only |
 | `logs/` | up to ~500 MB (rotated) | yes, safe |
 | `knownNodes.json`, `app-state.json` | tiny | operational |
 
@@ -45,8 +47,11 @@ first.
 5. **Verify** (🟢) — re-check `df -h` and run `fukuii-node-health-check`.
 
 ## Sizing guidance
-ETC mainnet is large and grows steadily (~30 GB/yr bodies). Provision SSD/NVMe
-with generous headroom; HDDs starve SNAP sync. See the runbook's breakdown table.
+- **ETC mainnet**: large and grows steadily (~30 GB/yr bodies). Provision SSD/NVMe with generous headroom; HDDs starve SNAP sync.
+- **Mordor**: smaller testnet, but same SSD requirement for acceptable SNAP performance.
+- **ETH mainnet**: significantly larger (1+ TB for a full archive node). ETH Sepolia is smaller but still SSD-required.
+- All chains: HDDs starve SNAP sync and degrade performance. Always use SSD/NVMe.
+See the runbook's breakdown table for per-network storage estimates.
 
 ## Deep reference
 - `docs/runbooks/disk-management.md` (storage breakdown, optimization)
