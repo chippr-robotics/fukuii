@@ -3309,7 +3309,9 @@ class SNAPSyncController(
               traversalParallelism = snapSyncConfig.healingTraversalParallelism,
               bfsQueueStorageOpt = Some(bfsQueueStorage),
               storageScheme = snapSyncConfig.storageScheme,
-              pathNodeStorageOpt = pathNodeStorageOpt
+              pathNodeStorageOpt = pathNodeStorageOpt,
+              frontierHighWater = snapSyncConfig.healingFrontierHighWater,
+              frontierLowWater = snapSyncConfig.healingFrontierLowWater
             )
             .withDispatcher("sync-dispatcher"),
           s"trie-node-healing-coordinator-$coordinatorGeneration"
@@ -3368,7 +3370,9 @@ class SNAPSyncController(
                   traversalParallelism = snapSyncConfig.healingTraversalParallelism,
                   bfsQueueStorageOpt = Some(bfsQueueStorage),
                   storageScheme = snapSyncConfig.storageScheme,
-                  pathNodeStorageOpt = pathNodeStorageOpt
+                  pathNodeStorageOpt = pathNodeStorageOpt,
+                  frontierHighWater = snapSyncConfig.healingFrontierHighWater,
+                  frontierLowWater = snapSyncConfig.healingFrontierLowWater
                 )
                 .withDispatcher("sync-dispatcher"),
               s"trie-node-healing-coordinator-$coordinatorGeneration"
@@ -4680,6 +4684,8 @@ case class SNAPSyncConfig(
     healingFrontierPersistence: Boolean = false,
     // Operator ceiling for BFS level parallelism. Effective = min(this, availableProcessors - 2).
     healingTraversalParallelism: Int = actors.TrieNodeHealingCoordinator.DefaultDfsParallelism,
+    healingFrontierHighWater: Int = actors.TrieNodeHealingCoordinator.DefaultFrontierHighWater,
+    healingFrontierLowWater: Int = actors.TrieNodeHealingCoordinator.DefaultFrontierLowWater,
     stateValidationEnabled: Boolean = true,
     maxRetries: Int = 3,
     timeout: FiniteDuration = 30.seconds,
@@ -4789,6 +4795,14 @@ object SNAPSyncConfig {
         if (snapConfig.hasPath("healing-traversal-parallelism"))
           snapConfig.getInt("healing-traversal-parallelism")
         else actors.TrieNodeHealingCoordinator.DefaultDfsParallelism,
+      healingFrontierHighWater =
+        if (snapConfig.hasPath("healing-frontier-high-water"))
+          snapConfig.getInt("healing-frontier-high-water")
+        else actors.TrieNodeHealingCoordinator.DefaultFrontierHighWater,
+      healingFrontierLowWater =
+        if (snapConfig.hasPath("healing-frontier-low-water"))
+          snapConfig.getInt("healing-frontier-low-water")
+        else actors.TrieNodeHealingCoordinator.DefaultFrontierLowWater,
       stateValidationEnabled = snapConfig.getBoolean("state-validation-enabled"),
       maxRetries = snapConfig.getInt("max-retries"),
       timeout = snapConfig.getDuration("timeout").toMillis.millis,

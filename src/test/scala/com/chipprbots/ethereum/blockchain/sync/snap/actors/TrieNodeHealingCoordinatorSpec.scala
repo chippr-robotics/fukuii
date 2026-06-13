@@ -709,6 +709,77 @@ class TrieNodeHealingCoordinatorSpec
     )
   }
 
+  it should "not deadlock under sustained frontier backpressure — the safety timeout resumes the walk" taggedAs UnitTest in {
+    import com.chipprbots.ethereum.mpt.{BranchNode, HashNode, NullNode, MptNode}
+    import java.util.concurrent.Executors
+
+    // Reproduces the 2026-06-13 OOM scenario in miniature: a BFS walk discovers missing nodes while
+    // the healing backlog is already over the high-water mark and CANNOT drain (no peers, low-water
+    // never reached). With high=1/low=0 the walk pauses on backpressure; the safety timeout must fire
+    // and let it resume so it still delivers its frontier instead of hanging forever. (At production
+    // defaults of 100K/50K this gate never trips in normal operation.)
+    val missing0 = kec256(ByteString("bp-missing-0"))
+    val missing3 = kec256(ByteString("bp-missing-3"))
+    val missing7 = kec256(ByteString("bp-missing-7"))
+    val children: Array[MptNode] = Array.fill[MptNode](16)(NullNode)
+    children(0) = HashNode(missing0.toArray)
+    children(3) = HashNode(missing3.toArray)
+    children(7) = HashNode(missing7.toArray)
+    val branch = BranchNode(children, None)
+    val storage = new TestMptStorage()
+    storage.putNode(branch)
+    val root = ByteString(branch.hash)
+
+    // Dedicated EC so the walk's blocking backpressure sleep cannot starve the actor thread.
+    val pool = Executors.newSingleThreadExecutor()
+    val ec = scala.concurrent.ExecutionContext.fromExecutorService(pool)
+    val coordinator = system.actorOf(
+      TrieNodeHealingCoordinator.props(
+        stateRoot = root,
+        networkPeerManager = TestProbe().ref,
+        requestTracker = new SNAPRequestTracker()(system.scheduler),
+        mptStorage = storage,
+        batchSize = 16,
+        snapSyncController = TestProbe().ref,
+        healingWriterEcOverride = Some(ec),
+        frontierHighWater = 1,
+        frontierLowWater = 0,
+        frontierBackpressureMaxWaitMs = 800L
+      )
+    )
+    try {
+      // Pre-load the backlog ABOVE the high-water mark with no peers, so it can never drain below
+      // low-water — the walk's emit gate will block until the safety timeout fires.
+      coordinator ! Messages.QueueMissingNodes(
+        Seq((Seq(ByteString(Array[Byte](0x09))), kec256(ByteString("bp-preload"))))
+      )
+      awaitAssert(
+        {
+          coordinator ! Messages.HealingGetProgress
+          expectMsgType[HealingStatistics](2.seconds).pendingTasks shouldBe 1
+        },
+        max = 3.seconds,
+        interval = 100.millis
+      )
+
+      coordinator ! Messages.StartTrieNodeHealing(root)
+
+      // The walk must still complete and deliver its 3 discovered children (preload + 3 = 4),
+      // proving the safety timeout fired and resumed it rather than deadlocking on the gate.
+      awaitAssert(
+        {
+          coordinator ! Messages.HealingGetProgress
+          expectMsgType[HealingStatistics](2.seconds).pendingTasks shouldBe 4
+        },
+        max = 8.seconds,
+        interval = 200.millis
+      )
+    } finally {
+      system.stop(coordinator)
+      pool.shutdownNow()
+    }
+  }
+
   it should "traverse multiple BFS levels and find frontier nodes deep in the trie" taggedAs UnitTest in {
     import com.chipprbots.ethereum.mpt.{BranchNode, HashNode, NullNode, MptNode}
 

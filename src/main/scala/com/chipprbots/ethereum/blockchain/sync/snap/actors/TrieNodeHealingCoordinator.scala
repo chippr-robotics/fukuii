@@ -49,7 +49,10 @@ class TrieNodeHealingCoordinator(
     traversalParallelism: Int = TrieNodeHealingCoordinator.DefaultDfsParallelism,
     bfsQueueStorageOpt: Option[BfsQueueStorage] = None,
     storageScheme: StorageScheme = StorageScheme.Hash,
-    pathNodeStorageOpt: Option[PathNodeStorage] = None
+    pathNodeStorageOpt: Option[PathNodeStorage] = None,
+    frontierHighWater: Int = TrieNodeHealingCoordinator.DefaultFrontierHighWater,
+    frontierLowWater: Int = TrieNodeHealingCoordinator.DefaultFrontierLowWater,
+    frontierBackpressureMaxWaitMs: Long = TrieNodeHealingCoordinator.FrontierBackpressureMaxWaitMs
 ) extends Actor
     with ActorLogging {
 
@@ -60,6 +63,13 @@ class TrieNodeHealingCoordinator(
   // immutable `Seq` did O(n) on every `:+` and head-drop — quadratic at healing scale.
   private case class HealingEntry(pathset: Seq[ByteString], hash: ByteString)
   private val pendingTasks: mutable.ArrayDeque[HealingEntry] = mutable.ArrayDeque.empty
+  // Thread-safe mirror of pendingTasks.size, refreshed by emitHealingFrontierGauges() on the actor
+  // thread. The frontier-rebuild BFS walk runs on healingWriterEc and reads this (never pendingTasks
+  // directly) to apply backpressure — it pauses emission when the healing backlog is large so a
+  // peer-scarce drain rate can't let discovered-but-unhealed nodes pile up to an OOM (see
+  // awaitFrontierDrain). geth bounds the analogous queue with trie.Sync maxFetchesPerDepth.
+  private val pendingBackpressure: java.util.concurrent.atomic.AtomicInteger =
+    new java.util.concurrent.atomic.AtomicInteger(0)
   private var completedTaskCount: Int = 0
   private var healingMilestonePct: Int = -1
 
@@ -200,9 +210,42 @@ class TrieNodeHealingCoordinator(
 
   /** Publish the live healing backlog/in-flight gauges for the Grafana healing-analytics section. */
   private def emitHealingFrontierGauges(): Unit = {
+    pendingBackpressure.set(pendingTasks.size)
     SNAPSyncMetrics.setHealingFrontierPending(pendingTasks.size.toLong)
     SNAPSyncMetrics.setHealingActiveRequests(activeRequests.size.toLong)
   }
+
+  /** Frontier-emission backpressure, called from the BFS walk thread (healingWriterEc) before each FrontierRebuilt
+    * batch. The walk reads the locally-stored trie fast (thousands of nodes/s) while healing drains over the network on
+    * a handful of SNAP peers (tens-to-hundreds/s). With no gate, a verification walk that re-discovers a large frontier
+    * floods pendingTasks/the actor mailbox until the heap is exhausted (observed live 2026-06-13: OOM at L7 under peer
+    * scarcity). This pauses the walk when the backlog reaches the high-water mark and resumes once it drains below the
+    * low-water mark. Reads only the AtomicInteger mirror + immutable vals — touches no actor state. Blocking is safe
+    * here: healingWriterEc is the blocking healing dispatcher. A hard timeout guarantees the walk can never deadlock if
+    * the drain stalls (fail loud, then resume).
+    */
+  private def awaitFrontierDrain(): Unit =
+    if (pendingBackpressure.get() >= frontierHighWater) {
+      val startWait = System.currentTimeMillis()
+      log.info(
+        s"[HEAL-BFS] Backpressure: healing backlog ${pendingBackpressure.get()} >= high-water " +
+          s"$frontierHighWater — pausing frontier emission until it drains below $frontierLowWater"
+      )
+      while (
+        pendingBackpressure.get() > frontierLowWater &&
+        System.currentTimeMillis() - startWait < frontierBackpressureMaxWaitMs
+      )
+        Thread.sleep(200)
+      val waitedMs = System.currentTimeMillis() - startWait
+      if (pendingBackpressure.get() > frontierLowWater)
+        log.warning(
+          s"[HEAL-BFS] Backpressure wait hit the " +
+            s"${frontierBackpressureMaxWaitMs / 1000}s safety timeout " +
+            s"(backlog still ${pendingBackpressure.get()}) — resuming emission to avoid deadlock"
+        )
+      else
+        log.info(s"[HEAL-BFS] Backpressure released after ${waitedMs}ms — resuming frontier emission")
+    }
 
   // Track last known available peers for re-dispatch after failures
   private val knownAvailablePeers = mutable.Set[Peer]()
@@ -1299,7 +1342,10 @@ class TrieNodeHealingCoordinator(
           futures.flatMap(f => Await.result(f, Duration.Inf))
         }
 
-      allFrontier.grouped(FrontierBatchSize).foreach(batch => selfRef ! FrontierRebuilt(batch))
+      allFrontier.grouped(FrontierBatchSize).foreach { batch =>
+        awaitFrontierDrain() // pause the walk if the healing backlog is over the high-water mark
+        selfRef ! FrontierRebuilt(batch)
+      }
 
       val fc = frontierCount.get()
       val queued = queue.counter - levelEnd
@@ -1514,6 +1560,16 @@ object TrieNodeHealingCoordinator {
     */
   val DefaultVisitedCap: Int = 4_000_000
 
+  // Frontier-emission backpressure watermarks (entries in pendingTasks). The BFS walk pauses
+  // emitting discovered missing nodes once the healing backlog reaches the high-water mark and
+  // resumes below the low-water mark, bounding discovered-but-unhealed heap to ~high-water entries
+  // (~100K HealingEntry ≈ tens of MB) instead of growing unbounded under a peer-scarce drain rate.
+  val DefaultFrontierHighWater: Int = 100_000
+  val DefaultFrontierLowWater: Int = 50_000
+  // Safety valve: the walk never blocks on backpressure longer than this before resuming (and
+  // warning), so a stalled drain (no peers, dead actor) can't deadlock the walk.
+  val FrontierBackpressureMaxWaitMs: Long = 10.minutes.toMillis
+
   /** Operator-configurable ceiling for BFS level parallelism. Effective parallelism is `min(DefaultDfsParallelism,
     * max(1, availableProcessors - 2))` so large levels are split across sub-ranges on `healingWriterEc`. See
     * `healing-traversal-parallelism` in `sync.conf`.
@@ -1552,7 +1608,10 @@ object TrieNodeHealingCoordinator {
       traversalParallelism: Int = DefaultDfsParallelism,
       bfsQueueStorageOpt: Option[BfsQueueStorage] = None,
       storageScheme: StorageScheme = StorageScheme.Hash,
-      pathNodeStorageOpt: Option[PathNodeStorage] = None
+      pathNodeStorageOpt: Option[PathNodeStorage] = None,
+      frontierHighWater: Int = DefaultFrontierHighWater,
+      frontierLowWater: Int = DefaultFrontierLowWater,
+      frontierBackpressureMaxWaitMs: Long = FrontierBackpressureMaxWaitMs
   ): Props =
     Props(
       new TrieNodeHealingCoordinator(
@@ -1569,7 +1628,10 @@ object TrieNodeHealingCoordinator {
         traversalParallelism,
         bfsQueueStorageOpt,
         storageScheme,
-        pathNodeStorageOpt
+        pathNodeStorageOpt,
+        frontierHighWater,
+        frontierLowWater,
+        frontierBackpressureMaxWaitMs
       )
     )
 }
