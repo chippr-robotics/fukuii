@@ -9,60 +9,69 @@ import com.chipprbots.ethereum.testing.Tags._
 
 import java.nio.ByteBuffer
 
-/** Unit tests for the heap-bounded `visited` set used by the post-SNAP frontier-rebuild DFS
-  * (`TrieNodeHealingCoordinator.boundedVisitedSet`).
+/** Unit tests for the Bloom-filter visited set used by the post-SNAP BFS frontier-rebuild walk
+  * (`TrieNodeHealingCoordinator.bfsVisitedFilter`).
   *
-  * These pin the Layer-1 OOM fix (docs/design/healing-frontier-scale.md): the DFS `visited` set MUST stay bounded by
-  * its cap regardless of how many nodes the walk touches (INV-3), with insertion-order eviction (earliest-inserted /
-  * earliest-completed subtries dropped first). Completeness of the rebuilt frontier (INV-1) is provided independently
-  * by `pendingHashSet` de-duplication and is exercised by the coordinator-level healing tests.
+  * These pin the correctness contract for the Layer-1 BFS visited set:
+  *   - No false negatives: a node that was put is always reported as seen (INV-3 / walk completeness).
+  *   - Re-discovery returns false: the `markIfNew` idiom must gate duplicate enqueuing.
+  *   - Monotonically growing: no eviction occurs regardless of how many nodes are inserted.
   */
 class FrontierRebuildSpec extends AnyFlatSpec with Matchers {
 
-  private def hash(i: Int): ByteString =
-    ByteString(ByteBuffer.allocate(4).putInt(i).array())
+  private def hash(i: Int): Array[Byte] =
+    ByteBuffer.allocate(4).putInt(i).array()
 
-  "boundedVisitedSet" should "never exceed its capacity as entries are added" taggedAs UnitTest in {
-    forCaps(Seq(1, 16, 100, 4096)) { cap =>
-      val visited = TrieNodeHealingCoordinator.boundedVisitedSet(cap)
-      // Add far more distinct entries than the cap — emulates a walk over millions of nodes.
-      (0 until cap * 4).foreach { i =>
-        visited += hash(i)
-        visited.size should be <= cap
-      }
-      visited.size shouldBe cap
-    }
+  "bfsVisitedFilter" should "never report false negatives for inserted entries" taggedAs UnitTest in {
+    val filter = TrieNodeHealingCoordinator.bfsVisitedFilter(expectedInsertions = 10_000L)
+    val entries = (0 until 1_000).map(hash)
+    entries.foreach(filter.put)
+    entries.foreach { e => filter.mightContain(e) shouldBe true }
   }
 
-  it should "evict the earliest-inserted entries first (insertion-order LRU)" taggedAs UnitTest in {
-    val cap = 50
-    val total = 200
-    val visited = TrieNodeHealingCoordinator.boundedVisitedSet(cap)
-    (0 until total).foreach(i => visited += hash(i))
-
-    // The most recent `cap` entries are retained; everything older is evicted.
-    (total - cap until total).foreach(i => visited should contain(hash(i)))
-    (0 until total - cap).foreach(i => visited should not contain hash(i))
+  it should "report mightContain = false for entries that were never inserted (with low FPR)" taggedAs UnitTest in {
+    val filter = TrieNodeHealingCoordinator.bfsVisitedFilter(expectedInsertions = 10_000L, fpp = 0.001)
+    (0 until 500).foreach(i => filter.put(hash(i)))
+    // Entries in [1000, 2000) were never inserted; at 0.1% FPR virtually none should trigger.
+    val falsePositives = (1_000 until 2_000).count(i => filter.mightContain(hash(i)))
+    falsePositives should be < 5 // 0 expected at 0.1%; allow a tiny margin
   }
 
-  it should "behave as a set — re-adding an existing entry does not grow it past the cap" taggedAs UnitTest in {
-    val cap = 32
-    val visited = TrieNodeHealingCoordinator.boundedVisitedSet(cap)
-    (0 until cap).foreach(i => visited += hash(i))
-    visited.size shouldBe cap
+  it should "simulate markIfNew: return false on re-encounter, true on first encounter" taggedAs UnitTest in {
+    val filter = TrieNodeHealingCoordinator.bfsVisitedFilter(expectedInsertions = 1_000L)
 
-    // Re-discovering already-visited nodes (shared references) must not grow the set.
-    (0 until cap).foreach(i => visited += hash(i))
-    visited.size shouldBe cap
-    visited should contain(hash(0))
+    def markIfNew(h: Array[Byte]): Boolean =
+      if (filter.mightContain(h)) false
+      else { filter.put(h); true }
+
+    val h1 = hash(42)
+    markIfNew(h1) shouldBe true  // first encounter — new
+    markIfNew(h1) shouldBe false // second encounter — already seen
+    markIfNew(h1) shouldBe false // idempotent
   }
 
-  it should "report membership correctly for present and absent entries" taggedAs UnitTest in {
-    val visited = TrieNodeHealingCoordinator.boundedVisitedSet(8)
-    visited += hash(1)
-    visited.contains(hash(1)) shouldBe true
-    visited.contains(hash(999)) shouldBe false
+  it should "accumulate without bound — no eviction up to expected capacity" taggedAs UnitTest in {
+    // Insert exactly expectedInsertions entries; all must still be present (no eviction).
+    val n      = 50_000
+    val filter = TrieNodeHealingCoordinator.bfsVisitedFilter(expectedInsertions = n.toLong)
+    (0 until n).foreach(i => filter.put(hash(i)))
+    val misses = (0 until n).count(i => !filter.mightContain(hash(i)))
+    misses shouldBe 0 // zero false negatives — the invariant that ensures walk correctness
   }
 
-  private def forCaps(caps: Seq[Int])(check: Int => Unit): Unit = caps.foreach(check)
+  it should "be thread-safe under concurrent puts and mightContain queries" taggedAs UnitTest in {
+    import scala.concurrent.{Await, Future}
+    import scala.concurrent.ExecutionContext.Implicits.global
+    import scala.concurrent.duration._
+
+    val n      = 10_000
+    val filter = TrieNodeHealingCoordinator.bfsVisitedFilter(expectedInsertions = n.toLong)
+
+    val writers  = Future.traverse((0 until n / 2).toList)(i => Future(filter.put(hash(i))))
+    val readers  = Future.traverse((0 until n / 2).toList)(i => Future(filter.mightContain(hash(i))))
+    Await.result(writers.zip(readers), 10.seconds)
+
+    // After writes complete, every written entry must be present.
+    (0 until n / 2).foreach(i => filter.mightContain(hash(i)) shouldBe true)
+  }
 }

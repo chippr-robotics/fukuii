@@ -1,12 +1,14 @@
 ---
 name: fukuii-checkpoint-service
 description: >-
-  Operate Fukuii's checkpoint-based rapid sync — point a fresh node at a trusted
-  checkpoint archive (local file or HTTP URL) so it imports a known pivot and
-  starts SNAP sync immediately instead of waiting on peer consensus, and produce
-  checkpoint archives for others. Use when bootstrapping a node fast, running a
-  checkpoint source for a fleet, or debugging why checkpoint import didn't engage.
-  Config changes require a restart — an irreversible/disruptive action under the
+  Operate Fukuii's checkpoint-based rapid sync for ETC/Mordor nodes — point a
+  fresh node at a trusted checkpoint archive (local file or HTTP URL) so it
+  imports a known pivot and starts SNAP sync immediately instead of waiting on
+  peer consensus, and produce checkpoint archives for others. Use when
+  bootstrapping an ETC/Mordor node fast, running a checkpoint source for a fleet,
+  or debugging why checkpoint import didn't engage. ETH/Sepolia nodes do NOT use
+  checkpoint-sync — they sync via Consensus Layer / Engine API instead. Config
+  changes require a restart — an irreversible/disruptive action under the
   guarded-write protocol.
 ---
 
@@ -16,9 +18,13 @@ Read `../CONVENTIONS.md` first. This is **config-driven**, not an RPC API — th
 are no `checkpoint_*` JSON-RPC methods. Config edits need a restart → 🔴.
 
 ## What it is
-On a **fresh** database (best-block == 0, SNAP not already done), Fukuii can
-import a trusted `.checkpoint` archive and use its block as the pivot, skipping
-the "wait for 3+ peers" phase before SNAP sync. Backed by
+This feature applies to **ETC/Mordor only**. ETH/Sepolia nodes sync through the
+Consensus Layer (CL) via the Engine API — checkpoint-sync is not relevant for
+ETH/Sepolia and the config keys below are silently ignored in that context.
+
+On a **fresh** ETC/Mordor database (best-block == 0, SNAP not already done),
+Fukuii can import a trusted `.checkpoint` archive and use its block as the pivot,
+skipping the "wait for 3+ peers" phase before SNAP sync. Backed by
 `blockchain/checkpoint/CheckpointArchive.scala` (+ `CheckpointDownloader`,
 `CheckpointExporter`).
 
@@ -49,6 +55,9 @@ the "wait for 3+ peers" phase before SNAP sync. Backed by
 ## Gotchas (verify before blaming the feature)
 - Won't engage on a **non-fresh** DB — that's by design.
 - Requires SNAP enabled; with `do-snap-sync=false` the pivot path differs.
+- **ETH/Sepolia does not use checkpoint-sync.** If `eth_syncing` is not advancing
+  on Sepolia, the cause is the Consensus Layer not being connected — not a
+  checkpoint configuration issue. See `fukuii-sync-troubleshooting`.
 
 ## Deep reference
 - `docs/runbooks/checkpoint-service.md`

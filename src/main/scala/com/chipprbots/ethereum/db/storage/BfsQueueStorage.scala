@@ -5,7 +5,7 @@ import java.util.concurrent.atomic.AtomicLong
 
 import scala.collection.mutable
 
-import com.chipprbots.ethereum.db.dataSource.{DataSource, DataSourceUpdateOptimized}
+import com.chipprbots.ethereum.db.dataSource.{DataSource, DataSourceUpdateOptimized, RocksDbDataSource}
 import com.chipprbots.ethereum.db.dataSource.DataSource.Namespace
 
 /** One decoded entry from the BFS level queue. */
@@ -104,21 +104,30 @@ class RocksDbBfsQueueStorage(dataSource: DataSource, namespace: Namespace) exten
     dataSource.update(Seq(DataSourceUpdateOptimized(namespace, toRemove = Seq.empty, toUpsert = upserts)))
   }
 
-  def iterateRange(from: Long, to: Long, chunkSize: Int = DefaultChunkSize): Iterator[Seq[BfsEntry]] = {
-    val rangeFrom = from
-    val rangeTo = to
-    new Iterator[Seq[BfsEntry]] {
-      private var pos: Long = rangeFrom
-      def hasNext: Boolean = pos < rangeTo
-      def next(): Seq[BfsEntry] = {
-        val end = math.min(rangeTo, pos + chunkSize)
-        val keys = (pos until end).map(longToBytes)
-        val values = dataSource.multiGetOptimized(namespace, keys)
-        pos = end
-        values.flatten.map(decodeEntry)
-      }
+  def iterateRange(from: Long, to: Long, chunkSize: Int = DefaultChunkSize): Iterator[Seq[BfsEntry]] =
+    dataSource match {
+      case rdb: RocksDbDataSource =>
+        // Forward iterator scan: O(1) seek + sequential block reads. Keys are dense big-endian
+        // longs in sorted SST files — the ideal case for a range scan vs batch point-lookups.
+        // Concurrent enqueueBatch writes land at keys ≥ `to`; the [from, to) range is read-only.
+        rdb.iterateSyncRange(namespace, longToBytes(from), longToBytes(to))
+          .map(decodeEntry)
+          .grouped(chunkSize)
+      case _ =>
+        // Fallback for InMemoryBfsQueueStorage tests: retain multiGetOptimized behaviour.
+        val rangeTo = to
+        new Iterator[Seq[BfsEntry]] {
+          private var pos: Long = from
+          def hasNext: Boolean = pos < rangeTo
+          def next(): Seq[BfsEntry] = {
+            val end = math.min(rangeTo, pos + chunkSize)
+            val keys = (pos until end).map(longToBytes)
+            val values = dataSource.multiGetOptimized(namespace, keys)
+            pos = end
+            values.flatten.map(decodeEntry)
+          }
+        }
     }
-  }
 
   def deleteRange(from: Long, to: Long): Unit =
     // Single native range tombstone — O(1) regardless of (to - from). The previous

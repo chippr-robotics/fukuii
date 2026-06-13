@@ -118,10 +118,6 @@ class StorageRangeCoordinator(
   // Matches go-ethereum storageConcurrency = 16 (sync.go:108).
   private val storageConcurrency: Int = 16
 
-  // Maximum SNAP request payload (bytes). Used for downsampling N when slots are few.
-  // Matches go-ethereum maxRequestSize = 512 KB (sync.go:56).
-  private val maxRequestBytes: Int = 512 * 1024
-
   // ========================================
   // Storage Queue Backpressure (#1232 follow-up — sepolia OOM)
   // ========================================
@@ -1523,9 +1519,6 @@ class StorageRangeCoordinator(
     *   Sequence of StorageTask objects covering [lastSlotReceived+1, task.last] in equal segments
     */
   private def createStorageSubTasks(task: StorageTask, lastSlotReceived: ByteString): Seq[StorageTask] = {
-    // Dynamic downsampling: ensure each subtask has enough slots to fill ≥2 full 512KB packets.
-    // Mirrors go-ethereum lines 2136-2143. maxSlotsPerPacket ≈ 512KB / 64 bytes per slot.
-    val maxSlotsPerPacket = maxRequestBytes / 64
     val chunks = storageConcurrency
     StorageTask.createSubTasks(
       accountHash = task.accountHash,

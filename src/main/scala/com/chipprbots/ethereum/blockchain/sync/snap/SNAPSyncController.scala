@@ -3304,7 +3304,7 @@ class SNAPSyncController(
               batchSize = snapSyncConfig.healingBatchSize,
               snapSyncController = self,
               concurrency = snapSyncConfig.healingConcurrency,
-              visitedCap = snapSyncConfig.healingVisitedCap,
+              bfsBloomExpectedInsertions = snapSyncConfig.healingBfsBloomExpectedSize,
               healingFrontierStorage = healingFrontierStorageOpt,
               traversalParallelism = snapSyncConfig.healingTraversalParallelism,
               bfsQueueStorageOpt = Some(bfsQueueStorage),
@@ -3365,7 +3365,7 @@ class SNAPSyncController(
                   batchSize = snapSyncConfig.healingBatchSize,
                   snapSyncController = self,
                   concurrency = snapSyncConfig.healingConcurrency,
-                  visitedCap = snapSyncConfig.healingVisitedCap,
+                  bfsBloomExpectedInsertions = snapSyncConfig.healingBfsBloomExpectedSize,
                   healingFrontierStorage = healingFrontierStorageOpt,
                   traversalParallelism = snapSyncConfig.healingTraversalParallelism,
                   bfsQueueStorageOpt = Some(bfsQueueStorage),
@@ -4675,10 +4675,10 @@ case class SNAPSyncConfig(
     healingBatchSize: Int = 16,
     healingConcurrency: Int = 16,
     healingMaxInFlightPerPeer: Int = 1,
-    // Cap on the post-SNAP frontier-rebuild DFS `visited` LRU (entries). Bounds heap during the
-    // full-state walk (≈ cap × 80 B; 4,000,000 ≈ 320 MB) so the walk completes instead of OOM-looping.
-    // Completeness is independent of this value. See docs/design/healing-frontier-scale.md.
-    healingVisitedCap: Int = actors.TrieNodeHealingCoordinator.DefaultVisitedCap,
+    // Expected insertions for the BFS walk's Bloom-filter visited set. At 1% FPR over 200M nodes
+    // ≈ 240 MB heap. Reduce for resource-constrained deployments (higher FPR = more re-walks, still
+    // correct). See docs/design/healing-frontier-scale.md.
+    healingBfsBloomExpectedSize: Long = actors.TrieNodeHealingCoordinator.DefaultBfsBloomExpectedInsertions,
     // Layer 2: persist the outstanding healing frontier so a restart resumes (O(frontier)) instead of
     // re-walking the full state. Default false (ships dark). See docs/design/healing-frontier-scale.md.
     healingFrontierPersistence: Boolean = false,
@@ -4785,10 +4785,10 @@ object SNAPSyncConfig {
         if (snapConfig.hasPath("healing-max-inflight-per-peer"))
           snapConfig.getInt("healing-max-inflight-per-peer")
         else 1,
-      healingVisitedCap =
-        if (snapConfig.hasPath("healing-visited-cap"))
-          snapConfig.getInt("healing-visited-cap")
-        else actors.TrieNodeHealingCoordinator.DefaultVisitedCap,
+      healingBfsBloomExpectedSize =
+        if (snapConfig.hasPath("healing-bfs-bloom-expected-size"))
+          snapConfig.getLong("healing-bfs-bloom-expected-size")
+        else actors.TrieNodeHealingCoordinator.DefaultBfsBloomExpectedInsertions,
       healingFrontierPersistence = snapConfig.hasPath("healing-frontier-persistence") &&
         snapConfig.getBoolean("healing-frontier-persistence"),
       healingTraversalParallelism =

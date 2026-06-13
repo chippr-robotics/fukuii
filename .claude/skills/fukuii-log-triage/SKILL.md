@@ -38,7 +38,8 @@ Read `../CONVENTIONS.md` first. Reading logs is 🟢; `admin_changeLogLevel` is 
 | Log pattern | Likely cause | Hand off to |
 | :-- | :-- | :-- |
 | Repeated peer disconnect / handshake fail | P2P/connectivity | `fukuii-peer-management` |
-| `AccountRange`/pivot stall, snap errors | sync stall | `fukuii-sync-troubleshooting` |
+| `AccountRange`/pivot stall, snap errors | ETC sync stall | `fukuii-sync-troubleshooting` |
+| Engine API timeout / missing `engine_forkchoiceUpdated` | ETH/Sepolia: CL not connected or stalled | `fukuii-sync-troubleshooting` — verify CL is running |
 | RocksDB corruption / IO error | disk/DB | `fukuii-disk-management`, then restore |
 | `OutOfMemoryError`, GC thrash | heap/resources | tune JVM heap (`.jvmopts`); restart |
 | `No space left on device` | disk full | `fukuii-disk-management` |
