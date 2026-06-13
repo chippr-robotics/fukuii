@@ -8,7 +8,7 @@ import org.bouncycastle.util.encoders.Hex
 import scala.collection.mutable
 import scala.concurrent.ExecutionContext
 import scala.concurrent.duration._
-import scala.jdk.CollectionConverters._
+import com.google.common.hash.{BloomFilter, Funnels}
 
 import scala.concurrent.{Await, Future}
 import scala.concurrent.duration.Duration
@@ -43,7 +43,7 @@ class TrieNodeHealingCoordinator(
     batchSize: Int,
     snapSyncController: ActorRef,
     concurrency: Int,
-    visitedCap: Int = TrieNodeHealingCoordinator.DefaultVisitedCap,
+    bfsBloomExpectedInsertions: Long = TrieNodeHealingCoordinator.DefaultBfsBloomExpectedInsertions,
     healingFrontierStorage: Option[HealingFrontierStorage] = None,
     healingWriterEcOverride: Option[ExecutionContext] = None,
     traversalParallelism: Int = TrieNodeHealingCoordinator.DefaultDfsParallelism,
@@ -162,14 +162,11 @@ class TrieNodeHealingCoordinator(
   // go-ethereum trie.Sync.Missing() alignment — bounded working set rather than full upfront BFS.
   private val FrontierBatchSize = 1000
 
-  // Cap on the frontier-rebuild DFS `visited` set. The DFS walks the full state trie (accounts +
-  // every storage trie — tens of millions of nodes on ETC mainnet); an unbounded visited set grew
-  // to ~2.9 GB and OOM-looped the node. A fixed-capacity LRU (insertion-order eviction) bounds it
-  // to ~cap × 80 B ≈ 320 MB. Completeness is preserved: any missing node re-discovered after an
-  // eviction is de-duplicated by `pendingHashSet`, and an evicted present node is only re-walked
-  // if reached again via a shared reference. See docs/design/healing-frontier-scale.md.
-  // Operator-tunable via `sync.snap-sync.healing-visited-cap`; defaults to DefaultVisitedCap.
-  private val HealingVisitedCap: Int = visitedCap
+  // Expected insertions for the BFS visited Bloom filter. Monotonically growing — no eviction,
+  // no false negatives, walk completeness is absolute. At 1% FPR over 200M nodes ≈ 240 MB heap.
+  // See docs/design/healing-frontier-scale.md.
+  // Operator-tunable via `sync.snap-sync.healing-bfs-bloom-expected-size`.
+  private val BfsBloomExpectedInsertions: Long = bfsBloomExpectedInsertions
   private val HealingTraversalParallelism: Int = traversalParallelism
   private val bfsQueue: BfsQueueStorage = bfsQueueStorageOpt.getOrElse(new InMemoryBfsQueueStorage())
 // --- Layer 2: persisted frontier (sync.snap-sync.healing-frontier-persistence) ---
@@ -1196,21 +1193,17 @@ class TrieNodeHealingCoordinator(
     import com.chipprbots.ethereum.domain.Account
     import scala.util.control.NonFatal
 
-    // LRU-bounded visited set (companion boundedVisitedSet): at the cap the ELDEST entry is
-    // evicted instead of refusing new entries. Refusing (the previous ConcurrentHashMap gate)
-    // silently TRUNCATED the traversal on tries larger than the cap — children past the cap were
-    // never enqueued, the queue drained early, and the walk reported "Complete" (and set the
-    // Layer-2 completeness marker) having covered only `cap` of the trie. Eviction trades that
-    // correctness hole for bounded re-walks of shared subtries (de-duplicated downstream by
-    // pendingHashSet). Access is synchronized: worker threads only touch it via markIfNew, and
-    // per-check lock cost is negligible against the 50K-node multiGet I/O per chunk.
-    val visitedLru = TrieNodeHealingCoordinator.boundedVisitedSet(HealingVisitedCap)
-    def markIfNew(h: ByteString): Boolean = visitedLru.synchronized {
-      if (visitedLru.contains(h)) false
-      else {
-        visitedLru += h
-        true
-      }
+    // Bloom-filter visited set: monotonically grows, never evicts. False negatives are impossible,
+    // preserving walk completeness. False positives (already-visited node reported as "new") cause
+    // an already-present subtrie to occasionally be skipped — safe because `pendingHashSet`
+    // deduplicates healing dispatch. At 1% FPR over 200M nodes ≈ 240 MB heap — lower than the
+    // former 4M-entry LRU (~480 MB with object overhead). Thread-safe: BloomFilter.put /
+    // mightContain use Guava 33.x internal lock striping.
+    val visitedFilter = TrieNodeHealingCoordinator.bfsVisitedFilter(BfsBloomExpectedInsertions)
+    def markIfNew(h: ByteString): Boolean = {
+      val arr = h.toArray
+      if (visitedFilter.mightContain(arr)) false
+      else { visitedFilter.put(arr); true }
     }
     markIfNew(startHash)
 
@@ -1555,10 +1548,11 @@ class TrieNodeHealingCoordinator(
 
 object TrieNodeHealingCoordinator {
 
-  /** Default cap on the frontier-rebuild DFS `visited` LRU: 4M entries ≈ 320 MB. Used when
-    * `sync.snap-sync.healing-visited-cap` is unset. See docs/design/healing-frontier-scale.md.
+  /** Default expected insertions for the BFS walk's Bloom-filter visited set.
+    * At 1% FPR over 200M nodes ≈ 240 MB heap — covers ETC and ETH mainnet full-state walks with
+    * headroom. Operator-tunable via `sync.snap-sync.healing-bfs-bloom-expected-size`.
     */
-  val DefaultVisitedCap: Int = 4_000_000
+  val DefaultBfsBloomExpectedInsertions: Long = 200_000_000L
 
   // Frontier-emission backpressure watermarks (entries in pendingTasks). The BFS walk pauses
   // emitting discovered missing nodes once the healing backlog reaches the high-water mark and
@@ -1581,18 +1575,12 @@ object TrieNodeHealingCoordinator {
     */
   val BfsChunkSize: Int = 50_000
 
-  /** Heap-bounded `visited` set for the frontier-rebuild DFS: a `LinkedHashMap`-backed LRU that evicts the
-    * earliest-inserted (already-completed) subtries once it exceeds `cap` (insertion-order eviction). Exposed on the
-    * companion so the eviction contract (size never exceeds `cap`; eldest dropped first) is unit-testable without
-    * instantiating the actor.
+  /** Guava Bloom filter for the BFS visited set. Monotonically growing — no eviction, no false
+    * negatives. Thread-safe (Guava 33.x lock-striped put/mightContain). Exposed on the companion
+    * so markIfNew semantics are unit-testable without instantiating the actor.
     */
-  def boundedVisitedSet(cap: Int): mutable.Set[ByteString] = {
-    val lru = new java.util.LinkedHashMap[ByteString, java.lang.Boolean](1024, 0.75f, false) {
-      override def removeEldestEntry(eldest: java.util.Map.Entry[ByteString, java.lang.Boolean]): Boolean =
-        size() > cap
-    }
-    java.util.Collections.newSetFromMap[ByteString](lru).asScala
-  }
+  def bfsVisitedFilter(expectedInsertions: Long, fpp: Double = 0.01): BloomFilter[Array[Byte]] =
+    BloomFilter.create(Funnels.byteArrayFunnel(), expectedInsertions, fpp)
 
   def props(
       stateRoot: ByteString,
@@ -1602,7 +1590,7 @@ object TrieNodeHealingCoordinator {
       batchSize: Int,
       snapSyncController: ActorRef,
       concurrency: Int = 16,
-      visitedCap: Int = DefaultVisitedCap,
+      bfsBloomExpectedInsertions: Long = DefaultBfsBloomExpectedInsertions,
       healingFrontierStorage: Option[HealingFrontierStorage] = None,
       healingWriterEcOverride: Option[ExecutionContext] = None,
       traversalParallelism: Int = DefaultDfsParallelism,
@@ -1622,7 +1610,7 @@ object TrieNodeHealingCoordinator {
         batchSize,
         snapSyncController,
         concurrency,
-        visitedCap,
+        bfsBloomExpectedInsertions,
         healingFrontierStorage,
         healingWriterEcOverride,
         traversalParallelism,
