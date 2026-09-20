@@ -101,7 +101,13 @@ fi
 FLAGS="$FLAGS -Dfukuii.network.rpc.http.enabled=true"
 FLAGS="$FLAGS -Dfukuii.network.rpc.http.interface=0.0.0.0"
 FLAGS="$FLAGS -Dfukuii.network.rpc.http.port=8545"
-FLAGS="$FLAGS -Dfukuii.network.rpc.apis=eth,web3,net,debug"
+# `txpool` added 2026-09-20 (#1407). The ethereum/rpc-compat suite exercises
+# txpool_content, txpool_contentFrom and txpool_status; all three are
+# implemented (JsonRpcController.scala:534-538, Apis.TxPool = "txpool", listed
+# in NodeBuilder's `available`), but they were never served under hive because
+# this line did not expose the namespace. Those three failures were a gap in
+# the harness configuration, not in the client.
+FLAGS="$FLAGS -Dfukuii.network.rpc.apis=eth,web3,net,debug,txpool"
 
 # Engine API — only enable for post-merge chains (TTD is not MAX)
 if [ "$TTD" != "$MAX" ]; then

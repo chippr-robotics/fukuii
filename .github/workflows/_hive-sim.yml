@@ -442,11 +442,22 @@ jobs:
             # because the methods are wrong (#1407). That is the difference
             # between "136 bugs" and "a handful of causes", and it is visible
             # only once the names are bucketed.
-            echo "--- failing tests by prefix ---"
+            echo "--- failing tests by namespace ---"
             printf '%s' "$gate_failed_names" | sed '/^$/d' \
               | sed -E 's#^([A-Za-z0-9]+)[_/].*#\1#; s#^([^ /]+)/.*#\1#' \
               | sort | uniq -c | sort -rn | head -25
-            echo "--- end prefix histogram ---"
+            echo "--- end namespace histogram ---"
+
+            # Second level: bucket by METHOD, not just namespace. The namespace
+            # rollup said "115 eth" for rpc-compat, which is a number, not a
+            # lead — `eth` spans dozens of unrelated methods. Bucketing on the
+            # part before the first `/` gives `eth_simulateV1`, `eth_getLogs`
+            # and so on, which is the unit a fix actually targets (#1407).
+            echo "--- failing tests by method (top 30) ---"
+            printf '%s' "$gate_failed_names" | sed '/^$/d' \
+              | sed -E 's#^([^/]+)/.*#\1#' \
+              | sort | uniq -c | sort -rn | head -30
+            echo "--- end method histogram ---"
           fi
           if [ -n "$sim_log" ] && [ "$failed" -gt 0 ]; then
             echo "--- first 40 FAILED test lines ---"
