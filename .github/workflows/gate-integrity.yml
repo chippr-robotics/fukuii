@@ -13,9 +13,9 @@ name: Gate Integrity
 
 on:
   push:
-    branches: [main, develop]
+    branches: [main, master, staging]
   pull_request:
-    branches: [main, develop]
+    branches: [main, master, staging]
   # Waivers and promotion deadlines expire on a calendar, not on a commit. A
   # daily run turns "this waiver is now expired" into a notification instead of
   # a surprise on someone else's unrelated PR.
