@@ -1,0 +1,51 @@
+name: Gate Integrity
+
+# The meta-check for the CI gate matrix (.github/gates.yml).
+#
+# Spec: specs/008-ci-gate-integrity/spec.md — issues #1402, #1403, #1404.
+#
+# This is a REQUIRED status check (FR-029). A gate system whose own consistency
+# check is optional guarantees nothing: the first inconvenient failure gets the
+# check disabled and the matrix rots back to decoration.
+#
+# It runs offline — no network, no Docker, no sbt (FR-030) — so requiring it
+# costs seconds, not minutes.
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+  # Waivers and promotion deadlines expire on a calendar, not on a commit. A
+  # daily run turns "this waiver is now expired" into a notification instead of
+  # a surprise on someone else's unrelated PR.
+  schedule:
+    - cron: '17 6 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  gate-integrity:
+    name: Gate Integrity
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Install PyYAML
+        run: pip install --disable-pip-version-check 'pyyaml>=6'
+
+      - name: Check gate matrix integrity
+        run: python3 scripts/ci/check_gate_integrity.py
+
+      - name: Self-test the gate logic
+        run: python3 scripts/ci/test_gate_integrity.py

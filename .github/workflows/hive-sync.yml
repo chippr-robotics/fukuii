@@ -35,6 +35,9 @@ jobs:
     with:
       sim: ethereum/sync
       label: sync
+      # Declared in .github/gates.yml (gate `hive-sync`). A run emitting fewer
+      # than this many results is a truncated run, not a pass.
+      min_tests: 8
       sim_timelimit: ${{ github.event.inputs.sim_timelimit || '40m' }}
       hive_ref: ${{ github.event.inputs.hive_ref || 'master' }}
       # Cross-client sync: each listed client takes a turn as the source and

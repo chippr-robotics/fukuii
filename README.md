@@ -143,13 +143,27 @@ The implementation optimizes for throughput at each phase:
 
 ### Ethereum Compliance
 
-The Ethereum Foundation [Hive](https://github.com/ethereum/hive) simulator suite is the industry standard for EL client compliance testing. Each simulator runs independently — a failing suite is immediately visible in the badge wall below, not buried in a monolithic pass/fail. Nightly reference tests from the Ethereum Foundation run across the full ETC and Ethereum fork schedules.
+The Ethereum Foundation [Hive](https://github.com/ethereum/hive) simulator suite is the
+industry standard for EL client compliance testing. Each simulator runs independently, so a
+failure is attributable to one suite rather than buried in a monolithic pass/fail. Nightly
+reference tests from the Ethereum Foundation run across the full ETC and Ethereum fork
+schedules.
+
+> **Read the badges with [`docs/STATUS.md`](docs/STATUS.md) open.** A badge tells you whether
+> a workflow run succeeded; it does not tell you whether that workflow is allowed to block a
+> merge. As of v0.8.0 **no Hive suite is a required gate** — every one of them is
+> *informational*, and the tier of each is published, with its promotion deadline, in
+> [Verification Status](docs/STATUS.md), generated from
+> [`.github/gates.yml`](.github/gates.yml). We say this plainly because the previous wording
+> here claimed a failing suite was "immediately visible in the badge wall", which was not
+> true: eleven of twelve suites could not fail at all. See
+> [#1402](https://github.com/chippr-robotics/fukuii/issues/1402) and
+> [#1403](https://github.com/chippr-robotics/fukuii/issues/1403).
 
 **Ethereum compliance — Hive simulators**
 
 [![Hive · smoke-genesis](https://github.com/chippr-robotics/fukuii/actions/workflows/hive-smoke-genesis.yml/badge.svg)](https://github.com/chippr-robotics/fukuii/actions/workflows/hive-smoke-genesis.yml)
 [![Hive · smoke-network](https://github.com/chippr-robotics/fukuii/actions/workflows/hive-smoke-network.yml/badge.svg)](https://github.com/chippr-robotics/fukuii/actions/workflows/hive-smoke-network.yml)
-[![Hive · rpc](https://github.com/chippr-robotics/fukuii/actions/workflows/hive-rpc.yml/badge.svg)](https://github.com/chippr-robotics/fukuii/actions/workflows/hive-rpc.yml)
 [![Hive · rpc-compat](https://github.com/chippr-robotics/fukuii/actions/workflows/hive-rpc-compat.yml/badge.svg)](https://github.com/chippr-robotics/fukuii/actions/workflows/hive-rpc-compat.yml)
 [![Hive · graphql](https://github.com/chippr-robotics/fukuii/actions/workflows/hive-graphql.yml/badge.svg)](https://github.com/chippr-robotics/fukuii/actions/workflows/hive-graphql.yml)
 [![Hive · devp2p](https://github.com/chippr-robotics/fukuii/actions/workflows/hive-devp2p.yml/badge.svg)](https://github.com/chippr-robotics/fukuii/actions/workflows/hive-devp2p.yml)

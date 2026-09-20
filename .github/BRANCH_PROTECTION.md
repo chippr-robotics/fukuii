@@ -61,9 +61,17 @@ To ensure good project hygiene, configure the following branch protection rules 
 
    ☑️ **Require status checks to pass before merging**
    - Require branches to be up to date before merging
-   - Status checks to require:
-     - `Test and Build` (from CI workflow)
+   - Status checks to require — **the authoritative list is `required_contexts`
+     in [`.github/gates.yml`](gates.yml)**; this section mirrors it:
+     - `Test and Build (JDK 25, Scala 3.3.7)` (from CI workflow)
      - `Build Docker Images` (from Docker workflow)
+     - `Gate Integrity` (validates the gate matrix itself)
+
+   > GitHub branch-protection settings live outside the repository, so no check
+   > can verify them. `.github/gates.yml` is the source of truth a reviewer can
+   > read and diff; applying it here is a manual step for a maintainer with
+   > admin rights. If the two disagree, the matrix is right and the setting is
+   > the bug. See `specs/008-ci-gate-integrity/` and #1404.
 
    ☑️ **Require conversation resolution before merging**
    - Ensures all review comments are addressed
@@ -87,7 +95,7 @@ If you have the GitHub CLI installed, you can configure branch protection with:
 
 gh api repos/{owner}/{repo}/branches/main/protection \
   --method PUT \
-  --field required_status_checks='{"strict":true,"contexts":["Test and Build","Build Docker Images"]}' \
+  --field required_status_checks='{"strict":true,"contexts":["Test and Build (JDK 25, Scala 3.3.7)","Build Docker Images","Gate Integrity"]}' \
   --field enforce_admins=true \
   --field required_pull_request_reviews='{"required_approving_review_count":1,"dismiss_stale_reviews":true}' \
   --field required_conversation_resolution=true \

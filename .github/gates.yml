@@ -1,0 +1,332 @@
+# ---------------------------------------------------------------------------
+# Fukuii CI Gate Matrix — the single source of truth for "what must be green".
+#
+# Spec: specs/008-ci-gate-integrity/spec.md  (issues #1402, #1403, #1404)
+# Enforced by: scripts/ci/check_gate_integrity.py (workflow: gate-integrity.yml)
+#
+# Rules this file exists to make un-rottable:
+#   * Every CI check is declared here with a tier. Undeclared = build failure.
+#   * tier: required        -> must be green to merge; MUST have a real gate.
+#   * tier: informational   -> observed and reported, not blocking. MUST carry
+#                              `issue` + `promote_by` — informational is a
+#                              staging area with a deadline, not a parking lot.
+#   * tier: quarantined     -> known broken, tracked, EXCLUDED from all public
+#                              claims. Also requires `issue` + `promote_by`.
+#   * Every waiver expires. No owner/issue/reason/expires -> build failure.
+#     Past `expires` -> build failure. There is no bypass; extend it in a PR.
+#
+# HONESTY RULE (#1403): docs may only claim a suite is "verified"/"compliant"/
+# "passing" if its tier here is `required`. The claim linter enforces this.
+# ---------------------------------------------------------------------------
+
+version: 1
+
+meta:
+  spec: specs/008-ci-gate-integrity/spec.md
+  # Warn (do not fail) this many days before a waiver or promote_by date lands.
+  warn_window_days: 14
+
+# ---------------------------------------------------------------------------
+# Canonical facts (#1403 — "One public truth"). Stated ONCE, here. Every other
+# occurrence in docs/README is a reference to this, never a restatement.
+# ---------------------------------------------------------------------------
+canonical:
+  binary: fukuii
+  registry: ghcr.io/chippr-robotics/fukuii
+  registry_mirror: docker.io/chipprbots/fukuii
+  version_source: version.sbt        # FR-019: the ONLY versioning scheme.
+  version_scheme: semver             # MAJOR.MINOR.PATCH, .github/VERSIONING.md
+  lineage: >-
+    Fukuii is a derivative work of IOHK's Mantis client, maintained by Chippr
+    Robotics LLC under Apache-2.0. See NOTICE. Mantis is a trademark of IOHK,
+    used here only to describe this fork's origin.
+  sister_project:
+    repo: fukuii-project/fukuii-cli
+    relationship: >-
+      An independent, ground-up rewrite with no common ancestor and no shared
+      source with this repository. It is NOT this release train and NOT a fork
+      of this tree. See issue #1399 for the divergence assessment and the
+      clean-room constraint.
+    tracking_issue: 1399
+
+# ---------------------------------------------------------------------------
+# Required status checks. These are the contexts branch protection must list.
+# Apply with the `gh api` invocation in .github/BRANCH_PROTECTION.md.
+# ---------------------------------------------------------------------------
+required_contexts:
+  - Test and Build (JDK 25, Scala 3.3.7)
+  - Build Docker Images
+  - Gate Integrity
+
+# ---------------------------------------------------------------------------
+# Gates
+# ---------------------------------------------------------------------------
+gates:
+
+  # --- Core build / test -----------------------------------------------------
+
+  - id: ci-test-build
+    workflow: ci.yml
+    context: Test and Build (JDK 25, Scala 3.3.7)
+    tier: required
+    owner: realcodywburns
+    covers: >-
+      scalafmtCheckAll, compile-all, Tier-1 testEssential, Tier-2 testStandard
+      with coverage (develop + PRs into main), KPI baselines, ethereum/tests
+      integration job, assembly build.
+
+  - id: docker-build
+    workflow: docker.yml
+    context: Build Docker Images
+    tier: required
+    owner: realcodywburns
+    covers: Container images build and push for mainnet/mordor/bootnode variants.
+
+  - id: gate-integrity
+    workflow: gate-integrity.yml
+    context: Gate Integrity
+    tier: required
+    owner: realcodywburns
+    covers: >-
+      This matrix itself — undeclared checks, required-but-unfailable gates,
+      expired/incomplete waivers, unmapped constitution principles, stale
+      generated status doc, dead badges, and over-claiming documentation.
+      FR-029: the meta-check is itself required, or it guarantees nothing.
+
+  # --- Hive suites ----------------------------------------------------------
+  #
+  # HONEST STATE, 2026-09-20: every Hive suite is `informational`. Not one is
+  # declared required, because none has evidence of a green run on `main` that
+  # we could point at. The last green main-branch smoke-genesis run was
+  # 2026-04-30 (run 25184051794); every PR run since has been red.
+  #
+  # Declaring these required today would repeat the v0.8.0 defect in reverse:
+  # a required check nobody can pass gets waived into meaninglessness within a
+  # week. So instead: the MECHANISM lands now (zero-results fails, min_tests,
+  # hive_exit enforced — see _hive-sim.yml), the PROMOTION is scheduled below,
+  # and promotion requires `evidence`: a green run URL on `main`.
+  #
+  # #1402 asks for "the first required slice". It is declared in
+  # `first_required_slice` below with dates, not asserted as already true.
+
+  - id: hive-sync
+    workflow: hive-sync.yml
+    context: Hive · sync
+    tier: informational
+    owner: realcodywburns
+    issue: 1402
+    promote_by: 2026-12-31
+    min_tests: 8
+    covers: >-
+      Cross-client sync interop. fukuii as sync CLIENT (fukuii syncs from
+      go-ethereum/nethermind) and as sync SERVER (go-ethereum/nethermind sync
+      from fukuii). Gated on the `fukuii` subset only, so upstream
+      geth<->nethermind failures do not pollute this signal.
+    waivers: [sync-server-geth-from-fukuii, sync-client-fukuii-from-nethermind]
+    status_note: >-
+      The only suite with a real subset gate today. #1402's first required-slice
+      item. Both waivers below must be retired before promotion — the
+      sync-SERVER direction is precisely what #1402 says shipped red in v0.8.0.
+
+  - id: hive-smoke-genesis
+    workflow: hive-smoke-genesis.yml
+    context: Hive · smoke-genesis
+    tier: informational
+    owner: realcodywburns
+    issue: 1402
+    promote_by: 2026-11-30
+    min_tests: 1
+    covers: Client starts from a hive-supplied genesis and reports a chain head.
+    status_note: >-
+      Cheapest suite and the natural first promotion: if this cannot be made
+      required, nothing can. Last green on main 2026-04-30; red since.
+
+  - id: hive-smoke-network
+    workflow: hive-smoke-network.yml
+    context: Hive · smoke-network
+    tier: informational
+    owner: realcodywburns
+    issue: 1402
+    promote_by: 2026-11-30
+    min_tests: 1
+    covers: Client accepts peers and forms a network under hive's harness.
+
+  - id: hive-consume-rlp
+    workflow: hive-consume-rlp.yml
+    context: Hive · consume-rlp
+    tier: informational
+    owner: realcodywburns
+    issue: 1402
+    promote_by: 2026-12-31
+    min_tests: 50
+    covers: >-
+      EELS consume-rlp — block import from RLP across the fork schedule,
+      including the ETC forks. #1402's third required-slice item.
+    status_note: >-
+      ~67% failing at v0.8.0. Not claimed as verified anywhere until promoted.
+
+  - id: hive-engine
+    workflow: hive-engine.yml
+    context: Hive · engine
+    tier: informational
+    owner: realcodywburns
+    issue: 1402
+    promote_by: 2026-12-31
+    min_tests: 20
+    covers: >-
+      Engine API suite, including invalid-payload rejection — #1402's second
+      required-slice item. ETH/Sepolia path only.
+
+  - id: hive-consensus
+    workflow: hive-consensus.yml
+    context: Hive · consensus
+    tier: informational
+    owner: realcodywburns
+    issue: 1402
+    promote_by: 2027-03-31
+    min_tests: 50
+    covers: ethereum/consensus — state-transition conformance.
+
+  - id: hive-consume-engine
+    workflow: hive-consume-engine.yml
+    context: Hive · consume-engine
+    tier: informational
+    owner: realcodywburns
+    issue: 1402
+    promote_by: 2027-03-31
+    min_tests: 20
+    covers: EELS consume-engine — payload import via Engine API.
+
+  - id: hive-rpc-compat
+    workflow: hive-rpc-compat.yml
+    context: Hive · rpc-compat
+    tier: informational
+    owner: realcodywburns
+    issue: 1402
+    promote_by: 2027-03-31
+    min_tests: 20
+    covers: JSON-RPC method compatibility against the reference corpus.
+
+  - id: hive-graphql
+    workflow: hive-graphql.yml
+    context: Hive · graphql
+    tier: informational
+    owner: realcodywburns
+    issue: 1402
+    promote_by: 2027-03-31
+    min_tests: 10
+    covers: GraphQL endpoint conformance.
+
+  - id: hive-devp2p
+    workflow: hive-devp2p.yml
+    context: Hive · devp2p
+    tier: informational
+    owner: realcodywburns
+    issue: 1402
+    promote_by: 2027-03-31
+    min_tests: 10
+    covers: devp2p discovery and RLPx wire conformance.
+
+  - id: hive-pyspec
+    workflow: hive-pyspec.yml
+    context: Hive · pyspec
+    tier: informational
+    owner: realcodywburns
+    issue: 1402
+    promote_by: 2027-03-31
+    min_tests: 50
+    covers: execution-spec-tests via hive's pyspec simulator.
+
+  - id: ethereum-tests-nightly
+    workflow: ethereum-tests-nightly.yml
+    context: Ethereum Tests
+    tier: informational
+    owner: realcodywburns
+    issue: 1402
+    promote_by: 2027-03-31
+    covers: >-
+      Nightly ethereum/tests across the full ETC and ETH fork schedules.
+    status_note: >-
+      Runs with continue-on-error today. Promotion requires removing that and
+      establishing a baseline pass count first.
+
+  # --- Quarantined: parallel unchecked paths, excluded from all claims -------
+
+  - id: hive-prague
+    workflow: hive-prague.yml
+    context: Hive Prague Suite
+    tier: quarantined
+    owner: realcodywburns
+    issue: 1402
+    promote_by: 2026-12-31
+    covers: Legacy standalone Prague caller — does NOT use _hive-sim.yml.
+    status_note: >-
+      A parallel, unchecked code path with its own inline `exit 0`. Migrate to
+      _hive-sim.yml (inheriting its gates) or delete. Excluded from public
+      claims until then.
+
+  - id: hive-osaka
+    workflow: hive-osaka.yml
+    context: Hive Osaka Suite
+    tier: quarantined
+    owner: realcodywburns
+    issue: 1402
+    promote_by: 2026-12-31
+    covers: Legacy standalone Osaka caller — does NOT use _hive-sim.yml.
+    status_note: Same as hive-prague. Migrate to _hive-sim.yml or delete.
+
+# ---------------------------------------------------------------------------
+# #1402: the first required slice — declared with dates, not asserted as done.
+#
+# A gate may only be moved to `tier: required` in a PR that also adds an
+# `evidence:` field pointing at a green run of that workflow on `main`. The
+# Gate Integrity check enforces this: `required` + Hive + no evidence = FAIL.
+# That is what stops "required" from becoming another unbacked claim.
+# ---------------------------------------------------------------------------
+first_required_slice:
+  issue: 1402
+  target: 2026-12-31
+  members:
+    - gate: hive-sync
+      item: geth<->fukuii sync, BOTH directions
+      blocked_by: [sync-server-geth-from-fukuii, sync-client-fukuii-from-nethermind]
+    - gate: hive-engine
+      item: invalid-payload rejection
+      blocked_by: []
+    - gate: hive-consume-rlp
+      item: ETC-fork consume-rlp
+      blocked_by: []
+  rule: >-
+    Nightlies MUST NOT report green while any member of this slice is red.
+    Enforced structurally by _hive-sim.yml (a suite that produced no results,
+    fewer than min_tests results, or any gated-subset failure is red) rather
+    than by convention.
+
+# ---------------------------------------------------------------------------
+# Waivers — every gate_exclude branch in every workflow MUST appear here.
+# Missing field or past expiry => Gate Integrity fails. No bypass exists.
+# ---------------------------------------------------------------------------
+waivers:
+
+  - id: sync-server-geth-from-fukuii
+    gate: hive-sync
+    pattern: sync go-ethereum from fukuii
+    owner: realcodywburns
+    issue: 1402
+    reason: >-
+      fukuii as SNAP/fast sync SERVER does not yet serve go-ethereum to
+      completion. This is the exact failure #1402 names as having shipped
+      green in v0.8.0. Waived with a deadline so the gate can be required
+      NOW for the directions that do work, rather than requiring nothing.
+    expires: 2026-12-31
+
+  - id: sync-client-fukuii-from-nethermind
+    gate: hive-sync
+    pattern: sync fukuii from nethermind
+    owner: realcodywburns
+    issue: 1402
+    reason: >-
+      fukuii syncing FROM nethermind is intermittently red; root cause not yet
+      isolated (suspected snap/2 range-response framing). Geth-as-source is
+      gated and green, so the client direction retains real coverage.
+    expires: 2026-12-31

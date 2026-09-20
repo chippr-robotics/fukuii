@@ -35,5 +35,8 @@ jobs:
     with:
       sim: devp2p
       label: devp2p
+      # Declared in .github/gates.yml (gate `hive-devp2p`). A run emitting fewer
+      # than this many results is a truncated run, not a pass.
+      min_tests: 10
       sim_timelimit: ${{ github.event.inputs.sim_timelimit || '40m' }}
       hive_ref: ${{ github.event.inputs.hive_ref || 'master' }}

@@ -35,6 +35,9 @@ jobs:
     with:
       sim: ethereum/graphql
       label: graphql
+      # Declared in .github/gates.yml (gate `hive-graphql`). A run emitting fewer
+      # than this many results is a truncated run, not a pass.
+      min_tests: 10
       # parallelism=1: the graphql suite's `pending` / `sendRawTransaction` tests are
       # order-sensitive. With parallelism>1, test 35 (graphql_pending) races tests 34 /
       # 36 / 38 at the mempool and flakes based on scheduling. Serial execution gives
