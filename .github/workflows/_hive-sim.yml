@@ -422,9 +422,31 @@ jobs:
           # test(s) match gate 'fukuii'" with no way to learn WHICH two — a
           # failure you cannot name is a failure you cannot fix (#1407).
           if [ -n "$gate_failed_names" ]; then
-            echo "--- failing tests matching gate '${GATE_PATTERN}' ---"
+            # NOTE the empty-pattern case. With no gate_pattern every test name
+            # "contains" the empty substring, so this list is ALL failures, not
+            # a gated subset. Label it for what it actually is — the first
+            # version of this block said "matching gate ''", which read as a
+            # filter that had been applied when none had.
+            if [ -n "${GATE_PATTERN:-}" ]; then
+              echo "--- failing tests matching gate '${GATE_PATTERN}' ---"
+            else
+              echo "--- all failing tests (no gate_pattern set) ---"
+            fi
             printf '%s' "$gate_failed_names" | sed '/^$/d' | sort -u
-            echo "--- end gate-matching failures ---"
+            echo "--- end failing test list ---"
+
+            # Histogram by namespace/prefix. A raw list of 136 names is data;
+            # the count per prefix is a diagnosis. rpc-compat's failures turned
+            # out to cluster by RPC namespace — with `txpool_*` failing only
+            # because the hive adapter does not expose that namespace, not
+            # because the methods are wrong (#1407). That is the difference
+            # between "136 bugs" and "a handful of causes", and it is visible
+            # only once the names are bucketed.
+            echo "--- failing tests by prefix ---"
+            printf '%s' "$gate_failed_names" | sed '/^$/d' \
+              | sed -E 's#^([A-Za-z0-9]+)[_/].*#\1#; s#^([^ /]+)/.*#\1#' \
+              | sort | uniq -c | sort -rn | head -25
+            echo "--- end prefix histogram ---"
           fi
           if [ -n "$sim_log" ] && [ "$failed" -gt 0 ]; then
             echo "--- first 40 FAILED test lines ---"
