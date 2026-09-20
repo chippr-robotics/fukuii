@@ -158,7 +158,7 @@ gates:
       go-ethereum/nethermind) and as sync SERVER (go-ethereum/nethermind sync
       from fukuii). Gated on the `fukuii` subset only, so upstream
       geth<->nethermind failures do not pollute this signal.
-    waivers: [sync-server-geth-from-fukuii, sync-client-fukuii-from-nethermind]
+    waivers: [sync-server-fukuii, sync-client-fukuii-from-nethermind]
     status_note: >-
       The only suite with a real subset gate today. #1402's first required-slice
       item. Both waivers below must be retired before promotion — the
@@ -357,16 +357,29 @@ first_required_slice:
 # ---------------------------------------------------------------------------
 waivers:
 
-  - id: sync-server-geth-from-fukuii
+  - id: sync-server-fukuii
     gate: hive-sync
-    pattern: sync go-ethereum from fukuii
+    pattern: fukuii as sync server
     owner: realcodywburns
     issue: 1402
     reason: >-
-      fukuii as SNAP/fast sync SERVER does not yet serve go-ethereum to
-      completion. This is the exact failure #1402 names as having shipped
-      green in v0.8.0. Waived with a deadline so the gate can be required
-      NOW for the directions that do work, rather than requiring nothing.
+      fukuii as sync SERVER does not serve a peer to completion. This is the
+      failure #1402 names as having shipped green in v0.8.0.
+
+      RENAMED 2026-09-20 (#1407). This waiver previously read
+      `sync go-ethereum from fukuii`, which is NOT a test name ethereum/hive
+      ever generates, so it excluded nothing. hive's sync simulator names its
+      cases from a CLIENT placeholder that is always the client under test
+      (simulators/ethereum/sync/main.go):
+
+          Name: "CLIENT as snap-sync server"   -> "fukuii as snap-sync server"
+          Name: "CLIENT as sync server"        -> "fukuii as sync server"
+          Name: "sync CLIENT from %s"          -> "sync fukuii from go-ethereum"
+
+      There is no "sync <other> from fukuii" form. The intent was right and
+      the string was wrong, so the sync-server failure this waiver was written
+      for was never actually waived — it was failing the gate unacknowledged,
+      behind gates that could not fail anyway.
     expires: 2026-12-31
 
   - id: sync-client-fukuii-from-nethermind

@@ -14,6 +14,7 @@ Offline, no dependencies beyond PyYAML. Exit 0 = all cases behaved.
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -121,30 +122,47 @@ def m_required_without_evidence(root: Path) -> None:
          "    context: Hive · devp2p\n    tier: required")
 
 
+def _first_waiver(root: Path) -> dict:
+    """Read the first declared waiver instead of hardcoding one.
+
+    These mutations used to name `sync-server-geth-from-fukuii` literally,
+    which broke the moment that waiver was renamed (#1407). A self-test that
+    hardcodes the data it mutates tests the fixture, not the checker.
+    """
+    import yaml as _y
+    doc = _y.safe_load((root / ".github/gates.yml").read_text(encoding="utf-8"))
+    waivers = doc.get("waivers") or []
+    assert waivers, "gates.yml declares no waivers — these cases need at least one"
+    return waivers[0]
+
+
 def m_expired_waiver(root: Path) -> None:
     """C6 — a waiver past its expiry date."""
+    w = _first_waiver(root)
     edit(root, ".github/gates.yml",
-         "    expires: 2026-12-31\n\n  - id: sync-client-fukuii-from-nethermind",
-         "    expires: 2020-01-01\n\n  - id: sync-client-fukuii-from-nethermind")
+         f"    expires: {w['expires']}",
+         "    expires: 2020-01-01")
 
 
 def m_incomplete_waiver(root: Path) -> None:
     """C6 — a waiver missing its owner."""
+    w = _first_waiver(root)
     edit(root, ".github/gates.yml",
-         "  - id: sync-server-geth-from-fukuii\n"
-         "    gate: hive-sync\n"
-         "    pattern: sync go-ethereum from fukuii\n"
-         "    owner: realcodywburns\n",
-         "  - id: sync-server-geth-from-fukuii\n"
-         "    gate: hive-sync\n"
-         "    pattern: sync go-ethereum from fukuii\n")
+         f"  - id: {w['id']}\n    gate: {w['gate']}\n"
+         f"    pattern: {w['pattern']}\n    owner: {w['owner']}\n",
+         f"  - id: {w['id']}\n    gate: {w['gate']}\n"
+         f"    pattern: {w['pattern']}\n")
 
 
 def m_undeclared_exclusion(root: Path) -> None:
     """C7 — a workflow excludes a test no waiver declares."""
-    edit(root, ".github/workflows/hive-sync.yml",
-         "gate_exclude: 'sync go-ethereum from fukuii|sync fukuii from nethermind'",
-         "gate_exclude: 'sync go-ethereum from fukuii|sync fukuii from nethermind|sync fukuii from besu'")
+    p = root / ".github/workflows/hive-sync.yml"
+    txt = p.read_text(encoding="utf-8")
+    m = re.search(r"gate_exclude: '([^']+)'", txt)
+    assert m, "hive-sync.yml has no gate_exclude to extend"
+    p.write_text(txt.replace(m.group(0),
+                             f"gate_exclude: '{m.group(1)}|sync fukuii from besu'", 1),
+                 encoding="utf-8")
 
 
 def m_overdue_promotion(root: Path) -> None:
