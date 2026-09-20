@@ -583,9 +583,29 @@ jobs:
           fi
 
           # (5) Any failure inside the gated subset.
+          #
+          # A subset gate exists so that upstream failures between OTHER clients
+          # (geth<->nethermind) don't pollute our signal. That tolerance is the
+          # whole point of the pattern, so it applies only when one is set.
           if [ -n "${GATE_PATTERN:-}" ] && [ "$gate_failed" -gt 0 ]; then
             verdict=1
             reasons+=("${gate_failed} failing test(s) match gate '${GATE_PATTERN}'")
+          fi
+
+          # (6) No subset gate configured -> the whole suite is ours, so ANY
+          # failing test is a real failure.
+          #
+          # Found by the devp2p run on this very PR: 5 results, all 5 failing,
+          # no gate_pattern, threshold 0 — caught only because min_tests was 10.
+          # Had it emitted 10 failing tests it would have gone GREEN, because
+          # condition (5) is guarded on a pattern this suite does not set. That
+          # is the same "cannot fail in this configuration" defect the gate was
+          # written to remove, reintroduced one level down. With no pattern
+          # there is no third-party result to tolerate: every test in the run is
+          # fukuii's own, and a failure is a failure.
+          if [ -z "${GATE_PATTERN:-}" ] && [ "$failed" -gt 0 ]; then
+            verdict=1
+            reasons+=("${failed} failing test(s) and no gate_pattern is set — with no subset filter the whole suite is in scope")
           fi
 
           {

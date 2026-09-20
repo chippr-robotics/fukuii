@@ -270,6 +270,11 @@ matrix calls informational fails the claim check.
   cannot cause the gate to be skipped and the job to be reported green.
 - **FR-005**: Enforcement MUST be a single terminal step whose failure message names the suite,
   the reason, and the counts, so the cause is legible from the check page without opening logs.
+- **FR-005a**: When no `gate_pattern` is configured, ANY failing test MUST fail the job. A
+  subset gate exists to tolerate failures between *other* clients; with no subset filter there
+  is no third-party result to tolerate, so every test in the run is in scope. Without this, a
+  suite that satisfies `min_tests` with every test failing reports green — the same
+  "cannot fail in this configuration" defect one level down.
 
 **Declared matrix (US2)**
 

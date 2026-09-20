@@ -82,6 +82,15 @@ correction rather than the weakening this plan warns against. The negative contr
 a reachable timestamp injected into `mordor-chain.conf` fires three assertions, including the
 behavioural `forBlock` equality check.
 
+**D8 — No subset gate means the whole suite is in scope.** The `devp2p` run on this PR emitted 5
+results, all 5 failing, `hive` exit 1, no `gate_pattern`, `pass_threshold: 0` — and was caught only
+because `min_tests` was 10. Had it emitted 10 failing tests it would have gone **green**: condition
+(5) is guarded on a `gate_pattern` that suite does not set, so nothing else could fail it. That is
+the defect this feature exists to remove, reintroduced one level down in my own gate. Fixed by
+condition (6): with no pattern there is no third-party result to tolerate, so any failure is red.
+Found by CI on this PR, not by review — which is the argument for landing the mechanism before
+promoting anything to required.
+
 ## Expected consequence, stated plainly
 
 **Hive badges will go red.** Suites that previously could not fail now fail when they produce no
@@ -99,7 +108,7 @@ spec.md → Out of Scope.
 
 | What | How | Result |
 |---|---|---|
-| Gate shell logic | 7 cases against extracted step (`bash -n` + execution) | 7/7 behaved |
+| Gate shell logic | 10 cases against extracted step (`bash -n` + execution), incl. the no-`gate_pattern` hole and a subset-tolerance regression guard | 10/10 behaved |
 | Meta-check | `scripts/ci/test_gate_integrity.py` | 16/16 behaved |
 | Meta-check on this tree | `python3 scripts/ci/check_gate_integrity.py` | 0 failures, 0 warnings |
 | All workflow YAML | `yaml.safe_load` per file | parses |

@@ -30,6 +30,10 @@ US4 = constitution enforcement (P2) · US5 = ETC/ETH isolation (P2) · US6 = pub
       hive crash, gated-subset failure, tabulation-never-ran, healthy, upstream-failure-outside-gate).
       **Result: 7/7.**
 
+- [X] T007a Close the no-`gate_pattern` hole found by CI on this PR (`devp2p`: 5 results, all
+      failing, green but for `min_tests`). Condition (6): with no subset filter, any failure is red
+      (FR-005a). Re-validated 10/10 including a regression guard that subset tolerance still holds.
+
 ## Phase 3: US2 + US3 — the meta-check
 
 - [X] T008 Write `scripts/ci/check_gate_integrity.py` — C1–C13, offline (FR-030).
