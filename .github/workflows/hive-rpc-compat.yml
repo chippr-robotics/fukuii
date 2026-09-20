@@ -35,5 +35,8 @@ jobs:
     with:
       sim: ethereum/rpc-compat
       label: rpc-compat
+      # Declared in .github/gates.yml (gate `hive-rpc-compat`). A run emitting fewer
+      # than this many results is a truncated run, not a pass.
+      min_tests: 20
       sim_timelimit: ${{ github.event.inputs.sim_timelimit || '30m' }}
       hive_ref: ${{ github.event.inputs.hive_ref || 'master' }}

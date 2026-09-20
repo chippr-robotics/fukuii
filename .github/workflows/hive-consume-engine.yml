@@ -44,6 +44,9 @@ jobs:
     with:
       sim: ethereum/eels/consume-engine
       label: consume-engine
+      # Declared in .github/gates.yml (gate `hive-consume-engine`). A run emitting fewer
+      # than this many results is a truncated run, not a pass.
+      min_tests: 20
       sim_timelimit: ${{ github.event.inputs.sim_timelimit || '60m' }}
       sim_limit: ${{ github.event.inputs.sim_limit || '' }}
       sim_buildarg: disable_strict_exception_matching=nimbus-el,fukuii

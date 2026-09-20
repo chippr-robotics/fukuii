@@ -122,6 +122,7 @@ extra_javascript:
 # Navigation structure
 nav:
   - Home: index.md
+  - Verification Status: STATUS.md
   
   - Getting Started:
     - getting-started/index.md

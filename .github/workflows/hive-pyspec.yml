@@ -35,5 +35,8 @@ jobs:
     with:
       sim: ethereum/pyspec
       label: pyspec
+      # Declared in .github/gates.yml (gate `hive-pyspec`). A run emitting fewer
+      # than this many results is a truncated run, not a pass.
+      min_tests: 50
       sim_timelimit: ${{ github.event.inputs.sim_timelimit || '60m' }}
       hive_ref: ${{ github.event.inputs.hive_ref || 'master' }}

@@ -39,6 +39,9 @@ jobs:
     with:
       sim: ethereum/eels/consume-rlp
       label: consume-rlp
+      # Declared in .github/gates.yml (gate `hive-consume-rlp`). A run emitting fewer
+      # than this many results is a truncated run, not a pass.
+      min_tests: 50
       sim_timelimit: ${{ github.event.inputs.sim_timelimit || '60m' }}
       sim_limit: ${{ github.event.inputs.sim_limit || '' }}
       sim_buildarg: disable_strict_exception_matching=nimbus-el,fukuii

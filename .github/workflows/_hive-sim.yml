@@ -50,6 +50,20 @@ on:
         required: false
         type: number
         default: 0
+      min_tests:
+        description: |
+          Minimum number of test results the simulator must produce for the run
+          to be considered meaningful. A run that emits fewer than this many
+          results FAILS, regardless of how many of them passed.
+
+          This exists because a simulator that never started and a simulator
+          that passed everything used to be indistinguishable: both ended with
+          passed=0 failed=0 and a green job. Absence of evidence is not
+          evidence of a pass. Suites declared `required` in .github/gates.yml
+          MUST set this above zero (enforced by the Gate Integrity check).
+        required: false
+        type: number
+        default: 0
       hive_ref:
         description: 'ethereum/hive git ref to test against'
         required: false
@@ -118,6 +132,7 @@ jobs:
       passed: ${{ steps.tab.outputs.passed }}
       failed: ${{ steps.tab.outputs.failed }}
       total: ${{ steps.tab.outputs.total }}
+      json_count: ${{ steps.tab.outputs.json_count }}
       gate_passed: ${{ steps.tab.outputs.gate_passed }}
       gate_failed: ${{ steps.tab.outputs.gate_failed }}
 
@@ -398,6 +413,47 @@ jobs:
           fi
 
           total=$((passed + failed))
+
+          # Echo the failing test names to STDOUT, not only to the job summary.
+          #
+          # The summary is unreachable from the REST API, so a failure whose
+          # name lives only there cannot be triaged without downloading the
+          # log artifact by hand. That made the `sync` gate report "2 failing
+          # test(s) match gate 'fukuii'" with no way to learn WHICH two — a
+          # failure you cannot name is a failure you cannot fix (#1407).
+          if [ -n "$gate_failed_names" ]; then
+            # NOTE the empty-pattern case. With no gate_pattern every test name
+            # "contains" the empty substring, so this list is ALL failures, not
+            # a gated subset. Label it for what it actually is — the first
+            # version of this block said "matching gate ''", which read as a
+            # filter that had been applied when none had.
+            if [ -n "${GATE_PATTERN:-}" ]; then
+              echo "--- failing tests matching gate '${GATE_PATTERN}' ---"
+            else
+              echo "--- all failing tests (no gate_pattern set) ---"
+            fi
+            printf '%s' "$gate_failed_names" | sed '/^$/d' | sort -u
+            echo "--- end failing test list ---"
+
+            # Histogram by namespace/prefix. A raw list of 136 names is data;
+            # the count per prefix is a diagnosis. rpc-compat's failures turned
+            # out to cluster by RPC namespace — with `txpool_*` failing only
+            # because the hive adapter does not expose that namespace, not
+            # because the methods are wrong (#1407). That is the difference
+            # between "136 bugs" and "a handful of causes", and it is visible
+            # only once the names are bucketed.
+            echo "--- failing tests by prefix ---"
+            printf '%s' "$gate_failed_names" | sed '/^$/d' \
+              | sed -E 's#^([A-Za-z0-9]+)[_/].*#\1#; s#^([^ /]+)/.*#\1#' \
+              | sort | uniq -c | sort -rn | head -25
+            echo "--- end prefix histogram ---"
+          fi
+          if [ -n "$sim_log" ] && [ "$failed" -gt 0 ]; then
+            echo "--- first 40 FAILED test lines ---"
+            grep -E '(\] FAILED |FAILED tests/|--- FAIL:)' "$sim_log" | head -40 || true
+            echo "--- end FAILED test lines ---"
+          fi
+
           {
             echo "passed=$passed"
             echo "failed=$failed"
@@ -469,7 +525,9 @@ jobs:
             } >> "$GITHUB_STEP_SUMMARY"
           fi
 
-          # Always succeed — the threshold gate runs as a separate step.
+          # Always succeed — the tabulate step REPORTS. The single terminal
+          # "Enforce gate" step below is what DECIDES. Keeping the two apart
+          # means a parse hiccup degrades the summary, never the verdict.
           exit 0
 
       - name: Upload simulator logs
@@ -483,26 +541,133 @@ jobs:
           retention-days: 14
           if-no-files-found: warn
 
-      - name: Enforce pass threshold
-        if: ${{ inputs.pass_threshold > 0 }}
+      # ---------------------------------------------------------------------
+      # THE GATE. One terminal step, always evaluated, decides the verdict.
+      #
+      # This replaces two conditional gate steps that between them let three
+      # distinct failures report green (spec 008 / #1402):
+      #
+      #   1. Zero results.      Threshold gate was `if: pass_threshold > 0`, so
+      #                         a suite with no threshold skipped it entirely;
+      #                         the subset gate then found zero failures in
+      #                         zero tests and passed. A simulator that crashed
+      #                         before running looked exactly like a clean run.
+      #   2. Truncated results. A suite that emitted 3 of 400 cases, all
+      #                         passing, was green.
+      #   3. Skipped gates.     A failure in an earlier step skipped the gate
+      #                         steps and the job was still reported green.
+      #
+      # `if: always()` fixes (3). `min_tests` and the zero-results rule fix (1)
+      # and (2). The step runs for EVERY caller, including ones that configure
+      # no threshold and no subset gate — those still cannot pass on a crash.
+      # ---------------------------------------------------------------------
+      - name: Enforce gate
+        if: always()
         env:
           PASSED: ${{ steps.tab.outputs.passed }}
+          FAILED: ${{ steps.tab.outputs.failed }}
+          TOTAL: ${{ steps.tab.outputs.total }}
+          JSON_COUNT: ${{ steps.tab.outputs.json_count }}
           THRESHOLD: ${{ inputs.pass_threshold }}
+          MIN_TESTS: ${{ inputs.min_tests }}
+          GATE_PATTERN: ${{ inputs.gate_pattern }}
+          GATE_FAILED: ${{ steps.tab.outputs.gate_failed }}
+          HIVE_EXIT: ${{ steps.sim.outputs.hive_exit }}
           LABEL: ${{ inputs.label }}
+          SIM: ${{ inputs.sim }}
+        shell: bash
         run: |
-          if [ "$PASSED" -lt "$THRESHOLD" ]; then
-            echo "::error::Hive ${LABEL} only passed ${PASSED} tests (threshold ${THRESHOLD})."
+          set -uo pipefail
+
+          # The tabulate step is `if: always()`, but if the job died before it
+          # ran at all these are empty strings rather than numbers. Empty means
+          # "we learned nothing", which is a failure, not a zero.
+          missing_tab=0
+          [ -z "${TOTAL:-}" ] && missing_tab=1
+          total=${TOTAL:-0};        [[ "$total"  =~ ^[0-9]+$ ]] || total=0
+          passed=${PASSED:-0};      [[ "$passed" =~ ^[0-9]+$ ]] || passed=0
+          failed=${FAILED:-0};      [[ "$failed" =~ ^[0-9]+$ ]] || failed=0
+          gate_failed=${GATE_FAILED:-0}; [[ "$gate_failed" =~ ^[0-9]+$ ]] || gate_failed=0
+          min_tests=${MIN_TESTS:-0};     [[ "$min_tests"   =~ ^[0-9]+$ ]] || min_tests=0
+          threshold=${THRESHOLD:-0};     [[ "$threshold"   =~ ^[0-9]+$ ]] || threshold=0
+
+          verdict=0
+          reasons=()
+
+          if [ "$missing_tab" -eq 1 ]; then
+            verdict=1
+            reasons+=("tabulation never ran — the job failed before results could be counted")
+          fi
+
+          # (1) Zero results is never a pass, whatever the thresholds say.
+          if [ "$total" -eq 0 ]; then
+            verdict=1
+            reasons+=("simulator produced ZERO test results (hive exit ${HIVE_EXIT:-unknown}) — absence of evidence is not a pass")
+          fi
+
+          # (2) A truncated run is not a pass either.
+          if [ "$min_tests" -gt 0 ] && [ "$total" -lt "$min_tests" ]; then
+            verdict=1
+            reasons+=("only ${total} test result(s); this suite declares min_tests=${min_tests} — the run was truncated")
+          fi
+
+          # (3) hive itself died AND left us nothing to judge by.
+          if [ -n "${HIVE_EXIT:-}" ] && [ "${HIVE_EXIT}" != "0" ] && [ "$total" -eq 0 ]; then
+            verdict=1
+            reasons+=("hive exited ${HIVE_EXIT} with no results — harness or client startup failure")
+          fi
+
+          # (4) Declared pass floor.
+          if [ "$threshold" -gt 0 ] && [ "$passed" -lt "$threshold" ]; then
+            verdict=1
+            reasons+=("only ${passed} test(s) passed; threshold is ${threshold}")
+          fi
+
+          # (5) Any failure inside the gated subset.
+          #
+          # A subset gate exists so that upstream failures between OTHER clients
+          # (geth<->nethermind) don't pollute our signal. That tolerance is the
+          # whole point of the pattern, so it applies only when one is set.
+          if [ -n "${GATE_PATTERN:-}" ] && [ "$gate_failed" -gt 0 ]; then
+            verdict=1
+            reasons+=("${gate_failed} failing test(s) match gate '${GATE_PATTERN}'")
+          fi
+
+          # (6) No subset gate configured -> the whole suite is ours, so ANY
+          # failing test is a real failure.
+          #
+          # Found by the devp2p run on this very PR: 5 results, all 5 failing,
+          # no gate_pattern, threshold 0 — caught only because min_tests was 10.
+          # Had it emitted 10 failing tests it would have gone GREEN, because
+          # condition (5) is guarded on a pattern this suite does not set. That
+          # is the same "cannot fail in this configuration" defect the gate was
+          # written to remove, reintroduced one level down. With no pattern
+          # there is no third-party result to tolerate: every test in the run is
+          # fukuii's own, and a failure is a failure.
+          if [ -z "${GATE_PATTERN:-}" ] && [ "$failed" -gt 0 ]; then
+            verdict=1
+            reasons+=("${failed} failing test(s) and no gate_pattern is set — with no subset filter the whole suite is in scope")
+          fi
+
+          {
+            echo
+            echo "#### Gate · ${LABEL}"
+            echo
+            echo "\`${SIM}\` — ${passed} passed, ${failed} failed, ${total} total "
+            echo "(min_tests=${min_tests}, threshold=${threshold}, hive exit ${HIVE_EXIT:-?})"
+            echo
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          if [ "$verdict" -ne 0 ]; then
+            for r in "${reasons[@]}"; do
+              echo "::error::Hive ${LABEL}: ${r}"
+              echo "- :x: ${r}" >> "$GITHUB_STEP_SUMMARY"
+            done
+            echo "See docs/STATUS.md for this suite's tier and .github/gates.yml for its gate." \
+              >> "$GITHUB_STEP_SUMMARY"
             exit 1
           fi
 
-      - name: Enforce gate (zero failures in subset)
-        if: ${{ inputs.gate_pattern != '' }}
-        env:
-          GATE_FAILED: ${{ steps.tab.outputs.gate_failed }}
-          GATE_PATTERN: ${{ inputs.gate_pattern }}
-          LABEL: ${{ inputs.label }}
-        run: |
-          if [ "$GATE_FAILED" -gt 0 ]; then
-            echo "::error::Hive ${LABEL} has ${GATE_FAILED} failing test(s) matching gate '${GATE_PATTERN}'."
-            exit 1
-          fi
+          echo ":white_check_mark: Gate passed." >> "$GITHUB_STEP_SUMMARY"
+          echo "Hive ${LABEL} gate passed: ${passed}/${total}."
+

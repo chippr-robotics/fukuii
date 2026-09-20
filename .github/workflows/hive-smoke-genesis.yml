@@ -35,5 +35,8 @@ jobs:
     with:
       sim: smoke/genesis
       label: smoke-genesis
+      # Declared in .github/gates.yml (gate `hive-smoke-genesis`). A run emitting fewer
+      # than this many results is a truncated run, not a pass.
+      min_tests: 1
       sim_timelimit: ${{ github.event.inputs.sim_timelimit || '20m' }}
       hive_ref: ${{ github.event.inputs.hive_ref || 'master' }}
