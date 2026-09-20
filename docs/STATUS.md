@@ -61,7 +61,6 @@ must become required or be formally re-scoped in a reviewed PR.
 | `hive-rpc-compat` | JSON-RPC method compatibility against the reference corpus. | 2027-03-31 | #1402 |  |
 | `hive-graphql` | GraphQL endpoint conformance. | 2027-03-31 | #1402 |  |
 | `hive-devp2p` | devp2p discovery and RLPx wire conformance. | 2027-03-31 | #1402 |  |
-| `hive-pyspec` | execution-spec-tests via hive's pyspec simulator. | 2027-03-31 | #1402 |  |
 | `ethereum-tests-nightly` | Nightly ethereum/tests across the full ETC and ETH fork schedules. | 2027-03-31 | #1402 | Runs with continue-on-error today. Promotion requires removing that and establishing a baseline pass count first. |
 
 ## Quarantined — excluded from all claims

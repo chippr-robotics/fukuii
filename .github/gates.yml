@@ -263,16 +263,6 @@ gates:
     min_tests: 10
     covers: devp2p discovery and RLPx wire conformance.
 
-  - id: hive-pyspec
-    workflow: hive-pyspec.yml
-    context: Hive · pyspec
-    tier: informational
-    owner: realcodywburns
-    issue: 1402
-    promote_by: 2027-03-31
-    min_tests: 50
-    covers: execution-spec-tests via hive's pyspec simulator.
-
   - id: ethereum-tests-nightly
     workflow: ethereum-tests-nightly.yml
     context: Ethereum Tests
@@ -337,6 +327,29 @@ first_required_slice:
     Enforced structurally by _hive-sim.yml (a suite that produced no results,
     fewer than min_tests results, or any gated-subset failure is red) rather
     than by convention.
+
+# ---------------------------------------------------------------------------
+# REMOVED GATES — kept here so a deletion is auditable, not silent.
+#
+# hive-pyspec (removed 2026-09-20, #1407)
+#   `ethereum/pyspec` NO LONGER EXISTS in ethereum/hive. Verified against hive
+#   master: simulators/ethereum/ contains consensus, eels, engine, graphql,
+#   rpc-compat and sync — no pyspec. The workflow pointed at a simulator that
+#   had been deleted upstream, which is why it produced ZERO results with hive
+#   exit 1 on 100% of observed runs, while genuinely contended suites
+#   (consume-rlp) failed only intermittently. The difference in pattern was
+#   the clue.
+#
+#   Its coverage is not lost. pyspec ran execution-spec-tests fixtures; that
+#   corpus is now served by simulators/ethereum/eels/*, whose Dockerfiles
+#   clone ethereum/execution-specs directly. We already run two of them —
+#   `consume-rlp` (1808 tests) and `consume-engine` (1499) — so the fixtures
+#   are still exercised, by more tests than pyspec ever reported here.
+#
+#   This is supersession, not suppression. Constitution V forbids deleting a
+#   failing test to get green; it does not require keeping a reference to a
+#   simulator that upstream removed. Nothing that could pass was switched off.
+# ---------------------------------------------------------------------------
 
 # ---------------------------------------------------------------------------
 # Waivers — every gate_exclude branch in every workflow MUST appear here.
