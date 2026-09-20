@@ -13,31 +13,27 @@ import com.chipprbots.ethereum.vm.EvmConfig
 
 /** ETC/ETH fork-dispatch isolation — Constitution Principle I.3–I.5, issue #1404.
   *
-  * Principle I says the two chain families MUST NOT share a dispatch path: ETC uses
-  * `OlympiaOpCodes` / `forBlock()`, ETH uses `OsakaOpCodes` / `forTimestamp()`. Until this spec
-  * existed, nothing asserted it.
+  * Principle I says the two chain families MUST NOT share a dispatch path: ETC uses `OlympiaOpCodes` / `forBlock()`,
+  * ETH uses `OsakaOpCodes` / `forTimestamp()`. Until this spec existed, nothing asserted it.
   *
   * What actually protects ETC today is narrower and more fragile than the principle suggests.
-  * `EvmConfig.forBlock(blockNumber, timestamp, config)` applies ETH timestamp-fork overrides —
-  * Shanghai, Cancun, Prague, Osaka — to *whatever config it is handed*. It does not ask which
-  * chain family that config belongs to. An ETC block is safe from Osaka semantics for exactly one
-  * reason: ETC chain configs leave `forkTimestamps` unset, so every `is*Timestamp` predicate
-  * returns false and the overrides are inert.
+  * `EvmConfig.forBlock(blockNumber, timestamp, config)` applies ETH timestamp-fork overrides — Shanghai, Cancun,
+  * Prague, Osaka — to *whatever config it is handed*. It does not ask which chain family that config belongs to. An ETC
+  * block is safe from Osaka semantics for exactly one reason: ETC chain configs leave `forkTimestamps` unset, so every
+  * `is*Timestamp` predicate returns false and the overrides are inert.
   *
-  * That is a convention, and before this spec it was one config edit away from a chain split —
-  * with no test to catch it and consensus divergence as the failure mode. This spec converts the
-  * convention into an enforced invariant, in both directions, over **every** chain in
-  * `blockchains.conf` rather than a hardcoded subset, so a chain added tomorrow is covered the day
-  * it lands (FR-024).
+  * That is a convention, and before this spec it was one config edit away from a chain split — with no test to catch it
+  * and consensus divergence as the failure mode. This spec converts the convention into an enforced invariant, in both
+  * directions, over **every** chain in `blockchains.conf` rather than a hardcoded subset, so a chain added tomorrow is
+  * covered the day it lands (FR-024).
   *
-  * The naming collision makes the risk easy to miss on review: `EvmConfig.OlympiaOpCodes` is used
-  * for ETC's Olympia fork *and* for ETH's Cancun. Reading the dispatch table is not enough to see
-  * the boundary; that is precisely why it needs a test.
+  * The naming collision makes the risk easy to miss on review: `EvmConfig.OlympiaOpCodes` is used for ETC's Olympia
+  * fork *and* for ETH's Cancun. Reading the dispatch table is not enough to see the boundary; that is precisely why it
+  * needs a test.
   *
-  * This spec asserts over existing configuration and changes no consensus behaviour. If an
-  * assertion here ever fails, the config is the bug — route it through `forge` (ETC) or `beacon`
-  * (ETH) per the Consensus-Critical Change Protocol. Do not "fix" a failure by weakening an
-  * assertion.
+  * This spec asserts over existing configuration and changes no consensus behaviour. If an assertion here ever fails,
+  * the config is the bug — route it through `forge` (ETC) or `beacon` (ETH) per the Consensus-Critical Change Protocol.
+  * Do not "fix" a failure by weakening an assertion.
   */
 class ChainIsolationSpec extends AnyFlatSpec with Matchers with TableDrivenPropertyChecks:
 
@@ -49,14 +45,14 @@ class ChainIsolationSpec extends AnyFlatSpec with Matchers with TableDrivenPrope
   private val ethChains: Seq[(String, BlockchainConfig)] =
     allChains.toSeq.filter(_._2.networkType == NetworkType.ETH).sortBy(_._1)
 
-  /** ECIP-1017 era length on a real ETC chain is 5M blocks (mainnet) / 2M (Mordor). ETH-family
-    * configs disable era-based emission by setting a sentinel era far beyond any reachable height.
-    * Anything below this bound means ECIP-1017 emission is live.
+  /** ECIP-1017 era length on a real ETC chain is 5M blocks (mainnet) / 2M (Mordor). ETH-family configs disable
+    * era-based emission by setting a sentinel era far beyond any reachable height. Anything below this bound means
+    * ECIP-1017 emission is live.
     */
   private val Ecip1017DisabledSentinel: BigInt = BigInt(1_000_000_000L)
 
-  /** Timestamps spanning the real ETH fork schedule plus the far future, used to prove that
-    * timestamp dispatch is inert on ETC for every value a block could carry.
+  /** Timestamps spanning the real ETH fork schedule plus the far future, used to prove that timestamp dispatch is inert
+    * on ETC for every value a block could carry.
     */
   private val probeTimestamps: Seq[Long] = Seq(
     0L, // genesis
