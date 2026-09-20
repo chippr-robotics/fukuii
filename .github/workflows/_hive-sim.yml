@@ -413,6 +413,25 @@ jobs:
           fi
 
           total=$((passed + failed))
+
+          # Echo the failing test names to STDOUT, not only to the job summary.
+          #
+          # The summary is unreachable from the REST API, so a failure whose
+          # name lives only there cannot be triaged without downloading the
+          # log artifact by hand. That made the `sync` gate report "2 failing
+          # test(s) match gate 'fukuii'" with no way to learn WHICH two — a
+          # failure you cannot name is a failure you cannot fix (#1407).
+          if [ -n "$gate_failed_names" ]; then
+            echo "--- failing tests matching gate '${GATE_PATTERN}' ---"
+            printf '%s' "$gate_failed_names" | sed '/^$/d' | sort -u
+            echo "--- end gate-matching failures ---"
+          fi
+          if [ -n "$sim_log" ] && [ "$failed" -gt 0 ]; then
+            echo "--- first 40 FAILED test lines ---"
+            grep -E '(\] FAILED |FAILED tests/|--- FAIL:)' "$sim_log" | head -40 || true
+            echo "--- end FAILED test lines ---"
+          fi
+
           {
             echo "passed=$passed"
             echo "failed=$failed"
