@@ -442,22 +442,31 @@ jobs:
             # because the methods are wrong (#1407). That is the difference
             # between "136 bugs" and "a handful of causes", and it is visible
             # only once the names are bucketed.
-            echo "--- failing tests by namespace ---"
-            printf '%s' "$gate_failed_names" | sed '/^$/d' \
-              | sed -E 's#^([A-Za-z0-9]+)[_/].*#\1#; s#^([^ /]+)/.*#\1#' \
-              | sort | uniq -c | sort -rn | head -25
-            echo "--- end namespace histogram ---"
+            # Also tee the histograms to a file. The gate step (the LAST step
+            # in the job) re-prints it, because GitHub's job-log API returns a
+            # bounded window from the END of the log: anything printed here, in
+            # the middle, is unreachable via `get_job_logs` no matter how large
+            # a tail is requested. Triage kept hitting that wall (#1407) — the
+            # diagnosis was in the log and still could not be read.
+            : > /tmp/hive-histogram.txt
+            {
+                echo "--- failing tests by namespace ---"
+              printf '%s' "$gate_failed_names" | sed '/^$/d' \
+                | sed -E 's#^([A-Za-z0-9]+)[_/].*#\1#; s#^([^ /]+)/.*#\1#' \
+                | sort | uniq -c | sort -rn | head -25
+              echo "--- end namespace histogram ---"
 
-            # Second level: bucket by METHOD, not just namespace. The namespace
-            # rollup said "115 eth" for rpc-compat, which is a number, not a
-            # lead — `eth` spans dozens of unrelated methods. Bucketing on the
-            # part before the first `/` gives `eth_simulateV1`, `eth_getLogs`
-            # and so on, which is the unit a fix actually targets (#1407).
-            echo "--- failing tests by method (top 30) ---"
-            printf '%s' "$gate_failed_names" | sed '/^$/d' \
-              | sed -E 's#^([^/]+)/.*#\1#' \
-              | sort | uniq -c | sort -rn | head -30
-            echo "--- end method histogram ---"
+              # Second level: bucket by METHOD, not just namespace. The namespace
+              # rollup said "115 eth" for rpc-compat, which is a number, not a
+              # lead — `eth` spans dozens of unrelated methods. Bucketing on the
+              # part before the first `/` gives `eth_simulateV1`, `eth_getLogs`
+              # and so on, which is the unit a fix actually targets (#1407).
+              echo "--- failing tests by method (top 30) ---"
+              printf '%s' "$gate_failed_names" | sed '/^$/d' \
+                | sed -E 's#^([^/]+)/.*#\1#' \
+                | sort | uniq -c | sort -rn | head -30
+                echo "--- end method histogram ---"
+            } | tee /tmp/hive-histogram.txt
           fi
           if [ -n "$sim_log" ] && [ "$failed" -gt 0 ]; then
             echo "--- first 40 FAILED test lines ---"
@@ -670,6 +679,18 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
           if [ "$verdict" -ne 0 ]; then
+            # Re-print the histogram HERE, in the job's last step, so it lands
+            # inside the bounded window `get_job_logs` returns from the end of
+            # the log. Printed only in the tabulate step it is unreachable via
+            # the API — the diagnosis existed but could not be read (#1407).
+            if [ -s /tmp/hive-histogram.txt ]; then
+              echo
+              echo "===== failure breakdown (repeated here so it is reachable from the log tail) ====="
+              cat /tmp/hive-histogram.txt
+              echo "===== end failure breakdown ====="
+              echo
+            fi
+
             for r in "${reasons[@]}"; do
               echo "::error::Hive ${LABEL}: ${r}"
               echo "- :x: ${r}" >> "$GITHUB_STEP_SUMMARY"
