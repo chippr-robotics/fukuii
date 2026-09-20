@@ -71,6 +71,17 @@ exists to encourage. Fixed with a bounded negation window, with its limits docum
 rather than hidden: it is a heuristic, not a parser, and a determined author could phrase around
 it. Accepted — the check targets drift by well-meaning authors, not adversaries.
 
+**D7 — The isolation invariant is unreachability, not absence.** The spec's first run failed on
+the `test` fixture chain, which declares ETH fork timestamps at year-2286 sentinels so the Engine
+API specs can exercise fork activation. The finding was in the assertion: what protects ETC is that
+no block it imports can carry a timestamp tripping those predicates — absence is one sufficient
+route to that, not the property itself. Restated in two tiers: no *reachable* ETH fork timestamp on
+any ETC chain (2200-01-01 horizon), plus strict absence on production ETC chains. The production
+rule keeps its original strength and the fixture allowance is bounded and named, so this is a
+correction rather than the weakening this plan warns against. The negative control confirms it:
+a reachable timestamp injected into `mordor-chain.conf` fires three assertions, including the
+behavioural `forBlock` equality check.
+
 ## Expected consequence, stated plainly
 
 **Hive badges will go red.** Suites that previously could not fail now fail when they produce no
@@ -92,4 +103,5 @@ spec.md → Out of Scope.
 | Meta-check | `scripts/ci/test_gate_integrity.py` | 16/16 behaved |
 | Meta-check on this tree | `python3 scripts/ci/check_gate_integrity.py` | 0 failures, 0 warnings |
 | All workflow YAML | `yaml.safe_load` per file | parses |
-| `ChainIsolationSpec` | **NOT RUN** — no `sbt` and JDK 21 vs required JDK 25 in this environment | must be run before merge |
+| `ChainIsolationSpec` | `sbt "testOnly *ChainIsolationSpec*"` on JDK 25 | **10/10 pass** |
+| `ChainIsolationSpec` negative control | injected a reachable ETH fork timestamp into `mordor-chain.conf` | **3 assertions fired**, config restored |

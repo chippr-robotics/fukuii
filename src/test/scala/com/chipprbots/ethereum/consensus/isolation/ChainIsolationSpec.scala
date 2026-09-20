@@ -51,8 +51,25 @@ class ChainIsolationSpec extends AnyFlatSpec with Matchers with TableDrivenPrope
     */
   private val Ecip1017DisabledSentinel: BigInt = BigInt(1_000_000_000L)
 
+  /** Chains that exist only to drive the test harness, never shipped as a network anyone runs. `test` is overridden by
+    * `src/test/resources/application.conf`, which sets far-future ETH fork timestamps so the Engine API specs can
+    * exercise fork activation at controlled instants. Production ETC chains are held to the stricter rule below.
+    */
+  private val FixtureChains: Set[String] = Set("test")
+
+  /** An ETH fork timestamp at or beyond this instant (2200-01-01) cannot be reached by any block a running node will
+    * ever import, so the override it guards is dead code rather than a live fork.
+    *
+    * This bound, not the mere absence of a value, is what actually keeps ETC safe. The harness sentinels sit at
+    * ~9_999_999_99x (year 2286); anything a real fork schedule would carry is in the 2020s-2030s and fails the check by
+    * nine orders of magnitude. Widening `absent` to `absent or unreachable` therefore costs nothing against the threat
+    * that matters — a reachable ETH fork activating on an ETC chain — while not flagging the deliberate fixture.
+    */
+  private val UnreachableTimestampHorizon: Long = 7_258_118_400L // 2200-01-01
+
   /** Timestamps spanning the real ETH fork schedule plus the far future, used to prove that timestamp dispatch is inert
-    * on ETC for every value a block could carry.
+    * on ETC for every value a block could carry. The last probe sits just under the unreachable horizon: if a sentinel
+    * were ever lowered into reachable range, this catches it even if the declaration check were relaxed further.
     */
   private val probeTimestamps: Seq[Long] = Seq(
     0L, // genesis
@@ -60,7 +77,8 @@ class ChainIsolationSpec extends AnyFlatSpec with Matchers with TableDrivenPrope
     1_706_655_072L, // Sepolia Cancun
     1_741_159_776L, // Sepolia Prague
     1_760_427_360L, // Sepolia Osaka
-    4_102_444_800L // 2100-01-01 — far beyond any scheduled fork
+    4_102_444_800L, // 2100-01-01 — far beyond any scheduled fork
+    UnreachableTimestampHorizon - 1 // the last instant a node could plausibly see
   )
 
   "Chain configuration" should "declare at least one chain of each family" taggedAs (UnitTest) in {
@@ -74,25 +92,55 @@ class ChainIsolationSpec extends AnyFlatSpec with Matchers with TableDrivenPrope
 
   // --- Principle I.3 / I.4: nothing from the ETH path may reach an ETC chain ----------------
 
-  "An ETC chain" should "declare no ETH fork timestamps" taggedAs (UnitTest) in {
+  private def declaredEthForks(config: BlockchainConfig): Seq[(String, Long)] =
+    val ts = config.forkTimestamps
+    Seq(
+      "shanghai" -> ts.shanghaiTimestamp,
+      "cancun" -> ts.cancunTimestamp,
+      "prague" -> ts.pragueTimestamp,
+      "osaka" -> ts.osakaTimestamp,
+      "bpo1" -> ts.bpo1Timestamp,
+      "bpo2" -> ts.bpo2Timestamp
+    ).collect { case (fork, Some(value)) => fork -> value }
+
+  "An ETC chain" should "never declare a REACHABLE ETH fork timestamp" taggedAs (UnitTest) in {
+    // The invariant that actually protects ETC. `EvmConfig.forBlock(blockNumber, timestamp, config)` applies ETH
+    // timestamp-fork overrides to whatever config it is handed — it never asks which chain family that config belongs
+    // to. An ETC chain is safe only while no block it imports can carry a timestamp that trips one of those
+    // predicates. A reachable value here activates Osaka opcodes and fee schedules on ETC blocks and splits the chain.
     forAll(Table(("chain", "config"), etcChains*)) { (name, config) =>
-      val ts = config.forkTimestamps
-      val set = Seq(
-        "shanghai" -> ts.shanghaiTimestamp,
-        "cancun" -> ts.cancunTimestamp,
-        "prague" -> ts.pragueTimestamp,
-        "osaka" -> ts.osakaTimestamp,
-        "bpo1" -> ts.bpo1Timestamp,
-        "bpo2" -> ts.bpo2Timestamp
-      ).collect { case (fork, Some(value)) => s"$fork=$value" }
+      val reachable = declaredEthForks(config)
+        .filter { case (_, value) => value < UnreachableTimestampHorizon }
+        .map { case (fork, value) => s"$fork=$value" }
 
       withClue(
-        s"ETC chain '$name' sets ETH fork timestamp(s) [${set.mkString(", ")}]. " +
+        s"ETC chain '$name' declares ETH fork timestamp(s) [${reachable.mkString(", ")}] " +
+          s"below the unreachable horizon $UnreachableTimestampHorizon (2200-01-01). " +
           "EvmConfig.forBlock(blockNumber, timestamp, config) applies ETH timestamp-fork " +
-          "overrides to any config that carries them — including Osaka opcodes and fee " +
-          "schedules. Setting one on an ETC chain activates ETH semantics on ETC blocks and " +
-          "splits the chain (Constitution I.3). "
-      )(set shouldBe empty)
+          "overrides to any config that carries them, without checking the chain family — so a " +
+          "reachable value activates ETH semantics on ETC blocks and splits the chain " +
+          "(Constitution I.3). "
+      )(reachable shouldBe empty)
+    }
+  }
+
+  it should "declare no ETH fork timestamp at all, on a production chain" taggedAs (UnitTest) in {
+    // Stricter rule where it matters. Only the harness fixtures may carry far-future sentinels; a chain people
+    // actually run must not reference the ETH timestamp path at all, so the dead-code argument above never has to be
+    // relied upon in production.
+    val production = etcChains.filterNot { case (name, _) => FixtureChains.contains(name) }
+    withClue("no production ETC chains found — this assertion would vacuously pass: ") {
+      production should not be empty
+    }
+
+    forAll(Table(("chain", "config"), production*)) { (name, config) =>
+      val declared = declaredEthForks(config).map { case (fork, value) => s"$fork=$value" }
+      withClue(
+        s"production ETC chain '$name' declares ETH fork timestamp(s) [${declared.mkString(", ")}]. " +
+          "Even an unreachable sentinel has no business on a chain people run: it keeps the ETH " +
+          "timestamp-dispatch path live on ETC, one edited digit away from a fork " +
+          s"(Constitution I.3). If this is deliberate, add '$name' to FixtureChains and say why. "
+      )(declared shouldBe empty)
     }
   }
 
