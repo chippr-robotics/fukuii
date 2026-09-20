@@ -53,10 +53,46 @@ canonical:
 # Required status checks. These are the contexts branch protection must list.
 # Apply with the `gh api` invocation in .github/BRANCH_PROTECTION.md.
 # ---------------------------------------------------------------------------
+# TARGET STATE. The live ruleset is NOT verifiable from inside the repository
+# (see the reconciliation note below) — this is what it SHOULD require.
 required_contexts:
   - Test and Build (JDK 25, Scala 3.3.7)
-  - Build Docker Images
+  - Docker Build
   - Gate Integrity
+
+# ---------------------------------------------------------------------------
+# RECONCILIATION NOTE — discovered 2026-09-20 while attempting to merge #1406.
+#
+# The live ruleset and this file disagree, and no check in this repository can
+# see that. A merge attempt was rejected with:
+#
+#     405 Repository rule violations found
+#     2 of 5 required status checks are failing.
+#
+# So the ruleset requires FIVE contexts. `.github/BRANCH_PROTECTION.md`
+# documented TWO. This file declared THREE. All three numbers were different,
+# and two of the five are Hive suites that this matrix declares
+# `informational` — i.e. suites it says cannot block a merge, which in fact do.
+#
+# That is this feature's own defect class one layer out: a declared
+# configuration that does not match the enforced one. Constitution rule V.4 is
+# labelled `aspirational` in docs/governance/constitution-enforcement.md for
+# exactly this reason — GitHub settings live outside the repo and the
+# Gate Integrity check cannot read them. The honest position is that
+# `required_contexts` above is a TARGET a maintainer must apply and verify by
+# hand, not an observation.
+#
+# Two further facts the merge attempt established, both previously undocumented:
+#   * Merge commits are DISABLED on this repository ("Merge commits are not
+#     allowed"). Squash or rebase only — linear history is enforced, not
+#     "optional" as BRANCH_PROTECTION.md described it.
+#   * The Docker context is named `Docker Build`, not `Build Docker Images` as
+#     previously declared here and in BRANCH_PROTECTION.md.
+#
+# ACTION (needs admin): reconcile the ruleset to `required_contexts` above —
+# drop the Hive contexts, which belong in the informational tier until #1407
+# makes them passable, and add `Gate Integrity`. Steps in BRANCH_PROTECTION.md.
+# ---------------------------------------------------------------------------
 
 # ---------------------------------------------------------------------------
 # Gates
@@ -77,7 +113,7 @@ gates:
 
   - id: docker-build
     workflow: docker.yml
-    context: Build Docker Images
+    context: Docker Build
     tier: required
     owner: realcodywburns
     covers: Container images build and push for mainnet/mordor/bootnode variants.
