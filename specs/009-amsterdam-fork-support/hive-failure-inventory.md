@@ -18,6 +18,7 @@ and no claim below rests on it.
 | rpc-compat | c82c89e | 207 | 40 | 247 |
 | devp2p | c82c89e | 28 | 34 | 62 |
 | devp2p | 4d57c9d | 28 | 34 | 62 |
+| devp2p | b1f2db0 | 44 | 18 | 62 |
 | graphql | c82c89e | 50 | 2 | 52 |
 | consume-rlp | c82c89e | 1796 | 4 | 1800 |
 | consensus | c82c89e | denominator unstable — not comparable |
@@ -48,7 +49,15 @@ on the handshake.
 
 ## Root causes, each tied to its evidence
 
-### A. ForkID omits three forks — 27 devp2p
+### A. ForkID omits three forks — 27 devp2p — FIXED in `b1f2db0`
+
+**Outcome, measured on `b1f2db0`: 44 / 18 / 62, against 28 / 34 / 62 on `4d57c9d`.** Same
+denominator, so the numbers are directly comparable: 16 tests fixed. The `wrong fork ID`
+bucket went 27 -> **0**. Of those 27, fifteen now pass outright and twelve get past the
+handshake and fail on real protocol conformance for the first time — see H below. The
+`snap/2` (3) and harness `exit status 1` (3) buckets were untouched, as expected.
+
+The diagnosis follows.
 
 fukuii advertises `0x321a21a2`; peers demand `0x5942bfc2`. Computing EIP-6122 CRC32 over the
 fixture genesis `1518c33d…52024c` discriminates exactly:
@@ -160,10 +169,31 @@ Four unrelated failures, no shared cause:
 The last two are the SAME defects that appear in consume-engine's remainder (F) under
 different forks, so the two suites share 2 root causes, not 4. Fixing them moves both.
 
+### H. devp2p protocol conformance — 12, newly visible on `b1f2db0`
+
+These are not new defects. They are defects the handshake failure concealed: with the fork id
+wrong, no peer ever got far enough to exercise them. They appeared as the fork-id bucket
+drained, which is why devp2p's failure count fell by 16 rather than by 27.
+
+| cluster | n | symptom |
+|---|---:|---|
+| snap/1 server does not respond | 4 | `AccountRange`, `GetByteCodes`, `GetTrieNodes`, `GetStorageRanges` — every one `i/o timeout`, never a wrong answer |
+| `GetPooledTransactions` not served | 5 | `NewPooledTxs` and `BlobViolations` time out; `Transaction`, `InvalidTxs`, `LargeTxRequest` crash the simulator with a Go panic |
+| blob sidecar handling | 2 | `TestBlobTxWithoutSidecar`, `TestBlobTxWithMismatchedSidecar` — both `failed to read GetPooledTransactions message: disconnect` |
+| eth/71 block access lists | 1 | `GetBlockAccessLists` — `connection reset by peer` during status exchange |
+
+The first two clusters are the substantial ones. `i/o timeout` on every snap/1 request means
+the node accepts the snap connection and then never answers, which is a serving defect rather
+than a wrong-response defect. The tx-pool cluster is likely one cause: fukuii either
+disconnects or fails to answer `GetPooledTransactions`, and the blob pair reports the same
+message, so those 7 may be 1 root cause rather than 7. NOT established either way.
+
 ## What is NOT established
 
-* Whether fixing A clears all 27 devp2p tests or merely uncovers a third layer. Only a hive
-  run settles it — the same caution that applied to `4d57c9d`.
+* ~~Whether fixing A clears all 27 devp2p tests or merely uncovers a third layer.~~ Settled by
+  the `b1f2db0` run: it cleared the fork-id bucket entirely, and a third layer was indeed
+  underneath for 12 of them. Both halves of that caution turned out to be warranted.
+* Whether the 7 tx-pool and blob failures in H share one root cause or are several.
 * Whether B's fix needs sites beyond the two named. The 32 failures prove the fork gate is
   reached first; they do not prove it is the only broken comparison.
 * Whether the 3 devp2p `exit status 1` harness failures are fukuii's at all.
