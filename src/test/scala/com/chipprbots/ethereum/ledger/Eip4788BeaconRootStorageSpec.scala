@@ -70,6 +70,21 @@ class Eip4788BeaconRootStorageSpec extends AnyFlatSpec with Matchers:
       ethCompatibleStorage = true
     )
 
+    /** The canonical EIP-4788 contract as every public network actually has it: deployed by the pre-signed
+      * Nick's-method transaction from 0x0B799C86a49DEeb90402691F1041aa3AF2d3C875 (EIP-4788 "Deployment") long before
+      * the Cancun fork, so the account already carries code and nonce=1 by the time the first post-Cancun block is
+      * processed. The client never deploys it itself — EIP-4788 Block processing: "if no code exists at
+      * BEACON_ROOTS_ADDRESS, the call must fail silently" — so every storage-behaviour test must start from a world
+      * where it is present.
+      */
+    val deployedWorld: InMemoryWorldStateProxy =
+      emptyWorld
+        .saveAccount(
+          BeaconRootContractAddress,
+          Account.empty(blockchainConfig.accountStartNonce).copy(nonce = UInt256(1))
+        )
+        .saveCode(BeaconRootContractAddress, BeaconRootsCode)
+
     def makeBlock(beaconRoot: ByteString, timestamp: Long = CancunTs): Block = Block(
       header = Fixtures.Blocks.ValidBlock.header.copy(
         unixTimestamp = Timestamp(timestamp),
@@ -86,7 +101,7 @@ class Eip4788BeaconRootStorageSpec extends AnyFlatSpec with Matchers:
       body = BlockBody(Nil, Nil)
     )
 
-    def runBlock(block: Block, world: InMemoryWorldStateProxy = emptyWorld): InMemoryWorldStateProxy =
+    def runBlock(block: Block, world: InMemoryWorldStateProxy = deployedWorld): InMemoryWorldStateProxy =
       exec.executeBlockTransactions(block, world).toOption.get.worldState
 
   // Case 1 — First post-Cancun block: timestamp slot and root slot
@@ -120,7 +135,7 @@ class Eip4788BeaconRootStorageSpec extends AnyFlatSpec with Matchers:
       ),
       body = BlockBody(Nil, Nil)
     )
-    val world: InMemoryWorldStateProxy = runBlock(preCancunBlock)
+    val world: InMemoryWorldStateProxy = runBlock(preCancunBlock, emptyWorld)
 
     val timestampIdx: BigInt = BigInt(CancunTs) % Buf
     val rootIdx: BigInt = timestampIdx + Buf
@@ -161,8 +176,9 @@ class Eip4788BeaconRootStorageSpec extends AnyFlatSpec with Matchers:
     storage.load(slotA_ts) shouldBe BigInt(tsA)
     storage.load(slotA_root) shouldBe UInt256(rootA).toBigInt
 
-  // Case 4 — §ETH-T4-C contract deployment: code present and nonce=1 after first Cancun block
-  it should "deploy the beacon roots contract with the EIP-4788 bytecode and nonce=1" taggedAs (
+  // Case 4 — §ETH-T4-C: the contract is a pre-existing chain object, not something the client
+  // deploys. Processing a post-Cancun block must leave its code and nonce exactly as found.
+  it should "keep the deployed EIP-4788 bytecode and nonce=1 unchanged" taggedAs (
     UnitTest,
     ConsensusTest
   ) in new TestSetup:
@@ -171,3 +187,18 @@ class Eip4788BeaconRootStorageSpec extends AnyFlatSpec with Matchers:
 
     world.getCode(BeaconRootContractAddress) shouldBe BeaconRootsCode
     world.getAccount(BeaconRootContractAddress).map(_.nonce) shouldBe Some(UInt256(1))
+
+  // Case 5 — EIP-4788 Block processing: "if no code exists at BEACON_ROOTS_ADDRESS, the call must
+  // fail silently". No account, no code, no storage: byte-for-byte what go-ethereum leaves behind.
+  it should "write nothing at all when no code exists at the beacon roots address" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in new TestSetup:
+    val world: InMemoryWorldStateProxy =
+      runBlock(makeBlock(ByteString(Array.fill(32)(0xdd.toByte))), emptyWorld)
+
+    val timestampIdx: BigInt = BigInt(CancunTs) % Buf
+    world.getAccount(BeaconRootContractAddress) shouldBe None
+    world.getCode(BeaconRootContractAddress) shouldBe ByteString.empty
+    world.getStorage(BeaconRootContractAddress).load(timestampIdx) shouldBe BigInt(0)
+    world.getStorage(BeaconRootContractAddress).load(timestampIdx + Buf) shouldBe BigInt(0)

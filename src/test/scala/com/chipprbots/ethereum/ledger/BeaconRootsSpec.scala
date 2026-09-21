@@ -69,6 +69,21 @@ class BeaconRootsSpec extends AnyFlatSpec with Matchers:
       ethCompatibleStorage = true
     )
 
+    /** The canonical EIP-4788 contract as every public network actually has it: deployed by the pre-signed
+      * Nick's-method transaction from 0x0B799C86a49DEeb90402691F1041aa3AF2d3C875 (EIP-4788 "Deployment") long before
+      * the Cancun fork, so the account already carries code and nonce=1 by the time the first post-Cancun block is
+      * processed. The client never deploys it itself — EIP-4788 Block processing: "if no code exists at
+      * BEACON_ROOTS_ADDRESS, the call must fail silently" — so every storage-behaviour test must start from a world
+      * where it is present.
+      */
+    val deployedWorld: InMemoryWorldStateProxy =
+      emptyWorld
+        .saveAccount(
+          BeaconRootContractAddress,
+          Account.empty(blockchainConfig.accountStartNonce).copy(nonce = UInt256(1))
+        )
+        .saveCode(BeaconRootContractAddress, BeaconRootsCode)
+
     def makeBlock(beaconRoot: ByteString, timestamp: Long = CancunTs): Block = Block(
       header = Fixtures.Blocks.ValidBlock.header.copy(
         unixTimestamp = Timestamp(timestamp),
@@ -85,18 +100,27 @@ class BeaconRootsSpec extends AnyFlatSpec with Matchers:
       body = BlockBody(Nil, Nil)
     )
 
-    def runBlock(block: Block, world: InMemoryWorldStateProxy = emptyWorld): InMemoryWorldStateProxy =
+    def runBlock(block: Block, world: InMemoryWorldStateProxy = deployedWorld): InMemoryWorldStateProxy =
       exec.executeBlockTransactions(block, world).toOption.get.worldState
 
-  "EIP-4788 beacon roots" should "deploy contract code and set nonce=1 on the first Cancun block" taggedAs (
+  // EIP-4788 Block processing: "if no code exists at BEACON_ROOTS_ADDRESS, the call must fail
+  // silently". go-ethereum's SYSTEM_ADDRESS call carries value 0, and under EIP-158 a zero-value
+  // call to a non-existent account returns before CreateAccount (core/vm/evm.go Call) — so the
+  // reference client leaves NO trace. Seeding code + nonce here forked the state root at the first
+  // post-Cancun block of any chain whose genesis omits the account (hive ethereum/graphql, block 34).
+  "EIP-4788 beacon roots" should "NOT deploy the contract when no code exists at the address" taggedAs (
     EthereumTest,
     ConsensusTest
   ) in new TestSetup:
     val world: InMemoryWorldStateProxy =
-      runBlock(makeBlock(ByteString(Array.fill(32)(0xab.toByte))))
+      runBlock(makeBlock(ByteString(Array.fill(32)(0xab.toByte))), emptyWorld)
 
-    world.getCode(BeaconRootContractAddress) shouldBe BeaconRootsCode
-    world.getAccount(BeaconRootContractAddress).map(_.nonce) shouldBe Some(UInt256(1))
+    world.getCode(BeaconRootContractAddress) shouldBe ByteString.empty
+    world.getAccount(BeaconRootContractAddress) shouldBe None
+
+    val ts: BigInt = BigInt(CancunTs) % BeaconRootHistoryBufferLength
+    world.getStorage(BeaconRootContractAddress).load(ts) shouldBe BigInt(0)
+    world.getStorage(BeaconRootContractAddress).load(ts + BeaconRootHistoryBufferLength) shouldBe BigInt(0)
 
   it should "write the timestamp and beacon root to the ring-buffer storage slots" taggedAs (
     EthereumTest,
@@ -111,7 +135,7 @@ class BeaconRootsSpec extends AnyFlatSpec with Matchers:
     storage.load(timestampIdx) shouldBe BigInt(CancunTs)
     storage.load(rootIdx) shouldBe UInt256(beaconRoot).toBigInt
 
-  it should "not redeploy the contract code on subsequent Cancun blocks" taggedAs (
+  it should "leave the deployed contract's code and nonce untouched across Cancun blocks" taggedAs (
     EthereumTest,
     ConsensusTest
   ) in new TestSetup:
@@ -138,7 +162,7 @@ class BeaconRootsSpec extends AnyFlatSpec with Matchers:
       ),
       body = BlockBody(Nil, Nil)
     )
-    val world: InMemoryWorldStateProxy = runBlock(block)
+    val world: InMemoryWorldStateProxy = runBlock(block, emptyWorld)
 
     world.getCode(BeaconRootContractAddress) shouldBe ByteString.empty
     world.getAccount(BeaconRootContractAddress) shouldBe None

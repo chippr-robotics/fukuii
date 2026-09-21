@@ -209,23 +209,30 @@ class BlockExecution(
         val timestampIdx = timestamp.mod(UInt256(BeaconRootHistoryBufferLength))
         val rootIdx = timestampIdx + UInt256(BeaconRootHistoryBufferLength)
 
-        // Deploy contract bytecode and set nonce=1 on the first Cancun block (mirror EIP-2935 pattern).
-        // The Sepolia genesis does NOT pre-allocate this account; it is seeded here during block processing.
-        // go-ethereum achieves this by executing a real EVM call; Fukuii sets code + nonce directly.
-        val w1 = if world.getCode(BeaconRootContractAddress).isEmpty then
-          val account = world
-            .getAccount(BeaconRootContractAddress)
-            .getOrElse(Account.empty(blockchainConfig.accountStartNonce))
-            .copy(nonce = UInt256(1))
-          world
-            .saveAccount(BeaconRootContractAddress, account)
-            .saveCode(BeaconRootContractAddress, BeaconRootsCode)
-        else world
-
-        val storage = w1.getStorage(BeaconRootContractAddress)
-        val s1 = storage.store(timestampIdx.toBigInt, timestamp.toBigInt)
-        val s2 = s1.store(rootIdx.toBigInt, UInt256(beaconRoot.value).toBigInt)
-        w1.saveStorage(BeaconRootContractAddress, s2)
+        // EIP-4788: "if no code exists at BEACON_ROOTS_ADDRESS, the call must fail silently".
+        // The client MUST NOT deploy the contract itself. It is deployed like any other contract,
+        // by the pre-signed Nick's-method transaction from 0x0B799C86a49DEeb90402691F1041aa3AF2d3C875
+        // (EIP-4788 "Deployment"), which is part of the chain history on mainnet and every public
+        // testnet. go-ethereum performs a SYSTEM_ADDRESS call with value 0; under EIP-158 a call
+        // to a non-existent account with zero value returns immediately and creates nothing
+        // (core/vm/evm.go Call), so an absent contract produces NO state change at all.
+        //
+        // Seeding code + nonce here produced a state-root divergence on any chain whose genesis
+        // does not pre-allocate the account: fukuii wrote an account (nonce=1, codeHash) plus two
+        // storage slots that the reference client does not have. Observed on hive
+        // ethereum/graphql, whose testGenesis.json allocates only one account while block 34
+        // carries parentBeaconBlockRoot (first block past cancunTime).
+        //
+        // The direct storage write below (instead of an EVM system call) is the optimisation the
+        // EIP explicitly permits: "Clients may decide to omit an explicit EVM call and directly
+        // set the storage values." It is only valid when the canonical contract is the one
+        // deployed there, which is why the code-presence guard is a hard precondition.
+        if world.getCode(BeaconRootContractAddress).isEmpty then world
+        else
+          val storage = world.getStorage(BeaconRootContractAddress)
+          val s1 = storage.store(timestampIdx.toBigInt, timestamp.toBigInt)
+          val s2 = s1.store(rootIdx.toBigInt, UInt256(beaconRoot.value).toBigInt)
+          world.saveStorage(BeaconRootContractAddress, s2)
 
       case _ => world
 
