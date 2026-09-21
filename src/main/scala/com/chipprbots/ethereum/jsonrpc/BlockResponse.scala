@@ -66,7 +66,13 @@ case class BlockResponse(
     blobGasUsed: Option[BigInt],
     excessBlobGas: Option[BigInt],
     parentBeaconBlockRoot: Option[ByteString],
-    requestsHash: Option[ByteString]
+    requestsHash: Option[ByteString],
+    /** Whether the JSON encoder should emit `totalDifficulty`. The factory methods below default it to true, so any
+      * construction site not explicitly opting out keeps pre-existing behaviour; only the ETH-family eth_ read path
+      * sets it false. No default here: the case class's synthetic apply and the explicit overloads below cannot both
+      * carry default arguments. See EthBlocksJsonMethodsImplicits.
+      */
+    emitTotalDifficulty: Boolean
 ) extends BaseBlockResponse
 
 object BlockResponse:
@@ -77,7 +83,8 @@ object BlockResponse:
       block: Block,
       weight: Option[ChainWeight] = None,
       fullTxs: Boolean = false,
-      pendingBlock: Boolean = false
+      pendingBlock: Boolean = false,
+      emitTotalDifficulty: Boolean = true
   ): BlockResponse =
     val transactions =
       if fullTxs then
@@ -137,12 +144,18 @@ object BlockResponse:
       blobGasUsed = block.header.blobGasUsed,
       excessBlobGas = block.header.excessBlobGas,
       parentBeaconBlockRoot = block.header.parentBeaconBlockRoot.map(_.value),
-      requestsHash = block.header.requestsHash
+      requestsHash = block.header.requestsHash,
+      emitTotalDifficulty = emitTotalDifficulty
     )
 
+  /** Header-only variant. Deliberately keeps its original signature and always emits `totalDifficulty`: Scala forbids
+    * two overloaded `apply`s that both carry default arguments, and the block-based overload above owns the defaults.
+    * Callers that need the ETH-family gate use that one with an explicit empty body.
+    */
   def apply(blockHeader: BlockHeader, weight: Option[ChainWeight], pendingBlock: Boolean): BlockResponse =
     BlockResponse(
       block = Block(blockHeader, BlockBody(Nil, Nil)),
       weight = weight,
-      pendingBlock = pendingBlock
+      pendingBlock = pendingBlock,
+      emitTotalDifficulty = true
     )

@@ -45,7 +45,6 @@ object EthBlocksJsonMethodsImplicits extends JsonMethodsImplicits:
       "receiptsRoot" -> encodeAsHex(block.receiptsRoot),
       "miner" -> block.miner.map(encodeAsHex).getOrElse(JNull),
       "difficulty" -> encodeAsHex(block.difficulty),
-      "totalDifficulty" -> block.totalDifficulty.map(encodeAsHex).getOrElse(JNull),
       "extraData" -> encodeAsHex(block.extraData),
       "size" -> encodeAsHex(block.size),
       "gasLimit" -> encodeAsHex(block.gasLimit),
@@ -55,6 +54,21 @@ object EthBlocksJsonMethodsImplicits extends JsonMethodsImplicits:
       "transactions" -> transactionsField,
       "uncles" -> JArray(block.uncles.toList.map(encodeAsHex))
     )
+
+    // totalDifficulty is NOT in the execution-apis Block schema. It was dropped when the
+    // merge made it meaningless for ETH-family chains, and rpc-compat compares the response
+    // object exactly, so emitting one extra key fails the whole test — that single key was
+    // the only diff in 10 of that suite's 40 failures (9 eth_getBlockByNumber + 1
+    // eth_getBlockByHash).
+    //
+    // ETC is PoW and still reports it, so this is gated on network type rather than removed.
+    // The flag defaults to true, which means every construction site not explicitly changed
+    // keeps the old behaviour — ETC/Mordor output stays byte-identical by construction rather
+    // than by inspection.
+    val totalDifficultyField =
+      if block.emitTotalDifficulty then
+        List("totalDifficulty" -> block.totalDifficulty.map(encodeAsHex).getOrElse(JNull))
+      else Nil
 
     // Post-London (EIP-1559) fields
     val baseFeeField = block.baseFeePerGas.map(v => "baseFeePerGas" -> encodeAsHex(v)).toList
@@ -77,7 +91,7 @@ object EthBlocksJsonMethodsImplicits extends JsonMethodsImplicits:
     val requestsHashField = block.requestsHash.map(v => "requestsHash" -> encodeAsHex(v)).toList
 
     JObject(
-      baseFields ::: baseFeeField ::: withdrawalsRootField ::: withdrawalsField :::
+      baseFields ::: totalDifficultyField ::: baseFeeField ::: withdrawalsRootField ::: withdrawalsField :::
         blobGasUsedField ::: excessBlobGasField ::: parentBeaconBlockRootField ::: requestsHashField
     )
 

@@ -15,6 +15,7 @@ import com.chipprbots.ethereum.domain.BlockHeaderImplicits.BlockHeaderEnc
 import com.chipprbots.ethereum.ledger.BlockQueue
 import com.chipprbots.ethereum.rlp
 import com.chipprbots.ethereum.utils.BlockchainConfig
+import com.chipprbots.ethereum.utils.NetworkType
 import com.chipprbots.ethereum.utils.Config
 
 object EthBlocksService:
@@ -118,6 +119,12 @@ class EthBlocksService(
 
   given BlockchainConfig = blockchainConfig
 
+  /** ETH-family chains must not emit `totalDifficulty` — execution-apis dropped it from the Block schema after the
+    * merge, and rpc-compat compares the object exactly. ETC is PoW and still reports it, so this is a gate rather than
+    * a removal. See EthBlocksJsonMethodsImplicits for the measured impact.
+    */
+  private def emitTotalDifficulty: Boolean = blockchainConfig.networkType != NetworkType.ETH
+
   /** eth_blockNumber that returns the number of most recent block.
     *
     * @return
@@ -167,7 +174,10 @@ class EthBlocksService(
     }
     val blockResponseOpt =
       if !isExposed then None
-      else blockOpt.map(block => BlockResponse(block, weight, fullTxs = fullTxs))
+      else
+        blockOpt.map(block =>
+          BlockResponse(block, weight, fullTxs = fullTxs, emitTotalDifficulty = emitTotalDifficulty)
+        )
     Right(BlockByBlockHashResponse(blockResponseOpt))
   }
 
@@ -183,7 +193,13 @@ class EthBlocksService(
     val blockResponseOpt =
       resolveBlock(blockParam).toOption.map { case ResolvedBlock(block, pending) =>
         val weight = blockchainReader.getChainWeightByHash(block.header.hash)
-        BlockResponse(block, weight, fullTxs = fullTxs, pendingBlock = pending.isDefined)
+        BlockResponse(
+          block,
+          weight,
+          fullTxs = fullTxs,
+          pendingBlock = pending.isDefined,
+          emitTotalDifficulty = emitTotalDifficulty
+        )
       }
     Right(BlockByNumberResponse(blockResponseOpt))
   }
@@ -221,7 +237,12 @@ class EthBlocksService(
 
     // The block in the response will not have any txs or uncles
     val uncleBlockResponseOpt = uncleHeaderOpt.map { uncleHeader =>
-      BlockResponse(blockHeader = uncleHeader, weight = weight, pendingBlock = false)
+      BlockResponse(
+        Block(uncleHeader, BlockBody(Nil, Nil)),
+        weight,
+        pendingBlock = false,
+        emitTotalDifficulty = emitTotalDifficulty
+      )
     }
     Right(UncleByBlockHashAndIndexResponse(uncleBlockResponseOpt))
   }
@@ -248,9 +269,10 @@ class EthBlocksService(
           // The block in the response will not have any txs or uncles
           Some(
             BlockResponse(
-              blockHeader = uncleHeader,
-              weight = weight,
-              pendingBlock = pending.isDefined
+              Block(uncleHeader, BlockBody(Nil, Nil)),
+              weight,
+              pendingBlock = pending.isDefined,
+              emitTotalDifficulty = emitTotalDifficulty
             )
           )
         else None

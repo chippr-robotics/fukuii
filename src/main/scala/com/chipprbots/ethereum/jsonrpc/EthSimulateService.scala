@@ -717,9 +717,18 @@ class EthSimulateService(
       if validation then
         // Check maxFeePerGas >= baseFee
         if baseFee > 0 && maxFeePerGas < baseFee && !call.gasPrice.isDefined then
+          // -38012, not the generic -32602. execution-apis gives eth_simulateV1 its own error
+          // range and rpc-compat compares the code, not just the message: all six of that
+          // suite's eth_simulateV1 failures were this one line answering InvalidParams with an
+          // otherwise-correct diagnosis.
+          //
+          // Four sibling constructors in JsonRpcError are likewise declared and never called
+          // (SimulateNonceTooLow/-High, SimulateBlockGasLimitExceeded, SimulateMoveToSelf).
+          // They are deliberately left alone: no fixture in the current suite exercises them,
+          // so changing them would be an unmeasured edit to tests that pass today.
           break(
             Left(
-              JsonRpcError.InvalidParams(
+              JsonRpcError.SimulateBaseFeeTooLow(
                 s"max fee per gas less than block base fee: address ${sender.toString}, maxFeePerGas: $maxFeePerGas, baseFee: $baseFee"
               )
             )
