@@ -120,6 +120,38 @@ VERIFY: ran sbt testEssential — result: DID NOT RUN (end-of-thread, ~24 min)
 VERIFY: ran hive devp2p — result: DID NOT RUN (Slice B gate, T037)
 ```
 
+### `forge` ETC sign-off — OBTAINED (post-hoc; it should have preceded the push)
+
+**Verdict: signed off. ETC/Mordor/Gorgoroth byte-for-byte unchanged.** Verified by source reading and
+JVM bytecode decompilation, not by assertion:
+
+| Item | Finding |
+|---|---|
+| Decoder strictness | Safe, and **a bug fix rather than a risk**. The only header encoder emits >16 items for Shanghai/Cancun/Prague/Amsterdam only; ETC constructs `HefEmpty` (15) and `HefPostOlympia` (16) and nothing else — ECIP-1111's base fee is one field. Crucially, the old catch-all's "acceptance" of 22/23/24 was **never canonicalization**: the node hashes a header by *re-encoding* it, so a 22-item header re-encoded to 21 yields a hash no honest peer's child references. What the catch-all actually provided was a **hash-malleability surface** — two wire byte strings mapping to one local header. Slice A closes it. |
+| boopickle ordinals | Safe. Decompiled `CompositePickler`/`IdentMap` in boopickle 1.5.0: `pickle` writes `idx - 1` where `idx = k + 1`, so the wire value **is** 1-based registration order. Appending is backward compatible; ETC's two variants keep ordinals 1 and 2. |
+| `validateFieldCount` order | Safe. The `networkType != ETH` short-circuit is the first condition, so ETC returns before any timestamp is read. Amsterdam-before-Cancun is also correct on its own merits — a Prague-shaped header satisfies the Cancun and Shanghai predicates, so a later branch would be dead. |
+| `numberOfExtraFields` / Ethash | Safe, byte-identical. Every pre-existing arm returns its previous value; ETC's sealing encoding is 13 items (`HefEmpty`) / 14 with baseFee at index 13 (`HefPostOlympia`), unchanged at all six `getEncodedWithoutNonce` call sites. Mining hash unaffected. |
+
+**Two gaps it found that I had not:**
+
+1. **The four ETC suites I ran do not actually exercise any of the above.** They are gas-limit and
+   Olympia-activation suites. The ones that pin this diff's ETC invariants are
+   `EthashBlockHeaderValidatorSpec`, `PoWBlockHeaderValidatorSpec`,
+   `RestrictedEthashBlockHeaderValidatorSpec` and `EthashMinerSpec` — they drive
+   `getEncodedWithoutNonce` through the real PoW hash, which is the item where a mistake breaks
+   *mining* rather than validation. **Run these.**
+2. **Nothing pinned the boopickle ordinal byte** — addressed by `PicklerOrdinalRatchetSpec`.
+   `Picklers.given` is imported by `BlockHeadersStorage`/`BlockBodiesStorage`, so the blast radius is
+   the whole persistent header database, not just the fast-sync checkpoint. A mid-list insertion
+   would renumber every later variant, corrupt an existing ETC datadir on upgrade, and leave the
+   entire suite green.
+
+**ETH-side blocker created by Slice A, relayed to Slice B**: `BlockHeaderValidatorSkeleton.scala:278-285`
+has no `HefPostAmsterdam` case, and `PoSBlockHeaderValidator` inherits `validate`. A 23-item header at
+devp2p block 36+ now decodes to `HefPostAmsterdam` and is rejected by `validateExtraFields`. devp2p
+stops at 36 either way, but the reason moved. Also `GenesisDataLoader.scala:188-211` has no Amsterdam
+branch, so a fixture with `amsterdamTime: 0` would get the Prague shape and a **wrong genesis hash**.
+
 **T007 remains outstanding and is the ETC guard** — do not let it drift. `BlockHeaderFieldCountSpec`
 now asserts the property for a *synthetic* ETC config, which is strictly weaker: it does not read the
 shipped `etc-chain.conf` / `mordor-chain.conf` / `gorgoroth-chain.conf`. FR-004 wants the shipped
