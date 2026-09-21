@@ -904,6 +904,88 @@
         }
       }
     },
+    "/eth_baseFee": {
+      "post": {
+        "tags": [
+          "ETH"
+        ],
+        "summary": "eth_baseFee",
+        "description": "Get the base fee per gas of the next block",
+        "operationId": "eth_baseFee",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "jsonrpc",
+                  "method",
+                  "params",
+                  "id"
+                ],
+                "properties": {
+                  "jsonrpc": {
+                    "type": "string",
+                    "enum": [
+                      "2.0"
+                    ],
+                    "example": "2.0"
+                  },
+                  "method": {
+                    "type": "string",
+                    "enum": [
+                      "eth_baseFee"
+                    ],
+                    "example": "eth_baseFee"
+                  },
+                  "params": {
+                    "type": "array",
+                    "items": {},
+                    "example": []
+                  },
+                  "id": {
+                    "oneOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "integer"
+                      }
+                    ],
+                    "example": 1
+                  }
+                }
+              },
+              "example": {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "eth_baseFee",
+                "params": []
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JSONRPCResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request - Invalid JSON-RPC request"
+          },
+          "500": {
+            "description": "Internal server error"
+          }
+        }
+      }
+    },
     "/eth_getBalance": {
       "post": {
         "tags": [
@@ -2114,6 +2196,102 @@
                 "params": [
                   "{{ address }}",
                   "0x0",
+                  "latest"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JSONRPCResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request - Invalid JSON-RPC request"
+          },
+          "500": {
+            "description": "Internal server error"
+          }
+        }
+      }
+    },
+    "/eth_getStorageValues": {
+      "post": {
+        "tags": [
+          "ETH"
+        ],
+        "summary": "eth_getStorageValues",
+        "description": "Get multiple storage slots across multiple addresses in a single request",
+        "operationId": "eth_getStorageValues",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "jsonrpc",
+                  "method",
+                  "params",
+                  "id"
+                ],
+                "properties": {
+                  "jsonrpc": {
+                    "type": "string",
+                    "enum": [
+                      "2.0"
+                    ],
+                    "example": "2.0"
+                  },
+                  "method": {
+                    "type": "string",
+                    "enum": [
+                      "eth_getStorageValues"
+                    ],
+                    "example": "eth_getStorageValues"
+                  },
+                  "params": {
+                    "type": "array",
+                    "items": {},
+                    "example": [
+                      {
+                        "{{ address }}": [
+                          "0x0"
+                        ]
+                      },
+                      "latest"
+                    ]
+                  },
+                  "id": {
+                    "oneOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "integer"
+                      }
+                    ],
+                    "example": 1
+                  }
+                }
+              },
+              "example": {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "eth_getStorageValues",
+                "params": [
+                  {
+                    "{{ address }}": [
+                      "0x0"
+                    ]
+                  },
                   "latest"
                 ]
               }
@@ -6270,6 +6448,88 @@
                   1,
                   true
                 ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JSONRPCResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request - Invalid JSON-RPC request"
+          },
+          "500": {
+            "description": "Internal server error"
+          }
+        }
+      }
+    },
+    "/eth_capabilities": {
+      "post": {
+        "tags": [
+          "RPC"
+        ],
+        "summary": "eth_capabilities",
+        "description": "Get the node's effective data-retention capabilities for RPC routing",
+        "operationId": "eth_capabilities",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "jsonrpc",
+                  "method",
+                  "params",
+                  "id"
+                ],
+                "properties": {
+                  "jsonrpc": {
+                    "type": "string",
+                    "enum": [
+                      "2.0"
+                    ],
+                    "example": "2.0"
+                  },
+                  "method": {
+                    "type": "string",
+                    "enum": [
+                      "eth_capabilities"
+                    ],
+                    "example": "eth_capabilities"
+                  },
+                  "params": {
+                    "type": "array",
+                    "items": {},
+                    "example": []
+                  },
+                  "id": {
+                    "oneOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "integer"
+                      }
+                    ],
+                    "example": 1
+                  }
+                }
+              },
+              "example": {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "eth_capabilities",
+                "params": []
               }
             }
           }

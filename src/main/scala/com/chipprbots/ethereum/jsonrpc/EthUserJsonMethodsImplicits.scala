@@ -87,3 +87,53 @@ object EthUserJsonMethodsImplicits extends JsonMethodsImplicits:
           case _ => Left(InvalidParams())
 
       def encodeJson(t: GetStorageRootResponse): JValue = encodeAsHex(t.storageRoot)
+
+  given eth_getStorageValues: (JsonMethodDecoder[GetStorageValuesRequest] & JsonEncoder[GetStorageValuesResponse]) =
+    new JsonMethodDecoder[GetStorageValuesRequest] with JsonEncoder[GetStorageValuesResponse]:
+
+      private def decodeSlots(rawAddress: String, slotValues: List[JValue]): Either[JsonRpcError, List[BigInt]] =
+        slotValues.foldLeft[Either[JsonRpcError, List[BigInt]]](Right(Nil)) {
+          case (acc, slotValue: JString) =>
+            val keyHex = slotValue.s.stripPrefix("0x").stripPrefix("0X")
+            if keyHex.length > 64 then
+              Left(InvalidParams(s"""storage key too long (want at most 32 bytes): "${slotValue.s}""""))
+            else
+              for
+                positions <- acc
+                position <- extractQuantity(slotValue)
+              yield positions :+ position
+          case (_, _) => Left(InvalidParams(s"invalid storage key for address $rawAddress"))
+        }
+
+      private def decodeEntries(fields: List[(String, JValue)]): Either[JsonRpcError, Seq[StorageValuesEntry]] =
+        if fields.isEmpty then Left(InvalidParams("empty request"))
+        else
+          fields.foldLeft[Either[JsonRpcError, List[StorageValuesEntry]]](Right(Nil)) {
+            case (acc, (rawAddress, JArray(slotValues))) =>
+              for
+                entries <- acc
+                address <- extractAddress(rawAddress)
+                slots <- decodeSlots(rawAddress, slotValues)
+              yield entries :+ StorageValuesEntry(rawAddress, address, slots)
+            case (_, (rawAddress, _)) => Left(InvalidParams(s"invalid storage keys for address $rawAddress"))
+          }
+
+      def decodeJson(params: Option[JArray]): Either[JsonRpcError, GetStorageValuesRequest] =
+        params match
+          case Some(JArray(JObject(fields) :: Nil)) =>
+            // Block parameter omitted — defaults to latest.
+            decodeEntries(fields).map(GetStorageValuesRequest(_, BlockParam.Latest))
+          case Some(JArray(JObject(fields) :: (blockValue: JValue) :: Nil)) =>
+            for
+              entries <- decodeEntries(fields)
+              block <- extractBlockParam(blockValue)
+            yield GetStorageValuesRequest(entries, block)
+          case _ => Left(InvalidParams())
+
+      def encodeJson(t: GetStorageValuesResponse): JValue =
+        def pad(value: ByteString): ByteString =
+          if value.length < 32 then ByteString(new Array[Byte](32 - value.length)) ++ value else value
+
+        JObject(t.values.toList.map { case (rawAddress, values) =>
+          rawAddress -> JArray(values.map(v => encodeAsHex(pad(v))).toList)
+        })

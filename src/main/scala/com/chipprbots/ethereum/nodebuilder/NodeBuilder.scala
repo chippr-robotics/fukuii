@@ -600,13 +600,20 @@ trait EthTxServiceBuilder:
   )
 
 trait EthBlocksServiceBuilder:
-  self: BlockchainBuilder & MiningBuilder & BlockQueueBuilder =>
+  self: BlockchainBuilder & MiningBuilder & BlockQueueBuilder & StorageBuilder =>
 
   /** Override in subtraits that have access to ForkChoiceManager (e.g. EngineApiBuilder) */
   def forkChoiceManagerForRpc: Option[com.chipprbots.ethereum.consensus.engine.ForkChoiceManager] = None
 
   lazy val ethBlocksService =
-    new EthBlocksService(blockchain, blockchainReader, mining, blockQueue, forkChoiceManagerForRpc)
+    new EthBlocksService(
+      blockchain,
+      blockchainReader,
+      mining,
+      blockQueue,
+      forkChoiceManagerForRpc,
+      storagesInstance.pruningMode
+    )
 
 trait EthUserServiceBuilder:
   self: BlockchainBuilder & BlockchainConfigBuilder & MiningBuilder & StorageBuilder =>

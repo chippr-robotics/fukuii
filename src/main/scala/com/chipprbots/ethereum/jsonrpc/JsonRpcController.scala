@@ -230,6 +230,8 @@ case class JsonRpcController(
       handle[GetBalanceRequest, GetBalanceResponse](ethUserService.getBalance, req)
     case req @ JsonRpcRequest(_, "eth_getStorageAt", _, _) =>
       handle[GetStorageAtRequest, GetStorageAtResponse](ethUserService.getStorageAt, req)
+    case req @ JsonRpcRequest(_, "eth_getStorageValues", _, _) =>
+      handle[GetStorageValuesRequest, GetStorageValuesResponse](ethUserService.getStorageValues, req)
     case req @ JsonRpcRequest(_, "eth_getTransactionCount", _, _) =>
       handle[GetTransactionCountRequest, GetTransactionCountResponse](ethUserService.getTransactionCount, req)
     case req @ JsonRpcRequest(_, "eth_newFilter", _, _) =>
@@ -280,6 +282,10 @@ case class JsonRpcController(
       handle[MaxPriorityFeePerGasRequest, MaxPriorityFeePerGasResponse](ethBlocksService.maxPriorityFeePerGas, req)
     case req @ JsonRpcRequest(_, "eth_blobBaseFee", _, _) =>
       handle[BlobBaseFeeRequest, BlobBaseFeeResponse](ethBlocksService.blobBaseFee, req)
+    case req @ JsonRpcRequest(_, "eth_baseFee", _, _) =>
+      handle[BaseFeeRequest, BaseFeeResponse](ethBlocksService.baseFee, req)
+    case req @ JsonRpcRequest(_, "eth_capabilities", _, _) =>
+      handle[CapabilitiesRequest, CapabilitiesResponse](ethBlocksService.capabilities, req)
     case req @ JsonRpcRequest(_, "eth_createAccessList", _, _) =>
       handle[CreateAccessListRequest, CreateAccessListResponse](ethInfoService.createAccessList, req)
     case req @ JsonRpcRequest(_, "eth_simulateV1", _, _) =>

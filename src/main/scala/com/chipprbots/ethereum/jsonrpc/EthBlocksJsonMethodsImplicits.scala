@@ -260,6 +260,40 @@ object EthBlocksJsonMethodsImplicits extends JsonMethodsImplicits:
     new NoParamsMethodDecoder(BlobBaseFeeRequest()) with JsonEncoder[BlobBaseFeeResponse]:
       def encodeJson(t: BlobBaseFeeResponse): JValue = encodeAsHex(t.blobBaseFee)
 
+  // eth_baseFee
+  given eth_baseFee: (NoParamsMethodDecoder[BaseFeeRequest] & JsonEncoder[BaseFeeResponse]) =
+    new NoParamsMethodDecoder(BaseFeeRequest()) with JsonEncoder[BaseFeeResponse]:
+      def encodeJson(t: BaseFeeResponse): JValue = encodeAsHex(t.baseFee)
+
+  // eth_capabilities
+  given eth_capabilities: (NoParamsMethodDecoder[CapabilitiesRequest] & JsonEncoder[CapabilitiesResponse]) =
+    new NoParamsMethodDecoder(CapabilitiesRequest()) with JsonEncoder[CapabilitiesResponse]:
+      private def encodeResource(r: CapabilitiesResource): JValue =
+        val base = List("disabled" -> JBool(r.disabled), "oldestBlock" -> encodeAsHex(r.oldestBlock))
+        val deleteStrategy = r.deleteStrategy
+          .map(retentionBlocks =>
+            "deleteStrategy" -> JObject(
+              "type" -> JString("window"),
+              "retentionBlocks" -> encodeAsHex(retentionBlocks)
+            )
+          )
+          .toList
+        JObject(base ::: deleteStrategy)
+
+      def encodeJson(t: CapabilitiesResponse): JValue =
+        JObject(
+          "head" -> JObject(
+            "number" -> encodeAsHex(t.headNumber),
+            "hash" -> encodeAsHex(t.headHash)
+          ),
+          "state" -> encodeResource(t.state),
+          "tx" -> encodeResource(t.tx),
+          "logs" -> encodeResource(t.logs),
+          "receipts" -> encodeResource(t.receipts),
+          "blocks" -> encodeResource(t.blocks),
+          "stateproofs" -> encodeResource(t.stateproofs)
+        )
+
   // debug_getRawBlock
   given debug_getRawBlock: (JsonMethodDecoder[GetRawBlockRequest] & JsonEncoder[GetRawBlockResponse]) =
     new JsonMethodDecoder[GetRawBlockRequest] with JsonEncoder[GetRawBlockResponse]:
