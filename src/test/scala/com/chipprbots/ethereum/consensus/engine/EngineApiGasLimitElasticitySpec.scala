@@ -45,7 +45,7 @@ class EngineApiGasLimitElasticitySpec extends AnyWordSpec with Matchers:
     /** Some(2) = ETH/London regime, None = ETC regime. */
     def elasticity: Option[Int]
 
-    override implicit def blockchainConfig: BlockchainConfig =
+    implicit override def blockchainConfig: BlockchainConfig =
       initBlockchainConfig.withUpdatedForkBlocks(
         _.copy(olympiaBlockNumber = BigInt(1), olympiaGasLimitElasticity = elasticity)
       )
@@ -176,15 +176,16 @@ class EngineApiGasLimitElasticitySpec extends AnyWordSpec with Matchers:
         extraData = block.header.extraData,
         baseFeePerGas = block.header.baseFee.getOrElse(BigInt(0)),
         blockHash = block.header.hash.value,
-        transactions = block.body.transactionList.map(stx => ByteString(rlpEncode(SignedTransactionEnc(stx).toRLPEncodable))),
+        transactions =
+          block.body.transactionList.map(stx => ByteString(rlpEncode(SignedTransactionEnc(stx).toRLPEncodable))),
         withdrawals = block.body.withdrawals
       )
 
     def newPayloadStatus(gasLimit: BigInt): PayloadStatusV1 =
       engineApi.newPayload(blockToPayload(buildBlock1(gasLimit))).unsafeRunSync()
 
-    /** Drive the PRODUCER side: forkchoiceUpdated(head = genesis, attrs) then getPayload.
-      * Returns the gas limit the payload builder chose for the activation block.
+    /** Drive the PRODUCER side: forkchoiceUpdated(head = genesis, attrs) then getPayload. Returns the gas limit the
+      * payload builder chose for the activation block.
       */
     def producedActivationGasLimit(): BigInt =
       val fcs = ForkChoiceState(
@@ -225,7 +226,7 @@ class EngineApiGasLimitElasticitySpec extends AnyWordSpec with Matchers:
     ) in new EthSetup:
       val status: PayloadStatusV1 = newPayloadStatus(DoubledGasLimit)
       withClue(s"validationError=${status.validationError}: ") {
-        status.validationError.getOrElse("") should not include GasLimitErrorFragment
+        (status.validationError.getOrElse("") should not).include(GasLimitErrorFragment)
       }
       status.status shouldBe Valid
 
@@ -265,7 +266,7 @@ class EngineApiGasLimitElasticitySpec extends AnyWordSpec with Matchers:
     ) in new EtcSetup:
       val status: PayloadStatusV1 = newPayloadStatus(GenesisGasLimit)
       withClue(s"validationError=${status.validationError}: ") {
-        status.validationError.getOrElse("") should not include GasLimitErrorFragment
+        (status.validationError.getOrElse("") should not).include(GasLimitErrorFragment)
       }
       status.status shouldBe Valid
 
@@ -279,7 +280,7 @@ class EngineApiGasLimitElasticitySpec extends AnyWordSpec with Matchers:
       // is taken from the scaled parent too — not just the diff.
       val status: PayloadStatusV1 = newPayloadStatus(DoubledGasLimit + 4_000)
       withClue(s"validationError=${status.validationError}: ") {
-        status.validationError.getOrElse("") should not include GasLimitErrorFragment
+        (status.validationError.getOrElse("") should not).include(GasLimitErrorFragment)
       }
       status.status shouldBe Valid
   }
@@ -308,7 +309,7 @@ class EngineApiGasLimitElasticitySpec extends AnyWordSpec with Matchers:
       val produced: BigInt = producedActivationGasLimit()
       val status: PayloadStatusV1 = newPayloadStatus(produced)
       withClue(s"validationError=${status.validationError}: ") {
-        status.validationError.getOrElse("") should not include GasLimitErrorFragment
+        (status.validationError.getOrElse("") should not).include(GasLimitErrorFragment)
       }
       status.status shouldBe Valid
   }
