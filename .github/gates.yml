@@ -158,7 +158,7 @@ gates:
       go-ethereum/nethermind) and as sync SERVER (go-ethereum/nethermind sync
       from fukuii). Gated on the `fukuii` subset only, so upstream
       geth<->nethermind failures do not pollute this signal.
-    waivers: [sync-server-fukuii, sync-client-fukuii-from-nethermind]
+    waivers: [sync-server-geth-from-fukuii, sync-client-fukuii-from-nethermind]
     status_note: >-
       The only suite with a real subset gate today. #1402's first required-slice
       item. Both waivers below must be retired before promotion — the
@@ -357,29 +357,42 @@ first_required_slice:
 # ---------------------------------------------------------------------------
 waivers:
 
-  - id: sync-server-fukuii
+  - id: sync-server-geth-from-fukuii
     gate: hive-sync
-    pattern: fukuii as sync server
+    pattern: sync go-ethereum from fukuii
     owner: realcodywburns
     issue: 1402
     reason: >-
-      fukuii as sync SERVER does not serve a peer to completion. This is the
-      failure #1402 names as having shipped green in v0.8.0.
+      go-ethereum syncing FROM fukuii does not complete. fukuii is the SERVER
+      here; this is the sync-server failure #1402 names as having shipped green
+      in v0.8.0.
 
-      RENAMED 2026-09-20 (#1407). This waiver previously read
-      `sync go-ethereum from fukuii`, which is NOT a test name ethereum/hive
-      ever generates, so it excluded nothing. hive's sync simulator names its
-      cases from a CLIENT placeholder that is always the client under test
-      (simulators/ethereum/sync/main.go):
+      RESTORED 2026-09-21 (#1407), reverting an incorrect rename I made the day
+      before. I had claimed `sync go-ethereum from fukuii` was not a name hive
+      generates, reasoning that the CLIENT placeholder in
+      simulators/ethereum/sync/sync.go is always the client under test. That was
+      wrong: hive substitutes CLIENT for EVERY client in the run, and pairs it
+      against every other as `source`, so with fukuii/go-ethereum/nethermind all
+      present the suite emits both directions. The measured run on 77acf82 lists
+      `sync go-ethereum from fukuii` explicitly, alongside `sync fukuii from
+      go-ethereum`. The original string was correct and I broke it.
 
-          Name: "CLIENT as snap-sync server"   -> "fukuii as snap-sync server"
-          Name: "CLIENT as sync server"        -> "fukuii as sync server"
-          Name: "sync CLIENT from %s"          -> "sync fukuii from go-ethereum"
+      Measured on 77acf82, after the Bind-sender fix (ServerActor sent Bind with
+      no sender, so Bound went to dead letters and serverStatus never became
+      Listening):
 
-      There is no "sync <other> from fukuii" form. The intent was right and
-      the string was wrong, so the sync-server failure this waiver was written
-      for was never actually waived — it was failing the gate unacknowledged,
-      behind gates that could not fail anyway.
+          PASS  fukuii as sync server
+          PASS  sync fukuii from fukuii
+          PASS  sync nethermind from fukuii
+          PASS  sync fukuii from go-ethereum
+          PASS  sync fukuii from nethermind
+          FAIL  sync go-ethereum from fukuii
+
+      So `fukuii as sync server` now passes and no longer needs a waiver — real
+      progress on #1402 — and nethermind can sync from fukuii. Only go-ethereum
+      as the syncing peer still fails, which narrows this considerably: it is
+      not "fukuii cannot serve", it is something specific to the geth client
+      pairing.
     expires: 2026-12-31
 
   - id: sync-client-fukuii-from-nethermind

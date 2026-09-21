@@ -366,6 +366,31 @@ def check_status_doc() -> None:
 
 # ---------------------------------------------------------------------------
 
+def check_blocked_by(doc: dict) -> None:
+    """C14 — every `blocked_by` entry must name a waiver that exists.
+
+    Added 2026-09-21 after renaming a waiver left `first_required_slice.blocked_by`
+    pointing at an id that no longer existed. Nothing caught it: C6 validates that
+    each waiver is complete and unexpired, and C7 that each gate_exclude branch has
+    a declared waiver, but neither walks the reverse direction. A promotion schedule
+    blocked on a waiver that does not exist reads as blocked forever while naming
+    nothing — a claim with no referent, which is the defect class this whole matrix
+    exists to prevent.
+    """
+    known = {w.get("id") for w in (doc.get("waivers") or []) if w.get("id")}
+    slice_ = doc.get("first_required_slice") or {}
+    entries = slice_.get("gates") if isinstance(slice_, dict) else None
+    for entry in entries or []:
+        if not isinstance(entry, dict):
+            continue
+        name = entry.get("gate", "<unnamed>")
+        for ref in entry.get("blocked_by") or []:
+            if ref not in known:
+                fail("C14", f"first_required_slice gate '{name}' is blocked_by "
+                            f"'{ref}', which is not a declared waiver id. Known ids: "
+                            f"{', '.join(sorted(known)) or '(none)'}")
+
+
 def main() -> int:
     if not GATES.exists():
         print(f"::error::{GATES} not found.", file=sys.stderr)
@@ -379,6 +404,7 @@ def main() -> int:
     check_badges(gates)
     check_claims(gates)
     check_status_doc()
+    check_blocked_by(doc)
 
     summary_lines = ["### Gate Integrity", ""]
     tiers: dict[str, int] = {}
