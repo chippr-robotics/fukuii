@@ -88,9 +88,13 @@ reproduced `headblock.json.hash` byte-identically, which fixes `requestsHash`[20
 `blockAccessListHash`[21], `slotNumber`[22].
 
 The decoder becomes `case 21 => HefPostPrague`, `case 23 => HefPostAmsterdam`, and everything else —
-including 22, and including anything above 23 — falls to the existing throw. Note that 18, 19 and 22
-are *already* rejected; the `>= 21` catch-all is the only inconsistency, and closing it makes the
-decoder uniformly exact.
+including 22, and including anything above 23 — falls to the existing throw.
+
+**Measured correction.** An earlier draft of this document claimed 18, 19 and 22 were already
+rejected. Only **18 and 19** were. `case n if n >= 21` matches 22 and 24 too, so both decoded as
+`HefPostPrague` and re-encoded to 21 items. Rejecting them is therefore *new* behaviour, and Slice A
+corrects more than the first reading suggested. Verified by probing the unmodified decoder before any
+edit — the point of running that probe.
 
 Accessor methods (`baseFee`, `withdrawalsRoot`, `blobGasUsed`, `excessBlobGas`,
 `parentBeaconBlockRoot`, `requestsHash`) each gain an `HefPostAmsterdam` case. Missing one is a silent

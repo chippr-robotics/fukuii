@@ -51,7 +51,7 @@ Decoding maps item count to header shape **exactly**. There is no tolerant fallb
 | 23 | `HefPostAmsterdam` |
 | anything else | **reject**, with the count named in the message |
 
-18, 19 and 22 are already rejected today; the only tolerant case is `n if n >= 21`, and it is the one
+Only 18 and 19 are rejected today. `n if n >= 21` swallows 22 and 24 as well — it is the one
 that produces wrong hashes. Replacing it with `case 21` and `case 23` makes the table uniform.
 
 **Round-trip invariant, for every shape in the table**: `encode(decode(bytes)) == bytes`, and therefore
