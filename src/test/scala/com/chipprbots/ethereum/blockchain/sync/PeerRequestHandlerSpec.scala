@@ -8,8 +8,12 @@ import org.apache.pekko.actor.typed.ActorRef as TypedActorRef
 import org.apache.pekko.actor.typed.scaladsl.adapter.*
 import org.apache.pekko.testkit.TestProbe
 
+import org.scalatest.concurrent.Eventually
 import org.scalatest.flatspec.AnyFlatSpecLike
 import org.scalatest.matchers.should.Matchers
+import org.scalatest.time.Millis
+import org.scalatest.time.Seconds
+import org.scalatest.time.Span
 
 import scala.concurrent.duration.*
 
@@ -26,7 +30,11 @@ import com.chipprbots.ethereum.network.p2p.messages.WireProtocol.Ping.PingEnc
 import com.chipprbots.ethereum.network.p2p.messages.WireProtocol.Pong
 import com.chipprbots.ethereum.testing.Tags.*
 
-class PeerRequestHandlerSpec extends ScalaTestWithActorTestKit(ManualTime.config) with AnyFlatSpecLike with Matchers:
+class PeerRequestHandlerSpec
+    extends ScalaTestWithActorTestKit(ManualTime.config)
+    with AnyFlatSpecLike
+    with Matchers
+    with Eventually:
 
   val manualTime: ManualTime = ManualTime()
 
@@ -81,9 +89,24 @@ class PeerRequestHandlerSpec extends ScalaTestWithActorTestKit(ManualTime.config
     spawnPRH(npmProbe)
     npmProbe.expectMsgType[NetworkPeerManagerActor.SendMessageCmd]
 
-    peerEventBus ! PublishCmd(MessageFromPeer(Pong(), peerId))
-
-    replyTo.expectMessageType[PeerRequestHandler.ResponseReceived[Pong]]
+    // Republish until the subscription is live, rather than publishing once and hoping.
+    //
+    // PeerRequestHandler sends SendMessageCmd to networkPeerManager BEFORE it sends its two
+    // SubscribeCmd messages to the peer event bus (PeerRequestHandler.scala:74-82). Those are
+    // DIFFERENT destination actors, so observing SendMessageCmd above establishes only that the
+    // subscribes were enqueued — not that the bus has processed them. Pekko guarantees ordering per
+    // sender/receiver pair, and the subscribes come from the handler while this publish comes from
+    // the test, so there is no ordering between them at all.
+    //
+    // A single publish landing in that window is DROPPED, and no timeout can recover a message that
+    // was never delivered — which is why this failed on a cold JVM (slow subscription processing)
+    // and passed on a warm one. Raising the timeout would have hidden the race, not fixed it.
+    //
+    // The assertion is unchanged; only delivery is retried.
+    eventually(timeout(Span(5, Seconds)), interval(Span(50, Millis))) {
+      peerEventBus ! PublishCmd(MessageFromPeer(Pong(), peerId))
+      replyTo.expectMessageType[PeerRequestHandler.ResponseReceived[Pong]](100.millis)
+    }
 
   it should "reply RequestFailed when the response timer fires" taggedAs (UnitTest, NetworkTest) in new Fixtures:
     val npmProbe = TestProbe()(testKit.system.toClassic)
