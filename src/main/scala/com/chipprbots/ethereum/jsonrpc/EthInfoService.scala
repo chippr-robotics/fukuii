@@ -268,7 +268,12 @@ class EthInfoService(
         case HefPostShanghai(_, wr)               => HefPostShanghai(0, wr)
         case HefPostCancun(_, wr, bg, eb, pb)     => HefPostCancun(0, wr, bg, eb, pb)
         case HefPostPrague(_, wr, bg, eb, pb, rh) => HefPostPrague(0, wr, bg, eb, pb, rh)
-        case other                                => other
+        // Amsterdam (23 items). Without this case the `other` arm returns the header unchanged and
+        // eth_call / eth_estimateGas keep a non-zero base fee on every Amsterdam block — a silent
+        // degradation, not a crash, which is why it needs its own case rather than a catch-all.
+        case HefPostAmsterdam(_, wr, bg, eb, pb, rh, bal, slot) =>
+          HefPostAmsterdam(0, wr, bg, eb, pb, rh, bal, slot)
+        case other => other
       block.block.header.copy(extraFields = zeroBaseFeeExtra)
     else block.block.header
     f(stx, header, block.pendingState)

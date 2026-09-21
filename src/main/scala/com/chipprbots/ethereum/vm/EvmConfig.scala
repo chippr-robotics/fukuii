@@ -5,6 +5,7 @@ import org.apache.pekko.util.ByteString
 import com.chipprbots.ethereum
 
 import com.chipprbots.ethereum.domain.AccessListItem
+import com.chipprbots.ethereum.domain.Address
 import com.chipprbots.ethereum.domain.Timestamp
 import com.chipprbots.ethereum.domain.UInt256
 import com.chipprbots.ethereum.utils.BlockchainConfig
@@ -53,6 +54,18 @@ object EvmConfig:
       config = config.copy(
         feeSchedule = new FeeSchedule.OsakaFeeSchedule,
         opCodeList = OsakaOpCodes // EIP-7939: CLZ opcode
+      )
+    // Amsterdam (ETH-family only). Gated on a timestamp that no ETC-family config declares, so this
+    // branch is unreachable on ETC/Mordor/Gorgoroth — asserted by ChainConfigMatrixSpec against the
+    // SHIPPED config files, not left to convention.
+    //
+    // Adds no opcodes. What it changes is the gas model: EIP-8038 access/write repricing (fee schedule),
+    // EIP-8037 state-gas metering, EIP-2780 intrinsic decomposition, EIP-7778 block accounting,
+    // EIP-7708 transfer logs and EIP-7954 size limits — all behind `amsterdamEnabled`.
+    if blockchainConfig.isAmsterdamTimestamp(timestamp) then
+      config = config.copy(
+        feeSchedule = new FeeSchedule.AmsterdamFeeSchedule,
+        amsterdamEnabled = true
       )
     config
 
@@ -233,7 +246,11 @@ case class EvmConfig(
     eip3651Enabled: Boolean = false,
     eip3860Enabled: Boolean = false,
     eip6049DeprecationEnabled: Boolean = false,
-    eip6780Enabled: Boolean = false
+    eip6780Enabled: Boolean = false,
+    /** Amsterdam (ETH-family). Gates EIP-8037 state-gas metering, EIP-2780's intrinsic decomposition, EIP-7708
+      * value-transfer logs and EIP-7954's size limits. `false` on every ETC path.
+      */
+    amsterdamEnabled: Boolean = false
 ):
 
   import feeSchedule.*
@@ -269,30 +286,73 @@ case class EvmConfig(
     else c(memNeeded) - c(memSize)
 
   /** Calculates transaction intrinsic gas. See YP section 6.2
+    *
+    * `to`, `value` and `sender` exist for EIP-2780 (Amsterdam), which decomposes the flat 21,000 into named primitives
+    * whose applicability depends on the destination and the value. They are required rather than defaulted on purpose:
+    * a default would silently mis-price every Amsterdam transaction at a call site that forgot them, and the compiler
+    * is the only thing that reliably notices. Pre-Amsterdam they are ignored.
     */
   def calcTransactionIntrinsicGas(
       txData: ByteString,
       isContractCreation: Boolean,
       accessList: Seq[AccessListItem],
-      authorizationListSize: Int = 0
+      authorizationListSize: Int,
+      to: Option[Address],
+      value: UInt256,
+      sender: Address
   ): BigInt =
     val txDataZero = txData.count(_ == 0)
     val txDataNonZero = txData.length - txDataZero
+
+    val calldataPrice: BigInt = txDataZero * G_txdatazero + txDataNonZero * G_txdatanonzero
 
     val accessListPrice =
       accessList.size * G_access_list_address +
         accessList.map(_.storageKeys.size).sum * G_access_list_storage
 
-    // EIP-7702: Per-authorization intrinsic gas = PER_AUTH_BASE_COST (25000) per EIP spec
-    val authListPrice: BigInt = BigInt(authorizationListSize) * BigInt(25000)
-
     val initCodeCost: BigInt = if isContractCreation then calcInitCodeCost(txData) else BigInt(0)
 
-    txDataZero * G_txdatazero +
-      txDataNonZero * G_txdatanonzero + accessListPrice + authListPrice +
-      (if isContractCreation then G_txcreate else 0) +
-      G_transaction +
-      initCodeCost
+    if amsterdamEnabled then
+      // EIP-2780 replaces the flat base AND EIP-7702's flat PER_AUTH_BASE_COST. Calldata and access-list
+      // metering are explicitly unchanged.
+      val authListPrice: BigInt = BigInt(authorizationListSize) * AmsterdamGas.ExecutionPerAuthBaseCost
+      transactionBaseCost(to, value, sender) + calldataPrice + accessListPrice + authListPrice + initCodeCost
+    else
+      // EIP-7702: Per-authorization intrinsic gas = PER_AUTH_BASE_COST (25000) per EIP spec
+      val authListPrice: BigInt = BigInt(authorizationListSize) * BigInt(25000)
+      calldataPrice + accessListPrice + authListPrice +
+        (if isContractCreation then G_txcreate else 0) +
+        G_transaction +
+        initCodeCost
+
+  /** EIP-2780's decomposed transaction base cost — the state-INDEPENDENT part of intrinsic gas.
+    *
+    * This is also the base the EIP-7623 calldata floor sits on once Amsterdam is active (EIP-2780, "Interactions with
+    * other EIPs"): the floor's fixed term is no longer the stale 21,000 but this same sum, with per-authorization and
+    * initcode-word charges excluded. That is not a nicety — a floor still anchored at 21,000 would drag the measured
+    * 12,000 self-transfer back up to 21,000 and the measured 17,201 `tx-callrevert` up to 21,040, contradicting the
+    * fixture on both.
+    *
+    * Pre-Amsterdam this returns the legacy flat cost, so the floor keeps its EIP-7623 meaning unchanged.
+    */
+  def transactionBaseCost(to: Option[Address], value: UInt256, sender: Address): BigInt =
+    // Pre-Amsterdam this is EIP-7623's flat 21,000 and NOTHING else. In particular it must not include
+    // `G_txcreate`: EIP-7623's floor is `21000 + tokens * 10` for every transaction shape, creation
+    // included, and folding the 32,000 creation surcharge into it would raise the floor on contract
+    // deployments — a live pre-Amsterdam and ETC behaviour change with no EIP behind it.
+    if !amsterdamEnabled then G_transaction
+    else
+      val isSelfTransfer = to.contains(sender)
+      val recipientCost: BigInt =
+        if isSelfTransfer then 0 // no charge at all for tx.to == tx.sender
+        else if to.isEmpty then AmsterdamGas.CreateAccess // deployment account access + write
+        else AmsterdamGas.ColdAccountAccess // recipient touch, always at the cold rate
+      val valueCost: BigInt =
+        // A creation's recipient balance write is already covered by CREATE_ACCESS; a self-transfer
+        // moves nothing and emits no EIP-7708 log, so it pays nothing.
+        if value.isZero || isSelfTransfer || to.isEmpty then 0
+        else AmsterdamGas.TxValueCost
+      AmsterdamGas.TxBaseCost + recipientCost + valueCost
 
   /** If the initialization code completes successfully, a final contract-creation cost is paid, the code-deposit cost,
     * proportional to the size of the created contract’s code. See YP equation (96)
@@ -310,13 +370,19 @@ case class EvmConfig(
   def gasCap(g: BigInt): BigInt =
     subGasCapDivisor.map(d => g - g / d).getOrElse(g)
 
+  /** EIP-7954 (Amsterdam) raises EIP-170's 24 KiB code limit to 64 KiB. The chain-config value is what every
+    * pre-Amsterdam path — including every ETC fork — continues to read.
+    */
   def maxCodeSize: Option[BigInt] =
-    blockchainConfig.maxCodeSize
+    if amsterdamEnabled then Some(AmsterdamGas.MaxCodeSize) else blockchainConfig.maxCodeSize
 
-  /** EIP-3860: Maximum initcode size (2 * MAX_CODE_SIZE)
+  /** EIP-3860: Maximum initcode size (2 * MAX_CODE_SIZE). EIP-7954 raises it to a flat 128 KiB, which is 2 x the new
+    * code limit — stated as its own constant in the EIP rather than derived, so it is stated as its own constant here.
     */
   def maxInitCodeSize: Option[BigInt] =
-    if eip3860Enabled then maxCodeSize.map(_ * 2) else None
+    if amsterdamEnabled then Some(AmsterdamGas.MaxInitCodeSize)
+    else if eip3860Enabled then maxCodeSize.map(_ * 2)
+    else None
 
   /** EIP-3860: Calculate gas cost for initcode
     * @param initCode
@@ -432,6 +498,56 @@ object FeeSchedule:
     * inside the MODEXP precompile itself, not the fee schedule.
     */
   class OsakaFeeSchedule extends PragueFeeSchedule
+
+  /** Amsterdam fee schedule (ETH-family only).
+    *
+    * Only the slots EIP-8038 actually reprices are overridden. Everything else — `COLD_STORAGE_ACCESS` 2,100,
+    * `WARM_ACCESS` 100, the EIP-2929 cold/warm rules, calldata pricing, `CALL_STIPEND` — is unchanged by the EIP and
+    * therefore unchanged here.
+    *
+    * Three of these overrides set a slot to **zero** because the charge has moved to the state-gas dimension rather
+    * than disappeared: `G_newaccount` (EIP-8037 `GAS_NEW_ACCOUNT`), `G_codedeposit` (CPSB per byte) and, implicitly,
+    * `G_sset`, whose SSTORE branch the Amsterdam path no longer reaches. A zero here with no corresponding state charge
+    * would under-price state growth by exactly the amount the fork exists to raise, so each is paired with an explicit
+    * charge site: `CallOp`/`SELFDESTRUCT`/`CreateOp` for the account leaf, `VM.saveNewContract` for the code deposit,
+    * `SSTORE` for the slot.
+    *
+    * Validated against go-ethereum's devp2p reference chain: these values reproduce block 41's measured receipt figure
+    * of 326,947 and header figure of 183,600 exactly (AmsterdamGasAccountingSpec).
+    */
+  class AmsterdamFeeSchedule extends OsakaFeeSchedule:
+    // ── EIP-8038: access repricing ──────────────────────────────────────────
+    /** COLD_ACCOUNT_ACCESS 2,600 -> 3,000 (+15%). */
+    override val G_cold_account_access: BigInt = AmsterdamGas.ColdAccountAccess
+
+    /** ACCESS_LIST_ADDRESS_COST 2,400 -> 2,900 (+21%). */
+    override val G_access_list_address: BigInt = 2900
+
+    /** ACCESS_LIST_STORAGE_KEY_COST 1,900 -> 2,000 (+5%). */
+    override val G_access_list_storage: BigInt = 2000
+
+    /** STORAGE_CLEAR_REFUND 4,800 -> 11,616 (+142%). */
+    override val R_sclear: BigInt = AmsterdamGas.StorageClearRefund
+
+    // ── EIP-8038: write surcharges folded into existing composites ──────────
+    /** CALL_VALUE is redefined as ACCOUNT_WRITE (9,000) + CALL_STIPEND (2,300). The stipend itself is unchanged. */
+    override val G_callvalue: BigInt = AmsterdamGas.AccountWrite + 2300
+
+    /** GAS_CREATE 32,000 -> CREATE_ACCESS 12,000 = ACCOUNT_WRITE + COLD_ACCOUNT_ACCESS. */
+    override val G_create: BigInt = AmsterdamGas.CreateAccess
+
+    // ── EIP-8037: charges that leave the execution dimension entirely ───────
+    /** GAS_NEW_ACCOUNT leaves execution gas; charged as STATE_BYTES_PER_NEW_ACCOUNT x CPSB in state gas. */
+    override val G_newaccount: BigInt = 0
+
+    /** Code deposit leaves execution gas at 200/byte; charged as CPSB per byte in state gas, with only the 6-per-word
+      * hash cost remaining in execution (applied in `VM.saveNewContract`).
+      */
+    override val G_codedeposit: BigInt = 0
+
+    // ── EIP-2780: the decomposed transaction base ───────────────────────────
+    /** TX_BASE_COST. Read only through `EvmConfig.transactionBaseCost`, which adds the recipient and value terms. */
+    override val G_transaction: BigInt = AmsterdamGas.TxBaseCost
 
 trait FeeSchedule:
   val G_zero: BigInt

@@ -480,7 +480,10 @@ class EngineApiController(
       case BlockHeader.HeaderExtraFields.HefPostShanghai(bf, _)           => bf
       case BlockHeader.HeaderExtraFields.HefPostCancun(bf, _, _, _, _)    => bf
       case BlockHeader.HeaderExtraFields.HefPostPrague(bf, _, _, _, _, _) => bf
-      case _                                                              => BigInt(0)
+      // Amsterdam: without this the catch-all yields baseFee 0, and every priority fee below is
+      // computed against the wrong base — engine_getPayload would report an inflated block value.
+      case BlockHeader.HeaderExtraFields.HefPostAmsterdam(bf, _, _, _, _, _, _, _) => bf
+      case _                                                                       => BigInt(0)
     if receipts.isEmpty then "0x0"
     else
       val txs = block.body.transactionList
@@ -533,7 +536,11 @@ class EngineApiController(
       case BlockHeader.HeaderExtraFields.HefPostShanghai(bf, _)               => (Some(bf), None, None)
       case BlockHeader.HeaderExtraFields.HefPostCancun(bf, _, bgu, ebg, _)    => (Some(bf), Some(bgu), Some(ebg))
       case BlockHeader.HeaderExtraFields.HefPostPrague(bf, _, bgu, ebg, _, _) => (Some(bf), Some(bgu), Some(ebg))
-      case _                                                                  => (None, None, None)
+      // Amsterdam: the catch-all returns (None, None, None), which makes engine_getPayload omit
+      // baseFeePerGas, blobGasUsed AND excessBlobGas entirely on an Amsterdam payload.
+      case BlockHeader.HeaderExtraFields.HefPostAmsterdam(bf, _, bgu, ebg, _, _, _, _) =>
+        (Some(bf), Some(bgu), Some(ebg))
+      case _ => (None, None, None)
     val baseFields = List(
       "parentHash" -> JString(hex(header.parentHash.value)),
       "feeRecipient" -> JString(hex(header.beneficiary)),

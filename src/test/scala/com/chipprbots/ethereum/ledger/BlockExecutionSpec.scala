@@ -171,7 +171,7 @@ class BlockExecutionSpec
 
         txsExecResult.isRight shouldBe true
 
-        val BlockResult(_, resultingGasUsed, resultingReceipts, _) = txsExecResult.toOption.get
+        val BlockResult(_, resultingGasUsed, _, resultingReceipts, _) = txsExecResult.toOption.get
         resultingGasUsed shouldBe 0
         resultingReceipts shouldBe Nil
 
@@ -210,7 +210,7 @@ class BlockExecutionSpec
           blockExecution.executeBlockTransactions(block, initialWorld)
 
         txsExecResult.isRight shouldBe true
-        val BlockResult(resultingWorldState, resultingGasUsed, resultingReceipts, _) = txsExecResult.toOption.get
+        val BlockResult(resultingWorldState, resultingGasUsed, _, resultingReceipts, _) = txsExecResult.toOption.get
 
         val transaction: Transaction = validStxSignedByOrigin.tx
         // Check valid world
@@ -288,7 +288,7 @@ class BlockExecutionSpec
 
           txsExecResult.isRight shouldBe txValidAccordingToValidators
           if txsExecResult.isRight then
-            val BlockResult(resultingWorldState, resultingGasUsed, resultingReceipts, _) = txsExecResult.toOption.get
+            val BlockResult(resultingWorldState, resultingGasUsed, _, resultingReceipts, _) = txsExecResult.toOption.get
 
             val transaction = stx.tx.tx
             // Check valid world
@@ -552,7 +552,7 @@ class BlockExecutionSpec
         val txsExecResult = blockExecution.executeBlockTransactions(block, initialWorld)
 
         assert(txsExecResult.isRight)
-        val BlockResult(resultingWorldState, resultingGasUsed, resultingReceipts, _) = txsExecResult.toOption.get
+        val BlockResult(resultingWorldState, resultingGasUsed, _, resultingReceipts, _) = txsExecResult.toOption.get
         val transaction1 = stx1.tx.tx
         val transaction2 = stx2.tx.tx
         // Check valid gasUsed

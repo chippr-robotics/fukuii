@@ -8,6 +8,7 @@ import com.chipprbots.ethereum.domain.BlockHeader
 import com.chipprbots.ethereum.domain.BlockHeader.HeaderExtraFields.HefEmpty
 import com.chipprbots.ethereum.domain.Difficulty
 import com.chipprbots.ethereum.domain.GasAmount
+import com.chipprbots.ethereum.domain.BlockHeader.HeaderExtraFields.HefPostAmsterdam
 import com.chipprbots.ethereum.domain.BlockHeader.HeaderExtraFields.HefPostCancun
 import com.chipprbots.ethereum.domain.BlockHeader.HeaderExtraFields.HefPostOlympia
 import com.chipprbots.ethereum.domain.BlockHeader.HeaderExtraFields.HefPostPrague
@@ -276,11 +277,16 @@ trait BlockHeaderValidatorSkeleton extends BlockHeaderValidator:
     val isOlympiaActivated = blockHeader.number.value >= blockchainConfig.forkBlockNumbers.olympiaBlockNumber
 
     blockHeader.extraFields match
-      case HefPostPrague(_, _, _, _, _, _) if isOlympiaActivated => Right(BlockHeaderValid)
-      case HefPostCancun(_, _, _, _, _) if isOlympiaActivated    => Right(BlockHeaderValid)
-      case HefPostShanghai(_, _) if isOlympiaActivated           => Right(BlockHeaderValid)
-      case HefPostOlympia(_) if isOlympiaActivated               => Right(BlockHeaderValid)
-      case HefEmpty if !isOlympiaActivated                       => Right(BlockHeaderValid)
+      // Amsterdam (23 items). Slice A taught the decoder to produce this variant; without a case here it
+      // falls to the catch-all below and every Amsterdam block is rejected with HeaderExtraFieldsError
+      // before it reaches execution at all. `PoSBlockHeaderValidator` inherits this method without
+      // overriding `validate`, so it runs on the live PoS import path.
+      case HefPostAmsterdam(_, _, _, _, _, _, _, _) if isOlympiaActivated => Right(BlockHeaderValid)
+      case HefPostPrague(_, _, _, _, _, _) if isOlympiaActivated          => Right(BlockHeaderValid)
+      case HefPostCancun(_, _, _, _, _) if isOlympiaActivated             => Right(BlockHeaderValid)
+      case HefPostShanghai(_, _) if isOlympiaActivated                    => Right(BlockHeaderValid)
+      case HefPostOlympia(_) if isOlympiaActivated                        => Right(BlockHeaderValid)
+      case HefEmpty if !isOlympiaActivated                                => Right(BlockHeaderValid)
       case _ =>
         Left(HeaderExtraFieldsError(blockHeader.extraFields))
 

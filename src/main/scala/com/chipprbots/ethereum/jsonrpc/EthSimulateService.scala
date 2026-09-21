@@ -370,7 +370,10 @@ class EthSimulateService(
     // Build final header with computed roots and blob gas
     val finalExtraFields = simHeader.extraFields match
       case p: HefPostPrague => p.copy(blobGasUsed = blobGasUsed)
-      case other            => other
+      // Amsterdam: simulating on top of an Amsterdam block gives `simHeader` a 23-field shape, and
+      // without this case the header keeps the BASE block's blobGasUsed instead of the simulated one.
+      case a: BlockHeader.HeaderExtraFields.HefPostAmsterdam => a.copy(blobGasUsed = blobGasUsed)
+      case other                                             => other
     val finalHeader = simHeader.copy(
       stateRoot = TrieRoot(stateRoot),
       transactionsRoot = TrieRoot(transactionsRoot),
@@ -812,7 +815,7 @@ class EthSimulateService(
       world = world.saveAccount(sender, senderAccount)
 
       // Execute transaction
-      val TxResult(newWorld, gasUsed, logs, returnData, vmError) =
+      val TxResult(newWorld, gasUsed, logs, returnData, vmError, _, _) =
         blockPreparator.executeTransactionForSimulation(
           stx,
           sender,

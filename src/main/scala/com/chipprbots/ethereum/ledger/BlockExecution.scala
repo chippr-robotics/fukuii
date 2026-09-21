@@ -526,7 +526,20 @@ object BlockExecutionError:
   final case class ValidationBeforeExecError(error: ValidationError) extends BlockExecutionError:
     def describe: String = error.toString
 
-  final case class StateBeforeFailure(worldState: InMemoryWorldStateProxy, acumGas: BigInt, acumReceipts: Seq[Receipt])
+  /** @param acumGas
+    *   the receipt counter — the running sum of `tx_gas_used`, which is what `cumulativeGasUsed` continues from.
+    * @param acumExecutionGas
+    *   EIP-8037 `block_execution_gas_used` so far. Equal to `acumGas` pre-Amsterdam.
+    * @param acumStateGas
+    *   EIP-8037 `block_state_gas_used` so far. Zero pre-Amsterdam.
+    */
+  final case class StateBeforeFailure(
+      worldState: InMemoryWorldStateProxy,
+      acumGas: BigInt,
+      acumReceipts: Seq[Receipt],
+      acumExecutionGas: BigInt = 0,
+      acumStateGas: BigInt = 0
+  )
 
   final case class TxsExecutionError(stx: SignedTransaction, stateBeforeError: StateBeforeFailure, reason: String)
       extends BlockExecutionError:

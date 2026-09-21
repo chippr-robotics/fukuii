@@ -2,6 +2,8 @@ package com.chipprbots.ethereum.vm
 
 import org.apache.pekko.util.ByteString
 
+import scala.annotation.unused
+
 import com.chipprbots.ethereum.crypto.kec256
 import com.chipprbots.ethereum.domain.Account
 import com.chipprbots.ethereum.domain.Address
@@ -238,10 +240,32 @@ abstract class OpCode(val code: Byte, val delta: Int, val alpha: Int, val baseGa
     else
       val gas: BigInt = calcGas(state)
       if gas > state.gas then state.copy(gas = 0).withError(OutOfGas)
-      else exec(state).spendGas(gas)
+      else
+        // EIP-8037: state gas is metered at the END of a state-mutating opcode. The DECISION, though, is
+        // made from the pre-execution state — the SSTORE table keys on the slot's original, current and
+        // new values, all of which are only available before `exec` runs.
+        val stateGas: BigInt = stateGasDelta(state)
+        val executed = exec(state).spendGas(gas)
+        if stateGas == 0 then executed
+        else if stateGas < 0 then executed.refillStateGas(-stateGas)
+        else if executed.stateGasShortfall(stateGas) > executed.gas then
+          // A state charge that cannot be met is an EXCEPTIONAL HALT, not a partial charge. This is the
+          // measured `tx-emit-*` case: the execution component is affordable, GAS_STORAGE_SET is not, and
+          // the transaction consumes its whole limit having written nothing.
+          state.copy(gas = 0).withError(OutOfGas)
+        else executed.chargeStateGas(stateGas)
 
   protected def calcGas[S <: Storage[S], W <: WorldStateProxy[W, S]](state: ProgramState[W, S]): BigInt =
     baseGas(state) + varGas(state)
+
+  /** EIP-8037 state-gas charged (positive) or refilled (negative) by this opcode, computed from the state BEFORE
+    * execution.
+    *
+    * Zero for every opcode that does not create or destroy state, and zero for every opcode on every pre-Amsterdam and
+    * ETC path — which is what keeps the hook above a no-op outside the fork.
+    */
+  protected def stateGasDelta[S <: Storage[S], W <: WorldStateProxy[W, S]](@unused state: ProgramState[W, S]): BigInt =
+    0
 
   protected def baseGas[S <: Storage[S], W <: WorldStateProxy[W, S]](state: ProgramState[W, S]): BigInt = baseGasFn(
     state.config.feeSchedule
@@ -648,29 +672,31 @@ case object SSTORE extends OpCode(0x55, 2, 0, _.G_zero):
     val (Seq(offset, newValue), stack1) = state.stack.pop(2)
     val currentValue = state.storage.load(offset)
 
-    val refund: BigInt = if eip2200Enabled || eip1283Enabled then
-      val originalValue = state.originalWorld.getStorage(state.ownAddress).load(offset)
-      if currentValue != newValue.toBigInt then
-        if originalValue == currentValue then // fresh slot
-          if originalValue != 0 && newValue.isZero then state.config.feeSchedule.R_sclear
-          else 0
-        else // dirty slot
-          val clear =
-            if originalValue != 0 then
-              if currentValue == 0 then -state.config.feeSchedule.R_sclear
-              else if newValue.isZero then state.config.feeSchedule.R_sclear
+    val refund: BigInt =
+      if state.config.amsterdamEnabled then amsterdamRefund(state, offset, newValue, currentValue)
+      else if eip2200Enabled || eip1283Enabled then
+        val originalValue = state.originalWorld.getStorage(state.ownAddress).load(offset)
+        if currentValue != newValue.toBigInt then
+          if originalValue == currentValue then // fresh slot
+            if originalValue != 0 && newValue.isZero then state.config.feeSchedule.R_sclear
+            else 0
+          else // dirty slot
+            val clear =
+              if originalValue != 0 then
+                if currentValue == 0 then -state.config.feeSchedule.R_sclear
+                else if newValue.isZero then state.config.feeSchedule.R_sclear
+                else BigInt(0)
               else BigInt(0)
-            else BigInt(0)
 
-          val reset =
-            if originalValue == newValue.toBigInt then
-              if UInt256(originalValue).isZero then state.config.feeSchedule.G_sset - state.config.feeSchedule.G_sload
-              else state.config.feeSchedule.G_sreset - state.config.feeSchedule.G_sload
-            else BigInt(0)
-          clear + reset
-      else BigInt(0)
-    else if newValue.isZero && !UInt256(currentValue).isZero then state.config.feeSchedule.R_sclear
-    else 0
+            val reset =
+              if originalValue == newValue.toBigInt then
+                if UInt256(originalValue).isZero then state.config.feeSchedule.G_sset - state.config.feeSchedule.G_sload
+                else state.config.feeSchedule.G_sreset - state.config.feeSchedule.G_sload
+              else BigInt(0)
+            clear + reset
+        else BigInt(0)
+      else if newValue.isZero && !UInt256(currentValue).isZero then state.config.feeSchedule.R_sclear
+      else 0
     val updatedStorage = state.storage.store(offset, newValue)
     state
       .addAccessedStorageKey(state.ownAddress, StorageKey(offset.toBigInt))
@@ -690,6 +716,102 @@ case object SSTORE extends OpCode(0x55, 2, 0, _.G_zero):
     val eip2200Enabled = isEip2200Enabled(etcFork, ethFork)
     val eip1283Enabled = isEip1283Enabled(ethFork)
 
+    if state.config.amsterdamEnabled then amsterdamVarGas(state, offset, newValue, currentValue)
+    else amsterdamFreeVarGas(state, offset, newValue, currentValue, eip2200Enabled, eip1283Enabled)
+
+  /** EIP-8038 SSTORE pricing: three independent components, of which only the first two are execution gas.
+    *
+    *   - **Access**: COLD_STORAGE_ACCESS (2,100) or WARM_ACCESS (100), on the EIP-2929 rules, unchanged.
+    *   - **Write**: STORAGE_WRITE (10,000) when the write moves the slot AWAY from its transaction-start value — `new
+    *     != current && current == original`. Net-metered, so a slot returned to its original value gets it back through
+    *     the refund counter rather than never paying it.
+    *   - **State creation**: GAS_STORAGE_SET, in the state dimension only. See `stateGasDelta`.
+    *
+    * This replaces the EIP-2200 `G_sset`/`G_sreset`/no-op ladder outright rather than adjusting it; the two models do
+    * not compose. The EIP-7928 GAS_CALL_STIPEND pre-state check is retained and, per EIP-8037, is measured against
+    * `gas_left` alone, excluding the reservoir.
+    */
+  private def amsterdamVarGas[S <: Storage[S], W <: WorldStateProxy[W, S]](
+      state: ProgramState[W, S],
+      offset: UInt256,
+      newValue: UInt256,
+      currentValue: BigInt
+  ): BigInt =
+    if state.gas <= state.config.feeSchedule.G_callstipend then
+      state.config.feeSchedule.G_callstipend + 1 // forces the OutOfGas branch in OpCode.execute
+    else
+      val originalValue = state.originalWorld.getStorage(state.ownAddress).load(offset)
+      val writeCost: BigInt =
+        if newValue.toBigInt != currentValue && currentValue == originalValue then AmsterdamGas.StorageWrite
+        else BigInt(0)
+      val accessCost = OpCode.storageAccessCost(state, state.ownAddress, StorageKey(offset.toBigInt))(
+        _ => 0,
+        _.G_cold_sload,
+        _.G_warm_storage_read
+      )
+      accessCost + writeCost
+
+  /** EIP-8038 SSTORE refund rules, evaluated on every SSTORE.
+    *
+    *   1. +STORAGE_CLEAR_REFUND when a slot non-zero at transaction start is cleared. 2. -STORAGE_CLEAR_REFUND when
+    *      such a slot, already cleared in this transaction, is set non-zero again — so a clear-then-reset round trip is
+    *      never net-profitable. 3. +STORAGE_WRITE when the slot is returned to its transaction-start value, undoing the
+    *      write charge.
+    *
+    * All three are adjustments to the transaction refund counter and stay subject to the 20% cap.
+    */
+  private def amsterdamRefund[S <: Storage[S], W <: WorldStateProxy[W, S]](
+      state: ProgramState[W, S],
+      offset: UInt256,
+      newValue: UInt256,
+      currentValue: BigInt
+  ): BigInt =
+    val originalValue = state.originalWorld.getStorage(state.ownAddress).load(offset)
+    val newIsZero = newValue.isZero
+    val currentIsZero = currentValue == 0
+    val originalIsZero = originalValue == 0
+
+    val clearRefund: BigInt =
+      if !originalIsZero && !currentIsZero && newIsZero then AmsterdamGas.StorageClearRefund
+      else if !originalIsZero && currentIsZero && !newIsZero then -AmsterdamGas.StorageClearRefund
+      else BigInt(0)
+
+    val writeRefund: BigInt =
+      if newValue.toBigInt == originalValue && newValue.toBigInt != currentValue then AmsterdamGas.StorageWrite
+      else BigInt(0)
+
+    clearRefund + writeRefund
+
+  /** EIP-8037 state-gas component of SSTORE.
+    *
+    *   - charged when the write creates a slot: original 0, current 0, new non-zero.
+    *   - refilled when a slot created in THIS transaction is cleared: original 0, current non-zero, new 0. That is a
+    *     refill, not a refund — the state was never durably created, so it is netted out of `evm_state_gas_used`
+    *     regardless of EIP-7778.
+    *
+    * Every other transition leaves the state dimension alone, including clearing a slot that pre-existed the
+    * transaction: the leaf was already paid for.
+    */
+  override protected def stateGasDelta[S <: Storage[S], W <: WorldStateProxy[W, S]](
+      state: ProgramState[W, S]
+  ): BigInt =
+    if !state.config.amsterdamEnabled then BigInt(0)
+    else
+      val (Seq(offset, newValue), _) = state.stack.pop(2)
+      val currentValue = state.storage.load(offset)
+      val originalValue = state.originalWorld.getStorage(state.ownAddress).load(offset)
+      if originalValue == 0 && currentValue == 0 && !newValue.isZero then AmsterdamGas.GasStorageSet
+      else if originalValue == 0 && currentValue != 0 && newValue.isZero then -AmsterdamGas.GasStorageSet
+      else BigInt(0)
+
+  private def amsterdamFreeVarGas[S <: Storage[S], W <: WorldStateProxy[W, S]](
+      state: ProgramState[W, S],
+      offset: UInt256,
+      newValue: UInt256,
+      currentValue: BigInt,
+      eip2200Enabled: Boolean,
+      eip1283Enabled: Boolean
+  ): BigInt =
     val originalCharge: BigInt =
       if eip2200Enabled && state.gas <= state.config.feeSchedule.G_callstipend then
         state.config.feeSchedule.G_callstipend + 1 // Out of gas error
@@ -877,6 +999,13 @@ case object LOG2 extends LogOp(0xa2)
 case object LOG3 extends LogOp(0xa3)
 case object LOG4 extends LogOp(0xa4)
 
+object CreateOp:
+  /** EIP-2681 nonce cap. Used only inside the Amsterdam charge decision, as one of EIP-7928's pre-checks: a creation
+    * that would overflow the creator's nonce never reads the destination and is never charged for a new account. It
+    * does NOT introduce a new failure mode on any path.
+    */
+  val MaxNonce: BigInt = BigInt(2).pow(64) - 1
+
 abstract class CreateOp(code: Int, delta: Int) extends OpCode(code, delta, 1, _.G_create):
   // Override execute() to pass the pre-computed gas cost to exec() via state.opcodeGasCost,
   // avoiding the duplicate gas calculation that CreateOp.exec() previously performed (EC-243).
@@ -889,93 +1018,141 @@ abstract class CreateOp(code: Int, delta: Int) extends OpCode(code, delta, 1, _.
       if gas > state.gas then state.copy(gas = 0).withError(OutOfGas)
       else exec(state.copy(opcodeGasCost = gas)).spendGas(gas)
 
-  protected def exec[S <: Storage[S], W <: WorldStateProxy[W, S]](state: ProgramState[W, S]): ProgramState[W, S] =
-    val (Seq(endowment, inOffset, inSize), stack1) = state.stack.pop(3)
+  protected def exec[S <: Storage[S], W <: WorldStateProxy[W, S]](state0: ProgramState[W, S]): ProgramState[W, S] =
+    val (Seq(endowment, inOffset, inSize), stack1) = state0.stack.pop(3)
 
     // EIP-3860: Check initcode size limit
-    val maxInitCodeSize = state.config.maxInitCodeSize
-    if state.config.eip3860Enabled && maxInitCodeSize.exists(max => inSize.toBigInt > max) then
+    val maxInitCodeSize = state0.config.maxInitCodeSize
+    if state0.config.eip3860Enabled && maxInitCodeSize.exists(max => inSize.toBigInt > max) then
       // Exceptional abort: initcode too large
-      state.withStack(stack1.push(UInt256.Zero)).withError(InitCodeSizeLimit).step()
+      state0.withStack(stack1.push(UInt256.Zero)).withError(InitCodeSizeLimit).step()
     else
 
       // Gas cost already computed by OpCode.execute() and stored in state.opcodeGasCost
-      val availableGas = state.gas - state.opcodeGasCost
-      val startGas = state.config.gasCap(availableGas)
-      val (initCode, memory1) = state.memory.load(inOffset, inSize)
-      val world1 = state.world.increaseNonce(state.ownAddress)
+      val availableGas = state0.gas - state0.opcodeGasCost
+      val (initCode, memory1) = state0.memory.load(inOffset, inSize)
+      val world1 = state0.world.increaseNonce(state0.ownAddress)
 
-      val context: ProgramContext[W, S] = ProgramContext(
-        callerAddr = state.env.ownerAddr,
-        originAddr = state.env.originAddr,
-        recipientAddr = None,
-        gasPrice = state.env.gasPrice,
-        startGas = startGas,
-        inputData = initCode,
-        value = endowment,
-        endowment = endowment,
-        doTransfer = true,
-        blockHeader = state.env.blockHeader,
-        callDepth = state.env.callDepth + 1,
-        world = world1,
-        initialAddressesToDelete = state.addressesToDelete,
-        evmConfig = state.config,
-        originalWorld = state.originalWorld,
-        createdAddresses = state.createdAddresses,
-        warmAddresses = state.accessedAddresses,
-        warmStorage = state.accessedStorageKeys,
-        transientStorage = state.transientStorage,
-        precompileRelocations = state.env.precompileRelocations,
-        blobVersionedHashes = state.env.blobVersionedHashes,
-        traceTransfers = state.env.traceTransfers
-      )
+      // ── EIP-8037 account-creation state charge, in EIP-7928's ordering ──────
+      //
+      // EIP-7928 defers reading the computed destination until creation has passed the checks that
+      // precede any state access: sender balance for the endowment, nonce overflow, and the call-depth
+      // limit. A creation failing those never reads the destination, and no state gas is charged.
+      //
+      // Without that ordering, EIP-8037's CREATE charge gives wrong answers for creations that fail their
+      // pre-checks, which is why this lands here rather than with the rest of EIP-7928 in slice C.
+      //
+      // The address is derived from `world1` with exactly the call `VM.create` makes on the same world, so
+      // the two agree by construction; and the charge is decided by EIP-161 EXISTENCE alone, independently
+      // of the EIP-684 collision outcome — a colliding destination is existent, so it is never charged.
+      val newAccountStateGas: BigInt =
+        if !state0.config.amsterdamEnabled then BigInt(0)
+        else
+          val senderCanFund = endowment <= state0.ownBalance
+          val depthOk = state0.env.callDepth + 1 <= EvmConfig.MaxCallDepth
+          val nonceOk = world1.getAccount(state0.ownAddress).forall(_.nonce.toBigInt <= CreateOp.MaxNonce)
+          if !(senderCanFund && depthOk && nonceOk) then BigInt(0)
+          else
+            val destination = this match
+              case CREATE2 =>
+                val (Seq(salt), _) = stack1.pop(1)
+                world1.create2Address(state0.ownAddress, salt, initCode)
+              case _ => world1.createAddress(state0.ownAddress)
+            if world1.isAccountDead(destination) then AmsterdamGas.GasNewAccount else BigInt(0)
 
-      val ((result, newAddress), stack2) = this match
-        case CREATE => (state.vm.create(context), stack1)
-        case CREATE2 =>
-          val (Seq(salt), stack2) = stack1.pop(1)
-          (state.vm.create(context, Some(salt)), stack2)
+      val stateGasShortfall = (newAccountStateGas - state0.stateGasReservoir).max(0)
+      if stateGasShortfall > availableGas then
+        // EIP-8037: "a failed charge exceptionally halts the creating frame — exactly as for CALL*".
+        state0.copy(gas = 0).withError(OutOfGas)
+      else
+        // The charge lands in the CREATING frame, before 63/64 of the remaining gas is forwarded, so the
+        // portion drawn from gas_left reduces what the create frame receives.
+        val state = state0.chargeStateGas(newAccountStateGas)
+        val startGas = state.config.gasCap(state.gas - state.opcodeGasCost)
 
-      result.error match
-        case Some(error) =>
-          val world2 = if error == InvalidCall then state.world else world1
-          val resultStack = stack2.push(UInt256.Zero)
-          val returnData = if error == RevertOccurs then result.returnData else ByteString.empty
-          state
-            .spendGas(startGas - result.gasRemaining)
-            .withWorld(world2)
-            .withStack(resultStack)
-            .withReturnData(returnData)
-            .addAccessedAddresses(if error == InvalidCall then Set.empty else Set(newAddress))
-            .step()
+        val context: ProgramContext[W, S] = ProgramContext(
+          callerAddr = state.env.ownerAddr,
+          originAddr = state.env.originAddr,
+          recipientAddr = None,
+          gasPrice = state.env.gasPrice,
+          startGas = startGas,
+          inputData = initCode,
+          value = endowment,
+          endowment = endowment,
+          doTransfer = true,
+          blockHeader = state.env.blockHeader,
+          callDepth = state.env.callDepth + 1,
+          world = world1,
+          initialAddressesToDelete = state.addressesToDelete,
+          evmConfig = state.config,
+          originalWorld = state.originalWorld,
+          createdAddresses = state.createdAddresses,
+          warmAddresses = state.accessedAddresses,
+          warmStorage = state.accessedStorageKeys,
+          transientStorage = state.transientStorage,
+          precompileRelocations = state.env.precompileRelocations,
+          blobVersionedHashes = state.env.blobVersionedHashes,
+          traceTransfers = state.env.traceTransfers,
+          // The reservoir passes to the child IN FULL; the 63/64 rule above applies to gas_left only.
+          stateGasReservoir = state.stateGasReservoir,
+          evmStateGasUsed = state.evmStateGasUsed
+        )
 
-        case None =>
-          val resultStack = stack2.push(newAddress.toUInt256)
-          val internalTx =
-            InternalTransaction(
-              CREATE,
-              context.callerAddr,
-              None,
-              context.startGas,
-              context.inputData,
-              context.endowment
-            )
+        val ((result, newAddress), stack2) = this match
+          case CREATE => (state.vm.create(context), stack1)
+          case CREATE2 =>
+            val (Seq(salt), stack2) = stack1.pop(1)
+            (state.vm.create(context, Some(salt)), stack2)
 
-          state
-            .spendGas(startGas - result.gasRemaining)
-            .withWorld(result.world)
-            .refundGas(result.gasRefund)
-            .withStack(resultStack)
-            .withAddressesToDelete(result.addressesToDelete)
-            .withCreatedAddresses(result.createdAddresses)
-            .withLogs(result.logs)
-            .withMemory(memory1)
-            .withInternalTxs(internalTx +: result.internalTxs)
-            .withReturnData(ByteString.empty)
-            .addAccessedStorageKeys(result.accessedStorageKeys)
-            .addAccessedAddresses(result.accessedAddresses + newAddress)
-            .copy(transientStorage = result.transientStorage)
-            .step()
+        result.error match
+          case Some(error) =>
+            val world2 = if error == InvalidCall then state.world else world1
+            val resultStack = stack2.push(UInt256.Zero)
+            val returnData = if error == RevertOccurs then result.returnData else ByteString.empty
+            state
+              .spendGas(startGas - result.gasRemaining)
+              // The create frame rolled itself back to the baseline it was handed; the account-creation
+              // charge was made HERE, so it is refilled HERE, in LIFO order.
+              .absorbFailedChildStateGas(result.stateGasReservoir, result.evmStateGasUsed)
+              .refillStateGas(newAccountStateGas)
+              .withWorld(world2)
+              .withStack(resultStack)
+              .withReturnData(returnData)
+              .addAccessedAddresses(if error == InvalidCall then Set.empty else Set(newAddress))
+              .step()
+
+          case None =>
+            val resultStack = stack2.push(newAddress.toUInt256)
+            val internalTx =
+              InternalTransaction(
+                CREATE,
+                context.callerAddr,
+                None,
+                context.startGas,
+                context.inputData,
+                context.endowment
+              )
+
+            state
+              .spendGas(startGas - result.gasRemaining)
+              .mergeSuccessfulChildStateGas(
+                result.stateGasReservoir,
+                result.evmStateGasUsed,
+                result.stateGasFromGasLeft
+              )
+              .withWorld(result.world)
+              .refundGas(result.gasRefund)
+              .withStack(resultStack)
+              .withAddressesToDelete(result.addressesToDelete)
+              .withCreatedAddresses(result.createdAddresses)
+              .withLogs(result.logs)
+              .withMemory(memory1)
+              .withInternalTxs(internalTx +: result.internalTxs)
+              .withReturnData(ByteString.empty)
+              .addAccessedStorageKeys(result.accessedStorageKeys)
+              .addAccessedAddresses(result.accessedAddresses + newAddress)
+              .copy(transientStorage = result.transientStorage)
+              .step()
 
   override protected def availableInContext[S <: Storage[S], W <: WorldStateProxy[W, S]]
       : ProgramState[W, S] => Boolean = !_.staticCtx
@@ -1002,6 +1179,51 @@ case object CREATE2 extends CreateOp(0xf5, 4):
     memCost + hashCost + initCodeGasCost
 
 abstract class CallOp(code: Int, delta: Int, alpha: Int) extends OpCode(code, delta, alpha, _.G_zero):
+
+  /** EIP-8037: the account-creation state charge a CALL incurs when it is about to bring a non-existent account into
+    * being. Applied right before entering the child frame, and only for CALL — CALLCODE's recipient is the calling
+    * account, which already exists, and DELEGATECALL/STATICCALL transfer nothing.
+    *
+    * This mirrors the condition the pre-Amsterdam schedule used for `G_newaccount`; under Amsterdam that fee-schedule
+    * slot is 0 and the whole charge has moved to the state dimension, so the two never both fire.
+    */
+  private def newAccountStateGas[S <: Storage[S], W <: WorldStateProxy[W, S]](
+      state: ProgramState[W, S],
+      to: Address,
+      endowment: UInt256
+  ): BigInt =
+    if state.config.amsterdamEnabled && this == CALL && endowment > UInt256.Zero && state.world.isAccountDead(to) then
+      AmsterdamGas.GasNewAccount
+    else BigInt(0)
+
+  private def callTarget[S <: Storage[S], W <: WorldStateProxy[W, S]](state: ProgramState[W, S]): (Address, UInt256) =
+    val (Seq(_, to, callValue, _, _, _, _), _) = getParams(state)
+    val endowment = if this == DELEGATECALL || this == STATICCALL then UInt256.Zero else callValue
+    (Address(to), endowment)
+
+  override def execute[S <: Storage[S], W <: WorldStateProxy[W, S]](state0: ProgramState[W, S]): ProgramState[W, S] =
+    if !availableInContext(state0) then state0.withError(OpCodeNotAvailableInStaticContext(code.toByte))
+    else if state0.stack.size < delta then state0.withError(StackUnderflow)
+    else if state0.stack.size - delta + alpha > state0.stack.maxSize then state0.withError(StackOverflow)
+    else
+      val executionCost: BigInt = calcGas(state0)
+      if executionCost > state0.gas then state0.copy(gas = 0).withError(OutOfGas)
+      else
+        val (to, endowment) = callTarget(state0)
+        val stateGas = newAccountStateGas(state0, to, endowment)
+        if (stateGas - state0.stateGasReservoir).max(0) > state0.gas - executionCost then
+          // EIP-8037: a failed state charge exceptionally halts the calling frame.
+          state0.copy(gas = 0).withError(OutOfGas)
+        else
+          // Charge BEFORE the 63/64 split so the portion drawn from gas_left reduces what the child
+          // receives. `calcGas` is recomputed on the charged state because `calcStartGas` inside `exec`
+          // derives the forwarded gas from the same `state.gas` — computing the two from different states
+          // is precisely how a gas-cap inconsistency gets introduced.
+          val state = state0.chargeStateGas(stateGas)
+          val gas: BigInt = calcGas(state)
+          if gas > state.gas then state.copy(gas = 0).withError(OutOfGas)
+          else exec(state).spendGas(gas)
+
   protected def exec[S <: Storage[S], W <: WorldStateProxy[W, S]](state: ProgramState[W, S]): ProgramState[W, S] =
     val (params @ Seq(_, to, callValue, inOffset, inSize, outOffset, outSize), stack1) = getParams(state)
 
@@ -1057,8 +1279,15 @@ abstract class CallOp(code: Int, delta: Int, alpha: Int) extends OpCode(code, de
       transientStorage = state.transientStorage,
       precompileRelocations = state.env.precompileRelocations,
       blobVersionedHashes = state.env.blobVersionedHashes,
-      traceTransfers = state.env.traceTransfers
+      traceTransfers = state.env.traceTransfers,
+      // The reservoir passes to the child IN FULL; the 63/64 rule applies to gas_left only.
+      stateGasReservoir = state.stateGasReservoir,
+      evmStateGasUsed = state.evmStateGasUsed
     )
+
+    // Recomputed rather than threaded: the world is unchanged since `execute` decided it, so this is the
+    // same number, and recomputing avoids widening `exec`'s signature on a hot path.
+    val chargedNewAccountStateGas = newAccountStateGas(state, toAddr, endowment)
 
     val result = state.vm.call(context, owner)
 
@@ -1079,6 +1308,10 @@ abstract class CallOp(code: Int, delta: Int, alpha: Int) extends OpCode(code, de
           .withMemory(memoryAdjustment)
           .withWorld(world1)
           .spendGas(gasAdjustment)
+          // EIP-8037: when the child reverts or halts exceptionally the account creation is undone, so the
+          // charge made here is refilled here, in LIFO order.
+          .absorbFailedChildStateGas(result.stateGasReservoir, result.evmStateGasUsed)
+          .refillStateGas(chargedNewAccountStateGas)
           .withReturnData(result.returnData)
           .addAccessedAddress(toAddr)
           .step()
@@ -1102,6 +1335,11 @@ abstract class CallOp(code: Int, delta: Int, alpha: Int) extends OpCode(code, de
 
         state
           .spendGas(-result.gasRemaining)
+          .mergeSuccessfulChildStateGas(
+            result.stateGasReservoir,
+            result.evmStateGasUsed,
+            result.stateGasFromGasLeft
+          )
           .refundGas(result.gasRefund)
           .withStack(stack2)
           .withMemory(mem2)
@@ -1308,13 +1546,21 @@ case object SELFDESTRUCT extends OpCode(0xff, 1, 0, _.G_selfdestruct):
         Seq(com.chipprbots.ethereum.domain.TxLogEntry(ethAddr, Seq(transferTopic, fromPadded, toPadded), data))
       else Seq.empty
 
+    // EIP-7708: a non-zero-value-transferring SELFDESTRUCT to a DIFFERENT account emits the protocol
+    // transfer log, at the time the transfer executes. Distinct from the `traceTransfers` log above,
+    // which is a simulation-only affordance emitted from 0xeee… and is not consensus data.
+    val eip7708Logs =
+      if state.config.amsterdamEnabled && state.ownBalance > UInt256.Zero && state.ownAddress != refundAddr then
+        Seq(AmsterdamGas.transferLog(state.ownAddress, refundAddr, state.ownBalance))
+      else Seq.empty
+
     val state1 = state
       .withWorld(world)
       .refundGas(gasRefund)
       .addAccessedAddress(refundAddr)
       .withStack(stack1)
       .withReturnData(ByteString.empty)
-      .withLogs(transferLogs)
+      .withLogs(transferLogs ++ eip7708Logs)
 
     if shouldDelete then state1.withAddressToDelete(state.ownAddress).halt
     else state1.halt
@@ -1338,9 +1584,35 @@ case object SELFDESTRUCT extends OpCode(0xff, 1, 0, _.G_selfdestruct):
       then state.config.feeSchedule.G_newaccount
       else 0
 
+    // EIP-8038: a positive balance sent to a dead account additionally pays ACCOUNT_WRITE — the write
+    // component of creating the beneficiary's leaf. Under Amsterdam `G_newaccount` above is 0, because its
+    // state-creation component moved wholly to the state dimension (see `stateGasDelta`).
+    val accountWriteCharge: BigInt =
+      if state.config.amsterdamEnabled && isValueTransfer && state.world.isAccountDead(refundAddress) then
+        AmsterdamGas.AccountWrite
+      else BigInt(0)
+
     // Note: SELFDESTRUCT does not charge a WARM_STORAGE_READ_COST in case the recipient is already warm
     val addressAccessCharge = OpCode.addressAccessCost(state, refundAddress)(_ => 0, _.G_cold_account_access, _ => 0)
-    baseCharge + addressAccessCharge
+    baseCharge + accountWriteCharge + addressAccessCharge
+
+  /** EIP-8037: SELFDESTRUCT charges STATE_BYTES_PER_NEW_ACCOUNT x CPSB when the balance transfer creates a new account
+    * leaf.
+    *
+    * There is deliberately no *refill* here. Destroying an account created in the same transaction produces no state
+    * growth, but EIP-8037 is explicit that it produces no state-gas refill either — and a pre-existing account is not
+    * removed at all under EIP-6780, so there is nothing to credit back. That non-refill is what lets block 41's 183,600
+    * stand even though its CREATE'd child selfdestructs in the same transaction.
+    */
+  override protected def stateGasDelta[S <: Storage[S], W <: WorldStateProxy[W, S]](
+      state: ProgramState[W, S]
+  ): BigInt =
+    if !state.config.amsterdamEnabled then BigInt(0)
+    else
+      val (refundAddr, _) = state.stack.pop()
+      if state.ownBalance > UInt256.Zero && state.world.isAccountDead(Address(refundAddr)) then
+        AmsterdamGas.GasNewAccount
+      else BigInt(0)
 
   override protected def availableInContext[S <: Storage[S], W <: WorldStateProxy[W, S]]
       : ProgramState[W, S] => Boolean = !_.staticCtx

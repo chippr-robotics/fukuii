@@ -107,19 +107,47 @@ Blocks 46 and 48 reconstruct byte-exactly as one `Transfer(address,address,uint2
 `0xffffffffffffffffffffffffffffffffffffffFE`. Without these logs every receipt root and bloom after
 activation is wrong.
 
+### V6 — contract-creation transactions (added in slice B, measured)
+
+Not in the original five, and it should have been: **131 of the 522 post-activation transactions are
+contract creations**, a path none of V1–V5 touched. The chain deploys three identical initcodes on both
+sides of the fork, so each is a measured pre/post pair.
+
+| Initcode | Pre-Amsterdam | Amsterdam | What it exercises |
+|---|---|---|---|
+| 256-byte deployer (blocks 4 / 50) | 105,782 | **84,692** = the whole limit | code deposit, 200/byte → CPSB/byte |
+| LOG loop (blocks 5 / 38) | 64,613 | **44,560** = the whole limit | gas-metered loop termination |
+| SSTORE loop (blocks 6 / 39) | 119,662 | **104,258** = the whole limit | fresh-slot state charges in a loop |
+
+All three post-activation deployments consume their entire gas limit, and the mechanism is EIP-2780's
+**pre-execution phase**: the 183,600 new-account charge is a runtime charge applied after the
+transaction is already valid but before the first frame, and none of the three is funded for it. Per
+EIP-2780 the transaction stays valid and included — it is charged for everything consumed and reverted.
+An implementation that instead rejected these transactions, or that charged the 183,600 as intrinsic
+gas, produces a different block.
+
 ## What the fixture does NOT cover
 
 Recorded so it is not mistaken for coverage. Maximum `tx.gas` across the chain's 612 transactions is
 **1,628,065** (block 14, legacy), far
-below `TX_MAX_GAS_LIMIT`, so `state_gas_reservoir = 0` in **every** transaction:
+below `TX_MAX_GAS_LIMIT`, so `state_gas_reservoir = 0` in **every** transaction.
 
-- reservoir seeding above the threshold
-- cross-frame reservoir passing (full, not 63/64)
-- LIFO refill ordering
-- `state_gas_committed` and the successful-child merge
-- `STORAGE_CLEAR_REFUND` 11,616 — no transaction in the chain clears a slot
-- EIP-7778's no-refund block accounting
-- the EIP-7928 creation pre-check ordering, for a creation that fails its pre-checks
+Status after slice B. **A written vector is weaker evidence than a measured one**; the distinction is
+kept explicit rather than collapsed into a tick.
 
-**Fixture-green is necessary, not sufficient.** These need `ethereum/execution-spec-tests`
-`tests/amsterdam/` vectors, which compounds the gate gap declared in `plan.md`.
+| Behaviour | Status |
+|---|---|
+| reservoir seeding above the threshold | **written vector** — `AmsterdamStateGasReservoirSpec`, incl. the exact-threshold boundary |
+| cross-frame reservoir passing (full, not 63/64) | **written vector**, and confirmed discriminating: forwarding at 63/64 makes it fail |
+| LIFO refill ordering | **written vector** (unit-level; the ordering is unobservable end to end unless gas runs out) |
+| the successful-child merge | **written vector** (unit-level, both the simple and the child-draw case) |
+| the reservoir being *necessary* — `gas_left` exhausted while the reservoir funds a charge | **still uncovered**. Reaching it needs an intrinsic cost near 2^24, i.e. ~1 MB of calldata |
+| `state_gas_committed` | **still uncovered**. Implemented (EIP-7702 commit ordering) but no vector reaches it |
+| EIP-7702 authorization state charges under EIP-2780 | **still uncovered**. The chain's single Type-4 transaction is pre-activation |
+| `STORAGE_CLEAR_REFUND` 11,616 | **still uncovered** — no transaction in the chain clears a slot |
+| EIP-7778's no-refund block accounting | **still uncovered** — implemented, but no fixture transaction earns a refund |
+| the EIP-7928 creation pre-check ordering, for a creation that fails its pre-checks | **still uncovered** (slice C, T041) |
+
+**Fixture-green is necessary, not sufficient.** The rows still marked uncovered need
+`ethereum/execution-spec-tests` `tests/amsterdam/` vectors, which compounds the gate gap declared in
+`plan.md`.

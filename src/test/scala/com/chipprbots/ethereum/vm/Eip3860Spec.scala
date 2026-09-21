@@ -134,7 +134,15 @@ class Eip3860Spec extends AnyWordSpec with Matchers:
     "testing transaction intrinsic gas" should {
       "include initcode cost for create transactions after Spiral" taggedAs (UnitTest, VMTest) in {
         val initCode = fxt.initCodeOfSize(1024) // 32 words = 64 gas
-        val baseGas = configSpiral.calcTransactionIntrinsicGas(initCode, isContractCreation = true, Seq.empty)
+        val baseGas = configSpiral.calcTransactionIntrinsicGas(
+          initCode,
+          isContractCreation = true,
+          Seq.empty,
+          0,
+          None,
+          UInt256.Zero,
+          Address(0)
+        )
 
         // Base gas = 21000 (G_transaction) + 32000 (G_txcreate) + data cost + initcode cost
         // Note: initCodeOfSize uses JUMPDEST (0x5b) which is non-zero, so most bytes are non-zero
@@ -142,14 +150,38 @@ class Eip3860Spec extends AnyWordSpec with Matchers:
         // Initcode cost: 32 words * 2 gas/word = 64
         // We just verify it's higher than without initcode cost
         val baseGasPreSpiral =
-          configPreSpiral.calcTransactionIntrinsicGas(initCode, isContractCreation = true, Seq.empty)
+          configPreSpiral.calcTransactionIntrinsicGas(
+            initCode,
+            isContractCreation = true,
+            Seq.empty,
+            0,
+            None,
+            UInt256.Zero,
+            Address(0)
+          )
         baseGas shouldBe (baseGasPreSpiral + 64)
       }
 
       "not include initcode cost for non-create transactions" taggedAs (UnitTest, VMTest) in {
         val data = fxt.initCodeOfSize(1024)
-        val baseGas = configSpiral.calcTransactionIntrinsicGas(data, isContractCreation = false, Seq.empty)
-        val baseGasPreSpiral = configPreSpiral.calcTransactionIntrinsicGas(data, isContractCreation = false, Seq.empty)
+        val baseGas = configSpiral.calcTransactionIntrinsicGas(
+          data,
+          isContractCreation = false,
+          Seq.empty,
+          0,
+          Some(Address(1)),
+          UInt256.Zero,
+          Address(0)
+        )
+        val baseGasPreSpiral = configPreSpiral.calcTransactionIntrinsicGas(
+          data,
+          isContractCreation = false,
+          Seq.empty,
+          0,
+          Some(Address(1)),
+          UInt256.Zero,
+          Address(0)
+        )
 
         // Non-create transactions don't get initcode cost
         baseGas shouldBe baseGasPreSpiral
@@ -237,7 +269,15 @@ class Eip3860Spec extends AnyWordSpec with Matchers:
         // Use configSpiral which has EIP-3860 enabled
 
         // Calculate intrinsic gas with EIP-3860 enabled
-        val intrinsicGas = configSpiral.calcTransactionIntrinsicGas(initCode, isContractCreation = true, Seq.empty)
+        val intrinsicGas = configSpiral.calcTransactionIntrinsicGas(
+          initCode,
+          isContractCreation = true,
+          Seq.empty,
+          0,
+          None,
+          UInt256.Zero,
+          Address(0)
+        )
 
         // Should include initcode cost (49152 bytes = 1536 words = 3072 gas)
         val initcodeCost = configSpiral.calcInitCodeCost(initCode)

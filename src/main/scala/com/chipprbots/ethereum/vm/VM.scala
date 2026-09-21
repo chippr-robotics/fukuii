@@ -42,12 +42,35 @@ class VM[W <: WorldStateProxy[W, S], S <: Storage[S]](
       )
     }
 
-    context.recipientAddr match
-      case Some(recipientAddr) =>
-        call(context, recipientAddr)
+    // EIP-2780: the pre-execution phase (account-creation state charge) could not be funded. The
+    // transaction stays valid and included — it simply skips execution and reverts, exactly as an
+    // out-of-gas halt inside a call frame would. Validity was decided by the intrinsic check alone.
+    if context.preExecutionOutOfGas then
+      ProgramResult[W, S](
+        returnData = ByteString.empty,
+        gasRemaining = 0,
+        world = context.world,
+        addressesToDelete = Set.empty,
+        logs = Nil,
+        internalTxs = Nil,
+        gasRefund = 0,
+        error = Some(OutOfGas),
+        accessedAddresses = Set.empty,
+        accessedStorageKeys = Set.empty,
+        // EIP-2780: the pre-execution phase is rolled back in full, so the reservoir goes back to the
+        // value it had at the start of the transaction and is returned to the sender at settlement.
+        // `gas_left` is consumed, as for any exceptional halt.
+        stateGasReservoir = context.initialStateGasReservoir,
+        evmStateGasUsed = 0,
+        stateGasBaseline = context.initialStateGasReservoir
+      )
+    else
+      context.recipientAddr match
+        case Some(recipientAddr) =>
+          call(context, recipientAddr)
 
-      case None =>
-        create(context)._1
+        case None =>
+          create(context)._1
 
   /** Message call - Θ function in YP
     */
@@ -78,7 +101,24 @@ class VM[W <: WorldStateProxy[W, S], S <: Storage[S]](
             val world1 = if context.doTransfer then makeTransfer else context.world
             val context1: PC = context.copy(world = world1)
 
-            if PrecompiledContracts.isDefinedAt(context1) then PrecompiledContracts.run(context1)
+            // EIP-7708: a log is issued for any non-zero-value-transferring CALL to a DIFFERENT account,
+            // at the time the transfer executes — i.e. here, at frame entry, so it precedes every log the
+            // called code emits. DELEGATECALL and CALLCODE carry `doTransfer = false` and STATICCALL a zero
+            // endowment, so none of them qualifies.
+            //
+            // Seeding it into the frame rather than appending it at the call site is deliberate: the log
+            // then follows the frame's fate automatically, and a reverted frame drops it along with the
+            // transfer it recorded.
+            val transferLogs: Seq[com.chipprbots.ethereum.domain.TxLogEntry] =
+              if context.evmConfig.amsterdamEnabled && context.doTransfer &&
+                context.endowment > UInt256.Zero && context.callerAddr != recipientAddr
+              then Seq(AmsterdamGas.transferLog(context.callerAddr, recipientAddr, context.endowment))
+              else Nil
+
+            if PrecompiledContracts.isDefinedAt(context1) then
+              val precompileResult = PrecompiledContracts.run(context1)
+              if transferLogs.isEmpty then precompileResult
+              else precompileResult.copy(logs = transferLogs ++ precompileResult.logs)
             else
               val code = resolveCode(world1, recipientAddr)
               val env = ExecEnv(context1, code, ownerAddr)
@@ -87,7 +127,7 @@ class VM[W <: WorldStateProxy[W, S], S <: Storage[S]](
               val delegationTarget =
                 try SetCodeTransaction.parseDelegation(world1.getCode(recipientAddr))
                 catch case _: Exception => None
-              val initialState: PS = ProgramState(this, context1, env)
+              val initialState: PS = ProgramState(this, context1, env).withLogs(transferLogs)
               val warmState = delegationTarget match
                 case Some(target) => initialState.addAccessedAddress(target)
                 case None         => initialState
@@ -210,7 +250,15 @@ class VM[W <: WorldStateProxy[W, S], S <: Storage[S]](
                 )
                   .addAccessedAddress(contractAddr)
 
-              val execResult = exec(initialState).toResult
+              // EIP-7708: a CREATE/CREATE2 endowment is a value transfer to the created account and
+              // carries the same log, emitted at the time the transfer executes.
+              val endowedState =
+                if context.evmConfig.amsterdamEnabled && context.endowment > UInt256.Zero &&
+                  context.callerAddr != contractAddr
+                then initialState.withLog(AmsterdamGas.transferLog(context.callerAddr, contractAddr, context.endowment))
+                else initialState
+
+              val execResult = exec(endowedState).toResult
 
               val newContractResult = saveNewContract(context, contractAddr, execResult, env.evmConfig)
               (newContractResult, contractAddr)
@@ -286,7 +334,13 @@ class VM[W <: WorldStateProxy[W, S], S <: Storage[S]](
       0,
       Some(InvalidCall),
       accessedAddresses,
-      accessedStorageKeys
+      accessedStorageKeys,
+      // EIP-8037: an operation that is unsuccessful BEFORE entering the call frame charges nothing and
+      // returns the reservoir exactly as it was handed over. Returning the defaults (0) instead would
+      // silently destroy the parent's reservoir.
+      stateGasReservoir = context.stateGasReservoir,
+      evmStateGasUsed = context.evmStateGasUsed,
+      stateGasBaseline = context.stateGasBaselineOverride.getOrElse(context.stateGasReservoir)
     )
 
   private def exceedsMaxContractSize(context: PC, config: EvmConfig, contractCode: ByteString): Boolean =
@@ -304,32 +358,52 @@ class VM[W <: WorldStateProxy[W, S], S <: Storage[S]](
         if result.error.contains(RevertOccurs) then result else result.copy(gasRemaining = 0)
       else
         val contractCode = result.returnData
-        val codeDepositCost = config.calcCodeDepositCost(contractCode)
+
+        // EIP-8037 splits the code-deposit charge across both dimensions: the durable bytes are state gas
+        // at CPSB each, and only the hashing work — 6 per 32-byte word — stays in execution gas. The
+        // Amsterdam fee schedule sets G_codedeposit to 0, so the legacy 200/byte term vanishes here rather
+        // than being double-counted.
+        val codeDepositExecutionCost: BigInt =
+          if config.amsterdamEnabled then config.feeSchedule.G_sha3word * wordsForBytes(contractCode.size)
+          else config.calcCodeDepositCost(contractCode)
+        val codeDepositStateCost: BigInt =
+          if config.amsterdamEnabled then AmsterdamGas.Cpsb * contractCode.size else BigInt(0)
+        // State gas draws from the reservoir first and from gas_left only for the remainder.
+        val stateCostFromGasLeft: BigInt = (codeDepositStateCost - result.stateGasReservoir).max(0)
 
         val maxCodeSizeExceeded = exceedsMaxContractSize(context, config, contractCode)
-        val codeStoreOutOfGas = result.gasRemaining < codeDepositCost
+        val codeStoreOutOfGas = result.gasRemaining < codeDepositExecutionCost + stateCostFromGasLeft
         // EIP-3541: Reject new contracts starting with 0xEF byte
         val startsWithEF = config.eip3541Enabled && contractCode.nonEmpty && contractCode.head == 0xef.toByte
 
         if startsWithEF then
           // EIP-3541: Code starting with 0xEF byte causes exceptional abort
-          result.copy(error = Some(InvalidCode), gasRemaining = 0)
+          result.copy(error = Some(InvalidCode), gasRemaining = 0).withStateGasRestoredToBaseline
         else if maxCodeSizeExceeded || (codeStoreOutOfGas && config.exceptionalFailedCodeDeposit) then
-          // Code size too big or code storage causes out-of-gas with exceptionalFailedCodeDeposit enabled
-          result.copy(error = Some(OutOfGas), gasRemaining = 0)
+          // Code size too big or code storage causes out-of-gas with exceptionalFailedCodeDeposit enabled.
+          // The frame itself completed normally, so `ProgramState.toResult` did NOT roll its state gas
+          // back — this is the one exit where the rollback has to be applied after the fact.
+          result.copy(error = Some(OutOfGas), gasRemaining = 0).withStateGasRestoredToBaseline
         else if codeStoreOutOfGas && !config.exceptionalFailedCodeDeposit then
-          // Code storage causes out-of-gas with exceptionalFailedCodeDeposit disabled
+          // Code storage causes out-of-gas with exceptionalFailedCodeDeposit disabled. Pre-Homestead only,
+          // and pre-Amsterdam by construction: the frame keeps its gas and its state, and no code is stored.
           result
         else
           // Code storage succeeded
           result.copy(
-            gasRemaining = result.gasRemaining - codeDepositCost,
+            gasRemaining = result.gasRemaining - codeDepositExecutionCost - stateCostFromGasLeft,
+            stateGasReservoir = result.stateGasReservoir - (codeDepositStateCost - stateCostFromGasLeft),
+            evmStateGasUsed = result.evmStateGasUsed + codeDepositStateCost,
+            stateGasFromGasLeft = result.stateGasFromGasLeft + stateCostFromGasLeft,
             world = result.world.saveCode(address, result.returnData)
           )
 
     if tracing then
       val contractCodeSize = result.returnData.size
-      val codeDepositCost = config.calcCodeDepositCost(result.returnData)
+      val codeDepositCost =
+        if config.amsterdamEnabled then
+          config.feeSchedule.G_sha3word * wordsForBytes(contractCodeSize) + AmsterdamGas.Cpsb * contractCodeSize
+        else config.calcCodeDepositCost(result.returnData)
       val maxCodeSizeExceeded = exceedsMaxContractSize(context, config, result.returnData)
       val codeStoreOutOfGas = result.gasRemaining < codeDepositCost
       log.info(

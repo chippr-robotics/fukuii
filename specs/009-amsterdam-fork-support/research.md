@@ -85,6 +85,15 @@ Execution gas 143,347 reproduced from the pre-Amsterdam baseline **[D]**:
 | `CREATE`: `GAS_CREATE 32,000` → `CREATE_ACCESS 12,000`; 120×1530 moves to state gas | −20,000 |
 | **= 143,347** | **exactly 326,947 − 183,600** ✓ |
 
+**Read the SSTORE row carefully — it is not a repricing.** It is the difference between two *different*
+storage transitions, and mistaking it for one costs an hour. At block 24 the hash-keyed slot is
+**created** (`GAS_SSET 20,000 + cold 2,100 = 22,100`) while slot 0 is an existing warm update
+(`G_sreset 2,900`). At block 41 both slots already exist, so under EIP-8038 they cost
+`COLD_STORAGE_ACCESS 2,100 + STORAGE_WRITE 10,000 = 12,100` and `WARM_ACCESS 100 + STORAGE_WRITE 10,000
+= 10,100`. `(12,100 + 10,100) − (22,100 + 2,900) = −2,800`. Like for like, EIP-8038 *raises* an
+existing-slot write by ~7,100. Confirmed by executing the real bytecode: blocks 8 (165,447), 24
+(168,247) and 41 (326,947 / 183,600) all reproduce to the gas unit in `AmsterdamGasAccountingSpec`.
+
 Corroborating exact reproductions **[D]** vs **[M]**: `tx-callrevert` 23,201 → 17,201;
 `tx-emit-legacy` pre-fork 49,768; `tx-emit-eip1559` 49,068 (block 9) and 51,868 (block 25); and
 self-transfers costing exactly **12,000** = `TX_BASE_COST` alone, confirming EIP-2780's self-transfer

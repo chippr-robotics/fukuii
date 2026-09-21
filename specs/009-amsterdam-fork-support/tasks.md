@@ -78,7 +78,7 @@ land with Slice A.
 - [x] T004 Add `isAmsterdamTimestamp(timestamp: Timestamp): Boolean` to `BlockchainConfig` in `src/main/scala/com/chipprbots/ethereum/utils/BlockchainConfig.scala`, following the exact shape of `isOsakaTimestamp`
 - [x] T005 Parse HOCON key `amsterdam-timestamp` alongside `osaka-timestamp` in `BlockchainConfig`'s reader in `src/main/scala/com/chipprbots/ethereum/utils/BlockchainConfig.scala`
 - [x] T006 [P] Declare `amsterdam-timestamp` in `src/main/resources/conf/base/chains/hive-chain.conf` only, wired from the hive harness. Do NOT add it to `eth-chain.conf` or `sepolia-chain.conf` — neither network has scheduled Amsterdam, and declaring it would activate untested consensus rules on a live chain
-- [ ] T007 [US3] Write `src/test/scala/com/chipprbots/ethereum/utils/ChainConfigMatrixSpec.scala` asserting that every ETC-family shipped config (`etc-chain.conf`, `mordor-chain.conf`, `gorgoroth-chain.conf`) has `forkTimestamps.amsterdamTimestamp.isEmpty`. **This is FR-004 as a test rather than a convention** — safety-by-omission is only as good as the configs, and nothing currently catches a stray declaration
+- [x] T007 [US3] Write `src/test/scala/com/chipprbots/ethereum/utils/ChainConfigMatrixSpec.scala` asserting that every ETC-family shipped config (`etc-chain.conf`, `mordor-chain.conf`, `gorgoroth-chain.conf`) has `forkTimestamps.amsterdamTimestamp.isEmpty`. **This is FR-004 as a test rather than a convention** — safety-by-omission is only as good as the configs, and nothing currently catches a stray declaration
 
 **Checkpoint**: Amsterdam is declarable, absent everywhere it should be absent, and a test says so.
 
@@ -108,7 +108,11 @@ and honestly. That is the expected outcome, not a reason to bundle it with Slice
 - [x] T014 [US2] Add the `HefPostAmsterdam` case to `BlockHeader.validateFieldCount` in `src/main/scala/com/chipprbots/ethereum/domain/BlockHeader.scala`, and a case to `src/test/scala/com/chipprbots/ethereum/domain/BlockHeaderFieldCountSpec.scala` — this is the separate shape-versus-active-fork check, not the decoder arity check, and it needs the new shape too
 - [x] T015 [US3] Run the four ETC regression suites and confirm green with no assertion edits: `sbt "testOnly *SpiralToOlympiaGasTransitionSpec* *OlympiaBlockHeaderValidationSpec* *OlympiaGasLimitSpec* *GasLimitCalculationSpec*"`
 
-**Slice A is DONE and verified**, except T007.
+**Slice A is DONE and verified.** T007 landed with slice B as `ChainConfigMatrixSpec` — it loads the
+shipped `blockchains.conf` the way the application assembles it (mounted at `fukuii`, so the
+`${fukuii.olympia.treasury-address}` substitutions and `include required(...)` directives resolve as at
+runtime) and asserts `amsterdamTimestamp.isEmpty` for `etc`, `mordor` and `gorgoroth`, plus a positive
+control so the assertion cannot pass by the reader silently failing to parse the key.
 
 ```
 VERIFY: ran sbt scalafmtCheckAll — result: PASS
@@ -152,10 +156,8 @@ devp2p block 36+ now decodes to `HefPostAmsterdam` and is rejected by `validateE
 stops at 36 either way, but the reason moved. Also `GenesisDataLoader.scala:188-211` has no Amsterdam
 branch, so a fixture with `amsterdamTime: 0` would get the Prague shape and a **wrong genesis hash**.
 
-**T007 remains outstanding and is the ETC guard** — do not let it drift. `BlockHeaderFieldCountSpec`
-now asserts the property for a *synthetic* ETC config, which is strictly weaker: it does not read the
-shipped `etc-chain.conf` / `mordor-chain.conf` / `gorgoroth-chain.conf`. FR-004 wants the shipped
-files checked.
+**T007 is CLOSED** (see above). `BlockHeaderFieldCountSpec`'s synthetic-config assertion remains, and is
+strictly weaker; `ChainConfigMatrixSpec` is the one that reads the shipped files FR-004 names.
 
 Three sites beyond this slice's stated scope needed the new variant, each a silent-failure risk
 rather than a compile error: the boopickle registries in `Picklers.scala` and
@@ -187,35 +189,65 @@ convenience, **not** as merge points.
 
 ### Tests first
 
-- [ ] T016 [US1] Write `src/test/scala/com/chipprbots/ethereum/vm/AmsterdamGasAccountingSpec.scala` covering **V1**: block 41 produces header `gasUsed` **183,600** AND receipt `cumulativeGasUsed` **326,947**. This is the decisive test for the slice — a single-counter implementation fails it and passes every weaker test
-- [ ] T017 [P] [US1] Add **V2** to `src/test/scala/com/chipprbots/ethereum/vm/AmsterdamGasAccountingSpec.scala`: each of the four `tx-emit-*` transactions halts with `status = 0`, empty bloom, zero logs and exactly 100,000 consumed
-- [ ] T018 [P] [US1] Add **V3** to `src/test/scala/com/chipprbots/ethereum/vm/AmsterdamGasAccountingSpec.scala`: block 36 `gasUsed` = 783,360 = 8 × 97,920 and block 37 = 489,600 = 5 × 97,920, both exact multiples of `STATE_BYTES_PER_STORAGE_SET(64) × CPSB(1530)` — the state dimension is the maximum in each
-- [ ] T019 [P] [US1] Add **V4** to `src/test/scala/com/chipprbots/ethereum/vm/AmsterdamIntrinsicGasSpec.scala`: transfer to existing EOA stays **21,000**, self-transfer drops to **12,000**, `tx-callrevert` drops 23,201 → **17,201**. All three directions — a blanket change either way is wrong
-- [ ] T020 [P] [US1] Add **V5** to `src/test/scala/com/chipprbots/ethereum/ledger/AmsterdamTransferLogSpec.scala`: post-activation transfer blocks reconstruct blooms with popcount 12 where pre-activation blocks 18/30/31 give 0, and block 41's popcount rises 18 → 30
+- [x] T016 [US1] Write `src/test/scala/com/chipprbots/ethereum/vm/AmsterdamGasAccountingSpec.scala` covering **V1**: block 41 produces header `gasUsed` **183,600** AND receipt `cumulativeGasUsed` **326,947**. This is the decisive test for the slice — a single-counter implementation fails it and passes every weaker test
+- [x] T017 [P] [US1] Add **V2** to `src/test/scala/com/chipprbots/ethereum/vm/AmsterdamGasAccountingSpec.scala`: each of the four `tx-emit-*` transactions halts with `status = 0`, empty bloom, zero logs and exactly 100,000 consumed
+- [x] T018 [P] [US1] Add **V3** to `src/test/scala/com/chipprbots/ethereum/vm/AmsterdamGasAccountingSpec.scala`: block 36 `gasUsed` = 783,360 = 8 × 97,920 and block 37 = 489,600 = 5 × 97,920, both exact multiples of `STATE_BYTES_PER_STORAGE_SET(64) × CPSB(1530)` — the state dimension is the maximum in each
+- [x] T019 [P] [US1] Add **V4** to `src/test/scala/com/chipprbots/ethereum/vm/AmsterdamIntrinsicGasSpec.scala`: transfer to existing EOA stays **21,000**, self-transfer drops to **12,000**, `tx-callrevert` drops 23,201 → **17,201**. All three directions — a blanket change either way is wrong
+- [x] T020 [P] [US1] Add **V5** to `src/test/scala/com/chipprbots/ethereum/ledger/AmsterdamTransferLogSpec.scala`: post-activation transfer blocks reconstruct blooms with popcount 12 where pre-activation blocks 18/30/31 give 0, and block 41's popcount rises 18 → 30
 
 ### Core restructure (forge sign-off required on every signature below)
 
-- [ ] T021 [US1] Add `executionGasUsed` and `stateGasUsed` to `BlockResult` in `src/main/scala/com/chipprbots/ethereum/ledger/BlockResult.scala`, keeping `gasUsed` as the **derived** `max(executionGasUsed, stateGasUsed)` so header construction call sites are unchanged. Pre-Amsterdam the new counters stay 0 and `gasUsed` keeps its present meaning
-- [ ] T022 [US1] Add the five frame-local state-gas fields to `ProgramState` in `src/main/scala/com/chipprbots/ethereum/vm/ProgramState.scala` per `data-model.md` §3: `stateGasReservoir`, `evmStateGasUsed`, `stateGasFromGasLeft`, `stateGasBaseline`, `stateGasCommitted`
-- [ ] T023 [US1] Implement save/restore of `stateGasBaseline` on frame entry and exit in `src/main/scala/com/chipprbots/ethereum/vm/VM.scala`, restoring to baseline on revert and on exceptional halt. **This is what makes V2 come out at `max(100,000, 0)`** rather than `max(100,000, something)` — the restore is load-bearing, not bookkeeping
-- [ ] T024 [US1] Convert `ProgramContext.startGas` to the reservoir split in `src/main/scala/com/chipprbots/ethereum/vm/ProgramContext.scala`: `gasLeft = min(TX_MAX_GAS_LIMIT - intrinsic, tx.gas - intrinsic)`, `stateGasReservoir = (tx.gas - intrinsic) - gasLeft`, with `TX_MAX_GAS_LIMIT = 2^24`
-- [ ] T025 [US1] Extend `calcTransactionIntrinsicGas` in `src/main/scala/com/chipprbots/ethereum/vm/EvmConfig.scala` with `to: Option[Address]`, `value: UInt256` and `sender: Address` — EIP-2780 cannot decompose the flat 21,000 without them. **forge sign-off before this edit**
-- [ ] T026 [US1] Update all five call sites: `src/main/scala/com/chipprbots/ethereum/consensus/validators/std/StdSignedTransactionValidator.scala:290`, `src/main/scala/com/chipprbots/ethereum/ledger/BlockPreparator.scala:409` and `:471`, `src/main/scala/com/chipprbots/ethereum/vm/ProgramContext.scala:21`, `src/main/scala/com/chipprbots/ethereum/domain/SignedTransaction.scala:620`. Every one is on a consensus path
-- [ ] T027 [US1] Add `AmsterdamFeeSchedule` to `src/main/scala/com/chipprbots/ethereum/vm/EvmConfig.scala` with the EIP-8038 figures, extending `OsakaFeeSchedule`
-- [ ] T028 [US1] Add the Amsterdam branch to the timestamp cascade in `EvmConfig.forBlock(blockNumber, timestamp, blockchainConfig)` in `src/main/scala/com/chipprbots/ethereum/vm/EvmConfig.scala`, after the Osaka branch. **Do not touch** the two-argument `forBlock(blockNumber, blockchainConfig)` overload — that is the block-number cascade ETC dispatches through
-- [ ] T029 [US1] Add the state-gas return channel to `SSTORE`, `CreateOp`, `CALL` and `SELFDESTRUCT` in `src/main/scala/com/chipprbots/ethereum/vm/OpCode.scala`, drawing from the reservoir first and then from `gas_left`. **forge sign-off before this edit**
-- [ ] T030 [US1] Implement EIP-7778 per-transaction accounting in `src/main/scala/com/chipprbots/ethereum/ledger/BlockPreparator.scala`: `tx_execution_gas = max(tx_gas_used_before_refund - tx_state_gas, calldata_floor)`, accumulating the two block counters separately while receipts keep summing `tx_gas_used`. **This is the V1 divergence** — header maximum, receipt sum
-- [ ] T031 [US1] Implement the EIP-7928 creation pre-check ordering in `src/main/scala/com/chipprbots/ethereum/vm/OpCode.scala` — defer reading the computed destination until after sender-balance, nonce-overflow and call-depth checks. **Lands in B although the commitment lands in C** (`research.md` R-2): without the ordering, 8037's creation charge gives wrong answers for creations that fail their pre-checks
-- [ ] T032 [US1] Implement EIP-7708 value-transfer logs in `src/main/scala/com/chipprbots/ethereum/ledger/BlockPreparator.scala` and the CALL path, emitted from `0xffffffffffffffffffffffffffffffffffffffFE` as ordinary `TxLogEntry` values so they flow into receipts and blooms unchanged. **In B, not C**: the cost is folded into EIP-2780's `TX_VALUE_COST` of 6,000, so it is not separable from the intrinsic work
-- [ ] T033 [P] [US1] Raise code-size and initcode-size limits to 65,536 / 131,072 under the Amsterdam gate (EIP-7954) in `src/main/scala/com/chipprbots/ethereum/vm/EvmConfig.scala`
+- [x] T021 [US1] Add `executionGasUsed` and `stateGasUsed` to `BlockResult` in `src/main/scala/com/chipprbots/ethereum/ledger/BlockResult.scala`, keeping `gasUsed` as the **derived** `max(executionGasUsed, stateGasUsed)` so header construction call sites are unchanged. Pre-Amsterdam the new counters stay 0 and `gasUsed` keeps its present meaning
+- [x] T022 [US1] Add the five frame-local state-gas fields to `ProgramState` in `src/main/scala/com/chipprbots/ethereum/vm/ProgramState.scala` per `data-model.md` §3: `stateGasReservoir`, `evmStateGasUsed`, `stateGasFromGasLeft`, `stateGasBaseline`, `stateGasCommitted`
+- [x] T023 [US1] Implement save/restore of `stateGasBaseline` on frame entry and exit in `src/main/scala/com/chipprbots/ethereum/vm/VM.scala`, restoring to baseline on revert and on exceptional halt. **This is what makes V2 come out at `max(100,000, 0)`** rather than `max(100,000, something)` — the restore is load-bearing, not bookkeeping
+- [x] T024 [US1] Convert `ProgramContext.startGas` to the reservoir split in `src/main/scala/com/chipprbots/ethereum/vm/ProgramContext.scala`: `gasLeft = min(TX_MAX_GAS_LIMIT - intrinsic, tx.gas - intrinsic)`, `stateGasReservoir = (tx.gas - intrinsic) - gasLeft`, with `TX_MAX_GAS_LIMIT = 2^24`
+- [x] T025 [US1] Extend `calcTransactionIntrinsicGas` in `src/main/scala/com/chipprbots/ethereum/vm/EvmConfig.scala` with `to: Option[Address]`, `value: UInt256` and `sender: Address` — EIP-2780 cannot decompose the flat 21,000 without them. **forge sign-off before this edit**
+- [x] T026 [US1] Update all five call sites: `src/main/scala/com/chipprbots/ethereum/consensus/validators/std/StdSignedTransactionValidator.scala:290`, `src/main/scala/com/chipprbots/ethereum/ledger/BlockPreparator.scala:409` and `:471`, `src/main/scala/com/chipprbots/ethereum/vm/ProgramContext.scala:21`, `src/main/scala/com/chipprbots/ethereum/domain/SignedTransaction.scala:620`. Every one is on a consensus path
+- [x] T027 [US1] Add `AmsterdamFeeSchedule` to `src/main/scala/com/chipprbots/ethereum/vm/EvmConfig.scala` with the EIP-8038 figures, extending `OsakaFeeSchedule`
+- [x] T028 [US1] Add the Amsterdam branch to the timestamp cascade in `EvmConfig.forBlock(blockNumber, timestamp, blockchainConfig)` in `src/main/scala/com/chipprbots/ethereum/vm/EvmConfig.scala`, after the Osaka branch. **Do not touch** the two-argument `forBlock(blockNumber, blockchainConfig)` overload — that is the block-number cascade ETC dispatches through
+- [x] T029 [US1] Add the state-gas return channel to `SSTORE`, `CreateOp`, `CALL` and `SELFDESTRUCT` in `src/main/scala/com/chipprbots/ethereum/vm/OpCode.scala`, drawing from the reservoir first and then from `gas_left`. **forge sign-off before this edit**
+- [x] T030 [US1] Implement EIP-7778 per-transaction accounting in `src/main/scala/com/chipprbots/ethereum/ledger/BlockPreparator.scala`: `tx_execution_gas = max(tx_gas_used_before_refund - tx_state_gas, calldata_floor)`, accumulating the two block counters separately while receipts keep summing `tx_gas_used`. **This is the V1 divergence** — header maximum, receipt sum
+- [x] T031 [US1] Implement the EIP-7928 creation pre-check ordering in `src/main/scala/com/chipprbots/ethereum/vm/OpCode.scala` — defer reading the computed destination until after sender-balance, nonce-overflow and call-depth checks. **Lands in B although the commitment lands in C** (`research.md` R-2): without the ordering, 8037's creation charge gives wrong answers for creations that fail their pre-checks
+- [x] T032 [US1] Implement EIP-7708 value-transfer logs in `src/main/scala/com/chipprbots/ethereum/ledger/BlockPreparator.scala` and the CALL path, emitted from `0xffffffffffffffffffffffffffffffffffffffFE` as ordinary `TxLogEntry` values so they flow into receipts and blooms unchanged. **In B, not C**: the cost is folded into EIP-2780's `TX_VALUE_COST` of 6,000, so it is not separable from the intrinsic work
+- [x] T033 [P] [US1] Raise code-size and initcode-size limits to 65,536 / 131,072 under the Amsterdam gate (EIP-7954) in `src/main/scala/com/chipprbots/ethereum/vm/EvmConfig.scala`
 
 ### Validation
 
-- [ ] T034 [US1] Run V1–V5 and confirm all pass: `sbt "testOnly *Amsterdam*"`
-- [ ] T035 [US3] Re-run `sbt "testOnly *SpiralToOlympiaGasTransitionSpec* *OlympiaBlockHeaderValidationSpec* *OlympiaGasLimitSpec* *GasLimitCalculationSpec* *ChainConfigMatrixSpec*"` — green, no assertion edits
-- [ ] T036 [US3] Add a test asserting ECIP-1111 treasury crediting in `src/main/scala/com/chipprbots/ethereum/ledger/BlockPreparator.scala` is unaffected. It computes `baseFee * blockHeader.gasUsed`, and under Amsterdam that field is a **maximum**, not a total. ETC never activates Amsterdam so this is inert — but inert-by-argument is exactly how the EIP-1559 elasticity gap was missed, so it gets an assertion
+- [x] T034 [US1] Run V1–V5 and confirm all pass: `sbt "testOnly *Amsterdam*"`
+- [x] T035 [US3] Re-run `sbt "testOnly *SpiralToOlympiaGasTransitionSpec* *OlympiaBlockHeaderValidationSpec* *OlympiaGasLimitSpec* *GasLimitCalculationSpec* *ChainConfigMatrixSpec*"` — green, no assertion edits
+- [x] T036 [US3] Add a test asserting ECIP-1111 treasury crediting in `src/main/scala/com/chipprbots/ethereum/ledger/BlockPreparator.scala` is unaffected. It computes `baseFee * blockHeader.gasUsed`, and under Amsterdam that field is a **maximum**, not a total. ETC never activates Amsterdam so this is inert — but inert-by-argument is exactly how the EIP-1559 elasticity gap was missed, so it gets an assertion
 - [ ] T037 [US1] Run the fixture end to end: `cd hive && ./hive --sim devp2p --client fukuii`. Passes when import reaches head ~89 with no `ValidationAfterExecError`. **Make no numeric prediction** for the resulting failure count — a prediction made earlier in this effort was wrong for a knowable reason
 - [ ] T038 Run both inertness oracles from `hive/` and confirm they have not moved **in either direction**: rpc-compat (baseline 40/247) and graphql (baseline 2/52). An improvement is the same signal as a regression — it means Amsterdam code ran on a chain that never activated it. Derive counts from `testCases[].summaryResult.pass` verdicts, **not** from fukuii's own logs
+
+**Slice B is implemented and verified at the unit/vector level, except T037 and T038** (hive, run by
+the coordinator).
+
+```
+VERIFY: ran sbt compile-all                          — result: PASS — 0 errors
+VERIFY: ran sbt scalafmtCheckAll                     — result: PASS
+VERIFY: ran sbt "testOnly *Amsterdam*"               — result: PASS — 5 suites, 0 failed
+VERIFY: ran sbt "testOnly *SpiralToOlympiaGasTransitionSpec* *OlympiaBlockHeaderValidationSpec*
+        *OlympiaGasLimitSpec* *GasLimitCalculationSpec* *ChainConfigMatrixSpec*"
+        — result: PASS — no assertion edits
+VERIFY: ran sbt testVM                               — result: PASS — 271 tests
+VERIFY: ran hive devp2p (T037) / rpc-compat + graphql (T038) — result: DID NOT RUN (coordinator's)
+```
+
+**Twelve measured block totals reproduce to the gas unit** by executing the fixture's own bytecode, six
+on each side of the fork. Six pre-Amsterdam figures (blocks 4, 5, 6, 8, 23, 24) validate the harness
+before any Amsterdam claim is made; six post-Amsterdam ones (blocks 38, 39, 41, 45, 50, plus block 41's
+receipt) are the result. Block 41 carries header 183,600 and receipt 326,947 simultaneously — V1.
+
+**Scope correction, measured:** 131 of the 522 post-activation transactions are contract creations, a
+path none of V1–V5 covered. They are added as **V6** in `contracts/gas-accounting.md`, and they are the
+reason `ProgramContext`'s EIP-2780 pre-execution phase is load-bearing for devp2p rather than an edge
+case: all three measured post-activation deployments run out of gas *in that phase*.
+
+**Not implemented, flagged rather than silently skipped** — see the hand-back and
+`contracts/gas-accounting.md`: EIP-8037's per-dimension block-fullness check in transaction validation,
+the `SYSTEM_CALL_GAS_LIMIT` bump for EIP-2935/4788/7002/7251 system calls, and the Amsterdam branch in
+`GenesisDataLoader` (blocked on EIP-7928's empty block-access-list commitment, which lands in slice C;
+a `log.error` fires rather than a wrong genesis hash being produced quietly).
 
 **Checkpoint**: US1 delivered. Slice B is one merge.
 

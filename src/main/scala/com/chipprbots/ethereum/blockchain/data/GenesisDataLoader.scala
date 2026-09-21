@@ -186,6 +186,22 @@ class GenesisDataLoader(
     // Empty trie root = keccak256(RLP("")) = keccak256(0x80) — NOT keccak of empty list
     val emptyWithdrawalsRoot = ByteString(crypto.kec256(rlp.encode(RLPValue(Array.empty[Byte]))))
 
+    // KNOWN GAP, stated rather than papered over: a genesis whose timestamp already activates Amsterdam
+    // gets the Prague (21-field) shape below and therefore the WRONG GENESIS HASH. The missing branch is
+    // not added here because two of the Amsterdam header's fields have no defined value yet in this
+    // codebase — `blockAccessListHash` is EIP-7928's commitment over an empty block-level access list,
+    // whose encoding lands in slice C, and guessing it would produce a hash that looks plausible and is
+    // wrong. An absent branch that logs is easier to find than a confident wrong constant.
+    //
+    // Harmless for the reference fixture (`amsterdamTime: 360` > genesis timestamp 0); a landmine for any
+    // fixture with `amsterdamTime: 0`.
+    if blockchainConfig.isAmsterdamTimestamp(genesisTimestamp) then
+      log.error(
+        "GENESIS: this chain activates Amsterdam at the genesis timestamp, but the genesis header is " +
+          "built with the Prague 21-field shape. The genesis hash WILL be wrong. Blocked on the " +
+          "EIP-7928 empty block-access-list commitment (slice C)."
+      )
+
     val extraFields = if blockchainConfig.isPragueTimestamp(genesisTimestamp) then
       val emptyRequestsHash = ByteString(java.security.MessageDigest.getInstance("SHA-256").digest(Array.empty[Byte]))
       BlockHeader.HeaderExtraFields.HefPostPrague(

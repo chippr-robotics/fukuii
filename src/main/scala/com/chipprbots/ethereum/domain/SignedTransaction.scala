@@ -616,8 +616,19 @@ object SignedTransactionWithSender:
         val authListSize = tx match
           case sct: SetCodeTransaction => sct.authorizationList.size
           case _                       => 0
+        // See StdSignedTransactionValidator for why `getSender` here is a cache hit and why the fallback
+        // is harmless: `recoverSenders` drops any transaction whose sender cannot be recovered.
+        val sender = SignedTransaction.getSender(stx).getOrElse(Address(0))
         val intrinsicGas =
-          config.calcTransactionIntrinsicGas(tx.payload, tx.isContractInit, Transaction.accessList(tx), authListSize)
+          config.calcTransactionIntrinsicGas(
+            tx.payload,
+            tx.isContractInit,
+            Transaction.accessList(tx),
+            authListSize,
+            tx.receivingAddress,
+            UInt256(tx.value),
+            sender
+          )
         tx.gasLimit.value >= intrinsicGas
     }
 
