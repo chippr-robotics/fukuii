@@ -107,7 +107,15 @@ FLAGS="$FLAGS -Dfukuii.network.rpc.http.port=8545"
 # in NodeBuilder's `available`), but they were never served under hive because
 # this line did not expose the namespace. Those three failures were a gap in
 # the harness configuration, not in the client.
-FLAGS="$FLAGS -Dfukuii.network.rpc.apis=eth,web3,net,debug,txpool"
+# `admin` added 2026-09-21 (#1407). hive/fukuii/enode.sh calls admin_nodeInfo to
+# discover this node's P2P identity. admin_nodeInfo is implemented
+# (JsonRpcController.scala:495, Apis.Admin = "admin") but the namespace was not
+# exposed, so the call returned method-not-found, enode.sh fell through to its
+# last-resort branch and emitted a literal "unknown" as the public key. hive then
+# failed every devp2p test with `invalid public key (encoding/hex: invalid byte:
+# U+0075 'u')` — the 'u' of "unknown". Same shape as the txpool gap above:
+# implemented method, unexposed namespace, failure attributed to the client.
+FLAGS="$FLAGS -Dfukuii.network.rpc.apis=eth,web3,net,debug,txpool,admin"
 
 # Engine API — only enable for post-merge chains (TTD is not MAX)
 if [ "$TTD" != "$MAX" ]; then
