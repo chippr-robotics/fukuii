@@ -62,10 +62,34 @@ for every scope decision. The one genuinely open question — the unexplained ga
 clarification the user can answer; it is research that belongs in `/speckit-plan`, and it is recorded as
 such rather than deferred to a question.
 
+**Iteration 2 — re-validation after Phase 0 research (2026-09-21):**
+
+Phase 0 forced two corrections to the spec, so the checklist was re-run against the amended text.
+
+1. *A missing EIP, not a scope expansion.* Research reconstructed receipts and blooms across the
+   activation boundary and found value-transfer logs the original scope list omitted. The spec's own
+   rule is that scope is whatever the fixture exercises; the fixture exercises this, so the spec was
+   incomplete and is corrected (FR-019). Recording it as an expansion would have been a nicer story
+   and a false one. Item *Scope is clearly bounded* re-checked and still passes — the boundary rule
+   did not move, only its application.
+
+2. *The unresolved arithmetic (iteration 1, finding 4) is closed.* Both figures were reproduced
+   against decoded fixture data. FR-017 no longer describes them as unexplained; it now requires the
+   implementation to reproduce the established derivations. One of the two turned out not to be an
+   arithmetic question at all — the field reports a maximum, not a total — which is why it resisted
+   derivation from the totals. This is recorded because it vindicates writing the figure down as a
+   binding gate rather than a footnote: the wrong model would otherwise have been carried into
+   implementation and found by a failing receipt root.
+
+Both amendments also propagated to `plan.md`, which merged two slices on the strength of the
+dependency finding. Item *Requirements are testable and unambiguous* re-checked for FR-019 and the
+revised FR-017: both name observable outcomes (bloom content, a header/receipt divergence) that a test
+can assert. **All 16 items still pass.**
+
 ## Notes
 
 - Items marked incomplete require spec updates before `/speckit-clarify` or `/speckit-plan`
-- All items pass as of iteration 1. Spec is ready for `/speckit-plan`.
+- All items pass as of iteration 2. Spec is ready for `/speckit-tasks`.
 - **Constitution alignment**: this feature is consensus-critical throughout (Principle I). Planning must
   route ETH implementation through `beacon` and obtain `forge` sign-off that ETC is untouched, per the
   Consensus-Critical Change Protocol. FR-004 and FR-018 encode the ETC-safety constraint as testable

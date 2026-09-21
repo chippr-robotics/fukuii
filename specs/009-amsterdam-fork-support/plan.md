@@ -13,10 +13,12 @@ fukuii cannot import hive's `devp2p` fixture chain past block 36, the first Amst
 stalls at head 35 of ~89 and advertises a head peers reject, which is why 27 of that suite's 34
 failures are `wrong head block in status`. fukuii has no Amsterdam support at all.
 
-The work splits into three independently shippable P1 slices plus one P2. The header-decoder slice
-fixes live corruption today and has no dependency on any Amsterdam gas work, so it lands first. The
-gas work is gated behind closing the arithmetic in Phase 0 — the spec makes that a completion gate
-(FR-017), not a footnote.
+The header-decoder slice fixes live corruption today, has no dependency on any Amsterdam gas work,
+and lands first. **Phase 0 is complete** (`research.md`): both FR-017 figures are closed against the
+decoded fixture, and the answer changed this plan's sequencing. The provisional split of the gas work
+into two slices does not survive — EIP-2780, 8037, 8038 and 7778 are numerically interdependent and
+land as one atomic slice. Phase 0 also found a missing EIP (value-transfer logs), now added to the
+spec as FR-019.
 
 ## Technical Context
 
@@ -145,12 +147,14 @@ hive/fukuii/fukuii.sh                 # map HIVE_AMSTERDAM_TIMESTAMP -> amsterda
 established timestamp-fork pattern already used for Shanghai, Cancun, Prague and Osaka, which keeps
 ETC safe by omission rather than by an explicit guard.
 
-## Sequencing — three P1 slices, landed separately
+## Sequencing — four slices, landed separately
 
-The spec deliberately assigns P1 to three stories because each is independently shippable. This plan
-commits to landing them as **separate bucket-C commits**, not one change.
+**Revised by Phase 0.** The spec assigns P1 to three stories on the judgement that each is
+independently shippable. Research confirmed that for the header work (slice A) and refuted it for the
+gas work: the two gas slices are numerically interdependent and merge into one atomic slice B. What
+follows is the corrected sequence, landed as **separate bucket-C commits**, not one change.
 
-### Slice 1 — Strict header field-count decoding (User Story 2)
+### Slice A — Strict header field-count decoding (User Story 2)
 
 **Lands first. No dependency on any Amsterdam work.**
 
@@ -168,34 +172,64 @@ than refusing a block it cannot represent. The replacement must reject, not trun
 
 **Risk**: low. Reject-unknown is strictly safer than truncate-silently.
 
-### Slice 2 — Activation plumbing + non-structural repricing
+### Slice B — the atomic gas change (was slices 2 and 3)
 
 `amsterdamTimestamp` on `ForkTimestamps`, `isAmsterdamTimestamp`, the `EvmConfig` cascade branch, an
-`AmsterdamFeeSchedule`, EIP-2780 intrinsic decomposition, EIP-7954 code-size limits, and the two new
-header fields as a `HefPostAmsterdam` variant.
+`AmsterdamFeeSchedule`, EIP-2780 intrinsic decomposition, EIP-8038 state-access repricing, EIP-8037's
+state-gas dimension, EIP-7778 block accounting, EIP-7954 code-size limits, and EIP-7708 value-transfer
+logs.
 
-**[PENDING Phase 0]** — whether EIP-2780/8038 can land without EIP-8037/7778 depends on the research
-outcome. If the gas dimensions are entangled, slices 2 and 3 merge.
+**Phase 0 merged the two slices.** They cannot be sequenced independently and the evidence is
+arithmetic, not stylistic: block 41's header figure is only reproducible with 8037's per-dimension
+maximum, 8038's creation-access price and 2780's decomposed intrinsic *simultaneously* — no
+two-of-three gives it. Beyond that, 2780's parameter table imports 8038's values and 8037's products,
+so 2780 alone is not numerically defined; 2780 moves account creation out of intrinsic gas into a
+runtime charge that must land in 8037's state dimension, so 2780 without 8037 leaves account creation
+uncharged; and 8038 explicitly defers two of its constants to 8037, so 8038 alone produces a pricing
+state that exists in no client. Landing them separately would ship two intermediate states that are
+wrong by construction.
 
-**Risk**: medium. Touches the shared `EvmConfig` cascade. ETC safety rests on omission; a
-config-matrix test asserting no ETC chain declares an Amsterdam activation is required, mirroring the
-one added for `olympiaGasLimitElasticity`.
+EIP-7708 joins this slice rather than slice C because it is inseparable from the intrinsic
+value-transfer charge that prices it, and because without it every receipt root and bloom after
+activation is wrong — it is not deferrable behind the gas work, it *is* part of it.
 
-### Slice 3 — EIP-8037 state-gas reservoir + EIP-7778 block accounting
+**Shape of the change** (from `research.md`, and the reason this is not a constant swap):
+`ProgramState` gains frame-local state-gas counters with save/restore on frame entry and exit;
+`ProgramContext`'s starting gas becomes a two-dimensional split; and the block-level result must carry
+**two** block counters plus a **separate** receipt counter, because the header reports a maximum while
+receipts report a sum. An implementation carrying one scalar will fail one of them. The constant
+tables are the easy part and should land last within the slice.
 
-The structural change: a second gas dimension on `ProgramState` with LIFO refills and frame-local
-rollback baselines, plus revised block-level accounting.
+**Risk**: high, and now concentrated rather than spread. This is the slice that can silently mis-meter
+every Amsterdam transaction. Two mitigations: the non-activating suites (rpc-compat, graphql) are
+regression oracles that must not move at all, and a config-matrix test must assert no ETC chain
+declares an Amsterdam activation, mirroring the one added for `olympiaGasLimitElasticity`.
 
-**[PENDING Phase 0]** — the precise model is exactly what Phase 0 must establish. Implementation must
-not begin until the two fixture figures are derived.
+**Known blind spot — carried from `research.md` R-1.** Every transaction in the fixture has a gas
+limit far below `TX_MAX_GAS_LIMIT`, so the state-gas reservoir is empty throughout and the fixture
+never exercises reservoir seeding, cross-frame passing, LIFO refill ordering, or the successful-child
+merge. Fixture-green does not close this slice. Those paths need `execution-spec-tests`
+`tests/amsterdam/` vectors, which compounds the declared gate gap above.
 
-**Risk**: high. This is the slice that can silently mis-meter every Amsterdam transaction.
+### Slice C — EIP-7928 block-level access lists
 
-### Slice 4 — EIP-7928 BAL validation + EIP-8282 builder requests (P2)
+Block-level access list computation and validation against the header commitment.
 
-Block-level access list computation and validation; the two builder system contracts and their
-contribution to `requestsHash`. Their system calls must not count against the block gas limit — the
+**Sequencing dependency on slice B is real, not cosmetic** (`research.md` R-2): EIP-8037's creation
+charge is conditional on an ordering that EIP-7928 defines — the computed destination must not be read
+until after the sender-balance, nonce-overflow and call-depth checks. Implementing 8037's creation
+charge without that ordering gives wrong answers for creations that fail their pre-checks, and the
+fixture does not cover that path. The ordering must be implemented in B even though the commitment
+itself lands in C.
+
+### Slice D — EIP-8282 builder requests (P2)
+
+The two builder system contracts and their contribution to `requestsHash`. Their system calls must not count against the block gas limit — the
 same rule fukuii already implements correctly for EIP-7002/7251, verified during diagnosis.
+
+**Open before this slice starts** (`research.md` R-6): EIP-8282 has not been read. Two Amsterdam
+blocks carry gas totals that are exact multiples of the storage-set state charge, which is measured,
+but attributing those to specific builder queue slots is inference and must be closed first.
 
 ## Test Strategy
 
@@ -203,10 +237,10 @@ Per slice, the test that fails before and passes after:
 
 | Slice | Decisive test |
 |---|---|
-| 1 | A header with an unrecognised field count is rejected; round-trip decode/encode reproduces canonical bytes and hash for every supported fork |
-| 2 | Intrinsic cost: value transfer to existing EOA unchanged; zero-value call to contract cheaper by the derived delta. Config matrix: no ETC chain declares Amsterdam |
-| 3 | The fixture's Amsterdam gas figures reproduced exactly, including the two currently-unexplained ones (FR-017) |
-| 4 | BAL commitment matches; builder request commitment matches; builder system calls excluded from block gas |
+| A | A header with an unrecognised field count is rejected; round-trip decode/encode reproduces canonical bytes and hash for every supported fork |
+| B | Intrinsic cost: transfer to an existing EOA unchanged at 21,000, self-transfer at 12,000, zero-value contract call cheaper by the derived delta. **Header/receipt divergence**: block 41 must produce header `gasUsed` 183,600 *and* receipt `cumulativeGasUsed` 326,947 — a single-counter implementation fails this and passes nothing weaker. **Measured OOG**: the four `tx-emit-*` variants must each halt with status 0, empty bloom, zero logs and 100,000 consumed. **Transfer logs**: post-activation transfer blocks must reproduce their blooms, which are non-empty where the pre-activation ones are empty. Config matrix: no ETC chain declares Amsterdam |
+| C | BAL commitment matches; creation pre-check ordering gives the right answer for a creation that fails its pre-checks (not fixture-covered — needs a written vector) |
+| D | Builder request commitment matches; builder system calls excluded from block gas |
 
 **ETC regression guard, every slice**: `SpiralToOlympiaGasTransitionSpec`,
 `OlympiaBlockHeaderValidationSpec`, `OlympiaGasLimitSpec`, `GasLimitCalculationSpec` must stay green
@@ -224,22 +258,26 @@ activity.
 before the `wrong head block in status` failures can move, and how far they then move is not derivable
 in advance.
 
-## Phase 0: Research — IN FLIGHT
+## Phase 0: Research — COMPLETE
 
-Open items, all assigned:
+Output: [`research.md`](./research.md). All five open items closed.
 
-1. **Derive 183,600** (`tx-calltree` Amsterdam total) from named constants and normative clauses.
-2. **Derive 100,000** (four `tx-emit-*` variants collapsing to their gas limit).
-3. **Establish the gas model**: relationship between execution-gas and state-gas dimensions; what the
-   header's `gasUsed` contains under EIP-7778; refill, refund and frame-revert semantics.
-4. **EIP dependency ordering**: can 2780/8038 land without 8037/7778, or are they atomic?
-5. **Blast radius** per EIP, flagging anything shared with the ETC path.
+| # | Item | Outcome |
+|---|---|---|
+| 1 | Derive 183,600 (`tx-calltree`) | **Closed.** The header reports `max(execution, state)`, not a total. State gas is one term; execution gas 143,347 reproduced term-by-term from the pre-fork baseline |
+| 2 | Derive 100,000 (four `tx-emit-*`) | **Closed, and measured rather than derived.** Out-of-gas: status 0, empty bloom, zero logs recovered byte-exactly from the receipt trie, with the contract's counter frozen at the pre-fork invocation count |
+| 3 | Establish the gas model | **Closed.** Two block counters plus a separate receipt counter; reservoir empty below `TX_MAX_GAS_LIMIT`; state charges restore to baseline on exceptional halt |
+| 4 | EIP dependency ordering | **Closed — atomic.** Drove the slice merge above |
+| 5 | Blast radius | **Closed.** Shared-signature surface enumerated in `research.md`; `forge` sign-off required before any of it is edited |
 
-Method constraint: reproduce against the decoded fixture, not from EIP text alone. Four diagnoses in
-the preceding effort were wrong from reasoning about source without checking what the harness emits;
-the two that held came from decoding the fixture.
+The method constraint held: the machinery (RLP decoder, keccak, single-entry MPT root, receipt and
+bloom construction) was validated against known pre-Amsterdam blocks *before* being trusted on
+Amsterdam ones, and every figure above is marked in `research.md` as measured, derived, or inferred.
+Two findings — the missing EIP and the slice merge — would not have surfaced from EIP text alone,
+which is the point.
 
-**Output**: `research.md` with each figure either closed by arithmetic or explicitly declared open.
+**Research changed the plan.** Both corrections are carried above rather than noted and ignored:
+slices 2 and 3 are merged into B, and EIP-7708 is added to B and to the spec as FR-019.
 
 ## Phase 1: Design & Contracts — after Phase 0
 
