@@ -245,9 +245,22 @@ case: all three measured post-activation deployments run out of gas *in that pha
 
 **Not implemented, flagged rather than silently skipped** — see the hand-back and
 `contracts/gas-accounting.md`: EIP-8037's per-dimension block-fullness check in transaction validation,
-the `SYSTEM_CALL_GAS_LIMIT` bump for EIP-2935/4788/7002/7251 system calls, and the Amsterdam branch in
-`GenesisDataLoader` (blocked on EIP-7928's empty block-access-list commitment, which lands in slice C;
-a `log.error` fires rather than a wrong genesis hash being produced quietly).
+and the Amsterdam branch in `GenesisDataLoader` (blocked on EIP-7928's empty block-access-list
+commitment, which lands in slice C; a `log.error` fires rather than a wrong genesis hash being produced
+quietly).
+
+**`SYSTEM_CALL_GAS_LIMIT` bump — CLOSED in slice D (T044), and it is not builder-only.** EIP-8037
+defines `SYSTEM_CALL_GAS_LIMIT` as one global constant, so `BlockExecution.scala:~420` funds *every*
+VM-executed system call on an Amsterdam block at `AmsterdamGas.SystemCallGasLimit` (31,566,720), which
+includes the already-shipped EIP-7002/7251 calls — not only the two EIP-8282 ones. Scoping the bump to
+the builder pair would invent a two-constant model no reference client has. EIP-2935 and EIP-4788 need
+no change because this client applies them as direct storage writes rather than EVM calls (the
+optimisation EIP-4788 explicitly permits), so they have no ceiling to raise. No fixture block
+distinguishes 30,000,000 from 31,566,720 — every dequeue path is orders of magnitude below both — so
+the no-op claim is carried by an oracle instead: `AmsterdamBuilderRequestsSpec` → "leave the EIP-7002/7251
+system calls byte-identical when Amsterdam raises the gas ceiling" runs the fixture's own withdrawal and
+consolidation bytecode over a non-empty queue on both sides of the fork and requires identical requests,
+identical storage and an identical state root.
 
 **Checkpoint**: US1 delivered. Slice B is one merge.
 

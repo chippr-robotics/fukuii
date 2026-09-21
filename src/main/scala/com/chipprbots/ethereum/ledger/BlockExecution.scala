@@ -17,6 +17,7 @@ import com.chipprbots.ethereum.utils.BlockchainConfig
 import com.chipprbots.ethereum.utils.ByteStringUtils
 import com.chipprbots.ethereum.utils.DaoForkConfig
 import com.chipprbots.ethereum.utils.Logger
+import com.chipprbots.ethereum.vm.AmsterdamGas
 import com.chipprbots.ethereum.vm.EvmConfig
 import com.chipprbots.ethereum.vm.ProgramContext
 
@@ -111,9 +112,10 @@ class BlockExecution(
           .leftMap(BlockExecutionError.MPTError.apply)
         // EIP-4895: Process beacon chain withdrawals (Shanghai+)
         worldAfterWithdrawals = processWithdrawals(block, worldAfterReward)
-        // Prague: Process system calls for withdrawal/consolidation requests. The system-call
-        // outputs (type 0x01, 0x02) and deposit log requests (type 0x00) combine to form the
-        // EIP-7685 requestsHash; follower mode verifies, proposer mode emits.
+        // Prague: Process system calls for withdrawal/consolidation requests; Amsterdam adds the two
+        // EIP-8282 builder predeploys. The system-call outputs (types 0x01, 0x02 and, post-Amsterdam,
+        // 0x03, 0x04) and deposit log requests (type 0x00) combine to form the EIP-7685 requestsHash;
+        // follower mode verifies, proposer mode emits.
         systemCallResult = processPragueSystemCalls(block, worldAfterWithdrawals)
         worldAfterSystemCalls = systemCallResult._1
         systemRequests = systemCallResult._2
@@ -361,14 +363,21 @@ class BlockExecution(
         }
       case _ => world
 
-  /** Prague: Execute system calls for withdrawal and consolidation request processing. Per EIP-7002 and EIP-7251, the
-    * system makes calls to the withdrawal queue and consolidation queue contracts after all transactions in the block.
+  /** Execute the end-of-block SYSTEM_ADDRESS calls to the request-queue predeploys, after all transactions.
+    *
+    * Prague: EIP-7002 (withdrawals) and EIP-7251 (consolidations). Amsterdam additionally calls the two EIP-8282
+    * builder predeploys — see [[BlockExecution.systemCallTargets]].
+    *
+    * These calls are not bookkeeping that can be skipped. Each predeploy's dequeue path clears the per-block slots its
+    * user path dirtied, so omitting a call leaves those slots set and forks the account's storage root, and with it the
+    * state root.
     *
     * Returns the updated world state AND the typed-request bytes collected from each system call's return data (used
-    * for EIP-7685 requestsHash). The returned Seq is in EIP-7685 canonical order: [withdrawals_request,
-    * consolidations_request]. Deposit requests are collected separately via collectDepositRequests.
+    * for the EIP-7685 requestsHash). The returned Seq is in canonical request-type order: withdrawals (0x01),
+    * consolidations (0x02), then builder deposit (0x03) and builder exit (0x04). A call returning no data contributes
+    * nothing. Deposit requests (0x00) are collected separately via collectDepositRequests.
     */
-  private def processPragueSystemCalls(
+  private[ledger] def processPragueSystemCalls(
       block: Block,
       world: InMemoryWorldStateProxy
   )(implicit blockchainConfig: BlockchainConfig): (InMemoryWorldStateProxy, Seq[ByteString]) =
@@ -381,11 +390,26 @@ class BlockExecution(
 
     // EIP-7685: Execute system calls to request contracts and collect output.
     // EIP-6110 DEPOSIT contract has no system call — deposits are parsed from logs.
-    // Only EIP-7002 (withdrawals) and EIP-7251 (consolidations) do a SYSTEM_ADDRESS call.
-    for (queueAddr, requestType) <- Seq(
-        (WithdrawalQueueAddress, WithdrawalRequestType),
-        (ConsolidationQueueAddress, ConsolidationRequestType)
-      )
+    // Prague: EIP-7002 (withdrawals) and EIP-7251 (consolidations). Amsterdam adds the two EIP-8282 builder
+    // predeploys. The SYSTEM_ADDRESS call is not optional bookkeeping: each predeploy's dequeue path clears the
+    // per-block slots its user path dirtied (for the builder deposit contract, slots 0x01 and 0x03), so skipping
+    // the call leaves those slots set and forks the storage root -> account RLP -> STATE ROOT.
+    //
+    // GAS CEILING, stated explicitly because it changes an already-shipped path. `SYSTEM_CALL_GAS_LIMIT` is one
+    // global constant, not a per-contract one: EIP-8037 raises it from 30,000,000 to 30,000,000 + 16 x
+    // GAS_STORAGE_SET so that a system call has state-dimension headroom, and it does so for EVERY system call,
+    // not only the two EIP-8282 ones. So on an Amsterdam block the pre-existing EIP-7002/7251 calls are funded at
+    // the raised ceiling too. That is deliberate: scoping the bump to the builder pair would invent a
+    // two-constant model no reference client has. EIP-2935 and EIP-4788 are unaffected here only because this
+    // client applies them as direct storage writes (the optimisation EIP-4788 explicitly permits) rather than as
+    // EVM calls, so they have no gas ceiling to raise — see `applyEip4788` / `applyEip2935`.
+    //
+    // The bump is strictly upward (30,000,000 -> 31,566,720) and the queue predeploys are bounded loops that
+    // never read GAS, so it is a no-op for 7002/7251. That is asserted, not assumed:
+    // `AmsterdamBuilderRequestsSpec` runs the fixture's real withdrawal and consolidation bytecode over a
+    // non-empty queue at both ceilings and requires byte-identical requests and storage.
+    val amsterdamActive = blockchainConfig.isAmsterdamTimestamp(block.header.unixTimestamp)
+    for (queueAddr, requestType) <- BlockExecution.systemCallTargets(block.header.unixTimestamp)
     do
       val code = w.getCode(queueAddr)
       if code.nonEmpty then
@@ -394,7 +418,7 @@ class BlockExecution(
           originAddr = SystemAddress,
           recipientAddr = Some(queueAddr),
           gasPrice = com.chipprbots.ethereum.domain.UInt256.Zero,
-          startGas = BigInt(30000000),
+          startGas = if amsterdamActive then AmsterdamGas.SystemCallGasLimit else BigInt(30000000),
           inputData = ByteString.empty,
           value = com.chipprbots.ethereum.domain.UInt256.Zero,
           endowment = com.chipprbots.ethereum.domain.UInt256.Zero,
@@ -452,21 +476,6 @@ class BlockExecution(
     if buf.isEmpty then None
     else Some(ByteString(Array(DepositRequestType.toByte)) ++ ByteString(buf.toArray))
 
-  /** EIP-7685: Concatenate per-type request bytes (each = type_byte || data) and compute sha256(sha256(deposits) ++
-    * sha256(withdrawals) ++ sha256(consolidations)). Missing types contribute sha256("").
-    */
-  def computeRequestsHash(deposits: Option[ByteString], systemRequests: Seq[ByteString]): ByteString =
-    import java.security.MessageDigest
-    val sha = MessageDigest.getInstance("SHA-256")
-    def digest(bs: ByteString): Array[Byte] =
-      val d = MessageDigest.getInstance("SHA-256")
-      d.update(bs.toArray)
-      d.digest()
-    val depositsHash = digest(deposits.getOrElse(ByteString.empty))
-    sha.update(depositsHash)
-    systemRequests.foreach(r => sha.update(digest(r)))
-    ByteString(sha.digest())
-
 object BlockExecution:
 
   val SystemAddress: Address = Address("0xfffffffffffffffffffffffffffffffffffffffe")
@@ -480,10 +489,40 @@ object BlockExecution:
   /** EIP-7251: Consolidation request queue contract */
   val ConsolidationQueueAddress: Address = Address("0x0000bbddc7ce488642fb579f8b00f3a590007251")
 
+  /** EIP-8282: Builder DEPOSIT request queue contract (Amsterdam). */
+  val BuilderDepositQueueAddress: Address = Address("0x0000bFF46984e3725691FA540a8C7589300D8282")
+
+  /** EIP-8282: Builder EXIT request queue contract (Amsterdam). */
+  val BuilderExitQueueAddress: Address = Address("0x000064D678505ad48F8cCb093BC65613800E8282")
+
   /** EIP-7685 request type byte prefixes (canonical ordering). */
   val DepositRequestType: Int = 0x00
   val WithdrawalRequestType: Int = 0x01
   val ConsolidationRequestType: Int = 0x02
+  val BuilderDepositRequestType: Int = 0x03
+  val BuilderExitRequestType: Int = 0x04
+
+  /** The EIP-7685 system-call targets for the fork active at `timestamp`, in canonical request-type order.
+    *
+    * EIP-7002 (0x01) and EIP-7251 (0x02) come in at Prague. EIP-8282 appends the two builder predeploys, 0x03 (deposit)
+    * and 0x04 (exit), at Amsterdam. The order is load-bearing: `requestsHash` folds the per-type digests in ascending
+    * type order, so the builder pair must follow 7002/7251 and never precede them.
+    *
+    * ETC safety: no ETC-family config declares `amsterdam-timestamp`, so `isAmsterdamTimestamp` reads `None` and this
+    * returns the Prague pair unchanged on every ETC chain. The caller additionally skips any target with no deployed
+    * code, which is the second, independent guard.
+    */
+  def systemCallTargets(timestamp: Timestamp)(implicit blockchainConfig: BlockchainConfig): Seq[(Address, Int)] =
+    val pragueTargets = Seq(
+      (WithdrawalQueueAddress, WithdrawalRequestType),
+      (ConsolidationQueueAddress, ConsolidationRequestType)
+    )
+    if blockchainConfig.isAmsterdamTimestamp(timestamp) then
+      pragueTargets ++ Seq(
+        (BuilderDepositQueueAddress, BuilderDepositRequestType),
+        (BuilderExitQueueAddress, BuilderExitRequestType)
+      )
+    else pragueTargets
 
   /** EIP-6110: keccak256("DepositEvent(bytes,bytes,bytes,bytes,bytes)") topic signature. */
   val DepositEventSignature: ByteString = ByteString(

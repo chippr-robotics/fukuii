@@ -26,8 +26,9 @@ case class BlockResult(
     stateGasUsed: BigInt = 0,
     receipts: Seq[Receipt] = Nil,
     // EIP-7685 typed requests (type_byte || data), in canonical order:
-    // deposits (0x00) → withdrawals (0x01) → consolidations (0x02). Present only
-    // when the block is post-Prague AND the request list is non-empty.
+    // deposits (0x00) → withdrawals (0x01) → consolidations (0x02), then, from
+    // Amsterdam, builder deposit (0x03) → builder exit (0x04). Present only when
+    // the block is post-Prague AND the request list is non-empty.
     executionRequests: Seq[ByteString] = Nil
 ):
 
