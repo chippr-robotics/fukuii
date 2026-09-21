@@ -191,10 +191,32 @@ class EngineApiService(
         blockchainReader.getBlockHeaderByHash(BlockHash(payload.parentHash)).map(_.hash.value).getOrElse(zeroHash)
       PayloadStatusV1(Invalid, latestValidHash = Some(lvh), validationError = Some("INVALID_VERSIONED_HASHES"))
     else if blockchainReader.getBlockHeaderByHash(BlockHash(payload.blockHash)).exists { h =>
-        blockchainReader.getBlockHeaderByNumber(h.number.value).exists(_.hash.value == payload.blockHash)
+        blockchainReader.getBlockHeaderByNumber(h.number.value).exists(_.hash.value == payload.blockHash) &&
+        blockchainReader.getReceiptsByHash(h.hash).isDefined
       }
     then
-      // Already fully stored with number mapping — skip re-execution
+      // Already fully stored AND executed — skip re-execution.
+      //
+      // A canonical number→hash mapping alone is NOT proof of execution and must never be
+      // used as one: several sync paths (SNAP pivot bootstrap, header backfill, fast-sync
+      // state updates) legitimately publish a number→hash mapping for a block whose body and
+      // receipts arrive later. Answering VALID off that mapping claims we validated a block
+      // we never ran. Receipts are the codebase's existing was-executed predicate (see
+      // `parentValidated` below and EthBlocksService's `isExposed`).
+      //
+      // Be precise about what this conjunct does and does not prove. Receipts are NOT a
+      // guarantee of local execution: ChainDownloader.scala:619/:703 and FastSync.scala:1170
+      // store peer-supplied receipts on the backfill path without executing anything, so on a
+      // fast/SNAP-synced node a block can have receipts it never earned. What the conjunct
+      // does give is a strictly tighter predicate than the mapping alone — every block it
+      // admits was already admitted before — so it can only move answers from VALID toward
+      // ACCEPTED/SYNCING, never the reverse. That direction is the safe one: re-executing a
+      // block we had already validated costs time, whereas skipping execution on a block we
+      // had not costs correctness.
+      //
+      // The one thing it does prove cleanly is the empty-block case: storeReceipts pickles a
+      // non-empty value even for an empty Seq, so a zero-tx block yields Some(Nil), not None,
+      // and is not forced into needless re-execution.
       PayloadStatusV1(Valid, latestValidHash = Some(payload.blockHash))
     else if invalidBlocks.containsKey(payload.parentHash) then
       // Parent was previously marked INVALID — child inherits invalidity.
@@ -503,13 +525,27 @@ class EngineApiService(
         // anyway so its BeaconHead listener (SyncController) can drive SNAP-sync pivot
         // selection. Without this, post-merge cold-start hangs forever in CL-PIVOT
         // wait state because the FCU short-circuits before publishBeaconHead fires.
-        forkChoiceManager.applyForkChoiceState(forkChoiceState)
+        // notifyBeaconHead publishes and nothing else — see the headOptimistic branch below
+        // for why this must not be applyForkChoiceState.
+        forkChoiceManager.notifyBeaconHead(forkChoiceState)
         EngineApiMetrics.recordForkchoiceUpdated("SYNCING")
         IO.pure(Right(ForkchoiceUpdatedResponse(payloadStatus = PayloadStatusV1(Syncing))))
       else if headOptimistic then
         // Same rationale as the unknown-head case: drive ForkChoiceManager so SNAP sync
         // can re-pivot on the freshest CL head while we're still optimistically caught up.
-        forkChoiceManager.applyForkChoiceState(forkChoiceState)
+        //
+        // MUST be notifyBeaconHead, NOT applyForkChoiceState. The head here exists by hash
+        // but was never executed (storeBlockByHashOnly: no receipts, no number→hash mapping).
+        // applyForkChoiceState finds the header by hash, so it takes its head-known branch and
+        // runs promoteBranchToCanonical + saveBestKnownBlocks — writing a canonical number→hash
+        // mapping for a block we never validated. newPayload's dedup branch then reads that
+        // mapping back as proof of execution and answers VALID for an invalid block; hive
+        // invalid_payload.go:242 ("Invalid NewPayload, Transaction *, Syncing=True") requires
+        // INVALID. The write also (a) makes headOptimistic self-falsifying, so a repeated FCU
+        // took the full path and returned VALID where invalid_payload.go:253 allows only
+        // SYNCING|INVALID, and (b) exposed the unexecuted block via eth_getBlockByHash
+        // (EthBlocksService `isExposed`), breaking invalid_payload.go:258.
+        forkChoiceManager.notifyBeaconHead(forkChoiceState)
         EngineApiMetrics.recordForkchoiceUpdated("SYNCING")
         IO.pure(Right(ForkchoiceUpdatedResponse(payloadStatus = PayloadStatusV1(Syncing))))
       else if safeUnknown || finalizedUnknown then

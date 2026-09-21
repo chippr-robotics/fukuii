@@ -87,6 +87,29 @@ class ForkChoiceManager(
 
       Right(())
 
+  /** Publish the CL head to the registered listener and do **nothing else**.
+    *
+    * This is the notify-only half of [[applyForkChoiceState]], for the SYNCING branches of `engine_forkchoiceUpdated`.
+    * Those branches need the [[ForkChoiceManager.BeaconHead]] publish — it is the trigger SyncController forwards as
+    * `CLPivotHint` to drive SNAP-sync pivot selection (#1207) — but they must NOT write a canonical number→hash
+    * mapping, must NOT move the best-block pointer, and must NOT cache `currentState`: the head they are reporting on
+    * has not been executed by us.
+    *
+    * Calling [[applyForkChoiceState]] here instead was a consensus defect. When the head was present by hash but
+    * unexecuted (stored via `storeBlockByHashOnly`), the header lookup succeeded, so `promoteBranchToCanonical` +
+    * `saveBestKnownBlocks` ran and wrote number→hash for a block we never validated. `engine_newPayload`'s dedup branch
+    * then read that mapping back as proof of prior successful execution and answered VALID for an invalid block. hive
+    * `invalid_payload.go:242` ("Invalid NewPayload, Transaction *, Syncing=True") requires INVALID there.
+    */
+  def notifyBeaconHead(newState: ForkChoiceState): Unit =
+    val maybeHeader = blockchainReader.getBlockHeaderByHash(BlockHash(newState.headBlockHash))
+    log.info(
+      "Fork choice head {} not executed yet (SYNCING, notify-only): headerKnown={}",
+      newState.headBlockHash,
+      maybeHeader.isDefined
+    )
+    publishBeaconHead(newState.headBlockHash, maybeHeader)
+
   /** Clear fork choice state (e.g., on shutdown or mode switch). */
   def clear(): Unit = currentState.set(None)
 
