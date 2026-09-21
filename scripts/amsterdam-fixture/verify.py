@@ -118,6 +118,57 @@ def main(d):
     print(f"         execution gas = {CUMULATIVE} - {STATE_GAS} = {CUMULATIVE - STATE_GAS}")
     print(f"         header        = max({CUMULATIVE - STATE_GAS}, {STATE_GAS}) = {gas_used(41)}")
 
+    # -------------------------------------------------------------- stage 3b
+    print("\nStage 3b — V2: the four tx-emit-* collapses are OUT OF GAS, measured")
+
+    # contracts/gas-accounting.md V2. An exceptional halt consumes the whole limit and reverts
+    # all state, so the receipt carries status 0, an EMPTY bloom and ZERO logs. Reconstructing
+    # the root from exactly that — and nothing else — is what makes this measured rather than
+    # inferred. `emit` has no REVERT path and these are top-level calls, so OOG is the only
+    # reachable failure.
+    for n in (42, 45):
+        ttype = blocks[n - 1][1][0][0] if isinstance(blocks[n - 1][1][0], (bytes, bytearray)) else 0
+        payload = enc([0, 100000, bloom([]), []])
+        check(f"block {n} receipts root = status 0, 100,000 consumed, no logs",
+              h(single_root((bytes([ttype]) if ttype else b"") + payload)), h(hdr(n)[5]))
+        check(f"block {n} header gasUsed = 100,000 (the full limit)", gas_used(n), 100000)
+
+    # -------------------------------------------------------------- stage 3c
+    print("\nStage 3c — V5: EIP-7708 value-transfer logs (spec FR-019)")
+
+    # Pre-activation transfers carry an empty bloom; post-activation ones do not. The root
+    # below reconstructs ONLY with the system-address transfer log present. This is the
+    # measurement that put EIP-7708 into scope — it was missing from the first draft of the
+    # spec because that diagnosis never reconstructed a receipt.
+    popcount = lambda bl: sum(bin(x).count("1") for x in bytes(bl))
+    for n in (18, 30, 31):
+        check(f"block {n} (pre-activation transfer) bloom is empty", popcount(hdr(n)[6]), 0)
+    for n in (46, 48):
+        check(f"block {n} (post-activation transfer) bloom popcount = 12", popcount(hdr(n)[6]), 12)
+
+    SENDER = bytes.fromhex("7435ed30a8b4aeb0877cef0c6e8cffe834eb865f")
+    RECIPIENT = bytes.fromhex("83c7e323d189f18725ac510004fdc2941f8c4a78")
+    for n in (46, 48):
+        tx = blocks[n - 1][1][0]
+        ttype = tx[0] if isinstance(tx, (bytes, bytearray)) else 0
+        logs = [(SYS, [TRANSFER, b"\x00" * 12 + SENDER, b"\x00" * 12 + RECIPIENT],
+                 (1).to_bytes(32, "big"))]
+        lg = [[a, list(t), data] for (a, t, data) in logs]
+        payload = enc([1, 21000, bloom(logs), lg])
+        check(f"block {n} receipts root reconstructs with the transfer log",
+              h(single_root((bytes([ttype]) if ttype else b"") + payload)), h(hdr(n)[5]))
+
+    # -------------------------------------------------------------- stage 3d
+    print("\nStage 3d — V4: intrinsic gas moves in THREE directions, not one")
+
+    # A blanket change in either direction is wrong, which is why all three are checked.
+    check("transfer to an existing EOA is unchanged at 21,000 (block 46)", gas_used(46), 21000)
+    check("  = TX_BASE_COST 12,000 + TX_VALUE_COST 6,000 + COLD_ACCOUNT_ACCESS 3,000",
+          12000 + 6000 + 3000, 21000)
+    check("self-transfer drops to 12,000 = TX_BASE_COST alone (block 165)", gas_used(165), 12000)
+    check("tx-callrevert before activation (block 23) = 23,201", gas_used(23), 23201)
+    check("tx-callrevert after activation (block 40) = 17,201", gas_used(40), 17201)
+
     # ---------------------------------------------------------------- stage 4
     print("\nStage 4 — V3: blocks whose total is a whole multiple of the state charge")
 

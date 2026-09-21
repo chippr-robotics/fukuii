@@ -88,9 +88,9 @@ witnesses for the `max()` rule.
 
 | Case | Pre-Amsterdam | Amsterdam | Source |
 |---|---|---|---|
-| transfer to existing EOA | 21,000 | 21,000 | **[M]** |
-| self-transfer | 21,000 | 12,000 | **[M]** |
-| `tx-callrevert` | 23,201 | 17,201 | **[M]**, reproduced **[D]** |
+| transfer to existing EOA | 21,000 | 21,000 (block 46) | **[M]** |
+| self-transfer | 21,000 | 12,000 (block 165) | **[M]** |
+| `tx-callrevert` | 23,201 (block 23) | 17,201 (block 40) | **[M]**, reproduced **[D]** |
 
 A blanket change in either direction is wrong. The self-transfer case is the sharpest, and it is
 measured rather than read from the EIP.

@@ -64,9 +64,8 @@ run: R-1's stated maximum gas limit was 1,000,000, and the true figure is **1,62
 conclusion is unaffected (both are far below 2^24) but the number was wrong in three documents and
 is now corrected. That is the value of a runnable check over a recorded assertion.
 
-**Checkpoint**: another engineer can reproduce V1, V3 and R-1 from scratch. V2, V4 and V5 are
-recorded in `contracts/gas-accounting.md` but are not yet self-checking here — adding them is
-worthwhile and not yet done.
+**Checkpoint**: another engineer can reproduce **all five vectors** and R-1 from scratch — 31 checks,
+all passing.
 
 ---
 

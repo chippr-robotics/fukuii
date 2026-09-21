@@ -42,11 +42,22 @@ unknown one.
 | 1 | The machinery is correct — keccak vector, 600 blocks decode, block 600 header round-trips to its canonical hash, block 35 has 21 items and block 36 has 23 |
 | 2 | The live header-decoder defect: block 36's canonical hash is `6372c88f…`, but dropping items 21–22 (what `case n if n >= 21` does today) yields `94844dfd…`. Decoding **succeeds and returns the wrong answer**, which is why the fix is to reject rather than tolerate |
 | 3 | **V1** — block 41's receipts root reconstructs only with `cumulativeGasUsed = 326,947`, while the header reports `gasUsed = 183,600`. The header is `max(execution, state)`; receipts are the sum. A single-counter implementation cannot satisfy both |
+| 3b | **V2** — blocks 42 and 45 reconstruct byte-exactly as `status 0`, empty bloom, zero logs, 100,000 consumed. Out of gas, measured, not inferred |
+| 3c | **V5** — pre-activation transfer blocks 18/30/31 carry empty blooms; post-activation blocks 46/48 carry popcount 12 and reconstruct **only** with the system-address transfer log present |
+| 3d | **V4** — intrinsic gas moves in three directions: transfer to an existing EOA unchanged at 21,000, self-transfer down to 12,000, `tx-callrevert` 23,201 → 17,201 |
 | 4 | **V3** — blocks 36 and 37 are exact multiples of `GAS_STORAGE_SET` (8× and 5× 97,920), so the state dimension is the maximum in each |
 | 5 | **R-1** — the largest gas limit in all 612 transactions is 1,628,065, far below `TX_MAX_GAS_LIMIT` (2²⁴), so the state-gas reservoir is empty throughout and the fixture cannot exercise it |
 
-Stage 3 also demonstrates why EIP-7708 is in scope: the block-41 receipts root does **not**
-reconstruct without the system-address transfer log. That measurement is what added FR-019.
+31 checks in total.
+
+Stages 3 and 3c both demonstrate why EIP-7708 is in scope: neither the block-41 nor the block-46
+receipts root reconstructs without the system-address transfer log. That measurement is what added
+FR-019, and it was missed in the first draft of the spec because that diagnosis never rebuilt a
+receipt.
+
+Stage 3d turns up a tidy confirmation of EIP-2780's decomposition: a post-activation transfer still
+costs exactly 21,000, because `TX_BASE_COST 12,000 + TX_VALUE_COST 6,000 + COLD_ACCOUNT_ACCESS 3,000`
+lands on the old flat figure — *while* emitting a transfer log, whose cost is folded into the 6,000.
 
 ## One trap worth naming
 
