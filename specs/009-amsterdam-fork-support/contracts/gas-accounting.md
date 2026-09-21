@@ -109,7 +109,8 @@ activation is wrong.
 
 ## What the fixture does NOT cover
 
-Recorded so it is not mistaken for coverage. Maximum `tx.gas` in the entire chain is 1,000,000, far
+Recorded so it is not mistaken for coverage. Maximum `tx.gas` across the chain's 612 transactions is
+**1,628,065** (block 14, legacy), far
 below `TX_MAX_GAS_LIMIT`, so `state_gas_reservoir = 0` in **every** transaction:
 
 - reservoir seeding above the threshold

@@ -178,7 +178,7 @@ The spec's Assumptions state that scope is defined by what the fixture exercises
 ## Risks and open items
 
 **R-1 — the fixture never exercises the state-gas reservoir.** Maximum `tx.gas` in the entire chain is
-1,000,000, far below `TX_MAX_GAS_LIMIT = 16,777,216`, so `state_gas_reservoir = 0` in **every**
+**1,628,065** (block 14), far below `TX_MAX_GAS_LIMIT = 16,777,216`, so `state_gas_reservoir = 0` in **every**
 transaction. Passing this fixture proves nothing about reservoir seeding, cross-frame passing (full,
 not 63/64), LIFO refill ordering, `state_gas_committed`, or the successful-child merge step. **Treat
 "fixture green" as necessary, not sufficient** — those paths need `ethereum/execution-spec-tests`

@@ -56,11 +56,17 @@ shared signature refactor perturbing ETC arithmetic by accident.
 
 **Purpose**: make the fixture and its figures reproducible by someone who did not do Phase 0.
 
-- [ ] T001 [P] Commit the fixture-decoding harness (RLP decode, keccak, single-entry MPT root, receipt and bloom reconstruction) used in Phase 0 to `local/scripts/amsterdam-fixture/`, with its pre-Amsterdam validation cases (receipt roots at blocks 8, 24, 40; block 600 header re-encode) as runnable self-checks
-- [ ] T002 [P] Record in `local/scripts/amsterdam-fixture/README.md` how to obtain `chain.rlp`, `txinfo.json`, `headstate.json`, `headblock.json`, `genesis.json` and `forkenv.json` from hive's devp2p simulator testdata, so every figure in `contracts/gas-accounting.md` can be re-derived rather than trusted
+- [x] T001 [P] Commit the fixture-decoding harness (RLP decode, keccak, single-entry MPT root, receipt and bloom reconstruction) used in Phase 0 to `scripts/amsterdam-fixture/`, with its pre-Amsterdam validation cases (receipt roots at blocks 8, 24, 40; block 600 header re-encode) as runnable self-checks
+- [x] T002 [P] Record in `scripts/amsterdam-fixture/README.md` how to obtain `chain.rlp`, `txinfo.json`, `headstate.json`, `headblock.json`, `genesis.json` and `forkenv.json` from hive's devp2p simulator testdata, so every figure in `contracts/gas-accounting.md` can be re-derived rather than trusted
 
-**Checkpoint**: another engineer can reproduce V1–V5 from scratch. If they cannot, the rest of this
-list rests on assertion rather than evidence.
+**DONE.** `scripts/amsterdam-fixture/verify.py` — all checks pass. It caught a real error on first
+run: R-1's stated maximum gas limit was 1,000,000, and the true figure is **1,628,065**. R-1's
+conclusion is unaffected (both are far below 2^24) but the number was wrong in three documents and
+is now corrected. That is the value of a runnable check over a recorded assertion.
+
+**Checkpoint**: another engineer can reproduce V1, V3 and R-1 from scratch. V2, V4 and V5 are
+recorded in `contracts/gas-accounting.md` but are not yet self-checking here — adding them is
+worthwhile and not yet done.
 
 ---
 

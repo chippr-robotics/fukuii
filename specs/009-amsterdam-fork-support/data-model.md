@@ -161,7 +161,9 @@ stateGasReservoir  = evmGas - gasLeft
 ```
 
 **Carry R-1 forward into the tests.** Every transaction in the reference fixture has
-`tx.gas ≤ 1,000,000`, far below `2^24`, so `stateGasReservoir` is **0 in every fixture transaction**.
+`tx.gas ≤ 1,628,065` (block 14), far below `2^24 = 16,777,216`, so `stateGasReservoir` is **0 in
+every one of the chain's 612 transactions** — re-measured by `scripts/amsterdam-fixture/verify.py`
+stage 5.
 The fixture cannot distinguish a correct reservoir implementation from one that never seeds it at all.
 Reservoir seeding, cross-frame passing (full, not 63/64), LIFO refill ordering and the successful-child
 merge need written vectors.
