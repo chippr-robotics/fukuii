@@ -24,16 +24,16 @@ import BlockHeaderImplicits.*
   *   1. `HefPostAmsterdam` exists, carries `blockAccessListHash` (RLP item 21) and `slotNumber` (RLP item 22) in the
   *      order measured in `specs/009-amsterdam-fork-support/contracts/header-rlp.md`, and a 23-item header round-trips
   *      byte-identically through decode/encode.
-  *   1. The decoder maps item count to shape **exactly**. Before this change the sole tolerant branch,
-  *      `case n if n >= 21`, accepted 22, 23 and 24 items as `HefPostPrague`, silently dropped the trailing items and
-  *      re-encoded to 21 — producing a hash that is not the hash that went in. That is the defect this spec pins.
+  *   1. The decoder maps item count to shape **exactly**. Before this change the sole tolerant branch, `case n if n >=
+  *      21`, accepted 22, 23 and 24 items as `HefPostPrague`, silently dropped the trailing items and re-encoded to 21
+  *      — producing a hash that is not the hash that went in. That is the defect this spec pins.
   *
   * **Provenance of the vectors**: synthetic. The reference fixture (hive's devp2p `chain.rlp`, whose block 600 hashes
   * to `6372c88f…`) is not vendored in this repository — see `scripts/amsterdam-fixture/README.md` — so no canonical
   * Amsterdam header bytes were available. Every header below is constructed from a `BlockHeader` value, encoded, and
   * checked for self-consistency. That establishes the arity table and the round-trip invariant; it does **not**
-  * establish agreement with go-ethereum on the canonical hash. No canonical hash is asserted, deliberately: an
-  * invented expectation would be worse than none.
+  * establish agreement with go-ethereum on the canonical hash. No canonical hash is asserted, deliberately: an invented
+  * expectation would be worse than none.
   */
 // scalastyle:off magic.number
 class BlockHeaderAmsterdamRlpSpec extends AnyWordSpec with Matchers:
@@ -98,8 +98,10 @@ class BlockHeaderAmsterdamRlpSpec extends AnyWordSpec with Matchers:
 
   "BlockHeader RLP — Amsterdam (23 items)" should {
 
-    "encode exactly 23 items, with blockAccessListHash at 21 and slotNumber at 22" taggedAs (UnitTest,
-      ConsensusTest) in {
+    "encode exactly 23 items, with blockAccessListHash at 21 and slotNumber at 22" taggedAs (
+      UnitTest,
+      ConsensusTest
+    ) in {
       val items = itemsOf(headerOf(postAmsterdam))
       items.length shouldBe 23
 
@@ -129,8 +131,10 @@ class BlockHeaderAmsterdamRlpSpec extends AnyWordSpec with Matchers:
       decoded.hash shouldBe header.hash
     }
 
-    "expose every Amsterdam field through the total accessors (a missing case is a silent None)" taggedAs (UnitTest,
-      ConsensusTest) in {
+    "expose every Amsterdam field through the total accessors (a missing case is a silent None)" taggedAs (
+      UnitTest,
+      ConsensusTest
+    ) in {
       val decoded = rlp.encode(headerOf(postAmsterdam).toRLPEncodable).toBlockHeader
 
       decoded.baseFee shouldBe Some(BigInt(1_000_000_000))

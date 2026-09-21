@@ -84,8 +84,7 @@ class BlockHeaderFieldCountSpec
         BlockHeader.validateFieldCount(header, etcConfig) shouldBe Right(())
       }
 
-      "accept a 15-item shape at a timestamp that would be Amsterdam-era on ETH" taggedAs (UnitTest,
-        ConsensusTest) in {
+      "accept a 15-item shape at a timestamp that would be Amsterdam-era on ETH" taggedAs (UnitTest, ConsensusTest) in {
         // The ETC guard restated for the new fork: no ETC config declares amsterdam-timestamp,
         // and the networkType short-circuit fires before any timestamp is consulted.
         val header = baseHeader(PostAmsterdamTs).copy(extraFields = HefEmpty)
