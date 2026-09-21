@@ -177,16 +177,39 @@ drained, which is why devp2p's failure count fell by 16 rather than by 27.
 
 | cluster | n | symptom |
 |---|---:|---|
-| snap/1 server does not respond | 4 | `AccountRange`, `GetByteCodes`, `GetTrieNodes`, `GetStorageRanges` — every one `i/o timeout`, never a wrong answer |
+| snap/1 protocol offset is hardcoded | 4 | `AccountRange`, `GetByteCodes`, `GetTrieNodes`, `GetStorageRanges` — root-caused below |
 | `GetPooledTransactions` not served | 5 | `NewPooledTxs` and `BlobViolations` time out; `Transaction`, `InvalidTxs`, `LargeTxRequest` crash the simulator with a Go panic |
 | blob sidecar handling | 2 | `TestBlobTxWithoutSidecar`, `TestBlobTxWithMismatchedSidecar` — both `failed to read GetPooledTransactions message: disconnect` |
 | eth/71 block access lists | 1 | `GetBlockAccessLists` — `connection reset by peer` during status exchange |
 
-The first two clusters are the substantial ones. `i/o timeout` on every snap/1 request means
-the node accepts the snap connection and then never answers, which is a serving defect rather
-than a wrong-response defect. The tx-pool cluster is likely one cause: fukuii either
-disconnects or fails to answer `GetPooledTransactions`, and the blob pair reports the same
-message, so those 7 may be 1 root cause rather than 7. NOT established either way.
+**snap/1 — root cause established.** The simulator reports `i/o timeout`, which reads like a
+serving defect, but the client log says otherwise:
+
+```
+DECODE_ERROR: Peer sent unknown message type: 0x2a (42) ... Unknown snap/1 message type: 42
+DECODE_ERROR: Cannot decode GetByteCodes. Expected RLPList[3] with structure
+              [requestId, hashes, …] - disconnecting
+```
+
+fukuii is not failing to answer; it is **disconnecting**, and the simulator's read then times
+out. The cause is `SNAP.scala:40`:
+
+    val SnapProtocolOffset = 0x30
+
+RLPx assigns each negotiated subprotocol a message-code offset derived from the capability set
+agreed in the Hello exchange — it is not a constant. The peer is sending snap messages at
+`0x2a` and `0x2c`. fukuii looks for them at `0x30`, treats `0x2a` as unknown, and when a code
+does fall inside its `0x30` window it decodes the wrong message type, which is the
+`RLPList[3]` structure failure above.
+
+The comment at `SNAP.scala:29` records that this already bit once: the offset was `0x21` and
+"caused SNAP's GetAccountRange to decode as BlockRangeUpdate". Moving the constant to `0x30`
+treated that symptom. Hardcoding it at all is the defect, and it will break again on the next
+capability-set change. Fix belongs with `herald` (P2P/RLPx), not consensus.
+
+**tx-pool and blob — NOT established.** fukuii either disconnects or fails to answer
+`GetPooledTransactions`; the blob pair reports the same message, so those 7 may be 1 root
+cause rather than 7. No evidence either way yet.
 
 ## What is NOT established
 
