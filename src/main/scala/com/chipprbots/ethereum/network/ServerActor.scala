@@ -120,7 +120,23 @@ object ServerActor:
       ipDetector: () => Option[InetAddress]
   ): Behavior[Command] =
     Behaviors.receiveMessagePartial { case StartServer(address, advertisedAddress) =>
-      tcpManager ! Bind(tcpBridge, address)
+      // `tcpBridge` must be BOTH the handler and the sender.
+      //
+      // Pekko IO TCP routes these differently: `Connected` goes to the handler named inside
+      // `Bind`, but `Bound` and `CommandFailed` go to the SENDER of the `Bind` command. The
+      // Classic original relied on Classic's implicit sender:
+      //
+      //     IO(Tcp) ! Bind(self, address)        // sender == self, so Bound came back to self
+      //
+      // Typed has no implicit sender, so a bare `tcpManager ! Bind(...)` is sent with
+      // `ActorRef.noSender` and both `Bound` and `CommandFailed` are delivered to dead letters.
+      // The socket still binds at the OS level, but `TcpBound` never arrives, the actor sits in
+      // `waitingForBindingResult` forever, and `serverStatus` stays `NotListening` — which is
+      // what `net_listening` and `admin_nodeInfo` report on. A bind FAILURE was equally
+      // invisible, since `CommandFailed` was lost the same way.
+      //
+      // Use the explicit two-arg `tell` so the bridge receives all three events.
+      tcpManager.tell(Bind(tcpBridge, address), tcpBridge)
       waitingForBindingResult(ctx, nodeStatusHolder, peerManager, blacklist, advertisedAddress, ipDetector)
     }
 

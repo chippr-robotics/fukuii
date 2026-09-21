@@ -31,6 +31,47 @@ class ServerActorSpec extends ScalaTestWithActorTestKit with AnyFlatSpecLike wit
 
   private def blacklist: Blacklist = CacheBasedBlacklist.empty(100)
 
+  // Regression guard for the Classic->Typed migration defect: `Bind` was sent with no sender,
+  // so Pekko delivered `Bound` to dead letters and `TcpBound` never arrived. Every other test in
+  // this file injects `TcpBound` into the actor by hand via a TestProbe standing in for the TCP
+  // manager, which bypasses the real round-trip entirely — that is why the defect survived. This
+  // one drives the REAL `IO(Tcp)` manager against a real ephemeral port and asserts only on the
+  // observable outcome.
+  "ServerActor" should "reach Listening via the real Pekko TCP manager, not just an injected TcpBound" taggedAs (
+    UnitTest,
+    NetworkTest
+  ) in {
+    val holder = freshHolder()
+    val pm = TestProbe()
+    val realTcpManager = org.apache.pekko.io.IO(Tcp)(classicSystem)
+
+    val actor = testKit.spawn(
+      // Port 0 = let the OS choose a free port. Loopback so this never opens an external listener.
+      // Explicit advertised address keeps the assertion about binding alone, with no dependency on
+      // ExternalIPDetector or the network.
+      ServerActor.testApply(holder, pm.ref, blacklist, realTcpManager, () => Some(InetAddress.getLoopbackAddress)),
+      "server-real-tcp-bind"
+    )
+
+    actor ! ServerActor.StartServer(
+      new InetSocketAddress(InetAddress.getLoopbackAddress, 0),
+      Some(InetAddress.getLoopbackAddress)
+    )
+
+    // Before the fix this never becomes Listening: the socket binds, but `Bound` goes to dead
+    // letters and the actor waits in `waitingForBindingResult` indefinitely.
+    eventually(timeout(10.seconds), interval(50.millis)) {
+      holder.get().serverStatus shouldBe a[ServerStatus.Listening]
+    }
+
+    val listening = holder.get().serverStatus.asInstanceOf[ServerStatus.Listening]
+    // The OS assigned a real port, so it must be non-zero — proof an actual bind happened rather
+    // than a status written from the requested address.
+    listening.address.getPort should not be 0
+
+    testKit.stop(actor)
+  }
+
   "ServerActor" should "transition to listening immediately when an explicit advertised-address is set" taggedAs (
     UnitTest,
     NetworkTest
