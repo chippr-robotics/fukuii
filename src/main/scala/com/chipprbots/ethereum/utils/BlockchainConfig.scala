@@ -32,6 +32,7 @@ case class ForkTimestamps(
     cancunTimestamp: Option[Long] = None,
     pragueTimestamp: Option[Long] = None,
     osakaTimestamp: Option[Long] = None,
+    amsterdamTimestamp: Option[Long] = None,
     bpo1Timestamp: Option[Long] = None,
     bpo2Timestamp: Option[Long] = None
 )
@@ -74,6 +75,12 @@ case class BlockchainConfig(
 
   def isOsakaTimestamp(timestamp: Timestamp): Boolean =
     forkTimestamps.osakaTimestamp.exists(ts => timestamp.toLong >= ts)
+
+  /** Amsterdam fork activation (ETH-family only). No ETC-family config declares `amsterdam-timestamp`, so this reads
+    * `None` and always returns `false` for ETC/Mordor.
+    */
+  def isAmsterdamTimestamp(timestamp: Timestamp): Boolean =
+    forkTimestamps.amsterdamTimestamp.exists(ts => timestamp.toLong >= ts)
 
   /** EIP-7892 Blob Parameter Only (BPO) fork activation. BPOs raise the blob target/max without other consensus
     * changes. Sepolia activated BPO1 on 2025-10-21.
@@ -285,6 +292,7 @@ object BlockchainConfig:
       cancunTimestamp = Try(blockchainConfig.getLong("cancun-timestamp")).toOption,
       pragueTimestamp = Try(blockchainConfig.getLong("prague-timestamp")).toOption,
       osakaTimestamp = Try(blockchainConfig.getLong("osaka-timestamp")).toOption,
+      amsterdamTimestamp = Try(blockchainConfig.getLong("amsterdam-timestamp")).toOption,
       bpo1Timestamp = Try(blockchainConfig.getLong("bpo1-timestamp")).toOption,
       bpo2Timestamp = Try(blockchainConfig.getLong("bpo2-timestamp")).toOption
     )

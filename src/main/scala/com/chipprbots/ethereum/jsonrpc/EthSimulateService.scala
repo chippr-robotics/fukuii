@@ -332,8 +332,9 @@ class EthSimulateService(
     // stateRoot, so simulated pre-merge blocks must too. Post-merge blocks have no
     // reward — execution layer pays nothing, withdrawals come from the CL.
     val isPoW = simHeader.extraFields match
-      case HefEmpty                                                                     => true
-      case _: HefPostOlympia | _: HefPostShanghai | _: HefPostCancun | _: HefPostPrague => false
+      case HefEmpty => true
+      case _: HefPostOlympia | _: HefPostShanghai | _: HefPostCancun | _: HefPostPrague | _: HefPostAmsterdam =>
+        false
     if isPoW then
       val reward = blockchainConfig.monetaryPolicyConfig.firstEraBlockReward
       val byzantiumReward = blockchainConfig.monetaryPolicyConfig.firstEraReducedBlockReward

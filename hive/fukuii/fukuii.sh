@@ -34,6 +34,7 @@ SHANGHAI_TS=${HIVE_SHANGHAI_TIMESTAMP:-}
 CANCUN_TS=${HIVE_CANCUN_TIMESTAMP:-}
 PRAGUE_TS=${HIVE_PRAGUE_TIMESTAMP:-}
 OSAKA_TS=${HIVE_OSAKA_TIMESTAMP:-}
+AMSTERDAM_TS=${HIVE_AMSTERDAM_TIMESTAMP:-}
 
 # ==============================================================================
 # Genesis: convert geth format to Fukuii format
@@ -96,6 +97,7 @@ fi
 [ -n "$CANCUN_TS" ] && FLAGS="$FLAGS -Dfukuii.blockchains.hive.cancun-timestamp=$CANCUN_TS"
 [ -n "$PRAGUE_TS" ] && FLAGS="$FLAGS -Dfukuii.blockchains.hive.prague-timestamp=$PRAGUE_TS"
 [ -n "$OSAKA_TS" ] && FLAGS="$FLAGS -Dfukuii.blockchains.hive.osaka-timestamp=$OSAKA_TS"
+[ -n "$AMSTERDAM_TS" ] && FLAGS="$FLAGS -Dfukuii.blockchains.hive.amsterdam-timestamp=$AMSTERDAM_TS"
 
 # RPC
 FLAGS="$FLAGS -Dfukuii.network.rpc.http.enabled=true"
