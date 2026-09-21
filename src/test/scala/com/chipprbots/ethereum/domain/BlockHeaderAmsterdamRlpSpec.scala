@@ -96,6 +96,10 @@ class BlockHeaderAmsterdamRlpSpec extends AnyWordSpec with Matchers:
 
   private def encodeItems(items: Seq[RLPEncodeable]): Array[Byte] = rlp.encode(RLPList(items*))
 
+  private def rawBytes(item: RLPEncodeable): ByteString = item match
+    case RLPValue(bytes) => ByteString(bytes)
+    case other           => fail(s"expected RLPValue, got $other")
+
   "BlockHeader RLP — Amsterdam (23 items)" should {
 
     "encode exactly 23 items, with blockAccessListHash at 21 and slotNumber at 22" taggedAs (
@@ -106,10 +110,11 @@ class BlockHeaderAmsterdamRlpSpec extends AnyWordSpec with Matchers:
       items.length shouldBe 23
 
       // Positions are the measured ones; assert on the wire bytes rather than on the case class,
-      // so a field reorder in the encoder cannot pass.
-      items(20) shouldBe RLPValue(b32(0x33).toArray)
-      items(21) shouldBe RLPValue(b32(0x44).toArray)
-      items(22) shouldBe RLPValue(ByteUtils.bigIntToUnsignedByteArray(BigInt(600)))
+      // so a field reorder in the encoder cannot pass. RLPValue wraps a raw Array[Byte] whose
+      // equals is reference identity, hence the explicit ByteString lift.
+      rawBytes(items(20)) shouldBe b32(0x33)
+      rawBytes(items(21)) shouldBe b32(0x44)
+      rawBytes(items(22)) shouldBe ByteString(ByteUtils.bigIntToUnsignedByteArray(BigInt(600)))
     }
 
     "decode a 23-item header to HefPostAmsterdam, not HefPostPrague" taggedAs (UnitTest, ConsensusTest) in {
