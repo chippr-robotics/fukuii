@@ -24,9 +24,9 @@ import com.chipprbots.ethereum.utils.Picklers.given
   *
   * **The blast radius is not just fast sync.** `Picklers.given` is imported by `BlockHeadersStorage` and
   * `BlockBodiesStorage`, i.e. the persistent header database for the whole chain — ETC included, where the only
-  * reachable variants are `HefEmpty` (pre-Olympia) and `HefPostOlympia` (ECIP-1111 base fee). An ordinal shift
-  * corrupts an existing ETC datadir on upgrade, and the node would decode a `HefEmpty` record as `HefPostOlympia` or
-  * worse rather than failing loudly.
+  * reachable variants are `HefEmpty` (pre-Olympia) and `HefPostOlympia` (ECIP-1111 base fee). An ordinal shift corrupts
+  * an existing ETC datadir on upgrade, and the node would decode a `HefEmpty` record as `HefPostOlympia` or worse
+  * rather than failing loudly.
   *
   * So: **append new variants, never insert.** This spec is the ratchet that makes that a build failure instead of a
   * code-review convention.
