@@ -212,17 +212,42 @@ trait BlockHeaderValidatorSkeleton extends BlockHeaderValidator:
   private def validateGasLimit(
       blockHeader: BlockHeader,
       parentHeader: BlockHeader
-  ): Either[BlockHeaderError, BlockHeaderValid] =
+  )(implicit blockchainConfig: BlockchainConfig): Either[BlockHeaderError, BlockHeaderValid] =
     // 2^63 - 1 is the protocol-wide gasLimit cap (cannot fit in an int64). It applies
     // regardless of EIP-106 activation — any block with gasLimit >= 2^63 is malformed.
     if blockHeader.gasLimit.value > MaxGasLimit then Left(HeaderGasLimitError)
     else
-      // Standard ±1/1024 bound applies at all blocks including the Olympia activation.
-      // ETC Olympia increases gas limit 7.5× (8M → 60M) via gradual miner convergence
-      // over ~2,055 blocks — not the 2× one-shot doubling of ETH London (which was
-      // maintaining effective capacity, not increasing throughput).
-      val gasLimitDiff = (blockHeader.gasLimit - parentHeader.gasLimit).abs
-      val gasLimitDiffLimit = parentHeader.gasLimit / GasLimitBoundDivisor
+      // EIP-1559 one-shot elasticity scaling at the fork-activation block.
+      //
+      // go-ethereum (consensus/misc/eip1559.go, VerifyEip1559Header) scales the parent's
+      // gas limit by the elasticity multiplier when the parent is the last pre-fork block,
+      // then applies the ordinary ±1/1024 window AROUND that scaled value. It is not an
+      // exact-2× equality check: with parent P the activation block may sit anywhere in
+      // (2P - 2P/1024, 2P + 2P/1024).
+      //
+      // Whether this scaling applies is a per-chain fork-schedule property, not a network
+      // type test: `olympiaGasLimitElasticity` is Some(2) for ETH/Sepolia/hive (London) and
+      // absent — None — for ETC/Mordor/Gorgoroth. See the field comment in BlockchainConfig
+      // for what is and is not settled on the ETC side (ECIP-1122 pending).
+      //
+      // The predicate keys on the PARENT crossing the fork, matching go-ethereum, and uses
+      // two independent height comparisons rather than `blockHeader.number == olympiaBlock`.
+      // validateGasLimit runs BEFORE validateNumber in `validate`, so at this point the
+      // parent/child height relationship is still unverified and must not be assumed.
+      val olympiaBlockNumber = blockchainConfig.forkBlockNumbers.olympiaBlockNumber
+      val parentIsPreOlympia = parentHeader.number.value < olympiaBlockNumber
+      val headerIsPostOlympia = blockHeader.number.value >= olympiaBlockNumber
+      val effectiveParentGasLimit: GasAmount =
+        blockchainConfig.forkBlockNumbers.olympiaGasLimitElasticity match
+          case Some(multiplier) if parentIsPreOlympia && headerIsPostOlympia =>
+            // GasAmount has *(Long) and *(BigInt) but no *(Int) — widen explicitly.
+            parentHeader.gasLimit * BigInt(multiplier)
+          case _ => parentHeader.gasLimit
+
+      // BOTH the diff and the bound are taken from the scaled parent. Computing the divisor
+      // from the raw parent would leave a 2× too-tight window at exactly the activation block.
+      val gasLimitDiff = (blockHeader.gasLimit - effectiveParentGasLimit).abs
+      val gasLimitDiffLimit = effectiveParentGasLimit / GasLimitBoundDivisor
       if gasLimitDiff < gasLimitDiffLimit && blockHeader.gasLimit >= GasAmount(MinGasLimit) then Right(BlockHeaderValid)
       else Left(HeaderGasLimitError)
 

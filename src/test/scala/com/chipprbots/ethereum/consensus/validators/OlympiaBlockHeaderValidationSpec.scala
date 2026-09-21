@@ -39,14 +39,18 @@ class OlympiaBlockHeaderValidationSpec
 
   private val olympiaBlock: BigInt = BigInt(100)
 
+  // olympiaGasLimitElasticity pinned to None ON PURPOSE rather than inherited from the parse
+  // default: this suite asserts ETC gas-limit behaviour, where the standard +/-1/1024 window
+  // applies at EVERY block including the Olympia activation block. Some(2) would move the
+  // window to be centred on 2x the parent at that one block.
   implicit val config: BlockchainConfig = blockchainConfig.withUpdatedForkBlocks(
-    _.copy(olympiaBlockNumber = olympiaBlock)
+    _.copy(olympiaBlockNumber = olympiaBlock, olympiaGasLimitElasticity = None)
   )
 
   // ETH / Hive regime: baseFeeFloor = 0 (Big0). Under this floor the EIP-1559 decrease-branch
   // off-by-one becomes observable end-to-end through header validation.
   private val configFloorZero: BlockchainConfig = blockchainConfig
-    .withUpdatedForkBlocks(_.copy(olympiaBlockNumber = olympiaBlock))
+    .withUpdatedForkBlocks(_.copy(olympiaBlockNumber = olympiaBlock, olympiaGasLimitElasticity = None))
     .copy(baseFeeFloor = BigInt(0))
 
   private val InitialBaseFee: BigInt = BaseFeeCalculator.InitialBaseFee

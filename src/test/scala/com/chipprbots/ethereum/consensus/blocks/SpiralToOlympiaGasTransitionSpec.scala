@@ -55,8 +55,17 @@ class SpiralToOlympiaGasTransitionSpec
 
   // olympiaGasTarget = Some(60M) is required so gasLimitAdjustmentStartAt(olympiaBlock)
   // returns Some(60M) rather than falling back to miningConfig.gasLimitTarget.
+  //
+  // olympiaGasLimitElasticity is pinned to None ON PURPOSE rather than inherited from the
+  // parse default: this suite asserts the ETC regime, where there is NO one-shot 2x gas-limit
+  // scaling at the Olympia activation block. If the default ever flipped, these expectations
+  // would silently start describing the ETH regime instead of failing.
   implicit val config: BlockchainConfig = blockchainConfig.withUpdatedForkBlocks(
-    _.copy(olympiaBlockNumber = olympiaBlock, olympiaGasTarget = Some(BigInt(60_000_000)))
+    _.copy(
+      olympiaBlockNumber = olympiaBlock,
+      olympiaGasTarget = Some(BigInt(60_000_000)),
+      olympiaGasLimitElasticity = None
+    )
   )
 
   private val SpiralGasLimit: BigInt = BigInt(8_000_000)

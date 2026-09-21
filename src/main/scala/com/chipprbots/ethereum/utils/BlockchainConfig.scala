@@ -123,7 +123,24 @@ case class ForkBlockNumbers(
     // block onward via the standard ±1/1024 mechanism — the schedule is authoritative
     // regardless of operator config. None → fall back to miningConfig.gasLimitTarget.
     spiralGasTarget: Option[BigInt] = None,
-    olympiaGasTarget: Option[BigInt] = None
+    olympiaGasTarget: Option[BigInt] = None,
+    // EIP-1559 §"gas limit" one-shot elasticity scaling at the fork-activation block.
+    // On ETH/London (go-ethereum core/block_validator.go + consensus/misc/eip1559.go
+    // `VerifyEip1559Header`), the FIRST post-fork block validates its ±1/1024 window
+    // against parent.gasLimit * ElasticityMultiplier, not against the raw parent —
+    // the activation block is allowed to double. Every later block uses the raw parent.
+    //
+    // Some(n) → the fork-activation block scales the parent gas limit by n before the
+    // bound check. None → no scaling at activation; the ordinary ±1/1024 window applies
+    // at every block including the fork block.
+    //
+    // ETC leaves this None. What is established: ECIP-1121 / EIP-7935 back the 60M gas
+    // limit convergence target, reached gradually via the ±1/1024 mechanism. What is NOT
+    // established: no ECIP text (1111 or 1121) documents whether ETC suppresses the
+    // London-style one-shot elasticity scaling at the Olympia activation block. Leaving
+    // it unset preserves current ETC behaviour byte-for-byte; ECIP-1122 is expected to
+    // settle this, and if it lands the other way this is the single knob to flip.
+    olympiaGasLimitElasticity: Option[Int] = None
 ):
   def all: List[BigInt] = this.productIterator.toList.collect { case i: BigInt =>
     i
@@ -244,6 +261,9 @@ object BlockchainConfig:
       Try(BigInt(blockchainConfig.getString("spiral-gas-target"))).toOption
     val olympiaGasTarget: Option[BigInt] =
       Try(BigInt(blockchainConfig.getString("olympia-gas-target"))).toOption
+    // Absent key → None → no one-shot gas-limit scaling at the fork block (ETC default).
+    val olympiaGasLimitElasticity: Option[Int] =
+      Try(blockchainConfig.getInt("olympia-gas-limit-elasticity")).toOption
 
     val treasuryAddress: Address =
       Try(Address(blockchainConfig.getString("treasury-address"))).getOrElse(Address(0))
@@ -309,7 +329,8 @@ object BlockchainConfig:
         olympiaBlockNumber = olympiaBlockNumber,
         mergeNetsplitBlockNumber = mergeNetsplitBlockNumber,
         spiralGasTarget = spiralGasTarget,
-        olympiaGasTarget = olympiaGasTarget
+        olympiaGasTarget = olympiaGasTarget,
+        olympiaGasLimitElasticity = olympiaGasLimitElasticity
       ),
       maxCodeSize = maxCodeSize,
       customGenesisFileOpt = customGenesisFileOpt,

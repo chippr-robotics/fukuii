@@ -222,9 +222,36 @@ class EngineApiService(
         else if block.header.gasLimit < GasAmount(5000) then
           Some(s"gas limit below minimum: ${block.header.gasLimit} < 5000")
         else
-          // EIP-1559 gas limit bounds: |gasLimit - parent.gasLimit| < parent.gasLimit / 1024
-          val diff = (block.header.gasLimit - parent.gasLimit).abs
-          val limit = parent.gasLimit / 1024
+          // EIP-1559 gas limit bounds: |gasLimit - effectiveParent| < effectiveParent / 1024.
+          //
+          // This inline check duplicates BlockHeaderValidatorSkeleton.validateGasLimit and MUST
+          // stay in step with it — the engine newPayload path does not route through the skeleton
+          // validator, so a rule applied in only one of the two makes the client accept blocks it
+          // will not produce (or reject blocks it does produce). Extraction of a shared helper is
+          // deliberately left to a separate commit.
+          //
+          // effectiveParent applies the same one-shot elasticity scaling at the fork-activation
+          // block: when the parent is the last pre-fork block and the child is the first post-fork
+          // block, go-ethereum validates the ±1/1024 window around parent.gasLimit * multiplier.
+          // Some(2) on ETH/Sepolia/hive; None on ETC (see BlockchainConfig field comment).
+          // Both the diff and the divisor come from the scaled value.
+          val olympiaBlockNumber = blockchainConfig.forkBlockNumbers.olympiaBlockNumber
+          val effectiveParentGasLimit =
+            blockchainConfig.forkBlockNumbers.olympiaGasLimitElasticity match
+              case Some(multiplier)
+                  if parent.number.value < olympiaBlockNumber &&
+                    block.header.number.value >= olympiaBlockNumber =>
+                // GasAmount has *(Long) and *(BigInt) but no *(Int) — widen explicitly.
+                parent.gasLimit * BigInt(multiplier)
+              case _ => parent.gasLimit
+          val diff = (block.header.gasLimit - effectiveParentGasLimit).abs
+          val limit = effectiveParentGasLimit / 1024
+          // The `!= parent.gasLimit` clause is NOT in go-ethereum. It exists as a guard for the
+          // limit == 0 case (a zero/tiny parent gas limit makes the bound 0, so diff >= limit holds
+          // even for an unchanged gas limit and an otherwise-valid chain is rejected). It is
+          // compared against the RAW parent on purpose: "gas limit unchanged from the parent" is a
+          // statement about the actual header field, not the scaled bound input. Removing this
+          // clause to match geth is a separate, separately-reviewed change.
           if diff >= limit && block.header.gasLimit != parent.gasLimit then
             Some(s"invalid gas limit change: diff=$diff exceeds bound=$limit")
           // EIP-4844: Validate excessBlobGas against parent.
@@ -751,7 +778,24 @@ class EngineApiService(
 
                             // Build post-merge header with skeleton (difficulty=0 so payBlockReward skips PoW rewards)
                             val blockNumber = parent.header.number + 1
-                            val gasLimit = parent.header.gasLimit // keep parent gas limit
+                            // Keep the parent gas limit, EXCEPT at the EIP-1559 fork-activation
+                            // block, where the elasticity multiplier applies as a one-shot scale.
+                            // Producer and validator must agree: the inline check above (and
+                            // BlockHeaderValidatorSkeleton.validateGasLimit) centre the ±1/1024
+                            // window on the scaled parent at that one block, so a producer that
+                            // kept the raw parent here would emit a payload its own newPayload
+                            // round-trip rejects. That producer/validator asymmetry is exactly the
+                            // failure mode this pair of changes exists to prevent.
+                            // Some(2) on ETH/Sepolia/hive; None on ETC → unchanged behaviour there.
+                            val olympiaActivation = blockchainConfig.forkBlockNumbers.olympiaBlockNumber
+                            val gasLimit =
+                              blockchainConfig.forkBlockNumbers.olympiaGasLimitElasticity match
+                                case Some(multiplier)
+                                    if parent.header.number.value < olympiaActivation &&
+                                      blockNumber.value >= olympiaActivation =>
+                                  // GasAmount has *(Long) and *(BigInt) but no *(Int).
+                                  parent.header.gasLimit * BigInt(multiplier)
+                                case _ => parent.header.gasLimit
                             val header = BlockHeader(
                               parentHash = parent.header.hash,
                               ommersHash = BlockHash(
