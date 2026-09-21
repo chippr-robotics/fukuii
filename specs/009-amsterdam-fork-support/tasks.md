@@ -74,10 +74,10 @@ all passing.
 **Purpose**: activation gating and the ETC guard. Additive and ETC-inert by construction, so it can
 land with Slice A.
 
-- [ ] T003 Add `amsterdamTimestamp: Option[Long] = None` to `ForkTimestamps` in `src/main/scala/com/chipprbots/ethereum/utils/BlockchainConfig.scala`, positioned after `osakaTimestamp`
-- [ ] T004 Add `isAmsterdamTimestamp(timestamp: Timestamp): Boolean` to `BlockchainConfig` in `src/main/scala/com/chipprbots/ethereum/utils/BlockchainConfig.scala`, following the exact shape of `isOsakaTimestamp`
-- [ ] T005 Parse HOCON key `amsterdam-timestamp` alongside `osaka-timestamp` in `BlockchainConfig`'s reader in `src/main/scala/com/chipprbots/ethereum/utils/BlockchainConfig.scala`
-- [ ] T006 [P] Declare `amsterdam-timestamp` in `src/main/resources/conf/base/chains/hive-chain.conf` only, wired from the hive harness. Do NOT add it to `eth-chain.conf` or `sepolia-chain.conf` — neither network has scheduled Amsterdam, and declaring it would activate untested consensus rules on a live chain
+- [x] T003 Add `amsterdamTimestamp: Option[Long] = None` to `ForkTimestamps` in `src/main/scala/com/chipprbots/ethereum/utils/BlockchainConfig.scala`, positioned after `osakaTimestamp`
+- [x] T004 Add `isAmsterdamTimestamp(timestamp: Timestamp): Boolean` to `BlockchainConfig` in `src/main/scala/com/chipprbots/ethereum/utils/BlockchainConfig.scala`, following the exact shape of `isOsakaTimestamp`
+- [x] T005 Parse HOCON key `amsterdam-timestamp` alongside `osaka-timestamp` in `BlockchainConfig`'s reader in `src/main/scala/com/chipprbots/ethereum/utils/BlockchainConfig.scala`
+- [x] T006 [P] Declare `amsterdam-timestamp` in `src/main/resources/conf/base/chains/hive-chain.conf` only, wired from the hive harness. Do NOT add it to `eth-chain.conf` or `sepolia-chain.conf` — neither network has scheduled Amsterdam, and declaring it would activate untested consensus rules on a live chain
 - [ ] T007 [US3] Write `src/test/scala/com/chipprbots/ethereum/utils/ChainConfigMatrixSpec.scala` asserting that every ETC-family shipped config (`etc-chain.conf`, `mordor-chain.conf`, `gorgoroth-chain.conf`) has `forkTimestamps.amsterdamTimestamp.isEmpty`. **This is FR-004 as a test rather than a convention** — safety-by-omission is only as good as the configs, and nothing currently catches a stray declaration
 
 **Checkpoint**: Amsterdam is declarable, absent everywhere it should be absent, and a test says so.
@@ -96,19 +96,50 @@ and honestly. That is the expected outcome, not a reason to bundle it with Slice
 
 ### Tests first (these must FAIL before T010)
 
-- [ ] T008 [US2] Write `src/test/scala/com/chipprbots/ethereum/domain/BlockHeaderAmsterdamRlpSpec.scala`: a 23-item header decodes to `HefPostAmsterdam`, re-encodes byte-identically, and hashes to `6372c88f…`. **Confirm it fails first** — today it passes decoding and produces `94844dfd…`, so a test that goes green before the fix is testing the wrong thing
-- [ ] T009 [P] [US2] Extend the same spec with the round-trip invariant `encode(decode(bytes)) == bytes` for all six shapes in `contracts/header-rlp.md` (15/16/17/20/21/23), and rejection with the count named for 18, 19, 22 and 24
+- [x] T008 [US2] Write `src/test/scala/com/chipprbots/ethereum/domain/BlockHeaderAmsterdamRlpSpec.scala`: a 23-item header decodes to `HefPostAmsterdam`, re-encodes byte-identically, and hashes to `6372c88f…`. **Confirm it fails first** — today it passes decoding and produces `94844dfd…`, so a test that goes green before the fix is testing the wrong thing
+- [x] T009 [P] [US2] Extend the same spec with the round-trip invariant `encode(decode(bytes)) == bytes` for all six shapes in `contracts/header-rlp.md` (15/16/17/20/21/23), and rejection with the count named for 18, 19, 22 and 24
 
 ### Implementation
 
-- [ ] T010 [US2] Add `HefPostAmsterdam` to `HeaderExtraFields` in `src/main/scala/com/chipprbots/ethereum/domain/BlockHeader.scala` with fields in the measured order from `contracts/header-rlp.md`: `baseFee`, `withdrawalsRoot`, `blobGasUsed`, `excessBlobGas`, `parentBeaconBlockRoot`, `requestsHash`, `blockAccessListHash`, `slotNumber`
-- [ ] T011 [US2] Replace `case n if n >= 21` with `case 21 => HefPostPrague` and `case 23 => HefPostAmsterdam` in the decoder in `src/main/scala/com/chipprbots/ethereum/domain/BlockHeader.scala`. Everything else falls through to the existing throw. **Measured correction**: only 18 and 19 were rejected before this change. `n >= 21` swallowed 22 and 24 as well, decoding both as `HefPostPrague` — so rejecting them is NEW behaviour, not pre-existing, and Slice A is more corrective than an earlier draft of this task claimed
-- [ ] T012 [US2] Add the `HefPostAmsterdam` encode case to `BlockHeaderEnc.toRLPEncodable` in `src/main/scala/com/chipprbots/ethereum/domain/BlockHeader.scala`, emitting 8 extra items
-- [ ] T013 [US2] Add `HefPostAmsterdam` cases to each accessor in `src/main/scala/com/chipprbots/ethereum/domain/BlockHeader.scala` (`baseFee`, `withdrawalsRoot`, `blobGasUsed`, `excessBlobGas`, `parentBeaconBlockRoot`, `requestsHash`) and to `extraFieldsCount` (→ 8). **Each needs its own assertion**: these are total functions returning `Option`, so a missing case is a silent `None`, not a compile error
-- [ ] T014 [US2] Add the `HefPostAmsterdam` case to `BlockHeader.validateFieldCount` in `src/main/scala/com/chipprbots/ethereum/domain/BlockHeader.scala`, and a case to `src/test/scala/com/chipprbots/ethereum/domain/BlockHeaderFieldCountSpec.scala` — this is the separate shape-versus-active-fork check, not the decoder arity check, and it needs the new shape too
-- [ ] T015 [US3] Run the four ETC regression suites and confirm green with no assertion edits: `sbt "testOnly *SpiralToOlympiaGasTransitionSpec* *OlympiaBlockHeaderValidationSpec* *OlympiaGasLimitSpec* *GasLimitCalculationSpec*"`
+- [x] T010 [US2] Add `HefPostAmsterdam` to `HeaderExtraFields` in `src/main/scala/com/chipprbots/ethereum/domain/BlockHeader.scala` with fields in the measured order from `contracts/header-rlp.md`: `baseFee`, `withdrawalsRoot`, `blobGasUsed`, `excessBlobGas`, `parentBeaconBlockRoot`, `requestsHash`, `blockAccessListHash`, `slotNumber`
+- [x] T011 [US2] Replace `case n if n >= 21` with `case 21 => HefPostPrague` and `case 23 => HefPostAmsterdam` in the decoder in `src/main/scala/com/chipprbots/ethereum/domain/BlockHeader.scala`. Everything else falls through to the existing throw. **Measured correction**: only 18 and 19 were rejected before this change. `n >= 21` swallowed 22 and 24 as well, decoding both as `HefPostPrague` — so rejecting them is NEW behaviour, not pre-existing, and Slice A is more corrective than an earlier draft of this task claimed
+- [x] T012 [US2] Add the `HefPostAmsterdam` encode case to `BlockHeaderEnc.toRLPEncodable` in `src/main/scala/com/chipprbots/ethereum/domain/BlockHeader.scala`, emitting 8 extra items
+- [x] T013 [US2] Add `HefPostAmsterdam` cases to each accessor in `src/main/scala/com/chipprbots/ethereum/domain/BlockHeader.scala` (`baseFee`, `withdrawalsRoot`, `blobGasUsed`, `excessBlobGas`, `parentBeaconBlockRoot`, `requestsHash`) and to `extraFieldsCount` (→ 8). **Each needs its own assertion**: these are total functions returning `Option`, so a missing case is a silent `None`, not a compile error
+- [x] T014 [US2] Add the `HefPostAmsterdam` case to `BlockHeader.validateFieldCount` in `src/main/scala/com/chipprbots/ethereum/domain/BlockHeader.scala`, and a case to `src/test/scala/com/chipprbots/ethereum/domain/BlockHeaderFieldCountSpec.scala` — this is the separate shape-versus-active-fork check, not the decoder arity check, and it needs the new shape too
+- [x] T015 [US3] Run the four ETC regression suites and confirm green with no assertion edits: `sbt "testOnly *SpiralToOlympiaGasTransitionSpec* *OlympiaBlockHeaderValidationSpec* *OlympiaGasLimitSpec* *GasLimitCalculationSpec*"`
 
-**Checkpoint**: Slice A is independently shippable. Commit and land it before starting Slice B.
+**Slice A is DONE and verified**, except T007.
+
+```
+VERIFY: ran sbt scalafmtCheckAll — result: PASS
+VERIFY: ran sbt "testOnly *BlockHeader* *SpiralToOlympiaGasTransitionSpec*
+        *OlympiaBlockHeaderValidationSpec* *OlympiaGasLimitSpec*
+        *GasLimitCalculationSpec* *Pickler*"
+        — result: PASS — 13 suites, 104 tests, 0 failed, no assertion edits
+VERIFY: ran sbt testEssential — result: DID NOT RUN (end-of-thread, ~24 min)
+VERIFY: ran hive devp2p — result: DID NOT RUN (Slice B gate, T037)
+```
+
+**T007 remains outstanding and is the ETC guard** — do not let it drift. `BlockHeaderFieldCountSpec`
+now asserts the property for a *synthetic* ETC config, which is strictly weaker: it does not read the
+shipped `etc-chain.conf` / `mordor-chain.conf` / `gorgoroth-chain.conf`. FR-004 wants the shipped
+files checked.
+
+Three sites beyond this slice's stated scope needed the new variant, each a silent-failure risk
+rather than a compile error: the boopickle registries in `Picklers.scala` and
+`FastSyncStateStorage.scala` (appended last — registration order is the wire index, so appending
+keeps persisted fast-sync records decodable) and `EthSimulateService`'s `isPoW` match (no `case _`,
+so a runtime `MatchError`).
+
+**Flagged for Slice B, not fixed here** — four `case _ =>` fallbacks that silently degrade under
+Amsterdam without crashing: `EthInfoService.scala:266` (`zeroBaseFeeExtra` returns the header
+unchanged, so `eth_call` keeps a non-zero base fee), `EngineApiController.scala:478` (`baseFee` falls
+through to 0), `EngineApiController.scala:531` (returns `(None, None, None)`, so `engine_getPayload`
+omits all three fields), and `EthSimulateService.scala:370` (patches `blobGasUsed` only on
+`HefPostPrague` — currently unreachable, but live the moment Slice B adds an Amsterdam branch to its
+header builder).
+
+**Checkpoint**: Slice A is independently shippable and shipped.
 
 ---
 
