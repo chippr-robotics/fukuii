@@ -93,6 +93,11 @@ object ProgramContext:
   * @param originalWorld
   *   state of the world at the beginning of the current transaction, read-only, needed for
   *   https://eips.ethereum.org/EIPS/eip-1283
+  * @param createdAddresses
+  *   addresses created by CREATE/CREATE2 so far in this transaction (EIP-6780). NOTE: this cannot be derived from
+  *   `originalWorld` because `VM.create` deliberately replaces the create frame's `originalWorld` with
+  *   `originalWorld.initialiseAccount(contractAddr)` for EIP-1283/2200 original-value lookups, which makes the new
+  *   address *exist* there.
   */
 case class ProgramContext[W <: WorldStateProxy[W, S], S <: Storage[S]](
     callerAddr: Address,
@@ -114,6 +119,7 @@ case class ProgramContext[W <: WorldStateProxy[W, S], S <: Storage[S]](
     warmAddresses: Set[Address],
     warmStorage: Set[(Address, StorageKey)],
     transientStorage: Map[(Address, StorageKey), BigInt] = Map.empty,
+    createdAddresses: Set[Address] = Set.empty,
     precompileRelocations: Map[Address, Address] = Map.empty,
     blobVersionedHashes: Seq[ByteString] = Seq.empty,
     traceTransfers: Boolean = false,

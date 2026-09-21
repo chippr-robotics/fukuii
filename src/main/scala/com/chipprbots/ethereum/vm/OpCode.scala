@@ -921,6 +921,7 @@ abstract class CreateOp(code: Int, delta: Int) extends OpCode(code, delta, 1, _.
         initialAddressesToDelete = state.addressesToDelete,
         evmConfig = state.config,
         originalWorld = state.originalWorld,
+        createdAddresses = state.createdAddresses,
         warmAddresses = state.accessedAddresses,
         warmStorage = state.accessedStorageKeys,
         transientStorage = state.transientStorage,
@@ -966,6 +967,7 @@ abstract class CreateOp(code: Int, delta: Int) extends OpCode(code, delta, 1, _.
             .refundGas(result.gasRefund)
             .withStack(resultStack)
             .withAddressesToDelete(result.addressesToDelete)
+            .withCreatedAddresses(result.createdAddresses)
             .withLogs(result.logs)
             .withMemory(memory1)
             .withInternalTxs(internalTx +: result.internalTxs)
@@ -1049,6 +1051,7 @@ abstract class CallOp(code: Int, delta: Int, alpha: Int) extends OpCode(code, de
       evmConfig = state.config,
       staticCtx = static,
       originalWorld = state.originalWorld,
+      createdAddresses = state.createdAddresses,
       warmAddresses = stateWithDelegationWarming.accessedAddresses,
       warmStorage = state.accessedStorageKeys,
       transientStorage = state.transientStorage,
@@ -1104,6 +1107,7 @@ abstract class CallOp(code: Int, delta: Int, alpha: Int) extends OpCode(code, de
           .withMemory(mem2)
           .withWorld(result.world)
           .withAddressesToDelete(result.addressesToDelete)
+          .withCreatedAddresses(result.createdAddresses)
           .withInternalTxs(internalTx +: result.internalTxs)
           .withLogs(result.logs ++ transferLogs)
           .withReturnData(result.returnData)
@@ -1261,9 +1265,19 @@ case object SELFDESTRUCT extends OpCode(0xff, 1, 0, _.G_selfdestruct):
     val gasRefund: BigInt =
       if state.addressesToDelete contains state.ownAddress then 0 else state.config.feeSchedule.R_selfdestruct
 
-    // EIP-6780: Post-Olympia, SELFDESTRUCT only destroys contracts created in the same transaction.
-    // Pre-existing contracts only have their balance transferred.
-    val createdInThisTx = !state.originalWorld.accountExists(state.ownAddress)
+    // EIP-6780: Post-Cancun (ETH) / post-Olympia (ETC), SELFDESTRUCT only destroys contracts created in the same
+    // transaction. Pre-existing contracts only have their balance transferred.
+    //
+    // `createdAddresses` is authoritative: it is populated by VM.create for the address it is creating and propagated
+    // down into sub-frames. The `originalWorld` fallback is retained for callers that construct a ProgramContext by
+    // hand (and for EIP-7702-delegated code running on an authority absent at tx start); it is NOT sufficient on its
+    // own, because VM.create sets the create frame's `originalWorld` to
+    // `originalWorld.initialiseAccount(contractAddr)` — required by EIP-1283/2200 original-value lookups — which makes
+    // the newly created address *exist* there. Relying on it alone left a CREATE'd + self-destructed child in the trie
+    // with nonce=1 (hive devp2p block 8, hivechain `tx-calltree`): identical gas, divergent state root.
+    // Reference: go-ethereum StateDB.SelfDestruct6780 keys off the `newContract` flag set by CreateContract.
+    val createdInThisTx =
+      state.createdAddresses.contains(state.ownAddress) || !state.originalWorld.accountExists(state.ownAddress)
     val shouldDelete = !state.config.eip6780Enabled || createdInThisTx
 
     // Self-transfer ether handling differs by deletion outcome:

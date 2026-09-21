@@ -20,6 +20,9 @@ import com.chipprbots.ethereum.domain.TxLogEntry
   *   list of internal transactions (for debugging/tracing) if enabled in config
   * @param error
   *   defined when the program terminated abnormally
+  * @param createdAddresses
+  *   addresses of accounts created by CREATE/CREATE2 during this transaction (EIP-6780). Propagated upwards only from
+  *   frames that completed without error, so a reverted CREATE does not leak its address.
   */
 case class ProgramResult[W <: WorldStateProxy[W, S], S <: Storage[S]](
     returnData: ByteString,
@@ -32,5 +35,6 @@ case class ProgramResult[W <: WorldStateProxy[W, S], S <: Storage[S]](
     error: Option[ProgramError],
     accessedAddresses: Set[Address],
     accessedStorageKeys: Set[(Address, StorageKey)],
-    transientStorage: Map[(Address, StorageKey), BigInt] = Map.empty
+    transientStorage: Map[(Address, StorageKey), BigInt] = Map.empty,
+    createdAddresses: Set[Address] = Set.empty
 )

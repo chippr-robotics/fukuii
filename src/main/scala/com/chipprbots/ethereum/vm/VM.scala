@@ -195,8 +195,19 @@ class VM[W <: WorldStateProxy[W, S], S <: Storage[S]](
 
               val env = ExecEnv(context, code, contractAddr).copy(inputData = ByteString.empty)
 
+              // EIP-6780: `contractAddr` is created *in this transaction*. Record it explicitly — it cannot be
+              // inferred from `originalWorld` below, because `originInitialisedAccount` deliberately contains the
+              // freshly initialised account (needed for EIP-1283/2200 original-value lookups).
               val initialState: PS =
-                ProgramState(this, context.copy(world = world1, originalWorld = originInitialisedAccount): PC, env)
+                ProgramState(
+                  this,
+                  context.copy(
+                    world = world1,
+                    originalWorld = originInitialisedAccount,
+                    createdAddresses = context.createdAddresses + contractAddr
+                  ): PC,
+                  env
+                )
                   .addAccessedAddress(contractAddr)
 
               val execResult = exec(initialState).toResult

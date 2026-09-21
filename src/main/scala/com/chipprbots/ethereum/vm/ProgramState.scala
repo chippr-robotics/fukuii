@@ -31,7 +31,8 @@ object ProgramState:
         context.recipientAddr.getOrElse(context.callerAddr)
       ) ++ context.warmAddresses ++ coinbaseAddress,
       accessedStorageKeys = context.warmStorage,
-      transientStorage = context.transientStorage
+      transientStorage = context.transientStorage,
+      createdAddresses = context.createdAddresses
     )
 
 /** Intermediate state updated with execution of each opcode in the program
@@ -92,7 +93,8 @@ case class ProgramState[W <: WorldStateProxy[W, S], S <: Storage[S]](
     accessedAddresses: Set[Address],
     accessedStorageKeys: Set[(Address, StorageKey)],
     transientStorage: Map[(Address, StorageKey), BigInt] = Map.empty,
-    opcodeGasCost: BigInt = 0
+    opcodeGasCost: BigInt = 0,
+    createdAddresses: Set[Address] = Set.empty
 ):
 
   def config: EvmConfig = env.evmConfig
@@ -145,6 +147,10 @@ case class ProgramState[W <: WorldStateProxy[W, S], S <: Storage[S]](
   def withAddressesToDelete(addresses: Set[Address]): ProgramState[W, S] =
     copy(addressesToDelete = addressesToDelete ++ addresses)
 
+  /** EIP-6780: record addresses created by CREATE/CREATE2 in this transaction. */
+  def withCreatedAddresses(addresses: Set[Address]): ProgramState[W, S] =
+    copy(createdAddresses = createdAddresses ++ addresses)
+
   def withLog(log: TxLogEntry): ProgramState[W, S] =
     copy(logs = logs :+ log)
 
@@ -184,5 +190,6 @@ case class ProgramState[W <: WorldStateProxy[W, S], S <: Storage[S]](
       error,
       accessedAddresses,
       accessedStorageKeys,
-      transientStorage
+      transientStorage,
+      createdAddresses
     )
