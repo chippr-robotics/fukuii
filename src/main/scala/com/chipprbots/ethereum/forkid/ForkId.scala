@@ -87,7 +87,15 @@ object ForkId:
       config.forkTimestamps.pragueTimestamp.map(BigInt(_)),
       config.forkTimestamps.osakaTimestamp.map(BigInt(_)),
       config.forkTimestamps.bpo1Timestamp.map(BigInt(_)),
-      config.forkTimestamps.bpo2Timestamp.map(BigInt(_))
+      config.forkTimestamps.bpo2Timestamp.map(BigInt(_)),
+      // Amsterdam was absent here while every other timestamp fork was present, so a
+      // chain declaring `amsterdamTime` advertised a checksum computed over the forks
+      // BEFORE it. Measured against hive's devp2p fixture (genesis
+      // 1518c33d…52024c, forks 60/120/180/240/300/360): fukuii sent 0x321a21a2, the
+      // checksum of [cancun, prague, osaka], and peers wanted 0x5942bfc2, the checksum
+      // of all six. 27 of that suite's 34 failures were the resulting
+      // `wrong fork ID in status` handshake rejection.
+      config.forkTimestamps.amsterdamTimestamp.map(BigInt(_))
     ).flatten.filterNot(_ == 0).distinct.sorted
 
   extension (forkId: ForkId)

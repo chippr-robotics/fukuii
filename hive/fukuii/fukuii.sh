@@ -34,6 +34,13 @@ SHANGHAI_TS=${HIVE_SHANGHAI_TIMESTAMP:-}
 CANCUN_TS=${HIVE_CANCUN_TIMESTAMP:-}
 PRAGUE_TS=${HIVE_PRAGUE_TIMESTAMP:-}
 OSAKA_TS=${HIVE_OSAKA_TIMESTAMP:-}
+# BPO1/BPO2 (EIP-7892 blob-parameter-only forks). These carry no EVM changes, but
+# they ARE forks: they must enter the EIP-6122 fork-id checksum chain, and they
+# select the blob target/max and base-fee update fraction. Omitting them made the
+# node advertise a fork id computed over [cancun, prague, osaka] only, which peers
+# reject with "wrong fork ID in status".
+BPO1_TS=${HIVE_BPO1_TIMESTAMP:-}
+BPO2_TS=${HIVE_BPO2_TIMESTAMP:-}
 AMSTERDAM_TS=${HIVE_AMSTERDAM_TIMESTAMP:-}
 
 # ==============================================================================
@@ -97,6 +104,8 @@ fi
 [ -n "$CANCUN_TS" ] && FLAGS="$FLAGS -Dfukuii.blockchains.hive.cancun-timestamp=$CANCUN_TS"
 [ -n "$PRAGUE_TS" ] && FLAGS="$FLAGS -Dfukuii.blockchains.hive.prague-timestamp=$PRAGUE_TS"
 [ -n "$OSAKA_TS" ] && FLAGS="$FLAGS -Dfukuii.blockchains.hive.osaka-timestamp=$OSAKA_TS"
+[ -n "$BPO1_TS" ] && FLAGS="$FLAGS -Dfukuii.blockchains.hive.bpo1-timestamp=$BPO1_TS"
+[ -n "$BPO2_TS" ] && FLAGS="$FLAGS -Dfukuii.blockchains.hive.bpo2-timestamp=$BPO2_TS"
 [ -n "$AMSTERDAM_TS" ] && FLAGS="$FLAGS -Dfukuii.blockchains.hive.amsterdam-timestamp=$AMSTERDAM_TS"
 
 # RPC
