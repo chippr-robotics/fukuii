@@ -279,15 +279,29 @@ which is the point.
 **Research changed the plan.** Both corrections are carried above rather than noted and ignored:
 slices 2 and 3 are merged into B, and EIP-7708 is added to B and to the spec as FR-019.
 
-## Phase 1: Design & Contracts — after Phase 0
+## Phase 1: Design & Contracts — COMPLETE
 
-- `data-model.md`: `ForkTimestamps` extension, `HefPostAmsterdam` header variant, the state-gas
-  dimension's shape, builder request types.
-- `contracts/`: header RLP field ordering for 23-field headers; the two builder system-contract
-  addresses and their invocation contract.
-- `quickstart.md`: how to validate — import the fixture chain past block 36, confirm head ~89, confirm
-  rpc-compat and graphql unmoved.
-- Update `CLAUDE.md`'s SPECKIT plan reference to this file.
+| Artifact | Contents |
+|---|---|
+| [`data-model.md`](./data-model.md) | `ForkTimestamps.amsterdamTimestamp`; the `EvmConfig` cascade branch; `HefPostAmsterdam` and why the existing decoder is wrong; `BlockResult`'s three counters; `ProgramState`'s five state-gas fields; the `calcTransactionIntrinsicGas` signature change and its five call sites; transfer logs; builder requests |
+| [`contracts/header-rlp.md`](./contracts/header-rlp.md) | The 23-field ordering, measured by re-encoding block 600 to a byte-identical hash; the exact-arity decode table; the round-trip invariant |
+| [`contracts/gas-accounting.md`](./contracts/gas-accounting.md) | The `max()` rule and reservoir split; five conformance vectors V1–V5 from the fixture; an explicit list of what the fixture does **not** cover |
+| [`quickstart.md`](./quickstart.md) | Per-slice run commands, the two non-regression oracles, the ETC guard suites, and the reporting convention |
+
+`CLAUDE.md`'s SPECKIT plan reference now points here.
+
+### Constitution re-check, post-design
+
+| Principle | Post-design assessment |
+|---|---|
+| **I. Consensus Determinism** | **Still the dominant risk, now better bounded.** Design isolates the ETC exposure to shared *signatures* rather than fork gates — the gates are `Option`-typed and absent in every ETC config, while `calcTransactionIntrinsicGas`, `OpCode`, `ProgramState` and `BlockPreparator` are genuinely shared. `research.md` enumerates that surface and every item goes to `forge` before it is edited. |
+| **III. Test Discipline** | **The declared gate gap got worse, and is stated rather than smoothed over.** R-1 establishes that the fixture cannot exercise the state-gas reservoir at all, so the strongest oracle available is weaker than it looked when the gap was first recorded. `contracts/gas-accounting.md` lists the uncovered paths explicitly so nobody reads fixture-green as compliance. Unchanged as a blocker: it is pre-existing and affects every consensus change here. |
+| **V. Quality Gates** | No change. No test may be weakened; the four ETC regression suites must pass with no assertion edits. |
+| Others | Unchanged from the pre-Phase-0 assessment. |
+
+**No new Constitution violations.** The one thing design made worse — the strength of the available
+oracle — is a fact about the fixture, not a choice this plan made, and it is now recorded in three
+places rather than one.
 
 ## Complexity Tracking
 
