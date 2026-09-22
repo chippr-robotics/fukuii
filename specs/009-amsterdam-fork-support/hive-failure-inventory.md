@@ -24,6 +24,9 @@ and no claim below rests on it.
 | consume-rlp | c82c89e | 1796 | 4 | 1800 |
 | consensus | c82c89e | denominator unstable — not comparable |
 | sync, smoke-genesis, smoke-network | c82c89e | green |
+| rpc-compat | 8979c3f | 241 | **6** | 247 | testing_* namespace — all 9 cleared |
+| rpc-compat | 3bbc861 | 232 | 15 | 247 | debug_trace error class — 4 cleared |
+| graphql | 8979c3f | 50 | 2 | 52 | oracle held through the 597-line refactor |
 | engine | fc713a9 | 306 | 97 | 403 |
 | consume-engine | fc713a9 | — | 8 | 1442 |
 | consume-rlp | fc713a9 | — | 4 | 1800 |
