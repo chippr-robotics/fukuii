@@ -67,11 +67,15 @@ class StructLogTracerSpec extends AnyFreeSpec with Matchers:
   // PUSH1 0x02, PUSH1 0x03, ADD, STOP — deliberately two distinct, order-revealing operands.
   private val code = ByteString(0x60, 0x02, 0x60, 0x03, 0x01, 0x00)
 
-  private def runTopLevelCall(tracer: StructLogTracer): Unit =
+  // PUSH1 0x02, PUSH1 0x00, MSTORE, PUSH1 0x00, STOP — writes the word 0x02 to memory offset 0,
+  // then a trailing PUSH1/STOP so a post-MSTORE step exists whose prevState.memory is non-empty.
+  private val memoryWriteCode = ByteString(0x60, 0x02, 0x60, 0x00, 0x52, 0x60, 0x00, 0x00)
+
+  private def runTopLevelCall(tracer: StructLogTracer, contractCode: ByteString = code): Unit =
     val world = MockWorldState()
       .saveAccount(senderAddr, senderAcc)
       .saveAccount(recipientAddr, Account(nonce = 0))
-      .saveCode(recipientAddr, code)
+      .saveCode(recipientAddr, contractCode)
 
     val vm = VM[MockWorldState, MockStorage](Some(tracer))
     val ctx = ProgramContext[MockWorldState, MockStorage](
@@ -168,4 +172,44 @@ class StructLogTracerSpec extends AnyFreeSpec with Matchers:
       tracer.getResult shouldBe a[JObject]
       tracer.getResult should not be JNothing
     }
+
+    "omits memory entirely when enableMemory is false (the default) — go-ethereum's zero-value Config; " +
+      "execution-apis's trace-block-with-transactions.io sends no config at all and expects zero memory keys" taggedAs (
+        UnitTest,
+        VMTest
+      ) in {
+        val tracer = new StructLogTracer(enableMemory = false, enableStorage = false)
+        runTopLevelCall(tracer, memoryWriteCode)
+
+        tracer.getSteps should not be empty
+        tracer.getSteps.foreach(_.memory shouldBe None)
+
+        val structLogs = (tracer.getResult \ "structLogs").asInstanceOf[JArray].arr
+        structLogs should not be empty
+        structLogs.foreach(log => (log \ "memory") shouldBe JNothing)
+      }
+
+    "emits 0x-prefixed, 64-hex-digit memory words when enableMemory is true, per opcode-tracer.yaml's " +
+      "bytes32 pattern ^0x[0-9a-f]{64}$ — the un-prefixed encoding previously emitted failed this exact check" taggedAs (
+        UnitTest,
+        VMTest
+      ) in {
+        val tracer = new StructLogTracer(enableMemory = true, enableStorage = false)
+        runTopLevelCall(tracer, memoryWriteCode)
+
+        val steps = tracer.getSteps
+        val afterMstore = steps.sliding(2).collectFirst { case Seq(a, b) if a.op == "MSTORE" => b }
+          .getOrElse(fail("expected a step immediately after MSTORE"))
+
+        // MSTORE(offset=0, value=2) writes value 2 as a right-aligned, zero-padded 32-byte word.
+        val expectedWord = "0x" + ("0" * 63) + "2"
+        afterMstore.memory shouldBe Some(Seq(expectedWord))
+        afterMstore.memory.get.head should fullyMatch regex "^0x[0-9a-f]{64}$"
+
+        val structLogs = (tracer.getResult \ "structLogs").asInstanceOf[JArray].arr
+        val afterMstoreJson = structLogs
+          .find(log => (log \ "pc") == JInt(afterMstore.pc))
+          .getOrElse(fail("expected a structLog entry matching the post-MSTORE step"))
+        (afterMstoreJson \ "memory") shouldBe JArray(List(JString(expectedWord)))
+      }
   }

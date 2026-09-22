@@ -59,7 +59,10 @@ class StructLogTracer(
       if mem.size > 0 then
         val words = (0 until mem.size by 32).map { offset =>
           val word = mem.load(UInt256(offset), UInt256(32))._1
-          word.toArray.map("%02x".format(_)).mkString
+          // Schema (execution-apis src/schemas/opcode-tracer.yaml, StructLog.memory.items): each
+          // chunk is a 0x-prefixed bytes32 (^0x[0-9a-f]{64}$). The un-prefixed hex below was
+          // previously emitted bare and failed that pattern — see StructLogTracerSpec.
+          "0x" + word.toArray.map("%02x".format(_)).mkString
         }
         Some(words.toSeq)
       else Some(Seq.empty)

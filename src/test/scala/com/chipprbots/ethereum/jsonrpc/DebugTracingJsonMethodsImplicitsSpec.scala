@@ -98,3 +98,55 @@ class DebugTracingJsonMethodsImplicitsSpec extends AnyFreeSpec with Matchers:
       DebugTracingJsonMethodsImplicits.debug_traceCall.encodeJson(response) shouldBe innerResult
     }
   }
+
+  /** Pins CHASE-QUEUE C7: extractTraceConfig previously read "disableMemory" — a field name no real caller
+    * sends — so the unconditional default left memory capture ON. go-ethereum / execution-apis send
+    * "enableMemory" (direct sense, default off). Params below are taken verbatim from the .io fixtures under
+    * execution-apis/tests/debug_traceBlockByNumber.
+    */
+  "extractTraceConfig" - {
+    "defaults to memory OFF when no config object is sent at all, matching go-ethereum's zero-value Config" in {
+      val config = DebugTracingJsonMethodsImplicits.extractTraceConfig(None)
+      config shouldBe Right(TraceConfig())
+      config.map(_.enableMemory) shouldBe Right(false)
+    }
+
+    "reads enableMemory / enableReturnData / disableStack / disableStorage under the exact field names " +
+      "sent by trace-block-memory-encoding.io" in {
+        val param = Some(
+          JObject(
+            "disableStack" -> JBool(false),
+            "disableStorage" -> JBool(false),
+            "enableMemory" -> JBool(true),
+            "enableReturnData" -> JBool(true)
+          )
+        )
+        DebugTracingJsonMethodsImplicits.extractTraceConfig(param) shouldBe Right(
+          TraceConfig(disableStorage = false, enableMemory = true, disableStack = false, enableReturnData = true)
+        )
+      }
+
+    "keeps enableMemory=false when a caller explicitly sends enableMemory:false — the exact params " +
+      "trace-block-storage-encoding.io and trace-block-storage-snapshot-timing.io send, previously ignored " +
+      "in favour of an always-true default" in {
+        val param = Some(
+          JObject(
+            "disableStack" -> JBool(false),
+            "disableStorage" -> JBool(false),
+            "enableMemory" -> JBool(false),
+            "enableReturnData" -> JBool(true)
+          )
+        )
+        DebugTracingJsonMethodsImplicits.extractTraceConfig(param).map(_.enableMemory) shouldBe Right(false)
+      }
+
+    "falls back to the legacy disableMemory (inverted) key only when enableMemory itself is absent" in {
+      val param = Some(JObject("disableMemory" -> JBool(true)))
+      DebugTracingJsonMethodsImplicits.extractTraceConfig(param).map(_.enableMemory) shouldBe Right(false)
+    }
+
+    "prefers enableMemory over a conflicting legacy disableMemory when both are present" in {
+      val param = Some(JObject("enableMemory" -> JBool(true), "disableMemory" -> JBool(true)))
+      DebugTracingJsonMethodsImplicits.extractTraceConfig(param).map(_.enableMemory) shouldBe Right(true)
+    }
+  }
