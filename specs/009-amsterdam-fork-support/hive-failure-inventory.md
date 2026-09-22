@@ -693,3 +693,68 @@ exchange above, the 34/34 correspondence, and 469 INVALIDs elsewhere in the same
 is not: that the side branch is never executed. Confirming that needs the branch-import
 path instrumented or a targeted unit reproduction, and it is the single largest remaining
 lever in the engine suite.
+
+---
+
+## The remaining 14 engine failures, triaged from their own detail logs
+
+Everything below is the harness's own FAIL line, read from the `hive-logs-engine`
+artifact for `6c8bc97`. With the 34 invalid-ancestor and 30 fork-id families already
+characterised, this accounts for all 78.
+
+| n | family | harness's FAIL line | reading |
+|--:|---|---|---|
+| 4 | Withdrawals Fork on ... Re-Org Sync | `Timeout waiting for sync`, after `SYNCING` | **same shape as the 34** |
+| 5 | Blob Transaction Ordering / On Block 1 | `Error verifying blob bundle: expected N blob, got M` | blob-bundle assembly |
+| 2 | Request Blob Pooled Transactions | `invalid message code: 33` | **BlockRangeUpdate** |
+| 1 | GetPayloadBodiesByRange (Sidechain) | `withdrawal 1 not equal: want=…` | withdrawal content |
+| 1 | ForkchoiceUpdatedV3, Null Beacon Root | `Expected error on EngineForkchoiceUpdatedV3` | missing rejection |
+| 1 | In-Order Consecutive Payload Execution | (no FAIL line in tail) | not yet characterised |
+
+### Correcting an attribution I made two commits ago
+
+The two `Request Blob Pooled Transactions` failures were recorded — in a commit message
+and in a task brief — as evidence for the four-element wrapper gate at
+`ETHPackets.toPooledTransactions`. **That was wrong.** Their FAIL line is
+
+    Error executing step 2: error waiting for response: invalid message code: 33
+
+and 33 = 0x21 = `baseProtoLen`(16) + eth-relative 17 = **BlockRangeUpdate**. These are the
+eager post-handshake BRU send already removed in `cd56c7e`, surfacing as a raw wire code
+rather than as the devp2p harness's `unhandled eth msg code 17` panic.
+
+That correction propagates. The three devp2p blob tests (`TestBlobTxWithoutSidecar`,
+`TestBlobTxWithMismatchedSidecar`, `BlobViolations`) fail with "failed to read
+GetPooledTransactions message: disconnect" and "i/o timeout" — downstream symptoms of a
+harness that died mid-exchange. If that death is the BRU, those three may already be green
+from `cd56c7e`, and they are no longer good evidence for the wrapper fix. The wrapper fix
+remains correct on its own merits (a valid EIP-7594 sidecar being classified as ABSENT is
+a real defect), but it should not claim those tests until measured.
+
+### The sync family is probably 38, not 34
+
+The four `Withdrawals Fork ... Re-Org Sync` failures end in `Timeout waiting for sync`
+after the node answers `SYNCING` — the same stuck-in-SYNCING shape as the 34
+invalid-ancestor tests, which end in `Timeout waiting for main client to detect invalid
+chain` from the same state. Both are re-org/side-branch scenarios where the node
+acknowledges the head and then never makes progress. If the side-branch execution gap is
+the cause, it is worth **38 engine tests**, not 34.
+
+Stated as a shape match, not a proven shared cause.
+
+### Two small, self-contained ones
+
+- **`ForkchoiceUpdatedV3 ... Null Beacon Root`** — fukuii answers `VALID` with a payload
+  id where the harness expects an *error*. FCUv3 with Shanghai payload attributes and a
+  null beacon root must be rejected; fukuii accepts it. A missing validation, not a
+  behavioural bug.
+- **`GetPayloadBodiesByRange (Sidechain)`** — `withdrawal 1 not equal`, i.e. the returned
+  payload body carries different withdrawal content than the block it names.
+
+### Five blob-bundle count mismatches
+
+`expected 0 blob, got 6`, `expected 5 blob, got 6`, and `expected 6 blob, got 5`. The node
+returns the wrong number of blobs in the `getPayload` bundle — including returning 6 when
+none were expected. This is bundle assembly, unrelated to the EIP-7594 sidecar decode
+fixed in `9bc7fb4`, and the "got 5 where 6 expected" case shows it is not simply
+off-by-one in one direction.
