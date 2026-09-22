@@ -224,6 +224,9 @@ object EvmConfig:
     */
   val LondonConfigBuilder: EvmConfigBuilder = config =>
     MagnetoConfigBuilder(config).copy(
+      // EIP-3198 BASEFEE. MagnetoOpCodes (inherited above) is the ETC/Berlin table and has no 0x48; hive
+      // consume-engine test_all_opcodes measured the omission at +15,002 gas on Paris and Shanghai.
+      opCodeList = LondonOpCodes,
       feeSchedule = new ethereum.vm.FeeSchedule.MystiqueFeeSchedule, // EIP-3529 refund changes
       eip3541Enabled = true // EIP-3541: reject 0xEF contracts
     )
