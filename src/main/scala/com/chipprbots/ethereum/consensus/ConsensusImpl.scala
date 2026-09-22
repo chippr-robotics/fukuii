@@ -30,13 +30,18 @@ class ConsensusImpl(
     blockchainReader: BlockchainReader,
     blockchainWriter: BlockchainWriter,
     blockExecution: BlockExecution,
-    // Narrow, one-way channel into the Engine API's invalid-block registry. `None` on every network that does not
-    // run an Engine API (ETC/Mordor/Gorgoroth), which makes every call below a no-op there. See
+    // Narrow, one-way channel into the Engine API's invalid-block registry. In production this is ALWAYS a `Some`:
+    // NodeBuilder passes `Some(invalidChainReporter)`, a LateBound holder, on every network including ETC/Mordor/
+    // Gorgoroth. What makes every call below a no-op there is that the holder is never BOUND (only
+    // EngineApiBuilder.bindInvalidChainReporter binds it, gated on network.engine-api.enabled). See
     // [[com.chipprbots.ethereum.consensus.engine.InvalidChainReporter]].
     invalidChainReporter: Option[InvalidChainReporter] = None,
-    // PoS fork choice, or None. `None` on every network that does not run an Engine API (ETC/Mordor/Gorgoroth), and
-    // `None` by default so no construction site inherits the new arm by accident. See
-    // [[com.chipprbots.ethereum.consensus.engine.DesignatedHead]].
+    // PoS fork choice. In production this is ALWAYS a `Some`: NodeBuilder passes `Some(designatedHead)`, a
+    // DesignatedHead.LateBound holder, on every network including ETC/Mordor/Gorgoroth. What keeps the PoS arm inert
+    // on a PoW chain is that the holder is never BOUND there — EngineApiBuilder.bindDesignatedHead is the only binder
+    // and requires network.engine-api.enabled AND a configured terminal-total-difficulty — so `headBlockHash` is
+    // `None` and `leadsToDesignatedHead` is false. The `None` default only serves direct test construction.
+    // See [[com.chipprbots.ethereum.consensus.engine.DesignatedHead]].
     designatedHead: Option[DesignatedHead] = None
 ) extends Consensus
     with Logger:
@@ -161,9 +166,13 @@ class ConsensusImpl(
         // The second disjunct is the PoS arm, and it is needed because the first is unsatisfiable post-merge:
         // `ChainWeight.increase` adds `header.difficulty`, every post-merge header carries 0, so
         // `newBranchWeight(branch, parentWeight) == parentWeight <= currentBestBlockWeight` for EVERY branch and this
-        // method could never once reorganise a PoS chain. It is reachable only when `designatedHead` is a `Some`,
-        // which no PoW chain ever supplies (see DesignatedHead), so `||` cannot change an ETC decision: on ETC the
-        // right-hand side is a constant false and short-circuit evaluation never even walks a header.
+        // method could never once reorganise a PoS chain. On ETC/Mordor/Gorgoroth the right-hand side is ALWAYS false,
+        // but NOT because `designatedHead` is `None` — in production it is `Some(LateBound)` on every network. It is
+        // false because that holder is never BOUND on a PoW chain (EngineApiBuilder.bindDesignatedHead requires the
+        // Engine API enabled AND a terminal-total-difficulty, which no PoW config sets), so `headBlockHash` is `None`
+        // and `leadsToDesignatedHead` returns false without walking a single header. `||` therefore cannot change an
+        // ETC decision. ConsensusImplSpec pins exactly this production shape: an unbound LateBound, PoW fork choice
+        // unchanged.
         //
         // What it asks is the correct PoS fork-choice question: does this branch lead to the head the consensus layer
         // named? If so we follow it, because on PoS the EL does not choose — it follows the CL. If the branch turns

@@ -14,9 +14,9 @@ import com.chipprbots.ethereum.utils.ByteStringUtils.hash2string
 import com.chipprbots.ethereum.utils.Logger
 
 /** @param designatedHead
-  *   PoS fork choice, or `None`. `None` on every PoW chain — see [[DesignatedHead]] for the two independent reasons
-  *   ETC/Mordor/Gorgoroth can never supply one, and note that the default here is `None`, so any construction site that
-  *   does not explicitly opt in keeps the pre-merge behaviour untouched.
+  *   PoS fork choice, or `None`. `None` on every PoW chain: SyncController supplies a `Some` only when
+  *   terminal-total-difficulty is configured (see [[DesignatedHead]]). The default is `None` too, so any construction
+  *   site that does not explicitly opt in keeps the pre-merge behaviour untouched.
   */
 class BranchResolution(
     blockchainReader: BlockchainReader,
@@ -84,9 +84,11 @@ class BranchResolution(
           // accept it. This is the normal case for regular sync importing new blocks.
           NewBetterBranch(Nil)
         else if newHeaders.nonEmpty && leadsToDesignatedHead(newHeaders) then
-          // PoS arm. Unreachable unless `designatedHead` is a Some, which only a post-merge chain running an Engine
-          // API ever supplies (DesignatedHead's scaladoc lists both gates); on ETC/Mordor/Gorgoroth control cannot
-          // arrive here and the two branches above are the whole decision, exactly as before.
+          // PoS arm. It replaces only the old final `else NoChainSwitch`, so whenever its predicate is false the
+          // result is exactly what it was before. On ETC/Mordor/Gorgoroth the predicate is always false because
+          // `designatedHead` is `None`: SyncController builds it only when terminal-total-difficulty is configured,
+          // which no PoW chain config does. That TTD check is the ONLY gate on this path — Node always supplies a
+          // ForkChoiceManager to sync, Engine API enabled or not. See DesignatedHead's scaladoc.
           //
           // The arm exists because the two branches above cannot decide a post-merge fork AT ALL. Every header has
           // difficulty 0, so newWeight == oldWeight always; the second branch then requires oldBlocks.isEmpty, which

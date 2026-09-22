@@ -308,10 +308,11 @@ object SyncController:
     private val isPoSChain: Boolean = configBuilder.blockchainConfig.terminalTotalDifficulty.isDefined
     private val clPivotEnabled: Boolean = isPoSChain && forkChoiceManagerOpt.isDefined
 
-    // PoS fork choice for the p2p import path, or None. Guarded by exactly the conjunction above: a configured
-    // terminal-total-difficulty (set in eth-chain.conf and sepolia-chain.conf and in NO PoW chain config) AND a live
-    // ForkChoiceManager. On ETC/Mordor/Gorgoroth this is None for the life of the node, so `BranchResolution`'s PoS
-    // arm is structurally absent there rather than merely false. See DesignatedHead.
+    // PoS fork choice for the p2p import path, or None. Same conjunction as clPivotEnabled above, but note which half
+    // does the work: a running Node always supplies a ForkChoiceManager (Node.forkChoiceManagerForSync), so the
+    // OPERATIVE gate is `isPoSChain` — a configured terminal-total-difficulty, set in eth-chain.conf and
+    // sepolia-chain.conf and in NO PoW chain config. On ETC/Mordor/Gorgoroth this is None for the life of the node,
+    // so `BranchResolution`'s PoS arm predicate is always false there. See DesignatedHead.
     private val designatedHeadOpt: Option[DesignatedHead] =
       if isPoSChain then forkChoiceManagerOpt.map(fcm => DesignatedHead(() => fcm.getHeadBlockHash)) else None
 

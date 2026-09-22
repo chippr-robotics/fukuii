@@ -20,16 +20,25 @@ import com.chipprbots.ethereum.domain.BlockchainReader
   * fork choice on a PoS chain: the execution layer does not choose, it follows. This trait is how the two weight sites
   * ask.
   *
-  * ETC/Mordor/Gorgoroth — TWO INDEPENDENT REASONS THIS IS UNREACHABLE ON A PoW CHAIN, either of which alone suffices:
+  * ETC/Mordor/Gorgoroth — WHY THE PoS ARM IS INERT ON A PoW CHAIN. There are two consumers and each has exactly one
+  * gate. They are not two layers of defence on one path; they are one gate per path, so each must hold on its own.
   *
-  *   1. Both consumers take `Option[DesignatedHead]` and both derive it from the chain being post-merge.
-  *      `SyncController` uses its existing `isPoSChain` (`blockchainConfig.terminalTotalDifficulty.isDefined`, the same
-  *      predicate behind `clPivotEnabled`); `terminal-total-difficulty` is set in exactly two config files,
-  *      `eth-chain.conf` and `sepolia-chain.conf`, and in no PoW chain config. So the value is `None` on ETC and the
-  *      PoS arm is not merely false, it is structurally absent. 2. The [[DesignatedHead.LateBound]] holder handed to
-  *      `ConsensusImpl` is bound only by `EngineApiBuilder.bindDesignatedHead()`, gated on `network.engine-api.enabled`
-  *      AND a configured TTD. Unbound, `headBlockHash` is `None`, and [[DesignatedHead.leadsToDesignatedHead]] is then
-  *      false for every input.
+  * `BranchResolution` (constructed by `SyncController`): receives `Option[DesignatedHead]` built as `if isPoSChain then
+  * forkChoiceManagerOpt.map(...) else None`, where `isPoSChain` is `blockchainConfig.terminalTotalDifficulty.isDefined`
+  * — the predicate behind `clPivotEnabled`. `terminal-total-difficulty` is set only in `eth-chain.conf` and
+  * `sepolia-chain.conf`, so on a PoW chain the value is `None` and the arm is structurally absent.
+  *
+  * `ConsensusImpl` (constructed by `NodeBuilder`): receives `Some(LateBound)` on EVERY network, ETC included — the cake
+  * forbids handing it a `ForkChoiceManager` at construction. The gate here is BINDING: the holder is bound only by
+  * `EngineApiBuilder.bindDesignatedHead()`, which requires `network.engine-api.enabled` AND a configured TTD. On a PoW
+  * chain it stays unbound, `headBlockHash` is `None`, and [[DesignatedHead.leadsToDesignatedHead]] is false for every
+  * input.
+  *
+  * Misconfiguration hazard: an operator who force-sets `terminal-total-difficulty` on a PoW chain opens BOTH gates.
+  * Then a LIGHTER or equal-TD branch the head designates is accepted — the arm sits after the TD comparison, so it
+  * overrides the TD rule and MESS is never consulted on that path — while a HEAVIER branch that MESS rejects is still
+  * refused, because MESS lives inside the TD arm, which returns first. That configuration already switches on other PoS
+  * paths; the behaviour is pinned, not prevented, by `BranchResolutionSpec`.
   *
   * A reviewer checking ETC impact only has to confirm that no PoW configuration sets `terminal-total-difficulty` and
   * that nothing else calls `bind`. Both are one grep.

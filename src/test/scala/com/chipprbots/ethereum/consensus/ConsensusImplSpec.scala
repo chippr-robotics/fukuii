@@ -18,6 +18,7 @@ import com.chipprbots.ethereum.consensus.Consensus.ExtendedCurrentBestBranch
 import com.chipprbots.ethereum.consensus.Consensus.ExtendedCurrentBestBranchPartially
 import com.chipprbots.ethereum.consensus.Consensus.KeptCurrentBestBranch
 import com.chipprbots.ethereum.consensus.Consensus.SelectedNewBestBranch
+import com.chipprbots.ethereum.consensus.engine.DesignatedHead
 import com.chipprbots.ethereum.domain.Difficulty
 import com.chipprbots.ethereum.domain.Block
 import com.chipprbots.ethereum.domain.ChainWeight
@@ -159,6 +160,79 @@ class ConsensusImplSpec extends AnyFlatSpec with Matchers with ScalaFutures with
     blockchainReader.getBestBlock shouldBe Some(newTip.head)
     blockchainReader.getBlockByHash(initialBestBlock.hash) shouldBe Some(initialBestBlock)
 
+  // ---------------------------------------------------------------------------------------------------------------
+  // PoW fork choice under the PRODUCTION wiring of the PoS arm.
+  //
+  // In production ConsensusImpl is never built with `designatedHead = None`: NodeBuilder passes
+  // `Some(designatedHead)`, a DesignatedHead.LateBound, on EVERY network. On ETC/Mordor/Gorgoroth that holder is
+  // never bound (EngineApiBuilder.bindDesignatedHead requires the Engine API AND a terminal-total-difficulty), so its
+  // `headBlockHash` is None. These cases pin that shape explicitly — an unbound LateBound — and show that the TD rule
+  // is the whole decision under it.
+  // ---------------------------------------------------------------------------------------------------------------
+
+  it should "KEEP the current chain for an equal-TD competing PoW branch, under an unbound LateBound" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in new ConsensusSetup:
+    // Same height as the tip and same per-block difficulty (generateBlock copies the parent's), so equal total
+    // difficulty. The TD rule is strict `>`, so a PoW node keeps its chain.
+    val equalTdBranch: List[Block] = BlockHelpers.generateChain(2, initialChain(2))
+    val etcShaped = consensusWith(Some(new DesignatedHead.LateBound))
+
+    whenReady(etcShaped.evaluateBranch(NonEmptyList.fromListUnsafe(equalTdBranch)).unsafeToFuture()) {
+      _ shouldBe KeptCurrentBestBranch
+    }
+    blockchainReader.getBestBlock shouldBe Some(initialBestBlock)
+
+  it should "SELECT a heavier competing PoW branch, under an unbound LateBound" taggedAs (UnitTest, ConsensusTest) in
+    new ConsensusSetup:
+      val heavierBranch: List[Block] =
+        BlockHelpers.generateChain(
+          2,
+          initialChain(2),
+          b => b.copy(header = b.header.copy(difficulty = Difficulty(10000000)))
+        )
+      val etcShaped = consensusWith(Some(new DesignatedHead.LateBound))
+
+      whenReady(etcShaped.evaluateBranch(NonEmptyList.fromListUnsafe(heavierBranch)).unsafeToFuture()) {
+        _ shouldBe a[SelectedNewBestBranch]
+      }
+      blockchainReader.getBestBlock shouldBe Some(heavierBranch.last)
+
+  it should "be sensitive to the binding — a BOUND holder does change the equal-TD outcome" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in new ConsensusSetup:
+    // The permanent form of the negative control for the two cases above. Same equal-TD branch, same constructor
+    // shape, the only difference is that the holder is bound to a head on that branch — and the result flips. So
+    // the unbound cases pass because the binding gate holds, not because nothing reaches the arm.
+    val equalTdBranch: List[Block] = BlockHelpers.generateChain(2, initialChain(2))
+    val holder = new DesignatedHead.LateBound
+    holder.bind(DesignatedHead(() => Some(equalTdBranch.last.hash.value)))
+
+    whenReady(consensusWith(Some(holder)).evaluateBranch(NonEmptyList.fromListUnsafe(equalTdBranch)).unsafeToFuture()) {
+      _ shouldBe a[SelectedNewBestBranch]
+    }
+
+  it should "read the cake's own DesignatedHead holder — the wiring every other case in this spec runs under" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in new ConsensusSetup:
+    // `consensus` in this spec is NodeBuilder's ConsensusBuilder.consensus (StdTestMiningBuilder mixes it in), i.e.
+    // `new ConsensusImpl(..., Some(invalidChainReporter), Some(designatedHead))`. Unbound, it keeps an equal-TD
+    // branch; binding THAT holder flips it. This proves every pre-existing case above already ran under the
+    // production shape, with an unbound LateBound.
+    val equalTdBranch: List[Block] = BlockHelpers.generateChain(2, initialChain(2))
+    designatedHead.isBound shouldBe false
+    whenReady(consensus.evaluateBranch(NonEmptyList.fromListUnsafe(equalTdBranch)).unsafeToFuture()) {
+      _ shouldBe KeptCurrentBestBranch
+    }
+
+    designatedHead.bind(DesignatedHead(() => Some(equalTdBranch.last.hash.value)))
+    whenReady(consensus.evaluateBranch(NonEmptyList.fromListUnsafe(equalTdBranch)).unsafeToFuture()) {
+      _ shouldBe a[SelectedNewBestBranch]
+    }
+
   // SCALA 3 MIGRATION: Moved ConsensusSetup inside class to access MockFactory context
   class ConsensusSetup extends EphemBlockchainTestSetup:
     override lazy val blockExecution: BlockExecution = stub[BlockExecution]
@@ -191,6 +265,9 @@ class ConsensusImplSpec extends AnyFlatSpec with Matchers with ScalaFutures with
     implicit val runtime: IORuntime = IORuntime.global
 
     def setFailingBlock(block: Block): Unit = failingBlockHash = Some(block.hash.value)
+
+    def consensusWith(designatedHead: Option[DesignatedHead]): ConsensusImpl =
+      new ConsensusImpl(blockchainReader, blockchainWriter, blockExecution, None, designatedHead)
 
 object ConsensusImplSpec:
   val initialChain: List[Block] = BlockHelpers.genesis +: BlockHelpers.generateChain(4, BlockHelpers.genesis)
