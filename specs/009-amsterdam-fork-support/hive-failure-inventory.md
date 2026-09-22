@@ -1030,3 +1030,88 @@ Two qualifications on urgency, neither on correctness:
    objects plus the `ethWireSizeFor`/negotiation/handshake-dispatch plumbing already sized
    as the medium ETH71 tier, plus one message variant. If the goal is un-redding these four
    rather than protocol parity, that is a materially cheaper target.
+
+---
+
+## Measured on `9be2cfd` — the first run carrying the day's fixes
+
+### rpc-compat: 6 → 8. A regression, and mine
+
+239 / 8 / 247 — same denominator, so the move is real.
+
+| method | on 6c8bc97 | on 9be2cfd |
+|---|---:|---:|
+| `eth_sendRawTransaction` | 1 | **0** |
+| `debug_traceTransaction` | 2 | 1 |
+| `debug_traceBlockByNumber` | 2 | **5** |
+| `debug_traceBlockByHash` | 0 | **1** |
+| `eth_config` | 1 | 1 |
+
+The blob-sidecar fix worked and one tracer test cleared. But four tests that were
+PASSING now fail, including a method that was not failing until its encoder was
+touched.
+
+They were passing **vacuously**. With `getResult` returning `JNothing`,
+`debug_traceBlockBy*` emitted an empty array, which trivially satisfies "an array
+whose items each carry txHash and result" — no items, nothing to check. Making the
+response real is what exposed them.
+
+Two causes, both traceable to decisions recorded in this file:
+
+1. **Memory entries lack the `0x` prefix.** Measured:
+   `jsonschema: '/0/result/structLogs/7/memory/0' ... does not match pattern
+   '^0x[0-9a-f]{64}$'`. The brief that produced `ab3c063` asserted memory was
+   un-prefixed and that the existing encoding was already correct. That was derived
+   from go-ethereum's `%x` formatting rather than from the schema the harness
+   enforces — the precise error this document repeatedly warns against, committed
+   while warning against it.
+
+2. **C7 was the root cause and was deliberately deferred.** The fixture sends
+   `params: ["0x1"]` — no config object at all — and its expected output contains
+   zero `memory` keys. go-ethereum defaults memory OFF. fukuii computes
+   `enableMemory = !config.disableMemory`, and `disableMemory` is a field name no
+   caller sends, so it stays false and memory is always ON. Logging C7 and scoping
+   it out was a misjudgement: it produces both failure shapes, and a full memory
+   snapshot per opcode across a 62-transaction block is also the leading explanation
+   for the two remaining `context deadline exceeded` timeouts, which the O(n) fix
+   did not clear.
+
+### devp2p: 18 → 18, but the composition changed
+
+The BRU fix had a real, measurable effect that the count hides:
+
+- `ETH69_BRU_POST_HANDSHAKE`: **0 occurrences** (was 40 in one container). The eager
+  send is genuinely gone.
+- `panic: unhandled eth msg code 17`: **1 occurrence, down from 3**.
+- `src is not an RLPValue`: **still exactly 4**, unchanged — that cause is untouched,
+  as predicted.
+
+But no test moved from red to green. Two of the three panics became a different
+failure:
+
+| test | on 6c8bc97 | on 9be2cfd |
+|---|---|---|
+| `Transaction` | panic code 17 | **still** panic code 17 |
+| `LargeTxRequest` | panic code 17 | `failed to send txs: … i/o timeout` |
+| `InvalidTxs` | panic code 17 | `failed to send txs: … i/o timeout` |
+| `NewPooledTxs` | disconnect | disconnect |
+
+So the eager BRU was masking a second defect: fukuii does not answer the tx
+announcement, and the harness now waits and times out instead of dying. The fix was
+necessary and not sufficient, which is different from "it did not work" and also
+different from "it worked".
+
+One BRU still reaches a peer — `Transaction` still panics on code 17 — so a
+remaining sender is emitting it. `BlockBroadcast.broadcastBlock` and
+`announceCanonicalHead` are the legitimate change-driven senders and were left
+untouched by design. Worth noting the harness panics on **any** BlockRangeUpdate,
+legitimate or not, since its `readEth` has no case for code 17 at all: a
+correctly-behaving eth/69 client announcing a genuine range change would also kill
+it. That places the residue in the same category as the eth/72 announcement shape —
+correct behaviour the harness does not accept.
+
+### graphql: still exactly 2
+
+The inertness oracle held across changes to `BlockchainConfig`, fork-id computation,
+both handshake states, `EthInfoService`, `ETHPackets`, `DebugTracingService`,
+`StructLogTracer` and the RLP decode paths. It moved in neither direction.
