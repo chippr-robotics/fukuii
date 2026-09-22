@@ -313,8 +313,11 @@ object SyncController:
     // OPERATIVE gate is `isPoSChain` — a configured terminal-total-difficulty, set in eth-chain.conf and
     // sepolia-chain.conf and in NO PoW chain config. On ETC/Mordor/Gorgoroth this is None for the life of the node,
     // so `BranchResolution`'s PoS arm predicate is always false there. See DesignatedHead.
+    // Reads the REQUESTED head, not getHeadBlockHash (executed-only, so it lags exactly when a CL-designated side
+    // branch is being fetched). See ForkChoiceManager.getRequestedHeadBlockHash.
     private val designatedHeadOpt: Option[DesignatedHead] =
-      if isPoSChain then forkChoiceManagerOpt.map(fcm => DesignatedHead(() => fcm.getHeadBlockHash)) else None
+      if isPoSChain then forkChoiceManagerOpt.map(fcm => DesignatedHead(() => fcm.getRequestedHeadBlockHash))
+      else None
 
     // TD calibration stats — updated by CalibrateChainWeightFromPeer handler.
     // calibrationSucceeded and networkBestTD are read by the TD_CALIBRATION_STATS periodic log

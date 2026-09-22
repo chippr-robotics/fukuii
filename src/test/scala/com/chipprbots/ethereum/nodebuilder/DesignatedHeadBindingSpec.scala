@@ -1,11 +1,14 @@
 package com.chipprbots.ethereum.nodebuilder
 
+import org.apache.pekko.util.ByteString
+
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
 import org.scalatest.prop.TableDrivenPropertyChecks
 
 import com.chipprbots.ethereum.blockchain.sync.EphemBlockchainTestSetup
 import com.chipprbots.ethereum.consensus.engine.EngineApiHttpServer
+import com.chipprbots.ethereum.consensus.engine.ForkChoiceState
 import com.chipprbots.ethereum.testing.Tags.*
 import com.chipprbots.ethereum.utils.BlockchainConfig
 import com.chipprbots.ethereum.utils.Config
@@ -38,6 +41,8 @@ class DesignatedHeadBindingSpec extends AnyFlatSpec with Matchers with TableDriv
     allChains.toSeq
       .filter { case (_, c) => c.networkType == NetworkType.ETH && c.terminalTotalDifficulty.isDefined }
       .sortBy(_._1)
+
+  private val zero32: ByteString = ByteString(new Array[Byte](32))
 
   /** The production node cake with only two things changed: the chain, and the Engine API forced on. */
   private class NodeOn(chain: BlockchainConfig) extends StdNode(Config) with EphemBlockchainTestSetup:
@@ -74,5 +79,42 @@ class DesignatedHeadBindingSpec extends AnyFlatSpec with Matchers with TableDriv
       withClue(s"ETH chain '$name' has a TTD and the Engine API on, so the holder must bind: ")(
         node.designatedHead.isBound shouldBe true
       )
+    }
+  }
+
+  // The SOURCE the binder wires in. On 4854b7d20 it read ForkChoiceManager.getHeadBlockHash, which only moves on
+  // EXECUTED heads; an FCU naming an ACCEPTED (hash-only) side head goes through notifyBeaconHead and never moves it, so
+  // the bound holder kept naming the old canonical tip and hive's 28 re-org-sync targets all stayed red. This drives
+  // the production node's own ForkChoiceManager through notifyBeaconHead and reads the production holder back.
+
+  it should "expose a head the CL named notify-only (not yet executed) on ETH-family chains" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in {
+    forAll(Table(("chain", "config"), ethChainsWithTtd*)) { (name, config) =>
+      val node = new NodeOn(config)
+      node.bindDesignatedHead()
+      val sideHead = ByteString(Array.fill(32)(0x5b.toByte))
+      node.forkChoiceManager.notifyBeaconHead(ForkChoiceState(sideHead, zero32, zero32))
+      withClue(s"ETH chain '$name': the executed head must not move on a notify-only FCU: ")(
+        node.forkChoiceManager.getHeadBlockHash shouldBe None
+      )
+      withClue(s"ETH chain '$name': the designated head must follow the CL's request, executed or not: ")(
+        node.designatedHead.headBlockHash shouldBe Some(sideHead)
+      )
+    }
+  }
+
+  it should "keep the holder yielding None on every ETC chain even after the CL names a head" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in {
+    // The requested head is written on more paths than the executed one was. The ETC gate is the BINDING, not the
+    // value, so it must still hold once the ForkChoiceManager has a head recorded.
+    forAll(Table(("chain", "config"), etcChains*)) { (name, config) =>
+      val node = new NodeOn(config)
+      node.bindDesignatedHead()
+      node.forkChoiceManager.notifyBeaconHead(ForkChoiceState(ByteString(Array.fill(32)(0x5b.toByte)), zero32, zero32))
+      withClue(s"ETC chain '$name': ")(node.designatedHead.headBlockHash shouldBe None)
     }
   }

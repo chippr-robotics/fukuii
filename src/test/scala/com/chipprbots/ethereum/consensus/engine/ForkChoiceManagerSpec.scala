@@ -101,3 +101,40 @@ class ForkChoiceManagerSpec extends ScalaTestWithActorTestKit with AnyFlatSpecLi
     fcm.applyForkChoiceState(ForkChoiceState(knownHeadHash, ByteString.empty, ByteString.empty))
     second.expectMsgType[ForkChoiceManager.BeaconHead]
     first.expectNoMessage()
+
+  // Requested head vs executed head. The p2p fork choice (DesignatedHead) reads the REQUESTED head; everything that
+  // means "validated" reads the executed one. These pin that the two stay separate.
+
+  it should "leave the executed head untouched on notifyBeaconHead, but record it as requested" taggedAs UnitTest in new Fixture:
+    fcm.applyForkChoiceState(ForkChoiceState(knownHeadHash, ByteString.empty, ByteString.empty)) shouldBe Right(())
+    val executedState = fcm.getState
+
+    fcm.notifyBeaconHead(ForkChoiceState(unknownHeadHash, ByteString.empty, ByteString.empty))
+
+    fcm.getHeadBlockHash shouldBe Some(knownHeadHash)
+    fcm.getState shouldBe executedState
+    fcm.getRequestedHeadBlockHash shouldBe Some(unknownHeadHash)
+
+  it should "not activate on notifyBeaconHead alone" taggedAs UnitTest in new Fixture:
+    fcm.notifyBeaconHead(ForkChoiceState(knownHeadHash, ByteString.empty, ByteString.empty))
+    fcm.isActive shouldBe false
+    fcm.getHeadBlockHash shouldBe None
+    fcm.getRequestedHeadBlockHash shouldBe Some(knownHeadHash)
+
+  it should "record the requested head on applyForkChoiceState, head known or not" taggedAs UnitTest in new Fixture:
+    fcm.applyForkChoiceState(ForkChoiceState(unknownHeadHash, ByteString.empty, ByteString.empty)) shouldBe Left(
+      "SYNCING"
+    )
+    fcm.getRequestedHeadBlockHash shouldBe Some(unknownHeadHash)
+    fcm.getHeadBlockHash shouldBe None
+
+    fcm.applyForkChoiceState(ForkChoiceState(knownHeadHash, ByteString.empty, ByteString.empty)) shouldBe Right(())
+    fcm.getRequestedHeadBlockHash shouldBe Some(knownHeadHash)
+    fcm.getHeadBlockHash shouldBe Some(knownHeadHash)
+
+  it should "clear both the executed and the requested head" taggedAs UnitTest in new Fixture:
+    fcm.applyForkChoiceState(ForkChoiceState(knownHeadHash, ByteString.empty, ByteString.empty))
+    fcm.notifyBeaconHead(ForkChoiceState(unknownHeadHash, ByteString.empty, ByteString.empty))
+    fcm.clear()
+    fcm.getHeadBlockHash shouldBe None
+    fcm.getRequestedHeadBlockHash shouldBe None

@@ -913,7 +913,10 @@ trait EngineApiBuilder extends Logger:
     */
   def bindDesignatedHead(): Unit =
     if engineApiConfig.enabled && blockchainConfig.terminalTotalDifficulty.isDefined then
-      designatedHead.bind(DesignatedHead(() => forkChoiceManager.getHeadBlockHash))
+      // getRequestedHeadBlockHash, NOT getHeadBlockHash: the latter only moves on EXECUTED heads, so it still names the
+      // old canonical head while the CL points at the side-chain head this binding exists to follow. See
+      // ForkChoiceManager.getRequestedHeadBlockHash.
+      designatedHead.bind(DesignatedHead(() => forkChoiceManager.getRequestedHeadBlockHash))
       log.info("Post-merge chain with Engine API enabled: p2p branch resolution now follows the CL's designated head")
     else
       log.debug(

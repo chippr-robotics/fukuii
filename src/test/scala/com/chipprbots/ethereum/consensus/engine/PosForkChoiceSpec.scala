@@ -222,8 +222,87 @@ class PosForkChoiceSpec extends AnyFlatSpec with Matchers with ScalaFutures with
       reported.toList shouldBe sideBranch.drop(1).map(_.hash.value -> lvh)
 
   // ---------------------------------------------------------------------------------------------------------------
+  // 4. The head SOURCE, driven through the real ForkChoiceManager rather than injected.
+  //
+  //    Sections 2 and 3 hand the gates a DesignatedHead that already names the side head. Production never did: both
+  //    bindings read ForkChoiceManager.getHeadBlockHash, which only moves on EXECUTED heads, while the FCU naming an
+  //    ACCEPTED side head goes through notifyBeaconHead and leaves it on the old canonical tip. Measured on hive
+  //    `engine` 4854b7d20: 0 of 28 targets cleared, branch fetched (`headers=14 … range=[1-14]`) and silently dropped.
+  //    These cases reproduce that sequence exactly: canonical head applied, side head ACCEPTED by hash only, FCU to it
+  //    notify-only.
+  // ---------------------------------------------------------------------------------------------------------------
+
+  "The CL's designated head, routed through ForkChoiceManager" should
+    "follow a side head the CL named notify-only, while the executed head stays put" taggedAs (
+      UnitTest,
+      ConsensusTest
+    ) in new NotifyOnlySideHead:
+      // Executed-only invariant: notifyBeaconHead must not move the executed head.
+      fcm.getHeadBlockHash shouldBe Some(canonicalTip.hash.value)
+      fcm.getRequestedHeadBlockHash shouldBe Some(acceptedSideHead.hash.value)
+
+      // The binding the fix installs: walks acceptedSideHead -> sideBranch.last and meets the tip.
+      DesignatedHead.leadsToDesignatedHead(
+        Some(DesignatedHead(() => fcm.getRequestedHeadBlockHash)),
+        blockchainReader,
+        sideBranch.last.hash.value
+      ) shouldBe true
+
+      // The binding on 4854b7d20. Pinned as FALSE because that is the measured defect: the walk starts from the old
+      // canonical tip and can never meet a side-branch tip. If this ever flips, the executed-only invariant broke.
+      DesignatedHead.leadsToDesignatedHead(
+        Some(DesignatedHead(() => fcm.getHeadBlockHash)),
+        blockchainReader,
+        sideBranch.last.hash.value
+      ) shouldBe false
+
+  it should "let BranchResolution accept the side branch the CL named notify-only" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in new NotifyOnlySideHead:
+    val resolution = new BranchResolution(blockchainReader, Some(DesignatedHead(() => fcm.getRequestedHeadBlockHash)))
+    resolution.resolveBranch(NonEmptyList.fromListUnsafe(sideBranch.map(_.header))) match
+      case NewBetterBranch(oldBranch) => oldBranch.map(_.number) shouldBe canonicalSuffix.map(_.number)
+      case other                      => fail(s"expected NewBetterBranch, got $other")
+
+  it should "let ConsensusImpl execute the side branch and report the invalid block on it" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in new NotifyOnlySideHead:
+    failAt(sideBranch(1))
+    val posConsensus = consensusWith(Some(DesignatedHead(() => fcm.getRequestedHeadBlockHash)))
+    whenReady(posConsensus.evaluateBranch(NonEmptyList.fromListUnsafe(sideBranch)).unsafeToFuture())(_ => ())
+
+    executedBlocks.toList.map(_.number) shouldBe List(sideBranch.head.number)
+    val lvh: ByteString = sideBranch(0).hash.value
+    reported.toList shouldBe sideBranch.drop(1).map(_.hash.value -> lvh)
+
+  it should "still REFUSE the side branch once the CL names the canonical head again" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in new NotifyOnlySideHead:
+    // The requested head follows the CL in BOTH directions: a later executed FCU back to our own chain must restore
+    // the refusal, or a stale side-head request would keep p2p gossip able to move us.
+    fcm.applyForkChoiceState(ForkChoiceState(canonicalTip.hash.value, zero32, zero32)) shouldBe Right(())
+    val resolution = new BranchResolution(blockchainReader, Some(DesignatedHead(() => fcm.getRequestedHeadBlockHash)))
+    resolution.resolveBranch(NonEmptyList.fromListUnsafe(sideBranch.map(_.header))) shouldBe NoChainSwitch
+
+  // ---------------------------------------------------------------------------------------------------------------
   // Fixtures
   // ---------------------------------------------------------------------------------------------------------------
+
+  /** hive's sequence up to the moment the peer delivers the side branch: our canonical tip was applied by an executed
+    * FCU; the CL then sent `engine_newPayload` for a side head whose parent we lack (stored by hash only, exactly what
+    * `EngineApiService` does before answering ACCEPTED), and an FCU to it that took the notify-only SYNCING path.
+    */
+  class NotifyOnlySideHead extends PosChainSetup:
+    val zero32: ByteString = ByteString(new Array[Byte](32))
+    val fcm = new ForkChoiceManager(blockchainReader, blockchainWriter)
+    fcm.applyForkChoiceState(ForkChoiceState(canonicalTip.hash.value, zero32, zero32)) shouldBe Right(())
+
+    val acceptedSideHead: Block = BlockHelpers.generateChain(1, sideBranch.last, posBlock).head
+    blockchainWriter.storeBlockByHashOnly(acceptedSideHead).commit()
+    fcm.notifyBeaconHead(ForkChoiceState(acceptedSideHead.hash.value, zero32, zero32))
 
   /** Just a place to put headers so the ancestry walk has something to walk. */
   class HeaderStore extends EphemBlockchainTestSetup:

@@ -45,8 +45,15 @@ import com.chipprbots.ethereum.domain.BlockchainReader
   */
 trait DesignatedHead:
 
-  /** The `headBlockHash` of the most recent `engine_forkchoiceUpdated`, or `None` if the consensus layer has never
-    * spoken (or there is no consensus layer, which is the PoW case).
+  /** The `headBlockHash` of the most recent `engine_forkchoiceUpdated` that was not rejected as a known-INVALID head —
+    * whether or not we have executed that head — or `None` if the consensus layer has never spoken (or there is no
+    * consensus layer, which is the PoW case).
+    *
+    * Both production sources read `ForkChoiceManager.getRequestedHeadBlockHash`. They must NOT read
+    * `ForkChoiceManager.getHeadBlockHash`: that is executed-only, and the case this trait exists for is precisely a CL
+    * head stored by hash but not yet executed, which reaches the manager through `notifyBeaconHead` and never moves the
+    * executed head. Bound to the executed head, the ancestry walk starts from the OLD canonical tip and refuses every
+    * branch it was meant to accept (hive `engine` 4854b7d20: 0 of 28 targets cleared).
     */
   def headBlockHash: Option[ByteString]
 
