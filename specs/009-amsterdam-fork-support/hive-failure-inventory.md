@@ -1512,3 +1512,44 @@ stale-fixture case, so **graphql is now at its floor of 1** and cannot reach 0 u
 This also sets a two-sided bar for the ETC correction now in progress: `04` must keep passing
 (estimation still returns 111,953) *and* the Frontier CREATE semantics must return byte-for-byte to
 their pre-`89856a1` behaviour. Both, not either.
+
+### The 8551→8545 window, finally measured — and the decision it closes
+
+The logback change did its job. `JSON-RPC HTTP server bound to …` now appears in hive client logs
+for the first time, so the readiness race can be quantified instead of argued about. Four containers
+in the `db1c345` sync run:
+
+| container | 8551 bound | 8545 bound | gap |
+|---|---|---|---:|
+| `4feed877` | 17:33:25,984 | 17:33:26,119 | **+135 ms** |
+| `831b8d76` | 17:35:33,482 | 17:35:33,699 | **+217 ms** |
+| `b5c60ced` | 17:34:55,748 | 17:34:55,905 | **+157 ms** |
+| `2f84c002` | 17:33:31,367 | 17:33:31,562 | **+195 ms** |
+
+Consistently 135–217 ms. Against the earlier measurement of the failing case — hive declared the
+client up at `53.352` on the 8551 gate, and the simulator's first `eth_getBlockByNumber` hit 8545 at
+`~53.43`, about **80 ms** later — the simulator fires squarely *inside* that window every time. This
+is a deterministic failure, not an intermittent one, which matches `sync fukuii from fukuii` failing
+in every run rather than flaking.
+
+**Decision: leave it (option a). Closed, not deferred.** The numbers rule the alternatives out:
+
+- Swapping to 8545-first fixes this one test and reinstates the 2026-06-01 bug for every suite that
+  gates on the default 8545 — including `engine`, 403 tests — because those sims call 8551 just as
+  promptly as this one calls 8545.
+- Binding concurrently (option c) would shrink the window to a few ms, comfortably inside the 80 ms
+  the simulator takes. But it makes the ordering non-deterministic, so it trades **one deterministic
+  failure** for a **small probabilistic flake across 403 tests**. That is a worse risk profile for a
+  one-test gain.
+- Conditioning the adapter on `HIVE_BOOTNODE` (option b) remains available if this test ever matters
+  more than it does now.
+
+`sync` therefore stays at 2 of 12: this one, plus `sync go-ethereum from fukuii` (the ~70 s
+`CANONICAL_HEAD_ANNOUNCE` peer-scan deferral against a 60 s budget), which is a separate cause and
+still open.
+
+### devp2p on `db1c345`: 18 of 62, composition unchanged
+
+discv4 0/16, discv5 0/11, eth 9/25, snap 5/6, snap2 4/4 — identical to `810d6d8`. The inertness
+oracle held across the Muir Glacier fix, the tracer work, the estimateGas change and the INVALID
+propagation.
