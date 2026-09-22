@@ -176,8 +176,29 @@ object OpCodes:
   val EtcOlympiaOpCodes: List[OpCode] =
     CLZ :: (List(BASEFEE, TLOAD, TSTORE, MCOPY) ++ SpiralOpCodes)
 
-  /** ETH Osaka (timestamp-based); CLZ already present via OlympiaOpCodes. */
-  val OsakaOpCodes: List[OpCode] = OlympiaOpCodes
+  // ── ETH-only opcode tables (never selected on an ETC chain) ─────────────────────────────────
+  //
+  // ETH London/Paris are block-gated through `LondonConfigBuilder`, the branch `forBlock()` takes only when
+  // `spiralBlockNumber > olympiaBlockNumber` (the ETH fork shape; no shipped ETC config satisfies it). Shanghai onward
+  // are applied by the timestamp overlay, which is inert on ETC because ETC configs declare no fork timestamps. None of
+  // the ETC tables above (Magneto/Spiral/EtcOlympia) is modified or referenced by these.
+  //
+  // Each list is exactly the previous ETH fork plus that fork's EIPs, cross-checked against go-ethereum
+  // core/vm/jump_table.go (newLondonInstructionSet … newOsakaInstructionSet) and EEST v5.4.0 test_all_opcodes.
+
+  /** ETH London / Paris: Berlin (= Phoenix set) + BASEFEE (EIP-3198). */
+  val LondonOpCodes: List[OpCode] = BASEFEE +: PhoenixOpCodes
+
+  /** ETH Shanghai: London + PUSH0 (EIP-3855). */
+  val ShanghaiOpCodes: List[OpCode] = PUSH0 +: LondonOpCodes
+
+  /** ETH Cancun / Prague: Shanghai + BLOBHASH (EIP-4844), BLOBBASEFEE (EIP-7516), TLOAD/TSTORE (EIP-1153), MCOPY
+    * (EIP-5656). No CLZ — EIP-7939 is Osaka; 0x1e is an undefined opcode here.
+    */
+  val CancunOpCodes: List[OpCode] = List(BLOBHASH, BLOBBASEFEE, TLOAD, TSTORE, MCOPY) ++ ShanghaiOpCodes
+
+  /** ETH Osaka: Cancun + CLZ (EIP-7939). */
+  val OsakaOpCodes: List[OpCode] = CLZ :: CancunOpCodes
 
 object OpCode:
   def sliceBytes(bytes: ByteString, offset: UInt256, size: UInt256): ByteString =

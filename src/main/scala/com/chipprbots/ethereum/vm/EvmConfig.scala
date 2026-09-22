@@ -36,13 +36,15 @@ object EvmConfig:
     // Apply timestamp-based fork upgrades for ETH chains
     if blockchainConfig.isShanghaiTimestamp(timestamp) then
       config = config.copy(
-        opCodeList = SpiralOpCodes, // Adds PUSH0 (EIP-3855)
+        opCodeList = ShanghaiOpCodes, // London + PUSH0 (EIP-3855); NOT SpiralOpCodes, which lacks BASEFEE
         eip3651Enabled = true, // Warm COINBASE
         eip3860Enabled = true // Initcode metering
       )
     if blockchainConfig.isCancunTimestamp(timestamp) then
       config = config.copy(
-        opCodeList = OlympiaOpCodes, // Adds TSTORE/TLOAD/MCOPY/BLOBHASH/BLOBBASEFEE
+        // Adds TSTORE/TLOAD/MCOPY/BLOBHASH/BLOBBASEFEE. NOT OlympiaOpCodes: that list carries CLZ (EIP-7939),
+        // which is Osaka-only — hive consume-engine test_all_opcodes measured the leak at -49,898 gas.
+        opCodeList = CancunOpCodes,
         feeSchedule = new FeeSchedule.OlympiaFeeSchedule,
         eip6780Enabled = true // SELFDESTRUCT restriction
       )
@@ -119,6 +121,10 @@ object EvmConfig:
   val SpiralOpCodes: OpCodeList = OpCodeList(OpCodes.SpiralOpCodes)
   val OlympiaOpCodes: OpCodeList = OpCodeList(OpCodes.OlympiaOpCodes)
   val EtcOlympiaOpCodes: OpCodeList = OpCodeList(OpCodes.EtcOlympiaOpCodes)
+  // ETH-only tables — see OpCodes.LondonOpCodes for why none of these is reachable on ETC.
+  val LondonOpCodes: OpCodeList = OpCodeList(OpCodes.LondonOpCodes)
+  val ShanghaiOpCodes: OpCodeList = OpCodeList(OpCodes.ShanghaiOpCodes)
+  val CancunOpCodes: OpCodeList = OpCodeList(OpCodes.CancunOpCodes)
   val OsakaOpCodes: OpCodeList = OpCodeList(OpCodes.OsakaOpCodes)
 
   val FrontierConfigBuilder: EvmConfigBuilder = config =>
