@@ -107,11 +107,39 @@ The registry must move out of EngineApiService, or gain a narrow interface the i
 can call. Prefer the latter: a small trait with `reportInvalid(hash, lvh)` owned by the
 engine module, injected into BlockImporter. Do NOT widen it into a general-purpose event bus.
 
-## NOT established
+## SETTLED: the node NEVER reports invalidity. It is not reporting late.
 
-* Whether the 48 time out because reporting never happens, or because it happens too slowly.
-  The mode change is consistent with "never", but I have not read a per-test timeline to
-  prove the node had the answer and failed to deliver it vs. never reached a verdict.
+This was the open question the fix depended on, and it is now answered from the engine
+artifact's own detail logs — no client logs needed, because the detail log carries the full
+hive<->client RPC exchange including every response fukuii gave.
+
+Across ALL 48 timeout-family tests on fc713a9:
+
+    tests examined:                        48
+    tests where fukuii EVER said INVALID:   0
+    aggregate payloadStatus responses:     ACCEPTED 2014, SYNCING 2014, VALID 912, INVALID 0
+    newPayload polls per test:             min 41, median 51, max 58
+
+Hive asks between 41 and 58 times per test across the whole budget and receives
+ACCEPTED/SYNCING every single time. Zero INVALID responses in 4,940 status replies.
+
+The 912 VALID responses matter too: the node is answering correctly for good payloads
+throughout, so it is not wedged, stalled or degraded. It simply has no channel through which
+to say "this chain is invalid".
+
+That removes the last ambiguity in the diagnosis. The fix is a REPORTING channel, not a
+latency or ordering problem:
+
+  * trigger on the typed, unambiguous signals b4cdc30 made reachable —
+    ValidationBeforeExecError (carrying BlockHeaderError | BlockError | OmmersError) and
+    TxsExecutionError
+  * never on MPTError / MissingParentError, nor on "Block has invalid gas used" unless
+    findMissingContractCode returns None (BlockImporter.scala:545-549 already draws that line)
+  * route through a narrow reportInvalid(hash, lvh) entry point, because invalidBlocks
+    currently has none
+
+## Still NOT established
+
 * Whether LVH computed on the p2p path matches what hive expects
   (`altChainPayloads[InvalidIndex-1]`, a validated NON-canonical side-chain block).
 * Whether the ReOrgFromCanonical=true topology (peer head 14 < fukuii head 15) even lets
