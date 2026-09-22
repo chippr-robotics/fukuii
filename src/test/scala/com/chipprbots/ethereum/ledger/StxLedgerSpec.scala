@@ -67,23 +67,23 @@ class StxLedgerSpec extends AnyFlatSpec with Matchers with Logger:
     * code's byte length) * 200 (`G_codedeposit`) — the code-deposit cost was silently omitted from the estimate.
     *
     * Root cause: `VM.saveNewContract` (VM.scala), pre-Homestead branch. Frontier's `exceptionalFailedCodeDeposit \=
-    * false` correctly skips the revert/burn-all-gas penalty for a CREATE that ran out of gas paying the code deposit,
-    * but the code returned `result` completely unchanged — including `error = None`. That makes
-    * `binarySearchGasEstimation` (which reads `TxResult.vmError`) treat "ran the init code, produced runtime bytes, but
-    * couldn't afford to store them" as a SUCCESS, so the binary search converges on the minimum gas to merely RUN the
-    * init code, never the minimum to actually deploy it.
+    * false` makes a CREATE that cannot pay its code deposit a SUCCESS — gas kept, state kept, no code stored — so the
+    * result carried `error = None` and nothing distinguished it from a creation that actually deployed. That let
+    * `binarySearchGasEstimation` treat "ran the init code, produced runtime bytes, but couldn't afford to store them"
+    * as an acceptable answer, so the search converged on the minimum gas to merely RUN the init code, never the minimum
+    * to actually deploy it.
     *
-    * go-ethereum's `core/vm/evm.go` `create()` does NOT make that mistake: `err = ErrCodeStoreOutOfGas` is set
-    * unconditionally, and `evm.chainRules.IsHomestead` gates only whether the world gets reverted and the remaining gas
-    * burned — not whether `err` is set at all. `Result.Failed()` (checked by both `eth_estimateGas` and the GraphQL
-    * resolver) is therefore true on every fork, pre-Homestead included.
+    * Fix: `ProgramResult.codeDepositShortfall` — a plain boolean, deliberately NOT a `ProgramError`, set on that branch
+    * and read ONLY by `binarySearchGasEstimation`. `error` stays `None`, which is what every consensus consumer keys
+    * on, so block execution is unchanged by construction.
     *
-    * Fix: `CodeStoreOutOfGasPreHomestead` (ProgramError.scala) — a `ProgramError` with `useWholeGas = false` (no extra
-    * gas burned, matching Frontier) and the new `rollbackOnError = false` (the partial state change — nonce bump,
-    * endowment transfer — must still stick for a transaction that actually lands in a block).
-    * `BlockPreparator.executeTransaction`'s checkpoint-rollback now reads `rollbackOnError` instead of blanket
-    * `error.isDefined`, so this is the only error variant that reports "failed" to callers like
-    * `binarySearchGasEstimation` while leaving the already-applied world state alone.
+    * The obvious-looking alternative — reporting a `ProgramError` here, as go-ethereum's `create()` appears to do — is
+    * a consensus trap, and was briefly shipped and reverted. geth sets `ErrCodeStoreOutOfGas` inside `create()` but
+    * `core/vm/instructions.go` `opCreate` then discards it ("if the ruleset is frontier we must ignore this error and
+    * pretend the operation was successful"), so it never reaches the caller's stack value or the top-level `vmerr`.
+    * fukuii's `CreateOp` has no such discard: a `Some` there makes a nested CREATE push 0 instead of the new address
+    * and throw away the init code's state, and makes `calcTotalGasToRefund` drop the gas-refund counter. See
+    * `FrontierCreateCodeDepositSpec` and the refund test below, which pin both halves.
     */
   it should "estimate the code-deposit cost for a pre-Homestead CREATE that can't afford to store its code" taggedAs (
     UnitTest,
@@ -111,6 +111,57 @@ class StxLedgerSpec extends AnyFlatSpec with Matchers with Logger:
     val runtimeCodeSize = 343
     val codeDepositCost = runtimeCodeSize * 200
     (estimationResult - codeDepositCost) shouldEqual BigInt(43353)
+
+  /** Companion to the estimation pin above, guarding the OTHER half of the same VM branch: what a pre-Homestead
+    * code-deposit shortfall must do to a transaction that actually lands in a block.
+    *
+    * Frontier's `exceptionalFailedCodeDeposit = false` makes this case a SUCCESS — gas kept, state kept, no code stored
+    * — so `ProgramResult.error` stays `None`, and `BlockPreparator.calcTotalGasToRefund` therefore takes its `case
+    * None` arm and CREDITS the accumulated gas-refund counter. go-ethereum agrees by construction: `create()` skips
+    * `RevertToSnapshot` on this path, so the journaled refund counter survives into `refundGas`.
+    *
+    * Signalling the shortfall as a `ProgramError` instead breaks exactly this: `calcTotalGasToRefund` dispatches on
+    * `error.map(_.useWholeGas)`, and a `Some(false)` drops `min(gasUsed / 2, gasRefund)` silently. The sender is
+    * overcharged, the receipt's `cumulativeGasUsed` moves, the header's `gasUsed` moves, and the block hash moves — on
+    * ETC mainnet blocks 0 - 1,149,999. Nothing else in the suite covers it.
+    */
+  it should "credit the gas refund for a pre-Homestead CREATE that cannot pay its code deposit" taggedAs (
+    UnitTest,
+    StateTest
+  ) in new HiveGraphQLScenarioSetup:
+    // SSTORE(0, 1) then SSTORE(0, 0): sets a slot and clears it, accruing R_sclear = 15,000 (Frontier). Then
+    // RETURN 1,000 zero bytes, whose 200,000 code deposit the 60,000-gas transaction cannot possibly afford.
+    val refundingInitCode: ByteString = ByteString(
+      Hex.decode(
+        "6001600055" + // PUSH1 1, PUSH1 0, SSTORE   -> slot 0 = 1 (G_sset 20,000)
+          "6000600055" + // PUSH1 0, PUSH1 0, SSTORE -> slot 0 = 0 (G_sreset 5,000, R_sclear +15,000)
+          "6103e86000f3" // PUSH2 0x03e8, PUSH1 0, RETURN -> 1,000 bytes of runtime code
+      )
+    )
+
+    val refundTx: LegacyTransaction =
+      LegacyTransaction(0, GasPrice.Zero, GasAmount(60000), None, 0, refundingInitCode)
+    val refundStx: SignedTransaction = SignedTransaction(refundTx, ECDSASignature(0, 0, 0))
+
+    val vmResult: PR =
+      mining.blockPreparator.runVM(refundStx, fromAddress, block32Header, worldWithAccount)
+
+    // The branch under test was actually reached, and reached as a SUCCESS.
+    vmResult.error shouldBe None
+    vmResult.codeDepositShortfall shouldBe true
+    vmResult.gasRefund shouldEqual BigInt(15000)
+    vmResult.gasRemaining should be > BigInt(0)
+
+    val totalRefunded: BigInt =
+      mining.blockPreparator.calcTotalGasToRefund(refundStx, vmResult, block32Header.number.value)
+
+    // The refund counter is credited on top of the unspent gas. Expressed relationally rather than as a magic
+    // constant: signalling this case as a ProgramError collapses `totalRefunded` to exactly `gasRemaining`.
+    val gasUsedBeforeRefund: BigInt = refundTx.gasLimit.value - vmResult.gasRemaining
+    val expectedRefundCredit: BigInt = (gasUsedBeforeRefund / 2).min(vmResult.gasRefund)
+    expectedRefundCredit shouldEqual BigInt(15000)
+    totalRefunded shouldEqual vmResult.gasRemaining + expectedRefundCredit
+    totalRefunded should be > vmResult.gasRemaining
 
   it should "correctly estimate gasLimit for value transfer transaction" taggedAs (
     UnitTest,

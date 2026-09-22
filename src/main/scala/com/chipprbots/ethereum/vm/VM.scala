@@ -387,14 +387,22 @@ class VM[W <: WorldStateProxy[W, S], S <: Storage[S]](
         else if codeStoreOutOfGas && !config.exceptionalFailedCodeDeposit then
           // Code storage causes out-of-gas with exceptionalFailedCodeDeposit disabled. Pre-Homestead only,
           // and pre-Amsterdam by construction: the frame keeps its gas and its state, and no code is stored.
-          // BUT an error IS still reported (CodeStoreOutOfGasPreHomestead, ProgramError.scala) — go-ethereum's
-          // `IsHomestead` check gates only the revert/full-gas-burn, not whether `err` gets set at all,  so
-          // `Result.Failed()` (and therefore fukuii's `TxResult.vmError`, which `binarySearchGasEstimation`
-          // reads) is true on every fork. Without this, `eth_estimateGas`/GraphQL `estimateGas` would treat a
-          // contract deployment that stored NO code as a successful minimum, silently omitting the code-deposit
-          // cost from the estimate (measured: hive graphql `04_eth_estimateGas_contractDeploy` short by exactly
-          // runtimeCodeSize * G_codedeposit).
-          result.copy(error = Some(CodeStoreOutOfGasPreHomestead))
+          //
+          // `error` MUST stay `None` here. It is the field every consensus consumer keys on:
+          //   - `CreateOp` (OpCode.scala) dispatches the CREATE result on `error` alone — a `Some` makes it
+          //     push 0 instead of the new address and revert the child frame's world to the post-endowment
+          //     snapshot, discarding every SSTORE/log the init code made.
+          //   - `BlockPreparator.calcTotalGasToRefund` dispatches on `error.map(_.useWholeGas)` — a `Some`
+          //     drops the accumulated gas-refund counter.
+          // go-ethereum reaches the same end state by a different route: `core/vm/evm.go create()` does set
+          // `err = ErrCodeStoreOutOfGas` unconditionally, but `core/vm/instructions.go opCreate` then throws
+          // it away — "if the ruleset is frontier we must ignore this error and pretend the operation was
+          // successful" — so it never reaches the caller's stack value, the child's state, or the top-level
+          // `vmerr`. Setting `error` here and relying on downstream consumers to un-set it is the shape that
+          // produced a silent ETC consensus divergence on blocks 0-1,149,999 (reverted; see git history).
+          //
+          // `codeDepositShortfall` carries the fact to gas ESTIMATION only. No consensus path reads it.
+          result.copy(codeDepositShortfall = true)
         else
           // Code storage succeeded
           result.copy(

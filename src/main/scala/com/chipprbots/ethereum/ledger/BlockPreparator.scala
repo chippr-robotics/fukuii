@@ -415,11 +415,8 @@ class BlockPreparator(
     val result = runVM(stx, senderAddress, blockHeader, worldAfterAuths, authExecutionGas, authStateGas)
 
     val resultWithErrorHandling: PR =
-      if result.error.exists(_.rollbackOnError) then
-        // Rollback to the world before transfer was done if an error happened. Exception:
-        // CodeStoreOutOfGasPreHomestead (ProgramError.scala) carries an error for estimateGas/eth_call purposes
-        // but must NOT roll back — Frontier's EIP-2 leniency keeps the partial state change (nonce bump,
-        // endowment transfer) for a transaction that actually lands in a block, even though it stored no code.
+      if result.error.isDefined then
+        // Rollback to the world before transfer was done if an error happened
         result.copy(world = checkpointWorldState, addressesToDelete = Set.empty, logs = Nil)
       else result
 
