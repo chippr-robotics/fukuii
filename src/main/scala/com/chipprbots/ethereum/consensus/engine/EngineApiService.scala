@@ -6,6 +6,7 @@ import org.apache.pekko.util.ByteString
 
 import cats.effect.IO
 
+import com.chipprbots.ethereum.consensus.eip1559.BaseFeeCalculator
 import com.chipprbots.ethereum.consensus.engine.PayloadStatus.*
 import com.chipprbots.ethereum.consensus.validators.std.MptListValidator
 import com.chipprbots.ethereum.crypto.kec256
@@ -665,20 +666,24 @@ class EngineApiService(
                         )
                       )
                     case Some(parent) =>
-                      // Compute EIP-1559 base fee from parent
-                      val parentBaseFee = parent.header.baseFee.getOrElse(BigInt("1000000000"))
-                      val parentGasTarget = parent.header.gasLimit / 2
-                      val baseFee: BigInt =
-                        if parent.header.number == BlockNumber.Zero then parentBaseFee
-                        else if parent.header.gasUsed == parentGasTarget then parentBaseFee
-                        else if parent.header.gasUsed > parentGasTarget then
-                          val delta =
-                            parentBaseFee * (parent.header.gasUsed - parentGasTarget).value / parentGasTarget.value / 8
-                          parentBaseFee + (if delta == BigInt(0) then BigInt(1) else delta)
-                        else
-                          val delta =
-                            parentBaseFee * (parentGasTarget - parent.header.gasUsed).value / parentGasTarget.value / 8
-                          if parentBaseFee - delta < 0 then BigInt(0) else parentBaseFee - delta
+                      // EIP-1559 base fee for the block we are about to propose.
+                      //
+                      // Delegates to the canonical calculator rather than carrying an inline
+                      // copy. The copy that used to live here had a `parent.number == 0 =>
+                      // parentBaseFee` special case that neither BaseFeeCalculator nor
+                      // go-ethereum's consensus/misc/eip1559.CalcBaseFee has. On a chain
+                      // whose genesis is already London (Sepolia, and every hive sim that
+                      // sets HIVE_FORK_LONDON=0) that made us propose block 1 with the
+                      // genesis base fee instead of the 1/8 decrease an empty genesis earns:
+                      // 1,000,000,000 where the rule gives 875,000,000. Every other client
+                      // computes the latter, so our block 1 was unacceptable to them —
+                      // invisible only because no validation path recomputed it.
+                      //
+                      // The London-activation exemption the copy was reaching for is already
+                      // in calcBaseFee, keyed correctly on olympiaBlockNumber rather than on
+                      // the parent being genesis. The copy also floored the decrease at 0
+                      // instead of blockchainConfig.baseFeeFloor.
+                      val baseFee: BigInt = BaseFeeCalculator.calcBaseFee(parent.header, blockchainConfig)
 
                       // Fetch pending transactions from the tx pool using IO.fromFuture so the
                       // CE3 compute thread is not blocked waiting for the actor response.
