@@ -437,3 +437,144 @@ discovery mechanism can reach.
   those have drifted is NOT established.
 * `consensus` suite health, which its unstable denominator makes unmeasurable as run today.
   That is a CI-integrity defect in its own right.
+
+---
+
+# Measurements on `6c8bc97` — and four root causes named
+
+`6c8bc97` is the first commit whose hive jobs can report their own counts (it moved the
+`$GITHUB_OUTPUT` emission ahead of the reporting block). Every figure below comes from the
+uploaded artifact's `summaryResult.pass`, not from the gate.
+
+| suite | passed | failed | total | gate verdict |
+|---|---:|---:|---:|---|
+| rpc-compat | 241 | **6** | 247 | RED |
+| graphql | 50 | 2 | 52 | RED |
+| devp2p | 44 | 18 | 62 | RED |
+| sync | 17 | **1** | 18 | **GREEN — and the green is hiding the failure** |
+| smoke-genesis, smoke-network | — | 0 | — | GREEN |
+
+rpc-compat has now held at 6 across three consecutive samples. graphql and devp2p are
+unmoved, which is what the inertness oracle is for.
+
+## sync: still one real failure, still hidden by the gate
+
+The gate printed `Hive sync gate passed: 17/18` with `GATE_FAILED: 0`. The artifact says
+otherwise: the one failing test is **`sync go-ethereum from fukuii`** — a fukuii-matching
+test suppressed by `hive-sync.yml`'s `gate_exclude`. A green check here still means a real
+defect.
+
+What did change: the *other* waived test, `sync fukuii from nethermind`, now **passes**. The
+suite went from 2 failures to 1 without the gate being able to say so.
+
+The remaining failure is fukuii-as-SERVER. From its detail log, the harness drives geth (the
+sink) to block 0xbb8 = 3000 via `engine_newPayloadV3` / `engine_forkchoiceUpdatedV3`; geth
+answers `SYNCING` to both and then `sync failed: timeout (1m0s elapsed, current head is 0)`.
+geth never leaves head 0, i.e. it got nothing from fukuii over p2p. See root cause B below —
+fukuii disconnects snap peers.
+
+## Root cause A — `debug_trace*` returns no `result` at all
+
+`StructLogTracer.getResult` is `JNothing` (`vm/StructLogTracer.scala:111`). Its scaladoc
+claims the response "is built by DebugTracingJsonMethodsImplicits using
+getSteps/gas/failed/returnValue". **That comment is false**:
+`DebugTracingJsonMethodsImplicits.debug_traceTransaction.encodeJson(t) = t.result`, and
+`t.result` *is* `tracer.getResult`. Nothing reads `getSteps`. `setResult` (line 98) has zero
+callers anywhere in src/main or src/test, while `ExecutionTracer.onTxEnd` — which
+`StxLedger.simulateTransactionWithTracer` already calls with exactly the right gas/return/error
+— is not overridden. The whole result half of the tracer is unwired.
+
+Measured: the node answers `{"jsonrpc":"2.0","id":1}` and the harness reports
+`unable to parse result: unexpected end of JSON input`. Costs
+`debug_traceTransaction/trace-contract-call` and `/trace-legacy-transfer`.
+
+StructLogTracer is the default for any request with no `tracer` name, which is what all four
+tracer tests send — so this breaks every default-tracer trace call, not just these two.
+
+## Root cause A2 — `traceAllTxsInBlock` is O(n²), and A3 is hiding behind it
+
+`DebugTracingService.traceAllTxsInBlock` calls `advanceWorldToTx(..., txIndex, parentStateRoot)`
+inside `stxs.zipWithIndex.map`, and `advanceWorldToTx` does
+`(0 until txIndex).foldLeft(world0)` — it re-executes the whole prefix from the parent root on
+every index. Block 0x2 of this fixture carries **~62 transactions**, most of them contract
+creations with gasLimit 1,628,061: that is 1,891 redundant executions. Measured result is
+`context deadline exceeded (Client.Timeout exceeded while awaiting headers)` on both
+`debug_traceBlockByNumber` tests.
+
+**A3, currently masked by A2:** the hive schema
+(`rpc-compat/testdata/openrpc-tracer.json`) requires every `debug_traceBlockByNumber` array
+item to have BOTH `txHash` and `result`. fukuii's encoder emits bare tracer results with no
+envelope. Fixing only the timeout would move these two tests from timeout to schema failure,
+not to green.
+
+## Root cause B — the devp2p snap offset mismatch is structural, not a fukuii bug
+
+go-ethereum master `cmd/devp2p/internal/ethtest/protocol.go:34-40` **hardcodes**:
+
+    baseProtoLen = 16
+    ethProtoLen  = 22
+    snapProtoLen = 10
+
+so the harness always places snap at wire offset 38 regardless of which eth version it
+negotiated. Only **eth/72** has protocolLength 22 (`eth/protocols/eth/protocol.go:49`:
+`{ETH69: 18, ETH70: 18, ETH71: 20, ETH72: 22}`), so the harness effectively assumes an
+eth/72 peer.
+
+fukuii advertises eth/68 + eth/69, putting its snap base at 16+18 = 34. The harness's
+GetByteCodes (snap 0x04) therefore arrives at wire 42 and GetTrieNodes (0x06) at wire 44.
+fukuii's own client log says exactly that:
+
+    Error: Unknown snap/1 message type: 42
+    Error: Unknown snap/1 message type: 44
+    Cannot decode GetByteCodes. Expected RLPList[3] ...   (17 occurrences)
+    Cannot decode GetTrieNodes. Expected RLPList[4] ...   (5 occurrences)
+
+each followed by `DECODE_ERROR ... - disconnecting`. fukuii's `ethWireSizeFor`
+(`RLPxConnectionHandler.scala:126`) is **correct** and was verified against geth's table —
+the mismatch is the harness's fixed assumption, and the only way to satisfy it is to reach
+eth/72. Accounts for `AccountRange`, `GetByteCodes`, `GetStorageRanges`, `GetTrieNodes` plus
+one client-launch failure.
+
+Four more — `Status`, `TrieNodesRemoved`, and two `GetBlockAccessLists` — fail earlier, at
+`could not negotiate snap protocol (remote caps: [eth/68 eth/69 snap/1], local snap version: 2)`:
+fukuii offers snap/1, the harness requires snap/2 (EIP-8189, which adds
+`GetBlockAccessLists=0x08` / `BlockAccessLists=0x09` and removes GetTrieNodes).
+
+## Root cause C — fukuii sends an unsolicited BlockRangeUpdate after every eth/69 handshake
+
+`NetworkPeerManagerActor.scala:733-743` sends `ETH69.BlockRangeUpdate` immediately after
+every eth/69 handshake. fukuii's own scaladoc (`ETH69.scala:151`) says it is
+"Sent when peer's available block range changes" — EIP-7642 defines a change notification,
+and geth emits it only on change.
+
+geth's harness `conn.go:185` computes `code -= baseProtoLen`, then switches on the
+eth-relative code; its case list ends at `default: panic("unhandled eth msg code %d")` with
+**no case for BlockRangeUpdate (17)**. fukuii sends BRU at wire 33; the harness reads 17 and
+panics. Measured: `panic: unhandled eth msg code 17` in `Transaction`, `InvalidTxs`,
+`LargeTxRequest`. fukuii's log shows `ETH69_BRU_POST_HANDSHAKE` firing 40× in one container.
+
+Four further tx-flow tests (`NewPooledTxs`, `BlobViolations`, `TestBlobTxWithoutSidecar`,
+`TestBlobTxWithMismatchedSidecar`) fail with "disconnect" in the same flow. Same cause is a
+**hypothesis, not a measurement** — recorded as such.
+
+## Root cause D — EIP-7594 blob sidecars are rejected
+
+`eth_sendRawTransaction/send-blob-tx` answers `-32600`. Decoding the 137,725-byte payload the
+harness actually sent gives
+
+    0x03 || rlp([ tx_payload(14), 0x01, [1 blob 131072B], [1 commitment 48B], [128 proofs 48B] ])
+
+— **5** wrapper elements, a version byte, and 128 *cell* proofs: the EIP-7594 (PeerDAS)
+sidecar form. `ETHPackets.toSignedTransactionWithSidecar` accepts only
+`outer.items.size == 4` (legacy EIP-4844); the 5-element wrapper falls through to a branch
+that reads the whole wrapper as a 14-field tx body, throws, and is swallowed by
+`EthTxService.scala:276`'s `case Failure(_) => InvalidRequest`. That bare `Failure(_)` is also
+why a decode error presented as a meaningless JSON-RPC envelope error.
+
+## Root cause E — `eth_config` (EIP-7910) is structurally wrong
+
+Exact-comparison test, six deviations: `activationBlock` hex instead of `activationTime`
+decimal; `blobSchedule` and `forkId` absent; precompiles keyed by geth-internal camelCase
+instead of canonical UPPER_SNAKE (and `KZG_POINT_EVALUATION` missing entirely);
+`systemContracts` carrying 1 of 5 entries under the wrong name; and `next`/`last` fabricating
+fork objects with a `0xde0b6b3a7640000` sentinel where the spec wants `null`.
