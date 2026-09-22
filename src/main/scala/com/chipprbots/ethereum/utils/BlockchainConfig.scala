@@ -59,7 +59,12 @@ case class BlockchainConfig(
     minTip: BigInt = BigInt(1000000000),
     networkType: NetworkType = NetworkType.ETC,
     terminalTotalDifficulty: Option[BigInt] = None,
-    forkTimestamps: ForkTimestamps = ForkTimestamps()
+    forkTimestamps: ForkTimestamps = ForkTimestamps(),
+    // EIP-6110 deposit contract address. Genesis-declared on ETH-family chains (geth
+    // `config.depositContractAddress`) and NOT a universal constant: hive's rpc-compat
+    // fixture declares the zero address, Sepolia uses its own. `None` means "not declared",
+    // and readers fall back to the mainnet contract. ETC/Mordor never declare it.
+    depositContractAddress: Option[Address] = None
 ):
   def isPoS(totalDifficulty: BigInt): Boolean =
     terminalTotalDifficulty.exists(ttd => totalDifficulty >= ttd)
@@ -287,6 +292,9 @@ object BlockchainConfig:
     val terminalTotalDifficulty: Option[BigInt] =
       Try(BigInt(blockchainConfig.getString("terminal-total-difficulty"))).toOption
 
+    val depositContractAddress: Option[Address] =
+      Try(Address(blockchainConfig.getString("deposit-contract-address"))).toOption
+
     val forkTimestamps: ForkTimestamps = ForkTimestamps(
       shanghaiTimestamp = Try(blockchainConfig.getLong("shanghai-timestamp")).toOption,
       cancunTimestamp = Try(blockchainConfig.getLong("cancun-timestamp")).toOption,
@@ -359,6 +367,7 @@ object BlockchainConfig:
       minTip = minTip,
       networkType = networkType,
       terminalTotalDifficulty = terminalTotalDifficulty,
+      depositContractAddress = depositContractAddress,
       forkTimestamps = forkTimestamps
     )
   // scalastyle:on method.length

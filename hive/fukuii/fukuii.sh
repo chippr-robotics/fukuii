@@ -56,6 +56,11 @@ TARGET_GAS_LIMIT=${HIVE_TARGET_GAS_LIMIT:-}
 
 if [ -f "$GENESIS_FILE" ]; then
     jq -f /mapper.jq "$GENESIS_FILE" > "$CONFIG_DIR/genesis.json"
+    # EIP-6110 deposit contract. Genesis-declared and NOT a universal constant — hive's
+    # rpc-compat fixture declares the zero address while mainnet uses 0x00000000219ab540...
+    # eth_config (EIP-7910) must advertise the chain's own value, so read it from the
+    # genesis rather than falling back to the mainnet contract.
+    DEPOSIT_CONTRACT=$(jq -r '.config.depositContractAddress // empty' "$GENESIS_FILE" 2>/dev/null || true)
 fi
 
 # ==============================================================================
@@ -114,6 +119,9 @@ fi
 [ -n "$BPO1_TS" ] && FLAGS="$FLAGS -Dfukuii.blockchains.hive.bpo1-timestamp=$BPO1_TS"
 [ -n "$BPO2_TS" ] && FLAGS="$FLAGS -Dfukuii.blockchains.hive.bpo2-timestamp=$BPO2_TS"
 [ -n "$AMSTERDAM_TS" ] && FLAGS="$FLAGS -Dfukuii.blockchains.hive.amsterdam-timestamp=$AMSTERDAM_TS"
+
+# EIP-6110 deposit contract address, as declared by the fixture genesis (see above).
+[ -n "$DEPOSIT_CONTRACT" ] && FLAGS="$FLAGS -Dfukuii.blockchains.hive.deposit-contract-address=$DEPOSIT_CONTRACT"
 
 # RPC
 [ -n "$TARGET_GAS_LIMIT" ] && FLAGS="$FLAGS -Dfukuii.mining.gas-limit-target=$TARGET_GAS_LIMIT"

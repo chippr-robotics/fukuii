@@ -19,12 +19,16 @@ import com.chipprbots.ethereum.crypto.*
 import com.chipprbots.ethereum.domain.*
 import com.chipprbots.ethereum.jsonrpc.AkkaTaskOps.*
 import com.chipprbots.ethereum.keystore.KeyStore
+import com.chipprbots.ethereum.consensus.engine.BlobGasUtils
+import com.chipprbots.ethereum.forkid.ForkId
+import com.chipprbots.ethereum.ledger.BlockExecution
 import com.chipprbots.ethereum.ledger.BlockExecution.HistoryStorageAddress
 import com.chipprbots.ethereum.ledger.InMemoryWorldStateProxy
 import com.chipprbots.ethereum.ledger.StxLedger
 import com.chipprbots.ethereum.mpt.MerklePatriciaTrie.MissingNodeException
 import com.chipprbots.ethereum.network.p2p.messages.Capability
 import com.chipprbots.ethereum.utils.BlockchainConfig
+import com.chipprbots.ethereum.utils.NetworkType
 import com.chipprbots.ethereum.vm.PrecompiledContracts
 
 object EthInfoService:
@@ -32,11 +36,52 @@ object EthInfoService:
   case class ChainIdResponse(value: BigInt)
 
   case class ConfigRequest()
+
+  /** EIP-7892 blob parameters advertised for a fork. Blob counts, not gas. */
+  case class BlobScheduleConfig(target: BigInt, max: BigInt, baseFeeUpdateFraction: BigInt)
+
+  /** One entry of the EIP-7910 `eth_config` response.
+    *
+    * `activationBlock` and `activationTime` are mutually exclusive: ETH-family forks after the Merge are
+    * timestamp-gated and report `activationTime`; ETC remains block-gated and reports `activationBlock`.
+    * `forkId`/`blobSchedule` are ETH-family only.
+    */
   case class ForkConfig(
-      activationBlock: BigInt,
+      activationBlock: Option[BigInt],
+      activationTime: Option[Long],
       chainId: BigInt,
+      forkId: Option[BigInt],
+      blobSchedule: Option[BlobScheduleConfig],
       precompiles: Map[String, Address],
       systemContracts: Map[String, Address]
+  )
+
+  /** Canonical EIP-7910 precompile names, keyed by address.
+    *
+    * These are the names the spec fixes, NOT go-ethereum's internal identifiers, and the mapping is not mechanical:
+    * `ecrecover` is `ECREC`, `identity` is `ID`, the bn256 family is `BN254_*` (the curve's correct name), and the BLS
+    * multi-exponentiations are `MSM`. The set of addresses is derived from `PrecompiledContracts` so the advertised
+    * list cannot drift from the precompiles the EVM actually runs.
+    */
+  val Eip7910PrecompileNames: Map[Address, String] = Map(
+    PrecompiledContracts.EcDsaRecAddr -> "ECREC",
+    PrecompiledContracts.Sha256Addr -> "SHA256",
+    PrecompiledContracts.Rip160Addr -> "RIPEMD160",
+    PrecompiledContracts.IdAddr -> "ID",
+    PrecompiledContracts.ModExpAddr -> "MODEXP",
+    PrecompiledContracts.Bn128AddAddr -> "BN254_ADD",
+    PrecompiledContracts.Bn128MulAddr -> "BN254_MUL",
+    PrecompiledContracts.Bn128PairingAddr -> "BN254_PAIRING",
+    PrecompiledContracts.Blake2bCompressionAddr -> "BLAKE2F",
+    PrecompiledContracts.KzgPointEvalAddr -> "KZG_POINT_EVALUATION",
+    PrecompiledContracts.BlsG1AddAddr -> "BLS12_G1ADD",
+    PrecompiledContracts.BlsG1MultiExpAddr -> "BLS12_G1MSM",
+    PrecompiledContracts.BlsG2AddAddr -> "BLS12_G2ADD",
+    PrecompiledContracts.BlsG2MultiExpAddr -> "BLS12_G2MSM",
+    PrecompiledContracts.BlsPairingAddr -> "BLS12_PAIRING_CHECK",
+    PrecompiledContracts.BlsMapG1Addr -> "BLS12_MAP_FP_TO_G1",
+    PrecompiledContracts.BlsMapG2Addr -> "BLS12_MAP_FP2_TO_G2",
+    PrecompiledContracts.P256VerifyAddr -> "P256VERIFY"
   )
   case class ConfigResponse(
       current: Option[ForkConfig],
@@ -131,7 +176,118 @@ class EthInfoService(
       }
       .map(_.asRight)
 
+  /** eth_config (EIP-7910).
+    *
+    * ETH-family chains are timestamp-gated after the Merge, so `current`/`next`/`last` are selected from the
+    * `forkTimestamps` schedule and report `activationTime`. ETC/Mordor is block-gated and keeps the block-numbered
+    * schedule below unchanged.
+    */
   def config(@unused req: ConfigRequest): ServiceResponse[ConfigResponse] = IO {
+    val response = blockchainConfig.networkType match
+      case NetworkType.ETH => ethFamilyConfig.getOrElse(blockNumberedConfig)
+      case NetworkType.ETC => blockNumberedConfig
+    Right(response)
+  }
+
+  /** Head timestamp used to select the active fork. Mirrors the handshake's derivation (EthNodeStatus68ExchangeState)
+    * so `eth_config` and the advertised fork id cannot disagree about which fork we believe we are on.
+    */
+  private def headTimestamp: Long =
+    val stored = blockchainReader
+      .getBlockHeaderByNumber(blockchainReader.getBestBlockNumber)
+      .map(_.unixTimestamp)
+      .getOrElse(Timestamp.Zero)
+    if stored == Timestamp.Zero then System.currentTimeMillis() / 1000 else stored.toLong
+
+  /** EIP-7910 response for timestamp-gated (ETH-family) chains. `None` when no timestamp fork has activated yet — the
+    * caller then falls back to the block-numbered schedule rather than inventing an activation time.
+    */
+  private def ethFamilyConfig: Option[ConfigResponse] =
+    val ft = blockchainConfig.forkTimestamps
+    // Sorted by activation time, not declaration order: EIP-7892 BPO forks interleave with
+    // the named forks, and on some schedules two forks share a timestamp.
+    val schedule: List[Long] = List(
+      ft.shanghaiTimestamp,
+      ft.cancunTimestamp,
+      ft.pragueTimestamp,
+      ft.osakaTimestamp,
+      ft.bpo1Timestamp,
+      ft.bpo2Timestamp,
+      ft.amsterdamTimestamp
+    ).flatten.distinct.sorted
+
+    val head = headTimestamp
+    val headNumber = blockchainReader.getBestBlockNumber
+
+    schedule.filter(_ <= head).lastOption.map { currentTs =>
+      val next = schedule.find(_ > head)
+      ConfigResponse(
+        current = Some(ethForkConfig(currentTs, headNumber)),
+        next = next.map(ethForkConfig(_, headNumber)),
+        // `last` describes the final scheduled fork. With nothing further scheduled there is no
+        // "last" distinct from "current", and EIP-7910 wants null — emitting a fabricated entry
+        // (the old 1e18 "never" sentinel) advertises a fork that does not exist.
+        last = next.map(_ => ethForkConfig(schedule.last, headNumber))
+      )
+    }
+
+  private def ethForkConfig(forkTimestamp: Long, headNumber: BigInt): ForkConfig =
+    val ts = Timestamp(forkTimestamp)
+    ForkConfig(
+      activationBlock = None,
+      activationTime = Some(forkTimestamp),
+      chainId = blockchainConfig.chainId.value,
+      // Computed with the same EIP-2124/6122 machinery the p2p handshake uses, evaluated at this
+      // fork's own timestamp so each entry carries the checksum through that fork.
+      forkId = Some(
+        ForkId.create(blockchainReader.genesisHeader.hash.value, blockchainConfig)(headNumber, forkTimestamp).hash
+      ),
+      blobSchedule = blobScheduleAt(ts),
+      precompiles = ethPrecompilesAt(ts),
+      systemContracts = ethSystemContractsAt(ts)
+    )
+
+  /** Blob parameters in BLOBS, not gas — EIP-7910 reports counts. Absent before Cancun, which is the first fork with
+    * blobs at all.
+    */
+  private def blobScheduleAt(ts: Timestamp): Option[BlobScheduleConfig] =
+    Option.when(blockchainConfig.isCancunTimestamp(ts))(
+      BlobScheduleConfig(
+        target = BlobGasUtils.targetBlobGasPerBlock(ts, blockchainConfig) / BlobGasUtils.GAS_PER_BLOB,
+        max = BlobGasUtils.maxBlobGasPerBlock(ts, blockchainConfig) / BlobGasUtils.GAS_PER_BLOB,
+        baseFeeUpdateFraction = BlobGasUtils.updateFractionFor(ts, blockchainConfig)
+      )
+    )
+
+  /** Derived from the very sets `PrecompiledContracts` hands the EVM, so the advertised list is the implemented list.
+    * BPO and Amsterdam forks add no precompiles, so they inherit the Osaka set.
+    */
+  private def ethPrecompilesAt(ts: Timestamp): Map[String, Address] =
+    val active =
+      if blockchainConfig.isOsakaTimestamp(ts) then PrecompiledContracts.osakaContracts
+      else if blockchainConfig.isPragueTimestamp(ts) then PrecompiledContracts.olympiaContracts
+      else if blockchainConfig.isCancunTimestamp(ts) then PrecompiledContracts.cancunContracts
+      else PrecompiledContracts.istanbulPhoenixContracts
+    active.keys.flatMap(addr => Eip7910PrecompileNames.get(addr).map(_ -> addr)).toMap
+
+  /** EIP-4788 lands the beacon-roots contract at Cancun; EIP-2935/6110/7002/7251 land the rest at Prague. */
+  private def ethSystemContractsAt(ts: Timestamp): Map[String, Address] =
+    val beaconRoots = Map("BEACON_ROOTS_ADDRESS" -> BlockExecution.BeaconRootContractAddress)
+    if blockchainConfig.isPragueTimestamp(ts) then
+      beaconRoots ++ Map(
+        "CONSOLIDATION_REQUEST_PREDEPLOY_ADDRESS" -> BlockExecution.ConsolidationQueueAddress,
+        // Genesis-declared per chain (geth `config.depositContractAddress`); the mainnet
+        // contract is only the fallback when a chain does not declare one.
+        "DEPOSIT_CONTRACT_ADDRESS" -> blockchainConfig.depositContractAddress
+          .getOrElse(BlockExecution.DepositContractAddress),
+        "HISTORY_STORAGE_ADDRESS" -> HistoryStorageAddress,
+        "WITHDRAWAL_REQUEST_PREDEPLOY_ADDRESS" -> BlockExecution.WithdrawalQueueAddress
+      )
+    else if blockchainConfig.isCancunTimestamp(ts) then beaconRoots
+    else Map.empty
+
+  /** Block-numbered fork schedule. This is the ETC/Mordor path and its output is deliberately unchanged. */
+  private def blockNumberedConfig: ConfigResponse =
     val fbn = blockchainConfig.forkBlockNumbers
     val chainId = blockchainConfig.chainId.value
 
@@ -189,7 +345,7 @@ class EthInfoService(
         precompiles: Map[String, Address],
         sysContracts: Map[String, Address]
     ): ForkConfig =
-      ForkConfig(block, chainId, precompiles, sysContracts)
+      ForkConfig(Some(block), None, chainId, None, None, precompiles, sysContracts)
 
     // Find current fork (last fork at or before currentBlock)
     val activeForks = forks.filter(_._2 <= currentBlock)
@@ -199,8 +355,7 @@ class EthInfoService(
     val next = futureForks.headOption.map(f => toForkConfig(f._1, f._2, f._3, f._4))
     val last = forks.lastOption.map(f => toForkConfig(f._1, f._2, f._3, f._4))
 
-    Right(ConfigResponse(current, next, if futureForks.nonEmpty then last else None))
-  }
+    ConfigResponse(current, next, if futureForks.nonEmpty then last else None)
 
   def call(req: CallRequest): ServiceResponse[CallResponse] =
     IO {
