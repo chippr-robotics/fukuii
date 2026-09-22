@@ -635,3 +635,61 @@ failures.
 Note the histogram printed in the log is truncated (`head -25` / `head -30` in the
 tabulate step), so the names above are the top slice of 78, not the whole set. The full
 list is in the `hive-logs-engine` artifact.
+
+---
+
+## The 34 invalid-ancestor failures, characterised — and a correction to "zero INVALID"
+
+### Correcting a figure recorded earlier in this effort
+
+An earlier finding in this effort was carried forward as "the node never reports INVALID,
+across all 48 tests" and repeated in summary as an established fact. On `6c8bc97` the
+engine run's own detail logs say otherwise:
+
+| status reply | count (whole engine suite, 403 tests) |
+|---|---:|
+| VALID | 11,116 |
+| SYNCING | 2,678 |
+| ACCEPTED | 2,608 |
+| **INVALID** | **469** |
+| INVALID_BLOCK_HASH | 0 |
+
+fukuii answers INVALID 469 times. The original measurement was scoped to the 48
+timeout-family tests, not the suite — so the two figures have **different denominators and
+were never comparable**. Restating the subset result as a property of the node was the
+error, and it is exactly the denominator mistake this file's opening rule exists to
+prevent. The reporting path is not globally dead.
+
+### What the 34 actually are
+
+`Timeout waiting for main client to detect invalid chain` appears exactly **34** times,
+matching the 34 invalid-ancestor failures one for one. The family is characterised by that
+single message, and the measured exchange is always the same shape:
+
+    >> engine_newPayloadV1   (payload whose ANCESTOR is invalid)
+    << {"status":"ACCEPTED","latestValidHash":null,"validationError":null}
+    >> engine_forkchoiceUpdatedV1  (head = that payload)
+    << {"payloadStatus":{"status":"SYNCING",...},"payloadId":null}
+    FAIL: Timeout waiting for main client to detect invalid chain
+
+ACCEPTED then SYNCING is a legitimate first answer — the ancestor genuinely is missing. The
+failure is that nothing INVALID ever follows.
+
+### Why 5779126 does not cover this, stated as hypothesis
+
+`InvalidChainReporter` classifies an import failure and reports it. It is downstream of an
+import. In this family the node answers SYNCING and then, apparently, never executes the
+side branch at all — so no import fails, so there is nothing to classify and nothing to
+report. The reporting channel was wired up correctly; the message it exists to carry is
+never generated.
+
+That is consistent with the separately-recorded gap where `importToNewBranch` never
+executes a lighter side branch, and it explains why BOTH `CanonicalReOrg=True` (24) and
+`=False` (10) variants persist — the distinction does not matter if neither branch is
+executed.
+
+**This is a hypothesis fitting the evidence, not a measurement.** What is measured: the
+exchange above, the 34/34 correspondence, and 469 INVALIDs elsewhere in the same run. What
+is not: that the side branch is never executed. Confirming that needs the branch-import
+path instrumented or a targeted unit reproduction, and it is the single largest remaining
+lever in the engine suite.
