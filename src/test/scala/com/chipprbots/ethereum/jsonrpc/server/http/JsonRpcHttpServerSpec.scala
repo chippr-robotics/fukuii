@@ -9,6 +9,7 @@ import org.apache.pekko.http.scaladsl.model.*
 import org.apache.pekko.http.scaladsl.model.headers.*
 import org.apache.pekko.http.scaladsl.server.Route
 import org.apache.pekko.http.scaladsl.testkit.ScalatestRouteTest
+import org.apache.pekko.stream.scaladsl.Source
 import org.apache.pekko.util.ByteString
 
 import cats.effect.IO
@@ -154,6 +155,48 @@ class JsonRpcHttpServerSpec
       status === StatusCodes.OK
       responseAs[String] shouldEqual """[{"jsonrpc":"2.0","result":"this is a response","id":1},{"jsonrpc":"2.0","result":"this is a response","id":1}]"""
     }
+
+  // Regression: a batch arriving as a STREAMED entity must be handled like a strict one.
+  //
+  // The POST route tries `entity(as[JsonRpcRequest])` and falls back to
+  // `entity(as[Seq[JsonRpcRequest]])`. For a batch the first alternative must fail, so the
+  // second has to re-read the entity. A streamed entity is a one-shot source: without
+  // toStrictEntity the failed first unmarshal drains it, the fallback rejects too, and the
+  // rejection handler answers a well-formed batch with
+  //   400 {"jsonrpc":"2.0","error":{"code":-32700,...},"id":0}
+  //
+  // The batch test above cannot catch this — `HttpEntity(contentType, byteString)` builds a
+  // STRICT entity, which is re-readable, so it passes either way. This one builds
+  // HttpEntity.Default over a Source, which is what a real client's batch POST looks like
+  // when the body does not arrive in a single buffered chunk.
+  it should "pass a valid batch json request received as a streamed entity to the controller" taggedAs
+    (UnitTest, RPCTest) in new TestSetup:
+      mockJsonRpcController.handleRequest
+        .expects(*)
+        .twice()
+        .returning(IO.pure(jsonRpcResponseSuccessful))
+
+      val jsonRequests: ByteString =
+        ByteString("""[{"jsonrpc":"2.0", "method": "asd", "id": "1"}, {"jsonrpc":"2.0", "method": "asd", "id": "2"}]""")
+      // A ONE-SHOT source. Source.single would not do: it re-emits its element on every
+      // materialization, so the fallback alternative would succeed even without the fix and
+      // the test would pass vacuously (measured — it did). A real network entity is backed by
+      // the connection, which yields its bytes exactly once; a shared exhausted iterator is
+      // the smallest faithful model of that.
+      val oneShot: Iterator[ByteString] = Iterator.single(jsonRequests)
+      val streamedEntity: RequestEntity = HttpEntity.Default(
+        ContentTypes.`application/json`,
+        jsonRequests.length.toLong,
+        Source.fromIterator(() => oneShot)
+      )
+      val postRequest: HttpRequest = HttpRequest(HttpMethods.POST, uri = "/", entity = streamedEntity)
+
+      postRequest ~> Route.seal(mockJsonRpcHttpServer.route) ~> check {
+        withClue(s"streamed batch must not be answered with a parse error, got: ${responseAs[String]}: ") {
+          status shouldEqual StatusCodes.OK
+        }
+        (responseAs[String] should not).include("-32700")
+      }
 
   it should "return BadRequest when malformed request is received" taggedAs (UnitTest, RPCTest) in new TestSetup:
     val jsonRequestInvalid: ByteString = ByteString("""{"jsonrpc":"2.0", "method": "this is not a valid json""")
