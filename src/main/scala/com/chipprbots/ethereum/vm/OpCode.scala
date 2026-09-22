@@ -597,7 +597,10 @@ case object BLOCKHASH extends OpCode(0x40, 1, 1, _.G_blockhash) with ConstGas:
 
 case object COINBASE extends ConstOp(0x41)(s => UInt256(s.env.blockHeader.beneficiary))
 
-case object TIMESTAMP extends ConstOp(0x42)(s => UInt256(s.env.blockHeader.unixTimestamp.toLong))
+// toUInt256 is the UNSIGNED widening. UInt256(_.toLong) sign-extends, which would push
+// 2^256-1 instead of 2^64-1 for a top-half uint64 timestamp — a silent state divergence
+// from every reference client for any contract that reads block.timestamp.
+case object TIMESTAMP extends ConstOp(0x42)(s => s.env.blockHeader.unixTimestamp.toUInt256)
 
 case object NUMBER extends ConstOp(0x43)(s => UInt256(s.env.blockHeader.number.value))
 

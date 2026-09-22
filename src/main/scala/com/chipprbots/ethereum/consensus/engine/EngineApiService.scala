@@ -603,7 +603,10 @@ class EngineApiService(
               if attrs.timestamp == 0 then Some("invalid payload attributes: zero timestamp")
               else
                 blockchainReader.getBlockHeaderByHash(BlockHash(forkChoiceState.headBlockHash)).flatMap { parent =>
-                  if attrs.timestamp <= parent.unixTimestamp.toLong then
+                  // Wrap in Timestamp so the comparison is UNSIGNED. attrs.timestamp is a raw
+                  // Long decoded from a uint64 Quantity; comparing it as a signed primitive
+                  // rejects every payload attribute at or above 2^63 with -38003.
+                  if Timestamp(attrs.timestamp) <= parent.unixTimestamp then
                     Some("invalid payload attributes: timestamp too low")
                   else None
                 }

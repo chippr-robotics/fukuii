@@ -4,6 +4,7 @@ import java.util.zip.CRC32
 
 import org.apache.pekko.util.ByteString
 
+import com.chipprbots.ethereum.domain.Timestamp
 import com.chipprbots.ethereum.rlp.*
 import com.chipprbots.ethereum.utils.BigIntExtensionMethods.*
 import com.chipprbots.ethereum.utils.BlockchainConfig
@@ -44,8 +45,13 @@ object ForkId:
     // Process block forks first (sorted), then timestamp forks (sorted)
     val allForks = blockForks.map((_, false)) ++ timestampForks.map((_, true))
 
+    // headTimestamp is a uint64 in a Long. BigInt(headTimestamp) sign-extends, so a head at
+    // or above 2^63 would read as negative and NO timestamp fork would count as passed —
+    // the node would advertise the checksum of a genesis-era prefix and every honest peer
+    // would reject the handshake with "wrong fork ID in status" (EIP-2124/6122).
+    val headTimestampUnsigned: BigInt = Timestamp(headTimestamp).toUnsignedBigInt
     val next = allForks.find { case (fork, isTimestamp) =>
-      val passed = if isTimestamp then fork <= BigInt(headTimestamp) else fork <= head
+      val passed = if isTimestamp then fork <= headTimestampUnsigned else fork <= head
       if passed then crc.update(bigIntToBytes(fork, 8))
       !passed
     }

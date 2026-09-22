@@ -253,7 +253,12 @@ object BlockHeaderImplicits:
         RLPValue(ByteUtils.bigIntToUnsignedByteArray(number.value)),
         RLPValue(ByteUtils.bigIntToUnsignedByteArray(gasLimit.value)),
         RLPValue(ByteUtils.bigIntToUnsignedByteArray(gasUsed.value)),
-        RLPValue(ByteUtils.bigIntToUnsignedByteArray(unixTimestamp.toLong)),
+        // toUnsignedBigInt, NOT the implicit Long->BigInt widening: the latter sign-extends,
+        // and bigIntToUnsignedByteArray then emits BigInt(-1).toByteArray = the single byte
+        // 0xFF (it only ever strips a leading 0x00, never a leading 0xFF). A 2^64-1 timestamp
+        // would encode as the 1-byte value 255, and since hash = kec256(toBytes) the block
+        // hash would be wrong — engine newPayload rejects it as "block hash mismatch".
+        RLPValue(ByteUtils.bigIntToUnsignedByteArray(unixTimestamp.toUnsignedBigInt)),
         RLPValue(extraData.toArray),
         RLPValue(mixHash.value.toArray),
         RLPValue(nonce.toArray)

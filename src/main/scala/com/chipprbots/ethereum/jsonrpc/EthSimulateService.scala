@@ -980,7 +980,9 @@ class EthSimulateService(
     import com.chipprbots.ethereum.ledger.BlockExecution.*
     blockHeader.parentBeaconBlockRoot match
       case Some(beaconRoot) =>
-        val timestamp = UInt256(blockHeader.unixTimestamp.toLong)
+        // Must match BlockExecution.applyEip4788 exactly, or eth_simulateV1 becomes an
+        // oracle that disagrees with real execution. See the note there.
+        val timestamp = blockHeader.unixTimestamp.toUInt256
         val timestampIdx = timestamp.mod(UInt256(BeaconRootHistoryBufferLength))
         val rootIdx = timestampIdx + UInt256(BeaconRootHistoryBufferLength)
         val account = world
