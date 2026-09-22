@@ -1835,3 +1835,77 @@ should not be defined in terms of ETC-named lists.
 
 The London commit (`aabf156e8`) sits inside `forBlock()`'s block-number dispatch and is under ETC
 review before it is pushed.
+
+---
+
+## `0101b9e36` measured, and what the next push carries
+
+### `0101b9e36` — a clean, reproducible baseline
+
+| suite | result | vs `501368ec9` |
+|---|---:|---|
+| rpc-compat | 0 / 247 | held green |
+| graphql | 1 / 52 | held (stale fixture) |
+| engine | 42 / 403 | **identical names** — 0 cleared, 0 new |
+| devp2p | 18 / 62 | held, same per-sub-suite split |
+| sync | 1 / 18 | held |
+| consensus | 11 / 2,412 | see below |
+| `Test and Build` | **success** | first green run in a long while |
+
+`0101b9e36` carried no engine-relevant change, so engine repeating the same 42 *by name* establishes
+the baseline is not flaky. Any delta on the next push is attributable to the code in it.
+
+**consensus ran for real this time** — 2,412 tests, further than any earlier run (1,519–1,864),
+reaching tests never exercised before. Of 11 failures:
+
+- 2 genuine: `testOpcode_1e_Cancun` / `_Prague` — the CLZ bug, fixed in the push below.
+- 5 `Test was terminated by host` — the simulation's wall-clock tail.
+- 4 `Call1024*` (Byzantium, Constantinople, ConstantinopleFix, Frontier) that a first-pass classifier
+  marked genuine. **They are not.** Each reads `can't launch node (type fukuii): client did not start:
+  timed out waiting for container startup` and ran exactly 120 s — hive's `--client.checktimelimit` —
+  launched in the final three minutes before the simulation timed out. A second form of the same tail.
+  The classifier matched only "terminated by host"; it now needs both strings.
+
+So consensus has had exactly **two** genuine failures on every run measured, and both are fixed below.
+
+### What the next push carries (validated: 259/259, formatting and compile-all clean)
+
+| commit | change | review |
+|---|---|---|
+| `a6c652a17` | Cause B — ChainWeight for engine-imported blocks + PoS fork-choice arm | forge: ETC unchanged |
+| `d21e86667` | five mis-stated gate comments corrected; tests for ETC's real (unbound) wiring; misconfiguration hazard pinned | follows forge's findings |
+| `3065b12e6` | GasUsed: report a mismatch the block's own receipts prove | forge design, conditions A+B, checked line by line |
+| `47ebbb9fc`, `aabf156e8` | BASEFEE on ETH London/Paris/Shanghai; no CLZ on Cancun/Prague | forge: ETC unchanged (full table dump, byte-identical) |
+| `4bbc0903f` | `test_all_opcodes` pinned against the rebuilt EEST fixture | — |
+| `ba93ddf0b` | ETH mainnet Osaka / BPO1 / BPO2 timestamps; geth's full 38-row mainnet fork-id table | ETH-only config |
+
+**Predictions, not measurements:** engine 42 → ~16 (Cause B ~24, GasUsed 2); consume-engine's 4
+`test_all_opcodes` clear; consensus's 2 `testOpcode_1e` clear. The currently-passing reorg tests are the
+regression risk to watch — this is the first time fukuii reorganises a PoS chain over p2p.
+
+### The mainnet finding, and a test of ours that encoded it
+
+`eth-chain.conf` declared no Osaka, BPO1 or BPO2, under a comment saying Osaka was "not yet scheduled on
+mainnet" — stale since Fusaka activated in December 2025. go-ethereum master `MainnetChainConfig`:
+Osaka `1764798551`, BPO1 `1765290071`, BPO2 `1767747671`. Without them fukuii's mainnet fork id omitted
+three activations, so it **could not peer with ETH mainnet past December 2025**, and ran none of Osaka's
+rules there. Same class as the Arrow/Gray Glacier gap found earlier, which blocked peering from December
+2021. No hive suite covers it: hive runs its own chains.
+
+`ForkIdEthMainnetSpec`, written earlier in this effort, pinned `next = None` at the Prague head — the
+missing-Osaka bug encoded as an expectation. geth's published table says `Next: 1764798551`; two
+assertions now expect that. Stricter, not weaker, and named here so it is reviewable. The spec now
+carries geth's entire mainnet table, row for row.
+
+**Inferred, not tested:** fukuii now executes Osaka rules on mainnet past 2025-12-03. Any latent Osaka
+bug now matters there. Nothing here exercised mainnet Osaka block execution.
+
+### Logged for later
+
+- `EvmConfig.scala:80-81` picks London vs Olympia builder by fork ordering (`spiral > olympia`), not chain
+  family; `isEthereum` goes unused. A custom ETC config with olympia < spiral would silently get the ETH
+  London table. No shipped config has that shape. Both specialists agree it should select by family.
+- `OlympiaOpCodes` is unreferenced in main code, and its doc comment says ETC uses it — a naming trap.
+- `BlobGasUtils`' header comment still gives BPO1 as 8/12 and BPO2 as 12/18; the code (10/15, 14/21) is
+  right and matches geth.
+- Pattern, three times over: ETH fork overlays built from ETC-named opcode tables.
