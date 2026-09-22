@@ -1499,3 +1499,16 @@ Measured against the fixture's exact init bytecode through `StxLedger.binarySear
 Frontier-only config: **43,353 before, 111,953 after** — an exact match to the expected `0x1b551`, and
 `111,953 − 43,353 = 68,600 = 343 × 200`, where 343 is the deployed runtime length read from the
 `PUSH2 0x0157` in the init code.
+
+### Measured: graphql 2 → 1 on `db1c345`
+
+`51 / 1 / 52`. `04_eth_estimateGas_contractDeploy` **passes** — the Frontier code-deposit diagnosis
+was right and the fix works end to end, not just against the unit pin.
+
+The single remaining failure is `07_eth_gasPrice`, returning `0x3437004b` unchanged. That is the
+stale-fixture case, so **graphql is now at its floor of 1** and cannot reach 0 until hive updates
+`07_eth_gasPrice.json` upstream.
+
+This also sets a two-sided bar for the ETC correction now in progress: `04` must keep passing
+(estimation still returns 111,953) *and* the Frontier CREATE semantics must return byte-for-byte to
+their pre-`89856a1` behaviour. Both, not either.
