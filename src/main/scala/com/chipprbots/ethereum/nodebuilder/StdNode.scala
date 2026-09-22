@@ -66,14 +66,21 @@ abstract class BaseNode extends Node:
     startDiscoveryManager()
 
     // Phase 3: API servers (user-facing, ready as early as possible).
-    // Bind the Engine API (8551) BEFORE the ETH JSON-RPC (8545). Hive's client-readiness
-    // check (and a real CL) probes the ETH RPC, then immediately drives sync via the Engine
-    // API. The Engine API runs on an isolated ActorSystem and `startEngineApiServer()` Await-
-    // blocks until 8551 is actually bound — so binding it first guarantees 8551 is listening
-    // by the time 8545 (the readiness signal) comes up. With the old order, hive declared the
-    // node ready on 8545 and the sim's engine_newPayloadV3 hit 8551 before it had bound →
-    // "connection refused" → instant sync failure (hive ethereum/sync "sync fukuii from
-    // go-ethereum", 2026-06-01). No-op when the Engine API is disabled (e.g. ETC mainnet).
+    // Bind the Engine API (8551) BEFORE the ETH JSON-RPC (8545), and await BOTH. Hive's
+    // client-readiness check (and a real CL) probes the ETH RPC, then immediately drives sync
+    // via the Engine API, so 8551 must be listening before 8545 is advertised as ready.
+    //
+    // Both starts below Await their binding, so on return from this pair the order
+    // 8551-then-8545 is a real guarantee rather than a hope: 8545 accepting a connection
+    // implies 8551 already does. That is what hive/fukuii/Dockerfile's HIVE_CHECK_LIVE_PORT
+    // keys on, and both halves are load-bearing --
+    //   * binding 8551 first fixes the original bug: hive declared the node ready on 8545 and
+    //     the sim's engine_newPayloadV3 hit 8551 before it had bound (2026-06-01);
+    //   * awaiting 8545 fixes its mirror image: with readiness moved to 8551 to dodge that,
+    //     the harness's first eth_getBlockByNumber then raced the fire-and-forget 8545 bind.
+    // Fixing either alone just moves the race to the other port.
+    //
+    // No-op when the Engine API is disabled (e.g. ETC mainnet).
     startEngineApiServer()
     startJsonRpcHttpServer()
     startJsonRpcWsServer()
@@ -174,11 +181,39 @@ abstract class BaseNode extends Node:
 
   private def startDiscoveryManager(): Unit = peerDiscoveryManagerTyped ! PeerDiscoveryManager.Start
 
+  /** Starts the JSON-RPC HTTP server and BLOCKS until the socket is listening.
+    *
+    * `run()` only requests the bind -- it attaches a logging callback to the binding future and returns immediately --
+    * so without this await the method returns while the port is still coming up. That made "node started" mean nothing
+    * for 8545, and it is the whole of hive's `ethereum/sync` flakiness: startEngineApiServer() below awaits its own
+    * binding, so 8551 is guaranteed listening on return while 8545 lands some unpredictable moment later. With
+    * readiness gated on 8551 the harness declared the node ready at the earliest possible instant and its first
+    * eth_getBlockByNumber raced the async 8545 bind -- "connection refused", instant fail, no retry, intermittent by
+    * construction.
+    *
+    * Awaiting here makes 8545 genuinely the last port up, which is what hive/fukuii/Dockerfile's HIVE_CHECK_LIVE_PORT
+    * now keys on: 8545 accepting connections implies 8551 already does.
+    *
+    * A bind failure is logged, not thrown -- a node that cannot serve RPC should still sync.
+    */
   private def startJsonRpcHttpServer(): Unit =
     maybeJsonRpcHttpServer match
-      case Right(jsonRpcServer) if jsonRpcConfig.httpServerConfig.enabled => jsonRpcServer.run()
-      case Left(error) if jsonRpcConfig.httpServerConfig.enabled          => log.error(error)
-      case _                                                              => // Nothing
+      case Right(jsonRpcServer) if jsonRpcConfig.httpServerConfig.enabled =>
+        try
+          val binding = scala.concurrent.Await.result(
+            jsonRpcServer.run(),
+            scala.concurrent.duration.Duration(10, "seconds")
+          )
+          log.info(s"JSON-RPC HTTP server bound to ${binding.localAddress}")
+        catch
+          case ex: Exception =>
+            log.error(
+              s"JSON-RPC HTTP server failed to start on ${jsonRpcConfig.httpServerConfig.interface}:" +
+                s"${jsonRpcConfig.httpServerConfig.port}",
+              ex
+            )
+      case Left(error) if jsonRpcConfig.httpServerConfig.enabled => log.error(error)
+      case _                                                     => // Nothing
   private def startJsonRpcWsServer(): Unit =
     if jsonRpcConfig.wsServerConfig.enabled then jsonRpcWsServer.run()
 

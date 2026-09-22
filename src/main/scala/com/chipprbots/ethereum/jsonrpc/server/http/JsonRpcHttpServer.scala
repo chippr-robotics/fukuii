@@ -7,6 +7,9 @@ import org.apache.pekko.http.cors.javadsl.CorsRejection
 import org.apache.pekko.http.cors.scaladsl.CorsDirectives.*
 import org.apache.pekko.http.cors.scaladsl.model.HttpOriginMatcher
 import org.apache.pekko.http.cors.scaladsl.settings.CorsSettings
+import scala.concurrent.Future
+
+import org.apache.pekko.http.scaladsl.Http
 import org.apache.pekko.http.scaladsl.model.*
 import org.apache.pekko.http.scaladsl.server.*
 import org.apache.pekko.http.scaladsl.server.Directives.*
@@ -133,7 +136,13 @@ trait JsonRpcHttpServer extends Json4sSupport with Logger:
 
   /** Try to start JSON RPC server
     */
-  def run(): Unit
+  /** Binds the HTTP server and returns the binding future.
+    *
+    * Returning the future rather than Unit is what lets a caller wait for the socket to be LISTENING rather than merely
+    * for bind() to have been requested. StdNode does exactly that, so that "node started" means the JSON-RPC port
+    * actually accepts connections. See StdNode.startJsonRpcHttpServer for why that matters to hive.
+    */
+  def run(): Future[Http.ServerBinding]
 
   private def handleHealth(): StandardRoute =
     // Simple liveness check - if server responds, it's alive
