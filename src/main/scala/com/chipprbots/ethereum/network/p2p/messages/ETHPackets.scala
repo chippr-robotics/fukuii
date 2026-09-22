@@ -391,6 +391,37 @@ object ETHPackets:
 
   object SignedTransactions:
 
+    /** Legacy EIP-4844 blob-tx network wrapper: `[tx_payload, blobs, commitments, proofs]` — one KZG proof per blob. */
+    private[messages] val BlobTxWrapperSizeEip4844: Int = 4
+
+    /** EIP-7594 (PeerDAS, Osaka) blob-tx network wrapper: `[tx_payload, wrapper_version, blobs, commitments,
+      * cell_proofs]` — an explicit version byte plus CELLS_PER_EXT_BLOB (128) cell proofs per blob instead of one proof
+      * per blob.
+      */
+    private[messages] val BlobTxWrapperSizeEip7594: Int = 5
+
+    /** The only wrapper version EIP-7594 defines. */
+    private[messages] val BlobTxWrapperVersionEip7594: BigInt = BigInt(1)
+
+    private[messages] def isBlobTxNetworkWrapperSize(size: Int): Boolean =
+      size == BlobTxWrapperSizeEip4844 || size == BlobTxWrapperSizeEip7594
+
+    /** Validate the EIP-7594 wrapper version byte. Fails loudly on anything other than `0x01`: an unknown wrapper
+      * version means the blob/commitment/proof layout that follows is not the one we are about to parse, and accepting
+      * it would let us re-broadcast a sidecar we never actually validated.
+      */
+    private[messages] def validateBlobTxWrapperVersion(versionField: RLPEncodeable): Unit =
+      val version = versionField match
+        case RLPValue(bs) => ByteUtils.bytesToBigInt(bs)
+        case other =>
+          throw new RuntimeException(
+            s"Blob tx network wrapper version must be a scalar, got ${other.getClass.getSimpleName}"
+          )
+      if version != BlobTxWrapperVersionEip7594 then
+        throw new RuntimeException(
+          s"Unsupported blob tx network wrapper version $version (only $BlobTxWrapperVersionEip7594 is defined by EIP-7594)"
+        )
+
     implicit class SignedTransactionEnc(val signedTx: SignedTransaction) extends RLPSerializable:
       override def toRLPEncodable: RLPEncodeable =
         val receivingAddressBytes = signedTx.tx.receivingAddress.map(_.toArray).getOrElse(Array.empty[Byte])
@@ -720,9 +751,14 @@ object ETHPackets:
           case Transaction.Type03 =>
             val decoded = rawDecode(bytes.tail)
             decoded match
-              case outer: RLPList if outer.items.size == 4 =>
+              case outer: RLPList if isBlobTxNetworkWrapperSize(outer.items.size) =>
                 outer.items.head match
                   case inner: RLPList =>
+                    // A 5-element wrapper is EIP-7594 and carries an explicit version byte at
+                    // index 1. Validate it: silently accepting an unknown wrapper version would
+                    // admit a sidecar we cannot interpret (wrong proof count, wrong proof
+                    // semantics) and propagate it to peers as if it were well-formed.
+                    if outer.items.size == BlobTxWrapperSizeEip7594 then validateBlobTxWrapperVersion(outer.items(1))
                     val stx = PrefixedRLPEncodable(Transaction.Type03, inner).toSignedTransaction
                     (stx, Some(bytes))
                   case _ =>

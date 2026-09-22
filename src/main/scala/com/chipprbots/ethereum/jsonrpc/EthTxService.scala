@@ -26,6 +26,7 @@ import com.chipprbots.ethereum.transactions.PendingTransactionsManager
 import com.chipprbots.ethereum.transactions.PendingTransactionsManager.PendingTransaction
 import com.chipprbots.ethereum.transactions.TransactionPicker
 import com.chipprbots.ethereum.utils.BlockchainConfig
+import com.chipprbots.ethereum.utils.Logger
 
 object EthTxService:
   case class GetTransactionByHashRequest(txHash: ByteString) // rename to match request
@@ -54,7 +55,8 @@ class EthTxService(
     val scheduler: Scheduler
 )(implicit val blockchainConfig: BlockchainConfig)
     extends TransactionPicker
-    with ResolveBlock:
+    with ResolveBlock
+    with Logger:
   import EthTxService.*
   // blockchainConfig is taken as an implicit constructor parameter so multi-instance
   // runtime callers (NodeBuilder) automatically supply the per-instance config in scope
@@ -272,7 +274,12 @@ class EthTxService(
               rawBytesOpt.map(org.apache.pekko.util.ByteString(_))
             )
             IO.pure(Right(SendRawTransactionResponse(signedTransaction.hash.value)))
-      case Failure(_) =>
+      case Failure(e) =>
+        // Keep the wire response exactly as before (-32600), but do NOT swallow the cause:
+        // a raw-tx decode failure previously surfaced as a bare "not a valid Request object",
+        // which is indistinguishable from a malformed JSON envelope and cost real debugging
+        // time on the EIP-7594 blob wrapper. The decoder's message is the only signal here.
+        log.debug(s"eth_sendRawTransaction could not decode the supplied raw transaction: ${e.getMessage}", e)
         IO.pure(Left(JsonRpcError.InvalidRequest))
 
   /** eth_getTransactionByBlockNumberAndIndex Returns the information about a transaction with the block number and
