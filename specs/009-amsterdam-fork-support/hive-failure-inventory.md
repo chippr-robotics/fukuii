@@ -1997,3 +1997,39 @@ first matching height, so a later FCU back to the old head can leave stale side-
 both TTD-gated; `currentState` writers unchanged. `DesignatedHeadBindingSpec` now proves the holder
 stays `None` on every ETC chain even after `notifyBeaconHead`. VERIFY: 71/0 across the binding,
 branch-resolution, consensus and four ETC regression specs.
+
+### `ce2ac432d` — failed reorg reports the block it actually stopped at (local; forge SIGN-OFF)
+
+Beacon's fix for the second blocker. `ConsensusAdapter` returns `BlockImportFailedAt(error, hash)` (a
+subclass of `BlockImportFailed`: extractor, `toString`, equality all inherited) on a failed reorg;
+`BlockImporter`'s gas arm reports the named block and its hash-linked descendants only when the
+reporter is live; the Engine API invalid registry is now first-verdict-wins. Negative controls: with
+both halves reverted the hive-shape regression marks 10 blocks invalid instead of 3 (8 cases fail).
+
+forge: every result consumer on ETC sees exactly `BlockImportFailed(error)`; `toString`-routed gas arm,
+`InvalidateBlocksFrom` (batch-head number), retry sets, blacklisting and blockQueue writes unchanged;
+`reportsInvalidChains` false on ETC (unbound; `engine-api.enabled` defaults false and no ETC conf
+overrides it). VERIFY 134/135; the one failure (`RegularSyncSpec` "should return updated status after
+importing blocks", timeout at `RegularSyncFixtures.scala:278`) reproduced identically on a
+`git clone --shared` checkout at `4854b7d20` — pre-existing, not this change.
+
+### ETC finding — partial-reorg canonical index vs core-geth BLOCKHASH (OPEN; needs user decision)
+
+Found while assessing beacon's canonical-index warning. Source analysis only, not reproduced.
+
+fukuii's BLOCKHASH reads the canonical number→hash index (`BlockExecution.scala:148`); core-geth's
+`GetHashFn` walks the executing block's ancestry (`core/evm.go:93-129`). When a TD-winning reorg fails
+mid-branch (invalid execution, or missing state on a snap-synced node), `ConsensusImpl.scala:255` sets
+best to the last executed block unconditionally and leaves the index mixed — side branch below, old
+chain above. core-geth never moves head to a lighter block and keeps its index exactly the head's chain.
+Consequences on ETC, per forge: fukuii can sit on a lower-TD head; the next old-chain block arriving by
+NewBlock executes with side-branch BLOCKHASH values for the rewritten heights → state-root mismatch →
+a valid canonical block rejected, exposure lasting ~256 blocks; and `collectOldBranch` in that path may
+walk to genesis (possible hang/OOM; code-read only).
+
+Beacon's proposed ~3-line index fix (`setCanonicalChainHead` on partial reorg) is correct for ETH's
+FCU-back path but **strictly worse on ETC** — it would blank BLOCKHASH(13..15) where fukuii currently
+agrees with core-geth. forge's recommendation: TTD-gate it for ETH only; fix ETC separately under the
+consensus-change protocol (ancestry-walk BLOCKHASH, weight-gated head move on partial failure, bounded
+`collectOldBranch`). Neither is applied. It does not change any hive verdict (forge/beacon both: INVALID
+is detected before any query of those heights), so it is not on the hive critical path.
