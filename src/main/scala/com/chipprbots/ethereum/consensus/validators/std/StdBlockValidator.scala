@@ -20,9 +20,26 @@ import com.chipprbots.ethereum.utils.ByteUtils.or
 
 object StdBlockValidator extends BlockValidator:
 
-  /** ECIP adaptation of EIP-7934: Max RLP-encoded block size (8 MiB = 10 MiB - 2 MiB). Activates at Olympia. ETC adapts
-    * the Ethereum 10 MiB cap down to 8 MiB to match ETC's lower gas limits. Pre-Olympia chains never produce blocks
-    * near this cap in practice, so leaving unconditional is safe.
+  /** EIP-7934 MAX_RLP_BLOCK_SIZE: the cap on an RLP-encoded block, 8 MiB.
+    *
+    * This is the EIP's own value, not an ETC-specific reduction of it. EIP-7934 defines MAX_BLOCK_SIZE = 10 MiB and
+    * SAFETY_MARGIN = 2 MiB, and MAX_RLP_BLOCK_SIZE is their difference -- 10,485,760 - 2,097,152 = 8,388,608. An
+    * earlier version of this comment described 8 MiB as ETC adapting Ethereum's "10 MiB cap" down for lower gas limits;
+    * that reading is wrong and would mislead anyone tempted to raise it to 10 MiB for ETH. Both chains want exactly
+    * this number.
+    *
+    * Applied unconditionally, which matches the EIP: its specification says only "Any RLP-encoded block exceeding
+    * MAX_RLP_BLOCK_SIZE must be considered invalid", at both block creation and validation, with no activation keyed to
+    * a named fork or timestamp. go-ethereum gates the equivalent check on Osaka, but that is a deployment choice for
+    * mainnet activation rather than something the spec requires.
+    *
+    * Reachability, which is why unconditional is safe rather than merely spec-permitted: the binding constraint is
+    * calldata. Pre-Prague, at 4 gas per zero byte, a 30M-gas block tops out near 7.15 MiB; from Prague, EIP-7623's
+    * floor of 10 gas per token puts a 45M-gas block near 4.3 MiB. Real blocks run 2-3 MiB. No chain fukuii syncs
+    * produces a block that reaches this cap on either side of any fork.
+    *
+    * Note this now runs on the p2p import path for ETH as well as ETC: validateBlockBefore Execution reaches it there
+    * since BlockExecution stopped passing alreadyValidated = true.
     */
   val BlockRLPSizeCap: Long = 8L * 1024 * 1024 // 8,388,608
 
