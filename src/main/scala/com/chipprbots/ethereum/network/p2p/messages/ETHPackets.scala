@@ -732,10 +732,16 @@ object ETHPackets:
           case Transaction.Type04 => PrefixedRLPEncodable(Transaction.Type04, rawDecode(bytes.tail))
           case Transaction.Type03 =>
             rawDecode(bytes.tail) match
-              case outer: RLPList if outer.items.size == 4 =>
+              case outer: RLPList if isBlobTxNetworkWrapperSize(outer.items.size) =>
                 outer.items.head match
-                  case inner: RLPList => PrefixedRLPEncodable(Transaction.Type03, inner)
-                  case _              => PrefixedRLPEncodable(Transaction.Type03, outer)
+                  case inner: RLPList =>
+                    // Mirrors toSignedTransactionWithSidecar's wrapper handling: a 5-element
+                    // wrapper is EIP-7594 and carries an explicit version byte at index 1 that
+                    // must be validated, not silently accepted (same reasoning, same helper --
+                    // see toSignedTransactionWithSidecar below for the full rationale).
+                    if outer.items.size == BlobTxWrapperSizeEip7594 then validateBlobTxWrapperVersion(outer.items(1))
+                    PrefixedRLPEncodable(Transaction.Type03, inner)
+                  case _ => PrefixedRLPEncodable(Transaction.Type03, outer)
               case other => PrefixedRLPEncodable(Transaction.Type03, other)
           case Transaction.Type02 => PrefixedRLPEncodable(Transaction.Type02, rawDecode(bytes.tail))
           case Transaction.Type01 => PrefixedRLPEncodable(Transaction.Type01, rawDecode(bytes.tail))
@@ -1061,23 +1067,39 @@ object ETHPackets:
           import SignedTransactions.*
           import TypedTransaction.*
           val typedItems = rlpList.items.toTypedRLPEncodables
+
+          // A Type-03 (blob) tx item is network-wrapped -- sidecar present -- when its RLP list is
+          // exactly the EIP-4844 (4: [tx, blobs, commitments, proofs]) or EIP-7594 (5: [tx,
+          // version, blobs, commitments, cell_proofs]) shape AND the first element is itself a
+          // list (the tx body), not a scalar. Any other shape -- in practice the bare ~14-field tx
+          // body with no wrapper at all -- means the sidecar is genuinely ABSENT, which is a real
+          // protocol violation distinct from "sidecar present, just in the newer wrapper". Both
+          // passes below must agree on this predicate, which is why it is a single named check
+          // instead of two copies: two copies is exactly how this file ended up accepting only
+          // size==4 in one place while EIP-7594 sidecars are size==5.
+          def isWrappedBlobBody(inner: RLPList): Boolean =
+            isBlobTxNetworkWrapperSize(inner.items.size) && (inner.items.head match
+              case _: RLPList => true
+              case _          => false
+            )
+
           typedItems.foreach {
             case PrefixedRLPEncodable(Transaction.Type03, inner: RLPList) =>
-              val isNetworkWrapped = inner.items.size == 4 && (inner.items.head match
-                case _: RLPList => true
-                case _          => false
-              )
-              if !isNetworkWrapped then
+              if !isWrappedBlobBody(inner) then
                 throw new RuntimeException("Blob tx in PooledTransactions missing sidecar (network wrapping required)")
+              else if inner.items.size == BlobTxWrapperSizeEip7594 then
+                // Present, but in the newer wrapper -- validate the version rather than silently
+                // trusting a blob/commitment/proof layout we have not confirmed we can interpret.
+                // Same helper toSignedTransactionWithSidecar/toSignedTransaction use; deliberately
+                // a DIFFERENT failure (and message) from the "missing sidecar" branch above -- one
+                // is "no sidecar was sent", the other is "a sidecar was sent, but we don't
+                // understand its version" and callers must be able to tell those apart.
+                validateBlobTxWrapperVersion(inner.items(1))
             case _ =>
           }
           val blobTxRawBytesBuilder = Map.newBuilder[ByteString, ByteString]
           val unwrappedItems = typedItems.map {
-            case prefixed @ PrefixedRLPEncodable(Transaction.Type03, inner: RLPList)
-                if inner.items.size == 4 && (inner.items.head match
-                  case _: RLPList => true
-                  case _          => false
-                ) =>
+            case prefixed @ PrefixedRLPEncodable(Transaction.Type03, inner: RLPList) if isWrappedBlobBody(inner) =>
               val rawBytes = com.chipprbots.ethereum.rlp.encode(prefixed)
               val unwrapped = PrefixedRLPEncodable(Transaction.Type03, inner.items.head)
               val stx = unwrapped.toSignedTransaction
