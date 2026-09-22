@@ -819,3 +819,48 @@ So there are two candidate explanations for the 38 and they are not the same fix
 Distinguishing them needs the branch-import path instrumented on one of these fixtures.
 Whichever it is, the weight guard is independently wrong for PoS and worth fixing on its
 own merits — but it should not be credited with the 38 until measured.
+
+---
+
+## The fork-id defect was an ETH mainnet peering failure, independently verified
+
+The missing Arrow Glacier / Gray Glacier fork blocks were found through hive's rpc-compat
+fixture, but they are not a fixture artifact. `src/main/resources/conf/base/chains/eth-chain.conf`
+declared neither, so the defect applied to **ETH mainnet**.
+
+Verified by recomputing EIP-2124 from the canonical mainnet genesis hash
+`d4e56740f876aef8c010b86a40d5f56745a118d0906a34e69aec8c0db1cb8fa3` and the canonical fork
+schedule, rather than by trusting the figure:
+
+```python
+h = crc32(genesis)
+for f in forks: h = crc32(uint64_be(f), h)
+```
+
+with block forks `[1150000, 1920000, 2463000, 2675000, 4370000, 7280000, 9069000, 9200000,
+12244000, 12965000, (13773000, 15050000)]` and timestamp forks `[1681338455, 1710338135,
+1746612311]` (Shanghai, Cancun, Prague):
+
+| fork list | fork id at a Prague head |
+|---|---|
+| **with** Arrow Glacier + Gray Glacier | **`0xc376cf8b`** — the real mainnet value |
+| **without** them | **`0x8e91a3e4`** — what fukuii advertised |
+
+`0xc376cf8b` is ETH mainnet's published Prague fork id. Reproducing it from the canonical
+genesis and schedule, and reproducing the wrong value from fukuii's schedule, fixes both
+ends of the claim.
+
+**Consequence:** on ETH mainnet, at any head past Arrow Glacier (block 13,773,000,
+December 2021), fukuii advertised a fork id no peer agrees with, and the ETH status
+exchange is rejected with `wrong fork ID in status`. That is not degraded peering; it is
+no peering at all, for roughly four years of chain history.
+
+Sepolia declares neither fork and is unaffected. ETC declares neither and is unaffected.
+
+Worth noting how this was found. Nothing in the repository asserted the *value* of a
+computed fork id for any chain — the arithmetic was exercised only indirectly, so a missing
+input produced a confidently wrong answer that no test could see. The hive fixture caught it
+by accident, from a different direction, while the production chain carried the same defect
+silently. The regression tests added alongside the fix pin the value for the fixture chain
+AND for mainnet, and pin the wrong value for the without-glaciers config so the fix is shown
+to be causal.
