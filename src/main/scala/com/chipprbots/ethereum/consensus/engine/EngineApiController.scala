@@ -456,113 +456,14 @@ class EngineApiController(
         JsonRpcResponse("2.0", None, Some(JsonRpcError(-38001, err, None)), reqId(request))
     }
 
-  /** blockValue = Σ gasUsedByTx_i × (effectiveGasPrice_i − baseFeePerGas). Miner's priority-fee revenue for the block.
-    * Per EIP-3675 V2 envelope, this is what the CL reads to pick the highest-value payload across builders.
-    *
-    * For each tx:
-    *   - gasUsedByTx = receipt.cumulativeGas − previousReceipt.cumulativeGas (since receipts record CUMULATIVE gas, not
-    *     per-tx).
-    *   - effectiveGasPrice = for legacy / access-list txs: tx.gasPrice. For EIP-1559 / blob: min(maxFeePerGas, baseFee
-    *     + maxPriorityFeePerGas).
-    */
-  private def computeBlockValue(
-      block: Block,
-      receipts: Seq[com.chipprbots.ethereum.domain.Receipt]
-  ): String =
-    import com.chipprbots.ethereum.domain.{
-      TransactionWithAccessList,
-      TransactionWithDynamicFee,
-      BlobTransaction,
-      SetCodeTransaction
-    }
-    val baseFee = block.header.extraFields match
-      case BlockHeader.HeaderExtraFields.HefPostOlympia(bf)               => bf
-      case BlockHeader.HeaderExtraFields.HefPostShanghai(bf, _)           => bf
-      case BlockHeader.HeaderExtraFields.HefPostCancun(bf, _, _, _, _)    => bf
-      case BlockHeader.HeaderExtraFields.HefPostPrague(bf, _, _, _, _, _) => bf
-      // Amsterdam: without this the catch-all yields baseFee 0, and every priority fee below is
-      // computed against the wrong base — engine_getPayload would report an inflated block value.
-      case BlockHeader.HeaderExtraFields.HefPostAmsterdam(bf, _, _, _, _, _, _, _) => bf
-      case _                                                                       => BigInt(0)
-    if receipts.isEmpty then "0x0"
-    else
-      val txs = block.body.transactionList
-      // derive per-tx gas used from cumulative deltas
-      val gasUsedPerTx: Seq[BigInt] = receipts
-        .map(_.cumulativeGasUsed)
-        .scanLeft(BigInt(0)) { (_, cum) =>
-          cum
-        }
-        .sliding(2, 1)
-        .collect { case Seq(prev, cur) => cur - prev }
-        .toSeq
-      val totalPriorityFee: BigInt = txs
-        .zip(gasUsedPerTx)
-        .map { case (stx, gasUsed) =>
-          val effectiveGasPrice: BigInt = stx.tx match
-            case t: TransactionWithDynamicFee => (baseFee + t.maxPriorityFeePerGas).min(t.maxFeePerGas)
-            case t: BlobTransaction           => (baseFee + t.maxPriorityFeePerGas).min(t.maxFeePerGas)
-            case t: SetCodeTransaction        => (baseFee + t.maxPriorityFeePerGas).min(t.maxFeePerGas)
-            case t: TransactionWithAccessList => t.gasPrice.value
-            case _                            => stx.tx.gasPrice.value
-          val priorityPerGas = (effectiveGasPrice - baseFee).max(0)
-          gasUsed * priorityPerGas
-        }
-        .sum
-      s"0x${totalPriorityFee.toString(16)}"
+  // Payload JSON encoding and blockValue derivation live in the companion object so the
+  // `testing_*` namespace (jsonrpc/TestingService) emits a byte-identical ExecutionPayloadV3.
+  // One codec, one shape: a change here cannot silently diverge between the two surfaces.
+  private def computeBlockValue(block: Block, receipts: Seq[com.chipprbots.ethereum.domain.Receipt]): String =
+    EngineApiController.computeBlockValue(block, receipts)
 
   private def blockToExecutionPayload(block: Block): JObject =
-    import block.header
-    def hex(bs: ByteString): String = "0x" + org.bouncycastle.util.encoders.Hex.toHexString(bs.toArray)
-    def hexQ(n: BigInt): String = s"0x${n.toString(16)}"
-
-    val txs = block.body.transactionList.map { stx =>
-      JString(
-        "0x" + org.bouncycastle.util.encoders.Hex.toHexString(SignedTransaction.byteArraySerializable.toBytes(stx))
-      )
-    }
-    val withdrawals = block.body.withdrawals.map { wds =>
-      JArray(wds.map { w =>
-        JObject(
-          "index" -> JString(hexQ(w.index)),
-          "validatorIndex" -> JString(hexQ(w.validatorIndex)),
-          "address" -> JString(hex(w.address.bytes)),
-          "amount" -> JString(hexQ(w.amount))
-        )
-      }.toList)
-    }
-    val (baseFee, blobGasUsed, excessBlobGas) = header.extraFields match
-      case BlockHeader.HeaderExtraFields.HefPostOlympia(bf)                   => (Some(bf), None, None)
-      case BlockHeader.HeaderExtraFields.HefPostShanghai(bf, _)               => (Some(bf), None, None)
-      case BlockHeader.HeaderExtraFields.HefPostCancun(bf, _, bgu, ebg, _)    => (Some(bf), Some(bgu), Some(ebg))
-      case BlockHeader.HeaderExtraFields.HefPostPrague(bf, _, bgu, ebg, _, _) => (Some(bf), Some(bgu), Some(ebg))
-      // Amsterdam: the catch-all returns (None, None, None), which makes engine_getPayload omit
-      // baseFeePerGas, blobGasUsed AND excessBlobGas entirely on an Amsterdam payload.
-      case BlockHeader.HeaderExtraFields.HefPostAmsterdam(bf, _, bgu, ebg, _, _, _, _) =>
-        (Some(bf), Some(bgu), Some(ebg))
-      case _ => (None, None, None)
-    val baseFields = List(
-      "parentHash" -> JString(hex(header.parentHash.value)),
-      "feeRecipient" -> JString(hex(header.beneficiary)),
-      "stateRoot" -> JString(hex(header.stateRoot.value)),
-      "receiptsRoot" -> JString(hex(header.receiptsRoot.value)),
-      "logsBloom" -> JString(hex(header.logsBloom.value)),
-      "prevRandao" -> JString(hex(header.mixHash.value)),
-      "blockNumber" -> JString(hexQ(header.number.value)),
-      "gasLimit" -> JString(hexQ(header.gasLimit.value)),
-      "gasUsed" -> JString(hexQ(header.gasUsed.value)),
-      "timestamp" -> JString(s"0x${header.unixTimestamp.toHexString}"),
-      "extraData" -> JString(hex(header.extraData)),
-      "baseFeePerGas" -> JString(hexQ(baseFee.getOrElse(BigInt(0)))),
-      "blockHash" -> JString(hex(header.hash.value)),
-      "transactions" -> JArray(txs.toList)
-    )
-    val withdrawalsField = withdrawals.map(w => "withdrawals" -> w).toList
-    val blobFields = List(
-      blobGasUsed.map(v => "blobGasUsed" -> JString(hexQ(v))),
-      excessBlobGas.map(v => "excessBlobGas" -> JString(hexQ(v)))
-    ).flatten
-    JObject(baseFields ++ withdrawalsField ++ blobFields)
+    EngineApiController.blockToExecutionPayload(block)
 
   private def handleGetClientVersion(request: JsonRpcRequest): IO[JsonRpcResponse] =
     // Per execution-apis spec, `commit` MUST be the canonical short git SHA — pure
@@ -775,3 +676,120 @@ class EngineApiController(
         case JInt(n) => n
       }
       .getOrElse(BigInt(0))
+
+/** Pure Engine-API JSON encoders, shared with the execution-apis `testing_*` namespace.
+  *
+  * These are the single source of truth for the ExecutionPayloadV3 wire shape and for the `blockValue` derivation.
+  * `testing_buildBlockV1` returns the same envelope engine_getPayloadV3+ does, so both must encode identically.
+  */
+object EngineApiController:
+
+  def byteStringToHex(bs: ByteString): String = "0x" + bs.map("%02x".format(_)).mkString
+
+  /** blockValue = Σ gasUsedByTx_i × (effectiveGasPrice_i − baseFeePerGas). Miner's priority-fee revenue for the block.
+    * Per EIP-3675 V2 envelope, this is what the CL reads to pick the highest-value payload across builders.
+    *
+    * For each tx:
+    *   - gasUsedByTx = receipt.cumulativeGas − previousReceipt.cumulativeGas (since receipts record CUMULATIVE gas, not
+    *     per-tx).
+    *   - effectiveGasPrice = for legacy / access-list txs: tx.gasPrice. For EIP-1559 / blob: min(maxFeePerGas, baseFee
+    *     + maxPriorityFeePerGas).
+    */
+  def computeBlockValue(
+      block: Block,
+      receipts: Seq[com.chipprbots.ethereum.domain.Receipt]
+  ): String =
+    import com.chipprbots.ethereum.domain.{
+      TransactionWithAccessList,
+      TransactionWithDynamicFee,
+      BlobTransaction,
+      SetCodeTransaction
+    }
+    val baseFee = block.header.extraFields match
+      case BlockHeader.HeaderExtraFields.HefPostOlympia(bf)               => bf
+      case BlockHeader.HeaderExtraFields.HefPostShanghai(bf, _)           => bf
+      case BlockHeader.HeaderExtraFields.HefPostCancun(bf, _, _, _, _)    => bf
+      case BlockHeader.HeaderExtraFields.HefPostPrague(bf, _, _, _, _, _) => bf
+      // Amsterdam: without this the catch-all yields baseFee 0, and every priority fee below is
+      // computed against the wrong base — engine_getPayload would report an inflated block value.
+      case BlockHeader.HeaderExtraFields.HefPostAmsterdam(bf, _, _, _, _, _, _, _) => bf
+      case _                                                                       => BigInt(0)
+    if receipts.isEmpty then "0x0"
+    else
+      val txs = block.body.transactionList
+      // derive per-tx gas used from cumulative deltas
+      val gasUsedPerTx: Seq[BigInt] = receipts
+        .map(_.cumulativeGasUsed)
+        .scanLeft(BigInt(0)) { (_, cum) =>
+          cum
+        }
+        .sliding(2, 1)
+        .collect { case Seq(prev, cur) => cur - prev }
+        .toSeq
+      val totalPriorityFee: BigInt = txs
+        .zip(gasUsedPerTx)
+        .map { case (stx, gasUsed) =>
+          val effectiveGasPrice: BigInt = stx.tx match
+            case t: TransactionWithDynamicFee => (baseFee + t.maxPriorityFeePerGas).min(t.maxFeePerGas)
+            case t: BlobTransaction           => (baseFee + t.maxPriorityFeePerGas).min(t.maxFeePerGas)
+            case t: SetCodeTransaction        => (baseFee + t.maxPriorityFeePerGas).min(t.maxFeePerGas)
+            case t: TransactionWithAccessList => t.gasPrice.value
+            case _                            => stx.tx.gasPrice.value
+          val priorityPerGas = (effectiveGasPrice - baseFee).max(0)
+          gasUsed * priorityPerGas
+        }
+        .sum
+      s"0x${totalPriorityFee.toString(16)}"
+
+  def blockToExecutionPayload(block: Block): JObject =
+    import block.header
+    def hex(bs: ByteString): String = "0x" + org.bouncycastle.util.encoders.Hex.toHexString(bs.toArray)
+    def hexQ(n: BigInt): String = s"0x${n.toString(16)}"
+
+    val txs = block.body.transactionList.map { stx =>
+      JString(
+        "0x" + org.bouncycastle.util.encoders.Hex.toHexString(SignedTransaction.byteArraySerializable.toBytes(stx))
+      )
+    }
+    val withdrawals = block.body.withdrawals.map { wds =>
+      JArray(wds.map { w =>
+        JObject(
+          "index" -> JString(hexQ(w.index)),
+          "validatorIndex" -> JString(hexQ(w.validatorIndex)),
+          "address" -> JString(hex(w.address.bytes)),
+          "amount" -> JString(hexQ(w.amount))
+        )
+      }.toList)
+    }
+    val (baseFee, blobGasUsed, excessBlobGas) = header.extraFields match
+      case BlockHeader.HeaderExtraFields.HefPostOlympia(bf)                   => (Some(bf), None, None)
+      case BlockHeader.HeaderExtraFields.HefPostShanghai(bf, _)               => (Some(bf), None, None)
+      case BlockHeader.HeaderExtraFields.HefPostCancun(bf, _, bgu, ebg, _)    => (Some(bf), Some(bgu), Some(ebg))
+      case BlockHeader.HeaderExtraFields.HefPostPrague(bf, _, bgu, ebg, _, _) => (Some(bf), Some(bgu), Some(ebg))
+      // Amsterdam: the catch-all returns (None, None, None), which makes engine_getPayload omit
+      // baseFeePerGas, blobGasUsed AND excessBlobGas entirely on an Amsterdam payload.
+      case BlockHeader.HeaderExtraFields.HefPostAmsterdam(bf, _, bgu, ebg, _, _, _, _) =>
+        (Some(bf), Some(bgu), Some(ebg))
+      case _ => (None, None, None)
+    val baseFields = List(
+      "parentHash" -> JString(hex(header.parentHash.value)),
+      "feeRecipient" -> JString(hex(header.beneficiary)),
+      "stateRoot" -> JString(hex(header.stateRoot.value)),
+      "receiptsRoot" -> JString(hex(header.receiptsRoot.value)),
+      "logsBloom" -> JString(hex(header.logsBloom.value)),
+      "prevRandao" -> JString(hex(header.mixHash.value)),
+      "blockNumber" -> JString(hexQ(header.number.value)),
+      "gasLimit" -> JString(hexQ(header.gasLimit.value)),
+      "gasUsed" -> JString(hexQ(header.gasUsed.value)),
+      "timestamp" -> JString(s"0x${header.unixTimestamp.toHexString}"),
+      "extraData" -> JString(hex(header.extraData)),
+      "baseFeePerGas" -> JString(hexQ(baseFee.getOrElse(BigInt(0)))),
+      "blockHash" -> JString(hex(header.hash.value)),
+      "transactions" -> JArray(txs.toList)
+    )
+    val withdrawalsField = withdrawals.map(w => "withdrawals" -> w).toList
+    val blobFields = List(
+      blobGasUsed.map(v => "blobGasUsed" -> JString(hexQ(v))),
+      excessBlobGas.map(v => "excessBlobGas" -> JString(hexQ(v)))
+    ).flatten
+    JObject(baseFields ++ withdrawalsField ++ blobFields)

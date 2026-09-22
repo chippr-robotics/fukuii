@@ -8,7 +8,6 @@ import com.chipprbots.ethereum.consensus.difficulty.DifficultyCalculator
 import com.chipprbots.ethereum.consensus.mining.MiningConfig
 import com.chipprbots.ethereum.consensus.pow.blocks.Ommers
 import com.chipprbots.ethereum.consensus.pow.blocks.OmmersSeqEnc
-import com.chipprbots.ethereum.consensus.validators.BlockHeaderValidator
 import com.chipprbots.ethereum.consensus.validators.std.MptListValidator.intByteArraySerializable
 import com.chipprbots.ethereum.crypto.kec256
 import com.chipprbots.ethereum.db.dataSource.EphemDataSource
@@ -195,12 +194,9 @@ abstract class BlockGeneratorSkeleton(
     val target = blockchainConfig.forkBlockNumbers
       .gasLimitAdjustmentStartAt(blockNumber)
       .getOrElse(miningConfig.gasLimitTarget)
-    val delta = parentGas / BlockHeaderValidator.GasLimitBoundDivisor - 1
-    if parentGas < target then
-      val n = parentGas + delta; if n > target then target else n
-    else if parentGas > target then
-      val n = parentGas - delta; if n < target then target else n
-    else parentGas
+    // Arithmetic lives in GasLimitCalculator so the ETC miner and the ETH testing block builder
+    // cannot drift apart. Target resolution stays here — it is ETC fork-schedule specific.
+    GasLimitCalculator.calcGasLimit(parentGas, target)
 
   protected def buildMpt[K](entities: Seq[K], vSerializable: ByteArraySerializable[K]): ByteString =
     val stateStorage = StateStorage.getReadOnlyStorage(EphemDataSource())

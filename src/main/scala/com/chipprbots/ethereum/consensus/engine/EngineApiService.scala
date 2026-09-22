@@ -71,12 +71,6 @@ class EngineApiService(
   // blobsBundle envelope.
   // cellProofsPerBlob stashes EIP-7594 PeerDAS cell proofs (128 × 48 bytes per blob)
   // for use by engine_getBlobsV2 (§ETH-T10-B).
-  case class BlobsBundleData(
-      blobs: Seq[ByteString],
-      commitments: Seq[ByteString],
-      proofs: Seq[ByteString],
-      cellProofsPerBlob: Seq[Seq[ByteString]]
-  )
   private val pendingPayloadBlobsBundle =
     new java.util.concurrent.ConcurrentHashMap[ByteString, BlobsBundleData]()
   // Insertion timestamps (System.nanoTime) shared by all four maps above, used for eviction.
@@ -666,312 +660,47 @@ class EngineApiService(
                         )
                       )
                     case Some(parent) =>
-                      // EIP-1559 base fee for the block we are about to propose.
-                      //
-                      // Delegates to the canonical calculator rather than carrying an inline
-                      // copy. The copy that used to live here had a `parent.number == 0 =>
-                      // parentBaseFee` special case that neither BaseFeeCalculator nor
-                      // go-ethereum's consensus/misc/eip1559.CalcBaseFee has. On a chain
-                      // whose genesis is already London (Sepolia, and every hive sim that
-                      // sets HIVE_FORK_LONDON=0) that made us propose block 1 with the
-                      // genesis base fee instead of the 1/8 decrease an empty genesis earns:
-                      // 1,000,000,000 where the rule gives 875,000,000. Every other client
-                      // computes the latter, so our block 1 was unacceptable to them —
-                      // invisible only because no validation path recomputed it.
-                      //
-                      // The London-activation exemption the copy was reaching for is already
-                      // in calcBaseFee, keyed correctly on olympiaBlockNumber rather than on
-                      // the parent being genesis. The copy also floored the decrease at 0
-                      // instead of blockchainConfig.baseFeeFloor.
-                      val baseFee: BigInt = BaseFeeCalculator.calcBaseFee(parent.header, blockchainConfig)
-
-                      // Fetch pending transactions from the tx pool using IO.fromFuture so the
-                      // CE3 compute thread is not blocked waiting for the actor response.
-                      import com.chipprbots.ethereum.transactions.PendingTransactionsManager.*
-                      import org.apache.pekko.actor.typed.scaladsl.AskPattern.*
-                      pendingTransactionsManager
-                        .map { ptm =>
-                          IO.fromFuture(
-                            IO(
-                              ptm.ask[PendingTransactionsResponse](ref => GetPendingTransactionsReq(ref))
-                            )
-                          ).handleErrorWith { e =>
-                            log.error("Failed to fetch pending txs: {}", e.getMessage)
-                            IO.pure(PendingTransactionsResponse(Seq.empty))
-                          }
-                        }
-                        .getOrElse(IO.pure(PendingTransactionsResponse(Seq.empty)))
-                        .flatMap { response =>
-                          // Also capture the network-wrapped raw bytes for EIP-4844 blob txs so
-                          // engine_getPayloadV3 can emit them in the blobsBundle envelope.
+                      selectMempoolTransactions(Timestamp(attrs.timestamp))
+                        .flatMap { case (pendingTxsForBlock, blobTxRawBytesFromPool) =>
                           IO {
-                            val expectedChainId = blockchainConfig.chainId.value
-                            val filtered = response.pendingTransactions.map(_.stx.tx).filter { stx =>
-                              val txChainId: Option[BigInt] = stx.tx match
-                                case t: com.chipprbots.ethereum.domain.TransactionWithAccessList => Some(t.chainId)
-                                case t: com.chipprbots.ethereum.domain.TransactionWithDynamicFee => Some(t.chainId)
-                                case t: com.chipprbots.ethereum.domain.BlobTransaction           => Some(t.chainId)
-                                case t: com.chipprbots.ethereum.domain.SetCodeTransaction        => Some(t.chainId)
-                                case _ => None // legacy txs don't have explicit chainID
-                              txChainId.forall(_ == expectedChainId)
-                            }
-                            // Sort by (sender, nonce) so execution processes each sender's txs
-                            // in nonce order. The pool returns them in arrival order — a blob-tx
-                            // producer like hive's NewPayloadV3 tests sends nonces N, N+1, ...,
-                            // and without this sort execution hits NONCE_MISMATCH_TOO_HIGH when
-                            // tx with nonce N+2 runs before nonce N.
-                            @annotation.nowarn("cat=deprecation") // Seq[Byte] key uses Ordering.Iterable
-                            val txs = filtered.sortBy { stx =>
-                              val sender =
-                                SignedTransaction.getSender(stx).map(_.bytes.toArray.toSeq).getOrElse(Seq.empty)
-                              (sender, stx.tx.nonce)
-                            }
-                            if txs.nonEmpty then log.info("Payload includes {} pending transactions", txs.size)
-                            val pendingTxs = txs
-                            val blobTxRawBytesFromPool: Map[ByteString, ByteString] = response.blobTxNetworkBytes
-
-                            // EIP-4844 / EIP-7691: cap blob-gas included in the payload at the fork's
-                            // MAX_BLOB_GAS_PER_BLOCK (6 blobs Cancun, 9 blobs Prague). Without this cap
-                            // the proposer packs every pool blob tx into one block and getPayloadV3's
-                            // blobsBundle grows past the test's `ExpectedIncludedBlobCount`.
-                            val pendingTxsForBlock =
-                              val maxBlobGas =
-                                BlobGasUtils.maxBlobGasPerBlock(Timestamp(attrs.timestamp), blockchainConfig)
-                              pendingTxs
-                                .foldLeft((Seq.empty[SignedTransaction], BigInt(0))) { case ((kept, blobGas), stx) =>
-                                  stx.tx match
-                                    case b: com.chipprbots.ethereum.domain.BlobTransaction =>
-                                      val add = BigInt(b.blobVersionedHashes.size) * BlobGasUtils.GAS_PER_BLOB
-                                      if blobGas + add <= maxBlobGas then (kept :+ stx, blobGas + add)
-                                      else (kept, blobGas) // skip this blob tx, smaller ones later may still fit
-                                    case _ =>
-                                      (kept :+ stx, blobGas)
-                                }
-                                ._1
-
-                            val emptyWithdrawalsRoot = ByteString(
-                              kec256(
-                                com.chipprbots.ethereum.rlp
-                                  .encode(com.chipprbots.ethereum.rlp.RLPValue(Array.empty[Byte]))
-                              )
-                            )
-                            val emptyTrieRoot = ByteString(
-                              kec256(
-                                com.chipprbots.ethereum.rlp
-                                  .encode(com.chipprbots.ethereum.rlp.RLPValue(Array.empty[Byte]))
-                              )
-                            )
-
-                            // Determine which fork is active at the proposed block's timestamp so we emit
-                            // the correct HeaderExtraFields variant and header fields.
-                            val attrTs = Timestamp(attrs.timestamp)
-                            val isShanghai = blockchainConfig.isShanghaiTimestamp(attrTs)
-                            val isCancun = blockchainConfig.isCancunTimestamp(attrTs)
-                            val isPrague = blockchainConfig.isPragueTimestamp(attrTs)
-                            val withdrawals: Seq[com.chipprbots.ethereum.domain.Withdrawal] =
-                              attrs.withdrawals.getOrElse(Nil)
-
-                            // Compute withdrawalsRoot from attrs (Shanghai+ payload attributes).
-                            val computedWithdrawalsRoot =
-                              if withdrawals.nonEmpty then computeWithdrawalsRoot(withdrawals)
-                              else emptyWithdrawalsRoot
-
-                            // EIP-4844 / EIP-7691 / EIP-7892 / EIP-7918 excessBlobGas from parent.
-                            val parentExcessBlobGas = parent.header.excessBlobGas.getOrElse(BigInt(0))
-                            val parentBlobGasUsed = parent.header.blobGasUsed.getOrElse(BigInt(0))
-                            val parentBlobBaseFee = parent.header.baseFee.getOrElse(BigInt(0))
-                            val childExcessBlobGas = BlobGasUtils.expectedExcessBlobGas(
-                              parentExcessBlobGas,
-                              parentBlobGasUsed,
-                              parentBlobBaseFee,
-                              attrTs,
-                              blockchainConfig
-                            )
-
-                            val parentBeaconBlockRoot =
-                              attrs.parentBeaconBlockRoot.getOrElse(ByteString(new Array[Byte](32)))
-
-                            // Placeholder extraFields — stateRoot / requestsHash / blobGasUsed are filled in
-                            // AFTER executing the block (we can't know them yet).
-                            val initialExtraFields =
-                              if isPrague then
-                                HefPostPrague(
-                                  baseFee,
-                                  computedWithdrawalsRoot,
-                                  BigInt(0),
-                                  childExcessBlobGas,
-                                  parentBeaconBlockRoot,
-                                  ByteString.empty
-                                )
-                              else if isCancun then
-                                HefPostCancun(
-                                  baseFee,
-                                  computedWithdrawalsRoot,
-                                  BigInt(0),
-                                  childExcessBlobGas,
-                                  parentBeaconBlockRoot
-                                )
-                              else if isShanghai then HefPostShanghai(baseFee, computedWithdrawalsRoot)
-                              else
-                                // Paris (post-merge, pre-Shanghai): HefPostOlympia holds only baseFee.
-                                // Using HefPostShanghai here breaks the blockHash round-trip: getPayloadV1
-                                // returns a payload with no withdrawals field, and newPayloadV1 reconstructs
-                                // the header as HefPostOlympia — different RLP, different hash, so every
-                                // Paris payload we build fails its own newPayload round-trip.
-                                HefPostOlympia(baseFee)
-
-                            // Build post-merge header with skeleton (difficulty=0 so payBlockReward skips PoW rewards)
-                            val blockNumber = parent.header.number + 1
-                            // Keep the parent gas limit, EXCEPT at the EIP-1559 fork-activation
-                            // block, where the elasticity multiplier applies as a one-shot scale.
-                            // Producer and validator must agree: the inline check above (and
-                            // BlockHeaderValidatorSkeleton.validateGasLimit) centre the ±1/1024
-                            // window on the scaled parent at that one block, so a producer that
-                            // kept the raw parent here would emit a payload its own newPayload
-                            // round-trip rejects. That producer/validator asymmetry is exactly the
-                            // failure mode this pair of changes exists to prevent.
-                            // Some(2) on ETH/Sepolia/hive; None on ETC → unchanged behaviour there.
-                            val olympiaActivation = blockchainConfig.forkBlockNumbers.olympiaBlockNumber
-                            val gasLimit =
-                              blockchainConfig.forkBlockNumbers.olympiaGasLimitElasticity match
-                                case Some(multiplier)
-                                    if parent.header.number.value < olympiaActivation &&
-                                      blockNumber.value >= olympiaActivation =>
-                                  // GasAmount has *(Long) and *(BigInt) but no *(Int).
-                                  parent.header.gasLimit * BigInt(multiplier)
-                                case _ => parent.header.gasLimit
-                            val header = BlockHeader(
-                              parentHash = parent.header.hash,
-                              ommersHash = BlockHash(
-                                ByteString(
-                                  kec256(com.chipprbots.ethereum.rlp.encode(com.chipprbots.ethereum.rlp.RLPList()))
-                                )
-                              ),
-                              beneficiary = attrs.suggestedFeeRecipient.bytes,
-                              stateRoot = TrieRoot.Empty,
-                              transactionsRoot = TrieRoot(emptyTrieRoot),
-                              receiptsRoot = TrieRoot(emptyTrieRoot),
-                              logsBloom = BloomFilter.Empty,
-                              difficulty = Difficulty.Zero,
-                              number = blockNumber,
-                              gasLimit = gasLimit,
-                              gasUsed = GasAmount.Zero,
-                              unixTimestamp = Timestamp(attrs.timestamp),
-                              extraData = ByteString("fukuii".getBytes),
-                              mixHash = BlockHash(attrs.prevRandao),
-                              nonce = ByteString(new Array[Byte](8)),
-                              extraFields = initialExtraFields
-                            )
-                            val body = BlockBody(pendingTxsForBlock.toList, Nil, withdrawals = attrs.withdrawals)
-                            val skeletonBlock = Block(header, body)
-
-                            // Route EVERY post-merge proposer build through executeForProposer (which
-                            // goes through BlockExecution.executeBlock — txs, payBlockReward, withdrawals
-                            // via processWithdrawals, Prague system calls, then persistState).
-                            // The previous `if (isPrague) …  else BlockPreparator.prepareBlock` branch
-                            // was broken for Shanghai/Cancun: BlockPreparator.prepareBlock does NOT call
-                            // processWithdrawals, so the proposer-built header contained a stateRoot that
-                            // did not reflect the withdrawals — every withdrawals hive test came back with
-                            // "Block has invalid state root hash" on its own payload round-trip.
-                            // executeBlock early-returns cleanly on pre-Prague (processPragueSystemCalls
-                            // is a no-op outside Prague), so there's nothing to lose by using it always.
-                            import com.chipprbots.ethereum.consensus.validators.std.MptListValidator.intByteArraySerializable
-                            import com.chipprbots.ethereum.mpt.MerklePatriciaTrie
-                            import com.chipprbots.ethereum.domain.Receipt
-                            val (receipts, gasUsedTotal, finalStateRoot, executionRequests) =
-                              blockExecution.executeForProposer(skeletonBlock) match
-                                case Right(result) =>
-                                  (
-                                    result.receipts,
-                                    result.gasUsed,
-                                    result.worldState.stateRootHash,
-                                    result.executionRequests
-                                  )
-                                case Left(err) =>
-                                  log.error("Proposer-mode execution failed: {}", err)
-                                  (Seq.empty[Receipt], BigInt(0), parent.header.stateRoot.value, Seq.empty[ByteString])
-
-                            val receiptsLogs =
-                              BloomFilter.Empty.toArray +: receipts.map(_.logsBloomFilter.toArray)
-                            val bloomFilter = ByteString(com.chipprbots.ethereum.utils.ByteUtils.or(receiptsLogs*))
-                            def buildMpt[T](
-                                items: Seq[T],
-                                ser: com.chipprbots.ethereum.mpt.ByteArraySerializable[T]
-                            ): ByteString =
-                              val storage = new com.chipprbots.ethereum.db.storage.SerializingMptStorage(
-                                new com.chipprbots.ethereum.db.storage.ArchiveNodeStorage(
-                                  new com.chipprbots.ethereum.db.storage.NodeStorage(
-                                    com.chipprbots.ethereum.db.dataSource.EphemDataSource()
-                                  )
-                                )
-                              )
-                              val trie = items.zipWithIndex.foldLeft(
-                                MerklePatriciaTrie[Int, T](storage)(intByteArraySerializable, ser)
-                              ) { case (t, (item, idx)) =>
-                                t.put(idx, item)
-                              }
-                              ByteString(trie.getRootHash)
-
-                            // Blob-gas accounting: sum GAS_PER_BLOB * blob_count across blob txs.
-                            val blobGasUsed: BigInt = skeletonBlock.body.transactionList.map {
-                              case SignedTransaction(blobTx: com.chipprbots.ethereum.domain.BlobTransaction, _) =>
-                                BigInt(blobTx.blobVersionedHashes.size) * BlobGasUtils.GAS_PER_BLOB
-                              case _ => BigInt(0)
-                            }.sum
-
-                            // Finalize extraFields with execution-derived values.
-                            val finalExtraFields = initialExtraFields match
-                              case _: HefPostPrague =>
-                                HefPostPrague(
-                                  baseFee,
-                                  computedWithdrawalsRoot,
-                                  blobGasUsed,
-                                  childExcessBlobGas,
-                                  parentBeaconBlockRoot,
-                                  computeRequestsHash(executionRequests)
-                                )
-                              case _: HefPostCancun =>
-                                HefPostCancun(
-                                  baseFee,
-                                  computedWithdrawalsRoot,
-                                  blobGasUsed,
-                                  childExcessBlobGas,
-                                  parentBeaconBlockRoot
-                                )
-                              case other => other
-
-                            val updatedHeader = header.copy(
-                              stateRoot = TrieRoot(finalStateRoot),
-                              receiptsRoot = TrieRoot(buildMpt(receipts, Receipt.byteArraySerializable)),
-                              transactionsRoot = TrieRoot(
-                                buildMpt(skeletonBlock.body.transactionList, SignedTransaction.byteArraySerializable)
-                              ),
-                              logsBloom = BloomFilter(bloomFilter),
-                              gasUsed = GasAmount(gasUsedTotal),
-                              extraFields = finalExtraFields
-                            )
-                            val payload = skeletonBlock.copy(header = updatedHeader)
+                            // Delegate to the single proposer-side builder (buildBlockOnParent). The engine
+                            // path keeps its historical policy: parent gas limit (modulo the one-shot EIP-1559
+                            // elasticity scale at London activation), the configured header extra-data, and
+                            // LENIENT handling of a failed transaction.
+                            val payload = buildBlockOnParent(
+                              parent,
+                              attrs,
+                              pendingTxsForBlock,
+                              ByteString("fukuii".getBytes),
+                              proposerGasLimit(parent.header, parent.header.number.value + 1, None),
+                              strict = false
+                            ) match
+                              case Right(built) => built
+                              case Left(err)    =>
+                                // Unreachable with strict = false; buildBlockOnParent only returns Left when strict.
+                                throw new IllegalStateException(s"lenient proposer build returned Left: $err")
                             evictOldestIfAtCapacity()
                             pendingPayloadTimestamps.put(id, System.nanoTime())
-                            pendingPayloads.put(id, payload)
+                            pendingPayloads.put(id, payload.block)
                             // Also stash executionRequests so getPayloadV4 can emit them.
-                            if executionRequests.nonEmpty then pendingPayloadRequests.put(id, executionRequests)
+                            if payload.executionRequests.nonEmpty then
+                              pendingPayloadRequests.put(id, payload.executionRequests)
                             // Stash receipts so getPayloadV2+ can compute the blockValue envelope field.
-                            if receipts.nonEmpty then pendingPayloadReceipts.put(id, receipts)
+                            if payload.receipts.nonEmpty then pendingPayloadReceipts.put(id, payload.receipts)
                             // EIP-4844: collect the blob sidecars for every blob tx in the built payload
                             // so engine_getPayloadV3 can emit the blobsBundle envelope. Without this the
                             // envelope has empty arrays while the payload body has blob txs; the hive
                             // engine-cancun VerifyBlobBundle step fails with "expected N blob, got 0".
-                            val bundle = buildBlobsBundle(payload.body.transactionList, blobTxRawBytesFromPool)
+                            val bundle = buildBlobsBundle(payload.block.body.transactionList, blobTxRawBytesFromPool)
                             if bundle.blobs.nonEmpty then pendingPayloadBlobsBundle.put(id, bundle)
                             log.info(
                               "Built payload {} for block {} (baseFee={}, parent={}, fork={}, requests={})",
                               id.toArray.map("%02x".format(_)).mkString,
-                              payload.header.number,
-                              baseFee,
+                              payload.block.header.number,
+                              payload.block.header.baseFee.getOrElse(BigInt(0)),
                               parent.header.number,
-                              if isPrague then "Prague" else if isCancun then "Cancun" else "Shanghai",
-                              executionRequests.size
+                              forkNameAt(payload.block.header.unixTimestamp),
+                              payload.executionRequests.size
                             )
                           }.handleError { e =>
                             log.error("Failed to build payload: {}", e.getMessage)
@@ -995,6 +724,350 @@ class EngineApiService(
       // end else (blockFullyStored check)
     // end else (invalidBlocks check)
   }
+
+  /** Mempool selection for a proposer build: chain-ID filter, (sender, nonce) ordering, and the EIP-4844/EIP-7691
+    * blob-gas cap for the fork active at `timestamp`.
+    *
+    * Returns the transactions to include and the network-wrapped raw bytes the pool captured for each blob tx. The
+    * latter is not recoverable from the canonical transaction encoding, so it has to be carried out of here for
+    * `blobsBundle` to be reconstructible.
+    */
+  def selectMempoolTransactions(timestamp: Timestamp): IO[(Seq[SignedTransaction], Map[ByteString, ByteString])] =
+    import com.chipprbots.ethereum.transactions.PendingTransactionsManager.*
+    import org.apache.pekko.actor.typed.scaladsl.AskPattern.*
+    // Fetch pending transactions from the tx pool using IO.fromFuture so the
+    // CE3 compute thread is not blocked waiting for the actor response.
+    pendingTransactionsManager
+      .map { ptm =>
+        IO.fromFuture(
+          IO(
+            ptm.ask[PendingTransactionsResponse](ref => GetPendingTransactionsReq(ref))
+          )
+        ).handleErrorWith { e =>
+          log.error("Failed to fetch pending txs: {}", e.getMessage)
+          IO.pure(PendingTransactionsResponse(Seq.empty))
+        }
+      }
+      .getOrElse(IO.pure(PendingTransactionsResponse(Seq.empty)))
+      .map { response =>
+        val expectedChainId = blockchainConfig.chainId.value
+        val filtered = response.pendingTransactions.map(_.stx.tx).filter { stx =>
+          val txChainId: Option[BigInt] = stx.tx match
+            case t: com.chipprbots.ethereum.domain.TransactionWithAccessList => Some(t.chainId)
+            case t: com.chipprbots.ethereum.domain.TransactionWithDynamicFee => Some(t.chainId)
+            case t: com.chipprbots.ethereum.domain.BlobTransaction           => Some(t.chainId)
+            case t: com.chipprbots.ethereum.domain.SetCodeTransaction        => Some(t.chainId)
+            case _ => None // legacy txs don't have explicit chainID
+          txChainId.forall(_ == expectedChainId)
+        }
+        // Sort by (sender, nonce) so execution processes each sender's txs
+        // in nonce order. The pool returns them in arrival order — a blob-tx
+        // producer like hive's NewPayloadV3 tests sends nonces N, N+1, ...,
+        // and without this sort execution hits NONCE_MISMATCH_TOO_HIGH when
+        // tx with nonce N+2 runs before nonce N.
+        @annotation.nowarn("cat=deprecation") // Seq[Byte] key uses Ordering.Iterable
+        val pendingTxs = filtered.sortBy { stx =>
+          val sender =
+            SignedTransaction.getSender(stx).map(_.bytes.toArray.toSeq).getOrElse(Seq.empty)
+          (sender, stx.tx.nonce)
+        }
+        if pendingTxs.nonEmpty then log.info("Payload includes {} pending transactions", pendingTxs.size)
+
+        // EIP-4844 / EIP-7691: cap blob-gas included in the payload at the fork's
+        // MAX_BLOB_GAS_PER_BLOCK (6 blobs Cancun, 9 blobs Prague). Without this cap
+        // the proposer packs every pool blob tx into one block and getPayloadV3's
+        // blobsBundle grows past the test's `ExpectedIncludedBlobCount`.
+        val pendingTxsForBlock =
+          val maxBlobGas = BlobGasUtils.maxBlobGasPerBlock(timestamp, blockchainConfig)
+          pendingTxs
+            .foldLeft((Seq.empty[SignedTransaction], BigInt(0))) { case ((kept, blobGas), stx) =>
+              stx.tx match
+                case b: com.chipprbots.ethereum.domain.BlobTransaction =>
+                  val add = BigInt(b.blobVersionedHashes.size) * BlobGasUtils.GAS_PER_BLOB
+                  if blobGas + add <= maxBlobGas then (kept :+ stx, blobGas + add)
+                  else (kept, blobGas) // skip this blob tx, smaller ones later may still fit
+                case _ =>
+                  (kept :+ stx, blobGas)
+            }
+            ._1
+        (pendingTxsForBlock, response.blobTxNetworkBytes)
+      }
+
+  /** Internal control-flow signal for a strict build whose transaction list could not be applied. Never escapes
+    * [[buildBlockOnParent]] — it is caught there and turned into a Left.
+    */
+  final private case class ProposerExecutionFailed(reason: String) extends RuntimeException(reason)
+
+  /** The gasLimit a proposer puts in the child header.
+    *
+    * @param target
+    *   `None` keeps the parent's gas limit (the engine API's historical policy — the CL does not tell us a target, so
+    *   we do not drift). `Some(t)` converges toward `t` at go-ethereum's `CalcGasLimit` rate; the `testing_*` namespace
+    *   uses this so fixtures generated against geth (which always has a `--miner.gaslimit`) match.
+    *
+    * Both branches respect the one-shot EIP-1559 elasticity scale at London/Olympia activation: producer and validator
+    * must agree, and BlockHeaderValidatorSkeleton.validateGasLimit centres its +-1/1024 window on the scaled parent at
+    * exactly that block.
+    */
+  def proposerGasLimit(parent: BlockHeader, childNumber: BigInt, target: Option[BigInt]): GasAmount =
+    val olympiaActivation = blockchainConfig.forkBlockNumbers.olympiaBlockNumber
+    val effectiveParent =
+      blockchainConfig.forkBlockNumbers.olympiaGasLimitElasticity match
+        case Some(multiplier) if parent.number.value < olympiaActivation && childNumber >= olympiaActivation =>
+          // GasAmount has *(Long) and *(BigInt) but no *(Int).
+          parent.gasLimit * BigInt(multiplier)
+        case _ => parent.gasLimit
+    target match
+      case None => effectiveParent
+      case Some(t) =>
+        GasAmount(com.chipprbots.ethereum.consensus.blocks.GasLimitCalculator.calcGasLimit(effectiveParent.value, t))
+
+  /** Fork name for the proposer build log line. */
+  private def forkNameAt(ts: Timestamp): String =
+    if blockchainConfig.isPragueTimestamp(ts) then "Prague"
+    else if blockchainConfig.isCancunTimestamp(ts) then "Cancun"
+    else if blockchainConfig.isShanghaiTimestamp(ts) then "Shanghai"
+    else "Paris"
+
+  /** EIP-4844 sidecars for `txs`, given the network-wrapped raw bytes captured for each blob tx. */
+  def blobsBundleFor(txs: Seq[SignedTransaction], blobTxRawBytes: Map[ByteString, ByteString]): BlobsBundleData =
+    buildBlobsBundle(txs, blobTxRawBytes)
+
+  /** Build a block on top of `parent` from CL/test-supplied payload attributes and an explicit transaction list.
+    *
+    * Single proposer-side block builder for the whole client: `engine_forkchoiceUpdated`'s payload build and the
+    * `testing_*` namespace both go through here, so a payload produced by one can never disagree with the other on
+    * header field derivation (withdrawalsRoot, excessBlobGas, requestsHash, bloom, roots).
+    *
+    * Side-effect free with respect to the canonical chain: nothing is stored, no head moves. `executeForProposer` does
+    * write trie nodes to the backing MPT storage (see BlockExecution.buildInitialWorld), but writes no block, receipt,
+    * or number->hash mapping.
+    *
+    * @param transactions
+    *   exactly the transactions to include, in order. Caller does the mempool selection.
+    * @param gasLimit
+    *   the child header's gasLimit. Caller's policy: the engine path keeps the parent's (modulo the one-shot EIP-1559
+    *   elasticity scale at London activation), the testing path converges toward the configured target.
+    * @param strict
+    *   true -> a failed transaction aborts the build with Left; false -> pre-existing lenient engine behaviour.
+    */
+  def buildBlockOnParent(
+      parent: Block,
+      attrs: PayloadAttributes,
+      transactions: Seq[SignedTransaction],
+      extraData: ByteString,
+      gasLimit: GasAmount,
+      strict: Boolean
+  ): Either[String, BuiltBlock] =
+    try
+      // EIP-1559 base fee for the block we are about to propose.
+      //
+      // Delegates to the canonical calculator rather than carrying an inline copy. The copy
+      // that used to live here had a `parent.number == 0 => parentBaseFee` special case that
+      // neither BaseFeeCalculator nor go-ethereum's consensus/misc/eip1559.CalcBaseFee has. On
+      // a chain whose genesis is already London (Sepolia, and every hive sim that sets
+      // HIVE_FORK_LONDON=0) that made us propose block 1 with the genesis base fee instead of
+      // the 1/8 decrease an empty genesis earns: 1,000,000,000 where the rule gives 875,000,000.
+      // Every other client computes the latter, so our block 1 was unacceptable to them —
+      // invisible only because no validation path recomputed it.
+      //
+      // The London-activation exemption the copy was reaching for is already in calcBaseFee,
+      // keyed correctly on olympiaBlockNumber rather than on the parent being genesis. The copy
+      // also floored the decrease at 0 instead of blockchainConfig.baseFeeFloor.
+      val baseFee: BigInt = BaseFeeCalculator.calcBaseFee(parent.header, blockchainConfig)
+      val emptyWithdrawalsRoot = ByteString(
+        kec256(
+          com.chipprbots.ethereum.rlp
+            .encode(com.chipprbots.ethereum.rlp.RLPValue(Array.empty[Byte]))
+        )
+      )
+      val emptyTrieRoot = ByteString(
+        kec256(
+          com.chipprbots.ethereum.rlp
+            .encode(com.chipprbots.ethereum.rlp.RLPValue(Array.empty[Byte]))
+        )
+      )
+
+      // Determine which fork is active at the proposed block's timestamp so we emit
+      // the correct HeaderExtraFields variant and header fields.
+      val attrTs = Timestamp(attrs.timestamp)
+      val isShanghai = blockchainConfig.isShanghaiTimestamp(attrTs)
+      val isCancun = blockchainConfig.isCancunTimestamp(attrTs)
+      val isPrague = blockchainConfig.isPragueTimestamp(attrTs)
+      val withdrawals: Seq[com.chipprbots.ethereum.domain.Withdrawal] =
+        attrs.withdrawals.getOrElse(Nil)
+
+      // Compute withdrawalsRoot from attrs (Shanghai+ payload attributes).
+      val computedWithdrawalsRoot =
+        if withdrawals.nonEmpty then computeWithdrawalsRoot(withdrawals)
+        else emptyWithdrawalsRoot
+
+      // EIP-4844 / EIP-7691 / EIP-7892 / EIP-7918 excessBlobGas from parent.
+      val parentExcessBlobGas = parent.header.excessBlobGas.getOrElse(BigInt(0))
+      val parentBlobGasUsed = parent.header.blobGasUsed.getOrElse(BigInt(0))
+      val parentBlobBaseFee = parent.header.baseFee.getOrElse(BigInt(0))
+      val childExcessBlobGas = BlobGasUtils.expectedExcessBlobGas(
+        parentExcessBlobGas,
+        parentBlobGasUsed,
+        parentBlobBaseFee,
+        attrTs,
+        blockchainConfig
+      )
+
+      val parentBeaconBlockRoot =
+        attrs.parentBeaconBlockRoot.getOrElse(ByteString(new Array[Byte](32)))
+
+      // Placeholder extraFields — stateRoot / requestsHash / blobGasUsed are filled in
+      // AFTER executing the block (we can't know them yet).
+      val initialExtraFields =
+        if isPrague then
+          HefPostPrague(
+            baseFee,
+            computedWithdrawalsRoot,
+            BigInt(0),
+            childExcessBlobGas,
+            parentBeaconBlockRoot,
+            ByteString.empty
+          )
+        else if isCancun then
+          HefPostCancun(
+            baseFee,
+            computedWithdrawalsRoot,
+            BigInt(0),
+            childExcessBlobGas,
+            parentBeaconBlockRoot
+          )
+        else if isShanghai then HefPostShanghai(baseFee, computedWithdrawalsRoot)
+        else
+          // Paris (post-merge, pre-Shanghai): HefPostOlympia holds only baseFee.
+          // Using HefPostShanghai here breaks the blockHash round-trip: getPayloadV1
+          // returns a payload with no withdrawals field, and newPayloadV1 reconstructs
+          // the header as HefPostOlympia — different RLP, different hash, so every
+          // Paris payload we build fails its own newPayload round-trip.
+          HefPostOlympia(baseFee)
+
+      // Build post-merge header with skeleton (difficulty=0 so payBlockReward skips PoW rewards)
+      val blockNumber = parent.header.number + 1
+      val header = BlockHeader(
+        parentHash = parent.header.hash,
+        ommersHash = BlockHash(
+          ByteString(
+            kec256(com.chipprbots.ethereum.rlp.encode(com.chipprbots.ethereum.rlp.RLPList()))
+          )
+        ),
+        beneficiary = attrs.suggestedFeeRecipient.bytes,
+        stateRoot = TrieRoot.Empty,
+        transactionsRoot = TrieRoot(emptyTrieRoot),
+        receiptsRoot = TrieRoot(emptyTrieRoot),
+        logsBloom = BloomFilter.Empty,
+        difficulty = Difficulty.Zero,
+        number = blockNumber,
+        gasLimit = gasLimit,
+        gasUsed = GasAmount.Zero,
+        unixTimestamp = Timestamp(attrs.timestamp),
+        extraData = extraData,
+        mixHash = BlockHash(attrs.prevRandao),
+        nonce = ByteString(new Array[Byte](8)),
+        extraFields = initialExtraFields
+      )
+      val body = BlockBody(transactions.toList, Nil, withdrawals = attrs.withdrawals)
+      val skeletonBlock = Block(header, body)
+
+      // Route EVERY post-merge proposer build through executeForProposer (which
+      // goes through BlockExecution.executeBlock — txs, payBlockReward, withdrawals
+      // via processWithdrawals, Prague system calls, then persistState).
+      // The previous `if (isPrague) …  else BlockPreparator.prepareBlock` branch
+      // was broken for Shanghai/Cancun: BlockPreparator.prepareBlock does NOT call
+      // processWithdrawals, so the proposer-built header contained a stateRoot that
+      // did not reflect the withdrawals — every withdrawals hive test came back with
+      // "Block has invalid state root hash" on its own payload round-trip.
+      // executeBlock early-returns cleanly on pre-Prague (processPragueSystemCalls
+      // is a no-op outside Prague), so there's nothing to lose by using it always.
+      import com.chipprbots.ethereum.consensus.validators.std.MptListValidator.intByteArraySerializable
+      import com.chipprbots.ethereum.mpt.MerklePatriciaTrie
+      import com.chipprbots.ethereum.domain.Receipt
+      val (receipts, gasUsedTotal, finalStateRoot, executionRequests) =
+        blockExecution.executeForProposer(skeletonBlock) match
+          case Right(result) =>
+            (
+              result.receipts,
+              result.gasUsed,
+              result.worldState.stateRootHash,
+              result.executionRequests
+            )
+          case Left(err) =>
+            log.error("Proposer-mode execution failed: {}", err)
+            // STRICT (testing_* namespace): an unapplicable transaction is a hard failure the
+            // caller must see as a JSON-RPC error, per execution-apis testing_buildBlockV1 /
+            // testing_commitBlockV1 ("the client MUST return a JSON-RPC error").
+            // LENIENT (engine_forkchoiceUpdated): pre-existing behaviour — keep building with
+            // the parent's stateRoot so a payloadId is still returned. Changing that is a
+            // separate, separately-reviewed change.
+            if strict then throw ProposerExecutionFailed(err.describe)
+            (Seq.empty[Receipt], BigInt(0), parent.header.stateRoot.value, Seq.empty[ByteString])
+
+      val receiptsLogs =
+        BloomFilter.Empty.toArray +: receipts.map(_.logsBloomFilter.toArray)
+      val bloomFilter = ByteString(com.chipprbots.ethereum.utils.ByteUtils.or(receiptsLogs*))
+      def buildMpt[T](
+          items: Seq[T],
+          ser: com.chipprbots.ethereum.mpt.ByteArraySerializable[T]
+      ): ByteString =
+        val storage = new com.chipprbots.ethereum.db.storage.SerializingMptStorage(
+          new com.chipprbots.ethereum.db.storage.ArchiveNodeStorage(
+            new com.chipprbots.ethereum.db.storage.NodeStorage(
+              com.chipprbots.ethereum.db.dataSource.EphemDataSource()
+            )
+          )
+        )
+        val trie = items.zipWithIndex.foldLeft(
+          MerklePatriciaTrie[Int, T](storage)(intByteArraySerializable, ser)
+        ) { case (t, (item, idx)) =>
+          t.put(idx, item)
+        }
+        ByteString(trie.getRootHash)
+
+      // Blob-gas accounting: sum GAS_PER_BLOB * blob_count across blob txs.
+      val blobGasUsed: BigInt = skeletonBlock.body.transactionList.map {
+        case SignedTransaction(blobTx: com.chipprbots.ethereum.domain.BlobTransaction, _) =>
+          BigInt(blobTx.blobVersionedHashes.size) * BlobGasUtils.GAS_PER_BLOB
+        case _ => BigInt(0)
+      }.sum
+
+      // Finalize extraFields with execution-derived values.
+      val finalExtraFields = initialExtraFields match
+        case _: HefPostPrague =>
+          HefPostPrague(
+            baseFee,
+            computedWithdrawalsRoot,
+            blobGasUsed,
+            childExcessBlobGas,
+            parentBeaconBlockRoot,
+            computeRequestsHash(executionRequests)
+          )
+        case _: HefPostCancun =>
+          HefPostCancun(
+            baseFee,
+            computedWithdrawalsRoot,
+            blobGasUsed,
+            childExcessBlobGas,
+            parentBeaconBlockRoot
+          )
+        case other => other
+
+      val updatedHeader = header.copy(
+        stateRoot = TrieRoot(finalStateRoot),
+        receiptsRoot = TrieRoot(buildMpt(receipts, Receipt.byteArraySerializable)),
+        transactionsRoot = TrieRoot(
+          buildMpt(skeletonBlock.body.transactionList, SignedTransaction.byteArraySerializable)
+        ),
+        logsBloom = BloomFilter(bloomFilter),
+        gasUsed = GasAmount(gasUsedTotal),
+        extraFields = finalExtraFields
+      )
+      val built = BuiltBlock(skeletonBlock.copy(header = updatedHeader), receipts, executionRequests)
+      Right(built)
+    catch case ProposerExecutionFailed(msg) => Left(msg)
 
   /** engine_getPayloadV1/V2/V3/V4 — Return a previously built payload by ID. */
   def getPayload(payloadId: ByteString): IO[Either[String, Block]] = IO {

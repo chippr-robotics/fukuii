@@ -698,6 +698,11 @@ trait ApisBuilder extends ApisBase:
     val Debug = "debug"
     val Rpc = "rpc"
     val Test = "test"
+    // execution-apis `testing_*` block-production namespace. Deliberately NOT in `available`'s
+    // shipped defaults beyond being selectable: the spec says it "MUST NOT be exposed on
+    // public-facing RPC APIs" and "is strongly recommended to be disabled by default".
+    // Opt in with -Dfukuii.network.rpc.apis=...,testing
+    val Testing = "testing"
     val Qa = "qa"
     val Admin = "admin"
     val TxPool = "txpool"
@@ -706,7 +711,7 @@ trait ApisBuilder extends ApisBase:
 
   import Apis.*
   override def available: List[String] =
-    List(Eth, Web3, Net, Personal, Fukuii, Mcp, Debug, Test, Qa, Admin, TxPool, Trace, Subscribe)
+    List(Eth, Web3, Net, Personal, Fukuii, Mcp, Debug, Test, Testing, Qa, Admin, TxPool, Trace, Subscribe)
 
 trait AdminServiceBuilder:
   this: PeerManagerActorBuilder & NodeStatusBuilder & BlockchainBuilder & BlockchainConfigBuilder &
@@ -773,6 +778,12 @@ trait JSONRpcControllerBuilder:
 
   protected def testService: Option[TestService] = None
 
+  /** execution-apis `testing_*` namespace. None by default — the spec requires it be off unless explicitly enabled.
+    * Overridden in [[Node]], the only place where EngineApiBuilder's engineApiService and forkChoiceManager are both in
+    * scope.
+    */
+  protected def testingService: Option[TestingService] = None
+
   lazy val jsonRpcController =
     new JsonRpcController(
       web3Service,
@@ -785,6 +796,7 @@ trait JSONRpcControllerBuilder:
       ethFilterService,
       personalService,
       testService,
+      testingService,
       debugService,
       qaService,
       fukuiiService,
@@ -1180,3 +1192,23 @@ trait Node
   // post-merge chains. Closes #1207.
   override def forkChoiceManagerForSync: Option[com.chipprbots.ethereum.consensus.engine.ForkChoiceManager] =
     Some(forkChoiceManager)
+
+  // execution-apis `testing_*` block-production namespace. Constructed here because this is the
+  // only assembly point where EngineApiBuilder (engineApiService, forkChoiceManager) and the
+  // JSON-RPC controller meet. Constructing it does NOT expose it: JsonRpcBaseController only
+  // dispatches namespaces present in `network.rpc.apis`, and `testing` is in none of the shipped
+  // configs.
+  override protected lazy val testingService: Option[TestingService] = Some(
+    new TestingService(
+      engineApiService,
+      blockchainReader,
+      blockchainWriter,
+      forkChoiceManager,
+      Some(pendingTransactionsManagerTyped),
+      Some(blockTopic),
+      // go-ethereum's --miner.gaslimit equivalent. hive's rpc-compat sets HIVE_TARGET_GAS_LIMIT
+      // to 60000000 so every client converges to the same next-block gas limit; fukuii's default
+      // mining.gas-limit-target is already 60000000.
+      miningConfig.gasLimitTarget
+    )(blockchainConfig)
+  )

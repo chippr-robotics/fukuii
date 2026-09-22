@@ -43,6 +43,13 @@ BPO1_TS=${HIVE_BPO1_TIMESTAMP:-}
 BPO2_TS=${HIVE_BPO2_TIMESTAMP:-}
 AMSTERDAM_TS=${HIVE_AMSTERDAM_TIMESTAMP:-}
 
+# go-ethereum's --miner.gaslimit. hive's rpc-compat simulator sets this explicitly
+# ("Match execution-apis' Geth default so all clients build the same next-block gas
+# limit") and the execution-apis testing_* fixtures were recorded against it: the
+# proposer steps the gas limit toward this target by parent/1024-1 per block, so a
+# mismatch changes every built block's hash. Fukuii's own default is already 60M.
+TARGET_GAS_LIMIT=${HIVE_TARGET_GAS_LIMIT:-}
+
 # ==============================================================================
 # Genesis: convert geth format to Fukuii format
 # ==============================================================================
@@ -109,6 +116,8 @@ fi
 [ -n "$AMSTERDAM_TS" ] && FLAGS="$FLAGS -Dfukuii.blockchains.hive.amsterdam-timestamp=$AMSTERDAM_TS"
 
 # RPC
+[ -n "$TARGET_GAS_LIMIT" ] && FLAGS="$FLAGS -Dfukuii.mining.gas-limit-target=$TARGET_GAS_LIMIT"
+
 FLAGS="$FLAGS -Dfukuii.network.rpc.http.enabled=true"
 FLAGS="$FLAGS -Dfukuii.network.rpc.http.interface=0.0.0.0"
 FLAGS="$FLAGS -Dfukuii.network.rpc.http.port=8545"
@@ -126,7 +135,14 @@ FLAGS="$FLAGS -Dfukuii.network.rpc.http.port=8545"
 # failed every devp2p test with `invalid public key (encoding/hex: invalid byte:
 # U+0075 'u')` — the 'u' of "unknown". Same shape as the txpool gap above:
 # implemented method, unexposed namespace, failure attributed to the client.
-FLAGS="$FLAGS -Dfukuii.network.rpc.apis=eth,web3,net,debug,txpool,admin"
+# `testing` added 2026-09-22. The ethereum/rpc-compat suite exercises the
+# execution-apis testing_* namespace (testing_buildBlockV1, testing_commitBlockV1 —
+# 9 test vectors). The namespace is implemented (jsonrpc/TestingService.scala,
+# Apis.Testing = "testing") but is deliberately absent from every shipped config:
+# the spec says it "MUST NOT be exposed on public-facing RPC APIs" and "is strongly
+# recommended to be disabled by default". hive is exactly the environment it is for,
+# so it is opted in here and ONLY here.
+FLAGS="$FLAGS -Dfukuii.network.rpc.apis=eth,web3,net,debug,txpool,admin,testing"
 
 # Engine API — only enable for post-merge chains (TTD is not MAX)
 if [ "$TTD" != "$MAX" ]; then
