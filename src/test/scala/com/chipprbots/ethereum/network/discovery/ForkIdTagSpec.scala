@@ -27,7 +27,7 @@ class ForkIdTagSpec extends AnyWordSpec with Matchers:
   private val dummySig = Signature(BitVector.empty)
 
   private def makeTag(head: BigInt, conf: com.chipprbots.ethereum.utils.BlockchainConfig = etcConf): ForkIdTag =
-    new ForkIdTag(() => etcGenesis, conf, () => head)
+    new ForkIdTag(() => etcGenesis, () => 0L, conf, () => head)
 
   private def enrWith(forkId: ForkId): EthereumNodeRecord =
     EthereumNodeRecord(dummySig, 0L, ethKey -> ByteVector(encode(forkId.toRLPEncodable)))

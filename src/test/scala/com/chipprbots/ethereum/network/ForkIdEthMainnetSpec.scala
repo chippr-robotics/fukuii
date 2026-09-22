@@ -30,13 +30,16 @@ import com.chipprbots.ethereum.utils.Config.*
 class ForkIdEthMainnetSpec extends AnyWordSpec with Matchers:
 
   /** ETH mainnet genesis hash. */
+  /** ETH mainnet's genesis header declares timestamp 0. */
+  private val GenesisTimestamp: Long = 0L
+
   private val mainnetGenesisHash =
     ByteString(Hex.decode("d4e56740f876aef8c010b86a40d5f56745a118d0906a34e69aec8c0db1cb8fa3"))
 
   private val ethConf: BlockchainConfig = blockchains.blockchains("eth")
 
   private def create(head: BigInt, ts: Long): ForkId =
-    ForkId.create(mainnetGenesisHash, ethConf)(head, ts)
+    ForkId.create(mainnetGenesisHash, GenesisTimestamp, ethConf)(head, ts)
 
   "ForkId for ETH mainnet" must {
 
@@ -91,7 +94,7 @@ class ForkIdEthMainnetSpec extends AnyWordSpec with Matchers:
           override val drainList = d.drainList
           override val includeOnForkIdList: Boolean = false
       })
-      ForkId.create(mainnetGenesisHash, daoExcluded)(17000000, 1681338455L) shouldBe
+      ForkId.create(mainnetGenesisHash, GenesisTimestamp, daoExcluded)(17000000, 1681338455L) shouldBe
         ForkId(0x5de97580L, Some(1710338135L))
     }
 
@@ -104,7 +107,7 @@ class ForkIdEthMainnetSpec extends AnyWordSpec with Matchers:
           grayGlacierBlockNumber = Long.MaxValue
         )
       )
-      ForkId.create(mainnetGenesisHash, withoutGlaciers)(23000000, 1760000000L) shouldBe
+      ForkId.create(mainnetGenesisHash, GenesisTimestamp, withoutGlaciers)(23000000, 1760000000L) shouldBe
         ForkId(0x8e91a3e4L, None)
     }
   }

@@ -35,6 +35,9 @@ import com.chipprbots.ethereum.utils.Config.*
 class ForkIdHiveRpcCompatSpec extends AnyWordSpec with Matchers:
 
   /** hive rpc-compat fixture genesis hash (eth_getBlockByNumber/get-genesis.io). */
+  /** hive rpc-compat genesis.json declares `"timestamp": "0x0"`. */
+  private val GenesisTimestamp: Long = 0L
+
   private val fixtureGenesisHash =
     ByteString(Hex.decode("44fd89d504659cd58f48f4796b77a7e7012cf296a2409afa2f6c3cb99b5b3d99"))
 
@@ -81,7 +84,7 @@ class ForkIdHiveRpcCompatSpec extends AnyWordSpec with Matchers:
     */
   private val headBlock = BigInt(54)
 
-  private def create(ts: Long): ForkId = ForkId.create(fixtureGenesisHash, fixtureConf)(headBlock, ts)
+  private def create(ts: Long): ForkId = ForkId.create(fixtureGenesisHash, GenesisTimestamp, fixtureConf)(headBlock, ts)
 
   "ForkId for hive's rpc-compat fixture chain" must {
 
@@ -92,7 +95,7 @@ class ForkIdHiveRpcCompatSpec extends AnyWordSpec with Matchers:
     }
 
     "enumerate every timestamp fork" taggedAs (UnitTest, NetworkTest) in {
-      ForkId.gatherTimestampForks(fixtureConf) shouldBe List[BigInt](390, 420, 450, 480, 510, 540)
+      ForkId.gatherTimestampForks(fixtureConf, GenesisTimestamp) shouldBe List[BigInt](390, 420, 450, 480, 510, 540)
     }
 
     "accumulate all block forks before the first timestamp fork" taggedAs (UnitTest, NetworkTest) in {
@@ -129,6 +132,6 @@ class ForkIdHiveRpcCompatSpec extends AnyWordSpec with Matchers:
           mergeNetsplitBlockNumber = Long.MaxValue
         )
       )
-      ForkId.create(fixtureGenesisHash, withoutGlaciers)(headBlock, 540) shouldBe ForkId(0x5e0cb820L, None)
+      ForkId.create(fixtureGenesisHash, GenesisTimestamp, withoutGlaciers)(headBlock, 540) shouldBe ForkId(0x5e0cb820L, None)
     }
   }

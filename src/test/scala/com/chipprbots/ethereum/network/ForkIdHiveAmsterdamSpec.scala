@@ -37,6 +37,11 @@ import com.chipprbots.ethereum.utils.Config.*
 class ForkIdHiveAmsterdamSpec extends AnyWordSpec with Matchers:
 
   /** hive devp2p fixture genesis hash (chain.rlp block 0). */
+  /** The fixture genesis declares timestamp 0, so every timestamp fork is strictly after genesis and none is dropped
+    * by the EIP-6122 "at or before genesis" rule.
+    */
+  private val GenesisTimestamp: Long = 0L
+
   private val fixtureGenesisHash =
     ByteString(Hex.decode("1518c33dab6ed4dbb2d0c48239ac2f00acc0e28dc43660bb745a0f127552024c"))
 
@@ -75,12 +80,12 @@ class ForkIdHiveAmsterdamSpec extends AnyWordSpec with Matchers:
     * that `gatherBlockForks` is empty is what makes that true, and it fails loudly if a config change ever reintroduces
     * a block fork.
     */
-  private def create(ts: Long): ForkId = ForkId.create(fixtureGenesisHash, fixtureConf)(BigInt(600), ts)
+  private def create(ts: Long): ForkId = ForkId.create(fixtureGenesisHash, GenesisTimestamp, fixtureConf)(BigInt(600), ts)
 
   "ForkId for hive's Amsterdam devp2p fixture chain" must {
 
     "enumerate every timestamp fork, Amsterdam included" taggedAs (UnitTest, NetworkTest) in {
-      ForkId.gatherTimestampForks(fixtureConf) shouldBe List[BigInt](60, 120, 180, 240, 300, 360)
+      ForkId.gatherTimestampForks(fixtureConf, GenesisTimestamp) shouldBe List[BigInt](60, 120, 180, 240, 300, 360)
     }
 
     "carry no block forks, so the checksum chain reaches the timestamps" taggedAs (UnitTest, NetworkTest) in {
@@ -138,13 +143,13 @@ class ForkIdHiveAmsterdamSpec extends AnyWordSpec with Matchers:
       // tail checksum is pinned by ForkIdSepoliaSpec — this asserts the input to that.
       val sepolia = blockchains.blockchains("sepolia")
       sepolia.forkTimestamps.amsterdamTimestamp shouldBe None
-      ForkId.gatherTimestampForks(sepolia) should not contain BigInt(360)
+      ForkId.gatherTimestampForks(sepolia, GenesisTimestamp) should not contain BigInt(360)
     }
 
     "treat a zero timestamp as genesis, not as a checksum entry" taggedAs (UnitTest, NetworkTest) in {
       // shanghaiTimestamp = 0 on the fixture chain. Genesis-active forks are already
       // folded into the genesis hash and must not be accumulated again.
       fixtureConf.forkTimestamps.shanghaiTimestamp shouldBe Some(0L)
-      ForkId.gatherTimestampForks(fixtureConf) should not contain BigInt(0)
+      ForkId.gatherTimestampForks(fixtureConf, GenesisTimestamp) should not contain BigInt(0)
     }
   }
