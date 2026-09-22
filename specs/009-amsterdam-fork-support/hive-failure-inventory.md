@@ -24,6 +24,21 @@ and no claim below rests on it.
 | consume-rlp | c82c89e | 1796 | 4 | 1800 |
 | consensus | c82c89e | denominator unstable — not comparable |
 | sync, smoke-genesis, smoke-network | c82c89e | green |
+| rpc-compat | e33b3e0 | 228 | 19 | 247 |
+| rpc-compat | b4cdc30 | 228 | 19 | 247 |
+| graphql | e33b3e0 | 50 | 2 | 52 |
+| graphql | b4cdc30 | 50 | 2 | 52 |
+| devp2p | e33b3e0 | 44 | 18 | 62 |
+| sync | cd7d670, e33b3e0 | — | 1 | 1 |
+
+The two `b4cdc30` rows are the inertness oracles measured across the pre-execution validation
+fix. Their **method histograms are byte-identical** to `e33b3e0`, not merely their counts:
+rpc-compat 5 `testing_commitBlockV1` / 4 `testing_buildBlockV1` / 3 `debug_traceTransaction` /
+3 `debug_traceBlockByNumber` / 2 `debug_traceBlockByHash` / 1 `eth_sendRawTransaction` /
+1 `eth_config`; graphql `07_eth_gasPrice` and `04_eth_estimateGas_contractDeploy`. That is the
+expected result for the right reason — both suites ingest via `chain.rlp` → `ChainImporter`,
+which already called the same validator battery at `ChainImporter.scala:119`, so the fix
+cannot reach them.
 
 ## devp2p — what the flat 34 concealed
 
@@ -279,7 +294,32 @@ recovery short of a process restart. Pre-change, that trigger caused only a peer
 **Any future attempt must distinguish "this block is consensus-invalid" from "I could not execute
 this block right now".** They are not the same and the error types do not separate them today.
 
-### A pre-existing coverage ceiling, independent of any fix
+### A pre-existing coverage ceiling — CLOSED by b4cdc30
+
+*The section below is the original finding, left as written. It was correct, and it is now
+fixed.* `BlockExecution.executeAndValidateBlocks` passed `alreadyValidated = true`, which at
+`BlockExecution.scala:53` skipped `validateBlockBeforeExecution` — the only caller of
+`blockHeaderValidator.validate` **and** of `ommersValidator.validate` on this path.
+
+Measured before the fix, by `BlockExecutionPreValidationSpec`: a chain of three blocks that
+executes cleanly, with one block's header validator returning `Left(HeaderDifficultyError)`,
+imported as `executed 3 of 3 blocks, error=None`. Same for a block whose ommer validator
+returned `Left(OmmersLengthError)`. After: execution stops at the offending block with a
+`ValidationBeforeExecError`.
+
+Scope, corrected from an earlier claim in this effort: the Engine API does **not** come through
+here. `newPayload` has its own call site at `EngineApiService.scala:355`. The fix therefore
+changes the p2p regular-sync path and the testmode RPC path only, and cannot alter any
+engine-api response status or `validationError` string.
+
+Chesterton's fence: `alreadyValidated = true` was correct in the original Mantis, where blocks
+imported one at a time through a path that always validated first. `6ad1dec` introduced the
+bulk `evaluateBranch` (a bare pass-through that never pre-validates) and `e168554` added the
+extends-best skip; the flag outlived the guarantee it depended on. The `ConsensusAdapter`
+comment the section below calls out is exactly what made it invisible — it was aspirational
+when written and false after those two refactors.
+
+### The original finding
 
 `StdValidators.validateBlockAfterExecution` checks only `gasUsed` and `stateRoot`. The batch
 import path `BlockFetcher` uses (`tryImportBlocks -> evaluateBranch -> forwardAndTranslateConsensusResult`)
@@ -302,5 +342,37 @@ discovery mechanism can reach.
 * Whether B's fix needs sites beyond the two named. The 32 failures prove the fork gate is
   reached first; they do not prove it is the only broken comparison.
 * Whether the 3 devp2p `exit status 1` harness failures are fukuii's at all.
+* ~~Whether `sync`'s intermittency is a flake or a regression.~~ **Settled: neither.** It is a
+  startup race, fixed in `607d61d`. From the run's own simulator log:
+  `error getting block from fukuii (5ee8d3aa): Post "http://172.17.0.5:8545": dial tcp
+  172.17.0.5:8545: connect: connection refused`, 277ms after the container started, against a
+  node whose stdout shows a clean startup — ETH69 handshake with the geth peer succeeded,
+  Engine API up on 8551, `newPayload #3000` accepted, CL beacon head received. Nothing was
+  listening on 8545 yet. `JsonRpcHttpServer.run()` only *requested* the bind and returned
+  `Unit`, while `startEngineApiServer` **awaits** its binding — so 8551 was guaranteed up on
+  return and 8545 was not, and `HIVE_CHECK_LIVE_PORT=8551` declared readiness at the earliest
+  possible instant. Hive hard-fails that connection refusal rather than retrying inside
+  `--client.checktimelimit`, so the result was decided by a sub-second race.
+
+  Two prior fixes each created the other's symptom: binding 8551 first (StdNode) fixed hive
+  declaring readiness on 8545 while `engine_newPayloadV3` hit an unbound 8551; moving the probe
+  to 8551 (Dockerfile) was the same bug from the other side, and its written premise —
+  "fukuii's Engine API server binds AFTER JSON-RPC HTTP" — had by then been inverted by the
+  StdNode change. `607d61d` awaits both bindings and returns the probe to 8545, which is
+  correct *because* of the await: 8545 accepting a connection implies 8551 already does.
+
+  **Two suspect commits were wrongly accused before CI history was checked.** `b91d3fd`'s own
+  run has `sync` PASSING, and `e788857` has no check-runs or workflow runs at all — it was
+  never built, superseded before Actions triggered. The "three consecutive reds after three
+  suspect commits" pattern does not survive contact with the data.
+* Whether fukuii's proposer had other inline consensus-formula copies that have drifted.
+  `a058080` found one: `EngineApiService.scala:669-681` carried an EIP-1559 copy opening with
+  `if parent.header.number == BlockNumber.Zero then parentBaseFee`, a genesis special case
+  neither `BaseFeeCalculator.calcBaseFee` nor go-ethereum has (the London exemption is keyed on
+  `olympiaBlockNumber`). On a London-at-genesis chain that made fukuii propose block 1 at
+  1,000,000,000 where the rule gives 875,000,000, so every block 1 it produced was unacceptable
+  to peers — invisible because nothing on any path recomputed it. `EngineApiService` carries
+  further inline copies of the gas-limit bound (`:262-280`) and the blob-gas formula; whether
+  those have drifted is NOT established.
 * `consensus` suite health, which its unstable denominator makes unmeasurable as run today.
   That is a CI-integrity defect in its own right.
