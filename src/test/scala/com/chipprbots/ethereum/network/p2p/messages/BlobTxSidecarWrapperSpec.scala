@@ -176,7 +176,7 @@ class BlobTxSidecarWrapperSpec extends AnyFlatSpec with Matchers:
 
     val thrown = intercept[RuntimeException](poolWrap(bare).toPooledTransactions)
     thrown.getMessage should include("missing sidecar")
-    thrown.getMessage should not include "wrapper version"
+    (thrown.getMessage should not).include("wrapper version")
   }
 
   it should "reject an unknown 5-element wrapper version as a version defect -- not as missing" in {
@@ -185,7 +185,7 @@ class BlobTxSidecarWrapperSpec extends AnyFlatSpec with Matchers:
 
     val thrown = intercept[RuntimeException](poolWrap(badVersion).toPooledTransactions)
     thrown.getMessage should include("wrapper version")
-    thrown.getMessage should not include "missing sidecar"
+    (thrown.getMessage should not).include("missing sidecar")
   }
 
   it should "reject a 5-element wrapper whose version field is a list rather than a scalar" in {
