@@ -1773,3 +1773,65 @@ Neither runs in this PR's CI: `testEssential` excludes `SyncTest`, the tag these
 names that category as "complex actor choreography that times out under CI load"; Tier 2 is skipped
 for `staging`-targeted PRs. Pre-existing, outside this gate, not caused by this work. Recorded rather
 than changed.
+
+---
+
+## Correction: the consume suites are ~3.5% sampled, not four tests short
+
+The `501368ec9` entry above said consume-engine "stopped at 1469/1473" and consume-rlp "at
+1698/1702", with four tests each still launching, and that raising the time limit lets the suite
+finish. **Wrong denominator.** 1,473 and 1,702 are the tests hive had *started* — hive only learns of
+a test when it begins. pytest's own collection line in the simulator log reads:
+
+| suite | collected | launched in 60m | fraction |
+|---|---:|---:|---:|
+| consume-engine | **42,234** | 1,473 | ~3.5% |
+| consume-rlp | **47,589** | 1,702 | ~3.6% |
+
+`gates.yml`'s recorded 1,499 and 1,808 were truncated runs too, not suite sizes. The error was taking
+hive's count as the total without checking pytest's.
+
+Consequences:
+
+- **80m does not finish these suites.** It buys ~1/3 more coverage per run, still well under 5%.
+  Completing either at parallelism 4 would take on the order of a day. The 80m change is kept for the
+  coverage, with its rationale corrected in the workflow comments.
+- **The timeout tail is permanent.** Every run ends `simulation timed out` with ~4 tests killed
+  mid-launch. Those remain wall-clock artifacts rather than fukuii failures — that half of the
+  earlier entry holds — but they recur every run at whichever position the wall falls.
+- **"8 of 1,473" and "4 of 1,702" are failure rates over a ~3.5% prefix**, not suite results. The
+  rest of each suite has never been exercised on this branch.
+- **consume-engine, consume-rlp and consensus share one shape:** none can complete in CI as
+  configured, so none can go green on their current definition, independent of fukuii's
+  correctness. Making them gateable needs a scoping decision — e.g. a `--sim.limit` subset that
+  completes and is representative of the forks fukuii targets. That is a decision about what the
+  gate is for, and is recorded here rather than made.
+
+### The `test_all_opcodes` fix, and what it says about ETH mainnet
+
+Two causes, each confirmed by diffing all 256 result slots against the EEST v5.4.0 fixture:
+
+- **Paris/Shanghai +15,002 — BASEFEE (0x48, EIP-3198) not executable.** `LondonConfigBuilder`
+  inherited `MagnetoOpCodes` (ETC's Phoenix/Berlin table, no 0x48), and the Shanghai overlay installed
+  `SpiralOpCodes`, also without it. Only slot 0x48 differed. A failed call burns the 35,000 stipend
+  plus a cold no-op SSTORE (2,200); a successful one costs 98 and pays 22,100 to set the slot:
+  35,000 + 2,200 − 98 − 22,100 = 15,002.
+- **Cancun/Prague −49,898 — CLZ (0x1e, EIP-7939, Osaka-only) active early.** The Cancun overlay
+  installed `OlympiaOpCodes`, which contains CLZ. The fixture calls 0x1e **twice**:
+  2×35,000 + 2,200 + 100 − (2×101 + 22,100 + 100) = 49,898. The consensus suite's `testOpcode_1e`
+  lead explained all of it.
+
+Shanghai's value equalling expected-Paris was coincidence: PUSH0's own valid/invalid swing is also
+15,002. Not a PUSH0 bug.
+
+**Wider consequence (inferred, not measured):** fukuii's ETH mainnet configuration takes the same
+London path, so full-syncing ETH mainnet between London and Shanghai would diverge on any transaction
+that executes BASEFEE.
+
+**A pattern, three times over:** an ETH fork overlay borrowing an ETC-named opcode table — Magneto for
+London, Spiral for Shanghai, Olympia for Cancun. `OlympiaOpCodes` is now unreferenced in main code and
+its doc comment wrongly says ETC uses it. Worth a CHASE-QUEUE entry and a structural guard: ETH tables
+should not be defined in terms of ETC-named lists.
+
+The London commit (`aabf156e8`) sits inside `forBlock()`'s block-number dispatch and is under ETC
+review before it is pushed.
