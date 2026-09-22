@@ -119,14 +119,14 @@ class DebugTracingService(
       for
         location <- transactionMappingStorage
           .get(req.txHash)
-          .toRight(JsonRpcError.InvalidParams("Transaction not found"))
+          .toRight(JsonRpcError.LogicError("Transaction not found"))
         TransactionLocation(blockHash, txIndex) = location
         block <- blockchainReader
           .getBlockByHash(BlockHash(blockHash))
-          .toRight(JsonRpcError.InvalidParams(s"Block not found for hash ${blockHash.toHex}"))
+          .toRight(JsonRpcError.LogicError(s"Block not found for hash ${blockHash.toHex}"))
         parentHeader <- blockchainReader
           .getBlockHeaderByHash(block.header.parentHash)
-          .toRight(JsonRpcError.InvalidParams("Parent block not found"))
+          .toRight(JsonRpcError.LogicError("Parent block not found"))
         stxs = SignedTransactionWithSender.getSignedTransactions(block.body.transactionList)
         _ <- Either.cond(
           txIndex >= 0 && txIndex < stxs.length,
@@ -202,7 +202,7 @@ class DebugTracingService(
       for
         block <- blockchainReader
           .getBlockByHash(BlockHash(req.blockHash))
-          .toRight(JsonRpcError.InvalidParams(s"Block not found for hash ${req.blockHash.toHex}"))
+          .toRight(JsonRpcError.LogicError(s"Block not found for hash ${req.blockHash.toHex}"))
         result <- traceAllTxsInBlock(block, req.config)
       yield TraceBlockByHashResponse(result)
     }.recover { case _: MissingNodeException =>
@@ -235,7 +235,7 @@ class DebugTracingService(
   private def traceAllTxsInBlock(block: Block, config: TraceConfig): Either[JsonRpcError, Seq[JValue]] =
     blockchainReader
       .getBlockHeaderByHash(block.header.parentHash)
-      .toRight(JsonRpcError.InvalidParams("Parent block header not found"))
+      .toRight(JsonRpcError.LogicError("Parent block header not found"))
       .map { parentHeader =>
         val stxs = SignedTransactionWithSender.getSignedTransactions(block.body.transactionList)
         stxs.zipWithIndex.map { case (stx, txIndex) =>
@@ -308,15 +308,15 @@ class DebugTracingService(
       for
         block <- blockchainReader
           .getBlockByHash(BlockHash(req.blockHash))
-          .toRight(JsonRpcError.InvalidParams(s"Block not found for hash ${req.blockHash.toHex}"))
+          .toRight(JsonRpcError.LogicError(s"Block not found for hash ${req.blockHash.toHex}"))
         _ <- Either.cond(
           block.header.number.value > 0,
           (),
-          JsonRpcError.InvalidParams("Genesis block is not traceable")
+          JsonRpcError.LogicError("Genesis block is not traceable")
         )
         parentHeader <- blockchainReader
           .getBlockHeaderByHash(block.header.parentHash)
-          .toRight(JsonRpcError.InvalidParams("Parent block header not found"))
+          .toRight(JsonRpcError.LogicError("Parent block header not found"))
         stxs = SignedTransactionWithSender.getSignedTransactions(block.body.transactionList)
         roots =
           if stxs.isEmpty then Seq.empty
