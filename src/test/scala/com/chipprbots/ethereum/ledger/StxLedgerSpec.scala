@@ -66,9 +66,9 @@ class StxLedgerSpec extends AnyFlatSpec with Matchers with Logger:
     * expected `0x1b551` = 111953; fukuii returned `0xa959` = 43353, short by exactly 68600 = 343 (the deployed runtime
     * code's byte length) * 200 (`G_codedeposit`) — the code-deposit cost was silently omitted from the estimate.
     *
-    * Root cause: `VM.saveNewContract` (VM.scala), pre-Homestead branch. Frontier's `exceptionalFailedCodeDeposit
-    * \= false` correctly skips the revert/burn-all-gas penalty for a CREATE that ran out of gas paying the code
-    * deposit, but the code returned `result` completely unchanged — including `error = None`. That makes
+    * Root cause: `VM.saveNewContract` (VM.scala), pre-Homestead branch. Frontier's `exceptionalFailedCodeDeposit \=
+    * false` correctly skips the revert/burn-all-gas penalty for a CREATE that ran out of gas paying the code deposit,
+    * but the code returned `result` completely unchanged — including `error = None`. That makes
     * `binarySearchGasEstimation` (which reads `TxResult.vmError`) treat "ran the init code, produced runtime bytes, but
     * couldn't afford to store them" as a SUCCESS, so the binary search converges on the minimum gas to merely RUN the
     * init code, never the minimum to actually deploy it.
