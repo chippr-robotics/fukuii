@@ -93,7 +93,7 @@ object DebugTracingJsonMethodsImplicits extends JsonMethodsImplicits:
             Left(JsonRpcError.InvalidParams())
 
       override def encodeJson(t: TraceBlockByHashResponse): JValue =
-        JArray(t.results.toList)
+        JArray(t.results.map(encodeTxTraceResult).toList)
 
   given debug_traceBlockByNumber: JsonMethodCodec[TraceBlockByNumberRequest, TraceBlockByNumberResponse] =
     new JsonMethodCodec[TraceBlockByNumberRequest, TraceBlockByNumberResponse]:
@@ -108,7 +108,7 @@ object DebugTracingJsonMethodsImplicits extends JsonMethodsImplicits:
             Left(JsonRpcError.InvalidParams())
 
       override def encodeJson(t: TraceBlockByNumberResponse): JValue =
-        JArray(t.results.toList)
+        JArray(t.results.map(encodeTxTraceResult).toList)
 
   given debug_intermediateRoots: JsonMethodCodec[IntermediateRootsRequest, IntermediateRootsResponse] =
     new JsonMethodCodec[IntermediateRootsRequest, IntermediateRootsResponse]:
@@ -145,6 +145,14 @@ object DebugTracingJsonMethodsImplicits extends JsonMethodsImplicits:
         }.toList)
 
   // ─── Helpers ──────────────────────────────────────────────────────────────────
+
+  /** Wraps a per-tx block-trace result with its originating tx hash, per the execution-apis / hive openrpc-tracer.json
+    * schema, which requires every debug_traceBlockByHash / debug_traceBlockByNumber array entry to carry both `txHash`
+    * and `result`. debug_traceTransaction / debug_traceCall are NOT wrapped this way — they correctly return the bare
+    * result object.
+    */
+  private def encodeTxTraceResult(r: TxTraceResult): JValue =
+    JObject("txHash" -> encodeAsHex(r.txHash), "result" -> r.result)
 
   /** Decodes an optional TraceConfig from a JSON object parameter. Absent or JNull → default TraceConfig().
     *

@@ -75,10 +75,17 @@ object DebugTracingService:
   case class TraceCallManyResponse(results: Seq[JValue])
 
   case class TraceBlockByHashRequest(blockHash: ByteString, config: TraceConfig = TraceConfig())
-  case class TraceBlockByHashResponse(results: Seq[JValue])
+  case class TraceBlockByHashResponse(results: Seq[TxTraceResult])
 
   case class TraceBlockByNumberRequest(block: BlockParam, config: TraceConfig = TraceConfig())
-  case class TraceBlockByNumberResponse(results: Seq[JValue])
+  case class TraceBlockByNumberResponse(results: Seq[TxTraceResult])
+
+  /** One transaction's trace result within a block-level trace (debug_traceBlockByHash / debug_traceBlockByNumber). The
+    * execution-apis / hive openrpc-tracer.json schema requires each array entry to carry BOTH `txHash` and `result` —
+    * go-ethereum's traceBlock wraps every per-tx trace the same way so callers can correlate a result with the
+    * transaction that produced it without re-deriving hashes.
+    */
+  case class TxTraceResult(txHash: ByteString, result: JValue)
 
   /** debug_intermediateRoots params — block hash, optional trace config (ignored for root computation). */
   case class IntermediateRootsRequest(blockHash: ByteString, config: TraceConfig = TraceConfig())
@@ -227,23 +234,32 @@ class DebugTracingService(
 
   // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-  /** Replays all transactions in a block, returning one trace result per tx.
+  /** Replays all transactions in a block, returning one trace result per tx, each tagged with its tx hash.
     *
-    * Each tx is traced independently with a fresh tracer, using advanceWorldToTx to reproduce the exact world state the
-    * tx saw on-chain.
+    * Threads the world state forward tx-by-tx instead of calling advanceWorldToTx per index: advanceWorldToTx replays
+    * every prior tx from the parent state root, so calling it once per index makes this method O(n^2) in the
+    * transaction count. simulateTransactionWithTracer already returns the post-tx world in TxResult.worldState, so we
+    * carry that into the next iteration and only build the genuine parent-state world once (matches core-geth's
+    * traceBlock, which steps one statedb forward). advanceWorldToTx itself is untouched — traceTransaction legitimately
+    * uses it for a single index.
     */
-  private def traceAllTxsInBlock(block: Block, config: TraceConfig): Either[JsonRpcError, Seq[JValue]] =
+  private def traceAllTxsInBlock(block: Block, config: TraceConfig): Either[JsonRpcError, Seq[TxTraceResult]] =
     blockchainReader
       .getBlockHeaderByHash(block.header.parentHash)
       .toRight(JsonRpcError.LogicError("Parent block header not found"))
       .map { parentHeader =>
         val stxs = SignedTransactionWithSender.getSignedTransactions(block.body.transactionList)
-        stxs.zipWithIndex.map { case (stx, txIndex) =>
-          val world = stxLedger.advanceWorldToTx(block.header, stxs, txIndex, parentHeader.stateRoot.value)
-          val tracer = selectTracer(config, Some(world))
-          stxLedger.simulateTransactionWithTracer(stx, block.header, Some(world), tracer)
-          tracer.getResult
-        }
+        if stxs.isEmpty then Seq.empty
+        else
+          var currentWorld = stxLedger.advanceWorldToTx(block.header, stxs, 0, parentHeader.stateRoot.value)
+          val resultsBuf = scala.collection.mutable.ArrayBuffer[TxTraceResult]()
+          stxs.foreach { stx =>
+            val tracer = selectTracer(config, Some(currentWorld))
+            val txResult = stxLedger.simulateTransactionWithTracer(stx, block.header, Some(currentWorld), tracer)
+            resultsBuf += TxTraceResult(stx.tx.hash.value, tracer.getResult)
+            currentWorld = txResult.worldState
+          }
+          resultsBuf.toSeq
       }
 
   /** Selects and constructs a tracer based on config.tracer.
