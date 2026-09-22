@@ -81,6 +81,12 @@ abstract class BaseNode extends Node:
     // Fixing either alone just moves the race to the other port.
     //
     // No-op when the Engine API is disabled (e.g. ETC mainnet).
+    //
+    // Bind the p2p import path's invalid-chain channel first. It must be live before
+    // startSyncController() below, or a consensus-invalid block imported in the first moments of
+    // sync would be rejected with no way to tell the CL. Also a no-op when the Engine API is
+    // disabled, and for the same reason: see EngineApiBuilder.bindInvalidChainReporter.
+    bindInvalidChainReporter()
     startEngineApiServer()
     startJsonRpcHttpServer()
     startJsonRpcWsServer()

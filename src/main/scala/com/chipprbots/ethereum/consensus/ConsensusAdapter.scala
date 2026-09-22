@@ -1,5 +1,7 @@
 package com.chipprbots.ethereum.consensus
 
+import org.apache.pekko.util.ByteString
+
 import cats.data.NonEmptyList
 import cats.effect.IO
 import cats.effect.unsafe.IORuntime
@@ -18,6 +20,7 @@ import com.chipprbots.ethereum.consensus.Consensus.ExtendedCurrentBestBranch
 import com.chipprbots.ethereum.consensus.Consensus.ExtendedCurrentBestBranchPartially
 import com.chipprbots.ethereum.consensus.Consensus.KeptCurrentBestBranch
 import com.chipprbots.ethereum.consensus.Consensus.SelectedNewBestBranch
+import com.chipprbots.ethereum.consensus.engine.InvalidChainReporter
 import com.chipprbots.ethereum.domain.Block
 import com.chipprbots.ethereum.domain.BlockHash
 import com.chipprbots.ethereum.domain.BlockHeader
@@ -38,8 +41,29 @@ class ConsensusAdapter(
     blockchainReader: BlockchainReader,
     blockQueue: BlockQueue,
     blockValidation: BlockValidation,
-    validationScheduler: IORuntime
+    validationScheduler: IORuntime,
+    // Same channel `ConsensusImpl` holds. Present here only so `BlockImporter` — which already depends on this
+    // class and on nothing else in the consensus package — can report the ONE case `ConsensusImpl` deliberately
+    // refuses to classify: the gas-used mismatch, which needs `findMissingContractCode` to disambiguate and so can
+    // only be decided in `BlockImporter`. `None` on ETC/Mordor/Gorgoroth.
+    invalidChainReporter: Option[InvalidChainReporter] = None
 ) extends Logger:
+
+  /** Report a block the import path has PROVEN consensus-invalid, so `engine_newPayload` / `engine_forkchoiceUpdated`
+    * can answer INVALID for it and its descendants.
+    *
+    * Deliberately not a general hook. The only caller is `BlockImporter`'s gas-used branch, on the arm where
+    * `findMissingContractCode` returned `None` — i.e. after the recoverable "we are missing bytecode, fetch it over
+    * SNAP and retry" reading has been positively excluded. Every other error type is classified upstream by
+    * `ConsensusImpl.reportIfProvenInvalid`, which still has the typed `BlockExecutionError`; by the time a failure
+    * reaches `BlockImporter` it is a `String` and cannot be classified safely.
+    *
+    * @param latestValidHash
+    *   must be the last VALIDATED ancestor, which on the import path is the failing block's parent.
+    */
+  def reportInvalidChain(blockHash: ByteString, latestValidHash: ByteString): Unit =
+    invalidChainReporter.foreach(_.reportInvalid(blockHash, latestValidHash))
+
   def evaluateBranchBlock(
       block: Block
   )(implicit blockExecutionScheduler: IORuntime, blockchainConfig: BlockchainConfig): IO[BlockImportResult] =

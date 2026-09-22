@@ -85,6 +85,14 @@ object StdValidators:
     val header = block.header
     val blockAndReceiptsValidation = self.blockValidator.validateBlockAndReceipts(header, receipts)
 
+    // DO NOT REORDER THE gasUsed AND stateRoot CHECKS BELOW. The gasUsed check MUST come first and MUST return
+    // early. `InvalidChainReporter.provesConsensusInvalid` reports a state-root mismatch to the Engine API as a
+    // proven consensus failure, and the ONLY reason that is safe is this ordering: reaching the state-root branch
+    // proves gasUsed already matched, which proves execution was complete. A node missing contract code executes a
+    // contract call as a plain transfer (`InMemoryWorldStateProxy.getCode` returns ByteString.empty rather than
+    // throwing), which perturbs gas and would trip the FIRST branch — where the mismatch stays ambiguous and is
+    // disambiguated by `BlockImporter.findMissingContractCode`. Swap these two and a partially-synced node starts
+    // permanently marking honest blocks invalid through the state-root branch, and refuses its own canonical chain.
     if header.gasUsed.value != gasUsed then
       Left(ValidationAfterExecError(s"Block has invalid gas used, expected ${header.gasUsed} but got $gasUsed"))
     else if header.stateRoot.value != stateRootHash then

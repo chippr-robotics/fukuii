@@ -545,6 +545,16 @@ final private class BlockImporterLogic(
                     ResolvingMissingNode(NonEmptyList(failedBlock, notImportedBlocks.tail))
                   case None =>
                     log.error("Gas mismatch on block {} but no missing contract code found", failedBlock.number)
+                    // This arm — and ONLY this arm — is where a gas-used mismatch is proven to be a real consensus
+                    // failure rather than a missing-bytecode artifact. `InMemoryWorldStateProxy.getCode` returns
+                    // ByteString.empty instead of throwing when code is absent, so a partially-synced node
+                    // under-counts gas on an honest block and lands in the sibling `Some(codeHash)` arm above, which
+                    // fetches the code over SNAP and retries. Having positively excluded that reading, tell the
+                    // Engine API so newPayload/forkchoiceUpdated can answer INVALID for this block and its
+                    // descendants. latestValidHash = the failing block's parent: execution proceeds in order and
+                    // stops at the first failure, so the parent is the last block we validated.
+                    // No-op unless the Engine API is enabled (ETC/Mordor/Gorgoroth never bind a reporter).
+                    consensus.reportInvalidChain(failedBlock.hash.value, failedBlock.header.parentHash.value)
                     val invalidBlockNr = failedBlock.number.value
                     fetcher ! BlockFetcher.InvalidateBlocksFrom(invalidBlockNr, err.toString)
                     Running

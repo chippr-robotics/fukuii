@@ -7,6 +7,7 @@ import cats.effect.unsafe.IORuntime
 import scala.annotation.tailrec
 
 import com.chipprbots.ethereum.consensus.Consensus.*
+import com.chipprbots.ethereum.consensus.engine.InvalidChainReporter
 import com.chipprbots.ethereum.domain.Block
 import com.chipprbots.ethereum.domain.BlockHash
 import com.chipprbots.ethereum.domain.BlockHeader
@@ -15,6 +16,7 @@ import com.chipprbots.ethereum.domain.BlockchainWriter
 import com.chipprbots.ethereum.domain.ChainWeight
 import com.chipprbots.ethereum.ledger.BlockData
 import com.chipprbots.ethereum.ledger.BlockExecution
+import com.chipprbots.ethereum.ledger.BlockExecutionError
 import com.chipprbots.ethereum.ledger.BlockExecutionError.MPTError
 import com.chipprbots.ethereum.ledger.BlockMetrics
 import com.chipprbots.ethereum.mpt.MerklePatriciaTrie.MissingNodeException
@@ -26,9 +28,48 @@ import com.chipprbots.ethereum.utils.Logger
 class ConsensusImpl(
     blockchainReader: BlockchainReader,
     blockchainWriter: BlockchainWriter,
-    blockExecution: BlockExecution
+    blockExecution: BlockExecution,
+    // Narrow, one-way channel into the Engine API's invalid-block registry. `None` on every network that does not
+    // run an Engine API (ETC/Mordor/Gorgoroth), which makes every call below a no-op there. See
+    // [[com.chipprbots.ethereum.consensus.engine.InvalidChainReporter]].
+    invalidChainReporter: Option[InvalidChainReporter] = None
 ) extends Consensus
     with Logger:
+
+  /** Tell the consensus layer that `failingBlock` is consensus-invalid, but ONLY when the execution error proves it.
+    *
+    * This is the only place on the bulk p2p import path where the TYPED `BlockExecutionError` and the branch are both
+    * in scope; `ConsensusAdapter` already reduced the error to a `String` one frame up, and `BlockImporter` sees only
+    * that string. Classification therefore has to happen here.
+    *
+    * latestValidHash = `failingBlock.header.parentHash`. That is exactly "the most recent valid block in the branch
+    * defined by payload and its ancestors" required by the Engine API spec, and it is correct in all three arrival
+    * shapes because `BlockExecution.executeAndValidateBlocks` executes in order and stops at the first failure, so the
+    * executed set is always a prefix of the branch:
+    *   - some blocks of this batch executed => the parent is the last of them;
+    *   - none executed => the parent is the branch's parent, which we either just had as canonical head
+    *     (`importToTop`'s guard) or had previously executed (`importToNewBranch` resolved a stored chain weight for it,
+    *     and weights are written only after a successful execution).
+    * In the side-chain (reorg) case that parent is a validated but non-canonical block, which is what hive's
+    * invalid-ancestor tests expect — not the canonical head.
+    */
+  private def reportIfProvenInvalid(failingBlock: Block, error: BlockExecutionError): Unit =
+    invalidChainReporter.foreach { reporter =>
+      if InvalidChainReporter.provesConsensusInvalid(error) then
+        log.warn(
+          "Reporting block {} ({}) as consensus-invalid to the Engine API: {}",
+          failingBlock.number,
+          failingBlock.header.hashAsHexString,
+          error.describe
+        )
+        reporter.reportInvalid(failingBlock.hash.value, failingBlock.header.parentHash.value)
+      else
+        log.debug(
+          "Not reporting block {} as invalid — error does not prove invalidity: {}",
+          failingBlock.number,
+          error.describe
+        )
+    }
 
   /** Try to set the given branch as the new best branch if it is better than the current best branch.
     * @param branch
@@ -111,11 +152,17 @@ class ConsensusImpl(
         ConsensusErrorDueToMissingNode(Nil, reason)
 
       case (Nil, Some(error)) =>
+        // Nothing executed, so the failing block is the branch head and its parent is the current best block
+        // (guaranteed by handleBranchImport's `currentBestHeader.hash == branch.head.header.parentHash` guard).
+        reportIfProvenInvalid(branch.head, error)
         BranchExecutionFailure(Nil, branch.head.header.hash.value, error.toString)
 
       case (importedBlocks, Some(error)) =>
         saveLastBlock(importedBlocks)
         val failingBlock = branch.toList.drop(importedBlocks.length).head
+        // NB: this arm maps to `BlockImportedToTop` in ConsensusAdapter, which DISCARDS `error`. Reporting here is
+        // the only signal that escapes a partially-successful batch at all.
+        reportIfProvenInvalid(failingBlock, error)
         ExtendedCurrentBestBranchPartially(
           importedBlocks,
           BranchExecutionFailure(Nil, failingBlock.hash.value, error.toString)
@@ -178,9 +225,13 @@ class ConsensusImpl(
           newBranch.last.number,
           error
         )
+        val failingBlock = newBranch.toList.drop(executedBlocks.length).head
+        // Side-chain case. `failingBlock.header.parentHash` is a validated but (until this batch) non-canonical
+        // block — precisely the latestValidHash hive's invalid-ancestor tests assert on.
+        reportIfProvenInvalid(failingBlock, error)
         BranchExecutionFailure(
           executedBlocks.map(_.block),
-          newBranch.toList.drop(executedBlocks.length).head.hash.value,
+          failingBlock.hash.value,
           s"Error while trying to reorganise chain: $error"
         )
 

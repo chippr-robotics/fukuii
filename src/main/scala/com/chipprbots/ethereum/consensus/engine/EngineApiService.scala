@@ -125,6 +125,30 @@ class EngineApiService(
         markInvalidRecursive(child, lvh)
     }
 
+  /** The one-way entry point the p2p import path uses to put a block into `invalidBlocks`.
+    *
+    * `invalidBlocks` and `markInvalidRecursive` stay private: this is deliberately the only door, it takes exactly the
+    * two values the registry stores, and it returns nothing. A consensus-invalid block found by `BlockImporter` is
+    * otherwise invisible to `newPayload`/`forkchoiceUpdated`, which then answer SYNCING/ACCEPTED forever.
+    *
+    * Recursion is intentional and is the same `markInvalidRecursive` the engine path uses: descendants that were
+    * optimistically accepted while their ancestor was unknown must inherit the verdict and the same `latestValidHash`.
+    * Unlike the engine-side call sites this does NOT remove the reported block itself from storage — on the import path
+    * a block that failed execution was never saved (`BlockExecution.executeAndValidateBlocks` only writes on `Right`),
+    * and `BlockImporter` separately tells `BlockFetcher` to invalidate and blacklist it.
+    *
+    * See [[InvalidChainReporter]] for which errors may legitimately arrive here.
+    */
+  val invalidChainReporter: InvalidChainReporter =
+    (blockHash, latestValidHash) =>
+      log.warn(
+        "[ENGINE-API] import path reported block {} consensus-invalid, latestValidHash={}",
+        com.chipprbots.ethereum.utils.ByteStringUtils.hash2string(blockHash),
+        com.chipprbots.ethereum.utils.ByteStringUtils.hash2string(latestValidHash)
+      )
+      EngineApiMetrics.recordImportPathInvalidReport()
+      markInvalidRecursive(blockHash, latestValidHash)
+
   /** Return the latest block number from the blockchain storage. */
   def getLatestBlockNumber: BigInt =
     blockchainReader.getBestBlockNumber

@@ -262,6 +262,8 @@ trait BlockQueueBuilder:
 trait ConsensusBuilder:
   self: BlockchainBuilder & BlockQueueBuilder & MiningBuilder & ActorSystemBuilder & StorageBuilder =>
 
+  import com.chipprbots.ethereum.consensus.engine.InvalidChainReporter
+
   lazy val blockValidation = new BlockValidation(mining, blockchainReader, blockQueue)
   lazy val blockExecution = new BlockExecution(
     blockchain,
@@ -272,11 +274,23 @@ trait ConsensusBuilder:
     blockValidation
   )
 
+  /** Late-bound channel from the p2p import path into the Engine API's invalid-block registry.
+    *
+    * Constructed unconditionally and inert until something binds it. `EngineApiBuilder.bindInvalidChainReporter()` is
+    * the only binder and it is gated on `network.engine-api.enabled`, so on ETC/Mordor/Gorgoroth this stays unbound for
+    * the life of the node and every `reportInvalid` is a no-op.
+    *
+    * It has to be late-bound rather than injected: `EngineApiBuilder` already depends on `ConsensusBuilder` for
+    * `blockExecution`, so the reverse dependency would be a cake cycle.
+    */
+  lazy val invalidChainReporter: InvalidChainReporter.LateBound = new InvalidChainReporter.LateBound
+
   lazy val consensus: Consensus =
     new ConsensusImpl(
       blockchainReader,
       blockchainWriter,
-      blockExecution
+      blockExecution,
+      Some(invalidChainReporter)
     )
 
   lazy val chainImporter: ChainImporter =
@@ -288,7 +302,8 @@ trait ConsensusBuilder:
       blockchainReader,
       blockQueue,
       blockValidation,
-      IORuntime.global
+      IORuntime.global,
+      Some(invalidChainReporter)
     )
 
 trait ForkResolverBuilder:
@@ -824,7 +839,7 @@ trait JSONRpcHealthcheckerBuilder:
       classicSystem.toTyped.scheduler
     )
 
-trait EngineApiBuilder:
+trait EngineApiBuilder extends Logger:
   self: ActorSystemBuilder & BlockchainBuilder & BlockchainConfigBuilder & ConsensusBuilder & StorageBuilder &
     MiningBuilder & PendingTransactionsManagerBuilder & InstanceConfigProvider & JSONRpcControllerBuilder =>
 
@@ -852,6 +867,21 @@ trait EngineApiBuilder:
     )(blockchainConfig, typedScheduler)
 
   lazy val engineApiController: EngineApiController = new EngineApiController(engineApiService, Some(jsonRpcController))
+
+  /** Bind the p2p import path's invalid-chain channel to this node's Engine API registry. Called once, from
+    * `StdNode.start()`, before sync begins.
+    *
+    * Gated on `engineApiConfig.enabled`, NOT on the existence of an `EngineApiService`: `Node` constructs one
+    * unconditionally to back the `testing_*` JSON-RPC namespace, so on ETC/Mordor/Gorgoroth an instance exists but the
+    * server is off. Binding there would let the import path write INVALID verdicts into a registry nothing reads, on a
+    * chain family this feature has no business touching. With the config gate, ETC leaves the holder unbound and
+    * `BlockImporter`/`ConsensusImpl` behave exactly as before this feature existed.
+    */
+  def bindInvalidChainReporter(): Unit =
+    if engineApiConfig.enabled then
+      invalidChainReporter.bind(engineApiService.invalidChainReporter)
+      log.info("Engine API enabled: p2p import path can now report consensus-invalid chains to the CL")
+    else log.debug("Engine API disabled: p2p import path invalid-chain reporting stays inert")
 
   lazy val maybeEngineApiServer: Option[EngineApiHttpServer] =
     if engineApiConfig.enabled then
