@@ -30,8 +30,24 @@ and no claim below rests on it.
 | rpc-compat | fc713a9 | 228 | 19 | 247 |
 | graphql | fc713a9 | 50 | 2 | 52 |
 | devp2p | fc713a9 | 44 | 18 | 62 |
-| sync | fc713a9 | GREEN | 0 | 1 |
-| sync | 3bbc861 | — | **1** | 1 | <- RED AGAIN. Not fixed. See below.
+| sync | fc713a9 | 10 | **1 real + 1 gate-excluded** | 12 | gate said 0 |
+| sync | 3bbc861 | 10 | **2 real, 1 gate-excluded** | 12 | gate said 1 |
+| sync | 672e410 | — | red | 12 | docs-only commit |
+
+**The sync row was wrong in an earlier revision of this file and the error is worth naming.**
+It recorded `fc713a9` as "GREEN / 0 failing / 1 total". All three numbers were wrong. The
+suite has **12** tests, not 1. That run had **one real failure** — test 9,
+`sync go-ethereum from fukuii`. It reported zero because `.github/workflows/hive-sync.yml:69`
+sets
+
+    gate_exclude: 'sync go-ethereum from fukuii|sync fukuii from nethermind'
+
+and test 9 is documented there as failing since 2026-05-14. The GATE was zero; the SUITE was
+11/12. Reading a gate result as a suite result is exactly the mistake this document's opening
+rule — derive counts from `summaryResult.pass` — exists to prevent, and it was made anyway.
+
+Confirmed from each run's own `hive-run.log`: fc713a9 ends `tests=18 failed=1`, 3bbc861 ends
+`tests=18 failed=2` (18 = both suites; sync is suite 1 of 2).
 | consensus | fc713a9 | denominator unstable — 7 failing, not comparable |
 | rpc-compat | e33b3e0 | 228 | 19 | 247 |
 | rpc-compat | b4cdc30 | 228 | 19 | 247 |
@@ -351,7 +367,31 @@ discovery mechanism can reach.
 * Whether B's fix needs sites beyond the two named. The 32 failures prove the fork gate is
   reached first; they do not prove it is the only broken comparison.
 * Whether the 3 devp2p `exit status 1` harness failures are fukuii's at all.
-* **Whether `sync` is fixed. IT IS NOT, and an earlier version of this entry overstated it.**
+* **Whether `sync` is fixed. IT IS NOT — and both commits I suspected are CLEARED.**
+
+  Settled from both runs' artifacts. `git diff fc713a9 3bbc861 -- StdNode.scala` and
+  `-- hive/fukuii/Dockerfile` are **empty**: the Await-bind and HIVE_CHECK_LIVE_PORT=8545 are
+  byte-identical between the green run and the red one. `9501d25` only wraps the two
+  `entity(as[...])` alternatives inside an ALREADY-BOUND route, so it cannot produce "nothing
+  listening", and the failure is a TCP `connection refused` 261ms in with no 5s gap anywhere.
+  `d288bfb` is cleared from the wire, not by assumption: every PEER_HANDSHAKE_SUCCESS in both
+  runs reads `cap=ETH69`, ETH70 appears nowhere, so that branch is unreached.
+
+  The real delta is ONE test, `sync fukuii from go-ethereum`, flipping with the
+  pre-607d61d signature: `dial tcp :8545: connect: connection refused`, first attempt, no
+  retry, against a node whose own log shows a healthy ETH69 handshake and two answered Engine
+  API calls immediately before. hive-sync.yml's own comments flag this specific test as the
+  suite's most fragile under CPU contention during concurrent JVM warmup on a 2-core runner.
+  Whether this occurrence is that contention class or other jitter is **NOT ESTABLISHED** —
+  the artifact carries no scheduler telemetry.
+
+  So `607d61d` removed a real mechanism and did not make the suite deterministic. Both
+  statements are true and neither implies the other.
+
+  Note for future investigations: the SYNC artifacts DO contain
+  `workspace/logs/fukuii/client-*.log`. The engine artifact did not. That asymmetry is why
+  the 48-test "never reports vs reports too late" question stayed open, and it may be
+  answerable from a suite whose artifact keeps client logs.
   `607d61d` removed a mechanism that provably produced the observed failure — that part still
   holds and the evidence for it is below. But the suite went GREEN on `fc713a9` and RED again
   on `3bbc861`, so one green run was never sufficient evidence for "fixed", least of all for a
