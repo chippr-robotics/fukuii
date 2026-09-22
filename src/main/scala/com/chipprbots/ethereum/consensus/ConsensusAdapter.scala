@@ -68,7 +68,15 @@ class ConsensusAdapter(
           // During sequential sync, each block's parent was just saved by the previous iteration.
           // doBlockPreValidation runs on a different thread pool (validationScheduler) which can
           // race with the storage write, causing intermittent HeaderParentNotFoundError.
-          // The consensus.evaluateBranch will validate blocks during execution.
+          //
+          // Skipping here is safe ONLY because BlockExecution.executeAndValidateBlocks now passes
+          // alreadyValidated = false, so every block is validated on the single-threaded @tailrec
+          // execution loop before it executes. Until that change the claim below was aspirational
+          // and this skip, together with `evaluateBranch`'s unconditional pass-through, was the
+          // whole of the gap: peer-supplied blocks reached execution with unchecked headers.
+          // Do not restore doBlockPreValidation in `evaluateBranch` to compensate -- that would
+          // reintroduce the cross-thread race this skip exists to avoid, and duplicate work
+          // BlockExecution already does on the right thread.
           val validated =
             if bestHeader.hash == block.header.parentHash then
               IO.pure(Right(BlockExecutionSuccess): Either[ValidationBeforeExecError, BlockExecutionSuccess])

@@ -325,7 +325,28 @@ class BlockExecution(
       if remainingBlocksIncOrder.isEmpty then (executedBlocksDecOrder.reverse, None)
       else
         val blockToExecute = remainingBlocksIncOrder.head
-        executeAndValidateBlock(blockToExecute, alreadyValidated = true) match
+        // `alreadyValidated = false`: validate each block BEFORE executing it.
+        //
+        // `validateBlockBeforeExecution` is the only caller of
+        // `blockHeaderValidator.validate` and `ommersValidator.validate` on this path
+        // (ValidatorsExecutor.validateBlockBeforeExecution). This method's two callers,
+        // ConsensusImpl.importToTop and ConsensusImpl.importToNewBranch, serve bulk p2p
+        // import and Engine API newPayload, so passing `true` here meant peer-supplied
+        // blocks reached execution with their headers entirely unchecked — no PoW, no
+        // difficulty, no gasLimit bound, no ommer rules — and were accepted outright.
+        // BlockExecutionPreValidationSpec measured that: 3 of 3 blocks executed with
+        // error=None while one block's header validator returned HeaderDifficultyError.
+        //
+        // `true` was a correct contract in the original Mantis, where blocks were imported
+        // one at a time through a path that always validated first. 6ad1dec (bulk
+        // `evaluateBranch`) and e168554 (the extends-best skip in ConsensusAdapter) removed
+        // that guarantee without retiring the flag.
+        //
+        // No thread race here despite the comment at ConsensusAdapter.scala:67-71: `go` is a
+        // single @tailrec loop on one thread, each iteration's `blockchainWriter.save`
+        // completes before the next begins, and `executeBlock` already resolves the parent
+        // header from the same storage at BlockExecution.scala:104-106.
+        executeAndValidateBlock(blockToExecute, alreadyValidated = false) match
           case Right(receipts) =>
             val newWeight = parentWeight.increase(blockToExecute.header)
             val newBlockData = BlockData(blockToExecute, receipts, newWeight)
