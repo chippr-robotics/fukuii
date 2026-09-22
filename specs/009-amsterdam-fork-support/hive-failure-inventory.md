@@ -30,7 +30,8 @@ and no claim below rests on it.
 | rpc-compat | fc713a9 | 228 | 19 | 247 |
 | graphql | fc713a9 | 50 | 2 | 52 |
 | devp2p | fc713a9 | 44 | 18 | 62 |
-| sync | fc713a9 | **GREEN** | 0 | 1 |
+| sync | fc713a9 | GREEN | 0 | 1 |
+| sync | 3bbc861 | — | **1** | 1 | <- RED AGAIN. Not fixed. See below.
 | consensus | fc713a9 | denominator unstable — 7 failing, not comparable |
 | rpc-compat | e33b3e0 | 228 | 19 | 247 |
 | rpc-compat | b4cdc30 | 228 | 19 | 247 |
@@ -350,8 +351,17 @@ discovery mechanism can reach.
 * Whether B's fix needs sites beyond the two named. The 32 failures prove the fork gate is
   reached first; they do not prove it is the only broken comparison.
 * Whether the 3 devp2p `exit status 1` harness failures are fukuii's at all.
-* ~~Whether `sync`'s intermittency is a flake or a regression.~~ **Settled: neither, and
-  CONFIRMED GREEN on `fc713a9`.** It was a startup race, fixed in `607d61d`. From the run's own simulator log:
+* **Whether `sync` is fixed. IT IS NOT, and an earlier version of this entry overstated it.**
+  `607d61d` removed a mechanism that provably produced the observed failure — that part still
+  holds and the evidence for it is below. But the suite went GREEN on `fc713a9` and RED again
+  on `3bbc861`, so one green run was never sufficient evidence for "fixed", least of all for a
+  suite whose entire history is intermittency (the prior pattern was green, green, red, green,
+  red). Either a later commit broke it — `9501d25` wrapped the JSON-RPC POST route in
+  `toStrictEntity`, and the sync sim polls eth_getBlockByNumber on 8545, so it is on the path —
+  or `607d61d` removed one of several mechanisms. Under investigation from the artifact.
+  Treat sync as 1 failing until two consecutive greens, not one.
+
+  The mechanism `607d61d` removed, which remains correctly diagnosed: From the run's own simulator log:
   `error getting block from fukuii (5ee8d3aa): Post "http://172.17.0.5:8545": dial tcp
   172.17.0.5:8545: connect: connection refused`, 277ms after the container started, against a
   node whose stdout shows a clean startup — ETH69 handshake with the geth peer succeeded,
