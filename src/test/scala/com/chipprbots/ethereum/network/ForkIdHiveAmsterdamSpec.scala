@@ -37,8 +37,8 @@ import com.chipprbots.ethereum.utils.Config.*
 class ForkIdHiveAmsterdamSpec extends AnyWordSpec with Matchers:
 
   /** hive devp2p fixture genesis hash (chain.rlp block 0). */
-  /** The fixture genesis declares timestamp 0, so every timestamp fork is strictly after genesis and none is dropped
-    * by the EIP-6122 "at or before genesis" rule.
+  /** The fixture genesis declares timestamp 0, so every timestamp fork is strictly after genesis and none is dropped by
+    * the EIP-6122 "at or before genesis" rule.
     */
   private val GenesisTimestamp: Long = 0L
 
@@ -80,7 +80,8 @@ class ForkIdHiveAmsterdamSpec extends AnyWordSpec with Matchers:
     * that `gatherBlockForks` is empty is what makes that true, and it fails loudly if a config change ever reintroduces
     * a block fork.
     */
-  private def create(ts: Long): ForkId = ForkId.create(fixtureGenesisHash, GenesisTimestamp, fixtureConf)(BigInt(600), ts)
+  private def create(ts: Long): ForkId =
+    ForkId.create(fixtureGenesisHash, GenesisTimestamp, fixtureConf)(BigInt(600), ts)
 
   "ForkId for hive's Amsterdam devp2p fixture chain" must {
 

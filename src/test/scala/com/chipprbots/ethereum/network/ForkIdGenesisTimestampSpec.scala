@@ -17,10 +17,10 @@ import com.chipprbots.ethereum.utils.Config.*
   * go-ethereum's `gatherForks` drops them with `for len(forksByTime) > 0 && forksByTime[0] <= genesis`. fukuii filtered
   * `== 0` instead, which coincides with the correct rule only when the genesis timestamp happens to be zero.
   *
-  * WHY THIS SPEC EXISTS. On hive's engine suite the entire `Genesis=1` Fork ID family failed with
-  * `have 0xb9fc74b5 / want 0x4107882a`: with genesis at time 1 and Cancun also at 1, geth dropped Cancun and fukuii
-  * accumulated it. Twelve tests, one rule. The zero-genesis cases in this spec are the control showing the old rule was
-  * right for that case and only that case — which is why nothing caught it.
+  * WHY THIS SPEC EXISTS. On hive's engine suite the entire `Genesis=1` Fork ID family failed with `have 0xb9fc74b5 /
+  * want 0x4107882a`: with genesis at time 1 and Cancun also at 1, geth dropped Cancun and fukuii accumulated it. Twelve
+  * tests, one rule. The zero-genesis cases in this spec are the control showing the old rule was right for that case
+  * and only that case — which is why nothing caught it.
   *
   * The genesis hash here is synthetic (32 bytes of 0xab) so the checksums are reproducible by hand; each expected value
   * is CRC32 over the genesis hash followed by each accumulated fork as a big-endian uint64, computed independently of

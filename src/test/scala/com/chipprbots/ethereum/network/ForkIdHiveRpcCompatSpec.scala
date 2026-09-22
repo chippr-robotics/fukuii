@@ -132,6 +132,9 @@ class ForkIdHiveRpcCompatSpec extends AnyWordSpec with Matchers:
           mergeNetsplitBlockNumber = Long.MaxValue
         )
       )
-      ForkId.create(fixtureGenesisHash, GenesisTimestamp, withoutGlaciers)(headBlock, 540) shouldBe ForkId(0x5e0cb820L, None)
+      ForkId.create(fixtureGenesisHash, GenesisTimestamp, withoutGlaciers)(headBlock, 540) shouldBe ForkId(
+        0x5e0cb820L,
+        None
+      )
     }
   }

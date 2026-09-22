@@ -24,9 +24,9 @@ class ForkIdSepoliaSpec extends AnyWordSpec with Matchers:
   private val sepoliaConf = blockchains.blockchains("sepolia")
 
   // Sepolia genesis hash — go-ethereum params/config.go SepoliaGenesisHash
-  /** Sepolia's genesis header timestamp (0x6159af19). Unlike the other fixtures this is NOT zero, which is exactly
-    * why the EIP-6122 filter must compare against the genesis time rather than against a hardcoded zero. Every Sepolia
-    * fork is later than this, so no fork is dropped and the checksums below are unchanged.
+  /** Sepolia's genesis header timestamp (0x6159af19). Unlike the other fixtures this is NOT zero, which is exactly why
+    * the EIP-6122 filter must compare against the genesis time rather than against a hardcoded zero. Every Sepolia fork
+    * is later than this, so no fork is dropped and the checksums below are unchanged.
     */
   private val SepoliaGenesisTimestamp: Long = 1633267481L
 

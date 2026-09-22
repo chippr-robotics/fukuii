@@ -11,12 +11,12 @@ import org.scalatest.matchers.should.Matchers
 /** Ratchet: the ETH status handshake must never substitute wall-clock time for a head block timestamp when computing
   * the EIP-2124 fork id.
   *
-  * WHAT WENT WRONG. All three status-exchange sites carried
-  * `if header.unixTimestamp == Timestamp.Zero then Timestamp(System.currentTimeMillis() / 1000)`. That treats a
-  * timestamp of zero as "missing", but zero is real data: hive's engine fixtures and ETH mainnet both declare a genesis
-  * timestamp of 0. On such a chain the substitution jumped the fork-id clock to the present, so every timestamp fork
-  * looked already passed and we advertised `next=0` while a fork was genuinely upcoming. Measured across hive's entire
-  * `Genesis=0` Fork ID family, e.g. `have 0x237d1525 next=0` against `want 0xc8014e7d next=1`.
+  * WHAT WENT WRONG. All three status-exchange sites carried `if header.unixTimestamp == Timestamp.Zero then
+  * Timestamp(System.currentTimeMillis() / 1000)`. That treats a timestamp of zero as "missing", but zero is real data:
+  * hive's engine fixtures and ETH mainnet both declare a genesis timestamp of 0. On such a chain the substitution
+  * jumped the fork-id clock to the present, so every timestamp fork looked already passed and we advertised `next=0`
+  * while a fork was genuinely upcoming. Measured across hive's entire `Genesis=0` Fork ID family, e.g. `have 0x237d1525
+  * next=0` against `want 0xc8014e7d next=1`.
   *
   * The genuine failure mode — a head header that is missing from storage — is now handled explicitly and logged, rather
   * than being conflated with a legitimate zero.

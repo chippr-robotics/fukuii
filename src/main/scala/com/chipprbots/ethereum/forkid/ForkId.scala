@@ -99,8 +99,8 @@ object ForkId:
     *
     * This previously filtered `== 0`, which is only the same rule on a chain whose genesis timestamp happens to be
     * zero. On a chain with genesis at time 1 and a fork also at 1, we kept the fork and advertised a checksum that had
-    * accumulated it while every peer had not — measured on hive's engine suite as
-    * `have 0xb9fc74b5 / want 0x4107882a` across the whole `Genesis=1` family.
+    * accumulated it while every peer had not — measured on hive's engine suite as `have 0xb9fc74b5 / want 0x4107882a`
+    * across the whole `Genesis=1` family.
     */
   def gatherTimestampForks(config: BlockchainConfig, genesisTimestamp: Long): List[BigInt] =
     List(
