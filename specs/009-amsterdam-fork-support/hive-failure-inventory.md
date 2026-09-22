@@ -15,6 +15,7 @@ and no claim below rests on it.
 |---|---|---:|---:|---:|
 | engine | c82c89e | 258 | 145 | 403 |
 | consume-engine | c82c89e | 1768 | 41 | 1809 |
+| consume-engine | b91d3fd | 1434 | 8 | 1442 |
 | rpc-compat | c82c89e | 207 | 40 | 247 |
 | devp2p | c82c89e | 28 | 34 | 62 |
 | devp2p | 4d57c9d | 28 | 34 | 62 |
@@ -210,6 +211,87 @@ capability-set change. Fix belongs with `herald` (P2P/RLPx), not consensus.
 **tx-pool and blob — NOT established.** fukuii either disconnects or fails to answer
 `GetPooledTransactions`; the blob pair reports the same message, so those 7 may be 1 root
 cause rather than 7. No evidence either way yet.
+
+## I. engine — "Invalid Missing Ancestor Syncing ReOrg", 48 failures
+
+Half of all remaining engine failures. An implementation attempt was made and **reverted**; what
+follows is the ground truth it produced, so the next attempt does not rediscover it.
+
+### The 48 reconcile exactly
+
+`tests.go:261-301` registers 11 surviving `InvalidField` values × 2 `ReOrgFromCanonical` modes,
+plus 2 extra `EmptyTransactions` variants of `InvalidStateRoot` = **24 cases**. `suites/cancun`
+re-registers every `suite_engine.Tests` entry `WithMainFork(config.Cancun)`, and hive runs both
+suites: **24 + 24 = 48**. The defect is therefore fork-independent, not a Cancun gap.
+
+`InvalidIndex` is 8 for `InvalidReceiptsRoot|GasLimit|GasUsed|Timestamp`, 9 for the rest.
+`cAHeight = 5`, `n = 10`, so `altChainPayloads[i]` is block `5+i`.
+
+### fukuii must sync over p2p in BOTH modes — there is no cheap local subset
+
+The distribution loop is `for i := 1; i < n` — blocks 6..14 go **only to the secondary client**.
+`altChainPayloads[10]` (block 15) is never sent to the secondary; it goes only to the client under
+test, inside the poll loop. So fukuii never receives the ancestors over the Engine API and must
+fetch them from the peer.
+
+`ReOrgFromCanonical` does not change that, only the starting position:
+
+* `false` — fukuii is removed from the CLMock for canonical production, so it sits at **genesis**
+  and must sync 14 blocks. Peering is established by `secondaryClient.AddPeer(t.Engine)`.
+* `true` — fukuii is driven through canonical blocks 1..15, so its head is **block 15** while the
+  peer's head is **block 14**. Peering is established at secondary startup instead, via the
+  variadic `bootClients` argument to `StartGethNode` (`node.go:69-81`, `:209-215`) — byte-identical
+  to `AddPeer`. **There is no un-peered case.**
+
+The `true` mode is the hard one: the peer's head is LOWER than fukuii's own. Any sync strategy
+gated on "peer must have greater height or total difficulty" will never fire. It needs a targeted
+**reverse-by-hash walk** from `altChainPayloads[10].parentHash`, which fukuii does not currently
+have.
+
+### The latestValidHash requirement is strict
+
+```
+if cAHeight != 0 || tc.InvalidIndex != 1 { lvh = altChainPayloads[tc.InvalidIndex-1].BlockHash }
+```
+No registered case sets `CommonAncestorHeight` or `InvalidIndex == 1`, so the condition is always
+true and **the PoW zero-hash branch is dead code for all 48**. `&lvh` is a pointer to a stack
+value and is never nil, so returning INVALID with `latestValidHash: null` **fails**, as does the
+zero hash, as does fukuii's own canonical head. The expected block is on the side chain and was
+never fukuii's head: fukuii must be able to name a validated-but-non-canonical block.
+
+Budget: `TimeoutSeconds = 60` for the whole test, starting at setup. Setup burns ~20-30s (15 ×
+`ProduceSingleBlock`, each with a 1s sleep), leaving roughly 30-40 poll iterations.
+
+### Why the first attempt was reverted
+
+It discovered invalidity by calling `reportInvalidBranch` for every `BlockExecutionError` except
+`MPTError(MissingNodeException)`. But missing contract code does NOT surface as that exception —
+`InMemoryWorldStateProxy.getCode` returns `ByteString.empty` rather than throwing, so the failure
+arrives as `ValidationAfterExecError("Block has invalid gas used")`. `BlockImporter.scala:518-545`
+treats that exact string as **locally recoverable**: it fetches the bytecode over SNAP
+`GetByteCodes` and re-imports the same block, which becomes canonical.
+
+The registry had already marked it invalid, and its `pruneAtOrBelow` was a structurally dead
+no-op — the predicate re-reads a header every insertion path has already deleted. Net effect: the
+node permanently refuses its own honest canonical chain, on any network including ETC, with no
+recovery short of a process restart. Pre-change, that trigger caused only a peer-blacklist strike.
+
+**Any future attempt must distinguish "this block is consensus-invalid" from "I could not execute
+this block right now".** They are not the same and the error types do not separate them today.
+
+### A pre-existing coverage ceiling, independent of any fix
+
+`StdValidators.validateBlockAfterExecution` checks only `gasUsed` and `stateRoot`. The batch
+import path `BlockFetcher` uses (`tryImportBlocks -> evaluateBranch -> forwardAndTranslateConsensusResult`)
+never calls `doBlockPreValidation` — that happens only on the single-block `MinedBlock` /
+`ImportNewBlock` path. There is no parent-relative gasLimit-bound or timestamp check anywhere on
+the p2p import path, and `ConsensusAdapter` carries a comment asserting the opposite.
+
+So a tampered `gasLimit` or `timestamp` ancestor imports **cleanly** and becomes canonical, and
+`newPayload(tip)` would answer VALID — hive's instant hard-fail ("Client returned VALID on an
+invalid chain"). Execution-level invalidities (stateRoot, gasUsed, receiptsRoot) are detectable;
+header-relative ones are not, until that gap is closed. This bounds how much of the 48 any
+discovery mechanism can reach.
 
 ## What is NOT established
 
