@@ -1350,3 +1350,90 @@ which the cross-tab above splits by two discriminators (`Invalid P8` always fail
 | devp2p | 18 | 18 | 18 |
 | engine | 97 (fc713a9) | 78 | **48** (355/48/403) |
 | sync | — | 1 real | 2 (both timing, diagnosed above) |
+
+---
+
+## The Missing-Ancestor family, diagnosed: two causes, one fixed
+
+Both discriminators from the cross-tab now have named mechanisms with log evidence, not stories.
+
+### Cause A — depth-1 invalid-ancestor propagation (fixed, `94199a1`)
+
+The cross-tab is not really "P8 vs P9". It is the **distance from the CL-supplied tip to the planted
+invalid block**:
+
+| case | side chain | invalid | tip sent to fukuii | hops |
+|---|---|---|---|---|
+| `Invalid P9` (passes) | P1..P9 = blocks 6..14 | P9 = block 14 | block 15, parent = P9 | **1** |
+| `Invalid P8` (fails) | P1..P9 = blocks 6..14 | P8 = block 13 | block 15, parent = P9 | **2** |
+
+`EngineApiService:240` tests only `invalidBlocks.containsKey(payload.parentHash)`, and
+`markInvalidRecursive` (`:117-126`) cascades only through `acceptedChildrenByParent` — an index
+populated solely at `:469-474`, i.e. only for blocks that arrived via `engine_newPayload`. Block 14
+arrived over p2p, so the poison chain breaks one link short of the tip.
+
+The decisive evidence is that fukuii reaches the **right verdict** and cannot express it:
+
+```
+[BlockFetcher]     [RegularSync] headers=14 … range=[1-14] waiting=14
+[EngineApiService] import path reported block 46fd0a65… consensus-invalid, latestValidHash=7d0d9971…
+[EngineApiService] newPayload #15: ACCEPTED (parent unknown)   ×80 → timeout
+```
+
+`46fd0a65` is side-chain P8, `7d0d9971` is P7. In the passing P9 case the reported block IS the tip's
+direct parent, the `:240` guard fires on the next poll, and the response is
+`INVALID lvh=0xf9ebef0b40`.
+
+Fixed by carrying an already-proven verdict along a proven link: `provenDescendants` keeps only the
+unbroken `parentHash`-linked prefix behind the failing block and stops at the first break, all sharing
+one `latestValidHash` — which is what hive asserts (`invalid_ancestor.go:444`). It does **not** widen
+`provesConsensusInvalid`. Predicted to flip 8 of the 34 (`CanonicalReOrg=False, Invalid P8`, four
+corrupted fields × Paris/Cancun). Prediction, not measurement.
+
+### Cause B — engine-imported blocks carry no ChainWeight (NOT fixed; 28 of 38)
+
+`BlockchainWriter.storeBlock` (`domain/BlockchainWriter.scala:54`) writes header and body only, and
+`grep ChainWeight` over `EngineApiService.scala` and `ForkChoiceManager.scala` returns **zero hits**.
+Every block imported through `engine_newPayload` therefore has no stored chain weight, and any later
+p2p branch resolution across that range is unresolvable:
+
+```
+PEER_HANDSHAKE_SUCCESS  … bestHash=4f8c8262… latestBlock=14
+PEER-CHAIN-DIVERGE      Peer reports hash=4f8c8262… at block 14; our hash=11d2f6e7…
+[RegularSync] headers=14 from=PeerId(c6646db9…) range=[1-14] waiting=14
+ERROR [BranchResolution] ChainWeight for 6: c05c5658… not found when resolving branch
+```
+
+So the path **does** reach the p2p import layer — the open question from the previous entry — and dies
+in `BranchResolution.compareBranch` before any weight comparison happens.
+
+**Blast radius, measured not estimated:** `"not found when resolving branch"` appears in exactly **32 of
+486** client logs in the `6c8bc97` artifact. Mapped container-id → test name: **22 Missing-Ancestor
+`CanonicalReOrg=True` + all 4 `Withdrawals … Re-Org Sync`** (some tests spawn two containers). That is
+**28 of this family's 38 failures, one cause.**
+
+Two blockers stack behind it, both source-verified, both biting the moment weights exist:
+`ChainWeight.increase = totalDifficulty + header.difficulty` with post-merge difficulty 0 makes
+`newWeight > oldWeight` unsatisfiable in `BranchResolution.compareBranch:69` (its escape hatch at `:73`
+is guarded on `oldBlocks.isEmpty`, which excludes exactly the reorg case), and
+`ConsensusImpl.importToNewBranch:133` carries the same unsatisfiable guard. So storing the weight alone
+just moves the failure to `NoChainSwitch`; steps 1 and 2 are one atomic unit.
+
+### Two corrections to earlier entries in this file
+
+- **The peer-scan deferral is NOT the engine-suite cause.** Measured and refuted: in the failing P8
+  container the announce reached a peer at `15:04:15,640` and the header fetch followed 92 ms later.
+  That hypothesis stands only for the `sync` suite's 60s budget, where it was measured.
+- **The engine-driven backfill has been working by accident.** It chases the *peer's handshake height*,
+  not the CL-supplied beacon head. In `CanonicalReOrg=False` the secondary geth connects late and its
+  ETH/69 STATUS already advertises height 14, so the range fetch happens to cover the gap. In the 2
+  `EmptyTxs=True` never-fetched cases the peer handshakes at head ≈ 0, post-merge geth never gossips,
+  and `BlockFetcher.knownTop` freezes at 1 — no `headers=` line appears in the whole log. There is no
+  reverse-from-hash beacon sync in fukuii.
+
+### Also flagged, ownership undetermined
+
+`RegularSyncSpec` → "should return updated status after importing blocks" times out at
+`RegularSyncFixtures.scala:278`. Reproduced 3/3 at `94199a1` and 1/1 with those files reverted, so it is
+not that change. Whether it is a stale test or collateral from the concurrent `BlockPreparator`/`VM`
+work is open and being re-checked against the current head.
