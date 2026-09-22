@@ -387,7 +387,14 @@ class VM[W <: WorldStateProxy[W, S], S <: Storage[S]](
         else if codeStoreOutOfGas && !config.exceptionalFailedCodeDeposit then
           // Code storage causes out-of-gas with exceptionalFailedCodeDeposit disabled. Pre-Homestead only,
           // and pre-Amsterdam by construction: the frame keeps its gas and its state, and no code is stored.
-          result
+          // BUT an error IS still reported (CodeStoreOutOfGasPreHomestead, ProgramError.scala) — go-ethereum's
+          // `IsHomestead` check gates only the revert/full-gas-burn, not whether `err` gets set at all,  so
+          // `Result.Failed()` (and therefore fukuii's `TxResult.vmError`, which `binarySearchGasEstimation`
+          // reads) is true on every fork. Without this, `eth_estimateGas`/GraphQL `estimateGas` would treat a
+          // contract deployment that stored NO code as a successful minimum, silently omitting the code-deposit
+          // cost from the estimate (measured: hive graphql `04_eth_estimateGas_contractDeploy` short by exactly
+          // runtimeCodeSize * G_codedeposit).
+          result.copy(error = Some(CodeStoreOutOfGasPreHomestead))
         else
           // Code storage succeeded
           result.copy(
