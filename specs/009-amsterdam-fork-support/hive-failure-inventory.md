@@ -1553,3 +1553,76 @@ still open.
 discv4 0/16, discv5 0/11, eth 9/25, snap 5/6, snap2 4/4 — identical to `810d6d8`. The inertness
 oracle held across the Muir Glacier fix, the tracer work, the estimateGas change and the INVALID
 propagation.
+
+---
+
+## devp2p's snap failures are not fukuii's — and the "responseBytes" reading was wrong
+
+### Correction: `responseBytes` is a request echo, not an error
+
+An earlier entry here recorded the four `snap` failures as "snap responses ignore the `responseBytes`
+soft limit", citing that value as the last line of each failure. That reading was mine and it was
+wrong. The full text is:
+
+```
+   request:
+       root: 7714335f…
+       range: 0x00…00 - 0xff…ff
+       responseBytes: 4000
+ test 0 failed: account range request failed: read tcp 172.17.0.3:42266->…:30303: i/o timeout
+```
+
+`responseBytes` belongs to the pretty-printed *request*; the error is `i/o timeout`. It precedes
+every failure block, including budgets that should return instantly, so it carries no information
+about limit handling at all.
+
+### The real cause: a wire-offset mismatch in hive's own devp2p CLI tool
+
+Evidence from both sides of the same connection:
+
+- client side: `AccountRange` test 0 → `read tcp 172.17.0.3:42266->…: i/o timeout`
+- server side, same port: `DECODE_ERROR … Cannot decode GetByteCodes. Expected RLPList[3]` — fukuii
+  received hive's `GetAccountRange` bytes and decoded them as `GetByteCodes`, exactly 4 canonical
+  slots away — and later `Unknown snap/1 message type: 42`
+
+go-ethereum's `cmd/devp2p/internal/ethtest/protocol.go` hardcodes `ethProtoLen = 22` with a comment
+admitting it assumes the negotiated capabilities are exactly `{eth, snap}`. Real geth servers do not:
+`eth/protocols/eth/protocol.go` has `protocolLengths = {69:18, 70:18, 71:20, 72:22}`, consumed via
+`p2p.Protocol{Length: …}`, and `p2p/peer.go matchProtocols` sizes each subprotocol's wire range by the
+version actually negotiated. fukuii replicates that correctly in
+`RLPxConnectionHandler.scala:125-146`.
+
+The arithmetic closes: fukuii negotiates eth/69, so its `peerSnapBase` is `0x22` (34) and its snap
+window is `[34, 42)`. The tool assumes `0x26` (38). The tool's `GetAccountRange` at 38 reads as
+fukuii's slot 4 — `GetByteCodes`. The tool's `GetByteCodes` at 42 falls outside the window entirely.
+Both observed log lines, exactly.
+
+**Making fukuii match the tool would break real interop** with any compliant eth/69 + snap/1 peer. The
+reference is go-ethereum's *server*, not its CLI test helper. No production change was made; a
+regression test now pins `[ETH70, ETH69, SNAP1]` → negotiated ETH69 → `peerSnapBase = 0x22` so a later
+session does not "fix" this into an interop regression.
+
+A confirming detail: the one `GetTrieNodes` sub-test that appears to pass has `expReject: true` in
+`snap_ethtest.go:614-624` — it expects a failed read, so the identical offset failure scores as a pass
+there and nowhere else.
+
+### snap/2 is a real build, and it is blocked on Amsterdam
+
+`Capability.scala` has no `SNAP2` at all. Per go-ethereum, snap/2 (`protocolLengths` 10 vs 8) adds
+`GetAccessListsMsg`/`AccessListsMsg` and **removes** `GetTrieNodes`/`TrieNodes` from the handler set —
+which is precisely what hive's `TrieNodesRemoved` test checks. Serving `GetAccessLists` requires
+EIP-7928 block access lists, which this plan lists as slice C, **not yet built**. So snap/2 cannot be
+implemented honestly today.
+
+### `client launch` is an artifact, not a defect
+
+`simulators/devp2p/main.go` runs `./devp2p rlpx snap-test` as a subprocess; it reports each case via
+TAP *and* exits nonzero if any failed, which surfaces as a separate `client launch` pseudo-test. It
+moves in lockstep and clears automatically when the real failures do.
+
+### What this means for devp2p's floor
+
+Of the 18: **9 are snap-related and none is a fukuii defect fixable today** — 5 from the hive tool's
+own offset assumption, 4 requiring snap/2 and therefore EIP-7928. Like graphql's stale fixture, this
+is a ceiling on what "all green" can mean for this suite until Amsterdam lands or hive updates its
+tool.
