@@ -240,7 +240,13 @@ class EthInfoService(
       // Computed with the same EIP-2124/6122 machinery the p2p handshake uses, evaluated at this
       // fork's own timestamp so each entry carries the checksum through that fork.
       forkId = Some(
-        ForkId.create(blockchainReader.genesisHeader.hash.value, blockchainConfig)(headNumber, forkTimestamp).hash
+        ForkId
+          .create(
+            blockchainReader.genesisHeader.hash.value,
+            blockchainReader.genesisHeader.unixTimestamp.toLong,
+            blockchainConfig
+          )(headNumber, forkTimestamp)
+          .hash
       ),
       blobSchedule = blobScheduleAt(ts),
       precompiles = ethPrecompilesAt(ts),

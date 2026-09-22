@@ -320,13 +320,14 @@ object DnsDiscovery extends Logger:
     */
   class EnrForkIdFilter(
       genesisHash: () => ByteString,
+      genesisTimestamp: () => Long,
       blockchainConfig: BlockchainConfig,
       currentBestBlock: () => BigInt
   ):
     def accepts(remoteForkId: ForkId): Boolean =
       import ForkIdValidator.syncIoLogger
       ForkIdValidator
-        .validatePeer[SyncIO](genesisHash(), blockchainConfig)(
+        .validatePeer[SyncIO](genesisHash(), genesisTimestamp(), blockchainConfig)(
           currentBestBlock(),
           remoteForkId
         )

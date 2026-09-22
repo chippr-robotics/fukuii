@@ -30,6 +30,7 @@ import com.chipprbots.ethereum.utils.BlockchainConfig
   */
 class ForkIdTag(
     genesisHash: () => ByteString,
+    genesisTimestamp: () => Long,
     blockchainConfig: BlockchainConfig,
     currentBestBlock: () => BigInt
 ) extends KeyValueTag:
@@ -37,7 +38,7 @@ class ForkIdTag(
   private val ethKey: ByteVector = EthereumNodeRecord.Keys.key("eth")
 
   override def toAttr: Option[(ByteVector, ByteVector)] =
-    val forkId = ForkId.create(genesisHash(), blockchainConfig)(currentBestBlock())
+    val forkId = ForkId.create(genesisHash(), genesisTimestamp(), blockchainConfig)(currentBestBlock())
     Some(ethKey -> ByteVector(encode(forkId.toRLPEncodable)))
 
   override def toFilter: KeyValueTag.EnrFilter = enr =>
@@ -52,7 +53,7 @@ class ForkIdTag(
           case Right(remoteForkId) =>
             import ForkIdValidator.syncIoLogger
             ForkIdValidator
-              .validatePeer[SyncIO](genesisHash(), blockchainConfig)(
+              .validatePeer[SyncIO](genesisHash(), genesisTimestamp(), blockchainConfig)(
                 currentBestBlock(),
                 remoteForkId
               )

@@ -29,18 +29,25 @@ object ForkId:
     BigInt("1000000000000000000") -> "Olympia"
   )
 
-  def create(genesisHash: ByteString, config: BlockchainConfig)(head: BigInt): ForkId =
-    create(genesisHash, config)(head, 0L)
+  def create(genesisHash: ByteString, genesisTimestamp: Long, config: BlockchainConfig)(head: BigInt): ForkId =
+    create(genesisHash, genesisTimestamp, config)(head, 0L)
 
   /** EIP-2124 + EIP-6122: ForkId computation with both block number and timestamp. Block-number forks are compared
     * against `head`, timestamp forks against `headTimestamp`.
+    *
+    * `genesisTimestamp` is required, not optional: go-ethereum drops every timestamp fork at or before the genesis
+    * time, and that cannot be inferred from the config alone. Passing the wrong value produces a checksum that looks
+    * plausible and is rejected by every peer, so callers must supply the real genesis header's timestamp.
     */
-  def create(genesisHash: ByteString, config: BlockchainConfig)(head: BigInt, headTimestamp: Long): ForkId =
+  def create(genesisHash: ByteString, genesisTimestamp: Long, config: BlockchainConfig)(
+      head: BigInt,
+      headTimestamp: Long
+  ): ForkId =
     val crc = new CRC32()
     crc.update(genesisHash.asByteBuffer)
 
     val blockForks = gatherBlockForks(config)
-    val timestampForks = gatherTimestampForks(config)
+    val timestampForks = gatherTimestampForks(config, genesisTimestamp)
 
     // Process block forks first (sorted), then timestamp forks (sorted)
     val allForks = blockForks.map((_, false)) ++ timestampForks.map((_, true))
@@ -68,8 +75,8 @@ object ForkId:
   private val maxBlockSentinel: BigInt = BigInt(Long.MaxValue)
   private val olympiaSentinel: BigInt = BigInt("1000000000000000000")
 
-  def gatherForks(config: BlockchainConfig): List[BigInt] =
-    (gatherBlockForks(config) ++ gatherTimestampForks(config)).distinct.sorted
+  def gatherForks(config: BlockchainConfig, genesisTimestamp: Long): List[BigInt] =
+    (gatherBlockForks(config) ++ gatherTimestampForks(config, genesisTimestamp)).distinct.sorted
 
   def gatherBlockForks(config: BlockchainConfig): List[BigInt] =
     val maybeDaoBlock: Option[BigInt] = config.daoForkConfig.flatMap { daoConf =>
@@ -85,8 +92,17 @@ object ForkId:
       if config.forkBlockNumbers.olympiaBlockNumber == olympiaSentinel then List(olympiaSentinel) else Nil
     realForks ++ olympiaNext
 
-  /** EIP-6122: Timestamp-based forks for post-Merge chains. */
-  def gatherTimestampForks(config: BlockchainConfig): List[BigInt] =
+  /** EIP-6122: Timestamp-based forks for post-Merge chains.
+    *
+    * Forks at or before the genesis timestamp are part of the genesis ruleset, not transitions, and are dropped —
+    * go-ethereum's `gatherForks` does exactly this (`for len(forksByTime) > 0 && forksByTime[0] <= genesis`).
+    *
+    * This previously filtered `== 0`, which is only the same rule on a chain whose genesis timestamp happens to be
+    * zero. On a chain with genesis at time 1 and a fork also at 1, we kept the fork and advertised a checksum that had
+    * accumulated it while every peer had not — measured on hive's engine suite as
+    * `have 0xb9fc74b5 / want 0x4107882a` across the whole `Genesis=1` family.
+    */
+  def gatherTimestampForks(config: BlockchainConfig, genesisTimestamp: Long): List[BigInt] =
     List(
       config.forkTimestamps.shanghaiTimestamp.map(BigInt(_)),
       config.forkTimestamps.cancunTimestamp.map(BigInt(_)),
@@ -102,7 +118,7 @@ object ForkId:
       // of all six. 27 of that suite's 34 failures were the resulting
       // `wrong fork ID in status` handshake rejection.
       config.forkTimestamps.amsterdamTimestamp.map(BigInt(_))
-    ).flatten.filterNot(_ == 0).distinct.sorted
+    ).flatten.filterNot(_ <= Timestamp(genesisTimestamp).toUnsignedBigInt).distinct.sorted
 
   extension (forkId: ForkId)
     def toRLPEncodable: RLPEncodeable =
