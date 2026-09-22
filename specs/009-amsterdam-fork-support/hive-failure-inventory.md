@@ -24,6 +24,14 @@ and no claim below rests on it.
 | consume-rlp | c82c89e | 1796 | 4 | 1800 |
 | consensus | c82c89e | denominator unstable — not comparable |
 | sync, smoke-genesis, smoke-network | c82c89e | green |
+| engine | fc713a9 | 306 | 97 | 403 |
+| consume-engine | fc713a9 | — | 8 | 1442 |
+| consume-rlp | fc713a9 | — | 4 | 1800 |
+| rpc-compat | fc713a9 | 228 | 19 | 247 |
+| graphql | fc713a9 | 50 | 2 | 52 |
+| devp2p | fc713a9 | 44 | 18 | 62 |
+| sync | fc713a9 | **GREEN** | 0 | 1 |
+| consensus | fc713a9 | denominator unstable — 7 failing, not comparable |
 | rpc-compat | e33b3e0 | 228 | 19 | 247 |
 | rpc-compat | b4cdc30 | 228 | 19 | 247 |
 | graphql | e33b3e0 | 50 | 2 | 52 |
@@ -342,8 +350,8 @@ discovery mechanism can reach.
 * Whether B's fix needs sites beyond the two named. The 32 failures prove the fork gate is
   reached first; they do not prove it is the only broken comparison.
 * Whether the 3 devp2p `exit status 1` harness failures are fukuii's at all.
-* ~~Whether `sync`'s intermittency is a flake or a regression.~~ **Settled: neither.** It is a
-  startup race, fixed in `607d61d`. From the run's own simulator log:
+* ~~Whether `sync`'s intermittency is a flake or a regression.~~ **Settled: neither, and
+  CONFIRMED GREEN on `fc713a9`.** It was a startup race, fixed in `607d61d`. From the run's own simulator log:
   `error getting block from fukuii (5ee8d3aa): Post "http://172.17.0.5:8545": dial tcp
   172.17.0.5:8545: connect: connection refused`, 277ms after the container started, against a
   node whose stdout shows a clean startup — ETH69 handshake with the geth peer succeeded,
