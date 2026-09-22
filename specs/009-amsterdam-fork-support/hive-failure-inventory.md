@@ -1258,3 +1258,40 @@ BlockFetcher        - [RegularSync] headers=952  … range=[2049-3000] waiting=2
 So the engine `Missing Ancestor Syncing` question is not "is backfill implemented" but
 whether it starts on that path, and whether executing a backfilled branch ever turns
 into `INVALID` + `latestValidHash` on the engine response.
+
+#### `sync fukuii from fukuii`: the readiness gate is on 8551, not 8545
+
+Run to ground rather than left as "timing". hive `simulators/ethereum/sync/main.go:97`:
+
+```go
+sinkParams := params.Set("HIVE_BOOTNODE", enode).Set("HIVE_CHECK_LIVE_PORT", "8551")
+```
+
+The sync simulator **overrides** the readiness port to 8551 for the sink node.
+`internal/libhive/api.go:286` reads `HIVE_CHECK_LIVE_PORT` from the *simulator's*
+params, not from the client image's `ENV`, so `hive/fukuii/Dockerfile`'s
+`HIVE_CHECK_LIVE_PORT=8545` does not apply to this suite at all.
+
+`StdNode.startNode` deliberately binds 8551 first and 8545 last, awaiting both, so that
+"8545 accepting implies 8551 already does" — correct for every simulator that gates on
+the default 8545, and exactly backwards for this one. Measured: 8551 bound at
+16:23:53.349, hive declared the client up at 16:23:53.352, the simulator's first
+`eth_getBlockByNumber` hit 8545 at ~16:23:53.43 and was refused.
+
+**Not fixed, deliberately.** Swapping the order fixes this one test and reinstates the
+2026-06-01 bug (`engine_newPayloadV3` hitting an unbound 8551) for every suite that
+gates on 8545 — the engine suite is 403 tests. Binding concurrently does not help
+either: hive's probe can connect as soon as the *first* port binds, before `startNode`
+returns. There is no ordering that satisfies both gates, so this is a trade to decide
+deliberately, not to guess at. Options, for the record:
+  a. leave it — costs 1 test of 12 in `sync`;
+  b. have the adapter ask for 8545-first only when `HIVE_BOOTNODE` is set, which is the
+     signal that identifies this simulator's sink node;
+  c. shrink the 8551→8545 window by pre-materialising the HTTP server before either bind.
+
+What *did* change: `logback.xml` now carries
+`<logger name="com.chipprbots.ethereum.nodebuilder" level="INFO"/>`. `StdNode` logs both
+binds as it awaits them, but only the 8551 line was ever visible — `EngineApiHttpServer`
+sits under the `consensus.engine` logger while `StdNode` fell through to `ROOT=ERROR`.
+The 8545 bind time has been invisible in every hive log collected so far, which is why
+this race was twice attributed to the wrong port. The next run will show both.

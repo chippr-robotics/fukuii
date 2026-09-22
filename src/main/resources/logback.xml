@@ -117,6 +117,13 @@
     <logger name="com.chipprbots.ethereum.App" level="INFO" />
     <logger name="com.chipprbots.ethereum.Fukuii" level="INFO" />
 
+    <!-- Node startup: StdNode logs the 8551 and 8545 binds as it awaits each of them, but only
+         the 8551 line was ever visible because EngineApiHttpServer sits under the consensus.engine
+         logger below while StdNode fell through to ROOT=ERROR. The two bind times are exactly what
+         distinguishes "the RPC port was not up yet" from every other cause of a connection-refused
+         at startup, and their absence is why that race has been misdiagnosed twice. -->
+    <logger name="com.chipprbots.ethereum.nodebuilder" level="INFO" />
+
     <!-- Engine API (CL-driver): log every newPayload / forkchoice outcome for post-mortem -->
     <logger name="com.chipprbots.ethereum.consensus.engine" level="INFO" />
     
