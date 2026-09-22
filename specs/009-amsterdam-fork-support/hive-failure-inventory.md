@@ -1196,3 +1196,65 @@ gives the actual values for the first time:
 
 The estimateGas delta is 68,600 = 343 × 200, which is the shape of a missing
 `G_codedeposit` charge — a hypothesis to test against the fixture, not a finding.
+
+### devp2p on `810d6d8`: still 18, composition changed again
+
+| sub-suite | total | failing |
+|---|---:|---:|
+| discv4 | 16 | 0 |
+| discv5 | 11 | 0 |
+| eth | 25 | 9 |
+| snap | 6 | 5 |
+| snap2 | 4 | 4 |
+
+Three of the 18 are the `client launch` pseudo-test reporting `exit status 1` — one
+per sub-suite that has a launch step, not three distinct defects.
+
+Two causes are now named rather than guessed:
+
+- **snap/2 is not advertised.** `snap2 / Status` fails with
+  `could not negotiate snap protocol (remote caps: [eth/68 eth/69 snap/1], local: snap/2)`.
+  fukuii offers snap/1; the sub-suite requires snap/2. That is 2 of the 4 snap2
+  failures (`Status`, `TrieNodesRemoved`).
+- **snap responses ignore the `responseBytes` soft limit.** All four snap failures
+  (`AccountRange` 4000, `GetByteCodes` 10000, `GetTrieNodes` 5000, `GetStorageRanges`
+  500) report the limit as the last line, and `snap2 / GetBlockAccessLists` reports
+  2097152.
+
+The `invalid message code 17` BRU panic is gone from this suite entirely. The eth
+residue is now disconnects and i/o timeouts on the pooled-transaction path
+(`NewPooledTxs`, `TestBlobTxWithoutSidecar`, `TestBlobTxWithMismatchedSidecar`,
+`LargeTxRequest`, `InvalidTxs`, `BlobViolations`), plus `GetBlockAccessLists`
+(EIP-7928, expected — Amsterdam is not implemented).
+
+### sync on `810d6d8`: 2 of 12, and the logs say fukuii is NOT missing backfill
+
+Both failures, with their real causes:
+
+- **`sync fukuii from fukuii`** — `dial tcp 172.17.0.5:8545: connect: connection refused`.
+  The test ran 16:23:50.374 → 16:23:53.432 and the client it queries was instantiated
+  at 16:23:53.352, i.e. **80 ms before the test gave up**. This is hive considering the
+  container ready before fukuii has bound 8545, not a sync defect. The liveness gate
+  (`HIVE_CHECK_LIVE_PORT`) is the thing to look at.
+- **`sync go-ethereum from fukuii`** — `timeout (1m0s elapsed, current head is 0)`.
+  The source fukuii logged at 16:23:50
+  `CANONICAL_HEAD_ANNOUNCE: no handshaked peers yet for block 3000 — deferring to peer-scan`
+  and did not actually announce until **16:25:00**, ~70 s later. hive's budget is 60 s;
+  the test ended 16:24:54, six seconds short. The deferral window outlives the test.
+
+**Correction to an earlier working assumption.** It had been supposed that fukuii has
+no engine-driven backfill. The client logs from this run show it does, and that it
+reaches the wire:
+
+```
+ForkChoiceManager   - Fork choice head … not executed yet (SYNCING, notify-only): headerKnown=true
+SyncController$Impl - Received CL-driven beacon head d4a8090b… (knownHeader=3000)
+BlockBroadcast      - CANONICAL_HEAD_ANNOUNCE: block=3000 … to 1 handshaked peers
+BlockFetcher        - [RegularSync] headers=1024 … range=[1-1024]    waiting=1024
+BlockFetcher        - [RegularSync] headers=1024 … range=[1025-2048] waiting=2048
+BlockFetcher        - [RegularSync] headers=952  … range=[2049-3000] waiting=2744
+```
+
+So the engine `Missing Ancestor Syncing` question is not "is backfill implemented" but
+whether it starts on that path, and whether executing a backfilled branch ever turns
+into `INVALID` + `latestValidHash` on the engine response.
