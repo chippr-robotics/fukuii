@@ -1626,3 +1626,88 @@ Of the 18: **9 are snap-related and none is a fukuii defect fixable today** — 
 own offset assumption, 4 requiring snap/2 and therefore EIP-7928. Like graphql's stale fixture, this
 is a ceiling on what "all green" can mean for this suite until Amsterdam lands or hive updates its
 tool.
+
+---
+
+## Measurement on `501368ec9` — rpc-compat is green
+
+All numbers from `summaryResult.pass`; engine diffed by test name.
+
+| suite | before | `501368ec9` | note |
+|---|---:|---:|---|
+| **rpc-compat** | 1 | **0 / 247** | green — the Muir Glacier reconstruction was right |
+| graphql | 1 | 1 / 52 | at its floor (stale upstream fixture) |
+| **engine** | 48 | **42 / 403** | 6 cleared, **0 new** — pinned at `baselines/engine-failing-501368ec9.txt` |
+| devp2p | 18 | 18 / 62 | unchanged; ~9 are the hive tool / snap/2 ceiling |
+| sync | 2 / 12 | **1 / 18** | `sync fukuii from fukuii` passed; see correction below |
+| consume-engine | — | 8 / 1473 | first measurement; see below |
+| consume-rlp | — | 4 / 1702 | first measurement; see below |
+| consensus | — | 0 tests ran | hiveproxy race; see below |
+
+### Engine: Cause A scored — 6 of 8 predicted
+
+All 6 cleared tests are exactly the targeted cell, `Invalid P8, CanonicalReOrg=False`:
+GasLimit, ReceiptsRoot and Timestamp, each × Cancun/Paris. The prediction was 8. The 2 that did not
+flip are both **GasUsed** × Cancun/Paris. The fix's report named a separate gas-used arm at
+`BlockImporter.scala:557` receiving "the same treatment"; the measurement says that arm is not
+carrying the verdict. Handed back to its author.
+
+### Correction: the sync readiness race is probabilistic, not deterministic
+
+An earlier entry concluded "Deterministic, not intermittent" for `sync fukuii from fukuii`, from a
+135–217 ms bind window against a simulator call measured at ~80 ms. On this run the window was the
+same (143–255 ms) and the test **passed**. The window was measured four times; the simulator's call
+delay was measured once, and it evidently varies. Overclaimed from a single sample. The decision
+to leave it is unchanged — it was sound on the risk trade-off regardless — but it rests on
+"probabilistic", not "deterministic".
+
+### consume-*: 8 of 12 failures are a time budget, not fukuii
+
+Both suites ran exactly 60:00 and hit `simulation timed out` with four tests each still being
+launched (consume-engine at 1469/1473, consume-rlp at 1698/1702). Their clients died with
+`timed out waiting for container startup`; each client log is 238 lines of logback initialisation
+and nothing else. Which four land in the tail depends on scheduling — which is why `gates.yml`
+records consume-rlp as failing "only intermittently". `--sim.timelimit` raised to 80m (`5804dc8`).
+
+The remaining **4 are real**: `test_all_opcodes` on Paris, Shanghai, Cancun and Prague, each
+`INVALID reason=Block has invalid gas used`:
+
+| fork | expected | fukuii | Δ |
+|---|---:|---:|---:|
+| Paris | 8,298,977 | 8,313,979 | +15,002 |
+| Shanghai | 8,283,975 | 8,298,977 | +15,002 |
+| Cancun | 8,209,169 | 8,159,271 | −49,898 |
+| Prague | 8,209,169 | 8,159,271 | −49,898 |
+
+Pre-merge forks of the same test pass.
+
+### consensus: never actually measured, and it cannot finish
+
+This run's `ethereum/consensus` registered **zero** tests: the simulator's only output is
+`Post "http://172.17.0.2:8081/testsuite": connect: connection refused`, 0.4 s after the hiveproxy
+container started. A race inside hive; fukuii was never launched.
+
+Worse, this suite has been **cancelled by this branch's own pushes on nearly every run**
+(`cancel-in-progress`), so it had never been read at all here. Going back further, it has failed on
+every completed run since 5 July, including unrelated `automated/update-bootnodes` branches — and
+every one of those is the same shape. Three runs decoded:
+
+| run | tests run | failed | of which timeout tail | genuine |
+|---|---:|---:|---:|---:|
+| 35566969778 | 1,864 | 7 | 5 | 2 |
+| 35678567820 | 1,606 | 7 | 5 | 2 |
+| 35695707097 | 1,519 | 7 | 5 | 2 |
+
+The legacy ethereum/tests corpus is far larger than ~1,800 tests, so at parallelism 4 in 60m the
+suite **never completes**, and only its first ~1,800 tests are ever exercised. Raising the limit
+would expose more tests but would not make it finish. That is a scoping decision for this gate,
+recorded here rather than changed.
+
+The 2 genuine failures, identical in all three runs:
+`bcStateTests/testOpcode_10.json::testOpcode_1e_Cancun` and `…_Prague` — stateRoot mismatches.
+Opcode `0x1e` is **CLZ (EIP-7939), an Osaka opcode**, which must be undefined on Cancun and Prague.
+If fukuii enables it early, an undefined-opcode sub-call on those forks would not burn its stipend
+and fukuii's gas would come out *low* — the direction and fork set of `test_all_opcodes`' −49,898.
+Two independent suites pointing at the same place. Hypothesis, handed to the ETH specialist to
+verify by executing the fixture; the Paris/Shanghai +15,002 goes the other way and is probably a
+separate cause.
