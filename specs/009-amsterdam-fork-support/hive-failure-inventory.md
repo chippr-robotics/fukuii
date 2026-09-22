@@ -1711,3 +1711,65 @@ and fukuii's gas would come out *low* — the direction and fork set of `test_al
 Two independent suites pointing at the same place. Hypothesis, handed to the ETH specialist to
 verify by executing the fixture; the Paris/Shanghai +15,002 goes the other way and is probably a
 separate cause.
+
+---
+
+## Cause B implemented (`a6c652a17`) — awaiting ETC sign-off before it is pushed
+
+beacon implemented steps 1 and 2 as one unit, and showed rather than asserted that they must be one:
+a test that stores a `ChainWeight` for every block still gets `NoChainSwitch`, because with weights
+present `compareBranch` sees equal weights (difficulty 0 everywhere) and a non-empty `oldBlocks`,
+and refuses.
+
+- **Step 1** — `EngineApiService.storeChainWeightFor` writes `parentWeight.increase(header)` for an
+  executed engine block, and writes nothing rather than invent one when the parent has no weight.
+- **Step 2** — a PoS arm at both weight sites, sharing `DesignatedHead.leadsToDesignatedHead`: true
+  iff the branch tip is the fork-choice head or an ancestor of it through headers already held;
+  capped at 1024 hops; false on any doubt (no CL, silent CL, missing header, cap hit).
+
+Two independent gates keep it off PoW chains: `designatedHeadOpt` is `None` unless
+`terminalTotalDifficulty.isDefined` (set only by `eth-chain.conf` and `sepolia-chain.conf`), and the
+`ConsensusImpl` holder is bound only when the Engine API is enabled on a TTD chain. Three negative
+controls, each failing exactly the tests that encode its half. The four ETC specs pass unchanged.
+
+**Predicted, not measured:** ~24 of the 28 targeted clear (24 `CanonicalReOrg=True` + 4
+`Withdrawals … Re-Org Sync`), taking engine from 42 to about 18. Excluded from the prediction: the 2
+`EmptyTxs=True` cases, whose peer handshakes before it has built anything so `BlockFetcher.knownTop`
+freezes at 1 — they need real beacon sync — and the 2 `GasUsed, CanonicalReOrg=True` cases, which
+will now execute but hit the gap below. This is the first time fukuii reorganises a PoS chain over
+p2p at all, so the currently-passing reorg tests are the thing to watch for regressions.
+
+Held from the remote pending a `forge` review: this changes fork choice, on paths ETC shares.
+
+### The GasUsed residual is an ownership gap, not a propagation gap
+
+The two `GasUsed, Invalid P8` tests that Cause A did not clear produce **no verdict at all**. In the
+failing container the node fetches the same `headers=14` as the passing GasLimit case, but logs
+neither `import path reported` nor `BlockImporter`'s INFO-level `Gas mismatch`. Nothing is reported,
+so there is nothing to propagate.
+
+- `InvalidChainReporter.provesConsensusInvalid` deliberately declines gas-used mismatches, because
+  missing bytecode can produce one on an honest block; its comment assigns that case to `BlockImporter`.
+- `BlockImporter`'s gas-used arm is reached only via `BlockImportFailed` — when *nothing* in the batch
+  executed.
+- In hive, blocks 1–12 execute and 13 fails: a partial success, which `ConsensusAdapter` maps to
+  `BlockImportedToTop`, keeping the error only in a `log.warn`.
+
+So each side believes the other owns it. The obvious fix — running `findMissingContractCode` on the
+partial path — was rejected because that predicate **fails open** (an exception returns `None`, read
+as "nothing missing, report invalid") and only checks direct call targets. The proposed fix instead
+compares our receipts root with the header's on a gas-used mismatch: if they agree, the header's own
+receipts commit to our `cumulativeGasUsed` and the block contradicts itself regardless of state
+completeness. It touches `StdValidators`, which ETC shares, so it is under design review, not built.
+
+### Pre-existing unit failures found in passing
+
+- `SyncControllerSpec`: 11 failures, all 25 s timeouts in fast-sync pivot tests — identical with the
+  new work stashed at a clean `501368ec9`.
+- `RegularSyncSpec` "should return updated status after importing blocks": a 3 s poll timeout,
+  failing at every commit checked back to before `94199a1`.
+
+Neither runs in this PR's CI: `testEssential` excludes `SyncTest`, the tag these carry, and `build.sbt`
+names that category as "complex actor choreography that times out under CI load"; Tier 2 is skipped
+for `staging`-targeted PRs. Pre-existing, outside this gate, not caused by this work. Recorded rather
+than changed.
