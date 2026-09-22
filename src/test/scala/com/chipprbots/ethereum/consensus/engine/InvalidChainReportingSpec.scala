@@ -16,6 +16,11 @@ import org.scalatest.matchers.should.Matchers
 import com.chipprbots.ethereum.BlockHelpers
 import com.chipprbots.ethereum.NormalPatience
 import com.chipprbots.ethereum.blockchain.sync.EphemBlockchainTestSetup
+import com.chipprbots.ethereum.blockchain.sync.regular.BlockImportFailed
+import com.chipprbots.ethereum.blockchain.sync.regular.BlockImportFailedAt
+import com.chipprbots.ethereum.blockchain.sync.regular.BlockImportResult
+import com.chipprbots.ethereum.blockchain.sync.regular.BlockImporter
+import com.chipprbots.ethereum.consensus.ConsensusAdapter
 import com.chipprbots.ethereum.consensus.ConsensusImpl
 import com.chipprbots.ethereum.consensus.engine.PayloadStatus.*
 import com.chipprbots.ethereum.consensus.pow.validators.OmmersValidator.OmmersError
@@ -419,6 +424,152 @@ class InvalidChainReportingSpec
     }
 
   // ---------------------------------------------------------------------------------------------------------------
+  // 4. A FAILED REORG reported twice. ConsensusImpl reports the true failing block; BlockImporter's gas-used arm then
+  //    used to report the batch HEAD and everything hash-linked behind it, with the head's parent as latestValidHash —
+  //    poisoning honest blocks and, through `put`, overwriting the correct verdict. Source-traced on 13c1e5686 for
+  //    hive `Invalid Missing Ancestor Syncing ReOrg, GasUsed, CanonicalReOrg=True`.
+  // ---------------------------------------------------------------------------------------------------------------
+
+  "A failed reorg onto a gas-used-invalid side chain" should
+    "leave exactly P8', P9', P10' INVALID with latestValidHash = P7' (batch = side 6..14)" taggedAs (
+      UnitTest,
+      ConsensusTest
+    ) in new HiveGasUsedReorgSetup:
+      importBatchThroughTheImporterRule(side)
+
+      engineApi.invalidBlocksSnapshot shouldBe Map(
+        p8.hash.value -> p7.hash.value,
+        p9.hash.value -> p7.hash.value,
+        p10.blockHash -> p7.hash.value
+      )
+
+  it should "leave exactly P8', P9', P10' INVALID when the batch also carries the common prefix 1..5" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in new HiveGasUsedReorgSetup:
+    // The client log's shape: `[RegularSync] headers=14 … range=[1-14]`. The batch head is then canonical block 1,
+    // and the pre-fix rule reported canonical 1..5 as invalid too, with genesis as latestValidHash.
+    importBatchThroughTheImporterRule(canonical.take(5) ++ side)
+
+    engineApi.invalidBlocksSnapshot shouldBe Map(
+      p8.hash.value -> p7.hash.value,
+      p9.hash.value -> p7.hash.value,
+      p10.blockHash -> p7.hash.value
+    )
+
+  it should "answer newPayload and forkchoiceUpdated for P10' with latestValidHash = P7' — what hive asserts" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in new HiveGasUsedReorgSetup:
+    importBatchThroughTheImporterRule(side)
+    whenReady(engineApi.newPayload(p10).unsafeToFuture()) { r =>
+      r.status shouldBe Invalid
+      r.latestValidHash shouldBe Some(p7.hash.value)
+    }
+    whenReady(engineApi.forkchoiceUpdated(ForkChoiceState(p10.blockHash, zero32, zero32), None).unsafeToFuture()) {
+      case Right(response) =>
+        response.payloadStatus.status shouldBe Invalid
+        response.payloadStatus.latestValidHash shouldBe Some(p7.hash.value)
+      case Left(err) => fail(s"expected a payload status, got JSON-RPC error: $err")
+    }
+
+  "provenGasUsedFailure" should "keep the pre-existing answer when no failing block is named" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in {
+    val chain = BlockHelpers.generateChain(3, BlockHelpers.genesis)
+    BlockImporter.provenGasUsedFailure(BlockImportFailed("gas"), chain, reportingLive = true, _ => None) shouldBe
+      Some(chain.head -> chain.tail)
+    BlockImporter.provenGasUsedFailure(BlockImportFailed("gas"), chain, reportingLive = false, _ => None) shouldBe
+      Some(chain.head -> chain.tail)
+  }
+
+  it should "keep the pre-existing answer when the named failing block IS the batch head" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in {
+    val chain = BlockHelpers.generateChain(3, BlockHelpers.genesis)
+    val err = new BlockImportFailedAt("gas", chain.head.hash.value)
+    BlockImporter.provenGasUsedFailure(err, chain, reportingLive = false, _ => fail("must not be consulted")) shouldBe
+      Some(chain.head -> chain.tail)
+  }
+
+  it should "report the NAMED block, not the head, when reporting is live" taggedAs (UnitTest, ConsensusTest) in {
+    val chain = BlockHelpers.generateChain(4, BlockHelpers.genesis)
+    val err = new BlockImportFailedAt("gas", chain(2).hash.value)
+    BlockImporter.provenGasUsedFailure(err, chain, reportingLive = true, _ => None) shouldBe
+      Some(chain(2) -> List(chain(3)))
+  }
+
+  it should "do nothing — and never look for missing code — on a chain with no live reporter (ETC)" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in {
+    val chain = BlockHelpers.generateChain(4, BlockHelpers.genesis)
+    val err = new BlockImportFailedAt("gas", chain(2).hash.value)
+    BlockImporter.provenGasUsedFailure(err, chain, reportingLive = false, _ => fail("must not be consulted")) shouldBe
+      None
+  }
+
+  it should "REFUSE when the named block's own contract code is missing" taggedAs (UnitTest, ConsensusTest) in {
+    // The head was cleared by the caller; the named block was not. Same ambiguity the gas-used arm exists to resolve.
+    val chain = BlockHelpers.generateChain(4, BlockHelpers.genesis)
+    val err = new BlockImportFailedAt("gas", chain(2).hash.value)
+    BlockImporter.provenGasUsedFailure(
+      err,
+      chain,
+      reportingLive = true,
+      b => if b.hash == chain(2).hash then Some(BlockHelpers.randomHash()) else None
+    ) shouldBe None
+  }
+
+  it should "REFUSE rather than guess when the named block is not in the batch" taggedAs (UnitTest, ConsensusTest) in {
+    val chain = BlockHelpers.generateChain(3, BlockHelpers.genesis)
+    val err = new BlockImportFailedAt("gas", BlockHelpers.randomHash())
+    BlockImporter.provenGasUsedFailure(err, chain, reportingLive = true, _ => None) shouldBe None
+  }
+
+  "BlockImportFailedAt" should "be indistinguishable from BlockImportFailed to every existing consumer" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in {
+    // The ETC-inertness argument for carrying the hash: equality, extractor and toString are inherited unchanged.
+    val at: BlockImportResult = new BlockImportFailedAt("boom", BlockHelpers.randomHash())
+    at shouldBe BlockImportFailed("boom")
+    at.toString shouldBe BlockImportFailed("boom").toString
+    at.hashCode shouldBe BlockImportFailed("boom").hashCode
+    val extracted = at match
+      case BlockImportFailed(error) => Some(error)
+      case _                        => None
+    extracted shouldBe Some("boom")
+  }
+
+  "ConsensusAdapter.reportsInvalidChains" should "be false with no reporter or an unbound one, true once bound" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in new HiveGasUsedReorgSetup:
+    adapterWith(None).reportsInvalidChains shouldBe false
+    val holder = new InvalidChainReporter.LateBound
+    adapterWith(Some(holder)).reportsInvalidChains shouldBe false
+    holder.bind(engineApi.invalidChainReporter)
+    adapterWith(Some(holder)).reportsInvalidChains shouldBe true
+
+  "The invalid-block registry" should "keep the first verdict and hand it to descendants on a conflicting re-report" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in new EngineSetup:
+    val invalid: ByteString = BlockHelpers.randomHash()
+    val right: ByteString = BlockHelpers.randomHash()
+    val wrong: ByteString = BlockHelpers.randomHash()
+    val child: ExecutionPayload = payloadOfUnexecutableChild(invalid)
+    whenReady(engineApi.newPayload(child).unsafeToFuture())(_.status shouldBe Accepted)
+
+    engineApi.invalidChainReporter.reportInvalid(invalid, right)
+    engineApi.invalidChainReporter.reportInvalid(invalid, wrong)
+
+    engineApi.invalidBlocksSnapshot shouldBe Map(invalid -> right, child.blockHash -> right)
+
+  // ---------------------------------------------------------------------------------------------------------------
   // Fixtures
   // ---------------------------------------------------------------------------------------------------------------
 
@@ -477,6 +628,118 @@ class InvalidChainReportingSpec
       new ForkChoiceManager(blockchainReader, blockchainWriter),
       None
     )(blockchainConfig, typedScheduler)
+
+  /** hive's `Invalid Missing Ancestor Syncing ReOrg, GasUsed, CanonicalReOrg=True`, at the moment the peer delivers the
+    * side chain.
+    *
+    * Canonical 1..15 (post-merge: difficulty 0), executed and weighted, best = 15. Side chain P1'..P9' = 6..14 forking
+    * at canonical 5. P8' carries a header gasUsed its own receipts contradict. The CL has already sent P10' (child of
+    * P9') via newPayload — ACCEPTED, stored by hash only, indexed under P9' — and an FCU naming it, which took the
+    * notify-only path. Everything on the path under test is real: EngineApiService's registry, ForkChoiceManager,
+    * ConsensusImpl (reorganise + reportIfProvenInvalid), ConsensusAdapter, and BlockImporter's report rule. Only block
+    * execution is stubbed, so the failing block and its error are exact.
+    */
+  class HiveGasUsedReorgSetup extends EphemBlockchainTestSetup:
+    implicit val runtime: IORuntime = IORuntime.global
+    implicit lazy val typedScheduler: org.apache.pekko.actor.typed.Scheduler = classicSystem.toTyped.scheduler
+
+    val zero32: ByteString = ByteString(new Array[Byte](32))
+
+    private def posBlock(block: Block): Block =
+      block.copy(
+        header = block.header.copy(difficulty = Difficulty.Zero),
+        body = block.body.copy(uncleNodesList = Nil)
+      )
+
+    private val genesisWeight = ChainWeight.totalDifficultyOnly(BlockHelpers.genesis.header.difficulty.value)
+    blockchainWriter.save(BlockHelpers.genesis, Nil, genesisWeight, saveAsBestBlock = true)
+
+    val canonical: List[Block] = BlockHelpers.generateChain(15, BlockHelpers.genesis, posBlock)
+    canonical.foldLeft(genesisWeight) { (w, b) =>
+      val next = w.increase(b.header)
+      blockchainWriter.save(b, Nil, next, saveAsBestBlock = true)
+      next
+    }
+
+    /** P1'..P9' at heights 6..14, off canonical block 5. */
+    val side: List[Block] = BlockHelpers.generateChain(9, canonical(4), posBlock)
+    val p7: Block = side(6)
+    val p8: Block = side(7)
+    val p9: Block = side(8)
+
+    private val gasUsedError: BlockExecutionError = ValidationAfterExecError(
+      "Block has invalid gas used, expected 183600 but got 326947; " +
+        com.chipprbots.ethereum.consensus.validators.std.StdValidators.HeaderGasContradictsReceiptsMarker
+    )
+
+    override lazy val blockExecution: BlockExecution = stub[BlockExecution]
+    (blockExecution
+      .executeAndValidateBlocks(_: List[Block], _: ChainWeight)(_: BlockchainConfig))
+      .when(*, *, *)
+      .anyNumberOfTimes()
+      .onCall { (blocks, weight, _) =>
+        val ok = blocks.takeWhile(_.hash != p8.hash)
+        val executed = ok.foldLeft((weight, List.empty[BlockData])) { case ((w, acc), b) =>
+          val next = w.increase(b.header)
+          blockchainWriter.save(b, Nil, next, saveAsBestBlock = false)
+          (next, acc :+ BlockData(b, Nil, next))
+        }
+        (executed._2, blocks.find(_.hash == p8.hash).map(_ => gasUsedError))
+      }
+
+    lazy val fcm: ForkChoiceManager = new ForkChoiceManager(blockchainReader, blockchainWriter)
+
+    lazy val engineApi: EngineApiService =
+      new EngineApiService(blockchainReader, blockchainWriter, blockExecution, fcm, None)(
+        blockchainConfig,
+        typedScheduler
+      )
+
+    def adapterWith(reporter: Option[InvalidChainReporter]): ConsensusAdapter =
+      new ConsensusAdapter(
+        new ConsensusImpl(
+          blockchainReader,
+          blockchainWriter,
+          blockExecution,
+          reporter,
+          Some(DesignatedHead(() => fcm.getRequestedHeadBlockHash))
+        ),
+        blockchainReader,
+        blockQueue,
+        new com.chipprbots.ethereum.ledger.BlockValidation(mining, blockchainReader, blockQueue),
+        runtime,
+        reporter
+      )
+
+    /** P10': the CL's head, one hop above the side branch the peer serves. */
+    val p10: ExecutionPayload = payloadOfUnexecutableChild(p9.hash.value)
+
+    /** Drive one fetched batch through the production path, then apply BlockImporter's gas-used report rule to the
+      * result exactly as `handleBlocksImport` does on that arm: `importedBlocks` is `Nil` for a `BlockImportFailed`, so
+      * `notImportedBlocks` is the whole batch, and `findMissingContractCode` finds nothing (the hive recipient's code
+      * is present).
+      */
+    def importBatchThroughTheImporterRule(batch: List[Block]): Unit =
+      whenReady(engineApi.newPayload(p10).unsafeToFuture())(_.status shouldBe Accepted)
+      whenReady(engineApi.forkchoiceUpdated(ForkChoiceState(p10.blockHash, zero32, zero32), None).unsafeToFuture()) {
+        _.map(_.payloadStatus.status) shouldBe Right(Syncing)
+      }
+      fcm.getRequestedHeadBlockHash shouldBe Some(p10.blockHash)
+
+      val adapter = adapterWith(Some(engineApi.invalidChainReporter))
+      val result = adapter.evaluateBranch(NonEmptyList.fromListUnsafe(batch)).unsafeRunSync()
+
+      // The shape BlockImporter sees: a failure it routes to the gas-used arm, naming P8'.
+      result shouldBe a[BlockImportFailedAt]
+      result.asInstanceOf[BlockImportFailedAt].failingBlockHash shouldBe p8.hash.value
+      result.toString should include(InvalidChainReporter.GasUsedMismatchMarker)
+
+      BlockImporter.provenGasUsedFailure(result, batch, adapter.reportsInvalidChains, _ => None).foreach {
+        case (failing, descendants) =>
+          val lvh = failing.header.parentHash.value
+          adapter.reportInvalidChain(failing.hash.value, lvh)
+          descendants.foreach(d => adapter.reportInvalidChain(d.hash.value, lvh))
+      }
 
   /** Minimal live EngineApiService. Only the invalid-block registry is exercised, but it is the real one. */
   class EngineSetup extends EphemBlockchainTestSetup:

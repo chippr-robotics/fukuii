@@ -8,6 +8,7 @@ import cats.effect.unsafe.IORuntime
 
 import com.chipprbots.ethereum.blockchain.sync.regular.BlockEnqueued
 import com.chipprbots.ethereum.blockchain.sync.regular.BlockImportFailed
+import com.chipprbots.ethereum.blockchain.sync.regular.BlockImportFailedAt
 import com.chipprbots.ethereum.blockchain.sync.regular.BlockImportFailedDueToMissingNode
 import com.chipprbots.ethereum.blockchain.sync.regular.BlockImportResult
 import com.chipprbots.ethereum.blockchain.sync.regular.BlockImportedToTop
@@ -63,6 +64,16 @@ class ConsensusAdapter(
     */
   def reportInvalidChain(blockHash: ByteString, latestValidHash: ByteString): Unit =
     invalidChainReporter.foreach(_.reportInvalid(blockHash, latestValidHash))
+
+  /** Would [[reportInvalidChain]] reach anyone? False on ETC/Mordor/Gorgoroth: there the reporter is either absent or a
+    * `LateBound` nothing ever binds. `BlockImporter` uses this to skip work whose ONLY purpose is a report, so that
+    * work cannot run — and cannot change anything, not even a log line — on a chain with no consensus layer.
+    */
+  def reportsInvalidChains: Boolean =
+    invalidChainReporter.exists {
+      case lateBound: InvalidChainReporter.LateBound => lateBound.isBound
+      case _                                         => true
+    }
 
   def evaluateBranchBlock(
       block: Block
@@ -148,7 +159,9 @@ class ConsensusAdapter(
         case BranchExecutionFailure(blocksToEnqueue, failingBlockHash, error) =>
           blocksToEnqueue.foreach(blockQueue.enqueueBlock(_))
           blockQueue.removeSubtree(BlockHash(failingBlockHash))
-          BlockImportFailed(error)
+          // Carry WHICH block failed. Equal to, and matched exactly like, `BlockImportFailed(error)` everywhere else;
+          // only BlockImporter's invalid-chain report reads the hash. See BlockImportFailedAt.
+          new BlockImportFailedAt(error, failingBlockHash)
         case ConsensusError(blocksToEnqueue, error) =>
           blocksToEnqueue.foreach(blockQueue.enqueueBlock(_))
           BlockImportFailed(error)

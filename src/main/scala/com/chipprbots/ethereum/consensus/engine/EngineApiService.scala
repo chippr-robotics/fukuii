@@ -113,17 +113,43 @@ class EngineApiService(
 
   /** Mark `hash` as INVALID and recursively invalidate every optimistically-accepted descendant. All descendants
     * inherit the same `latestValidHash`.
+    *
+    * FIRST VERDICT WINS. An existing entry is never overwritten; descendants inherit the STORED latestValidHash. Every
+    * legitimate writer derives the value the same way — the invalid block's own parent, or the value already stored for
+    * an invalid ancestor — so two writers for one hash agree, and a disagreement means the later one is wrong. That is
+    * not hypothetical: a failed p2p reorg used to re-report its already-correct verdict with the batch head's parent as
+    * latestValidHash, and `put` replaced the right answer with the wrong one (see BlockImportFailedAt). A conflict is
+    * logged at WARN rather than silently dropped. The finalized-watermark prune in `forkchoiceUpdated` still removes
+    * entries; this only governs a second write to a live one.
     */
   private def markInvalidRecursive(hash: ByteString, lvh: ByteString): Unit =
-    invalidBlocks.put(hash, lvh)
+    val effectiveLvh = Option(invalidBlocks.putIfAbsent(hash, lvh)) match
+      case Some(existing) =>
+        if existing != lvh then
+          log.warn(
+            "[ENGINE-API] block {} already INVALID with latestValidHash={}; ignoring conflicting latestValidHash={}",
+            com.chipprbots.ethereum.utils.ByteStringUtils.hash2string(hash),
+            com.chipprbots.ethereum.utils.ByteStringUtils.hash2string(existing),
+            com.chipprbots.ethereum.utils.ByteStringUtils.hash2string(lvh)
+          )
+        existing
+      case None => lvh
     val children = Option(acceptedChildrenByParent.remove(hash))
     children.foreach { set =>
       val iter = set.iterator()
       while iter.hasNext do
         val child = iter.next()
         blockchainWriter.removeBlockByHash(BlockHash(child)).commit()
-        markInvalidRecursive(child, lvh)
+        markInvalidRecursive(child, effectiveLvh)
     }
+
+  /** Read-only copy of the invalid-block registry (blockHash -> latestValidHash), for specs that must assert the WHOLE
+    * registry — "these entries and nothing else" — rather than probe it hash by hash through forkchoiceUpdated, which
+    * has side effects.
+    */
+  private[engine] def invalidBlocksSnapshot: Map[ByteString, ByteString] =
+    import scala.jdk.CollectionConverters.*
+    invalidBlocks.asScala.toMap
 
   /** Give an engine-executed block a `ChainWeight`, so the p2p import path can still resolve branches across it.
     *

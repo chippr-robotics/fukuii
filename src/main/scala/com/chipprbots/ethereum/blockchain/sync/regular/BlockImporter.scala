@@ -15,6 +15,7 @@ import cats.effect.IO
 import cats.effect.unsafe.IORuntime
 import cats.implicits.*
 
+import scala.compiletime.asMatchable
 import scala.concurrent.duration.*
 
 import com.chipprbots.ethereum.blockchain.sync.Blacklist
@@ -68,6 +69,49 @@ object BlockImporter:
 
   private[regular] case object SyncRetryTick extends Command
   private[regular] val RetryKey = "BlockImporterRetry"
+
+  /** The block the gas-used arm may report as consensus-invalid, with its proven descendants — or `None` to report
+    * nothing.
+    *
+    * Precondition: the caller is on the gas-used arm AND `findMissingContractCode(notImportedBlocks.head)` was `None`.
+    *
+    * The pre-existing rule was "the failing block is `notImportedBlocks.head`". That holds whenever `importedBlocks`
+    * tells the truth about how much of the batch executed, and it does NOT hold after a failed reorganisation: the
+    * consensus result collapses to `BlockImportFailed`, `tryImportBlocks` then reports zero imported blocks, and the
+    * head is an honest block that executed fine. Reporting it, its descendants and — worst — the genuinely invalid
+    * block with the head's parent as latestValidHash is what this fixes. See [[BlockImportFailedAt]].
+    *
+    * Three outcomes:
+    *   - No failing-block hash, or it IS the head: exactly the pre-existing answer, `head` + its proven descendants.
+    *   - It names a later block and reporting is live: that block + its proven descendants, but only after the same
+    *     missing-bytecode disambiguation has been run on THAT block — the caller's check ran on the head, which proves
+    *     nothing about it.
+    *   - Otherwise (reporting not live, hash not in the batch, or that block's contract code is missing): `None`.
+    *     Refusing is the safe direction; `ConsensusImpl.reportIfProvenInvalid` has already reported every failure the
+    *     typed error proves, including a receipts-contradicted gas-used mismatch.
+    *
+    * ETC/Mordor/Gorgoroth: `reportingLive` is false there, so the second outcome is unreachable and
+    * `findMissingContractCode` is never called from here; the first outcome feeds `reportInvalidChain`, a no-op on
+    * those chains, exactly as before.
+    */
+  private[ethereum] def provenGasUsedFailure(
+      err: Any,
+      notImportedBlocks: List[Block],
+      reportingLive: Boolean,
+      findMissingContractCode: Block => Option[ByteString]
+  ): Option[(Block, List[Block])] =
+    notImportedBlocks match
+      case Nil => None
+      case head :: tail =>
+        err.asMatchable match
+          case at: BlockImportFailedAt if at.failingBlockHash != head.hash.value =>
+            if !reportingLive then None
+            else
+              notImportedBlocks.dropWhile(_.hash.value != at.failingBlockHash) match
+                case failing :: rest if findMissingContractCode(failing).isEmpty =>
+                  Some(failing -> InvalidChainReporter.provenDescendants(failing, rest))
+                case _ => None
+          case _ => Some(head -> InvalidChainReporter.provenDescendants(head, tail))
 
   // scalastyle:off parameter.number
   def apply(
@@ -555,20 +599,37 @@ final private class BlockImporterLogic(
                     // descendants. latestValidHash = the failing block's parent: execution proceeds in order and
                     // stops at the first failure, so the parent is the last block we validated.
                     // No-op unless the Engine API is enabled (ETC/Mordor/Gorgoroth never bind a reporter).
-                    val latestValidHash = failedBlock.header.parentHash.value
-                    consensus.reportInvalidChain(failedBlock.hash.value, latestValidHash)
-                    // Same reasoning as ConsensusImpl.reportIfProvenInvalid: the blocks queued behind the failing
-                    // one were never executed, and the unbroken parentHash-linked prefix of them is provably
-                    // invalid-by-descent with the same latestValidHash. Without this the verdict stops at
-                    // `failedBlock` and a CL-supplied tip two or more hops above it stays ACCEPTED forever.
-                    InvalidChainReporter.provenDescendants(failedBlock, notImportedBlocks.tail).foreach { d =>
-                      log.warning(
-                        "Block {} descends from invalid block {} — reporting as consensus-invalid",
-                        d.number,
-                        failedBlock.number
-                      )
-                      consensus.reportInvalidChain(d.hash.value, latestValidHash)
-                    }
+                    //
+                    // WHICH block is reported is decided by `provenGasUsedFailure`, not assumed to be `failedBlock`:
+                    // after a failed REORG, execution stopped mid-batch and `failedBlock` (the batch head) is an
+                    // honest block. See BlockImportFailedAt. The fetcher message below is deliberately unchanged.
+                    BlockImporter.provenGasUsedFailure(
+                      err,
+                      notImportedBlocks,
+                      consensus.reportsInvalidChains,
+                      findMissingContractCode
+                    ) match
+                      case Some((failing, descendants)) =>
+                        val latestValidHash = failing.header.parentHash.value
+                        consensus.reportInvalidChain(failing.hash.value, latestValidHash)
+                        // Same reasoning as ConsensusImpl.reportIfProvenInvalid: the blocks queued behind the failing
+                        // one were never executed, and the unbroken parentHash-linked prefix of them is provably
+                        // invalid-by-descent with the same latestValidHash. Without this the verdict stops at
+                        // the failing block and a CL-supplied tip two or more hops above it stays ACCEPTED forever.
+                        descendants.foreach { d =>
+                          log.warning(
+                            "Block {} descends from invalid block {} — reporting as consensus-invalid",
+                            d.number,
+                            failing.number
+                          )
+                          consensus.reportInvalidChain(d.hash.value, latestValidHash)
+                        }
+                      case None =>
+                        log.debug(
+                          "Gas mismatch in batch starting at block {}: execution stopped at a later block that could " +
+                            "not be proven invalid from here — not reporting from the import path",
+                          failedBlock.number
+                        )
                     val invalidBlockNr = failedBlock.number.value
                     fetcher ! BlockFetcher.InvalidateBlocksFrom(invalidBlockNr, err.toString)
                     Running
