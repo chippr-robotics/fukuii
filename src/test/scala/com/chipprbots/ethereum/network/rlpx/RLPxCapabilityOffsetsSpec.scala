@@ -107,6 +107,56 @@ class RLPxCapabilityOffsetsSpec extends AnyFlatSpec with Matchers:
     offsets.peerSnapBase shouldBe None
   }
 
+  // ── hive devp2p `snap`/`snap2` suites: confirmed NOT a fukuii offset bug ──
+  // Root-caused against the 2026-09-22 hive artifact (snap: AccountRange/GetByteCodes/
+  // GetTrieNodes/GetStorageRanges all fail `i/o timeout`; fukuii's own server log for the
+  // same run shows e.g. `DECODE_ERROR: ... Cannot decode GetByteCodes. Expected RLPList[3]`
+  // for a request hive sent as GetAccountRange, and `Unknown snap/1 message type: 42/44` for
+  // hive's actual GetByteCodes/GetTrieNodes requests). Traced to go-ethereum's OWN
+  // `cmd/devp2p/internal/ethtest/protocol.go`, which hardcodes `ethProtoLen = 22` (the slot
+  // count for eth/72) for every peering regardless of which eth version was actually
+  // negotiated — see `getProto`'s doc comment: "assuming the negotiated capabilities are
+  // exactly {eth,snap}". Real go-ethereum servers (`eth/protocols/eth/handler.go` via
+  // `p2p.Protocol{Length: protocolLengths[version]}`, `eth/protocols/eth/protocol.go:
+  // protocolLengths = {69:18, 70:18, 71:20, 72:22}`) do NOT do this — they size the eth slot
+  // per the version actually negotiated, exactly like `ethWireSizeFor` above. Because fukuii
+  // only advertises up to eth/69 (`InstanceConfig.scala` never sets an eth70 capability flag),
+  // it negotiates eth/69 (Length 18) with this test tool, so its `peerSnapBase` is 0x22 — but
+  // the tool writes/reads snap frames assuming 0x26 (0x10 + 0x16), a 4-slot shift. Every real
+  // snap message lands on the wrong canonical SNAP slot (GetAccountRange → decoded as
+  // GetByteCodes, GetByteCodes → falls outside fukuii's [0x22,0x2a) window entirely = "unknown
+  // message type", etc.), so fukuii never sends a reply the tool recognises within its 2s read
+  // deadline (`var timeout = 2 * time.Second` in the same file).
+  //
+  // This is upstream go-ethereum test-tool behaviour, not a fukuii wire defect: fukuii's
+  // dynamic per-negotiated-version sizing is what matches the *real* go-ethereum server
+  // implementation, and is what protects real interop with any live eth/69 + snap/1 peer.
+  // "Fixing" `ethWireSizeFor`/`computeCapabilityOffsets` to hardcode a fixed 0x16 slot count
+  // to chase this specific test tool would BREAK real geth/Nethermind/Besu interop at eth/68
+  // and eth/69 (see the ETH68 case a few tests above, which correctly gets 0x21, not 0x26).
+  // The only way to make the go-ethereum devp2p CLI tool's own assumption hold is for fukuii
+  // to negotiate eth/72 with it — i.e. implement eth/71 and eth/72, which is out of scope here
+  // (see AGENTS.md herald: "ETH68/69/70 only") and unrelated to Amsterdam (specs/009).
+  //
+  // This test pins the exact peer shape the hive tool presents (it advertises eth/72 and
+  // eth/70 in its Hello alongside eth/69 and snap/1; fukuii doesn't recognise eth/71 or eth/72
+  // and silently drops them per `Capability.toCapability`'s EIP-8 leniency, and doesn't
+  // advertise eth/70 itself, so negotiation lands on eth/69) so a future "fix" attempt has to
+  // consciously break this assertion rather than silently regress it.
+  it should "NOT shift SNAP base to please the hive devp2p CLI tool's fixed eth/72-sized offset assumption (peer also advertises eth/70, unrecognised eth/71/72 dropped)" taggedAs UnitTest in {
+    val hiveDevp2pToolHello = List(Capability.ETH70, Capability.ETH69, Capability.SNAP1)
+    val offsets = RLPxConnectionHandler.computeCapabilityOffsets(
+      peerCaps = hiveDevp2pToolHello,
+      negotiatedEth = Capability.ETH69, // fukuii only advertises up to eth/69, so eth/69 wins
+      supportsSnap = true
+    )
+    offsets.peerEthBase shouldBe 0x10
+    offsets.peerEthSize shouldBe 0x12
+    // Correct per real go-ethereum (protocolLengths(eth/69) = 18) — NOT 0x26 (0x10 + 0x16),
+    // which is what the hive devp2p CLI tool's own hardcoded `ethProtoLen = 22` would assume.
+    offsets.peerSnapBase shouldBe Some(0x22)
+  }
+
   // Regression: locks the inverse of the old buggy mapping. With the bug, Nethermind shape
   // produced peerSnapBase=0x10 + peerEthBase=0x18; the eth/69 Status frame (wire id 0x10,
   // RLPList[7]) was translated onto canonical SNAP GetAccountRange (0x30, RLPList[5]) and the
