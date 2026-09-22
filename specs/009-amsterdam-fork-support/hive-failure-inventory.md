@@ -1295,3 +1295,58 @@ binds as it awaits them, but only the 8551 line was ever visible — `EngineApiH
 sits under the `consensus.engine` logger while `StdNode` fell through to `ROOT=ERROR`.
 The 8545 bind time has been invisible in every hive log collected so far, which is why
 this race was twice attributed to the wrong port. The next run will show both.
+
+---
+
+## Engine on `810d6d8`: 78 → 48, and all 30 that cleared were one family
+
+`355 / 48 / 403`, against `325 / 78 / 403` on `6c8bc97` — same denominator, so the
+difference is real. Failing test NAMES diffed against
+`baselines/engine-failing-6c8bc97.txt`:
+
+- **30 cleared** — every single `Fork ID:` test. All 12 `Genesis=0, Cancun=*`, all 12
+  `Genesis=1, Cancun=*`, and all 6 `Paris` ones.
+- **0 new failures.** No regression anywhere in the suite.
+
+The new failing set is pinned at `baselines/engine-failing-810d6d8.txt`.
+
+**A prediction was wrong, in the useful direction.** The expectation carried into this
+run was that 24 of the 30 would flip from the fork-id work (12 from dropping the
+wall-clock substitution, 12 from the genesis-timestamp filter) and that the 6 `Paris`
+ones would NOT, because those were failing on `invalid message code: 33` rather than on
+the checksum. All 6 flipped too. Deleting the eager post-handshake
+`ETH69.BlockRangeUpdate` cleared them: `invalid message code` has gone from 21
+occurrences to **zero** across the whole suite, and `wrong fork ID in status` from 10 to
+**zero**. Two independent defects, both gone, and the second was worth more than it was
+credited for.
+
+### The remaining 48
+
+| count | cause |
+|---:|---|
+| 34 | `Timeout waiting for main client to detect invalid chain` — Missing Ancestor Syncing |
+| 5 | blob bundle count mismatch |
+| 4 | `Timeout waiting for sync` — Withdrawals Re-Org Sync |
+| 2 | `Request Blob Pooled Transactions`: `expected size 131330, got 146` |
+| 1 | `ForkchoiceUpdatedV3 To Request Shanghai Payload, Null Beacon Root` |
+| 1 | `In-Order Consecutive Payload Execution` |
+| 1 | `GetPayloadBodiesByRange (Sidechain)` |
+
+The two `Request Blob Pooled Transactions` failures changed shape rather than clearing:
+they were `invalid message code: 33` and are now a sidecar size mismatch
+(`expected size 131330, got 146`). That is a different, and more specific, defect than
+the one they were previously attributed to.
+
+38 of the 48 are the Missing Ancestor Syncing family plus the Re-Org Sync timeouts,
+which the cross-tab above splits by two discriminators (`Invalid P8` always fails;
+`CanonicalReOrg=True` always fails).
+
+### Scoreboard, all on `810d6d8` unless noted
+
+| suite | start | `6c8bc97` | `810d6d8` |
+|---|---:|---:|---:|
+| rpc-compat | 19 | 6 | **1** (246/1/247) |
+| graphql | 2 | 2 | 2 |
+| devp2p | 18 | 18 | 18 |
+| engine | 97 (fc713a9) | 78 | **48** (355/48/403) |
+| sync | — | 1 real | 2 (both timing, diagnosed above) |
