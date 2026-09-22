@@ -17,10 +17,10 @@ assumptions so every loop recipe starts from verified facts rather than guesses.
 | `sbt scalafmtCheck` | Verify format without writing | ~20s |
 | `sbt scalafixAll` | Run all scalafix rules | ~30s |
 | `sbt formatAll` | scalafixAll + scalafmtAll (pre-PR only; aborts on pre-existing violations) | ~50s |
-| `.local/scripts/fukuii-test essential` | Tier 1 via wrapper with persistent logging | ~24 min |
-| `.local/scripts/fukuii-test standard` | Tier 2 via wrapper | ~30 min |
-| `.local/scripts/fukuii-test only <Spec>` | Targeted single-spec run | ~10-60s |
-| `.local/scripts/fukuii-test quick` | crypto submodule only | ~20s |
+| `./scripts/fukuii-test essential` | Tier 1 via wrapper with persistent logging | ~24 min |
+| `./scripts/fukuii-test standard` | Tier 2 via wrapper | ~30 min |
+| `./scripts/fukuii-test only "*<Spec>*"` | Targeted single-spec run | ~10-60s |
+| `./scripts/fukuii-test quick` | crypto submodule only | ~20s |
 
 **SyncTest exclusion:** RegularSyncSpec, FastSyncSpec, SyncControllerSpec,
 BlockchainHostActorSpec, SyncStateDownloaderStateSpec — all tagged `SyncTest` and
@@ -88,10 +88,10 @@ subsystem only ever updates `upstream` branches. Conformance checks always diff 
 
 | Script | Location | Purpose |
 |--------|----------|---------|
-| `fukuii-test` | `.local/scripts/fukuii-test` | Test tier wrapper with persistent logging |
-| `fukuii-run-tick` | `.local/scripts/fukuii-run-tick` | Monitoring state collection (used in cron) |
-| `fukuii-monitor` | `.local/scripts/fukuii-monitor` | High-level node status check |
-| `fukuii-inject-loop` | `.local/scripts/fukuii-inject-loop` | Trie-node injection loop (model for automation pattern) |
+| `fukuii-test` | `./scripts/fukuii-test essential` | Test tier wrapper with persistent logging |
+| `fukuii-run-tick` | `./scripts/fukuii-run-tick` | Monitoring state collection (used in cron) |
+| `fukuii-monitor` | `./scripts/fukuii-monitor` | High-level node status check |
+| `fukuii-inject-loop` | `./scripts/fukuii-inject-loop` | Trie-node injection loop (model for automation pattern) |
 
 ## Relevant Existing Protocols
 

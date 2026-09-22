@@ -39,14 +39,14 @@ No tests. These phases change syntax only — compile is the full signal.
 ### After logic-changing phases
 (Main migration, caller updates, behavior changes)
 ```bash
-./local/scripts/fukuii-test <ActorNameSpec>          # actor-specific, seconds
-./local/scripts/fukuii-test <SubsystemSuite>         # subsystem if callers touched
+./scripts/fukuii-test only "*<ActorNameSpec>*"          # actor-specific, seconds
+./scripts/fukuii-test only "*<SubsystemSuite>*"         # subsystem if callers touched
 ```
 Run targeted tests only. Do not run testEssential here.
 
 ### End of thread — once
 ```bash
-./local/scripts/fukuii-test                          # full testEssential (~24 min)
+./scripts/fukuii-test essential                          # full testEssential (~24 min)
 ```
 Run exactly once per thread after all phases are complete. This is the regression gate.
 Do not run it between phases. Do not run it as a mid-session sanity check.
@@ -120,12 +120,12 @@ If you are unsure whether a type qualifies, run the grep above before starting.
 
 ```bash
 # By actor name:
-./local/scripts/fukuii-test AccountRangeCoordinatorSpec
-./local/scripts/fukuii-test ByteCodeCoordinatorSpec
+./scripts/fukuii-test only "*AccountRangeCoordinatorSpec*"
+./scripts/fukuii-test only "*ByteCodeCoordinatorSpec*"
 
 # By subsystem:
-./local/scripts/fukuii-test SNAPSuite      # all SNAP tests (~263)
-./local/scripts/fukuii-test NetworkSuite
+./scripts/fukuii-test only "*SNAPSuite*"      # all SNAP tests (~263)
+./scripts/fukuii-test only "*NetworkSuite*"
 
 # By tag (sbt native):
 sbt testNetwork
@@ -176,7 +176,7 @@ closing; do not accept a lower count as the new baseline without a recorded reas
 
 ## Protocol for failing tests after migration
 
-1. Run targeted test first: `./local/scripts/fukuii-test <FailingSpec>`
+1. Run targeted test first: `./scripts/fukuii-test only "*<FailingSpec>*"`
 2. Read the failure — understand it before touching anything
 3. If failure is in the migrated actor: fix the migration, not the test
 4. If failure is in a test that tests Classic behavior: update the test for Typed API

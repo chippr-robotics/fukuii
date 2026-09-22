@@ -34,8 +34,9 @@ burned, validator withdrawals, blob transactions (EIP-4844), Osaka fork.
 | `sbt formatCheck` | Verify formatting without writing | CI / pre-flight check |
 | `sbt pp` | compile-all + formatAll + quick + integration tests | Pre-PR gate — same caveat as formatAll |
 | `sbt "testOnly *Foo*"` | Single test class (seconds) | After each phase that changes logic — not compile-only phases |
-| `./local/scripts/fukuii-test FooSpec` | Wrapper for targeted test | Same as testOnly — prefer this form |
-| `./local/scripts/fukuii-test` | Full testEssential via wrapper | **End of thread only, once** — 24 min, do not run between phases |
+| `./scripts/fukuii-test only "*Foo*"` | Wrapper for targeted test | Same as testOnly — prefer this form |
+| `./scripts/fukuii-test essential` | Full testEssential via wrapper | **End of thread only, once** — 24 min, do not run between phases |
+| `./scripts/fukuii-test quick` | `crypto / test` only (~20 s) | Fast smoke check of the crypto sub-module |
 | `sbt testEssential` | Tier 1 full suite (24 min, 3,621 tests) | End of thread only — stalls development if run mid-thread |
 | `sbt testStandard` | Tier 2 tests | Before opening a PR |
 | `sbt testComprehensive` | Tier 3 full compliance suite (<3 h) | Release gate only |
