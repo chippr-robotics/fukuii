@@ -758,3 +758,64 @@ returns the wrong number of blobs in the `getPayload` bundle — including retur
 none were expected. This is bundle assembly, unrelated to the EIP-7594 sidecar decode
 fixed in `9bc7fb4`, and the "got 5 where 6 expected" case shows it is not simply
 off-by-one in one direction.
+
+---
+
+## A verified defect: `importToNewBranch` can never select a side branch on a post-merge chain
+
+This is code-level and checkable by reading two files; it is recorded separately from the
+question of which tests it explains.
+
+`ConsensusImpl.importToNewBranch`:
+
+```scala
+blockchainReader.getChainWeightByHash(parentHash) match
+  case Some(parentWeight) =>
+    if newBranchWeight(branch, parentWeight) > currentBestBlockWeight then
+      reorganise(currentBestBlockNumber, branch, parentWeight, parentHash)
+    else KeptCurrentBestBranch          // no execution, no reporting
+  case None => ConsensusError(...)      // no execution either
+```
+
+`newBranchWeight` folds `ChainWeight.increase`, and `ChainWeight.increase` is:
+
+```scala
+def increase(header: BlockHeader): ChainWeight =
+  ChainWeight(totalDifficulty + header.difficulty)
+```
+
+**Post-merge every block has `difficulty == 0`.** So `newBranchWeight(branch, parentWeight)`
+equals `parentWeight` exactly, for a branch of any length. A side branch by definition forks
+at or below the current head, so `parentWeight <= currentBestBlockWeight`, and the guard
+`newBranchWeight > currentBestBlockWeight` is therefore **never satisfiable on a PoS chain**.
+
+Every side branch on an Engine-API chain takes `else KeptCurrentBestBranch` and is silently
+dropped without being executed. Chain weight is a proof-of-work selection rule; after the
+merge it is frozen, and post-merge head selection is the consensus layer's decision
+delivered by `forkchoiceUpdated`, not something the execution layer derives from difficulty.
+
+`reportIfProvenInvalid` is called from `importToTop` (two arms) and from `reorganise`'s
+failure arm. It is **not** called on the `KeptCurrentBestBranch` path — consistent, since
+nothing executed, so nothing failed to report.
+
+ETC is unaffected and must stay that way: PoW blocks carry real difficulty, the comparison
+is meaningful there, and this is the correct rule for a PoW chain.
+
+### What this does and does not explain
+
+**Not established:** that this is the code path the 34 invalid-ancestor and 4
+Withdrawals-Re-Org-Sync failures traverse. `engine_newPayload` does not reach
+`ConsensusImpl` at all — it calls `blockExecution.executeAndValidateBlockFull` directly,
+gated on `parentKnown && parentValidated`, and on an unknown parent it stores the block with
+`storeBlockByHashOnly` and answers ACCEPTED. That first answer is correct. What follows —
+how the missing ancestors are backfilled, and whether that backfill reaches
+`BlockImporter` → `ConsensusImpl.evaluateBranch` → `importToNewBranch` — was not traced.
+
+So there are two candidate explanations for the 38 and they are not the same fix:
+
+1. the backfill reaches `importToNewBranch` and is dropped by the weight guard above; or
+2. no backfill is ever requested, and the node simply sits on the stored-by-hash block.
+
+Distinguishing them needs the branch-import path instrumented on one of these fixtures.
+Whichever it is, the weight guard is independently wrong for PoS and worth fixing on its
+own merits — but it should not be credited with the 38 until measured.
