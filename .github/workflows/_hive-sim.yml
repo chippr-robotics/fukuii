@@ -126,7 +126,10 @@ jobs:
   hive:
     name: ${{ inputs.label }}
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    # 105, raised from 90 so an 80m --sim.timelimit (consume-engine/-rlp) plus image builds
+    # (~3-5m) and artifact upload cannot push the job past its ceiling. A job killed at the
+    # ceiling loses its artifacts entirely, which is strictly worse than any test result.
+    timeout-minutes: 105
 
     outputs:
       passed: ${{ steps.tab.outputs.passed }}

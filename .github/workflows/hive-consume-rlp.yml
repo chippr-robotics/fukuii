@@ -42,7 +42,14 @@ jobs:
       # Declared in .github/gates.yml (gate `hive-consume-rlp`). A run emitting fewer
       # than this many results is a truncated run, not a pass.
       min_tests: 50
-      sim_timelimit: ${{ github.event.inputs.sim_timelimit || '60m' }}
+      # 80m, raised from 60m. Measured on 501368ec9: both suites ran exactly 60:00 and hit
+      # `simulation timed out` with the last 4 tests each still being launched — consume-engine
+      # stopped at 1469/1473, consume-rlp at 1698/1702. hive killed those clients with
+      # `timed out waiting for container startup` and scored them "Test was terminated by host",
+      # which reads as 8 fukuii failures but is the tail of a suite out of wall clock. Which 4
+      # tests land in that tail depends on scheduling, which is why gates.yml records consume-rlp
+      # as failing "only intermittently". No test is changed; the suite is given time to finish.
+      sim_timelimit: ${{ github.event.inputs.sim_timelimit || '80m' }}
       sim_limit: ${{ github.event.inputs.sim_limit || '' }}
       sim_buildarg: disable_strict_exception_matching=nimbus-el,fukuii
       hive_ref: ${{ github.event.inputs.hive_ref || 'master' }}
