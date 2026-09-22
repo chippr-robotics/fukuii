@@ -864,3 +864,105 @@ by accident, from a different direction, while the production chain carried the 
 silently. The regression tests added alongside the fix pin the value for the fixture chain
 AND for mainnet, and pin the wrong value for the without-glaciers config so the fix is shown
 to be causal.
+
+---
+
+## Corrections from the fork-id work, and a devp2p cause measured at last
+
+### The mainnet fork id was wrong for TWO independent reasons, and I reported the wrong value
+
+`a858f7c` was described in its own commit message as adding the two glacier forks. It also
+flipped `include-on-fork-id-list` from `false` to `true` on `eth-chain.conf`, which that
+message never mentions. That second change is a separate defect: the DAO fork block
+1,920,000 was being excluded from ETH mainnet's fork list.
+
+The flag is **correct for ETC** — ETC rejected the DAO bailout, so 1,920,000 is not a fork
+transition there — and `eth-chain.conf` inherited it from the ETC config lineage.
+go-ethereum's mainnet config sets `DAOForkSupport: true`. `etc-chain.conf` still reads
+`false` and must keep doing so.
+
+So the earlier claim in this file and in `9d1bf8b`/`a858f7c` — that fukuii advertised
+`0x8e91a3e4` — **was wrong**. That is the value for a config missing the glaciers but
+*having* DAO. Recomputed across all four states from the canonical mainnet genesis:
+
+| config state | fork id at a Prague head |
+|---|---:|
+| DAO + both glaciers (correct) | `0xc376cf8b` |
+| DAO, no glaciers | `0x8e91a3e4` ← what was previously reported |
+| glaciers, no DAO | `0xce126fe9` |
+| **neither — what fukuii actually shipped** | **`0x0f91ba49`** |
+
+The conclusion is unchanged and if anything stronger: fukuii could not peer on ETH mainnet.
+The specific number was wrong because the earlier check assumed a fork list the shipped
+config did not have — verifying the *fix* without verifying the *starting state*.
+
+Corroboration that the corrected list is right, reproduced independently here: at a
+Shanghai head it yields `0xdce96c2d` and at a Cancun head `0x9f3d2254`, both published
+mainnet values, and both require the DAO block **and** both glaciers.
+
+### The 30 engine `Fork ID:` failures are NOT explained by that fix
+
+Checked against the artifact's have/want pairs rather than assumed. Three distinct causes,
+none of them the enumeration gap:
+
+- **12 × `Genesis=0, Cancun=*`** — wall-clock substitution.
+  `EthNodeStatus68ExchangeState.scala:73` and `:177`, and
+  `EthNodeStatus69ExchangeState.scala:151`, all do
+  `if storedTimestamp == Timestamp.Zero then Timestamp(System.currentTimeMillis()/1000)`.
+  On a chain whose genesis timestamp is legitimately 0, the head timestamp *is* 0, so
+  fukuii substitutes wall-clock and every timestamp fork looks passed. Measured:
+  `have=0x237d1525 next=0` vs `want=0xc8014e7d next=1` — `next=0` is the tell.
+- **12 × `Genesis=1, Cancun=*`** — wrong filter rule. `ForkId.scala:105` ends
+  `.flatten.filterNot(_ == 0).distinct.sorted`; geth filters `<= genesisTimestamp`. With
+  genesis ts 1 and Cancun at 1, geth skips Cancun and fukuii accumulates it.
+  `ForkId.create` takes no genesis timestamp, so this needs an API change threaded to the
+  handshake call sites.
+- **6 × `Paris=*`** — `invalid message code: 33`, i.e. the BlockRangeUpdate bug, already
+  fixed in `cd56c7e`.
+
+The glaciers are irrelevant to all 30: the engine simulator's genesis puts every block fork
+at 0, so they filter out as genesis ruleset.
+
+### The sync `peercount=0` fork-id hypothesis is ruled out
+
+`hive/simulators/ethereum/sync/chain/genesis.json` puts every block fork at 0 — glaciers and
+mergeNetsplit included — and both `shanghaiTime` and `cancunTime` at 0, with genesis
+timestamp `0x0`. The fork list is therefore **empty for both clients**: block forks at 0
+filter as genesis ruleset, and timestamp forks at 0 filter under both geth's
+`<= genesis` rule and fukuii's `== 0` rule. Both sides compute bare `CRC32(genesis)` with
+`next=0`, and no head timestamp changes that. Fork id cannot explain that failure. The
+mechanism floated earlier in this effort is dead; the cause is elsewhere.
+
+### Four devp2p failures now have a measured cause: the eth/72 announcement shape
+
+Predicted from harness source, then confirmed against fukuii's own client log from the
+`6c8bc97` devp2p run:
+
+    DECODE_ERROR: Cannot decode message ... - disconnecting. Error: src is not an RLPValue
+
+**Exactly 4** occurrences, all in the container running the eth tests, each immediately
+after `ETH69_STATUS: ForkId validation passed`. Exactly 4 tests fail in that flow:
+`NewPooledTxs`, `BlobViolations`, `TestBlobTxWithoutSidecar`, `TestBlobTxWithMismatchedSidecar`.
+
+The chain, closed in source:
+
+- go-ethereum's `testBadBlobTx` and `TestBlobViolations` construct
+  `NewPooledTransactionHashesPacket72{Types, Sizes, Hashes, Mask}` — 4 fields, including the
+  PeerDAS `Mask` — and send it **with no `negotiatedProtoVersion` gate**, unlike the
+  `eth72Supported()`-gated tests beside them.
+- `ETHPackets.toNewPooledTransactionHashes`'s typed case is
+  `RLPList(RLPValue(typesBytes), sizesList: RLPList, hashesList: RLPList)` — exactly 3.
+- A 4-element packet falls to `case rlpList: RLPList => fromRlpList[ByteString](rlpList)`,
+  which hits the nested `sizes` list where a scalar is required, and
+  `rlp/.../RLPImplicits.scala:23` throws `RLPException("src is not an RLPValue")` — the
+  exact string in the log.
+
+So these four are neither the wrapper gate nor the BRU. Both earlier attributions were
+wrong. fukuii caps at ETH70 and is being handed a message for a protocol it never
+negotiated, so rejecting it is arguably correct — which would place these four in the same
+bucket as the snap-offset failures: not reachable without eth/71-72 support.
+
+Separately flagged: that generic fallback branch fabricates `types` and `sizes` as
+`Seq.fill(hashes.size)(0)` — inventing protocol data it does not have. On an input it can
+coerce it would succeed with fabricated metadata instead of failing. That is a
+silent-fallback defect independent of eth/72.
