@@ -578,3 +578,60 @@ decimal; `blobSchedule` and `forkId` absent; precompiles keyed by geth-internal 
 instead of canonical UPPER_SNAKE (and `KZG_POINT_EVALUATION` missing entirely);
 `systemContracts` carrying 1 of 5 entries under the wrong name; and `next`/`last` fabricating
 fork objects with a `0xde0b6b3a7640000` sentinel where the spec wants `null`.
+
+---
+
+## engine on `6c8bc97` — 325 / 78 / 403
+
+| suite | commit | passed | failed | total |
+|---|---|---:|---:|---:|
+| engine | fc713a9 | 306 | 97 | 403 |
+| engine | **6c8bc97** | **325** | **78** | **403** |
+
+The denominator is identical, so the difference is real: **19 fewer failures.** This is
+also the first engine run that reported its own counts — the tabulation-ordering fix
+(`6c8bc97`) worked, and the failure breakdown is reachable from the log tail.
+
+**What this run cannot tell us.** It carries two changes at once — the `-32700` batch fix
+and the invalid-chain reporting channel (`5779126`) — so the 19 cannot be split between
+them from the count alone. Attributing *which* 19 cleared would need `fc713a9`'s failing-test
+list to diff against, which this file does not record. The 19 is therefore a real
+improvement of unknown composition, not 19 tests we can name.
+
+### A prediction that was wrong, recorded as such
+
+Before the run I wrote: "`CanonicalReOrg=False` variants clearing confirms the reporting
+channel. If `=True` variants also clear, my model of that topology is wrong and I'll say
+so."
+
+Neither happened. **Both variants are still failing**, e.g.
+
+    Invalid Missing Ancestor Syncing ReOrg, Timestamp,     EmptyTxs=False, CanonicalReOrg=False, Invalid P8 (Paris, Cancun)
+    Invalid Missing Ancestor Syncing ReOrg, ReceiptsRoot,  EmptyTxs=False, CanonicalReOrg=False, Invalid P8 (Paris, Cancun)
+    Invalid Missing Ancestor Syncing ReOrg, Incomplete Transactions, EmptyTxs=False, CanonicalReOrg=False, Invalid P9 (Paris)
+
+So the reporting channel did not clear the `=False` family, which is what I expected it to
+do. The failure mode I named as the falsifier (`=True` clearing too) is not what occurred
+either — the prediction simply missed. `5779126` may still be doing something useful; this
+run does not show it, and the honest reading is that the invalid-ancestor family is not
+explained by the reporting gap alone.
+
+### New signal worth acting on
+
+Two entries not previously prominent:
+
+    Request Blob Pooled Transactions Single   (Cancun)
+    Request Blob Pooled Transactions Multiple (Cancun)
+
+These are **pooled blob transactions**, which is exactly the surface of the still-open
+four-element wrapper gate in `ETHPackets.toPooledTransactions` (lines 1066 and 1077, where
+`isNetworkWrapped` requires `inner.items.size == 4`). A correctly formed EIP-7594 sidecar
+from a peer is currently classified as ABSENT rather than malformed. That fix was scoped
+for three devp2p tests; these two suggest it reaches the engine suite as well.
+
+Also present and not yet diagnosed: four `Withdrawals Fork on ... Re-Org Sync (Paris)`
+failures.
+
+Note the histogram printed in the log is truncated (`head -25` / `head -30` in the
+tabulate step), so the names above are the top slice of 78, not the whole set. The full
+list is in the `hive-logs-engine` artifact.
