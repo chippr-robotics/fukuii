@@ -61,6 +61,19 @@ if [ -f "$GENESIS_FILE" ]; then
     # eth_config (EIP-7910) must advertise the chain's own value, so read it from the
     # genesis rather than falling back to the mainnet contract.
     DEPOSIT_CONTRACT=$(jq -r '.config.depositContractAddress // empty' "$GENESIS_FILE" 2>/dev/null || true)
+
+    # Arrow Glacier (EIP-4345), Gray Glacier (EIP-5133) and the post-Merge net-split block
+    # (EIP-3675). These have no EVM semantics, but go-ethereum's `gatherForks` enumerates
+    # every *Block field of ChainConfig, so all three enter the EIP-2124 fork-id checksum
+    # chain. hive exports HIVE_FORK_* only for the forks it models, and these three are not
+    # among them, so read them from the genesis the simulator actually handed us.
+    #
+    # Omitting them is not cosmetic: on this fixture the correct checksum is 0xe272ecbe and
+    # the checksum without them is 0x5e0cb820, which every geth peer rejects with
+    # "wrong fork ID in status" — i.e. no peering at all.
+    ARROW_GLACIER=$(jq -r '.config.arrowGlacierBlock // empty' "$GENESIS_FILE" 2>/dev/null || true)
+    GRAY_GLACIER=$(jq -r '.config.grayGlacierBlock // empty' "$GENESIS_FILE" 2>/dev/null || true)
+    MERGE_NETSPLIT=$(jq -r '.config.mergeNetsplitBlock // empty' "$GENESIS_FILE" 2>/dev/null || true)
 fi
 
 # ==============================================================================
@@ -122,6 +135,11 @@ fi
 
 # EIP-6110 deposit contract address, as declared by the fixture genesis (see above).
 [ -n "$DEPOSIT_CONTRACT" ] && FLAGS="$FLAGS -Dfukuii.blockchains.hive.deposit-contract-address=$DEPOSIT_CONTRACT"
+
+# Fork-id-only block forks read from the genesis above (see the comment there).
+[ -n "$ARROW_GLACIER" ] && FLAGS="$FLAGS -Dfukuii.blockchains.hive.arrow-glacier-block-number=$ARROW_GLACIER"
+[ -n "$GRAY_GLACIER" ] && FLAGS="$FLAGS -Dfukuii.blockchains.hive.gray-glacier-block-number=$GRAY_GLACIER"
+[ -n "$MERGE_NETSPLIT" ] && FLAGS="$FLAGS -Dfukuii.blockchains.hive.merge-netsplit-block-number=$MERGE_NETSPLIT"
 
 # RPC
 [ -n "$TARGET_GAS_LIMIT" ] && FLAGS="$FLAGS -Dfukuii.mining.gas-limit-target=$TARGET_GAS_LIMIT"

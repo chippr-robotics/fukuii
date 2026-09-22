@@ -130,6 +130,24 @@ case class ForkBlockNumbers(
     // lists this for Sepolia. Without it, our forkId hashes for Shanghai+ are off by
     // one CRC32 round and ForkIdValidator.checkSuperset rejects all chain-head peers.
     mergeNetsplitBlockNumber: BigInt = Long.MaxValue,
+    // EIP-4345 (Arrow Glacier) and EIP-5133 (Gray Glacier): ETH difficulty-bomb delays.
+    //
+    // They carry NO EVM or state semantics here and must not be wired into any consensus
+    // path — fukuii never implemented ETH's bomb schedule, and ETH is post-merge PoS where
+    // difficulty is irrelevant. They exist for exactly one reason: go-ethereum's
+    // `gatherForks` enumerates every `*Block` field of ChainConfig, so both numbers enter
+    // the EIP-2124 fork-id checksum chain. Omitting them makes our fork hash diverge from
+    // every geth peer on any chain that declares them, and the handshake is then rejected
+    // with "wrong fork ID in status".
+    //
+    // Measured on hive's rpc-compat fixture (arrowGlacierBlock 30, grayGlacierBlock 33,
+    // mergeNetsplitBlock 36): with all three present the checksum is 0xe272ecbe, which is
+    // what the chain expects; with them absent it is 0x5e0cb820.
+    //
+    // Long.MaxValue is the "not configured" sentinel that ForkId.gatherBlockForks filters
+    // out, so these are inert for every chain that does not declare them — ETC included.
+    arrowGlacierBlockNumber: BigInt = Long.MaxValue,
+    grayGlacierBlockNumber: BigInt = Long.MaxValue,
     // Gas limit targets embedded in the fork schedule (EIP-7935 / ECIP-1121).
     // When Some(target), the miner converges toward that target from the fork activation
     // block onward via the standard ±1/1024 mechanism — the schedule is authoritative
@@ -194,7 +212,9 @@ object ForkBlockNumbers:
     mystiqueBlockNumber = Long.MaxValue,
     spiralBlockNumber = Long.MaxValue,
     olympiaBlockNumber = Long.MaxValue,
-    mergeNetsplitBlockNumber = Long.MaxValue
+    mergeNetsplitBlockNumber = Long.MaxValue,
+    arrowGlacierBlockNumber = Long.MaxValue,
+    grayGlacierBlockNumber = Long.MaxValue
   )
 
 object BlockchainConfig:
@@ -269,6 +289,12 @@ object BlockchainConfig:
       Try(BigInt(blockchainConfig.getString("olympia-block-number"))).getOrElse(BigInt(Long.MaxValue))
     val mergeNetsplitBlockNumber: BigInt =
       Try(BigInt(blockchainConfig.getString("merge-netsplit-block-number"))).getOrElse(BigInt(Long.MaxValue))
+    // Absent key → Long.MaxValue sentinel → filtered out of the fork-id chain. ETC/Mordor
+    // never declare these, so their checksums are unaffected.
+    val arrowGlacierBlockNumber: BigInt =
+      Try(BigInt(blockchainConfig.getString("arrow-glacier-block-number"))).getOrElse(BigInt(Long.MaxValue))
+    val grayGlacierBlockNumber: BigInt =
+      Try(BigInt(blockchainConfig.getString("gray-glacier-block-number"))).getOrElse(BigInt(Long.MaxValue))
     val spiralGasTarget: Option[BigInt] =
       Try(BigInt(blockchainConfig.getString("spiral-gas-target"))).toOption
     val olympiaGasTarget: Option[BigInt] =
@@ -344,6 +370,8 @@ object BlockchainConfig:
         spiralBlockNumber = spiralBlockNumber,
         olympiaBlockNumber = olympiaBlockNumber,
         mergeNetsplitBlockNumber = mergeNetsplitBlockNumber,
+        arrowGlacierBlockNumber = arrowGlacierBlockNumber,
+        grayGlacierBlockNumber = grayGlacierBlockNumber,
         spiralGasTarget = spiralGasTarget,
         olympiaGasTarget = olympiaGasTarget,
         olympiaGasLimitElasticity = olympiaGasLimitElasticity
