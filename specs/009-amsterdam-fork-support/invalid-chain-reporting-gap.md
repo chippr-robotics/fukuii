@@ -18,6 +18,29 @@ It now simply fails to REPORT invalidity in time. That is a directional correctn
 gate count hides completely, and it renames the problem: not "validation is wrong" but
 "validation result never reaches the caller".
 
+## Verified independently from the artifacts
+
+Not a relayed claim. Extracted from both runs' `hive-logs-engine` artifacts by mapping each
+suite JSON's own `testDetailsLog` and reading each failing case's `summaryResult.log`
+{begin,end} byte range — note `summaryResult.details` is EMPTY for all 97, the message is
+only in the detail log, and an earlier attempt that fell back to an arbitrary detail file
+produced garbage until the per-suite mapping was fixed.
+
+| FAIL message | base b91d3fd | new fc713a9 |
+|---|---:|---:|
+| `Timeout waiting for main client to detect invalid chain` | 21 | **48** |
+| `Unexpected status response on EngineNewPayloadV3: INVALID, expected=VALID,ACCEPTED` | 12 | **0** |
+| `Unexpected status response on EngineNewPayloadV1: INVALID, expected=VALID,ACCEPTED` | 12 | **0** |
+| `Client returned VALID on an invalid chain` | 3 | **0** |
+| `Error trying to send transactions: ... Bad Request` (-32700) | 7 | 8 |
+| other / no FAIL line | 41 | 41 |
+| **total** | **96** | **97** |
+
+21 + 12 + 12 + 3 = 48. The three distinct families collapsed into one. The -32700 family
+went 7 -> 8, which is the entire +1 and is addressed separately by 9501d25.
+
+So the reporting gap is worth **48 engine tests, half the suite, through one mechanism**.
+
 ## The structural cause, verified
 
 `EngineApiService.scala:110`   `private val invalidBlocks = ConcurrentHashMap[...]`
