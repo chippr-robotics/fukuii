@@ -1909,3 +1909,52 @@ bug now matters there. Nothing here exercised mainnet Osaka block execution.
 - `BlobGasUtils`' header comment still gives BPO1 as 8/12 and BPO2 as 12/18; the code (10/15, 14/21) is
   right and matches geth.
 - Pattern, three times over: ETH fork overlays built from ETC-named opcode tables.
+
+## `4854b7d20` measured — Cause B cleared 0 of 28, and why
+
+| suite | result | vs prediction |
+|---|---|---|
+| engine | 363 / 403, **40 fail** (baseline 42): cleared 2, new 0 | predicted ~16 |
+| rpc-compat | 247 / 247 | held |
+| graphql | 51 / 52 | held at floor |
+| devp2p | 18 / 62, identical by name | held |
+| sync | 11 / 12 (`sync go-ethereum from fukuii`, known) | held |
+| snapsync | 6 / 6 | held |
+| consume-engine, consume-rlp, consensus | still running at time of writing | — |
+
+The 2 cleared are `GasUsed, CanonicalReOrg=False, Invalid P8` × Paris/Cancun — `3065b12e6` worked as
+designed. **Cause B cleared none of its 28**: every `CanonicalReOrg=True` Missing-Ancestor case and all
+4 `Withdrawals … Re-Org Sync` still end `Timeout waiting for main client to detect invalid chain`. No
+regressions, so the new PoS arm is at least inert where it should be.
+
+**What changed in the logs.** `not found when resolving branch` is gone from all 11 `EmptyTxs=False`
+target logs. Each shows the same sequence and then silence:
+
+```
+Fork choice head 923e5ac2… not executed yet (SYNCING, notify-only): headerKnown=true   (×35)
+PEER-CHAIN-DIVERGE  Peer reports hash=5b09ed69… at block 14; our hash=892454c3…
+[RegularSync] headers=14 from=PeerId(37c47bf8…) range=[1-14] waiting=14
+[RegularSync] block=14 top=14 behind=0 … caught-up ready=0 waiting=0
+```
+
+No import, no reported invalid block. The branch reached `compareBranch` and fell through to
+`NoChainSwitch`, which logs nothing.
+
+**Root cause — source-verified.** Both `DesignatedHead` sources read
+`ForkChoiceManager.getHeadBlockHash` (`NodeBuilder.scala:916`, `SyncController.scala:317`), which returns
+`currentState`. `currentState` is written only by `applyForkChoiceState`, i.e. for heads we have
+executed. The FCU naming the side-chain head goes through `notifyBeaconHead` — deliberately, because
+writing canonical state for an unexecuted head was an earlier consensus defect — and that path never
+touches `currentState`. So at exactly the moment Cause B exists for, the "designated head" is still our
+old canonical block 15 (`405eed0b…`); `leadsToDesignatedHead` walks the canonical chain and never meets
+the side tip (`5b09ed69…`, parent of the CL's head `923e5ac2…`). The unit tests passed because they
+inject the head directly instead of driving it through `notifyBeaconHead`.
+
+The design was right; the wire to it was wrong. The fix is a separate "most recent CL-requested head"
+in `ForkChoiceManager`, recorded on both the apply and notify paths, with `currentState` left
+executed-only. Heads already known invalid return INVALID before either path runs, so they are never
+recorded. Routed to `beacon`, with a regression test that drives the head through `notifyBeaconHead`.
+
+Not covered by this fix: `StateRoot, EmptyTxs=True, CanonicalReOrg=True` logs **no** header fetch at
+all (`hdrs=0`) — the peer handshakes at head ≈ 0 and nothing chases the beacon head by hash. That is the
+missing reverse-from-hash beacon sync logged earlier, not Cause B.
