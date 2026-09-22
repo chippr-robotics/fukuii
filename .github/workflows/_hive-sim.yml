@@ -414,6 +414,33 @@ jobs:
 
           total=$((passed + failed))
 
+          # Emit the counts THE MOMENT they are known, before any reporting.
+          #
+          # They used to be written ~60 lines further down, after the failing-name
+          # list and both histograms. Anything that went wrong in that reporting
+          # block — and this step runs under `set -u` — lost the counts entirely,
+          # and the gate then read empty outputs and declared "tabulation never
+          # ran / ZERO test results" for a run that had in fact produced results.
+          #
+          # That is not a cosmetic failure: it is indistinguishable, at the gate,
+          # from a simulator that genuinely produced nothing, so a complete engine
+          # run reports as a harness failure and the measurement is lost. Observed
+          # on engine twice, most recently run 35732925487, where the very same log
+          # carried a fully populated failure histogram — proof the loop had run —
+          # directly above "simulator produced ZERO test results".
+          #
+          # Reporting is best-effort; the counts are the product. Write the product
+          # first.
+          {
+            echo "passed=$passed"
+            echo "failed=$failed"
+            echo "total=$total"
+            echo "gate_passed=$gate_passed"
+            echo "gate_failed=$gate_failed"
+            echo "json_count=$json_count"
+          } >> "$GITHUB_OUTPUT"
+
+
           # Echo the failing test names to STDOUT, not only to the job summary.
           #
           # The summary is unreachable from the REST API, so a failure whose
@@ -473,15 +500,6 @@ jobs:
             grep -E '(\] FAILED |FAILED tests/|--- FAIL:)' "$sim_log" | head -40 || true
             echo "--- end FAILED test lines ---"
           fi
-
-          {
-            echo "passed=$passed"
-            echo "failed=$failed"
-            echo "total=$total"
-            echo "gate_passed=$gate_passed"
-            echo "gate_failed=$gate_failed"
-            echo "json_count=$json_count"
-          } >> "$GITHUB_OUTPUT"
 
           if [ "$json_count" -gt 0 ]; then
             src="${json_count} JSON result(s)"
