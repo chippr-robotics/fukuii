@@ -5,6 +5,8 @@ import org.apache.pekko.util.ByteString
 import java.util.concurrent.atomic.AtomicReference
 
 import com.chipprbots.ethereum.consensus.validators.BlockHeaderError
+import com.chipprbots.ethereum.domain.Block
+import com.chipprbots.ethereum.domain.BlockHash
 import com.chipprbots.ethereum.ledger.BlockExecutionError
 
 /** One-way channel from the p2p block-import path into the Engine API's invalid-block registry.
@@ -65,6 +67,38 @@ object InvalidChainReporter:
 
     override def reportInvalid(blockHash: ByteString, latestValidHash: ByteString): Unit =
       delegate.get().foreach(_.reportInvalid(blockHash, latestValidHash))
+
+  /** The prefix of `rest` that provably descends from `invalidBlock` through an unbroken `parentHash` chain.
+    *
+    * WHY THIS EXISTS. `EngineApiService.markInvalidRecursive` propagates a verdict to descendants, but only to
+    * descendants it learned about through `engine_newPayload` (its `acceptedChildrenByParent` index). A block that
+    * arrived over p2p is invisible to that index, so the poison chain breaks at the first p2p-supplied link and the
+    * CL-supplied tip above it keeps getting ACCEPTED forever.
+    *
+    * Measured on hive `engine` commit 6c8bc97: hive's "Invalid Missing Ancestor Syncing ReOrg ... Invalid P8" plants
+    * the invalid block TWO hops below the tip the CL hands us. The client log shows the import path correctly
+    * reporting the invalid block (`import path reported block 46fd0a65… consensus-invalid,
+    * latestValidHash=7d0d9971…`) and then answering `newPayload #15: ACCEPTED (parent unknown)` 80 more times,
+    * because the intermediate block (14) was fetched from a peer and so is in no engine-side index. Every P8 variant
+    * failed, 16/16; every variant where the invalid block IS the tip's direct parent (P9) passed.
+    *
+    * SAFETY. The link test is done here, block by block, rather than trusting the caller's branch to be contiguous:
+    * a block is reported only if its `parentHash` equals the hash of the block proven invalid immediately before it.
+    * The walk stops at the first break — it does not skip over a gap and resume. A block whose parent is
+    * consensus-invalid is itself consensus-invalid with no execution required and with the SAME `latestValidHash`
+    * ("the most recent valid block in the branch defined by payload and its ancestors" — Engine API spec), because
+    * the most recent valid ancestor of every block on the poisoned suffix is the invalid block's parent.
+    *
+    * This does NOT widen [[provesConsensusInvalid]]. Callers must gate on that predicate for the FAILING block first;
+    * this helper only carries an already-proven verdict downward along a proven link.
+    */
+  def provenDescendants(invalidBlock: Block, rest: List[Block]): List[Block] =
+    @annotation.tailrec
+    def loop(parentHash: BlockHash, remaining: List[Block], acc: List[Block]): List[Block] =
+      remaining match
+        case b :: tail if b.header.parentHash == parentHash => loop(b.hash, tail, b :: acc)
+        case _                                              => acc.reverse
+    loop(invalidBlock.hash, rest, Nil)
 
   /** Substring that identifies the one genuinely ambiguous post-execution failure. See [[provesConsensusInvalid]]. */
   private[ethereum] val GasUsedMismatchMarker = "Block has invalid gas used"

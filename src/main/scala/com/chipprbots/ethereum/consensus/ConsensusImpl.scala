@@ -53,16 +53,36 @@ class ConsensusImpl(
     * In the side-chain (reorg) case that parent is a validated but non-canonical block, which is what hive's
     * invalid-ancestor tests expect — not the canonical head.
     */
-  private def reportIfProvenInvalid(failingBlock: Block, error: BlockExecutionError): Unit =
+  private def reportIfProvenInvalid(
+      failingBlock: Block,
+      error: BlockExecutionError,
+      unexecutedSuffix: List[Block]
+  ): Unit =
     invalidChainReporter.foreach { reporter =>
       if InvalidChainReporter.provesConsensusInvalid(error) then
+        val latestValidHash = failingBlock.header.parentHash.value
         log.warn(
           "Reporting block {} ({}) as consensus-invalid to the Engine API: {}",
           failingBlock.number,
           failingBlock.header.hashAsHexString,
           error.describe
         )
-        reporter.reportInvalid(failingBlock.hash.value, failingBlock.header.parentHash.value)
+        reporter.reportInvalid(failingBlock.hash.value, latestValidHash)
+        // Carry the verdict down the rest of this branch. `unexecutedSuffix` holds the blocks that came after the
+        // failing one in the SAME batch and were therefore never executed; `provenDescendants` keeps only the
+        // unbroken parentHash-linked prefix of them, so every block reported here is a proven descendant of a proven
+        // invalid block. Without this the Engine API's verdict stops at the failing block and any CL-supplied tip
+        // more than one hop above it stays ACCEPTED forever — hive's "Invalid Missing Ancestor Syncing ReOrg ...
+        // Invalid P8" family, 16/16 failing on 6c8bc97. See InvalidChainReporter.provenDescendants.
+        InvalidChainReporter.provenDescendants(failingBlock, unexecutedSuffix).foreach { descendant =>
+          log.warn(
+            "Reporting block {} ({}) as consensus-invalid to the Engine API: descends from invalid block {}",
+            descendant.number,
+            descendant.header.hashAsHexString,
+            failingBlock.header.hashAsHexString
+          )
+          reporter.reportInvalid(descendant.hash.value, latestValidHash)
+        }
       else
         log.debug(
           "Not reporting block {} as invalid — error does not prove invalidity: {}",
@@ -154,15 +174,16 @@ class ConsensusImpl(
       case (Nil, Some(error)) =>
         // Nothing executed, so the failing block is the branch head and its parent is the current best block
         // (guaranteed by handleBranchImport's `currentBestHeader.hash == branch.head.header.parentHash` guard).
-        reportIfProvenInvalid(branch.head, error)
+        reportIfProvenInvalid(branch.head, error, branch.tail)
         BranchExecutionFailure(Nil, branch.head.header.hash.value, error.toString)
 
       case (importedBlocks, Some(error)) =>
         saveLastBlock(importedBlocks)
-        val failingBlock = branch.toList.drop(importedBlocks.length).head
+        val unexecuted = branch.toList.drop(importedBlocks.length)
+        val failingBlock = unexecuted.head
         // NB: this arm maps to `BlockImportedToTop` in ConsensusAdapter, which DISCARDS `error`. Reporting here is
         // the only signal that escapes a partially-successful batch at all.
-        reportIfProvenInvalid(failingBlock, error)
+        reportIfProvenInvalid(failingBlock, error, unexecuted.tail)
         ExtendedCurrentBestBranchPartially(
           importedBlocks,
           BranchExecutionFailure(Nil, failingBlock.hash.value, error.toString)
@@ -225,10 +246,11 @@ class ConsensusImpl(
           newBranch.last.number,
           error
         )
-        val failingBlock = newBranch.toList.drop(executedBlocks.length).head
+        val unexecuted = newBranch.toList.drop(executedBlocks.length)
+        val failingBlock = unexecuted.head
         // Side-chain case. `failingBlock.header.parentHash` is a validated but (until this batch) non-canonical
         // block — precisely the latestValidHash hive's invalid-ancestor tests assert on.
-        reportIfProvenInvalid(failingBlock, error)
+        reportIfProvenInvalid(failingBlock, error, unexecuted.tail)
         BranchExecutionFailure(
           executedBlocks.map(_.block),
           failingBlock.hash.value,

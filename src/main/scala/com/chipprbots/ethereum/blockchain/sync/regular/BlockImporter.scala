@@ -26,6 +26,7 @@ import com.chipprbots.ethereum.blockchain.sync.regular.BlockBroadcasterActor.Bro
 import com.chipprbots.ethereum.blockchain.sync.regular.BlockImporter.Command
 import com.chipprbots.ethereum.blockchain.sync.regular.RegularSync.ProgressProtocol
 import com.chipprbots.ethereum.consensus.ConsensusAdapter
+import com.chipprbots.ethereum.consensus.engine.InvalidChainReporter
 import com.chipprbots.ethereum.crypto.kec256
 import com.chipprbots.ethereum.db.storage.EvmCodeStorage
 import com.chipprbots.ethereum.db.storage.StateStorage
@@ -554,7 +555,20 @@ final private class BlockImporterLogic(
                     // descendants. latestValidHash = the failing block's parent: execution proceeds in order and
                     // stops at the first failure, so the parent is the last block we validated.
                     // No-op unless the Engine API is enabled (ETC/Mordor/Gorgoroth never bind a reporter).
-                    consensus.reportInvalidChain(failedBlock.hash.value, failedBlock.header.parentHash.value)
+                    val latestValidHash = failedBlock.header.parentHash.value
+                    consensus.reportInvalidChain(failedBlock.hash.value, latestValidHash)
+                    // Same reasoning as ConsensusImpl.reportIfProvenInvalid: the blocks queued behind the failing
+                    // one were never executed, and the unbroken parentHash-linked prefix of them is provably
+                    // invalid-by-descent with the same latestValidHash. Without this the verdict stops at
+                    // `failedBlock` and a CL-supplied tip two or more hops above it stays ACCEPTED forever.
+                    InvalidChainReporter.provenDescendants(failedBlock, notImportedBlocks.tail).foreach { d =>
+                      log.warning(
+                        "Block {} descends from invalid block {} — reporting as consensus-invalid",
+                        d.number,
+                        failedBlock.number
+                      )
+                      consensus.reportInvalidChain(d.hash.value, latestValidHash)
+                    }
                     val invalidBlockNr = failedBlock.number.value
                     fetcher ! BlockFetcher.InvalidateBlocksFrom(invalidBlockNr, err.toString)
                     Running

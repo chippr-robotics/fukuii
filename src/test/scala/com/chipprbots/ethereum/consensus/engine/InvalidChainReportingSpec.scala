@@ -168,8 +168,15 @@ class InvalidChainReportingSpec
 
     whenReady(consensusUnderTest.evaluateBranch(NonEmptyList.fromListUnsafe(branch)).unsafeToFuture())(_ => ())
 
-    // Exactly one report, naming the failing block, with the last block we actually executed as latestValidHash.
-    reported.toList shouldBe List(branch(1).hash.value -> branch(0).hash.value)
+    // The failing block, named with the last block we actually executed as latestValidHash, AND the rest of the
+    // branch behind it: those blocks were never executed, they are parentHash-linked descendants of a block proven
+    // invalid, and the Engine API has no other way to learn they are poisoned (they never arrive via newPayload).
+    // Every descendant carries the SAME latestValidHash — the most recent valid ancestor is the same block for all
+    // of them. Order matters: the failing block first, then descending.
+    reported.toList shouldBe List(
+      branch(1).hash.value -> branch(0).hash.value,
+      branch(2).hash.value -> branch(0).hash.value
+    )
 
   it should "report with LVH = the branch parent when nothing in the batch executed" taggedAs (
     UnitTest,
@@ -180,7 +187,11 @@ class InvalidChainReportingSpec
 
     whenReady(consensusUnderTest.evaluateBranch(NonEmptyList.fromListUnsafe(branch)).unsafeToFuture())(_ => ())
 
-    reported.toList shouldBe List(branch(0).hash.value -> initialBestBlock.hash.value)
+    reported.toList shouldBe List(
+      branch(0).hash.value -> initialBestBlock.hash.value,
+      branch(1).hash.value -> initialBestBlock.hash.value,
+      branch(2).hash.value -> initialBestBlock.hash.value
+    )
 
   it should "report a SIDE-CHAIN failure with a validated non-canonical LVH, not the canonical head" taggedAs (
     UnitTest,
@@ -200,7 +211,10 @@ class InvalidChainReportingSpec
 
     whenReady(consensusUnderTest.evaluateBranch(NonEmptyList.fromListUnsafe(altChain)).unsafeToFuture())(_ => ())
 
-    reported.toList shouldBe List(altChain(1).hash.value -> altChain(0).hash.value)
+    reported.toList shouldBe List(
+      altChain(1).hash.value -> altChain(0).hash.value,
+      altChain(2).hash.value -> altChain(0).hash.value
+    )
     // And the LVH is genuinely not the pre-reorg canonical tip.
     altChain(0).hash.value should not be initialBestBlock.hash.value
 
@@ -235,6 +249,40 @@ class InvalidChainReportingSpec
     whenReady(consensusUnderTest.evaluateBranch(NonEmptyList.fromListUnsafe(branch)).unsafeToFuture())(_ => ())
 
     reported shouldBe empty
+
+  // ---------------------------------------------------------------------------------------------------------------
+  // 2b. Depth. The verdict must reach a CL-supplied tip that is MORE THAN ONE HOP above the invalid block.
+  //
+  //     Measured on hive `engine` 6c8bc97, "Invalid Missing Ancestor Syncing ReOrg": the cross-tab splits perfectly
+  //     on the distance from the invalid block to the payload the CL hands us. Invalid block == the tip's direct
+  //     parent (hive's "Invalid P9"): 14 of 16 pass. Invalid block two hops down ("Invalid P8"): 0 of 16 pass, for
+  //     every corrupted field (GasLimit, GasUsed, ReceiptsRoot, Timestamp, StateRoot). The intermediate block is
+  //     fetched from a peer, so it is in no engine-side index, and the poison chain stops there.
+  // ---------------------------------------------------------------------------------------------------------------
+
+  "provenDescendants" should "return the whole parentHash-linked suffix" taggedAs (UnitTest, ConsensusTest) in {
+    val chain = BlockHelpers.generateChain(4, BlockHelpers.genesis)
+    InvalidChainReporter.provenDescendants(chain.head, chain.tail) shouldBe chain.tail
+  }
+
+  it should "stop at the first broken link rather than skipping over it" taggedAs (UnitTest, ConsensusTest) in {
+    // The safety property. A batch that is NOT one contiguous chain must not have a verdict carried across the gap:
+    // a block whose parent is not the block we just proved invalid is not proven invalid by anything here.
+    val chain = BlockHelpers.generateChain(4, BlockHelpers.genesis)
+    val unrelated = BlockHelpers.generateChain(1, BlockHelpers.genesis).head
+    val withGap = List(chain(1), unrelated, chain(3))
+    InvalidChainReporter.provenDescendants(chain.head, withGap) shouldBe List(chain(1))
+  }
+
+  it should "report nothing when the first candidate is not a child" taggedAs (UnitTest, ConsensusTest) in {
+    val chain = BlockHelpers.generateChain(3, BlockHelpers.genesis)
+    val unrelated = BlockHelpers.generateChain(1, BlockHelpers.genesis).head
+    InvalidChainReporter.provenDescendants(chain.head, List(unrelated, chain(1))) shouldBe Nil
+  }
+
+  it should "report nothing for an empty suffix" taggedAs (UnitTest, ConsensusTest) in {
+    InvalidChainReporter.provenDescendants(BlockHelpers.genesis, Nil) shouldBe Nil
+  }
 
   "InvalidChainReporter.LateBound" should "be a no-op until bound" taggedAs (UnitTest, ConsensusTest) in {
     val holder = new InvalidChainReporter.LateBound
@@ -303,6 +351,50 @@ class InvalidChainReportingSpec
       after.latestValidHash shouldBe Some(lastValidHash)
     }
 
+  it should "answer INVALID for a CL tip whose invalid ancestor is a GRANDparent, not a parent" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in new ConsensusSetup:
+    // The full hive "Invalid P8" shape, both halves wired together:
+    //
+    //   B0 (executes)  ->  I (invalid)  ->  M (never executed, arrives only over p2p)  ->  T (the CL's tip)
+    //
+    // The CL gives us T and nothing else, so T is optimistically ACCEPTED and indexed under M. The backfill then
+    // fetches B0, I, M from a peer; execution stops at I. Before this change the Engine API learned about I alone,
+    // M was in no index, and T stayed ACCEPTED for the whole of hive's timeout — 16 of 16 P8 variants failed that
+    // way. The assertion below is that T now answers INVALID, with the latestValidHash hive checks:
+    // `altChainPayloads[InvalidIndex-1]`, i.e. I's parent B0 (invalid_ancestor.go:444).
+    override lazy val reporterOpt: Option[InvalidChainReporter] = Some(engineApi.invalidChainReporter)
+
+    val branch: List[Block] = BlockHelpers.generateChain(3, initialBestBlock)
+    val b0: Block = branch(0)
+    val invalidBlock: Block = branch(1)
+    val intermediate: Block = branch(2)
+    val tip: ExecutionPayload = payloadOfUnexecutableChild(intermediate.hash.value)
+
+    failAt(invalidBlock, ValidationBeforeExecError(BlockHeaderError.HeaderGasLimitError))
+
+    // 1. The CL hands us the tip first. Its parent is unknown, so: ACCEPTED, and indexed under the intermediate.
+    whenReady(engineApi.newPayload(tip).unsafeToFuture())(_.status shouldBe Accepted)
+
+    // 2. The backfill runs and execution stops at the invalid block.
+    whenReady(consensusUnderTest.evaluateBranch(NonEmptyList.fromListUnsafe(branch)).unsafeToFuture())(_ => ())
+
+    // 3. The tip — two hops above the invalid block — is now INVALID, with I's parent as latestValidHash.
+    whenReady(engineApi.newPayload(tip).unsafeToFuture()) { after =>
+      after.status shouldBe Invalid
+      after.latestValidHash shouldBe Some(b0.hash.value)
+    }
+
+    // 4. And forkchoiceUpdated naming that same tip as head agrees — hive asserts both (invalid_ancestor.go:446-449).
+    val fcs: ForkChoiceState = ForkChoiceState(tip.blockHash, b0.hash.value, b0.hash.value)
+    whenReady(engineApi.forkchoiceUpdated(fcs, None).unsafeToFuture()) {
+      case Right(response) =>
+        response.payloadStatus.status shouldBe Invalid
+        response.payloadStatus.latestValidHash shouldBe Some(b0.hash.value)
+      case Left(err) => fail(s"expected a payload status, got JSON-RPC error: $err")
+    }
+
   // ---------------------------------------------------------------------------------------------------------------
   // Fixtures
   // ---------------------------------------------------------------------------------------------------------------
@@ -349,6 +441,20 @@ class InvalidChainReportingSpec
     lazy val consensusUnderTest: ConsensusImpl =
       new ConsensusImpl(blockchainReader, blockchainWriter, blockExecution, reporterOpt)
 
+    // A live EngineApiService over the SAME storage, so a test can assert what the CL is actually told after the
+    // import path speaks. Only the "grandparent" test overrides `reporterOpt` to point at it; for every other test
+    // here it is never touched. The stubbed `blockExecution` is safe to hand over: the engine path under test never
+    // executes anything (the payload's parent is deliberately absent from storage).
+    implicit lazy val typedScheduler: org.apache.pekko.actor.typed.Scheduler = classicSystem.toTyped.scheduler
+
+    lazy val engineApi: EngineApiService = new EngineApiService(
+      blockchainReader,
+      blockchainWriter,
+      blockExecution,
+      new ForkChoiceManager(blockchainReader, blockchainWriter),
+      None
+    )(blockchainConfig, typedScheduler)
+
   /** Minimal live EngineApiService. Only the invalid-block registry is exercised, but it is the real one. */
   class EngineSetup extends EphemBlockchainTestSetup:
     implicit val runtime: IORuntime = IORuntime.global
@@ -377,47 +483,48 @@ class InvalidChainReportingSpec
       None
     )(blockchainConfig, typedScheduler)
 
-    /** An empty post-Shanghai payload whose parent is `parentHash`. Field-for-field what `payloadToBlock` rebuilds, so
-      * the envelope survives newPayload's block-hash integrity check; it is never executed (the parent is deliberately
-      * unknown), which is the point — we are testing the registry, not execution.
-      */
-    def payloadOfUnexecutableChild(parentHash: ByteString): ExecutionPayload =
-      val header = BlockHeader(
-        parentHash = BlockHash(parentHash),
-        ommersHash = BlockHash(BlockHeader.EmptyOmmers),
-        beneficiary = ByteString(new Array[Byte](20)),
-        stateRoot = TrieRoot(BlockHelpers.randomHash()),
-        transactionsRoot = TrieRoot(BlockHeader.EmptyMpt),
-        receiptsRoot = TrieRoot(BlockHelpers.randomHash()),
-        logsBloom = BloomFilter.Empty,
-        difficulty = Difficulty.Zero,
-        number = BlockNumber(42),
-        gasLimit = GasAmount(30000000),
-        gasUsed = GasAmount(0),
-        unixTimestamp = Timestamp(1700000000L),
-        extraData = ByteString.empty,
-        mixHash = BlockHash(ByteString(new Array[Byte](32))),
-        nonce = ByteString(new Array[Byte](8)),
-        extraFields = HefPostShanghai(baseFee = BigInt(1000000000), withdrawalsRoot = BlockHeader.EmptyMpt)
-      )
-      ExecutionPayload(
-        parentHash = header.parentHash.value,
-        feeRecipient = Address(header.beneficiary),
-        stateRoot = header.stateRoot.value,
-        receiptsRoot = header.receiptsRoot.value,
-        logsBloom = header.logsBloom.value,
-        prevRandao = header.mixHash.value,
-        blockNumber = header.number.value,
-        gasLimit = header.gasLimit.value,
-        gasUsed = header.gasUsed.value,
-        timestamp = header.unixTimestamp.toLong,
-        extraData = header.extraData,
-        baseFeePerGas = header.baseFee.getOrElse(BigInt(0)),
-        blockHash = header.hash.value,
-        transactions = Seq.empty,
-        withdrawals = Some(Seq.empty)
-      )
-
 object InvalidChainReportingSpec:
   val initialChain: List[Block] = BlockHelpers.genesis +: BlockHelpers.generateChain(4, BlockHelpers.genesis)
   val initialBestBlock: Block = initialChain.last
+
+  /** An empty post-Shanghai payload whose parent is `parentHash`. Field-for-field what `payloadToBlock` rebuilds, so
+    * the envelope survives newPayload's block-hash integrity check; it is never executed (the parent is deliberately
+    * unknown), which is the point — we are testing the registry, not execution.
+    */
+  def payloadOfUnexecutableChild(parentHash: ByteString): ExecutionPayload =
+    val header = BlockHeader(
+      parentHash = BlockHash(parentHash),
+      ommersHash = BlockHash(BlockHeader.EmptyOmmers),
+      beneficiary = ByteString(new Array[Byte](20)),
+      stateRoot = TrieRoot(BlockHelpers.randomHash()),
+      transactionsRoot = TrieRoot(BlockHeader.EmptyMpt),
+      receiptsRoot = TrieRoot(BlockHelpers.randomHash()),
+      logsBloom = BloomFilter.Empty,
+      difficulty = Difficulty.Zero,
+      number = BlockNumber(42),
+      gasLimit = GasAmount(30000000),
+      gasUsed = GasAmount(0),
+      unixTimestamp = Timestamp(1700000000L),
+      extraData = ByteString.empty,
+      mixHash = BlockHash(ByteString(new Array[Byte](32))),
+      nonce = ByteString(new Array[Byte](8)),
+      extraFields = HefPostShanghai(baseFee = BigInt(1000000000), withdrawalsRoot = BlockHeader.EmptyMpt)
+    )
+    ExecutionPayload(
+      parentHash = header.parentHash.value,
+      feeRecipient = Address(header.beneficiary),
+      stateRoot = header.stateRoot.value,
+      receiptsRoot = header.receiptsRoot.value,
+      logsBloom = header.logsBloom.value,
+      prevRandao = header.mixHash.value,
+      blockNumber = header.number.value,
+      gasLimit = header.gasLimit.value,
+      gasUsed = header.gasUsed.value,
+      timestamp = header.unixTimestamp.toLong,
+      extraData = header.extraData,
+      baseFeePerGas = header.baseFee.getOrElse(BigInt(0)),
+      blockHash = header.hash.value,
+      transactions = Seq.empty,
+      withdrawals = Some(Seq.empty)
+    )
+
