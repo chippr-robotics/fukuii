@@ -111,9 +111,20 @@ object RLPxConnectionHandler:
   // Pure functions
   // =========================================================================
 
+  /** Message-ID slots an eth capability reserves, per go-ethereum's own `protocolLengths`
+    * (eth/protocols/eth/protocol.go): {66:17, 67:17, 68:17, 69:18, 70:18, 71:20, 72:22}.
+    *
+    * This is a property of the specific (name, version) pair, not a constant — devp2p's rlpx.md ("Message ID-based
+    * Multiplexing") says each capability statically specifies how many message IDs it requires, and offsets are
+    * assigned from that. Getting it wrong shifts the SNAP base and misroutes every snap message; see
+    * RLPxCapabilityOffsetsSpec for the regression cases.
+    *
+    * ETH70 was negotiable (Capability.scala:29,40) but fell through to 17 here, which would have put the SNAP base one
+    * slot low on any ETH70 + snap peering. Dormant only because the hive profile in use caps advertisement at eth/69.
+    */
   def ethWireSizeFor(cap: Capability): Int = cap match
-    case Capability.ETH69 => 0x12
-    case _                => 0x11
+    case Capability.ETH69 | Capability.ETH70 => 0x12
+    case _                                   => 0x11
 
   case class CapabilityOffsets(peerEthBase: Int, peerEthSize: Int, peerSnapBase: Option[Int])
 

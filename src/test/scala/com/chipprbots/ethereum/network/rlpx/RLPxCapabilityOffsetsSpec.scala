@@ -73,6 +73,20 @@ class RLPxCapabilityOffsetsSpec extends AnyFlatSpec with Matchers:
     offsets.peerSnapBase shouldBe Some(0x21)
   }
 
+  it should "use 18-code ETH wire size for ETH/70, matching ETH/69, and shift SNAP base accordingly" taggedAs UnitTest in {
+    val offsets = RLPxConnectionHandler.computeCapabilityOffsets(
+      peerCaps = List(Capability.SNAP1, Capability.ETH70),
+      negotiatedEth = Capability.ETH70,
+      supportsSnap = true
+    )
+    offsets.peerEthBase shouldBe 0x10
+    // go-ethereum protocolLengths: {69:18, 70:18}. ETH70 previously fell through to 17 here,
+    // which would have placed SNAP one slot low and misrouted every snap message on an
+    // ETH70 peering. Dormant in hive only because that profile caps advertisement at eth/69.
+    offsets.peerEthSize shouldBe 0x12
+    offsets.peerSnapBase shouldBe Some(0x22)
+  }
+
   it should "disable SNAP routing when supportsSnap=false even if peer advertises snap/1" taggedAs UnitTest in {
     val offsets = RLPxConnectionHandler.computeCapabilityOffsets(
       peerCaps = List(Capability.SNAP1, Capability.ETH69),
