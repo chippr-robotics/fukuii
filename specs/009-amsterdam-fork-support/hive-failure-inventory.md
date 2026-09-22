@@ -1958,3 +1958,42 @@ recorded. Routed to `beacon`, with a regression test that drives the head throug
 Not covered by this fix: `StateRoot, EmptyTxs=True, CanonicalReOrg=True` logs **no** header fetch at
 all (`hdrs=0`) — the peer handshakes at head ≈ 0 and nothing chases the beacon head by hash. That is the
 missing reverse-from-hash beacon sync logged earlier, not Cause B.
+
+### Correction — a docs-only push is NOT free on this PR
+
+I pushed `42b3b52cb` (one markdown file) reasoning that it matched no hive workflow's `paths:` filter.
+Wrong: on `pull_request` events GitHub evaluates `paths:` against the **whole PR diff versus the
+base**, not the pushed commit. This PR touches `src/**`, so every push re-triggers every hive suite,
+and `cancel-in-progress` killed the `4854b7d20` consume-engine, consume-rlp and consensus runs after
+~60 min, before they reported. Rule from here: **batch docs with code; never push docs alone while a
+long suite is in flight.**
+
+devp2p re-ran on `42b3b52cb` (identical code): per-suite failures identical by name — eth 9, snap 5,
+snap2 4, discv4 0, discv5 0. A first pass that flattened names across suites showed spurious churn
+(`Status` exists in both eth and snap2); per-suite comparison is the only valid diff.
+
+### `13c1e5686` — Cause B rebound to the CL's requested head (pushed; measuring)
+
+`ForkChoiceManager.requestedHead`, written by both `applyForkChoiceState` and `notifyBeaconHead`;
+both `DesignatedHead` bindings read it; `currentState` stays executed-only. Negative control: the
+binding spec fails 3/4 with the old `getHeadBlockHash` binding and passes 4/4 with the new one.
+Targeted specs 68/0; engine-adjacent + the four ETC specs 75/0.
+
+**Prediction, not measurement:** the 11 `EmptyTxs=False, CanonicalReOrg=True` cases and the 4
+`Withdrawals … Re-Org Sync` move — **except** `GasUsed, CanonicalReOrg=True`, which beacon traced to a
+second blocker: a failed reorg surfaces as bare `BlockImportFailed`, `BlockImporter` then treats the
+batch *head* as the failing block, and the gas arm reports the head plus every hash-linked block with
+`lvh` = the head's parent — overwriting the correct `lvh = P7'` and marking honest blocks invalid.
+Being fixed separately. `StateRoot, EmptyTxs=True, CanonicalReOrg=True` needs by-hash beacon sync
+and will not move.
+
+Also flagged by beacon (not yet reachable in a failing test, assessment pending): a partial reorg
+rewrites number→hash for heights the CL never designated, and `promoteBranchToCanonical` stops at the
+first matching height, so a later FCU back to the old head can leave stale side-chain entries below it.
+
+**forge sign-off on `13c1e5686`: ETC unchanged.** Gates identical to the Cause B sign-off
+(`SyncController.scala:318-320`, `NodeBuilder.scala:915`); `terminal-total-difficulty` set only in
+`eth-chain.conf` / `sepolia-chain.conf`; one binder, gated; `requestedHead` has exactly two readers,
+both TTD-gated; `currentState` writers unchanged. `DesignatedHeadBindingSpec` now proves the holder
+stays `None` on every ETC chain even after `notifyBeaconHead`. VERIFY: 71/0 across the binding,
+branch-resolution, consensus and four ETC regression specs.
