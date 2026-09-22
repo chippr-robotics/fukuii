@@ -373,7 +373,7 @@ class NetworkPeerManagerSpec extends AnyFlatSpec with Matchers:
     gbh.skip shouldBe BigInt(0)
     gbh.reverse shouldBe false
 
-  it should "skip the best-block probe on ETH/69 (number is in STATUS)" taggedAs (
+  it should "skip the best-block probe AND send no eager BlockRangeUpdate on ETH/69 (number is already in STATUS)" taggedAs (
     UnitTest,
     NetworkTest
   ) in new TestSetup:
@@ -387,9 +387,17 @@ class NetworkPeerManagerSpec extends AnyFlatSpec with Matchers:
     // Drain the two subscriptions.
     peerEventBus.expectMsgType[SubscribeCmd].to shouldBe PeerDisconnectedClassifier(PeerSelector.WithId(peer1.id))
     peerEventBus.expectMsgType[SubscribeCmd]
-    // ETH/69: no GetBlockHeaders probe (latestBlock is in STATUS),
-    // but a BlockRangeUpdate is sent immediately so the remote peer knows our chain range.
-    peerManager.expectMsgClass(classOf[PeerManagerActor.SendMessageCmd])
+    // ETH/69: no GetBlockHeaders probe (latestBlock is in STATUS), and NO eager BlockRangeUpdate
+    // either. Regression pin for the fix that removed the unsolicited post-handshake BRU send:
+    // EIP-7642 defines BlockRangeUpdate (0x11) as a change notification, not a handshake greeting,
+    // and go-ethereum only emits it from blockRangeLoop on ChainHeadEvent / snap-sync progress
+    // (eth/handler.go), broadcast to all connected peers at that moment — never as a one-shot
+    // reply to the peer that just handshaked. Sending it eagerly here broke hive's devp2p
+    // Transaction/InvalidTxs/LargeTxRequest tests: the harness has no case for eth-relative msg
+    // code 17 and panics with "unhandled eth msg code 17". fukuii's own range is already
+    // communicated via the 7-field STATUS payload (see EthNodeStatus69ExchangeState), and later
+    // range changes go out through BlockBroadcast.broadcastBlock / announceCanonicalHead instead
+    // — neither of which fires during plain handshake completion.
     peerManager.expectNoMessage(100.millis)
 
   it should "discover peer block number from probe response on ETH/64-/68" taggedAs (
@@ -699,11 +707,11 @@ class NetworkPeerManagerSpec extends AnyFlatSpec with Matchers:
         PeerSelector.WithId(peer.id)
       )
       peerProbe.expectNoMessage(100.millis)
-      // For ETH/69 peers, the actor sends a BlockRangeUpdate to peerManager immediately
-      // after handshake (announces our own chain range). Consume it so it doesn't
-      // bleed into subsequent peerManager expectations.
-      if peerInfo.remoteStatus.capability == Capability.ETH69 then
-        peerManager.expectMsgClass(classOf[PeerManagerActor.SendMessageCmd])
+      // ETH/69 peers get no post-handshake message at all: no GetBlockHeaders probe (number is
+      // already in STATUS) and no eager BlockRangeUpdate (BRU is a change notification — see
+      // BlockBroadcast.broadcastBlock / announceCanonicalHead — not a handshake greeting).
+      // Nothing to drain here; callers proceed straight to their own peerManager expectations
+      // (e.g. RefreshPeerBestBlocksTick probes).
 
   it should "ETH69 archive peer: correct inflated Tier3 chainWeight after 3 consecutive unchanged probes" taggedAs (
     UnitTest,

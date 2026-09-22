@@ -26,7 +26,6 @@ import com.chipprbots.ethereum.network.p2p.Message
 import com.chipprbots.ethereum.network.p2p.MessageSerializable
 import com.chipprbots.ethereum.network.p2p.messages.Capability
 import com.chipprbots.ethereum.network.p2p.messages.Codes
-import com.chipprbots.ethereum.network.p2p.messages.ETH69
 import com.chipprbots.ethereum.network.p2p.messages.ETHPackets
 import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.NewBlockHashes.NewBlockHashes
 import com.chipprbots.ethereum.network.p2p.messages.SNAP
@@ -718,7 +717,27 @@ object NetworkPeerManagerActor:
           MessageClassifier(msgCodesWithInfo, PeerSelector.WithId(peer.id)),
           eventAdapter
         )
-        // Besu-style eager best-block probe.
+        // Besu-style eager best-block probe. ETH/69 peers are deliberately excluded — NOT
+        // because they need a substitute post-handshake message, but because they need NOTHING:
+        // their initial block range is already inside the 7-field STATUS payload itself
+        // (earliestBlock/latestBlock/latestBlockHash — see EthNodeStatus69ExchangeState.createStatusMsg,
+        // which we just exchanged a few lines above this call). A previous version of this branch
+        // sent a standalone ETH69.BlockRangeUpdate here ("announce our block range immediately after
+        // STATUS"), which was wrong on two counts: (1) pure duplicate of what STATUS already said, and
+        // (2) a protocol violation — EIP-7642 defines BlockRangeUpdate (0x11) as a change notification.
+        // go-ethereum only emits it from blockRangeLoop on ChainHeadEvent / snap-sync-progress
+        // (go-ethereum eth/handler.go: blockRangeLoop/broadcastBlockRange), gated by shouldSend()
+        // (every 32 blocks, or immediately on a backward range move), and broadcasts it to ALL
+        // currently-connected peers at that moment — never as a one-shot greeting to the peer that
+        // just finished a handshake. fukuii's own change-driven path already exists and is unaffected
+        // by this fix: BlockBroadcast.broadcastBlock (new block imported) and
+        // BlockBroadcast.announceCanonicalHead (CL forkchoice head advance) both send BlockRangeUpdate
+        // to ETH69 peers exactly when our range changes.
+        //
+        // The eager send here broke hive's devp2p Transaction/InvalidTxs/LargeTxRequest tests: the
+        // harness's eth-relative code switch (cmd/devp2p/internal/ethtest/conn.go) has no case for
+        // message code 17 (BlockRangeUpdate at wire offset 16+1) and panics with
+        // "unhandled eth msg code 17" the moment it arrives unsolicited.
         if peerInfo.remoteStatus.capability != Capability.ETH69 && !peerInfo.isAtGenesis then
           val bestHash = peerInfo.remoteStatus.bestHash
           val probe: MessageSerializable =
@@ -730,17 +749,6 @@ object NetworkPeerManagerActor:
             ByteStringUtils.hash2string(bestHash)
           )
           peerManagerActor ! PeerManagerActor.SendMessageCmd(probe, peer.id)
-        else if peerInfo.remoteStatus.capability == Capability.ETH69 then
-          // ETH/69 (EIP-7642): announce our block range immediately after STATUS.
-          val bestInfo = appStateStorage.getBestBlockInfo()
-          val bru = ETH69.BlockRangeUpdate(BigInt(0), bestInfo.number, bestInfo.hash)
-          log.info(
-            "ETH69_BRU_POST_HANDSHAKE: peer={} latestBlock={} latestHash={}",
-            peer.id,
-            bestInfo.number,
-            bestInfo.hash
-          )
-          peerManagerActor ! PeerManagerActor.SendMessageCmd(bru, peer.id)
         NetworkMetrics.registerAddHandshakedPeer(peer)
         PeerTelemetry.registerPeer(peer, peerInfo)
         handleMessages(peersWithInfo + (peer.id -> PeerWithInfo(peer, peerInfo)))
