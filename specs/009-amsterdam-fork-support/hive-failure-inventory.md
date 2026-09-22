@@ -1192,7 +1192,7 @@ gives the actual values for the first time:
 | test | expected | got |
 |---|---|---|
 | `04_eth_estimateGas_contractDeploy` | `0x1b551` (111,953) | `0xa959` (43,353) |
-| `07_eth_gasPrice` | `0x10` (16) **or** `0x1` (1) | `0x3437004b` (876,610,123) |
+| `07_eth_gasPrice` | `0x10` (16) **or** `0x1` (1) | `0x3437004b` (876,019,787) |
 
 The estimateGas delta is 68,600 = 343 × 200, which is the shape of a missing
 `G_codedeposit` charge — a hypothesis to test against the fixture, not a finding.
@@ -1437,3 +1437,65 @@ just moves the failure to `NoChainSwitch`; steps 1 and 2 are one atomic unit.
 `RegularSyncFixtures.scala:278`. Reproduced 3/3 at `94199a1` and 1/1 with those files reverted, so it is
 not that change. Whether it is a stale test or collateral from the concurrent `BlockPreparator`/`VM`
 work is open and being re-checked against the current head.
+
+---
+
+## graphql: one real defect, one stale fixture — and a bad conversion of mine
+
+### Correction first
+
+An earlier entry in this file recorded fukuii's `07_eth_gasPrice` answer `0x3437004b` as
+**876,610,123**. That is wrong; `0x3437004b` is **876,019,787**. The figure was mine, it went into the
+agent brief, and the "≈590,337 wei tip" derived from it was an artifact of the bad conversion, not a
+measurement. The line above is corrected in place.
+
+With the right number the residual vanishes: the fixture chain's head block carries
+`baseFee = 0x3437004a = 876,019,786`, and fukuii returns `baseFee + 1` — the 1-wei `min-tip` default.
+Nothing unexplained.
+
+### `07_eth_gasPrice` — a stale fixture, self-evidenced
+
+The strong form of this argument needs no appeal to what geth's CI does. **hive's own fixture set
+contradicts itself**:
+
+| fixture | asserts |
+|---|---|
+| `01_eth_blockNumber.json` | head = `0x22` = block **34** |
+| `51_eth_getBlock_4844.json` | block 34 `baseFeePerGas` = `0x3437004a` = **876,019,786** |
+| `07_eth_gasPrice.json` | accepts only `0x10` (16) or `0x1` (1) |
+
+go-ethereum's current `Resolver.GasPrice()` is `tipcap + head.BaseFee` when `BaseFee != nil`. Given
+the head and baseFee that the sibling fixtures themselves pin, 16 or 1 wei is arithmetically
+unreachable — for geth as much as for fukuii. The contradiction is internal to the fixture set, so
+this holds without trusting any external report.
+
+An alternative was considered and ruled out on the same evidence: that geth's plain `import` leaves
+the canonical head at the last PoW block (32, where `baseFee` is nil) without the Engine API — real,
+known geth behaviour, but `01_eth_blockNumber` pinning head = 34 kills it.
+
+**Recorded as a known-permanent failure**, not an open bug. The graphql suite cannot reach 0 until
+hive updates those accepted values upstream; its floor is 1. This is a source-level proof, not an
+execution one — geth was not run against the fixture.
+
+### `04_eth_estimateGas_contractDeploy` — a real fukuii defect, fixed
+
+The graphql simulator does **not** run on the execution-apis chain that rpc-compat uses. Its
+`init/testGenesis.json` sets `homesteadBlock` through `londonBlock` all to **33**, so block 32 — the
+block the fixture queries — is pure **Frontier**.
+
+Under Frontier (`exceptionalFailedCodeDeposit = false`) a CREATE that cannot pay the code deposit does
+not revert. But `VM.saveNewContract` also set no error at all, so `binarySearchGasEstimation`, which
+reads `TxResult.vmError`, treated "ran the init code, could not afford to store it" as success.
+go-ethereum's `core/vm/evm.go create()` sets `err = ErrCodeStoreOutOfGas` unconditionally —
+`IsHomestead` gates only the revert and gas burn, not whether the error is set.
+
+Fixed with a `CodeStoreOutOfGasPreHomestead` error carrying `rollbackOnError = false`, so
+`BlockPreparator.executeTransaction` now checks `error.exists(_.rollbackOnError)` rather than blanket
+`error.isDefined`: the failure is reported to `estimateGas`/`eth_call` while the already-applied
+partial state (nonce bump, endowment transfer) survives for a transaction that really lands in a
+block — Frontier's actual leniency, not blanket revert.
+
+Measured against the fixture's exact init bytecode through `StxLedger.binarySearchGasEstimation` on a
+Frontier-only config: **43,353 before, 111,953 after** — an exact match to the expected `0x1b551`, and
+`111,953 − 43,353 = 68,600 = 343 × 200`, where 343 is the deployed runtime length read from the
+`PUSH2 0x0157` in the init code.
