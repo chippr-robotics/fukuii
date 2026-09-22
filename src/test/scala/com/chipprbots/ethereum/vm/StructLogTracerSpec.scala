@@ -198,13 +198,15 @@ class StructLogTracerSpec extends AnyFreeSpec with Matchers:
         runTopLevelCall(tracer, memoryWriteCode)
 
         val steps = tracer.getSteps
-        val afterMstore = steps.sliding(2).collectFirst { case Seq(a, b) if a.op == "MSTORE" => b }
+        val afterMstore = steps
+          .sliding(2)
+          .collectFirst { case Seq(a, b) if a.op == "MSTORE" => b }
           .getOrElse(fail("expected a step immediately after MSTORE"))
 
         // MSTORE(offset=0, value=2) writes value 2 as a right-aligned, zero-padded 32-byte word.
         val expectedWord = "0x" + ("0" * 63) + "2"
         afterMstore.memory shouldBe Some(Seq(expectedWord))
-        afterMstore.memory.get.head should fullyMatch regex "^0x[0-9a-f]{64}$"
+        (afterMstore.memory.get.head should fullyMatch).regex("^0x[0-9a-f]{64}$")
 
         val structLogs = (tracer.getResult \ "structLogs").asInstanceOf[JArray].arr
         val afterMstoreJson = structLogs

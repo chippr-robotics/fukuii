@@ -49,10 +49,9 @@ object DebugTracingService:
 
   /** Tracer configuration, mirroring go-ethereum's eth/tracers/logger.Config.
     *
-    * Field polarity intentionally mirrors go-ethereum exactly — memory/returnData are opt-IN
-    * (default off), stack/storage are opt-OUT (default on). See
-    * execution-apis src/schemas/opcode-tracer.yaml `TraceConfig` for the normative field names
-    * and defaults; every field here defaults to what go-ethereum returns when a caller sends no
+    * Field polarity intentionally mirrors go-ethereum exactly — memory/returnData are opt-IN (default off),
+    * stack/storage are opt-OUT (default on). See execution-apis src/schemas/opcode-tracer.yaml `TraceConfig` for the
+    * normative field names and defaults; every field here defaults to what go-ethereum returns when a caller sends no
     * config object at all (e.g. `debug_traceBlockByNumber(blockParam)` with no second argument).
     *
     * @param tracer
@@ -60,18 +59,17 @@ object DebugTracingService:
     * @param disableStorage
     *   suppress storage snapshots per step (StructLogTracer only). Default false (storage ON).
     * @param enableMemory
-    *   include memory snapshots per step (StructLogTracer only). Default false (memory OFF) —
-    *   capturing a full word-by-word memory snapshot on every opcode of every transaction is
-    *   expensive, so this must stay opt-in to match go-ethereum.
+    *   include memory snapshots per step (StructLogTracer only). Default false (memory OFF) — capturing a full
+    *   word-by-word memory snapshot on every opcode of every transaction is expensive, so this must stay opt-in to
+    *   match go-ethereum.
     * @param disableStack
     *   suppress stack snapshots per step (unused; StructLogTracer always records stack)
     * @param enableReturnData
-    *   include the most-recent-call return data per step (StructLogTracer only). Parsed for
-    *   forward-compatibility with go-ethereum's field name, but not yet wired to a capture path —
-    *   StructLogTracer has no per-step return-data buffer today. The field is always absent from
-    *   the response regardless of this setting, which is schema-valid either way (execution-apis
-    *   marks `returnData` optional even when the caller asks for it). Tracked as a follow-up, not
-    *   required by any current fixture.
+    *   include the most-recent-call return data per step (StructLogTracer only). Parsed for forward-compatibility with
+    *   go-ethereum's field name, but not yet wired to a capture path — StructLogTracer has no per-step return-data
+    *   buffer today. The field is always absent from the response regardless of this setting, which is schema-valid
+    *   either way (execution-apis marks `returnData` optional even when the caller asks for it). Tracked as a
+    *   follow-up, not required by any current fixture.
     */
   case class TraceConfig(
       tracer: Option[String] = None,

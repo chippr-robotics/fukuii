@@ -99,9 +99,9 @@ class DebugTracingJsonMethodsImplicitsSpec extends AnyFreeSpec with Matchers:
     }
   }
 
-  /** Pins CHASE-QUEUE C7: extractTraceConfig previously read "disableMemory" — a field name no real caller
-    * sends — so the unconditional default left memory capture ON. go-ethereum / execution-apis send
-    * "enableMemory" (direct sense, default off). Params below are taken verbatim from the .io fixtures under
+  /** Pins CHASE-QUEUE C7: extractTraceConfig previously read "disableMemory" — a field name no real caller sends — so
+    * the unconditional default left memory capture ON. go-ethereum / execution-apis send "enableMemory" (direct sense,
+    * default off). Params below are taken verbatim from the .io fixtures under
     * execution-apis/tests/debug_traceBlockByNumber.
     */
   "extractTraceConfig" - {
