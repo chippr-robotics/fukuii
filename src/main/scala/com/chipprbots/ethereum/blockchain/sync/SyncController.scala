@@ -24,6 +24,7 @@ import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController.StartRegu
 import com.chipprbots.ethereum.blockchain.sync.snap.ChainDownloader
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController.StartRegularSyncBootstrapByHash
 import com.chipprbots.ethereum.consensus.ConsensusAdapter
+import com.chipprbots.ethereum.consensus.engine.DesignatedHead
 import com.chipprbots.ethereum.consensus.engine.ForkChoiceManager
 import com.chipprbots.ethereum.consensus.mess.MESSConfig
 import com.chipprbots.ethereum.consensus.validators.Validators
@@ -306,6 +307,13 @@ object SyncController:
     // because both `syncConfig` and the chain config are stable for the actor's lifetime.
     private val isPoSChain: Boolean = configBuilder.blockchainConfig.terminalTotalDifficulty.isDefined
     private val clPivotEnabled: Boolean = isPoSChain && forkChoiceManagerOpt.isDefined
+
+    // PoS fork choice for the p2p import path, or None. Guarded by exactly the conjunction above: a configured
+    // terminal-total-difficulty (set in eth-chain.conf and sepolia-chain.conf and in NO PoW chain config) AND a live
+    // ForkChoiceManager. On ETC/Mordor/Gorgoroth this is None for the life of the node, so `BranchResolution`'s PoS
+    // arm is structurally absent there rather than merely false. See DesignatedHead.
+    private val designatedHeadOpt: Option[DesignatedHead] =
+      if isPoSChain then forkChoiceManagerOpt.map(fcm => DesignatedHead(() => fcm.getHeadBlockHash)) else None
 
     // TD calibration stats — updated by CalibrateChainWeightFromPeer handler.
     // calibrationSucceeded and networkBestTD are read by the TD_CALIBRATION_STATS periodic log
@@ -1807,7 +1815,7 @@ object SyncController:
             blockchainWriter,
             stateStorage,
             evmCodeStorage,
-            { val br = new BranchResolution(blockchainReader); br.messConfig = messConfig; br },
+            { val br = new BranchResolution(blockchainReader, designatedHeadOpt); br.messConfig = messConfig; br },
             validators.blockValidator,
             blacklist,
             syncConfig,
@@ -2505,7 +2513,7 @@ object SyncController:
             blockchainWriter,
             stateStorage,
             evmCodeStorage,
-            { val br = new BranchResolution(blockchainReader); br.messConfig = messConfig; br },
+            { val br = new BranchResolution(blockchainReader, designatedHeadOpt); br.messConfig = messConfig; br },
             validators.blockValidator,
             blacklist,
             syncConfig,

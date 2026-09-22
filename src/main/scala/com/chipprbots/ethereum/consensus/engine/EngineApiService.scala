@@ -125,6 +125,42 @@ class EngineApiService(
         markInvalidRecursive(child, lvh)
     }
 
+  /** Give an engine-executed block a `ChainWeight`, so the p2p import path can still resolve branches across it.
+    *
+    * WHY THIS EXISTS. `storeBlock`/`storeBlockByHashOnly` write a header and a body and nothing else
+    * (BlockchainWriter.scala), and neither this class nor `ForkChoiceManager` wrote a weight before this. A node whose
+    * chain was built entirely through `engine_newPayload` therefore had NO weight for any of its own blocks, and the
+    * first time a competing branch arrived over p2p, `BranchResolution.compareBranch` could not resolve the fork point
+    * and bailed:
+    *
+    * {{{
+    * ERROR [BranchResolution] ChainWeight for 6: c05c5658… not found when resolving branch: List(BlockHeader{…})
+    * }}}
+    *
+    * Measured on hive `engine` 6c8bc97: that line appears in 32 of 486 client logs, and those 32 map to all 24 `Invalid
+    * Missing Ancestor Syncing ReOrg … CanonicalReOrg=True` failures plus all 4 `Withdrawals … Re-Org Sync` timeouts.
+    * The branch was fetched and then discarded unexecuted, so the invalid block on it was never found and the CL was
+    * never told.
+    *
+    * WHAT THE VALUE MEANS — very little, and that is the point. Post-merge every header carries `difficulty = 0`, so
+    * `ChainWeight.increase` is the identity and every block on a PoS chain has the genesis weight. The number is not a
+    * fork-choice input any more (see `BranchResolution`'s PoS arm, which asks the consensus layer instead). What
+    * matters is that the entry EXISTS, because the lookup being `None` is what aborts branch resolution.
+    *
+    * If the parent has no stored weight we write nothing rather than inventing one. That case means the local chain was
+    * seeded by some path that skipped weights (and this method, applied from the next block on, cannot repair history);
+    * a fabricated weight would be a worse answer than an absent one on a chain where the number still means something.
+    */
+  private def storeChainWeightFor(block: Block, parentHeader: Option[BlockHeader]): Unit =
+    parentHeader.flatMap(p => blockchainReader.getChainWeightByHash(p.hash)) match
+      case Some(parentWeight) =>
+        blockchainWriter.storeChainWeight(block.header.hash, parentWeight.increase(block.header)).commit()
+      case None =>
+        log.debug(
+          "[ENGINE-API] no stored ChainWeight for the parent of block {} — not writing one for the child either",
+          block.number
+        )
+
   /** The one-way entry point the p2p import path uses to put a block into `invalidBlocks`.
     *
     * `invalidBlocks` and `markInvalidRecursive` stay private: this is deliberately the only door, it takes exactly the
@@ -403,6 +439,7 @@ class EngineApiService(
                     if extendsCanonical then blockchainWriter.storeBlock(block).commit()
                     else blockchainWriter.storeBlockByHashOnly(block).commit()
                     blockchainWriter.storeReceipts(block.header.hash, receipts).commit()
+                    storeChainWeightFor(block, parentHeader)
                     // NB: do NOT remove txs from the pool here. A newPayload'd block is stored
                     // but not yet canonical (no FCU has advanced bestBlock); the same txs must
                     // remain available for an alternative sibling payload on the same parent

@@ -87,6 +87,10 @@ abstract class BaseNode extends Node:
     // sync would be rejected with no way to tell the CL. Also a no-op when the Engine API is
     // disabled, and for the same reason: see EngineApiBuilder.bindInvalidChainReporter.
     bindInvalidChainReporter()
+    // And the read side, for the same reason and with the same timing constraint: branch resolution must already know
+    // to follow the CL's head before the first peer branch arrives. Also a no-op off a post-merge chain with a live
+    // Engine API — see EngineApiBuilder.bindDesignatedHead.
+    bindDesignatedHead()
     startEngineApiServer()
     startJsonRpcHttpServer()
     startJsonRpcWsServer()

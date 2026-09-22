@@ -264,6 +264,7 @@ trait BlockQueueBuilder:
 trait ConsensusBuilder:
   self: BlockchainBuilder & BlockQueueBuilder & MiningBuilder & ActorSystemBuilder & StorageBuilder =>
 
+  import com.chipprbots.ethereum.consensus.engine.DesignatedHead
   import com.chipprbots.ethereum.consensus.engine.InvalidChainReporter
 
   lazy val blockValidation = new BlockValidation(mining, blockchainReader, blockQueue)
@@ -287,12 +288,27 @@ trait ConsensusBuilder:
     */
   lazy val invalidChainReporter: InvalidChainReporter.LateBound = new InvalidChainReporter.LateBound
 
+  /** Late-bound read side of PoS fork choice, for `ConsensusImpl.importToNewBranch`.
+    *
+    * Same shape and same reason as `invalidChainReporter` above: constructed unconditionally, inert until bound, and
+    * `EngineApiBuilder.bindDesignatedHead()` is the only binder. That binder is gated on `network.engine-api.enabled`
+    * AND a configured terminal-total-difficulty, so on ETC/Mordor/Gorgoroth this stays unbound for the life of the
+    * node, `headBlockHash` is always `None`, and `importToNewBranch` keeps its pre-merge weight comparison as the whole
+    * decision.
+    *
+    * Late-bound for the cake, not by preference: `EngineApiBuilder` already depends on `ConsensusBuilder`, so
+    * `ConsensusBuilder` cannot take a `ForkChoiceManager` at construction time. `SyncController` has no such problem
+    * and builds its own `Option[DesignatedHead]` straight from the `ForkChoiceManager` it is already handed.
+    */
+  lazy val designatedHead: DesignatedHead.LateBound = new DesignatedHead.LateBound
+
   lazy val consensus: Consensus =
     new ConsensusImpl(
       blockchainReader,
       blockchainWriter,
       blockExecution,
-      Some(invalidChainReporter)
+      Some(invalidChainReporter),
+      Some(designatedHead)
     )
 
   lazy val chainImporter: ChainImporter =
@@ -884,6 +900,25 @@ trait EngineApiBuilder extends Logger:
       invalidChainReporter.bind(engineApiService.invalidChainReporter)
       log.info("Engine API enabled: p2p import path can now report consensus-invalid chains to the CL")
     else log.debug("Engine API disabled: p2p import path invalid-chain reporting stays inert")
+
+  /** Let `ConsensusImpl.importToNewBranch` see the CL's designated head. The mirror of [[bindInvalidChainReporter]],
+    * and deliberately adjacent to it so the two channels between the Engine API and the p2p import path are reviewed
+    * together.
+    *
+    * DOUBLE GATE, and both conjuncts are load-bearing for a different reason. `engineApiConfig.enabled` is the same
+    * gate the reporter uses and is what keeps a node with the Engine API switched off on its pre-existing behaviour.
+    * `terminalTotalDifficulty.isDefined` is the PoS predicate — the same one behind `SyncController.clPivotEnabled` —
+    * and is what makes this structurally unreachable on ETC/Mordor/Gorgoroth even if someone later enables an Engine
+    * API on a PoW chain for the `testing_*` namespace. Neither alone would be enough for both properties.
+    */
+  def bindDesignatedHead(): Unit =
+    if engineApiConfig.enabled && blockchainConfig.terminalTotalDifficulty.isDefined then
+      designatedHead.bind(DesignatedHead(() => forkChoiceManager.getHeadBlockHash))
+      log.info("Post-merge chain with Engine API enabled: p2p branch resolution now follows the CL's designated head")
+    else
+      log.debug(
+        "Not a post-merge chain with a live Engine API: p2p branch resolution keeps chain-weight fork choice"
+      )
 
   lazy val maybeEngineApiServer: Option[EngineApiHttpServer] =
     if engineApiConfig.enabled then

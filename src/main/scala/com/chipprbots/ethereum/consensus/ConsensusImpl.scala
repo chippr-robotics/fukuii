@@ -7,6 +7,7 @@ import cats.effect.unsafe.IORuntime
 import scala.annotation.tailrec
 
 import com.chipprbots.ethereum.consensus.Consensus.*
+import com.chipprbots.ethereum.consensus.engine.DesignatedHead
 import com.chipprbots.ethereum.consensus.engine.InvalidChainReporter
 import com.chipprbots.ethereum.domain.Block
 import com.chipprbots.ethereum.domain.BlockHash
@@ -32,7 +33,11 @@ class ConsensusImpl(
     // Narrow, one-way channel into the Engine API's invalid-block registry. `None` on every network that does not
     // run an Engine API (ETC/Mordor/Gorgoroth), which makes every call below a no-op there. See
     // [[com.chipprbots.ethereum.consensus.engine.InvalidChainReporter]].
-    invalidChainReporter: Option[InvalidChainReporter] = None
+    invalidChainReporter: Option[InvalidChainReporter] = None,
+    // PoS fork choice, or None. `None` on every network that does not run an Engine API (ETC/Mordor/Gorgoroth), and
+    // `None` by default so no construction site inherits the new arm by accident. See
+    // [[com.chipprbots.ethereum.consensus.engine.DesignatedHead]].
+    designatedHead: Option[DesignatedHead] = None
 ) extends Consensus
     with Logger:
 
@@ -151,8 +156,22 @@ class ConsensusImpl(
 
     blockchainReader.getChainWeightByHash(parentHash) match
       case Some(parentWeight) =>
-        if newBranchWeight(branch, parentWeight) > currentBestBlockWeight then
-          reorganise(currentBestBlockNumber, branch, parentWeight, parentHash)
+        // Two ways in. The weight comparison is the pre-merge rule and is untouched.
+        //
+        // The second disjunct is the PoS arm, and it is needed because the first is unsatisfiable post-merge:
+        // `ChainWeight.increase` adds `header.difficulty`, every post-merge header carries 0, so
+        // `newBranchWeight(branch, parentWeight) == parentWeight <= currentBestBlockWeight` for EVERY branch and this
+        // method could never once reorganise a PoS chain. It is reachable only when `designatedHead` is a `Some`,
+        // which no PoW chain ever supplies (see DesignatedHead), so `||` cannot change an ETC decision: on ETC the
+        // right-hand side is a constant false and short-circuit evaluation never even walks a header.
+        //
+        // What it asks is the correct PoS fork-choice question: does this branch lead to the head the consensus layer
+        // named? If so we follow it, because on PoS the EL does not choose — it follows the CL. If the branch turns
+        // out to contain an invalid block, `reorganise` stops at it and reports it, which is exactly how the Engine
+        // API learns to answer INVALID for a CL head it cannot reach.
+        if newBranchWeight(branch, parentWeight) > currentBestBlockWeight ||
+          leadsToDesignatedHead(branch)
+        then reorganise(currentBestBlockNumber, branch, parentWeight, parentHash)
         else KeptCurrentBestBranch
       case None =>
         ConsensusError(
@@ -256,6 +275,15 @@ class ConsensusImpl(
           failingBlock.hash.value,
           s"Error while trying to reorganise chain: $error"
         )
+
+  /** Is the tip of this candidate branch on the path to the head the consensus layer designated?
+    *
+    * Delegates to the shared [[DesignatedHead.leadsToDesignatedHead]] so this and `BranchResolution.compareBranch` —
+    * the two sites that must agree, because a branch has to pass both to be executed — cannot drift apart. False
+    * whenever `designatedHead` is `None`, i.e. always on a PoW chain.
+    */
+  private def leadsToDesignatedHead(branch: NonEmptyList[Block]): Boolean =
+    DesignatedHead.leadsToDesignatedHead(designatedHead, blockchainReader, branch.last.hash.value)
 
   private def newBranchWeight(newBranch: NonEmptyList[Block], parentWeight: ChainWeight) =
     newBranch.foldLeft(parentWeight)((w, b) => w.increase(b.header))

@@ -306,6 +306,39 @@ class EngineApiServiceSpec extends AnyWordSpec with Matchers:
         // Need to use same txRoot as the original block
         modified.copy(blockHash = header.hash.value)
 
+    "give an executed block a ChainWeight, so p2p branch resolution can cross it" taggedAs UnitTest in
+      new EngineApiTestSetup:
+        // WHY. `storeBlock`/`storeBlockByHashOnly` write a header and a body and nothing else, and nothing in the
+        // Engine API used to write a weight. A node whose chain was built entirely through newPayload therefore had
+        // no weight for any of its own blocks, and `BranchResolution.compareBranch` aborted the first time a
+        // competing branch arrived:
+        //   ERROR [BranchResolution] ChainWeight for 6: c05c5658… not found when resolving branch
+        // Measured on hive `engine` 6c8bc97 in 32 of 486 client logs, covering all 24
+        // `Missing Ancestor Syncing … CanonicalReOrg=True` failures and all 4 `Withdrawals … Re-Org Sync` timeouts.
+        // GenesisDataLoader writes a weight for genesis in production; the fixture stores genesis raw, so do it here.
+        blockchainWriter
+          .storeChainWeight(genesisHeader.hash, ChainWeight.totalDifficultyOnly(genesisHeader.difficulty.value))
+          .commit()
+        blockchainReader.getChainWeightByHash(genesisHeader.hash) should not be empty
+
+        val (validBlock, _) = buildValidBlock1()
+        engineApi.newPayload(blockToPayload(validBlock)).unsafeRunSync().status shouldBe Valid
+
+        // Post-merge the NUMBER is uninteresting — difficulty is 0, so it equals the parent's. The entry EXISTING is
+        // the whole point: `None` is what aborted branch resolution.
+        blockchainReader.getChainWeightByHash(validBlock.header.hash) shouldBe
+          blockchainReader.getChainWeightByHash(genesisHeader.hash)
+
+    "not invent a ChainWeight when the parent has none" taggedAs UnitTest in new EngineApiTestSetup:
+      // The fixture deliberately leaves genesis without a weight. A fabricated value would be a worse answer than an
+      // absent one on a chain where the number still means something, and execution must be unaffected either way.
+      blockchainReader.getChainWeightByHash(genesisHeader.hash) shouldBe None
+
+      val (validBlock, _) = buildValidBlock1()
+      engineApi.newPayload(blockToPayload(validBlock)).unsafeRunSync().status shouldBe Valid
+
+      blockchainReader.getChainWeightByHash(validBlock.header.hash) shouldBe None
+
     "return VALID for a correctly constructed empty block" taggedAs UnitTest in new EngineApiTestSetup:
       val (validBlock, _) = buildValidBlock1()
       val payload: ExecutionPayload = blockToPayload(validBlock)
