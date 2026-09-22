@@ -74,13 +74,22 @@ object StdValidators:
 
     result.left.map(ValidationBeforeExecError.apply)
 
+  /** Appended to the gas-used mismatch message when the block's own receipts PROVE the header's `gasUsed` is wrong.
+    *
+    * Consumed by `InvalidChainReporter.provesConsensusInvalid`. It must never contain a substring that some other
+    * consumer matches on (`"root mismatch"`, `"Proof root"`, `"Missing root node"`, `"Missing proof for empty account
+    * range"`, `"Peer disconnected"`, `"ATTR:"`, `"fork-id mismatch"`), and the message it is appended to keeps `"Block
+    * has invalid gas used"` as a contiguous prefix so `BlockImporter`'s gas-used arm matches exactly as before.
+    */
+  val HeaderGasContradictsReceiptsMarker: String = "header gasUsed contradicts the receipts it commits to"
+
   def validateBlockAfterExecution(
       self: Validators,
       block: Block,
       stateRootHash: ByteString,
       receipts: Seq[Receipt],
       gasUsed: BigInt
-  ): Either[BlockExecutionError, BlockExecutionSuccess] =
+  )(implicit blockchainConfig: BlockchainConfig): Either[BlockExecutionError, BlockExecutionSuccess] =
 
     val header = block.header
     val blockAndReceiptsValidation = self.blockValidator.validateBlockAndReceipts(header, receipts)
@@ -94,7 +103,29 @@ object StdValidators:
     // disambiguated by `BlockImporter.findMissingContractCode`. Swap these two and a partially-synced node starts
     // permanently marking honest blocks invalid through the state-root branch, and refuses its own canonical chain.
     if header.gasUsed.value != gasUsed then
-      Left(ValidationAfterExecError(s"Block has invalid gas used, expected ${header.gasUsed} but got $gasUsed"))
+      // Is this mismatch PROVEN, independent of how complete our local state is? Yes, when the header contradicts
+      // the receipts it commits to. Yellow Paper invariant, every fork Frontier→Prague and every ETC fork: the
+      // header's gasUsed equals the final receipt's cumulativeGasUsed (H_g = ℓ(R)_u). If our computed receipts hash
+      // to header.receiptsRoot, then they ARE the receipts the header commits to, so when their final cumulative gas
+      // differs from header.gasUsed the block is self-inconsistent and invalid whatever state we hold. This reasons
+      // purely from that invariant; it does not depend on missing code perturbing receipts. When the root does NOT
+      // match — the missing-code case among others — nothing is proven and the message is unchanged.
+      //
+      // Deliberately NOT `gasUsed` (BlockResult.gasUsed is max(executionGasUsed, stateGasUsed)); the receipts are
+      // read directly. Gated OFF at Amsterdam and later: under EIP-8037/7778 header gasUsed is the max of two
+      // dimensions while receipts carry the sum (hive devp2p block 41: header 183,600 vs receipt 326,947), so there
+      // the receipts do not commit to header gasUsed and a root match proves nothing.
+      //
+      // `blockAndReceiptsValidation` is computed eagerly above, so this adds no work. It checks the receipts root
+      // first, so anything other than Left(BlockReceiptsHashError) means the root matched.
+      val base = s"Block has invalid gas used, expected ${header.gasUsed} but got $gasUsed"
+      val provenByOwnReceipts =
+        !blockchainConfig.isAmsterdamTimestamp(header.unixTimestamp) &&
+          blockAndReceiptsValidation != Left(StdBlockValidator.BlockReceiptsHashError) &&
+          header.gasUsed.value != receipts.lastOption.fold(BigInt(0))(_.cumulativeGasUsed)
+      Left(
+        ValidationAfterExecError(if provenByOwnReceipts then s"$base; $HeaderGasContradictsReceiptsMarker" else base)
+      )
     else if header.stateRoot.value != stateRootHash then
       Left(ValidationAfterExecError(s"Block has invalid state root hash, expected ${Hex
           .toHexString(header.stateRoot.toArray)} but got ${Hex.toHexString(stateRootHash.toArray)}"))

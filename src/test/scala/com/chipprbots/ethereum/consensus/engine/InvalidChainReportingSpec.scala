@@ -236,6 +236,29 @@ class InvalidChainReportingSpec
 
       reported shouldBe empty
 
+  it should "report a gas-used mismatch MID-BATCH when the block's own receipts prove it" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in new ConsensusSetup:
+    // The hive GasUsed P8 shape: blocks before the bad one execute, so this is a PARTIAL batch, which
+    // ConsensusAdapter maps to BlockImportedToTop and BlockImporter never sees. Before this change a gas-used
+    // mismatch here was reported by nobody. With the receipts-proof marker, ConsensusImpl reports it itself.
+    val branch: List[Block] = BlockHelpers.generateChain(3, initialBestBlock)
+    failAt(
+      branch(1),
+      ValidationAfterExecError(
+        "Block has invalid gas used, expected 183600 but got 0; " +
+          com.chipprbots.ethereum.consensus.validators.std.StdValidators.HeaderGasContradictsReceiptsMarker
+      )
+    )
+
+    whenReady(consensusUnderTest.evaluateBranch(NonEmptyList.fromListUnsafe(branch)).unsafeToFuture())(_ => ())
+
+    reported.toList shouldBe List(
+      branch(1).hash.value -> branch(0).hash.value,
+      branch(2).hash.value -> branch(0).hash.value
+    )
+
   it should "be inert with no reporter — the ETC/Mordor/Gorgoroth configuration" taggedAs (
     UnitTest,
     ConsensusTest

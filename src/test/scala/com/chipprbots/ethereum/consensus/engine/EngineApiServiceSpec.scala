@@ -58,7 +58,7 @@ class EngineApiServiceSpec extends AnyWordSpec with Matchers:
         stateRootHash = correctStateRoot, // execution computed this
         receipts = Seq.empty,
         gasUsed = 21000
-      )
+      )(using com.chipprbots.ethereum.utils.Config.blockchains.blockchainConfig)
 
       result.isLeft shouldBe true
       result.left.getOrElse(null).toString should include("state root")
@@ -93,7 +93,7 @@ class EngineApiServiceSpec extends AnyWordSpec with Matchers:
         stateRootHash = stateRoot.value,
         receipts = Seq.empty,
         gasUsed = 21000 // execution computed different gasUsed
-      )
+      )(using com.chipprbots.ethereum.utils.Config.blockchains.blockchainConfig)
 
       result.isLeft shouldBe true
       result.left.getOrElse(null).toString should include("gas used")
@@ -128,7 +128,7 @@ class EngineApiServiceSpec extends AnyWordSpec with Matchers:
         stateRootHash = stateRoot.value, // matches
         receipts = Seq.empty,
         gasUsed = 21000 // matches
-      )
+      )(using com.chipprbots.ethereum.utils.Config.blockchains.blockchainConfig)
 
       result.isRight shouldBe true
     }

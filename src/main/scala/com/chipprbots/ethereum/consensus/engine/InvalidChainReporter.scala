@@ -125,7 +125,12 @@ object InvalidChainReporter:
     * FALSE — transient, or not decidable from what we hold:
     *
     *   - `MPTError`, `MissingParentError`: missing state, by definition.
-    *   - `ValidationAfterExecError` carrying [[GasUsedMismatchMarker]]. This is THE ambiguous case.
+    *   - `ValidationAfterExecError` carrying [[GasUsedMismatchMarker]] ALONE. This is THE ambiguous case. The
+    *     exception, reported TRUE: the same message also carrying `StdValidators.HeaderGasContradictsReceiptsMarker`,
+    *     which proves the header contradicts the receipts it commits to (see that marker's comment). Without that
+    *     exception a gas-used mismatch found mid-batch was reported by NOBODY: `ConsensusAdapter` maps a partial batch
+    *     failure to `BlockImportedToTop` and drops the error, so `BlockImporter`'s gas-used arm never ran — hive
+    *     `engine` 501368ec9, `Invalid Missing Ancestor Syncing ReOrg, GasUsed … Invalid P8`, 2/2 failing.
     *     `InMemoryWorldStateProxy.getCode` returns `ByteString.empty` instead of throwing when the bytecode is absent
     *     from `EvmCodeStorage`, so a partially-synced node executes a contract call as if it were a transfer to an EOA,
     *     under-counts gas, and reports a gas mismatch for a perfectly honest block. The disambiguation
@@ -164,6 +169,12 @@ object InvalidChainReporter:
       case _: TxsExecutionError =>
         true
       case ValidationAfterExecError(reason) =>
-        !reason.contains(GasUsedMismatchMarker)
+        // A gas-used mismatch is ambiguous (missing contract code) UNLESS the block's own receipts prove it: see
+        // StdValidators.HeaderGasContradictsReceiptsMarker. That marker is only ever appended when our receipts hash to
+        // the header's receiptsRoot and their final cumulative gas differs from header.gasUsed, pre-Amsterdam.
+        !reason.contains(GasUsedMismatchMarker) ||
+        reason.contains(
+          com.chipprbots.ethereum.consensus.validators.std.StdValidators.HeaderGasContradictsReceiptsMarker
+        )
       case MissingParentError | _: MPTError =>
         false
