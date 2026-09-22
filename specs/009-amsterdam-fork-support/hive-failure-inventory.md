@@ -1115,3 +1115,84 @@ correct behaviour the harness does not accept.
 The inertness oracle held across changes to `BlockchainConfig`, fork-id computation,
 both handshake states, `EthInfoService`, `ETHPackets`, `DebugTracingService`,
 `StructLogTracer` and the RLP decode paths. It moved in neither direction.
+
+---
+
+## Measurement on `810d6d8` — rpc-compat 8 → 1, and what the last one was
+
+| suite | start | `6c8bc97` | `9be2cfd` | `810d6d8` |
+|---|---:|---:|---:|---:|
+| rpc-compat | 19 | 6 | 8 | **1** (246 / 1 / 247) |
+| graphql | 2 | 2 | 2 | 2 (same two tests) |
+
+Every `debug_*` failure cleared, including both `context deadline exceeded` timeouts.
+That settles the open question from the previous entry: the timeouts were the
+always-on memory capture (C7), not residual O(n²) cost. The tracer work is done.
+
+### The last rpc-compat failure was one field, and it reconstructs exactly
+
+`eth_config/get-config` differed in a single key. Everything else — `activationTime`,
+`blobSchedule`, `chainId`, all 18 precompiles, all 5 system contracts — matched.
+
+```
+forkId: -- "0xe54f18d6"   (fukuii)
+        ++ "0xe272ecbe"   (expected)
+```
+
+Reconstructed from the fixture rather than reasoned about. The chain is
+execution-apis `tests/genesis.json`: genesis hash
+`44fd89d5…5b3d99`, genesis timestamp 0, block forks 3, 6, 9, 12, 15, 18, **21**, 24,
+27, 30, 33, 36 and timestamp forks 390, 420, 450, 480, 510, 540. CRC32 accumulated
+over that full list gives `0xe272ecbe`. Accumulated over the same list **with block 21
+removed** it gives `0xe54f18d6` — fukuii's value, to the bit. No other single
+omission reproduces it:
+
+| fork list | checksum |
+|---|---|
+| full | `0xe272ecbe` ← expected |
+| **minus muirGlacier (21)** | **`0xe54f18d6`** ← fukuii |
+| minus mergeNetsplit (36) | `0xb22c635f` |
+| minus arrowGlacier (30) | `0x11e136dc` |
+| minus grayGlacier (33) | `0x6d87fac3` |
+| minus bpo1 (510) | `0xecf4d81f` |
+
+### Cause: a one-character gap between a shell script and a Go fixture
+
+`hive/fukuii/fukuii.sh` read `HIVE_FORK_MUIRGLACIER`. hive exports
+`HIVE_FORK_MUIR_GLACIER` — that is the name in execution-apis' `tests/forkenv.json`
+(`"HIVE_FORK_MUIR_GLACIER": "21"`) and in hive's own
+`clients/go-ethereum/mapper.jq`. The un-underscored spelling survives only in a stale
+comment in hive's `geth.sh` and is never set by anything. So the read fell through to
+the `$MAX` sentinel and Muir Glacier never entered the checksum chain.
+
+`ForkIdHiveRpcCompatSpec` asserts `0xe272ecbe` for this chain and passed the entire
+time the node was advertising `0xe54f18d6`. It asserts what `ForkId` does with a
+config; nothing asserted that the adapter **builds** that config. That gap is now
+closed by `HiveAdapterForkEnvSpec`, which reads `fukuii.sh` and checks both
+directions: no env name the script reads that hive never exports, and no
+block-numbered fork hive exports that the script never reads. Negative control run:
+restoring the old spelling fails all three of its assertions.
+
+Scope of the defect, measured not assumed: devp2p's fixture sets
+`HIVE_FORK_MUIR_GLACIER=0`, and forks at block 0 are filtered from the checksum
+anyway, so **devp2p was never affected**. This was worth exactly one rpc-compat test.
+
+While in there, `arrowGlacierBlock`, `grayGlacierBlock`, `mergeNetsplitBlock` and
+`depositContractAddress` now prefer hive's exported `HIVE_FORK_ARROW_GLACIER`,
+`HIVE_FORK_GRAY_GLACIER`, `HIVE_MERGE_BLOCK_ID` and `HIVE_DEPOSIT_CONTRACT_ADDRESS`,
+keeping the genesis `config` reads as fallback. Both real fixtures agree on every one
+of those values, so this changes nothing measurable today; it removes the assumption
+that a simulator's genesis always carries them.
+
+### graphql: the two failures, finally with numbers
+
+The inertness oracle has held at exactly 2 across every change. Decoding the artifact
+gives the actual values for the first time:
+
+| test | expected | got |
+|---|---|---|
+| `04_eth_estimateGas_contractDeploy` | `0x1b551` (111,953) | `0xa959` (43,353) |
+| `07_eth_gasPrice` | `0x10` (16) **or** `0x1` (1) | `0x3437004b` (876,610,123) |
+
+The estimateGas delta is 68,600 = 343 × 200, which is the shape of a missing
+`G_codedeposit` charge — a hypothesis to test against the fixture, not a finding.

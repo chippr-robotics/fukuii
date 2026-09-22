@@ -23,7 +23,14 @@ BYZANTIUM=${HIVE_FORK_BYZANTIUM:-$MAX}
 CONSTANTINOPLE=${HIVE_FORK_CONSTANTINOPLE:-$MAX}
 PETERSBURG=${HIVE_FORK_PETERSBURG:-$MAX}
 ISTANBUL=${HIVE_FORK_ISTANBUL:-$MAX}
-MUIRGLACIER=${HIVE_FORK_MUIRGLACIER:-$MAX}
+# HIVE_FORK_MUIR_GLACIER is underscored. That is the name execution-apis'
+# tests/forkenv.json and hive's own clients/go-ethereum/mapper.jq export; the
+# un-underscored HIVE_FORK_MUIRGLACIER survives only in a stale comment in hive's
+# geth.sh and is never set by anything. Reading the wrong one left Muir Glacier at the
+# $MAX sentinel, so it never entered the EIP-2124 checksum chain. Measured on
+# rpc-compat: fukuii advertised 0xe54f18d6 — exactly the checksum of the fixture's fork
+# list with block 21 removed — where peers and eth_config expect 0xe272ecbe.
+MUIRGLACIER=${HIVE_FORK_MUIR_GLACIER:-$MAX}
 BERLIN=${HIVE_FORK_BERLIN:-$MAX}
 LONDON=${HIVE_FORK_LONDON:-$MAX}
 
@@ -75,6 +82,16 @@ if [ -f "$GENESIS_FILE" ]; then
     GRAY_GLACIER=$(jq -r '.config.grayGlacierBlock // empty' "$GENESIS_FILE" 2>/dev/null || true)
     MERGE_NETSPLIT=$(jq -r '.config.mergeNetsplitBlock // empty' "$GENESIS_FILE" 2>/dev/null || true)
 fi
+
+# hive does export all four of these, under its own names, and a simulator may hand us a
+# genesis whose `config` block omits them while the environment carries them. Env wins
+# where present; the genesis reads above remain the fallback. Both real fixtures
+# (execution-apis tests/forkenv.json and devp2p's testdata) agree on every value, so this
+# changes nothing there and only removes the dependency on the genesis carrying them.
+ARROW_GLACIER=${HIVE_FORK_ARROW_GLACIER:-$ARROW_GLACIER}
+GRAY_GLACIER=${HIVE_FORK_GRAY_GLACIER:-$GRAY_GLACIER}
+MERGE_NETSPLIT=${HIVE_MERGE_BLOCK_ID:-$MERGE_NETSPLIT}
+DEPOSIT_CONTRACT=${HIVE_DEPOSIT_CONTRACT_ADDRESS:-$DEPOSIT_CONTRACT}
 
 # ==============================================================================
 # JWT secret for Engine API
