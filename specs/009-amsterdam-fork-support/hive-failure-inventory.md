@@ -966,3 +966,67 @@ Separately flagged: that generic fallback branch fabricates `types` and `sizes` 
 `Seq.fill(hashes.size)(0)` — inventing protocol data it does not have. On an input it can
 coerce it would succeed with fabricated metadata instead of failing. That is a
 silent-fallback defect independent of eth/72.
+
+---
+
+## The `NewPooledTransactionHashes` fallback: Chesterton's Fence, resolved
+
+The generic fallback branch in `ETHPackets.toNewPooledTransactionHashes` fabricates
+`types` and `sizes` as `Seq.fill(hashes.size)(0)`. Before proposing to remove it, the
+question was why it exists. It answers itself:
+
+`src/test/scala/.../ETH68MessagesSpec.scala:41-57` is a test named
+
+    "decoding NewPooledTransactionHashes in legacy ETH65 format" should
+      "successfully decode and set default types and sizes"
+
+It encodes a bare flat hash list — no types, no sizes, no wrapper — and asserts exactly
+those fabricated zeros. The branch exists for **ETH65's pre-EIP-5793 announcement format**.
+
+That field is gone. fukuii supports ETH68/69/70 only; ETH63–67 are removed. Confirmed
+structurally, not just by policy: `HelloExchangeState.scala` dispatches negotiation with
+cases for `Capability.ETH69` (line 74) and `Capability.ETH68` (line 88) and nothing else —
+`case _ =>` (line 100) is `DisconnectedState(IncompatibleP2pProtocolVersion)`. There is no
+connection state in which a genuine ETH65 peer reaches this decoder.
+
+So the branch cannot fire for the reason it was written. It can only fire on data matching
+no format fukuii understands — which is precisely the eth/72 case that costs four devp2p
+tests. On that input it happens to throw (the nested `sizes` list will not coerce to
+`ByteString`), so removing it changes nothing for those four. On some other shape that
+*does* fully coerce, today's code would silently succeed with invented protocol metadata,
+handing tx-pool prioritisation and blob-tx type handling data the peer never sent.
+
+A hard failure is both safer and more honest about attribution. The current log line is
+`src is not an RLPValue` — an RLP-internals detail. The protocol-level statement is
+"expected the 3-field typed form (ETH68+), got an N-element list".
+
+**When this is taken, the ETH65 test must go or be repurposed in the same change** (into
+"any non-3-field shape is a decode failure"), or it becomes a red test pinning removed
+behaviour. ~17 lines.
+
+## Those four devp2p failures: correctly blocked, and cheaper to unblock than "eth/72"
+
+Disconnecting is the **right** behaviour, for a structural reason rather than a practical
+one. devp2p binds message shape to the negotiated protocol version, not to sniffing bytes.
+ETH68's and ETH72's `NewPooledTransactionHashesMsg` share a wire code and carry two
+different version-defined shapes; a client knows which to expect from the handshake. Having
+negotiated ETH70-or-below, fukuii has agreed it will only receive ETH70-shaped messages on
+that connection. A 4-field arrival is not ambiguous input to interpret — it is a message a
+compliant peer would not send. There is no decode cleverness at ETH70 that yields the right
+answer, because ETH70 has no right answer for that shape.
+
+Two qualifications on urgency, neither on correctness:
+
+1. **Partly a harness gap.** The same go-ethereum file gates other tests behind
+   `eth72Supported()`, which skips cleanly when `negotiatedProtoVersion < ETH72`, but
+   `testBadBlobTx` and `TestBlobViolations` build `NewPooledTransactionHashesPacket72`
+   unconditionally. That is an inconsistency upstream may tighten, at which point these
+   four become skips with no fukuii-side work. Not a promise — a reason not to record them
+   as permanently blocked.
+2. **The unlocking slice is smaller than full eth/72.** These four never touch
+   `GetCells`/`Cells`, the PeerDAS/KZG cell-proof surface that made ETH72 the
+   large, speculative tier in the earlier scoping. They need only (a) negotiating eth/72 at
+   all and (b) a dedicated decoder for the 4-field packet, i.e. the `Capability` case
+   objects plus the `ethWireSizeFor`/negotiation/handshake-dispatch plumbing already sized
+   as the medium ETH71 tier, plus one message variant. If the goal is un-redding these four
+   rather than protocol parity, that is a materially cheaper target.
