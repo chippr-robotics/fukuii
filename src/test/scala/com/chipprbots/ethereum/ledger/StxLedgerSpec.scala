@@ -63,25 +63,24 @@ class StxLedgerSpec extends AnyFlatSpec with Matchers with Logger:
   /** Pins hive `graphql` simulator fixture `04_eth_estimateGas_contractDeploy` (`estimateGas` on a contract-creation
     * `CallData`, block 32 of the simulator's own `testBlockchain.blocks` — pure Frontier: that fixture's
     * `testGenesis.json` sets `homesteadBlock` through `londonBlock` all to 33, so block 32 predates every fork).
-    * expected `0x1b551` = 111953; fukuii returned `0xa959` = 43353, short by exactly 68600 = 343 (the deployed
-    * runtime code's byte length) * 200 (`G_codedeposit`) — the code-deposit cost was silently omitted from the
-    * estimate.
+    * expected `0x1b551` = 111953; fukuii returned `0xa959` = 43353, short by exactly 68600 = 343 (the deployed runtime
+    * code's byte length) * 200 (`G_codedeposit`) — the code-deposit cost was silently omitted from the estimate.
     *
     * Root cause: `VM.saveNewContract` (VM.scala), pre-Homestead branch. Frontier's `exceptionalFailedCodeDeposit
-    * = false` correctly skips the revert/burn-all-gas penalty for a CREATE that ran out of gas paying the code
+    * \= false` correctly skips the revert/burn-all-gas penalty for a CREATE that ran out of gas paying the code
     * deposit, but the code returned `result` completely unchanged — including `error = None`. That makes
-    * `binarySearchGasEstimation` (which reads `TxResult.vmError`) treat "ran the init code, produced runtime
-    * bytes, but couldn't afford to store them" as a SUCCESS, so the binary search converges on the minimum gas to
-    * merely RUN the init code, never the minimum to actually deploy it.
+    * `binarySearchGasEstimation` (which reads `TxResult.vmError`) treat "ran the init code, produced runtime bytes, but
+    * couldn't afford to store them" as a SUCCESS, so the binary search converges on the minimum gas to merely RUN the
+    * init code, never the minimum to actually deploy it.
     *
     * go-ethereum's `core/vm/evm.go` `create()` does NOT make that mistake: `err = ErrCodeStoreOutOfGas` is set
-    * unconditionally, and `evm.chainRules.IsHomestead` gates only whether the world gets reverted and the
-    * remaining gas burned — not whether `err` is set at all. `Result.Failed()` (checked by both `eth_estimateGas`
-    * and the GraphQL resolver) is therefore true on every fork, pre-Homestead included.
+    * unconditionally, and `evm.chainRules.IsHomestead` gates only whether the world gets reverted and the remaining gas
+    * burned — not whether `err` is set at all. `Result.Failed()` (checked by both `eth_estimateGas` and the GraphQL
+    * resolver) is therefore true on every fork, pre-Homestead included.
     *
-    * Fix: `CodeStoreOutOfGasPreHomestead` (ProgramError.scala) — a `ProgramError` with `useWholeGas = false` (no
-    * extra gas burned, matching Frontier) and the new `rollbackOnError = false` (the partial state change —
-    * nonce bump, endowment transfer — must still stick for a transaction that actually lands in a block).
+    * Fix: `CodeStoreOutOfGasPreHomestead` (ProgramError.scala) — a `ProgramError` with `useWholeGas = false` (no extra
+    * gas burned, matching Frontier) and the new `rollbackOnError = false` (the partial state change — nonce bump,
+    * endowment transfer — must still stick for a transaction that actually lands in a block).
     * `BlockPreparator.executeTransaction`'s checkpoint-rollback now reads `rollbackOnError` instead of blanket
     * `error.isDefined`, so this is the only error variant that reports "failed" to callers like
     * `binarySearchGasEstimation` while leaving the already-applied world state alone.
@@ -309,16 +308,16 @@ trait ScenarioSetup extends EphemBlockchainTestSetup:
     .and(blockchainWriter.storeChainWeight(BlockHash(genesisHash), genesisWeight))
     .commit()
 
-/** Reproduces the fork state of hive's OWN `ethereum/graphql` simulator fixture chain — NOT the shared
-  * `execution-apis` chain that `rpc-compat` uses (that was the initial, WRONG assumption investigating this defect;
-  * see the false-premise note in `04_eth_estimateGas_contractDeploy` in ForkIdHiveRpcCompatSpec-adjacent history).
-  * `simulators/ethereum/graphql/init/testGenesis.json` (ethereum/hive, current as of 2026-08-31) declares
-  * `chainId: 1` and sets EVERY fork field — `homesteadBlock` through `londonBlock` — to `33`. The simulator's own
-  * `testBlockchain.blocks` (35 blocks) confirms this: block 33 is the first block whose header carries a
-  * `baseFee` field (1 gwei) and an 17-field RLP shape; blocks 0-32 are 15-field, no-baseFee headers. So block 32,
-  * which the `04_eth_estimateGas_contractDeploy` fixture queries, runs under PURE FRONTIER rules — no Homestead,
-  * no EIP-158/161, no Byzantium, nothing. `ForkBlockNumbers.Empty` (frontier=0, everything else at the
-  * `Long.MaxValue` sentinel) is exactly that.
+/** Reproduces the fork state of hive's OWN `ethereum/graphql` simulator fixture chain — NOT the shared `execution-apis`
+  * chain that `rpc-compat` uses (that was the initial, WRONG assumption investigating this defect; see the
+  * false-premise note in `04_eth_estimateGas_contractDeploy` in ForkIdHiveRpcCompatSpec-adjacent history).
+  * `simulators/ethereum/graphql/init/testGenesis.json` (ethereum/hive, current as of 2026-08-31) declares `chainId: 1`
+  * and sets EVERY fork field — `homesteadBlock` through `londonBlock` — to `33`. The simulator's own
+  * `testBlockchain.blocks` (35 blocks) confirms this: block 33 is the first block whose header carries a `baseFee`
+  * field (1 gwei) and an 17-field RLP shape; blocks 0-32 are 15-field, no-baseFee headers. So block 32, which the
+  * `04_eth_estimateGas_contractDeploy` fixture queries, runs under PURE FRONTIER rules — no Homestead, no EIP-158/161,
+  * no Byzantium, nothing. `ForkBlockNumbers.Empty` (frontier=0, everything else at the `Long.MaxValue` sentinel) is
+  * exactly that.
   */
 trait HiveGraphQLScenarioSetup extends ScenarioSetup:
   implicit override lazy val blockchainConfig: BlockchainConfig = BlockchainConfig(
@@ -336,11 +335,10 @@ trait HiveGraphQLScenarioSetup extends ScenarioSetup:
     bootstrapNodes = Set()
   )
 
-  /** Block 32 header: pure Frontier, no baseFee field at all (matches the real header shape — `HefEmpty` is
-    * correct here, not a zeroed `HefPostOlympia`, because pre-London headers don't carry the field). Timestamp
-    * 1444660029 is the fixture's own block-32 timestamp (irrelevant to gas cost here since no timestamp-gated
-    * fork exists this early anyway, but kept faithful to the source chain for anyone re-deriving other numbers
-    * from this fixture later).
+  /** Block 32 header: pure Frontier, no baseFee field at all (matches the real header shape — `HefEmpty` is correct
+    * here, not a zeroed `HefPostOlympia`, because pre-London headers don't carry the field). Timestamp 1444660029 is
+    * the fixture's own block-32 timestamp (irrelevant to gas cost here since no timestamp-gated fork exists this early
+    * anyway, but kept faithful to the source chain for anyone re-deriving other numbers from this fixture later).
     */
   val block32Header: BlockHeader = genesisHeader.copy(
     number = BlockNumber(32),

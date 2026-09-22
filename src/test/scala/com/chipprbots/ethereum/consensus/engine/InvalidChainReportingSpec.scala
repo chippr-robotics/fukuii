@@ -527,4 +527,3 @@ object InvalidChainReportingSpec:
       transactions = Seq.empty,
       withdrawals = Some(Seq.empty)
     )
-
