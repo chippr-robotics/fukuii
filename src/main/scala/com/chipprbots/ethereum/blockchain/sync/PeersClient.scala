@@ -88,16 +88,28 @@ object PeersClient:
         ctx.messageAdapter[NetworkPeerManagerActor.HandshakedPeers] {
           case NetworkPeerManagerActor.HandshakedPeers(peers) => HandshakedPeersCmd(peers)
         }
-      val peerDisconnectedAdapter: TypedActorRef[PeerEvent] =
+      // ONE adapter for PeerEvent, handling every case this actor subscribes to.
+      //
+      // Pekko registers message adapters keyed by message CLASS, and a new registration
+      // REPLACES the existing one for that class — so two `messageAdapter[PeerEvent]` calls do
+      // not yield two independent adapters. The second silently won, and every PeerDisconnected
+      // routed to the first was then run through the second's function, which knew only
+      // MaintainedPeersChanged and threw:
+      //
+      //   scala.MatchError: unexpected PeerEvent from bus: PeerDisconnected(PeerId(...))
+      //     at PeersClient$.$anonfun$3(PeersClient.scala:99)
+      //
+      // Observed twice in a single hive sync run. Each throw restarts PeersClient under its
+      // supervisor, discarding in-flight request state. Both subscriptions can share one ref:
+      // the event bus routes by classifier, so each still delivers only its own event type.
+      val peerEventAdapter: TypedActorRef[PeerEvent] =
         ctx.messageAdapter[PeerEvent] {
-          case PeerDisconnected(peerId) => PeerDisconnectedCmd(peerId)
-          case e                        => throw new MatchError(s"unexpected PeerEvent from bus: $e")
-        }
-      val maintainedAdapter: TypedActorRef[PeerEvent] =
-        ctx.messageAdapter[PeerEvent] {
+          case PeerDisconnected(peerId)        => PeerDisconnectedCmd(peerId)
           case MaintainedPeersChanged(nodeIds) => MaintainedPeersChangedCmd(nodeIds)
           case e                               => throw new MatchError(s"unexpected PeerEvent from bus: $e")
         }
+      val peerDisconnectedAdapter: TypedActorRef[PeerEvent] = peerEventAdapter
+      val maintainedAdapter: TypedActorRef[PeerEvent] = peerEventAdapter
 
       // Besu alignment: subscribe at startup so updates arrive before any BlacklistPeer message.
       peerEventBus ! SubscribeCmd(MaintainedPeersClassifier, maintainedAdapter)
