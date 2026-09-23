@@ -1327,7 +1327,11 @@ abstract class CallOp(code: Int, delta: Int, alpha: Int) extends OpCode(code, de
           if error == InvalidCall then -startGas else if error == RevertOccurs then -result.gasRemaining else BigInt(0)
         val memoryAdjustment = if error == RevertOccurs then mem2 else mem1.expand(outOffset, outSize)
 
-        state
+        // EIP-7702: the delegation target was warmed by this CALL's gas charge, in the CALLER's frame (go-ethereum
+        // `makeCallVariantGasCallEIP7702` adds it before `evm.Call` takes its snapshot), so a failing child does not
+        // un-warm it. Building on `state` here dropped it, and the next call to the same pointer paid 2,600 again
+        // (EEST `test_pointer_reverts[*first_revert_True*]`: +2,500).
+        stateWithDelegationWarming
           .withStack(stack2)
           .withMemory(memoryAdjustment)
           .withWorld(world1)
@@ -1395,14 +1399,7 @@ abstract class CallOp(code: Int, delta: Int, alpha: Int) extends OpCode(code, de
 
     val memCost = calcMemCost(state, inOffset, inSize, outOffset, outSize)
 
-    // EIP-7702: If the target has delegation code, charge cold access for the delegation target
-    val delegationCost: BigInt =
-      val addr = Address(to)
-      val code = state.world.getCode(addr)
-      SetCodeTransaction.parseDelegation(code) match
-        case Some(target) if !state.accessedAddresses.contains(target) =>
-          state.config.feeSchedule.G_cold_account_access
-        case _ => BigInt(0)
+    val delegationCost: BigInt = delegationAccessCost(state, Address(to))
 
     val gExtra: BigInt = gasExtra(state, endowment, Address(to))
     val gCap: BigInt = gasCap(state, gas, gExtra + memCost + delegationCost)
@@ -1436,8 +1433,29 @@ abstract class CallOp(code: Int, delta: Int, alpha: Int) extends OpCode(code, de
     val Seq(gas, to, _, inOffset, inSize, outOffset, outSize) = params
     val memCost = calcMemCost(state, inOffset, inSize, outOffset, outSize)
     val gExtra = gasExtra(state, endowment, Address(to))
-    val gCap = gasCap(state, gas, gExtra + memCost)
+    // The delegation charge must reduce the gas the 63/64 rule splits, exactly as it does in `varGas`: go-ethereum
+    // `makeCallVariantGasCallEIP7702` spends it from `contract.Gas` BEFORE `callGas` runs. Leaving it out here
+    // forwarded more gas to the child than the caller was charged, and the child's unused gas then came back as a
+    // net credit (EEST `test_nonce_validity[nonce=2**64-2]`: 2,559 short).
+    val gCap = gasCap(state, gas, gExtra + memCost + delegationAccessCost(state, Address(to)))
     if endowment.isZero then gCap else gCap + state.config.feeSchedule.G_callstipend
+
+  /** EIP-7702: the extra access charge for calling an account whose code is a delegation indicator — the delegation
+    * TARGET's EIP-2929 access cost, warm (100) or cold (2,600). go-ethereum `makeCallVariantGasCallEIP7702` charges
+    * `WarmStorageReadCostEIP2929` when the target is already in the access list, not zero; a precompile target is
+    * always warm, so it always costs 100 (EEST `test_set_code_to_precompile`, `test_account_warming`).
+    */
+  protected def delegationAccessCost[S <: Storage[S], W <: WorldStateProxy[W, S]](
+      state: ProgramState[W, S],
+      addr: Address
+  ): BigInt =
+    SetCodeTransaction.parseDelegation(state.world.getCode(addr)) match
+      case Some(target) =>
+        // `addr` itself is warmed (and charged) before its delegation is inspected, so a self-delegation's target
+        // is always warm here (EEST `test_self_set_code_cost[pre_authorized_True]`: 2,700, not 5,200).
+        if target == addr || state.accessedAddresses.contains(target) then state.config.feeSchedule.G_warm_storage_read
+        else state.config.feeSchedule.G_cold_account_access
+      case None => BigInt(0)
 
   private def gasCap[S <: Storage[S], W <: WorldStateProxy[W, S]](
       state: ProgramState[W, S],
