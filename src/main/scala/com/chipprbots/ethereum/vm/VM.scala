@@ -120,13 +120,15 @@ class VM[W <: WorldStateProxy[W, S], S <: Storage[S]](
               if transferLogs.isEmpty then precompileResult
               else precompileResult.copy(logs = transferLogs ++ precompileResult.logs)
             else
-              val code = resolveCode(world1, recipientAddr)
+              val code = resolveCode(context1.evmConfig, world1, recipientAddr)
               val env = ExecEnv(context1, code, ownerAddr)
 
               // EIP-7702: If code was resolved from a delegation, warm the delegation target
               val delegationTarget =
-                try SetCodeTransaction.parseDelegation(world1.getCode(recipientAddr))
-                catch case _: Exception => None
+                if !context1.evmConfig.eip7702Enabled then None
+                else
+                  try SetCodeTransaction.parseDelegation(world1.getCode(recipientAddr))
+                  catch case _: Exception => None
               val initialState: PS = ProgramState(this, context1, env).withLogs(transferLogs)
               val warmState = delegationTarget match
                 case Some(target) => initialState.addAccessedAddress(target)
@@ -146,13 +148,17 @@ class VM[W <: WorldStateProxy[W, S], S <: Storage[S]](
     result
 
   /** EIP-7702: Resolve delegation code one level deep. If the account has a delegation prefix (0xef0100), load the
-    * target's code instead.
+    * target's code instead. Only once EIP-7702 is active (`eip7702Enabled`: Prague on ETH, Olympia on ETC) — before
+    * that the account's own code runs, and its leading 0xEF is an undefined opcode (go-ethereum `resolveCode` gates on
+    * `IsPrague`; core-geth has no EIP-7702 at all).
     */
-  private def resolveCode(world: W, addr: Address): ByteString =
+  private def resolveCode(config: EvmConfig, world: W, addr: Address): ByteString =
     val code = world.getCode(addr)
-    SetCodeTransaction.parseDelegation(code) match
-      case Some(target) => world.getCode(target)
-      case None         => code
+    if !config.eip7702Enabled then code
+    else
+      SetCodeTransaction.parseDelegation(code) match
+        case Some(target) => world.getCode(target)
+        case None         => code
 
   /** Contract creation - Λ function in YP salt is used to create contract by CREATE2 opcode. See
     * https://github.com/ethereum/EIPs/blob/master/EIPS/eip-1014.md

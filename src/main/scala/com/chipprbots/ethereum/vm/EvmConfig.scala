@@ -50,7 +50,8 @@ object EvmConfig:
       )
     if blockchainConfig.isPragueTimestamp(timestamp) then
       config = config.copy(
-        feeSchedule = new FeeSchedule.PragueFeeSchedule // EIP-7623: increased calldata costs
+        feeSchedule = new FeeSchedule.PragueFeeSchedule, // EIP-7623: increased calldata costs
+        eip7702Enabled = true // EIP-7702: delegation designators are followed
       )
     if blockchainConfig.isOsakaTimestamp(timestamp) then
       config = config.copy(
@@ -235,7 +236,8 @@ object EvmConfig:
     SpiralConfigBuilder(config).copy(
       opCodeList = EtcOlympiaOpCodes,
       feeSchedule = new FeeSchedule.OlympiaFeeSchedule,
-      eip6780Enabled = true
+      eip6780Enabled = true,
+      eip7702Enabled = true // ECIP-1121: EIP-7702 activates with Olympia, together with Type-4 tx admission
     )
 
   case class OpCodeList(opCodes: List[OpCode]):
@@ -256,6 +258,14 @@ case class EvmConfig(
     eip3860Enabled: Boolean = false,
     eip6049DeprecationEnabled: Boolean = false,
     eip6780Enabled: Boolean = false,
+    /** EIP-7702: code of the form 0xef0100 ++ address is a delegation designator — CALL-family and tx-level calls run
+      * the target's code, warm the target and (CALL family) pay its access cost. Enabled at Prague on ETH (timestamp)
+      * and at Olympia on ETC (block number), the same forks that admit Type-4 transactions. Before that, such code is
+      * ordinary bytecode: 0xEF is an undefined opcode, so executing it is an exceptional halt. That matters on ETC,
+      * where a 23-byte 0xef0100 contract could be deployed before Mystique (EIP-3541); core-geth, which has no
+      * EIP-7702, executes it as INVALID.
+      */
+    eip7702Enabled: Boolean = false,
     /** Amsterdam (ETH-family). Gates EIP-8037 state-gas metering, EIP-2780's intrinsic decomposition, EIP-7708
       * value-transfer logs and EIP-7954's size limits. `false` on every ETC path.
       */

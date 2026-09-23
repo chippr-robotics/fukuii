@@ -1273,12 +1273,14 @@ abstract class CallOp(code: Int, delta: Int, alpha: Int) extends OpCode(code, de
         (state.ownAddress, state.env.callerAddr, callValue, UInt256.Zero, false, state.staticCtx)
     val startGas = calcStartGas(state, params, endowment)
 
-    // EIP-7702: Warm the delegation target address if applicable
+    // EIP-7702: Warm the delegation target address if applicable (only once EIP-7702 is active)
     val stateWithDelegationWarming =
-      val code = state.world.getCode(toAddr)
-      SetCodeTransaction.parseDelegation(code) match
-        case Some(target) => state.addAccessedAddress(target)
-        case None         => state
+      if !state.config.eip7702Enabled then state
+      else
+        val code = state.world.getCode(toAddr)
+        SetCodeTransaction.parseDelegation(code) match
+          case Some(target) => state.addAccessedAddress(target)
+          case None         => state
 
     val context: ProgramContext[W, S] = ProgramContext(
       callerAddr = caller,
@@ -1449,13 +1451,17 @@ abstract class CallOp(code: Int, delta: Int, alpha: Int) extends OpCode(code, de
       state: ProgramState[W, S],
       addr: Address
   ): BigInt =
-    SetCodeTransaction.parseDelegation(state.world.getCode(addr)) match
-      case Some(target) =>
-        // `addr` itself is warmed (and charged) before its delegation is inspected, so a self-delegation's target
-        // is always warm here (EEST `test_self_set_code_cost[pre_authorized_True]`: 2,700, not 5,200).
-        if target == addr || state.accessedAddresses.contains(target) then state.config.feeSchedule.G_warm_storage_read
-        else state.config.feeSchedule.G_cold_account_access
-      case None => BigInt(0)
+    // Before EIP-7702 (ETH pre-Prague, ETC pre-Olympia) 0xef0100-prefixed code is not a designator and costs nothing.
+    if !state.config.eip7702Enabled then BigInt(0)
+    else
+      SetCodeTransaction.parseDelegation(state.world.getCode(addr)) match
+        case Some(target) =>
+          // `addr` itself is warmed (and charged) before its delegation is inspected, so a self-delegation's target
+          // is always warm here (EEST `test_self_set_code_cost[pre_authorized_True]`: 2,700, not 5,200).
+          if target == addr || state.accessedAddresses.contains(target) then
+            state.config.feeSchedule.G_warm_storage_read
+          else state.config.feeSchedule.G_cold_account_access
+        case None => BigInt(0)
 
   private def gasCap[S <: Storage[S], W <: WorldStateProxy[W, S]](
       state: ProgramState[W, S],
