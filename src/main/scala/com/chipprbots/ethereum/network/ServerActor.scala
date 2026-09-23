@@ -87,9 +87,9 @@ object ServerActor:
       tcpManager: ActorRef,
       tcpBridge: ActorRef
   ): Behavior[Command] =
-    Behaviors.receiveMessagePartial { case StartServer(address, advertisedAddress) =>
+    Behaviors.receiveMessagePartial { case StartServer(address, advertisedAddress, detectionMode) =>
       tcpManager ! Bind(tcpBridge, address)
-      waitingForBindingResult(ctx, nodeStatusHolder, peerManager, blacklist, advertisedAddress)
+      waitingForBindingResult(ctx, nodeStatusHolder, peerManager, blacklist, advertisedAddress, detectionMode)
     }
 
   private def waitingForBindingResult(
@@ -97,7 +97,8 @@ object ServerActor:
       nodeStatusHolder: AtomicReference[NodeStatus],
       peerManager: TypedActorRef[PeerManagerActor.Command],
       blacklist: Blacklist,
-      advertisedAddressOverride: Option[InetAddress]
+      advertisedAddressOverride: Option[InetAddress],
+      detectionMode: DetectionMode
   ): Behavior[Command] =
     Behaviors.receiveMessagePartial {
       case TcpBound(localAddress) =>
@@ -106,7 +107,7 @@ object ServerActor:
             finishBinding(ctx, nodeStatusHolder, peerManager, blacklist, localAddress, override_)
           case None if localAddress.getAddress.isAnyLocalAddress =>
             // ExternalIPDetector.detect() can block up to ~13s — run it off the dispatcher thread.
-            ctx.pipeToSelf(Future(ExternalIPDetector.detect())(ctx.executionContext)) {
+            ctx.pipeToSelf(Future(ExternalIPDetector.detect(detectionMode))(ctx.executionContext)) {
               case Success(ip) => DetectedIP(ip)
               case Failure(_)  => DetectedIP(None)
             }
@@ -133,9 +134,10 @@ object ServerActor:
 
       case DetectedIP(None) =>
         ctx.log.warn(
-          "External IP detection failed (UPnP/STUN/HTTP/interface all unavailable); advertising loopback — " +
-            "inbound peers on other hosts may not reach this node. Set " +
-            "fukuii.network.server-address.advertised-address to advertise a specific reachable address."
+          "External IP detection failed (UPnP/STUN/HTTP/interface all unavailable, or detection mode is 'none'); " +
+            "advertising loopback — inbound peers on other hosts may not reach this node. Set " +
+            "fukuii.network.server-address.advertised-address to advertise a specific reachable address, or " +
+            "adjust fukuii.network.server-address.external-ip-detection (none|upnp|full) to change the detection strategy."
         )
         finishBinding(
           ctx,
@@ -196,7 +198,11 @@ object ServerActor:
     }
 
   sealed trait Command
-  case class StartServer(address: InetSocketAddress, advertisedAddress: Option[InetAddress] = None) extends Command
+  case class StartServer(
+      address: InetSocketAddress,
+      advertisedAddress: Option[InetAddress] = None,
+      detectionMode: DetectionMode = DetectionMode.Full
+  ) extends Command
   private[network] case class DetectedIP(ip: Option[InetAddress]) extends Command
 
   // Internal wrappers lifting Classic Tcp.Event messages (delivered via the TcpEventBridge) into the typed ADT.
