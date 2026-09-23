@@ -70,6 +70,8 @@ class LargeMemoryExpansionSpec extends AnyFunSuite with Matchers:
   // Bytes allocated by this thread (HotSpot); deterministic, unlike heap occupancy.
   private def allocatedBy(f: => Unit): Long =
     val mx = java.lang.management.ManagementFactory.getThreadMXBean.asInstanceOf[com.sun.management.ThreadMXBean]
+    // getThreadAllocatedBytes returns -1 when unsupported or disabled, which would make every delta ~0 and pass.
+    assume(mx.isThreadAllocatedMemorySupported && mx.isThreadAllocatedMemoryEnabled)
     val id = Thread.currentThread.threadId
     val before = mx.getThreadAllocatedBytes(id)
     f
@@ -105,5 +107,20 @@ class LargeMemoryExpansionSpec extends AnyFunSuite with Matchers:
         bytes shouldBe expected(offset, size)
         bytes.toArray.toSeq shouldBe expected(offset, size).toArray.toSeq
         after.size shouldBe (if size == 0 then memory.size else math.max(memory.size, offset + size))
+      }
+  }
+
+  test("no load hands out the process-wide zero page through toArrayUnsafe or compact", UnitTest, VMTest) {
+    // Pekko returns a ByteString's backing array from toArrayUnsafe()/compact only when the ByteString spans all of it.
+    // A load of exactly one page of unwritten memory must therefore not be a full-length view of the shared page, or
+    // a caller writing into that array would corrupt every later zero run in the process.
+    val page = 1 << 20
+    val memory = Memory.empty.expand(UInt256(0), UInt256(2 * page))
+    for (offset, size) <- Seq((0, page), (page, page), (0, page - 1), (0, 2 * page)) do
+      val first = memory.load(UInt256(offset), UInt256(size))._1
+      val second = memory.load(UInt256(offset), UInt256(size))._1
+      withClue(s"offset=$offset size=$size: ") {
+        (first.toArrayUnsafe() eq second.toArrayUnsafe()) shouldBe false
+        (first.compact.toArrayUnsafe() eq second.compact.toArrayUnsafe()) shouldBe false
       }
   }

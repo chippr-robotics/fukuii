@@ -10,12 +10,16 @@ object Memory:
 
   def empty: Memory = new Memory(ByteString(), 0)
 
-  /** One page of zeros, shared by every zero run a load returns. Nothing ever writes it: `fromArrayUnsafe` is its only
-    * reference, and a ByteString exposes its bytes only by copying (`toArray`, `copyToArray`) or read-only
-    * (`asByteBuffer`).
+  /** One page of zeros, shared by every zero run a load returns — process-wide, so it must never be written.
+    *
+    * The backing array is one byte longer than the page, so no view handed out is the whole array: Pekko's
+    * `toArrayUnsafe()` and `compact` return the backing array itself only for a full-length ByteString, and a view of
+    * exactly `ZeroPageSize` bytes would otherwise be one. Every other ByteString accessor copies (`toArray`,
+    * `copyToArray`) or is read-only (`asByteBuffer`).
     */
   private val ZeroPageSize = 1 << 20
-  private val zeroPage: ByteString = ByteString.fromArrayUnsafe(new Array[Byte](ZeroPageSize))
+  private val zeroPage: ByteString =
+    ByteString.fromArrayUnsafe(new Array[Byte](ZeroPageSize + 1), 0, ZeroPageSize)
 
   /** `size` zero bytes as views of the shared page: no byte array is allocated, whatever the size.
     *
