@@ -45,8 +45,11 @@ The script does the same steps as `.github/workflows/_hive-sim.yml`:
 2. Builds the thin `chipprbots/fukuii:latest` image.
 3. Copies `hive/fukuii/*` and the jar into `$HIVE_DIR/clients/fukuii`.
 4. Runs hive.
-5. Prints the pass/fail counts and the names of failing tests. The script exits non-zero if
-   any test failed.
+5. Prints the pass/fail counts and the names of failing tests for every suite the run
+   produced. The script exits non-zero if any test failed.
+
+Steps 2–5 hold a lock on the hive checkout (`$HIVE_DIR/.local-run.lock`), so runs from several
+clones that share one hive checkout queue up instead of testing each other's jar.
 
 Options:
 
@@ -56,11 +59,37 @@ Options:
 | `--parallelism N` | 4 | hive `--sim.parallelism` |
 | `--timelimit` | 40m | hive `--sim.timelimit` |
 | `--checktimelimit` | 120s | hive `--client.checktimelimit` |
+| `--clients LIST` | fukuii | hive `--client`, e.g. `fukuii,go-ethereum` to compare with a reference client or to run the cross-client sync tests |
 | `--skip-build` | off | reuse the last assembly |
 | `-- …` | | extra arguments passed straight to hive |
 
 Run it from a normal clone, not a `git worktree`: the build's sbt-git plugin fails to load in
 a linked worktree (`NoWorkTreeException`).
+
+Use a hive checkout at the same `master` that CI clones. The simulators change between
+commits, so an older checkout can give different results from CI. Go is not needed on the
+host; build the binary in a container:
+
+```bash
+git clone --depth=1 https://github.com/ethereum/hive.git ~/hive-master && cd ~/hive-master
+docker run --rm -u "$(id -u):$(id -g)" -e HOME=/tmp -e GOCACHE=/tmp/gocache -e GOPATH=/tmp/gopath \
+  -e CGO_ENABLED=0 -v "$PWD":/src -w /src golang:1.25-alpine go build -o hive .
+```
+
+On a workstation with `systemd-oomd` (Ubuntu desktop default), run the script as its own user
+unit. Under memory pressure oomd kills a whole cgroup. A run started straight from a terminal
+shares that terminal's cgroup, so oomd kills the terminal too. That happened on the ops node
+(4 cores, 15 GB) with four heavy clients running in parallel.
+
+```bash
+systemd-run --user --unit=hive-local --collect -p MemoryHigh=4G \
+  --working-directory="$PWD" -E HIVE_DIR="$HOME/hive-master" \
+  scripts/hive/local.sh ethereum/engine --limit '/Blob Transaction' --parallelism 2
+journalctl --user -fu hive-local     # follow it
+```
+
+On a machine that size, use `--parallelism 2`. The heaviest vectors, such as
+`CALLBlake2f_MaxRounds`, take about 130 s each at that setting.
 
 Logs are in `$HIVE_DIR/workspace/logs/`. Each client log is under `fukuii/`.
 
@@ -69,6 +98,7 @@ Expect fixed overhead per run. On the ops node (4 cores), a single
 about 16 min inside the consensus simulator, which loads its whole fixture corpus whatever
 `--limit` selects. Pass `--skip-build` to reuse the last assembly while iterating.
 
-For comparison with CI, keep `--parallelism` at 4. Resource failures depend on how many
-clients run at once: a heavy vector that passes with `--parallelism 1` can still time out
-at 4.
+For an exact comparison with CI, use `--parallelism 4` if the machine can take it. Resource
+failures depend on how many clients run at once: a heavy vector that passes with
+`--parallelism 1` or `2` can still time out at 4. A resource-bound result from a local run
+at lower parallelism therefore needs its CI counterpart before anyone relies on it.
