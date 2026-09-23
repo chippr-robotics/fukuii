@@ -132,7 +132,9 @@ object BlockResponse:
       size = Block.size(block),
       gasLimit = block.header.gasLimit.value,
       gasUsed = block.header.gasUsed.value,
-      timestamp = BigInt(block.header.unixTimestamp.toLong),
+      // uint64 bit pattern -> unsigned BigInt. A signed BigInt(...toLong) sign-extends timestamps
+      // >= 2^63 and renders as "0x-2" instead of "0xfffffffffffffffe" (see Timestamp.toUnsignedBigInt).
+      timestamp = block.header.unixTimestamp.toUnsignedBigInt,
       mixHash = block.header.mixHash.value,
       transactions = transactions,
       uncles = block.body.uncleNodesList.map(_.hash.value),

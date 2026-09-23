@@ -411,7 +411,9 @@ class EthSimulateService(
       baseHeader: BlockHeader
   ): Either[JsonRpcError, Unit] = boundary {
     var prevNumber = baseHeader.number.value
-    var prevTimestamp = BigInt(baseHeader.unixTimestamp.toLong)
+    // uint64 bit pattern -> unsigned BigInt (not BigInt(...toLong), which sign-extends timestamps
+    // >= 2^63 into negative values and corrupts every ordering/gap comparison below).
+    var prevTimestamp = baseHeader.unixTimestamp.toUnsignedBigInt
 
     for (bsc, _) <- blockStateCalls.zipWithIndex do
       val overrides = bsc.blockOverrides.getOrElse(BlockOverrides())
@@ -468,7 +470,8 @@ class EthSimulateService(
   ): BlockHeader =
     val ov = overrides.getOrElse(BlockOverrides())
     val number = ov.number.map(BlockNumber(_)).getOrElse(parentHeader.number + 1)
-    val timestamp = ov.time.getOrElse(BigInt(parentHeader.unixTimestamp.toLong) + 12)
+    // uint64 bit pattern -> unsigned BigInt; see validateBlockOrdering above for the sign-extension bug this avoids.
+    val timestamp = ov.time.getOrElse(parentHeader.unixTimestamp.toUnsignedBigInt + 12)
     val gasLimit = ov.gasLimit.map(GasAmount(_)).getOrElse(parentHeader.gasLimit)
     val beneficiary = ov.feeRecipient.map(_.bytes).getOrElse(ByteString(new Array[Byte](20)))
     val prevRandao = ov.prevRandao.getOrElse(ByteString(new Array[Byte](32)))
@@ -919,7 +922,8 @@ class EthSimulateService(
           address = txLog.loggerAddress,
           data = txLog.data,
           topics = txLog.logTopics,
-          blockTimestamp = Some(BigInt(blockHeader.unixTimestamp.toLong))
+          // uint64 bit pattern -> unsigned BigInt; see BlockResponse.scala for the sign-extension bug this avoids.
+          blockTimestamp = Some(blockHeader.unixTimestamp.toUnsignedBigInt)
         )
         globalLogIndex += 1
         l

@@ -89,7 +89,8 @@ object TransactionReceiptResponse:
         address = txLog.loggerAddress,
         data = txLog.data,
         topics = txLog.logTopics,
-        blockTimestamp = Some(BigInt(blockHeader.unixTimestamp.toLong))
+        // uint64 bit pattern -> unsigned BigInt; see BlockResponse.scala for the sign-extension bug this avoids.
+        blockTimestamp = Some(blockHeader.unixTimestamp.toUnsignedBigInt)
       )
     }
 
@@ -135,5 +136,6 @@ object TransactionReceiptResponse:
             .getBlobGasPrice(eg, blockHeader.unixTimestamp, blockchainConfig)
         )
       ),
-      blockTimestamp = Some(BigInt(blockHeader.unixTimestamp.toLong))
+      // uint64 bit pattern -> unsigned BigInt; see BlockResponse.scala for the sign-extension bug this avoids.
+      blockTimestamp = Some(blockHeader.unixTimestamp.toUnsignedBigInt)
     )
