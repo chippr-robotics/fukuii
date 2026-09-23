@@ -214,11 +214,18 @@ class VM[W <: WorldStateProxy[W, S], S <: Storage[S]](
                 .getOrElse(context.world.createAddress(context.callerAddr))
 
               // EIP-684: revert a CREATE if the target address already has non-empty code/nonce.
-              // EIP-7610 (Paris+): additionally revert if the address has non-empty storage.
-              // Activation matches the EELS test marker `valid_from("Paris")` — we use
-              // BlockHeader.isPoS (difficulty==0 && baseFee set) as the Paris / PoS signal.
+              // EIP-7610: additionally revert if the address has non-empty storage. The EIP is RETROACTIVE — "from
+              // genesis" — so on ETH it is not fork-gated: Besu (ContractCreationProcessor.accountExists), EELS and
+              // go-ethereum v1.14-v1.17 (GetStorageRoot) apply it on every fork, and ethereum/legacytests
+              // RevertInCreateInInit(_Create2) expect the collision on Byzantium..Berlin. The EEST
+              // `valid_from("Paris")` marker only limits where those fixtures are generated. (The previous Paris-only
+              // gate, via isPoS, is kept as a disjunct so no PoS configuration changes.)
+              // ETC keeps core-geth's rule — nonce/code only (core/vm/evm.go create) — on every fork. Hitting a
+              // storage-only account needs a CREATE address collision (its creator's nonce has moved on; CREATE2 would
+              // need a keccak preimage), so the choice cannot change ETC history.
+              val eip7610 = context.evmConfig.blockchainConfig.isEthereum || context.blockHeader.isPoS
               val conflict =
-                if context.blockHeader.isPoS then context.world.nonEmptyCodeOrNonceOrStorageAccount(contractAddr)
+                if eip7610 then context.world.nonEmptyCodeOrNonceOrStorageAccount(contractAddr)
                 else context.world.nonEmptyCodeOrNonceAccount(contractAddr)
 
               /** Specification of https://eips.ethereum.org/EIPS/eip-1283 states, that `originalValue` should be taken
