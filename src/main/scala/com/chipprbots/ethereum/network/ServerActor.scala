@@ -133,8 +133,9 @@ object ServerActor:
 
       case DetectedIP(None) =>
         ctx.log.warn(
-          "External IP detection failed (STUN/HTTP/interface all unavailable); " +
-            "advertising loopback — inbound peers on other hosts may not reach this node"
+          "External IP detection failed (UPnP/STUN/HTTP/interface all unavailable); advertising loopback — " +
+            "inbound peers on other hosts may not reach this node. Set " +
+            "fukuii.network.server-address.advertised-address to advertise a specific reachable address."
         )
         finishBinding(
           ctx,
