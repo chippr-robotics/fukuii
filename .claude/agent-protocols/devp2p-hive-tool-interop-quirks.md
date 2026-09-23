@@ -8,10 +8,69 @@ failure description as a root cause — a plausible-sounding one-line summary
 ("responseBytes ignored") can be a paraphrase of the request echo, not the
 actual failure text.
 
-Used by: herald
+Used by: herald, conduit
 Referenced by: none yet — promote references here as they accumulate.
 
 ---
+
+## Pattern: hive `graphql` simulator `07_eth_gasPrice` fixture predates the chain's EIP-1559 extension
+
+**Symptom:** `{ gasPrice }` against hive's `simulators/ethereum/graphql` chain
+returns a value in the hundreds-of-millions-of-wei range (fukuii: `0x3437004b`
+= 876,019,787); `testcases/07_eth_gasPrice.json` accepts only `0x10` (16) or
+`0x1` (1) wei. This is the sole failure in an otherwise-clean run (51/52 as of
+2026-09).
+
+**Root cause:** the fixture is stale, not the client. `graphql.go`'s own
+comment admits it: "The chain has originated from the Besu client. It
+consisted of Frontier blocks. It has been since extended with post-merge
+blocks." `init/testGenesis.json` sets `londonBlock: 33`; the chain has 35
+blocks (0-34), so head (block 34) is EIP-1559-active with a real `baseFee`.
+Confirmed three independent ways against the actual fixture set (not just the
+one hive artifact in hand):
+1. Direct RLP decode of `init/testBlockchain.blocks`, block 34 header field
+   15 (`baseFee`) = `0x3437004a` = 876,019,786.
+2. Sibling fixture `51_eth_getBlock_4844.json` (`block(number: 34) {
+   baseFeePerGas }`) independently pins the SAME value.
+3. Sibling fixture `01_eth_blockNumber.json` pins head = `0x22` = 34 (not the
+   last pre-London block, 32) — so head really is the EIP-1559 block, not an
+   artifact of a client importing further than intended.
+
+Current go-ethereum's own resolver (`graphql/graphql.go:
+Resolver.GasPrice`) is `tipcap + head.BaseFee` when `head.BaseFee != nil` —
+no conforming implementation of that formula, fukuii's or a freshly-run
+geth's, can land on 16 or 1 wei once baseFee is ~876M. The fixture's two
+accepted values were authored against the chain's original (pre-extension,
+Frontier-only, no-baseFee) state and never regenerated after blocks 33-34
+were appended.
+
+**Diagnosis checklist (don't redo the RLP decode from scratch — this has now
+been independently re-derived 3+ times in the same session across separate
+commits):**
+1. Check `init/testGenesis.json`'s fork-activation blocks against the actual
+   head block number (`01_eth_blockNumber.json` or the client's own import
+   log — `"Chain import: N imported"`) to see if the head postdates a fork
+   the failing fixture predates.
+2. Cross-check against ANY sibling fixture that independently pins a fact
+   about the same head block (here, `51_eth_getBlock_4844.json`'s
+   `baseFeePerGas`) — if two fixtures in the same file set are mutually
+   contradictory under the reference client's OWN current formula, the newer
+   ground truth (the field-specific fixture, corroborated by an RLP decode)
+   wins over the older/coarser one (`07_eth_gasPrice.json`).
+3. Pull current upstream source for the resolver in question
+   (`graphql/graphql.go`, `eth/gasprice/oracle.go`) — don't assume the
+   fixture encodes the CURRENT reference formula; fixtures get created once
+   and chains get extended later without regenerating every dependent case.
+
+**Do not "fix" this by changing fukuii's gas price oracle.**
+`EthTxService.minimumGasPrice()`/`suggestGasPrice()` (shared by
+`eth_gasPrice` and the GraphQL `gasPrice` field, `GraphQLSchema.scala`) already
+implement the same `baseFee + tip` shape as current go-ethereum; matching the
+stale fixture would require literally ignoring `baseFee`, which would be a
+real EIP-1559 regression on every live ETH/Sepolia chain. Recorded as a
+known-permanent hive-side floor (`GasPriceOracleSpec`, the pin test tagged
+`RPCTest`); `specs/009-amsterdam-fork-support/plan.md` tracks it as a
+non-regression oracle that must not move.
 
 ## Pattern: hardcoded protocol-multiplexing offsets in `cmd/devp2p`
 
