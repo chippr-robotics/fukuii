@@ -31,7 +31,7 @@ on:
         type: string
         default: ''
       sim_buildarg:
-        description: 'Optional value for --sim.buildarg (e.g. disable_strict_exception_matching=fukuii)'
+        description: 'Optional --sim.buildarg values, one ARG=VALUE per line (e.g. disable_strict_exception_matching=fukuii)'
         required: false
         type: string
         default: ''
@@ -40,6 +40,14 @@ on:
         required: false
         type: string
         default: '40m'
+      timeout_minutes:
+        description: |
+          Job ceiling. 105 covers an 80m --sim.timelimit plus image builds and artifact upload.
+          The sharded full pass (hive-full.yml) runs 300m shards and raises this to 350, under
+          GitHub's 360-minute cap for hosted jobs. A job killed at the ceiling loses its artifacts.
+        required: false
+        type: number
+        default: 105
       parallelism:
         description: 'Value for --sim.parallelism'
         required: false
@@ -126,11 +134,10 @@ jobs:
   hive:
     name: ${{ inputs.label }}
     runs-on: ubuntu-latest
-    # 105, raised from 90 so an 80m --sim.timelimit (consume-engine/-rlp, which never complete
-    # and always run to the limit) plus image builds
-    # (~3-5m) and artifact upload cannot push the job past its ceiling. A job killed at the
+    # Default 105 (see the timeout_minutes input): an 80m --sim.timelimit plus image builds
+    # (~3-5m) and artifact upload must not push the job past its ceiling. A job killed at the
     # ceiling loses its artifacts entirely, which is strictly worse than any test result.
-    timeout-minutes: 105
+    timeout-minutes: ${{ inputs.timeout_minutes }}
 
     outputs:
       passed: ${{ steps.tab.outputs.passed }}
@@ -286,7 +293,10 @@ jobs:
             --loglevel 3
           )
           [ -n "$SIM_LIMIT" ]   && args+=(--sim.limit   "$SIM_LIMIT")
-          [ -n "$SIM_BUILDARG" ] && args+=(--sim.buildarg "$SIM_BUILDARG")
+          # One build arg per line; hive accepts --sim.buildarg repeatedly (hive.go:94).
+          while IFS= read -r ba; do
+            [ -n "$ba" ] && args+=(--sim.buildarg "$ba")
+          done <<< "$SIM_BUILDARG"
 
           ./hive "${args[@]}" 2>&1 | tee hive-run.log
           hive_exit=${PIPESTATUS[0]}

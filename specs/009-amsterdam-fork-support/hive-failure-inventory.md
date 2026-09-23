@@ -2122,3 +2122,28 @@ as timeout tail, not genuinely.)
 
 **All three long suites now show 0 genuine failures on the tests they reach.** They still end red
 because they cannot finish inside CI's time budget (task #14, open with the user).
+
+## Task #14 — the long suites now run to completion (sharded full pass)
+
+**Why they never finished, measured.** Every consume/consensus test starts a fresh fukuii container:
+2,452 clients for 2,452 tests (consume-engine, `13c1e5686`). Mean test time 7.8 s (engine), 6.7 s
+(rlp), 10.9 s (consensus); fukuii's own logged startup to the RPC bind is 6.1 s median of that. At
+parallelism 4 that is ~31 / ~35 / ~26 tests per minute. Suite sizes: consume-engine 42,234 and
+consume-rlp 47,589 (EEST v5.4.0 index), consensus ~50,000 (1,142 + ~10,900 legacy files + ~3,300
+legacy-cancun files at ~3.4 tests/file). A complete pass is ~23 h per consume suite; a hosted job is
+capped at 6 h. More time in one job cannot finish them.
+
+**What changed.** `hive-full.yml` runs each suite as ~3 h shards (8 + 8 + 12 = 28 jobs, 300m sim
+limit, 350m job ceiling) from `.github/hive-shards.json`, then an aggregate job gives one verdict
+per suite: every shard finished (`simulation … finished`, never `timed out`), consume shards selected
+exactly their planned tests and together the whole suite, and zero failures. consume-* fixtures are
+pinned to `stable@v5.4.0` (the release the plan was built from). Triggers: a `hive-full` PR label,
+workflow_dispatch, nightly — not every push (~90 runner-hours per pass). The per-push workflows keep
+their 80m/60m sample.
+
+**The partition is proven, three ways.** `scripts/hive/gen-shards.py` builds it from a prefix trie
+with a negated catch-all at every split (so unseen tests still land exactly once) and refuses to
+write a plan that is not exact. Independently: (1) the real EELS `consume engine|rlp --sim.limit
+collectonly:<shard>` selected exactly the planned count for all 16 consume shards — 42,234 and 47,589
+unique ids, 0 duplicates; (2) hive's own Go matcher (`hivesim/testmatch.go`, RE2, case-insensitive)
+put all 14,545 consensus test files plus unseen-directory probes in exactly one shard.

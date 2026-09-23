@@ -1,0 +1,124 @@
+name: Hive · full pass
+
+# Runs consume-engine, consume-rlp and consensus TO COMPLETION.
+#
+# The per-push workflows (hive-consume-engine.yml, hive-consume-rlp.yml, hive-consensus.yml) run
+# an 80m / 60m sample and always end `simulation timed out`: the suites hold 42,234, 47,589 and
+# ~50,000 tests, every test starts a fresh client container (~8 s each, measured), and a
+# GitHub-hosted job is capped at 6 h. A complete pass is ~23 h of wall time per consume suite at
+# --sim.parallelism 4, so it has to be split across jobs.
+#
+# .github/hive-shards.json (generated and PROVEN an exact partition by
+# scripts/hive/gen-shards.py) splits them into ~3 h shards. The aggregate job then reports one
+# verdict per suite: every shard finished, the shards selected exactly the whole suite, and no
+# test failed. A suite is never reported green on a workflow conclusion alone.
+#
+# Cost: ~28 jobs x ~3.5 h per pass. It is therefore NOT run on every push:
+#   * label a PR `hive-full` to run it on that PR's head (and again on each push while labelled),
+#   * workflow_dispatch, or the nightly schedule (both run from the default branch's copy of
+#     this file, per GitHub's rules for those events).
+
+on:
+  pull_request:
+    types: [labeled, synchronize, reopened]
+    branches: [main, master, staging]
+  workflow_dispatch:
+    inputs:
+      suites:
+        description: 'Comma-separated suites from .github/hive-shards.json'
+        required: false
+        default: 'consume-engine,consume-rlp,consensus'
+      hive_ref:
+        description: 'ethereum/hive git ref'
+        required: false
+        default: 'master'
+  schedule:
+    - cron: '0 2 * * *'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: hive-full-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  plan:
+    # On PRs only when labelled `hive-full`; a different label being added is not a trigger.
+    if: >-
+      github.event_name != 'pull_request' ||
+      (contains(github.event.pull_request.labels.*.name, 'hive-full') &&
+       (github.event.action != 'labeled' || github.event.label.name == 'hive-full'))
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.m.outputs.matrix }}
+      suites: ${{ steps.m.outputs.suites }}
+    steps:
+      - uses: actions/checkout@v5
+      - id: m
+        env:
+          SUITES: ${{ github.event.inputs.suites || 'consume-engine,consume-rlp,consensus' }}
+        run: |
+          python3 - <<'EOF'
+          import json, os
+          plan = json.load(open(".github/hive-shards.json"))
+          wanted = [s for s in os.environ["SUITES"].split(",") if s]
+          fixtures = plan["eest_fixtures"]
+          sims = {
+              # consume-* fixtures are pinned to the release the shard plan was generated from;
+              # an unpinned `stable@latest` would silently invalidate the partition.
+              "consume-engine": ("ethereum/eels/consume-engine",
+                                 f"fixtures={fixtures}\ndisable_strict_exception_matching=nimbus-el,fukuii"),
+              "consume-rlp": ("ethereum/eels/consume-rlp", f"fixtures={fixtures}"),
+              "consensus": ("ethereum/consensus", ""),
+          }
+          include = []
+          for suite in wanted:
+              sim, buildarg = sims[suite]
+              for shard in plan["suites"][suite]["shards"]:
+                  include.append({"name": shard["name"], "sim": sim, "sim_limit": shard["sim_limit"],
+                                  "buildarg": buildarg})
+          with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+              f.write(f"matrix={json.dumps({'include': include})}\n")
+              f.write(f"suites={','.join(wanted)}\n")
+          print(f"{len(include)} shards: " + ", ".join(i["name"] for i in include))
+          EOF
+
+  shard:
+    needs: plan
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    uses: ./.github/workflows/_hive-sim.yml
+    with:
+      sim: ${{ matrix.sim }}
+      label: ${{ matrix.name }}
+      sim_limit: ${{ matrix.sim_limit }}
+      sim_buildarg: ${{ matrix.buildarg }}
+      # Shards are planned at ~3 h; 300m leaves headroom for a slow runner. 350 stays under
+      # GitHub's 360-minute cap for hosted jobs, so artifacts are always uploaded.
+      sim_timelimit: '300m'
+      timeout_minutes: 350
+      # A shard that produced almost nothing is a broken shard, not a pass.
+      min_tests: 20
+      hive_ref: ${{ github.event.inputs.hive_ref || 'master' }}
+
+  aggregate:
+    needs: [plan, shard]
+    if: always() && needs.plan.result == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/download-artifact@v5
+        with:
+          pattern: hive-logs-*
+          path: artifacts
+      - name: Verdict per suite
+        run: python3 scripts/hive/aggregate-full.py artifacts --suites "${{ needs.plan.outputs.suites }}"
+      - name: Upload failing-test lists
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: hive-full-verdict
+          path: artifacts/failing-*.txt
+          retention-days: 30
