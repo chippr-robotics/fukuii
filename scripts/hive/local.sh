@@ -49,10 +49,11 @@ fi
 JAR=$(ls -t target/scala-3.*/fukuii-assembly-*.jar 2>/dev/null | head -1)
 [ -n "$JAR" ] || { echo "no assembly jar under target/ (drop --skip-build)" >&2; exit 1; }
 
-# One run per hive checkout at a time: the client image, clients/fukuii and workspace/ are
-# shared, so two concurrent runs (e.g. two agents' clones) would test each other's jar.
+# One run per MACHINE at a time. The image tags built below (chipprbots/fukuii:latest, and
+# hive's hive/clients/fukuii:latest) are global to the Docker daemon, so two concurrent runs —
+# even from different clones and different hive checkouts — would test each other's jar.
 # The sbt assembly above stays outside the lock; each clone builds its own.
-LOCK="$HIVE_DIR/.local-run.lock"
+LOCK=${HIVE_LOCAL_LOCK:-/tmp/fukuii-hive-local.lock}
 exec 9>"$LOCK"
 if ! flock -n 9; then
   echo "waiting for another local hive run on $HIVE_DIR to finish ($LOCK)..." >&2

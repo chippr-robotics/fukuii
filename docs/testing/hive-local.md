@@ -48,8 +48,9 @@ The script does the same steps as `.github/workflows/_hive-sim.yml`:
 5. Prints the pass/fail counts and the names of failing tests for every suite the run
    produced. The script exits non-zero if any test failed.
 
-Steps 2–5 hold a lock on the hive checkout (`$HIVE_DIR/.local-run.lock`), so runs from several
-clones that share one hive checkout queue up instead of testing each other's jar.
+Steps 2–5 hold a machine-wide lock (`/tmp/fukuii-hive-local.lock`). The Docker image tags they
+build are global to the daemon, so runs from several clones, even ones using different hive
+checkouts, queue up instead of testing each other's jar.
 
 Options:
 
