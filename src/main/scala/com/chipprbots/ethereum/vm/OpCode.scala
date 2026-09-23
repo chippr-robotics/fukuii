@@ -5,6 +5,7 @@ import org.apache.pekko.util.ByteString
 import scala.annotation.unused
 
 import com.chipprbots.ethereum.crypto.kec256
+import com.chipprbots.ethereum.crypto.kec256ZeroPadded
 import com.chipprbots.ethereum.domain.Account
 import com.chipprbots.ethereum.domain.Address
 import com.chipprbots.ethereum.domain.SetCodeTransaction
@@ -452,8 +453,10 @@ case object CLZ extends UnaryOp(0x1e, _.G_low)(v => UInt256(256 - v.toBigInt.bit
 case object SHA3 extends OpCode(0x20, 2, 1, _.G_sha3):
   protected def exec[S <: Storage[S], W <: WorldStateProxy[W, S]](state: ProgramState[W, S]): ProgramState[W, S] =
     val (Seq(offset, size), stack1) = state.stack.pop(2)
-    val (input, mem1) = state.memory.load(offset, size)
-    val hash = kec256(input.toArray)
+    // Stream the never-written tail of the region into the digest instead of materialising it: a paid-for
+    // gigabyte-scale SHA3 (ethereum/tests randomStatetest94) must hash, not exhaust the heap. Same bytes, same hash.
+    val (storedPrefix, zeroTail, mem1) = state.memory.loadZeroPadded(offset, size)
+    val hash = kec256ZeroPadded(storedPrefix.toArray, zeroTail)
     val ret = UInt256(hash)
     val stack2 = stack1.push(ret)
     state.withStack(stack2).withMemory(mem1).step()

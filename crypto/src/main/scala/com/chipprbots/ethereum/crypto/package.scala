@@ -69,6 +69,29 @@ package object crypto {
   def kec256(input: Array[Byte]): Array[Byte] =
     kec256(input, 0, input.length)
 
+  /** keccak-256 of `prefix` followed by `zeroCount` zero bytes, without materialising the zeros. Byte-identical to
+    * `kec256(prefix ++ new Array[Byte](zeroCount))`; exists so the EVM can hash a paid-for, never-written memory region
+    * of gigabyte scale (SHA3) in constant heap.
+    */
+  def kec256ZeroPadded(prefix: Array[Byte], zeroCount: Int): Array[Byte] = {
+    require(zeroCount >= 0, s"negative zero padding: $zeroCount")
+    val d = kec256Digest.get()
+    d.reset() // reset-on-entry (INV-1/FR-002)
+    val output = Array.ofDim[Byte](d.getDigestSize)
+    d.update(prefix, 0, prefix.length)
+    var left = zeroCount
+    while (left > 0) {
+      val n = math.min(left, ZeroChunk.length)
+      d.update(ZeroChunk, 0, n)
+      left -= n
+    }
+    d.doFinal(output, 0)
+    output
+  }
+
+  // Read-only source of zero bytes for kec256ZeroPadded. Never written, never handed out.
+  private val ZeroChunk: Array[Byte] = new Array[Byte](64 * 1024)
+
   def kec256(input: Array[Byte]*): Array[Byte] = {
     val d = kec256Digest.get()
     d.reset() // reset-on-entry (INV-1/FR-002): clears any state left by a prior aborted hash
