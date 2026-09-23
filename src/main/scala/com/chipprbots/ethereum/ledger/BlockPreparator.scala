@@ -219,7 +219,9 @@ class BlockPreparator(
       world: InMemoryWorldStateProxy,
       authExecutionGas: BigInt = 0,
       authStateGas: BigInt = 0,
-      tracer: Option[com.chipprbots.ethereum.vm.ExecutionTracer] = None
+      tracer: Option[com.chipprbots.ethereum.vm.ExecutionTracer] = None,
+      // EIP-7702: authorities recovered while processing the authorization list, warm for the whole transaction.
+      extraWarmAddresses: Set[Address] = Set.empty
   )(implicit blockchainConfig: BlockchainConfig): PR =
     val evmConfig = EvmConfig.forBlock(blockHeader.number.value, blockHeader.unixTimestamp, blockchainConfig)
     val context: PC =
@@ -227,6 +229,7 @@ class BlockPreparator(
     // Apply simulation flags if set (for eth_simulateV1)
     val contextWithSimFlags =
       var ctx = context
+      if extraWarmAddresses.nonEmpty then ctx = ctx.copy(warmAddresses = ctx.warmAddresses ++ extraWarmAddresses)
       if _simulatePrecompileRelocations.nonEmpty then
         ctx = ctx.copy(precompileRelocations = _simulatePrecompileRelocations)
       if _simulateTraceTransfers then ctx = ctx.copy(traceTransfers = true)
@@ -395,6 +398,7 @@ class BlockPreparator(
     val amsterdamActive = blockchainConfig.isAmsterdamTimestamp(blockHeader.unixTimestamp)
     var authExecutionGas: BigInt = 0
     var authStateGas: BigInt = 0
+    var authorityWarmAddresses: Set[Address] = Set.empty
     val worldAfterAuths = stx.tx match
       case sct: SetCodeTransaction =>
         if amsterdamActive then
@@ -407,12 +411,21 @@ class BlockPreparator(
           )
           authExecutionGas = execGas
           authStateGas = stateGas
-        val (world, refund) = applyAuthorizationsWithRefund(sct.authorizationList, checkpointWorldState)
+        val (world, refund, warm) = applyAuthorizationsWithRefund(sct.authorizationList, checkpointWorldState)
         authExistingAccountRefund = if amsterdamActive then 0 else refund
+        authorityWarmAddresses = warm
         world
       case _ => checkpointWorldState
 
-    val result = runVM(stx, senderAddress, blockHeader, worldAfterAuths, authExecutionGas, authStateGas)
+    val result = runVM(
+      stx,
+      senderAddress,
+      blockHeader,
+      worldAfterAuths,
+      authExecutionGas,
+      authStateGas,
+      extraWarmAddresses = authorityWarmAddresses
+    )
 
     val resultWithErrorHandling: PR =
       if result.error.isDefined then
@@ -754,23 +767,25 @@ class BlockPreparator(
           worldPersisted
         )
 
-  /** Apply authorizations and return (world, refund) where refund is the gas to refund for existing accounts per geth's
-    * EIP-7702 implementation: Intrinsic charges CallNewAccountGas (25000) per auth. If the authority account exists,
-    * refund CallNewAccountGas - TxAuthTupleGas (25000 - 12500 = 12500).
+  /** Apply an authorization list in order and return `(world, refund, warmAuthorities)`, following go-ethereum's
+    * `stateTransition.applyAuthorization`:
+    *   - the intrinsic charge is PER_EMPTY_ACCOUNT_COST (25,000) per tuple; a tuple that is APPLIED to an authority
+    *     that already exists refunds PER_EMPTY_ACCOUNT_COST - PER_AUTH_BASE_COST (12,500). A skipped tuple refunds
+    *     nothing — even when its authority exists (EEST `test_nonce_validity[nonce=0,account_nonce=1]`: 70,431, not
+    *     57,931);
+    *   - every authority that is RECOVERED is added to accessed_addresses (EIP-7702 step 4), whether or not the tuple
+    *     then applies, so the transaction's first touch of it is warm (100) rather than cold (2,600).
     */
   private def applyAuthorizationsWithRefund(
       authList: List[SetCodeAuthorization],
       world: InMemoryWorldStateProxy
-  )(implicit blockchainConfig: BlockchainConfig): (InMemoryWorldStateProxy, BigInt) =
-    authList.foldLeft((world, BigInt(0))) { case ((w, refund), auth) =>
-      // Recover authority to check existence (needed for refund even if auth is invalid)
-      val authorityOpt = recoverAuthority(auth)
-      val existsRefund = authorityOpt match
-        case Some(addr) if w.getAccount(addr).isDefined => BigInt(25000 - 12500)
-        case _                                          => BigInt(0)
-      applyAuthorization(auth, w) match
-        case Some(newWorld) => (newWorld, refund + existsRefund)
-        case None           => (w, refund + existsRefund)
+  )(implicit blockchainConfig: BlockchainConfig): (InMemoryWorldStateProxy, BigInt, Set[Address]) =
+    authList.foldLeft((world, BigInt(0), Set.empty[Address])) { case ((w, refund, warm), auth) =>
+      processAuthorization(auth, w) match
+        case AuthorizationOutcome.Skipped            => (w, refund, warm)
+        case AuthorizationOutcome.Invalid(authority) => (w, refund, warm + authority)
+        case AuthorizationOutcome.Applied(authority, newWorld, existed) =>
+          (newWorld, if existed then refund + BigInt(25000 - 12500) else refund, warm + authority)
     }
 
   /** EIP-2780's runtime charges for EIP-7702 authorization processing, computed against the world as it stood BEFORE
@@ -827,7 +842,14 @@ class BlockPreparator(
     }
     (executionGas, stateGas)
 
-  /** Recover authority address from authorization signature (for gas accounting) */
+  /** EIP-7702 steps 1-3 (go-ethereum `validateAuthorization` up to `auth.Authority()`): the checks that decide whether
+    * an authority can be recovered at all. `None` means the tuple is skipped WITHOUT warming anything.
+    *
+    *   1. `chain_id` is 0 or the current chain id; 2. `nonce < 2**64 - 1` (EIP-2681): the authority's nonce is bumped
+    *      on success, so 2**64 - 1 would overflow; 3. the signature values are canonical — `y_parity` in {0, 1}, `0 < r
+    *      < n`, `0 < s <= n/2` — and recover to a public key. go-ethereum: `crypto.ValidateSignatureValues(v, r, s,
+    *      homestead = true)`.
+    */
   private def recoverAuthority(
       auth: SetCodeAuthorization
   )(implicit blockchainConfig: BlockchainConfig): Option[Address] =
@@ -836,7 +858,13 @@ class BlockPreparator(
     import com.chipprbots.ethereum.rlp.RLPImplicitConversions.toEncodeable
     import com.chipprbots.ethereum.rlp.RLPImplicits.given
 
-    if auth.chainId != 0 && auth.chainId != blockchainConfig.chainId.value then None
+    val chainIdOk = auth.chainId == 0 || auth.chainId == blockchainConfig.chainId.value
+    val nonceOk = auth.nonce < BlockPreparator.AuthorizationNonceLimit
+    val sigValuesOk =
+      (auth.v == 0 || auth.v == 1) &&
+        auth.r > 0 && auth.r < BlockPreparator.Secp256k1N &&
+        auth.s > 0 && auth.s <= BlockPreparator.Secp256k1HalfN
+    if !(chainIdOk && nonceOk && sigValuesOk) then None
     else
       val sigHash = com.chipprbots.ethereum.crypto.kec256(
         encode(
@@ -850,6 +878,7 @@ class BlockPreparator(
           )
         )
       )
+      // Convert y-parity (0/1) to point sign (27/28) for recovery
       val rawV = if auth.v == 0 then ECDSASignature.negativePointSign else ECDSASignature.positivePointSign
       val ecdsaSig = ECDSASignature(auth.r, auth.s, BigInt(rawV))
       ecdsaSig.publicKey(sigHash).flatMap { key =>
@@ -862,60 +891,56 @@ class BlockPreparator(
       auth: SetCodeAuthorization,
       world: InMemoryWorldStateProxy
   )(implicit blockchainConfig: BlockchainConfig): Option[InMemoryWorldStateProxy] =
-    import com.chipprbots.ethereum.crypto.ECDSASignature
-    import com.chipprbots.ethereum.rlp.{encode, PrefixedRLPEncodable, RLPList}
-    import com.chipprbots.ethereum.rlp.RLPImplicitConversions.toEncodeable
-    import com.chipprbots.ethereum.rlp.RLPImplicits.given
+    processAuthorization(auth, world) match
+      case AuthorizationOutcome.Applied(_, newWorld, _) => Some(newWorld)
+      case _                                            => None
 
-    // 1. Verify chain ID: must be 0 (wildcard) or match current chain
-    if auth.chainId != 0 && auth.chainId != blockchainConfig.chainId.value then None
-    else
-      // 2. Recover authority address from authorization signature
-      val sigHash = com.chipprbots.ethereum.crypto.kec256(
-        encode(
-          PrefixedRLPEncodable(
-            0x05,
-            RLPList(
-              toEncodeable(auth.chainId),
-              toEncodeable(auth.address.toArray),
-              toEncodeable(auth.nonce)
-            )
-          )
-        )
-      )
-
-      // Convert y-parity (0/1) to point sign (27/28) for recovery
-      val rawV = if auth.v == 0 then ECDSASignature.negativePointSign else ECDSASignature.positivePointSign
-      val ecdsaSig = ECDSASignature(auth.r, auth.s, BigInt(rawV))
-      val recoveredKey = ecdsaSig.publicKey(sigHash)
-      val authority = recoveredKey.flatMap { key =>
-        val addrBytes = com.chipprbots.ethereum.crypto.kec256(key).slice(12, 32)
-        if addrBytes.length == Address.Length then Some(Address(addrBytes)) else None
-      }
-      authority.flatMap { authorityAddr =>
-        // 3. Check that authority does not have code (unless it's already a delegation)
+  /** One EIP-7702 authorization tuple, processed against the world as it stands after the tuples before it. */
+  private def processAuthorization(
+      auth: SetCodeAuthorization,
+      world: InMemoryWorldStateProxy
+  )(implicit blockchainConfig: BlockchainConfig): AuthorizationOutcome =
+    recoverAuthority(auth) match
+      case None                => AuthorizationOutcome.Skipped
+      case Some(authorityAddr) =>
+        // Step 5: the authority has no code, or only a delegation indicator.
         val code = world.getCode(authorityAddr)
-        if code.nonEmpty && !SetCodeTransaction.isDelegation(code) then None
+        if code.nonEmpty && !SetCodeTransaction.isDelegation(code) then AuthorizationOutcome.Invalid(authorityAddr)
         else
-          // 4. Verify nonce matches
-          val account = world
-            .getAccount(authorityAddr)
-            .getOrElse(Account.empty(blockchainConfig.accountStartNonce))
-          if account.nonce != UInt256(auth.nonce) then None
+          // Step 6: the authority's nonce equals the tuple's.
+          val existing = world.getAccount(authorityAddr)
+          val account = existing.getOrElse(Account.empty(blockchainConfig.accountStartNonce))
+          if account.nonce != UInt256(auth.nonce) then AuthorizationOutcome.Invalid(authorityAddr)
           else
-            // 5. Increment nonce
-            val updatedAccount = account.copy(nonce = account.nonce + 1)
-            val w1 = world.saveAccount(authorityAddr, updatedAccount)
-
-            // 6. Set delegation code (or clear if target is zero address)
-            val zeroAddress = Address(0L)
+            // Steps 8-9: bump the nonce, then set (or, for the zero address, clear) the delegation indicator.
+            val w1 = world.saveAccount(authorityAddr, account.copy(nonce = account.nonce + 1))
             val w2 =
-              if auth.address == zeroAddress then w1.saveCode(authorityAddr, ByteString.empty)
+              if auth.address == Address(0L) then w1.saveCode(authorityAddr, ByteString.empty)
               else w1.saveCode(authorityAddr, SetCodeTransaction.addressToDelegation(auth.address))
-            Some(w2)
-      }
+            AuthorizationOutcome.Applied(authorityAddr, w2, authorityExisted = existing.isDefined)
+
+/** Outcome of one EIP-7702 authorization tuple (go-ethereum `validateAuthorization` / `applyAuthorization`). */
+private[ledger] enum AuthorizationOutcome:
+  /** Rejected before the authority was recovered (chain id, nonce overflow, signature): nothing is warmed. */
+  case Skipped
+
+  /** Authority recovered — and therefore warmed — but the tuple is skipped (authority has code, or nonce mismatch). */
+  case Invalid(authority: Address)
+
+  /** Tuple applied; `authorityExisted` decides the PER_EMPTY_ACCOUNT_COST - PER_AUTH_BASE_COST refund. */
+  case Applied(authority: Address, world: InMemoryWorldStateProxy, authorityExisted: Boolean)
 
 object BlockPreparator:
+
+  /** EIP-7702 / EIP-2681: an authorization's nonce must be strictly below 2**64 - 1, because a successful authorization
+    * bumps the authority's nonce and 2**64 - 1 has no successor.
+    */
+  val AuthorizationNonceLimit: BigInt = (BigInt(1) << 64) - 1
+
+  /** secp256k1 group order n, and n/2 (the EIP-2 upper bound on `s`). */
+  val Secp256k1N: BigInt =
+    BigInt("fffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364141", 16)
+  val Secp256k1HalfN: BigInt = Secp256k1N >> 1
 
   /** EIP-7623: Calculate floor data gas for a transaction. Floor ensures calldata-heavy transactions pay a minimum gas
     * cost. tokens = nonzero_bytes * 4 + zero_bytes floorDataGas = 21000 + tokens * 10
