@@ -57,10 +57,13 @@ LEGACY_TESTS_COMMIT = "1f581b8ccdc4c63acf5f2c5c1b155c690c32a8eb"
 # ---- sizing ---------------------------------------------------------------------------------
 # Measured on hive at parallelism 4 (13c1e5686): consume-engine 2,452 tests / 79.8 min,
 # consume-rlp 2,832 / 79.7 min, consensus 1,582 / 60 min. Targets keep each shard near 3 h, well
-# inside the 300 min simulator limit and the 360 min job cap.
-TARGET = {"consume-engine": 5600, "consume-rlp": 6400, "consensus": 4800}
+# inside the 300 min simulator limit and the 360 min job cap. The first full pass (33b730e75)
+# measured consensus shards at 39-52 tests/min, so 7,200 keeps the slowest near 3 h.
+TARGET = {"consume-engine": 5600, "consume-rlp": 6400, "consensus": 7200}
 # consensus files hold several tests each; measured 3.30 (consensus) and 3.48 (legacy) per file.
-TESTS_PER_FILE = {"consensus": 3.30, "legacy": 3.48, "legacy-cancun": 3.48}
+# legacy-cancun files carry every fork variant (London..Cancun x d/g/v): the first full pass ran
+# 15,487 tests from 738 of its files, 20.99 per file -- the earlier 3.48 left its shards 6x over.
+TESTS_PER_FILE = {"consensus": 3.30, "legacy": 3.48, "legacy-cancun": 20.99}
 
 FORMAT = {"consume-engine": "blockchain_test_engine", "consume-rlp": "blockchain_test"}
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))

@@ -108,58 +108,83 @@
         },
         {
           "name": "consensus-legacy-01",
-          "sim_limit": "^legacy$/^(?:$|[^/])|^/(?:$|[^giv])|^/g(?:$|[^e])|^/ge(?:$|[^n])|^/gen(?:$|[^e])|^/gene(?:$|[^r])|^/gener(?:$|[^a])|^/genera(?:$|[^l])|^/general(?:$|[^s])|^/generals(?:$|[^t])|^/generalst(?:$|[^a])|^/generalsta(?:$|[^t])|^/generalstat(?:$|[^e])|^/generalstate(?:$|[^t])|^/generalstatet(?:$|[^e])|^/generalstatete(?:$|[^s])|^/generalstatetes(?:$|[^t])|^/generalstatetest(?:$|[^s])|^/generalstatetests(?:$|[^/])|^/generalstatetests/(?:$|[^s])|^/generalstatetests/s(?:$|[^t])|^/generalstatetests/st(?:$|[^abcdehilmnpqrstwz])|^/generalstatetests/sth|^/generalstatetests/stt(?:$|[^ir])|^/generalstatetests/stti(?:$|[^m])|^/generalstatetests/sttim(?:$|[^e])|^/generalstatetests/sttime(?:$|[^c])|^/generalstatetests/sttimec(?:$|[^o])|^/generalstatetests/sttimeco(?:$|[^n])|^/generalstatetests/sttimecon(?:$|[^s])|^/generalstatetests/sttimecons(?:$|[^u])|^/generalstatetests/sttimeconsu(?:$|[^m])|^/generalstatetests/sttimeconsum(?:$|[^i])|^/generalstatetests/sttimeconsumi(?:$|[^n])|^/generalstatetests/sttimeconsumin(?:$|[^g])|^/generalstatetests/sttimeconsuming(?:$|[^/])|^/generalstatetests/sttimeconsuming/(?:$|[^s])|^/generalstatetests/sttimeconsuming/s(?:$|[^st])|^/generalstatetests/sttimeconsuming/ss(?:$|[^t])|^/generalstatetests/sttimeconsuming/sst(?:$|[^o])|^/generalstatetests/sttimeconsuming/ssto(?:$|[^r])|^/generalstatetests/sttimeconsuming/sstor(?:$|[^e])|^/generalstatetests/sttimeconsuming/sstore(?:$|[^_])|^/generalstatetests/sttimeconsuming/sstore_(?:$|[^c])|^/generalstatetests/sttimeconsuming/sstore_c(?:$|[^o])|^/generalstatetests/sttimeconsuming/sstore_co(?:$|[^m])|^/generalstatetests/sttimeconsuming/sstore_com(?:$|[^b])|^/generalstatetests/sttimeconsuming/sstore_comb(?:$|[^i])|^/generalstatetests/sttimeconsuming/sstore_combi(?:$|[^n])|^/generalstatetests/sttimeconsuming/sstore_combin(?:$|[^a])|^/generalstatetests/sttimeconsuming/sstore_combina(?:$|[^t])|^/generalstatetests/sttimeconsuming/sstore_combinat(?:$|[^i])|^/generalstatetests/sttimeconsuming/sstore_combinati(?:$|[^o])|^/generalstatetests/sttimeconsuming/sstore_combinatio(?:$|[^n])|^/generalstatetests/sttimeconsuming/sstore_combination(?:$|[^s])|^/generalstatetests/sttimeconsuming/sstore_combinations(?:$|[^_])|^/generalstatetests/sttimeconsuming/sstore_combinations_(?:$|[^i])|^/generalstatetests/sttimeconsuming/sstore_combinations_i(?:$|[^n])|^/generalstatetests/sttimeconsuming/sstore_combinations_in(?:$|[^i])|^/generalstatetests/sttimeconsuming/sstore_combinations_ini(?:$|[^t])|^/generalstatetests/sttimeconsuming/sstore_combinations_init(?:$|[^i])|^/generalstatetests/sttimeconsuming/sstore_combinations_initi(?:$|[^a])|^/generalstatetests/sttimeconsuming/sstore_combinations_initia(?:$|[^l])|^/generalstatetests/sttimeconsuming/sstore_combinations_initial(?:$|[^012])|^/generalstatetests/sttimeconsuming/sstore_combinations_initial0(?:$|[^_])|^/generalstatetests/sttimeconsuming/sstore_combinations_initial0_(?:$|[^d])|^/generalstatetests/sttimeconsuming/sstore_combinations_initial0_d(?:$|[^0123456789])|^/generalstatetests/sttimeconsuming/sstore_combinations_initial0_d0|^/generalstatetests/sttimeconsuming/sstore_combinations_initial1(?:$|[^_])|^/generalstatetests/sttimeconsuming/sstore_combinations_initial1_(?:$|[^d])|^/generalstatetests/sttimeconsuming/sstore_combinations_initial1_d(?:$|[^0123456789])|^/generalstatetests/sttimeconsuming/sstore_combinations_initial1_d0|^/generalstatetests/sttimeconsuming/sstore_combinations_initial2(?:$|[^_])|^/generalstatetests/sttimeconsuming/sstore_combinations_initial2_(?:$|[^d])|^/generalstatetests/sttimeconsuming/sstore_combinations_initial2_d(?:$|[^0123456789])|^/generalstatetests/sttimeconsuming/sstore_combinations_initial2_d0|^/generalstatetests/sttimeconsuming/st|^/generalstatetests/stz",
-          "est_tests": 4778
+          "sim_limit": "^legacy$/^(?:$|[^/])|^/(?:$|[^giv])|^/g(?:$|[^e])|^/ge(?:$|[^n])|^/gen(?:$|[^e])|^/gene(?:$|[^r])|^/gener(?:$|[^a])|^/genera(?:$|[^l])|^/general(?:$|[^s])|^/generals(?:$|[^t])|^/generalst(?:$|[^a])|^/generalsta(?:$|[^t])|^/generalstat(?:$|[^e])|^/generalstate(?:$|[^t])|^/generalstatet(?:$|[^e])|^/generalstatete(?:$|[^s])|^/generalstatetes(?:$|[^t])|^/generalstatetest(?:$|[^s])|^/generalstatetests(?:$|[^/])|^/generalstatetests/(?:$|[^s])|^/generalstatetests/s(?:$|[^t])|^/generalstatetests/st(?:$|[^abcdehilmnpqrstwz])|^/generalstatetests/sta|^/generalstatetests/stt(?:$|[^ir])|^/generalstatetests/stti(?:$|[^m])|^/generalstatetests/sttim(?:$|[^e])|^/generalstatetests/sttime(?:$|[^c])|^/generalstatetests/sttimec(?:$|[^o])|^/generalstatetests/sttimeco(?:$|[^n])|^/generalstatetests/sttimecon(?:$|[^s])|^/generalstatetests/sttimecons(?:$|[^u])|^/generalstatetests/sttimeconsu(?:$|[^m])|^/generalstatetests/sttimeconsum(?:$|[^i])|^/generalstatetests/sttimeconsumi(?:$|[^n])|^/generalstatetests/sttimeconsumin(?:$|[^g])|^/generalstatetests/sttimeconsuming(?:$|[^/])|^/generalstatetests/sttimeconsuming/(?:$|[^s])|^/generalstatetests/sttimeconsuming/s(?:$|[^st])|^/generalstatetests/sttimeconsuming/ss(?:$|[^t])|^/generalstatetests/sttimeconsuming/sst(?:$|[^o])|^/generalstatetests/sttimeconsuming/ssto(?:$|[^r])|^/generalstatetests/sttimeconsuming/sstor(?:$|[^e])|^/generalstatetests/sttimeconsuming/sstore(?:$|[^_])|^/generalstatetests/sttimeconsuming/sstore_(?:$|[^c])|^/generalstatetests/sttimeconsuming/sstore_c(?:$|[^o])|^/generalstatetests/sttimeconsuming/sstore_co(?:$|[^m])|^/generalstatetests/sttimeconsuming/sstore_com(?:$|[^b])|^/generalstatetests/sttimeconsuming/sstore_comb(?:$|[^i])|^/generalstatetests/sttimeconsuming/sstore_combi(?:$|[^n])|^/generalstatetests/sttimeconsuming/sstore_combin(?:$|[^a])|^/generalstatetests/sttimeconsuming/sstore_combina(?:$|[^t])|^/generalstatetests/sttimeconsuming/sstore_combinat(?:$|[^i])|^/generalstatetests/sttimeconsuming/sstore_combinati(?:$|[^o])|^/generalstatetests/sttimeconsuming/sstore_combinatio(?:$|[^n])|^/generalstatetests/sttimeconsuming/sstore_combination(?:$|[^s])|^/generalstatetests/sttimeconsuming/sstore_combinations(?:$|[^_])|^/generalstatetests/sttimeconsuming/sstore_combinations_(?:$|[^i])|^/generalstatetests/sttimeconsuming/sstore_combinations_i(?:$|[^n])|^/generalstatetests/sttimeconsuming/sstore_combinations_in(?:$|[^i])|^/generalstatetests/sttimeconsuming/sstore_combinations_ini(?:$|[^t])|^/generalstatetests/sttimeconsuming/sstore_combinations_init(?:$|[^i])|^/generalstatetests/sttimeconsuming/sstore_combinations_initi(?:$|[^a])|^/generalstatetests/sttimeconsuming/sstore_combinations_initia(?:$|[^l])|^/generalstatetests/sttimeconsuming/sstore_combinations_initial(?:$|[^012])|^/generalstatetests/sttimeconsuming/sstore_combinations_initial0|^/generalstatetests/sttimeconsuming/st|^/v",
+          "est_tests": 7193
         },
         {
           "name": "consensus-legacy-02",
-          "sim_limit": "^legacy$/^/generalstatetests/sts|^/i",
-          "est_tests": 4750
+          "sim_limit": "^legacy$/^/generalstatetests/sth|^/generalstatetests/stm|^/generalstatetests/sttimeconsuming/sstore_combinations_initial1|^/generalstatetests/sttr",
+          "est_tests": 7144
         },
         {
           "name": "consensus-legacy-03",
-          "sim_limit": "^legacy$/^/generalstatetests/stc|^/generalstatetests/stl|^/generalstatetests/stq|^/generalstatetests/sttimeconsuming/sstore_combinations_initial0_d1",
-          "est_tests": 4778
+          "sim_limit": "^legacy$/^/generalstatetests/stb|^/generalstatetests/ste|^/generalstatetests/stl|^/generalstatetests/sttimeconsuming/sstore_combinations_initial2|^/i",
+          "est_tests": 7169
         },
         {
           "name": "consensus-legacy-04",
-          "sim_limit": "^legacy$/^/generalstatetests/stb|^/generalstatetests/sttimeconsuming/sstore_combinations_initial1_d1|^/generalstatetests/sttr|^/v",
-          "est_tests": 4750
+          "sim_limit": "^legacy$/^/generalstatetests/stn|^/generalstatetests/stp|^/generalstatetests/stw|^/generalstatetests/stz",
+          "est_tests": 7190
         },
         {
           "name": "consensus-legacy-05",
-          "sim_limit": "^legacy$/^/generalstatetests/stm|^/generalstatetests/sttimeconsuming/sstore_combinations_initial0_d2|^/generalstatetests/sttimeconsuming/sstore_combinations_initial0_d3|^/generalstatetests/sttimeconsuming/sstore_combinations_initial0_d4|^/generalstatetests/sttimeconsuming/sstore_combinations_initial2_d1|^/generalstatetests/stw",
-          "est_tests": 4785
+          "sim_limit": "^legacy$/^/generalstatetests/stc|^/generalstatetests/std|^/generalstatetests/sti|^/generalstatetests/stq|^/generalstatetests/sts",
+          "est_tests": 6407
         },
         {
           "name": "consensus-legacy-06",
-          "sim_limit": "^legacy$/^/generalstatetests/str|^/generalstatetests/sttimeconsuming/sstore_combinations_initial0_d5|^/generalstatetests/sttimeconsuming/sstore_combinations_initial0_d6|^/generalstatetests/sttimeconsuming/sstore_combinations_initial0_d7|^/generalstatetests/sttimeconsuming/sstore_combinations_initial0_d8|^/generalstatetests/sttimeconsuming/sstore_combinations_initial0_d9",
-          "est_tests": 4778
-        },
-        {
-          "name": "consensus-legacy-07",
-          "sim_limit": "^legacy$/^/generalstatetests/std|^/generalstatetests/sti|^/generalstatetests/stn|^/generalstatetests/stp|^/generalstatetests/sttimeconsuming/sstore_combinations_initial1_d2|^/generalstatetests/sttimeconsuming/sstore_combinations_initial1_d3|^/generalstatetests/sttimeconsuming/sstore_combinations_initial1_d4|^/generalstatetests/sttimeconsuming/sstore_combinations_initial1_d5|^/generalstatetests/sttimeconsuming/sstore_combinations_initial1_d6|^/generalstatetests/sttimeconsuming/sstore_combinations_initial1_d7",
-          "est_tests": 4788
-        },
-        {
-          "name": "consensus-legacy-08",
-          "sim_limit": "^legacy$/^/generalstatetests/sta|^/generalstatetests/ste|^/generalstatetests/sttimeconsuming/sstore_combinations_initial1_d8|^/generalstatetests/sttimeconsuming/sstore_combinations_initial1_d9|^/generalstatetests/sttimeconsuming/sstore_combinations_initial2_d2|^/generalstatetests/sttimeconsuming/sstore_combinations_initial2_d3|^/generalstatetests/sttimeconsuming/sstore_combinations_initial2_d4|^/generalstatetests/sttimeconsuming/sstore_combinations_initial2_d5|^/generalstatetests/sttimeconsuming/sstore_combinations_initial2_d6|^/generalstatetests/sttimeconsuming/sstore_combinations_initial2_d7|^/generalstatetests/sttimeconsuming/sstore_combinations_initial2_d8|^/generalstatetests/sttimeconsuming/sstore_combinations_initial2_d9",
-          "est_tests": 4541
+          "sim_limit": "^legacy$/^/generalstatetests/str",
+          "est_tests": 2847
         },
         {
           "name": "consensus-legacy-cancun-01",
-          "sim_limit": "^legacy-cancun$/^(?:$|[^/])|^/(?:$|[^gitv])|^/g(?:$|[^e])|^/ge(?:$|[^n])|^/gen(?:$|[^e])|^/gene(?:$|[^r])|^/gener(?:$|[^a])|^/genera(?:$|[^l])|^/general(?:$|[^s])|^/generals(?:$|[^t])|^/generalst(?:$|[^a])|^/generalsta(?:$|[^t])|^/generalstat(?:$|[^e])|^/generalstate(?:$|[^t])|^/generalstatet(?:$|[^e])|^/generalstatete(?:$|[^s])|^/generalstatetes(?:$|[^t])|^/generalstatetest(?:$|[^s])|^/generalstatetests(?:$|[^/])|^/generalstatetests/(?:$|[^cpsv])|^/generalstatetests/s(?:$|[^ht])|^/generalstatetests/st(?:$|[^abcdehilmnpqrstwz])|^/generalstatetests/ste|^/generalstatetests/str|^/generalstatetests/sts|^/generalstatetests/stt|^/t",
-          "est_tests": 4799
+          "sim_limit": "^legacy-cancun$/^(?:$|[^/])|^/(?:$|[^gitv])|^/g(?:$|[^e])|^/ge(?:$|[^n])|^/gen(?:$|[^e])|^/gene(?:$|[^r])|^/gener(?:$|[^a])|^/genera(?:$|[^l])|^/general(?:$|[^s])|^/generals(?:$|[^t])|^/generalst(?:$|[^a])|^/generalsta(?:$|[^t])|^/generalstat(?:$|[^e])|^/generalstate(?:$|[^t])|^/generalstatet(?:$|[^e])|^/generalstatete(?:$|[^s])|^/generalstatetes(?:$|[^t])|^/generalstatetest(?:$|[^s])|^/generalstatetests(?:$|[^/])|^/generalstatetests/(?:$|[^cpsv])|^/generalstatetests/s(?:$|[^ht])|^/generalstatetests/sh|^/generalstatetests/st(?:$|[^abcdehilmnpqrstwz])|^/generalstatetests/stc(?:$|[^ahor])|^/generalstatetests/str(?:$|[^ae])|^/generalstatetests/stra(?:$|[^n])|^/generalstatetests/stran(?:$|[^d])|^/generalstatetests/strand(?:$|[^o])|^/generalstatetests/strando(?:$|[^m])|^/generalstatetests/strandom(?:$|[^/2])|^/generalstatetests/sts(?:$|[^ehlopsty])|^/generalstatetests/stse|^/generalstatetests/stsl|^/generalstatetests/stz",
+          "est_tests": 7200
         },
         {
           "name": "consensus-legacy-cancun-02",
-          "sim_limit": "^legacy-cancun$/^/generalstatetests/p|^/generalstatetests/sta|^/generalstatetests/stb|^/generalstatetests/stc|^/generalstatetests/stz|^/i|^/v",
-          "est_tests": 4799
+          "sim_limit": "^legacy-cancun$/^/generalstatetests/stch|^/generalstatetests/strandom/|^/generalstatetests/stss",
+          "est_tests": 7158
         },
         {
           "name": "consensus-legacy-cancun-03",
-          "sim_limit": "^legacy-cancun$/^/generalstatetests/c|^/generalstatetests/sh|^/generalstatetests/std|^/generalstatetests/sth|^/generalstatetests/sti|^/generalstatetests/stl|^/generalstatetests/stm|^/generalstatetests/stn|^/generalstatetests/stp|^/generalstatetests/stq|^/generalstatetests/stw|^/generalstatetests/v",
-          "est_tests": 1844
+          "sim_limit": "^legacy-cancun$/^/generalstatetests/std|^/generalstatetests/sth|^/generalstatetests/stst",
+          "est_tests": 7200
+        },
+        {
+          "name": "consensus-legacy-cancun-04",
+          "sim_limit": "^legacy-cancun$/^/generalstatetests/stco|^/generalstatetests/stt|^/v",
+          "est_tests": 7137
+        },
+        {
+          "name": "consensus-legacy-cancun-05",
+          "sim_limit": "^legacy-cancun$/^/generalstatetests/stca|^/generalstatetests/stcr",
+          "est_tests": 7179
+        },
+        {
+          "name": "consensus-legacy-cancun-06",
+          "sim_limit": "^legacy-cancun$/^/generalstatetests/p|^/generalstatetests/strandom2",
+          "est_tests": 7200
+        },
+        {
+          "name": "consensus-legacy-cancun-07",
+          "sim_limit": "^legacy-cancun$/^/generalstatetests/sta|^/generalstatetests/ste|^/i",
+          "est_tests": 6948
+        },
+        {
+          "name": "consensus-legacy-cancun-08",
+          "sim_limit": "^legacy-cancun$/^/generalstatetests/stb|^/generalstatetests/stre|^/generalstatetests/stsy|^/t",
+          "est_tests": 7095
+        },
+        {
+          "name": "consensus-legacy-cancun-09",
+          "sim_limit": "^legacy-cancun$/^/generalstatetests/stl|^/generalstatetests/stm|^/generalstatetests/stp|^/generalstatetests/v",
+          "est_tests": 7137
+        },
+        {
+          "name": "consensus-legacy-cancun-10",
+          "sim_limit": "^legacy-cancun$/^/generalstatetests/c|^/generalstatetests/sti|^/generalstatetests/stn|^/generalstatetests/stq|^/generalstatetests/stsh|^/generalstatetests/stso|^/generalstatetests/stsp|^/generalstatetests/stw",
+          "est_tests": 4765
         }
       ]
     }
