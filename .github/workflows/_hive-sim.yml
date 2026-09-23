@@ -236,11 +236,10 @@ jobs:
       - name: Sync fukuii hive adapter
         run: |
           mkdir -p external/hive/clients/fukuii
-          cp -v "$GITHUB_WORKSPACE/hive/fukuii/Dockerfile" external/hive/clients/fukuii/Dockerfile
-          cp -v "$GITHUB_WORKSPACE/hive/fukuii/fukuii.sh" external/hive/clients/fukuii/fukuii.sh
-          cp -v "$GITHUB_WORKSPACE/hive/fukuii/mapper.jq" external/hive/clients/fukuii/mapper.jq
-          cp -v "$GITHUB_WORKSPACE/hive/fukuii/enode.sh" external/hive/clients/fukuii/enode.sh 2>/dev/null || true
-          cp -v "$GITHUB_WORKSPACE/hive/fukuii/hive.yaml" external/hive/clients/fukuii/hive.yaml 2>/dev/null || true
+          # Copy the WHOLE adapter directory: it is hive's docker build context, and the
+          # Dockerfile COPYs files a per-name list would silently miss (aot-train.sh broke
+          # every suite on 0146454e9 exactly that way).
+          cp -v "$GITHUB_WORKSPACE"/hive/fukuii/* external/hive/clients/fukuii/
           cp target/scala-3.*/fukuii-assembly-*.jar external/hive/clients/fukuii/
 
       - name: Set up Go
