@@ -104,6 +104,25 @@ class EthashBlockHeaderValidatorSpec
     }
   }
 
+  it should "reject difficulty 0 on a chain without a terminal total difficulty (core-geth errInvalidDifficulty)" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in {
+    // ethereum/tests bcInvalidHeaderTest/DifficultyIsZero. Zero used to be waved through as "post-merge" on every chain.
+    val zero = validBlockHeader.copy(difficulty = Difficulty.Zero)
+    blockchainConfig.terminalTotalDifficulty shouldBe None
+    PoWBlockHeaderValidator.validate(zero, validParent.header) shouldBe Left(HeaderDifficultyError)
+  }
+
+  it should "still accept difficulty 0 where a terminal total difficulty is configured (post-merge arm unchanged)" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in {
+    val zero = validBlockHeader.copy(difficulty = Difficulty.Zero)
+    val mergeConfig = blockchainConfig.copy(terminalTotalDifficulty = Some(BigInt(0)))
+    MockedPowBlockHeaderValidator.validate(zero, validParent.header)(mergeConfig) shouldBe Right(BlockHeaderValid)
+  }
+
   it should "return a failure if created based on invalid gas used" taggedAs (UnitTest, ConsensusTest) in {
     forAll(bigIntGen) { gasUsed =>
       val blockHeader = validBlockHeader.copy(gasUsed = GasAmount(gasUsed))

@@ -13,7 +13,7 @@ import com.chipprbots.ethereum.consensus.eip1559.BaseFeeCalculator
 import com.chipprbots.ethereum.consensus.mining.MiningConfig
 import com.chipprbots.ethereum.consensus.mining.Protocol
 import com.chipprbots.ethereum.consensus.pow.blocks.Ommers
-import com.chipprbots.ethereum.consensus.pow.validators.MockedPowBlockHeaderValidator
+import com.chipprbots.ethereum.consensus.validators.DifficultyAgnosticValidator
 import com.chipprbots.ethereum.consensus.validators.BlockHeaderError.HeaderGasLimitError
 import com.chipprbots.ethereum.consensus.validators.BlockHeaderValid
 import com.chipprbots.ethereum.domain.Difficulty
@@ -37,8 +37,8 @@ import com.chipprbots.ethereum.utils.BlockchainConfig
   * Two critical properties verified:
   *   1. calculateGasLimit() automatically applies the 60M Olympia floor via the fork gas schedule
   *      (gasLimitAdjustmentStartAt) — no config change needed for the operator. 2. Every miner-generated gas limit
-  *      passes MockedPowBlockHeaderValidator at each step — miner and validator are always consistent across the fork
-  *      boundary.
+  *      passes the header validator (DifficultyAgnosticValidator: PoW and difficulty isolated) at each step — miner and
+  *      validator are always consistent across the fork boundary.
   *
   * The validateGasLimit ETH London 2× bug would have caused Fukuii to reject every block it produced at Olympia
   * activation: miner → 8,007,811 (1/1024), old validator expected ~16,000,000 (ETH London 2× rule). This spec is the
@@ -80,7 +80,7 @@ class SpiralToOlympiaGasTransitionSpec
   private val legacyMiner = new TestableGen(SpiralGasLimit)
 
   private def validate(header: BlockHeader, parent: BlockHeader) =
-    MockedPowBlockHeaderValidator.validate(header, parent)
+    DifficultyAgnosticValidator.validate(header, parent)
 
   private def spiralHeader(number: BigInt, gasLimit: BigInt, timestamp: Long): BlockHeader =
     Fixtures.Blocks.ValidBlock.header.copy(

@@ -173,9 +173,15 @@ trait BlockHeaderValidatorSkeleton extends BlockHeaderValidator:
       blockHeader: BlockHeader,
       parent: BlockHeader
   )(implicit blockchainConfig: BlockchainConfig): Either[BlockHeaderError, BlockHeaderValid] =
-    if blockHeader.difficulty == Difficulty.Zero then
-      // Post-merge: difficulty is always 0 (EIP-3675). Pre-merge blocks never have difficulty=0
-      // because the Ethash difficulty algorithm always produces a positive value.
+    if blockHeader.difficulty == Difficulty.Zero && blockchainConfig.terminalTotalDifficulty.isDefined then
+      // Post-merge: difficulty is always 0 (EIP-3675). Only a chain that HAS a merge — a configured
+      // terminal-total-difficulty — can carry such a header; that branch is ETH's and unchanged.
+      //
+      // Without a TTD (every ETC chain, and every pre-merge ETH configuration) difficulty 0 is not a special case:
+      // it must equal the Ethash difficulty computed from the parent like any other value, which is never 0, so the
+      // header is rejected — core-geth ethash.verifyHeader `errInvalidDifficulty`. This used to be accepted
+      // unconditionally: a zero-difficulty header adds no weight, and on a PoW chain it is a block that should never
+      // import (ethereum/tests bcInvalidHeaderTest/DifficultyIsZero, every fork Frontier..ConstantinopleFix).
       Right(BlockHeaderValid)
     else if difficulty.calculateDifficulty(
         blockHeader.number.value,

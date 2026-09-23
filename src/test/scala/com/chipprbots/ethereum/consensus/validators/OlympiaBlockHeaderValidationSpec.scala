@@ -7,7 +7,6 @@ import org.scalatest.wordspec.AnyWordSpec
 
 import com.chipprbots.ethereum.Fixtures
 import com.chipprbots.ethereum.consensus.eip1559.BaseFeeCalculator
-import com.chipprbots.ethereum.consensus.pow.validators.MockedPowBlockHeaderValidator
 import com.chipprbots.ethereum.consensus.validators.BlockHeaderError.HeaderBaseFeeError
 import com.chipprbots.ethereum.consensus.validators.BlockHeaderError.HeaderExtraFieldsError
 import com.chipprbots.ethereum.consensus.validators.BlockHeaderError.HeaderGasLimitError
@@ -24,8 +23,11 @@ import com.chipprbots.ethereum.utils.BlockchainConfig
 
 /** Tests that BlockHeaderValidatorSkeleton enforces extraFields and baseFee at the Olympia fork boundary.
   *
-  * Uses MockedPowBlockHeaderValidator (skips PoW) with difficulty=0 headers (skips difficulty validation) to isolate
-  * the fork-gating logic.
+  * Uses [[DifficultyAgnosticValidator]] (PoW mocked, difficulty calculator pinned to 0) with difficulty=0 headers to
+  * isolate the fork-gating logic. This spec used to rely on MockedPowBlockHeaderValidator treating difficulty 0 as
+  * "skip difficulty validation" on every chain; that bypass is now confined to chains with a terminal total difficulty
+  * (a zero-difficulty PoW header is invalid, core-geth errInvalidDifficulty), so the isolation is made explicit here.
+  * No assertion changed.
   *
   * Gas limit: standard ±1/1024 per block applies at ALL blocks including the Olympia activation. ETC Olympia converges
   * 8M → 60M gradually over ~2,055 blocks; there is no one-shot doubling at activation.
@@ -85,7 +87,7 @@ class OlympiaBlockHeaderValidationSpec
     )
 
   private def validate(header: BlockHeader, parent: BlockHeader) =
-    MockedPowBlockHeaderValidator.validate(header, parent)
+    DifficultyAgnosticValidator.validate(header, parent)
 
   "OlympiaBlockHeaderValidation" when {
 
@@ -230,7 +232,7 @@ class OlympiaBlockHeaderValidationSpec
           extraData = baseExtraData,
           extraFields = HefPostOlympia(BigInt(7))
         )
-        MockedPowBlockHeaderValidator.validate(child, emptyParent)(configFloorZero) shouldBe Right(BlockHeaderValid)
+        DifficultyAgnosticValidator.validate(child, emptyParent)(configFloorZero) shouldBe Right(BlockHeaderValid)
       }
     }
   }
