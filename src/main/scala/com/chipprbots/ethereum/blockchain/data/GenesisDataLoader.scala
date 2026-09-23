@@ -95,7 +95,7 @@ class GenesisDataLoader(
 
   def loadGenesisData(genesisData: GenesisData)(implicit blockchainConfig: BlockchainConfig): Try[Unit] =
 
-    val storage = stateStorage.getReadOnlyStorage
+    val storage = GenesisDataLoader.AppendOnlyMptStorage(stateStorage.getReadOnlyStorage)
     val initalRootHash = MerklePatriciaTrie.EmptyRootHash
 
     val stateMptRootHash = getGenesisStateRoot(genesisData, initalRootHash, storage)
@@ -261,6 +261,25 @@ class GenesisDataLoader(
     ByteString(Hex.decode(List.fill(length)("0").mkString))
 
 object GenesisDataLoader:
+
+  /** Genesis tries are built into ONE shared, content-addressed node buffer (`ReadOnlyNodeStorage`), and every MPT
+    * `put` reports the nodes it replaced as removals — which that buffer applies with `buffer -= hash`. Two accounts
+    * whose storage tries share a node therefore corrupt each other: EEST `stEIP2930/variedContext` gives 0x..f114
+    * storage {0: 0x0bad} (a single leaf, which is its root) and 0x..f115 {0: 0x0bad, 0x60a7: 0xdead}; building f115's
+    * trie creates that same leaf, then replaces it and "removes" it, deleting f114's storage root before `persist()`.
+    * The genesis state root is still right (it is computed, not read back), so the genesis hash matched and the first
+    * block that wrote f114's storage failed with MissingStorageNodeException -> newPayload `SYNCING`/ACCEPTED.
+    *
+    * Nothing a genesis build replaces can be garbage that must be deleted — the buffer's removals are never persisted
+    * anyway (`ReadOnlyNodeStorage.persist` only sees upserts) — so dropping removals here is exact.
+    */
+  final private[data] case class AppendOnlyMptStorage(underlying: MptStorage) extends MptStorage:
+    override def get(nodeId: Array[Byte]): com.chipprbots.ethereum.mpt.MptNode = underlying.get(nodeId)
+    override def updateNodesInStorage(
+        newRoot: Option[com.chipprbots.ethereum.mpt.MptNode],
+        toRemove: Seq[com.chipprbots.ethereum.mpt.MptNode]
+    ): Option[com.chipprbots.ethereum.mpt.MptNode] = underlying.updateNodesInStorage(newRoot, Nil)
+    override def persist(): Unit = underlying.persist()
   object JsonSerializers:
 
     def deserializeByteString(jv: JValue): ByteString = jv match
