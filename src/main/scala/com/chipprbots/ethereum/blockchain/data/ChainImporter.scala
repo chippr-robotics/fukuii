@@ -120,15 +120,21 @@ class ChainImporter(
       case Left(err) =>
         Left(s"pre-execution validation failed: $err")
       case Right(_) =>
-        blockExecution.executeBlockNoValidation(block).flatMap { case (receipts, gasUsed, stateRootHash) =>
-          blockValidation.validateBlockAfterExecution(block, stateRootHash, receipts, gasUsed) match
-            case Left(err) =>
-              receipts.zipWithIndex.foreach { case (r, i) =>
-                log.error(s"Chain import: block ${block.header.number} tx[$i] cumulativeGas=${r.cumulativeGasUsed}")
-              }
-              Left(s"post-execution validation failed: $err")
-            case Right(_) =>
-              Right(receipts)
+        blockExecution.executeBlockNoValidationWithRequests(block).flatMap {
+          case (receipts, gasUsed, stateRootHash, requests) =>
+            blockValidation.validateBlockAfterExecution(block, stateRootHash, receipts, gasUsed) match
+              case Left(err) =>
+                receipts.zipWithIndex.foreach { case (r, i) =>
+                  log.error(s"Chain import: block ${block.header.number} tx[$i] cumulativeGas=${r.cumulativeGasUsed}")
+                }
+                Left(s"post-execution validation failed: $err")
+              case Right(_) =>
+                // EIP-7685: the header's requestsHash must match the requests execution produced.
+                blockExecution
+                  .validateRequestsHash(block, requests)
+                  .left
+                  .map(err => s"post-execution validation failed: ${err.describe}")
+                  .map(_ => receipts)
         }
 
   /** Decode concatenated RLP-encoded blocks from a byte array. */

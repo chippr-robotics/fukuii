@@ -25,7 +25,7 @@ import com.chipprbots.ethereum.utils.NetworkType
 /** execution-spec-tests v5.4.0 (`fixtures_stable.tar.gz`, `blockchain_tests/`) vectors that hive's consume-engine /
   * consume-rlp full pass on 33b730e75 failed, replayed through the path `ChainImporter` takes for hive's chain.rlp:
   * genesis via [[GenesisDataLoader]] (the `alloc` is the fixture's `pre`), then per block
-  * `validateBlockBeforeExecution` → execute → `validateBlockAfterExecution`, each block
+  * `validateBlockBeforeExecution` → execute → `validateBlockAfterExecution` → `validateRequestsHash`, each block
   * accepted or rejected exactly as the fixture's `expectException` says, ending on the fixture's `lastblockhash`.
   *
   * The JSON under `src/test/resources/eest-regression/` is the fixture verbatim, trimmed to the fields replayed here
@@ -36,7 +36,8 @@ class EestRegressionVectorsSpec extends AnyWordSpec with Matchers:
 
   /** file → what it pins. */
   private val vectorFiles: Seq[(String, String)] = Seq(
-    "genesis-shared-storage-nodes.json" -> "genesis storage tries that share a node both keep it"
+    "genesis-shared-storage-nodes.json" -> "genesis storage tries that share a node both keep it",
+    "eip7685-requests.json" -> "EIP-6110 deposit-log layout, EIP-7002/7251 system-call failure, EIP-7685 requestsHash"
   )
 
   private def hx(s: String): Array[Byte] = Hex.decode(s.stripPrefix("0x"))
@@ -151,12 +152,13 @@ class EestRegressionVectorsSpec extends AnyWordSpec with Matchers:
       val block = hx(str(b \ "rlp")).toBlock
       val outcome: Either[String, Seq[Receipt]] =
         blockValidation.validateBlockBeforeExecution(block).left.map(_.toString).flatMap { _ =>
-          blockExecution.executeBlockNoValidation(block).left.map(_.describe).flatMap {
-            case (receipts, gasUsed, root) =>
+          blockExecution.executeBlockNoValidationWithRequests(block).left.map(_.describe).flatMap {
+            case (receipts, gasUsed, root, requests) =>
               blockValidation
                 .validateBlockAfterExecution(block, root, receipts, gasUsed)
                 .left
                 .map(_.toString)
+                .flatMap(_ => blockExecution.validateRequestsHash(block, requests).left.map(_.describe))
                 .map(_ => receipts)
           }
         }

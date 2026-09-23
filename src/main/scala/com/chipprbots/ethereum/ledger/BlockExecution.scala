@@ -62,6 +62,7 @@ class BlockExecution(
           result.receipts,
           result.gasUsed
         )
+        _ <- validateRequestsHash(block, result.executionRequests)
       yield (result.receipts, result.executionRequests)
 
     if blockExecResult.isRight then
@@ -75,9 +76,40 @@ class BlockExecution(
   def executeBlockNoValidation(
       block: Block
   )(implicit blockchainConfig: BlockchainConfig): Either[BlockExecutionError, (Seq[Receipt], BigInt, ByteString)] =
+    executeBlockNoValidationWithRequests(block).map { case (receipts, gasUsed, root, _) => (receipts, gasUsed, root) }
+
+  /** [[executeBlockNoValidation]] plus the EIP-7685 requests execution produced, so an import path that validates after
+    * the fact (ChainImporter) can check the header's `requestsHash` with [[validateRequestsHash]].
+    */
+  def executeBlockNoValidationWithRequests(
+      block: Block
+  )(implicit
+      blockchainConfig: BlockchainConfig
+  ): Either[BlockExecutionError, (Seq[Receipt], BigInt, ByteString, Seq[ByteString])] =
     executeBlock(block).map { result =>
-      (result.receipts, result.gasUsed, result.worldState.stateRootHash)
+      (result.receipts, result.gasUsed, result.worldState.stateRootHash, result.executionRequests)
     }
+
+  /** EIP-7685: a Prague+ header's `requestsHash` must commit to exactly the requests execution produced. Without this
+    * check a block could carry any `requestsHash` and still be imported over RLP / devp2p (the Engine API path compares
+    * the CL-supplied request list instead, which is equivalent there). EEST `test_consolidation_requests_negative`,
+    * `test_invalid_multi_type_requests`, `test_withdrawal_requests_negative`.
+    */
+  def validateRequestsHash(block: Block, requests: Seq[ByteString])(implicit
+      blockchainConfig: BlockchainConfig
+  ): Either[BlockExecutionError, Unit] =
+    if !blockchainConfig.isPragueTimestamp(block.header.unixTimestamp) then Right(())
+    else
+      val expected = BlockExecution.computeRequestsHash(requests)
+      block.header.requestsHash match
+        case Some(h) if h == expected => Right(())
+        case other =>
+          Left(
+            BlockExecutionError.ValidationAfterExecError(
+              s"INVALID_REQUESTS: header requestsHash ${other.map(ByteStringUtils.hash2string)} != " +
+                s"${ByteStringUtils.hash2string(expected)} computed from ${requests.size} executed request(s)"
+            )
+          )
 
   /** Proposer-mode execution. Runs all Prague preambles (EIP-4788, EIP-2935), transactions, withdrawals, and system
     * calls (EIP-7002/7251), collects deposit requests (EIP-6110), and returns the full BlockResult with receipts +
@@ -117,10 +149,19 @@ class BlockExecution(
         // EIP-8282 builder predeploys. The system-call outputs (types 0x01, 0x02 and, post-Amsterdam,
         // 0x03, 0x04) and deposit log requests (type 0x00) combine to form the EIP-7685 requestsHash;
         // follower mode verifies, proposer mode emits.
-        systemCallResult = processPragueSystemCalls(block, worldAfterWithdrawals)
+        //
+        // Both halves can INVALIDATE the block (EIP-6110 / EIP-7002 / EIP-7251, EELS
+        // `process_checked_system_transaction` / `extract_deposit_data`): a system call that halts or
+        // reverts, and a DepositEvent log whose ABI layout is not the canonical one.
+        systemCallResult <- processPragueSystemCallsChecked(block, worldAfterWithdrawals)
+          .leftMap(BlockExecutionError.ValidationAfterExecError.apply)
         worldAfterSystemCalls = systemCallResult._1
         systemRequests = systemCallResult._2
-        depositRequest = collectDepositRequests(execResult.receipts)
+        depositRequest <- (
+          if blockchainConfig.isPragueTimestamp(block.header.unixTimestamp) then
+            collectDepositRequests(execResult.receipts)
+          else Right(None)
+        ).leftMap(BlockExecutionError.ValidationAfterExecError.apply)
         // State root hash needs to be up-to-date for validateBlockAfterExecution. In proposer mode the
         // backing MPT storage is read-only, so persistState computes the trie hash in-memory without
         // writing to RocksDB — exactly what we want for a speculative payload.
@@ -443,7 +484,25 @@ class BlockExecution(
       block: Block,
       world: InMemoryWorldStateProxy
   )(implicit blockchainConfig: BlockchainConfig): (InMemoryWorldStateProxy, Seq[ByteString]) =
-    if !blockchainConfig.isPragueTimestamp(block.header.unixTimestamp) then return (world, Nil)
+    processPragueSystemCallsChecked(block, world).fold(err => throw new IllegalStateException(err), identity)
+
+  /** [[processPragueSystemCalls]], reporting a failed system call instead of ignoring it.
+    *
+    * EIP-7002 / EIP-7251: if the system call fails (halts exceptionally or reverts) the block MUST be deemed invalid.
+    * go-ethereum `processRequestsSystemCall` returns `system call failed to execute` on any EVM error; EELS
+    * `process_checked_system_transaction` raises InvalidBlock. Previously the result's error was dropped and whatever
+    * return data it carried (a REVERT's payload, or nothing) was folded into the requests — EEST
+    * `test_system_contract_errors[system_contract_{reverts,throws,out_of_gas}]` imported as VALID.
+    *
+    * A target with no deployed code is still skipped rather than failed: go-ethereum does the same (a call to an empty
+    * account succeeds with empty output), and it is the independent guard that keeps these calls inert on chains that
+    * never deploy the predeploys.
+    */
+  private[ledger] def processPragueSystemCallsChecked(
+      block: Block,
+      world: InMemoryWorldStateProxy
+  )(implicit blockchainConfig: BlockchainConfig): Either[String, (InMemoryWorldStateProxy, Seq[ByteString])] =
+    if !blockchainConfig.isPragueTimestamp(block.header.unixTimestamp) then return Right((world, Nil))
 
     import BlockExecution.*
     val evmConfig = EvmConfig.forBlock(block.header.number.value, block.header.unixTimestamp, blockchainConfig)
@@ -471,10 +530,11 @@ class BlockExecution(
     // `AmsterdamBuilderRequestsSpec` runs the fixture's real withdrawal and consolidation bytecode over a
     // non-empty queue at both ceilings and requires byte-identical requests and storage.
     val amsterdamActive = blockchainConfig.isAmsterdamTimestamp(block.header.unixTimestamp)
+    var failure: Option[String] = None
     for (queueAddr, requestType) <- BlockExecution.systemCallTargets(block.header.unixTimestamp)
     do
       val code = w.getCode(queueAddr)
-      if code.nonEmpty then
+      if failure.isEmpty && code.nonEmpty then
         val context = ProgramContext[InMemoryWorldStateProxy, InMemoryWorldStateProxyStorage](
           callerAddr = SystemAddress,
           originAddr = SystemAddress,
@@ -496,47 +556,42 @@ class BlockExecution(
         )
         val vm = new com.chipprbots.ethereum.vm.VM[InMemoryWorldStateProxy, InMemoryWorldStateProxyStorage]
         val result = vm.run(context)
-        w = InMemoryWorldStateProxy.persistState(result.world)
-        // EIP-7685 request bytes = single-byte type prefix || raw system-call returndata.
-        // Empty returndata (no queued requests) means no bytes are emitted for this type.
-        if result.returnData.nonEmpty then outputs += ByteString(Array(requestType.toByte)) ++ result.returnData
-    (w, outputs.toSeq)
+        result.error match
+          case Some(err) =>
+            failure = Some(s"SYSTEM_CONTRACT_CALL_FAILED: system call to $queueAddr failed: $err")
+          case None =>
+            w = InMemoryWorldStateProxy.persistState(result.world)
+            // EIP-7685 request bytes = single-byte type prefix || raw system-call returndata.
+            // Empty returndata (no queued requests) means no bytes are emitted for this type.
+            if result.returnData.nonEmpty then outputs += ByteString(Array(requestType.toByte)) ++ result.returnData
+    failure.toLeft((w, outputs.toSeq))
 
   /** EIP-6110: Parse `DepositEvent(bytes,bytes,bytes,bytes,bytes)` logs emitted by the beacon deposit contract during
-    * block execution and return one request entry per deposit. Event ABI: [pubkey(48)->64,
-    * withdrawal_credentials(32)->64, amount(8)->32, signature(96)->128, index(8)->32]. The canonical request body
-    * concatenates the raw fields (pubkey || wc || amount_le || signature || index_le) = 192 bytes; with the type byte
-    * prefix (0x00) that's 193 bytes per deposit. Returns a single ByteString = 0x00 || concatenated_deposit_data (or
-    * empty if none).
+    * block execution and return one request entry: 0x00 || (pubkey || wc || amount || signature || index) per deposit,
+    * or None if there were none.
+    *
+    * A deposit log whose ABI layout is not exactly the canonical one — 576 bytes, offsets 160/256/320/384/512, sizes
+    * 48/32/8/96/8 — makes the BLOCK invalid (EELS `extract_deposit_data`, EEST `test_invalid_layout` /
+    * `test_invalid_log_length`: INVALID_DEPOSIT_EVENT_LAYOUT). Previously any log of at least 608 bytes was sliced at
+    * fixed positions and any shorter one silently dropped, so a malformed event was misparsed or ignored, never
+    * rejected.
     */
-  def collectDepositRequests(receipts: Seq[Receipt]): Option[ByteString] =
+  def collectDepositRequests(receipts: Seq[Receipt]): Either[String, Option[ByteString]] =
     import BlockExecution.*
-    val buf = scala.collection.mutable.ArrayBuffer.empty[Byte]
-    for
+    val deposits = for
       receipt <- receipts
       log <- receipt.logs
       if log.loggerAddress == DepositContractAddress
       if log.logTopics.headOption.contains(DepositEventSignature)
-    do
-      // Deposit event data layout (offsets + 32-byte length prefix + padded body):
-      //   offsets: 5 * 32 bytes = 160 bytes of ABI offsets [160, 256, 352, 416, 576]
-      //   pubkey: 32-byte length (=48) + 48-byte body + 16-byte pad     = 96 bytes
-      //   wc:     32-byte length (=32) + 32-byte body                    = 64 bytes
-      //   amount: 32-byte length (=8)  + 8-byte body + 24-byte pad       = 64 bytes
-      //   sig:    32-byte length (=96) + 96-byte body + 32-byte pad      = 160 bytes
-      //   index:  32-byte length (=8)  + 8-byte body + 24-byte pad       = 64 bytes
-      // Total = 160 + 96 + 64 + 64 + 160 + 64 = 608 bytes. We slice the raw bodies.
-      val d = log.data
-      if d.length >= 608 then
-        // skip 5x32 offsets = 160
-        val pubkey = d.slice(160 + 32, 160 + 32 + 48) // 48
-        val wc = d.slice(160 + 96 + 32, 160 + 96 + 32 + 32) // 32
-        val amountLE = d.slice(160 + 96 + 64 + 32, 160 + 96 + 64 + 32 + 8) // 8
-        val signature = d.slice(160 + 96 + 64 + 64 + 32, 160 + 96 + 64 + 64 + 32 + 96) // 96
-        val indexLE = d.slice(160 + 96 + 64 + 64 + 160 + 32, 160 + 96 + 64 + 64 + 160 + 32 + 8) // 8
-        buf ++= pubkey ++= wc ++= amountLE ++= signature ++= indexLE
-    if buf.isEmpty then None
-    else Some(ByteString(Array(DepositRequestType.toByte)) ++ ByteString(buf.toArray))
+    yield log.data
+    deposits.toList
+      .traverse(extractDepositData)
+      .left
+      .map(err => s"INVALID_DEPOSIT_EVENT_LAYOUT: $err")
+      .map { bodies =>
+        if bodies.isEmpty then None
+        else Some(bodies.foldLeft(ByteString(Array(DepositRequestType.toByte)))(_ ++ _))
+      }
 
 object BlockExecution:
 
@@ -585,6 +640,35 @@ object BlockExecution:
         (BuilderExitQueueAddress, BuilderExitRequestType)
       )
     else pragueTargets
+
+  /** EIP-6110 `DepositEvent` ABI layout: (offset, size) of pubkey, withdrawal_credentials, amount, signature, index. */
+  private val DepositEventLength = 576
+  private val DepositEventFields: Seq[(Int, Int)] = Seq((160, 48), (256, 32), (320, 8), (384, 96), (512, 8))
+
+  /** EELS `extract_deposit_data`: validate a `DepositEvent` payload's layout and return the unframed 192-byte body. */
+  def extractDepositData(data: ByteString): Either[String, ByteString] =
+    def word(at: Int): BigInt = BigInt(1, data.slice(at, at + 32).toArray)
+    if data.length != DepositEventLength then Left(s"deposit event data length ${data.length} != $DepositEventLength")
+    else
+      DepositEventFields.zipWithIndex
+        .collectFirst {
+          case ((offset, _), i) if word(i * 32) != offset  => s"field $i offset ${word(i * 32)} != $offset"
+          case ((offset, size), i) if word(offset) != size => s"field $i size ${word(offset)} != $size"
+        }
+        .toLeft(
+          DepositEventFields.map { case (offset, size) => data.slice(offset + 32, offset + 32 + size) }.reduce(_ ++ _)
+        )
+
+  /** EIP-7685 `requests_hash`: sha256(sha256(r_0) ++ sha256(r_1) ++ ...), skipping entries that carry only a type byte
+    * (go-ethereum `CalcRequestsHash`). Execution never produces such entries; the skip matters only for CL input.
+    */
+  def computeRequestsHash(requests: Seq[ByteString]): ByteString =
+    val outer = java.security.MessageDigest.getInstance("SHA-256")
+    requests.foreach { request =>
+      if request.length > 1 then
+        outer.update(java.security.MessageDigest.getInstance("SHA-256").digest(request.toArray))
+    }
+    ByteString(outer.digest())
 
   /** EIP-6110: keccak256("DepositEvent(bytes,bytes,bytes,bytes,bytes)") topic signature. */
   val DepositEventSignature: ByteString = ByteString(
