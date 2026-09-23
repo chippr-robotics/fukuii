@@ -487,6 +487,27 @@ class PrecompiledContractsSpec extends AnyFunSuite with Matchers with ScalaCheck
     }
   }
 
+  // EIP-197: a G2 point that is on the twist curve but outside the order-r subgroup is invalid input, so the
+  // precompile FAILS (all call gas consumed), as in go-ethereum/core-geth (bn256 twistPoint.IsOnCurve multiplies by
+  // Order). Input: EEST v5.4.0 stZeroKnowledge/ecpairing_inputs[invalid_g2_subgroup-10] — G1 = infinity, so without
+  // the subgroup check the pairing product is trivially 1 and the call "succeeds".
+  test("BN128Pairing_G2_outside_subgroup_fails", UnitTest, VMTest) {
+    val pair =
+      "0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000192b7e3a0ca8b63592989fe8b2589465703315272bc730644e72e131a029b85045b68181585d00001b86b77538000000000100000000128a694e7017ae1db6a312c9ef648b1a4910a41e684cb554302044a2065f04680df2d76a91278279cf401d431c31876ee9c8ad35070694552ccbd36875541383"
+    val context = buildContext(PrecompiledContracts.Bn128PairingAddr, ByteString(Hex.decode(pair * 2)))
+    val result = vm.run(context)
+    result.error shouldBe defined
+    result.returnData shouldEqual ByteString.empty
+    result.gasRemaining shouldEqual 0
+
+    // The G2 generator (in the subgroup) with the same infinity G1 still pairs to 1.
+    val generatorPair = "0" * 128 +
+      "198e9393920d483a7260bfb731fb5d25f1aa493335a9e71297e485b7aef312c21800deef121f1e76426a00665e5c4479674322d4f75edadd46debd5cd992f6ed090689d0585ff075ec9e99ad690c3395bc4b313370b38ef355acdadcd122975b12c85ea5db8c6deb4aab71808dcb408fe3d1e7690c43d37b4ce6cc0166fa7daa"
+    val ok = vm.run(buildContext(PrecompiledContracts.Bn128PairingAddr, ByteString(Hex.decode(generatorPair))))
+    ok.error shouldBe None
+    ok.returnData shouldEqual PrecompiledContracts.Bn128Pairing.positiveResult
+  }
+
   test("BLAKE2bCompress") {
     val testData = Table(
       ("input", "Expected"),
