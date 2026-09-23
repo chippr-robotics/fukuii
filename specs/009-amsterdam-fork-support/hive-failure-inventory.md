@@ -2033,3 +2033,34 @@ agrees with core-geth. forge's recommendation: TTD-gate it for ETH only; fix ETC
 consensus-change protocol (ancestry-walk BLOCKHASH, weight-gated head move on partial failure, bounded
 `collectOldBranch`). Neither is applied. It does not change any hive verdict (forge/beacon both: INVALID
 is detected before any query of those heights), so it is not on the hive critical path.
+
+## `13c1e5686` measured — engine 40 → 25; Cause B works
+
+engine **378 / 403, 25 fail** (4854b7d20: 40). By name: **cleared 16, new 1.** Failing names pinned in
+`baselines/engine-failing-13c1e5686.txt`. Also on this head: rpc-compat 247/247, graphql 51/52
+(`07_eth_gasPrice`), devp2p identical per suite, sync success. consume-engine / consume-rlp /
+consensus still running at time of writing.
+
+**Cleared (16):** every `CanonicalReOrg=True, Invalid P9` case (StateRoot, Transaction
+Gas/GasPrice/Nonce/Signature/Value × Paris/Cancun = 12) and all 4 `Withdrawals … Re-Org Sync`. This is
+the first time fukuii reorganises a PoS chain over p2p; none of the reorg tests that were passing
+before broke.
+
+**New (1):** `Transaction Nonce, EmptyTxs=False, CanonicalReOrg=False, Invalid P9 (Paris)` — `Unable to
+customize payload: no transactions available for modification`. The client log ends at startup, with no
+engine activity logged: hive's first payload from fukuii had no tx to corrupt. The test passed by
+name on `501368ec9`, `0101b9e36` and `4854b7d20` and does not reach the reorg path. One occurrence —
+recorded as unexplained, watch the next run; not scored as a regression or as a flake yet.
+
+**`CanonicalReOrg=True` still failing (10), three causes:**
+
+| tests | signature | cause |
+|---|---|---|
+| GasLimit / ReceiptsRoot / Timestamp P8 × 2 forks (6) | INVALID detected correctly, FCU back to canonical VALID; then fukuii's **own built payload** fails `NONCE_MISMATCH_TOO_LOW: Got tx nonce 0 but sender in mpt is: 1` → "No clients validated the payload" | **Cause C (new)**: stale already-included tx in the payload after the reorg round-trip. Theory (unverified): partial reorg returned displaced canonical txs to the pool; the FCU back never prunes them; the builder takes them. Routed to `beacon`. |
+| GasUsed P8 × 2 | `Unexpected LatestValidHash` | batch-head misreport — `ce2ac432d` (local, forge sign-off) |
+| Incomplete Transactions, CanonicalReOrg=True × 2 | `Unexpected LatestValidHash` | same signature; expected to be `ce2ac432d` too — prediction |
+
+`StateRoot, EmptyTxs=True, CanonicalReOrg=True` × 2 still time out (no by-hash beacon sync), as
+predicted. The remaining 12 (blob bundle ×5, Request Blob Pooled ×2, FCUv3 Null Beacon Root, In-Order
+Consecutive, GetPayloadBodiesByRange Sidechain, Incomplete Transactions CanonicalReOrg=False ×2) are
+unchanged, pre-existing, and outside this family.
