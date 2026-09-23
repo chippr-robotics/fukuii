@@ -2178,3 +2178,20 @@ the sink's 8551, then queries 8545; this sink bound 8551 at 00:48:58.693 and 854
 needs 8545 first, every other simulator needs 8551 first — so the fix is to finish constructing both
 servers and then issue both binds back to back, shrinking the window from ~240 ms to milliseconds.
 Queued for `conduit`.
+
+## `33b730e75` measured — engine 12 → 11; startup cache confirmed in CI
+
+`0146454e9` broke every hive suite: the adapter-sync step copied `hive/fukuii/` files by name and
+missed the new `aot-train.sh`, so hive's client image build failed (`COPY failed … aot-train.sh`) and
+every suite returned zero results. `33b730e75` copies the whole directory (it is the build context);
+the fix was reproduced locally against that exact context before pushing. My miss: the cache commit
+was validated by building from `hive/fukuii/` directly, never through the CI copy step.
+
+On the fixed head (adds `ed1669bbc`'s readiness-port bind order and the AOT cache):
+
+- engine **392 / 403, 11 fail**, by name vs `14acbe402`: **cleared 1, new 0** —
+  `In-Order Consecutive Payload Execution` (previously `context deadline exceeded` on an FCU call).
+  Pinned in `baselines/engine-failing-33b730e75.txt`.
+- **Engine wall clock 41.3 → 31.6 min (−24%)** with identical test content — the AOT startup cache
+  measured in CI, consistent with the −29% container-start measurement made locally.
+- graphql 51/52 (`07_eth_gasPrice`); devp2p per-suite identical by name (eth 9 / snap 5 / snap2 4).
