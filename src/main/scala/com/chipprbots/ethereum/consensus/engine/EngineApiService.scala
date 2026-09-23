@@ -318,6 +318,7 @@ class EngineApiService(
 
       // Pre-execution header validation (catches modified Number, GasLimit, Timestamp, BlobGas)
       val headerInvalid: Option[String] = parentHeader.flatMap { parent =>
+        lazy val expectedBaseFee = BaseFeeCalculator.calcBaseFee(parent, blockchainConfig)
         if block.header.number != parent.number + 1 then
           Some(s"invalid block number: expected ${parent.number + 1} got ${block.header.number}")
         else if block.header.unixTimestamp <= parent.unixTimestamp then
@@ -357,6 +358,22 @@ class EngineApiService(
           // clause to match geth is a separate, separately-reviewed change.
           if diff >= limit && block.header.gasLimit != parent.gasLimit then
             Some(s"invalid gas limit change: diff=$diff exceeds bound=$limit")
+          // EIP-1559: baseFeePerGas must equal the value computed from the parent (go-ethereum
+          // consensus/misc/eip1559.VerifyEIP1559Header, "invalid baseFee"). Like the gas-limit
+          // check above, this duplicates a BlockHeaderValidatorSkeleton rule (validateBaseFee)
+          // because this path executes with alreadyValidated = true and never reaches the
+          // skeleton. Without it a payload whose baseFee is wrong but whose transactions do not
+          // depend on it (e.g. an empty block) executes to the header's own state root and is
+          // answered VALID. BaseFeeCalculator.calcBaseFee is the same function the skeleton and
+          // this service's payload builder use, so validator and producer cannot disagree.
+          // payloadToBlock always populates baseFee from payload.baseFeePerGas; the None arm is
+          // unreachable today and is rejected rather than skipped should that ever change.
+          else if !block.header.baseFee.contains(expectedBaseFee) then
+            Some(
+              s"INVALID_BASEFEE_PER_GAS: invalid baseFee: have ${block.header.baseFee.getOrElse("none")}, " +
+                s"want $expectedBaseFee, parentBaseFee ${parent.baseFee.getOrElse("none")}, " +
+                s"parentGasUsed ${parent.gasUsed}"
+            )
           // EIP-4844: Validate excessBlobGas against parent.
           // EIP-7691 (Prague) raises target 3→6 blobs; EIP-7892 BPO1/BPO2 raise it 6→8→12.
           // Pass the right target based on the CHILD block's fork timestamp (child is the
