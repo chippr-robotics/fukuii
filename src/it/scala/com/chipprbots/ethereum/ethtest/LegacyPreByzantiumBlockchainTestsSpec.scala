@@ -40,15 +40,29 @@ import com.chipprbots.ethereum.utils.NetworkType
 class LegacyPreByzantiumBlockchainTestsSpec extends EthereumTestsSpec:
   import LegacyPreByzantiumBlockchainTestsSpec.*
 
-  private val networks = Set("Frontier", "Homestead", "EIP150", "EIP158")
+  private val defaultNetworks = Set("Frontier", "Homestead", "EIP150", "EIP158")
+
+  /** `FUKUII_LEGACY_TESTS_NETWORKS` (comma-separated) widens the run to other networks, e.g. to replay the
+    * post-Byzantium copies of a vector. The KnownFailures ratchet is only enforced for the default pre-Byzantium slice.
+    */
+  private val networks: Set[String] =
+    sys.env
+      .get("FUKUII_LEGACY_TESTS_NETWORKS")
+      .map(_.split(",").map(_.trim).filter(_.nonEmpty).toSet)
+      .getOrElse(defaultNetworks)
 
   /** Fork schedule per network. Mirrors `hive/fukuii/fukuii.sh`, which activates EIP-155/160/161 together at
-    * HIVE_FORK_SPURIOUS. `TestConverter.networkToConfig` omits `eip161BlockNumber` for EIP158, so it is added here.
+    * HIVE_FORK_SPURIOUS. `TestConverter.networkToConfig` omits `eip161BlockNumber` for EIP158 through Istanbul, so it
+    * is added here.
     */
   private def configFor(network: String): BlockchainConfig =
-    val cfg = TestConverter.networkToConfig(network, baseBlockchainConfig)
-    val forks =
-      if network == "EIP158" then cfg.forkBlockNumbers.copy(eip161BlockNumber = 0) else cfg.forkBlockNumbers
+    // ConstantinopleFix (= Petersburg) has no case in TestConverter and would silently fall back to Frontier.
+    val converterNetwork = if network == "ConstantinopleFix" then "Constantinople" else network
+    val cfg = TestConverter.networkToConfig(converterNetwork, baseBlockchainConfig)
+    val forks = network match
+      case "EIP158" | "Byzantium" | "Constantinople" | "Istanbul" => cfg.forkBlockNumbers.copy(eip161BlockNumber = 0)
+      case "ConstantinopleFix" => cfg.forkBlockNumbers.copy(eip161BlockNumber = 0, petersburgBlockNumber = 0)
+      case _                   => cfg.forkBlockNumbers
     // `TestConverter` forces NetworkType.ETH. `FUKUII_LEGACY_TESTS_NETWORK_TYPE=ETC` re-runs the slice under the ETC
     // network type, i.e. the configuration ETC mainnet history below Atlantis is executed with.
     val networkType =
@@ -163,12 +177,13 @@ class LegacyPreByzantiumBlockchainTestsSpec extends EthereumTestsSpec:
     failures.take(50).foreach(f => info(s"FAIL $f"))
 
     // Ratchet: no failure outside KnownFailures, and a known failure that starts passing must be removed from the list.
-    val failedNames = failures.map(_.split('\t')(1)).toSet
-    val unexpected = failures.filterNot(f => KnownFailures.contains(f.split('\t')(1)))
-    unexpected shouldBe empty
-    withClue("known failures that now pass (remove them from KnownFailures): ") {
-      (KnownFailures.intersect(ran) -- failedNames).toSeq.sorted shouldBe empty
-    }
+    if networks == defaultNetworks then
+      val failedNames = failures.map(_.split('\t')(1)).toSet
+      val unexpected = failures.filterNot(f => KnownFailures.contains(f.split('\t')(1)))
+      unexpected shouldBe empty
+      withClue("known failures that now pass (remove them from KnownFailures): ") {
+        (KnownFailures.intersect(ran) -- failedNames).toSeq.sorted shouldBe empty
+      }
   }
 
 object LegacyPreByzantiumBlockchainTestsSpec:
@@ -183,14 +198,7 @@ object LegacyPreByzantiumBlockchainTestsSpec:
       (for
         d <- Seq(5, 6, 7, 8, 9, 11)
         n <- Seq("Homestead", "EIP150", "EIP158")
-      yield s"CREATE2_HighNonceDelegatecall_d${d}g0v0_$n").toSet ++
-      // ECRECOVER with s >= secp256k1n (d4: s == n, d5: s == n + 1) must return empty (geth ValidateSignatureValues).
-      // `EllipticCurveRecovery` has no r/s range check and the 15,000 gas surplus is exactly a non-zero SSTORE of the
-      // result, i.e. fukuii recovers an address.
-      (for
-        d <- Seq(4, 5)
-        n <- Seq("Frontier", "Homestead", "EIP150", "EIP158")
-      yield s"CallEcrecover_Overflow_d${d}g0v0_$n").toSet
+      yield s"CREATE2_HighNonceDelegatecall_d${d}g0v0_$n").toSet
 
   /** `EthereumTestHelper` inherits `MockValidatorsAlwaysSucceed`, under which `executeAndValidateBlock` checks only
     * gasUsed and the state root: the receipts root and logs bloom are never compared, so a wrong intermediate state
