@@ -2147,3 +2147,34 @@ write a plan that is not exact. Independently: (1) the real EELS `consume engine
 collectonly:<shard>` selected exactly the planned count for all 16 consume shards — 42,234 and 47,589
 unique ids, 0 duplicates; (2) hive's own Go matcher (`hivesim/testmatch.go`, RE2, case-insensitive)
 put all 14,545 consensus test files plus unseen-directory probes in exactly one shard.
+
+## `14acbe402` measured — engine 25 → 12, no new failures
+
+engine **391 / 403, 12 fail** (13c1e5686: 25). By name: **cleared 13, new 0**. Pinned in
+`baselines/engine-failing-14acbe402.txt`.
+
+- Cause C fix (`7c10050f9`) cleared **all 6** predicted (GasLimit / ReceiptsRoot / Timestamp,
+  CanonicalReOrg=True, P8 × Paris/Cancun).
+- Batch-head fix (`ce2ac432d`) cleared the **2 GasUsed** P8 and — as predicted from the identical
+  `Unexpected LatestValidHash` signature — the **2 Incomplete Transactions, CanonicalReOrg=True**.
+- Unpredicted: **2 blob-ordering tests cleared** (`Single Account, Single Blob` / `Dual Blob`). The
+  executability filter now drops stale blob txs before building; consistent with forge's note that
+  stale blob txs were consuming blob budget. Not yet proven to be the mechanism.
+- `Transaction Nonce, CanonicalReOrg=False, P9 (Paris)` passed again — the 13c1e5686 failure was a
+  single occurrence; still unexplained, now 1 in 5 runs.
+
+The whole `Invalid Missing Ancestor Syncing ReOrg` family is now down to 4: `StateRoot, EmptyTxs=True`
+× 2 (no by-hash beacon sync) and `Incomplete Transactions, CanonicalReOrg=False` × 2.
+
+Remaining 12: the 4 above; `Blob Transaction Ordering, Multiple Clients`; `Blob Transactions On
+Block 1` × 2; `Request Blob Pooled Transactions` × 2; `ForkchoiceUpdatedV3 … Null Beacon Root`;
+`In-Order Consecutive Payload Execution`; `GetPayloadBodiesByRange (Sidechain)`.
+
+Other suites: rpc-compat success; graphql 51/52 (`07_eth_gasPrice`); devp2p per suite eth 9 / snap 5 /
+snap2 4 (unchanged counts); snapsync 6/6. **sync 10/12** — `sync fukuii from fukuii` failed with
+`dial tcp …:8545: connect: connection refused`: the known readiness race. The sync simulator checks
+the sink's 8551, then queries 8545; this sink bound 8551 at 00:48:58.693 and 8545 at 00:48:58.934
+(241 ms). Not caused by this head (no startup code changed). Reordering cannot fix it — the sync sink
+needs 8545 first, every other simulator needs 8551 first — so the fix is to finish constructing both
+servers and then issue both binds back to back, shrinking the window from ~240 ms to milliseconds.
+Queued for `conduit`.
