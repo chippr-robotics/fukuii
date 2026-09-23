@@ -98,9 +98,22 @@ class ChainImporter(
 
           val bestHash = BlockHash(blockchainReader.getBestBlockHeader.map(_.hash.value).getOrElse(ByteString.empty))
           val extendsHead = block.header.parentHash == bestHash
+          // core-geth ForkChoice.ReorgNeeded: once the terminal total difficulty is reached, every imported block is
+          // accepted as head ("all the headers after the transition come from the trusted consensus layer"). There
+          // is no TD to compare post-merge (difficulty 0 everywhere), so the TD fork choice below must not run: it
+          // would keep the first chain in the file on an equal-weight tie. ethereum/tests
+          // bcMultiChainTest/UncleFromSideChain_{Cancun,Prague} expects the last VALID block of the file as head.
+          val postMerge = blockchainConfig.terminalTotalDifficulty.exists { ttd =>
+            blockchainReader
+              .getChainWeightByHash(block.header.parentHash)
+              .getOrElse(ChainWeight.zero)
+              .increase(block.header)
+              .totalDifficulty
+              .value >= ttd
+          }
 
           if alreadyExists then skipped += 1
-          else if !extendsHead && forkChoice.isDefined then
+          else if !extendsHead && !postMerge && forkChoice.isDefined then
             // A side-chain block. Saving it as best — what this loop did for every block — made the LAST block of
             // the file the head whatever its total difficulty, so every ethereum/tests fork/uncle-race vector
             // (lotsOfLeafs, sideChainWithMoreTransactions, uncleBlockAtBlock3afterBlock4, ...) ended on the wrong

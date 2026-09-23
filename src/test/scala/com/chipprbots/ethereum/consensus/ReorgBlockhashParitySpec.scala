@@ -23,6 +23,7 @@ import com.chipprbots.ethereum.ledger.InMemoryWorldStateProxy
 import com.chipprbots.ethereum.mpt.MerklePatriciaTrie
 import com.chipprbots.ethereum.security.SecureRandomBuilder
 import com.chipprbots.ethereum.testing.Tags.*
+import com.chipprbots.ethereum.utils.BlockchainConfig
 
 /** core-geth parity for BLOCKHASH and for the canonical index across reorganisations (ETC).
   *
@@ -153,9 +154,33 @@ class ReorgBlockhashParitySpec extends AnyFlatSpec with Matchers with ScalaFutur
       node.bestHash shouldBe heavierSide.last.hash
       (3 to 5).foreach(n => node.indexed(n) shouldBe Some(heavierSide(n - 3).hash))
 
+  it should "make the last valid block the head once the terminal total difficulty is reached (core-geth)" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in new PostMergeFixture:
+    // ethereum/tests bcMultiChainTest/UncleFromSideChain_{Cancun,Prague} shape. Post-merge every header has
+    // difficulty 0, so two chains always weigh the same and a TD rule can never choose. core-geth's
+    // ForkChoice.ReorgNeeded returns true for any block at or past the TTD: on import, each valid block becomes the
+    // head. The TD fork choice above kept the FIRST chain in the file instead (hive consensus 1143/0 -> 1143/2).
+    val aChain = oracle.extendCanonical(oracle.genesis, 3, difficulty = 0)
+    val bChain = oracle.extendSide(oracle.genesis, 3, difficulty = 0, tag = 0x63)
+
+    node.importFile(aChain ++ bChain)
+    node.bestHash shouldBe bChain.last.hash
+    (1 to 3).foreach(n => node.indexed(n) shouldBe Some(bChain(n - 1).hash))
+
   class Fixture:
     val oracle = new Oracle
     val node = new Node
+
+  /** Both hosts on a chain whose terminal total difficulty is 0, as hive configures post-merge fixtures. */
+  class PostMergeFixture:
+    val oracle = new Oracle:
+      implicit override lazy val blockchainConfig: BlockchainConfig =
+        super.blockchainConfig.copy(terminalTotalDifficulty = Some(BigInt(0)))
+    val node = new Node:
+      implicit override lazy val blockchainConfig: BlockchainConfig =
+        super.blockchainConfig.copy(terminalTotalDifficulty = Some(BigInt(0)))
 
   /** Seals blocks. Canonical blocks are indexed (so its BLOCKHASH answers are the single-chain, core-geth answers);
     * side blocks are stored by hash only and carry no transactions.
