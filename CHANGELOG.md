@@ -29,6 +29,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Comprehensive test suite with 11 tests covering gas cost changes and edge cases
 
 ### Changed
+- Gorgoroth devnet: Olympia-era gas now follows EIP-2537 (G1/G2 MSM discount tables) and EIP-7702
+  (authorization refunds, authority warming, delegation access cost). Gorgoroth datadirs that ran
+  past the Olympia block (15,800,850) with an older build must be reset. ETC mainnet and Mordor are
+  unaffected — Olympia is not active there.
 - Renamed GHCR image path from `chordodes_fukuii` to `fukuii` across all CI/CD, docs, and scripts
 - Modernized CI apt-key pattern to use `signed-by` keyring (replaces deprecated `apt-key add`)
 - Renamed `logback-node2-sync-trace.xml` → `logback-sync-trace.xml` (not node-specific)
