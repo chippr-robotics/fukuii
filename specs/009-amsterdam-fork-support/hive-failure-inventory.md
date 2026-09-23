@@ -2230,3 +2230,32 @@ Logged for later:
 - The weight rule is not TTD-gated (pre-existing).
 - Tests to add: side-chain newPayload storing `BLOCKHASH(n)` above the fork point; post-merge non-canonical-parent
   `oldBranch` bound; Prague BLOCKHASH vs EIP-2935 history slot on a side chain.
+
+## First full pass verdict (run 35809412324 on `33b730e75`)
+
+Not green, and it could not have been: 25 of 28 shards finished; the three consensus-legacy-cancun
+shards were planned ~6x too small (3.48 tests per file assumed, 20.99 measured) and ran into the
+300 min limit — fixed in `829b75d28` (consensus 12 → 17 shards). Fully green shards:
+consensus-consensus, consensus-legacy-01, -05, consume-engine-01, consume-rlp-01, -02.
+
+Every failure in the other 19 shards was bucketed; none was left unexplained. Fixed in the push that
+follows this entry (22 commits, testEssential 4218/1 — the root-only KeyStore test):
+
+| Group | Root cause | Commit(s) |
+|---|---|---|
+| Stack overflow, 1024-deep call/create | client JVM stack 2M; needs >3M | `f648d7785` (-Xss8M) |
+| Reorg / side-chain head + BLOCKHASH | canonical index read instead of ancestry | `9bef158b4` |
+| beacon_root timestamps ≥ 2^63 | signed Long rendered as `0x-…` | `7648cc602` |
+| EIP-7702 (~450, both import paths) | refund for skipped auths, authorities not warmed, warm delegation target 0 not 100, rollback on failed type-4 | `4a222dc7d` `d16f3bc09` `51dffb606` |
+| Prague requests | requestsHash unchecked outside Engine API; failed system call; malformed deposit log; empty predeploy | `6975b4f3c` `7a860aa72` |
+| blobGasUsed / base fee | missing in shared body validator / Engine API path | `1318cfc9e` `7e314b72b` |
+| BLS12-381 MSM | discount tables ≠ EIP-2537 | `a805e6eca` |
+| EIP-2681 / EIP-2935 / sysdeploy | nonce 2^64-1 create; history contract self-deploy on ETH | `8e1e60702` `2d5c0ef62` |
+| MCOPY / genesis / newPayloadV2 | UInt256 wrap; shared storage node dropped; -32602 | `866414f06` `c01e90246` `a5cb1c2d0` |
+| 7702 designators pre-activation (review finding) | resolveCode ungated — ETC mainnet risk | `b12cb6e88` |
+
+Still open (forge, in progress): zero-fee coinbase pre-EIP-161, ECRECOVER edge cases, BN254 G2
+subgroup, EIP-7610 storage collision, chain-file import fork choice, gigabyte memory expansion
+(`randomStatetest94`), DifficultyIsZero, uncle reuse, doubleSelfdestruct. Performance (not
+consensus): `static_Call50000*` and `tstore_wide_address_space` exceed the 30 s Engine API request
+timeout under hive parallelism (503).
