@@ -301,8 +301,20 @@ class BlockPreparator(
     // must not materialise the account). All other zero-value payments still
     // count as touches when withTouch=true — an existing empty account that
     // receives one becomes a deletion candidate via deleteEmptyTouchedAccounts.
+    //
+    // Pre-EIP-161 (noEmptyAccounts = false) a zero-value payment to a NON-EXISTENT account still CREATES it, empty.
+    // That is what core-geth (`StateDB.AddBalance` -> `getOrNewStateObject`) and Besu (`worldState.getOrCreate(
+    // miningBeneficiary)`) do with a zero transaction fee, and nothing clears the empty account before EIP-161, so it
+    // is part of the intermediate state root that pre-Byzantium/pre-Atlantis receipts commit to (and of the account
+    // set later transactions in the block see). ethereum/legacytests callOutput*/callcodeOutput*_Frontier (gasPrice 0,
+    // coinbase absent from pre) pin it. The first branch (`isZeroValueTransferToNonExistentAccount`) has already
+    // returned for this case on every post-EIP-161 block, so the materialisation only ever fires pre-EIP-161.
     if world.isZeroValueTransferToNonExistentAccount(address, value) then world
-    else if value == UInt256.Zero then if withTouch then world.touchAccounts(address) else world
+    else if value == UInt256.Zero then
+      val materialised =
+        if world.accountExists(address) then world
+        else world.saveAccount(address, Account.empty(blockchainConfig.accountStartNonce))
+      if withTouch then materialised.touchAccounts(address) else materialised
     else
       val savedWorld = increaseAccountBalance(address, value)(world)
       if withTouch then savedWorld.touchAccounts(address) else savedWorld
