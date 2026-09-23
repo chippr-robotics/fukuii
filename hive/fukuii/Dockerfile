@@ -15,6 +15,18 @@ COPY mapper.jq /mapper.jq
 COPY enode.sh /hive-bin/enode.sh
 RUN chmod +x /fukuii.sh /hive-bin/enode.sh
 
+# JDK 25 AOT cache (JEP 483/514). hive starts a fresh container for every test, and
+# loading/linking ~12k classes from the assembly is a large share of each startup, so
+# train once here and let every container reuse it (readiness 5.35 s -> 3.8 s median).
+# aot-train.sh boots the node through /fukuii.sh itself (same java, same flags, same
+# -jar path — the JVM ignores a cache whose inputs do not match), stops it once :8545
+# is serving, and deletes everything the run wrote except /app/fukuii/fukuii.aot.
+# fukuii.sh passes -XX:AOTCache only when that file exists.
+# This step must stay AFTER the fukuii.sh COPY. It is keyed on the FROM layer, so a
+# new base image (new jar) always retrains; a cache from another jar is never reused.
+COPY aot-train.sh aot-train-genesis.json /
+RUN chmod +x /aot-train.sh && /aot-train.sh && rm /aot-train.sh
+
 # /version.txt is created by the base image (chipprbots/fukuii:latest) from
 # the actual JAR filename, so a version bump propagates automatically.
 

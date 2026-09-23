@@ -248,14 +248,52 @@ fi
 # (-XX:TieredStopAtLevel=1) so the JVM reaches readiness fast — full C2 optimization
 # never pays off in a single 3000-block sync and only lengthens cold-start, which is
 # what tips slow fukuii-sink sync tests over hive's --client.checktimelimit.
+#
+# JVM_OPTS is shared with the AOT cache below: aot-train.sh trains through this very
+# script, so the image-build training run and every hive run use one flag set by
+# construction (-D properties in $FLAGS may differ; the JVM does not validate those).
+JVM_OPTS=(
+    -Xmx512m
+    -Xms128m
+    -Xss2M
+    -XX:+UseG1GC
+    -XX:TieredStopAtLevel=1
+    -XX:MaxMetaspaceSize=256m
+    -XX:+ExitOnOutOfMemoryError
+    # JDK 25.0.4 mis-links a few i2c/c2i adapter stubs out of an AOT cache and prints
+    # "Failed to link AdapterHandlerEntry ... to its code in the AOT code cache" on every
+    # start, then regenerates them. Harmless but alarming in hive logs; adapters are a
+    # handful of tiny stubs, and not caching them measured no slower (N=20).
+    -XX:+UnlockDiagnosticVMOptions
+    -XX:-AOTAdapterCaching
+)
+
+# ==============================================================================
+# AOT cache (JDK 25, JEP 483/514) — startup time only, no behavioural effect
+# ==============================================================================
+# The image build (Dockerfile -> aot-train.sh) boots this node once with a hive-like
+# post-merge config until the readiness port binds, stops it, and the JVM writes the
+# classes it loaded and linked to $AOT_CACHE. Every hive container then maps them in
+# instead of re-parsing and re-linking ~12k classes out of the 200 MB assembly.
+# Measured (container start -> :8545 accepting, N=20): 5.35 s -> 3.8 s median on a
+# post-merge Prague genesis, 2.7 s -> 1.4 s pre-merge. Most of what remains post-merge is
+# the native KZG trusted-setup load (~1.9 s), which a class cache cannot touch.
+#
+# The cache holds loaded/linked class data and pre-resolved lambda call sites; the
+# application's own static initialisers still run normally, so program semantics are
+# unchanged. The JVM validates the cache against the JDK build, the -jar path, size and
+# mtime, and the GC/heap flags; on ANY mismatch it prints an [aot] error line, ignores
+# the cache (AOTMode defaults to "auto") and starts exactly as without it. A missing
+# file is skipped here explicitly.
+AOT_CACHE=/app/fukuii/fukuii.aot
+if [ -n "$FUKUII_AOT_TRAIN" ]; then
+    JVM_OPTS+=("-XX:AOTCacheOutput=$AOT_CACHE")
+elif [ -f "$AOT_CACHE" ]; then
+    JVM_OPTS+=("-XX:AOTCache=$AOT_CACHE")
+fi
+
 exec java \
-    -Xmx512m \
-    -Xms128m \
-    -Xss2M \
-    -XX:+UseG1GC \
-    -XX:TieredStopAtLevel=1 \
-    -XX:MaxMetaspaceSize=256m \
-    -XX:+ExitOnOutOfMemoryError \
+    "${JVM_OPTS[@]}" \
     $FLAGS \
     -jar /app/fukuii/lib/fukuii-assembly.jar \
     hive
