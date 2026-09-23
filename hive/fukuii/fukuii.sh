@@ -106,6 +106,9 @@ echo "0x7365637265747365637265747365637265747365637265747365637265747365" > "$JW
 FLAGS=""
 FLAGS="$FLAGS -Dfukuii.datadir=$DATADIR"
 FLAGS="$FLAGS -Dfukuii.blockchains.network=hive"
+# The port hive probes for readiness (libhive default 8545; the ethereum/sync
+# sink node is probed on 8551). StdNode binds this port last. See Dockerfile.
+FLAGS="$FLAGS -Dfukuii.network.readiness-port=${HIVE_CHECK_LIVE_PORT:-8545}"
 
 # Chain/network identity
 FLAGS="$FLAGS -Dfukuii.blockchains.hive.chain-id=$CHAIN_ID"

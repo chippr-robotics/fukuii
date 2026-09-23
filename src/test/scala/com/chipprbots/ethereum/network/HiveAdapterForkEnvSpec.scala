@@ -77,7 +77,8 @@ class HiveAdapterForkEnvSpec extends AnyWordSpec with Matchers:
     * "must be a fork-environment key" check rather than added to the canonical set, which stays a literal transcript of
     * the two fixtures.
     */
-  private val NonForkHiveEnv: Set[String] = Set("HIVE_BOOTNODE", "HIVE_MINER", "HIVE_SKIP_POW")
+  private val NonForkHiveEnv: Set[String] =
+    Set("HIVE_BOOTNODE", "HIVE_MINER", "HIVE_SKIP_POW", "HIVE_CHECK_LIVE_PORT")
 
   private val adapterPath = "hive/fukuii/fukuii.sh"
 

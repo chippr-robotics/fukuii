@@ -66,19 +66,15 @@ abstract class BaseNode extends Node:
     startDiscoveryManager()
 
     // Phase 3: API servers (user-facing, ready as early as possible).
-    // Bind the Engine API (8551) BEFORE the ETH JSON-RPC (8545), and await BOTH. Hive's
-    // client-readiness check (and a real CL) probes the ETH RPC, then immediately drives sync
-    // via the Engine API, so 8551 must be listening before 8545 is advertised as ready.
-    //
-    // Both starts below Await their binding, so on return from this pair the order
-    // 8551-then-8545 is a real guarantee rather than a hope: 8545 accepting a connection
-    // implies 8551 already does. That is what hive/fukuii/Dockerfile's HIVE_CHECK_LIVE_PORT
-    // keys on, and both halves are load-bearing --
-    //   * binding 8551 first fixes the original bug: hive declared the node ready on 8545 and
-    //     the sim's engine_newPayloadV3 hit 8551 before it had bound (2026-06-01);
-    //   * awaiting 8545 fixes its mirror image: with readiness moved to 8551 to dodge that,
-    //     the harness's first eth_getBlockByNumber then raced the fire-and-forget 8545 bind.
-    // Fixing either alone just moves the race to the other port.
+    // The Engine API (8551) and ETH JSON-RPC (8545) both bind here, each awaited, in the order chosen further
+    // down. The history matters because this ordering was flipped twice, each flip fixing one hive simulator and
+    // breaking another:
+    //   * 8545 probed, 8551 bound after it: the sim's engine_newPayloadV3 hit 8551 before it had bound (2026-06-01);
+    //   * 8551 bound first, 8545 fire-and-forget: the harness's first eth_getBlockByNumber raced the 8545 bind;
+    //   * 8551 then 8545, both awaited: correct for every simulator that probes 8545, wrong for `ethereum/sync`,
+    //     whose sink node is probed on 8551 (hive sync.go:97). hive/fukuii/Dockerfile's HIVE_CHECK_LIVE_PORT was
+    //     believed to pin the probe to 8545; it does not — libhive reads the port from the simulator's per-client
+    //     parameters only (internal/libhive/api.go), defaulting to 8545.
     //
     // No-op when the Engine API is disabled (e.g. ETC mainnet).
     //
@@ -91,8 +87,16 @@ abstract class BaseNode extends Node:
     // to follow the CL's head before the first peer branch arrives. Also a no-op off a post-merge chain with a live
     // Engine API — see EngineApiBuilder.bindDesignatedHead.
     bindDesignatedHead()
-    startEngineApiServer()
-    startJsonRpcHttpServer()
+    // Whichever port the supervisor probes for readiness must bind LAST, so that "that port accepts a connection"
+    // implies the other one already does. hive decides per simulator which port it probes (libhive defaults to 8545;
+    // the `ethereum/sync` sink node overrides it to 8551), so a fixed order is always wrong for one of them — see
+    // StdNode.engineApiBindsLast. Both starts Await their binding, which is what makes the order a guarantee.
+    if StdNode.engineApiBindsLast(readinessPort, engineApiConfig.port) then
+      startJsonRpcHttpServer()
+      startEngineApiServer()
+    else
+      startEngineApiServer()
+      startJsonRpcHttpServer()
     startJsonRpcWsServer()
     startJsonRpcIpcServer()
 
@@ -183,6 +187,13 @@ abstract class BaseNode extends Node:
     networkConfig.Server.listenAddress,
     networkConfig.Server.advertisedAddress.map(java.net.InetAddress.getByName)
   )
+
+  /** The port an external supervisor probes to decide this node is ready, if one was configured
+    * (`fukuii.network.readiness-port`; the hive adapter sets it from `HIVE_CHECK_LIVE_PORT`). `None` keeps the default
+    * order, Engine API first and JSON-RPC last.
+    */
+  private lazy val readinessPort: Option[Int] =
+    Try(instanceConfig.config.getInt("network.readiness-port")).toOption
 
   private def startSyncController(): Unit =
     syncController ! SyncController.WrappedSyncProtocol(SyncProtocol.Start)
@@ -335,3 +346,15 @@ class StdNode(
 ) extends BaseNode
     with StdMiningBuilder:
   override lazy val instanceConfig: com.chipprbots.ethereum.utils.InstanceConfig = _instanceConfig
+
+object StdNode:
+
+  /** Should the Engine API bind after the ETH JSON-RPC server rather than before it?
+    *
+    * Only when the readiness probe targets the Engine API port. hive's `ethereum/sync` simulator probes 8551 on the
+    * sink node, then calls eth_getBlockByNumber on 8545 about 200 ms later; with 8551 bound first that call lost the
+    * race to the 8545 bind — `connection refused`, measured ~10 ms short on 14acbe402. Every other simulator probes
+    * 8545 and then drives 8551 immediately, which needs the opposite order. Hence: the probed port binds last.
+    */
+  def engineApiBindsLast(readinessPort: Option[Int], engineApiPort: Int): Boolean =
+    readinessPort.contains(engineApiPort)
