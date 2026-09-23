@@ -2259,3 +2259,27 @@ subgroup, EIP-7610 storage collision, chain-file import fork choice, gigabyte me
 (`randomStatetest94`), DifficultyIsZero, uncle reuse, doubleSelfdestruct. Performance (not
 consensus): `static_Call50000*` and `tstore_wide_address_space` exceed the 30 s Engine API request
 timeout under hive parallelism (503).
+
+## Local session close-out (2026-09-23)
+
+- **CI's "Gating Integration Tests" step ran nothing.** `Integration = config("it").extend(Test)`
+  inherited Test's `-l IntegrationTest`, and all six specs that step names are tagged
+  IntegrationTest. Fixed in `fix(build): stop the it config inheriting ...`; with it, the six specs
+  plus `ForkChoiceBlockchainTestsSpec` run 23 pass / 1 ignored (ContractTest, pre-existing `ignore`).
+  `IntegrationTest / test`, `pp`, `testComprehensive` and the nightly now also run the 22 tagged IT
+  suites, including the networking ones (E2E*, *SyncItSpec) that have not run in a long time.
+- **`ForkChoiceBlockchainTestsSpec`** (new, IT): bcMultiChainTest, bcTotalDifficultyTest,
+  bcForkStressTest and bcRandomBlockhashTest through the production import path with fork choice.
+  On `9bef158b4`'s BLOCKHASH/reorg rules: 232/232, 42 reorganisations. Fixtures from
+  `ets/tests` (or `-Dblockchaintests.basePath` / `BLOCKCHAINTESTS_BASEPATH`).
+- **Local engine run on `ed1669bbc`** (hive parallelism 2, host shared with sbt — timing-contended,
+  superseded by the `33b730e75` CI measurement above): 19/403 failed vs 12 on `14acbe402`.
+  Not in the 14acbe402 list: GetPayloadBodies Parallel (Paris), GetPayloadBodiesByRange (Paris),
+  Invalid Missing Ancestor ReOrg StateRoot EmptyTxs=False P9 (Cancun), Syncing ReOrg GasUsed P8
+  CanonicalReOrg=True (Paris), Syncing ReOrg ReceiptsRoot P8 CanonicalReOrg=True (Cancun), Re-Org Back
+  into Canonical Chain Depth=10 Execute Side Payload (Cancun), Sync after 128 blocks Withdrawals on
+  Block 2 Multiple Withdrawal Accounts (Paris). Treat as flake candidates unless a CI run repeats them.
+- A parallel local implementation of the BLOCKHASH/reorg fix was superseded by `9bef158b4` and not
+  pushed; kept on local branch `archive/forge-blockhash-parity-local` (includes extra specs:
+  ReorganiseHeadSelectionSpec, BlockHashAncestrySpec with a snap-backfill-hole case) should anyone
+  want to port those tests onto `AncestorBlockHashes`.
