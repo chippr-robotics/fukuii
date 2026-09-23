@@ -21,6 +21,8 @@ import org.apache.pekko.io.Tcp.CommandFailed
 import org.apache.pekko.io.Tcp.Connected
 
 import scala.concurrent.Future
+import scala.concurrent.duration.FiniteDuration
+import scala.concurrent.duration.DurationInt
 import scala.util.Failure
 import scala.util.Success
 
@@ -31,6 +33,13 @@ import com.chipprbots.ethereum.utils.NodeStatus
 import com.chipprbots.ethereum.utils.ServerStatus
 
 object ServerActor:
+
+  /** How often a listening server whose advertised address was auto-detected (not configured, not `none` mode) re-runs
+    * detection to catch a changed external address (e.g. a dynamic-IP ISP reassignment).
+    */
+  private val RefreshInterval: FiniteDuration = 30.minutes
+
+  private case object RefreshTimerKey
 
   /** Behavior factory for the Typed ServerActor.
     *
@@ -111,16 +120,36 @@ object ServerActor:
       case TcpBound(localAddress) =>
         advertisedAddressOverride match
           case Some(override_) =>
-            finishBinding(ctx, nodeStatusHolder, peerManager, blacklist, localAddress, override_)
+            finishBinding(
+              ctx,
+              nodeStatusHolder,
+              peerManager,
+              blacklist,
+              localAddress,
+              override_,
+              detectionMode,
+              detect,
+              wasAutoDetected = false
+            )
           case None if localAddress.getAddress.isAnyLocalAddress =>
             // detect() can block up to ~13s (real implementation) — run it off the dispatcher thread.
             ctx.pipeToSelf(Future(detect(detectionMode))(ctx.executionContext)) {
               case Success(ip) => DetectedIP(ip)
               case Failure(_)  => DetectedIP(None)
             }
-            waitingForIpDetection(ctx, nodeStatusHolder, peerManager, blacklist, localAddress)
+            waitingForIpDetection(ctx, nodeStatusHolder, peerManager, blacklist, localAddress, detectionMode, detect)
           case None =>
-            finishBinding(ctx, nodeStatusHolder, peerManager, blacklist, localAddress, localAddress.getAddress)
+            finishBinding(
+              ctx,
+              nodeStatusHolder,
+              peerManager,
+              blacklist,
+              localAddress,
+              localAddress.getAddress,
+              detectionMode,
+              detect,
+              wasAutoDetected = false
+            )
 
       case TcpCommandFailed(b) =>
         ctx.log.warn("Binding to {} failed", b.localAddress)
@@ -132,12 +161,24 @@ object ServerActor:
       nodeStatusHolder: AtomicReference[NodeStatus],
       peerManager: TypedActorRef[PeerManagerActor.Command],
       blacklist: Blacklist,
-      localAddress: InetSocketAddress
+      localAddress: InetSocketAddress,
+      detectionMode: DetectionMode,
+      detect: DetectionMode => Option[InetAddress]
   ): Behavior[Command] =
     Behaviors.receiveMessagePartial {
       case DetectedIP(Some(ip)) =>
         ctx.log.info("External IP detected for advertisement: {}", ip.getHostAddress)
-        finishBinding(ctx, nodeStatusHolder, peerManager, blacklist, localAddress, ip)
+        finishBinding(
+          ctx,
+          nodeStatusHolder,
+          peerManager,
+          blacklist,
+          localAddress,
+          ip,
+          detectionMode,
+          detect,
+          wasAutoDetected = true
+        )
 
       case DetectedIP(None) =>
         ctx.log.warn(
@@ -152,7 +193,10 @@ object ServerActor:
           peerManager,
           blacklist,
           localAddress,
-          InetAddress.getLoopbackAddress
+          InetAddress.getLoopbackAddress,
+          detectionMode,
+          detect,
+          wasAutoDetected = true
         )
 
       case TcpCommandFailed(b) =>
@@ -166,7 +210,10 @@ object ServerActor:
       peerManager: TypedActorRef[PeerManagerActor.Command],
       blacklist: Blacklist,
       localAddress: InetSocketAddress,
-      advertisedHost: InetAddress
+      advertisedHost: InetAddress,
+      detectionMode: DetectionMode,
+      detect: DetectionMode => Option[InetAddress],
+      wasAutoDetected: Boolean
   ): Behavior[Command] =
     val advertisedAddress = new InetSocketAddress(advertisedHost, localAddress.getPort)
     ctx.log.info("Listening on {}", localAddress)
@@ -177,21 +224,71 @@ object ServerActor:
       advertisedAddress.getPort
     )
     nodeStatusHolder.getAndUpdate(_.copy(serverStatus = ServerStatus.Listening(advertisedAddress)))
-    listening(ctx, peerManager, blacklist)
+    listening(ctx, peerManager, blacklist, nodeStatusHolder, localAddress, detectionMode, detect, wasAutoDetected)
 
+  /** Handles inbound connections and, when the advertised address was auto-detected (never when explicitly configured,
+    * never in `none` mode), periodically re-runs `detect` to catch a changed external address. A refreshed address only
+    * replaces the advertised one when it validates as public (via [[ExternalIPDetector.isPublicIPv4]]) and differs from
+    * what's currently advertised; the change is logged at INFO.
+    */
   private def listening(
       ctx: ActorContext[Command],
       peerManager: TypedActorRef[PeerManagerActor.Command],
-      blacklist: Blacklist
+      blacklist: Blacklist,
+      nodeStatusHolder: AtomicReference[NodeStatus],
+      localAddress: InetSocketAddress,
+      detectionMode: DetectionMode,
+      detect: DetectionMode => Option[InetAddress],
+      wasAutoDetected: Boolean,
+      refreshInterval: FiniteDuration = RefreshInterval
   ): Behavior[Command] =
-    Behaviors.receiveMessagePartial { case TcpConnected(connection, remoteAddress) =>
-      val addr = remoteAddress.getAddress
-      val isLocal = addr.isLoopbackAddress || addr.isSiteLocalAddress
-      if !isLocal && blacklist.isBlacklisted(PeerManagerActor.PeerAddress(remoteAddress.getHostString)) then
-        ctx.log.debug("Dropping inbound TCP from blacklisted {}", remoteAddress.getHostString)
-        connection ! Close
-      else peerManager ! PeerManagerActor.HandlePeerConnectionCmd(connection, remoteAddress)
-      Behaviors.same
+    Behaviors.withTimers { timers =>
+      if wasAutoDetected && detectionMode != DetectionMode.None then
+        timers.startTimerWithFixedDelay(RefreshTimerKey, RefreshExternalIP, refreshInterval)
+
+      Behaviors.receiveMessagePartial {
+        case TcpConnected(connection, remoteAddress) =>
+          val addr = remoteAddress.getAddress
+          val isLocal = addr.isLoopbackAddress || addr.isSiteLocalAddress
+          if !isLocal && blacklist.isBlacklisted(PeerManagerActor.PeerAddress(remoteAddress.getHostString)) then
+            ctx.log.debug("Dropping inbound TCP from blacklisted {}", remoteAddress.getHostString)
+            connection ! Close
+          else peerManager ! PeerManagerActor.HandlePeerConnectionCmd(connection, remoteAddress)
+          Behaviors.same
+
+        case RefreshExternalIP if wasAutoDetected && detectionMode != DetectionMode.None =>
+          // Same off-thread pattern as the initial detection in waitingForBindingResult, and the same
+          // injected `detect` function — production re-runs the real cascade; tests supply a stub.
+          ctx.pipeToSelf(Future(detect(detectionMode))(ctx.executionContext)) {
+            case Success(ip) => RefreshedIP(ip)
+            case Failure(_)  => RefreshedIP(None)
+          }
+          Behaviors.same
+
+        case RefreshExternalIP =>
+          // Belt-and-suspenders: the timer is never started for a configured address or `none` mode, but
+          // guard the handler too so a stray/test-injected RefreshExternalIP can never re-detect or
+          // overwrite a deliberately configured address.
+          Behaviors.same
+
+        case RefreshedIP(Some(ip)) if ExternalIPDetector.isPublicIPv4(ip) =>
+          val currentHost = nodeStatusHolder.get().serverStatus match
+            case ServerStatus.Listening(addr) => Some(addr.getAddress)
+            case _                            => None
+          if !currentHost.contains(ip) then
+            val refreshedAddress = new InetSocketAddress(ip, localAddress.getPort)
+            nodeStatusHolder.getAndUpdate(_.copy(serverStatus = ServerStatus.Listening(refreshedAddress)))
+            ctx.log.info(
+              "External address refreshed: {} -> {}",
+              currentHost.map(_.getHostAddress).getOrElse("unknown"),
+              ip.getHostAddress
+            )
+          Behaviors.same
+
+        case RefreshedIP(_) =>
+          // None, or a non-public candidate — keep advertising the current address.
+          Behaviors.same
+      }
     }
 
   /** Classic bridge actor: registered as the `Bind` handler with the TCP extension. Lifts Classic `Tcp.Event` messages
@@ -215,6 +312,12 @@ object ServerActor:
       detectionMode: DetectionMode
   ) extends Command
   private[network] case class DetectedIP(ip: Option[InetAddress]) extends Command
+
+  // Periodic external-address refresh, scheduled only for an auto-detected (non-configured, non-`none`-mode)
+  // advertised address. Tests can send RefreshExternalIP directly to trigger a refresh without waiting for
+  // the real timer.
+  private[network] case object RefreshExternalIP extends Command
+  private[network] case class RefreshedIP(ip: Option[InetAddress]) extends Command
 
   // Internal wrappers lifting Classic Tcp.Event messages (delivered via the TcpEventBridge) into the typed ADT.
   private[network] case class TcpBound(localAddress: InetSocketAddress) extends Command
