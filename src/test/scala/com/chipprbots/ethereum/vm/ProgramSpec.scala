@@ -121,6 +121,8 @@ class ProgramSpec extends AnyFlatSpec with Matchers with ScalaCheckPropertyCheck
     val mx = java.lang.management.ManagementFactory.getThreadMXBean.asInstanceOf[com.sun.management.ThreadMXBean]
     val code = ByteString(Array.fill(15000)(JUMPDEST.code))
     Program(code).validJumpDestinations.size shouldBe 15000 // warm-up
+    // getThreadAllocatedBytes returns -1 when unsupported or disabled, which would make the delta ~0 and pass.
+    assume(mx.isThreadAllocatedMemorySupported && mx.isThreadAllocatedMemoryEnabled)
     val id = Thread.currentThread.threadId
     val before = mx.getThreadAllocatedBytes(id)
     val destinations = Program(code).validJumpDestinations
