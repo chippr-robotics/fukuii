@@ -2195,3 +2195,38 @@ On the fixed head (adds `ed1669bbc`'s readiness-port bind order and the AOT cach
 - **Engine wall clock 41.3 → 31.6 min (−24%)** with identical test content — the AOT startup cache
   measured in CI, consistent with the −29% container-start measurement made locally.
 - graphql 51/52 (`07_eth_gasPrice`); devp2p per-suite identical by name (eth 9 / snap 5 / snap2 4).
+
+## First full pass (run 35809412324 on `33b730e75`) — interim, shards still running
+
+Completed shards so far:
+
+| shard | result | genuine failures |
+|---|---|---|
+| consensus-consensus | 1143 / 0 | — |
+| consensus-legacy-05 | 3318 / 0 | — |
+| consensus-legacy-06 | 9 SOE + 3 `RevertInCreateInInit` | SOE fixed by `-Xss8M`; RevertInCreateInInit with forge |
+| consensus-legacy-07 | 16 SOE + 6 Homestead `callOutput*` | SOE fixed by `-Xss8M`; callOutput fixed (pre-EIP-161 zero-fee coinbase) |
+| consume-engine-08 | 3009 / 25 | 5 SOE, 2 ECRECOVER `PointAtInfinity`, 18 Prague/Cancun (below) |
+
+consume-engine-08's 18 are gaps the per-push samples never reached — exactly what the full pass exists to find:
+EIP-7702 authorization nonce edge cases (5, INVALID), MCOPY huge offset size 0/1 (4), EIP-7623 `test_full_gas_consumption`
+type-4 (2), stEIP2930 `variedContext` returning ACCEPTED (2), pre-Cancun payload with blob fields expecting `-32602` (3),
+`tstore_wide_address_space` HTTP 503 (1), plus 1 of the 7702 group. With beacon.
+
+### BLOCKHASH by ancestry (`031454642`) — beacon ETH review: APPROVE-WITH-NOTES
+
+The ancestry lookup also fixes a latent ETH divergence: a side-chain `engine_newPayload` previously resolved BLOCKHASH for
+heights between the fork point and the parent from the canonical index. PoS head selection is unchanged (post-merge
+difficulty 0 ⇒ never `selectedByWeight`). Not byte-identical on PoS in one respect: `collectOldBranch` now returns the
+bounded old branch instead of everything back to genesis when the parent is non-canonical, which changes the
+`ChainReorganised` payload for the tx pool and log subscriptions — a correction.
+
+Logged for later:
+- RPC paths (`StxLedger` eth_call / debug_trace, `EthUserService`, `GraphQLSchema`, `EthSimulateService`) still read
+  BLOCKHASH from the canonical index, so a call or trace against a non-canonical block by hash differs from ancestry.
+  Pre-existing.
+- Missing-ancestor fallback reads the canonical index where the reference returns an empty hash (unreachable without
+  missing data; pre-existing behaviour).
+- The weight rule is not TTD-gated (pre-existing).
+- Tests to add: side-chain newPayload storing `BLOCKHASH(n)` above the fork point; post-merge non-canonical-parent
+  `oldBranch` bound; Prague BLOCKHASH vs EIP-2935 history slot on a side chain.
