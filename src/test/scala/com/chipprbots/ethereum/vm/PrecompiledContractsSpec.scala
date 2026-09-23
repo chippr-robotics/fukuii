@@ -116,6 +116,55 @@ class PrecompiledContractsSpec extends AnyFunSuite with Matchers with ScalaCheck
     invalidResult.returnData shouldEqual ByteString.empty
   }
 
+  // core-geth core/vm/contracts.go ecrecover.Run: `!allZero(input[32:63]) || !crypto.ValidateSignatureValues(v, r, s,
+  // false)` -> empty output. That is r, s in [1, secp256k1n - 1] and v in {27, 28}; high s IS accepted (the Homestead
+  // low-s rule applies to transaction signatures only). A recovery that yields the point at infinity is also empty.
+  // Every case costs the fixed 3000 gas.
+  test("ECDSARECOVER_ValidateSignatureValues", UnitTest, VMTest) {
+    val n = BigInt("fffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364141", 16)
+    val p = BigInt("fffffffffffffffffffffffffffffffffffffffffffffffffffffffefffffc2f", 16)
+    val gx = BigInt("79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798", 16)
+    val h = BigInt("18c547e4f7b0f325ad1e56f57e26c745b09a3e503d86e00e5255ff7f715d3d1c", 16)
+    val r = BigInt("73b1693892219d736caba55bdb67216e485557ea6b6af75f37096c9aa6a5a75f", 16)
+    val s = BigInt("eeb940b1d03b21e36b0e47e79769f095fe2ab855bd91e3a38756b7d75a9c4549", 16) // > n / 2
+    val signer = ByteString(Hex.decode("000000000000000000000000a94f5374fce5edbc8e2a8697c15331677e6ebf0b"))
+
+    def word(x: BigInt): ByteString = ByteUtils.padLeft(ByteString(x.toByteArray).takeRight(32), 32, 0)
+    def run(h: BigInt, v: BigInt, r: BigInt, s: BigInt): ByteString =
+      val context = buildContext(PrecompiledContracts.EcDsaRecAddr, word(h) ++ word(v) ++ word(r) ++ word(s))
+      val result = vm.run(context)
+      (context.startGas - result.gasRemaining) shouldEqual 3000
+      result.returnData
+
+    // The smallest r in [n, p) that is the x-coordinate of a curve point: recovery math would succeed, the range
+    // check must not let it.
+    val rAboveN = Iterator
+      .from(0)
+      .map(k => n + k)
+      .find(x => scala.util.Try(curve.getCurve.decodePoint((Array[Byte](2) ++ word(x).toArray))).isSuccess)
+      .get
+    rAboveN should be < p
+
+    run(h, 28, r, s) shouldEqual signer // high s accepted
+    run(h, 27, r, n - s) shouldEqual signer // the low-s twin recovers the same key
+
+    run(h, 28, r, 0) shouldEqual ByteString.empty
+    run(h, 28, r, n) shouldEqual ByteString.empty
+    run(h, 28, r, n + 1) shouldEqual ByteString.empty
+    run(h, 28, r, BigInt(2).pow(256) - 1) shouldEqual ByteString.empty
+    run(h, 28, 0, s) shouldEqual ByteString.empty
+    run(h, 28, n, s) shouldEqual ByteString.empty
+    run(h, 27, rAboveN, s) shouldEqual ByteString.empty
+    run(h, 28, rAboveN, s) shouldEqual ByteString.empty
+    run(h, 28, p, s) shouldEqual ByteString.empty
+    Seq(BigInt(0), BigInt(1), BigInt(26), BigInt(29), BigInt(27 + 256), BigInt(28) << 248).foreach { v =>
+      run(h, v, r, s) shouldEqual ByteString.empty
+    }
+
+    // Point at infinity: R = G (r = Gx, even y -> v = 27), s = 1, hash = 1 gives Q = r^-1 (s*R - hash*G) = O.
+    run(1, 27, gx, 1) shouldEqual ByteString.empty
+  }
+
   test("SHA256") {
     val bytesGen = Generators.getByteStringGen(0, 256)
     forAll(bytesGen) { bytes =>

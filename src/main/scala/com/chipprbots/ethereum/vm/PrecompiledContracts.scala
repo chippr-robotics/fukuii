@@ -178,6 +178,8 @@ object PrecompiledContracts:
       )
 
   object EllipticCurveRecovery extends PrecompiledContract:
+    private val secp256k1n: BigInt = BigInt(curve.getN)
+
     def exec(inputData: ByteString): Option[ByteString] =
       val data: ByteString = inputData.padToByteString(128, 0.toByte)
       val h = data.slice(0, 32)
@@ -185,8 +187,16 @@ object PrecompiledContracts:
       val r = data.slice(64, 96)
       val s = data.slice(96, 128)
 
-      if hasOnlyLastByteSet(v) then
-        val recovered = Try(ECDSASignature(r, s, v.last).publicKey(h)).getOrElse(None)
+      // core-geth `ecrecover.Run` (core/vm/contracts.go): `crypto.ValidateSignatureValues(v, r, s, homestead =
+      // false)` — r and s must lie in [1, secp256k1n - 1], on every fork. High s is accepted: the Homestead low-s rule
+      // applies to transaction signatures only. Without this, s >= n reduces mod n inside the point multiplication
+      // and r in [n, p) is still a valid x-coordinate, so both recover an address where the reference returns empty.
+      // Precompile-scoped on purpose: transaction signatures are range-checked in StdSignedTransactionValidator.
+      if hasOnlyLastByteSet(v) && inSignatureRange(r) && inSignatureRange(s) then
+        // A recovery landing on the point at infinity encodes as zero bytes, not a 64-byte key: libsecp256k1 fails
+        // it, so it must yield empty output rather than keccak256("")[12:].
+        val recovered =
+          Try(ECDSASignature(r, s, v.last).publicKey(h)).getOrElse(None).filter(_.length == PublicKeyLength)
         Some(
           recovered
             .map { bytes =>
@@ -201,6 +211,12 @@ object PrecompiledContracts:
 
     private def hasOnlyLastByteSet(v: ByteString): Boolean =
       v.dropWhile(_ == 0).size == 1
+
+    private val PublicKeyLength = 64
+
+    private def inSignatureRange(word: ByteString): Boolean =
+      val x = BigInt(1, word.toArray)
+      x > 0 && x < secp256k1n
 
   object Sha256 extends PrecompiledContract:
     def exec(inputData: ByteString): Option[ByteString] =
