@@ -167,6 +167,17 @@ fi
 FLAGS="$FLAGS -Dfukuii.network.rpc.http.enabled=true"
 FLAGS="$FLAGS -Dfukuii.network.rpc.http.interface=0.0.0.0"
 FLAGS="$FLAGS -Dfukuii.network.rpc.http.port=8545"
+# Pekko HTTP request timeout, raised from the shipped 30 s (which matches go-ethereum's
+# auth-RPC write timeout) for hive only. Test vectors such as static_Call50000* and
+# tstore_wide spend ~5e9 gas in one block — far beyond any mainnet block — and under
+# hive's parallel clients a cold newPayload for them measured ~25 s (4 contending JVMs)
+# to ~52 s (8). At 30 s Pekko answers 503 while execution continues. The Engine API
+# spec sets no server-side limit (the consensus client MAY wait longer than its 8 s).
+# Applies to both the JSON-RPC and Engine API servers (system properties override
+# engine-api-system.conf). idle-timeout must stay above request-timeout or the
+# connection is closed under an in-flight request first.
+FLAGS="$FLAGS -Dpekko.http.server.request-timeout=120s"
+FLAGS="$FLAGS -Dpekko.http.server.idle-timeout=180s"
 # `txpool` added 2026-09-20 (#1407). The ethereum/rpc-compat suite exercises
 # txpool_content, txpool_contentFrom and txpool_status; all three are
 # implemented (JsonRpcController.scala:534-538, Apis.TxPool = "txpool", listed
@@ -244,10 +255,14 @@ if [ -n "$HIVE_MINER" ]; then
     FLAGS="$FLAGS -Dfukuii.mining.coinbase=$HIVE_MINER"
 fi
 
-# Hive clients are ephemeral: one short sync run, then discarded. Cap JIT at C1
-# (-XX:TieredStopAtLevel=1) so the JVM reaches readiness fast — full C2 optimization
-# never pays off in a single 3000-block sync and only lengthens cold-start, which is
-# what tips slow fukuii-sink sync tests over hive's --client.checktimelimit.
+# The JIT is NOT capped at C1. An earlier -XX:TieredStopAtLevel=1 bought ~0.5-0.7 s of
+# readiness (AOT cache on; ~1 s without) but ran EVM-heavy blocks 2-4x slower. Measured
+# on 2 pinned CPUs with these flags: static_Call50000 cold newPayload 19.9 s capped vs
+# 7.2 s uncapped (1 JVM), 44 s vs 25 s with 4 JVMs contending — the capped runs are what
+# crossed the Engine API request timeout (HTTP 503) under hive's parallelism. A full
+# 3,000-block sync-sim import is no slower uncapped (12.4 s vs 12.2 s): C2 pays for
+# itself within a few thousand light blocks. The slow fukuii-sink sync runs the cap was
+# meant to help stall in RegularSync for ~90 s with or without it.
 #
 # JVM_OPTS is shared with the AOT cache below: aot-train.sh trains through this very
 # script, so the image-build training run and every hive run use one flag set by
@@ -263,7 +278,6 @@ JVM_OPTS=(
     # all with exact lastblockhash. Reserved, not committed, memory: untouched pages cost nothing.
     -Xss8M
     -XX:+UseG1GC
-    -XX:TieredStopAtLevel=1
     -XX:MaxMetaspaceSize=256m
     -XX:+ExitOnOutOfMemoryError
     # JDK 25.0.4 mis-links a few i2c/c2i adapter stubs out of an AOT cache and prints
