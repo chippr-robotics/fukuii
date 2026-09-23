@@ -494,9 +494,9 @@ class BlockExecution(
     * return data it carried (a REVERT's payload, or nothing) was folded into the requests — EEST
     * `test_system_contract_errors[system_contract_{reverts,throws,out_of_gas}]` imported as VALID.
     *
-    * A target with no deployed code is still skipped rather than failed: go-ethereum does the same (a call to an empty
-    * account succeeds with empty output), and it is the independent guard that keeps these calls inert on chains that
-    * never deploy the predeploys.
+    * An empty predeploy never reaches here in `executeBlock`: [[requireRequestPredeploysPresent]] has already made that
+    * block invalid (SYSTEM_CONTRACT_EMPTY). The `code.nonEmpty` skip below stays as the guard for the direct callers
+    * (tests, proposer paths) that do not run that check.
     */
   private[ledger] def processPragueSystemCallsChecked(
       block: Block,
