@@ -260,10 +260,19 @@ class BlockExecution(
       blockNumber >= blockchainConfig.forkBlockNumbers.olympiaBlockNumber
     if !pragueActive && !etcOlympiaActive then return world
 
-    // Deploy history storage contract only if not already deployed (genesis may pre-deploy it).
-    // Use code presence as the sole guard — identical to applyEip4788's account-existence guard.
-    // Tying deployment to isActivationBlock caused IllegalStateException when processing a
-    // post-activation block on a fresh world: the account was absent so getStorage threw.
+    // ETH (Prague): EIP-2935 "if no code exists at HISTORY_STORAGE_ADDRESS, the call must fail silently".
+    // Exactly as for EIP-4788 (see applyEip4788), the client MUST NOT deploy the contract itself: on ETH it is
+    // deployed by a regular transaction, and go-ethereum's ProcessParentBlockHash is a SYSTEM_ADDRESS call with
+    // value 0, which under EIP-158 returns without creating anything when the account does not exist. Self-deploying
+    // here wrote an account (nonce 1, code) plus a slot the reference does not have, and forked the state root of
+    // the first Prague block on any chain that deploys the contract in-chain rather than in genesis (EEST
+    // test_system_contract_deployment[CancunToPragueAtTime15k-deploy_after_fork / deploy_on_fork_block]).
+    if !etcOlympiaActive && world.getCode(HistoryStorageAddress).isEmpty then return world
+
+    // ETC (Olympia, ECIP-1112): the history contract IS deployed by the client at activation, so deploy it here
+    // if absent (genesis may pre-deploy it). Code presence is the sole guard. Tying deployment to
+    // isActivationBlock caused IllegalStateException when processing a post-activation block on a fresh world:
+    // the account was absent so getStorage threw.
     val w1 = if world.getCode(HistoryStorageAddress).isEmpty then
       val account = world
         .getAccount(HistoryStorageAddress)
