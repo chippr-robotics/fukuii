@@ -2064,3 +2064,61 @@ recorded as unexplained, watch the next run; not scored as a regression or as a 
 predicted. The remaining 12 (blob bundle ×5, Request Blob Pooled ×2, FCUv3 Null Beacon Root, In-Order
 Consecutive, GetPayloadBodiesByRange Sidechain, Incomplete Transactions CanonicalReOrg=False ×2) are
 unchanged, pre-existing, and outside this family.
+
+### `7c10050f9` — Cause C: build payloads only from txs executable on the parent (local)
+
+Beacon traced it in the client log: the stale tx (nonce 0) is **canonical block 14's**. On
+`NewBetterBranch(canonical 6..15)`, `BlockImporter.resolveBranch` returns the displaced blocks' txs to
+the pool *before* the reorg executes; the pool admits them against the best block's state, and the only
+best block where block 14's tx still looks valid is the partially-reorged side tip P7' (reorg failed
+at P8'). The FCU back to 15 removes only block 15's txs. The engine builder is lenient — a failed tx
+does not abort the build — so the stale tx became an INVALID payload rather than a skipped one.
+(Two corrections to my theory: `ConsensusAdapter` re-enqueue is blocks, not txs; and exactly one tx
+survived because of the pool's per-sender dedupe.)
+
+Fix: `EngineApiService.executableAtParent` keeps, per sender, the contiguous nonce run starting at that
+sender's nonce **in the parent's state** (geth's pending/executable rule); drops nonce-too-low, gapped
+and unrecoverable-sender txs; unreadable parent state leaves the list unchanged. Engine FCU build path
+only; `testing_*` builds, the pool, and PoW block generation untouched. New read-only
+`BlockchainReader.getAccountAtStateRoot`. `EngineApiStalePoolTxSpec` (5) fails 3 with the guard
+disconnected. VERIFY 185/0 across engine, testing, fork-choice, invalid-chain and the four ETC specs.
+**Prediction:** the 6 Cause C tests clear. Pool re-add timing in `resolveBranch` and head-change pool
+pruning are logged follow-ups (both touch the pool actor ETC shares).
+
+**forge sign-off on `7c10050f9`: ETC unchanged.** `getAccountAtStateRoot` is read-only
+(`ReadOnlyNodeStorage`) with one caller, `executableAtParent`, reached only from `forkchoiceUpdated`,
+which is served only by the Engine API server (`NodeBuilder.scala:927-932`, `enabled = false` by
+default; no ETC conf sets it). No change under `transactions/`, `consensus/mining/`, `consensus/pow/`,
+resources, or `TestingService`. VERIFY 61/0. geth parity: legacypool `Pending()` is exactly the
+contiguous run from the head-state nonce; worker `commitTransactions` Shifts on nonce-too-low and Pops
+on other failures.
+
+**Lead for the 5 pre-existing blob-bundle failures (not yet investigated):** `selectMempoolTransactions`
+applies the blob-gas cap (`EngineApiService.scala:867-879`) *before* the executability filter, so a
+stale blob tx can consume blob budget and displace a valid one. The failures read "expected 5 blob, got
+6" / "expected 0 blob, got 6" — worth checking against this ordering before assuming another cause.
+
+### consensus on `13c1e5686` — 0 genuine (prediction met)
+
+1,582 run, 5 fail, **all 5 timeout tail** ("terminated by host" / container-startup timeout: `test file
+loader` + `badOpcodes_d19g0v0` × Byzantium/Constantinople/ConstantinopleFix/EIP158). **0 genuine.**
+`testOpcode_1e_Cancun` and `testOpcode_1e_Prague` — the two genuine failures on every earlier run —
+were reached and **PASS**: the CLZ-off-Cancun/Prague fix (`aabf156e8`) is confirmed in hive. Fewer
+tests ran than on `0101b9e36` (2,412), so this is a coverage-limited result, as always for this suite.
+
+### consume-rlp on `13c1e5686` — 0 genuine (prediction met)
+
+2,832 launched of 47,589 collected; 4 fail, **all 4 timeout tail; 0 genuine** (was 5 genuine, all
+`test_all_opcodes`). All 11 `test_all_opcodes` variants reached and **PASS**, including Cancun, London,
+Paris, Prague and Shanghai — the opcode-table fix (`47ebbb9fc` + `aabf156e8` + `4bbc0903f`) is confirmed
+in hive.
+
+### consume-engine on `13c1e5686` — 0 genuine (prediction met)
+
+2,452 launched of 42,234 collected; 4 fail, **all 4 timeout tail; 0 genuine** (was 5 genuine). The five
+previously-genuine failures — `test_all_opcodes` × Cancun/Paris/Prague/Shanghai and
+`test_constant_gas[fork_Paris-BASEFEE]` — all **PASS**. (`test_constant_gas[fork_Prague-PUSH7]` fails
+as timeout tail, not genuinely.)
+
+**All three long suites now show 0 genuine failures on the tests they reach.** They still end red
+because they cannot finish inside CI's time budget (task #14, open with the user).
