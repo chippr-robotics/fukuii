@@ -76,3 +76,55 @@ class ProgramSpec extends AnyFlatSpec with Matchers with ScalaCheckPropertyCheck
     val program = Program(code)
     program.validJumpDestinations shouldBe (0 to CodeSize).toSet
   }
+
+  // The HashSet scan `validJumpDestinations` used before it became a bit set, kept as the oracle.
+  private def referenceJumpDestinations(code: ByteString): Set[Int] =
+    @scala.annotation.tailrec
+    def go(pos: Int, accum: Set[Int]): Set[Int] =
+      if pos < 0 || pos >= code.length then accum
+      else
+        EvmConfig.FrontierOpCodes.byteToOpCode.get(code(pos)) match
+          case Some(pushOp: PushOp) => go(pos + pushOp.i + 2, accum)
+          case Some(JUMPDEST)       => go(pos + 1, accum + pos)
+          case _                    => go(pos + 1, accum)
+    go(0, Set.empty)
+
+  it should "match the HashSet scan on arbitrary code, every PUSH width and code length" taggedAs (
+    UnitTest,
+    VMTest
+  ) in {
+    // JUMPDEST-heavy bytes with every PUSH1..PUSH32 in the mix, so PUSH data hides JUMPDESTs, and code that ends
+    // inside a PUSH's data.
+    val byteGen: Gen[Byte] = Gen.frequency(
+      4 -> Gen.const(JUMPDEST.code),
+      2 -> Gen.choose(0x60, 0x7f).map(_.toByte),
+      1 -> Gen.choose(Byte.MinValue, Byte.MaxValue)
+    )
+    val codeGen: Gen[ByteString] = for
+      n <- Gen.oneOf(Gen.choose(0, 200), Gen.oneOf(63, 64, 65, 127, 128, 129, 4095, 4096, 4097))
+      bytes <- Gen.listOfN(n, byteGen)
+    yield ByteString(bytes.toArray)
+
+    forAll(codeGen, minSuccessful(500)) { code =>
+      val program = Program(code)
+      val expected = referenceJumpDestinations(code)
+      program.validJumpDestinations shouldBe expected
+      (-2 to code.length + 70).foreach { dest =>
+        program.validJumpDestinations.contains(dest) shouldBe expected.contains(dest)
+      }
+    }
+  }
+
+  it should "cost bits, not a hash set, for code full of JUMPDESTs" taggedAs (UnitTest, VMTest) in {
+    // ethereum/tests JUMPDEST_AttackwithJump: 15 KB of JUMPDESTs, and one Program per frame of a 1,024-deep
+    // self-call on Homestead. Bytes allocated by this thread (HotSpot) are deterministic, unlike heap occupancy.
+    val mx = java.lang.management.ManagementFactory.getThreadMXBean.asInstanceOf[com.sun.management.ThreadMXBean]
+    val code = ByteString(Array.fill(15000)(JUMPDEST.code))
+    Program(code).validJumpDestinations.size shouldBe 15000 // warm-up
+    val id = Thread.currentThread.threadId
+    val before = mx.getThreadAllocatedBytes(id)
+    val destinations = Program(code).validJumpDestinations
+    val allocated = mx.getThreadAllocatedBytes(id) - before
+    destinations.size shouldBe 15000
+    allocated should be < 512L * 1024
+  }
