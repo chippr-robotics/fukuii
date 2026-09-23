@@ -132,6 +132,27 @@ class ReorgBlockhashParitySpec extends AnyFlatSpec with Matchers with ScalaFutur
       node.bestHash shouldBe a12.hash
       node.storedBlockhash(a12, slot = 12) shouldBe a10.hash.value
 
+  "Chain-file import (hive consensus simulator path)" should
+    "apply TD fork choice instead of making the last block in the file the head" taggedAs (
+      UnitTest,
+      ConsensusTest
+    ) in new Fixture:
+      // ethereum/tests lotsOfLeafs / sideChainWithMoreTransactions / uncleBlockAtBlock3afterBlock4 shape: the file
+      // lists the canonical chain, then a lighter side block, then (second file) a heavier side branch. core-geth's
+      // `import` (InsertChain -> writeBlockAndSetHead) keeps the heaviest head; ChainImporter used to save every
+      // block as best, so the file's last block won whatever its TD.
+      val aChain = oracle.extendCanonical(oracle.genesis, 4, difficulty = 1000)
+      val lighterSide = oracle.extendSide(aChain(1), 1, difficulty = 500, tag = 0x61) // b3 < a3
+      val heavierSide = oracle.extendSide(aChain(1), 3, difficulty = 1000, tag = 0x62) // c3..c5 > a3..a4
+
+      node.importFile(aChain ++ lighterSide)
+      node.bestHash shouldBe aChain.last.hash
+      node.indexed(3) shouldBe Some(aChain(2).hash)
+
+      node.importFile(heavierSide)
+      node.bestHash shouldBe heavierSide.last.hash
+      (3 to 5).foreach(n => node.indexed(n) shouldBe Some(heavierSide(n - 3).hash))
+
   class Fixture:
     val oracle = new Oracle
     val node = new Node
@@ -201,6 +222,13 @@ class ReorgBlockhashParitySpec extends AnyFlatSpec with Matchers with ScalaFutur
   class Node extends ChainHost:
     def importAll(blocks: List[Block]): BlockImportResult =
       consensusAdapter.evaluateBranch(NonEmptyList.fromListUnsafe(blocks)).unsafeRunSync()
+
+    def importFile(blocks: List[Block]): (Int, Int, Int) =
+      val file = java.nio.file.Files.createTempFile("chain", ".rlp")
+      try
+        java.nio.file.Files.write(file, blocks.flatMap(b => Block.BlockEnc(b).toBytes.toSeq).toArray)
+        chainImporter.importChainFile(file.toString)
+      finally java.nio.file.Files.delete(file)
 
     def importOne(block: Block): BlockImportResult =
       consensusAdapter.evaluateBranchBlock(block).unsafeRunSync()

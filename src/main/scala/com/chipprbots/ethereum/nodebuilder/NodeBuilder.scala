@@ -312,7 +312,15 @@ trait ConsensusBuilder:
     )
 
   lazy val chainImporter: ChainImporter =
-    new ChainImporter(blockchainReader, blockchainWriter, blockExecution, blockValidation)
+    new ChainImporter(
+      blockchainReader,
+      blockchainWriter,
+      blockExecution,
+      blockValidation,
+      Some((block: Block, config: BlockchainConfig) =>
+        consensusAdapter.evaluateBranchBlock(block)(IORuntime.global, config)
+      )
+    )
 
   lazy val consensusAdapter: ConsensusAdapter =
     new ConsensusAdapter(
