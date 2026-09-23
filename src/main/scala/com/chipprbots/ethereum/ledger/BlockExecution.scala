@@ -112,6 +112,7 @@ class BlockExecution(
           .leftMap(BlockExecutionError.MPTError.apply)
         // EIP-4895: Process beacon chain withdrawals (Shanghai+)
         worldAfterWithdrawals = processWithdrawals(block, worldAfterReward)
+        _ <- requireRequestPredeploysPresent(block, worldAfterWithdrawals)
         // Prague: Process system calls for withdrawal/consolidation requests; Amsterdam adds the two
         // EIP-8282 builder predeploys. The system-call outputs (types 0x01, 0x02 and, post-Amsterdam,
         // 0x03, 0x04) and deposit log requests (type 0x00) combine to form the EIP-7685 requestsHash;
@@ -412,6 +413,32 @@ class BlockExecution(
     * consolidations (0x02), then builder deposit (0x03) and builder exit (0x04). A call returning no data contributes
     * nothing. Deposit requests (0x00) are collected separately via collectDepositRequests.
     */
+  /** EIP-7002 / EIP-7251: "If there is no code at <PREDEPLOY_ADDRESS>, the corresponding block MUST be marked invalid."
+    * Checked on the world AFTER transactions and withdrawals, so a block that deploys the contract itself is valid
+    * (EIP-7002 "Empty code failure": "the empty code validation occurs after block-transactions execution"). EEST:
+    * SYSTEM_CONTRACT_EMPTY, test_system_contract_deployment[CancunToPragueAtTime15k-deploy_after_fork-*].
+    *
+    * Emptiness is read from the account's codeHash, which is state-trie data, rather than from the code bytes, so a
+    * node with incomplete code storage cannot misreport a deployed contract as missing and condemn a valid block.
+    *
+    * Same targets, in the same order, as processPragueSystemCalls (which keeps its silent `code.nonEmpty` skip; that is
+    * now unreachable for a block that passes here). Prague-gated: ETC never reaches it.
+    */
+  private[ledger] def requireRequestPredeploysPresent(
+      block: Block,
+      world: InMemoryWorldStateProxy
+  )(implicit blockchainConfig: BlockchainConfig): Either[BlockExecutionError, Unit] =
+    if !blockchainConfig.isPragueTimestamp(block.header.unixTimestamp) then Right(())
+    else
+      BlockExecution
+        .systemCallTargets(block.header.unixTimestamp)
+        .collectFirst {
+          case (addr, _) if world.getAccount(addr).forall(_.codeHash == Account.EmptyCodeHash) => addr
+        }
+        .fold(Right(())) { addr =>
+          Left(BlockExecutionError.ValidationAfterExecError(s"SYSTEM_CONTRACT_EMPTY: no code at system contract $addr"))
+        }
+
   private[ledger] def processPragueSystemCalls(
       block: Block,
       world: InMemoryWorldStateProxy
