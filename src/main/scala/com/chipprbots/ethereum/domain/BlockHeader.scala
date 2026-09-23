@@ -316,22 +316,33 @@ object BlockHeaderImplicits:
           if items.length < 15 then
             throw new Exception(s"BlockHeader cannot be decoded: expected >= 15 items, got ${items.length}")
 
+          // Fixed-size fields must be EXACTLY their size, as go-ethereum/core-geth decode them into fixed arrays
+          // (common.Hash, common.Address, types.Bloom, types.BlockNonce) and reject any other length
+          // ("rlp: input string too short/long"). Accepting e.g. a 31-byte mixHash made a re-encoded copy of a canonical
+          // block hash differently, so it passed as an uncle that is really an ancestor (ethereum/tests bcForgedTest
+          // reusePreviousBlockAsUncleIgnoringLeadingZerosIn{MixHash,Nonce}).
+          def fixed(index: Int, name: String, size: Int): ByteString =
+            val value = byteStringFromEncodeable(items(index))
+            if value.length != size then
+              throw new Exception(s"BlockHeader cannot be decoded: $name must be $size bytes, got ${value.length}")
+            value
+
           val base = BlockHeader(
-            parentHash = BlockHash(byteStringFromEncodeable(items(0))),
-            ommersHash = BlockHash(byteStringFromEncodeable(items(1))),
-            beneficiary = byteStringFromEncodeable(items(2)),
-            stateRoot = TrieRoot(byteStringFromEncodeable(items(3))),
-            transactionsRoot = TrieRoot(byteStringFromEncodeable(items(4))),
-            receiptsRoot = TrieRoot(byteStringFromEncodeable(items(5))),
-            logsBloom = BloomFilter(byteStringFromEncodeable(items(6))),
+            parentHash = BlockHash(fixed(0, "parentHash", 32)),
+            ommersHash = BlockHash(fixed(1, "ommersHash", 32)),
+            beneficiary = fixed(2, "beneficiary", 20),
+            stateRoot = TrieRoot(fixed(3, "stateRoot", 32)),
+            transactionsRoot = TrieRoot(fixed(4, "transactionsRoot", 32)),
+            receiptsRoot = TrieRoot(fixed(5, "receiptsRoot", 32)),
+            logsBloom = BloomFilter(fixed(6, "logsBloom", 256)),
             difficulty = Difficulty(bigIntFromEncodeable(items(7))),
             number = BlockNumber(bigIntFromEncodeable(items(8))),
             gasLimit = GasAmount(bigIntFromEncodeable(items(9))),
             gasUsed = GasAmount(bigIntFromEncodeable(items(10))),
             unixTimestamp = Timestamp(longFromEncodeable(items(11))),
             extraData = byteStringFromEncodeable(items(12)),
-            mixHash = BlockHash(byteStringFromEncodeable(items(13))),
-            nonce = byteStringFromEncodeable(items(14))
+            mixHash = BlockHash(fixed(13, "mixHash", 32)),
+            nonce = fixed(14, "nonce", 8)
           )
 
           items.length match

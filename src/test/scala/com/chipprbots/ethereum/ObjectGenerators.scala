@@ -265,7 +265,9 @@ trait ObjectGenerators:
     gasUsed <- bigIntGen
     unixTimestamp <- intGen.map(_.abs)
     extraData <- byteStringOfLengthNGen(8)
-    mixHash <- byteStringOfLengthNGen(8)
+    // A header's mixHash is a 32-byte hash and its nonce 8 bytes; the decoder rejects any other length, as
+    // go-ethereum/core-geth do. An 8-byte mixHash was never a header any client could have sent.
+    mixHash <- byteStringOfLengthNGen(32)
     nonce <- byteStringOfLengthNGen(8)
   yield BlockHeader(
     parentHash = BlockHash(parentHash),
