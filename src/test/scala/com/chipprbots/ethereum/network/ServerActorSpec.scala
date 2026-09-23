@@ -31,6 +31,12 @@ class ServerActorSpec extends ScalaTestWithActorTestKit with AnyFlatSpecLike wit
 
   private def blacklist: Blacklist = CacheBasedBlacklist.empty(100)
 
+  // Every test injects a stub detector — never the real ExternalIPDetector — so no test in this file can
+  // reach a non-loopback host. `neverCalled` additionally proves detect() is never invoked at all on the
+  // configured-advertised-address path.
+  private def neverCalled: DetectionMode => Option[InetAddress] =
+    _ => fail("ExternalIPDetector.detect should not be called when an advertised address is configured")
+
   "ServerActor" should "transition to listening immediately when an explicit advertised-address is set" taggedAs (
     UnitTest,
     NetworkTest
@@ -39,11 +45,12 @@ class ServerActorSpec extends ScalaTestWithActorTestKit with AnyFlatSpecLike wit
     val pm = TestProbe()
     // TCP probe absorbs the Bind request so no real socket binding happens.
     val tcpProbe = TestProbe()
-    val actor = testKit.spawn(ServerActor.testApply(holder, pm.ref, blacklist, tcpProbe.ref), "server-test-1")
+    val actor =
+      testKit.spawn(ServerActor.testApply(holder, pm.ref, blacklist, tcpProbe.ref, neverCalled), "server-test-1")
 
     val explicit = InetAddress.getByName("1.2.3.4")
     val localAddr = new InetSocketAddress("0.0.0.0", 30303)
-    actor ! ServerActor.StartServer(localAddr, Some(explicit))
+    actor ! ServerActor.StartServer(localAddr, Some(explicit), DetectionMode.Full)
     // The Bind carries the bridge handler ref that receives the Bound/CommandFailed/Connected events.
     val bindHandler = tcpProbe.expectMsgType[Tcp.Bind].handler
     bindHandler ! Tcp.Bound(localAddr)
@@ -66,11 +73,16 @@ class ServerActorSpec extends ScalaTestWithActorTestKit with AnyFlatSpecLike wit
     val holder = freshHolder()
     val pm = TestProbe()
     val tcpProbe = TestProbe()
-    val actor = testKit.spawn(ServerActor.testApply(holder, pm.ref, blacklist, tcpProbe.ref), "server-test-2")
+    // Stub detector: never called for real in this test (the manually-injected DetectedIP below always wins
+    // the race against the actor's own pipeToSelf-driven result), but must never touch the network regardless.
+    val actor = testKit.spawn(
+      ServerActor.testApply(holder, pm.ref, blacklist, tcpProbe.ref, _ => None),
+      "server-test-2"
+    )
 
     val localAddr = new InetSocketAddress("0.0.0.0", 30304)
     val detectedIp = InetAddress.getByName("5.6.7.8")
-    actor ! ServerActor.StartServer(localAddr, None)
+    actor ! ServerActor.StartServer(localAddr, None, DetectionMode.Upnp)
     // Confirm StartServer was processed, then inject TcpBound directly to preserve
     // same-sender ordering with the DetectedIP message that follows immediately.
     // (Using bindHandler would route through TcpEventBridge — a different sender —
@@ -96,10 +108,13 @@ class ServerActorSpec extends ScalaTestWithActorTestKit with AnyFlatSpecLike wit
     val holder = freshHolder()
     val pm = TestProbe()
     val tcpProbe = TestProbe()
-    val actor = testKit.spawn(ServerActor.testApply(holder, pm.ref, blacklist, tcpProbe.ref), "server-test-3")
+    val actor = testKit.spawn(
+      ServerActor.testApply(holder, pm.ref, blacklist, tcpProbe.ref, _ => None),
+      "server-test-3"
+    )
 
     val localAddr = new InetSocketAddress("0.0.0.0", 30305)
-    actor ! ServerActor.StartServer(localAddr, None)
+    actor ! ServerActor.StartServer(localAddr, None, DetectionMode.Upnp)
     // Inject TcpBound directly (same-sender ordering guarantee — see test 2 comment).
     tcpProbe.expectMsgType[Tcp.Bind]
     actor ! ServerActor.TcpBound(localAddr)

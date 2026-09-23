@@ -49,22 +49,27 @@ object ServerActor:
       peerManager: TypedActorRef[PeerManagerActor.Command],
       blacklist: Blacklist
   ): Behavior[Command] =
-    behavior(nodeStatusHolder, peerManager, blacklist, tcpManagerRef = None)
+    behavior(nodeStatusHolder, peerManager, blacklist, tcpManagerRef = None, detect = ExternalIPDetector.detect(_))
 
-  /** Test entry point: injects a TCP manager ref (a TestProbe) to avoid real port binding. */
+  /** Test entry point: injects a TCP manager ref (a TestProbe) to avoid real port binding, and a stub detector so no
+    * test ever reaches the real UPnP/STUN/HTTP cascade. `detect` has no default deliberately — every call site must
+    * state what detection should return, rather than silently inheriting network-touching behaviour.
+    */
   def testApply(
       nodeStatusHolder: AtomicReference[NodeStatus],
       peerManager: TypedActorRef[PeerManagerActor.Command],
       blacklist: Blacklist,
-      tcpManager: ActorRef
+      tcpManager: ActorRef,
+      detect: DetectionMode => Option[InetAddress]
   ): Behavior[Command] =
-    behavior(nodeStatusHolder, peerManager, blacklist, tcpManagerRef = Some(tcpManager))
+    behavior(nodeStatusHolder, peerManager, blacklist, tcpManagerRef = Some(tcpManager), detect = detect)
 
   private def behavior(
       nodeStatusHolder: AtomicReference[NodeStatus],
       peerManager: TypedActorRef[PeerManagerActor.Command],
       blacklist: Blacklist,
-      tcpManagerRef: Option[ActorRef]
+      tcpManagerRef: Option[ActorRef],
+      detect: DetectionMode => Option[InetAddress]
   ): Behavior[Command] =
     Behaviors.setup { ctx =>
       val classicSystem = ctx.system.toClassic
@@ -76,7 +81,7 @@ object ServerActor:
       val tcpBridge: ActorRef =
         ctx.toClassic.actorOf(Props(new TcpEventBridge(ctx.self)), "tcp-event-bridge")
 
-      initial(ctx, nodeStatusHolder, peerManager, blacklist, tcpManager, tcpBridge)
+      initial(ctx, nodeStatusHolder, peerManager, blacklist, tcpManager, tcpBridge, detect)
     }
 
   private def initial(
@@ -85,11 +90,12 @@ object ServerActor:
       peerManager: TypedActorRef[PeerManagerActor.Command],
       blacklist: Blacklist,
       tcpManager: ActorRef,
-      tcpBridge: ActorRef
+      tcpBridge: ActorRef,
+      detect: DetectionMode => Option[InetAddress]
   ): Behavior[Command] =
     Behaviors.receiveMessagePartial { case StartServer(address, advertisedAddress, detectionMode) =>
       tcpManager ! Bind(tcpBridge, address)
-      waitingForBindingResult(ctx, nodeStatusHolder, peerManager, blacklist, advertisedAddress, detectionMode)
+      waitingForBindingResult(ctx, nodeStatusHolder, peerManager, blacklist, advertisedAddress, detectionMode, detect)
     }
 
   private def waitingForBindingResult(
@@ -98,7 +104,8 @@ object ServerActor:
       peerManager: TypedActorRef[PeerManagerActor.Command],
       blacklist: Blacklist,
       advertisedAddressOverride: Option[InetAddress],
-      detectionMode: DetectionMode
+      detectionMode: DetectionMode,
+      detect: DetectionMode => Option[InetAddress]
   ): Behavior[Command] =
     Behaviors.receiveMessagePartial {
       case TcpBound(localAddress) =>
@@ -106,8 +113,8 @@ object ServerActor:
           case Some(override_) =>
             finishBinding(ctx, nodeStatusHolder, peerManager, blacklist, localAddress, override_)
           case None if localAddress.getAddress.isAnyLocalAddress =>
-            // ExternalIPDetector.detect() can block up to ~13s — run it off the dispatcher thread.
-            ctx.pipeToSelf(Future(ExternalIPDetector.detect(detectionMode))(ctx.executionContext)) {
+            // detect() can block up to ~13s (real implementation) — run it off the dispatcher thread.
+            ctx.pipeToSelf(Future(detect(detectionMode))(ctx.executionContext)) {
               case Success(ip) => DetectedIP(ip)
               case Failure(_)  => DetectedIP(None)
             }
@@ -198,10 +205,14 @@ object ServerActor:
     }
 
   sealed trait Command
+  // detectionMode has no default: production always passes the configured mode (StdNode reads
+  // network.server-address.external-ip-detection); an implicit default here previously caused every
+  // call site that omitted it — including several tests — to silently run the full network-touching
+  // UPnP/STUN/HTTP cascade.
   case class StartServer(
       address: InetSocketAddress,
       advertisedAddress: Option[InetAddress] = None,
-      detectionMode: DetectionMode = DetectionMode.Full
+      detectionMode: DetectionMode
   ) extends Command
   private[network] case class DetectedIP(ip: Option[InetAddress]) extends Command
 
