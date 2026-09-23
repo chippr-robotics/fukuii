@@ -255,7 +255,13 @@ fi
 JVM_OPTS=(
     -Xmx512m
     -Xms128m
-    -Xss2M
+    # 8M, not 2M: the EVM recurses on the JVM stack at ~3.1 KB per call level, so a
+    # 1024-deep CALL/CREATE chain needs >3 MB. At 2M, chain import on `main` threw
+    # StackOverflowError on 24 legacy consensus tests (Call1024*, Delegatecall1024*,
+    # LoopCallsDepthThenRevert*, recursiveCreateReturnValue, CallRecursiveBombPreCall) and
+    # the port never opened. Reproduced: 3M still overflows two of them; 4M and 8M pass
+    # all with exact lastblockhash. Reserved, not committed, memory: untouched pages cost nothing.
+    -Xss8M
     -XX:+UseG1GC
     -XX:TieredStopAtLevel=1
     -XX:MaxMetaspaceSize=256m
