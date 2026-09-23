@@ -185,7 +185,8 @@ abstract class BaseNode extends Node:
 
   private def startServer(): Unit = server ! ServerActor.StartServer(
     networkConfig.Server.listenAddress,
-    networkConfig.Server.advertisedAddress.map(java.net.InetAddress.getByName)
+    networkConfig.Server.advertisedAddress.map(java.net.InetAddress.getByName),
+    networkConfig.Server.externalIpDetectionMode
   )
 
   /** The port an external supervisor probes to decide this node is ready, if one was configured

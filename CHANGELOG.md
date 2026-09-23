@@ -8,6 +8,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Configurable external IP detection strategy via `network.server-address.external-ip-detection`
+  (`none` | `upnp` | `full`, default `upnp`); every detected candidate is now validated as a public
+  IPv4 address before being advertised to peers
 - Production release checklist in ETC-HANDOFF.md
 - Shared test helper library for Gorgoroth test scripts (`ops/gorgoroth/test-scripts/lib/test-helpers.sh`)
 - Static nodes configuration support via `static-nodes.json` file in datadir
