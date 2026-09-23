@@ -164,6 +164,22 @@ class BlockchainReader(
       else None
     case EmptyBranch => None
 
+  /** The account at `address` in the state committed to by `stateRoot` — read-only, keyed by the ROOT, not by a block
+    * number.
+    *
+    * Why not [[getAccount]]: that resolves a block NUMBER through the canonical number→hash index, which names the
+    * wrong block whenever the caller holds a specific header that is not (or not yet, or no longer) the one the index
+    * points at. A proposer building on an explicit parent must read that parent's state and nothing else.
+    *
+    * `None` means the account does not exist in that state. A trie node missing from storage throws `MPTException`;
+    * callers decide what "cannot judge" means for them.
+    */
+  def getAccountAtStateRoot(stateRoot: ByteString, address: Address): Option[Account] =
+    MerklePatriciaTrie[Address, Account](
+      rootHash = stateRoot.toArray,
+      source = stateStorage.getReadOnlyStorage
+    ).get(address)
+
   def getAccountProof(branch: Branch, address: Address, blockNumber: BigInt): Option[Vector[MptNode]] =
     branch match
       case BestBranch(_, tipBlockNumber) =>

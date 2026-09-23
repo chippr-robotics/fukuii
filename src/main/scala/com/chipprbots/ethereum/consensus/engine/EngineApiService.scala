@@ -757,7 +757,7 @@ class EngineApiService(
                             val payload = buildBlockOnParent(
                               parent,
                               attrs,
-                              pendingTxsForBlock,
+                              executableAtParent(parent.header, pendingTxsForBlock),
                               ByteString("fukuii".getBytes),
                               proposerGasLimit(parent.header, parent.header.number.value + 1, None),
                               strict = false
@@ -879,6 +879,70 @@ class EngineApiService(
             ._1
         (pendingTxsForBlock, response.blobTxNetworkBytes)
       }
+
+  /** The prefix-by-sender of `txs` that can actually execute on top of `parent`: per sender, only the unbroken run of
+    * nonces starting at that sender's nonce in `parent`'s state. `txs` must already be ordered by (sender, nonce),
+    * which [[selectMempoolTransactions]] guarantees.
+    *
+    * WHY THIS EXISTS. The pool can hold a transaction the chain has already included. Measured on hive `engine`
+    * 13c1e5686, `Invalid Missing Ancestor Syncing ReOrg, GasLimit, EmptyTxs=False, CanonicalReOrg=True, Invalid P8`:
+    * branch resolution re-adds the displaced canonical blocks' transactions to the pool before the reorg executes; the
+    * pool validates them against whatever the best block is when the message lands, which was the partially-reorged
+    * side tip (P7'), where canonical block 14's sender still had nonce 0; the forkchoice back to canonical 15 prunes
+    * only block 15's transactions. Our next payload (block 17) then carried block 14's transaction again and every
+    * client, us included, rejected it: `NONCE_MISMATCH_TOO_LOW: Got tx nonce 0 but sender in mpt is: 1`. The engine
+    * build is LENIENT, so a failed transaction does not abort it — it yields a payload that can never validate.
+    *
+    * go-ethereum cannot get here: its pool resets on every head change and hands the miner only EXECUTABLE transactions
+    * (nonce contiguous from the state nonce), and its miner additionally skips a nonce-too-low transaction rather than
+    * including it. This applies the same executability rule at build time, against the parent's own state root, so it
+    * holds however the pool came to be stale.
+    *
+    * Dropped: nonce below the parent-state nonce (already included, or replaced), a nonce gap (would fail with
+    * NONCE_MISMATCH_TOO_HIGH), and an unrecoverable sender. A trie node missing at the parent root means we cannot
+    * judge, so the list is returned unchanged — exactly the pre-existing behaviour.
+    */
+  def executableAtParent(parent: BlockHeader, txs: Seq[SignedTransaction]): Seq[SignedTransaction] =
+    if txs.isEmpty then txs
+    else
+      try
+        val nextNonce = scala.collection.mutable.Map.empty[Address, BigInt]
+        val (kept, dropped) =
+          txs.foldLeft((Vector.empty[SignedTransaction], Vector.empty[String])) { case ((keep, drop), stx) =>
+            SignedTransaction.getSender(stx) match
+              case None => (keep, drop :+ s"${stx.hash.toHex}: unrecoverable sender")
+              case Some(sender) =>
+                val expected = nextNonce.getOrElseUpdate(
+                  sender,
+                  blockchainReader
+                    .getAccountAtStateRoot(parent.stateRoot.value, sender)
+                    .map(_.nonce.toBigInt)
+                    .getOrElse(blockchainConfig.accountStartNonce.toBigInt)
+                )
+                val nonce = stx.tx.nonce
+                if nonce == expected then
+                  nextNonce.update(sender, expected + 1)
+                  (keep :+ stx, drop)
+                else if nonce < expected then
+                  (keep, drop :+ s"${stx.hash.toHex}: nonce $nonce below state nonce $expected")
+                else (keep, drop :+ s"${stx.hash.toHex}: nonce $nonce leaves a gap after $expected")
+          }
+        if dropped.nonEmpty then
+          log.info(
+            "Proposer build on block {}: excluding {} non-executable pool transaction(s): {}",
+            parent.number,
+            dropped.size,
+            dropped.mkString("; ")
+          )
+        kept
+      catch
+        case e: com.chipprbots.ethereum.mpt.MerklePatriciaTrie.MPTException =>
+          log.warn(
+            "Proposer build on block {}: parent state unreadable ({}); not filtering pool transactions",
+            parent.number,
+            e.getMessage
+          )
+          txs
 
   /** Internal control-flow signal for a strict build whose transaction list could not be applied. Never escapes
     * [[buildBlockOnParent]] — it is caught there and turned into a Left.
