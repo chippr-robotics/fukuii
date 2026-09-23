@@ -99,6 +99,13 @@ jobs:
       # GitHub's 360-minute cap for hosted jobs, so artifacts are always uploaded.
       sim_timelimit: '300m'
       timeout_minutes: 350
+      # Consensus-sim clients import the test chain before opening their RPC port, so this
+      # bounds the heaviest vector. stTimeConsuming/CALLBlake2f_MaxRounds executes 4.29e9
+      # BLAKE2f rounds: ~68 s on an idle 2-vCPU runner, ~140 s with 4 clients contending
+      # (--sim.parallelism 4). The reference client's AVX2 path measured ~100 s under the same
+      # contention on the same host, so 120 s fails on resources, not correctness. A client
+      # that never starts still fails — later.
+      checktimelimit: '300s'
       # A shard that produced almost nothing is a broken shard, not a pass.
       min_tests: 20
       hive_ref: ${{ github.event.inputs.hive_ref || 'master' }}
