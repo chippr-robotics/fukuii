@@ -58,7 +58,7 @@ must become required or be formally re-scoped in a reviewed PR.
 | `hive-engine` | Engine API suite, including invalid-payload rejection — #1402's second required-slice item. ETH/Sepolia path only. | 2026-12-31 | #1402 |  |
 | `hive-consensus` | ethereum/consensus — state-transition conformance. | 2027-03-31 | #1402 |  |
 | `hive-consume-engine` | EELS consume-engine — payload import via Engine API. | 2027-03-31 | #1402 |  |
-| `hive-full` | consume-engine, consume-rlp and consensus run TO COMPLETION, sharded per .github/hive-shards.json (an exact partition, proven by scripts/hive/gen-shards.py). The per-push hive-consume-*/hive-consensus workflows only sample these suites. | 2027-03-31 | #1402 | Runs on a `hive-full` PR label, workflow_dispatch, or nightly — ~28 jobs x ~3.5 h per pass, so not on every push. Verdict comes from the aggregate job, never the workflow conclusion. |
+| `hive-full` | consume-engine, consume-rlp and consensus run TO COMPLETION, sharded per .github/hive-shards.json (an exact partition, proven by scripts/hive/gen-shards.py). The release-PR hive-consume-*/hive-consensus workflows only sample these suites. | 2027-03-31 | #1402 | Release gate: runs on a `hive-full`-labelled PR to main, or workflow_dispatch — ~33 jobs x ~3.5 h per pass, so never per push or nightly. Verdict comes from the aggregate job, never the workflow conclusion. |
 | `hive-rpc-compat` | JSON-RPC method compatibility against the reference corpus. | 2027-03-31 | #1402 |  |
 | `hive-graphql` | GraphQL endpoint conformance. | 2027-03-31 | #1402 |  |
 | `hive-devp2p` | devp2p discovery and RLPx wire conformance. | 2027-03-31 | #1402 |  |

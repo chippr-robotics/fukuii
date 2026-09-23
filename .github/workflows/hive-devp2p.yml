@@ -1,8 +1,12 @@
 name: Hive · devp2p
 
 on:
+  # Release-time only (plus workflow_dispatch). These suites hold a runner for 40-80 min per
+  # push and the org has a small shared runner pool; running them on every staging push
+  # blocked production CI. They gate the staging -> main release PR instead. Targeted runs
+  # belong on a local hive checkout (see docs/testing/hive-local.md).
   pull_request:
-    branches: [main, master, staging]
+    branches: [main, master]
     paths:
       - 'src/**'
       - 'build.sbt'

@@ -13,15 +13,16 @@ name: Hive · full pass
 # verdict per suite: every shard finished, the shards selected exactly the whole suite, and no
 # test failed. A suite is never reported green on a workflow conclusion alone.
 #
-# Cost: ~28 jobs x ~3.5 h per pass. It is therefore NOT run on every push:
-#   * label a PR `hive-full` to run it on that PR's head (and again on each push while labelled),
-#   * workflow_dispatch, or the nightly schedule (both run from the default branch's copy of
-#     this file, per GitHub's rules for those events).
+# Cost: ~33 jobs x ~3.5 h per pass, on a small shared runner pool. It is therefore a
+# RELEASE gate, not a per-push or nightly check:
+#   * label the staging -> main release PR `hive-full` (it re-runs on each push while labelled),
+#   * or workflow_dispatch before cutting a version.
+# Day-to-day targeted runs belong on a local hive checkout (docs/testing/hive-local.md).
 
 on:
   pull_request:
     types: [labeled, synchronize, reopened]
-    branches: [main, master, staging]
+    branches: [main, master]
   workflow_dispatch:
     inputs:
       suites:
@@ -32,8 +33,6 @@ on:
         description: 'ethereum/hive git ref'
         required: false
         default: 'master'
-  schedule:
-    - cron: '0 2 * * *'
 
 permissions:
   contents: read
