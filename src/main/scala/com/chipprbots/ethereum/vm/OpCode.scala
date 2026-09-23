@@ -1024,9 +1024,9 @@ case object LOG3 extends LogOp(0xa3)
 case object LOG4 extends LogOp(0xa4)
 
 object CreateOp:
-  /** EIP-2681 nonce cap. Used only inside the Amsterdam charge decision, as one of EIP-7928's pre-checks: a creation
-    * that would overflow the creator's nonce never reads the destination and is never charged for a new account. It
-    * does NOT introduce a new failure mode on any path.
+  /** EIP-2681 nonce cap. A creation whose creator nonce would overflow it fails in VM.create (creatorNonceOverflowed)
+    * on every fork, as in go-ethereum. Also one of EIP-7928's pre-checks inside the Amsterdam charge decision below:
+    * such a creation never reads the destination and is never charged for a new account.
     */
   val MaxNonce: BigInt = BigInt(2).pow(64) - 1
 

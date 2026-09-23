@@ -353,6 +353,63 @@ class CreateOpcodeSpec extends AnyWordSpec with Matchers with ScalaCheckProperty
       }
     }
 
+    // EIP-2681 / go-ethereum core/vm/evm.go create(): `if nonce+1 < nonce { return ..., gas, ErrNonceUintOverflow }`,
+    // checked after depth and balance and BEFORE the nonce bump and AddAddressToAccessList. Same observable outcome as
+    // the two cases above, plus: the target address stays cold. Oracle: EEST v5.4.0 static CREATE_HighNonce,
+    // CREATE2_HighNonce*, CreateAddressWarmAfterFail[create-high-nonce-*] (creator nonce 0xffffffffffffffff is
+    // unchanged in postState and CREATE's result slot stays 0).
+    "creator nonce is 2^64 - 1 (EIP-2681)" should {
+      val maxNonce = UInt256(BigInt(2).pow(64) - 1)
+      val world = fxt.initWorld.saveAccount(
+        fxt.creatorAddr,
+        fxt.initWorld.getGuaranteedAccount(fxt.creatorAddr).copy(nonce = maxNonce)
+      )
+      val context: PC = fxt.context.copy(world = world, originalWorld = world)
+      val result = CreateResult(context = context, opcode = opcode)
+      val wouldBeAddress = opcode match
+        case CREATE  => world.increaseNonce(fxt.creatorAddr).createAddress(fxt.creatorAddr)
+        case CREATE2 => world.create2Address(fxt.creatorAddr, fxt.salt, fxt.createCode.code)
+
+      "not modify world state (the creator's nonce is not incremented)" in {
+        result.world shouldEqual context.world
+        result.world.getGuaranteedAccount(fxt.creatorAddr).nonce shouldEqual maxNonce
+      }
+
+      "return 0" in {
+        result.returnValue shouldEqual 0
+      }
+
+      "consume only the CREATE base cost" in {
+        result.stateOut.gasUsed shouldEqual G_create + (if withHashCost then
+                                                          G_sha3word * wordsForBytes(fxt.contractCode.code.size)
+                                                        else 0)
+      }
+
+      "leave the would-be address cold" in {
+        result.stateOut.accessedAddresses should not contain wouldBeAddress
+      }
+
+      "leave return buffer empty and step forward" in {
+        result.stateOut.returnData shouldEqual ByteString.empty
+        result.stateOut.pc shouldEqual result.stateIn.pc + 1
+      }
+    }
+
+    "creator nonce is 2^64 - 2 (the last nonce that may still create)" should {
+      val nonce = UInt256(BigInt(2).pow(64) - 2)
+      val world = fxt.initWorld.saveAccount(
+        fxt.creatorAddr,
+        fxt.initWorld.getGuaranteedAccount(fxt.creatorAddr).copy(nonce = nonce)
+      )
+      val context: PC = fxt.context.copy(world = world, originalWorld = world)
+      val result = CreateResult(context = context, opcode = opcode)
+
+      "create the contract and bump the nonce to 2^64 - 1" in {
+        (result.returnValue should not).equal(UInt256.Zero)
+        result.world.getGuaranteedAccount(fxt.creatorAddr).nonce shouldEqual UInt256(BigInt(2).pow(64) - 1)
+      }
+    }
+
     "initialization includes SELFDESTRUCT opcode" should {
       val gasRequiredForInit = fxt.initWithSelfDestruct.linearConstGas(config) + G_newaccount
       val gasRequiredForCreation = gasRequiredForInit + G_create

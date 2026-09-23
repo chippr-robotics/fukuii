@@ -171,7 +171,8 @@ class VM[W <: WorldStateProxy[W, S], S <: Storage[S]](
     val (result, newAddress) =
       try
         val pair =
-          if !isValidCall(context) then (invalidCallResult(context, Set.empty, Set.empty), Address(0))
+          if !isValidCall(context) || creatorNonceOverflowed(context) then
+            (invalidCallResult(context, Set.empty, Set.empty), Address(0))
           else
             require(context.recipientAddr.isEmpty, "recipient address must be empty for contract creation")
             require(context.doTransfer, "contract creation will always transfer funds")
@@ -318,6 +319,20 @@ class VM[W <: WorldStateProxy[W, S], S <: Storage[S]](
   protected def isValidCall(context: PC): Boolean =
     context.endowment <= context.world.getBalance(context.callerAddr) &&
       context.callDepth <= EvmConfig.MaxCallDepth
+
+  /** EIP-2681: a creation whose creator nonce would overflow uint64 fails before it starts. go-ethereum core/vm/evm.go
+    * create() returns ErrNonceUintOverflow with the gas unchanged, after the depth and balance checks and BEFORE
+    * bumping the nonce and adding the address to the access list -- the same observable outcome as those two checks,
+    * which is why it shares their InvalidCall result (CreateOp then restores the pre-bump world, pushes 0, keeps the
+    * address cold, and charges only the CREATE base cost).
+    *
+    * Unconditional, as in go-ethereum, core-geth and Besu: no fork gate. `context.world` already carries the creator's
+    * bumped nonce (CreateOp.exec and the tx-level upfront step both increment before calling create), so overflow shows
+    * up as a bumped nonce above 2^64 - 1. At tx level it cannot: StdSignedTransactionValidator rejects tx nonces >=
+    * 2^64 - 1, so the bumped sender nonce is at most 2^64 - 1.
+    */
+  private def creatorNonceOverflowed(context: PC): Boolean =
+    context.world.getAccount(context.callerAddr).exists(_.nonce.toBigInt > CreateOp.MaxNonce)
 
   private def invalidCallResult(
       context: PC,
