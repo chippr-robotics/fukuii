@@ -1762,9 +1762,13 @@ case object MCOPY extends OpCode(0x5e, 3, 0, _.G_verylow):
     else
       // Word copy cost: G_copy (3) * ceil(size / 32)
       val copyCost = state.config.feeSchedule.G_copy * wordsForBytes(size)
-      // Memory expansion: max of src+size and dst+size
-      val srcEnd = src + size
-      val dstEnd = dst + size
-      val maxEnd = if srcEnd > dstEnd then srcEnd else dstEnd
+      // Memory expansion to max(src, dst) + size, computed in unbounded BigInt. `src + size` on UInt256 wraps
+      // modulo 2^256: MCOPY(dst = 0, src = 2^256 - 1, size = 1) then priced as an expansion to 1 byte, the frame
+      // did not run out of gas, and `memory.load` was handed an offset no Int can hold (EEST
+      // `MCOPY_memory_expansion_cost[huge_*]`). go-ethereum: `memoryMcopy` → calcMemSize64(max(dst, src), size),
+      // whose overflow is ErrGasUintOverflow — an out-of-gas halt, which `calcMemCost`'s MaxMemory cap reproduces.
+      val srcEnd = src.toBigInt + size.toBigInt
+      val dstEnd = dst.toBigInt + size.toBigInt
+      val maxEnd = srcEnd.max(dstEnd)
       val memCost = state.config.calcMemCost(state.memory.size, BigInt(0), maxEnd)
       copyCost + memCost

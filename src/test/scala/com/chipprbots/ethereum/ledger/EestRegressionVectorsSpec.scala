@@ -39,7 +39,8 @@ class EestRegressionVectorsSpec extends AnyWordSpec with Matchers:
     "genesis-shared-storage-nodes.json" -> "genesis storage tries that share a node both keep it",
     "eip7685-requests.json" -> "EIP-6110 deposit-log layout, EIP-7002/7251 system-call failure, EIP-7685 requestsHash",
     "eip7702-authorizations.json" -> "EIP-7702 per-tuple validity, authority warming, refunds and delegation access costs",
-    "eip7702-failed-tx-rollback.json" -> "a failed Type-4 transaction keeps its authorizations and their refund"
+    "eip7702-failed-tx-rollback.json" -> "a failed Type-4 transaction keeps its authorizations and their refund",
+    "mcopy-huge-offsets.json" -> "MCOPY memory expansion with offsets near 2^256"
   )
 
   private def hx(s: String): Array[Byte] = Hex.decode(s.stripPrefix("0x"))
