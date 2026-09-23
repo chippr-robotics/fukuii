@@ -427,10 +427,17 @@ class BlockPreparator(
       extraWarmAddresses = authorityWarmAddresses
     )
 
+    // A failed top-level frame reverts to the world as it stood when the frame was ENTERED. Pre-Amsterdam that is
+    // after the EIP-7702 authorizations: they are applied before the call snapshot (go-ethereum `execute`), so a
+    // reverting or exceptionally-halting Type-4 transaction still leaves its delegations and nonce bumps in place
+    // (EEST `test_full_gas_consumption[type_4]`, `test_set_code_to_sstore[invalid-*]`). For every other transaction
+    // type `worldAfterAuths` IS `checkpointWorldState`. Amsterdam keeps its existing rollback target, which spec 009
+    // owns (EIP-2780's pre-execution phase is rolled back as a whole).
+    val rollbackWorld = if amsterdamActive then checkpointWorldState else worldAfterAuths
     val resultWithErrorHandling: PR =
       if result.error.isDefined then
         // Rollback to the world before transfer was done if an error happened
-        result.copy(world = checkpointWorldState, addressesToDelete = Set.empty, logs = Nil)
+        result.copy(world = rollbackWorld, addressesToDelete = Set.empty, logs = Nil)
       else result
 
     // EIP-7702: Add auth refund to the VM's refund counter before capping
@@ -440,7 +447,17 @@ class BlockPreparator(
       else resultWithErrorHandling
     val evmConfigForTx = EvmConfig.forBlock(blockHeader.number.value, blockHeader.unixTimestamp, blockchainConfig)
 
-    val totalGasToRefundBase = calcTotalGasToRefund(stx, resultWithAuthRefund, blockHeader.number.value)
+    // go-ethereum applies the refund counter on EVERY exit path (`st.gasRemaining += st.calcRefund()` after the call,
+    // regardless of `vmerr`). A failed frame reverts the refunds it accrued itself, but the EIP-7702 existing-authority
+    // refund was accrued before the frame's snapshot and survives it. `calcTotalGasToRefund` drops `gasRefund` on
+    // error — correct for every refund the VM produced, wrong for this one — so it is capped (EIP-3529, /5) and
+    // added back here. Zero for every non-Type-4 transaction and for every Amsterdam one.
+    val totalGasToRefundVm = calcTotalGasToRefund(stx, resultWithAuthRefund, blockHeader.number.value)
+    val authRefundOnFailure: BigInt =
+      if result.error.isDefined && authExistingAccountRefund > 0 then
+        ((gasLimit.value - totalGasToRefundVm) / 5).min(authExistingAccountRefund)
+      else BigInt(0)
+    val totalGasToRefundBase = totalGasToRefundVm + authRefundOnFailure
     val executionGasBase = gasLimit - GasAmount(totalGasToRefundBase)
 
     if DebugTrace.enabledForBlock(blockHeader.number.value) then
