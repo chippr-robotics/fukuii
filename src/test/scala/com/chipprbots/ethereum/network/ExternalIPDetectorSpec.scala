@@ -291,3 +291,73 @@ class ExternalIPDetectorSpec extends AnyFlatSpec with Matchers:
       ExternalIPDetector.tryStun(List("127.0.0.1" -> port)) shouldBe None
     }
   }
+
+  // ---------------------------------------------------------------------
+  // detect(mode, ...) — injected probe functions, no real network at all
+  // ---------------------------------------------------------------------
+
+  private class CountingProbe(result: Option[InetAddress]) extends (() => Option[InetAddress]):
+    var callCount: Int = 0
+    def apply(): Option[InetAddress] =
+      callCount += 1
+      result
+
+  "detect" should "call nothing and return None in mode None" taggedAs (UnitTest, NetworkTest) in {
+    val upnp = new CountingProbe(Some(v4(8, 8, 8, 8)))
+    val stun = new CountingProbe(Some(v4(8, 8, 8, 8)))
+    val http = new CountingProbe(Some(v4(8, 8, 8, 8)))
+    val local = new CountingProbe(Some(v4(8, 8, 8, 8)))
+
+    ExternalIPDetector.detect(DetectionMode.None, upnp, stun, http, local) shouldBe None
+    upnp.callCount shouldBe 0
+    stun.callCount shouldBe 0
+    http.callCount shouldBe 0
+    local.callCount shouldBe 0
+  }
+
+  it should "call only upnp and local-interface in mode Upnp, never stun or http" taggedAs (
+    UnitTest,
+    NetworkTest
+  ) in {
+    val upnp = new CountingProbe(None)
+    val stun = new CountingProbe(Some(v4(8, 8, 8, 8)))
+    val http = new CountingProbe(Some(v4(8, 8, 8, 8)))
+    val local = new CountingProbe(Some(v4(9, 9, 9, 9)))
+
+    val result = ExternalIPDetector.detect(DetectionMode.Upnp, upnp, stun, http, local)
+    result shouldBe Some(v4(9, 9, 9, 9))
+    upnp.callCount shouldBe 1
+    local.callCount shouldBe 1
+    stun.callCount shouldBe 0
+    http.callCount shouldBe 0
+  }
+
+  it should "call every step in order in mode Full, stopping at the first public result" taggedAs (
+    UnitTest,
+    NetworkTest
+  ) in {
+    val upnp = new CountingProbe(None)
+    val stun = new CountingProbe(Some(v4(1, 2, 3, 4)))
+    val http = new CountingProbe(Some(v4(8, 8, 8, 8)))
+    val local = new CountingProbe(Some(v4(9, 9, 9, 9)))
+
+    val result = ExternalIPDetector.detect(DetectionMode.Full, upnp, stun, http, local)
+    result shouldBe Some(v4(1, 2, 3, 4))
+    upnp.callCount shouldBe 1
+    stun.callCount shouldBe 1
+    http.callCount shouldBe 0 // never reached — stun already produced a result
+    local.callCount shouldBe 0
+  }
+
+  it should "fall through every step in mode Full when each returns None" taggedAs (UnitTest, NetworkTest) in {
+    val upnp = new CountingProbe(None)
+    val stun = new CountingProbe(None)
+    val http = new CountingProbe(None)
+    val local = new CountingProbe(None)
+
+    ExternalIPDetector.detect(DetectionMode.Full, upnp, stun, http, local) shouldBe None
+    upnp.callCount shouldBe 1
+    stun.callCount shouldBe 1
+    http.callCount shouldBe 1
+    local.callCount shouldBe 1
+  }

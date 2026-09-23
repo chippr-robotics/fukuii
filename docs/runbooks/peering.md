@@ -271,7 +271,27 @@ If behind NAT/router:
    fukuii.network.automatic-port-forwarding = true
    ```
 
-**D. Manually add peers**
+**D. Configure external IP detection**
+
+The address Fukuii advertises to peers (in its enode URL) is controlled by
+`fukuii.network.server-address.external-ip-detection`:
+
+- `upnp` (default) — asks the local gateway router for its WAN address, then falls back to a local
+  network interface address. No traffic leaves the LAN.
+- `full` — adds a STUN probe and an HTTPS probe ahead of the local-interface fallback. Use this behind
+  carrier-grade NAT (CGNAT) or when UPnP is disabled on the gateway.
+- `none` — no detection at all; you must set `advertised-address` yourself.
+
+Every detected candidate is validated as a public IPv4 address before it is advertised. If detection
+fails entirely (or the mode is `none`), Fukuii advertises loopback and logs a warning. In containers or
+enterprise deployments where outbound STUN/HTTPS probing is undesirable, set the address explicitly and
+skip detection:
+
+```hocon
+fukuii.network.server-address.advertised-address = "203.0.113.10"
+```
+
+**E. Manually add peers**
 
 If discovery fails, you can manually specify peers in your config:
 
@@ -287,7 +307,7 @@ Find bootstrap nodes from:
 - Community resources
 - Other node operators
 
-**E. Reset known nodes**
+**F. Reset known nodes**
 
 If `knownNodes.json` is corrupted:
 

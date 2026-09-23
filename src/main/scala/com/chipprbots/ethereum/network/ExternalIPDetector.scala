@@ -25,14 +25,36 @@ import org.jupnp.support.igd.callback.GetExternalIP
 
 import com.chipprbots.ethereum.utils.Logger
 
+/** How aggressively [[ExternalIPDetector.detect]] is allowed to probe for this node's external address.
+  *
+  *   - `None` — no detection at all; only an explicitly configured advertised address is ever used.
+  *   - `Upnp` — UPnP IGD, then a local network interface. No traffic leaves the LAN.
+  *   - `Full` — UPnP, then STUN, then an HTTPS probe, then a local network interface.
+  *
+  * Configured via `network.server-address.external-ip-detection`.
+  */
+enum DetectionMode:
+  case None, Upnp, Full
+
+object DetectionMode:
+  def fromString(s: String): DetectionMode = s.trim.toLowerCase match
+    case "none" => DetectionMode.None
+    case "upnp" => DetectionMode.Upnp
+    case "full" => DetectionMode.Full
+    case other =>
+      throw new IllegalArgumentException(
+        s"Invalid value '$other' for network.server-address.external-ip-detection " +
+          "(expected one of: none, upnp, full)"
+      )
+
 /** Detects this node's externally reachable IPv4 address via a best-effort cascade of independent probes, validating
   * every candidate before it is returned.
   *
-  * Cascade order:
+  * Cascade order (bounded by the configured [[DetectionMode]]):
   *   1. UPnP IGD (GetExternalIP) — asks the local gateway router for its WAN address 2. STUN (RFC 5389 Binding Request)
-  *      — fast UDP round trip against a public STUN server 3. HTTPS probe — a plaintext IPv4 literal returned by a
-  *      public "what's my IP" endpoint 4. First non-loopback, non-link-local IPv4 address bound to a local network
-  *      interface
+  *      — fast UDP round trip against a public STUN server (`full` mode only) 3. HTTPS probe — a plaintext IPv4 literal
+  *      returned by a public "what's my IP" endpoint (`full` mode only) 4. First non-loopback, non-link-local IPv4
+  *      address bound to a local network interface
   *
   * Every candidate — regardless of which step produced it — is validated with [[isPublicIPv4]] before being accepted;
   * private-use, loopback, link-local, CGNAT, documentation, benchmarking, multicast, and reserved ranges are all
@@ -40,7 +62,7 @@ import com.chipprbots.ethereum.utils.Logger
   * further.
   *
   * Called once at startup when no explicit advertised address is configured (see
-  * `network.server-address.advertised-address`).
+  * `network.server-address.advertised-address` and `network.server-address.external-ip-detection`).
   */
 object ExternalIPDetector extends Logger:
 
@@ -63,11 +85,23 @@ object ExternalIPDetector extends Logger:
   private val HttpTimeoutMs = 2000
   private val HttpMaxBodyBytes = 64
 
-  /** Returns the best available externally reachable address, or None if every step failed or produced only non-public
-    * candidates.
+  /** Returns the best available externally reachable address for the given [[DetectionMode]], or None if every step
+    * permitted by that mode failed, produced only non-public candidates, or the mode is `None`.
+    *
+    * The four probe steps are individually injectable (each defaults to the real implementation) so tests can observe
+    * call order and count without touching the network.
     */
-  def detect(): Option[InetAddress] =
-    tryUpnp().orElse(tryStun()).orElse(tryHttp()).orElse(tryLocalInterface())
+  def detect(
+      mode: DetectionMode = DetectionMode.Full,
+      upnpProbe: () => Option[InetAddress] = () => tryUpnp(),
+      stunProbe: () => Option[InetAddress] = () => tryStun(),
+      httpProbe: () => Option[InetAddress] = () => tryHttp(),
+      localInterfaceProbe: () => Option[InetAddress] = () => tryLocalInterface()
+  ): Option[InetAddress] =
+    mode match
+      case DetectionMode.None => None
+      case DetectionMode.Upnp => upnpProbe().orElse(localInterfaceProbe())
+      case DetectionMode.Full => upnpProbe().orElse(stunProbe()).orElse(httpProbe()).orElse(localInterfaceProbe())
 
   /** True only for an IPv4 address outside every reserved/private/documentation/multicast range. Never true for an IPv6
     * address. Checked as explicit prefix comparisons on the 32-bit value, not via `InetAddress`'s own

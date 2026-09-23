@@ -47,6 +47,7 @@ import com.chipprbots.ethereum.domain.ChainWeight
 import com.chipprbots.ethereum.domain.TrieRoot
 import com.chipprbots.ethereum.ledger.InMemoryWorldStateProxy
 import com.chipprbots.ethereum.mpt.MerklePatriciaTrie
+import com.chipprbots.ethereum.network.DetectionMode
 import com.chipprbots.ethereum.network.ForkResolver
 import com.chipprbots.ethereum.network.KnownNodesManager
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor
@@ -335,7 +336,9 @@ abstract class CommonFakePeer(peerName: String, fakePeerCustomConfig: FakePeerCu
     for
       _ <- IO {
         peerManager ! PeerManagerActor.StartConnectingCmd
-        server ! ServerActor.StartServer(listenAddress)
+        // listenAddress is a concrete (non-wildcard) address, so detection is never attempted regardless of
+        // mode — DetectionMode.None documents that intent explicitly.
+        server ! ServerActor.StartServer(listenAddress, detectionMode = DetectionMode.None)
       }
       _ <- retryUntilWithDelay(IO(nodeStatusHolder.get()), 1.second, 5) { status =>
         status.serverStatus == Listening(listenAddress)

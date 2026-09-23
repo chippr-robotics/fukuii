@@ -7,6 +7,7 @@ import scala.concurrent.duration.*
 import com.typesafe.config.Config as TypesafeConfig
 
 import com.chipprbots.ethereum.db.dataSource.RocksDbConfig
+import com.chipprbots.ethereum.network.DetectionMode
 import com.chipprbots.ethereum.network.NetworkProtocolConfig
 import com.chipprbots.ethereum.network.PeerManagerActor.FastSyncHostConfiguration
 import com.chipprbots.ethereum.network.PeerManagerActor.PeerConfiguration
@@ -96,6 +97,8 @@ class InstanceConfig(val config: TypesafeConfig, val instanceId: String = "defau
         if serverConfig.hasPath("advertised-address") && !serverConfig.getIsNull("advertised-address") then
           Some(serverConfig.getString("advertised-address"))
         else None
+      val externalIpDetectionMode: DetectionMode =
+        DetectionMode.fromString(serverConfig.getString("external-ip-detection"))
 
     val peer: PeerConfiguration = new PeerConfiguration:
       private val peerConfig = networkConfig.getConfig("peer")
