@@ -169,6 +169,12 @@ class EngineApiController(
                 Some(InvalidParams -> "newPayloadV2 post-Shanghai payload must include withdrawals")
               case 2 if !isShanghaiPayload && hasWithdrawals =>
                 Some(InvalidParams -> "newPayloadV2 pre-Shanghai payload must not include withdrawals")
+              // go-ethereum NewPayloadV2: a pre-Cancun payload carrying either EIP-4844 header field is a params
+              // error, not an INVALID block (EEST `test_invalid_pre_fork_block_with_blob_fields`, -32602).
+              case 2 if payload.excessBlobGas.isDefined =>
+                Some(InvalidParams -> "newPayloadV2: non-nil excessBlobGas pre-cancun")
+              case 2 if payload.blobGasUsed.isDefined =>
+                Some(InvalidParams -> "newPayloadV2: non-nil blobGasUsed pre-cancun")
               case 1 if hasWithdrawals =>
                 Some(InvalidParams -> "newPayloadV1 must not include withdrawals")
               case 1 if isShanghaiPayload =>

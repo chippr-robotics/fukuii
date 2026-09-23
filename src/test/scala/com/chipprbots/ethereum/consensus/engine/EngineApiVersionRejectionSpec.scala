@@ -172,6 +172,49 @@ class EngineApiVersionRejectionSpec extends AnyWordSpec with Matchers:
       response.result shouldBe None
     }
 
+    // Guard: newPayloadV2 for a Shanghai (pre-Cancun) payload that carries EIP-4844 header fields is a params error
+    // (go-ethereum NewPayloadV2), not an INVALID block. EEST cancun/eip4844_blobs/test_excess_blob_gas_fork_transition
+    // ::test_invalid_pre_fork_block_with_blob_fields[ShanghaiToCancunAtTime15k] — all three field combinations.
+    "return -32602 when newPayloadV2 carries blobGasUsed and/or excessBlobGas before Cancun" taggedAs (
+      UnitTest,
+      ConsensusTest
+    ) in {
+      def shanghaiPayload(blobFields: (String, JString)*): JObject = JObject(
+        List(
+          "parentHash" -> JString(zeroHash32),
+          "feeRecipient" -> JString(zeroAddr20),
+          "stateRoot" -> JString(zeroHash32),
+          "receiptsRoot" -> JString(zeroHash32),
+          "logsBloom" -> JString(zeroBloom),
+          "prevRandao" -> JString(zeroHash32),
+          "blockNumber" -> JString("0x1"),
+          "gasLimit" -> JString("0x1c9c380"),
+          "gasUsed" -> JString("0x0"),
+          "timestamp" -> JString("0x" + ShanghaiTs.toHexString),
+          "extraData" -> JString("0x"),
+          "baseFeePerGas" -> JString("0x3b9aca00"),
+          "blockHash" -> JString(zeroHash32),
+          "transactions" -> JArray(Nil),
+          "withdrawals" -> JArray(Nil)
+        ) ++ blobFields*
+      )
+      val variants = Seq(
+        Seq("blobGasUsed" -> JString("0x0")),
+        Seq("excessBlobGas" -> JString("0x0")),
+        Seq("blobGasUsed" -> JString("0x0"), "excessBlobGas" -> JString("0x0"))
+      )
+      val controller = new EngineApiController(stubService)
+      variants.foreach { fields =>
+        val request =
+          JsonRpcRequest("2.0", "engine_newPayloadV2", Some(JArray(List(shanghaiPayload(fields*)))), Some(JInt(1)))
+        val response = controller.handleRequest(request).unsafeRunSync()
+        withClue(fields.map(_._1).mkString("+")) {
+          response.error.map(_.code) shouldBe Some(-32602)
+          response.result shouldBe None
+        }
+      }
+    }
+
     // Guard: forkchoiceUpdatedV3 with a non-zero parentBeaconBlockRoot before Cancun activation
     // is an UNSUPPORTED_FORK — the CL sent a Cancun-shaped attribute to a pre-Cancun chain.
     "return -38005 when forkchoiceUpdatedV3 carries parentBeaconBlockRoot before Cancun" taggedAs (
