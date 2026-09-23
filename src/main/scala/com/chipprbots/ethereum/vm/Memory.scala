@@ -10,8 +10,30 @@ object Memory:
 
   def empty: Memory = new Memory(ByteString(), 0)
 
-  // JVM arrays are zero-initialised, and fromArrayUnsafe does not copy: one allocation, not two.
-  private def zeros(size: Int): ByteString = ByteString.fromArrayUnsafe(new Array[Byte](size))
+  /** One page of zeros, shared by every zero run a load returns. Nothing ever writes it: `fromArrayUnsafe` is its only
+    * reference, and a ByteString exposes its bytes only by copying (`toArray`, `copyToArray`) or read-only
+    * (`asByteBuffer`).
+    */
+  private val ZeroPageSize = 1 << 20
+  private val zeroPage: ByteString = ByteString.fromArrayUnsafe(new Array[Byte](ZeroPageSize))
+
+  /** `size` zero bytes as views of the shared page: no byte array is allocated, whatever the size.
+    *
+    * Why: a CALL's input is a load of the caller's memory, and it stays reachable for as long as the callee runs.
+    * ethereum/tests `static_Call1MB1024Calldepth` (d1) passes 1,000,000 bytes of never-written memory down every level
+    * of a ~550-deep STATICCALL recursion; materialising each input kept ~550 MB live and killed hive's `-Xmx512m`
+    * client with `OutOfMemoryError` at chain import. The content is the same zero bytes either way.
+    */
+  private def zeros(size: Int): ByteString =
+    if size <= ZeroPageSize then zeroPage.take(size)
+    else
+      val pages = ByteString.newBuilder
+      var left = size
+      while left > 0 do
+        val n = math.min(left, ZeroPageSize)
+        pages ++= zeroPage.take(n)
+        left -= n
+      pages.result()
 
 /** Volatile memory with 256 bit address space. Every mutating operation on a Memory returns a new updated copy of it.
   *
@@ -81,7 +103,9 @@ class Memory private (private val underlying: ByteString, val size: Int):
       (prefix, n - prefix.length, new Memory(underlying, math.max(this.size, end)))
 
   /** Returns a ByteString of a given size starting at the given offset of the Memory. The memory is automatically
-    * expanded when reading previously uninitialised regions; only the returned bytes are allocated.
+    * expanded when reading previously uninitialised regions. Nothing is copied: the stored part is a slice of
+    * `underlying` (never written after construction — `store` builds a new array), and the unwritten part is a view of
+    * the shared zero page.
     */
   private def doLoad(offset: UInt256, size: Int): (ByteString, Memory) =
     if size <= 0 then (ByteString.empty, this)
