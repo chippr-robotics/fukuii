@@ -145,7 +145,9 @@ class BlockExecution(
     InMemoryWorldStateProxy(
       evmCodeStorage = evmCodeStorage,
       blockchain.getBackingMptStorage(block.header.number.value),
-      (number: BigInt) => blockchainReader.getBlockHeaderByNumber(number).map(_.hash.value),
+      // BLOCKHASH walks this block's own ancestry (core-geth GetHashFn), never the canonical index — see
+      // AncestorBlockHashes for why the index can name a different chain at the heights being asked about.
+      AncestorBlockHashes.forBlock(block.header, blockchainReader),
       accountStartNonce = blockchainConfig.accountStartNonce,
       stateRootHash = parentHeader.stateRoot.value,
       noEmptyAccounts = EvmConfig.forBlock(block.header.number.value, blockchainConfig).noEmptyAccounts,

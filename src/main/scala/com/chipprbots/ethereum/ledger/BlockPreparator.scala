@@ -731,7 +731,9 @@ class BlockPreparator(
         InMemoryWorldStateProxy(
           evmCodeStorage = evmCodeStorage,
           mptStorage = blockchain.getReadOnlyMptStorage(),
-          getBlockHashByNumber = (number: BigInt) => blockchainReader.getBlockHeaderByNumber(number).map(_.hash.value),
+          // Mined blocks must answer BLOCKHASH exactly as every importer will: by the ancestry of the block being
+          // built (core-geth GetHashFn), not by the canonical index. See AncestorBlockHashes.
+          getBlockHashByNumber = AncestorBlockHashes.forBlock(block.header, blockchainReader),
           accountStartNonce = blockchainConfig.accountStartNonce,
           stateRootHash = parent.stateRoot.value,
           noEmptyAccounts = EvmConfig.forBlock(block.header.number.value, blockchainConfig).noEmptyAccounts,

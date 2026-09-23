@@ -233,6 +233,51 @@ class ConsensusImplSpec extends AnyFlatSpec with Matchers with ScalaFutures with
       _ shouldBe a[SelectedNewBestBranch]
     }
 
+  it should "leave the PoS designated-head arm's partial-failure handling as it was (best -> last executed)" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in new ConsensusSetup:
+    // Guard for the ETC BLOCKHASH/index parity change: only a branch selected BY WEIGHT gets the core-geth head rule.
+    // Equal-TD branch b3'..b4' (same height, same TD as b3..b4, so NOT heavier) is selected solely because the bound
+    // holder names b4'; b4' fails, so only b3' executes. b3' is lighter than the old head b4 — the weight rule would
+    // keep b4, but this arm is ETH's and must still move best to b3', exactly as before.
+    val equalTdBranch: List[Block] = BlockHelpers.generateChain(2, initialChain(2))
+    val holder = new DesignatedHead.LateBound
+    holder.bind(DesignatedHead(() => Some(equalTdBranch.last.hash.value)))
+    setFailingBlock(equalTdBranch(1))
+
+    whenReady(consensusWith(Some(holder)).evaluateBranch(NonEmptyList.fromListUnsafe(equalTdBranch)).unsafeToFuture()) {
+      _ shouldBe a[BranchExecutionFailure]
+    }
+    blockchainReader.getBestBlock shouldBe Some(equalTdBranch.head)
+
+  it should "keep the heavier old head when a weight-selected reorg executes only a lighter prefix (core-geth)" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in new ConsensusSetup:
+    // The weight-selected counterpart of the case above, with the ETC-shaped (unbound) holder: b3' at difficulty 1,
+    // b4'/b5' heavy. The whole branch outweighs b3..b4, so it is selected and executed; b4' fails, and b3' alone does
+    // not outweigh b4. core-geth's writeBlockAndSetHead keeps b4, and the index at height 3 goes back to b3.
+    val branch: List[Block] = BlockHelpers.generateChain(
+      3,
+      initialChain(2),
+      b =>
+        b.copy(header =
+          b.header.copy(difficulty =
+            Difficulty(if b.number.value == initialChain(2).number.value + 1 then 1 else 10000000)
+          )
+        )
+    )
+    setFailingBlock(branch(1))
+
+    whenReady(consensus.evaluateBranch(NonEmptyList.fromListUnsafe(branch)).unsafeToFuture()) {
+      _ shouldBe a[BranchExecutionFailure]
+    }
+    blockchainReader.getBestBlock shouldBe Some(initialBestBlock)
+    blockchainReader.getBlockHeaderByNumber(initialChain(3).number.value).map(_.hash) shouldBe Some(
+      initialChain(3).hash
+    )
+
   // SCALA 3 MIGRATION: Moved ConsensusSetup inside class to access MockFactory context
   class ConsensusSetup extends EphemBlockchainTestSetup:
     override lazy val blockExecution: BlockExecution = stub[BlockExecution]

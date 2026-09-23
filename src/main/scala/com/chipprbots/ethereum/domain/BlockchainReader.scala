@@ -132,6 +132,13 @@ class BlockchainReader(
       yield block
     case EmptyBranch | BestBranch(_, _) => None
 
+  /** The raw canonical number→hash index entry at `number`, whatever the current best block is — including entries
+    * above it, which [[getHashByBlockNumber]] hides. For code that has to read, and later put back, the index exactly
+    * as it stands (`ConsensusImpl.reorganise`).
+    */
+  def getCanonicalHashByNumber(number: BigInt): Option[BlockHash] =
+    blockNumberMappingStorage.get(number).map(BlockHash.apply)
+
   /** Returns a block hash for the block at the given height if any */
   def getHashByBlockNumber(branch: Branch, number: BigInt): Option[BlockHash] = branch match
     case BestBranch(_, tipBlockNumber) =>

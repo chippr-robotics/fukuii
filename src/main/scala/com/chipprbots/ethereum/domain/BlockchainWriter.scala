@@ -99,6 +99,30 @@ class BlockchainWriter(
       }
       batch.and(appStateStorage.putBestBlockInfo(BlockInfo(targetHash.value, targetNumber))).commit()
 
+  /** Rewrite part of the canonical number→hash index in ONE atomic batch: write `put` (and re-point the transaction
+    * locations of those blocks at them), delete the `remove` heights, and move the best block if `newBest` is given.
+    *
+    * The index half of core-geth's `reorg()` + `writeHeadBlock` (core/blockchain.go): after it, the index is exactly
+    * the head's ancestry — no entry from another chain below the head, none at all above it. `ConsensusImpl.reorganise`
+    * uses it both to adopt a new head and to put the old head's entries back when it keeps the old head.
+    */
+  def rewriteCanonicalIndex(
+      put: Seq[(BigInt, BlockHash)],
+      remove: Seq[BigInt],
+      newBest: Option[(BlockHash, BigInt)],
+      reader: BlockchainReader
+  ): Unit =
+    val withPuts = put.foldLeft(blockNumberMappingStorage.emptyBatchUpdate) { case (acc, (number, hash)) =>
+      val withNumber = acc.and(blockNumberMappingStorage.put(number, hash.value))
+      reader.getBlockBodyByHash(hash).fold(withNumber)(body => withNumber.and(saveTxsLocations(hash, body)))
+    }
+    val withRemoves = remove.foldLeft(withPuts)((acc, number) => acc.and(blockNumberMappingStorage.remove(number)))
+    newBest
+      .fold(withRemoves) { case (hash, number) =>
+        withRemoves.and(appStateStorage.putBestBlockInfo(BlockInfo(hash.value, number)))
+      }
+      .commit()
+
   /** Promote a block previously stored by hash only (sidechain) to the canonical chain. Walks back from `headHash`
     * along parent pointers until it meets the current canonical chain (i.e. finds a header whose number→hash mapping
     * already points to it) and rewrites number→hash for every block on the new branch. Receipts are already indexed by

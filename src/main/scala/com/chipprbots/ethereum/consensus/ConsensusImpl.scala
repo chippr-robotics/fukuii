@@ -7,6 +7,7 @@ import cats.effect.unsafe.IORuntime
 import scala.annotation.tailrec
 
 import com.chipprbots.ethereum.consensus.Consensus.*
+import com.chipprbots.ethereum.consensus.ConsensusImpl.ForkPoint
 import com.chipprbots.ethereum.consensus.engine.DesignatedHead
 import com.chipprbots.ethereum.consensus.engine.InvalidChainReporter
 import com.chipprbots.ethereum.domain.Block
@@ -178,9 +179,14 @@ class ConsensusImpl(
         // named? If so we follow it, because on PoS the EL does not choose — it follows the CL. If the branch turns
         // out to contain an invalid block, `reorganise` stops at it and reports it, which is exactly how the Engine
         // API learns to answer INVALID for a CL head it cannot reach.
-        if newBranchWeight(branch, parentWeight) > currentBestBlockWeight ||
-          leadsToDesignatedHead(branch)
-        then reorganise(currentBestBlockNumber, branch, parentWeight, parentHash)
+        //
+        // `selectedByWeight` is carried into `reorganise`: only a branch chosen by the PoW rule gets the core-geth
+        // head/index handling there. A branch chosen solely by the designated head (post-merge, where no branch is
+        // ever heavier) keeps its pre-existing handling exactly.
+        val selectedByWeight = newBranchWeight(branch, parentWeight) > currentBestBlockWeight
+        if selectedByWeight || leadsToDesignatedHead(branch)
+        then
+          reorganise(currentBestBlockNumber, currentBestBlockWeight, branch, parentWeight, parentHash, selectedByWeight)
         else KeptCurrentBestBranch
       case None =>
         ConsensusError(
@@ -225,17 +231,17 @@ class ConsensusImpl(
   )
 
   // Execute-first reorganise — reference client pattern (go-ethereum/Besu/Nethermind).
-  // Old canonical blocks are NOT deleted before execution. On failure, the old canonical
-  // state is completely untouched — no revertChainReorganisation needed or possible.
-  // executeAndValidateBlocks writes blockNumberMappingStorage[N] = new_hash for each
-  // successfully executed block, so canonical pointers are updated atomically by execution.
-  // On partial failure the chain advances to the last successful block; old stale entries
-  // remain in DB (same as reference clients — GC'd by RocksDB compaction).
+  // Old canonical blocks are NOT deleted before execution, and their state is never touched.
+  // executeAndValidateBlocks writes blockNumberMappingStorage[N] = new_hash for each successfully executed block;
+  // `settleHead` then decides, after execution, which head the node keeps and makes the canonical index exactly that
+  // head's ancestry (core-geth writeBlockAndSetHead + reorg()). Old blocks stay in the DB either way.
   private def reorganise(
       bestBlockNumber: BigInt,
+      bestBlockWeight: ChainWeight,
       newBranch: NonEmptyList[Block],
       parentWeight: ChainWeight,
-      parentHash: BlockHash
+      parentHash: BlockHash,
+      selectedByWeight: Boolean
   )(implicit
       blockchainConfig: BlockchainConfig
   ): ConsensusResult =
@@ -245,14 +251,19 @@ class ConsensusImpl(
       bestBlockNumber
     )
 
-    // Read old branch data without modifying DB — populate SelectedNewBestBranch return value
-    val oldBlocksData = collectOldBranch(parentHash, bestBlockNumber)
+    // Read-only, and BEFORE execution overwrites any of it: where the branch leaves the canonical chain, and what the
+    // canonical index holds above that point.
+    val fork = locateFork(parentHash, newBranch.head.number.value - 1)
+    val oldCanonical: List[(BigInt, BlockHash)] =
+      ((fork.number + 1) to bestBlockNumber).toList.flatMap(n =>
+        blockchainReader.getCanonicalHashByNumber(n).map(n -> _)
+      )
+    val oldBlocksData = collectOldBranch(oldCanonical)
 
     // Execute new branch against the unchanged parent canonical state
     val (executedBlocks, maybeError) = blockExecution.executeAndValidateBlocks(newBranch.toList, parentWeight)
 
-    // Advance bestKnown to furthest successfully executed block (even on partial failure)
-    executedBlocks.lastOption.foreach(b => blockchainWriter.saveBestKnownBlocks(b.block.hash, b.block.number.value))
+    settleHead(executedBlocks, parentWeight, bestBlockNumber, bestBlockWeight, fork, oldCanonical, selectedByWeight)
 
     maybeError match
       case None =>
@@ -321,24 +332,116 @@ class ConsensusImpl(
         newBranch.foreach(block => BlockMetrics.measure(block, blockchainReader.getBlockByHash))
       case _ => ()
 
-  // Read-only traversal of the current canonical chain from fromNumber down to (exclusive) parent.
-  // Does NOT delete or modify any DB state — used solely to populate SelectedNewBestBranch.
-  private def collectOldBranch(parent: BlockHash, fromNumber: BigInt): List[BlockData] =
+  /** Decide which head the node keeps after executing (a prefix of) a new branch, and make the canonical index exactly
+    * that head's ancestry. The index half of core-geth's `writeBlockAndSetHead` + `reorg()` (core/blockchain.go).
+    *
+    * Nothing executed: nothing was written, nothing changes.
+    *
+    * Branch chosen by the designated head alone (`selectedByWeight` false — the post-merge PoS arm, never taken on a
+    * PoW chain): best moves to the last executed block, exactly as before this method existed. That arm belongs to the
+    * ETH fork choice and is deliberately left as it was.
+    *
+    * Branch chosen by weight (every ETC reorg):
+    *   - the executed blocks outweigh the old head (always, when the whole branch executed): they become the head.
+    *     Heights between the fork point and the branch parent are pointed at the parent's own ancestry (non-empty only
+    *     when the parent was itself a non-canonical block), and every entry above the new head is deleted — so a
+    *     shorter new chain leaves no old-chain hashes above it.
+    *   - they do not (execution stopped early, on a lighter prefix): the old head stays, as core-geth's `ReorgNeeded`
+    *     would keep it, and the index is put back exactly as it was captured before execution; heights the old chain
+    *     never reached are deleted.
+    *
+    * Before this, best always moved to the last executed block and nothing else was rewritten, which left the node on a
+    * lighter head with an index mixing two chains; see ReorgBlockhashParitySpec.
+    */
+  private def settleHead(
+      executedBlocks: List[BlockData],
+      parentWeight: ChainWeight,
+      oldBestNumber: BigInt,
+      oldBestWeight: ChainWeight,
+      fork: ForkPoint,
+      oldCanonical: List[(BigInt, BlockHash)],
+      selectedByWeight: Boolean
+  ): Unit =
+    executedBlocks.lastOption.foreach { last =>
+      val tip = last.block
+      if !selectedByWeight then blockchainWriter.saveBestKnownBlocks(tip.hash, tip.number.value)
+      else
+        // Recomputed from the headers rather than read from BlockData: it is exactly what BlockExecution computes, and
+        // it does not depend on the executor having filled the weight in.
+        val executedWeight = executedBlocks.foldLeft(parentWeight)((w, b) => w.increase(b.block.header))
+        if executedWeight > oldBestWeight then
+          blockchainWriter.rewriteCanonicalIndex(
+            put = fork.parentSideChain,
+            remove = ((tip.number.value + 1) to oldBestNumber).toList,
+            newBest = Some((tip.hash, tip.number.value)),
+            reader = blockchainReader
+          )
+        else
+          val old = oldCanonical.toMap
+          val executedHeights = executedBlocks.map(_.block.number.value)
+          log.warn(
+            "REORG-PARTIAL: executed blocks {}-{} do not outweigh the current head {} — keeping it and restoring the " +
+              "canonical index",
+            executedHeights.head,
+            executedHeights.last,
+            oldBestNumber
+          )
+          // All of the captured segment, not only the executed heights: that also re-points the transaction
+          // locations of every old block, which a side block carrying the same transaction may have overwritten.
+          blockchainWriter.rewriteCanonicalIndex(
+            put = oldCanonical,
+            remove = executedHeights.filterNot(old.contains),
+            newBest = None,
+            reader = blockchainReader
+          )
+    }
+
+  /** Where a branch whose parent is `parentHash` leaves the canonical chain.
+    *
+    * Walks back from the parent by header until it reaches a block the canonical index names at its own height. When
+    * the parent is canonical — the usual case — that is the parent itself and no header is read beyond it. When the
+    * parent is a block that was executed earlier but is not canonical now (the node reorganised away from it), the walk
+    * passes over exactly those non-canonical ancestors, so its length is bounded by that side chain.
+    */
+  private def locateFork(parentHash: BlockHash, parentNumber: BigInt): ForkPoint =
     @tailrec
-    def go(parent: BlockHash, fromNumber: BigInt, acc: List[BlockData]): List[BlockData] =
-      blockchainReader.getBlockByNumber(blockchainReader.getBestBranch, fromNumber) match
-        case Some(block) if block.header.hash == parent || fromNumber == 0 =>
-          acc
+    def go(hash: BlockHash, number: BigInt, sideChain: List[(BigInt, BlockHash)]): ForkPoint =
+      if number < 0 || blockchainReader.getCanonicalHashByNumber(number).contains(hash) then
+        ForkPoint(number, sideChain)
+      else
+        blockchainReader.getBlockHeaderByHash(hash) match
+          case Some(header) if header.number.value == number =>
+            go(header.parentHash, number - 1, (number, hash) :: sideChain)
+          case _ =>
+            log.error(
+              "Reorganise: ancestry of the new branch is broken at height {} ({}); treating it as the fork point",
+              number,
+              hash.toHexString
+            )
+            ForkPoint(number, sideChain)
+    go(parentHash, parentNumber, Nil)
 
-        case Some(block) =>
-          val hash = block.header.hash
-          val blockDataOpt = for
-            receipts <- blockchainReader.getReceiptsByHash(hash)
-            weight <- blockchainReader.getChainWeightByHash(hash)
-          yield BlockData(block, receipts, weight)
-          go(parent, fromNumber - 1, blockDataOpt.map(_ :: acc).getOrElse(acc))
+  /** The blocks leaving the canonical chain, in ascending order, from the index entries captured above the fork point.
+    * Bounded by the reorganisation depth. Read-only; used solely to populate SelectedNewBestBranch.
+    *
+    * It used to walk the index down from the best block until it met the branch parent, and stopped only at genesis
+    * when it never did — i.e. whenever the parent was not the canonical block at its height.
+    */
+  private def collectOldBranch(oldCanonical: List[(BigInt, BlockHash)]): List[BlockData] =
+    oldCanonical.flatMap { case (_, hash) =>
+      for
+        block <- blockchainReader.getBlockByHash(hash)
+        receipts <- blockchainReader.getReceiptsByHash(hash)
+        weight <- blockchainReader.getChainWeightByHash(hash)
+      yield BlockData(block, receipts, weight)
+    }
 
-        case None =>
-          log.error(s"collectOldBranch: unexpected missing block at number $fromNumber")
-          acc
-    go(parent, fromNumber, Nil)
+object ConsensusImpl:
+
+  /** @param number
+    *   height of the last block the branch shares with the canonical chain
+    * @param parentSideChain
+    *   the branch parent's ancestors above `number` that the canonical index does NOT name (ascending), the parent
+    *   included when it is one of them; empty when the parent is canonical
+    */
+  final private[consensus] case class ForkPoint(number: BigInt, parentSideChain: List[(BigInt, BlockHash)])
