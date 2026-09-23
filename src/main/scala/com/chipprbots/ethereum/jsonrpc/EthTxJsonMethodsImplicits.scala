@@ -80,16 +80,10 @@ object EthTxJsonMethodsImplicits extends JsonMethodsImplicits:
     val effectiveGasPriceField = receipt.effectiveGasPrice.map(v => "effectiveGasPrice" -> encodeAsHex(v)).toList
     val blobGasUsedField = receipt.blobGasUsed.map(v => "blobGasUsed" -> encodeAsHex(v)).toList
     val blobGasPriceField = receipt.blobGasPrice.map(v => "blobGasPrice" -> encodeAsHex(v)).toList
-    // Pre-existing gap found while fixing the uint64 timestamp encoding bug: `blockTimestamp` is a
-    // field on TransactionReceiptResponse (populated by both `apply` overloads) but was never wired
-    // into this hand-written encoder, so eth_getTransactionReceipt silently dropped it. TxLog and
-    // TransactionResponse's own encoders already emit the field; this brings the receipt encoder
-    // into line with them.
-    val blockTimestampField = receipt.blockTimestamp.map(v => "blockTimestamp" -> encodeAsHex(v)).toList
 
     JObject(
       baseFields ::: toField ::: middleFields ::: rootField ::: statusField :::
-        typeField ::: effectiveGasPriceField ::: blobGasUsedField ::: blobGasPriceField ::: blockTimestampField
+        typeField ::: effectiveGasPriceField ::: blobGasUsedField ::: blobGasPriceField
     )
 
   given transactionResponseJsonEncoder: JsonEncoder[TransactionResponse] = tx =>

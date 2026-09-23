@@ -113,7 +113,7 @@ class TimestampEncodingSpec extends AnyFlatSpec with Matchers:
 
   // ── TransactionReceiptResponse (eth_getTransactionReceipt blockTimestamp) ───────────────────
 
-  "TransactionReceiptResponse" should "encode blockTimestamp >= 2^63 as its unsigned hex value" in {
+  "TransactionReceiptResponse" should "carry blockTimestamp >= 2^63 unsigned, and not emit it at the receipt's top level" in {
     val stx = signedTx
     val receipt = LegacyReceipt.withHashOutcome(
       postTransactionStateHash = ByteString(),
@@ -132,8 +132,11 @@ class TimestampEncodingSpec extends AnyFlatSpec with Matchers:
     )
     response.blockTimestamp shouldBe Some(BigInt(ExtremeTimestampUnsignedDecimal))
 
+    // The execution-apis receipt schema (and hive rpc-compat's exact-match fixtures) has
+    // blockTimestamp on each LOG, not on the receipt object; emitting it at the top level fails
+    // every eth_getTransactionReceipt comparison.
     val json = transactionReceiptResponseJsonEncoder.encodeJson(response)
-    (json \ "blockTimestamp").asInstanceOf[JString].s shouldBe ExtremeTimestampHex
+    (json \ "blockTimestamp") shouldBe JNothing
   }
 
   // ── eth_simulateV1 block/tx timestamp encoding ───────────────────────────────────────────────
