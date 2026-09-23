@@ -2,9 +2,11 @@ package com.chipprbots.ethereum.consensus.validators.std
 
 import org.apache.pekko.util.ByteString
 
+import com.chipprbots.ethereum.consensus.engine.BlobGasUtils
 import com.chipprbots.ethereum.consensus.pow.blocks.OmmersSeqEnc
 import com.chipprbots.ethereum.consensus.validators.BlockValidator
 import com.chipprbots.ethereum.crypto.*
+import com.chipprbots.ethereum.domain.BlobTransaction
 import com.chipprbots.ethereum.domain.Block
 import com.chipprbots.ethereum.domain.BlockBody
 import com.chipprbots.ethereum.domain.BlockHeader
@@ -155,7 +157,41 @@ object StdBlockValidator extends BlockValidator:
       _ <- validateBlockRLPSize(block)
       _ <- validateWithdrawalsPresence(block)
       _ <- validateWithdrawalsRoot(block)
+      _ <- validateBlobGasUsed(block)
     yield BlockValid
+
+  /** EIP-4844: the header's blobGasUsed must account for exactly the blobs the body carries, and a header without
+    * blobGasUsed (pre-Cancun) must not be followed by a body that carries any. Mirrors go-ethereum
+    * `core/block_validator.go` `ValidateBody` ("blob gas used mismatch" / "data blobs present in block body").
+    *
+    * This is a body-vs-header rule, which is why it lives here and not in the header validator: the header validator
+    * checks blobGasUsed against its own bounds (at most the per-block max, a multiple of GAS_PER_BLOB) and checks
+    * excessBlobGas against the parent, but it never sees the transactions. Before this check existed the rule ran only
+    * inside `EngineApiService.newPayload`, so every path that imports through `validateBlockBeforeExecution` (chain.rlp
+    * import, regular sync) accepted a block whose header misstated its blob gas.
+    *
+    * go-ethereum compares `blobGasUsed / GAS_PER_BLOB` with the blob count; this compares `blobGasUsed` with `blobs *
+    * GAS_PER_BLOB`. The two agree on every header that passes header validation (which requires a multiple of
+    * GAS_PER_BLOB), and the exact comparison stays strict for the callers that match bodies to headers without header
+    * validation (BlockFetcherState, SyncBlocksValidator).
+    *
+    * ETC: headers never carry blobGasUsed and blocks never carry blob transactions (type 3 is rejected pre-Cancun by
+    * the signed-transaction validator), so both arms are inert there.
+    */
+  private def validateBlobGasUsed(block: Block): Either[BlockError, BlockValid] =
+    val blobs = block.body.transactionList.iterator.map { stx =>
+      stx.tx match
+        case bt: BlobTransaction => bt.blobVersionedHashes.size
+        case _                   => 0
+    }.sum
+    block.header.blobGasUsed match
+      case Some(headerBlobGasUsed) =>
+        val computed = BigInt(blobs) * BlobGasUtils.GAS_PER_BLOB
+        if headerBlobGasUsed == computed then Right(BlockValid)
+        else Left(BlockBlobGasUsedError(headerBlobGasUsed, computed))
+      case None =>
+        if blobs == 0 then Right(BlockValid)
+        else Left(BlockBlobsWithoutBlobGasError(blobs))
 
   /** EIP-4895: pre-Shanghai blocks (header.withdrawalsRoot = None) MUST NOT attach a withdrawals field to the body.
     *
@@ -234,6 +270,16 @@ object StdBlockValidator extends BlockValidator:
   case object BlockWithdrawalsOrphanedError extends BlockError
 
   case class BlockRLPSizeError(size: Long, cap: Long) extends BlockError
+
+  /** EIP-4844: header.blobGasUsed != (blob versioned hashes in the body) x GAS_PER_BLOB. go-ethereum: "blob gas used
+    * mismatch".
+    */
+  case class BlockBlobGasUsedError(headerBlobGasUsed: BigInt, computedBlobGasUsed: BigInt) extends BlockError
+
+  /** EIP-4844: the body carries blobs but the header has no blobGasUsed field (pre-Cancun header). go-ethereum: "data
+    * blobs present in block body".
+    */
+  case class BlockBlobsWithoutBlobGasError(blobCount: Int) extends BlockError
 
   sealed trait BlockValid
 
