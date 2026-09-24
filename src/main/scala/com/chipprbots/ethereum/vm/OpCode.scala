@@ -964,8 +964,7 @@ sealed abstract class PushOp(code: Int) extends OpCode(code, 0, 1, _.G_verylow) 
 
   protected def nextStack[S <: Storage[S], W <: WorldStateProxy[W, S]](state: ProgramState[W, S]): Stack =
     val n = i + 1
-    val bytes = state.program.getBytes(state.pc + 1, n)
-    val word = UInt256(bytes)
+    val word = state.program.immediate(state.pc + 1, n)
     state.stack.push(word)
 
 case object PUSH1 extends PushOp(0x60)

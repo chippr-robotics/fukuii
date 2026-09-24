@@ -6,6 +6,7 @@ import scala.annotation.tailrec
 import scala.collection.immutable.BitSet
 
 import com.chipprbots.ethereum.crypto.kec256
+import com.chipprbots.ethereum.domain.UInt256
 import com.chipprbots.ethereum.utils.ByteStringUtils.Padding
 
 /** Holds a program's code and provides utilities for accessing it (defaulting to zeroes when out of scope)
@@ -24,6 +25,29 @@ case class Program(code: ByteString):
 
   def getBytes(from: Int, size: Int): ByteString =
     code.slice(from, from + size).padToByteString(size, 0.toByte)
+
+  /** The unsigned big-endian value of the `size` bytes at `from`, bytes past the end of the code reading as zero — that
+    * is, `UInt256(getBytes(from, size))` — read byte by byte instead of through a slice, a padded copy and a
+    * shift-and-add per byte on BigInt. PUSH1..PUSH32 decode their immediate here.
+    *
+    * @param size
+    *   0 to 32. Up to 7 bytes the value is accumulated in a Long, which cannot overflow or go negative at that width.
+    */
+  def immediate(from: Int, size: Int): UInt256 =
+    if size <= 7 then
+      var value = 0L
+      var k = 0
+      while k < size do
+        value = (value << 8) | (getByte(from + k) & 0xff)
+        k += 1
+      UInt256(value)
+    else
+      val bytes = new Array[Byte](size)
+      var k = 0
+      while k < size do
+        bytes(k) = getByte(from + k)
+        k += 1
+      UInt256(BigInt(1, bytes))
 
   val length: Int = code.size
 

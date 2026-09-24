@@ -172,3 +172,22 @@ class ProgramSpec extends AnyFlatSpec with Matchers with ScalaCheckPropertyCheck
       byte <- Byte.MinValue to Byte.MaxValue
     do table.opCodeFor(byte.toByte) shouldBe table.byteToOpCode.get(byte.toByte)
   }
+
+  "Program.immediate" should "read the value UInt256(getBytes(from, size)) does, zero past the end of the code" taggedAs (
+    UnitTest,
+    VMTest
+  ) in {
+    val codeGen: Gen[ByteString] =
+      Gen.choose(0, 70).flatMap(n => Gen.listOfN(n, byteGen)).map(l => ByteString(l.toArray))
+    forAll(codeGen, minSuccessful(500)) { code =>
+      val program = Program(code)
+      for
+        from <- 0 to code.length + 2
+        size <- 0 to 32
+      do program.immediate(from, size) shouldBe com.chipprbots.ethereum.domain.UInt256(program.getBytes(from, size))
+    }
+    // the widths where the Long accumulator ends and the BigInt path begins, at their extreme values
+    for size <- Seq(6, 7, 8, 9, 31, 32) do
+      val ones = Program(ByteString(Array.fill(40)(0xff.toByte)))
+      ones.immediate(1, size) shouldBe com.chipprbots.ethereum.domain.UInt256(ones.getBytes(1, size))
+  }
