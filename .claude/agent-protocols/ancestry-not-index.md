@@ -38,6 +38,16 @@ core-geth `writeBlockAndSetHead` + `reorg()` (`core/blockchain.go` ~1465, ~2160-
 fukuii writes index entries as it executes, so a reorganisation that keeps the old head must put the captured entries
 back. `ConsensusImpl.settleHead` does this, atomically, through `BlockchainWriter.rewriteCanonicalIndex`.
 
+The post-merge head (ETH) moves through a different writer, with the same invariant: `engine_forkchoiceUpdated` ->
+`ForkChoiceManager.applyForkChoiceState` -> `BlockchainWriter.promoteToCanonicalHead` (go-ethereum `SetCanonical`:
+`reorg` + `writeHeadBlock`). A PoS head can move DOWN — to an ancestor, or to a shorter side chain — so:
+- every entry above the new head is deleted (up to the old best, then on while entries remain);
+- the walk back from the new head trusts an existing entry as the meeting point only AT OR BELOW the old best.
+  Above it the index is not the best block's ancestry: `engine_newPayload` writes entries ahead of the head, and the
+  PoS designated-head arm moves the best block without clearing above it. Stopping at such an entry leaves the other
+  branch's hashes below the new head (hive `Re-org to Previously Validated Sidechain Payload` walks into exactly this).
+Shapes: `EngineApiSidechainNewPayloadSpec`, "engine_forkchoiceUpdated to a lower head".
+
 ## Checklist for any change touching import, reorg or execution
 
 1. Does anything executed read the index? Replace it with an ancestry lookup.
