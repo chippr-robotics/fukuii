@@ -986,12 +986,24 @@ class RegularSyncSpec
         yield assert(status === Status.Syncing(0, Progress(0, lastBlock), None))
       }
 
-      "return updated status after importing blocks" taggedAs DisabledTest in testCaseT { fixture =>
+      "return updated status after importing blocks" in testCaseT { fixture =>
         import fixture.*
 
         for
           _ <- IO {
-            testBlocks.take(5).foreach(setImportResult(_, IO(BlockImportedToTop(Nil))))
+            // BlockImporter imports a batch through evaluateBranch and reports progress for the blocks listed in
+            // BlockImportedToTop's data, as ConsensusAdapter fills it from ExtendedCurrentBestBranch. An empty list
+            // means nothing was imported, so the stub names each block it imports.
+            testBlocks
+              .take(5)
+              .foreach(block =>
+                setImportResult(
+                  block,
+                  IO(
+                    BlockImportedToTop(List(BlockData(block, Nil, ChainWeight.totalDifficultyOnly(block.number.value))))
+                  )
+                )
+              )
 
             peersClient.setAutoPilot(new PeersClientAutoPilot(testBlocks.take(5)))
 
