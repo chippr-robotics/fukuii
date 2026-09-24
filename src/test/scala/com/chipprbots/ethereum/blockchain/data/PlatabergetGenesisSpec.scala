@@ -17,8 +17,8 @@ import com.chipprbots.ethereum.utils.NetworkType
 /** Platåberget, the public Glamsterdam testnet, built from the SHIPPED configuration.
   *
   * Ground truth, all independent of this implementation:
-  *   - genesis hash / state root: https://plataberget.dev/ and the live network's block 0 (`eth_getBlockByNumber
-  *     0x0` on https://rpc.plataberget.ethpandaops.io, 2026-09-24), which also gives every header field asserted below
+  *   - genesis hash / state root: https://plataberget.dev/ and the live network's block 0 (`eth_getBlockByNumber 0x0`
+  *     on https://rpc.plataberget.ethpandaops.io, 2026-09-24), which also gives every header field asserted below
   *   - chain id 0x1a6a8cc6e (`eth_chainId`), network id 7091047534 (`net_version`)
   *   - fork schedule: ethpandaops/glamsterdam-devnets network-configs/devnet-8/metadata/genesis.json
   *
@@ -58,7 +58,14 @@ class PlatabergetGenesisSpec extends AnyFlatSpec with Matchers:
     UnitTest
   ) in {
     val ft = plataberget.forkTimestamps
-    Seq(ft.shanghaiTimestamp, ft.cancunTimestamp, ft.pragueTimestamp, ft.osakaTimestamp, ft.bpo1Timestamp, ft.bpo2Timestamp)
+    Seq(
+      ft.shanghaiTimestamp,
+      ft.cancunTimestamp,
+      ft.pragueTimestamp,
+      ft.osakaTimestamp,
+      ft.bpo1Timestamp,
+      ft.bpo2Timestamp
+    )
       .foreach(_ shouldBe Some(0L))
     ft.amsterdamTimestamp shouldBe Some(AmsterdamTimestamp)
     plataberget.isAmsterdamTimestamp(Timestamp(GenesisTimestamp)) shouldBe false

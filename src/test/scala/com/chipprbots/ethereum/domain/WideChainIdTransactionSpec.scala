@@ -14,10 +14,11 @@ import com.chipprbots.ethereum.utils.Config
 
 /** Transactions for a chain id wider than 32 bits.
   *
-  * Platåberget's chain id is 7091047534 (0x1a6a8cc6e) — the first shipped chain whose id does not fit in an Int, or even
-  * a UInt32. An EIP-155 `v` for it is 14182095103/14182095104, which a Byte-, Int- or UInt32-typed signature or chain-id
-  * path would silently truncate, recovering the wrong sender (or none) for every legacy transaction on that network.
-  * Every other shipped chain id (1, 61, 63, 11155111) fits in an Int, so nothing else in the suite exercises this width.
+  * Platåberget's chain id is 7091047534 (0x1a6a8cc6e) — the first shipped chain whose id does not fit in an Int, or
+  * even a UInt32. An EIP-155 `v` for it is 14182095103/14182095104, which a Byte-, Int- or UInt32-typed signature or
+  * chain-id path would silently truncate, recovering the wrong sender (or none) for every legacy transaction on that
+  * network. Every other shipped chain id (1, 61, 63, 11155111) fits in an Int, so nothing else in the suite exercises
+  * this width.
   */
 class WideChainIdTransactionSpec extends AnyFlatSpec with Matchers:
 
@@ -44,7 +45,7 @@ class WideChainIdTransactionSpec extends AnyFlatSpec with Matchers:
       )
       val stx = SignedTransaction.sign(tx, signingKey, Some(WideChainId))
 
-      stx.signature.v should (equal(WideChainId * 2 + 35) or equal(WideChainId * 2 + 36))
+      stx.signature.v should (equal(WideChainId * 2 + 35).or(equal(WideChainId * 2 + 36)))
 
       val decoded = stx.toBytes.toSignedTransaction
       decoded shouldBe stx

@@ -15,13 +15,13 @@ import com.chipprbots.ethereum.utils.Config.*
   * Ground truth:
   *   - the post-Amsterdam checksum 0x05842a50 is what the live network reports (`eth_config` → `current.forkId` on
   *     https://rpc.plataberget.ethpandaops.io, 2026-09-24; `next` is null)
-  *   - both checksums were computed independently as CRC32 over the genesis hash, then each passed fork's timestamp as a
-  *     big-endian uint64 (Python `zlib.crc32`), which reproduces the live value above
+  *   - both checksums were computed independently as CRC32 over the genesis hash, then each passed fork's timestamp as
+  *     a big-endian uint64 (Python `zlib.crc32`), which reproduces the live value above
   *
   * Platåberget is the first shipped chain whose genesis timestamp (1786622400) is non-zero AND later than forks it
   * declares at 0: Shanghai..BPO2 are all genesis-active, so the EIP-6122 "at or before genesis" rule must drop all six
-  * and leave Amsterdam as the only checksum entry. A node that kept any of them would advertise a checksum no Platåberget
-  * peer shares and be refused at every Status exchange.
+  * and leave Amsterdam as the only checksum entry. A node that kept any of them would advertise a checksum no
+  * Platåberget peer shares and be refused at every Status exchange.
   */
 class ForkIdPlatabergetSpec extends AnyWordSpec with Matchers:
 
