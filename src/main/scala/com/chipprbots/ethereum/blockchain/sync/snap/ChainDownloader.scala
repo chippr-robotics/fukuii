@@ -255,7 +255,21 @@ class ChainDownloader private (
 
           case PeerResult(RequestFailed(_, peer, reason)) =>
             headerRequestPeers -= peer.id
+            // Re-queue this peer's in-flight hashes before dropping it. Each peer has at most one
+            // outstanding request per category, so `.get` is unambiguous. Without this, a timed-out or
+            // disconnected request's bodies/receipts simply vanish — bodiesQueue/receiptsQueue lose the
+            // hashes, checkCompletion() then finds every queue empty, and the backfill declares COMPLETE
+            // (and clears its cursors) while those blocks were never actually fetched. Blacklisting below
+            // is unaffected. For a truncated eth/70 block the re-queued hash resumes correctly: this path
+            // never touches partialReceiptState/partialReceiptBuffer, so the next request for that hash
+            // still finds its buffered receipts and resume index and continues rather than restarting.
+            bodyRequestPeers.get(peer.id).foreach { case (_, hashes) =>
+              bodiesQueue = hashes.toVector ++ bodiesQueue
+            }
             bodyRequestPeers -= peer.id
+            receiptRequestPeers.get(peer.id).foreach { case (_, hashes) =>
+              receiptsQueue = hashes.toVector ++ receiptsQueue
+            }
             receiptRequestPeers -= peer.id
             log.debug("Chain download request failed for peer {}: {}", peer.id, reason)
             blacklist.add(peer.id, syncConfig.blacklistDuration, FastSyncRequestFailed(reason))
@@ -274,6 +288,14 @@ class ChainDownloader private (
             receiptRequestPeers.get(peer.id).foreach { case (_, requestedHashes) =>
               receiptRequestPeers -= peer.id
               handleReceipts(peer, requestedHashes, eth66Receipts)
+            }
+            dispatchRequests()
+
+          // ETH69 (EIP-7642): bloom-absent receipts, no partial delivery.
+          case PeerResult(ResponseReceived(_, peer, receipts69: ETHPackets.Receipts69, _)) =>
+            receiptRequestPeers.get(peer.id).foreach { case (_, requestedHashes) =>
+              receiptRequestPeers -= peer.id
+              handleReceipts69(peer, requestedHashes, receipts69)
             }
             dispatchRequests()
 
@@ -441,6 +463,28 @@ class ChainDownloader private (
             ),
           s"chain-receipts-eth70-${System.nanoTime()}"
         )
+      else if peerWithInfo.peerInfo.remoteStatus.capability == Capability.ETH69 then
+        // ETH69 (EIP-7642): the wire request is byte-identical to ETH68's GetReceipts — only the response
+        // shape changes (bloom-absent Receipts69, decoded by ETH69MessageDecoder). PeerRequestHandler
+        // filters a reply by the caller-supplied ResponseMsg type via TypeTest (`case responseMsg: ResponseMsg`
+        // / `case _ => Behaviors.same`); a peer negotiated at ETH69 sends back a Receipts69, so asking with
+        // Receipts68 as the expected type makes every reply fall through the wildcard and the request always
+        // times out.
+        val requestMsg = ETHPackets.GetReceipts(ETHPackets.nextRequestId, batch)
+        context.spawn(
+          PeerRequestHandler
+            .behavior[ETHPackets.GetReceipts, ETHPackets.Receipts69](
+              peer,
+              requestTimeout,
+              networkPeerManager,
+              peerEventBus,
+              requestMsg,
+              Codes.ReceiptsCode,
+              replyTo = prhResultAdapter,
+              requestId = 0
+            ),
+          s"chain-receipts-eth69-${System.nanoTime()}"
+        )
       else
         val requestMsg = ETHPackets.GetReceipts(ETHPackets.nextRequestId, batch)
         context.spawn(
@@ -581,6 +625,28 @@ class ChainDownloader private (
       if remaining.nonEmpty then bodiesQueue = remaining.toVector ++ bodiesQueue
   // else bodies.isEmpty
 
+  /** Store per-block receipts and atomically advance the backfill receipt cursor (#1169): the cursor update rides in
+    * the same write batch as the highest-numbered block's receipt write, so a crash mid-write never leaves the cursor
+    * ahead of disk. Shared by handleReceipts (eth/68), handleReceipts69 (eth/69), and handleReceipts70's complete-block
+    * path (eth/70-72) — the three receipt decoders differ only in wire shape, not in how a decoded batch is persisted.
+    */
+  private def storeReceiptsAndAdvanceCursor(receiptsByHash: Seq[(ByteString, Seq[Receipt])]): Unit =
+    if receiptsByHash.nonEmpty then
+      val highestReceiptNumber = receiptsByHash
+        .flatMap { case (hash, _) => blockchainReader.getBlockHeaderByHash(BlockHash(hash)).map(_.number.value) }
+        .maxOption
+        .getOrElse(BigInt(0))
+
+      receiptsByHash.zipWithIndex.foreach { case ((hash, receipts), idx) =>
+        val storeUpdate = blockchainWriter.storeReceipts(BlockHash(hash), receipts)
+        val withCursor =
+          if idx == receiptsByHash.size - 1 && highestReceiptNumber > appStateStorage.getBackfillBestReceipt() then
+            storeUpdate.and(appStateStorage.putBackfillBestReceipt(highestReceiptNumber))
+          else storeUpdate
+        withCursor.commit()
+      }
+      receiptsDownloaded += receiptsByHash.size
+
   private def handleReceipts(
       peer: Peer,
       requestedHashes: Seq[ByteString],
@@ -611,25 +677,8 @@ class ChainDownloader private (
             .map(_.toReceipt)
         }
 
-        // Store receipts. Atomically advance the receipt cursor (#1169) in the same batch as
-        // the highest-numbered receipt write, so a crash mid-write doesn't leave the cursor
-        // ahead of disk.
-        val receiptsByHash = requestedHashes.zip(receiptsByBlock)
-        val highestReceiptNumber = receiptsByHash
-          .flatMap { case (hash, _) => blockchainReader.getBlockHeaderByHash(BlockHash(hash)).map(_.number.value) }
-          .maxOption
-          .getOrElse(BigInt(0))
-
-        receiptsByHash.zipWithIndex.foreach { case ((hash, receipts), idx) =>
-          val storeUpdate = blockchainWriter.storeReceipts(BlockHash(hash), receipts)
-          val withCursor =
-            if idx == receiptsByHash.size - 1 && highestReceiptNumber > appStateStorage.getBackfillBestReceipt() then
-              storeUpdate.and(appStateStorage.putBackfillBestReceipt(highestReceiptNumber))
-            else storeUpdate
-          withCursor.commit()
-        }
-
-        receiptsDownloaded += receiptsByBlock.size
+        // Store receipts + atomically advance the backfill receipt cursor (#1169 pattern).
+        storeReceiptsAndAdvanceCursor(requestedHashes.zip(receiptsByBlock))
 
         // Re-queue remaining
         val remaining = requestedHashes.drop(receiptsByBlock.size)
@@ -642,6 +691,47 @@ class ChainDownloader private (
             peer.id,
             syncConfig.blacklistDuration,
             FastSyncRequestFailed(s"Invalid receipts: ${ex.getMessage}")
+          )
+
+  /** ETH69 (EIP-7642) receipt handler. Unlike eth/70+, eth/69 has no partial-delivery flag — a response is either the
+    * full batch of usable blocks or nothing — so this needs none of handleReceipts70's resume bookkeeping. Each
+    * per-block RLP list decodes through `toEth69Receipt`, the strict `[txType, postStateOrStatus, cumulativeGasUsed,
+    * logs]` decoder (no bloom on the wire, recomputed from the logs); a malformed receipt fails the whole response and
+    * blacklists the peer that sent it, same as handleReceipts and handleReceipts70.
+    */
+  private def handleReceipts69(
+      peer: Peer,
+      requestedHashes: Seq[ByteString],
+      receipts69: ETHPackets.Receipts69
+  ): Unit =
+    val hashStrings = requestedHashes.map(h => s"0x${h.toArray.map("%02x".format(_)).mkString}")
+    val receiptsRlp = receipts69.receiptsForBlocks
+    if receiptsRlp.items.isEmpty then
+      receiptsQueue = requestedHashes.toVector ++ receiptsQueue
+      blacklist.add(peer.id, syncConfig.blacklistDuration, EmptyReceipts(hashStrings))
+    else
+      try
+        // Every item must be a block's receipt list. Skipping one would zip each later block's receipts onto the
+        // wrong hash, and nothing downstream checks them against the header's receiptsRoot.
+        val receiptsByBlock: Seq[Seq[Receipt]] = receiptsRlp.items.map {
+          case blockReceipts: RLPList => blockReceipts.items.map(_.toEth69Receipt)
+          case other                  => throw new RuntimeException(s"block receipts are not a list: $other")
+        }
+
+        // Store receipts + atomically advance the backfill receipt cursor (#1169 pattern).
+        storeReceiptsAndAdvanceCursor(requestedHashes.zip(receiptsByBlock))
+
+        // Re-queue remaining
+        val remaining = requestedHashes.drop(receiptsByBlock.size)
+        if remaining.nonEmpty then receiptsQueue = remaining.toVector ++ receiptsQueue
+      catch
+        case ex: Exception =>
+          log.warn("Chain download ETH69: failed to decode receipts from peer {}: {}", peer.id, ex.getMessage)
+          receiptsQueue = requestedHashes.toVector ++ receiptsQueue
+          blacklist.add(
+            peer.id,
+            syncConfig.blacklistDuration,
+            FastSyncRequestFailed(s"Invalid receipts (ETH69): ${ex.getMessage}")
           )
 
   // Self-contained ETH70 receipt handler — does NOT delegate to handleReceipts.
@@ -689,21 +779,7 @@ class ChainDownloader private (
           }
 
         // Store complete receipts + advance backfill cursor (#1169 pattern)
-        if completeByHash.nonEmpty then
-          val highestReceiptNumber = completeByHash
-            .flatMap { case (h, _) => blockchainReader.getBlockHeaderByHash(BlockHash(h)).map(_.number.value) }
-            .maxOption
-            .getOrElse(BigInt(0))
-
-          completeByHash.zipWithIndex.foreach { case ((hash, receipts), idx) =>
-            val storeUpdate = blockchainWriter.storeReceipts(BlockHash(hash), receipts)
-            val withCursor =
-              if idx == completeByHash.size - 1 && highestReceiptNumber > appStateStorage.getBackfillBestReceipt() then
-                storeUpdate.and(appStateStorage.putBackfillBestReceipt(highestReceiptNumber))
-              else storeUpdate
-            withCursor.commit()
-          }
-          receiptsDownloaded += completeByHash.size
+        storeReceiptsAndAdvanceCursor(completeByHash)
 
         // Accumulate partial receipts for the truncated last block and re-queue it
         incompleteItemOpt.foreach { blockRlp =>
