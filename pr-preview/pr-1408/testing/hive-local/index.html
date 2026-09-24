@@ -5475,9 +5475,12 @@ the <code>aggregate</code> verdict.</p>
 <li>Builds the thin <code>chipprbots/fukuii:latest</code> image.</li>
 <li>Copies <code>hive/fukuii/*</code> and the jar into <code>$HIVE_DIR/clients/fukuii</code>.</li>
 <li>Runs hive.</li>
-<li>Prints the pass/fail counts and the names of failing tests. The script exits non-zero if
-   any test failed.</li>
+<li>Prints the pass/fail counts and the names of failing tests for every suite the run
+   produced. The script exits non-zero if any test failed.</li>
 </ol>
+<p>Steps 2–5 hold a machine-wide lock (<code>/tmp/fukuii-hive-local.lock</code>). The Docker image tags they
+build are global to the daemon, so runs from several clones, even ones using different hive
+checkouts, queue up instead of testing each other's jar.</p>
 <p>Options:</p>
 <table>
 <thead>
@@ -5509,6 +5512,11 @@ the <code>aggregate</code> verdict.</p>
 <td>hive <code>--client.checktimelimit</code></td>
 </tr>
 <tr>
+<td><code>--clients LIST</code></td>
+<td>fukuii</td>
+<td>hive <code>--client</code>, e.g. <code>fukuii,go-ethereum</code> to compare with a reference client or to run the cross-client sync tests</td>
+</tr>
+<tr>
 <td><code>--skip-build</code></td>
 <td>off</td>
 <td>reuse the last assembly</td>
@@ -5522,14 +5530,33 @@ the <code>aggregate</code> verdict.</p>
 </table>
 <p>Run it from a normal clone, not a <code>git worktree</code>: the build's sbt-git plugin fails to load in
 a linked worktree (<code>NoWorkTreeException</code>).</p>
+<p>Use a hive checkout at the same <code>master</code> that CI clones. The simulators change between
+commits, so an older checkout can give different results from CI. Go is not needed on the
+host; build the binary in a container:</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>git<span class="w"> </span>clone<span class="w"> </span>--depth<span class="o">=</span><span class="m">1</span><span class="w"> </span>https://github.com/ethereum/hive.git<span class="w"> </span>~/hive-master<span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span><span class="nb">cd</span><span class="w"> </span>~/hive-master
+</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>docker<span class="w"> </span>run<span class="w"> </span>--rm<span class="w"> </span>-u<span class="w"> </span><span class="s2">"</span><span class="k">$(</span>id<span class="w"> </span>-u<span class="k">)</span><span class="s2">:</span><span class="k">$(</span>id<span class="w"> </span>-g<span class="k">)</span><span class="s2">"</span><span class="w"> </span>-e<span class="w"> </span><span class="nv">HOME</span><span class="o">=</span>/tmp<span class="w"> </span>-e<span class="w"> </span><span class="nv">GOCACHE</span><span class="o">=</span>/tmp/gocache<span class="w"> </span>-e<span class="w"> </span><span class="nv">GOPATH</span><span class="o">=</span>/tmp/gopath<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="w">  </span>-e<span class="w"> </span><span class="nv">CGO_ENABLED</span><span class="o">=</span><span class="m">0</span><span class="w"> </span>-v<span class="w"> </span><span class="s2">"</span><span class="nv">$PWD</span><span class="s2">"</span>:/src<span class="w"> </span>-w<span class="w"> </span>/src<span class="w"> </span>golang:1.25-alpine<span class="w"> </span>go<span class="w"> </span>build<span class="w"> </span>-o<span class="w"> </span>hive<span class="w"> </span>.
+</span></code></pre></div>
+<p>On a workstation with <code>systemd-oomd</code> (Ubuntu desktop default), run the script as its own user
+unit. Under memory pressure oomd kills a whole cgroup. A run started straight from a terminal
+shares that terminal's cgroup, so oomd kills the terminal too. That happened on the ops node
+(4 cores, 15 GB) with four heavy clients running in parallel.</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>systemd-run<span class="w"> </span>--user<span class="w"> </span>--unit<span class="o">=</span>hive-local<span class="w"> </span>--collect<span class="w"> </span>-p<span class="w"> </span><span class="nv">MemoryHigh</span><span class="o">=</span>4G<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="w">  </span>--working-directory<span class="o">=</span><span class="s2">"</span><span class="nv">$PWD</span><span class="s2">"</span><span class="w"> </span>-E<span class="w"> </span><span class="nv">HIVE_DIR</span><span class="o">=</span><span class="s2">"</span><span class="nv">$HOME</span><span class="s2">/hive-master"</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="w">  </span>scripts/hive/local.sh<span class="w"> </span>ethereum/engine<span class="w"> </span>--limit<span class="w"> </span><span class="s1">'/Blob Transaction'</span><span class="w"> </span>--parallelism<span class="w"> </span><span class="m">2</span>
+</span><span id="__span-2-4"><a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a>journalctl<span class="w"> </span>--user<span class="w"> </span>-fu<span class="w"> </span>hive-local<span class="w">     </span><span class="c1"># follow it</span>
+</span></code></pre></div>
+<p>On a machine that size, use <code>--parallelism 2</code>. The heaviest vectors, such as
+<code>CALLBlake2f_MaxRounds</code>, take about 130 s each at that setting.</p>
 <p>Logs are in <code>$HIVE_DIR/workspace/logs/</code>. Each client log is under <code>fukuii/</code>.</p>
 <p>Expect fixed overhead per run. On the ops node (4 cores), a single
 <code>consensus/.*UncleFromSideChain_Cancun</code> test took 22.6 min in total: the assembly build plus
 about 16 min inside the consensus simulator, which loads its whole fixture corpus whatever
 <code>--limit</code> selects. Pass <code>--skip-build</code> to reuse the last assembly while iterating.</p>
-<p>For comparison with CI, keep <code>--parallelism</code> at 4. Resource failures depend on how many
-clients run at once: a heavy vector that passes with <code>--parallelism 1</code> can still time out
-at 4.</p>
+<p>For an exact comparison with CI, use <code>--parallelism 4</code> if the machine can take it. Resource
+failures depend on how many clients run at once: a heavy vector that passes with
+<code>--parallelism 1</code> or <code>2</code> can still time out at 4. A resource-bound result from a local run
+at lower parallelism therefore needs its CI counterpart before anyone relies on it.</p>
 
 
 
