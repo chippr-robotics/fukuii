@@ -31,6 +31,7 @@ import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.GetNodeData
 import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.NodeData
 import com.chipprbots.ethereum.rlp.RLPEncodeable
 import com.chipprbots.ethereum.rlp.RLPList
+import com.chipprbots.ethereum.rlp.RLPValue
 import com.chipprbots.ethereum.rlp.encode
 import com.chipprbots.ethereum.transactions.PendingTransactionsManager
 import com.chipprbots.ethereum.transactions.PendingTransactionsManager.PendingTransactionsResponse
@@ -50,7 +51,9 @@ object BlockchainHostActor:
       Codes.GetReceiptsCode,
       Codes.GetBlockBodiesCode,
       Codes.GetBlockHeadersCode,
-      Codes.GetPooledTransactionsCode
+      Codes.GetPooledTransactionsCode,
+      Codes.GetBlockAccessListsCode,
+      Codes.GetCellsCode
     )
 
   def apply(
@@ -211,6 +214,32 @@ object BlockchainHostActor:
       // ETH68 GetBlockHeaders (via ETHPackets)
       case ETHPackets.GetBlockHeaders(requestId, block, maxHeaders, skip, reverse) =>
         handleGetBlockHeadersRequest(block, maxHeaders, skip, reverse, Some(requestId))
+
+      // ETH71 GetBlockAccessLists (EIP-8159). fukuii has no EIP-7928 BAL storage, so every
+      // requested hash gets the empty-string sentinel — an honest "unavailable", not fabricated
+      // data, and the wire-correct answer regardless: an empty BAL response is spec-valid even for
+      // a node that HAS the block, as long as it's not silently claiming to have data it doesn't.
+      // Order is preserved 1:1 with the request; see ETHPackets.scala's GetBlockAccessLists doc.
+      case ETHPackets.GetBlockAccessLists(requestId, blockHashes) =>
+        val entries = blockHashes.map(_ => RLPValue(Array.emptyByteArray))
+        context.log.debug(
+          "HOST_BLOCK_ACCESS_LISTS: requestId={} requested={} (all-empty, no BAL storage)",
+          requestId,
+          blockHashes.size
+        )
+        Some(ETHPackets.BlockAccessLists(requestId, entries))
+
+      // ETH72 GetCells (EIP-8070). fukuii has no PeerDAS cell/blob storage, so it answers with the
+      // fully-empty response (zero hashes, zero cells) rather than invent cell data — the same
+      // "honest absence" go-ethereum's own answerGetCells gives for any hash it has no blob data
+      // for. The requested mask is echoed back unchanged, matching go-ethereum's ReplyCells.
+      case ETHPackets.GetCells(requestId, hashes, mask) =>
+        context.log.debug(
+          "HOST_CELLS: requestId={} requested={} (empty, no cell storage)",
+          requestId,
+          hashes.size
+        )
+        Some(ETHPackets.Cells(requestId, Seq.empty, Seq.empty, mask))
 
       case _ => None
 

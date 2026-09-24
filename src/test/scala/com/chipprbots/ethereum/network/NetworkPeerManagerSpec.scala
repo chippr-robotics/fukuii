@@ -325,11 +325,13 @@ class NetworkPeerManagerSpec extends AnyFlatSpec with Matchers:
         com.chipprbots.ethereum.network.p2p.messages.SNAP.Codes.StorageRangesCode,
         com.chipprbots.ethereum.network.p2p.messages.SNAP.Codes.TrieNodesCode,
         com.chipprbots.ethereum.network.p2p.messages.SNAP.Codes.ByteCodesCode,
+        com.chipprbots.ethereum.network.p2p.messages.SNAP.Codes.AccessListsCode,
         // SNAP protocol request codes — server-side serving
         com.chipprbots.ethereum.network.p2p.messages.SNAP.Codes.GetAccountRangeCode,
         com.chipprbots.ethereum.network.p2p.messages.SNAP.Codes.GetStorageRangesCode,
         com.chipprbots.ethereum.network.p2p.messages.SNAP.Codes.GetTrieNodesCode,
-        com.chipprbots.ethereum.network.p2p.messages.SNAP.Codes.GetByteCodesCode
+        com.chipprbots.ethereum.network.p2p.messages.SNAP.Codes.GetByteCodesCode,
+        com.chipprbots.ethereum.network.p2p.messages.SNAP.Codes.GetAccessListsCode
       ),
       PeerSelector.WithId(peer1.id)
     )
@@ -637,7 +639,10 @@ class NetworkPeerManagerSpec extends AnyFlatSpec with Matchers:
           com.chipprbots.ethereum.network.p2p.messages.SNAP.Codes.GetAccountRangeCode,
           com.chipprbots.ethereum.network.p2p.messages.SNAP.Codes.GetStorageRangesCode,
           com.chipprbots.ethereum.network.p2p.messages.SNAP.Codes.GetTrieNodesCode,
-          com.chipprbots.ethereum.network.p2p.messages.SNAP.Codes.GetByteCodesCode
+          com.chipprbots.ethereum.network.p2p.messages.SNAP.Codes.GetByteCodesCode,
+          // snap/2 (EIP-8189): GetAccessLists needs the same pre-handshake early subscription as
+          // the other SNAP request codes above.
+          com.chipprbots.ethereum.network.p2p.messages.SNAP.Codes.GetAccessListsCode
         ),
         PeerSelector.AllPeers
       )
@@ -659,11 +664,13 @@ class NetworkPeerManagerSpec extends AnyFlatSpec with Matchers:
           com.chipprbots.ethereum.network.p2p.messages.SNAP.Codes.StorageRangesCode,
           com.chipprbots.ethereum.network.p2p.messages.SNAP.Codes.TrieNodesCode,
           com.chipprbots.ethereum.network.p2p.messages.SNAP.Codes.ByteCodesCode,
+          com.chipprbots.ethereum.network.p2p.messages.SNAP.Codes.AccessListsCode,
           // SNAP protocol request codes — server-side serving
           com.chipprbots.ethereum.network.p2p.messages.SNAP.Codes.GetAccountRangeCode,
           com.chipprbots.ethereum.network.p2p.messages.SNAP.Codes.GetStorageRangesCode,
           com.chipprbots.ethereum.network.p2p.messages.SNAP.Codes.GetTrieNodesCode,
-          com.chipprbots.ethereum.network.p2p.messages.SNAP.Codes.GetByteCodesCode
+          com.chipprbots.ethereum.network.p2p.messages.SNAP.Codes.GetByteCodesCode,
+          com.chipprbots.ethereum.network.p2p.messages.SNAP.Codes.GetAccessListsCode
         ),
         PeerSelector.WithId(peer.id)
       )
@@ -676,7 +683,7 @@ class NetworkPeerManagerSpec extends AnyFlatSpec with Matchers:
       // Genesis peers and ETH/69 peers are skipped (see dedicated tests below).
       peerProbe.expectNoMessage(100.millis)
       val nonGenesis = peerInfo.remoteStatus.bestHash != peerInfo.remoteStatus.genesisHash
-      val notEth69 = peerInfo.remoteStatus.capability != Capability.ETH69
+      val notEth69 = !Capability.isEth69Plus(peerInfo.remoteStatus.capability)
       if nonGenesis && notEth69 then
         val probe = peerManager.expectMsgClass(classOf[PeerManagerActor.SendMessageCmd])
         probe.peerId shouldBe peer.id
@@ -746,10 +753,12 @@ class NetworkPeerManagerSpec extends AnyFlatSpec with Matchers:
           com.chipprbots.ethereum.network.p2p.messages.SNAP.Codes.StorageRangesCode,
           com.chipprbots.ethereum.network.p2p.messages.SNAP.Codes.TrieNodesCode,
           com.chipprbots.ethereum.network.p2p.messages.SNAP.Codes.ByteCodesCode,
+          com.chipprbots.ethereum.network.p2p.messages.SNAP.Codes.AccessListsCode,
           com.chipprbots.ethereum.network.p2p.messages.SNAP.Codes.GetAccountRangeCode,
           com.chipprbots.ethereum.network.p2p.messages.SNAP.Codes.GetStorageRangesCode,
           com.chipprbots.ethereum.network.p2p.messages.SNAP.Codes.GetTrieNodesCode,
-          com.chipprbots.ethereum.network.p2p.messages.SNAP.Codes.GetByteCodesCode
+          com.chipprbots.ethereum.network.p2p.messages.SNAP.Codes.GetByteCodesCode,
+          com.chipprbots.ethereum.network.p2p.messages.SNAP.Codes.GetAccessListsCode
         ),
         PeerSelector.WithId(peer.id)
       )

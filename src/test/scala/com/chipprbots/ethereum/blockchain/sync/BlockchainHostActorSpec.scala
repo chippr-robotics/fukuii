@@ -54,7 +54,10 @@ class BlockchainHostActorSpec extends AnyFlatSpec with Matchers:
         Codes.GetNodeDataCode,
         Codes.GetReceiptsCode,
         Codes.GetBlockBodiesCode,
-        Codes.GetBlockHeadersCode
+        Codes.GetBlockHeadersCode,
+        // eth/71 (EIP-8159) and eth/72 (EIP-8070): served alongside the other ETH request codes.
+        Codes.GetBlockAccessListsCode,
+        Codes.GetCellsCode
       ),
       PeerSelector.AllPeers
     )

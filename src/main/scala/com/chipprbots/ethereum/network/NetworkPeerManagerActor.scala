@@ -133,7 +133,8 @@ object NetworkPeerManagerActor:
               SNAP.Codes.GetAccountRangeCode,
               SNAP.Codes.GetStorageRangesCode,
               SNAP.Codes.GetTrieNodesCode,
-              SNAP.Codes.GetByteCodesCode
+              SNAP.Codes.GetByteCodesCode,
+              SNAP.Codes.GetAccessListsCode
             ),
             PeerSelector.AllPeers
           ),
@@ -388,11 +389,11 @@ object NetworkPeerManagerActor:
             if peerInfo.isAtGenesis then {
               // Genesis peers are block 0 by definition — nothing to refresh.
             } else
-              val recentlySignaled = peerInfo.remoteStatus.capability == Capability.ETH69 &&
+              val recentlySignaled = Capability.isEth69Plus(peerInfo.remoteStatus.capability) &&
                 lastBlockSignalMs.get(peerId).exists(t => now - t < refreshStaleAfterMs)
               if !recentlySignaled then
                 // Archive-node detection: track consecutive probes with no maxBlockNumber advancement.
-                if peerInfo.remoteStatus.capability == Capability.ETH69 then
+                if Capability.isEth69Plus(peerInfo.remoteStatus.capability) then
                   lastProbeMaxBlock.get(peerId) match
                     case Some(prev) if peerInfo.maxBlockNumber <= prev =>
                       consecutiveUnchangedProbes(peerId) = consecutiveUnchangedProbes.getOrElse(peerId, 0) + 1
@@ -424,7 +425,7 @@ object NetworkPeerManagerActor:
                 coldStartCompleted = true
                 var refreshCount = 0
                 peersWithInfo.foreach { case (peerId, PeerWithInfo(_, peerInfo)) =>
-                  if peerInfo.remoteStatus.capability == Capability.ETH69 && peerInfo.maxBlockNumber > 0 then
+                  if Capability.isEth69Plus(peerInfo.remoteStatus.capability) && peerInfo.maxBlockNumber > 0 then
                     val (cw, source) = reader.resolveETH69ChainWeight(
                       peerInfo.bestBlockHash,
                       peerInfo.maxBlockNumber,
@@ -525,6 +526,10 @@ object NetworkPeerManagerActor:
           handleGetByteCodes(msg, peerId, peersWithInfo.get(peerId))
           Behaviors.same
 
+        case PeerEventCmd(MessageFromPeer(msg: GetAccessLists, peerId)) =>
+          handleGetAccessLists(msg, peerId, peersWithInfo.get(peerId))
+          Behaviors.same
+
         // ── General MessageFromPeer (guarded by peersWithInfo membership) ────
 
         case PeerEventCmd(MessageFromPeer(message, peerId)) if peersWithInfo.contains(peerId) =>
@@ -622,7 +627,7 @@ object NetworkPeerManagerActor:
         peersWithInfo: PeersWithInfo
     ): Behavior[Command] =
       val chainInfoDisplay =
-        if peerInfo.remoteStatus.capability == com.chipprbots.ethereum.network.p2p.messages.Capability.ETH69 then
+        if com.chipprbots.ethereum.network.p2p.messages.Capability.isEth69Plus(peerInfo.remoteStatus.capability) then
           s"latestBlock=${peerInfo.remoteStatus.latestBlock.getOrElse("?")} TD=${peerInfo.remoteStatus.chainWeight.totalDifficulty} (ETH/69, TD from local DB or block-number proxy)"
         else s"TD=${peerInfo.remoteStatus.chainWeight.totalDifficulty}"
       val clientType = NodeClientType.recognize(peerInfo.remoteStatus.remoteClientId)
@@ -636,7 +641,7 @@ object NetworkPeerManagerActor:
       )
 
       // Track best ETH68 peer TD for timed calibration (CalibrateChainWeightNow).
-      if peerInfo.remoteStatus.capability != com.chipprbots.ethereum.network.p2p.messages.Capability.ETH69 then
+      if !com.chipprbots.ethereum.network.p2p.messages.Capability.isEth69Plus(peerInfo.remoteStatus.capability) then
         val peerTD = peerInfo.remoteStatus.chainWeight.totalDifficulty.value
         if bestNetworkTip.forall { case (best, _) => peerTD > best } then
           val prevTD = bestNetworkTip.map(_._1).getOrElse(BigInt(0))
@@ -663,7 +668,7 @@ object NetworkPeerManagerActor:
               )
           }
         }
-        if peerInfo.remoteStatus.capability != com.chipprbots.ethereum.network.p2p.messages.Capability.ETH69 then
+        if !com.chipprbots.ethereum.network.p2p.messages.Capability.isEth69Plus(peerInfo.remoteStatus.capability) then
           val peerTD = peerInfo.remoteStatus.chainWeight.totalDifficulty.value
           reader.getBestBlock.foreach { ourBest =>
             reader.getChainWeightByHash(ourBest.header.hash).foreach { ourWeight =>
@@ -768,7 +773,7 @@ object NetworkPeerManagerActor:
         // harness's eth-relative code switch (cmd/devp2p/internal/ethtest/conn.go) has no case for
         // message code 17 (BlockRangeUpdate at wire offset 16+1) and panics with
         // "unhandled eth msg code 17" the moment it arrives unsolicited.
-        if peerInfo.remoteStatus.capability != Capability.ETH69 && !peerInfo.isAtGenesis then
+        if !Capability.isEth69Plus(peerInfo.remoteStatus.capability) && !peerInfo.isAtGenesis then
           val bestHash = peerInfo.remoteStatus.bestHash
           val probe: MessageSerializable =
             ETHPackets.GetBlockHeaders(ETHPackets.nextRequestId, Right(bestHash), 1, 0, reverse = false)
@@ -892,7 +897,7 @@ object NetworkPeerManagerActor:
           // Archive/static peers (maxBlockNumber unchanged across N probes) are exempt from
           // the monotonic guard so a Tier3 overestimate at handshake can be corrected down.
           blockchainReader match
-            case Some(reader) if updated.remoteStatus.capability == Capability.ETH69 =>
+            case Some(reader) if Capability.isEth69Plus(updated.remoteStatus.capability) =>
               val (cw, source) = reader.resolveETH69ChainWeight(maxBlockHash, maxBlockNumber, isPoWChain)
               val isImprovement = cw.totalDifficulty > updated.chainWeight.totalDifficulty
               val isPeerStatic =
@@ -1139,6 +1144,28 @@ object NetworkPeerManagerActor:
         peerId,
         response.codes.size
       )
+
+    /** Handle incoming GetAccessLists request from a peer (server-side, snap/2 only — EIP-8189).
+      *
+      * fukuii has no EIP-7928 BAL storage, so every requested hash gets the empty-string sentinel — the honest
+      * "unavailable" answer, not fabricated data. Same positional-response contract as ETH71's GetBlockAccessLists; see
+      * SnapServer.serveAccessLists.
+      */
+    private def handleGetAccessLists(
+        msg: GetAccessLists,
+        peerId: PeerId,
+        @annotation.unused peerWithInfo: Option[PeerWithInfo]
+    ): Unit =
+      log.debug(
+        s"Received GetAccessLists request from peer $peerId: requestId=${msg.requestId}, hashes=${msg.hashes.size}, bytes=${msg.responseBytes}"
+      )
+      val response = com.chipprbots.ethereum.network.snapserver.SnapServer.serveAccessLists(msg.requestId, msg.hashes)
+      peerManagerActor ! PeerManagerActor.SendMessageCmd(response, peerId)
+      log.debug(
+        "SNAP-SERVE: GetAccessLists peer={} entries={}",
+        peerId,
+        response.accessLists.size
+      )
   // scalastyle:on number.of.methods
 
   // =========================================================================
@@ -1156,11 +1183,13 @@ object NetworkPeerManagerActor:
     SNAP.Codes.StorageRangesCode,
     SNAP.Codes.TrieNodesCode,
     SNAP.Codes.ByteCodesCode,
+    SNAP.Codes.AccessListsCode,
     // SNAP protocol request codes — incoming requests we serve as a SNAP server.
     SNAP.Codes.GetAccountRangeCode,
     SNAP.Codes.GetStorageRangesCode,
     SNAP.Codes.GetTrieNodesCode,
-    SNAP.Codes.GetByteCodesCode
+    SNAP.Codes.GetByteCodesCode,
+    SNAP.Codes.GetAccessListsCode
   )
 
   /** RemoteStatus was created to decouple status information from protocol status messages (they are different versions
@@ -1272,7 +1301,7 @@ object NetworkPeerManagerActor:
   object PeerInfo:
     def apply(remoteStatus: RemoteStatus, forkAccepted: Boolean): PeerInfo =
       val initialMaxBlock: BigInt =
-        if remoteStatus.capability == com.chipprbots.ethereum.network.p2p.messages.Capability.ETH69 then
+        if com.chipprbots.ethereum.network.p2p.messages.Capability.isEth69Plus(remoteStatus.capability) then
           remoteStatus.latestBlock.getOrElse(BigInt(0))
         else BigInt(0)
       PeerInfo(
