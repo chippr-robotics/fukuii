@@ -472,13 +472,23 @@ class EngineApiService(
                     log.warn("[ENGINE-API] newPayload #{}: INVALID_REQUESTS", payload.blockNumber)
                     Some(false)
                   else
-                    // Detect whether this payload extends canonical (parent == current best) or is a
-                    // sidechain. For canonical-extending payloads we write number→hash; for sidechains
-                    // we store by-hash-only so later forkchoiceUpdated can promote via
+                    // Detect whether this payload extends canonical or is a sidechain. For
+                    // canonical-extending payloads we write number→hash; for sidechains we store
+                    // by-hash-only so later forkchoiceUpdated can promote via
                     // ForkChoiceManager.promoteBranchToCanonical.
+                    //
+                    // "Extends canonical" needs BOTH a canonical parent AND a height no canonical block
+                    // holds yet. A canonical parent alone is not enough: a SIBLING of a canonical block
+                    // has one too, and writing its number→hash entry replaced the canonical block at
+                    // that height without any forkchoiceUpdated — engine_newPayload must never move the
+                    // canonical chain. hive `GetPayloadBodiesByRange (Sidechain) (Paris)` sends exactly
+                    // that sibling (withdrawals shuffled), and engine_getPayloadBodiesByRangeV1 then
+                    // answered with the sibling's body ("withdrawal 1 not equal").
                     val extendsCanonical = parentHeader.exists { p =>
                       blockchainReader.getBlockHeaderByNumber(p.number.value).exists(_.hash == p.hash)
-                    }
+                    } && blockchainReader
+                      .getBlockHeaderByNumber(block.header.number.value)
+                      .forall(_.hash == block.header.hash)
                     if extendsCanonical then blockchainWriter.storeBlock(block).commit()
                     else blockchainWriter.storeBlockByHashOnly(block).commit()
                     blockchainWriter.storeReceipts(block.header.hash, receipts).commit()
