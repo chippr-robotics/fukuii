@@ -39,16 +39,14 @@ class ForkIdTag(
 
   override def toAttr: Option[(ByteVector, ByteVector)] =
     val forkId = ForkId.create(genesisHash(), genesisTimestamp(), blockchainConfig)(currentBestBlock())
-    Some(ethKey -> ByteVector(encode(forkId.toRLPEncodable)))
+    Some(ethKey -> ForkIdTag.encodeEthEntry(forkId))
 
   override def toFilter: KeyValueTag.EnrFilter = enr =>
     enr.content.attrs.get(ethKey) match
       case None => Right(()) // no eth key — pre-EIP-2124 node, accept optimistically
       case Some(ethBytes) =>
-        Try {
-          val rlp = rawDecode(ethBytes.toArray)
-          decode[ForkId](rlp)
-        }.toEither.left.map(e => s"ENR eth key: cannot decode ForkId: ${e.getMessage}") match
+        Try(ForkIdTag.decodeEthEntry(ethBytes.toArray)).toEither.left
+          .map(e => s"ENR eth key: cannot decode ForkId: ${e.getMessage}") match
           case Left(err) => Left(err)
           case Right(remoteForkId) =>
             import ForkIdValidator.syncIoLogger
@@ -60,3 +58,22 @@ class ForkIdTag(
               .unsafeRunSync() match
               case Connect => Right(())
               case other   => Left(s"ENR fork ID incompatible ($other): $remoteForkId")
+
+object ForkIdTag:
+
+  /** The ENR `eth` entry: `[[fork-hash, fork-next], ...rest]` (devp2p enr-entries/eth.md; go-ethereum's `enrEntry` is
+    * `{ForkID; Rest []rlp.RawValue "tail"}`). The fork ID sits inside an outer list. fukuii used to write the bare
+    * `[fork-hash, fork-next]`, which go-ethereum's `n.Load(&entry)` cannot decode, so its node filter never offered a
+    * fukuii node as a dial candidate.
+    */
+  def encodeEthEntry(forkId: ForkId): ByteVector = ByteVector(encode(RLPList(forkId.toRLPEncodable)))
+
+  /** Reads an `eth` entry in the standard form, ignoring any fields after the fork ID. Also reads the bare fork ID
+    * fukuii wrote before, so that fork-ID filtering between fukuii nodes keeps working across a mixed upgrade. Throws
+    * on anything else; callers decide whether that rejects the record.
+    */
+  def decodeEthEntry(bytes: Array[Byte]): ForkId =
+    rawDecode(bytes) match
+      case RLPList(forkId: RLPList, _*)             => decode[ForkId](forkId)
+      case bare @ RLPList(_: RLPValue, _: RLPValue) => decode[ForkId](bare)
+      case other                                    => throw new RuntimeException(s"not an eth ENR entry: $other")

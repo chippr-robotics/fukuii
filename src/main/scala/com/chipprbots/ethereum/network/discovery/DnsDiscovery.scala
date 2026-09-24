@@ -22,7 +22,6 @@ import com.chipprbots.ethereum.forkid.ForkIdValidator
 import com.chipprbots.ethereum.rlp
 import com.chipprbots.ethereum.rlp.RLPList
 import com.chipprbots.ethereum.rlp.RLPValue
-import com.chipprbots.ethereum.rlp.decode
 import com.chipprbots.ethereum.rlp.rawDecode
 import com.chipprbots.ethereum.utils.BlockchainConfig
 import com.chipprbots.ethereum.utils.Logger
@@ -199,7 +198,7 @@ object DnsDiscovery extends Logger:
               attrs
                 .get("eth")
                 .flatMap { ethBytes =>
-                  try Some(decode[ForkId](rawDecode(ethBytes)))
+                  try Some(ForkIdTag.decodeEthEntry(ethBytes))
                   catch case _: Exception => None
                 }
                 .filter(id => !filter.accepts(id)) match
