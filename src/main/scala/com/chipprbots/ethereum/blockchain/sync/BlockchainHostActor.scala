@@ -139,12 +139,20 @@ object BlockchainHostActor:
         .toSeq
 
     /** Bodies for the requested blocks, stopping at the first block we lack — same "reply matched by position"
-      * reasoning as receiptsPrefix (#18) — and once adding the next body would push the response past go-ethereum's
-      * softResponseLimit (2 MiB, eth/protocols/eth/handler.go's ServiceGetBlockBodiesQuery), whichever comes first.
-      * Still capped at maxBlocksBodiesPerMessage. Previously this used `hashes.take(N).flatMap(getBlockBodyByHash)`,
-      * which silently DROPPED a missing body and kept going — `flatMap` discards `None`s rather than stopping — so a
-      * later known body shifted into the earlier missing block's reply slot. Mirrors GetReceipts70's own budget style
-      * (below): a body that alone would blow the budget is left out entirely, never forced in.
+      * reasoning as receiptsPrefix (#18) — and once the bytes already accumulated reach go-ethereum's softResponseLimit
+      * (2 MiB, eth/protocols/eth/handler.go's ServiceGetBlockBodiesQuery), whichever comes first. Still capped at
+      * maxBlocksBodiesPerMessage. Previously this used `hashes.take(N).flatMap(getBlockBodyByHash)`, which silently
+      * DROPPED a missing body and kept going — `flatMap` discards `None`s rather than stopping — so a later known body
+      * shifted into the earlier missing block's reply slot.
+      *
+      * The budget check happens BEFORE fetching/measuring the next candidate body, using only the bytes already
+      * accumulated from PRIOR bodies — exactly go-ethereum's `if bytes >= softResponseLimit { break }`, checked ahead
+      * of `bytes += len(data)`. This means the response can overshoot the 2 MiB budget by up to one body's size, and
+      * the body that crosses the limit is still included — not "a body that would blow the budget is left out": a
+      * `cumBytes + bodyBytes > limit` look-ahead check (the earlier version of this comment/code) would exclude a body
+      * whose OWN size exceeds 2 MiB even when it's the very first candidate, so a peer asking for a single block whose
+      * body alone is over 2 MiB would get an empty BlockBodies every time and could never fetch that block from fukuii
+      * — a liveness bug, not a safety one. Only a body requested AFTER the budget is already exhausted gets left out.
       */
     def bodiesPrefix(blockHashes: Seq[ByteString]): Seq[BlockBody] =
       import com.chipprbots.ethereum.domain.BlockBody.BlockBodyEnc
@@ -159,10 +167,13 @@ object BlockchainHostActor:
 
       val (fitting, _, _) = available.foldLeft((Vector.empty[BlockBody], 0L, false)) {
         case (acc @ (_, _, true), _) => acc
+        case ((bodies, cumBytes, false), _) if cumBytes >= SoftResponseLimitBytes =>
+          (bodies, cumBytes, true) // budget already exhausted by prior bodies — stop before this one
         case ((bodies, cumBytes, false), body) =>
+          // Always include: this may push cumBytes past the limit, which is correct — go-ethereum measures a
+          // body only AFTER deciding to include it, so the body that crosses the limit still ships.
           val bodyBytes = encode(body.toRLPEncodable).length.toLong
-          if cumBytes + bodyBytes > SoftResponseLimitBytes then (bodies, cumBytes, true)
-          else (bodies :+ body, cumBytes + bodyBytes, false)
+          (bodies :+ body, cumBytes + bodyBytes, false)
       }
       fitting
 

@@ -303,18 +303,24 @@ class BlockchainHostActorSpec extends AnyFlatSpec with Matchers:
     val stx = SignedTransaction.sign(tx, BlockHelpers.keyPair, None)
     BlockBody(List(stx), Nil)
 
-  it should "cap a GetBlockBodies response at the 2 MiB soft limit, rather than sending every requested body" taggedAs (
+  // go-ethereum's ServiceGetBlockBodiesQuery checks `bytes >= softResponseLimit` BEFORE adding the next body, using
+  // only bytes already accumulated from PRIOR bodies — so the body that pushes the total past 2 MiB still ships,
+  // and only a body requested AFTER the budget is already exhausted gets left out. Sizes chosen so body(1) is the
+  // one that crosses the limit (comfortably under 2 MiB on its own, but cumulative with body(0) goes over) — it
+  // must still be included; body(2), requested after the budget is exhausted, must not be.
+  it should "cap a GetBlockBodies response at the 2 MiB soft limit, including the body that crosses it" taggedAs (
     UnitTest
   ) in new TestSetup:
-    // 3 bodies x ~900 KiB of transaction payload each: two together (~1.8 MiB) fit the 2 MiB budget, a third
-    // (~2.7 MiB) does not. Well under maxBlocksBodiesPerMessage (200 in this TestSetup), so only the byte budget
-    // can be responsible for truncating the response.
     val hashes: Seq[ByteString] = Seq(
       ByteString(Hex.decode("44" * 32)),
       ByteString(Hex.decode("55" * 32)),
       ByteString(Hex.decode("66" * 32))
     )
-    val bodies: Seq[BlockBody] = Seq.fill(3)(paddedBody(900 * 1024))
+    val bodies: Seq[BlockBody] = Seq(
+      paddedBody(1500 * 1024), // ~1.5 MiB — well under budget alone
+      paddedBody(1000 * 1024), // ~1.0 MiB — cumulative ~2.5 MiB: CROSSES the 2 MiB limit, must still be included
+      paddedBody(500 * 1024) // budget already exhausted before this one is even measured — must be excluded
+    )
 
     blockchainWriter
       .storeBlockBody(BlockHash(hashes(0)), bodies(0))
@@ -331,7 +337,29 @@ class BlockchainHostActorSpec extends AnyFlatSpec with Matchers:
       case ETHPackets.BlockBodies(reqId, returned) =>
         reqId shouldBe BigInt(1)
         returned shouldBe Seq(bodies(0), bodies(1))
-      case other => fail(s"expected BlockBodies with 2 of the 3 requested bodies, got $other")
+      case other => fail(s"expected BlockBodies with the first 2 of the 3 requested bodies, got $other")
+
+  // Liveness: a look-ahead budget check (`cumBytes + bodyBytes > limit` before deciding to include) would exclude
+  // a body whose OWN size exceeds 2 MiB even as the very first candidate (cumBytes=0), so a peer asking for a
+  // single block whose body alone is over 2 MiB would get an empty BlockBodies every time and could never fetch
+  // that block from fukuii. go-ethereum's actual check only looks at bytes already accumulated from PRIOR
+  // bodies (0 here), so the first body is always attempted regardless of its own size.
+  it should "still serve a single body whose own size is over the 2 MiB soft limit" taggedAs (UnitTest) in new TestSetup:
+    val hash: ByteString = ByteString(Hex.decode("77" * 32))
+    val oversizedBody: BlockBody = paddedBody(3 * 1024 * 1024) // ~3 MiB, alone over the 2 MiB budget
+
+    blockchainWriter.storeBlockBody(BlockHash(hash), oversizedBody).commit()
+
+    blockchainHost ! BlockchainHostActor.PeerEventReceived(
+      MessageFromPeer(ETHPackets.GetBlockBodies(BigInt(1), Seq(hash)), peerId)
+    )
+
+    val response = networkPeerManager.expectMsgType[NetworkPeerManagerActor.SendMessageCmd]
+    response.message.underlyingMsg match
+      case ETHPackets.BlockBodies(reqId, returned) =>
+        reqId shouldBe BigInt(1)
+        returned shouldBe Seq(oversizedBody)
+      case other => fail(s"expected BlockBodies with the single oversized body, got $other")
 
   it should "return block headers by block number" taggedAs (UnitTest) in new TestSetup:
     // given
