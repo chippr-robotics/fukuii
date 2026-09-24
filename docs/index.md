@@ -71,7 +71,8 @@ Fukuii is an EVM-compliant execution layer client built with Scala 3. Originatin
 |---------|----------|-----------|--------|
 | Ethereum Classic | 61 | PoW (Ethash) | Full sync (SNAP / fast / regular) |
 | Mordor | 63 | PoW (Ethash) | Full sync (SNAP / fast / regular) |
-| Sepolia | 11155111 | PoS (Engine API) | Validated — 21+ EL peers, Lighthouse CL |
+| Sepolia | 11155111 | PoS (Engine API) | Validated — 21+ EL peers, Lighthouse CL. Glamsterdam activates 2026-10-06 ([details](specifications/GLAMSTERDAM.md)) |
+| Platåberget | 7091047534 | PoS (Engine API) | Glamsterdam testnet — configuration and genesis shipped; Amsterdam support in progress ([details](specifications/GLAMSTERDAM.md)) |
 | Ethereum Mainnet | 1 | PoS (Engine API) | Configuration available |
 
 ## Documentation Organization
