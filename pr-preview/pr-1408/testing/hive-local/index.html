@@ -5557,6 +5557,11 @@ shares that terminal's cgroup, so oomd kills the terminal too. That happened on 
 </span></code></pre></div>
 <p>On a machine that size, use <code>--parallelism 2</code>. The heaviest vectors, such as
 <code>CALLBlake2f_MaxRounds</code>, take about 130 s each at that setting.</p>
+<p>Do not run sbt, or any other large JVM, while a timing-sensitive suite such as <code>engine</code> or
+<code>sync</code> is running. On the ops node, two engine tests failed after the fukuii client froze
+for about 32 s: timers fired late and an Engine API call hit its 20 s timeout. Both times,
+sbt JVMs had pushed the host into swap. Neither test fails on CI runners, where the engine
+suite passes 403/403, so a timeout seen in a shared local run is not evidence about fukuii.</p>
 <p>Logs are in <code>$HIVE_DIR/workspace/logs/</code>. Each client log is under <code>fukuii/</code>.</p>
 <p>Expect fixed overhead per run. On the ops node (4 cores), a single
 <code>consensus/.*UncleFromSideChain_Cancun</code> test took 22.6 min in total: the assembly build plus
