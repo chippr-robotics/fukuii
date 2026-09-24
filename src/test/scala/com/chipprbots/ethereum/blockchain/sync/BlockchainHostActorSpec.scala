@@ -17,11 +17,15 @@ import com.chipprbots.ethereum.Timeouts
 import com.chipprbots.ethereum.blockchain.sync.codec.MptNodeCodecs.*
 import com.chipprbots.ethereum.blockchain.sync.codec.ReceiptCodecs.*
 import com.chipprbots.ethereum.crypto
+import com.chipprbots.ethereum.domain.Address
 import com.chipprbots.ethereum.domain.BlockBody
 import com.chipprbots.ethereum.domain.BlockHeader
 import com.chipprbots.ethereum.domain.BlockNumber
+import com.chipprbots.ethereum.domain.BloomFilter
+import com.chipprbots.ethereum.domain.LegacyReceipt
 import com.chipprbots.ethereum.domain.Receipt
 import com.chipprbots.ethereum.domain.BlockHash
+import com.chipprbots.ethereum.domain.TxLogEntry
 import com.chipprbots.ethereum.mpt.ExtensionNode
 import com.chipprbots.ethereum.mpt.HashNode
 import com.chipprbots.ethereum.mpt.HexPrefix
@@ -42,6 +46,7 @@ import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.GetBlockHeaders
 import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.GetNodeData
 import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.NodeData
 import com.chipprbots.ethereum.network.rlpx.RLPxConnectionHandler.RLPxConfiguration
+import com.chipprbots.ethereum.rlp.RLPList
 import com.chipprbots.ethereum.testing.Tags.*
 import com.chipprbots.ethereum.utils.Config
 
@@ -90,6 +95,123 @@ class BlockchainHostActorSpec extends AnyFlatSpec with Matchers:
         ),
         peerId
       )
+    )
+
+  // ---- ETH70 GetReceipts (EIP-7706 partial receipt delivery) -----------------------------------------------
+  //
+  // Regression coverage for hive's TestGetLargeReceipts: fukuii capped a receipts response at 2 MiB
+  // (softResponseLimit, the constant meant for headers/bodies/ETH69 receipts) instead of the 10 MiB
+  // maxPacketSize go-ethereum's serviceGetReceiptsQuery70 actually uses for eth/70. The undersized cap made
+  // fukuii truncate far more eagerly than go-ethereum ever would for the same >10 MiB fixture, and an unrelated
+  // divergence in how an unfillable block was represented (an empty-but-present placeholder, incomplete=true,
+  // instead of omitting the block entirely with incomplete=false) combined with it to leave the large block's
+  // accumulated receipt root empty (the well-known empty-trie hash) once the hive tool's resume loop finished.
+
+  private def paddedReceipt(dataSize: Int): Receipt =
+    LegacyReceipt.withHashOutcome(
+      postTransactionStateHash = ByteString(Array.fill[Byte](32)(1)),
+      cumulativeGasUsed = 21000,
+      logsBloomFilter = BloomFilter.Empty,
+      logs = Seq(TxLogEntry(Address(0xaa), Seq.empty, ByteString(Array.fill[Byte](dataSize)(0))))
+    )
+
+  // ETH70's wire encoding drops the bloom filter (like ETH69) — the SAME shape BlockchainHostActor's
+  // GetReceipts70 branch builds via ETHPackets.ReceiptBloomFreeEnc. Constructed explicitly (not via
+  // `receipt.toRLPEncodable`) because this file's file-level `ReceiptCodecs.*` wildcard import (needed by the
+  // bloom-INCLUDING ETH68 test above) already provides a same-named extension for `Receipt`, and Scala 3
+  // prefers that native `extension` over a same-scope `implicit class`-provided one regardless of import
+  // locality — so calling through the extension-method syntax here would silently encode the WRONG (bloom
+  // filter included) shape.
+  private def receiptsListRLP(receipts: Seq[Receipt]): RLPList =
+    RLPList(receipts.map(r => ETHPackets.ReceiptBloomFreeEnc(r).toRLPEncodable)*)
+
+  // Compares wire bytes, not `==` on the decoded message: `Receipts70` nests `RLPValue(bytes: Array[Byte])`,
+  // and a case class's auto-derived `equals` compares an `Array` field by REFERENCE (JVM `Array#equals`), not
+  // content — two independently-built receipt lists with byte-for-byte identical content would still (wrongly)
+  // report as unequal. `ByteString` has proper content equality, so comparing the fully-encoded bytes is both
+  // correct and closer to what an actual peer on the wire observes.
+  private def wireBytes(msg: ETHPackets.Receipts70): ByteString =
+    ByteString(ETHPackets.Receipts70.Receipts70Enc(msg).toBytes: Array[Byte])
+
+  private def expectReceipts70(networkPeerManager: TestProbe, peerId: PeerId, expected: ETHPackets.Receipts70): Unit =
+    val actual = networkPeerManager.expectMsgType[NetworkPeerManagerActor.SendMessageCmd]
+    actual.peerId shouldBe peerId
+    ByteString(actual.message.toBytes) shouldBe wireBytes(expected)
+
+  it should "serve receipts up to ~3 MiB in one response without truncating at the old 2 MiB limit" taggedAs (
+    UnitTest
+  ) in new TestSetup:
+    // 3 receipts x ~1 MiB of log data each: over the OLD (wrong) 2 MiB cap, comfortably under the correct
+    // 10 MiB maxPacketSize. Under the bug this fixes, this would have come back truncated
+    // (lastBlockIncomplete=true, only 1-2 receipts) instead of complete.
+    val hash: ByteString = ByteString(Hex.decode("a218e2c611f21232d857e3c8cecdcdf1f65f25a4477f98f6f47e4063807f2308"))
+    val receipts: Seq[Receipt] = Seq.fill(3)(paddedReceipt(1024 * 1024))
+
+    blockchainWriter.storeReceipts(BlockHash(hash), receipts).commit()
+
+    blockchainHost ! BlockchainHostActor.PeerEventReceived(
+      MessageFromPeer(ETHPackets.GetReceipts70(BigInt(0), firstBlockReceiptIndex = 0L, Seq(hash)), peerId)
+    )
+
+    expectReceipts70(
+      networkPeerManager,
+      peerId,
+      ETHPackets.Receipts70(BigInt(0), lastBlockIncomplete = false, RLPList(receiptsListRLP(receipts)))
+    )
+
+  it should "stop serving (no placeholder entry) at the first unknown block, rather than skipping past it" taggedAs (
+    UnitTest
+  ) in new TestSetup:
+    val unknownHash: ByteString = ByteString(Hex.decode("aa" * 32))
+    val knownHash: ByteString = ByteString(Hex.decode("bb" * 32))
+    val knownReceipts: Seq[Receipt] = Seq(paddedReceipt(16))
+
+    // knownHash is stored, but comes AFTER unknownHash in the request — it must never be reached, let alone
+    // have its receipts land in unknownHash's response slot.
+    blockchainWriter.storeReceipts(BlockHash(knownHash), knownReceipts).commit()
+
+    blockchainHost ! BlockchainHostActor.PeerEventReceived(
+      MessageFromPeer(
+        ETHPackets.GetReceipts70(BigInt(0), firstBlockReceiptIndex = 0L, Seq(unknownHash, knownHash)),
+        peerId
+      )
+    )
+
+    expectReceipts70(
+      networkPeerManager,
+      peerId,
+      ETHPackets.Receipts70(BigInt(0), lastBlockIncomplete = false, RLPList())
+    )
+
+  it should "return an explicit empty list (not a stop) for a block already fully resumed, and keep serving the rest" taggedAs (
+    UnitTest
+  ) in new TestSetup:
+    val resumedHash: ByteString = ByteString(Hex.decode("cc" * 32))
+    val nextHash: ByteString = ByteString(Hex.decode("dd" * 32))
+    val resumedReceipts: Seq[Receipt] = Seq(paddedReceipt(16), paddedReceipt(16))
+    val nextReceipts: Seq[Receipt] = Seq(paddedReceipt(16))
+
+    blockchainWriter
+      .storeReceipts(BlockHash(resumedHash), resumedReceipts)
+      .and(blockchainWriter.storeReceipts(BlockHash(nextHash), nextReceipts))
+      .commit()
+
+    // firstBlockReceiptIndex == resumedHash's full receipt count: the client already has everything for it.
+    blockchainHost ! BlockchainHostActor.PeerEventReceived(
+      MessageFromPeer(
+        ETHPackets.GetReceipts70(
+          BigInt(0),
+          firstBlockReceiptIndex = resumedReceipts.size.toLong,
+          Seq(resumedHash, nextHash)
+        ),
+        peerId
+      )
+    )
+
+    expectReceipts70(
+      networkPeerManager,
+      peerId,
+      ETHPackets.Receipts70(BigInt(0), lastBlockIncomplete = false, RLPList(RLPList(), receiptsListRLP(nextReceipts)))
     )
 
   it should "return BlockBodies for block hashes" taggedAs (UnitTest) in new TestSetup:

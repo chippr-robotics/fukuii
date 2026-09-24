@@ -156,12 +156,28 @@ object BlockchainHostActor:
         )
         Some(ETHPackets.Receipts69(requestId, receiptsRLP))
 
-      // ETH70 GetReceipts — partial receipt delivery per EIP-7706.
-      // firstBlockReceiptIndex: skip already-received receipts in the first block (client resume).
-      // Applies 2 MiB soft limit per-receipt; sets lastBlockIncomplete=true when a block is truncated.
+      // ETH70 GetReceipts — partial receipt delivery per EIP-7706, mirroring go-ethereum's
+      // serviceGetReceiptsQuery70/blockReceiptsToNetwork (eth/protocols/eth/handlers.go, receipt.go).
+      // firstBlockReceiptIndex: skip already-received receipts in the first requested block (client resume).
+      //
+      // Response budget is maxPacketSize (10 MiB — the devp2p wire packet limit go-ethereum's eth/handler.go
+      // documents as "commonly enforced by clients"), NOT the 2 MiB softResponseLimit used for
+      // headers/bodies/ETH69 receipts. EIP-7706's whole point is letting a receipts response approach the wire
+      // limit via chunked delivery instead of being held to the conservative single-shot target — using the
+      // smaller constant here meant hive's >10 MiB TestGetLargeReceipts needed far more (and smaller) chunks
+      // than intended, tripping the truncation edge case below far more readily than go-ethereum ever would for
+      // the same fixture, and produced a wrong (empty-trie) accumulated receipt root for the large block.
+      //
+      // If the FIRST still-needed receipt of a block does not fit at all (`fittingEncs` empty while there was at
+      // least one receipt left to serve), go-ethereum omits that block from the response entirely — never an
+      // empty placeholder — and does not flag the response incomplete (`blockReceiptsToNetwork` returns
+      // `(nil, false, nil)`; the caller `break`s without appending). Once at least one receipt of a block HAS
+      // been included, hitting the limit on a later one truncates normally: that block's partial list is
+      // included and `lastBlockIncomplete=true`. A block already fully resumed (`toServe` empty) still gets an
+      // explicit empty list and does not stop serving — that is a confirmation, not a truncation.
       case ETHPackets.GetReceipts70(requestId, firstBlockReceiptIndex, blockHashes) =>
         import ETHPackets.ReceiptBloomFreeEnc
-        val MaxResponseBytes = 2L * 1024 * 1024 // 2 MiB soft limit per EIP-7706
+        val MaxResponseBytes = 10L * 1024 * 1024 // maxPacketSize per go-ethereum eth/handler.go
 
         // State: (accumulated per-block RLP lists, lastBlockIncomplete, cumulative bytes, done flag)
         val (blockReceiptLists, lastBlockIncomplete, _, _) =
@@ -169,14 +185,14 @@ object BlockchainHostActor:
             .take(peerConfiguration.fastSyncHostConfiguration.maxReceiptsPerMessage)
             .zipWithIndex
             .foldLeft((Vector.empty[RLPList], false, 0L, false)) {
-              case (acc @ (_, _, _, true), _) => acc // already truncated mid-block — skip remaining
+              case (acc @ (_, _, _, true), _) => acc // already stopped serving — skip remaining
               case ((lists, _, cumBytes, false), (hash, blockIdx)) =>
                 blockchainReader.getReceiptsByHash(BlockHash(hash)) match
-                  case None => (lists, false, cumBytes, false) // unknown block — skip silently
+                  case None => (lists, false, cumBytes, true) // unknown block — stop, like the nil-results break below
                   case Some(receipts) =>
                     val toServe = if blockIdx == 0 then receipts.drop(firstBlockReceiptIndex.toInt) else receipts
-                    // Encode per receipt, truncate at 2 MiB, track whether we finished the block
-                    val (fittingEncs, incomplete, newBytes) =
+                    // Encode per receipt, stopping once the NEXT one would exceed the budget.
+                    val (fittingEncs, truncatedMidBlock, newBytes) =
                       toServe.foldLeft((Vector.empty[RLPEncodeable], false, cumBytes)) {
                         case (acc2 @ (_, true, _), _) => acc2
                         case ((encs, false, cb), receipt) =>
@@ -185,8 +201,13 @@ object BlockchainHostActor:
                           if cb + encBytes > MaxResponseBytes then (encs, true, cb)
                           else (encs :+ enc, false, cb + encBytes)
                       }
-                    val blockRLP = RLPList(fittingEncs.map(e => e)*)
-                    (lists :+ blockRLP, incomplete, newBytes, incomplete)
+                    if fittingEncs.isEmpty && toServe.nonEmpty then
+                      // Nothing fit, even for the first still-needed receipt: omit this block and stop —
+                      // matches go-ethereum's (nil, false, nil) / "if results == nil { break }".
+                      (lists, false, cumBytes, true)
+                    else
+                      val blockRLP = RLPList(fittingEncs*)
+                      (lists :+ blockRLP, truncatedMidBlock, newBytes, truncatedMidBlock)
             }
 
         val receiptsRLP = RLPList(blockReceiptLists*)
