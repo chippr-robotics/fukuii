@@ -961,11 +961,6 @@ class EngineApiService(
           )
           txs
 
-  /** Internal control-flow signal for a strict build whose transaction list could not be applied. Never escapes
-    * [[buildBlockOnParent]] — it is caught there and turned into a Left.
-    */
-  final private case class ProposerExecutionFailed(reason: String) extends RuntimeException(reason)
-
   /** The gasLimit a proposer puts in the child header.
     *
     * @param target
@@ -1017,7 +1012,9 @@ class EngineApiService(
     *   the child header's gasLimit. Caller's policy: the engine path keeps the parent's (modulo the one-shot EIP-1559
     *   elasticity scale at London activation), the testing path converges toward the configured target.
     * @param strict
-    *   true -> a failed transaction aborts the build with Left; false -> pre-existing lenient engine behaviour.
+    *   true -> a failed transaction aborts the build with Left (the `testing_*` namespace: execution-apis says an
+    *   unapplicable transaction MUST be a JSON-RPC error). false -> `engine_forkchoiceUpdated`: never Left; a
+    *   transaction that cannot be applied is left out, see [[buildLeniently]].
     */
   def buildBlockOnParent(
       parent: Block,
@@ -1027,152 +1024,244 @@ class EngineApiService(
       gasLimit: GasAmount,
       strict: Boolean
   ): Either[String, BuiltBlock] =
-    try
-      // EIP-1559 base fee for the block we are about to propose.
-      //
-      // Delegates to the canonical calculator rather than carrying an inline copy. The copy
-      // that used to live here had a `parent.number == 0 => parentBaseFee` special case that
-      // neither BaseFeeCalculator nor go-ethereum's consensus/misc/eip1559.CalcBaseFee has. On
-      // a chain whose genesis is already London (Sepolia, and every hive sim that sets
-      // HIVE_FORK_LONDON=0) that made us propose block 1 with the genesis base fee instead of
-      // the 1/8 decrease an empty genesis earns: 1,000,000,000 where the rule gives 875,000,000.
-      // Every other client computes the latter, so our block 1 was unacceptable to them —
-      // invisible only because no validation path recomputed it.
-      //
-      // The London-activation exemption the copy was reaching for is already in calcBaseFee,
-      // keyed correctly on olympiaBlockNumber rather than on the parent being genesis. The copy
-      // also floored the decrease at 0 instead of blockchainConfig.baseFeeFloor.
-      val baseFee: BigInt = BaseFeeCalculator.calcBaseFee(parent.header, blockchainConfig)
-      val emptyWithdrawalsRoot = ByteString(
-        kec256(
-          com.chipprbots.ethereum.rlp
-            .encode(com.chipprbots.ethereum.rlp.RLPValue(Array.empty[Byte]))
+    if strict then
+      sealProposerBlock(parent, attrs, transactions, extraData, gasLimit)(executeProposerBlock).left.map { err =>
+        log.error("Proposer-mode execution failed: {}", err)
+        err.describe
+      }
+    else Right(buildLeniently(parent, attrs, transactions, extraData, gasLimit))
+
+  /** Re-executions a lenient build spends dropping failed transactions one by one before it falls back to keeping only
+    * the transactions that ran before the failure. Each attempt re-executes the whole list, so this bounds the cost.
+    */
+  private val LenientBuildRetries = 8
+
+  private def executeProposerBlock(
+      block: Block
+  ): Either[com.chipprbots.ethereum.ledger.BlockExecutionError, ProposerExecution] =
+    blockExecution
+      .executeForProposer(block)
+      .map(r => ProposerExecution(r.receipts, r.gasUsed, r.worldState.stateRootHash, r.executionRequests))
+
+  /** `engine_forkchoiceUpdated`'s build: always a payload, and one that executes.
+    *
+    * A transaction the execution rejects (go-ethereum's `commitTransactions` default arm) is dropped, together with its
+    * sender's later transactions (they cannot follow the nonce gap) and every later transaction whose gas limit no
+    * longer fits what is left of the block; then the list is executed again. A failure that no transaction explains
+    * (system call, deposit-log layout, missing state) yields the empty payload, as go-ethereum keeps its empty payload
+    * when a full build fails.
+    *
+    * WHY. This used to keep EVERY transaction when execution failed and seal the block over the parent's state root
+    * with no receipts: a payload that no client, this one included, can validate. hive `Blob Transactions On Block 1, *
+    * (Cancun)` observed it as a 6-blob payload where an empty one was expected (the blob transaction could no longer
+    * pay the blob base fee); on a live network it is a missed slot.
+    *
+    * Only when even the empty payload cannot be executed does it still fall back to that old shape — empty now — so
+    * forkchoiceUpdated keeps answering with a payloadId.
+    */
+  private def buildLeniently(
+      parent: Block,
+      attrs: PayloadAttributes,
+      transactions: Seq[SignedTransaction],
+      extraData: ByteString,
+      gasLimit: GasAmount
+  ): BuiltBlock =
+    import com.chipprbots.ethereum.ledger.BlockExecutionError.TxsExecutionError
+    @scala.annotation.tailrec
+    def attempt(txs: Seq[SignedTransaction], retriesLeft: Int): BuiltBlock =
+      sealProposerBlock(parent, attrs, txs, extraData, gasLimit)(executeProposerBlock) match
+        case Right(built) => built
+        case Left(TxsExecutionError(failed, before, reason)) =>
+          val failedAt = txs.indexWhere(_.hash == failed.hash)
+          val remaining =
+            if failedAt < 0 then Nil
+            else if retriesLeft > 0 then
+              val sender = SignedTransaction.getSender(failed)
+              val gasLeft = gasLimit.value - before.acumGas
+              val (ran, rest) = txs.splitAt(failedAt)
+              ran ++ rest.drop(1).filterNot { stx =>
+                // acumGas only grows, so a gas limit above what was left BEFORE the failed
+                // transaction can never fit later on either (validateBlockHasEnoughGasLimitForTx).
+                SignedTransaction.getSender(stx) == sender || stx.tx.gasLimit.value > gasLeft
+              }
+            else txs.take(failedAt)
+          log.info(
+            "Proposer build on block {}: leaving out transaction {} ({}); {} of {} transaction(s) remain",
+            parent.header.number,
+            failed.hash.toHex,
+            reason,
+            remaining.size,
+            txs.size
+          )
+          attempt(remaining, retriesLeft - 1)
+        case Left(other) if txs.nonEmpty =>
+          log.warn(
+            "Proposer build on block {}: execution failed for a reason no transaction explains ({}); building the " +
+              "empty payload instead",
+            parent.header.number,
+            other.describe
+          )
+          attempt(Nil, retriesLeft)
+        case Left(other) =>
+          log.error(
+            "Proposer build on block {}: even the empty payload failed to execute ({}); sealing it over the " +
+              "parent's state root",
+            parent.header.number,
+            other.describe
+          )
+          sealProposerBlock(parent, attrs, Nil, extraData, gasLimit)(_ =>
+            Right(ProposerExecution(Nil, BigInt(0), parent.header.stateRoot.value, Nil))
+          ).fold(err => throw new IllegalStateException(s"sealing without execution failed: $err"), identity)
+    attempt(transactions, LenientBuildRetries)
+
+  /** What block execution hands the proposer's header derivation. */
+  final private case class ProposerExecution(
+      receipts: Seq[com.chipprbots.ethereum.domain.Receipt],
+      gasUsed: BigInt,
+      stateRoot: ByteString,
+      executionRequests: Seq[ByteString]
+  )
+
+  /** Derive the proposer's header for exactly `transactions`, in order, executing the skeleton block with `execute`.
+    * The single place every proposer-built header field comes from.
+    */
+  private def sealProposerBlock(
+      parent: Block,
+      attrs: PayloadAttributes,
+      transactions: Seq[SignedTransaction],
+      extraData: ByteString,
+      gasLimit: GasAmount
+  )(
+      execute: Block => Either[com.chipprbots.ethereum.ledger.BlockExecutionError, ProposerExecution]
+  ): Either[com.chipprbots.ethereum.ledger.BlockExecutionError, BuiltBlock] =
+    // EIP-1559 base fee for the block we are about to propose.
+    //
+    // Delegates to the canonical calculator rather than carrying an inline copy. The copy
+    // that used to live here had a `parent.number == 0 => parentBaseFee` special case that
+    // neither BaseFeeCalculator nor go-ethereum's consensus/misc/eip1559.CalcBaseFee has. On
+    // a chain whose genesis is already London (Sepolia, and every hive sim that sets
+    // HIVE_FORK_LONDON=0) that made us propose block 1 with the genesis base fee instead of
+    // the 1/8 decrease an empty genesis earns: 1,000,000,000 where the rule gives 875,000,000.
+    // Every other client computes the latter, so our block 1 was unacceptable to them —
+    // invisible only because no validation path recomputed it.
+    //
+    // The London-activation exemption the copy was reaching for is already in calcBaseFee,
+    // keyed correctly on olympiaBlockNumber rather than on the parent being genesis. The copy
+    // also floored the decrease at 0 instead of blockchainConfig.baseFeeFloor.
+    val baseFee: BigInt = BaseFeeCalculator.calcBaseFee(parent.header, blockchainConfig)
+    val emptyWithdrawalsRoot = ByteString(
+      kec256(
+        com.chipprbots.ethereum.rlp
+          .encode(com.chipprbots.ethereum.rlp.RLPValue(Array.empty[Byte]))
+      )
+    )
+    val emptyTrieRoot = ByteString(
+      kec256(
+        com.chipprbots.ethereum.rlp
+          .encode(com.chipprbots.ethereum.rlp.RLPValue(Array.empty[Byte]))
+      )
+    )
+
+    // Determine which fork is active at the proposed block's timestamp so we emit
+    // the correct HeaderExtraFields variant and header fields.
+    val attrTs = Timestamp(attrs.timestamp)
+    val isShanghai = blockchainConfig.isShanghaiTimestamp(attrTs)
+    val isCancun = blockchainConfig.isCancunTimestamp(attrTs)
+    val isPrague = blockchainConfig.isPragueTimestamp(attrTs)
+    val withdrawals: Seq[com.chipprbots.ethereum.domain.Withdrawal] =
+      attrs.withdrawals.getOrElse(Nil)
+
+    // Compute withdrawalsRoot from attrs (Shanghai+ payload attributes).
+    val computedWithdrawalsRoot =
+      if withdrawals.nonEmpty then computeWithdrawalsRoot(withdrawals)
+      else emptyWithdrawalsRoot
+
+    // EIP-4844 / EIP-7691 / EIP-7892 / EIP-7918 excessBlobGas from parent.
+    val parentExcessBlobGas = parent.header.excessBlobGas.getOrElse(BigInt(0))
+    val parentBlobGasUsed = parent.header.blobGasUsed.getOrElse(BigInt(0))
+    val parentBlobBaseFee = parent.header.baseFee.getOrElse(BigInt(0))
+    val childExcessBlobGas = BlobGasUtils.expectedExcessBlobGas(
+      parentExcessBlobGas,
+      parentBlobGasUsed,
+      parentBlobBaseFee,
+      attrTs,
+      blockchainConfig
+    )
+
+    val parentBeaconBlockRoot =
+      attrs.parentBeaconBlockRoot.getOrElse(ByteString(new Array[Byte](32)))
+
+    // Placeholder extraFields — stateRoot / requestsHash / blobGasUsed are filled in
+    // AFTER executing the block (we can't know them yet).
+    val initialExtraFields =
+      if isPrague then
+        HefPostPrague(
+          baseFee,
+          computedWithdrawalsRoot,
+          BigInt(0),
+          childExcessBlobGas,
+          parentBeaconBlockRoot,
+          ByteString.empty
         )
-      )
-      val emptyTrieRoot = ByteString(
-        kec256(
-          com.chipprbots.ethereum.rlp
-            .encode(com.chipprbots.ethereum.rlp.RLPValue(Array.empty[Byte]))
+      else if isCancun then
+        HefPostCancun(
+          baseFee,
+          computedWithdrawalsRoot,
+          BigInt(0),
+          childExcessBlobGas,
+          parentBeaconBlockRoot
         )
-      )
+      else if isShanghai then HefPostShanghai(baseFee, computedWithdrawalsRoot)
+      else
+        // Paris (post-merge, pre-Shanghai): HefPostOlympia holds only baseFee.
+        // Using HefPostShanghai here breaks the blockHash round-trip: getPayloadV1
+        // returns a payload with no withdrawals field, and newPayloadV1 reconstructs
+        // the header as HefPostOlympia — different RLP, different hash, so every
+        // Paris payload we build fails its own newPayload round-trip.
+        HefPostOlympia(baseFee)
 
-      // Determine which fork is active at the proposed block's timestamp so we emit
-      // the correct HeaderExtraFields variant and header fields.
-      val attrTs = Timestamp(attrs.timestamp)
-      val isShanghai = blockchainConfig.isShanghaiTimestamp(attrTs)
-      val isCancun = blockchainConfig.isCancunTimestamp(attrTs)
-      val isPrague = blockchainConfig.isPragueTimestamp(attrTs)
-      val withdrawals: Seq[com.chipprbots.ethereum.domain.Withdrawal] =
-        attrs.withdrawals.getOrElse(Nil)
+    // Build post-merge header with skeleton (difficulty=0 so payBlockReward skips PoW rewards)
+    val blockNumber = parent.header.number + 1
+    val header = BlockHeader(
+      parentHash = parent.header.hash,
+      ommersHash = BlockHash(
+        ByteString(
+          kec256(com.chipprbots.ethereum.rlp.encode(com.chipprbots.ethereum.rlp.RLPList()))
+        )
+      ),
+      beneficiary = attrs.suggestedFeeRecipient.bytes,
+      stateRoot = TrieRoot.Empty,
+      transactionsRoot = TrieRoot(emptyTrieRoot),
+      receiptsRoot = TrieRoot(emptyTrieRoot),
+      logsBloom = BloomFilter.Empty,
+      difficulty = Difficulty.Zero,
+      number = blockNumber,
+      gasLimit = gasLimit,
+      gasUsed = GasAmount.Zero,
+      unixTimestamp = Timestamp(attrs.timestamp),
+      extraData = extraData,
+      mixHash = BlockHash(attrs.prevRandao),
+      nonce = ByteString(new Array[Byte](8)),
+      extraFields = initialExtraFields
+    )
+    val body = BlockBody(transactions.toList, Nil, withdrawals = attrs.withdrawals)
+    val skeletonBlock = Block(header, body)
 
-      // Compute withdrawalsRoot from attrs (Shanghai+ payload attributes).
-      val computedWithdrawalsRoot =
-        if withdrawals.nonEmpty then computeWithdrawalsRoot(withdrawals)
-        else emptyWithdrawalsRoot
-
-      // EIP-4844 / EIP-7691 / EIP-7892 / EIP-7918 excessBlobGas from parent.
-      val parentExcessBlobGas = parent.header.excessBlobGas.getOrElse(BigInt(0))
-      val parentBlobGasUsed = parent.header.blobGasUsed.getOrElse(BigInt(0))
-      val parentBlobBaseFee = parent.header.baseFee.getOrElse(BigInt(0))
-      val childExcessBlobGas = BlobGasUtils.expectedExcessBlobGas(
-        parentExcessBlobGas,
-        parentBlobGasUsed,
-        parentBlobBaseFee,
-        attrTs,
-        blockchainConfig
-      )
-
-      val parentBeaconBlockRoot =
-        attrs.parentBeaconBlockRoot.getOrElse(ByteString(new Array[Byte](32)))
-
-      // Placeholder extraFields — stateRoot / requestsHash / blobGasUsed are filled in
-      // AFTER executing the block (we can't know them yet).
-      val initialExtraFields =
-        if isPrague then
-          HefPostPrague(
-            baseFee,
-            computedWithdrawalsRoot,
-            BigInt(0),
-            childExcessBlobGas,
-            parentBeaconBlockRoot,
-            ByteString.empty
-          )
-        else if isCancun then
-          HefPostCancun(
-            baseFee,
-            computedWithdrawalsRoot,
-            BigInt(0),
-            childExcessBlobGas,
-            parentBeaconBlockRoot
-          )
-        else if isShanghai then HefPostShanghai(baseFee, computedWithdrawalsRoot)
-        else
-          // Paris (post-merge, pre-Shanghai): HefPostOlympia holds only baseFee.
-          // Using HefPostShanghai here breaks the blockHash round-trip: getPayloadV1
-          // returns a payload with no withdrawals field, and newPayloadV1 reconstructs
-          // the header as HefPostOlympia — different RLP, different hash, so every
-          // Paris payload we build fails its own newPayload round-trip.
-          HefPostOlympia(baseFee)
-
-      // Build post-merge header with skeleton (difficulty=0 so payBlockReward skips PoW rewards)
-      val blockNumber = parent.header.number + 1
-      val header = BlockHeader(
-        parentHash = parent.header.hash,
-        ommersHash = BlockHash(
-          ByteString(
-            kec256(com.chipprbots.ethereum.rlp.encode(com.chipprbots.ethereum.rlp.RLPList()))
-          )
-        ),
-        beneficiary = attrs.suggestedFeeRecipient.bytes,
-        stateRoot = TrieRoot.Empty,
-        transactionsRoot = TrieRoot(emptyTrieRoot),
-        receiptsRoot = TrieRoot(emptyTrieRoot),
-        logsBloom = BloomFilter.Empty,
-        difficulty = Difficulty.Zero,
-        number = blockNumber,
-        gasLimit = gasLimit,
-        gasUsed = GasAmount.Zero,
-        unixTimestamp = Timestamp(attrs.timestamp),
-        extraData = extraData,
-        mixHash = BlockHash(attrs.prevRandao),
-        nonce = ByteString(new Array[Byte](8)),
-        extraFields = initialExtraFields
-      )
-      val body = BlockBody(transactions.toList, Nil, withdrawals = attrs.withdrawals)
-      val skeletonBlock = Block(header, body)
-
-      // Route EVERY post-merge proposer build through executeForProposer (which
-      // goes through BlockExecution.executeBlock — txs, payBlockReward, withdrawals
-      // via processWithdrawals, Prague system calls, then persistState).
-      // The previous `if (isPrague) …  else BlockPreparator.prepareBlock` branch
-      // was broken for Shanghai/Cancun: BlockPreparator.prepareBlock does NOT call
-      // processWithdrawals, so the proposer-built header contained a stateRoot that
-      // did not reflect the withdrawals — every withdrawals hive test came back with
-      // "Block has invalid state root hash" on its own payload round-trip.
-      // executeBlock early-returns cleanly on pre-Prague (processPragueSystemCalls
-      // is a no-op outside Prague), so there's nothing to lose by using it always.
-      import com.chipprbots.ethereum.consensus.validators.std.MptListValidator.intByteArraySerializable
-      import com.chipprbots.ethereum.mpt.MerklePatriciaTrie
-      import com.chipprbots.ethereum.domain.Receipt
-      val (receipts, gasUsedTotal, finalStateRoot, executionRequests) =
-        blockExecution.executeForProposer(skeletonBlock) match
-          case Right(result) =>
-            (
-              result.receipts,
-              result.gasUsed,
-              result.worldState.stateRootHash,
-              result.executionRequests
-            )
-          case Left(err) =>
-            log.error("Proposer-mode execution failed: {}", err)
-            // STRICT (testing_* namespace): an unapplicable transaction is a hard failure the
-            // caller must see as a JSON-RPC error, per execution-apis testing_buildBlockV1 /
-            // testing_commitBlockV1 ("the client MUST return a JSON-RPC error").
-            // LENIENT (engine_forkchoiceUpdated): pre-existing behaviour — keep building with
-            // the parent's stateRoot so a payloadId is still returned. Changing that is a
-            // separate, separately-reviewed change.
-            if strict then throw ProposerExecutionFailed(err.describe)
-            (Seq.empty[Receipt], BigInt(0), parent.header.stateRoot.value, Seq.empty[ByteString])
+    // Route EVERY post-merge proposer build through executeForProposer (which
+    // goes through BlockExecution.executeBlock — txs, payBlockReward, withdrawals
+    // via processWithdrawals, Prague system calls, then persistState).
+    // The previous `if (isPrague) …  else BlockPreparator.prepareBlock` branch
+    // was broken for Shanghai/Cancun: BlockPreparator.prepareBlock does NOT call
+    // processWithdrawals, so the proposer-built header contained a stateRoot that
+    // did not reflect the withdrawals — every withdrawals hive test came back with
+    // "Block has invalid state root hash" on its own payload round-trip.
+    // executeBlock early-returns cleanly on pre-Prague (processPragueSystemCalls
+    // is a no-op outside Prague), so there's nothing to lose by using it always.
+    import com.chipprbots.ethereum.consensus.validators.std.MptListValidator.intByteArraySerializable
+    import com.chipprbots.ethereum.mpt.MerklePatriciaTrie
+    import com.chipprbots.ethereum.domain.Receipt
+    execute(skeletonBlock).map { executed =>
+      val ProposerExecution(receipts, gasUsedTotal, finalStateRoot, executionRequests) = executed
 
       val receiptsLogs =
         BloomFilter.Empty.toArray +: receipts.map(_.logsBloomFilter.toArray)
@@ -1233,9 +1322,8 @@ class EngineApiService(
         gasUsed = GasAmount(gasUsedTotal),
         extraFields = finalExtraFields
       )
-      val built = BuiltBlock(skeletonBlock.copy(header = updatedHeader), receipts, executionRequests)
-      Right(built)
-    catch case ProposerExecutionFailed(msg) => Left(msg)
+      BuiltBlock(skeletonBlock.copy(header = updatedHeader), receipts, executionRequests)
+    }
 
   /** engine_getPayloadV1/V2/V3/V4 — Return a previously built payload by ID. */
   def getPayload(payloadId: ByteString): IO[Either[String, Block]] = IO {

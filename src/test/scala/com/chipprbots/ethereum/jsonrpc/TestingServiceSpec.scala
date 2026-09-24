@@ -214,10 +214,10 @@ class TestingServiceSpec extends AnyWordSpec with Matchers:
 
     "keep engine_forkchoiceUpdated's lenient behaviour: a bad transaction does NOT abort the build" taggedAs
       UnitTest in new Setup:
-        // Regression guard on the extraction. The engine path has always built a payload even when
-        // the transaction list failed to apply (it falls back to the parent's stateRoot and still
-        // hands the CL a payloadId). Only the testing_* namespace is strict. If `strict = false`
-        // ever starts returning Left, forkchoiceUpdated throws instead of answering.
+        // Regression guard on the extraction. The engine path always builds a payload, even when
+        // a transaction fails to apply: it leaves that transaction out and hands the CL a payload
+        // that executes. Only the testing_* namespace is strict. If `strict = false` ever starts
+        // returning Left, forkchoiceUpdated throws instead of answering.
         val bad = rawTx(nonce = 999).toArray.toSignedTransaction
 
         val lenient = engineApi.buildBlockOnParent(
@@ -238,6 +238,9 @@ class TestingServiceSpec extends AnyWordSpec with Matchers:
         )
 
         lenient.isRight shouldBe true
+        // ...and it leaves the unapplicable transaction OUT rather than sealing it into a block no
+        // client can execute.
+        lenient.map(_.block.body.transactionList) shouldBe Right(Nil)
         strict.isLeft shouldBe true
 
     "produce the identical block for the engine and testing paths given identical inputs" taggedAs UnitTest in
