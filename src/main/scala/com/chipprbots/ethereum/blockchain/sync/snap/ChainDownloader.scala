@@ -448,7 +448,26 @@ class ChainDownloader private (
         case _                                                      => false
 
       if isEth70OrNewer then
-        // ETH70: resume partial delivery from the buffered index for the first block in batch
+        // ETH70's GetReceipts70 can only resume ONE block per request — firstBlockResumeIdx applies solely to
+        // batch.head on the wire (go-ethereum's serviceGetReceiptsQuery70 only reads index 0). If a hash with a
+        // buffered partial (from an earlier truncation) is anywhere else in this batch — the resume push in
+        // handleReceipts70 lands it at the front, but a subsequent re-queue (RequestFailed, or another
+        // truncation's own resume-push) can land in front of IT, displacing it to batch.tail — that buffer can
+        // no longer be resumed: the peer will send the block fresh from receipt 0, and handleReceipts70 would
+        // otherwise prepend the stale buffered prefix to the fresh full receipts, duplicating the first k
+        // receipts, failing the receiptsRoot check, and blacklisting the (blameless) peer that answered
+        // correctly (#32). Drop it instead — the peer's full response covers those receipts anyway, so nothing
+        // is lost, only the resume optimisation for this one block.
+        batch.tail.foreach { hash =>
+          if partialReceiptBuffer.contains(hash) then
+            log.debug(
+              "Chain download ETH70: dropping stale partial-receipt buffer for {} — displaced from batch head",
+              s"0x${hash.toArray.take(4).map("%02x".format(_)).mkString}"
+            )
+            partialReceiptState -= hash
+            partialReceiptBuffer -= hash
+        }
+        // Resume partial delivery from the buffered index for the first block in batch
         val firstBlockResumeIdx = partialReceiptState.getOrElse(batch.head, 0L)
         val requestMsg = ETHPackets.GetReceipts70(ETHPackets.nextRequestId, firstBlockResumeIdx, batch)
         context.spawn(
@@ -603,34 +622,45 @@ class ChainDownloader private (
         EmptyBlockBodies(requestedHashes.map(h => s"0x${h.toArray.map("%02x".format(_)).mkString}"))
       )
     else
-      // Store received bodies + atomically advance the body cursor (#1169).
+      // Store received bodies, then advance the body cursor over the contiguous run now on disk (#33).
       val received = requestedHashes.zip(bodies)
-      val highestBodyNumber = received
-        .flatMap { case (hash, _) => blockchainReader.getBlockHeaderByHash(BlockHash(hash)).map(_.number.value) }
-        .maxOption
-        .getOrElse(BigInt(0))
-      val cursorUpdate =
-        if highestBodyNumber > appStateStorage.getBackfillBestBody() then
-          appStateStorage.putBackfillBestBody(highestBodyNumber)
-        else appStateStorage.emptyBatchUpdate
-
       received
         .map { case (hash, body) => blockchainWriter.storeBlockBody(BlockHash(hash), body) }
         .reduce(_.and(_))
-        .and(cursorUpdate)
         .commit()
 
       bodiesDownloaded += received.size
+      advanceBodyCursor()
 
       // Re-queue any remaining hashes that weren't served
       val remaining = requestedHashes.drop(bodies.size)
       if remaining.nonEmpty then bodiesQueue = remaining.toVector ++ bodiesQueue
   // else bodies.isEmpty
 
-  /** Store per-block receipts and atomically advance the backfill receipt cursor (#1169): the cursor update rides in
-    * the same write batch as the highest-numbered block's receipt write, so a crash mid-write never leaves the cursor
-    * ahead of disk. Shared by handleReceipts (eth/68), handleReceipts69 (eth/69), and handleReceipts70's complete-block
-    * path (eth/70-72) — the three receipt decoders differ only in wire shape, not in how a decoded batch is persisted.
+  /** Advance the body backfill cursor only over the prefix that is actually contiguous on disk from `cursor+1` onward
+    * (#33). Bodies are fetched by several concurrent peers and a failed batch is re-queued (7b7a61708), so batches
+    * complete out of order: a batch that fills blocks far above the cursor can commit while a lower block's fetch is
+    * still in flight or retrying. The old code advanced the cursor to `max(cursor, highest block number JUST stored)`,
+    * so the cursor could sit above a gap — and findBestStoredHeader's restart rescan trusts everything at or below the
+    * cursor as stored (`i > bodyFloor` is the only condition that triggers a presence check), so a gap below the cursor
+    * was never re-queued after a crash and that body was lost for good.
+    *
+    * Scanning forward from `cursor+1` and stopping at the first missing body makes the cursor mean what the rescan
+    * assumes: every block at or below it is stored. A crash between the store above and this call simply leaves the
+    * cursor at its old (safe, possibly stale) value — never past a gap — so an old cursor written by a pre-#33 build,
+    * or one left behind mid-crash, costs at most a few redundant re-fetches on restart, never data loss. In the common
+    * case (single peer, in-order delivery) this scans exactly one block per call.
+    */
+  private def advanceBodyCursor(): Unit =
+    val current = appStateStorage.getBackfillBestBody()
+    var n = current + 1
+    while blockchainReader.getBlockHeaderByNumber(n).exists(h => blockchainReader.getBlockBodyByHash(h.hash).isDefined)
+    do n += 1
+    if n - 1 > current then appStateStorage.putBackfillBestBody(n - 1).commit()
+
+  /** Store per-block receipts, then advance the backfill receipt cursor over the contiguous run now on disk (#1169,
+    * #33). Shared by handleReceipts (eth/68), handleReceipts69 (eth/69), and handleReceipts70's complete-block path
+    * (eth/70-72) — the three receipt decoders differ only in wire shape, not in how a decoded batch is persisted.
     *
     * A reply is matched to the request by position, so a peer that skips a block it lacks shifts every later block's
     * receipts onto the wrong hash, and the cursor would then move past blocks whose receipts are wrong. Each block's
@@ -648,17 +678,20 @@ class ChainDownloader private (
       }
       .toVector
     if verified.nonEmpty then
-      val highestReceiptNumber = verified.flatMap { case (_, _, header) => header.map(_.number.value) }.max
-      verified.zipWithIndex.foreach { case ((hash, receipts, _), idx) =>
-        val storeUpdate = blockchainWriter.storeReceipts(BlockHash(hash), receipts)
-        val withCursor =
-          if idx == verified.size - 1 && highestReceiptNumber > appStateStorage.getBackfillBestReceipt() then
-            storeUpdate.and(appStateStorage.putBackfillBestReceipt(highestReceiptNumber))
-          else storeUpdate
-        withCursor.commit()
+      verified.foreach { case (hash, receipts, _) =>
+        blockchainWriter.storeReceipts(BlockHash(hash), receipts).commit()
       }
       receiptsDownloaded += verified.size
+      advanceReceiptCursor()
     verified.size
+
+  /** See advanceBodyCursor — same contiguous-prefix reasoning, applied to the receipt cursor (#33). */
+  private def advanceReceiptCursor(): Unit =
+    val current = appStateStorage.getBackfillBestReceipt()
+    var n = current + 1
+    while blockchainReader.getBlockHeaderByNumber(n).exists(h => blockchainReader.getReceiptsByHash(h.hash).isDefined)
+    do n += 1
+    if n - 1 > current then appStateStorage.putBackfillBestReceipt(n - 1).commit()
 
   /** A block's receipts in a peer's reply do not hash to its header's receiptsRoot. Re-queue it and everything after
     * it, drop any eth/70 partial state for those hashes (it may hold the wrong receipts), and blacklist the peer.

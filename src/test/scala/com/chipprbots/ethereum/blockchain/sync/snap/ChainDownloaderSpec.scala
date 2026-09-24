@@ -233,6 +233,17 @@ class ChainDownloaderSpec
   private def receipts69(requestId: BigInt, receipt: Receipt): ETHPackets.Receipts69 =
     ETHPackets.Receipts69(requestId, RLPList(RLPList(ETHPackets.ReceiptBloomFreeEnc(receipt).toRLPEncodable)))
 
+  private def receipts70(
+      requestId: BigInt,
+      lastBlockIncomplete: Boolean,
+      blocks: Seq[Seq[Receipt]]
+  ): ETHPackets.Receipts70 =
+    ETHPackets.Receipts70(
+      requestId,
+      lastBlockIncomplete,
+      RLPList(blocks.map(receipts => RLPList(receipts.map(r => ETHPackets.ReceiptBloomFreeEnc(r).toRLPEncodable)*))*)
+    )
+
   /** The receipts-trie root block validation checks (MptListValidator). */
   private def receiptsRootOf(receipts: Seq[Receipt]): TrieRoot =
     val trie = MerklePatriciaTrie[Int, Receipt](StateStorage.getReadOnlyStorage(EphemDataSource()))(
@@ -459,6 +470,328 @@ class ChainDownloaderSpec
 
     testKit.stop(downloader)
   }
+
+  // ── Defect 3 (#32): eth/70 partial-receipt resume ordering ─────────────────────────────────────────
+  //
+  // requestReceipts only ever sends firstBlockResumeIdx for batch.head — GetReceipts70's wire format can only
+  // resume ONE block per request (go-ethereum's serviceGetReceiptsQuery70 only reads index 0). handleReceipts70's
+  // own re-queue used to push any hashes the peer never even attempted ("remaining") in FRONT of the hash it just
+  // buffered a partial for, so the very next batch could have the buffered-partial hash anywhere but batch.head.
+  // The peer then (correctly, per protocol) sends that block's receipts fresh from index 0, and the old code
+  // merged them with the STALE buffered prefix — duplicating the first k receipts, failing the receiptsRoot
+  // check, re-queuing the block a third time, and blacklisting the peer that answered honestly.
+  it should "not duplicate a truncated eth/70 block's receipts when it is displaced from the next batch's head" taggedAs UnitTest in {
+    val storage = new EphemBlockchainTestSetup {}
+    val appStateStorage = storage.storagesInstance.storages.appStateStorage
+    val networkPeerManager = TestProbe()
+    val peerEventBus = TestProbe()
+    val replyToProbe = TestProbe()
+
+    val header1Receipts: Seq[Receipt] =
+      Seq(LegacyReceipt(SuccessOutcome, BigInt(21000), BloomFilter(ledger.BloomFilter.create(Nil)), Nil))
+    val r0 = LegacyReceipt(SuccessOutcome, BigInt(30000), BloomFilter(ledger.BloomFilter.create(Nil)), Nil)
+    val r1 = LegacyReceipt(SuccessOutcome, BigInt(31000), BloomFilter(ledger.BloomFilter.create(Nil)), Nil)
+    val r2 = LegacyReceipt(SuccessOutcome, BigInt(32000), BloomFilter(ledger.BloomFilter.create(Nil)), Nil)
+    val header2Receipts: Seq[Receipt] = Seq(r0, r1, r2)
+
+    val chain = BlockHelpers.generateChain(2, BlockHelpers.genesis)
+    val header1: BlockHeader = chain(0).header.copy(receiptsRoot = receiptsRootOf(header1Receipts))
+    val header2: BlockHeader = chain(1).header.copy(receiptsRoot = receiptsRootOf(header2Receipts))
+
+    storage.blockchainWriter
+      .storeBlockHeader(header1)
+      .and(storage.blockchainWriter.storeBlockBody(header1.hash, BlockBody(Nil, Nil)))
+      .and(storage.blockchainWriter.storeBlockHeader(header2))
+      .and(storage.blockchainWriter.storeBlockBody(header2.hash, BlockBody(Nil, Nil)))
+      .commit()
+    appStateStorage.putBackfillBestHeader(BigInt(2)).commit()
+
+    val peerId = PeerId("eth70-peer")
+    val peer =
+      Peer(peerId, new InetSocketAddress("127.0.0.1", 0), TestProbe(peerId.value).ref, incomingConnection = false)
+    val peerStatus = RemoteStatus(
+      Capability.ETH70,
+      1,
+      ChainWeight.totalDifficultyOnly(1),
+      ByteString("best-hash"),
+      ByteString("genesis-hash")
+    )
+    val peerInfo = PeerInfo(
+      peerStatus,
+      forkAccepted = true,
+      chainWeight = peerStatus.chainWeight,
+      maxBlockNumber = BigInt(2),
+      bestBlockHash = peerStatus.bestHash
+    )
+
+    val downloader: TypedActorRef[ChainDownloader.Command] = testKit
+      .spawn(
+        ChainDownloader(
+          blockchainReader = storage.blockchainReader,
+          blockchainWriter = storage.blockchainWriter,
+          appStateStorage = appStateStorage,
+          networkPeerManager = networkPeerManager.ref,
+          peerEventBus = peerEventBus.ref,
+          syncConfig = defaultSyncConfig.copy(blacklistDuration = 5.seconds),
+          replyTo = replyToProbe.ref,
+          maxConcurrentRequests = 4
+        ),
+        s"chain-downloader-eth70-resume-${System.nanoTime()}"
+      )
+
+    val handshakeReq = networkPeerManager.expectMsgType[NetworkPeerManagerActor.GetHandshakedPeersCmd](5.seconds)
+    handshakeReq.replyTo ! NetworkPeerManagerActor.HandshakedPeers(Map(peer -> peerInfo))
+    val peerAddSub = peerEventBus.expectMsgType[SubscribeCmd](5.seconds)
+    peerAddSub.to shouldBe PeerDisconnectedClassifier(PeerSelector.WithId(peerId))
+
+    downloader ! ChainDownloader.Start(BigInt(2))
+    downloader ! ChainDownloader.BoostConcurrency(4)
+
+    val prhSubs1 = (1 to 2).map(_ => peerEventBus.expectMsgType[SubscribeCmd](5.seconds))
+    val prhAdapter: TypedActorRef[PeerEvent] = prhSubs1
+      .collectFirst {
+        case SubscribeCmd(MessageClassifier(codes, PeerSelector.WithId(pid)), ref)
+            if codes.contains(Codes.ReceiptsCode) && pid == peerId =>
+          ref
+      }
+      .getOrElse(fail(s"no MessageClassifier(ReceiptsCode) SubscribeCmd among: $prhSubs1"))
+
+    // Round 1: findBestStoredHeader's restart-rebuild scan walks block numbers DOWN from `best`, so the queue it
+    // seeds is [header2.hash, header1.hash] — header2 is batch.head, and is the one truncated below.
+    val firstSend = networkPeerManager.expectMsgType[NetworkPeerManagerActor.SendMessageCmd](5.seconds)
+    val firstReqId = firstSend.message.underlyingMsg match
+      case ETHPackets.GetReceipts70(reqId, firstIdx, hashes) =>
+        firstIdx shouldBe 0L
+        hashes shouldBe Seq(header2.hash.value, header1.hash.value)
+        reqId
+      case other => fail(s"expected GetReceipts70, got $other")
+
+    // Peer truncates mid-header2 — 2 of its 3 receipts, lastBlockIncomplete=true — and never even attempts
+    // header1. This is what pushes header1 ("remaining") in front of header2's buffered partial in the old code.
+    prhAdapter ! PeerEvent.MessageFromPeer(
+      receipts70(firstReqId, lastBlockIncomplete = true, Seq(Seq(r0, r1))),
+      peerId
+    )
+
+    // Round 2: whichever order the retry lands in, header2 must appear. This is a NEW GetReceipts70 —
+    // requestReceipts spawns a fresh PeerRequestHandler per request, which is a one-shot actor that subscribes
+    // (and stops) once — so round 2 needs its own freshly-captured adapter, not the round-1 one above.
+    val secondSend = networkPeerManager.expectMsgType[NetworkPeerManagerActor.SendMessageCmd](5.seconds)
+    val (secondReqId, secondHashes) = secondSend.message.underlyingMsg match
+      case ETHPackets.GetReceipts70(reqId, _, hashes) =>
+        hashes.toSet shouldBe Set(header1.hash.value, header2.hash.value)
+        (reqId, hashes)
+      case other => fail(s"expected a second GetReceipts70, got $other")
+
+    // Round 1's now-finished PeerRequestHandler unsubscribes (UnsubscribeAllCmd) before round 2's handler
+    // subscribes, so the next 2 SubscribeCmds are no longer guaranteed to be the very next 2 messages on this
+    // probe — collect messages until 2 SubscribeCmds are found, ignoring anything else interleaved.
+    val prhSubs2 = collectSubscribes(peerEventBus, count = 2)
+    val prhAdapter2: TypedActorRef[PeerEvent] = prhSubs2
+      .collectFirst {
+        case SubscribeCmd(MessageClassifier(codes, PeerSelector.WithId(pid)), ref)
+            if codes.contains(Codes.ReceiptsCode) && pid == peerId =>
+          ref
+      }
+      .getOrElse(fail(s"no MessageClassifier(ReceiptsCode) SubscribeCmd among: $prhSubs2"))
+
+    // Peer answers fully this time: header1's single receipt, and header2's receipts FRESH from index 0 (it was
+    // never told to resume header2, wherever header2 landed in this batch) — all 3 receipts, not a resumed 1.
+    val secondBlocks = secondHashes.map(h => if h == header1.hash.value then header1Receipts else header2Receipts)
+    prhAdapter2 ! PeerEvent.MessageFromPeer(
+      receipts70(secondReqId, lastBlockIncomplete = false, secondBlocks),
+      peerId
+    )
+
+    // Fixed code: header2 stores exactly its real 3 receipts (no duplication), the receiptsRoot check passes, and
+    // no third round is needed. Buggy code: the stale 2-receipt buffer is prepended to the fresh 3, the resulting
+    // 5-receipt list fails the receiptsRoot check, header2 is re-queued, and the (blameless) peer is blacklisted —
+    // this `eventually` never observes the store and times out.
+    eventually(timeout(3.seconds), interval(50.millis)) {
+      storage.blockchainReader.getReceiptsByHash(header2.hash) shouldBe Some(header2Receipts)
+    }
+    storage.blockchainReader.getReceiptsByHash(header1.hash) shouldBe Some(header1Receipts)
+
+    testKit.stop(downloader)
+  }
+
+  // ── Defect 4 (#33): backfill body cursor could skip past a gap after a crash ───────────────────────
+  //
+  // putBackfillBestBody used to record the HIGHEST block number just stored, not "everything at or below this is
+  // on disk". Bodies are fetched by several peers concurrently and a failed batch is re-queued (7b7a61708), so
+  // batches complete out of order: a higher block's body can land before a lower one that is still in flight.
+  // findBestStoredHeader's restart rescan trusts the cursor as an unconditional floor (`i > bodyFloor` is the
+  // only condition that triggers a presence check), so if the process "crashes" before the lower block's retry
+  // completes, that gap was never re-queued on the next startup — the body was lost for good.
+  it should "not lose a lower block's body to a gap after a crash, when a higher block's body lands first" taggedAs UnitTest in {
+    val storage = new EphemBlockchainTestSetup {}
+    val appStateStorage = storage.storagesInstance.storages.appStateStorage
+    val networkPeerManager = TestProbe()
+    val peerEventBus = TestProbe()
+    val replyToProbe = TestProbe()
+
+    val chain = BlockHelpers.generateChain(2, BlockHelpers.genesis)
+    val header1: BlockHeader = chain(0).header // its body is the one still "in flight" when the crash happens
+    val header2: BlockHeader = chain(1).header // its body lands first
+
+    storage.blockchainWriter
+      .storeBlockHeader(header1)
+      .and(storage.blockchainWriter.storeBlockHeader(header2))
+      .and(storage.blockchainWriter.storeReceipts(header1.hash, Seq.empty))
+      .and(storage.blockchainWriter.storeReceipts(header2.hash, Seq.empty))
+      .commit()
+    appStateStorage.putBackfillBestHeader(BigInt(2)).commit()
+
+    def mkPeer(id: PeerId): Peer =
+      Peer(id, new InetSocketAddress("127.0.0.1", 0), TestProbe(id.value).ref, incomingConnection = false)
+    def mkInfo: PeerInfo =
+      val status = RemoteStatus(
+        Capability.ETH68,
+        1,
+        ChainWeight.totalDifficultyOnly(1),
+        ByteString("best-hash"),
+        ByteString("genesis-hash")
+      )
+      PeerInfo(
+        status,
+        forkAccepted = true,
+        chainWeight = status.chainWeight,
+        maxBlockNumber = BigInt(2),
+        bestBlockHash = status.bestHash
+      )
+
+    val peer1Id = PeerId("body-peer-1")
+    val peer2Id = PeerId("body-peer-2")
+    val peer1 = mkPeer(peer1Id)
+    val peer2 = mkPeer(peer2Id)
+
+    // blockBodiesPerRequest=1 so each peer's batch is exactly one hash — this is what lets one block's body be
+    // answered while the other is still outstanding, instead of both landing in a single reply.
+    val splitSyncConfig = defaultSyncConfig.copy(blockBodiesPerRequest = 1)
+
+    val downloader1: TypedActorRef[ChainDownloader.Command] = testKit
+      .spawn(
+        ChainDownloader(
+          blockchainReader = storage.blockchainReader,
+          blockchainWriter = storage.blockchainWriter,
+          appStateStorage = appStateStorage,
+          networkPeerManager = networkPeerManager.ref,
+          peerEventBus = peerEventBus.ref,
+          syncConfig = splitSyncConfig,
+          replyTo = replyToProbe.ref,
+          maxConcurrentRequests = 4
+        ),
+        s"chain-downloader-gap-crash-${System.nanoTime()}"
+      )
+
+    val handshakeReq = networkPeerManager.expectMsgType[NetworkPeerManagerActor.GetHandshakedPeersCmd](5.seconds)
+    handshakeReq.replyTo ! NetworkPeerManagerActor.HandshakedPeers(Map(peer1 -> mkInfo, peer2 -> mkInfo))
+
+    val peerAddSubs = (1 to 2).map(_ => peerEventBus.expectMsgType[SubscribeCmd](5.seconds))
+    peerAddSubs.map(_.to).toSet shouldBe Set(
+      PeerDisconnectedClassifier(PeerSelector.WithId(peer1Id)),
+      PeerDisconnectedClassifier(PeerSelector.WithId(peer2Id))
+    )
+
+    downloader1 ! ChainDownloader.Start(BigInt(2))
+    downloader1 ! ChainDownloader.BoostConcurrency(4)
+
+    // Two GetBlockBodies requests go out, one hash each, one per peer.
+    val sends = (1 to 2).map(_ => networkPeerManager.expectMsgType[NetworkPeerManagerActor.SendMessageCmd](5.seconds))
+    val sendForHeader2 = sends
+      .find(_.message.underlyingMsg match
+        case ETHPackets.GetBlockBodies(_, hashes) => hashes == Seq(header2.hash.value)
+        case _                                    => false
+      )
+      .getOrElse(fail(s"no GetBlockBodies for header2 among: $sends"))
+    sends
+      .find(_.message.underlyingMsg match
+        case ETHPackets.GetBlockBodies(_, hashes) => hashes == Seq(header1.hash.value)
+        case _                                    => false
+      )
+      .getOrElse(fail(s"no GetBlockBodies for header1 among: $sends"))
+
+    val reqIdForHeader2 = sendForHeader2.message.underlyingMsg match
+      case ETHPackets.GetBlockBodies(reqId, _) => reqId
+      case other                               => fail(s"expected GetBlockBodies, got $other")
+
+    val prhSubs = (1 to 4).map(_ => peerEventBus.expectMsgType[SubscribeCmd](5.seconds))
+    def messageAdapterFor(pid: PeerId): TypedActorRef[PeerEvent] = prhSubs
+      .collectFirst {
+        case SubscribeCmd(MessageClassifier(codes, PeerSelector.WithId(p)), ref)
+            if codes.contains(Codes.BlockBodiesCode) && p == pid =>
+          ref
+      }
+      .getOrElse(fail(s"no MessageClassifier(BlockBodiesCode) SubscribeCmd for $pid among: $prhSubs"))
+
+    // header2's body lands; header1's request is left unanswered — simulating it still being in flight when the
+    // crash below happens.
+    messageAdapterFor(sendForHeader2.peerId) ! PeerEvent.MessageFromPeer(
+      ETHPackets.BlockBodies(reqIdForHeader2, Seq(BlockBody(Nil, Nil))),
+      sendForHeader2.peerId
+    )
+
+    eventually(timeout(3.seconds), interval(50.millis)) {
+      storage.blockchainReader.getBlockBodyByHash(header2.hash) shouldBe Some(BlockBody(Nil, Nil))
+    }
+    // The crux of #33: the cursor must still reflect the true contiguous prefix (nothing — header1 is still
+    // missing), not the highest block a batch happened to store.
+    appStateStorage.getBackfillBestBody() shouldBe BigInt(0)
+
+    // "Crash": the in-memory downloader (and its outstanding header1 request) is gone; only storage and the
+    // cursor survive, exactly as they would across a process restart.
+    testKit.stop(downloader1)
+
+    val networkPeerManager2 = TestProbe()
+    val peerEventBus2 = TestProbe()
+    val replyToProbe2 = TestProbe()
+    val downloader2: TypedActorRef[ChainDownloader.Command] = testKit
+      .spawn(
+        ChainDownloader(
+          blockchainReader = storage.blockchainReader,
+          blockchainWriter = storage.blockchainWriter,
+          appStateStorage = appStateStorage,
+          networkPeerManager = networkPeerManager2.ref,
+          peerEventBus = peerEventBus2.ref,
+          syncConfig = splitSyncConfig,
+          replyTo = replyToProbe2.ref,
+          maxConcurrentRequests = 4
+        ),
+        s"chain-downloader-gap-crash-restart-${System.nanoTime()}"
+      )
+
+    val handshakeReq2 = networkPeerManager2.expectMsgType[NetworkPeerManagerActor.GetHandshakedPeersCmd](5.seconds)
+    handshakeReq2.replyTo ! NetworkPeerManagerActor.HandshakedPeers(Map(peer1 -> mkInfo))
+    peerEventBus2.expectMsgType[SubscribeCmd](5.seconds) // peer registration
+
+    downloader2 ! ChainDownloader.Start(BigInt(2))
+    downloader2 ! ChainDownloader.BoostConcurrency(4)
+
+    // Fixed code: the cursor stayed at 0, so findBestStoredHeader's rescan re-queues header1 and this request
+    // goes out. Buggy code: the cursor was wrongly advanced to 2, bodyFloor excludes both blocks from the
+    // rescan, bodiesQueue stays empty, and checkCompletion declares the backfill done instead — this never
+    // arrives.
+    val restartSend = networkPeerManager2.expectMsgType[NetworkPeerManagerActor.SendMessageCmd](5.seconds)
+    restartSend.message.underlyingMsg match
+      case ETHPackets.GetBlockBodies(_, hashes) => hashes shouldBe Seq(header1.hash.value)
+      case other                                => fail(s"expected a re-issued GetBlockBodies for header1, got $other")
+
+    testKit.stop(downloader2)
+  }
+
+  /** Collects the next `count` `SubscribeCmd`s seen on `probe`, skipping over anything else interleaved (e.g. an
+    * `UnsubscribeAllCmd` from a just-finished PeerRequestHandler unsubscribing before a new one subscribes). Bounded so
+    * a genuine wedge fails loudly instead of hanging.
+    */
+  private def collectSubscribes(probe: TestProbe, count: Int, maxAttempts: Int = 10): Seq[SubscribeCmd] =
+    val collected = scala.collection.mutable.Buffer.empty[SubscribeCmd]
+    var attempts = 0
+    while collected.size < count && attempts < maxAttempts do
+      attempts += 1
+      probe.receiveOne(5.seconds) match
+        case s: SubscribeCmd => collected += s
+        case _               => ()
+    collected.toSeq
 
   /** Sends `GetProgress` and waits for the `Progress` reply — both a synchronisation barrier (the actor has drained its
     * mailbox up to this point) and a liveness probe (a reply means the behavior did not wedge or stop).
