@@ -626,6 +626,53 @@ class SyncControllerSpec
     storagesInstance.storages.appStateStorage.isStorageRecoveryDone() shouldBe true
   }
 
+  // ── PoS regular sync: ask peers for the block a CL head is missing ─────────────────────────────────────────────────
+  // hive "Invalid Missing Ancestor Syncing ReOrg, StateRoot, EmptyTxs=True, CanonicalReOrg=True, Invalid P9": the only
+  // peer handshook at genesis and never re-advertised, so regular sync never asked it for anything. See
+  // MissingAncestorProbe.
+
+  it should "probe peers for the unknown parent of a CL head held only by hash (PoS, regular sync)" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in withPosRegularSyncSetup(terminalTotalDifficulty = Some(BigInt(0))) { testSetup =>
+    import testSetup.*
+    startRegularSyncAndWait()
+
+    val List(missingParent, clHead) = com.chipprbots.ethereum.BlockHelpers
+      .generateChain(2, com.chipprbots.ethereum.BlockHelpers.genesis): @unchecked
+    blockchainWriter.storeBlockByHashOnly(clHead).commit() // how engine_newPayload stores an ACCEPTED payload
+    forkChoiceManager.notifyBeaconHead(
+      com.chipprbots.ethereum.consensus.engine.ForkChoiceState(clHead.hash.value, zero32, zero32)
+    )
+
+    networkPeerManager.fishForMessage(10.seconds, "ProbeMissingAncestorCmd for the CL head's parent") {
+      case NetworkPeerManagerActor.ProbeMissingAncestorCmd(hash, number) =>
+        hash shouldBe missingParent.hash.value
+        number shouldBe missingParent.number.value
+        true
+      case _ => false
+    }
+  }
+
+  it should "never probe on a chain with no terminal total difficulty — the ETC/Mordor shape" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in withPosRegularSyncSetup(terminalTotalDifficulty = None) { testSetup =>
+    import testSetup.*
+    startRegularSyncAndWait()
+
+    val List(_, clHead) = com.chipprbots.ethereum.BlockHelpers
+      .generateChain(2, com.chipprbots.ethereum.BlockHelpers.genesis): @unchecked
+    blockchainWriter.storeBlockByHashOnly(clHead).commit()
+    // Without a TTD the SyncController never registers as the ForkChoiceManager listener, so this reaches nobody.
+    forkChoiceManager.notifyBeaconHead(
+      com.chipprbots.ethereum.consensus.engine.ForkChoiceState(clHead.hash.value, zero32, zero32)
+    )
+
+    val received = networkPeerManager.receiveWhile(2.seconds) { case m => m }
+    received.collect { case p: NetworkPeerManagerActor.ProbeMissingAncestorCmd => p } shouldBe empty
+  }
+
   // ── T10-T13: startup diagnostic + handler tests ───────────────────────────────────────────────
   // RLP encoding of a 32-byte hash = valid HashNode (length==MaxEncodedNodeLength → no MPTException)
   private def validMptNodeRlp(hash: ByteString): Array[Byte] = Array(0xa0.toByte) ++ hash.toArray
@@ -1117,6 +1164,67 @@ class SyncControllerSpec
 
   def withTestSetup(validators: Validators = new Mocks.MockValidatorsAlwaysSucceed)(test: TestSetup => Any): Unit =
     val testSetup = new TestSetup(validators)
+    try test(testSetup)
+    finally testSetup.cleanup()
+
+  /** A SyncController that starts straight into regular sync with a real ForkChoiceManager, on a chain whose
+    * terminal-total-difficulty is `terminalTotalDifficulty`. `Some` is the ETH/Sepolia shape (clPivotEnabled), `None`
+    * the ETC/Mordor one.
+    */
+  class PosRegularSyncSetup(terminalTotalDifficulty: Option[BigInt]) extends TestSetup():
+    override def defaultSyncConfig: SyncConfig = super.defaultSyncConfig.copy(doFastSync = false, doSnapSync = false)
+
+    lazy val forkChoiceManager: com.chipprbots.ethereum.consensus.engine.ForkChoiceManager =
+      new com.chipprbots.ethereum.consensus.engine.ForkChoiceManager(blockchainReader, blockchainWriter)
+
+    val zero32: ByteString = ByteString(new Array[Byte](32))
+
+    private val baseChainConfig: BlockchainConfig = blockchainConfig
+    private lazy val chainConfigBuilder: com.chipprbots.ethereum.nodebuilder.BlockchainConfigBuilder =
+      new com.chipprbots.ethereum.nodebuilder.BlockchainConfigBuilder
+        with com.chipprbots.ethereum.TestInstanceConfigProvider:
+        implicit override def blockchainConfig: BlockchainConfig =
+          baseChainConfig.copy(terminalTotalDifficulty = terminalTotalDifficulty)
+
+    override lazy val syncController: TestActorRef[Nothing] = TestActorRef(
+      org.apache.pekko.actor.typed.scaladsl.adapter.PropsAdapter(
+        SyncController(
+          blockchain,
+          blockchainReader,
+          blockchainWriter,
+          storagesInstance.storages.appStateStorage,
+          storagesInstance.storages.blockNumberMappingStorage,
+          storagesInstance.storages.evmCodeStorage,
+          storagesInstance.storages.stateStorage,
+          storagesInstance.storages.nodeStorage,
+          storagesInstance.storages.flatSlotStorage,
+          storagesInstance.storages.fastSyncStateStorage,
+          consensusAdapter,
+          validators,
+          peerMessageBus.ref,
+          pendingTransactionsManager.ref
+            .toTyped[com.chipprbots.ethereum.transactions.PendingTransactionsManager.Command],
+          blockTopic,
+          ommersPool.ref,
+          networkPeerManager.ref,
+          blacklist,
+          syncConfig,
+          chainConfigBuilder,
+          forkChoiceManagerOpt = Some(forkChoiceManager),
+          externalSchedulerOpt = Some(system.scheduler)
+        )
+      )
+    )
+
+    def startRegularSyncAndWait(): Unit =
+      syncController ! SyncController.WrappedSyncProtocol(SyncProtocol.Start)
+      eventually {
+        someTimePasses()
+        assert(syncController.children.exists(_.path.name.startsWith("regular-sync")))
+      }
+
+  def withPosRegularSyncSetup(terminalTotalDifficulty: Option[BigInt])(test: PosRegularSyncSetup => Any): Unit =
+    val testSetup = new PosRegularSyncSetup(terminalTotalDifficulty)
     try test(testSetup)
     finally testSetup.cleanup()
 

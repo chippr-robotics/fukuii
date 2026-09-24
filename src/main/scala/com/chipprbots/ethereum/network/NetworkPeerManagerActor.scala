@@ -70,6 +70,15 @@ object NetworkPeerManagerActor:
   final case class UpdateClHeadCmd(blockNumber: BigInt) extends Command
   final case class ConnectToPeerForwardCmd(uri: java.net.URI) extends Command
 
+  /** Ask every handshaked peer whose advertised height is below `number` for the header of block `hash`.
+    *
+    * Sent only by `SyncController`'s regular-sync `BeaconHead` arm (PoS chains only), for the first block missing from
+    * the ancestry of the head the consensus layer named. See `blockchain.sync.MissingAncestorProbe`. The reply needs no
+    * handler of its own: `updateMaxBlock` raises the peer's advertised height from any `BlockHeaders` it sends, which
+    * is what lets `PeersClient.bestPeer` select a peer that handshook at genesis and never re-advertised.
+    */
+  final case class ProbeMissingAncestorCmd(hash: ByteString, number: BigInt) extends Command
+
   // PeerEvent wrapper delivered via messageAdapter from the event bus:
   final case class PeerEventCmd(event: PeerEvent) extends Command
 
@@ -309,6 +318,27 @@ object NetworkPeerManagerActor:
 
         case UpdateClHeadCmd(blockNumber) =>
           if !lastKnownClHead.contains(blockNumber) then lastKnownClHead = Some(blockNumber)
+          Behaviors.same
+
+        case ProbeMissingAncestorCmd(hash, number) =>
+          // Only peers that have NOT told us they are at or past this height. A peer that has is already selectable,
+          // and the by-number fetch will ask it. The post-handshake probe's genesis exemption (no eager probe of a
+          // peer's own genesis hash, 7c6d6e993) concerns a different request: this one names a non-genesis block the
+          // consensus layer has shown exists, so an honest peer answers with the header or with nothing.
+          val behind = peersWithInfo.values.filter(_.peerInfo.maxBlockNumber < number)
+          if behind.nonEmpty then
+            log.info(
+              "MISSING_ANCESTOR_PROBE: block {} ({}) — asking {} of {} peers whose advertised head is below it",
+              number,
+              ByteStringUtils.hash2string(hash),
+              behind.size,
+              peersWithInfo.size
+            )
+            behind.foreach { case PeerWithInfo(peer, _) =>
+              val probe: MessageSerializable =
+                ETHPackets.GetBlockHeaders(ETHPackets.nextRequestId, Right(hash), 1, 0, reverse = false)
+              peerManagerActor ! PeerManagerActor.SendMessageCmd(probe, peer.id)
+            }
           Behaviors.same
 
         case ConnectToPeerForwardCmd(uri) =>

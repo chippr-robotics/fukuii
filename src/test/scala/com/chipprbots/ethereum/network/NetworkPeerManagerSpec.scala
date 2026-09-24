@@ -422,6 +422,53 @@ class NetworkPeerManagerSpec extends AnyFlatSpec with Matchers:
     val resp: PeerInfoResponse = requestSender.expectMsgType[PeerInfoResponse]
     resp.peerInfo.map(_.maxBlockNumber) shouldBe Some(BigInt(24463116))
 
+  it should "probe only peers advertising a height below a missing CL ancestor, and learn the height from the reply" taggedAs (
+    UnitTest,
+    NetworkTest
+  ) in new TestSetup:
+    // hive "Invalid Missing Ancestor Syncing ReOrg … CanonicalReOrg=True": the secondary geth handshook at genesis over
+    // eth/69 and never re-advertised (go-ethereum sends BlockRangeUpdate every 32 blocks). PeersClient.bestPeer never
+    // selects a height-0 peer, so without this probe fukuii sent it nothing for the whole test.
+    expectInitialSubscriptions()
+
+    val genesisInfo: PeerInfo = createGenesisPeerInfo()
+    val genesisEth69: PeerInfo =
+      genesisInfo.copy(remoteStatus = genesisInfo.remoteStatus.copy(capability = Capability.ETH69))
+    setupNewPeer(peer1, peer1Probe, genesisEth69)
+    // Already advertises exactly the missing height: selectable as it is, so it must not be probed (`<`, not `<=`).
+    val atHeightEth69: PeerInfo =
+      peer2Info.copy(remoteStatus = peer2Info.remoteStatus.copy(capability = Capability.ETH69), maxBlockNumber = 14)
+    setupNewPeer(peer2, peer2Probe, atHeightEth69)
+
+    val missing: BlockHeader = baseBlockHeader.copy(number = BlockNumber(14))
+    peersInfoHolder ! ProbeMissingAncestorCmd(missing.hash.value, BigInt(14))
+
+    val sent: PeerManagerActor.SendMessageCmd = peerManager.expectMsgClass(classOf[PeerManagerActor.SendMessageCmd])
+    sent.peerId shouldBe peer1.id
+    sent.message.code shouldBe Codes.GetBlockHeadersCode
+    val gbh: GetBlockHeaders = sent.message.underlyingMsg.asInstanceOf[GetBlockHeaders]
+    gbh.block shouldBe Right(missing.hash.value)
+    gbh.maxHeaders shouldBe BigInt(1)
+    gbh.skip shouldBe BigInt(0)
+    gbh.reverse shouldBe false
+    peerManager.expectNoMessage(100.millis)
+
+    // The reply needs no handler of its own: updateMaxBlock lifts the genesis peer's advertised height off 0.
+    peersInfoHolder ! PeerEventCmd(MessageFromPeer(BlockHeaders(BigInt(0), Seq(missing)), peer1.id))
+    peersInfoHolder ! PeerInfoRequestCmd(peer1.id, requestSender.ref)
+    requestSender.expectMsgType[PeerInfoResponse].peerInfo.map(_.maxBlockNumber) shouldBe Some(BigInt(14))
+
+  it should "send nothing for a missing CL ancestor when no peer is behind it" taggedAs (UnitTest, NetworkTest) in
+    new TestSetup:
+      expectInitialSubscriptions()
+      val aheadEth69: PeerInfo =
+        peer2Info.copy(remoteStatus = peer2Info.remoteStatus.copy(capability = Capability.ETH69), maxBlockNumber = 20)
+      setupNewPeer(peer2, peer2Probe, aheadEth69)
+
+      peersInfoHolder ! ProbeMissingAncestorCmd(baseBlockHeader.copy(number = BlockNumber(14)).hash.value, BigInt(14))
+
+      peerManager.expectNoMessage(100.millis)
+
   it should "route SNAP protocol messages to registered SNAPSyncController" taggedAs (
     UnitTest,
     NetworkTest

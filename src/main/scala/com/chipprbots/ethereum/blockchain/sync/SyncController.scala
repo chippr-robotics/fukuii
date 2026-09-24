@@ -1037,6 +1037,15 @@ object SyncController:
           val isNewBeaconHead = !latestBeaconHead.exists(_.headHash == bh.headHash)
           handleBeaconHead(bh, snapSyncOpt = None)
           if isNewBeaconHead then regularSync ! SyncProtocol.NewCanonicalHead(bh.headHash, bh.knownHeader)
+          // The CL named a head whose ancestry we lack. Regular sync only asks peers that have ADVERTISED a height, and
+          // a peer that handshook at genesis may never re-advertise (go-ethereum: every 32 blocks), so ask peers for
+          // the missing block by hash. Sent on every FCU until the gap closes — the CL re-sends FCU, and a peer that
+          // lacked the block last time may have it now. A node keeping up sends nothing: its heads are executed.
+          if clPivotEnabled then
+            MissingAncestorProbe.target(bh, blockchainReader).foreach { t =>
+              networkPeerManager ! com.chipprbots.ethereum.network.NetworkPeerManagerActor
+                .ProbeMissingAncestorCmd(t.hash, t.number)
+            }
           Behaviors.same
         case msg: SyncProtocol.RegularSyncCommand =>
           // GetStatus (JSON-RPC eth_syncing), MinedBlock (miner), and other RegularSyncCommand subtypes
