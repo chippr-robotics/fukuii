@@ -4,7 +4,7 @@ package com.chipprbots.ethereum.blockchain.sync
 
 import org.apache.pekko.actor.ActorRef
 import org.apache.pekko.actor.ActorSystem
-
+import org.apache.pekko.actor.typed.ActorRef as TypedActorRef
 import org.apache.pekko.actor.typed.scaladsl.adapter.*
 import org.apache.pekko.testkit.ExplicitlyTriggeredScheduler
 import org.apache.pekko.testkit.TestActor.AutoPilot
@@ -41,7 +41,10 @@ import com.chipprbots.ethereum.ledger.VMImpl
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor.HandshakedPeers
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor.SendMessageCmd
+import com.chipprbots.ethereum.network.PeerEventBusActor
 import com.chipprbots.ethereum.network.PeerEventBusActor.PeerEvent.MessageFromPeer
+import com.chipprbots.ethereum.network.PeerId
+import com.chipprbots.ethereum.network.p2p.Message
 import com.chipprbots.ethereum.network.p2p.messages.ETHPackets
 import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.BlockBodies
 import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.GetBlockBodies
@@ -259,7 +262,15 @@ class SyncControllerSpec
       val newBlocks =
         getHeaders(defaultStateBeforeNodeRestart.bestBlockHeaderNumber + 1, syncConfig.blockHeadersPerRequest)
 
-      setupAutoPilot(networkPeerManager, handshakedPeers, defaultPivotBlockHeader, BlockchainData(newBlocks))
+      // Serve only headers until the persisted pivot has been checked. With every request answered, fast sync reaches
+      // finish() within one poll of `eventually`, and finish() purges the sync state this check reads.
+      val autopilot = setupAutoPilot(
+        networkPeerManager,
+        handshakedPeers,
+        defaultPivotBlockHeader,
+        BlockchainData(newBlocks),
+        onlyPivot = true
+      )
       val fast = syncController.children.find(_.path.name.startsWith("fast-sync")).get
 
       // Inject far-ahead headers into Typed FastSync via WrappedPrhResult (private[sync] — accessible here).
@@ -277,6 +288,8 @@ class SyncControllerSpec
           someTimePasses()
           storagesInstance.storages.fastSyncStateStorage.getSyncState().get.pivotBlock shouldBe defaultPivotBlockHeader
         }
+
+        autopilot.updateAutoPilot(handshakedPeers, defaultPivotBlockHeader, BlockchainData(newBlocks))
 
         // even though we receive this future headers fast sync should finish
         eventually {
@@ -370,8 +383,10 @@ class SyncControllerSpec
         onlyPivot = true
       )
 
+    // Advance 300 ms per poll, not 3 s: each rejection reschedules the next pivot request pivotBlockReScheduleInterval
+    // (1 s) later, and a 3 s step can run two or three of them between polls, so the count skips past 1.
     eventually {
-      someTimePasses()
+      littleTimePasses()
       storagesInstance.storages.fastSyncStateStorage.getSyncState().get.pivotBlockUpdateFailures shouldBe 1
     }
 
@@ -825,7 +840,11 @@ class SyncControllerSpec
     // + cake overrides
 
     val networkPeerManager: TestProbe = TestProbe()
-    val peerMessageBus: TestProbe = TestProbe()
+    // A real bus, not a probe: SyncController's typed requesters (PeerRequestHandler, PivotBlockSelector) send
+    // SendMessageCmd with no sender and wait on the bus for the reply, so the autopilot publishes every fake-peer
+    // response here, as PeerActor publishes a decoded wire message.
+    val peerMessageBus: TypedActorRef[PeerEventBusActor.Command] =
+      system.spawn(PeerEventBusActor.behavior(), "peer-event-bus")
     val pendingTransactionsManager: TestProbe = TestProbe()
 
     val ommersPool: TestProbe = TestProbe()
@@ -878,7 +897,7 @@ class SyncControllerSpec
           storagesInstance.storages.fastSyncStateStorage,
           consensusAdapter,
           validators,
-          peerMessageBus.ref,
+          peerMessageBus,
           pendingTransactionsManager.ref
             .toTyped[com.chipprbots.ethereum.transactions.PendingTransactionsManager.Command],
           blockTopic,
@@ -921,38 +940,43 @@ class SyncControllerSpec
         failedBodiesTries: Int,
         onlyPivot: Boolean,
         failedNodeRequest: Boolean,
-        autoPilotProbeRef: ActorRef
+        autoPilotProbeRef: ActorRef,
+        earlierPivotHeaders: Seq[BlockHeader] = Nil
     ) extends AutoPilot:
+      /** Answer as a peer does: the requester is subscribed to the bus, not waiting on a reply to itself. */
+      private def reply(response: Message, peer: PeerId): Unit =
+        peerMessageBus ! PeerEventBusActor.PublishCmd(MessageFromPeer(response, peer))
+
       override def run(sender: ActorRef, msg: Any): AutoPilot =
         msg match
-          case NetworkPeerManagerActor.GetHandshakedPeers =>
-            sender ! handshakedPeers
-            this
-
           case NetworkPeerManagerActor.GetHandshakedPeersCmd(replyTo) =>
             replyTo ! handshakedPeers
-            this
-
-          case NetworkPeerManagerActor.RegisterChainWeightCalibrationTarget(_) =>
             this
 
           case NetworkPeerManagerActor.RegisterChainWeightCalibrationTargetCmd(_) =>
             this
 
-          case NetworkPeerManagerActor.CalibrateChainWeightNow =>
+          // SyncController sends this 30 s after regular sync starts. Unhandled, it would throw in the autopilot,
+          // which restarts the TestActor without its autopilot and leaves every later request unanswered.
+          case NetworkPeerManagerActor.CalibrateChainWeightNowCmd =>
             this
 
-          // ETH69 G5 by-hash backlink probe: block = Right(hash). Store pivot header in the
+          // ETH69 G5 by-hash backlink probe: block = Right(hash). Store the probed pivot header in the
           // canonical chain so PivotBlockSelector's canonical-match check succeeds, then reply
-          // with the pivot header as the single-element backlink chain.
+          // with it as the single-element backlink chain. Answer for the hash asked about: an election
+          // held before updateAutoPilot can be probed after it, and a reply rooted at the new pivot fails
+          // the "starts at the pivot" check, which deepens every later election by pivotBlockOffset.
           case SendMessageCmd(msg: ETHPackets.GetBlockHeaders.GetBlockHeadersEnc, peer)
               if msg.underlyingMsg.block.isRight =>
             val requestId = msg.underlyingMsg.requestId
-            blockchainWriter.storeBlockHeader(pivotHeader).commit()
+            val probedHash = msg.underlyingMsg.block.toOption.get
+            val probedHeader =
+              (pivotHeader +: earlierPivotHeaders).find(_.hash.value == probedHash).getOrElse(pivotHeader)
+            blockchainWriter.storeBlockHeader(probedHeader).commit()
             storagesInstance.storages.blockNumberMappingStorage
-              .put(pivotHeader.number.value, pivotHeader.hash.value)
+              .put(probedHeader.number.value, probedHeader.hash.value)
               .commit()
-            sender ! MessageFromPeer(ETHPackets.BlockHeaders(requestId, Seq(pivotHeader)), peer)
+            reply(ETHPackets.BlockHeaders(requestId, Seq(probedHeader)), peer)
             this
 
           // Handle ETH66 GetBlockHeaders by block number (with requestId)
@@ -962,55 +986,51 @@ class SyncControllerSpec
             val requestedBlockNumber = underlyingMessage.block.swap.toOption.get
             if requestedBlockNumber == pivotHeader.number.value then
               // pivot block
-              sender ! MessageFromPeer(ETHPackets.BlockHeaders(requestId, Seq(pivotHeader)), peer)
+              reply(ETHPackets.BlockHeaders(requestId, Seq(pivotHeader)), peer)
             else
               val headers = generateBlockHeaders66(underlyingMessage, blockchainData)
-              sender ! MessageFromPeer(ETHPackets.BlockHeaders(requestId, headers), peer)
+              reply(ETHPackets.BlockHeaders(requestId, headers), peer)
             this
 
           // Handle ETH68/69 GetReceipts (with requestId)
           case SendMessageCmd(msg: ETHPackets.GetReceipts.GetReceiptsEnc, peer) if !onlyPivot =>
             val requestId = msg.underlyingMsg.requestId
             if failedReceiptsTries > 0 then
-              sender ! MessageFromPeer(ETHPackets.Receipts68(requestId, RLPList()), peer)
+              reply(ETHPackets.Receipts68(requestId, RLPList()), peer)
               this.copy(failedReceiptsTries = failedReceiptsTries - 1)
             else
               val rec = msg.underlyingMsg.blockHashes.flatMap(h => blockchainData.receipts.get(h))
               // For empty receipts, create an RLPList with empty receipt sequences
               val receiptsRlp = RLPList(rec.map(_ => RLPList())*)
-              sender ! MessageFromPeer(ETHPackets.Receipts68(requestId, receiptsRlp), peer)
+              reply(ETHPackets.Receipts68(requestId, receiptsRlp), peer)
               this
 
           case SendMessageCmd(msg: ETHPackets.GetBlockBodies.GetBlockBodiesEnc, peer) if !onlyPivot =>
             val requestId = msg.underlyingMsg.requestId
             if failedBodiesTries > 0 then
-              sender ! MessageFromPeer(ETHPackets.BlockBodies(requestId, Seq.empty), peer)
+              reply(ETHPackets.BlockBodies(requestId, Seq.empty), peer)
               this.copy(failedBodiesTries = failedBodiesTries - 1)
             else
               val bod = msg.underlyingMsg.hashes.flatMap(h => blockchainData.bodies.get(h))
-              sender ! MessageFromPeer(ETHPackets.BlockBodies(requestId, bod), peer)
+              reply(ETHPackets.BlockBodies(requestId, bod), peer)
               this
 
           case SendMessageCmd(msg: GetBlockBodiesEnc, peer) if !onlyPivot =>
             val requestId = msg.underlyingMsg.requestId
             if failedBodiesTries > 0 then
-              sender ! MessageFromPeer(BlockBodies(requestId, Seq.empty), peer)
+              reply(BlockBodies(requestId, Seq.empty), peer)
               this.copy(failedBodiesTries = failedBodiesTries - 1)
             else
               val bod = msg.underlyingMsg.hashes.flatMap(h => blockchainData.bodies.get(h))
-              sender ! MessageFromPeer(BlockBodies(requestId, bod), peer)
+              reply(BlockBodies(requestId, bod), peer)
               this
 
           // Handle GetNodeData (EIP-4938: rejected in ETH68, but still handled for legacy)
           case SendMessageCmd(_: ETHPackets.GetNodeData.GetNodeDataEnc, peer) if !onlyPivot =>
             stateDownloadStarted = true
-            if !failedNodeRequest then
-              sender ! MessageFromPeer(
-                ETHPackets.NodeData(Seq(ByteString(defaultStateMptLeafWithAccount.toArray))),
-                peer
-              )
-            if !failedNodeRequest then
-              sender ! MessageFromPeer(ETH63NodeData(Seq(defaultStateMptLeafWithAccount)), peer)
+            // One reply. The classic harness sent this twice, as ETHPackets.NodeData and as ETH63NodeData, which is
+            // an import alias of the same class.
+            if !failedNodeRequest then reply(ETH63NodeData(Seq(defaultStateMptLeafWithAccount)), peer)
             this
 
           case SendMessageCmd(_, _) =>
@@ -1018,7 +1038,16 @@ class SyncControllerSpec
 
           case AutoPilotUpdateData(peers, pivot, data, failedReceipts, failedBodies, onlyPivot, failedNode) =>
             sender ! DataUpdated
-            this.copy(peers, pivot, data, failedReceipts, failedBodies, onlyPivot, failedNode)
+            this.copy(
+              peers,
+              pivot,
+              data,
+              failedReceipts,
+              failedBodies,
+              onlyPivot,
+              failedNode,
+              earlierPivotHeaders = pivotHeader +: earlierPivotHeaders
+            )
 
       def updateAutoPilot(
           handshakedPeers: HandshakedPeers,
@@ -1201,7 +1230,7 @@ class SyncControllerSpec
           storagesInstance.storages.fastSyncStateStorage,
           consensusAdapter,
           validators,
-          peerMessageBus.ref,
+          peerMessageBus,
           pendingTransactionsManager.ref
             .toTyped[com.chipprbots.ethereum.transactions.PendingTransactionsManager.Command],
           blockTopic,
