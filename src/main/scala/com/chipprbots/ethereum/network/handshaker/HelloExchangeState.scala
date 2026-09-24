@@ -45,9 +45,16 @@ case class HelloExchangeState(handshakerConfiguration: NetworkHandshakerConfigur
       Config.supportedCapabilities.mkString(", ")
     )
 
-    // Check if peer supports SNAP/1 protocol
-    val supportsSnap = peerCapabilities.contains(Capability.SNAP1)
-    log.debug("PEER_SNAP_SUPPORT: supportsSnap={}, p2pVersion={}", supportsSnap, hello.p2pVersion)
+    // Negotiated SNAP version (independent of the ETH negotiation below — devp2p negotiates each
+    // protocol family separately; see Capability.negotiateSnap).
+    val negotiatedSnap = Capability.negotiateSnap(peerCapabilities, Config.supportedCapabilities)
+    val supportsSnap = negotiatedSnap.isDefined
+    log.debug(
+      "PEER_SNAP_SUPPORT: supportsSnap={}, negotiatedSnap={}, p2pVersion={}",
+      supportsSnap,
+      negotiatedSnap.map(_.toString).getOrElse("none"),
+      hello.p2pVersion
+    )
 
     // Log compression decision based on p2p version
     val compressionPolicy =
@@ -71,6 +78,21 @@ case class HelloExchangeState(handshakerConfiguration: NetworkHandshakerConfigur
 
     negotiationResult match
 
+      case Some(cap @ (Capability.ETH72 | Capability.ETH71 | Capability.ETH70)) =>
+        log.debug(
+          "PROTOCOL_NEGOTIATED: clientId={}, protocol={}, supportsSnap={} (negotiatedSnap={})",
+          hello.clientId,
+          cap,
+          supportsSnap,
+          negotiatedSnap.map(_.toString).getOrElse("none")
+        )
+        EthNodeStatus70ExchangeState(
+          handshakerConfiguration,
+          cap,
+          supportsSnap = supportsSnap,
+          peerCapabilities,
+          clientId = hello.clientId
+        )
       case Some(Capability.ETH69) =>
         log.debug(
           "PROTOCOL_NEGOTIATED: clientId={}, protocol=eth/69, supportsSnap={} (snap/1 explicit={})",
