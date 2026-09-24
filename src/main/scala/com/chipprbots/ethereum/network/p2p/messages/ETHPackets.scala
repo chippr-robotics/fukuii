@@ -429,6 +429,33 @@ object ETHPackets:
           s"Unsupported blob tx network wrapper version $version (only $BlobTxWrapperVersionEip7594 is defined by EIP-7594)"
         )
 
+    /** EIP-4844: a sidecar belongs to its tx only if commitment i hashes to the tx's versioned hash i —
+      * `kzg_to_versioned_hash(c) = 0x01 || sha256(c)[1:]` — with one commitment per hash. A sidecar that fails this is
+      * not the tx's sidecar at all, however well-formed, so the peer that sent it is faulty. This needs no KZG
+      * arithmetic, and it holds whether or not the blobs themselves travel with the tx.
+      */
+    private[messages] def validateBlobCommitments(stx: SignedTransaction, commitmentsField: RLPEncodeable): Unit =
+      val versionedHashes = stx.tx match
+        case blobTx: BlobTransaction => blobTx.blobVersionedHashes.map(_.toArray)
+        case other => throw new RuntimeException(s"Blob tx sidecar on a ${other.getClass.getSimpleName}")
+      val commitments = commitmentsField match
+        case RLPList(items*) =>
+          items.map {
+            case RLPValue(commitment) => commitment
+            case other => throw new RuntimeException(s"Blob tx sidecar commitment is not a byte string: $other")
+          }
+        case other => throw new RuntimeException(s"Blob tx sidecar commitments are not a list: $other")
+      if commitments.size != versionedHashes.size then
+        throw new RuntimeException(
+          s"Blob tx sidecar has ${commitments.size} commitments for ${versionedHashes.size} versioned hashes"
+        )
+      commitments.zip(versionedHashes).zipWithIndex.foreach { case ((commitment, versionedHash), i) =>
+        val hash = java.security.MessageDigest.getInstance("SHA-256").digest(commitment)
+        hash(0) = 0x01 // VERSIONED_HASH_VERSION_KZG
+        if !java.util.Arrays.equals(hash, versionedHash) then
+          throw new RuntimeException(s"Blob tx sidecar commitment $i does not match versioned hash $i")
+      }
+
     /** A transaction as one item of a transaction list (`Transactions`, `PooledTransactions`). EIP-2718: a typed tx is
       * a single RLP byte string holding `type || rlp(payload)`. A bare `PrefixedRLPEncodable` serializes as that
       * concatenation with no string header — fukuii's own decoder tolerates it, other clients reject it. BlockBody and
@@ -1121,6 +1148,8 @@ object ETHPackets:
               val rawBytes = com.chipprbots.ethereum.rlp.encode(prefixed)
               val unwrapped = PrefixedRLPEncodable(Transaction.Type03, inner.items.head)
               val stx = unwrapped.toSignedTransaction
+              // Commitments sit second from the end in both wrapper shapes (…, commitments, proofs).
+              validateBlobCommitments(stx, inner.items(inner.items.size - 2))
               blobTxRawBytesBuilder += (stx.hash.value -> ByteString(rawBytes))
               unwrapped
             case other => other

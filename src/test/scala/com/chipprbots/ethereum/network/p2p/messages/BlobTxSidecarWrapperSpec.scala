@@ -195,3 +195,35 @@ class BlobTxSidecarWrapperSpec extends AnyFlatSpec with Matchers:
     val thrown = intercept[RuntimeException](poolWrap(badVersion).toPooledTransactions)
     thrown.getMessage should include("scalar")
   }
+
+  // ── Sidecar consistency (EIP-4844: commitment i hashes to versioned hash i) ──────────────────────
+  // hive's TestBlobTxWithMismatchedSidecar delivers a tx whose first commitment is zeroed. The size is unchanged, so
+  // the announcement check cannot see it; only hashing the commitments can.
+
+  it should "reject a sidecar whose commitment does not hash to the tx's versioned hash" in {
+    val items = outerItems
+    val zeroed = RLPList(RLPValue(new Array[Byte](48)))
+    val mismatched = reWrap(items.head, items(1), items(2), zeroed, items(4))
+
+    val thrown = intercept[RuntimeException](poolWrap(mismatched).toPooledTransactions)
+    thrown.getMessage should include("does not match versioned hash 0")
+  }
+
+  it should "reject a sidecar with a different number of commitments than versioned hashes" in {
+    val items = outerItems
+    val doubled = RLPList(items(3).asInstanceOf[RLPList].items ++ items(3).asInstanceOf[RLPList].items*)
+    val tooMany = reWrap(items.head, items(1), items(2), doubled, items(4))
+
+    val thrown = intercept[RuntimeException](poolWrap(tooMany).toPooledTransactions)
+    thrown.getMessage should include("2 commitments for 1 versioned hashes")
+  }
+
+  it should "check the commitments of a sidecar sent without its blobs, the eth/72 form hive's test uses" in {
+    val items = outerItems
+    val noBlobs = reWrap(items.head, items(1), RLPList(), items(3), items(4))
+    val noBlobsMismatched = reWrap(items.head, items(1), RLPList(), RLPList(RLPValue(new Array[Byte](48))), items(4))
+
+    Hex.toHexString(poolWrap(noBlobs).toPooledTransactions.txs.head.hash.value.toArray) shouldBe ExpectedTxHash
+    val thrown = intercept[RuntimeException](poolWrap(noBlobsMismatched).toPooledTransactions)
+    thrown.getMessage should include("does not match versioned hash 0")
+  }
