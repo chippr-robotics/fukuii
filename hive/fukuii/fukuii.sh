@@ -286,6 +286,17 @@ JVM_OPTS=(
     # handful of tiny stubs, and not caching them measured no slower (N=20).
     -XX:+UnlockDiagnosticVMOptions
     -XX:-AOTAdapterCaching
+    # Inline ProgramState's constructor wherever C2 compiles an allocation of it. The EVM
+    # builds one ProgramState (a 26-field case class) per executed instruction. Compiled on
+    # its own, the constructor is ~6 KB of machine code, because every reference store needs
+    # a G1 barrier when the object isn't known to be fresh. That is over InlineSmallCode
+    # (2500), so each allocation site called it instead of inlining it. Inlined at the
+    # allocation, the barriers are elided. Measured on this image's JDK (Temurin 25.0.4),
+    # legacy loopMul_d2g0v0_Cancun: 25.4 -> 18.1 CPU-s (-29%). JIT inlining only, no
+    # behavioural effect. `quiet` must come first: it stops the JVM echoing the command
+    # at startup.
+    -XX:CompileCommand=quiet
+    "-XX:CompileCommand=inline,com.chipprbots.ethereum.vm.ProgramState::<init>"
 )
 
 # ==============================================================================
