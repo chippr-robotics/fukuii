@@ -358,19 +358,11 @@ class EngineApiController(
         // "GetPayloadV2 To Request Cancun Payload" and "GetPayloadV3 To Request Shanghai
         // Payload" tests exercise this — V2 for a Cancun-ts payload and V3 for a
         // Shanghai-ts payload must both return -38005 UNSUPPORTED_FORK.
-        val cfg = com.chipprbots.ethereum.utils.Config.blockchains.blockchainConfig
-        val ts = stored.header.unixTimestamp
-        val isCancunPayload = cfg.isCancunTimestamp(ts)
-        val isShanghaiPayload = cfg.isShanghaiTimestamp(ts)
-        val isOsakaPayload = cfg.isOsakaTimestamp(ts)
-        val forkError: Option[String] = version match
-          case 2 if isCancunPayload   => Some("getPayloadV2 cannot return a Cancun payload; use V3")
-          case 3 if !isCancunPayload  => Some("getPayloadV3 can only return Cancun-or-later payloads")
-          case 1 if isShanghaiPayload => Some("getPayloadV1 cannot return a Shanghai-or-later payload; use V2")
-          case 4 if isOsakaPayload    => Some("getPayloadV4 cannot return an Osaka-or-later payload; use V5")
-          case 5 if !isOsakaPayload   => Some("getPayloadV5 can only return Osaka-or-later payloads")
-          case _                      => None
-        forkError match
+        EngineApiController.getPayloadForkError(
+          version,
+          stored.header.unixTimestamp,
+          com.chipprbots.ethereum.utils.Config.blockchains.blockchainConfig
+        ) match
           case Some(msg) =>
             // Refused BEFORE the payload is resolved, so a wrong-version call does not end its build process:
             // go-ethereum rejects it on the payload ID's version, before Payload.Resolve.
@@ -752,6 +744,25 @@ object EngineApiController:
         else if !inV3Window then
           Some(UnsupportedForkCode -> "forkchoiceUpdatedV3 must only be called for Cancun/Prague/Osaka payloads")
         else None
+
+  /** The -38005 message when engine_getPayloadV{version} must not serve a payload built for `timestamp`, or None when
+    * it may. Pure: reads nothing but its arguments.
+    */
+  def getPayloadForkError(
+      version: Int,
+      timestamp: Timestamp,
+      blockchainConfig: com.chipprbots.ethereum.utils.BlockchainConfig
+  ): Option[String] =
+    val isCancunPayload = blockchainConfig.isCancunTimestamp(timestamp)
+    val isShanghaiPayload = blockchainConfig.isShanghaiTimestamp(timestamp)
+    val isOsakaPayload = blockchainConfig.isOsakaTimestamp(timestamp)
+    version match
+      case 2 if isCancunPayload   => Some("getPayloadV2 cannot return a Cancun payload; use V3")
+      case 3 if !isCancunPayload  => Some("getPayloadV3 can only return Cancun-or-later payloads")
+      case 1 if isShanghaiPayload => Some("getPayloadV1 cannot return a Shanghai-or-later payload; use V2")
+      case 4 if isOsakaPayload    => Some("getPayloadV4 cannot return an Osaka-or-later payload; use V5")
+      case 5 if !isOsakaPayload   => Some("getPayloadV5 can only return Osaka-or-later payloads")
+      case _                      => None
 
   def byteStringToHex(bs: ByteString): String = "0x" + bs.map("%02x".format(_)).mkString
 
