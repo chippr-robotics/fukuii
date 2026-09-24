@@ -99,13 +99,12 @@ class BlockchainHostActorSpec extends AnyFlatSpec with Matchers:
 
   // ---- ETH70 GetReceipts (EIP-7706 partial receipt delivery) -----------------------------------------------
   //
-  // Regression coverage for hive's TestGetLargeReceipts: fukuii capped a receipts response at 2 MiB
+  // Coverage for the eth/70 size cap and truncation semantics: fukuii capped a receipts response at 2 MiB
   // (softResponseLimit, the constant meant for headers/bodies/ETH69 receipts) instead of the 10 MiB
-  // maxPacketSize go-ethereum's serviceGetReceiptsQuery70 actually uses for eth/70. The undersized cap made
-  // fukuii truncate far more eagerly than go-ethereum ever would for the same >10 MiB fixture, and an unrelated
-  // divergence in how an unfillable block was represented (an empty-but-present placeholder, incomplete=true,
-  // instead of omitting the block entirely with incomplete=false) combined with it to leave the large block's
-  // accumulated receipt root empty (the well-known empty-trie hash) once the hive tool's resume loop finished.
+  // maxPacketSize go-ethereum's serviceGetReceiptsQuery70 actually uses for eth/70, and represented an
+  // unfillable block as an empty-but-present placeholder (incomplete=true) where go-ethereum omits it
+  // (incomplete=false). hive's TestGetLargeReceipts still reported an empty-trie receipt root after both were
+  // fixed; that came from the shape of each receipt on the wire, pinned in Eth69ReceiptWireFormatSpec.
 
   private def paddedReceipt(dataSize: Int): Receipt =
     LegacyReceipt.withHashOutcome(

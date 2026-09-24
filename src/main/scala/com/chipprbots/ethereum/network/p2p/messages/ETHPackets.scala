@@ -1237,18 +1237,29 @@ object ETHPackets:
         )
       )
 
-  /** Encode a Receipt WITHOUT bloom (ETH69 serving, EIP-7642). Wire: [stateHash, gasUsed, [logs]] — no logsBloomFilter
-    * field.
+  /** The EIP-2718 type of the transaction a receipt belongs to; 0 for a legacy receipt. */
+  private def receiptTxType(r: Receipt): Byte = r match
+    case _: LegacyReceipt => 0
+    case _: Type01Receipt => Transaction.Type01
+    case _: Type02Receipt => Transaction.Type02
+    case _: Type03Receipt => Transaction.Type03
+    case _: Type04Receipt => Transaction.Type04
+    case other: TypedLegacyReceipt =>
+      throw new IllegalArgumentException(s"No transaction type for receipt class ${other.getClass.getSimpleName}")
+
+  /** Encode a Receipt in the eth/69 network form (EIP-7642), which eth/70-72 keep: `[txType, postStateOrStatus,
+    * cumulativeGasUsed, logs]`. There is no bloom, and every receipt is a plain four-item list — a legacy receipt
+    * carries type 0, and a typed receipt is NOT wrapped in its EIP-2718 type prefix the way it is on eth/68.
+    * go-ethereum's decoder (eth/protocols/eth/receipt.go) rejects any other shape and hashes a rejected receipt as
+    * absent, so a block's receipts come out with the wrong root.
     */
   implicit class ReceiptBloomFreeEnc(r: Receipt) extends RLPSerializable:
     override def toRLPEncodable: RLPEncodeable =
-      wrapTypedReceipt(
-        r,
-        RLPList(
-          receiptStateHash(r),
-          RLPValue(ByteUtils.bigIntToUnsignedByteArray(r.cumulativeGasUsed)),
-          RLPList(r.logs.map(_.toRLPEncodable)*)
-        )
+      RLPList(
+        receiptTxType(r),
+        receiptStateHash(r),
+        RLPValue(ByteUtils.bigIntToUnsignedByteArray(r.cumulativeGasUsed)),
+        RLPList(r.logs.map(_.toRLPEncodable)*)
       )
 
   // ── RECEIPTS — version-suffixed: EIP-7642 removes bloom in ETH69 ─────────────

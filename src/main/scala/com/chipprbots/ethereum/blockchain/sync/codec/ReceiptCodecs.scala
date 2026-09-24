@@ -2,6 +2,8 @@ package com.chipprbots.ethereum.blockchain.sync.codec
 
 import org.apache.pekko.util.ByteString
 
+import org.bouncycastle.util.encoders.Hex
+
 import com.chipprbots.ethereum.domain.*
 import com.chipprbots.ethereum.domain.Transaction.TransactionTypeValidator
 import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.TypedTransaction.*
@@ -142,3 +144,41 @@ object ReceiptCodecs:
         case RLPValue(bytes) if bytes.nonEmpty && bytes.head.isValidTransactionType && bytes.length > 1 =>
           decodeTypedReceiptFromBytes(bytes)
         case other => other.toLegacyReceipt
+
+    /** Decode one receipt in the eth/69 network form (EIP-7642), which eth/70-72 keep: `[txType, postStateOrStatus,
+      * cumulativeGasUsed, logs]`, every receipt a plain four-item list whatever its type. The bloom is not on the wire,
+      * so it is recomputed from the logs. Any other shape — the eth/68 bloom form, an EIP-2718-prefixed receipt, an
+      * unknown type, a postStateOrStatus that is neither a status nor a 32-byte root — is rejected rather than coerced:
+      * read as the eth/68 form, a four-item network receipt decodes without error into a receipt whose type, status,
+      * gas and bloom are all wrong.
+      */
+    def toEth69Receipt: Receipt = rlpEncodeable match
+      case RLPList(RLPValue(txType), RLPValue(outcome), RLPValue(cumulativeGasUsed), logs: RLPList) =>
+        val postTransactionStateHash =
+          if outcome.isEmpty then FailureOutcome
+          else if outcome.length == 1 && outcome(0) == 1 then SuccessOutcome
+          else if outcome.length == 32 then HashOutcome(ByteString(outcome))
+          else
+            throw new RuntimeException(
+              s"Cannot decode eth/69 receipt: postStateOrStatus is ${Hex.toHexString(outcome)}"
+            )
+        val logEntries = logs.items.map(_.toTxLogEntry)
+        val receipt = LegacyReceipt(
+          postTransactionStateHash,
+          ByteUtils.bytesToBigInt(cumulativeGasUsed),
+          BloomFilter(com.chipprbots.ethereum.ledger.BloomFilter.create(logEntries)),
+          logEntries
+        )
+        if txType.isEmpty then receipt
+        else if txType.length == 1 then
+          txType(0) match
+            case Transaction.Type01 => Type01Receipt(receipt)
+            case Transaction.Type02 => Type02Receipt(receipt)
+            case Transaction.Type03 => Type03Receipt(receipt)
+            case Transaction.Type04 => Type04Receipt(receipt)
+            case other              => throw new RuntimeException(s"Cannot decode eth/69 receipt: tx type $other")
+        else throw new RuntimeException(s"Cannot decode eth/69 receipt: tx type ${Hex.toHexString(txType)}")
+      case other =>
+        throw new RuntimeException(
+          s"Cannot decode eth/69 receipt: expected [txType, postStateOrStatus, cumulativeGasUsed, logs], got $other"
+        )

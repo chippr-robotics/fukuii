@@ -163,10 +163,9 @@ object BlockchainHostActor:
       // Response budget is maxPacketSize (10 MiB — the devp2p wire packet limit go-ethereum's eth/handler.go
       // documents as "commonly enforced by clients"), NOT the 2 MiB softResponseLimit used for
       // headers/bodies/ETH69 receipts. EIP-7706's whole point is letting a receipts response approach the wire
-      // limit via chunked delivery instead of being held to the conservative single-shot target — using the
-      // smaller constant here meant hive's >10 MiB TestGetLargeReceipts needed far more (and smaller) chunks
-      // than intended, tripping the truncation edge case below far more readily than go-ethereum ever would for
-      // the same fixture, and produced a wrong (empty-trie) accumulated receipt root for the large block.
+      // limit via chunked delivery instead of being held to the conservative single-shot target — the smaller
+      // constant chunked hive's >10 MiB TestGetLargeReceipts block far more finely than go-ethereum would. (That
+      // test's empty-trie receipt root was a different defect: the shape of each receipt, see ReceiptBloomFreeEnc.)
       //
       // If the FIRST still-needed receipt of a block does not fit at all (`fittingEncs` empty while there was at
       // least one receipt left to serve), go-ethereum omits that block from the response entirely — never an

@@ -113,8 +113,8 @@ class ChainDownloader private (
 
   // ETH70 partial receipt tracking: hash → next resume index (receipts already received)
   private var partialReceiptState: Map[ByteString, Long] = Map.empty
-  // ETH70 partial receipt buffer: hash → RLP-encoded receipts accumulated so far
-  private var partialReceiptBuffer: Map[ByteString, Seq[RLPEncodeable]] = Map.empty
+  // ETH70 partial receipt buffer: hash → receipts accumulated so far
+  private var partialReceiptBuffer: Map[ByteString, Seq[Receipt]] = Map.empty
 
   // Stats
   private var headersDownloaded: BigInt = 0
@@ -651,8 +651,6 @@ class ChainDownloader private (
       requestedHashes: Seq[ByteString],
       receipts70: ETHPackets.Receipts70
   ): Unit =
-    import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.TypedTransaction.*
-
     val hashStrings = requestedHashes.map(h => s"0x${h.toArray.map("%02x".format(_)).mkString}")
     val receiptsRlp = receipts70.receiptsForBlocks
     val lastBlockIncomplete = receipts70.lastBlockIncomplete
@@ -669,17 +667,10 @@ class ChainDownloader private (
         val responseItems: Seq[RLPList] = receiptsRlp.items.collect { case rl: RLPList => rl }
         val responseCount = responseItems.size
 
-        // Decode typed-tx prefixes from a bloom-absent block RLP (same logic as handleReceipts)
-        def decodeEncs(blockRlp: RLPList): Seq[RLPEncodeable] =
-          blockRlp.items.flatMap {
-            case v: RLPValue =>
-              val receiptBytes = v.bytes
-              if receiptBytes.nonEmpty && (receiptBytes(0) & 0xff) < 0x7f && receiptBytes.length > 1 then
-                try Seq(RLPValue(Array(receiptBytes(0))), rawDecode(receiptBytes.tail))
-                catch case _: Exception => Seq(v)
-              else Seq(v)
-            case other => Seq(other)
-          }
+        // eth/70+ receipts are the eth/69 network form (EIP-7642): one four-item list per receipt, typed or not, so
+        // the item count of a block's list is its receipt count — the resume index for a truncated block. Decoding
+        // each chunk as it arrives charges a malformed one to the peer that sent it.
+        def decodeBlock(blockRlp: RLPList): Seq[Receipt] = blockRlp.items.map(_.toEth69Receipt)
 
         // Split: complete blocks vs. the possibly-truncated last block
         val (completeItems, incompleteItemOpt) =
@@ -691,7 +682,7 @@ class ChainDownloader private (
           completeItems.zipWithIndex.map { case (blockRlp, idx) =>
             val hash = requestedHashes(idx)
             val existing = partialReceiptBuffer.getOrElse(hash, Seq.empty)
-            val decoded = (existing ++ decodeEncs(blockRlp)).toTypedRLPEncodables.map(_.toReceipt)
+            val decoded = existing ++ decodeBlock(blockRlp)
             partialReceiptState -= hash
             partialReceiptBuffer -= hash
             (hash, decoded)
@@ -719,7 +710,7 @@ class ChainDownloader private (
           val incompleteHashIdx = completeItems.size
           val hash = requestedHashes(incompleteHashIdx)
           val existing = partialReceiptBuffer.getOrElse(hash, Seq.empty)
-          val accumulated = existing ++ decodeEncs(blockRlp)
+          val accumulated = existing ++ decodeBlock(blockRlp)
           partialReceiptBuffer = partialReceiptBuffer.updated(hash, accumulated)
           partialReceiptState = partialReceiptState.updated(hash, accumulated.size.toLong)
           // Push back at front of queue so the next dispatch resumes this block first
