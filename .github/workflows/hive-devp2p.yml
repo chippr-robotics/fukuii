@@ -33,14 +33,31 @@ concurrency:
   group: hive-devp2p-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
+# Two jobs, because the simulator runs its suites in order (discv4, discv5, eth, snap, snap2) and
+# a test that never finishes stops every suite after it. Both are gate `hive-devp2p` in
+# .github/gates.yml. A job emitting fewer than its min_tests results is a truncated run, not a pass.
 jobs:
-  run:
+  # discv4, discv5, snap and snap2: every test.
+  discovery-snap:
     uses: ./.github/workflows/_hive-sim.yml
     with:
       sim: devp2p
       label: devp2p
-      # Declared in .github/gates.yml (gate `hive-devp2p`). A run emitting fewer
-      # than this many results is a truncated run, not a pass.
-      min_tests: 10
+      sim_limit: 'discv4|discv5|snap'
+      min_tests: 30
+      sim_timelimit: ${{ github.event.inputs.sim_timelimit || '40m' }}
+      hive_ref: ${{ github.event.inputs.hive_ref || 'master' }}
+
+  # eth: every test except the two that wait for a GetCells request. fukuii cannot send one until
+  # the EIP-8070 sparse blobpool exists (#1409), and the test tool reads without a timeout there,
+  # so either would hang the suite until the time limit. Both are dated waivers in gates.yml.
+  eth:
+    uses: ./.github/workflows/_hive-sim.yml
+    with:
+      sim: devp2p
+      label: devp2p-eth
+      sim_limit: 'eth'
+      sim_skip: 'GetCells|BlobTxWithInvalidCells'
+      min_tests: 20
       sim_timelimit: ${{ github.event.inputs.sim_timelimit || '40m' }}
       hive_ref: ${{ github.event.inputs.hive_ref || 'master' }}

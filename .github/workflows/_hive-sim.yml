@@ -30,6 +30,17 @@ on:
         required: false
         type: string
         default: ''
+      sim_skip:
+        description: |
+          Optional `|`-separated list of exact test names the simulator must NOT run. It is for a
+          test that cannot fail cleanly, e.g. one whose tool waits forever, where skipping it is the
+          only way the rest of the suite runs at all. scripts/ci/hive_skip_regex.py turns the list
+          into a test regex matching every other name, so tests added upstream still run.
+          `sim_limit` must then name suites only (no `/`). Every name must be a declared waiver
+          in .github/gates.yml, checked by Gate Integrity (C7) exactly like a gate_exclude branch.
+        required: false
+        type: string
+        default: ''
       sim_buildarg:
         description: 'Optional --sim.buildarg values, one ARG=VALUE per line (e.g. disable_strict_exception_matching=fukuii)'
         required: false
@@ -274,6 +285,7 @@ jobs:
         env:
           SIM: ${{ inputs.sim }}
           SIM_LIMIT: ${{ inputs.sim_limit }}
+          SIM_SKIP: ${{ inputs.sim_skip }}
           SIM_BUILDARG: ${{ inputs.sim_buildarg }}
           SIM_TIMELIMIT: ${{ inputs.sim_timelimit }}
           PARALLELISM: ${{ inputs.parallelism }}
@@ -301,6 +313,14 @@ jobs:
             --client.checktimelimit="$CHECKTIMELIMIT"
             --loglevel 3
           )
+          if [ -n "$SIM_SKIP" ]; then
+            # Declared waivers that cannot run (see the sim_skip input): select every test but these.
+            case "$SIM_LIMIT" in
+              */*) echo "::error::sim_skip needs a suite-only sim_limit, got '${SIM_LIMIT}'"; exit 1 ;;
+            esac
+            SIM_LIMIT="${SIM_LIMIT}/$(python3 "$GITHUB_WORKSPACE/scripts/ci/hive_skip_regex.py" "$SIM_SKIP")" || exit 1
+            echo "Not running (declared waivers): ${SIM_SKIP}"
+          fi
           [ -n "$SIM_LIMIT" ]   && args+=(--sim.limit   "$SIM_LIMIT")
           # One build arg per line; hive accepts --sim.buildarg repeatedly (hive.go:94).
           while IFS= read -r ba; do
@@ -330,6 +350,7 @@ jobs:
           HIVE_EXIT: ${{ steps.sim.outputs.hive_exit }}
           GATE_PATTERN: ${{ inputs.gate_pattern }}
           GATE_EXCLUDE: ${{ inputs.gate_exclude }}
+          SIM_SKIP: ${{ inputs.sim_skip }}
         run: |
           set -uo pipefail
           shopt -s nullglob
@@ -538,6 +559,10 @@ jobs:
             echo "| passed | failed | total | threshold | hive exit | source |"
             echo "|-------:|-------:|------:|----------:|----------:|:-------|"
             echo "| ${passed} | ${failed} | ${total} | ${THRESHOLD} | ${HIVE_EXIT:-?} | ${src} |"
+            if [ -n "${SIM_SKIP:-}" ]; then
+              echo
+              echo "Not run, as declared waivers in \`.github/gates.yml\`: \`${SIM_SKIP}\`"
+            fi
             if [ -n "$GATE_PATTERN" ]; then
               echo
               echo "Gate (\`${GATE_PATTERN}\`-matching subset): **${gate_passed} passed, ${gate_failed} failed**"

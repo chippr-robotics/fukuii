@@ -7,26 +7,30 @@
 # for day-to-day, targeted verification of a fix.
 #
 # Usage:
-#   scripts/hive/local.sh <sim> [--limit REGEX] [--parallelism N] [--timelimit 40m]
-#                                   [--checktimelimit 120s] [--clients fukuii,go-ethereum]
-#                                   [--skip-build] [-- extra hive args]
+#   scripts/hive/local.sh <sim> [--limit REGEX] [--skip 'NameA|NameB'] [--parallelism N]
+#                                   [--timelimit 40m] [--checktimelimit 120s]
+#                                   [--clients fukuii,go-ethereum] [--skip-build] [-- extra hive args]
+# --skip names tests NOT to run, exactly as _hive-sim.yml's sim_skip does; --limit must then name
+# suites only.
 # Examples:
 #   scripts/hive/local.sh ethereum/consensus --limit 'legacy-cancun/.*CALLBlake2f_MaxRounds'
 #   scripts/hive/local.sh ethereum/eels/consume-engine --limit '.*static_Call50000.*' --skip-build
 #   scripts/hive/local.sh ethereum/graphql --clients fukuii,go-ethereum --limit '/07_eth_gasPrice'
+#   scripts/hive/local.sh devp2p --limit eth --skip 'GetCells|BlobTxWithInvalidCells' --parallelism 1
 #
 # Env: HIVE_DIR (default ~/hive) — an ethereum/hive checkout with a built ./hive binary
 #      (build it with `go build .` in that directory).
 set -euo pipefail
 
-usage() { sed -n '2,21p' "$0"; exit 2; }
+usage() { sed -n '2,22p' "$0"; exit 2; }
 [ $# -ge 1 ] || usage
 
 SIM=$1; shift
-LIMIT=""; PAR=4; TIMELIMIT=40m; CHECK=120s; BUILD=1; CLIENTS=fukuii; EXTRA=()
+LIMIT=""; SKIP=""; PAR=4; TIMELIMIT=40m; CHECK=120s; BUILD=1; CLIENTS=fukuii; EXTRA=()
 while [ $# -gt 0 ]; do
   case "$1" in
     --limit)          LIMIT=$2; shift 2 ;;
+    --skip)           SKIP=$2; shift 2 ;;
     --parallelism)    PAR=$2; shift 2 ;;
     --timelimit)      TIMELIMIT=$2; shift 2 ;;
     --checktimelimit) CHECK=$2; shift 2 ;;
@@ -39,6 +43,10 @@ while [ $# -gt 0 ]; do
 done
 
 REPO=$(cd "$(dirname "$0")/../.." && pwd)
+if [ -n "$SKIP" ]; then
+  case "$LIMIT" in */*) echo "--skip needs a suite-only --limit, got '$LIMIT'" >&2; exit 2 ;; esac
+  LIMIT="$LIMIT/$(python3 "$REPO/scripts/ci/hive_skip_regex.py" "$SKIP")"
+fi
 HIVE_DIR=${HIVE_DIR:-$HOME/hive}
 [ -x "$HIVE_DIR/hive" ] || { echo "no hive binary at $HIVE_DIR/hive (run: cd $HIVE_DIR && go build .)" >&2; exit 1; }
 

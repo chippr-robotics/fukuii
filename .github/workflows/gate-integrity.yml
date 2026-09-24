@@ -49,3 +49,6 @@ jobs:
 
       - name: Self-test the gate logic
         run: python3 scripts/ci/test_gate_integrity.py
+
+      - name: Self-test the hive skip regex
+        run: python3 scripts/ci/test_hive_skip_regex.py

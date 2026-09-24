@@ -57,12 +57,18 @@ Options:
 | Option | Default | Meaning |
 |---|---|---|
 | `--limit REGEX` | none | hive `--sim.limit` |
+| `--skip 'A\|B'` | none | tests NOT to run, as CI's `sim_skip`; `--limit` must then name suites only |
 | `--parallelism N` | 4 | hive `--sim.parallelism` |
 | `--timelimit` | 40m | hive `--sim.timelimit` |
 | `--checktimelimit` | 120s | hive `--client.checktimelimit` |
 | `--clients LIST` | fukuii | hive `--client`, e.g. `fukuii,go-ethereum` to compare with a reference client or to run the cross-client sync tests |
 | `--skip-build` | off | reuse the last assembly |
 | `-- …` | | extra arguments passed straight to hive |
+
+`devp2p`'s `eth` suite has two tests, `GetCells` and `BlobTxWithInvalidCells`, that wait
+without a timeout for a `GetCells` request fukuii cannot send until #1409. Run the suite with
+`--limit eth --skip 'GetCells|BlobTxWithInvalidCells'`, as `hive-devp2p.yml` does, or it hangs
+until the time limit.
 
 Run it from a normal clone, not a `git worktree`: the build's sbt-git plugin fails to load in
 a linked worktree (`NoWorkTreeException`).

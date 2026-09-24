@@ -61,7 +61,7 @@ must become required or be formally re-scoped in a reviewed PR.
 | `hive-full` | consume-engine, consume-rlp and consensus run TO COMPLETION, sharded per .github/hive-shards.json (an exact partition, proven by scripts/hive/gen-shards.py). The release-PR hive-consume-*/hive-consensus workflows only sample these suites. | 2027-03-31 | #1402 | Release gate: runs on a `hive-full`-labelled PR to main, or workflow_dispatch — ~33 jobs x ~3.5 h per pass, so never per push or nightly. Verdict comes from the aggregate job, never the workflow conclusion. |
 | `hive-rpc-compat` | JSON-RPC method compatibility against the reference corpus. | 2027-03-31 | #1402 |  |
 | `hive-graphql` | GraphQL endpoint conformance. | 2027-03-31 | #1402 |  |
-| `hive-devp2p` | devp2p discovery and RLPx wire conformance. | 2027-03-31 | #1402 |  |
+| `hive-devp2p` | devp2p discovery and RLPx wire conformance. | 2027-03-31 | #1402 | Two jobs since 2026-09-24. One runs discv4, discv5, snap and snap2 in full; the other runs eth without GetCells and BlobTxWithInvalidCells, which are skipped via sim_skip and waived until #1409 because they hang the suite. Local hive on 4dc5b77af: discv4 16/16, discv5 11/11, snap 6/6, snap2 4/4, eth 22/24. |
 | `ethereum-tests-nightly` | Nightly ethereum/tests across the full ETC and ETH fork schedules. | 2027-03-31 | #1402 | Runs with continue-on-error today. Promotion requires removing that and establishing a baseline pass count first. |
 
 ## Quarantined — excluded from all claims
@@ -92,4 +92,6 @@ bypass — extending a waiver means editing the matrix in a reviewed PR.
 | Waiver | Gate | Excluded test | Owner | Issue | Expires |
 |---|---|---|---|---|---|
 | `graphql-gasprice-stale-fixture` | `hive-graphql` | `07_eth_gasPrice` | realcodywburns | #1407 | 2026-12-31 |
+| `devp2p-getcells-needs-sparse-blobpool` | `hive-devp2p` | `GetCells` | realcodywburns | #1409 | 2026-12-31 |
+| `devp2p-invalid-cells-needs-sparse-blobpool` | `hive-devp2p` | `BlobTxWithInvalidCells` | realcodywburns | #1409 | 2026-12-31 |
 

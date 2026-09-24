@@ -284,6 +284,11 @@ gates:
     promote_by: 2027-03-31
     min_tests: 10
     covers: devp2p discovery and RLPx wire conformance.
+    status_note: >-
+      Two jobs since 2026-09-24. One runs discv4, discv5, snap and snap2 in full; the
+      other runs eth without GetCells and BlobTxWithInvalidCells, which are skipped via
+      sim_skip and waived until #1409 because they hang the suite. Local hive on
+      4dc5b77af: discv4 16/16, discv5 11/11, snap 6/6, snap2 4/4, eth 22/24.
 
   - id: ethereum-tests-nightly
     workflow: ethereum-tests-nightly.yml
@@ -374,8 +379,9 @@ first_required_slice:
 # ---------------------------------------------------------------------------
 
 # ---------------------------------------------------------------------------
-# Waivers — every gate_exclude branch in every workflow MUST appear here.
-# Missing field or past expiry => Gate Integrity fails. No bypass exists.
+# Waivers — every gate_exclude branch and every sim_skip name in every workflow
+# MUST appear here. Missing field or past expiry => Gate Integrity fails. No
+# bypass exists.
 # ---------------------------------------------------------------------------
 waivers:
 
@@ -400,4 +406,35 @@ waivers:
       The reference client fails the same test, so there is no conformant answer to
       match. fukuii passes every other graphql test (51/52). Lift this waiver when
       upstream updates the fixture.
+    expires: 2026-12-31
+
+  - id: devp2p-getcells-needs-sparse-blobpool
+    gate: hive-devp2p
+    pattern: GetCells
+    owner: realcodywburns
+    issue: 1409
+    reason: >-
+      Needs the EIP-8070 sparse blobpool, #1409 scope, which starts once hive is
+      green. The test announces blob txs under a custody mask and waits for fukuii
+      to fetch cells with GetCells. fukuii never sends one, and go-ethereum's devp2p
+      tool waits without a read timeout (readAnyFrom), so the test does not fail:
+      it hangs the eth suite until the time limit. That is why hive-devp2p.yml skips
+      it (sim_skip) rather than excluding its result.
+
+      Measured locally 2026-09-24 on hive master 43ea47b: GetCells never returned,
+      and every eth test that does not need cells passes (22/24 on 4dc5b77af). Lift
+      with #1409.
+    expires: 2026-12-31
+
+  - id: devp2p-invalid-cells-needs-sparse-blobpool
+    gate: hive-devp2p
+    pattern: BlobTxWithInvalidCells
+    owner: realcodywburns
+    issue: 1409
+    reason: >-
+      Needs the EIP-8070 sparse blobpool, #1409 scope. The test serves a blob tx,
+      then waits for a GetCells request so it can answer with corrupt cells and
+      expect a disconnect. fukuii never sends GetCells, and the tool waits without a
+      read timeout (readAnyFrom), so this test also hangs the eth suite; skipped via
+      sim_skip for the same reason as GetCells. Lift with #1409.
     expires: 2026-12-31

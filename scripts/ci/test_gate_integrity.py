@@ -206,6 +206,47 @@ def m_undeclared_exclusion(root: Path) -> None:
     raise AssertionError("no hive workflow has a gate_pattern to add an exclusion to — C7 case has no subject")
 
 
+def m_undeclared_skip(root: Path) -> None:
+    """C7 — a workflow stops running a test no waiver declares (sim_skip)."""
+    for p in sorted((root / ".github/workflows").glob("*.yml")):
+        txt = p.read_text(encoding="utf-8")
+        m = re.search(r"sim_skip: '([^']+)'", txt)
+        if m:
+            p.write_text(txt.replace(m.group(0), f"sim_skip: '{m.group(1)}|a test no waiver declares'", 1),
+                         encoding="utf-8")
+            return
+    raise AssertionError("no workflow sets sim_skip — C7 skip case has no subject")
+
+
+def m_undeclared_exclusion_in_second_job(root: Path) -> None:
+    """C7 — an undeclared exclusion in the SECOND _hive-sim.yml job of a workflow still fails.
+
+    The check used to read only the first `gate_exclude:` in a file. So the first job here gets an
+    exclusion that IS declared, and the second an undeclared one: a first-match reader sees only
+    the declared one and passes. hive-devp2p.yml runs two jobs.
+    """
+    import yaml
+
+    doc = yaml.safe_load((root / ".github/gates.yml").read_text(encoding="utf-8"))
+    for p in sorted((root / ".github/workflows").glob("*.yml")):
+        txt = p.read_text(encoding="utf-8")
+        jobs = list(re.finditer(r"^(\s*)sim: .+\n", txt, re.M))
+        if len(jobs) < 2 or txt.count("uses: ./.github/workflows/_hive-sim.yml") < 2:
+            continue
+        gate = next((g["id"] for g in doc["gates"] if g.get("workflow") == p.name), None)
+        declared = next((w["pattern"] for w in doc.get("waivers", []) if w.get("gate") == gate), None)
+        if not declared:
+            continue
+        first, second = jobs[0], jobs[1]
+        patched = (txt[: first.end()] + f"{first.group(1)}gate_exclude: '{declared}'\n"
+                   + txt[first.end(): second.end()]
+                   + f"{second.group(1)}gate_exclude: 'a test no waiver declares'\n"
+                   + txt[second.end():])
+        p.write_text(patched, encoding="utf-8")
+        return
+    raise AssertionError("no two-job hive workflow with a declared waiver — C7 second-job case has no subject")
+
+
 def m_overdue_promotion(root: Path) -> None:
     """C5 — an informational gate past its promote_by date."""
     edit(root, ".github/gates.yml",
@@ -276,6 +317,8 @@ def main() -> int:
     case("C6  expired waiver fails", True, "C6", m_expired_waiver)
     case("C6  incomplete waiver fails", True, "C6", m_incomplete_waiver)
     case("C7  undeclared gate_exclude fails", True, "C7", m_undeclared_exclusion)
+    case("C7  undeclared sim_skip fails", True, "C7", m_undeclared_skip)
+    case("C7  undeclared gate_exclude in a second job fails", True, "C7", m_undeclared_exclusion_in_second_job)
 
     print(" constitution checks")
     case("C8  unmapped principle fails", True, "C8", m_unmapped_principle)
