@@ -222,6 +222,29 @@ object PendingTransactionsManager:
           txsToNotify.foreach(stx => setTxKnown(stx, peer.id))
       }
 
+    /** Handle an inbound NewPooledTransactionHashes announcement (ETH67+ 3-field, or ETH72's 4-field form): request
+      * every hash we don't already have pending, and record each announcement's (type, size) for later validation
+      * against the PooledTransactions reply. Shared by both wire shapes — ETH72's custody Mask is not consulted here
+      * (fukuii has no PeerDAS cell storage to fetch selectively against; see NewPooledTransactionHashes72's doc
+      * comment) — so fetching unknown hashes is identical either way.
+      */
+    def requestUnknownAnnouncedHashes(
+        hashes: Seq[ByteString],
+        types: Seq[Byte],
+        sizes: Seq[BigInt],
+        peerId: PeerId
+    ): Unit =
+      val unknownHashes = hashes.filterNot(h => pendingTransactions.asMap().containsKey(h))
+      if unknownHashes.nonEmpty then
+        hashes.zip(types).zip(sizes).foreach { case ((hash, txType), size) =>
+          pendingAnnouncements = pendingAnnouncements.updated(hash, (txType, size, peerId))
+        }
+        val requestId = ETHPackets.nextRequestId
+        networkPeerManager ! NetworkPeerManagerActor.SendMessageCmd(
+          ETHPackets.GetPooledTransactions(requestId, unknownHashes),
+          peerId
+        )
+
     /** Update pendingNonces high-water mark for accepted transactions. */
     def updatePendingNonces(txs: Iterable[SignedTransactionWithSender]): Unit =
       txs.foreach { stx =>
@@ -405,22 +428,27 @@ object PendingTransactionsManager:
         notifyPeersOfTransactions(stillPending, peers)
         Behaviors.same
 
-      // ETH67+ NewPooledTransactionHashes — request unknown tx hashes via GetPooledTransactions
+      // ETH67-71 NewPooledTransactionHashes (3-field) — request unknown tx hashes via GetPooledTransactions
       case WrappedPeerEvent(
             com.chipprbots.ethereum.network.PeerEventBusActor.PeerEvent
               .MessageFromPeer(msg: ETHPackets.NewPooledTransactionHashes, peerId)
           ) =>
-        val unknownHashes = msg.hashes.filterNot(h => pendingTransactions.asMap().containsKey(h))
-        if unknownHashes.nonEmpty then
-          // Track announced types/sizes for validation when PooledTransactions arrives
-          msg.hashes.zip(msg.types).zip(msg.sizes).foreach { case ((hash, txType), size) =>
-            pendingAnnouncements = pendingAnnouncements.updated(hash, (txType, size, peerId))
-          }
-          val requestId = ETHPackets.nextRequestId
-          networkPeerManager ! NetworkPeerManagerActor.SendMessageCmd(
-            ETHPackets.GetPooledTransactions(requestId, unknownHashes),
-            peerId
-          )
+        requestUnknownAnnouncedHashes(msg.hashes, msg.types, msg.sizes, peerId)
+        Behaviors.same
+
+      // ETH72 NewPooledTransactionHashes72 (4-field, adds a custody Mask — EIP-8070) — same wire code as
+      // the 3-field form above but a DIFFERENT, non-subtype case class (see its doc comment in
+      // ETHPackets.scala), so it needs its own case: a peer that negotiated ETH72 sends this shape, never
+      // the 3-field one, and without this arm the message matched no case here at all — silently dropped,
+      // so fukuii never issued GetPooledTransactions for an ETH72 peer's announcement. That is what hive's
+      // TestNewPooledTxs and TestBlobViolations were observing as a read timeout waiting for
+      // GetPooledTransactions ("reading pooled tx request failed: i/o timeout"), not a decode failure —
+      // ETH72MessageDecoder already decoded the message correctly; nothing downstream ever acted on it.
+      case WrappedPeerEvent(
+            com.chipprbots.ethereum.network.PeerEventBusActor.PeerEvent
+              .MessageFromPeer(msg: ETHPackets.NewPooledTransactionHashes72, peerId)
+          ) =>
+        requestUnknownAnnouncedHashes(msg.hashes, msg.types, msg.sizes, peerId)
         Behaviors.same
 
       // ETH66+ PooledTransactions response — add received txs to pool

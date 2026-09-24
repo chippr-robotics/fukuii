@@ -376,6 +376,70 @@ class PendingTransactionsManagerSpec
         sizes shouldBe Seq(BigInt(networkForm.length))
       case other => fail(s"Unexpected: $other")
 
+  // ---- inbound NewPooledTransactionHashes / NewPooledTransactionHashes72 -> GetPooledTransactions -------------
+  //
+  // Regression coverage for hive's TestNewPooledTxs / TestBlobViolations: NewPooledTransactionHashes72 (ETH72's
+  // 4-field announcement, EIP-8070) is a distinct case class from the 3-field NewPooledTransactionHashes, not a
+  // subtype, so the inbound handler needed its OWN pattern-match case. Without one, an ETH72 peer's announcement
+  // matched no case in the actor's Behaviors.receiveMessage at all and was silently dropped: fukuii never issued
+  // GetPooledTransactions, which is what hive observed as a read timeout waiting for that request ("reading
+  // pooled tx request failed: i/o timeout") rather than a decode failure — ETH72MessageDecoder already decoded
+  // the message correctly; nothing downstream ever acted on it.
+
+  it should "request unknown hashes via GetPooledTransactions when an ETH72 peer announces NewPooledTransactionHashes72 (4-field)" taggedAs (
+    UnitTest
+  ) in new TestSetup:
+    val unknownHash: ByteString = ByteString(Array.fill[Byte](32)(7))
+    val announcement = ETHPackets.NewPooledTransactionHashes72(
+      types = Seq(Transaction.Type02),
+      sizes = Seq(BigInt(123)),
+      hashes = Seq(unknownHash),
+      mask = ETHPackets.NewPooledTransactionHashes72.NoCustody
+    )
+
+    pendingTransactionsManager ! WrappedPeerEvent(PeerEvent.MessageFromPeer(announcement, peer1.id))
+
+    val requested: SendMessageCmd = etcPeerManager.expectMsgType[NetworkPeerManagerActor.SendMessageCmd]
+    requested.peerId shouldBe peer1.id
+    requested.message.underlyingMsg match
+      case ETHPackets.GetPooledTransactions(_, requestedHashes) => requestedHashes shouldBe Seq(unknownHash)
+      case other                                                => fail(s"Unexpected: $other")
+
+  it should "request unknown hashes via GetPooledTransactions when a pre-ETH72 peer announces NewPooledTransactionHashes (3-field)" taggedAs (
+    UnitTest
+  ) in new TestSetup:
+    val unknownHash: ByteString = ByteString(Array.fill[Byte](32)(9))
+    val announcement = ETHPackets.NewPooledTransactionHashes(
+      types = Seq(Transaction.Type02),
+      sizes = Seq(BigInt(456)),
+      hashes = Seq(unknownHash)
+    )
+
+    pendingTransactionsManager ! WrappedPeerEvent(PeerEvent.MessageFromPeer(announcement, peer1.id))
+
+    val requested: SendMessageCmd = etcPeerManager.expectMsgType[NetworkPeerManagerActor.SendMessageCmd]
+    requested.peerId shouldBe peer1.id
+    requested.message.underlyingMsg match
+      case ETHPackets.GetPooledTransactions(_, requestedHashes) => requestedHashes shouldBe Seq(unknownHash)
+      case other                                                => fail(s"Unexpected: $other")
+
+  it should "not request an already-pending hash announced via NewPooledTransactionHashes72" taggedAs (
+    UnitTest
+  ) in new TestSetup:
+    val stx: SignedTransactionWithSender = newStx()
+    pendingTransactionsManager ! AddTransactions(Set(stx))
+    etcPeerManager.expectNoMessage(100.millis) // no connected peers yet — nothing to announce to
+
+    val announcement = ETHPackets.NewPooledTransactionHashes72(
+      types = Seq(0.toByte),
+      sizes = Seq(BigInt(1)),
+      hashes = Seq(stx.tx.hash.value),
+      mask = ETHPackets.NewPooledTransactionHashes72.NoCustody
+    )
+    pendingTransactionsManager ! WrappedPeerEvent(PeerEvent.MessageFromPeer(announcement, peer1.id))
+
+    etcPeerManager.expectNoMessage(200.millis)
+
   it should "remove transaction on timeout" taggedAs (UnitTest) in new TestSetup:
     override val txPoolConfig: TxPoolConfig = new TxPoolConfig:
       override val txPoolSize: Int = 300
