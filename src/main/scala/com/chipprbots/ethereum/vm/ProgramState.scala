@@ -254,6 +254,16 @@ case class ProgramState[W <: WorldStateProxy[W, S], S <: Storage[S]](
   def goto(i: Int): ProgramState[W, S] =
     copy(pc = i)
 
+  /** `withStack(stack).step(pcIncrement).spendGas(gasSpent)`, built as one copy instead of three: the whole transition
+    * of an instruction that only moves the stack and the program counter (see `StackOnlyOp` in OpCode.scala).
+    */
+  def stepWithStack(stack: Stack, pcIncrement: Int, gasSpent: BigInt): ProgramState[W, S] =
+    copy(stack = stack, pc = pc + pcIncrement, gas = gas - gasSpent)
+
+  /** `withStack(stack).goto(dest).spendGas(gasSpent)`, built as one copy: a JUMP or JUMPI that is taken. */
+  def jumpWithStack(stack: Stack, dest: Int, gasSpent: BigInt): ProgramState[W, S] =
+    copy(stack = stack, pc = dest, gas = gas - gasSpent)
+
   def withStack(stack: Stack): ProgramState[W, S] =
     copy(stack = stack)
 

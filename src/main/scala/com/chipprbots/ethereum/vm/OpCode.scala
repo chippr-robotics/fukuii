@@ -267,7 +267,7 @@ abstract class OpCode(val code: Byte, val delta: Int, val alpha: Int, val baseGa
         // made from the pre-execution state — the SSTORE table keys on the slot's original, current and
         // new values, all of which are only available before `exec` runs.
         val stateGas: BigInt = stateGasDelta(state)
-        val executed = exec(state).spendGas(gas)
+        val executed = execAndSpendGas(state, gas)
         if stateGas == 0 then executed
         else if stateGas < 0 then executed.refillStateGas(-stateGas)
         else if executed.stateGasShortfall(stateGas) > executed.gas then
@@ -296,6 +296,18 @@ abstract class OpCode(val code: Byte, val delta: Int, val alpha: Int, val baseGa
   protected def varGas[S <: Storage[S], W <: WorldStateProxy[W, S]](state: ProgramState[W, S]): BigInt
 
   protected def exec[S <: Storage[S], W <: WorldStateProxy[W, S]](state: ProgramState[W, S]): ProgramState[W, S]
+
+  /** Runs the instruction and charges its execution gas: `exec(state).spendGas(gas)`.
+    *
+    * [[StackOnlyOp]] and JUMP/JUMPI override this to build the very same state in one `copy`. The composed form copies
+    * the 29-field `ProgramState` once per step — `withStack`, then `step`/`goto`, then `spendGas` — and on the stack
+    * and arithmetic instructions those copies were the largest single cost of interpretation.
+    */
+  protected def execAndSpendGas[S <: Storage[S], W <: WorldStateProxy[W, S]](
+      state: ProgramState[W, S],
+      gas: BigInt
+  ): ProgramState[W, S] =
+    exec(state).spendGas(gas)
 
   protected def availableInContext[S <: Storage[S], W <: WorldStateProxy[W, S]]: ProgramState[W, S] => Boolean = _ =>
     true
@@ -329,56 +341,82 @@ sealed trait ConstGas:
   self: OpCode =>
   protected def varGas[S <: Storage[S], W <: WorldStateProxy[W, S]](state: ProgramState[W, S]): BigInt = 0
 
+/** An instruction whose whole effect is a new stack and a program-counter advance. It writes no memory, world, return
+  * data, log, refund or access list, and never halts.
+  *
+  * Both transitions are derived from `nextStack` and `pcIncrement`, so they cannot disagree: `exec` is
+  * `withStack(nextStack(state)).step(pcIncrement)`, and `execAndSpendGas` is that followed by `spendGas(gas)` — the
+  * default composition — built as a single copy. `nextStack` always sees the state from before the instruction, gas
+  * included, exactly as `exec` did (GAS pushes the pre-charge gas minus its own cost).
+  */
+sealed trait StackOnlyOp:
+  self: OpCode =>
+
+  /** The stack after this instruction, computed from the state before it. */
+  protected def nextStack[S <: Storage[S], W <: WorldStateProxy[W, S]](state: ProgramState[W, S]): Stack
+
+  /** How far the program counter moves: 1, or 1 + the immediate's length for PUSH1..PUSH32. */
+  protected def pcIncrement: Int = 1
+
+  protected def exec[S <: Storage[S], W <: WorldStateProxy[W, S]](state: ProgramState[W, S]): ProgramState[W, S] =
+    state.withStack(nextStack(state)).step(pcIncrement)
+
+  override protected def execAndSpendGas[S <: Storage[S], W <: WorldStateProxy[W, S]](
+      state: ProgramState[W, S],
+      gas: BigInt
+  ): ProgramState[W, S] =
+    state.stepWithStack(nextStack(state), pcIncrement, gas)
+
 case object STOP extends OpCode(0x00, 0, 0, _.G_zero) with ConstGas:
   protected def exec[S <: Storage[S], W <: WorldStateProxy[W, S]](state: ProgramState[W, S]): ProgramState[W, S] =
     state.withReturnData(ByteString.empty).halt
 
 sealed abstract class UnaryOp(code: Int, baseGasFn: FeeSchedule => BigInt)(val f: UInt256 => UInt256)
     extends OpCode(code, 1, 1, baseGasFn)
-    with ConstGas:
+    with ConstGas
+    with StackOnlyOp:
 
-  protected def exec[S <: Storage[S], W <: WorldStateProxy[W, S]](state: ProgramState[W, S]): ProgramState[W, S] =
+  protected def nextStack[S <: Storage[S], W <: WorldStateProxy[W, S]](state: ProgramState[W, S]): Stack =
     val (a, stack1) = state.stack.pop()
     val res = f(a)
-    val stack2 = stack1.push(res)
-    state.withStack(stack2).step()
+    stack1.push(res)
 
 sealed abstract class BinaryOp(code: Int, baseGasFn: FeeSchedule => BigInt)(val f: (UInt256, UInt256) => UInt256)
-    extends OpCode(code.toByte, 2, 1, baseGasFn):
+    extends OpCode(code.toByte, 2, 1, baseGasFn)
+    with StackOnlyOp:
 
-  protected def exec[S <: Storage[S], W <: WorldStateProxy[W, S]](state: ProgramState[W, S]): ProgramState[W, S] =
+  protected def nextStack[S <: Storage[S], W <: WorldStateProxy[W, S]](state: ProgramState[W, S]): Stack =
     val (Seq(a, b), stack1) = state.stack.pop(2)
     val res = f(a, b)
-    val stack2 = stack1.push(res)
-    state.withStack(stack2).step()
+    stack1.push(res)
 
 sealed abstract class TernaryOp(code: Int, baseGasFn: FeeSchedule => BigInt)(
     val f: (UInt256, UInt256, UInt256) => UInt256
-) extends OpCode(code.toByte, 3, 1, baseGasFn):
+) extends OpCode(code.toByte, 3, 1, baseGasFn)
+    with StackOnlyOp:
 
-  protected def exec[S <: Storage[S], W <: WorldStateProxy[W, S]](state: ProgramState[W, S]): ProgramState[W, S] =
+  protected def nextStack[S <: Storage[S], W <: WorldStateProxy[W, S]](state: ProgramState[W, S]): Stack =
     val (Seq(a, b, c), stack1) = state.stack.pop(3)
     val res = f(a, b, c)
-    val stack2 = stack1.push(res)
-    state.withStack(stack2).step()
+    stack1.push(res)
 
 sealed abstract class ConstOp(code: Int)(
     val f: ProgramState[? <: WorldStateProxy[_, ? <: Storage[_]], ? <: Storage[_]] => UInt256
 ) extends OpCode(code, 0, 1, _.G_base)
-    with ConstGas:
+    with ConstGas
+    with StackOnlyOp:
 
-  protected def exec[S <: Storage[S], W <: WorldStateProxy[W, S]](state: ProgramState[W, S]): ProgramState[W, S] =
-    val stack1 = state.stack.push(f(state))
-    state.withStack(stack1).step()
+  protected def nextStack[S <: Storage[S], W <: WorldStateProxy[W, S]](state: ProgramState[W, S]): Stack =
+    state.stack.push(f(state))
 
 sealed abstract class ShiftingOp(code: Int, f: (UInt256, UInt256) => UInt256)
     extends OpCode(code, 2, 1, _.G_verylow)
-    with ConstGas:
-  protected def exec[S <: Storage[S], W <: WorldStateProxy[W, S]](state: ProgramState[W, S]): ProgramState[W, S] =
+    with ConstGas
+    with StackOnlyOp:
+  protected def nextStack[S <: Storage[S], W <: WorldStateProxy[W, S]](state: ProgramState[W, S]): Stack =
     val (Seq(shift: UInt256, value: UInt256), remainingStack) = state.stack.pop(2)
     val result = if shift >= UInt256(256) then Zero else f(value, shift)
-    val resultStack = remainingStack.push(result)
-    state.withStack(resultStack).step()
+    remainingStack.push(result)
 
 case object ADD extends BinaryOp(0x01, _.G_verylow)(_ + _) with ConstGas
 
@@ -434,16 +472,15 @@ case object SHL extends ShiftingOp(0x1b, _ << _)
 case object SHR extends ShiftingOp(0x1c, _ >> _)
 
 // arithmetic shift right
-case object SAR extends OpCode(0x1d, 2, 1, _.G_verylow) with ConstGas:
-  protected def exec[S <: Storage[S], W <: WorldStateProxy[W, S]](state: ProgramState[W, S]): ProgramState[W, S] =
+case object SAR extends OpCode(0x1d, 2, 1, _.G_verylow) with ConstGas with StackOnlyOp:
+  protected def nextStack[S <: Storage[S], W <: WorldStateProxy[W, S]](state: ProgramState[W, S]): Stack =
     val (Seq(shift, value), remainingStack) = state.stack.pop(2)
 
     val result =
       if shift >= UInt256(256) then if value.toSign >= 0 then Zero else UInt256(-1)
       else value.sshift(shift)
 
-    val resultStack = remainingStack.push(result)
-    state.withStack(resultStack).step()
+    remainingStack.push(result)
 
 /** EIP-7939: Count Leading Zero bits. Pops one 256-bit value and pushes the count of leading zero bits (0..256). For
   * the zero input, result is 256.
@@ -637,10 +674,10 @@ case object DIFFICULTY
 
 case object GASLIMIT extends ConstOp(0x45)(s => UInt256(s.env.blockHeader.gasLimit.value))
 
-case object POP extends OpCode(0x50, 1, 0, _.G_base) with ConstGas:
-  protected def exec[S <: Storage[S], W <: WorldStateProxy[W, S]](state: ProgramState[W, S]): ProgramState[W, S] =
+case object POP extends OpCode(0x50, 1, 0, _.G_base) with ConstGas with StackOnlyOp:
+  protected def nextStack[S <: Storage[S], W <: WorldStateProxy[W, S]](state: ProgramState[W, S]): Stack =
     val (_, stack1) = state.stack.pop()
-    state.withStack(stack1).step()
+    stack1
 
 case object MLOAD extends OpCode(0x51, 1, 1, _.G_verylow):
   protected def exec[S <: Storage[S], W <: WorldStateProxy[W, S]](state: ProgramState[W, S]): ProgramState[W, S] =
@@ -873,23 +910,37 @@ case object SSTORE extends OpCode(0x55, 2, 0, _.G_zero):
     ethFork >= EthForks.Istanbul || etcFork >= EtcForks.Phoenix
 
 case object JUMP extends OpCode(0x56, 1, 0, _.G_mid) with ConstGas:
+  // The transition is written once, in execAndSpendGas; exec is its zero-charge case.
   protected def exec[S <: Storage[S], W <: WorldStateProxy[W, S]](state: ProgramState[W, S]): ProgramState[W, S] =
+    execAndSpendGas(state, BigInt(0))
+
+  override protected def execAndSpendGas[S <: Storage[S], W <: WorldStateProxy[W, S]](
+      state: ProgramState[W, S],
+      gas: BigInt
+  ): ProgramState[W, S] =
     val (pos, stack1) = state.stack.pop()
     val dest = pos.toInt // fail with InvalidJump if conversion to Int is lossy
 
     if pos == UInt256(dest) && state.program.validJumpDestinations.contains(dest) then
-      state.withStack(stack1).goto(dest)
-    else state.withError(InvalidJump(pos))
+      state.jumpWithStack(stack1, dest, gas)
+    else state.withError(InvalidJump(pos)).spendGas(gas)
 
 case object JUMPI extends OpCode(0x57, 2, 0, _.G_high) with ConstGas:
+  // The transition is written once, in execAndSpendGas; exec is its zero-charge case.
   protected def exec[S <: Storage[S], W <: WorldStateProxy[W, S]](state: ProgramState[W, S]): ProgramState[W, S] =
+    execAndSpendGas(state, BigInt(0))
+
+  override protected def execAndSpendGas[S <: Storage[S], W <: WorldStateProxy[W, S]](
+      state: ProgramState[W, S],
+      gas: BigInt
+  ): ProgramState[W, S] =
     val (Seq(pos, cond), stack1) = state.stack.pop(2)
     val dest = pos.toInt // fail with InvalidJump if conversion to Int is lossy
 
-    if cond.isZero then state.withStack(stack1).step()
+    if cond.isZero then state.stepWithStack(stack1, 1, gas)
     else if pos == UInt256(dest) && state.program.validJumpDestinations.contains(dest) then
-      state.withStack(stack1).goto(dest)
-    else state.withError(InvalidJump(pos))
+      state.jumpWithStack(stack1, dest, gas)
+    else state.withError(InvalidJump(pos)).spendGas(gas)
 
 case object PC extends ConstOp(0x58)(_.pc)
 
@@ -897,24 +948,25 @@ case object MSIZE extends ConstOp(0x59)(s => (UInt256.Size * wordsForBytes(s.mem
 
 case object GAS extends ConstOp(0x5a)(state => (state.gas - state.config.feeSchedule.G_base).toUInt256)
 
-case object JUMPDEST extends OpCode(0x5b, 0, 0, _.G_jumpdest) with ConstGas:
-  protected def exec[S <: Storage[S], W <: WorldStateProxy[W, S]](state: ProgramState[W, S]): ProgramState[W, S] =
-    state.step()
+case object JUMPDEST extends OpCode(0x5b, 0, 0, _.G_jumpdest) with ConstGas with StackOnlyOp:
+  protected def nextStack[S <: Storage[S], W <: WorldStateProxy[W, S]](state: ProgramState[W, S]): Stack =
+    state.stack
 
-case object PUSH0 extends OpCode(0x5f, 0, 1, _.G_base) with ConstGas:
-  protected def exec[S <: Storage[S], W <: WorldStateProxy[W, S]](state: ProgramState[W, S]): ProgramState[W, S] =
-    val stack1 = state.stack.push(UInt256.Zero)
-    state.withStack(stack1).step()
+case object PUSH0 extends OpCode(0x5f, 0, 1, _.G_base) with ConstGas with StackOnlyOp:
+  protected def nextStack[S <: Storage[S], W <: WorldStateProxy[W, S]](state: ProgramState[W, S]): Stack =
+    state.stack.push(UInt256.Zero)
 
-sealed abstract class PushOp(code: Int) extends OpCode(code, 0, 1, _.G_verylow) with ConstGas:
+sealed abstract class PushOp(code: Int) extends OpCode(code, 0, 1, _.G_verylow) with ConstGas with StackOnlyOp:
   val i: Int = code - 0x60
 
-  protected def exec[S <: Storage[S], W <: WorldStateProxy[W, S]](state: ProgramState[W, S]): ProgramState[W, S] =
+  // the opcode byte plus its i + 1 immediate bytes
+  override protected def pcIncrement: Int = i + 2
+
+  protected def nextStack[S <: Storage[S], W <: WorldStateProxy[W, S]](state: ProgramState[W, S]): Stack =
     val n = i + 1
     val bytes = state.program.getBytes(state.pc + 1, n)
     val word = UInt256(bytes)
-    val stack1 = state.stack.push(word)
-    state.withStack(stack1).step(n + 1)
+    state.stack.push(word)
 
 case object PUSH1 extends PushOp(0x60)
 case object PUSH2 extends PushOp(0x61)
@@ -951,12 +1003,12 @@ case object PUSH32 extends PushOp(0x7f)
 
 sealed abstract class DupOp private (code: Int, val i: Int)
     extends OpCode(code, i + 1, i + 2, _.G_verylow)
-    with ConstGas:
+    with ConstGas
+    with StackOnlyOp:
   def this(code: Int) = this(code, code - 0x80)
 
-  protected def exec[S <: Storage[S], W <: WorldStateProxy[W, S]](state: ProgramState[W, S]): ProgramState[W, S] =
-    val stack1 = state.stack.dup(i)
-    state.withStack(stack1).step()
+  protected def nextStack[S <: Storage[S], W <: WorldStateProxy[W, S]](state: ProgramState[W, S]): Stack =
+    state.stack.dup(i)
 
 case object DUP1 extends DupOp(0x80)
 case object DUP2 extends DupOp(0x81)
@@ -975,12 +1027,14 @@ case object DUP14 extends DupOp(0x8d)
 case object DUP15 extends DupOp(0x8e)
 case object DUP16 extends DupOp(0x8f)
 
-sealed abstract class SwapOp(code: Int, val i: Int) extends OpCode(code, i + 2, i + 2, _.G_verylow) with ConstGas:
+sealed abstract class SwapOp(code: Int, val i: Int)
+    extends OpCode(code, i + 2, i + 2, _.G_verylow)
+    with ConstGas
+    with StackOnlyOp:
   def this(code: Int) = this(code, code - 0x90)
 
-  protected def exec[S <: Storage[S], W <: WorldStateProxy[W, S]](state: ProgramState[W, S]): ProgramState[W, S] =
-    val stack1 = state.stack.swap(i + 1)
-    state.withStack(stack1).step()
+  protected def nextStack[S <: Storage[S], W <: WorldStateProxy[W, S]](state: ProgramState[W, S]): Stack =
+    state.stack.swap(i + 1)
 
 case object SWAP1 extends SwapOp(0x90)
 case object SWAP2 extends SwapOp(0x91)
