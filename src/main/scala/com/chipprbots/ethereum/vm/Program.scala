@@ -15,8 +15,12 @@ import com.chipprbots.ethereum.utils.ByteStringUtils.Padding
   */
 case class Program(code: ByteString):
 
+  /** The byte at `pc`, or 0 (STOP) outside the code. Read once per executed instruction, so it indexes the code
+    * directly rather than through `code.lift(pc)`, which allocates a lifted function and an `Option` for the same
+    * answer.
+    */
   def getByte(pc: Int): Byte =
-    code.lift(pc).getOrElse(0)
+    if pc >= 0 && pc < length then code(pc) else 0
 
   def getBytes(from: Int, size: Int): ByteString =
     code.slice(from, from + size).padToByteString(size, 0.toByte)
@@ -43,9 +47,8 @@ case class Program(code: ByteString):
     def scan(pos: Int): Unit =
       if pos >= 0 && pos < length then
         val byte = code(pos)
-        val opCode = EvmConfig.FrontierOpCodes.byteToOpCode.get(
-          byte
-        ) // we only need to check PushOp and JUMPDEST, they are both present in Frontier
+        // we only need to check PushOp and JUMPDEST, they are both present in Frontier
+        val opCode = EvmConfig.FrontierOpCodes.opCodeFor(byte)
         opCode match
           case Some(pushOp: PushOp) => scan(pos + pushOp.i + 2)
           case Some(JUMPDEST) =>

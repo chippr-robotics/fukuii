@@ -292,7 +292,7 @@ class VM[W <: WorldStateProxy[W, S], S <: Storage[S]](
   @tailrec
   final private[vm] def exec(state: ProgramState[W, S]): ProgramState[W, S] =
     val byte = state.program.getByte(state.pc)
-    state.config.byteToOpCode.get(byte) match
+    state.config.opCodeFor(byte) match
       case Some(opCode) =>
         val newState = opCode.execute(state)
         // Per-opcode hook. VM-level `tracer` and the tracer carried in state.env.tracer

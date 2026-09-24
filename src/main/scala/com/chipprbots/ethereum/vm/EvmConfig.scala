@@ -244,6 +244,18 @@ object EvmConfig:
     val byteToOpCode: Map[Byte, OpCode] =
       opCodes.map(op => op.code -> op).toMap
 
+    /** `byteToOpCode` as a 256-slot table indexed by the unsigned byte, holding the map's own lookup results: built
+      * from the map, so the two cannot disagree. The interpreter looks an opcode up for every instruction it executes,
+      * and there the map's hashing, boxing and fresh `Some` cost about as much as a simple instruction itself.
+      */
+    private val opCodeTable: Array[Option[OpCode]] =
+      val table = Array.fill[Option[OpCode]](256)(None)
+      byteToOpCode.foreach { case (byte, op) => table(byte & 0xff) = Some(op) }
+      table
+
+    /** `byteToOpCode.get(byte)`, without allocating. */
+    def opCodeFor(byte: Byte): Option[OpCode] = opCodeTable(byte & 0xff)
+
 case class EvmConfig(
     blockchainConfig: BlockchainConfigForEvm,
     feeSchedule: FeeSchedule,
@@ -280,6 +292,10 @@ case class EvmConfig(
 
   def byteToOpCode: Map[Byte, OpCode] =
     opCodeList.byteToOpCode
+
+  /** `byteToOpCode.get(byte)`, without allocating: see [[EvmConfig.OpCodeList.opCodeFor]]. */
+  def opCodeFor(byte: Byte): Option[OpCode] =
+    opCodeList.opCodeFor(byte)
 
   /** Calculate gas cost of memory usage. Incur a blocking gas cost if memory usage exceeds reasonable limits.
     *

@@ -130,3 +130,45 @@ class ProgramSpec extends AnyFlatSpec with Matchers with ScalaCheckPropertyCheck
     destinations.size shouldBe 15000
     allocated should be < 512L * 1024
   }
+
+  it should "fetch the byte at pc, and 0 outside the code, exactly as code.lift did" taggedAs (UnitTest, VMTest) in {
+    // A plain array, a slice into a larger one, and a concatenation: the three ByteString shapes code arrives in.
+    val shapes: Gen[ByteString] = for
+      bytes <- Gen.listOf(byteGen).map(l => ByteString(l.toArray))
+      shape <- Gen.choose(0, 2)
+    yield shape match
+      case 0 => bytes
+      case 1 => (ByteString(1.toByte, 2.toByte) ++ bytes ++ ByteString(3.toByte)).compact.slice(2, 2 + bytes.length)
+      case _ => ByteString(bytes.take(bytes.length / 2).toArray) ++ ByteString(bytes.drop(bytes.length / 2).toArray)
+
+    forAll(shapes, minSuccessful(500)) { code =>
+      val program = Program(code)
+      (-3 to code.length + 3).foreach { pc =>
+        program.getByte(pc) shouldBe code.lift(pc).getOrElse(0.toByte)
+      }
+    }
+  }
+
+  "OpCodeList.opCodeFor" should "answer byteToOpCode.get for every byte of every fork's table" taggedAs (
+    UnitTest,
+    VMTest
+  ) in {
+    val tables = Seq(
+      EvmConfig.FrontierOpCodes,
+      EvmConfig.HomesteadOpCodes,
+      EvmConfig.ByzantiumOpCodes,
+      EvmConfig.ConstantinopleOpCodes,
+      EvmConfig.PhoenixOpCodes,
+      EvmConfig.SpiralOpCodes,
+      EvmConfig.OlympiaOpCodes,
+      EvmConfig.EtcOlympiaOpCodes,
+      EvmConfig.LondonOpCodes,
+      EvmConfig.ShanghaiOpCodes,
+      EvmConfig.CancunOpCodes,
+      EvmConfig.OsakaOpCodes
+    )
+    for
+      table <- tables
+      byte <- Byte.MinValue to Byte.MaxValue
+    do table.opCodeFor(byte.toByte) shouldBe table.byteToOpCode.get(byte.toByte)
+  }
