@@ -112,12 +112,10 @@ class ForkChoiceManager(
       )
       currentState.set(Some(newState))
 
-      // Rewrite number→hash mapping for the new canonical branch (no-op if already canonical).
-      // Then persist canonical best-block pointer.
-      maybeHeader.foreach { header =>
-        blockchainWriter.promoteBranchToCanonical(BlockHash(newState.headBlockHash), blockchainReader)
-        blockchainWriter.saveBestKnownBlocks(BlockHash(newState.headBlockHash), header.number.value)
-      }
+      // One batch: the number→hash index becomes exactly the head's ancestry (the new branch written, every entry
+      // above the head deleted) and the best-block pointer moves to the head — whether the head moved up, sideways,
+      // or DOWN to an ancestor or a shorter side chain.
+      maybeHeader.foreach(header => blockchainWriter.promoteToCanonicalHead(header, blockchainReader))
 
       Right(())
 
@@ -131,10 +129,11 @@ class ForkChoiceManager(
     * nothing about execution and is what lets the p2p import path fetch and execute the branch that leads to it.
     *
     * Calling [[applyForkChoiceState]] here instead was a consensus defect. When the head was present by hash but
-    * unexecuted (stored via `storeBlockByHashOnly`), the header lookup succeeded, so `promoteBranchToCanonical` +
-    * `saveBestKnownBlocks` ran and wrote number→hash for a block we never validated. `engine_newPayload`'s dedup branch
-    * then read that mapping back as proof of prior successful execution and answered VALID for an invalid block. hive
-    * `invalid_payload.go:242` ("Invalid NewPayload, Transaction *, Syncing=True") requires INVALID there.
+    * unexecuted (stored via `storeBlockByHashOnly`), the header lookup succeeded, so the canonical-head write
+    * (`BlockchainWriter.promoteToCanonicalHead`) wrote number→hash for a block we never validated.
+    * `engine_newPayload`'s dedup branch then read that mapping back as proof of prior successful execution and answered
+    * VALID for an invalid block. hive `invalid_payload.go:242` ("Invalid NewPayload, Transaction *, Syncing=True")
+    * requires INVALID there.
     */
   def notifyBeaconHead(newState: ForkChoiceState): Unit =
     requestedHead.set(Some(newState.headBlockHash))

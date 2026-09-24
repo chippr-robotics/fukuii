@@ -259,3 +259,78 @@ class EngineApiSidechainNewPayloadSpec extends AnyWordSpec with Matchers:
         newPayload(block3).status shouldBe Valid
         canonicalAt(3) shouldBe Some(block3.hash)
   }
+
+  /** After engine_forkchoiceUpdated the canonical index is exactly the head's ancestry: every height up to the head
+    * names the head's ancestor and no height above it has an entry. go-ethereum's `SetCanonical` (core/blockchain.go
+    * `reorg`: "Delete all hash markers that are not part of the new canonical chain", then `writeHeadBlock`).
+    *
+    * The defect: a head that moved DOWN left the old chain's entries above it, and the branch walk that promotes a new
+    * head stopped at the first entry naming the walked block, wherever it was. So a later forkchoiceUpdated back onto
+    * the old chain stopped at a leftover entry, and the heights below it kept the other branch.
+    */
+  "engine_forkchoiceUpdated to a lower head" should {
+
+    "delete the index entries above an ancestor it rewinds to" taggedAs (UnitTest, ConsensusTest) in new Setup:
+      block2 // canonical genesis <- block1 <- block2, head block2
+      forkchoice(block1)
+
+      blockchainReader.getBestBlockNumber shouldBe BigInt(1)
+      canonicalAt(1) shouldBe Some(block1.hash)
+      canonicalAt(2) shouldBe None
+
+      forkchoice(block2)
+      canonicalAt(2) shouldBe Some(block2.hash)
+
+    "delete the index entries above a shorter side chain it reorganises to" taggedAs (UnitTest, ConsensusTest) in
+      new Setup:
+        block2
+        val side1 = payloadOn(Block(genesisHeader, BlockBody(Nil, Nil)), Nil, randao = 0x0a) // sibling of block1
+        newPayload(side1).status shouldBe Valid
+        forkchoice(side1)
+
+        blockchainReader.getBestBlockNumber shouldBe BigInt(1)
+        canonicalAt(1) shouldBe Some(side1.hash)
+        canonicalAt(2) shouldBe None
+
+    "leave the index exactly the ancestry of a head reached back across a shorter side chain" taggedAs (
+      UnitTest,
+      ConsensusTest
+    ) in new Setup:
+      // hive `Re-org to Previously Validated Sidechain Payload`: forkchoiceUpdated to a side block below the head, then
+      // the CL carries on from the old chain. The leftover entry at height 2 made block3's newPayload write height 3,
+      // and the forkchoiceUpdated to block3 then stopped its walk at height 3 — height 1 still named side1.
+      block2
+      val side1 = payloadOn(Block(genesisHeader, BlockBody(Nil, Nil)), Nil, randao = 0x0a)
+      newPayload(side1).status shouldBe Valid
+      forkchoice(side1)
+
+      val block3 = payloadOn(block2, Nil, randao = 0x03)
+      newPayload(block3).status shouldBe Valid
+      forkchoice(block3)
+
+      canonicalAt(1) shouldBe Some(block1.hash)
+      canonicalAt(2) shouldBe Some(block2.hash)
+      canonicalAt(3) shouldBe Some(block3.hash)
+      // What eth_getBlockByNumber serves for height 1 while block3 is the head.
+      blockchainReader.getBlockByNumber(blockchainReader.getBestBranch, 1).map(_.hash) shouldBe Some(block1.hash)
+      // block1's transaction is back on block1.
+      engineApi.getPayloadBodyByNumber(1).map(_._1.size) shouldBe Some(1)
+
+    "not stop its walk at an entry above the best block that another writer left" taggedAs (UnitTest, ConsensusTest) in
+      new Setup:
+        // The p2p import path's designated-head arm (ConsensusImpl.settleHead, `!selectedByWeight`) moves the best
+        // block exactly like this: BlockExecution saves the executed block with its number->hash entry, then the best
+        // block moves to the branch tip. Nothing clears what lies above the tip, so height 2 keeps block2.
+        block2
+        val side1 = payloadOn(Block(genesisHeader, BlockBody(Nil, Nil)), Nil, randao = 0x0a)
+        newPayload(side1).status shouldBe Valid
+        blockchainWriter.save(side1, Nil, ChainWeight.zero, saveAsBestBlock = false)
+        blockchainWriter.saveBestKnownBlocks(side1.hash, side1.header.number.value)
+        canonicalAt(2) shouldBe Some(block2.hash)
+
+        forkchoice(block2)
+
+        blockchainReader.getBestBlockNumber shouldBe BigInt(2)
+        canonicalAt(1) shouldBe Some(block1.hash)
+        canonicalAt(2) shouldBe Some(block2.hash)
+  }

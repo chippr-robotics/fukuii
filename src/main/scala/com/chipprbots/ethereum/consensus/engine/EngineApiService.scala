@@ -475,7 +475,7 @@ class EngineApiService(
                     // Detect whether this payload extends canonical or is a sidechain. For
                     // canonical-extending payloads we write number→hash; for sidechains we store
                     // by-hash-only so later forkchoiceUpdated can promote via
-                    // ForkChoiceManager.promoteBranchToCanonical.
+                    // BlockchainWriter.promoteToCanonicalHead.
                     //
                     // "Extends canonical" needs BOTH a canonical parent AND a height no canonical block
                     // holds yet. A canonical parent alone is not enough: a SIBLING of a canonical block
@@ -577,7 +577,7 @@ class EngineApiService(
       payloadAttributes: Option[PayloadAttributes]
   ): IO[Either[String, ForkchoiceUpdatedResponse]] = IO.defer {
     // Check invalid/unvalidated blocks BEFORE applying fork choice state
-    // (applyForkChoiceState calls saveBestKnownBlocks which would make the block canonical)
+    // (applyForkChoiceState calls promoteToCanonicalHead, which would make the block canonical)
     val zeroHash = ByteString(new Array[Byte](32))
 
     if invalidBlocks.containsKey(forkChoiceState.headBlockHash) then
@@ -646,7 +646,7 @@ class EngineApiService(
         // MUST be notifyBeaconHead, NOT applyForkChoiceState. The head here exists by hash
         // but was never executed (storeBlockByHashOnly: no receipts, no number→hash mapping).
         // applyForkChoiceState finds the header by hash, so it takes its head-known branch and
-        // runs promoteBranchToCanonical + saveBestKnownBlocks — writing a canonical number→hash
+        // runs promoteToCanonicalHead — writing a canonical number→hash
         // mapping for a block we never validated. newPayload's dedup branch then reads that
         // mapping back as proof of execution and answers VALID for an invalid block; hive
         // invalid_payload.go:242 ("Invalid NewPayload, Transaction *, Syncing=True") requires
