@@ -19,6 +19,7 @@ import com.chipprbots.ethereum.domain.SignedTransaction
 import com.chipprbots.ethereum.domain.SignedTransactionWithSender
 import com.chipprbots.ethereum.jsonrpc.NewPendingTransaction
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor
+import com.chipprbots.ethereum.network.NetworkPeerManagerActor.PeerInfo
 import com.chipprbots.ethereum.network.Peer
 import com.chipprbots.ethereum.network.PeerEventBusActor.Command as PeerEventBusCommand
 import com.chipprbots.ethereum.network.PeerEventBusActor.PeerEvent
@@ -26,9 +27,13 @@ import com.chipprbots.ethereum.network.PeerEventBusActor.SubscribeCmd
 import com.chipprbots.ethereum.network.PeerEventBusActor.SubscriptionClassifier
 import com.chipprbots.ethereum.network.PeerId
 import com.chipprbots.ethereum.network.PeerManagerActor
+import com.chipprbots.ethereum.network.p2p.MessageSerializable
+import com.chipprbots.ethereum.network.p2p.messages.Capability
 import com.chipprbots.ethereum.network.p2p.messages.Codes
 import com.chipprbots.ethereum.network.p2p.messages.ETHPackets
 import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.GetPooledTransactions.*
+import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.NewPooledTransactionHashes.*
+import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.NewPooledTransactionHashes72.*
 import com.chipprbots.ethereum.utils.BlockchainConfig
 import com.chipprbots.ethereum.utils.ByteStringUtils.ByteStringOps
 import com.chipprbots.ethereum.utils.Config
@@ -155,6 +160,14 @@ object PendingTransactionsManager:
       */
     var connectedPeers: Map[PeerId, Peer] = Map.empty
 
+    /** Negotiated ETH capability per connected peer, populated alongside `connectedPeers`. Needed so
+      * `notifyPeersOfTransactions` can pick the correct NewPooledTransactionHashes wire shape: ETH72 replaced the
+      * 3-field ETH68+ announcement with a 4-field form (adds a custody Mask, EIP-8070) — same wire code, but a peer
+      * that negotiated ETH72 will fail to RLP-decode the 3-field form into its 4-field struct. Falls back to ETH68 (the
+      * 3-field shape) for any peer this map has no entry for — matches the shape every version below ETH72 expects.
+      */
+    var connectedPeerCapabilities: Map[PeerId, Capability] = Map.empty
+
     /** High-water mark of the next expected nonce per sender address. Once nonce N is accepted, pendingNonces(sender) =
       * max(current, N+1). Never decremented on removal — only cleared on ClearPendingTransactions. Applied before MPT
       * state validation so it works even when state trie is unavailable.
@@ -192,7 +205,19 @@ object PendingTransactionsManager:
               case Some(networkForm) => BigInt(networkForm.length)
               case None              => BigInt(SignedTransaction.byteArraySerializable.toBytes(stx).length)
           }
-          val announcement = ETHPackets.NewPooledTransactionHashes(types, sizes, hashes)
+          // ETH72 peers require the 4-field announcement (adds a custody Mask, EIP-8070) — same wire
+          // code as the 3-field ETH68+ form, but a strictly different RLP shape (see
+          // ETHPackets.NewPooledTransactionHashes72's doc comment). fukuii has no PeerDAS cell storage,
+          // so it always advertises zero custody rather than claim cells it can't serve.
+          val announcement: MessageSerializable =
+            if connectedPeerCapabilities.get(peer.id).contains(Capability.ETH72) then
+              ETHPackets.NewPooledTransactionHashes72(
+                types,
+                sizes,
+                hashes,
+                ETHPackets.NewPooledTransactionHashes72.NoCustody
+              ): MessageSerializable
+            else ETHPackets.NewPooledTransactionHashes(types, sizes, hashes): MessageSerializable
           networkPeerManager ! NetworkPeerManagerActor.SendMessageCmd(announcement, peer.id)
           txsToNotify.foreach(stx => setTxKnown(stx, peer.id))
       }
@@ -291,8 +316,11 @@ object PendingTransactionsManager:
 
     // scalastyle:off method.length
     Behaviors.receiveMessage {
-      case WrappedPeerEvent(PeerEvent.PeerHandshakeSuccessful(peer, _)) =>
+      case WrappedPeerEvent(PeerEvent.PeerHandshakeSuccessful(peer, handshakeResult)) =>
         connectedPeers += (peer.id -> peer)
+        handshakeResult match
+          case pi: PeerInfo => connectedPeerCapabilities += (peer.id -> pi.remoteStatus.capability)
+          case _            => // non-ETH handshake result — leave unset, falls back to the ETH68 wire shape
         pendingTransactions.cleanUp()
         val stxs = pendingTransactions.asMap().values().asScala.toSeq.map(_.stx)
         context.self ! NotifyPeers(stxs, Seq(peer))
@@ -300,6 +328,7 @@ object PendingTransactionsManager:
 
       case WrappedPeerEvent(PeerEvent.PeerDisconnected(peerId)) =>
         connectedPeers -= peerId
+        connectedPeerCapabilities -= peerId
         Behaviors.same
 
       case AddUncheckedTransactions(transactions) =>
