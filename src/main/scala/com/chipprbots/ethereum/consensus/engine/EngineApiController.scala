@@ -288,38 +288,53 @@ class EngineApiController(
               // overlay the version error. UnsupportedFork (-38005) does not apply forkchoice —
               // the CL called the wrong method entirely.
               if code == InvalidAttrs then
-                // If head is unknown (syncing), return SYNCING payload status without the
-                // attrs error — validation presupposes a known head. Hive's 'Invalid
-                // PayloadAttributes, Missing BeaconRoot, Syncing=True' expects no error.
+                // The attributes error is the answer ONLY when the forkchoice state was applied to a VALID head.
+                // execution-apis processes payload attributes after applying the forkchoice state and only for a
+                // VALID head (paris.md engine_forkchoiceUpdatedV1 point 7, which shanghai.md and cancun.md extend
+                // with these checks); hive spells the order out in suites/engine/payload_attributes.go. Every other
+                // outcome keeps its own answer: SYNCING and INVALID are payload statuses (hive 'Invalid
+                // PayloadAttributes, Missing BeaconRoot, Syncing=True' expects no error), and an inconsistent
+                // forkchoice state is -38002 — which this branch used to report as -38003.
                 engineApiService.forkchoiceUpdated(fcs, None).map {
-                  case Right(response) if response.payloadStatus.status == PayloadStatus.Syncing =>
-                    JsonRpcResponse("2.0", Some(encodeForkchoiceUpdatedResponse(response)), None, reqId(request))
-                  case _ =>
+                  case Right(response) if response.payloadStatus.status == PayloadStatus.Valid =>
                     JsonRpcResponse("2.0", None, Some(JsonRpcError(code, msg, None)), reqId(request))
+                  case outcome => forkchoiceUpdatedResponse(outcome, request)
                 }
               else
                 IO.pure(
                   JsonRpcResponse("2.0", None, Some(JsonRpcError(code, msg, None)), reqId(request))
                 )
-            else
-              engineApiService.forkchoiceUpdated(fcs, payloadAttrs).map {
-                case Right(response) =>
-                  JsonRpcResponse("2.0", Some(encodeForkchoiceUpdatedResponse(response)), None, reqId(request))
-                case Left(errorMsg) if errorMsg.startsWith("ATTR:") =>
-                  // Invalid payload attributes → -38003 per Engine API spec
-                  JsonRpcResponse(
-                    "2.0",
-                    None,
-                    Some(JsonRpcError(-38003, errorMsg.stripPrefix("ATTR:"), None)),
-                    reqId(request)
-                  )
-                case Left(errorMsg) =>
-                  // Invalid forkchoice state (e.g. unknown safe/finalized hash) → -38002
-                  JsonRpcResponse("2.0", None, Some(JsonRpcError(-38002, errorMsg, None)), reqId(request))
-              }
+            else engineApiService.forkchoiceUpdated(fcs, payloadAttrs).map(forkchoiceUpdatedResponse(_, request))
       case _ =>
         IO.pure(
           JsonRpcResponse("2.0", None, Some(JsonRpcError.InvalidParams("missing fork choice state")), reqId(request))
+        )
+
+  /** The JSON-RPC answer for what `EngineApiService.forkchoiceUpdated` returned. Both paths of
+    * [[handleForkchoiceUpdated]] answer through here, so an error keeps its code whichever path raised it: the service
+    * marks an attributes error with the "ATTR:" prefix (-38003); any other `Left` is an inconsistent forkchoice state
+    * (-38002: an unknown safe or finalized block, or one that is not an ancestor of the head).
+    */
+  private def forkchoiceUpdatedResponse(
+      outcome: Either[String, ForkchoiceUpdatedResponse],
+      request: JsonRpcRequest
+  ): JsonRpcResponse =
+    outcome match
+      case Right(response) =>
+        JsonRpcResponse("2.0", Some(encodeForkchoiceUpdatedResponse(response)), None, reqId(request))
+      case Left(errorMsg) if errorMsg.startsWith("ATTR:") =>
+        JsonRpcResponse(
+          "2.0",
+          None,
+          Some(JsonRpcError(EngineApiController.InvalidPayloadAttributesCode, errorMsg.stripPrefix("ATTR:"), None)),
+          reqId(request)
+        )
+      case Left(errorMsg) =>
+        JsonRpcResponse(
+          "2.0",
+          None,
+          Some(JsonRpcError(EngineApiController.InvalidForkchoiceStateCode, errorMsg, None)),
+          reqId(request)
         )
 
   private def handleExchangeCapabilities(request: JsonRpcRequest): IO[JsonRpcResponse] =
@@ -649,6 +664,7 @@ class EngineApiController(
 object EngineApiController:
 
   private val InvalidParamsCode = -32602
+  private val InvalidForkchoiceStateCode = -38002
   private val InvalidPayloadAttributesCode = -38003
   private val UnsupportedForkCode = -38005
 
