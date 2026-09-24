@@ -10,7 +10,7 @@
 #   scripts/bench/blockchain-test-bench.sh loopMul-bt.json 'loopMul_d2g0v0_Cancun'
 #
 # The JVM gets hive's client flags (hive/fukuii/fukuii.sh): 512 MB heap, 8 MB thread stacks, G1,
-# ProgramState's constructor inlined. Add JAVA_OPTS=-XX:CompileCommand=dontinline,... to undo the last.
+# ProgramState's constructor inlined (INLINE_PROGRAM_STATE=0 leaves that one out, as hive ran before it).
 #
 # Environment:
 #   JFR=<file.jfr>       record a JDK Flight Recorder profile of the run ("profile" settings)
@@ -48,8 +48,10 @@ if [[ -n "${MAIN_CLASSES:-}" ]]; then
   cp="$(tr ':' '\n' <<<"$cp" | sed -E "s#^$root/target/scala-3[^/]*/classes\$#$MAIN_CLASSES#" | paste -sd:)"
 fi
 
-jvm=(-Xmx512m -Xms128m -Xss8M -XX:+UseG1GC
-  -XX:CompileCommand=quiet "-XX:CompileCommand=inline,com.chipprbots.ethereum.vm.ProgramState::<init>")
+jvm=(-Xmx512m -Xms128m -Xss8M -XX:+UseG1GC)
+if [[ "${INLINE_PROGRAM_STATE:-1}" != 0 ]]; then
+  jvm+=(-XX:CompileCommand=quiet "-XX:CompileCommand=inline,com.chipprbots.ethereum.vm.ProgramState::<init>")
+fi
 if [[ -n "${JFR:-}" ]]; then
   jvm+=("-XX:StartFlightRecording=filename=$JFR,settings=profile,dumponexit=true")
 fi
