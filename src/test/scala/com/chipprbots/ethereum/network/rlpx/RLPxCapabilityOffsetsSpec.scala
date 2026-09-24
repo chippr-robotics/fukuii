@@ -80,10 +80,48 @@ class RLPxCapabilityOffsetsSpec extends AnyFlatSpec with Matchers:
       supportsSnap = true
     )
     offsets.peerEthBase shouldBe 0x10
-    // go-ethereum protocolLengths: {69:18, 70:18}. ETH70 previously fell through to 17 here,
-    // which would have placed SNAP one slot low and misrouted every snap message on an
-    // ETH70 peering. Dormant in hive only because that profile caps advertisement at eth/69.
+    // go-ethereum protocolLengths: {69:18, 70:18}.
     offsets.peerEthSize shouldBe 0x12
+    offsets.peerSnapBase shouldBe Some(0x22)
+  }
+
+  it should "use 20-code ETH wire size for ETH/71 (adds GetBlockAccessLists/BlockAccessLists) and shift SNAP base accordingly" taggedAs UnitTest in {
+    val offsets = RLPxConnectionHandler.computeCapabilityOffsets(
+      peerCaps = List(Capability.SNAP1, Capability.ETH71),
+      negotiatedEth = Capability.ETH71,
+      supportsSnap = true
+    )
+    offsets.peerEthBase shouldBe 0x10
+    // go-ethereum protocolLengths(ETH71) = 20 (eth/protocols/eth/protocol.go).
+    offsets.peerEthSize shouldBe 0x14
+    offsets.peerSnapBase shouldBe Some(0x24)
+  }
+
+  it should "use 22-code ETH wire size for ETH/72 (adds GetCells/Cells) and place SNAP at 0x26 — the exact base the hive devp2p CLI tool assumes" taggedAs UnitTest in {
+    val offsets = RLPxConnectionHandler.computeCapabilityOffsets(
+      peerCaps = List(Capability.SNAP1, Capability.ETH72),
+      negotiatedEth = Capability.ETH72,
+      supportsSnap = true
+    )
+    offsets.peerEthBase shouldBe 0x10
+    // go-ethereum protocolLengths(ETH72) = 22. This is the fix for the "snap suite" i/o timeouts
+    // documented in the test below and in devp2p-hive-tool-interop-quirks.md — the hive tool's
+    // hardcoded `ethProtoLen = 22` now matches reality once fukuii actually negotiates eth/72,
+    // instead of requiring fukuii to special-case the tool's assumption.
+    offsets.peerEthSize shouldBe 0x16
+    offsets.peerSnapBase shouldBe Some(0x26)
+  }
+
+  it should "widen the canonical SNAP window to 10 slots (snap/2 adds GetAccessLists/AccessLists) without disturbing snap/1 routing" taggedAs UnitTest in {
+    RLPxConnectionHandler.CanonicalSnapSize shouldBe 0x0a
+    val offsets = RLPxConnectionHandler.computeCapabilityOffsets(
+      peerCaps = List(Capability.SNAP1, Capability.ETH69),
+      negotiatedEth = Capability.ETH69,
+      supportsSnap = true
+    )
+    // snap/1's own wire codes (0x00-0x07 relative) are unaffected by the wider canonical window —
+    // it only changes which wire ids get RECOGNISED as "in the snap range" at all, not where
+    // snap/1's own base sits.
     offsets.peerSnapBase shouldBe Some(0x22)
   }
 
@@ -107,47 +145,34 @@ class RLPxCapabilityOffsetsSpec extends AnyFlatSpec with Matchers:
     offsets.peerSnapBase shouldBe None
   }
 
-  // ── hive devp2p `snap`/`snap2` suites: confirmed NOT a fukuii offset bug ──
-  // Root-caused against the 2026-09-22 hive artifact (snap: AccountRange/GetByteCodes/
-  // GetTrieNodes/GetStorageRanges all fail `i/o timeout`; fukuii's own server log for the
-  // same run shows e.g. `DECODE_ERROR: ... Cannot decode GetByteCodes. Expected RLPList[3]`
-  // for a request hive sent as GetAccountRange, and `Unknown snap/1 message type: 42/44` for
-  // hive's actual GetByteCodes/GetTrieNodes requests). Traced to go-ethereum's OWN
-  // `cmd/devp2p/internal/ethtest/protocol.go`, which hardcodes `ethProtoLen = 22` (the slot
-  // count for eth/72) for every peering regardless of which eth version was actually
-  // negotiated — see `getProto`'s doc comment: "assuming the negotiated capabilities are
-  // exactly {eth,snap}". Real go-ethereum servers (`eth/protocols/eth/handler.go` via
-  // `p2p.Protocol{Length: protocolLengths[version]}`, `eth/protocols/eth/protocol.go:
-  // protocolLengths = {69:18, 70:18, 71:20, 72:22}`) do NOT do this — they size the eth slot
-  // per the version actually negotiated, exactly like `ethWireSizeFor` above. Because fukuii
-  // only advertises up to eth/69 (`InstanceConfig.scala` never sets an eth70 capability flag),
-  // it negotiates eth/69 (Length 18) with this test tool, so its `peerSnapBase` is 0x22 — but
-  // the tool writes/reads snap frames assuming 0x26 (0x10 + 0x16), a 4-slot shift. Every real
-  // snap message lands on the wrong canonical SNAP slot (GetAccountRange → decoded as
-  // GetByteCodes, GetByteCodes → falls outside fukuii's [0x22,0x2a) window entirely = "unknown
-  // message type", etc.), so fukuii never sends a reply the tool recognises within its 2s read
-  // deadline (`var timeout = 2 * time.Second` in the same file).
+  // ── hive devp2p `snap` suite offset mismatch — HISTORICAL, resolved by implementing eth/71+72 ──
+  // Originally root-caused against the 2026-09-22 hive artifact: go-ethereum's OWN
+  // `cmd/devp2p/internal/ethtest/protocol.go` hardcodes `ethProtoLen` to the slot count of the
+  // tool's own highest-offered eth version (22, for eth/72) regardless of which version a given
+  // peering actually negotiates — see `getProto`'s doc comment: "assuming the negotiated
+  // capabilities are exactly {eth,snap}". At the time, fukuii only advertised up to eth/69
+  // (`InstanceConfig.scala` had no eth70+ capability flags), so it negotiated eth/69 (Length 18)
+  // with the tool, landing `peerSnapBase` at 0x22 against the tool's fixed assumption of 0x26 — a
+  // 4-slot shift that misrouted every snap message (GetAccountRange → decoded as GetByteCodes,
+  // etc.), all traced in `devp2p-hive-tool-interop-quirks.md`.
   //
-  // This is upstream go-ethereum test-tool behaviour, not a fukuii wire defect: fukuii's
-  // dynamic per-negotiated-version sizing is what matches the *real* go-ethereum server
-  // implementation, and is what protects real interop with any live eth/69 + snap/1 peer.
-  // "Fixing" `ethWireSizeFor`/`computeCapabilityOffsets` to hardcode a fixed 0x16 slot count
-  // to chase this specific test tool would BREAK real geth/Nethermind/Besu interop at eth/68
-  // and eth/69 (see the ETH68 case a few tests above, which correctly gets 0x21, not 0x26).
-  // The only way to make the go-ethereum devp2p CLI tool's own assumption hold is for fukuii
-  // to negotiate eth/72 with it — i.e. implement eth/71 and eth/72, which is out of scope here
-  // (see AGENTS.md herald: "ETH68/69/70 only") and unrelated to Amsterdam (specs/009).
+  // fukuii's dynamic per-negotiated-version sizing (`ethWireSizeFor`) was always correct — the fix
+  // was never to hardcode a slot count to chase the tool, but to reach the version the tool
+  // actually assumes: eth/71 and eth/72 are now implemented and advertised (see
+  // `RLPxCapabilityOffsetsSpec`'s ETH71/ETH72 cases above and `CapabilityNegotiateSpec`), so a peer
+  // offering eth/72 now genuinely negotiates eth/72 and lands `peerSnapBase` at 0x26 — matching the
+  // tool without fukuii special-casing anything.
   //
-  // This test pins the exact peer shape the hive tool presents (it advertises eth/72 and
-  // eth/70 in its Hello alongside eth/69 and snap/1; fukuii doesn't recognise eth/71 or eth/72
-  // and silently drops them per `Capability.toCapability`'s EIP-8 leniency, and doesn't
-  // advertise eth/70 itself, so negotiation lands on eth/69) so a future "fix" attempt has to
-  // consciously break this assertion rather than silently regress it.
-  it should "NOT shift SNAP base to please the hive devp2p CLI tool's fixed eth/72-sized offset assumption (peer also advertises eth/70, unrecognised eth/71/72 dropped)" taggedAs UnitTest in {
-    val hiveDevp2pToolHello = List(Capability.ETH70, Capability.ETH69, Capability.SNAP1)
+  // This test keeps pinning the OLD peer shape (capped at eth/70, i.e. a peer — or hive profile —
+  // that hasn't adopted eth/71/72 yet) as a pure function-level regression: `computeCapabilityOffsets`
+  // must still produce the SAME numeric offsets for an eth/69-vs-eth/70 negotiation outcome, because
+  // ETH69 and ETH70 share the identical 18-slot wire footprint (`protocolLengths = {69:18, 70:18}`)
+  // — the peerSnapBase math is unaffected by which of the two labels negotiation actually returns.
+  it should "produce identical offsets whether negotiation lands on ETH69 or ETH70 (both are 18-slot wire footprints) for a peer capped below eth/71" taggedAs UnitTest in {
+    val peerCappedAtEth70 = List(Capability.ETH70, Capability.ETH69, Capability.SNAP1)
     val offsets = RLPxConnectionHandler.computeCapabilityOffsets(
-      peerCaps = hiveDevp2pToolHello,
-      negotiatedEth = Capability.ETH69, // fukuii only advertises up to eth/69, so eth/69 wins
+      peerCaps = peerCappedAtEth70,
+      negotiatedEth = Capability.ETH69,
       supportsSnap = true
     )
     offsets.peerEthBase shouldBe 0x10

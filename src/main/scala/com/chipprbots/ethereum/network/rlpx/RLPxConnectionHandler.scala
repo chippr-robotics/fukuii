@@ -26,6 +26,7 @@ import com.chipprbots.ethereum.network.p2p.MessageDecoder.*
 import com.chipprbots.ethereum.network.p2p.MessageSerializable
 import com.chipprbots.ethereum.network.p2p.NetworkMessageDecoder
 import com.chipprbots.ethereum.network.p2p.SNAPMessageDecoder
+import com.chipprbots.ethereum.network.p2p.SNAP2MessageDecoder
 import com.chipprbots.ethereum.network.p2p.messages.Capability
 import com.chipprbots.ethereum.network.p2p.messages.WireProtocol.Hello
 import com.chipprbots.ethereum.network.p2p.messages.WireProtocol.Hello.HelloEnc
@@ -84,7 +85,15 @@ object RLPxConnectionHandler:
   val CanonicalEthBase: Int = 0x10
   val CanonicalEthSize: Int = 0x11
   val CanonicalSnapBase: Int = 0x30
-  val CanonicalSnapSize: Int = 0x08
+
+  /** snap/1 reserves 8 canonical slots (0x30-0x37); snap/2 (EIP-8189) adds GetAccessLists/AccessLists at relative
+    * 0x08/0x09, so the canonical window must cover 10 slots regardless of which snap version is actually negotiated on
+    * a given connection. Widening this is safe unconditionally: the DECODER chosen per negotiated snap version
+    * (SNAPMessageDecoder vs SNAP2MessageDecoder, see ethMessageCodecFactory) is what actually determines whether a
+    * translated code means anything — a snap/1 peer that somehow sent a code in the extra 2 slots would still get
+    * rejected as "unknown", just via a differently-numbered canonical id than before.
+    */
+  val CanonicalSnapSize: Int = 0x0a
 
   // =========================================================================
   // Parent-direction types — messages this actor sends to PeerActor
@@ -118,12 +127,11 @@ object RLPxConnectionHandler:
     * Multiplexing") says each capability statically specifies how many message IDs it requires, and offsets are
     * assigned from that. Getting it wrong shifts the SNAP base and misroutes every snap message; see
     * RLPxCapabilityOffsetsSpec for the regression cases.
-    *
-    * ETH70 was negotiable (Capability.scala:29,40) but fell through to 17 here, which would have put the SNAP base one
-    * slot low on any ETH70 + snap peering. Dormant only because the hive profile in use caps advertisement at eth/69.
     */
   def ethWireSizeFor(cap: Capability): Int = cap match
     case Capability.ETH69 | Capability.ETH70 => 0x12
+    case Capability.ETH71                    => 0x14
+    case Capability.ETH72                    => 0x16
     case _                                   => 0x11
 
   case class CapabilityOffsets(peerEthBase: Int, peerEthSize: Int, peerSnapBase: Option[Int])
@@ -133,7 +141,7 @@ object RLPxConnectionHandler:
       negotiatedEth: Capability,
       supportsSnap: Boolean
   ): CapabilityOffsets =
-    val snapPresent = peerCaps.contains(Capability.SNAP1)
+    val snapPresent = peerCaps.contains(Capability.SNAP1) || peerCaps.contains(Capability.SNAP2)
     val ethPresent = peerCaps.exists(_.name == com.chipprbots.ethereum.network.p2p.messages.ProtocolFamily.ETH)
     val snapOnlyPeer = snapPresent && !ethPresent
     val peerEthWireSize = ethWireSizeFor(negotiatedEth)
@@ -151,12 +159,13 @@ object RLPxConnectionHandler:
       p2pVersion: Long,
       clientId: String,
       compressionPolicy: CompressionPolicy,
-      supportsSnap: Boolean
+      negotiatedSnap: Option[Capability]
   ): MessageCodec =
     val ethDecoder = EthereumMessageDecoder.ethMessageDecoder(negotiated)
-    val decoderWithSnap =
-      if supportsSnap then NetworkMessageDecoder.orElse(ethDecoder).orElse(SNAPMessageDecoder)
-      else NetworkMessageDecoder.orElse(ethDecoder)
+    val decoderWithSnap = negotiatedSnap match
+      case Some(Capability.SNAP2) => NetworkMessageDecoder.orElse(ethDecoder).orElse(SNAP2MessageDecoder)
+      case Some(_)                => NetworkMessageDecoder.orElse(ethDecoder).orElse(SNAPMessageDecoder)
+      case None                   => NetworkMessageDecoder.orElse(ethDecoder)
     new MessageCodec(frameCodec, decoderWithSnap, p2pVersion, clientId, compressionPolicy)
 
   // =========================================================================
@@ -271,7 +280,14 @@ object RLPxConnectionHandler:
   def apply(
       capabilities: List[Capability],
       authHandshaker: AuthHandshaker,
-      messageCodecFactory: (FrameCodec, Capability, Long, String, CompressionPolicy, Boolean) => MessageCodec,
+      messageCodecFactory: (
+          FrameCodec,
+          Capability,
+          Long,
+          String,
+          CompressionPolicy,
+          Option[Capability]
+      ) => MessageCodec,
       rlpxConfiguration: RLPxConfiguration,
       extractorFactory: Secrets => HelloCodec,
       parent: ActorRef[PeerActor.Command],
@@ -299,7 +315,14 @@ object RLPxConnectionHandler:
   final private class Impl(
       capabilities: List[Capability],
       authHandshaker: AuthHandshaker,
-      messageCodecFactory: (FrameCodec, Capability, Long, String, CompressionPolicy, Boolean) => MessageCodec,
+      messageCodecFactory: (
+          FrameCodec,
+          Capability,
+          Long,
+          String,
+          CompressionPolicy,
+          Option[Capability]
+      ) => MessageCodec,
       rlpxConfiguration: RLPxConfiguration,
       extractorFactory: Secrets => HelloCodec,
       parent: ActorRef[PeerActor.Command],
@@ -477,9 +500,9 @@ object RLPxConnectionHandler:
       Capability.negotiate(hello.capabilities.toList, capabilities).map { negotiated =>
         val compressionPolicy =
           CompressionPolicy.fromHandshake(HelloExchangeState.P2pVersion, hello.p2pVersion)
-        val supportsSnap =
-          capabilities.contains(Capability.SNAP1) && hello.capabilities.contains(Capability.SNAP1)
-        if supportsSnap then log.debug("[RLPx] SNAP/1 capability enabled for peer {}", peerId)
+        val negotiatedSnap = Capability.negotiateSnap(hello.capabilities.toList, capabilities)
+        val supportsSnap = negotiatedSnap.isDefined
+        if supportsSnap then log.debug("[RLPx] {} capability enabled for peer {}", negotiatedSnap.get, peerId)
         val inboundTranslator = computeInboundTranslator(hello, negotiated, supportsSnap)
         (
           messageCodecFactory(
@@ -488,7 +511,7 @@ object RLPxConnectionHandler:
             hello.p2pVersion,
             hello.clientId,
             compressionPolicy,
-            supportsSnap
+            negotiatedSnap
           ),
           negotiated,
           inboundTranslator

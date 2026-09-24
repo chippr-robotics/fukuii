@@ -269,11 +269,18 @@ object ETHPackets:
               case RLPList(items*) => items.length; case _ => -1
             throw new RuntimeException(s"Cannot decode Status69 (got $fieldCount fields): $other")
 
-  // ── Status70 — ETH70 Status message ─────────────────────────────────────────
+  // ── Status70 — ETH70 Status message (also serves ETH71 and ETH72) ────────────
   //
   // ETH70 does not change the Status wire format vs ETH69 (still 7 fields, no TD).
   // A separate type keeps ETH70's decoder self-contained: if ETH69 is deprecated and
   // Status69 is removed, ETH70 continues to compile without modification.
+  //
+  // ETH71 (EIP-8159) and ETH72 (EIP-8070) do not touch Status either — go-ethereum defines
+  // exactly ONE `StatusPacket` struct for the whole 69-72 range (eth/protocols/eth/protocol.go;
+  // `Handshake()` in handshake.go sends it unconditionally on every version). ETH71MessageDecoder
+  // and ETH72MessageDecoder therefore reuse this same Status70 type rather than adding
+  // Status71/Status72 duplicates — matching the reference means matching ITS one-type choice, not
+  // multiplying wrapper types for versions that carry no wire difference.
   //
   // Wire: [protocolVersion, networkId, genesisHash, forkId, earliestBlock, latestBlock, latestBlockHash]
   // Reference: EIP-7706 — Status format unchanged from EIP-7642.
@@ -1409,6 +1416,209 @@ object ETHPackets:
   case class BlockRangeUpdate(earliestBlock: BigInt, latestBlock: BigInt, latestBlockHash: ByteString) extends Message:
     override val code: Int = Codes.BlockRangeUpdateCode
     override def toShortString: String = s"BlockRangeUpdate(earliest=$earliestBlock, latest=$latestBlock)"
+
+  // ── ETH71 BLOCK ACCESS LISTS (EIP-8159) ───────────────────────────────────────
+  //
+  // Wire: GetBlockAccessLists: [requestId, [blockHashes]]
+  //       BlockAccessLists:    [requestId, [entry, ...]]  — one entry per requested hash, in order.
+  //       An unavailable BAL is the RLP empty string (0x80) — never a skipped position, since an
+  //       empty LIST is itself a valid (empty) access list and must stay distinguishable from
+  //       "we don't have one". fukuii has no EIP-7928 BAL storage yet, so it always emits the
+  //       empty-string sentinel — honest "unavailable" rather than fabricated data — but the type
+  //       keeps entries as raw RLPEncodeable (same passthrough pattern as Receipts68.receiptsForBlocks)
+  //       so a real BAL can be served byte-for-byte once storage exists, with no wire-format change.
+  //
+  // Reference: go-ethereum eth/protocols/eth/protocol.go GetBlockAccessListsPacket / BlockAccessListPacket
+
+  object GetBlockAccessLists:
+    implicit class GetBlockAccessListsEnc(val underlyingMsg: GetBlockAccessLists)
+        extends MessageSerializableImplicit[GetBlockAccessLists](underlyingMsg)
+        with RLPSerializable:
+      override def code: Int = Codes.GetBlockAccessListsCode
+      override def toRLPEncodable: RLPEncodeable =
+        RLPList(
+          RLPValue(ByteUtils.bigIntToUnsignedByteArray(msg.requestId)),
+          toRlpList(msg.blockHashes)
+        )
+
+    extension (bytes: Array[Byte])
+      def toGetBlockAccessLists: GetBlockAccessLists = rawDecode(bytes) match
+        case RLPList(RLPValue(requestIdBytes), hashesList: RLPList) =>
+          GetBlockAccessLists(ByteUtils.bytesToBigInt(requestIdBytes), fromRlpList[ByteString](hashesList))
+        case other =>
+          throw new RuntimeException(s"Cannot decode GetBlockAccessLists. Expected RLPList[2], got: $other")
+
+  case class GetBlockAccessLists(requestId: BigInt, blockHashes: Seq[ByteString]) extends Message with HasRequestId:
+    override def code: Int = Codes.GetBlockAccessListsCode
+    override def toShortString: String =
+      s"GetBlockAccessLists { requestId: $requestId, count: ${blockHashes.size} }"
+
+  object BlockAccessLists:
+    implicit class BlockAccessListsEnc(val underlyingMsg: BlockAccessLists)
+        extends MessageSerializableImplicit[BlockAccessLists](underlyingMsg)
+        with RLPSerializable:
+      override def code: Int = Codes.BlockAccessListsCode
+      override def toRLPEncodable: RLPEncodeable =
+        RLPList(
+          RLPValue(ByteUtils.bigIntToUnsignedByteArray(msg.requestId)),
+          RLPList(msg.entries*)
+        )
+
+    extension (bytes: Array[Byte])
+      def toBlockAccessLists: BlockAccessLists = rawDecode(bytes) match
+        case RLPList(RLPValue(requestIdBytes), entriesList: RLPList) =>
+          BlockAccessLists(ByteUtils.bytesToBigInt(requestIdBytes), entriesList.items)
+        case other =>
+          throw new RuntimeException(s"Cannot decode BlockAccessLists. Expected RLPList[2], got: $other")
+
+  case class BlockAccessLists(requestId: BigInt, entries: Seq[RLPEncodeable]) extends Message with HasRequestId:
+    override def code: Int = Codes.BlockAccessListsCode
+    override def toShortString: String = s"BlockAccessLists { requestId: $requestId, entries: ${entries.size} }"
+
+  // ── ETH72 CELLS (EIP-8070) ─────────────────────────────────────────────────────
+  //
+  // PeerDAS cell exchange for blob transactions. `mask` is a 16-byte custody bitmap
+  // (go-ethereum `types.CustodyBitmap`, a fixed [16]byte — RLP-encodes as a plain byte string,
+  // same as any other fixed-size hash field; no custom codec needed). Each cell is a fixed
+  // 2048-byte KZG cell (go-ethereum `kzg4844.Cell`).
+  //
+  // Wire: GetCells: [requestId, [hashes], mask]
+  //       Cells:    [requestId, [hashes], [[cell, ...], ...], mask]  — outer list is per-hash,
+  //                 inner list is that hash's cells. `hashes`/`cells` may be a SUBSET of the
+  //                 request: go-ethereum's answerGetCells (handlers.go) simply omits any hash it
+  //                 has no cell data for — unlike GetBlockAccessLists, there is no positional
+  //                 empty-entry sentinel here. fukuii has no blob/cell storage, so it always
+  //                 serves the fully-empty response (zero hashes, zero cells, mask echoed back)
+  //                 rather than fabricate cell data — the same "honest absence" answer go-ethereum
+  //                 gives for any hash it can't find blob data for.
+  //
+  // Reference: go-ethereum eth/protocols/eth/protocol.go GetCellsRequestPacket / CellsPacket
+
+  object GetCells:
+    implicit class GetCellsEnc(val underlyingMsg: GetCells)
+        extends MessageSerializableImplicit[GetCells](underlyingMsg)
+        with RLPSerializable:
+      override def code: Int = Codes.GetCellsCode
+      override def toRLPEncodable: RLPEncodeable =
+        import msg.*
+        RLPList(
+          RLPValue(ByteUtils.bigIntToUnsignedByteArray(requestId)),
+          toRlpList(hashes),
+          RLPValue(mask.toArray[Byte])
+        )
+
+    extension (bytes: Array[Byte])
+      def toGetCells: GetCells = rawDecode(bytes) match
+        case RLPList(RLPValue(requestIdBytes), hashesList: RLPList, RLPValue(maskBytes)) =>
+          GetCells(ByteUtils.bytesToBigInt(requestIdBytes), fromRlpList[ByteString](hashesList), ByteString(maskBytes))
+        case other =>
+          throw new RuntimeException(s"Cannot decode GetCells. Expected RLPList[3], got: $other")
+
+  case class GetCells(requestId: BigInt, hashes: Seq[ByteString], mask: ByteString) extends Message with HasRequestId:
+    override def code: Int = Codes.GetCellsCode
+    override def toShortString: String = s"GetCells { requestId: $requestId, hashes: ${hashes.size} }"
+
+  object Cells:
+    implicit class CellsEnc(val underlyingMsg: Cells)
+        extends MessageSerializableImplicit[Cells](underlyingMsg)
+        with RLPSerializable:
+      override def code: Int = Codes.CellsCode
+      override def toRLPEncodable: RLPEncodeable =
+        import msg.*
+        RLPList(
+          RLPValue(ByteUtils.bigIntToUnsignedByteArray(requestId)),
+          toRlpList(hashes),
+          RLPList(cells.map(perHash => RLPList(perHash.map(c => RLPValue(c.toArray[Byte]))*))*),
+          RLPValue(mask.toArray[Byte])
+        )
+
+    extension (bytes: Array[Byte])
+      def toCells: Cells = rawDecode(bytes) match
+        case RLPList(RLPValue(requestIdBytes), hashesList: RLPList, cellsList: RLPList, RLPValue(maskBytes)) =>
+          val hashes = fromRlpList[ByteString](hashesList)
+          val cells = cellsList.items.map {
+            case perHash: RLPList =>
+              perHash.items.map {
+                case RLPValue(cellBytes) => ByteString(cellBytes)
+                case other =>
+                  throw new RuntimeException(s"Cannot decode cell. Expected RLPValue, got: $other")
+              }
+            case other =>
+              throw new RuntimeException(s"Cannot decode per-hash cell list. Expected RLPList, got: $other")
+          }
+          Cells(ByteUtils.bytesToBigInt(requestIdBytes), hashes, cells, ByteString(maskBytes))
+        case other =>
+          throw new RuntimeException(s"Cannot decode Cells. Expected RLPList[4], got: $other")
+
+  case class Cells(requestId: BigInt, hashes: Seq[ByteString], cells: Seq[Seq[ByteString]], mask: ByteString)
+      extends Message
+      with HasRequestId:
+    override def code: Int = Codes.CellsCode
+    override def toShortString: String = s"Cells { requestId: $requestId, hashes: ${hashes.size} }"
+
+  // ── ETH72 NEW POOLED TRANSACTION HASHES (4-field, adds custody Mask) ─────────────
+  //
+  // ETH72 (EIP-8070) replaces the 3-field ETH68+ announcement (types, sizes, hashes) with a
+  // 4-field form carrying the announcing peer's own PeerDAS custody bitmap. Same wire CODE as
+  // the 3-field form (NewPooledTransactionHashesCode) — the two shapes are distinguished purely
+  // by the negotiated protocol version, per go-ethereum's `eth71`/`eth72` handler-map split
+  // (handleNewPooledTransactionHashes vs handleNewPooledTransactionHashes72). ETH72MessageDecoder
+  // uses this type exclusively; ETH68-71 keep using the plain `NewPooledTransactionHashes` above.
+  //
+  // Wire: [types, sizes, [hashes], mask]
+  //
+  // fukuii has no blob/cell storage, so outbound announcements (PendingTransactionsManager) always
+  // send an all-zero mask ("I custody nothing") rather than fabricate custody we can't back —
+  // see NewPooledTransactionHashes72.NoCustody.
+
+  object NewPooledTransactionHashes72:
+    /** All-zero custody bitmap: fukuii has no PeerDAS cell storage, so every outbound ETH72 announcement honestly
+      * advertises zero custody rather than claiming (via `CustodyBitmapAll`) cells it cannot actually serve.
+      */
+    val NoCustody: ByteString = ByteString(new Array[Byte](16))
+
+    implicit class NewPooledTransactionHashes72Enc(val underlyingMsg: NewPooledTransactionHashes72)
+        extends MessageSerializableImplicit[NewPooledTransactionHashes72](underlyingMsg)
+        with RLPSerializable:
+      override def code: Int = Codes.NewPooledTransactionHashesCode
+      override def toRLPEncodable: RLPEncodeable =
+        import msg.*
+        RLPList(RLPValue(types.toArray), toRlpList(sizes), toRlpList(hashes), RLPValue(mask.toArray[Byte]))
+
+    extension (bytes: Array[Byte])
+      def toNewPooledTransactionHashes72: NewPooledTransactionHashes72 =
+        rawDecode(bytes) match
+          case RLPList(RLPValue(typesBytes), sizesList: RLPList, hashesList: RLPList, RLPValue(maskBytes)) =>
+            NewPooledTransactionHashes72(
+              typesBytes.toSeq,
+              fromRlpList[BigInt](sizesList),
+              fromRlpList[ByteString](hashesList),
+              ByteString(maskBytes)
+            )
+          case other =>
+            // No legacy-format fallback here (unlike the ETH65-compat branch in the plain
+            // NewPooledTransactionHashes decoder): a peer that negotiated ETH72 and sends a
+            // non-4-field announcement is sending a shape ETH72 does not define. Coercing it
+            // would either silently fabricate a mask/types/sizes the peer never sent, or (for a
+            // 3-field arrival) misparse the 3rd element as something it structurally isn't. Hard
+            // failure here is what actually happens: ETHPackets.toNewPooledTransactionHashes's
+            // own generic fallback throws `RLPException("src is not an RLPValue")` on a 4-field
+            // input for the same reason — see hive-failure-inventory.md "the eth/72 announcement
+            // shape".
+            throw new RuntimeException(
+              s"Cannot decode NewPooledTransactionHashes72. Expected RLPList[4] with structure " +
+                s"[types, sizes, hashes, mask], got: $other"
+            )
+
+  case class NewPooledTransactionHashes72(
+      types: Seq[Byte],
+      sizes: Seq[BigInt],
+      hashes: Seq[ByteString],
+      mask: ByteString
+  ) extends Message:
+    require(types.size == sizes.size && sizes.size == hashes.size, "types, sizes, and hashes must have same length")
+    override def code: Int = Codes.NewPooledTransactionHashesCode
+    override def toShortString: String = s"NewPooledTransactionHashes72 { count: ${hashes.size} }"
 
   // ── LEGACY TYPES: GetNodeData / NodeData (EIP-4938: removed in ETH68) ──────────────────
   // Retained so BlockchainHostActor can respond to legacy peers and StateNodeFetcher can
