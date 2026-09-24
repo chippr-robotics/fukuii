@@ -616,21 +616,38 @@ object SignedTransactionWithSender:
         val authListSize = tx match
           case sct: SetCodeTransaction => sct.authorizationList.size
           case _                       => 0
-        // See StdSignedTransactionValidator for why `getSender` here is a cache hit and why the fallback
-        // is harmless: `recoverSenders` drops any transaction whose sender cannot be recovered.
-        val sender = SignedTransaction.getSender(stx).getOrElse(Address(0))
-        val intrinsicGas =
-          config.calcTransactionIntrinsicGas(
-            tx.payload,
-            tx.isContractInit,
-            Transaction.accessList(tx),
-            authListSize,
-            tx.receivingAddress,
-            UInt256(tx.value),
-            sender
-          )
-        tx.gasLimit.value >= intrinsicGas
+        coversIntrinsicGas(config, stx, authListSize)
     }
+
+  /** Whether `stx`'s gas limit covers its intrinsic gas under `config`.
+    *
+    * The sender enters intrinsic gas only through transactionBaseCost, and only from Amsterdam, where a self-transfer
+    * (to == sender) costs less. Recovering the sender is an ECDSA public-key recovery, and the stateless filter runs
+    * sequentially on its caller's thread for a whole announcement batch; for 2,000 txs that kept the
+    * SignedTransactionsFilterActor busy for seconds. So the check runs first with a sender that is never tx.to. That
+    * cost is never below the true one, so passing it is exact. The real sender is recovered only when that check fails
+    * under Amsterdam. The fallback is harmless: `recoverSenders` drops txs whose sender cannot be recovered.
+    */
+  private[domain] def coversIntrinsicGas(
+      config: com.chipprbots.ethereum.vm.EvmConfig,
+      stx: SignedTransaction,
+      authListSize: Int
+  )(implicit blockchainConfig: BlockchainConfig): Boolean =
+    val tx = stx.tx
+    def intrinsicGas(sender: Address): BigInt =
+      config.calcTransactionIntrinsicGas(
+        tx.payload,
+        tx.isContractInit,
+        Transaction.accessList(tx),
+        authListSize,
+        tx.receivingAddress,
+        UInt256(tx.value),
+        sender
+      )
+    val notTheRecipient = if tx.receivingAddress.contains(Address(0)) then Address(1) else Address(0)
+    tx.gasLimit.value >= intrinsicGas(notTheRecipient) ||
+    (config.amsterdamEnabled &&
+      tx.gasLimit.value >= intrinsicGas(SignedTransaction.getSender(stx).getOrElse(Address(0))))
 
   private def recoverSenders(
       stxs: Seq[SignedTransaction]
