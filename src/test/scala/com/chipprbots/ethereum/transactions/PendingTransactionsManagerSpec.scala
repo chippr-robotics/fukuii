@@ -21,6 +21,8 @@ import com.chipprbots.ethereum.Timeouts
 import com.chipprbots.ethereum.consensus.eip1559.BaseFeeCalculator
 import com.chipprbots.ethereum.crypto
 import com.chipprbots.ethereum.domain.Address
+import com.chipprbots.ethereum.domain.BlobTransaction
+import com.chipprbots.ethereum.domain.BlobVersionedHash
 import com.chipprbots.ethereum.domain.Block
 import com.chipprbots.ethereum.domain.GasAmount
 import com.chipprbots.ethereum.domain.GasPrice
@@ -30,6 +32,7 @@ import com.chipprbots.ethereum.domain.BlockchainReader
 import com.chipprbots.ethereum.domain.LegacyTransaction
 import com.chipprbots.ethereum.domain.SignedTransaction
 import com.chipprbots.ethereum.domain.SignedTransactionWithSender
+import com.chipprbots.ethereum.domain.Transaction
 import com.chipprbots.ethereum.domain.TransactionWithDynamicFee
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor.SendMessageCmd
@@ -339,6 +342,39 @@ class PendingTransactionsManagerSpec
       case ETHPackets.NewPooledTransactionHashes(_, _, hashes) => hashes shouldBe Seq(stx.tx.hash)
       case SignedTransactions(txs)                             => txs shouldBe Seq(stx.tx)
       case other                                               => fail(s"Unexpected: $other")
+
+  it should "announce a blob tx at the length of the network form it serves" taggedAs (UnitTest) in new TestSetup:
+    // A peer checks the PooledTransactions reply against the announced size, and a blob tx is
+    // served in its network form (tx, blobs, commitments, proofs). 131,330 bytes is one blob's
+    // network form in hive's "Request Blob Pooled Transactions" test, which was announced at 146,
+    // the bare tx.
+    val blobTx = BlobTransaction(
+      chainId = 0x3d,
+      nonce = 0,
+      maxPriorityFeePerGas = 1,
+      maxFeePerGas = 1,
+      gasLimit = GasAmount(21000),
+      receivingAddress = Some(Address(42)),
+      value = 0,
+      payload = ByteString.empty,
+      accessList = Nil,
+      maxFeePerBlobGas = 1,
+      blobVersionedHashes = List(BlobVersionedHash(ByteString(Array.fill[Byte](32)(1))))
+    )
+    val signed = SignedTransaction.sign(blobTx, keyPair1, Some(0x3d))
+    val networkForm = ByteString(Array.fill[Byte](131330)(0))
+
+    pendingTransactionsManager ! WrappedPeerEvent(PeerEvent.PeerHandshakeSuccessful(peer1, new HandshakeResult {}))
+    pendingTransactionsManager ! AddOrOverrideTransaction(signed, Some(networkForm))
+
+    val announced: SendMessageCmd = etcPeerManager.expectMsgType[NetworkPeerManagerActor.SendMessageCmd]
+    announced.peerId shouldBe peer1.id
+    announced.message.underlyingMsg match
+      case ETHPackets.NewPooledTransactionHashes(types, sizes, hashes) =>
+        hashes shouldBe Seq(signed.hash)
+        types shouldBe Seq(Transaction.Type03)
+        sizes shouldBe Seq(BigInt(networkForm.length))
+      case other => fail(s"Unexpected: $other")
 
   it should "remove transaction on timeout" taggedAs (UnitTest) in new TestSetup:
     override val txPoolConfig: TxPoolConfig = new TxPoolConfig:

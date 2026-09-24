@@ -185,7 +185,13 @@ object PendingTransactionsManager:
               case _: BlobTransaction           => Transaction.Type03
               case _: SetCodeTransaction        => Transaction.Type04
           }
-          val sizes = txsToNotify.map(stx => BigInt(SignedTransaction.byteArraySerializable.toBytes(stx).length))
+          // A blob tx travels in its network form, 0x03 || rlp([tx, blobs, commitments, proofs]). That is
+          // what GetPooledTransactions serves, so its length is the size a peer checks the reply against.
+          val sizes = txsToNotify.map { stx =>
+            blobTxNetworkBytes.get(stx.hash.value) match
+              case Some(networkForm) => BigInt(networkForm.length)
+              case None              => BigInt(SignedTransaction.byteArraySerializable.toBytes(stx).length)
+          }
           val announcement = ETHPackets.NewPooledTransactionHashes(types, sizes, hashes)
           networkPeerManager ! NetworkPeerManagerActor.SendMessageCmd(announcement, peer.id)
           txsToNotify.foreach(stx => setTxKnown(stx, peer.id))

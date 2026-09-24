@@ -422,6 +422,16 @@ object ETHPackets:
           s"Unsupported blob tx network wrapper version $version (only $BlobTxWrapperVersionEip7594 is defined by EIP-7594)"
         )
 
+    /** A transaction as one item of a transaction list (`Transactions`, `PooledTransactions`). EIP-2718: a typed tx is
+      * a single RLP byte string holding `type || rlp(payload)`. A bare `PrefixedRLPEncodable` serializes as that
+      * concatenation with no string header — fukuii's own decoder tolerates it, other clients reject it. BlockBody and
+      * Block apply the same framing.
+      */
+    private[messages] def txListItem(stx: SignedTransaction): RLPEncodeable =
+      stx.toRLPEncodable match
+        case typed: PrefixedRLPEncodable => RLPValue(com.chipprbots.ethereum.rlp.encode(typed))
+        case legacy                      => legacy
+
     implicit class SignedTransactionEnc(val signedTx: SignedTransaction) extends RLPSerializable:
       override def toRLPEncodable: RLPEncodeable =
         val receivingAddressBytes = signedTx.tx.receivingAddress.map(_.toArray).getOrElse(Array.empty[Byte])
@@ -778,7 +788,7 @@ object ETHPackets:
         with RLPSerializable:
       override def code: Int = Codes.SignedTransactionsCode
       override def toRLPEncodable: RLPEncodeable =
-        RLPList(msg.txs.map(_.toRLPEncodable)*)
+        RLPList(msg.txs.map(txListItem)*)
 
     extension (bytes: Array[Byte])
       def toSignedTransactions: SignedTransactions = rawDecode(bytes) match
@@ -1056,8 +1066,9 @@ object ETHPackets:
       override def toRLPEncodable: RLPEncodeable =
         val txItems: Seq[RLPEncodeable] = msg.txs.map { stx =>
           msg.blobTxRawBytes.get(stx.hash.value) match
-            case Some(rawBytes) => PrefixedRLPEncodable(rawBytes(0), rawDecode(rawBytes.toArray.drop(1)))
-            case None           => stx.toRLPEncodable
+            // Already the network form, 0x03 || rlp([tx, blobs, commitments, proofs]); served verbatim.
+            case Some(networkForm) => RLPValue(networkForm.toArray)
+            case None              => txListItem(stx)
         }
         RLPList(RLPValue(ByteUtils.bigIntToUnsignedByteArray(msg.requestId)), RLPList(txItems*))
 
