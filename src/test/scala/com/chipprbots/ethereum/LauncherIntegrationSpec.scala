@@ -126,7 +126,7 @@ class LauncherIntegrationSpec extends AnyFlatSpec with Matchers:
   }
 
   it should "validate all known networks are recognized" taggedAs (UnitTest) in {
-    val knownNetworks = Seq("etc", "eth", "mordor", "bootnode", "gorgoroth")
+    val knownNetworks = Seq("etc", "eth", "mordor", "sepolia", "plataberget", "bootnode", "gorgoroth")
 
     knownNetworks.foreach { network =>
       withClue(s"Network '$network' should be recognized: ") {
@@ -344,6 +344,21 @@ class LauncherIntegrationSpec extends AnyFlatSpec with Matchers:
       setNetworkConfig("etc")
       setNetworkConfig("mordor")
       setNetworkConfig("gorgoroth")
+    }
+  }
+
+  it should "resolve every launcher network to its bundled conf/<network>.conf resource" taggedAs (UnitTest) in {
+    // A name in App.knownNetworks without a bundled conf file does not fail: setNetworkConfig
+    // logs a warning and the node starts on the default (ETC) config. Assert the pairing directly
+    // so adding a network (e.g. plataberget) without shipping its launcher config fails here.
+    clearConfigOverrides()
+    Seq("etc", "eth", "mordor", "sepolia", "plataberget", "hive", "bootnode", "gorgoroth").foreach { network =>
+      withClue(s"network '$network': ") {
+        isNetwork(network) shouldBe true
+        setNetworkConfig(network)
+        System.getProperty("config.resource") shouldBe s"conf/$network.conf"
+      }
+      clearConfigOverrides()
     }
   }
 

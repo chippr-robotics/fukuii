@@ -42,6 +42,9 @@ case "$NETWORK" in
   sepolia)
     FLOOR_MB=4096; CEIL_MB=6144    # 1B txns, 50% utilization — heavier than expected
     ;;
+  plataberget)
+    FLOOR_MB=4096; CEIL_MB=6144    # Glamsterdam testnet (genesis 2026-08-13): small state, 200M-gas blocks — sized as Sepolia until measured
+    ;;
   eth|mainnet)
     FLOOR_MB=6144; CEIL_MB=10240   # 3.5B txns, 50% utilization, DeFi-heavy — estimate
     ;;
@@ -104,6 +107,7 @@ else
   case "$NETWORK" in
     mordor)   HEAP_ARG="-Xmx2g";  INIT_ARG="-Xms512m" ;;
     sepolia)  HEAP_ARG="-Xmx4g";  INIT_ARG="-Xms1g" ;;
+    plataberget) HEAP_ARG="-Xmx4g"; INIT_ARG="-Xms1g" ;;
     eth)      HEAP_ARG="-Xmx6g";  INIT_ARG="-Xms2g" ;;
     etc|*)    HEAP_ARG="-Xmx5g";  INIT_ARG="-Xms2g" ;;
   esac
