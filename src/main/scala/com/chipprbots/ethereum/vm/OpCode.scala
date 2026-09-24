@@ -208,6 +208,16 @@ object OpCode:
     */
   private[vm] val NoGas: BigInt = BigInt(0)
 
+  /** Whether `pos` is a valid JUMP/JUMPI destination of `program`.
+    *
+    * This was `pos == UInt256(pos.toInt) && program.validJumpDestinations.contains(pos.toInt)`. `toInt` keeps the low
+    * 31 bits, so the round trip holds exactly when pos <= Int.MaxValue, i.e. when pos, which is never negative, is a
+    * valid Int — tested here without building a UInt256 to compare against. The bit set is then queried with an unboxed
+    * Int.
+    */
+  private[vm] def isJumpDestination(program: Program, pos: UInt256): Boolean =
+    pos.toBigInt.isValidInt && program.validJumpDestinations.contains(pos.toInt)
+
   def sliceBytes(bytes: ByteString, offset: UInt256, size: UInt256): ByteString =
     val start = offset.min(bytes.size).toInt
     val end = (offset + size).min(bytes.size).toInt
@@ -932,10 +942,7 @@ case object JUMP extends OpCode(0x56, 1, 0, _.G_mid) with ConstGas:
       gas: BigInt
   ): ProgramState[W, S] =
     val (pos, stack1) = state.stack.pop()
-    val dest = pos.toInt // fail with InvalidJump if conversion to Int is lossy
-
-    if pos == UInt256(dest) && state.program.validJumpDestinations.contains(dest) then
-      state.jumpWithStack(stack1, dest, gas)
+    if OpCode.isJumpDestination(state.program, pos) then state.jumpWithStack(stack1, pos.toInt, gas)
     else state.withError(InvalidJump(pos)).spendGas(gas)
 
 case object JUMPI extends OpCode(0x57, 2, 0, _.G_high) with ConstGas:
@@ -948,11 +955,9 @@ case object JUMPI extends OpCode(0x57, 2, 0, _.G_high) with ConstGas:
       gas: BigInt
   ): ProgramState[W, S] =
     val (Seq(pos, cond), stack1) = state.stack.pop(2)
-    val dest = pos.toInt // fail with InvalidJump if conversion to Int is lossy
 
     if cond.isZero then state.stepWithStack(stack1, 1, gas)
-    else if pos == UInt256(dest) && state.program.validJumpDestinations.contains(dest) then
-      state.jumpWithStack(stack1, dest, gas)
+    else if OpCode.isJumpDestination(state.program, pos) then state.jumpWithStack(stack1, pos.toInt, gas)
     else state.withError(InvalidJump(pos)).spendGas(gas)
 
 case object PC extends ConstOp(0x58)(_.pc)

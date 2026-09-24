@@ -58,7 +58,7 @@ case class Program(code: ByteString):
     * ~45 bytes per JUMPDEST: ethereum/tests `JUMPDEST_AttackwithJump` (15 KB of JUMPDESTs, 1,024 self-calls deep on
     * Homestead, which has no 63/64 rule) kept 681 MB live and died at `-Xmx512m`. Membership is unchanged.
     */
-  lazy val validJumpDestinations: Set[Int] = validJumpDestinationsAfterPosition(0)
+  lazy val validJumpDestinations: BitSet = validJumpDestinationsAfterPosition(0)
 
   /** Returns the valid jump destinations of the program after a given position.
     *

@@ -191,3 +191,36 @@ class ProgramSpec extends AnyFlatSpec with Matchers with ScalaCheckPropertyCheck
       val ones = Program(ByteString(Array.fill(40)(0xff.toByte)))
       ones.immediate(1, size) shouldBe com.chipprbots.ethereum.domain.UInt256(ones.getBytes(1, size))
   }
+
+  "OpCode.isJumpDestination" should "agree with pos == UInt256(pos.toInt) && validJumpDestinations.contains(pos.toInt)" taggedAs (
+    UnitTest,
+    VMTest
+  ) in {
+    import com.chipprbots.ethereum.domain.UInt256
+    def former(program: Program, pos: UInt256): Boolean =
+      pos == UInt256(pos.toInt) && program.validJumpDestinations.contains(pos.toInt)
+
+    // JUMPDEST at 0, 5 and 64; a PUSH1 whose immediate is a 0x5b byte at 10 (not a destination)
+    val code = ByteString(Array.tabulate[Byte](70) {
+      case 0 | 5 | 64 => JUMPDEST.code
+      case 9          => PUSH1.code
+      case 10         => JUMPDEST.code
+      case _          => STOP.code
+    })
+    val program = Program(code)
+    val wide = BigInt(2).pow(32)
+    val positions: Seq[BigInt] =
+      (BigInt(0) to BigInt(72)) ++
+        Seq(BigInt(Int.MaxValue) - 1, BigInt(Int.MaxValue), BigInt(Int.MaxValue) + 1, BigInt(2).pow(31)) ++
+        // values whose low 31 bits name a real destination: toInt alone would accept them
+        Seq(wide, wide + 5, wide + 64, BigInt(2).pow(31) + 5, BigInt(2).pow(255) + 64, UInt256.MaxValue.toBigInt)
+    positions.foreach { p =>
+      val pos = UInt256(p)
+      withClue(s"pos = $p: ") {
+        OpCode.isJumpDestination(program, pos) shouldBe former(program, pos)
+      }
+    }
+    OpCode.isJumpDestination(program, UInt256(5)) shouldBe true
+    OpCode.isJumpDestination(program, UInt256(10)) shouldBe false
+    OpCode.isJumpDestination(program, UInt256(wide + 5)) shouldBe false
+  }
