@@ -585,4 +585,16 @@ class EngineApiProposerBuildSpec extends AnyWordSpec with Matchers:
 
       getPayloadCall(5, payloadId).error.map(_.code) shouldBe Some(-38005) // a Prague payload asked for as V5
       envelope(getPayloadCall(4, payloadId))._3.map(_.take(4)) shouldBe List("0x01")
+
+    "not be taken, or the payload frozen, by a getPayloadV3 refused for a Prague payload" taggedAs (
+      UnitTest,
+      ConsensusTest
+    ) in new PragueSetup:
+      // getPayloadV3 serves Cancun payloads only (cancun.md; go-ethereum checkFork(Cancun)). It used to serve a Prague
+      // payload — resolving and freezing it, in the V3 envelope, which has no executionRequests at all.
+      poolContents.set(Seq(withdrawalRequest(alice, 0) -> 1L))
+      val payloadId = requestPayload(genesisHeader)
+
+      getPayloadCall(3, payloadId).error.map(_.code) shouldBe Some(-38005)
+      envelope(getPayloadCall(4, payloadId))._3.map(_.take(4)) shouldBe List("0x01")
   }

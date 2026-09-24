@@ -746,23 +746,51 @@ object EngineApiController:
         else None
 
   /** The -38005 message when engine_getPayloadV{version} must not serve a payload built for `timestamp`, or None when
-    * it may. Pure: reads nothing but its arguments.
+    * it may. Each version serves one fork window — go-ethereum's `checkFork` per version (eth/catalyst/api.go), and
+    * execution-apis "MUST return -38005: Unsupported fork error if the timestamp of the built payload does not fall
+    * within the time frame of the <fork> fork" (cancun.md getPayloadV3, prague.md getPayloadV4, osaka.md getPayloadV5):
+    *   - V1: Paris. go-ethereum checks only the payload ID's version for V1; fukuii keeps V1 to Paris, as for the other
+    *     V1 methods (see [[payloadAttributesVersionError]]).
+    *   - V2: Paris and Shanghai.
+    *   - V3: Cancun.
+    *   - V4: Prague.
+    *   - V5: Osaka and the blob-parameter-only forks after it (go-ethereum: Osaka, BPO1..BPO5).
+    *   - There is no V6 (Amsterdam), so no version serves an Amsterdam payload.
+    *
+    * V3 used to serve every payload from Cancun on, V4 every payload before Osaka, and V5 Amsterdam.
+    *
+    * Pure: reads nothing but its arguments. The controller calls it before resolving the payload, so a refused call
+    * neither freezes the payload nor takes anything from it.
     */
   def getPayloadForkError(
       version: Int,
       timestamp: Timestamp,
       blockchainConfig: com.chipprbots.ethereum.utils.BlockchainConfig
   ): Option[String] =
-    val isCancunPayload = blockchainConfig.isCancunTimestamp(timestamp)
-    val isShanghaiPayload = blockchainConfig.isShanghaiTimestamp(timestamp)
-    val isOsakaPayload = blockchainConfig.isOsakaTimestamp(timestamp)
+    val shanghai = blockchainConfig.isShanghaiTimestamp(timestamp)
+    val cancun = blockchainConfig.isCancunTimestamp(timestamp)
+    val prague = blockchainConfig.isPragueTimestamp(timestamp)
+    val osaka = blockchainConfig.isOsakaTimestamp(timestamp)
+    val amsterdam = blockchainConfig.isAmsterdamTimestamp(timestamp)
+    val fork =
+      if amsterdam then "an Amsterdam"
+      else if blockchainConfig.isBpo2Timestamp(timestamp) then "a BPO2"
+      else if blockchainConfig.isBpo1Timestamp(timestamp) then "a BPO1"
+      else if osaka then "an Osaka"
+      else if prague then "a Prague"
+      else if cancun then "a Cancun"
+      else if shanghai then "a Shanghai"
+      else "a Paris"
+    def refuse(serves: String): Some[String] = Some(
+      s"getPayloadV$version serves $serves payloads only, not $fork payload"
+    )
     version match
-      case 2 if isCancunPayload   => Some("getPayloadV2 cannot return a Cancun payload; use V3")
-      case 3 if !isCancunPayload  => Some("getPayloadV3 can only return Cancun-or-later payloads")
-      case 1 if isShanghaiPayload => Some("getPayloadV1 cannot return a Shanghai-or-later payload; use V2")
-      case 4 if isOsakaPayload    => Some("getPayloadV4 cannot return an Osaka-or-later payload; use V5")
-      case 5 if !isOsakaPayload   => Some("getPayloadV5 can only return Osaka-or-later payloads")
-      case _                      => None
+      case 1 => if shanghai then refuse("Paris") else None
+      case 2 => if cancun then refuse("Paris and Shanghai") else None
+      case 3 => if !cancun || prague then refuse("Cancun") else None
+      case 4 => if !prague || osaka then refuse("Prague") else None
+      case 5 => if !osaka || amsterdam then refuse("Osaka (and BPO)") else None
+      case _ => refuse("no")
 
   def byteStringToHex(bs: ByteString): String = "0x" + bs.map("%02x".format(_)).mkString
 
