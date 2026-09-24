@@ -68,7 +68,31 @@ class BlockBroadcast(
           networkPeerManager ! NetworkPeerManagerActor.SendMessageCmd(bru, peer.id)
         }
 
-  /** Announces a CL-canonical head to ALL handshaked peers without sending a NewBlock message.
+  /** Node-wide cadence gate for the periodic (full known-peer-set) `BlockRangeUpdate` re-announce below, mirroring
+    * go-ethereum's `blockRangeState.shouldSend` (`eth/handler.go`): re-broadcast only once the head has advanced by 32
+    * or more blocks since the last broadcast, or the range has moved backwards (a reorg). `None` (nothing broadcast
+    * yet) always sends — this is what lets the very first post-merge `forkchoiceUpdated` still correct peers that
+    * handshook while fukuii was still at genesis (the race `announceCanonicalHead` exists to fix).
+    *
+    * Without this gate, a live post-merge chain's every-slot `forkchoiceUpdated` (~12s) re-broadcasts BlockRangeUpdate
+    * to every ETH69+ peer on every single block — unbounded peer traffic go-ethereum explicitly avoids, and exactly the
+    * kind of unsolicited message hive's devp2p `eth` suite panics on: its raw connections read one expected message at
+    * a time, and `Conn.ReadEth` has no case for an unexpected 0x11 (`TestLargeTxRequest`, `TestNewPooledTxs`: `panic:
+    * unhandled eth msg code 17`).
+    *
+    * Only the periodic path (the `throttleBlockRangeUpdate = true` default below) reads/updates this — the
+    * newly-observed-peer catch-up path is peer-specific, not a global cadence, and must stay unaffected (see that call
+    * site's own filter in `BlockBroadcasterActor`).
+    */
+  private var lastAnnouncedBRULatest: Option[BigInt] = None
+
+  private def shouldSendCanonicalHeadBRU(latest: BigInt): Boolean =
+    lastAnnouncedBRULatest match
+      case None                        => true
+      case Some(prev) if latest < prev => true // reorg: range moved backward, announce immediately
+      case Some(prev)                  => latest - prev >= 32
+
+  /** Announces a CL-canonical head to ALL given handshaked peers without sending a NewBlock message.
     *
     * Used on post-merge (PoS / ETH) chains when `forkchoiceUpdated` advances the head: peers that completed the ETH
     * STATUS handshake before the FCU was processed saw `bestBlockNumber=0` (genesis) and never received a corrective
@@ -76,17 +100,30 @@ class BlockBroadcast(
     * without this call those peers time out believing fukuii has nothing to offer. See Hive run/sync bug analysis.
     *
     * Wire behaviour (mirrors go-ethereum `handler.BroadcastBlock` head-only path):
-    *   - ETH68 (and all non-ETH69) peers → `NewBlockHashes(hash, number)`: the standard head-announce signal.
-    *   - ETH69 peers → `BlockRangeUpdate(0, number, hash)`: replaces NewBlock on PoS per EIP-7642.
+    *   - ETH68 (and all non-ETH69) peers → `NewBlockHashes(hash, number)`: the standard head-announce signal, sent
+    *     unconditionally (unchanged — never the source of the hive panic, which is BlockRangeUpdate-specific).
+    *   - ETH69 peers → `BlockRangeUpdate(0, number, hash)`: replaces NewBlock on PoS per EIP-7642, subject to
+    *     `shouldSendCanonicalHeadBRU` when `throttleBlockRangeUpdate` is true.
     *
-    * No `shouldSend` gating: a CL head-advance must be announced to every connected peer regardless of what block
-    * number that peer last reported. This differs intentionally from `broadcastBlock` which filters by
-    * `shouldSendNewBlock`. `broadcastBlock`'s existing behaviour is unchanged.
+    * `NewBlockHashes` keeps no `shouldSend` gating: a CL head-advance must be announced to every connected peer
+    * regardless of what block number that peer last reported. This differs intentionally from `broadcastBlock` which
+    * filters by `shouldSendNewBlock`. `broadcastBlock`'s existing behaviour is unchanged.
+    *
+    * @param throttleBlockRangeUpdate
+    *   `true` (default) for the periodic re-announce to the full known-peer set on every genuine head advance
+    *   (`BlockBroadcasterActor`'s `AnnounceCanonicalHead` case): the BlockRangeUpdate part is gated by
+    *   `shouldSendCanonicalHeadBRU`. `false` for the newly-observed-peer catch-up call, where the caller has already
+    *   filtered `handshakedPeers` down to peers whose own STATUS reports they are behind `head` — those peers have
+    *   never received a BlockRangeUpdate at all, so the global cadence does not apply; the correction always sends.
     *
     * Safety: on PoW chains (ETC/Mordor) `BeaconHead` is never published (`clPivotEnabled=false`), so this method is
     * never called — there is ZERO PoW/ETC regression risk.
     */
-  def announceCanonicalHead(head: BlockHeader, handshakedPeers: Map[PeerId, PeerWithInfo]): Unit =
+  def announceCanonicalHead(
+      head: BlockHeader,
+      handshakedPeers: Map[PeerId, PeerWithInfo],
+      throttleBlockRangeUpdate: Boolean = true
+  ): Unit =
     if handshakedPeers.isEmpty then
       // Logged at INFO (not DEBUG): the empty-peer case is the diagnostic signature of the FCU-before-peer-map race.
       // BlockBroadcasterActor recovers by re-announcing to peers as the scan discovers them; this line records that
@@ -94,16 +131,20 @@ class BlockBroadcast(
       log.info("CANONICAL_HEAD_ANNOUNCE: no handshaked peers yet for block {} — deferring to peer-scan", head.number)
     else
       val newBlockHashMsg = ETHPackets.NewBlockHashes.NewBlockHashes(Seq(BlockHash(head.hash.value, head.number.value)))
-      val bru = ETH69.BlockRangeUpdate(BigInt(0), head.number.value, head.hash.value)
+      val latest = head.number.value
+      val sendBRU = !throttleBlockRangeUpdate || shouldSendCanonicalHeadBRU(latest)
+      if throttleBlockRangeUpdate && sendBRU then lastAnnouncedBRULatest = Some(latest)
+      val bru = ETH69.BlockRangeUpdate(BigInt(0), latest, head.hash.value)
       log.info(
-        "CANONICAL_HEAD_ANNOUNCE: block={} hash={} to {} handshaked peers",
+        "CANONICAL_HEAD_ANNOUNCE: block={} hash={} to {} handshaked peers (bru={})",
         head.number,
         head.hash,
-        handshakedPeers.size
+        handshakedPeers.size,
+        if sendBRU then "sent" else "throttled"
       )
       handshakedPeers.foreach { case (_, PeerWithInfo(peer, peerInfo)) =>
         if Capability.isEth69Plus(peerInfo.remoteStatus.capability) then
-          networkPeerManager ! NetworkPeerManagerActor.SendMessageCmd(bru, peer.id)
+          if sendBRU then networkPeerManager ! NetworkPeerManagerActor.SendMessageCmd(bru, peer.id)
         else networkPeerManager ! NetworkPeerManagerActor.SendMessageCmd(newBlockHashMsg, peer.id)
       }
 

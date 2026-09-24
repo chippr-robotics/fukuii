@@ -718,6 +718,114 @@ class BlockBroadcastSpec extends ScalaTestWithActorTestKit with AnyFlatSpecLike 
     networkPeerManagerProbe.expectMsg(NetworkPeerManagerActor.SendMessageCmd(expectedHashes, peer.id))
     networkPeerManagerProbe.expectNoMessage()
 
+  // ---- announceCanonicalHead BlockRangeUpdate cadence gate (shouldSendCanonicalHeadBRU) -------------------------
+  //
+  // Regression coverage for the hive devp2p `eth` suite panic: BlockBroadcasterActor re-announces the canonical
+  // head to the full known-peer set on every genuine forkchoiceUpdated. Before this gate, that meant a fresh
+  // BlockRangeUpdate to every ETH69+ peer on every single post-merge slot (~12s); the hive tool's `Conn.ReadEth`
+  // has no case for an unsolicited 0x11 and panics (`TestLargeTxRequest`, `TestNewPooledTxs`). The gate mirrors
+  // go-ethereum's `blockRangeState.shouldSend` (eth/handler.go): resend only on a 32+ block advance or a backward
+  // move (reorg). The default `throttleBlockRangeUpdate = true` exercises the gate; an explicit `false` (the
+  // newly-observed-peer catch-up shape) always sends.
+
+  it should "throttle a repeated BlockRangeUpdate to the same known peer when the head advanced fewer than 32 blocks" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in new PoSTestSetup:
+    val eth69Info: PeerInfo = eth69PeerInfoAt(BigInt(500))
+    val peers = Map(peer.id -> PeerWithInfo(peer, eth69Info))
+    val firstHead: BlockHeader = baseBlockHeader.copy(number = BlockNumber(1000))
+    val secondHead: BlockHeader = baseBlockHeader.copy(number = BlockNumber(1010)) // +10, below the 32-block gate
+
+    blockBroadcast.announceCanonicalHead(firstHead, peers)
+    networkPeerManagerProbe.expectMsg(
+      NetworkPeerManagerActor.SendMessageCmd(
+        ETH69.BlockRangeUpdate(BigInt(0), firstHead.number.value, firstHead.hash.value),
+        peer.id
+      )
+    )
+
+    blockBroadcast.announceCanonicalHead(secondHead, peers)
+    networkPeerManagerProbe.expectNoMessage() // throttled — no second BlockRangeUpdate
+
+  it should "send BlockRangeUpdate again once the head has advanced by 32 or more blocks since the last broadcast" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in new PoSTestSetup:
+    val eth69Info: PeerInfo = eth69PeerInfoAt(BigInt(500))
+    val peers = Map(peer.id -> PeerWithInfo(peer, eth69Info))
+    val firstHead: BlockHeader = baseBlockHeader.copy(number = BlockNumber(1000))
+    val secondHead: BlockHeader = baseBlockHeader.copy(number = BlockNumber(1032)) // exactly +32
+
+    blockBroadcast.announceCanonicalHead(firstHead, peers)
+    networkPeerManagerProbe.expectMsg(
+      NetworkPeerManagerActor.SendMessageCmd(
+        ETH69.BlockRangeUpdate(BigInt(0), firstHead.number.value, firstHead.hash.value),
+        peer.id
+      )
+    )
+
+    blockBroadcast.announceCanonicalHead(secondHead, peers)
+    networkPeerManagerProbe.expectMsg(
+      NetworkPeerManagerActor.SendMessageCmd(
+        ETH69.BlockRangeUpdate(BigInt(0), secondHead.number.value, secondHead.hash.value),
+        peer.id
+      )
+    )
+
+  it should "send BlockRangeUpdate immediately when the range moves backward (reorg), regardless of the 32-block gate" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in new PoSTestSetup:
+    val eth69Info: PeerInfo = eth69PeerInfoAt(BigInt(500))
+    val peers = Map(peer.id -> PeerWithInfo(peer, eth69Info))
+    val firstHead: BlockHeader = baseBlockHeader.copy(number = BlockNumber(1000))
+    val reorgedHead: BlockHeader = baseBlockHeader.copy(number = BlockNumber(900)) // moved backward
+
+    blockBroadcast.announceCanonicalHead(firstHead, peers)
+    networkPeerManagerProbe.expectMsg(
+      NetworkPeerManagerActor.SendMessageCmd(
+        ETH69.BlockRangeUpdate(BigInt(0), firstHead.number.value, firstHead.hash.value),
+        peer.id
+      )
+    )
+
+    blockBroadcast.announceCanonicalHead(reorgedHead, peers)
+    networkPeerManagerProbe.expectMsg(
+      NetworkPeerManagerActor.SendMessageCmd(
+        ETH69.BlockRangeUpdate(BigInt(0), reorgedHead.number.value, reorgedHead.hash.value),
+        peer.id
+      )
+    )
+
+  it should "always send BlockRangeUpdate when throttleBlockRangeUpdate=false, bypassing the cadence gate (newly-observed-peer catch-up)" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in new PoSTestSetup:
+    val eth69Info: PeerInfo = eth69PeerInfoAt(BigInt(500))
+    val peers = Map(peer.id -> PeerWithInfo(peer, eth69Info))
+    val firstHead: BlockHeader = baseBlockHeader.copy(number = BlockNumber(1000))
+    val secondHead: BlockHeader =
+      baseBlockHeader.copy(number = BlockNumber(1010)) // +10 — would be throttled by default
+
+    blockBroadcast.announceCanonicalHead(firstHead, peers)
+    networkPeerManagerProbe.expectMsg(
+      NetworkPeerManagerActor.SendMessageCmd(
+        ETH69.BlockRangeUpdate(BigInt(0), firstHead.number.value, firstHead.hash.value),
+        peer.id
+      )
+    )
+
+    // A newly-observed peer's catch-up call — never received a BlockRangeUpdate before, so the global
+    // "have we told everyone recently" cadence must not suppress it.
+    blockBroadcast.announceCanonicalHead(secondHead, peers, throttleBlockRangeUpdate = false)
+    networkPeerManagerProbe.expectMsg(
+      NetworkPeerManagerActor.SendMessageCmd(
+        ETH69.BlockRangeUpdate(BigInt(0), secondHead.number.value, secondHead.hash.value),
+        peer.id
+      )
+    )
+
   // -------------------------------------------------------------------------
 
   class TestSetup(implicit system: org.apache.pekko.actor.ActorSystem):
