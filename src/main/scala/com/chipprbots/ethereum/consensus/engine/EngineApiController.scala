@@ -249,25 +249,25 @@ class EngineApiController(
     val params = request.params.map(_.arr).getOrElse(Nil)
     params.headOption match
       case Some(fcsJson: JObject) =>
-        // Per Engine API spec, a malformed forkchoice state or payload attributes must not raise
-        // a JSON-RPC error from the decoder; decoding errors come back as -38003 (invalid
-        // payload attributes).
-        val decoded = scala.util.Try {
-          val fcs = decodeForkChoiceState(fcsJson)
-          val payloadAttrs = params.lift(1).collect { case obj: JObject => decodePayloadAttributes(obj) }
-          (fcs, payloadAttrs)
-        }.toEither
-        decoded match
-          case Left(ex) =>
-            val msg = Option(ex.getMessage).getOrElse(ex.getClass.getSimpleName)
-            IO.pure(
-              JsonRpcResponse(
-                "2.0",
-                None,
-                Some(JsonRpcError(-38003, s"malformed forkchoice params: $msg", None)),
-                reqId(request)
-              )
+        // A forkchoiceState that does not match ForkchoiceStateV1 is -32602 (shanghai.md / cancun.md
+        // engine_forkchoiceUpdatedV2/V3 point 1); nothing is applied. Payload attributes that cannot be
+        // decoded stay -38003 (invalid payload attributes).
+        val decoded: Either[JsonRpcError, (ForkChoiceState, Option[PayloadAttributes])] =
+          for
+            fcs <- decodeForkChoiceState(fcsJson).left.map(msg =>
+              JsonRpcError.InvalidParams(s"invalid forkchoice state: $msg")
             )
+            payloadAttrs <- scala.util
+              .Try(params.lift(1).collect { case obj: JObject => decodePayloadAttributes(obj) })
+              .toEither
+              .left
+              .map { ex =>
+                val msg = Option(ex.getMessage).getOrElse(ex.getClass.getSimpleName)
+                JsonRpcError(-38003, s"malformed payload attributes: $msg", None)
+              }
+          yield (fcs, payloadAttrs)
+        decoded match
+          case Left(error) => IO.pure(JsonRpcResponse("2.0", None, Some(error), reqId(request)))
           case Right((fcs, payloadAttrs)) =>
             val InvalidAttrs = -38003
             val versionError: Option[(Int, String)] =
@@ -602,13 +602,26 @@ class EngineApiController(
       amount = extractQuantity(fields, "amount")
     )
 
-  private def decodeForkChoiceState(json: JObject): ForkChoiceState =
+  /** A ForkchoiceStateV1, or why the JSON is not one: three required fields, each DATA of 32 bytes — a string of `0x`
+    * and exactly 64 hex digits, as go-ethereum's `common.Hash` decoding (hexutil.UnmarshalFixedJSON) requires.
+    * go-ethereum reads a MISSING field as the zero hash; the spec's structure has all three required, and a CL always
+    * sends all three, so a missing one is refused here too.
+    */
+  private def decodeForkChoiceState(json: JObject): Either[String, ForkChoiceState] =
     val fields = json.obj.toMap
-    ForkChoiceState(
-      headBlockHash = hexToByteString(extractString(fields, "headBlockHash")),
-      safeBlockHash = hexToByteString(extractString(fields, "safeBlockHash")),
-      finalizedBlockHash = hexToByteString(extractString(fields, "finalizedBlockHash"))
-    )
+    def isHexDigit(c: Char): Boolean = (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')
+    def hash32(key: String): Either[String, ByteString] =
+      fields.get(key) match
+        case None => Left(s"$key: missing")
+        case Some(JString(s))
+            if s.length == 66 && (s.startsWith("0x") || s.startsWith("0X")) && s.drop(2).forall(isHexDigit) =>
+          Right(ByteString(org.bouncycastle.util.encoders.Hex.decode(s.drop(2))))
+        case Some(_) => Left(s"$key: not a 0x-prefixed 32-byte hash")
+    for
+      head <- hash32("headBlockHash")
+      safe <- hash32("safeBlockHash")
+      finalized <- hash32("finalizedBlockHash")
+    yield ForkChoiceState(headBlockHash = head, safeBlockHash = safe, finalizedBlockHash = finalized)
 
   private def decodePayloadAttributes(json: JObject): PayloadAttributes =
     val fields = json.obj.toMap

@@ -45,6 +45,7 @@ class EngineApiForkchoiceErrorCodeSpec extends AnyWordSpec with Matchers:
 
   implicit val ioRuntime: IORuntime = IORuntime.global
 
+  private val InvalidParams = -32602
   private val InvalidForkchoiceState = -38002
   private val InvalidPayloadAttributes = -38003
   private val UnsupportedFork = -38005
@@ -94,7 +95,7 @@ class EngineApiForkchoiceErrorCodeSpec extends AnyWordSpec with Matchers:
     blockchainWriter.storeBlockByHashOnly(side1).commit()
     blockchainWriter.storeReceipts(side1.header.hash, Nil).commit()
 
-    private def hex(bs: ByteString): String = "0x" + bs.toArray.map("%02x".format(_)).mkString
+    def hex(bs: ByteString): String = "0x" + bs.toArray.map("%02x".format(_)).mkString
 
     def attrs(ts: Long, withdrawals: Boolean, beaconRoot: Boolean): JObject =
       JObject(
@@ -124,10 +125,23 @@ class EngineApiForkchoiceErrorCodeSpec extends AnyWordSpec with Matchers:
         "safeBlockHash" -> JString(hex(safe)),
         "finalizedBlockHash" -> JString(hex(finalized))
       )
+      send(version, state, payloadAttributes)
+
+    /** A forkchoiceUpdated with the forkchoiceState exactly as given, well-formed or not. */
+    def send(version: Int, state: JObject, payloadAttributes: Option[JObject]): JsonRpcResponse =
       val params = JArray(state :: payloadAttributes.toList)
       controller
         .handleRequest(JsonRpcRequest("2.0", s"engine_forkchoiceUpdatedV$version", Some(params), Some(JInt(1))))
         .unsafeRunSync()
+
+    /** A forkchoiceState naming block1 as head, zero safe/finalized, with `field` replaced by `value` (or dropped). */
+    def stateWith(field: String, value: Option[JValue]): JObject =
+      val base = List[(String, JValue)](
+        "headBlockHash" -> JString(hex(block1.header.hash.value)),
+        "safeBlockHash" -> JString(hex(zero32)),
+        "finalizedBlockHash" -> JString(hex(zero32))
+      )
+      JObject(base.flatMap { case (k, v) => if k == field then value.map(k -> _) else Some(k -> v) })
 
     /** `result.payloadStatus.status`, when the response carries a result. */
     def payloadStatusOf(response: JsonRpcResponse): Option[String] =
@@ -219,4 +233,65 @@ class EngineApiForkchoiceErrorCodeSpec extends AnyWordSpec with Matchers:
         )
       response.error.map(_.code) shouldBe Some(UnsupportedFork)
       blockchainReader.getBestBlockNumber shouldBe BigInt(0)
+  }
+
+  /** execution-apis shanghai.md / cancun.md, engine_forkchoiceUpdatedV2/V3 point 1: "Client software MUST verify that
+    * forkchoiceState matches the ForkchoiceStateV1 structure and return -32602: Invalid params on failure". The
+    * structure is three required fields, each DATA of 32 bytes. go-ethereum answers -32602 for any hash it cannot
+    * decode into `common.Hash` (`hexutil.UnmarshalFixedJSON`: 0x prefix, exactly 64 hex digits), in every version.
+    *
+    * These answered -38003 ("malformed forkchoice params") — or, for a hash of the wrong length or without its prefix,
+    * were accepted and acted on. Nothing may be applied in any of them.
+    */
+  "engine_forkchoiceUpdated with a forkchoiceState that does not match ForkchoiceStateV1" should {
+
+    "answer -32602 when a field is missing" taggedAs (UnitTest, ConsensusTest) in new Setup:
+      val response = send(3, stateWith("safeBlockHash", None), None)
+      response.error.map(_.code) shouldBe Some(InvalidParams)
+      blockchainReader.getBestBlockNumber shouldBe BigInt(0)
+
+    "answer -32602 for a hash that is not hex" taggedAs (UnitTest, ConsensusTest) in new Setup:
+      val response = send(3, stateWith("headBlockHash", Some(JString("0x" + "zz" * 32))), None)
+      response.error.map(_.code) shouldBe Some(InvalidParams)
+      blockchainReader.getBestBlockNumber shouldBe BigInt(0)
+
+    "answer -32602 for a hash that is not 32 bytes" taggedAs (UnitTest, ConsensusTest) in new Setup:
+      val twentyBytes = hex(block1.header.hash.value.take(20))
+      val response = send(3, stateWith("headBlockHash", Some(JString(twentyBytes))), None)
+      response.error.map(_.code) shouldBe Some(InvalidParams)
+      blockchainReader.getBestBlockNumber shouldBe BigInt(0)
+
+    "answer -32602 for a hash without its 0x prefix, instead of applying it" taggedAs (UnitTest, ConsensusTest) in
+      new Setup:
+        val unprefixed = hex(block1.header.hash.value).drop(2)
+        val response = send(3, stateWith("headBlockHash", Some(JString(unprefixed))), None)
+        response.error.map(_.code) shouldBe Some(InvalidParams)
+        blockchainReader.getBestBlockNumber shouldBe BigInt(0)
+
+    "answer -32602 for a hash that is not a string" taggedAs (UnitTest, ConsensusTest) in new Setup:
+      val response = send(3, stateWith("finalizedBlockHash", Some(JInt(0))), None)
+      response.error.map(_.code) shouldBe Some(InvalidParams)
+      blockchainReader.getBestBlockNumber shouldBe BigInt(0)
+
+    "still accept the forkchoiceState when it is well formed (upper-case hex included)" taggedAs (
+      UnitTest,
+      ConsensusTest
+    ) in new Setup:
+      val upperCase = "0x" + hex(block1.header.hash.value).drop(2).toUpperCase
+      val response = send(3, stateWith("headBlockHash", Some(JString(upperCase))), None)
+      response.error shouldBe None
+      payloadStatusOf(response) shouldBe Some("VALID")
+      blockchainReader.getBestBlockNumber shouldBe BigInt(1)
+
+    "leave a payloadAttributes decoding failure at -38003" taggedAs (UnitTest, ConsensusTest) in new Setup:
+      // Attributes that do not match their structure are -38003 (cancun.md point 2.1), not -32602; only the
+      // forkchoiceState's structure is -32602.
+      val noPrevRandao = JObject(
+        "timestamp" -> JString("0x" + CancunTs.toHexString),
+        "suggestedFeeRecipient" -> JString("0x" + "00" * 20),
+        "withdrawals" -> JArray(Nil),
+        "parentBeaconBlockRoot" -> JString("0x" + "ab" * 32)
+      )
+      val response = send(3, stateWith("safeBlockHash", Some(JString(hex(zero32)))), Some(noPrevRandao))
+      response.error.map(_.code) shouldBe Some(InvalidPayloadAttributes)
   }
