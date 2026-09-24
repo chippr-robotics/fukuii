@@ -201,6 +201,30 @@ class EngineApiSidechainNewPayloadSpec extends AnyWordSpec with Matchers:
 
     def canonicalAt(number: Int): Option[BlockHash] = blockchainReader.getBlockHeaderByNumber(number).map(_.hash)
 
+    /** eth_getTransactionByHash, as the JSON-RPC server answers it, over the same storage and the same (stub) pool. */
+    lazy val ethTx = new com.chipprbots.ethereum.jsonrpc.EthTxService(
+      blockchain,
+      blockchainReader,
+      mining,
+      pendingTxManager,
+      scala.concurrent.duration.FiniteDuration(3, java.util.concurrent.TimeUnit.SECONDS),
+      storagesInstance.storages.transactionMappingStorage,
+      typedScheduler
+    )
+
+    /** The block eth_getTransactionByHash reports `stx` as included in; None when it reports no such transaction. */
+    def reportedBlockOf(stx: SignedTransaction): Option[ByteString] =
+      ethTx
+        .getTransactionByHash(com.chipprbots.ethereum.jsonrpc.EthTxService.GetTransactionByHashRequest(stx.hash.value))
+        .unsafeRunSync()
+        .toOption
+        .flatMap(_.txResponse)
+        .flatMap(_.blockHash)
+
+    /** The transaction-lookup entry itself: which block the node records `stx` as included in. */
+    def lookupOf(stx: SignedTransaction): Option[ByteString] =
+      storagesInstance.storages.transactionMappingStorage.get(stx.hash.value).map(_.blockHash)
+
     /** Canonical genesis -> block1 -> block2 (block2 carries tx1), made head through forkchoiceUpdated. */
     lazy val canonicalChain: (Block, Block) =
       val b1 = payloadOn(Block(genesisHeader, BlockBody(Nil, Nil)), Seq(tx0), randao = 0x01)
@@ -333,4 +357,51 @@ class EngineApiSidechainNewPayloadSpec extends AnyWordSpec with Matchers:
         blockchainReader.getBestBlockNumber shouldBe BigInt(2)
         canonicalAt(1) shouldBe Some(block1.hash)
         canonicalAt(2) shouldBe Some(block2.hash)
+  }
+
+  /** The transaction lookup follows the canonical chain too. eth_getTransactionByHash (EthTxService
+    * `getTransactionDataByHash`) reads the lookup, then the block BY HASH, and never asks whether that block is still
+    * canonical — so a transaction that only a dropped block carried was still reported as included in it, with that
+    * block's hash, number and index. go-ethereum's `reorg` deletes the lookups of the dropped blocks' transactions that
+    * the new chain does not re-include (`types.HashDifference(deletedTxs, rebirthTxs)`, core/blockchain.go).
+    *
+    * The stub pool is empty, so "not included" answers null here rather than as a pending transaction.
+    */
+  "engine_forkchoiceUpdated and the transaction lookup" should {
+
+    "stop reporting a transaction as included once the only block carrying it leaves the chain" taggedAs (
+      UnitTest,
+      ConsensusTest
+    ) in new Setup:
+      val head = block2 // builds the chain first: the lookup below must see block2 already imported
+      reportedBlockOf(tx1) shouldBe Some(head.hash.value)
+
+      forkchoice(block1) // rewind: block2, the only block carrying tx1, is dropped
+
+      lookupOf(tx1) shouldBe None
+      reportedBlockOf(tx1) shouldBe None
+      reportedBlockOf(tx0) shouldBe Some(block1.hash.value)
+
+      forkchoice(block2) // and back: tx1 is included again
+      reportedBlockOf(tx1) shouldBe Some(block2.hash.value)
+
+    "drop it on a reorganisation to a sibling that leaves the transaction out" taggedAs (UnitTest, ConsensusTest) in
+      new Setup:
+        val emptySibling = payloadOn(block1, Nil, randao = 0x0b)
+        newPayload(emptySibling).status shouldBe Valid
+
+        forkchoice(emptySibling)
+
+        lookupOf(tx1) shouldBe None
+        reportedBlockOf(tx1) shouldBe None
+
+    "point it at the new block when the new branch re-includes the transaction" taggedAs (UnitTest, ConsensusTest) in
+      new Setup:
+        val sameTxSibling = payloadOn(block1, Seq(tx1), randao = 0x0c)
+        sameTxSibling.hash should not be block2.hash
+        newPayload(sameTxSibling).status shouldBe Valid
+
+        forkchoice(sameTxSibling)
+
+        reportedBlockOf(tx1) shouldBe Some(sameTxSibling.hash.value)
   }

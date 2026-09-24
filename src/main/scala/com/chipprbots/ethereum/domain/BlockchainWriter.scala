@@ -1,5 +1,7 @@
 package com.chipprbots.ethereum.domain
 
+import org.apache.pekko.util.ByteString
+
 import scala.annotation.tailrec
 
 import com.chipprbots.ethereum.db.dataSource.DataSourceBatchUpdate
@@ -114,16 +116,23 @@ class BlockchainWriter(
       newBest: Option[(BlockHash, BigInt)],
       reader: BlockchainReader
   ): Unit =
+    canonicalIndexUpdate(put, remove, newBest, reader).commit()
+
+  /** The batch [[rewriteCanonicalIndex]] commits, uncommitted, so a caller can add to the same atomic write. */
+  private def canonicalIndexUpdate(
+      put: Seq[(BigInt, BlockHash)],
+      remove: Seq[BigInt],
+      newBest: Option[(BlockHash, BigInt)],
+      reader: BlockchainReader
+  ): DataSourceBatchUpdate =
     val withPuts = put.foldLeft(blockNumberMappingStorage.emptyBatchUpdate) { case (acc, (number, hash)) =>
       val withNumber = acc.and(blockNumberMappingStorage.put(number, hash.value))
       reader.getBlockBodyByHash(hash).fold(withNumber)(body => withNumber.and(saveTxsLocations(hash, body)))
     }
     val withRemoves = remove.foldLeft(withPuts)((acc, number) => acc.and(blockNumberMappingStorage.remove(number)))
-    newBest
-      .fold(withRemoves) { case (hash, number) =>
-        withRemoves.and(appStateStorage.putBestBlockInfo(BlockInfo(hash.value, number)))
-      }
-      .commit()
+    newBest.fold(withRemoves) { case (hash, number) =>
+      withRemoves.and(appStateStorage.putBestBlockInfo(BlockInfo(hash.value, number)))
+    }
 
   /** Make `head` the canonical head, in ONE atomic batch: afterwards the number→hash index is exactly `head`'s ancestry
     * — every height up to `head` names `head`'s ancestor, and no height above `head` has an entry — and the best block
@@ -145,7 +154,13 @@ class BlockchainWriter(
     * head that moves DOWN — a forkchoiceUpdated to an ancestor, or to a shorter side chain — used to leave the old
     * chain's entries above it.
     *
-    * Only the index and the best-block pointer move; headers, bodies and receipts stay where they are.
+    * TRANSACTION LOOKUPS. The blocks this drops from the index — the ones it deletes above the head and the ones it
+    * replaces below it — lose the lookups of every transaction the new branch does not re-include: go-ethereum `reorg`,
+    * `types.HashDifference(deletedTxs, rebirthTxs)`. eth_getTransactionByHash follows a lookup to its block by hash
+    * without asking whether that block is still canonical, so it used to report such a transaction as included in a
+    * block that had left the chain.
+    *
+    * Only the index, the lookups and the best-block pointer move; headers, bodies and receipts stay where they are.
     */
   def promoteToCanonicalHead(head: BlockHeader, reader: BlockchainReader): Unit =
     val oldBest = reader.getBestBlockNumber
@@ -170,17 +185,31 @@ class BlockchainWriter(
           .iterate(headNumber.max(oldBest) + 1)(_ + 1)
           .takeWhile(n => reader.getCanonicalHashByNumber(n).isDefined)
           .toList
+
+    // Read before the batch: the blocks the index names now at the heights it is about to replace or delete.
+    val dropped: Seq[BlockHash] =
+      put.flatMap { case (number, hash) => reader.getCanonicalHashByNumber(number).filterNot(_ == hash) } ++
+        remove.flatMap(reader.getCanonicalHashByNumber)
+    def txHashes(blocks: Seq[BlockHash]): Set[ByteString] =
+      blocks.flatMap(reader.getBlockBodyByHash).flatMap(_.transactionList.map(_.hash.value)).toSet
+    val staleLookups = txHashes(dropped) -- txHashes(put.map(_._2))
+
     // A plain extension rewrites only heights above the old best and clears nothing: not worth a line.
     if remove.nonEmpty || put.exists(_._1 <= oldBest) then
       log.info(
-        "Canonical head moved: head=#{} {} previousBest=#{} rewritten={} clearedAboveHead={}",
+        "Canonical head moved: head=#{} {} previousBest=#{} rewritten={} clearedAboveHead={} droppedTxLookups={}",
         headNumber,
         head.hash.toHexString,
         oldBest,
         put.size,
-        remove.size
+        remove.size,
+        staleLookups.size
       )
-    rewriteCanonicalIndex(put = put, remove = remove, newBest = Some((head.hash, headNumber)), reader = reader)
+    canonicalIndexUpdate(put, remove, Some((head.hash, headNumber)), reader)
+      .and(staleLookups.foldLeft(transactionMappingStorage.emptyBatchUpdate) { (acc, tx) =>
+        acc.and(transactionMappingStorage.remove(tx))
+      })
+      .commit()
 
   private def saveBlockNumberMapping(number: BigInt, hash: BlockHash): DataSourceBatchUpdate =
     blockNumberMappingStorage.put(number, hash.value)
