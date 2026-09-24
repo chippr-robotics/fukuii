@@ -764,7 +764,7 @@ class EngineApiService(
                         )
                       )
                     case Some(parent) =>
-                      selectMempoolTransactions(Timestamp(attrs.timestamp))
+                      selectMempoolTransactions(parent.header, Timestamp(attrs.timestamp))
                         .flatMap { case (pendingTxsForBlock, blobTxRawBytesFromPool) =>
                           IO {
                             // Delegate to the single proposer-side builder (buildBlockOnParent). The engine
@@ -774,7 +774,7 @@ class EngineApiService(
                             val payload = buildBlockOnParent(
                               parent,
                               attrs,
-                              executableAtParent(parent.header, pendingTxsForBlock),
+                              pendingTxsForBlock,
                               ByteString("fukuii".getBytes),
                               proposerGasLimit(parent.header, parent.header.number.value + 1, None),
                               strict = false
@@ -829,14 +829,24 @@ class EngineApiService(
     // end else (invalidBlocks check)
   }
 
-  /** Mempool selection for a proposer build: chain-ID filter, (sender, nonce) ordering, and the EIP-4844/EIP-7691
-    * blob-gas cap for the fork active at `timestamp`.
+  /** Mempool selection for a proposer build on `parent` at `timestamp`, in go-ethereum's miner order:
+    *   1. chain-ID filter;
+    *   1. per sender, the nonce-contiguous run executable on `parent`'s state ([[executableAtParent]]);
+    *   1. [[ProposerTxSelection.select]]: each run cut at the first transaction the child block cannot pay for (base
+    *      fee; blob base fee; any blob transaction before Cancun), the runs merged by effective tip, and blob
+    *      transactions capped at the fork's MAX_BLOB_GAS_PER_BLOCK.
+    *
+    * The child's base fee and excess blob gas are derived exactly as [[buildBlockOnParent]] derives them, so a
+    * transaction kept here passes the fee checks the proposer's own execution applies.
     *
     * Returns the transactions to include and the network-wrapped raw bytes the pool captured for each blob tx. The
     * latter is not recoverable from the canonical transaction encoding, so it has to be carried out of here for
     * `blobsBundle` to be reconstructible.
     */
-  def selectMempoolTransactions(timestamp: Timestamp): IO[(Seq[SignedTransaction], Map[ByteString, ByteString])] =
+  def selectMempoolTransactions(
+      parent: BlockHeader,
+      timestamp: Timestamp
+  ): IO[(Seq[SignedTransaction], Map[ByteString, ByteString])] =
     import com.chipprbots.ethereum.transactions.PendingTransactionsManager.*
     import org.apache.pekko.actor.typed.scaladsl.AskPattern.*
     // Fetch pending transactions from the tx pool using IO.fromFuture so the
@@ -855,8 +865,8 @@ class EngineApiService(
       .getOrElse(IO.pure(PendingTransactionsResponse(Seq.empty)))
       .map { response =>
         val expectedChainId = blockchainConfig.chainId.value
-        val filtered = response.pendingTransactions.map(_.stx.tx).filter { stx =>
-          val txChainId: Option[BigInt] = stx.tx match
+        val onChain = response.pendingTransactions.filter { ptx =>
+          val txChainId: Option[BigInt] = ptx.stx.tx.tx match
             case t: com.chipprbots.ethereum.domain.TransactionWithAccessList => Some(t.chainId)
             case t: com.chipprbots.ethereum.domain.TransactionWithDynamicFee => Some(t.chainId)
             case t: com.chipprbots.ethereum.domain.BlobTransaction           => Some(t.chainId)
@@ -864,42 +874,48 @@ class EngineApiService(
             case _ => None // legacy txs don't have explicit chainID
           txChainId.forall(_ == expectedChainId)
         }
-        // Sort by (sender, nonce) so execution processes each sender's txs
-        // in nonce order. The pool returns them in arrival order — a blob-tx
-        // producer like hive's NewPayloadV3 tests sends nonces N, N+1, ...,
-        // and without this sort execution hits NONCE_MISMATCH_TOO_HIGH when
-        // tx with nonce N+2 runs before nonce N.
-        @annotation.nowarn("cat=deprecation") // Seq[Byte] key uses Ordering.Iterable
-        val pendingTxs = filtered.sortBy { stx =>
-          val sender =
-            SignedTransaction.getSender(stx).map(_.bytes.toArray.toSeq).getOrElse(Seq.empty)
-          (sender, stx.tx.nonce)
+        // executableAtParent needs each sender's transactions together and in nonce order (the pool
+        // answers in no particular order); the order between senders is decided later, by price.
+        val bySenderThenNonce =
+          onChain.groupBy(_.stx.senderAddress).values.toSeq.flatMap(_.sortBy(_.stx.tx.tx.nonce))
+        val arrival = bySenderThenNonce.map(p => p.stx.tx.hash -> p).toMap
+        val candidates = executableAtParent(parent, bySenderThenNonce.map(_.stx.tx)).flatMap { stx =>
+          arrival.get(stx.hash).map(p => ProposerTxSelection.Candidate(stx, p.stx.senderAddress, p.addTimestamp))
         }
-        if pendingTxs.nonEmpty then log.info("Payload includes {} pending transactions", pendingTxs.size)
 
-        // EIP-4844 / EIP-7691: cap blob-gas included in the payload at the fork's
-        // MAX_BLOB_GAS_PER_BLOCK (6 blobs Cancun, 9 blobs Prague). Without this cap
-        // the proposer packs every pool blob tx into one block and getPayloadV3's
-        // blobsBundle grows past the test's `ExpectedIncludedBlobCount`.
-        val pendingTxsForBlock =
-          val maxBlobGas = BlobGasUtils.maxBlobGasPerBlock(timestamp, blockchainConfig)
-          pendingTxs
-            .foldLeft((Seq.empty[SignedTransaction], BigInt(0))) { case ((kept, blobGas), stx) =>
-              stx.tx match
-                case b: com.chipprbots.ethereum.domain.BlobTransaction =>
-                  val add = BigInt(b.blobVersionedHashes.size) * BlobGasUtils.GAS_PER_BLOB
-                  if blobGas + add <= maxBlobGas then (kept :+ stx, blobGas + add)
-                  else (kept, blobGas) // skip this blob tx, smaller ones later may still fit
-                case _ =>
-                  (kept :+ stx, blobGas)
-            }
-            ._1
-        (pendingTxsForBlock, response.blobTxNetworkBytes)
+        val baseFee = BaseFeeCalculator.calcBaseFee(parent, blockchainConfig)
+        val isCancun = blockchainConfig.isCancunTimestamp(timestamp)
+        // Blob transactions do not exist before Cancun: no blob base fee, no blob gas.
+        // (BlobGasUtils.maxBlobGasPerBlock answers the Cancun cap for a pre-Cancun timestamp, so it
+        // must not be asked here without this guard.)
+        val blobBaseFee: Option[BigInt] = Option.when(isCancun) {
+          val childExcessBlobGas = BlobGasUtils.expectedExcessBlobGas(
+            parent.excessBlobGas.getOrElse(BigInt(0)),
+            parent.blobGasUsed.getOrElse(BigInt(0)),
+            parent.baseFee.getOrElse(BigInt(0)),
+            timestamp,
+            blockchainConfig
+          )
+          BlobGasUtils.getBlobGasPrice(childExcessBlobGas, timestamp, blockchainConfig)
+        }
+        val maxBlobGas = if isCancun then BlobGasUtils.maxBlobGasPerBlock(timestamp, blockchainConfig) else BigInt(0)
+        val selected = ProposerTxSelection.select(candidates, baseFee, blobBaseFee, maxBlobGas)
+
+        if onChain.nonEmpty then
+          log.info(
+            "Proposer build on block {}: {} of {} pool transaction(s) selected (baseFee={}, blobBaseFee={})",
+            parent.number,
+            selected.size,
+            onChain.size,
+            baseFee,
+            blobBaseFee.map(_.toString).getOrElse("n/a")
+          )
+        (selected, response.blobTxNetworkBytes)
       }
 
   /** The prefix-by-sender of `txs` that can actually execute on top of `parent`: per sender, only the unbroken run of
-    * nonces starting at that sender's nonce in `parent`'s state. `txs` must already be ordered by (sender, nonce),
-    * which [[selectMempoolTransactions]] guarantees.
+    * nonces starting at that sender's nonce in `parent`'s state. `txs` must already have each sender's transactions
+    * together and in nonce order, which [[selectMempoolTransactions]] guarantees.
     *
     * WHY THIS EXISTS. The pool can hold a transaction the chain has already included. Measured on hive `engine`
     * 13c1e5686, `Invalid Missing Ancestor Syncing ReOrg, GasLimit, EmptyTxs=False, CanonicalReOrg=True, Invalid P8`:

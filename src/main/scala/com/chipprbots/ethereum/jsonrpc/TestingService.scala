@@ -18,6 +18,7 @@ import com.chipprbots.ethereum.consensus.engine.ForkChoiceState
 import com.chipprbots.ethereum.consensus.engine.PayloadAttributes
 import com.chipprbots.ethereum.domain.Block
 import com.chipprbots.ethereum.domain.BlockHash
+import com.chipprbots.ethereum.domain.BlockHeader
 import com.chipprbots.ethereum.domain.BlockchainReader
 import com.chipprbots.ethereum.domain.BlockchainWriter
 import com.chipprbots.ethereum.domain.Receipt
@@ -163,7 +164,7 @@ class TestingService(
       rawTransactions: Option[Seq[ByteString]],
       extraData: Option[ByteString]
   ): IO[Either[JsonRpcError, (BuiltBlock, BlobsBundleData)]] =
-    resolveTransactions(attrs, rawTransactions).map(_.flatMap { case (txs, sidecars) =>
+    resolveTransactions(parent.header, attrs, rawTransactions).map(_.flatMap { case (txs, sidecars) =>
       // go-ethereum's miner converges the gas limit toward --miner.gaslimit via core.CalcGasLimit.
       // The execution-apis fixtures are generated against it (hive's rpc-compat sets
       // HIVE_TARGET_GAS_LIMIT=60000000 explicitly "so all clients build the same next-block gas
@@ -198,12 +199,13 @@ class TestingService(
 
   /** `null` -> mempool; `[]` -> empty block; non-empty -> exactly these, in order, no mempool txs. */
   private def resolveTransactions(
+      parent: BlockHeader,
       attrs: PayloadAttributes,
       rawTransactions: Option[Seq[ByteString]]
   ): IO[Either[JsonRpcError, (Seq[SignedTransaction], Map[ByteString, ByteString])]] =
     rawTransactions match
       case None =>
-        engineApiService.selectMempoolTransactions(Timestamp(attrs.timestamp)).map(Right(_))
+        engineApiService.selectMempoolTransactions(parent, Timestamp(attrs.timestamp)).map(Right(_))
       case Some(raws) =>
         IO.pure(decodeTransactions(raws))
 
