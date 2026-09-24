@@ -14,6 +14,11 @@ object UInt256:
 
   private val Modulus: BigInt = BigInt(2).pow(256)
 
+  /** 2^256 - 1. `n & Mask` is `n mod 2^256` for every integer `n`, negative ones included: `BigInteger.and` works on
+    * the infinite two's-complement form, whose low 256 bits are exactly the non-negative residue.
+    */
+  private val Mask: BigInt = Modulus - 1
+
   val MaxValue: UInt256 = new UInt256(Modulus - 1)
 
   val Zero: UInt256 = new UInt256(0)
@@ -53,7 +58,13 @@ object UInt256:
 
   private val Zeros: ByteString = ByteString(Array.fill[Byte](Size)(0))
 
-  private def boundBigInt(n: BigInt): BigInt = (n % Modulus + Modulus) % Modulus
+  /** `n mod 2^256`, non-negative. Formerly `(n % Modulus + Modulus) % Modulus`: the same value, but two BigInteger
+    * divisions per call — and the second one always divides for real, its dividend being at least 2^256 — on every ADD,
+    * SUB, MUL, PUSH, JUMP target and Long conversion. An in-range value is returned as it is; anything else keeps its
+    * low 256 bits.
+    */
+  private def boundBigInt(n: BigInt): BigInt =
+    if n.signum >= 0 && n.bitLength <= Size * 8 then n else n & Mask
 
   private val MaxSignedValue: BigInt = BigInt(2).pow(Size * 8 - 1) - 1
 
