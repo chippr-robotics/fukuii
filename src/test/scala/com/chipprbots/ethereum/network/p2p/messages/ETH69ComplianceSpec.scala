@@ -285,7 +285,7 @@ class ETH69ComplianceSpec extends AnyWordSpec with Matchers:
   // The bug: ETHPackets.Receipts69 was encoded using bloom-inclusive ReceiptEnc
   // (from ReceiptCodecs). The fix uses ReceiptBloomFreeEnc, which produces the EIP-7642
   // receipt [txType, postStateOrStatus, cumulativeGasUsed, logs] — no logsBloomFilter.
-  // Eth69ReceiptWireFormatSpec pins those bytes against go-ethereum's.
+  // ReceiptWireFormatSpec pins those bytes against go-ethereum's.
   //
   // This test uses the production encoding path (ReceiptBloomFreeEnc) to prove that
   // a LegacyReceipt with a real non-zero bloom does NOT include that bloom on the wire.

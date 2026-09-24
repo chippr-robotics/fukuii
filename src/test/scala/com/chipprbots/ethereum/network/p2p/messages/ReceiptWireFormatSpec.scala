@@ -18,8 +18,14 @@ import com.chipprbots.ethereum.rlp.RLPEncodeable
 import com.chipprbots.ethereum.rlp.RLPList
 import com.chipprbots.ethereum.rlp.RLPValue
 
-/** The eth/69 network receipt (EIP-7642), which eth/70-72 keep: `[txType, postStateOrStatus, cumulativeGasUsed, logs]`
-  * — no bloom, and every receipt a plain four-item list, legacy ones carrying type 0.
+/** Receipts on the wire, pinned to go-ethereum's bytes.
+  *
+  * eth/66-68: `[postStateOrStatus, cumulativeGasUsed, bloom, logs]`, a typed receipt held as ONE RLP byte string of
+  * `type || rlp(receipt)`. fukuii put the bare concatenation in the list instead, which go-ethereum and core-geth
+  * reject as a short typed receipt, so neither could fetch the receipts of a block holding a typed tx from fukuii.
+  *
+  * eth/69 (EIP-7642), which eth/70-72 keep: `[txType, postStateOrStatus, cumulativeGasUsed, logs]` — no bloom, and
+  * every receipt a plain four-item list, legacy ones carrying type 0.
   *
   * fukuii used to serve `[postStateOrStatus, cumulativeGasUsed, logs]` for a legacy receipt and the EIP-2718 prefixed
   * form for a typed one. go-ethereum's decoder rejects both, and when it hashes a block's receipts it treats a rejected
@@ -27,10 +33,11 @@ import com.chipprbots.ethereum.rlp.RLPValue
   * reader had the mirror problem: a four-item network receipt matched its eth/68 `[status, gas, bloom, logs]` pattern
   * and decoded without error into a receipt whose status, gas and bloom were all wrong.
   *
-  * The vectors below come from go-ethereum (`eth.NewReceiptList` + `rlp.EncodeToBytes`, and `types.DeriveSha` for the
-  * root), built from the same six receipts as `receipts`.
+  * The vectors below come from go-ethereum, built from the same six receipts as `receipts`: `rlp.EncodeToBytes` of the
+  * `[]*types.Receipt` for eth/68 (the resource file), `eth.NewReceiptList` + `rlp.EncodeToBytes` for eth/69, and
+  * `types.DeriveSha` for the root.
   */
-class Eth69ReceiptWireFormatSpec extends AnyFlatSpec with Matchers:
+class ReceiptWireFormatSpec extends AnyFlatSpec with Matchers:
 
   private def bloomOf(logs: Seq[TxLogEntry]): BloomFilter = BloomFilter(ledger.BloomFilter.create(logs))
 
@@ -51,6 +58,12 @@ class Eth69ReceiptWireFormatSpec extends AnyFlatSpec with Matchers:
     Type03Receipt(receipt(SuccessOutcome, 163000)),
     Type04Receipt(receipt(SuccessOutcome, 190000))
   )
+
+  /** go-ethereum's eth/68 encoding of `receipts` as one block's receipt list. */
+  private val gethEth68BlockList: Array[Byte] =
+    val is = getClass.getResourceAsStream("/eth68-receipt-list-go-ethereum.rlp")
+    try is.readAllBytes()
+    finally is.close()
 
   /** go-ethereum's eth/69 encoding of `receipts` as one block's receipt list. */
   private val gethBlockList = Hex.decode(
@@ -87,6 +100,20 @@ class Eth69ReceiptWireFormatSpec extends AnyFlatSpec with Matchers:
       Receipt.byteArraySerializable
     )
     Hex.toHexString(rs.zipWithIndex.foldLeft(trie)((t, r) => t.put(r._2, r._1)).getRootHash)
+
+  "ReceiptBloomEnc" should "encode a block's eth/68 receipt list byte-for-byte as go-ethereum does" in {
+    val encoded = rlp.encode(RLPList(receipts.map(r => ETHPackets.ReceiptBloomEnc(r).toRLPEncodable)*))
+    Hex.toHexString(encoded) shouldBe Hex.toHexString(gethEth68BlockList)
+  }
+
+  it should "hold a typed receipt as one byte string and leave a legacy receipt as a list" in {
+    ETHPackets.ReceiptBloomEnc(receipts.head).toRLPEncodable shouldBe a[RLPList]
+    ETHPackets.ReceiptBloomEnc(receipts(1)).toRLPEncodable match
+      case RLPValue(bytes) =>
+        bytes.head shouldBe Transaction.Type02
+        rlp.rawDecode(bytes.tail) shouldBe a[RLPList]
+      case other => fail(s"not a byte string: $other")
+  }
 
   "ReceiptBloomFreeEnc" should "encode each receipt type byte-for-byte as go-ethereum does" in {
     receipts.zip(gethSingles).foreach { case (r, expected) =>

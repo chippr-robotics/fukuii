@@ -104,7 +104,7 @@ class BlockchainHostActorSpec extends AnyFlatSpec with Matchers:
   // maxPacketSize go-ethereum's serviceGetReceiptsQuery70 actually uses for eth/70, and represented an
   // unfillable block as an empty-but-present placeholder (incomplete=true) where go-ethereum omits it
   // (incomplete=false). hive's TestGetLargeReceipts still reported an empty-trie receipt root after both were
-  // fixed; that came from the shape of each receipt on the wire, pinned in Eth69ReceiptWireFormatSpec.
+  // fixed; that came from the shape of each receipt on the wire, pinned in ReceiptWireFormatSpec.
 
   private def paddedReceipt(dataSize: Int): Receipt =
     LegacyReceipt.withHashOutcome(

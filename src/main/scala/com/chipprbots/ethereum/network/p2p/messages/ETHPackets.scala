@@ -1245,26 +1245,23 @@ object ETHPackets:
     case SuccessOutcome    => 1.toByte
     case _                 => 0.toByte
 
-  private def wrapTypedReceipt(r: Receipt, legacyRLP: RLPList): RLPEncodeable = r match
-    case _: LegacyReceipt      => legacyRLP
-    case _: Type01Receipt      => PrefixedRLPEncodable(Transaction.Type01, legacyRLP)
-    case _: Type02Receipt      => PrefixedRLPEncodable(Transaction.Type02, legacyRLP)
-    case _: Type03Receipt      => PrefixedRLPEncodable(Transaction.Type03, legacyRLP)
-    case _: Type04Receipt      => PrefixedRLPEncodable(Transaction.Type04, legacyRLP)
-    case _: TypedLegacyReceipt => legacyRLP
-
-  /** Encode a Receipt with bloom (ETH68 serving). Same as ETH63.ReceiptImplicits.ReceiptEnc. */
+  /** Encode a Receipt as one item of an eth/66-68 receipt list: `[postStateOrStatus, cumulativeGasUsed, bloom, logs]`,
+    * and for a typed receipt, EIP-2718's `type || rlp(receipt)` held in ONE RLP byte string — as a typed tx is in a tx
+    * list. A bare `PrefixedRLPEncodable` would serialize as that concatenation with no string header, which a reader
+    * sees as a 1-byte string followed by a stray list: go-ethereum and core-geth reject it as a short typed receipt, so
+    * they could not fetch the receipts of any block holding a typed tx from fukuii.
+    */
   implicit class ReceiptBloomEnc(r: Receipt) extends RLPSerializable:
     override def toRLPEncodable: RLPEncodeable =
-      wrapTypedReceipt(
-        r,
-        RLPList(
-          receiptStateHash(r),
-          RLPValue(ByteUtils.bigIntToUnsignedByteArray(r.cumulativeGasUsed)),
-          RLPValue(r.logsBloomFilter.toArray),
-          RLPList(r.logs.map(_.toRLPEncodable)*)
-        )
+      val receipt = RLPList(
+        receiptStateHash(r),
+        RLPValue(ByteUtils.bigIntToUnsignedByteArray(r.cumulativeGasUsed)),
+        RLPValue(r.logsBloomFilter.toArray),
+        RLPList(r.logs.map(_.toRLPEncodable)*)
       )
+      val txType = receiptTxType(r)
+      if txType == 0 then receipt
+      else RLPValue(com.chipprbots.ethereum.rlp.encode(PrefixedRLPEncodable(txType, receipt)))
 
   /** The EIP-2718 type of the transaction a receipt belongs to; 0 for a legacy receipt. */
   private def receiptTxType(r: Receipt): Byte = r match
