@@ -12,6 +12,7 @@ import org.bouncycastle.util.encoders.Hex
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
 
+import com.chipprbots.ethereum.BlockHelpers
 import com.chipprbots.ethereum.Fixtures
 import com.chipprbots.ethereum.Timeouts
 import com.chipprbots.ethereum.blockchain.sync.codec.MptNodeCodecs.*
@@ -25,6 +26,7 @@ import com.chipprbots.ethereum.domain.BloomFilter
 import com.chipprbots.ethereum.domain.LegacyReceipt
 import com.chipprbots.ethereum.domain.Receipt
 import com.chipprbots.ethereum.domain.BlockHash
+import com.chipprbots.ethereum.domain.SignedTransaction
 import com.chipprbots.ethereum.domain.TxLogEntry
 import com.chipprbots.ethereum.mpt.ExtensionNode
 import com.chipprbots.ethereum.mpt.HashNode
@@ -264,6 +266,72 @@ class BlockchainHostActorSpec extends AnyFlatSpec with Matchers:
     networkPeerManager.expectMsg(
       NetworkPeerManagerActor.SendMessageCmd(ETHPackets.BlockBodies(BigInt(0), blockBodies), peerId)
     )
+
+  // A reply is matched to the request by position, so skipping a block we lack would shift every later block's
+  // body onto the wrong hash — the same "reply matched by position" risk receipts already guard against
+  // (see "stop at the first block it has no receipts for" above). The old code used
+  // `hashes.take(N).flatMap(getBlockBodyByHash)`, which silently DROPS a `None` and keeps going instead of
+  // stopping (#18).
+  it should "stop at the first block it has no body for, rather than skip it" taggedAs (UnitTest) in new TestSetup:
+    val known1: ByteString = ByteString(Hex.decode("11" * 32))
+    val unknownHash: ByteString = ByteString(Hex.decode("22" * 32))
+    val known2: ByteString = ByteString(Hex.decode("33" * 32))
+
+    // known2 is stored, but comes AFTER unknownHash in the request — it must never be reached, let alone have
+    // its body land in unknownHash's response slot.
+    blockchainWriter
+      .storeBlockBody(BlockHash(known1), baseBlockBody)
+      .and(blockchainWriter.storeBlockBody(BlockHash(known2), baseBlockBody))
+      .commit()
+
+    blockchainHost ! BlockchainHostActor.PeerEventReceived(
+      MessageFromPeer(ETHPackets.GetBlockBodies(BigInt(1), Seq(known1, unknownHash, known2)), peerId)
+    )
+
+    networkPeerManager.expectMsg(
+      NetworkPeerManagerActor.SendMessageCmd(ETHPackets.BlockBodies(BigInt(1), Seq(baseBlockBody)), peerId)
+    )
+
+  // ---- ETH68 GetBlockBodies size budget (#18) ---------------------------------------------------------------
+  //
+  // maxBlocksBodiesPerMessage caps the COUNT, but go-ethereum also stops adding bodies once the response reaches
+  // softResponseLimit (2 MiB, eth/protocols/eth/handler.go's ServiceGetBlockBodiesQuery). fukuii had no byte
+  // budget at all, so a batch of large bodies within the count cap could be served in one oversized reply.
+
+  private def paddedBody(payloadSize: Int): BlockBody =
+    val tx = BlockHelpers.defaultTx.copy(payload = ByteString(Array.fill[Byte](payloadSize)(0)))
+    val stx = SignedTransaction.sign(tx, BlockHelpers.keyPair, None)
+    BlockBody(List(stx), Nil)
+
+  it should "cap a GetBlockBodies response at the 2 MiB soft limit, rather than sending every requested body" taggedAs (
+    UnitTest
+  ) in new TestSetup:
+    // 3 bodies x ~900 KiB of transaction payload each: two together (~1.8 MiB) fit the 2 MiB budget, a third
+    // (~2.7 MiB) does not. Well under maxBlocksBodiesPerMessage (200 in this TestSetup), so only the byte budget
+    // can be responsible for truncating the response.
+    val hashes: Seq[ByteString] = Seq(
+      ByteString(Hex.decode("44" * 32)),
+      ByteString(Hex.decode("55" * 32)),
+      ByteString(Hex.decode("66" * 32))
+    )
+    val bodies: Seq[BlockBody] = Seq.fill(3)(paddedBody(900 * 1024))
+
+    blockchainWriter
+      .storeBlockBody(BlockHash(hashes(0)), bodies(0))
+      .and(blockchainWriter.storeBlockBody(BlockHash(hashes(1)), bodies(1)))
+      .and(blockchainWriter.storeBlockBody(BlockHash(hashes(2)), bodies(2)))
+      .commit()
+
+    blockchainHost ! BlockchainHostActor.PeerEventReceived(
+      MessageFromPeer(ETHPackets.GetBlockBodies(BigInt(1), hashes), peerId)
+    )
+
+    val response = networkPeerManager.expectMsgType[NetworkPeerManagerActor.SendMessageCmd]
+    response.message.underlyingMsg match
+      case ETHPackets.BlockBodies(reqId, returned) =>
+        reqId shouldBe BigInt(1)
+        returned shouldBe Seq(bodies(0), bodies(1))
+      case other => fail(s"expected BlockBodies with 2 of the 3 requested bodies, got $other")
 
   it should "return block headers by block number" taggedAs (UnitTest) in new TestSetup:
     // given

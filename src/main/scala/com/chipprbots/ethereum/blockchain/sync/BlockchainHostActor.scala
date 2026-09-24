@@ -12,6 +12,7 @@ import scala.concurrent.duration.*
 
 import com.chipprbots.ethereum.blockchain.sync.codec.MptNodeCodecs.*
 import com.chipprbots.ethereum.db.storage.EvmCodeStorage
+import com.chipprbots.ethereum.domain.BlockBody
 import com.chipprbots.ethereum.domain.BlockHash
 import com.chipprbots.ethereum.domain.BlockHeader
 import com.chipprbots.ethereum.domain.BlockchainReader
@@ -137,6 +138,34 @@ object BlockchainHostActor:
         .flatten
         .toSeq
 
+    /** Bodies for the requested blocks, stopping at the first block we lack — same "reply matched by position"
+      * reasoning as receiptsPrefix (#18) — and once adding the next body would push the response past go-ethereum's
+      * softResponseLimit (2 MiB, eth/protocols/eth/handler.go's ServiceGetBlockBodiesQuery), whichever comes first.
+      * Still capped at maxBlocksBodiesPerMessage. Previously this used `hashes.take(N).flatMap(getBlockBodyByHash)`,
+      * which silently DROPPED a missing body and kept going — `flatMap` discards `None`s rather than stopping — so a
+      * later known body shifted into the earlier missing block's reply slot. Mirrors GetReceipts70's own budget style
+      * (below): a body that alone would blow the budget is left out entirely, never forced in.
+      */
+    def bodiesPrefix(blockHashes: Seq[ByteString]): Seq[BlockBody] =
+      import com.chipprbots.ethereum.domain.BlockBody.BlockBodyEnc
+      val SoftResponseLimitBytes = 2L * 1024 * 1024 // go-ethereum eth/protocols/eth/handler.go softResponseLimit
+
+      val available = blockHashes.iterator
+        .take(peerConfiguration.fastSyncHostConfiguration.maxBlocksBodiesPerMessage)
+        .map(hash => blockchainReader.getBlockBodyByHash(BlockHash(hash)))
+        .takeWhile(_.isDefined)
+        .flatten
+        .toSeq
+
+      val (fitting, _, _) = available.foldLeft((Vector.empty[BlockBody], 0L, false)) {
+        case (acc @ (_, _, true), _) => acc
+        case ((bodies, cumBytes, false), body) =>
+          val bodyBytes = encode(body.toRLPEncodable).length.toLong
+          if cumBytes + bodyBytes > SoftResponseLimitBytes then (bodies, cumBytes, true)
+          else (bodies :+ body, cumBytes + bodyBytes, false)
+      }
+      fitting
+
     /** Handles request for block data, which includes receipts, block bodies and headers (all requested by hash)
       *
       * @param message
@@ -229,9 +258,7 @@ object BlockchainHostActor:
 
       // ETH68 GetBlockBodies (via ETHPackets)
       case ETHPackets.GetBlockBodies(requestId, hashes) =>
-        val blockBodies = hashes
-          .take(peerConfiguration.fastSyncHostConfiguration.maxBlocksBodiesPerMessage)
-          .flatMap(hash => blockchainReader.getBlockBodyByHash(BlockHash(hash)))
+        val blockBodies = bodiesPrefix(hashes)
         context.log.debug(
           "HOST_BLOCK_BODIES_ETH68: requestId={} requested={} returning={}",
           requestId,
