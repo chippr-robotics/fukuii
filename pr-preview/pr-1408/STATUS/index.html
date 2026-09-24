@@ -5733,7 +5733,7 @@ must become required or be formally re-scoped in a reviewed PR.</p>
 <td>devp2p discovery and RLPx wire conformance.</td>
 <td>2027-03-31</td>
 <td>#1402</td>
-<td></td>
+<td>Two jobs since 2026-09-24. One runs discv4, discv5, snap and snap2 in full; the other runs eth without GetCells and BlobTxWithInvalidCells, which are skipped via sim_skip and waived until #1409 because they hang the suite. Local hive on 4dc5b77af: discv4 16/16, discv5 11/11, snap 6/6, snap2 4/4, eth 22/24.</td>
 </tr>
 <tr>
 <td><code>ethereum-tests-nightly</code></td>
@@ -5822,6 +5822,22 @@ bypass — extending a waiver means editing the matrix in a reviewed PR.</p>
 <td><code>07_eth_gasPrice</code></td>
 <td>realcodywburns</td>
 <td>#1407</td>
+<td>2026-12-31</td>
+</tr>
+<tr>
+<td><code>devp2p-getcells-needs-sparse-blobpool</code></td>
+<td><code>hive-devp2p</code></td>
+<td><code>GetCells</code></td>
+<td>realcodywburns</td>
+<td>#1409</td>
+<td>2026-12-31</td>
+</tr>
+<tr>
+<td><code>devp2p-invalid-cells-needs-sparse-blobpool</code></td>
+<td><code>hive-devp2p</code></td>
+<td><code>BlobTxWithInvalidCells</code></td>
+<td>realcodywburns</td>
+<td>#1409</td>
 <td>2026-12-31</td>
 </tr>
 </tbody>
