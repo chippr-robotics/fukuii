@@ -46,6 +46,7 @@ import com.chipprbots.ethereum.security.SecureRandomBuilder
 import com.chipprbots.ethereum.testing.Tags.OlympiaTest
 import com.chipprbots.ethereum.testing.Tags.UnitTest
 import com.chipprbots.ethereum.transactions.PendingTransactionsManager.*
+import com.chipprbots.ethereum.utils.BlockchainConfig
 import com.chipprbots.ethereum.utils.TxPoolConfig
 
 /** Test suite for PendingTransactionsManager actor.
@@ -571,6 +572,60 @@ class PendingTransactionsManagerSpec
       resp.pendingTransactions.map(_.stx).toSet shouldBe Set(stx)
     }
 
+  // hive's devp2p Transaction, InvalidTxs and LargeTxRequest all send this shape: tip cap 1 wei, fee cap exactly the
+  // head's base fee. At that base fee it pays no tip, but it is includable once the base fee holds or falls, and
+  // go-ethereum's pool admits and announces it (it checks the tip CAP against txpool.pricelimit).
+  private def feeCapAtBaseFee(chainId: BigInt, tipCap: BigInt): TransactionWithDynamicFee =
+    TransactionWithDynamicFee(
+      chainId = chainId,
+      nonce = BigInt(0),
+      maxPriorityFeePerGas = tipCap,
+      maxFeePerGas = BaseFeeCalculator.InitialBaseFee, // = the head's base fee in TestSetupWithBaseFee
+      gasLimit = GasAmount(21_000),
+      receivingAddress = Some(Address(42)),
+      value = BigInt(0),
+      payload = ByteString.empty,
+      accessList = Nil
+    )
+
+  it should "admit a tx whose fee cap sits at the base fee on an ETH-family network, as go-ethereum does" taggedAs (
+    UnitTest
+  ) in new TestSetupWithBaseFee:
+    override def chainConfig: BlockchainConfig =
+      // eth, sepolia and hive set no min-tip, so they load go-ethereum's 1 wei default.
+      super.chainConfig.copy(networkType = com.chipprbots.ethereum.utils.NetworkType.ETH, minTip = BigInt(1))
+    val stx: SignedTransactionWithSender = newDynamicStx(BigInt(0), feeCapAtBaseFee(BigInt(61), tipCap = 1))
+    pendingTransactionsManager ! AddTransactions(stx)
+    eventually {
+      val resp =
+        pendingTransactionsManager.ask[PendingTransactionsResponse](ref => GetPendingTransactionsReq(ref)).futureValue
+      resp.pendingTransactions.map(_.stx).toSet shouldBe Set(stx)
+    }
+
+  it should "still reject a tip cap below minTip on an ETH-family network" taggedAs (UnitTest) in new TestSetupWithBaseFee:
+    override def chainConfig: BlockchainConfig =
+      // eth, sepolia and hive set no min-tip, so they load go-ethereum's 1 wei default.
+      super.chainConfig.copy(networkType = com.chipprbots.ethereum.utils.NetworkType.ETH, minTip = BigInt(1))
+    val stx: SignedTransactionWithSender = newDynamicStx(BigInt(0), feeCapAtBaseFee(BigInt(61), tipCap = 0))
+    pendingTransactionsManager ! AddTransactions(stx)
+    eventually {
+      val resp =
+        pendingTransactionsManager.ask[PendingTransactionsResponse](ref => GetPendingTransactionsReq(ref)).futureValue
+      resp.pendingTransactions shouldBe empty
+    }
+
+  it should "keep ECIP-1122's effective-tip rule on ETC: a fee cap at the base fee pays no tip and is rejected" taggedAs (
+    UnitTest,
+    OlympiaTest
+  ) in new TestSetupWithBaseFee:
+    val stx: SignedTransactionWithSender = newDynamicStx(BigInt(0), feeCapAtBaseFee(BigInt(61), tipCap = 1))
+    pendingTransactionsManager ! AddTransactions(stx)
+    eventually {
+      val resp =
+        pendingTransactionsManager.ask[PendingTransactionsResponse](ref => GetPendingTransactionsReq(ref)).futureValue
+      resp.pendingTransactions shouldBe empty
+    }
+
   it should "protect nonce queue: rejected zero-tip tx does not block same-nonce valid tx" taggedAs (
     UnitTest,
     OlympiaTest
@@ -620,6 +675,9 @@ class PendingTransactionsManagerSpec
 
   /** TestSetup variant with a fake BlockchainReader that returns baseFee = 1 gwei. */
   trait TestSetupWithBaseFee extends TestSetup:
+    /** The chain the pool admits for. The default is the loaded config, which is ETC. */
+    def chainConfig: BlockchainConfig = com.chipprbots.ethereum.utils.Config.blockchains.blockchainConfig
+
     private val blockWithBaseFee: Block = Block(
       header = com.chipprbots.ethereum.Fixtures.Blocks.ValidBlock.header.copy(
         extraFields = HefPostOlympia(BaseFeeCalculator.InitialBaseFee)
@@ -639,7 +697,8 @@ class PendingTransactionsManagerSpec
         peerMessageBus.ref,
         pendingTxTopic,
         blockchainReader = fakeBlockchainReader,
-        stateStorage = null
+        stateStorage = null,
+        chainConfig = chainConfig
       ),
       s"ptm-test-basefee-${java.util.UUID.randomUUID()}"
     )

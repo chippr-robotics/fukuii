@@ -97,10 +97,11 @@ object PendingTransactionsManager:
       peerEventBus: ActorRef[PeerEventBusCommand],
       pendingTxTopic: ActorRef[Topic.Command[NewPendingTransaction]],
       blockchainReader: com.chipprbots.ethereum.domain.BlockchainReader = null,
-      stateStorage: com.chipprbots.ethereum.db.storage.StateStorage = null
+      stateStorage: com.chipprbots.ethereum.db.storage.StateStorage = null,
+      chainConfig: BlockchainConfig = Config.blockchains.blockchainConfig
   ): Behavior[Command] = Behaviors.setup { context =>
 
-    given blockchainConfig: BlockchainConfig = Config.blockchains.blockchainConfig
+    given blockchainConfig: BlockchainConfig = chainConfig
 
     // Spawn STFA as a child with a bounded mailbox (backpressure from network layer)
     context.spawn(
@@ -264,17 +265,33 @@ object PendingTransactionsManager:
           case None               => true
       }
 
-      // 2. ECIP-1122: reject if effectiveTip < minTip.
-      // Pre-Olympia (Spiral): 1 wei floor — matches core-geth txpool.pricelimit default.
-      // At/after Olympia: blockchainConfig.minTip (1 gwei per ECIP-1122).
+      // 2. Minimum tip.
+      // ETC (ECIP-1122): the tip a tx pays at the current base fee must reach the floor. Pre-Olympia (Spiral):
+      // 1 wei, matching core-geth's txpool.pricelimit default. At/after Olympia: blockchainConfig.minTip (1 gwei).
+      // ETH-family (network-type = eth): go-ethereum's rule. The tx's tip CAP (maxPriorityFeePerGas, or gasPrice
+      // for legacy and access-list txs) must reach minTip, geth's txpool.pricelimit (1 wei unless configured).
+      // A tx whose fee cap sits exactly at today's base fee pays no tip at that base fee, yet it is includable
+      // once the base fee holds or falls, and geth pools and announces it. Measuring the effective tip there
+      // rejected it, so hive's devp2p Transaction/InvalidTxs/LargeTxRequest never saw it announced.
       val bestBlockOpt = Option(blockchainReader).flatMap(_.getBestBlock)
       val currentBaseFee = bestBlockOpt.flatMap(_.header.baseFee).getOrElse(blockchainConfig.baseFeeFloor)
+      val isEthFamily = blockchainConfig.networkType == com.chipprbots.ethereum.utils.NetworkType.ETH
       val isOlympiaActive =
         bestBlockOpt.exists(_.header.number.value >= blockchainConfig.forkBlockNumbers.olympiaBlockNumber)
-      val effectiveMinTip = if isOlympiaActive then blockchainConfig.minTip else BigInt(1)
+      val effectiveMinTip = if isEthFamily || isOlympiaActive then blockchainConfig.minTip else BigInt(1)
+      def tipCap(tx: com.chipprbots.ethereum.domain.Transaction): BigInt =
+        import com.chipprbots.ethereum.domain.*
+        tx match
+          case t: TransactionWithDynamicFee => t.maxPriorityFeePerGas
+          case t: BlobTransaction           => t.maxPriorityFeePerGas
+          case t: SetCodeTransaction        => t.maxPriorityFeePerGas
+          case other                        => other.gasPrice.value
       val afterTipCheck = afterPendingNonceCheck.filter { stx =>
         val effectiveTip =
-          com.chipprbots.ethereum.domain.Transaction.effectiveGasPrice(stx.tx.tx, Some(currentBaseFee)) - currentBaseFee
+          if isEthFamily then tipCap(stx.tx.tx)
+          else
+            com.chipprbots.ethereum.domain.Transaction
+              .effectiveGasPrice(stx.tx.tx, Some(currentBaseFee)) - currentBaseFee
         if effectiveTip < effectiveMinTip then
           context.log.debug(
             "Rejecting tx {} from {}: effectiveTip {} < minTip {}",
