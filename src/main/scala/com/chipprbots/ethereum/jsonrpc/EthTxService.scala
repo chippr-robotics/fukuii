@@ -15,6 +15,7 @@ import scala.util.Try
 import com.chipprbots.ethereum.consensus.mining.Mining
 import com.chipprbots.ethereum.db.storage.TransactionMappingStorage
 import com.chipprbots.ethereum.db.storage.TransactionMappingStorage.TransactionLocation
+import com.chipprbots.ethereum.domain.BlobTransaction
 import com.chipprbots.ethereum.domain.Block
 import com.chipprbots.ethereum.domain.BlockHash
 import com.chipprbots.ethereum.domain.Blockchain
@@ -255,11 +256,15 @@ class EthTxService(
           val ts = tip.map(_.unixTimestamp).getOrElse(Timestamp.Zero)
           val evmConfig = com.chipprbots.ethereum.vm.EvmConfig.forBlock(bestNum, ts, blockchainConfig)
           val tx = signedTransaction.tx
+          // A blob tx submitted without its sidecar cannot be served to peers or proposed: nothing shows the blobs
+          // exist. go-ethereum's pool rejects it with this message (core/txpool/validation.go, validateBlobSidecar).
+          val missingSidecar = tx.isInstanceOf[BlobTransaction] && rawBytesOpt.isEmpty
           val initCodeTooLarge =
             tx.isContractInit &&
               evmConfig.eip3860Enabled &&
               evmConfig.maxInitCodeSize.exists(max => tx.payload.size > max)
-          if initCodeTooLarge then
+          if missingSidecar then IO.pure(Left(JsonRpcError.LogicError("missing sidecar in blob transaction")))
+          else if initCodeTooLarge then
             IO.pure(
               Left(
                 JsonRpcError.InvalidParams(
