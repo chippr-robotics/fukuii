@@ -327,7 +327,7 @@ abstract class OpCode(val code: Byte, val delta: Int, val alpha: Int, val baseGa
   /** Runs the instruction and charges its execution gas: `exec(state).spendGas(gas)`.
     *
     * [[StackOnlyOp]] and JUMP/JUMPI override this to build the very same state in one `copy`. The composed form copies
-    * the 29-field `ProgramState` once per step — `withStack`, then `step`/`goto`, then `spendGas` — and on the stack
+    * the 26-field `ProgramState` once per step — `withStack`, then `step`/`goto`, then `spendGas` — and on the stack
     * and arithmetic instructions those copies were the largest single cost of interpretation.
     */
   protected def execAndSpendGas[S <: Storage[S], W <: WorldStateProxy[W, S]](
