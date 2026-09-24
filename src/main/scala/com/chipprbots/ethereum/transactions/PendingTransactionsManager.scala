@@ -41,6 +41,9 @@ import com.chipprbots.ethereum.utils.TxPoolConfig
 
 object PendingTransactionsManager:
 
+  /** How far a delivered tx's size may differ from its announced size before the peer counts as lying about it. */
+  private[transactions] val AnnouncedSizeSlackBytes: Int = 8
+
   sealed trait Command
 
   case class AddTransactions(signedTransactions: Set[SignedTransactionWithSender]) extends Command
@@ -475,39 +478,49 @@ object PendingTransactionsManager:
           ) =>
         // Validate received txs against their announcements (type/size mismatch = blob violation)
         import com.chipprbots.ethereum.domain.*
-        val announcementViolation = msg.txs.zipWithIndex.exists { case (stx, idx) =>
-          pendingAnnouncements.get(stx.hash.value).exists { case (announcedType, announcedSize, _) =>
-            val actualType: Byte = stx.tx match
-              case _: LegacyTransaction         => 0.toByte
-              case _: TransactionWithAccessList => Transaction.Type01
-              case _: TransactionWithDynamicFee => Transaction.Type02
-              case _: BlobTransaction           => Transaction.Type03
-              case _: SetCodeTransaction        => Transaction.Type04
-            val typeMismatch = actualType != announcedType
-            // Use original wire size (from PooledTransactions decode) for accurate comparison
-            val sizeMismatch =
-              if idx < msg.originalSizes.size then BigInt(msg.originalSizes(idx)) != announcedSize
-              else false
-            typeMismatch || sizeMismatch
+        val announcementViolation: Option[String] = msg.txs.zipWithIndex.iterator
+          .flatMap { case (stx, idx) =>
+            pendingAnnouncements.get(stx.hash.value).flatMap { case (announcedType, announcedSize, _) =>
+              val actualType: Byte = stx.tx match
+                case _: LegacyTransaction         => 0.toByte
+                case _: TransactionWithAccessList => Transaction.Type01
+                case _: TransactionWithDynamicFee => Transaction.Type02
+                case _: BlobTransaction           => Transaction.Type03
+                case _: SetCodeTransaction        => Transaction.Type04
+              val typeMismatch = actualType != announcedType
+              // Wire size from the PooledTransactions decode, against the announcement with go-ethereum's slack: it
+              // drops a peer only when the two are more than 8 bytes apart (eth/fetcher/tx_fetcher.go), because the
+              // size it announces is not always the exact wire length. For a blob tx its Transaction.Size() prices the
+              // outer list header as if it wrapped the sidecar alone, one byte short when the sidecar is tiny — a blob
+              // tx sent without blobs. Dropping on any difference disconnected go-ethereum peers over that byte.
+              val deliveredSize = msg.originalSizes.lift(idx).map(BigInt(_))
+              val sizeMismatch = deliveredSize.exists(size => (size - announcedSize).abs > AnnouncedSizeSlackBytes)
+              Option.when(typeMismatch || sizeMismatch)(
+                s"tx ${stx.hash.toHex} announced as type $announcedType, $announcedSize bytes; " +
+                  s"delivered as type $actualType, ${deliveredSize.getOrElse("?")} bytes"
+              )
+            }
           }
-        }
+          .nextOption()
         // Clean up announcements for received txs
         msg.txs.foreach(stx => pendingAnnouncements -= stx.hash.value)
-        if announcementViolation then
-          context.log.debug(
-            "PooledTransactions from peer {} has type/size mismatch with announcement — disconnecting",
-            peerId
-          )
-          peerManager ! PeerManagerActor.DisconnectPeerFireAndForgetCmd(peerId)
-        else
-          // Store blob tx sidecar bytes for PooledTransactions responses
-          msg.blobTxRawBytes.foreach { case (hash, rawBytes) =>
-            blobTxNetworkBytes += (hash -> rawBytes)
-          }
-          val validTxs = SignedTransactionWithSender.getSignedTransactions(msg.txs)
-          if validTxs.nonEmpty then
-            context.self ! AddTransactions(validTxs.toSet)
-            validTxs.foreach(stx => setTxKnown(stx.tx, peerId))
+        announcementViolation match
+          case Some(violation) =>
+            context.log.info(
+              "PooledTransactions from peer {} contradicts its announcement — disconnecting: {}",
+              peerId,
+              violation
+            )
+            peerManager ! PeerManagerActor.DisconnectPeerFireAndForgetCmd(peerId)
+          case None =>
+            // Store blob tx sidecar bytes for PooledTransactions responses
+            msg.blobTxRawBytes.foreach { case (hash, rawBytes) =>
+              blobTxNetworkBytes += (hash -> rawBytes)
+            }
+            val validTxs = SignedTransactionWithSender.getSignedTransactions(msg.txs)
+            if validTxs.nonEmpty then
+              context.self ! AddTransactions(validTxs.toSet)
+              validTxs.foreach(stx => setTxKnown(stx.tx, peerId))
         Behaviors.same
 
       case GetPendingTransactionsReq(replyTo) =>

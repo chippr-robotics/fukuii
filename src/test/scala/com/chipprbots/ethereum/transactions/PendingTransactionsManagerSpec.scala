@@ -36,6 +36,7 @@ import com.chipprbots.ethereum.domain.Transaction
 import com.chipprbots.ethereum.domain.TransactionWithDynamicFee
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor.SendMessageCmd
+import com.chipprbots.ethereum.network.PeerManagerActor
 import com.chipprbots.ethereum.network.Peer
 import com.chipprbots.ethereum.network.PeerEventBusActor.PeerEvent
 import com.chipprbots.ethereum.network.PeerId
@@ -440,6 +441,38 @@ class PendingTransactionsManagerSpec
     pendingTransactionsManager ! WrappedPeerEvent(PeerEvent.MessageFromPeer(announcement, peer1.id))
 
     etcPeerManager.expectNoMessage(200.millis)
+
+  // ---- delivered PooledTransactions vs. the announcement --------------------------------------------------
+  //
+  // go-ethereum drops a peer over an announced/delivered size gap only above 8 bytes, and the size it announces can
+  // be a byte short of the wire length (a blob tx sent without blobs). hive's BlobTxAvailabilityFailure delivers eight
+  // such txs and expects no disconnect; BlobViolations overstates a size by 10 bytes and expects one.
+
+  private def announceThenDeliver(setup: TestSetup, announcedSize: Int, deliveredSize: Int): Unit =
+    import setup.*
+    val stx: SignedTransaction = newStx().tx
+    pendingTransactionsManager ! WrappedPeerEvent(
+      PeerEvent.MessageFromPeer(
+        ETHPackets.NewPooledTransactionHashes(Seq(0.toByte), Seq(BigInt(announcedSize)), Seq(stx.hash.value)),
+        peer1.id
+      )
+    )
+    etcPeerManager.expectMsgType[NetworkPeerManagerActor.SendMessageCmd] // the GetPooledTransactions
+    pendingTransactionsManager ! WrappedPeerEvent(
+      PeerEvent.MessageFromPeer(ETHPackets.PooledTransactions(BigInt(1), Seq(stx), Seq(deliveredSize)), peer1.id)
+    )
+
+  it should "keep a peer whose delivered tx is within 8 bytes of the size it announced" taggedAs (
+    UnitTest
+  ) in new TestSetup:
+    announceThenDeliver(this, announcedSize = 109, deliveredSize = 110)
+    peerManager.expectNoMessage(300.millis)
+
+  it should "disconnect a peer whose delivered tx is more than 8 bytes off the size it announced" taggedAs (
+    UnitTest
+  ) in new TestSetup:
+    announceThenDeliver(this, announcedSize = 120, deliveredSize = 110)
+    peerManager.expectMsg(PeerManagerActor.DisconnectPeerFireAndForgetCmd(peer1.id))
 
   it should "remove transaction on timeout" taggedAs (UnitTest) in new TestSetup:
     override val txPoolConfig: TxPoolConfig = new TxPoolConfig:
