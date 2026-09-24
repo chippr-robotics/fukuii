@@ -17,6 +17,9 @@
 #   BENCH_CP_REFRESH=1   re-resolve the classpath (after a dependency change; not needed after a
 #                        source change, the classpath points at the compiled class directories)
 #   SBT="..."            how to invoke sbt for the classpath (default: sbt -batch)
+#   JDK_IMAGE=<image>    run the JVM in this Docker image instead of the host's java, e.g.
+#                        chipprbots/fukuii:latest for the JDK hive runs (the classpath, the
+#                        fixture and any JFR/MAIN_CLASSES paths are mounted at their host paths)
 #   MAIN_CLASSES=<dir>   use this copy of the root module's compiled classes instead of
 #                        target/scala-3.*/classes: an A/B run against a saved build of another
 #                        commit (the harness and test classes must still link against it)
@@ -51,5 +54,34 @@ fi
 # shellcheck disable=SC2206
 jvm+=(${JAVA_OPTS:-})
 
-exec java "${jvm[@]}" -cp "$cp" \
-  com.chipprbots.ethereum.ethtest.BlockchainTestBench "$@"
+main=(com.chipprbots.ethereum.ethtest.BlockchainTestBench "$@")
+if [[ -z "${JDK_IMAGE:-}" ]]; then
+  exec java "${jvm[@]}" -cp "$cp" "${main[@]}"
+fi
+
+# Every directory the JVM reads or writes, at the same path inside the container.
+mounts=()
+declare -A seen=()
+add_mount() { # <dir> <ro|rw>
+  local dir
+  dir="$(cd "$1" && pwd)"
+  [[ -n "${seen[$dir]:-}" ]] && return
+  seen[$dir]=1
+  mounts+=(-v "$dir:$dir:$2")
+}
+add_mount "$root" ro
+add_mount "$(dirname "$(realpath "$1")")" ro
+[[ -n "${MAIN_CLASSES:-}" ]] && add_mount "$MAIN_CLASSES" ro
+[[ -n "${JFR:-}" ]] && add_mount "$(dirname "$JFR")" rw
+coursier="${COURSIER_CACHE:-$HOME/.cache/coursier}"
+[[ -d "$coursier" ]] && add_mount "$coursier" ro
+while IFS= read -r entry; do
+  case "$entry" in
+    "$root"/* | "$coursier"/*) ;; # already mounted
+    *.jar) add_mount "$(dirname "$entry")" ro ;;
+    *) if [[ -d "$entry" ]]; then add_mount "$entry" ro; fi ;;
+  esac
+done < <(tr ':' '\n' <<<"$cp")
+
+exec docker run --rm --memory=2g -u "$(id -u):$(id -g)" -e HOME=/tmp -w /tmp "${mounts[@]}" \
+  --entrypoint java "$JDK_IMAGE" "${jvm[@]}" -cp "$cp" "${main[@]}"
