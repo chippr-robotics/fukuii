@@ -202,6 +202,12 @@ object OpCodes:
   val OsakaOpCodes: List[OpCode] = CLZ :: CancunOpCodes
 
 object OpCode:
+
+  /** Zero gas, as one shared value: the default state-gas delta and the variable gas of a constant-gas instruction are
+    * read for every instruction executed, and `0` converted to BigInt at each read costs a cache lookup.
+    */
+  private[vm] val NoGas: BigInt = BigInt(0)
+
   def sliceBytes(bytes: ByteString, offset: UInt256, size: UInt256): ByteString =
     val start = offset.min(bytes.size).toInt
     val end = (offset + size).min(bytes.size).toInt
@@ -268,8 +274,10 @@ abstract class OpCode(val code: Byte, val delta: Int, val alpha: Int, val baseGa
         // new values, all of which are only available before `exec` runs.
         val stateGas: BigInt = stateGasDelta(state)
         val executed = execAndSpendGas(state, gas)
-        if stateGas == 0 then executed
-        else if stateGas < 0 then executed.refillStateGas(-stateGas)
+        // signum, not `== 0` / `< 0`: comparing a BigInt with an Int literal boxes the literal and goes through
+        // BoxesRunTime's numeric equality on every instruction. Same outcomes.
+        if stateGas.signum == 0 then executed
+        else if stateGas.signum < 0 then executed.refillStateGas(-stateGas)
         else if executed.stateGasShortfall(stateGas) > executed.gas then
           // A state charge that cannot be met is an EXCEPTIONAL HALT, not a partial charge. This is the
           // measured `tx-emit-*` case: the execution component is affordable, GAS_STORAGE_SET is not, and
@@ -287,7 +295,7 @@ abstract class OpCode(val code: Byte, val delta: Int, val alpha: Int, val baseGa
     * ETC path — which is what keeps the hook above a no-op outside the fork.
     */
   protected def stateGasDelta[S <: Storage[S], W <: WorldStateProxy[W, S]](@unused state: ProgramState[W, S]): BigInt =
-    0
+    OpCode.NoGas
 
   protected def baseGas[S <: Storage[S], W <: WorldStateProxy[W, S]](state: ProgramState[W, S]): BigInt = baseGasFn(
     state.config.feeSchedule
@@ -339,7 +347,12 @@ trait StorageAccessGas:
 
 sealed trait ConstGas:
   self: OpCode =>
-  protected def varGas[S <: Storage[S], W <: WorldStateProxy[W, S]](state: ProgramState[W, S]): BigInt = 0
+  protected def varGas[S <: Storage[S], W <: WorldStateProxy[W, S]](state: ProgramState[W, S]): BigInt = OpCode.NoGas
+
+  // `baseGas(state) + varGas(state)` with the variable part known to be zero: the same value, without the call, the
+  // BigInt addition and its small-value cache lookup on every constant-gas instruction.
+  override protected def calcGas[S <: Storage[S], W <: WorldStateProxy[W, S]](state: ProgramState[W, S]): BigInt =
+    baseGas(state)
 
 /** An instruction whose whole effect is a new stack and a program-counter advance. It writes no memory, world, return
   * data, log, refund or access list, and never halts.
