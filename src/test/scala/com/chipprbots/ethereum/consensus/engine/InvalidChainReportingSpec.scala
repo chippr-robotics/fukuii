@@ -133,6 +133,20 @@ class InvalidChainReportingSpec
     ) shouldBe false
   }
 
+  it should "report a gas-used mismatch the header proves by committing to no transactions" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in {
+    // hive RemoveTransaction: the emptied block keeps its original gasUsed. Missing contract code cannot explain a
+    // nonzero claim when there is no transaction to under-count, so this one IS proven.
+    InvalidChainReporter.provesConsensusInvalid(
+      ValidationAfterExecError(
+        "Block has invalid gas used, expected 21000 but got 0; " +
+          com.chipprbots.ethereum.consensus.validators.std.StdValidators.HeaderGasContradictsEmptyTxListMarker
+      )
+    ) shouldBe true
+  }
+
   it should "NOT report a missing parent header — that is transient, not invalid" taggedAs (
     UnitTest,
     ConsensusTest
@@ -263,6 +277,27 @@ class InvalidChainReportingSpec
       branch(1).hash.value -> branch(0).hash.value,
       branch(2).hash.value -> branch(0).hash.value
     )
+
+  it should "report a gas-used mismatch AT THE BATCH TIP when the header commits to no transactions" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in new ConsensusSetup:
+    // The hive "Incomplete Transactions … CanonicalReOrg=False, Invalid P9" shape: the node syncs from genesis, the
+    // header batch ends AT the invalid block, everything before it executes, and it fails last. A partial batch with
+    // no suffix behind the failing block — ConsensusImpl is the only place that can report it, and the CL's tip (the
+    // invalid block's child, held by hash only) learns its verdict through the registry's accepted-children index.
+    val branch: List[Block] = BlockHelpers.generateChain(3, initialBestBlock)
+    failAt(
+      branch(2),
+      ValidationAfterExecError(
+        "Block has invalid gas used, expected 21000 but got 0; " +
+          com.chipprbots.ethereum.consensus.validators.std.StdValidators.HeaderGasContradictsEmptyTxListMarker
+      )
+    )
+
+    whenReady(consensusUnderTest.evaluateBranch(NonEmptyList.fromListUnsafe(branch)).unsafeToFuture())(_ => ())
+
+    reported.toList shouldBe List(branch(2).hash.value -> branch(1).hash.value)
 
   it should "be inert with no reporter — the ETC/Mordor/Gorgoroth configuration" taggedAs (
     UnitTest,
@@ -422,6 +457,64 @@ class InvalidChainReportingSpec
         response.payloadStatus.latestValidHash shouldBe Some(b0.hash.value)
       case Left(err) => fail(s"expected a payload status, got JSON-RPC error: $err")
     }
+
+  it should "answer INVALID for a CL tip whose parent fails LAST in a partial batch on a header-proven gas mismatch" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in new ConsensusSetup:
+    // hive "Invalid Missing Ancestor Syncing ReOrg, Incomplete Transactions, EmptyTxs=False, CanonicalReOrg=False,
+    // Invalid P9". The node syncs from genesis and the peer's header batch ends AT the invalid block:
+    //
+    //   B0 .. P (execute)  ->  I (emptied body, original gasUsed kept)  ->  T (the CL's tip, parent unknown)
+    //
+    // I fails last, so this is ConsensusImpl's partial-batch arm, whose error ConsensusAdapter then drops. Measured on
+    // 436d724dd: imported to I's parent, then ACCEPTED for T until hive timed out, 2/2 (Paris, Cancun).
+    override lazy val reporterOpt: Option[InvalidChainReporter] = Some(engineApi.invalidChainReporter)
+
+    val branch: List[Block] = BlockHelpers.generateChain(3, initialBestBlock)
+    val lastValid: Block = branch(1)
+    val invalidBlock: Block = branch(2)
+    val tip: ExecutionPayload = payloadOfUnexecutableChild(invalidBlock.hash.value)
+    failAt(
+      invalidBlock,
+      ValidationAfterExecError(
+        "Block has invalid gas used, expected 21000 but got 0; " +
+          com.chipprbots.ethereum.consensus.validators.std.StdValidators.HeaderGasContradictsEmptyTxListMarker
+      )
+    )
+
+    whenReady(engineApi.newPayload(tip).unsafeToFuture())(_.status shouldBe Accepted)
+    whenReady(consensusUnderTest.evaluateBranch(NonEmptyList.fromListUnsafe(branch)).unsafeToFuture())(_ => ())
+
+    whenReady(engineApi.newPayload(tip).unsafeToFuture()) { after =>
+      after.status shouldBe Invalid
+      after.latestValidHash shouldBe Some(lastValid.hash.value)
+    }
+    val fcs: ForkChoiceState = ForkChoiceState(tip.blockHash, lastValid.hash.value, lastValid.hash.value)
+    whenReady(engineApi.forkchoiceUpdated(fcs, None).unsafeToFuture()) {
+      case Right(response) =>
+        response.payloadStatus.status shouldBe Invalid
+        response.payloadStatus.latestValidHash shouldBe Some(lastValid.hash.value)
+      case Left(err) => fail(s"expected a payload status, got JSON-RPC error: $err")
+    }
+
+  it should "leave that tip ACCEPTED when the same failure carries no proof — the pre-fix behaviour" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in new ConsensusSetup:
+    // Negative control for the test above: identical topology, bare gas-used message. This is what a node missing
+    // contract code produces, and it must stay unreported — the channel's whole safety argument.
+    override lazy val reporterOpt: Option[InvalidChainReporter] = Some(engineApi.invalidChainReporter)
+
+    val branch: List[Block] = BlockHelpers.generateChain(3, initialBestBlock)
+    val tip: ExecutionPayload = payloadOfUnexecutableChild(branch(2).hash.value)
+    failAt(branch(2), ValidationAfterExecError("Block has invalid gas used, expected 21000 but got 0"))
+
+    whenReady(engineApi.newPayload(tip).unsafeToFuture())(_.status shouldBe Accepted)
+    whenReady(consensusUnderTest.evaluateBranch(NonEmptyList.fromListUnsafe(branch)).unsafeToFuture())(_ => ())
+
+    whenReady(engineApi.newPayload(tip).unsafeToFuture())(_.status shouldBe Accepted)
+    engineApi.invalidBlocksSnapshot shouldBe empty
 
   // ---------------------------------------------------------------------------------------------------------------
   // 4. A FAILED REORG reported twice. ConsensusImpl reports the true failing block; BlockImporter's gas-used arm then

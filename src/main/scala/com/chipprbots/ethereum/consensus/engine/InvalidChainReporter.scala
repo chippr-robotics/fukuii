@@ -5,6 +5,7 @@ import org.apache.pekko.util.ByteString
 import java.util.concurrent.atomic.AtomicReference
 
 import com.chipprbots.ethereum.consensus.validators.BlockHeaderError
+import com.chipprbots.ethereum.consensus.validators.std.StdValidators
 import com.chipprbots.ethereum.domain.Block
 import com.chipprbots.ethereum.domain.BlockHash
 import com.chipprbots.ethereum.ledger.BlockExecutionError
@@ -126,16 +127,19 @@ object InvalidChainReporter:
     *
     *   - `MPTError`, `MissingParentError`: missing state, by definition.
     *   - `ValidationAfterExecError` carrying [[GasUsedMismatchMarker]] ALONE. This is THE ambiguous case. The
-    *     exception, reported TRUE: the same message also carrying `StdValidators.HeaderGasContradictsReceiptsMarker`,
-    *     which proves the header contradicts the receipts it commits to (see that marker's comment). Without that
-    *     exception a gas-used mismatch found mid-batch was reported by NOBODY: `ConsensusAdapter` maps a partial batch
-    *     failure to `BlockImportedToTop` and drops the error, so `BlockImporter`'s gas-used arm never ran — hive
-    *     `engine` 501368ec9, `Invalid Missing Ancestor Syncing ReOrg, GasUsed … Invalid P8`, 2/2 failing.
-    *     `InMemoryWorldStateProxy.getCode` returns `ByteString.empty` instead of throwing when the bytecode is absent
-    *     from `EvmCodeStorage`, so a partially-synced node executes a contract call as if it were a transfer to an EOA,
-    *     under-counts gas, and reports a gas mismatch for a perfectly honest block. The disambiguation
-    *     (`findMissingContractCode`: `Some` => fetch over SNAP and retry, `None` => genuinely invalid) already exists
-    *     in `BlockImporter`, and that is where the gas-used case is reported from. It is never reported from here.
+    *     exceptions, reported TRUE: the same message also carrying `StdValidators.HeaderGasContradictsReceiptsMarker`,
+    *     which proves the header contradicts the receipts it commits to, or
+    *     `StdValidators.HeaderGasContradictsEmptyTxListMarker`, which proves the header claims gas while committing to
+    *     no transactions (see each marker's comment). Without them a gas-used mismatch found mid-batch was reported by
+    *     NOBODY: `ConsensusAdapter` maps a partial batch failure to `BlockImportedToTop` and drops the error, so
+    *     `BlockImporter`'s gas-used arm never ran — hive `engine` 501368ec9, `Invalid Missing Ancestor Syncing ReOrg,
+    *     GasUsed … Invalid P8`, 2/2 failing; and `… Incomplete Transactions … CanonicalReOrg=False, Invalid P9`, 2/2
+    *     failing on 436d724dd. `InMemoryWorldStateProxy.getCode` returns `ByteString.empty` instead of throwing when
+    *     the bytecode is absent from `EvmCodeStorage`, so a partially-synced node executes a contract call as if it
+    *     were a transfer to an EOA, under-counts gas, and reports a gas mismatch for a perfectly honest block. The
+    *     disambiguation (`findMissingContractCode`: `Some` => fetch over SNAP and retry, `None` => genuinely invalid)
+    *     already exists in `BlockImporter`, and that is where the gas-used case is reported from. It is never reported
+    *     from here.
     *   - `HeaderParentNotFoundError`: says only that the parent is not in storage yet. Same failure mode as the
     *     reverted attempt, one layer up.
     *   - `HeaderUnexpectedError`: a string-carrying catch-all (`SyncBlocksValidator` wraps arbitrary messages in it).
@@ -169,12 +173,15 @@ object InvalidChainReporter:
       case _: TxsExecutionError =>
         true
       case ValidationAfterExecError(reason) =>
-        // A gas-used mismatch is ambiguous (missing contract code) UNLESS the block's own receipts prove it: see
-        // StdValidators.HeaderGasContradictsReceiptsMarker. That marker is only ever appended when our receipts hash to
-        // the header's receiptsRoot and their final cumulative gas differs from header.gasUsed, pre-Amsterdam.
+        // A gas-used mismatch is ambiguous (missing contract code) UNLESS the block itself proves it. Two proofs, each
+        // appended by StdValidators' gas-used arm only when it holds:
+        //   - HeaderGasContradictsReceiptsMarker: our receipts hash to the header's receiptsRoot and their final
+        //     cumulative gas differs from header.gasUsed, pre-Amsterdam.
+        //   - HeaderGasContradictsEmptyTxListMarker: the header commits to no transactions (empty-trie
+        //     transactionsRoot) and still claims nonzero gas. Missing code cannot explain that: there is no
+        //     transaction to under-count.
         !reason.contains(GasUsedMismatchMarker) ||
-        reason.contains(
-          com.chipprbots.ethereum.consensus.validators.std.StdValidators.HeaderGasContradictsReceiptsMarker
-        )
+        reason.contains(StdValidators.HeaderGasContradictsReceiptsMarker) ||
+        reason.contains(StdValidators.HeaderGasContradictsEmptyTxListMarker)
       case MissingParentError | _: MPTError =>
         false
