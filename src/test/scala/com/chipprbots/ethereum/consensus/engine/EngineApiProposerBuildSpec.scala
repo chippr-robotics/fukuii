@@ -73,6 +73,9 @@ class EngineApiProposerBuildSpec extends AnyWordSpec with Matchers:
     /** (transaction, arrival millis) — what the stub pool answers. */
     val poolContents: AtomicReference[Seq[(SignedTransaction, Long)]] = new AtomicReference(Nil)
 
+    /** The EIP-4844 network form the pool captured for its blob transactions (tx hash -> raw bytes). */
+    val poolBlobBytes: AtomicReference[Map[ByteString, ByteString]] = new AtomicReference(Map.empty)
+
     lazy val pendingTxManager: org.apache.pekko.actor.typed.ActorRef[PendingTransactionsManager.Command] =
       classicSystem.spawn(
         Behaviors.receiveMessage[PendingTransactionsManager.Command] {
@@ -82,7 +85,7 @@ class EngineApiProposerBuildSpec extends AnyWordSpec with Matchers:
                 PendingTransactionsManager.PendingTransaction(withSender, arrival)
               }
             }
-            replyTo ! PendingTransactionsManager.PendingTransactionsResponse(entries)
+            replyTo ! PendingTransactionsManager.PendingTransactionsResponse(entries, poolBlobBytes.get())
             Behaviors.same
           case _ => Behaviors.same
         },
@@ -207,8 +210,8 @@ class EngineApiProposerBuildSpec extends AnyWordSpec with Matchers:
         parentBeaconBlockRoot = Option.when(cancun)(ByteString(Array.fill(32)(0x07.toByte)))
       )
 
-    /** forkchoiceUpdated(head, attrs) -> getPayload. */
-    def buildOn(head: BlockHeader): Block =
+    /** forkchoiceUpdated(head, attrs) -> (payloadId, getPayload). */
+    def buildOnWithId(head: BlockHeader): (ByteString, Block) =
       val response =
         engineApi
           .forkchoiceUpdated(ForkChoiceState(head.hash.value, zero32, zero32), Some(attrsFor(head)))
@@ -217,7 +220,9 @@ class EngineApiProposerBuildSpec extends AnyWordSpec with Matchers:
         .getOrElse(fail(s"forkchoiceUpdated failed: $response"))
         .payloadId
         .getOrElse(fail("forkchoiceUpdated returned no payloadId"))
-      engineApi.getPayload(payloadId).unsafeRunSync().getOrElse(fail("getPayload failed"))
+      (payloadId, engineApi.getPayload(payloadId).unsafeRunSync().getOrElse(fail("getPayload failed")))
+
+    def buildOn(head: BlockHeader): Block = buildOnWithId(head)._2
 
     def newPayloadStatus(block: Block): PayloadStatusV1 =
       import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.SignedTransactions.*
@@ -309,6 +314,33 @@ class EngineApiProposerBuildSpec extends AnyWordSpec with Matchers:
       block1.body.transactionList shouldBe Seq(transfer)
       block1.header.blobGasUsed shouldBe Some(BigInt(0))
       expectValid(block1)
+
+    "carry a Cancun payload's blob sidecars in its bundle, without EIP-7594 cell proofs" taggedAs (
+      UnitTest,
+      ConsensusTest
+    ) in new CancunSetup:
+      // Cell proofs are for BlobsBundleV2 (engine_getPayloadV5, Osaka onwards) only. Computing them here, one c-kzg call
+      // per blob, made each 6-blob Cancun build take ~4.3 s (hive `In-Order Consecutive Payload Execution (Cancun)`).
+      val payable = blob(alice, 0, blobs = 6, maxFeePerBlobGas = 2)
+      val zeroBlob = Array.fill[Byte](ethereum.ckzg4844.CKZG4844JNI.BYTES_PER_BLOB)(0)
+      val networkForm = com.chipprbots.ethereum.rlp.encode(
+        com.chipprbots.ethereum.rlp.RLPList(
+          com.chipprbots.ethereum.rlp.RLPValue(Array.empty[Byte]),
+          com.chipprbots.ethereum.rlp.RLPList(Seq.fill(6)(com.chipprbots.ethereum.rlp.RLPValue(zeroBlob))*),
+          com.chipprbots.ethereum.rlp.RLPList(Seq.fill(6)(com.chipprbots.ethereum.rlp.RLPValue(new Array[Byte](48)))*),
+          com.chipprbots.ethereum.rlp.RLPList(Seq.fill(6)(com.chipprbots.ethereum.rlp.RLPValue(new Array[Byte](48)))*)
+        )
+      )
+      poolContents.set(Seq(payable -> 1L))
+      poolBlobBytes.set(Map(payable.hash.value -> ByteString(0x03.toByte +: networkForm)))
+
+      val (payloadId, block1) = buildOnWithId(genesisHeader)
+      block1.body.transactionList shouldBe Seq(payable)
+      val bundle = engineApi.getPayloadBlobsBundle(payloadId)
+      bundle.blobs.size shouldBe 6
+      bundle.commitments.size shouldBe 6
+      bundle.proofs.size shouldBe 6
+      bundle.cellProofsPerBlob shouldBe empty
 
     "include the same blob transaction once it can pay the blob base fee" taggedAs (UnitTest, ConsensusTest) in
       new CancunSetup:
