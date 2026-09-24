@@ -224,16 +224,21 @@ FLAGS="$FLAGS -Dfukuii.network.server-address.interface=0.0.0.0"
 FLAGS="$FLAGS -Dfukuii.network.server-address.port=30303"
 FLAGS="$FLAGS -Dfukuii.network.discovery.interface=0.0.0.0"
 FLAGS="$FLAGS -Dfukuii.network.discovery.port=30303"
-# Workaround for `sync go-ethereum from fukuii` Hive gate: scalanet's discv4
-# packet decoder rejects every one of geth's UDP packets with
-# `PacketException: Failed to unpack message: Invalid hash` (~4 errors/sec for
-# the entire 60s test window). Without a PONG, geth's discovery state machine
-# never marks fukuii's bootnode alive and never TCP-dials it for RLPx — test
-# times out at head=0. Hive already supplies the bootnode via static-nodes.json
-# below (HIVE_BOOTNODE), so discovery isn't needed to find peers; disabling it
-# sidesteps the parser bug. Underlying scalanet hash-validation regression
-# tracked separately — restore discovery in hive runs once that is fixed.
+# Discovery stays on. A go-ethereum sink finds its source only through discovery: hive passes
+# the source's enode as --bootnodes, which seeds geth's table but is not dialed as such. geth
+# dials a node only while its discovery keeps it alive and its ENR carries an `eth` entry geth
+# can load and accepts. The static-nodes.json below covers fukuii sinks, not other clients.
 FLAGS="$FLAGS -Dfukuii.network.discovery.discovery-enabled=true"
+
+# Advertise the container's own address, as hive's go-ethereum adapter does with
+# --nat=extip. Left to detection, the ENR carries this host's public IP, or loopback where
+# detection fails; geth adopts the ENR's IP, its pings there time out, and it drops the node
+# as dead before ever dialing it.
+HIVE_SELF_IP=$(hostname -i 2>/dev/null | awk '{print $1}')
+if [ -n "$HIVE_SELF_IP" ]; then
+    FLAGS="$FLAGS -Dfukuii.network.server-address.advertised-address=$HIVE_SELF_IP"
+    FLAGS="$FLAGS -Dfukuii.network.discovery.host=$HIVE_SELF_IP"
+fi
 
 # Chain import — prefer /chain.rlp, otherwise concatenate /blocks/*.rlp (consensus sim).
 if [ -f "/chain.rlp" ]; then
