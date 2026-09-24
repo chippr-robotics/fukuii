@@ -40,9 +40,17 @@ class EngineApiProposerBuildSpec extends AnyWordSpec with Matchers:
   implicit val ioRuntime: IORuntime = IORuntime.global
 
   private val CancunTs: Long = 9999999995L // test application.conf: Cancun, not Prague
+  private val PragueTs: Long = 9999999998L // test application.conf: Prague, not Osaka
+  private val OsakaTs: Long = 9999999999L // test application.conf: Osaka
 
-  abstract private class Setup(genesisTimestamp: Long, genesisExtraFields: HeaderExtraFields)
-      extends EphemBlockchainTestSetup:
+  /** @param genesisContracts
+    *   code deployed at genesis (balance 1 wei, as go-ethereum's genesis allocs deploy predeploys)
+    */
+  abstract private class Setup(
+      genesisTimestamp: Long,
+      genesisExtraFields: HeaderExtraFields,
+      genesisContracts: Seq[(Address, ByteString)] = Nil
+  ) extends EphemBlockchainTestSetup:
 
     implicit override def blockchainConfig: BlockchainConfig =
       initBlockchainConfig.withUpdatedForkBlocks(
@@ -158,6 +166,26 @@ class EngineApiProposerBuildSpec extends AnyWordSpec with Matchers:
         Some(chainId)
       )
 
+    /** An EIP-7002 withdrawal request: 1 wei (the fee while the queue is empty) and pubkey48 || amount8 to the queue
+      * predeploy. The block's end-of-block system call turns it into a 0x01 execution request.
+      */
+    def withdrawalRequest(key: AsymmetricCipherKeyPair, nonce: BigInt): SignedTransaction =
+      SignedTransaction.sign(
+        TransactionWithDynamicFee(
+          chainId,
+          nonce,
+          BigInt(1),
+          BigInt("30000000000"),
+          GasAmount(1_000_000),
+          Some(BlockExecution.WithdrawalQueueAddress),
+          1,
+          QueuePredeploys.WithdrawalRequestCalldata,
+          Nil
+        ),
+        key,
+        Some(chainId)
+      )
+
     private val genesisStateRoot =
       val world = InMemoryWorldStateProxy(
         storagesInstance.storages.evmCodeStorage,
@@ -171,7 +199,11 @@ class EngineApiProposerBuildSpec extends AnyWordSpec with Matchers:
       val funded = Seq(alice, bob).foldLeft(world) { (w, key) =>
         w.saveAccount(address(key), Account(balance = UInt256(BigInt("1000000000000000000"))))
       }
-      InMemoryWorldStateProxy.persistState(funded).stateRootHash
+      val deployed = genesisContracts.foldLeft(funded) { case (w, (contract, code)) =>
+        w.saveAccount(contract, Account(balance = UInt256(1), codeHash = CodeHash(crypto.kec256(code))))
+          .saveCode(contract, code)
+      }
+      InMemoryWorldStateProxy.persistState(deployed).stateRootHash
 
     val genesisHeader: BlockHeader = BlockHeader(
       parentHash = BlockHash(ByteString(new Array[Byte](32))),
@@ -294,8 +326,63 @@ class EngineApiProposerBuildSpec extends AnyWordSpec with Matchers:
 
     def hexOf(block: Block): String = "0x" + block.hash.value.toArray.map("%02x".format(_)).mkString
 
+    /** What an engine_getPayloadV2+ envelope carries: the payload's blockHash, blockValue, executionRequests (V4/V5;
+      * empty when the field is absent) and the blobsBundle, verbatim.
+      */
+    def envelope(response: com.chipprbots.ethereum.jsonrpc.JsonRpcResponse): (String, String, List[String], String) =
+      import org.json4s.JsonAST.{JArray, JObject, JString}
+      response.result match
+        case Some(JObject(fields)) =>
+          val env = fields.toMap
+          val hash = env.get("executionPayload").collect { case JObject(p) => p.toMap.get("blockHash") }.flatten match
+            case Some(JString(h)) => h
+            case other            => fail(s"no executionPayload.blockHash: $other")
+          val value = env.get("blockValue").collect { case JString(v) => v }.getOrElse(fail("no blockValue"))
+          val requests = env.get("executionRequests").collect { case JArray(rs) => rs.collect { case JString(r) => r } }
+          (hash, value, requests.getOrElse(Nil), env.get("blobsBundle").toString)
+        case other => fail(s"getPayload answered $other, error ${response.error}")
+
   /** Paris-era genesis (the test config activates Shanghai and later far in the future). */
   private class ParisSetup extends Setup(1000L, HefPostOlympia(BaseFeeCalculator.InitialBaseFee))
+
+  /** The two Prague request-queue predeploys, as a Prague block needs them. */
+  private val queuePredeploys: Seq[(Address, ByteString)] = Seq(
+    BlockExecution.WithdrawalQueueAddress -> QueuePredeploys.WithdrawalQueueCode,
+    BlockExecution.ConsolidationQueueAddress -> QueuePredeploys.ConsolidationQueueCode
+  )
+
+  /** Cancun genesis one second before Prague, queue predeploys deployed: block 1 is a Prague block
+    * (engine_getPayloadV4).
+    */
+  private class PragueSetup
+      extends Setup(
+        PragueTs - 1,
+        HefPostCancun(
+          baseFee = BaseFeeCalculator.InitialBaseFee,
+          withdrawalsRoot = BlockHeader.EmptyMpt,
+          blobGasUsed = BigInt(0),
+          excessBlobGas = BigInt(0),
+          parentBeaconBlockRoot = ByteString(new Array[Byte](32))
+        ),
+        queuePredeploys
+      )
+
+  /** Prague genesis one second before Osaka, queue predeploys deployed: block 1 is an Osaka block
+    * (engine_getPayloadV5).
+    */
+  private class OsakaSetup
+      extends Setup(
+        OsakaTs - 1,
+        HefPostPrague(
+          baseFee = BaseFeeCalculator.InitialBaseFee,
+          withdrawalsRoot = BlockHeader.EmptyMpt,
+          blobGasUsed = BigInt(0),
+          excessBlobGas = BigInt(0),
+          parentBeaconBlockRoot = ByteString(new Array[Byte](32)),
+          requestsHash = ByteString(new Array[Byte](32))
+        ),
+        queuePredeploys
+      )
 
   /** Cancun genesis whose blob gas makes block 1's blob base fee exactly 2 wei: excess 15 blobs + used 6 blobs - target
     * 3 blobs = 18 blobs of excess, and fake_exponential(1, 18 * 131072, 3338477) = 2.
@@ -459,4 +546,43 @@ class EngineApiProposerBuildSpec extends AnyWordSpec with Matchers:
       getPayloadCall(3, payloadId).error.map(_.code) shouldBe Some(-38005) // a Paris payload asked for as V3
       servedV1(getPayloadCall(1, payloadId))._2 shouldBe 1
       stored(payloadId).body.transactionList shouldBe Seq(transfer)
+  }
+
+  /** The EIP-7685 execution requests are part of the served payload: the header's requestsHash commits to them, so a CL
+    * that fetches the payload again and proposes it with a different list proposes a block no client validates.
+    * getPayloadExecutionRequests REMOVED the entry on the first read, so every later engine_getPayloadV4/V5 for the id
+    * answered `executionRequests: []`.
+    *
+    * V4 and V5 cannot both be answered for one payload — V4 is refused for an Osaka payload and V5 for a Prague one
+    * (-38005) — so each is repeated on the fork it serves, and a refused call is checked not to take anything.
+    */
+  "engine_getPayload's executionRequests" should {
+
+    "be the same on every engine_getPayloadV4 for one payload" taggedAs (UnitTest, ConsensusTest) in new PragueSetup:
+      poolContents.set(Seq(withdrawalRequest(alice, 0) -> 1L))
+      val payloadId = requestPayload(genesisHeader)
+
+      val first = envelope(getPayloadCall(4, payloadId))
+      withClue("the payload must carry a request, or the comparison is vacuous: ") {
+        first._3.map(_.take(4)) shouldBe List("0x01")
+      }
+      envelope(getPayloadCall(4, payloadId)) shouldBe first
+      envelope(getPayloadCall(4, payloadId)) shouldBe first
+
+    "be the same on every engine_getPayloadV5 for one payload" taggedAs (UnitTest, ConsensusTest) in new OsakaSetup:
+      poolContents.set(Seq(withdrawalRequest(alice, 0) -> 1L))
+      val payloadId = requestPayload(genesisHeader)
+
+      val first = envelope(getPayloadCall(5, payloadId))
+      withClue("the payload must carry a request, or the comparison is vacuous: ") {
+        first._3.map(_.take(4)) shouldBe List("0x01")
+      }
+      envelope(getPayloadCall(5, payloadId)) shouldBe first
+
+    "not be taken by a call refused for its version" taggedAs (UnitTest, ConsensusTest) in new PragueSetup:
+      poolContents.set(Seq(withdrawalRequest(alice, 0) -> 1L))
+      val payloadId = requestPayload(genesisHeader)
+
+      getPayloadCall(5, payloadId).error.map(_.code) shouldBe Some(-38005) // a Prague payload asked for as V5
+      envelope(getPayloadCall(4, payloadId))._3.map(_.take(4)) shouldBe List("0x01")
   }

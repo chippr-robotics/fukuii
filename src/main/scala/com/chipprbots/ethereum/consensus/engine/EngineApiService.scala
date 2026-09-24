@@ -50,9 +50,8 @@ class EngineApiService(
    * Two triggers:
    *   PUT: evict the oldest entry (smallest insertedAt across all four maps) when size >= cap.
    *   GET (getPayload only): if age > TTL, remove from all four maps and return 404.
-   *        This also cleans up orphaned pendingPayloadRequests entries that V1/V2/V3
-   *        getPayload calls never .remove(), since only the V4 path calls
-   *        getPayloadExecutionRequests which does the remove.
+   * Nothing else removes a payload's entries: a payload and everything served with it (receipts,
+   * execution requests, blobs bundle) share one lifetime, however often engine_getPayload reads them.
    */
   private val PayloadCap = 64
   private val PayloadTtlNs = 12_800_000_000_000L // 12.8 min in nanoseconds
@@ -94,7 +93,7 @@ class EngineApiService(
 
   /** The answer of the first engine_getPayload that returned each payload; every later call gets the same one. */
   private val servedPayloads =
-    new java.util.concurrent.ConcurrentHashMap[ByteString, cats.effect.Deferred[IO, Either[String, Block]]]()
+    new java.util.concurrent.ConcurrentHashMap[ByteString, cats.effect.Deferred[IO, Either[String, ServedPayload]]]()
 
   /** go-ethereum stops improving a payload SECONDS_PER_SLOT after its build started (miner/payload_building.go). */
   private val PayloadBuildLifetimeNs = 12_000_000_000L
@@ -1440,10 +1439,8 @@ class EngineApiService(
     // hive engine-withdrawals "Withdrawals Fork on Block N" tests do). Removing on the first
     // read makes any follow-up call fail with "Payload not available".
     //
-    // TTL eviction: if the entry is older than PayloadTtlNs we treat it as gone. The
-    // removePayloadEntry call also cleans up pendingPayloadRequests entries that V1/V2/V3
-    // paths would otherwise orphan (they never call getPayloadExecutionRequests which does
-    // the only explicit .remove of that map).
+    // TTL eviction: if the entry is older than PayloadTtlNs we treat it as gone, together with
+    // everything served with it (removePayloadEntry).
     Option(pendingPayloads.get(payloadId)) match
       case Some(block) =>
         val age = Option(pendingPayloadTimestamps.get(payloadId)).map(System.nanoTime() - _).getOrElse(0L)
@@ -1475,10 +1472,15 @@ class EngineApiService(
     * forkchoiceUpdated's build; like every proposer build it persists its trie nodes
     * (BlockExecution.executeForProposer).
     *
+    * What is frozen is the whole answer ([[ServedPayload]]): the block with its receipts (`blockValue`), EIP-7685
+    * execution requests and blobs bundle. The requests matter most — the header's requestsHash commits to them, so a CL
+    * that fetched the payload again and got another list would propose a block no client validates; they used to be
+    * read once and removed, and every later engine_getPayloadV4/V5 answered `executionRequests: []`.
+    *
     * Concurrent calls for one id share the first call's answer.
     */
-  def resolvePayload(payloadId: ByteString): IO[Either[String, Block]] =
-    IO.deferred[Either[String, Block]].flatMap { mine =>
+  def resolvePayload(payloadId: ByteString): IO[Either[String, ServedPayload]] =
+    IO.deferred[Either[String, ServedPayload]].flatMap { mine =>
       IO(Option(servedPayloads.putIfAbsent(payloadId, mine))).flatMap {
         case Some(first) => first.get
         case None        =>
@@ -1493,14 +1495,25 @@ class EngineApiService(
                     hexOf(payloadId),
                     e.getMessage
                   )
-                ) *> getPayload(payloadId)
+                ) *> storedPayload(payloadId)
               }
               .flatTap(mine.complete)
           }
       }
     }
 
-  private def refreshPayload(payloadId: ByteString): IO[Either[String, Block]] =
+  /** The payload held for `payloadId` now, with everything served alongside it. */
+  private def storedPayload(payloadId: ByteString): IO[Either[String, ServedPayload]] =
+    getPayload(payloadId).map(_.map { block =>
+      ServedPayload(
+        block,
+        getPayloadReceipts(payloadId),
+        getPayloadExecutionRequests(payloadId),
+        getPayloadBlobsBundle(payloadId)
+      )
+    })
+
+  private def refreshPayload(payloadId: ByteString): IO[Either[String, ServedPayload]] =
     Option(payloadBuildProcesses.get(payloadId)) match
       case Some(process) if System.nanoTime() - process.startedAtNanos <= PayloadBuildLifetimeNs =>
         val rebuild: IO[Option[(EnginePayload, Set[ByteString])]] =
@@ -1540,18 +1553,27 @@ class EngineApiService(
                   payload.built.block.header.number,
                   payload.built.block.body.transactionList.size
                 )
-                Right(payload.built.block)
+                Right(
+                  ServedPayload(
+                    payload.built.block,
+                    payload.built.receipts,
+                    payload.built.executionRequests,
+                    payload.blobsBundle
+                  )
+                )
               }
-            case None => getPayload(payloadId)
+            case None => storedPayload(payloadId)
           }
-      case _ => getPayload(payloadId)
+      case _ => storedPayload(payloadId)
 
   /** Return the EIP-7685 executionRequests (typed byte strings, type-prefixed) associated with a payload we built. Only
-    * non-empty for Prague+ blocks. Used by engine_getPayloadV4 to return the requests alongside the executionPayload
-    * envelope.
+    * non-empty for Prague+ blocks. Served in the engine_getPayloadV4/V5 envelope alongside the executionPayload.
+    *
+    * `get` (not `remove`), like the receipts and the blobs bundle: they live as long as the payload and go with it
+    * (removePayloadEntry). Removing them on the first read made every later V4/V5 call for the id answer `[]`.
     */
   def getPayloadExecutionRequests(payloadId: ByteString): Seq[ByteString] =
-    Option(pendingPayloadRequests.remove(payloadId)).getOrElse(Nil)
+    Option(pendingPayloadRequests.get(payloadId)).getOrElse(Nil)
 
   /** Receipts produced while building this payload. Used by engine_getPayloadV2+ to compute the `blockValue` envelope
     * field. `get` (not `remove`) because the CL may call getPayloadV1 and then getPayloadV2 for the same id (hive

@@ -105,3 +105,15 @@ case class BuiltBlock(
     receipts: Seq[com.chipprbots.ethereum.domain.Receipt],
     executionRequests: Seq[ByteString]
 )
+
+/** One engine_getPayload answer, whole: the block and everything its envelope carries that the block cannot give back —
+  * the receipts (`blockValue`), the EIP-7685 execution requests (the header holds only their hash) and the EIP-4844
+  * blobs bundle. `EngineApiService.resolvePayload` settles it once per payload id and serves it unchanged to every
+  * later call, so no part of an answer can differ between two calls for the same payload.
+  */
+final case class ServedPayload(
+    block: com.chipprbots.ethereum.domain.Block,
+    receipts: Seq[com.chipprbots.ethereum.domain.Receipt],
+    executionRequests: Seq[ByteString],
+    blobsBundle: BlobsBundleData
+)

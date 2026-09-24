@@ -376,20 +376,22 @@ class EngineApiController(
             // go-ethereum rejects it on the payload ID's version, before Payload.Resolve.
             IO.pure(JsonRpcResponse("2.0", None, Some(JsonRpcError(UnsupportedFork, msg, None)), reqId(request)))
           case None =>
-            // The payload brought up to date with the pool, once (EngineApiService.resolvePayload). A rebuild keeps
-            // the parent and the attributes, so the fork checked above is the fork of what is served.
+            // The payload brought up to date with the pool, once (EngineApiService.resolvePayload), and answered
+            // WHOLE from what that settled: block, receipts, execution requests and blobs bundle, the same on every
+            // call for the id. A rebuild keeps the parent and the attributes, so the fork checked above is the fork of
+            // what is served.
             engineApiService.resolvePayload(payloadId).map {
               case Left(err) =>
                 JsonRpcResponse("2.0", None, Some(JsonRpcError(-38001, err, None)), reqId(request))
-              case Right(block) =>
+              case Right(served) =>
+                val block = served.block
                 val payload = blockToExecutionPayload(block)
                 // V1 returns bare ExecutionPayload.
                 // V2+ wraps it in ExecutionPayloadEnvelope per Engine API spec.
-                // blockValue depends on receipts (effectiveGasPrice per tx). Fetch once so V2/V3/V4 share.
-                lazy val receipts = engineApiService.getPayloadReceipts(payloadId)
-                lazy val blockValueHex = computeBlockValue(block, receipts)
+                // blockValue depends on receipts (effectiveGasPrice per tx).
+                lazy val blockValueHex = computeBlockValue(block, served.receipts)
                 lazy val blobsBundleJson: JObject =
-                  val bundle = engineApiService.getPayloadBlobsBundle(payloadId)
+                  val bundle = served.blobsBundle
                   JObject(
                     "commitments" -> JArray(bundle.commitments.toList.map(c => JString(byteStringToHex(c)))),
                     "proofs" -> JArray(bundle.proofs.toList.map(p => JString(byteStringToHex(p)))),
@@ -410,7 +412,7 @@ class EngineApiController(
                       "shouldOverrideBuilder" -> JBool(false)
                     )
                   case 4 => // Prague: BlobsBundleV1 + executionRequests (EIP-7685)
-                    val executionRequests = engineApiService.getPayloadExecutionRequests(payloadId)
+                    val executionRequests = served.executionRequests
                     JObject(
                       "executionPayload" -> payload,
                       "blockValue" -> JString(blockValueHex),
@@ -421,9 +423,9 @@ class EngineApiController(
                       )
                     )
                   case _ => // V5+: BlobsBundleV2 (EIP-7594 cell proofs) + executionRequests
-                    val executionRequests = engineApiService.getPayloadExecutionRequests(payloadId)
+                    val executionRequests = served.executionRequests
                     val blobsBundleV2Json: JObject =
-                      val bundle = engineApiService.getPayloadBlobsBundle(payloadId)
+                      val bundle = served.blobsBundle
                       JObject(
                         "commitments" -> JArray(bundle.commitments.toList.map(c => JString(byteStringToHex(c)))),
                         "proofs" -> JArray(
