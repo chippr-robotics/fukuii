@@ -181,14 +181,29 @@ def m_incomplete_waiver(root: Path) -> None:
 
 
 def m_undeclared_exclusion(root: Path) -> None:
-    """C7 — a workflow excludes a test no waiver declares."""
-    p = root / ".github/workflows/hive-sync.yml"
-    txt = p.read_text(encoding="utf-8")
-    m = re.search(r"gate_exclude: '([^']+)'", txt)
-    assert m, "hive-sync.yml has no gate_exclude to extend"
-    p.write_text(txt.replace(m.group(0),
-                             f"gate_exclude: '{m.group(1)}|sync fukuii from besu'", 1),
-                 encoding="utf-8")
+    """C7 — a workflow excludes a test no waiver declares.
+
+    Extends whichever workflow already excludes something, or adds an exclusion under a
+    gate_pattern when none does. This case used to name hive-sync.yml, whose exclusion went
+    away when both of its waivers were retired (#1407).
+    """
+    undeclared = "a test no waiver declares"
+    workflows = sorted((root / ".github/workflows").glob("*.yml"))
+    for p in workflows:
+        txt = p.read_text(encoding="utf-8")
+        m = re.search(r"gate_exclude: '([^']+)'", txt)
+        if m:
+            p.write_text(txt.replace(m.group(0), f"gate_exclude: '{m.group(1)}|{undeclared}'", 1),
+                         encoding="utf-8")
+            return
+    for p in workflows:
+        txt = p.read_text(encoding="utf-8")
+        m = re.search(r"^(\s*)gate_pattern: '[^']+'\n", txt, re.M)
+        if m and "_hive-sim.yml" in txt:
+            p.write_text(txt.replace(m.group(0), f"{m.group(0)}{m.group(1)}gate_exclude: '{undeclared}'\n", 1),
+                         encoding="utf-8")
+            return
+    raise AssertionError("no hive workflow has a gate_pattern to add an exclusion to — C7 case has no subject")
 
 
 def m_overdue_promotion(root: Path) -> None:

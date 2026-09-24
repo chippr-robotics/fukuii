@@ -158,11 +158,15 @@ gates:
       go-ethereum/nethermind) and as sync SERVER (go-ethereum/nethermind sync
       from fukuii). Gated on the `fukuii` subset only, so upstream
       geth<->nethermind failures do not pollute this signal.
-    waivers: [sync-server-geth-from-fukuii, sync-client-fukuii-from-nethermind]
     status_note: >-
-      The only suite with a real subset gate today. #1402's first required-slice
-      item. Both waivers below must be retired before promotion — the
-      sync-SERVER direction is precisely what #1402 says shipped red in v0.8.0.
+      #1402's first required-slice item. Both waivers are retired (#1407).
+      `sync go-ethereum from fukuii` passes since fukuii's ENR `eth` entry
+      became [[fork-hash, fork-next]] and the hive adapter advertises the
+      container address. `sync fukuii from nethermind` was an intermittent
+      fukuii-sink failure; it passes after the fix for the dropped-reply race
+      behind the same intermittent sink stall (3af08c103). Evidence: CI run
+      35997930212 on a78d2557d, 18/18; locally with all three clients, every
+      fukuii test green.
 
   - id: hive-smoke-genesis
     workflow: hive-smoke-genesis.yml
@@ -333,7 +337,7 @@ first_required_slice:
   members:
     - gate: hive-sync
       item: geth<->fukuii sync, BOTH directions
-      blocked_by: [sync-server-geth-from-fukuii, sync-client-fukuii-from-nethermind]
+      blocked_by: []
     - gate: hive-engine
       item: invalid-payload rejection
       blocked_by: []
@@ -374,55 +378,6 @@ first_required_slice:
 # Missing field or past expiry => Gate Integrity fails. No bypass exists.
 # ---------------------------------------------------------------------------
 waivers:
-
-  - id: sync-server-geth-from-fukuii
-    gate: hive-sync
-    pattern: sync go-ethereum from fukuii
-    owner: realcodywburns
-    issue: 1402
-    reason: >-
-      go-ethereum syncing FROM fukuii does not complete. fukuii is the SERVER
-      here; this is the sync-server failure #1402 names as having shipped green
-      in v0.8.0.
-
-      RESTORED 2026-09-21 (#1407), reverting an incorrect rename I made the day
-      before. I had claimed `sync go-ethereum from fukuii` was not a name hive
-      generates, reasoning that the CLIENT placeholder in
-      simulators/ethereum/sync/sync.go is always the client under test. That was
-      wrong: hive substitutes CLIENT for EVERY client in the run, and pairs it
-      against every other as `source`, so with fukuii/go-ethereum/nethermind all
-      present the suite emits both directions. The measured run on 77acf82 lists
-      `sync go-ethereum from fukuii` explicitly, alongside `sync fukuii from
-      go-ethereum`. The original string was correct and I broke it.
-
-      Measured on 77acf82, after the Bind-sender fix (ServerActor sent Bind with
-      no sender, so Bound went to dead letters and serverStatus never became
-      Listening):
-
-          PASS  fukuii as sync server
-          PASS  sync fukuii from fukuii
-          PASS  sync nethermind from fukuii
-          PASS  sync fukuii from go-ethereum
-          PASS  sync fukuii from nethermind
-          FAIL  sync go-ethereum from fukuii
-
-      So `fukuii as sync server` now passes and no longer needs a waiver — real
-      progress on #1402 — and nethermind can sync from fukuii. Only go-ethereum
-      as the syncing peer still fails, which narrows this considerably: it is
-      not "fukuii cannot serve", it is something specific to the geth client
-      pairing.
-    expires: 2026-12-31
-
-  - id: sync-client-fukuii-from-nethermind
-    gate: hive-sync
-    pattern: sync fukuii from nethermind
-    owner: realcodywburns
-    issue: 1402
-    reason: >-
-      fukuii syncing FROM nethermind is intermittently red; root cause not yet
-      isolated (suspected snap/2 range-response framing). Geth-as-source is
-      gated and green, so the client direction retains real coverage.
-    expires: 2026-12-31
 
   - id: graphql-gasprice-stale-fixture
     gate: hive-graphql
