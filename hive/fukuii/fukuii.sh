@@ -234,10 +234,10 @@ FLAGS="$FLAGS -Dfukuii.network.discovery.discovery-enabled=true"
 # --nat=extip. Left to detection, the ENR carries this host's public IP, or loopback where
 # detection fails; geth adopts the ENR's IP, its pings there time out, and it drops the node
 # as dead before ever dialing it.
-HIVE_SELF_IP=$(hostname -i 2>/dev/null | awk '{print $1}')
-if [ -n "$HIVE_SELF_IP" ]; then
-    FLAGS="$FLAGS -Dfukuii.network.server-address.advertised-address=$HIVE_SELF_IP"
-    FLAGS="$FLAGS -Dfukuii.network.discovery.host=$HIVE_SELF_IP"
+CONTAINER_IP=$(hostname -i 2>/dev/null | awk '{print $1}')
+if [ -n "$CONTAINER_IP" ]; then
+    FLAGS="$FLAGS -Dfukuii.network.server-address.advertised-address=$CONTAINER_IP"
+    FLAGS="$FLAGS -Dfukuii.network.discovery.host=$CONTAINER_IP"
 fi
 
 # Chain import — prefer /chain.rlp, otherwise concatenate /blocks/*.rlp (consensus sim).
