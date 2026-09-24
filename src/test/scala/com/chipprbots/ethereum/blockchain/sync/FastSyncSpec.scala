@@ -3,6 +3,7 @@ package com.chipprbots.ethereum.blockchain.sync
 import org.apache.pekko.actor.ActorRef
 import org.apache.pekko.actor.ActorSystem
 import org.apache.pekko.actor.testkit.typed.scaladsl.ScalaTestWithActorTestKit
+import org.apache.pekko.actor.typed.ActorRef as TypedActorRef
 import org.apache.pekko.actor.typed.scaladsl.adapter.*
 import org.apache.pekko.testkit.TestProbe
 import org.apache.pekko.util.Timeout
@@ -28,6 +29,7 @@ import com.chipprbots.ethereum.domain.Transaction
 import com.chipprbots.ethereum.domain.TrieRoot
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor
 import com.chipprbots.ethereum.network.Peer
+import com.chipprbots.ethereum.network.PeerEventBusActor
 import com.chipprbots.ethereum.network.p2p.messages.ETHPackets
 import com.chipprbots.ethereum.rlp.RLPList
 import com.chipprbots.ethereum.rlp.RLPValue
@@ -72,6 +74,10 @@ class FastSyncSpec extends ScalaTestWithActorTestKit() with FreeSpecBase with Sp
         .withBestBlockData(lastBlock.number.value, lastBlock.hash.value)
         .copy(remoteStatus = peerInfo.remoteStatus.copy(bestHash = lastBlock.hash.value))
     }
+    // A real bus, not a probe: FastSync's typed requesters subscribe to it for replies, and the fake network peer
+    // manager publishes every response to it.
+    lazy val peerEventBus: TypedActorRef[PeerEventBusActor.Command] =
+      self.testKit.spawn(PeerEventBusActor.behavior())
     lazy val networkPeerManager =
       new NetworkPeerManagerFake(
         syncConfig,
@@ -79,9 +85,9 @@ class FastSyncSpec extends ScalaTestWithActorTestKit() with FreeSpecBase with Sp
         // ETH69 G5 — include genesis so the pivot's parent-chain backlink probe (reverse from the pivot) can
         // walk back to genesis, which is the only block in the local canonical chain at sync start. Without it
         // the backlink finds no canonical ancestor and the pivot is (correctly) rejected.
-        BlockHelpers.genesis :: testBlocks
+        BlockHelpers.genesis :: testBlocks,
+        peerEventBus
       )
-    lazy val peerEventBus: TestProbe = TestProbe("peer_event-bus")
     lazy val syncControllerProbe: TestProbe = TestProbe("sync-controller")
     lazy val fastSync: ActorRef = self.testKit
       .spawn(
@@ -96,7 +102,7 @@ class FastSyncSpec extends ScalaTestWithActorTestKit() with FreeSpecBase with Sp
           nodeStorage = storagesInstance.storages.nodeStorage,
           stateStorage = storagesInstance.storages.stateStorage,
           validators = validators,
-          peerEventBus = peerEventBus.ref,
+          peerEventBus = peerEventBus,
           networkPeerManager = networkPeerManager.ref,
           blacklist = blacklist,
           syncConfig = syncConfig,
@@ -152,17 +158,13 @@ class FastSyncSpec extends ScalaTestWithActorTestKit() with FreeSpecBase with Sp
         (for
           _ <- saveGenesis
           _ <- saveTestBlocksWithWeights
-          // Subscribe BEFORE startSync so no topic events can be missed under load.
-          // Race: IO.start schedules fibers but doesn't guarantee they've subscribed before
-          // Pekko dispatcher threads start processing startSync messages. IO.cede yields the
-          // main fiber so the IO scheduler can run both subscription fibers before we proceed.
-          pivotFiber <- networkPeerManager.pivotBlockSelected.head.compile.lastOrError.start
-          blocksFiber <- networkPeerManager.fetchedBlocks.head.compile.lastOrError.start
-          _ <- cats.effect.IO.cede // yield: allow subscription fibers to register before Pekko dispatch
+          // Subscribe BEFORE startSync: each returns once its subscription is registered, so no response is missed.
+          pivotSelected <- networkPeerManager.subscribePivotBlockSelected
+          blocksFetched <- networkPeerManager.subscribeFetchedBlocks
           _ <- startSync
           _ <- networkPeerManager.onPeersConnected
-          _ <- pivotFiber.joinWith(cats.effect.IO.raiseError(new RuntimeException("pivot fiber canceled")))
-          _ <- blocksFiber.joinWith(cats.effect.IO.raiseError(new RuntimeException("blocks fiber canceled")))
+          _ <- pivotSelected
+          _ <- blocksFetched
         yield
           val peer = testPeers.keys.head
 
@@ -234,11 +236,10 @@ class FastSyncSpec extends ScalaTestWithActorTestKit() with FreeSpecBase with Sp
         assert(correctPct < 95) // fix: guard stays silent
       }
 
-      // Actor test: SyncingHandler.receive handles NetworkIncompatible by calling cleanup() and
-      // context.become(idle).  In tests there is no SyncController parent to stop FastSync
-      // afterwards, so orphaned watched children's Terminated messages arrive at idle (which
-      // has no Terminated handler) → DeathPactException → FastSync terminates.
-      // Termination of fastSync is our regression signal: it proves the handler ran.
+      // Actor test: the syncing behavior handles the scheduler's NetworkIncompatible by calling cleanup(), asking
+      // the SyncController to fall back to SNAP, and stopping. Termination of fastSync is our regression signal: it
+      // proves the handler ran. This covers FastSync's handler only: SyncStateSchedulerActor has sent no
+      // NetworkIncompatible since its stall watchdog was dropped in e16855453.
       "actor exits syncing loop on NetworkIncompatible — ETH68-only network escape valve" taggedAs (
         UnitTest,
         SyncTest
@@ -247,21 +248,26 @@ class FastSyncSpec extends ScalaTestWithActorTestKit() with FreeSpecBase with Sp
         (for
           _ <- saveGenesis
           _ <- saveTestBlocksWithWeights
-          // Subscribe BEFORE startSync — see companion test for race condition explanation.
-          pivotFiber <- networkPeerManager.pivotBlockSelected.head.compile.lastOrError.start
-          blocksFiber <- networkPeerManager.fetchedBlocks.head.compile.lastOrError.start
-          _ <- cats.effect.IO.cede // yield: allow subscription fibers to register before Pekko dispatch
+          // Subscribe BEFORE startSync — see the typed-receipts test.
+          pivotSelected <- networkPeerManager.subscribePivotBlockSelected
+          blocksFetched <- networkPeerManager.subscribeFetchedBlocks
           _ <- startSync
           _ <- networkPeerManager.onPeersConnected
-          _ <- pivotFiber.joinWith(cats.effect.IO.raiseError(new RuntimeException("pivot fiber canceled")))
-          _ <- blocksFiber.joinWith(cats.effect.IO.raiseError(new RuntimeException("blocks fiber canceled")))
+          _ <- pivotSelected
+          _ <- blocksFetched
           _ <- cats.effect.IO {
             val watcher = TestProbe("watchdog-test-probe")
             watcher.watch(fastSync)
-            // Inject the message SyncStateSchedulerActor emits when no ETH63-67 peers serve GetNodeData.
-            fastSync ! SyncStateSchedulerActor.NetworkIncompatible
-            // FastSync calls cleanup() + context.become(idle) → orphaned children terminate →
-            // idle receives Terminated → DeathPactException → FastSync terminates.
+            // The scheduler replies to FastSync's message adapter, which wraps the reply into a FastSync.Command; a raw
+            // NetworkIncompatible sent to fastSync itself is not a Command and is dropped. Pekko gives an actor a
+            // single adapter ref and picks the adapter by message class, so the replyTo in FastSync's own
+            // GetHandshakedPeersCmd delivers NetworkIncompatible the way SyncStateSchedulerActor's reply arrives.
+            @annotation.nowarn("msg=Matchable") // a classic TestProbe hands fishForSpecificMessage an Any
+            val fastSyncAdapter = networkPeerManager.probe.fishForSpecificMessage(timeout.duration) {
+              case NetworkPeerManagerActor.GetHandshakedPeersCmd(replyTo) if replyTo.path.parent == fastSync.path =>
+                replyTo.toClassic
+            }
+            fastSyncAdapter ! SyncStateSchedulerActor.NetworkIncompatible
             watcher.expectTerminated(fastSync, timeout.duration)
           }
         yield succeed).timeout(timeout.duration)
@@ -290,11 +296,10 @@ class FastSyncSpec extends ScalaTestWithActorTestKit() with FreeSpecBase with Sp
         (for
           _ <- saveGenesis
           _ <- saveTestBlocksWithWeights
-          pivotFiber <- networkPeerManager.pivotBlockSelected.head.compile.lastOrError.start
-          _ <- cats.effect.IO.cede
+          pivotSelected <- networkPeerManager.subscribePivotBlockSelected
           _ <- startSync
           _ <- networkPeerManager.onPeersConnected
-          _ <- pivotFiber.joinWith(cats.effect.IO.raiseError(new RuntimeException("pivot fiber canceled")))
+          _ <- pivotSelected
           // Poll until SSA has replied with initial stats — proves the Typed reply chain works
           status <- Stream
             .awakeEvery[IO](10.millis)
@@ -321,14 +326,13 @@ class FastSyncSpec extends ScalaTestWithActorTestKit() with FreeSpecBase with Sp
         (for
           _ <- saveGenesis
           _ <- saveTestBlocksWithWeights
-          // Subscribe BEFORE startSync so no topic events can be missed under load.
-          pivotFiber <- networkPeerManager.pivotBlockSelected.head.compile.lastOrError.start
-          blocksFiber <- networkPeerManager.fetchedBlocks.head.compile.lastOrError.start
-          _ <- cats.effect.IO.cede // yield: allow subscription fibers to register before Pekko dispatch
+          // Subscribe BEFORE startSync — see the typed-receipts test.
+          pivotSelected <- networkPeerManager.subscribePivotBlockSelected
+          blocksFetched <- networkPeerManager.subscribeFetchedBlocks
           _ <- startSync
           _ <- networkPeerManager.onPeersConnected
-          _ <- pivotFiber.joinWith(cats.effect.IO.raiseError(new RuntimeException("pivot fiber canceled")))
-          blocksBatch <- blocksFiber.joinWith(cats.effect.IO.raiseError(new RuntimeException("blocks fiber canceled")))
+          _ <- pivotSelected
+          blocksBatch <- blocksFetched
           status <- getSyncStatus
           lastBlockFromBatch = blocksBatch.lastOption.map(_.number.value).getOrElse(BigInt(0))
         yield status match
@@ -357,12 +361,11 @@ class FastSyncSpec extends ScalaTestWithActorTestKit() with FreeSpecBase with Sp
         (for
           _ <- saveGenesis
           _ <- saveTestBlocksWithWeights
-          // Subscribe BEFORE startSync so no topic events can be missed under load.
-          pivotFiber <- networkPeerManager.pivotBlockSelected.head.compile.lastOrError.start
-          _ <- cats.effect.IO.cede // yield: allow subscription fibers to register before Pekko dispatch
+          // Subscribe BEFORE startSync — see the typed-receipts test.
+          pivotSelected <- networkPeerManager.subscribePivotBlockSelected
           _ <- startSync
           _ <- networkPeerManager.onPeersConnected
-          _ <- pivotFiber.joinWith(cats.effect.IO.raiseError(new RuntimeException("pivot fiber canceled")))
+          _ <- pivotSelected
           _ <- Stream
             .awakeEvery[IO](10.millis)
             .evalMap(_ => getSyncStatus)
