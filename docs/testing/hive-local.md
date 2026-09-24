@@ -98,6 +98,12 @@ journalctl --user -fu hive-local     # follow it
 On a machine that size, use `--parallelism 2`. The heaviest vectors, such as
 `CALLBlake2f_MaxRounds`, take about 130 s each at that setting.
 
+Do not run sbt, or any other large JVM, while a timing-sensitive suite such as `engine` or
+`sync` is running. On the ops node, two engine tests failed after the fukuii client froze
+for about 32 s: timers fired late and an Engine API call hit its 20 s timeout. Both times,
+sbt JVMs had pushed the host into swap. Neither test fails on CI runners, where the engine
+suite passes 403/403, so a timeout seen in a shared local run is not evidence about fukuii.
+
 Logs are in `$HIVE_DIR/workspace/logs/`. Each client log is under `fukuii/`.
 
 Expect fixed overhead per run. On the ops node (4 cores), a single
