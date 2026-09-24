@@ -416,9 +416,14 @@ class ChainDownloader private (
       receiptsQueue = receiptsQueue.drop(batch.size)
 
       val peer = peerWithInfo.peer
-      val isEth70 = peerWithInfo.peerInfo.remoteStatus.capability == Capability.ETH70
+      // ETH71/72 keep ETH70's GetReceipts70/Receipts70 wire shape unchanged (go-ethereum's eth71/eth72
+      // handler maps both still route GetReceiptsMsg/ReceiptsMsg to handleGetReceipts70/handleReceipts70)
+      // — same partial-delivery resume logic applies to all three.
+      val isEth70OrNewer = peerWithInfo.peerInfo.remoteStatus.capability match
+        case Capability.ETH70 | Capability.ETH71 | Capability.ETH72 => true
+        case _                                                      => false
 
-      if isEth70 then
+      if isEth70OrNewer then
         // ETH70: resume partial delivery from the buffered index for the first block in batch
         val firstBlockResumeIdx = partialReceiptState.getOrElse(batch.head, 0L)
         val requestMsg = ETHPackets.GetReceipts70(ETHPackets.nextRequestId, firstBlockResumeIdx, batch)

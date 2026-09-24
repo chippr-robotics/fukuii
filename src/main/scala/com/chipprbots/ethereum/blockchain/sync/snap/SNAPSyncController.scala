@@ -112,7 +112,7 @@ private class SNAPSyncControllerImpl(
         currentPeers
           .filter { p =>
             p.peerInfo.forkAccepted &&
-            p.peerInfo.remoteStatus.capability != Capability.ETH69 &&
+            !Capability.isEth69Plus(p.peerInfo.remoteStatus.capability) &&
             p.peerInfo.maxBlockNumber > BigInt(0) // Wait for eager probe; peerBlock=0 → ETH68_BOOTSTRAP risk
           }
           .foreach { p =>
@@ -4057,7 +4057,7 @@ private class SNAPSyncControllerImpl(
     val currentPeerCandidates: Seq[(BigInt, BigInt)] = handshakedPeers.values
       .filter { p =>
         p.peerInfo.forkAccepted &&
-        p.peerInfo.remoteStatus.capability != Capability.ETH69 &&
+        !Capability.isEth69Plus(p.peerInfo.remoteStatus.capability) &&
         p.peerInfo.maxBlockNumber > pivotBlockNumber
       }
       .map(p => (p.peerInfo.remoteStatus.chainWeight.totalDifficulty.value, p.peerInfo.maxBlockNumber))

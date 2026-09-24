@@ -54,7 +54,7 @@ class BlockBroadcast(
     if shouldSendBRU then
       val bru = ETH69.BlockRangeUpdate(BigInt(0), newHeader.number.value, newHeader.hash.value)
       val eth69Peers = peersWithoutBlock.filter { case (_, PeerWithInfo(_, info)) =>
-        info.remoteStatus.capability == Capability.ETH69
+        Capability.isEth69Plus(info.remoteStatus.capability)
       }
       if eth69Peers.nonEmpty then
         log.info(
@@ -102,7 +102,7 @@ class BlockBroadcast(
         handshakedPeers.size
       )
       handshakedPeers.foreach { case (_, PeerWithInfo(peer, peerInfo)) =>
-        if peerInfo.remoteStatus.capability == Capability.ETH69 then
+        if Capability.isEth69Plus(peerInfo.remoteStatus.capability) then
           networkPeerManager ! NetworkPeerManagerActor.SendMessageCmd(bru, peer.id)
         else networkPeerManager ! NetworkPeerManagerActor.SendMessageCmd(newBlockHashMsg, peer.id)
       }
@@ -112,7 +112,7 @@ class BlockBroadcast(
     // ETH/69 peers: chainWeight may be actual TD (local lookup) or a block-number proxy (peer
     // ahead of us). The proxy case makes the TD comparison always true, spamming every ETH69 peer.
     // Use block-number comparison only for ETH69 — maxBlockNumber is now correct (from latestBlock).
-    val heavierChain = peerInfo.remoteStatus.capability != Capability.ETH69 &&
+    val heavierChain = !Capability.isEth69Plus(peerInfo.remoteStatus.capability) &&
       newBlock.chainWeight > peerInfo.chainWeight
     blockAhead || heavierChain
 
@@ -128,11 +128,11 @@ class BlockBroadcast(
           Some(blockToBroadcast.as63) // PoW: send NewBlock with TD — ECBP-1100 chain weight signal
         case Capability.ETH69 =>
           None // PoS: no NewBlock — go-ethereum aligned
-        case Capability.ETH70 if isPoWChain =>
+        case Capability.ETH70 | Capability.ETH71 | Capability.ETH72 if isPoWChain =>
           Some(blockToBroadcast.as63) // PoW: send NewBlock with TD — same as ETH69
-        case Capability.ETH70 =>
-          None // PoS: no NewBlock — same as ETH69
-        case Capability.SNAP1 =>
+        case Capability.ETH70 | Capability.ETH71 | Capability.ETH72 =>
+          None // PoS: no NewBlock — same as ETH69. NewBlock is unaffected by EIP-7975/8159/8070.
+        case Capability.SNAP1 | Capability.SNAP2 =>
           Some(blockToBroadcast.as63)
 
       messageOpt.foreach(msg => networkPeerManager ! NetworkPeerManagerActor.SendMessageCmd(msg, peer.id))
