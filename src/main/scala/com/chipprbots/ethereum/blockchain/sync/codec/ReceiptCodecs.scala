@@ -104,9 +104,9 @@ object ReceiptCodecs:
           BloomFilter(ByteString(logsBloomFilterBytes)),
           logs.items.map(_.toTxLogEntry)
         )
-      // 3-field: ETH69/70 bloom-absent (EIP-7642)  [stateHash, gasUsed, logs]
-      // Bloom stored as 256 zero bytes — correct bloom recomputation from logs is a future
-      // concern (not required for block storage correctness on ETC where ETH70 defaults off).
+      // 3-field [stateHash, gasUsed, logs]: the eth/69 shape fukuii itself used to send, before it followed
+      // EIP-7642's [txType, stateHash, gasUsed, logs] — eth/69+ receipts now decode through toEth69Receipt.
+      // Bloom stored as 256 zero bytes.
       case RLPList(
             postTransactionStateHash,
             RLPValue(cumulativeGasUsedBytes),

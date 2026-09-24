@@ -1299,7 +1299,7 @@ object ETHPackets:
   //
   // Wire format difference:
   //   ETH68: [requestId, [[stateHash, gasUsed, logsBloom, [logs]], ...]]
-  //   ETH69: [requestId, [[stateHash, gasUsed, [logs]], ...]]  ← no bloom (EIP-7642)
+  //   ETH69: [requestId, [[txType, stateHash, gasUsed, [logs]], ...]]  ← tx type first, no bloom (EIP-7642)
 
   /** ETH68 receipts: bloom-inclusive. Source: ETH66.Receipts + ETH63.ReceiptEnc. */
   object Receipts68:
