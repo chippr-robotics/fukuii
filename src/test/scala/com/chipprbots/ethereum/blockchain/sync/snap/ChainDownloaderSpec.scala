@@ -10,6 +10,7 @@ import org.apache.pekko.util.ByteString
 
 import scala.concurrent.duration.*
 
+import org.bouncycastle.util.encoders.Hex
 import org.scalatest.concurrent.Eventually
 import org.scalatest.flatspec.AnyFlatSpecLike
 import org.scalatest.matchers.should.Matchers
@@ -17,8 +18,10 @@ import org.scalatest.matchers.should.Matchers
 import com.chipprbots.ethereum.BlockHelpers
 import com.chipprbots.ethereum.blockchain.sync.EphemBlockchainTestSetup
 import com.chipprbots.ethereum.blockchain.sync.TestSyncConfig
+import com.chipprbots.ethereum.consensus.validators.std.MptListValidator
 import com.chipprbots.ethereum.db.dataSource.EphemDataSource
 import com.chipprbots.ethereum.db.storage.AppStateStorage
+import com.chipprbots.ethereum.db.storage.StateStorage
 import com.chipprbots.ethereum.domain.BlockBody
 import com.chipprbots.ethereum.domain.BlockHeader
 import com.chipprbots.ethereum.domain.BlockchainReader
@@ -28,7 +31,9 @@ import com.chipprbots.ethereum.domain.ChainWeight
 import com.chipprbots.ethereum.domain.LegacyReceipt
 import com.chipprbots.ethereum.domain.Receipt
 import com.chipprbots.ethereum.domain.SuccessOutcome
+import com.chipprbots.ethereum.domain.TrieRoot
 import com.chipprbots.ethereum.ledger
+import com.chipprbots.ethereum.mpt.MerklePatriciaTrie
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor.PeerInfo
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor.RemoteStatus
@@ -43,6 +48,7 @@ import com.chipprbots.ethereum.network.p2p.messages.Capability
 import com.chipprbots.ethereum.network.p2p.messages.Codes
 import com.chipprbots.ethereum.network.p2p.messages.ETHPackets
 import com.chipprbots.ethereum.rlp.RLPList
+import com.chipprbots.ethereum.rlp.rawDecode
 import com.chipprbots.ethereum.testing.Tags.*
 
 /** Unit tests for the Pekko Typed `ChainDownloader` (Group S6 migration).
@@ -156,9 +162,108 @@ class ChainDownloaderSpec
   // subscriptions, a hand-built (but wire-accurate, via ETHPackets.ReceiptBloomFreeEnc) Receipts69 delivered through
   // the captured subscriber adapter, same as a real PeerEventBusActor would deliver it.
   it should "store receipts served by an eth/69 peer (Receipts69), not just eth/68's Receipts68" taggedAs UnitTest in {
+    val req = receiptRequest(Capability.ETH69, receiptsRootOf(Seq(fixtureReceipt)), blacklistDuration = 5.seconds)
+
+    // Deliver as the real PeerEventBusActor would: publish MessageFromPeer to the subscriber it captured.
+    req.prhAdapter ! PeerEvent.MessageFromPeer(receipts69(req.requestId, fixtureReceipt), req.peerId)
+
+    // The response travels test-thread -> PeerRequestHandler (child actor) -> downloader's prhResultAdapter
+    // before handleReceipts69's store+commit runs — a GetProgress sent right after, straight to `downloader`
+    // with no intermediate hop, could outrace it. Poll the observable storage effect instead of relying on a
+    // single round-trip to win that race.
+    eventually {
+      req.storage.blockchainReader.getReceiptsByHash(req.header.hash) shouldBe Some(Seq(fixtureReceipt))
+    }
+
+    // Once the store is observed, a fresh GetProgress is guaranteed to be processed after it (same target actor,
+    // sent from this point on) — confirms the stats counter moved too, not just the storage side effect.
+    val progress = expectProgress(req.downloader)
+    progress.receiptsDownloaded shouldBe BigInt(1)
+
+    testKit.stop(req.downloader)
+  }
+
+  // A reply is matched to the request by position, and a fukuii server used to skip blocks it lacked, so a shifted
+  // reply put later blocks' receipts under earlier hashes. Receipts must hash to their header's receiptsRoot before
+  // they are stored; a reply that does not is dropped, the block re-queued, and the peer blacklisted.
+  it should "not store receipts that do not hash to the header's receiptsRoot, and request them again" taggedAs UnitTest in {
+    val req = receiptRequest(Capability.ETH69, receiptsRootOf(Seq(fixtureReceipt)), blacklistDuration = 50.millis)
+    val wrongReceipt: Receipt =
+      LegacyReceipt(SuccessOutcome, BigInt(42000), BloomFilter(ledger.BloomFilter.create(Nil)), Nil)
+
+    req.prhAdapter ! PeerEvent.MessageFromPeer(receipts69(req.requestId, wrongReceipt), req.peerId)
+
+    // Once the peer's blacklist lapses, the block is requested again rather than marked done.
+    val again = req.networkPeerManager.expectMsgType[NetworkPeerManagerActor.SendMessageCmd](5.seconds)
+    again.message.underlyingMsg match
+      case ETHPackets.GetReceipts(_, hashes) => hashes shouldBe Seq(req.header.hash.value)
+      case other                             => fail(s"expected the block's receipts to be requested again, got $other")
+    req.storage.blockchainReader.getReceiptsByHash(req.header.hash) shouldBe None
+    expectProgress(req.downloader).receiptsDownloaded shouldBe BigInt(0)
+
+    testKit.stop(req.downloader)
+  }
+
+  // The ETC path: core-geth serves eth/68, decoded inline in handleReceipts. go-ethereum's own eth/68 encoding of six
+  // receipts (legacy, a failed type-2 with a log, type-1, a pre-Byzantium state root, types 3 and 4) must pass the
+  // receiptsRoot check against go-ethereum's root for them (ReceiptWireFormatSpec) and be stored.
+  it should "store go-ethereum's eth/68 receipts when they hash to the header's receiptsRoot" taggedAs UnitTest in {
+    val gethRoot =
+      TrieRoot(ByteString(Hex.decode("41dece3b55a3dc635cae82a36884aa29aa401ced1423803347ea54b7a2700940")))
+    val req = receiptRequest(Capability.ETH68, gethRoot, blacklistDuration = 5.seconds)
+    val gethEth68BlockList: Array[Byte] =
+      val is = getClass.getResourceAsStream("/eth68-receipt-list-go-ethereum.rlp")
+      try is.readAllBytes()
+      finally is.close()
+
+    req.prhAdapter ! PeerEvent.MessageFromPeer(
+      ETHPackets.Receipts68(req.requestId, RLPList(rawDecode(gethEth68BlockList))),
+      req.peerId
+    )
+
+    eventually {
+      req.storage.blockchainReader.getReceiptsByHash(req.header.hash).map(_.size) shouldBe Some(6)
+    }
+    testKit.stop(req.downloader)
+  }
+
+  private val fixtureReceipt: Receipt =
+    LegacyReceipt(SuccessOutcome, BigInt(21000), BloomFilter(ledger.BloomFilter.create(Nil)), Nil)
+
+  private def receipts69(requestId: BigInt, receipt: Receipt): ETHPackets.Receipts69 =
+    ETHPackets.Receipts69(requestId, RLPList(RLPList(ETHPackets.ReceiptBloomFreeEnc(receipt).toRLPEncodable)))
+
+  /** The receipts-trie root block validation checks (MptListValidator). */
+  private def receiptsRootOf(receipts: Seq[Receipt]): TrieRoot =
+    val trie = MerklePatriciaTrie[Int, Receipt](StateStorage.getReadOnlyStorage(EphemDataSource()))(
+      MptListValidator.intByteArraySerializable,
+      Receipt.byteArraySerializable
+    )
+    TrieRoot(ByteString(receipts.zipWithIndex.foldLeft(trie)((t, r) => t.put(r._2, r._1)).getRootHash))
+
+  final private case class ReceiptRequest(
+      storage: EphemBlockchainTestSetup,
+      downloader: TypedActorRef[ChainDownloader.Command],
+      networkPeerManager: TestProbe,
+      prhAdapter: TypedActorRef[PeerEvent],
+      requestId: BigInt,
+      header: BlockHeader,
+      peerId: PeerId
+  )
+
+  /** Drives the real protocol end to end with real EphemDataSource-backed storage (EphemBlockchainTestSetup) rather
+    * than mocking ChainDownloader's internals: real GetHandshakedPeers poll, real PeerRequestHandler spawn and
+    * PeerEventBus subscriptions. Leaves the downloader having sent one peer, at `capability`, a GetReceipts for one
+    * stored block whose header carries `receiptsRoot`.
+    */
+  private def receiptRequest(
+      capability: Capability,
+      receiptsRoot: TrieRoot,
+      blacklistDuration: FiniteDuration
+  ): ReceiptRequest =
     val storage = new EphemBlockchainTestSetup {}
-    val appStateStorage =
-      storage.storagesInstance.storages.appStateStorage // same data source: a receipt write and its cursor commit as one batch
+    // Same data source as the block store: a receipt write and its cursor commit as one batch.
+    val appStateStorage = storage.storagesInstance.storages.appStateStorage
     val networkPeerManager = TestProbe()
     val peerEventBus = TestProbe()
     val replyToProbe = TestProbe()
@@ -167,24 +272,27 @@ class ChainDownloaderSpec
     // queue-rebuild pass (triggered by Start) then seeds only receiptsQueue — with a single peer and bodies
     // taking dispatch priority over receipts, an empty bodiesQueue is what guarantees the one available
     // request slot goes to a receipts fetch instead.
-    val header1: BlockHeader = BlockHelpers.generateBlock(BlockHelpers.genesis).header
+    val header: BlockHeader = BlockHelpers
+      .generateBlock(BlockHelpers.genesis)
+      .header
+      .copy(receiptsRoot = receiptsRoot)
     storage.blockchainWriter
-      .storeBlockHeader(header1)
-      .and(storage.blockchainWriter.storeBlockBody(header1.hash, BlockBody(Nil, Nil)))
+      .storeBlockHeader(header)
+      .and(storage.blockchainWriter.storeBlockBody(header.hash, BlockBody(Nil, Nil)))
       .commit()
     // Fast-skip cursor (#1169): tells findBestStoredHeader block 1 is our best header without needing genesis
     // itself in storage.
     appStateStorage.putBackfillBestHeader(BigInt(1)).commit()
 
-    val peerId = PeerId("eth69-peer")
+    val peerId = PeerId(s"$capability-peer")
     val peer =
       Peer(peerId, new InetSocketAddress("127.0.0.1", 0), TestProbe(peerId.value).ref, incomingConnection = false)
     val peerStatus = RemoteStatus(
-      Capability.ETH69,
+      capability,
       1,
       ChainWeight.totalDifficultyOnly(1),
-      ByteString("eth69-best-hash"),
-      ByteString("eth69-genesis-hash")
+      ByteString("best-hash"),
+      ByteString("genesis-hash")
     )
     val peerInfo = PeerInfo(
       peerStatus,
@@ -202,7 +310,7 @@ class ChainDownloaderSpec
           appStateStorage = appStateStorage,
           networkPeerManager = networkPeerManager.ref,
           peerEventBus = peerEventBus.ref,
-          syncConfig = defaultSyncConfig,
+          syncConfig = defaultSyncConfig.copy(blacklistDuration = blacklistDuration),
           replyTo = replyToProbe.ref,
           maxConcurrentRequests = 4
         ),
@@ -239,33 +347,11 @@ class ChainDownloaderSpec
     sendCmd.peerId shouldBe peerId
     val requestId = sendCmd.message.underlyingMsg match
       case ETHPackets.GetReceipts(reqId, hashes) =>
-        hashes shouldBe Seq(header1.hash.value)
+        hashes shouldBe Seq(header.hash.value)
         reqId
       case other => fail(s"expected a plain GetReceipts (same wire form as eth/68), got $other")
 
-    val fixtureReceipt: Receipt =
-      LegacyReceipt(SuccessOutcome, BigInt(21000), BloomFilter(ledger.BloomFilter.create(Nil)), Nil)
-    val blockReceiptsRlp = RLPList(ETHPackets.ReceiptBloomFreeEnc(fixtureReceipt).toRLPEncodable)
-    val receipts69Msg = ETHPackets.Receipts69(requestId, RLPList(blockReceiptsRlp))
-
-    // Deliver as the real PeerEventBusActor would: publish MessageFromPeer to the subscriber it captured.
-    prhAdapter ! PeerEvent.MessageFromPeer(receipts69Msg, peerId)
-
-    // The response travels test-thread -> PeerRequestHandler (child actor) -> downloader's prhResultAdapter
-    // before handleReceipts69's store+commit runs — a GetProgress sent right after, straight to `downloader`
-    // with no intermediate hop, could outrace it. Poll the observable storage effect instead of relying on a
-    // single round-trip to win that race.
-    eventually {
-      storage.blockchainReader.getReceiptsByHash(header1.hash) shouldBe Some(Seq(fixtureReceipt))
-    }
-
-    // Once the store is observed, a fresh GetProgress is guaranteed to be processed after it (same target actor,
-    // sent from this point on) — confirms the stats counter moved too, not just the storage side effect.
-    val progress = expectProgress(downloader)
-    progress.receiptsDownloaded shouldBe BigInt(1)
-
-    testKit.stop(downloader)
-  }
+    ReceiptRequest(storage, downloader, networkPeerManager, prhAdapter, requestId, header, peerId)
 
   // ── Defect 2: a failed request lost its batch ───────────────────────────────────────────────────────
   //

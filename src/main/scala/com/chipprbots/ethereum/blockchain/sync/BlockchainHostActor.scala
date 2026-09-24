@@ -15,6 +15,7 @@ import com.chipprbots.ethereum.db.storage.EvmCodeStorage
 import com.chipprbots.ethereum.domain.BlockHash
 import com.chipprbots.ethereum.domain.BlockHeader
 import com.chipprbots.ethereum.domain.BlockchainReader
+import com.chipprbots.ethereum.domain.Receipt
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor
 import com.chipprbots.ethereum.network.PeerEventBusActor.Command as PeerEventBusCommand
 import com.chipprbots.ethereum.network.PeerEventBusActor.PeerEvent
@@ -124,6 +125,18 @@ object BlockchainHostActor:
 
       case _ => None
 
+    /** Receipts for the requested blocks, stopping at the first block we lack, as go-ethereum does (`if results == nil
+      * { break }`). A reply is matched to the request by position, so skipping a block would shift every later block's
+      * receipts onto the wrong hash in the requester's hands.
+      */
+    def receiptsPrefix(blockHashes: Seq[ByteString]): Seq[Seq[Receipt]] =
+      blockHashes.iterator
+        .take(peerConfiguration.fastSyncHostConfiguration.maxReceiptsPerMessage)
+        .map(hash => blockchainReader.getReceiptsByHash(BlockHash(hash)))
+        .takeWhile(_.isDefined)
+        .flatten
+        .toSeq
+
     /** Handles request for block data, which includes receipts, block bodies and headers (all requested by hash)
       *
       * @param message
@@ -135,9 +148,7 @@ object BlockchainHostActor:
       // ETH68 GetReceipts — bloom-inclusive response
       case ETHPackets.GetReceipts(requestId, blockHashes) =>
         import ETHPackets.ReceiptBloomEnc
-        val receipts = blockHashes
-          .take(peerConfiguration.fastSyncHostConfiguration.maxReceiptsPerMessage)
-          .flatMap(hash => blockchainReader.getReceiptsByHash(BlockHash(hash)))
+        val receipts = receiptsPrefix(blockHashes)
         val receiptsRLP = RLPList(receipts.map(rs => RLPList(rs.map(_.toRLPEncodable)*))*)
         context.log.info("HOST_RECEIPTS_ETH68: requestId={} blocks={}", requestId, receipts.size)
         Some(ETHPackets.Receipts68(requestId, receiptsRLP))
@@ -145,9 +156,7 @@ object BlockchainHostActor:
       // ETH69 GetReceipts — bloom-ABSENT response per EIP-7642
       case ETHPackets.GetReceipts69(requestId, blockHashes) =>
         import ETHPackets.ReceiptBloomFreeEnc
-        val receipts = blockHashes
-          .take(peerConfiguration.fastSyncHostConfiguration.maxReceiptsPerMessage)
-          .flatMap(hash => blockchainReader.getReceiptsByHash(BlockHash(hash)))
+        val receipts = receiptsPrefix(blockHashes)
         val receiptsRLP = RLPList(receipts.map(rs => RLPList(rs.map(_.toRLPEncodable)*))*)
         context.log.info(
           "HOST_RECEIPTS_ETH69: requestId={} blocks={} (bloom-absent, EIP-7642)",

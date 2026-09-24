@@ -97,6 +97,34 @@ class BlockchainHostActorSpec extends AnyFlatSpec with Matchers:
       )
     )
 
+  // A reply is matched to the request by position, so skipping a block we lack would shift every later block's
+  // receipts onto the wrong hash. Stop at the first one, as go-ethereum does.
+  it should "stop at the first block it has no receipts for, rather than skip it (eth/68 and eth/69)" taggedAs (
+    UnitTest
+  ) in new TestSetup:
+    val known1: ByteString = ByteString(Hex.decode("11" * 32))
+    val unknown: ByteString = ByteString(Hex.decode("22" * 32))
+    val known2: ByteString = ByteString(Hex.decode("33" * 32))
+    blockchainWriter
+      .storeReceipts(BlockHash(known1), Seq.empty)
+      .and(blockchainWriter.storeReceipts(BlockHash(known2), Seq.empty))
+      .commit()
+    val onlyKnown1 = com.chipprbots.ethereum.rlp.RLPList(com.chipprbots.ethereum.rlp.RLPList())
+
+    blockchainHost ! BlockchainHostActor.PeerEventReceived(
+      MessageFromPeer(ETHPackets.GetReceipts(BigInt(1), Seq(known1, unknown, known2)), peerId)
+    )
+    val eth68 = networkPeerManager.expectMsgType[NetworkPeerManagerActor.SendMessageCmd]
+    ByteString(eth68.message.toBytes) shouldBe
+      ByteString(ETHPackets.Receipts68.Receipts68Enc(ETHPackets.Receipts68(BigInt(1), onlyKnown1)).toBytes: Array[Byte])
+
+    blockchainHost ! BlockchainHostActor.PeerEventReceived(
+      MessageFromPeer(ETHPackets.GetReceipts69(BigInt(2), Seq(known1, unknown, known2)), peerId)
+    )
+    val eth69 = networkPeerManager.expectMsgType[NetworkPeerManagerActor.SendMessageCmd]
+    ByteString(eth69.message.toBytes) shouldBe
+      ByteString(ETHPackets.Receipts69.Receipts69Enc(ETHPackets.Receipts69(BigInt(2), onlyKnown1)).toBytes: Array[Byte])
+
   // ---- ETH70 GetReceipts (EIP-7706 partial receipt delivery) -----------------------------------------------
   //
   // Coverage for the eth/70 size cap and truncation semantics: fukuii capped a receipts response at 2 MiB

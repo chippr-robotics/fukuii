@@ -18,6 +18,8 @@ import com.chipprbots.ethereum.blockchain.sync.PeerRequestHandler
 import com.chipprbots.ethereum.blockchain.sync.PeerRequestHandler.RequestFailed
 import com.chipprbots.ethereum.blockchain.sync.PeerRequestHandler.ResponseReceived
 import com.chipprbots.ethereum.blockchain.sync.codec.ReceiptCodecs.*
+import com.chipprbots.ethereum.consensus.validators.std.MptListValidator
+import com.chipprbots.ethereum.consensus.validators.std.StdBlockValidator.BlockReceiptsHashError
 import com.chipprbots.ethereum.db.storage.AppStateStorage
 import com.chipprbots.ethereum.domain.BlockBody
 import com.chipprbots.ethereum.domain.BlockHash
@@ -629,23 +631,52 @@ class ChainDownloader private (
     * the same write batch as the highest-numbered block's receipt write, so a crash mid-write never leaves the cursor
     * ahead of disk. Shared by handleReceipts (eth/68), handleReceipts69 (eth/69), and handleReceipts70's complete-block
     * path (eth/70-72) — the three receipt decoders differ only in wire shape, not in how a decoded batch is persisted.
+    *
+    * A reply is matched to the request by position, so a peer that skips a block it lacks shifts every later block's
+    * receipts onto the wrong hash, and the cursor would then move past blocks whose receipts are wrong. Each block's
+    * receipts are therefore checked against its header's receiptsRoot, the check block validation makes
+    * (StdBlockValidator.validateReceipts), and storing stops at the first block that fails. Returns how many leading
+    * blocks were stored.
     */
-  private def storeReceiptsAndAdvanceCursor(receiptsByHash: Seq[(ByteString, Seq[Receipt])]): Unit =
-    if receiptsByHash.nonEmpty then
-      val highestReceiptNumber = receiptsByHash
-        .flatMap { case (hash, _) => blockchainReader.getBlockHeaderByHash(BlockHash(hash)).map(_.number.value) }
-        .maxOption
-        .getOrElse(BigInt(0))
-
-      receiptsByHash.zipWithIndex.foreach { case ((hash, receipts), idx) =>
+  private def storeReceiptsAndAdvanceCursor(receiptsByHash: Seq[(ByteString, Seq[Receipt])]): Int =
+    val verified = receiptsByHash.iterator
+      .map { case (hash, receipts) => (hash, receipts, blockchainReader.getBlockHeaderByHash(BlockHash(hash))) }
+      .takeWhile { case (_, receipts, header) =>
+        header.exists(h =>
+          MptListValidator.isValid[Receipt](h.receiptsRoot.toArray, receipts, Receipt.byteArraySerializable)
+        )
+      }
+      .toVector
+    if verified.nonEmpty then
+      val highestReceiptNumber = verified.flatMap { case (_, _, header) => header.map(_.number.value) }.max
+      verified.zipWithIndex.foreach { case ((hash, receipts, _), idx) =>
         val storeUpdate = blockchainWriter.storeReceipts(BlockHash(hash), receipts)
         val withCursor =
-          if idx == receiptsByHash.size - 1 && highestReceiptNumber > appStateStorage.getBackfillBestReceipt() then
+          if idx == verified.size - 1 && highestReceiptNumber > appStateStorage.getBackfillBestReceipt() then
             storeUpdate.and(appStateStorage.putBackfillBestReceipt(highestReceiptNumber))
           else storeUpdate
         withCursor.commit()
       }
-      receiptsDownloaded += receiptsByHash.size
+      receiptsDownloaded += verified.size
+    verified.size
+
+  /** A block's receipts in a peer's reply do not hash to its header's receiptsRoot. Re-queue it and everything after
+    * it, drop any eth/70 partial state for those hashes (it may hold the wrong receipts), and blacklist the peer.
+    */
+  private def rejectMismatchedReceipts(peer: Peer, fromMismatch: Seq[ByteString]): Unit =
+    val hashStrings = fromMismatch.map(h => s"0x${h.toArray.map("%02x".format(_)).mkString}")
+    log.warn(
+      "Chain download: receipts from peer {} do not match the receiptsRoot of block {}; re-queuing {} block(s)",
+      peer.id,
+      hashStrings.headOption.getOrElse("?"),
+      fromMismatch.size
+    )
+    fromMismatch.foreach { h =>
+      partialReceiptState -= h; partialReceiptBuffer -= h
+    }
+    receiptsQueue = fromMismatch.toVector ++ receiptsQueue
+    val firstAndCount = hashStrings.headOption.map(h => s"$h (+${hashStrings.size - 1} re-queued after it)").toSeq
+    blacklist.add(peer.id, syncConfig.blacklistDuration, InvalidReceipts(firstAndCount, BlockReceiptsHashError))
 
   private def handleReceipts(
       peer: Peer,
@@ -678,11 +709,13 @@ class ChainDownloader private (
         }
 
         // Store receipts + atomically advance the backfill receipt cursor (#1169 pattern).
-        storeReceiptsAndAdvanceCursor(requestedHashes.zip(receiptsByBlock))
-
-        // Re-queue remaining
-        val remaining = requestedHashes.drop(receiptsByBlock.size)
-        if remaining.nonEmpty then receiptsQueue = remaining.toVector ++ receiptsQueue
+        val delivered = requestedHashes.zip(receiptsByBlock)
+        val stored = storeReceiptsAndAdvanceCursor(delivered)
+        if stored < delivered.size then rejectMismatchedReceipts(peer, requestedHashes.drop(stored))
+        else
+          // Re-queue remaining
+          val remaining = requestedHashes.drop(receiptsByBlock.size)
+          if remaining.nonEmpty then receiptsQueue = remaining.toVector ++ receiptsQueue
       catch
         case ex: Exception =>
           log.warn("Chain download: failed to decode receipts from peer {}: {}", peer.id, ex.getMessage)
@@ -719,11 +752,13 @@ class ChainDownloader private (
         }
 
         // Store receipts + atomically advance the backfill receipt cursor (#1169 pattern).
-        storeReceiptsAndAdvanceCursor(requestedHashes.zip(receiptsByBlock))
-
-        // Re-queue remaining
-        val remaining = requestedHashes.drop(receiptsByBlock.size)
-        if remaining.nonEmpty then receiptsQueue = remaining.toVector ++ receiptsQueue
+        val delivered = requestedHashes.zip(receiptsByBlock)
+        val stored = storeReceiptsAndAdvanceCursor(delivered)
+        if stored < delivered.size then rejectMismatchedReceipts(peer, requestedHashes.drop(stored))
+        else
+          // Re-queue remaining
+          val remaining = requestedHashes.drop(receiptsByBlock.size)
+          if remaining.nonEmpty then receiptsQueue = remaining.toVector ++ receiptsQueue
       catch
         case ex: Exception =>
           log.warn("Chain download ETH69: failed to decode receipts from peer {}: {}", peer.id, ex.getMessage)
@@ -779,29 +814,30 @@ class ChainDownloader private (
           }
 
         // Store complete receipts + advance backfill cursor (#1169 pattern)
-        storeReceiptsAndAdvanceCursor(completeByHash)
+        val stored = storeReceiptsAndAdvanceCursor(completeByHash)
+        if stored < completeByHash.size then rejectMismatchedReceipts(peer, requestedHashes.drop(stored))
+        else
+          // Accumulate partial receipts for the truncated last block and re-queue it
+          incompleteItemOpt.foreach { blockRlp =>
+            val incompleteHashIdx = completeItems.size
+            val hash = requestedHashes(incompleteHashIdx)
+            val existing = partialReceiptBuffer.getOrElse(hash, Seq.empty)
+            val accumulated = existing ++ decodeBlock(blockRlp)
+            partialReceiptBuffer = partialReceiptBuffer.updated(hash, accumulated)
+            partialReceiptState = partialReceiptState.updated(hash, accumulated.size.toLong)
+            // Push back at front of queue so the next dispatch resumes this block first
+            receiptsQueue = hash +: receiptsQueue
+            log.debug(
+              "RECEIPTS_ETH70_PARTIAL: hash={} buffered={} receipts, resumeIdx={}",
+              s"0x${hash.toArray.take(4).map("%02x".format(_)).mkString}",
+              accumulated.size,
+              accumulated.size
+            )
+          }
 
-        // Accumulate partial receipts for the truncated last block and re-queue it
-        incompleteItemOpt.foreach { blockRlp =>
-          val incompleteHashIdx = completeItems.size
-          val hash = requestedHashes(incompleteHashIdx)
-          val existing = partialReceiptBuffer.getOrElse(hash, Seq.empty)
-          val accumulated = existing ++ decodeBlock(blockRlp)
-          partialReceiptBuffer = partialReceiptBuffer.updated(hash, accumulated)
-          partialReceiptState = partialReceiptState.updated(hash, accumulated.size.toLong)
-          // Push back at front of queue so the next dispatch resumes this block first
-          receiptsQueue = hash +: receiptsQueue
-          log.debug(
-            "RECEIPTS_ETH70_PARTIAL: hash={} buffered={} receipts, resumeIdx={}",
-            s"0x${hash.toArray.take(4).map("%02x".format(_)).mkString}",
-            accumulated.size,
-            accumulated.size
-          )
-        }
-
-        // Re-queue any hashes the server didn't return at all (beyond responseCount)
-        val remaining = requestedHashes.drop(responseCount)
-        if remaining.nonEmpty then receiptsQueue = remaining.toVector ++ receiptsQueue
+          // Re-queue any hashes the server didn't return at all (beyond responseCount)
+          val remaining = requestedHashes.drop(responseCount)
+          if remaining.nonEmpty then receiptsQueue = remaining.toVector ++ receiptsQueue
 
       catch
         case ex: Exception =>
