@@ -269,6 +269,7 @@ gates:
     promote_by: 2027-03-31
     min_tests: 10
     covers: GraphQL endpoint conformance.
+    waivers: [graphql-gasprice-stale-fixture]
 
   - id: hive-devp2p
     workflow: hive-devp2p.yml
@@ -421,4 +422,27 @@ waivers:
       fukuii syncing FROM nethermind is intermittently red; root cause not yet
       isolated (suspected snap/2 range-response framing). Geth-as-source is
       gated and green, so the client direction retains real coverage.
+    expires: 2026-12-31
+
+  - id: graphql-gasprice-stale-fixture
+    gate: hive-graphql
+    pattern: 07_eth_gasPrice
+    owner: realcodywburns
+    issue: 1407
+    reason: >-
+      Stale upstream fixture, not a fukuii defect. hive's
+      simulators/ethereum/graphql/testcases/07_eth_gasPrice.json accepts only
+      gasPrice 0x10 or 0x1, pre-London fixed prices, on a chain whose head base fee
+      is ~0x3437004a. No client that prices from the base fee can return either
+      value.
+
+      Measured locally 2026-09-23 on hive master 43ea47b with both clients in one run
+      (scripts/hive/local.sh ethereum/graphql --clients fukuii,go-ethereum):
+
+          FAIL 07_eth_gasPrice (fukuii)       got 0x3437004b  (baseFee + 1 wei tip)
+          FAIL 07_eth_gasPrice (go-ethereum)  got 0x3446428a  (geth 1.17.7-unstable be58ada)
+
+      The reference client fails the same test, so there is no conformant answer to
+      match. fukuii passes every other graphql test (51/52). Lift this waiver when
+      upstream updates the fixture.
     expires: 2026-12-31

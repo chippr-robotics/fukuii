@@ -102,15 +102,41 @@ def m_undeclared_caller(root: Path) -> None:
         encoding="utf-8")
 
 
+def _hive_gate_whose_only_mechanism_is_min_tests(root: Path) -> dict:
+    """An informational Hive gate that `min_tests` alone makes able to fail.
+
+    This case used to name `hive-graphql` literally and broke the moment graphql
+    gained a `gate_pattern` (its waiver, #1407) — with a pattern it still has a
+    mechanism after `min_tests` is removed, so C3 correctly stays quiet. Same
+    lesson as `_first_waiver`: pick the data, don't hardcode it.
+    """
+    import yaml as _y
+    doc = _y.safe_load((root / ".github/gates.yml").read_text(encoding="utf-8"))
+    for g in doc.get("gates") or []:
+        wf = g.get("workflow")
+        if not wf or g.get("tier") != "informational" or (g.get("pass_threshold") or 0) > 0:
+            continue
+        if not (g.get("min_tests") or 0) > 0:
+            continue
+        text = (root / ".github/workflows" / wf).read_text(encoding="utf-8")
+        if "_hive-sim.yml" in text and not re.search(r"^\s*gate_pattern:\s*\S", text, re.M):
+            return g
+    raise AssertionError("no informational Hive gate relies on min_tests alone — C3 case has no subject")
+
+
 def m_required_without_mechanism(root: Path) -> None:
     """C3 — a Hive gate declared required with nothing that can fail it."""
-    edit(root, ".github/gates.yml",
-         "  - id: hive-graphql\n    workflow: hive-graphql.yml\n"
-         "    context: Hive · graphql\n    tier: informational",
-         "  - id: hive-graphql\n    workflow: hive-graphql.yml\n"
-         "    context: Hive · graphql\n    tier: required")
-    edit(root, ".github/gates.yml", "    min_tests: 10\n    covers: GraphQL endpoint conformance.",
-         "    covers: GraphQL endpoint conformance.")
+    g = _hive_gate_whose_only_mechanism_is_min_tests(root)
+    p = root / ".github/gates.yml"
+    s = p.read_text(encoding="utf-8")
+    head = f"  - id: {g['id']}\n"
+    start = s.index(head)
+    nxt = s.find("\n  - id: ", start + len(head))
+    end = len(s) if nxt == -1 else nxt
+    block = s[start:end]
+    block = block.replace("    tier: informational\n", "    tier: required\n", 1)
+    block = re.sub(r"^    min_tests: \d+\n", "", block, count=1, flags=re.M)
+    p.write_text(s[:start] + block + s[end:], encoding="utf-8")
 
 
 def m_required_without_evidence(root: Path) -> None:

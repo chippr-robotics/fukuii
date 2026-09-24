@@ -93,4 +93,5 @@ bypass — extending a waiver means editing the matrix in a reviewed PR.
 |---|---|---|---|---|---|
 | `sync-server-geth-from-fukuii` | `hive-sync` | `sync go-ethereum from fukuii` | realcodywburns | #1402 | 2026-12-31 |
 | `sync-client-fukuii-from-nethermind` | `hive-sync` | `sync fukuii from nethermind` | realcodywburns | #1402 | 2026-12-31 |
+| `graphql-gasprice-stale-fixture` | `hive-graphql` | `07_eth_gasPrice` | realcodywburns | #1407 | 2026-12-31 |
 
