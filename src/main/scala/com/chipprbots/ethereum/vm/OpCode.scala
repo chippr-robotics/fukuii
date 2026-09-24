@@ -272,7 +272,9 @@ abstract class OpCode(val code: Byte, val delta: Int, val alpha: Int, val baseGa
   def this(code: Int, pop: Int, push: Int, constGasFn: FeeSchedule => BigInt) = this(code.toByte, pop, push, constGasFn)
 
   def execute[S <: Storage[S], W <: WorldStateProxy[W, S]](state: ProgramState[W, S]): ProgramState[W, S] =
-    if !availableInContext(state) then state.withError(OpCodeNotAvailableInStaticContext(code))
+    // `availableInContext` is only consulted inside a static frame: outside one it is true for every instruction (see
+    // its contract below), and asking costs a virtual call and a function application per instruction.
+    if state.staticCtx && !availableInContext(state) then state.withError(OpCodeNotAvailableInStaticContext(code))
     else if state.stack.size < delta then state.withError(StackUnderflow)
     else if state.stack.size - delta + alpha > state.stack.maxSize then state.withError(StackOverflow)
     else
@@ -282,7 +284,8 @@ abstract class OpCode(val code: Byte, val delta: Int, val alpha: Int, val baseGa
         // EIP-8037: state gas is metered at the END of a state-mutating opcode. The DECISION, though, is
         // made from the pre-execution state — the SSTORE table keys on the slot's original, current and
         // new values, all of which are only available before `exec` runs.
-        val stateGas: BigInt = stateGasDelta(state)
+        // Only asked from Amsterdam on: before it, every instruction's delta is zero (see its contract below).
+        val stateGas: BigInt = if state.config.amsterdamEnabled then stateGasDelta(state) else OpCode.NoGas
         val executed = execAndSpendGas(state, gas)
         // signum, not `== 0` / `< 0`: comparing a BigInt with an Int literal boxes the literal and goes through
         // BoxesRunTime's numeric equality on every instruction. Same outcomes.
@@ -303,8 +306,14 @@ abstract class OpCode(val code: Byte, val delta: Int, val alpha: Int, val baseGa
     *
     * Zero for every opcode that does not create or destroy state, and zero for every opcode on every pre-Amsterdam and
     * ETC path — which is what keeps the hook above a no-op outside the fork.
+    *
+    * Contract: an override returns zero whenever `!state.config.amsterdamEnabled` (EIP-8037 state gas begins at
+    * Amsterdam). `execute` relies on it and does not call this method before the fork; OpCodeContractSpec checks it for
+    * every opcode of every opcode table.
     */
-  protected def stateGasDelta[S <: Storage[S], W <: WorldStateProxy[W, S]](@unused state: ProgramState[W, S]): BigInt =
+  protected[vm] def stateGasDelta[S <: Storage[S], W <: WorldStateProxy[W, S]](
+      @unused state: ProgramState[W, S]
+  ): BigInt =
     OpCode.NoGas
 
   protected def baseGas[S <: Storage[S], W <: WorldStateProxy[W, S]](state: ProgramState[W, S]): BigInt = baseGasFn(
@@ -327,8 +336,14 @@ abstract class OpCode(val code: Byte, val delta: Int, val alpha: Int, val baseGa
   ): ProgramState[W, S] =
     exec(state).spendGas(gas)
 
-  protected def availableInContext[S <: Storage[S], W <: WorldStateProxy[W, S]]: ProgramState[W, S] => Boolean = _ =>
-    true
+  /** Whether the instruction may run in `state`'s context (EIP-214: no state modification inside a STATICCALL frame).
+    *
+    * Contract: an override is true whenever `!state.staticCtx` — static-context restrictions apply inside a static
+    * frame only. `execute` relies on it and asks only inside one; OpCodeContractSpec checks it for every opcode of
+    * every opcode table.
+    */
+  protected[vm] def availableInContext[S <: Storage[S], W <: WorldStateProxy[W, S]]: ProgramState[W, S] => Boolean =
+    _ => true
 
 trait AddrAccessGas:
   self: OpCode =>
@@ -879,7 +894,7 @@ case object SSTORE extends OpCode(0x55, 2, 0, _.G_zero):
     * Every other transition leaves the state dimension alone, including clearing a slot that pre-existed the
     * transaction: the leaf was already paid for.
     */
-  override protected def stateGasDelta[S <: Storage[S], W <: WorldStateProxy[W, S]](
+  override protected[vm] def stateGasDelta[S <: Storage[S], W <: WorldStateProxy[W, S]](
       state: ProgramState[W, S]
   ): BigInt =
     if !state.config.amsterdamEnabled then BigInt(0)
@@ -922,7 +937,7 @@ case object SSTORE extends OpCode(0x55, 2, 0, _.G_zero):
       _ => 0
     )
 
-  override protected def availableInContext[S <: Storage[S], W <: WorldStateProxy[W, S]]
+  override protected[vm] def availableInContext[S <: Storage[S], W <: WorldStateProxy[W, S]]
       : ProgramState[W, S] => Boolean = !_.staticCtx
 
   // https://eips.ethereum.org/EIPS/eip-1283
@@ -1088,7 +1103,7 @@ sealed abstract class LogOp(code: Int, val i: Int) extends OpCode(code, i + 2, 0
     val logCost = state.config.feeSchedule.G_logdata * size + i * state.config.feeSchedule.G_logtopic
     memCost + logCost
 
-  override protected def availableInContext[S <: Storage[S], W <: WorldStateProxy[W, S]]
+  override protected[vm] def availableInContext[S <: Storage[S], W <: WorldStateProxy[W, S]]
       : ProgramState[W, S] => Boolean = !_.staticCtx
 
 case object LOG0 extends LogOp(0xa0)
@@ -1252,7 +1267,7 @@ abstract class CreateOp(code: Int, delta: Int) extends OpCode(code, delta, 1, _.
               .copy(transientStorage = result.transientStorage)
               .step()
 
-  override protected def availableInContext[S <: Storage[S], W <: WorldStateProxy[W, S]]
+  override protected[vm] def availableInContext[S <: Storage[S], W <: WorldStateProxy[W, S]]
       : ProgramState[W, S] => Boolean = !_.staticCtx
 
 case object CREATE extends CreateOp(0xf0, 3):
@@ -1571,7 +1586,7 @@ abstract class CallOp(code: Int, delta: Int, alpha: Int) extends OpCode(code, de
     callCost + c_xfer + c_new
 
 case object CALL extends CallOp(0xf1, 7, 1):
-  override protected def availableInContext[S <: Storage[S], W <: WorldStateProxy[W, S]]
+  override protected[vm] def availableInContext[S <: Storage[S], W <: WorldStateProxy[W, S]]
       : ProgramState[W, S] => Boolean = state =>
     !state.staticCtx || {
       val (Seq(_, _, callValue), _) = state.stack.pop(3)
@@ -1726,7 +1741,7 @@ case object SELFDESTRUCT extends OpCode(0xff, 1, 0, _.G_selfdestruct):
     * removed at all under EIP-6780, so there is nothing to credit back. That non-refill is what lets block 41's 183,600
     * stand even though its CREATE'd child selfdestructs in the same transaction.
     */
-  override protected def stateGasDelta[S <: Storage[S], W <: WorldStateProxy[W, S]](
+  override protected[vm] def stateGasDelta[S <: Storage[S], W <: WorldStateProxy[W, S]](
       state: ProgramState[W, S]
   ): BigInt =
     if !state.config.amsterdamEnabled then BigInt(0)
@@ -1736,7 +1751,7 @@ case object SELFDESTRUCT extends OpCode(0xff, 1, 0, _.G_selfdestruct):
         AmsterdamGas.GasNewAccount
       else BigInt(0)
 
-  override protected def availableInContext[S <: Storage[S], W <: WorldStateProxy[W, S]]
+  override protected[vm] def availableInContext[S <: Storage[S], W <: WorldStateProxy[W, S]]
       : ProgramState[W, S] => Boolean = !_.staticCtx
 
 case object CHAINID extends ConstOp(0x46)(state => UInt256(state.env.evmConfig.blockchainConfig.chainId.value))
@@ -1820,7 +1835,7 @@ case object TSTORE extends OpCode(0x5d, 2, 0, _.G_warm_storage_read) with ConstG
     )
     state.copy(transientStorage = updatedTransient).withStack(stack1).step()
 
-  override protected def availableInContext[S <: Storage[S], W <: WorldStateProxy[W, S]]
+  override protected[vm] def availableInContext[S <: Storage[S], W <: WorldStateProxy[W, S]]
       : ProgramState[W, S] => Boolean = !_.staticCtx
 
 /** EIP-5656: MCOPY — memory-to-memory copy with proper overlap handling. Gas: G_verylow (3) + 3 * ceil(size/32) +
