@@ -550,10 +550,14 @@ object PeersClient:
     // for blocks they literally don't have. forkAccepted=true is necessary but not
     // sufficient — the peer must also have advanced past genesis.
     //
-    // Use maxBlockNumber > 0 rather than !isAtGenesis (bestHash == genesisHash): ETC and
-    // ETH mainnet share genesis hash d4e56740..., so isAtGenesis is unreliable as a
-    // cross-chain discriminator. Block-number-based filtering matches go-ethereum and Besu
-    // peer selection semantics (both filter by peerHeadBlockHeader.getNumber() > 0).
+    // Use maxBlockNumber > 0 rather than !isAtGenesis (bestHash == genesisHash). Both keep
+    // out a peer at genesis, and neither tells an ETC peer from an ETH-mainnet one: the
+    // chains share genesis hash d4e56740..., and the fork-ID check is what separates them.
+    // The difference is eth/68, whose STATUS carries no block number: an eth/68 peer counts
+    // as block 0, and is skipped here, until its first header probe answers. The overload
+    // below and SNAP peer selection (SNAPSyncController.servesSnapState) use the hash test.
+    // Block-number-based filtering matches go-ethereum and Besu peer selection semantics
+    // (both filter by peerHeadBlockHeader.getNumber() > 0).
     val peersToUse = peersToDownloadFrom.values
       .map { case PeerWithInfo(peer, peerInfo) =>
         val isReady = peerInfo.forkAccepted && peerInfo.maxBlockNumber > 0

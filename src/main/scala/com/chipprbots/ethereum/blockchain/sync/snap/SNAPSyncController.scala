@@ -3405,9 +3405,7 @@ private class SNAPSyncControllerImpl(
     // that actually can't serve the current pivot's state.
     accountRangeCoordinator.foreach { coordinator =>
       val snapPeers = peersToDownloadFrom.collect {
-        case (_, peerWithInfo)
-            if peerWithInfo.peerInfo.remoteStatus.supportsSnap && peerWithInfo.peerInfo.forkAccepted =>
-          peerWithInfo.peer
+        case (_, peerWithInfo) if SNAPSyncController.servesSnapState(peerWithInfo.peerInfo) => peerWithInfo.peer
       }
 
       SNAPSyncMetrics.setSnapCapablePeers(snapPeers.size)
@@ -3423,9 +3421,7 @@ private class SNAPSyncControllerImpl(
     // Notify coordinator of available peers
     bytecodeCoordinator.foreach { coordinator =>
       val snapPeers = peersToDownloadFrom.collect {
-        case (_, peerWithInfo)
-            if peerWithInfo.peerInfo.remoteStatus.supportsSnap && peerWithInfo.peerInfo.forkAccepted =>
-          peerWithInfo.peer
+        case (_, peerWithInfo) if SNAPSyncController.servesSnapState(peerWithInfo.peerInfo) => peerWithInfo.peer
       }
 
       if snapPeers.isEmpty then ctx.log.debug("No SNAP-capable peers available for bytecode requests")
@@ -3571,7 +3567,7 @@ private class SNAPSyncControllerImpl(
           // Flush current snap peers immediately — the 0-second scheduler delay is async; an explicit
           // flush here ensures peers are available before any StartTrieNodeHealing dispatch attempt.
           peersToDownloadFrom.values
-            .filter(p => p.peerInfo.remoteStatus.supportsSnap && p.peerInfo.forkAccepted)
+            .filter(p => SNAPSyncController.servesSnapState(p.peerInfo))
             .foreach(p => coordinator ! actors.TrieNodeHealingCoordinator.HealingPeerAvailable(p.peer))
         }
 
@@ -3645,7 +3641,7 @@ private class SNAPSyncControllerImpl(
               snapSyncConfig.healingMaxInFlightPerPeer
             )
             peersToDownloadFrom.values
-              .filter(p => p.peerInfo.remoteStatus.supportsSnap && p.peerInfo.forkAccepted)
+              .filter(p => SNAPSyncController.servesSnapState(p.peerInfo))
               .foreach(p => coordinator ! actors.TrieNodeHealingCoordinator.HealingPeerAvailable(p.peer))
           }
           startHealingRequestScheduler()
@@ -3677,9 +3673,7 @@ private class SNAPSyncControllerImpl(
     // Notify coordinator of available peers
     trieNodeHealingCoordinator.foreach { coordinator =>
       val snapPeers = peersToDownloadFrom.collect {
-        case (_, peerWithInfo)
-            if peerWithInfo.peerInfo.remoteStatus.supportsSnap && peerWithInfo.peerInfo.forkAccepted =>
-          peerWithInfo.peer
+        case (_, peerWithInfo) if SNAPSyncController.servesSnapState(peerWithInfo.peerInfo) => peerWithInfo.peer
       }
 
       if snapPeers.isEmpty then ctx.log.debug("No SNAP-capable peers available for healing requests")
@@ -4817,9 +4811,10 @@ private class SNAPSyncControllerImpl(
 object SNAPSyncController:
 
   /** Whether a handshaked peer can serve SNAP state for our pivot: SNAP-capable, on our fork, and not sitting at its
-    * genesis block. A peer at genesis holds no state and answers every StorageRanges request empty, burning its strikes
-    * until the eligible pool collapses. On ETC that is typically an ETH-mainnet node syncing from scratch: the chains
-    * share genesis and networkId 1, so it passes the fork-ID check.
+    * genesis block. Every phase that hands peers to a coordinator filters on this: account ranges, bytecodes, storage
+    * ranges, trie-node healing, and the post-sync recovery in `SyncController`. A peer at genesis holds no state and
+    * answers every request empty, which costs each phase strikes or retries (#1356). On ETC that is typically an
+    * ETH-mainnet node syncing from scratch: the chains share genesis and networkId 1, so it passes the fork-ID check.
     *
     * The test is the peer's best-block hash. It is known from the handshake on for every protocol version, and it moves
     * with `maxBlockNumber` whenever the peer reports a higher block (`withBestBlockData`). It used to be
@@ -4828,7 +4823,7 @@ object SNAPSyncController:
     * in a 2-peer ETC pool is the whole pool. Unlike the `>= pivot` guard removed in PR #1238, this does not exclude a
     * peer that is merely behind: one at block N < pivot still serves state up to N.
     */
-  private[snap] def servesSnapState(
+  private[sync] def servesSnapState(
       peerInfo: com.chipprbots.ethereum.network.NetworkPeerManagerActor.PeerInfo
   ): Boolean =
     peerInfo.remoteStatus.supportsSnap &&

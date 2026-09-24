@@ -2224,7 +2224,7 @@ object SyncController:
 
         case com.chipprbots.ethereum.network.NetworkPeerManagerActor.HandshakedPeers(peers) =>
           val snapPeers =
-            peers.filter { case (_, peerInfo) => peerInfo.remoteStatus.supportsSnap && peerInfo.forkAccepted }
+            peers.filter { case (_, peerInfo) => SNAPSyncController.servesSnapState(peerInfo) }
           if snapPeers.nonEmpty then
             snapPeers.foreach { case (peer, _) =>
               bytecodeActor.foreach(_ ! BytecodeRecoveryActor.ByteCodePeerAvailable(peer))
