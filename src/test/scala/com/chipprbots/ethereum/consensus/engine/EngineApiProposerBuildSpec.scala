@@ -255,6 +255,45 @@ class EngineApiProposerBuildSpec extends AnyWordSpec with Matchers:
       val status = newPayloadStatus(block)
       withClue(s"validationError=${status.validationError}: ")(status.status shouldBe Valid)
 
+    lazy val controller = new EngineApiController(engineApi)
+
+    /** forkchoiceUpdated(head, attrs) — the payloadId only; nothing is fetched. */
+    def requestPayload(head: BlockHeader): ByteString =
+      engineApi
+        .forkchoiceUpdated(ForkChoiceState(head.hash.value, zero32, zero32), Some(attrsFor(head)))
+        .unsafeRunSync()
+        .getOrElse(fail("forkchoiceUpdated failed"))
+        .payloadId
+        .getOrElse(fail("forkchoiceUpdated returned no payloadId"))
+
+    /** engine_getPayloadV{version} exactly as the CL sends it, through the controller. */
+    def getPayloadCall(version: Int, payloadId: ByteString): com.chipprbots.ethereum.jsonrpc.JsonRpcResponse =
+      import org.json4s.JsonAST.{JArray, JInt, JString}
+      val idHex = "0x" + payloadId.toArray.map("%02x".format(_)).mkString
+      controller
+        .handleRequest(
+          com.chipprbots.ethereum.jsonrpc
+            .JsonRpcRequest("2.0", s"engine_getPayloadV$version", Some(JArray(List(JString(idHex)))), Some(JInt(1)))
+        )
+        .unsafeRunSync()
+
+    /** (blockHash, number of transactions) of the payload an engine_getPayloadV1 answer carries. */
+    def servedV1(response: com.chipprbots.ethereum.jsonrpc.JsonRpcResponse): (String, Int) =
+      import org.json4s.JsonAST.{JArray, JObject, JString}
+      response.result match
+        case Some(JObject(fields)) =>
+          val payload = fields.toMap
+          val hash = payload.get("blockHash").collect { case JString(h) => h }.getOrElse(fail("no blockHash"))
+          val txs = payload.get("transactions").collect { case JArray(items) => items.size }.getOrElse(fail("no txs"))
+          (hash, txs)
+        case other => fail(s"getPayloadV1 answered $other, error ${response.error}")
+
+    /** What the service currently holds for `payloadId`. */
+    def stored(payloadId: ByteString): Block =
+      engineApi.getPayload(payloadId).unsafeRunSync().getOrElse(fail("payload not available"))
+
+    def hexOf(block: Block): String = "0x" + block.hash.value.toArray.map("%02x".format(_)).mkString
+
   /** Paris-era genesis (the test config activates Shanghai and later far in the future). */
   private class ParisSetup extends Setup(1000L, HefPostOlympia(BaseFeeCalculator.InitialBaseFee))
 
@@ -351,4 +390,73 @@ class EngineApiProposerBuildSpec extends AnyWordSpec with Matchers:
         block1.body.transactionList shouldBe Seq(payable)
         block1.header.blobGasUsed shouldBe Some(BlobGasUtils.GAS_PER_BLOB * 6)
         expectValid(block1)
+  }
+
+  /** execution-apis paris.md, engine_getPayloadV1: "MUST return the most recent version of the payload that is
+    * available in the corresponding build process at the time of receiving the call", and "Payload building" point 3:
+    * the default strategy keeps the transaction set up to date with the local mempool until getPayload.
+    *
+    * The build ran once, inside forkchoiceUpdated, so a transaction that reached the pool between forkchoiceUpdated and
+    * getPayload was left out: hive `Blob Transaction Ordering, Multiple Clients (Cancun)` failed with "expected 6 blob,
+    * got 5" when client B's gossiped 1-blob transaction arrived after client A's forkchoiceUpdated.
+    *
+    * These drive getPayload through the controller, as the CL does. The pool is the stub's; nothing sleeps.
+    */
+  "engine_getPayload" should {
+
+    "include a transaction that reached the pool after forkchoiceUpdated" taggedAs (UnitTest, ConsensusTest) in
+      new ParisSetup:
+        val payloadId = requestPayload(genesisHeader)
+        stored(payloadId).body.transactionList shouldBe empty
+
+        val transfer = legacy(bob, 0)
+        poolContents.set(Seq(transfer -> 1L))
+        val (servedHash, servedTxs) = servedV1(getPayloadCall(1, payloadId))
+
+        servedTxs shouldBe 1
+        val served = stored(payloadId)
+        servedHash shouldBe hexOf(served)
+        served.body.transactionList shouldBe Seq(transfer)
+        expectValid(served)
+
+    "answer exactly the payload it built when the pool has not changed" taggedAs (UnitTest, ConsensusTest) in
+      new ParisSetup:
+        poolContents.set(Seq(legacy(bob, 0) -> 1L))
+        val payloadId = requestPayload(genesisHeader)
+        val built = stored(payloadId)
+
+        servedV1(getPayloadCall(1, payloadId)) shouldBe ((hexOf(built), 1))
+
+    "keep answering the payload it served, even after the pool changes" taggedAs (UnitTest, ConsensusTest) in
+      new ParisSetup:
+        // "Client software MAY stop the corresponding build process after serving this call"; go-ethereum does
+        // (Payload.Resolve), and hive's withdrawals tests ask V1 then V2 for one id and expect the same payload.
+        val payloadId = requestPayload(genesisHeader)
+        val first = servedV1(getPayloadCall(1, payloadId))
+
+        poolContents.set(Seq(legacy(bob, 0) -> 1L))
+        servedV1(getPayloadCall(1, payloadId)) shouldBe first
+        first._2 shouldBe 0
+
+    "not restart a build for attributes it is already building" taggedAs (UnitTest, ConsensusTest) in new ParisSetup:
+      // "Payload building" point 6: "If a build process with given payloadAttributes already exists, client software
+      // SHOULD NOT restart it" (go-ethereum: `localBlocks.has(id)`). Restarting replaced a payload already served.
+      val payloadId = requestPayload(genesisHeader)
+      val served = servedV1(getPayloadCall(1, payloadId))
+
+      poolContents.set(Seq(legacy(bob, 0) -> 1L))
+      requestPayload(genesisHeader) shouldBe payloadId
+      servedV1(getPayloadCall(1, payloadId)) shouldBe served
+
+    "bring the payload up to date on the call that returns it, not on one refused for its version" taggedAs (
+      UnitTest,
+      ConsensusTest
+    ) in new ParisSetup:
+      val payloadId = requestPayload(genesisHeader)
+      val transfer = legacy(bob, 0)
+      poolContents.set(Seq(transfer -> 1L))
+
+      getPayloadCall(3, payloadId).error.map(_.code) shouldBe Some(-38005) // a Paris payload asked for as V3
+      servedV1(getPayloadCall(1, payloadId))._2 shouldBe 1
+      stored(payloadId).body.transactionList shouldBe Seq(transfer)
   }

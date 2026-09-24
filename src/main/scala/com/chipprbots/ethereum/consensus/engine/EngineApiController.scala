@@ -352,14 +352,14 @@ class EngineApiController(
       case Some(JArray(List(JString(id)))) => id
       case _                               => ""
     val payloadId = hexToByteString(payloadIdHex)
-    engineApiService.getPayload(payloadId).map {
-      case Right(block) =>
+    engineApiService.getPayload(payloadId).flatMap {
+      case Right(stored) =>
         // Validate the RPC version matches the payload's fork timestamp. Hive's
         // "GetPayloadV2 To Request Cancun Payload" and "GetPayloadV3 To Request Shanghai
         // Payload" tests exercise this — V2 for a Cancun-ts payload and V3 for a
         // Shanghai-ts payload must both return -38005 UNSUPPORTED_FORK.
         val cfg = com.chipprbots.ethereum.utils.Config.blockchains.blockchainConfig
-        val ts = block.header.unixTimestamp
+        val ts = stored.header.unixTimestamp
         val isCancunPayload = cfg.isCancunTimestamp(ts)
         val isShanghaiPayload = cfg.isShanghaiTimestamp(ts)
         val isOsakaPayload = cfg.isOsakaTimestamp(ts)
@@ -372,67 +372,78 @@ class EngineApiController(
           case _                      => None
         forkError match
           case Some(msg) =>
-            JsonRpcResponse("2.0", None, Some(JsonRpcError(UnsupportedFork, msg, None)), reqId(request))
+            // Refused BEFORE the payload is resolved, so a wrong-version call does not end its build process:
+            // go-ethereum rejects it on the payload ID's version, before Payload.Resolve.
+            IO.pure(JsonRpcResponse("2.0", None, Some(JsonRpcError(UnsupportedFork, msg, None)), reqId(request)))
           case None =>
-            val payload = blockToExecutionPayload(block)
-            // V1 returns bare ExecutionPayload.
-            // V2+ wraps it in ExecutionPayloadEnvelope per Engine API spec.
-            // blockValue depends on receipts (effectiveGasPrice per tx). Fetch once so V2/V3/V4 share.
-            lazy val receipts = engineApiService.getPayloadReceipts(payloadId)
-            lazy val blockValueHex = computeBlockValue(block, receipts)
-            lazy val blobsBundleJson: JObject =
-              val bundle = engineApiService.getPayloadBlobsBundle(payloadId)
-              JObject(
-                "commitments" -> JArray(bundle.commitments.toList.map(c => JString(byteStringToHex(c)))),
-                "proofs" -> JArray(bundle.proofs.toList.map(p => JString(byteStringToHex(p)))),
-                "blobs" -> JArray(bundle.blobs.toList.map(b => JString(byteStringToHex(b))))
-              )
-            val result: JValue = version match
-              case 1 => payload
-              case 2 =>
-                JObject(
-                  "executionPayload" -> payload,
-                  "blockValue" -> JString(blockValueHex)
-                )
-              case 3 =>
-                JObject(
-                  "executionPayload" -> payload,
-                  "blockValue" -> JString(blockValueHex),
-                  "blobsBundle" -> blobsBundleJson,
-                  "shouldOverrideBuilder" -> JBool(false)
-                )
-              case 4 => // Prague: BlobsBundleV1 + executionRequests (EIP-7685)
-                val executionRequests = engineApiService.getPayloadExecutionRequests(payloadId)
-                JObject(
-                  "executionPayload" -> payload,
-                  "blockValue" -> JString(blockValueHex),
-                  "blobsBundle" -> blobsBundleJson,
-                  "shouldOverrideBuilder" -> JBool(false),
-                  "executionRequests" -> JArray(
-                    executionRequests.toList.map(r => JString(byteStringToHex(r)))
-                  )
-                )
-              case _ => // V5+: BlobsBundleV2 (EIP-7594 cell proofs) + executionRequests
-                val executionRequests = engineApiService.getPayloadExecutionRequests(payloadId)
-                val blobsBundleV2Json: JObject =
+            // The payload brought up to date with the pool, once (EngineApiService.resolvePayload). A rebuild keeps
+            // the parent and the attributes, so the fork checked above is the fork of what is served.
+            engineApiService.resolvePayload(payloadId).map {
+              case Left(err) =>
+                JsonRpcResponse("2.0", None, Some(JsonRpcError(-38001, err, None)), reqId(request))
+              case Right(block) =>
+                val payload = blockToExecutionPayload(block)
+                // V1 returns bare ExecutionPayload.
+                // V2+ wraps it in ExecutionPayloadEnvelope per Engine API spec.
+                // blockValue depends on receipts (effectiveGasPrice per tx). Fetch once so V2/V3/V4 share.
+                lazy val receipts = engineApiService.getPayloadReceipts(payloadId)
+                lazy val blockValueHex = computeBlockValue(block, receipts)
+                lazy val blobsBundleJson: JObject =
                   val bundle = engineApiService.getPayloadBlobsBundle(payloadId)
                   JObject(
                     "commitments" -> JArray(bundle.commitments.toList.map(c => JString(byteStringToHex(c)))),
-                    "proofs" -> JArray(bundle.cellProofsPerBlob.flatten.toList.map(p => JString(byteStringToHex(p)))),
+                    "proofs" -> JArray(bundle.proofs.toList.map(p => JString(byteStringToHex(p)))),
                     "blobs" -> JArray(bundle.blobs.toList.map(b => JString(byteStringToHex(b))))
                   )
-                JObject(
-                  "executionPayload" -> payload,
-                  "blockValue" -> JString(blockValueHex),
-                  "blobsBundle" -> blobsBundleV2Json,
-                  "shouldOverrideBuilder" -> JBool(false),
-                  "executionRequests" -> JArray(
-                    executionRequests.toList.map(r => JString(byteStringToHex(r)))
-                  )
-                )
-            JsonRpcResponse("2.0", Some(result), None, reqId(request))
+                val result: JValue = version match
+                  case 1 => payload
+                  case 2 =>
+                    JObject(
+                      "executionPayload" -> payload,
+                      "blockValue" -> JString(blockValueHex)
+                    )
+                  case 3 =>
+                    JObject(
+                      "executionPayload" -> payload,
+                      "blockValue" -> JString(blockValueHex),
+                      "blobsBundle" -> blobsBundleJson,
+                      "shouldOverrideBuilder" -> JBool(false)
+                    )
+                  case 4 => // Prague: BlobsBundleV1 + executionRequests (EIP-7685)
+                    val executionRequests = engineApiService.getPayloadExecutionRequests(payloadId)
+                    JObject(
+                      "executionPayload" -> payload,
+                      "blockValue" -> JString(blockValueHex),
+                      "blobsBundle" -> blobsBundleJson,
+                      "shouldOverrideBuilder" -> JBool(false),
+                      "executionRequests" -> JArray(
+                        executionRequests.toList.map(r => JString(byteStringToHex(r)))
+                      )
+                    )
+                  case _ => // V5+: BlobsBundleV2 (EIP-7594 cell proofs) + executionRequests
+                    val executionRequests = engineApiService.getPayloadExecutionRequests(payloadId)
+                    val blobsBundleV2Json: JObject =
+                      val bundle = engineApiService.getPayloadBlobsBundle(payloadId)
+                      JObject(
+                        "commitments" -> JArray(bundle.commitments.toList.map(c => JString(byteStringToHex(c)))),
+                        "proofs" -> JArray(
+                          bundle.cellProofsPerBlob.flatten.toList.map(p => JString(byteStringToHex(p)))
+                        ),
+                        "blobs" -> JArray(bundle.blobs.toList.map(b => JString(byteStringToHex(b))))
+                      )
+                    JObject(
+                      "executionPayload" -> payload,
+                      "blockValue" -> JString(blockValueHex),
+                      "blobsBundle" -> blobsBundleV2Json,
+                      "shouldOverrideBuilder" -> JBool(false),
+                      "executionRequests" -> JArray(
+                        executionRequests.toList.map(r => JString(byteStringToHex(r)))
+                      )
+                    )
+                JsonRpcResponse("2.0", Some(result), None, reqId(request))
+            }
       case Left(err) =>
-        JsonRpcResponse("2.0", None, Some(JsonRpcError(-38001, err, None)), reqId(request))
+        IO.pure(JsonRpcResponse("2.0", None, Some(JsonRpcError(-38001, err, None)), reqId(request)))
     }
 
   // Payload JSON encoding and blockValue derivation live in the companion object so the

@@ -889,7 +889,8 @@ trait EngineApiBuilder extends Logger:
       blockchainWriter,
       blockExecution,
       forkChoiceManager,
-      Some(pendingTransactionsManagerTyped)
+      Some(pendingTransactionsManagerTyped),
+      getPayloadRebuildBudget = EngineApiService.GetPayloadRebuildBudget
     )(blockchainConfig, typedScheduler)
 
   lazy val engineApiController: EngineApiController = new EngineApiController(engineApiService, Some(jsonRpcController))

@@ -17,6 +17,7 @@ import com.chipprbots.ethereum.ledger.BlockExecution
 import com.chipprbots.ethereum.mpt.ByteArraySerializable
 import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.SignedTransactions.*
 import com.chipprbots.ethereum.rlp.encode as rlpEncode
+import com.chipprbots.ethereum.transactions.PendingTransactionsManager.PendingTransactionsResponse
 import com.chipprbots.ethereum.utils.BlockchainConfig
 import com.chipprbots.ethereum.utils.Logger
 
@@ -30,7 +31,11 @@ class EngineApiService(
     forkChoiceManager: ForkChoiceManager,
     pendingTransactionsManager: Option[org.apache.pekko.actor.typed.ActorRef[
       com.chipprbots.ethereum.transactions.PendingTransactionsManager.Command
-    ]]
+    ]],
+    // How long engine_getPayload may spend bringing a payload up to date with the pool before it serves the payload
+    // as built (see resolvePayload). Unbounded here, which keeps the specs deterministic; the node passes
+    // EngineApiService.GetPayloadRebuildBudget (NodeBuilder), because the CL gives engine_getPayload 1 s.
+    getPayloadRebuildBudget: scala.concurrent.duration.Duration = scala.concurrent.duration.Duration.Inf
 )(implicit blockchainConfig: BlockchainConfig, typedScheduler: org.apache.pekko.actor.typed.Scheduler)
     extends Logger:
 
@@ -76,6 +81,24 @@ class EngineApiService(
   // Insertion timestamps (System.nanoTime) shared by all four maps above, used for eviction.
   private val pendingPayloadTimestamps = new java.util.concurrent.ConcurrentHashMap[ByteString, Long]()
 
+  /** What a payload's build process builds from: its parent and attributes, and the hashes of every pending transaction
+    * the pool held when the current version was built — the test for whether engine_getPayload has anything to add.
+    */
+  final private case class PayloadBuildProcess(
+      parent: Block,
+      attrs: PayloadAttributes,
+      poolTxs: Set[ByteString],
+      startedAtNanos: Long
+  )
+  private val payloadBuildProcesses = new java.util.concurrent.ConcurrentHashMap[ByteString, PayloadBuildProcess]()
+
+  /** The answer of the first engine_getPayload that returned each payload; every later call gets the same one. */
+  private val servedPayloads =
+    new java.util.concurrent.ConcurrentHashMap[ByteString, cats.effect.Deferred[IO, Either[String, Block]]]()
+
+  /** go-ethereum stops improving a payload SECONDS_PER_SLOT after its build started (miner/payload_building.go). */
+  private val PayloadBuildLifetimeNs = 12_000_000_000L
+
   /** Remove a payloadId from all four pending maps and the timestamp index. */
   private def removePayloadEntry(payloadId: ByteString): Unit =
     pendingPayloads.remove(payloadId)
@@ -83,6 +106,64 @@ class EngineApiService(
     pendingPayloadReceipts.remove(payloadId)
     pendingPayloadBlobsBundle.remove(payloadId)
     pendingPayloadTimestamps.remove(payloadId)
+    payloadBuildProcesses.remove(payloadId)
+    servedPayloads.remove(payloadId)
+
+  /** One version of a payload: what engine_getPayload serves for it. */
+  final private case class EnginePayload(built: BuiltBlock, blobsBundle: BlobsBundleData)
+
+  /** Build a payload on `parent` from `attrs` and the pool contents `pool`: the engine path's historical policy —
+    * parent gas limit (modulo the one-shot EIP-1559 elasticity scale at London activation), the configured header
+    * extra-data, and LENIENT handling of a failed transaction — through the single proposer-side builder.
+    */
+  private def buildEnginePayload(
+      parent: Block,
+      attrs: PayloadAttributes,
+      pool: PendingTransactionsResponse
+  ): EnginePayload =
+    val (pendingTxsForBlock, blobTxRawBytesFromPool) = selectFromPool(pool, parent.header, Timestamp(attrs.timestamp))
+    val built = buildBlockOnParent(
+      parent,
+      attrs,
+      pendingTxsForBlock,
+      ByteString("fukuii".getBytes),
+      proposerGasLimit(parent.header, parent.header.number.value + 1, None),
+      strict = false
+    ) match
+      case Right(built) => built
+      case Left(err)    =>
+        // Unreachable with strict = false; buildBlockOnParent only returns Left when strict.
+        throw new IllegalStateException(s"lenient proposer build returned Left: $err")
+    // EIP-4844: collect the blob sidecars for every blob tx in the built payload so engine_getPayloadV3 can emit the
+    // blobsBundle envelope. Without this the envelope has empty arrays while the payload body has blob txs; the hive
+    // engine-cancun VerifyBlobBundle step fails with "expected N blob, got 0".
+    //
+    // EIP-7594 cell proofs only for an Osaka-or-later payload: engine_getPayloadV5 is their only reader here, and the
+    // controller refuses V5 for anything earlier. See buildBlobsBundle for what they cost.
+    val bundle = buildBlobsBundle(
+      built.block.body.transactionList,
+      blobTxRawBytesFromPool,
+      withCellProofs = blockchainConfig.isOsakaTimestamp(built.block.header.unixTimestamp)
+    )
+    EnginePayload(built, bundle)
+
+  /** Make `payload` what engine_getPayload serves for `payloadId`, replacing every part of an earlier version. */
+  private def storeEnginePayload(payloadId: ByteString, payload: EnginePayload): Unit =
+    pendingPayloads.put(payloadId, payload.built.block)
+    // Also stash executionRequests so getPayloadV4 can emit them.
+    if payload.built.executionRequests.nonEmpty then
+      pendingPayloadRequests.put(payloadId, payload.built.executionRequests)
+    else pendingPayloadRequests.remove(payloadId)
+    // Stash receipts so getPayloadV2+ can compute the blockValue envelope field.
+    if payload.built.receipts.nonEmpty then pendingPayloadReceipts.put(payloadId, payload.built.receipts)
+    else pendingPayloadReceipts.remove(payloadId)
+    if payload.blobsBundle.blobs.nonEmpty then pendingPayloadBlobsBundle.put(payloadId, payload.blobsBundle)
+    else pendingPayloadBlobsBundle.remove(payloadId)
+
+  private def poolTxHashes(pool: PendingTransactionsResponse): Set[ByteString] =
+    pool.pendingTransactions.iterator.map(_.stx.tx.hash.value).toSet
+
+  private def hexOf(bytes: ByteString): String = bytes.toArray.map("%02x".format(_)).mkString
 
   /** If the timestamp map is at cap, find the oldest entry and remove it from all four maps. */
   private def evictOldestIfAtCapacity(): Unit = evictionLock.synchronized {
@@ -774,60 +855,41 @@ class EngineApiService(
                         )
                       )
                     case Some(parent) =>
-                      selectMempoolTransactions(parent.header, Timestamp(attrs.timestamp))
-                        .flatMap { case (pendingTxsForBlock, blobTxRawBytesFromPool) =>
-                          IO {
-                            // Delegate to the single proposer-side builder (buildBlockOnParent). The engine
-                            // path keeps its historical policy: parent gas limit (modulo the one-shot EIP-1559
-                            // elasticity scale at London activation), the configured header extra-data, and
-                            // LENIENT handling of a failed transaction.
-                            val payload = buildBlockOnParent(
-                              parent,
-                              attrs,
-                              pendingTxsForBlock,
-                              ByteString("fukuii".getBytes),
-                              proposerGasLimit(parent.header, parent.header.number.value + 1, None),
-                              strict = false
-                            ) match
-                              case Right(built) => built
-                              case Left(err)    =>
-                                // Unreachable with strict = false; buildBlockOnParent only returns Left when strict.
-                                throw new IllegalStateException(s"lenient proposer build returned Left: $err")
-                            evictOldestIfAtCapacity()
-                            pendingPayloadTimestamps.put(id, System.nanoTime())
-                            pendingPayloads.put(id, payload.block)
-                            // Also stash executionRequests so getPayloadV4 can emit them.
-                            if payload.executionRequests.nonEmpty then
-                              pendingPayloadRequests.put(id, payload.executionRequests)
-                            // Stash receipts so getPayloadV2+ can compute the blockValue envelope field.
-                            if payload.receipts.nonEmpty then pendingPayloadReceipts.put(id, payload.receipts)
-                            // EIP-4844: collect the blob sidecars for every blob tx in the built payload
-                            // so engine_getPayloadV3 can emit the blobsBundle envelope. Without this the
-                            // envelope has empty arrays while the payload body has blob txs; the hive
-                            // engine-cancun VerifyBlobBundle step fails with "expected N blob, got 0".
-                            //
-                            // EIP-7594 cell proofs only for an Osaka-or-later payload: engine_getPayloadV5 is
-                            // their only reader here, and the controller refuses V5 for anything earlier. See
-                            // buildBlobsBundle for what they cost.
-                            val bundle = buildBlobsBundle(
-                              payload.block.body.transactionList,
-                              blobTxRawBytesFromPool,
-                              withCellProofs = blockchainConfig.isOsakaTimestamp(payload.block.header.unixTimestamp)
-                            )
-                            if bundle.blobs.nonEmpty then pendingPayloadBlobsBundle.put(id, bundle)
-                            log.info(
-                              "Built payload {} for block {} (baseFee={}, parent={}, fork={}, requests={})",
-                              id.toArray.map("%02x".format(_)).mkString,
-                              payload.block.header.number,
-                              payload.block.header.baseFee.getOrElse(BigInt(0)),
-                              parent.header.number,
-                              forkNameAt(payload.block.header.unixTimestamp),
-                              payload.executionRequests.size
-                            )
-                          }.handleError { e =>
-                            log.error("Failed to build payload: {}", e.getMessage)
+                      // A build process for these attributes already exists: return its id and leave it alone
+                      // (paris.md "Payload building" point 6, "SHOULD NOT restart it"; go-ethereum
+                      // `localBlocks.has(id)`). Restarting replaced a payload engine_getPayload may already have
+                      // served. What reached the pool since is picked up by engine_getPayload (resolvePayload).
+                      val alreadyBuilding =
+                        Option(pendingPayloadTimestamps.get(id)).exists(System.nanoTime() - _ <= PayloadTtlNs)
+                      val build: IO[Unit] =
+                        if alreadyBuilding then
+                          IO(log.debug("Payload {} is already being built; not restarting it", hexOf(id)))
+                        else
+                          pendingPoolTransactions.flatMap { pool =>
+                            IO {
+                              val payload = buildEnginePayload(parent, attrs, pool)
+                              evictOldestIfAtCapacity()
+                              pendingPayloadTimestamps.put(id, System.nanoTime())
+                              storeEnginePayload(id, payload)
+                              payloadBuildProcesses.put(
+                                id,
+                                PayloadBuildProcess(parent, attrs, poolTxHashes(pool), System.nanoTime())
+                              )
+                              servedPayloads.remove(id)
+                              log.info(
+                                "Built payload {} for block {} (baseFee={}, parent={}, fork={}, requests={})",
+                                hexOf(id),
+                                payload.built.block.header.number,
+                                payload.built.block.header.baseFee.getOrElse(BigInt(0)),
+                                parent.header.number,
+                                forkNameAt(payload.built.block.header.unixTimestamp),
+                                payload.built.executionRequests.size
+                              )
+                            }.handleError { e =>
+                              log.error("Failed to build payload: {}", e.getMessage)
+                            }
                           }
-                        }
+                      build
                         .map { _ =>
                           EngineApiMetrics.recordForkchoiceUpdated("VALID")
                           Right(
@@ -865,6 +927,10 @@ class EngineApiService(
       parent: BlockHeader,
       timestamp: Timestamp
   ): IO[(Seq[SignedTransaction], Map[ByteString, ByteString])] =
+    pendingPoolTransactions.map(selectFromPool(_, parent, timestamp))
+
+  /** The pool's pending transactions, as the proposer build reads them. A pool that cannot be asked reads as empty. */
+  private def pendingPoolTransactions: IO[PendingTransactionsResponse] =
     import com.chipprbots.ethereum.transactions.PendingTransactionsManager.*
     import org.apache.pekko.actor.typed.scaladsl.AskPattern.*
     // Fetch pending transactions from the tx pool using IO.fromFuture so the
@@ -881,55 +947,60 @@ class EngineApiService(
         }
       }
       .getOrElse(IO.pure(PendingTransactionsResponse(Seq.empty)))
-      .map { response =>
-        val expectedChainId = blockchainConfig.chainId.value
-        val onChain = response.pendingTransactions.filter { ptx =>
-          val txChainId: Option[BigInt] = ptx.stx.tx.tx match
-            case t: com.chipprbots.ethereum.domain.TransactionWithAccessList => Some(t.chainId)
-            case t: com.chipprbots.ethereum.domain.TransactionWithDynamicFee => Some(t.chainId)
-            case t: com.chipprbots.ethereum.domain.BlobTransaction           => Some(t.chainId)
-            case t: com.chipprbots.ethereum.domain.SetCodeTransaction        => Some(t.chainId)
-            case _ => None // legacy txs don't have explicit chainID
-          txChainId.forall(_ == expectedChainId)
-        }
-        // executableAtParent needs each sender's transactions together and in nonce order (the pool
-        // answers in no particular order); the order between senders is decided later, by price.
-        val bySenderThenNonce =
-          onChain.groupBy(_.stx.senderAddress).values.toSeq.flatMap(_.sortBy(_.stx.tx.tx.nonce))
-        val arrival = bySenderThenNonce.map(p => p.stx.tx.hash -> p).toMap
-        val candidates = executableAtParent(parent, bySenderThenNonce.map(_.stx.tx)).flatMap { stx =>
-          arrival.get(stx.hash).map(p => ProposerTxSelection.Candidate(stx, p.stx.senderAddress, p.addTimestamp))
-        }
 
-        val baseFee = BaseFeeCalculator.calcBaseFee(parent, blockchainConfig)
-        val isCancun = blockchainConfig.isCancunTimestamp(timestamp)
-        // Blob transactions do not exist before Cancun: no blob base fee, no blob gas.
-        // (BlobGasUtils.maxBlobGasPerBlock answers the Cancun cap for a pre-Cancun timestamp, so it
-        // must not be asked here without this guard.)
-        val blobBaseFee: Option[BigInt] = Option.when(isCancun) {
-          val childExcessBlobGas = BlobGasUtils.expectedExcessBlobGas(
-            parent.excessBlobGas.getOrElse(BigInt(0)),
-            parent.blobGasUsed.getOrElse(BigInt(0)),
-            parent.baseFee.getOrElse(BigInt(0)),
-            timestamp,
-            blockchainConfig
-          )
-          BlobGasUtils.getBlobGasPrice(childExcessBlobGas, timestamp, blockchainConfig)
-        }
-        val maxBlobGas = if isCancun then BlobGasUtils.maxBlobGasPerBlock(timestamp, blockchainConfig) else BigInt(0)
-        val selected = ProposerTxSelection.select(candidates, baseFee, blobBaseFee, maxBlobGas)
+  /** [[selectMempoolTransactions]]' selection, from pool contents already read. */
+  private def selectFromPool(
+      response: PendingTransactionsResponse,
+      parent: BlockHeader,
+      timestamp: Timestamp
+  ): (Seq[SignedTransaction], Map[ByteString, ByteString]) =
+    val expectedChainId = blockchainConfig.chainId.value
+    val onChain = response.pendingTransactions.filter { ptx =>
+      val txChainId: Option[BigInt] = ptx.stx.tx.tx match
+        case t: com.chipprbots.ethereum.domain.TransactionWithAccessList => Some(t.chainId)
+        case t: com.chipprbots.ethereum.domain.TransactionWithDynamicFee => Some(t.chainId)
+        case t: com.chipprbots.ethereum.domain.BlobTransaction           => Some(t.chainId)
+        case t: com.chipprbots.ethereum.domain.SetCodeTransaction        => Some(t.chainId)
+        case _ => None // legacy txs don't have explicit chainID
+      txChainId.forall(_ == expectedChainId)
+    }
+    // executableAtParent needs each sender's transactions together and in nonce order (the pool
+    // answers in no particular order); the order between senders is decided later, by price.
+    val bySenderThenNonce =
+      onChain.groupBy(_.stx.senderAddress).values.toSeq.flatMap(_.sortBy(_.stx.tx.tx.nonce))
+    val arrival = bySenderThenNonce.map(p => p.stx.tx.hash -> p).toMap
+    val candidates = executableAtParent(parent, bySenderThenNonce.map(_.stx.tx)).flatMap { stx =>
+      arrival.get(stx.hash).map(p => ProposerTxSelection.Candidate(stx, p.stx.senderAddress, p.addTimestamp))
+    }
 
-        if onChain.nonEmpty then
-          log.info(
-            "Proposer build on block {}: {} of {} pool transaction(s) selected (baseFee={}, blobBaseFee={})",
-            parent.number,
-            selected.size,
-            onChain.size,
-            baseFee,
-            blobBaseFee.map(_.toString).getOrElse("n/a")
-          )
-        (selected, response.blobTxNetworkBytes)
-      }
+    val baseFee = BaseFeeCalculator.calcBaseFee(parent, blockchainConfig)
+    val isCancun = blockchainConfig.isCancunTimestamp(timestamp)
+    // Blob transactions do not exist before Cancun: no blob base fee, no blob gas.
+    // (BlobGasUtils.maxBlobGasPerBlock answers the Cancun cap for a pre-Cancun timestamp, so it
+    // must not be asked here without this guard.)
+    val blobBaseFee: Option[BigInt] = Option.when(isCancun) {
+      val childExcessBlobGas = BlobGasUtils.expectedExcessBlobGas(
+        parent.excessBlobGas.getOrElse(BigInt(0)),
+        parent.blobGasUsed.getOrElse(BigInt(0)),
+        parent.baseFee.getOrElse(BigInt(0)),
+        timestamp,
+        blockchainConfig
+      )
+      BlobGasUtils.getBlobGasPrice(childExcessBlobGas, timestamp, blockchainConfig)
+    }
+    val maxBlobGas = if isCancun then BlobGasUtils.maxBlobGasPerBlock(timestamp, blockchainConfig) else BigInt(0)
+    val selected = ProposerTxSelection.select(candidates, baseFee, blobBaseFee, maxBlobGas)
+
+    if onChain.nonEmpty then
+      log.info(
+        "Proposer build on block {}: {} of {} pool transaction(s) selected (baseFee={}, blobBaseFee={})",
+        parent.number,
+        selected.size,
+        onChain.size,
+        baseFee,
+        blobBaseFee.map(_.toString).getOrElse("n/a")
+      )
+    (selected, response.blobTxNetworkBytes)
 
   /** The prefix-by-sender of `txs` that can actually execute on top of `parent`: per sender, only the unbroken run of
     * nonces starting at that sender's nonce in `parent`'s state. `txs` must already have each sender's transactions
@@ -1360,7 +1431,9 @@ class EngineApiService(
       BuiltBlock(skeletonBlock.copy(header = updatedHeader), receipts, executionRequests)
     }
 
-  /** engine_getPayloadV1/V2/V3/V4 — Return a previously built payload by ID. */
+  /** The payload currently held for `payloadId`, exactly as stored — nothing is rebuilt. engine_getPayload answers with
+    * [[resolvePayload]]; the controller reads this first only to check the method version against the payload's fork.
+    */
   def getPayload(payloadId: ByteString): IO[Either[String, Block]] = IO {
     // Do NOT remove: the engine-api spec allows the CL to call getPayload multiple times for
     // the same id (e.g. first getPayloadV1 then getPayloadV2 for the same payload, as the
@@ -1380,6 +1453,98 @@ class EngineApiService(
         else Right(block)
       case None => Left("Payload not available")
   }
+
+  /** engine_getPayloadV1..V5 — the payload for `payloadId`, brought up to date with the pool ONCE, then served
+    * unchanged to every later call.
+    *
+    * execution-apis paris.md engine_getPayloadV1: "MUST return the most recent version of the payload that is available
+    * in the corresponding build process at the time of receiving the call"; "Payload building" point 3: the default
+    * strategy keeps the transaction set up to date with the local mempool until getPayload. The build ran once, inside
+    * forkchoiceUpdated, so a transaction that reached the pool in between was left out: hive `Blob Transaction
+    * Ordering, Multiple Clients (Cancun)` saw 5 blobs where client B's gossiped 1-blob transaction made 6.
+    *
+    * So the first call rebuilds on the same parent and attributes when — and only when — the pool's pending set differs
+    * from the one the current version was built from; an unchanged pool serves the stored payload itself. After that
+    * the payload is frozen: go-ethereum stops its build process on the first getPayload (`Payload.Resolve`), and hive's
+    * withdrawals tests fetch one id with V1 and then V2 and expect the same payload. A build process older than
+    * SECONDS_PER_SLOT is not improved (go-ethereum's 12 s end timer).
+    *
+    * The rebuild is bounded by `getPayloadRebuildBudget`: the CL waits 1 s for engine_getPayload (execution-apis
+    * common.md), and a build can take seconds (buildBlobsBundle: 6 Osaka blobs ≈ 4.3 s). Past the budget the stored
+    * payload is served and the rebuild's result is discarded. The rebuild goes through the same buildBlockOnParent as
+    * forkchoiceUpdated's build; like every proposer build it persists its trie nodes
+    * (BlockExecution.executeForProposer).
+    *
+    * Concurrent calls for one id share the first call's answer.
+    */
+  def resolvePayload(payloadId: ByteString): IO[Either[String, Block]] =
+    IO.deferred[Either[String, Block]].flatMap { mine =>
+      IO(Option(servedPayloads.putIfAbsent(payloadId, mine))).flatMap {
+        case Some(first) => first.get
+        case None        =>
+          // Uncancelable once owned: every later call for this id waits on `mine`, so it must always be completed.
+          // Bounded all the same — the rebuild runs under getPayloadRebuildBudget.
+          IO.uncancelable { _ =>
+            refreshPayload(payloadId)
+              .handleErrorWith { e =>
+                IO(
+                  log.warn(
+                    "[ENGINE-API] payload {}: bringing it up to date failed ({}); serving it as built",
+                    hexOf(payloadId),
+                    e.getMessage
+                  )
+                ) *> getPayload(payloadId)
+              }
+              .flatTap(mine.complete)
+          }
+      }
+    }
+
+  private def refreshPayload(payloadId: ByteString): IO[Either[String, Block]] =
+    Option(payloadBuildProcesses.get(payloadId)) match
+      case Some(process) if System.nanoTime() - process.startedAtNanos <= PayloadBuildLifetimeNs =>
+        val rebuild: IO[Option[(EnginePayload, Set[ByteString])]] =
+          pendingPoolTransactions.flatMap { pool =>
+            val poolTxs = poolTxHashes(pool)
+            if poolTxs == process.poolTxs then IO.pure(None)
+            else
+              IO.blocking(Some(buildEnginePayload(process.parent, process.attrs, pool) -> poolTxs)).onError { case e =>
+                IO(log.warn("[ENGINE-API] payload {}: rebuild failed: {}", hexOf(payloadId), e.getMessage))
+              }
+          }
+        // The rebuild runs in its own fiber so the budget can abandon it: a started build is not interruptible, and
+        // waiting on it through a timeout would wait for it to finish anyway.
+        rebuild.start
+          .flatMap(
+            _.joinWithNever.timeoutTo(
+              getPayloadRebuildBudget,
+              IO(
+                log.warn(
+                  "[ENGINE-API] payload {}: rebuild did not finish within {}; serving the payload as built",
+                  hexOf(payloadId),
+                  getPayloadRebuildBudget
+                )
+              ).as(None)
+            )
+          )
+          .flatMap {
+            case Some((payload, poolTxs)) =>
+              IO {
+                // Not if eviction dropped the entry meanwhile: that would re-create it without a timestamp.
+                if pendingPayloadTimestamps.containsKey(payloadId) then
+                  storeEnginePayload(payloadId, payload)
+                  payloadBuildProcesses.put(payloadId, process.copy(poolTxs = poolTxs))
+                log.info(
+                  "Rebuilt payload {} for block {} with the pool as it is now: {} transaction(s)",
+                  hexOf(payloadId),
+                  payload.built.block.header.number,
+                  payload.built.block.body.transactionList.size
+                )
+                Right(payload.built.block)
+              }
+            case None => getPayload(payloadId)
+          }
+      case _ => getPayload(payloadId)
 
   /** Return the EIP-7685 executionRequests (typed byte strings, type-prefixed) associated with a payload we built. Only
     * non-empty for Prague+ blocks. Used by engine_getPayloadV4 to return the requests alongside the executionPayload
@@ -1868,3 +2033,12 @@ object BlobGasUtils:
       numeratorAccum = (numeratorAccum * numerator) / (denominator * i)
       i += 1
     output / denominator
+
+object EngineApiService:
+
+  /** How long engine_getPayload may spend bringing a payload up to date with the pool (`resolvePayload`) before it
+    * serves the payload as built. The CL waits 1 s for engine_getPayload (execution-apis common.md, "Timeouts"); half
+    * of it leaves room for the pool query and for encoding the envelope, whose blobs bundle alone can run to megabytes.
+    */
+  val GetPayloadRebuildBudget: scala.concurrent.duration.FiniteDuration =
+    scala.concurrent.duration.FiniteDuration(500, java.util.concurrent.TimeUnit.MILLISECONDS)
