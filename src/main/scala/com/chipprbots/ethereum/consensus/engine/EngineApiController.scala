@@ -269,57 +269,15 @@ class EngineApiController(
               )
             )
           case Right((fcs, payloadAttrs)) =>
-            // Version enforcement for forkchoiceUpdated:
-            // V3: requires parentBeaconBlockRoot in payload attributes (Cancun+)
-            // V1/V2: must NOT have parentBeaconBlockRoot
-            // Post-Cancun timestamp: V2 without beacon root → UnsupportedFork
-            // Pre-Cancun timestamp: V3 with beacon root → UnsupportedFork
-            val hasBeaconRoot = payloadAttrs.exists(_.parentBeaconBlockRoot.isDefined)
-            val hasWithdrawals = payloadAttrs.exists(_.withdrawals.isDefined)
-            val attrTimestamp = payloadAttrs.map(_.timestamp)
-            val blockchainConfig = com.chipprbots.ethereum.utils.Config.blockchains.blockchainConfig
-            val isShanghaiTimestamp = attrTimestamp.exists(ts => blockchainConfig.isShanghaiTimestamp(Timestamp(ts)))
-            val isCancunTimestamp = attrTimestamp.exists(ts => blockchainConfig.isCancunTimestamp(Timestamp(ts)))
-
-            // Engine API version matrix. -38005 UNSUPPORTED_FORK only when the RPC method itself is
-            // wrong for the current fork; -38003 INVALID_PAYLOAD_ATTRIBUTES for attribute-shape
-            // violations. V2 is permissive — it accepts V1-shape attrs pre-Shanghai. The hive
-            // withdrawals suite checks exact codes.
-            //   V1: timestamp < shanghai (hard error if post-Shanghai),        withdrawals absent
-            //   V2: accepts pre-Shanghai (V1-shape) OR post-Shanghai (V2-shape), beaconRoot absent
-            //   V3: timestamp ≥ cancun,                                         withdrawals + beaconRoot present
             val InvalidAttrs = -38003
-            val versionError: Option[(Int, String)] = (version, payloadAttrs) match
-              case (3, Some(_)) if !isCancunTimestamp && hasBeaconRoot =>
-                Some(UnsupportedFork -> "forkchoiceUpdatedV3 with beacon root before Cancun activation")
-              case (2, Some(_)) if isCancunTimestamp && hasBeaconRoot =>
-                // V2 attrs are NOT supposed to carry a beacon root. If the CL still sends one at
-                // a Cancun timestamp it's an attribute-shape error → -38003. (hive "Non-Null
-                // Beacon Root" variant)
-                Some(InvalidAttrs -> "forkchoiceUpdatedV2 attrs must not include parentBeaconBlockRoot")
-              case (2, Some(_)) if isCancunTimestamp =>
-                // V2 attrs without beacon root, post-Cancun → wrong method for this fork. hive
-                // "Missing Beacon Root" variant expects -38005 UNSUPPORTED_FORK.
-                Some(UnsupportedFork -> "forkchoiceUpdatedV2 cannot be used post-Cancun, use V3")
-              case (v, Some(_)) if v < 2 && isCancunTimestamp =>
-                Some(UnsupportedFork -> s"forkchoiceUpdatedV$v cannot be used post-Cancun, use V3")
-              case (1, Some(_)) if isShanghaiTimestamp =>
-                Some(UnsupportedFork -> "forkchoiceUpdatedV1 cannot be used post-Shanghai, use V2")
-              case (1, Some(_)) if hasWithdrawals =>
-                Some(InvalidAttrs -> "forkchoiceUpdatedV1 attrs must not include withdrawals")
-              // V2 pre-Shanghai: V1-shape attrs are OK; withdrawals field is NOT allowed.
-              case (2, Some(_)) if !isShanghaiTimestamp && hasWithdrawals =>
-                Some(InvalidAttrs -> "forkchoiceUpdatedV2 attrs must not include withdrawals pre-Shanghai")
-              // V2 post-Shanghai: withdrawals field is required.
-              case (2, Some(_)) if isShanghaiTimestamp && !hasWithdrawals =>
-                Some(InvalidAttrs -> "forkchoiceUpdatedV2 attrs must include withdrawals post-Shanghai")
-              case (2, Some(_)) if hasBeaconRoot =>
-                Some(InvalidAttrs -> "forkchoiceUpdatedV2 attrs must not include parentBeaconBlockRoot")
-              case (3, Some(_)) if !hasWithdrawals =>
-                Some(InvalidAttrs -> "forkchoiceUpdatedV3 attrs must include withdrawals")
-              case (3, Some(_)) if isCancunTimestamp && !hasBeaconRoot =>
-                Some(InvalidAttrs -> "forkchoiceUpdatedV3 attrs must include parentBeaconBlockRoot post-Cancun")
-              case _ => None
+            val versionError: Option[(Int, String)] =
+              payloadAttrs.flatMap(attrs =>
+                EngineApiController.payloadAttributesVersionError(
+                  version,
+                  attrs,
+                  com.chipprbots.ethereum.utils.Config.blockchains.blockchainConfig
+                )
+              )
 
             if versionError.isDefined then
               val (code, msg) = versionError.get
@@ -689,6 +647,69 @@ class EngineApiController(
   * `testing_buildBlockV1` returns the same envelope engine_getPayloadV3+ does, so both must encode identically.
   */
 object EngineApiController:
+
+  private val InvalidParamsCode = -32602
+  private val InvalidPayloadAttributesCode = -38003
+  private val UnsupportedForkCode = -38005
+
+  /** The JSON-RPC error (code, message) an `engine_forkchoiceUpdatedV{version}` call must answer for these payload
+    * attributes, or None when they are acceptable for the method. Pure: reads nothing but its arguments.
+    *
+    * Checks run in go-ethereum's order (eth/catalyst/api.go `ForkchoiceUpdatedV1/V2/V3`): the attribute SHAPE first,
+    * the fork window last. The order is observable, because an attribute set that is both mis-shaped and for the wrong
+    * fork gets the shape code, and hive asserts it. `ForkchoiceUpdatedV3 To Request Shanghai Payload, Null Beacon Root`
+    * sends V3 at a Shanghai timestamp without a beacon root and expects -38003; the `Non-Null Beacon Root` variant
+    * (same timestamp, beacon root present) expects -38005. The old matrix tested the fork first and let the
+    * null-beacon-root case through as VALID, because its only beacon-root check was confined to Cancun timestamps.
+    *
+    *   - V1: withdrawals or beacon root present -> -32602 (go-ethereum `paramsErr`), then a Shanghai-or-later timestamp
+    *     -> -38005. Deliberate deviation: go-ethereum also accepts Shanghai timestamps on V1 (it reports -32602 only
+    *     from Cancun on). We keep the execution-apis "update the methods of previous forks" rule, because a V1 build at
+    *     a Shanghai timestamp would carry no withdrawals list, and neither `getPayloadV1` nor `newPayloadV1` here
+    *     serves a Shanghai payload, so the payload could never round-trip.
+    *   - V2: beacon root present -> -38003; Paris with withdrawals -> -38003; Shanghai without withdrawals -> -38003;
+    *     any fork other than Paris/Shanghai -> -38005.
+    *   - V3: withdrawals missing -> -38003; beacon root missing -> -38003 (at ANY timestamp); a fork outside
+    *     Cancun..BPO5 (i.e. pre-Cancun, or Amsterdam onwards, which needs V4) -> -38005.
+    *
+    * -38003 answers still apply the forkchoice state first (see `handleForkchoiceUpdated`); -32602 and -38005 do not.
+    */
+  def payloadAttributesVersionError(
+      version: Int,
+      attrs: PayloadAttributes,
+      blockchainConfig: com.chipprbots.ethereum.utils.BlockchainConfig
+  ): Option[(Int, String)] =
+    val ts = Timestamp(attrs.timestamp)
+    val hasWithdrawals = attrs.withdrawals.isDefined
+    val hasBeaconRoot = attrs.parentBeaconBlockRoot.isDefined
+    val isShanghai = blockchainConfig.isShanghaiTimestamp(ts)
+    val isCancun = blockchainConfig.isCancunTimestamp(ts)
+    // The Engine API only exists post-merge, so "not yet Shanghai" is Paris.
+    val latestIsParis = !isShanghai
+    val latestIsShanghai = isShanghai && !isCancun
+    // go-ethereum checkFork(ts, Cancun, Prague, Osaka, BPO1..BPO5): Cancun is active and Amsterdam is not.
+    val inV3Window = isCancun && !blockchainConfig.isAmsterdamTimestamp(ts)
+    version match
+      case 1 =>
+        if hasWithdrawals || hasBeaconRoot then
+          Some(InvalidParamsCode -> "forkchoiceUpdatedV1: withdrawals and beacon root not supported in V1")
+        else if isShanghai then Some(UnsupportedForkCode -> "forkchoiceUpdatedV1 cannot be used post-Shanghai, use V2")
+        else None
+      case 2 =>
+        if hasBeaconRoot then Some(InvalidPayloadAttributesCode -> "forkchoiceUpdatedV2: unexpected beacon root")
+        else if latestIsParis && hasWithdrawals then
+          Some(InvalidPayloadAttributesCode -> "forkchoiceUpdatedV2: withdrawals before Shanghai")
+        else if latestIsShanghai && !hasWithdrawals then
+          Some(InvalidPayloadAttributesCode -> "forkchoiceUpdatedV2: missing withdrawals")
+        else if !(latestIsParis || latestIsShanghai) then
+          Some(UnsupportedForkCode -> "forkchoiceUpdatedV2 must only be called for Paris or Shanghai payloads")
+        else None
+      case _ =>
+        if !hasWithdrawals then Some(InvalidPayloadAttributesCode -> "forkchoiceUpdatedV3: missing withdrawals")
+        else if !hasBeaconRoot then Some(InvalidPayloadAttributesCode -> "forkchoiceUpdatedV3: missing beacon root")
+        else if !inV3Window then
+          Some(UnsupportedForkCode -> "forkchoiceUpdatedV3 must only be called for Cancun/Prague/Osaka payloads")
+        else None
 
   def byteStringToHex(bs: ByteString): String = "0x" + bs.map("%02x".format(_)).mkString
 
