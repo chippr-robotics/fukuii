@@ -60,7 +60,8 @@ object EestEngineReplay:
       case Right(a)    => a
       case Left(async) => async.unsafeRunSync()(using IORuntime.global)
 
-  /** `(status, validationError)` of the PayloadStatusV1 `statusObject` picks out of the answer, or its JSON-RPC error. */
+  /** `(status, validationError)` of the PayloadStatusV1 `statusObject` picks out of the answer, or its JSON-RPC error.
+    */
   private def outcome(response: JsonRpcResponse, statusObject: JValue => JValue): Either[String, (String, String)] =
     response.error match
       case Some(error) => Left(s"error ${error.code} (${error.message})")
