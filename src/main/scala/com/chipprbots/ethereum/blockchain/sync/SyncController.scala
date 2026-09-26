@@ -1432,11 +1432,16 @@ object SyncController:
           if needBytecode || needStorage then startRecovery(needBytecode, needStorage)
           else startRegularSync()._2
         case (_, SyncMode.Regular) =>
+          // Says what actually happens. Regular sync fetches missing nodes on demand (redownload-missing-state-nodes);
+          // when peers cannot serve them BlockImporter reports RegularSyncStuck, and that handler starts SNAP whatever
+          // do-snap-sync says. Changing that escape to honour do-snap-sync would leave such a node with no way out.
           liveSnapPivotFloor().foreach { floor =>
             log.error(
-              "Fast sync was in progress when this node was upgraded; fast sync was removed. Its best block {} " +
-                "was downloaded without state, and do-snap-sync is off, so regular sync will have to fetch the " +
-                "missing state node by node. Enable fukuii.sync.do-snap-sync to download it with SNAP.",
+              "Fast sync was in progress when this node was upgraded; fast sync was removed. Its best block {} has no " +
+                "state behind it, and do-snap-sync is off, so regular sync starts there and fetches the missing state " +
+                "from peers node by node. If peers cannot serve it, regular sync reports itself stuck and the node " +
+                "re-syncs with SNAP from a newer pivot, even with do-snap-sync off. Set fukuii.sync.do-snap-sync = true " +
+                "to start with SNAP instead.",
               floor - 1
             )
           }

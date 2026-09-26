@@ -18,6 +18,7 @@ import scala.collection.immutable.ArraySeq
 import scala.compiletime.asMatchable
 import scala.concurrent.Await
 import scala.concurrent.duration.*
+import scala.jdk.CollectionConverters.*
 
 import com.typesafe.config.ConfigFactory
 import org.scalamock.scalatest.MockFactory
@@ -344,6 +345,20 @@ class SyncControllerSpec
   private def childNamed(testSetup: TestSetup, prefix: String): Boolean =
     testSetup.syncController.children.exists(_.path.name.startsWith(prefix))
 
+  /** The ERROR messages SyncController logs while `f` runs (TestActorRef handles the message on the calling thread). */
+  private def syncControllerErrorsDuring(f: => Unit): List[String] =
+    val logger = org.slf4j.LoggerFactory
+      .getLogger("com.chipprbots.ethereum.blockchain.sync.SyncController$Impl")
+      .asInstanceOf[ch.qos.logback.classic.Logger]
+    val appender = new ch.qos.logback.core.read.ListAppender[ch.qos.logback.classic.spi.ILoggingEvent]
+    appender.start()
+    logger.addAppender(appender)
+    try f
+    finally logger.detachAppender(appender)
+    appender.list.asScala.toList
+      .filter(_.getLevel == ch.qos.logback.classic.Level.ERROR)
+      .map(_.getFormattedMessage)
+
   /** SNAP part-way through healing: pivot saved, every data phase done, best moved on by a healing pivot roll. */
   private def seedMidHeal(testSetup: TestSetup, pivot: BigInt, best: BigInt): Unit =
     import testSetup.*
@@ -549,7 +564,11 @@ class SyncControllerSpec
     import testSetup.*
     seedStrandedFastSync(testSetup)
 
-    syncController ! SyncController.WrappedSyncProtocol(SyncProtocol.Start)
+    val errors = syncControllerErrorsDuring(syncController ! SyncController.WrappedSyncProtocol(SyncProtocol.Start))
+
+    // The ERROR has to say what the node will do: regular sync tries the missing state node by node and, when peers
+    // cannot serve it, RegularSyncStuck re-runs SNAP whatever do-snap-sync says.
+    errors.exists(_.contains("re-syncs with SNAP from a newer pivot, even with do-snap-sync off")) shouldBe true
 
     eventually {
       someTimePasses()
