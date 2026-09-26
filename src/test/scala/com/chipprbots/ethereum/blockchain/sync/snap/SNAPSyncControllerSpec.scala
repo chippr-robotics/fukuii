@@ -165,14 +165,12 @@ class SNAPSyncControllerSpec extends AnyFlatSpec with Matchers:
     val _ = StateValidationComplete
     val getProgress = GetProgress
     val bootstrapComplete = BootstrapComplete
-    val fallback = FallbackToFastSync
 
     // Verify they exist
     start shouldBe Start
     done shouldBe Done
     getProgress shouldBe GetProgress
     bootstrapComplete shouldBe BootstrapComplete
-    fallback shouldBe FallbackToFastSync
   }
 
   it should "skip healing for clean deferred-merkleization downloads only" taggedAs UnitTest in {
@@ -944,7 +942,7 @@ class SNAPSyncControllerSpec extends AnyFlatSpec with Matchers:
     (consecutivePivotRefreshes >= MaxConsecutivePivotRefreshes) shouldBe false
   }
 
-  it should "trigger FallbackToFastSync after maxSnapSyncFailures (5) accumulated critical failures" taggedAs UnitTest in {
+  it should "enter dormant mode after maxSnapSyncFailures (5) accumulated critical failures" taggedAs UnitTest in {
     var criticalFailureCount = 0
     val maxSnapSyncFailures = 5
 
@@ -955,7 +953,7 @@ class SNAPSyncControllerSpec extends AnyFlatSpec with Matchers:
 
     // Final failure tips over threshold
     criticalFailureCount += 1
-    (criticalFailureCount >= maxSnapSyncFailures) shouldBe true // → fallbackToFastSync()
+    (criticalFailureCount >= maxSnapSyncFailures) shouldBe true // → enterDormantMode()
   }
 
   it should "lock MaxConsecutivePivotRefreshes=3 and default maxSnapSyncFailures=5 as threshold constants" taggedAs UnitTest in {

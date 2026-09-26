@@ -130,7 +130,7 @@ object SyncController:
   // child reply types are added or removed.
   //
   //   From SNAPSyncController (child reply-target = snapAdapter via Typed spawn):
-  //     SNAPSyncController.SnapSyncFinalized, SNAPSyncController.Done, SNAPSyncController.FallbackToFastSync,
+  //     SNAPSyncController.SnapSyncFinalized, SNAPSyncController.Done,
   //     SNAPSyncController.RequestHealingServeRoot, SNAPSyncController.StartRegularSyncBootstrap,
   //     SNAPSyncController.StartRegularSyncBootstrapByHash, SNAPSyncController.BootstrapComplete,
   //     SNAPSyncController.PivotBootstrapFailed, SyncProtocol.HealingImpossible, SyncProtocol.Status.Progress
@@ -718,17 +718,6 @@ object SyncController:
             resetSnapFastCycleCount()
             startRegularSync()._2
 
-          case com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController.FallbackToFastSync =>
-            ctx.unwatch(snapSync) // §7c-D4: intentional stop — drop the critical death-watch first.
-            ctx.stop(snapSync)
-            log.warn("SNAP sync failed repeatedly, falling back to fast sync")
-            // spec 004 MUST-FIX: clear the healing serve-root latch on every exit from runningSnapSync.
-            abortHealingServeRootRequest("SNAP fallback to fast sync — leaving snap sync")
-            snapFastCycleCount += 1
-            appStateStorage.putSnapFastCycleCount(snapFastCycleCount).commit()
-            log.info("SNAP<->Fast cycle count: {}", snapFastCycleCount)
-            checkSnapFastEscapeHatch().getOrElse(startFastSync())
-
           case SyncProtocol.HealingImpossible =>
             ctx.unwatch(snapSync) // §7c-D4: intentional stop — drop the critical death-watch first.
             ctx.stop(snapSync)
@@ -1216,16 +1205,6 @@ object SyncController:
                 s"pivot-header-bootstrap-$gen"
               )
           runningPivotHeaderBootstrap(newPeersClient, newHeaderBootstrap, newTargetBlock, originalSnapSyncRef)
-
-        case com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController.FallbackToFastSync =>
-          log.warn("Received FallbackToFastSync during pivot header bootstrap. Stopping bootstrap and falling back.")
-          ctx.stop(headerBootstrap)
-          ctx.stop(peersClient)
-          ctx.stop(originalSnapSyncRef)
-          snapFastCycleCount += 1
-          appStateStorage.putSnapFastCycleCount(snapFastCycleCount).commit()
-          log.info("SNAP<->Fast cycle count: {}", snapFastCycleCount)
-          checkSnapFastEscapeHatch().getOrElse(startFastSync())
 
         case com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController.SnapSyncFinalized(pivot) =>
           log.info(
