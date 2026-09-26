@@ -121,7 +121,7 @@
       },
       "targets": [
         {
-          "expr": "app_regularsync_block_current_number_gauge{instance=~\"$instance\"} or app_fastsync_block_bestFullBlock_number_gauge{instance=~\"$instance\"} or app_sync_block_number_gauge{instance=~\"$instance\"}",
+          "expr": "app_regularsync_block_current_number_gauge{instance=~\"$instance\"} or app_sync_block_number_gauge{instance=~\"$instance\"}",
           "refId": "A",
           "legendFormat": "{{instance}}"
         }
@@ -165,7 +165,7 @@
       },
       "targets": [
         {
-          "expr": "app_regularsync_block_bestKnown_number_gauge{instance=~\"$instance\"} or app_fastsync_block_pivotBlock_number_gauge{instance=~\"$instance\"}",
+          "expr": "app_regularsync_block_bestKnown_number_gauge{instance=~\"$instance\"} or app_snapsync_pivot_block_number_gauge{instance=~\"$instance\"}",
           "refId": "A",
           "legendFormat": "{{instance}}"
         }
@@ -209,7 +209,7 @@
       },
       "targets": [
         {
-          "expr": "clamp_min((app_regularsync_block_bestKnown_number_gauge{instance=~\"$instance\"} or app_fastsync_block_pivotBlock_number_gauge{instance=~\"$instance\"}) - (app_regularsync_block_current_number_gauge{instance=~\"$instance\"} or app_fastsync_block_bestFullBlock_number_gauge{instance=~\"$instance\"}), 0)",
+          "expr": "clamp_min((app_regularsync_block_bestKnown_number_gauge{instance=~\"$instance\"} or app_snapsync_pivot_block_number_gauge{instance=~\"$instance\"}) - (app_regularsync_block_current_number_gauge{instance=~\"$instance\"} or app_sync_block_number_gauge{instance=~\"$instance\"}), 0)",
           "refId": "A",
           "legendFormat": "{{instance}}"
         }
@@ -352,19 +352,9 @@
           "legendFormat": "{{instance}} last executed"
         },
         {
-          "expr": "app_fastsync_block_bestFullBlock_number_gauge{instance=~\"$instance\"}",
+          "expr": "app_snapsync_pivot_block_number_gauge{instance=~\"$instance\"}",
           "refId": "D",
-          "legendFormat": "{{instance}} fast-sync best"
-        },
-        {
-          "expr": "app_fastsync_block_bestHeader_number_gauge{instance=~\"$instance\"}",
-          "refId": "E",
-          "legendFormat": "{{instance}} fast-sync headers"
-        },
-        {
-          "expr": "app_fastsync_block_pivotBlock_number_gauge{instance=~\"$instance\"}",
-          "refId": "F",
-          "legendFormat": "{{instance}} fast-sync pivot"
+          "legendFormat": "{{instance}} SNAP pivot"
         }
       ],
       "fieldConfig": {
