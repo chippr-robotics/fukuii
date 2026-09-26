@@ -702,14 +702,9 @@ trait SyncControllerRefBuilder:
   def syncController: org.apache.pekko.actor.typed.ActorRef[SyncController.Command]
 
 trait FukuiiServiceBuilder:
-  self: TransactionHistoryServiceBuilder & JSONRpcConfigBuilder & SyncControllerRefBuilder & ActorSystemBuilder =>
+  self: TransactionHistoryServiceBuilder & JSONRpcConfigBuilder =>
 
-  lazy val fukuiiService = new FukuiiService(
-    transactionHistoryService,
-    jsonRpcConfig,
-    syncController,
-    classicSystem.toTyped.scheduler
-  )
+  lazy val fukuiiService = new FukuiiService(transactionHistoryService, jsonRpcConfig)
 
 trait McpServiceBuilder:
   self: PeerManagerActorBuilder & SyncControllerBuilder & ActorSystemBuilder & BlockchainBuilder &

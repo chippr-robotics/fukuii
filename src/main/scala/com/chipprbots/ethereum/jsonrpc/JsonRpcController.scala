@@ -20,10 +20,6 @@ import com.chipprbots.ethereum.jsonrpc.EthTxService.*
 import com.chipprbots.ethereum.jsonrpc.EthUserService.*
 import com.chipprbots.ethereum.jsonrpc.FukuiiService.GetAccountTransactionsRequest
 import com.chipprbots.ethereum.jsonrpc.FukuiiService.GetAccountTransactionsResponse
-import com.chipprbots.ethereum.jsonrpc.FukuiiService.ResetFastSyncRequest
-import com.chipprbots.ethereum.jsonrpc.FukuiiService.ResetFastSyncResponse
-import com.chipprbots.ethereum.jsonrpc.FukuiiService.RestartFastSyncRequest
-import com.chipprbots.ethereum.jsonrpc.FukuiiService.RestartFastSyncResponse
 import com.chipprbots.ethereum.jsonrpc.McpService.*
 import com.chipprbots.ethereum.jsonrpc.NetService.*
 import com.chipprbots.ethereum.jsonrpc.PersonalService.*
@@ -485,12 +481,6 @@ case class JsonRpcController(
   private def handleFukuiiRequest: PartialFunction[JsonRpcRequest, IO[JsonRpcResponse]] = {
     case req @ JsonRpcRequest(_, "fukuii_getAccountTransactions", _, _) =>
       handle[GetAccountTransactionsRequest, GetAccountTransactionsResponse](fukuiiService.getAccountTransactions, req)
-
-    case req @ JsonRpcRequest(_, "fukuii_resetFastSync", _, _) =>
-      handle[ResetFastSyncRequest, ResetFastSyncResponse](fukuiiService.resetFastSync, req)
-
-    case req @ JsonRpcRequest(_, "fukuii_restartFastSync", _, _) =>
-      handle[RestartFastSyncRequest, RestartFastSyncResponse](fukuiiService.restartFastSync, req)
   }
 
   private def handleMcpRequest: PartialFunction[JsonRpcRequest, IO[JsonRpcResponse]] = {
