@@ -35,7 +35,13 @@ case class ExecutionPayload(
     // `blobVersionedHashes` in this payload, in order. None when the CL is a pre-Cancun client.
     expectedBlobVersionedHashes: Option[Seq[ByteString]] = None,
     // Prague/Electra+ (EIP-7685, passed as separate newPayload param)
-    executionRequests: Option[Seq[ByteString]] = None
+    executionRequests: Option[Seq[ByteString]] = None,
+    // Amsterdam+ (ExecutionPayloadV4). The EIP-7928 block access list exactly as the CL sent it: the header commits to
+    // keccak256 of THESE bytes, and engine_newPayloadV5 decodes them strictly (BlockAccessList.decode) before the
+    // block-hash check. None when the field is absent or null.
+    blockAccessList: Option[ByteString] = None,
+    // Amsterdam+ (ExecutionPayloadV4, EIP-7843): the beacon slot the payload was built for, a uint64.
+    slotNumber: Option[BigInt] = None
 )
 
 /** Payload attributes for engine_forkchoiceUpdated (optional payload building). */

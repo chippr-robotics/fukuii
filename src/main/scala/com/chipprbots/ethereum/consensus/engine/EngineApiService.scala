@@ -307,7 +307,33 @@ class EngineApiService(
   def newPayload(payload: ExecutionPayload): IO[PayloadStatusV1] = IO {
     val block = payloadToBlock(payload)
 
-    if block.header.hash.value != payload.blockHash then
+    // EIP-7928 (engine_newPayloadV5): the block access list must be the canonical RLP of a well-formed list, the empty
+    // byte string included as a failure (the empty list is 0xc0). Undecodable is INVALID with latestValidHash null
+    // (execution-apis amsterdam.md engine_newPayloadV5 point 3), decided BEFORE the block-hash check, as go-ethereum's
+    // ExecutableDataToBlock does: the header commits to keccak256 of the raw bytes, so a broken encoding would
+    // otherwise surface as a block-hash mismatch and hide the actual defect. Like the hash mismatch, the verdict is
+    // about the envelope, so the block is not recorded as invalid.
+    //
+    // Until #1426 (EIP-7928 collection and validation) lands this is ALL the list is checked for: it is decoded, and
+    // bound to the header through the block hash (payloadToBlock hashes these exact bytes), but its content is not
+    // compared with what executing the block accesses. A well-formed list the CL supplies is trusted.
+    val blockAccessListError: Option[String] =
+      payload.blockAccessList.flatMap(bytes => BlockAccessList.decode(bytes).left.toOption)
+
+    if blockAccessListError.isDefined then
+      log.warn(
+        "[ENGINE-API] newPayload #{}: undecodable block access list ({} bytes): {}",
+        payload.blockNumber,
+        payload.blockAccessList.map(_.length).getOrElse(0),
+        blockAccessListError.getOrElse("")
+      )
+      EngineApiMetrics.recordNewPayload("INVALID", payload.blockNumber.toLong, payload.timestamp)
+      PayloadStatusV1(
+        Invalid,
+        latestValidHash = None,
+        validationError = blockAccessListError.map(err => s"INVALID_BLOCK_ACCESS_LIST: $err")
+      )
+    else if block.header.hash.value != payload.blockHash then
       log.warn(
         "[ENGINE-API] newPayload #{}: block-hash mismatch computed={} payload={}",
         payload.blockNumber,
@@ -1786,15 +1812,31 @@ class EngineApiService(
     val extraFields =
       (payload.executionRequests, payload.blobGasUsed, payload.excessBlobGas, payload.withdrawals) match
         case (Some(requests), Some(bgu), Some(ebg), _) =>
-          // Prague/Electra: has executionRequests → HefPostPrague with requestsHash
-          HefPostPrague(
-            baseFee = payload.baseFeePerGas,
-            withdrawalsRoot = withdrawalsRoot,
-            blobGasUsed = bgu,
-            excessBlobGas = ebg,
-            parentBeaconBlockRoot = pbbr,
-            requestsHash = computeRequestsHash(requests)
-          )
+          (payload.blockAccessList, payload.slotNumber) match
+            case (Some(accessList), Some(slot)) =>
+              // Amsterdam (ExecutionPayloadV4, reachable through engine_newPayloadV5 only — V4 refuses both fields):
+              // the 23-field header. blockAccessListHash is keccak256 of the list's bytes EXACTLY as the CL sent them
+              // (go-ethereum ExecutableDataToBlock), so newPayload's block-hash check binds those bytes to the header.
+              HefPostAmsterdam(
+                baseFee = payload.baseFeePerGas,
+                withdrawalsRoot = withdrawalsRoot,
+                blobGasUsed = bgu,
+                excessBlobGas = ebg,
+                parentBeaconBlockRoot = pbbr,
+                requestsHash = computeRequestsHash(requests),
+                blockAccessListHash = ByteString(kec256(accessList.toArray)),
+                slotNumber = slot
+              )
+            case _ =>
+              // Prague/Electra: has executionRequests → HefPostPrague with requestsHash
+              HefPostPrague(
+                baseFee = payload.baseFeePerGas,
+                withdrawalsRoot = withdrawalsRoot,
+                blobGasUsed = bgu,
+                excessBlobGas = ebg,
+                parentBeaconBlockRoot = pbbr,
+                requestsHash = computeRequestsHash(requests)
+              )
         case (None, Some(bgu), Some(ebg), _) =>
           // Cancun: has blob gas fields
           HefPostCancun(

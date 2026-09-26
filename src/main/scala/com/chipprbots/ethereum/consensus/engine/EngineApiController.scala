@@ -21,15 +21,21 @@ import com.chipprbots.ethereum.domain.Withdrawal
 import com.chipprbots.ethereum.jsonrpc.JsonRpcError
 import com.chipprbots.ethereum.jsonrpc.JsonRpcRequest
 import com.chipprbots.ethereum.jsonrpc.JsonRpcResponse
+import com.chipprbots.ethereum.utils.BlockchainConfig
 import com.chipprbots.ethereum.utils.BuildInfo
 import com.chipprbots.ethereum.utils.Logger
 
 /** Handles Engine API JSON-RPC methods (engine_* namespace). This controller processes raw JSON requests and delegates
   * to EngineApiService.
+  *
+  * @param blockchainConfig
+  *   the fork schedule every version gate reads. The node passes the one its EngineApiService runs on, so the method
+  *   windows and the service's execution agree; the default (the global config) keeps the stub-service specs short.
   */
 class EngineApiController(
     engineApiService: EngineApiService,
-    jsonRpcControllerOpt: Option[com.chipprbots.ethereum.jsonrpc.JsonRpcController] = None
+    jsonRpcControllerOpt: Option[com.chipprbots.ethereum.jsonrpc.JsonRpcController] = None,
+    blockchainConfig: BlockchainConfig = com.chipprbots.ethereum.utils.Config.blockchains.blockchainConfig
 ) extends Logger:
 
   private def reqId(request: JsonRpcRequest): JValue = request.id.getOrElse(JNull)
@@ -40,6 +46,7 @@ class EngineApiController(
       case "engine_newPayloadV2"        => handleNewPayload(request, version = 2)
       case "engine_newPayloadV3"        => handleNewPayload(request, version = 3)
       case "engine_newPayloadV4"        => handleNewPayload(request, version = 4)
+      case "engine_newPayloadV5"        => handleNewPayload(request, version = 5)
       case "engine_forkchoiceUpdatedV1" => handleForkchoiceUpdated(request, version = 1)
       case "engine_forkchoiceUpdatedV2" => handleForkchoiceUpdated(request, version = 2)
       case "engine_forkchoiceUpdatedV3" => handleForkchoiceUpdated(request, version = 3)
@@ -113,11 +120,11 @@ class EngineApiController(
           case Right(decodedPayload) =>
             var payload = decodedPayload
             val hasWithdrawals = payload.withdrawals.isDefined
-            val blockchainConfig = com.chipprbots.ethereum.utils.Config.blockchains.blockchainConfig
             val payloadTimestamp = Timestamp(payload.timestamp)
             val isShanghaiPayload = blockchainConfig.isShanghaiTimestamp(payloadTimestamp)
             val isCancunPayload = blockchainConfig.isCancunTimestamp(payloadTimestamp)
             val isPraguePayload = blockchainConfig.isPragueTimestamp(payloadTimestamp)
+            val isAmsterdamPayload = blockchainConfig.isAmsterdamTimestamp(payloadTimestamp)
 
             // Version enforcement on payload shape (not on method-of-fork — that's -38005).
             // Hive withdrawals suite expects -32602 (InvalidParamsError) for shape mismatches:
@@ -139,10 +146,18 @@ class EngineApiController(
             val hasAllCancunFields =
               payload.blobGasUsed.isDefined && payload.excessBlobGas.isDefined
             val versionError: Option[(Int, String)] = version match
-              // V4 is valid only for Prague and Osaka payloads (go-ethereum: checkFork(Prague,
-              // Osaka, BPO1-5)).  When Amsterdam is later defined, add a prior guard:
-              //   case 4 if isAmsterdamTimestamp =>
-              //     Some(UnsupportedFork -> "newPayloadV4 cannot be used post-Amsterdam, use V5")
+              case 5 => EngineApiController.newPayloadV5ParamsError(payload, params, isAmsterdamPayload)
+              // V4 serves Prague, Osaka and the BPOs (go-ethereum NewPayloadV4: checkFork(Prague, Osaka, BPO1, BPO2)).
+              // The two ExecutionPayloadV4 fields are refused first, as params errors, in go-ethereum's order; EEST
+              // `bal_invalid_engine_payload_field_before_fork` and `invalid_pre_fork_block_with_slot_number` send
+              // each to V4 before Amsterdam and expect -32602. Then the fork window: -38005 from Amsterdam on
+              // (amsterdam.md "Update the methods of previous forks"), and before Prague.
+              case 4 if payload.slotNumber.isDefined =>
+                Some(InvalidParams -> "newPayloadV4: slotNumber not supported pre-Amsterdam, use V5")
+              case 4 if payload.blockAccessList.isDefined =>
+                Some(InvalidParams -> "newPayloadV4: blockAccessList not supported pre-Amsterdam, use V5")
+              case 4 if isAmsterdamPayload =>
+                Some(UnsupportedFork -> "newPayloadV4 cannot be used post-Amsterdam, use V5")
               case 4 if !isPraguePayload =>
                 Some(UnsupportedFork -> "newPayloadV4 must only be called for Prague/Osaka payloads")
               case 3 if !isCancunPayload && hasAllCancunFields =>
@@ -272,11 +287,7 @@ class EngineApiController(
             val InvalidAttrs = -38003
             val versionError: Option[(Int, String)] =
               payloadAttrs.flatMap(attrs =>
-                EngineApiController.payloadAttributesVersionError(
-                  version,
-                  attrs,
-                  com.chipprbots.ethereum.utils.Config.blockchains.blockchainConfig
-                )
+                EngineApiController.payloadAttributesVersionError(version, attrs, blockchainConfig)
               )
 
             if versionError.isDefined then
@@ -358,11 +369,7 @@ class EngineApiController(
         // "GetPayloadV2 To Request Cancun Payload" and "GetPayloadV3 To Request Shanghai
         // Payload" tests exercise this — V2 for a Cancun-ts payload and V3 for a
         // Shanghai-ts payload must both return -38005 UNSUPPORTED_FORK.
-        EngineApiController.getPayloadForkError(
-          version,
-          stored.header.unixTimestamp,
-          com.chipprbots.ethereum.utils.Config.blockchains.blockchainConfig
-        ) match
+        EngineApiController.getPayloadForkError(version, stored.header.unixTimestamp, blockchainConfig) match
           case Some(msg) =>
             // Refused BEFORE the payload is resolved, so a wrong-version call does not end its build process:
             // go-ethereum rejects it on the payload ID's version, before Payload.Resolve.
@@ -595,7 +602,12 @@ class EngineApiController(
         items.collect { case obj: JObject => decodeWithdrawal(obj) }
       },
       blobGasUsed = fields.get("blobGasUsed").collect { case JString(hex) => BigInt(hex.stripPrefix("0x"), 16) },
-      excessBlobGas = fields.get("excessBlobGas").collect { case JString(hex) => BigInt(hex.stripPrefix("0x"), 16) }
+      excessBlobGas = fields.get("excessBlobGas").collect { case JString(hex) => BigInt(hex.stripPrefix("0x"), 16) },
+      // ExecutionPayloadV4 (Amsterdam). Absent and null both read as None, which engine_newPayloadV5 answers -32602.
+      // A present value must be well-formed DATA / QUANTITY; the BAL's RLP is only decoded later, by the service,
+      // so that an undecodable list is an INVALID payload and not a params error.
+      blockAccessList = EngineApiController.optionalData(fields, "blockAccessList"),
+      slotNumber = EngineApiController.optionalUint64(fields, "slotNumber")
     )
 
   private def decodeWithdrawal(json: JObject): Withdrawal =
@@ -685,6 +697,85 @@ object EngineApiController:
   private val InvalidForkchoiceStateCode = -38002
   private val InvalidPayloadAttributesCode = -38003
   private val UnsupportedForkCode = -38005
+
+  private val MaxUint64: BigInt = (BigInt(1) << 64) - 1
+
+  private def isHexDigit(c: Char): Boolean = (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')
+
+  /** `s` is DATA: `0x` (or `0X`, as go-ethereum's hexutil accepts) and an even number of hex digits, `bytes` bytes of
+    * them when given.
+    */
+  private def isData(s: String, bytes: Option[Int] = None): Boolean =
+    s.length >= 2 && s.length % 2 == 0 && (s.startsWith("0x") || s.startsWith("0X")) &&
+      bytes.forall(n => s.length == 2 + 2 * n) && s.drop(2).forall(isHexDigit)
+
+  /** An optional DATA field: None when absent or null, the bytes when well-formed; anything else throws, which the
+    * decoders turn into a malformed-payload answer. Stricter than the historical `hexToByteString` on purpose: an odd
+    * digit count or a stray character must not be decoded into different bytes than the CL hashed.
+    */
+  private[engine] def optionalData(fields: Map[String, JValue], key: String): Option[ByteString] =
+    fields.get(key) match
+      case None | Some(JNull)            => None
+      case Some(JString(s)) if isData(s) => Some(ByteString(org.bouncycastle.util.encoders.Hex.decode(s.drop(2))))
+      case Some(other)                   => throw new IllegalArgumentException(s"$key: not DATA ($other)")
+
+  /** An optional QUANTITY of at most 64 bits (e.g. `slotNumber`): None when absent or null; out of range or not a
+    * quantity throws, as for [[optionalData]].
+    */
+  private[engine] def optionalUint64(fields: Map[String, JValue], key: String): Option[BigInt] =
+    val value = fields.get(key) match
+      case None | Some(JNull) => None
+      case Some(JString(s))
+          if (s.startsWith("0x") || s.startsWith("0X")) && s.length > 2 && s.drop(2).forall(isHexDigit) =>
+        Some(BigInt(s.drop(2), 16))
+      case Some(JInt(n)) => Some(n)
+      case Some(other)   => throw new IllegalArgumentException(s"$key: not a QUANTITY ($other)")
+    value.foreach(v => require(v >= 0 && v <= MaxUint64, s"$key: $v does not fit 64 bits"))
+    value
+
+  /** The JSON-RPC error `engine_newPayloadV5` must answer, or None when the call may go on to the payload itself.
+    *
+    * go-ethereum's `NewPayloadV5` checks, in its order (eth/catalyst/api.go): every field and parameter an Amsterdam
+    * call must carry — withdrawals, excessBlobGas, blobGasUsed, expectedBlobVersionedHashes, parentBeaconBlockRoot,
+    * executionRequests, slotNumber, blockAccessList — each -32602 when missing or null; THEN the fork window, -38005
+    * when the timestamp is not Amsterdam. The request-list rules (-32602) and everything about the payload's content
+    * come after this.
+    *
+    * execution-apis amsterdam.md states "-38005 if the timestamp is not Amsterdam" and "-32602 if blockAccessList is
+    * missing" without ordering them. go-ethereum's order is the one newPayloadV3 already follows here, as hive expects:
+    * a payload missing a field of the method's own fork is a params error whatever its timestamp. EEST
+    * `invalid_post_fork_block_without_bal_hash_field` / `invalid_post_fork_block_without_slot_number` send V5 at the
+    * fork without one field each and expect -32602.
+    *
+    * A present but undecodable block access list (the empty byte string included) is not a params error: it is an
+    * INVALID payload, decided by `EngineApiService.newPayload`.
+    */
+  def newPayloadV5ParamsError(
+      payload: ExecutionPayload,
+      params: List[JValue],
+      isAmsterdam: Boolean
+  ): Option[(Int, String)] =
+    // Why the positional parameter at `index` is unusable, or None: absent/null is "nil", a wrong shape says so.
+    def param(index: Int, name: String, fork: String)(wellFormed: PartialFunction[JValue, Unit]): Option[String] =
+      params.lift(index) match
+        case None | Some(JNull)                           => Some(s"nil $name post-$fork")
+        case Some(value) if wellFormed.isDefinedAt(value) => None
+        case Some(_)                                      => Some(s"$name is malformed")
+    val problem: Option[String] =
+      if payload.withdrawals.isEmpty then Some("nil withdrawals post-shanghai")
+      else if payload.excessBlobGas.isEmpty then Some("nil excessBlobGas post-cancun")
+      else if payload.blobGasUsed.isEmpty then Some("nil blobGasUsed post-cancun")
+      else
+        param(1, "expectedBlobVersionedHashes", "cancun") { case _: JArray => () }
+          .orElse(param(2, "parentBeaconBlockRoot", "cancun") { case JString(s) if isData(s, Some(32)) => () })
+          .orElse(param(3, "executionRequests", "prague") { case _: JArray => () })
+          .orElse(Option.when(payload.slotNumber.isEmpty)("nil slotNumber post-amsterdam"))
+          .orElse(Option.when(payload.blockAccessList.isEmpty)("nil blockAccessList post-amsterdam"))
+    problem
+      .map(p => InvalidParamsCode -> s"newPayloadV5: $p")
+      .orElse(
+        Option.when(!isAmsterdam)(UnsupportedForkCode -> "newPayloadV5 must only be called for Amsterdam payloads")
+      )
 
   /** The JSON-RPC error (code, message) an `engine_forkchoiceUpdatedV{version}` call must answer for these payload
     * attributes, or None when they are acceptable for the method. Pure: reads nothing but its arguments.
