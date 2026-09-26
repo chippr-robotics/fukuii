@@ -5693,7 +5693,7 @@ must become required or be formally re-scoped in a reviewed PR.</p>
 <td>Cross-client sync interop. fukuii as sync CLIENT (fukuii syncs from go-ethereum/nethermind) and as sync SERVER (go-ethereum/nethermind sync from fukuii). Gated on the <code>fukuii</code> subset only, so upstream geth&lt;-&gt;nethermind failures do not pollute this signal.</td>
 <td>2026-12-31</td>
 <td>#1402</td>
-<td>The only suite with a real subset gate today. #1402's first required-slice item. Both waivers below must be retired before promotion — the sync-SERVER direction is precisely what #1402 says shipped red in v0.8.0.</td>
+<td>#1402's first required-slice item. Both waivers are retired (#1407). <code>sync go-ethereum from fukuii</code> passes since fukuii's ENR <code>eth</code> entry became [[fork-hash, fork-next]] and the hive adapter advertises the container address. <code>sync fukuii from nethermind</code> was an intermittent fukuii-sink failure; it passes after the fix for the dropped-reply race behind the same intermittent sink stall (3af08c103). Evidence: CI run 35997930212 on a78d2557d, 18/18; locally with all three clients, every fukuii test green.</td>
 </tr>
 <tr>
 <td><code>hive-smoke-genesis</code></td>
@@ -5763,7 +5763,7 @@ must become required or be formally re-scoped in a reviewed PR.</p>
 <td>devp2p discovery and RLPx wire conformance.</td>
 <td>2027-03-31</td>
 <td>#1402</td>
-<td></td>
+<td>Two jobs since 2026-09-24. One runs discv4, discv5, snap and snap2 in full; the other runs eth without GetCells and BlobTxWithInvalidCells, which are skipped via sim_skip and waived until #1409 because they hang the suite. Local hive on 4dc5b77af: discv4 16/16, discv5 11/11, snap 6/6, snap2 4/4, eth 22/24.</td>
 </tr>
 <tr>
 <td><code>ethereum-tests-nightly</code></td>
@@ -5813,7 +5813,7 @@ must become required or be formally re-scoped in a reviewed PR.</p>
 <tr>
 <td>geth&lt;-&gt;fukuii sync, BOTH directions</td>
 <td><code>hive-sync</code></td>
-<td><code>sync-server-geth-from-fukuii</code>, <code>sync-client-fukuii-from-nethermind</code></td>
+<td>—</td>
 </tr>
 <tr>
 <td>invalid-payload rejection</td>
@@ -5847,27 +5847,27 @@ bypass — extending a waiver means editing the matrix in a reviewed PR.</p>
 </thead>
 <tbody>
 <tr>
-<td><code>sync-server-geth-from-fukuii</code></td>
-<td><code>hive-sync</code></td>
-<td><code>sync go-ethereum from fukuii</code></td>
-<td>realcodywburns</td>
-<td>#1402</td>
-<td>2026-12-31</td>
-</tr>
-<tr>
-<td><code>sync-client-fukuii-from-nethermind</code></td>
-<td><code>hive-sync</code></td>
-<td><code>sync fukuii from nethermind</code></td>
-<td>realcodywburns</td>
-<td>#1402</td>
-<td>2026-12-31</td>
-</tr>
-<tr>
 <td><code>graphql-gasprice-stale-fixture</code></td>
 <td><code>hive-graphql</code></td>
 <td><code>07_eth_gasPrice</code></td>
 <td>realcodywburns</td>
 <td>#1407</td>
+<td>2026-12-31</td>
+</tr>
+<tr>
+<td><code>devp2p-getcells-needs-sparse-blobpool</code></td>
+<td><code>hive-devp2p</code></td>
+<td><code>GetCells</code></td>
+<td>realcodywburns</td>
+<td>#1409</td>
+<td>2026-12-31</td>
+</tr>
+<tr>
+<td><code>devp2p-invalid-cells-needs-sparse-blobpool</code></td>
+<td><code>hive-devp2p</code></td>
+<td><code>BlobTxWithInvalidCells</code></td>
+<td>realcodywburns</td>
+<td>#1409</td>
 <td>2026-12-31</td>
 </tr>
 </tbody>
