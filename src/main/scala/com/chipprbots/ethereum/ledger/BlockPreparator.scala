@@ -693,9 +693,19 @@ class BlockPreparator(
           }
           .toRight(TransactionSignatureError)
 
+        // All three counters: EIP-8037 checks block capacity per dimension (execution, state), not against the
+        // receipt sum `acumGas`. Before Amsterdam the execution counter equals `acumGas` and the state one is 0.
         val validatedStx = for
           accData <- accountDataOpt
-          _ <- signedTxValidator.validate(stx, accData._1, blockHeader, upfrontCost, acumGas)
+          _ <- signedTxValidator.validate(
+            stx,
+            accData._1,
+            blockHeader,
+            upfrontCost,
+            acumGas,
+            acumExecutionGas,
+            acumStateGas
+          )
         yield accData
 
         validatedStx match

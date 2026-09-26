@@ -9,6 +9,7 @@ import cats.effect.IO
 import com.chipprbots.ethereum.consensus.eip1559.BaseFeeCalculator
 import com.chipprbots.ethereum.consensus.engine.PayloadStatus.*
 import com.chipprbots.ethereum.consensus.validators.std.MptListValidator
+import com.chipprbots.ethereum.consensus.validators.std.StdSignedTransactionValidator
 import com.chipprbots.ethereum.crypto.kec256
 import com.chipprbots.ethereum.domain.*
 import com.chipprbots.ethereum.domain.BlockHeader.HeaderExtraFields.*
@@ -1210,12 +1211,22 @@ class EngineApiService(
             if failedAt < 0 then Nil
             else if retriesLeft > 0 then
               val sender = SignedTransaction.getSender(failed)
-              val gasLeft = gasLimit.value - before.acumGas
               val (ran, rest) = txs.splitAt(failedAt)
               ran ++ rest.drop(1).filterNot { stx =>
-                // acumGas only grows, so a gas limit above what was left BEFORE the failed
-                // transaction can never fit later on either (validateBlockHasEnoughGasLimitForTx).
-                SignedTransaction.getSender(stx) == sender || stx.tx.gasLimit.value > gasLeft
+                // The block's gas counters only grow, so a transaction that does not fit what was left
+                // BEFORE the failed transaction can never fit later on either. "Fit" is block validation's
+                // own rule: one counter before Amsterdam, EIP-8037's two dimensions from it.
+                SignedTransaction.getSender(stx) == sender ||
+                StdSignedTransactionValidator
+                  .blockGasCapacityError(
+                    stx.tx.gasLimit.value,
+                    gasLimit.value,
+                    Timestamp(attrs.timestamp),
+                    before.acumGas,
+                    before.acumExecutionGas,
+                    before.acumStateGas
+                  )
+                  .isDefined
               }
             else txs.take(failedAt)
           log.info(
