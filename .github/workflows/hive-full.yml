@@ -9,12 +9,15 @@ name: Hive · full pass
 # --sim.parallelism 4, so it has to be split across jobs.
 #
 # .github/hive-shards.json (generated and PROVEN an exact partition by
-# scripts/hive/gen-shards.py) splits them into ~3 h shards. The aggregate job then reports one
-# verdict per suite: every shard finished, the shards selected exactly the whole suite, and no
-# test failed. A suite is never reported green on a workflow conclusion alone.
+# scripts/hive/gen-shards.py) splits them into shards sized by measured test time: at most
+# 170 min of tests each (145 for consensus, whose loader reads the whole corpus first), costed at
+# a slow runner's pace. One consensus file, stEIP1559/intrinsic (6,960 tests), cannot be split
+# and runs alone in ~223 min. The aggregate job then reports one verdict per suite: every shard
+# finished, the shards selected exactly the whole suite, and no test failed. A suite is never
+# reported green on a workflow conclusion alone.
 #
-# Cost: ~33 jobs x ~3.5 h per pass, on a small shared runner pool. It is therefore a
-# RELEASE gate, not a per-push or nightly check:
+# Cost: 58 jobs, ~150 runner-hours per pass; legacy-cancun alone holds 111,983 tests. It is
+# therefore a RELEASE gate, not a per-push or nightly check:
 #   * label the staging -> main release PR `hive-full` (it re-runs on each push while labelled),
 #   * or workflow_dispatch before cutting a version.
 # Day-to-day targeted runs belong on a local hive checkout (docs/testing/hive-local.md).
@@ -94,8 +97,9 @@ jobs:
       label: ${{ matrix.name }}
       sim_limit: ${{ matrix.sim_limit }}
       sim_buildarg: ${{ matrix.buildarg }}
-      # Shards are planned at ~3 h; 300m leaves headroom for a slow runner. 350 stays under
-      # GitHub's 360-minute cap for hosted jobs, so artifacts are always uploaded.
+      # Shards are planned at <= 170 min of tests for a slow runner (223 for the one unsplittable
+      # consensus file); 300m is the hard stop. 350 stays under GitHub's 360-minute cap for
+      # hosted jobs, so artifacts are always uploaded.
       sim_timelimit: '300m'
       timeout_minutes: 350
       # Consensus-sim clients import the test chain before opening their RPC port, so this
