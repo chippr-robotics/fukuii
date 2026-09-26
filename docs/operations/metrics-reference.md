@@ -207,7 +207,7 @@ raise `block-cache-size` cautiously.
 | `app_network_tried_peers_gauge` | gauge | Distinct discovered nodes this process has attempted to connect to. | — |
 | `app_network_discovery_foundPeers_gauge` | gauge | Nodes currently known to discovery (DHT + DNS). | Node Health: Peers |
 | `app_network_peers_blacklisted_gauge` | gauge | Current blacklist size (live entries in the blacklist cache). | Node Health: Peers; SNAP Sync: Peer Pool Health |
-| `app_network_peers_blacklisted_fastSyncGroup_counter_total` | counter | Blacklist events attributed to fast-sync reasons. | — |
+| `app_network_peers_blacklisted_fastSyncGroup_counter_total` | counter | Blacklist events for bad chain-download responses (headers, bodies, receipts), from the SNAP chain downloader and the branch resolver. The name is left over from fast sync, which was removed. | — |
 | `app_network_peers_blacklisted_regularSyncGroup_counter_total` | counter | Blacklist events attributed to regular-sync reasons. | Node Health: Errors |
 | `app_network_peers_blacklisted_p2pGroup_counter_total` | counter | Blacklist events attributed to P2P/subprotocol reasons (the dominant group in practice). | — |
 | `app_network_messages_sent_counter_total` | counter | Wire-protocol messages sent across all peers. | Node Health: Network message rate |
@@ -252,5 +252,4 @@ defined in code but only appear on `/metrics` after their emitting subsystem fir
 | `app_regularsync_*` | Regular (full) sync block import | `block_current_number_gauge`, `block_bestKnown_number_gauge`, `blocks_imported_total`, `reorg_total`, `reorg_last_depth_gauge`, `blocks_propagation_timer{blocktype=}` | Node Health: Current Block, Blocks Behind, Block height, Import rate |
 | `app_sync_block_*` | Per-imported-block stats | `number`, `gasUsed`/`gasLimit`, `transactions`, `uncles`, `difficulty`, `timeBetweenParent_seconds` | Node Health: Block time, Transactions/Gas per block |
 | `app_chain_mess_*` | ECBP-1100 (MESS) reorg arbitration | `rejected_total`, `accepted_total`, `gravity_gauge` | — |
-| `app_fastsync_*` | Legacy fast sync (fallback mode) | `block_pivotBlock_number_gauge`, `state_downloadedNodes_gauge`, download timers | Node Health: Best Known Block, Block height |
 | `app_mining_*` | Internal Ethash miner | `minedblocks_evaluation_timer` | — |

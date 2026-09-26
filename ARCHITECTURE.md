@@ -33,8 +33,7 @@ fukuii/
 
 ```
 blockchain/sync/
-├── SyncController.scala              # Top-level sync orchestrator (SNAP → Fast → Regular fallback)
-├── AdaptiveSyncStrategy.scala        # Strategy selection with fallback chain
+├── SyncController.scala              # Top-level sync orchestrator (SNAP or regular sync, then regular sync)
 ├── PeersClient.scala                 # Peer request routing (ETH68/69/70, SNAP)
 ├── BlockchainHostActor.scala         # Serves blocks/state to remote peers
 ├── StorageRecoveryActor.scala        # Post-SNAP storage recovery (Bug 20)
@@ -54,10 +53,9 @@ blockchain/sync/
 │       ├── StorageRangeWorker.scala          # Individual storage request worker
 │       └── Messages.scala                    # All coordinator message types
 │
-├── fast/                             # Fast sync (fallback from SNAP)
-│   ├── FastSync.scala                # Fast sync controller
-│   ├── SyncStateSchedulerActor.scala # State download scheduler
-│   └── PivotBlockSelector.scala      # Pivot block consensus
+├── fast/                             # Branch resolution for regular sync (package name left from fast sync, removed)
+│   ├── FastSyncBranchResolverActor.scala # Finds the common ancestor with a peer's chain
+│   └── FastSyncBranchResolver.scala      # Recent-block and binary search helpers
 │
 └── regular/                          # Regular sync (block-by-block)
     ├── RegularSync.scala             # Block import orchestrator
@@ -240,7 +238,7 @@ docs/
 ```
 src/test/                             # Unit tests (2,314 tests, ~9 min)
 ├── scala/com/chipprbots/ethereum/
-│   ├── blockchain/sync/              # Sync controller, fast sync, regular sync, SNAP coordinator tests
+│   ├── blockchain/sync/              # Sync controller, regular sync, SNAP coordinator tests
 │   ├── ledger/                       # Block execution, world state tests
 │   ├── db/storage/                   # Storage layer tests
 │   ├── network/                      # P2P protocol tests
@@ -259,6 +257,6 @@ src/it/                               # Integration tests (~30 min)
 - **Actor system**: Apache Pekko 1.1.2 — all sync coordination uses actors
 - **Dispatchers**: `sync-dispatcher` for sync actors, `default-dispatcher` for HTTP/RPC
 - **Storage**: RocksDB with namespace-based column families, `TransactionalKeyValueStorage` base trait
-- **Sync pipeline**: SNAP → Fast → Regular fallback chain with escape hatch after 3 cycles
+- **Sync pipeline**: SNAP (or regular sync from genesis when `do-snap-sync` is off), then regular sync at the tip. SNAP does not fall back to another mode: it goes dormant and retries on a fresh pivot
 - **Two-phase storage**: Download slots to flat storage first, build MPT tries asynchronously
 - **Bootstrap checkpoints**: Config-based trusted block references for instant pivot selection
