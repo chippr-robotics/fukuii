@@ -52,7 +52,12 @@ case class PayloadAttributes(
     // Shanghai+
     withdrawals: Option[Seq[Withdrawal]] = None,
     // Cancun+
-    parentBeaconBlockRoot: Option[ByteString] = None
+    parentBeaconBlockRoot: Option[ByteString] = None,
+    // Amsterdam+ (PayloadAttributesV4). Decoded for engine_forkchoiceUpdatedV4 only; the V1-V3 methods never read them.
+    // `slotNumber` is the new payload's EIP-7843 slot (required); `targetGasLimit` the gas limit the CL wants the chain
+    // to converge on (optional, as in go-ethereum: see EngineApiController.payloadAttributesVersionError).
+    slotNumber: Option[BigInt] = None,
+    targetGasLimit: Option[BigInt] = None
 )
 
 /** Status values for PayloadStatusV1 */

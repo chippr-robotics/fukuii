@@ -132,7 +132,8 @@ class EngineApiService(
     ) match
       case Right(built) => built
       case Left(err)    =>
-        // Unreachable with strict = false; buildBlockOnParent only returns Left when strict.
+        // Unreachable: with strict = false buildBlockOnParent returns Left only for an Amsterdam timestamp, which
+        // forkchoiceUpdated refuses before any build process (and so any rebuild) exists.
         throw new IllegalStateException(s"lenient proposer build returned Left: $err")
     // EIP-4844: collect the blob sidecars for every blob tx in the built payload so engine_getPayloadV3 can emit the
     // blobsBundle envelope. Without this the envelope has empty arrays while the payload body has blob txs; the hive
@@ -675,9 +676,9 @@ class EngineApiService(
       // end headerInvalid else
   }
 
-  /** engine_forkchoiceUpdatedV1/V2/V3 — Update fork choice state, optionally start payload building. Returns
+  /** engine_forkchoiceUpdatedV1..V4 — Update fork choice state, optionally start payload building. Returns
     * Left(errorMessage) for JSON-RPC error responses (e.g. invalid forkchoice state), Right(response) for normal
-    * payload status responses.
+    * payload status responses. V4's `custodyColumns` never reaches here: the controller validates it and drops it.
     */
   def forkchoiceUpdated(
       forkChoiceState: ForkChoiceState,
@@ -870,30 +871,21 @@ class EngineApiService(
                       )
                     )
                   )
-                case Some(attrs) =>
-                  // Deterministic payload ID MUST be unique for every distinct attribute
-                  // combination — hive 'Unique Payload ID' test sends FCUs differing only in
-                  // a single withdrawal field or beaconRoot and expects the IDs to differ.
-                  // Include withdrawals + beaconRoot in the hash.
-                  val withdrawalBytes: Array[Byte] =
-                    attrs.withdrawals.toSeq.flatMap { ws =>
-                      ws.flatMap { w =>
-                        w.index.toByteArray.toSeq ++
-                          w.validatorIndex.toByteArray.toSeq ++
-                          w.address.bytes.toArray.toSeq ++
-                          w.amount.toByteArray.toSeq
-                      }
-                    }.toArray
-                  val beaconRootBytes = attrs.parentBeaconBlockRoot.map(_.toArray).getOrElse(Array.emptyByteArray)
-                  val idBytes = kec256(
-                    forkChoiceState.headBlockHash.toArray ++
-                      BigInt(attrs.timestamp).toByteArray ++
-                      attrs.prevRandao.toArray ++
-                      attrs.suggestedFeeRecipient.bytes.toArray ++
-                      withdrawalBytes ++
-                      beaconRootBytes
+                case Some(attrs) if blockchainConfig.isAmsterdamTimestamp(Timestamp(attrs.timestamp)) =>
+                  // The forkchoice state above is applied; only the build is refused, and before a payload ID is
+                  // handed out, so the CL learns now that no payload will come rather than at engine_getPayloadV6.
+                  // -38003 is go-ethereum's answer when its payload build fails (forkchoiceUpdated,
+                  // `InvalidPayloadAttributes.With(err)`).
+                  log.error(
+                    "[ENGINE-API] forkchoiceUpdated asks for a payload at Amsterdam timestamp {} on #{}: {}",
+                    attrs.timestamp,
+                    headHeader.map(_.number.value).getOrElse(BigInt(-1)),
+                    EngineApiService.AmsterdamBuildUnsupported
                   )
-                  val id = ByteString(idBytes.take(8))
+                  EngineApiMetrics.recordForkchoiceUpdated("INVALID")
+                  IO.pure(Left("ATTR:" + EngineApiService.AmsterdamBuildUnsupported))
+                case Some(attrs) =>
+                  val id = EngineApiService.payloadId(forkChoiceState.headBlockHash, attrs)
 
                   val parentOpt = blockchainReader.getBlockByHash(BlockHash(forkChoiceState.headBlockHash))
                   parentOpt match
@@ -1173,8 +1165,11 @@ class EngineApiService(
     *   elasticity scale at London activation), the testing path converges toward the configured target.
     * @param strict
     *   true -> a failed transaction aborts the build with Left (the `testing_*` namespace: execution-apis says an
-    *   unapplicable transaction MUST be a JSON-RPC error). false -> `engine_forkchoiceUpdated`: never Left; a
-    *   transaction that cannot be applied is left out, see [[buildLeniently]].
+    *   unapplicable transaction MUST be a JSON-RPC error). false -> `engine_forkchoiceUpdated`: a transaction that
+    *   cannot be applied is left out, see [[buildLeniently]].
+    * @return
+    *   Left, in either mode, for a timestamp at which Amsterdam is active
+    *   ([[EngineApiService.AmsterdamBuildUnsupported]] until #1427); otherwise Left only when `strict`.
     */
   def buildBlockOnParent(
       parent: Block,
@@ -1184,7 +1179,18 @@ class EngineApiService(
       gasLimit: GasAmount,
       strict: Boolean
   ): Either[String, BuiltBlock] =
-    if strict then
+    // The one way into sealProposerBlock, which can only seal headers up to Prague's shape: an Amsterdam header commits
+    // to the block access list, which nothing builds yet (#1426/#1427). engine_forkchoiceUpdated refuses such a build
+    // before it gets here; this also covers testing_buildBlockV1 and anything added later.
+    if blockchainConfig.isAmsterdamTimestamp(Timestamp(attrs.timestamp)) then
+      log.error(
+        "Proposer build on block {} at Amsterdam timestamp {} refused: {}",
+        parent.header.number,
+        attrs.timestamp,
+        EngineApiService.AmsterdamBuildUnsupported
+      )
+      Left(EngineApiService.AmsterdamBuildUnsupported)
+    else if strict then
       sealProposerBlock(parent, attrs, transactions, extraData, gasLimit)(executeProposerBlock).left.map { err =>
         log.error("Proposer-mode execution failed: {}", err)
         err.describe
@@ -2145,3 +2151,44 @@ object EngineApiService:
     */
   val GetPayloadRebuildBudget: scala.concurrent.duration.FiniteDuration =
     scala.concurrent.duration.FiniteDuration(500, java.util.concurrent.TimeUnit.MILLISECONDS)
+
+  /** Why no payload is built for an Amsterdam timestamp. An Amsterdam header commits to the block's EIP-7928 access
+    * list, which fukuii cannot construct until #1426/#1427; the builder used to seal a Prague-shaped header there
+    * instead, a block every client rejects. Refusing is the explicit failure: forkchoiceUpdated answers -38003 and
+    * `buildBlockOnParent` a Left, so no Amsterdam payload is ever stored or served.
+    */
+  val AmsterdamBuildUnsupported: String =
+    "payload building is not supported at Amsterdam timestamps yet: the block access list cannot be built (#1427)"
+
+  /** The engine_forkchoiceUpdated payload ID for building on `headBlockHash` with `attrs`: the first 8 bytes of a
+    * keccak256 over every attribute, so each distinct attribute set gets its own build process (hive `Unique Payload
+    * ID` changes one withdrawal field, or the beacon root, and expects a new ID; paris.md "Payload building" point 6).
+    *
+    * PayloadAttributesV4's `slotNumber` and `targetGasLimit` go in as 8-byte big-endian words when present, as
+    * go-ethereum's `BuildPayloadArgs.Id` writes them. They are absent on V1-V3 calls, which therefore keep exactly the
+    * IDs they had.
+    */
+  def payloadId(headBlockHash: ByteString, attrs: PayloadAttributes): ByteString =
+    val withdrawalBytes: Array[Byte] =
+      attrs.withdrawals.toSeq.flatMap { ws =>
+        ws.flatMap { w =>
+          w.index.toByteArray.toSeq ++
+            w.validatorIndex.toByteArray.toSeq ++
+            w.address.bytes.toArray.toSeq ++
+            w.amount.toByteArray.toSeq
+        }
+      }.toArray
+    val beaconRootBytes = attrs.parentBeaconBlockRoot.map(_.toArray).getOrElse(Array.emptyByteArray)
+    def uint64Bytes(value: Option[BigInt]): Array[Byte] =
+      value.map(v => java.nio.ByteBuffer.allocate(8).putLong(v.toLong).array()).getOrElse(Array.emptyByteArray)
+    val idBytes = kec256(
+      headBlockHash.toArray ++
+        BigInt(attrs.timestamp).toByteArray ++
+        attrs.prevRandao.toArray ++
+        attrs.suggestedFeeRecipient.bytes.toArray ++
+        withdrawalBytes ++
+        beaconRootBytes ++
+        uint64Bytes(attrs.slotNumber) ++
+        uint64Bytes(attrs.targetGasLimit)
+    )
+    ByteString(idBytes.take(8))

@@ -50,6 +50,7 @@ class EngineApiController(
       case "engine_forkchoiceUpdatedV1" => handleForkchoiceUpdated(request, version = 1)
       case "engine_forkchoiceUpdatedV2" => handleForkchoiceUpdated(request, version = 2)
       case "engine_forkchoiceUpdatedV3" => handleForkchoiceUpdated(request, version = 3)
+      case "engine_forkchoiceUpdatedV4" => handleForkchoiceUpdated(request, version = 4)
       case "engine_exchangeCapabilities" =>
         handleExchangeCapabilities(request)
       case "engine_getPayloadV1" => handleGetPayload(request, version = 1)
@@ -272,8 +273,15 @@ class EngineApiController(
             fcs <- decodeForkChoiceState(fcsJson).left.map(msg =>
               JsonRpcError.InvalidParams(s"invalid forkchoice state: $msg")
             )
+            // engine_forkchoiceUpdatedV4's third parameter, validated like the forkchoice state (-32602, nothing
+            // applied) and otherwise ignored: see EngineApiController.custodyColumnsError. Earlier versions have none.
+            _ <- Option
+              .when(version >= 4)(EngineApiController.custodyColumnsError(params.lift(2)))
+              .flatten
+              .map(JsonRpcError.InvalidParams(_))
+              .toLeft(())
             payloadAttrs <- scala.util
-              .Try(params.lift(1).collect { case obj: JObject => decodePayloadAttributes(obj) })
+              .Try(params.lift(1).collect { case obj: JObject => decodePayloadAttributes(obj, version) })
               .toEither
               .left
               .map { ex =>
@@ -640,8 +648,13 @@ class EngineApiController(
       finalized <- hash32("finalizedBlockHash")
     yield ForkChoiceState(headBlockHash = head, safeBlockHash = safe, finalizedBlockHash = finalized)
 
-  private def decodePayloadAttributes(json: JObject): PayloadAttributes =
+  /** The attributes of an `engine_forkchoiceUpdatedV{version}` call. The two PayloadAttributesV4 fields are read for V4
+    * only: V1-V3 ignore them exactly as before they existed (go-ethereum V3 does not reject them either), so neither
+    * their payload IDs nor their builds can change.
+    */
+  private def decodePayloadAttributes(json: JObject, version: Int): PayloadAttributes =
     val fields = json.obj.toMap
+    val v4 = version >= 4
     PayloadAttributes(
       timestamp = extractQuantity(fields, "timestamp").toLong,
       prevRandao = hexToByteString(extractString(fields, "prevRandao")),
@@ -649,7 +662,9 @@ class EngineApiController(
       withdrawals = fields.get("withdrawals").collect { case JArray(items) =>
         items.collect { case obj: JObject => decodeWithdrawal(obj) }
       },
-      parentBeaconBlockRoot = fields.get("parentBeaconBlockRoot").collect { case JString(hex) => hexToByteString(hex) }
+      parentBeaconBlockRoot = fields.get("parentBeaconBlockRoot").collect { case JString(hex) => hexToByteString(hex) },
+      slotNumber = if v4 then EngineApiController.optionalUint64(fields, "slotNumber") else None,
+      targetGasLimit = if v4 then EngineApiController.optionalUint64(fields, "targetGasLimit") else None
     )
 
   private def encodePayloadStatus(status: PayloadStatusV1): JValue =
@@ -796,6 +811,13 @@ object EngineApiController:
     *     any fork other than Paris/Shanghai -> -38005.
     *   - V3: withdrawals missing -> -38003; beacon root missing -> -38003 (at ANY timestamp); a fork outside
     *     Cancun..BPO5 (i.e. pre-Cancun, or Amsterdam onwards, which needs V4) -> -38005.
+    *   - V4 (amsterdam.md engine_forkchoiceUpdatedV4, go-ethereum `ForkchoiceUpdatedV4`): the PayloadAttributesV4
+    *     structure — withdrawals, beacon root and slotNumber each -38003 when missing — then the Amsterdam window,
+    *     -38005 before it. `targetGasLimit` is NOT required. The spec lists it in PayloadAttributesV4 and says the
+    *     builder "MUST use" it; go-ethereum reads it as optional and never rejects its absence. We follow go-ethereum:
+    *     hive's engine simulator is checked against it, and refusing would cost a CL that omits the field its slot,
+    *     where accepting costs nothing (without a target the build keeps the parent's gas limit, the engine path's
+    *     historical policy). Lighthouse always sends it.
     *
     * -38003 answers still apply the forkchoice state first (see `handleForkchoiceUpdated`); -32602 and -38005 do not.
     */
@@ -829,12 +851,35 @@ object EngineApiController:
         else if !(latestIsParis || latestIsShanghai) then
           Some(UnsupportedForkCode -> "forkchoiceUpdatedV2 must only be called for Paris or Shanghai payloads")
         else None
-      case _ =>
+      case 3 =>
         if !hasWithdrawals then Some(InvalidPayloadAttributesCode -> "forkchoiceUpdatedV3: missing withdrawals")
         else if !hasBeaconRoot then Some(InvalidPayloadAttributesCode -> "forkchoiceUpdatedV3: missing beacon root")
         else if !inV3Window then
           Some(UnsupportedForkCode -> "forkchoiceUpdatedV3 must only be called for Cancun/Prague/Osaka payloads")
         else None
+      case _ =>
+        if !hasWithdrawals then Some(InvalidPayloadAttributesCode -> "forkchoiceUpdatedV4: missing withdrawals")
+        else if !hasBeaconRoot then Some(InvalidPayloadAttributesCode -> "forkchoiceUpdatedV4: missing beacon root")
+        else if attrs.slotNumber.isEmpty then
+          Some(InvalidPayloadAttributesCode -> "forkchoiceUpdatedV4: missing slot number")
+        else if !blockchainConfig.isAmsterdamTimestamp(ts) then
+          Some(UnsupportedForkCode -> "forkchoiceUpdatedV4 must only be called for Amsterdam payloads")
+        else None
+
+  /** Why `custodyColumns`, engine_forkchoiceUpdatedV4's third parameter, is unacceptable, or None when it is fine:
+    * absent or null (the CL provides no custody), or DATA of exactly 16 bytes, the CELLS_PER_EXT_BLOB = 128-bit
+    * bitarray (amsterdam.md engine_forkchoiceUpdatedV4 point 3.1: "MUST be a 16-byte DATA value", else -32602;
+    * go-ethereum `types.CustodyBitmap`). Lighthouse omits it or sends null when it has no custody set.
+    *
+    * A valid value is otherwise ignored. Adopting the set is required "when acting as a sampler for type 3
+    * transactions" (point 3.2), and fukuii's blob pool does not sample (no EIP-8070 cell custody), so there is nothing
+    * to adopt; and the custody update must not affect the fork choice (point 3.4), which ignoring guarantees.
+    */
+  def custodyColumnsError(param: Option[JValue]): Option[String] =
+    param match
+      case None | Some(JNull)                      => None
+      case Some(JString(s)) if isData(s, Some(16)) => None
+      case Some(other)                             => Some(s"custodyColumns: not 16 bytes of DATA ($other)")
 
   /** The -38005 message when engine_getPayloadV{version} must not serve a payload built for `timestamp`, or None when
     * it may. Each version serves one fork window — go-ethereum's `checkFork` per version (eth/catalyst/api.go), and
