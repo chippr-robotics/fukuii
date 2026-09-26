@@ -1286,10 +1286,13 @@ object SyncController:
           log.warn("fukuii.snap.clearDoneOnStart=true: clearing SnapSyncDone to re-enter SNAP healing")
           appStateStorage.clearSnapSyncDone().commit()
 
-      // FastSyncDone is a legacy flag: fast sync was removed, but a node that finished it has a chain with state and
-      // continues in regular sync. Nothing sets it any more; the recovery paths below still clear it.
-      (appStateStorage.isSnapSyncDone(), appStateStorage.isFastSyncDone(), startMode) match
-        case (false, false, SyncMode.Snap) =>
+      // FastSyncDone is a legacy flag and does not pick the mode: with SNAP on and not done, SNAP starts even where
+      // fast sync once finished. Starting SNAP never cleared the flag, so it can sit on a node that is part-way through
+      // SNAP (best = a pivot whose state is still downloading), and fast sync could set it over an incomplete trie.
+      // Regular sync on such a node executes blocks against missing state. Nothing sets the flag any more; the
+      // recovery paths below still clear it.
+      (appStateStorage.isSnapSyncDone(), startMode) match
+        case (false, SyncMode.Snap) =>
           strandedFastSyncBest() match
             case Some(best) =>
               // The node was upgraded while fast sync was running. SNAP must pick a pivot above the stateless
@@ -1304,10 +1307,7 @@ object SyncController:
               startSnapSync(minPivotBlock = Some(best + 1))
             case None =>
               startSnapSync()
-        case (false, true, SyncMode.Snap) =>
-          log.info("Fast sync completed on this node earlier; continuing with regular sync")
-          startRegularSync()._2
-        case (true, _, SyncMode.Snap) =>
+        case (true, SyncMode.Snap) =>
           log.warn("do-snap-sync is true but SNAP sync already completed")
           // Diagnostic: log stored SNAP sync state root vs pivot block state root
           val snapStateRoot = appStateStorage.getSnapSyncStateRoot()
@@ -1393,7 +1393,7 @@ object SyncController:
           val needStorage = !appStateStorage.isStorageRecoveryDone()
           if needBytecode || needStorage then startRecovery(needBytecode, needStorage)
           else startRegularSync()._2
-        case (_, _, SyncMode.Regular) =>
+        case (_, SyncMode.Regular) =>
           strandedFastSyncBest().foreach { best =>
             log.error(
               "Fast sync was in progress when this node was upgraded; fast sync was removed. Its best block {} " +

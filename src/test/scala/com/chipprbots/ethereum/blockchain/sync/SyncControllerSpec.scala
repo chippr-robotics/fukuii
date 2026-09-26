@@ -322,9 +322,9 @@ class SyncControllerSpec
   }
 
   // ── Startup sync mode, and databases from before fast sync was removed ───────────────────────────────────────
-  // start() picks SNAP when do-snap-sync is set and regular sync otherwise. A node that finished fast sync continues
-  // in regular sync; a node upgraded mid-fast-sync starts SNAP with a pivot above the best block fast sync downloaded
-  // without state. Fast sync's leftover progress record (namespace `f`) is only tested for presence, never decoded.
+  // start() picks SNAP when do-snap-sync is set and SNAP is not done, whatever the legacy FastSyncDone flag says, and
+  // regular sync otherwise. A node upgraded mid-fast-sync starts SNAP with a pivot above the best block fast sync
+  // downloaded without state. Fast sync's leftover progress record (namespace `f`) is never decoded.
 
   private val StrandedBest: BigInt = 1000
 
@@ -356,20 +356,29 @@ class SyncControllerSpec
       assert(!childNamed(testSetup, "fast-sync"))
   }
 
-  it should "continue in regular sync on a node that finished fast sync, even with do-snap-sync on" taggedAs (
+  it should "resume SNAP, not regular sync, on a mid-SNAP node that still carries a FastSyncDone flag" taggedAs (
     UnitTest,
     SyncTest
   ) in withRecoveryTestSetup() { testSetup =>
     import testSetup.*
-    storagesInstance.storages.appStateStorage.fastSyncDone().commit()
+    // Starting SNAP never cleared FastSyncDone, so a node that once finished fast sync can be part-way through SNAP:
+    // best = SNAP's pivot, whose state is still being downloaded. Regular sync there would execute on missing state.
+    val appState = storagesInstance.storages.appStateStorage
+    blockchainWriter.storeBlockHeader(baseBlockHeader.copy(number = BlockNumber(StrandedBest))).commit()
+    appState
+      .fastSyncDone()
+      .and(appState.putBestBlockNumber(StrandedBest))
+      .and(appState.putSnapSyncPivotBlock(StrandedBest))
+      .and(appState.putSnapSyncStateRoot(ByteString(Array.fill[Byte](32)(0x66))))
+      .commit()
 
     syncController ! SyncController.WrappedSyncProtocol(SyncProtocol.Start)
 
     eventually {
       someTimePasses()
-      assert(childNamed(testSetup, "regular-sync"))
+      assert(childNamed(testSetup, "snap-sync"))
     }
-    assert(!childNamed(testSetup, "snap-sync"))
+    assert(!childNamed(testSetup, "regular-sync"))
   }
 
   it should "start SNAP with a pivot above the best block of a node upgraded mid-fast-sync" taggedAs (
