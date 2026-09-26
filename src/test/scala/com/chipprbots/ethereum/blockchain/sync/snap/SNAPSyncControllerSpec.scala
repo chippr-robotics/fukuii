@@ -903,7 +903,7 @@ class SNAPSyncControllerSpec extends AnyFlatSpec with Matchers:
   //
   // After MaxConsecutivePivotRefreshes (3) consecutive pivots where no peer serves the root,
   // SNAPSyncController records a critical failure. After maxSnapSyncFailures (5) accumulated
-  // critical failures, it falls back to fast sync. These tests model the counter semantics so
+  // critical failures, it enters dormant mode. These tests model the counter semantics so
   // a refactor cannot silently break the thresholds.
 
   "Consecutive pivot refresh counter" should "record critical failure after MaxConsecutivePivotRefreshes (3) stateless refreshes" taggedAs UnitTest in {
