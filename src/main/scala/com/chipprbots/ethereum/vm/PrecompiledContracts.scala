@@ -12,6 +12,7 @@ import com.chipprbots.ethereum.crypto.zksnark.BN128Fp
 import com.chipprbots.ethereum.crypto.zksnark.PairingCheck
 import com.chipprbots.ethereum.crypto.zksnark.PairingCheck.G1G2Pair
 import com.chipprbots.ethereum.domain.Address
+import com.chipprbots.ethereum.domain.BlockHeader
 import com.chipprbots.ethereum.utils.ByteStringUtils.*
 import com.chipprbots.ethereum.utils.ByteUtils
 import com.chipprbots.ethereum.vm.BlockchainConfigForEvm.EtcForks
@@ -163,14 +164,20 @@ object PrecompiledContracts:
     getContracts(context).contains(addr)
 
   def getContracts(context: ProgramContext[?, ?]): Map[Address, PrecompiledContract] =
-    val ethFork = context.evmConfig.blockchainConfig.ethForkForBlockNumber(context.blockHeader.number.value)
-    val etcFork = context.evmConfig.blockchainConfig.etcForkForBlockNumber(context.blockHeader.number.value)
+    getContracts(context.evmConfig, context.blockHeader)
+
+  /** The precompile set active for `blockHeader`. Depends on nothing but the fork, which is why a caller that has no
+    * frame yet (the EIP-2780 dispatch charge in `ProgramContext.apply`) can ask for it.
+    */
+  def getContracts(evmConfig: EvmConfig, blockHeader: BlockHeader): Map[Address, PrecompiledContract] =
+    val ethFork = evmConfig.blockchainConfig.ethForkForBlockNumber(blockHeader.number.value)
+    val etcFork = evmConfig.blockchainConfig.etcForkForBlockNumber(blockHeader.number.value)
     // Post-Cancun detection: check if block header has blob gas fields
-    val isCancun = context.blockHeader.blobGasUsed.isDefined || context.blockHeader.excessBlobGas.isDefined
+    val isCancun = blockHeader.blobGasUsed.isDefined || blockHeader.excessBlobGas.isDefined
     // EIP-2537 BLS12-381 precompiles activate at Prague timestamp on ETH chains
-    val isPrague = context.evmConfig.blockchainConfig.isPragueTimestamp(context.blockHeader.unixTimestamp)
+    val isPrague = evmConfig.blockchainConfig.isPragueTimestamp(blockHeader.unixTimestamp)
     // EIP-7951 P256VERIFY activates at Osaka timestamp on ETH chains
-    val isOsaka = context.evmConfig.blockchainConfig.isOsakaTimestamp(context.blockHeader.unixTimestamp)
+    val isOsaka = evmConfig.blockchainConfig.isOsakaTimestamp(blockHeader.unixTimestamp)
 
     if isOsaka then osakaContracts
     else if etcFork >= EtcForks.Olympia then
