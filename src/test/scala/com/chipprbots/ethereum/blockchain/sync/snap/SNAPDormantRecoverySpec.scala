@@ -28,6 +28,7 @@ import com.chipprbots.ethereum.blockchain.sync.EphemBlockchainTestSetup
 import com.chipprbots.ethereum.blockchain.sync.SyncProtocol
 import com.chipprbots.ethereum.blockchain.sync.TestSyncConfig
 import com.chipprbots.ethereum.domain.Block
+import com.chipprbots.ethereum.domain.BlockNumber
 import com.chipprbots.ethereum.domain.BlockBody
 import com.chipprbots.ethereum.domain.ChainWeight
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor
@@ -45,7 +46,8 @@ import com.chipprbots.ethereum.testing.Tags.*
 /** When SNAP cannot proceed it goes dormant — keeping its downloaded state and sending nothing to the SyncController —
   * and the dormant wake-up restarts it on a fresh pivot once a snap-capable peer is connected. This is SNAP's own
   * recovery for the three cases that used to hand the node to fast sync: no snap-capable peer after the capability
-  * grace period, bootstrap retries exhausted, and a missing genesis header.
+  * grace period, bootstrap retries exhausted, and a missing genesis header. Also covered: a woken controller gets a
+  * fresh bootstrap retry budget, and the proactive pivot roll moves an old pivot SNAP took before any peer connected.
   *
   * The parent probe stands in for the SyncController. The old fast-sync fallback messaged it at once; here it must stay
   * silent until the wake-up, whose fresh pivot shows up as a `StartRegularSyncBootstrap`. Only `dormantRetry` handles
@@ -96,6 +98,33 @@ class SNAPDormantRecoverySpec extends ScalaTestWithActorTestKit() with AnyFlatSp
     pollWith(snap, peersAt(height = 1000, snap = true))
     snap ! SNAPSyncController.RetrySnapSyncStart
     parent.expectMessage(10.seconds, SNAPSyncController.StartRegularSyncBootstrap(BigInt(1000 - PivotOffset)))
+
+  // Forge's note on the stranded-fast-sync floor: with no peer connected at start, SNAP's pivot selection uses the local
+  // best block, so the floor (best + 1) makes it commit a pivot from a header fast sync stored, however old. The proactive
+  // pivot roll moves it to a fresh one as soon as a snap peer shows the real head.
+  it should "roll off an old floor pivot it took from a local header before any peer connected" taggedAs UnitTest in new Fixture:
+    storeGenesis()
+    val strandedBest = BigInt(1000)
+    Seq(strandedBest, strandedBest + 1).foreach { n =>
+      blockchainWriter.storeBlockHeader(Fixtures.Blocks.Genesis.header.copy(number = BlockNumber(n))).commit()
+    }
+    storagesInstance.storages.appStateStorage.putBestBlockNumber(strandedBest).commit()
+    peers.set(Map.empty)
+    val snap = spawnController()
+    awaitFirstPoll()
+
+    snap ! SNAPSyncController.MinPivotBlock(strandedBest + 1)
+    snap ! SNAPSyncController.Start
+    eventually(storagesInstance.storages.appStateStorage.getSnapSyncPivotBlock() shouldBe Some(strandedBest + 1))
+
+    // A snap peer shows the real head, the capability check starts the account download, and the next stagnation
+    // check sees a pivot far outside the serve window.
+    val head = 3000
+    pollWith(snap, peersAt(height = head, snap = true))
+    snap ! SNAPSyncController.CheckSnapCapability
+    parent.expectNoMessage(500.millis) // the download starts on the old pivot; only the roll moves it
+    snap ! SNAPSyncController.CheckDownloadStagnation
+    parent.expectMessage(10.seconds, SNAPSyncController.StartRegularSyncBootstrap(BigInt(head - PivotOffset)))
 
   it should "go dormant, not fall back, when the genesis header is missing" taggedAs UnitTest in new Fixture:
     peers.set(peersAt(height = 10, snap = true)) // genesis pivot, but no genesis header stored
