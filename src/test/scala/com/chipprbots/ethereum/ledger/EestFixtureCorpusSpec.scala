@@ -31,7 +31,8 @@ import com.chipprbots.ethereum.testing.Tags.*
   * `EEST_FILTER` (a regex over the path below DIR, e.g. `eip8024`) narrows the run, `EEST_THREADS` sets the parallelism
   * (default: one per core), and `EEST_REPORT` moves the report (default `target/eest-report.txt`). The report groups
   * results by the two directories under `for_<fork>/` (e.g. `amsterdam/eip7928_block_level_access_lists`) and lists
-  * every failing test with its first divergence. Each variable also has a `-Deest.*` system property form.
+  * every failing test with its first divergence. `EEST_MIN_TESTS` fails the run when fewer tests were replayed, so a
+  * partially fetched corpus cannot pass as a smaller one. Each variable also has a `-Deest.*` system property form.
   *
   * With no corpus configured the test is canceled, not passed: a conformance claim needs the corpus to have run.
   */
@@ -126,6 +127,11 @@ class EestFixtureCorpusSpec extends AnyFlatSpec with Matchers:
     Files.write(reportPath, report.asJava)
     info(report.take(4 + byGroup.size).mkString("\n"))
 
+    setting("MIN_TESTS").map(_.toInt).foreach { min =>
+      withClue(s"only ${all.size} tests replayed where EEST_MIN_TESTS=$min: the corpus is incomplete. ") {
+        all.size should be >= min
+      }
+    }
     withClue(s"${failed.size} of ${all.size} fixtures diverge; full list in $reportPath. First: ") {
       failed.take(20).map(o => s"${o.file} :: ${o.test}: ${o.divergences.head}") shouldBe empty
     }
