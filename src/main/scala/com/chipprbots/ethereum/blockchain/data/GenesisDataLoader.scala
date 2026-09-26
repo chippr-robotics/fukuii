@@ -186,45 +186,50 @@ class GenesisDataLoader(
     // Empty trie root = keccak256(RLP("")) = keccak256(0x80) — NOT keccak of empty list
     val emptyWithdrawalsRoot = ByteString(crypto.kec256(rlp.encode(RLPValue(Array.empty[Byte]))))
 
-    // KNOWN GAP, stated rather than papered over: a genesis whose timestamp already activates Amsterdam
-    // gets the Prague (21-field) shape below and therefore the WRONG GENESIS HASH. The missing branch is
-    // not added here because two of the Amsterdam header's fields have no defined value yet in this
-    // codebase — `blockAccessListHash` is EIP-7928's commitment over an empty block-level access list,
-    // whose encoding lands in slice C, and guessing it would produce a hash that looks plausible and is
-    // wrong. An absent branch that logs is easier to find than a confident wrong constant.
-    //
-    // Harmless for the reference fixture (`amsterdamTime: 360` > genesis timestamp 0); a landmine for any
-    // fixture with `amsterdamTime: 0`.
-    if blockchainConfig.isAmsterdamTimestamp(genesisTimestamp) then
-      log.error(
-        "GENESIS: this chain activates Amsterdam at the genesis timestamp, but the genesis header is " +
-          "built with the Prague 21-field shape. The genesis hash WILL be wrong. Blocked on the " +
-          "EIP-7928 empty block-access-list commitment (slice C)."
-      )
+    // EIP-7685: sha256 of the empty request list, the genesis requestsHash from Prague on.
+    lazy val emptyRequestsHash =
+      ByteString(java.security.MessageDigest.getInstance("SHA-256").digest(Array.empty[Byte]))
 
-    val extraFields = if blockchainConfig.isPragueTimestamp(genesisTimestamp) then
-      val emptyRequestsHash = ByteString(java.security.MessageDigest.getInstance("SHA-256").digest(Array.empty[Byte]))
-      BlockHeader.HeaderExtraFields.HefPostPrague(
-        baseFee,
-        emptyWithdrawalsRoot,
-        parseOptQuantity(genesisData.blobGasUsed),
-        parseOptQuantity(genesisData.excessBlobGas),
-        zeros(hashLength),
-        emptyRequestsHash
-      )
-    else if blockchainConfig.isCancunTimestamp(genesisTimestamp) then
-      BlockHeader.HeaderExtraFields.HefPostCancun(
-        baseFee,
-        emptyWithdrawalsRoot,
-        parseOptQuantity(genesisData.blobGasUsed),
-        parseOptQuantity(genesisData.excessBlobGas),
-        zeros(hashLength)
-      )
-    else if blockchainConfig.isShanghaiTimestamp(genesisTimestamp) then
-      BlockHeader.HeaderExtraFields.HefPostShanghai(baseFee, emptyWithdrawalsRoot)
-    else if blockchainConfig.forkBlockNumbers.olympiaBlockNumber == 0 then
-      BlockHeader.HeaderExtraFields.HefPostOlympia(baseFee)
-    else BlockHeader.HeaderExtraFields.HefEmpty
+    // Amsterdam active at the genesis timestamp (go-ethereum core/genesis.go `IsAmsterdam`; every EEST
+    // `for_amsterdam` fixture): the Prague fields plus the 23-field header's two. `blockAccessListHash` commits
+    // to the EMPTY access list, since genesis executes nothing (keccak256(0xc0), BlockAccessList.EmptyHash);
+    // `slotNumber` is the genesis file's, 0 when absent. Built with the Prague shape instead, the genesis hash
+    // was wrong. Chains that activate Amsterdam later (Sepolia, Platåberget, hive's devp2p fixture) and every
+    // ETC chain never enter this branch.
+    val extraFields =
+      if blockchainConfig.isAmsterdamTimestamp(genesisTimestamp) then
+        BlockHeader.HeaderExtraFields.HefPostAmsterdam(
+          baseFee,
+          emptyWithdrawalsRoot,
+          parseOptQuantity(genesisData.blobGasUsed),
+          parseOptQuantity(genesisData.excessBlobGas),
+          zeros(hashLength),
+          emptyRequestsHash,
+          BlockAccessList.EmptyHash,
+          parseOptQuantity(genesisData.slotNumber)
+        )
+      else if blockchainConfig.isPragueTimestamp(genesisTimestamp) then
+        BlockHeader.HeaderExtraFields.HefPostPrague(
+          baseFee,
+          emptyWithdrawalsRoot,
+          parseOptQuantity(genesisData.blobGasUsed),
+          parseOptQuantity(genesisData.excessBlobGas),
+          zeros(hashLength),
+          emptyRequestsHash
+        )
+      else if blockchainConfig.isCancunTimestamp(genesisTimestamp) then
+        BlockHeader.HeaderExtraFields.HefPostCancun(
+          baseFee,
+          emptyWithdrawalsRoot,
+          parseOptQuantity(genesisData.blobGasUsed),
+          parseOptQuantity(genesisData.excessBlobGas),
+          zeros(hashLength)
+        )
+      else if blockchainConfig.isShanghaiTimestamp(genesisTimestamp) then
+        BlockHeader.HeaderExtraFields.HefPostShanghai(baseFee, emptyWithdrawalsRoot)
+      else if blockchainConfig.forkBlockNumbers.olympiaBlockNumber == 0 then
+        BlockHeader.HeaderExtraFields.HefPostOlympia(baseFee)
+      else BlockHeader.HeaderExtraFields.HefEmpty
 
     BlockHeader(
       parentHash = BlockHash(zeros(hashLength)),
