@@ -101,20 +101,28 @@ From [execution-apis `src/engine/amsterdam.md`](https://github.com/ethereum/exec
 
 | Method / structure | Change | fukuii |
 |---|---|---|
-| `ExecutionPayloadV4` | `ExecutionPayloadV3` + `blockAccessList` (RLP, EIP-7928) + `slotNumber` (EIP-7843) | **Not implemented** |
-| `PayloadAttributesV4` | `PayloadAttributesV3` + `slotNumber` + `targetGasLimit` | **Not implemented** |
-| `engine_newPayloadV5` | Takes `ExecutionPayloadV4`; missing `blockAccessList` → `-32602`; undecodable BAL → `INVALID` | **Not implemented** |
-| `engine_getPayloadV6` | Returns `ExecutionPayloadV4` | **Not implemented** |
-| `engine_forkchoiceUpdatedV4` | Takes `PayloadAttributesV4` | **Not implemented** |
-| `engine_getPayloadBodiesByHashV2` / `ByRangeV2` | `ExecutionPayloadBodyV2` adds `blockAccessList` (`null` pre-Amsterdam or pruned) | **Not implemented** |
+| `ExecutionPayloadV4` | `ExecutionPayloadV3` + `blockAccessList` (RLP, EIP-7928) + `slotNumber` (EIP-7843) | Implemented: the header commits to `keccak256` of the list's bytes as sent |
+| `PayloadAttributesV4` | `PayloadAttributesV3` + `slotNumber` + `targetGasLimit` | Implemented: `slotNumber` required, `targetGasLimit` optional (as in go-ethereum); both are in the payload ID |
+| `engine_newPayloadV5` | Takes `ExecutionPayloadV4`; missing `blockAccessList` → `-32602`; undecodable BAL → `INVALID` | Implemented. The access list is decoded strictly and bound to the header through the block hash; its **content is trusted**, not recomputed from execution, until [#1426](https://github.com/chippr-robotics/fukuii/issues/1426) |
+| `engine_getPayloadV6` | Returns `ExecutionPayloadV4` | Implemented, but there is nothing to serve yet (see below) |
+| `engine_forkchoiceUpdatedV4` | Takes `PayloadAttributesV4` and `custodyColumns` | Implemented. `custodyColumns` must be 16-byte DATA or null (else `-32602`) and is otherwise ignored: fukuii does not sample blobs |
+| `engine_getPayloadBodiesByHashV2` / `ByRangeV2` | `ExecutionPayloadBodyV2` adds `blockAccessList` (`null` pre-Amsterdam or pruned) | **Not implemented** ([#1428](https://github.com/chippr-robotics/fukuii/issues/1428)) |
 | `engine_getBlobsV4` | Returns blob cells and proofs, partial responses allowed | **Not implemented** |
 
-`engine_newPayloadV4`, `engine_getPayloadV5` and `engine_forkchoiceUpdatedV3` must reject Amsterdam
-timestamps with `-38005 Unsupported fork`; fukuii's guard for this is still a commented-out TODO in
-`EngineApiController`, and its payload builder still produces a Prague-shaped header at Amsterdam timestamps.
+`engine_newPayloadV4`, `engine_getPayloadV5` and `engine_forkchoiceUpdatedV3` reject Amsterdam timestamps with
+`-38005 Unsupported fork`. `engine_exchangeCapabilities` advertises `engine_newPayloadV5`,
+`engine_forkchoiceUpdatedV4` and `engine_getPayloadV6` on every network, as go-ethereum does.
 
-Until these land, a Glamsterdam CL cannot drive fukuii across the Amsterdam boundary: an unknown `engine_*`
-method returns "method not found".
+**fukuii cannot propose Amsterdam blocks yet.** An Amsterdam payload must commit to its block access list, which
+fukuii cannot build until [#1427](https://github.com/chippr-robotics/fukuii/issues/1427). Asked to build one,
+`engine_forkchoiceUpdatedV4` applies the forkchoice state, logs an error and answers `-38003` without a payload ID,
+rather than seal a Prague-shaped header that every client would reject. Following the chain is unaffected.
+
+The EEST engine fixtures (`tests@v21.0.0` `blockchain_tests_engine/for_amsterdam` and
+`for_bpo2toamsterdamattime15k`, 26,548 tests) replay through the real controller with `EestEngineFixtureCorpusSpec`.
+Every error code, genesis and forkchoice answer matches. The failures that remain are the same tests that fail over
+RLP (`EestFixtureCorpusSpec`), that is block execution and access-list content, plus one EIP-7934 block-size case
+the Engine API path does not check.
 
 ## Testing against Platåberget
 
@@ -154,9 +162,10 @@ exercising the Amsterdam implementation **before Sepolia activates on 2026-10-06
 What to expect: Amsterdam has been active since epoch 1536, about seven days after genesis, so the chain head is
 Amsterdam territory. fukuii can follow Platåberget only as far as its Amsterdam implementation allows — the
 [status table](#fukuii-implementation-status) is the honest guide. In particular, a checkpoint-synced CL starts
-past the fork and calls `engine_newPayloadV5` / `engine_forkchoiceUpdatedV4` immediately; until those exist,
-fukuii answers "method not found". Today the useful checks are the offline ones — genesis hash, fork id, peering
-and the `Status` handshake. Pre-Amsterdam blocks exercise genesis, Osaka and BPO rules; the first Amsterdam block
+past the fork and calls `engine_newPayloadV5` / `engine_forkchoiceUpdatedV4` immediately; fukuii serves both (see
+[Engine API](#engine-api)), so how far it follows depends on its Amsterdam execution, and its validators cannot
+propose. Today the most reliable checks are the offline ones — genesis hash, fork id, peering and the `Status`
+handshake. Pre-Amsterdam blocks exercise genesis, Osaka and BPO rules; the first Amsterdam block
 exercises everything in #1409. Block gas limits reach 200M.
 
 ## Release 0.9.0
