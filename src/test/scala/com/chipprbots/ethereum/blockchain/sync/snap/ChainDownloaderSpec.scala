@@ -514,12 +514,15 @@ class ChainDownloaderSpec
     val peerEventBus = TestProbe()
     val replyToProbe = TestProbe()
 
-    val header1Receipts: Seq[Receipt] =
-      Seq(LegacyReceipt(SuccessOutcome, BigInt(21000), BloomFilter(ledger.BloomFilter.create(Nil)), Nil))
+    // Ascending rescan order (#33 follow-up): header1 (the lower block number) is batch.head in round 1, so it
+    // carries the 3-receipt set that gets truncated; header2 is the "remaining" (never-attempted) one with a
+    // single receipt — the reverse pairing from before the rescan order flipped from descending to ascending.
     val r0 = LegacyReceipt(SuccessOutcome, BigInt(30000), BloomFilter(ledger.BloomFilter.create(Nil)), Nil)
     val r1 = LegacyReceipt(SuccessOutcome, BigInt(31000), BloomFilter(ledger.BloomFilter.create(Nil)), Nil)
     val r2 = LegacyReceipt(SuccessOutcome, BigInt(32000), BloomFilter(ledger.BloomFilter.create(Nil)), Nil)
-    val header2Receipts: Seq[Receipt] = Seq(r0, r1, r2)
+    val header1Receipts: Seq[Receipt] = Seq(r0, r1, r2)
+    val header2Receipts: Seq[Receipt] =
+      Seq(LegacyReceipt(SuccessOutcome, BigInt(21000), BloomFilter(ledger.BloomFilter.create(Nil)), Nil))
 
     val chain = BlockHelpers.generateChain(2, BlockHelpers.genesis)
     val header1: BlockHeader = chain(0).header.copy(receiptsRoot = receiptsRootOf(header1Receipts))
@@ -583,18 +586,19 @@ class ChainDownloaderSpec
       }
       .getOrElse(fail(s"no MessageClassifier(ReceiptsCode) SubscribeCmd among: $prhSubs1"))
 
-    // Round 1: findBestStoredHeader's restart-rebuild scan walks block numbers DOWN from `best`, so the queue it
-    // seeds is [header2.hash, header1.hash] — header2 is batch.head, and is the one truncated below.
+    // Round 1: findBestStoredHeader's restart-rebuild scan now walks block numbers UP from the floor (#33
+    // follow-up — ascending, so the lowest missing block is dispatched first), so the queue it seeds is
+    // [header1.hash, header2.hash] — header1 is batch.head, and is the one truncated below.
     val firstSend = networkPeerManager.expectMsgType[NetworkPeerManagerActor.SendMessageCmd](5.seconds)
     val firstReqId = firstSend.message.underlyingMsg match
       case ETHPackets.GetReceipts70(reqId, firstIdx, hashes) =>
         firstIdx shouldBe 0L
-        hashes shouldBe Seq(header2.hash.value, header1.hash.value)
+        hashes shouldBe Seq(header1.hash.value, header2.hash.value)
         reqId
       case other => fail(s"expected GetReceipts70, got $other")
 
-    // Peer truncates mid-header2 — 2 of its 3 receipts, lastBlockIncomplete=true — and never even attempts
-    // header1. This is what pushes header1 ("remaining") in front of header2's buffered partial in the old code.
+    // Peer truncates mid-header1 — 2 of its 3 receipts, lastBlockIncomplete=true — and never even attempts
+    // header2. This is what pushes header2 ("remaining") in front of header1's buffered partial in the old code.
     prhAdapter ! PeerEvent.MessageFromPeer(
       receipts70(firstReqId, lastBlockIncomplete = true, Seq(Seq(r0, r1))),
       peerId
@@ -622,22 +626,22 @@ class ChainDownloaderSpec
       }
       .getOrElse(fail(s"no MessageClassifier(ReceiptsCode) SubscribeCmd among: $prhSubs2"))
 
-    // Peer answers fully this time: header1's single receipt, and header2's receipts FRESH from index 0 (it was
-    // never told to resume header2, wherever header2 landed in this batch) — all 3 receipts, not a resumed 1.
+    // Peer answers fully this time: header2's single receipt, and header1's receipts FRESH from index 0 (it was
+    // never told to resume header1, wherever header1 landed in this batch) — all 3 receipts, not a resumed 1.
     val secondBlocks = secondHashes.map(h => if h == header1.hash.value then header1Receipts else header2Receipts)
     prhAdapter2 ! PeerEvent.MessageFromPeer(
       receipts70(secondReqId, lastBlockIncomplete = false, secondBlocks),
       peerId
     )
 
-    // Fixed code: header2 stores exactly its real 3 receipts (no duplication), the receiptsRoot check passes, and
+    // Fixed code: header1 stores exactly its real 3 receipts (no duplication), the receiptsRoot check passes, and
     // no third round is needed. Buggy code: the stale 2-receipt buffer is prepended to the fresh 3, the resulting
-    // 5-receipt list fails the receiptsRoot check, header2 is re-queued, and the (blameless) peer is blacklisted —
+    // 5-receipt list fails the receiptsRoot check, header1 is re-queued, and the (blameless) peer is blacklisted —
     // this `eventually` never observes the store and times out.
     eventually(timeout(3.seconds), interval(50.millis)) {
-      storage.blockchainReader.getReceiptsByHash(header2.hash) shouldBe Some(header2Receipts)
+      storage.blockchainReader.getReceiptsByHash(header1.hash) shouldBe Some(header1Receipts)
     }
-    storage.blockchainReader.getReceiptsByHash(header1.hash) shouldBe Some(header1Receipts)
+    storage.blockchainReader.getReceiptsByHash(header2.hash) shouldBe Some(header2Receipts)
 
     testKit.stop(downloader)
   }
@@ -1108,6 +1112,136 @@ class ChainDownloaderSpec
     retrySend.message.underlyingMsg match
       case ETHPackets.GetBlockBodies(_, retryHashes) => retryHashes shouldBe Seq(secondHash)
       case other => fail(s"expected a re-issued GetBlockBodies for the second hash only, got $other")
+
+    testKit.stop(downloader)
+  }
+
+  // ── Defect 6 (#33 follow-up): a single advanceBodyCursor/advanceReceiptCursor call was unbounded ──────────
+  //
+  // Forge's ETC review of #33 (b4b2a50b8): findBestStoredHeader's rebuild queued missing blocks highest-first, so
+  // the lowest missing block was dispatched LAST. Nothing could advance the cursor until it landed, and once it
+  // did, a single advanceBodyCursor call could have an unboundedly long already-stored run to walk in one actor
+  // message — on ETC mainnet (~25M blocks), estimated at ~75M reads, minutes warm / 1-2h cold after a restart deep
+  // into a backfill. Fixed two ways: the rescan now queues ascending (proven by the reordered assertions in the
+  // eth/70 test above), and each cursor-advance call is separately capped at `cursorScanCap` blocks (and never
+  // past `targetBlock`) regardless of dispatch order, so a store can never trigger an unbounded synchronous scan.
+  it should "advance the body cursor by at most cursorScanCap per call, reaching the end over repeated calls" taggedAs UnitTest in {
+    val storage = new EphemBlockchainTestSetup {}
+    val appStateStorage = storage.storagesInstance.storages.appStateStorage
+    val networkPeerManager = TestProbe()
+    val peerEventBus = TestProbe()
+    val replyToProbe = TestProbe()
+
+    val cap = 3L
+    val emptyBody = BlockBody(Nil, Nil)
+    val chain = BlockHelpers.generateChain(10, BlockHelpers.genesis)
+    val headers = chain.map(b => headerMatching(b.header, emptyBody))
+
+    // Headers 1-10 and receipts 1-10 (empty) are all already on disk; bodies 1-6 are too — only 7-10 are missing,
+    // so the rescan queues just those four, ascending. The cursor itself is never touched here, so it starts at 0.
+    headers
+      .map(h => storage.blockchainWriter.storeBlockHeader(h))
+      .reduce(_.and(_))
+      .and(headers.map(h => storage.blockchainWriter.storeReceipts(h.hash, Seq.empty)).reduce(_.and(_)))
+      .and(headers.take(6).map(h => storage.blockchainWriter.storeBlockBody(h.hash, emptyBody)).reduce(_.and(_)))
+      .commit()
+    appStateStorage.putBackfillBestHeader(BigInt(10)).commit()
+
+    val peerId = PeerId("cap-peer")
+    val peer =
+      Peer(peerId, new InetSocketAddress("127.0.0.1", 0), TestProbe(peerId.value).ref, incomingConnection = false)
+    val peerStatus = RemoteStatus(
+      Capability.ETH68,
+      1,
+      ChainWeight.totalDifficultyOnly(1),
+      ByteString("best-hash"),
+      ByteString("genesis-hash")
+    )
+    val peerInfo = PeerInfo(
+      peerStatus,
+      forkAccepted = true,
+      chainWeight = peerStatus.chainWeight,
+      maxBlockNumber = BigInt(10),
+      bestBlockHash = peerStatus.bestHash
+    )
+
+    // targetBlock (10) matches the highest stored header exactly, so bestHeaderNumber >= targetBlock already —
+    // no GetBlockHeaders is ever dispatched, keeping this a single-peer, bodies-only flow. blockBodiesPerRequest=1
+    // so each round below is exactly one hash, under this test's full control.
+    val downloader: TypedActorRef[ChainDownloader.Command] = testKit
+      .spawn(
+        ChainDownloader(
+          blockchainReader = storage.blockchainReader,
+          blockchainWriter = storage.blockchainWriter,
+          appStateStorage = appStateStorage,
+          networkPeerManager = networkPeerManager.ref,
+          peerEventBus = peerEventBus.ref,
+          syncConfig = defaultSyncConfig.copy(blockBodiesPerRequest = 1),
+          replyTo = replyToProbe.ref,
+          maxConcurrentRequests = 4,
+          cursorScanCap = cap
+        ),
+        s"chain-downloader-cursor-cap-${System.nanoTime()}"
+      )
+
+    val handshakeReq = networkPeerManager.expectMsgType[NetworkPeerManagerActor.GetHandshakedPeersCmd](5.seconds)
+    handshakeReq.replyTo ! NetworkPeerManagerActor.HandshakedPeers(Map(peer -> peerInfo))
+    val peerAddSub = peerEventBus.expectMsgType[SubscribeCmd](5.seconds)
+    peerAddSub.to shouldBe PeerDisconnectedClassifier(PeerSelector.WithId(peerId))
+
+    downloader ! ChainDownloader.Start(BigInt(10))
+    downloader ! ChainDownloader.BoostConcurrency(4)
+
+    // Delivers the response for the next expected single-hash GetBlockBodies request and returns the new cursor
+    // value observed immediately after.
+    def deliverNextBodyAndReadCursor(expectedHash: ByteString): BigInt =
+      val send = networkPeerManager.expectMsgType[NetworkPeerManagerActor.SendMessageCmd](5.seconds)
+      val reqId = send.message.underlyingMsg match
+        case ETHPackets.GetBlockBodies(reqId, hashes) =>
+          hashes shouldBe Seq(expectedHash)
+          reqId
+        case other => fail(s"expected a single-hash GetBlockBodies, got $other")
+      val subs = collectSubscribes(peerEventBus, count = 2)
+      val adapter: TypedActorRef[PeerEvent] = subs
+        .collectFirst {
+          case SubscribeCmd(MessageClassifier(codes, PeerSelector.WithId(pid)), ref)
+              if codes.contains(Codes.BlockBodiesCode) && pid == peerId =>
+            ref
+        }
+        .getOrElse(fail(s"no MessageClassifier(BlockBodiesCode) SubscribeCmd among: $subs"))
+      adapter ! PeerEvent.MessageFromPeer(ETHPackets.BlockBodies(reqId, Seq(emptyBody)), peerId)
+      eventually(timeout(3.seconds), interval(50.millis)) {
+        storage.blockchainReader.getBlockBodyByHash(BlockHash(expectedHash)) shouldBe Some(emptyBody)
+      }
+      appStateStorage.getBackfillBestBody()
+
+    // Round 1: delivering block 7's body lets the scan start from cursor+1=1, but it stops at the cap (3) even
+    // though blocks 1-6 are ALL already contiguously present — proving one call never advances by more than the cap.
+    deliverNextBodyAndReadCursor(headers(6).hash.value) shouldBe BigInt(3)
+    // Round 2: resumes from where round 1 stopped and is capped again.
+    deliverNextBodyAndReadCursor(headers(7).hash.value) shouldBe BigInt(6)
+    // Round 3: with only 2 blocks (9, 10) left below cursorScanCap's next window (6+3=9, but block 10 also lands
+    // within it since block 9 is the only gap before it), delivering block 9's body lets the scan reach the true
+    // end at block 10 too — receipts are already all stored, so once bodies reach target the backfill completes
+    // and clears its cursors (#1169): proven here via the Done reply rather than reading a cursor value that
+    // would already be cleared by the time this call returns, the same reasoning as the "valid batch" test above.
+    deliverNextBodyAndReadCursor(headers(8).hash.value) shouldBe BigInt(9)
+    val bodySend = networkPeerManager.expectMsgType[NetworkPeerManagerActor.SendMessageCmd](5.seconds)
+    val lastReqId = bodySend.message.underlyingMsg match
+      case ETHPackets.GetBlockBodies(reqId, hashes) =>
+        hashes shouldBe Seq(headers(9).hash.value)
+        reqId
+      case other => fail(s"expected the final single-hash GetBlockBodies, got $other")
+    val lastSubs = collectSubscribes(peerEventBus, count = 2)
+    val lastAdapter: TypedActorRef[PeerEvent] = lastSubs
+      .collectFirst {
+        case SubscribeCmd(MessageClassifier(codes, PeerSelector.WithId(pid)), ref)
+            if codes.contains(Codes.BlockBodiesCode) && pid == peerId =>
+          ref
+      }
+      .getOrElse(fail(s"no MessageClassifier(BlockBodiesCode) SubscribeCmd among: $lastSubs"))
+    lastAdapter ! PeerEvent.MessageFromPeer(ETHPackets.BlockBodies(lastReqId, Seq(emptyBody)), peerId)
+    replyToProbe.expectMsg(3.seconds, ChainDownloader.Done)
 
     testKit.stop(downloader)
   }

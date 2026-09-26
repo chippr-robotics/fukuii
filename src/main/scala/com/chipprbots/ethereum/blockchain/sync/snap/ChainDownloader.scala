@@ -81,7 +81,8 @@ class ChainDownloader private (
     initialMaxConcurrentRequests: Int,
     requestTimeout: FiniteDuration,
     snapServerPeerNodeIds: Set[ByteString],
-    replyTo: TypedActorRef[ChainDownloader.Done.type]
+    replyTo: TypedActorRef[ChainDownloader.Done.type],
+    cursorScanCap: Long
 ):
 
   import ChainDownloader.*
@@ -649,12 +650,20 @@ class ChainDownloader private (
     * assumes: every block at or below it is stored. A crash between the store above and this call simply leaves the
     * cursor at its old (safe, possibly stale) value — never past a gap — so an old cursor written by a pre-#33 build,
     * or one left behind mid-crash, costs at most a few redundant re-fetches on restart, never data loss. In the common
-    * case (single peer, in-order delivery) this scans exactly one block per call.
+    * case (single peer, in-order delivery) this scans exactly one block per call — but is NOT unbounded in general:
+    * after a restart, findBestStoredHeader's rebuild scan now queues the lowest missing block first (ascending, see
+    * below), so a long-already-stored run can become newly contiguous all at once. Bounded to `cursorScanCap` blocks
+    * (and never past `targetBlock`) per call for that case (#33 follow-up) — a single actor message can only ever read
+    * up to the cap, not the whole remaining chain; a later store call continues the scan from wherever this one
+    * stopped.
     */
   private def advanceBodyCursor(): Unit =
     val current = appStateStorage.getBackfillBestBody()
+    val limit = (current + cursorScanCap).min(targetBlock)
     var n = current + 1
-    while blockchainReader.getBlockHeaderByNumber(n).exists(h => blockchainReader.getBlockBodyByHash(h.hash).isDefined)
+    while n <= limit && blockchainReader
+        .getBlockHeaderByNumber(n)
+        .exists(h => blockchainReader.getBlockBodyByHash(h.hash).isDefined)
     do n += 1
     if n - 1 > current then appStateStorage.putBackfillBestBody(n - 1).commit()
 
@@ -741,11 +750,16 @@ class ChainDownloader private (
       advanceReceiptCursor()
     verified.size
 
-  /** See advanceBodyCursor — same contiguous-prefix reasoning, applied to the receipt cursor (#33). */
+  /** See advanceBodyCursor — same contiguous-prefix reasoning, same `cursorScanCap`/`targetBlock` bound, applied to the
+    * receipt cursor (#33, #33 follow-up).
+    */
   private def advanceReceiptCursor(): Unit =
     val current = appStateStorage.getBackfillBestReceipt()
+    val limit = (current + cursorScanCap).min(targetBlock)
     var n = current + 1
-    while blockchainReader.getBlockHeaderByNumber(n).exists(h => blockchainReader.getReceiptsByHash(h.hash).isDefined)
+    while n <= limit && blockchainReader
+        .getBlockHeaderByNumber(n)
+        .exists(h => blockchainReader.getReceiptsByHash(h.hash).isDefined)
     do n += 1
     if n - 1 > current then appStateStorage.putBackfillBestReceipt(n - 1).commit()
 
@@ -797,7 +811,7 @@ class ChainDownloader private (
             .map(_.toReceipt)
         }
 
-        // Store receipts + atomically advance the backfill receipt cursor (#1169 pattern).
+        // Store receipts, then advance the backfill receipt cursor over the contiguous run now on disk (#1169, #33).
         val delivered = requestedHashes.zip(receiptsByBlock)
         val stored = storeReceiptsAndAdvanceCursor(delivered)
         if stored < delivered.size then rejectMismatchedReceipts(peer, requestedHashes.drop(stored))
@@ -840,7 +854,7 @@ class ChainDownloader private (
           case other                  => throw new RuntimeException(s"block receipts are not a list: $other")
         }
 
-        // Store receipts + atomically advance the backfill receipt cursor (#1169 pattern).
+        // Store receipts, then advance the backfill receipt cursor over the contiguous run now on disk (#1169, #33).
         val delivered = requestedHashes.zip(receiptsByBlock)
         val stored = storeReceiptsAndAdvanceCursor(delivered)
         if stored < delivered.size then rejectMismatchedReceipts(peer, requestedHashes.drop(stored))
@@ -987,14 +1001,29 @@ class ChainDownloader private (
           low = mid + 1
         else high = mid - 1
 
-      // Rebuild the body/receipt queues for headers we have but bodies/receipts we don't.
-      // Use the body/receipt cursors as the floor so we don't re-walk every header — anything
-      // ≤ those cursors was committed atomically with its body/receipt write and is on disk.
+      // Rebuild the body/receipt queues for headers we have but bodies/receipts we don't. Use the body/receipt
+      // cursors as the floor so we don't re-walk every header — #33 made each cursor mean "every block at or below
+      // it is stored" (a verified contiguous prefix advanced by ChainDownloader.advanceBodyCursor /
+      // advanceReceiptCursor's own scan), not "committed atomically together with its write" — so anything at or
+      // below those cursors is still safe to skip re-checking, just via a different guarantee than before.
+      //
+      // Ascending, not descending (#33 follow-up, per Forge's ETC review of b4b2a50b8): this walk seeds
+      // bodiesQueue/receiptsQueue, and requestBodies/requestReceipts always take from the FRONT of the queue —
+      // appending low-to-high means the LOWEST missing block is dispatched FIRST. That matters because
+      // advanceBodyCursor/advanceReceiptCursor can only advance past a gap, never over one: with the old
+      // descending order the lowest missing block was queued LAST (fetched last), so nothing could advance the
+      // cursor until it landed — and once it did, everything above it could already be contiguously present,
+      // so a single advanceBodyCursor call had an effectively unbounded range to walk (on ETC mainnet, close to
+      // the whole chain after a restart deep into a backfill: Forge's estimate was ~75M reads in one actor
+      // message, 5-10 min warm / 1-2h cold). Ascending order — combined with cursorScanCap bounding each
+      // individual scan call regardless — lets the cursor advance incrementally as each low block lands, the same
+      // way it does during normal (non-restart) operation.
       val bodyFloor = appStateStorage.getBackfillBestBody()
       val receiptFloor = appStateStorage.getBackfillBestReceipt()
+      val lowestFloor = bodyFloor.min(receiptFloor)
 
-      var i = best
-      while i >= 1 do
+      var i = lowestFloor + 1
+      while i <= best do
         val needsBodyCheck = i > bodyFloor
         val needsReceiptCheck = i > receiptFloor
         if needsBodyCheck || needsReceiptCheck then
@@ -1005,7 +1034,7 @@ class ChainDownloader private (
               if needsReceiptCheck && blockchainReader.getReceiptsByHash(header.hash).isEmpty then
                 receiptsQueue :+= header.hash.value
             case None => // shouldn't happen
-        i -= 1
+        i += 1
 
       best
 
@@ -1088,7 +1117,15 @@ object ChainDownloader:
       maxConcurrentRequests: Int = 4,
       requestTimeout: FiniteDuration = 10.seconds,
       snapServerPeerNodeIds: Set[ByteString] = Set.empty,
-      blacklist: Blacklist = CacheBasedBlacklist.empty(1000)
+      blacklist: Blacklist = CacheBasedBlacklist.empty(1000),
+      // Bounds how many blocks a single advanceBodyCursor/advanceReceiptCursor call scans (#33 follow-up). Without
+      // a cap, a long contiguous run becoming available at once (e.g. after a restart whose rescan queues fill in
+      // a large stretch) forces one actor message to read potentially the whole chain synchronously — on ETC
+      // mainnet (~25M blocks) that was estimated at ~75M reads in one message, minutes warm / 1-2h cold. A cap
+      // means the scan yields after cursorScanCap blocks; the next successful store continues it from the new
+      // cursor. "A few thousand" per forge's review — 5000 is a few dispatch cycles' worth of throughput, not a
+      // noticeable latency hit, while bounding worst-case single-message cost to a few thousand DB reads.
+      cursorScanCap: Long = 5000L
   ): Behavior[Command] =
     Behaviors.setup { context =>
       Behaviors.withTimers { timers =>
@@ -1119,7 +1156,8 @@ object ChainDownloader:
           maxConcurrentRequests,
           requestTimeout,
           snapServerPeerNodeIds,
-          replyTo
+          replyTo,
+          cursorScanCap
         )
 
         // Immediate poll, then periodic poll for handshaked peers (replaces PeerListSupportNg's scheduleWithFixedDelay).

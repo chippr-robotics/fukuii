@@ -378,8 +378,15 @@ class AppStateStorage(val dataSource: DataSource) extends TransactionalKeyValueS
   //
   // Three separate cursors because `ChainDownloader` writes headers, bodies, and receipts on
   // independent commit paths — they don't all advance in lockstep and must be tracked
-  // separately. Each cursor is updated atomically with its corresponding storage commit so a
-  // crash mid-write never leaves the cursor ahead of the data on disk.
+  // separately. The header cursor is updated atomically with its `storeBlockHeader` commit (one
+  // write batch, headers validated and stored strictly in order) so a crash mid-write never
+  // leaves it ahead of the data on disk. Bodies and receipts are fetched by several peers
+  // concurrently and can complete out of order, so their cursors instead mean "every block at or
+  // below this number has its body/receipts stored" and are advanced by a separate
+  // contiguous-prefix scan AFTER each store commit (`ChainDownloader.advanceBodyCursor` /
+  // `advanceReceiptCursor`, #33) rather than bundled atomically with the store itself — but the
+  // scan only ever advances over what it has just verified is on disk, so the same
+  // never-ahead-of-data guarantee holds by construction, not by a single write batch.
 
   /** Highest backfill target the node was working toward when it last saved progress. Set when `ChainDownloader`
     * starts; cleared after `Done` so future startups don't spuriously resume.
@@ -397,14 +404,20 @@ class AppStateStorage(val dataSource: DataSource) extends TransactionalKeyValueS
   def putBackfillBestHeader(n: BigInt): DataSourceBatchUpdate =
     put(Keys.BackfillBestHeader, n.toString)
 
-  /** Highest block number whose `storeBlockBody` commit has succeeded. May lag the header cursor. */
+  /** Highest block number N such that every block from 1 to N has a `storeBlockBody` commit on disk — a verified
+    * contiguous prefix (`ChainDownloader.advanceBodyCursor`, #33), not merely the highest individual body that has ever
+    * been stored (bodies land out of order across concurrent peers). May lag the header cursor.
+    */
   def getBackfillBestBody(): BigInt =
     getBigInt(Keys.BackfillBestBody)
 
   def putBackfillBestBody(n: BigInt): DataSourceBatchUpdate =
     put(Keys.BackfillBestBody, n.toString)
 
-  /** Highest block number whose `storeReceipts` commit has succeeded. May lag the body cursor. */
+  /** Highest block number N such that every block from 1 to N has a `storeReceipts` commit on disk — a verified
+    * contiguous prefix (`ChainDownloader.advanceReceiptCursor`, #33), not merely the highest individual receipt set
+    * that has ever been stored. May lag the body cursor.
+    */
   def getBackfillBestReceipt(): BigInt =
     getBigInt(Keys.BackfillBestReceipt)
 
