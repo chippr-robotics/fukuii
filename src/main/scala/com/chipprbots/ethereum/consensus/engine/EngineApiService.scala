@@ -9,6 +9,7 @@ import cats.effect.IO
 import com.chipprbots.ethereum.consensus.eip1559.BaseFeeCalculator
 import com.chipprbots.ethereum.consensus.engine.PayloadStatus.*
 import com.chipprbots.ethereum.consensus.validators.std.MptListValidator
+import com.chipprbots.ethereum.consensus.validators.std.StdBlockValidator
 import com.chipprbots.ethereum.consensus.validators.std.StdSignedTransactionValidator
 import com.chipprbots.ethereum.crypto.kec256
 import com.chipprbots.ethereum.domain.*
@@ -555,8 +556,17 @@ class EngineApiService(
           blockchainReader.getBlockHeaderByNumber(p.number.value).exists(_.hash == p.hash) ||
           blockchainReader.getReceiptsByHash(p.hash).isDefined
         }
+        // Evaluated only on the branch that is about to execute (see blockRlpSizeError).
+        lazy val rlpSizeError = blockRlpSizeError(block)
         val executionResult =
-          if parentKnown && parentValidated then
+          if parentKnown && parentValidated && rlpSizeError.isDefined then
+            val lvh = parentHeader.map(_.hash.value).getOrElse(zeroHash)
+            blockchainWriter.removeBlockByHash(BlockHash(payload.blockHash)).commit()
+            markInvalidRecursive(payload.blockHash, lvh)
+            executionErrorReason.set(rlpSizeError)
+            log.warn("[ENGINE-API] newPayload #{}: INVALID reason={}", payload.blockNumber, rlpSizeError.getOrElse(""))
+            Some(false)
+          else if parentKnown && parentValidated then
             try
               blockExecution.executeAndValidateBlockFull(block, alreadyValidated = true) match
                 case Right((receipts, derivedRequests)) =>
@@ -675,6 +685,33 @@ class EngineApiService(
             PayloadStatusV1(Accepted)
       // end headerInvalid else
   }
+
+  /** EIP-7934 (Osaka): a block whose RLP encoding exceeds MAX_RLP_BLOCK_SIZE is invalid.
+    *
+    * `newPayload` executes with `alreadyValidated = true`, so `StdBlockValidator.validateHeaderAndBody` — the one place
+    * the cap was checked — never runs on this path, and an oversized payload was executed and answered VALID (EEST
+    * `test_block_at_rlp_size_limit_boundary[max_rlp_size_plus_1_byte]`). This adds that one rule, not the rest of the
+    * body validation, which a payload already satisfies: `payloadToBlock` derives the transactions, ommers and
+    * withdrawals roots from the body itself, so the block-hash check covers them, and blob gas is checked above.
+    *
+    * Placed where go-ethereum checks it. `BlockValidator.ValidateBody` opens with `IsOsaka(number, time) &&
+    * block.Size() > params.MaxBlockSize` (8,388,608) → `ErrBlockOversized`, and `newPayload` reaches it only through
+    * `InsertBlockWithoutSetHead`, i.e. for a block whose parent it has with state; the failure is answered INVALID with
+    * the parent as latest valid hash (`api.invalid(err, parent.Header())`). `block.Size()` is the RLP of [header,
+    * transactions, uncles, withdrawals], exactly [[Block.size]] (execution-specs osaka `state_transition`:
+    * `len(rlp.encode(block)) > MAX_RLP_BLOCK_SIZE`). The cap is the same constant as the import path's
+    * [[StdBlockValidator.BlockRLPSizeCap]].
+    *
+    * Gated on the block's own timestamp: before Osaka go-ethereum and execution-specs apply no such cap, and neither
+    * does this path. Only ETH chains reach the Engine API.
+    */
+  private def blockRlpSizeError(block: Block): Option[String] =
+    if !blockchainConfig.isOsakaTimestamp(block.header.unixTimestamp) then None
+    else
+      val size = Block.size(block)
+      Option.when(size > StdBlockValidator.BlockRLPSizeCap)(
+        s"RLP_BLOCK_LIMIT_EXCEEDED: block RLP size $size exceeds MAX_RLP_BLOCK_SIZE ${StdBlockValidator.BlockRLPSizeCap}"
+      )
 
   /** engine_forkchoiceUpdatedV1..V4 — Update fork choice state, optionally start payload building. Returns
     * Left(errorMessage) for JSON-RPC error responses (e.g. invalid forkchoice state), Right(response) for normal
