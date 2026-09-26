@@ -8,7 +8,6 @@ import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 
 import scala.jdk.CollectionConverters.*
-import scala.util.Try
 import scala.util.Using
 
 import org.json4s.*
@@ -16,6 +15,7 @@ import org.json4s.native.JsonMethods.*
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
 
+import com.chipprbots.ethereum.crypto.KzgTestSetup
 import com.chipprbots.ethereum.testing.Tags.*
 
 /** Replays a whole execution-specs `blockchain_tests` corpus through [[EestBlockchainReplay]].
@@ -41,6 +41,21 @@ class EestFixtureCorpusSpec extends AnyFlatSpec with Matchers:
     sys.props.get(s"eest.${name.toLowerCase}").orElse(sys.env.get(s"EEST_$name")).filter(_.nonEmpty)
 
   private case class Outcome(file: String, test: String, divergences: Seq[String])
+
+  /** Every error is a divergence of that one fixture, fatal ones included: a StackOverflowError from a 1024-deep call
+    * chain or a LinkageError from a native precompile would otherwise escape `Try`, kill the worker and silently drop
+    * the rest of its file from the count.
+    */
+  private def replayOne(t: JValue): Seq[String] =
+    try EestBlockchainReplay.replay(t)
+    catch case e: Throwable => Seq(s"threw $e")
+
+  /** The node runs the EVM on threads sized by `.jvmopts` (-Xss4M); a pool thread's default stack is smaller than a
+    * 1024-frame call chain needs, so workers get the node's headroom and then some.
+    */
+  private def workerFactory: java.util.concurrent.ThreadFactory =
+    val counter = new java.util.concurrent.atomic.AtomicInteger()
+    (r: Runnable) => new Thread(null, r, s"eest-replay-${counter.incrementAndGet()}", 64L * 1024 * 1024)
 
   /** `blockchain_tests/for_amsterdam/amsterdam/eip8024_dupn_swapn_exchange/x/y.json` → `amsterdam/eip8024_...`. */
   private def group(relative: String): String =
@@ -75,21 +90,20 @@ class EestFixtureCorpusSpec extends AnyFlatSpec with Matchers:
       files should not be empty
     }
 
+    // The point-evaluation precompile (0x0a) needs the trusted setup the node loads at startup.
+    KzgTestSetup.ensureLoaded()
     val outcomes = new ConcurrentLinkedQueue[Outcome]()
-    val pool = Executors.newFixedThreadPool(threads)
+    val pool = Executors.newFixedThreadPool(threads, workerFactory)
     val started = System.nanoTime()
     files.foreach { file =>
       pool.execute { () =>
         val relative = root.relativize(file).toString
-        Try(parse(Files.readString(file))).toEither match
-          case Left(e) => outcomes.add(Outcome(relative, "<file>", Seq(s"unreadable: $e")))
-          case Right(JObject(tests)) =>
-            tests.foreach { case (name, t) =>
-              val divergences = Try(EestBlockchainReplay.replay(t)).fold(e => Seq(s"threw $e"), identity)
-              outcomes.add(Outcome(relative, name, divergences))
-            }
-          case Right(other) =>
-            outcomes.add(Outcome(relative, "<file>", Seq(s"not a fixture object: ${other.getClass}")))
+        try
+          parse(Files.readString(file)) match
+            case JObject(tests) =>
+              tests.foreach { case (name, t) => outcomes.add(Outcome(relative, name, replayOne(t))) }
+            case other => outcomes.add(Outcome(relative, "<file>", Seq(s"not a fixture object: ${other.getClass}")))
+        catch case e: Throwable => outcomes.add(Outcome(relative, "<file>", Seq(s"unreadable: $e")))
       }
     }
     pool.shutdown()
