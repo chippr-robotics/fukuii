@@ -1334,9 +1334,19 @@ class ChainDownloaderSpec
     downloader ! ChainDownloader.Start(BigInt(10))
     downloader ! ChainDownloader.BoostConcurrency(4)
 
-    // Delivers the response for the next expected single-hash GetBlockBodies request and returns the new cursor
-    // value observed immediately after.
-    def deliverNextBodyAndReadCursor(expectedHash: ByteString): BigInt =
+    // Delivers the response for the next expected single-hash GetBlockBodies request, then waits for the cursor
+    // itself to reach `expectedCursor`.
+    //
+    // advanceBodyCursor() commits SEPARATELY from, and strictly after, the body's own storeBlockBody commit —
+    // both inside the same synchronous handleBodies call, but two distinct DataSourceBatchUpdate.commit()s. Waiting
+    // only on the body (as this helper originally did, returning the cursor read immediately afterward for the
+    // caller to assert on) is necessary but not sufficient: under scheduling pressure the test thread can observe
+    // the first commit and read the cursor before the second one lands, seeing a stale value. This is exactly the
+    // flake reported against 039aa6909/0d72ecc61 (cursor read back as 0 instead of 3) when the full suite ran
+    // repeated back-to-back under heavy sbt/JVM load — reproduced on both the pre- and post-ordered-matching code,
+    // confirming it's a test-synchronization gap, not a production defect. Fixed by polling the cursor itself in
+    // its own eventually, matching every other assertion in this file that depends on a specific persisted value.
+    def deliverNextBodyAndAwaitCursor(expectedHash: ByteString, expectedCursor: BigInt): Unit =
       val send = networkPeerManager.expectMsgType[NetworkPeerManagerActor.SendMessageCmd](5.seconds)
       val reqId = send.message.underlyingMsg match
         case ETHPackets.GetBlockBodies(reqId, hashes) =>
@@ -1355,19 +1365,20 @@ class ChainDownloaderSpec
       eventually(timeout(3.seconds), interval(50.millis)) {
         storage.blockchainReader.getBlockBodyByHash(BlockHash(expectedHash)) shouldBe Some(emptyBody)
       }
-      appStateStorage.getBackfillBestBody()
+      eventually(timeout(3.seconds), interval(50.millis)) {
+        appStateStorage.getBackfillBestBody() shouldBe expectedCursor
+      }
 
     // Round 1: delivering block 7's body lets the scan start from cursor+1=1, but it stops at the cap (3) even
     // though blocks 1-6 are ALL already contiguously present — proving one call never advances by more than the cap.
-    deliverNextBodyAndReadCursor(headers(6).hash.value) shouldBe BigInt(3)
+    deliverNextBodyAndAwaitCursor(headers(6).hash.value, BigInt(3))
     // Round 2: resumes from where round 1 stopped and is capped again.
-    deliverNextBodyAndReadCursor(headers(7).hash.value) shouldBe BigInt(6)
-    // Round 3: with only 2 blocks (9, 10) left below cursorScanCap's next window (6+3=9, but block 10 also lands
-    // within it since block 9 is the only gap before it), delivering block 9's body lets the scan reach the true
-    // end at block 10 too — receipts are already all stored, so once bodies reach target the backfill completes
-    // and clears its cursors (#1169): proven here via the Done reply rather than reading a cursor value that
-    // would already be cleared by the time this call returns, the same reasoning as the "valid batch" test above.
-    deliverNextBodyAndReadCursor(headers(8).hash.value) shouldBe BigInt(9)
+    deliverNextBodyAndAwaitCursor(headers(7).hash.value, BigInt(6))
+    // Round 3: with only 2 blocks (9, 10) left below cursorScanCap's next window (6+3=9), delivering block 9's body
+    // lets the scan reach 9 (block 10 is requested and delivered separately below, then proven via the Done reply
+    // rather than a direct cursor read — #1169's completion path seeds the cursor at bestHeaderNumber, but reading
+    // it here would race the same way this helper used to before the Done message is observed).
+    deliverNextBodyAndAwaitCursor(headers(8).hash.value, BigInt(9))
     val bodySend = networkPeerManager.expectMsgType[NetworkPeerManagerActor.SendMessageCmd](5.seconds)
     val lastReqId = bodySend.message.underlyingMsg match
       case ETHPackets.GetBlockBodies(reqId, hashes) =>
