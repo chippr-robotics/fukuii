@@ -545,14 +545,16 @@ Fast sync was removed. Nothing needs to be done before upgrading:
   cleared when SNAP completes; fast sync's progress record is deleted. With `do-snap-sync = false`
   it starts regular sync and logs an error: regular sync fetches the missing state node by node and,
   if peers cannot serve it, re-syncs with SNAP anyway.
-- **Node where fast sync finished earlier:** with `do-snap-sync = true` it still starts SNAP sync,
-  as earlier releases did, because SNAP has never completed on it. Near the chain head SNAP finds
-  nothing to download and hands over to regular sync (it needs a snap-capable peer to see the head,
-  and until one connects the node waits without importing blocks). More than 64 blocks behind, SNAP
-  downloads and heals the state at a fresh pivot instead of executing the missed blocks. With
-  `do-snap-sync = false` it carries on with regular sync.
+- **Node where fast sync finished earlier:** it continues with regular sync, with `do-snap-sync` on
+  or off, unless SNAP has progress there (then SNAP resumes). If fast sync left gaps in the state,
+  regular sync fetches them from peers and, failing that, re-syncs with SNAP from a newer pivot.
 
-**Note:** If your node is already synced, enabling SNAP sync won't re-sync. SNAP sync only activates on fresh nodes or when sync state is cleared.
+**Note:** Enabling SNAP sync does not re-sync a node where SNAP sync completed or fast sync
+finished: it continues with regular sync. On a node that reached its best block another way
+(regular sync from genesis, say), enabling SNAP sync starts it. Near the chain head it hands over
+to regular sync without downloading anything, once a snap-capable peer shows it the head. More
+than 64 blocks behind, it downloads the state at a fresh pivot instead of executing the missed
+blocks.
 
 ### Switching from SNAP Sync to Full Sync
 

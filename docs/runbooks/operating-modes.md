@@ -759,12 +759,10 @@ Fast sync is gone: it could not finish on today's networks (eth/67 and later pee
   survives restarts and is cleared when SNAP completes; fast sync's progress record is deleted. With
   `do-snap-sync = false` the node starts regular sync and logs an error: regular sync fetches the
   missing state node by node and, if peers cannot serve it, re-syncs with SNAP anyway.
-- **A node where fast sync finished earlier** still starts SNAP sync if `do-snap-sync` is on and
-  SNAP has never completed on it, as earlier releases did. Near the chain head SNAP finds nothing to
-  download and hands over to regular sync; it needs a snap-capable peer to see the head, and until
-  one connects the node waits (retries, then dormant mode) without importing blocks. More than 64
-  blocks behind, SNAP downloads and heals the state at a fresh pivot instead of executing the
-  missed blocks.
+- **A node where fast sync finished earlier** continues with regular sync, even with
+  `do-snap-sync` on, unless SNAP has progress there (then SNAP resumes). If fast sync left gaps in
+  the state, regular sync fetches them from peers and, failing that, re-syncs with SNAP from a newer
+  pivot.
 - **`fukuii_resetFastSync` and `fukuii_restartFastSync` were removed**, along with the
   `app_fastsync_*` metrics.
 
