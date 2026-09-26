@@ -344,6 +344,29 @@ class SyncControllerSpec
   private def childNamed(testSetup: TestSetup, prefix: String): Boolean =
     testSetup.syncController.children.exists(_.path.name.startsWith(prefix))
 
+  /** SNAP part-way through healing: pivot saved, every data phase done, best moved on by a healing pivot roll. */
+  private def seedMidHeal(testSetup: TestSetup, pivot: BigInt, best: BigInt): Unit =
+    import testSetup.*
+    val appState = storagesInstance.storages.appStateStorage
+    blockchainWriter.storeBlockHeader(baseBlockHeader.copy(number = BlockNumber(best))).commit()
+    appState
+      .putSnapSyncPivotBlock(pivot)
+      .and(appState.putSnapSyncStateRoot(ByteString(Array.fill[Byte](32)(0x66))))
+      .and(appState.putSnapSyncAccountsComplete(true))
+      .and(appState.putSnapSyncStorageComplete(true))
+      .and(appState.putSnapSyncBytecodeComplete(true))
+      .and(appState.putBestBlockNumber(best))
+      .commit()
+
+  /** Wait until the SNAP child of `controller` has handled the MinPivotBlock / Start its parent sent at spawn: SNAP
+    * answers GetProgress only after them.
+    */
+  private def awaitSnapStarted(controller: TestActorRef[Nothing]): Unit =
+    val snapSync = eventually(controller.children.find(_.path.name.startsWith("snap-sync")).get)
+    val progress = TestProbe()(controller.underlying.system)
+    snapSync.toTyped[SNAPSyncController.Command] ! SNAPSyncController.GetProgress(progress.ref.toTyped)
+    progress.expectMsgType[com.chipprbots.ethereum.blockchain.sync.snap.SyncProgress]
+
   it should "start regular sync when do-snap-sync is off" taggedAs (UnitTest, SyncTest) in withTestSetup() {
     testSetup =>
       import testSetup.*
@@ -399,6 +422,104 @@ class SyncControllerSpec
     }
     storagesInstance.storages.appStateStorage.getSnapSyncBootstrapTarget() shouldBe Some(StrandedBest + 1)
     assert(!childNamed(testSetup, "regular-sync"))
+    // Handled once: fast sync's record is gone, so no later start can take a SNAP-moved best block for a stranded one.
+    // The floor lives on in SNAP's state until SNAP holds a pivot at or above it.
+    storagesInstance.storages.fastSyncStateStorage.hasSyncState shouldBe false
+    storagesInstance.storages.appStateStorage.getSnapSyncMinPivotBlock() shouldBe Some(StrandedBest + 1)
+  }
+
+  it should "keep applying a persisted pivot floor after a restart, until SNAP holds a pivot above it" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in withRecoveryTestSetup() { testSetup =>
+    import testSetup.*
+    // The node restarted after the first start recorded the floor and deleted fast sync's record, but before SNAP
+    // chose a pivot. Only the persisted floor now says the best block has no state.
+    blockchainWriter.storeBlockHeader(baseBlockHeader.copy(number = BlockNumber(StrandedBest))).commit()
+    storagesInstance.storages.appStateStorage
+      .putBestBlockNumber(StrandedBest)
+      .and(storagesInstance.storages.appStateStorage.putSnapSyncMinPivotBlock(StrandedBest + 1))
+      .commit()
+    answerPeerPollsWith(snapPeerAt(StrandedBest + 10))
+
+    syncController ! SyncController.WrappedSyncProtocol(SyncProtocol.Start)
+
+    eventually {
+      someTimePasses()
+      assert(childNamed(testSetup, "pivot-header-bootstrap"))
+    }
+    storagesInstance.storages.appStateStorage.getSnapSyncBootstrapTarget() shouldBe Some(StrandedBest + 1)
+    assert(!childNamed(testSetup, "regular-sync"))
+  }
+
+  it should "clear the pivot floor when SNAP finalizes" taggedAs (UnitTest, SyncTest) in withRecoveryTestSetup() {
+    testSetup =>
+      import testSetup.*
+      val appState = storagesInstance.storages.appStateStorage
+      blockchainWriter.storeBlockHeader(baseBlockHeader.copy(number = BlockNumber(StrandedBest))).commit()
+      appState.putBestBlockNumber(StrandedBest).and(appState.putSnapSyncMinPivotBlock(StrandedBest + 1)).commit()
+
+      syncController ! SyncController.WrappedSyncProtocol(SyncProtocol.Start)
+      eventually(assert(childNamed(testSetup, "snap-sync")))
+      appState.getSnapSyncMinPivotBlock() shouldBe Some(StrandedBest + 1)
+
+      syncController ! SyncController.WrappedExternal(SNAPSyncController.SnapSyncFinalized(StrandedBest + 1))
+
+      appState.getSnapSyncMinPivotBlock() shouldBe None
+  }
+
+  it should "not re-apply the floor when the node restarts mid-heal, after SNAP took over" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in withRecoveryTestSetup() { testSetup =>
+    import testSetup.*
+    val appState = storagesInstance.storages.appStateStorage
+    seedStrandedFastSync(testSetup)
+    answerPeerPollsWith(snapPeerAt(StrandedBest + 10))
+
+    // First start: SNAP takes the stranded node over with a pivot above its best block.
+    syncController ! SyncController.WrappedSyncProtocol(SyncProtocol.Start)
+    eventually {
+      someTimePasses()
+      assert(childNamed(testSetup, "pivot-header-bootstrap"))
+    }
+    stopNode(syncController)
+
+    // SNAP then committed that pivot, downloaded every range and started healing. A healing pivot roll moved best
+    // without saving the pivot (SNAP saves it only when healing succeeds).
+    seedMidHeal(testSetup, pivot = StrandedBest + 1, best = StrandedBest + 100)
+
+    val restarted = restartedSyncController()
+    restarted ! SyncController.WrappedSyncProtocol(SyncProtocol.Start)
+    awaitSnapStarted(restarted)
+
+    // A floor above SNAP's saved pivot would trip belowEscalationHint and wipe these, restarting SNAP from scratch.
+    appState.isSnapSyncAccountsComplete() shouldBe true
+    appState.isSnapSyncStorageComplete() shouldBe true
+    appState.isSnapSyncBytecodeComplete() shouldBe true
+    // SNAP's saved pivot reached the floor, so the floor was spent: cleared, not applied again.
+    appState.getSnapSyncMinPivotBlock() shouldBe None
+  }
+
+  it should "leave a heal alone on a database that once fell back to fast sync" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in withRecoveryTestSetup() { testSetup =>
+    import testSetup.*
+    val appState = storagesInstance.storages.appStateStorage
+    // SNAP fell back to fast sync once (fast sync wrote its record), later resumed and is now healing: best was moved
+    // by a healing pivot roll, not by fast sync.
+    seedStrandedFastSync(testSetup)
+    seedMidHeal(testSetup, pivot = StrandedBest + 1, best = StrandedBest + 100)
+
+    syncController ! SyncController.WrappedSyncProtocol(SyncProtocol.Start)
+    awaitSnapStarted(syncController)
+
+    appState.isSnapSyncAccountsComplete() shouldBe true
+    appState.isSnapSyncStorageComplete() shouldBe true
+    appState.isSnapSyncBytecodeComplete() shouldBe true
+    storagesInstance.storages.fastSyncStateStorage.hasSyncState shouldBe false
+    appState.getSnapSyncMinPivotBlock() shouldBe None
   }
 
   it should "leave SNAP's resume alone once SNAP has taken over the best block of an upgraded node" taggedAs (
@@ -416,14 +537,8 @@ class SyncControllerSpec
       .commit()
 
     syncController ! SyncController.WrappedSyncProtocol(SyncProtocol.Start)
+    awaitSnapStarted(syncController)
 
-    // Barrier: SNAP answers GetProgress only after the MinPivotBlock / Start its parent sent at spawn.
-    val snapSync = eventually {
-      syncController.children.find(_.path.name.startsWith("snap-sync")).get
-    }
-    val progress = TestProbe()
-    snapSync.toTyped[SNAPSyncController.Command] ! SNAPSyncController.GetProgress(progress.ref.toTyped)
-    progress.expectMsgType[com.chipprbots.ethereum.blockchain.sync.snap.SyncProgress]
     storagesInstance.storages.appStateStorage.isSnapSyncAccountsComplete() shouldBe true
   }
 
@@ -441,6 +556,9 @@ class SyncControllerSpec
       assert(childNamed(testSetup, "regular-sync"))
     }
     assert(!childNamed(testSetup, "fast-sync"))
+    // The floor is kept, so switching do-snap-sync on later still starts SNAP above the stateless block.
+    storagesInstance.storages.fastSyncStateStorage.hasSyncState shouldBe false
+    storagesInstance.storages.appStateStorage.getSnapSyncMinPivotBlock() shouldBe Some(StrandedBest + 1)
   }
 
   class TestSetup(
@@ -520,6 +638,41 @@ class SyncControllerSpec
         )
       )
     )
+
+    /** A second SyncController on the same storages and peers: the node after a restart. */
+    def restartedSyncController(): TestActorRef[Nothing] = TestActorRef(
+      org.apache.pekko.actor.typed.scaladsl.adapter.PropsAdapter(
+        SyncController(
+          blockchain,
+          blockchainReader,
+          blockchainWriter,
+          storagesInstance.storages.appStateStorage,
+          storagesInstance.storages.evmCodeStorage,
+          storagesInstance.storages.stateStorage,
+          storagesInstance.storages.flatSlotStorage,
+          storagesInstance.storages.fastSyncStateStorage,
+          consensusAdapter,
+          validators,
+          peerMessageBus,
+          pendingTransactionsManager.ref
+            .toTyped[com.chipprbots.ethereum.transactions.PendingTransactionsManager.Command],
+          blockTopic,
+          ommersPool.ref,
+          networkPeerManager.ref,
+          blacklist,
+          syncConfig,
+          this,
+          externalSchedulerOpt = Some(system.scheduler)
+        )
+      )
+    )
+
+    /** Stop `controller` and its children, as a node shutdown would. */
+    def stopNode(controller: TestActorRef[Nothing]): Unit =
+      val watcher = TestProbe()
+      watcher.watch(controller)
+      system.stop(controller)
+      watcher.expectTerminated(controller)
 
     val baseBlockHeader = Fixtures.Blocks.Genesis.header
 
