@@ -126,5 +126,10 @@ final case class ServedPayload(
     block: com.chipprbots.ethereum.domain.Block,
     receipts: Seq[com.chipprbots.ethereum.domain.Receipt],
     executionRequests: Seq[ByteString],
-    blobsBundle: BlobsBundleData
+    blobsBundle: BlobsBundleData,
+    // EIP-7928: the RLP block access list of an Amsterdam payload, which engine_getPayloadV6 serves in its
+    // ExecutionPayloadV4 and the block itself does not carry (its header holds only the hash). Nothing fills it yet:
+    // the builder refuses Amsterdam timestamps until it can construct the list (#1427), so no Amsterdam payload is
+    // stored, and getPayloadV6 refuses one that lacks it.
+    blockAccessList: Option[ByteString] = None
 )

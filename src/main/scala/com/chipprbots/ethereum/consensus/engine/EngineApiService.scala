@@ -1726,21 +1726,31 @@ class EngineApiService(
     }
     BlobsBundleData(allBlobs.result(), allCommitments.result(), allProofs.result(), allCellProofsPerBlob.result())
 
-  /** engine_exchangeCapabilities — return supported Engine API methods. */
+  /** engine_exchangeCapabilities — return supported Engine API methods.
+    *
+    * The Amsterdam methods are advertised on every network, as go-ethereum advertises all of its methods: a CL picks
+    * the version by fork. Lighthouse's Gloas code fails with RequiredMethodUnsupported when forkchoiceUpdatedV4 or
+    * getPayloadV6 is missing, and sends attribute-less forkchoice updates through the highest forkchoiceUpdated
+    * advertised — which V4 therefore serves at every fork. getPayloadV6 is advertised although no Amsterdam payload is
+    * built yet (#1427): forkchoiceUpdatedV4 refuses the build (-38003) before a payload ID exists.
+    */
   def exchangeCapabilities(clCapabilities: Seq[String]): IO[Seq[String]] = IO {
     val supported = Seq(
       "engine_newPayloadV1",
       "engine_newPayloadV2",
       "engine_newPayloadV3",
       "engine_newPayloadV4",
+      "engine_newPayloadV5",
       "engine_forkchoiceUpdatedV1",
       "engine_forkchoiceUpdatedV2",
       "engine_forkchoiceUpdatedV3",
+      "engine_forkchoiceUpdatedV4",
       "engine_getPayloadV1",
       "engine_getPayloadV2",
       "engine_getPayloadV3",
       "engine_getPayloadV4",
       "engine_getPayloadV5",
+      "engine_getPayloadV6",
       "engine_getBlobsV1",
       "engine_getBlobsV2",
       "engine_getPayloadBodiesByHashV1",

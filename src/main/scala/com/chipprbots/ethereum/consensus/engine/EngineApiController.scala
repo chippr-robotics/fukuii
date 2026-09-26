@@ -12,6 +12,7 @@ import org.json4s.JValue
 import org.json4s.JsonAST.JBool
 import org.json4s.JsonAST.JInt
 
+import com.chipprbots.ethereum.crypto.kec256
 import com.chipprbots.ethereum.domain.Address
 import com.chipprbots.ethereum.domain.Block
 import com.chipprbots.ethereum.domain.BlockHeader
@@ -58,6 +59,7 @@ class EngineApiController(
       case "engine_getPayloadV3" => handleGetPayload(request, version = 3)
       case "engine_getPayloadV4" => handleGetPayload(request, version = 4)
       case "engine_getPayloadV5" => handleGetPayload(request, version = 5)
+      case "engine_getPayloadV6" => handleGetPayload(request, version = 6)
       case "engine_getClientVersionV1" =>
         handleGetClientVersion(request)
       case "engine_getBlobsV1" =>
@@ -392,10 +394,10 @@ class EngineApiController(
                 JsonRpcResponse("2.0", None, Some(JsonRpcError(-38001, err, None)), reqId(request))
               case Right(served) =>
                 val block = served.block
-                val payload = blockToExecutionPayload(block)
                 // V1 returns bare ExecutionPayload.
                 // V2+ wraps it in ExecutionPayloadEnvelope per Engine API spec.
                 // blockValue depends on receipts (effectiveGasPrice per tx).
+                lazy val payload = blockToExecutionPayload(block)
                 lazy val blockValueHex = computeBlockValue(block, served.receipts)
                 lazy val blobsBundleJson: JObject =
                   val bundle = served.blobsBundle
@@ -404,52 +406,74 @@ class EngineApiController(
                     "proofs" -> JArray(bundle.proofs.toList.map(p => JString(byteStringToHex(p)))),
                     "blobs" -> JArray(bundle.blobs.toList.map(b => JString(byteStringToHex(b))))
                   )
-                val result: JValue = version match
-                  case 1 => payload
+                // V5 onwards: BlobsBundleV2 (EIP-7594 cell proofs) + executionRequests. V5 and V6 differ only in the
+                // payload, V6's being an ExecutionPayloadV4.
+                def blobsBundleV2Envelope(executionPayload: JValue): JObject =
+                  val bundle = served.blobsBundle
+                  JObject(
+                    "executionPayload" -> executionPayload,
+                    "blockValue" -> JString(blockValueHex),
+                    "blobsBundle" -> JObject(
+                      "commitments" -> JArray(bundle.commitments.toList.map(c => JString(byteStringToHex(c)))),
+                      "proofs" -> JArray(
+                        bundle.cellProofsPerBlob.flatten.toList.map(p => JString(byteStringToHex(p)))
+                      ),
+                      "blobs" -> JArray(bundle.blobs.toList.map(b => JString(byteStringToHex(b))))
+                    ),
+                    "shouldOverrideBuilder" -> JBool(false),
+                    "executionRequests" -> JArray(
+                      served.executionRequests.toList.map(r => JString(byteStringToHex(r)))
+                    )
+                  )
+                val result: Either[JsonRpcError, JValue] = version match
+                  case 1 => Right(payload)
                   case 2 =>
-                    JObject(
-                      "executionPayload" -> payload,
-                      "blockValue" -> JString(blockValueHex)
+                    Right(
+                      JObject(
+                        "executionPayload" -> payload,
+                        "blockValue" -> JString(blockValueHex)
+                      )
                     )
                   case 3 =>
-                    JObject(
-                      "executionPayload" -> payload,
-                      "blockValue" -> JString(blockValueHex),
-                      "blobsBundle" -> blobsBundleJson,
-                      "shouldOverrideBuilder" -> JBool(false)
+                    Right(
+                      JObject(
+                        "executionPayload" -> payload,
+                        "blockValue" -> JString(blockValueHex),
+                        "blobsBundle" -> blobsBundleJson,
+                        "shouldOverrideBuilder" -> JBool(false)
+                      )
                     )
                   case 4 => // Prague: BlobsBundleV1 + executionRequests (EIP-7685)
-                    val executionRequests = served.executionRequests
-                    JObject(
-                      "executionPayload" -> payload,
-                      "blockValue" -> JString(blockValueHex),
-                      "blobsBundle" -> blobsBundleJson,
-                      "shouldOverrideBuilder" -> JBool(false),
-                      "executionRequests" -> JArray(
-                        executionRequests.toList.map(r => JString(byteStringToHex(r)))
-                      )
-                    )
-                  case _ => // V5+: BlobsBundleV2 (EIP-7594 cell proofs) + executionRequests
-                    val executionRequests = served.executionRequests
-                    val blobsBundleV2Json: JObject =
-                      val bundle = served.blobsBundle
+                    Right(
                       JObject(
-                        "commitments" -> JArray(bundle.commitments.toList.map(c => JString(byteStringToHex(c)))),
-                        "proofs" -> JArray(
-                          bundle.cellProofsPerBlob.flatten.toList.map(p => JString(byteStringToHex(p)))
-                        ),
-                        "blobs" -> JArray(bundle.blobs.toList.map(b => JString(byteStringToHex(b))))
-                      )
-                    JObject(
-                      "executionPayload" -> payload,
-                      "blockValue" -> JString(blockValueHex),
-                      "blobsBundle" -> blobsBundleV2Json,
-                      "shouldOverrideBuilder" -> JBool(false),
-                      "executionRequests" -> JArray(
-                        executionRequests.toList.map(r => JString(byteStringToHex(r)))
+                        "executionPayload" -> payload,
+                        "blockValue" -> JString(blockValueHex),
+                        "blobsBundle" -> blobsBundleJson,
+                        "shouldOverrideBuilder" -> JBool(false),
+                        "executionRequests" -> JArray(
+                          served.executionRequests.toList.map(r => JString(byteStringToHex(r)))
+                        )
                       )
                     )
-                JsonRpcResponse("2.0", Some(result), None, reqId(request))
+                  case 5 => Right(blobsBundleV2Envelope(payload))
+                  case _ =>
+                    // engine_getPayloadV6 (amsterdam.md): an ExecutionPayloadV4, whose blockAccessList the block does
+                    // not carry. A payload without its list, or with one its header does not commit to, cannot be
+                    // served: answering it anyway would hand the CL a block no client validates. Unreachable until
+                    // the builder produces Amsterdam payloads (#1427).
+                    EngineApiController.blockAccessListServeError(block, served.blockAccessList) match
+                      case Some(problem) =>
+                        log.error("[ENGINE-API] getPayloadV6 {}: cannot serve the payload: {}", payloadIdHex, problem)
+                        Left(JsonRpcError(-32603, s"payload cannot be served: $problem", None))
+                      case None =>
+                        Right(
+                          blobsBundleV2Envelope(
+                            EngineApiController.blockToExecutionPayload(block, served.blockAccessList)
+                          )
+                        )
+                result match
+                  case Right(envelope) => JsonRpcResponse("2.0", Some(envelope), None, reqId(request))
+                  case Left(error)     => JsonRpcResponse("2.0", None, Some(error), reqId(request))
             }
       case Left(err) =>
         IO.pure(JsonRpcResponse("2.0", None, Some(JsonRpcError(-38001, err, None)), reqId(request)))
@@ -890,8 +914,9 @@ object EngineApiController:
     *   - V2: Paris and Shanghai.
     *   - V3: Cancun.
     *   - V4: Prague.
-    *   - V5: Osaka and the blob-parameter-only forks after it (go-ethereum: Osaka, BPO1..BPO5).
-    *   - There is no V6 (Amsterdam), so no version serves an Amsterdam payload.
+    *   - V5: Osaka and the blob-parameter-only forks after it (go-ethereum: Osaka, BPO1, BPO2).
+    *   - V6: Amsterdam (go-ethereum: Amsterdam and the forks after it, BPO3..BPO5 and Bogota, none of which fukuii
+    *     schedules; amsterdam.md getPayloadV6).
     *
     * V3 used to serve every payload from Cancun on, V4 every payload before Osaka, and V5 Amsterdam.
     *
@@ -926,7 +951,20 @@ object EngineApiController:
       case 3 => if !cancun || prague then refuse("Cancun") else None
       case 4 => if !prague || osaka then refuse("Prague") else None
       case 5 => if !osaka || amsterdam then refuse("Osaka (and BPO)") else None
+      case 6 => if !amsterdam then refuse("Amsterdam") else None
       case _ => refuse("no")
+
+  /** Why an Amsterdam payload cannot be served as an ExecutionPayloadV4 (engine_getPayloadV6), or None when it can: the
+    * header must be Amsterdam's, and the block access list must be held and hash to the header's `blockAccessListHash`.
+    * Pure.
+    */
+  def blockAccessListServeError(block: Block, blockAccessList: Option[ByteString]): Option[String] =
+    (block.header.blockAccessListHash, blockAccessList) match
+      case (None, _)       => Some("its header is not an Amsterdam header (no blockAccessListHash)")
+      case (Some(_), None) => Some("no block access list is held for it")
+      case (Some(committed), Some(list)) if ByteString(kec256(list.toArray)) != committed =>
+        Some("its block access list does not hash to the header's blockAccessListHash")
+      case _ => None
 
   def byteStringToHex(bs: ByteString): String = "0x" + bs.map("%02x".format(_)).mkString
 
@@ -985,7 +1023,11 @@ object EngineApiController:
         .sum
       s"0x${totalPriorityFee.toString(16)}"
 
-  def blockToExecutionPayload(block: Block): JObject =
+  /** The ExecutionPayloadV1..V4 JSON of `block`. The V4 fields (Amsterdam): `slotNumber` whenever the header carries
+    * one, and `blockAccessList` when given — the block does not carry its list, so only a caller that holds it
+    * (engine_getPayloadV6) can complete an ExecutionPayloadV4. Pre-Amsterdam blocks encode exactly as before.
+    */
+  def blockToExecutionPayload(block: Block, blockAccessList: Option[ByteString] = None): JObject =
     import block.header
     def hex(bs: ByteString): String = "0x" + org.bouncycastle.util.encoders.Hex.toHexString(bs.toArray)
     def hexQ(n: BigInt): String = s"0x${n.toString(16)}"
@@ -1036,4 +1078,8 @@ object EngineApiController:
       blobGasUsed.map(v => "blobGasUsed" -> JString(hexQ(v))),
       excessBlobGas.map(v => "excessBlobGas" -> JString(hexQ(v)))
     ).flatten
-    JObject(baseFields ++ withdrawalsField ++ blobFields)
+    val amsterdamFields = List(
+      blockAccessList.map(list => "blockAccessList" -> JString(hex(list))),
+      header.slotNumber.map(slot => "slotNumber" -> JString(hexQ(slot)))
+    ).flatten
+    JObject(baseFields ++ withdrawalsField ++ blobFields ++ amsterdamFields)
