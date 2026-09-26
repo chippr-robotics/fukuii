@@ -22,6 +22,9 @@ SNAP sync is part of the devp2p SNAP/1 protocol specification and is supported b
 | Protocol | ETH/66+ | SNAP/1 (satellite of ETH) |
 | Verification | Full trie validation | Merkle proof verification |
 
+Fukuii no longer ships fast sync: it was removed, and SNAP sync replaces it. The comparison
+above explains why.
+
 SNAP sync is fundamentally more efficient because it:
 1. Downloads account and storage **ranges** instead of individual trie nodes
 2. Uses Merkle **proofs** to verify data instead of reconstructing entire trie
@@ -112,12 +115,11 @@ Then restart your node:
 
 ### How do I disable SNAP sync?
 
-To disable SNAP sync and use fast sync instead:
+To disable SNAP sync and import every block from genesis instead (regular sync):
 
 ```hocon
 sync {
   do-snap-sync = false
-  do-fast-sync = true
 }
 ```
 
@@ -153,7 +155,6 @@ For archive nodes, use full sync from genesis:
 ```hocon
 sync {
   do-snap-sync = false
-  do-fast-sync = false
 }
 ```
 
@@ -274,9 +275,12 @@ tail -100 logs/fukuii.log | grep -E "ERROR|WARN"
 
 If truly stuck (no progress for 30+ minutes), restart the node.
 
-### Why did SNAP sync fall back to fast sync?
+### Why did SNAP sync go dormant?
 
-SNAP sync falls back to fast sync after 5 critical failures (configurable via `max-snap-sync-failures`).
+SNAP sync goes dormant after 5 critical failures (configurable via `max-snap-sync-failures`), when
+no snap-capable peer appears within `snap-capability-grace-period`, or when no peers are found
+after the bootstrap retries. It keeps the state it has downloaded and retries on a fresh pivot after
+a back-off (3 minutes, doubling to a 20-minute cap). It does not fall back to another sync mode.
 
 **Common reasons:**
 1. **Too few SNAP-capable peers** - Need at least 5-10 peers with SNAP/1 capability
@@ -288,13 +292,11 @@ SNAP sync falls back to fast sync after 5 critical failures (configurable via `m
 grep "ERROR.*SNAP" logs/fukuii.log | tail -20
 ```
 
-**To retry SNAP sync:**
+**To retry SNAP sync now** rather than wait for the back-off, restart the node. The downloaded
+state is kept.
 ```bash
 # Stop node
 pkill fukuii
-
-# Clear SNAP sync state
-rm -rf ~/.fukuii/leveldb/snap-sync-*
 
 # Restart
 ./bin/fukuii -Dconfig.file=conf/fukuii.conf
@@ -390,9 +392,10 @@ This may take 1-3 healing iterations (5-15 minutes each).
 
 In that case, restart the node.
 
-### Can I interrupt SNAP sync and switch to fast sync?
+### Can I interrupt SNAP sync and switch to full sync?
 
-Yes, but you'll lose SNAP sync progress:
+Yes. Fast sync, the other option in earlier releases, was removed, so the alternative is full sync
+(regular sync from genesis):
 
 ```bash
 # Stop node
@@ -402,17 +405,15 @@ pkill fukuii
 # Edit conf/fukuii.conf:
 sync {
   do-snap-sync = false
-  do-fast-sync = true
 }
 
-# Clear SNAP sync state
-rm -rf ~/.fukuii/leveldb/snap-sync-*
-
-# Restart with fast sync
+# Restart
 ./bin/fukuii -Dconfig.file=conf/fukuii.conf
 ```
 
-**Note:** Fast sync will start from scratch. Only do this if SNAP sync is failing repeatedly.
+**Note:** Regular sync continues from the node's best block. If SNAP sync had not finished, the
+state at that block is incomplete and regular sync has to fetch the missing parts node by node;
+starting from an empty database avoids that. Only do this if the network has no snap-serving peers.
 
 ### My disk is full. Will SNAP sync work?
 
@@ -468,7 +469,8 @@ SNAP sync requires peers that support the SNAP/1 protocol. If you have no SNAP-c
    # Add known SNAP-capable bootstrap nodes
    # (configure in fukuii.conf under network.discovery)
    ```
-4. **Fallback** - Node will automatically fallback to fast sync after failures
+4. **Dormant retries** - SNAP goes dormant and retries on a fresh pivot (3 minutes, doubling to a
+   20-minute cap). On a network with no snap-serving peers, set `do-snap-sync = false`.
 
 ### Do I need to open any firewall ports?
 

@@ -775,16 +775,14 @@
             mineRounds: '100000',
             
             // Sync Configuration
-            syncMode: 'fast',
-            fastSyncEnabled: true,
+            syncMode: 'snap',
+            snapSyncEnabled: true,
             bootstrapEnabled: true,
-            doFastSync: true,
-            pivotBlockOffset: '128',
+            pivotBlockOffset: '64',
             maxBlocksHeadersPerRequest: '128',
             maxBlocksBodiesPerRequest: '128',
             maxReceiptsPerRequest: '60',
             maxMptComponentsPerRequest: '200',
-            fastSyncThrottle: '100.milliseconds',
             
             // Blockchain/Database Configuration
             pruningMode: 'archive',
@@ -947,11 +945,11 @@
             },
             syncMode: {
                 title: 'Synchronization Mode',
-                description: '<strong>Fast:</strong> Download state snapshot + recent blocks (hours). <strong>Full:</strong> Verify all blocks from genesis (days/weeks). Fast recommended for most use cases.'
+                description: '<strong>SNAP:</strong> Download recent state from snap/1 peers, then import blocks from there (hours to days). <strong>Full:</strong> Verify all blocks from genesis (days/weeks). SNAP recommended for most use cases. (Fast sync was removed.)'
             },
-            fastSyncEnabled: {
-                title: 'Fast Sync',
-                description: 'Download recent state snapshot rather than processing all history. Reduces initial sync from weeks to hours. Switches to full sync after catching up. Recommended: enabled.'
+            snapSyncEnabled: {
+                title: 'SNAP Sync',
+                description: 'Download recent state rather than processing all history. Needs snap/1 peers. Switches to regular sync after catching up. Recommended: enabled.'
             },
             bootstrapEnabled: {
                 title: 'Bootstrap Database',
@@ -959,7 +957,7 @@
             },
             pivotBlockOffset: {
                 title: 'Pivot Block Offset',
-                description: 'Number of blocks before chain head to start fast sync. Higher = more stable pivot point. Lower = faster initial sync. Default 128 balances stability vs speed.'
+                description: 'Number of blocks behind the chain head for the SNAP pivot. Higher = more stable pivot point. Lower = less to catch up afterwards. Default 64.'
             },
             enableMining: {
                 title: 'Mining Enabled',
@@ -1373,17 +1371,17 @@
                                 <div class="form-group">
                                     <label>Sync Mode</label>
                                     <select onchange="updateConfig('syncMode', this.value)">
-                                        <option value="fast" ${config.syncMode === 'fast' ? 'selected' : ''}>Fast Sync</option>
+                                        <option value="snap" ${config.syncMode === 'snap' ? 'selected' : ''}>SNAP Sync</option>
                                         <option value="full" ${config.syncMode === 'full' ? 'selected' : ''}>Full Sync</option>
                                     </select>
                                     <div class="help-text">Blockchain sync strategy</div>
                                 </div>
                                 <div class="form-group">
                                     <div class="checkbox-group">
-                                        <input type="checkbox" id="fastSyncEnabled" 
-                                            ${config.fastSyncEnabled ? 'checked' : ''}
-                                            onchange="toggleCheckbox('fastSyncEnabled')">
-                                        <label for="fastSyncEnabled">Enable Fast Sync</label>
+                                        <input type="checkbox" id="snapSyncEnabled" 
+                                            ${config.snapSyncEnabled ? 'checked' : ''}
+                                            onchange="toggleCheckbox('snapSyncEnabled')">
+                                        <label for="snapSyncEnabled">Enable SNAP Sync</label>
                                     </div>
                                 </div>
                                 <div class="form-group">
@@ -1399,7 +1397,7 @@
                                     <label for="pivot-block-offset">Pivot Block Offset</label>
                                     <input type="number" id="pivot-block-offset" value="${config.pivotBlockOffset}" 
                                         onchange="updateConfig('pivotBlockOffset', this.value)"
-                                        placeholder="128">
+                                        placeholder="64">
                                 </div>
                                 <div class="form-group">
                                     <label>Max Headers Per Request</label>
@@ -1418,12 +1416,6 @@
                                     <input type="number" id="max-receipts" value="${config.maxReceiptsPerRequest}" 
                                         onchange="updateConfig('maxReceiptsPerRequest', this.value)"
                                         placeholder="60">
-                                </div>
-                                <div class="form-group">
-                                    <label for="fast-sync-throttle">Fast Sync Throttle</label>
-                                    <input type="text" id="fast-sync-throttle" value="${config.fastSyncThrottle}" 
-                                        onchange="updateConfig('fastSyncThrottle', this.value)"
-                                        placeholder="100.milliseconds">
                                 </div>
                             </div>
                         </div>
@@ -1949,13 +1941,12 @@
             // Sync Configuration
             lines.push('  # Synchronization Configuration');
             lines.push('  sync {');
-            lines.push(`    do-fast-sync = ${config.fastSyncEnabled}`);
+            lines.push(`    do-snap-sync = ${config.snapSyncEnabled}`);
             lines.push(`    bootstrap-enabled = ${config.bootstrapEnabled}`);
-            lines.push(`    pivot-block-offset = ${config.pivotBlockOffset}`);
+            lines.push(`    snap-sync.pivot-block-offset = ${config.pivotBlockOffset}`);
             lines.push(`    max-blocks-headers-per-request = ${config.maxBlocksHeadersPerRequest}`);
             lines.push(`    max-blocks-bodies-per-request = ${config.maxBlocksBodiesPerRequest}`);
             lines.push(`    max-receipts-per-request = ${config.maxReceiptsPerRequest}`);
-            lines.push(`    fast-sync-throttle = ${config.fastSyncThrottle}`);
             lines.push('  }');
             lines.push('');
             

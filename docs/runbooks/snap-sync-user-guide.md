@@ -86,10 +86,6 @@ sync {
   # Enable SNAP sync (recommended for new nodes)
   do-snap-sync = true
   
-  # Disable fast sync to prioritize SNAP sync
-  # SNAP sync is preferred over fast sync when both are enabled
-  do-fast-sync = false
-  
   snap-sync {
     enabled = true
   }
@@ -98,15 +94,17 @@ sync {
 
 ### Disabling SNAP Sync
 
-To disable SNAP sync and fall back to fast sync:
+To disable SNAP sync and import every block from genesis instead (regular sync):
 
 **File:** `conf/fukuii.conf`
 ```hocon
 sync {
   do-snap-sync = false
-  do-fast-sync = true
 }
 ```
+
+Fast sync, the other option in earlier releases, was removed. See
+[Upgrading a Node That Used Fast Sync](#upgrading-a-node-that-used-fast-sync).
 
 ## Configuration
 
@@ -212,7 +210,7 @@ sync {
 
 - `storage-batch-size`: Accounts per storage request (default: 8)
 - `healing-batch-size`: Trie nodes per healing request (default: 16)
-- `max-snap-sync-failures`: Critical failures before fallback to fast sync (default: 5)
+- `max-snap-sync-failures`: Critical failures before SNAP goes dormant and retries on a fresh pivot (default: 5)
 
 ## Starting a Node with SNAP Sync
 
@@ -473,15 +471,18 @@ snap-sync {
 ./bin/fukuii -Dconfig.file=conf/fukuii.conf
 ```
 
-### Fallback to Fast Sync
+### Dormant Mode
 
-**Symptom:** SNAP sync fails and node falls back to fast sync
+**Symptom:** SNAP sync stops and the log shows
 
 ```
-[ERROR] SNAP sync failed after 5 critical failures, falling back to fast sync
+Entering dormant mode (attempt 1): <reason>. All downloaded state preserved. Will retry after backoff.
 ```
 
-**Cause:** Too many critical errors during SNAP sync
+**Cause:** SNAP cannot make progress: too many critical errors, no snap-capable peer within
+`snap-capability-grace-period`, or no peers at all after the bootstrap retries. SNAP keeps what
+it has downloaded and retries on a fresh pivot after a back-off (3 minutes, doubling to a
+20-minute cap). It does not fall back to another sync mode.
 
 **Solutions:**
 
@@ -495,17 +496,11 @@ snap-sync {
    - **Network issues:** Check internet connection and firewall
    - **Disk full:** Free up disk space
 
-3. **Retry SNAP sync:**
-   ```bash
-   # Stop the node
-   pkill -f fukuii
-   
-   # Clear SNAP sync state to force fresh start
-   rm -rf ~/.fukuii/leveldb/snap-sync-*
-   
-   # Restart with SNAP sync
-   ./bin/fukuii -Dconfig.file=conf/fukuii.conf
-   ```
+3. **Let it retry, or restart:** SNAP wakes up on its own after the back-off. Restarting the
+   node retries at once and keeps the downloaded state.
+
+4. **No snap-serving peers on this network:** set `do-snap-sync = false` to import every block
+   from genesis instead.
 
 ## Best Practices
 
@@ -538,51 +533,38 @@ snap-sync {
 
 ## Migration Guide
 
-### Migrating from Fast Sync to SNAP Sync
+### Upgrading a Node That Used Fast Sync
 
-If you have an existing node using fast sync:
+Fast sync was removed. Nothing needs to be done before upgrading:
 
-1. **Check current sync mode:**
-   ```bash
-   grep "do-fast-sync" conf/fukuii.conf
-   ```
-
-2. **Enable SNAP sync:**
-   ```hocon
-   sync {
-     do-snap-sync = true   # Enable SNAP
-     do-fast-sync = false  # Disable fast sync
-   }
-   ```
-
-3. **Restart node:**
-   ```bash
-   ./bin/fukuii -Dconfig.file=conf/fukuii.conf
-   ```
+- **Configuration:** `do-fast-sync` and the other fast-sync keys are ignored; the node logs a
+  warning for each one it finds and starts normally. Remove them when convenient. If you set
+  `do-fast-sync = false` to sync from genesis, set `do-snap-sync = false` instead.
+- **Node stopped part-way through fast sync:** it starts SNAP sync, with a pivot above the block
+  fast sync had reached. The old fast-sync progress record is ignored and left on disk. With
+  `do-snap-sync = false` it stays on regular sync and logs an error, because the state at its best
+  block is incomplete.
+- **Node that finished fast sync earlier:** it carries on with regular sync.
 
 **Note:** If your node is already synced, enabling SNAP sync won't re-sync. SNAP sync only activates on fresh nodes or when sync state is cleared.
 
-### Migrating from SNAP Sync to Fast Sync
-
-To switch back to fast sync:
+### Switching from SNAP Sync to Full Sync
 
 1. **Update configuration:**
    ```hocon
    sync {
-     do-snap-sync = false  # Disable SNAP
-     do-fast-sync = true   # Enable fast sync
+     do-snap-sync = false  # Import every block instead
    }
    ```
 
-2. **Clear sync state (optional):**
-   ```bash
-   rm -rf ~/.fukuii/leveldb/snap-sync-*
-   ```
-
-3. **Restart node:**
+2. **Restart node:**
    ```bash
    ./bin/fukuii -Dconfig.file=conf/fukuii.conf
    ```
+
+Regular sync continues from the node's best block. If SNAP sync had not finished, the state at
+that block is incomplete and regular sync has to fetch the missing parts node by node; starting
+from an empty database avoids that.
 
 ## Related Documentation
 

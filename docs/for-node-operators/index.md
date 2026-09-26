@@ -18,7 +18,6 @@ java -Xmx4g \
 java -Xmx4g \
   -Dfukuii.datadir=~/.fukuii/etc \
   -Dfukuii.network=etc \
-  -Dfukuii.sync.do-fast-sync=true \
   -jar target/scala-3.3.7/fukuii-assembly-0.7.0.jar etc
 ```
 

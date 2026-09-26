@@ -15,7 +15,7 @@ Private keys for pre-funded accounts are located in `fukuii/src/rpcTest/resource
 
 4. Go to `~/fukuii_build/fukuii-3.2.1` directory and run fukuii on ETC mainnet with command:
 
-        ./bin/fukuii-launcher etc -Dfukuii.sync.do-fast-sync=false -Dfukuii.network.discovery.discovery-enabled=true -Dfukuii.network.rpc.http.mode=http
+        ./bin/fukuii-launcher etc -Dfukuii.sync.do-snap-sync=false -Dfukuii.network.discovery.discovery-enabled=true -Dfukuii.network.rpc.http.mode=http
         
 5. Ensure it has at least `150000` blocks.
 6. Go to `fukuii` source dir and run 

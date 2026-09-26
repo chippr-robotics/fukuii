@@ -139,8 +139,6 @@ Prefixed with `app_` or `fukuii_`:
 
 - **Blockchain Sync:**
   - `app_regularsync_blocks_propagation_timer_seconds`: Block import timing
-  - `app_fastsync_headers_received_total`: Headers received during fast sync
-  - `app_fastsync_bodies_received_total`: Block bodies received
 
 - **Network:**
   - `app_network_peers_connected`: Currently connected peer count

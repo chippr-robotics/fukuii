@@ -203,7 +203,7 @@ graph TB
 **Key Subsystems:**
 - **Sync Subsystem**: Synchronizes blockchain state with peers
   - Regular sync for ongoing synchronization
-  - Fast sync for initial blockchain download
+  - SNAP sync for initial blockchain download
   - Block import and validation
   - Block broadcasting to peers
   

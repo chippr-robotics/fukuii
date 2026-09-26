@@ -227,13 +227,12 @@ const advancedConfigSections = {
   
   sync: {
     title: 'Blockchain Sync',
-    description: 'Synchronization and fast sync settings',
+    description: 'Synchronization settings',
     fields: {
-      'fukuii.sync.do-fast-sync': { label: 'Enable Fast Sync', type: 'boolean', default: true, description: 'Use fast sync for initial blockchain download' },
-      'fukuii.sync.max-concurrent-requests': { label: 'Concurrent Requests', type: 'number', default: 10, description: 'Maximum parallel block requests' },
+      'fukuii.sync.do-snap-sync': { label: 'Enable SNAP Sync', type: 'boolean', default: true, description: 'Use SNAP sync for the initial download; when off, import every block from genesis' },
       'fukuii.sync.block-headers-per-request': { label: 'Headers Per Request', type: 'number', default: 128, description: 'Block headers to request at once' },
       'fukuii.sync.block-bodies-per-request': { label: 'Bodies Per Request', type: 'number', default: 128, description: 'Block bodies to request at once' },
-      'fukuii.sync.pivot-block-offset': { label: 'Pivot Block Offset', type: 'number', default: 500, description: 'Offset from chain head for fast sync pivot' }
+      'fukuii.sync.snap-sync.pivot-block-offset': { label: 'Pivot Block Offset', type: 'number', default: 64, description: 'Offset from chain head for the SNAP pivot' }
     }
   },
   
