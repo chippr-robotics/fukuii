@@ -324,9 +324,10 @@ class SyncControllerSpec
   }
 
   // ── Startup sync mode, and databases from before fast sync was removed ───────────────────────────────────────
-  // start() picks SNAP when do-snap-sync is set and SNAP is not done, whatever the legacy FastSyncDone flag says, and
-  // regular sync otherwise. A node upgraded mid-fast-sync starts SNAP with a pivot above the best block fast sync
-  // downloaded without state. Fast sync's leftover progress record (namespace `f`) is never decoded.
+  // start() picks SNAP when do-snap-sync is set and SNAP is not done, and regular sync otherwise, with one exception:
+  // a node where fast sync finished (legacy FastSyncDone) and SNAP has no stake (accounts not complete, saved pivot not
+  // the best block) continues in regular sync. A node upgraded mid-fast-sync starts SNAP with a pivot above the best
+  // block fast sync downloaded without state. Fast sync's leftover progress record (namespace `f`) is never decoded.
 
   private val StrandedBest: BigInt = 1000
 
