@@ -34,7 +34,7 @@ class AppStateStorageSpec extends AnyWordSpec with ScalaCheckPropertyChecks with
 
     // Bug 30 escape valve: regular sync stuck on missing state nodes triggers a re-pivot via SNAP.
     // SyncController clears both *SyncDone flags so start() re-evaluates and enters SNAP rather
-    // than landing in `do-fast-sync is true but fast sync already completed` → regular sync loop.
+    // than landing in the `fast sync already completed` → regular sync branch.
     "round-trip clearFastSyncDone — flag is unset after clear" taggedAs (UnitTest, DatabaseTest) in new Fixtures:
       val storage: AppStateStorage = newAppStateStorage()
       storage.fastSyncDone().commit()

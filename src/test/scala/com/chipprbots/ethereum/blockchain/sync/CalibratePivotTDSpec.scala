@@ -318,7 +318,6 @@ class CalibratePivotTDSpec extends AnyFlatSpec with Matchers:
     override lazy val mining: TestMining = buildTestMining().withValidators(validators)
 
     override def defaultSyncConfig: SyncConfig = super.defaultSyncConfig.copy(
-      doFastSync = false,
       doSnapSync = false,
       peersScanInterval = 4.hours,
       checkForNewBlockInterval = 4.hours,

@@ -105,7 +105,7 @@ abstract class CommonFakePeer(peerName: String, fakePeerCustomConfig: FakePeerCu
       discoveryStatus = ServerStatus.NotListening
     )
 
-  lazy val tempDir: Path = Files.createTempDirectory("temp-fast-sync")
+  lazy val tempDir: Path = Files.createTempDirectory("temp-fake-peer")
 
   def getRockDbTestConfig(dbPath: String): RocksDbConfig =
     new RocksDbConfig:
@@ -289,19 +289,12 @@ abstract class CommonFakePeer(peerName: String, fakePeerCustomConfig: FakePeerCu
   lazy val vmConfig: VmConfig = VmConfig(Config.config)
 
   val testSyncConfig: Config.SyncConfig = syncConfig.copy(
-    minPeersToChoosePivotBlock = 1,
     peersScanInterval = 5.milliseconds,
     blockHeadersPerRequest = 200,
     blockBodiesPerRequest = 50,
     receiptsPerRequest = 50,
-    fastSyncThrottle = 10.milliseconds,
-    startRetryInterval = 50.milliseconds,
-    nodesPerRequest = 200,
-    maxTargetDifference = 1,
     syncRetryInterval = 50.milliseconds,
-    blacklistDuration = 100.seconds,
-    fastSyncMaxBatchRetries = 2,
-    fastSyncBlockValidationN = 200
+    blacklistDuration = 100.seconds
   )
 
   lazy val broadcaster = new BlockBroadcast(etcPeerManager)
