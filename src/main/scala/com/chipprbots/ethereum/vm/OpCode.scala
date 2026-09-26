@@ -1342,14 +1342,23 @@ abstract class CallOp(code: Int, delta: Int, alpha: Int) extends OpCode(code, de
       else
         val (to, endowment) = callTarget(state0)
         val stateGas = newAccountStateGas(state0, to, endowment)
-        if (stateGas - state0.stateGasReservoir).max(0) > state0.gas - executionCost then
+        // EIP-8037, in execution-specs `call`'s order: the call's own execution charge is paid, THEN the
+        // account-creation state charge (reservoir first, then gas_left), and only THEN is the child's grant sized,
+        // at 63/64 of the gas left after both. So the state charge has to fit in the gas left after the call's own
+        // charge — not in what would be left after forwarding 63/64 to the child, which is at most 1/64 of it: a
+        // 1M-gas `call{value: 1}` with all gas to a fresh account then halted instead of creating the account.
+        //
+        // Only evaluated when there is a state charge. With none (every ETC and pre-Amsterdam CALL) the old
+        // condition, `0 > state0.gas - executionCost`, was false by the check above, so skipping it is the same.
+        if stateGas.signum > 0 && state0.stateGasShortfall(stateGas) > state0.gas - ownExecutionCost(state0) then
           // EIP-8037: a failed state charge exceptionally halts the calling frame.
           state0.copy(gas = 0).withError(OutOfGas)
         else
           // Charge BEFORE the 63/64 split so the portion drawn from gas_left reduces what the child
           // receives. `calcGas` is recomputed on the charged state because `calcStartGas` inside `exec`
           // derives the forwarded gas from the same `state.gas` — computing the two from different states
-          // is precisely how a gas-cap inconsistency gets introduced.
+          // is precisely how a gas-cap inconsistency gets introduced. The check above leaves at least the
+          // call's own charge in `state.gas`, so the recomputed charge always fits.
           val state = state0.chargeStateGas(stateGas)
           val gas: BigInt = calcGas(state)
           if gas > state.gas then state.copy(gas = 0).withError(OutOfGas)
@@ -1513,6 +1522,17 @@ abstract class CallOp(code: Int, delta: Int, alpha: Int) extends OpCode(code, de
     val gExtra: BigInt = gasExtra(state, endowment, Address(to))
     val gCap: BigInt = gasCap(state, gas, gExtra + memCost + delegationCost)
     memCost + gCap + gExtra + delegationCost
+
+  /** The call's own execution charge: everything `varGas` charges except the gas forwarded to the child — memory
+    * expansion, the access and value-transfer charges (`gasExtra`) and the EIP-7702 delegation-target access. This is
+    * execution-specs' `extra_gas + extend_memory.cost`, charged before the account-creation state charge (see
+    * `execute`).
+    */
+  private def ownExecutionCost[S <: Storage[S], W <: WorldStateProxy[W, S]](state: ProgramState[W, S]): BigInt =
+    val (Seq(_, to, callValue, inOffset, inSize, outOffset, outSize), _) = getParams(state)
+    val endowment = if this == DELEGATECALL || this == STATICCALL then UInt256.Zero else callValue
+    calcMemCost(state, inOffset, inSize, outOffset, outSize) + gasExtra(state, endowment, Address(to)) +
+      delegationAccessCost(state, Address(to))
 
   protected def calcMemCost[S <: Storage[S], W <: WorldStateProxy[W, S]](
       state: ProgramState[W, S],
