@@ -1198,13 +1198,16 @@ object SyncController:
 
     /** SNAP's persisted pivot floor, unless it is spent.
       *
-      * SNAP commits pivots at or above its floor, so once its saved pivot reaches the floor the floor has done its job.
-      * It is cleared then instead of being applied again: a restart mid-heal must not raise the bar above the pivot
-      * SNAP already holds.
+      * The floor is spent once SNAP's saved pivot reaches it, or once SNAP's accounts are complete. The floor is only
+      * ever written before accounts complete, and a failed pivot refresh backtracks by the pivot offset, so SNAP can
+      * commit (and finish its accounts at) a pivot below a floor that was its first pivot. A spent floor is cleared,
+      * not applied again: a restart mid-heal must not raise the bar above the pivot SNAP already holds, where
+      * `belowEscalationHint` would discard its download.
       */
     private def liveSnapPivotFloor(): Option[BigInt] =
       appStateStorage.getSnapSyncMinPivotBlock().flatMap { floor =>
-        if appStateStorage.getSnapSyncPivotBlock().exists(_ >= floor) then
+        if appStateStorage.isSnapSyncAccountsComplete() || appStateStorage.getSnapSyncPivotBlock().exists(_ >= floor)
+        then
           appStateStorage.clearSnapSyncMinPivotBlock().commit()
           None
         else Some(floor)
