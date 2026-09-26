@@ -32,7 +32,7 @@ Read `../CONVENTIONS.md` first. Almost every config change needs a restart → �
 | :-- | :-- |
 | RPC namespaces | `network.rpc.apis` (default `eth,web3,net,personal,fukuii,debug,qa,admin`; add `mcp` for MCP tools) |
 | RPC bind/port | `network.rpc.http.{interface,port,mode}` (default `localhost:8546`, `http`) |
-| Sync strategy | `sync.do-snap-sync`, `sync.do-fast-sync` (ETC/Mordor — EL manages sync directly) |
+| Sync strategy | `sync.do-snap-sync`: SNAP when true, regular sync from genesis when false (ETC/Mordor — EL manages sync directly). Fast sync was removed; `do-fast-sync` is ignored with a warning |
 | Rapid sync | `sync.checkpoint-sync-file` / `-url` (→ `fukuii-checkpoint-service`; ETC/Mordor only) |
 | Chain family selector | `network-type` (in `base/chains/<chain>.conf`): `"etc"` for ETC/Mordor, `"eth"` for ETH/Sepolia (verified in `eth-chain.conf` / `sepolia-chain.conf`). This selects the consensus/fork-dispatch path; ETH/Sepolia additionally requires the `engine-api` section with a `jwt-secret-path`. |
 | Fork dispatch | ETC uses `OlympiaOpCodes` / `forBlock()` (block-number forks); ETH/Sepolia uses `OsakaOpCodes` / `forTimestamp()` (timestamp forks). These code paths MUST NOT be mixed. |
