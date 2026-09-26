@@ -61,10 +61,14 @@ class EngineApiSidechainNewPayloadSpec extends AnyWordSpec with Matchers:
 
     val poolContents: AtomicReference[Seq[SignedTransaction]] = new AtomicReference(Nil)
 
+    /** Reads of the pool. Every payload build begins with one. */
+    val poolQueries = new java.util.concurrent.atomic.AtomicInteger(0)
+
     lazy val pendingTxManager: org.apache.pekko.actor.typed.ActorRef[PendingTransactionsManager.Command] =
       classicSystem.spawn(
         Behaviors.receiveMessage[PendingTransactionsManager.Command] {
           case PendingTransactionsManager.GetPendingTransactionsReq(replyTo) =>
+            poolQueries.incrementAndGet()
             val entries = poolContents.get().flatMap { stx =>
               SignedTransactionWithSender.getSignedTransactions(Seq(stx)).map { withSender =>
                 PendingTransactionsManager.PendingTransaction(withSender, 0L)
@@ -199,6 +203,22 @@ class EngineApiSidechainNewPayloadSpec extends AnyWordSpec with Matchers:
         .payloadStatus
         .status shouldBe Valid
 
+    /** engine_forkchoiceUpdated(head), with payload attributes for a child of `head` when asked; the answer. */
+    def fcu(head: Block, withAttributes: Boolean): ForkchoiceUpdatedResponse =
+      engineApi
+        .forkchoiceUpdated(
+          ForkChoiceState(head.hash.value, zero32, zero32),
+          Option.when(withAttributes)(attrs(head.header, randao = 0x0d))
+        )
+        .unsafeRunSync()
+        .getOrElse(fail("forkchoiceUpdated answered an error"))
+
+    /** The canonical-head write itself — what forkchoiceUpdated calls once it adopts a head — for heads the engine API
+      * does not move to (an ancestor of the canonical head).
+      */
+    def makeHead(head: Block): Unit =
+      forkChoiceManager.applyForkChoiceState(ForkChoiceState(head.hash.value, zero32, zero32)) shouldBe Right(())
+
     def canonicalAt(number: Int): Option[BlockHash] = blockchainReader.getBlockHeaderByNumber(number).map(_.hash)
 
     /** eth_getTransactionByHash, as the JSON-RPC server answers it, over the same storage and the same (stub) pool. */
@@ -294,9 +314,12 @@ class EngineApiSidechainNewPayloadSpec extends AnyWordSpec with Matchers:
     */
   "engine_forkchoiceUpdated to a lower head" should {
 
-    "delete the index entries above an ancestor it rewinds to" taggedAs (UnitTest, ConsensusTest) in new Setup:
+    "delete the index entries above an ancestor made the head" taggedAs (UnitTest, ConsensusTest) in new Setup:
+      // The canonical-head write itself. engine_forkchoiceUpdated no longer moves the head to an ancestor (see
+      // "engine_forkchoiceUpdated to an ancestor of the canonical head"), but the write it calls must still leave the
+      // index exactly the head's ancestry when the head it is given lies below the old one.
       block2 // canonical genesis <- block1 <- block2, head block2
-      forkchoice(block1)
+      makeHead(block1)
 
       blockchainReader.getBestBlockNumber shouldBe BigInt(1)
       canonicalAt(1) shouldBe Some(block1.hash)
@@ -376,7 +399,10 @@ class EngineApiSidechainNewPayloadSpec extends AnyWordSpec with Matchers:
       val head = block2 // builds the chain first: the lookup below must see block2 already imported
       reportedBlockOf(tx1) shouldBe Some(head.hash.value)
 
-      forkchoice(block1) // rewind: block2, the only block carrying tx1, is dropped
+      // Rewind: block2, the only block carrying tx1, is dropped. Through the canonical-head write itself, as
+      // engine_forkchoiceUpdated no longer rewinds to an ancestor; a reorganisation to a sibling drops it the same way
+      // (next case).
+      makeHead(block1)
 
       lookupOf(tx1) shouldBe None
       reportedBlockOf(tx1) shouldBe None
@@ -404,4 +430,54 @@ class EngineApiSidechainNewPayloadSpec extends AnyWordSpec with Matchers:
         forkchoice(sameTxSibling)
 
         reportedBlockOf(tx1) shouldBe Some(sameTxSibling.hash.value)
+  }
+
+  /** execution-apis paris.md engine_forkchoiceUpdatedV1 point 2, carried into V2/V3: "Client software MAY skip an
+    * update of the forkchoice state and MUST NOT begin a payload build process if forkchoiceState.headBlockHash
+    * references a VALID ancestor of the head of canonical chain … In the case of such an event, client software MUST
+    * return {payloadStatus: {status: VALID, latestValidHash: forkchoiceState.headBlockHash, validationError: null},
+    * payloadId: null}."
+    *
+    * go-ethereum v1.16 — the version hive's engine simulator is built on — takes the skip ("Ignoring beacon update to
+    * old head"): it answers before the head, safe/finalized or payload building are touched.
+    *
+    * The defect: we rewound the head to the ancestor, deleting the index and the transaction lookups above it, and,
+    * given payload attributes, built a payload on it and returned its id.
+    */
+  "engine_forkchoiceUpdated to an ancestor of the canonical head" should {
+
+    "answer VALID for it with no payloadId, and leave the head, the index and the lookups alone" taggedAs (
+      UnitTest,
+      ConsensusTest
+    ) in new Setup:
+      block2 // canonical genesis <- block1 <- block2, head block2
+      val response = fcu(block1, withAttributes = false)
+
+      response.payloadStatus shouldBe PayloadStatusV1(Valid, latestValidHash = Some(block1.hash.value))
+      response.payloadId shouldBe None
+      blockchainReader.getBestBlockNumber shouldBe BigInt(2)
+      canonicalAt(2) shouldBe Some(block2.hash)
+      lookupOf(tx1) shouldBe Some(block2.hash.value)
+
+    "not begin a payload build for it, even with payload attributes" taggedAs (UnitTest, ConsensusTest) in new Setup:
+      block2
+      val poolReadsBefore = poolQueries.get
+      val response = fcu(block1, withAttributes = true)
+
+      response.payloadStatus shouldBe PayloadStatusV1(Valid, latestValidHash = Some(block1.hash.value))
+      response.payloadId shouldBe None
+      withClue("a payload build begins by reading the pool: ")(poolQueries.get shouldBe poolReadsBefore)
+      blockchainReader.getBestBlockNumber shouldBe BigInt(2)
+
+    "treat genesis as such an ancestor too" taggedAs (UnitTest, ConsensusTest) in new Setup:
+      block2
+      val response = fcu(Block(genesisHeader, BlockBody(Nil, Nil)), withAttributes = true)
+
+      response.payloadStatus shouldBe PayloadStatusV1(Valid, latestValidHash = Some(genesisHeader.hash.value))
+      response.payloadId shouldBe None
+      blockchainReader.getBestBlockNumber shouldBe BigInt(2)
+
+    "still build on the canonical head itself" taggedAs (UnitTest, ConsensusTest) in new Setup:
+      block2
+      fcu(block2, withAttributes = true).payloadId should not be empty
   }

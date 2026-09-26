@@ -708,6 +708,7 @@ class EngineApiService(
       val headOptimistic =
         blockExistsByHash && !blockFullyStored && !isGenesis &&
           blockchainReader.getReceiptsByHash(BlockHash(forkChoiceState.headBlockHash)).isEmpty
+      val bestBlockNumber = blockchainReader.getBestBlockNumber
 
       if !blockExistsByHash && !isGenesis then
         // Head unknown — client is still syncing to this head. Notify ForkChoiceManager
@@ -737,6 +738,33 @@ class EngineApiService(
         forkChoiceManager.notifyBeaconHead(forkChoiceState)
         EngineApiMetrics.recordForkchoiceUpdated("SYNCING")
         IO.pure(Right(ForkchoiceUpdatedResponse(payloadStatus = PayloadStatusV1(Syncing))))
+      else if blockFullyStored && headHeader.exists(_.number.value < bestBlockNumber) then
+        // The head names a VALID ancestor of the canonical head: canonical at its height and below the best block (up
+        // to the best block the index is the best block's ancestry, of executed or imported blocks). execution-apis
+        // paris.md engine_forkchoiceUpdatedV1 point 2, carried into V2/V3: the client "MAY skip an update of the
+        // forkchoice state and MUST NOT begin a payload build process ... MUST return {payloadStatus: {status: VALID,
+        // latestValidHash: forkchoiceState.headBlockHash, validationError: null}, payloadId: null}". go-ethereum v1.16,
+        // the version hive's engine simulator is built on, skips: "Ignoring beacon update to old head", answered
+        // before the head, safe/finalized or a payload build are touched. So do we.
+        //
+        // This used to go through: the head rewound to the ancestor, deleting the index and the transaction lookups
+        // above it, and with payload attributes a payload was built on it and its id returned. Moving the head back
+        // on the CL's word is also how a CL resyncing from an older checkpoint could pull a synced node's head down.
+        log.info(
+          "[ENGINE-API] forkchoiceUpdated names #{} {}, an ancestor of the canonical head #{}: head kept, no payload built",
+          headHeader.map(_.number.value).getOrElse(BigInt(-1)),
+          hexOf(forkChoiceState.headBlockHash),
+          bestBlockNumber
+        )
+        EngineApiMetrics.recordForkchoiceUpdated("VALID")
+        IO.pure(
+          Right(
+            ForkchoiceUpdatedResponse(
+              payloadStatus = PayloadStatusV1(Valid, latestValidHash = Some(forkChoiceState.headBlockHash)),
+              payloadId = None
+            )
+          )
+        )
       else if safeUnknown || finalizedUnknown then
         val msg = if safeUnknown then "unknown safe block hash" else "unknown finalized block hash"
         EngineApiMetrics.recordForkchoiceUpdated("INVALID")
