@@ -641,6 +641,23 @@ class SyncControllerSpec
     storagesInstance.storages.appStateStorage.getSnapSyncMinPivotBlock() shouldBe Some(StrandedBest + 1)
   }
 
+  it should "log the stranded-node ERROR once per floor, not on every restart" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in withTestSetup() { testSetup =>
+    import testSetup.*
+    seedStrandedFastSync(testSetup)
+    val stranded = "has no state behind it, and do-snap-sync is off"
+
+    val first = syncControllerErrorsDuring(syncController ! SyncController.WrappedSyncProtocol(SyncProtocol.Start))
+    first.exists(_.contains(stranded)) shouldBe true
+    stopNode(syncController)
+
+    val restarted = restartedSyncController()
+    val second = syncControllerErrorsDuring(restarted ! SyncController.WrappedSyncProtocol(SyncProtocol.Start))
+    second.exists(_.contains(stranded)) shouldBe false
+  }
+
   class TestSetup(
       _validators: Validators = new Mocks.MockValidatorsAlwaysSucceed
   ) extends EphemBlockchainTestSetup
