@@ -82,6 +82,21 @@ class SNAPDormantRecoverySpec extends ScalaTestWithActorTestKit() with AnyFlatSp
     wakeWithSnapPeersAt(snap, height = 1000)
     parent.expectMessage(SNAPSyncController.StartRegularSyncBootstrap(BigInt(1000 - PivotOffset)))
 
+  it should "give a woken controller a fresh bootstrap retry budget" taggedAs UnitTest in new Fixture:
+    storeGenesis()
+    peers.set(Map.empty)
+    val snap = spawnController()
+    awaitFirstPoll()
+    snap ! SNAPSyncController.Start
+    (2 to MaxBootstrapRetries).foreach(_ => snap ! SNAPSyncController.RetrySnapSyncStart) // budget spent: dormant
+
+    // It wakes to a snap peer whose height is not known yet, so the first attempt has to retry. With the spent
+    // budget carried over, that one retry sends it straight back to dormant.
+    wakeWithSnapPeersAt(snap, height = 0)
+    pollWith(snap, peersAt(height = 1000, snap = true))
+    snap ! SNAPSyncController.RetrySnapSyncStart
+    parent.expectMessage(10.seconds, SNAPSyncController.StartRegularSyncBootstrap(BigInt(1000 - PivotOffset)))
+
   it should "go dormant, not fall back, when the genesis header is missing" taggedAs UnitTest in new Fixture:
     peers.set(peersAt(height = 10, snap = true)) // genesis pivot, but no genesis header stored
     val snap = spawnController()

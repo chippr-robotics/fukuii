@@ -2975,6 +2975,9 @@ private class SNAPSyncControllerImpl(
     validationGeneration += 1
     validationInProgress = false
     consecutivePivotRefreshes = 0
+    // A fresh retry budget: going dormant on exhausted bootstrap retries leaves the counter at the limit, so without
+    // this the first retry after waking (a peer whose height is not known yet, say) would send it straight back.
+    bootstrapRetryCount = 0
 
     startSnapSync()
 
