@@ -72,6 +72,9 @@ object Blacklist:
       case object InvalidReceiptsType extends BlacklistReasonType with FastSyncBlacklistGroup:
         val code: Int = 7
         val name: String = "InvalidReceipts"
+      case object InvalidBodiesType extends BlacklistReasonType with FastSyncBlacklistGroup:
+        val code: Int = 31
+        val name: String = "InvalidBodies"
       case object FastSyncRequestFailedType extends BlacklistReasonType with FastSyncBlacklistGroup:
         val code: Int = 8
         val name: String = "FastSyncRequestFailed"
@@ -163,6 +166,9 @@ object Blacklist:
     final case class InvalidReceipts(knownHashes: Seq[String], error: BlockError) extends BlacklistReason:
       val reasonType: BlacklistReasonType = InvalidReceiptsType
       val description: String = s"Got invalid receipts for known hashes: $knownHashes due to: $error"
+    final case class InvalidBodies(knownHashes: Seq[String], error: BlockError) extends BlacklistReason:
+      val reasonType: BlacklistReasonType = InvalidBodiesType
+      val description: String = s"Got invalid bodies for known hashes: $knownHashes due to: $error"
     final case class FastSyncRequestFailed(error: String) extends BlacklistReason:
       val reasonType: BlacklistReasonType = FastSyncRequestFailedType
       val description: String = s"Request failed with error: $error"

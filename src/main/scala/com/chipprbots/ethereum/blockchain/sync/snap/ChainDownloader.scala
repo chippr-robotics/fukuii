@@ -19,6 +19,7 @@ import com.chipprbots.ethereum.blockchain.sync.PeerRequestHandler.RequestFailed
 import com.chipprbots.ethereum.blockchain.sync.PeerRequestHandler.ResponseReceived
 import com.chipprbots.ethereum.blockchain.sync.codec.ReceiptCodecs.*
 import com.chipprbots.ethereum.consensus.validators.std.MptListValidator
+import com.chipprbots.ethereum.consensus.validators.std.StdBlockValidator
 import com.chipprbots.ethereum.consensus.validators.std.StdBlockValidator.BlockReceiptsHashError
 import com.chipprbots.ethereum.db.storage.AppStateStorage
 import com.chipprbots.ethereum.domain.BlockBody
@@ -622,19 +623,18 @@ class ChainDownloader private (
         EmptyBlockBodies(requestedHashes.map(h => s"0x${h.toArray.map("%02x".format(_)).mkString}"))
       )
     else
-      // Store received bodies, then advance the body cursor over the contiguous run now on disk (#33).
-      val received = requestedHashes.zip(bodies)
-      received
-        .map { case (hash, body) => blockchainWriter.storeBlockBody(BlockHash(hash), body) }
-        .reduce(_.and(_))
-        .commit()
-
-      bodiesDownloaded += received.size
-      advanceBodyCursor()
-
-      // Re-queue any remaining hashes that weren't served
-      val remaining = requestedHashes.drop(bodies.size)
-      if remaining.nonEmpty then bodiesQueue = remaining.toVector ++ bodiesQueue
+      val delivered = requestedHashes.zip(bodies)
+      val (stored, firstError) = storeBodiesAndAdvanceCursor(delivered)
+      if stored < delivered.size then
+        rejectMismatchedBodies(
+          peer,
+          requestedHashes.drop(stored),
+          firstError.getOrElse(StdBlockValidator.BlockTransactionsHashError)
+        )
+      else
+        // Re-queue any remaining hashes that weren't served
+        val remaining = requestedHashes.drop(bodies.size)
+        if remaining.nonEmpty then bodiesQueue = remaining.toVector ++ bodiesQueue
   // else bodies.isEmpty
 
   /** Advance the body backfill cursor only over the prefix that is actually contiguous on disk from `cursor+1` onward
@@ -657,6 +657,62 @@ class ChainDownloader private (
     while blockchainReader.getBlockHeaderByNumber(n).exists(h => blockchainReader.getBlockBodyByHash(h.hash).isDefined)
     do n += 1
     if n - 1 > current then appStateStorage.putBackfillBestBody(n - 1).commit()
+
+  /** Store received bodies whose transactions/ommers hash to their header (and pass validateHeaderAndBody's other
+    * consensus checks — RLP size, withdrawals presence/root, blob gas), then advance the body cursor over the
+    * contiguous run now on disk (#18, #33). Reuses the SAME check block import makes
+    * (StdBlockValidator.validateHeaderAndBody) rather than re-implementing it — the same call regular sync's
+    * BlockFetcherState.validateBodies makes via blockValidator.validateHeaderAndBody (BlockFetcherState.scala:226).
+    *
+    * A reply is matched to the request by position, so a peer that sends a body for the wrong block (or a corrupted
+    * one) would otherwise be stored under the requested hash unconditionally, and the cursor would then move past a
+    * block whose body is wrong. Storing stops at the first block that fails; returns how many leading blocks were
+    * stored, and the validation error at the first failure (if any).
+    */
+  private def storeBodiesAndAdvanceCursor(
+      bodiesByHash: Seq[(ByteString, BlockBody)]
+  ): (Int, Option[StdBlockValidator.BlockError]) =
+    val checked = bodiesByHash.map { case (hash, body) =>
+      val result = blockchainReader.getBlockHeaderByHash(BlockHash(hash)) match
+        case Some(header) => StdBlockValidator.validateHeaderAndBody(header, body)
+        // No stored header for a hash we requested a body for shouldn't happen — the backfill queue is only ever
+        // seeded from headers already validated and stored (handleHeaders / findBestStoredHeader). Stop the
+        // prefix here rather than store against a header we can't even look up; BlockTransactionsHashError is the
+        // closest umbrella label (validateHeaderAndBody checks it first), not a claim about which check failed.
+        case None => Left(StdBlockValidator.BlockTransactionsHashError)
+      (hash, body, result)
+    }
+    val verified = checked.takeWhile { case (_, _, result) => result.isRight }
+    val firstError = checked.drop(verified.size).headOption.flatMap { case (_, _, result) => result.left.toOption }
+    if verified.nonEmpty then
+      verified
+        .map { case (hash, body, _) => blockchainWriter.storeBlockBody(BlockHash(hash), body) }
+        .reduce(_.and(_))
+        .commit()
+      bodiesDownloaded += verified.size
+      advanceBodyCursor()
+    (verified.size, firstError)
+
+  /** A block's body in a peer's reply does not hash to its header (StdBlockValidator.validateHeaderAndBody failed —
+    * transactionsRoot, ommersHash, or one of its other consensus checks). Re-queue it and everything after it, and
+    * blacklist the peer. Mirrors rejectMismatchedReceipts.
+    */
+  private def rejectMismatchedBodies(
+      peer: Peer,
+      fromMismatch: Seq[ByteString],
+      error: StdBlockValidator.BlockError
+  ): Unit =
+    val hashStrings = fromMismatch.map(h => s"0x${h.toArray.map("%02x".format(_)).mkString}")
+    log.warn(
+      "Chain download: body from peer {} does not match the header of block {}: {}; re-queuing {} block(s)",
+      peer.id,
+      hashStrings.headOption.getOrElse("?"),
+      error,
+      fromMismatch.size
+    )
+    bodiesQueue = fromMismatch.toVector ++ bodiesQueue
+    val firstAndCount = hashStrings.headOption.map(h => s"$h (+${hashStrings.size - 1} re-queued after it)").toSeq
+    blacklist.add(peer.id, syncConfig.blacklistDuration, InvalidBodies(firstAndCount, error))
 
   /** Store per-block receipts, then advance the backfill receipt cursor over the contiguous run now on disk (#1169,
     * #33). Shared by handleReceipts (eth/68), handleReceipts69 (eth/69), and handleReceipts70's complete-block path
