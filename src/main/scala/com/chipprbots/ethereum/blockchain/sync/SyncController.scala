@@ -542,6 +542,7 @@ object SyncController:
             log.info(
               s"SNAP state finalised at pivot=$pivot. Starting regular sync; chain backfill continues in background."
             )
+            clearSnapPivotFloor()
             // spec 004 MUST-FIX: clear the healing serve-root latch on every exit from runningSnapSync.
             abortHealingServeRootRequest("SNAP finalised — leaving snap sync")
             // SNAPSyncController already owns the live ChainDownloader child via its
@@ -1032,6 +1033,7 @@ object SyncController:
           log.info(
             s"Received SnapSyncFinalized(pivot=$pivot) during pivot header bootstrap. Stopping bootstrap and transitioning to regular sync."
           )
+          clearSnapPivotFloor()
           ctx.stop(headerBootstrap)
           ctx.stop(peersClient)
           // SNAP finalised mid-bootstrap is an exceptional path; tear down the SNAP actor cleanly
@@ -1156,22 +1158,66 @@ object SyncController:
           )
         }
 
-    /** The best block of a node upgraded while fast sync was running, while SNAP has not yet taken it over.
+    /** Fast sync's leftover progress record, handled once and then deleted.
       *
-      * Fast sync advanced the best-block pointer through blocks it downloaded without executing them, so the state at
-      * that block may be missing. It also left a progress record in namespace `f`; fast sync was removed, and the
-      * record is kept but only its presence is read. SNAP owns the pointer once it picks a pivot
-      * (`updateBestBlockForPivot` sets best = pivot), so a best block equal to SNAP's recorded pivot is not stranded.
+      * Fast sync advanced the best-block pointer through blocks it downloaded without executing them, so a node
+      * upgraded mid-fast-sync has a best block with no state behind it. SNAP would take that block for a synced chain
+      * (its pivot is not ahead of it) and hand the node to regular sync. Such a node gets a pivot floor of best + 1,
+      * persisted in SNAP's state so a restart before SNAP commits a pivot keeps it.
+      *
+      * The record also sits on databases where SNAP once fell back to fast sync and later took over again. There SNAP
+      * moved the best block, and a floor above SNAP's saved pivot would trip its `belowEscalationHint` and discard its
+      * download. So the floor is set only when nothing says SNAP owns the best block: neither SNAP nor fast sync is
+      * done, SNAP's accounts are not complete (a healing pivot roll moves best without saving the pivot, and healing
+      * implies all data phases complete), and best is not SNAP's saved pivot (`updateBestBlockForPivot` sets best =
+      * pivot).
+      *
+      * The record is deleted either way, in the same batch, so this runs at most once per database and no later start
+      * can mistake a SNAP-moved best block for a stranded one. It runs before anything else in start() touches the done
+      * flags (dangling-best recovery, `clearDoneOnStart`), so it sees them as persisted.
       */
-    private def strandedFastSyncBest(): Option[BigInt] =
-      val best = appStateStorage.getBestBlockNumber()
-      Option.when(
-        best > 0 && !appStateStorage.isFastSyncDone() && fastSyncStateStorage.hasSyncState &&
-          !appStateStorage.getSnapSyncPivotBlock().contains(best)
-      )(best)
+    private def adoptLeftoverFastSyncRecord(): Unit =
+      if fastSyncStateStorage.hasSyncState then
+        val best = appStateStorage.getBestBlockNumber()
+        val stranded =
+          best > 0 && !appStateStorage.isSnapSyncDone() && !appStateStorage.isFastSyncDone() &&
+            !appStateStorage.isSnapSyncAccountsComplete() && !appStateStorage.getSnapSyncPivotBlock().contains(best)
+        val floor =
+          if stranded then
+            log.warn(
+              "Fast sync was running when this node was upgraded; fast sync was removed. Its best block {} has no " +
+                "state behind it, so SNAP may not take a pivot below {}. Deleting fast sync's leftover progress record.",
+              best,
+              best + 1
+            )
+            appStateStorage.putSnapSyncMinPivotBlock(best + 1)
+          else
+            log.info("Deleting fast sync's leftover progress record: SNAP or a finished sync owns this database")
+            appStateStorage.emptyBatchUpdate
+        floor.and(fastSyncStateStorage.removeSyncState()).commit()
+
+    /** SNAP's persisted pivot floor, unless it is spent.
+      *
+      * SNAP commits pivots at or above its floor, so once its saved pivot reaches the floor the floor has done its job.
+      * It is cleared then instead of being applied again: a restart mid-heal must not raise the bar above the pivot
+      * SNAP already holds.
+      */
+    private def liveSnapPivotFloor(): Option[BigInt] =
+      appStateStorage.getSnapSyncMinPivotBlock().flatMap { floor =>
+        if appStateStorage.getSnapSyncPivotBlock().exists(_ >= floor) then
+          appStateStorage.clearSnapSyncMinPivotBlock().commit()
+          None
+        else Some(floor)
+      }
+
+    /** SNAP has finalized: whatever pivot floor it started with is spent. */
+    private def clearSnapPivotFloor(): Unit =
+      appStateStorage.clearSnapSyncMinPivotBlock().commit()
 
     def start(): Behavior[Command] =
       val startMode = SyncController.selectSyncMode(syncConfig)
+
+      adoptLeftoverFastSyncRecord()
 
       // Fast sync was removed, and with it this one-shot override (it cleared FastSyncDone so fast sync would run
       // again). Say so rather than ignore it silently.
@@ -1293,20 +1339,12 @@ object SyncController:
       // recovery paths below still clear it.
       (appStateStorage.isSnapSyncDone(), startMode) match
         case (false, SyncMode.Snap) =>
-          strandedFastSyncBest() match
-            case Some(best) =>
-              // The node was upgraded while fast sync was running. SNAP must pick a pivot above the stateless
-              // best block, as after RegularSyncStuck; otherwise its "pivot not ahead of local state" check takes
-              // that block for a synced chain and hands the node to regular sync without state.
-              log.warn(
-                "Fast sync was in progress when this node was upgraded; fast sync was removed. Its best block {} " +
-                  "was downloaded without state, so SNAP starts with a pivot above it. The leftover fast-sync " +
-                  "progress record is ignored.",
-                best
-              )
-              startSnapSync(minPivotBlock = Some(best + 1))
-            case None =>
-              startSnapSync()
+          // A live floor means the best block came from an interrupted fast sync and has no state: SNAP must pick a
+          // pivot above it, as after RegularSyncStuck, or its "pivot not ahead of local state" check takes that block
+          // for a synced chain and hands the node to regular sync without state.
+          val floor = liveSnapPivotFloor()
+          floor.foreach(f => log.info("SNAP starts with a pivot floor of {} (left by an interrupted fast sync)", f))
+          startSnapSync(minPivotBlock = floor)
         case (true, SyncMode.Snap) =>
           log.warn("do-snap-sync is true but SNAP sync already completed")
           // Diagnostic: log stored SNAP sync state root vs pivot block state root
@@ -1394,12 +1432,12 @@ object SyncController:
           if needBytecode || needStorage then startRecovery(needBytecode, needStorage)
           else startRegularSync()._2
         case (_, SyncMode.Regular) =>
-          strandedFastSyncBest().foreach { best =>
+          liveSnapPivotFloor().foreach { floor =>
             log.error(
               "Fast sync was in progress when this node was upgraded; fast sync was removed. Its best block {} " +
                 "was downloaded without state, and do-snap-sync is off, so regular sync will have to fetch the " +
                 "missing state node by node. Enable fukuii.sync.do-snap-sync to download it with SNAP.",
-              best
+              floor - 1
             )
           }
           startRegularSync()._2

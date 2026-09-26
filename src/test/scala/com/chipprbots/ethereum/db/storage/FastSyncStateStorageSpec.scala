@@ -11,8 +11,9 @@ import com.chipprbots.ethereum.db.dataSource.DataSourceUpdate
 import com.chipprbots.ethereum.db.dataSource.EphemDataSource
 import com.chipprbots.ethereum.testing.Tags.*
 
-/** [[FastSyncStateStorage]] only reports whether fast sync left its progress record behind. The key and namespace below
-  * are the ones fast sync wrote before it was removed; the check must keep finding records written under them.
+/** [[FastSyncStateStorage]] reports whether fast sync left its progress record behind and deletes it. The key and
+  * namespace below are the ones fast sync wrote before it was removed; the check must keep finding records written
+  * under them.
   */
 class FastSyncStateStorageSpec extends AnyFlatSpec with Matchers:
 
@@ -28,6 +29,22 @@ class FastSyncStateStorageSpec extends AnyFlatSpec with Matchers:
     dataSource.update(Seq(DataSourceUpdate(Namespaces.FastSyncStateNamespace, Nil, Seq(legacyKey -> someRecord))))
 
     new FastSyncStateStorage(dataSource).hasSyncState shouldBe true
+  }
+
+  it should "delete the record, and only the record, when asked" taggedAs (UnitTest, DatabaseTest) in {
+    val dataSource = EphemDataSource()
+    dataSource.update(
+      Seq(
+        DataSourceUpdate(Namespaces.FastSyncStateNamespace, Nil, Seq(legacyKey -> someRecord)),
+        DataSourceUpdate(Namespaces.AppStateNamespace, Nil, Seq(legacyKey -> someRecord))
+      )
+    )
+    val storage = new FastSyncStateStorage(dataSource)
+
+    storage.removeSyncState().commit()
+
+    storage.hasSyncState shouldBe false
+    dataSource.get(Namespaces.AppStateNamespace, legacyKey) shouldBe Some(someRecord)
   }
 
   it should "ignore the same key in another namespace" taggedAs (UnitTest, DatabaseTest) in {

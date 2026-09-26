@@ -214,6 +214,19 @@ class AppStateStorage(val dataSource: DataSource) extends TransactionalKeyValueS
   def putSnapSyncPivotBlock(pivotBlock: BigInt): DataSourceBatchUpdate =
     put(Keys.SnapSyncPivotBlock, pivotBlock.toString)
 
+  /** The lowest block SNAP may take as its pivot, set when the node was found stranded by an interrupted fast sync: the
+    * best block that fast sync reached has no state behind it, so a pivot at or below it would pass for "already
+    * synced". Persisted so a restart before SNAP commits a pivot keeps the floor; cleared once SNAP finalizes.
+    */
+  def getSnapSyncMinPivotBlock(): Option[BigInt] =
+    get(Keys.SnapSyncMinPivotBlock).map(BigInt(_))
+
+  def putSnapSyncMinPivotBlock(minPivotBlock: BigInt): DataSourceBatchUpdate =
+    put(Keys.SnapSyncMinPivotBlock, minPivotBlock.toString)
+
+  def clearSnapSyncMinPivotBlock(): DataSourceBatchUpdate =
+    remove(Keys.SnapSyncMinPivotBlock)
+
   /** Get the SNAP sync state root hash
     * @return
     *   SNAP sync state root hash, or None if not set
@@ -488,6 +501,7 @@ object AppStateStorage:
     val BootstrapPivotBlockHash = "BootstrapPivotBlockHash"
     val SnapSyncDone = "SnapSyncDone"
     val SnapSyncPivotBlock = "SnapSyncPivotBlock"
+    val SnapSyncMinPivotBlock = "SnapSyncMinPivotBlock"
     val SnapSyncStateRoot = "SnapSyncStateRoot"
     val SnapSyncProgress = "SnapSyncProgress"
     val SnapSyncBootstrapTarget = "SnapSyncBootstrapTarget"

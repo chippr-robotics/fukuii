@@ -76,6 +76,16 @@ class AppStateStorageSpec extends AnyWordSpec with ScalaCheckPropertyChecks with
       assert(!storage.isSnapSyncDone())
       assert(storage.isFastSyncDone())
 
+    "round-trip the SNAP pivot floor and clear it" taggedAs (UnitTest, DatabaseTest) in new Fixtures:
+      val storage: AppStateStorage = newAppStateStorage()
+      assert(storage.getSnapSyncMinPivotBlock().isEmpty)
+
+      storage.putSnapSyncMinPivotBlock(BigInt(1001)).commit()
+      assert(storage.getSnapSyncMinPivotBlock().contains(BigInt(1001)))
+
+      storage.clearSnapSyncMinPivotBlock().commit()
+      assert(storage.getSnapSyncMinPivotBlock().isEmpty)
+
     "clearFastSyncDone leaves SnapSyncDone untouched" taggedAs (UnitTest, DatabaseTest) in new Fixtures:
       val storage: AppStateStorage = newAppStateStorage()
       storage.snapSyncDone().commit()
