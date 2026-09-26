@@ -298,7 +298,7 @@ class SyncControllerSpec
     SyncTest
   ) in withTestSetup() { testSetup =>
     import testSetup.*
-    // doFastSync=true, doSnapSync=false; pre-set fastSyncDone → case (_, true, false, true) → startRegularSync()
+    // doSnapSync=false; pre-set fastSyncDone → case (_, _, Regular) → startRegularSync()
     storagesInstance.storages.appStateStorage.fastSyncDone().commit()
 
     syncController ! SyncController.WrappedSyncProtocol(SyncProtocol.Start)
@@ -462,21 +462,14 @@ class SyncControllerSpec
     val blacklist: CacheBasedBlacklist = CacheBasedBlacklist.empty(100)
 
     override def defaultSyncConfig: SyncConfig = super.defaultSyncConfig.copy(
-      doFastSync = true,
       branchResolutionRequestSize = 30,
       checkForNewBlockInterval = 1.second,
       blockHeadersPerRequest = 10,
       blockBodiesPerRequest = 10,
-      maximumTargetUpdateFailures = 50,
-      minPeersToChoosePivotBlock = 1,
       peersScanInterval = 1.second,
       redownloadMissingStateNodes = false,
-      fastSyncBlockValidationX = 10,
       blacklistDuration = 1.second,
-      peerResponseTimeout = 2.seconds,
-      persistStateSnapshotInterval = 0.1.seconds,
-      fastSyncThrottle = 10.milliseconds,
-      maxPivotBlockAge = 30
+      peerResponseTimeout = 2.seconds
     )
 
     // SyncController is Pekko Typed (Group ROOT) — a Behavior[Any]. Spawn through PropsAdapter so this Classic spec
@@ -564,7 +557,7 @@ class SyncControllerSpec
     * the ETC/Mordor one.
     */
   class PosRegularSyncSetup(terminalTotalDifficulty: Option[BigInt]) extends TestSetup():
-    override def defaultSyncConfig: SyncConfig = super.defaultSyncConfig.copy(doFastSync = false, doSnapSync = false)
+    override def defaultSyncConfig: SyncConfig = super.defaultSyncConfig.copy(doSnapSync = false)
 
     lazy val forkChoiceManager: com.chipprbots.ethereum.consensus.engine.ForkChoiceManager =
       new com.chipprbots.ethereum.consensus.engine.ForkChoiceManager(blockchainReader, blockchainWriter)
@@ -620,9 +613,6 @@ class SyncControllerSpec
 
   def withRecoveryTestSetup()(test: TestSetup => Any): Unit =
     val testSetup = new TestSetup():
-      override def defaultSyncConfig: SyncConfig = super.defaultSyncConfig.copy(
-        doSnapSync = true,
-        doFastSync = false
-      )
+      override def defaultSyncConfig: SyncConfig = super.defaultSyncConfig.copy(doSnapSync = true)
     try test(testSetup)
     finally testSetup.cleanup()
