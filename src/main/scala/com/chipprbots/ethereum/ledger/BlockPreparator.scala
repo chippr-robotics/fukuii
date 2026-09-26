@@ -366,6 +366,27 @@ class BlockPreparator(
   ): InMemoryWorldStateProxy =
     addressesToDelete.foldLeft(worldStateProxy) { case (world, address) => world.deleteAccount(address) }
 
+  /** EIP-8246 (Amsterdam) finalization of the accounts SELFDESTRUCT marked for deletion — under EIP-6780 only accounts
+    * created in the same transaction. They are no longer deleted: the nonce is reset, the code and all storage are
+    * cleared, and the BALANCE IS KEPT, so no ether is burned (execution-specs `clear_account_preserving_balance`,
+    * go-ethereum `finaliseAmsterdam`). An account left with a zero balance is empty, and EIP-161 removes it —
+    * execution-specs does so in the same `modify_state` step, so it is removed here rather than left for the
+    * touched-account sweep.
+    *
+    * Deleting first and saving a fresh account is what clears the storage: the fresh account carries the empty storage
+    * root, and the deletion drops the in-transaction storage and code overlays for the address. The code itself stays
+    * in the code store (shared by hash), exactly as [[deleteAccounts]] leaves it.
+    */
+  private[ledger] def clearSelfDestructedAccounts(addressesToDelete: Set[Address])(
+      worldStateProxy: InMemoryWorldStateProxy
+  )(implicit blockchainConfig: BlockchainConfig): InMemoryWorldStateProxy =
+    addressesToDelete.foldLeft(worldStateProxy) { case (world, address) =>
+      val balance = world.getBalance(address)
+      val cleared = world.deleteAccount(address)
+      if balance.isZero then cleared
+      else cleared.saveAccount(address, Account.empty(blockchainConfig.accountStartNonce).copy(balance = balance))
+    }
+
   /** EIP161 - State trie clearing Delete all accounts that have been touched (involved in any potentially
     * state-changing operation) during transaction execution.
     *
@@ -623,7 +644,11 @@ class BlockPreparator(
     // post-execution deduction needed here — would double-charge.
     val worldAfterBlobGas = worldAfterPayments
 
-    val deleteAccountsFn = deleteAccounts(resultWithErrorHandling.addressesToDelete)
+    // EIP-8246: from Amsterdam a self-destructed account keeps its balance; every earlier ETH fork and every ETC fork
+    // still deletes it outright, balance included.
+    val deleteAccountsFn =
+      if amsterdamActive then clearSelfDestructedAccounts(resultWithErrorHandling.addressesToDelete)
+      else deleteAccounts(resultWithErrorHandling.addressesToDelete)
     val deleteTouchedAccountsFn = deleteEmptyTouchedAccounts
     val persistStateFn = InMemoryWorldStateProxy.persistState
 

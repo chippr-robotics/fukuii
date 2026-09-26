@@ -1663,9 +1663,12 @@ case object SELFDESTRUCT extends OpCode(0xff, 1, 0, _.G_selfdestruct):
     //  - !shouldDelete (Cancun+ pre-existing contract): balance must be preserved. The "transfer
     //    self → self" is a no-op in any rational accounting. Required by bcValidBlockTest/
     //    reentrencySuicide, which calls SELFDESTRUCT(self) and expects the balance to remain.
+    //  - Amsterdam (EIP-8246): nothing burns any more. A same-transaction selfdestruct to self keeps its
+    //    balance here, and finalization keeps it too (BlockPreparator.clearSelfDestructedAccounts) —
+    //    execution-specs `move_ether` to itself, go-ethereum `opSelfdestruct6780` skipping the burn.
     val world =
       if state.ownAddress == refundAddr then
-        if shouldDelete then state.world.removeAllEther(state.ownAddress)
+        if shouldDelete && !state.config.amsterdamEnabled then state.world.removeAllEther(state.ownAddress)
         else state.world.touchAccounts(state.ownAddress)
       else state.world.transfer(state.ownAddress, refundAddr, state.ownBalance)
 
