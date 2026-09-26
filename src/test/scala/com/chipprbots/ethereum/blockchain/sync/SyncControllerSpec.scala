@@ -394,6 +394,44 @@ class SyncControllerSpec
       assert(!childNamed(testSetup, "fast-sync"))
   }
 
+  it should "continue in regular sync on a node where fast sync finished and SNAP has no stake" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in withRecoveryTestSetup() { testSetup =>
+    import testSetup.*
+    // Fast sync finished here long ago; SNAP never committed a pivot. Starting SNAP would leave the node dormant, importing
+    // nothing, until a snap peer appeared, and a node more than 64 blocks behind would download the whole state again.
+    blockchainWriter.storeBlockHeader(baseBlockHeader.copy(number = BlockNumber(StrandedBest))).commit()
+    storagesInstance.storages.appStateStorage
+      .fastSyncDone()
+      .and(storagesInstance.storages.appStateStorage.putBestBlockNumber(StrandedBest))
+      .commit()
+
+    syncController ! SyncController.WrappedSyncProtocol(SyncProtocol.Start)
+
+    eventually {
+      someTimePasses()
+      assert(childNamed(testSetup, "regular-sync"))
+    }
+    assert(!childNamed(testSetup, "snap-sync"))
+  }
+
+  it should "resume SNAP on a healing node that still carries a FastSyncDone flag" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in withRecoveryTestSetup() { testSetup =>
+    import testSetup.*
+    // SNAP's accounts are complete and a healing pivot roll moved best past the saved pivot: SNAP has a stake.
+    storagesInstance.storages.appStateStorage.fastSyncDone().commit()
+    seedMidHeal(testSetup, pivot = StrandedBest + 1, best = StrandedBest + 100)
+
+    syncController ! SyncController.WrappedSyncProtocol(SyncProtocol.Start)
+    awaitSnapStarted(syncController)
+
+    assert(!childNamed(testSetup, "regular-sync"))
+    storagesInstance.storages.appStateStorage.isSnapSyncAccountsComplete() shouldBe true
+  }
+
   it should "resume SNAP, not regular sync, on a mid-SNAP node that still carries a FastSyncDone flag" taggedAs (
     UnitTest,
     SyncTest

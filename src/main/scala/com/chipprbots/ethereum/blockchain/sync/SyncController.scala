@@ -1210,6 +1210,23 @@ object SyncController:
         else Some(floor)
       }
 
+    /** Whether the chain here came from a fast sync that finished, with nothing of SNAP's at stake.
+      *
+      * Such a node goes to regular sync, as it did before fast sync was removed. Starting SNAP there would leave it
+      * dormant, importing nothing, while no snap peer is reachable, and a node more than 64 blocks behind would
+      * download the whole state again. Regular sync does not need the trie to be complete: a missing node throws, nodes
+      * fetched on demand are checked against their keccak256 hash, and repeated failures become RegularSyncStuck, which
+      * starts SNAP with a pivot floor. An incomplete trie costs liveness, never a wrong root, so state completeness is
+      * not tested here.
+      *
+      * SNAP has a stake when its saved pivot is the best block (every pivot commit sets best = pivot) or its accounts
+      * are complete (healing implies that, and a healing pivot roll moves best without saving the pivot). A node
+      * part-way through SNAP therefore resumes SNAP, whatever FastSyncDone says.
+      */
+    private def fastSyncFinishedWithoutSnapStake(): Boolean =
+      appStateStorage.isFastSyncDone() && !appStateStorage.isSnapSyncAccountsComplete() &&
+        !appStateStorage.getSnapSyncPivotBlock().contains(appStateStorage.getBestBlockNumber())
+
     /** SNAP has finalized: whatever pivot floor it started with is spent. */
     private def clearSnapPivotFloor(): Unit =
       appStateStorage.clearSnapSyncMinPivotBlock().commit()
@@ -1332,12 +1349,16 @@ object SyncController:
           log.warn("fukuii.snap.clearDoneOnStart=true: clearing SnapSyncDone to re-enter SNAP healing")
           appStateStorage.clearSnapSyncDone().commit()
 
-      // FastSyncDone is a legacy flag and does not pick the mode: with SNAP on and not done, SNAP starts even where
-      // fast sync once finished. Starting SNAP never cleared the flag, so it can sit on a node that is part-way through
-      // SNAP (best = a pivot whose state is still downloading), and fast sync could set it over an incomplete trie.
-      // Regular sync on such a node executes blocks against missing state. Nothing sets the flag any more; the
-      // recovery paths below still clear it.
+      // FastSyncDone is a legacy flag; nothing sets it any more, and the recovery paths below still clear it. With SNAP
+      // on and not done, it sends the node to regular sync only when SNAP has no stake here (see
+      // `fastSyncFinishedWithoutSnapStake`). Starting SNAP never cleared the flag, so a node part-way through SNAP can
+      // carry it, and that node must resume SNAP.
       (appStateStorage.isSnapSyncDone(), startMode) match
+        case (false, SyncMode.Snap) if fastSyncFinishedWithoutSnapStake() =>
+          log.info(
+            "Fast sync finished on this node earlier and SNAP has no progress here; continuing with regular sync"
+          )
+          startRegularSync()._2
         case (false, SyncMode.Snap) =>
           // A live floor means the best block came from an interrupted fast sync and has no state: SNAP must pick a
           // pivot above it, as after RegularSyncStuck, or its "pivot not ahead of local state" check takes that block
