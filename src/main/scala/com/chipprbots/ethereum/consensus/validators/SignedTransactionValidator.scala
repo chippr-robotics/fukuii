@@ -27,6 +27,23 @@ object SignedTransactionError:
       extends SignedTransactionError:
     override def toString: String =
       s"INTRINSIC_GAS_TOO_LOW: Tx gas limit ($txGasLimit) < tx intrinsic gas ($txIntrinsicGas)"
+
+  /** Amsterdam: `tx.gas` below the EIP-7976/EIP-7981 calldata floor (execution-specs `validate_transaction`,
+    * "Insufficient calldata floor").
+    */
+  case class TransactionNotEnoughGasForFloorError(txGasLimit: BigInt, floorGas: BigInt) extends SignedTransactionError:
+    override def toString: String =
+      s"INTRINSIC_GAS_BELOW_FLOOR_GAS_COST: Tx gas limit ($txGasLimit) < calldata floor gas ($floorGas)"
+
+  /** Amsterdam (EIP-8037): the intrinsic execution gas or the calldata floor exceeds TX_MAX_GAS_LIMIT. `tx.gas` itself
+    * may exceed it — the excess seeds the state-gas reservoir — but these two may not. execution-specs raises
+    * `InsufficientTransactionGasError` for both, which the fixtures expect as INTRINSIC_GAS_TOO_LOW.
+    */
+  case class TransactionIntrinsicCostExceedsCap(intrinsicGas: BigInt, floorGas: BigInt, cap: BigInt)
+      extends SignedTransactionError:
+    override def toString: String =
+      s"INTRINSIC_GAS_TOO_LOW: intrinsic execution gas ($intrinsicGas) or calldata floor ($floorGas) " +
+        s"exceeds TX_MAX_GAS_LIMIT ($cap)"
   case class TransactionSenderCantPayUpfrontCostError(upfrontCost: UInt256, senderBalance: UInt256)
       extends SignedTransactionError:
     override def toString: String =

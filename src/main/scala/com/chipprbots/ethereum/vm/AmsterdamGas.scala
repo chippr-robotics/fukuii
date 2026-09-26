@@ -3,6 +3,7 @@ package com.chipprbots.ethereum.vm
 import org.apache.pekko.util.ByteString
 
 import com.chipprbots.ethereum.crypto.kec256
+import com.chipprbots.ethereum.domain.AccessListItem
 import com.chipprbots.ethereum.domain.Address
 import com.chipprbots.ethereum.domain.TxLogEntry
 import com.chipprbots.ethereum.domain.UInt256
@@ -93,6 +94,53 @@ object AmsterdamGas:
 
   /** EIP-8037: `tx.gas` ceiling, applied to the sum of both dimensions. */
   val TxMaxTotalGasLimit: BigInt = BigInt(2).pow(32) - 1
+
+  // ── EIP-7976 / EIP-7981: the calldata floor ─────────────────────────────────
+  //
+  // Values and formulas are execution-specs `forks/amsterdam` (`transactions.calculate_intrinsic_cost`,
+  // `GasCosts.TX_DATA_TOKEN_*`), which the EEST fixtures are generated from. Two places where the EIP texts read
+  // differently and execution-specs (and go-ethereum `FloorDataGas`) win:
+  //   - EIP-7976 anchors the floor on a flat 21,000; execution-specs anchors it on EIP-2780's decomposed base, the same
+  //     `TX_BASE + recipient_execution_gas` the intrinsic cost starts from;
+  //   - EIP-7981 lists EIP-2930's 2,400 / 1,900 per-entry charges; at Amsterdam those are EIP-8038's 2,900 / 2,000,
+  //     and the data surcharge below is added on top of them.
+
+  /** `TX_DATA_TOKEN_STANDARD`: floor tokens per calldata byte. Under EIP-7976 every byte, zero or not, counts 4. */
+  val TxDataTokenStandard: BigInt = 4
+
+  /** EIP-7976 `TX_DATA_TOKEN_FLOOR` (`TOTAL_COST_FLOOR_PER_TOKEN`): 10 -> 16, so 64 gas per calldata byte. */
+  val TxDataTokenFloor: BigInt = 16
+
+  /** EIP-7981: floor tokens for one access-list address, 20 bytes x 4. */
+  val AccessListAddressFloorTokens: BigInt = 80
+
+  /** EIP-7981: floor tokens for one access-list storage key, 32 bytes x 4. */
+  val AccessListStorageKeyFloorTokens: BigInt = 128
+
+  /** EIP-7981 `access_list_data_cost`: 1,280 gas per address and 2,048 per storage key.
+    *
+    * Charged on BOTH sides of `max(intrinsic + execution, floor)` — it is part of the intrinsic execution cost and of
+    * the floor — so an access list pays for its bytes whichever side decides `gas_used`. It is a surcharge: the
+    * per-entry access charges (`G_access_list_address` / `G_access_list_storage`) are still paid in addition.
+    */
+  def accessListDataCost(accessList: Seq[AccessListItem]): BigInt =
+    val addresses = BigInt(accessList.size)
+    val storageKeys = accessList.foldLeft(BigInt(0))((n, item) => n + item.storageKeys.size)
+    (addresses * AccessListAddressFloorTokens + storageKeys * AccessListStorageKeyFloorTokens) * TxDataTokenFloor
+
+  /** The Amsterdam calldata floor (`calldata_floor` in execution-specs `IntrinsicGasCost`):
+    * {{{
+    * baseExecutionGas + len(txData) * 4 * 16 + access_list_data_cost
+    * }}}
+    * `baseExecutionGas` is EIP-2780's `TX_BASE + recipient_execution_gas` — `EvmConfig.transactionBaseCost` under an
+    * Amsterdam config — and nothing else: initcode-word and per-authorization charges are intrinsic-only and never
+    * enter the floor.
+    *
+    * Amsterdam-only. The EIP-7623 floor of ETH Prague/Osaka and ETC Olympia is `BlockPreparator.calcFloorDataGas`,
+    * which this does not replace.
+    */
+  def calldataFloorGas(baseExecutionGas: BigInt, txData: ByteString, accessList: Seq[AccessListItem]): BigInt =
+    baseExecutionGas + BigInt(txData.length) * TxDataTokenStandard * TxDataTokenFloor + accessListDataCost(accessList)
 
   /** EIP-7954: contract code size limit, 24 KiB -> 64 KiB. */
   val MaxCodeSize: BigInt = 65536

@@ -6,7 +6,6 @@ import com.chipprbots.ethereum.consensus.validators.SignedTransactionError.*
 import com.chipprbots.ethereum.crypto.ECDSASignature
 import com.chipprbots.ethereum.domain.*
 import com.chipprbots.ethereum.utils.BlockchainConfig
-import com.chipprbots.ethereum.ledger.BlockPreparator
 import com.chipprbots.ethereum.vm.AmsterdamGas
 import com.chipprbots.ethereum.vm.EvmConfig
 
@@ -269,14 +268,21 @@ object StdSignedTransactionValidator extends SignedTransactionValidator:
           Right(SignedTransactionValid)
     else Right(SignedTransactionValid)
 
-  /** Validates the gas limit is no smaller than the intrinsic gas used by the transaction.
+  /** Validates the gas limit is no smaller than the intrinsic gas used by the transaction — and, at Amsterdam, no
+    * smaller than its calldata floor either.
+    *
+    * The Amsterdam floor check is execution-specs `validate_transaction`'s second gas check, straight after the
+    * intrinsic one: `intrinsic.calldata_floor > tx.gas` makes the transaction invalid. Only at Amsterdam: EIP-7623
+    * states the same rule for its own floor, but fukuii has never enforced it on ETH Prague/Osaka or ETC Olympia, and
+    * adding it there is a separate, separately reviewed change.
     *
     * @param stx
     *   Transaction to validate
     * @param blockHeaderNumber
     *   Number of the block where the stx transaction was included
     * @return
-    *   Either the validated transaction or a TransactionNotEnoughGasForIntrinsicError
+    *   Either the validated transaction, a TransactionNotEnoughGasForIntrinsicError or (Amsterdam) a
+    *   TransactionNotEnoughGasForFloorError
     */
   private def validateGasLimitEnoughForIntrinsicGas(
       stx: SignedTransaction,
@@ -303,8 +309,20 @@ object StdSignedTransactionValidator extends SignedTransactionValidator:
         UInt256(tx.value),
         sender
       )
-    if stx.tx.gasLimit >= GasAmount(txIntrinsicGas) then Right(SignedTransactionValid)
-    else Left(TransactionNotEnoughGasForIntrinsicError(stx.tx.gasLimit.value, txIntrinsicGas))
+    if stx.tx.gasLimit < GasAmount(txIntrinsicGas) then
+      Left(TransactionNotEnoughGasForIntrinsicError(stx.tx.gasLimit.value, txIntrinsicGas))
+    else if config.amsterdamEnabled then
+      val floor = config.calcAmsterdamCalldataFloorGas(
+        tx.payload,
+        Transaction.accessList(tx),
+        tx.receivingAddress,
+        UInt256(tx.value),
+        sender
+      )
+      if stx.tx.gasLimit < GasAmount(floor) then
+        Left(TransactionNotEnoughGasForFloorError(stx.tx.gasLimit.value, floor))
+      else Right(SignedTransactionValid)
+    else Right(SignedTransactionValid)
 
   /** Validates the sender account balance contains at least the cost required in up-front payment.
     *
@@ -342,6 +360,12 @@ object StdSignedTransactionValidator extends SignedTransactionValidator:
       // exists to serve. TX_MAX_GAS_LIMIT now caps EXECUTION gas only, so `tx.gas` above it is legal —
       // the excess seeds `state_gas_reservoir`. What is capped against 2^24 is the intrinsic cost, and
       // `tx.gas` as a whole is capped against the new TX_MAX_TOTAL_GAS_LIMIT = 2^32 - 1.
+      //
+      // execution-specs checks the intrinsic cost and the calldata floor against 2^24 separately, after
+      // both sufficiency checks (validateGasLimitEnoughForIntrinsicGas), and raises the same error for
+      // either — so one comparison against their maximum is the same rule. Its TX_MAX_TOTAL_GAS_LIMIT
+      // check comes before the sufficiency checks rather than after; both failing at once needs an
+      // intrinsic cost above 2^32 - 1, i.e. hundreds of megabytes of calldata.
       import stx.tx
       val config = EvmConfig.forBlock(blockHeaderNumber, blockHeaderTimestamp, blockchainConfig)
       val authListSize = tx match
@@ -357,14 +381,17 @@ object StdSignedTransactionValidator extends SignedTransactionValidator:
         UInt256(tx.value),
         sender
       )
-      val floor = BlockPreparator.calcFloorDataGas(
+      val floor = config.calcAmsterdamCalldataFloorGas(
         tx.payload,
-        config.transactionBaseCost(tx.receivingAddress, UInt256(tx.value), sender)
+        Transaction.accessList(tx),
+        tx.receivingAddress,
+        UInt256(tx.value),
+        sender
       )
       if tx.gasLimit.value > AmsterdamGas.TxMaxTotalGasLimit then
         Left(TransactionGasLimitExceedsCap(tx.gasLimit.value, AmsterdamGas.TxMaxTotalGasLimit))
-      else if intrinsic.max(floor) > TxGasLimitCap then
-        Left(TransactionGasLimitExceedsCap(intrinsic.max(floor), TxGasLimitCap))
+      else if intrinsic.max(floor) > AmsterdamGas.TxMaxGasLimit then
+        Left(TransactionIntrinsicCostExceedsCap(intrinsic, floor, AmsterdamGas.TxMaxGasLimit))
       else Right(SignedTransactionValid)
     else if (isOlympiaActivated || isOsakaActivated) && stx.tx.gasLimit > GasAmount(TxGasLimitCap) then
       Left(TransactionGasLimitExceedsCap(stx.tx.gasLimit.value, TxGasLimitCap))
