@@ -424,8 +424,9 @@ class AppStateStorage(val dataSource: DataSource) extends TransactionalKeyValueS
   def putBackfillBestReceipt(n: BigInt): DataSourceBatchUpdate =
     put(Keys.BackfillBestReceipt, n.toString)
 
-  /** Clear all backfill cursors + target. Called on `ChainDownloader.Done` so the next startup doesn't try to resume an
-    * already-completed backfill.
+  /** Clear all backfill cursors + target. A full reset — no code currently calls this on the "backfill just finished,
+    * still-alive downloader may run again" path (see `removeBackfillTarget`); this remains for a genuine fresh-start
+    * reset (e.g. a future admin/debug entry point).
     */
   def clearBackfillCursors(): DataSourceBatchUpdate =
     update(
@@ -437,6 +438,22 @@ class AppStateStorage(val dataSource: DataSource) extends TransactionalKeyValueS
       ),
       toUpsert = Nil
     )
+
+  /** Remove only the backfill target, leaving the header/body/receipt cursors in place. `needsBackfillResume()`
+    * short-circuits to `false` as soon as `getBackfillTarget() <= 0`, so this alone is sufficient to tell a FRESH
+    * startup "no backfill to resume" — the same signal `clearBackfillCursors()` gave.
+    *
+    * `ChainDownloader.checkCompletion` uses this instead of `clearBackfillCursors()` on `Done` (a bug Forge's ETC
+    * review of the #33 follow-up found, ETC mainnet scale): `SNAPSyncController` keeps the downloader alive after
+    * `Done` and can send it `UpdateTarget` on a later pivot refresh, landing in `idle()`'s handler, which calls
+    * `findBestStoredHeader()` again. That rebuild trusts the header/body/receipt cursors as a floor to avoid re-walking
+    * everything already confirmed on disk (#33) — deleting them on every completion meant that floor reset to 0 every
+    * time, so the SAME already-backfilled range (potentially the whole chain) got walked from scratch on every single
+    * pivot refresh. Leaving the three cursors at their completed values means the next `findBestStoredHeader()` call
+    * only walks the NEW incremental range above them.
+    */
+  def removeBackfillTarget(): DataSourceBatchUpdate =
+    remove(Keys.BackfillTarget)
 
   /** True iff SNAP is done AND a backfill target was previously persisted AND any of the three cursors is below the
     * target. `SyncController.start()` uses this to spawn a standalone `ChainDownloader` alongside regular sync.

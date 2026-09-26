@@ -7,6 +7,7 @@ import org.apache.pekko.actor.typed.scaladsl.Behaviors
 import org.apache.pekko.actor.typed.scaladsl.TimerScheduler
 import org.apache.pekko.util.ByteString
 
+import scala.annotation.tailrec
 import scala.concurrent.duration.*
 
 import com.chipprbots.ethereum.blockchain.sync.Blacklist
@@ -86,6 +87,8 @@ class ChainDownloader private (
 ):
 
   import ChainDownloader.*
+
+  require(cursorScanCap >= 1, s"cursorScanCap must be at least 1, was $cursorScanCap")
 
   private val prhResultAdapter: TypedActorRef[PeerRequestHandler.Result] =
     context.messageAdapter[PeerRequestHandler.Result](PeerResult(_))
@@ -200,8 +203,14 @@ class ChainDownloader private (
       handleCommon(message).getOrElse {
         message match
           case Dispatch =>
-            if !paused then dispatchRequests()
-            Behaviors.same
+            // dispatchRequests()'s result must be the returned Behavior, not discarded: it can be idle() (via
+            // checkCompletion, e.g. Done firing off a Dispatch tick) rather than always Behaviors.same. A `val
+            // x = dispatchRequests(); Behaviors.same` shape here used to silently drop that transition, leaving
+            // the actor stuck in downloading() forever after a completion triggered from this handler — so a
+            // later UpdateTarget landed in THIS behavior's simpler handler (below) instead of idle()'s (which
+            // recomputes bestHeaderNumber via findBestStoredHeader), defeating the #33 follow-up's fix for a
+            // pivot refresh after Done.
+            if !paused then dispatchRequests() else Behaviors.same
 
           case Pause =>
             if !paused then
@@ -213,8 +222,8 @@ class ChainDownloader private (
             if paused then
               paused = false
               log.info("Chain download resumed")
-              dispatchRequests()
-            Behaviors.same
+              dispatchRequests() // see Dispatch above — must be the returned Behavior, not discarded
+            else Behaviors.same
 
           case UpdateTarget(newTarget) =>
             if newTarget > targetBlock then
@@ -235,8 +244,7 @@ class ChainDownloader private (
 
           case BoostConcurrency(n) =>
             boostConcurrency(n)
-            dispatchRequests() // Immediately use the new slots
-            Behaviors.same
+            dispatchRequests() // Immediately use the new slots — see Dispatch above: must be the returned Behavior
 
           case YieldToRegularSync(n) =>
             yieldToRegularSync(n)
@@ -624,19 +632,42 @@ class ChainDownloader private (
         EmptyBlockBodies(requestedHashes.map(h => s"0x${h.toArray.map("%02x".format(_)).mkString}"))
       )
     else
-      val delivered = requestedHashes.zip(bodies)
-      val (stored, firstError) = storeBodiesAndAdvanceCursor(delivered)
-      if stored < delivered.size then
-        rejectMismatchedBodies(
-          peer,
-          requestedHashes.drop(stored),
-          firstError.getOrElse(StdBlockValidator.BlockTransactionsHashError)
-        )
-      else
-        // Re-queue any remaining hashes that weren't served
-        val remaining = requestedHashes.drop(bodies.size)
-        if remaining.nonEmpty then bodiesQueue = remaining.toVector ++ bodiesQueue
+      val (toRequeue, unmatchedError) = storeBodiesAndAdvanceCursor(requestedHashes, bodies)
+      unmatchedError match
+        case Some(error) => rejectMismatchedBodies(peer, toRequeue, error)
+        case None        => if toRequeue.nonEmpty then bodiesQueue = toRequeue.toVector ++ bodiesQueue
   // else bodies.isEmpty
+
+  /** Matches `items` against `requestedHashes` as an ORDERED SUBSEQUENCE, not a strict 1:1 zip: each delivered item is
+    * assigned to the next requested hash whose header it `validates` against, skipping over (not blacklisting) any
+    * requested hash the peer had nothing for. Mirrors regular sync's
+    * `BlockFetcherState.bodiesAreOrderedSubsetOfRequested` (BlockFetcherState.scala:216-229) and go-ethereum's own
+    * server-side behavior — core-geth's `ServiceGetBlockBodiesQuery`/`ServiceGetReceiptsQuery` `continue` on a missing
+    * entry rather than padding the response — so an honest peer that skips a block it doesn't have is never penalized
+    * for it (#1, forge's review of #33/7f173d50b).
+    *
+    * "A reply is matched to the request by position" no longer means "same index": it means "the next request the item
+    * satisfies", so a shorter-than-requested response no longer misaligns everything after the first gap.
+    *
+    * Returns the matched (hash, item) pairs in delivery order, and `Some(item)` only when a delivered item matches none
+    * of the requested hashes remaining at that point — genuinely unrequested/wrong data, not an honest skip. Once that
+    * happens, matching stops (nothing later in `items` is tried either — position is unrecoverable past a response that
+    * doesn't correspond to what was asked for).
+    */
+  @tailrec
+  private def matchOrderedSubsequence[Item](
+      remainingHashes: Seq[ByteString],
+      remainingItems: Seq[Item],
+      validates: (BlockHeader, Item) => Boolean,
+      matched: Vector[(ByteString, Item)] = Vector.empty
+  ): (Vector[(ByteString, Item)], Option[Item]) =
+    (remainingHashes, remainingItems) match
+      case (_, Seq()) => (matched, None) // nothing left delivered; any remaining hashes simply weren't in this reply
+      case (Seq(), unmatched +: _) => (matched, Some(unmatched)) // items remain, no hash left to try them against
+      case (hash +: restHashes, item +: restItems) =>
+        val ok = blockchainReader.getBlockHeaderByHash(BlockHash(hash)).exists(h => validates(h, item))
+        if ok then matchOrderedSubsequence(restHashes, restItems, validates, matched :+ (hash -> item))
+        else matchOrderedSubsequence(restHashes, remainingItems, validates, matched) // skip hash; retry item vs next
 
   /** Advance the body backfill cursor only over the prefix that is actually contiguous on disk from `cursor+1` onward
     * (#33). Bodies are fetched by several concurrent peers and a failed batch is re-queued (7b7a61708), so batches
@@ -673,67 +704,97 @@ class ChainDownloader private (
     * (StdBlockValidator.validateHeaderAndBody) rather than re-implementing it — the same call regular sync's
     * BlockFetcherState.validateBodies makes via blockValidator.validateHeaderAndBody (BlockFetcherState.scala:226).
     *
-    * A reply is matched to the request by position, so a peer that sends a body for the wrong block (or a corrupted
-    * one) would otherwise be stored under the requested hash unconditionally, and the cursor would then move past a
-    * block whose body is wrong. Storing stops at the first block that fails; returns how many leading blocks were
-    * stored, and the validation error at the first failure (if any).
+    * Matches `bodies` against `requestedHashes` as an ordered subsequence (matchOrderedSubsequence) rather than a
+    * strict positional zip, so a peer that honestly skips a block it doesn't have shifts nothing — every match is
+    * stored, and only the skipped-over (or never-reached) hashes are returned for re-queuing. Returns those hashes to
+    * re-queue, and `Some(error)` only when a delivered body matches none of the remaining requested hashes — genuinely
+    * wrong data, the caller's cue to blacklist.
     */
   private def storeBodiesAndAdvanceCursor(
-      bodiesByHash: Seq[(ByteString, BlockBody)]
-  ): (Int, Option[StdBlockValidator.BlockError]) =
-    val checked = bodiesByHash.map { case (hash, body) =>
-      val result = blockchainReader.getBlockHeaderByHash(BlockHash(hash)) match
-        case Some(header) => StdBlockValidator.validateHeaderAndBody(header, body)
-        // No stored header for a hash we requested a body for shouldn't happen — the backfill queue is only ever
-        // seeded from headers already validated and stored (handleHeaders / findBestStoredHeader). Stop the
-        // prefix here rather than store against a header we can't even look up; BlockTransactionsHashError is the
-        // closest umbrella label (validateHeaderAndBody checks it first), not a claim about which check failed.
-        case None => Left(StdBlockValidator.BlockTransactionsHashError)
-      (hash, body, result)
-    }
-    val verified = checked.takeWhile { case (_, _, result) => result.isRight }
-    val firstError = checked.drop(verified.size).headOption.flatMap { case (_, _, result) => result.left.toOption }
-    if verified.nonEmpty then
-      verified
-        .map { case (hash, body, _) => blockchainWriter.storeBlockBody(BlockHash(hash), body) }
+      requestedHashes: Seq[ByteString],
+      bodies: Seq[BlockBody]
+  ): (Seq[ByteString], Option[StdBlockValidator.BlockError]) =
+    val (matched, unmatchedBody) =
+      matchOrderedSubsequence[BlockBody](
+        requestedHashes,
+        bodies,
+        (header, body) => StdBlockValidator.validateHeaderAndBody(header, body).isRight
+      )
+    if matched.nonEmpty then
+      matched
+        .map { case (hash, body) => blockchainWriter.storeBlockBody(BlockHash(hash), body) }
         .reduce(_.and(_))
         .commit()
-      bodiesDownloaded += verified.size
+      bodiesDownloaded += matched.size
       advanceBodyCursor()
-    (verified.size, firstError)
+    val matchedHashes = matched.map(_._1).toSet
+    val toRequeue = requestedHashes.filterNot(matchedHashes.contains)
+    (toRequeue, unmatchedBody.map(_ => StdBlockValidator.BlockTransactionsHashError))
 
-  /** A block's body in a peer's reply does not hash to its header (StdBlockValidator.validateHeaderAndBody failed —
-    * transactionsRoot, ommersHash, or one of its other consensus checks). Re-queue it and everything after it, and
-    * blacklist the peer. Mirrors rejectMismatchedReceipts.
+  /** A delivered body matches none of the requested hashes still outstanding — genuinely unrequested/wrong data
+    * (StdBlockValidator.validateHeaderAndBody failed against every remaining candidate), not an honest skip. Peers that
+    * only skip blocks they lack never reach here (matchOrderedSubsequence re-queues those without calling this).
+    * Re-queue `toRequeue` (the skipped-over and/or unreached hashes from this batch) and blacklist the peer. Mirrors
+    * rejectMismatchedReceipts.
     */
   private def rejectMismatchedBodies(
       peer: Peer,
-      fromMismatch: Seq[ByteString],
+      toRequeue: Seq[ByteString],
       error: StdBlockValidator.BlockError
   ): Unit =
-    val hashStrings = fromMismatch.map(h => s"0x${h.toArray.map("%02x".format(_)).mkString}")
+    val hashStrings = toRequeue.map(h => s"0x${h.toArray.map("%02x".format(_)).mkString}")
     log.warn(
-      "Chain download: body from peer {} does not match the header of block {}: {}; re-queuing {} block(s)",
+      "Chain download: body from peer {} matched none of the requested blocks: {}; re-queuing {} block(s)",
       peer.id,
-      hashStrings.headOption.getOrElse("?"),
       error,
-      fromMismatch.size
+      toRequeue.size
     )
-    bodiesQueue = fromMismatch.toVector ++ bodiesQueue
-    val firstAndCount = hashStrings.headOption.map(h => s"$h (+${hashStrings.size - 1} re-queued after it)").toSeq
-    blacklist.add(peer.id, syncConfig.blacklistDuration, InvalidBodies(firstAndCount, error))
+    bodiesQueue = toRequeue.toVector ++ bodiesQueue
+    blacklist.add(peer.id, syncConfig.blacklistDuration, InvalidBodies(hashStrings, error))
 
   /** Store per-block receipts, then advance the backfill receipt cursor over the contiguous run now on disk (#1169,
-    * #33). Shared by handleReceipts (eth/68), handleReceipts69 (eth/69), and handleReceipts70's complete-block path
-    * (eth/70-72) — the three receipt decoders differ only in wire shape, not in how a decoded batch is persisted.
+    * #33). Shared by handleReceipts (eth/68) and handleReceipts69 (eth/69) — the two decoders differ only in wire
+    * shape, not in how a decoded batch is matched and persisted. handleReceipts70's complete-block path does NOT use
+    * this (see storeReceiptsPrefixAndAdvanceCursor) — its `completeByHash` is already a strict positional pairing built
+    * from `requestedHashes(idx)`, not independently-delivered items, so there is no real "skip" for ordered-subsequence
+    * matching to recover: attempting it would compare a block's receipts against the WRONG header's root instead of
+    * correctly detecting a skip. Fixing that would mean teaching handleReceipts70's own complete/incomplete split to
+    * detect skips before it assumes position `idx` — out of scope here; flagged in this task's report.
     *
-    * A reply is matched to the request by position, so a peer that skips a block it lacks shifts every later block's
-    * receipts onto the wrong hash, and the cursor would then move past blocks whose receipts are wrong. Each block's
-    * receipts are therefore checked against its header's receiptsRoot, the check block validation makes
-    * (StdBlockValidator.validateReceipts), and storing stops at the first block that fails. Returns how many leading
-    * blocks were stored.
+    * Matches `receiptsByBlock` against `requestedHashes` as an ordered subsequence (matchOrderedSubsequence) rather
+    * than a strict positional zip, so a peer that honestly skips a block it doesn't have shifts nothing — every match
+    * is stored, and only the skipped-over (or never-reached) hashes are returned for re-queuing. Each match is checked
+    * against its header's receiptsRoot, the same check block validation makes (StdBlockValidator.validateReceipts via
+    * MptListValidator). Returns the hashes to re-queue, and `true` only when a delivered receipt list matches none of
+    * the remaining requested hashes — genuinely wrong data, the caller's cue to blacklist.
     */
-  private def storeReceiptsAndAdvanceCursor(receiptsByHash: Seq[(ByteString, Seq[Receipt])]): Int =
+  private def storeReceiptsAndAdvanceCursor(
+      requestedHashes: Seq[ByteString],
+      receiptsByBlock: Seq[Seq[Receipt]]
+  ): (Seq[ByteString], Boolean) =
+    val (matched, unmatchedReceipts) =
+      matchOrderedSubsequence[Seq[Receipt]](
+        requestedHashes,
+        receiptsByBlock,
+        (header, receipts) =>
+          MptListValidator.isValid[Receipt](header.receiptsRoot.toArray, receipts, Receipt.byteArraySerializable)
+      )
+    if matched.nonEmpty then
+      matched.foreach { case (hash, receipts) =>
+        blockchainWriter.storeReceipts(BlockHash(hash), receipts).commit()
+      }
+      receiptsDownloaded += matched.size
+      advanceReceiptCursor()
+    val matchedHashes = matched.map(_._1).toSet
+    val toRequeue = requestedHashes.filterNot(matchedHashes.contains)
+    (toRequeue, unmatchedReceipts.isDefined)
+
+  /** handleReceipts70's own equivalent of storeReceiptsAndAdvanceCursor — NOT ordered-subsequence matching (see that
+    * method's doc for why). `receiptsByHash` is handleReceipts70's `completeByHash`: already paired
+    * `requestedHashes(idx) -> completeItems(idx)`, so this keeps the original prefix semantics (stop storing at the
+    * first block whose receipts don't hash to its receiptsRoot) — unchanged behavior from before this task.
+    */
+  private def storeReceiptsPrefixAndAdvanceCursor(receiptsByHash: Seq[(ByteString, Seq[Receipt])]): Int =
     val verified = receiptsByHash.iterator
       .map { case (hash, receipts) => (hash, receipts, blockchainReader.getBlockHeaderByHash(BlockHash(hash))) }
       .takeWhile { case (_, receipts, header) =>
@@ -763,23 +824,25 @@ class ChainDownloader private (
     do n += 1
     if n - 1 > current then appStateStorage.putBackfillBestReceipt(n - 1).commit()
 
-  /** A block's receipts in a peer's reply do not hash to its header's receiptsRoot. Re-queue it and everything after
-    * it, drop any eth/70 partial state for those hashes (it may hold the wrong receipts), and blacklist the peer.
+  /** Called for genuinely wrong receipt data — from handleReceipts/handleReceipts69, a delivered receipt list that
+    * matches none of the requested hashes still outstanding (peers that only skip blocks they lack never reach here —
+    * matchOrderedSubsequence re-queues those without calling this); from handleReceipts70, its own prefix check finding
+    * a block whose receipts don't hash to its receiptsRoot (storeReceiptsPrefixAndAdvanceCursor, unchanged prefix
+    * semantics). Re-queue `toRequeue`, drop any eth/70 partial state for them (it may hold receipts for the wrong
+    * block), and blacklist the peer.
     */
-  private def rejectMismatchedReceipts(peer: Peer, fromMismatch: Seq[ByteString]): Unit =
-    val hashStrings = fromMismatch.map(h => s"0x${h.toArray.map("%02x".format(_)).mkString}")
+  private def rejectMismatchedReceipts(peer: Peer, toRequeue: Seq[ByteString]): Unit =
+    val hashStrings = toRequeue.map(h => s"0x${h.toArray.map("%02x".format(_)).mkString}")
     log.warn(
-      "Chain download: receipts from peer {} do not match the receiptsRoot of block {}; re-queuing {} block(s)",
+      "Chain download: receipts from peer {} did not validate; re-queuing {} block(s)",
       peer.id,
-      hashStrings.headOption.getOrElse("?"),
-      fromMismatch.size
+      toRequeue.size
     )
-    fromMismatch.foreach { h =>
+    toRequeue.foreach { h =>
       partialReceiptState -= h; partialReceiptBuffer -= h
     }
-    receiptsQueue = fromMismatch.toVector ++ receiptsQueue
-    val firstAndCount = hashStrings.headOption.map(h => s"$h (+${hashStrings.size - 1} re-queued after it)").toSeq
-    blacklist.add(peer.id, syncConfig.blacklistDuration, InvalidReceipts(firstAndCount, BlockReceiptsHashError))
+    receiptsQueue = toRequeue.toVector ++ receiptsQueue
+    blacklist.add(peer.id, syncConfig.blacklistDuration, InvalidReceipts(hashStrings, BlockReceiptsHashError))
 
   private def handleReceipts(
       peer: Peer,
@@ -812,13 +875,9 @@ class ChainDownloader private (
         }
 
         // Store receipts, then advance the backfill receipt cursor over the contiguous run now on disk (#1169, #33).
-        val delivered = requestedHashes.zip(receiptsByBlock)
-        val stored = storeReceiptsAndAdvanceCursor(delivered)
-        if stored < delivered.size then rejectMismatchedReceipts(peer, requestedHashes.drop(stored))
-        else
-          // Re-queue remaining
-          val remaining = requestedHashes.drop(receiptsByBlock.size)
-          if remaining.nonEmpty then receiptsQueue = remaining.toVector ++ receiptsQueue
+        val (toRequeue, unmatched) = storeReceiptsAndAdvanceCursor(requestedHashes, receiptsByBlock)
+        if unmatched then rejectMismatchedReceipts(peer, toRequeue)
+        else if toRequeue.nonEmpty then receiptsQueue = toRequeue.toVector ++ receiptsQueue
       catch
         case ex: Exception =>
           log.warn("Chain download: failed to decode receipts from peer {}: {}", peer.id, ex.getMessage)
@@ -847,21 +906,19 @@ class ChainDownloader private (
       blacklist.add(peer.id, syncConfig.blacklistDuration, EmptyReceipts(hashStrings))
     else
       try
-        // Every item must be a block's receipt list. Skipping one would zip each later block's receipts onto the
-        // wrong hash, and nothing downstream checks them against the header's receiptsRoot.
+        // Every item must decode as a block's receipt list; a malformed one fails the whole response (caught
+        // below). A peer that HONESTLY has fewer items than requested (it lacks some of the blocks) is not an
+        // error here — storeReceiptsAndAdvanceCursor matches items to hashes as an ordered subsequence, so a
+        // shorter response no longer misaligns anything.
         val receiptsByBlock: Seq[Seq[Receipt]] = receiptsRlp.items.map {
           case blockReceipts: RLPList => blockReceipts.items.map(_.toEth69Receipt)
           case other                  => throw new RuntimeException(s"block receipts are not a list: $other")
         }
 
         // Store receipts, then advance the backfill receipt cursor over the contiguous run now on disk (#1169, #33).
-        val delivered = requestedHashes.zip(receiptsByBlock)
-        val stored = storeReceiptsAndAdvanceCursor(delivered)
-        if stored < delivered.size then rejectMismatchedReceipts(peer, requestedHashes.drop(stored))
-        else
-          // Re-queue remaining
-          val remaining = requestedHashes.drop(receiptsByBlock.size)
-          if remaining.nonEmpty then receiptsQueue = remaining.toVector ++ receiptsQueue
+        val (toRequeue, unmatched) = storeReceiptsAndAdvanceCursor(requestedHashes, receiptsByBlock)
+        if unmatched then rejectMismatchedReceipts(peer, toRequeue)
+        else if toRequeue.nonEmpty then receiptsQueue = toRequeue.toVector ++ receiptsQueue
       catch
         case ex: Exception =>
           log.warn("Chain download ETH69: failed to decode receipts from peer {}: {}", peer.id, ex.getMessage)
@@ -917,7 +974,7 @@ class ChainDownloader private (
           }
 
         // Store complete receipts + advance backfill cursor (#1169 pattern)
-        val stored = storeReceiptsAndAdvanceCursor(completeByHash)
+        val stored = storeReceiptsPrefixAndAdvanceCursor(completeByHash)
         if stored < completeByHash.size then rejectMismatchedReceipts(peer, requestedHashes.drop(stored))
         else
           // Accumulate partial receipts for the truncated last block and re-queue it
@@ -966,8 +1023,29 @@ class ChainDownloader private (
         receiptsDownloaded,
         targetBlock
       )
-      // Clear backfill cursors so the next startup doesn't try to resume a finished backfill (#1169).
-      appStateStorage.clearBackfillCursors().commit()
+      // Seed (don't delete) the header/body/receipt cursors at bestHeaderNumber, and remove only the backfill
+      // target (#33 follow-up — a Forge-found performance bug, ETC mainnet scale). bodiesQueue/receiptsQueue
+      // being empty is exactly the completion condition above, and handleBodies/handleReceipts* always re-queue
+      // anything that doesn't match (never silently drop a hash — see storeBodiesAndAdvanceCursor /
+      // storeReceiptsAndAdvanceCursor), so an empty queue here already proves every block up to bestHeaderNumber
+      // has a stored body and stored receipts: seeding the cursors at bestHeaderNumber is a direct consequence of
+      // that proof, not a blind trust of a stale value the way the pre-#33 bug was.
+      //
+      // The old clearBackfillCursors() call deleted all four keys, including the three cursors. SNAPSyncController
+      // keeps this actor alive after Done rather than stopping it, and can send UpdateTarget on a later pivot
+      // refresh — landing in idle()'s handler, which calls findBestStoredHeader() again. That rebuild trusts the
+      // cursors as a floor to skip re-walking anything already confirmed on disk; with them deleted, the floor
+      // reset to 0 every time, so findBestStoredHeader's rebuild scan walked the ENTIRE already-backfilled range
+      // (potentially the whole chain, e.g. ETC mainnet's ~25M blocks) from scratch on every single pivot refresh.
+      // removeBackfillTarget() alone is sufficient for needsBackfillResume() to report "nothing to resume" on a
+      // fresh startup (it short-circuits as soon as the target is <= 0), so nothing is lost by keeping the other
+      // three.
+      appStateStorage
+        .putBackfillBestHeader(bestHeaderNumber)
+        .and(appStateStorage.putBackfillBestBody(bestHeaderNumber))
+        .and(appStateStorage.putBackfillBestReceipt(bestHeaderNumber))
+        .and(appStateStorage.removeBackfillTarget())
+        .commit()
       timers.cancel(DispatchKey)
       replyTo ! Done
       idle()

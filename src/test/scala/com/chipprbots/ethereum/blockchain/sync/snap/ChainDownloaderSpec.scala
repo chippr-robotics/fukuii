@@ -16,6 +16,11 @@ import org.scalatest.flatspec.AnyFlatSpecLike
 import org.scalatest.matchers.should.Matchers
 
 import com.chipprbots.ethereum.BlockHelpers
+import com.chipprbots.ethereum.blockchain.sync.Blacklist
+import com.chipprbots.ethereum.blockchain.sync.Blacklist.BlacklistId
+import com.chipprbots.ethereum.blockchain.sync.Blacklist.BlacklistReason
+import com.chipprbots.ethereum.blockchain.sync.Blacklist.BlacklistReason.InvalidBodies
+import com.chipprbots.ethereum.blockchain.sync.CacheBasedBlacklist
 import com.chipprbots.ethereum.blockchain.sync.EphemBlockchainTestSetup
 import com.chipprbots.ethereum.blockchain.sync.TestSyncConfig
 import com.chipprbots.ethereum.consensus.validators.std.MptListValidator
@@ -278,6 +283,22 @@ class ChainDownloaderSpec
 
   private def signedTx(payloadSeed: ByteString): SignedTransaction =
     SignedTransaction.sign(BlockHelpers.defaultTx.copy(payload = payloadSeed), BlockHelpers.keyPair, None)
+
+  /** A real CacheBasedBlacklist (so isBlacklisted still works) that also records every `add` call's reason, so a test
+    * can assert not just "the peer ended up blacklisted" but which specific BlacklistReason was given — Forge's review
+    * noted the existing reject test only ever inferred blacklisting indirectly (via a retry after a short
+    * blacklistDuration lapses), never asserting isBlacklisted or the reason directly.
+    */
+  final private class RecordingBlacklist extends Blacklist:
+    private val delegate = CacheBasedBlacklist.empty(1000)
+    private var recorded: Vector[(BlacklistId, BlacklistReason)] = Vector.empty
+    def addedReasons: Vector[(BlacklistId, BlacklistReason)] = recorded
+    override def isBlacklisted(id: BlacklistId): Boolean = delegate.isBlacklisted(id)
+    override def add(id: BlacklistId, duration: FiniteDuration, reason: BlacklistReason): Unit =
+      recorded :+= (id -> reason)
+      delegate.add(id, duration, reason)
+    override def remove(id: BlacklistId): Unit = delegate.remove(id)
+    override def keys: Set[BlacklistId] = delegate.keys
 
   final private case class ReceiptRequest(
       storage: EphemBlockchainTestSetup,
@@ -957,6 +978,7 @@ class ChainDownloaderSpec
     // RequestFailed / rejection both blacklist the peer, and with only one handshaked peer the re-dispatch of the
     // re-queued hash can only happen once that blacklist window expires. Shrink it (matches "Defect 2"'s pattern).
     val fastBlacklistSyncConfig = defaultSyncConfig.copy(blacklistDuration = 50.millis)
+    val recordingBlacklist = new RecordingBlacklist
 
     val downloader: TypedActorRef[ChainDownloader.Command] = testKit
       .spawn(
@@ -968,7 +990,8 @@ class ChainDownloaderSpec
           peerEventBus = peerEventBus.ref,
           syncConfig = fastBlacklistSyncConfig,
           replyTo = replyToProbe.ref,
-          maxConcurrentRequests = 4
+          maxConcurrentRequests = 4,
+          blacklist = recordingBlacklist
         ),
         s"chain-downloader-wrong-body-${System.nanoTime()}"
       )
@@ -997,9 +1020,21 @@ class ChainDownloaderSpec
         reqId
       case other => fail(s"expected GetBlockBodies, got $other")
 
-    // Doesn't hash to header's (empty-body) transactionsRoot.
+    // Doesn't hash to header's (empty-body) transactionsRoot, and there is no OTHER requested hash left to try it
+    // against (a single-hash batch) — matchOrderedSubsequence's "matches no remaining requested block" case.
     val wrongBody = BlockBody(List(signedTx(ByteString("wrong"))), Nil)
     prhAdapter ! PeerEvent.MessageFromPeer(ETHPackets.BlockBodies(reqId, Seq(wrongBody)), peerId)
+
+    // Forge's review: the reject path must be directly asserted (isBlacklisted + the specific reason), not just
+    // inferred from a later retry. addedReasons is a permanent log, unaffected by the 50ms entry later expiring.
+    eventually(timeout(3.seconds), interval(50.millis)) {
+      recordingBlacklist.addedReasons should not be empty
+    }
+    recordingBlacklist.addedReasons.map(_._1) shouldBe Vector(peerId)
+    recordingBlacklist.addedReasons.head._2 match
+      case InvalidBodies(knownHashes, _) =>
+        knownHashes shouldBe Seq(s"0x${header.hash.toArray.map("%02x".format(_)).mkString}")
+      case other => fail(s"expected InvalidBodies, got $other")
 
     // Once the peer's blacklist lapses, the block is requested again rather than marked done.
     val again = networkPeerManager.expectMsgType[NetworkPeerManagerActor.SendMessageCmd](5.seconds)
@@ -1008,6 +1043,113 @@ class ChainDownloaderSpec
       case other                                => fail(s"expected the block's body to be requested again, got $other")
 
     storage.blockchainReader.getBlockBodyByHash(header.hash) shouldBe None
+
+    testKit.stop(downloader)
+  }
+
+  it should "store the rest and re-queue (without blacklisting) a peer that skips a middle block it lacks" taggedAs UnitTest in {
+    val storage = new EphemBlockchainTestSetup {}
+    val appStateStorage = storage.storagesInstance.storages.appStateStorage
+    val networkPeerManager = TestProbe()
+    val peerEventBus = TestProbe()
+    val replyToProbe = TestProbe()
+    val recordingBlacklist = new RecordingBlacklist
+
+    val chain = BlockHelpers.generateChain(3, BlockHelpers.genesis)
+    val body1 = BlockBody(Nil, Nil)
+    val body2 = BlockBody(List(signedTx(ByteString("h2"))), Nil)
+    val body3 = BlockBody(List(signedTx(ByteString("h3"))), Nil)
+    val header1: BlockHeader = headerMatching(chain(0).header, body1)
+    val header2: BlockHeader = headerMatching(chain(1).header, body2)
+    val header3: BlockHeader = headerMatching(chain(2).header, body3)
+
+    storage.blockchainWriter
+      .storeBlockHeader(header1)
+      .and(storage.blockchainWriter.storeBlockHeader(header2))
+      .and(storage.blockchainWriter.storeBlockHeader(header3))
+      .and(storage.blockchainWriter.storeReceipts(header1.hash, Seq.empty))
+      .and(storage.blockchainWriter.storeReceipts(header2.hash, Seq.empty))
+      .and(storage.blockchainWriter.storeReceipts(header3.hash, Seq.empty))
+      .commit()
+    appStateStorage.putBackfillBestHeader(BigInt(3)).commit()
+
+    val peerId = PeerId("skip-middle-peer")
+    val peer =
+      Peer(peerId, new InetSocketAddress("127.0.0.1", 0), TestProbe(peerId.value).ref, incomingConnection = false)
+    val peerStatus = RemoteStatus(
+      Capability.ETH68,
+      1,
+      ChainWeight.totalDifficultyOnly(1),
+      ByteString("best-hash"),
+      ByteString("genesis-hash")
+    )
+    val peerInfo = PeerInfo(
+      peerStatus,
+      forkAccepted = true,
+      chainWeight = peerStatus.chainWeight,
+      maxBlockNumber = BigInt(3),
+      bestBlockHash = peerStatus.bestHash
+    )
+
+    val downloader: TypedActorRef[ChainDownloader.Command] = testKit
+      .spawn(
+        ChainDownloader(
+          blockchainReader = storage.blockchainReader,
+          blockchainWriter = storage.blockchainWriter,
+          appStateStorage = appStateStorage,
+          networkPeerManager = networkPeerManager.ref,
+          peerEventBus = peerEventBus.ref,
+          syncConfig = defaultSyncConfig,
+          replyTo = replyToProbe.ref,
+          maxConcurrentRequests = 4,
+          blacklist = recordingBlacklist
+        ),
+        s"chain-downloader-skip-middle-${System.nanoTime()}"
+      )
+
+    val handshakeReq = networkPeerManager.expectMsgType[NetworkPeerManagerActor.GetHandshakedPeersCmd](5.seconds)
+    handshakeReq.replyTo ! NetworkPeerManagerActor.HandshakedPeers(Map(peer -> peerInfo))
+    val peerAddSub = peerEventBus.expectMsgType[SubscribeCmd](5.seconds)
+    peerAddSub.to shouldBe PeerDisconnectedClassifier(PeerSelector.WithId(peerId))
+
+    downloader ! ChainDownloader.Start(BigInt(3))
+    downloader ! ChainDownloader.BoostConcurrency(4)
+
+    val prhSubs = (1 to 2).map(_ => peerEventBus.expectMsgType[SubscribeCmd](5.seconds))
+    val prhAdapter: TypedActorRef[PeerEvent] = prhSubs
+      .collectFirst {
+        case SubscribeCmd(MessageClassifier(codes, PeerSelector.WithId(pid)), ref)
+            if codes.contains(Codes.BlockBodiesCode) && pid == peerId =>
+          ref
+      }
+      .getOrElse(fail(s"no MessageClassifier(BlockBodiesCode) SubscribeCmd among: $prhSubs"))
+
+    val firstSend = networkPeerManager.expectMsgType[NetworkPeerManagerActor.SendMessageCmd](5.seconds)
+    val (reqId, hashes) = firstSend.message.underlyingMsg match
+      case ETHPackets.GetBlockBodies(reqId, hashes) =>
+        hashes shouldBe Seq(header1.hash.value, header2.hash.value, header3.hash.value)
+        (reqId, hashes)
+      case other => fail(s"expected GetBlockBodies, got $other")
+    hashes.size shouldBe 3 // sanity: this test is only meaningful with header2 genuinely in the middle
+
+    // The peer honestly lacks header2's body — go-ethereum's ServiceGetBlockBodiesQuery `continue`s past a
+    // missing entry rather than padding the response, so this reply has 2 bodies for 3 requested hashes.
+    prhAdapter ! PeerEvent.MessageFromPeer(ETHPackets.BlockBodies(reqId, Seq(body1, body3)), peerId)
+
+    eventually(timeout(3.seconds), interval(50.millis)) {
+      storage.blockchainReader.getBlockBodyByHash(header1.hash) shouldBe Some(body1)
+      storage.blockchainReader.getBlockBodyByHash(header3.hash) shouldBe Some(body3)
+    }
+
+    // Only header2 — the one genuinely skipped — is re-requested.
+    val retrySend = networkPeerManager.expectMsgType[NetworkPeerManagerActor.SendMessageCmd](5.seconds)
+    retrySend.message.underlyingMsg match
+      case ETHPackets.GetBlockBodies(_, retryHashes) => retryHashes shouldBe Seq(header2.hash.value)
+      case other => fail(s"expected a re-issued GetBlockBodies for header2 only, got $other")
+
+    // The peer answered honestly (it just didn't have header2) — it must never be blacklisted for that.
+    recordingBlacklist.addedReasons shouldBe empty
+    recordingBlacklist.isBlacklisted(peerId) shouldBe false
 
     testKit.stop(downloader)
   }
@@ -1242,6 +1384,110 @@ class ChainDownloaderSpec
       .getOrElse(fail(s"no MessageClassifier(BlockBodiesCode) SubscribeCmd among: $lastSubs"))
     lastAdapter ! PeerEvent.MessageFromPeer(ETHPackets.BlockBodies(lastReqId, Seq(emptyBody)), peerId)
     replyToProbe.expectMsg(3.seconds, ChainDownloader.Done)
+
+    testKit.stop(downloader)
+  }
+
+  // ── Defect 7 (#33 follow-up, performance bug found by Forge's ETC review): a completed backfill's cursors were
+  // deleted, so a later UpdateTarget (SNAPSyncController keeps the downloader alive after Done and can route a
+  // pivot refresh to it) re-walked the ENTIRE already-backfilled range from findBestStoredHeader's rebuild scan —
+  // on ETC mainnet, potentially the whole ~25M-block chain, every single pivot refresh.
+  it should "not re-walk blocks at or below a completed target when UpdateTarget arrives after Done" taggedAs UnitTest in {
+    val storage = new EphemBlockchainTestSetup {}
+    val appStateStorage = storage.storagesInstance.storages.appStateStorage
+    val networkPeerManager = TestProbe()
+    val peerEventBus = TestProbe()
+    val replyToProbe = TestProbe()
+
+    val emptyBody = BlockBody(Nil, Nil)
+    val chain = BlockHelpers.generateChain(5, BlockHelpers.genesis)
+    val headers = chain.map(b => headerMatching(b.header, emptyBody))
+
+    // All 5 headers exist from the start (so UpdateTarget's binary search can find 3-5 without a fetch — this
+    // test is about the REBUILD's floor, not header fetching), but only blocks 1-2 have bodies/receipts: this is
+    // "backfill completed to block 2, then the target grew".
+    headers
+      .map(h => storage.blockchainWriter.storeBlockHeader(h))
+      .reduce(_.and(_))
+      .and(storage.blockchainWriter.storeBlockBody(headers(0).hash, emptyBody))
+      .and(storage.blockchainWriter.storeBlockBody(headers(1).hash, emptyBody))
+      .and(storage.blockchainWriter.storeReceipts(headers(0).hash, Seq.empty))
+      .and(storage.blockchainWriter.storeReceipts(headers(1).hash, Seq.empty))
+      .commit()
+    appStateStorage.putBackfillBestHeader(BigInt(2)).commit()
+
+    val peerId = PeerId("update-after-done-peer")
+    val peer =
+      Peer(peerId, new InetSocketAddress("127.0.0.1", 0), TestProbe(peerId.value).ref, incomingConnection = false)
+    val peerStatus = RemoteStatus(
+      Capability.ETH68,
+      1,
+      ChainWeight.totalDifficultyOnly(1),
+      ByteString("best-hash"),
+      ByteString("genesis-hash")
+    )
+    val peerInfo = PeerInfo(
+      peerStatus,
+      forkAccepted = true,
+      chainWeight = peerStatus.chainWeight,
+      maxBlockNumber = BigInt(5),
+      bestBlockHash = peerStatus.bestHash
+    )
+
+    val downloader: TypedActorRef[ChainDownloader.Command] = testKit
+      .spawn(
+        ChainDownloader(
+          blockchainReader = storage.blockchainReader,
+          blockchainWriter = storage.blockchainWriter,
+          appStateStorage = appStateStorage,
+          networkPeerManager = networkPeerManager.ref,
+          peerEventBus = peerEventBus.ref,
+          syncConfig = defaultSyncConfig,
+          replyTo = replyToProbe.ref,
+          maxConcurrentRequests = 4
+        ),
+        s"chain-downloader-update-after-done-${System.nanoTime()}"
+      )
+
+    val handshakeReq = networkPeerManager.expectMsgType[NetworkPeerManagerActor.GetHandshakedPeersCmd](5.seconds)
+    handshakeReq.replyTo ! NetworkPeerManagerActor.HandshakedPeers(Map(peer -> peerInfo))
+    peerEventBus.expectMsgType[SubscribeCmd](5.seconds)
+
+    // Target (2) matches the highest header with a body/receipts already stored, so this completes with no wire
+    // round-trip needed. BoostConcurrency's handler calls dispatchRequests() synchronously (matches every other
+    // test in this file) rather than waiting on the real 2-second Dispatch timer.
+    downloader ! ChainDownloader.Start(BigInt(2))
+    downloader ! ChainDownloader.BoostConcurrency(4)
+    replyToProbe.expectMsg(3.seconds, ChainDownloader.Done)
+
+    // Forge's fix: Done seeds (doesn't delete) the header/body/receipt cursors at the completed point; only the
+    // target itself is removed.
+    appStateStorage.getBackfillBestHeader() shouldBe BigInt(2)
+    appStateStorage.getBackfillBestBody() shouldBe BigInt(2)
+    appStateStorage.getBackfillBestReceipt() shouldBe BigInt(2)
+    appStateStorage.getBackfillTarget() shouldBe BigInt(0)
+
+    // Purely to OBSERVE whether the next rebuild re-walks below the cursor: remove block 1's body directly
+    // (bypassing the downloader), leaving its header untouched. A rebuild that (incorrectly) re-walked 1..best
+    // would notice this and queue block 1's hash for re-fetch; a rebuild that trusts the cursor for anything at
+    // or below it never looks and never queues it.
+    storage.storagesInstance.storages.blockBodiesStorage.remove(headers(0).hash.value).commit()
+
+    // SNAPSyncController keeps the downloader alive after Done and can route a later pivot refresh's UpdateTarget
+    // to it (ChainDownloader ~167-172, idle()'s handler) — this is that path. Headers 3-5 already exist, so
+    // findBestStoredHeader's binary search finds bestHeaderNumber=5 immediately (matching the new target) without
+    // any GetBlockHeaders round-trip — isolating this test to the body/receipt cursor floor specifically.
+    downloader ! ChainDownloader.UpdateTarget(BigInt(5))
+    downloader ! ChainDownloader.BoostConcurrency(4) // forces a synchronous dispatch instead of the 2s timer
+
+    // Only blocks 3-5 — genuinely new, above the completed target — are requested. Block 1 is never mentioned,
+    // even though its body was just removed from storage: the rebuild trusted the seeded cursor and never
+    // re-checked anything at or below it.
+    val bodySend = networkPeerManager.expectMsgType[NetworkPeerManagerActor.SendMessageCmd](5.seconds)
+    bodySend.message.underlyingMsg match
+      case ETHPackets.GetBlockBodies(_, hashes) =>
+        hashes shouldBe Seq(headers(2).hash.value, headers(3).hash.value, headers(4).hash.value)
+      case other => fail(s"expected GetBlockBodies for blocks 3-5 only, got $other")
 
     testKit.stop(downloader)
   }
