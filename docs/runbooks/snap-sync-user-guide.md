@@ -541,10 +541,16 @@ Fast sync was removed. Nothing needs to be done before upgrading:
   warning for each one it finds and starts normally. Remove them when convenient. If you set
   `do-fast-sync = false` to sync from genesis, set `do-snap-sync = false` instead.
 - **Node stopped part-way through fast sync:** it starts SNAP sync, with a pivot above the block
-  fast sync had reached. The old fast-sync progress record is ignored and left on disk. With
-  `do-snap-sync = false` it stays on regular sync and logs an error, because the state at its best
-  block is incomplete.
-- **Node that finished fast sync earlier:** it carries on with regular sync.
+  fast sync had reached (that block has no state behind it). The floor survives restarts and is
+  cleared when SNAP completes; fast sync's progress record is deleted. With `do-snap-sync = false`
+  it starts regular sync and logs an error: regular sync fetches the missing state node by node and,
+  if peers cannot serve it, re-syncs with SNAP anyway.
+- **Node where fast sync finished earlier:** with `do-snap-sync = true` it still starts SNAP sync,
+  as earlier releases did, because SNAP has never completed on it. Near the chain head SNAP finds
+  nothing to download and hands over to regular sync (it needs a snap-capable peer to see the head,
+  and until one connects the node waits without importing blocks). More than 64 blocks behind, SNAP
+  downloads and heals the state at a fresh pivot instead of executing the missed blocks. With
+  `do-snap-sync = false` it carries on with regular sync.
 
 **Note:** If your node is already synced, enabling SNAP sync won't re-sync. SNAP sync only activates on fresh nodes or when sync state is cleared.
 

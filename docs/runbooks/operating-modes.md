@@ -755,10 +755,16 @@ Fast sync is gone: it could not finish on today's networks (eth/67 and later pee
 - **If you set `do-fast-sync = false` to sync from genesis** (an archive node, for example), set
   `fukuii.sync.do-snap-sync = false` instead. Otherwise the node uses SNAP sync.
 - **A node that was part-way through fast sync** starts SNAP sync on its next start, with the pivot
-  kept above the block fast sync had reached. The leftover fast-sync progress record is ignored and
-  left on disk. With `do-snap-sync = false` it stays on regular sync and logs an error, because the
-  state at its best block is incomplete.
-- **A node that finished fast sync earlier** carries on with regular sync.
+  kept above the block fast sync had reached (that block has no state behind it). The floor
+  survives restarts and is cleared when SNAP completes; fast sync's progress record is deleted. With
+  `do-snap-sync = false` the node starts regular sync and logs an error: regular sync fetches the
+  missing state node by node and, if peers cannot serve it, re-syncs with SNAP anyway.
+- **A node where fast sync finished earlier** still starts SNAP sync if `do-snap-sync` is on and
+  SNAP has never completed on it, as earlier releases did. Near the chain head SNAP finds nothing to
+  download and hands over to regular sync; it needs a snap-capable peer to see the head, and until
+  one connects the node waits (retries, then dormant mode) without importing blocks. More than 64
+  blocks behind, SNAP downloads and heals the state at a fresh pivot instead of executing the
+  missed blocks.
 - **`fukuii_resetFastSync` and `fukuii_restartFastSync` were removed**, along with the
   `app_fastsync_*` metrics.
 
