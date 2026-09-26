@@ -30,6 +30,7 @@ import org.scalatest.matchers.should.Matchers
 import com.chipprbots.ethereum.Fixtures
 import com.chipprbots.ethereum.LongPatience
 import com.chipprbots.ethereum.Mocks
+import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncConfig
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController
 import com.chipprbots.ethereum.consensus.mining.TestMining
 import com.chipprbots.ethereum.consensus.validators.Validators
@@ -551,6 +552,28 @@ class SyncControllerSpec
     appState.isSnapSyncStorageComplete() shouldBe true
     appState.isSnapSyncBytecodeComplete() shouldBe true
     // SNAP's saved pivot reached the floor, so the floor was spent: cleared, not applied again.
+    appState.getSnapSyncMinPivotBlock() shouldBe None
+  }
+
+  it should "treat the pivot floor as spent once SNAP's accounts are complete, even below it" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in withRecoveryTestSetup() { testSetup =>
+    import testSetup.*
+    val appState = storagesInstance.storages.appStateStorage
+    // The floor was SNAP's first pivot. A failed pivot refresh backtracked by the pivot offset and SNAP committed, and
+    // finished its accounts at, a pivot below the floor. Applying the floor again would trip belowEscalationHint.
+    val floor = StrandedBest + 1
+    val backtracked = floor - SNAPSyncConfig().pivotBlockOffset
+    appState.putSnapSyncMinPivotBlock(floor).commit()
+    seedMidHeal(testSetup, pivot = backtracked, best = backtracked)
+
+    syncController ! SyncController.WrappedSyncProtocol(SyncProtocol.Start)
+    awaitSnapStarted(syncController)
+
+    appState.isSnapSyncAccountsComplete() shouldBe true
+    appState.isSnapSyncStorageComplete() shouldBe true
+    appState.isSnapSyncBytecodeComplete() shouldBe true
     appState.getSnapSyncMinPivotBlock() shouldBe None
   }
 
