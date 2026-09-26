@@ -255,6 +255,17 @@ object OpCode:
       else postColdGasFn(state.config.feeSchedule)
     else preGasFn(state.config.feeSchedule)
 
+  /** EIP-8038 (Amsterdam): EXTCODESIZE and EXTCODECOPY make a second database read, for the code itself, after the
+    * account read their access cost already prices. That read costs one WARM_ACCESS on top of the cold or warm account
+    * access. Zero before Amsterdam, and so on every ETC path.
+    *
+    * Only those two opcodes pay it. execution-specs `forks/amsterdam` adds `GasCosts.WARM_ACCESS` in `extcodesize` and
+    * `extcodecopy` alone: EXTCODEHASH and BALANCE read only the account, and the CALL family's code load is covered by
+    * its access charge (plus the delegation target's, under EIP-7702). The EIP-8038 text says the same.
+    */
+  private[vm] def codeReadSurcharge[S <: Storage[S], W <: WorldStateProxy[W, S]](state: ProgramState[W, S]): BigInt =
+    if state.config.amsterdamEnabled then state.config.feeSchedule.G_warm_storage_read else NoGas
+
 /** Base class for all the opcodes of the EVM
   *
   * @param code
@@ -636,6 +647,10 @@ case object CODECOPY extends OpCode(0x39, 3, 0, _.G_verylow):
 case object GASPRICE extends ConstOp(0x3a)(_.env.gasPrice)
 
 case object EXTCODESIZE extends OpCode(0x3b, 1, 1, _.G_extcode) with AddrAccessGas with ConstGas:
+  // The account access (AddrAccessGas), plus EIP-8038's code-read surcharge from Amsterdam on.
+  override protected def baseGas[S <: Storage[S], W <: WorldStateProxy[W, S]](state: ProgramState[W, S]): BigInt =
+    super.baseGas(state) + OpCode.codeReadSurcharge(state)
+
   protected def exec[S <: Storage[S], W <: WorldStateProxy[W, S]](state: ProgramState[W, S]): ProgramState[W, S] =
     val (addrUint, stack1) = state.stack.pop()
     val addr = Address(addrUint)
@@ -648,6 +663,9 @@ case object EXTCODESIZE extends OpCode(0x3b, 1, 1, _.G_extcode) with AddrAccessG
     Address(accountAddress)
 
 case object EXTCODECOPY extends OpCode(0x3c, 4, 0, _.G_extcode) with AddrAccessGas:
+  // The account access (AddrAccessGas), plus EIP-8038's code-read surcharge from Amsterdam on.
+  override protected def baseGas[S <: Storage[S], W <: WorldStateProxy[W, S]](state: ProgramState[W, S]): BigInt =
+    super.baseGas(state) + OpCode.codeReadSurcharge(state)
 
   protected def exec[S <: Storage[S], W <: WorldStateProxy[W, S]](state: ProgramState[W, S]): ProgramState[W, S] =
     val (Seq(address, memOffset, codeOffset, size), stack1) = state.stack.pop(4)
