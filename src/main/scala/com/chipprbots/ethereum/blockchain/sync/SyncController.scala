@@ -53,9 +53,9 @@ import com.chipprbots.ethereum.utils.NetworkType
   * `WrappedExternal` (child fire-and-forget replies via a `messageAdapter`) and `WrappedSyncProtocol` (JSON-RPC asks
   * now using Typed ask with embedded `replyTo` in each `SyncProtocol.*` message). Callers include
   * `NetworkPeerManagerActor` (`HandshakedPeers`, `CalibrateChainWeightFromPeer`), `ForkChoiceManager` (`BeaconHead` via
-  * `fcmAdapter` — a typed `TypedActorRef[ForkChoiceManager.BeaconHead]`), the JSON-RPC layer (`SyncProtocol.GetStatus`,
-  * `ResetFastSync`, `RestartFastSync`), and its children (`SNAPSyncController`, the recovery actors, `ChainDownloader`,
-  * the Classic `FastSync` / `RegularSync` / `PeersClient` / `PivotHeaderBootstrap`).
+  * `fcmAdapter` — a typed `TypedActorRef[ForkChoiceManager.BeaconHead]`), the JSON-RPC layer
+  * (`SyncProtocol.GetStatus`), and its children (`SNAPSyncController`, the recovery actors, `ChainDownloader`, the
+  * Classic `FastSync` / `RegularSync` / `PeersClient` / `PivotHeaderBootstrap`).
   *
   * Each former `context.become(stateX)` becomes a named `Behavior[Command]` factory method on `Impl`. Stored-sender
   * slots (`healingServeRootRequester`, `recentRootRequester`) carry explicit `ActorRef[ReplyType]` fields. Timers
@@ -394,32 +394,6 @@ object SyncController:
         ctx.system.deadLetters[SNAPSyncController.Command]
       )
 
-    private def handleResetFastSync(
-        replyTo: TypedActorRef[SyncProtocol.ResetFastSyncResponse]
-    ): Unit =
-      log.warn("ResetFastSync requested: clearing persisted fast-sync markers")
-      appStateStorage.clearFastSyncDone().commit()
-      fastSyncStateStorage.purge()
-      replyTo ! SyncProtocol.ResetFastSyncResponse(reset = true)
-
-    private def handleRestartFastSync(
-        replyTo: TypedActorRef[SyncProtocol.RestartFastSyncResponse]
-    ): Unit =
-      val nowMillis = System.currentTimeMillis()
-      val cooldownUntil = appStateStorage.getFastSyncCooldownUntilMillis()
-
-      if cooldownUntil > nowMillis then
-        val delay = (cooldownUntil - nowMillis).millis
-        log.warn(
-          "RestartFastSync requested but circuit-breaker is open (cool-off {} remaining); scheduling restart",
-          delay
-        )
-        timers.startSingleTimer(RestartFastSyncNow, delay)
-        replyTo ! SyncProtocol.RestartFastSyncResponse(started = false, cooldownUntilMillis = cooldownUntil)
-      else
-        ctx.self ! RestartFastSyncNow
-        replyTo ! SyncProtocol.RestartFastSyncResponse(started = true, cooldownUntilMillis = nowMillis)
-
     private def doRestartFastSyncNow(): Behavior[Command] =
       val nowMillis = System.currentTimeMillis()
       val cooldownUntil = nowMillis + syncConfig.fastSyncRestartCooloff.toMillis
@@ -521,12 +495,6 @@ object SyncController:
       msg match
         case SyncProtocol.Start =>
           start()
-        case msg: SyncProtocol.ResetFastSync =>
-          handleResetFastSync(msg.replyTo)
-          Behaviors.same
-        case msg: SyncProtocol.RestartFastSync =>
-          handleRestartFastSync(msg.replyTo)
-          Behaviors.same
         case RestartFastSyncNow =>
           doRestartFastSyncNow()
         case bh: ForkChoiceManager.BeaconHead =>
@@ -539,12 +507,6 @@ object SyncController:
     def runningFastSync(fastSync: TypedActorRef[FastSync.Command]): Behavior[Command] = Behaviors.receive { (_, cmd) =>
       val msg = unwrap(cmd)
       msg match
-        case msg: SyncProtocol.ResetFastSync =>
-          handleResetFastSync(msg.replyTo)
-          Behaviors.same
-        case msg: SyncProtocol.RestartFastSync =>
-          handleRestartFastSync(msg.replyTo)
-          Behaviors.same
         case RestartFastSyncNow =>
           doRestartFastSyncNow()
         case FastSync.Done =>
@@ -570,7 +532,7 @@ object SyncController:
           Behaviors.same
         case spMsg: SyncProtocol.SyncProtocolMsg =>
           // FastSync is Typed (Behavior[Command]); wrap external SyncProtocol messages so they arrive as Commands.
-          // GetStatus/ResetFastSync/RestartFastSync carry replyTo — forward the message as-is.
+          // GetStatus carries replyTo — forward the message as-is.
           fastSync ! FastSync.WrappedSyncProtocol(spMsg)
           Behaviors.same
         case bh: ForkChoiceManager.BeaconHead =>
@@ -586,12 +548,6 @@ object SyncController:
       (_, cmd) =>
         val msg = unwrap(cmd)
         msg match
-          case msg: SyncProtocol.ResetFastSync =>
-            handleResetFastSync(msg.replyTo)
-            Behaviors.same
-          case msg: SyncProtocol.RestartFastSync =>
-            handleRestartFastSync(msg.replyTo)
-            Behaviors.same
           case RestartFastSyncNow =>
             doRestartFastSyncNow()
           case SnapSyncCriticalFailure =>
@@ -925,12 +881,6 @@ object SyncController:
         case RegularSyncTerminated(actor) if actor == regularSync =>
           log.error("RegularSync actor terminated unexpectedly — restarting regular sync.")
           startRegularSync(resumeBackfill = false)._2
-        case msg: SyncProtocol.ResetFastSync =>
-          handleResetFastSync(msg.replyTo)
-          Behaviors.same
-        case msg: SyncProtocol.RestartFastSync =>
-          handleRestartFastSync(msg.replyTo)
-          Behaviors.same
         case RestartFastSyncNow =>
           doRestartFastSyncNow()
         case SyncProtocol.RegularSyncStuck(blockNumber, missingHash) =>
@@ -1091,8 +1041,6 @@ object SyncController:
       * delegating.
       */
     private def isRestartTrigger(msg: Any): Boolean = msg match // Any: Classic msg from adapter
-      case _: SyncProtocol.ResetFastSync    => true
-      case _: SyncProtocol.RestartFastSync  => true
       case RestartFastSyncNow               => true
       case _: SyncProtocol.RegularSyncStuck => true
       case _                                => false
@@ -1124,12 +1072,6 @@ object SyncController:
     ): Behavior[Command] = Behaviors.receive { (_, cmd) =>
       val msg = unwrap(cmd)
       msg match
-        case msg: SyncProtocol.ResetFastSync =>
-          handleResetFastSync(msg.replyTo)
-          Behaviors.same
-        case msg: SyncProtocol.RestartFastSync =>
-          handleRestartFastSync(msg.replyTo)
-          Behaviors.same
         case RestartFastSyncNow =>
           doRestartFastSyncNow()
 
