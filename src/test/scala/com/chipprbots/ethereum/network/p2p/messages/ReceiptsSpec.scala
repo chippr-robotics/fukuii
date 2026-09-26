@@ -24,8 +24,8 @@ import com.chipprbots.ethereum.testing.Tags.*
 
 /** Receipt encoding/decoding tests.
   *
-  * ETH68 uses Receipts68 (requestId + raw RLP) — decoded lazily by FastSync. ETH63.Receipts (domain-decoded) was
-  * removed with ETH63 deletion.
+  * ETH68 uses Receipts68 (requestId + raw RLP) — decoded lazily by the receipt downloader (ChainDownloader).
+  * ETH63.Receipts (domain-decoded) was removed with ETH63 deletion.
   */
 class ReceiptsSpec extends AnyFlatSpec with Matchers:
 
@@ -102,7 +102,7 @@ class ReceiptsSpec extends AnyFlatSpec with Matchers:
 
   it should "decode type 01 receipts in wire format (RLPValue with type prefix)" taggedAs (UnitTest, NetworkTest) in {
     // EIP-2718 typed receipts arrive as RLPValue(typeByte || rlp(payload)).
-    // Receipts68 stores raw RLP for lazy decoding in FastSync.
+    // Receipts68 stores raw RLP for lazy decoding by the receipt downloader.
     val legacyReceiptRLP = RLPList(
       RLPValue(exampleHash.toArray[Byte]),
       cumulativeGas,

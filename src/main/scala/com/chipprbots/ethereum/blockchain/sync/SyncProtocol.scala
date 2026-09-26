@@ -102,7 +102,7 @@ object SyncProtocol:
     case class Syncing(
         startingBlockNumber: BigInt,
         blocksProgress: Progress,
-        stateNodesProgress: Option[Progress] // relevant only in fast sync, but is required by RPC spec
+        stateNodesProgress: Option[Progress] // state download progress (SNAP sync); eth_syncing reports it
     ) extends Status
 
     case object NotSyncing extends Status
