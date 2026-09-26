@@ -283,9 +283,9 @@ class EthInfoService(
       beaconRoots ++ Map(
         "CONSOLIDATION_REQUEST_PREDEPLOY_ADDRESS" -> BlockExecution.ConsolidationQueueAddress,
         // Genesis-declared per chain (geth `config.depositContractAddress`); the mainnet
-        // contract is only the fallback when a chain does not declare one.
-        "DEPOSIT_CONTRACT_ADDRESS" -> blockchainConfig.depositContractAddress
-          .getOrElse(BlockExecution.DepositContractAddress),
+        // contract is only the fallback when a chain does not declare one. Same resolver as
+        // execution, so the advertised contract is the one whose logs become deposit requests.
+        "DEPOSIT_CONTRACT_ADDRESS" -> BlockExecution.depositContractFor(blockchainConfig),
         "HISTORY_STORAGE_ADDRESS" -> HistoryStorageAddress,
         "WITHDRAWAL_REQUEST_PREDEPLOY_ADDRESS" -> BlockExecution.WithdrawalQueueAddress
       )

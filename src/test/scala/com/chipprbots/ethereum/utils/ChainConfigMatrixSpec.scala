@@ -8,7 +8,9 @@ import com.typesafe.config.ConfigValueType
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
 
+import com.chipprbots.ethereum.domain.Address
 import com.chipprbots.ethereum.domain.Timestamp
+import com.chipprbots.ethereum.ledger.BlockExecution
 import com.chipprbots.ethereum.testing.Tags.*
 
 /** FR-004 as a test rather than a convention.
@@ -137,6 +139,53 @@ class ChainConfigMatrixSpec extends AnyFlatSpec with Matchers:
           ft.bpo2Timestamp
         )
         if timestampForks.exists(_.isDefined) then config.networkType shouldBe NetworkType.ETH
+      }
+    }
+  }
+
+  // EIP-6110 (#1416): execution reads deposits from the chain's own contract, so the effective address is pinned per
+  // shipped ETH-type chain. Sepolia's is its own (eth-clients/sepolia genesis `depositContractAddress`, go-ethereum
+  // params.SepoliaChainConfig); mainnet and Platåberget use the mainnet contract; `hive` declares none and falls back
+  // to mainnet (fukuii.sh overrides it from the simulator's genesis at runtime).
+  private val MainnetDepositContract = Address("0x00000000219ab540356cBB839Cbe05303d7705Fa")
+  private val ExpectedDepositContract: Map[String, Address] = Map(
+    "eth" -> MainnetDepositContract,
+    "sepolia" -> Address("0x7f02c3e3c98b133055b8b348b2ac625669ed295d"),
+    "plataberget" -> MainnetDepositContract,
+    "hive" -> MainnetDepositContract
+  )
+
+  private def shippedChainNames: Seq[String] =
+    shippedRoot
+      .getConfig("fukuii.blockchains")
+      .root()
+      .entrySet()
+      .asScala
+      .collect { case e if e.getValue.valueType == ConfigValueType.OBJECT => e.getKey }
+      .toSeq
+      .sorted
+
+  "every ETH-type shipped chain config" should "resolve exactly its pinned EIP-6110 deposit contract" taggedAs (
+    UnitTest
+  ) in {
+    val ethChains = shippedChainNames.filter(name => shippedChain(name).networkType == NetworkType.ETH)
+    // A new ETH-type chain must be added to the table: an unpinned one would silently scan the mainnet contract.
+    ethChains should contain theSameElementsAs ExpectedDepositContract.keys
+    ethChains.foreach { name =>
+      withClue(s"$name-chain.conf: ") {
+        BlockExecution.depositContractFor(shippedChain(name)) shouldBe ExpectedDepositContract(name)
+      }
+    }
+  }
+
+  "every ETC-type shipped chain config" should "declare no EIP-6110 deposit contract" taggedAs (UnitTest) in {
+    // Deposits are only collected on a Prague-active timestamp, which no ETC config declares (asserted above); this
+    // pins the second, independent guard: nothing on the ETC side names a deposit contract at all.
+    val etcChains = shippedChainNames.filter(name => shippedChain(name).networkType == NetworkType.ETC)
+    (etcChains should contain).allOf("etc", "mordor", "gorgoroth")
+    etcChains.foreach { name =>
+      withClue(s"$name-chain.conf: ") {
+        shippedChain(name).depositContractAddress shouldBe None
       }
     }
   }
