@@ -117,6 +117,47 @@ object PrecompiledContracts:
           case None               => baseContracts.get(addr) // Normal precompile check
     }
 
+  /** The result a precompile frame hands back to its caller.
+    *
+    * EIP-8037: a precompile charges execution gas only and never touches state gas. Like any other frame it is handed
+    * the caller's reservoir in full, and the caller then ADOPTS the child's counters (`mergeSuccessfulChildStateGas` /
+    * `absorbFailedChildStateGas`), so the frame must hand them back. A result left at the defaults (0) wipes the
+    * caller's unspent reservoir and the transaction's state gas already charged — which moves the header's `gasUsed` by
+    * more than 2^24 on any Amsterdam transaction above TX_MAX_GAS_LIMIT that calls a precompile (#1437).
+    *
+    * The shape is what `ProgramState(vm, context, env).toResult` gives a frame that ran no opcode: the context's
+    * counters on success and, on failure, the restore-to-baseline every failed frame applies (execution-specs
+    * `process_call`: `restore_state_gas` then `forfeit_remaining_gas`). The restore only matters when a transaction
+    * targets a precompile directly and its EIP-2780 pre-execution account-creation charge must be refilled; for a
+    * sub-call nothing between frame entry and exit moved the counters.
+    *
+    * Before Amsterdam every counter in the context is 0, so the result is identical to the previous one on every ETH
+    * fork before Amsterdam and on every ETC fork.
+    */
+  private def frameResult[W <: WorldStateProxy[W, S], S <: Storage[S]](
+      context: ProgramContext[W, S],
+      returnData: ByteString,
+      gasRemaining: BigInt,
+      error: Option[ProgramError]
+  ): ProgramResult[W, S] =
+    val completed = ProgramResult[W, S](
+      returnData = returnData,
+      gasRemaining = gasRemaining,
+      world = context.world,
+      addressesToDelete = Set.empty,
+      logs = Nil,
+      internalTxs = Nil,
+      gasRefund = 0,
+      error = error,
+      accessedAddresses = Set.empty,
+      accessedStorageKeys = Set.empty,
+      stateGasReservoir = context.stateGasReservoir,
+      evmStateGasUsed = context.evmStateGasUsed,
+      stateGasFromGasLeft = context.stateGasFromGasLeft,
+      stateGasBaseline = context.stateGasBaselineOverride.getOrElse(context.stateGasReservoir)
+    )
+    if error.isDefined then completed.withStateGasRestoredToBaseline else completed
+
   /** Check if an address is a known precompile address (without relocation) */
   def isPrecompileAddress(addr: Address, context: ProgramContext[?, ?]): Boolean =
     getContracts(context).contains(addr)
@@ -164,18 +205,7 @@ object PrecompiledContracts:
         else (ByteString.empty, Some(OutOfGas), BigInt(0))
       ): @unchecked
 
-      ProgramResult(
-        result,
-        gasRemaining,
-        context.world,
-        Set.empty,
-        Nil,
-        Nil,
-        0,
-        error,
-        Set.empty,
-        Set.empty
-      )
+      frameResult(context, result, gasRemaining, error)
 
   object EllipticCurveRecovery extends PrecompiledContract:
     private val secp256k1n: BigInt = BigInt(curve.getN)
@@ -272,17 +302,11 @@ object PrecompiledContracts:
           // value (ProgramResult / MODEXP output) is produced below. An expression rewrite would
           // require restructuring the validation into a separate boolean and is byte-level risky
           // for a precompile result that feeds state. Keep the short-circuit.
-          return ProgramResult( // scalafix:ok DisableSyntax.return
+          return frameResult( // scalafix:ok DisableSyntax.return
+            context,
             ByteString.empty,
             BigInt(0),
-            context.world,
-            Set.empty,
-            Nil,
-            Nil,
-            0,
-            Some(PreCompiledContractFail),
-            Set.empty,
-            Set.empty
+            Some(PreCompiledContractFail)
           )
 
       // EIP-7883: gas cost routing. On ETH chains, EIP-7883 activates at Osaka timestamp
@@ -298,18 +322,7 @@ object PrecompiledContracts:
         else (ByteString.empty, Some(OutOfGas), BigInt(0))
       ): @unchecked
 
-      ProgramResult(
-        result,
-        gasRemaining,
-        context.world,
-        Set.empty,
-        Nil,
-        Nil,
-        0,
-        error,
-        Set.empty,
-        Set.empty
-      )
+      frameResult(context, result, gasRemaining, error)
 
     def exec(inputData: ByteString): Option[ByteString] =
       val baseLength = getLength(inputData, 0)
