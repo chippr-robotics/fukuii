@@ -85,4 +85,7 @@ class FastSyncStateStorage(val dataSource: DataSource) extends KeyValueStorage[S
 
   def getSyncState(): Option[SyncState] = get(syncStateKey)
 
+  /** Whether a fast-sync progress record exists, without decoding it. */
+  def hasSyncState: Boolean = dataSource.get(namespace, keySerializer(syncStateKey)).isDefined
+
   def purge(): FastSyncStateStorage = remove(syncStateKey)
