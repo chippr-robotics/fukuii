@@ -1503,6 +1503,227 @@ class ChainDownloaderSpec
     testKit.stop(downloader)
   }
 
+  // ── Defect 8 (forge's ETC review of 0d72ecc61): checkCompletion's condition never checked headerRequestPeers
+  // (only the body/receipt in-flight maps), so Done can fire while a header request is still outstanding — here,
+  // via a second, redundant header request dispatchRequests' per-peer (not per-any-outstanding) check allows to go
+  // out to a different peer before the first one replies. idle()'s `case _` used to drop that reply on the floor
+  // without ever clearing headerRequestPeers, permanently excluding the peer from `available` and permanently
+  // occupying an inFlightCount slot. With maxConcurrentRequests=2 (matching sync.conf's real default) and the
+  // OTHER peer disconnected before the next round, that leaked slot is the ONLY peer left — old code can never
+  // dispatch again; fixed code clears it and completes normally.
+  it should "clear a leaked header-request marker on completion so a late reply does not permanently wedge dispatch" taggedAs UnitTest in {
+    val storage = new EphemBlockchainTestSetup {}
+    val appStateStorage = storage.storagesInstance.storages.appStateStorage
+    val networkPeerManager = TestProbe()
+    val peerEventBus = TestProbe()
+    val replyToProbe = TestProbe()
+
+    val emptyBody = BlockBody(Nil, Nil)
+    val chain = BlockHelpers.generateChain(2, BlockHelpers.genesis)
+    // headerMatching only fixes up transactionsRoot/ommersHash to match `emptyBody`, not receiptsRoot (needed here
+    // since — unlike every other test in this file — these headers go through the real handleHeaders/wire path,
+    // not direct storage, so storeReceiptsAndAdvanceCursor's MptListValidator check applies too) or parentHash
+    // (headerMatching changes each header's own hash, but chain(1).header.parentHash still points at chain(0)
+    // .header's ORIGINAL, pre-transform hash) — both fixed up explicitly below.
+    val header1: BlockHeader =
+      headerMatching(chain(0).header, emptyBody).copy(receiptsRoot = receiptsRootOf(Seq.empty))
+    val header2: BlockHeader =
+      headerMatching(chain(1).header, emptyBody)
+        .copy(parentHash = header1.hash, receiptsRoot = receiptsRootOf(Seq.empty))
+
+    // Genesis must be on disk with a chain weight for handleHeaders' parent-hash/weight check to accept header1
+    // (its parentHash points at genesis's own, unmodified hash — genesis is never passed through headerMatching).
+    storage.blockchainWriter
+      .storeBlockHeader(BlockHelpers.genesis.header)
+      .and(storage.blockchainWriter.storeChainWeight(BlockHelpers.genesis.header.hash, ChainWeight.zero))
+      .commit()
+
+    def mkPeer(id: PeerId): Peer =
+      Peer(id, new InetSocketAddress("127.0.0.1", 0), TestProbe(id.value).ref, incomingConnection = false)
+    def mkInfo: PeerInfo =
+      val status = RemoteStatus(
+        Capability.ETH68,
+        1,
+        ChainWeight.totalDifficultyOnly(1),
+        ByteString("best-hash"),
+        ByteString("genesis-hash")
+      )
+      PeerInfo(
+        status,
+        forkAccepted = true,
+        chainWeight = status.chainWeight,
+        maxBlockNumber = BigInt(2),
+        bestBlockHash = status.bestHash
+      )
+
+    val peer0Id = PeerId("header-race-peer-0")
+    val peer1Id = PeerId("header-race-peer-1")
+    val peer0 = mkPeer(peer0Id)
+    val peer1 = mkPeer(peer1Id)
+
+    val downloader: TypedActorRef[ChainDownloader.Command] = testKit
+      .spawn(
+        ChainDownloader(
+          blockchainReader = storage.blockchainReader,
+          blockchainWriter = storage.blockchainWriter,
+          appStateStorage = appStateStorage,
+          networkPeerManager = networkPeerManager.ref,
+          peerEventBus = peerEventBus.ref,
+          syncConfig = defaultSyncConfig,
+          replyTo = replyToProbe.ref,
+          maxConcurrentRequests = 2 // sync.conf's real default — the exact value forge's review flagged
+        ),
+        s"chain-downloader-header-leak-${System.nanoTime()}"
+      )
+
+    val handshakeReq = networkPeerManager.expectMsgType[NetworkPeerManagerActor.GetHandshakedPeersCmd](5.seconds)
+    handshakeReq.replyTo ! NetworkPeerManagerActor.HandshakedPeers(Map(peer0 -> mkInfo, peer1 -> mkInfo))
+
+    val peerAddSubs = (1 to 2).map(_ => peerEventBus.expectMsgType[SubscribeCmd](5.seconds))
+    def disconnectAdapterFor(pid: PeerId): TypedActorRef[PeerEvent] = peerAddSubs
+      .collectFirst { case SubscribeCmd(PeerDisconnectedClassifier(PeerSelector.WithId(p)), ref) if p == pid => ref }
+      .getOrElse(fail(s"no PeerDisconnectedClassifier SubscribeCmd for $pid among: $peerAddSubs"))
+
+    downloader ! ChainDownloader.Start(BigInt(1))
+    downloader ! ChainDownloader.BoostConcurrency(2)
+    // A second dispatch tick before either header reply arrives: dispatchRequests' per-peer (not per-any-
+    // outstanding) check lets a second, redundant header request go to whichever peer wasn't picked first — this
+    // is what puts two header requests in flight at once.
+    downloader ! ChainDownloader.BoostConcurrency(2)
+
+    val headerSends =
+      (1 to 2).map(_ => networkPeerManager.expectMsgType[NetworkPeerManagerActor.SendMessageCmd](5.seconds))
+    headerSends.foreach(_.message.underlyingMsg match
+      case ETHPackets.GetBlockHeaders(_, Left(n), _, 0, false) if n == BigInt(1) => ()
+      case other => fail(s"expected GetBlockHeaders(1,...), got $other")
+    )
+    val leakedPeerId = headerSends.head.peerId // never gets a reply until "late", after Done
+    val deliveredSend = headerSends(1) // delivered normally, crosses the completion line
+    val deliveredPeerId = deliveredSend.peerId
+    val deliveredReqId = deliveredSend.message.underlyingMsg match
+      case ETHPackets.GetBlockHeaders(reqId, _, _, _, _) => reqId
+      case other                                         => fail(s"expected GetBlockHeaders, got $other")
+
+    // Each PeerRequestHandler spawn (one per SendMessageCmd) subscribes twice — a MessageClassifier for its own
+    // reply code, and its own PeerDisconnectedClassifier to notice a mid-request disconnect — so two SIMULTANEOUS
+    // header requests (dispatched before either reply arrives) produce four subs together here, but every LATER,
+    // single request (body, receipts, the revived header, ...) needs its own fresh two collected right before use;
+    // reusing a stale list silently searches the wrong batch and fails with "no MessageClassifier(code) among:
+    // [some earlier round's subs]".
+    val headerSubs = collectSubscribes(peerEventBus, count = 4)
+    def adapterIn(subs: Seq[SubscribeCmd], pid: PeerId, code: Int): TypedActorRef[PeerEvent] = subs
+      .collectFirst {
+        case SubscribeCmd(MessageClassifier(codes, PeerSelector.WithId(p)), ref) if codes.contains(code) && p == pid =>
+          ref
+      }
+      .getOrElse(fail(s"no MessageClassifier($code) SubscribeCmd for $pid among: $subs"))
+    def messageAdapterFor(pid: PeerId, code: Int): TypedActorRef[PeerEvent] = adapterIn(headerSubs, pid, code)
+    def nextAdapterFor(pid: PeerId, code: Int): TypedActorRef[PeerEvent] =
+      adapterIn(collectSubscribes(peerEventBus, count = 2), pid, code)
+
+    // The "delivered" peer's header1 reply is the ONLY one processed while still in downloading() — it advances
+    // bestHeaderNumber to target and drives the rest of this round (body + receipts) to completion. The "leaked"
+    // peer's own header request is left unanswered for the rest of the test so far.
+    messageAdapterFor(deliveredPeerId, Codes.BlockHeadersCode) ! PeerEvent.MessageFromPeer(
+      ETHPackets.BlockHeaders(deliveredReqId, Seq(header1)),
+      deliveredPeerId
+    )
+
+    // Body + receipts for header1, both served by the same "delivered" peer — the "leaked" peer stays excluded
+    // from dispatch throughout (still "in flight" per headerRequestPeers), exactly the bug under test.
+    val bodySend = networkPeerManager.expectMsgType[NetworkPeerManagerActor.SendMessageCmd](5.seconds)
+    bodySend.peerId shouldBe deliveredPeerId
+    val bodyReqId = bodySend.message.underlyingMsg match
+      case ETHPackets.GetBlockBodies(reqId, hashes) =>
+        hashes shouldBe Seq(header1.hash.value)
+        reqId
+      case other => fail(s"expected GetBlockBodies, got $other")
+    nextAdapterFor(deliveredPeerId, Codes.BlockBodiesCode) ! PeerEvent.MessageFromPeer(
+      ETHPackets.BlockBodies(bodyReqId, Seq(emptyBody)),
+      deliveredPeerId
+    )
+
+    val receiptSend = networkPeerManager.expectMsgType[NetworkPeerManagerActor.SendMessageCmd](5.seconds)
+    receiptSend.peerId shouldBe deliveredPeerId
+    val receiptReqId = receiptSend.message.underlyingMsg match
+      case ETHPackets.GetReceipts(reqId, hashes) =>
+        hashes shouldBe Seq(header1.hash.value)
+        reqId
+      case other => fail(s"expected GetReceipts, got $other")
+    nextAdapterFor(deliveredPeerId, Codes.ReceiptsCode) ! PeerEvent.MessageFromPeer(
+      ETHPackets.Receipts68(receiptReqId, RLPList(RLPList())),
+      deliveredPeerId
+    )
+
+    // Backfill to target=1 completes — bestHeaderNumber>=target, both queues empty, both body/receipt in-flight
+    // maps empty — even though the "leaked" peer's header request has never been answered.
+    replyToProbe.expectMsg(5.seconds, ChainDownloader.Done)
+
+    // Deliver the "leaked" peer's reply NOW, while the actor is idle(). Content doesn't matter much (bestHeaderNumber
+    // has already moved past what this reply could usefully cover, so handleHeaders recognizes it as stale either
+    // way) — what matters is whether headerRequestPeers gets cleared. Reusing header1 keeps this a non-empty reply
+    // (so it exercises handleHeaders' own staleness check, not the separate empty-headers/emptyHeaderPeers path).
+    messageAdapterFor(leakedPeerId, Codes.BlockHeadersCode) ! PeerEvent.MessageFromPeer(
+      ETHPackets.BlockHeaders(ETHPackets.nextRequestId, Seq(header1)),
+      leakedPeerId
+    )
+
+    // Remove the "delivered" peer so ONLY the "leaked" peer remains for the next round — isolating whether the
+    // leaked peer can be used again, rather than the backfill merely working around it.
+    disconnectAdapterFor(deliveredPeerId) ! PeerEvent.PeerDisconnected(deliveredPeerId)
+
+    downloader ! ChainDownloader.UpdateTarget(BigInt(2))
+    downloader ! ChainDownloader.BoostConcurrency(2)
+
+    // Old code: headerRequestPeers still holds the leaked peer, so it's excluded from `available`; with the other
+    // peer gone, available is empty and dispatchRequests() sends nothing — this times out.
+    // Fixed code: headerRequestPeers was cleared on Done (and/or by the late reply above), so the leaked peer is
+    // usable again and this is header2's request.
+    val revivedSend = networkPeerManager.expectMsgType[NetworkPeerManagerActor.SendMessageCmd](5.seconds)
+    revivedSend.peerId shouldBe leakedPeerId
+    val revivedReqId = revivedSend.message.underlyingMsg match
+      case ETHPackets.GetBlockHeaders(reqId, Left(n), _, 0, false) if n == BigInt(2) => reqId
+      case other => fail(s"expected the revived peer to be dispatched GetBlockHeaders(2,...), got $other")
+
+    // Same "fresh subs per request" rule as nextAdapterFor above.
+    def revivedAdapterFor(code: Int): TypedActorRef[PeerEvent] = adapterIn(
+      collectSubscribes(peerEventBus, count = 2),
+      leakedPeerId,
+      code
+    )
+
+    revivedAdapterFor(Codes.BlockHeadersCode) ! PeerEvent.MessageFromPeer(
+      ETHPackets.BlockHeaders(revivedReqId, Seq(header2)),
+      leakedPeerId
+    )
+
+    val revivedBodySend = networkPeerManager.expectMsgType[NetworkPeerManagerActor.SendMessageCmd](5.seconds)
+    val revivedBodyReqId = revivedBodySend.message.underlyingMsg match
+      case ETHPackets.GetBlockBodies(reqId, hashes) =>
+        hashes shouldBe Seq(header2.hash.value)
+        reqId
+      case other => fail(s"expected GetBlockBodies for header2, got $other")
+    revivedAdapterFor(Codes.BlockBodiesCode) ! PeerEvent.MessageFromPeer(
+      ETHPackets.BlockBodies(revivedBodyReqId, Seq(emptyBody)),
+      leakedPeerId
+    )
+
+    val revivedReceiptSend = networkPeerManager.expectMsgType[NetworkPeerManagerActor.SendMessageCmd](5.seconds)
+    val revivedReceiptReqId = revivedReceiptSend.message.underlyingMsg match
+      case ETHPackets.GetReceipts(reqId, hashes) =>
+        hashes shouldBe Seq(header2.hash.value)
+        reqId
+      case other => fail(s"expected GetReceipts for header2, got $other")
+    revivedAdapterFor(Codes.ReceiptsCode) ! PeerEvent.MessageFromPeer(
+      ETHPackets.Receipts68(revivedReceiptReqId, RLPList(RLPList())),
+      leakedPeerId
+    )
+
+    replyToProbe.expectMsg(5.seconds, ChainDownloader.Done)
+
+    testKit.stop(downloader)
+  }
+
   /** Collects the next `count` `SubscribeCmd`s seen on `probe`, skipping over anything else interleaved (e.g. an
     * `UnsubscribeAllCmd` from a just-finished PeerRequestHandler unsubscribing before a new one subscribes). Bounded so
     * a genuine wedge fails loudly instead of hanging.

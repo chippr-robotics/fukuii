@@ -194,6 +194,19 @@ class ChainDownloader private (
             replyTo ! Progress(headersDownloaded, bodiesDownloaded, receiptsDownloaded, targetBlock)
             Behaviors.same
 
+          // A header request outlived its downloading() phase: Done fired (bodies/receipts already complete)
+          // while this reply was still in flight. Route it through the same handling downloading() uses instead
+          // of dropping it — see handleHeaderResult's doc (forge's ETC review, Defect 8). No dispatchRequests()
+          // call: idle() has nothing else to send right now; any newly usable headers (and the body/receipt
+          // hashes they queue) simply wait for the next Start/UpdateTarget to resume downloading().
+          case PeerResult(ResponseReceived(_, peer, ETHPackets.BlockHeaders(_, headers), _)) =>
+            handleHeaderResult(peer, headers)
+            Behaviors.same
+
+          case PeerResult(RequestFailed(_, peer, reason)) =>
+            handleRequestFailed(peer, reason)
+            Behaviors.same
+
           case _ => Behaviors.same
       }
     }
@@ -256,35 +269,11 @@ class ChainDownloader private (
 
           // --- Header responses ---
           case PeerResult(ResponseReceived(_, peer, ETHPackets.BlockHeaders(_, headers), _)) =>
-            headerRequestPeers -= peer.id
-            if headers.nonEmpty then
-              emptyHeaderPeers -= peer.id
-              handleHeaders(peer, headers)
-            else
-              emptyHeaderPeers += peer.id
-              log.debug("Empty headers from {} — excluding from header dispatch", peer.id)
+            handleHeaderResult(peer, headers)
             dispatchRequests()
 
           case PeerResult(RequestFailed(_, peer, reason)) =>
-            headerRequestPeers -= peer.id
-            // Re-queue this peer's in-flight hashes before dropping it. Each peer has at most one
-            // outstanding request per category, so `.get` is unambiguous. Without this, a timed-out or
-            // disconnected request's bodies/receipts simply vanish — bodiesQueue/receiptsQueue lose the
-            // hashes, checkCompletion() then finds every queue empty, and the backfill declares COMPLETE
-            // (and clears its cursors) while those blocks were never actually fetched. Blacklisting below
-            // is unaffected. For a truncated eth/70 block the re-queued hash resumes correctly: this path
-            // never touches partialReceiptState/partialReceiptBuffer, so the next request for that hash
-            // still finds its buffered receipts and resume index and continues rather than restarting.
-            bodyRequestPeers.get(peer.id).foreach { case (_, hashes) =>
-              bodiesQueue = hashes.toVector ++ bodiesQueue
-            }
-            bodyRequestPeers -= peer.id
-            receiptRequestPeers.get(peer.id).foreach { case (_, hashes) =>
-              receiptsQueue = hashes.toVector ++ receiptsQueue
-            }
-            receiptRequestPeers -= peer.id
-            log.debug("Chain download request failed for peer {}: {}", peer.id, reason)
-            blacklist.add(peer.id, syncConfig.blacklistDuration, FastSyncRequestFailed(reason))
+            handleRequestFailed(peer, reason)
             dispatchRequests()
 
           // --- Body responses ---
@@ -322,6 +311,49 @@ class ChainDownloader private (
           case _ => Behaviors.same
       }
     }
+
+  /** Shared logic for a BlockHeaders reply: clears the in-flight marker and either processes usable headers or records
+    * an empty-headers backoff. Called from both downloading() (which additionally re-dispatches afterward) and idle() —
+    * a header reply can arrive after checkCompletion() already fired Done (bodies/receipts drained while this request
+    * was still outstanding; Done's own condition never checked headerRequestPeers). idle()'s `case _` used to silently
+    * drop that reply on the floor without ever clearing headerRequestPeers, permanently excluding the peer from every
+    * future dispatch (available's filter) and permanently occupying an inFlightCount slot; with the default
+    * maxConcurrentRequests of 2 (sync.conf), two such leaks make dispatchRequests() return early at its very first
+    * check, before ever reaching checkCompletion() again — a permanent stall (forge's ETC review, Defect 8).
+    * checkCompletion()'s Done branch now also clears headerRequestPeers outright, so by the time a late reply like this
+    * is processed the set is usually already empty; this handles it correctly instead of dropping it either way.
+    * handleHeaders itself is safe to call while idle: its own bestHeaderNumber-relative staleness check (expectedStart)
+    * treats a reply for an already-superseded range as stale and no-ops rather than assuming it's still "the"
+    * outstanding request.
+    */
+  private def handleHeaderResult(peer: Peer, headers: Seq[BlockHeader]): Unit =
+    headerRequestPeers -= peer.id
+    if headers.nonEmpty then
+      emptyHeaderPeers -= peer.id
+      handleHeaders(peer, headers)
+    else
+      emptyHeaderPeers += peer.id
+      log.debug("Empty headers from {} — excluding from header dispatch", peer.id)
+
+  /** Shared logic for a failed request of any kind (header/body/receipt) — a peer only ever has at most one category
+    * outstanding at a time (dispatchRequests' `available` filter excludes a peer already tracked in any of the three
+    * in-flight maps), so exactly one of the three `foreach`/`-=` pairs below is ever non-trivial. Re-queues any
+    * in-flight body/receipt hashes before dropping the peer so they aren't silently lost, then blacklists it. Called
+    * from both downloading() (which additionally re-dispatches afterward) and idle() — see handleHeaderResult's doc for
+    * why a request can still fail after Done already fired.
+    */
+  private def handleRequestFailed(peer: Peer, reason: String): Unit =
+    headerRequestPeers -= peer.id
+    bodyRequestPeers.get(peer.id).foreach { case (_, hashes) =>
+      bodiesQueue = hashes.toVector ++ bodiesQueue
+    }
+    bodyRequestPeers -= peer.id
+    receiptRequestPeers.get(peer.id).foreach { case (_, hashes) =>
+      receiptsQueue = hashes.toVector ++ receiptsQueue
+    }
+    receiptRequestPeers -= peer.id
+    log.debug("Chain download request failed for peer {}: {}", peer.id, reason)
+    blacklist.add(peer.id, syncConfig.blacklistDuration, FastSyncRequestFailed(reason))
 
   private def dispatchRequests(): Behavior[Command] =
     val inFlightCount = headerRequestPeers.size + bodyRequestPeers.size + receiptRequestPeers.size
@@ -1046,6 +1078,16 @@ class ChainDownloader private (
         .and(appStateStorage.putBackfillBestReceipt(bestHeaderNumber))
         .and(appStateStorage.removeBackfillTarget())
         .commit()
+      // checkCompletion's own condition above never checks headerRequestPeers (only body/receipt in-flight maps),
+      // so Done can fire while a header request is still outstanding — a peer answers something else last and
+      // crosses bestHeaderNumber >= targetBlock while an earlier, redundant header request to a DIFFERENT peer is
+      // still in flight. Clearing it here (rather than leaving it to accumulate across completions) is what
+      // prevents that leak from ever reaching maxConcurrentRequests and permanently wedging dispatchRequests()
+      // before it can reach this method again (forge's ETC review, Defect 8 — see handleHeaderResult's doc for the
+      // idle()-side half of this fix). headerRequestPeers has no companion "in-flight hashes" map the way
+      // bodyRequestPeers/receiptRequestPeers do (requestHeaders always asks for the next range starting at
+      // bestHeaderNumber+1, never a specific hash list to restore), so clearing this one Set is the complete fix.
+      headerRequestPeers = Set.empty
       timers.cancel(DispatchKey)
       replyTo ! Done
       idle()
