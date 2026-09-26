@@ -148,8 +148,28 @@ object AmsterdamGas:
   /** EIP-7954: initcode size limit, 48 KiB -> 128 KiB. */
   val MaxInitCodeSize: BigInt = 131072
 
-  /** EIP-8037: system-call gas limit, 30M plus a 16-slot state margin. */
-  val SystemCallGasLimit: BigInt = BigInt(30000000) + GasStorageSet * 16
+  /** execution-specs `SYSTEM_TRANSACTION_GAS`: the EXECUTION-gas grant of every system call, 30,000,000 as before
+    * Amsterdam (EIP-4788, EIP-2935, EIP-7002, EIP-7251 `SYSTEM_CALL_GAS_LIMIT`).
+    */
+  val SystemCallExecutionGas: BigInt = 30000000
+
+  /** execution-specs `SYSTEM_MAX_SSTORES_PER_CALL`: the number of new storage slots a system call is expected to write
+    * at most.
+    */
+  val SystemMaxSstoresPerCall: BigInt = 16
+
+  /** EIP-8037: a system call's STATE-gas reservoir, 16 x GAS_STORAGE_SET = 1,566,720. It sits beside the 30M execution
+    * grant, not inside it: execution-specs `process_unchecked_system_transaction` sets `execution_gas_grant =
+    * SYSTEM_TRANSACTION_GAS` and `state_gas_reservoir = STORAGE_SET * SYSTEM_MAX_SSTORES_PER_CALL`; go-ethereum
+    * `systemCallGasBudget` builds `NewGasBudget(30_000_000, stateBudget)` the same way.
+    */
+  val SystemCallStateGasReservoir: BigInt = GasStorageSet * SystemMaxSstoresPerCall
+
+  /** The two budgets together, 31,566,720 (EEST `fork.system_call_gas_limit()`). A total, never an execution grant:
+    * granting it all as execution gas lets a system call spend 1,566,720 more execution gas than execution-specs allows
+    * and pushes the wrong value for GAS.
+    */
+  val SystemCallGasLimit: BigInt = SystemCallExecutionGas + SystemCallStateGasReservoir
 
   /** EIP-7708 SYSTEM_ADDRESS `0xfffffffffffffffffffffffffffffffffffffffe`: the emitter of every protocol-generated
     * value-transfer log. Reused from EIP-4788 so these logs are distinguishable from contract-emitted ones.

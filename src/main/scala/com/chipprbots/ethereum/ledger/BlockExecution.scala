@@ -504,7 +504,6 @@ class BlockExecution(
   )(implicit blockchainConfig: BlockchainConfig): Either[String, (InMemoryWorldStateProxy, Seq[ByteString])] =
     if !blockchainConfig.isPragueTimestamp(block.header.unixTimestamp) then return Right((world, Nil))
 
-    import BlockExecution.*
     val evmConfig = EvmConfig.forBlock(block.header.number.value, block.header.unixTimestamp, blockchainConfig)
     var w = world
     val outputs = scala.collection.mutable.ListBuffer.empty[ByteString]
@@ -516,44 +515,17 @@ class BlockExecution(
     // per-block slots its user path dirtied (for the builder deposit contract, slots 0x01 and 0x03), so skipping
     // the call leaves those slots set and forks the storage root -> account RLP -> STATE ROOT.
     //
-    // GAS CEILING, stated explicitly because it changes an already-shipped path. `SYSTEM_CALL_GAS_LIMIT` is one
-    // global constant, not a per-contract one: EIP-8037 raises it from 30,000,000 to 30,000,000 + 16 x
-    // GAS_STORAGE_SET so that a system call has state-dimension headroom, and it does so for EVERY system call,
-    // not only the two EIP-8282 ones. So on an Amsterdam block the pre-existing EIP-7002/7251 calls are funded at
-    // the raised ceiling too. That is deliberate: scoping the bump to the builder pair would invent a
-    // two-constant model no reference client has. EIP-2935 and EIP-4788 are unaffected here only because this
-    // client applies them as direct storage writes (the optimisation EIP-4788 explicitly permits) rather than as
-    // EVM calls, so they have no gas ceiling to raise — see `applyEip4788` / `applyEip2935`.
-    //
-    // The bump is strictly upward (30,000,000 -> 31,566,720) and the queue predeploys are bounded loops that
-    // never read GAS, so it is a no-op for 7002/7251. That is asserted, not assumed:
-    // `AmsterdamBuilderRequestsSpec` runs the fixture's real withdrawal and consolidation bytecode over a
-    // non-empty queue at both ceilings and requires byte-identical requests and storage.
-    val amsterdamActive = blockchainConfig.isAmsterdamTimestamp(block.header.unixTimestamp)
+    // GAS: on an Amsterdam block every system call, the pre-existing EIP-7002/7251 ones included, gets EIP-8037's
+    // state-gas reservoir BESIDE its unchanged 30,000,000 execution grant (see `systemCallContext`). The queue
+    // predeploys are bounded loops that never read GAS, so for them it changes nothing; that is asserted, not assumed:
+    // `AmsterdamBuilderRequestsSpec` runs the fixture's real withdrawal and consolidation bytecode over a non-empty
+    // queue on both sides of the fork and requires byte-identical requests and storage.
     var failure: Option[String] = None
     for (queueAddr, requestType) <- BlockExecution.systemCallTargets(block.header.unixTimestamp)
     do
       val code = w.getCode(queueAddr)
       if failure.isEmpty && code.nonEmpty then
-        val context = ProgramContext[InMemoryWorldStateProxy, InMemoryWorldStateProxyStorage](
-          callerAddr = SystemAddress,
-          originAddr = SystemAddress,
-          recipientAddr = Some(queueAddr),
-          gasPrice = com.chipprbots.ethereum.domain.UInt256.Zero,
-          startGas = if amsterdamActive then AmsterdamGas.SystemCallGasLimit else BigInt(30000000),
-          inputData = ByteString.empty,
-          value = com.chipprbots.ethereum.domain.UInt256.Zero,
-          endowment = com.chipprbots.ethereum.domain.UInt256.Zero,
-          doTransfer = false,
-          blockHeader = block.header,
-          callDepth = 0,
-          world = w,
-          initialAddressesToDelete = Set.empty,
-          evmConfig = evmConfig,
-          originalWorld = w,
-          warmAddresses = Set(queueAddr),
-          warmStorage = Set.empty
-        )
+        val context = BlockExecution.systemCallContext(block.header, w, queueAddr, ByteString.empty, evmConfig)
         val vm = new com.chipprbots.ethereum.vm.VM[InMemoryWorldStateProxy, InMemoryWorldStateProxyStorage]
         val result = vm.run(context)
         result.error match
@@ -663,6 +635,51 @@ object BlockExecution:
         (BuilderExitQueueAddress, BuilderExitRequestType)
       )
     else pragueTargets
+
+  /** The top-level context of a SYSTEM_ADDRESS call to `target`: value 0 and no transfer, `target` warm, gas price 0
+    * (go-ethereum's system `Message`).
+    *
+    * Gas: 30,000,000 of execution gas, on every fork. From Amsterdam (`evmConfig.amsterdamEnabled`) EIP-8037 adds a
+    * state-gas reservoir of 16 x GAS_STORAGE_SET = 1,566,720 BESIDE that grant, not inside it: execution-specs
+    * `process_unchecked_system_transaction` sets `execution_gas_grant = SYSTEM_TRANSACTION_GAS` and
+    * `state_gas_reservoir = STORAGE_SET * SYSTEM_MAX_SSTORES_PER_CALL`, and go-ethereum `systemCallGasBudget` does the
+    * same. So GAS reads 30,000,000 less what has been spent, a call that needs more than 30,000,000 of execution gas
+    * halts whatever reservoir is left, and state charges draw the reservoir first and only then the execution grant
+    * (EEST `test_system_call_execution_grant`, `_execution_boundary`, `_reservoir_boundary`). fukuii previously granted
+    * the 31,566,720 total as execution gas, with no reservoir.
+    *
+    * Pre-Amsterdam (ETH Prague/Osaka) the reservoir is 0 and the context is the one the EIP-7002/7251 calls always had.
+    * ETC never builds one: its only system-contract write, EIP-2935 at Olympia, is a direct storage write.
+    */
+  def systemCallContext(
+      header: BlockHeader,
+      world: InMemoryWorldStateProxy,
+      target: Address,
+      input: ByteString,
+      evmConfig: EvmConfig
+  ): ProgramContext[InMemoryWorldStateProxy, InMemoryWorldStateProxyStorage] =
+    val stateGasReservoir = if evmConfig.amsterdamEnabled then AmsterdamGas.SystemCallStateGasReservoir else BigInt(0)
+    ProgramContext[InMemoryWorldStateProxy, InMemoryWorldStateProxyStorage](
+      callerAddr = SystemAddress,
+      originAddr = SystemAddress,
+      recipientAddr = Some(target),
+      gasPrice = UInt256.Zero,
+      startGas = AmsterdamGas.SystemCallExecutionGas,
+      inputData = input,
+      value = UInt256.Zero,
+      endowment = UInt256.Zero,
+      doTransfer = false,
+      blockHeader = header,
+      callDepth = 0,
+      world = world,
+      initialAddressesToDelete = Set.empty,
+      evmConfig = evmConfig,
+      originalWorld = world,
+      warmAddresses = Set(target),
+      warmStorage = Set.empty,
+      stateGasReservoir = stateGasReservoir,
+      initialStateGasReservoir = stateGasReservoir
+    )
 
   /** EIP-6110 `DepositEvent` ABI layout: (offset, size) of pubkey, withdrawal_credentials, amount, signature, index. */
   private val DepositEventLength = 576
