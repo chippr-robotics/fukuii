@@ -302,6 +302,46 @@ identical storage and an identical state root.
 
 ---
 
+## Phase 8: Glamsterdam completion — the full EIP-7773 execution-layer scope (added 2026-09-26)
+
+Slices A–D covered what hive's devp2p fixture exercises. Sepolia activates Amsterdam on
+2026-10-06 13:53:36 UTC (`1791294816`) under the **whole** EIP-7773 rule set, and release 0.9.0 must
+follow it (user, 2026-09-26: "implement the eips to enable glamsterdam, network configurations and
+associated test suites"). This phase tracks that scope. Tracking issue **#1415**; each task below is one
+of its sub-issues. Impact analysis: `glamsterdam-coverage.md` (beacon, 2026-09-26); conformance
+oracle: execution-specs `tests@v21.0.0` Amsterdam blockchain tests, replayed in-repo by
+`EestFixtureCorpusSpec` (baseline in `baselines/eest-v21-amsterdam-2026-09-26.txt`).
+
+Slice C (T039–T042) is WI-10 below. Slice D's code and `AmsterdamBuilderRequestsSpec` already exist
+(T043–T047 are unticked bookkeeping, per the audit §2); the EEST `eip8282` directory is its check.
+
+- [x] T053 Network configs: Platåberget launcher network, Sepolia `amsterdam-timestamp` (#1417)
+- [x] T054 Conformance runner `EestFixtureCorpusSpec` + `scripts/eest/fetch_fixtures.py` + CI job `eest-amsterdam` (#1419; supersedes T049's approach). Remaining: hive consume-* against an Amsterdam fixture release
+- [x] T055 WI-1 EIP-6110 deposits from the chain's own contract; Sepolia broken since Prague (#1416)
+- [x] T056 WI-2 BAL codec, header accessors, Amsterdam genesis (#1418)
+- [x] T057 WI-4 EIP-8037 per-dimension block capacity (#1420)
+- [x] T058 WI-5 EIP-7976 + EIP-7981 + Amsterdam floor validity (#1421)
+- [ ] T059 EIP-8037 reservoir lost across precompile calls — slice B defect found by the corpus (#1437)
+- [ ] T060 WI-7 EIP-2780 / EIP-7702: keep delegations on in-frame failure, sequential authorizations (#1423)
+- [ ] T061 WI-6 EIP-8246 (#1422)
+- [ ] T062 WI-8 SLOTNUM + EIP-8024 (#1424)
+- [ ] T063 WI-9 Engine API: newPayloadV5, forkchoiceUpdatedV4, getPayloadV6, capabilities (#1425)
+- [ ] T064 WI-10 EIP-7928 BAL collection, validation, persistence — Slice C (#1426)
+- [ ] T065 WI-11 Amsterdam payload builder (#1427)
+- [ ] T066 WI-12 getPayloadBodiesV2 + eth/71 BAL serving (#1428)
+- [ ] T067 WI-13 fork id with the head timestamp (#1429)
+- [ ] T068 WI-14 RPC surfaces at Amsterdam (#1430)
+- [ ] T069 EIP-7623 validity missing since Prague — pre-existing, `forge` sign-off (#1438)
+- [ ] T070 Networking: sparse blobpool, getBlobsV3/V4, negotiated snap version (#1431; not required to follow the chain)
+- [ ] T071 WI-15 live validation: Platåberget soak, Sepolia across the boundary (#1432)
+- [ ] T072 Release 0.9.0 prep (#1433); `forge` ETC sign-off and `beacon` ETH sign-off before merge
+
+**Gate for the phase:** every `tests@v21.0.0` Amsterdam blockchain test passes, the ETC regression suites
+pass with no assertion edits, and T071's live evidence exists. The Constitution VII note for T052 is
+covered by T072's CHANGELOG and release notes.
+
+---
+
 ## Dependencies
 
 ```
