@@ -17,6 +17,7 @@ import com.chipprbots.ethereum.utils.BlockchainConfig
 import com.chipprbots.ethereum.utils.ByteStringUtils
 import com.chipprbots.ethereum.utils.DaoForkConfig
 import com.chipprbots.ethereum.utils.Logger
+import com.chipprbots.ethereum.vm.AmsterdamGas
 import com.chipprbots.ethereum.vm.EvmConfig
 import com.chipprbots.ethereum.vm.ProgramContext
 
@@ -61,6 +62,7 @@ class BlockExecution(
           result.receipts,
           result.gasUsed
         )
+        _ <- validateRequestsHash(block, result.executionRequests)
       yield (result.receipts, result.executionRequests)
 
     if blockExecResult.isRight then
@@ -74,9 +76,40 @@ class BlockExecution(
   def executeBlockNoValidation(
       block: Block
   )(implicit blockchainConfig: BlockchainConfig): Either[BlockExecutionError, (Seq[Receipt], BigInt, ByteString)] =
+    executeBlockNoValidationWithRequests(block).map { case (receipts, gasUsed, root, _) => (receipts, gasUsed, root) }
+
+  /** [[executeBlockNoValidation]] plus the EIP-7685 requests execution produced, so an import path that validates after
+    * the fact (ChainImporter) can check the header's `requestsHash` with [[validateRequestsHash]].
+    */
+  def executeBlockNoValidationWithRequests(
+      block: Block
+  )(implicit
+      blockchainConfig: BlockchainConfig
+  ): Either[BlockExecutionError, (Seq[Receipt], BigInt, ByteString, Seq[ByteString])] =
     executeBlock(block).map { result =>
-      (result.receipts, result.gasUsed, result.worldState.stateRootHash)
+      (result.receipts, result.gasUsed, result.worldState.stateRootHash, result.executionRequests)
     }
+
+  /** EIP-7685: a Prague+ header's `requestsHash` must commit to exactly the requests execution produced. Without this
+    * check a block could carry any `requestsHash` and still be imported over RLP / devp2p (the Engine API path compares
+    * the CL-supplied request list instead, which is equivalent there). EEST `test_consolidation_requests_negative`,
+    * `test_invalid_multi_type_requests`, `test_withdrawal_requests_negative`.
+    */
+  def validateRequestsHash(block: Block, requests: Seq[ByteString])(implicit
+      blockchainConfig: BlockchainConfig
+  ): Either[BlockExecutionError, Unit] =
+    if !blockchainConfig.isPragueTimestamp(block.header.unixTimestamp) then Right(())
+    else
+      val expected = BlockExecution.computeRequestsHash(requests)
+      block.header.requestsHash match
+        case Some(h) if h == expected => Right(())
+        case other =>
+          Left(
+            BlockExecutionError.ValidationAfterExecError(
+              s"INVALID_REQUESTS: header requestsHash ${other.map(ByteStringUtils.hash2string)} != " +
+                s"${ByteStringUtils.hash2string(expected)} computed from ${requests.size} executed request(s)"
+            )
+          )
 
   /** Proposer-mode execution. Runs all Prague preambles (EIP-4788, EIP-2935), transactions, withdrawals, and system
     * calls (EIP-7002/7251), collects deposit requests (EIP-6110), and returns the full BlockResult with receipts +
@@ -111,13 +144,24 @@ class BlockExecution(
           .leftMap(BlockExecutionError.MPTError.apply)
         // EIP-4895: Process beacon chain withdrawals (Shanghai+)
         worldAfterWithdrawals = processWithdrawals(block, worldAfterReward)
-        // Prague: Process system calls for withdrawal/consolidation requests. The system-call
-        // outputs (type 0x01, 0x02) and deposit log requests (type 0x00) combine to form the
-        // EIP-7685 requestsHash; follower mode verifies, proposer mode emits.
-        systemCallResult = processPragueSystemCalls(block, worldAfterWithdrawals)
+        _ <- requireRequestPredeploysPresent(block, worldAfterWithdrawals)
+        // Prague: Process system calls for withdrawal/consolidation requests; Amsterdam adds the two
+        // EIP-8282 builder predeploys. The system-call outputs (types 0x01, 0x02 and, post-Amsterdam,
+        // 0x03, 0x04) and deposit log requests (type 0x00) combine to form the EIP-7685 requestsHash;
+        // follower mode verifies, proposer mode emits.
+        //
+        // Both halves can INVALIDATE the block (EIP-6110 / EIP-7002 / EIP-7251, EELS
+        // `process_checked_system_transaction` / `extract_deposit_data`): a system call that halts or
+        // reverts, and a DepositEvent log whose ABI layout is not the canonical one.
+        systemCallResult <- processPragueSystemCallsChecked(block, worldAfterWithdrawals)
+          .leftMap(BlockExecutionError.ValidationAfterExecError.apply)
         worldAfterSystemCalls = systemCallResult._1
         systemRequests = systemCallResult._2
-        depositRequest = collectDepositRequests(execResult.receipts)
+        depositRequest <- (
+          if blockchainConfig.isPragueTimestamp(block.header.unixTimestamp) then
+            collectDepositRequests(execResult.receipts)
+          else Right(None)
+        ).leftMap(BlockExecutionError.ValidationAfterExecError.apply)
         // State root hash needs to be up-to-date for validateBlockAfterExecution. In proposer mode the
         // backing MPT storage is read-only, so persistState computes the trie hash in-memory without
         // writing to RocksDB — exactly what we want for a speculative payload.
@@ -143,7 +187,9 @@ class BlockExecution(
     InMemoryWorldStateProxy(
       evmCodeStorage = evmCodeStorage,
       blockchain.getBackingMptStorage(block.header.number.value),
-      (number: BigInt) => blockchainReader.getBlockHeaderByNumber(number).map(_.hash.value),
+      // BLOCKHASH walks this block's own ancestry (core-geth GetHashFn), never the canonical index — see
+      // AncestorBlockHashes for why the index can name a different chain at the heights being asked about.
+      AncestorBlockHashes.forBlock(block.header, blockchainReader),
       accountStartNonce = blockchainConfig.accountStartNonce,
       stateRootHash = parentHeader.stateRoot.value,
       noEmptyAccounts = EvmConfig.forBlock(block.header.number.value, blockchainConfig).noEmptyAccounts,
@@ -205,27 +251,37 @@ class BlockExecution(
     // Only apply post-Cancun (when parentBeaconBlockRoot is present)
     block.header.parentBeaconBlockRoot match
       case Some(beaconRoot) if blockchainConfig.isCancunTimestamp(block.header.unixTimestamp) =>
-        val timestamp = UInt256(block.header.unixTimestamp.toLong)
+        // toUInt256, NOT UInt256(_.toLong): the latter sign-extends, so a 2^64-1 timestamp
+        // becomes 2^256-1 and lands at ring index 511 instead of 4095 — AND stores that
+        // wrong value in the slot, which test_beacon_root_equal_to_timestamp reads back.
+        val timestamp = block.header.unixTimestamp.toUInt256
         val timestampIdx = timestamp.mod(UInt256(BeaconRootHistoryBufferLength))
         val rootIdx = timestampIdx + UInt256(BeaconRootHistoryBufferLength)
 
-        // Deploy contract bytecode and set nonce=1 on the first Cancun block (mirror EIP-2935 pattern).
-        // The Sepolia genesis does NOT pre-allocate this account; it is seeded here during block processing.
-        // go-ethereum achieves this by executing a real EVM call; Fukuii sets code + nonce directly.
-        val w1 = if world.getCode(BeaconRootContractAddress).isEmpty then
-          val account = world
-            .getAccount(BeaconRootContractAddress)
-            .getOrElse(Account.empty(blockchainConfig.accountStartNonce))
-            .copy(nonce = UInt256(1))
-          world
-            .saveAccount(BeaconRootContractAddress, account)
-            .saveCode(BeaconRootContractAddress, BeaconRootsCode)
-        else world
-
-        val storage = w1.getStorage(BeaconRootContractAddress)
-        val s1 = storage.store(timestampIdx.toBigInt, timestamp.toBigInt)
-        val s2 = s1.store(rootIdx.toBigInt, UInt256(beaconRoot.value).toBigInt)
-        w1.saveStorage(BeaconRootContractAddress, s2)
+        // EIP-4788: "if no code exists at BEACON_ROOTS_ADDRESS, the call must fail silently".
+        // The client MUST NOT deploy the contract itself. It is deployed like any other contract,
+        // by the pre-signed Nick's-method transaction from 0x0B799C86a49DEeb90402691F1041aa3AF2d3C875
+        // (EIP-4788 "Deployment"), which is part of the chain history on mainnet and every public
+        // testnet. go-ethereum performs a SYSTEM_ADDRESS call with value 0; under EIP-158 a call
+        // to a non-existent account with zero value returns immediately and creates nothing
+        // (core/vm/evm.go Call), so an absent contract produces NO state change at all.
+        //
+        // Seeding code + nonce here produced a state-root divergence on any chain whose genesis
+        // does not pre-allocate the account: fukuii wrote an account (nonce=1, codeHash) plus two
+        // storage slots that the reference client does not have. Observed on hive
+        // ethereum/graphql, whose testGenesis.json allocates only one account while block 34
+        // carries parentBeaconBlockRoot (first block past cancunTime).
+        //
+        // The direct storage write below (instead of an EVM system call) is the optimisation the
+        // EIP explicitly permits: "Clients may decide to omit an explicit EVM call and directly
+        // set the storage values." It is only valid when the canonical contract is the one
+        // deployed there, which is why the code-presence guard is a hard precondition.
+        if world.getCode(BeaconRootContractAddress).isEmpty then world
+        else
+          val storage = world.getStorage(BeaconRootContractAddress)
+          val s1 = storage.store(timestampIdx.toBigInt, timestamp.toBigInt)
+          val s2 = s1.store(rootIdx.toBigInt, UInt256(beaconRoot.value).toBigInt)
+          world.saveStorage(BeaconRootContractAddress, s2)
 
       case _ => world
 
@@ -246,10 +302,19 @@ class BlockExecution(
       blockNumber >= blockchainConfig.forkBlockNumbers.olympiaBlockNumber
     if !pragueActive && !etcOlympiaActive then return world
 
-    // Deploy history storage contract only if not already deployed (genesis may pre-deploy it).
-    // Use code presence as the sole guard — identical to applyEip4788's account-existence guard.
-    // Tying deployment to isActivationBlock caused IllegalStateException when processing a
-    // post-activation block on a fresh world: the account was absent so getStorage threw.
+    // ETH (Prague): EIP-2935 "if no code exists at HISTORY_STORAGE_ADDRESS, the call must fail silently".
+    // Exactly as for EIP-4788 (see applyEip4788), the client MUST NOT deploy the contract itself: on ETH it is
+    // deployed by a regular transaction, and go-ethereum's ProcessParentBlockHash is a SYSTEM_ADDRESS call with
+    // value 0, which under EIP-158 returns without creating anything when the account does not exist. Self-deploying
+    // here wrote an account (nonce 1, code) plus a slot the reference does not have, and forked the state root of
+    // the first Prague block on any chain that deploys the contract in-chain rather than in genesis (EEST
+    // test_system_contract_deployment[CancunToPragueAtTime15k-deploy_after_fork / deploy_on_fork_block]).
+    if !etcOlympiaActive && world.getCode(HistoryStorageAddress).isEmpty then return world
+
+    // ETC (Olympia, ECIP-1112): the history contract IS deployed by the client at activation, so deploy it here
+    // if absent (genesis may pre-deploy it). Code presence is the sole guard. Tying deployment to
+    // isActivationBlock caused IllegalStateException when processing a post-activation block on a fresh world:
+    // the account was absent so getStorage threw.
     val w1 = if world.getCode(HistoryStorageAddress).isEmpty then
       val account = world
         .getAccount(HistoryStorageAddress)
@@ -313,7 +378,28 @@ class BlockExecution(
       if remainingBlocksIncOrder.isEmpty then (executedBlocksDecOrder.reverse, None)
       else
         val blockToExecute = remainingBlocksIncOrder.head
-        executeAndValidateBlock(blockToExecute, alreadyValidated = true) match
+        // `alreadyValidated = false`: validate each block BEFORE executing it.
+        //
+        // `validateBlockBeforeExecution` is the only caller of
+        // `blockHeaderValidator.validate` and `ommersValidator.validate` on this path
+        // (ValidatorsExecutor.validateBlockBeforeExecution). This method's two callers,
+        // ConsensusImpl.importToTop and ConsensusImpl.importToNewBranch, serve bulk p2p
+        // import and Engine API newPayload, so passing `true` here meant peer-supplied
+        // blocks reached execution with their headers entirely unchecked — no PoW, no
+        // difficulty, no gasLimit bound, no ommer rules — and were accepted outright.
+        // BlockExecutionPreValidationSpec measured that: 3 of 3 blocks executed with
+        // error=None while one block's header validator returned HeaderDifficultyError.
+        //
+        // `true` was a correct contract in the original Mantis, where blocks were imported
+        // one at a time through a path that always validated first. 6ad1dec (bulk
+        // `evaluateBranch`) and e168554 (the extends-best skip in ConsensusAdapter) removed
+        // that guarantee without retiring the flag.
+        //
+        // No thread race here despite the comment at ConsensusAdapter.scala:67-71: `go` is a
+        // single @tailrec loop on one thread, each iteration's `blockchainWriter.save`
+        // completes before the next begins, and `executeBlock` already resolves the parent
+        // header from the same storage at BlockExecution.scala:104-106.
+        executeAndValidateBlock(blockToExecute, alreadyValidated = false) match
           case Right(receipts) =>
             val newWeight = parentWeight.increase(blockToExecute.header)
             val newBlockData = BlockData(blockToExecute, receipts, newWeight)
@@ -354,18 +440,69 @@ class BlockExecution(
         }
       case _ => world
 
-  /** Prague: Execute system calls for withdrawal and consolidation request processing. Per EIP-7002 and EIP-7251, the
-    * system makes calls to the withdrawal queue and consolidation queue contracts after all transactions in the block.
+  /** Execute the end-of-block SYSTEM_ADDRESS calls to the request-queue predeploys, after all transactions.
+    *
+    * Prague: EIP-7002 (withdrawals) and EIP-7251 (consolidations). Amsterdam additionally calls the two EIP-8282
+    * builder predeploys — see [[BlockExecution.systemCallTargets]].
+    *
+    * These calls are not bookkeeping that can be skipped. Each predeploy's dequeue path clears the per-block slots its
+    * user path dirtied, so omitting a call leaves those slots set and forks the account's storage root, and with it the
+    * state root.
     *
     * Returns the updated world state AND the typed-request bytes collected from each system call's return data (used
-    * for EIP-7685 requestsHash). The returned Seq is in EIP-7685 canonical order: [withdrawals_request,
-    * consolidations_request]. Deposit requests are collected separately via collectDepositRequests.
+    * for the EIP-7685 requestsHash). The returned Seq is in canonical request-type order: withdrawals (0x01),
+    * consolidations (0x02), then builder deposit (0x03) and builder exit (0x04). A call returning no data contributes
+    * nothing. Deposit requests (0x00) are collected separately via collectDepositRequests.
     */
-  private def processPragueSystemCalls(
+  /** EIP-7002 / EIP-7251: "If there is no code at <PREDEPLOY_ADDRESS>, the corresponding block MUST be marked invalid."
+    * Checked on the world AFTER transactions and withdrawals, so a block that deploys the contract itself is valid
+    * (EIP-7002 "Empty code failure": "the empty code validation occurs after block-transactions execution"). EEST:
+    * SYSTEM_CONTRACT_EMPTY, test_system_contract_deployment[CancunToPragueAtTime15k-deploy_after_fork-*].
+    *
+    * Emptiness is read from the account's codeHash, which is state-trie data, rather than from the code bytes, so a
+    * node with incomplete code storage cannot misreport a deployed contract as missing and condemn a valid block.
+    *
+    * Same targets, in the same order, as processPragueSystemCalls (which keeps its silent `code.nonEmpty` skip; that is
+    * now unreachable for a block that passes here). Prague-gated: ETC never reaches it.
+    */
+  private[ledger] def requireRequestPredeploysPresent(
+      block: Block,
+      world: InMemoryWorldStateProxy
+  )(implicit blockchainConfig: BlockchainConfig): Either[BlockExecutionError, Unit] =
+    if !blockchainConfig.isPragueTimestamp(block.header.unixTimestamp) then Right(())
+    else
+      BlockExecution
+        .systemCallTargets(block.header.unixTimestamp)
+        .collectFirst {
+          case (addr, _) if world.getAccount(addr).forall(_.codeHash == Account.EmptyCodeHash) => addr
+        }
+        .fold(Right(())) { addr =>
+          Left(BlockExecutionError.ValidationAfterExecError(s"SYSTEM_CONTRACT_EMPTY: no code at system contract $addr"))
+        }
+
+  private[ledger] def processPragueSystemCalls(
       block: Block,
       world: InMemoryWorldStateProxy
   )(implicit blockchainConfig: BlockchainConfig): (InMemoryWorldStateProxy, Seq[ByteString]) =
-    if !blockchainConfig.isPragueTimestamp(block.header.unixTimestamp) then return (world, Nil)
+    processPragueSystemCallsChecked(block, world).fold(err => throw new IllegalStateException(err), identity)
+
+  /** [[processPragueSystemCalls]], reporting a failed system call instead of ignoring it.
+    *
+    * EIP-7002 / EIP-7251: if the system call fails (halts exceptionally or reverts) the block MUST be deemed invalid.
+    * go-ethereum `processRequestsSystemCall` returns `system call failed to execute` on any EVM error; EELS
+    * `process_checked_system_transaction` raises InvalidBlock. Previously the result's error was dropped and whatever
+    * return data it carried (a REVERT's payload, or nothing) was folded into the requests — EEST
+    * `test_system_contract_errors[system_contract_{reverts,throws,out_of_gas}]` imported as VALID.
+    *
+    * An empty predeploy never reaches here in `executeBlock`: [[requireRequestPredeploysPresent]] has already made that
+    * block invalid (SYSTEM_CONTRACT_EMPTY). The `code.nonEmpty` skip below stays as the guard for the direct callers
+    * (tests, proposer paths) that do not run that check.
+    */
+  private[ledger] def processPragueSystemCallsChecked(
+      block: Block,
+      world: InMemoryWorldStateProxy
+  )(implicit blockchainConfig: BlockchainConfig): Either[String, (InMemoryWorldStateProxy, Seq[ByteString])] =
+    if !blockchainConfig.isPragueTimestamp(block.header.unixTimestamp) then return Right((world, Nil))
 
     import BlockExecution.*
     val evmConfig = EvmConfig.forBlock(block.header.number.value, block.header.unixTimestamp, blockchainConfig)
@@ -374,20 +511,36 @@ class BlockExecution(
 
     // EIP-7685: Execute system calls to request contracts and collect output.
     // EIP-6110 DEPOSIT contract has no system call — deposits are parsed from logs.
-    // Only EIP-7002 (withdrawals) and EIP-7251 (consolidations) do a SYSTEM_ADDRESS call.
-    for (queueAddr, requestType) <- Seq(
-        (WithdrawalQueueAddress, WithdrawalRequestType),
-        (ConsolidationQueueAddress, ConsolidationRequestType)
-      )
+    // Prague: EIP-7002 (withdrawals) and EIP-7251 (consolidations). Amsterdam adds the two EIP-8282 builder
+    // predeploys. The SYSTEM_ADDRESS call is not optional bookkeeping: each predeploy's dequeue path clears the
+    // per-block slots its user path dirtied (for the builder deposit contract, slots 0x01 and 0x03), so skipping
+    // the call leaves those slots set and forks the storage root -> account RLP -> STATE ROOT.
+    //
+    // GAS CEILING, stated explicitly because it changes an already-shipped path. `SYSTEM_CALL_GAS_LIMIT` is one
+    // global constant, not a per-contract one: EIP-8037 raises it from 30,000,000 to 30,000,000 + 16 x
+    // GAS_STORAGE_SET so that a system call has state-dimension headroom, and it does so for EVERY system call,
+    // not only the two EIP-8282 ones. So on an Amsterdam block the pre-existing EIP-7002/7251 calls are funded at
+    // the raised ceiling too. That is deliberate: scoping the bump to the builder pair would invent a
+    // two-constant model no reference client has. EIP-2935 and EIP-4788 are unaffected here only because this
+    // client applies them as direct storage writes (the optimisation EIP-4788 explicitly permits) rather than as
+    // EVM calls, so they have no gas ceiling to raise — see `applyEip4788` / `applyEip2935`.
+    //
+    // The bump is strictly upward (30,000,000 -> 31,566,720) and the queue predeploys are bounded loops that
+    // never read GAS, so it is a no-op for 7002/7251. That is asserted, not assumed:
+    // `AmsterdamBuilderRequestsSpec` runs the fixture's real withdrawal and consolidation bytecode over a
+    // non-empty queue at both ceilings and requires byte-identical requests and storage.
+    val amsterdamActive = blockchainConfig.isAmsterdamTimestamp(block.header.unixTimestamp)
+    var failure: Option[String] = None
+    for (queueAddr, requestType) <- BlockExecution.systemCallTargets(block.header.unixTimestamp)
     do
       val code = w.getCode(queueAddr)
-      if code.nonEmpty then
+      if failure.isEmpty && code.nonEmpty then
         val context = ProgramContext[InMemoryWorldStateProxy, InMemoryWorldStateProxyStorage](
           callerAddr = SystemAddress,
           originAddr = SystemAddress,
           recipientAddr = Some(queueAddr),
           gasPrice = com.chipprbots.ethereum.domain.UInt256.Zero,
-          startGas = BigInt(30000000),
+          startGas = if amsterdamActive then AmsterdamGas.SystemCallGasLimit else BigInt(30000000),
           inputData = ByteString.empty,
           value = com.chipprbots.ethereum.domain.UInt256.Zero,
           endowment = com.chipprbots.ethereum.domain.UInt256.Zero,
@@ -403,62 +556,42 @@ class BlockExecution(
         )
         val vm = new com.chipprbots.ethereum.vm.VM[InMemoryWorldStateProxy, InMemoryWorldStateProxyStorage]
         val result = vm.run(context)
-        w = InMemoryWorldStateProxy.persistState(result.world)
-        // EIP-7685 request bytes = single-byte type prefix || raw system-call returndata.
-        // Empty returndata (no queued requests) means no bytes are emitted for this type.
-        if result.returnData.nonEmpty then outputs += ByteString(Array(requestType.toByte)) ++ result.returnData
-    (w, outputs.toSeq)
+        result.error match
+          case Some(err) =>
+            failure = Some(s"SYSTEM_CONTRACT_CALL_FAILED: system call to $queueAddr failed: $err")
+          case None =>
+            w = InMemoryWorldStateProxy.persistState(result.world)
+            // EIP-7685 request bytes = single-byte type prefix || raw system-call returndata.
+            // Empty returndata (no queued requests) means no bytes are emitted for this type.
+            if result.returnData.nonEmpty then outputs += ByteString(Array(requestType.toByte)) ++ result.returnData
+    failure.toLeft((w, outputs.toSeq))
 
   /** EIP-6110: Parse `DepositEvent(bytes,bytes,bytes,bytes,bytes)` logs emitted by the beacon deposit contract during
-    * block execution and return one request entry per deposit. Event ABI: [pubkey(48)->64,
-    * withdrawal_credentials(32)->64, amount(8)->32, signature(96)->128, index(8)->32]. The canonical request body
-    * concatenates the raw fields (pubkey || wc || amount_le || signature || index_le) = 192 bytes; with the type byte
-    * prefix (0x00) that's 193 bytes per deposit. Returns a single ByteString = 0x00 || concatenated_deposit_data (or
-    * empty if none).
+    * block execution and return one request entry: 0x00 || (pubkey || wc || amount || signature || index) per deposit,
+    * or None if there were none.
+    *
+    * A deposit log whose ABI layout is not exactly the canonical one — 576 bytes, offsets 160/256/320/384/512, sizes
+    * 48/32/8/96/8 — makes the BLOCK invalid (EELS `extract_deposit_data`, EEST `test_invalid_layout` /
+    * `test_invalid_log_length`: INVALID_DEPOSIT_EVENT_LAYOUT). Previously any log of at least 608 bytes was sliced at
+    * fixed positions and any shorter one silently dropped, so a malformed event was misparsed or ignored, never
+    * rejected.
     */
-  def collectDepositRequests(receipts: Seq[Receipt]): Option[ByteString] =
+  def collectDepositRequests(receipts: Seq[Receipt]): Either[String, Option[ByteString]] =
     import BlockExecution.*
-    val buf = scala.collection.mutable.ArrayBuffer.empty[Byte]
-    for
+    val deposits = for
       receipt <- receipts
       log <- receipt.logs
       if log.loggerAddress == DepositContractAddress
       if log.logTopics.headOption.contains(DepositEventSignature)
-    do
-      // Deposit event data layout (offsets + 32-byte length prefix + padded body):
-      //   offsets: 5 * 32 bytes = 160 bytes of ABI offsets [160, 256, 352, 416, 576]
-      //   pubkey: 32-byte length (=48) + 48-byte body + 16-byte pad     = 96 bytes
-      //   wc:     32-byte length (=32) + 32-byte body                    = 64 bytes
-      //   amount: 32-byte length (=8)  + 8-byte body + 24-byte pad       = 64 bytes
-      //   sig:    32-byte length (=96) + 96-byte body + 32-byte pad      = 160 bytes
-      //   index:  32-byte length (=8)  + 8-byte body + 24-byte pad       = 64 bytes
-      // Total = 160 + 96 + 64 + 64 + 160 + 64 = 608 bytes. We slice the raw bodies.
-      val d = log.data
-      if d.length >= 608 then
-        // skip 5x32 offsets = 160
-        val pubkey = d.slice(160 + 32, 160 + 32 + 48) // 48
-        val wc = d.slice(160 + 96 + 32, 160 + 96 + 32 + 32) // 32
-        val amountLE = d.slice(160 + 96 + 64 + 32, 160 + 96 + 64 + 32 + 8) // 8
-        val signature = d.slice(160 + 96 + 64 + 64 + 32, 160 + 96 + 64 + 64 + 32 + 96) // 96
-        val indexLE = d.slice(160 + 96 + 64 + 64 + 160 + 32, 160 + 96 + 64 + 64 + 160 + 32 + 8) // 8
-        buf ++= pubkey ++= wc ++= amountLE ++= signature ++= indexLE
-    if buf.isEmpty then None
-    else Some(ByteString(Array(DepositRequestType.toByte)) ++ ByteString(buf.toArray))
-
-  /** EIP-7685: Concatenate per-type request bytes (each = type_byte || data) and compute sha256(sha256(deposits) ++
-    * sha256(withdrawals) ++ sha256(consolidations)). Missing types contribute sha256("").
-    */
-  def computeRequestsHash(deposits: Option[ByteString], systemRequests: Seq[ByteString]): ByteString =
-    import java.security.MessageDigest
-    val sha = MessageDigest.getInstance("SHA-256")
-    def digest(bs: ByteString): Array[Byte] =
-      val d = MessageDigest.getInstance("SHA-256")
-      d.update(bs.toArray)
-      d.digest()
-    val depositsHash = digest(deposits.getOrElse(ByteString.empty))
-    sha.update(depositsHash)
-    systemRequests.foreach(r => sha.update(digest(r)))
-    ByteString(sha.digest())
+    yield log.data
+    deposits.toList
+      .traverse(extractDepositData)
+      .left
+      .map(err => s"INVALID_DEPOSIT_EVENT_LAYOUT: $err")
+      .map { bodies =>
+        if bodies.isEmpty then None
+        else Some(bodies.foldLeft(ByteString(Array(DepositRequestType.toByte)))(_ ++ _))
+      }
 
 object BlockExecution:
 
@@ -473,10 +606,69 @@ object BlockExecution:
   /** EIP-7251: Consolidation request queue contract */
   val ConsolidationQueueAddress: Address = Address("0x0000bbddc7ce488642fb579f8b00f3a590007251")
 
+  /** EIP-8282: Builder DEPOSIT request queue contract (Amsterdam). */
+  val BuilderDepositQueueAddress: Address = Address("0x0000bFF46984e3725691FA540a8C7589300D8282")
+
+  /** EIP-8282: Builder EXIT request queue contract (Amsterdam). */
+  val BuilderExitQueueAddress: Address = Address("0x000064D678505ad48F8cCb093BC65613800E8282")
+
   /** EIP-7685 request type byte prefixes (canonical ordering). */
   val DepositRequestType: Int = 0x00
   val WithdrawalRequestType: Int = 0x01
   val ConsolidationRequestType: Int = 0x02
+  val BuilderDepositRequestType: Int = 0x03
+  val BuilderExitRequestType: Int = 0x04
+
+  /** The EIP-7685 system-call targets for the fork active at `timestamp`, in canonical request-type order.
+    *
+    * EIP-7002 (0x01) and EIP-7251 (0x02) come in at Prague. EIP-8282 appends the two builder predeploys, 0x03 (deposit)
+    * and 0x04 (exit), at Amsterdam. The order is load-bearing: `requestsHash` folds the per-type digests in ascending
+    * type order, so the builder pair must follow 7002/7251 and never precede them.
+    *
+    * ETC safety: no ETC-family config declares `amsterdam-timestamp`, so `isAmsterdamTimestamp` reads `None` and this
+    * returns the Prague pair unchanged on every ETC chain. The caller additionally skips any target with no deployed
+    * code, which is the second, independent guard.
+    */
+  def systemCallTargets(timestamp: Timestamp)(implicit blockchainConfig: BlockchainConfig): Seq[(Address, Int)] =
+    val pragueTargets = Seq(
+      (WithdrawalQueueAddress, WithdrawalRequestType),
+      (ConsolidationQueueAddress, ConsolidationRequestType)
+    )
+    if blockchainConfig.isAmsterdamTimestamp(timestamp) then
+      pragueTargets ++ Seq(
+        (BuilderDepositQueueAddress, BuilderDepositRequestType),
+        (BuilderExitQueueAddress, BuilderExitRequestType)
+      )
+    else pragueTargets
+
+  /** EIP-6110 `DepositEvent` ABI layout: (offset, size) of pubkey, withdrawal_credentials, amount, signature, index. */
+  private val DepositEventLength = 576
+  private val DepositEventFields: Seq[(Int, Int)] = Seq((160, 48), (256, 32), (320, 8), (384, 96), (512, 8))
+
+  /** EELS `extract_deposit_data`: validate a `DepositEvent` payload's layout and return the unframed 192-byte body. */
+  def extractDepositData(data: ByteString): Either[String, ByteString] =
+    def word(at: Int): BigInt = BigInt(1, data.slice(at, at + 32).toArray)
+    if data.length != DepositEventLength then Left(s"deposit event data length ${data.length} != $DepositEventLength")
+    else
+      DepositEventFields.zipWithIndex
+        .collectFirst {
+          case ((offset, _), i) if word(i * 32) != offset  => s"field $i offset ${word(i * 32)} != $offset"
+          case ((offset, size), i) if word(offset) != size => s"field $i size ${word(offset)} != $size"
+        }
+        .toLeft(
+          DepositEventFields.map { case (offset, size) => data.slice(offset + 32, offset + 32 + size) }.reduce(_ ++ _)
+        )
+
+  /** EIP-7685 `requests_hash`: sha256(sha256(r_0) ++ sha256(r_1) ++ ...), skipping entries that carry only a type byte
+    * (go-ethereum `CalcRequestsHash`). Execution never produces such entries; the skip matters only for CL input.
+    */
+  def computeRequestsHash(requests: Seq[ByteString]): ByteString =
+    val outer = java.security.MessageDigest.getInstance("SHA-256")
+    requests.foreach { request =>
+      if request.length > 1 then
+        outer.update(java.security.MessageDigest.getInstance("SHA-256").digest(request.toArray))
+    }
+    ByteString(outer.digest())
 
   /** EIP-6110: keccak256("DepositEvent(bytes,bytes,bytes,bytes,bytes)") topic signature. */
   val DepositEventSignature: ByteString = ByteString(
@@ -519,7 +711,20 @@ object BlockExecutionError:
   final case class ValidationBeforeExecError(error: ValidationError) extends BlockExecutionError:
     def describe: String = error.toString
 
-  final case class StateBeforeFailure(worldState: InMemoryWorldStateProxy, acumGas: BigInt, acumReceipts: Seq[Receipt])
+  /** @param acumGas
+    *   the receipt counter — the running sum of `tx_gas_used`, which is what `cumulativeGasUsed` continues from.
+    * @param acumExecutionGas
+    *   EIP-8037 `block_execution_gas_used` so far. Equal to `acumGas` pre-Amsterdam.
+    * @param acumStateGas
+    *   EIP-8037 `block_state_gas_used` so far. Zero pre-Amsterdam.
+    */
+  final case class StateBeforeFailure(
+      worldState: InMemoryWorldStateProxy,
+      acumGas: BigInt,
+      acumReceipts: Seq[Receipt],
+      acumExecutionGas: BigInt = 0,
+      acumStateGas: BigInt = 0
+  )
 
   final case class TxsExecutionError(stx: SignedTransaction, stateBeforeError: StateBeforeFailure, reason: String)
       extends BlockExecutionError:

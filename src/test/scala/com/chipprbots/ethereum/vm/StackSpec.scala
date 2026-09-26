@@ -98,3 +98,81 @@ class StackSpec extends AnyFunSuite with Matchers with ScalaCheckPropertyChecks:
       else stack1 shouldEqual stack
     }
   }
+
+  /** The Vector-backed Stack this class used to be, verbatim, as an oracle: the list-backed one must give the same
+    * results for every operation, in range or not.
+    */
+  final class VectorStack(val underlying: Vector[UInt256], val maxSize: Int):
+    def pop(): (UInt256, VectorStack) = underlying.lastOption match
+      case Some(word) => (word, VectorStack(underlying.dropRight(1), maxSize))
+      case None       => (UInt256.Zero, this)
+    def pop(n: Int): (Seq[UInt256], VectorStack) =
+      val (updated, popped) = underlying.splitAt(underlying.length - n)
+      if popped.length == n then (popped.reverse, VectorStack(updated, maxSize))
+      else (Seq.fill(n)(UInt256.Zero), this)
+    def push(word: UInt256): VectorStack =
+      val updated = underlying :+ word
+      if updated.length <= maxSize then VectorStack(updated, maxSize) else this
+    def push(words: Seq[UInt256]): VectorStack =
+      val updated = underlying ++ words
+      if updated.length > maxSize then this else VectorStack(updated, maxSize)
+    def dup(i: Int): VectorStack =
+      val j = underlying.length - i - 1
+      if i < 0 || i >= underlying.length || underlying.length >= maxSize then this
+      else VectorStack(underlying :+ underlying(j), maxSize)
+    def swap(i: Int): VectorStack =
+      val j = underlying.length - i - 1
+      if i <= 0 || i >= underlying.length then this
+      else VectorStack(underlying.updated(j, underlying.last).init :+ underlying(j), maxSize)
+    def size: Int = underlying.size
+    def toSeq: Seq[UInt256] = underlying.reverse
+    override def hashCode(): Int = underlying.hashCode
+    override def toString: String = underlying.reverse.mkString("Stack(", ",", ")")
+
+  sealed private trait Op
+  private case object Pop extends Op
+  final private case class PopN(n: Int) extends Op
+  final private case class Push(word: UInt256) extends Op
+  final private case class PushAll(words: List[UInt256]) extends Op
+  final private case class Dup(i: Int) extends Op
+  final private case class Swap(i: Int) extends Op
+
+  test("behaves exactly as the Vector-backed stack it replaced, over random operation sequences", UnitTest, VMTest) {
+    // indices and counts run past both ends of the stack, and the capacity is small enough to be hit
+    val opGen: Gen[Op] = Gen.oneOf(
+      Gen.const(Pop),
+      Gen.choose(-2, 20).map(PopN(_)),
+      uint256Gen.map(Push(_)),
+      Generators.getListGen(0, 6, uint256Gen).map(PushAll(_)),
+      Gen.choose(-2, 20).map(Dup(_)),
+      Gen.choose(-2, 20).map(Swap(_))
+    )
+    val caseGen = for
+      maxSize <- Gen.choose(0, 20)
+      ops <- Gen.listOfN(60, opGen)
+    yield (maxSize, ops)
+
+    forAll(caseGen, minSuccessful(2000)) { case (maxSize, ops) =>
+      ops.foldLeft((Stack.empty(maxSize), VectorStack(Vector.empty, maxSize))) { case ((stack, model), op) =>
+        val (next, nextModel) = op match
+          case Pop =>
+            val ((word, s), (w, m)) = (stack.pop(), model.pop())
+            word shouldEqual w
+            (s, m)
+          case PopN(n) =>
+            val ((words, s), (ws, m)) = (stack.pop(n), model.pop(n))
+            words shouldEqual ws
+            (s, m)
+          case Push(word)     => (stack.push(word), model.push(word))
+          case PushAll(words) => (stack.push(words), model.push(words))
+          case Dup(i)         => (stack.dup(i), model.dup(i))
+          case Swap(i)        => (stack.swap(i), model.swap(i))
+        next.toSeq shouldEqual nextModel.toSeq
+        next.size shouldEqual nextModel.size
+        next.maxSize shouldEqual nextModel.maxSize
+        next.hashCode shouldEqual nextModel.hashCode
+        next.toString shouldEqual nextModel.toString
+        (next, nextModel)
+      }
+    }
+  }

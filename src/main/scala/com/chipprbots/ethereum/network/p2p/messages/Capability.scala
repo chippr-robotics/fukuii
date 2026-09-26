@@ -27,7 +27,10 @@ object Capability:
   case object ETH68 extends Capability(ProtocolFamily.ETH, 68) // scalastyle:ignore magic.number
   case object ETH69 extends Capability(ProtocolFamily.ETH, 69) // scalastyle:ignore magic.number
   case object ETH70 extends Capability(ProtocolFamily.ETH, 70) // scalastyle:ignore magic.number
+  case object ETH71 extends Capability(ProtocolFamily.ETH, 71) // scalastyle:ignore magic.number
+  case object ETH72 extends Capability(ProtocolFamily.ETH, 72) // scalastyle:ignore magic.number
   case object SNAP1 extends Capability(ProtocolFamily.SNAP, 1) // scalastyle:ignore magic.number
+  case object SNAP2 extends Capability(ProtocolFamily.SNAP, 2) // scalastyle:ignore magic.number
 
   def parse(s: String): Option[Capability] = s match
     case "eth/63" => Some(ETH63)
@@ -38,45 +41,62 @@ object Capability:
     case "eth/68" => Some(ETH68)
     case "eth/69" => Some(ETH69)
     case "eth/70" => Some(ETH70)
+    case "eth/71" => Some(ETH71)
+    case "eth/72" => Some(ETH72)
     case "snap/1" => Some(SNAP1)
+    case "snap/2" => Some(SNAP2)
     case _        => None
 
   def parseUnsafe(s: String): Capability =
     parse(s).getOrElse(throw new RuntimeException(s"Capability $s not supported by Fukuii"))
 
+  /** Find the highest mutually-supported version within one protocol family, returned from `own` (never from `peer`) so
+    * the caller is guaranteed to hold a decoder for it. This is devp2p's standard subprotocol negotiation rule — see
+    * rlpx.md "Capability Messaging": each side advertises every version it can speak; the highest version present in
+    * BOTH lists wins.
+    */
+  private def negotiateFamily(peer: List[Capability], own: List[Capability]): Option[Capability] =
+    if peer.isEmpty || own.isEmpty then None
+    else
+      val peerVersions = peer.map(_.version).toSet
+      val ownVersions = own.map(_.version).toSet
+      val commonVersions = peerVersions.intersect(ownVersions)
+      if commonVersions.isEmpty then None
+      else
+        val maxCommon = commonVersions.max
+        own.find(_.version == maxCommon) // always from our side — we have the decoder
+
+  /** SNAP-family negotiation alone, exposed so callers that only care about the satellite protocol (decoder selection,
+    * wire-offset sizing) don't have to re-derive it from the combined `negotiate` result — `negotiate` only ever
+    * returns ETH's pick when both families are present (see `best`).
+    */
+  def negotiateSnap(peerCapabilities: List[Capability], ownCapabilities: List[Capability]): Option[Capability] =
+    negotiateFamily(
+      peerCapabilities.collect { case cap @ (SNAP1 | SNAP2) => cap },
+      ownCapabilities.collect { case cap @ (SNAP1 | SNAP2) =>
+        cap
+      }
+    )
+
+  /** ETH-family negotiation alone — same rationale as `negotiateSnap`. */
+  def negotiateEth(peerCapabilities: List[Capability], ownCapabilities: List[Capability]): Option[Capability] =
+    negotiateFamily(
+      peerCapabilities.collect {
+        case cap @ (ETH63 | ETH64 | ETH65 | ETH66 | ETH67 | ETH68 | ETH69 | ETH70 | ETH71 | ETH72) =>
+          cap
+      },
+      ownCapabilities.collect {
+        case cap @ (ETH63 | ETH64 | ETH65 | ETH66 | ETH67 | ETH68 | ETH69 | ETH70 | ETH71 | ETH72) =>
+          cap
+      }
+    )
+
   def negotiate(c1: List[Capability], c2: List[Capability]): Option[Capability] =
     // ETH protocol versions are backward compatible
     // If we advertise ETH68 and peer advertises ETH64, we should negotiate ETH64
-    // This means we need to find the highest common version for each protocol family
-
-    val ethVersions1 = c1.collect { case cap @ (ETH63 | ETH64 | ETH65 | ETH66 | ETH67 | ETH68 | ETH69 | ETH70) =>
-      cap
-    }
-    val ethVersions2 = c2.collect { case cap @ (ETH63 | ETH64 | ETH65 | ETH66 | ETH67 | ETH68 | ETH69 | ETH70) =>
-      cap
-    }
-
-    val snapVersions1 = c1.collect { case cap @ SNAP1 => cap }
-    val snapVersions2 = c2.collect { case cap @ SNAP1 => cap }
-
-    // For each protocol family, find the highest common version
-    val negotiatedCapabilities = List(
-      // ETH: find the highest version that BOTH sides advertise (strict intersection).
-      // We only return a capability from our own set (ethVersions1) to guarantee we have
-      // a decoder for it. The .orElse(ethVersions2...) fallback was a bug: it could
-      // return a peer cap we don't support (e.g. ETH67 when we only have ETH68/69).
-      if ethVersions1.nonEmpty && ethVersions2.nonEmpty then
-        val versions1 = ethVersions1.map(_.version).toSet
-        val versions2 = ethVersions2.map(_.version).toSet
-        val commonVersions = versions1.intersect(versions2)
-        if commonVersions.isEmpty then None
-        else
-          val maxCommon = commonVersions.max
-          ethVersions1.find(_.version == maxCommon) // always from our side — we have the decoder
-      else None,
-      // SNAP: exact match required
-      if snapVersions1.intersect(snapVersions2).nonEmpty then Some(SNAP1) else None
-    ).flatten
+    // This means we need to find the highest common version for each protocol family.
+    // For each protocol family, find the highest common version.
+    val negotiatedCapabilities = List(negotiateEth(c1, c2), negotiateSnap(c1, c2)).flatten
 
     negotiatedCapabilities match
       case Nil => None
@@ -88,8 +108,8 @@ object Capability:
   def best(capabilities: List[Capability]): Capability =
     capabilities
       .groupBy {
-        case ETH63 | ETH64 | ETH65 | ETH66 | ETH67 | ETH68 | ETH69 | ETH70 => "ETH"
-        case SNAP1                                                         => "SNAP"
+        case ETH63 | ETH64 | ETH65 | ETH66 | ETH67 | ETH68 | ETH69 | ETH70 | ETH71 | ETH72 => "ETH"
+        case SNAP1 | SNAP2                                                                 => "SNAP"
       }
       .toList
       .sortBy {
@@ -107,8 +127,19 @@ object Capability:
     * RequestId wrapper ETH63, ETH64, ETH65 do not use RequestId wrapper
     */
   def usesRequestId(capability: Capability): Boolean = capability match
-    case ETH66 | ETH67 | ETH68 | ETH69 | ETH70 | SNAP1 => true
-    case _                                             => false
+    case ETH66 | ETH67 | ETH68 | ETH69 | ETH70 | ETH71 | ETH72 | SNAP1 | SNAP2 => true
+    case _                                                                     => false
+
+  /** True for ETH69, ETH70, ETH71, ETH72 — the "no total-difficulty on the wire" tier (EIP-7642). These versions share
+    * the same Status shape (no TD, carries a block range instead), the same BlockRangeUpdate change notification, and
+    * the same 3-tier chainWeight resolution (BlockchainReader.resolveETH69ChainWeight). Call sites throughout
+    * NetworkPeerManagerActor/BlockBroadcast/SNAPSyncController historically compared `capability == Capability.ETH69`
+    * directly; that stopped being correct the moment ETH70+ became reachable (they carry the exact same "no TD"
+    * property ETH69 does) — use this predicate instead of hardcoding ETH69 in new code.
+    */
+  def isEth69Plus(capability: Capability): Boolean = capability match
+    case ETH69 | ETH70 | ETH71 | ETH72 => true
+    case _                             => false
 
   extension (msg: Capability) def toRLPEncodable: RLPEncodeable = RLPList(msg.name.toRLPEncodable, msg.version)
 

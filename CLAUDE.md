@@ -34,8 +34,9 @@ burned, validator withdrawals, blob transactions (EIP-4844), Osaka fork.
 | `sbt formatCheck` | Verify formatting without writing | CI / pre-flight check |
 | `sbt pp` | compile-all + formatAll + quick + integration tests | Pre-PR gate — same caveat as formatAll |
 | `sbt "testOnly *Foo*"` | Single test class (seconds) | After each phase that changes logic — not compile-only phases |
-| `./local/scripts/fukuii-test FooSpec` | Wrapper for targeted test | Same as testOnly — prefer this form |
-| `./local/scripts/fukuii-test` | Full testEssential via wrapper | **End of thread only, once** — 24 min, do not run between phases |
+| `./scripts/fukuii-test only "*Foo*"` | Wrapper for targeted test | Same as testOnly — prefer this form |
+| `./scripts/fukuii-test essential` | Full testEssential via wrapper | **End of thread only, once** — 24 min, do not run between phases |
+| `./scripts/fukuii-test quick` | `crypto / test` only (~20 s) | Fast smoke check of the crypto sub-module |
 | `sbt testEssential` | Tier 1 full suite (24 min, 3,621 tests) | End of thread only — stalls development if run mid-thread |
 | `sbt testStandard` | Tier 2 tests | Before opening a PR |
 | `sbt testComprehensive` | Tier 3 full compliance suite (<3 h) | Release gate only |
@@ -229,17 +230,22 @@ Read it before planning or implementing. Highlights:
 <!-- SPECKIT START -->
 For additional context about technologies to be used, project structure,
 shell commands, and other important information, read the current plan:
-`specs/007-hotpath-alloc-reduction/plan.md` (reduce hot-path CPU allocations on the
-keccak-256 + SNAP inline-merkleization paths to cut GC/allocation pressure and return CPU
-to sync — PURE PERFORMANCE, byte-for-byte identical consensus output. P1: replace per-call
-`new KeccakDigest(256)` with a thread-confined `ThreadLocal[KeccakDigest]` reset-on-entry
-(the load-bearing parity mechanism — guards the aborted-mid-update window). P2: reuse
-StackTrie transient scratch but NEVER the aliased final node blob (chain-split risk). P3:
-single-`Array[Byte]` `kec256` overload, `SnapHashTrie.emit` clone elision, `RLP.encode`
-O(n²)→O(n) — each FR-010-gated on proven parity + measured win. forge protocol; byte-for-byte
-gate via crypto/MPT/ethereum-tests + dedicated keccak vector/reset-after-abort/concurrency
-spec + A/B replay; perf is report-and-record, parity is the hard gate. Honest expectation:
-low single-digit to low-double-digit % throughput; the real CPU fix remains more cores.)
-Prior plans: `specs/004-decoupled-heal-serve-root/plan.md`,
-`specs/003-scoped-heal-verification/plan.md`.
+`specs/009-amsterdam-fork-support/plan.md` (Amsterdam hard fork support for ETH-family
+chains, timestamp-gated, ETC byte-for-byte unchanged. Motivation is measured: hive's devp2p
+fixture declares `amsterdamTime: 360`, so block 36 is the first Amsterdam block and import
+dies there, stranding the node at head 35 of ~89 — which is why 27 of that suite's 34
+failures are `wrong head block in status`. Four slices. A: strict header field-count
+decoding — the `case n if n >= 21` catch-all truncates 23-field headers and emits a WRONG
+hash today; ships first, alone, and does NOT move devp2p. B (atomic): EIP-2780 + 8037 +
+8038 + 7778 + 7954 + 7708 — Phase 0 proved these are numerically inseparable. C: EIP-7928
+block-level access lists. D: EIP-8282 builder requests. THE load-bearing fact: under
+EIP-8037 the header's `gasUsed` is max(execution, state), NOT a total, while receipts sum
+both — block 41 carries header 183,600 and receipt 326,947 and a single-counter
+implementation fails one of them. Fixture-green is necessary but NOT sufficient: every
+fixture tx sits below TX_MAX_GAS_LIMIT so the state-gas reservoir is empty throughout and
+its seeding, cross-frame passing, LIFO refills and successful-child merge go untested.
+`beacon` owns ETH; `forge` signs off that ETC is untouched; rpc-compat (40) and graphql (2)
+are the inertness oracles and must not move in EITHER direction.)
+Prior plans: `specs/007-hotpath-alloc-reduction/plan.md`,
+`specs/004-decoupled-heal-serve-root/plan.md`.
 <!-- SPECKIT END -->

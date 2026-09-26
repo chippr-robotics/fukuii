@@ -47,22 +47,36 @@ import com.chipprbots.ethereum.vm.StructLogTracer
   */
 object DebugTracingService:
 
-  /** Tracer configuration, mirroring go-ethereum tracers.TraceConfig.
+  /** Tracer configuration, mirroring go-ethereum's eth/tracers/logger.Config.
+    *
+    * Field polarity intentionally mirrors go-ethereum exactly — memory/returnData are opt-IN (default off),
+    * stack/storage are opt-OUT (default on). See execution-apis src/schemas/opcode-tracer.yaml `TraceConfig` for the
+    * normative field names and defaults; every field here defaults to what go-ethereum returns when a caller sends no
+    * config object at all (e.g. `debug_traceBlockByNumber(blockParam)` with no second argument).
     *
     * @param tracer
     *   optional named tracer; absent → default StructLogTracer
     * @param disableStorage
-    *   suppress storage snapshots per step (StructLogTracer only)
-    * @param disableMemory
-    *   suppress memory snapshots per step (StructLogTracer only)
+    *   suppress storage snapshots per step (StructLogTracer only). Default false (storage ON).
+    * @param enableMemory
+    *   include memory snapshots per step (StructLogTracer only). Default false (memory OFF) — capturing a full
+    *   word-by-word memory snapshot on every opcode of every transaction is expensive, so this must stay opt-in to
+    *   match go-ethereum.
     * @param disableStack
     *   suppress stack snapshots per step (unused; StructLogTracer always records stack)
+    * @param enableReturnData
+    *   include the most-recent-call return data per step (StructLogTracer only). Parsed for forward-compatibility with
+    *   go-ethereum's field name, but not yet wired to a capture path — StructLogTracer has no per-step return-data
+    *   buffer today. The field is always absent from the response regardless of this setting, which is schema-valid
+    *   either way (execution-apis marks `returnData` optional even when the caller asks for it). Tracked as a
+    *   follow-up, not required by any current fixture.
     */
   case class TraceConfig(
       tracer: Option[String] = None,
       disableStorage: Boolean = false,
-      disableMemory: Boolean = false,
-      disableStack: Boolean = false
+      enableMemory: Boolean = false,
+      disableStack: Boolean = false,
+      enableReturnData: Boolean = false
   )
 
   case class TraceTransactionRequest(txHash: ByteString, config: TraceConfig = TraceConfig())
@@ -75,10 +89,17 @@ object DebugTracingService:
   case class TraceCallManyResponse(results: Seq[JValue])
 
   case class TraceBlockByHashRequest(blockHash: ByteString, config: TraceConfig = TraceConfig())
-  case class TraceBlockByHashResponse(results: Seq[JValue])
+  case class TraceBlockByHashResponse(results: Seq[TxTraceResult])
 
   case class TraceBlockByNumberRequest(block: BlockParam, config: TraceConfig = TraceConfig())
-  case class TraceBlockByNumberResponse(results: Seq[JValue])
+  case class TraceBlockByNumberResponse(results: Seq[TxTraceResult])
+
+  /** One transaction's trace result within a block-level trace (debug_traceBlockByHash / debug_traceBlockByNumber). The
+    * execution-apis / hive openrpc-tracer.json schema requires each array entry to carry BOTH `txHash` and `result` —
+    * go-ethereum's traceBlock wraps every per-tx trace the same way so callers can correlate a result with the
+    * transaction that produced it without re-deriving hashes.
+    */
+  case class TxTraceResult(txHash: ByteString, result: JValue)
 
   /** debug_intermediateRoots params — block hash, optional trace config (ignored for root computation). */
   case class IntermediateRootsRequest(blockHash: ByteString, config: TraceConfig = TraceConfig())
@@ -119,14 +140,14 @@ class DebugTracingService(
       for
         location <- transactionMappingStorage
           .get(req.txHash)
-          .toRight(JsonRpcError.InvalidParams("Transaction not found"))
+          .toRight(JsonRpcError.LogicError("Transaction not found"))
         TransactionLocation(blockHash, txIndex) = location
         block <- blockchainReader
           .getBlockByHash(BlockHash(blockHash))
-          .toRight(JsonRpcError.InvalidParams(s"Block not found for hash ${blockHash.toHex}"))
+          .toRight(JsonRpcError.LogicError(s"Block not found for hash ${blockHash.toHex}"))
         parentHeader <- blockchainReader
           .getBlockHeaderByHash(block.header.parentHash)
-          .toRight(JsonRpcError.InvalidParams("Parent block not found"))
+          .toRight(JsonRpcError.LogicError("Parent block not found"))
         stxs = SignedTransactionWithSender.getSignedTransactions(block.body.transactionList)
         _ <- Either.cond(
           txIndex >= 0 && txIndex < stxs.length,
@@ -202,7 +223,7 @@ class DebugTracingService(
       for
         block <- blockchainReader
           .getBlockByHash(BlockHash(req.blockHash))
-          .toRight(JsonRpcError.InvalidParams(s"Block not found for hash ${req.blockHash.toHex}"))
+          .toRight(JsonRpcError.LogicError(s"Block not found for hash ${req.blockHash.toHex}"))
         result <- traceAllTxsInBlock(block, req.config)
       yield TraceBlockByHashResponse(result)
     }.recover { case _: MissingNodeException =>
@@ -227,23 +248,32 @@ class DebugTracingService(
 
   // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-  /** Replays all transactions in a block, returning one trace result per tx.
+  /** Replays all transactions in a block, returning one trace result per tx, each tagged with its tx hash.
     *
-    * Each tx is traced independently with a fresh tracer, using advanceWorldToTx to reproduce the exact world state the
-    * tx saw on-chain.
+    * Threads the world state forward tx-by-tx instead of calling advanceWorldToTx per index: advanceWorldToTx replays
+    * every prior tx from the parent state root, so calling it once per index makes this method O(n^2) in the
+    * transaction count. simulateTransactionWithTracer already returns the post-tx world in TxResult.worldState, so we
+    * carry that into the next iteration and only build the genuine parent-state world once (matches core-geth's
+    * traceBlock, which steps one statedb forward). advanceWorldToTx itself is untouched — traceTransaction legitimately
+    * uses it for a single index.
     */
-  private def traceAllTxsInBlock(block: Block, config: TraceConfig): Either[JsonRpcError, Seq[JValue]] =
+  private def traceAllTxsInBlock(block: Block, config: TraceConfig): Either[JsonRpcError, Seq[TxTraceResult]] =
     blockchainReader
       .getBlockHeaderByHash(block.header.parentHash)
-      .toRight(JsonRpcError.InvalidParams("Parent block header not found"))
+      .toRight(JsonRpcError.LogicError("Parent block header not found"))
       .map { parentHeader =>
         val stxs = SignedTransactionWithSender.getSignedTransactions(block.body.transactionList)
-        stxs.zipWithIndex.map { case (stx, txIndex) =>
-          val world = stxLedger.advanceWorldToTx(block.header, stxs, txIndex, parentHeader.stateRoot.value)
-          val tracer = selectTracer(config, Some(world))
-          stxLedger.simulateTransactionWithTracer(stx, block.header, Some(world), tracer)
-          tracer.getResult
-        }
+        if stxs.isEmpty then Seq.empty
+        else
+          var currentWorld = stxLedger.advanceWorldToTx(block.header, stxs, 0, parentHeader.stateRoot.value)
+          val resultsBuf = scala.collection.mutable.ArrayBuffer[TxTraceResult]()
+          stxs.foreach { stx =>
+            val tracer = selectTracer(config, Some(currentWorld))
+            val txResult = stxLedger.simulateTransactionWithTracer(stx, block.header, Some(currentWorld), tracer)
+            resultsBuf += TxTraceResult(stx.tx.hash.value, tracer.getResult)
+            currentWorld = txResult.worldState
+          }
+          resultsBuf.toSeq
       }
 
   /** Selects and constructs a tracer based on config.tracer.
@@ -265,7 +295,7 @@ class DebugTracingService(
     config.tracer.filterNot(_.isEmpty) match
       case None | Some("structLogger") =>
         new StructLogTracer(
-          enableMemory = !config.disableMemory,
+          enableMemory = config.enableMemory,
           enableStorage = !config.disableStorage
         )
       case Some("callTracer") =>
@@ -280,13 +310,13 @@ class DebugTracingService(
             ](world)
           case None =>
             new StructLogTracer(
-              enableMemory = !config.disableMemory,
+              enableMemory = config.enableMemory,
               enableStorage = !config.disableStorage
             )
       case Some(_) =>
         // Unsupported tracer name — fall back to StructLogTracer
         new StructLogTracer(
-          enableMemory = !config.disableMemory,
+          enableMemory = config.enableMemory,
           enableStorage = !config.disableStorage
         )
 
@@ -308,15 +338,15 @@ class DebugTracingService(
       for
         block <- blockchainReader
           .getBlockByHash(BlockHash(req.blockHash))
-          .toRight(JsonRpcError.InvalidParams(s"Block not found for hash ${req.blockHash.toHex}"))
+          .toRight(JsonRpcError.LogicError(s"Block not found for hash ${req.blockHash.toHex}"))
         _ <- Either.cond(
           block.header.number.value > 0,
           (),
-          JsonRpcError.InvalidParams("Genesis block is not traceable")
+          JsonRpcError.LogicError("Genesis block is not traceable")
         )
         parentHeader <- blockchainReader
           .getBlockHeaderByHash(block.header.parentHash)
-          .toRight(JsonRpcError.InvalidParams("Parent block header not found"))
+          .toRight(JsonRpcError.LogicError("Parent block header not found"))
         stxs = SignedTransactionWithSender.getSignedTransactions(block.body.transactionList)
         roots =
           if stxs.isEmpty then Seq.empty

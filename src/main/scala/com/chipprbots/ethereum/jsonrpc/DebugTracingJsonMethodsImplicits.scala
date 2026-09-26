@@ -93,7 +93,7 @@ object DebugTracingJsonMethodsImplicits extends JsonMethodsImplicits:
             Left(JsonRpcError.InvalidParams())
 
       override def encodeJson(t: TraceBlockByHashResponse): JValue =
-        JArray(t.results.toList)
+        JArray(t.results.map(encodeTxTraceResult).toList)
 
   given debug_traceBlockByNumber: JsonMethodCodec[TraceBlockByNumberRequest, TraceBlockByNumberResponse] =
     new JsonMethodCodec[TraceBlockByNumberRequest, TraceBlockByNumberResponse]:
@@ -108,7 +108,7 @@ object DebugTracingJsonMethodsImplicits extends JsonMethodsImplicits:
             Left(JsonRpcError.InvalidParams())
 
       override def encodeJson(t: TraceBlockByNumberResponse): JValue =
-        JArray(t.results.toList)
+        JArray(t.results.map(encodeTxTraceResult).toList)
 
   given debug_intermediateRoots: JsonMethodCodec[IntermediateRootsRequest, IntermediateRootsResponse] =
     new JsonMethodCodec[IntermediateRootsRequest, IntermediateRootsResponse]:
@@ -146,10 +146,26 @@ object DebugTracingJsonMethodsImplicits extends JsonMethodsImplicits:
 
   // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-  /** Decodes an optional TraceConfig from a JSON object parameter. Absent or JNull → default TraceConfig().
+  /** Wraps a per-tx block-trace result with its originating tx hash, per the execution-apis / hive openrpc-tracer.json
+    * schema, which requires every debug_traceBlockByHash / debug_traceBlockByNumber array entry to carry both `txHash`
+    * and `result`. debug_traceTransaction / debug_traceCall are NOT wrapped this way — they correctly return the bare
+    * result object.
+    */
+  private def encodeTxTraceResult(r: TxTraceResult): JValue =
+    JObject("txHash" -> encodeAsHex(r.txHash), "result" -> r.result)
+
+  /** Decodes an optional TraceConfig from a JSON object parameter. Absent or JNull → default TraceConfig(), which must
+    * match go-ethereum's zero-value logger.Config: memory and returnData OFF, stack and storage ON.
     *
-    * Besu/core-geth traceConfig fields: tracer: string (named tracer, e.g. "callTracer") disableStorage: boolean
-    * disableMemory: boolean disableStack: boolean
+    * Field names match go-ethereum's eth/tracers/logger.Config / execution-apis's opcode-tracer.yaml TraceConfig
+    * exactly, including their polarity: tracer: string (named tracer, e.g. "callTracer") disableStorage: boolean
+    * (default false — storage ON) disableStack: boolean (default false — stack ON) enableMemory: boolean (default false
+    * — memory OFF) enableReturnData: boolean (default false — returnData OFF)
+    *
+    * `enableMemory` also accepts the legacy `disableMemory` (inverted) key when `enableMemory` itself is absent, so any
+    * existing caller using the old name keeps working — but when NEITHER key is present the default is go-ethereum's:
+    * memory off. Getting this polarity wrong previously made fukuii capture a full memory snapshot on every opcode by
+    * default (see CHASE-QUEUE C7); memory capture must stay opt-in.
     */
   def extractTraceConfig(param: Option[JValue]): Either[JsonRpcError, TraceConfig] =
     param match
@@ -159,8 +175,16 @@ object DebugTracingJsonMethodsImplicits extends JsonMethodsImplicits:
         val map = fields.toMap
         val tracer = map.get("tracer").collect { case JString(s) => s }
         val disableStorage = map.get("disableStorage").collect { case JBool(b) => b }.getOrElse(false)
-        val disableMemory = map.get("disableMemory").collect { case JBool(b) => b }.getOrElse(false)
         val disableStack = map.get("disableStack").collect { case JBool(b) => b }.getOrElse(false)
-        Right(TraceConfig(tracer, disableStorage, disableMemory, disableStack))
+        // go-ethereum / execution-apis send "enableMemory" (direct sense). Fall back to the legacy
+        // "disableMemory" (inverted sense) only when "enableMemory" itself is absent, so the default with
+        // neither key present is still false — memory OFF, matching go-ethereum's zero-value Config.
+        val enableMemory = map
+          .get("enableMemory")
+          .collect { case JBool(b) => b }
+          .orElse(map.get("disableMemory").collect { case JBool(b) => b }.map(!_))
+          .getOrElse(false)
+        val enableReturnData = map.get("enableReturnData").collect { case JBool(b) => b }.getOrElse(false)
+        Right(TraceConfig(tracer, disableStorage, enableMemory, disableStack, enableReturnData))
       case _ =>
         Right(TraceConfig()) // ignore unknown forms

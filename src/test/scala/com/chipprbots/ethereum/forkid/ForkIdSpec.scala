@@ -16,10 +16,10 @@ class ForkIdSpec extends AnyWordSpec with Matchers:
 
   "ForkId" must {
     "gatherForks for all chain configurations without errors" in {
-      config.blockchains.map { case (name, conf) => (name, gatherForks(conf)) }
+      config.blockchains.map { case (name, conf) => (name, gatherForks(conf, 0L)) }
     }
     "gatherForks for the etc chain correctly" in {
-      val res = config.blockchains.map { case (name, conf) => (name, gatherForks(conf)) }
+      val res = config.blockchains.map { case (name, conf) => (name, gatherForks(conf, 0L)) }
       res("etc") shouldBe List(
         1150000,
         2500000,
@@ -40,7 +40,7 @@ class ForkIdSpec extends AnyWordSpec with Matchers:
     "create correct ForkId for ETC mainnet blocks" in {
       val etcConf = config.blockchains("etc")
       val etcGenesisHash = ByteString(Hex.decode("d4e56740f876aef8c010b86a40d5f56745a118d0906a34e69aec8c0db1cb8fa3"))
-      def create(head: BigInt) = ForkId.create(etcGenesisHash, etcConf)(head)
+      def create(head: BigInt) = ForkId.create(etcGenesisHash, 0L, etcConf)(head)
 
       // At block 0, report genesis ForkId per EIP-2124 and Core-Geth reference implementation
       create(0) shouldBe ForkId(0xfc64ec04L, Some(1150000)) // Unsynced (genesis)
@@ -73,7 +73,7 @@ class ForkIdSpec extends AnyWordSpec with Matchers:
     "create correct ForkId for mordor blocks" in {
       val mordorConf = config.blockchains("mordor")
       val mordorGenesisHash = ByteString(Hex.decode("a68ebde7932eccb177d38d55dcc6461a019dd795a681e59b5a3e4f3a7259a3f1"))
-      def create(head: BigInt) = ForkId.create(mordorGenesisHash, mordorConf)(head)
+      def create(head: BigInt) = ForkId.create(mordorGenesisHash, 0L, mordorConf)(head)
 
       // At block 0, report genesis ForkId per EIP-2124 and Core-Geth reference implementation
       create(0) shouldBe ForkId(0x175782aaL, Some(301243)) // Unsynced (genesis)
@@ -103,7 +103,7 @@ class ForkIdSpec extends AnyWordSpec with Matchers:
       // Core-Geth test case: {0, 0, ID{Hash: checksumToBytes(0xfc64ec04), Next: 1150000}}
       val etcConf = config.blockchains("etc")
       val etcGenesisHash = ByteString(Hex.decode("d4e56740f876aef8c010b86a40d5f56745a118d0906a34e69aec8c0db1cb8fa3"))
-      def create(head: BigInt) = ForkId.create(etcGenesisHash, etcConf)(head)
+      def create(head: BigInt) = ForkId.create(etcGenesisHash, 0L, etcConf)(head)
 
       // At block 0, report genesis ForkId (not latest fork)
       create(0) shouldBe ForkId(0xfc64ec04L, Some(1150000))

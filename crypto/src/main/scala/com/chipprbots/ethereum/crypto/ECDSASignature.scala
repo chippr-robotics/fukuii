@@ -116,8 +116,13 @@ object ECDSASignature {
             val rInv = r.modInverse(order)
             // Q = r^(-1)(sR - eG)
             val q = R.multiply(s.bigInteger).subtract(curve.getG.multiply(e.bigInteger)).multiply(rInv.bigInteger)
+            // Q = O is not a public key. libsecp256k1 secp256k1_ecdsa_sig_recover returns 0 for it, so core-geth and
+            // go-ethereum crypto.Ecrecover fail (transaction_signing.go recoverPlain: invalid sender; tx_setcode.go
+            // Authority: authorization skipped). BouncyCastle encodes O as the single byte 0x00, whose tail is empty —
+            // every caller would then hash an empty key into the fake address keccak256("")[12:].
+            if (q.isInfinity) None
             // byte 0 of encoded ECC point indicates that it is uncompressed point, it is part of bouncycastle encoding
-            Some(q.getEncoded(false).tail)
+            else Some(q.getEncoded(false).tail)
           } else None
         } else None
       }

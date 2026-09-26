@@ -386,7 +386,10 @@ object SyncStateSchedulerActor:
       case Capability.ETH68                                                                             => false
       case Capability.ETH69                                                                             => false
       case Capability.ETH70                                                                             => false
+      case Capability.ETH71                                                                             => false
+      case Capability.ETH72                                                                             => false
       case Capability.SNAP1                                                                             => false
+      case Capability.SNAP2                                                                             => false
 
     private def peerUsesSnap(peer: Peer): Boolean =
       peerListHelper.handshakedPeers.get(peer.id).exists { pwi =>

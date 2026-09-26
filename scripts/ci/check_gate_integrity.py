@@ -17,7 +17,8 @@ Checks, in order:
   C4  a `required` Hive gate must cite evidence of a green run
   C5  non-required gates must carry `issue` + `promote_by`; overdue = fail
   C6  waivers must be complete (owner/issue/reason/expires) and unexpired
-  C7  every gate_exclude branch in every workflow must be a declared waiver
+  C7  every gate_exclude branch and sim_skip name, in every job of every workflow,
+      must be a declared waiver
   C8  every constitution principle must appear in the enforcement map
   C9  every `enforced` mapping must name a gate that exists and can fail
   C10 one versioning scheme only (FR-019)
@@ -111,11 +112,24 @@ def scalar_input(text: str, key: str) -> str | None:
     return m.group(1).strip().strip("'\"")
 
 
+def scalar_inputs(text: str, key: str) -> list[str]:
+    """Every value of `key: <scalar>` in a caller workflow — one per job that sets it."""
+    return [m.group(1).strip().strip("'\"")
+            for m in re.finditer(rf"^\s*{re.escape(key)}:\s*(.+?)\s*$", text, re.MULTILINE)]
+
+
+def _branches(text: str, key: str) -> list[str]:
+    return [b.strip() for raw in scalar_inputs(text, key) for b in raw.split("|") if b.strip()]
+
+
 def gate_exclude_branches(text: str) -> list[str]:
-    raw = scalar_input(text, "gate_exclude")
-    if not raw:
-        return []
-    return [b.strip() for b in raw.split("|") if b.strip()]
+    """Tests a workflow runs but leaves out of its gate."""
+    return _branches(text, "gate_exclude")
+
+
+def sim_skip_names(text: str) -> list[str]:
+    """Tests a workflow does not run at all (_hive-sim.yml's `sim_skip`)."""
+    return _branches(text, "sim_skip")
 
 
 # ---------------------------------------------------------------------------
@@ -216,25 +230,33 @@ def check_waivers(doc: dict, gates: dict[str, dict]) -> None:
                     warn("C6", f"waiver `{wid}` expires {d} ({delta} days) — "
                                f"owner {w.get('owner')}, issue #{w.get('issue')}.")
 
-    # C7 — every exclusion in every workflow must be declared here.
+    # C7 — every exclusion in every workflow must be declared here: a gate_exclude branch (run, but
+    # not counted) and a sim_skip name (not run at all) alike, in every job that sets one.
     declared_patterns = {(w.get("gate"), w.get("pattern")) for w in waivers.values()}
     for gid, g in gates.items():
         wf = g.get("workflow")
         if not wf:
             continue
-        for branch in gate_exclude_branches(workflow_text(wf)):
+        text = workflow_text(wf)
+        for branch in gate_exclude_branches(text):
             if (gid, branch) not in declared_patterns:
                 fail("C7", f"workflow `{wf}` excludes `{branch}` from its gate, but no waiver "
                            f"declares it for gate `{gid}`. Silent, undated exclusions are how "
                            "v0.8.0 shipped red.")
+        for name in sim_skip_names(text):
+            if (gid, name) not in declared_patterns:
+                fail("C7", f"workflow `{wf}` does not run `{name}` (sim_skip), but no waiver "
+                           f"declares it for gate `{gid}`. A test that is never run is an "
+                           "exclusion too.")
     # And the reverse: a declared waiver whose pattern is no longer excluded is stale.
     for wid, w in waivers.items():
         g = gates.get(w.get("gate", ""))
         if not g or not g.get("workflow"):
             continue
-        if w.get("pattern") not in gate_exclude_branches(workflow_text(g["workflow"])):
+        text = workflow_text(g["workflow"])
+        if w.get("pattern") not in gate_exclude_branches(text) + sim_skip_names(text):
             warn("C7", f"waiver `{wid}` declares pattern `{w.get('pattern')}` but the workflow no "
-                       "longer excludes it — the waiver is stale and can be deleted.")
+                       "longer excludes or skips it — the waiver is stale and can be deleted.")
 
 
 def check_constitution(gates: dict[str, dict]) -> None:
@@ -366,6 +388,31 @@ def check_status_doc() -> None:
 
 # ---------------------------------------------------------------------------
 
+def check_blocked_by(doc: dict) -> None:
+    """C14 — every `blocked_by` entry must name a waiver that exists.
+
+    Added 2026-09-21 after renaming a waiver left `first_required_slice.blocked_by`
+    pointing at an id that no longer existed. Nothing caught it: C6 validates that
+    each waiver is complete and unexpired, and C7 that each gate_exclude branch has
+    a declared waiver, but neither walks the reverse direction. A promotion schedule
+    blocked on a waiver that does not exist reads as blocked forever while naming
+    nothing — a claim with no referent, which is the defect class this whole matrix
+    exists to prevent.
+    """
+    known = {w.get("id") for w in (doc.get("waivers") or []) if w.get("id")}
+    slice_ = doc.get("first_required_slice") or {}
+    entries = slice_.get("gates") if isinstance(slice_, dict) else None
+    for entry in entries or []:
+        if not isinstance(entry, dict):
+            continue
+        name = entry.get("gate", "<unnamed>")
+        for ref in entry.get("blocked_by") or []:
+            if ref not in known:
+                fail("C14", f"first_required_slice gate '{name}' is blocked_by "
+                            f"'{ref}', which is not a declared waiver id. Known ids: "
+                            f"{', '.join(sorted(known)) or '(none)'}")
+
+
 def main() -> int:
     if not GATES.exists():
         print(f"::error::{GATES} not found.", file=sys.stderr)
@@ -379,6 +426,7 @@ def main() -> int:
     check_badges(gates)
     check_claims(gates)
     check_status_doc()
+    check_blocked_by(doc)
 
     summary_lines = ["### Gate Integrity", ""]
     tiers: dict[str, int] = {}

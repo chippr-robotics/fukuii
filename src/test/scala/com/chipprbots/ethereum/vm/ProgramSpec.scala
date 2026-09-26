@@ -76,3 +76,151 @@ class ProgramSpec extends AnyFlatSpec with Matchers with ScalaCheckPropertyCheck
     val program = Program(code)
     program.validJumpDestinations shouldBe (0 to CodeSize).toSet
   }
+
+  // The HashSet scan `validJumpDestinations` used before it became a bit set, kept as the oracle.
+  private def referenceJumpDestinations(code: ByteString): Set[Int] =
+    @scala.annotation.tailrec
+    def go(pos: Int, accum: Set[Int]): Set[Int] =
+      if pos < 0 || pos >= code.length then accum
+      else
+        EvmConfig.FrontierOpCodes.byteToOpCode.get(code(pos)) match
+          case Some(pushOp: PushOp) => go(pos + pushOp.i + 2, accum)
+          case Some(JUMPDEST)       => go(pos + 1, accum + pos)
+          case _                    => go(pos + 1, accum)
+    go(0, Set.empty)
+
+  it should "match the HashSet scan on arbitrary code, every PUSH width and code length" taggedAs (
+    UnitTest,
+    VMTest
+  ) in {
+    // JUMPDEST-heavy bytes with every PUSH1..PUSH32 in the mix, so PUSH data hides JUMPDESTs, and code that ends
+    // inside a PUSH's data.
+    val byteGen: Gen[Byte] = Gen.frequency(
+      4 -> Gen.const(JUMPDEST.code),
+      2 -> Gen.choose(0x60, 0x7f).map(_.toByte),
+      1 -> Gen.choose(Byte.MinValue, Byte.MaxValue)
+    )
+    val codeGen: Gen[ByteString] = for
+      n <- Gen.oneOf(Gen.choose(0, 200), Gen.oneOf(63, 64, 65, 127, 128, 129, 4095, 4096, 4097))
+      bytes <- Gen.listOfN(n, byteGen)
+    yield ByteString(bytes.toArray)
+
+    forAll(codeGen, minSuccessful(500)) { code =>
+      val program = Program(code)
+      val expected = referenceJumpDestinations(code)
+      program.validJumpDestinations shouldBe expected
+      (-2 to code.length + 70).foreach { dest =>
+        program.validJumpDestinations.contains(dest) shouldBe expected.contains(dest)
+      }
+    }
+  }
+
+  it should "cost bits, not a hash set, for code full of JUMPDESTs" taggedAs (UnitTest, VMTest) in {
+    // ethereum/tests JUMPDEST_AttackwithJump: 15 KB of JUMPDESTs, and one Program per frame of a 1,024-deep
+    // self-call on Homestead. Bytes allocated by this thread (HotSpot) are deterministic, unlike heap occupancy.
+    val mx = java.lang.management.ManagementFactory.getThreadMXBean.asInstanceOf[com.sun.management.ThreadMXBean]
+    val code = ByteString(Array.fill(15000)(JUMPDEST.code))
+    Program(code).validJumpDestinations.size shouldBe 15000 // warm-up
+    // getThreadAllocatedBytes returns -1 when unsupported or disabled, which would make the delta ~0 and pass.
+    assume(mx.isThreadAllocatedMemorySupported && mx.isThreadAllocatedMemoryEnabled)
+    val id = Thread.currentThread.threadId
+    val before = mx.getThreadAllocatedBytes(id)
+    val destinations = Program(code).validJumpDestinations
+    val allocated = mx.getThreadAllocatedBytes(id) - before
+    destinations.size shouldBe 15000
+    allocated should be < 512L * 1024
+  }
+
+  it should "fetch the byte at pc, and 0 outside the code, exactly as code.lift did" taggedAs (UnitTest, VMTest) in {
+    // A plain array, a slice into a larger one, and a concatenation: the three ByteString shapes code arrives in.
+    val shapes: Gen[ByteString] = for
+      bytes <- Gen.listOf(byteGen).map(l => ByteString(l.toArray))
+      shape <- Gen.choose(0, 2)
+    yield shape match
+      case 0 => bytes
+      case 1 => (ByteString(1.toByte, 2.toByte) ++ bytes ++ ByteString(3.toByte)).compact.slice(2, 2 + bytes.length)
+      case _ => ByteString(bytes.take(bytes.length / 2).toArray) ++ ByteString(bytes.drop(bytes.length / 2).toArray)
+
+    forAll(shapes, minSuccessful(500)) { code =>
+      val program = Program(code)
+      (-3 to code.length + 3).foreach { pc =>
+        program.getByte(pc) shouldBe code.lift(pc).getOrElse(0.toByte)
+      }
+    }
+  }
+
+  "OpCodeList.opCodeFor" should "answer byteToOpCode.get for every byte of every fork's table" taggedAs (
+    UnitTest,
+    VMTest
+  ) in {
+    val tables = Seq(
+      EvmConfig.FrontierOpCodes,
+      EvmConfig.HomesteadOpCodes,
+      EvmConfig.ByzantiumOpCodes,
+      EvmConfig.ConstantinopleOpCodes,
+      EvmConfig.PhoenixOpCodes,
+      EvmConfig.SpiralOpCodes,
+      EvmConfig.OlympiaOpCodes,
+      EvmConfig.EtcOlympiaOpCodes,
+      EvmConfig.LondonOpCodes,
+      EvmConfig.ShanghaiOpCodes,
+      EvmConfig.CancunOpCodes,
+      EvmConfig.OsakaOpCodes
+    )
+    for
+      table <- tables
+      byte <- Byte.MinValue to Byte.MaxValue
+    do table.opCodeFor(byte.toByte) shouldBe table.byteToOpCode.get(byte.toByte)
+  }
+
+  "Program.immediate" should "read the value UInt256(getBytes(from, size)) does, zero past the end of the code" taggedAs (
+    UnitTest,
+    VMTest
+  ) in {
+    val codeGen: Gen[ByteString] =
+      Gen.choose(0, 70).flatMap(n => Gen.listOfN(n, byteGen)).map(l => ByteString(l.toArray))
+    forAll(codeGen, minSuccessful(500)) { code =>
+      val program = Program(code)
+      for
+        from <- 0 to code.length + 2
+        size <- 0 to 32
+      do program.immediate(from, size) shouldBe com.chipprbots.ethereum.domain.UInt256(program.getBytes(from, size))
+    }
+    // the widths where the Long accumulator ends and the BigInt path begins, at their extreme values
+    for size <- Seq(6, 7, 8, 9, 31, 32) do
+      val ones = Program(ByteString(Array.fill(40)(0xff.toByte)))
+      ones.immediate(1, size) shouldBe com.chipprbots.ethereum.domain.UInt256(ones.getBytes(1, size))
+  }
+
+  "OpCode.isJumpDestination" should "agree with pos == UInt256(pos.toInt) && validJumpDestinations.contains(pos.toInt)" taggedAs (
+    UnitTest,
+    VMTest
+  ) in {
+    import com.chipprbots.ethereum.domain.UInt256
+    def former(program: Program, pos: UInt256): Boolean =
+      pos == UInt256(pos.toInt) && program.validJumpDestinations.contains(pos.toInt)
+
+    // JUMPDEST at 0, 5 and 64; a PUSH1 whose immediate is a 0x5b byte at 10 (not a destination)
+    val code = ByteString(Array.tabulate[Byte](70) {
+      case 0 | 5 | 64 => JUMPDEST.code
+      case 9          => PUSH1.code
+      case 10         => JUMPDEST.code
+      case _          => STOP.code
+    })
+    val program = Program(code)
+    val wide = BigInt(2).pow(32)
+    val positions: Seq[BigInt] =
+      (BigInt(0) to BigInt(72)) ++
+        Seq(BigInt(Int.MaxValue) - 1, BigInt(Int.MaxValue), BigInt(Int.MaxValue) + 1, BigInt(2).pow(31)) ++
+        // values whose low 31 bits name a real destination: toInt alone would accept them
+        Seq(wide, wide + 5, wide + 64, BigInt(2).pow(31) + 5, BigInt(2).pow(255) + 64, UInt256.MaxValue.toBigInt)
+    positions.foreach { p =>
+      val pos = UInt256(p)
+      withClue(s"pos = $p: ") {
+        OpCode.isJumpDestination(program, pos) shouldBe former(program, pos)
+      }
+    }
+    OpCode.isJumpDestination(program, UInt256(5)) shouldBe true
+    OpCode.isJumpDestination(program, UInt256(10)) shouldBe false
+    OpCode.isJumpDestination(program, UInt256(wide + 5)) shouldBe false
+  }

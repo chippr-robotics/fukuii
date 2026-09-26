@@ -16,6 +16,7 @@ import org.apache.pekko.util.ByteString
 import scala.concurrent.duration.*
 import scala.util.Random
 
+import org.scalacheck.Gen
 import org.scalactic.anyvals.PosInt
 import org.scalatest.flatspec.AnyFlatSpecLike
 import org.scalatest.matchers.should.Matchers
@@ -40,6 +41,7 @@ import com.chipprbots.ethereum.domain.TrieRoot
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor.*
 import com.chipprbots.ethereum.network.Peer
 import com.chipprbots.ethereum.network.PeerActor
+import com.chipprbots.ethereum.network.PeerEventBusActor
 import com.chipprbots.ethereum.network.PeerEventBusActor.PeerEvent.MessageFromPeer
 import com.chipprbots.ethereum.network.PeerId
 import com.chipprbots.ethereum.network.p2p.messages.Capability
@@ -59,10 +61,21 @@ class StateSyncSpec
   implicit override val generatorDrivenConfig: PropertyCheckConfiguration =
     PropertyCheckConfiguration(minSuccessful = PosInt(3))
 
+  /** A generated world, reported by its size. On a failed property ScalaCheck shrinks the input, re-running a sync that
+    * waits out its 20 s timeout at each step, then prints it. Up to 1000 accounts with up to 100 storage slots each
+    * print as lines of several hundred KB, which the forked test JVM could not send back to sbt. With no Shrink
+    * instance this type falls back to Shrink.shrinkAny, which does not shrink.
+    */
+  final case class GeneratedWorld(accounts: List[MptNodeData]):
+    override def toString: String =
+      s"GeneratedWorld(${accounts.size} accounts, ${accounts.map(_.accountStorage.size).sum} storage slots)"
+
+  private val generatedWorlds: Gen[GeneratedWorld] = ObjectGenerators.genMultipleNodeData(1000).map(GeneratedWorld(_))
+
   "StateSync" should "sync state to different tries" taggedAs (UnitTest, SyncTest) in new TestSetup():
-    forAll(ObjectGenerators.genMultipleNodeData(1000)) { nodeData =>
+    forAll(generatedWorlds) { world =>
       val trieProvider = TrieProvider()
-      val target = trieProvider.buildWorld(nodeData)
+      val target = trieProvider.buildWorld(world.accounts)
       setAutoPilotWithProvider(trieProvider)
       syncStateSchedulerActor ! StartSyncingTo(TrieRoot(target), 1)
       syncInitResponse.expectMessage(20.seconds, StateSyncFinished)
@@ -72,9 +85,9 @@ class StateSyncSpec
     UnitTest,
     SyncTest
   ) in new TestSetup():
-    forAll(ObjectGenerators.genMultipleNodeData(1000)) { nodeData =>
+    forAll(generatedWorlds) { world =>
       val trieProvider1 = TrieProvider()
-      val target = trieProvider1.buildWorld(nodeData)
+      val target = trieProvider1.buildWorld(world.accounts)
       setAutoPilotWithProvider(trieProvider1, partialResponseConfig)
       syncStateSchedulerActor ! StartSyncingTo(TrieRoot(target), 1)
       syncInitResponse.expectMessage(20.seconds, StateSyncFinished)
@@ -84,18 +97,18 @@ class StateSyncSpec
     UnitTest,
     SyncTest
   ) in new TestSetup():
-    forAll(ObjectGenerators.genMultipleNodeData(1000)) { nodeData =>
+    forAll(generatedWorlds) { world =>
       val trieProvider1 = TrieProvider()
-      val target = trieProvider1.buildWorld(nodeData)
+      val target = trieProvider1.buildWorld(world.accounts)
       setAutoPilotWithProvider(trieProvider1, mixedResponseConfig)
       syncStateSchedulerActor ! StartSyncingTo(TrieRoot(target), 1)
       syncInitResponse.expectMessage(20.seconds, StateSyncFinished)
     }
 
   it should "restart state sync when requested" taggedAs (UnitTest, SyncTest) in new TestSetup():
-    forAll(ObjectGenerators.genMultipleNodeData(1000)) { nodeData =>
+    forAll(generatedWorlds) { world =>
       val trieProvider1 = TrieProvider()
-      val target = trieProvider1.buildWorld(nodeData)
+      val target = trieProvider1.buildWorld(world.accounts)
       setAutoPilotWithProvider(trieProvider1)
       syncStateSchedulerActor ! StartSyncingTo(TrieRoot(target), 1)
       syncStateSchedulerActor ! RestartRequested
@@ -183,26 +196,28 @@ class StateSyncSpec
 
     val networkPeerManager: TestProbe = TestProbe()
 
-    val peerEventBus: TestProbe = TestProbe()
+    // A real bus, not a probe: each typed PeerRequestHandler subscribes to it for its reply and sends SendMessageCmd
+    // with no sender, so the autopilot publishes each fake-peer response here, as PeerActor publishes a wire message.
+    val peerEventBus: TypedActorRef[PeerEventBusActor.Command] = testKit.spawn(PeerEventBusActor.behavior())
 
     def setAutoPilotWithProvider(trieProvider: TrieProvider, peerConfig: PeerConfig = defaultPeerConfig): Unit =
       networkPeerManager.setAutoPilot(
         new AutoPilot:
           override def run(sender: ActorRef, msg: Any): AutoPilot =
             msg match
-              case SendMessage(msg: GetNodeDataEnc, peer) =>
+              case SendMessageCmd(msg: GetNodeDataEnc, peer) =>
                 peerConfig(peer) match
                   case FullResponse =>
                     val responseMsg =
                       NodeData(trieProvider.getNodes(msg.underlyingMsg.mptElementsHashes.toList).map(_.data))
-                    sender ! MessageFromPeer(responseMsg, peer)
+                    peerEventBus ! PeerEventBusActor.PublishCmd(MessageFromPeer(responseMsg, peer))
                     this
                   case PartialResponse =>
                     val random: ThreadLocalRandom = ThreadLocalRandom.current()
                     val elementsToServe = random.nextInt(minMptNodeRequest, maxMptNodeRequest + 1)
                     val toGet = msg.underlyingMsg.mptElementsHashes.toList.take(elementsToServe)
                     val responseMsg = NodeData(trieProvider.getNodes(toGet).map(_.data))
-                    sender ! MessageFromPeer(responseMsg, peer)
+                    peerEventBus ! PeerEventBusActor.PublishCmd(MessageFromPeer(responseMsg, peer))
                     this
                   case NoResponse =>
                     this
@@ -248,7 +263,7 @@ class StateSyncSpec
           ),
           syncConfig,
           networkPeerManager.ref,
-          peerEventBus.ref,
+          peerEventBus,
           blacklist,
           syncInitResponse.ref,
           syncInitStats.ref

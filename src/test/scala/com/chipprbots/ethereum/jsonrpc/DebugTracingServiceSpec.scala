@@ -46,8 +46,16 @@ class DebugTracingServiceSpec
 
   // ── traceTransaction ────────────────────────────────────────────────────────
 
+  // "not found" is a server/application condition, code -32000, NOT a malformed-parameter
+  // condition (-32602). The parameter was well-formed; the resource simply does not exist.
+  // execution-apis pins -32000 for every one of these in its debug_trace* fixtures, and hive
+  // diffs on the code alone (it strips the message), so the code is the whole assertion.
+  // These tests previously asserted only isLeft, which is why the wrong code went unnoticed.
+  private val ServerErrorCode = -32000
+
   "DebugTracingService.traceTransaction" should
-    "return InvalidParams when transaction is not found in mapping storage" taggedAs (UnitTest, RPCTest) in
+    "return a -32000 server error when transaction is not found in mapping storage" taggedAs
+    (UnitTest, RPCTest) in
     new TestSetup:
       val unknownHash: ByteString = ByteString(Array.fill(32)(0xff.toByte))
       txMappingStorage.get.expects(unknownHash).returning(None)
@@ -57,8 +65,9 @@ class DebugTracingServiceSpec
         .unsafeRunSync()
 
       result.isLeft shouldBe true
+      result.swap.getOrElse(fail("Expected Left")).code shouldBe ServerErrorCode
 
-  it should "return InvalidParams when block hash is not in storage" taggedAs (UnitTest, RPCTest) in
+  it should "return a -32000 server error when block hash is not in storage" taggedAs (UnitTest, RPCTest) in
     new TestSetup:
       val txHash: ByteString = block.body.transactionList.head.hash.value
       val missingBlockHash: ByteString = ByteString(Array.fill(32)(0xee.toByte))
@@ -69,6 +78,7 @@ class DebugTracingServiceSpec
         .unsafeRunSync()
 
       result.isLeft shouldBe true
+      result.swap.getOrElse(fail("Expected Left")).code shouldBe ServerErrorCode
 
   it should "return a trace result for a valid transaction" taggedAs (UnitTest, RPCTest) in
     new TestSetup:
@@ -192,6 +202,7 @@ class DebugTracingServiceSpec
         .unsafeRunSync()
       result.isLeft shouldBe true
       result.swap.getOrElse(fail("Expected Left")).message should include("Block not found")
+      result.swap.getOrElse(fail("Expected Left")).code shouldBe ServerErrorCode
 
   it should "return empty list for a block with no transactions" taggedAs (UnitTest, RPCTest) in new TestSetup:
     import com.chipprbots.ethereum.jsonrpc.DebugTracingService.{IntermediateRootsRequest, IntermediateRootsResponse}

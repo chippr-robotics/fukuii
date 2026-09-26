@@ -178,6 +178,8 @@ object PrecompiledContracts:
       )
 
   object EllipticCurveRecovery extends PrecompiledContract:
+    private val secp256k1n: BigInt = BigInt(curve.getN)
+
     def exec(inputData: ByteString): Option[ByteString] =
       val data: ByteString = inputData.padToByteString(128, 0.toByte)
       val h = data.slice(0, 32)
@@ -185,8 +187,16 @@ object PrecompiledContracts:
       val r = data.slice(64, 96)
       val s = data.slice(96, 128)
 
-      if hasOnlyLastByteSet(v) then
-        val recovered = Try(ECDSASignature(r, s, v.last).publicKey(h)).getOrElse(None)
+      // core-geth `ecrecover.Run` (core/vm/contracts.go): `crypto.ValidateSignatureValues(v, r, s, homestead =
+      // false)` — r and s must lie in [1, secp256k1n - 1], on every fork. High s is accepted: the Homestead low-s rule
+      // applies to transaction signatures only. Without this, s >= n reduces mod n inside the point multiplication
+      // and r in [n, p) is still a valid x-coordinate, so both recover an address where the reference returns empty.
+      // Precompile-scoped on purpose: transaction signatures are range-checked in StdSignedTransactionValidator.
+      if hasOnlyLastByteSet(v) && inSignatureRange(r) && inSignatureRange(s) then
+        // A recovery landing on the point at infinity encodes as zero bytes, not a 64-byte key: libsecp256k1 fails
+        // it, so it must yield empty output rather than keccak256("")[12:].
+        val recovered =
+          Try(ECDSASignature(r, s, v.last).publicKey(h)).getOrElse(None).filter(_.length == PublicKeyLength)
         Some(
           recovered
             .map { bytes =>
@@ -201,6 +211,12 @@ object PrecompiledContracts:
 
     private def hasOnlyLastByteSet(v: ByteString): Boolean =
       v.dropWhile(_ == 0).size == 1
+
+    private val PublicKeyLength = 64
+
+    private def inSignatureRange(word: ByteString): Boolean =
+      val x = BigInt(1, word.toArray)
+      x > 0 && x < secp256k1n
 
   object Sha256 extends PrecompiledContract:
     def exec(inputData: ByteString): Option[ByteString] =
@@ -722,30 +738,44 @@ object PrecompiledContracts:
       )
       Some(result)
 
-  /** EIP-2537 G1 MSM discount table (128 entries). max_discount=519 at k>=128. */
-  private def blsG1MsmDiscount(k: Int): Int =
-    val table = Array(
-      1000, 949, 848, 797, 764, 740, 721, 707, 695, 685, 677, 670, 664, 659, 654, 650, 646, 643, 640, 637, 634, 632,
-      630, 627, 625, 624, 622, 620, 618, 617, 615, 614, 613, 611, 610, 609, 608, 607, 606, 605, 604, 603, 602, 601, 600,
-      599, 598, 597, 596, 595, 594, 593, 592, 591, 590, 589, 588, 587, 586, 585, 584, 583, 582, 581, 580, 579, 578, 577,
-      576, 575, 574, 573, 572, 571, 570, 569, 568, 567, 566, 565, 564, 563, 562, 561, 560, 559, 558, 557, 556, 555, 554,
-      553, 552, 551, 550, 549, 548, 547, 546, 545, 544, 543, 542, 541, 540, 539, 538, 537, 536, 535, 534, 533, 532, 531,
-      530, 529, 528, 527, 526, 525, 524, 523, 522, 521, 520, 519, 519, 519
-    )
-    if k <= 0 then 1000
-    else if k <= table.length then table(k - 1)
-    else 519 // for k > 128
+  /** EIP-2537 G1 MSM discount table, k = 1..128, verbatim from the EIP ("Discounts table for G1 MSM") and identical to
+    * go-ethereum params.Bls12381G1MultiExpDiscountTable. max_discount = 519 for k > 128.
+    *
+    * An earlier hand-entered table diverged from the EIP at 116 of 128 entries from k = 6 onward (740 where the EIP has
+    * 750, ...), undercharging 47 values of k and overcharging 69. execution-spec-tests
+    * test_bls12_variable_length_input_contracts.py::test_invalid_gas_g1msm calls 0x0c with (EIP cost - 1) gas for k =
+    * 1..129 and expects every call to fail; the undercharged calls succeeded, and fukuii rejected the valid block.
+    */
+  private val BlsG1MsmDiscountTable: Array[Int] = Array(
+    1000, 949, 848, 797, 764, 750, 738, 728, 719, 712, 705, 698, 692, 687, 682, 677, 673, 669, 665, 661, 658, 654, 651,
+    648, 645, 642, 640, 637, 635, 632, 630, 627, 625, 623, 621, 619, 617, 615, 613, 611, 609, 608, 606, 604, 603, 601,
+    599, 598, 596, 595, 593, 592, 591, 589, 588, 586, 585, 584, 582, 581, 580, 579, 577, 576, 575, 574, 573, 572, 570,
+    569, 568, 567, 566, 565, 564, 563, 562, 561, 560, 559, 558, 557, 556, 555, 554, 553, 552, 551, 550, 549, 548, 547,
+    547, 546, 545, 544, 543, 542, 541, 540, 540, 539, 538, 537, 536, 536, 535, 534, 533, 532, 532, 531, 530, 529, 528,
+    528, 527, 526, 525, 525, 524, 523, 522, 522, 521, 520, 520, 519
+  )
 
-  /** EIP-2537 G2 MSM discount table (128 entries). max_discount=524 at k>=128. */
-  private def blsG2MsmDiscount(k: Int): Int =
-    val table = Array(
-      1000, 1000, 923, 884, 855, 832, 812, 796, 782, 770, 759, 750, 742, 734, 727, 721, 715, 709, 704, 699, 694, 689,
-      685, 681, 677, 673, 669, 666, 662, 659, 656, 653, 650, 647, 644, 641, 639, 636, 634, 631, 629, 627, 624, 622, 620,
-      618, 616, 614, 612, 610, 608, 606, 604, 603, 601, 599, 597, 596, 594, 593, 591, 590, 588, 587, 585, 584, 582, 581,
-      580, 578, 577, 576, 574, 573, 572, 571, 569, 568, 567, 566, 565, 564, 563, 562, 561, 560, 559, 558, 557, 556, 555,
-      554, 553, 552, 551, 550, 549, 548, 547, 547, 546, 545, 544, 543, 543, 542, 541, 540, 540, 539, 538, 537, 537, 536,
-      535, 535, 534, 533, 533, 532, 531, 531, 530, 530, 529, 528, 528, 527
-    )
+  /** EIP-2537 G2 MSM discount table, k = 1..128, verbatim from the EIP ("Discounts table for G2 MSM") and identical to
+    * go-ethereum params.Bls12381G2MultiExpDiscountTable. max_discount = 524 for k > 128.
+    *
+    * The earlier hand-entered table diverged at 117 of 128 entries from k = 12 onward, every one of them overcharging
+    * (750 where the EIP has 749, ...), so a G2 MSM given exactly the EIP cost ran out of gas.
+    */
+  private val BlsG2MsmDiscountTable: Array[Int] = Array(
+    1000, 1000, 923, 884, 855, 832, 812, 796, 782, 770, 759, 749, 740, 732, 724, 717, 711, 704, 699, 693, 688, 683, 679,
+    674, 670, 666, 663, 659, 655, 652, 649, 646, 643, 640, 637, 634, 632, 629, 627, 624, 622, 620, 618, 615, 613, 611,
+    609, 607, 606, 604, 602, 600, 598, 597, 595, 593, 592, 590, 589, 587, 586, 584, 583, 582, 580, 579, 578, 576, 575,
+    574, 573, 571, 570, 569, 568, 567, 566, 565, 563, 562, 561, 560, 559, 558, 557, 556, 555, 554, 553, 552, 552, 551,
+    550, 549, 548, 547, 546, 545, 545, 544, 543, 542, 541, 541, 540, 539, 538, 537, 537, 536, 535, 535, 534, 533, 532,
+    532, 531, 530, 530, 529, 528, 528, 527, 526, 526, 525, 524, 524
+  )
+
+  private def blsG1MsmDiscount(k: Int): Int =
     if k <= 0 then 1000
-    else if k <= table.length then table(k - 1)
-    else 524 // for k > 128
+    else if k <= BlsG1MsmDiscountTable.length then BlsG1MsmDiscountTable(k - 1)
+    else 519 // max_discount, k > 128
+
+  private def blsG2MsmDiscount(k: Int): Int =
+    if k <= 0 then 1000
+    else if k <= BlsG2MsmDiscountTable.length then BlsG2MsmDiscountTable(k - 1)
+    else 524 // max_discount, k > 128

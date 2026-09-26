@@ -32,6 +32,7 @@ case class ForkTimestamps(
     cancunTimestamp: Option[Long] = None,
     pragueTimestamp: Option[Long] = None,
     osakaTimestamp: Option[Long] = None,
+    amsterdamTimestamp: Option[Long] = None,
     bpo1Timestamp: Option[Long] = None,
     bpo2Timestamp: Option[Long] = None
 )
@@ -58,32 +59,43 @@ case class BlockchainConfig(
     minTip: BigInt = BigInt(1000000000),
     networkType: NetworkType = NetworkType.ETC,
     terminalTotalDifficulty: Option[BigInt] = None,
-    forkTimestamps: ForkTimestamps = ForkTimestamps()
+    forkTimestamps: ForkTimestamps = ForkTimestamps(),
+    // EIP-6110 deposit contract address. Genesis-declared on ETH-family chains (geth
+    // `config.depositContractAddress`) and NOT a universal constant: hive's rpc-compat
+    // fixture declares the zero address, Sepolia uses its own. `None` means "not declared",
+    // and readers fall back to the mainnet contract. ETC/Mordor never declare it.
+    depositContractAddress: Option[Address] = None
 ):
   def isPoS(totalDifficulty: BigInt): Boolean =
     terminalTotalDifficulty.exists(ttd => totalDifficulty >= ttd)
 
   def isShanghaiTimestamp(timestamp: Timestamp): Boolean =
-    forkTimestamps.shanghaiTimestamp.exists(ts => timestamp.toLong >= ts)
+    forkTimestamps.shanghaiTimestamp.exists(ts => timestamp.isAtOrAfter(ts))
 
   def isCancunTimestamp(timestamp: Timestamp): Boolean =
-    forkTimestamps.cancunTimestamp.exists(ts => timestamp.toLong >= ts)
+    forkTimestamps.cancunTimestamp.exists(ts => timestamp.isAtOrAfter(ts))
 
   def isPragueTimestamp(timestamp: Timestamp): Boolean =
-    forkTimestamps.pragueTimestamp.exists(ts => timestamp.toLong >= ts)
+    forkTimestamps.pragueTimestamp.exists(ts => timestamp.isAtOrAfter(ts))
 
   def isOsakaTimestamp(timestamp: Timestamp): Boolean =
-    forkTimestamps.osakaTimestamp.exists(ts => timestamp.toLong >= ts)
+    forkTimestamps.osakaTimestamp.exists(ts => timestamp.isAtOrAfter(ts))
+
+  /** Amsterdam fork activation (ETH-family only). No ETC-family config declares `amsterdam-timestamp`, so this reads
+    * `None` and always returns `false` for ETC/Mordor.
+    */
+  def isAmsterdamTimestamp(timestamp: Timestamp): Boolean =
+    forkTimestamps.amsterdamTimestamp.exists(ts => timestamp.isAtOrAfter(ts))
 
   /** EIP-7892 Blob Parameter Only (BPO) fork activation. BPOs raise the blob target/max without other consensus
     * changes. Sepolia activated BPO1 on 2025-10-21.
     */
   def isBpo1Timestamp(timestamp: Timestamp): Boolean =
-    forkTimestamps.bpo1Timestamp.exists(ts => timestamp.toLong >= ts)
+    forkTimestamps.bpo1Timestamp.exists(ts => timestamp.isAtOrAfter(ts))
 
   /** EIP-7892 BPO2: second blob-target bump. Sepolia activated 2025-10-28. */
   def isBpo2Timestamp(timestamp: Timestamp): Boolean =
-    forkTimestamps.bpo2Timestamp.exists(ts => timestamp.toLong >= ts)
+    forkTimestamps.bpo2Timestamp.exists(ts => timestamp.isAtOrAfter(ts))
 
   def withUpdatedForkBlocks(update: (ForkBlockNumbers) => ForkBlockNumbers): BlockchainConfig =
     copy(forkBlockNumbers = update(forkBlockNumbers))
@@ -118,12 +130,47 @@ case class ForkBlockNumbers(
     // lists this for Sepolia. Without it, our forkId hashes for Shanghai+ are off by
     // one CRC32 round and ForkIdValidator.checkSuperset rejects all chain-head peers.
     mergeNetsplitBlockNumber: BigInt = Long.MaxValue,
+    // EIP-4345 (Arrow Glacier) and EIP-5133 (Gray Glacier): ETH difficulty-bomb delays.
+    //
+    // They carry NO EVM or state semantics here and must not be wired into any consensus
+    // path — fukuii never implemented ETH's bomb schedule, and ETH is post-merge PoS where
+    // difficulty is irrelevant. They exist for exactly one reason: go-ethereum's
+    // `gatherForks` enumerates every `*Block` field of ChainConfig, so both numbers enter
+    // the EIP-2124 fork-id checksum chain. Omitting them makes our fork hash diverge from
+    // every geth peer on any chain that declares them, and the handshake is then rejected
+    // with "wrong fork ID in status".
+    //
+    // Measured on hive's rpc-compat fixture (arrowGlacierBlock 30, grayGlacierBlock 33,
+    // mergeNetsplitBlock 36): with all three present the checksum is 0xe272ecbe, which is
+    // what the chain expects; with them absent it is 0x5e0cb820.
+    //
+    // Long.MaxValue is the "not configured" sentinel that ForkId.gatherBlockForks filters
+    // out, so these are inert for every chain that does not declare them — ETC included.
+    arrowGlacierBlockNumber: BigInt = Long.MaxValue,
+    grayGlacierBlockNumber: BigInt = Long.MaxValue,
     // Gas limit targets embedded in the fork schedule (EIP-7935 / ECIP-1121).
     // When Some(target), the miner converges toward that target from the fork activation
     // block onward via the standard ±1/1024 mechanism — the schedule is authoritative
     // regardless of operator config. None → fall back to miningConfig.gasLimitTarget.
     spiralGasTarget: Option[BigInt] = None,
-    olympiaGasTarget: Option[BigInt] = None
+    olympiaGasTarget: Option[BigInt] = None,
+    // EIP-1559 §"gas limit" one-shot elasticity scaling at the fork-activation block.
+    // On ETH/London (go-ethereum core/block_validator.go + consensus/misc/eip1559.go
+    // `VerifyEip1559Header`), the FIRST post-fork block validates its ±1/1024 window
+    // against parent.gasLimit * ElasticityMultiplier, not against the raw parent —
+    // the activation block is allowed to double. Every later block uses the raw parent.
+    //
+    // Some(n) → the fork-activation block scales the parent gas limit by n before the
+    // bound check. None → no scaling at activation; the ordinary ±1/1024 window applies
+    // at every block including the fork block.
+    //
+    // ETC leaves this None. What is established: ECIP-1121 / EIP-7935 back the 60M gas
+    // limit convergence target, reached gradually via the ±1/1024 mechanism. What is NOT
+    // established: no ECIP text (1111 or 1121) documents whether ETC suppresses the
+    // London-style one-shot elasticity scaling at the Olympia activation block. Leaving
+    // it unset preserves current ETC behaviour byte-for-byte; ECIP-1122 is expected to
+    // settle this, and if it lands the other way this is the single knob to flip.
+    olympiaGasLimitElasticity: Option[Int] = None
 ):
   def all: List[BigInt] = this.productIterator.toList.collect { case i: BigInt =>
     i
@@ -165,7 +212,9 @@ object ForkBlockNumbers:
     mystiqueBlockNumber = Long.MaxValue,
     spiralBlockNumber = Long.MaxValue,
     olympiaBlockNumber = Long.MaxValue,
-    mergeNetsplitBlockNumber = Long.MaxValue
+    mergeNetsplitBlockNumber = Long.MaxValue,
+    arrowGlacierBlockNumber = Long.MaxValue,
+    grayGlacierBlockNumber = Long.MaxValue
   )
 
 object BlockchainConfig:
@@ -240,10 +289,19 @@ object BlockchainConfig:
       Try(BigInt(blockchainConfig.getString("olympia-block-number"))).getOrElse(BigInt(Long.MaxValue))
     val mergeNetsplitBlockNumber: BigInt =
       Try(BigInt(blockchainConfig.getString("merge-netsplit-block-number"))).getOrElse(BigInt(Long.MaxValue))
+    // Absent key → Long.MaxValue sentinel → filtered out of the fork-id chain. ETC/Mordor
+    // never declare these, so their checksums are unaffected.
+    val arrowGlacierBlockNumber: BigInt =
+      Try(BigInt(blockchainConfig.getString("arrow-glacier-block-number"))).getOrElse(BigInt(Long.MaxValue))
+    val grayGlacierBlockNumber: BigInt =
+      Try(BigInt(blockchainConfig.getString("gray-glacier-block-number"))).getOrElse(BigInt(Long.MaxValue))
     val spiralGasTarget: Option[BigInt] =
       Try(BigInt(blockchainConfig.getString("spiral-gas-target"))).toOption
     val olympiaGasTarget: Option[BigInt] =
       Try(BigInt(blockchainConfig.getString("olympia-gas-target"))).toOption
+    // Absent key → None → no one-shot gas-limit scaling at the fork block (ETC default).
+    val olympiaGasLimitElasticity: Option[Int] =
+      Try(blockchainConfig.getInt("olympia-gas-limit-elasticity")).toOption
 
     val treasuryAddress: Address =
       Try(Address(blockchainConfig.getString("treasury-address"))).getOrElse(Address(0))
@@ -260,11 +318,15 @@ object BlockchainConfig:
     val terminalTotalDifficulty: Option[BigInt] =
       Try(BigInt(blockchainConfig.getString("terminal-total-difficulty"))).toOption
 
+    val depositContractAddress: Option[Address] =
+      Try(Address(blockchainConfig.getString("deposit-contract-address"))).toOption
+
     val forkTimestamps: ForkTimestamps = ForkTimestamps(
       shanghaiTimestamp = Try(blockchainConfig.getLong("shanghai-timestamp")).toOption,
       cancunTimestamp = Try(blockchainConfig.getLong("cancun-timestamp")).toOption,
       pragueTimestamp = Try(blockchainConfig.getLong("prague-timestamp")).toOption,
       osakaTimestamp = Try(blockchainConfig.getLong("osaka-timestamp")).toOption,
+      amsterdamTimestamp = Try(blockchainConfig.getLong("amsterdam-timestamp")).toOption,
       bpo1Timestamp = Try(blockchainConfig.getLong("bpo1-timestamp")).toOption,
       bpo2Timestamp = Try(blockchainConfig.getLong("bpo2-timestamp")).toOption
     )
@@ -308,8 +370,11 @@ object BlockchainConfig:
         spiralBlockNumber = spiralBlockNumber,
         olympiaBlockNumber = olympiaBlockNumber,
         mergeNetsplitBlockNumber = mergeNetsplitBlockNumber,
+        arrowGlacierBlockNumber = arrowGlacierBlockNumber,
+        grayGlacierBlockNumber = grayGlacierBlockNumber,
         spiralGasTarget = spiralGasTarget,
-        olympiaGasTarget = olympiaGasTarget
+        olympiaGasTarget = olympiaGasTarget,
+        olympiaGasLimitElasticity = olympiaGasLimitElasticity
       ),
       maxCodeSize = maxCodeSize,
       customGenesisFileOpt = customGenesisFileOpt,
@@ -330,6 +395,7 @@ object BlockchainConfig:
       minTip = minTip,
       networkType = networkType,
       terminalTotalDifficulty = terminalTotalDifficulty,
+      depositContractAddress = depositContractAddress,
       forkTimestamps = forkTimestamps
     )
   // scalastyle:on method.length

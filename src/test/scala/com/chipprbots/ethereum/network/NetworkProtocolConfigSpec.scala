@@ -25,7 +25,11 @@ class NetworkProtocolConfigSpec extends AnyFlatSpec with Matchers with ParallelT
 
   // ── NetworkProtocolConfig.default ─────────────────────────────────────────
 
-  "NetworkProtocolConfig.default" should "have eth68=true (universal baseline)" taggedAs UnitTest in {
+  "NetworkProtocolConfig.default" should "have eth72=false (opt-in; ETH-family only)" taggedAs UnitTest in {
+    NetworkProtocolConfig.default.eth72 shouldBe false
+  }
+
+  it should "have eth68=true (universal baseline)" taggedAs UnitTest in {
     NetworkProtocolConfig.default.eth68 shouldBe true
   }
 
@@ -77,12 +81,28 @@ class NetworkProtocolConfigSpec extends AnyFlatSpec with Matchers with ParallelT
     p.snap2 shouldBe false
   }
 
+  it should "read eth72 when it is set" taggedAs UnitTest in {
+    val c = ConfigFactory.parseString("""
+      { eth68=true, eth69=true, eth70=true, eth71=true, eth72=true, snap1=true, snap2=true }
+    """)
+    NetworkProtocolConfig.fromConfig(c).eth72 shouldBe true
+  }
+
+  it should "leave eth72 off when a config predates it" taggedAs UnitTest in {
+    // A config written before eth/72 existed must keep loading, and must not start advertising it.
+    val c = ConfigFactory.parseString("""
+      { eth68=true, eth69=true, eth70=true, eth71=true, snap1=true, snap2=true }
+    """)
+    NetworkProtocolConfig.fromConfig(c).eth72 shouldBe false
+  }
+
   it should "parse the conservative ETC global defaults from the loaded config" taggedAs UnitTest in {
     val p = Config.networkProtocols
     p.eth68 shouldBe true
     p.eth69 shouldBe true
     p.eth70 shouldBe false // absent from ETC peer set
     p.eth71 shouldBe false
+    p.eth72 shouldBe false
     p.snap1 shouldBe true
     p.snap2 shouldBe false
   }

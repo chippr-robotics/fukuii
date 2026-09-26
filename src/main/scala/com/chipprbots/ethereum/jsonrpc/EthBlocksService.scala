@@ -15,6 +15,7 @@ import com.chipprbots.ethereum.domain.BlockHeaderImplicits.BlockHeaderEnc
 import com.chipprbots.ethereum.ledger.BlockQueue
 import com.chipprbots.ethereum.rlp
 import com.chipprbots.ethereum.utils.BlockchainConfig
+import com.chipprbots.ethereum.utils.NetworkType
 import com.chipprbots.ethereum.utils.Config
 
 object EthBlocksService:
@@ -64,6 +65,9 @@ object EthBlocksService:
   case class BlobBaseFeeRequest()
   case class BlobBaseFeeResponse(blobBaseFee: BigInt)
 
+  case class BaseFeeRequest()
+  case class BaseFeeResponse(baseFee: BigInt)
+
   case class GetRawBlockRequest(block: BlockParam)
   case class GetRawBlockResponse(rawBlock: Option[ByteString])
 
@@ -73,17 +77,53 @@ object EthBlocksService:
   case class GetRawReceiptsRequest(block: BlockParam)
   case class GetRawReceiptsResponse(rawReceipts: Option[Seq[ByteString]])
 
+  case class CapabilitiesRequest()
+
+  /** A single resource's effective retention policy, as reported by `eth_capabilities`.
+    *
+    * @param oldestBlock
+    *   the oldest block number for which this resource is still available.
+    * @param deleteStrategy
+    *   `Some(retentionBlocks)` when the resource is pruned on a sliding window, `None` when the node retains it
+    *   indefinitely (archive pruning, or a resource type this node never prunes).
+    */
+  case class CapabilitiesResource(disabled: Boolean, oldestBlock: BigInt, deleteStrategy: Option[BigInt])
+  case class CapabilitiesResponse(
+      headNumber: BigInt,
+      headHash: ByteString,
+      state: CapabilitiesResource,
+      tx: CapabilitiesResource,
+      logs: CapabilitiesResource,
+      receipts: CapabilitiesResource,
+      blocks: CapabilitiesResource,
+      stateproofs: CapabilitiesResource
+  )
+
 class EthBlocksService(
     val blockchain: Blockchain,
     val blockchainReader: BlockchainReader,
     val mining: Mining,
     val blockQueue: BlockQueue,
-    private val _forkChoiceManagerOpt: Option[ForkChoiceManager] = None
+    private val _forkChoiceManagerOpt: Option[ForkChoiceManager] = None,
+    private val pruningMode: com.chipprbots.ethereum.db.storage.pruning.PruningMode =
+      com.chipprbots.ethereum.db.storage.pruning.PruningMode.ArchivePruning,
+    // Plain (non-`given`) constructor param, injectable by tests — e.g. to exercise the Olympia-activated
+    // branch of eth_baseFee without needing a live chain past the fork block. `given` class members are
+    // final in Scala 3 and cannot be overridden by subclassing, so this can't be a `given` itself and
+    // remain testable — instead it backs an anonymous `given` below for the implicit call sites in this
+    // class (TransactionReceiptResponse, SignedTransaction.getSender) that require one in scope.
+    val blockchainConfig: BlockchainConfig = Config.blockchains.blockchainConfig
 ) extends ResolveBlock:
   final override def forkChoiceManagerOpt: Option[ForkChoiceManager] = _forkChoiceManagerOpt
   import EthBlocksService.*
 
-  given blockchainConfig: BlockchainConfig = Config.blockchains.blockchainConfig
+  given BlockchainConfig = blockchainConfig
+
+  /** ETH-family chains must not emit `totalDifficulty` — execution-apis dropped it from the Block schema after the
+    * merge, and rpc-compat compares the object exactly. ETC is PoW and still reports it, so this is a gate rather than
+    * a removal. See EthBlocksJsonMethodsImplicits for the measured impact.
+    */
+  private def emitTotalDifficulty: Boolean = blockchainConfig.networkType != NetworkType.ETH
 
   /** eth_blockNumber that returns the number of most recent block.
     *
@@ -134,7 +174,10 @@ class EthBlocksService(
     }
     val blockResponseOpt =
       if !isExposed then None
-      else blockOpt.map(block => BlockResponse(block, weight, fullTxs = fullTxs))
+      else
+        blockOpt.map(block =>
+          BlockResponse(block, weight, fullTxs = fullTxs, emitTotalDifficulty = emitTotalDifficulty)
+        )
     Right(BlockByBlockHashResponse(blockResponseOpt))
   }
 
@@ -150,7 +193,13 @@ class EthBlocksService(
     val blockResponseOpt =
       resolveBlock(blockParam).toOption.map { case ResolvedBlock(block, pending) =>
         val weight = blockchainReader.getChainWeightByHash(block.header.hash)
-        BlockResponse(block, weight, fullTxs = fullTxs, pendingBlock = pending.isDefined)
+        BlockResponse(
+          block,
+          weight,
+          fullTxs = fullTxs,
+          pendingBlock = pending.isDefined,
+          emitTotalDifficulty = emitTotalDifficulty
+        )
       }
     Right(BlockByNumberResponse(blockResponseOpt))
   }
@@ -188,7 +237,12 @@ class EthBlocksService(
 
     // The block in the response will not have any txs or uncles
     val uncleBlockResponseOpt = uncleHeaderOpt.map { uncleHeader =>
-      BlockResponse(blockHeader = uncleHeader, weight = weight, pendingBlock = false)
+      BlockResponse(
+        Block(uncleHeader, BlockBody(Nil, Nil)),
+        weight,
+        pendingBlock = false,
+        emitTotalDifficulty = emitTotalDifficulty
+      )
     }
     Right(UncleByBlockHashAndIndexResponse(uncleBlockResponseOpt))
   }
@@ -215,9 +269,10 @@ class EthBlocksService(
           // The block in the response will not have any txs or uncles
           Some(
             BlockResponse(
-              blockHeader = uncleHeader,
-              weight = weight,
-              pendingBlock = pending.isDefined
+              Block(uncleHeader, BlockBody(Nil, Nil)),
+              weight,
+              pendingBlock = pending.isDefined,
+              emitTotalDifficulty = emitTotalDifficulty
             )
           )
         else None
@@ -348,6 +403,76 @@ class EthBlocksService(
       }
       .getOrElse(BigInt(0))
     Right(BlobBaseFeeResponse(fee))
+  }
+
+  /** eth_baseFee — the EIP-1559 base fee per gas of the *next* block (the child of current head).
+    *
+    * Reuses [[com.chipprbots.ethereum.consensus.eip1559.BaseFeeCalculator.calcBaseFee]] — the same function used by
+    * block production and header validation — rather than re-deriving the formula. Gated on whether the next block
+    * number has actually crossed the Olympia activation: `calcBaseFee` alone would return the 1 gwei `InitialBaseFee`
+    * floor even for a chain that hasn't activated base fees yet, which would be a fabricated answer here. When the next
+    * block wouldn't carry a base fee, report `0` — consistent with the `getOrElse(BigInt(0))` fallback already used in
+    * [[feeHistory]].
+    */
+  def baseFee(@unused req: BaseFeeRequest): ServiceResponse[BaseFeeResponse] = IO {
+    val fee = blockchainReader.getBestBlock
+      .map { parent =>
+        val nextBlockNumber = parent.header.number.value + 1
+        if nextBlockNumber >= blockchainConfig.forkBlockNumbers.olympiaBlockNumber then
+          com.chipprbots.ethereum.consensus.eip1559.BaseFeeCalculator.calcBaseFee(parent.header, blockchainConfig)
+        else BigInt(0)
+      }
+      .getOrElse(BigInt(0))
+    Right(BaseFeeResponse(fee))
+  }
+
+  /** eth_capabilities — the node's effective data-retention capabilities, for RPC-router routing decisions.
+    *
+    * Reports honestly from actual node configuration:
+    *   - `state` / `stateproofs` are backed by the state trie, which is subject to this node's [[pruningMode]]. Under
+    *     archive pruning, both are fully retained (`oldestBlock = 0`, no delete strategy). Under basic/in-memory
+    *     pruning, both report a sliding window of `history` blocks.
+    *   - `tx` / `logs` / `receipts` / `blocks` are not pruned by any mechanism in this node's storage layer (no
+    *     `PruneSupport` implementation trims block bodies, receipts, or transaction/log indices) — they are always
+    *     reported as fully retained.
+    */
+  def capabilities(@unused req: CapabilitiesRequest): ServiceResponse[CapabilitiesResponse] = IO {
+    import com.chipprbots.ethereum.db.storage.pruning.PruningMode
+
+    val bestBlock = blockchainReader.getBestBlock
+    val headNumber = bestBlock.map(_.header.number.value).getOrElse(BigInt(0))
+    val headHash = bestBlock.map(_.header.hash.value).getOrElse(ByteString(new Array[Byte](32)))
+
+    val stateCapability = pruningMode match
+      case PruningMode.ArchivePruning =>
+        CapabilitiesResource(disabled = false, oldestBlock = BigInt(0), deleteStrategy = None)
+      case PruningMode.BasicPruning(history) =>
+        CapabilitiesResource(
+          disabled = false,
+          oldestBlock = (headNumber - history).max(0),
+          deleteStrategy = Some(BigInt(history))
+        )
+      case PruningMode.InMemoryPruning(history) =>
+        CapabilitiesResource(
+          disabled = false,
+          oldestBlock = (headNumber - history).max(0),
+          deleteStrategy = Some(BigInt(history))
+        )
+
+    val unprunedCapability = CapabilitiesResource(disabled = false, oldestBlock = BigInt(0), deleteStrategy = None)
+
+    Right(
+      CapabilitiesResponse(
+        headNumber = headNumber,
+        headHash = headHash,
+        state = stateCapability,
+        tx = unprunedCapability,
+        logs = unprunedCapability,
+        receipts = unprunedCapability,
+        blocks = unprunedCapability,
+        stateproofs = stateCapability
+      )
+    )
   }
 
   def getRawBlock(req: GetRawBlockRequest): ServiceResponse[GetRawBlockResponse] = IO {

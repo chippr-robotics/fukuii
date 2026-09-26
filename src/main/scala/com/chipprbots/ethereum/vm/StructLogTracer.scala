@@ -3,8 +3,10 @@ package com.chipprbots.ethereum.vm
 import org.apache.pekko.util.ByteString
 
 import org.json4s.JsonAST.*
+import org.json4s.JsonDSL.*
 
 import com.chipprbots.ethereum.domain.UInt256
+import com.chipprbots.ethereum.utils.Hex
 
 /** A single step in EVM execution, matching go-ethereum's structLog format. */
 case class StructLog(
@@ -57,7 +59,10 @@ class StructLogTracer(
       if mem.size > 0 then
         val words = (0 until mem.size by 32).map { offset =>
           val word = mem.load(UInt256(offset), UInt256(32))._1
-          word.toArray.map("%02x".format(_)).mkString
+          // Schema (execution-apis src/schemas/opcode-tracer.yaml, StructLog.memory.items): each
+          // chunk is a 0x-prefixed bytes32 (^0x[0-9a-f]{64}$). The un-prefixed hex below was
+          // previously emitted bare and failed that pattern — see StructLogTracerSpec.
+          "0x" + word.toArray.map("%02x".format(_)).mkString
         }
         Some(words.toSeq)
       else Some(Seq.empty)
@@ -89,23 +94,59 @@ class StructLogTracer(
       gas = prevState.gas,
       gasCost = gasCost,
       depth = prevState.env.callDepth + 1, // go-ethereum uses 1-based depth
-      stack = prevState.stack.toSeq.map(_.toBigInt),
+      // go-ethereum's structLog stack is bottom-first (oldest push first). Stack.toSeq is
+      // top-first (see Stack.scala: toSeq = underlying.reverse), so it must be reversed here
+      // to avoid a schema-valid-but-wrong-order response.
+      stack = prevState.stack.toSeq.reverse.map(_.toBigInt),
       memory = memorySnapshot,
       storage = storageSnapshot,
       error = error
     )
 
-  def setResult(gas: BigInt, returnValue: ByteString, failed: Boolean): Unit =
-    _gas = gas
-    _returnValue = returnValue
-    _failed = failed
+  /** Populates the tx-level result fields. Fired once after the top-level transaction returns — see
+    * StxLedger.simulateTransactionWithTracer, which calls this after all onStep calls have completed with exactly the
+    * values go-ethereum's ExecutionResult carries: post-refund gas used, the return/revert data, and the error (if
+    * any).
+    */
+  override def onTxEnd(gasUsed: BigInt, output: ByteString, error: Option[String]): Unit =
+    _gas = gasUsed
+    _returnValue = output
+    _failed = error.isDefined
 
   def getSteps: Seq[StructLog] = steps.toSeq
   def gas: BigInt = _gas
   def failed: Boolean = _failed
   def returnValue: ByteString = _returnValue
 
-  /** Not used for StructLogTracer — response is built by DebugTracingJsonMethodsImplicits using
-    * getSteps/gas/failed/returnValue. Exists to satisfy the ExecutionTracer trait.
+  /** Builds the go-ethereum structLog response: {gas, failed, returnValue, structLogs}.
+    *
+    * core-geth reference: eth/tracers/logger/logger.go StructLogger — ExecutionResult()/StructLogs().
     */
-  override def getResult: JValue = JNothing
+  override def getResult: JValue =
+    ("gas" -> JInt(_gas)) ~
+      ("failed" -> JBool(_failed)) ~
+      ("returnValue" -> encodeHexBytes(_returnValue)) ~
+      ("structLogs" -> JArray(steps.toList.map(encodeStep)))
+
+  private def encodeStep(log: StructLog): JValue =
+    var obj: JObject = ("pc" -> JInt(log.pc)) ~
+      ("op" -> JString(log.op)) ~
+      ("gas" -> JInt(log.gas)) ~
+      ("gasCost" -> JInt(log.gasCost)) ~
+      ("depth" -> JInt(log.depth)) ~
+      ("stack" -> JArray(log.stack.map(encodeHex).toList))
+
+    log.memory.foreach(mem => obj = obj ~ ("memory" -> JArray(mem.map(JString(_)).toList)))
+    log.storage.foreach(st =>
+      obj = obj ~ ("storage" -> JObject(st.toList.map { case (k, v) => JField(k, JString(v)) }))
+    )
+    log.error.foreach(e => obj = obj ~ ("error" -> JString(e)))
+
+    obj
+
+  private def encodeHex(value: BigInt): JString =
+    JString("0x" + value.toString(16))
+
+  private def encodeHexBytes(bs: ByteString): JString =
+    if bs.isEmpty then JString("0x")
+    else JString("0x" + Hex.toHexString(bs.toArray))

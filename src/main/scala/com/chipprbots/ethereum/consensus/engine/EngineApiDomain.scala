@@ -82,3 +82,38 @@ case class PayloadId(id: ByteString)
 
 /** BlobAndProofV2 per EIP-7594 / engine_getBlobsV2 — blob + CELLS_PER_EXT_BLOB cell proofs (48 bytes each). */
 case class BlobAndProofV2(blob: ByteString, cellProofs: Seq[ByteString])
+
+/** EIP-4844/EIP-7594 sidecars for the blob transactions of one payload, as returned in the `blobsBundle` envelope of
+  * engine_getPayloadV3+ and of `testing_buildBlockV1`.
+  *
+  * `proofs` are the V1 (per-blob) proofs; `cellProofsPerBlob` are the EIP-7594 PeerDAS cell proofs used by
+  * BlobsBundleV2 and engine_getBlobsV2.
+  */
+case class BlobsBundleData(
+    blobs: Seq[ByteString],
+    commitments: Seq[ByteString],
+    proofs: Seq[ByteString],
+    cellProofsPerBlob: Seq[Seq[ByteString]]
+)
+
+/** Result of a proposer-side block build: the sealed block plus the two derived artefacts callers need but that are not
+  * recoverable from the block alone (receipts drive `blockValue`; executionRequests are EIP-7685's pre-image, only the
+  * hash of which is in the header).
+  */
+case class BuiltBlock(
+    block: com.chipprbots.ethereum.domain.Block,
+    receipts: Seq[com.chipprbots.ethereum.domain.Receipt],
+    executionRequests: Seq[ByteString]
+)
+
+/** One engine_getPayload answer, whole: the block and everything its envelope carries that the block cannot give back —
+  * the receipts (`blockValue`), the EIP-7685 execution requests (the header holds only their hash) and the EIP-4844
+  * blobs bundle. `EngineApiService.resolvePayload` settles it once per payload id and serves it unchanged to every
+  * later call, so no part of an answer can differ between two calls for the same payload.
+  */
+final case class ServedPayload(
+    block: com.chipprbots.ethereum.domain.Block,
+    receipts: Seq[com.chipprbots.ethereum.domain.Receipt],
+    executionRequests: Seq[ByteString],
+    blobsBundle: BlobsBundleData
+)

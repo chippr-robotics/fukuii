@@ -44,6 +44,28 @@ class BlockHeaderSpec extends AnyFreeSpec with Matchers with ScalaCheckPropertyC
       }
     }
 
+    "should reject fixed-size fields of the wrong length, as go-ethereum/core-geth do" taggedAs (
+      UnitTest,
+      ConsensusTest
+    ) in {
+      // ethereum/tests bcForgedTest reusePreviousBlockAsUncleIgnoringLeadingZerosIn{MixHash,Nonce}: a canonical block
+      // re-encoded with the leading zero of its mixHash / nonce stripped, offered as an uncle. Decoded leniently it
+      // hashes differently from the block it copies and slips past the "uncle is an ancestor" check.
+      forAll(blockHeaderGen) { header =>
+        header.toBytes.toBlockHeader shouldBe header
+        an[Exception] should be thrownBy header
+          .copy(mixHash = BlockHash(header.mixHash.value.drop(1)))
+          .toBytes
+          .toBlockHeader
+        an[Exception] should be thrownBy header.copy(nonce = header.nonce.drop(1)).toBytes.toBlockHeader
+        an[Exception] should be thrownBy header.copy(beneficiary = header.beneficiary.drop(1)).toBytes.toBlockHeader
+        an[Exception] should be thrownBy header
+          .copy(parentHash = BlockHash(header.parentHash.value ++ ByteString(0)))
+          .toBytes
+          .toBlockHeader
+      }
+    }
+
     "should generate the expected RLP object for standard headers" in {
       import com.chipprbots.ethereum.rlp.RLPValue
       import com.chipprbots.ethereum.utils.ByteUtils

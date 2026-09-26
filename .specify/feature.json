@@ -1,1 +1,3 @@
-{ "feature_directory": "specs/007-hotpath-alloc-reduction" }
+{
+  "feature_directory": "specs/009-amsterdam-fork-support"
+}

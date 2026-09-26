@@ -7,6 +7,9 @@ import org.apache.pekko.http.cors.javadsl.CorsRejection
 import org.apache.pekko.http.cors.scaladsl.CorsDirectives.*
 import org.apache.pekko.http.cors.scaladsl.model.HttpOriginMatcher
 import org.apache.pekko.http.cors.scaladsl.settings.CorsSettings
+import scala.concurrent.Future
+
+import org.apache.pekko.http.scaladsl.Http
 import org.apache.pekko.http.scaladsl.model.*
 import org.apache.pekko.http.scaladsl.server.*
 import org.apache.pekko.http.scaladsl.server.Directives.*
@@ -100,22 +103,42 @@ trait JsonRpcHttpServer extends Json4sSupport with Logger:
               )
         }
       } ~ (pathEndOrSingleSlash & post) {
-        entity(as[JsonRpcRequest]) {
-          case statusReq if statusReq.method == FaucetJsonRpcController.Status =>
-            handleRequest(statusReq)
-          case jsonReq =>
-            rateLimit {
-              handleRequest(jsonReq)
-            }
-        } ~ entity(as[Seq[JsonRpcRequest]]) {
-          case _ if config.rateLimit.enabled =>
-            complete(StatusCodes.MethodNotAllowed, JsonRpcError.MethodNotFound)
-          case reqSeq =>
-            complete {
-              reqSeq.toList
-                .traverse(request => jsonRpcController.handleRequest(request))
-                .unsafeToFuture()
-            }
+        // Materialize the request entity BEFORE the two `entity(as[...])` alternatives below.
+        //
+        // Those alternatives are tried in order, and for a BATCH request (a JSON array) the
+        // first one MUST fail — an array is not a single JsonRpcRequest. Pekko then tries the
+        // second. That only works if the entity can be read twice. A streamed entity
+        // (HttpEntity.Default / Chunked) is a one-shot source: the first failed unmarshal
+        // drains it, the second alternative rejects too, and myRejectionHandler above turns
+        // the resulting MalformedRequestContentRejection into
+        //   400 {"jsonrpc":"2.0","error":{"code":-32700,...},"id":0}
+        // for a batch that was perfectly well-formed.
+        //
+        // Whether a given batch arrives Strict or streamed depends on TCP arrival timing, so
+        // the bug is intermittent and load-dependent: measured in hive's engine-withdrawals
+        // suite failing after 1, 3, 5, 7, 11, 19 or 25 successful batches, or not at all
+        // within 30, for the SAME test with the SAME payloads across two runs.
+        //
+        // toStrictEntity gives both alternatives a re-readable buffered entity. The GraphQL
+        // branch above already does this with extractStrictEntity for the same reason.
+        toStrictEntity(5.seconds) {
+          entity(as[JsonRpcRequest]) {
+            case statusReq if statusReq.method == FaucetJsonRpcController.Status =>
+              handleRequest(statusReq)
+            case jsonReq =>
+              rateLimit {
+                handleRequest(jsonReq)
+              }
+          } ~ entity(as[Seq[JsonRpcRequest]]) {
+            case _ if config.rateLimit.enabled =>
+              complete(StatusCodes.MethodNotAllowed, JsonRpcError.MethodNotFound)
+            case reqSeq =>
+              complete {
+                reqSeq.toList
+                  .traverse(request => jsonRpcController.handleRequest(request))
+                  .unsafeToFuture()
+              }
+          }
         }
       }
     }
@@ -133,7 +156,13 @@ trait JsonRpcHttpServer extends Json4sSupport with Logger:
 
   /** Try to start JSON RPC server
     */
-  def run(): Unit
+  /** Binds the HTTP server and returns the binding future.
+    *
+    * Returning the future rather than Unit is what lets a caller wait for the socket to be LISTENING rather than merely
+    * for bind() to have been requested. StdNode does exactly that, so that "node started" means the JSON-RPC port
+    * actually accepts connections. See StdNode.startJsonRpcHttpServer for why that matters to hive.
+    */
+  def run(): Future[Http.ServerBinding]
 
   private def handleHealth(): StandardRoute =
     // Simple liveness check - if server responds, it's alive

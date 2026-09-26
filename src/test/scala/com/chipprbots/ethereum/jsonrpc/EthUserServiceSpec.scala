@@ -140,6 +140,81 @@ class EthUserServiceSpec
 
     response.unsafeRunSync() shouldEqual Right(GetTransactionCountResponse(BigInt(999)))
 
+  it should "handle getStorageValues request for multiple addresses, resolving the block once" taggedAs (
+    UnitTest,
+    RPCTest
+  ) in new TestSetup:
+    val knownAddress: Address = Address(ByteString(Hex.decode("abbb6bebfa05aa13e908eaa492bd7a8343760477")))
+    val unknownAddress: Address = Address(ByteString(Hex.decode("c1cadaffffffffffffffffffffffffffffffffff")))
+
+    import MerklePatriciaTrie.defaultByteArraySerializable
+
+    val storageMpt: MerklePatriciaTrie[BigInt, BigInt] =
+      com.chipprbots.ethereum.domain.EthereumUInt256Mpt
+        .storageMpt(
+          ByteString(MerklePatriciaTrie.EmptyRootHash),
+          storagesInstance.storages.stateStorage.getBackingStorage(0)
+        )
+        .put(UInt256(333), UInt256(123))
+
+    val mpt: MerklePatriciaTrie[Array[Byte], Account] =
+      MerklePatriciaTrie[Array[Byte], Account](storagesInstance.storages.stateStorage.getBackingStorage(0))
+        .put(
+          crypto.kec256(knownAddress.bytes.toArray[Byte]),
+          Account(0, UInt256(0), TrieRoot(ByteString(storageMpt.getRootHash)), CodeHash(ByteString("")))
+        )
+
+    val newBlockHeader: BlockHeader = blockToRequest.header.copy(stateRoot = TrieRoot(ByteString(mpt.getRootHash)))
+    val newblock: Block = blockToRequest.copy(header = newBlockHeader)
+    blockchainWriter.storeBlock(newblock).commit()
+    blockchainWriter.saveBestKnownBlocks(newblock.hash, newblock.number.value)
+
+    val request: GetStorageValuesRequest = GetStorageValuesRequest(
+      Seq(
+        StorageValuesEntry(knownAddress.toString, knownAddress, Seq(BigInt(333))),
+        StorageValuesEntry(unknownAddress.toString, unknownAddress, Seq(BigInt(1)))
+      ),
+      BlockParam.Latest
+    )
+
+    val response: ServiceResponse[GetStorageValuesResponse] = ethUserService.getStorageValues(request)
+    val result: Either[JsonRpcError, GetStorageValuesResponse] = response.unsafeRunSync()
+
+    result.isRight shouldBe true
+    val values: Map[String, Seq[ByteString]] = result.toOption.value.values
+    UInt256(values(knownAddress.toString).head) shouldEqual UInt256(123)
+    UInt256(values(unknownAddress.toString).head) shouldEqual UInt256(0)
+
+  it should "handle getStorageValues request for an unknown account, returning zero rather than an error" taggedAs (
+    UnitTest,
+    RPCTest
+  ) in new TestSetup:
+    val unknownAddress: Address = Address(ByteString(Hex.decode("c1cadaffffffffffffffffffffffffffffffffff")))
+
+    import MerklePatriciaTrie.defaultByteArraySerializable
+
+    // An empty-but-resolvable account trie (rooted at a real, stored empty MPT — not the fixture's
+    // unrelated mainnet stateRoot, which points at nodes this ephemeral test store never populated and
+    // would surface as MissingNodeException instead of exercising the "no account" fallback path).
+    val emptyMpt: MerklePatriciaTrie[Array[Byte], Account] =
+      MerklePatriciaTrie[Array[Byte], Account](storagesInstance.storages.stateStorage.getBackingStorage(0))
+
+    val newBlockHeader: BlockHeader = blockToRequest.header.copy(stateRoot = TrieRoot(ByteString(emptyMpt.getRootHash)))
+    val newblock: Block = blockToRequest.copy(header = newBlockHeader)
+    blockchainWriter.storeBlock(newblock).commit()
+    blockchainWriter.saveBestKnownBlocks(newblock.hash, newblock.number.value)
+
+    val request: GetStorageValuesRequest = GetStorageValuesRequest(
+      Seq(StorageValuesEntry(unknownAddress.toString, unknownAddress, Seq(BigInt(1)))),
+      BlockParam.Latest
+    )
+
+    val response: ServiceResponse[GetStorageValuesResponse] = ethUserService.getStorageValues(request)
+    val result: Either[JsonRpcError, GetStorageValuesResponse] = response.unsafeRunSync()
+
+    result.isRight shouldBe true
+    UInt256(result.toOption.value.values(unknownAddress.toString).head) shouldEqual UInt256(0)
+
   class TestSetup() extends EphemBlockchainTestSetup:
     lazy val ethUserService = new EthUserService(
       blockchain,

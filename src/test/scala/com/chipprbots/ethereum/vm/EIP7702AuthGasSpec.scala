@@ -2,6 +2,8 @@ package com.chipprbots.ethereum.vm
 
 import org.apache.pekko.util.ByteString
 
+import com.chipprbots.ethereum.domain.Address
+import com.chipprbots.ethereum.domain.UInt256
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
 
@@ -32,15 +34,55 @@ class EIP7702AuthGasSpec
   val emptyPayload: ByteString = ByteString.empty
 
   "EIP-7702 auth tuple gas" should "be 25000 per authorization" taggedAs (OlympiaTest, VMTest) in {
-    val gasWithAuth = evmConfig.calcTransactionIntrinsicGas(emptyPayload, isContractCreation = false, Nil, 1)
-    val gasWithoutAuth = evmConfig.calcTransactionIntrinsicGas(emptyPayload, isContractCreation = false, Nil, 0)
+    val gasWithAuth = evmConfig.calcTransactionIntrinsicGas(
+      emptyPayload,
+      isContractCreation = false,
+      Nil,
+      1,
+      Some(Address(1)),
+      UInt256.Zero,
+      Address(0)
+    )
+    val gasWithoutAuth = evmConfig.calcTransactionIntrinsicGas(
+      emptyPayload,
+      isContractCreation = false,
+      Nil,
+      0,
+      Some(Address(1)),
+      UInt256.Zero,
+      Address(0)
+    )
     (gasWithAuth - gasWithoutAuth) shouldBe BigInt(25000)
   }
 
   it should "scale linearly with authorization list size" taggedAs (OlympiaTest, VMTest) in {
-    val gas0 = evmConfig.calcTransactionIntrinsicGas(emptyPayload, isContractCreation = false, Nil, 0)
-    val gas1 = evmConfig.calcTransactionIntrinsicGas(emptyPayload, isContractCreation = false, Nil, 1)
-    val gas3 = evmConfig.calcTransactionIntrinsicGas(emptyPayload, isContractCreation = false, Nil, 3)
+    val gas0 = evmConfig.calcTransactionIntrinsicGas(
+      emptyPayload,
+      isContractCreation = false,
+      Nil,
+      0,
+      Some(Address(1)),
+      UInt256.Zero,
+      Address(0)
+    )
+    val gas1 = evmConfig.calcTransactionIntrinsicGas(
+      emptyPayload,
+      isContractCreation = false,
+      Nil,
+      1,
+      Some(Address(1)),
+      UInt256.Zero,
+      Address(0)
+    )
+    val gas3 = evmConfig.calcTransactionIntrinsicGas(
+      emptyPayload,
+      isContractCreation = false,
+      Nil,
+      3,
+      Some(Address(1)),
+      UInt256.Zero,
+      Address(0)
+    )
 
     (gas1 - gas0) shouldBe BigInt(25000)
     (gas3 - gas0) shouldBe BigInt(75000)
@@ -52,8 +94,24 @@ class EIP7702AuthGasSpec
     val payload = ByteString(Array.fill(100)(0x01.toByte)) // 100 nonzero bytes
     val accessList = List(AccessListItem(Address(1), List(StorageKey(BigInt(0)), StorageKey(BigInt(1)))))
 
-    val gasBase = evmConfig.calcTransactionIntrinsicGas(emptyPayload, isContractCreation = false, Nil, 0)
-    val gasFull = evmConfig.calcTransactionIntrinsicGas(payload, isContractCreation = false, accessList, 2)
+    val gasBase = evmConfig.calcTransactionIntrinsicGas(
+      emptyPayload,
+      isContractCreation = false,
+      Nil,
+      0,
+      Some(Address(1)),
+      UInt256.Zero,
+      Address(0)
+    )
+    val gasFull = evmConfig.calcTransactionIntrinsicGas(
+      payload,
+      isContractCreation = false,
+      accessList,
+      2,
+      Some(Address(1)),
+      UInt256.Zero,
+      Address(0)
+    )
 
     // Full = base + calldata(100 * 16) + accessList(1 addr * 2400 + 2 keys * 1900) + auth(2 * 25000)
     val calldataCost = BigInt(100) * 16 // G_txdatanonzero = 16

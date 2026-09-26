@@ -116,6 +116,55 @@ class PrecompiledContractsSpec extends AnyFunSuite with Matchers with ScalaCheck
     invalidResult.returnData shouldEqual ByteString.empty
   }
 
+  // core-geth core/vm/contracts.go ecrecover.Run: `!allZero(input[32:63]) || !crypto.ValidateSignatureValues(v, r, s,
+  // false)` -> empty output. That is r, s in [1, secp256k1n - 1] and v in {27, 28}; high s IS accepted (the Homestead
+  // low-s rule applies to transaction signatures only). A recovery that yields the point at infinity is also empty.
+  // Every case costs the fixed 3000 gas.
+  test("ECDSARECOVER_ValidateSignatureValues", UnitTest, VMTest) {
+    val n = BigInt("fffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364141", 16)
+    val p = BigInt("fffffffffffffffffffffffffffffffffffffffffffffffffffffffefffffc2f", 16)
+    val gx = BigInt("79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798", 16)
+    val h = BigInt("18c547e4f7b0f325ad1e56f57e26c745b09a3e503d86e00e5255ff7f715d3d1c", 16)
+    val r = BigInt("73b1693892219d736caba55bdb67216e485557ea6b6af75f37096c9aa6a5a75f", 16)
+    val s = BigInt("eeb940b1d03b21e36b0e47e79769f095fe2ab855bd91e3a38756b7d75a9c4549", 16) // > n / 2
+    val signer = ByteString(Hex.decode("000000000000000000000000a94f5374fce5edbc8e2a8697c15331677e6ebf0b"))
+
+    def word(x: BigInt): ByteString = ByteUtils.padLeft(ByteString(x.toByteArray).takeRight(32), 32, 0)
+    def run(h: BigInt, v: BigInt, r: BigInt, s: BigInt): ByteString =
+      val context = buildContext(PrecompiledContracts.EcDsaRecAddr, word(h) ++ word(v) ++ word(r) ++ word(s))
+      val result = vm.run(context)
+      (context.startGas - result.gasRemaining) shouldEqual 3000
+      result.returnData
+
+    // The smallest r in [n, p) that is the x-coordinate of a curve point: recovery math would succeed, the range
+    // check must not let it.
+    val rAboveN = Iterator
+      .from(0)
+      .map(k => n + k)
+      .find(x => scala.util.Try(curve.getCurve.decodePoint((Array[Byte](2) ++ word(x).toArray))).isSuccess)
+      .get
+    rAboveN should be < p
+
+    run(h, 28, r, s) shouldEqual signer // high s accepted
+    run(h, 27, r, n - s) shouldEqual signer // the low-s twin recovers the same key
+
+    run(h, 28, r, 0) shouldEqual ByteString.empty
+    run(h, 28, r, n) shouldEqual ByteString.empty
+    run(h, 28, r, n + 1) shouldEqual ByteString.empty
+    run(h, 28, r, BigInt(2).pow(256) - 1) shouldEqual ByteString.empty
+    run(h, 28, 0, s) shouldEqual ByteString.empty
+    run(h, 28, n, s) shouldEqual ByteString.empty
+    run(h, 27, rAboveN, s) shouldEqual ByteString.empty
+    run(h, 28, rAboveN, s) shouldEqual ByteString.empty
+    run(h, 28, p, s) shouldEqual ByteString.empty
+    Seq(BigInt(0), BigInt(1), BigInt(26), BigInt(29), BigInt(27 + 256), BigInt(28) << 248).foreach { v =>
+      run(h, v, r, s) shouldEqual ByteString.empty
+    }
+
+    // Point at infinity: R = G (r = Gx, even y -> v = 27), s = 1, hash = 1 gives Q = r^-1 (s*R - hash*G) = O.
+    run(1, 27, gx, 1) shouldEqual ByteString.empty
+  }
+
   test("SHA256") {
     val bytesGen = Generators.getByteStringGen(0, 256)
     forAll(bytesGen) { bytes =>
@@ -436,6 +485,27 @@ class PrecompiledContractsSpec extends AnyFunSuite with Matchers with ScalaCheck
 
       result.returnData shouldEqual ByteString(Hex.decode(expectedResult))
     }
+  }
+
+  // EIP-197: a G2 point that is on the twist curve but outside the order-r subgroup is invalid input, so the
+  // precompile FAILS (all call gas consumed), as in go-ethereum/core-geth (bn256 twistPoint.IsOnCurve multiplies by
+  // Order). Input: EEST v5.4.0 stZeroKnowledge/ecpairing_inputs[invalid_g2_subgroup-10] — G1 = infinity, so without
+  // the subgroup check the pairing product is trivially 1 and the call "succeeds".
+  test("BN128Pairing_G2_outside_subgroup_fails", UnitTest, VMTest) {
+    val pair =
+      "0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000192b7e3a0ca8b63592989fe8b2589465703315272bc730644e72e131a029b85045b68181585d00001b86b77538000000000100000000128a694e7017ae1db6a312c9ef648b1a4910a41e684cb554302044a2065f04680df2d76a91278279cf401d431c31876ee9c8ad35070694552ccbd36875541383"
+    val context = buildContext(PrecompiledContracts.Bn128PairingAddr, ByteString(Hex.decode(pair * 2)))
+    val result = vm.run(context)
+    result.error shouldBe defined
+    result.returnData shouldEqual ByteString.empty
+    result.gasRemaining shouldEqual 0
+
+    // The G2 generator (in the subgroup) with the same infinity G1 still pairs to 1.
+    val generatorPair = "0" * 128 +
+      "198e9393920d483a7260bfb731fb5d25f1aa493335a9e71297e485b7aef312c21800deef121f1e76426a00665e5c4479674322d4f75edadd46debd5cd992f6ed090689d0585ff075ec9e99ad690c3395bc4b313370b38ef355acdadcd122975b12c85ea5db8c6deb4aab71808dcb408fe3d1e7690c43d37b4ce6cc0166fa7daa"
+    val ok = vm.run(buildContext(PrecompiledContracts.Bn128PairingAddr, ByteString(Hex.decode(generatorPair))))
+    ok.error shouldBe None
+    ok.returnData shouldEqual PrecompiledContracts.Bn128Pairing.positiveResult
   }
 
   test("BLAKE2bCompress") {

@@ -211,7 +211,7 @@ eye checker: CONFIRM:DONE
 - `sbt compile-all` — aggregate compile (confirmed; exits 0 on clean tree)
 - `sbt testEssential` — Tier 1 test task (3,595+ tests; 24 min warm JVM)
 - `sbt scalafmtCheck` — format verify (confirmed; scalafmt plugin task)
-- `.local/scripts/fukuii-test` — wrapper script (confirmed at path)
+- `./scripts/fukuii-test` — wrapper script (verified 2026-09-22; the old `.local/scripts/` path does not exist)
 
 ### Agent role map
 

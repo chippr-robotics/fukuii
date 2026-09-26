@@ -57,6 +57,9 @@ class FastSyncStateStorage(val dataSource: DataSource) extends KeyValueStorage[S
       .addConcreteType[HefPostShanghai]
       .addConcreteType[HefPostCancun]
       .addConcreteType[HefPostPrague]
+      // Appended last on purpose: boopickle assigns concrete-type indices in registration
+      // order, so appending leaves every already-persisted fast-sync record decodable.
+      .addConcreteType[HefPostAmsterdam]
 
   given hashTypePickler: CompositePickler[HashType] =
     compositePickler[HashType]

@@ -275,8 +275,13 @@ class ConsensusAdapterSpec extends AnyFlatSpec with Matchers with ScalaFutures w
       _ shouldBe a[BlockImportFailed]
     }
 
-    // execute-first: chain advances to the last successfully executed block, not reverted
-    blockchainReader.getBestBlock.get shouldEqual newBlock2
+    // core-geth parity (writeBlockAndSetHead: the head moves only to a heavier block). The executed prefix newBlock2
+    // (weight1 + 101) is lighter than the old head oldBlock3 (weight1 + 102 + 103), so the old head stays and the index
+    // entry execution overwrote is put back. newBlock2 is kept as an executed side block, with its weight. This used to
+    // assert best == newBlock2 — a lighter head than the one the node already had; see ReorgBlockhashParitySpec.
+    blockchainReader.getBestBlock.get shouldEqual oldBlock3
+    blockchainReader.getBlockHeaderByNumber(oldBlock2.number.value).map(_.hash) shouldEqual Some(oldBlock2.hash)
+    blockchainReader.getBlockByHash(newBlock2.hash) shouldEqual Some(newBlock2)
     blockchainReader.getChainWeightByHash(newBlock2.header.hash) shouldEqual Some(newWeight2)
 
     blockQueue.isQueued(newBlock2.header.hash) shouldBe true

@@ -306,10 +306,12 @@ abstract class CommonFakePeer(peerName: String, fakePeerCustomConfig: FakePeerCu
 
   lazy val broadcaster = new BlockBroadcast(etcPeerManager)
 
+  // Not "block-broadcaster": RegularSyncItSpecUtils.FakePeer spawns its own top-level actor under that name in the same
+  // system, and this one is spawned lazily by the first broadcastBlock (InvalidActorNameException: not unique).
   lazy val broadcasterActor: org.apache.pekko.actor.typed.ActorRef[BlockBroadcasterActor.BroadcasterMsg] =
     system.spawn(
       BlockBroadcasterActor.apply(broadcaster, peerEventBus, etcPeerManager, blacklist, testSyncConfig),
-      "block-broadcaster"
+      "fake-peer-block-broadcaster"
     )
 
   private def getMptForBlock(block: Block) =

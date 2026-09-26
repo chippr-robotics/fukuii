@@ -141,10 +141,8 @@ jobs:
           mkdir -p external/hive/clients/fukuii
           # Source tree path: our adapter lives at hive/fukuii/ in the fukuii repo.
           # hive is checked out to external/hive so it doesn't shadow our adapter dir.
-          cp -v $GITHUB_WORKSPACE/hive/fukuii/Dockerfile external/hive/clients/fukuii/Dockerfile
-          cp -v $GITHUB_WORKSPACE/hive/fukuii/fukuii.sh external/hive/clients/fukuii/fukuii.sh
-          cp -v $GITHUB_WORKSPACE/hive/fukuii/mapper.jq external/hive/clients/fukuii/mapper.jq
-          cp -v $GITHUB_WORKSPACE/hive/fukuii/enode.sh external/hive/clients/fukuii/enode.sh 2>/dev/null || true
+          # Whole adapter dir = hive build context (see _hive-sim.yml).
+          cp -v "$GITHUB_WORKSPACE"/hive/fukuii/* external/hive/clients/fukuii/
           cp target/scala-3.*/fukuii-assembly-*.jar external/hive/clients/fukuii/
 
       - name: Build hive

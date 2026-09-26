@@ -13,6 +13,7 @@ import com.chipprbots.ethereum.domain.Transaction
 import com.chipprbots.ethereum.nodebuilder.BlockchainConfigBuilder
 import com.chipprbots.ethereum.vm.EvmConfig
 import com.chipprbots.ethereum.vm.ExecutionTracer
+import com.chipprbots.ethereum.vm.ProgramError
 
 class StxLedger(
     blockchain: BlockchainImpl,
@@ -39,6 +40,30 @@ class StxLedger(
       world: Option[InMemoryWorldStateProxy],
       tracer: Option[ExecutionTracer]
   ): TxResult =
+    val result = runSimulated(stx, blockHeader, world, tracer)
+    val totalGasToRefund = blockPreparator.calcTotalGasToRefund(stx.tx, result, blockHeader.number.value)
+
+    TxResult(
+      result.world,
+      stx.tx.tx.gasLimit.value - totalGasToRefund,
+      result.logs,
+      result.returnData,
+      result.error
+    )
+
+  /** Runs `stx` against a throwaway world and hands back the raw [[PR]].
+    *
+    * [[simulateTransactionWithTracer]] narrows this to a [[TxResult]]; [[binarySearchGasEstimation]] needs the
+    * un-narrowed result because it reads `codeDepositShortfall`, which deliberately does not exist on `TxResult` —
+    * keeping it off the type that block execution and the receipt path consume is what makes it impossible for the flag
+    * to influence consensus.
+    */
+  private def runSimulated(
+      stx: SignedTransactionWithSender,
+      blockHeader: BlockHeader,
+      world: Option[InMemoryWorldStateProxy],
+      tracer: Option[ExecutionTracer]
+  ): PR =
     val tx = stx.tx
 
     val world1 = world.getOrElse(
@@ -60,10 +85,7 @@ class StxLedger(
       else world1
 
     val worldForTx = blockPreparator.updateSenderAccountBeforeExecution(tx, senderAddress, world2)
-    val result = blockPreparator.runVM(tx, senderAddress, blockHeader, worldForTx, tracer)
-    val totalGasToRefund = blockPreparator.calcTotalGasToRefund(tx, result, blockHeader.number.value)
-
-    TxResult(result.world, tx.tx.gasLimit.value - totalGasToRefund, result.logs, result.returnData, result.error)
+    blockPreparator.runVM(tx, senderAddress, blockHeader, worldForTx, tracer = tracer)
 
   /** Like [[simulateTransaction]] but attaches a tracer and fires the tx-level lifecycle hooks.
     *
@@ -155,14 +177,39 @@ class StxLedger(
     if highLimit.value < lowLimit then highLimit.value
     else
       StxLedger.binaryChop(lowLimit, highLimit.value) { gasLimit =>
-        simulateTransaction(
+        val result = runSimulated(
           stx.copy(tx = tx.copy(tx = Transaction.withGasLimit(GasAmount(gasLimit))(tx.tx))),
           blockHeader,
-          world
-        ).vmError
+          world,
+          tracer = None
+        )
+        // A pre-Homestead CREATE that ran its init code but could not afford the 200/byte code deposit is a
+        // SUCCESS as far as consensus is concerned (Frontier keeps the gas and the state, and go-ethereum's
+        // `opCreate` discards the error) — but it deployed NO code, so it is not an acceptable answer for
+        // `eth_estimateGas`. Treating it as success here made the binary search converge on the minimum gas to
+        // merely RUN the init code, omitting `len(runtimeCode) * G_codedeposit` from the estimate (measured:
+        // hive graphql `04_eth_estimateGas_contractDeploy` returned 0xa959, expected 0x1b551 — short by exactly
+        // 343 * 200). `codeDepositShortfall` is read ONLY here; it is not a `ProgramError` and no consensus
+        // path sees it.
+        if result.codeDepositShortfall then Some(StxLedger.CodeDepositShortfall)
+        else result.error.map(StxLedger.VmFailure.apply)
       }
 
 object StxLedger:
+
+  /** Why [[StxLedger.binarySearchGasEstimation]] rejected a candidate gas limit.
+    *
+    * Deliberately NOT a [[ProgramError]]: [[CodeDepositShortfall]] is not an execution failure — Frontier treats a
+    * CREATE that cannot pay its code deposit as a success — it is only an unacceptable answer for `eth_estimateGas`.
+    * Modelling it as a `ProgramError` is what let it leak onto the consensus path.
+    */
+  sealed private[ledger] trait EstimationFailure
+
+  /** The VM halted. Anything a real execution would also treat as a failure. */
+  private[ledger] case class VmFailure(error: ProgramError) extends EstimationFailure
+
+  /** Pre-Homestead CREATE succeeded but deployed no code because it could not afford `200 * len(code)`. */
+  private[ledger] case object CodeDepositShortfall extends EstimationFailure
 
   /** Function finds minimal value in some interval for which provided function do not return error If searched value is
     * not in provided interval, function returns maximum value of searched interval

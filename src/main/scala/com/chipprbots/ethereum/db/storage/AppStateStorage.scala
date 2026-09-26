@@ -378,8 +378,25 @@ class AppStateStorage(val dataSource: DataSource) extends TransactionalKeyValueS
   //
   // Three separate cursors because `ChainDownloader` writes headers, bodies, and receipts on
   // independent commit paths — they don't all advance in lockstep and must be tracked
-  // separately. Each cursor is updated atomically with its corresponding storage commit so a
-  // crash mid-write never leaves the cursor ahead of the data on disk.
+  // separately. The header cursor is updated atomically with its `storeBlockHeader` commit (one
+  // write batch, headers validated and stored strictly in order) so a crash mid-write never
+  // leaves it ahead of the data on disk. Bodies and receipts are fetched by several peers
+  // concurrently and can complete out of order, so their cursors instead mean "every block at or
+  // below this number has its body/receipts stored" and are advanced by a separate
+  // contiguous-prefix scan AFTER each store commit (`ChainDownloader.advanceBodyCursor` /
+  // `advanceReceiptCursor`, #33) rather than bundled atomically with the store itself — but the
+  // scan only ever advances over what it has just verified is on disk, so the same
+  // never-ahead-of-data guarantee holds by construction, not by a single write batch.
+  //
+  // "The scan only ever advances over what it has just verified" is a claim about how FAR the scan trusts
+  // itself to advance — it does NOT mean a header existing at some number N is by itself evidence that 1..N
+  // are all present. `PivotHeaderBootstrap` (running(), Fetched branch) stores a SNAP pivot header directly,
+  // with no cursor update and nothing underneath it yet, so `getBlockHeaderByNumber` can return `Some` for a
+  // block far above a genuine gap. Neither the header cursor above nor a header existing at a high number
+  // implies contiguity below it (forge's ETC review of 43d1c3eee, Defect 9) — `ChainDownloader.
+  // findBestStoredHeader`'s own rebuild walk is what actually verifies the contiguous prefix (its own
+  // sequential, header-by-header check, independent of the cursor or the binary search that seeds it) and
+  // clamps `bestHeaderNumber` to the last confirmed-contiguous block rather than trusting an isolated header.
 
   /** Highest backfill target the node was working toward when it last saved progress. Set when `ChainDownloader`
     * starts; cleared after `Done` so future startups don't spuriously resume.
@@ -390,29 +407,48 @@ class AppStateStorage(val dataSource: DataSource) extends TransactionalKeyValueS
   def putBackfillTarget(target: BigInt): DataSourceBatchUpdate =
     put(Keys.BackfillTarget, target.toString)
 
-  /** Highest header number whose `storeBlockHeader` commit has succeeded. */
+  /** Highest header number whose `storeBlockHeader` commit has succeeded via `ChainDownloader`'s OWN sequential fetch
+    * path specifically — not merely "the highest block number with a header on disk from any source". A pivot header
+    * stored by `PivotHeaderBootstrap` doesn't advance this cursor and can leave a genuine gap beneath it;
+    * `ChainDownloader.findBestStoredHeader` accounts for that with its own contiguity walk rather than trusting this
+    * value (or a higher header found by its binary search) blindly.
+    */
   def getBackfillBestHeader(): BigInt =
     getBigInt(Keys.BackfillBestHeader)
 
   def putBackfillBestHeader(n: BigInt): DataSourceBatchUpdate =
     put(Keys.BackfillBestHeader, n.toString)
 
-  /** Highest block number whose `storeBlockBody` commit has succeeded. May lag the header cursor. */
+  /** Highest block number N such that every block from 1 to N has a `storeBlockBody` commit on disk — a verified
+    * contiguous prefix (`ChainDownloader.advanceBodyCursor`, #33), not merely the highest individual body that has ever
+    * been stored (bodies land out of order across concurrent peers). May lag the header cursor.
+    *
+    * "Every block from 1 to N" is only as trustworthy as the header cursor it walks against: `advanceBodyCursor` checks
+    * a block's body via its header, so a gap in the HEADERS themselves (see `getBackfillBestHeader`'s doc) bounds how
+    * far this can validly advance too, not just how far bodies happen to be fetched.
+    */
   def getBackfillBestBody(): BigInt =
     getBigInt(Keys.BackfillBestBody)
 
   def putBackfillBestBody(n: BigInt): DataSourceBatchUpdate =
     put(Keys.BackfillBestBody, n.toString)
 
-  /** Highest block number whose `storeReceipts` commit has succeeded. May lag the body cursor. */
+  /** Highest block number N such that every block from 1 to N has a `storeReceipts` commit on disk — a verified
+    * contiguous prefix (`ChainDownloader.advanceReceiptCursor`, #33), not merely the highest individual receipt set
+    * that has ever been stored. May lag the body cursor.
+    *
+    * Same header-contiguity caveat as `getBackfillBestBody`'s doc: this cursor's own scan is only as trustworthy as the
+    * headers it checks against.
+    */
   def getBackfillBestReceipt(): BigInt =
     getBigInt(Keys.BackfillBestReceipt)
 
   def putBackfillBestReceipt(n: BigInt): DataSourceBatchUpdate =
     put(Keys.BackfillBestReceipt, n.toString)
 
-  /** Clear all backfill cursors + target. Called on `ChainDownloader.Done` so the next startup doesn't try to resume an
-    * already-completed backfill.
+  /** Clear all backfill cursors + target. A full reset — no code currently calls this on the "backfill just finished,
+    * still-alive downloader may run again" path (see `removeBackfillTarget`); this remains for a genuine fresh-start
+    * reset (e.g. a future admin/debug entry point).
     */
   def clearBackfillCursors(): DataSourceBatchUpdate =
     update(
@@ -424,6 +460,22 @@ class AppStateStorage(val dataSource: DataSource) extends TransactionalKeyValueS
       ),
       toUpsert = Nil
     )
+
+  /** Remove only the backfill target, leaving the header/body/receipt cursors in place. `needsBackfillResume()`
+    * short-circuits to `false` as soon as `getBackfillTarget() <= 0`, so this alone is sufficient to tell a FRESH
+    * startup "no backfill to resume" — the same signal `clearBackfillCursors()` gave.
+    *
+    * `ChainDownloader.checkCompletion` uses this instead of `clearBackfillCursors()` on `Done` (a bug Forge's ETC
+    * review of the #33 follow-up found, ETC mainnet scale): `SNAPSyncController` keeps the downloader alive after
+    * `Done` and can send it `UpdateTarget` on a later pivot refresh, landing in `idle()`'s handler, which calls
+    * `findBestStoredHeader()` again. That rebuild trusts the header/body/receipt cursors as a floor to avoid re-walking
+    * everything already confirmed on disk (#33) — deleting them on every completion meant that floor reset to 0 every
+    * time, so the SAME already-backfilled range (potentially the whole chain) got walked from scratch on every single
+    * pivot refresh. Leaving the three cursors at their completed values means the next `findBestStoredHeader()` call
+    * only walks the NEW incremental range above them.
+    */
+  def removeBackfillTarget(): DataSourceBatchUpdate =
+    remove(Keys.BackfillTarget)
 
   /** True iff SNAP is done AND a backfill target was previously persisted AND any of the three cursors is below the
     * target. `SyncController.start()` uses this to spawn a standalone `ChainDownloader` alongside regular sync.

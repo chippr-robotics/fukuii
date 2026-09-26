@@ -51,17 +51,17 @@ must become required or be formally re-scoped in a reviewed PR.
 
 | Check | Covers | Promote by | Issue | Note |
 |---|---|---|---|---|
-| `hive-sync` | Cross-client sync interop. fukuii as sync CLIENT (fukuii syncs from go-ethereum/nethermind) and as sync SERVER (go-ethereum/nethermind sync from fukuii). Gated on the `fukuii` subset only, so upstream geth<->nethermind failures do not pollute this signal. | 2026-12-31 | #1402 | The only suite with a real subset gate today. #1402's first required-slice item. Both waivers below must be retired before promotion — the sync-SERVER direction is precisely what #1402 says shipped red in v0.8.0. |
+| `hive-sync` | Cross-client sync interop. fukuii as sync CLIENT (fukuii syncs from go-ethereum/nethermind) and as sync SERVER (go-ethereum/nethermind sync from fukuii). Gated on the `fukuii` subset only, so upstream geth<->nethermind failures do not pollute this signal. | 2026-12-31 | #1402 | #1402's first required-slice item. Both waivers are retired (#1407). `sync go-ethereum from fukuii` passes since fukuii's ENR `eth` entry became [[fork-hash, fork-next]] and the hive adapter advertises the container address. `sync fukuii from nethermind` was an intermittent fukuii-sink failure; it passes after the fix for the dropped-reply race behind the same intermittent sink stall (3af08c103). Evidence: CI run 35997930212 on a78d2557d, 18/18; locally with all three clients, every fukuii test green. |
 | `hive-smoke-genesis` | Client starts from a hive-supplied genesis and reports a chain head. | 2026-11-30 | #1402 | Cheapest suite and the natural first promotion: if this cannot be made required, nothing can. Last green on main 2026-04-30; red since. |
 | `hive-smoke-network` | Client accepts peers and forms a network under hive's harness. | 2026-11-30 | #1402 |  |
 | `hive-consume-rlp` | EELS consume-rlp — block import from RLP across the fork schedule, including the ETC forks. #1402's third required-slice item. | 2026-12-31 | #1402 | ~67% failing at v0.8.0. Not claimed as verified anywhere until promoted. |
 | `hive-engine` | Engine API suite, including invalid-payload rejection — #1402's second required-slice item. ETH/Sepolia path only. | 2026-12-31 | #1402 |  |
 | `hive-consensus` | ethereum/consensus — state-transition conformance. | 2027-03-31 | #1402 |  |
 | `hive-consume-engine` | EELS consume-engine — payload import via Engine API. | 2027-03-31 | #1402 |  |
+| `hive-full` | consume-engine, consume-rlp and consensus run TO COMPLETION, sharded per .github/hive-shards.json (an exact partition, proven by scripts/hive/gen-shards.py). The release-PR hive-consume-*/hive-consensus workflows only sample these suites. | 2027-03-31 | #1402 | Release gate: runs on a `hive-full`-labelled PR to main, or workflow_dispatch — ~33 jobs x ~3.5 h per pass, so never per push or nightly. Verdict comes from the aggregate job, never the workflow conclusion. |
 | `hive-rpc-compat` | JSON-RPC method compatibility against the reference corpus. | 2027-03-31 | #1402 |  |
 | `hive-graphql` | GraphQL endpoint conformance. | 2027-03-31 | #1402 |  |
-| `hive-devp2p` | devp2p discovery and RLPx wire conformance. | 2027-03-31 | #1402 |  |
-| `hive-pyspec` | execution-spec-tests via hive's pyspec simulator. | 2027-03-31 | #1402 |  |
+| `hive-devp2p` | devp2p discovery and RLPx wire conformance. | 2027-03-31 | #1402 | Two jobs since 2026-09-24. One runs discv4, discv5, snap and snap2 in full; the other runs eth without GetCells and BlobTxWithInvalidCells, which are skipped via sim_skip and waived until #1409 because they hang the suite. Local hive on 4dc5b77af: discv4 16/16, discv5 11/11, snap 6/6, snap2 4/4, eth 22/24. |
 | `ethereum-tests-nightly` | Nightly ethereum/tests across the full ETC and ETH fork schedules. | 2027-03-31 | #1402 | Runs with continue-on-error today. Promotion requires removing that and establishing a baseline pass count first. |
 
 ## Quarantined — excluded from all claims
@@ -77,7 +77,7 @@ Tracked by [#1402](https://github.com/chippr-robotics/fukuii/issues/1402), targe
 
 | Item | Gate | Blocked by |
 |---|---|---|
-| geth<->fukuii sync, BOTH directions | `hive-sync` | `sync-server-geth-from-fukuii`, `sync-client-fukuii-from-nethermind` |
+| geth<->fukuii sync, BOTH directions | `hive-sync` | — |
 | invalid-payload rejection | `hive-engine` | — |
 | ETC-fork consume-rlp | `hive-consume-rlp` | — |
 
@@ -91,6 +91,7 @@ bypass — extending a waiver means editing the matrix in a reviewed PR.
 
 | Waiver | Gate | Excluded test | Owner | Issue | Expires |
 |---|---|---|---|---|---|
-| `sync-server-geth-from-fukuii` | `hive-sync` | `sync go-ethereum from fukuii` | realcodywburns | #1402 | 2026-12-31 |
-| `sync-client-fukuii-from-nethermind` | `hive-sync` | `sync fukuii from nethermind` | realcodywburns | #1402 | 2026-12-31 |
+| `graphql-gasprice-stale-fixture` | `hive-graphql` | `07_eth_gasPrice` | realcodywburns | #1407 | 2026-12-31 |
+| `devp2p-getcells-needs-sparse-blobpool` | `hive-devp2p` | `GetCells` | realcodywburns | #1409 | 2026-12-31 |
+| `devp2p-invalid-cells-needs-sparse-blobpool` | `hive-devp2p` | `BlobTxWithInvalidCells` | realcodywburns | #1409 | 2026-12-31 |
 

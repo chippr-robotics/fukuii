@@ -212,7 +212,7 @@ class PeerActorSpec extends ScalaTestWithActorTestKit(ManualTime.config) with An
       totalDifficulty = daoForkBlockChainTotalDifficulty + 100000, // remote is after the fork
       bestHash = ByteString("blockhash"),
       genesisHash = genesisHash,
-      forkId = ForkId.create(genesisHash, PeerActorSpec.this.blockchainConfig)(daoForkBlockNumber)
+      forkId = ForkId.create(genesisHash, 0L, PeerActorSpec.this.blockchainConfig)(daoForkBlockNumber)
     )
     // Node status exchange
     expectStatusMessage()
@@ -579,5 +579,5 @@ class PeerActorSpec extends ScalaTestWithActorTestKit(ManualTime.config) with An
         totalDifficulty = daoForkBlockChainTotalDifficulty + 100000,
         bestHash = ByteString("blockhash"),
         genesisHash = genesisHash,
-        forkId = ForkId.create(this.genesisHash, handshakerConfiguration.blockchainConfig)(daoForkBlockNumber)
+        forkId = ForkId.create(this.genesisHash, 0L, handshakerConfiguration.blockchainConfig)(daoForkBlockNumber)
       )

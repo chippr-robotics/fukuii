@@ -531,3 +531,54 @@ class GasPriceOracleSpec
     val highResult = svc(rHigh, ethLondonCfg).suggestGasPrice()
     highResult should be > lowResult
   }
+
+  /** Pins hive `graphql` simulator fixture `07_eth_gasPrice` (`{ gasPrice }`) as INERT, not a fukuii defect — proven
+    * self-contained, from the fixture set's OWN data, without needing to trust an external geth report.
+    *
+    * `simulators/ethereum/graphql/testcases/07_eth_gasPrice.json` (ethereum/hive, current as of 2026-08-31) accepts
+    * only `"0x10"` (16) or `"0x1"` (1) wei. Three independent facts in the SAME fixture set contradict that:
+    *
+    *   1. `01_eth_blockNumber.json` (`{ block { number } }`, i.e. head/latest) expects `"0x22"` = 34 — head is block
+    *      34, not the last pre-merge block (32). 2. `51_eth_getBlock_4844.json` (`block(number: 34) { baseFeePerGas ...
+    *      }`) expects `baseFeePerGas` = `"0x3437004a"` = 876019786 wei for that same head block — geth's OWN recorded
+    *      ground truth for this chain, not an inference. 3. Independently decoding `init/testBlockchain.blocks`'
+    *      block-34 header RLP directly gives the identical `876019786` for the baseFee field (index 15) — confirms (2)
+    *      is not a fixture typo.
+    *
+    * go-ethereum's OWN current GraphQL resolver (`Resolver.GasPrice`, `graphql/graphql.go`):
+    * {{{
+    *   tipcap, _ := r.backend.SuggestGasTipCap(ctx)
+    *   if head := r.backend.CurrentHeader(); head.BaseFee != nil {
+    *       tipcap.Add(tipcap, head.BaseFee)
+    *   }
+    *   return tipcap
+    * }}}
+    * is the exact algorithm shape fukuii's `minimumGasPrice()`/`suggestGasPrice()` already implements (and the rest of
+    * this spec exhaustively pins): `baseFee + tip`, never a bare small constant, once any block carries a baseFee.
+    * Given (1)-(3), ANY conforming implementation of that formula — fukuii's or geth's own, run fresh against this
+    * exact fixture set — is arithmetically forced to return >= 876019786 wei, contradicting `07`'s "16 or 1" outright.
+    * This isn't a difference in which client code path answers the query; the fixture's own sibling files already state
+    * the chain condition that makes 16/1 unreachable by the documented formula.
+    *
+    * fukuii measured `0x3437004b` = 876019787 against this exact fixture (hive artifact, commit 810d6d8): `876019787 -
+    * 876019786 = 1`, i.e. EXACTLY `baseFee + minTip` (minTip=1 wei is the production default when unconfigured — see
+    * `BlockchainConfig.fromRawConfig`'s `min-tip` fallback). Zero unexplained residual — this is the formula working
+    * exactly as designed, not a fukuii miscalculation.
+    */
+  it should "exceed hive graphql's stale 07_eth_gasPrice expectations (16 or 1 wei) once baseFee is ~876M wei" taggedAs (
+    UnitTest,
+    RPCTest
+  ) in {
+    val measuredFixtureBaseFee = BigInt(876019786) // block 34 of hive graphql's testBlockchain.blocks, measured
+    val headBlock = blk(34, Nil, baseFeeOpt = Some(measuredFixtureBaseFee))
+    val window = emptyWindow(34)
+    val r = mockReader(bestNum = 34, window = window, bestBlock = Some(headBlock))
+    val result = svc(r, defaultCfg).suggestGasPrice()
+
+    // THE pin: this is fukuii's exact measured answer (hive artifact, commit 810d6d8) — baseFee + 1 wei minTip,
+    // with zero unexplained residual.
+    result shouldEqual BigInt("3437004b", 16)
+    result shouldEqual (measuredFixtureBaseFee + 1)
+    result should be > BigInt(0x10)
+    result should be > BigInt(0x1)
+  }

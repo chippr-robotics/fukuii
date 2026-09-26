@@ -332,8 +332,9 @@ class EthSimulateService(
     // stateRoot, so simulated pre-merge blocks must too. Post-merge blocks have no
     // reward — execution layer pays nothing, withdrawals come from the CL.
     val isPoW = simHeader.extraFields match
-      case HefEmpty                                                                     => true
-      case _: HefPostOlympia | _: HefPostShanghai | _: HefPostCancun | _: HefPostPrague => false
+      case HefEmpty => true
+      case _: HefPostOlympia | _: HefPostShanghai | _: HefPostCancun | _: HefPostPrague | _: HefPostAmsterdam =>
+        false
     if isPoW then
       val reward = blockchainConfig.monetaryPolicyConfig.firstEraBlockReward
       val byzantiumReward = blockchainConfig.monetaryPolicyConfig.firstEraReducedBlockReward
@@ -369,7 +370,10 @@ class EthSimulateService(
     // Build final header with computed roots and blob gas
     val finalExtraFields = simHeader.extraFields match
       case p: HefPostPrague => p.copy(blobGasUsed = blobGasUsed)
-      case other            => other
+      // Amsterdam: simulating on top of an Amsterdam block gives `simHeader` a 23-field shape, and
+      // without this case the header keeps the BASE block's blobGasUsed instead of the simulated one.
+      case a: BlockHeader.HeaderExtraFields.HefPostAmsterdam => a.copy(blobGasUsed = blobGasUsed)
+      case other                                             => other
     val finalHeader = simHeader.copy(
       stateRoot = TrieRoot(stateRoot),
       transactionsRoot = TrieRoot(transactionsRoot),
@@ -407,7 +411,9 @@ class EthSimulateService(
       baseHeader: BlockHeader
   ): Either[JsonRpcError, Unit] = boundary {
     var prevNumber = baseHeader.number.value
-    var prevTimestamp = BigInt(baseHeader.unixTimestamp.toLong)
+    // uint64 bit pattern -> unsigned BigInt (not BigInt(...toLong), which sign-extends timestamps
+    // >= 2^63 into negative values and corrupts every ordering/gap comparison below).
+    var prevTimestamp = baseHeader.unixTimestamp.toUnsignedBigInt
 
     for (bsc, _) <- blockStateCalls.zipWithIndex do
       val overrides = bsc.blockOverrides.getOrElse(BlockOverrides())
@@ -464,7 +470,8 @@ class EthSimulateService(
   ): BlockHeader =
     val ov = overrides.getOrElse(BlockOverrides())
     val number = ov.number.map(BlockNumber(_)).getOrElse(parentHeader.number + 1)
-    val timestamp = ov.time.getOrElse(BigInt(parentHeader.unixTimestamp.toLong) + 12)
+    // uint64 bit pattern -> unsigned BigInt; see validateBlockOrdering above for the sign-extension bug this avoids.
+    val timestamp = ov.time.getOrElse(parentHeader.unixTimestamp.toUnsignedBigInt + 12)
     val gasLimit = ov.gasLimit.map(GasAmount(_)).getOrElse(parentHeader.gasLimit)
     val beneficiary = ov.feeRecipient.map(_.bytes).getOrElse(ByteString(new Array[Byte](20)))
     val prevRandao = ov.prevRandao.getOrElse(ByteString(new Array[Byte](32)))
@@ -713,9 +720,18 @@ class EthSimulateService(
       if validation then
         // Check maxFeePerGas >= baseFee
         if baseFee > 0 && maxFeePerGas < baseFee && !call.gasPrice.isDefined then
+          // -38012, not the generic -32602. execution-apis gives eth_simulateV1 its own error
+          // range and rpc-compat compares the code, not just the message: all six of that
+          // suite's eth_simulateV1 failures were this one line answering InvalidParams with an
+          // otherwise-correct diagnosis.
+          //
+          // Four sibling constructors in JsonRpcError are likewise declared and never called
+          // (SimulateNonceTooLow/-High, SimulateBlockGasLimitExceeded, SimulateMoveToSelf).
+          // They are deliberately left alone: no fixture in the current suite exercises them,
+          // so changing them would be an unmeasured edit to tests that pass today.
           break(
             Left(
-              JsonRpcError.InvalidParams(
+              JsonRpcError.SimulateBaseFeeTooLow(
                 s"max fee per gas less than block base fee: address ${sender.toString}, maxFeePerGas: $maxFeePerGas, baseFee: $baseFee"
               )
             )
@@ -811,7 +827,7 @@ class EthSimulateService(
       world = world.saveAccount(sender, senderAccount)
 
       // Execute transaction
-      val TxResult(newWorld, gasUsed, logs, returnData, vmError) =
+      val TxResult(newWorld, gasUsed, logs, returnData, vmError, _, _) =
         blockPreparator.executeTransactionForSimulation(
           stx,
           sender,
@@ -906,7 +922,8 @@ class EthSimulateService(
           address = txLog.loggerAddress,
           data = txLog.data,
           topics = txLog.logTopics,
-          blockTimestamp = Some(BigInt(blockHeader.unixTimestamp.toLong))
+          // uint64 bit pattern -> unsigned BigInt; see BlockResponse.scala for the sign-extension bug this avoids.
+          blockTimestamp = Some(blockHeader.unixTimestamp.toUnsignedBigInt)
         )
         globalLogIndex += 1
         l
@@ -967,7 +984,9 @@ class EthSimulateService(
     import com.chipprbots.ethereum.ledger.BlockExecution.*
     blockHeader.parentBeaconBlockRoot match
       case Some(beaconRoot) =>
-        val timestamp = UInt256(blockHeader.unixTimestamp.toLong)
+        // Must match BlockExecution.applyEip4788 exactly, or eth_simulateV1 becomes an
+        // oracle that disagrees with real execution. See the note there.
+        val timestamp = blockHeader.unixTimestamp.toUInt256
         val timestampIdx = timestamp.mod(UInt256(BeaconRootHistoryBufferLength))
         val rootIdx = timestampIdx + UInt256(BeaconRootHistoryBufferLength)
         val account = world

@@ -21,6 +21,8 @@ import com.chipprbots.ethereum.Timeouts
 import com.chipprbots.ethereum.consensus.eip1559.BaseFeeCalculator
 import com.chipprbots.ethereum.crypto
 import com.chipprbots.ethereum.domain.Address
+import com.chipprbots.ethereum.domain.BlobTransaction
+import com.chipprbots.ethereum.domain.BlobVersionedHash
 import com.chipprbots.ethereum.domain.Block
 import com.chipprbots.ethereum.domain.GasAmount
 import com.chipprbots.ethereum.domain.GasPrice
@@ -30,9 +32,11 @@ import com.chipprbots.ethereum.domain.BlockchainReader
 import com.chipprbots.ethereum.domain.LegacyTransaction
 import com.chipprbots.ethereum.domain.SignedTransaction
 import com.chipprbots.ethereum.domain.SignedTransactionWithSender
+import com.chipprbots.ethereum.domain.Transaction
 import com.chipprbots.ethereum.domain.TransactionWithDynamicFee
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor.SendMessageCmd
+import com.chipprbots.ethereum.network.PeerManagerActor
 import com.chipprbots.ethereum.network.Peer
 import com.chipprbots.ethereum.network.PeerEventBusActor.PeerEvent
 import com.chipprbots.ethereum.network.PeerId
@@ -43,6 +47,7 @@ import com.chipprbots.ethereum.security.SecureRandomBuilder
 import com.chipprbots.ethereum.testing.Tags.OlympiaTest
 import com.chipprbots.ethereum.testing.Tags.UnitTest
 import com.chipprbots.ethereum.transactions.PendingTransactionsManager.*
+import com.chipprbots.ethereum.utils.BlockchainConfig
 import com.chipprbots.ethereum.utils.TxPoolConfig
 
 /** Test suite for PendingTransactionsManager actor.
@@ -340,6 +345,135 @@ class PendingTransactionsManagerSpec
       case SignedTransactions(txs)                             => txs shouldBe Seq(stx.tx)
       case other                                               => fail(s"Unexpected: $other")
 
+  it should "announce a blob tx at the length of the network form it serves" taggedAs (UnitTest) in new TestSetup:
+    // A peer checks the PooledTransactions reply against the announced size, and a blob tx is
+    // served in its network form (tx, blobs, commitments, proofs). 131,330 bytes is one blob's
+    // network form in hive's "Request Blob Pooled Transactions" test, which was announced at 146,
+    // the bare tx.
+    val blobTx = BlobTransaction(
+      chainId = 0x3d,
+      nonce = 0,
+      maxPriorityFeePerGas = 1,
+      maxFeePerGas = 1,
+      gasLimit = GasAmount(21000),
+      receivingAddress = Some(Address(42)),
+      value = 0,
+      payload = ByteString.empty,
+      accessList = Nil,
+      maxFeePerBlobGas = 1,
+      blobVersionedHashes = List(BlobVersionedHash(ByteString(Array.fill[Byte](32)(1))))
+    )
+    val signed = SignedTransaction.sign(blobTx, keyPair1, Some(0x3d))
+    val networkForm = ByteString(Array.fill[Byte](131330)(0))
+
+    pendingTransactionsManager ! WrappedPeerEvent(PeerEvent.PeerHandshakeSuccessful(peer1, new HandshakeResult {}))
+    pendingTransactionsManager ! AddOrOverrideTransaction(signed, Some(networkForm))
+
+    val announced: SendMessageCmd = etcPeerManager.expectMsgType[NetworkPeerManagerActor.SendMessageCmd]
+    announced.peerId shouldBe peer1.id
+    announced.message.underlyingMsg match
+      case ETHPackets.NewPooledTransactionHashes(types, sizes, hashes) =>
+        hashes shouldBe Seq(signed.hash)
+        types shouldBe Seq(Transaction.Type03)
+        sizes shouldBe Seq(BigInt(networkForm.length))
+      case other => fail(s"Unexpected: $other")
+
+  // ---- inbound NewPooledTransactionHashes / NewPooledTransactionHashes72 -> GetPooledTransactions -------------
+  //
+  // Regression coverage for hive's TestNewPooledTxs / TestBlobViolations: NewPooledTransactionHashes72 (ETH72's
+  // 4-field announcement, EIP-8070) is a distinct case class from the 3-field NewPooledTransactionHashes, not a
+  // subtype, so the inbound handler needed its OWN pattern-match case. Without one, an ETH72 peer's announcement
+  // matched no case in the actor's Behaviors.receiveMessage at all and was silently dropped: fukuii never issued
+  // GetPooledTransactions, which is what hive observed as a read timeout waiting for that request ("reading
+  // pooled tx request failed: i/o timeout") rather than a decode failure — ETH72MessageDecoder already decoded
+  // the message correctly; nothing downstream ever acted on it.
+
+  it should "request unknown hashes via GetPooledTransactions when an ETH72 peer announces NewPooledTransactionHashes72 (4-field)" taggedAs (
+    UnitTest
+  ) in new TestSetup:
+    val unknownHash: ByteString = ByteString(Array.fill[Byte](32)(7))
+    val announcement = ETHPackets.NewPooledTransactionHashes72(
+      types = Seq(Transaction.Type02),
+      sizes = Seq(BigInt(123)),
+      hashes = Seq(unknownHash),
+      mask = ETHPackets.NewPooledTransactionHashes72.NoCustody
+    )
+
+    pendingTransactionsManager ! WrappedPeerEvent(PeerEvent.MessageFromPeer(announcement, peer1.id))
+
+    val requested: SendMessageCmd = etcPeerManager.expectMsgType[NetworkPeerManagerActor.SendMessageCmd]
+    requested.peerId shouldBe peer1.id
+    requested.message.underlyingMsg match
+      case ETHPackets.GetPooledTransactions(_, requestedHashes) => requestedHashes shouldBe Seq(unknownHash)
+      case other                                                => fail(s"Unexpected: $other")
+
+  it should "request unknown hashes via GetPooledTransactions when a pre-ETH72 peer announces NewPooledTransactionHashes (3-field)" taggedAs (
+    UnitTest
+  ) in new TestSetup:
+    val unknownHash: ByteString = ByteString(Array.fill[Byte](32)(9))
+    val announcement = ETHPackets.NewPooledTransactionHashes(
+      types = Seq(Transaction.Type02),
+      sizes = Seq(BigInt(456)),
+      hashes = Seq(unknownHash)
+    )
+
+    pendingTransactionsManager ! WrappedPeerEvent(PeerEvent.MessageFromPeer(announcement, peer1.id))
+
+    val requested: SendMessageCmd = etcPeerManager.expectMsgType[NetworkPeerManagerActor.SendMessageCmd]
+    requested.peerId shouldBe peer1.id
+    requested.message.underlyingMsg match
+      case ETHPackets.GetPooledTransactions(_, requestedHashes) => requestedHashes shouldBe Seq(unknownHash)
+      case other                                                => fail(s"Unexpected: $other")
+
+  it should "not request an already-pending hash announced via NewPooledTransactionHashes72" taggedAs (
+    UnitTest
+  ) in new TestSetup:
+    val stx: SignedTransactionWithSender = newStx()
+    pendingTransactionsManager ! AddTransactions(Set(stx))
+    etcPeerManager.expectNoMessage(100.millis) // no connected peers yet — nothing to announce to
+
+    val announcement = ETHPackets.NewPooledTransactionHashes72(
+      types = Seq(0.toByte),
+      sizes = Seq(BigInt(1)),
+      hashes = Seq(stx.tx.hash.value),
+      mask = ETHPackets.NewPooledTransactionHashes72.NoCustody
+    )
+    pendingTransactionsManager ! WrappedPeerEvent(PeerEvent.MessageFromPeer(announcement, peer1.id))
+
+    etcPeerManager.expectNoMessage(200.millis)
+
+  // ---- delivered PooledTransactions vs. the announcement --------------------------------------------------
+  //
+  // go-ethereum drops a peer over an announced/delivered size gap only above 8 bytes, and the size it announces can
+  // be a byte short of the wire length (a blob tx sent without blobs). hive's BlobTxAvailabilityFailure delivers eight
+  // such txs and expects no disconnect; BlobViolations overstates a size by 10 bytes and expects one.
+
+  private def announceThenDeliver(setup: TestSetup, announcedSize: Int, deliveredSize: Int): Unit =
+    import setup.*
+    val stx: SignedTransaction = newStx().tx
+    pendingTransactionsManager ! WrappedPeerEvent(
+      PeerEvent.MessageFromPeer(
+        ETHPackets.NewPooledTransactionHashes(Seq(0.toByte), Seq(BigInt(announcedSize)), Seq(stx.hash.value)),
+        peer1.id
+      )
+    )
+    etcPeerManager.expectMsgType[NetworkPeerManagerActor.SendMessageCmd] // the GetPooledTransactions
+    pendingTransactionsManager ! WrappedPeerEvent(
+      PeerEvent.MessageFromPeer(ETHPackets.PooledTransactions(BigInt(1), Seq(stx), Seq(deliveredSize)), peer1.id)
+    )
+
+  it should "keep a peer whose delivered tx is within 8 bytes of the size it announced" taggedAs (
+    UnitTest
+  ) in new TestSetup:
+    announceThenDeliver(this, announcedSize = 109, deliveredSize = 110)
+    peerManager.expectNoMessage(300.millis)
+
+  it should "disconnect a peer whose delivered tx is more than 8 bytes off the size it announced" taggedAs (
+    UnitTest
+  ) in new TestSetup:
+    announceThenDeliver(this, announcedSize = 120, deliveredSize = 110)
+    peerManager.expectMsg(PeerManagerActor.DisconnectPeerFireAndForgetCmd(peer1.id))
+
   it should "remove transaction on timeout" taggedAs (UnitTest) in new TestSetup:
     override val txPoolConfig: TxPoolConfig = new TxPoolConfig:
       override val txPoolSize: Int = 300
@@ -471,6 +605,60 @@ class PendingTransactionsManagerSpec
       resp.pendingTransactions.map(_.stx).toSet shouldBe Set(stx)
     }
 
+  // hive's devp2p Transaction, InvalidTxs and LargeTxRequest all send this shape: tip cap 1 wei, fee cap exactly the
+  // head's base fee. At that base fee it pays no tip, but it is includable once the base fee holds or falls, and
+  // go-ethereum's pool admits and announces it (it checks the tip CAP against txpool.pricelimit).
+  private def feeCapAtBaseFee(chainId: BigInt, tipCap: BigInt): TransactionWithDynamicFee =
+    TransactionWithDynamicFee(
+      chainId = chainId,
+      nonce = BigInt(0),
+      maxPriorityFeePerGas = tipCap,
+      maxFeePerGas = BaseFeeCalculator.InitialBaseFee, // = the head's base fee in TestSetupWithBaseFee
+      gasLimit = GasAmount(21_000),
+      receivingAddress = Some(Address(42)),
+      value = BigInt(0),
+      payload = ByteString.empty,
+      accessList = Nil
+    )
+
+  it should "admit a tx whose fee cap sits at the base fee on an ETH-family network, as go-ethereum does" taggedAs (
+    UnitTest
+  ) in new TestSetupWithBaseFee:
+    override def chainConfig: BlockchainConfig =
+      // eth, sepolia and hive set no min-tip, so they load go-ethereum's 1 wei default.
+      super.chainConfig.copy(networkType = com.chipprbots.ethereum.utils.NetworkType.ETH, minTip = BigInt(1))
+    val stx: SignedTransactionWithSender = newDynamicStx(BigInt(0), feeCapAtBaseFee(BigInt(61), tipCap = 1))
+    pendingTransactionsManager ! AddTransactions(stx)
+    eventually {
+      val resp =
+        pendingTransactionsManager.ask[PendingTransactionsResponse](ref => GetPendingTransactionsReq(ref)).futureValue
+      resp.pendingTransactions.map(_.stx).toSet shouldBe Set(stx)
+    }
+
+  it should "still reject a tip cap below minTip on an ETH-family network" taggedAs (UnitTest) in new TestSetupWithBaseFee:
+    override def chainConfig: BlockchainConfig =
+      // eth, sepolia and hive set no min-tip, so they load go-ethereum's 1 wei default.
+      super.chainConfig.copy(networkType = com.chipprbots.ethereum.utils.NetworkType.ETH, minTip = BigInt(1))
+    val stx: SignedTransactionWithSender = newDynamicStx(BigInt(0), feeCapAtBaseFee(BigInt(61), tipCap = 0))
+    pendingTransactionsManager ! AddTransactions(stx)
+    eventually {
+      val resp =
+        pendingTransactionsManager.ask[PendingTransactionsResponse](ref => GetPendingTransactionsReq(ref)).futureValue
+      resp.pendingTransactions shouldBe empty
+    }
+
+  it should "keep ECIP-1122's effective-tip rule on ETC: a fee cap at the base fee pays no tip and is rejected" taggedAs (
+    UnitTest,
+    OlympiaTest
+  ) in new TestSetupWithBaseFee:
+    val stx: SignedTransactionWithSender = newDynamicStx(BigInt(0), feeCapAtBaseFee(BigInt(61), tipCap = 1))
+    pendingTransactionsManager ! AddTransactions(stx)
+    eventually {
+      val resp =
+        pendingTransactionsManager.ask[PendingTransactionsResponse](ref => GetPendingTransactionsReq(ref)).futureValue
+      resp.pendingTransactions shouldBe empty
+    }
+
   it should "protect nonce queue: rejected zero-tip tx does not block same-nonce valid tx" taggedAs (
     UnitTest,
     OlympiaTest
@@ -520,6 +708,9 @@ class PendingTransactionsManagerSpec
 
   /** TestSetup variant with a fake BlockchainReader that returns baseFee = 1 gwei. */
   trait TestSetupWithBaseFee extends TestSetup:
+    /** The chain the pool admits for. The default is the loaded config, which is ETC. */
+    def chainConfig: BlockchainConfig = com.chipprbots.ethereum.utils.Config.blockchains.blockchainConfig
+
     private val blockWithBaseFee: Block = Block(
       header = com.chipprbots.ethereum.Fixtures.Blocks.ValidBlock.header.copy(
         extraFields = HefPostOlympia(BaseFeeCalculator.InitialBaseFee)
@@ -539,7 +730,8 @@ class PendingTransactionsManagerSpec
         peerMessageBus.ref,
         pendingTxTopic,
         blockchainReader = fakeBlockchainReader,
-        stateStorage = null
+        stateStorage = null,
+        chainConfig = chainConfig
       ),
       s"ptm-test-basefee-${java.util.UUID.randomUUID()}"
     )

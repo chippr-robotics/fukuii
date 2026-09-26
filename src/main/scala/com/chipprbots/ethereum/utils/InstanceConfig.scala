@@ -54,9 +54,10 @@ class InstanceConfig(val config: TypesafeConfig, val instanceId: String = "defau
       Option.when(p.eth68)(Capability.ETH68),
       Option.when(p.eth69)(Capability.ETH69),
       Option.when(p.eth70)(Capability.ETH70),
-      // ETH71 slot wired here by spec-007
-      Option.when(p.snap1)(Capability.SNAP1)
-      // SNAP2 slot wired here by spec-008
+      Option.when(p.eth71)(Capability.ETH71),
+      Option.when(p.eth72)(Capability.ETH72),
+      Option.when(p.snap1)(Capability.SNAP1),
+      Option.when(p.snap2)(Capability.SNAP2)
     ).flatten
 
   // Startup validation — runs at construction; warns on misconfigured combinations but does not abort.
@@ -67,10 +68,12 @@ class InstanceConfig(val config: TypesafeConfig, val instanceId: String = "defau
     if !p.eth68 then log.warn("[InstanceConfig] eth68 disabled; this node cannot communicate with legacy peers")
     if p.eth70 && !p.eth69 then log.warn("[InstanceConfig] eth70 requires eth69; both should be enabled")
     if p.eth71 && !p.eth70 then log.warn("[InstanceConfig] eth71 requires eth70; both should be enabled")
+    if p.eth72 && !p.eth71 then log.warn("[InstanceConfig] eth72 requires eth71; both should be enabled")
     if p.snap2 && !p.snap1 then log.warn("[InstanceConfig] snap2 requires snap1; both should be enabled")
     val disabled = List(
       Option.unless(p.eth70)("eth70"),
       Option.unless(p.eth71)("eth71"),
+      Option.unless(p.eth72)("eth72"),
       Option.unless(p.snap2)("snap2")
     ).flatten
     val disabledNote = if disabled.nonEmpty then s"; ${disabled.mkString("/")} disabled by config" else ""

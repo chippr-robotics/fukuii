@@ -205,10 +205,11 @@ class ETH69ComplianceSpec extends AnyWordSpec with Matchers:
     "encoding and decoding" should {
       "round-trip with raw RLPList (bloom-absent blocks)" in {
         import com.chipprbots.ethereum.rlp.*
-        // ETH69 receipt: only 3 fields — [stateHash, gasUsed, logs] — NO bloom (EIP-7642)
+        // ETH69 receipt (EIP-7642): [txType, postStateOrStatus, cumulativeGasUsed, logs] — NO bloom
         val receiptRLP = RLPList(
-          RLPValue(Array.fill(32)(0xaa.toByte)), // stateHash
-          RLPValue(Array(0x01.toByte)), // gasUsed
+          RLPValue(Array.emptyByteArray), // txType 0 (legacy)
+          RLPValue(Array.fill(32)(0xaa.toByte)), // postStateOrStatus
+          RLPValue(Array(0x01.toByte)), // cumulativeGasUsed
           RLPList() // logs — NO logsBloomFilter field
         )
         val receiptsForBlocks = RLPList(RLPList(receiptRLP))
@@ -217,9 +218,8 @@ class ETH69ComplianceSpec extends AnyWordSpec with Matchers:
         decoder(Capability.ETH69).fromBytes(Codes.ReceiptsCode, encoded) match
           case Right(r: ETHPackets.Receipts69) =>
             r.requestId shouldEqual BigInt(42)
-            // Verify bloom field is ABSENT (3 fields per receipt, not 4)
             val firstReceipt = r.receiptsForBlocks.items.head.asInstanceOf[RLPList].items.head.asInstanceOf[RLPList]
-            firstReceipt.items.size shouldEqual 3 // stateHash, gasUsed, logs — NO bloom
+            firstReceipt.items.size shouldEqual 4 // txType, postStateOrStatus, cumulativeGasUsed, logs — NO bloom
           case other => fail(s"Expected Receipts69, got $other")
       }
 
@@ -232,24 +232,18 @@ class ETH69ComplianceSpec extends AnyWordSpec with Matchers:
           case other                           => fail(s"Expected Receipts69, got $other")
       }
 
-      "have 3 fields per receipt (not 4) — bloom ABSENT" in {
+      "carry the tx type where eth/68 carries the bloom — [txType, status, gas, logs], not [status, gas, bloom, logs]" in {
         import com.chipprbots.ethereum.rlp.*
-        // Bloom-absent receipt has 3 fields
-        val bloomAbsentReceipt = RLPList(
-          RLPValue(Array.fill(32)(0xaa.toByte)), // stateHash
-          RLPValue(Array(0x64.toByte)), // gasUsed = 100
-          RLPList() // logs
-        )
-        // Verify this is indeed 3 fields (not 4 with bloom)
-        bloomAbsentReceipt.items.size shouldEqual 3
-        // A bloom-inclusive receipt would have 4 fields
-        val bloomReceipt = RLPList(
-          RLPValue(Array.fill(32)(0xaa.toByte)), // stateHash
-          RLPValue(Array(0x64.toByte)), // gasUsed
-          RLPValue(Array.fill(256)(0x00.toByte)), // logsBloom  ← present in ETH68
-          RLPList() // logs
-        )
-        bloomReceipt.items.size shouldEqual 4
+        import com.chipprbots.ethereum.domain.*
+        // Both shapes have four items; what EIP-7642 changes is their meaning. A typed receipt is a plain list here,
+        // not the EIP-2718 prefixed form used on eth/68.
+        val typed = Type02Receipt(LegacyReceipt(SuccessOutcome, BigInt(100), BloomFilter.Empty, Seq.empty))
+        ETHPackets.ReceiptBloomFreeEnc(typed).toRLPEncodable match
+          case RLPList(RLPValue(txType), RLPValue(status), RLPValue(gas), _: RLPList) =>
+            txType.toSeq shouldEqual Seq(2.toByte)
+            status.toSeq shouldEqual Seq(1.toByte)
+            gas.toSeq shouldEqual Seq(100.toByte)
+          case other => fail(s"Expected [txType, postStateOrStatus, cumulativeGasUsed, logs], got $other")
       }
     }
   }
@@ -289,8 +283,9 @@ class ETH69ComplianceSpec extends AnyWordSpec with Matchers:
   // ── Receipts69 bloom ABSENT — regression test for the EIP-7642 bloom bug ────
   //
   // The bug: ETHPackets.Receipts69 was encoded using bloom-inclusive ReceiptEnc
-  // (from ReceiptCodecs), producing 4-field receipts. The fix uses ReceiptBloomFreeEnc
-  // which produces 3-field receipts: [stateHash, gasUsed, logs] — no logsBloomFilter.
+  // (from ReceiptCodecs). The fix uses ReceiptBloomFreeEnc, which produces the EIP-7642
+  // receipt [txType, postStateOrStatus, cumulativeGasUsed, logs] — no logsBloomFilter.
+  // ReceiptWireFormatSpec pins those bytes against go-ethereum's.
   //
   // This test uses the production encoding path (ReceiptBloomFreeEnc) to prove that
   // a LegacyReceipt with a real non-zero bloom does NOT include that bloom on the wire.
@@ -303,7 +298,7 @@ class ETH69ComplianceSpec extends AnyWordSpec with Matchers:
 
     "encoding a LegacyReceipt via ReceiptBloomFreeEnc" should {
 
-      "produce 3-field receipt RLP (no bloom field)" taggedAs UnitTest in {
+      "produce the four-item [txType, postStateOrStatus, cumulativeGasUsed, logs] receipt (no bloom field)" taggedAs UnitTest in {
         val bloom256 = ByteString(Array.fill(256)(0xff.toByte))
         val receipt = LegacyReceipt(
           SuccessOutcome,
@@ -314,7 +309,11 @@ class ETH69ComplianceSpec extends AnyWordSpec with Matchers:
         val receiptRLP = new ReceiptBloomFreeEnc(receipt).toRLPEncodable
         receiptRLP match
           case r: RLPList =>
-            r.items.size shouldEqual 3 // stateHash, gasUsed, logs — NO bloom
+            r.items.size shouldEqual 4 // txType, postStateOrStatus, cumulativeGasUsed, logs
+            r.items.exists {
+              case RLPValue(bytes) => bytes.length == 256
+              case _               => false
+            } shouldBe false // NO bloom
           case _ => fail("Expected RLPList for receipt")
       }
 
@@ -339,7 +338,7 @@ class ETH69ComplianceSpec extends AnyWordSpec with Matchers:
         hasBloom shouldBe false
       }
 
-      "round-trip via ETH69 decoder and preserve field count = 3" taggedAs UnitTest in {
+      "round-trip via ETH69 decoder and preserve field count = 4" taggedAs UnitTest in {
         val bloom256 = ByteString(Array.fill(256)(0xab.toByte))
         val receipt = LegacyReceipt(
           HashOutcome(ByteString(Array.fill(32)(0x11.toByte))),
@@ -357,7 +356,7 @@ class ETH69ComplianceSpec extends AnyWordSpec with Matchers:
             r.requestId shouldEqual BigInt(5)
             val blockReceipts = r.receiptsForBlocks.items.head.asInstanceOf[RLPList]
             val innerReceipt = blockReceipts.items.head.asInstanceOf[RLPList]
-            innerReceipt.items.size shouldEqual 3 // no bloom
+            innerReceipt.items.size shouldEqual 4 // txType, postStateOrStatus, cumulativeGasUsed, logs — no bloom
           case other => fail(s"Expected Receipts69, got $other")
       }
     }

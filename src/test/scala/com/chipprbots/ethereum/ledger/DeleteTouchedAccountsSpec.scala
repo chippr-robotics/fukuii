@@ -120,6 +120,52 @@ class DeleteTouchedAccountsSpec extends AnyFlatSpec with Matchers:
     (accountAddresses + validCreatedAccountAddress).foreach(a => assert(newWorld.getAccount(a).isDefined))
     newWorld.touchedAccounts.size shouldEqual 0
 
+  // Pre-EIP-161 a zero-value fee payment to a non-existent miner CREATES the (empty) account: core-geth
+  // `StateDB.AddBalance` -> `getOrNewStateObject`, Besu `worldState.getOrCreate(miningBeneficiary)`. Nothing clears
+  // it before EIP-161, so it is in the intermediate state root a pre-Byzantium receipt commits to
+  // (ethereum/legacytests callOutput*/callcodeOutput*_Frontier: gasPrice 0, coinbase absent from pre).
+  it should "materialise a non-existent miner on a zero-value fee payment pre EIP161" taggedAs (
+    UnitTest,
+    StateTest
+  ) in new TestSetup:
+    worldStatePreEIP161.getAccount(nonExistentAddress) shouldBe None
+
+    val newWorld: InMemoryWorldStateProxy = InMemoryWorldStateProxy.persistState(
+      mining.blockPreparator.pay(nonExistentAddress, zeroTransferBalance, withTouch = true)(worldStatePreEIP161)
+    )
+
+    newWorld.getAccount(nonExistentAddress) shouldBe Some(Account.empty())
+    newWorld.touchedAccounts.size shouldEqual 0
+    newWorld.stateRootHash shouldBe
+      InMemoryWorldStateProxy
+        .persistState(worldStatePreEIP161.saveAccount(nonExistentAddress, Account.empty()))
+        .stateRootHash
+    newWorld.stateRootHash should not be worldStatePreEIP161.stateRootHash
+
+  it should "not materialise a non-existent miner on a zero-value fee payment post EIP161" taggedAs (
+    UnitTest,
+    StateTest
+  ) in new TestSetup:
+    val newWorld: InMemoryWorldStateProxy = InMemoryWorldStateProxy.persistState(
+      mining.blockPreparator.deleteEmptyTouchedAccounts(
+        mining.blockPreparator.pay(nonExistentAddress, zeroTransferBalance, withTouch = true)(worldStatePostEIP161)
+      )
+    )
+
+    newWorld.getAccount(nonExistentAddress) shouldBe None
+    newWorld.stateRootHash shouldBe worldStatePostEIP161.stateRootHash
+
+  it should "leave an existing account unchanged on a zero-value fee payment pre EIP161" taggedAs (
+    UnitTest,
+    StateTest
+  ) in new TestSetup:
+    val newWorld: InMemoryWorldStateProxy = InMemoryWorldStateProxy.persistState(
+      mining.blockPreparator.pay(validAccountAddress, zeroTransferBalance, withTouch = true)(worldStatePreEIP161)
+    )
+
+    newWorld.getAccount(validAccountAddress) shouldBe worldStatePreEIP161.getAccount(validAccountAddress)
+    newWorld.stateRootHash shouldBe worldStatePreEIP161.stateRootHash
+
   // scalastyle:off magic.number
   trait TestSetup extends EphemBlockchainTestSetup:
     // + cake overrides
@@ -140,6 +186,7 @@ class DeleteTouchedAccountsSpec extends AnyFlatSpec with Matchers:
     val validEmptyAccountAddress1: Address = Address(0xbbbbbb)
 
     val validCreatedAccountAddress: Address = Address(0xcccccc)
+    val nonExistentAddress: Address = Address(0xdddddd)
 
     val accountAddresses: Set[Address] = Set(
       validAccountAddress,

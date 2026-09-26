@@ -1,11 +1,14 @@
 package com.chipprbots.ethereum.consensus
 
+import org.apache.pekko.util.ByteString
+
 import cats.data.NonEmptyList
 import cats.effect.IO
 import cats.effect.unsafe.IORuntime
 
 import com.chipprbots.ethereum.blockchain.sync.regular.BlockEnqueued
 import com.chipprbots.ethereum.blockchain.sync.regular.BlockImportFailed
+import com.chipprbots.ethereum.blockchain.sync.regular.BlockImportFailedAt
 import com.chipprbots.ethereum.blockchain.sync.regular.BlockImportFailedDueToMissingNode
 import com.chipprbots.ethereum.blockchain.sync.regular.BlockImportResult
 import com.chipprbots.ethereum.blockchain.sync.regular.BlockImportedToTop
@@ -18,6 +21,7 @@ import com.chipprbots.ethereum.consensus.Consensus.ExtendedCurrentBestBranch
 import com.chipprbots.ethereum.consensus.Consensus.ExtendedCurrentBestBranchPartially
 import com.chipprbots.ethereum.consensus.Consensus.KeptCurrentBestBranch
 import com.chipprbots.ethereum.consensus.Consensus.SelectedNewBestBranch
+import com.chipprbots.ethereum.consensus.engine.InvalidChainReporter
 import com.chipprbots.ethereum.domain.Block
 import com.chipprbots.ethereum.domain.BlockHash
 import com.chipprbots.ethereum.domain.BlockHeader
@@ -38,8 +42,39 @@ class ConsensusAdapter(
     blockchainReader: BlockchainReader,
     blockQueue: BlockQueue,
     blockValidation: BlockValidation,
-    validationScheduler: IORuntime
+    validationScheduler: IORuntime,
+    // Same channel `ConsensusImpl` holds. Present here only so `BlockImporter` — which already depends on this
+    // class and on nothing else in the consensus package — can report the ONE case `ConsensusImpl` deliberately
+    // refuses to classify: the gas-used mismatch, which needs `findMissingContractCode` to disambiguate and so can
+    // only be decided in `BlockImporter`. `None` on ETC/Mordor/Gorgoroth.
+    invalidChainReporter: Option[InvalidChainReporter] = None
 ) extends Logger:
+
+  /** Report a block the import path has PROVEN consensus-invalid, so `engine_newPayload` / `engine_forkchoiceUpdated`
+    * can answer INVALID for it and its descendants.
+    *
+    * Deliberately not a general hook. The only caller is `BlockImporter`'s gas-used branch, on the arm where
+    * `findMissingContractCode` returned `None` — i.e. after the recoverable "we are missing bytecode, fetch it over
+    * SNAP and retry" reading has been positively excluded. Every other error type is classified upstream by
+    * `ConsensusImpl.reportIfProvenInvalid`, which still has the typed `BlockExecutionError`; by the time a failure
+    * reaches `BlockImporter` it is a `String` and cannot be classified safely.
+    *
+    * @param latestValidHash
+    *   must be the last VALIDATED ancestor, which on the import path is the failing block's parent.
+    */
+  def reportInvalidChain(blockHash: ByteString, latestValidHash: ByteString): Unit =
+    invalidChainReporter.foreach(_.reportInvalid(blockHash, latestValidHash))
+
+  /** Would [[reportInvalidChain]] reach anyone? False on ETC/Mordor/Gorgoroth: there the reporter is either absent or a
+    * `LateBound` nothing ever binds. `BlockImporter` uses this to skip work whose ONLY purpose is a report, so that
+    * work cannot run — and cannot change anything, not even a log line — on a chain with no consensus layer.
+    */
+  def reportsInvalidChains: Boolean =
+    invalidChainReporter.exists {
+      case lateBound: InvalidChainReporter.LateBound => lateBound.isBound
+      case _                                         => true
+    }
+
   def evaluateBranchBlock(
       block: Block
   )(implicit blockExecutionScheduler: IORuntime, blockchainConfig: BlockchainConfig): IO[BlockImportResult] =
@@ -68,7 +103,15 @@ class ConsensusAdapter(
           // During sequential sync, each block's parent was just saved by the previous iteration.
           // doBlockPreValidation runs on a different thread pool (validationScheduler) which can
           // race with the storage write, causing intermittent HeaderParentNotFoundError.
-          // The consensus.evaluateBranch will validate blocks during execution.
+          //
+          // Skipping here is safe ONLY because BlockExecution.executeAndValidateBlocks now passes
+          // alreadyValidated = false, so every block is validated on the single-threaded @tailrec
+          // execution loop before it executes. Until that change the claim below was aspirational
+          // and this skip, together with `evaluateBranch`'s unconditional pass-through, was the
+          // whole of the gap: peer-supplied blocks reached execution with unchecked headers.
+          // Do not restore doBlockPreValidation in `evaluateBranch` to compensate -- that would
+          // reintroduce the cross-thread race this skip exists to avoid, and duplicate work
+          // BlockExecution already does on the right thread.
           val validated =
             if bestHeader.hash == block.header.parentHash then
               IO.pure(Right(BlockExecutionSuccess): Either[ValidationBeforeExecError, BlockExecutionSuccess])
@@ -116,7 +159,9 @@ class ConsensusAdapter(
         case BranchExecutionFailure(blocksToEnqueue, failingBlockHash, error) =>
           blocksToEnqueue.foreach(blockQueue.enqueueBlock(_))
           blockQueue.removeSubtree(BlockHash(failingBlockHash))
-          BlockImportFailed(error)
+          // Carry WHICH block failed. Equal to, and matched exactly like, `BlockImportFailed(error)` everywhere else;
+          // only BlockImporter's invalid-chain report reads the hash. See BlockImportFailedAt.
+          new BlockImportFailedAt(error, failingBlockHash)
         case ConsensusError(blocksToEnqueue, error) =>
           blocksToEnqueue.foreach(blockQueue.enqueueBlock(_))
           BlockImportFailed(error)

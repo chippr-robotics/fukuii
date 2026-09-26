@@ -1,6 +1,10 @@
 name: Hive · consume-rlp
 
 on:
+  # Release-time only (plus workflow_dispatch). These suites hold a runner for 40-80 min per
+  # push and the org has a small shared runner pool; running them on every staging push
+  # blocked production CI. They gate the staging -> main release PR instead. Targeted runs
+  # belong on a local hive checkout (see docs/testing/hive-local.md).
   pull_request:
     branches: [main, master]
     paths:
@@ -42,7 +46,18 @@ jobs:
       # Declared in .github/gates.yml (gate `hive-consume-rlp`). A run emitting fewer
       # than this many results is a truncated run, not a pass.
       min_tests: 50
-      sim_timelimit: ${{ github.event.inputs.sim_timelimit || '60m' }}
+      # 80m, raised from 60m. This does NOT let the suite finish, and cannot: pytest collects
+      # 47,589 items for this simulator, and at --sim.parallelism 4 a 60m run launched only
+      # 1,702 of them (~3.6%). Measured on 501368ec9. Finishing would take on the order of a day.
+      #
+      # What the extra time buys is coverage: ~1/3 more tests exercised per run. It does not
+      # remove the timeout tail — every run still ends with `simulation timed out` and ~4 tests
+      # killed mid-launch (`timed out waiting for container startup`), scored "Test was terminated
+      # by host". Those are wall-clock artifacts, not client failures; which tests land in the tail
+      # depends on scheduling, which is why gates.yml records this suite as failing
+      # "only intermittently". Whether this gate should instead run a --sim.limit subset that can
+      # complete is a scoping decision, recorded in specs/009-amsterdam-fork-support/.
+      sim_timelimit: ${{ github.event.inputs.sim_timelimit || '80m' }}
       sim_limit: ${{ github.event.inputs.sim_limit || '' }}
       sim_buildarg: disable_strict_exception_matching=nimbus-el,fukuii
       hive_ref: ${{ github.event.inputs.hive_ref || 'master' }}

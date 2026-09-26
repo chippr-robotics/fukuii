@@ -3,6 +3,16 @@ package com.chipprbots.ethereum.blockchain.data
 import java.io.File
 import java.io.FileInputStream
 
+import org.apache.pekko.util.ByteString
+
+import cats.effect.IO
+import cats.effect.unsafe.IORuntime
+
+import com.chipprbots.ethereum.blockchain.sync.regular.BlockEnqueued
+import com.chipprbots.ethereum.blockchain.sync.regular.BlockImportResult
+import com.chipprbots.ethereum.blockchain.sync.regular.BlockImportedToTop
+import com.chipprbots.ethereum.blockchain.sync.regular.ChainReorganised
+import com.chipprbots.ethereum.blockchain.sync.regular.DuplicateBlock
 import com.chipprbots.ethereum.domain.*
 import com.chipprbots.ethereum.domain.Block.BlockDec
 import com.chipprbots.ethereum.ledger.BlockExecution
@@ -22,7 +32,11 @@ class ChainImporter(
     blockchainReader: BlockchainReader,
     blockchainWriter: BlockchainWriter,
     blockExecution: BlockExecution,
-    blockValidation: BlockValidation
+    blockValidation: BlockValidation,
+    // The node's own fork choice for a block that does NOT extend the current head: queue it as a side branch and
+    // reorganise once that branch outweighs the head (ConsensusAdapter.evaluateBranchBlock -> BlockQueue ->
+    // ConsensusImpl). `None` keeps the old last-block-wins behaviour and exists only for direct test construction.
+    forkChoice: Option[(Block, BlockchainConfig) => IO[BlockImportResult]] = None
 ) extends Logger:
 
   /** Import all blocks from an RLP chain file.
@@ -82,7 +96,40 @@ class ChainImporter(
               false
             case None => false
 
+          val bestHash = BlockHash(blockchainReader.getBestBlockHeader.map(_.hash.value).getOrElse(ByteString.empty))
+          val extendsHead = block.header.parentHash == bestHash
+          // core-geth ForkChoice.ReorgNeeded: once the terminal total difficulty is reached, every imported block is
+          // accepted as head ("all the headers after the transition come from the trusted consensus layer"). There
+          // is no TD to compare post-merge (difficulty 0 everywhere), so the TD fork choice below must not run: it
+          // would keep the first chain in the file on an equal-weight tie. ethereum/tests
+          // bcMultiChainTest/UncleFromSideChain_{Cancun,Prague} expects the last VALID block of the file as head.
+          val postMerge = blockchainConfig.terminalTotalDifficulty.exists { ttd =>
+            blockchainReader
+              .getChainWeightByHash(block.header.parentHash)
+              .getOrElse(ChainWeight.zero)
+              .increase(block.header)
+              .totalDifficulty
+              .value >= ttd
+          }
+
           if alreadyExists then skipped += 1
+          else if !extendsHead && !postMerge && forkChoice.isDefined then
+            // A side-chain block. Saving it as best — what this loop did for every block — made the LAST block of
+            // the file the head whatever its total difficulty, so every ethereum/tests fork/uncle-race vector
+            // (lotsOfLeafs, sideChainWithMoreTransactions, uncleBlockAtBlock3afterBlock4, ...) ended on the wrong
+            // head. core-geth's `import` goes through InsertChain -> writeBlockAndSetHead, which moves the head only
+            // when forker.ReorgNeeded says the block is heavier. The node's own fork choice does exactly that.
+            forkChoice.get(block, blockchainConfig).unsafeRunSync()(using IORuntime.global) match
+              case BlockImportedToTop(data) =>
+                imported += data.size
+              case ChainReorganised(_, newBranch, _) =>
+                imported += newBranch.size
+                log.info(s"Chain import: block $blockNum reorganised to a heavier branch of ${newBranch.size} block(s)")
+              case BlockEnqueued | DuplicateBlock =>
+                skipped += 1 // kept as a side block (lighter or not yet rooted), exactly as core-geth writes a side chain
+              case other =>
+                log.error(s"Chain import: block $blockNum rejected by fork choice — $other")
+                failed += 1
           else
             importBlock(block) match
               case Right(receipts) =>
@@ -120,15 +167,21 @@ class ChainImporter(
       case Left(err) =>
         Left(s"pre-execution validation failed: $err")
       case Right(_) =>
-        blockExecution.executeBlockNoValidation(block).flatMap { case (receipts, gasUsed, stateRootHash) =>
-          blockValidation.validateBlockAfterExecution(block, stateRootHash, receipts, gasUsed) match
-            case Left(err) =>
-              receipts.zipWithIndex.foreach { case (r, i) =>
-                log.error(s"Chain import: block ${block.header.number} tx[$i] cumulativeGas=${r.cumulativeGasUsed}")
-              }
-              Left(s"post-execution validation failed: $err")
-            case Right(_) =>
-              Right(receipts)
+        blockExecution.executeBlockNoValidationWithRequests(block).flatMap {
+          case (receipts, gasUsed, stateRootHash, requests) =>
+            blockValidation.validateBlockAfterExecution(block, stateRootHash, receipts, gasUsed) match
+              case Left(err) =>
+                receipts.zipWithIndex.foreach { case (r, i) =>
+                  log.error(s"Chain import: block ${block.header.number} tx[$i] cumulativeGas=${r.cumulativeGasUsed}")
+                }
+                Left(s"post-execution validation failed: $err")
+              case Right(_) =>
+                // EIP-7685: the header's requestsHash must match the requests execution produced.
+                blockExecution
+                  .validateRequestsHash(block, requests)
+                  .left
+                  .map(err => s"post-execution validation failed: ${err.describe}")
+                  .map(_ => receipts)
         }
 
   /** Decode concatenated RLP-encoded blocks from a byte array. */

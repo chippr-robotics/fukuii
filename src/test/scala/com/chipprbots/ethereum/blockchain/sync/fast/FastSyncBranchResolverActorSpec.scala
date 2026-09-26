@@ -36,6 +36,7 @@ import com.chipprbots.ethereum.domain.ChainWeight
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor.*
 import com.chipprbots.ethereum.network.Peer
+import com.chipprbots.ethereum.network.PeerEventBusActor
 import com.chipprbots.ethereum.network.PeerEventBusActor.PeerEvent.MessageFromPeer
 import com.chipprbots.ethereum.network.PeerId
 import com.chipprbots.ethereum.network.p2p.messages.Capability
@@ -278,6 +279,11 @@ class FastSyncBranchResolverActorSpec
     val handshakedPeers: Map[Peer, PeerInfo] =
       (0 to 5).toList.map(peerId.andThen(getPeer)).fproduct(getPeerInfo(_)).toMap
 
+    // A real bus, not a probe: the resolver's typed PeerRequestHandler children subscribe to it for the reply, and the
+    // fake network peer manager publishes each response to it, as PeerActor publishes a decoded wire message.
+    lazy val peerEventBus: TypedActorRef[PeerEventBusActor.Command] =
+      self.testKit.spawn(PeerEventBusActor.behavior())
+
     def saveBlocks(blocks: List[Block]): Unit =
       blocks.foreach(block =>
         blockchainWriter.save(block, Nil, ChainWeight.totalDifficultyOnly(1), saveAsBestBlock = true)
@@ -291,7 +297,8 @@ class FastSyncBranchResolverActorSpec
         new NetworkPeerManagerAutoPilot(
           peersConnectedDeferred,
           peers,
-          blocks
+          blocks,
+          peerEventBus
         )
       networkPeerManager.setAutoPilot(autoPilot)
       networkPeerManager.ref
@@ -304,7 +311,7 @@ class FastSyncBranchResolverActorSpec
       self.testKit.spawn(
         FastSyncBranchResolverActor(
           replyTo = fastSync.toTyped[FastSyncBranchResolverActor.BranchResolverResponse],
-          peerEventBus = TestProbe("peer_event_bus").ref,
+          peerEventBus = peerEventBus,
           networkPeerManager = networkPeerManager,
           blockchain = blockchain,
           blockchainReader = blockchainReader,
@@ -330,7 +337,8 @@ object FastSyncBranchResolverActorSpec extends Logger:
   class NetworkPeerManagerAutoPilot(
       peersConnected: Deferred[IO, Unit],
       peers: Map[Peer, PeerInfo],
-      blocks: Map[Int, List[Block]]
+      blocks: Map[Int, List[Block]],
+      peerEventBus: TypedActorRef[PeerEventBusActor.Command]
   )(implicit ioRuntime: IORuntime)
       extends AutoPilot:
 
@@ -349,7 +357,7 @@ object FastSyncBranchResolverActorSpec extends Logger:
               ETHBlockHeaders(req.requestId, blocks.get(blockIndex).map(_.map(_.header)).getOrElse(Nil))
             case other =>
               throw new RuntimeException(s"Unexpected message sent to NetworkPeerManagerAutoPilot: $other")
-          val theResponse = MessageFromPeer(response, peerId)
-          sender ! theResponse
+          // A typed PeerRequestHandler sends SendMessageCmd with no sender and waits on the bus for the reply.
+          peerEventBus ! PeerEventBusActor.PublishCmd(MessageFromPeer(response, peerId))
           if blockIndex == blocksSetSize then ()
       this

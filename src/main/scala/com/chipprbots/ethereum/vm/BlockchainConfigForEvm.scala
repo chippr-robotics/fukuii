@@ -61,21 +61,21 @@ case class BlockchainConfigForEvm(
     * at Osaka, not Prague (per execution-specs).
     */
   def isPragueTimestamp(timestamp: Timestamp): Boolean =
-    pragueTimestamp.exists(ts => timestamp.toLong >= ts)
+    pragueTimestamp.exists(ts => timestamp.isAtOrAfter(ts))
 
   /** EIP-7883 MODEXP gas increase, EIP-7823 MODEXP input bounds, EIP-7951 P256VERIFY, EIP-7939 CLZ, EIP-7825 tx gas
     * cap, EIP-7934 block RLP size — gated by Osaka timestamp on ETH chains.
     */
   def isOsakaTimestamp(timestamp: Timestamp): Boolean =
-    osakaTimestamp.exists(ts => timestamp.toLong >= ts)
+    osakaTimestamp.exists(ts => timestamp.isAtOrAfter(ts))
 
   /** BPO1 (Blob Parameter Override 1) — changes blob update fraction to 8346193. */
   def isBpo1Timestamp(timestamp: Timestamp): Boolean =
-    bpo1Timestamp.exists(ts => timestamp.toLong >= ts)
+    bpo1Timestamp.exists(ts => timestamp.isAtOrAfter(ts))
 
   /** BPO2 (Blob Parameter Override 2) — changes blob update fraction to 11684671. */
   def isBpo2Timestamp(timestamp: Timestamp): Boolean =
-    bpo2Timestamp.exists(ts => timestamp.toLong >= ts)
+    bpo2Timestamp.exists(ts => timestamp.isAtOrAfter(ts))
 
   def etcForkForBlockNumber(blockNumber: BigInt): EtcFork = blockNumber match
     case _ if blockNumber < atlantisBlockNumber => BeforeAtlantis

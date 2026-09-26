@@ -25,7 +25,15 @@ class ForkChoiceManager(
     blockchainWriter: BlockchainWriter
 ) extends Logger:
 
+  // EXECUTED heads only. Written solely by the head-known branch of `applyForkChoiceState`, never by
+  // `notifyBeaconHead`. Everything that treats the head as validated (isActive, safe/finalized reads, RPC) reads this.
   private val currentState: AtomicReference[Option[ForkChoiceState]] =
+    new AtomicReference(None)
+
+  // The headBlockHash of the most recent fork-choice request that reached this manager through EITHER entry point,
+  // executed or not. Deliberately separate from `currentState`: see `getRequestedHeadBlockHash` for why the p2p fork
+  // choice needs this and must not read `currentState`, and why `currentState` must not be widened to cover it.
+  private val requestedHead: AtomicReference[Option[ByteString]] =
     new AtomicReference(None)
 
   // Listener that wants to know whenever the CL publishes a head, even when the head is unknown
@@ -38,7 +46,32 @@ class ForkChoiceManager(
 
   def getState: Option[ForkChoiceState] = currentState.get()
 
+  /** The head of the last fork choice we EXECUTED and applied. Stays on the old head while the CL points at a head we
+    * have only stored by hash — see [[getRequestedHeadBlockHash]] for the value that follows the CL in that case.
+    */
   def getHeadBlockHash: Option[ByteString] = currentState.get().map(_.headBlockHash)
+
+  /** The `headBlockHash` the consensus layer most recently asked for, whether or not we have executed it — the input to
+    * PoS fork choice on the p2p import path ([[DesignatedHead]]).
+    *
+    * WHY NOT [[getHeadBlockHash]]. That reads `currentState`, which only the head-known branch of
+    * [[applyForkChoiceState]] writes. The one situation p2p fork choice exists for — the CL names a side-chain head
+    * that arrived via `engine_newPayload`, was stored by hash only (ACCEPTED), and whose ancestors we still have to
+    * fetch from a peer — is routed by `EngineApiService.forkchoiceUpdated` through [[notifyBeaconHead]], which by
+    * design leaves `currentState` alone. So `getHeadBlockHash` still names the OLD canonical head exactly when a
+    * competing branch arrives, the ancestry walk from it never meets the branch tip, and the branch is dropped as
+    * `NoChainSwitch` unexecuted. Measured on hive `engine` 4854b7d20: 0 of 28 `Invalid Missing Ancestor Syncing ReOrg …
+    * CanonicalReOrg=True` / `Withdrawals … Re-Org Sync` targets cleared while bound to `getHeadBlockHash`.
+    *
+    * WHY NOT WIDEN `currentState` INSTEAD. `currentState` is read as "validated": [[notifyBeaconHead]]'s scaladoc
+    * records the consensus defect caused the last time an unexecuted head was treated as applied. This value carries no
+    * such claim, and nothing but [[DesignatedHead]] reads it.
+    *
+    * WHY IT IS SAFE TO FOLLOW. It only ever lets the importer ATTEMPT a branch that leads to this head; every block is
+    * still executed by `ConsensusImpl`, and an invalid one is reported through `InvalidChainReporter`. Heads already
+    * known INVALID never reach this manager: `forkchoiceUpdated` answers INVALID before calling either entry point.
+    */
+  def getRequestedHeadBlockHash: Option[ByteString] = requestedHead.get()
 
   def getSafeBlockHash: Option[ByteString] = currentState.get().map(_.safeBlockHash)
 
@@ -61,6 +94,7 @@ class ForkChoiceManager(
     *   Right(()) if valid, Left(error) if head block is unknown
     */
   def applyForkChoiceState(newState: ForkChoiceState): Either[String, Unit] =
+    requestedHead.set(Some(newState.headBlockHash))
     val maybeHeader = blockchainReader.getBlockHeaderByHash(BlockHash(newState.headBlockHash))
 
     // Publish to the listener regardless of head-known status — SNAP needs the
@@ -78,17 +112,43 @@ class ForkChoiceManager(
       )
       currentState.set(Some(newState))
 
-      // Rewrite number→hash mapping for the new canonical branch (no-op if already canonical).
-      // Then persist canonical best-block pointer.
-      maybeHeader.foreach { header =>
-        blockchainWriter.promoteBranchToCanonical(BlockHash(newState.headBlockHash), blockchainReader)
-        blockchainWriter.saveBestKnownBlocks(BlockHash(newState.headBlockHash), header.number.value)
-      }
+      // One batch: the number→hash index becomes exactly the head's ancestry (the new branch written, every entry
+      // above the head deleted) and the best-block pointer moves to the head — whether the head moved up, sideways,
+      // or DOWN to an ancestor or a shorter side chain.
+      maybeHeader.foreach(header => blockchainWriter.promoteToCanonicalHead(header, blockchainReader))
 
       Right(())
 
+  /** Publish the CL head to the registered listener and record it as the requested head — **nothing else**.
+    *
+    * This is the notify-only half of [[applyForkChoiceState]], for the SYNCING branches of `engine_forkchoiceUpdated`.
+    * Those branches need the [[ForkChoiceManager.BeaconHead]] publish — it is the trigger SyncController forwards as
+    * `CLPivotHint` to drive SNAP-sync pivot selection (#1207) — but they must NOT write a canonical number→hash
+    * mapping, must NOT move the best-block pointer, and must NOT cache `currentState`: the head they are reporting on
+    * has not been executed by us. It DOES record the head as requested ([[getRequestedHeadBlockHash]]), which claims
+    * nothing about execution and is what lets the p2p import path fetch and execute the branch that leads to it.
+    *
+    * Calling [[applyForkChoiceState]] here instead was a consensus defect. When the head was present by hash but
+    * unexecuted (stored via `storeBlockByHashOnly`), the header lookup succeeded, so the canonical-head write
+    * (`BlockchainWriter.promoteToCanonicalHead`) wrote number→hash for a block we never validated.
+    * `engine_newPayload`'s dedup branch then read that mapping back as proof of prior successful execution and answered
+    * VALID for an invalid block. hive `invalid_payload.go:242` ("Invalid NewPayload, Transaction *, Syncing=True")
+    * requires INVALID there.
+    */
+  def notifyBeaconHead(newState: ForkChoiceState): Unit =
+    requestedHead.set(Some(newState.headBlockHash))
+    val maybeHeader = blockchainReader.getBlockHeaderByHash(BlockHash(newState.headBlockHash))
+    log.info(
+      "Fork choice head {} not executed yet (SYNCING, notify-only): headerKnown={}",
+      newState.headBlockHash,
+      maybeHeader.isDefined
+    )
+    publishBeaconHead(newState.headBlockHash, maybeHeader)
+
   /** Clear fork choice state (e.g., on shutdown or mode switch). */
-  def clear(): Unit = currentState.set(None)
+  def clear(): Unit =
+    currentState.set(None)
+    requestedHead.set(None)
 
   private def publishBeaconHead(headHash: ByteString, knownHeader: Option[BlockHeader]): Unit =
     listenerRef.get().foreach { ref =>

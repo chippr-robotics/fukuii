@@ -12,9 +12,11 @@ import scala.concurrent.duration.*
 
 import com.chipprbots.ethereum.blockchain.sync.codec.MptNodeCodecs.*
 import com.chipprbots.ethereum.db.storage.EvmCodeStorage
+import com.chipprbots.ethereum.domain.BlockBody
 import com.chipprbots.ethereum.domain.BlockHash
 import com.chipprbots.ethereum.domain.BlockHeader
 import com.chipprbots.ethereum.domain.BlockchainReader
+import com.chipprbots.ethereum.domain.Receipt
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor
 import com.chipprbots.ethereum.network.PeerEventBusActor.Command as PeerEventBusCommand
 import com.chipprbots.ethereum.network.PeerEventBusActor.PeerEvent
@@ -31,6 +33,7 @@ import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.GetNodeData
 import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.NodeData
 import com.chipprbots.ethereum.rlp.RLPEncodeable
 import com.chipprbots.ethereum.rlp.RLPList
+import com.chipprbots.ethereum.rlp.RLPValue
 import com.chipprbots.ethereum.rlp.encode
 import com.chipprbots.ethereum.transactions.PendingTransactionsManager
 import com.chipprbots.ethereum.transactions.PendingTransactionsManager.PendingTransactionsResponse
@@ -50,7 +53,9 @@ object BlockchainHostActor:
       Codes.GetReceiptsCode,
       Codes.GetBlockBodiesCode,
       Codes.GetBlockHeadersCode,
-      Codes.GetPooledTransactionsCode
+      Codes.GetPooledTransactionsCode,
+      Codes.GetBlockAccessListsCode,
+      Codes.GetCellsCode
     )
 
   def apply(
@@ -121,6 +126,57 @@ object BlockchainHostActor:
 
       case _ => None
 
+    /** Receipts for the requested blocks, stopping at the first block we lack, as go-ethereum does (`if results == nil
+      * { break }`). A reply is matched to the request by position, so skipping a block would shift every later block's
+      * receipts onto the wrong hash in the requester's hands.
+      */
+    def receiptsPrefix(blockHashes: Seq[ByteString]): Seq[Seq[Receipt]] =
+      blockHashes.iterator
+        .take(peerConfiguration.fastSyncHostConfiguration.maxReceiptsPerMessage)
+        .map(hash => blockchainReader.getReceiptsByHash(BlockHash(hash)))
+        .takeWhile(_.isDefined)
+        .flatten
+        .toSeq
+
+    /** Bodies for the requested blocks, stopping at the first block we lack — same "reply matched by position"
+      * reasoning as receiptsPrefix (#18) — and once the bytes already accumulated reach go-ethereum's softResponseLimit
+      * (2 MiB, eth/protocols/eth/handler.go's ServiceGetBlockBodiesQuery), whichever comes first. Still capped at
+      * maxBlocksBodiesPerMessage. Previously this used `hashes.take(N).flatMap(getBlockBodyByHash)`, which silently
+      * DROPPED a missing body and kept going — `flatMap` discards `None`s rather than stopping — so a later known body
+      * shifted into the earlier missing block's reply slot.
+      *
+      * The budget check happens BEFORE fetching/measuring the next candidate body, using only the bytes already
+      * accumulated from PRIOR bodies — exactly go-ethereum's `if bytes >= softResponseLimit { break }`, checked ahead
+      * of `bytes += len(data)`. This means the response can overshoot the 2 MiB budget by up to one body's size, and
+      * the body that crosses the limit is still included — not "a body that would blow the budget is left out": a
+      * `cumBytes + bodyBytes > limit` look-ahead check (the earlier version of this comment/code) would exclude a body
+      * whose OWN size exceeds 2 MiB even when it's the very first candidate, so a peer asking for a single block whose
+      * body alone is over 2 MiB would get an empty BlockBodies every time and could never fetch that block from fukuii
+      * — a liveness bug, not a safety one. Only a body requested AFTER the budget is already exhausted gets left out.
+      */
+    def bodiesPrefix(blockHashes: Seq[ByteString]): Seq[BlockBody] =
+      import com.chipprbots.ethereum.domain.BlockBody.BlockBodyEnc
+      val SoftResponseLimitBytes = 2L * 1024 * 1024 // go-ethereum eth/protocols/eth/handler.go softResponseLimit
+
+      val available = blockHashes.iterator
+        .take(peerConfiguration.fastSyncHostConfiguration.maxBlocksBodiesPerMessage)
+        .map(hash => blockchainReader.getBlockBodyByHash(BlockHash(hash)))
+        .takeWhile(_.isDefined)
+        .flatten
+        .toSeq
+
+      val (fitting, _, _) = available.foldLeft((Vector.empty[BlockBody], 0L, false)) {
+        case (acc @ (_, _, true), _) => acc
+        case ((bodies, cumBytes, false), _) if cumBytes >= SoftResponseLimitBytes =>
+          (bodies, cumBytes, true) // budget already exhausted by prior bodies — stop before this one
+        case ((bodies, cumBytes, false), body) =>
+          // Always include: this may push cumBytes past the limit, which is correct — go-ethereum measures a
+          // body only AFTER deciding to include it, so the body that crosses the limit still ships.
+          val bodyBytes = encode(body.toRLPEncodable).length.toLong
+          (bodies :+ body, cumBytes + bodyBytes, false)
+      }
+      fitting
+
     /** Handles request for block data, which includes receipts, block bodies and headers (all requested by hash)
       *
       * @param message
@@ -132,9 +188,7 @@ object BlockchainHostActor:
       // ETH68 GetReceipts — bloom-inclusive response
       case ETHPackets.GetReceipts(requestId, blockHashes) =>
         import ETHPackets.ReceiptBloomEnc
-        val receipts = blockHashes
-          .take(peerConfiguration.fastSyncHostConfiguration.maxReceiptsPerMessage)
-          .flatMap(hash => blockchainReader.getReceiptsByHash(BlockHash(hash)))
+        val receipts = receiptsPrefix(blockHashes)
         val receiptsRLP = RLPList(receipts.map(rs => RLPList(rs.map(_.toRLPEncodable)*))*)
         context.log.info("HOST_RECEIPTS_ETH68: requestId={} blocks={}", requestId, receipts.size)
         Some(ETHPackets.Receipts68(requestId, receiptsRLP))
@@ -142,9 +196,7 @@ object BlockchainHostActor:
       // ETH69 GetReceipts — bloom-ABSENT response per EIP-7642
       case ETHPackets.GetReceipts69(requestId, blockHashes) =>
         import ETHPackets.ReceiptBloomFreeEnc
-        val receipts = blockHashes
-          .take(peerConfiguration.fastSyncHostConfiguration.maxReceiptsPerMessage)
-          .flatMap(hash => blockchainReader.getReceiptsByHash(BlockHash(hash)))
+        val receipts = receiptsPrefix(blockHashes)
         val receiptsRLP = RLPList(receipts.map(rs => RLPList(rs.map(_.toRLPEncodable)*))*)
         context.log.info(
           "HOST_RECEIPTS_ETH69: requestId={} blocks={} (bloom-absent, EIP-7642)",
@@ -153,12 +205,27 @@ object BlockchainHostActor:
         )
         Some(ETHPackets.Receipts69(requestId, receiptsRLP))
 
-      // ETH70 GetReceipts — partial receipt delivery per EIP-7706.
-      // firstBlockReceiptIndex: skip already-received receipts in the first block (client resume).
-      // Applies 2 MiB soft limit per-receipt; sets lastBlockIncomplete=true when a block is truncated.
+      // ETH70 GetReceipts — partial receipt delivery per EIP-7706, mirroring go-ethereum's
+      // serviceGetReceiptsQuery70/blockReceiptsToNetwork (eth/protocols/eth/handlers.go, receipt.go).
+      // firstBlockReceiptIndex: skip already-received receipts in the first requested block (client resume).
+      //
+      // Response budget is maxPacketSize (10 MiB — the devp2p wire packet limit go-ethereum's eth/handler.go
+      // documents as "commonly enforced by clients"), NOT the 2 MiB softResponseLimit used for
+      // headers/bodies/ETH69 receipts. EIP-7706's whole point is letting a receipts response approach the wire
+      // limit via chunked delivery instead of being held to the conservative single-shot target — the smaller
+      // constant chunked hive's >10 MiB TestGetLargeReceipts block far more finely than go-ethereum would. (That
+      // test's empty-trie receipt root was a different defect: the shape of each receipt, see ReceiptBloomFreeEnc.)
+      //
+      // If the FIRST still-needed receipt of a block does not fit at all (`fittingEncs` empty while there was at
+      // least one receipt left to serve), go-ethereum omits that block from the response entirely — never an
+      // empty placeholder — and does not flag the response incomplete (`blockReceiptsToNetwork` returns
+      // `(nil, false, nil)`; the caller `break`s without appending). Once at least one receipt of a block HAS
+      // been included, hitting the limit on a later one truncates normally: that block's partial list is
+      // included and `lastBlockIncomplete=true`. A block already fully resumed (`toServe` empty) still gets an
+      // explicit empty list and does not stop serving — that is a confirmation, not a truncation.
       case ETHPackets.GetReceipts70(requestId, firstBlockReceiptIndex, blockHashes) =>
         import ETHPackets.ReceiptBloomFreeEnc
-        val MaxResponseBytes = 2L * 1024 * 1024 // 2 MiB soft limit per EIP-7706
+        val MaxResponseBytes = 10L * 1024 * 1024 // maxPacketSize per go-ethereum eth/handler.go
 
         // State: (accumulated per-block RLP lists, lastBlockIncomplete, cumulative bytes, done flag)
         val (blockReceiptLists, lastBlockIncomplete, _, _) =
@@ -166,14 +233,14 @@ object BlockchainHostActor:
             .take(peerConfiguration.fastSyncHostConfiguration.maxReceiptsPerMessage)
             .zipWithIndex
             .foldLeft((Vector.empty[RLPList], false, 0L, false)) {
-              case (acc @ (_, _, _, true), _) => acc // already truncated mid-block — skip remaining
+              case (acc @ (_, _, _, true), _) => acc // already stopped serving — skip remaining
               case ((lists, _, cumBytes, false), (hash, blockIdx)) =>
                 blockchainReader.getReceiptsByHash(BlockHash(hash)) match
-                  case None => (lists, false, cumBytes, false) // unknown block — skip silently
+                  case None => (lists, false, cumBytes, true) // unknown block — stop, like the nil-results break below
                   case Some(receipts) =>
                     val toServe = if blockIdx == 0 then receipts.drop(firstBlockReceiptIndex.toInt) else receipts
-                    // Encode per receipt, truncate at 2 MiB, track whether we finished the block
-                    val (fittingEncs, incomplete, newBytes) =
+                    // Encode per receipt, stopping once the NEXT one would exceed the budget.
+                    val (fittingEncs, truncatedMidBlock, newBytes) =
                       toServe.foldLeft((Vector.empty[RLPEncodeable], false, cumBytes)) {
                         case (acc2 @ (_, true, _), _) => acc2
                         case ((encs, false, cb), receipt) =>
@@ -182,8 +249,13 @@ object BlockchainHostActor:
                           if cb + encBytes > MaxResponseBytes then (encs, true, cb)
                           else (encs :+ enc, false, cb + encBytes)
                       }
-                    val blockRLP = RLPList(fittingEncs.map(e => e)*)
-                    (lists :+ blockRLP, incomplete, newBytes, incomplete)
+                    if fittingEncs.isEmpty && toServe.nonEmpty then
+                      // Nothing fit, even for the first still-needed receipt: omit this block and stop —
+                      // matches go-ethereum's (nil, false, nil) / "if results == nil { break }".
+                      (lists, false, cumBytes, true)
+                    else
+                      val blockRLP = RLPList(fittingEncs*)
+                      (lists :+ blockRLP, truncatedMidBlock, newBytes, truncatedMidBlock)
             }
 
         val receiptsRLP = RLPList(blockReceiptLists*)
@@ -197,9 +269,7 @@ object BlockchainHostActor:
 
       // ETH68 GetBlockBodies (via ETHPackets)
       case ETHPackets.GetBlockBodies(requestId, hashes) =>
-        val blockBodies = hashes
-          .take(peerConfiguration.fastSyncHostConfiguration.maxBlocksBodiesPerMessage)
-          .flatMap(hash => blockchainReader.getBlockBodyByHash(BlockHash(hash)))
+        val blockBodies = bodiesPrefix(hashes)
         context.log.debug(
           "HOST_BLOCK_BODIES_ETH68: requestId={} requested={} returning={}",
           requestId,
@@ -211,6 +281,32 @@ object BlockchainHostActor:
       // ETH68 GetBlockHeaders (via ETHPackets)
       case ETHPackets.GetBlockHeaders(requestId, block, maxHeaders, skip, reverse) =>
         handleGetBlockHeadersRequest(block, maxHeaders, skip, reverse, Some(requestId))
+
+      // ETH71 GetBlockAccessLists (EIP-8159). fukuii has no EIP-7928 BAL storage, so every
+      // requested hash gets the empty-string sentinel — an honest "unavailable", not fabricated
+      // data, and the wire-correct answer regardless: an empty BAL response is spec-valid even for
+      // a node that HAS the block, as long as it's not silently claiming to have data it doesn't.
+      // Order is preserved 1:1 with the request; see ETHPackets.scala's GetBlockAccessLists doc.
+      case ETHPackets.GetBlockAccessLists(requestId, blockHashes) =>
+        val entries = blockHashes.map(_ => RLPValue(Array.emptyByteArray))
+        context.log.debug(
+          "HOST_BLOCK_ACCESS_LISTS: requestId={} requested={} (all-empty, no BAL storage)",
+          requestId,
+          blockHashes.size
+        )
+        Some(ETHPackets.BlockAccessLists(requestId, entries))
+
+      // ETH72 GetCells (EIP-8070). fukuii has no PeerDAS cell/blob storage, so it answers with the
+      // fully-empty response (zero hashes, zero cells) rather than invent cell data — the same
+      // "honest absence" go-ethereum's own answerGetCells gives for any hash it has no blob data
+      // for. The requested mask is echoed back unchanged, matching go-ethereum's ReplyCells.
+      case ETHPackets.GetCells(requestId, hashes, mask) =>
+        context.log.debug(
+          "HOST_CELLS: requestId={} requested={} (empty, no cell storage)",
+          requestId,
+          hashes.size
+        )
+        Some(ETHPackets.Cells(requestId, Seq.empty, Seq.empty, mask))
 
       case _ => None
 

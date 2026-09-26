@@ -48,9 +48,10 @@ object ForkIdValidator:
     */
   def validatePeer[F[_]: Monad: Logger](
       genesisHash: ByteString,
+      genesisTimestamp: Long,
       config: BlockchainConfig
   )(currentHeight: BigInt, remoteForkId: ForkId): F[ForkIdValidationResult] =
-    val forks = ForkId.gatherForks(config)
+    val forks = ForkId.gatherForks(config, genesisTimestamp)
     validatePeer[F](genesisHash, forks)(currentHeight, remoteForkId)
 
   private[forkid] def validatePeer[F[_]: Monad: Logger](

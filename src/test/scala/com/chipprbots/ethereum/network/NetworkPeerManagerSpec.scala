@@ -325,11 +325,13 @@ class NetworkPeerManagerSpec extends AnyFlatSpec with Matchers:
         com.chipprbots.ethereum.network.p2p.messages.SNAP.Codes.StorageRangesCode,
         com.chipprbots.ethereum.network.p2p.messages.SNAP.Codes.TrieNodesCode,
         com.chipprbots.ethereum.network.p2p.messages.SNAP.Codes.ByteCodesCode,
+        com.chipprbots.ethereum.network.p2p.messages.SNAP.Codes.AccessListsCode,
         // SNAP protocol request codes — server-side serving
         com.chipprbots.ethereum.network.p2p.messages.SNAP.Codes.GetAccountRangeCode,
         com.chipprbots.ethereum.network.p2p.messages.SNAP.Codes.GetStorageRangesCode,
         com.chipprbots.ethereum.network.p2p.messages.SNAP.Codes.GetTrieNodesCode,
-        com.chipprbots.ethereum.network.p2p.messages.SNAP.Codes.GetByteCodesCode
+        com.chipprbots.ethereum.network.p2p.messages.SNAP.Codes.GetByteCodesCode,
+        com.chipprbots.ethereum.network.p2p.messages.SNAP.Codes.GetAccessListsCode
       ),
       PeerSelector.WithId(peer1.id)
     )
@@ -373,7 +375,7 @@ class NetworkPeerManagerSpec extends AnyFlatSpec with Matchers:
     gbh.skip shouldBe BigInt(0)
     gbh.reverse shouldBe false
 
-  it should "skip the best-block probe on ETH/69 (number is in STATUS)" taggedAs (
+  it should "skip the best-block probe AND send no eager BlockRangeUpdate on ETH/69 (number is already in STATUS)" taggedAs (
     UnitTest,
     NetworkTest
   ) in new TestSetup:
@@ -387,9 +389,17 @@ class NetworkPeerManagerSpec extends AnyFlatSpec with Matchers:
     // Drain the two subscriptions.
     peerEventBus.expectMsgType[SubscribeCmd].to shouldBe PeerDisconnectedClassifier(PeerSelector.WithId(peer1.id))
     peerEventBus.expectMsgType[SubscribeCmd]
-    // ETH/69: no GetBlockHeaders probe (latestBlock is in STATUS),
-    // but a BlockRangeUpdate is sent immediately so the remote peer knows our chain range.
-    peerManager.expectMsgClass(classOf[PeerManagerActor.SendMessageCmd])
+    // ETH/69: no GetBlockHeaders probe (latestBlock is in STATUS), and NO eager BlockRangeUpdate
+    // either. Regression pin for the fix that removed the unsolicited post-handshake BRU send:
+    // EIP-7642 defines BlockRangeUpdate (0x11) as a change notification, not a handshake greeting,
+    // and go-ethereum only emits it from blockRangeLoop on ChainHeadEvent / snap-sync progress
+    // (eth/handler.go), broadcast to all connected peers at that moment — never as a one-shot
+    // reply to the peer that just handshaked. Sending it eagerly here broke hive's devp2p
+    // Transaction/InvalidTxs/LargeTxRequest tests: the harness has no case for eth-relative msg
+    // code 17 and panics with "unhandled eth msg code 17". fukuii's own range is already
+    // communicated via the 7-field STATUS payload (see EthNodeStatus69ExchangeState), and later
+    // range changes go out through BlockBroadcast.broadcastBlock / announceCanonicalHead instead
+    // — neither of which fires during plain handshake completion.
     peerManager.expectNoMessage(100.millis)
 
   it should "discover peer block number from probe response on ETH/64-/68" taggedAs (
@@ -413,6 +423,53 @@ class NetworkPeerManagerSpec extends AnyFlatSpec with Matchers:
     peersInfoHolder ! PeerInfoRequestCmd(peer1.id, requestSender.ref)
     val resp: PeerInfoResponse = requestSender.expectMsgType[PeerInfoResponse]
     resp.peerInfo.map(_.maxBlockNumber) shouldBe Some(BigInt(24463116))
+
+  it should "probe only peers advertising a height below a missing CL ancestor, and learn the height from the reply" taggedAs (
+    UnitTest,
+    NetworkTest
+  ) in new TestSetup:
+    // hive "Invalid Missing Ancestor Syncing ReOrg … CanonicalReOrg=True": the secondary geth handshook at genesis over
+    // eth/69 and never re-advertised (go-ethereum sends BlockRangeUpdate every 32 blocks). PeersClient.bestPeer never
+    // selects a height-0 peer, so without this probe fukuii sent it nothing for the whole test.
+    expectInitialSubscriptions()
+
+    val genesisInfo: PeerInfo = createGenesisPeerInfo()
+    val genesisEth69: PeerInfo =
+      genesisInfo.copy(remoteStatus = genesisInfo.remoteStatus.copy(capability = Capability.ETH69))
+    setupNewPeer(peer1, peer1Probe, genesisEth69)
+    // Already advertises exactly the missing height: selectable as it is, so it must not be probed (`<`, not `<=`).
+    val atHeightEth69: PeerInfo =
+      peer2Info.copy(remoteStatus = peer2Info.remoteStatus.copy(capability = Capability.ETH69), maxBlockNumber = 14)
+    setupNewPeer(peer2, peer2Probe, atHeightEth69)
+
+    val missing: BlockHeader = baseBlockHeader.copy(number = BlockNumber(14))
+    peersInfoHolder ! ProbeMissingAncestorCmd(missing.hash.value, BigInt(14))
+
+    val sent: PeerManagerActor.SendMessageCmd = peerManager.expectMsgClass(classOf[PeerManagerActor.SendMessageCmd])
+    sent.peerId shouldBe peer1.id
+    sent.message.code shouldBe Codes.GetBlockHeadersCode
+    val gbh: GetBlockHeaders = sent.message.underlyingMsg.asInstanceOf[GetBlockHeaders]
+    gbh.block shouldBe Right(missing.hash.value)
+    gbh.maxHeaders shouldBe BigInt(1)
+    gbh.skip shouldBe BigInt(0)
+    gbh.reverse shouldBe false
+    peerManager.expectNoMessage(100.millis)
+
+    // The reply needs no handler of its own: updateMaxBlock lifts the genesis peer's advertised height off 0.
+    peersInfoHolder ! PeerEventCmd(MessageFromPeer(BlockHeaders(BigInt(0), Seq(missing)), peer1.id))
+    peersInfoHolder ! PeerInfoRequestCmd(peer1.id, requestSender.ref)
+    requestSender.expectMsgType[PeerInfoResponse].peerInfo.map(_.maxBlockNumber) shouldBe Some(BigInt(14))
+
+  it should "send nothing for a missing CL ancestor when no peer is behind it" taggedAs (UnitTest, NetworkTest) in
+    new TestSetup:
+      expectInitialSubscriptions()
+      val aheadEth69: PeerInfo =
+        peer2Info.copy(remoteStatus = peer2Info.remoteStatus.copy(capability = Capability.ETH69), maxBlockNumber = 20)
+      setupNewPeer(peer2, peer2Probe, aheadEth69)
+
+      peersInfoHolder ! ProbeMissingAncestorCmd(baseBlockHeader.copy(number = BlockNumber(14)).hash.value, BigInt(14))
+
+      peerManager.expectNoMessage(100.millis)
 
   it should "route SNAP protocol messages to registered SNAPSyncController" taggedAs (
     UnitTest,
@@ -582,7 +639,10 @@ class NetworkPeerManagerSpec extends AnyFlatSpec with Matchers:
           com.chipprbots.ethereum.network.p2p.messages.SNAP.Codes.GetAccountRangeCode,
           com.chipprbots.ethereum.network.p2p.messages.SNAP.Codes.GetStorageRangesCode,
           com.chipprbots.ethereum.network.p2p.messages.SNAP.Codes.GetTrieNodesCode,
-          com.chipprbots.ethereum.network.p2p.messages.SNAP.Codes.GetByteCodesCode
+          com.chipprbots.ethereum.network.p2p.messages.SNAP.Codes.GetByteCodesCode,
+          // snap/2 (EIP-8189): GetAccessLists needs the same pre-handshake early subscription as
+          // the other SNAP request codes above.
+          com.chipprbots.ethereum.network.p2p.messages.SNAP.Codes.GetAccessListsCode
         ),
         PeerSelector.AllPeers
       )
@@ -604,11 +664,13 @@ class NetworkPeerManagerSpec extends AnyFlatSpec with Matchers:
           com.chipprbots.ethereum.network.p2p.messages.SNAP.Codes.StorageRangesCode,
           com.chipprbots.ethereum.network.p2p.messages.SNAP.Codes.TrieNodesCode,
           com.chipprbots.ethereum.network.p2p.messages.SNAP.Codes.ByteCodesCode,
+          com.chipprbots.ethereum.network.p2p.messages.SNAP.Codes.AccessListsCode,
           // SNAP protocol request codes — server-side serving
           com.chipprbots.ethereum.network.p2p.messages.SNAP.Codes.GetAccountRangeCode,
           com.chipprbots.ethereum.network.p2p.messages.SNAP.Codes.GetStorageRangesCode,
           com.chipprbots.ethereum.network.p2p.messages.SNAP.Codes.GetTrieNodesCode,
-          com.chipprbots.ethereum.network.p2p.messages.SNAP.Codes.GetByteCodesCode
+          com.chipprbots.ethereum.network.p2p.messages.SNAP.Codes.GetByteCodesCode,
+          com.chipprbots.ethereum.network.p2p.messages.SNAP.Codes.GetAccessListsCode
         ),
         PeerSelector.WithId(peer.id)
       )
@@ -621,7 +683,7 @@ class NetworkPeerManagerSpec extends AnyFlatSpec with Matchers:
       // Genesis peers and ETH/69 peers are skipped (see dedicated tests below).
       peerProbe.expectNoMessage(100.millis)
       val nonGenesis = peerInfo.remoteStatus.bestHash != peerInfo.remoteStatus.genesisHash
-      val notEth69 = peerInfo.remoteStatus.capability != Capability.ETH69
+      val notEth69 = !Capability.isEth69Plus(peerInfo.remoteStatus.capability)
       if nonGenesis && notEth69 then
         val probe = peerManager.expectMsgClass(classOf[PeerManagerActor.SendMessageCmd])
         probe.peerId shouldBe peer.id
@@ -691,19 +753,21 @@ class NetworkPeerManagerSpec extends AnyFlatSpec with Matchers:
           com.chipprbots.ethereum.network.p2p.messages.SNAP.Codes.StorageRangesCode,
           com.chipprbots.ethereum.network.p2p.messages.SNAP.Codes.TrieNodesCode,
           com.chipprbots.ethereum.network.p2p.messages.SNAP.Codes.ByteCodesCode,
+          com.chipprbots.ethereum.network.p2p.messages.SNAP.Codes.AccessListsCode,
           com.chipprbots.ethereum.network.p2p.messages.SNAP.Codes.GetAccountRangeCode,
           com.chipprbots.ethereum.network.p2p.messages.SNAP.Codes.GetStorageRangesCode,
           com.chipprbots.ethereum.network.p2p.messages.SNAP.Codes.GetTrieNodesCode,
-          com.chipprbots.ethereum.network.p2p.messages.SNAP.Codes.GetByteCodesCode
+          com.chipprbots.ethereum.network.p2p.messages.SNAP.Codes.GetByteCodesCode,
+          com.chipprbots.ethereum.network.p2p.messages.SNAP.Codes.GetAccessListsCode
         ),
         PeerSelector.WithId(peer.id)
       )
       peerProbe.expectNoMessage(100.millis)
-      // For ETH/69 peers, the actor sends a BlockRangeUpdate to peerManager immediately
-      // after handshake (announces our own chain range). Consume it so it doesn't
-      // bleed into subsequent peerManager expectations.
-      if peerInfo.remoteStatus.capability == Capability.ETH69 then
-        peerManager.expectMsgClass(classOf[PeerManagerActor.SendMessageCmd])
+      // ETH/69 peers get no post-handshake message at all: no GetBlockHeaders probe (number is
+      // already in STATUS) and no eager BlockRangeUpdate (BRU is a change notification — see
+      // BlockBroadcast.broadcastBlock / announceCanonicalHead — not a handshake greeting).
+      // Nothing to drain here; callers proceed straight to their own peerManager expectations
+      // (e.g. RefreshPeerBestBlocksTick probes).
 
   it should "ETH69 archive peer: correct inflated Tier3 chainWeight after 3 consecutive unchanged probes" taggedAs (
     UnitTest,

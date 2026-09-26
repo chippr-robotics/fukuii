@@ -346,7 +346,10 @@ class IrregularStateChangeDaoForkHandshakerSpec extends AnyFlatSpec with Matcher
             // Best block should be the low block
             statusMsg.bestHash shouldBe lowBlock.header.hash.value
             // ForkId should be calculated using actual block number (1000), matching core-geth
-            val expectedForkId = ForkId.create(genesisBlock.header.hash.value, blockchainConfig)(lowBlockNumber)
+            val expectedForkId =
+              ForkId.create(genesisBlock.header.hash.value, genesisBlock.header.unixTimestamp.toLong, blockchainConfig)(
+                lowBlockNumber
+              )
             statusMsg.forkId shouldBe expectedForkId
           case other =>
             fail(s"Expected ETHPackets.Status68.Status68Enc message but got: $other")
@@ -390,7 +393,10 @@ class IrregularStateChangeDaoForkHandshakerSpec extends AnyFlatSpec with Matcher
             val statusMsg = statusEnc.underlyingMsg
             statusMsg.bestHash shouldBe highBlock.header.hash.value
             // ForkId should be calculated using actual block number (19,200,000), matching core-geth
-            val expectedForkId = ForkId.create(genesisBlock.header.hash.value, blockchainConfig)(highBlockNumber)
+            val expectedForkId =
+              ForkId.create(genesisBlock.header.hash.value, genesisBlock.header.unixTimestamp.toLong, blockchainConfig)(
+                highBlockNumber
+              )
             statusMsg.forkId shouldBe expectedForkId
           case other =>
             fail(s"Expected ETHPackets.Status68.Status68Enc message but got: $other")

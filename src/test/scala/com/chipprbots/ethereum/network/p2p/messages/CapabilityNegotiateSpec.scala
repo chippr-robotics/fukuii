@@ -91,4 +91,51 @@ class CapabilityNegotiateSpec extends AnyWordSpec with Matchers:
         result shouldBe Some(Capability.ETH68)
       }
     }
+
+    // ── ETH70/71/72 + SNAP2 — go-ethereum master's full message-set implementation ──
+
+    "our set is the full implemented set [ETH68..ETH72, SNAP1, SNAP2]" should {
+      val ourFullSet =
+        List(
+          Capability.ETH68,
+          Capability.ETH69,
+          Capability.ETH70,
+          Capability.ETH71,
+          Capability.ETH72,
+          Capability.SNAP1,
+          Capability.SNAP2
+        )
+
+      "negotiate ETH72 with a peer offering the same full ETH range (go-ethereum master's general dial)" taggedAs UnitTest in {
+        val peerCaps = List(Capability.ETH72, Capability.ETH70, Capability.ETH69)
+        Capability.negotiateEth(peerCaps, ourFullSet) shouldBe Some(Capability.ETH72)
+      }
+
+      "negotiate exactly ETH71 with a peer that ONLY advertises eth/71 (go-ethereum's dialEth71)" taggedAs UnitTest in {
+        Capability.negotiateEth(List(Capability.ETH71), ourFullSet) shouldBe Some(Capability.ETH71)
+      }
+
+      "negotiate SNAP2 with a peer that ONLY advertises snap/2 (go-ethereum's dialSnap2)" taggedAs UnitTest in {
+        Capability.negotiateSnap(List(Capability.SNAP2), ourFullSet) shouldBe Some(Capability.SNAP2)
+      }
+
+      // ── ETC/core-geth interop safety net — the actual concern behind "check how the capability
+      // set is chosen per network" (herald task, eth/72 + snap/2 rollout). ──
+      "still negotiate eth/69 + snap/1 with an ETC-shaped peer that only speaks up to eth/69 (core-geth, Besu-ETC)" taggedAs UnitTest in {
+        val etcPeerCaps = List(Capability.ETH68, Capability.ETH69, Capability.SNAP1)
+        Capability.negotiateEth(etcPeerCaps, ourFullSet) shouldBe Some(Capability.ETH69)
+        Capability.negotiateSnap(etcPeerCaps, ourFullSet) shouldBe Some(Capability.SNAP1)
+        // The overall negotiate() result (ETH prioritised over SNAP in best()) must also land on
+        // eth/69, never silently drop to something the ETC peer never advertised.
+        Capability.negotiate(etcPeerCaps, ourFullSet) shouldBe Some(Capability.ETH69)
+      }
+
+      "still negotiate plain eth/68 with a legacy peer that never adopted EIP-7642" taggedAs UnitTest in {
+        Capability.negotiateEth(List(Capability.ETH68), ourFullSet) shouldBe Some(Capability.ETH68)
+      }
+
+      "return None for SNAP when the peer advertises ETH only (no snap capability at all)" taggedAs UnitTest in {
+        Capability.negotiateSnap(List(Capability.ETH69), ourFullSet) shouldBe None
+      }
+    }
   }

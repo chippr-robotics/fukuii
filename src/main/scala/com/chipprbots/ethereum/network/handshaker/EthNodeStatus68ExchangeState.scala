@@ -66,12 +66,31 @@ case class EthNodeStatus68ExchangeState(
     )
 
     val localBestBlock = blockchainReader.getBestBlockNumber
-    val localGenesisHash = blockchainReader.genesisHeader.hash.value
-    val storedTimestamp =
-      blockchainReader.getBlockHeaderByNumber(localBestBlock).map(_.unixTimestamp).getOrElse(Timestamp.Zero)
-    val localBestTimestamp =
-      if storedTimestamp == Timestamp.Zero then Timestamp(System.currentTimeMillis() / 1000) else storedTimestamp
-    val localForkId = ForkId.create(localGenesisHash, blockchainConfig)(localBestBlock, localBestTimestamp.toLong)
+    val localGenesisHeader = blockchainReader.genesisHeader
+    val localGenesisHash = localGenesisHeader.hash.value
+    // A head timestamp of zero is DATA, not a missing value: hive's engine fixtures declare
+    // genesis timestamp 0, and so does ETH mainnet. Substituting wall-clock here made every
+    // timestamp fork appear already passed, so we advertised `next=0` while a fork was genuinely
+    // upcoming — measured across hive's whole `Genesis=0` Fork ID family. The only real failure
+    // mode is a MISSING head header, which is handled explicitly below instead of being
+    // conflated with a legitimate zero.
+    val localBestTimestamp = blockchainReader
+      .getBlockHeaderByNumber(localBestBlock)
+      .map(_.unixTimestamp)
+      .getOrElse {
+        log.warn(
+          "ETH{}_STATUS: no stored header for best block {} — falling back to the genesis timestamp for the fork id. " +
+            "This indicates inconsistent block storage, not a zero-timestamp chain.",
+          protocolVersion,
+          localBestBlock
+        )
+        localGenesisHeader.unixTimestamp
+      }
+    val localForkId =
+      ForkId.create(localGenesisHash, localGenesisHeader.unixTimestamp.toLong, blockchainConfig)(
+        localBestBlock,
+        localBestTimestamp.toLong
+      )
 
     log.debug(
       "ETH{}_STATUS: Local state - bestBlock={}, genesisHash={}, localForkId={}",
@@ -99,7 +118,11 @@ case class EthNodeStatus68ExchangeState(
       DisconnectedState[PeerInfo](Disconnect.Reasons.UselessPeer)
     else
       (for validationResult <-
-          ForkIdValidator.validatePeer[SyncIO](blockchainReader.genesisHeader.hash.value, blockchainConfig)(
+          ForkIdValidator.validatePeer[SyncIO](
+            blockchainReader.genesisHeader.hash.value,
+            blockchainReader.genesisHeader.unixTimestamp.toLong,
+            blockchainConfig
+          )(
             blockchainReader.getBestBlockNumber,
             forkId
           )
@@ -168,15 +191,19 @@ case class EthNodeStatus68ExchangeState(
         ttdFallback
       }
 
-    val genesisHash = blockchainReader.genesisHeader.hash.value
+    val genesisHeader = blockchainReader.genesisHeader
+    val genesisHash = genesisHeader.hash.value
 
     // ALIGNMENT WITH CORE-GETH: Use actual current block number for ForkId calculation.
     // Core-geth uses head.Number.Uint64() and head.Time for forkID — not checkpoints.
+    // `bestBlockHeader` is a real header, so its timestamp is authoritative even when zero;
+    // the previous wall-clock substitution invented a future time on genesis-at-zero chains.
     val forkIdBlockNumber = bestBlockNumber
-    val forkIdTimestamp =
-      if bestBlockHeader.unixTimestamp == Timestamp.Zero then Timestamp(System.currentTimeMillis() / 1000)
-      else bestBlockHeader.unixTimestamp
-    val forkId = ForkId.create(genesisHash, blockchainConfig)(forkIdBlockNumber, forkIdTimestamp.toLong)
+    val forkId =
+      ForkId.create(genesisHash, genesisHeader.unixTimestamp.toLong, blockchainConfig)(
+        forkIdBlockNumber,
+        bestBlockHeader.unixTimestamp.toLong
+      )
 
     val status = ETHPackets.Status68.Status68(
       protocolVersion = negotiatedCapability.version,

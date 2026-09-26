@@ -42,12 +42,35 @@ class VM[W <: WorldStateProxy[W, S], S <: Storage[S]](
       )
     }
 
-    context.recipientAddr match
-      case Some(recipientAddr) =>
-        call(context, recipientAddr)
+    // EIP-2780: the pre-execution phase (account-creation state charge) could not be funded. The
+    // transaction stays valid and included — it simply skips execution and reverts, exactly as an
+    // out-of-gas halt inside a call frame would. Validity was decided by the intrinsic check alone.
+    if context.preExecutionOutOfGas then
+      ProgramResult[W, S](
+        returnData = ByteString.empty,
+        gasRemaining = 0,
+        world = context.world,
+        addressesToDelete = Set.empty,
+        logs = Nil,
+        internalTxs = Nil,
+        gasRefund = 0,
+        error = Some(OutOfGas),
+        accessedAddresses = Set.empty,
+        accessedStorageKeys = Set.empty,
+        // EIP-2780: the pre-execution phase is rolled back in full, so the reservoir goes back to the
+        // value it had at the start of the transaction and is returned to the sender at settlement.
+        // `gas_left` is consumed, as for any exceptional halt.
+        stateGasReservoir = context.initialStateGasReservoir,
+        evmStateGasUsed = 0,
+        stateGasBaseline = context.initialStateGasReservoir
+      )
+    else
+      context.recipientAddr match
+        case Some(recipientAddr) =>
+          call(context, recipientAddr)
 
-      case None =>
-        create(context)._1
+        case None =>
+          create(context)._1
 
   /** Message call - Θ function in YP
     */
@@ -78,16 +101,35 @@ class VM[W <: WorldStateProxy[W, S], S <: Storage[S]](
             val world1 = if context.doTransfer then makeTransfer else context.world
             val context1: PC = context.copy(world = world1)
 
-            if PrecompiledContracts.isDefinedAt(context1) then PrecompiledContracts.run(context1)
+            // EIP-7708: a log is issued for any non-zero-value-transferring CALL to a DIFFERENT account,
+            // at the time the transfer executes — i.e. here, at frame entry, so it precedes every log the
+            // called code emits. DELEGATECALL and CALLCODE carry `doTransfer = false` and STATICCALL a zero
+            // endowment, so none of them qualifies.
+            //
+            // Seeding it into the frame rather than appending it at the call site is deliberate: the log
+            // then follows the frame's fate automatically, and a reverted frame drops it along with the
+            // transfer it recorded.
+            val transferLogs: Seq[com.chipprbots.ethereum.domain.TxLogEntry] =
+              if context.evmConfig.amsterdamEnabled && context.doTransfer &&
+                context.endowment > UInt256.Zero && context.callerAddr != recipientAddr
+              then Seq(AmsterdamGas.transferLog(context.callerAddr, recipientAddr, context.endowment))
+              else Nil
+
+            if PrecompiledContracts.isDefinedAt(context1) then
+              val precompileResult = PrecompiledContracts.run(context1)
+              if transferLogs.isEmpty then precompileResult
+              else precompileResult.copy(logs = transferLogs ++ precompileResult.logs)
             else
-              val code = resolveCode(world1, recipientAddr)
+              val code = resolveCode(context1.evmConfig, world1, recipientAddr)
               val env = ExecEnv(context1, code, ownerAddr)
 
               // EIP-7702: If code was resolved from a delegation, warm the delegation target
               val delegationTarget =
-                try SetCodeTransaction.parseDelegation(world1.getCode(recipientAddr))
-                catch case _: Exception => None
-              val initialState: PS = ProgramState(this, context1, env)
+                if !context1.evmConfig.eip7702Enabled then None
+                else
+                  try SetCodeTransaction.parseDelegation(world1.getCode(recipientAddr))
+                  catch case _: Exception => None
+              val initialState: PS = ProgramState(this, context1, env).withLogs(transferLogs)
               val warmState = delegationTarget match
                 case Some(target) => initialState.addAccessedAddress(target)
                 case None         => initialState
@@ -106,13 +148,17 @@ class VM[W <: WorldStateProxy[W, S], S <: Storage[S]](
     result
 
   /** EIP-7702: Resolve delegation code one level deep. If the account has a delegation prefix (0xef0100), load the
-    * target's code instead.
+    * target's code instead. Only once EIP-7702 is active (`eip7702Enabled`: Prague on ETH, Olympia on ETC) — before
+    * that the account's own code runs, and its leading 0xEF is an undefined opcode (go-ethereum `resolveCode` gates on
+    * `IsPrague`; core-geth has no EIP-7702 at all).
     */
-  private def resolveCode(world: W, addr: Address): ByteString =
+  private def resolveCode(config: EvmConfig, world: W, addr: Address): ByteString =
     val code = world.getCode(addr)
-    SetCodeTransaction.parseDelegation(code) match
-      case Some(target) => world.getCode(target)
-      case None         => code
+    if !config.eip7702Enabled then code
+    else
+      SetCodeTransaction.parseDelegation(code) match
+        case Some(target) => world.getCode(target)
+        case None         => code
 
   /** Contract creation - Λ function in YP salt is used to create contract by CREATE2 opcode. See
     * https://github.com/ethereum/EIPs/blob/master/EIPS/eip-1014.md
@@ -131,7 +177,8 @@ class VM[W <: WorldStateProxy[W, S], S <: Storage[S]](
     val (result, newAddress) =
       try
         val pair =
-          if !isValidCall(context) then (invalidCallResult(context, Set.empty, Set.empty), Address(0))
+          if !isValidCall(context) || creatorNonceOverflowed(context) then
+            (invalidCallResult(context, Set.empty, Set.empty), Address(0))
           else
             require(context.recipientAddr.isEmpty, "recipient address must be empty for contract creation")
             require(context.doTransfer, "contract creation will always transfer funds")
@@ -167,11 +214,18 @@ class VM[W <: WorldStateProxy[W, S], S <: Storage[S]](
                 .getOrElse(context.world.createAddress(context.callerAddr))
 
               // EIP-684: revert a CREATE if the target address already has non-empty code/nonce.
-              // EIP-7610 (Paris+): additionally revert if the address has non-empty storage.
-              // Activation matches the EELS test marker `valid_from("Paris")` — we use
-              // BlockHeader.isPoS (difficulty==0 && baseFee set) as the Paris / PoS signal.
+              // EIP-7610: additionally revert if the address has non-empty storage. The EIP is RETROACTIVE — "from
+              // genesis" — so on ETH it is not fork-gated: Besu (ContractCreationProcessor.accountExists), EELS and
+              // go-ethereum v1.14-v1.17 (GetStorageRoot) apply it on every fork, and ethereum/legacytests
+              // RevertInCreateInInit(_Create2) expect the collision on Byzantium..Berlin. The EEST
+              // `valid_from("Paris")` marker only limits where those fixtures are generated. (The previous Paris-only
+              // gate, via isPoS, is kept as a disjunct so no PoS configuration changes.)
+              // ETC keeps core-geth's rule — nonce/code only (core/vm/evm.go create) — on every fork. Hitting a
+              // storage-only account needs a CREATE address collision (its creator's nonce has moved on; CREATE2 would
+              // need a keccak preimage), so the choice cannot change ETC history.
+              val eip7610 = context.evmConfig.blockchainConfig.isEthereum || context.blockHeader.isPoS
               val conflict =
-                if context.blockHeader.isPoS then context.world.nonEmptyCodeOrNonceOrStorageAccount(contractAddr)
+                if eip7610 then context.world.nonEmptyCodeOrNonceOrStorageAccount(contractAddr)
                 else context.world.nonEmptyCodeOrNonceAccount(contractAddr)
 
               /** Specification of https://eips.ethereum.org/EIPS/eip-1283 states, that `originalValue` should be taken
@@ -195,11 +249,30 @@ class VM[W <: WorldStateProxy[W, S], S <: Storage[S]](
 
               val env = ExecEnv(context, code, contractAddr).copy(inputData = ByteString.empty)
 
+              // EIP-6780: `contractAddr` is created *in this transaction*. Record it explicitly — it cannot be
+              // inferred from `originalWorld` below, because `originInitialisedAccount` deliberately contains the
+              // freshly initialised account (needed for EIP-1283/2200 original-value lookups).
               val initialState: PS =
-                ProgramState(this, context.copy(world = world1, originalWorld = originInitialisedAccount): PC, env)
+                ProgramState(
+                  this,
+                  context.copy(
+                    world = world1,
+                    originalWorld = originInitialisedAccount,
+                    createdAddresses = context.createdAddresses + contractAddr
+                  ): PC,
+                  env
+                )
                   .addAccessedAddress(contractAddr)
 
-              val execResult = exec(initialState).toResult
+              // EIP-7708: a CREATE/CREATE2 endowment is a value transfer to the created account and
+              // carries the same log, emitted at the time the transfer executes.
+              val endowedState =
+                if context.evmConfig.amsterdamEnabled && context.endowment > UInt256.Zero &&
+                  context.callerAddr != contractAddr
+                then initialState.withLog(AmsterdamGas.transferLog(context.callerAddr, contractAddr, context.endowment))
+                else initialState
+
+              val execResult = exec(endowedState).toResult
 
               val newContractResult = saveNewContract(context, contractAddr, execResult, env.evmConfig)
               (newContractResult, contractAddr)
@@ -219,7 +292,7 @@ class VM[W <: WorldStateProxy[W, S], S <: Storage[S]](
   @tailrec
   final private[vm] def exec(state: ProgramState[W, S]): ProgramState[W, S] =
     val byte = state.program.getByte(state.pc)
-    state.config.byteToOpCode.get(byte) match
+    state.config.opCodeFor(byte) match
       case Some(opCode) =>
         val newState = opCode.execute(state)
         // Per-opcode hook. VM-level `tracer` and the tracer carried in state.env.tracer
@@ -260,6 +333,20 @@ class VM[W <: WorldStateProxy[W, S], S <: Storage[S]](
     context.endowment <= context.world.getBalance(context.callerAddr) &&
       context.callDepth <= EvmConfig.MaxCallDepth
 
+  /** EIP-2681: a creation whose creator nonce would overflow uint64 fails before it starts. go-ethereum core/vm/evm.go
+    * create() returns ErrNonceUintOverflow with the gas unchanged, after the depth and balance checks and BEFORE
+    * bumping the nonce and adding the address to the access list -- the same observable outcome as those two checks,
+    * which is why it shares their InvalidCall result (CreateOp then restores the pre-bump world, pushes 0, keeps the
+    * address cold, and charges only the CREATE base cost).
+    *
+    * Unconditional, as in go-ethereum, core-geth and Besu: no fork gate. `context.world` already carries the creator's
+    * bumped nonce (CreateOp.exec and the tx-level upfront step both increment before calling create), so overflow shows
+    * up as a bumped nonce above 2^64 - 1. At tx level it cannot: StdSignedTransactionValidator rejects tx nonces >=
+    * 2^64 - 1, so the bumped sender nonce is at most 2^64 - 1.
+    */
+  private def creatorNonceOverflowed(context: PC): Boolean =
+    context.world.getAccount(context.callerAddr).exists(_.nonce.toBigInt > CreateOp.MaxNonce)
+
   private def invalidCallResult(
       context: PC,
       accessedAddresses: Set[Address],
@@ -275,7 +362,13 @@ class VM[W <: WorldStateProxy[W, S], S <: Storage[S]](
       0,
       Some(InvalidCall),
       accessedAddresses,
-      accessedStorageKeys
+      accessedStorageKeys,
+      // EIP-8037: an operation that is unsuccessful BEFORE entering the call frame charges nothing and
+      // returns the reservoir exactly as it was handed over. Returning the defaults (0) instead would
+      // silently destroy the parent's reservoir.
+      stateGasReservoir = context.stateGasReservoir,
+      evmStateGasUsed = context.evmStateGasUsed,
+      stateGasBaseline = context.stateGasBaselineOverride.getOrElse(context.stateGasReservoir)
     )
 
   private def exceedsMaxContractSize(context: PC, config: EvmConfig, contractCode: ByteString): Boolean =
@@ -293,32 +386,67 @@ class VM[W <: WorldStateProxy[W, S], S <: Storage[S]](
         if result.error.contains(RevertOccurs) then result else result.copy(gasRemaining = 0)
       else
         val contractCode = result.returnData
-        val codeDepositCost = config.calcCodeDepositCost(contractCode)
+
+        // EIP-8037 splits the code-deposit charge across both dimensions: the durable bytes are state gas
+        // at CPSB each, and only the hashing work — 6 per 32-byte word — stays in execution gas. The
+        // Amsterdam fee schedule sets G_codedeposit to 0, so the legacy 200/byte term vanishes here rather
+        // than being double-counted.
+        val codeDepositExecutionCost: BigInt =
+          if config.amsterdamEnabled then config.feeSchedule.G_sha3word * wordsForBytes(contractCode.size)
+          else config.calcCodeDepositCost(contractCode)
+        val codeDepositStateCost: BigInt =
+          if config.amsterdamEnabled then AmsterdamGas.Cpsb * contractCode.size else BigInt(0)
+        // State gas draws from the reservoir first and from gas_left only for the remainder.
+        val stateCostFromGasLeft: BigInt = (codeDepositStateCost - result.stateGasReservoir).max(0)
 
         val maxCodeSizeExceeded = exceedsMaxContractSize(context, config, contractCode)
-        val codeStoreOutOfGas = result.gasRemaining < codeDepositCost
+        val codeStoreOutOfGas = result.gasRemaining < codeDepositExecutionCost + stateCostFromGasLeft
         // EIP-3541: Reject new contracts starting with 0xEF byte
         val startsWithEF = config.eip3541Enabled && contractCode.nonEmpty && contractCode.head == 0xef.toByte
 
         if startsWithEF then
           // EIP-3541: Code starting with 0xEF byte causes exceptional abort
-          result.copy(error = Some(InvalidCode), gasRemaining = 0)
+          result.copy(error = Some(InvalidCode), gasRemaining = 0).withStateGasRestoredToBaseline
         else if maxCodeSizeExceeded || (codeStoreOutOfGas && config.exceptionalFailedCodeDeposit) then
-          // Code size too big or code storage causes out-of-gas with exceptionalFailedCodeDeposit enabled
-          result.copy(error = Some(OutOfGas), gasRemaining = 0)
+          // Code size too big or code storage causes out-of-gas with exceptionalFailedCodeDeposit enabled.
+          // The frame itself completed normally, so `ProgramState.toResult` did NOT roll its state gas
+          // back — this is the one exit where the rollback has to be applied after the fact.
+          result.copy(error = Some(OutOfGas), gasRemaining = 0).withStateGasRestoredToBaseline
         else if codeStoreOutOfGas && !config.exceptionalFailedCodeDeposit then
-          // Code storage causes out-of-gas with exceptionalFailedCodeDeposit disabled
-          result
+          // Code storage causes out-of-gas with exceptionalFailedCodeDeposit disabled. Pre-Homestead only,
+          // and pre-Amsterdam by construction: the frame keeps its gas and its state, and no code is stored.
+          //
+          // `error` MUST stay `None` here. It is the field every consensus consumer keys on:
+          //   - `CreateOp` (OpCode.scala) dispatches the CREATE result on `error` alone — a `Some` makes it
+          //     push 0 instead of the new address and revert the child frame's world to the post-endowment
+          //     snapshot, discarding every SSTORE/log the init code made.
+          //   - `BlockPreparator.calcTotalGasToRefund` dispatches on `error.map(_.useWholeGas)` — a `Some`
+          //     drops the accumulated gas-refund counter.
+          // go-ethereum reaches the same end state by a different route: `core/vm/evm.go create()` does set
+          // `err = ErrCodeStoreOutOfGas` unconditionally, but `core/vm/instructions.go opCreate` then throws
+          // it away — "if the ruleset is frontier we must ignore this error and pretend the operation was
+          // successful" — so it never reaches the caller's stack value, the child's state, or the top-level
+          // `vmerr`. Setting `error` here and relying on downstream consumers to un-set it is the shape that
+          // produced a silent ETC consensus divergence on blocks 0-1,149,999 (reverted; see git history).
+          //
+          // `codeDepositShortfall` carries the fact to gas ESTIMATION only. No consensus path reads it.
+          result.copy(codeDepositShortfall = true)
         else
           // Code storage succeeded
           result.copy(
-            gasRemaining = result.gasRemaining - codeDepositCost,
+            gasRemaining = result.gasRemaining - codeDepositExecutionCost - stateCostFromGasLeft,
+            stateGasReservoir = result.stateGasReservoir - (codeDepositStateCost - stateCostFromGasLeft),
+            evmStateGasUsed = result.evmStateGasUsed + codeDepositStateCost,
+            stateGasFromGasLeft = result.stateGasFromGasLeft + stateCostFromGasLeft,
             world = result.world.saveCode(address, result.returnData)
           )
 
     if tracing then
       val contractCodeSize = result.returnData.size
-      val codeDepositCost = config.calcCodeDepositCost(result.returnData)
+      val codeDepositCost =
+        if config.amsterdamEnabled then
+          config.feeSchedule.G_sha3word * wordsForBytes(contractCodeSize) + AmsterdamGas.Cpsb * contractCodeSize
+        else config.calcCodeDepositCost(result.returnData)
       val maxCodeSizeExceeded = exceedsMaxContractSize(context, config, result.returnData)
       val codeStoreOutOfGas = result.gasRemaining < codeDepositCost
       log.info(

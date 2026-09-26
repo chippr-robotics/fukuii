@@ -27,9 +27,16 @@ class ForkIdTagSpec extends AnyWordSpec with Matchers:
   private val dummySig = Signature(BitVector.empty)
 
   private def makeTag(head: BigInt, conf: com.chipprbots.ethereum.utils.BlockchainConfig = etcConf): ForkIdTag =
-    new ForkIdTag(() => etcGenesis, conf, () => head)
+    new ForkIdTag(() => etcGenesis, () => 0L, conf, () => head)
 
-  private def enrWith(forkId: ForkId): EthereumNodeRecord =
+  /** An ENR whose `eth` entry is in the standard form every other client writes: `[[fork-hash, fork-next], ...rest]`.
+    * Built by hand, not with ForkIdTag.encodeEthEntry, so the filter tests do not just agree with our own encoder.
+    */
+  private def enrWith(forkId: ForkId, rest: RLPEncodeable*): EthereumNodeRecord =
+    EthereumNodeRecord(dummySig, 0L, ethKey -> ByteVector(encode(RLPList((forkId.toRLPEncodable +: rest)*))))
+
+  /** The bare `[fork-hash, fork-next]` fukuii wrote before the entry was fixed. */
+  private def enrWithLegacyEntry(forkId: ForkId): EthereumNodeRecord =
     EthereumNodeRecord(dummySig, 0L, ethKey -> ByteVector(encode(forkId.toRLPEncodable)))
 
   private val enrWithoutEth: EthereumNodeRecord =
@@ -94,5 +101,38 @@ class ForkIdTagSpec extends AnyWordSpec with Matchers:
       val badBytes = ByteVector(0xff.toByte, 0xfe.toByte, 0x00.toByte)
       val enr = EthereumNodeRecord(dummySig, 0L, ethKey -> badBytes)
       makeTag(20000000).toFilter(enr) shouldBe a[Left[?, ?]]
+    }
+
+    "ignore fields after the fork ID, as go-ethereum's `Rest` tail allows" in {
+      val spiralForkId = ForkId(0xbe46d57cL, None)
+      val extra = RLPValue(Array[Byte](1, 2, 3))
+      makeTag(20000000).toFilter(enrWith(spiralForkId, extra)) shouldBe Right(())
+    }
+
+    "still read the bare fork ID older fukuii nodes wrote" in {
+      val spiralForkId = ForkId(0xbe46d57cL, None)
+      makeTag(20000000).toFilter(enrWithLegacyEntry(spiralForkId)) shouldBe Right(())
+      val ethPetersburg = ForkId(0x668db0afL, None)
+      makeTag(20000000).toFilter(enrWithLegacyEntry(ethPetersburg)) shouldBe a[Left[?, ?]]
+    }
+  }
+
+  "ForkIdTag.toAttr" must {
+
+    "write the eth entry as [[fork-hash, fork-next]], the form go-ethereum's node filter loads" in {
+      // Derived from the RLP rules, independently of our encoder: fork-hash is a 4-byte string
+      // (84 fc64ec04), fork-next 1150000 = 0x118c30 is a 3-byte string (83 118c30), their list
+      // has 9 bytes of payload (c9 ...), and the entry wraps that in a second list (ca ...).
+      ForkIdTag.encodeEthEntry(ForkId(0xfc64ec04L, Some(1150000))).toHex shouldBe "cac984fc64ec0483118c30"
+    }
+
+    "advertise a record whose own filter reads it back" in {
+      val tag = makeTag(20000000)
+      val (key, value) = tag.toAttr.get
+      key shouldBe ethKey
+      rawDecode(value.toArray) match
+        case RLPList(_: RLPList) => ()
+        case other               => fail(s"eth entry is not [[fork-hash, fork-next]]: $other")
+      tag.toFilter(EthereumNodeRecord(dummySig, 0L, key -> value)) shouldBe Right(())
     }
   }

@@ -169,7 +169,6 @@ schedules.
 [![Hive · devp2p](https://github.com/chippr-robotics/fukuii/actions/workflows/hive-devp2p.yml/badge.svg)](https://github.com/chippr-robotics/fukuii/actions/workflows/hive-devp2p.yml)
 [![Hive · sync](https://github.com/chippr-robotics/fukuii/actions/workflows/hive-sync.yml/badge.svg)](https://github.com/chippr-robotics/fukuii/actions/workflows/hive-sync.yml)
 [![Hive · consensus](https://github.com/chippr-robotics/fukuii/actions/workflows/hive-consensus.yml/badge.svg)](https://github.com/chippr-robotics/fukuii/actions/workflows/hive-consensus.yml)
-[![Hive · pyspec](https://github.com/chippr-robotics/fukuii/actions/workflows/hive-pyspec.yml/badge.svg)](https://github.com/chippr-robotics/fukuii/actions/workflows/hive-pyspec.yml)
 [![Hive · engine](https://github.com/chippr-robotics/fukuii/actions/workflows/hive-engine.yml/badge.svg)](https://github.com/chippr-robotics/fukuii/actions/workflows/hive-engine.yml)
 [![Hive · consume-engine](https://github.com/chippr-robotics/fukuii/actions/workflows/hive-consume-engine.yml/badge.svg)](https://github.com/chippr-robotics/fukuii/actions/workflows/hive-consume-engine.yml)
 [![Hive · consume-rlp](https://github.com/chippr-robotics/fukuii/actions/workflows/hive-consume-rlp.yml/badge.svg)](https://github.com/chippr-robotics/fukuii/actions/workflows/hive-consume-rlp.yml)
@@ -180,13 +179,11 @@ schedules.
 |---|---|
 | `smoke-genesis` | Genesis block consistency |
 | `smoke-network` | Basic network connectivity |
-| `rpc` | JSON-RPC API correctness |
 | `rpc-compat` | Cross-client RPC compatibility |
 | `graphql` | GraphQL API |
 | `devp2p` | Wire protocol handshake and framing |
 | `sync` | Chain sync correctness |
 | `consensus` | Ethereum consensus test vectors |
-| `pyspec` | Python-based spec conformance |
 | `engine` | Engine API request/response |
 | `consume-engine` | Engine payload consumption |
 | `consume-rlp` | RLP encoding correctness |

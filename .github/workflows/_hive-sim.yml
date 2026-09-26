@@ -30,8 +30,19 @@ on:
         required: false
         type: string
         default: ''
+      sim_skip:
+        description: |
+          Optional `|`-separated list of exact test names the simulator must NOT run. It is for a
+          test that cannot fail cleanly, e.g. one whose tool waits forever, where skipping it is the
+          only way the rest of the suite runs at all. scripts/ci/hive_skip_regex.py turns the list
+          into a test regex matching every other name, so tests added upstream still run.
+          `sim_limit` must then name suites only (no `/`). Every name must be a declared waiver
+          in .github/gates.yml, checked by Gate Integrity (C7) exactly like a gate_exclude branch.
+        required: false
+        type: string
+        default: ''
       sim_buildarg:
-        description: 'Optional value for --sim.buildarg (e.g. disable_strict_exception_matching=fukuii)'
+        description: 'Optional --sim.buildarg values, one ARG=VALUE per line (e.g. disable_strict_exception_matching=fukuii)'
         required: false
         type: string
         default: ''
@@ -40,6 +51,22 @@ on:
         required: false
         type: string
         default: '40m'
+      timeout_minutes:
+        description: |
+          Job ceiling. 105 covers an 80m --sim.timelimit plus image builds and artifact upload.
+          The sharded full pass (hive-full.yml) runs 300m shards and raises this to 350, under
+          GitHub's 360-minute cap for hosted jobs. A job killed at the ceiling loses its artifacts.
+        required: false
+        type: number
+        default: 105
+      checktimelimit:
+        description: |
+          Value for --client.checktimelimit: how long hive waits for a client to open its RPC
+          port. For the consensus simulator that window includes importing the test's chain,
+          so it bounds the heaviest single vector, not only JVM startup.
+        required: false
+        type: string
+        default: '120s'
       parallelism:
         description: 'Value for --sim.parallelism'
         required: false
@@ -126,7 +153,10 @@ jobs:
   hive:
     name: ${{ inputs.label }}
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    # Default 105 (see the timeout_minutes input): an 80m --sim.timelimit plus image builds
+    # (~3-5m) and artifact upload must not push the job past its ceiling. A job killed at the
+    # ceiling loses its artifacts entirely, which is strictly worse than any test result.
+    timeout-minutes: ${{ inputs.timeout_minutes }}
 
     outputs:
       passed: ${{ steps.tab.outputs.passed }}
@@ -225,11 +255,10 @@ jobs:
       - name: Sync fukuii hive adapter
         run: |
           mkdir -p external/hive/clients/fukuii
-          cp -v "$GITHUB_WORKSPACE/hive/fukuii/Dockerfile" external/hive/clients/fukuii/Dockerfile
-          cp -v "$GITHUB_WORKSPACE/hive/fukuii/fukuii.sh" external/hive/clients/fukuii/fukuii.sh
-          cp -v "$GITHUB_WORKSPACE/hive/fukuii/mapper.jq" external/hive/clients/fukuii/mapper.jq
-          cp -v "$GITHUB_WORKSPACE/hive/fukuii/enode.sh" external/hive/clients/fukuii/enode.sh 2>/dev/null || true
-          cp -v "$GITHUB_WORKSPACE/hive/fukuii/hive.yaml" external/hive/clients/fukuii/hive.yaml 2>/dev/null || true
+          # Copy the WHOLE adapter directory: it is hive's docker build context, and the
+          # Dockerfile COPYs files a per-name list would silently miss (aot-train.sh broke
+          # every suite on 0146454e9 exactly that way).
+          cp -v "$GITHUB_WORKSPACE"/hive/fukuii/* external/hive/clients/fukuii/
           cp target/scala-3.*/fukuii-assembly-*.jar external/hive/clients/fukuii/
 
       - name: Set up Go
@@ -256,9 +285,11 @@ jobs:
         env:
           SIM: ${{ inputs.sim }}
           SIM_LIMIT: ${{ inputs.sim_limit }}
+          SIM_SKIP: ${{ inputs.sim_skip }}
           SIM_BUILDARG: ${{ inputs.sim_buildarg }}
           SIM_TIMELIMIT: ${{ inputs.sim_timelimit }}
           PARALLELISM: ${{ inputs.parallelism }}
+          CHECKTIMELIMIT: ${{ inputs.checktimelimit }}
           CLIENTS: ${{ inputs.clients }}
         # Do not inherit GitHub's default `-e -o pipefail` — hive returns
         # non-zero for a wide range of per-sim outcomes (test failures,
@@ -278,16 +309,72 @@ jobs:
             # sync target, tipping slow fukuii-sink sync tests over the deadline.
             # Benign for native clients (geth/nethermind respond well within 60s);
             # the timeout only matters when a client is genuinely slow to get ready.
-            --client.checktimelimit=120s
+            # Overridable per caller (checktimelimit input); the sharded full pass raises it.
+            --client.checktimelimit="$CHECKTIMELIMIT"
             --loglevel 3
           )
+          if [ -n "$SIM_SKIP" ]; then
+            # Declared waivers that cannot run (see the sim_skip input): select every test but these.
+            case "$SIM_LIMIT" in
+              */*) echo "::error::sim_skip needs a suite-only sim_limit, got '${SIM_LIMIT}'"; exit 1 ;;
+            esac
+            SIM_LIMIT="${SIM_LIMIT}/$(python3 "$GITHUB_WORKSPACE/scripts/ci/hive_skip_regex.py" "$SIM_SKIP")" || exit 1
+            echo "Not running (declared waivers): ${SIM_SKIP}"
+          fi
           [ -n "$SIM_LIMIT" ]   && args+=(--sim.limit   "$SIM_LIMIT")
-          [ -n "$SIM_BUILDARG" ] && args+=(--sim.buildarg "$SIM_BUILDARG")
+          # One build arg per line; hive accepts --sim.buildarg repeatedly (hive.go:94).
+          while IFS= read -r ba; do
+            [ -n "$ba" ] && args+=(--sim.buildarg "$ba")
+          done <<< "$SIM_BUILDARG"
 
-          ./hive "${args[@]}" 2>&1 | tee hive-run.log
-          hive_exit=${PIPESTATUS[0]}
+          run_hive() {
+            ./hive "${args[@]}" 2>&1 | tee hive-run.log
+            hive_exit=${PIPESTATUS[0]}
+            echo "Hive exited with code ${hive_exit}"
+          }
+          has_results() {
+            local jf
+            for jf in workspace/logs/*.json; do
+              [ -f "$jf" ] || continue
+              jq -e '(.testCases // {}) | length > 0' "$jf" >/dev/null 2>&1 && return 0
+            done
+            return 1
+          }
+          # A failure of the harness itself, before any client ran a test. The full pass of
+          # 2026-09-24 lost two shards this way: consume's image build failed fetching its
+          # fixtures ("consume cache ... returned a non-zero code"), and a consensus simulator
+          # started before hive's proxy was listening ("dial tcp ...:8081: connection refused").
+          # Neither says anything about fukuii. A client that fails to start leaves neither
+          # signature, so it is never retried.
+          harness_failure() {
+            local sl
+            if grep -q "image build failed" hive-run.log; then
+              echo "the simulator image build failed"
+              return 0
+            fi
+            for sl in workspace/logs/*-simulator-*.log; do
+              [ -f "$sl" ] || continue
+              if grep -qE 'dial tcp [0-9.]+:8081: connect: connection refused' "$sl"; then
+                echo "the simulator could not reach hive's proxy"
+                return 0
+              fi
+            done
+            return 1
+          }
+
+          run_hive
+          # One retry, and only for zero results plus a harness signature: an absent result
+          # still fails the gate after the retry. The first attempt's logs stay in the artifact.
+          if ! has_results && reason=$(harness_failure); then
+            echo "::warning::Hive produced no results because ${reason}; retrying once."
+            echo "retry_reason=${reason}" >> "$GITHUB_OUTPUT"
+            mkdir -p workspace/logs/attempt-1
+            find workspace/logs -maxdepth 1 -type f -exec mv {} workspace/logs/attempt-1/ \;
+            mv hive-run.log workspace/logs/attempt-1/hive-run.log
+            sleep 30
+            run_hive
+          fi
           echo "hive_exit=${hive_exit}" >> "$GITHUB_OUTPUT"
-          echo "Hive exited with code ${hive_exit}"
           exit 0
 
       - name: Tabulate results
@@ -305,8 +392,10 @@ jobs:
           SIM: ${{ inputs.sim }}
           THRESHOLD: ${{ inputs.pass_threshold }}
           HIVE_EXIT: ${{ steps.sim.outputs.hive_exit }}
+          RETRY_REASON: ${{ steps.sim.outputs.retry_reason }}
           GATE_PATTERN: ${{ inputs.gate_pattern }}
           GATE_EXCLUDE: ${{ inputs.gate_exclude }}
+          SIM_SKIP: ${{ inputs.sim_skip }}
         run: |
           set -uo pipefail
           shopt -s nullglob
@@ -414,6 +503,33 @@ jobs:
 
           total=$((passed + failed))
 
+          # Emit the counts THE MOMENT they are known, before any reporting.
+          #
+          # They used to be written ~60 lines further down, after the failing-name
+          # list and both histograms. Anything that went wrong in that reporting
+          # block — and this step runs under `set -u` — lost the counts entirely,
+          # and the gate then read empty outputs and declared "tabulation never
+          # ran / ZERO test results" for a run that had in fact produced results.
+          #
+          # That is not a cosmetic failure: it is indistinguishable, at the gate,
+          # from a simulator that genuinely produced nothing, so a complete engine
+          # run reports as a harness failure and the measurement is lost. Observed
+          # on engine twice, most recently run 35732925487, where the very same log
+          # carried a fully populated failure histogram — proof the loop had run —
+          # directly above "simulator produced ZERO test results".
+          #
+          # Reporting is best-effort; the counts are the product. Write the product
+          # first.
+          {
+            echo "passed=$passed"
+            echo "failed=$failed"
+            echo "total=$total"
+            echo "gate_passed=$gate_passed"
+            echo "gate_failed=$gate_failed"
+            echo "json_count=$json_count"
+          } >> "$GITHUB_OUTPUT"
+
+
           # Echo the failing test names to STDOUT, not only to the job summary.
           #
           # The summary is unreachable from the REST API, so a failure whose
@@ -442,26 +558,37 @@ jobs:
             # because the methods are wrong (#1407). That is the difference
             # between "136 bugs" and "a handful of causes", and it is visible
             # only once the names are bucketed.
-            echo "--- failing tests by prefix ---"
-            printf '%s' "$gate_failed_names" | sed '/^$/d' \
-              | sed -E 's#^([A-Za-z0-9]+)[_/].*#\1#; s#^([^ /]+)/.*#\1#' \
-              | sort | uniq -c | sort -rn | head -25
-            echo "--- end prefix histogram ---"
+            # Also tee the histograms to a file. The gate step (the LAST step
+            # in the job) re-prints it, because GitHub's job-log API returns a
+            # bounded window from the END of the log: anything printed here, in
+            # the middle, is unreachable via `get_job_logs` no matter how large
+            # a tail is requested. Triage kept hitting that wall (#1407) — the
+            # diagnosis was in the log and still could not be read.
+            : > /tmp/hive-histogram.txt
+            {
+                echo "--- failing tests by namespace ---"
+              printf '%s' "$gate_failed_names" | sed '/^$/d' \
+                | sed -E 's#^([A-Za-z0-9]+)[_/].*#\1#; s#^([^ /]+)/.*#\1#' \
+                | sort | uniq -c | sort -rn | head -25
+              echo "--- end namespace histogram ---"
+
+              # Second level: bucket by METHOD, not just namespace. The namespace
+              # rollup said "115 eth" for rpc-compat, which is a number, not a
+              # lead — `eth` spans dozens of unrelated methods. Bucketing on the
+              # part before the first `/` gives `eth_simulateV1`, `eth_getLogs`
+              # and so on, which is the unit a fix actually targets (#1407).
+              echo "--- failing tests by method (top 30) ---"
+              printf '%s' "$gate_failed_names" | sed '/^$/d' \
+                | sed -E 's#^([^/]+)/.*#\1#' \
+                | sort | uniq -c | sort -rn | head -30
+                echo "--- end method histogram ---"
+            } | tee /tmp/hive-histogram.txt
           fi
           if [ -n "$sim_log" ] && [ "$failed" -gt 0 ]; then
             echo "--- first 40 FAILED test lines ---"
             grep -E '(\] FAILED |FAILED tests/|--- FAIL:)' "$sim_log" | head -40 || true
             echo "--- end FAILED test lines ---"
           fi
-
-          {
-            echo "passed=$passed"
-            echo "failed=$failed"
-            echo "total=$total"
-            echo "gate_passed=$gate_passed"
-            echo "gate_failed=$gate_failed"
-            echo "json_count=$json_count"
-          } >> "$GITHUB_OUTPUT"
 
           if [ "$json_count" -gt 0 ]; then
             src="${json_count} JSON result(s)"
@@ -477,6 +604,14 @@ jobs:
             echo "| passed | failed | total | threshold | hive exit | source |"
             echo "|-------:|-------:|------:|----------:|----------:|:-------|"
             echo "| ${passed} | ${failed} | ${total} | ${THRESHOLD} | ${HIVE_EXIT:-?} | ${src} |"
+            if [ -n "${SIM_SKIP:-}" ]; then
+              echo
+              echo "Not run, as declared waivers in \`.github/gates.yml\`: \`${SIM_SKIP}\`"
+            fi
+            if [ -n "${RETRY_REASON:-}" ]; then
+              echo
+              echo "Retried once: the first attempt produced no results because ${RETRY_REASON}. Its logs are under \`attempt-1/\` in the artifact."
+            fi
             if [ -n "$GATE_PATTERN" ]; then
               echo
               echo "Gate (\`${GATE_PATTERN}\`-matching subset): **${gate_passed} passed, ${gate_failed} failed**"
@@ -659,6 +794,18 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
           if [ "$verdict" -ne 0 ]; then
+            # Re-print the histogram HERE, in the job's last step, so it lands
+            # inside the bounded window `get_job_logs` returns from the end of
+            # the log. Printed only in the tabulate step it is unreachable via
+            # the API — the diagnosis existed but could not be read (#1407).
+            if [ -s /tmp/hive-histogram.txt ]; then
+              echo
+              echo "===== failure breakdown (repeated here so it is reachable from the log tail) ====="
+              cat /tmp/hive-histogram.txt
+              echo "===== end failure breakdown ====="
+              echo
+            fi
+
             for r in "${reasons[@]}"; do
               echo "::error::Hive ${LABEL}: ${r}"
               echo "- :x: ${r}" >> "$GITHUB_STEP_SUMMARY"

@@ -158,11 +158,15 @@ gates:
       go-ethereum/nethermind) and as sync SERVER (go-ethereum/nethermind sync
       from fukuii). Gated on the `fukuii` subset only, so upstream
       geth<->nethermind failures do not pollute this signal.
-    waivers: [sync-server-geth-from-fukuii, sync-client-fukuii-from-nethermind]
     status_note: >-
-      The only suite with a real subset gate today. #1402's first required-slice
-      item. Both waivers below must be retired before promotion — the
-      sync-SERVER direction is precisely what #1402 says shipped red in v0.8.0.
+      #1402's first required-slice item. Both waivers are retired (#1407).
+      `sync go-ethereum from fukuii` passes since fukuii's ENR `eth` entry
+      became [[fork-hash, fork-next]] and the hive adapter advertises the
+      container address. `sync fukuii from nethermind` was an intermittent
+      fukuii-sink failure; it passes after the fix for the dropped-reply race
+      behind the same intermittent sink stall (3af08c103). Evidence: CI run
+      35997930212 on a78d2557d, 18/18; locally with all three clients, every
+      fukuii test green.
 
   - id: hive-smoke-genesis
     workflow: hive-smoke-genesis.yml
@@ -233,6 +237,23 @@ gates:
     min_tests: 20
     covers: EELS consume-engine — payload import via Engine API.
 
+  - id: hive-full
+    workflow: hive-full.yml
+    context: Hive · full pass
+    tier: informational
+    owner: realcodywburns
+    issue: 1402
+    promote_by: 2027-03-31
+    min_tests: 20
+    covers: >-
+      consume-engine, consume-rlp and consensus run TO COMPLETION, sharded per
+      .github/hive-shards.json (an exact partition, proven by scripts/hive/gen-shards.py).
+      The release-PR hive-consume-*/hive-consensus workflows only sample these suites.
+    status_note: >-
+      Release gate: runs on a `hive-full`-labelled PR to main, or workflow_dispatch —
+      ~33 jobs x ~3.5 h per pass, so never per push or nightly. Verdict comes from the aggregate job, never the workflow
+      conclusion.
+
   - id: hive-rpc-compat
     workflow: hive-rpc-compat.yml
     context: Hive · rpc-compat
@@ -252,6 +273,7 @@ gates:
     promote_by: 2027-03-31
     min_tests: 10
     covers: GraphQL endpoint conformance.
+    waivers: [graphql-gasprice-stale-fixture]
 
   - id: hive-devp2p
     workflow: hive-devp2p.yml
@@ -262,16 +284,11 @@ gates:
     promote_by: 2027-03-31
     min_tests: 10
     covers: devp2p discovery and RLPx wire conformance.
-
-  - id: hive-pyspec
-    workflow: hive-pyspec.yml
-    context: Hive · pyspec
-    tier: informational
-    owner: realcodywburns
-    issue: 1402
-    promote_by: 2027-03-31
-    min_tests: 50
-    covers: execution-spec-tests via hive's pyspec simulator.
+    status_note: >-
+      Two jobs since 2026-09-24. One runs discv4, discv5, snap and snap2 in full; the
+      other runs eth without GetCells and BlobTxWithInvalidCells, which are skipped via
+      sim_skip and waived until #1409 because they hang the suite. Local hive on
+      4dc5b77af: discv4 16/16, discv5 11/11, snap 6/6, snap2 4/4, eth 22/24.
 
   - id: ethereum-tests-nightly
     workflow: ethereum-tests-nightly.yml
@@ -325,7 +342,7 @@ first_required_slice:
   members:
     - gate: hive-sync
       item: geth<->fukuii sync, BOTH directions
-      blocked_by: [sync-server-geth-from-fukuii, sync-client-fukuii-from-nethermind]
+      blocked_by: []
     - gate: hive-engine
       item: invalid-payload rejection
       blocked_by: []
@@ -339,30 +356,85 @@ first_required_slice:
     than by convention.
 
 # ---------------------------------------------------------------------------
-# Waivers — every gate_exclude branch in every workflow MUST appear here.
-# Missing field or past expiry => Gate Integrity fails. No bypass exists.
+# REMOVED GATES — kept here so a deletion is auditable, not silent.
+#
+# hive-pyspec (removed 2026-09-20, #1407)
+#   `ethereum/pyspec` NO LONGER EXISTS in ethereum/hive. Verified against hive
+#   master: simulators/ethereum/ contains consensus, eels, engine, graphql,
+#   rpc-compat and sync — no pyspec. The workflow pointed at a simulator that
+#   had been deleted upstream, which is why it produced ZERO results with hive
+#   exit 1 on 100% of observed runs, while genuinely contended suites
+#   (consume-rlp) failed only intermittently. The difference in pattern was
+#   the clue.
+#
+#   Its coverage is not lost. pyspec ran execution-spec-tests fixtures; that
+#   corpus is now served by simulators/ethereum/eels/*, whose Dockerfiles
+#   clone ethereum/execution-specs directly. We already run two of them —
+#   `consume-rlp` (1808 tests) and `consume-engine` (1499) — so the fixtures
+#   are still exercised, by more tests than pyspec ever reported here.
+#
+#   This is supersession, not suppression. Constitution V forbids deleting a
+#   failing test to get green; it does not require keeping a reference to a
+#   simulator that upstream removed. Nothing that could pass was switched off.
+# ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+# Waivers — every gate_exclude branch and every sim_skip name in every workflow
+# MUST appear here. Missing field or past expiry => Gate Integrity fails. No
+# bypass exists.
 # ---------------------------------------------------------------------------
 waivers:
 
-  - id: sync-server-geth-from-fukuii
-    gate: hive-sync
-    pattern: sync go-ethereum from fukuii
+  - id: graphql-gasprice-stale-fixture
+    gate: hive-graphql
+    pattern: 07_eth_gasPrice
     owner: realcodywburns
-    issue: 1402
+    issue: 1407
     reason: >-
-      fukuii as SNAP/fast sync SERVER does not yet serve go-ethereum to
-      completion. This is the exact failure #1402 names as having shipped
-      green in v0.8.0. Waived with a deadline so the gate can be required
-      NOW for the directions that do work, rather than requiring nothing.
+      Stale upstream fixture, not a fukuii defect. hive's
+      simulators/ethereum/graphql/testcases/07_eth_gasPrice.json accepts only
+      gasPrice 0x10 or 0x1, pre-London fixed prices, on a chain whose head base fee
+      is ~0x3437004a. No client that prices from the base fee can return either
+      value.
+
+      Measured locally 2026-09-23 on hive master 43ea47b with both clients in one run
+      (scripts/hive/local.sh ethereum/graphql --clients fukuii,go-ethereum):
+
+          FAIL 07_eth_gasPrice (fukuii)       got 0x3437004b  (baseFee + 1 wei tip)
+          FAIL 07_eth_gasPrice (go-ethereum)  got 0x3446428a  (geth 1.17.7-unstable be58ada)
+
+      The reference client fails the same test, so there is no conformant answer to
+      match. fukuii passes every other graphql test (51/52). Lift this waiver when
+      upstream updates the fixture.
     expires: 2026-12-31
 
-  - id: sync-client-fukuii-from-nethermind
-    gate: hive-sync
-    pattern: sync fukuii from nethermind
+  - id: devp2p-getcells-needs-sparse-blobpool
+    gate: hive-devp2p
+    pattern: GetCells
     owner: realcodywburns
-    issue: 1402
+    issue: 1409
     reason: >-
-      fukuii syncing FROM nethermind is intermittently red; root cause not yet
-      isolated (suspected snap/2 range-response framing). Geth-as-source is
-      gated and green, so the client direction retains real coverage.
+      Needs the EIP-8070 sparse blobpool, #1409 scope, which starts once hive is
+      green. The test announces blob txs under a custody mask and waits for fukuii
+      to fetch cells with GetCells. fukuii never sends one, and go-ethereum's devp2p
+      tool waits without a read timeout (readAnyFrom), so the test does not fail:
+      it hangs the eth suite until the time limit. That is why hive-devp2p.yml skips
+      it (sim_skip) rather than excluding its result.
+
+      Measured locally 2026-09-24 on hive master 43ea47b: GetCells never returned,
+      and every eth test that does not need cells passes (22/24 on 4dc5b77af). Lift
+      with #1409.
+    expires: 2026-12-31
+
+  - id: devp2p-invalid-cells-needs-sparse-blobpool
+    gate: hive-devp2p
+    pattern: BlobTxWithInvalidCells
+    owner: realcodywburns
+    issue: 1409
+    reason: >-
+      Needs the EIP-8070 sparse blobpool, #1409 scope. The test serves a blob tx,
+      then waits for a GetCells request so it can answer with corrupt cells and
+      expect a disconnect. fukuii never sends GetCells, and the tool waits without a
+      read timeout (readAnyFrom), so this test also hangs the eth suite; skipped via
+      sim_skip for the same reason as GetCells. Lift with #1409.
     expires: 2026-12-31

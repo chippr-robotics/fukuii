@@ -220,7 +220,9 @@ class BestNetworkTipTrackingSpec extends AnyFlatSpec with Matchers:
           com.chipprbots.ethereum.network.p2p.messages.SNAP.Codes.GetAccountRangeCode,
           com.chipprbots.ethereum.network.p2p.messages.SNAP.Codes.GetStorageRangesCode,
           com.chipprbots.ethereum.network.p2p.messages.SNAP.Codes.GetTrieNodesCode,
-          com.chipprbots.ethereum.network.p2p.messages.SNAP.Codes.GetByteCodesCode
+          com.chipprbots.ethereum.network.p2p.messages.SNAP.Codes.GetByteCodesCode,
+          // snap/2 (EIP-8189): served when negotiated; never arrives from a snap/1 peer.
+          com.chipprbots.ethereum.network.p2p.messages.SNAP.Codes.GetAccessListsCode
         ),
         PeerSelector.AllPeers
       )

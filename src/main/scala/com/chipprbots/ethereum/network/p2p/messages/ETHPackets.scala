@@ -269,11 +269,18 @@ object ETHPackets:
               case RLPList(items*) => items.length; case _ => -1
             throw new RuntimeException(s"Cannot decode Status69 (got $fieldCount fields): $other")
 
-  // ── Status70 — ETH70 Status message ─────────────────────────────────────────
+  // ── Status70 — ETH70 Status message (also serves ETH71 and ETH72) ────────────
   //
   // ETH70 does not change the Status wire format vs ETH69 (still 7 fields, no TD).
   // A separate type keeps ETH70's decoder self-contained: if ETH69 is deprecated and
   // Status69 is removed, ETH70 continues to compile without modification.
+  //
+  // ETH71 (EIP-8159) and ETH72 (EIP-8070) do not touch Status either — go-ethereum defines
+  // exactly ONE `StatusPacket` struct for the whole 69-72 range (eth/protocols/eth/protocol.go;
+  // `Handshake()` in handshake.go sends it unconditionally on every version). ETH71MessageDecoder
+  // and ETH72MessageDecoder therefore reuse this same Status70 type rather than adding
+  // Status71/Status72 duplicates — matching the reference means matching ITS one-type choice, not
+  // multiplying wrapper types for versions that carry no wire difference.
   //
   // Wire: [protocolVersion, networkId, genesisHash, forkId, earliestBlock, latestBlock, latestBlockHash]
   // Reference: EIP-7706 — Status format unchanged from EIP-7642.
@@ -390,6 +397,74 @@ object ETHPackets:
   // Source: ETHPackets.SignedTransactions (full copy, standalone)
 
   object SignedTransactions:
+
+    /** Legacy EIP-4844 blob-tx network wrapper: `[tx_payload, blobs, commitments, proofs]` — one KZG proof per blob. */
+    private[messages] val BlobTxWrapperSizeEip4844: Int = 4
+
+    /** EIP-7594 (PeerDAS, Osaka) blob-tx network wrapper: `[tx_payload, wrapper_version, blobs, commitments,
+      * cell_proofs]` — an explicit version byte plus CELLS_PER_EXT_BLOB (128) cell proofs per blob instead of one proof
+      * per blob.
+      */
+    private[messages] val BlobTxWrapperSizeEip7594: Int = 5
+
+    /** The only wrapper version EIP-7594 defines. */
+    private[messages] val BlobTxWrapperVersionEip7594: BigInt = BigInt(1)
+
+    private[messages] def isBlobTxNetworkWrapperSize(size: Int): Boolean =
+      size == BlobTxWrapperSizeEip4844 || size == BlobTxWrapperSizeEip7594
+
+    /** Validate the EIP-7594 wrapper version byte. Fails loudly on anything other than `0x01`: an unknown wrapper
+      * version means the blob/commitment/proof layout that follows is not the one we are about to parse, and accepting
+      * it would let us re-broadcast a sidecar we never actually validated.
+      */
+    private[messages] def validateBlobTxWrapperVersion(versionField: RLPEncodeable): Unit =
+      val version = versionField match
+        case RLPValue(bs) => ByteUtils.bytesToBigInt(bs)
+        case other =>
+          throw new RuntimeException(
+            s"Blob tx network wrapper version must be a scalar, got ${other.getClass.getSimpleName}"
+          )
+      if version != BlobTxWrapperVersionEip7594 then
+        throw new RuntimeException(
+          s"Unsupported blob tx network wrapper version $version (only $BlobTxWrapperVersionEip7594 is defined by EIP-7594)"
+        )
+
+    /** EIP-4844: a sidecar belongs to its tx only if commitment i hashes to the tx's versioned hash i —
+      * `kzg_to_versioned_hash(c) = 0x01 || sha256(c)[1:]` — with one commitment per hash. A sidecar that fails this is
+      * not the tx's sidecar at all, however well-formed, so the peer that sent it is faulty. This needs no KZG
+      * arithmetic, and it holds whether or not the blobs themselves travel with the tx.
+      */
+    private[messages] def validateBlobCommitments(stx: SignedTransaction, commitmentsField: RLPEncodeable): Unit =
+      val versionedHashes = stx.tx match
+        case blobTx: BlobTransaction => blobTx.blobVersionedHashes.map(_.toArray)
+        case other => throw new RuntimeException(s"Blob tx sidecar on a ${other.getClass.getSimpleName}")
+      val commitments = commitmentsField match
+        case RLPList(items*) =>
+          items.map {
+            case RLPValue(commitment) => commitment
+            case other => throw new RuntimeException(s"Blob tx sidecar commitment is not a byte string: $other")
+          }
+        case other => throw new RuntimeException(s"Blob tx sidecar commitments are not a list: $other")
+      if commitments.size != versionedHashes.size then
+        throw new RuntimeException(
+          s"Blob tx sidecar has ${commitments.size} commitments for ${versionedHashes.size} versioned hashes"
+        )
+      commitments.zip(versionedHashes).zipWithIndex.foreach { case ((commitment, versionedHash), i) =>
+        val hash = java.security.MessageDigest.getInstance("SHA-256").digest(commitment)
+        hash(0) = 0x01 // VERSIONED_HASH_VERSION_KZG
+        if !java.util.Arrays.equals(hash, versionedHash) then
+          throw new RuntimeException(s"Blob tx sidecar commitment $i does not match versioned hash $i")
+      }
+
+    /** A transaction as one item of a transaction list (`Transactions`, `PooledTransactions`). EIP-2718: a typed tx is
+      * a single RLP byte string holding `type || rlp(payload)`. A bare `PrefixedRLPEncodable` serializes as that
+      * concatenation with no string header — fukuii's own decoder tolerates it, other clients reject it. BlockBody and
+      * Block apply the same framing.
+      */
+    private[messages] def txListItem(stx: SignedTransaction): RLPEncodeable =
+      stx.toRLPEncodable match
+        case typed: PrefixedRLPEncodable => RLPValue(com.chipprbots.ethereum.rlp.encode(typed))
+        case legacy                      => legacy
 
     implicit class SignedTransactionEnc(val signedTx: SignedTransaction) extends RLPSerializable:
       override def toRLPEncodable: RLPEncodeable =
@@ -701,10 +776,16 @@ object ETHPackets:
           case Transaction.Type04 => PrefixedRLPEncodable(Transaction.Type04, rawDecode(bytes.tail))
           case Transaction.Type03 =>
             rawDecode(bytes.tail) match
-              case outer: RLPList if outer.items.size == 4 =>
+              case outer: RLPList if isBlobTxNetworkWrapperSize(outer.items.size) =>
                 outer.items.head match
-                  case inner: RLPList => PrefixedRLPEncodable(Transaction.Type03, inner)
-                  case _              => PrefixedRLPEncodable(Transaction.Type03, outer)
+                  case inner: RLPList =>
+                    // Mirrors toSignedTransactionWithSidecar's wrapper handling: a 5-element
+                    // wrapper is EIP-7594 and carries an explicit version byte at index 1 that
+                    // must be validated, not silently accepted (same reasoning, same helper --
+                    // see toSignedTransactionWithSidecar below for the full rationale).
+                    if outer.items.size == BlobTxWrapperSizeEip7594 then validateBlobTxWrapperVersion(outer.items(1))
+                    PrefixedRLPEncodable(Transaction.Type03, inner)
+                  case _ => PrefixedRLPEncodable(Transaction.Type03, outer)
               case other => PrefixedRLPEncodable(Transaction.Type03, other)
           case Transaction.Type02 => PrefixedRLPEncodable(Transaction.Type02, rawDecode(bytes.tail))
           case Transaction.Type01 => PrefixedRLPEncodable(Transaction.Type01, rawDecode(bytes.tail))
@@ -720,9 +801,14 @@ object ETHPackets:
           case Transaction.Type03 =>
             val decoded = rawDecode(bytes.tail)
             decoded match
-              case outer: RLPList if outer.items.size == 4 =>
+              case outer: RLPList if isBlobTxNetworkWrapperSize(outer.items.size) =>
                 outer.items.head match
                   case inner: RLPList =>
+                    // A 5-element wrapper is EIP-7594 and carries an explicit version byte at
+                    // index 1. Validate it: silently accepting an unknown wrapper version would
+                    // admit a sidecar we cannot interpret (wrong proof count, wrong proof
+                    // semantics) and propagate it to peers as if it were well-formed.
+                    if outer.items.size == BlobTxWrapperSizeEip7594 then validateBlobTxWrapperVersion(outer.items(1))
                     val stx = PrefixedRLPEncodable(Transaction.Type03, inner).toSignedTransaction
                     (stx, Some(bytes))
                   case _ =>
@@ -736,7 +822,7 @@ object ETHPackets:
         with RLPSerializable:
       override def code: Int = Codes.SignedTransactionsCode
       override def toRLPEncodable: RLPEncodeable =
-        RLPList(msg.txs.map(_.toRLPEncodable)*)
+        RLPList(msg.txs.map(txListItem)*)
 
     extension (bytes: Array[Byte])
       def toSignedTransactions: SignedTransactions = rawDecode(bytes) match
@@ -1014,8 +1100,9 @@ object ETHPackets:
       override def toRLPEncodable: RLPEncodeable =
         val txItems: Seq[RLPEncodeable] = msg.txs.map { stx =>
           msg.blobTxRawBytes.get(stx.hash.value) match
-            case Some(rawBytes) => PrefixedRLPEncodable(rawBytes(0), rawDecode(rawBytes.toArray.drop(1)))
-            case None           => stx.toRLPEncodable
+            // Already the network form, 0x03 || rlp([tx, blobs, commitments, proofs]); served verbatim.
+            case Some(networkForm) => RLPValue(networkForm.toArray)
+            case None              => txListItem(stx)
         }
         RLPList(RLPValue(ByteUtils.bigIntToUnsignedByteArray(msg.requestId)), RLPList(txItems*))
 
@@ -1025,26 +1112,44 @@ object ETHPackets:
           import SignedTransactions.*
           import TypedTransaction.*
           val typedItems = rlpList.items.toTypedRLPEncodables
+
+          // A Type-03 (blob) tx item is network-wrapped -- sidecar present -- when its RLP list is
+          // exactly the EIP-4844 (4: [tx, blobs, commitments, proofs]) or EIP-7594 (5: [tx,
+          // version, blobs, commitments, cell_proofs]) shape AND the first element is itself a
+          // list (the tx body), not a scalar. Any other shape -- in practice the bare ~14-field tx
+          // body with no wrapper at all -- means the sidecar is genuinely ABSENT, which is a real
+          // protocol violation distinct from "sidecar present, just in the newer wrapper". Both
+          // passes below must agree on this predicate, which is why it is a single named check
+          // instead of two copies: two copies is exactly how this file ended up accepting only
+          // size==4 in one place while EIP-7594 sidecars are size==5.
+          def isWrappedBlobBody(inner: RLPList): Boolean =
+            isBlobTxNetworkWrapperSize(inner.items.size) && (inner.items.head match
+              case _: RLPList => true
+              case _          => false
+            )
+
           typedItems.foreach {
             case PrefixedRLPEncodable(Transaction.Type03, inner: RLPList) =>
-              val isNetworkWrapped = inner.items.size == 4 && (inner.items.head match
-                case _: RLPList => true
-                case _          => false
-              )
-              if !isNetworkWrapped then
+              if !isWrappedBlobBody(inner) then
                 throw new RuntimeException("Blob tx in PooledTransactions missing sidecar (network wrapping required)")
+              else if inner.items.size == BlobTxWrapperSizeEip7594 then
+                // Present, but in the newer wrapper -- validate the version rather than silently
+                // trusting a blob/commitment/proof layout we have not confirmed we can interpret.
+                // Same helper toSignedTransactionWithSidecar/toSignedTransaction use; deliberately
+                // a DIFFERENT failure (and message) from the "missing sidecar" branch above -- one
+                // is "no sidecar was sent", the other is "a sidecar was sent, but we don't
+                // understand its version" and callers must be able to tell those apart.
+                validateBlobTxWrapperVersion(inner.items(1))
             case _ =>
           }
           val blobTxRawBytesBuilder = Map.newBuilder[ByteString, ByteString]
           val unwrappedItems = typedItems.map {
-            case prefixed @ PrefixedRLPEncodable(Transaction.Type03, inner: RLPList)
-                if inner.items.size == 4 && (inner.items.head match
-                  case _: RLPList => true
-                  case _          => false
-                ) =>
+            case prefixed @ PrefixedRLPEncodable(Transaction.Type03, inner: RLPList) if isWrappedBlobBody(inner) =>
               val rawBytes = com.chipprbots.ethereum.rlp.encode(prefixed)
               val unwrapped = PrefixedRLPEncodable(Transaction.Type03, inner.items.head)
               val stx = unwrapped.toSignedTransaction
+              // Commitments sit second from the end in both wrapper shapes (…, commitments, proofs).
+              validateBlobCommitments(stx, inner.items(inner.items.size - 2))
               blobTxRawBytesBuilder += (stx.hash.value -> ByteString(rawBytes))
               unwrapped
             case other => other
@@ -1140,39 +1245,47 @@ object ETHPackets:
     case SuccessOutcome    => 1.toByte
     case _                 => 0.toByte
 
-  private def wrapTypedReceipt(r: Receipt, legacyRLP: RLPList): RLPEncodeable = r match
-    case _: LegacyReceipt      => legacyRLP
-    case _: Type01Receipt      => PrefixedRLPEncodable(Transaction.Type01, legacyRLP)
-    case _: Type02Receipt      => PrefixedRLPEncodable(Transaction.Type02, legacyRLP)
-    case _: Type03Receipt      => PrefixedRLPEncodable(Transaction.Type03, legacyRLP)
-    case _: Type04Receipt      => PrefixedRLPEncodable(Transaction.Type04, legacyRLP)
-    case _: TypedLegacyReceipt => legacyRLP
-
-  /** Encode a Receipt with bloom (ETH68 serving). Same as ETH63.ReceiptImplicits.ReceiptEnc. */
+  /** Encode a Receipt as one item of an eth/66-68 receipt list: `[postStateOrStatus, cumulativeGasUsed, bloom, logs]`,
+    * and for a typed receipt, EIP-2718's `type || rlp(receipt)` held in ONE RLP byte string — as a typed tx is in a tx
+    * list. A bare `PrefixedRLPEncodable` would serialize as that concatenation with no string header, which a reader
+    * sees as a 1-byte string followed by a stray list: go-ethereum and core-geth reject it as a short typed receipt, so
+    * they could not fetch the receipts of any block holding a typed tx from fukuii.
+    */
   implicit class ReceiptBloomEnc(r: Receipt) extends RLPSerializable:
     override def toRLPEncodable: RLPEncodeable =
-      wrapTypedReceipt(
-        r,
-        RLPList(
-          receiptStateHash(r),
-          RLPValue(ByteUtils.bigIntToUnsignedByteArray(r.cumulativeGasUsed)),
-          RLPValue(r.logsBloomFilter.toArray),
-          RLPList(r.logs.map(_.toRLPEncodable)*)
-        )
+      val receipt = RLPList(
+        receiptStateHash(r),
+        RLPValue(ByteUtils.bigIntToUnsignedByteArray(r.cumulativeGasUsed)),
+        RLPValue(r.logsBloomFilter.toArray),
+        RLPList(r.logs.map(_.toRLPEncodable)*)
       )
+      val txType = receiptTxType(r)
+      if txType == 0 then receipt
+      else RLPValue(com.chipprbots.ethereum.rlp.encode(PrefixedRLPEncodable(txType, receipt)))
 
-  /** Encode a Receipt WITHOUT bloom (ETH69 serving, EIP-7642). Wire: [stateHash, gasUsed, [logs]] — no logsBloomFilter
-    * field.
+  /** The EIP-2718 type of the transaction a receipt belongs to; 0 for a legacy receipt. */
+  private def receiptTxType(r: Receipt): Byte = r match
+    case _: LegacyReceipt => 0
+    case _: Type01Receipt => Transaction.Type01
+    case _: Type02Receipt => Transaction.Type02
+    case _: Type03Receipt => Transaction.Type03
+    case _: Type04Receipt => Transaction.Type04
+    case other: TypedLegacyReceipt =>
+      throw new IllegalArgumentException(s"No transaction type for receipt class ${other.getClass.getSimpleName}")
+
+  /** Encode a Receipt in the eth/69 network form (EIP-7642), which eth/70-72 keep: `[txType, postStateOrStatus,
+    * cumulativeGasUsed, logs]`. There is no bloom, and every receipt is a plain four-item list — a legacy receipt
+    * carries type 0, and a typed receipt is NOT wrapped in its EIP-2718 type prefix the way it is on eth/68.
+    * go-ethereum's decoder (eth/protocols/eth/receipt.go) rejects any other shape and hashes a rejected receipt as
+    * absent, so a block's receipts come out with the wrong root.
     */
   implicit class ReceiptBloomFreeEnc(r: Receipt) extends RLPSerializable:
     override def toRLPEncodable: RLPEncodeable =
-      wrapTypedReceipt(
-        r,
-        RLPList(
-          receiptStateHash(r),
-          RLPValue(ByteUtils.bigIntToUnsignedByteArray(r.cumulativeGasUsed)),
-          RLPList(r.logs.map(_.toRLPEncodable)*)
-        )
+      RLPList(
+        receiptTxType(r),
+        receiptStateHash(r),
+        RLPValue(ByteUtils.bigIntToUnsignedByteArray(r.cumulativeGasUsed)),
+        RLPList(r.logs.map(_.toRLPEncodable)*)
       )
 
   // ── RECEIPTS — version-suffixed: EIP-7642 removes bloom in ETH69 ─────────────
@@ -1183,7 +1296,7 @@ object ETHPackets:
   //
   // Wire format difference:
   //   ETH68: [requestId, [[stateHash, gasUsed, logsBloom, [logs]], ...]]
-  //   ETH69: [requestId, [[stateHash, gasUsed, [logs]], ...]]  ← no bloom (EIP-7642)
+  //   ETH69: [requestId, [[txType, stateHash, gasUsed, [logs]], ...]]  ← tx type first, no bloom (EIP-7642)
 
   /** ETH68 receipts: bloom-inclusive. Source: ETH66.Receipts + ETH63.ReceiptEnc. */
   object Receipts68:
@@ -1340,6 +1453,209 @@ object ETHPackets:
   case class BlockRangeUpdate(earliestBlock: BigInt, latestBlock: BigInt, latestBlockHash: ByteString) extends Message:
     override val code: Int = Codes.BlockRangeUpdateCode
     override def toShortString: String = s"BlockRangeUpdate(earliest=$earliestBlock, latest=$latestBlock)"
+
+  // ── ETH71 BLOCK ACCESS LISTS (EIP-8159) ───────────────────────────────────────
+  //
+  // Wire: GetBlockAccessLists: [requestId, [blockHashes]]
+  //       BlockAccessLists:    [requestId, [entry, ...]]  — one entry per requested hash, in order.
+  //       An unavailable BAL is the RLP empty string (0x80) — never a skipped position, since an
+  //       empty LIST is itself a valid (empty) access list and must stay distinguishable from
+  //       "we don't have one". fukuii has no EIP-7928 BAL storage yet, so it always emits the
+  //       empty-string sentinel — honest "unavailable" rather than fabricated data — but the type
+  //       keeps entries as raw RLPEncodeable (same passthrough pattern as Receipts68.receiptsForBlocks)
+  //       so a real BAL can be served byte-for-byte once storage exists, with no wire-format change.
+  //
+  // Reference: go-ethereum eth/protocols/eth/protocol.go GetBlockAccessListsPacket / BlockAccessListPacket
+
+  object GetBlockAccessLists:
+    implicit class GetBlockAccessListsEnc(val underlyingMsg: GetBlockAccessLists)
+        extends MessageSerializableImplicit[GetBlockAccessLists](underlyingMsg)
+        with RLPSerializable:
+      override def code: Int = Codes.GetBlockAccessListsCode
+      override def toRLPEncodable: RLPEncodeable =
+        RLPList(
+          RLPValue(ByteUtils.bigIntToUnsignedByteArray(msg.requestId)),
+          toRlpList(msg.blockHashes)
+        )
+
+    extension (bytes: Array[Byte])
+      def toGetBlockAccessLists: GetBlockAccessLists = rawDecode(bytes) match
+        case RLPList(RLPValue(requestIdBytes), hashesList: RLPList) =>
+          GetBlockAccessLists(ByteUtils.bytesToBigInt(requestIdBytes), fromRlpList[ByteString](hashesList))
+        case other =>
+          throw new RuntimeException(s"Cannot decode GetBlockAccessLists. Expected RLPList[2], got: $other")
+
+  case class GetBlockAccessLists(requestId: BigInt, blockHashes: Seq[ByteString]) extends Message with HasRequestId:
+    override def code: Int = Codes.GetBlockAccessListsCode
+    override def toShortString: String =
+      s"GetBlockAccessLists { requestId: $requestId, count: ${blockHashes.size} }"
+
+  object BlockAccessLists:
+    implicit class BlockAccessListsEnc(val underlyingMsg: BlockAccessLists)
+        extends MessageSerializableImplicit[BlockAccessLists](underlyingMsg)
+        with RLPSerializable:
+      override def code: Int = Codes.BlockAccessListsCode
+      override def toRLPEncodable: RLPEncodeable =
+        RLPList(
+          RLPValue(ByteUtils.bigIntToUnsignedByteArray(msg.requestId)),
+          RLPList(msg.entries*)
+        )
+
+    extension (bytes: Array[Byte])
+      def toBlockAccessLists: BlockAccessLists = rawDecode(bytes) match
+        case RLPList(RLPValue(requestIdBytes), entriesList: RLPList) =>
+          BlockAccessLists(ByteUtils.bytesToBigInt(requestIdBytes), entriesList.items)
+        case other =>
+          throw new RuntimeException(s"Cannot decode BlockAccessLists. Expected RLPList[2], got: $other")
+
+  case class BlockAccessLists(requestId: BigInt, entries: Seq[RLPEncodeable]) extends Message with HasRequestId:
+    override def code: Int = Codes.BlockAccessListsCode
+    override def toShortString: String = s"BlockAccessLists { requestId: $requestId, entries: ${entries.size} }"
+
+  // ── ETH72 CELLS (EIP-8070) ─────────────────────────────────────────────────────
+  //
+  // PeerDAS cell exchange for blob transactions. `mask` is a 16-byte custody bitmap
+  // (go-ethereum `types.CustodyBitmap`, a fixed [16]byte — RLP-encodes as a plain byte string,
+  // same as any other fixed-size hash field; no custom codec needed). Each cell is a fixed
+  // 2048-byte KZG cell (go-ethereum `kzg4844.Cell`).
+  //
+  // Wire: GetCells: [requestId, [hashes], mask]
+  //       Cells:    [requestId, [hashes], [[cell, ...], ...], mask]  — outer list is per-hash,
+  //                 inner list is that hash's cells. `hashes`/`cells` may be a SUBSET of the
+  //                 request: go-ethereum's answerGetCells (handlers.go) simply omits any hash it
+  //                 has no cell data for — unlike GetBlockAccessLists, there is no positional
+  //                 empty-entry sentinel here. fukuii has no blob/cell storage, so it always
+  //                 serves the fully-empty response (zero hashes, zero cells, mask echoed back)
+  //                 rather than fabricate cell data — the same "honest absence" answer go-ethereum
+  //                 gives for any hash it can't find blob data for.
+  //
+  // Reference: go-ethereum eth/protocols/eth/protocol.go GetCellsRequestPacket / CellsPacket
+
+  object GetCells:
+    implicit class GetCellsEnc(val underlyingMsg: GetCells)
+        extends MessageSerializableImplicit[GetCells](underlyingMsg)
+        with RLPSerializable:
+      override def code: Int = Codes.GetCellsCode
+      override def toRLPEncodable: RLPEncodeable =
+        import msg.*
+        RLPList(
+          RLPValue(ByteUtils.bigIntToUnsignedByteArray(requestId)),
+          toRlpList(hashes),
+          RLPValue(mask.toArray[Byte])
+        )
+
+    extension (bytes: Array[Byte])
+      def toGetCells: GetCells = rawDecode(bytes) match
+        case RLPList(RLPValue(requestIdBytes), hashesList: RLPList, RLPValue(maskBytes)) =>
+          GetCells(ByteUtils.bytesToBigInt(requestIdBytes), fromRlpList[ByteString](hashesList), ByteString(maskBytes))
+        case other =>
+          throw new RuntimeException(s"Cannot decode GetCells. Expected RLPList[3], got: $other")
+
+  case class GetCells(requestId: BigInt, hashes: Seq[ByteString], mask: ByteString) extends Message with HasRequestId:
+    override def code: Int = Codes.GetCellsCode
+    override def toShortString: String = s"GetCells { requestId: $requestId, hashes: ${hashes.size} }"
+
+  object Cells:
+    implicit class CellsEnc(val underlyingMsg: Cells)
+        extends MessageSerializableImplicit[Cells](underlyingMsg)
+        with RLPSerializable:
+      override def code: Int = Codes.CellsCode
+      override def toRLPEncodable: RLPEncodeable =
+        import msg.*
+        RLPList(
+          RLPValue(ByteUtils.bigIntToUnsignedByteArray(requestId)),
+          toRlpList(hashes),
+          RLPList(cells.map(perHash => RLPList(perHash.map(c => RLPValue(c.toArray[Byte]))*))*),
+          RLPValue(mask.toArray[Byte])
+        )
+
+    extension (bytes: Array[Byte])
+      def toCells: Cells = rawDecode(bytes) match
+        case RLPList(RLPValue(requestIdBytes), hashesList: RLPList, cellsList: RLPList, RLPValue(maskBytes)) =>
+          val hashes = fromRlpList[ByteString](hashesList)
+          val cells = cellsList.items.map {
+            case perHash: RLPList =>
+              perHash.items.map {
+                case RLPValue(cellBytes) => ByteString(cellBytes)
+                case other =>
+                  throw new RuntimeException(s"Cannot decode cell. Expected RLPValue, got: $other")
+              }
+            case other =>
+              throw new RuntimeException(s"Cannot decode per-hash cell list. Expected RLPList, got: $other")
+          }
+          Cells(ByteUtils.bytesToBigInt(requestIdBytes), hashes, cells, ByteString(maskBytes))
+        case other =>
+          throw new RuntimeException(s"Cannot decode Cells. Expected RLPList[4], got: $other")
+
+  case class Cells(requestId: BigInt, hashes: Seq[ByteString], cells: Seq[Seq[ByteString]], mask: ByteString)
+      extends Message
+      with HasRequestId:
+    override def code: Int = Codes.CellsCode
+    override def toShortString: String = s"Cells { requestId: $requestId, hashes: ${hashes.size} }"
+
+  // ── ETH72 NEW POOLED TRANSACTION HASHES (4-field, adds custody Mask) ─────────────
+  //
+  // ETH72 (EIP-8070) replaces the 3-field ETH68+ announcement (types, sizes, hashes) with a
+  // 4-field form carrying the announcing peer's own PeerDAS custody bitmap. Same wire CODE as
+  // the 3-field form (NewPooledTransactionHashesCode) — the two shapes are distinguished purely
+  // by the negotiated protocol version, per go-ethereum's `eth71`/`eth72` handler-map split
+  // (handleNewPooledTransactionHashes vs handleNewPooledTransactionHashes72). ETH72MessageDecoder
+  // uses this type exclusively; ETH68-71 keep using the plain `NewPooledTransactionHashes` above.
+  //
+  // Wire: [types, sizes, [hashes], mask]
+  //
+  // fukuii has no blob/cell storage, so outbound announcements (PendingTransactionsManager) always
+  // send an all-zero mask ("I custody nothing") rather than fabricate custody we can't back —
+  // see NewPooledTransactionHashes72.NoCustody.
+
+  object NewPooledTransactionHashes72:
+    /** All-zero custody bitmap: fukuii has no PeerDAS cell storage, so every outbound ETH72 announcement honestly
+      * advertises zero custody rather than claiming (via `CustodyBitmapAll`) cells it cannot actually serve.
+      */
+    val NoCustody: ByteString = ByteString(new Array[Byte](16))
+
+    implicit class NewPooledTransactionHashes72Enc(val underlyingMsg: NewPooledTransactionHashes72)
+        extends MessageSerializableImplicit[NewPooledTransactionHashes72](underlyingMsg)
+        with RLPSerializable:
+      override def code: Int = Codes.NewPooledTransactionHashesCode
+      override def toRLPEncodable: RLPEncodeable =
+        import msg.*
+        RLPList(RLPValue(types.toArray), toRlpList(sizes), toRlpList(hashes), RLPValue(mask.toArray[Byte]))
+
+    extension (bytes: Array[Byte])
+      def toNewPooledTransactionHashes72: NewPooledTransactionHashes72 =
+        rawDecode(bytes) match
+          case RLPList(RLPValue(typesBytes), sizesList: RLPList, hashesList: RLPList, RLPValue(maskBytes)) =>
+            NewPooledTransactionHashes72(
+              typesBytes.toSeq,
+              fromRlpList[BigInt](sizesList),
+              fromRlpList[ByteString](hashesList),
+              ByteString(maskBytes)
+            )
+          case other =>
+            // No legacy-format fallback here (unlike the ETH65-compat branch in the plain
+            // NewPooledTransactionHashes decoder): a peer that negotiated ETH72 and sends a
+            // non-4-field announcement is sending a shape ETH72 does not define. Coercing it
+            // would either silently fabricate a mask/types/sizes the peer never sent, or (for a
+            // 3-field arrival) misparse the 3rd element as something it structurally isn't. Hard
+            // failure here is what actually happens: ETHPackets.toNewPooledTransactionHashes's
+            // own generic fallback throws `RLPException("src is not an RLPValue")` on a 4-field
+            // input for the same reason — see hive-failure-inventory.md "the eth/72 announcement
+            // shape".
+            throw new RuntimeException(
+              s"Cannot decode NewPooledTransactionHashes72. Expected RLPList[4] with structure " +
+                s"[types, sizes, hashes, mask], got: $other"
+            )
+
+  case class NewPooledTransactionHashes72(
+      types: Seq[Byte],
+      sizes: Seq[BigInt],
+      hashes: Seq[ByteString],
+      mask: ByteString
+  ) extends Message:
+    require(types.size == sizes.size && sizes.size == hashes.size, "types, sizes, and hashes must have same length")
+    override def code: Int = Codes.NewPooledTransactionHashesCode
+    override def toShortString: String = s"NewPooledTransactionHashes72 { count: ${hashes.size} }"
 
   // ── LEGACY TYPES: GetNodeData / NodeData (EIP-4938: removed in ETH68) ──────────────────
   // Retained so BlockchainHostActor can respond to legacy peers and StateNodeFetcher can

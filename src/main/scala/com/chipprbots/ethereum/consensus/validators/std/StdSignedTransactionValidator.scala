@@ -6,6 +6,8 @@ import com.chipprbots.ethereum.consensus.validators.SignedTransactionError.*
 import com.chipprbots.ethereum.crypto.ECDSASignature
 import com.chipprbots.ethereum.domain.*
 import com.chipprbots.ethereum.utils.BlockchainConfig
+import com.chipprbots.ethereum.ledger.BlockPreparator
+import com.chipprbots.ethereum.vm.AmsterdamGas
 import com.chipprbots.ethereum.vm.EvmConfig
 
 object StdSignedTransactionValidator extends SignedTransactionValidator:
@@ -286,8 +288,21 @@ object StdSignedTransactionValidator extends SignedTransactionValidator:
     val authListSize = tx match
       case sct: SetCodeTransaction => sct.authorizationList.size
       case _                       => 0
+    // EIP-2780 needs the destination, the value and the sender to decompose the base cost. `getSender` is
+    // memoised and the caller recovered this sender a line earlier, so this is a cache hit rather than a
+    // second ECDSA recovery. A transaction whose sender cannot be recovered fails signature validation
+    // before this figure is consulted, so the fallback only has to be harmless, not meaningful.
+    val sender = SignedTransaction.getSender(stx).getOrElse(Address(0))
     val txIntrinsicGas =
-      config.calcTransactionIntrinsicGas(tx.payload, tx.isContractInit, Transaction.accessList(tx), authListSize)
+      config.calcTransactionIntrinsicGas(
+        tx.payload,
+        tx.isContractInit,
+        Transaction.accessList(tx),
+        authListSize,
+        tx.receivingAddress,
+        UInt256(tx.value),
+        sender
+      )
     if stx.tx.gasLimit >= GasAmount(txIntrinsicGas) then Right(SignedTransactionValid)
     else Left(TransactionNotEnoughGasForIntrinsicError(stx.tx.gasLimit.value, txIntrinsicGas))
 
@@ -321,7 +336,37 @@ object StdSignedTransactionValidator extends SignedTransactionValidator:
     // maps London→olympiaBlockNumber, so we must NOT trip the Olympia gate there.
     val isOlympiaActivated = !isEth && blockHeaderNumber >= blockchainConfig.forkBlockNumbers.olympiaBlockNumber
     val isOsakaActivated = blockchainConfig.isOsakaTimestamp(blockHeaderTimestamp)
-    if (isOlympiaActivated || isOsakaActivated) && stx.tx.gasLimit > GasAmount(TxGasLimitCap) then
+
+    if blockchainConfig.isAmsterdamTimestamp(blockHeaderTimestamp) then
+      // EIP-8037 REDEFINES this bound, and getting it wrong rejects every transaction the reservoir
+      // exists to serve. TX_MAX_GAS_LIMIT now caps EXECUTION gas only, so `tx.gas` above it is legal —
+      // the excess seeds `state_gas_reservoir`. What is capped against 2^24 is the intrinsic cost, and
+      // `tx.gas` as a whole is capped against the new TX_MAX_TOTAL_GAS_LIMIT = 2^32 - 1.
+      import stx.tx
+      val config = EvmConfig.forBlock(blockHeaderNumber, blockHeaderTimestamp, blockchainConfig)
+      val authListSize = tx match
+        case sct: SetCodeTransaction => sct.authorizationList.size
+        case _                       => 0
+      val sender = SignedTransaction.getSender(stx).getOrElse(Address(0))
+      val intrinsic = config.calcTransactionIntrinsicGas(
+        tx.payload,
+        tx.isContractInit,
+        Transaction.accessList(tx),
+        authListSize,
+        tx.receivingAddress,
+        UInt256(tx.value),
+        sender
+      )
+      val floor = BlockPreparator.calcFloorDataGas(
+        tx.payload,
+        config.transactionBaseCost(tx.receivingAddress, UInt256(tx.value), sender)
+      )
+      if tx.gasLimit.value > AmsterdamGas.TxMaxTotalGasLimit then
+        Left(TransactionGasLimitExceedsCap(tx.gasLimit.value, AmsterdamGas.TxMaxTotalGasLimit))
+      else if intrinsic.max(floor) > TxGasLimitCap then
+        Left(TransactionGasLimitExceedsCap(intrinsic.max(floor), TxGasLimitCap))
+      else Right(SignedTransactionValid)
+    else if (isOlympiaActivated || isOsakaActivated) && stx.tx.gasLimit > GasAmount(TxGasLimitCap) then
       Left(TransactionGasLimitExceedsCap(stx.tx.gasLimit.value, TxGasLimitCap))
     else Right(SignedTransactionValid)
 

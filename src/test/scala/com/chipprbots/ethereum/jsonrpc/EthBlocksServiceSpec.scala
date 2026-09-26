@@ -17,10 +17,12 @@ import com.chipprbots.ethereum.NormalPatience
 import com.chipprbots.ethereum.blockchain.sync.EphemBlockchainTestSetup
 import com.chipprbots.ethereum.consensus.blocks.PendingBlock
 import com.chipprbots.ethereum.consensus.blocks.PendingBlockAndState
+import com.chipprbots.ethereum.consensus.eip1559.BaseFeeCalculator
 import com.chipprbots.ethereum.consensus.mining.MiningConfigs
 import com.chipprbots.ethereum.consensus.mining.TestMining
 import com.chipprbots.ethereum.consensus.pow.blocks.PoWBlockGenerator
 import com.chipprbots.ethereum.db.storage.AppStateStorage
+import com.chipprbots.ethereum.db.storage.pruning.BasicPruning
 import com.chipprbots.ethereum.domain.Difficulty
 import com.chipprbots.ethereum.domain.Block
 import com.chipprbots.ethereum.domain.BlockBody
@@ -30,6 +32,8 @@ import com.chipprbots.ethereum.domain.BlockHash
 import com.chipprbots.ethereum.jsonrpc.EthBlocksService.*
 import com.chipprbots.ethereum.ledger.InMemoryWorldStateProxy
 import com.chipprbots.ethereum.testing.Tags.*
+import com.chipprbots.ethereum.utils.BlockchainConfig
+import com.chipprbots.ethereum.utils.Config
 
 class EthBlocksServiceSpec
     extends ScalaTestWithActorTestKit
@@ -446,6 +450,82 @@ class EthBlocksServiceSpec
     response.unsafeRunSync() shouldEqual Right(
       GetUncleCountByBlockHashResponse(blockToRequest.body.uncleNodesList.size)
     )
+
+  it should "eth_baseFee return 0 when the next block is pre-Olympia" taggedAs (UnitTest, RPCTest) in new TestSetup:
+    // The "test" network config used in this build has no olympia-block-number set (defaults to
+    // Long.MaxValue) — EIP-1559 base fees haven't activated, so the honest answer is 0, not the
+    // fabricated 1-gwei InitialBaseFee floor that BaseFeeCalculator.calcBaseFee alone would return.
+    blockchainWriter.storeBlock(blockToRequest).commit()
+    blockchainWriter.saveBestKnownBlocks(blockToRequest.hash, blockToRequest.number.value)
+
+    val response: ServiceResponse[BaseFeeResponse] = ethBlocksService.baseFee(BaseFeeRequest())
+    response.unsafeRunSync() shouldEqual Right(BaseFeeResponse(BigInt(0)))
+
+  it should "eth_baseFee delegate to BaseFeeCalculator.calcBaseFee once Olympia is activated" taggedAs (
+    UnitTest,
+    RPCTest
+  ) in new TestSetup:
+    blockchainWriter.storeBlock(blockToRequest).commit()
+    blockchainWriter.saveBestKnownBlocks(blockToRequest.hash, blockToRequest.number.value)
+
+    val olympiaConfig: BlockchainConfig =
+      Config.blockchains.blockchainConfig.withUpdatedForkBlocks(_.copy(olympiaBlockNumber = 0))
+
+    val gatedEthBlocksService: EthBlocksService =
+      new EthBlocksService(blockchain, blockchainReader, mining, blockQueue, blockchainConfig = olympiaConfig)
+
+    val expected: BigInt = BaseFeeCalculator.calcBaseFee(blockToRequest.header, olympiaConfig)
+
+    val response: ServiceResponse[BaseFeeResponse] = gatedEthBlocksService.baseFee(BaseFeeRequest())
+    response.unsafeRunSync() shouldEqual Right(BaseFeeResponse(expected))
+
+  it should "eth_capabilities report full retention for every resource under archive pruning" taggedAs (
+    UnitTest,
+    RPCTest
+  ) in new TestSetup:
+    blockchainWriter.storeBlock(blockToRequest).commit()
+    blockchainWriter.saveBestKnownBlocks(blockToRequest.hash, blockToRequest.number.value)
+
+    val response: ServiceResponse[CapabilitiesResponse] = ethBlocksService.capabilities(CapabilitiesRequest())
+    val result: CapabilitiesResponse = response.unsafeRunSync().toOption.value
+
+    val fullyRetained = CapabilitiesResource(disabled = false, oldestBlock = BigInt(0), deleteStrategy = None)
+    result.headNumber shouldEqual blockToRequest.number.value
+    result.headHash shouldEqual blockToRequest.hash.value
+    result.state shouldEqual fullyRetained
+    result.stateproofs shouldEqual fullyRetained
+    result.tx shouldEqual fullyRetained
+    result.logs shouldEqual fullyRetained
+    result.receipts shouldEqual fullyRetained
+    result.blocks shouldEqual fullyRetained
+
+  it should "eth_capabilities report a sliding window for state/stateproofs under basic pruning but full retention for tx/logs/receipts/blocks" taggedAs (
+    UnitTest,
+    RPCTest
+  ) in new TestSetup:
+    val history = 5
+    blockchainWriter.storeBlock(blockToRequest).commit()
+    blockchainWriter.saveBestKnownBlocks(blockToRequest.hash, blockToRequest.number.value)
+
+    val prunedEthBlocksService: EthBlocksService =
+      new EthBlocksService(blockchain, blockchainReader, mining, blockQueue, pruningMode = BasicPruning(history))
+
+    val response: ServiceResponse[CapabilitiesResponse] = prunedEthBlocksService.capabilities(CapabilitiesRequest())
+    val result: CapabilitiesResponse = response.unsafeRunSync().toOption.value
+
+    val expectedOldestBlock = blockToRequest.number.value - history
+    result.state shouldEqual CapabilitiesResource(
+      disabled = false,
+      oldestBlock = expectedOldestBlock,
+      deleteStrategy = Some(BigInt(history))
+    )
+    result.stateproofs shouldEqual result.state
+
+    val fullyRetained = CapabilitiesResource(disabled = false, oldestBlock = BigInt(0), deleteStrategy = None)
+    result.tx shouldEqual fullyRetained
+    result.logs shouldEqual fullyRetained
+    result.receipts shouldEqual fullyRetained
+    result.blocks shouldEqual fullyRetained
 
   class TestSetup() extends EphemBlockchainTestSetup:
     val blockGenerator: PoWBlockGenerator = mock[PoWBlockGenerator]

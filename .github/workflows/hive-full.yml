@@ -1,0 +1,134 @@
+name: Hive · full pass
+
+# Runs consume-engine, consume-rlp and consensus TO COMPLETION.
+#
+# The per-push workflows (hive-consume-engine.yml, hive-consume-rlp.yml, hive-consensus.yml) run
+# an 80m / 60m sample and always end `simulation timed out`: the suites hold 42,234, 47,589 and
+# ~50,000 tests, every test starts a fresh client container (~8 s each, measured), and a
+# GitHub-hosted job is capped at 6 h. A complete pass is ~23 h of wall time per consume suite at
+# --sim.parallelism 4, so it has to be split across jobs.
+#
+# .github/hive-shards.json (generated and PROVEN an exact partition by
+# scripts/hive/gen-shards.py) splits them into shards sized by measured test time: at most
+# 170 min of tests each (145 for consensus, whose loader reads the whole corpus first), costed at
+# a slow runner's pace. One consensus file, stEIP1559/intrinsic (6,960 tests), cannot be split
+# and runs alone in ~223 min. The aggregate job then reports one verdict per suite: every shard
+# finished, the shards selected exactly the whole suite, and no test failed. A suite is never
+# reported green on a workflow conclusion alone.
+#
+# Cost: 58 jobs, ~150 runner-hours per pass; legacy-cancun alone holds 111,983 tests. It is
+# therefore a RELEASE gate, not a per-push or nightly check:
+#   * label the staging -> main release PR `hive-full` (it re-runs on each push while labelled),
+#   * or workflow_dispatch before cutting a version.
+# Day-to-day targeted runs belong on a local hive checkout (docs/testing/hive-local.md).
+
+on:
+  pull_request:
+    types: [labeled, synchronize, reopened]
+    branches: [main, master]
+  workflow_dispatch:
+    inputs:
+      suites:
+        description: 'Comma-separated suites from .github/hive-shards.json'
+        required: false
+        default: 'consume-engine,consume-rlp,consensus'
+      hive_ref:
+        description: 'ethereum/hive git ref'
+        required: false
+        default: 'master'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: hive-full-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  plan:
+    # On PRs only when labelled `hive-full`; a different label being added is not a trigger.
+    if: >-
+      github.event_name != 'pull_request' ||
+      (contains(github.event.pull_request.labels.*.name, 'hive-full') &&
+       (github.event.action != 'labeled' || github.event.label.name == 'hive-full'))
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.m.outputs.matrix }}
+      suites: ${{ steps.m.outputs.suites }}
+    steps:
+      - uses: actions/checkout@v5
+      - id: m
+        env:
+          SUITES: ${{ github.event.inputs.suites || 'consume-engine,consume-rlp,consensus' }}
+        run: |
+          python3 - <<'EOF'
+          import json, os
+          plan = json.load(open(".github/hive-shards.json"))
+          wanted = [s for s in os.environ["SUITES"].split(",") if s]
+          fixtures = plan["eest_fixtures"]
+          sims = {
+              # consume-* fixtures are pinned to the release the shard plan was generated from;
+              # an unpinned `stable@latest` would silently invalidate the partition.
+              "consume-engine": ("ethereum/eels/consume-engine",
+                                 f"fixtures={fixtures}\ndisable_strict_exception_matching=nimbus-el,fukuii"),
+              "consume-rlp": ("ethereum/eels/consume-rlp", f"fixtures={fixtures}"),
+              "consensus": ("ethereum/consensus", ""),
+          }
+          include = []
+          for suite in wanted:
+              sim, buildarg = sims[suite]
+              for shard in plan["suites"][suite]["shards"]:
+                  include.append({"name": shard["name"], "sim": sim, "sim_limit": shard["sim_limit"],
+                                  "buildarg": buildarg})
+          with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+              f.write(f"matrix={json.dumps({'include': include})}\n")
+              f.write(f"suites={','.join(wanted)}\n")
+          print(f"{len(include)} shards: " + ", ".join(i["name"] for i in include))
+          EOF
+
+  shard:
+    needs: plan
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    uses: ./.github/workflows/_hive-sim.yml
+    with:
+      sim: ${{ matrix.sim }}
+      label: ${{ matrix.name }}
+      sim_limit: ${{ matrix.sim_limit }}
+      sim_buildarg: ${{ matrix.buildarg }}
+      # Shards are planned at <= 170 min of tests for a slow runner (223 for the one unsplittable
+      # consensus file); 300m is the hard stop. 350 stays under GitHub's 360-minute cap for
+      # hosted jobs, so artifacts are always uploaded.
+      sim_timelimit: '300m'
+      timeout_minutes: 350
+      # Consensus-sim clients import the test chain before opening their RPC port, so this
+      # bounds the heaviest vector. stTimeConsuming/CALLBlake2f_MaxRounds executes 4.29e9
+      # BLAKE2f rounds: ~68 s on an idle 2-vCPU runner, ~140 s with 4 clients contending
+      # (--sim.parallelism 4). The reference client's AVX2 path measured ~100 s under the same
+      # contention on the same host, so 120 s fails on resources, not correctness. A client
+      # that never starts still fails — later.
+      checktimelimit: '300s'
+      # A shard that produced almost nothing is a broken shard, not a pass.
+      min_tests: 20
+      hive_ref: ${{ github.event.inputs.hive_ref || 'master' }}
+
+  aggregate:
+    needs: [plan, shard]
+    if: always() && needs.plan.result == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/download-artifact@v5
+        with:
+          pattern: hive-logs-*
+          path: artifacts
+      - name: Verdict per suite
+        run: python3 scripts/hive/aggregate-full.py artifacts --suites "${{ needs.plan.outputs.suites }}"
+      - name: Upload failing-test lists
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: hive-full-verdict
+          path: artifacts/failing-*.txt
+          retention-days: 30

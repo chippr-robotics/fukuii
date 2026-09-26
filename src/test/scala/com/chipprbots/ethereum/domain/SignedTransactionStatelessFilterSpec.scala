@@ -180,3 +180,56 @@ class SignedTransactionStatelessFilterSpec extends AnyFlatSpec with Matchers:
       Seq(makeCallTxWithNonce(BigInt(2).pow(64) - 1))
     ) shouldBe empty
   }
+
+  // ── coversIntrinsicGas: exact without recovering the sender ────────────────────
+  // The stateless filter used to recover every sender (ECDSA) before checking intrinsic gas, which kept the
+  // SignedTransactionsFilterActor busy for seconds on hive's 2,000-tx LargeTxRequest. It now checks first with a
+  // sender that is never tx.to and recovers only when that fails under Amsterdam. This pins that the answer is
+  // unchanged: for every case it must equal gasLimit >= intrinsic gas computed with the TRUE sender.
+
+  "coversIntrinsicGas" should "agree with the true-sender rule before and under Amsterdam" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in {
+    import com.chipprbots.ethereum.crypto
+    import com.chipprbots.ethereum.vm.EvmConfig
+    implicit val cfg: BlockchainConfig = ethConfig
+    val keyPair = crypto.generateKeyPair(new java.security.SecureRandom())
+    val sender = Address(keyPair)
+    val other = Address(Hex.decode("00000000000000000000000000000000000000aa"))
+    val preAmsterdam = EvmConfig.forBlock(BigInt(6_000_000), Timestamp(0L), ethConfig)
+    val amsterdam = preAmsterdam.copy(amsterdamEnabled = true)
+
+    def tx(to: Option[Address], value: BigInt, gasLimit: BigInt): SignedTransaction =
+      SignedTransaction.sign(
+        TransactionWithDynamicFee(
+          chainId = ethConfig.chainId.value,
+          nonce = BigInt(0),
+          maxPriorityFeePerGas = BigInt(1),
+          maxFeePerGas = BigInt(1000),
+          gasLimit = GasAmount(gasLimit),
+          receivingAddress = to,
+          value = value,
+          payload = ByteString.empty,
+          accessList = Nil
+        ),
+        keyPair,
+        Some(ethConfig.chainId.value)
+      )
+
+    def trueIntrinsic(config: EvmConfig, to: Option[Address], value: BigInt): BigInt =
+      config.calcTransactionIntrinsicGas(ByteString.empty, to.isEmpty, Nil, 0, to, UInt256(value), sender)
+
+    val recipients = Seq(Some(sender), Some(Address(0)), Some(other), None)
+    for
+      config <- Seq(preAmsterdam, amsterdam)
+      to <- recipients
+      value <- Seq(BigInt(0), BigInt(1))
+      exact = trueIntrinsic(config, to, value)
+      gasLimit <- Seq(exact - 1, exact, exact + 1, BigInt(21_000), BigInt(30_000))
+      if gasLimit > 0
+    do
+      withClue(s"amsterdam=${config.amsterdamEnabled} to=$to value=$value gasLimit=$gasLimit exact=$exact: ") {
+        SignedTransactionWithSender.coversIntrinsicGas(config, tx(to, value, gasLimit), 0) shouldBe (gasLimit >= exact)
+      }
+  }

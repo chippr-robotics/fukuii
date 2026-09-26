@@ -49,6 +49,7 @@ object Picklers:
   given hefPostShanghaiPickler: Pickler[HefPostShanghai] = generatePickler[HefPostShanghai]
   given hefPostCancunPickler: Pickler[HefPostCancun] = generatePickler[HefPostCancun]
   given hefPostPraguePickler: Pickler[HefPostPrague] = generatePickler[HefPostPrague]
+  given hefPostAmsterdamPickler: Pickler[HefPostAmsterdam] = generatePickler[HefPostAmsterdam]
 
   given extraFieldsPickler: Pickler[HeaderExtraFields] = compositePickler[HeaderExtraFields]
     .addConcreteType[HefEmpty.type]
@@ -56,6 +57,9 @@ object Picklers:
     .addConcreteType[HefPostShanghai]
     .addConcreteType[HefPostCancun]
     .addConcreteType[HefPostPrague]
+    // Appended last on purpose: boopickle assigns concrete-type indices in registration
+    // order, so appending leaves every already-persisted fast-sync record decodable.
+    .addConcreteType[HefPostAmsterdam]
 
   given addressPickler: Pickler[Address] =
     transformPickler[Address, ByteString](bytes => Address(bytes))(address => address.bytes)

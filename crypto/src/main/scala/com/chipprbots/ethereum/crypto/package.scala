@@ -1,6 +1,7 @@
 package com.chipprbots.ethereum
 
 import java.nio.charset.StandardCharsets
+import java.security.MessageDigest
 import java.security.SecureRandom
 
 import org.apache.pekko.util.ByteString
@@ -68,6 +69,29 @@ package object crypto {
   // bytes. Genuine multi-arg callers (e.g. `kec256(a, b)`) still bind to the varargs overload.
   def kec256(input: Array[Byte]): Array[Byte] =
     kec256(input, 0, input.length)
+
+  /** keccak-256 of `prefix` followed by `zeroCount` zero bytes, without materialising the zeros. Byte-identical to
+    * `kec256(prefix ++ new Array[Byte](zeroCount))`; exists so the EVM can hash a paid-for, never-written memory region
+    * of gigabyte scale (SHA3) in constant heap.
+    */
+  def kec256ZeroPadded(prefix: Array[Byte], zeroCount: Int): Array[Byte] = {
+    require(zeroCount >= 0, s"negative zero padding: $zeroCount")
+    val d = kec256Digest.get()
+    d.reset() // reset-on-entry (INV-1/FR-002)
+    val output = Array.ofDim[Byte](d.getDigestSize)
+    d.update(prefix, 0, prefix.length)
+    var left = zeroCount
+    while (left > 0) {
+      val n = math.min(left, ZeroChunk.length)
+      d.update(ZeroChunk, 0, n)
+      left -= n
+    }
+    d.doFinal(output, 0)
+    output
+  }
+
+  // Read-only source of zero bytes for kec256ZeroPadded. Never written, never handed out.
+  private val ZeroChunk: Array[Byte] = new Array[Byte](64 * 1024)
 
   def kec256(input: Array[Byte]*): Array[Byte] = {
     val d = kec256Digest.get()
@@ -202,13 +226,21 @@ package object crypto {
   def ripemd160(input: ByteString): ByteString =
     ByteString(ripemd160(input.toArray))
 
-  def sha256(input: Array[Byte]): Array[Byte] = {
-    val digest = new SHA256Digest()
-    val out = Array.ofDim[Byte](digest.getDigestSize)
-    digest.update(input, 0, input.size)
-    digest.doFinal(out, 0)
-    out
-  }
+  /** SHA-256 (FIPS 180-4) through the JDK's `MessageDigest` rather than BouncyCastle's pure-Java `SHA256Digest`.
+    *
+    * SHA-256 is a fixed function, so the output is byte-identical by definition (`Sha256Spec` pins the FIPS 180-4
+    * vectors and checks every length class against `SHA256Digest`). Why: C2 compiles the JDK's compression function to
+    * an intrinsic (SHA-NI, or AVX2 where absent), and the SHA256 precompile (0x02) is priced low enough that
+    * ethereum/tests `static_Call50000_sha256` hashes 2.5 GB in one block — 19.4 s with `SHA256Digest`, 5.1 s with this
+    * under the default JIT. The intrinsic is C2-only: a JVM capped at C1 (`-XX:TieredStopAtLevel=1`) runs both
+    * implementations at the same speed.
+    *
+    * Java SE requires every platform to provide "SHA-256", and no JCA provider is installed globally (scalanet passes
+    * its BouncyCastle provider explicitly), so this resolves to the JDK implementation. A fresh instance per call: a
+    * `MessageDigest` is not thread-safe, and the lookup is noise next to the hashing.
+    */
+  def sha256(input: Array[Byte]): Array[Byte] =
+    MessageDigest.getInstance("SHA-256").digest(input)
 
   def sha256(input: ByteString): ByteString =
     ByteString(sha256(input.toArray))

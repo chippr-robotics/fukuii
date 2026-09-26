@@ -24,6 +24,7 @@ import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController.StartRegu
 import com.chipprbots.ethereum.blockchain.sync.snap.ChainDownloader
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController.StartRegularSyncBootstrapByHash
 import com.chipprbots.ethereum.consensus.ConsensusAdapter
+import com.chipprbots.ethereum.consensus.engine.DesignatedHead
 import com.chipprbots.ethereum.consensus.engine.ForkChoiceManager
 import com.chipprbots.ethereum.consensus.mess.MESSConfig
 import com.chipprbots.ethereum.consensus.validators.Validators
@@ -306,6 +307,17 @@ object SyncController:
     // because both `syncConfig` and the chain config are stable for the actor's lifetime.
     private val isPoSChain: Boolean = configBuilder.blockchainConfig.terminalTotalDifficulty.isDefined
     private val clPivotEnabled: Boolean = isPoSChain && forkChoiceManagerOpt.isDefined
+
+    // PoS fork choice for the p2p import path, or None. Same conjunction as clPivotEnabled above, but note which half
+    // does the work: a running Node always supplies a ForkChoiceManager (Node.forkChoiceManagerForSync), so the
+    // OPERATIVE gate is `isPoSChain` — a configured terminal-total-difficulty, set in eth-chain.conf and
+    // sepolia-chain.conf and in NO PoW chain config. On ETC/Mordor/Gorgoroth this is None for the life of the node,
+    // so `BranchResolution`'s PoS arm predicate is always false there. See DesignatedHead.
+    // Reads the REQUESTED head, not getHeadBlockHash (executed-only, so it lags exactly when a CL-designated side
+    // branch is being fetched). See ForkChoiceManager.getRequestedHeadBlockHash.
+    private val designatedHeadOpt: Option[DesignatedHead] =
+      if isPoSChain then forkChoiceManagerOpt.map(fcm => DesignatedHead(() => fcm.getRequestedHeadBlockHash))
+      else None
 
     // TD calibration stats — updated by CalibrateChainWeightFromPeer handler.
     // calibrationSucceeded and networkBestTD are read by the TD_CALIBRATION_STATS periodic log
@@ -1025,6 +1037,15 @@ object SyncController:
           val isNewBeaconHead = !latestBeaconHead.exists(_.headHash == bh.headHash)
           handleBeaconHead(bh, snapSyncOpt = None)
           if isNewBeaconHead then regularSync ! SyncProtocol.NewCanonicalHead(bh.headHash, bh.knownHeader)
+          // The CL named a head whose ancestry we lack. Regular sync only asks peers that have ADVERTISED a height, and
+          // a peer that handshook at genesis may never re-advertise (go-ethereum: every 32 blocks), so ask peers for
+          // the missing block by hash. Sent on every FCU until the gap closes — the CL re-sends FCU, and a peer that
+          // lacked the block last time may have it now. A node keeping up sends nothing: its heads are executed.
+          if clPivotEnabled then
+            MissingAncestorProbe.target(bh, blockchainReader).foreach { t =>
+              networkPeerManager ! com.chipprbots.ethereum.network.NetworkPeerManagerActor
+                .ProbeMissingAncestorCmd(t.hash, t.number)
+            }
           Behaviors.same
         case msg: SyncProtocol.RegularSyncCommand =>
           // GetStatus (JSON-RPC eth_syncing), MinedBlock (miner), and other RegularSyncCommand subtypes
@@ -1807,7 +1828,7 @@ object SyncController:
             blockchainWriter,
             stateStorage,
             evmCodeStorage,
-            { val br = new BranchResolution(blockchainReader); br.messConfig = messConfig; br },
+            { val br = new BranchResolution(blockchainReader, designatedHeadOpt); br.messConfig = messConfig; br },
             validators.blockValidator,
             blacklist,
             syncConfig,
@@ -2203,7 +2224,7 @@ object SyncController:
 
         case com.chipprbots.ethereum.network.NetworkPeerManagerActor.HandshakedPeers(peers) =>
           val snapPeers =
-            peers.filter { case (_, peerInfo) => peerInfo.remoteStatus.supportsSnap && peerInfo.forkAccepted }
+            peers.filter { case (_, peerInfo) => SNAPSyncController.servesSnapState(peerInfo) }
           if snapPeers.nonEmpty then
             snapPeers.foreach { case (peer, _) =>
               bytecodeActor.foreach(_ ! BytecodeRecoveryActor.ByteCodePeerAvailable(peer))
@@ -2505,7 +2526,7 @@ object SyncController:
             blockchainWriter,
             stateStorage,
             evmCodeStorage,
-            { val br = new BranchResolution(blockchainReader); br.messConfig = messConfig; br },
+            { val br = new BranchResolution(blockchainReader, designatedHeadOpt); br.messConfig = messConfig; br },
             validators.blockValidator,
             blacklist,
             syncConfig,

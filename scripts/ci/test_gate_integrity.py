@@ -14,6 +14,7 @@ Offline, no dependencies beyond PyYAML. Exit 0 = all cases behaved.
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -101,15 +102,41 @@ def m_undeclared_caller(root: Path) -> None:
         encoding="utf-8")
 
 
+def _hive_gate_whose_only_mechanism_is_min_tests(root: Path) -> dict:
+    """An informational Hive gate that `min_tests` alone makes able to fail.
+
+    This case used to name `hive-graphql` literally and broke the moment graphql
+    gained a `gate_pattern` (its waiver, #1407) — with a pattern it still has a
+    mechanism after `min_tests` is removed, so C3 correctly stays quiet. Same
+    lesson as `_first_waiver`: pick the data, don't hardcode it.
+    """
+    import yaml as _y
+    doc = _y.safe_load((root / ".github/gates.yml").read_text(encoding="utf-8"))
+    for g in doc.get("gates") or []:
+        wf = g.get("workflow")
+        if not wf or g.get("tier") != "informational" or (g.get("pass_threshold") or 0) > 0:
+            continue
+        if not (g.get("min_tests") or 0) > 0:
+            continue
+        text = (root / ".github/workflows" / wf).read_text(encoding="utf-8")
+        if "_hive-sim.yml" in text and not re.search(r"^\s*gate_pattern:\s*\S", text, re.M):
+            return g
+    raise AssertionError("no informational Hive gate relies on min_tests alone — C3 case has no subject")
+
+
 def m_required_without_mechanism(root: Path) -> None:
     """C3 — a Hive gate declared required with nothing that can fail it."""
-    edit(root, ".github/gates.yml",
-         "  - id: hive-graphql\n    workflow: hive-graphql.yml\n"
-         "    context: Hive · graphql\n    tier: informational",
-         "  - id: hive-graphql\n    workflow: hive-graphql.yml\n"
-         "    context: Hive · graphql\n    tier: required")
-    edit(root, ".github/gates.yml", "    min_tests: 10\n    covers: GraphQL endpoint conformance.",
-         "    covers: GraphQL endpoint conformance.")
+    g = _hive_gate_whose_only_mechanism_is_min_tests(root)
+    p = root / ".github/gates.yml"
+    s = p.read_text(encoding="utf-8")
+    head = f"  - id: {g['id']}\n"
+    start = s.index(head)
+    nxt = s.find("\n  - id: ", start + len(head))
+    end = len(s) if nxt == -1 else nxt
+    block = s[start:end]
+    block = block.replace("    tier: informational\n", "    tier: required\n", 1)
+    block = re.sub(r"^    min_tests: \d+\n", "", block, count=1, flags=re.M)
+    p.write_text(s[:start] + block + s[end:], encoding="utf-8")
 
 
 def m_required_without_evidence(root: Path) -> None:
@@ -121,30 +148,103 @@ def m_required_without_evidence(root: Path) -> None:
          "    context: Hive · devp2p\n    tier: required")
 
 
+def _first_waiver(root: Path) -> dict:
+    """Read the first declared waiver instead of hardcoding one.
+
+    These mutations used to name `sync-server-geth-from-fukuii` literally,
+    which broke the moment that waiver was renamed (#1407). A self-test that
+    hardcodes the data it mutates tests the fixture, not the checker.
+    """
+    import yaml as _y
+    doc = _y.safe_load((root / ".github/gates.yml").read_text(encoding="utf-8"))
+    waivers = doc.get("waivers") or []
+    assert waivers, "gates.yml declares no waivers — these cases need at least one"
+    return waivers[0]
+
+
 def m_expired_waiver(root: Path) -> None:
     """C6 — a waiver past its expiry date."""
+    w = _first_waiver(root)
     edit(root, ".github/gates.yml",
-         "    expires: 2026-12-31\n\n  - id: sync-client-fukuii-from-nethermind",
-         "    expires: 2020-01-01\n\n  - id: sync-client-fukuii-from-nethermind")
+         f"    expires: {w['expires']}",
+         "    expires: 2020-01-01")
 
 
 def m_incomplete_waiver(root: Path) -> None:
     """C6 — a waiver missing its owner."""
+    w = _first_waiver(root)
     edit(root, ".github/gates.yml",
-         "  - id: sync-server-geth-from-fukuii\n"
-         "    gate: hive-sync\n"
-         "    pattern: sync go-ethereum from fukuii\n"
-         "    owner: realcodywburns\n",
-         "  - id: sync-server-geth-from-fukuii\n"
-         "    gate: hive-sync\n"
-         "    pattern: sync go-ethereum from fukuii\n")
+         f"  - id: {w['id']}\n    gate: {w['gate']}\n"
+         f"    pattern: {w['pattern']}\n    owner: {w['owner']}\n",
+         f"  - id: {w['id']}\n    gate: {w['gate']}\n"
+         f"    pattern: {w['pattern']}\n")
 
 
 def m_undeclared_exclusion(root: Path) -> None:
-    """C7 — a workflow excludes a test no waiver declares."""
-    edit(root, ".github/workflows/hive-sync.yml",
-         "gate_exclude: 'sync go-ethereum from fukuii|sync fukuii from nethermind'",
-         "gate_exclude: 'sync go-ethereum from fukuii|sync fukuii from nethermind|sync fukuii from besu'")
+    """C7 — a workflow excludes a test no waiver declares.
+
+    Extends whichever workflow already excludes something, or adds an exclusion under a
+    gate_pattern when none does. This case used to name hive-sync.yml, whose exclusion went
+    away when both of its waivers were retired (#1407).
+    """
+    undeclared = "a test no waiver declares"
+    workflows = sorted((root / ".github/workflows").glob("*.yml"))
+    for p in workflows:
+        txt = p.read_text(encoding="utf-8")
+        m = re.search(r"gate_exclude: '([^']+)'", txt)
+        if m:
+            p.write_text(txt.replace(m.group(0), f"gate_exclude: '{m.group(1)}|{undeclared}'", 1),
+                         encoding="utf-8")
+            return
+    for p in workflows:
+        txt = p.read_text(encoding="utf-8")
+        m = re.search(r"^(\s*)gate_pattern: '[^']+'\n", txt, re.M)
+        if m and "_hive-sim.yml" in txt:
+            p.write_text(txt.replace(m.group(0), f"{m.group(0)}{m.group(1)}gate_exclude: '{undeclared}'\n", 1),
+                         encoding="utf-8")
+            return
+    raise AssertionError("no hive workflow has a gate_pattern to add an exclusion to — C7 case has no subject")
+
+
+def m_undeclared_skip(root: Path) -> None:
+    """C7 — a workflow stops running a test no waiver declares (sim_skip)."""
+    for p in sorted((root / ".github/workflows").glob("*.yml")):
+        txt = p.read_text(encoding="utf-8")
+        m = re.search(r"sim_skip: '([^']+)'", txt)
+        if m:
+            p.write_text(txt.replace(m.group(0), f"sim_skip: '{m.group(1)}|a test no waiver declares'", 1),
+                         encoding="utf-8")
+            return
+    raise AssertionError("no workflow sets sim_skip — C7 skip case has no subject")
+
+
+def m_undeclared_exclusion_in_second_job(root: Path) -> None:
+    """C7 — an undeclared exclusion in the SECOND _hive-sim.yml job of a workflow still fails.
+
+    The check used to read only the first `gate_exclude:` in a file. So the first job here gets an
+    exclusion that IS declared, and the second an undeclared one: a first-match reader sees only
+    the declared one and passes. hive-devp2p.yml runs two jobs.
+    """
+    import yaml
+
+    doc = yaml.safe_load((root / ".github/gates.yml").read_text(encoding="utf-8"))
+    for p in sorted((root / ".github/workflows").glob("*.yml")):
+        txt = p.read_text(encoding="utf-8")
+        jobs = list(re.finditer(r"^(\s*)sim: .+\n", txt, re.M))
+        if len(jobs) < 2 or txt.count("uses: ./.github/workflows/_hive-sim.yml") < 2:
+            continue
+        gate = next((g["id"] for g in doc["gates"] if g.get("workflow") == p.name), None)
+        declared = next((w["pattern"] for w in doc.get("waivers", []) if w.get("gate") == gate), None)
+        if not declared:
+            continue
+        first, second = jobs[0], jobs[1]
+        patched = (txt[: first.end()] + f"{first.group(1)}gate_exclude: '{declared}'\n"
+                   + txt[first.end(): second.end()]
+                   + f"{second.group(1)}gate_exclude: 'a test no waiver declares'\n"
+                   + txt[second.end():])
+        p.write_text(patched, encoding="utf-8")
+        return
+    raise AssertionError("no two-job hive workflow with a declared waiver — C7 second-job case has no subject")
 
 
 def m_overdue_promotion(root: Path) -> None:
@@ -217,6 +317,8 @@ def main() -> int:
     case("C6  expired waiver fails", True, "C6", m_expired_waiver)
     case("C6  incomplete waiver fails", True, "C6", m_incomplete_waiver)
     case("C7  undeclared gate_exclude fails", True, "C7", m_undeclared_exclusion)
+    case("C7  undeclared sim_skip fails", True, "C7", m_undeclared_skip)
+    case("C7  undeclared gate_exclude in a second job fails", True, "C7", m_undeclared_exclusion_in_second_job)
 
     print(" constitution checks")
     case("C8  unmapped principle fails", True, "C8", m_unmapped_principle)

@@ -88,16 +88,28 @@ object PeersClient:
         ctx.messageAdapter[NetworkPeerManagerActor.HandshakedPeers] {
           case NetworkPeerManagerActor.HandshakedPeers(peers) => HandshakedPeersCmd(peers)
         }
-      val peerDisconnectedAdapter: TypedActorRef[PeerEvent] =
+      // ONE adapter for PeerEvent, handling every case this actor subscribes to.
+      //
+      // Pekko registers message adapters keyed by message CLASS, and a new registration
+      // REPLACES the existing one for that class — so two `messageAdapter[PeerEvent]` calls do
+      // not yield two independent adapters. The second silently won, and every PeerDisconnected
+      // routed to the first was then run through the second's function, which knew only
+      // MaintainedPeersChanged and threw:
+      //
+      //   scala.MatchError: unexpected PeerEvent from bus: PeerDisconnected(PeerId(...))
+      //     at PeersClient$.$anonfun$3(PeersClient.scala:99)
+      //
+      // Observed twice in a single hive sync run. Each throw restarts PeersClient under its
+      // supervisor, discarding in-flight request state. Both subscriptions can share one ref:
+      // the event bus routes by classifier, so each still delivers only its own event type.
+      val peerEventAdapter: TypedActorRef[PeerEvent] =
         ctx.messageAdapter[PeerEvent] {
-          case PeerDisconnected(peerId) => PeerDisconnectedCmd(peerId)
-          case e                        => throw new MatchError(s"unexpected PeerEvent from bus: $e")
-        }
-      val maintainedAdapter: TypedActorRef[PeerEvent] =
-        ctx.messageAdapter[PeerEvent] {
+          case PeerDisconnected(peerId)        => PeerDisconnectedCmd(peerId)
           case MaintainedPeersChanged(nodeIds) => MaintainedPeersChangedCmd(nodeIds)
           case e                               => throw new MatchError(s"unexpected PeerEvent from bus: $e")
         }
+      val peerDisconnectedAdapter: TypedActorRef[PeerEvent] = peerEventAdapter
+      val maintainedAdapter: TypedActorRef[PeerEvent] = peerEventAdapter
 
       // Besu alignment: subscribe at startup so updates arrive before any BlacklistPeer message.
       peerEventBus ! SubscribeCmd(MaintainedPeersClassifier, maintainedAdapter)
@@ -538,10 +550,15 @@ object PeersClient:
     // for blocks they literally don't have. forkAccepted=true is necessary but not
     // sufficient — the peer must also have advanced past genesis.
     //
-    // Use maxBlockNumber > 0 rather than !isAtGenesis (bestHash == genesisHash): ETC and
-    // ETH mainnet share genesis hash d4e56740..., so isAtGenesis is unreliable as a
-    // cross-chain discriminator. Block-number-based filtering matches go-ethereum and Besu
-    // peer selection semantics (both filter by peerHeadBlockHeader.getNumber() > 0).
+    // Use maxBlockNumber > 0 rather than !isAtGenesis (bestHash == genesisHash). Both keep
+    // out a peer at genesis, and neither tells an ETC peer from an ETH-mainnet one: the
+    // chains share genesis hash d4e56740..., and the fork-ID check separates them only once
+    // a peer is past the shared Homestead block (1,150,000). The difference is eth/68, whose
+    // STATUS carries no block number: an eth/68 peer counts as block 0, and is skipped here,
+    // until its first header probe answers. The overload below tests the handshake-time best
+    // hash (isAtGenesis); SNAP peer selection (SNAPSyncController.servesSnapState) tests the
+    // current one. Block-number-based filtering matches go-ethereum and Besu peer selection
+    // semantics (both filter by peerHeadBlockHeader.getNumber() > 0).
     val peersToUse = peersToDownloadFrom.values
       .map { case PeerWithInfo(peer, peerInfo) =>
         val isReady = peerInfo.forkAccepted && peerInfo.maxBlockNumber > 0

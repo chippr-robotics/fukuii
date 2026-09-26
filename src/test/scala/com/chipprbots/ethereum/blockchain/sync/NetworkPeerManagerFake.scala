@@ -1,12 +1,14 @@
 package com.chipprbots.ethereum.blockchain.sync
 import org.apache.pekko.actor.ActorRef
 import org.apache.pekko.actor.ActorSystem
+import org.apache.pekko.actor.typed.ActorRef as TypedActorRef
 import org.apache.pekko.testkit.TestActor.AutoPilot
 import org.apache.pekko.testkit.TestProbe
 import org.apache.pekko.util.ByteString
 
 import cats.effect.Deferred
 import cats.effect.IO
+import cats.effect.Resource
 import cats.effect.unsafe.IORuntime
 
 import fs2.Stream
@@ -19,6 +21,7 @@ import com.chipprbots.ethereum.network.NetworkPeerManagerActor
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor.PeerInfo
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor.SendMessageCmd
 import com.chipprbots.ethereum.network.Peer
+import com.chipprbots.ethereum.network.PeerEventBusActor
 import com.chipprbots.ethereum.network.PeerEventBusActor.PeerEvent.MessageFromPeer
 import com.chipprbots.ethereum.network.p2p.messages.ETHPackets
 import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.BlockBodies
@@ -31,10 +34,17 @@ import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.NodeData
 import com.chipprbots.ethereum.rlp.RLPList
 import com.chipprbots.ethereum.utils.Config.SyncConfig
 
+/** Stands in for `NetworkPeerManagerActor` in front of a set of fake peers.
+  *
+  * Requests arrive as `SendMessageCmd` from typed requesters (`PeerRequestHandler`, `PivotBlockSelector`), which carry
+  * no sender and wait on the peer event bus for the reply. So each response is published to `peerEventBus`, the way
+  * `PeerActor` publishes a decoded wire message; pass the same real bus to the actors under test.
+  */
 class NetworkPeerManagerFake(
     syncConfig: SyncConfig,
     peers: Map[Peer, PeerInfo],
-    blocks: List[Block]
+    blocks: List[Block],
+    peerEventBus: TypedActorRef[PeerEventBusActor.Command]
 )(implicit system: ActorSystem, ioRuntime: IORuntime):
   private val responsesTopicIO: IO[Topic[IO, MessageFromPeer]] = Topic[IO, MessageFromPeer]
   private val requestsTopicIO: IO[Topic[IO, SendMessageCmd]] = Topic[IO, SendMessageCmd]
@@ -49,7 +59,8 @@ class NetworkPeerManagerFake(
       responsesTopic,
       peersConnectedDeferred,
       peers,
-      blocks
+      blocks,
+      peerEventBus
     )
   probe.setAutoPilot(autoPilot)
 
@@ -58,7 +69,47 @@ class NetworkPeerManagerFake(
   val requests: Stream[IO, SendMessageCmd] = requestsTopic.subscribe(100)
   val responses: Stream[IO, MessageFromPeer] = responsesTopic.subscribe(100)
   val onPeersConnected: IO[Unit] = peersConnectedDeferred.get
-  val pivotBlockSelected: Stream[IO, BlockHeader] = responses
+  val pivotBlockSelected: Stream[IO, BlockHeader] = pivotBlockSelectedIn(responses)
+
+  val fetchedHeaders: Stream[IO, Seq[BlockHeader]] = responses.collect {
+    case MessageFromPeer(BlockHeaders(_, headers), _) if headers.size == syncConfig.blockHeadersPerRequest =>
+      headers
+  }
+  val fetchedBodies: Stream[IO, Seq[BlockBody]] = bodiesIn(responses)
+  val requestedReceipts: Stream[IO, Seq[ByteString]] = receiptRequestsIn(requests)
+  val fetchedBlocks: Stream[IO, List[Block]] = fetchedBlocksIn(responses, requests)
+
+  /** The first element of [[pivotBlockSelected]], from a subscription registered before this IO completes.
+    *
+    * `Topic.subscribe` registers its subscriber only once the stream starts running, so a consumer fiber started just
+    * before sync begins can miss the first responses; `IO.cede` after `.start` narrows that window but does not close
+    * it. `subscribeAwait` registers on acquisition. The subscription is released once the element is taken.
+    */
+  val subscribePivotBlockSelected: IO[IO[BlockHeader]] =
+    firstElementOf(responsesTopic.subscribeAwait(100).map(pivotBlockSelectedIn))
+
+  /** As [[subscribePivotBlockSelected]], for [[fetchedBlocks]]. */
+  val subscribeFetchedBlocks: IO[IO[List[Block]]] =
+    firstElementOf(
+      for
+        responses <- responsesTopic.subscribeAwait(100)
+        requests <- requestsTopic.subscribeAwait(100)
+      yield fetchedBlocksIn(responses, requests)
+    )
+
+  // Cancelling the returned IO (a test's timeout) cancels the consumer too, which releases the subscription: a
+  // subscriber left with a full queue would block the autopilot's publish1 and every actor that sends to it.
+  private def firstElementOf[A](subscription: Resource[IO, Stream[IO, A]]): IO[IO[A]] =
+    subscription.allocated.flatMap { case (stream, unsubscribe) =>
+      stream.head.compile.lastOrError
+        .guarantee(unsubscribe)
+        .start
+        .map(fiber =>
+          fiber.joinWith(IO.raiseError(new RuntimeException("subscription fiber canceled"))).onCancel(fiber.cancel)
+        )
+    }
+
+  private def pivotBlockSelectedIn(responses: Stream[IO, MessageFromPeer]): Stream[IO, BlockHeader] = responses
     .collect { case MessageFromPeer(BlockHeaders(_, Seq(header)), peer) =>
       (header, peer)
     }
@@ -71,26 +122,26 @@ class NetworkPeerManagerFake(
       else Stream.empty
     }
 
-  val fetchedHeaders: Stream[IO, Seq[BlockHeader]] = responses.collect {
-    case MessageFromPeer(BlockHeaders(_, headers), _) if headers.size == syncConfig.blockHeadersPerRequest =>
-      headers
-  }
-  val fetchedBodies: Stream[IO, Seq[BlockBody]] = responses.collect { case MessageFromPeer(BlockBodies(_, bodies), _) =>
-    bodies
-  }
-  val requestedReceipts: Stream[IO, Seq[ByteString]] = requests.collect(
+  private def bodiesIn(responses: Stream[IO, MessageFromPeer]): Stream[IO, Seq[BlockBody]] =
+    responses.collect { case MessageFromPeer(BlockBodies(_, bodies), _) => bodies }
+
+  private def receiptRequestsIn(requests: Stream[IO, SendMessageCmd]): Stream[IO, Seq[ByteString]] = requests.collect(
     Function.unlift(msg =>
       msg.message.underlyingMsg match
         case GetReceipts(_, hashes) => Some(hashes)
         case _                      => None
     )
   )
-  val fetchedBlocks: Stream[IO, List[Block]] = fetchedBodies
+
+  private def fetchedBlocksIn(
+      responses: Stream[IO, MessageFromPeer],
+      requests: Stream[IO, SendMessageCmd]
+  ): Stream[IO, List[Block]] = bodiesIn(responses)
     .scan[(List[Block], List[Block])]((Nil, blocks)) { case ((_, remainingBlocks), bodies) =>
       remainingBlocks.splitAt(bodies.size)
     }
     .map(_._1)
-    .zip(requestedReceipts)
+    .zip(receiptRequestsIn(requests))
     .map { case (blocks, _) => blocks } // a big simplification, but should be sufficient here
 
   val fetchedState: Stream[IO, Seq[ByteString]] = responses.collect {
@@ -103,7 +154,8 @@ object NetworkPeerManagerFake:
       responses: Topic[IO, MessageFromPeer],
       peersConnected: Deferred[IO, Unit],
       peers: Map[Peer, PeerInfo],
-      blocks: List[Block]
+      blocks: List[Block],
+      peerEventBus: TypedActorRef[PeerEventBusActor.Command]
   )(implicit ioRuntime: IORuntime)
       extends AutoPilot:
     def run(sender: ActorRef, msg: Any): NetworkPeerManagerAutoPilot =
@@ -126,7 +178,7 @@ object NetworkPeerManagerFake:
             case ETHPackets.GetNodeData(mptElementsHashes) =>
               ETHPackets.NodeData(Seq.empty)
           val theResponse = MessageFromPeer(response, peerId)
-          sender ! theResponse
+          peerEventBus ! PeerEventBusActor.PublishCmd(theResponse)
           responses.publish1(theResponse).unsafeRunSync()
       this
 

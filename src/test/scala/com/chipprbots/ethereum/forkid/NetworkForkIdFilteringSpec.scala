@@ -43,10 +43,10 @@ class NetworkForkIdFilteringSpec extends AnyWordSpec with Matchers:
     EthereumNodeRecord(dummySig, 0L, ethKey -> ByteVector(encode(forkId.toRLPEncodable)))
 
   private def etcTag(head: BigInt): ForkIdTag =
-    new ForkIdTag(() => etcGenesisHash, etcConf, () => head)
+    new ForkIdTag(() => etcGenesisHash, () => 0L, etcConf, () => head)
 
   private def mordorTag(head: BigInt): ForkIdTag =
-    new ForkIdTag(() => mordorGenesisHash, mordorConf, () => head)
+    new ForkIdTag(() => mordorGenesisHash, () => 0L, mordorConf, () => head)
 
   // Known forkId values, verified against core-geth reference implementation.
   private val EtcSpiralForkId = ForkId(0xbe46d57cL, None)
@@ -97,13 +97,13 @@ class NetworkForkIdFilteringSpec extends AnyWordSpec with Matchers:
     // -----------------------------------------------------------------------
 
     "confirm ETC mainnet Spiral forkId is 0xbe46d57c (verified against core-geth)" in {
-      val created = ForkId.create(etcGenesisHash, etcConf)(19250000)
+      val created = ForkId.create(etcGenesisHash, 0L, etcConf)(19250000)
       created.hash shouldBe 0xbe46d57cL
       created.next shouldBe Some(BigInt("1000000000000000000"))
     }
 
     "confirm Mordor Spiral forkId is 0x3a6b00d7 (verified against core-geth)" in {
-      val created = ForkId.create(mordorGenesisHash, mordorConf)(9957000)
+      val created = ForkId.create(mordorGenesisHash, 0L, mordorConf)(9957000)
       created.hash shouldBe 0x3a6b00d7L
       created.next shouldBe Some(BigInt("1000000000000000000"))
     }
@@ -119,7 +119,7 @@ class NetworkForkIdFilteringSpec extends AnyWordSpec with Matchers:
     // ForkId = Spiral hash, next=Some(10^18). This is the current production state —
     // all three ETC clients advertise Olympia as the next fork per EIP-2124.
     "emit Spiral/next=Olympia sentinel when Olympia block is not yet scheduled" in {
-      val id = ForkId.create(etcGenesisHash, etcConf)(20000000)
+      val id = ForkId.create(etcGenesisHash, 0L, etcConf)(20000000)
       id shouldBe ForkId(0xbe46d57cL, Some(BigInt("1000000000000000000")))
     }
 
@@ -127,7 +127,7 @@ class NetworkForkIdFilteringSpec extends AnyWordSpec with Matchers:
     // ForkId = Spiral hash, next=Some(olympiaBlock).
     // This signals to peers that a fork is coming, per EIP-2124 §4.
     "emit Spiral/next=Olympia when Olympia block is configured but not yet reached" in {
-      val id = ForkId.create(etcGenesisHash, olympiaConf)(25000000)
+      val id = ForkId.create(etcGenesisHash, 0L, olympiaConf)(25000000)
       id.hash shouldBe 0xbe46d57cL
       id.next shouldBe Some(BigInt(30000000))
     }
@@ -135,7 +135,7 @@ class NetworkForkIdFilteringSpec extends AnyWordSpec with Matchers:
     // State 3: Olympia block reached (head >= olympiaBlock).
     // ForkId = new Olympia hash, next=None.
     "emit Olympia hash/None when past the Olympia activation block" in {
-      val id = ForkId.create(etcGenesisHash, olympiaConf)(30000000)
+      val id = ForkId.create(etcGenesisHash, 0L, olympiaConf)(30000000)
       (id.hash should not).equal(0xbe46d57cL) // hash changes at fork
       id.next shouldBe None // no upcoming fork known
     }
@@ -146,11 +146,11 @@ class NetworkForkIdFilteringSpec extends AnyWordSpec with Matchers:
       etcTag(20000000).toFilter(enrWith(EthPetersburgForkId)) shouldBe a[Left[?, ?]]
 
       // State 2: Olympia pending
-      val tag2 = new ForkIdTag(() => etcGenesisHash, olympiaConf, () => 25000000)
+      val tag2 = new ForkIdTag(() => etcGenesisHash, () => 0L, olympiaConf, () => 25000000)
       tag2.toFilter(enrWith(EthPetersburgForkId)) shouldBe a[Left[?, ?]]
 
       // State 3: Olympia activated
-      val tag3 = new ForkIdTag(() => etcGenesisHash, olympiaConf, () => 31000000)
+      val tag3 = new ForkIdTag(() => etcGenesisHash, () => 0L, olympiaConf, () => 31000000)
       tag3.toFilter(enrWith(EthPetersburgForkId)) shouldBe a[Left[?, ?]]
     }
 
@@ -158,7 +158,7 @@ class NetworkForkIdFilteringSpec extends AnyWordSpec with Matchers:
       // Local is past Olympia, remote is still at Spiral but reports next=Some(olympiaBlock).
       // Per EIP-2124 subset rule: Spiral checksum with correct next-pointer matches → Connect.
       val spiralWithOlympiaPending = ForkId(0xbe46d57cL, Some(30000000))
-      val tag = new ForkIdTag(() => etcGenesisHash, olympiaConf, () => 35000000)
+      val tag = new ForkIdTag(() => etcGenesisHash, () => 0L, olympiaConf, () => 35000000)
       tag.toFilter(enrWith(spiralWithOlympiaPending)) shouldBe Right(())
     }
   }

@@ -218,7 +218,7 @@ object LatestBlockResource:
           |  "totalDifficulty": "$td",
           |  "gasLimit": ${h.gasLimit},
           |  "gasUsed": ${h.gasUsed},
-          |  "timestamp": ${h.unixTimestamp},
+          |  "timestamp": ${h.unixTimestamp.toUnsignedBigInt},
           |  "transactionCount": $txCount,
           |  "stateRoot": "${ByteStringUtils.hash2string(h.stateRoot.value)}",
           |  "extraData": "0x${org.bouncycastle.util.encoders.Hex.toHexString(h.extraData.toArray)}"
@@ -251,7 +251,7 @@ object BlockByNumberResource:
           |  "totalDifficulty": "$td",
           |  "gasLimit": ${h.gasLimit},
           |  "gasUsed": ${h.gasUsed},
-          |  "timestamp": ${h.unixTimestamp},
+          |  "timestamp": ${h.unixTimestamp.toUnsignedBigInt},
           |  "stateRoot": "${ByteStringUtils.hash2string(h.stateRoot.value)}",
           |  "extraData": "0x${org.bouncycastle.util.encoders.Hex.toHexString(h.extraData.toArray)}"
           |}""".stripMargin

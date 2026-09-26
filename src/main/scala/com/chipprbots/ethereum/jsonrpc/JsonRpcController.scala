@@ -48,6 +48,9 @@ case class JsonRpcController(
     ethFilterService: EthFilterService,
     personalService: PersonalServiceAPI,
     testServiceOpt: Option[TestService],
+    // execution-apis `testing_*` namespace. Option because the spec requires it be disabled by
+    // default; None when the node was not built with it.
+    testingServiceOpt: Option[TestingService],
     debugService: DebugService,
     qaService: QAService,
     fukuiiService: FukuiiService,
@@ -79,6 +82,7 @@ case class JsonRpcController(
   import JsonMethodsImplicits.given
   import QAJsonMethodsImplicits.given
   import TestJsonMethodsImplicits.given
+  import TestingJsonMethodsImplicits.given
   import FukuiiJsonMethodImplicits.given
   import McpJsonMethodsImplicits.given
 
@@ -92,6 +96,7 @@ case class JsonRpcController(
     Apis.Rpc -> handleRpcRequest,
     Apis.Debug -> (handleDebugRequest.orElse(handleDebugTracingRequest)),
     Apis.Test -> handleTestRequest,
+    Apis.Testing -> handleTestingRequest,
     Apis.Qa -> handleQARequest,
     Apis.Admin -> handleAdminRequest,
     Apis.TxPool -> handleTxPoolRequest,
@@ -230,6 +235,8 @@ case class JsonRpcController(
       handle[GetBalanceRequest, GetBalanceResponse](ethUserService.getBalance, req)
     case req @ JsonRpcRequest(_, "eth_getStorageAt", _, _) =>
       handle[GetStorageAtRequest, GetStorageAtResponse](ethUserService.getStorageAt, req)
+    case req @ JsonRpcRequest(_, "eth_getStorageValues", _, _) =>
+      handle[GetStorageValuesRequest, GetStorageValuesResponse](ethUserService.getStorageValues, req)
     case req @ JsonRpcRequest(_, "eth_getTransactionCount", _, _) =>
       handle[GetTransactionCountRequest, GetTransactionCountResponse](ethUserService.getTransactionCount, req)
     case req @ JsonRpcRequest(_, "eth_newFilter", _, _) =>
@@ -280,6 +287,10 @@ case class JsonRpcController(
       handle[MaxPriorityFeePerGasRequest, MaxPriorityFeePerGasResponse](ethBlocksService.maxPriorityFeePerGas, req)
     case req @ JsonRpcRequest(_, "eth_blobBaseFee", _, _) =>
       handle[BlobBaseFeeRequest, BlobBaseFeeResponse](ethBlocksService.blobBaseFee, req)
+    case req @ JsonRpcRequest(_, "eth_baseFee", _, _) =>
+      handle[BaseFeeRequest, BaseFeeResponse](ethBlocksService.baseFee, req)
+    case req @ JsonRpcRequest(_, "eth_capabilities", _, _) =>
+      handle[CapabilitiesRequest, CapabilitiesResponse](ethBlocksService.capabilities, req)
     case req @ JsonRpcRequest(_, "eth_createAccessList", _, _) =>
       handle[CreateAccessListRequest, CreateAccessListResponse](ethInfoService.createAccessList, req)
     case req @ JsonRpcRequest(_, "eth_simulateV1", _, _) =>
@@ -396,6 +407,25 @@ case class JsonRpcController(
           tFilter
         )
     }
+
+  /** execution-apis `testing_*` — deterministic block production for test harnesses.
+    *
+    * Empty partial function when the namespace was not wired, so an enabled-but-unbuilt `testing` api falls through to
+    * method-not-found rather than NPEing.
+    */
+  private def handleTestingRequest: PartialFunction[JsonRpcRequest, IO[JsonRpcResponse]] =
+    testingServiceOpt match
+      case Some(testingService) => handleTestingRequest(testingService)
+      case None                 => PartialFunction.empty
+
+  private def handleTestingRequest(
+      testingService: TestingService
+  ): PartialFunction[JsonRpcRequest, IO[JsonRpcResponse]] = {
+    case req @ JsonRpcRequest(_, "testing_buildBlockV1", _, _) =>
+      handle[TestingService.BuildBlockRequest, TestingService.BuildBlockResponse](testingService.buildBlock, req)
+    case req @ JsonRpcRequest(_, "testing_commitBlockV1", _, _) =>
+      handle[TestingService.CommitBlockRequest, TestingService.CommitBlockResponse](testingService.commitBlock, req)
+  }
 
   private def handleTestRequest: PartialFunction[JsonRpcRequest, IO[JsonRpcResponse]] =
     testServiceOpt match

@@ -45,36 +45,42 @@ case class BlockHeader(
     copy(extraData = extraData.dropRight(n))
 
   val baseFee: Option[BigInt] = extraFields match
-    case HefPostOlympia(fee)               => Some(fee)
-    case HefPostShanghai(fee, _)           => Some(fee)
-    case HefPostCancun(fee, _, _, _, _)    => Some(fee)
-    case HefPostPrague(fee, _, _, _, _, _) => Some(fee)
-    case _                                 => None
+    case HefPostOlympia(fee)                        => Some(fee)
+    case HefPostShanghai(fee, _)                    => Some(fee)
+    case HefPostCancun(fee, _, _, _, _)             => Some(fee)
+    case HefPostPrague(fee, _, _, _, _, _)          => Some(fee)
+    case HefPostAmsterdam(fee, _, _, _, _, _, _, _) => Some(fee)
+    case _                                          => None
 
   val withdrawalsRoot: Option[ByteString] = extraFields match
-    case HefPostShanghai(_, wr)           => Some(wr)
-    case HefPostCancun(_, wr, _, _, _)    => Some(wr)
-    case HefPostPrague(_, wr, _, _, _, _) => Some(wr)
-    case _                                => None
+    case HefPostShanghai(_, wr)                    => Some(wr)
+    case HefPostCancun(_, wr, _, _, _)             => Some(wr)
+    case HefPostPrague(_, wr, _, _, _, _)          => Some(wr)
+    case HefPostAmsterdam(_, wr, _, _, _, _, _, _) => Some(wr)
+    case _                                         => None
 
   val blobGasUsed: Option[BigInt] = extraFields match
-    case HefPostCancun(_, _, bgu, _, _)    => Some(bgu)
-    case HefPostPrague(_, _, bgu, _, _, _) => Some(bgu)
-    case _                                 => None
+    case HefPostCancun(_, _, bgu, _, _)             => Some(bgu)
+    case HefPostPrague(_, _, bgu, _, _, _)          => Some(bgu)
+    case HefPostAmsterdam(_, _, bgu, _, _, _, _, _) => Some(bgu)
+    case _                                          => None
 
   val excessBlobGas: Option[BigInt] = extraFields match
-    case HefPostCancun(_, _, _, ebg, _)    => Some(ebg)
-    case HefPostPrague(_, _, _, ebg, _, _) => Some(ebg)
-    case _                                 => None
+    case HefPostCancun(_, _, _, ebg, _)             => Some(ebg)
+    case HefPostPrague(_, _, _, ebg, _, _)          => Some(ebg)
+    case HefPostAmsterdam(_, _, _, ebg, _, _, _, _) => Some(ebg)
+    case _                                          => None
 
   val parentBeaconBlockRoot: Option[BlockHash] = extraFields match
-    case HefPostCancun(_, _, _, _, pbbr)    => Some(BlockHash(pbbr))
-    case HefPostPrague(_, _, _, _, pbbr, _) => Some(BlockHash(pbbr))
-    case _                                  => None
+    case HefPostCancun(_, _, _, _, pbbr)             => Some(BlockHash(pbbr))
+    case HefPostPrague(_, _, _, _, pbbr, _)          => Some(BlockHash(pbbr))
+    case HefPostAmsterdam(_, _, _, _, pbbr, _, _, _) => Some(BlockHash(pbbr))
+    case _                                           => None
 
   val requestsHash: Option[ByteString] = extraFields match
-    case HefPostPrague(_, _, _, _, _, rh) => Some(rh)
-    case _                                => None
+    case HefPostPrague(_, _, _, _, _, rh)          => Some(rh)
+    case HefPostAmsterdam(_, _, _, _, _, rh, _, _) => Some(rh)
+    case _                                         => None
 
   def isPoS: Boolean = difficulty == Difficulty.Zero && baseFee.isDefined
   def isPoW: Boolean = !isPoS
@@ -138,11 +144,12 @@ object BlockHeader:
 
     val numberOfPowFields = 2
     val numberOfExtraFields = blockHeader.extraFields match
-      case HefPostPrague(_, _, _, _, _, _) => 6
-      case HefPostCancun(_, _, _, _, _)    => 5
-      case HefPostShanghai(_, _)           => 2
-      case HefPostOlympia(_)               => 1
-      case HefEmpty                        => 0
+      case HefPostAmsterdam(_, _, _, _, _, _, _, _) => 8
+      case HefPostPrague(_, _, _, _, _, _)          => 6
+      case HefPostCancun(_, _, _, _, _)             => 5
+      case HefPostShanghai(_, _)                    => 2
+      case HefPostOlympia(_)                        => 1
+      case HefEmpty                                 => 0
 
     val baseFields = rlpList.items.dropRight(numberOfPowFields + numberOfExtraFields)
     val extraFieldsEncoded = rlpList.items.takeRight(numberOfExtraFields)
@@ -156,6 +163,11 @@ object BlockHeader:
     */
   def validateFieldCount(header: BlockHeader, config: BlockchainConfig): Either[String, Unit] =
     if config.networkType != NetworkType.ETH then Right(())
+    else if config.isAmsterdamTimestamp(header.unixTimestamp) && !isAmsterdamShape(header.extraFields) then
+      Left(
+        s"Amsterdam-era header at timestamp ${header.unixTimestamp} missing blockAccessListHash/slotNumber " +
+          s"(RLP field count below 23 — expected HefPostAmsterdam)"
+      )
     else if config.isCancunTimestamp(header.unixTimestamp) && header.blobGasUsed.isEmpty then
       Left(
         s"Cancun-era header at timestamp ${header.unixTimestamp} missing blobGasUsed " +
@@ -167,6 +179,10 @@ object BlockHeader:
           s"(RLP field count below 17 — expected HefPostShanghai+)"
       )
     else Right(())
+
+  private def isAmsterdamShape(extraFields: HeaderExtraFields): Boolean = extraFields match
+    case _: HefPostAmsterdam => true
+    case _                   => false
 
   sealed trait HeaderExtraFields
   object HeaderExtraFields:
@@ -195,6 +211,24 @@ object BlockHeader:
         requestsHash: ByteString
     ) extends HeaderExtraFields
 
+    /** Amsterdam: adds blockAccessListHash (EIP-7928, RLP item 21) and slotNumber (EIP-7843, RLP item 22). RLP = 23
+      * items.
+      *
+      * Field ordering is measured, not derived from EIP prose: block 600 of hive's devp2p fixture was re-encoded from
+      * its decoded parts in this order and keccak-hashed byte-identically to `headblock.json.hash`. See
+      * `specs/009-amsterdam-fork-support/contracts/header-rlp.md`. Do not reorder.
+      */
+    case class HefPostAmsterdam(
+        baseFee: BigInt,
+        withdrawalsRoot: ByteString,
+        blobGasUsed: BigInt,
+        excessBlobGas: BigInt,
+        parentBeaconBlockRoot: ByteString,
+        requestsHash: ByteString,
+        blockAccessListHash: ByteString,
+        slotNumber: BigInt
+    ) extends HeaderExtraFields
+
 object BlockHeaderImplicits:
 
   import com.chipprbots.ethereum.rlp.RLPImplicitConversions.*
@@ -219,13 +253,29 @@ object BlockHeaderImplicits:
         RLPValue(ByteUtils.bigIntToUnsignedByteArray(number.value)),
         RLPValue(ByteUtils.bigIntToUnsignedByteArray(gasLimit.value)),
         RLPValue(ByteUtils.bigIntToUnsignedByteArray(gasUsed.value)),
-        RLPValue(ByteUtils.bigIntToUnsignedByteArray(unixTimestamp.toLong)),
+        // toUnsignedBigInt, NOT the implicit Long->BigInt widening: the latter sign-extends,
+        // and bigIntToUnsignedByteArray then emits BigInt(-1).toByteArray = the single byte
+        // 0xFF (it only ever strips a leading 0x00, never a leading 0xFF). A 2^64-1 timestamp
+        // would encode as the 1-byte value 255, and since hash = kec256(toBytes) the block
+        // hash would be wrong — engine newPayload rejects it as "block hash mismatch".
+        RLPValue(ByteUtils.bigIntToUnsignedByteArray(unixTimestamp.toUnsignedBigInt)),
         RLPValue(extraData.toArray),
         RLPValue(mixHash.value.toArray),
         RLPValue(nonce.toArray)
       )
 
       val extraItems: Seq[RLPEncodeable] = extraFields match
+        case HefPostAmsterdam(bf, wr, bgu, ebg, pbbr, rh, balh, slot) =>
+          Seq(
+            RLPValue(ByteUtils.bigIntToUnsignedByteArray(bf)),
+            RLPValue(wr.toArray),
+            RLPValue(ByteUtils.bigIntToUnsignedByteArray(bgu)),
+            RLPValue(ByteUtils.bigIntToUnsignedByteArray(ebg)),
+            RLPValue(pbbr.toArray),
+            RLPValue(rh.toArray),
+            RLPValue(balh.toArray),
+            RLPValue(ByteUtils.bigIntToUnsignedByteArray(slot))
+          )
         case HefPostPrague(bf, wr, bgu, ebg, pbbr, rh) =>
           Seq(
             RLPValue(ByteUtils.bigIntToUnsignedByteArray(bf)),
@@ -266,22 +316,33 @@ object BlockHeaderImplicits:
           if items.length < 15 then
             throw new Exception(s"BlockHeader cannot be decoded: expected >= 15 items, got ${items.length}")
 
+          // Fixed-size fields must be EXACTLY their size, as go-ethereum/core-geth decode them into fixed arrays
+          // (common.Hash, common.Address, types.Bloom, types.BlockNonce) and reject any other length
+          // ("rlp: input string too short/long"). Accepting e.g. a 31-byte mixHash made a re-encoded copy of a canonical
+          // block hash differently, so it passed as an uncle that is really an ancestor (ethereum/tests bcForgedTest
+          // reusePreviousBlockAsUncleIgnoringLeadingZerosIn{MixHash,Nonce}).
+          def fixed(index: Int, name: String, size: Int): ByteString =
+            val value = byteStringFromEncodeable(items(index))
+            if value.length != size then
+              throw new Exception(s"BlockHeader cannot be decoded: $name must be $size bytes, got ${value.length}")
+            value
+
           val base = BlockHeader(
-            parentHash = BlockHash(byteStringFromEncodeable(items(0))),
-            ommersHash = BlockHash(byteStringFromEncodeable(items(1))),
-            beneficiary = byteStringFromEncodeable(items(2)),
-            stateRoot = TrieRoot(byteStringFromEncodeable(items(3))),
-            transactionsRoot = TrieRoot(byteStringFromEncodeable(items(4))),
-            receiptsRoot = TrieRoot(byteStringFromEncodeable(items(5))),
-            logsBloom = BloomFilter(byteStringFromEncodeable(items(6))),
+            parentHash = BlockHash(fixed(0, "parentHash", 32)),
+            ommersHash = BlockHash(fixed(1, "ommersHash", 32)),
+            beneficiary = fixed(2, "beneficiary", 20),
+            stateRoot = TrieRoot(fixed(3, "stateRoot", 32)),
+            transactionsRoot = TrieRoot(fixed(4, "transactionsRoot", 32)),
+            receiptsRoot = TrieRoot(fixed(5, "receiptsRoot", 32)),
+            logsBloom = BloomFilter(fixed(6, "logsBloom", 256)),
             difficulty = Difficulty(bigIntFromEncodeable(items(7))),
             number = BlockNumber(bigIntFromEncodeable(items(8))),
             gasLimit = GasAmount(bigIntFromEncodeable(items(9))),
             gasUsed = GasAmount(bigIntFromEncodeable(items(10))),
             unixTimestamp = Timestamp(longFromEncodeable(items(11))),
             extraData = byteStringFromEncodeable(items(12)),
-            mixHash = BlockHash(byteStringFromEncodeable(items(13))),
-            nonce = byteStringFromEncodeable(items(14))
+            mixHash = BlockHash(fixed(13, "mixHash", 32)),
+            nonce = fixed(14, "nonce", 8)
           )
 
           items.length match
@@ -304,7 +365,7 @@ object BlockHeaderImplicits:
                   parentBeaconBlockRoot = byteStringFromEncodeable(items(19))
                 )
               )
-            case n if n >= 21 =>
+            case 21 =>
               base.copy(extraFields =
                 HefPostPrague(
                   baseFee = bigIntFromEncodeable(items(15)),
@@ -313,6 +374,19 @@ object BlockHeaderImplicits:
                   excessBlobGas = bigIntFromEncodeable(items(18)),
                   parentBeaconBlockRoot = byteStringFromEncodeable(items(19)),
                   requestsHash = byteStringFromEncodeable(items(20))
+                )
+              )
+            case 23 =>
+              base.copy(extraFields =
+                HefPostAmsterdam(
+                  baseFee = bigIntFromEncodeable(items(15)),
+                  withdrawalsRoot = byteStringFromEncodeable(items(16)),
+                  blobGasUsed = bigIntFromEncodeable(items(17)),
+                  excessBlobGas = bigIntFromEncodeable(items(18)),
+                  parentBeaconBlockRoot = byteStringFromEncodeable(items(19)),
+                  requestsHash = byteStringFromEncodeable(items(20)),
+                  blockAccessListHash = byteStringFromEncodeable(items(21)),
+                  slotNumber = bigIntFromEncodeable(items(22))
                 )
               )
             case n =>

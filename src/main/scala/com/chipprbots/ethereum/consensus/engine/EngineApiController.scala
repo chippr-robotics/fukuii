@@ -169,6 +169,12 @@ class EngineApiController(
                 Some(InvalidParams -> "newPayloadV2 post-Shanghai payload must include withdrawals")
               case 2 if !isShanghaiPayload && hasWithdrawals =>
                 Some(InvalidParams -> "newPayloadV2 pre-Shanghai payload must not include withdrawals")
+              // go-ethereum NewPayloadV2: a pre-Cancun payload carrying either EIP-4844 header field is a params
+              // error, not an INVALID block (EEST `test_invalid_pre_fork_block_with_blob_fields`, -32602).
+              case 2 if payload.excessBlobGas.isDefined =>
+                Some(InvalidParams -> "newPayloadV2: non-nil excessBlobGas pre-cancun")
+              case 2 if payload.blobGasUsed.isDefined =>
+                Some(InvalidParams -> "newPayloadV2: non-nil blobGasUsed pre-cancun")
               case 1 if hasWithdrawals =>
                 Some(InvalidParams -> "newPayloadV1 must not include withdrawals")
               case 1 if isShanghaiPayload =>
@@ -243,77 +249,35 @@ class EngineApiController(
     val params = request.params.map(_.arr).getOrElse(Nil)
     params.headOption match
       case Some(fcsJson: JObject) =>
-        // Per Engine API spec, a malformed forkchoice state or payload attributes must not raise
-        // a JSON-RPC error from the decoder; decoding errors come back as -38003 (invalid
-        // payload attributes).
-        val decoded = scala.util.Try {
-          val fcs = decodeForkChoiceState(fcsJson)
-          val payloadAttrs = params.lift(1).collect { case obj: JObject => decodePayloadAttributes(obj) }
-          (fcs, payloadAttrs)
-        }.toEither
-        decoded match
-          case Left(ex) =>
-            val msg = Option(ex.getMessage).getOrElse(ex.getClass.getSimpleName)
-            IO.pure(
-              JsonRpcResponse(
-                "2.0",
-                None,
-                Some(JsonRpcError(-38003, s"malformed forkchoice params: $msg", None)),
-                reqId(request)
-              )
+        // A forkchoiceState that does not match ForkchoiceStateV1 is -32602 (shanghai.md / cancun.md
+        // engine_forkchoiceUpdatedV2/V3 point 1); nothing is applied. Payload attributes that cannot be
+        // decoded stay -38003 (invalid payload attributes).
+        val decoded: Either[JsonRpcError, (ForkChoiceState, Option[PayloadAttributes])] =
+          for
+            fcs <- decodeForkChoiceState(fcsJson).left.map(msg =>
+              JsonRpcError.InvalidParams(s"invalid forkchoice state: $msg")
             )
+            payloadAttrs <- scala.util
+              .Try(params.lift(1).collect { case obj: JObject => decodePayloadAttributes(obj) })
+              .toEither
+              .left
+              .map { ex =>
+                val msg = Option(ex.getMessage).getOrElse(ex.getClass.getSimpleName)
+                JsonRpcError(-38003, s"malformed payload attributes: $msg", None)
+              }
+          yield (fcs, payloadAttrs)
+        decoded match
+          case Left(error) => IO.pure(JsonRpcResponse("2.0", None, Some(error), reqId(request)))
           case Right((fcs, payloadAttrs)) =>
-            // Version enforcement for forkchoiceUpdated:
-            // V3: requires parentBeaconBlockRoot in payload attributes (Cancun+)
-            // V1/V2: must NOT have parentBeaconBlockRoot
-            // Post-Cancun timestamp: V2 without beacon root → UnsupportedFork
-            // Pre-Cancun timestamp: V3 with beacon root → UnsupportedFork
-            val hasBeaconRoot = payloadAttrs.exists(_.parentBeaconBlockRoot.isDefined)
-            val hasWithdrawals = payloadAttrs.exists(_.withdrawals.isDefined)
-            val attrTimestamp = payloadAttrs.map(_.timestamp)
-            val blockchainConfig = com.chipprbots.ethereum.utils.Config.blockchains.blockchainConfig
-            val isShanghaiTimestamp = attrTimestamp.exists(ts => blockchainConfig.isShanghaiTimestamp(Timestamp(ts)))
-            val isCancunTimestamp = attrTimestamp.exists(ts => blockchainConfig.isCancunTimestamp(Timestamp(ts)))
-
-            // Engine API version matrix. -38005 UNSUPPORTED_FORK only when the RPC method itself is
-            // wrong for the current fork; -38003 INVALID_PAYLOAD_ATTRIBUTES for attribute-shape
-            // violations. V2 is permissive — it accepts V1-shape attrs pre-Shanghai. The hive
-            // withdrawals suite checks exact codes.
-            //   V1: timestamp < shanghai (hard error if post-Shanghai),        withdrawals absent
-            //   V2: accepts pre-Shanghai (V1-shape) OR post-Shanghai (V2-shape), beaconRoot absent
-            //   V3: timestamp ≥ cancun,                                         withdrawals + beaconRoot present
             val InvalidAttrs = -38003
-            val versionError: Option[(Int, String)] = (version, payloadAttrs) match
-              case (3, Some(_)) if !isCancunTimestamp && hasBeaconRoot =>
-                Some(UnsupportedFork -> "forkchoiceUpdatedV3 with beacon root before Cancun activation")
-              case (2, Some(_)) if isCancunTimestamp && hasBeaconRoot =>
-                // V2 attrs are NOT supposed to carry a beacon root. If the CL still sends one at
-                // a Cancun timestamp it's an attribute-shape error → -38003. (hive "Non-Null
-                // Beacon Root" variant)
-                Some(InvalidAttrs -> "forkchoiceUpdatedV2 attrs must not include parentBeaconBlockRoot")
-              case (2, Some(_)) if isCancunTimestamp =>
-                // V2 attrs without beacon root, post-Cancun → wrong method for this fork. hive
-                // "Missing Beacon Root" variant expects -38005 UNSUPPORTED_FORK.
-                Some(UnsupportedFork -> "forkchoiceUpdatedV2 cannot be used post-Cancun, use V3")
-              case (v, Some(_)) if v < 2 && isCancunTimestamp =>
-                Some(UnsupportedFork -> s"forkchoiceUpdatedV$v cannot be used post-Cancun, use V3")
-              case (1, Some(_)) if isShanghaiTimestamp =>
-                Some(UnsupportedFork -> "forkchoiceUpdatedV1 cannot be used post-Shanghai, use V2")
-              case (1, Some(_)) if hasWithdrawals =>
-                Some(InvalidAttrs -> "forkchoiceUpdatedV1 attrs must not include withdrawals")
-              // V2 pre-Shanghai: V1-shape attrs are OK; withdrawals field is NOT allowed.
-              case (2, Some(_)) if !isShanghaiTimestamp && hasWithdrawals =>
-                Some(InvalidAttrs -> "forkchoiceUpdatedV2 attrs must not include withdrawals pre-Shanghai")
-              // V2 post-Shanghai: withdrawals field is required.
-              case (2, Some(_)) if isShanghaiTimestamp && !hasWithdrawals =>
-                Some(InvalidAttrs -> "forkchoiceUpdatedV2 attrs must include withdrawals post-Shanghai")
-              case (2, Some(_)) if hasBeaconRoot =>
-                Some(InvalidAttrs -> "forkchoiceUpdatedV2 attrs must not include parentBeaconBlockRoot")
-              case (3, Some(_)) if !hasWithdrawals =>
-                Some(InvalidAttrs -> "forkchoiceUpdatedV3 attrs must include withdrawals")
-              case (3, Some(_)) if isCancunTimestamp && !hasBeaconRoot =>
-                Some(InvalidAttrs -> "forkchoiceUpdatedV3 attrs must include parentBeaconBlockRoot post-Cancun")
-              case _ => None
+            val versionError: Option[(Int, String)] =
+              payloadAttrs.flatMap(attrs =>
+                EngineApiController.payloadAttributesVersionError(
+                  version,
+                  attrs,
+                  com.chipprbots.ethereum.utils.Config.blockchains.blockchainConfig
+                )
+              )
 
             if versionError.isDefined then
               val (code, msg) = versionError.get
@@ -324,38 +288,53 @@ class EngineApiController(
               // overlay the version error. UnsupportedFork (-38005) does not apply forkchoice —
               // the CL called the wrong method entirely.
               if code == InvalidAttrs then
-                // If head is unknown (syncing), return SYNCING payload status without the
-                // attrs error — validation presupposes a known head. Hive's 'Invalid
-                // PayloadAttributes, Missing BeaconRoot, Syncing=True' expects no error.
+                // The attributes error is the answer ONLY when the forkchoice state was applied to a VALID head.
+                // execution-apis processes payload attributes after applying the forkchoice state and only for a
+                // VALID head (paris.md engine_forkchoiceUpdatedV1 point 7, which shanghai.md and cancun.md extend
+                // with these checks); hive spells the order out in suites/engine/payload_attributes.go. Every other
+                // outcome keeps its own answer: SYNCING and INVALID are payload statuses (hive 'Invalid
+                // PayloadAttributes, Missing BeaconRoot, Syncing=True' expects no error), and an inconsistent
+                // forkchoice state is -38002 — which this branch used to report as -38003.
                 engineApiService.forkchoiceUpdated(fcs, None).map {
-                  case Right(response) if response.payloadStatus.status == PayloadStatus.Syncing =>
-                    JsonRpcResponse("2.0", Some(encodeForkchoiceUpdatedResponse(response)), None, reqId(request))
-                  case _ =>
+                  case Right(response) if response.payloadStatus.status == PayloadStatus.Valid =>
                     JsonRpcResponse("2.0", None, Some(JsonRpcError(code, msg, None)), reqId(request))
+                  case outcome => forkchoiceUpdatedResponse(outcome, request)
                 }
               else
                 IO.pure(
                   JsonRpcResponse("2.0", None, Some(JsonRpcError(code, msg, None)), reqId(request))
                 )
-            else
-              engineApiService.forkchoiceUpdated(fcs, payloadAttrs).map {
-                case Right(response) =>
-                  JsonRpcResponse("2.0", Some(encodeForkchoiceUpdatedResponse(response)), None, reqId(request))
-                case Left(errorMsg) if errorMsg.startsWith("ATTR:") =>
-                  // Invalid payload attributes → -38003 per Engine API spec
-                  JsonRpcResponse(
-                    "2.0",
-                    None,
-                    Some(JsonRpcError(-38003, errorMsg.stripPrefix("ATTR:"), None)),
-                    reqId(request)
-                  )
-                case Left(errorMsg) =>
-                  // Invalid forkchoice state (e.g. unknown safe/finalized hash) → -38002
-                  JsonRpcResponse("2.0", None, Some(JsonRpcError(-38002, errorMsg, None)), reqId(request))
-              }
+            else engineApiService.forkchoiceUpdated(fcs, payloadAttrs).map(forkchoiceUpdatedResponse(_, request))
       case _ =>
         IO.pure(
           JsonRpcResponse("2.0", None, Some(JsonRpcError.InvalidParams("missing fork choice state")), reqId(request))
+        )
+
+  /** The JSON-RPC answer for what `EngineApiService.forkchoiceUpdated` returned. Both paths of
+    * [[handleForkchoiceUpdated]] answer through here, so an error keeps its code whichever path raised it: the service
+    * marks an attributes error with the "ATTR:" prefix (-38003); any other `Left` is an inconsistent forkchoice state
+    * (-38002: an unknown safe or finalized block, or one that is not an ancestor of the head).
+    */
+  private def forkchoiceUpdatedResponse(
+      outcome: Either[String, ForkchoiceUpdatedResponse],
+      request: JsonRpcRequest
+  ): JsonRpcResponse =
+    outcome match
+      case Right(response) =>
+        JsonRpcResponse("2.0", Some(encodeForkchoiceUpdatedResponse(response)), None, reqId(request))
+      case Left(errorMsg) if errorMsg.startsWith("ATTR:") =>
+        JsonRpcResponse(
+          "2.0",
+          None,
+          Some(JsonRpcError(EngineApiController.InvalidPayloadAttributesCode, errorMsg.stripPrefix("ATTR:"), None)),
+          reqId(request)
+        )
+      case Left(errorMsg) =>
+        JsonRpcResponse(
+          "2.0",
+          None,
+          Some(JsonRpcError(EngineApiController.InvalidForkchoiceStateCode, errorMsg, None)),
+          reqId(request)
         )
 
   private def handleExchangeCapabilities(request: JsonRpcRequest): IO[JsonRpcResponse] =
@@ -373,189 +352,102 @@ class EngineApiController(
       case Some(JArray(List(JString(id)))) => id
       case _                               => ""
     val payloadId = hexToByteString(payloadIdHex)
-    engineApiService.getPayload(payloadId).map {
-      case Right(block) =>
+    engineApiService.getPayload(payloadId).flatMap {
+      case Right(stored) =>
         // Validate the RPC version matches the payload's fork timestamp. Hive's
         // "GetPayloadV2 To Request Cancun Payload" and "GetPayloadV3 To Request Shanghai
         // Payload" tests exercise this — V2 for a Cancun-ts payload and V3 for a
         // Shanghai-ts payload must both return -38005 UNSUPPORTED_FORK.
-        val cfg = com.chipprbots.ethereum.utils.Config.blockchains.blockchainConfig
-        val ts = block.header.unixTimestamp
-        val isCancunPayload = cfg.isCancunTimestamp(ts)
-        val isShanghaiPayload = cfg.isShanghaiTimestamp(ts)
-        val isOsakaPayload = cfg.isOsakaTimestamp(ts)
-        val forkError: Option[String] = version match
-          case 2 if isCancunPayload   => Some("getPayloadV2 cannot return a Cancun payload; use V3")
-          case 3 if !isCancunPayload  => Some("getPayloadV3 can only return Cancun-or-later payloads")
-          case 1 if isShanghaiPayload => Some("getPayloadV1 cannot return a Shanghai-or-later payload; use V2")
-          case 4 if isOsakaPayload    => Some("getPayloadV4 cannot return an Osaka-or-later payload; use V5")
-          case 5 if !isOsakaPayload   => Some("getPayloadV5 can only return Osaka-or-later payloads")
-          case _                      => None
-        forkError match
+        EngineApiController.getPayloadForkError(
+          version,
+          stored.header.unixTimestamp,
+          com.chipprbots.ethereum.utils.Config.blockchains.blockchainConfig
+        ) match
           case Some(msg) =>
-            JsonRpcResponse("2.0", None, Some(JsonRpcError(UnsupportedFork, msg, None)), reqId(request))
+            // Refused BEFORE the payload is resolved, so a wrong-version call does not end its build process:
+            // go-ethereum rejects it on the payload ID's version, before Payload.Resolve.
+            IO.pure(JsonRpcResponse("2.0", None, Some(JsonRpcError(UnsupportedFork, msg, None)), reqId(request)))
           case None =>
-            val payload = blockToExecutionPayload(block)
-            // V1 returns bare ExecutionPayload.
-            // V2+ wraps it in ExecutionPayloadEnvelope per Engine API spec.
-            // blockValue depends on receipts (effectiveGasPrice per tx). Fetch once so V2/V3/V4 share.
-            lazy val receipts = engineApiService.getPayloadReceipts(payloadId)
-            lazy val blockValueHex = computeBlockValue(block, receipts)
-            lazy val blobsBundleJson: JObject =
-              val bundle = engineApiService.getPayloadBlobsBundle(payloadId)
-              JObject(
-                "commitments" -> JArray(bundle.commitments.toList.map(c => JString(byteStringToHex(c)))),
-                "proofs" -> JArray(bundle.proofs.toList.map(p => JString(byteStringToHex(p)))),
-                "blobs" -> JArray(bundle.blobs.toList.map(b => JString(byteStringToHex(b))))
-              )
-            val result: JValue = version match
-              case 1 => payload
-              case 2 =>
-                JObject(
-                  "executionPayload" -> payload,
-                  "blockValue" -> JString(blockValueHex)
-                )
-              case 3 =>
-                JObject(
-                  "executionPayload" -> payload,
-                  "blockValue" -> JString(blockValueHex),
-                  "blobsBundle" -> blobsBundleJson,
-                  "shouldOverrideBuilder" -> JBool(false)
-                )
-              case 4 => // Prague: BlobsBundleV1 + executionRequests (EIP-7685)
-                val executionRequests = engineApiService.getPayloadExecutionRequests(payloadId)
-                JObject(
-                  "executionPayload" -> payload,
-                  "blockValue" -> JString(blockValueHex),
-                  "blobsBundle" -> blobsBundleJson,
-                  "shouldOverrideBuilder" -> JBool(false),
-                  "executionRequests" -> JArray(
-                    executionRequests.toList.map(r => JString(byteStringToHex(r)))
-                  )
-                )
-              case _ => // V5+: BlobsBundleV2 (EIP-7594 cell proofs) + executionRequests
-                val executionRequests = engineApiService.getPayloadExecutionRequests(payloadId)
-                val blobsBundleV2Json: JObject =
-                  val bundle = engineApiService.getPayloadBlobsBundle(payloadId)
+            // The payload brought up to date with the pool, once (EngineApiService.resolvePayload), and answered
+            // WHOLE from what that settled: block, receipts, execution requests and blobs bundle, the same on every
+            // call for the id. A rebuild keeps the parent and the attributes, so the fork checked above is the fork of
+            // what is served.
+            engineApiService.resolvePayload(payloadId).map {
+              case Left(err) =>
+                JsonRpcResponse("2.0", None, Some(JsonRpcError(-38001, err, None)), reqId(request))
+              case Right(served) =>
+                val block = served.block
+                val payload = blockToExecutionPayload(block)
+                // V1 returns bare ExecutionPayload.
+                // V2+ wraps it in ExecutionPayloadEnvelope per Engine API spec.
+                // blockValue depends on receipts (effectiveGasPrice per tx).
+                lazy val blockValueHex = computeBlockValue(block, served.receipts)
+                lazy val blobsBundleJson: JObject =
+                  val bundle = served.blobsBundle
                   JObject(
                     "commitments" -> JArray(bundle.commitments.toList.map(c => JString(byteStringToHex(c)))),
-                    "proofs" -> JArray(bundle.cellProofsPerBlob.flatten.toList.map(p => JString(byteStringToHex(p)))),
+                    "proofs" -> JArray(bundle.proofs.toList.map(p => JString(byteStringToHex(p)))),
                     "blobs" -> JArray(bundle.blobs.toList.map(b => JString(byteStringToHex(b))))
                   )
-                JObject(
-                  "executionPayload" -> payload,
-                  "blockValue" -> JString(blockValueHex),
-                  "blobsBundle" -> blobsBundleV2Json,
-                  "shouldOverrideBuilder" -> JBool(false),
-                  "executionRequests" -> JArray(
-                    executionRequests.toList.map(r => JString(byteStringToHex(r)))
-                  )
-                )
-            JsonRpcResponse("2.0", Some(result), None, reqId(request))
+                val result: JValue = version match
+                  case 1 => payload
+                  case 2 =>
+                    JObject(
+                      "executionPayload" -> payload,
+                      "blockValue" -> JString(blockValueHex)
+                    )
+                  case 3 =>
+                    JObject(
+                      "executionPayload" -> payload,
+                      "blockValue" -> JString(blockValueHex),
+                      "blobsBundle" -> blobsBundleJson,
+                      "shouldOverrideBuilder" -> JBool(false)
+                    )
+                  case 4 => // Prague: BlobsBundleV1 + executionRequests (EIP-7685)
+                    val executionRequests = served.executionRequests
+                    JObject(
+                      "executionPayload" -> payload,
+                      "blockValue" -> JString(blockValueHex),
+                      "blobsBundle" -> blobsBundleJson,
+                      "shouldOverrideBuilder" -> JBool(false),
+                      "executionRequests" -> JArray(
+                        executionRequests.toList.map(r => JString(byteStringToHex(r)))
+                      )
+                    )
+                  case _ => // V5+: BlobsBundleV2 (EIP-7594 cell proofs) + executionRequests
+                    val executionRequests = served.executionRequests
+                    val blobsBundleV2Json: JObject =
+                      val bundle = served.blobsBundle
+                      JObject(
+                        "commitments" -> JArray(bundle.commitments.toList.map(c => JString(byteStringToHex(c)))),
+                        "proofs" -> JArray(
+                          bundle.cellProofsPerBlob.flatten.toList.map(p => JString(byteStringToHex(p)))
+                        ),
+                        "blobs" -> JArray(bundle.blobs.toList.map(b => JString(byteStringToHex(b))))
+                      )
+                    JObject(
+                      "executionPayload" -> payload,
+                      "blockValue" -> JString(blockValueHex),
+                      "blobsBundle" -> blobsBundleV2Json,
+                      "shouldOverrideBuilder" -> JBool(false),
+                      "executionRequests" -> JArray(
+                        executionRequests.toList.map(r => JString(byteStringToHex(r)))
+                      )
+                    )
+                JsonRpcResponse("2.0", Some(result), None, reqId(request))
+            }
       case Left(err) =>
-        JsonRpcResponse("2.0", None, Some(JsonRpcError(-38001, err, None)), reqId(request))
+        IO.pure(JsonRpcResponse("2.0", None, Some(JsonRpcError(-38001, err, None)), reqId(request)))
     }
 
-  /** blockValue = Σ gasUsedByTx_i × (effectiveGasPrice_i − baseFeePerGas). Miner's priority-fee revenue for the block.
-    * Per EIP-3675 V2 envelope, this is what the CL reads to pick the highest-value payload across builders.
-    *
-    * For each tx:
-    *   - gasUsedByTx = receipt.cumulativeGas − previousReceipt.cumulativeGas (since receipts record CUMULATIVE gas, not
-    *     per-tx).
-    *   - effectiveGasPrice = for legacy / access-list txs: tx.gasPrice. For EIP-1559 / blob: min(maxFeePerGas, baseFee
-    *     + maxPriorityFeePerGas).
-    */
-  private def computeBlockValue(
-      block: Block,
-      receipts: Seq[com.chipprbots.ethereum.domain.Receipt]
-  ): String =
-    import com.chipprbots.ethereum.domain.{
-      TransactionWithAccessList,
-      TransactionWithDynamicFee,
-      BlobTransaction,
-      SetCodeTransaction
-    }
-    val baseFee = block.header.extraFields match
-      case BlockHeader.HeaderExtraFields.HefPostOlympia(bf)               => bf
-      case BlockHeader.HeaderExtraFields.HefPostShanghai(bf, _)           => bf
-      case BlockHeader.HeaderExtraFields.HefPostCancun(bf, _, _, _, _)    => bf
-      case BlockHeader.HeaderExtraFields.HefPostPrague(bf, _, _, _, _, _) => bf
-      case _                                                              => BigInt(0)
-    if receipts.isEmpty then "0x0"
-    else
-      val txs = block.body.transactionList
-      // derive per-tx gas used from cumulative deltas
-      val gasUsedPerTx: Seq[BigInt] = receipts
-        .map(_.cumulativeGasUsed)
-        .scanLeft(BigInt(0)) { (_, cum) =>
-          cum
-        }
-        .sliding(2, 1)
-        .collect { case Seq(prev, cur) => cur - prev }
-        .toSeq
-      val totalPriorityFee: BigInt = txs
-        .zip(gasUsedPerTx)
-        .map { case (stx, gasUsed) =>
-          val effectiveGasPrice: BigInt = stx.tx match
-            case t: TransactionWithDynamicFee => (baseFee + t.maxPriorityFeePerGas).min(t.maxFeePerGas)
-            case t: BlobTransaction           => (baseFee + t.maxPriorityFeePerGas).min(t.maxFeePerGas)
-            case t: SetCodeTransaction        => (baseFee + t.maxPriorityFeePerGas).min(t.maxFeePerGas)
-            case t: TransactionWithAccessList => t.gasPrice.value
-            case _                            => stx.tx.gasPrice.value
-          val priorityPerGas = (effectiveGasPrice - baseFee).max(0)
-          gasUsed * priorityPerGas
-        }
-        .sum
-      s"0x${totalPriorityFee.toString(16)}"
+  // Payload JSON encoding and blockValue derivation live in the companion object so the
+  // `testing_*` namespace (jsonrpc/TestingService) emits a byte-identical ExecutionPayloadV3.
+  // One codec, one shape: a change here cannot silently diverge between the two surfaces.
+  private def computeBlockValue(block: Block, receipts: Seq[com.chipprbots.ethereum.domain.Receipt]): String =
+    EngineApiController.computeBlockValue(block, receipts)
 
   private def blockToExecutionPayload(block: Block): JObject =
-    import block.header
-    def hex(bs: ByteString): String = "0x" + org.bouncycastle.util.encoders.Hex.toHexString(bs.toArray)
-    def hexQ(n: BigInt): String = s"0x${n.toString(16)}"
-
-    val txs = block.body.transactionList.map { stx =>
-      JString(
-        "0x" + org.bouncycastle.util.encoders.Hex.toHexString(SignedTransaction.byteArraySerializable.toBytes(stx))
-      )
-    }
-    val withdrawals = block.body.withdrawals.map { wds =>
-      JArray(wds.map { w =>
-        JObject(
-          "index" -> JString(hexQ(w.index)),
-          "validatorIndex" -> JString(hexQ(w.validatorIndex)),
-          "address" -> JString(hex(w.address.bytes)),
-          "amount" -> JString(hexQ(w.amount))
-        )
-      }.toList)
-    }
-    val (baseFee, blobGasUsed, excessBlobGas) = header.extraFields match
-      case BlockHeader.HeaderExtraFields.HefPostOlympia(bf)                   => (Some(bf), None, None)
-      case BlockHeader.HeaderExtraFields.HefPostShanghai(bf, _)               => (Some(bf), None, None)
-      case BlockHeader.HeaderExtraFields.HefPostCancun(bf, _, bgu, ebg, _)    => (Some(bf), Some(bgu), Some(ebg))
-      case BlockHeader.HeaderExtraFields.HefPostPrague(bf, _, bgu, ebg, _, _) => (Some(bf), Some(bgu), Some(ebg))
-      case _                                                                  => (None, None, None)
-    val baseFields = List(
-      "parentHash" -> JString(hex(header.parentHash.value)),
-      "feeRecipient" -> JString(hex(header.beneficiary)),
-      "stateRoot" -> JString(hex(header.stateRoot.value)),
-      "receiptsRoot" -> JString(hex(header.receiptsRoot.value)),
-      "logsBloom" -> JString(hex(header.logsBloom.value)),
-      "prevRandao" -> JString(hex(header.mixHash.value)),
-      "blockNumber" -> JString(hexQ(header.number.value)),
-      "gasLimit" -> JString(hexQ(header.gasLimit.value)),
-      "gasUsed" -> JString(hexQ(header.gasUsed.value)),
-      "timestamp" -> JString(s"0x${header.unixTimestamp.toHexString}"),
-      "extraData" -> JString(hex(header.extraData)),
-      "baseFeePerGas" -> JString(hexQ(baseFee.getOrElse(BigInt(0)))),
-      "blockHash" -> JString(hex(header.hash.value)),
-      "transactions" -> JArray(txs.toList)
-    )
-    val withdrawalsField = withdrawals.map(w => "withdrawals" -> w).toList
-    val blobFields = List(
-      blobGasUsed.map(v => "blobGasUsed" -> JString(hexQ(v))),
-      excessBlobGas.map(v => "excessBlobGas" -> JString(hexQ(v)))
-    ).flatten
-    JObject(baseFields ++ withdrawalsField ++ blobFields)
+    EngineApiController.blockToExecutionPayload(block)
 
   private def handleGetClientVersion(request: JsonRpcRequest): IO[JsonRpcResponse] =
     // Per execution-apis spec, `commit` MUST be the canonical short git SHA — pure
@@ -715,13 +607,26 @@ class EngineApiController(
       amount = extractQuantity(fields, "amount")
     )
 
-  private def decodeForkChoiceState(json: JObject): ForkChoiceState =
+  /** A ForkchoiceStateV1, or why the JSON is not one: three required fields, each DATA of 32 bytes — a string of `0x`
+    * and exactly 64 hex digits, as go-ethereum's `common.Hash` decoding (hexutil.UnmarshalFixedJSON) requires.
+    * go-ethereum reads a MISSING field as the zero hash; the spec's structure has all three required, and a CL always
+    * sends all three, so a missing one is refused here too.
+    */
+  private def decodeForkChoiceState(json: JObject): Either[String, ForkChoiceState] =
     val fields = json.obj.toMap
-    ForkChoiceState(
-      headBlockHash = hexToByteString(extractString(fields, "headBlockHash")),
-      safeBlockHash = hexToByteString(extractString(fields, "safeBlockHash")),
-      finalizedBlockHash = hexToByteString(extractString(fields, "finalizedBlockHash"))
-    )
+    def isHexDigit(c: Char): Boolean = (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')
+    def hash32(key: String): Either[String, ByteString] =
+      fields.get(key) match
+        case None => Left(s"$key: missing")
+        case Some(JString(s))
+            if s.length == 66 && (s.startsWith("0x") || s.startsWith("0X")) && s.drop(2).forall(isHexDigit) =>
+          Right(ByteString(org.bouncycastle.util.encoders.Hex.decode(s.drop(2))))
+        case Some(_) => Left(s"$key: not a 0x-prefixed 32-byte hash")
+    for
+      head <- hash32("headBlockHash")
+      safe <- hash32("safeBlockHash")
+      finalized <- hash32("finalizedBlockHash")
+    yield ForkChoiceState(headBlockHash = head, safeBlockHash = safe, finalizedBlockHash = finalized)
 
   private def decodePayloadAttributes(json: JObject): PayloadAttributes =
     val fields = json.obj.toMap
@@ -768,3 +673,231 @@ class EngineApiController(
         case JInt(n) => n
       }
       .getOrElse(BigInt(0))
+
+/** Pure Engine-API JSON encoders, shared with the execution-apis `testing_*` namespace.
+  *
+  * These are the single source of truth for the ExecutionPayloadV3 wire shape and for the `blockValue` derivation.
+  * `testing_buildBlockV1` returns the same envelope engine_getPayloadV3+ does, so both must encode identically.
+  */
+object EngineApiController:
+
+  private val InvalidParamsCode = -32602
+  private val InvalidForkchoiceStateCode = -38002
+  private val InvalidPayloadAttributesCode = -38003
+  private val UnsupportedForkCode = -38005
+
+  /** The JSON-RPC error (code, message) an `engine_forkchoiceUpdatedV{version}` call must answer for these payload
+    * attributes, or None when they are acceptable for the method. Pure: reads nothing but its arguments.
+    *
+    * Checks run in go-ethereum's order (eth/catalyst/api.go `ForkchoiceUpdatedV1/V2/V3`): the attribute SHAPE first,
+    * the fork window last. The order is observable, because an attribute set that is both mis-shaped and for the wrong
+    * fork gets the shape code, and hive asserts it. `ForkchoiceUpdatedV3 To Request Shanghai Payload, Null Beacon Root`
+    * sends V3 at a Shanghai timestamp without a beacon root and expects -38003; the `Non-Null Beacon Root` variant
+    * (same timestamp, beacon root present) expects -38005. The old matrix tested the fork first and let the
+    * null-beacon-root case through as VALID, because its only beacon-root check was confined to Cancun timestamps.
+    *
+    *   - V1: withdrawals or beacon root present -> -32602 (go-ethereum `paramsErr`), then a Shanghai-or-later timestamp
+    *     -> -38005. Deliberate deviation: go-ethereum also accepts Shanghai timestamps on V1 (it reports -32602 only
+    *     from Cancun on). We keep the execution-apis "update the methods of previous forks" rule, because a V1 build at
+    *     a Shanghai timestamp would carry no withdrawals list, and neither `getPayloadV1` nor `newPayloadV1` here
+    *     serves a Shanghai payload, so the payload could never round-trip.
+    *   - V2: beacon root present -> -38003; Paris with withdrawals -> -38003; Shanghai without withdrawals -> -38003;
+    *     any fork other than Paris/Shanghai -> -38005.
+    *   - V3: withdrawals missing -> -38003; beacon root missing -> -38003 (at ANY timestamp); a fork outside
+    *     Cancun..BPO5 (i.e. pre-Cancun, or Amsterdam onwards, which needs V4) -> -38005.
+    *
+    * -38003 answers still apply the forkchoice state first (see `handleForkchoiceUpdated`); -32602 and -38005 do not.
+    */
+  def payloadAttributesVersionError(
+      version: Int,
+      attrs: PayloadAttributes,
+      blockchainConfig: com.chipprbots.ethereum.utils.BlockchainConfig
+  ): Option[(Int, String)] =
+    val ts = Timestamp(attrs.timestamp)
+    val hasWithdrawals = attrs.withdrawals.isDefined
+    val hasBeaconRoot = attrs.parentBeaconBlockRoot.isDefined
+    val isShanghai = blockchainConfig.isShanghaiTimestamp(ts)
+    val isCancun = blockchainConfig.isCancunTimestamp(ts)
+    // The Engine API only exists post-merge, so "not yet Shanghai" is Paris.
+    val latestIsParis = !isShanghai
+    val latestIsShanghai = isShanghai && !isCancun
+    // go-ethereum checkFork(ts, Cancun, Prague, Osaka, BPO1..BPO5): Cancun is active and Amsterdam is not.
+    val inV3Window = isCancun && !blockchainConfig.isAmsterdamTimestamp(ts)
+    version match
+      case 1 =>
+        if hasWithdrawals || hasBeaconRoot then
+          Some(InvalidParamsCode -> "forkchoiceUpdatedV1: withdrawals and beacon root not supported in V1")
+        else if isShanghai then Some(UnsupportedForkCode -> "forkchoiceUpdatedV1 cannot be used post-Shanghai, use V2")
+        else None
+      case 2 =>
+        if hasBeaconRoot then Some(InvalidPayloadAttributesCode -> "forkchoiceUpdatedV2: unexpected beacon root")
+        else if latestIsParis && hasWithdrawals then
+          Some(InvalidPayloadAttributesCode -> "forkchoiceUpdatedV2: withdrawals before Shanghai")
+        else if latestIsShanghai && !hasWithdrawals then
+          Some(InvalidPayloadAttributesCode -> "forkchoiceUpdatedV2: missing withdrawals")
+        else if !(latestIsParis || latestIsShanghai) then
+          Some(UnsupportedForkCode -> "forkchoiceUpdatedV2 must only be called for Paris or Shanghai payloads")
+        else None
+      case _ =>
+        if !hasWithdrawals then Some(InvalidPayloadAttributesCode -> "forkchoiceUpdatedV3: missing withdrawals")
+        else if !hasBeaconRoot then Some(InvalidPayloadAttributesCode -> "forkchoiceUpdatedV3: missing beacon root")
+        else if !inV3Window then
+          Some(UnsupportedForkCode -> "forkchoiceUpdatedV3 must only be called for Cancun/Prague/Osaka payloads")
+        else None
+
+  /** The -38005 message when engine_getPayloadV{version} must not serve a payload built for `timestamp`, or None when
+    * it may. Each version serves one fork window — go-ethereum's `checkFork` per version (eth/catalyst/api.go), and
+    * execution-apis "MUST return -38005: Unsupported fork error if the timestamp of the built payload does not fall
+    * within the time frame of the <fork> fork" (cancun.md getPayloadV3, prague.md getPayloadV4, osaka.md getPayloadV5):
+    *   - V1: Paris. go-ethereum checks only the payload ID's version for V1; fukuii keeps V1 to Paris, as for the other
+    *     V1 methods (see [[payloadAttributesVersionError]]).
+    *   - V2: Paris and Shanghai.
+    *   - V3: Cancun.
+    *   - V4: Prague.
+    *   - V5: Osaka and the blob-parameter-only forks after it (go-ethereum: Osaka, BPO1..BPO5).
+    *   - There is no V6 (Amsterdam), so no version serves an Amsterdam payload.
+    *
+    * V3 used to serve every payload from Cancun on, V4 every payload before Osaka, and V5 Amsterdam.
+    *
+    * Pure: reads nothing but its arguments. The controller calls it before resolving the payload, so a refused call
+    * neither freezes the payload nor takes anything from it.
+    */
+  def getPayloadForkError(
+      version: Int,
+      timestamp: Timestamp,
+      blockchainConfig: com.chipprbots.ethereum.utils.BlockchainConfig
+  ): Option[String] =
+    val shanghai = blockchainConfig.isShanghaiTimestamp(timestamp)
+    val cancun = blockchainConfig.isCancunTimestamp(timestamp)
+    val prague = blockchainConfig.isPragueTimestamp(timestamp)
+    val osaka = blockchainConfig.isOsakaTimestamp(timestamp)
+    val amsterdam = blockchainConfig.isAmsterdamTimestamp(timestamp)
+    val fork =
+      if amsterdam then "an Amsterdam"
+      else if blockchainConfig.isBpo2Timestamp(timestamp) then "a BPO2"
+      else if blockchainConfig.isBpo1Timestamp(timestamp) then "a BPO1"
+      else if osaka then "an Osaka"
+      else if prague then "a Prague"
+      else if cancun then "a Cancun"
+      else if shanghai then "a Shanghai"
+      else "a Paris"
+    def refuse(serves: String): Some[String] = Some(
+      s"getPayloadV$version serves $serves payloads only, not $fork payload"
+    )
+    version match
+      case 1 => if shanghai then refuse("Paris") else None
+      case 2 => if cancun then refuse("Paris and Shanghai") else None
+      case 3 => if !cancun || prague then refuse("Cancun") else None
+      case 4 => if !prague || osaka then refuse("Prague") else None
+      case 5 => if !osaka || amsterdam then refuse("Osaka (and BPO)") else None
+      case _ => refuse("no")
+
+  def byteStringToHex(bs: ByteString): String = "0x" + bs.map("%02x".format(_)).mkString
+
+  /** blockValue = Σ gasUsedByTx_i × (effectiveGasPrice_i − baseFeePerGas). Miner's priority-fee revenue for the block.
+    * Per EIP-3675 V2 envelope, this is what the CL reads to pick the highest-value payload across builders.
+    *
+    * For each tx:
+    *   - gasUsedByTx = receipt.cumulativeGas − previousReceipt.cumulativeGas (since receipts record CUMULATIVE gas, not
+    *     per-tx).
+    *   - effectiveGasPrice = for legacy / access-list txs: tx.gasPrice. For EIP-1559 / blob: min(maxFeePerGas, baseFee
+    *     + maxPriorityFeePerGas).
+    */
+  def computeBlockValue(
+      block: Block,
+      receipts: Seq[com.chipprbots.ethereum.domain.Receipt]
+  ): String =
+    import com.chipprbots.ethereum.domain.{
+      TransactionWithAccessList,
+      TransactionWithDynamicFee,
+      BlobTransaction,
+      SetCodeTransaction
+    }
+    val baseFee = block.header.extraFields match
+      case BlockHeader.HeaderExtraFields.HefPostOlympia(bf)               => bf
+      case BlockHeader.HeaderExtraFields.HefPostShanghai(bf, _)           => bf
+      case BlockHeader.HeaderExtraFields.HefPostCancun(bf, _, _, _, _)    => bf
+      case BlockHeader.HeaderExtraFields.HefPostPrague(bf, _, _, _, _, _) => bf
+      // Amsterdam: without this the catch-all yields baseFee 0, and every priority fee below is
+      // computed against the wrong base — engine_getPayload would report an inflated block value.
+      case BlockHeader.HeaderExtraFields.HefPostAmsterdam(bf, _, _, _, _, _, _, _) => bf
+      case _                                                                       => BigInt(0)
+    if receipts.isEmpty then "0x0"
+    else
+      val txs = block.body.transactionList
+      // derive per-tx gas used from cumulative deltas
+      val gasUsedPerTx: Seq[BigInt] = receipts
+        .map(_.cumulativeGasUsed)
+        .scanLeft(BigInt(0)) { (_, cum) =>
+          cum
+        }
+        .sliding(2, 1)
+        .collect { case Seq(prev, cur) => cur - prev }
+        .toSeq
+      val totalPriorityFee: BigInt = txs
+        .zip(gasUsedPerTx)
+        .map { case (stx, gasUsed) =>
+          val effectiveGasPrice: BigInt = stx.tx match
+            case t: TransactionWithDynamicFee => (baseFee + t.maxPriorityFeePerGas).min(t.maxFeePerGas)
+            case t: BlobTransaction           => (baseFee + t.maxPriorityFeePerGas).min(t.maxFeePerGas)
+            case t: SetCodeTransaction        => (baseFee + t.maxPriorityFeePerGas).min(t.maxFeePerGas)
+            case t: TransactionWithAccessList => t.gasPrice.value
+            case _                            => stx.tx.gasPrice.value
+          val priorityPerGas = (effectiveGasPrice - baseFee).max(0)
+          gasUsed * priorityPerGas
+        }
+        .sum
+      s"0x${totalPriorityFee.toString(16)}"
+
+  def blockToExecutionPayload(block: Block): JObject =
+    import block.header
+    def hex(bs: ByteString): String = "0x" + org.bouncycastle.util.encoders.Hex.toHexString(bs.toArray)
+    def hexQ(n: BigInt): String = s"0x${n.toString(16)}"
+
+    val txs = block.body.transactionList.map { stx =>
+      JString(
+        "0x" + org.bouncycastle.util.encoders.Hex.toHexString(SignedTransaction.byteArraySerializable.toBytes(stx))
+      )
+    }
+    val withdrawals = block.body.withdrawals.map { wds =>
+      JArray(wds.map { w =>
+        JObject(
+          "index" -> JString(hexQ(w.index)),
+          "validatorIndex" -> JString(hexQ(w.validatorIndex)),
+          "address" -> JString(hex(w.address.bytes)),
+          "amount" -> JString(hexQ(w.amount))
+        )
+      }.toList)
+    }
+    val (baseFee, blobGasUsed, excessBlobGas) = header.extraFields match
+      case BlockHeader.HeaderExtraFields.HefPostOlympia(bf)                   => (Some(bf), None, None)
+      case BlockHeader.HeaderExtraFields.HefPostShanghai(bf, _)               => (Some(bf), None, None)
+      case BlockHeader.HeaderExtraFields.HefPostCancun(bf, _, bgu, ebg, _)    => (Some(bf), Some(bgu), Some(ebg))
+      case BlockHeader.HeaderExtraFields.HefPostPrague(bf, _, bgu, ebg, _, _) => (Some(bf), Some(bgu), Some(ebg))
+      // Amsterdam: the catch-all returns (None, None, None), which makes engine_getPayload omit
+      // baseFeePerGas, blobGasUsed AND excessBlobGas entirely on an Amsterdam payload.
+      case BlockHeader.HeaderExtraFields.HefPostAmsterdam(bf, _, bgu, ebg, _, _, _, _) =>
+        (Some(bf), Some(bgu), Some(ebg))
+      case _ => (None, None, None)
+    val baseFields = List(
+      "parentHash" -> JString(hex(header.parentHash.value)),
+      "feeRecipient" -> JString(hex(header.beneficiary)),
+      "stateRoot" -> JString(hex(header.stateRoot.value)),
+      "receiptsRoot" -> JString(hex(header.receiptsRoot.value)),
+      "logsBloom" -> JString(hex(header.logsBloom.value)),
+      "prevRandao" -> JString(hex(header.mixHash.value)),
+      "blockNumber" -> JString(hexQ(header.number.value)),
+      "gasLimit" -> JString(hexQ(header.gasLimit.value)),
+      "gasUsed" -> JString(hexQ(header.gasUsed.value)),
+      "timestamp" -> JString(s"0x${header.unixTimestamp.toHexString}"),
+      "extraData" -> JString(hex(header.extraData)),
+      "baseFeePerGas" -> JString(hexQ(baseFee.getOrElse(BigInt(0)))),
+      "blockHash" -> JString(hex(header.hash.value)),
+      "transactions" -> JArray(txs.toList)
+    )
+    val withdrawalsField = withdrawals.map(w => "withdrawals" -> w).toList
+    val blobFields = List(
+      blobGasUsed.map(v => "blobGasUsed" -> JString(hexQ(v))),
+      excessBlobGas.map(v => "excessBlobGas" -> JString(hexQ(v)))
+    ).flatten
+    JObject(baseFields ++ withdrawalsField ++ blobFields)
