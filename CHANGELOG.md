@@ -79,20 +79,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
       completes. With `do-snap-sync = false` the node starts regular sync and logs an error:
       regular sync fetches the missing state node by node and, if peers cannot serve it, re-syncs
       with SNAP from a newer pivot, even with `do-snap-sync` off.
-    - A node where fast sync finished earlier still starts SNAP sync when `do-snap-sync` is on and
-      SNAP has not completed on it, as earlier releases did: the `FastSyncDone` flag cannot be
-      trusted to mean the state is complete. Near the chain head, SNAP finds its pivot is not ahead
-      of the local best block and hands over to regular sync without downloading anything. It
-      needs a snap-capable peer to see the head: until one connects, it retries, then waits in
-      dormant mode, and the node imports no blocks meanwhile. More than 64 blocks behind, SNAP
-      downloads and heals the state at a fresh pivot instead of executing the missed blocks. The
-      near-head hand-over does not mark SNAP complete, so it recurs at each restart.
+    - A node where fast sync finished earlier continues with regular sync, even with
+      `do-snap-sync` on, unless SNAP has progress there (its saved pivot is the node's best block,
+      or its accounts are complete): then SNAP resumes. Regular sync does not need fast sync's trie
+      to be complete: it fetches missing state from peers node by node and, if that fails,
+      re-syncs with SNAP from a newer pivot.
     - If your configuration set `do-fast-sync = false` to sync from genesis (an archive node, for
       example), set `do-snap-sync = false`; otherwise the node uses SNAP sync.
     - Fast sync's progress record (column family `f`, key `fast-sync-state`) is deleted at the
       first start, once the node has checked whether fast sync left it stranded. The
       `FastSyncCooldownUntilMillis` and `SnapFastCycleCount` app-state keys stay on disk, unread.
-      `FastSyncDone` is still read, but no longer picks the sync mode.
+      `FastSyncDone` is still read: with SNAP on, it sends a node where SNAP has no progress to
+      regular sync.
 
 ### Fixed
 - **Critical**: Fixed ETH68 peer connection failures due to incorrect message decoder order
