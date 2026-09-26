@@ -5985,32 +5985,32 @@ proposing), <a href="https://eips.ethereum.org/EIPS/eip-8061">8061</a> (increase
 <tr>
 <td><code>ExecutionPayloadV4</code></td>
 <td><code>ExecutionPayloadV3</code> + <code>blockAccessList</code> (RLP, EIP-7928) + <code>slotNumber</code> (EIP-7843)</td>
-<td><strong>Not implemented</strong></td>
+<td>Implemented: the header commits to <code>keccak256</code> of the list's bytes as sent</td>
 </tr>
 <tr>
 <td><code>PayloadAttributesV4</code></td>
 <td><code>PayloadAttributesV3</code> + <code>slotNumber</code> + <code>targetGasLimit</code></td>
-<td><strong>Not implemented</strong></td>
+<td>Implemented: <code>slotNumber</code> required, <code>targetGasLimit</code> optional (as in go-ethereum); both are in the payload ID</td>
 </tr>
 <tr>
 <td><code>engine_newPayloadV5</code></td>
 <td>Takes <code>ExecutionPayloadV4</code>; missing <code>blockAccessList</code> → <code>-32602</code>; undecodable BAL → <code>INVALID</code></td>
-<td><strong>Not implemented</strong></td>
+<td>Implemented. The access list is decoded strictly and bound to the header through the block hash; its <strong>content is trusted</strong>, not recomputed from execution, until <a href="https://github.com/chippr-robotics/fukuii/issues/1426">#1426</a></td>
 </tr>
 <tr>
 <td><code>engine_getPayloadV6</code></td>
 <td>Returns <code>ExecutionPayloadV4</code></td>
-<td><strong>Not implemented</strong></td>
+<td>Implemented, but there is nothing to serve yet (see below)</td>
 </tr>
 <tr>
 <td><code>engine_forkchoiceUpdatedV4</code></td>
-<td>Takes <code>PayloadAttributesV4</code></td>
-<td><strong>Not implemented</strong></td>
+<td>Takes <code>PayloadAttributesV4</code> and <code>custodyColumns</code></td>
+<td>Implemented. <code>custodyColumns</code> must be 16-byte DATA or null (else <code>-32602</code>) and is otherwise ignored: fukuii does not sample blobs</td>
 </tr>
 <tr>
 <td><code>engine_getPayloadBodiesByHashV2</code> / <code>ByRangeV2</code></td>
 <td><code>ExecutionPayloadBodyV2</code> adds <code>blockAccessList</code> (<code>null</code> pre-Amsterdam or pruned)</td>
-<td><strong>Not implemented</strong></td>
+<td><strong>Not implemented</strong> (<a href="https://github.com/chippr-robotics/fukuii/issues/1428">#1428</a>)</td>
 </tr>
 <tr>
 <td><code>engine_getBlobsV4</code></td>
@@ -6019,11 +6019,18 @@ proposing), <a href="https://eips.ethereum.org/EIPS/eip-8061">8061</a> (increase
 </tr>
 </tbody>
 </table>
-<p><code>engine_newPayloadV4</code>, <code>engine_getPayloadV5</code> and <code>engine_forkchoiceUpdatedV3</code> must reject Amsterdam
-timestamps with <code>-38005 Unsupported fork</code>; fukuii's guard for this is still a commented-out TODO in
-<code>EngineApiController</code>, and its payload builder still produces a Prague-shaped header at Amsterdam timestamps.</p>
-<p>Until these land, a Glamsterdam CL cannot drive fukuii across the Amsterdam boundary: an unknown <code>engine_*</code>
-method returns "method not found".</p>
+<p><code>engine_newPayloadV4</code>, <code>engine_getPayloadV5</code> and <code>engine_forkchoiceUpdatedV3</code> reject Amsterdam timestamps with
+<code>-38005 Unsupported fork</code>. <code>engine_exchangeCapabilities</code> advertises <code>engine_newPayloadV5</code>,
+<code>engine_forkchoiceUpdatedV4</code> and <code>engine_getPayloadV6</code> on every network, as go-ethereum does.</p>
+<p><strong>fukuii cannot propose Amsterdam blocks yet.</strong> An Amsterdam payload must commit to its block access list, which
+fukuii cannot build until <a href="https://github.com/chippr-robotics/fukuii/issues/1427">#1427</a>. Asked to build one,
+<code>engine_forkchoiceUpdatedV4</code> applies the forkchoice state, logs an error and answers <code>-38003</code> without a payload ID,
+rather than seal a Prague-shaped header that every client would reject. Following the chain is unaffected.</p>
+<p>The EEST engine fixtures (<code>tests@v21.0.0</code> <code>blockchain_tests_engine/for_amsterdam</code> and
+<code>for_bpo2toamsterdamattime15k</code>, 26,548 tests) replay through the real controller with <code>EestEngineFixtureCorpusSpec</code>.
+Every error code, genesis and forkchoice answer matches. The failures that remain are the same tests that fail over
+RLP (<code>EestFixtureCorpusSpec</code>), that is block execution and access-list content, plus one EIP-7934 block-size case
+the Engine API path does not check.</p>
 <h2 id="testing-against-plataberget">Testing against Platåberget<a class="headerlink" href="#testing-against-plataberget" title="Permanent link">&para;</a></h2>
 <p>Platåberget is the public, permissionless Glamsterdam testnet (launched 2026-08-17 on the
 <code>glamsterdam-devnet-8</code> spec, expected to run a few months). It is fukuii's live-network target for
@@ -6090,9 +6097,10 @@ exercising the Amsterdam implementation <strong>before Sepolia activates on 2026
 <p>What to expect: Amsterdam has been active since epoch 1536, about seven days after genesis, so the chain head is
 Amsterdam territory. fukuii can follow Platåberget only as far as its Amsterdam implementation allows — the
 <a href="#fukuii-implementation-status">status table</a> is the honest guide. In particular, a checkpoint-synced CL starts
-past the fork and calls <code>engine_newPayloadV5</code> / <code>engine_forkchoiceUpdatedV4</code> immediately; until those exist,
-fukuii answers "method not found". Today the useful checks are the offline ones — genesis hash, fork id, peering
-and the <code>Status</code> handshake. Pre-Amsterdam blocks exercise genesis, Osaka and BPO rules; the first Amsterdam block
+past the fork and calls <code>engine_newPayloadV5</code> / <code>engine_forkchoiceUpdatedV4</code> immediately; fukuii serves both (see
+<a href="#engine-api">Engine API</a>), so how far it follows depends on its Amsterdam execution, and its validators cannot
+propose. Today the most reliable checks are the offline ones — genesis hash, fork id, peering and the <code>Status</code>
+handshake. Pre-Amsterdam blocks exercise genesis, Osaka and BPO rules; the first Amsterdam block
 exercises everything in #1409. Block gas limits reach 200M.</p>
 <h2 id="release-090">Release 0.9.0<a class="headerlink" href="#release-090" title="Permanent link">&para;</a></h2>
 <p>0.9.0 is the Glamsterdam release. Its task list — EIP coverage, Engine API, networking, hive gates, the
