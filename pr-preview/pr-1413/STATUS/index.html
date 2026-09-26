@@ -5772,6 +5772,13 @@ must become required or be formally re-scoped in a reviewed PR.</p>
 <td>#1402</td>
 <td>Runs with continue-on-error today. Promotion requires removing that and establishing a baseline pass count first.</td>
 </tr>
+<tr>
+<td><code>eest-amsterdam</code></td>
+<td>execution-specs tests@v21.0.0 Amsterdam and BPO2-&gt;Amsterdam blockchain_tests (26,503) replayed from the release's own block RLP through the import path (EestFixtureCorpusSpec). Fails on any divergence and on fewer than EEST_MIN_TESTS replayed tests.</td>
+<td>2026-11-30</td>
+<td>#1419</td>
+<td>Baseline 18,081 / 26,503 on 2026-09-26, before the Glamsterdam work items (#1415). Promote once the corpus is fully green and 0.9.0 ships.</td>
+</tr>
 </tbody>
 </table>
 <h2 id="quarantined-excluded-from-all-claims">Quarantined — excluded from all claims<a class="headerlink" href="#quarantined-excluded-from-all-claims" title="Permanent link">&para;</a></h2>
