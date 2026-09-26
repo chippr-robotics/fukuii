@@ -27,28 +27,16 @@ import ConfigUtils.*
 object Config extends InstanceConfig(ConfigFactory.load().getConfig("fukuii"), "default"):
 
   case class SyncConfig(
-      doFastSync: Boolean,
       doSnapSync: Boolean,
-      fastSyncRestartCooloff: FiniteDuration,
       peersScanInterval: FiniteDuration,
       blacklistDuration: FiniteDuration,
-      criticalBlacklistDuration: FiniteDuration,
-      startRetryInterval: FiniteDuration,
       syncRetryInterval: FiniteDuration,
-      syncSwitchDelay: FiniteDuration,
       peerResponseTimeout: FiniteDuration,
       printStatusInterval: FiniteDuration,
-      maxConcurrentRequests: Int,
       blockHeadersPerRequest: Int,
       blockBodiesPerRequest: Int,
       receiptsPerRequest: Int,
-      nodesPerRequest: Int,
-      minPeersToChoosePivotBlock: Int,
-      peersToChoosePivotBlockMargin: Int,
       peersToFetchFrom: Int,
-      pivotBlockOffset: Int,
-      pivotBlockMaxTotalSelectionAttempts: Int,
-      persistStateSnapshotInterval: FiniteDuration,
       blocksBatchSize: Int,
       maxFetcherQueueSize: Int,
       // Import backpressure threshold (readyBlocks queue). Decoupled from maxFetcherQueueSize
@@ -58,27 +46,13 @@ object Config extends InstanceConfig(ConfigFactory.load().getConfig("fukuii"), "
       bodiesFetchConcurrency: Int = 1,
       checkForNewBlockInterval: FiniteDuration,
       branchResolutionRequestSize: Int,
-      blockChainOnlyPeersPoolSize: Int,
-      fastSyncThrottle: FiniteDuration,
       maxQueuedBlockNumberAhead: Int,
       maxQueuedBlockNumberBehind: Int,
       maxNewBlockHashAge: Int,
       maxNewHashes: Int,
       redownloadMissingStateNodes: Boolean,
-      fastSyncBlockValidationK: Int,
-      fastSyncBlockValidationN: Int,
-      fastSyncBlockValidationX: Int,
-      maxTargetDifference: Int,
-      maximumTargetUpdateFailures: Int,
-      stateSyncBloomFilterSize: Int,
-      stateSyncPersistBatchSize: Int,
-      pivotBlockReScheduleInterval: FiniteDuration,
-      maxPivotBlockAge: Int,
-      fastSyncMaxBatchRetries: Int,
-      maxPivotBlockFailuresCount: Int,
       maxRetryDelay: FiniteDuration,
       maxBodyFetchRetries: Int,
-      maxSnapFastCycleTransitions: Int,
       useBootstrapCheckpoints: Boolean,
       bootstrapCheckpoints: Seq[(BigInt, String)], // (blockNumber, blockHash)
       // Post-merge SNAP behavior. When the chain has TerminalTotalDifficulty configured
@@ -106,40 +80,20 @@ object Config extends InstanceConfig(ConfigFactory.load().getConfig("fukuii"), "
   )
 
   object SyncConfig:
-    private val DefaultPivotBlockMaxTotalSelectionAttempts = 20
-    private val DefaultFastSyncRestartCooloff = 10.minutes
 
     def apply(etcClientConfig: TypesafeConfig): SyncConfig =
       val syncConfig = etcClientConfig.getConfig("sync")
       SyncConfig(
-        doFastSync = syncConfig.getBoolean("do-fast-sync"),
         doSnapSync = syncConfig.getBoolean("do-snap-sync"),
-        fastSyncRestartCooloff =
-          if syncConfig.hasPath("fast-sync-restart-cooloff") then
-            syncConfig.getDuration("fast-sync-restart-cooloff").toMillis.millis
-          else DefaultFastSyncRestartCooloff,
         peersScanInterval = syncConfig.getDuration("peers-scan-interval").toMillis.millis,
         blacklistDuration = syncConfig.getDuration("blacklist-duration").toMillis.millis,
-        criticalBlacklistDuration = syncConfig.getDuration("critical-blacklist-duration").toMillis.millis,
-        startRetryInterval = syncConfig.getDuration("start-retry-interval").toMillis.millis,
         syncRetryInterval = syncConfig.getDuration("sync-retry-interval").toMillis.millis,
-        syncSwitchDelay = syncConfig.getDuration("sync-switch-delay").toMillis.millis,
         peerResponseTimeout = syncConfig.getDuration("peer-response-timeout").toMillis.millis,
         printStatusInterval = syncConfig.getDuration("print-status-interval").toMillis.millis,
-        maxConcurrentRequests = syncConfig.getInt("max-concurrent-requests"),
         blockHeadersPerRequest = syncConfig.getInt("block-headers-per-request"),
         blockBodiesPerRequest = syncConfig.getInt("block-bodies-per-request"),
         receiptsPerRequest = syncConfig.getInt("receipts-per-request"),
-        nodesPerRequest = syncConfig.getInt("nodes-per-request"),
-        minPeersToChoosePivotBlock = syncConfig.getInt("min-peers-to-choose-pivot-block"),
-        peersToChoosePivotBlockMargin = syncConfig.getInt("peers-to-choose-pivot-block-margin"),
         peersToFetchFrom = syncConfig.getInt("peers-to-fetch-from"),
-        pivotBlockOffset = syncConfig.getInt("pivot-block-offset"),
-        pivotBlockMaxTotalSelectionAttempts =
-          if syncConfig.hasPath("pivot-block-max-total-selection-attempts") then
-            syncConfig.getInt("pivot-block-max-total-selection-attempts")
-          else DefaultPivotBlockMaxTotalSelectionAttempts,
-        persistStateSnapshotInterval = syncConfig.getDuration("persist-state-snapshot-interval").toMillis.millis,
         blocksBatchSize = syncConfig.getInt("blocks-batch-size"),
         maxFetcherQueueSize = syncConfig.getInt("max-fetcher-queue-size"),
         maxReadyBlocksQueueSize =
@@ -150,34 +104,17 @@ object Config extends InstanceConfig(ConfigFactory.load().getConfig("fukuii"), "
           else 1,
         checkForNewBlockInterval = syncConfig.getDuration("check-for-new-block-interval").toMillis.millis,
         branchResolutionRequestSize = syncConfig.getInt("branch-resolution-request-size"),
-        blockChainOnlyPeersPoolSize = syncConfig.getInt("fastsync-block-chain-only-peers-pool"),
-        fastSyncThrottle = syncConfig.getDuration("fastsync-throttle").toMillis.millis,
         maxQueuedBlockNumberBehind = syncConfig.getInt("max-queued-block-number-behind"),
         maxQueuedBlockNumberAhead = syncConfig.getInt("max-queued-block-number-ahead"),
         maxNewBlockHashAge = syncConfig.getInt("max-new-block-hash-age"),
         maxNewHashes = syncConfig.getInt("max-new-hashes"),
         redownloadMissingStateNodes = syncConfig.getBoolean("redownload-missing-state-nodes"),
-        fastSyncBlockValidationK = syncConfig.getInt("fast-sync-block-validation-k"),
-        fastSyncBlockValidationN = syncConfig.getInt("fast-sync-block-validation-n"),
-        fastSyncBlockValidationX = syncConfig.getInt("fast-sync-block-validation-x"),
-        maxTargetDifference = syncConfig.getInt("max-target-difference"),
-        maximumTargetUpdateFailures = syncConfig.getInt("maximum-target-update-failures"),
-        stateSyncBloomFilterSize = syncConfig.getInt("state-sync-bloom-filter-size"),
-        stateSyncPersistBatchSize = syncConfig.getInt("state-sync-persist-batch-size"),
-        pivotBlockReScheduleInterval = syncConfig.getDuration("pivot-block-reschedule-interval").toMillis.millis,
-        maxPivotBlockAge = syncConfig.getInt("max-pivot-block-age"),
-        fastSyncMaxBatchRetries = syncConfig.getInt("fast-sync-max-batch-retries"),
-        maxPivotBlockFailuresCount = syncConfig.getInt("max-pivot-block-failures-count"),
         maxRetryDelay =
           if syncConfig.hasPath("max-retry-delay") then syncConfig.getDuration("max-retry-delay").toMillis.millis
           else 30.seconds,
         maxBodyFetchRetries =
           if syncConfig.hasPath("max-body-fetch-retries") then syncConfig.getInt("max-body-fetch-retries")
           else 10,
-        maxSnapFastCycleTransitions =
-          if syncConfig.hasPath("max-snap-fast-cycle-transitions") then
-            syncConfig.getInt("max-snap-fast-cycle-transitions")
-          else 3,
         useBootstrapCheckpoints =
           if syncConfig.hasPath("use-bootstrap-checkpoints") then syncConfig.getBoolean("use-bootstrap-checkpoints")
           else false,

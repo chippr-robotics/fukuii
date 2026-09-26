@@ -21,7 +21,7 @@ Understanding these modes helps operators:
 3. [Archive Node](#archive-node)
 4. [Boot Node](#boot-node)
 5. [Mining Node](#mining-node)
-6. [Fast Sync vs Full Sync](#fast-sync-vs-full-sync)
+6. [SNAP Sync vs Full Sync](#snap-sync-vs-full-sync)
 7. [Sync Strategy Comparison](#sync-strategy-comparison)
 8. [Mode Selection Guide](#mode-selection-guide)
 9. [Configuration Examples](#configuration-examples)
@@ -34,7 +34,7 @@ Fukuii supports several operating modes, each optimized for different use cases:
 
 | Mode | Disk Space | Sync Time | Use Case | Serves Historical Data |
 |------|-----------|-----------|----------|----------------------|
-| **Full Node (Fast Sync)** | ~400 GB | Hours | Standard operation, RPC queries | Recent blocks only (~64 blocks history) |
+| **Full Node (SNAP Sync)** | ~400 GB | Hours to days | Standard operation, RPC queries | Recent blocks only (~64 blocks history) |
 | **Full Node (Full Sync)** | ~400 GB | Days/Weeks | From-genesis validation | Recent blocks only (~64 blocks history) |
 | **Archive Node** | ~600-800 GB | Days/Weeks | Historical queries, analytics | All blocks since genesis |
 | **Boot Node** | Minimal | Minutes | Peer discovery only | No blockchain data |
@@ -49,7 +49,7 @@ graph LR
     A --> D[Boot Node]
     A --> E[Mining Node]
     
-    B --> B1[Fast Sync<br/>Quick, Recent History]
+    B --> B1[SNAP Sync<br/>Quick, Recent History]
     B --> B2[Full Sync<br/>Slow, Full Validation]
     
     C --> C1[Complete History<br/>Large Storage]
@@ -71,12 +71,12 @@ A **Full Node** validates all blocks and maintains the current state of the bloc
 ### Characteristics
 
 - **Default Mode**: No special configuration required
-- **Sync Strategy**: Fast sync (downloads state snapshot + recent blocks)
+- **Sync Strategy**: SNAP sync (downloads recent state from snap/1 peers, then imports blocks from there)
 - **State Storage**: Maintains current state with limited history (default: 64 blocks)
 - **Pruning**: Enabled (`basic` mode - reference count based pruning)
 - **RPC Capabilities**: Full current state queries, limited historical queries
 - **Disk Requirements**: ~400 GB (Ethereum Classic as of 2025)
-- **Initial Sync Time**: 2-8 hours (depends on network and hardware)
+- **Initial Sync Time**: hours on Mordor, a day or more on ETC mainnet (peer-bound; see [Sync Lifecycle](../operations/sync-lifecycle.md))
 
 ### When to Use
 
@@ -98,10 +98,10 @@ Full node is the **default configuration**. No changes needed to `base.conf`:
 
 ```hocon
 fukuii {
-  # Fast sync enabled (default)
+  # SNAP sync enabled (default)
   sync {
-    do-fast-sync = true
-    pivot-block-offset = 32
+    do-snap-sync = true
+    snap-sync.pivot-block-offset = 64
   }
   
   # Basic pruning enabled (default)
@@ -187,7 +187,7 @@ An **Archive Node** stores the complete historical state of the blockchain at ev
 
 - **State Storage**: Complete historical state for all blocks
 - **Pruning**: Disabled (`archive` mode)
-- **Sync Strategy**: Full sync from genesis (fast sync not compatible with archive mode)
+- **Sync Strategy**: Full sync from genesis (SNAP sync not compatible with archive mode)
 - **RPC Capabilities**: Full historical queries (e.g., `eth_getBalance` at any block)
 - **Disk Requirements**: ~600-800 GB initial, growing ~50-60 GB/year (ETC)
 - **Initial Sync Time**: 7-14 days (full validation from genesis)
@@ -215,11 +215,10 @@ Create `archive-node.conf`:
 include "base.conf"
 
 fukuii {
-  # Disable fast sync - archive requires full sync from genesis
+  # Disable SNAP sync - archive requires full sync from genesis
   # Also optimize sync performance
   sync {
-    do-fast-sync = false
-    max-concurrent-requests = 20
+    do-snap-sync = false
     block-headers-per-request = 256
     block-bodies-per-request = 256
   }
@@ -254,7 +253,7 @@ docker run -d \
   -v fukuii-archive-conf:/app/conf \
   -e JAVA_OPTS="-Xms8g -Xmx16g" \
   ghcr.io/chippr-robotics/fukuii:latest \
-  -Dfukuii.sync.do-fast-sync=false \
+  -Dfukuii.sync.do-snap-sync=false \
   -Dfukuii.pruning.mode=archive
 ```
 
@@ -263,7 +262,7 @@ docker run -d \
 # Start with archive configuration
 ./bin/fukuii \
   -J-Xms8g -J-Xmx16g \
-  -Dfukuii.sync.do-fast-sync=false \
+  -Dfukuii.sync.do-snap-sync=false \
   -Dfukuii.pruning.mode=archive \
   etc
 ```
@@ -347,7 +346,7 @@ Fukuii includes a pre-configured bootnode configuration file optimized for peer 
 - **In distribution:** `conf/bootnode.conf`
 
 The bootnode configuration includes:
-- Blockchain synchronization disabled
+- SNAP sync disabled
 - RPC endpoints disabled
 - Maximized peer limits (500 outgoing, 200 incoming)
 - Aggressive discovery settings (30s scan interval, 64 bucket size)
@@ -369,9 +368,9 @@ If you need to customize the bootnode settings, you can create your own configur
 include "app.conf"
 
 fukuii {
-  # Disable blockchain synchronization
+  # Keep SNAP's state download off (bootnode.conf does the same)
   sync {
-    do-fast-sync = false
+    do-snap-sync = false
   }
   
   # Disable RPC (bootnodes don't serve RPC)
@@ -448,7 +447,7 @@ docker run -d \
   -v fukuii-bootnode-data:/app/data \
   -e JAVA_OPTS="-Xms2g -Xmx4g" \
   ghcr.io/chippr-robotics/fukuii:latest \
-  -Dfukuii.sync.do-fast-sync=false \
+  -Dfukuii.sync.do-snap-sync=false \
   -Dfukuii.network.rpc.http.enabled=false \
   -Dfukuii.network.peer.max-outgoing-peers=500 \
   -Dfukuii.network.peer.max-incoming-peers=200 \
@@ -459,7 +458,7 @@ docker run -d \
 ```bash
 ./bin/fukuii \
   -J-Xms2g -J-Xmx4g \
-  -Dfukuii.sync.do-fast-sync=false \
+  -Dfukuii.sync.do-snap-sync=false \
   -Dfukuii.network.rpc.http.enabled=false \
   -Dfukuii.network.peer.max-outgoing-peers=500 \
   -Dfukuii.network.peer.max-incoming-peers=200 \
@@ -523,7 +522,7 @@ A **Mining Node** validates transactions, creates blocks, and participates in co
 - **Block Production**: Creates and proposes new blocks
 - **Consensus Participation**: Competes in PoW mining
 - **State Requirements**: Requires full current state
-- **Sync Strategy**: Fast sync acceptable, but must stay synchronized
+- **Sync Strategy**: SNAP sync acceptable, but must stay synchronized
 - **Resource Usage**: High CPU usage during mining
 
 ### When to Use
@@ -566,9 +565,9 @@ fukuii {
     protocol = "pow"
   }
   
-  # Ensure fast sync for quick start
+  # SNAP sync for a quick start (the default)
   sync {
-    do-fast-sync = true
+    do-snap-sync = true
   }
   
   # Use basic pruning (mining needs current state, not full history)
@@ -690,7 +689,7 @@ Instead of solo mining, consider joining a mining pool for more consistent rewar
 | Network | 100 Mbps | 100 Mbps |
 | GPU | Mining GPU required | N/A |
 
-## Fast Sync vs Full Sync
+## SNAP Sync vs Full Sync
 
 Fukuii supports two synchronization strategies that affect initial sync time and validation approach.
 
@@ -698,10 +697,10 @@ Fukuii supports two synchronization strategies that affect initial sync time and
 
 ```mermaid
 graph TB
-    subgraph "Fast Sync"
-        A[Start] --> B[Download Recent State Snapshot]
-        B --> C[Download Recent Block Headers]
-        C --> D[Download & Validate Recent Blocks]
+    subgraph "SNAP Sync"
+        A[Start] --> B[Pick a Pivot ~64 Blocks Behind the Head]
+        B --> C[Download Account, Storage & Bytecode Ranges]
+        C --> D[Heal the State Trie to the Pivot Root]
         D --> E[Continue Regular Sync]
         E --> F[Synced]
     end
@@ -720,30 +719,52 @@ graph TB
     style L fill:#87CEEB
 ```
 
-### Fast Sync (Default)
+### SNAP Sync (Default)
 
 **How It Works:**
-1. Downloads a state snapshot from near the chain tip (~32 blocks behind)
-2. Downloads recent block headers and bodies
-3. Validates the snapshot and recent blocks
+1. Picks a pivot block ~64 blocks behind the network head (`snap-sync.pivot-block-offset`)
+2. Downloads the pivot's state from snap/1 peers as account, storage and bytecode ranges, and the chain's headers, bodies and receipts alongside
+3. Heals the state trie until it matches the pivot's state root, then validates it
 4. Continues with regular synchronization
 
 **Configuration:**
 ```hocon
-fukuii.sync.do-fast-sync = true
+fukuii.sync.do-snap-sync = true
 ```
 
 **Characteristics:**
-- ⚡ **Fast**: 2-8 hours to sync
-- 💾 **Efficient**: Downloads state snapshot, not all historical transactions
-- ✅ **Secure**: Validates state snapshot cryptographically
+- ⚡ **Fast**: hours on Mordor, a day or more on ETC mainnet
+- 💾 **Efficient**: Downloads state, not all historical transactions
+- ✅ **Secure**: Every range is checked against its Merkle proof and the pivot's state root
 - 📊 **Limited History**: Only maintains ~64 blocks of state history
+- 🔌 **Needs snap/1 peers**: with none reachable, SNAP goes dormant and retries on a fresh pivot (3 minutes, doubling to a 20-minute cap). On a network with no snap-serving peers, use full sync.
 
 **When to Use:**
 - Default for most deployments
 - When fast initial sync is priority
 - Standard full node operation
 - Resource-efficient setup
+
+### Fast Sync (Removed)
+
+Fast sync is gone: it could not finish on today's networks (eth/67 and later peers do not serve
+`GetNodeData`), no other client supports it, and SNAP sync replaces it. What an upgraded node does:
+
+- **`fukuii.sync.do-fast-sync` and the other fast-sync keys are ignored.** The node logs one warning
+  per key it finds and starts normally. The keys are listed in the [CHANGELOG](../../CHANGELOG.md).
+- **If you set `do-fast-sync = false` to sync from genesis** (an archive node, for example), set
+  `fukuii.sync.do-snap-sync = false` instead. Otherwise the node uses SNAP sync.
+- **A node that was part-way through fast sync** starts SNAP sync on its next start, with the pivot
+  kept above the block fast sync had reached (that block has no state behind it). The floor
+  survives restarts and is cleared when SNAP completes; fast sync's progress record is deleted. With
+  `do-snap-sync = false` the node starts regular sync and logs an error: regular sync fetches the
+  missing state node by node and, if peers cannot serve it, re-syncs with SNAP anyway.
+- **A node where fast sync finished earlier** continues with regular sync, even with
+  `do-snap-sync` on, unless SNAP has progress there (then SNAP resumes). If fast sync left gaps in
+  the state, regular sync fetches them from peers and, failing that, re-syncs with SNAP from a newer
+  pivot.
+- **`fukuii_resetFastSync` and `fukuii_restartFastSync` were removed**, along with the
+  `app_fastsync_*` metrics.
 
 ### Full Sync
 
@@ -755,7 +776,7 @@ fukuii.sync.do-fast-sync = true
 
 **Configuration:**
 ```hocon
-fukuii.sync.do-fast-sync = false
+fukuii.sync.do-snap-sync = false
 ```
 
 **Characteristics:**
@@ -772,34 +793,33 @@ fukuii.sync.do-fast-sync = false
 
 ### Sync Mode Configuration Examples
 
-**Fast Sync (Default):**
+**SNAP Sync (Default):**
 ```bash
-./bin/fukuii etc  # Fast sync enabled by default
+./bin/fukuii etc  # SNAP sync enabled by default
 ```
 
 **Full Sync:**
 ```bash
-./bin/fukuii -Dfukuii.sync.do-fast-sync=false etc
+./bin/fukuii -Dfukuii.sync.do-snap-sync=false etc
 ```
 
-**Fast Sync with Custom Pivot Offset:**
+**SNAP Sync with Custom Pivot Offset:**
 ```bash
 ./bin/fukuii \
-  -Dfukuii.sync.do-fast-sync=true \
-  -Dfukuii.sync.pivot-block-offset=64 \
+  -Dfukuii.sync.snap-sync.pivot-block-offset=128 \
   etc
 ```
 
 ## Sync Strategy Comparison
 
-| Aspect | Fast Sync | Full Sync |
+| Aspect | SNAP Sync | Full Sync |
 |--------|-----------|-----------|
-| **Initial Sync Time** | 2-8 hours | 7-14 days |
+| **Initial Sync Time** | Hours to days | 7-14 days |
 | **Disk I/O During Sync** | Moderate | Very High |
-| **Network Bandwidth** | ~200-300 GB | ~400 GB+ |
+| **Network Bandwidth** | State plus chain data | ~400 GB+ |
 | **CPU Usage During Sync** | Moderate | High |
 | **Historical State** | Limited (~64 blocks) | Can be complete (with archive mode) |
-| **Security Model** | Cryptographic snapshot validation | Full transaction execution |
+| **Security Model** | Merkle-proof-checked state at the pivot | Full transaction execution |
 | **Archive Node Compatible** | ❌ No | ✅ Yes |
 | **Mining Ready** | ✅ Yes (after sync) | ✅ Yes (after sync) |
 | **Recommended For** | Most users, production deployments | Archive nodes, maximum security |
@@ -812,15 +832,17 @@ sequenceDiagram
     participant P as Peer Nodes
     participant DB as Local Database
     
-    Note over N,P: Fast Sync Process
+    Note over N,P: SNAP Sync Process
     
     N->>P: Request pivot block (tip - offset)
     P->>N: Pivot block header
-    N->>P: Request state snapshot at pivot
-    P->>N: State snapshot data
-    N->>DB: Validate and store state
-    N->>P: Request recent blocks
-    P->>N: Block headers and bodies
+    N->>P: GetAccountRange / GetStorageRanges / GetByteCodes at the pivot root
+    P->>N: State ranges with Merkle proofs
+    N->>DB: Verify proofs and store state
+    N->>P: GetTrieNodes for nodes still missing (healing)
+    P->>N: Trie nodes
+    N->>P: Request headers, bodies and receipts
+    P->>N: Chain data
     N->>DB: Validate and store blocks
     
     Note over N: Switch to regular sync
@@ -846,12 +868,12 @@ graph TD
     A --> D{Mine blocks?}
     
     B -->|Yes| E[Archive Node<br/>~800 GB, 7-14 days sync]
-    B -->|No| F[Full Node<br/>~400 GB, 2-8 hours sync]
+    B -->|No| F[Full Node<br/>~400 GB, hours-days sync]
     
     C -->|No| G[Boot Node<br/>~1 GB, minutes]
     C -->|Yes| B
     
-    D -->|Yes| H[Mining Node<br/>~400 GB, 2-8 hours sync<br/>+ mining hardware]
+    D -->|Yes| H[Mining Node<br/>~400 GB, hours-days sync<br/>+ mining hardware]
     D -->|No| C
     
     style E fill:#FFD700
@@ -864,14 +886,14 @@ graph TD
 
 | Use Case | Recommended Mode | Rationale |
 |----------|------------------|-----------|
-| **Personal Wallet** | Full Node (Fast Sync) | Quick sync, minimal resources, full functionality |
-| **dApp Backend** | Full Node (Fast Sync) | Current state queries, reasonable resources |
+| **Personal Wallet** | Full Node (SNAP Sync) | Quick sync, minimal resources, full functionality |
+| **dApp Backend** | Full Node (SNAP Sync) | Current state queries, reasonable resources |
 | **Block Explorer** | Archive Node (Full Sync) | Complete historical queries required |
 | **Analytics Platform** | Archive Node (Full Sync) | Historical state analysis |
 | **Public RPC Service** | Archive Node (Full Sync) | Serve all RPC query types |
-| **Mining Operation** | Mining Node (Fast Sync) | Quick start, focus on mining |
+| **Mining Operation** | Mining Node (SNAP Sync) | Quick start, focus on mining |
 | **Network Infrastructure** | Boot Node | Peer discovery service, minimal resources |
-| **Development/Testing** | Full Node (Fast Sync) | Quick setup for development |
+| **Development/Testing** | Full Node (SNAP Sync) | Quick setup for development |
 | **Regulatory Compliance** | Archive Node (Full Sync) | Complete audit trail required |
 
 ## Configuration Examples
@@ -886,10 +908,9 @@ include "base.conf"
 fukuii {
   # Network selection is in base.conf via include chain
   
-  # Fast sync for quick start
+  # SNAP sync for a quick start (the default)
   sync {
-    do-fast-sync = true
-    pivot-block-offset = 32
+    do-snap-sync = true
   }
   
   # Basic pruning
@@ -933,10 +954,9 @@ include "base.conf"
 fukuii {
   # Full sync from genesis
   sync {
-    do-fast-sync = false
+    do-snap-sync = false
     
     # Optimize sync performance
-    max-concurrent-requests = 30
     block-headers-per-request = 384
     block-bodies-per-request = 384
   }
@@ -1005,9 +1025,9 @@ fukuii {
 include "base.conf"
 
 fukuii {
-  # No blockchain sync
+  # Keep SNAP's state download off (bootnode.conf does the same)
   sync {
-    do-fast-sync = false
+    do-snap-sync = false
   }
   
   # Minimal pruning config (not used since not syncing)
@@ -1072,9 +1092,9 @@ fukuii {
     protocol = "pow"
   }
   
-  # Fast sync for quick start
+  # SNAP sync for a quick start (the default)
   sync {
-    do-fast-sync = true
+    do-snap-sync = true
   }
   
   # Basic pruning sufficient for mining
@@ -1163,7 +1183,7 @@ services:
       - JAVA_OPTS=-Xms16g -Xmx32g
     command: >
       etc
-      -Dfukuii.sync.do-fast-sync=false
+      -Dfukuii.sync.do-snap-sync=false
       -Dfukuii.pruning.mode=archive
       -Dfukuii.network.server-address.port=9077
       -Dfukuii.network.discovery.port=30304
@@ -1236,7 +1256,7 @@ cat > archive-node.conf << 'EOF'
 include "base.conf"
 
 fukuii {
-  sync.do-fast-sync = false
+  sync.do-snap-sync = false
   pruning.mode = "archive"
 }
 EOF
@@ -1258,7 +1278,7 @@ tail -f ~/.fukuii/etc/logs/fukuii.log
 
 **Requirements:**
 - Can keep existing data if desired
-- Fast sync will download new state snapshot
+- Option B re-syncs with SNAP sync
 
 **Steps:**
 
@@ -1273,7 +1293,6 @@ docker stop fukuii-archive
 # Archive data includes full node data
 # Simply run with new config
 ./bin/fukuii \
-  -Dfukuii.sync.do-fast-sync=true \
   -Dfukuii.pruning.mode=basic \
   etc
 ```
@@ -1284,12 +1303,12 @@ docker stop fukuii-archive
 rm -rf ~/.fukuii/etc/rocksdb/
 
 # Start with full node config
-./bin/fukuii etc  # Uses defaults (fast sync + basic pruning)
+./bin/fukuii etc  # Uses defaults (SNAP sync + basic pruning)
 ```
 
 **Expected Downtime:** 
 - Option A: Immediate (just restart)
-- Option B: 2-8 hours (fast sync)
+- Option B: hours to days (SNAP sync)
 
 ### Full Node → Mining Node
 
@@ -1412,11 +1431,10 @@ grep -r "pruning" ~/.fukuii/etc/
 
 **Solutions:**
 
-1. **Increase concurrent requests:**
+1. **Fetch bodies from more peers at once:**
 ```bash
 ./bin/fukuii \
-  -Dfukuii.sync.max-concurrent-requests=40 \
-  -Dfukuii.sync.block-headers-per-request=512 \
+  -Dfukuii.sync.bodies-fetch-concurrency=8 \
   etc
 ```
 
@@ -1508,24 +1526,25 @@ curl -X POST --data '{"jsonrpc":"2.0","method":"eth_hashrate","params":[],"id":1
    - Consider connecting external GPU/ASIC miners
    - Or join a mining pool
 
-#### Fast Sync: Pivot Block Selection Failed
+#### SNAP Sync: Dormant Mode
 
-**Problem:** Fast sync fails to select pivot block
+**Problem:** The log shows `Entering dormant mode (attempt N): ...` and sync does not progress.
+Common reasons are `no snap-capable peers after the capability grace period` and
+`no peers found after N bootstrap retries`.
+
+SNAP keeps what it has downloaded and retries on a fresh pivot after a back-off (3 minutes,
+doubling to a 20-minute cap). It does not fall back to another sync mode.
 
 **Solutions:**
 
-1. **Increase minimum peers:**
+1. **Check that peers offer snap/1:**
 ```bash
-./bin/fukuii \
-  -Dfukuii.sync.min-peers-to-choose-pivot-block=10 \
-  etc
+grep "PEER_HANDSHAKE_SUCCESS" ~/.fukuii/etc/logs/fukuii.log | grep -c "supportsSnap=true"
 ```
 
-2. **Adjust pivot block offset:**
-```bash
-./bin/fukuii \
-  -Dfukuii.sync.pivot-block-offset=64 \
-  etc
+2. **Pin a snap-serving peer** (in your configuration file):
+```hocon
+fukuii.sync.snap-sync.snap-server-peers = ["enode://PUBKEY@HOST:30303"]
 ```
 
 3. **Ensure sufficient peers:**
@@ -1534,11 +1553,9 @@ curl -X POST --data '{"jsonrpc":"2.0","method":"net_peerCount","params":[],"id":
   http://localhost:8546
 ```
 
-Need 5+ peers for pivot selection.
-
-4. **Check network connectivity:**
+4. **No snap-serving peers on this network:** sync from genesis instead.
 ```bash
-ping 8.8.8.8
+./bin/fukuii -Dfukuii.sync.do-snap-sync=false etc
 ```
 
 ### Performance Issues
@@ -1627,6 +1644,6 @@ jstat -gc <PID> 1000
 
 ---
 
-**Document Version**: 1.0  
-**Last Updated**: 2025-11-06  
+**Document Version**: 1.1  
+**Last Updated**: 2026-09-26  
 **Maintainer**: Chippr Robotics LLC

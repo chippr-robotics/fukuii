@@ -47,9 +47,11 @@ type). For ETH/Sepolia: also identify the CL client and its status. See CONVENTI
    `pivot`/RocksDB lines around the stall window.
 5. **ETC/Mordor SNAP** — pivot moves as the chain advances; a stuck pivot or
    stalled `AccountRangeCoordinator` is a known failure family. Check progress
-   of account vs storage ranges. If genuinely wedged, the documented recovery
-   is a clean restart (🔴 — stops the node) or, last resort, a fast-sync reset
-   via `fukuii_resetFastSync` / `fukuii_restartFastSync` (🔴 — discards progress).
+   of account vs storage ranges. SNAP recovers on its own: after repeated
+   failures it goes dormant and retries on a fresh pivot (3 min, doubling to a
+   20 min cap). If genuinely wedged, the documented recovery is a clean restart
+   (🔴 — stops the node). Fast sync, and its `fukuii_resetFastSync` /
+   `fukuii_restartFastSync` RPCs, were removed.
 6. **Performance tuning — ETC/Mordor** (🔴 — edits `fukuii.conf`, needs restart) —
    match concurrency to CPU before touching anything else:
 

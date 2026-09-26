@@ -451,7 +451,6 @@ class ChainWeightCalibrationSpec extends AnyFlatSpec with Matchers:
     override lazy val mining: TestMining = buildTestMining().withValidators(validators)
 
     override def defaultSyncConfig: SyncConfig = super.defaultSyncConfig.copy(
-      doFastSync = false,
       doSnapSync = false,
       // Long intervals prevent periodic GetHandshakedPeersCmd / block-check messages from
       // appearing in networkPeerManager's queue when timePasses(30.minutes) advances the
@@ -481,10 +480,8 @@ class ChainWeightCalibrationSpec extends AnyFlatSpec with Matchers:
           blockchainReader,
           blockchainWriter,
           storagesInstance.storages.appStateStorage,
-          storagesInstance.storages.blockNumberMappingStorage,
           storagesInstance.storages.evmCodeStorage,
           storagesInstance.storages.stateStorage,
-          storagesInstance.storages.nodeStorage,
           storagesInstance.storages.flatSlotStorage,
           storagesInstance.storages.fastSyncStateStorage,
           consensusAdapter,

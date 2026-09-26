@@ -866,8 +866,9 @@ private[actors] class StorageRangeCoordinatorImpl(
         // the queue locks at >100K pending → backpressure ENGAGED → AccountRangeCoordinator
         // dispatch paused → storage can't drain (no usable peers for current root) →
         // backpressure never releases (low-water = 50K is unreachable) → account stalls →
-        // 5/5 critical SNAP failures → fallback to FastSync (which is also stuck on sepolia
-        // because peers don't serve GetNodeData on ETH/68+).
+        // 5/5 critical SNAP failures → the fast-sync fallback of the time, which was just as
+        // stuck on sepolia because peers don't serve GetNodeData on ETH/68+ (fast sync has
+        // since been removed; the failures now put SNAP into dormant mode).
         //
         // The fix: pivot refresh is the natural recovery moment. New root → maybe new
         // peers can serve the queued tasks → drain might resume. Let account dispatch

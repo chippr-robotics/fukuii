@@ -153,8 +153,6 @@ import com.chipprbots.ethereum.utils.TxPoolConfig
   *   ADR-017 for comprehensive test suite strategy
   * @see
   *   [[com.chipprbots.ethereum.blockchain.sync.regular.BlockFetcherSpec]] for actor cleanup pattern
-  * @see
-  *   [[com.chipprbots.ethereum.blockchain.sync.StateStorageActorSpec]] for eventually pattern
   */
 
 class PendingTransactionsManagerSpec

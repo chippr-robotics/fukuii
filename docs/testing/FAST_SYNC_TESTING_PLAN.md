@@ -1,8 +1,11 @@
 # Fast Sync Testing Plan for Fukuii Clients
 
+> **Obsolete.** Fast sync was removed from Fukuii; SNAP sync replaces it. This plan is kept as a
+> record and no longer applies.
+
 **Document Version**: 1.0  
 **Date**: December 8, 2025  
-**Status**: Active  
+**Status**: Obsolete (fast sync removed)  
 **Test Environment**: Gorgoroth 6-Node Internal Test Network
 
 ## Executive Summary

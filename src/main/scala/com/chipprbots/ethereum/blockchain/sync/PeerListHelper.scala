@@ -34,18 +34,15 @@ class PeerListHelper(
     peerEventBus: TypedActorRef[PeerEventBusCommand],
     blacklist: Blacklist,
     peerDisconnectedAdapter: TypedActorRef[PeerEvent],
-    log: Logger,
-    sharedRateTracker: Option[PeerRateTracker] = None
+    log: Logger
 ):
 
   private val bigIntReverseOrdering: Ordering[BigInt] = Ordering[BigInt].reverse
 
   private var peers: Map[PeerId, PeerWithInfo] = Map.empty
 
-  /** The rate tracker the helper tunes on every handshaked-peer refresh. FastSync (S2/SNAP2) shares its own instance so
-    * the concurrent fetcher queues read the same RTT/capacity estimates the helper maintains.
-    */
-  val ethRateTracker: PeerRateTracker = sharedRateTracker.getOrElse(new PeerRateTracker())
+  /** The rate tracker the helper tunes on every handshaked-peer refresh. */
+  val ethRateTracker: PeerRateTracker = new PeerRateTracker()
 
   /** Read-only accessor for the current handshaked peers (needed by `FastSyncBranchResolverActor`). */
   def handshakedPeers: Map[PeerId, PeerWithInfo] = peers

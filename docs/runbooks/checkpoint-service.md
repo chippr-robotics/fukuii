@@ -28,10 +28,10 @@ graph TB
     
     StartSync --> SnapEnabled{SNAP Sync<br/>Enabled?}
     SnapEnabled -->|Yes| SnapSync[SNAP Sync Protocol<br/>- 80% faster<br/>- 99% less bandwidth<br/>- State snapshots]
-    SnapEnabled -->|No| FastSync[Fast Sync Protocol<br/>- Traditional method<br/>- Full state download]
+    SnapEnabled -->|No| FullSync[Regular Sync<br/>- Imports every block<br/>- From genesis]
     
     SnapSync --> Complete[Sync Complete]
-    FastSync --> Complete
+    FullSync --> Complete
     
     style LoadCP fill:#90EE90
     style UseCP fill:#90EE90
@@ -44,11 +44,12 @@ graph TB
 
 | Method | Time to Start Syncing | Total Sync Time (ETC Mainnet) |
 |--------|----------------------|-------------------------------|
-| **Traditional** (No checkpoints) | 2-10 minutes<br/>(peer wait) | ~8-12 hours<br/>(fast sync) |
-| **Bootstrap Checkpoints Only** | **Immediate**<br/>(no wait) | ~8-12 hours<br/>(fast sync) |
-| **Rapid Sync**<br/>(Checkpoints + SNAP) | **Immediate**<br/>(no wait) | **~2-3 hours**<br/>(SNAP sync) |
+| **SNAP without checkpoints** | 2-10 minutes<br/>(peer wait) | SNAP sync time<br/>plus the wait |
+| **Rapid Sync**<br/>(Checkpoints + SNAP) | **Immediate**<br/>(no wait) | SNAP sync time |
+| **Full sync**<br/>(`do-snap-sync = false`) | 2-10 minutes<br/>(peer wait) | Days to weeks |
 
-**Key Benefit**: Rapid sync eliminates the peer discovery bottleneck and reduces total sync time by up to **75%**.
+**Key Benefit**: Rapid sync eliminates the peer discovery bottleneck. (Earlier releases also
+offered fast sync; it was removed.)
 
 ## What is the Checkpoint Service?
 
@@ -130,8 +131,7 @@ graph LR
     end
     
     subgraph "Sync Modes"
-        SNAP[SNAP Sync<br/>Fastest - 2-3 hours<br/>State snapshots]
-        Fast[Fast Sync<br/>Standard - 8-12 hours<br/>Full state download]
+        SNAP[SNAP Sync<br/>Fastest<br/>State snapshots]
         Full[Full Sync<br/>Slowest - days/weeks<br/>Full validation]
     end
     
@@ -139,7 +139,6 @@ graph LR
     Dynamic --> Config
     Config --> AppState
     AppState --> SNAP
-    AppState --> Fast
     AppState --> Full
     
     style Static fill:#90EE90
@@ -156,12 +155,10 @@ graph LR
 
 2. **Sync Selection Phase**
    - If SNAP sync enabled: Uses checkpoint as starting point for state download
-   - If fast sync enabled: Uses checkpoint to skip peer consensus phase
    - Sync begins immediately without waiting for 3+ peers
 
 3. **Synchronization Phase**
    - SNAP sync downloads account/storage ranges from checkpoint forward
-   - Fast sync downloads full state from checkpoint forward
    - Traditional peer wait (2-10 minutes) eliminated entirely
 
 4. **Update Phase** (Optional - Production Only)
@@ -234,8 +231,7 @@ $ ./bin/fukuii etc --no-bootstrap-checkpoints
 [WAIT] 8 minutes elapsed...
 [INFO] Querying peers for pivot block consensus
 [INFO] Pivot block selected: 19250000
-[INFO] Beginning fast sync from block 19250000
-[INFO] ETA: 8-12 hours
+[INFO] Beginning SNAP sync from block 19250000
 ```
 
 **With Checkpoints + SNAP Sync (Rapid Sync):**
@@ -261,8 +257,6 @@ $ ./bin/fukuii etc
 
 **Time Comparison:**
 - **Peer wait eliminated**: 8 minutes → 0 seconds
-- **Total sync time**: 8-12 hours → 2-3 hours
-- **Overall improvement**: 75% faster time-to-sync
 
 ### Scenario 2: Private Network Rapid Sync
 
@@ -291,10 +285,6 @@ fukuii {
   sync {
     # Enable SNAP sync for fastest synchronization
     do-snap-sync = true
-    do-fast-sync = false
-    
-    # Lower peer requirements for private network
-    min-peers-to-choose-pivot-block = 1
   }
 }
 ```
@@ -989,11 +979,11 @@ grep "bootstrap-checkpoints" conf/etc-chain.conf
 
 **Symptom:**
 ```
-[INFO] Beginning fast sync from block 19250000
-[WARN] SNAP sync not available, using fast sync
+Entering dormant mode (attempt 1): no snap-capable peers after the capability grace period. All downloaded state preserved. Will retry after backoff.
 ```
 
-**Cause**: SNAP sync disabled or insufficient SNAP-capable peers.
+**Cause**: No SNAP-capable peers. (With `do-snap-sync = false` SNAP never starts and the node
+imports blocks from genesis instead.)
 
 **Solution:**
 ```bash
@@ -1233,9 +1223,9 @@ sync.snap-sync.healing-batch-size = 32  # Default: 16
 # Restart node to retry healing with fresh peers
 systemctl restart fukuii
 
-# If healing repeatedly fails, fall back to fast sync
+# If healing repeatedly fails and the network has no snap-serving peers,
+# import every block from genesis instead (start from an empty database)
 sync.do-snap-sync = false
-sync.do-fast-sync = true
 ```
 
 ### Issue: Performance Monitoring
