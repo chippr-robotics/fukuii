@@ -1142,21 +1142,36 @@ class ChainDownloader private (
       val receiptFloor = appStateStorage.getBackfillBestReceipt()
       val lowestFloor = bodyFloor.min(receiptFloor)
 
+      // Both the binary search above and the cursor fast-skip at the top of this method assume contiguity —
+      // "header exists at N" is treated as evidence about everything below N too. That assumption breaks for an
+      // isolated header: PivotHeaderBootstrap.storeBlockHeader (running(), Fetched branch) stores a SNAP pivot
+      // header on its own, with no corresponding headers below it yet and no cursor update — so `best` above can
+      // legitimately be a header that exists with a genuine gap underneath it, not a verified contiguous prefix
+      // (forge's ETC review of 43d1c3eee, Defect 9). This walk was already sequential (it exists to rebuild
+      // bodiesQueue/receiptsQueue), so it's the natural place to verify contiguity too: `case None` used to
+      // silently skip a missing header and keep walking, letting `best` (and therefore bestHeaderNumber) overstate
+      // what's actually been fetched — the gap was never queued for re-fetch by anything, since
+      // dispatchRequests' header-priority loop only ever asks starting at bestHeaderNumber+1, assuming everything
+      // at or below it is already there. Clamp `best` to the last confirmed-contiguous block instead, and stop
+      // the walk there — anything above a real gap isn't confirmed either, so there's nothing left to check.
       var i = lowestFloor + 1
-      while i <= best do
-        val needsBodyCheck = i > bodyFloor
-        val needsReceiptCheck = i > receiptFloor
-        if needsBodyCheck || needsReceiptCheck then
-          blockchainReader.getBlockHeaderByNumber(i) match
-            case Some(header) =>
-              if needsBodyCheck && blockchainReader.getBlockBodyByHash(header.hash).isEmpty then
-                bodiesQueue :+= header.hash.value
-              if needsReceiptCheck && blockchainReader.getReceiptsByHash(header.hash).isEmpty then
-                receiptsQueue :+= header.hash.value
-            case None => // shouldn't happen
-        i += 1
+      var contiguousBest = best
+      var gapFound = false
+      while i <= best && !gapFound do
+        blockchainReader.getBlockHeaderByNumber(i) match
+          case Some(header) =>
+            val needsBodyCheck = i > bodyFloor
+            val needsReceiptCheck = i > receiptFloor
+            if needsBodyCheck && blockchainReader.getBlockBodyByHash(header.hash).isEmpty then
+              bodiesQueue :+= header.hash.value
+            if needsReceiptCheck && blockchainReader.getReceiptsByHash(header.hash).isEmpty then
+              receiptsQueue :+= header.hash.value
+            i += 1
+          case None =>
+            contiguousBest = i - 1
+            gapFound = true
 
-      best
+      contiguousBest
 
   private def boostConcurrency(n: Int): Unit =
     val prev = maxConcurrentRequests

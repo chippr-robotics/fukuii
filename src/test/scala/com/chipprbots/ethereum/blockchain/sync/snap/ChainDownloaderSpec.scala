@@ -1724,6 +1724,95 @@ class ChainDownloaderSpec
     testKit.stop(downloader)
   }
 
+  // ── Defect 9 (forge's ETC review of 43d1c3eee): findBestStoredHeader's binary search (and the cursor fast-skip
+  // ahead of it) both treat "a header exists at number N" as evidence that 1..N are all present too. That breaks
+  // for an isolated header: PivotHeaderBootstrap stores a SNAP pivot header directly, with no cursor update and
+  // nothing underneath it yet. The rebuild walk that follows (which ALSO seeds bodiesQueue/receiptsQueue) used to
+  // silently skip a missing header (`case None => // shouldn't happen`) and keep going, so `best` — and therefore
+  // bestHeaderNumber — could overstate what's actually contiguous, permanently hiding the gap from
+  // dispatchRequests' header-priority loop (which only ever asks starting at bestHeaderNumber+1).
+  it should "clamp bestHeaderNumber at a gap instead of trusting an isolated header above it" taggedAs UnitTest in {
+    val storage = new EphemBlockchainTestSetup {}
+    val appStateStorage = storage.storagesInstance.storages.appStateStorage
+    val networkPeerManager = TestProbe()
+    val peerEventBus = TestProbe()
+    val replyToProbe = TestProbe()
+
+    // Blocks 1-5 are a genuine contiguous prefix. Block 100 is an isolated header — same shape as a
+    // PivotHeaderBootstrap-stored pivot: present on disk, but with nothing underneath it (blocks 6-99 have no
+    // header at all) and no cursor update accompanying it. headerMatching/parent-hash chaining is irrelevant here
+    // — findBestStoredHeader only ever checks existence (getBlockHeaderByNumber(n).isDefined), never validates a
+    // chain, so plain generated headers are enough.
+    val chain = BlockHelpers.generateChain(5, BlockHelpers.genesis)
+    val pivotHeader: BlockHeader = chain(4).header.copy(number = chain(4).header.number + 95) // block 100
+
+    storage.blockchainWriter
+      .storeBlockHeader(chain(0).header)
+      .and(storage.blockchainWriter.storeBlockHeader(chain(1).header))
+      .and(storage.blockchainWriter.storeBlockHeader(chain(2).header))
+      .and(storage.blockchainWriter.storeBlockHeader(chain(3).header))
+      .and(storage.blockchainWriter.storeBlockHeader(chain(4).header))
+      .and(storage.blockchainWriter.storeBlockHeader(pivotHeader))
+      .commit()
+    // Directly trusting the cursor at the isolated pivot's number is the fast-skip path's own version of the same
+    // assumption break (the class-level comment above getBackfillBestHeader's doc: "a header existing at a high
+    // number [does not] imply contiguity below it") — it reaches the exact same rebuild-walk code the binary
+    // search's own (arithmetic-dependent, harder to force deterministically) mis-probe would.
+    appStateStorage.putBackfillBestHeader(BigInt(100)).commit()
+
+    val peerId = PeerId("gap-peer")
+    val peer =
+      Peer(peerId, new InetSocketAddress("127.0.0.1", 0), TestProbe(peerId.value).ref, incomingConnection = false)
+    val peerStatus = RemoteStatus(
+      Capability.ETH68,
+      1,
+      ChainWeight.totalDifficultyOnly(1),
+      ByteString("best-hash"),
+      ByteString("genesis-hash")
+    )
+    val peerInfo = PeerInfo(
+      peerStatus,
+      forkAccepted = true,
+      chainWeight = peerStatus.chainWeight,
+      maxBlockNumber = BigInt(100),
+      bestBlockHash = peerStatus.bestHash
+    )
+
+    val downloader: TypedActorRef[ChainDownloader.Command] = testKit
+      .spawn(
+        ChainDownloader(
+          blockchainReader = storage.blockchainReader,
+          blockchainWriter = storage.blockchainWriter,
+          appStateStorage = appStateStorage,
+          networkPeerManager = networkPeerManager.ref,
+          peerEventBus = peerEventBus.ref,
+          syncConfig = defaultSyncConfig,
+          replyTo = replyToProbe.ref,
+          maxConcurrentRequests = 4
+        ),
+        s"chain-downloader-header-gap-${System.nanoTime()}"
+      )
+
+    val handshakeReq = networkPeerManager.expectMsgType[NetworkPeerManagerActor.GetHandshakedPeersCmd](5.seconds)
+    handshakeReq.replyTo ! NetworkPeerManagerActor.HandshakedPeers(Map(peer -> peerInfo))
+    peerEventBus.expectMsgType[SubscribeCmd](5.seconds)
+
+    downloader ! ChainDownloader.Start(BigInt(100))
+    downloader ! ChainDownloader.BoostConcurrency(4)
+
+    // Old code: findBestStoredHeader trusts the cursor at 100 (the isolated pivot), the rebuild walk silently
+    // skips the missing headers 6-99, and bestHeaderNumber ends up 100 == target — no GetBlockHeaders is ever
+    // dispatched (bestHeaderNumber < targetBlock is false), and blocks 1-5 and 100 go straight to body/receipt
+    // requests instead, permanently hiding the gap.
+    // Fixed code: the rebuild walk finds block 6 missing, clamps bestHeaderNumber to 5, and the gap is requested.
+    val send = networkPeerManager.expectMsgType[NetworkPeerManagerActor.SendMessageCmd](5.seconds)
+    send.message.underlyingMsg match
+      case ETHPackets.GetBlockHeaders(_, Left(n), _, 0, false) => n shouldBe BigInt(6)
+      case other => fail(s"expected GetBlockHeaders(6,...) to fetch the gap, got $other")
+
+    testKit.stop(downloader)
+  }
+
   /** Collects the next `count` `SubscribeCmd`s seen on `probe`, skipping over anything else interleaved (e.g. an
     * `UnsubscribeAllCmd` from a just-finished PeerRequestHandler unsubscribing before a new one subscribes). Bounded so
     * a genuine wedge fails loudly instead of hanging.
