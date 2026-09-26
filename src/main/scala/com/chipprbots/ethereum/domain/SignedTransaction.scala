@@ -619,13 +619,15 @@ object SignedTransactionWithSender:
         coversIntrinsicGas(config, stx, authListSize)
     }
 
-  /** Whether `stx`'s gas limit covers its intrinsic gas under `config`.
+  /** Whether `stx`'s gas limit covers its intrinsic gas under `config` — and, under Amsterdam, the rest of
+    * execution-specs `validate_transaction`'s gas rule: `tx.gas >= max(intrinsic, calldata floor)` with both at most
+    * TX_MAX_GAS_LIMIT (EIP-7976 / EIP-7981 / EIP-8037), the rule `StdSignedTransactionValidator` applies to blocks.
     *
-    * The sender enters intrinsic gas only through transactionBaseCost, and only from Amsterdam, where a self-transfer
-    * (to == sender) costs less. Recovering the sender is an ECDSA public-key recovery, and the stateless filter runs
-    * sequentially on its caller's thread for a whole announcement batch; for 2,000 txs that kept the
-    * SignedTransactionsFilterActor busy for seconds. So the check runs first with a sender that is never tx.to. That
-    * cost is never below the true one, so passing it is exact. The real sender is recovered only when that check fails
+    * The sender enters intrinsic gas and the floor only through transactionBaseCost, and only from Amsterdam, where a
+    * self-transfer (to == sender) costs less. Recovering the sender is an ECDSA public-key recovery, and the stateless
+    * filter runs sequentially on its caller's thread for a whole announcement batch; for 2,000 txs that kept the
+    * SignedTransactionsFilterActor busy for seconds. So the check runs first with a sender that is never tx.to. Neither
+    * cost is ever below the true one, so passing it is exact. The real sender is recovered only when that check fails
     * under Amsterdam. The fallback is harmless: `recoverSenders` drops txs whose sender cannot be recovered.
     */
   private[domain] def coversIntrinsicGas(
@@ -634,8 +636,8 @@ object SignedTransactionWithSender:
       authListSize: Int
   )(implicit blockchainConfig: BlockchainConfig): Boolean =
     val tx = stx.tx
-    def intrinsicGas(sender: Address): BigInt =
-      config.calcTransactionIntrinsicGas(
+    def covers(sender: Address): Boolean =
+      val intrinsicGas = config.calcTransactionIntrinsicGas(
         tx.payload,
         tx.isContractInit,
         Transaction.accessList(tx),
@@ -644,10 +646,20 @@ object SignedTransactionWithSender:
         UInt256(tx.value),
         sender
       )
+      if !config.amsterdamEnabled then tx.gasLimit.value >= intrinsicGas
+      else
+        val floor = config.calcAmsterdamCalldataFloorGas(
+          tx.payload,
+          Transaction.accessList(tx),
+          tx.receivingAddress,
+          UInt256(tx.value),
+          sender
+        )
+        val required = intrinsicGas.max(floor)
+        tx.gasLimit.value >= required && required <= com.chipprbots.ethereum.vm.AmsterdamGas.TxMaxGasLimit
     val notTheRecipient = if tx.receivingAddress.contains(Address(0)) then Address(1) else Address(0)
-    tx.gasLimit.value >= intrinsicGas(notTheRecipient) ||
-    (config.amsterdamEnabled &&
-      tx.gasLimit.value >= intrinsicGas(SignedTransaction.getSender(stx).getOrElse(Address(0))))
+    covers(notTheRecipient) ||
+    (config.amsterdamEnabled && covers(SignedTransaction.getSender(stx).getOrElse(Address(0))))
 
   private def recoverSenders(
       stxs: Seq[SignedTransaction]

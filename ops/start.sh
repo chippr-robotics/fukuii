@@ -38,6 +38,9 @@ case "$NETWORK" in
   sepolia)
     FLOOR_MB=4096; CEIL_MB=6144    # 1B txns, 50% utilization — heavier than expected
     ;;
+  plataberget)
+    FLOOR_MB=4096; CEIL_MB=6144    # Glamsterdam testnet (genesis 2026-08-13): small state, 200M-gas blocks — sized as Sepolia until measured
+    ;;
   eth|mainnet)
     FLOOR_MB=6144; CEIL_MB=10240   # 3.5B txns, 50% utilization, DeFi-heavy — estimate
     ;;

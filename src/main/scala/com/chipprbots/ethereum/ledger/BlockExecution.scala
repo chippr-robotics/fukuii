@@ -570,18 +570,26 @@ class BlockExecution(
     * block execution and return one request entry: 0x00 || (pubkey || wc || amount || signature || index) per deposit,
     * or None if there were none.
     *
+    * The contract is the chain's own ([[BlockExecution.depositContractFor]]), not the mainnet constant: Sepolia's is
+    * `0x7f02c3e3…295d`. Scanning the mainnet address there finds no deposits, so every Sepolia block carrying one
+    * computed `sha256("")` instead of the header's `requestsHash` and was rejected as INVALID_REQUESTS (Sepolia block
+    * 11,321,359: 10 deposits, `SepoliaDepositRequestsSpec`).
+    *
     * A deposit log whose ABI layout is not exactly the canonical one — 576 bytes, offsets 160/256/320/384/512, sizes
     * 48/32/8/96/8 — makes the BLOCK invalid (EELS `extract_deposit_data`, EEST `test_invalid_layout` /
     * `test_invalid_log_length`: INVALID_DEPOSIT_EVENT_LAYOUT). Previously any log of at least 608 bytes was sliced at
     * fixed positions and any shorter one silently dropped, so a malformed event was misparsed or ignored, never
     * rejected.
     */
-  def collectDepositRequests(receipts: Seq[Receipt]): Either[String, Option[ByteString]] =
+  def collectDepositRequests(receipts: Seq[Receipt])(implicit
+      blockchainConfig: BlockchainConfig
+  ): Either[String, Option[ByteString]] =
     import BlockExecution.*
+    val depositContract = depositContractFor(blockchainConfig)
     val deposits = for
       receipt <- receipts
       log <- receipt.logs
-      if log.loggerAddress == DepositContractAddress
+      if log.loggerAddress == depositContract
       if log.logTopics.headOption.contains(DepositEventSignature)
     yield log.data
     deposits.toList
@@ -597,8 +605,23 @@ object BlockExecution:
 
   val SystemAddress: Address = Address("0xfffffffffffffffffffffffffffffffffffffffe")
 
-  /** EIP-6110: Deposit contract for on-chain validator deposits */
+  /** EIP-6110: the MAINNET beacon deposit contract, and the fallback for a chain that declares none. Never compare a
+    * log address with this directly; resolve the chain's contract with [[depositContractFor]].
+    */
   val DepositContractAddress: Address = Address("0x00000000219ab540356cBB839Cbe05303d7705Fa")
+
+  /** EIP-6110 `DEPOSIT_CONTRACT_ADDRESS` of the chain being executed: its `deposit-contract-address` if declared,
+    * otherwise the mainnet contract.
+    *
+    * EIP-6110 lists the address as network configuration ("Mainnet" row) that MUST ship with the client; go-ethereum
+    * reads `ChainConfig.DepositContractAddress` in `ParseDepositLogs` (Sepolia `0x7f02c3e3…295d`). The fallback is
+    * execution-specs': its `requests.py` hard-codes the mainnet address and EEST fixtures declare none. go-ethereum
+    * differs only for a custom genesis that omits the field, where its zero value scans address 0x0.
+    *
+    * Execution and `eth_config` both resolve through here, so the address a node advertises is the one it validates.
+    */
+  def depositContractFor(blockchainConfig: BlockchainConfig): Address =
+    blockchainConfig.depositContractAddress.getOrElse(DepositContractAddress)
 
   /** EIP-7002: Withdrawal request queue contract */
   val WithdrawalQueueAddress: Address = Address("0x00000961ef480eb55e80d19ad83579a64c007002")

@@ -1,11 +1,16 @@
 package com.chipprbots.ethereum.utils
 
+import scala.jdk.CollectionConverters.*
+
 import com.typesafe.config.Config as TypesafeConfig
 import com.typesafe.config.ConfigFactory
+import com.typesafe.config.ConfigValueType
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
 
+import com.chipprbots.ethereum.domain.Address
 import com.chipprbots.ethereum.domain.Timestamp
+import com.chipprbots.ethereum.ledger.BlockExecution
 import com.chipprbots.ethereum.testing.Tags.*
 
 /** FR-004 as a test rather than a convention.
@@ -81,12 +86,106 @@ class ChainConfigMatrixSpec extends AnyFlatSpec with Matchers:
     }
   }
 
-  "the live ETH-family shipped configs" should "not declare Amsterdam either (T006: hive only)" taggedAs (UnitTest) in {
-    // eth-chain.conf and sepolia-chain.conf must NOT declare it — neither network has scheduled Amsterdam,
-    // and declaring it would activate untested consensus rules on a live chain.
-    Seq("eth", "sepolia").foreach { name =>
-      withClue(s"$name-chain.conf declared an Amsterdam activation timestamp: ") {
-        shippedChain(name).forkTimestamps.amsterdamTimestamp shouldBe None
+  // T006 as amended 2026-09-24 (specs/009-amsterdam-fork-support/tasks.md): Amsterdam is declared exactly where it
+  // is scheduled, at exactly the published value, and nowhere else. A wrong value is a chain split at the fork
+  // boundary and a missing one is a node that stops there, so each value is pinned, not merely checked for presence.
+  "the live ETH-family shipped configs" should "leave Amsterdam undeclared on mainnet, which has not scheduled it" taggedAs (
+    UnitTest
+  ) in {
+    withClue("eth-chain.conf declared an Amsterdam activation timestamp: ") {
+      shippedChain("eth").forkTimestamps.amsterdamTimestamp shouldBe None
+    }
+  }
+
+  it should "declare Amsterdam on Sepolia at exactly its published activation" taggedAs (UnitTest) in {
+    // 2026-10-06 13:53:36 UTC, Gloas epoch 353024: eth-clients/sepolia metadata/genesis.json `amsterdamTime`,
+    // go-ethereum params.SepoliaChainConfig, the EIP-7773 activation table.
+    shippedChain("sepolia").forkTimestamps.amsterdamTimestamp shouldBe Some(1791294816L)
+  }
+
+  it should "declare Amsterdam on Platåberget at exactly its published activation" taggedAs (UnitTest) in {
+    // 2026-08-20 07:50:24 UTC, Gloas epoch 1536: ethpandaops/glamsterdam-devnets devnet-8 genesis.json.
+    val plataberget = shippedChain("plataberget")
+    plataberget.forkTimestamps.amsterdamTimestamp shouldBe Some(1787212224L)
+    plataberget.networkType shouldBe NetworkType.ETH
+  }
+
+  "every shipped chain config" should "parse, and declare timestamp forks only on an ETH-type network" taggedAs (
+    UnitTest
+  ) in {
+    // Every built-in chain is parsed at every node start, whichever network is selected, so a malformed chain file
+    // or a missing required include (a genesis JSON) stops ETC and Mordor nodes from starting too. And timestamp
+    // dispatch is ETH-only: a timestamp fork on an ETC-type chain is exactly the leak FR-004 forbids.
+    val chains = shippedRoot
+      .getConfig("fukuii.blockchains")
+      .root()
+      .entrySet()
+      .asScala
+      .collect { case e if e.getValue.valueType == ConfigValueType.OBJECT => e.getKey }
+      .toSeq
+      .sorted
+    (chains should contain).allOf("etc", "mordor", "gorgoroth", "eth", "sepolia", "plataberget")
+    chains.foreach { name =>
+      withClue(s"$name-chain.conf: ") {
+        val config = shippedChain(name)
+        val ft = config.forkTimestamps
+        val timestampForks = Seq(
+          ft.shanghaiTimestamp,
+          ft.cancunTimestamp,
+          ft.pragueTimestamp,
+          ft.osakaTimestamp,
+          ft.amsterdamTimestamp,
+          ft.bpo1Timestamp,
+          ft.bpo2Timestamp
+        )
+        if timestampForks.exists(_.isDefined) then config.networkType shouldBe NetworkType.ETH
+      }
+    }
+  }
+
+  // EIP-6110 (#1416): execution reads deposits from the chain's own contract, so the effective address is pinned per
+  // shipped ETH-type chain. Sepolia's is its own (eth-clients/sepolia genesis `depositContractAddress`, go-ethereum
+  // params.SepoliaChainConfig); mainnet and Platåberget use the mainnet contract; `hive` declares none and falls back
+  // to mainnet (fukuii.sh overrides it from the simulator's genesis at runtime).
+  private val MainnetDepositContract = Address("0x00000000219ab540356cBB839Cbe05303d7705Fa")
+  private val ExpectedDepositContract: Map[String, Address] = Map(
+    "eth" -> MainnetDepositContract,
+    "sepolia" -> Address("0x7f02c3e3c98b133055b8b348b2ac625669ed295d"),
+    "plataberget" -> MainnetDepositContract,
+    "hive" -> MainnetDepositContract
+  )
+
+  private def shippedChainNames: Seq[String] =
+    shippedRoot
+      .getConfig("fukuii.blockchains")
+      .root()
+      .entrySet()
+      .asScala
+      .collect { case e if e.getValue.valueType == ConfigValueType.OBJECT => e.getKey }
+      .toSeq
+      .sorted
+
+  "every ETH-type shipped chain config" should "resolve exactly its pinned EIP-6110 deposit contract" taggedAs (
+    UnitTest
+  ) in {
+    val ethChains = shippedChainNames.filter(name => shippedChain(name).networkType == NetworkType.ETH)
+    // A new ETH-type chain must be added to the table: an unpinned one would silently scan the mainnet contract.
+    ethChains should contain theSameElementsAs ExpectedDepositContract.keys
+    ethChains.foreach { name =>
+      withClue(s"$name-chain.conf: ") {
+        BlockExecution.depositContractFor(shippedChain(name)) shouldBe ExpectedDepositContract(name)
+      }
+    }
+  }
+
+  "every ETC-type shipped chain config" should "declare no EIP-6110 deposit contract" taggedAs (UnitTest) in {
+    // Deposits are only collected on a Prague-active timestamp, which no ETC config declares (asserted above); this
+    // pins the second, independent guard: nothing on the ETC side names a deposit contract at all.
+    val etcChains = shippedChainNames.filter(name => shippedChain(name).networkType == NetworkType.ETC)
+    (etcChains should contain).allOf("etc", "mordor", "gorgoroth")
+    etcChains.foreach { name =>
+      withClue(s"$name-chain.conf: ") {
+        shippedChain(name).depositContractAddress shouldBe None
       }
     }
   }

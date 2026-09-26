@@ -63,6 +63,7 @@ must become required or be formally re-scoped in a reviewed PR.
 | `hive-graphql` | GraphQL endpoint conformance. | 2027-03-31 | #1402 |  |
 | `hive-devp2p` | devp2p discovery and RLPx wire conformance. | 2027-03-31 | #1402 | Two jobs since 2026-09-24. One runs discv4, discv5, snap and snap2 in full; the other runs eth without GetCells and BlobTxWithInvalidCells, which are skipped via sim_skip and waived until #1409 because they hang the suite. Local hive on 4dc5b77af: discv4 16/16, discv5 11/11, snap 6/6, snap2 4/4, eth 22/24. |
 | `ethereum-tests-nightly` | Nightly ethereum/tests across the full ETC and ETH fork schedules. | 2027-03-31 | #1402 | Runs with continue-on-error today. Promotion requires removing that and establishing a baseline pass count first. |
+| `eest-amsterdam` | execution-specs tests@v21.0.0 Amsterdam and BPO2->Amsterdam blockchain_tests (26,503) replayed from the release's own block RLP through the import path (EestFixtureCorpusSpec). Fails on any divergence and on fewer than EEST_MIN_TESTS replayed tests. | 2026-11-30 | #1419 | Baseline 18,081 / 26,503 on 2026-09-26, before the Glamsterdam work items (#1415). Promote once the corpus is fully green and 0.9.0 ships. |
 
 ## Quarantined — excluded from all claims
 

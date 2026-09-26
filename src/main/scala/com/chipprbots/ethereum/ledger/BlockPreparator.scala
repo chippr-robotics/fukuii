@@ -505,10 +505,24 @@ class BlockPreparator(
     // EIP-2780 replaces it with the decomposed base, and that substitution is load-bearing rather than
     // cosmetic — a floor still anchored at 21,000 would drag the measured 12,000 self-transfer back up to
     // 21,000 and the measured 17,201 `tx-callrevert` up to 21,040, contradicting the fixture on both.
-    val floorDataGas = BlockPreparator.calcFloorDataGas(
-      stx.tx.payload,
-      evmConfigForTx.transactionBaseCost(stx.tx.receivingAddress, UInt256(stx.tx.value), senderAddress)
-    )
+    //
+    // Amsterdam also reprices the floor itself: EIP-7976 charges 64 gas per calldata byte, zero or not, and
+    // EIP-7981 adds the access list's data cost. That is a different function, not a different base, so
+    // the pre-Amsterdam call below — ETH Prague/Osaka and ETC Olympia — is untouched.
+    val floorDataGas =
+      if evmConfigForTx.amsterdamEnabled then
+        evmConfigForTx.calcAmsterdamCalldataFloorGas(
+          stx.tx.payload,
+          Transaction.accessList(stx.tx),
+          stx.tx.receivingAddress,
+          UInt256(stx.tx.value),
+          senderAddress
+        )
+      else
+        BlockPreparator.calcFloorDataGas(
+          stx.tx.payload,
+          evmConfigForTx.transactionBaseCost(stx.tx.receivingAddress, UInt256(stx.tx.value), senderAddress)
+        )
 
     // `tx_gas_used = max(tx_gas_used_after_refund, calldata_floor_gas_cost)` (EIP-8037, unchanged in shape
     // from EIP-7623). This is what the sender pays and what the receipt accumulates.
@@ -679,9 +693,19 @@ class BlockPreparator(
           }
           .toRight(TransactionSignatureError)
 
+        // All three counters: EIP-8037 checks block capacity per dimension (execution, state), not against the
+        // receipt sum `acumGas`. Before Amsterdam the execution counter equals `acumGas` and the state one is 0.
         val validatedStx = for
           accData <- accountDataOpt
-          _ <- signedTxValidator.validate(stx, accData._1, blockHeader, upfrontCost, acumGas)
+          _ <- signedTxValidator.validate(
+            stx,
+            accData._1,
+            blockHeader,
+            upfrontCost,
+            acumGas,
+            acumExecutionGas,
+            acumStateGas
+          )
         yield accData
 
         validatedStx match
@@ -976,15 +1000,11 @@ object BlockPreparator:
     */
   def calcFloorDataGas(payload: ByteString): BigInt = calcFloorDataGas(payload, BigInt(21000))
 
-  /** EIP-7623's floor with an explicit base.
+  /** EIP-7623's floor with an explicit base: `baseCost + (nonzero_bytes * 4 + zero_bytes) * 10`.
     *
-    * EIP-2780 (Amsterdam) replaces the flat 21,000 with the transaction's *decomposed* base — TX_BASE_COST plus the
-    * applicable recipient and value primitives, excluding per-authorization and initcode-word charges. The calldata
-    * schedule itself is untouched; only the base the floor sits on moves.
-    *
-    * Two measured consequences, either of which fails if the base stays at 21,000: the self-transfer at block 165 costs
-    * 12,000 (a 21,000 floor would force 21,000), and `tx-callrevert` at block 40 costs 17,201 (a 21,000 base gives a
-    * floor of 21,040 and would force that instead).
+    * Pre-Amsterdam only. Amsterdam replaces the whole floor, not just its base — EIP-7976's 64 gas per byte and
+    * EIP-7981's access-list data cost on EIP-2780's decomposed base — with
+    * [[com.chipprbots.ethereum.vm.AmsterdamGas.calldataFloorGas]].
     */
   def calcFloorDataGas(payload: ByteString, baseCost: BigInt): BigInt =
     val zeroBytes = payload.count(_ == 0)

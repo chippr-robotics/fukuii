@@ -39,6 +39,7 @@ Fukuii is a full EVM execution layer implementation that:
 | Ethereum Classic | 61        | PoW (Ethash)     | Full sync (SNAP / fast / regular)           |
 | Mordor           | 63        | PoW (Ethash)     | Full sync (SNAP / fast / regular)           |
 | Sepolia          | 11155111  | PoS (Engine API) | Full sync                                   |
+| Platåberget      | 7091047534 | PoS (Engine API) | Glamsterdam testnet — Amsterdam support in progress |
 | Ethereum Mainnet | 1         | PoS (Engine API) | Full sync                                   |
 
 ## High-Level Architecture

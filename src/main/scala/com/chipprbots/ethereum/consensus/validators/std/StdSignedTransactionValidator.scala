@@ -6,7 +6,6 @@ import com.chipprbots.ethereum.consensus.validators.SignedTransactionError.*
 import com.chipprbots.ethereum.crypto.ECDSASignature
 import com.chipprbots.ethereum.domain.*
 import com.chipprbots.ethereum.utils.BlockchainConfig
-import com.chipprbots.ethereum.ledger.BlockPreparator
 import com.chipprbots.ethereum.vm.AmsterdamGas
 import com.chipprbots.ethereum.vm.EvmConfig
 
@@ -39,6 +38,24 @@ object StdSignedTransactionValidator extends SignedTransactionValidator:
       upfrontGasCost: UInt256,
       accumGasUsed: BigInt
   )(implicit blockchainConfig: BlockchainConfig): Either[SignedTransactionError, SignedTransactionValid] =
+    // One counter stands for all three. That is exact before Amsterdam — the execution dimension IS the receipt sum and
+    // the state dimension is empty — and for a block's first transaction at Amsterdam. Block execution passes the real
+    // EIP-8037 counters through the overload below.
+    validate(stx, senderAccount, blockHeader, upfrontGasCost, accumGasUsed, accumGasUsed, BigInt(0))
+
+  /** [[validate]] with the block's gas so far in all three counters: `accumGasUsed` (the receipt sum), and EIP-8037's
+    * `accumExecutionGas` and `accumStateGas`, which Amsterdam's block-capacity check reads instead
+    * ([[blockGasCapacityError]]).
+    */
+  override def validate(
+      stx: SignedTransaction,
+      senderAccount: Account,
+      blockHeader: BlockHeader,
+      upfrontGasCost: UInt256,
+      accumGasUsed: BigInt,
+      accumExecutionGas: BigInt,
+      accumStateGas: BigInt
+  )(implicit blockchainConfig: BlockchainConfig): Either[SignedTransactionError, SignedTransactionValid] =
     for
       _ <- validateOlympiaTxTypes(stx, blockHeader)
       _ <- validateBlobTransactionSupport(stx, blockHeader)
@@ -51,7 +68,7 @@ object StdSignedTransactionValidator extends SignedTransactionValidator:
       _ <- validateMaxFeeAgainstBaseFee(stx, blockHeader)
       _ <- validateMaxFeePerBlobGas(stx, blockHeader)
       _ <- validateAccountHasEnoughGasToPayUpfrontCost(senderAccount.balance, upfrontGasCost)
-      _ <- validateBlockHasEnoughGasLimitForTx(stx, accumGasUsed, blockHeader.gasLimit)
+      _ <- validateBlockHasEnoughGasLimitForTx(stx, blockHeader, accumGasUsed, accumExecutionGas, accumStateGas)
     yield SignedTransactionValid
 
   /** EIP-4844 Type-3 (blob) transactions require Cancun activation. ETC never activates Cancun, so blob transactions
@@ -269,14 +286,21 @@ object StdSignedTransactionValidator extends SignedTransactionValidator:
           Right(SignedTransactionValid)
     else Right(SignedTransactionValid)
 
-  /** Validates the gas limit is no smaller than the intrinsic gas used by the transaction.
+  /** Validates the gas limit is no smaller than the intrinsic gas used by the transaction — and, at Amsterdam, no
+    * smaller than its calldata floor either.
+    *
+    * The Amsterdam floor check is execution-specs `validate_transaction`'s second gas check, straight after the
+    * intrinsic one: `intrinsic.calldata_floor > tx.gas` makes the transaction invalid. Only at Amsterdam: EIP-7623
+    * states the same rule for its own floor, but fukuii has never enforced it on ETH Prague/Osaka or ETC Olympia, and
+    * adding it there is a separate, separately reviewed change.
     *
     * @param stx
     *   Transaction to validate
     * @param blockHeaderNumber
     *   Number of the block where the stx transaction was included
     * @return
-    *   Either the validated transaction or a TransactionNotEnoughGasForIntrinsicError
+    *   Either the validated transaction, a TransactionNotEnoughGasForIntrinsicError or (Amsterdam) a
+    *   TransactionNotEnoughGasForFloorError
     */
   private def validateGasLimitEnoughForIntrinsicGas(
       stx: SignedTransaction,
@@ -303,8 +327,20 @@ object StdSignedTransactionValidator extends SignedTransactionValidator:
         UInt256(tx.value),
         sender
       )
-    if stx.tx.gasLimit >= GasAmount(txIntrinsicGas) then Right(SignedTransactionValid)
-    else Left(TransactionNotEnoughGasForIntrinsicError(stx.tx.gasLimit.value, txIntrinsicGas))
+    if stx.tx.gasLimit < GasAmount(txIntrinsicGas) then
+      Left(TransactionNotEnoughGasForIntrinsicError(stx.tx.gasLimit.value, txIntrinsicGas))
+    else if config.amsterdamEnabled then
+      val floor = config.calcAmsterdamCalldataFloorGas(
+        tx.payload,
+        Transaction.accessList(tx),
+        tx.receivingAddress,
+        UInt256(tx.value),
+        sender
+      )
+      if stx.tx.gasLimit < GasAmount(floor) then
+        Left(TransactionNotEnoughGasForFloorError(stx.tx.gasLimit.value, floor))
+      else Right(SignedTransactionValid)
+    else Right(SignedTransactionValid)
 
   /** Validates the sender account balance contains at least the cost required in up-front payment.
     *
@@ -342,6 +378,12 @@ object StdSignedTransactionValidator extends SignedTransactionValidator:
       // exists to serve. TX_MAX_GAS_LIMIT now caps EXECUTION gas only, so `tx.gas` above it is legal —
       // the excess seeds `state_gas_reservoir`. What is capped against 2^24 is the intrinsic cost, and
       // `tx.gas` as a whole is capped against the new TX_MAX_TOTAL_GAS_LIMIT = 2^32 - 1.
+      //
+      // execution-specs checks the intrinsic cost and the calldata floor against 2^24 separately, after
+      // both sufficiency checks (validateGasLimitEnoughForIntrinsicGas), and raises the same error for
+      // either — so one comparison against their maximum is the same rule. Its TX_MAX_TOTAL_GAS_LIMIT
+      // check comes before the sufficiency checks rather than after; both failing at once needs an
+      // intrinsic cost above 2^32 - 1, i.e. hundreds of megabytes of calldata.
       import stx.tx
       val config = EvmConfig.forBlock(blockHeaderNumber, blockHeaderTimestamp, blockchainConfig)
       val authListSize = tx match
@@ -357,35 +399,81 @@ object StdSignedTransactionValidator extends SignedTransactionValidator:
         UInt256(tx.value),
         sender
       )
-      val floor = BlockPreparator.calcFloorDataGas(
+      val floor = config.calcAmsterdamCalldataFloorGas(
         tx.payload,
-        config.transactionBaseCost(tx.receivingAddress, UInt256(tx.value), sender)
+        Transaction.accessList(tx),
+        tx.receivingAddress,
+        UInt256(tx.value),
+        sender
       )
       if tx.gasLimit.value > AmsterdamGas.TxMaxTotalGasLimit then
         Left(TransactionGasLimitExceedsCap(tx.gasLimit.value, AmsterdamGas.TxMaxTotalGasLimit))
-      else if intrinsic.max(floor) > TxGasLimitCap then
-        Left(TransactionGasLimitExceedsCap(intrinsic.max(floor), TxGasLimitCap))
+      else if intrinsic.max(floor) > AmsterdamGas.TxMaxGasLimit then
+        Left(TransactionIntrinsicCostExceedsCap(intrinsic, floor, AmsterdamGas.TxMaxGasLimit))
       else Right(SignedTransactionValid)
     else if (isOlympiaActivated || isOsakaActivated) && stx.tx.gasLimit > GasAmount(TxGasLimitCap) then
       Left(TransactionGasLimitExceedsCap(stx.tx.gasLimit.value, TxGasLimitCap))
     else Right(SignedTransactionValid)
 
-  /** The sum of the transaction’s gas limit and the gas utilised in this block prior must be no greater than the
-    * block’s gasLimit
+  /** The transaction must fit what is left of the block's gas; see [[blockGasCapacityError]].
     *
     * @param stx
     *   Transaction to validate
-    * @param accumGasUsed
-    *   Gas spent within tx container block prior executing stx
-    * @param blockGasLimit
-    *   Block gas limit
+    * @param blockHeader
+    *   Container block: its gas limit, and its timestamp for the fork
     * @return
-    *   Either the validated transaction or a TransactionGasLimitTooBigError
+    *   Either the validated transaction, a TransactionGasLimitTooBigError or (Amsterdam) a
+    *   TransactionExecutionGasExceedsBlockCapacity / TransactionStateGasExceedsBlockCapacity
     */
   private def validateBlockHasEnoughGasLimitForTx(
       stx: SignedTransaction,
+      blockHeader: BlockHeader,
       accumGasUsed: BigInt,
-      blockGasLimit: GasAmount
-  ): Either[SignedTransactionError, SignedTransactionValid] =
-    if stx.tx.gasLimit + GasAmount(accumGasUsed) <= blockGasLimit then Right(SignedTransactionValid)
-    else Left(TransactionGasLimitTooBigError(stx.tx.gasLimit.value, accumGasUsed, blockGasLimit.value))
+      accumExecutionGas: BigInt,
+      accumStateGas: BigInt
+  )(implicit blockchainConfig: BlockchainConfig): Either[SignedTransactionError, SignedTransactionValid] =
+    blockGasCapacityError(
+      stx.tx.gasLimit.value,
+      blockHeader.gasLimit.value,
+      blockHeader.unixTimestamp,
+      accumGasUsed,
+      accumExecutionGas,
+      accumStateGas
+    ).toLeft(SignedTransactionValid)
+
+  /** Whether a transaction with gas limit `txGasLimit` still fits a block, given what the block's earlier transactions
+    * used: `None` if it fits. The one statement of the rule — block validation applies it, and the payload builder uses
+    * it to leave out transactions that can no longer fit.
+    *
+    * Before Amsterdam, and on every ETC fork, one counter: `txGasLimit + accumGasUsed <= blockGasLimit`, where
+    * `accumGasUsed` is the receipt sum.
+    *
+    * Amsterdam (EIP-8037; execution-specs `check_block_gas_capacity`, go-ethereum `GasPool.CheckGasAmsterdam`) checks
+    * each dimension against its own remaining budget:
+    * {{{
+    * min(TX_MAX_GAS_LIMIT, txGasLimit) <= blockGasLimit - accumExecutionGas   // at most 2^24 of execution per tx
+    * txGasLimit                       <= blockGasLimit - accumStateGas
+    * }}}
+    * The receipt sum plays no part. Receipts add both dimensions while the header takes their maximum, so the sum can
+    * legitimately approach twice the gas limit: the single-counter rule would reject valid Amsterdam blocks — and,
+    * since execution is counted before refunds (EIP-7778) while receipts are after them, accept invalid ones.
+    */
+  def blockGasCapacityError(
+      txGasLimit: BigInt,
+      blockGasLimit: BigInt,
+      blockTimestamp: Timestamp,
+      accumGasUsed: BigInt,
+      accumExecutionGas: BigInt,
+      accumStateGas: BigInt
+  )(implicit blockchainConfig: BlockchainConfig): Option[SignedTransactionError] =
+    if !blockchainConfig.isAmsterdamTimestamp(blockTimestamp) then
+      Option.when(txGasLimit + accumGasUsed > blockGasLimit)(
+        TransactionGasLimitTooBigError(txGasLimit, accumGasUsed, blockGasLimit)
+      )
+    else
+      val executionReservation = txGasLimit.min(AmsterdamGas.TxMaxGasLimit)
+      if executionReservation > blockGasLimit - accumExecutionGas then
+        Some(TransactionExecutionGasExceedsBlockCapacity(executionReservation, accumExecutionGas, blockGasLimit))
+      else if txGasLimit > blockGasLimit - accumStateGas then
+        Some(TransactionStateGasExceedsBlockCapacity(txGasLimit, accumStateGas, blockGasLimit))
+      else None
