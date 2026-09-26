@@ -596,26 +596,44 @@ object PrecompiledContracts:
         // bad input to contract, contract will not execute, set price to zero
         BigInt(0)
 
-  // Spec: https://eips.ethereum.org/EIPS/eip-7951
-  // EIP-7951: P256VERIFY — secp256r1 (P-256) signature verification
+  /** EIP-7951 P256VERIFY: secp256r1 (P-256) signature verification. Spec: https://eips.ethereum.org/EIPS/eip-7951
+    *
+    * Follows execution-specs `osaka/vm/precompiled_contracts/p256verify.py` step for step (go-ethereum `p256Verify`
+    * agrees): the 6,900 gas is charged first, whatever the input; then the call SUCCEEDS with EMPTY output unless the
+    * input is exactly 160 bytes — hash, r, s, qx, qy — and the signature verifies, in which case the output is 0x01
+    * left-padded to 32 bytes. There is no 32-byte zero word for "does not verify": a caller sees RETURNDATASIZE 0.
+    *
+    * The bound and curve checks are the reference's own, made here rather than left to the JDK's ECDSA provider so that
+    * the result cannot depend on which provider answers.
+    *
+    * Active on ETH from Osaka (timestamp) and on ETC from Olympia (block, ECIP-1121); see [[getContracts]].
+    */
   object P256Verify extends PrecompiledContract:
-    private val expectedInputLength = 160 // hash(32) + r(32) + s(32) + x(32) + y(32)
+    private val InputLength = 160 // hash(32) + r(32) + s(32) + qx(32) + qy(32)
+
+    /** execution-specs `SECP256R1N` / `SECP256R1P` / `SECP256R1A` / `SECP256R1B`. */
+    private val N = BigInt("ffffffff00000000ffffffffffffffffbce6faada7179e84f3b9cac2fc632551", 16)
+    private val P = BigInt("ffffffff00000001000000000000000000000000ffffffffffffffffffffffff", 16)
+    private val A = BigInt("ffffffff00000001000000000000000000000000fffffffffffffffffffffffc", 16)
+    private val B = BigInt("5ac635d8aa3a93e7b3ebbd55769886bc651d06b0cc53b0f63bce3c3e27d2604b", 16)
+
+    private val Verified: ByteString = ByteUtils.padLeft(ByteString(1), 32)
 
     def exec(inputData: ByteString): Option[ByteString] =
-      if inputData.length < expectedInputLength then Some(ByteString.empty) // Invalid input — return empty (failure)
-      else
-        val hash = inputData.slice(0, 32).toArray
-        val r = inputData.slice(32, 64).toArray
-        val s = inputData.slice(64, 96).toArray
-        val x = inputData.slice(96, 128).toArray
-        val y = inputData.slice(128, 160).toArray
+      Some(if verifies(inputData) then Verified else ByteString.empty)
 
-        if Secp256r1.verify(hash, r, s, x, y) then
-          // Valid signature: return 0x01 left-padded to 32 bytes
-          Some(ByteUtils.padLeft(ByteString(1), 32))
-        else
-          // Invalid signature: return 0x00 left-padded to 32 bytes
-          Some(ByteString(new Array[Byte](32)))
+    private def verifies(input: ByteString): Boolean =
+      input.length == InputLength && {
+        def word(i: Int): Array[Byte] = input.slice(32 * i, 32 * (i + 1)).toArray
+        val (hash, rBytes, sBytes, xBytes, yBytes) = (word(0), word(1), word(2), word(3), word(4))
+        val (r, s) = (BigInt(1, rBytes), BigInt(1, sBytes))
+        val (qx, qy) = (BigInt(1, xBytes), BigInt(1, yBytes))
+        r > 0 && r < N && s > 0 && s < N && // 0 < r < n and 0 < s < n
+        qx < P && qy < P && // 0 <= qx < p and 0 <= qy < p
+        !(qx == 0 && qy == 0) && // not the point at infinity
+        (qy * qy).mod(P) == (qx * qx * qx + A * qx + B).mod(P) && // on the curve
+        Secp256r1.verify(hash, rBytes, sBytes, xBytes, yBytes)
+      }
 
     def gas(inputData: ByteString, etcFork: EtcFork, ethFork: EthFork): BigInt = BigInt(6900)
 
