@@ -134,6 +134,12 @@ object PrecompiledContracts:
     *
     * Before Amsterdam every counter in the context is 0, so the result is identical to the previous one on every ETH
     * fork before Amsterdam and on every ETC fork.
+    *
+    * EIP-1153 transient storage is handed back for the same reason: a successful CALL-family frame ADOPTS the child's
+    * transient storage (`CallOp.exec`: `copy(transientStorage = result.transientStorage)`), and a precompile neither
+    * reads nor writes it. Left at the default (empty), a successful precompile call wiped every TSTORE the transaction
+    * had made so far — TSTORE(k, 42); CALL 0x04; TLOAD(k) gave 0 where execution-specs gives 42 (#1439). The access
+    * sets, logs and deletions stay empty: the caller MERGES those, so empty is exact.
     */
   private def frameResult[W <: WorldStateProxy[W, S], S <: Storage[S]](
       context: ProgramContext[W, S],
@@ -152,6 +158,7 @@ object PrecompiledContracts:
       error = error,
       accessedAddresses = Set.empty,
       accessedStorageKeys = Set.empty,
+      transientStorage = context.transientStorage,
       stateGasReservoir = context.stateGasReservoir,
       evmStateGasUsed = context.evmStateGasUsed,
       stateGasFromGasLeft = context.stateGasFromGasLeft,
