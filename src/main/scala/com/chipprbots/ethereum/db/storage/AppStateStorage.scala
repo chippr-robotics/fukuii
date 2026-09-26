@@ -43,9 +43,10 @@ class AppStateStorage(val dataSource: DataSource) extends TransactionalKeyValueS
     put(Keys.BestBlockNumber, bestBlockNumber.toString)
 
   /** Whether fast sync finished on this node. Fast sync was removed and nothing in the node sets this flag any more; a
-    * database that fast sync completed earlier still carries it. It does not choose the sync mode (with SNAP on and not
-    * done, SNAP starts regardless); `SyncController` reads it only to tell a stranded fast sync from a finished one,
-    * and its recovery paths clear it.
+    * database that fast sync completed earlier still carries it. `SyncController` reads it in two places: to tell a
+    * stranded fast sync from a finished one, and, with SNAP on and not done, to send a node where fast sync finished
+    * and SNAP has no stake (accounts not complete, saved pivot not the best block) to regular sync instead of SNAP. Its
+    * recovery paths clear it.
     */
   def isFastSyncDone(): Boolean =
     get(Keys.FastSyncDone).exists(_.toBoolean)
