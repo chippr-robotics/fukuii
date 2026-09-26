@@ -171,3 +171,72 @@ class AmsterdamSystemCallSpec extends AnyFlatSpec with Matchers:
     // 30,000,000 - 6 - 22,100 - 2 = 29,977,892.
     val osaka = requestSystemCall(OsakaTs, WithdrawalQueueAddress, SetThenStoreGas)
     storageOf(osaka, WithdrawalQueueAddress, 1) shouldBe BigInt(29977892)
+
+  // ── EIP-4788 / EIP-2935: real system calls from Amsterdam on ────────────────
+
+  // The canonical contracts, as EEST's pre-states carry them (the EIP-4788 and EIP-2935 deployments).
+  private val BeaconRootsCode = ByteString(
+    Hex.decode(
+      "3373fffffffffffffffffffffffffffffffffffffffe14604d57602036146024575f5ffd5b5f35801560495762001fff8106908154" +
+        "14603c575f5ffd5b62001fff01545f5260205ff35b5f5ffd5b62001fff42064281555f359062001fff015500"
+    )
+  )
+  private val HistoryCode = BlockExecution.HistoryStorageCode
+
+  private val BeaconRoot = ByteString(Hex.decode("42" * 32))
+
+  /** Runs the block preamble and an empty transaction list, as block execution does. */
+  private def preamble(setup: Setup, timestamp: Long, world: InMemoryWorldStateProxy): InMemoryWorldStateProxy =
+    setup.exec
+      .executeBlockTransactions(setup.block(timestamp, BeaconRoot), world)(setup.blockchainConfig)
+      .fold(err => fail(s"block execution failed: $err"), _.worldState)
+
+  import BlockExecution.BeaconRootContractAddress
+  import BlockExecution.HistoryStorageAddress
+
+  "the EIP-4788 and EIP-2935 preamble" should "run the code at both addresses at Amsterdam" taggedAs (
+    UnitTest,
+    StateTest
+  ) in new Setup:
+    // EEST test_system_call_execution_grant[beacon] / [history]: the probe must run, so GAS lands in slot 0.
+    val world = withCode(withCode(emptyWorld, BeaconRootContractAddress, StoreGas), HistoryStorageAddress, StoreGas)
+    val after = preamble(this, AmsterdamTs, world)
+    storageOf(after, BeaconRootContractAddress, 0) shouldBe BigInt(29999998)
+    storageOf(after, HistoryStorageAddress, 0) shouldBe BigInt(29999998)
+    // And nothing was written where the direct writes would have put the timestamp and the root.
+    storageOf(after, BeaconRootContractAddress, 360) shouldBe BigInt(0)
+    storageOf(after, BeaconRootContractAddress, 360 + 8191) shouldBe BigInt(0)
+
+  it should "leave the canonical contracts exactly as the direct writes did" taggedAs (
+    UnitTest,
+    StateTest
+  ) in new Setup:
+    val world =
+      withCode(withCode(emptyWorld, BeaconRootContractAddress, BeaconRootsCode), HistoryStorageAddress, HistoryCode)
+    val parentHash = BigInt(1, block(AmsterdamTs).header.parentHash.value.toArray)
+
+    // Amsterdam, by running the contracts: timestamp 360 -> slots 360 and 360 + 8191; block 36 -> history slot 35.
+    val amsterdam = preamble(this, AmsterdamTs, world)
+    storageOf(amsterdam, BeaconRootContractAddress, 360) shouldBe BigInt(360)
+    storageOf(amsterdam, BeaconRootContractAddress, 360 + 8191) shouldBe BigInt(1, BeaconRoot.toArray)
+    storageOf(amsterdam, HistoryStorageAddress, 35) shouldBe parentHash
+
+    // Osaka, by the direct writes: the same layout at timestamp 359.
+    val osaka = preamble(this, OsakaTs, world)
+    storageOf(osaka, BeaconRootContractAddress, 359) shouldBe BigInt(359)
+    storageOf(osaka, BeaconRootContractAddress, 359 + 8191) shouldBe BigInt(1, BeaconRoot.toArray)
+    storageOf(osaka, HistoryStorageAddress, 35) shouldBe parentHash
+
+  it should "drop a failing call's changes and keep executing the block" taggedAs (UnitTest, StateTest) in new Setup:
+    // execution-specs process_unchecked_system_transaction: the failure is ignored. PUSH1 1 PUSH1 0 SSTORE INVALID
+    // writes a slot and then halts, so the write must not survive; the history call after it still runs.
+    val failing = ByteString(Hex.decode("6001600055fe"))
+    val world = withCode(withCode(emptyWorld, BeaconRootContractAddress, failing), HistoryStorageAddress, HistoryCode)
+    val after = preamble(this, AmsterdamTs, world)
+    storageOf(after, BeaconRootContractAddress, 0) shouldBe BigInt(0)
+    storageOf(after, HistoryStorageAddress, 35) shouldBe BigInt(1, block(AmsterdamTs).header.parentHash.value.toArray)
+
+  it should "create nothing when no contract is deployed" taggedAs (UnitTest, StateTest) in new Setup:
+    val after = preamble(this, AmsterdamTs, emptyWorld)
+    after.getAccount(BeaconRootContractAddress) shouldBe None
+    after.getAccount(HistoryStorageAddress) shouldBe None
