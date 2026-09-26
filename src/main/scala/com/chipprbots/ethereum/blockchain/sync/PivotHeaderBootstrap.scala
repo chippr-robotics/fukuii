@@ -32,8 +32,8 @@ import com.chipprbots.ethereum.utils.Config.SyncConfig
 /** Fetches and persists a single pivot header so SNAP can start without importing blocks.
   *
   * Two modes:
-  *   - **By number** (`targetBlock`, `targetHash = None`): the standard pre-merge / non-CL path. Used by both fast-sync
-  *     pivot bootstrap and SNAP's TD-driven pivot selection.
+  *   - **By number** (`targetBlock`, `targetHash = None`): the standard pre-merge / non-CL path, used by SNAP's
+  *     TD-driven pivot selection.
   *   - **By hash** (`targetBlock = 0`, `targetHash = Some(_)`): the CL-driven post-merge path (#1207). The CL has
   *     pushed a head hash via engine_forkchoiceUpdated; we fetch that hash directly via `GetBlockHeaders(Right(hash))`.
   *     The `Completed` reply uses `header.number` as the targetBlock so callers don't need to special-case the by-hash
@@ -67,7 +67,7 @@ object PivotHeaderBootstrap:
   final case class Completed(targetBlock: BigInt, header: BlockHeader) extends Reply
   final case class Failed(reason: String) extends Reply
 
-  /** Fetch by block number (the standard pre-merge / fast-sync / TD-driven SNAP path). */
+  /** Fetch by block number (the standard pre-merge / TD-driven SNAP path). */
   def apply(
       peersClient: ActorRef[PeersClient.Command],
       blockchainWriter: BlockchainWriter,

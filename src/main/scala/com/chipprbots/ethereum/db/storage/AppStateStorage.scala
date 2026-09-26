@@ -42,6 +42,10 @@ class AppStateStorage(val dataSource: DataSource) extends TransactionalKeyValueS
   def putBestBlockNumber(bestBlockNumber: BigInt): DataSourceBatchUpdate =
     put(Keys.BestBlockNumber, bestBlockNumber.toString)
 
+  /** Whether fast sync finished on this node. Fast sync was removed and nothing in the node sets this flag any more; a
+    * database that fast sync completed earlier still carries it. `SyncController` reads it at startup (such a node
+    * continues in regular sync) and its recovery paths clear it.
+    */
   def isFastSyncDone(): Boolean =
     get(Keys.FastSyncDone).exists(_.toBoolean)
 
@@ -50,15 +54,6 @@ class AppStateStorage(val dataSource: DataSource) extends TransactionalKeyValueS
 
   def clearFastSyncDone(): DataSourceBatchUpdate =
     remove(Keys.FastSyncDone)
-
-  def getFastSyncCooldownUntilMillis(): Long =
-    get(Keys.FastSyncCooldownUntilMillis).flatMap(v => scala.util.Try(v.toLong).toOption).getOrElse(0L)
-
-  def putFastSyncCooldownUntilMillis(untilMillis: Long): DataSourceBatchUpdate =
-    put(Keys.FastSyncCooldownUntilMillis, untilMillis.toString)
-
-  def isFastSyncCoolingOff(nowMillis: Long): Boolean =
-    getFastSyncCooldownUntilMillis() > nowMillis
 
   def getEstimatedHighestBlock(): BigInt =
     getBigInt(Keys.EstimatedHighestBlock)
@@ -302,16 +297,6 @@ class AppStateStorage(val dataSource: DataSource) extends TransactionalKeyValueS
   def clearSnapSyncBootstrapTarget(): DataSourceBatchUpdate =
     update(toRemove = Seq(Keys.SnapSyncBootstrapTarget), toUpsert = Nil)
 
-  /** Get the SNAP/Fast sync bounce cycle count. */
-  def getSnapFastCycleCount(): Int =
-    get(Keys.SnapFastCycleCount).flatMap(v => scala.util.Try(v.toInt).toOption).getOrElse(0)
-
-  def putSnapFastCycleCount(count: Int): DataSourceBatchUpdate =
-    put(Keys.SnapFastCycleCount, count.toString)
-
-  def clearSnapFastCycleCount(): DataSourceBatchUpdate =
-    remove(Keys.SnapFastCycleCount)
-
   /** Check if SNAP sync account download phase has completed. Used to skip account re-download on process restart
     * during bytecode/storage phase.
     */
@@ -496,7 +481,6 @@ object AppStateStorage:
     val BestBlockNumber = "BestBlockNumber"
     val BestBlockHash = "BestBlockHash"
     val FastSyncDone = "FastSyncDone"
-    val FastSyncCooldownUntilMillis = "FastSyncCooldownUntilMillis"
     val EstimatedHighestBlock = "EstimatedHighestBlock"
     val SyncStartingBlock = "SyncStartingBlock"
     val BootstrapPivotBlock = "BootstrapPivotBlock"
@@ -506,7 +490,6 @@ object AppStateStorage:
     val SnapSyncStateRoot = "SnapSyncStateRoot"
     val SnapSyncProgress = "SnapSyncProgress"
     val SnapSyncBootstrapTarget = "SnapSyncBootstrapTarget"
-    val SnapFastCycleCount = "SnapFastCycleCount"
     val BytecodeRecoveryDone = "BytecodeRecoveryDone"
     val StorageRecoveryDone = "StorageRecoveryDone"
     val RecoveryProgress = "RecoveryProgress"
