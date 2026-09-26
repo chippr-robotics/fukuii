@@ -1174,27 +1174,31 @@ object SyncController:
       *
       * The record is deleted either way, in the same batch, so this runs at most once per database and no later start
       * can mistake a SNAP-moved best block for a stranded one. It runs before anything else in start() touches the done
-      * flags (dangling-best recovery, `clearDoneOnStart`), so it sees them as persisted.
+      * flags (dangling-best recovery, `clearDoneOnStart`), so it sees them as persisted. Returns the floor it wrote, if
+      * any: only the one start that finds the stranded node writes one.
       */
-    private def adoptLeftoverFastSyncRecord(): Unit =
-      if fastSyncStateStorage.hasSyncState then
+    private def adoptLeftoverFastSyncRecord(): Option[BigInt] =
+      if !fastSyncStateStorage.hasSyncState then None
+      else
         val best = appStateStorage.getBestBlockNumber()
         val stranded =
           best > 0 && !appStateStorage.isSnapSyncDone() && !appStateStorage.isFastSyncDone() &&
             !appStateStorage.isSnapSyncAccountsComplete() && !appStateStorage.getSnapSyncPivotBlock().contains(best)
-        val floor =
-          if stranded then
+        val floor = Option.when(stranded)(best + 1)
+        val floorUpdate = floor match
+          case Some(f) =>
             log.warn(
               "Fast sync was running when this node was upgraded; fast sync was removed. Its best block {} has no " +
                 "state behind it, so SNAP may not take a pivot below {}. Deleting fast sync's leftover progress record.",
               best,
-              best + 1
+              f
             )
-            appStateStorage.putSnapSyncMinPivotBlock(best + 1)
-          else
+            appStateStorage.putSnapSyncMinPivotBlock(f)
+          case None =>
             log.info("Deleting fast sync's leftover progress record: SNAP or a finished sync owns this database")
             appStateStorage.emptyBatchUpdate
-        floor.and(fastSyncStateStorage.removeSyncState()).commit()
+        floorUpdate.and(fastSyncStateStorage.removeSyncState()).commit()
+        floor
 
     /** SNAP's persisted pivot floor, unless it is spent.
       *
@@ -1237,7 +1241,7 @@ object SyncController:
     def start(): Behavior[Command] =
       val startMode = SyncController.selectSyncMode(syncConfig)
 
-      adoptLeftoverFastSyncRecord()
+      val floorSetThisStart = adoptLeftoverFastSyncRecord()
 
       // Fast sync was removed, and with it this one-shot override (it cleared FastSyncDone so fast sync would run
       // again). Say so rather than ignore it silently.
@@ -1459,15 +1463,22 @@ object SyncController:
           // Says what actually happens. Regular sync fetches missing nodes on demand (redownload-missing-state-nodes);
           // when peers cannot serve them BlockImporter reports RegularSyncStuck, and that handler starts SNAP whatever
           // do-snap-sync says. Changing that escape to honour do-snap-sync would leave such a node with no way out.
+          // Logged at ERROR once, by the start that found the stranded node; later starts note it at INFO.
           liveSnapPivotFloor().foreach { floor =>
-            log.error(
-              "Fast sync was in progress when this node was upgraded; fast sync was removed. Its best block {} has no " +
-                "state behind it, and do-snap-sync is off, so regular sync starts there and fetches the missing state " +
-                "from peers node by node. If peers cannot serve it, regular sync reports itself stuck and the node " +
-                "re-syncs with SNAP from a newer pivot, even with do-snap-sync off. Set fukuii.sync.do-snap-sync = true " +
-                "to start with SNAP instead.",
-              floor - 1
-            )
+            if floorSetThisStart.contains(floor) then
+              log.error(
+                "Fast sync was in progress when this node was upgraded; fast sync was removed. Its best block {} has " +
+                  "no state behind it, and do-snap-sync is off, so regular sync starts there and fetches the missing " +
+                  "state from peers node by node. If peers cannot serve it, regular sync reports itself stuck and the " +
+                  "node re-syncs with SNAP from a newer pivot, even with do-snap-sync off. Set " +
+                  "fukuii.sync.do-snap-sync = true to start with SNAP instead.",
+                floor - 1
+              )
+            else
+              log.info(
+                "Block {} (reached by an interrupted fast sync) still lacks state; regular sync fetches it on demand",
+                floor - 1
+              )
           }
           startRegularSync()._2
 
