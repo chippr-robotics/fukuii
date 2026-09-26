@@ -32,7 +32,8 @@ import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.GetBlockHeaders a
 import com.chipprbots.ethereum.utils.Config.SyncConfig
 
 /** Finds the first common block between our chain and the chain of the master peer (the peer with the highest block),
-  * so fast sync can discard our diverged tip and re-download from the common ancestor.
+  * so regular sync (`BlockImporter`) can discard our diverged tip and re-download from the common ancestor. The name is
+  * left over from fast sync, its first caller, which was removed.
   *
   * Pekko Typed migration (Group S2 — narrowed): `Behavior[Command]` with a sealed Command ADT. Three named behavior
   * states: `waitingForPeerWithHighestBlock` / `waitingForRecentBlockHeaders` / `waitingForBinarySearchBlock`. Peer-list
@@ -41,9 +42,9 @@ import com.chipprbots.ethereum.utils.Config.SyncConfig
   * All inbound message types are Command ADT members. `HandshakedPeers` replies from `NetworkPeerManagerActor` (Classic
   * tell) are wrapped via a `messageAdapter` into `HandshakedPeersMsg`. `PeerRequestHandler` results arrive wrapped as
   * `PeerRequestResult` via another adapter; the PRH child is spawned typed and death-watched with `watchWith(handler,
-  * HandlerTerminated(handler))`. `replyTo: TypedActorRef[BranchResolverResponse]` stays a typed ref — `FastSync` passes
-  * `ctx.messageAdapter[BranchResolverResponse](identity)` until it is itself narrowed (SNAP2). The pure
-  * binary-search/discard logic stays in [[FastSyncBranchResolver]] via [[BranchLogic]].
+  * HandlerTerminated(handler))`. `replyTo: TypedActorRef[BranchResolverResponse]` is a typed ref: `BlockImporter`
+  * passes a message adapter that wraps each reply in its own Command. The pure binary-search/discard logic stays in
+  * [[FastSyncBranchResolver]] via [[BranchLogic]].
   */
 object FastSyncBranchResolverActor:
 
@@ -71,7 +72,7 @@ object FastSyncBranchResolverActor:
   /** Wraps a `PeerRequestHandler.Result` reply from the PRH result adapter. */
   final private case class PeerRequestResult(result: PeerRequestHandler.Result) extends Command
 
-  // ----- Outgoing messages to the Classic `fastSync` parent -----
+  // ----- Replies to the caller (`replyTo`) -----
 
   sealed trait BranchResolverResponse
   final case class BranchResolvedSuccessful(highestCommonBlockNumber: BigInt, masterPeer: Peer)
