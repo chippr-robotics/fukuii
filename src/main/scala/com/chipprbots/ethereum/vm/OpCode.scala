@@ -201,6 +201,13 @@ object OpCodes:
   /** ETH Osaka: Cancun + CLZ (EIP-7939). */
   val OsakaOpCodes: List[OpCode] = CLZ :: CancunOpCodes
 
+  /** ETH Amsterdam: Osaka + SLOTNUM (EIP-7843) + DUPN, SWAPN, EXCHANGE (EIP-8024) — execution-specs `forks/amsterdam`
+    * `Ops` less Osaka's, and go-ethereum `newAmsterdamInstructionSet` (enable7843, enable8024). Reached only through
+    * the Amsterdam branch of the timestamp cascade (`EvmConfig.forBlock`); no ETC table holds 0x4b or 0xe6..0xe8
+    * (OpCodeContractSpec).
+    */
+  val AmsterdamOpCodes: List[OpCode] = List(SLOTNUM, DUPN, SWAPN, EXCHANGE) ++ OsakaOpCodes
+
 object OpCode:
 
   /** Zero gas, as one shared value: the default state-gas delta and the variable gas of a constant-gas instruction are
@@ -265,6 +272,27 @@ object OpCode:
     */
   private[vm] def codeReadSurcharge[S <: Storage[S], W <: WorldStateProxy[W, S]](state: ProgramState[W, S]): BigInt =
     if state.config.amsterdamEnabled then state.config.feeSchedule.G_warm_storage_read else NoGas
+
+  // ── EIP-8024 immediate decoding (execution-specs forks/amsterdam vm/stack.py) ──────────────────
+  //
+  // `x` is the unsigned immediate byte, 0..255. The forbidden ranges keep an immediate from being 0x5b (JUMPDEST) or
+  // 0x60..0x7f (PUSH1..PUSH32), which is what lets JUMPDEST analysis stay unchanged.
+
+  /** Whether `x` is a valid DUPN/SWAPN immediate: 0..90 or 128..255. 91..127 is an exceptional halt. */
+  private[vm] def isValidSingleImmediate(x: Int): Boolean = x <= 90 || x >= 128
+
+  /** `decode_single`: the stack index n, 17 <= n <= 235, of a valid DUPN/SWAPN immediate. */
+  private[vm] def decodeSingle(x: Int): Int = (x + 145) % 256
+
+  /** Whether `x` is a valid EXCHANGE immediate: 0..81 or 128..255. 82..127 is an exceptional halt. */
+  private[vm] def isValidPairImmediate(x: Int): Boolean = x <= 81 || x >= 128
+
+  /** `decode_pair`: the stack indices (n, m), 1 <= n < m <= 30 - n, of a valid EXCHANGE immediate. */
+  private[vm] def decodePair(x: Int): (Int, Int) =
+    val k = x ^ 143
+    val q = k / 16
+    val r = k % 16
+    if q < r then (q + 1, r + 1) else (r + 1, 29 - q)
 
 /** Base class for all the opcodes of the EVM
   *
@@ -1103,6 +1131,62 @@ case object SWAP14 extends SwapOp(0x9d)
 case object SWAP15 extends SwapOp(0x9e)
 case object SWAP16 extends SwapOp(0x9f)
 
+/** EIP-8024 (Amsterdam) DUPN, SWAPN and EXCHANGE: stack access below depth 16 through a one-byte immediate.
+  *
+  * Each charges VERY_LOW (3), reads `x = code[pc + 1]` (0 past the end of the code, as for PUSH), decodes it and moves
+  * pc on by 2. An immediate in the forbidden range, or a stack too shallow for the decoded index, is an exceptional
+  * halt. execution-specs `vm/instructions/stack.py` charges the gas, then checks the immediate, then the depth, then
+  * (DUPN) the push; `execute` checks the bounds `delta`/`alpha` declare (nothing popped, DUPN's one push) before the
+  * gas. Every one of these halts consumes the frame's gas, so the order only changes which error is reported.
+  *
+  * JUMPDEST analysis is unchanged (EIP-8024; execution-specs `get_valid_jump_destinations` skips PUSH data only): the
+  * immediate is not skipped, and the forbidden ranges keep every valid immediate off 0x5b and 0x60..0x7f.
+  *
+  * The transition is written once, in `execAndSpendGas`, as for JUMP; `exec` is its zero-charge case. Not a
+  * `StackOnlyOp`, which never halts.
+  */
+sealed abstract class ImmediateStackOp(code: Int, alpha: Int) extends OpCode(code, 0, alpha, _.G_verylow) with ConstGas:
+
+  /** The stack after the instruction, given its immediate `x` (0..255), or the halt it causes. */
+  protected def nextStack(x: Int, stack: Stack): Either[ProgramError, Stack]
+
+  protected def exec[S <: Storage[S], W <: WorldStateProxy[W, S]](state: ProgramState[W, S]): ProgramState[W, S] =
+    execAndSpendGas(state, OpCode.NoGas)
+
+  override protected def execAndSpendGas[S <: Storage[S], W <: WorldStateProxy[W, S]](
+      state: ProgramState[W, S],
+      gas: BigInt
+  ): ProgramState[W, S] =
+    nextStack(state.program.getByte(state.pc + 1) & 0xff, state.stack) match
+      case Right(stack) => state.stepWithStack(stack, 2, gas)
+      case Left(error)  => state.withError(error).spendGas(gas)
+
+/** EIP-8024: duplicate the n-th stack item (1-based), 17 <= n <= 235, onto the top. */
+case object DUPN extends ImmediateStackOp(0xe6, alpha = 1):
+  protected def nextStack(x: Int, stack: Stack): Either[ProgramError, Stack] =
+    if !OpCode.isValidSingleImmediate(x) then Left(InvalidOpCode(code))
+    else
+      val n = OpCode.decodeSingle(x)
+      if n > stack.size then Left(StackUnderflow) else Right(stack.dup(n - 1))
+
+/** EIP-8024: swap the top with the (n + 1)-th stack item (1-based), 17 <= n <= 235. */
+case object SWAPN extends ImmediateStackOp(0xe7, alpha = 0):
+  protected def nextStack(x: Int, stack: Stack): Either[ProgramError, Stack] =
+    if !OpCode.isValidSingleImmediate(x) then Left(InvalidOpCode(code))
+    else
+      val n = OpCode.decodeSingle(x)
+      if n + 1 > stack.size then Left(StackUnderflow) else Right(stack.swap(n))
+
+/** EIP-8024: exchange the (n + 1)-th and (m + 1)-th stack items (1-based), 1 <= n < m <= 30 - n. */
+case object EXCHANGE extends ImmediateStackOp(0xe8, alpha = 0):
+  protected def nextStack(x: Int, stack: Stack): Either[ProgramError, Stack] =
+    if !OpCode.isValidPairImmediate(x) then Left(InvalidOpCode(code))
+    else
+      val (n, m) = OpCode.decodePair(x)
+      // Plain Int arithmetic: `n.max(m)` would resolve through UInt256's implicit conversion in this file.
+      val deeper = math.max(n, m)
+      if deeper + 1 > stack.size then Left(StackUnderflow) else Right(stack.exchange(math.min(n, m), deeper))
+
 sealed abstract class LogOp(code: Int, val i: Int) extends OpCode(code, i + 2, 0, _.G_log):
   def this(code: Int) = this(code, code - 0xa0)
 
@@ -1856,6 +1940,16 @@ case object BLOBBASEFEE extends OpCode(0x4a, 0, 1, _.G_base) with ConstGas:
       else CancunUpdateFraction
     val fee = calcBlobFee(excessBlobGas, fraction)
     state.withStack(state.stack.push(UInt256(fee))).step()
+
+/** EIP-7843 (Amsterdam): SLOTNUM pushes the beacon-chain slot of the block being executed, the header's `slotNumber`
+  * (field 22, a uint64). Gas BASE (2), like the other block-environment reads.
+  *
+  * The header is fukuii's block environment, carried by `ProgramContext.blockHeader` into every frame's `ExecEnv`:
+  * execution-specs reads `block_env.slot_number`, set from `block.header.slot_number`, and go-ethereum
+  * `BlockContext.SlotNum`, set from `header.SlotNumber`. An Amsterdam header (23 fields) always carries it; a header
+  * without the field pushes 0, as go-ethereum's `NewEVMBlockContext` does.
+  */
+case object SLOTNUM extends ConstOp(0x4b)(s => UInt256(s.env.blockHeader.slotNumber.getOrElse(BigInt(0))))
 
 /** EIP-1153: TLOAD — load from transient storage. Gas: G_warm_storage_read (100). */
 case object TLOAD extends OpCode(0x5c, 1, 1, _.G_warm_storage_read) with ConstGas:

@@ -62,12 +62,14 @@ object EvmConfig:
     // branch is unreachable on ETC/Mordor/Gorgoroth — asserted by ChainConfigMatrixSpec against the
     // SHIPPED config files, not left to convention.
     //
-    // Adds no opcodes. What it changes is the gas model: EIP-8038 access/write repricing (fee schedule),
-    // EIP-8037 state-gas metering, EIP-2780 intrinsic decomposition, EIP-7778 block accounting,
-    // EIP-7708 transfer logs and EIP-7954 size limits — all behind `amsterdamEnabled`.
+    // Opcodes: EIP-7843 SLOTNUM and EIP-8024 DUPN/SWAPN/EXCHANGE (AmsterdamOpCodes, the only table that
+    // holds them). The rest is the gas model: EIP-8038 access/write repricing (fee schedule), EIP-8037
+    // state-gas metering, EIP-2780 intrinsic decomposition, EIP-7778 block accounting, EIP-7708 transfer
+    // logs and EIP-7954 size limits — all behind `amsterdamEnabled`.
     if blockchainConfig.isAmsterdamTimestamp(timestamp) then
       config = config.copy(
         feeSchedule = new FeeSchedule.AmsterdamFeeSchedule,
+        opCodeList = AmsterdamOpCodes,
         amsterdamEnabled = true
       )
     config
@@ -127,6 +129,7 @@ object EvmConfig:
   val ShanghaiOpCodes: OpCodeList = OpCodeList(OpCodes.ShanghaiOpCodes)
   val CancunOpCodes: OpCodeList = OpCodeList(OpCodes.CancunOpCodes)
   val OsakaOpCodes: OpCodeList = OpCodeList(OpCodes.OsakaOpCodes)
+  val AmsterdamOpCodes: OpCodeList = OpCodeList(OpCodes.AmsterdamOpCodes)
 
   val FrontierConfigBuilder: EvmConfigBuilder = config =>
     EvmConfig(
