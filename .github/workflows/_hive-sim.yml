@@ -327,10 +327,54 @@ jobs:
             [ -n "$ba" ] && args+=(--sim.buildarg "$ba")
           done <<< "$SIM_BUILDARG"
 
-          ./hive "${args[@]}" 2>&1 | tee hive-run.log
-          hive_exit=${PIPESTATUS[0]}
+          run_hive() {
+            ./hive "${args[@]}" 2>&1 | tee hive-run.log
+            hive_exit=${PIPESTATUS[0]}
+            echo "Hive exited with code ${hive_exit}"
+          }
+          has_results() {
+            local jf
+            for jf in workspace/logs/*.json; do
+              [ -f "$jf" ] || continue
+              jq -e '(.testCases // {}) | length > 0' "$jf" >/dev/null 2>&1 && return 0
+            done
+            return 1
+          }
+          # A failure of the harness itself, before any client ran a test. The full pass of
+          # 2026-09-24 lost two shards this way: consume's image build failed fetching its
+          # fixtures ("consume cache ... returned a non-zero code"), and a consensus simulator
+          # started before hive's proxy was listening ("dial tcp ...:8081: connection refused").
+          # Neither says anything about fukuii. A client that fails to start leaves neither
+          # signature, so it is never retried.
+          harness_failure() {
+            local sl
+            if grep -q "image build failed" hive-run.log; then
+              echo "the simulator image build failed"
+              return 0
+            fi
+            for sl in workspace/logs/*-simulator-*.log; do
+              [ -f "$sl" ] || continue
+              if grep -qE 'dial tcp [0-9.]+:8081: connect: connection refused' "$sl"; then
+                echo "the simulator could not reach hive's proxy"
+                return 0
+              fi
+            done
+            return 1
+          }
+
+          run_hive
+          # One retry, and only for zero results plus a harness signature: an absent result
+          # still fails the gate after the retry. The first attempt's logs stay in the artifact.
+          if ! has_results && reason=$(harness_failure); then
+            echo "::warning::Hive produced no results because ${reason}; retrying once."
+            echo "retry_reason=${reason}" >> "$GITHUB_OUTPUT"
+            mkdir -p workspace/logs/attempt-1
+            find workspace/logs -maxdepth 1 -type f -exec mv {} workspace/logs/attempt-1/ \;
+            mv hive-run.log workspace/logs/attempt-1/hive-run.log
+            sleep 30
+            run_hive
+          fi
           echo "hive_exit=${hive_exit}" >> "$GITHUB_OUTPUT"
-          echo "Hive exited with code ${hive_exit}"
           exit 0
 
       - name: Tabulate results
@@ -348,6 +392,7 @@ jobs:
           SIM: ${{ inputs.sim }}
           THRESHOLD: ${{ inputs.pass_threshold }}
           HIVE_EXIT: ${{ steps.sim.outputs.hive_exit }}
+          RETRY_REASON: ${{ steps.sim.outputs.retry_reason }}
           GATE_PATTERN: ${{ inputs.gate_pattern }}
           GATE_EXCLUDE: ${{ inputs.gate_exclude }}
           SIM_SKIP: ${{ inputs.sim_skip }}
@@ -562,6 +607,10 @@ jobs:
             if [ -n "${SIM_SKIP:-}" ]; then
               echo
               echo "Not run, as declared waivers in \`.github/gates.yml\`: \`${SIM_SKIP}\`"
+            fi
+            if [ -n "${RETRY_REASON:-}" ]; then
+              echo
+              echo "Retried once: the first attempt produced no results because ${RETRY_REASON}. Its logs are under \`attempt-1/\` in the artifact."
             fi
             if [ -n "$GATE_PATTERN" ]; then
               echo
