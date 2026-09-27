@@ -719,7 +719,7 @@ class PendingTransactionsManagerSpec
     )
 
     private val fakeBlockchainReader: BlockchainReader =
-      new BlockchainReader(null, null, null, null, null, null, null):
+      new BlockchainReader(null, null, null, null, null, null, null, null):
         override def getBestBlock: Option[Block] = Some(blockWithBaseFee)
 
     override val pendingTransactionsManager: org.apache.pekko.actor.typed.ActorRef[Command] = testKit.spawn(

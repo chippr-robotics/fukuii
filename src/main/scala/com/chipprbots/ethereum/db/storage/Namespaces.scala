@@ -27,6 +27,8 @@ object Namespaces:
     IndexedSeq[Byte]('t'.toByte) // state trie nodes, path-keyed (PathScheme only)
   val StorageTriePathNamespace: IndexedSeq[Byte] =
     IndexedSeq[Byte]('u'.toByte) // storage trie nodes, path-keyed, scoped by accountHash (PathScheme only)
+  val BlockAccessListNamespace: IndexedSeq[Byte] =
+    IndexedSeq[Byte]('j'.toByte) // EIP-7928 block access lists (block hash -> RLP), go-ethereum's `accessListPrefix`
 
   val nsSeq: Seq[IndexedSeq[Byte]] = Seq(
     ReceiptsNamespace,
@@ -47,5 +49,8 @@ object Namespaces:
     BfsQueueNamespace,
     SnapSyncProgressNamespace,
     StateTriePathNamespace,
-    StorageTriePathNamespace
+    StorageTriePathNamespace,
+    // Added in 0.9.0. RocksDbDataSource opens with setCreateMissingColumnFamilies(true), so an existing database gains
+    // the empty column family on its next start; nothing is migrated.
+    BlockAccessListNamespace
   )
