@@ -118,9 +118,9 @@ class EngineApiService(
   /** One version of a payload: what engine_getPayload serves for it. */
   final private case class EnginePayload(built: BuiltBlock, blobsBundle: BlobsBundleData)
 
-  /** Build a payload on `parent` from `attrs` and the pool contents `pool`: the engine path's historical policy —
-    * parent gas limit (modulo the one-shot EIP-1559 elasticity scale at London activation), the configured header
-    * extra-data, and LENIENT handling of a failed transaction — through the single proposer-side builder.
+  /** Build a payload on `parent` from `attrs` and the pool contents `pool`: the engine path's policy — the gas limit of
+    * [[enginePayloadGasLimit]], the configured header extra-data, and LENIENT handling of a failed transaction —
+    * through the single proposer-side builder.
     */
   private def buildEnginePayload(
       parent: Block,
@@ -133,7 +133,7 @@ class EngineApiService(
       attrs,
       pendingTxsForBlock,
       ByteString("fukuii".getBytes),
-      proposerGasLimit(parent.header, parent.header.number.value + 1, None),
+      enginePayloadGasLimit(parent.header, attrs),
       strict = false
     ) match
       case Right(built) => built
@@ -1168,9 +1168,10 @@ class EngineApiService(
   /** The gasLimit a proposer puts in the child header.
     *
     * @param target
-    *   `None` keeps the parent's gas limit (the engine API's historical policy — the CL does not tell us a target, so
-    *   we do not drift). `Some(t)` converges toward `t` at go-ethereum's `CalcGasLimit` rate; the `testing_*` namespace
-    *   uses this so fixtures generated against geth (which always has a `--miner.gaslimit`) match.
+    *   `None` keeps the parent's gas limit (the engine API's policy when the CL names no target, see
+    *   [[enginePayloadGasLimit]]). `Some(t)` converges toward `t` at go-ethereum's `CalcGasLimit` rate; the `testing_*`
+    *   namespace uses this so fixtures generated against geth (which always has a `--miner.gaslimit`) match, and so
+    *   does an Amsterdam payload whose attributes carry `targetGasLimit`.
     *
     * Both branches respect the one-shot EIP-1559 elasticity scale at London/Olympia activation: producer and validator
     * must agree, and BlockHeaderValidatorSkeleton.validateGasLimit centres its +-1/1024 window on the scaled parent at
@@ -1188,6 +1189,25 @@ class EngineApiService(
       case None => effectiveParent
       case Some(t) =>
         GasAmount(com.chipprbots.ethereum.consensus.blocks.GasLimitCalculator.calcGasLimit(effectiveParent.value, t))
+
+  /** The gasLimit of the payload engine_forkchoiceUpdated builds on `parent` for `attrs`.
+    *
+    * From Amsterdam, PayloadAttributesV4's `targetGasLimit` sets it as go-ethereum's miner does (miner/worker.go
+    * `prepareWork`: the target replaces the node's gas ceiling when the block is Amsterdam and the field is present,
+    * and the header takes `core.CalcGasLimit(parent.GasLimit, target)`), a step of at most parent/1024 - 1 toward the
+    * target per block. `CalcGasLimit` first raises a target below MinGasLimit to 5,000. The shared
+    * [[com.chipprbots.ethereum.consensus.blocks.GasLimitCalculator.calcGasLimit]], which the ETC miner also uses, does
+    * not, and stays as it is: the raise is applied here, on the ETH engine path, so no target can take the header below
+    * the minimum validation enforces.
+    *
+    * Without a target, and before Amsterdam, the parent's gas limit is kept, the engine path's policy before
+    * PayloadAttributesV4 existed. go-ethereum falls back to its `--miner.gaslimit` there; this path has none.
+    */
+  def enginePayloadGasLimit(parent: BlockHeader, attrs: PayloadAttributes): GasAmount =
+    val target = attrs.targetGasLimit
+      .filter(_ => blockchainConfig.isAmsterdamTimestamp(Timestamp(attrs.timestamp)))
+      .map(_.max(com.chipprbots.ethereum.consensus.validators.BlockHeaderValidator.MinGasLimit))
+    proposerGasLimit(parent, parent.number.value + 1, target)
 
   /** Fork name for the proposer build log line. */
   private def forkNameAt(ts: Timestamp): String =

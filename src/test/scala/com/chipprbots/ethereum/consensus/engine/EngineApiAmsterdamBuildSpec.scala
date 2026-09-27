@@ -531,6 +531,27 @@ class EngineApiAmsterdamBuildSpec extends AnyWordSpec with Matchers:
       )
       block.header.requestsHash shouldBe Some(BlockExecution.computeRequestsHash(requests))
     }
+
+    "move the gas limit toward targetGasLimit at go-ethereum's CalcGasLimit rate" taggedAs (
+      UnitTest,
+      ConsensusTest
+    ) in {
+      val builder = builderNode()
+      val validator = validatorNode()
+      val payloadId =
+        requestPayload(builder, 4, attributes(12, Some(BigInt(1)), targetGasLimit = Some(BigInt(60_000_000))))
+      val envelope = envelopeOf(getPayload(builder, 6, payloadId))
+      val block = builtBlock(builder, payloadId)
+
+      // The validating node checks the step against the parent (less than parent / 1024): VALID.
+      expectValid(validator, 5, envelope)
+      // CalcGasLimit(45,000,000, 60,000,000): one step of 45,000,000 / 1024 - 1 = 43,944.
+      block.header.gasLimit.value shouldBe BigInt(45_043_944)
+      envelope \ "executionPayload" \ "gasLimit" shouldBe JString(quantity(45_043_944))
+      // Without a target the parent's gas limit is kept.
+      val untargeted = requestPayload(builder, 4, attributes(12, Some(BigInt(2))))
+      builtBlock(builder, untargeted).header.gasLimit.value shouldBe GenesisGasLimit
+    }
   }
 
   /** execution-specs' `BPO2ToAmsterdamAtTime15k` schedule: every fork through BPO2 at genesis, Amsterdam at 15,000 —
