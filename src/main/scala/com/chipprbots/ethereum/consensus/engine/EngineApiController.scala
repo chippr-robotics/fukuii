@@ -67,9 +67,13 @@ class EngineApiController(
       case "engine_getBlobsV2" =>
         handleGetBlobsV2(request)
       case "engine_getPayloadBodiesByHashV1" =>
-        handleGetPayloadBodiesByHash(request)
+        handleGetPayloadBodiesByHash(request, version = 1)
+      case "engine_getPayloadBodiesByHashV2" =>
+        handleGetPayloadBodiesByHash(request, version = 2)
       case "engine_getPayloadBodiesByRangeV1" =>
-        handleGetPayloadBodiesByRange(request)
+        handleGetPayloadBodiesByRange(request, version = 1)
+      case "engine_getPayloadBodiesByRangeV2" =>
+        handleGetPayloadBodiesByRange(request, version = 2)
       // CL clients and hive tests send eth_* methods through the authrpc port.
       // Forward to the real JSON-RPC controller for proper responses.
       case method if method.startsWith("eth_") || method.startsWith("net_") || method.startsWith("web3_") =>
@@ -539,7 +543,13 @@ class EngineApiController(
     val nullEntries = hashes.map(_ => JNull)
     IO.pure(JsonRpcResponse("2.0", Some(JArray(nullEntries)), None, reqId(request)))
 
-  private def handleGetPayloadBodiesByHash(request: JsonRpcRequest): IO[JsonRpcResponse] =
+  /** engine_getPayloadBodiesByHashV1 (execution-apis shanghai.md) and engine_getPayloadBodiesByHashV2 (amsterdam.md),
+    * which "follows the same specification as engine_getPayloadBodiesByHashV1": one entry per requested hash, "in the
+    * order given in the request, using `null` for any missing blocks", and no request-size limit (the spec asks for at
+    * least 32; go-ethereum sets no maximum on either version). V2 answers ExecutionPayloadBodyV2, which adds
+    * `blockAccessList` (EngineApiService.getPayloadBodyV2ByHash).
+    */
+  private def handleGetPayloadBodiesByHash(request: JsonRpcRequest, version: Int): IO[JsonRpcResponse] =
     val hashes = request.params
       .map(_.arr)
       .getOrElse(Nil)
@@ -550,11 +560,28 @@ class EngineApiController(
       .getOrElse(Nil)
 
     val bodies = hashes.map { hash =>
-      engineApiService.getPayloadBodyByHash(hash).map(encodePayloadBody).getOrElse(JNull)
+      if version == 1 then engineApiService.getPayloadBodyByHash(hash).map(encodePayloadBody).getOrElse(JNull)
+      else engineApiService.getPayloadBodyV2ByHash(hash).map(encodePayloadBodyV2).getOrElse(JNull)
     }
+    log.debug(
+      "[ENGINE-API] getPayloadBodiesByHashV{}: requested={} found={}",
+      version,
+      hashes.size,
+      bodies.count(_ != JNull)
+    )
     IO.pure(JsonRpcResponse("2.0", Some(JArray(bodies)), None, reqId(request)))
 
-  private def handleGetPayloadBodiesByRange(request: JsonRpcRequest): IO[JsonRpcResponse] =
+  /** engine_getPayloadBodiesByRangeV1 (execution-apis shanghai.md) and engine_getPayloadBodiesByRangeV2 (amsterdam.md),
+    * which "follows the same specification as engine_getPayloadBodiesByRangeV1". Both keep V1's range rules as
+    * implemented here: `-32602` when `start` or `count` is below 1; the canonical blocks from `start`, at most `count`
+    * and at most 1,024 of them, `null` for one below the tip this node does not hold, and no trailing `null` past the
+    * tip. V2 answers ExecutionPayloadBodyV2 (EngineApiService.getPayloadBodyV2ByNumber).
+    *
+    * Above 1,024 blocks the range is cut short rather than refused: go-ethereum answers `-38004: Too large request` for
+    * `count > 1024`, which the spec's "MUST return -38004 ... if the requested range is too large" describes. The cut
+    * is V1's behaviour and is kept for V1 and V2 alike.
+    */
+  private def handleGetPayloadBodiesByRange(request: JsonRpcRequest, version: Int): IO[JsonRpcResponse] =
     val params = request.params.map(_.arr).getOrElse(Nil)
     val start = params.headOption
       .collect {
@@ -589,15 +616,35 @@ class EngineApiController(
       else
         val effectiveCount = count.min(latest - start + 1).min(1024)
         val bodies = (0L until effectiveCount.toLong).map { offset =>
-          engineApiService.getPayloadBodyByNumber(start + offset).map(encodePayloadBody).getOrElse(JNull)
+          val number = start + offset
+          if version == 1 then engineApiService.getPayloadBodyByNumber(number).map(encodePayloadBody).getOrElse(JNull)
+          else engineApiService.getPayloadBodyV2ByNumber(number).map(encodePayloadBodyV2).getOrElse(JNull)
         }.toList
+        log.debug(
+          "[ENGINE-API] getPayloadBodiesByRangeV{}: start={} count={} served={}",
+          version,
+          start,
+          count,
+          bodies.size
+        )
         IO.pure(JsonRpcResponse("2.0", Some(JArray(bodies)), None, reqId(request)))
 
-  private def encodePayloadBody(body: (Seq[ByteString], Option[Seq[org.json4s.JValue]])): JValue =
+  private def encodePayloadBody(body: (Seq[ByteString], Option[Seq[org.json4s.JValue]])): JObject =
     val (txs, withdrawals) = body
     val txsJson = JArray(txs.map(tx => JString(byteStringToHex(tx))).toList)
     val wsJson = withdrawals.map(ws => JArray(ws.toList)).getOrElse(JNull)
     JObject("transactions" -> txsJson, "withdrawals" -> wsJson)
+
+  /** ExecutionPayloadBodyV2: V1's `transactions` and `withdrawals`, from V1's encoder, then `blockAccessList`, present
+    * in every entry as DATA or `null` (execution-apis amsterdam.md "DATA|null"; go-ethereum `BlockAccessList
+    * *hexutil.Bytes json:"blockAccessList"`, no omitempty). The list is hex-encoded as stored, byte for byte.
+    */
+  private def encodePayloadBodyV2(body: ExecutionPayloadBodyV2): JObject =
+    val blockAccessList: JValue = body.blockAccessList.fold[JValue](JNull) { list =>
+      JString("0x" + org.bouncycastle.util.encoders.Hex.toHexString(list.toArray))
+    }
+    val v1 = encodePayloadBody((body.transactions, body.withdrawals))
+    JObject(v1.obj :+ ("blockAccessList" -> blockAccessList))
 
   // --- JSON encoding/decoding helpers ---
 

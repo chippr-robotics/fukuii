@@ -91,6 +91,18 @@ case class ForkchoiceUpdatedResponse(
 /** Payload ID for tracking built payloads */
 case class PayloadId(id: ByteString)
 
+/** ExecutionPayloadBodyV2 (execution-apis amsterdam.md), one entry of engine_getPayloadBodiesByHashV2/ByRangeV2: the
+  * ExecutionPayloadBodyV1 of a block — its EIP-2718 `transactions`, and `withdrawals` (None, JSON `null`, before
+  * Shanghai), JSON-encoded by the same code as V1 so the two versions cannot disagree on them — plus `blockAccessList`:
+  * the block's EIP-7928 list, as the canonical RLP its header's `blockAccessListHash` commits to. None (JSON `null`)
+  * for a block before Amsterdam, and for an Amsterdam block whose list this node does not hold.
+  */
+final case class ExecutionPayloadBodyV2(
+    transactions: Seq[ByteString],
+    withdrawals: Option[Seq[org.json4s.JValue]],
+    blockAccessList: Option[ByteString]
+)
+
 /** BlobAndProofV2 per EIP-7594 / engine_getBlobsV2 — blob + CELLS_PER_EXT_BLOB cell proofs (48 bytes each). */
 case class BlobAndProofV2(blob: ByteString, cellProofs: Seq[ByteString])
 

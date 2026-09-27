@@ -1774,7 +1774,9 @@ class EngineApiService(
     * the version by fork. Lighthouse's Gloas code fails with RequiredMethodUnsupported when forkchoiceUpdatedV4 or
     * getPayloadV6 is missing, and sends attribute-less forkchoice updates through the highest forkchoiceUpdated
     * advertised — which V4 therefore serves at every fork. getPayloadV6 is advertised although no Amsterdam payload is
-    * built yet (#1427): forkchoiceUpdatedV4 refuses the build (-38003) before a payload ID exists.
+    * built yet (#1427): forkchoiceUpdatedV4 refuses the build (-38003) before a payload ID exists. The payload-bodies
+    * V2 methods likewise: Lighthouse's `get_payload_bodies_by_hash_v2` fails with PayloadBodiesByHashV2NotSupported
+    * unless the method is advertised.
     */
   def exchangeCapabilities(clCapabilities: Seq[String]): IO[Seq[String]] = IO {
     val supported = Seq(
@@ -1796,7 +1798,9 @@ class EngineApiService(
       "engine_getBlobsV1",
       "engine_getBlobsV2",
       "engine_getPayloadBodiesByHashV1",
+      "engine_getPayloadBodiesByHashV2",
       "engine_getPayloadBodiesByRangeV1",
+      "engine_getPayloadBodiesByRangeV2",
       "engine_getClientVersionV1",
       "engine_exchangeCapabilities"
     )
@@ -1838,6 +1842,43 @@ class EngineApiService(
     blockchainReader.getBlockHeaderByNumber(number).flatMap { header =>
       blockchainReader.getBlockBodyByHash(header.hash).map(bodyToPayloadBody)
     }
+
+  /** engine_getPayloadBodiesByHashV2 (execution-apis amsterdam.md): the V1 body of block `hash`, found exactly as
+    * [[getPayloadBodyByHash]] finds it (None, a `null` entry, for a body this node does not hold), plus its EIP-7928
+    * block access list (see [[servedBlockAccessList]]).
+    */
+  def getPayloadBodyV2ByHash(hash: ByteString): Option[ExecutionPayloadBodyV2] =
+    blockchainReader.getBlockBodyByHash(BlockHash(hash)).map { body =>
+      payloadBodyV2(blockchainReader.getBlockHeaderByHash(BlockHash(hash)), body)
+    }
+
+  /** engine_getPayloadBodiesByRangeV2: [[getPayloadBodyV2ByHash]] for the canonical block `number`, found exactly as
+    * [[getPayloadBodyByNumber]] finds it.
+    */
+  def getPayloadBodyV2ByNumber(number: BigInt): Option[ExecutionPayloadBodyV2] =
+    blockchainReader.getBlockHeaderByNumber(number).flatMap { header =>
+      blockchainReader.getBlockBodyByHash(header.hash).map(body => payloadBodyV2(Some(header), body))
+    }
+
+  private def payloadBodyV2(header: Option[BlockHeader], body: BlockBody): ExecutionPayloadBodyV2 =
+    val (transactions, withdrawals) = bodyToPayloadBody(body)
+    ExecutionPayloadBodyV2(transactions, withdrawals, header.flatMap(servedBlockAccessList))
+
+  /** The `blockAccessList` of an ExecutionPayloadBodyV2. execution-apis amsterdam.md, for both methods: "Client
+    * software MUST set the `blockAccessList` field to `null` for blocks that predate the Amsterdam fork activation" and
+    * "... to `null` if the block access list has been pruned from storage".
+    *
+    * Before Amsterdam — the block's timestamp against the chain's Amsterdam timestamp, so every ETC block and every
+    * block of a chain that schedules no Amsterdam — the answer is None without reading the store. From Amsterdam it is
+    * the list as stored (`BlockchainReader.getBlockAccessListByHash`): the canonical RLP written once the block
+    * validated against it, served as it is. None when no list is held: fukuii prunes none, but a block this node never
+    * executed has none — one below a snap-sync pivot, one accepted without execution, one imported before the store
+    * existed.
+    */
+  private def servedBlockAccessList(header: BlockHeader): Option[ByteString] =
+    if blockchainConfig.isAmsterdamTimestamp(header.unixTimestamp) then
+      blockchainReader.getBlockAccessListByHash(header.hash)
+    else None
 
   private def bodyToPayloadBody(body: BlockBody): (Seq[ByteString], Option[Seq[org.json4s.JValue]]) =
     val rawTxs = body.transactionList.map { stx =>
