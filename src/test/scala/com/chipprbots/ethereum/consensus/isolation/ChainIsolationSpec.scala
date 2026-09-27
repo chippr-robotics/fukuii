@@ -178,7 +178,10 @@ class ChainIsolationSpec extends AnyFlatSpec with Matchers with TableDrivenPrope
         config.forkBlockNumbers.byzantiumBlockNumber.max(1),
         config.forkBlockNumbers.atlantisBlockNumber.max(1),
         config.forkBlockNumbers.magnetoBlockNumber.max(1),
-        BigInt(25_000_000)
+        BigInt(25_000_000),
+        // The Olympia-era ruleset, at whatever height this chain puts it. Olympia is unscheduled on
+        // every shipped ETC chain, so no fixed height would reach it.
+        config.forkBlockNumbers.olympiaBlockNumber
       ).distinct
 
       for
