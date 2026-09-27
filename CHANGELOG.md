@@ -32,10 +32,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Comprehensive test suite with 11 tests covering gas cost changes and edge cases
 
 ### Changed
-- Gorgoroth devnet: Olympia-era gas now follows EIP-2537 (G1/G2 MSM discount tables) and EIP-7702
-  (authorization refunds, authority warming, delegation access cost). Gorgoroth datadirs that ran
-  past the Olympia block (15,800,850) with an older build must be reset. ETC mainnet and Mordor are
-  unaffected — Olympia is not active there.
+- **Olympia is deferred on every chain** until a confirmed test block number exists. Gorgoroth
+  (`gorgoroth-chain.conf`, was 15,800,850) and the private-network template
+  (`enterprise-template.conf`, was 0) now set `olympia-block-number` to the unscheduled sentinel
+  `1000000000000000000`, as ETC mainnet and Mordor already do. Everything keyed to that block stays
+  off with it, including the EIP-1559 base fee and ECIP-1111 treasury credit, the Olympia opcodes and
+  precompiles, EIP-7702, the Olympia gas-limit rules and the MESS reactivation window. ETC mainnet,
+  Mordor and the ETH-family chains are unchanged (on ETH-family configs `olympia-block-number` is the
+  London block).
+  - **Gorgoroth operators:** move every fukuii node to this build at the same time. A node left on
+    an older build activates Olympia at 15,800,850 and splits from the rest there. If your chain
+    already ran past 15,800,850 on an Olympia-active build, reset the datadir: this build rejects
+    those blocks, because their headers carry a base fee. The Gorgoroth fork ID no longer announces
+    15,800,850 as the next fork.
+  - **Private networks from the template:** new copies leave Olympia unscheduled, so genesis has no
+    base fee field. A network already running from an earlier copy keeps what that copy sets;
+    changing `olympia-block-number` on a live chain is a hard fork.
+- Olympia-era gas now follows EIP-2537 (G1/G2 MSM discount tables) and EIP-7702 (authorization
+  refunds, authority warming, delegation access cost). No ETC-family chain activates Olympia (see the
+  entry above), so ETC mainnet, Mordor and Gorgoroth are unaffected.
 - Renamed GHCR image path from `chordodes_fukuii` to `fukuii` across all CI/CD, docs, and scripts
 - Modernized CI apt-key pattern to use `signed-by` keyring (replaces deprecated `apt-key add`)
 - Renamed `logback-node2-sync-trace.xml` → `logback-sync-trace.xml` (not node-specific)

@@ -102,3 +102,40 @@ class ChainConfigMatrixSpec extends AnyFlatSpec with Matchers:
     parsed.isAmsterdamTimestamp(Timestamp(359L)) shouldBe false
     parsed.isAmsterdamTimestamp(Timestamp(360L)) shouldBe true
   }
+
+  // ── Olympia stays unscheduled (user directive, 2026-09-27) ──────────────────
+  //
+  // Olympia must not activate on any chain until a confirmed test block number exists. The ETC-family
+  // configs carry the unscheduled sentinel 10^18, the value ForkId.gatherBlockForks recognises and
+  // advertises as the pending Olympia fork. Scheduling Olympia anywhere means changing these assertions
+  // on purpose, not just editing a config.
+
+  private val OlympiaUnscheduled: BigInt = BigInt("1000000000000000000")
+
+  "the ETC-family shipped chain configs" should "leave Olympia unscheduled" taggedAs (UnitTest) in {
+    EtcFamilyChains.foreach { name =>
+      withClue(s"$name-chain.conf schedules Olympia: ") {
+        shippedChain(name).forkBlockNumbers.olympiaBlockNumber shouldBe OlympiaUnscheduled
+      }
+    }
+  }
+
+  it should "keep the MESS reactivation window unscheduled with it" taggedAs (UnitTest) in {
+    // Olympia reopens ECIP-1100 MESS. etc and mordor declare ecbp1100-reactivate-block-number;
+    // gorgoroth declares none, so the reader falls back to olympia-block-number.
+    EtcFamilyChains.foreach { name =>
+      withClue(s"$name-chain.conf reopens MESS while Olympia is unscheduled: ") {
+        shippedChain(name).messConfig.reactivationBlock shouldBe Some(OlympiaUnscheduled)
+      }
+    }
+  }
+
+  "the enterprise network template" should "leave Olympia unscheduled" taggedAs (UnitTest) in {
+    // conf/enterprise-template.conf is the ETC-type starting point for private networks; it set
+    // Olympia at genesis until the deferral. Read at the HOCON level: the template declares no
+    // eip106-block-number, so BlockchainConfig.fromRawConfig cannot read its chain as shipped.
+    val template = ConfigFactory.parseResources("conf/enterprise-template.conf").resolve()
+    template.getString("fukuii.blockchains.network") shouldBe "enterprise-network"
+    BigInt(template.getString("fukuii.blockchains.enterprise-network.olympia-block-number")) shouldBe
+      OlympiaUnscheduled
+  }

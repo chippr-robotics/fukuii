@@ -2,7 +2,7 @@
 
 Post-Olympia engineering work items. Each item has a source location, priority, and risk assessment.
 
-**Schedule:** Address after Mordor activation (block 15,800,850) and ETC mainnet fork are stable.
+**Schedule:** Address after Olympia is active and stable on Mordor and ETC mainnet. Olympia is unscheduled on every chain until a confirmed test block number exists.
 
 ---
 

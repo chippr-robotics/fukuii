@@ -154,7 +154,8 @@ Chain configs define when specific protocol upgrades activate:
   spiral-block-number = "19250000"
 
   # Olympia (ECIP-1111/1112/1121: EIP-1559, EVM modernization, EIP-7702)
-  # olympia-block-number = "TBD"  # ~mid-June 2026
+  # Unscheduled: deferred on every chain until a confirmed test block number exists.
+  olympia-block-number = "1000000000000000000"
 }
 ```
 
