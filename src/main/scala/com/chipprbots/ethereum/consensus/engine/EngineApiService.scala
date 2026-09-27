@@ -1867,10 +1867,9 @@ class EngineApiService(
     * The Amsterdam methods are advertised on every network, as go-ethereum advertises all of its methods: a CL picks
     * the version by fork. Lighthouse's Gloas code fails with RequiredMethodUnsupported when forkchoiceUpdatedV4 or
     * getPayloadV6 is missing, and sends attribute-less forkchoice updates through the highest forkchoiceUpdated
-    * advertised — which V4 therefore serves at every fork. getPayloadV6 is advertised although no Amsterdam payload is
-    * built yet (#1427): forkchoiceUpdatedV4 refuses the build (-38003) before a payload ID exists. The payload-bodies
-    * V2 methods likewise: Lighthouse's `get_payload_bodies_by_hash_v2` fails with PayloadBodiesByHashV2NotSupported
-    * unless the method is advertised.
+    * advertised — which V4 therefore serves at every fork. getPayloadV6 serves the Amsterdam payloads
+    * forkchoiceUpdatedV4 builds (#1427). The payload-bodies V2 methods are advertised for the same reason: Lighthouse's
+    * `get_payload_bodies_by_hash_v2` fails with PayloadBodiesByHashV2NotSupported unless the method is advertised.
     */
   def exchangeCapabilities(clCapabilities: Seq[String]): IO[Seq[String]] = IO {
     val supported = Seq(
