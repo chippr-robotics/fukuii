@@ -433,9 +433,14 @@ object PrecompiledContracts:
       if value.isValidInt then value.toInt
       else Integer.MAX_VALUE
 
+    /** A length word is read from the input right-padded with zeros (EIP-198: "the input is padded with zeros"). An
+      * input that ends inside a length word keeps the bytes it has as the word's HIGH-order bytes: 31 bytes `00..01`
+      * are the length 256, not 1. Reading the short slice as a number of its own would give a smaller length, a
+      * different gas cost and a different result than every other client computes for the same call.
+      */
     private def getLength(bytes: ByteString, position: Int): Int =
       val start = position * lengthBytes
-      safeInt(ByteUtils.toBigInt(bytes.slice(start, start + lengthBytes)))
+      safeInt(ByteUtils.toBigInt(bytes.slice(start, start + lengthBytes).padToByteString(lengthBytes, 0.toByte)))
 
     private def adjustExpLength(expBytes: ByteString, expLength: Int): Long =
       val expHead =
