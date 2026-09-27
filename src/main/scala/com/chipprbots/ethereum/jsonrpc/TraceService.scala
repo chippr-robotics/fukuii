@@ -136,7 +136,7 @@ class TraceService(
         parentHeader <- blockchainReader
           .getBlockHeaderByHash(block.header.parentHash)
           .toRight(JsonRpcError.InvalidParams("Parent block not found"))
-        stxs = SignedTransactionWithSender.getSignedTransactions(block.body.transactionList)
+        stxs = SignedTransactionWithSender.getSignedTransactionsOfBlock(block.header, block.body.transactionList)
         _ <- Either.cond(
           txIndex >= 0 && txIndex < stxs.length,
           (),
@@ -199,7 +199,7 @@ class TraceService(
         parentHeader <- blockchainReader
           .getBlockHeaderByHash(block.header.parentHash)
           .toRight(JsonRpcError.InvalidParams("Parent block not found"))
-        stxs = SignedTransactionWithSender.getSignedTransactions(block.body.transactionList)
+        stxs = SignedTransactionWithSender.getSignedTransactionsOfBlock(block.header, block.body.transactionList)
         _ <- Either.cond(
           txIndex >= 0 && txIndex < stxs.length,
           (),
@@ -229,7 +229,7 @@ class TraceService(
         parentHeader <- blockchainReader
           .getBlockHeaderByHash(block.header.parentHash)
           .toRight(JsonRpcError.InvalidParams("Parent block not found"))
-        stxs = SignedTransactionWithSender.getSignedTransactions(block.body.transactionList)
+        stxs = SignedTransactionWithSender.getSignedTransactionsOfBlock(block.header, block.body.transactionList)
         results = stxs.zipWithIndex.map { case (stx, txIndex) =>
           val world = stxLedger.advanceWorldToTx(block.header, stxs, txIndex, parentHeader.stateRoot.value)
           buildReplayResult(stx, block, Some(world), stx.tx.hash.value, txIndex, req.options)
@@ -291,7 +291,7 @@ class TraceService(
 
   /** Traces all txs in a block and returns flat trace objects for all of them concatenated. */
   private def traceAllTxsFlat(block: Block, parentStateRoot: ByteString): Seq[JValue] =
-    val stxs = SignedTransactionWithSender.getSignedTransactions(block.body.transactionList)
+    val stxs = SignedTransactionWithSender.getSignedTransactionsOfBlock(block.header, block.body.transactionList)
     stxs.zipWithIndex.flatMap { case (stx, txIndex) =>
       val world = stxLedger.advanceWorldToTx(block.header, stxs, txIndex, parentStateRoot)
       val tracer = new CallTracer(onlyTopCall = false)

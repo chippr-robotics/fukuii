@@ -148,7 +148,7 @@ class DebugTracingService(
         parentHeader <- blockchainReader
           .getBlockHeaderByHash(block.header.parentHash)
           .toRight(JsonRpcError.LogicError("Parent block not found"))
-        stxs = SignedTransactionWithSender.getSignedTransactions(block.body.transactionList)
+        stxs = SignedTransactionWithSender.getSignedTransactionsOfBlock(block.header, block.body.transactionList)
         _ <- Either.cond(
           txIndex >= 0 && txIndex < stxs.length,
           (),
@@ -262,7 +262,7 @@ class DebugTracingService(
       .getBlockHeaderByHash(block.header.parentHash)
       .toRight(JsonRpcError.LogicError("Parent block header not found"))
       .map { parentHeader =>
-        val stxs = SignedTransactionWithSender.getSignedTransactions(block.body.transactionList)
+        val stxs = SignedTransactionWithSender.getSignedTransactionsOfBlock(block.header, block.body.transactionList)
         if stxs.isEmpty then Seq.empty
         else
           var currentWorld = stxLedger.advanceWorldToTx(block.header, stxs, 0, parentHeader.stateRoot.value)
@@ -347,7 +347,7 @@ class DebugTracingService(
         parentHeader <- blockchainReader
           .getBlockHeaderByHash(block.header.parentHash)
           .toRight(JsonRpcError.LogicError("Parent block header not found"))
-        stxs = SignedTransactionWithSender.getSignedTransactions(block.body.transactionList)
+        stxs = SignedTransactionWithSender.getSignedTransactionsOfBlock(block.header, block.body.transactionList)
         roots =
           if stxs.isEmpty then Seq.empty
           else
@@ -389,7 +389,8 @@ class DebugTracingService(
           val branch = blockchainReader.getBestBranch
           blockchainReader.getBlockByNumber(branch, blockNum).flatMap { block =>
             blockchainReader.getBlockHeaderByHash(block.header.parentHash).map { parentHeader =>
-              val stxs = SignedTransactionWithSender.getSignedTransactions(block.body.transactionList)
+              val stxs =
+                SignedTransactionWithSender.getSignedTransactionsOfBlock(block.header, block.body.transactionList)
               val traces = stxs.zipWithIndex.map { case (stx, txIndex) =>
                 val world = stxLedger.advanceWorldToTx(block.header, stxs, txIndex, parentHeader.stateRoot.value)
                 val tracer = selectTracer(config, Some(world))

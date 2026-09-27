@@ -120,9 +120,9 @@ class AmsterdamTransactionValiditySpec extends AnyFlatSpec with Matchers with Am
     validate(stx, atAmsterdam, amsterdamConfig) shouldBe Right(SignedTransactionValid)
   }
 
-  // ── The txpool's stateless pre-filter, where it already selects Amsterdam ──
+  // ── The txpool's stateless pre-filter, with Amsterdam active at the head ──
 
-  /** Every timestamp fork at genesis, so the pre-filter's "latest configured fork" is Amsterdam. */
+  /** Every timestamp fork at genesis, so Amsterdam is the fork active at any head the pre-filter is given. */
   private val amsterdamAtGenesis: BlockchainConfig = amsterdamConfig.copy(forkTimestamps =
     ForkTimestamps(
       shanghaiTimestamp = Some(0L),
@@ -135,25 +135,28 @@ class AmsterdamTransactionValiditySpec extends AnyFlatSpec with Matchers with Am
   private val osakaAtGenesis: BlockchainConfig =
     amsterdamAtGenesis.copy(forkTimestamps = amsterdamAtGenesis.forkTimestamps.copy(amsterdamTimestamp = None))
 
+  /** The chain head the pool filters under (WI-14: the fork active at the head). Past every fork at genesis. */
+  private val Head: Timestamp = Timestamp(1_000L)
+
   "The txpool pre-filter under Amsterdam" should "drop a transaction below its calldata floor and keep one at it" taggedAs (
     UnitTest,
     ConsensusTest
   ) in {
-    SignedTransactionWithSender.getStatelessValidTransactions(Seq(heavyCall(78999, amsterdamAtGenesis)))(
+    SignedTransactionWithSender.getStatelessValidTransactions(Seq(heavyCall(78999, amsterdamAtGenesis)), Head)(
       amsterdamAtGenesis
     ) shouldBe empty
-    SignedTransactionWithSender.getStatelessValidTransactions(Seq(heavyCall(79000, amsterdamAtGenesis)))(
+    SignedTransactionWithSender.getStatelessValidTransactions(Seq(heavyCall(79000, amsterdamAtGenesis)), Head)(
       amsterdamAtGenesis
     ) should have size 1
   }
 
   it should "drop a transaction whose floor exceeds TX_MAX_GAS_LIMIT" taggedAs (UnitTest, ConsensusTest) in {
     val stx = dynamicFeeTx(Some(recipient), 0, 17777240, payload = nonZeros(261910), config = amsterdamAtGenesis)
-    SignedTransactionWithSender.getStatelessValidTransactions(Seq(stx))(amsterdamAtGenesis) shouldBe empty
+    SignedTransactionWithSender.getStatelessValidTransactions(Seq(stx), Head)(amsterdamAtGenesis) shouldBe empty
   }
 
   it should "keep applying the intrinsic rule alone before Amsterdam" taggedAs (UnitTest, ConsensusTest) in {
-    SignedTransactionWithSender.getStatelessValidTransactions(Seq(heavyCall(61000, osakaAtGenesis)))(
+    SignedTransactionWithSender.getStatelessValidTransactions(Seq(heavyCall(61000, osakaAtGenesis)), Head)(
       osakaAtGenesis
     ) should have size 1
   }

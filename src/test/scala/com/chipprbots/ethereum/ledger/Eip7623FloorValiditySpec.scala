@@ -170,14 +170,17 @@ class Eip7623FloorValiditySpec extends AnyFlatSpec with Matchers with AmsterdamF
   private val cancunAtGenesis: BlockchainConfig =
     preAmsterdamConfig.copy(forkTimestamps = ForkTimestamps(shanghaiTimestamp = Some(0L), cancunTimestamp = Some(0L)))
 
+  /** The chain head the pool filters under (WI-14: the fork active at the head). Past every fork at genesis. */
+  private val Head: Timestamp = Timestamp(1_000L)
+
   "The txpool pre-filter on an ETH chain past Prague" should "drop a transaction below its floor and keep one at it" taggedAs (
     UnitTest,
     ConsensusTest
   ) in {
-    SignedTransactionWithSender.getStatelessValidTransactions(Seq(heavyCall(60999, osakaAtGenesis)))(
+    SignedTransactionWithSender.getStatelessValidTransactions(Seq(heavyCall(60999, osakaAtGenesis)), Head)(
       osakaAtGenesis
     ) shouldBe empty
-    SignedTransactionWithSender.getStatelessValidTransactions(Seq(heavyCall(61000, osakaAtGenesis)))(
+    SignedTransactionWithSender.getStatelessValidTransactions(Seq(heavyCall(61000, osakaAtGenesis)), Head)(
       osakaAtGenesis
     ) should have size 1
   }
@@ -186,7 +189,7 @@ class Eip7623FloorValiditySpec extends AnyFlatSpec with Matchers with AmsterdamF
     UnitTest,
     ConsensusTest
   ) in {
-    SignedTransactionWithSender.getStatelessValidTransactions(Seq(heavyCall(37000, cancunAtGenesis)))(
+    SignedTransactionWithSender.getStatelessValidTransactions(Seq(heavyCall(37000, cancunAtGenesis)), Head)(
       cancunAtGenesis
     ) should have size 1
   }
@@ -196,15 +199,28 @@ class Eip7623FloorValiditySpec extends AnyFlatSpec with Matchers with AmsterdamF
     ConsensusTest,
     OlympiaTest
   ) in {
-    SignedTransactionWithSender.getStatelessValidTransactions(Seq(etcHeavyCall(37000)))(etcConfig) should have size 1
+    // The ETC filter never reads the head: this one fails the test if it is read.
+    SignedTransactionWithSender.getStatelessValidTransactions(
+      Seq(etcHeavyCall(37000)),
+      fail("the ETC stateless filter read the chain head")
+    )(etcConfig) should have size 1
   }
 
-  it should "leave admission unchanged where Amsterdam is scheduled: its latest-fork proxy cannot name the floor" taggedAs (
+  it should "apply the floor where Amsterdam is scheduled, while the head is before Amsterdam" taggedAs (
     UnitTest,
     ConsensusTest
   ) in {
-    // amsterdamConfig: Osaka at 180, Amsterdam at 360. The proxy picks Osaka, whose floor Amsterdam replaces.
-    SignedTransactionWithSender.getStatelessValidTransactions(Seq(heavyCall(37000, amsterdamConfig)))(
+    // amsterdamConfig: Osaka at 180, Amsterdam at 360; a head at 300 is Osaka. Before WI-14 (#1430) the filter used
+    // the latest configured fork as its "now" and could not tell which floor applied here, so it applied none and kept
+    // this 37,000-gas transaction. It now takes the fork from the head, and Osaka's rule is EIP-7623's.
+    val osakaHead = Timestamp(300L)
+    SignedTransactionWithSender.getStatelessValidTransactions(Seq(heavyCall(37000, amsterdamConfig)), osakaHead)(
+      amsterdamConfig
+    ) shouldBe empty
+    SignedTransactionWithSender.getStatelessValidTransactions(Seq(heavyCall(60999, amsterdamConfig)), osakaHead)(
+      amsterdamConfig
+    ) shouldBe empty
+    SignedTransactionWithSender.getStatelessValidTransactions(Seq(heavyCall(61000, amsterdamConfig)), osakaHead)(
       amsterdamConfig
     ) should have size 1
   }

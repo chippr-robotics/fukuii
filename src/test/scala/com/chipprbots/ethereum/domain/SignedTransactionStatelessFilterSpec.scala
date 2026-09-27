@@ -49,6 +49,9 @@ class SignedTransactionStatelessFilterSpec extends AnyFlatSpec with Matchers:
       forkTimestamps = ForkTimestamps(shanghaiTimestamp = Some(0L)) // always activated
     )
 
+  // The chain head the pool filters under (WI-14: the fork active at the head). Past Shanghai on `ethConfig`.
+  private val HeadPastShanghai: Timestamp = Timestamp(1_000L)
+
   // 1024 non-zero bytes of initcode.  Non-zero matters: G_txdatanonzero = 16, G_txdatazero = 4.
   // Keeping it all non-zero gives a predictable data-cost calculation.
   private val initcode: ByteString = ByteString(Array.fill(1024)(0xff.toByte))
@@ -86,7 +89,7 @@ class SignedTransactionStatelessFilterSpec extends AnyFlatSpec with Matchers:
     implicit val cfg: BlockchainConfig = ethConfig
     val tx = makeCreateTx(LondonIntrinsicGas)
     // Post-fix: timestamp-aware forBlock is used → eip3860Enabled = true → tx rejected
-    SignedTransactionWithSender.getStatelessValidTransactions(Seq(tx)) shouldBe empty
+    SignedTransactionWithSender.getStatelessValidTransactions(Seq(tx), HeadPastShanghai) shouldBe empty
   }
 
   it should "admit a contract-creation tx whose gasLimit meets the Shanghai intrinsic gas (EIP-3860 included)" taggedAs (
@@ -95,7 +98,7 @@ class SignedTransactionStatelessFilterSpec extends AnyFlatSpec with Matchers:
   ) in {
     implicit val cfg: BlockchainConfig = ethConfig
     val tx = makeCreateTx(ShanghaiIntrinsicGas)
-    SignedTransactionWithSender.getStatelessValidTransactions(Seq(tx)) should have size 1
+    SignedTransactionWithSender.getStatelessValidTransactions(Seq(tx), HeadPastShanghai) should have size 1
   }
 
   it should "admit a non-creation tx unaffected by EIP-3860 (call tx with same payload)" taggedAs (
@@ -118,7 +121,7 @@ class SignedTransactionStatelessFilterSpec extends AnyFlatSpec with Matchers:
       signatureRandom = dummyR,
       signature = dummyS
     )
-    SignedTransactionWithSender.getStatelessValidTransactions(Seq(callTx)) should have size 1
+    SignedTransactionWithSender.getStatelessValidTransactions(Seq(callTx), HeadPastShanghai) should have size 1
   }
 
   // ── §ETH-T6-B: EIP-2681 nonce overflow in stateless mempool filter ───────────
@@ -147,7 +150,8 @@ class SignedTransactionStatelessFilterSpec extends AnyFlatSpec with Matchers:
   ) in {
     implicit val cfg: BlockchainConfig = ethConfig
     SignedTransactionWithSender.getStatelessValidTransactions(
-      Seq(makeCallTxWithNonce(BigInt(2).pow(64) - 2))
+      Seq(makeCallTxWithNonce(BigInt(2).pow(64) - 2)),
+      HeadPastShanghai
     ) should have size 1
   }
 
@@ -157,7 +161,8 @@ class SignedTransactionStatelessFilterSpec extends AnyFlatSpec with Matchers:
   ) in {
     implicit val cfg: BlockchainConfig = ethConfig
     SignedTransactionWithSender.getStatelessValidTransactions(
-      Seq(makeCallTxWithNonce(BigInt(2).pow(64) - 1))
+      Seq(makeCallTxWithNonce(BigInt(2).pow(64) - 1)),
+      HeadPastShanghai
     ) shouldBe empty
   }
 
@@ -167,7 +172,8 @@ class SignedTransactionStatelessFilterSpec extends AnyFlatSpec with Matchers:
   ) in {
     implicit val cfg: BlockchainConfig = ethConfig
     SignedTransactionWithSender.getStatelessValidTransactions(
-      Seq(makeCallTxWithNonce(BigInt(2).pow(64)))
+      Seq(makeCallTxWithNonce(BigInt(2).pow(64))),
+      HeadPastShanghai
     ) shouldBe empty
   }
 
@@ -176,8 +182,10 @@ class SignedTransactionStatelessFilterSpec extends AnyFlatSpec with Matchers:
     ConsensusTest
   ) in {
     implicit val cfg: BlockchainConfig = etcConfig
+    // The ETC filter never reads the head: this one fails the test if it is read.
     SignedTransactionWithSender.getStatelessValidTransactions(
-      Seq(makeCallTxWithNonce(BigInt(2).pow(64) - 1))
+      Seq(makeCallTxWithNonce(BigInt(2).pow(64) - 1)),
+      fail("the ETC stateless filter read the chain head")
     ) shouldBe empty
   }
 

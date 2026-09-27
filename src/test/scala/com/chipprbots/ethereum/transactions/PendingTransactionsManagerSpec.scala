@@ -706,6 +706,110 @@ class PendingTransactionsManagerSpec
       resp.pendingTransactions.map(_.stx.tx.hash) shouldBe Seq(acceptedStx.tx.hash) // same nonce accepted
     }
 
+  // WI-14 (#1430): the stateless filter admits under the fork active at the chain head, read from the best block header.
+  // A 12,000-gas self-transfer is valid from Amsterdam (EIP-2780) and invalid before it (21,000).
+
+  it should "filter a peer's transactions under the fork active at the head: Osaka's rules before Amsterdam" taggedAs (
+    UnitTest
+  ) in new TestSetupWithHead(headTimestamp = 300L):
+    val amsterdamOnly: SignedTransaction = selfTransfer(12000)
+    val valid: SignedTransaction = selfTransfer(21000)
+    // One message, one filter pass: once `valid` is pooled, `amsterdamOnly` has been judged too.
+    pendingTransactionsManager ! AddUncheckedTransactions(Seq(amsterdamOnly, valid))
+    eventually {
+      val resp =
+        pendingTransactionsManager.ask[PendingTransactionsResponse](ref => GetPendingTransactionsReq(ref)).futureValue
+      resp.pendingTransactions.map(_.stx.tx) shouldBe Seq(valid)
+    }
+
+  it should "admit a transaction valid only from Amsterdam once the head is at Amsterdam" taggedAs (UnitTest) in
+    new TestSetupWithHead(headTimestamp = 460L):
+      val amsterdamOnly: SignedTransaction = selfTransfer(12000)
+      pendingTransactionsManager ! AddUncheckedTransactions(Seq(amsterdamOnly))
+      eventually {
+        val resp =
+          pendingTransactionsManager.ask[PendingTransactionsResponse](ref => GetPendingTransactionsReq(ref)).futureValue
+        resp.pendingTransactions.map(_.stx.tx) shouldBe Seq(amsterdamOnly)
+      }
+
+  /** A pool on an ETH chain with the Amsterdam fixture schedule (Prague 120, Osaka 180, Amsterdam 360), whose best
+    * block header sits at `headTimestamp`. No state storage, so admission ends at the tip check.
+    */
+  class TestSetupWithHead(headTimestamp: Long) extends TestSetup:
+    val chainConfig: BlockchainConfig = com.chipprbots.ethereum.utils.Config.blockchains.blockchainConfig
+      .copy(
+        networkType = com.chipprbots.ethereum.utils.NetworkType.ETH,
+        minTip = BigInt(1),
+        forkTimestamps = com.chipprbots.ethereum.utils.ForkTimestamps(
+          shanghaiTimestamp = Some(0L),
+          cancunTimestamp = Some(60L),
+          pragueTimestamp = Some(120L),
+          osakaTimestamp = Some(180L),
+          amsterdamTimestamp = Some(360L)
+        )
+      )
+      .withUpdatedForkBlocks(
+        _.copy(
+          homesteadBlockNumber = 0,
+          eip150BlockNumber = 0,
+          eip155BlockNumber = 0,
+          eip160BlockNumber = 0,
+          eip161BlockNumber = 0,
+          byzantiumBlockNumber = 0,
+          constantinopleBlockNumber = 0,
+          petersburgBlockNumber = 0,
+          istanbulBlockNumber = 0,
+          berlinBlockNumber = 0,
+          olympiaBlockNumber = 0
+        )
+      )
+
+    private val head: Block = Block(
+      header = com.chipprbots.ethereum.Fixtures.Blocks.ValidBlock.header.copy(
+        unixTimestamp = com.chipprbots.ethereum.domain.Timestamp(headTimestamp),
+        extraFields = HefPostOlympia(BaseFeeCalculator.InitialBaseFee)
+      ),
+      body = BlockBody(transactionList = Nil, uncleNodesList = Nil)
+    )
+
+    private val readerAtHead: BlockchainReader =
+      new BlockchainReader(null, null, null, null, null, null, null, null):
+        override def getBestBlockHeader: Option[com.chipprbots.ethereum.domain.BlockHeader] = Some(head.header)
+        override def getBestBlock: Option[Block] = Some(head)
+
+    override val pendingTransactionsManager: org.apache.pekko.actor.typed.ActorRef[Command] = testKit.spawn(
+      PendingTransactionsManager(
+        txPoolConfig,
+        peerManager.ref,
+        etcPeerManager.ref,
+        peerMessageBus.ref,
+        pendingTxTopic,
+        blockchainReader = readerAtHead,
+        stateStorage = null,
+        chainConfig = chainConfig
+      ),
+      s"ptm-test-head-${java.util.UUID.randomUUID()}"
+    )
+
+    /** A value-bearing self-transfer from a fresh account, tip 1 wei. */
+    def selfTransfer(gasLimit: BigInt): SignedTransaction =
+      val keyPair = crypto.generateKeyPair(secureRandom)
+      SignedTransaction.sign(
+        TransactionWithDynamicFee(
+          chainId = chainConfig.chainId.value,
+          nonce = BigInt(0),
+          maxPriorityFeePerGas = BigInt(1),
+          maxFeePerGas = BaseFeeCalculator.InitialBaseFee * 2,
+          gasLimit = GasAmount(gasLimit),
+          receivingAddress = Some(Address(keyPair)),
+          value = BigInt(1),
+          payload = ByteString.empty,
+          accessList = Nil
+        ),
+        keyPair,
+        Some(chainConfig.chainId.value)
+      )
+
   /** TestSetup variant with a fake BlockchainReader that returns baseFee = 1 gwei. */
   trait TestSetupWithBaseFee extends TestSetup:
     /** The chain the pool admits for. The default is the loaded config, which is ETC. */
