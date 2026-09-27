@@ -751,7 +751,8 @@ Fast sync is gone: it could not finish on today's networks (eth/67 and later pee
 `GetNodeData`), no other client supports it, and SNAP sync replaces it. What an upgraded node does:
 
 - **`fukuii.sync.do-fast-sync` and the other fast-sync keys are ignored.** The node logs one warning
-  per key it finds and starts normally. The keys are listed in the [CHANGELOG](../../CHANGELOG.md).
+  per key it finds and starts normally. The keys are listed in the
+  [CHANGELOG](https://github.com/chippr-robotics/fukuii/blob/main/CHANGELOG.md).
 - **If you set `do-fast-sync = false` to sync from genesis** (an archive node, for example), set
   `fukuii.sync.do-snap-sync = false` instead. Otherwise the node uses SNAP sync.
 - **A node that was part-way through fast sync** starts SNAP sync on its next start, with the pivot
