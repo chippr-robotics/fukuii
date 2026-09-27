@@ -42,8 +42,9 @@ import com.chipprbots.ethereum.utils.Config
   *     never reaches the fork choice.
   *   - Without attributes V4 works at every fork: Lighthouse sends every attribute-less forkchoice update through the
   *     highest version the EL advertises, long before Amsterdam.
-  *   - Building an Amsterdam payload is refused (-38003, after the forkchoice state is applied) until the builder can
-  *     construct the block access list (#1427); the payload ID covers slotNumber and targetGasLimit.
+  *   - An Amsterdam build needs the slot its header carries (EIP-7843): the service refuses attributes without one
+  *     (-38003, after the forkchoice state is applied), as go-ethereum's miner does, and so does buildBlockOnParent.
+  *     The payload ID covers slotNumber and targetGasLimit. Amsterdam builds themselves: EngineApiAmsterdamBuildSpec.
   */
 class EngineApiForkchoiceUpdatedV4Spec extends AnyWordSpec with Matchers:
 
@@ -330,7 +331,7 @@ class EngineApiForkchoiceUpdatedV4Spec extends AnyWordSpec with Matchers:
         .handleRequest(JsonRpcRequest("2.0", "engine_forkchoiceUpdatedV4", Some(JArray(params)), Some(JInt(1))))
         .unsafeRunSync()
 
-  private def attributes(ts: Long, slot: Option[BigInt] = Some(BigInt(7)), target: Option[BigInt] = None) =
+  private def attributes(ts: Long, slot: Option[BigInt], target: Option[BigInt] = None) =
     PayloadAttributes(
       timestamp = ts,
       prevRandao = ByteString(new Array[Byte](32)),
@@ -343,20 +344,21 @@ class EngineApiForkchoiceUpdatedV4Spec extends AnyWordSpec with Matchers:
 
   "EngineApiService, asked for an Amsterdam payload" should {
 
-    "apply the forkchoice state, then refuse the build with -38003 and store no payload (#1427)" taggedAs (
+    "apply the forkchoice state, then refuse attributes without a slot number with -38003 and store no payload" taggedAs (
       UnitTest,
       ConsensusTest
     ) in new Fixture:
-      val response = fcuV4(List(fcsJson(genesisHash), attrsJson(12)))
+      // The controller refuses such attributes before the service is asked (see above); this is the service's own
+      // guard, reached directly. go-ethereum: "no slot number set post-amsterdam", InvalidPayloadAttributes.
+      val headHash = genesis.header.hash.value
+      val zero = ByteString(new Array[Byte](32))
+      val slotless = attributes(12, slot = None)
+      val outcome = service.forkchoiceUpdated(ForkChoiceState(headHash, zero, zero), Some(slotless)).unsafeRunSync()
 
-      response.error.map(_.code) shouldBe Some(InvalidAttributes)
-      response.error.map(_.message).getOrElse("") should include("#1427")
-      forkChoiceManager.getHeadBlockHash shouldBe Some(genesis.header.hash.value)
-      val wouldBeId = EngineApiService.payloadId(
-        genesis.header.hash.value,
-        attributes(12, slot = Some(BigInt(42)), target = Some(BigInt(60000000)))
-      )
-      service.getPayload(wouldBeId).unsafeRunSync() shouldBe Left("Payload not available")
+      outcome shouldBe Left("ATTR:" + EngineApiService.AmsterdamSlotNumberMissing)
+      forkChoiceManager.getHeadBlockHash shouldBe Some(headHash)
+      service.getPayload(EngineApiService.payloadId(headHash, slotless)).unsafeRunSync() shouldBe
+        Left("Payload not available")
 
     "still answer VALID to the same call without attributes" taggedAs (UnitTest, ConsensusTest) in new Fixture:
       val response = fcuV4(List(fcsJson(genesisHash), JNull, JString("0x" + "ff" * 16)))
@@ -365,13 +367,22 @@ class EngineApiForkchoiceUpdatedV4Spec extends AnyWordSpec with Matchers:
       payloadStatus(response) shouldBe Some(JString("VALID"))
       response.result.map(_ \ "payloadId") shouldBe Some(JNull)
 
-    "refuse an Amsterdam timestamp in buildBlockOnParent, strict or lenient, instead of sealing a Prague header" taggedAs (
+    "refuse Amsterdam attributes without a slot number in buildBlockOnParent, strict or lenient" taggedAs (
       UnitTest,
       ConsensusTest
     ) in new Fixture:
+      // Also what testing_buildBlockV1 gets at Amsterdam: its attributes decoder reads no slotNumber.
       Seq(true, false).foreach { strict =>
-        service.buildBlockOnParent(genesis, attributes(12), Nil, ByteString.empty, GasAmount(60000000), strict) shouldBe
-          Left(EngineApiService.AmsterdamBuildUnsupported)
+        withClue(s"strict=$strict: ") {
+          service.buildBlockOnParent(
+            genesis,
+            attributes(12, slot = None),
+            Nil,
+            ByteString.empty,
+            GasAmount(60000000),
+            strict
+          ) shouldBe Left(EngineApiService.AmsterdamSlotNumberMissing)
+        }
       }
   }
 

@@ -463,8 +463,9 @@ class EngineApiController(
                   case _ =>
                     // engine_getPayloadV6 (amsterdam.md): an ExecutionPayloadV4, whose blockAccessList the block does
                     // not carry. A payload without its list, or with one its header does not commit to, cannot be
-                    // served: answering it anyway would hand the CL a block no client validates. Unreachable until
-                    // the builder produces Amsterdam payloads (#1427).
+                    // served: answering it anyway would hand the CL a block no client validates. The builder keeps the
+                    // list of every Amsterdam payload it executes; only its last-resort seal, which executes nothing,
+                    // has none (EngineApiService.buildLeniently).
                     EngineApiController.blockAccessListServeError(block, served.blockAccessList) match
                       case Some(problem) =>
                         log.error("[ENGINE-API] getPayloadV6 {}: cannot serve the payload: {}", payloadIdHex, problem)

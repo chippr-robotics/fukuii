@@ -36,9 +36,9 @@ import com.chipprbots.ethereum.utils.Config
 /** engine_getPayloadV6 (execution-apis amsterdam.md): `{executionPayload: ExecutionPayloadV4, blockValue, blobsBundle:
   * BlobsBundleV2, shouldOverrideBuilder, executionRequests}` for an Amsterdam payload, -38005 for any other.
   *
-  * No Amsterdam payload is built yet (#1427), so these specs hand the controller one through a stub service. What they
-  * pin is the wire shape that builder will be served through, and that it round-trips: the ExecutionPayloadV4 V6 serves
-  * is accepted by engine_newPayloadV5 as the same block.
+  * These specs hand the controller a payload through a stub service. What they pin is the wire shape a built payload is
+  * served through, and that it round-trips: the ExecutionPayloadV4 V6 serves is accepted by engine_newPayloadV5 as the
+  * same block. Payloads the real builder produces are served and validated in EngineApiAmsterdamBuildSpec.
   */
 class EngineApiGetPayloadV6Spec extends AnyWordSpec with Matchers:
 

@@ -50,10 +50,11 @@ class EngineApiService(
    * Cap = 64 entries per map.  TTL = 12.8 minutes (2 epochs, 12_800_000_000_000 ns).
    * The CL never sends a "discard payload" call, so eviction is EL self-managed.
    * Two triggers:
-   *   PUT: evict the oldest entry (smallest insertedAt across all four maps) when size >= cap.
-   *   GET (getPayload only): if age > TTL, remove from all four maps and return 404.
+   *   PUT: evict the oldest entry (smallest insertedAt across all pending maps) when size >= cap.
+   *   GET (getPayload only): if age > TTL, remove from all pending maps and return 404.
    * Nothing else removes a payload's entries: a payload and everything served with it (receipts,
-   * execution requests, blobs bundle) share one lifetime, however often engine_getPayload reads them.
+   * execution requests, blobs bundle, block access list) share one lifetime, however often
+   * engine_getPayload reads them.
    */
   private val PayloadCap = 64
   private val PayloadTtlNs = 12_800_000_000_000L // 12.8 min in nanoseconds
@@ -79,7 +80,10 @@ class EngineApiService(
   // for use by engine_getBlobsV2 (§ETH-T10-B).
   private val pendingPayloadBlobsBundle =
     new java.util.concurrent.ConcurrentHashMap[ByteString, BlobsBundleData]()
-  // Insertion timestamps (System.nanoTime) shared by all four maps above, used for eviction.
+  // EIP-7928: the RLP block access list of each Amsterdam payload, which engine_getPayloadV6 serves in its
+  // ExecutionPayloadV4. The block does not carry it (its header holds only the hash), so it is kept beside the block.
+  private val pendingPayloadAccessLists = new java.util.concurrent.ConcurrentHashMap[ByteString, ByteString]()
+  // Insertion timestamps (System.nanoTime) shared by all the maps above, used for eviction.
   private val pendingPayloadTimestamps = new java.util.concurrent.ConcurrentHashMap[ByteString, Long]()
 
   /** What a payload's build process builds from: its parent and attributes, and the hashes of every pending transaction
@@ -100,12 +104,13 @@ class EngineApiService(
   /** go-ethereum stops improving a payload SECONDS_PER_SLOT after its build started (miner/payload_building.go). */
   private val PayloadBuildLifetimeNs = 12_000_000_000L
 
-  /** Remove a payloadId from all four pending maps and the timestamp index. */
+  /** Remove a payloadId from every pending map and the timestamp index. */
   private def removePayloadEntry(payloadId: ByteString): Unit =
     pendingPayloads.remove(payloadId)
     pendingPayloadRequests.remove(payloadId)
     pendingPayloadReceipts.remove(payloadId)
     pendingPayloadBlobsBundle.remove(payloadId)
+    pendingPayloadAccessLists.remove(payloadId)
     pendingPayloadTimestamps.remove(payloadId)
     payloadBuildProcesses.remove(payloadId)
     servedPayloads.remove(payloadId)
@@ -133,8 +138,8 @@ class EngineApiService(
     ) match
       case Right(built) => built
       case Left(err)    =>
-        // Unreachable: with strict = false buildBlockOnParent returns Left only for an Amsterdam timestamp, which
-        // forkchoiceUpdated refuses before any build process (and so any rebuild) exists.
+        // Unreachable: with strict = false buildBlockOnParent returns Left only for Amsterdam attributes without a slot
+        // number, which forkchoiceUpdated refuses before any build process (and so any rebuild) exists.
         throw new IllegalStateException(s"lenient proposer build returned Left: $err")
     // EIP-4844: collect the blob sidecars for every blob tx in the built payload so engine_getPayloadV3 can emit the
     // blobsBundle envelope. Without this the envelope has empty arrays while the payload body has blob txs; the hive
@@ -161,6 +166,10 @@ class EngineApiService(
     else pendingPayloadReceipts.remove(payloadId)
     if payload.blobsBundle.blobs.nonEmpty then pendingPayloadBlobsBundle.put(payloadId, payload.blobsBundle)
     else pendingPayloadBlobsBundle.remove(payloadId)
+    // EIP-7928: an Amsterdam payload's access list, for engine_getPayloadV6; the block holds only its hash.
+    payload.built.blockAccessList match
+      case Some(accessList) => pendingPayloadAccessLists.put(payloadId, accessList.toBytes)
+      case None             => pendingPayloadAccessLists.remove(payloadId)
 
   private def poolTxHashes(pool: PendingTransactionsResponse): Set[ByteString] =
     pool.pendingTransactions.iterator.map(_.stx.tx.hash.value).toSet
@@ -913,19 +922,21 @@ class EngineApiService(
                       )
                     )
                   )
-                case Some(attrs) if blockchainConfig.isAmsterdamTimestamp(Timestamp(attrs.timestamp)) =>
-                  // The forkchoice state above is applied; only the build is refused, and before a payload ID is
-                  // handed out, so the CL learns now that no payload will come rather than at engine_getPayloadV6.
-                  // -38003 is go-ethereum's answer when its payload build fails (forkchoiceUpdated,
-                  // `InvalidPayloadAttributes.With(err)`).
+                case Some(attrs) if amsterdamSlotMissing(attrs) =>
+                  // An Amsterdam header carries the beacon slot (EIP-7843), which only the attributes can supply.
+                  // go-ethereum's miner fails such a build ("no slot number set post-amsterdam", miner/worker.go
+                  // `prepareWork`) and forkchoiceUpdated answers -38003 (`InvalidPayloadAttributes.With(err)`).
+                  // engine_forkchoiceUpdatedV4 already refuses missing slotNumber before the service is asked; this is
+                  // the service's own guard. The forkchoice state above is applied; the build is refused before a
+                  // payload ID is handed out.
                   log.error(
                     "[ENGINE-API] forkchoiceUpdated asks for a payload at Amsterdam timestamp {} on #{}: {}",
                     attrs.timestamp,
                     headHeader.map(_.number.value).getOrElse(BigInt(-1)),
-                    EngineApiService.AmsterdamBuildUnsupported
+                    EngineApiService.AmsterdamSlotNumberMissing
                   )
                   EngineApiMetrics.recordForkchoiceUpdated("INVALID")
-                  IO.pure(Left("ATTR:" + EngineApiService.AmsterdamBuildUnsupported))
+                  IO.pure(Left("ATTR:" + EngineApiService.AmsterdamSlotNumberMissing))
                 case Some(attrs) =>
                   val id = EngineApiService.payloadId(forkChoiceState.headBlockHash, attrs)
 
@@ -1180,7 +1191,9 @@ class EngineApiService(
 
   /** Fork name for the proposer build log line. */
   private def forkNameAt(ts: Timestamp): String =
-    if blockchainConfig.isPragueTimestamp(ts) then "Prague"
+    if blockchainConfig.isAmsterdamTimestamp(ts) then "Amsterdam"
+    else if blockchainConfig.isOsakaTimestamp(ts) then "Osaka"
+    else if blockchainConfig.isPragueTimestamp(ts) then "Prague"
     else if blockchainConfig.isCancunTimestamp(ts) then "Cancun"
     else if blockchainConfig.isShanghaiTimestamp(ts) then "Shanghai"
     else "Paris"
@@ -1210,8 +1223,8 @@ class EngineApiService(
     *   unapplicable transaction MUST be a JSON-RPC error). false -> `engine_forkchoiceUpdated`: a transaction that
     *   cannot be applied is left out, see [[buildLeniently]].
     * @return
-    *   Left, in either mode, for a timestamp at which Amsterdam is active
-    *   ([[EngineApiService.AmsterdamBuildUnsupported]] until #1427); otherwise Left only when `strict`.
+    *   Left, in either mode, for attributes at an Amsterdam timestamp that name no beacon slot
+    *   ([[EngineApiService.AmsterdamSlotNumberMissing]]); otherwise Left only when `strict`.
     */
   def buildBlockOnParent(
       parent: Block,
@@ -1221,23 +1234,28 @@ class EngineApiService(
       gasLimit: GasAmount,
       strict: Boolean
   ): Either[String, BuiltBlock] =
-    // The one way into sealProposerBlock, which can only seal headers up to Prague's shape: an Amsterdam header commits
-    // to the block access list, which nothing builds yet (#1426/#1427). engine_forkchoiceUpdated refuses such a build
-    // before it gets here; this also covers testing_buildBlockV1 and anything added later.
-    if blockchainConfig.isAmsterdamTimestamp(Timestamp(attrs.timestamp)) then
+    // The one way into sealProposerBlock. An Amsterdam header carries the beacon slot (EIP-7843), which only the
+    // attributes can supply, and SLOTNUM reads it while the block executes: without it nothing can be sealed.
+    // engine_forkchoiceUpdated refuses such attributes before it gets here; this also covers testing_buildBlockV1,
+    // whose attributes carry no slot, and anything added later.
+    if amsterdamSlotMissing(attrs) then
       log.error(
         "Proposer build on block {} at Amsterdam timestamp {} refused: {}",
         parent.header.number,
         attrs.timestamp,
-        EngineApiService.AmsterdamBuildUnsupported
+        EngineApiService.AmsterdamSlotNumberMissing
       )
-      Left(EngineApiService.AmsterdamBuildUnsupported)
+      Left(EngineApiService.AmsterdamSlotNumberMissing)
     else if strict then
       sealProposerBlock(parent, attrs, transactions, extraData, gasLimit)(executeProposerBlock).left.map { err =>
         log.error("Proposer-mode execution failed: {}", err)
         err.describe
       }
     else Right(buildLeniently(parent, attrs, transactions, extraData, gasLimit))
+
+  /** Attributes at an Amsterdam timestamp without the beacon slot the header must carry (EIP-7843). */
+  private def amsterdamSlotMissing(attrs: PayloadAttributes): Boolean =
+    blockchainConfig.isAmsterdamTimestamp(Timestamp(attrs.timestamp)) && attrs.slotNumber.isEmpty
 
   /** Re-executions a lenient build spends dropping failed transactions one by one before it falls back to keeping only
     * the transactions that ran before the failure. Each attempt re-executes the whole list, so this bounds the cost.
@@ -1249,7 +1267,9 @@ class EngineApiService(
   ): Either[com.chipprbots.ethereum.ledger.BlockExecutionError, ProposerExecution] =
     blockExecution
       .executeForProposer(block)
-      .map(r => ProposerExecution(r.receipts, r.gasUsed, r.worldState.stateRootHash, r.executionRequests))
+      .map(r =>
+        ProposerExecution(r.receipts, r.gasUsed, r.worldState.stateRootHash, r.executionRequests, r.blockAccessList)
+      )
 
   /** `engine_forkchoiceUpdated`'s build: always a payload, and one that executes.
     *
@@ -1327,8 +1347,11 @@ class EngineApiService(
             parent.header.number,
             other.describe
           )
+          // Nothing executed, so no block access list either: an Amsterdam payload sealed here is one
+          // engine_getPayloadV6 refuses to serve (EngineApiController.blockAccessListServeError), rather than hand
+          // the CL a block sealed over its parent's state root.
           sealProposerBlock(parent, attrs, Nil, extraData, gasLimit)(_ =>
-            Right(ProposerExecution(Nil, BigInt(0), parent.header.stateRoot.value, Nil))
+            Right(ProposerExecution(Nil, BigInt(0), parent.header.stateRoot.value, Nil, None))
           ).fold(err => throw new IllegalStateException(s"sealing without execution failed: $err"), identity)
     attempt(transactions, LenientBuildRetries)
 
@@ -1337,7 +1360,9 @@ class EngineApiService(
       receipts: Seq[com.chipprbots.ethereum.domain.Receipt],
       gasUsed: BigInt,
       stateRoot: ByteString,
-      executionRequests: Seq[ByteString]
+      executionRequests: Seq[ByteString],
+      // EIP-7928: the access list execution built (`BlockResult.blockAccessList`), Some exactly for an Amsterdam block.
+      blockAccessList: Option[BlockAccessList]
   )
 
   /** Derive the proposer's header for exactly `transactions`, in order, executing the skeleton block with `execute`.
@@ -1386,6 +1411,14 @@ class EngineApiService(
     val isShanghai = blockchainConfig.isShanghaiTimestamp(attrTs)
     val isCancun = blockchainConfig.isCancunTimestamp(attrTs)
     val isPrague = blockchainConfig.isPragueTimestamp(attrTs)
+    val isAmsterdam = blockchainConfig.isAmsterdamTimestamp(attrTs)
+    // EIP-7843: the beacon slot an Amsterdam header carries, from the attributes (go-ethereum `prepareWork`:
+    // `header.SlotNumber = genParams.slotNum`). It goes into the skeleton header BEFORE execution, because SLOTNUM reads
+    // the executing header's slot: sealed in afterwards, the proposer's state root would disagree with every validator's.
+    // Read only on the Amsterdam branch below; buildBlockOnParent refuses Amsterdam attributes without one, so the throw
+    // is unreachable.
+    lazy val amsterdamSlot: BigInt =
+      attrs.slotNumber.getOrElse(throw new IllegalStateException(EngineApiService.AmsterdamSlotNumberMissing))
     val withdrawals: Seq[com.chipprbots.ethereum.domain.Withdrawal] =
       attrs.withdrawals.getOrElse(Nil)
 
@@ -1409,10 +1442,21 @@ class EngineApiService(
     val parentBeaconBlockRoot =
       attrs.parentBeaconBlockRoot.getOrElse(ByteString(new Array[Byte](32)))
 
-    // Placeholder extraFields — stateRoot / requestsHash / blobGasUsed are filled in
-    // AFTER executing the block (we can't know them yet).
+    // Placeholder extraFields — stateRoot / requestsHash / blobGasUsed / blockAccessListHash are filled in
+    // AFTER executing the block (we can't know them yet). The slot is not a placeholder: see `amsterdamSlot`.
     val initialExtraFields =
-      if isPrague then
+      if isAmsterdam then
+        HefPostAmsterdam(
+          baseFee,
+          computedWithdrawalsRoot,
+          BigInt(0),
+          childExcessBlobGas,
+          parentBeaconBlockRoot,
+          requestsHash = ByteString.empty,
+          blockAccessListHash = ByteString.empty,
+          slotNumber = amsterdamSlot
+        )
+      else if isPrague then
         HefPostPrague(
           baseFee,
           computedWithdrawalsRoot,
@@ -1479,7 +1523,7 @@ class EngineApiService(
     import com.chipprbots.ethereum.mpt.MerklePatriciaTrie
     import com.chipprbots.ethereum.domain.Receipt
     execute(skeletonBlock).map { executed =>
-      val ProposerExecution(receipts, gasUsedTotal, finalStateRoot, executionRequests) = executed
+      val ProposerExecution(receipts, gasUsedTotal, finalStateRoot, executionRequests, blockAccessList) = executed
 
       val receiptsLogs =
         BloomFilter.Empty.toArray +: receipts.map(_.logsBloomFilter.toArray)
@@ -1511,6 +1555,22 @@ class EngineApiService(
 
       // Finalize extraFields with execution-derived values.
       val finalExtraFields = initialExtraFields match
+        case HefPostAmsterdam(_, _, _, _, _, _, _, slot) =>
+          // EIP-7685: the requests include EIP-8282's builder deposits (0x03) and exits (0x04), which the shared
+          // executeBlock collects from the Amsterdam system calls (BlockExecution.systemCallTargets).
+          // EIP-7928: keccak256(rlp(list)) of the list execution built (go-ethereum AssembleBlock:
+          // `header.BlockAccessListHash = bal.Hash()`), the same bytes engine_getPayloadV6 serves. Only the last-resort
+          // seal, which executes nothing, has no list; its payload is then one getPayloadV6 refuses to serve.
+          HefPostAmsterdam(
+            baseFee,
+            computedWithdrawalsRoot,
+            blobGasUsed,
+            childExcessBlobGas,
+            parentBeaconBlockRoot,
+            computeRequestsHash(executionRequests),
+            blockAccessList.fold(BlockAccessList.EmptyHash)(_.hash),
+            slot
+          )
         case _: HefPostPrague =>
           HefPostPrague(
             baseFee,
@@ -1540,7 +1600,7 @@ class EngineApiService(
         gasUsed = GasAmount(gasUsedTotal),
         extraFields = finalExtraFields
       )
-      BuiltBlock(skeletonBlock.copy(header = updatedHeader), receipts, executionRequests)
+      BuiltBlock(skeletonBlock.copy(header = updatedHeader), receipts, executionRequests, blockAccessList)
     }
 
   /** The payload currently held for `payloadId`, exactly as stored — nothing is rebuilt. engine_getPayload answers with
@@ -1586,9 +1646,10 @@ class EngineApiService(
     * (BlockExecution.executeForProposer).
     *
     * What is frozen is the whole answer ([[ServedPayload]]): the block with its receipts (`blockValue`), EIP-7685
-    * execution requests and blobs bundle. The requests matter most — the header's requestsHash commits to them, so a CL
-    * that fetched the payload again and got another list would propose a block no client validates; they used to be
-    * read once and removed, and every later engine_getPayloadV4/V5 answered `executionRequests: []`.
+    * execution requests, blobs bundle and, for an Amsterdam payload, EIP-7928 block access list. The requests matter
+    * most — the header's requestsHash commits to them, so a CL that fetched the payload again and got another list
+    * would propose a block no client validates; they used to be read once and removed, and every later
+    * engine_getPayloadV4/V5 answered `executionRequests: []`.
     *
     * Concurrent calls for one id share the first call's answer.
     */
@@ -1622,7 +1683,8 @@ class EngineApiService(
         block,
         getPayloadReceipts(payloadId),
         getPayloadExecutionRequests(payloadId),
-        getPayloadBlobsBundle(payloadId)
+        getPayloadBlobsBundle(payloadId),
+        Option(pendingPayloadAccessLists.get(payloadId))
       )
     })
 
@@ -1671,7 +1733,8 @@ class EngineApiService(
                     payload.built.block,
                     payload.built.receipts,
                     payload.built.executionRequests,
-                    payload.blobsBundle
+                    payload.blobsBundle,
+                    payload.built.blockAccessList.map(_.toBytes)
                   )
                 )
               }
@@ -2247,13 +2310,11 @@ object EngineApiService:
   val GetPayloadRebuildBudget: scala.concurrent.duration.FiniteDuration =
     scala.concurrent.duration.FiniteDuration(500, java.util.concurrent.TimeUnit.MILLISECONDS)
 
-  /** Why no payload is built for an Amsterdam timestamp. An Amsterdam header commits to the block's EIP-7928 access
-    * list, which fukuii cannot construct until #1426/#1427; the builder used to seal a Prague-shaped header there
-    * instead, a block every client rejects. Refusing is the explicit failure: forkchoiceUpdated answers -38003 and
-    * `buildBlockOnParent` a Left, so no Amsterdam payload is ever stored or served.
+  /** Why no payload is built for Amsterdam attributes without `slotNumber`: an Amsterdam header carries the beacon slot
+    * (EIP-7843) and nothing else can supply it. go-ethereum's text (miner/worker.go `prepareWork`); its
+    * forkchoiceUpdated answers the failed build with -38003, and so does ours.
     */
-  val AmsterdamBuildUnsupported: String =
-    "payload building is not supported at Amsterdam timestamps yet: the block access list cannot be built (#1427)"
+  val AmsterdamSlotNumberMissing: String = "no slot number set post-amsterdam"
 
   /** The engine_forkchoiceUpdated payload ID for building on `headBlockHash` with `attrs`: the first 8 bytes of a
     * keccak256 over every attribute, so each distinct attribute set gets its own build process (hive `Unique Payload

@@ -119,14 +119,17 @@ case class BlobsBundleData(
     cellProofsPerBlob: Seq[Seq[ByteString]]
 )
 
-/** Result of a proposer-side block build: the sealed block plus the two derived artefacts callers need but that are not
-  * recoverable from the block alone (receipts drive `blockValue`; executionRequests are EIP-7685's pre-image, only the
-  * hash of which is in the header).
+/** Result of a proposer-side block build: the sealed block plus the derived artefacts callers need but that are not
+  * recoverable from the block alone (receipts drive `blockValue`; executionRequests are EIP-7685's pre-image and the
+  * block access list EIP-7928's, only the hashes of which are in the header).
   */
 case class BuiltBlock(
     block: com.chipprbots.ethereum.domain.Block,
     receipts: Seq[com.chipprbots.ethereum.domain.Receipt],
-    executionRequests: Seq[ByteString]
+    executionRequests: Seq[ByteString],
+    // EIP-7928: the access list the block's execution built — what an Amsterdam header's blockAccessListHash commits to
+    // and what engine_getPayloadV6 serves. None before Amsterdam.
+    blockAccessList: Option[com.chipprbots.ethereum.domain.BlockAccessList] = None
 )
 
 /** One engine_getPayload answer, whole: the block and everything its envelope carries that the block cannot give back —
@@ -140,8 +143,7 @@ final case class ServedPayload(
     executionRequests: Seq[ByteString],
     blobsBundle: BlobsBundleData,
     // EIP-7928: the RLP block access list of an Amsterdam payload, which engine_getPayloadV6 serves in its
-    // ExecutionPayloadV4 and the block itself does not carry (its header holds only the hash). Nothing fills it yet:
-    // the builder refuses Amsterdam timestamps until it can construct the list (#1427), so no Amsterdam payload is
-    // stored, and getPayloadV6 refuses one that lacks it.
+    // ExecutionPayloadV4 and the block itself does not carry (its header holds only the hash). The builder keeps it for
+    // every Amsterdam payload it executes; getPayloadV6 refuses a payload that lacks it.
     blockAccessList: Option[ByteString] = None
 )
