@@ -74,7 +74,7 @@ means the rule exists in code with unit coverage, not that it has passed hive or
 | [8037](https://eips.ethereum.org/EIPS/eip-8037) | State creation gas cost increase | Implemented |
 | [8038](https://eips.ethereum.org/EIPS/eip-8038) | State-access gas cost update | Implemented |
 | [8246](https://eips.ethereum.org/EIPS/eip-8246) | Remove SELFDESTRUCT burn | **Not implemented** — same-transaction SELFDESTRUCT still burns |
-| [8282](https://eips.ethereum.org/EIPS/eip-8282) | Builder execution requests | Implemented in execution; `eth_config` omits the `BUILDER_*` system contracts |
+| [8282](https://eips.ethereum.org/EIPS/eip-8282) | Builder execution requests | Implemented. `eth_config` reports `BUILDER_DEPOSIT_CONTRACT_ADDRESS` and `BUILDER_EXIT_CONTRACT_ADDRESS` from Amsterdam (see [JSON-RPC at Amsterdam](#json-rpc-at-amsterdam)) |
 
 **Consensus layer** — implemented by the paired CL client, no fukuii code:
 [7688](https://eips.ethereum.org/EIPS/eip-7688) (forward-compatible consensus data structures),
@@ -123,6 +123,49 @@ The EEST engine fixtures (`tests@v21.0.0` `blockchain_tests_engine/for_amsterdam
 Every error code, genesis and forkchoice answer matches. The failures that remain are the same tests that fail over
 RLP (`EestFixtureCorpusSpec`), that is block execution and access-list content, plus one EIP-7934 block-size case
 the Engine API path does not check.
+
+## JSON-RPC at Amsterdam
+
+What the JSON-RPC surfaces do from Amsterdam ([#1430](https://github.com/chippr-robotics/fukuii/issues/1430)). Every
+change is keyed on the Amsterdam timestamp, except the calldata floor in `eth_estimateGas`, which follows the fork where
+a floor becomes a validity rule, and the pool's choice of fork, which follows the chain head.
+
+| Surface | From Amsterdam | Before Amsterdam, and ETC |
+|---|---|---|
+| `eth_config` | `systemContracts` adds EIP-8282's `BUILDER_DEPOSIT_CONTRACT_ADDRESS` (`0x0000bff46984e3725691fa540a8c7589300d8282`) and `BUILDER_EXIT_CONTRACT_ADDRESS` (`0x000064d678505ad48f8ccb093bc65613800e8282`), the queues block execution calls, as go-ethereum's `ActiveSystemContracts` does. fukuii's response for Platåberget equals the live network's (`EthConfigPlatabergetSpec`). | Unchanged. |
+| txpool pre-filter (transactions from peers and from re-orgs) | Admits under the rules of the fork active at the chain head, as go-ethereum's pool does: EIP-2780's intrinsic cost (a self-transfer is valid at 12,000), EIP-7976 / EIP-7981's floor, both at most 2^24. `eth_sendRawTransaction` does not go through this filter. | ETH: the head's fork as well. The filter used to take the latest configured fork up to Osaka, and where Amsterdam was scheduled it applied no floor, because that proxy could not tell which floor applied. So on Sepolia until 2026-10-06, a peer's transaction below EIP-7623's floor is now refused, as it already was on mainnet; it is invalid in any block. ETC: unchanged. The head is not read and no floor rule applies. |
+| `eth_estimateGas` | The search starts at the least valid gas limit, `max(intrinsic, floor)`: 12,000 for a self-transfer (21,000 before), and the EIP-7976 floor for a call carrying calldata. It used to answer the intrinsic cost, below the floor, which is a gas limit every node rejects. go-ethereum answers any plain transfer to an EOA with 21,000 without searching lower; fukuii answers the exact minimum. | ETH Prague and Osaka: the same rule with EIP-7623's floor, where the search also answered the intrinsic cost below it. It applies on ETC from the Olympia block as well, under the validator's own predicate, but no shipped chain schedules Olympia. ETH before Prague, and ETC before Olympia: unchanged, starting at 21,000. |
+| `eth_simulateV1` | A simulated block at an Amsterdam timestamp has the 23-field header, and the response carries `blockAccessListHash` and `slotNumber`. `blockAccessListHash` is the empty list's hash, because the simulator records no access list, just as `requestsHash` is not computed. `slotNumber` is 0, because a simulated block has no beacon slot; go-ethereum's simulator leaves it unset, so SLOTNUM reads 0 there too. | Unchanged. |
+| Trace and debug replays of a stored block (`debug_traceTransaction`, `debug_traceBlockBy*`, `debug_intermediateRoots`, `debug_traceChain`, `trace_transaction`, `trace_block`, `trace_replay*`) | Re-executed as block import executed the block: the EIP-4788 / EIP-2935 system calls, then each transaction through block execution's own path with the tracer attached. The gas each transaction reports, its trace and the state root after it match block execution, and every transaction the block carries is replayed. | Unchanged: the bare VM, below. |
+
+### What the bare VM leaves out
+
+Two kinds of request still run a transaction on the bare VM (`StxLedger.simulateTransaction`). The first is a call built
+from RPC arguments, on any fork: `eth_call`, `eth_createAccessList`, GraphQL `call`, `debug_traceCall`, `trace_call`,
+`trace_callMany` and `eth_estimateGas`'s search. The second is a replay of a block before Amsterdam, or of any ETC
+block. Compared with block execution, that path:
+
+- does not apply an EIP-7702 authorization list, so a Type-4 transaction's delegations and authority nonce bumps are
+  missing, and at Amsterdam so are EIP-2780's authorization charges (calls built from RPC arguments carry no list);
+- does not charge the calldata floor (EIP-7623 from Prague, EIP-7976 / EIP-7981 at Amsterdam). The gas it reports is
+  what execution took, and a gas limit below the floor runs instead of being refused;
+- does not refund the sender or pay the coinbase, and does not delete self-destructed or empty touched accounts;
+- for replays, starts the block without its EIP-4788 / EIP-2935 preamble and does not persist the world between
+  transactions, so `debug_intermediateRoots` before Amsterdam does not report the roots block execution reached;
+- for replays, recovers a stored block's transactions through the pool's pre-#1430 rules (the latest configured fork up
+  to Osaka), which can drop a valid transaction from the replay. On a chain without Amsterdam, that includes a
+  pre-Prague transaction below EIP-7623's floor.
+
+At Amsterdam the bare VM already carries what lives in the frame itself: EIP-2780's recipient-creation and
+delegation-access charges, EIP-8037's state-gas reservoir, and EIP-7708's transfer logs. `eth_estimateGas` makes up for
+the missing floor by starting its search at `max(intrinsic, floor)`.
+
+The pre-Amsterdam and ETC replays keep this path on purpose, so #1430 changes no pre-Amsterdam or ETC trace output, and
+hive's rpc-compat suite checks that output. Moving them to block execution is a separate change, and ETC's side needs
+forge's sign-off.
+
+Not changed by #1430: `eth_getBlockByNumber` and `eth_getBlockByHash` do not yet report an Amsterdam header's
+`blockAccessListHash` and `slotNumber`, which go-ethereum's `RPCMarshalHeader` does.
 
 ## Testing against Platåberget
 
