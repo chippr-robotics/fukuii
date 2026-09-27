@@ -5676,10 +5676,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#fallback-to-fast-sync" class="md-nav__link">
+  <a href="#dormant-mode" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Fallback to Fast Sync
+        Dormant Mode
       
     </span>
   </a>
@@ -5754,10 +5754,10 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#migrating-from-fast-sync-to-snap-sync" class="md-nav__link">
+  <a href="#upgrading-a-node-that-used-fast-sync" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Migrating from Fast Sync to SNAP Sync
+        Upgrading a Node That Used Fast Sync
       
     </span>
   </a>
@@ -5765,10 +5765,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#migrating-from-snap-sync-to-fast-sync" class="md-nav__link">
+  <a href="#switching-from-snap-sync-to-full-sync" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Migrating from SNAP Sync to Fast Sync
+        Switching from SNAP Sync to Full Sync
       
     </span>
   </a>
@@ -5897,23 +5897,20 @@
 </span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>  # Enable SNAP sync (recommended for new nodes)
 </span><span id="__span-3-3"><a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a>  do-snap-sync = true
 </span><span id="__span-3-4"><a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a>
-</span><span id="__span-3-5"><a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a>  # Disable fast sync to prioritize SNAP sync
-</span><span id="__span-3-6"><a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a>  # SNAP sync is preferred over fast sync when both are enabled
-</span><span id="__span-3-7"><a id="__codelineno-3-7" name="__codelineno-3-7" href="#__codelineno-3-7"></a>  do-fast-sync = false
-</span><span id="__span-3-8"><a id="__codelineno-3-8" name="__codelineno-3-8" href="#__codelineno-3-8"></a>
-</span><span id="__span-3-9"><a id="__codelineno-3-9" name="__codelineno-3-9" href="#__codelineno-3-9"></a>  snap-sync {
-</span><span id="__span-3-10"><a id="__codelineno-3-10" name="__codelineno-3-10" href="#__codelineno-3-10"></a>    enabled = true
-</span><span id="__span-3-11"><a id="__codelineno-3-11" name="__codelineno-3-11" href="#__codelineno-3-11"></a>  }
-</span><span id="__span-3-12"><a id="__codelineno-3-12" name="__codelineno-3-12" href="#__codelineno-3-12"></a>}
+</span><span id="__span-3-5"><a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a>  snap-sync {
+</span><span id="__span-3-6"><a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a>    enabled = true
+</span><span id="__span-3-7"><a id="__codelineno-3-7" name="__codelineno-3-7" href="#__codelineno-3-7"></a>  }
+</span><span id="__span-3-8"><a id="__codelineno-3-8" name="__codelineno-3-8" href="#__codelineno-3-8"></a>}
 </span></code></pre></div></p>
 <h3 id="disabling-snap-sync">Disabling SNAP Sync<a class="headerlink" href="#disabling-snap-sync" title="Permanent link">&para;</a></h3>
-<p>To disable SNAP sync and fall back to fast sync:</p>
+<p>To disable SNAP sync and import every block from genesis instead (regular sync):</p>
 <p><strong>File:</strong> <code>conf/fukuii.conf</code>
 <div class="language-text highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>sync {
 </span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>  do-snap-sync = false
-</span><span id="__span-4-3"><a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a>  do-fast-sync = true
-</span><span id="__span-4-4"><a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a>}
+</span><span id="__span-4-3"><a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a>}
 </span></code></pre></div></p>
+<p>Fast sync, the other option in earlier releases, was removed. See
+<a href="#upgrading-a-node-that-used-fast-sync">Upgrading a Node That Used Fast Sync</a>.</p>
 <h2 id="configuration">Configuration<a class="headerlink" href="#configuration" title="Permanent link">&para;</a></h2>
 <h3 id="basic-configuration">Basic Configuration<a class="headerlink" href="#basic-configuration" title="Permanent link">&para;</a></h3>
 <p>The default SNAP sync configuration is optimized for most use cases. These are the key parameters:</p>
@@ -5996,7 +5993,7 @@
 <ul>
 <li><code>storage-batch-size</code>: Accounts per storage request (default: 8)</li>
 <li><code>healing-batch-size</code>: Trie nodes per healing request (default: 16)</li>
-<li><code>max-snap-sync-failures</code>: Critical failures before fallback to fast sync (default: 5)</li>
+<li><code>max-snap-sync-failures</code>: Critical failures before SNAP goes dormant and retries on a fresh pivot (default: 5)</li>
 </ul>
 <h2 id="starting-a-node-with-snap-sync">Starting a Node with SNAP Sync<a class="headerlink" href="#starting-a-node-with-snap-sync" title="Permanent link">&para;</a></h2>
 <h3 id="first-time-sync">First-Time Sync<a class="headerlink" href="#first-time-sync" title="Permanent link">&para;</a></h3>
@@ -6214,11 +6211,14 @@
 </span><span id="__span-23-6"><a id="__codelineno-23-6" name="__codelineno-23-6" href="#__codelineno-23-6"></a><span class="c1"># Restart to apply new config</span>
 </span><span id="__span-23-7"><a id="__codelineno-23-7" name="__codelineno-23-7" href="#__codelineno-23-7"></a>./bin/fukuii<span class="w"> </span>-Dconfig.file<span class="o">=</span>conf/fukuii.conf
 </span></code></pre></div></p>
-<h3 id="fallback-to-fast-sync">Fallback to Fast Sync<a class="headerlink" href="#fallback-to-fast-sync" title="Permanent link">&para;</a></h3>
-<p><strong>Symptom:</strong> SNAP sync fails and node falls back to fast sync</p>
-<div class="language-text highlight"><pre><span></span><code><span id="__span-24-1"><a id="__codelineno-24-1" name="__codelineno-24-1" href="#__codelineno-24-1"></a>[ERROR] SNAP sync failed after 5 critical failures, falling back to fast sync
+<h3 id="dormant-mode">Dormant Mode<a class="headerlink" href="#dormant-mode" title="Permanent link">&para;</a></h3>
+<p><strong>Symptom:</strong> SNAP sync stops and the log shows</p>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-24-1"><a id="__codelineno-24-1" name="__codelineno-24-1" href="#__codelineno-24-1"></a>Entering dormant mode (attempt 1): &lt;reason&gt;. All downloaded state preserved. Will retry after backoff.
 </span></code></pre></div>
-<p><strong>Cause:</strong> Too many critical errors during SNAP sync</p>
+<p><strong>Cause:</strong> SNAP cannot make progress: too many critical errors, no snap-capable peer within
+<code>snap-capability-grace-period</code>, or no peers at all after the bootstrap retries. SNAP keeps what
+it has downloaded and retries on a fresh pivot after a back-off (3 minutes, doubling to a
+20-minute cap). It does not fall back to another sync mode.</p>
 <p><strong>Solutions:</strong></p>
 <ol>
 <li>
@@ -6235,16 +6235,12 @@
 <p><strong>Disk full:</strong> Free up disk space</p>
 </li>
 <li>
-<p><strong>Retry SNAP sync:</strong>
-   <div class="language-bash highlight"><pre><span></span><code><span id="__span-26-1"><a id="__codelineno-26-1" name="__codelineno-26-1" href="#__codelineno-26-1"></a><span class="c1"># Stop the node</span>
-</span><span id="__span-26-2"><a id="__codelineno-26-2" name="__codelineno-26-2" href="#__codelineno-26-2"></a>pkill<span class="w"> </span>-f<span class="w"> </span>fukuii
-</span><span id="__span-26-3"><a id="__codelineno-26-3" name="__codelineno-26-3" href="#__codelineno-26-3"></a>
-</span><span id="__span-26-4"><a id="__codelineno-26-4" name="__codelineno-26-4" href="#__codelineno-26-4"></a><span class="c1"># Clear SNAP sync state to force fresh start</span>
-</span><span id="__span-26-5"><a id="__codelineno-26-5" name="__codelineno-26-5" href="#__codelineno-26-5"></a>rm<span class="w"> </span>-rf<span class="w"> </span>~/.fukuii/leveldb/snap-sync-*
-</span><span id="__span-26-6"><a id="__codelineno-26-6" name="__codelineno-26-6" href="#__codelineno-26-6"></a>
-</span><span id="__span-26-7"><a id="__codelineno-26-7" name="__codelineno-26-7" href="#__codelineno-26-7"></a><span class="c1"># Restart with SNAP sync</span>
-</span><span id="__span-26-8"><a id="__codelineno-26-8" name="__codelineno-26-8" href="#__codelineno-26-8"></a>./bin/fukuii<span class="w"> </span>-Dconfig.file<span class="o">=</span>conf/fukuii.conf
-</span></code></pre></div></p>
+<p><strong>Let it retry, or restart:</strong> SNAP wakes up on its own after the back-off. Restarting the
+   node retries at once and keeps the downloaded state.</p>
+</li>
+<li>
+<p><strong>No snap-serving peers on this network:</strong> set <code>do-snap-sync = false</code> to import every block
+   from genesis instead.</p>
 </li>
 </ol>
 <h2 id="best-practices">Best Practices<a class="headerlink" href="#best-practices" title="Permanent link">&para;</a></h2>
@@ -6273,51 +6269,45 @@
 - <strong>Average network</strong> (10-50 Mbps, 10-20 peers): 4-6 hours
 - <strong>Poor network</strong> (&lt;10 Mbps, &lt;10 peers): 8-12 hours</p>
 <h2 id="migration-guide">Migration Guide<a class="headerlink" href="#migration-guide" title="Permanent link">&para;</a></h2>
-<h3 id="migrating-from-fast-sync-to-snap-sync">Migrating from Fast Sync to SNAP Sync<a class="headerlink" href="#migrating-from-fast-sync-to-snap-sync" title="Permanent link">&para;</a></h3>
-<p>If you have an existing node using fast sync:</p>
-<ol>
-<li>
-<p><strong>Check current sync mode:</strong>
-   <div class="language-bash highlight"><pre><span></span><code><span id="__span-27-1"><a id="__codelineno-27-1" name="__codelineno-27-1" href="#__codelineno-27-1"></a>grep<span class="w"> </span><span class="s2">"do-fast-sync"</span><span class="w"> </span>conf/fukuii.conf
-</span></code></pre></div></p>
-</li>
-<li>
-<p><strong>Enable SNAP sync:</strong>
-   <div class="language-text highlight"><pre><span></span><code><span id="__span-28-1"><a id="__codelineno-28-1" name="__codelineno-28-1" href="#__codelineno-28-1"></a>sync {
-</span><span id="__span-28-2"><a id="__codelineno-28-2" name="__codelineno-28-2" href="#__codelineno-28-2"></a>  do-snap-sync = true   # Enable SNAP
-</span><span id="__span-28-3"><a id="__codelineno-28-3" name="__codelineno-28-3" href="#__codelineno-28-3"></a>  do-fast-sync = false  # Disable fast sync
-</span><span id="__span-28-4"><a id="__codelineno-28-4" name="__codelineno-28-4" href="#__codelineno-28-4"></a>}
-</span></code></pre></div></p>
-</li>
-<li>
-<p><strong>Restart node:</strong>
-   <div class="language-bash highlight"><pre><span></span><code><span id="__span-29-1"><a id="__codelineno-29-1" name="__codelineno-29-1" href="#__codelineno-29-1"></a>./bin/fukuii<span class="w"> </span>-Dconfig.file<span class="o">=</span>conf/fukuii.conf
-</span></code></pre></div></p>
-</li>
-</ol>
-<p><strong>Note:</strong> If your node is already synced, enabling SNAP sync won't re-sync. SNAP sync only activates on fresh nodes or when sync state is cleared.</p>
-<h3 id="migrating-from-snap-sync-to-fast-sync">Migrating from SNAP Sync to Fast Sync<a class="headerlink" href="#migrating-from-snap-sync-to-fast-sync" title="Permanent link">&para;</a></h3>
-<p>To switch back to fast sync:</p>
+<h3 id="upgrading-a-node-that-used-fast-sync">Upgrading a Node That Used Fast Sync<a class="headerlink" href="#upgrading-a-node-that-used-fast-sync" title="Permanent link">&para;</a></h3>
+<p>Fast sync was removed. Nothing needs to be done before upgrading:</p>
+<ul>
+<li><strong>Configuration:</strong> <code>do-fast-sync</code> and the other fast-sync keys are ignored; the node logs a
+  warning for each one it finds and starts normally. Remove them when convenient. If you set
+  <code>do-fast-sync = false</code> to sync from genesis, set <code>do-snap-sync = false</code> instead.</li>
+<li><strong>Node stopped part-way through fast sync:</strong> it starts SNAP sync, with a pivot above the block
+  fast sync had reached (that block has no state behind it). The floor survives restarts and is
+  cleared when SNAP completes; fast sync's progress record is deleted. With <code>do-snap-sync = false</code>
+  it starts regular sync and logs an error: regular sync fetches the missing state node by node and,
+  if peers cannot serve it, re-syncs with SNAP anyway.</li>
+<li><strong>Node where fast sync finished earlier:</strong> it continues with regular sync, with <code>do-snap-sync</code> on
+  or off, unless SNAP has progress there (then SNAP resumes). If fast sync left gaps in the state,
+  regular sync fetches them from peers and, failing that, re-syncs with SNAP from a newer pivot.</li>
+</ul>
+<p><strong>Note:</strong> Enabling SNAP sync does not re-sync a node where SNAP sync completed or fast sync
+finished: it continues with regular sync. On a node that reached its best block another way
+(regular sync from genesis, say), enabling SNAP sync starts it. Near the chain head it hands over
+to regular sync without downloading anything, once a snap-capable peer shows it the head. More
+than 64 blocks behind, it downloads the state at a fresh pivot instead of executing the missed
+blocks.</p>
+<h3 id="switching-from-snap-sync-to-full-sync">Switching from SNAP Sync to Full Sync<a class="headerlink" href="#switching-from-snap-sync-to-full-sync" title="Permanent link">&para;</a></h3>
 <ol>
 <li>
 <p><strong>Update configuration:</strong>
-   <div class="language-text highlight"><pre><span></span><code><span id="__span-30-1"><a id="__codelineno-30-1" name="__codelineno-30-1" href="#__codelineno-30-1"></a>sync {
-</span><span id="__span-30-2"><a id="__codelineno-30-2" name="__codelineno-30-2" href="#__codelineno-30-2"></a>  do-snap-sync = false  # Disable SNAP
-</span><span id="__span-30-3"><a id="__codelineno-30-3" name="__codelineno-30-3" href="#__codelineno-30-3"></a>  do-fast-sync = true   # Enable fast sync
-</span><span id="__span-30-4"><a id="__codelineno-30-4" name="__codelineno-30-4" href="#__codelineno-30-4"></a>}
-</span></code></pre></div></p>
-</li>
-<li>
-<p><strong>Clear sync state (optional):</strong>
-   <div class="language-bash highlight"><pre><span></span><code><span id="__span-31-1"><a id="__codelineno-31-1" name="__codelineno-31-1" href="#__codelineno-31-1"></a>rm<span class="w"> </span>-rf<span class="w"> </span>~/.fukuii/leveldb/snap-sync-*
+   <div class="language-text highlight"><pre><span></span><code><span id="__span-26-1"><a id="__codelineno-26-1" name="__codelineno-26-1" href="#__codelineno-26-1"></a>sync {
+</span><span id="__span-26-2"><a id="__codelineno-26-2" name="__codelineno-26-2" href="#__codelineno-26-2"></a>  do-snap-sync = false  # Import every block instead
+</span><span id="__span-26-3"><a id="__codelineno-26-3" name="__codelineno-26-3" href="#__codelineno-26-3"></a>}
 </span></code></pre></div></p>
 </li>
 <li>
 <p><strong>Restart node:</strong>
-   <div class="language-bash highlight"><pre><span></span><code><span id="__span-32-1"><a id="__codelineno-32-1" name="__codelineno-32-1" href="#__codelineno-32-1"></a>./bin/fukuii<span class="w"> </span>-Dconfig.file<span class="o">=</span>conf/fukuii.conf
+   <div class="language-bash highlight"><pre><span></span><code><span id="__span-27-1"><a id="__codelineno-27-1" name="__codelineno-27-1" href="#__codelineno-27-1"></a>./bin/fukuii<span class="w"> </span>-Dconfig.file<span class="o">=</span>conf/fukuii.conf
 </span></code></pre></div></p>
 </li>
 </ol>
+<p>Regular sync continues from the node's best block. If SNAP sync had not finished, the state at
+that block is incomplete and regular sync has to fetch the missing parts node by node; starting
+from an empty database avoids that.</p>
 <h2 id="related-documentation">Related Documentation<a class="headerlink" href="#related-documentation" title="Permanent link">&para;</a></h2>
 <ul>
 <li><a href="../operating-modes/">Operating Modes Runbook</a> - Overview of all node operating modes</li>

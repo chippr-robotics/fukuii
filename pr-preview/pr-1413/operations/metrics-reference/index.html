@@ -6265,7 +6265,7 @@ raise <code>block-cache-size</code> cautiously.</p>
 <tr>
 <td><code>app_network_peers_blacklisted_fastSyncGroup_counter_total</code></td>
 <td>counter</td>
-<td>Blacklist events attributed to fast-sync reasons.</td>
+<td>Blacklist events for bad chain-download responses (headers, bodies, receipts), from the SNAP chain downloader and the branch resolver. The name is left over from fast sync, which was removed.</td>
 <td>—</td>
 </tr>
 <tr>
@@ -6437,12 +6437,6 @@ defined in code but only appear on <code>/metrics</code> after their emitting su
 <td>ECBP-1100 (MESS) reorg arbitration</td>
 <td><code>rejected_total</code>, <code>accepted_total</code>, <code>gravity_gauge</code></td>
 <td>—</td>
-</tr>
-<tr>
-<td><code>app_fastsync_*</code></td>
-<td>Legacy fast sync (fallback mode)</td>
-<td><code>block_pivotBlock_number_gauge</code>, <code>state_downloadedNodes_gauge</code>, download timers</td>
-<td>Node Health: Best Known Block, Block height</td>
 </tr>
 <tr>
 <td><code>app_mining_*</code></td>

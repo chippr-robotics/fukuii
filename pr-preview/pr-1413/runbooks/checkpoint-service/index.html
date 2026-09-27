@@ -6261,10 +6261,10 @@
 
     StartSync --&gt; SnapEnabled{SNAP Sync&lt;br/&gt;Enabled?}
     SnapEnabled --&gt;|Yes| SnapSync[SNAP Sync Protocol&lt;br/&gt;- 80% faster&lt;br/&gt;- 99% less bandwidth&lt;br/&gt;- State snapshots]
-    SnapEnabled --&gt;|No| FastSync[Fast Sync Protocol&lt;br/&gt;- Traditional method&lt;br/&gt;- Full state download]
+    SnapEnabled --&gt;|No| FullSync[Regular Sync&lt;br/&gt;- Imports every block&lt;br/&gt;- From genesis]
 
     SnapSync --&gt; Complete[Sync Complete]
-    FastSync --&gt; Complete
+    FullSync --&gt; Complete
 
     style LoadCP fill:#90EE90
     style UseCP fill:#90EE90
@@ -6282,23 +6282,24 @@
 </thead>
 <tbody>
 <tr>
-<td><strong>Traditional</strong> (No checkpoints)</td>
+<td><strong>SNAP without checkpoints</strong></td>
 <td>2-10 minutes<br/>(peer wait)</td>
-<td>~8-12 hours<br/>(fast sync)</td>
-</tr>
-<tr>
-<td><strong>Bootstrap Checkpoints Only</strong></td>
-<td><strong>Immediate</strong><br/>(no wait)</td>
-<td>~8-12 hours<br/>(fast sync)</td>
+<td>SNAP sync time<br/>plus the wait</td>
 </tr>
 <tr>
 <td><strong>Rapid Sync</strong><br/>(Checkpoints + SNAP)</td>
 <td><strong>Immediate</strong><br/>(no wait)</td>
-<td><strong>~2-3 hours</strong><br/>(SNAP sync)</td>
+<td>SNAP sync time</td>
+</tr>
+<tr>
+<td><strong>Full sync</strong><br/>(<code>do-snap-sync = false</code>)</td>
+<td>2-10 minutes<br/>(peer wait)</td>
+<td>Days to weeks</td>
 </tr>
 </tbody>
 </table>
-<p><strong>Key Benefit</strong>: Rapid sync eliminates the peer discovery bottleneck and reduces total sync time by up to <strong>75%</strong>.</p>
+<p><strong>Key Benefit</strong>: Rapid sync eliminates the peer discovery bottleneck. (Earlier releases also
+offered fast sync; it was removed.)</p>
 <h2 id="what-is-the-checkpoint-service">What is the Checkpoint Service?<a class="headerlink" href="#what-is-the-checkpoint-service" title="Permanent link">&para;</a></h2>
 <p>The checkpoint service provides two complementary checkpoint management systems:</p>
 <ol>
@@ -6372,8 +6373,7 @@
     end
 
     subgraph "Sync Modes"
-        SNAP[SNAP Sync&lt;br/&gt;Fastest - 2-3 hours&lt;br/&gt;State snapshots]
-        Fast[Fast Sync&lt;br/&gt;Standard - 8-12 hours&lt;br/&gt;Full state download]
+        SNAP[SNAP Sync&lt;br/&gt;Fastest&lt;br/&gt;State snapshots]
         Full[Full Sync&lt;br/&gt;Slowest - days/weeks&lt;br/&gt;Full validation]
     end
 
@@ -6381,7 +6381,6 @@
     Dynamic --&gt; Config
     Config --&gt; AppState
     AppState --&gt; SNAP
-    AppState --&gt; Fast
     AppState --&gt; Full
 
     style Static fill:#90EE90
@@ -6399,7 +6398,6 @@
 <p><strong>Sync Selection Phase</strong></p>
 </li>
 <li>If SNAP sync enabled: Uses checkpoint as starting point for state download</li>
-<li>If fast sync enabled: Uses checkpoint to skip peer consensus phase</li>
 <li>
 <p>Sync begins immediately without waiting for 3+ peers</p>
 </li>
@@ -6407,7 +6405,6 @@
 <p><strong>Synchronization Phase</strong></p>
 </li>
 <li>SNAP sync downloads account/storage ranges from checkpoint forward</li>
-<li>Fast sync downloads full state from checkpoint forward</li>
 <li>
 <p>Traditional peer wait (2-10 minutes) eliminated entirely</p>
 </li>
@@ -6471,8 +6468,7 @@
 </span><span id="__span-2-9"><a id="__codelineno-2-9" name="__codelineno-2-9" href="#__codelineno-2-9"></a><span class="o">[</span>WAIT<span class="o">]</span><span class="w"> </span><span class="m">8</span><span class="w"> </span>minutes<span class="w"> </span>elapsed...
 </span><span id="__span-2-10"><a id="__codelineno-2-10" name="__codelineno-2-10" href="#__codelineno-2-10"></a><span class="o">[</span>INFO<span class="o">]</span><span class="w"> </span>Querying<span class="w"> </span>peers<span class="w"> </span><span class="k">for</span><span class="w"> </span>pivot<span class="w"> </span>block<span class="w"> </span>consensus
 </span><span id="__span-2-11"><a id="__codelineno-2-11" name="__codelineno-2-11" href="#__codelineno-2-11"></a><span class="o">[</span>INFO<span class="o">]</span><span class="w"> </span>Pivot<span class="w"> </span>block<span class="w"> </span>selected:<span class="w"> </span><span class="m">19250000</span>
-</span><span id="__span-2-12"><a id="__codelineno-2-12" name="__codelineno-2-12" href="#__codelineno-2-12"></a><span class="o">[</span>INFO<span class="o">]</span><span class="w"> </span>Beginning<span class="w"> </span>fast<span class="w"> </span>sync<span class="w"> </span>from<span class="w"> </span>block<span class="w"> </span><span class="m">19250000</span>
-</span><span id="__span-2-13"><a id="__codelineno-2-13" name="__codelineno-2-13" href="#__codelineno-2-13"></a><span class="o">[</span>INFO<span class="o">]</span><span class="w"> </span>ETA:<span class="w"> </span><span class="m">8</span>-12<span class="w"> </span>hours
+</span><span id="__span-2-12"><a id="__codelineno-2-12" name="__codelineno-2-12" href="#__codelineno-2-12"></a><span class="o">[</span>INFO<span class="o">]</span><span class="w"> </span>Beginning<span class="w"> </span>SNAP<span class="w"> </span>sync<span class="w"> </span>from<span class="w"> </span>block<span class="w"> </span><span class="m">19250000</span>
 </span></code></pre></div></p>
 <p><strong>With Checkpoints + SNAP Sync (Rapid Sync):</strong>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>$<span class="w"> </span>./bin/fukuii<span class="w"> </span>etc
@@ -6494,9 +6490,7 @@
 </span><span id="__span-3-17"><a id="__codelineno-3-17" name="__codelineno-3-17" href="#__codelineno-3-17"></a><span class="o">[</span>INFO<span class="o">]</span><span class="w"> </span>ETA:<span class="w"> </span><span class="m">2</span>-3<span class="w"> </span>hours<span class="w"> </span><span class="o">(</span><span class="m">75</span>%<span class="w"> </span>faster<span class="w"> </span>than<span class="w"> </span>traditional<span class="w"> </span>sync<span class="o">)</span>
 </span></code></pre></div></p>
 <p><strong>Time Comparison:</strong>
-- <strong>Peer wait eliminated</strong>: 8 minutes → 0 seconds
-- <strong>Total sync time</strong>: 8-12 hours → 2-3 hours
-- <strong>Overall improvement</strong>: 75% faster time-to-sync</p>
+- <strong>Peer wait eliminated</strong>: 8 minutes → 0 seconds</p>
 <h3 id="scenario-2-private-network-rapid-sync">Scenario 2: Private Network Rapid Sync<a class="headerlink" href="#scenario-2-private-network-rapid-sync" title="Permanent link">&para;</a></h3>
 <p>For private/consortium networks with limited peers:</p>
 <p><strong>Configuration</strong> (<code>conf/private-network.conf</code>):
@@ -6521,12 +6515,8 @@
 </span><span id="__span-4-19"><a id="__codelineno-4-19" name="__codelineno-4-19" href="#__codelineno-4-19"></a>  sync {
 </span><span id="__span-4-20"><a id="__codelineno-4-20" name="__codelineno-4-20" href="#__codelineno-4-20"></a>    # Enable SNAP sync for fastest synchronization
 </span><span id="__span-4-21"><a id="__codelineno-4-21" name="__codelineno-4-21" href="#__codelineno-4-21"></a>    do-snap-sync = true
-</span><span id="__span-4-22"><a id="__codelineno-4-22" name="__codelineno-4-22" href="#__codelineno-4-22"></a>    do-fast-sync = false
-</span><span id="__span-4-23"><a id="__codelineno-4-23" name="__codelineno-4-23" href="#__codelineno-4-23"></a>
-</span><span id="__span-4-24"><a id="__codelineno-4-24" name="__codelineno-4-24" href="#__codelineno-4-24"></a>    # Lower peer requirements for private network
-</span><span id="__span-4-25"><a id="__codelineno-4-25" name="__codelineno-4-25" href="#__codelineno-4-25"></a>    min-peers-to-choose-pivot-block = 1
-</span><span id="__span-4-26"><a id="__codelineno-4-26" name="__codelineno-4-26" href="#__codelineno-4-26"></a>  }
-</span><span id="__span-4-27"><a id="__codelineno-4-27" name="__codelineno-4-27" href="#__codelineno-4-27"></a>}
+</span><span id="__span-4-22"><a id="__codelineno-4-22" name="__codelineno-4-22" href="#__codelineno-4-22"></a>  }
+</span><span id="__span-4-23"><a id="__codelineno-4-23" name="__codelineno-4-23" href="#__codelineno-4-23"></a>}
 </span></code></pre></div></p>
 <p><strong>Startup:</strong>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>$<span class="w"> </span>./bin/fukuii<span class="w"> </span>--config<span class="w"> </span>conf/private-network.conf
@@ -7124,10 +7114,10 @@ Additional requirements for checkpoint sources:
 </span></code></pre></div></p>
 <h3 id="issue-snap-sync-not-activating">Issue: SNAP Sync Not Activating<a class="headerlink" href="#issue-snap-sync-not-activating" title="Permanent link">&para;</a></h3>
 <p><strong>Symptom:</strong>
-<div class="language-text highlight"><pre><span></span><code><span id="__span-32-1"><a id="__codelineno-32-1" name="__codelineno-32-1" href="#__codelineno-32-1"></a>[INFO] Beginning fast sync from block 19250000
-</span><span id="__span-32-2"><a id="__codelineno-32-2" name="__codelineno-32-2" href="#__codelineno-32-2"></a>[WARN] SNAP sync not available, using fast sync
+<div class="language-text highlight"><pre><span></span><code><span id="__span-32-1"><a id="__codelineno-32-1" name="__codelineno-32-1" href="#__codelineno-32-1"></a>Entering dormant mode (attempt 1): no snap-capable peers after the capability grace period. All downloaded state preserved. Will retry after backoff.
 </span></code></pre></div></p>
-<p><strong>Cause</strong>: SNAP sync disabled or insufficient SNAP-capable peers.</p>
+<p><strong>Cause</strong>: No SNAP-capable peers. (With <code>do-snap-sync = false</code> SNAP never starts and the node
+imports blocks from genesis instead.)</p>
 <p><strong>Solution:</strong>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-33-1"><a id="__codelineno-33-1" name="__codelineno-33-1" href="#__codelineno-33-1"></a><span class="c1"># Check SNAP sync configuration</span>
 </span><span id="__span-33-2"><a id="__codelineno-33-2" name="__codelineno-33-2" href="#__codelineno-33-2"></a>grep<span class="w"> </span>-A<span class="w"> </span><span class="m">5</span><span class="w"> </span><span class="s2">"do-snap-sync"</span><span class="w"> </span>conf/base/sync.conf
@@ -7327,9 +7317,9 @@ Additional requirements for checkpoint sources:
 </span><span id="__span-47-7"><a id="__codelineno-47-7" name="__codelineno-47-7" href="#__codelineno-47-7"></a><span class="c1"># Restart node to retry healing with fresh peers</span>
 </span><span id="__span-47-8"><a id="__codelineno-47-8" name="__codelineno-47-8" href="#__codelineno-47-8"></a>systemctl<span class="w"> </span>restart<span class="w"> </span>fukuii
 </span><span id="__span-47-9"><a id="__codelineno-47-9" name="__codelineno-47-9" href="#__codelineno-47-9"></a>
-</span><span id="__span-47-10"><a id="__codelineno-47-10" name="__codelineno-47-10" href="#__codelineno-47-10"></a><span class="c1"># If healing repeatedly fails, fall back to fast sync</span>
-</span><span id="__span-47-11"><a id="__codelineno-47-11" name="__codelineno-47-11" href="#__codelineno-47-11"></a>sync.do-snap-sync<span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nb">false</span>
-</span><span id="__span-47-12"><a id="__codelineno-47-12" name="__codelineno-47-12" href="#__codelineno-47-12"></a>sync.do-fast-sync<span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nb">true</span>
+</span><span id="__span-47-10"><a id="__codelineno-47-10" name="__codelineno-47-10" href="#__codelineno-47-10"></a><span class="c1"># If healing repeatedly fails and the network has no snap-serving peers,</span>
+</span><span id="__span-47-11"><a id="__codelineno-47-11" name="__codelineno-47-11" href="#__codelineno-47-11"></a><span class="c1"># import every block from genesis instead (start from an empty database)</span>
+</span><span id="__span-47-12"><a id="__codelineno-47-12" name="__codelineno-47-12" href="#__codelineno-47-12"></a>sync.do-snap-sync<span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nb">false</span>
 </span></code></pre></div></p>
 <h3 id="issue-performance-monitoring">Issue: Performance Monitoring<a class="headerlink" href="#issue-performance-monitoring" title="Permanent link">&para;</a></h3>
 <p><strong>Monitor rapid sync performance in real-time:</strong></p>

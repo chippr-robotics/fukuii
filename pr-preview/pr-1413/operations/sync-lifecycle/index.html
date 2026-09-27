@@ -5516,8 +5516,8 @@
 <p>This page narrates the full journey of a fukuii node from first start to following the chain
 tip: which phases run, what each looks like in the logs and metrics, what "normal" is at each
 step, and roughly how long things take. It reflects the current implementation (SNAP sync
-with stack-trie account building, BFS state healing, ConcurrentFetch block pipelines,
-eth/68 + eth/69 wire protocols).</p>
+with stack-trie account building, BFS state healing, concurrent header/body/receipt
+download, eth/68 + eth/69 wire protocols).</p>
 <p>Companion pages: <a href="../state-healing-operations/">State Healing — Operator's Guide</a>,
 <a href="../monitoring-snap-sync/">Monitoring SNAP Sync</a>, and the
 <a href="../metrics-reference/">Metrics Reference</a>.</p>
@@ -5627,9 +5627,8 @@ import baseline is set at the pivot, and the chain-weight for the pivot is calib
 peers (a SNAP-synced node never executed the historical blocks, so cumulative difficulty is
 seeded from the network and accumulated normally from there).</p>
 <h2 id="5-regular-sync-phase-8-steady-state">5. Regular sync (phase 8 / steady state)<a class="headerlink" href="#5-regular-sync-phase-8-steady-state" title="Permanent link">&para;</a></h2>
-<p>Block-by-block import to the tip, through the concurrent fetch pipeline
-(<code>ConcurrentFetch</code> header/body/receipt queues with per-peer rate tracking). Catch-up imports
-in 50-block batches:</p>
+<p>Block-by-block import to the tip: the block fetcher requests headers and bodies through the
+peers client, which tracks per-peer response rates. Catch-up imports in 50-block batches:</p>
 <div class="language-text highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>Imported blocks 16176171 - 16176220
 </span></code></pre></div>
 <p>Reference point: a Mordor node ~180K blocks behind catches up at ~100+ blocks/s with a

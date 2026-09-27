@@ -1432,15 +1432,15 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#fast-sync-vs-full-sync" class="md-nav__link">
+  <a href="#snap-sync-vs-full-sync" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Fast Sync vs Full Sync
+        SNAP Sync vs Full Sync
       
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="Fast Sync vs Full Sync">
+    <nav class="md-nav" aria-label="SNAP Sync vs Full Sync">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
@@ -1455,10 +1455,21 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#fast-sync-default" class="md-nav__link">
+  <a href="#snap-sync-default" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Fast Sync (Default)
+        SNAP Sync (Default)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#fast-sync-removed" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Fast Sync (Removed)
       
     </span>
   </a>
@@ -6622,15 +6633,15 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#fast-sync-vs-full-sync" class="md-nav__link">
+  <a href="#snap-sync-vs-full-sync" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Fast Sync vs Full Sync
+        SNAP Sync vs Full Sync
       
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="Fast Sync vs Full Sync">
+    <nav class="md-nav" aria-label="SNAP Sync vs Full Sync">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
@@ -6645,10 +6656,21 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#fast-sync-default" class="md-nav__link">
+  <a href="#snap-sync-default" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Fast Sync (Default)
+        SNAP Sync (Default)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#fast-sync-removed" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Fast Sync (Removed)
       
     </span>
   </a>
@@ -7045,7 +7067,7 @@
 <li><a href="#archive-node">Archive Node</a></li>
 <li><a href="#boot-node">Boot Node</a></li>
 <li><a href="#mining-node">Mining Node</a></li>
-<li><a href="#fast-sync-vs-full-sync">Fast Sync vs Full Sync</a></li>
+<li><a href="#snap-sync-vs-full-sync">SNAP Sync vs Full Sync</a></li>
 <li><a href="#sync-strategy-comparison">Sync Strategy Comparison</a></li>
 <li><a href="#mode-selection-guide">Mode Selection Guide</a></li>
 <li><a href="#configuration-examples">Configuration Examples</a></li>
@@ -7066,9 +7088,9 @@
 </thead>
 <tbody>
 <tr>
-<td><strong>Full Node (Fast Sync)</strong></td>
+<td><strong>Full Node (SNAP Sync)</strong></td>
 <td>~400 GB</td>
-<td>Hours</td>
+<td>Hours to days</td>
 <td>Standard operation, RPC queries</td>
 <td>Recent blocks only (~64 blocks history)</td>
 </tr>
@@ -7109,7 +7131,7 @@
     A --&gt; D[Boot Node]
     A --&gt; E[Mining Node]
 
-    B --&gt; B1[Fast Sync&lt;br/&gt;Quick, Recent History]
+    B --&gt; B1[SNAP Sync&lt;br/&gt;Quick, Recent History]
     B --&gt; B2[Full Sync&lt;br/&gt;Slow, Full Validation]
 
     C --&gt; C1[Complete History&lt;br/&gt;Large Storage]
@@ -7127,12 +7149,12 @@
 <h3 id="characteristics">Characteristics<a class="headerlink" href="#characteristics" title="Permanent link">&para;</a></h3>
 <ul>
 <li><strong>Default Mode</strong>: No special configuration required</li>
-<li><strong>Sync Strategy</strong>: Fast sync (downloads state snapshot + recent blocks)</li>
+<li><strong>Sync Strategy</strong>: SNAP sync (downloads recent state from snap/1 peers, then imports blocks from there)</li>
 <li><strong>State Storage</strong>: Maintains current state with limited history (default: 64 blocks)</li>
 <li><strong>Pruning</strong>: Enabled (<code>basic</code> mode - reference count based pruning)</li>
 <li><strong>RPC Capabilities</strong>: Full current state queries, limited historical queries</li>
 <li><strong>Disk Requirements</strong>: ~400 GB (Ethereum Classic as of 2025)</li>
-<li><strong>Initial Sync Time</strong>: 2-8 hours (depends on network and hardware)</li>
+<li><strong>Initial Sync Time</strong>: hours on Mordor, a day or more on ETC mainnet (peer-bound; see <a href="../../operations/sync-lifecycle/">Sync Lifecycle</a>)</li>
 </ul>
 <h3 id="when-to-use">When to Use<a class="headerlink" href="#when-to-use" title="Permanent link">&para;</a></h3>
 <p>✅ <strong>Use Full Node when:</strong>
@@ -7148,10 +7170,10 @@
 <h3 id="configuration">Configuration<a class="headerlink" href="#configuration" title="Permanent link">&para;</a></h3>
 <p>Full node is the <strong>default configuration</strong>. No changes needed to <code>base.conf</code>:</p>
 <div class="language-text highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>fukuii {
-</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>  # Fast sync enabled (default)
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>  # SNAP sync enabled (default)
 </span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>  sync {
-</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>    do-fast-sync = true
-</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>    pivot-block-offset = 32
+</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>    do-snap-sync = true
+</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>    snap-sync.pivot-block-offset = 64
 </span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a>  }
 </span><span id="__span-0-7"><a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a>
 </span><span id="__span-0-8"><a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a>  # Basic pruning enabled (default)
@@ -7243,7 +7265,7 @@
 <ul>
 <li><strong>State Storage</strong>: Complete historical state for all blocks</li>
 <li><strong>Pruning</strong>: Disabled (<code>archive</code> mode)</li>
-<li><strong>Sync Strategy</strong>: Full sync from genesis (fast sync not compatible with archive mode)</li>
+<li><strong>Sync Strategy</strong>: Full sync from genesis (SNAP sync not compatible with archive mode)</li>
 <li><strong>RPC Capabilities</strong>: Full historical queries (e.g., <code>eth_getBalance</code> at any block)</li>
 <li><strong>Disk Requirements</strong>: ~600-800 GB initial, growing ~50-60 GB/year (ETC)</li>
 <li><strong>Initial Sync Time</strong>: 7-14 days (full validation from genesis)</li>
@@ -7265,29 +7287,28 @@
 <div class="language-text highlight"><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a>include "base.conf"
 </span><span id="__span-7-2"><a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a>
 </span><span id="__span-7-3"><a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a>fukuii {
-</span><span id="__span-7-4"><a id="__codelineno-7-4" name="__codelineno-7-4" href="#__codelineno-7-4"></a>  # Disable fast sync - archive requires full sync from genesis
+</span><span id="__span-7-4"><a id="__codelineno-7-4" name="__codelineno-7-4" href="#__codelineno-7-4"></a>  # Disable SNAP sync - archive requires full sync from genesis
 </span><span id="__span-7-5"><a id="__codelineno-7-5" name="__codelineno-7-5" href="#__codelineno-7-5"></a>  # Also optimize sync performance
 </span><span id="__span-7-6"><a id="__codelineno-7-6" name="__codelineno-7-6" href="#__codelineno-7-6"></a>  sync {
-</span><span id="__span-7-7"><a id="__codelineno-7-7" name="__codelineno-7-7" href="#__codelineno-7-7"></a>    do-fast-sync = false
-</span><span id="__span-7-8"><a id="__codelineno-7-8" name="__codelineno-7-8" href="#__codelineno-7-8"></a>    max-concurrent-requests = 20
-</span><span id="__span-7-9"><a id="__codelineno-7-9" name="__codelineno-7-9" href="#__codelineno-7-9"></a>    block-headers-per-request = 256
-</span><span id="__span-7-10"><a id="__codelineno-7-10" name="__codelineno-7-10" href="#__codelineno-7-10"></a>    block-bodies-per-request = 256
-</span><span id="__span-7-11"><a id="__codelineno-7-11" name="__codelineno-7-11" href="#__codelineno-7-11"></a>  }
-</span><span id="__span-7-12"><a id="__codelineno-7-12" name="__codelineno-7-12" href="#__codelineno-7-12"></a>
-</span><span id="__span-7-13"><a id="__codelineno-7-13" name="__codelineno-7-13" href="#__codelineno-7-13"></a>  # Archive mode: no pruning
-</span><span id="__span-7-14"><a id="__codelineno-7-14" name="__codelineno-7-14" href="#__codelineno-7-14"></a>  pruning {
-</span><span id="__span-7-15"><a id="__codelineno-7-15" name="__codelineno-7-15" href="#__codelineno-7-15"></a>    mode = "archive"
-</span><span id="__span-7-16"><a id="__codelineno-7-16" name="__codelineno-7-16" href="#__codelineno-7-16"></a>  }
-</span><span id="__span-7-17"><a id="__codelineno-7-17" name="__codelineno-7-17" href="#__codelineno-7-17"></a>
-</span><span id="__span-7-18"><a id="__codelineno-7-18" name="__codelineno-7-18" href="#__codelineno-7-18"></a>  # Optional: Increase peer limits for better connectivity during long sync
-</span><span id="__span-7-19"><a id="__codelineno-7-19" name="__codelineno-7-19" href="#__codelineno-7-19"></a>  network {
-</span><span id="__span-7-20"><a id="__codelineno-7-20" name="__codelineno-7-20" href="#__codelineno-7-20"></a>    peer {
-</span><span id="__span-7-21"><a id="__codelineno-7-21" name="__codelineno-7-21" href="#__codelineno-7-21"></a>      min-outgoing-peers = 30
-</span><span id="__span-7-22"><a id="__codelineno-7-22" name="__codelineno-7-22" href="#__codelineno-7-22"></a>      max-outgoing-peers = 100
-</span><span id="__span-7-23"><a id="__codelineno-7-23" name="__codelineno-7-23" href="#__codelineno-7-23"></a>      max-incoming-peers = 50
-</span><span id="__span-7-24"><a id="__codelineno-7-24" name="__codelineno-7-24" href="#__codelineno-7-24"></a>    }
-</span><span id="__span-7-25"><a id="__codelineno-7-25" name="__codelineno-7-25" href="#__codelineno-7-25"></a>  }
-</span><span id="__span-7-26"><a id="__codelineno-7-26" name="__codelineno-7-26" href="#__codelineno-7-26"></a>}
+</span><span id="__span-7-7"><a id="__codelineno-7-7" name="__codelineno-7-7" href="#__codelineno-7-7"></a>    do-snap-sync = false
+</span><span id="__span-7-8"><a id="__codelineno-7-8" name="__codelineno-7-8" href="#__codelineno-7-8"></a>    block-headers-per-request = 256
+</span><span id="__span-7-9"><a id="__codelineno-7-9" name="__codelineno-7-9" href="#__codelineno-7-9"></a>    block-bodies-per-request = 256
+</span><span id="__span-7-10"><a id="__codelineno-7-10" name="__codelineno-7-10" href="#__codelineno-7-10"></a>  }
+</span><span id="__span-7-11"><a id="__codelineno-7-11" name="__codelineno-7-11" href="#__codelineno-7-11"></a>
+</span><span id="__span-7-12"><a id="__codelineno-7-12" name="__codelineno-7-12" href="#__codelineno-7-12"></a>  # Archive mode: no pruning
+</span><span id="__span-7-13"><a id="__codelineno-7-13" name="__codelineno-7-13" href="#__codelineno-7-13"></a>  pruning {
+</span><span id="__span-7-14"><a id="__codelineno-7-14" name="__codelineno-7-14" href="#__codelineno-7-14"></a>    mode = "archive"
+</span><span id="__span-7-15"><a id="__codelineno-7-15" name="__codelineno-7-15" href="#__codelineno-7-15"></a>  }
+</span><span id="__span-7-16"><a id="__codelineno-7-16" name="__codelineno-7-16" href="#__codelineno-7-16"></a>
+</span><span id="__span-7-17"><a id="__codelineno-7-17" name="__codelineno-7-17" href="#__codelineno-7-17"></a>  # Optional: Increase peer limits for better connectivity during long sync
+</span><span id="__span-7-18"><a id="__codelineno-7-18" name="__codelineno-7-18" href="#__codelineno-7-18"></a>  network {
+</span><span id="__span-7-19"><a id="__codelineno-7-19" name="__codelineno-7-19" href="#__codelineno-7-19"></a>    peer {
+</span><span id="__span-7-20"><a id="__codelineno-7-20" name="__codelineno-7-20" href="#__codelineno-7-20"></a>      min-outgoing-peers = 30
+</span><span id="__span-7-21"><a id="__codelineno-7-21" name="__codelineno-7-21" href="#__codelineno-7-21"></a>      max-outgoing-peers = 100
+</span><span id="__span-7-22"><a id="__codelineno-7-22" name="__codelineno-7-22" href="#__codelineno-7-22"></a>      max-incoming-peers = 50
+</span><span id="__span-7-23"><a id="__codelineno-7-23" name="__codelineno-7-23" href="#__codelineno-7-23"></a>    }
+</span><span id="__span-7-24"><a id="__codelineno-7-24" name="__codelineno-7-24" href="#__codelineno-7-24"></a>  }
+</span><span id="__span-7-25"><a id="__codelineno-7-25" name="__codelineno-7-25" href="#__codelineno-7-25"></a>}
 </span></code></pre></div>
 <h3 id="starting-an-archive-node">Starting an Archive Node<a class="headerlink" href="#starting-an-archive-node" title="Permanent link">&para;</a></h3>
 <p><strong>Docker:</strong>
@@ -7301,14 +7322,14 @@
 </span><span id="__span-8-8"><a id="__codelineno-8-8" name="__codelineno-8-8" href="#__codelineno-8-8"></a><span class="w">  </span>-v<span class="w"> </span>fukuii-archive-conf:/app/conf<span class="w"> </span><span class="se">\</span>
 </span><span id="__span-8-9"><a id="__codelineno-8-9" name="__codelineno-8-9" href="#__codelineno-8-9"></a><span class="w">  </span>-e<span class="w"> </span><span class="nv">JAVA_OPTS</span><span class="o">=</span><span class="s2">"-Xms8g -Xmx16g"</span><span class="w"> </span><span class="se">\</span>
 </span><span id="__span-8-10"><a id="__codelineno-8-10" name="__codelineno-8-10" href="#__codelineno-8-10"></a><span class="w">  </span>ghcr.io/chippr-robotics/fukuii:latest<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-8-11"><a id="__codelineno-8-11" name="__codelineno-8-11" href="#__codelineno-8-11"></a><span class="w">  </span>-Dfukuii.sync.do-fast-sync<span class="o">=</span><span class="nb">false</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-8-11"><a id="__codelineno-8-11" name="__codelineno-8-11" href="#__codelineno-8-11"></a><span class="w">  </span>-Dfukuii.sync.do-snap-sync<span class="o">=</span><span class="nb">false</span><span class="w"> </span><span class="se">\</span>
 </span><span id="__span-8-12"><a id="__codelineno-8-12" name="__codelineno-8-12" href="#__codelineno-8-12"></a><span class="w">  </span>-Dfukuii.pruning.mode<span class="o">=</span>archive
 </span></code></pre></div></p>
 <p><strong>From Distribution:</strong>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-9-1"><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a><span class="c1"># Start with archive configuration</span>
 </span><span id="__span-9-2"><a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a>./bin/fukuii<span class="w"> </span><span class="se">\</span>
 </span><span id="__span-9-3"><a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a><span class="w">  </span>-J-Xms8g<span class="w"> </span>-J-Xmx16g<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-9-4"><a id="__codelineno-9-4" name="__codelineno-9-4" href="#__codelineno-9-4"></a><span class="w">  </span>-Dfukuii.sync.do-fast-sync<span class="o">=</span><span class="nb">false</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-9-4"><a id="__codelineno-9-4" name="__codelineno-9-4" href="#__codelineno-9-4"></a><span class="w">  </span>-Dfukuii.sync.do-snap-sync<span class="o">=</span><span class="nb">false</span><span class="w"> </span><span class="se">\</span>
 </span><span id="__span-9-5"><a id="__codelineno-9-5" name="__codelineno-9-5" href="#__codelineno-9-5"></a><span class="w">  </span>-Dfukuii.pruning.mode<span class="o">=</span>archive<span class="w"> </span><span class="se">\</span>
 </span><span id="__span-9-6"><a id="__codelineno-9-6" name="__codelineno-9-6" href="#__codelineno-9-6"></a><span class="w">  </span>etc
 </span></code></pre></div></p>
@@ -7397,7 +7418,7 @@
 - <strong>In source:</strong> <code>src/main/resources/conf/bootnode.conf</code>
 - <strong>In distribution:</strong> <code>conf/bootnode.conf</code></p>
 <p>The bootnode configuration includes:
-- Blockchain synchronization disabled
+- SNAP sync disabled
 - RPC endpoints disabled
 - Maximized peer limits (500 outgoing, 200 incoming)
 - Aggressive discovery settings (30s scan interval, 64 bucket size)
@@ -7412,9 +7433,9 @@
 <div class="language-text highlight"><pre><span></span><code><span id="__span-13-1"><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a>include "app.conf"
 </span><span id="__span-13-2"><a id="__codelineno-13-2" name="__codelineno-13-2" href="#__codelineno-13-2"></a>
 </span><span id="__span-13-3"><a id="__codelineno-13-3" name="__codelineno-13-3" href="#__codelineno-13-3"></a>fukuii {
-</span><span id="__span-13-4"><a id="__codelineno-13-4" name="__codelineno-13-4" href="#__codelineno-13-4"></a>  # Disable blockchain synchronization
+</span><span id="__span-13-4"><a id="__codelineno-13-4" name="__codelineno-13-4" href="#__codelineno-13-4"></a>  # Keep SNAP's state download off (bootnode.conf does the same)
 </span><span id="__span-13-5"><a id="__codelineno-13-5" name="__codelineno-13-5" href="#__codelineno-13-5"></a>  sync {
-</span><span id="__span-13-6"><a id="__codelineno-13-6" name="__codelineno-13-6" href="#__codelineno-13-6"></a>    do-fast-sync = false
+</span><span id="__span-13-6"><a id="__codelineno-13-6" name="__codelineno-13-6" href="#__codelineno-13-6"></a>    do-snap-sync = false
 </span><span id="__span-13-7"><a id="__codelineno-13-7" name="__codelineno-13-7" href="#__codelineno-13-7"></a>  }
 </span><span id="__span-13-8"><a id="__codelineno-13-8" name="__codelineno-13-8" href="#__codelineno-13-8"></a>
 </span><span id="__span-13-9"><a id="__codelineno-13-9" name="__codelineno-13-9" href="#__codelineno-13-9"></a>  # Disable RPC (bootnodes don't serve RPC)
@@ -7481,7 +7502,7 @@
 </span><span id="__span-16-6"><a id="__codelineno-16-6" name="__codelineno-16-6" href="#__codelineno-16-6"></a><span class="w">  </span>-v<span class="w"> </span>fukuii-bootnode-data:/app/data<span class="w"> </span><span class="se">\</span>
 </span><span id="__span-16-7"><a id="__codelineno-16-7" name="__codelineno-16-7" href="#__codelineno-16-7"></a><span class="w">  </span>-e<span class="w"> </span><span class="nv">JAVA_OPTS</span><span class="o">=</span><span class="s2">"-Xms2g -Xmx4g"</span><span class="w"> </span><span class="se">\</span>
 </span><span id="__span-16-8"><a id="__codelineno-16-8" name="__codelineno-16-8" href="#__codelineno-16-8"></a><span class="w">  </span>ghcr.io/chippr-robotics/fukuii:latest<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-16-9"><a id="__codelineno-16-9" name="__codelineno-16-9" href="#__codelineno-16-9"></a><span class="w">  </span>-Dfukuii.sync.do-fast-sync<span class="o">=</span><span class="nb">false</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-16-9"><a id="__codelineno-16-9" name="__codelineno-16-9" href="#__codelineno-16-9"></a><span class="w">  </span>-Dfukuii.sync.do-snap-sync<span class="o">=</span><span class="nb">false</span><span class="w"> </span><span class="se">\</span>
 </span><span id="__span-16-10"><a id="__codelineno-16-10" name="__codelineno-16-10" href="#__codelineno-16-10"></a><span class="w">  </span>-Dfukuii.network.rpc.http.enabled<span class="o">=</span><span class="nb">false</span><span class="w"> </span><span class="se">\</span>
 </span><span id="__span-16-11"><a id="__codelineno-16-11" name="__codelineno-16-11" href="#__codelineno-16-11"></a><span class="w">  </span>-Dfukuii.network.peer.max-outgoing-peers<span class="o">=</span><span class="m">500</span><span class="w"> </span><span class="se">\</span>
 </span><span id="__span-16-12"><a id="__codelineno-16-12" name="__codelineno-16-12" href="#__codelineno-16-12"></a><span class="w">  </span>-Dfukuii.network.peer.max-incoming-peers<span class="o">=</span><span class="m">200</span><span class="w"> </span><span class="se">\</span>
@@ -7490,7 +7511,7 @@
 <p><strong>Alternative: From Distribution with Inline Flags:</strong>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-17-1"><a id="__codelineno-17-1" name="__codelineno-17-1" href="#__codelineno-17-1"></a>./bin/fukuii<span class="w"> </span><span class="se">\</span>
 </span><span id="__span-17-2"><a id="__codelineno-17-2" name="__codelineno-17-2" href="#__codelineno-17-2"></a><span class="w">  </span>-J-Xms2g<span class="w"> </span>-J-Xmx4g<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-17-3"><a id="__codelineno-17-3" name="__codelineno-17-3" href="#__codelineno-17-3"></a><span class="w">  </span>-Dfukuii.sync.do-fast-sync<span class="o">=</span><span class="nb">false</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-17-3"><a id="__codelineno-17-3" name="__codelineno-17-3" href="#__codelineno-17-3"></a><span class="w">  </span>-Dfukuii.sync.do-snap-sync<span class="o">=</span><span class="nb">false</span><span class="w"> </span><span class="se">\</span>
 </span><span id="__span-17-4"><a id="__codelineno-17-4" name="__codelineno-17-4" href="#__codelineno-17-4"></a><span class="w">  </span>-Dfukuii.network.rpc.http.enabled<span class="o">=</span><span class="nb">false</span><span class="w"> </span><span class="se">\</span>
 </span><span id="__span-17-5"><a id="__codelineno-17-5" name="__codelineno-17-5" href="#__codelineno-17-5"></a><span class="w">  </span>-Dfukuii.network.peer.max-outgoing-peers<span class="o">=</span><span class="m">500</span><span class="w"> </span><span class="se">\</span>
 </span><span id="__span-17-6"><a id="__codelineno-17-6" name="__codelineno-17-6" href="#__codelineno-17-6"></a><span class="w">  </span>-Dfukuii.network.peer.max-incoming-peers<span class="o">=</span><span class="m">200</span><span class="w"> </span><span class="se">\</span>
@@ -7568,7 +7589,7 @@ Others can add your boot node to their configuration:</p>
 <li><strong>Block Production</strong>: Creates and proposes new blocks</li>
 <li><strong>Consensus Participation</strong>: Competes in PoW mining</li>
 <li><strong>State Requirements</strong>: Requires full current state</li>
-<li><strong>Sync Strategy</strong>: Fast sync acceptable, but must stay synchronized</li>
+<li><strong>Sync Strategy</strong>: SNAP sync acceptable, but must stay synchronized</li>
 <li><strong>Resource Usage</strong>: High CPU usage during mining</li>
 </ul>
 <h3 id="when-to-use_3">When to Use<a class="headerlink" href="#when-to-use_3" title="Permanent link">&para;</a></h3>
@@ -7605,9 +7626,9 @@ Others can add your boot node to their configuration:</p>
 </span><span id="__span-23-20"><a id="__codelineno-23-20" name="__codelineno-23-20" href="#__codelineno-23-20"></a>    protocol = "pow"
 </span><span id="__span-23-21"><a id="__codelineno-23-21" name="__codelineno-23-21" href="#__codelineno-23-21"></a>  }
 </span><span id="__span-23-22"><a id="__codelineno-23-22" name="__codelineno-23-22" href="#__codelineno-23-22"></a>
-</span><span id="__span-23-23"><a id="__codelineno-23-23" name="__codelineno-23-23" href="#__codelineno-23-23"></a>  # Ensure fast sync for quick start
+</span><span id="__span-23-23"><a id="__codelineno-23-23" name="__codelineno-23-23" href="#__codelineno-23-23"></a>  # SNAP sync for a quick start (the default)
 </span><span id="__span-23-24"><a id="__codelineno-23-24" name="__codelineno-23-24" href="#__codelineno-23-24"></a>  sync {
-</span><span id="__span-23-25"><a id="__codelineno-23-25" name="__codelineno-23-25" href="#__codelineno-23-25"></a>    do-fast-sync = true
+</span><span id="__span-23-25"><a id="__codelineno-23-25" name="__codelineno-23-25" href="#__codelineno-23-25"></a>    do-snap-sync = true
 </span><span id="__span-23-26"><a id="__codelineno-23-26" name="__codelineno-23-26" href="#__codelineno-23-26"></a>  }
 </span><span id="__span-23-27"><a id="__codelineno-23-27" name="__codelineno-23-27" href="#__codelineno-23-27"></a>
 </span><span id="__span-23-28"><a id="__codelineno-23-28" name="__codelineno-23-28" href="#__codelineno-23-28"></a>  # Use basic pruning (mining needs current state, not full history)
@@ -7736,14 +7757,14 @@ Instead of solo mining, consider joining a mining pool for more consistent rewar
 </tr>
 </tbody>
 </table>
-<h2 id="fast-sync-vs-full-sync">Fast Sync vs Full Sync<a class="headerlink" href="#fast-sync-vs-full-sync" title="Permanent link">&para;</a></h2>
+<h2 id="snap-sync-vs-full-sync">SNAP Sync vs Full Sync<a class="headerlink" href="#snap-sync-vs-full-sync" title="Permanent link">&para;</a></h2>
 <p>Fukuii supports two synchronization strategies that affect initial sync time and validation approach.</p>
 <h3 id="sync-strategy-comparison">Sync Strategy Comparison<a class="headerlink" href="#sync-strategy-comparison" title="Permanent link">&para;</a></h3>
 <pre class="mermaid"><code>graph TB
-    subgraph "Fast Sync"
-        A[Start] --&gt; B[Download Recent State Snapshot]
-        B --&gt; C[Download Recent Block Headers]
-        C --&gt; D[Download &amp; Validate Recent Blocks]
+    subgraph "SNAP Sync"
+        A[Start] --&gt; B[Pick a Pivot ~64 Blocks Behind the Head]
+        B --&gt; C[Download Account, Storage &amp; Bytecode Ranges]
+        C --&gt; D[Heal the State Trie to the Pivot Root]
         D --&gt; E[Continue Regular Sync]
         E --&gt; F[Synced]
     end
@@ -7760,25 +7781,47 @@ Instead of solo mining, consider joining a mining pool for more consistent rewar
     style G fill:#FFD700
     style F fill:#87CEEB
     style L fill:#87CEEB</code></pre>
-<h3 id="fast-sync-default">Fast Sync (Default)<a class="headerlink" href="#fast-sync-default" title="Permanent link">&para;</a></h3>
+<h3 id="snap-sync-default">SNAP Sync (Default)<a class="headerlink" href="#snap-sync-default" title="Permanent link">&para;</a></h3>
 <p><strong>How It Works:</strong>
-1. Downloads a state snapshot from near the chain tip (~32 blocks behind)
-2. Downloads recent block headers and bodies
-3. Validates the snapshot and recent blocks
+1. Picks a pivot block ~64 blocks behind the network head (<code>snap-sync.pivot-block-offset</code>)
+2. Downloads the pivot's state from snap/1 peers as account, storage and bytecode ranges, and the chain's headers, bodies and receipts alongside
+3. Heals the state trie until it matches the pivot's state root, then validates it
 4. Continues with regular synchronization</p>
 <p><strong>Configuration:</strong>
-<div class="language-text highlight"><pre><span></span><code><span id="__span-30-1"><a id="__codelineno-30-1" name="__codelineno-30-1" href="#__codelineno-30-1"></a>fukuii.sync.do-fast-sync = true
+<div class="language-text highlight"><pre><span></span><code><span id="__span-30-1"><a id="__codelineno-30-1" name="__codelineno-30-1" href="#__codelineno-30-1"></a>fukuii.sync.do-snap-sync = true
 </span></code></pre></div></p>
 <p><strong>Characteristics:</strong>
-- ⚡ <strong>Fast</strong>: 2-8 hours to sync
-- 💾 <strong>Efficient</strong>: Downloads state snapshot, not all historical transactions
-- ✅ <strong>Secure</strong>: Validates state snapshot cryptographically
-- 📊 <strong>Limited History</strong>: Only maintains ~64 blocks of state history</p>
+- ⚡ <strong>Fast</strong>: hours on Mordor, a day or more on ETC mainnet
+- 💾 <strong>Efficient</strong>: Downloads state, not all historical transactions
+- ✅ <strong>Secure</strong>: Every range is checked against its Merkle proof and the pivot's state root
+- 📊 <strong>Limited History</strong>: Only maintains ~64 blocks of state history
+- 🔌 <strong>Needs snap/1 peers</strong>: with none reachable, SNAP goes dormant and retries on a fresh pivot (3 minutes, doubling to a 20-minute cap). On a network with no snap-serving peers, use full sync.</p>
 <p><strong>When to Use:</strong>
 - Default for most deployments
 - When fast initial sync is priority
 - Standard full node operation
 - Resource-efficient setup</p>
+<h3 id="fast-sync-removed">Fast Sync (Removed)<a class="headerlink" href="#fast-sync-removed" title="Permanent link">&para;</a></h3>
+<p>Fast sync is gone: it could not finish on today's networks (eth/67 and later peers do not serve
+<code>GetNodeData</code>), no other client supports it, and SNAP sync replaces it. What an upgraded node does:</p>
+<ul>
+<li><strong><code>fukuii.sync.do-fast-sync</code> and the other fast-sync keys are ignored.</strong> The node logs one warning
+  per key it finds and starts normally. The keys are listed in the
+  <a href="https://github.com/chippr-robotics/fukuii/blob/main/CHANGELOG.md">CHANGELOG</a>.</li>
+<li><strong>If you set <code>do-fast-sync = false</code> to sync from genesis</strong> (an archive node, for example), set
+  <code>fukuii.sync.do-snap-sync = false</code> instead. Otherwise the node uses SNAP sync.</li>
+<li><strong>A node that was part-way through fast sync</strong> starts SNAP sync on its next start, with the pivot
+  kept above the block fast sync had reached (that block has no state behind it). The floor
+  survives restarts and is cleared when SNAP completes; fast sync's progress record is deleted. With
+  <code>do-snap-sync = false</code> the node starts regular sync and logs an error: regular sync fetches the
+  missing state node by node and, if peers cannot serve it, re-syncs with SNAP anyway.</li>
+<li><strong>A node where fast sync finished earlier</strong> continues with regular sync, even with
+  <code>do-snap-sync</code> on, unless SNAP has progress there (then SNAP resumes). If fast sync left gaps in
+  the state, regular sync fetches them from peers and, failing that, re-syncs with SNAP from a newer
+  pivot.</li>
+<li><strong><code>fukuii_resetFastSync</code> and <code>fukuii_restartFastSync</code> were removed</strong>, along with the
+  <code>app_fastsync_*</code> metrics.</li>
+</ul>
 <h3 id="full-sync">Full Sync<a class="headerlink" href="#full-sync" title="Permanent link">&para;</a></h3>
 <p><strong>How It Works:</strong>
 1. Downloads all block headers from genesis to current
@@ -7786,7 +7829,7 @@ Instead of solo mining, consider joining a mining pool for more consistent rewar
 3. Executes every transaction from genesis
 4. Builds complete state by replaying entire chain history</p>
 <p><strong>Configuration:</strong>
-<div class="language-text highlight"><pre><span></span><code><span id="__span-31-1"><a id="__codelineno-31-1" name="__codelineno-31-1" href="#__codelineno-31-1"></a>fukuii.sync.do-fast-sync = false
+<div class="language-text highlight"><pre><span></span><code><span id="__span-31-1"><a id="__codelineno-31-1" name="__codelineno-31-1" href="#__codelineno-31-1"></a>fukuii.sync.do-snap-sync = false
 </span></code></pre></div></p>
 <p><strong>Characteristics:</strong>
 - 🐢 <strong>Slow</strong>: 7-14 days to sync
@@ -7799,31 +7842,30 @@ Instead of solo mining, consider joining a mining pool for more consistent rewar
 - Research and auditing purposes
 - When time is not critical</p>
 <h3 id="sync-mode-configuration-examples">Sync Mode Configuration Examples<a class="headerlink" href="#sync-mode-configuration-examples" title="Permanent link">&para;</a></h3>
-<p><strong>Fast Sync (Default):</strong>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-32-1"><a id="__codelineno-32-1" name="__codelineno-32-1" href="#__codelineno-32-1"></a>./bin/fukuii<span class="w"> </span>etc<span class="w">  </span><span class="c1"># Fast sync enabled by default</span>
+<p><strong>SNAP Sync (Default):</strong>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-32-1"><a id="__codelineno-32-1" name="__codelineno-32-1" href="#__codelineno-32-1"></a>./bin/fukuii<span class="w"> </span>etc<span class="w">  </span><span class="c1"># SNAP sync enabled by default</span>
 </span></code></pre></div></p>
 <p><strong>Full Sync:</strong>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-33-1"><a id="__codelineno-33-1" name="__codelineno-33-1" href="#__codelineno-33-1"></a>./bin/fukuii<span class="w"> </span>-Dfukuii.sync.do-fast-sync<span class="o">=</span><span class="nb">false</span><span class="w"> </span>etc
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-33-1"><a id="__codelineno-33-1" name="__codelineno-33-1" href="#__codelineno-33-1"></a>./bin/fukuii<span class="w"> </span>-Dfukuii.sync.do-snap-sync<span class="o">=</span><span class="nb">false</span><span class="w"> </span>etc
 </span></code></pre></div></p>
-<p><strong>Fast Sync with Custom Pivot Offset:</strong>
+<p><strong>SNAP Sync with Custom Pivot Offset:</strong>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-34-1"><a id="__codelineno-34-1" name="__codelineno-34-1" href="#__codelineno-34-1"></a>./bin/fukuii<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-34-2"><a id="__codelineno-34-2" name="__codelineno-34-2" href="#__codelineno-34-2"></a><span class="w">  </span>-Dfukuii.sync.do-fast-sync<span class="o">=</span><span class="nb">true</span><span class="w"> </span><span class="se">\</span>
-</span><span id="__span-34-3"><a id="__codelineno-34-3" name="__codelineno-34-3" href="#__codelineno-34-3"></a><span class="w">  </span>-Dfukuii.sync.pivot-block-offset<span class="o">=</span><span class="m">64</span><span class="w"> </span><span class="se">\</span>
-</span><span id="__span-34-4"><a id="__codelineno-34-4" name="__codelineno-34-4" href="#__codelineno-34-4"></a><span class="w">  </span>etc
+</span><span id="__span-34-2"><a id="__codelineno-34-2" name="__codelineno-34-2" href="#__codelineno-34-2"></a><span class="w">  </span>-Dfukuii.sync.snap-sync.pivot-block-offset<span class="o">=</span><span class="m">128</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-34-3"><a id="__codelineno-34-3" name="__codelineno-34-3" href="#__codelineno-34-3"></a><span class="w">  </span>etc
 </span></code></pre></div></p>
 <h2 id="sync-strategy-comparison_1">Sync Strategy Comparison<a class="headerlink" href="#sync-strategy-comparison_1" title="Permanent link">&para;</a></h2>
 <table>
 <thead>
 <tr>
 <th>Aspect</th>
-<th>Fast Sync</th>
+<th>SNAP Sync</th>
 <th>Full Sync</th>
 </tr>
 </thead>
 <tbody>
 <tr>
 <td><strong>Initial Sync Time</strong></td>
-<td>2-8 hours</td>
+<td>Hours to days</td>
 <td>7-14 days</td>
 </tr>
 <tr>
@@ -7833,7 +7875,7 @@ Instead of solo mining, consider joining a mining pool for more consistent rewar
 </tr>
 <tr>
 <td><strong>Network Bandwidth</strong></td>
-<td>~200-300 GB</td>
+<td>State plus chain data</td>
 <td>~400 GB+</td>
 </tr>
 <tr>
@@ -7848,7 +7890,7 @@ Instead of solo mining, consider joining a mining pool for more consistent rewar
 </tr>
 <tr>
 <td><strong>Security Model</strong></td>
-<td>Cryptographic snapshot validation</td>
+<td>Merkle-proof-checked state at the pivot</td>
 <td>Full transaction execution</td>
 </tr>
 <tr>
@@ -7874,15 +7916,17 @@ Instead of solo mining, consider joining a mining pool for more consistent rewar
     participant P as Peer Nodes
     participant DB as Local Database
 
-    Note over N,P: Fast Sync Process
+    Note over N,P: SNAP Sync Process
 
     N-&gt;&gt;P: Request pivot block (tip - offset)
     P-&gt;&gt;N: Pivot block header
-    N-&gt;&gt;P: Request state snapshot at pivot
-    P-&gt;&gt;N: State snapshot data
-    N-&gt;&gt;DB: Validate and store state
-    N-&gt;&gt;P: Request recent blocks
-    P-&gt;&gt;N: Block headers and bodies
+    N-&gt;&gt;P: GetAccountRange / GetStorageRanges / GetByteCodes at the pivot root
+    P-&gt;&gt;N: State ranges with Merkle proofs
+    N-&gt;&gt;DB: Verify proofs and store state
+    N-&gt;&gt;P: GetTrieNodes for nodes still missing (healing)
+    P-&gt;&gt;N: Trie nodes
+    N-&gt;&gt;P: Request headers, bodies and receipts
+    P-&gt;&gt;N: Chain data
     N-&gt;&gt;DB: Validate and store blocks
 
     Note over N: Switch to regular sync
@@ -7902,12 +7946,12 @@ Instead of solo mining, consider joining a mining pool for more consistent rewar
     A --&gt; D{Mine blocks?}
 
     B --&gt;|Yes| E[Archive Node&lt;br/&gt;~800 GB, 7-14 days sync]
-    B --&gt;|No| F[Full Node&lt;br/&gt;~400 GB, 2-8 hours sync]
+    B --&gt;|No| F[Full Node&lt;br/&gt;~400 GB, hours-days sync]
 
     C --&gt;|No| G[Boot Node&lt;br/&gt;~1 GB, minutes]
     C --&gt;|Yes| B
 
-    D --&gt;|Yes| H[Mining Node&lt;br/&gt;~400 GB, 2-8 hours sync&lt;br/&gt;+ mining hardware]
+    D --&gt;|Yes| H[Mining Node&lt;br/&gt;~400 GB, hours-days sync&lt;br/&gt;+ mining hardware]
     D --&gt;|No| C
 
     style E fill:#FFD700
@@ -7926,12 +7970,12 @@ Instead of solo mining, consider joining a mining pool for more consistent rewar
 <tbody>
 <tr>
 <td><strong>Personal Wallet</strong></td>
-<td>Full Node (Fast Sync)</td>
+<td>Full Node (SNAP Sync)</td>
 <td>Quick sync, minimal resources, full functionality</td>
 </tr>
 <tr>
 <td><strong>dApp Backend</strong></td>
-<td>Full Node (Fast Sync)</td>
+<td>Full Node (SNAP Sync)</td>
 <td>Current state queries, reasonable resources</td>
 </tr>
 <tr>
@@ -7951,7 +7995,7 @@ Instead of solo mining, consider joining a mining pool for more consistent rewar
 </tr>
 <tr>
 <td><strong>Mining Operation</strong></td>
-<td>Mining Node (Fast Sync)</td>
+<td>Mining Node (SNAP Sync)</td>
 <td>Quick start, focus on mining</td>
 </tr>
 <tr>
@@ -7961,7 +8005,7 @@ Instead of solo mining, consider joining a mining pool for more consistent rewar
 </tr>
 <tr>
 <td><strong>Development/Testing</strong></td>
-<td>Full Node (Fast Sync)</td>
+<td>Full Node (SNAP Sync)</td>
 <td>Quick setup for development</td>
 </tr>
 <tr>
@@ -7979,36 +8023,35 @@ Instead of solo mining, consider joining a mining pool for more consistent rewar
 </span><span id="__span-35-3"><a id="__codelineno-35-3" name="__codelineno-35-3" href="#__codelineno-35-3"></a>fukuii {
 </span><span id="__span-35-4"><a id="__codelineno-35-4" name="__codelineno-35-4" href="#__codelineno-35-4"></a>  # Network selection is in base.conf via include chain
 </span><span id="__span-35-5"><a id="__codelineno-35-5" name="__codelineno-35-5" href="#__codelineno-35-5"></a>
-</span><span id="__span-35-6"><a id="__codelineno-35-6" name="__codelineno-35-6" href="#__codelineno-35-6"></a>  # Fast sync for quick start
+</span><span id="__span-35-6"><a id="__codelineno-35-6" name="__codelineno-35-6" href="#__codelineno-35-6"></a>  # SNAP sync for a quick start (the default)
 </span><span id="__span-35-7"><a id="__codelineno-35-7" name="__codelineno-35-7" href="#__codelineno-35-7"></a>  sync {
-</span><span id="__span-35-8"><a id="__codelineno-35-8" name="__codelineno-35-8" href="#__codelineno-35-8"></a>    do-fast-sync = true
-</span><span id="__span-35-9"><a id="__codelineno-35-9" name="__codelineno-35-9" href="#__codelineno-35-9"></a>    pivot-block-offset = 32
-</span><span id="__span-35-10"><a id="__codelineno-35-10" name="__codelineno-35-10" href="#__codelineno-35-10"></a>  }
-</span><span id="__span-35-11"><a id="__codelineno-35-11" name="__codelineno-35-11" href="#__codelineno-35-11"></a>
-</span><span id="__span-35-12"><a id="__codelineno-35-12" name="__codelineno-35-12" href="#__codelineno-35-12"></a>  # Basic pruning
-</span><span id="__span-35-13"><a id="__codelineno-35-13" name="__codelineno-35-13" href="#__codelineno-35-13"></a>  pruning {
-</span><span id="__span-35-14"><a id="__codelineno-35-14" name="__codelineno-35-14" href="#__codelineno-35-14"></a>    mode = "basic"
-</span><span id="__span-35-15"><a id="__codelineno-35-15" name="__codelineno-35-15" href="#__codelineno-35-15"></a>    history = 64
-</span><span id="__span-35-16"><a id="__codelineno-35-16" name="__codelineno-35-16" href="#__codelineno-35-16"></a>  }
-</span><span id="__span-35-17"><a id="__codelineno-35-17" name="__codelineno-35-17" href="#__codelineno-35-17"></a>
-</span><span id="__span-35-18"><a id="__codelineno-35-18" name="__codelineno-35-18" href="#__codelineno-35-18"></a>  # Standard peer configuration
-</span><span id="__span-35-19"><a id="__codelineno-35-19" name="__codelineno-35-19" href="#__codelineno-35-19"></a>  network {
-</span><span id="__span-35-20"><a id="__codelineno-35-20" name="__codelineno-35-20" href="#__codelineno-35-20"></a>    peer {
-</span><span id="__span-35-21"><a id="__codelineno-35-21" name="__codelineno-35-21" href="#__codelineno-35-21"></a>      min-outgoing-peers = 20
-</span><span id="__span-35-22"><a id="__codelineno-35-22" name="__codelineno-35-22" href="#__codelineno-35-22"></a>      max-outgoing-peers = 50
-</span><span id="__span-35-23"><a id="__codelineno-35-23" name="__codelineno-35-23" href="#__codelineno-35-23"></a>      max-incoming-peers = 30
-</span><span id="__span-35-24"><a id="__codelineno-35-24" name="__codelineno-35-24" href="#__codelineno-35-24"></a>    }
-</span><span id="__span-35-25"><a id="__codelineno-35-25" name="__codelineno-35-25" href="#__codelineno-35-25"></a>
-</span><span id="__span-35-26"><a id="__codelineno-35-26" name="__codelineno-35-26" href="#__codelineno-35-26"></a>    rpc {
-</span><span id="__span-35-27"><a id="__codelineno-35-27" name="__codelineno-35-27" href="#__codelineno-35-27"></a>      http {
-</span><span id="__span-35-28"><a id="__codelineno-35-28" name="__codelineno-35-28" href="#__codelineno-35-28"></a>        enabled = true
-</span><span id="__span-35-29"><a id="__codelineno-35-29" name="__codelineno-35-29" href="#__codelineno-35-29"></a>        interface = "localhost"
-</span><span id="__span-35-30"><a id="__codelineno-35-30" name="__codelineno-35-30" href="#__codelineno-35-30"></a>        port = 8546
-</span><span id="__span-35-31"><a id="__codelineno-35-31" name="__codelineno-35-31" href="#__codelineno-35-31"></a>      }
-</span><span id="__span-35-32"><a id="__codelineno-35-32" name="__codelineno-35-32" href="#__codelineno-35-32"></a>      apis = "eth,web3,net"
-</span><span id="__span-35-33"><a id="__codelineno-35-33" name="__codelineno-35-33" href="#__codelineno-35-33"></a>    }
-</span><span id="__span-35-34"><a id="__codelineno-35-34" name="__codelineno-35-34" href="#__codelineno-35-34"></a>  }
-</span><span id="__span-35-35"><a id="__codelineno-35-35" name="__codelineno-35-35" href="#__codelineno-35-35"></a>}
+</span><span id="__span-35-8"><a id="__codelineno-35-8" name="__codelineno-35-8" href="#__codelineno-35-8"></a>    do-snap-sync = true
+</span><span id="__span-35-9"><a id="__codelineno-35-9" name="__codelineno-35-9" href="#__codelineno-35-9"></a>  }
+</span><span id="__span-35-10"><a id="__codelineno-35-10" name="__codelineno-35-10" href="#__codelineno-35-10"></a>
+</span><span id="__span-35-11"><a id="__codelineno-35-11" name="__codelineno-35-11" href="#__codelineno-35-11"></a>  # Basic pruning
+</span><span id="__span-35-12"><a id="__codelineno-35-12" name="__codelineno-35-12" href="#__codelineno-35-12"></a>  pruning {
+</span><span id="__span-35-13"><a id="__codelineno-35-13" name="__codelineno-35-13" href="#__codelineno-35-13"></a>    mode = "basic"
+</span><span id="__span-35-14"><a id="__codelineno-35-14" name="__codelineno-35-14" href="#__codelineno-35-14"></a>    history = 64
+</span><span id="__span-35-15"><a id="__codelineno-35-15" name="__codelineno-35-15" href="#__codelineno-35-15"></a>  }
+</span><span id="__span-35-16"><a id="__codelineno-35-16" name="__codelineno-35-16" href="#__codelineno-35-16"></a>
+</span><span id="__span-35-17"><a id="__codelineno-35-17" name="__codelineno-35-17" href="#__codelineno-35-17"></a>  # Standard peer configuration
+</span><span id="__span-35-18"><a id="__codelineno-35-18" name="__codelineno-35-18" href="#__codelineno-35-18"></a>  network {
+</span><span id="__span-35-19"><a id="__codelineno-35-19" name="__codelineno-35-19" href="#__codelineno-35-19"></a>    peer {
+</span><span id="__span-35-20"><a id="__codelineno-35-20" name="__codelineno-35-20" href="#__codelineno-35-20"></a>      min-outgoing-peers = 20
+</span><span id="__span-35-21"><a id="__codelineno-35-21" name="__codelineno-35-21" href="#__codelineno-35-21"></a>      max-outgoing-peers = 50
+</span><span id="__span-35-22"><a id="__codelineno-35-22" name="__codelineno-35-22" href="#__codelineno-35-22"></a>      max-incoming-peers = 30
+</span><span id="__span-35-23"><a id="__codelineno-35-23" name="__codelineno-35-23" href="#__codelineno-35-23"></a>    }
+</span><span id="__span-35-24"><a id="__codelineno-35-24" name="__codelineno-35-24" href="#__codelineno-35-24"></a>
+</span><span id="__span-35-25"><a id="__codelineno-35-25" name="__codelineno-35-25" href="#__codelineno-35-25"></a>    rpc {
+</span><span id="__span-35-26"><a id="__codelineno-35-26" name="__codelineno-35-26" href="#__codelineno-35-26"></a>      http {
+</span><span id="__span-35-27"><a id="__codelineno-35-27" name="__codelineno-35-27" href="#__codelineno-35-27"></a>        enabled = true
+</span><span id="__span-35-28"><a id="__codelineno-35-28" name="__codelineno-35-28" href="#__codelineno-35-28"></a>        interface = "localhost"
+</span><span id="__span-35-29"><a id="__codelineno-35-29" name="__codelineno-35-29" href="#__codelineno-35-29"></a>        port = 8546
+</span><span id="__span-35-30"><a id="__codelineno-35-30" name="__codelineno-35-30" href="#__codelineno-35-30"></a>      }
+</span><span id="__span-35-31"><a id="__codelineno-35-31" name="__codelineno-35-31" href="#__codelineno-35-31"></a>      apis = "eth,web3,net"
+</span><span id="__span-35-32"><a id="__codelineno-35-32" name="__codelineno-35-32" href="#__codelineno-35-32"></a>    }
+</span><span id="__span-35-33"><a id="__codelineno-35-33" name="__codelineno-35-33" href="#__codelineno-35-33"></a>  }
+</span><span id="__span-35-34"><a id="__codelineno-35-34" name="__codelineno-35-34" href="#__codelineno-35-34"></a>}
 </span></code></pre></div>
 <p><strong>Start:</strong>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-36-1"><a id="__codelineno-36-1" name="__codelineno-36-1" href="#__codelineno-36-1"></a>./bin/fukuii<span class="w"> </span>-Dconfig.file<span class="o">=</span>full-node.conf<span class="w"> </span>etc
@@ -8020,57 +8063,56 @@ Instead of solo mining, consider joining a mining pool for more consistent rewar
 </span><span id="__span-37-3"><a id="__codelineno-37-3" name="__codelineno-37-3" href="#__codelineno-37-3"></a>fukuii {
 </span><span id="__span-37-4"><a id="__codelineno-37-4" name="__codelineno-37-4" href="#__codelineno-37-4"></a>  # Full sync from genesis
 </span><span id="__span-37-5"><a id="__codelineno-37-5" name="__codelineno-37-5" href="#__codelineno-37-5"></a>  sync {
-</span><span id="__span-37-6"><a id="__codelineno-37-6" name="__codelineno-37-6" href="#__codelineno-37-6"></a>    do-fast-sync = false
+</span><span id="__span-37-6"><a id="__codelineno-37-6" name="__codelineno-37-6" href="#__codelineno-37-6"></a>    do-snap-sync = false
 </span><span id="__span-37-7"><a id="__codelineno-37-7" name="__codelineno-37-7" href="#__codelineno-37-7"></a>
 </span><span id="__span-37-8"><a id="__codelineno-37-8" name="__codelineno-37-8" href="#__codelineno-37-8"></a>    # Optimize sync performance
-</span><span id="__span-37-9"><a id="__codelineno-37-9" name="__codelineno-37-9" href="#__codelineno-37-9"></a>    max-concurrent-requests = 30
-</span><span id="__span-37-10"><a id="__codelineno-37-10" name="__codelineno-37-10" href="#__codelineno-37-10"></a>    block-headers-per-request = 384
-</span><span id="__span-37-11"><a id="__codelineno-37-11" name="__codelineno-37-11" href="#__codelineno-37-11"></a>    block-bodies-per-request = 384
-</span><span id="__span-37-12"><a id="__codelineno-37-12" name="__codelineno-37-12" href="#__codelineno-37-12"></a>  }
-</span><span id="__span-37-13"><a id="__codelineno-37-13" name="__codelineno-37-13" href="#__codelineno-37-13"></a>
-</span><span id="__span-37-14"><a id="__codelineno-37-14" name="__codelineno-37-14" href="#__codelineno-37-14"></a>  # Archive mode - no pruning
-</span><span id="__span-37-15"><a id="__codelineno-37-15" name="__codelineno-37-15" href="#__codelineno-37-15"></a>  pruning {
-</span><span id="__span-37-16"><a id="__codelineno-37-16" name="__codelineno-37-16" href="#__codelineno-37-16"></a>    mode = "archive"
-</span><span id="__span-37-17"><a id="__codelineno-37-17" name="__codelineno-37-17" href="#__codelineno-37-17"></a>  }
-</span><span id="__span-37-18"><a id="__codelineno-37-18" name="__codelineno-37-18" href="#__codelineno-37-18"></a>
-</span><span id="__span-37-19"><a id="__codelineno-37-19" name="__codelineno-37-19" href="#__codelineno-37-19"></a>  # High peer limits for better connectivity
-</span><span id="__span-37-20"><a id="__codelineno-37-20" name="__codelineno-37-20" href="#__codelineno-37-20"></a>  network {
-</span><span id="__span-37-21"><a id="__codelineno-37-21" name="__codelineno-37-21" href="#__codelineno-37-21"></a>    peer {
-</span><span id="__span-37-22"><a id="__codelineno-37-22" name="__codelineno-37-22" href="#__codelineno-37-22"></a>      min-outgoing-peers = 40
-</span><span id="__span-37-23"><a id="__codelineno-37-23" name="__codelineno-37-23" href="#__codelineno-37-23"></a>      max-outgoing-peers = 150
-</span><span id="__span-37-24"><a id="__codelineno-37-24" name="__codelineno-37-24" href="#__codelineno-37-24"></a>      max-incoming-peers = 75
-</span><span id="__span-37-25"><a id="__codelineno-37-25" name="__codelineno-37-25" href="#__codelineno-37-25"></a>    }
-</span><span id="__span-37-26"><a id="__codelineno-37-26" name="__codelineno-37-26" href="#__codelineno-37-26"></a>
-</span><span id="__span-37-27"><a id="__codelineno-37-27" name="__codelineno-37-27" href="#__codelineno-37-27"></a>    rpc {
-</span><span id="__span-37-28"><a id="__codelineno-37-28" name="__codelineno-37-28" href="#__codelineno-37-28"></a>      http {
-</span><span id="__span-37-29"><a id="__codelineno-37-29" name="__codelineno-37-29" href="#__codelineno-37-29"></a>        enabled = true
-</span><span id="__span-37-30"><a id="__codelineno-37-30" name="__codelineno-37-30" href="#__codelineno-37-30"></a>        interface = "0.0.0.0"  # ⚠️ Use firewall/proxy
-</span><span id="__span-37-31"><a id="__codelineno-37-31" name="__codelineno-37-31" href="#__codelineno-37-31"></a>        port = 8546
-</span><span id="__span-37-32"><a id="__codelineno-37-32" name="__codelineno-37-32" href="#__codelineno-37-32"></a>
-</span><span id="__span-37-33"><a id="__codelineno-37-33" name="__codelineno-37-33" href="#__codelineno-37-33"></a>        # Rate limiting for public access
-</span><span id="__span-37-34"><a id="__codelineno-37-34" name="__codelineno-37-34" href="#__codelineno-37-34"></a>        rate-limit {
-</span><span id="__span-37-35"><a id="__codelineno-37-35" name="__codelineno-37-35" href="#__codelineno-37-35"></a>          enabled = true
-</span><span id="__span-37-36"><a id="__codelineno-37-36" name="__codelineno-37-36" href="#__codelineno-37-36"></a>          min-request-interval = 100.milliseconds
-</span><span id="__span-37-37"><a id="__codelineno-37-37" name="__codelineno-37-37" href="#__codelineno-37-37"></a>        }
-</span><span id="__span-37-38"><a id="__codelineno-37-38" name="__codelineno-37-38" href="#__codelineno-37-38"></a>      }
-</span><span id="__span-37-39"><a id="__codelineno-37-39" name="__codelineno-37-39" href="#__codelineno-37-39"></a>
-</span><span id="__span-37-40"><a id="__codelineno-37-40" name="__codelineno-37-40" href="#__codelineno-37-40"></a>      # Full API suite for archive node
-</span><span id="__span-37-41"><a id="__codelineno-37-41" name="__codelineno-37-41" href="#__codelineno-37-41"></a>      # Note: 'personal' API removed for security - manage keys separately
-</span><span id="__span-37-42"><a id="__codelineno-37-42" name="__codelineno-37-42" href="#__codelineno-37-42"></a>      apis = "eth,web3,net,fukuii,debug"
-</span><span id="__span-37-43"><a id="__codelineno-37-43" name="__codelineno-37-43" href="#__codelineno-37-43"></a>    }
-</span><span id="__span-37-44"><a id="__codelineno-37-44" name="__codelineno-37-44" href="#__codelineno-37-44"></a>  }
-</span><span id="__span-37-45"><a id="__codelineno-37-45" name="__codelineno-37-45" href="#__codelineno-37-45"></a>
-</span><span id="__span-37-46"><a id="__codelineno-37-46" name="__codelineno-37-46" href="#__codelineno-37-46"></a>  # Optimize database
-</span><span id="__span-37-47"><a id="__codelineno-37-47" name="__codelineno-37-47" href="#__codelineno-37-47"></a>  db {
-</span><span id="__span-37-48"><a id="__codelineno-37-48" name="__codelineno-37-48" href="#__codelineno-37-48"></a>    rocksdb {
-</span><span id="__span-37-49"><a id="__codelineno-37-49" name="__codelineno-37-49" href="#__codelineno-37-49"></a>      # Larger cache for better performance
-</span><span id="__span-37-50"><a id="__codelineno-37-50" name="__codelineno-37-50" href="#__codelineno-37-50"></a>      block-cache-size = 268435456  # 256 MB
-</span><span id="__span-37-51"><a id="__codelineno-37-51" name="__codelineno-37-51" href="#__codelineno-37-51"></a>
-</span><span id="__span-37-52"><a id="__codelineno-37-52" name="__codelineno-37-52" href="#__codelineno-37-52"></a>      # Optimize write performance during sync
-</span><span id="__span-37-53"><a id="__codelineno-37-53" name="__codelineno-37-53" href="#__codelineno-37-53"></a>      # (these are advanced settings, use with caution)
-</span><span id="__span-37-54"><a id="__codelineno-37-54" name="__codelineno-37-54" href="#__codelineno-37-54"></a>    }
-</span><span id="__span-37-55"><a id="__codelineno-37-55" name="__codelineno-37-55" href="#__codelineno-37-55"></a>  }
-</span><span id="__span-37-56"><a id="__codelineno-37-56" name="__codelineno-37-56" href="#__codelineno-37-56"></a>}
+</span><span id="__span-37-9"><a id="__codelineno-37-9" name="__codelineno-37-9" href="#__codelineno-37-9"></a>    block-headers-per-request = 384
+</span><span id="__span-37-10"><a id="__codelineno-37-10" name="__codelineno-37-10" href="#__codelineno-37-10"></a>    block-bodies-per-request = 384
+</span><span id="__span-37-11"><a id="__codelineno-37-11" name="__codelineno-37-11" href="#__codelineno-37-11"></a>  }
+</span><span id="__span-37-12"><a id="__codelineno-37-12" name="__codelineno-37-12" href="#__codelineno-37-12"></a>
+</span><span id="__span-37-13"><a id="__codelineno-37-13" name="__codelineno-37-13" href="#__codelineno-37-13"></a>  # Archive mode - no pruning
+</span><span id="__span-37-14"><a id="__codelineno-37-14" name="__codelineno-37-14" href="#__codelineno-37-14"></a>  pruning {
+</span><span id="__span-37-15"><a id="__codelineno-37-15" name="__codelineno-37-15" href="#__codelineno-37-15"></a>    mode = "archive"
+</span><span id="__span-37-16"><a id="__codelineno-37-16" name="__codelineno-37-16" href="#__codelineno-37-16"></a>  }
+</span><span id="__span-37-17"><a id="__codelineno-37-17" name="__codelineno-37-17" href="#__codelineno-37-17"></a>
+</span><span id="__span-37-18"><a id="__codelineno-37-18" name="__codelineno-37-18" href="#__codelineno-37-18"></a>  # High peer limits for better connectivity
+</span><span id="__span-37-19"><a id="__codelineno-37-19" name="__codelineno-37-19" href="#__codelineno-37-19"></a>  network {
+</span><span id="__span-37-20"><a id="__codelineno-37-20" name="__codelineno-37-20" href="#__codelineno-37-20"></a>    peer {
+</span><span id="__span-37-21"><a id="__codelineno-37-21" name="__codelineno-37-21" href="#__codelineno-37-21"></a>      min-outgoing-peers = 40
+</span><span id="__span-37-22"><a id="__codelineno-37-22" name="__codelineno-37-22" href="#__codelineno-37-22"></a>      max-outgoing-peers = 150
+</span><span id="__span-37-23"><a id="__codelineno-37-23" name="__codelineno-37-23" href="#__codelineno-37-23"></a>      max-incoming-peers = 75
+</span><span id="__span-37-24"><a id="__codelineno-37-24" name="__codelineno-37-24" href="#__codelineno-37-24"></a>    }
+</span><span id="__span-37-25"><a id="__codelineno-37-25" name="__codelineno-37-25" href="#__codelineno-37-25"></a>
+</span><span id="__span-37-26"><a id="__codelineno-37-26" name="__codelineno-37-26" href="#__codelineno-37-26"></a>    rpc {
+</span><span id="__span-37-27"><a id="__codelineno-37-27" name="__codelineno-37-27" href="#__codelineno-37-27"></a>      http {
+</span><span id="__span-37-28"><a id="__codelineno-37-28" name="__codelineno-37-28" href="#__codelineno-37-28"></a>        enabled = true
+</span><span id="__span-37-29"><a id="__codelineno-37-29" name="__codelineno-37-29" href="#__codelineno-37-29"></a>        interface = "0.0.0.0"  # ⚠️ Use firewall/proxy
+</span><span id="__span-37-30"><a id="__codelineno-37-30" name="__codelineno-37-30" href="#__codelineno-37-30"></a>        port = 8546
+</span><span id="__span-37-31"><a id="__codelineno-37-31" name="__codelineno-37-31" href="#__codelineno-37-31"></a>
+</span><span id="__span-37-32"><a id="__codelineno-37-32" name="__codelineno-37-32" href="#__codelineno-37-32"></a>        # Rate limiting for public access
+</span><span id="__span-37-33"><a id="__codelineno-37-33" name="__codelineno-37-33" href="#__codelineno-37-33"></a>        rate-limit {
+</span><span id="__span-37-34"><a id="__codelineno-37-34" name="__codelineno-37-34" href="#__codelineno-37-34"></a>          enabled = true
+</span><span id="__span-37-35"><a id="__codelineno-37-35" name="__codelineno-37-35" href="#__codelineno-37-35"></a>          min-request-interval = 100.milliseconds
+</span><span id="__span-37-36"><a id="__codelineno-37-36" name="__codelineno-37-36" href="#__codelineno-37-36"></a>        }
+</span><span id="__span-37-37"><a id="__codelineno-37-37" name="__codelineno-37-37" href="#__codelineno-37-37"></a>      }
+</span><span id="__span-37-38"><a id="__codelineno-37-38" name="__codelineno-37-38" href="#__codelineno-37-38"></a>
+</span><span id="__span-37-39"><a id="__codelineno-37-39" name="__codelineno-37-39" href="#__codelineno-37-39"></a>      # Full API suite for archive node
+</span><span id="__span-37-40"><a id="__codelineno-37-40" name="__codelineno-37-40" href="#__codelineno-37-40"></a>      # Note: 'personal' API removed for security - manage keys separately
+</span><span id="__span-37-41"><a id="__codelineno-37-41" name="__codelineno-37-41" href="#__codelineno-37-41"></a>      apis = "eth,web3,net,fukuii,debug"
+</span><span id="__span-37-42"><a id="__codelineno-37-42" name="__codelineno-37-42" href="#__codelineno-37-42"></a>    }
+</span><span id="__span-37-43"><a id="__codelineno-37-43" name="__codelineno-37-43" href="#__codelineno-37-43"></a>  }
+</span><span id="__span-37-44"><a id="__codelineno-37-44" name="__codelineno-37-44" href="#__codelineno-37-44"></a>
+</span><span id="__span-37-45"><a id="__codelineno-37-45" name="__codelineno-37-45" href="#__codelineno-37-45"></a>  # Optimize database
+</span><span id="__span-37-46"><a id="__codelineno-37-46" name="__codelineno-37-46" href="#__codelineno-37-46"></a>  db {
+</span><span id="__span-37-47"><a id="__codelineno-37-47" name="__codelineno-37-47" href="#__codelineno-37-47"></a>    rocksdb {
+</span><span id="__span-37-48"><a id="__codelineno-37-48" name="__codelineno-37-48" href="#__codelineno-37-48"></a>      # Larger cache for better performance
+</span><span id="__span-37-49"><a id="__codelineno-37-49" name="__codelineno-37-49" href="#__codelineno-37-49"></a>      block-cache-size = 268435456  # 256 MB
+</span><span id="__span-37-50"><a id="__codelineno-37-50" name="__codelineno-37-50" href="#__codelineno-37-50"></a>
+</span><span id="__span-37-51"><a id="__codelineno-37-51" name="__codelineno-37-51" href="#__codelineno-37-51"></a>      # Optimize write performance during sync
+</span><span id="__span-37-52"><a id="__codelineno-37-52" name="__codelineno-37-52" href="#__codelineno-37-52"></a>      # (these are advanced settings, use with caution)
+</span><span id="__span-37-53"><a id="__codelineno-37-53" name="__codelineno-37-53" href="#__codelineno-37-53"></a>    }
+</span><span id="__span-37-54"><a id="__codelineno-37-54" name="__codelineno-37-54" href="#__codelineno-37-54"></a>  }
+</span><span id="__span-37-55"><a id="__codelineno-37-55" name="__codelineno-37-55" href="#__codelineno-37-55"></a>}
 </span></code></pre></div>
 <p><strong>Start with JVM optimization:</strong>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-38-1"><a id="__codelineno-38-1" name="__codelineno-38-1" href="#__codelineno-38-1"></a>./bin/fukuii<span class="w"> </span><span class="se">\</span>
@@ -8086,9 +8128,9 @@ Instead of solo mining, consider joining a mining pool for more consistent rewar
 <div class="language-text highlight"><pre><span></span><code><span id="__span-39-1"><a id="__codelineno-39-1" name="__codelineno-39-1" href="#__codelineno-39-1"></a>include "base.conf"
 </span><span id="__span-39-2"><a id="__codelineno-39-2" name="__codelineno-39-2" href="#__codelineno-39-2"></a>
 </span><span id="__span-39-3"><a id="__codelineno-39-3" name="__codelineno-39-3" href="#__codelineno-39-3"></a>fukuii {
-</span><span id="__span-39-4"><a id="__codelineno-39-4" name="__codelineno-39-4" href="#__codelineno-39-4"></a>  # No blockchain sync
+</span><span id="__span-39-4"><a id="__codelineno-39-4" name="__codelineno-39-4" href="#__codelineno-39-4"></a>  # Keep SNAP's state download off (bootnode.conf does the same)
 </span><span id="__span-39-5"><a id="__codelineno-39-5" name="__codelineno-39-5" href="#__codelineno-39-5"></a>  sync {
-</span><span id="__span-39-6"><a id="__codelineno-39-6" name="__codelineno-39-6" href="#__codelineno-39-6"></a>    do-fast-sync = false
+</span><span id="__span-39-6"><a id="__codelineno-39-6" name="__codelineno-39-6" href="#__codelineno-39-6"></a>    do-snap-sync = false
 </span><span id="__span-39-7"><a id="__codelineno-39-7" name="__codelineno-39-7" href="#__codelineno-39-7"></a>  }
 </span><span id="__span-39-8"><a id="__codelineno-39-8" name="__codelineno-39-8" href="#__codelineno-39-8"></a>
 </span><span id="__span-39-9"><a id="__codelineno-39-9" name="__codelineno-39-9" href="#__codelineno-39-9"></a>  # Minimal pruning config (not used since not syncing)
@@ -8146,9 +8188,9 @@ Instead of solo mining, consider joining a mining pool for more consistent rewar
 </span><span id="__span-41-8"><a id="__codelineno-41-8" name="__codelineno-41-8" href="#__codelineno-41-8"></a>    protocol = "pow"
 </span><span id="__span-41-9"><a id="__codelineno-41-9" name="__codelineno-41-9" href="#__codelineno-41-9"></a>  }
 </span><span id="__span-41-10"><a id="__codelineno-41-10" name="__codelineno-41-10" href="#__codelineno-41-10"></a>
-</span><span id="__span-41-11"><a id="__codelineno-41-11" name="__codelineno-41-11" href="#__codelineno-41-11"></a>  # Fast sync for quick start
+</span><span id="__span-41-11"><a id="__codelineno-41-11" name="__codelineno-41-11" href="#__codelineno-41-11"></a>  # SNAP sync for a quick start (the default)
 </span><span id="__span-41-12"><a id="__codelineno-41-12" name="__codelineno-41-12" href="#__codelineno-41-12"></a>  sync {
-</span><span id="__span-41-13"><a id="__codelineno-41-13" name="__codelineno-41-13" href="#__codelineno-41-13"></a>    do-fast-sync = true
+</span><span id="__span-41-13"><a id="__codelineno-41-13" name="__codelineno-41-13" href="#__codelineno-41-13"></a>    do-snap-sync = true
 </span><span id="__span-41-14"><a id="__codelineno-41-14" name="__codelineno-41-14" href="#__codelineno-41-14"></a>  }
 </span><span id="__span-41-15"><a id="__codelineno-41-15" name="__codelineno-41-15" href="#__codelineno-41-15"></a>
 </span><span id="__span-41-16"><a id="__codelineno-41-16" name="__codelineno-41-16" href="#__codelineno-41-16"></a>  # Basic pruning sufficient for mining
@@ -8231,7 +8273,7 @@ Instead of solo mining, consider joining a mining pool for more consistent rewar
 </span><span id="__span-43-31"><a id="__codelineno-43-31" name="__codelineno-43-31" href="#__codelineno-43-31"></a><span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">JAVA_OPTS=-Xms16g -Xmx32g</span>
 </span><span id="__span-43-32"><a id="__codelineno-43-32" name="__codelineno-43-32" href="#__codelineno-43-32"></a><span class="w">    </span><span class="nt">command</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">&gt;</span>
 </span><span id="__span-43-33"><a id="__codelineno-43-33" name="__codelineno-43-33" href="#__codelineno-43-33"></a><span class="w">      </span><span class="no">etc</span>
-</span><span id="__span-43-34"><a id="__codelineno-43-34" name="__codelineno-43-34" href="#__codelineno-43-34"></a><span class="w">      </span><span class="no">-Dfukuii.sync.do-fast-sync=false</span>
+</span><span id="__span-43-34"><a id="__codelineno-43-34" name="__codelineno-43-34" href="#__codelineno-43-34"></a><span class="w">      </span><span class="no">-Dfukuii.sync.do-snap-sync=false</span>
 </span><span id="__span-43-35"><a id="__codelineno-43-35" name="__codelineno-43-35" href="#__codelineno-43-35"></a><span class="w">      </span><span class="no">-Dfukuii.pruning.mode=archive</span>
 </span><span id="__span-43-36"><a id="__codelineno-43-36" name="__codelineno-43-36" href="#__codelineno-43-36"></a><span class="w">      </span><span class="no">-Dfukuii.network.server-address.port=9077</span>
 </span><span id="__span-43-37"><a id="__codelineno-43-37" name="__codelineno-43-37" href="#__codelineno-43-37"></a><span class="w">      </span><span class="no">-Dfukuii.network.discovery.port=30304</span>
@@ -8297,7 +8339,7 @@ Instead of solo mining, consider joining a mining pool for more consistent rewar
 </span><span id="__span-48-3"><a id="__codelineno-48-3" name="__codelineno-48-3" href="#__codelineno-48-3"></a><span class="s">include "base.conf"</span>
 </span><span id="__span-48-4"><a id="__codelineno-48-4" name="__codelineno-48-4" href="#__codelineno-48-4"></a>
 </span><span id="__span-48-5"><a id="__codelineno-48-5" name="__codelineno-48-5" href="#__codelineno-48-5"></a><span class="s">fukuii {</span>
-</span><span id="__span-48-6"><a id="__codelineno-48-6" name="__codelineno-48-6" href="#__codelineno-48-6"></a><span class="s">  sync.do-fast-sync = false</span>
+</span><span id="__span-48-6"><a id="__codelineno-48-6" name="__codelineno-48-6" href="#__codelineno-48-6"></a><span class="s">  sync.do-snap-sync = false</span>
 </span><span id="__span-48-7"><a id="__codelineno-48-7" name="__codelineno-48-7" href="#__codelineno-48-7"></a><span class="s">  pruning.mode = "archive"</span>
 </span><span id="__span-48-8"><a id="__codelineno-48-8" name="__codelineno-48-8" href="#__codelineno-48-8"></a><span class="s">}</span>
 </span><span id="__span-48-9"><a id="__codelineno-48-9" name="__codelineno-48-9" href="#__codelineno-48-9"></a><span class="s">EOF</span>
@@ -8318,7 +8360,7 @@ Instead of solo mining, consider joining a mining pool for more consistent rewar
 <h3 id="archive-node-full-node">Archive Node → Full Node<a class="headerlink" href="#archive-node-full-node" title="Permanent link">&para;</a></h3>
 <p><strong>Requirements:</strong>
 - Can keep existing data if desired
-- Fast sync will download new state snapshot</p>
+- Option B re-syncs with SNAP sync</p>
 <p><strong>Steps:</strong></p>
 <ol>
 <li>
@@ -8332,9 +8374,8 @@ Instead of solo mining, consider joining a mining pool for more consistent rewar
 </span><span id="__span-52-2"><a id="__codelineno-52-2" name="__codelineno-52-2" href="#__codelineno-52-2"></a><span class="c1"># Archive data includes full node data</span>
 </span><span id="__span-52-3"><a id="__codelineno-52-3" name="__codelineno-52-3" href="#__codelineno-52-3"></a><span class="c1"># Simply run with new config</span>
 </span><span id="__span-52-4"><a id="__codelineno-52-4" name="__codelineno-52-4" href="#__codelineno-52-4"></a>./bin/fukuii<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-52-5"><a id="__codelineno-52-5" name="__codelineno-52-5" href="#__codelineno-52-5"></a><span class="w">  </span>-Dfukuii.sync.do-fast-sync<span class="o">=</span><span class="nb">true</span><span class="w"> </span><span class="se">\</span>
-</span><span id="__span-52-6"><a id="__codelineno-52-6" name="__codelineno-52-6" href="#__codelineno-52-6"></a><span class="w">  </span>-Dfukuii.pruning.mode<span class="o">=</span>basic<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-52-7"><a id="__codelineno-52-7" name="__codelineno-52-7" href="#__codelineno-52-7"></a><span class="w">  </span>etc
+</span><span id="__span-52-5"><a id="__codelineno-52-5" name="__codelineno-52-5" href="#__codelineno-52-5"></a><span class="w">  </span>-Dfukuii.pruning.mode<span class="o">=</span>basic<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-52-6"><a id="__codelineno-52-6" name="__codelineno-52-6" href="#__codelineno-52-6"></a><span class="w">  </span>etc
 </span></code></pre></div></p>
 </li>
 <li>
@@ -8343,13 +8384,13 @@ Instead of solo mining, consider joining a mining pool for more consistent rewar
 </span><span id="__span-53-2"><a id="__codelineno-53-2" name="__codelineno-53-2" href="#__codelineno-53-2"></a>rm<span class="w"> </span>-rf<span class="w"> </span>~/.fukuii/etc/rocksdb/
 </span><span id="__span-53-3"><a id="__codelineno-53-3" name="__codelineno-53-3" href="#__codelineno-53-3"></a>
 </span><span id="__span-53-4"><a id="__codelineno-53-4" name="__codelineno-53-4" href="#__codelineno-53-4"></a><span class="c1"># Start with full node config</span>
-</span><span id="__span-53-5"><a id="__codelineno-53-5" name="__codelineno-53-5" href="#__codelineno-53-5"></a>./bin/fukuii<span class="w"> </span>etc<span class="w">  </span><span class="c1"># Uses defaults (fast sync + basic pruning)</span>
+</span><span id="__span-53-5"><a id="__codelineno-53-5" name="__codelineno-53-5" href="#__codelineno-53-5"></a>./bin/fukuii<span class="w"> </span>etc<span class="w">  </span><span class="c1"># Uses defaults (SNAP sync + basic pruning)</span>
 </span></code></pre></div></p>
 </li>
 </ol>
 <p><strong>Expected Downtime:</strong> 
 - Option A: Immediate (just restart)
-- Option B: 2-8 hours (fast sync)</p>
+- Option B: hours to days (SNAP sync)</p>
 <h3 id="full-node-mining-node">Full Node → Mining Node<a class="headerlink" href="#full-node-mining-node" title="Permanent link">&para;</a></h3>
 <p><strong>Requirements:</strong>
 - Keep existing synchronized data
@@ -8501,11 +8542,10 @@ Instead of solo mining, consider joining a mining pool for more consistent rewar
 <p><strong>Solutions:</strong></p>
 <ol>
 <li>
-<p><strong>Increase concurrent requests:</strong>
+<p><strong>Fetch bodies from more peers at once:</strong>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-65-1"><a id="__codelineno-65-1" name="__codelineno-65-1" href="#__codelineno-65-1"></a>./bin/fukuii<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-65-2"><a id="__codelineno-65-2" name="__codelineno-65-2" href="#__codelineno-65-2"></a><span class="w">  </span>-Dfukuii.sync.max-concurrent-requests<span class="o">=</span><span class="m">40</span><span class="w"> </span><span class="se">\</span>
-</span><span id="__span-65-3"><a id="__codelineno-65-3" name="__codelineno-65-3" href="#__codelineno-65-3"></a><span class="w">  </span>-Dfukuii.sync.block-headers-per-request<span class="o">=</span><span class="m">512</span><span class="w"> </span><span class="se">\</span>
-</span><span id="__span-65-4"><a id="__codelineno-65-4" name="__codelineno-65-4" href="#__codelineno-65-4"></a><span class="w">  </span>etc
+</span><span id="__span-65-2"><a id="__codelineno-65-2" name="__codelineno-65-2" href="#__codelineno-65-2"></a><span class="w">  </span>-Dfukuii.sync.bodies-fetch-concurrency<span class="o">=</span><span class="m">8</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-65-3"><a id="__codelineno-65-3" name="__codelineno-65-3" href="#__codelineno-65-3"></a><span class="w">  </span>etc
 </span></code></pre></div></p>
 </li>
 <li>
@@ -8595,22 +8635,22 @@ Instead of solo mining, consider joining a mining pool for more consistent rewar
 <li>Consider connecting external GPU/ASIC miners</li>
 <li>Or join a mining pool</li>
 </ol>
-<h4 id="fast-sync-pivot-block-selection-failed">Fast Sync: Pivot Block Selection Failed<a class="headerlink" href="#fast-sync-pivot-block-selection-failed" title="Permanent link">&para;</a></h4>
-<p><strong>Problem:</strong> Fast sync fails to select pivot block</p>
+<h4 id="snap-sync-dormant-mode">SNAP Sync: Dormant Mode<a class="headerlink" href="#snap-sync-dormant-mode" title="Permanent link">&para;</a></h4>
+<p><strong>Problem:</strong> The log shows <code>Entering dormant mode (attempt N): ...</code> and sync does not progress.
+Common reasons are <code>no snap-capable peers after the capability grace period</code> and
+<code>no peers found after N bootstrap retries</code>.</p>
+<p>SNAP keeps what it has downloaded and retries on a fresh pivot after a back-off (3 minutes,
+doubling to a 20-minute cap). It does not fall back to another sync mode.</p>
 <p><strong>Solutions:</strong></p>
 <ol>
 <li>
-<p><strong>Increase minimum peers:</strong>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-76-1"><a id="__codelineno-76-1" name="__codelineno-76-1" href="#__codelineno-76-1"></a>./bin/fukuii<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-76-2"><a id="__codelineno-76-2" name="__codelineno-76-2" href="#__codelineno-76-2"></a><span class="w">  </span>-Dfukuii.sync.min-peers-to-choose-pivot-block<span class="o">=</span><span class="m">10</span><span class="w"> </span><span class="se">\</span>
-</span><span id="__span-76-3"><a id="__codelineno-76-3" name="__codelineno-76-3" href="#__codelineno-76-3"></a><span class="w">  </span>etc
+<p><strong>Check that peers offer snap/1:</strong>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-76-1"><a id="__codelineno-76-1" name="__codelineno-76-1" href="#__codelineno-76-1"></a>grep<span class="w"> </span><span class="s2">"PEER_HANDSHAKE_SUCCESS"</span><span class="w"> </span>~/.fukuii/etc/logs/fukuii.log<span class="w"> </span><span class="p">|</span><span class="w"> </span>grep<span class="w"> </span>-c<span class="w"> </span><span class="s2">"supportsSnap=true"</span>
 </span></code></pre></div></p>
 </li>
 <li>
-<p><strong>Adjust pivot block offset:</strong>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-77-1"><a id="__codelineno-77-1" name="__codelineno-77-1" href="#__codelineno-77-1"></a>./bin/fukuii<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-77-2"><a id="__codelineno-77-2" name="__codelineno-77-2" href="#__codelineno-77-2"></a><span class="w">  </span>-Dfukuii.sync.pivot-block-offset<span class="o">=</span><span class="m">64</span><span class="w"> </span><span class="se">\</span>
-</span><span id="__span-77-3"><a id="__codelineno-77-3" name="__codelineno-77-3" href="#__codelineno-77-3"></a><span class="w">  </span>etc
+<p><strong>Pin a snap-serving peer</strong> (in your configuration file):
+<div class="language-text highlight"><pre><span></span><code><span id="__span-77-1"><a id="__codelineno-77-1" name="__codelineno-77-1" href="#__codelineno-77-1"></a>fukuii.sync.snap-sync.snap-server-peers = ["enode://PUBKEY@HOST:30303"]
 </span></code></pre></div></p>
 </li>
 <li>
@@ -8619,12 +8659,11 @@ Instead of solo mining, consider joining a mining pool for more consistent rewar
 </span><span id="__span-78-2"><a id="__codelineno-78-2" name="__codelineno-78-2" href="#__codelineno-78-2"></a><span class="w">  </span>http://localhost:8546
 </span></code></pre></div></p>
 </li>
-</ol>
-<p>Need 5+ peers for pivot selection.</p>
-<ol>
-<li><strong>Check network connectivity:</strong>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-79-1"><a id="__codelineno-79-1" name="__codelineno-79-1" href="#__codelineno-79-1"></a>ping<span class="w"> </span><span class="m">8</span>.8.8.8
-</span></code></pre></div></li>
+<li>
+<p><strong>No snap-serving peers on this network:</strong> sync from genesis instead.
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-79-1"><a id="__codelineno-79-1" name="__codelineno-79-1" href="#__codelineno-79-1"></a>./bin/fukuii<span class="w"> </span>-Dfukuii.sync.do-snap-sync<span class="o">=</span><span class="nb">false</span><span class="w"> </span>etc
+</span></code></pre></div></p>
+</li>
 </ol>
 <h3 id="performance-issues">Performance Issues<a class="headerlink" href="#performance-issues" title="Permanent link">&para;</a></h3>
 <h4 id="high-cpu-usage">High CPU Usage<a class="headerlink" href="#high-cpu-usage" title="Permanent link">&para;</a></h4>
@@ -8710,8 +8749,8 @@ Instead of solo mining, consider joining a mining pool for more consistent rewar
 <li><a href="../../architecture/architecture-overview/">Architecture Overview</a></li>
 </ul>
 <hr />
-<p><strong>Document Version</strong>: 1.0<br />
-<strong>Last Updated</strong>: 2025-11-06<br />
+<p><strong>Document Version</strong>: 1.1<br />
+<strong>Last Updated</strong>: 2026-09-26<br />
 <strong>Maintainer</strong>: Chippr Robotics LLC</p>
 
 
