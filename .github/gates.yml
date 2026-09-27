@@ -313,11 +313,16 @@ gates:
     covers: >-
       execution-specs tests@v21.0.0 Amsterdam and BPO2->Amsterdam blockchain_tests
       (26,503) replayed from the release's own block RLP through the import path
-      (EestFixtureCorpusSpec). Fails on any divergence and on fewer than
-      EEST_MIN_TESTS replayed tests.
+      (EestFixtureCorpusSpec), and every block they accept (27,352) rebuilt by the
+      Engine API payload builder from its parent, attributes and transactions,
+      which must reproduce execution-specs' block hash
+      (EngineApiAmsterdamBuilderEestSpec). Fails on any divergence in either, on
+      fewer than EEST_MIN_TESTS tests in either, and on a missing corpus.
     status_note: >-
-      Baseline 18,081 / 26,503 on 2026-09-26, before the Glamsterdam work items
-      (#1415). Promote once the corpus is fully green and 0.9.0 ships.
+      26,503 / 26,503 on the import replay (run 36294294338, 2026-09-27), up from a
+      baseline of 18,081 on 2026-09-26 before the Glamsterdam work items (#1415).
+      The builder rebuild (#1427) reproduced all 27,352 blocks when run locally on
+      2026-09-27. Promote once 0.9.0 ships.
 
   # --- Quarantined: parallel unchecked paths, excluded from all claims -------
 

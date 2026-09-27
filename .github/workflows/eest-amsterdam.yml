@@ -2,7 +2,12 @@ name: EEST Amsterdam
 
 # Replays execution-specs' Amsterdam blockchain_tests (tests@v21.0.0: the Amsterdam and
 # BPO2->Amsterdam directories, 26,503 tests) through fukuii's block import path with
-# EestFixtureCorpusSpec. Declared in .github/gates.yml as `eest-amsterdam`.
+# EestFixtureCorpusSpec, and rebuilds every block they accept with the Engine API payload
+# builder (EngineApiAmsterdamBuilderEestSpec), which must reproduce execution-specs' block
+# hash. Declared in .github/gates.yml as `eest-amsterdam`.
+#
+# Both read the same fetched corpus (EEST_FIXTURES) and both enforce EEST_MIN_TESTS: with it
+# set, a missing corpus FAILS rather than cancels, and a partial one fails its count.
 #
 # The corpus is not vendored. scripts/eest/fetch_fixtures.py streams the ~1 GB release asset
 # and stops once past the wanted directories (~265 MB read), and the result is cached per
@@ -14,6 +19,8 @@ on:
     paths:
       - 'src/main/**'
       - 'src/test/scala/com/chipprbots/ethereum/ledger/Eest*'
+      - 'src/test/scala/com/chipprbots/ethereum/consensus/engine/EestBuilderReplay.scala'
+      - 'src/test/scala/com/chipprbots/ethereum/consensus/engine/EngineApiAmsterdamBuilderEestSpec.scala'
       - 'scripts/eest/**'
       - '.github/workflows/eest-amsterdam.yml'
       - 'build.sbt'
@@ -85,32 +92,37 @@ jobs:
         if: steps.fixtures-cache.outputs.cache-hit != 'true'
         run: python3 scripts/eest/fetch_fixtures.py eest-fixtures --release "$EEST_RELEASE"
 
-      - name: Replay the corpus
-        run: sbt "testOnly *EestFixtureCorpusSpec"
+      - name: Replay the corpus and rebuild it with the payload builder
+        run: sbt "testOnly *EestFixtureCorpusSpec *EngineApiAmsterdamBuilderEestSpec"
         env:
           FUKUII_DEV: true
           EEST_FIXTURES: ${{ github.workspace }}/eest-fixtures/fixtures
           EEST_REPORT: ${{ github.workspace }}/eest-report.txt
+          EEST_BUILDER_REPORT: ${{ github.workspace }}/eest-builder-report.txt
           SBT_OPTS: -Xmx6g -Xss4M
 
       - name: Summary
         if: always()
         run: |
-          if [ -f eest-report.txt ]; then
-            {
-              echo '```'
-              sed -n '1,/^failures/p' eest-report.txt
-              echo '```'
-            } >> "$GITHUB_STEP_SUMMARY"
-            sed -n '1,/^failures/p' eest-report.txt
-          else
-            echo "No report: the replay did not run." | tee -a "$GITHUB_STEP_SUMMARY"
-          fi
+          for report in eest-report.txt eest-builder-report.txt; do
+            if [ -f "$report" ]; then
+              {
+                echo '```'
+                sed -n '1,/^failures/p' "$report"
+                echo '```'
+              } >> "$GITHUB_STEP_SUMMARY"
+              sed -n '1,/^failures/p' "$report"
+            else
+              echo "No $report: that run did not happen." | tee -a "$GITHUB_STEP_SUMMARY"
+            fi
+          done
 
       - name: Upload report
         if: always()
         uses: actions/upload-artifact@v6
         with:
           name: eest-amsterdam-report
-          path: eest-report.txt
+          path: |
+            eest-report.txt
+            eest-builder-report.txt
           if-no-files-found: warn

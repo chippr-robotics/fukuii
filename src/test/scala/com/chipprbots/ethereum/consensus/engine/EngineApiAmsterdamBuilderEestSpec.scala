@@ -41,8 +41,9 @@ import com.chipprbots.ethereum.testing.Tags.*
   *
   * With `EEST_FIXTURES` set (fetch with `scripts/eest/fetch_fixtures.py`, as for EestFixtureCorpusSpec), the second
   * test does the same for every fixture under it: `EEST_FILTER` narrows the run, `EEST_THREADS` sets the parallelism
-  * and `EEST_BUILDER_REPORT` moves the report (default `target/eest-builder-report.txt`). Without a corpus it is
-  * canceled.
+  * and `EEST_BUILDER_REPORT` moves the report (default `target/eest-builder-report.txt`). `EEST_MIN_TESTS` fails the
+  * run when fewer tests were rebuilt, and makes a missing corpus a failure: CI (eest-amsterdam.yml) sets it, so the
+  * gate cannot pass on a corpus that is absent or partial. With neither set, the test is canceled, not passed.
   */
 class EngineApiAmsterdamBuilderEestSpec extends AnyFlatSpec with Matchers:
 
@@ -77,9 +78,12 @@ class EngineApiAmsterdamBuilderEestSpec extends AnyFlatSpec with Matchers:
     SlowTest,
     ConsensusTest
   ) in {
-    val root = setting("FIXTURES")
-      .map(Paths.get(_))
-      .getOrElse(cancel("no corpus configured: set EEST_FIXTURES (see scripts/eest/fetch_fixtures.py)"))
+    val minTests = setting("MIN_TESTS").map(_.toInt)
+    val root = setting("FIXTURES").map(Paths.get(_)).getOrElse {
+      // A declared minimum means a corpus is required (CI): cancelling here would let the gate pass on nothing.
+      if minTests.isDefined then fail(s"EEST_MIN_TESTS=${minTests.get} is set but no corpus is: set EEST_FIXTURES")
+      else cancel("no corpus configured: set EEST_FIXTURES (see scripts/eest/fetch_fixtures.py)")
+    }
     assert(Files.isDirectory(root), s"EEST_FIXTURES=$root is not a directory")
     val filter = setting("FILTER").map(_.r)
     val threads = setting("THREADS").map(_.toInt).getOrElse(Runtime.getRuntime.availableProcessors)
@@ -142,6 +146,11 @@ class EngineApiAmsterdamBuilderEestSpec extends AnyFlatSpec with Matchers:
     Files.write(reportPath, report.asJava)
     info(report.take(2).mkString("\n"))
 
+    minTests.foreach { min =>
+      withClue(s"only ${all.size} tests rebuilt where EEST_MIN_TESTS=$min: the corpus is incomplete. ") {
+        all.size should be >= min
+      }
+    }
     withClue(s"${failed.size} of ${all.size} fixtures diverge; full list in $reportPath. First: ") {
       failed.take(20).map(r => s"${r.file} :: ${r.test}: ${r.outcome.divergences.head}") shouldBe empty
     }

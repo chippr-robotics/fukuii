@@ -34,7 +34,8 @@ import com.chipprbots.ethereum.testing.Tags.*
   * every failing test with its first divergence. `EEST_MIN_TESTS` fails the run when fewer tests were replayed, so a
   * partially fetched corpus cannot pass as a smaller one. Each variable also has a `-Deest.*` system property form.
   *
-  * With no corpus configured the test is canceled, not passed: a conformance claim needs the corpus to have run.
+  * With no corpus configured the test is canceled, not passed: a conformance claim needs the corpus to have run. With
+  * `EEST_MIN_TESTS` set (CI, eest-amsterdam.yml) a missing corpus fails instead, so the gate cannot pass on nothing.
   */
 class EestFixtureCorpusSpec extends AnyFlatSpec with Matchers:
 
@@ -71,9 +72,11 @@ class EestFixtureCorpusSpec extends AnyFlatSpec with Matchers:
     SlowTest,
     ConsensusTest
   ) in {
-    val root = setting("FIXTURES")
-      .map(Paths.get(_))
-      .getOrElse(cancel("no corpus configured: set EEST_FIXTURES (see scripts/eest/fetch_fixtures.py)"))
+    val root = setting("FIXTURES").map(Paths.get(_)).getOrElse {
+      // A declared minimum means a corpus is required (CI): cancelling here would let the gate pass on nothing.
+      setting("MIN_TESTS").foreach(min => fail(s"EEST_MIN_TESTS=$min is set but no corpus is: set EEST_FIXTURES"))
+      cancel("no corpus configured: set EEST_FIXTURES (see scripts/eest/fetch_fixtures.py)")
+    }
     assert(Files.isDirectory(root), s"EEST_FIXTURES=$root is not a directory")
     val filter = setting("FILTER").map(_.r)
     val threads = setting("THREADS").map(_.toInt).getOrElse(Runtime.getRuntime.availableProcessors)
