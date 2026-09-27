@@ -23,11 +23,13 @@ import com.chipprbots.ethereum.domain.GasPrice
 import com.chipprbots.ethereum.domain.LegacyTransaction
 import com.chipprbots.ethereum.domain.SignedTransactionWithSender
 import com.chipprbots.ethereum.ledger.StxLedger
+import com.chipprbots.ethereum.ledger.TxResult
 import com.chipprbots.ethereum.mpt.MerklePatriciaTrie.MissingNodeException
 import com.chipprbots.ethereum.utils.BlockchainConfig
 import com.chipprbots.ethereum.utils.ByteStringUtils.ByteStringOps
 import com.chipprbots.ethereum.utils.Config
 import com.chipprbots.ethereum.vm.CallTracer
+import com.chipprbots.ethereum.vm.ExecutionTracer
 import com.chipprbots.ethereum.vm.VmTracer
 
 /** Service implementing the trace_* family of JSON-RPC methods (Parity/OpenEthereum format).
@@ -145,7 +147,7 @@ class TraceService(
         targetStx = stxs(txIndex)
         world = stxLedger.advanceWorldToTx(block.header, stxs, txIndex, parentHeader.stateRoot.value)
         tracer = new CallTracer(onlyTopCall = false)
-        _ = stxLedger.simulateTransactionWithTracer(targetStx, block.header, Some(world), tracer)
+        _ = stxLedger.replayTransaction(targetStx, block.header, world, Some(tracer))
         flat = flattenCallTree(
           tracer.getResult,
           req.txHash,
@@ -207,7 +209,9 @@ class TraceService(
         )
         targetStx = stxs(txIndex)
         world = stxLedger.advanceWorldToTx(block.header, stxs, txIndex, parentHeader.stateRoot.value)
-        result = buildReplayResult(targetStx, block, Some(world), req.txHash, txIndex, req.options)
+        result = buildReplayResult(block, req.txHash, txIndex, req.options)(tracer =>
+          stxLedger.replayTransaction(targetStx, block.header, world, Some(tracer))
+        )
       yield TraceReplayTransactionResponse(result)
     }.recover { case _: MissingNodeException =>
       Left(JsonRpcError.NodeNotFound)
@@ -232,7 +236,9 @@ class TraceService(
         stxs = SignedTransactionWithSender.getSignedTransactionsOfBlock(block.header, block.body.transactionList)
         results = stxs.zipWithIndex.map { case (stx, txIndex) =>
           val world = stxLedger.advanceWorldToTx(block.header, stxs, txIndex, parentHeader.stateRoot.value)
-          buildReplayResult(stx, block, Some(world), stx.tx.hash.value, txIndex, req.options)
+          buildReplayResult(block, stx.tx.hash.value, txIndex, req.options)(tracer =>
+            stxLedger.replayTransaction(stx, block.header, world, Some(tracer))
+          )
         }
       yield TraceReplayBlockTransactionsResponse(results)
     }.recover { case _: MissingNodeException =>
@@ -252,13 +258,8 @@ class TraceService(
         resolved <- resolveBlock(req.block)
         stx <- buildCallTx(req.call, resolved.block)
         world = resolved.pendingState
-        result = buildReplayResult(
-          stx,
-          resolved.block,
-          world,
-          ByteString.empty,
-          0,
-          req.options
+        result = buildReplayResult(resolved.block, ByteString.empty, 0, req.options)(tracer =>
+          stxLedger.simulateTransactionWithTracer(stx, resolved.block.header, world, tracer)
         )
       yield TraceCallResponse(result)
     }.recover { case _: MissingNodeException =>
@@ -278,7 +279,9 @@ class TraceService(
         val results: Seq[JValue] = req.calls.map { case (callTx, options) =>
           buildCallTx(callTx, resolved.block)
             .map { stx =>
-              buildReplayResult(stx, resolved.block, resolved.pendingState, ByteString.empty, 0, options)
+              buildReplayResult(resolved.block, ByteString.empty, 0, options)(tracer =>
+                stxLedger.simulateTransactionWithTracer(stx, resolved.block.header, resolved.pendingState, tracer)
+              )
             }
             .getOrElse(JNull)
         }
@@ -295,22 +298,25 @@ class TraceService(
     stxs.zipWithIndex.flatMap { case (stx, txIndex) =>
       val world = stxLedger.advanceWorldToTx(block.header, stxs, txIndex, parentStateRoot)
       val tracer = new CallTracer(onlyTopCall = false)
-      stxLedger.simulateTransactionWithTracer(stx, block.header, Some(world), tracer)
+      stxLedger.replayTransaction(stx, block.header, world, Some(tracer))
       flattenCallTree(tracer.getResult, stx.tx.hash.value, txIndex, block.header.hash.value, block.header.number.value)
     }
 
-  /** Builds a replay result bundle: { trace, vmTrace, stateDiff } based on options. */
+  /** Builds a replay result bundle: { trace, vmTrace, stateDiff } based on options.
+    *
+    * `execute` runs the transaction once per tracer, on the same pre-state each time: a stored block's transaction
+    * through `StxLedger.replayTransaction`, a synthetic call (trace_call, trace_callMany) through
+    * `StxLedger.simulateTransactionWithTracer`.
+    */
   private def buildReplayResult(
-      stx: SignedTransactionWithSender,
       block: Block,
-      world: Option[com.chipprbots.ethereum.ledger.InMemoryWorldStateProxy],
       txHash: ByteString,
       txIndex: Int,
       options: TraceOptions
-  ): JValue =
+  )(execute: ExecutionTracer => TxResult): JValue =
     // Always run CallTracer for the trace field (even if options.trace=false, needed for vmTrace sub selection)
     val callTracer = new CallTracer(onlyTopCall = false)
-    stxLedger.simulateTransactionWithTracer(stx, block.header, world, callTracer)
+    execute(callTracer)
 
     val traceField: JValue =
       if options.trace then
@@ -327,7 +333,7 @@ class TraceService(
 
     val vmTraceField: JValue = if options.vmTrace then
       val vmTracer = new VmTracer()
-      stxLedger.simulateTransactionWithTracer(stx, block.header, world, vmTracer)
+      execute(vmTracer)
       vmTracer.getResult
     else JNull
 

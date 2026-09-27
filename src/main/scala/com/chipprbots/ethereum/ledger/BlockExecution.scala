@@ -292,7 +292,7 @@ class BlockExecution(
         // Amsterdam: EIP-4788 and EIP-2935 run as real system calls (see `applyAmsterdamPreambleSystemCalls`), which
         // share EIP-7928 block access index 0.
         val preambleReads = accessList.map(_ => new BlockAccessRecorder)
-        val afterPreamble = applyAmsterdamPreambleSystemCalls(block, worldAfterDao, preambleReads)
+        val afterPreamble = BlockExecution.applyAmsterdamPreambleSystemCalls(block.header, worldAfterDao, preambleReads)
         for
           builder <- accessList
           reads <- preambleReads
@@ -413,58 +413,6 @@ class BlockExecution(
     val storage = w1.getStorage(HistoryStorageAddress)
     val updatedStorage = storage.store(slot, parentHashValue.toBigInt)
     w1.saveStorage(HistoryStorageAddress, updatedStorage)
-
-  /** Amsterdam: the EIP-4788 and EIP-2935 block preamble as execution-specs `apply_body` runs it — two
-    * `process_unchecked_system_transaction` calls from SYSTEM_ADDRESS, the beacon roots contract with the parent beacon
-    * block root, then the history contract with the parent hash — instead of [[applyEip4788]] / [[applyEip2935]]'s
-    * direct storage writes.
-    *
-    * The direct writes are the shortcut EIP-4788 permits ("clients may decide to omit an explicit EVM call and directly
-    * set the storage values"), and they give the same storage only while the canonical contracts are the code at those
-    * addresses. On Amsterdam the shortcut stops being equivalent. EIP-8037 funds each call with an execution grant and
-    * a separate state-gas reservoir (see `systemCallContext`), and EEST checks that by putting its own code at both
-    * addresses (`test_system_call_execution_grant`, `_execution_boundary`, `_reservoir_boundary`, beacon and history
-    * variants): only running the code gives their storage. EIP-7928 also records the calls' reads and writes in the
-    * block access list at index 0, which needs the calls to run.
-    *
-    * With the canonical contracts the storage is the same as the direct writes: the beacon roots contract stores the
-    * timestamp and the root at slots `timestamp % 8191` and `timestamp % 8191 + 8191`, and the history contract stores
-    * the parent hash at slot `(number - 1) % 8191` (asserted in AmsterdamSystemCallSpec). Every earlier fork and every
-    * ETC fork keep the direct writes.
-    */
-  private def applyAmsterdamPreambleSystemCalls(
-      block: Block,
-      world: InMemoryWorldStateProxy,
-      accessRecorder: Option[BlockAccessRecorder]
-  )(implicit blockchainConfig: BlockchainConfig): InMemoryWorldStateProxy =
-    import BlockExecution.*
-    val afterBeaconRoot = block.header.parentBeaconBlockRoot.fold(world) { root =>
-      uncheckedSystemCall(block, world, BeaconRootContractAddress, root.value, accessRecorder)
-    }
-    uncheckedSystemCall(block, afterBeaconRoot, HistoryStorageAddress, block.header.parentHash.value, accessRecorder)
-
-  /** execution-specs `process_unchecked_system_transaction`: a SYSTEM_ADDRESS call to `target`, whose failure is
-    * ignored — the call's state changes are dropped and the block stays valid. No code at `target` means nothing to run
-    * and nothing changes, as for any zero-value call to an account without code.
-    */
-  private def uncheckedSystemCall(
-      block: Block,
-      world: InMemoryWorldStateProxy,
-      target: Address,
-      input: ByteString,
-      accessRecorder: Option[BlockAccessRecorder]
-  )(implicit blockchainConfig: BlockchainConfig): InMemoryWorldStateProxy =
-    // EIP-7928: the target is read even when it has no code (execution-specs `create_evm` resolves its code first;
-    // EEST `bal_4788_absent_contract`), and its reads stay when the call fails
-    // (`bal_pre_execution_call_failure_keeps_read_drops_write`).
-    accessRecorder.foreach(BlockExecution.recordSystemCallTarget(world, target, _))
-    if world.getCode(target).isEmpty then world
-    else
-      val evmConfig = EvmConfig.forBlock(block.header.number.value, block.header.unixTimestamp, blockchainConfig)
-      val context = BlockExecution.systemCallContext(block.header, world, target, input, evmConfig, accessRecorder)
-      val result =
-        new com.chipprbots.ethereum.vm.VM[InMemoryWorldStateProxy, InMemoryWorldStateProxyStorage].run(context)
-      if result.error.isDefined then world else InMemoryWorldStateProxy.persistState(result.world)
 
   /** This function updates worldState transferring balance from drainList accounts to refundContract address
     *
@@ -842,6 +790,60 @@ object BlockExecution:
   ): Unit =
     recorder.recordAccount(target)
     SetCodeTransaction.parseDelegation(world.getCode(target)).foreach(recorder.recordAccount)
+
+  /** Amsterdam: the EIP-4788 and EIP-2935 block preamble as execution-specs `apply_body` runs it — two
+    * `process_unchecked_system_transaction` calls from SYSTEM_ADDRESS, the beacon roots contract with the parent beacon
+    * block root, then the history contract with the parent hash — instead of the direct storage writes of the
+    * `BlockExecution` class's `applyEip4788` / `applyEip2935`.
+    *
+    * The direct writes are the shortcut EIP-4788 permits ("clients may decide to omit an explicit EVM call and directly
+    * set the storage values"), and they give the same storage only while the canonical contracts are the code at those
+    * addresses. On Amsterdam the shortcut stops being equivalent. EIP-8037 funds each call with an execution grant and
+    * a separate state-gas reservoir (see `systemCallContext`), and EEST checks that by putting its own code at both
+    * addresses (`test_system_call_execution_grant`, `_execution_boundary`, `_reservoir_boundary`, beacon and history
+    * variants): only running the code gives their storage. EIP-7928 also records the calls' reads and writes in the
+    * block access list at index 0, which needs the calls to run.
+    *
+    * With the canonical contracts the storage is the same as the direct writes: the beacon roots contract stores the
+    * timestamp and the root at slots `timestamp % 8191` and `timestamp % 8191 + 8191`, and the history contract stores
+    * the parent hash at slot `(number - 1) % 8191` (asserted in AmsterdamSystemCallSpec). Every earlier fork and every
+    * ETC fork keep the direct writes.
+    *
+    * Here in the companion rather than on the class so that block execution and the trace replays of an Amsterdam block
+    * (`StxLedger.advanceWorldToTx`) run one and the same preamble.
+    */
+  private[ledger] def applyAmsterdamPreambleSystemCalls(
+      header: BlockHeader,
+      world: InMemoryWorldStateProxy,
+      accessRecorder: Option[BlockAccessRecorder]
+  )(implicit blockchainConfig: BlockchainConfig): InMemoryWorldStateProxy =
+    val afterBeaconRoot = header.parentBeaconBlockRoot.fold(world) { root =>
+      uncheckedSystemCall(header, world, BeaconRootContractAddress, root.value, accessRecorder)
+    }
+    uncheckedSystemCall(header, afterBeaconRoot, HistoryStorageAddress, header.parentHash.value, accessRecorder)
+
+  /** execution-specs `process_unchecked_system_transaction`: a SYSTEM_ADDRESS call to `target`, whose failure is
+    * ignored — the call's state changes are dropped and the block stays valid. No code at `target` means nothing to run
+    * and nothing changes, as for any zero-value call to an account without code.
+    */
+  private def uncheckedSystemCall(
+      header: BlockHeader,
+      world: InMemoryWorldStateProxy,
+      target: Address,
+      input: ByteString,
+      accessRecorder: Option[BlockAccessRecorder]
+  )(implicit blockchainConfig: BlockchainConfig): InMemoryWorldStateProxy =
+    // EIP-7928: the target is read even when it has no code (execution-specs `create_evm` resolves its code first;
+    // EEST `bal_4788_absent_contract`), and its reads stay when the call fails
+    // (`bal_pre_execution_call_failure_keeps_read_drops_write`).
+    accessRecorder.foreach(recordSystemCallTarget(world, target, _))
+    if world.getCode(target).isEmpty then world
+    else
+      val evmConfig = EvmConfig.forBlock(header.number.value, header.unixTimestamp, blockchainConfig)
+      val context = systemCallContext(header, world, target, input, evmConfig, accessRecorder)
+      val result =
+        new com.chipprbots.ethereum.vm.VM[InMemoryWorldStateProxy, InMemoryWorldStateProxyStorage].run(context)
+      if result.error.isDefined then world else InMemoryWorldStateProxy.persistState(result.world)
 
   /** EIP-6110 `DepositEvent` ABI layout: (offset, size) of pubkey, withdrawal_credentials, amount, signature, index. */
   private val DepositEventLength = 576

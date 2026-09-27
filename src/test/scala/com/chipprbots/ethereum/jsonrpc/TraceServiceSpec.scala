@@ -69,13 +69,8 @@ class TraceServiceSpec
 
     txMappingStorage.get.expects(txHash).returning(Some(TransactionLocation(block.header.hash.value, txIndex)))
     mockLedger.advanceWorldToTx.expects(*, *, *, *).returning(mockWorld)
-    (mockLedger
-      .simulateTransactionWithTracer(
-        _: SignedTransactionWithSender,
-        _: BlockHeader,
-        _: Option[InMemoryWorldStateProxy],
-        _: ExecutionTracer
-      ))
+    // A stored block's transaction is re-executed through replayTransaction (WI-14), not the bare simulate.
+    mockLedger.replayTransaction
       .expects(*, *, *, *)
       .returning(null.asInstanceOf[TxResult])
 
@@ -125,13 +120,8 @@ class TraceServiceSpec
 
     txMappingStorage.get.expects(txHash).returning(Some(TransactionLocation(block.header.hash.value, txIndex)))
     mockLedger.advanceWorldToTx.expects(*, *, *, *).returning(mockWorld)
-    (mockLedger
-      .simulateTransactionWithTracer(
-        _: SignedTransactionWithSender,
-        _: BlockHeader,
-        _: Option[InMemoryWorldStateProxy],
-        _: ExecutionTracer
-      ))
+    // A stored block's transaction is re-executed through replayTransaction (WI-14), not the bare simulate.
+    mockLedger.replayTransaction
       .expects(*, *, *, *)
       .returning(null.asInstanceOf[TxResult])
       .anyNumberOfTimes()

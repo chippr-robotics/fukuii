@@ -453,7 +453,10 @@ class BlockPreparator(
       blockHeader: BlockHeader,
       world: InMemoryWorldStateProxy,
       // EIP-7928: the transaction's block-access recorder. Present only when executing an Amsterdam block.
-      accessRecorder: Option[BlockAccessRecorder] = None
+      accessRecorder: Option[BlockAccessRecorder] = None,
+      // An RPC tracer watching the top-level frame, for a trace replay (StxLedger.replayTransaction). Block import and
+      // block building never pass one, and without one the frame runs on `vm` exactly as it always has.
+      tracer: Option[ExecutionTracer] = None
   )(implicit blockchainConfig: BlockchainConfig): TxResult =
     log.debug(s"Transaction ${stx.hash.toHex} execution start")
     // EIP-7928: execution-specs `check_transaction` reads the sender before anything else.
@@ -525,7 +528,9 @@ class BlockPreparator(
         recorder
       )
     }
-    val result = vm.run(context)
+    // A tracer rides on a VM of its own, as runVMWithTracer's does: the VM's tracer is the one that sees sub-call
+    // entries and exits as well as steps. It is not also put on the context, which would report every step twice.
+    val result = tracer.fold(vm.run(context))(t => new VMImpl(Some(t)).run(context))
 
     // A failed top-level frame reverts to the world as it stood when the frame was ENTERED, which is after the
     // EIP-7702 authorizations: they are applied before the call snapshot (go-ethereum `execute`, execution-specs
