@@ -25,8 +25,9 @@ import com.chipprbots.ethereum.domain.BlockchainReader
   *
   * `BranchResolution` (constructed by `SyncController`): receives `Option[DesignatedHead]` built as `if isPoSChain then
   * forkChoiceManagerOpt.map(...) else None`, where `isPoSChain` is `blockchainConfig.terminalTotalDifficulty.isDefined`
-  * — the predicate behind `clPivotEnabled`. `terminal-total-difficulty` is set only in `eth-chain.conf` and
-  * `sepolia-chain.conf`, so on a PoW chain the value is `None` and the arm is structurally absent.
+  * — the predicate behind `clPivotEnabled`. `terminal-total-difficulty` is set only in `eth-chain.conf`,
+  * `sepolia-chain.conf` and `plataberget-chain.conf`, so on a PoW chain the value is `None` and the arm is structurally
+  * absent.
   *
   * `ConsensusImpl` (constructed by `NodeBuilder`): receives `Some(LateBound)` on EVERY network, ETC included — the cake
   * forbids handing it a `ForkChoiceManager` at construction. The gate here is BINDING: the holder is bound only by

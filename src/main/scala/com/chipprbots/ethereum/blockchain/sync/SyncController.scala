@@ -310,9 +310,9 @@ object SyncController:
 
     // PoS fork choice for the p2p import path, or None. Same conjunction as clPivotEnabled above, but note which half
     // does the work: a running Node always supplies a ForkChoiceManager (Node.forkChoiceManagerForSync), so the
-    // OPERATIVE gate is `isPoSChain` — a configured terminal-total-difficulty, set in eth-chain.conf and
-    // sepolia-chain.conf and in NO PoW chain config. On ETC/Mordor/Gorgoroth this is None for the life of the node,
-    // so `BranchResolution`'s PoS arm predicate is always false there. See DesignatedHead.
+    // OPERATIVE gate is `isPoSChain` — a configured terminal-total-difficulty, set in eth-chain.conf,
+    // sepolia-chain.conf and plataberget-chain.conf and in NO PoW chain config. On ETC/Mordor/Gorgoroth this is None
+    // for the life of the node, so `BranchResolution`'s PoS arm predicate is always false there. See DesignatedHead.
     // Reads the REQUESTED head, not getHeadBlockHash (executed-only, so it lags exactly when a CL-designated side
     // branch is being fetched). See ForkChoiceManager.getRequestedHeadBlockHash.
     private val designatedHeadOpt: Option[DesignatedHead] =
