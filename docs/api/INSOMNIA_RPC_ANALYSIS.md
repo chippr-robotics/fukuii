@@ -253,7 +253,7 @@ If you need the following, consider using Geth or another client:
 ## Documentation References
 
 - [Ethereum Execution APIs](https://github.com/ethereum/execution-apis)
-- [Ethereum JSON-RPC Specification](https://ethereum.github.io/execution-apis/api-documentation/)
+- [Ethereum JSON-RPC Specification](https://ethereum.github.io/execution-apis/)
 - [Geth JSON-RPC API](https://geth.ethereum.org/docs/interacting-with-geth/rpc)
 - [ETC Protocol](https://ethereumclassic.org/)
 

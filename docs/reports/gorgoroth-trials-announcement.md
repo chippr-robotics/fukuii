@@ -162,9 +162,9 @@ Your feedback during the alpha testing period directly impacts the timeline and 
 Comprehensive guides are available to help you:
 
 ### Gorgoroth Testing
-- **[Gorgoroth Quick Start](https://github.com/chippr-robotics/fukuii/blob/main/ops/gorgoroth/QUICKSTART.md)** - Get running in 5 minutes
+- **[Gorgoroth Quick Start](https://github.com/chippr-robotics/fukuii/blob/main/ops/gorgoroth/README.md#quick-start)** - Get running in 5 minutes
 - **[Compatibility Testing Guide](https://github.com/chippr-robotics/fukuii/blob/main/docs/testing/GORGOROTH_COMPATIBILITY_TESTING.md)** - Detailed test procedures
-- **[Faucet Testing Guide](https://github.com/chippr-robotics/fukuii/blob/main/docs/testing/GORGOROTH_FAUCET_TESTING.md)** - Test token distribution
+- **[Faucet Testing Guide](https://github.com/chippr-robotics/fukuii/blob/main/docs/testing/GORGOROTH_COMPATIBILITY_TESTING.md#faucet-service-testing)** - Test token distribution
 - **[Validation Status](https://github.com/chippr-robotics/fukuii/blob/main/docs/validation/GORGOROTH_VALIDATION_STATUS.md)** - Current progress
 
 ### Cirith Ungol Testing (Bonus)

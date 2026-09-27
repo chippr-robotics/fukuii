@@ -529,7 +529,7 @@ readinessProbe:
 Release images published to `ghcr.io/chippr-robotics/fukuii` follow supply chain security best practices:
 
 #### 1. Image Signing with Cosign
-- All release images are signed using [Sigstore Cosign](https://docs.sigstore.dev/cosign/overview/)
+- All release images are signed using [Sigstore Cosign](https://docs.sigstore.dev/cosign/signing/overview/)
 - Uses keyless signing with GitHub OIDC (no keys to manage or rotate)
 - Signatures are stored in the Sigstore transparency log (Rekor)
 - Verifiable proof that images were built by our official GitHub Actions workflows
