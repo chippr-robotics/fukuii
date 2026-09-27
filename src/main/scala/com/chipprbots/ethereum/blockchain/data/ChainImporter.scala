@@ -132,7 +132,7 @@ class ChainImporter(
                 failed += 1
           else
             importBlock(block) match
-              case Right(receipts) =>
+              case Right((receipts, blockAccessList)) =>
                 val parentWeight = blockchainReader
                   .getChainWeightByHash(block.header.parentHash)
                   .getOrElse(ChainWeight.zero)
@@ -144,6 +144,8 @@ class ChainImporter(
                 // consensus / consume-engine fixtures expect head to advance over blob blocks;
                 // mainnet ingestion uses Engine API + sidecar verification, not chain.rlp.
                 blockchainWriter.save(block, receipts, newWeight, saveAsBestBlock = true)
+                // EIP-7928: the list the block just validated against.
+                blockAccessList.foreach(bal => blockchainWriter.storeBlockAccessList(block.header.hash, bal).commit())
                 blockchainReader.recordBlockDifficulty(block.header.difficulty)
                 imported += 1
 
@@ -159,7 +161,9 @@ class ChainImporter(
       // else blocks.nonEmpty
     // else file.exists
 
-  private def importBlock(block: Block)(implicit blockchainConfig: BlockchainConfig): Either[Any, Seq[Receipt]] =
+  private def importBlock(
+      block: Block
+  )(implicit blockchainConfig: BlockchainConfig): Either[Any, (Seq[Receipt], Option[BlockAccessList])] =
     // Validate header/body pre-execution (ommers, difficulty, nonce, withdrawals/blob fields, etc.),
     // then execute, then validate post-execution (gasUsed, receiptsRoot, stateRoot).
     // Invalid blocks are rejected and the previous chain head is preserved.
@@ -168,7 +172,7 @@ class ChainImporter(
         Left(s"pre-execution validation failed: $err")
       case Right(_) =>
         blockExecution.executeBlockNoValidationWithRequests(block).flatMap {
-          case (receipts, gasUsed, stateRootHash, requests) =>
+          case (receipts, gasUsed, stateRootHash, requests, blockAccessList) =>
             blockValidation.validateBlockAfterExecution(block, stateRootHash, receipts, gasUsed) match
               case Left(err) =>
                 receipts.zipWithIndex.foreach { case (r, i) =>
@@ -176,12 +180,14 @@ class ChainImporter(
                 }
                 Left(s"post-execution validation failed: $err")
               case Right(_) =>
-                // EIP-7685: the header's requestsHash must match the requests execution produced.
+                // EIP-7685: the header's requestsHash must match the requests execution produced; EIP-7928: its
+                // blockAccessListHash, the access list execution produced.
                 blockExecution
                   .validateRequestsHash(block, requests)
+                  .flatMap(_ => blockExecution.validateBlockAccessList(block, blockAccessList))
                   .left
                   .map(err => s"post-execution validation failed: ${err.describe}")
-                  .map(_ => receipts)
+                  .map(_ => (receipts, blockAccessList))
         }
 
   /** Decode concatenated RLP-encoded blocks from a byte array. */

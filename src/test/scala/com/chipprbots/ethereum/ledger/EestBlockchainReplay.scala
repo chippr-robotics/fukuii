@@ -105,6 +105,61 @@ object EestBlockchainReplay:
   private def bi(s: String): BigInt = if s.stripPrefix("0x").isEmpty then 0 else BigInt(s.stripPrefix("0x"), 16)
   private def str(v: JValue): String = v.values.toString
 
+  /** A debugging aid for an `INVALID_BLOCK_ACCESS_LIST` divergence: where the list execution produced differs from the
+    * fixture's `blockAccessList` JSON (execution-specs' own list, rendered for humans). The replay never builds
+    * anything from that JSON — the verdict is the header hash alone — so this only names the difference, first few
+    * entries first.
+    */
+  private def accessListDiff(json: JValue, computed: Option[BlockAccessList]): String =
+    import BlockAccessList.*
+    def idx(v: JValue): Long = bi(str(v \ "blockAccessIndex")).toLong
+    def arr(v: JValue): List[JValue] = v match
+      case JArray(items) => items
+      case _             => Nil
+    val expected: Map[Address, AccountChanges] = arr(json).map { a =>
+      val address = Address(hx(str(a \ "address")))
+      address -> AccountChanges(
+        address,
+        arr(a \ "storageChanges").map { sc =>
+          SlotChanges(
+            UInt256(bi(str(sc \ "slot"))),
+            arr(sc \ "slotChanges").map(c => StorageChange(idx(c), UInt256(bi(str(c \ "postValue")))))
+          )
+        },
+        arr(a \ "storageReads").map(r => UInt256(bi(str(r)))),
+        arr(a \ "balanceChanges").map(c => BalanceChange(idx(c), UInt256(bi(str(c \ "postBalance"))))),
+        arr(a \ "nonceChanges").map(c => NonceChange(idx(c), bi(str(c \ "postNonce")))),
+        arr(a \ "codeChanges").map(c => CodeChange(idx(c), ByteString(hx(str(c \ "newCode")))))
+      )
+    }.toMap
+    val actual: Map[Address, AccountChanges] = computed.toSeq.flatMap(_.accounts).map(a => a.address -> a).toMap
+    if expected.isEmpty then "" // no JSON for this block
+    else
+      val diffs = (expected.keySet ++ actual.keySet).toSeq.sortBy(_.toString).flatMap { address =>
+        (expected.get(address), actual.get(address)) match
+          case (Some(_), None) => Seq(s"$address missing")
+          case (None, Some(a)) => Seq(s"$address extra: $a")
+          case (Some(e), Some(a)) =>
+            Seq(
+              Option.when(e.storageChanges != a.storageChanges)(
+                s"$address storage_changes want ${e.storageChanges} got ${a.storageChanges}"
+              ),
+              Option.when(e.storageReads != a.storageReads)(
+                s"$address storage_reads want ${e.storageReads} got ${a.storageReads}"
+              ),
+              Option.when(e.balanceChanges != a.balanceChanges)(
+                s"$address balance_changes want ${e.balanceChanges} got ${a.balanceChanges}"
+              ),
+              Option.when(e.nonceChanges != a.nonceChanges)(
+                s"$address nonce_changes want ${e.nonceChanges} got ${a.nonceChanges}"
+              ),
+              Option.when(e.codeChanges != a.codeChanges)(s"$address code_changes differ")
+            ).flatten
+          case (None, None) => Nil
+      }
+      if diffs.isEmpty then " (content equals the fixture's JSON list)"
+      else diffs.take(6).mkString(" | vs fixture JSON: ", "; ", if diffs.size > 6 then s"; +${diffs.size - 6}" else "")
+
   private class Env extends EphemBlockchainTestSetup:
     override lazy val validators: Validators = ValidatorsExecutor(Protocol.EngineApi)
     override lazy val vm: VMImpl = new VMImpl
@@ -179,12 +234,18 @@ object EestBlockchainReplay:
               Try(hx(str(b \ "rlp")).toBlock).toEither.left.map(e => s"undecodable: $e").flatMap { block =>
                 blockValidation.validateBlockBeforeExecution(block).left.map(_.toString).flatMap { _ =>
                   blockExecution.executeBlockNoValidationWithRequests(block).left.map(_.describe).flatMap {
-                    case (receipts, gasUsed, root, requests) =>
+                    case (receipts, gasUsed, root, requests, accessList) =>
                       blockValidation
                         .validateBlockAfterExecution(block, root, receipts, gasUsed)
                         .left
                         .map(_.toString)
                         .flatMap(_ => blockExecution.validateRequestsHash(block, requests).left.map(_.describe))
+                        .flatMap { _ =>
+                          blockExecution
+                            .validateBlockAccessList(block, accessList)
+                            .left
+                            .map(err => err.describe + accessListDiff(b \ "blockAccessList", accessList))
+                        }
                         .map(_ => (block, receipts))
                   }
                 }

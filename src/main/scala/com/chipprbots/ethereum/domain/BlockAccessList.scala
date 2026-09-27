@@ -50,7 +50,42 @@ final case class BlockAccessList(accounts: Seq[AccountChanges]):
       1L + (account.storageChanges.iterator.map(_.slot) ++ account.storageReads.iterator).toSet.size
     }.sum
 
+  /** EIP-7928's size constraint, `itemCount <= gasLimit / ITEM_COST` (execution-specs
+    * `validate_block_access_list_gas_limit`, raised as `BlockAccessListGasLimitExceededError`).
+    */
+  def validateSize(gasLimit: BigInt): Either[String, Unit] =
+    val limit = gasLimit / ItemCost
+    Either.cond(
+      BigInt(itemCount) <= limit,
+      (),
+      s"$itemCount items exceed the limit of $limit (block gas limit $gasLimit / $ItemCost)"
+    )
+
+  /** The checks [[BlockAccessList.decode]] leaves to a block, for a list received with one (engine_newPayloadV5): no
+    * `block_access_index` beyond `transactionCount + 1`, the post-execution index (EIP-7928 "Spurious entries MAY be
+    * detected by validating BAL indices, which MUST never be higher than `len(transactions) + 1`"), and
+    * [[validateSize]]. go-ethereum `BlockAccessList.Validate`. A list execution builds meets both by construction, bar
+    * the size, which [[validateSize]] covers.
+    */
+  def validateFor(transactionCount: Int, gasLimit: BigInt): Either[String, Unit] =
+    val maxIndex = transactionCount + 1L
+    accounts.iterator
+      .flatMap { account =>
+        (account.storageChanges.iterator.flatMap(_.changes.iterator.map(_.blockAccessIndex)) ++
+          account.balanceChanges.iterator.map(_.blockAccessIndex) ++
+          account.nonceChanges.iterator.map(_.blockAccessIndex) ++
+          account.codeChanges.iterator.map(_.blockAccessIndex)).collectFirst {
+          case index if index > maxIndex => s"${account.address}: block access index $index exceeds $maxIndex"
+        }
+      }
+      .nextOption()
+      .toLeft(())
+      .flatMap(_ => validateSize(gasLimit))
+
 object BlockAccessList:
+
+  /** EIP-7928 `ITEM_COST` (execution-specs `GasCosts.BLOCK_ACCESS_LIST_ITEM`): block gas per list item allowed. */
+  val ItemCost: Long = 2000
 
   /** Largest `block_access_index`: the field is a u32. */
   val MaxBlockAccessIndex: Long = 0xffffffffL

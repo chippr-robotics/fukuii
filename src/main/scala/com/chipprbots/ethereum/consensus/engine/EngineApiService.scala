@@ -569,7 +569,7 @@ class EngineApiService(
           else if parentKnown && parentValidated then
             try
               blockExecution.executeAndValidateBlockFull(block, alreadyValidated = true) match
-                case Right((receipts, derivedRequests)) =>
+                case Right((receipts, derivedRequests, blockAccessList)) =>
                   // EIP-7685: Per Engine API spec, verify the CL-supplied executionRequests match
                   // what block execution actually produced. Mismatch → INVALID (e.g. CL attempted
                   // to inject a deposit/withdrawal request that the execution layer didn't emit).
@@ -610,6 +610,11 @@ class EngineApiService(
                     if extendsCanonical then blockchainWriter.storeBlock(block).commit()
                     else blockchainWriter.storeBlockByHashOnly(block).commit()
                     blockchainWriter.storeReceipts(block.header.hash, receipts).commit()
+                    // EIP-7928: execution produced this list and validated the header against it (the CL's bytes
+                    // hash to the same commitment), so it is the list to keep and to serve.
+                    blockAccessList.foreach(bal =>
+                      blockchainWriter.storeBlockAccessList(block.header.hash, bal).commit()
+                    )
                     storeChainWeightFor(block, parentHeader)
                     // NB: do NOT remove txs from the pool here. A newPayload'd block is stored
                     // but not yet canonical (no FCU has advanced bestBlock); the same txs must
