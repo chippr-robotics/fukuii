@@ -29,6 +29,7 @@ import com.chipprbots.ethereum.blockchain.sync.fast.FastSyncBranchResolverActor
 import com.chipprbots.ethereum.consensus.ConsensusAdapter
 import com.chipprbots.ethereum.consensus.ConsensusImpl
 import com.chipprbots.ethereum.consensus.engine.DesignatedHead
+import com.chipprbots.ethereum.consensus.validators.BlockHeaderError
 import com.chipprbots.ethereum.db.storage.EvmCodeStorage
 import com.chipprbots.ethereum.db.storage.StateStorage
 import com.chipprbots.ethereum.domain.*
@@ -38,6 +39,7 @@ import com.chipprbots.ethereum.jsonrpc.NewBlockImported
 import com.chipprbots.ethereum.ledger.BlockData
 import com.chipprbots.ethereum.ledger.BlockExecution
 import com.chipprbots.ethereum.ledger.BlockExecutionError
+import com.chipprbots.ethereum.ledger.BlockExecutionError.ValidationBeforeExecError
 import com.chipprbots.ethereum.ledger.BlockValidation
 import com.chipprbots.ethereum.ledger.BranchResolution
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor
@@ -215,6 +217,34 @@ class PosRegularSyncImportSpec extends ScalaTestWithActorTestKit with AnyFlatSpe
     fetcher.expectMessageType[BlockFetcher.PickBlocks](importTimeout)
     stop()
 
+  it should "drop, not replay, batches deferred behind an import that failed and already rewound the fetcher" taggedAs (
+    UnitTest,
+    SyncTest,
+    ConsensusTest
+  ) in new ImporterFixture():
+    start()
+    requestPick()
+    requestPick()
+    val first = fetcher.expectMessageType[BlockFetcher.PickBlocks]
+    val second = fetcher.expectMessageType[BlockFetcher.PickBlocks]
+
+    failAt(ahead.head)
+    val (started, release) = holdBatchStartingAt(head.number.value + 1)
+    try
+      first.replyTo ! BlockFetcher.PickedBlocks(fromWire(ahead.take(50)))
+      started.await(10, TimeUnit.SECONDS) shouldBe true
+      second.replyTo ! BlockFetcher.PickedBlocks(fromWire(ahead.slice(50, 52))) // deferred: the import is running
+    finally release.countDown()
+
+    // The failed import rewinds the fetcher to its own first block: exactly one InvalidateBlocksFrom …
+    fetcher.expectMessageType[BlockFetcher.InvalidateBlocksFrom](importTimeout).fromBlock shouldBe head.number.value + 1
+    // … and the next thing the fetcher hears is a fresh pick. Unfixed: the deferred batch was handed back, resolved as
+    // UnknownBranch and rewound the fetcher a second, deeper time — InvalidateBlocksFrom(N - 64) arrived here.
+    fetcher.expectMessageType[BlockFetcher.PickBlocks](importTimeout)
+    executedNumbers shouldBe empty
+    blockchainReader.getBestBlockNumber shouldBe head.number.value
+    stop()
+
   "BlockImporter on a PoW chain (the ETC/Mordor/Gorgoroth wiring)" should
     "handle the same post-rewind batch exactly as before: the whole batch, prefix included, re-executed" taggedAs (
       UnitTest,
@@ -337,7 +367,11 @@ class PosRegularSyncImportSpec extends ScalaTestWithActorTestKit with AnyFlatSpe
     def executedNumbers: List[BigInt] = executed.asScala.toList.map(_.number.value)
 
     @volatile private var hold: Option[(BigInt, CountDownLatch, CountDownLatch)] = None
+    @volatile private var failing: Option[ByteString] = None
     @volatile private var forkRecoveryFrom: Option[BigInt] = None
+
+    /** Make `block` fail validation: the blocks before it in its batch execute, it and the rest do not. */
+    def failAt(block: Block): Unit = failing = Some(block.hash.value)
 
     /** Have the import of the batch that starts at `firstBlock` raise StartForkRecovery from INSIDE itself, the way
       * FORK-DETECT does (tryImportBlocks, on the import's own IO) — so that import's ImportDone is sent after it.
@@ -362,16 +396,21 @@ class PosRegularSyncImportSpec extends ScalaTestWithActorTestKit with AnyFlatSpe
             started.countDown()
             release.await(30, TimeUnit.SECONDS)
         }
-        val (_, data) = blocks.foldLeft((weight, Vector.empty[BlockData])) { case ((w, acc), b) =>
+        val valid = blocks.takeWhile(b => !failing.contains(b.hash.value))
+        val (_, data) = valid.foldLeft((weight, Vector.empty[BlockData])) { case ((w, acc), b) =>
           val next = w.increase(b.header)
           blockchainWriter.save(b, Nil, next, saveAsBestBlock = false)
           executed.add(b)
           (next, acc :+ BlockData(b, Nil, next))
         }
+        val failure: Option[BlockExecutionError] =
+          blocks
+            .find(b => failing.contains(b.hash.value))
+            .map(_ => ValidationBeforeExecError(BlockHeaderError.HeaderGasLimitError))
         forkRecoveryFrom.filter(first => blocks.headOption.exists(_.number.value == first)).foreach { first =>
           importer ! BlockImporter.StartForkRecovery(first)
         }
-        (data.toList, Option.empty[BlockExecutionError])
+        (data.toList, failure)
       }
 
     // --- the production objects under test ----------------------------------------------------------------------

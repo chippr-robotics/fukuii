@@ -70,6 +70,10 @@ object BlockImporter:
   private[regular] case object SyncRetryTick extends Command
   private[regular] val RetryKey = "BlockImporterRetry"
 
+  // Above this many batches deferred behind one running import (post-merge only), BlockImporter warns: see the
+  // deferral arm in `running`.
+  private[regular] val DeferredBatchesWarnThreshold: Int = 5
+
   /** The block the gas-used arm may report as consensus-invalid, with its proven descendants — or `None` to report
     * nothing.
     *
@@ -178,6 +182,12 @@ object BlockImporter:
 
   sealed trait NewBehavior
   case object Running extends NewBehavior
+
+  /** [[Running]], but the import already sent the fetcher an `InvalidateBlocksFrom`: every batch picked before that is
+    * stale, so batches deferred during the import are dropped instead of handed back. Otherwise identical to
+    * [[Running]] — and on ETC/Mordor/Gorgoroth, where nothing is ever deferred, identical outright.
+    */
+  case object RunningAfterFetcherRewind extends NewBehavior
   case class ResolvingMissingNode(blocksToRetry: NonEmptyList[Block]) extends NewBehavior
   case class ResolvingBranch(from: BigInt) extends NewBehavior
 
@@ -286,12 +296,22 @@ final private class BlockImporterLogic(
         // importable against that stale head would EXECUTE concurrently with the running import. Hold it and hand it
         // back, in order, when that import is done. Gated on BranchResolution's PoS gate: a PoW chain handles every
         // picked batch on arrival, as before.
+        val queued = state.deferredBatches.size + 1
         log.debug(
           "Picked batch deferred: from={} to={} reason=import-in-flight queued={}",
           blocks.head.number,
           blocks.last.number,
-          state.deferredBatches.size + 1
+          queued
         )
+        // Batches queue here only when several pick requests were answered while one import runs, so more than a
+        // handful means imports are far slower than the pick cadence: a backlog worth seeing without DEBUG.
+        if queued > DeferredBatchesWarnThreshold then
+          log.warning(
+            "Picked batches backing up behind a slow import: queued={} from={} to={}",
+            queued,
+            blocks.head.number,
+            blocks.last.number
+          )
         running(state.deferBatch(blocks))
 
       case FetcherResponse(BlockFetcher.PickedBlocks(blocks: NonEmptyList[Block @unchecked])) =>
@@ -327,9 +347,15 @@ final private class BlockImporterLogic(
         newBehavior match
           case Running =>
             // Oldest first, and ahead of the PickBlocks, so the batches reach importBlocks in fetch order. Each is then
-            // resolved against the head this import left behind. After a failed import the fetcher has already been
-            // rewound; a stale batch then resolves as UnknownBranch, which is what handling it on arrival did too.
+            // resolved against the head this import left behind.
             deferred.foreach(blocks => selfRef ! FetcherResponse(BlockFetcher.PickedBlocks(blocks)))
+            selfRef ! PickBlocks
+          case RunningAfterFetcherRewind =>
+            // The import failed and already sent InvalidateBlocksFrom: the fetcher is re-serving from the failing
+            // block, so every deferred batch lies beyond a block that was never imported. Handing them back would
+            // only resolve as UnknownBranch and rewind the fetcher a second, deeper time.
+            if deferred.nonEmpty then
+              log.debug("Deferred batches dropped: count={} reason=import-failed-fetcher-rewound", deferred.size)
             selfRef ! PickBlocks
           case r: ResolvingBranch =>
             // The fetcher is being rewound (InvalidateBlocksFrom already sent): it re-serves these blocks.
@@ -463,7 +489,7 @@ final private class BlockImporterLogic(
       state: ImporterState
   ): Behavior[Command] =
     newBehavior match
-      case Running =>
+      case Running | RunningAfterFetcherRewind =>
         timers.startTimerWithFixedDelay(RetryKey, SyncRetryTick, syncConfig.syncRetryInterval)
         running(state)
       case ResolvingMissingNode(blocksToRetry) =>
@@ -672,11 +698,11 @@ final private class BlockImporterLogic(
                         )
                     val invalidBlockNr = failedBlock.number.value
                     fetcher ! BlockFetcher.InvalidateBlocksFrom(invalidBlockNr, err.toString)
-                    Running
+                    RunningAfterFetcherRewind
               case _ =>
                 val invalidBlockNr = notImportedBlocks.head.number.value
                 fetcher ! BlockFetcher.InvalidateBlocksFrom(invalidBlockNr, err.toString)
-                Running
+                RunningAfterFetcherRewind
       }
 
   private def tryImportBlocks(
