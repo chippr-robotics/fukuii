@@ -484,7 +484,7 @@ class EngineApiService(
                 s"parentGasUsed ${parent.gasUsed}"
             )
           // EIP-4844: Validate excessBlobGas against parent.
-          // EIP-7691 (Prague) raises target 3→6 blobs; EIP-7892 BPO1/BPO2 raise it 6→8→12.
+          // EIP-7691 (Prague) raises target 3→6 blobs; EIP-7892 BPO1/BPO2 raise it 6→10→14.
           // Pass the right target based on the CHILD block's fork timestamp (child is the
           // one being validated; parent may precede the active BPO).
           else if block.header.excessBlobGas.isDefined then
@@ -2027,13 +2027,15 @@ class EngineApiService(
   *   - Cancun (EIP-4844): target=3, max=6 blobs
   *   - Prague (EIP-7691): target=6, max=9 blobs
   *   - Osaka: target=6, max=9 blobs (no blob change; inherits Prague)
-  *   - BPO1 (EIP-7892): target=8, max=12 blobs
-  *   - BPO2 (EIP-7892): target=12, max=18 blobs
+  *   - BPO1 (EIP-7892): target=10, max=15 blobs, update fraction 8,346,193
+  *   - BPO2 (EIP-7892): target=14, max=21 blobs, update fraction 11,684,671
+  *   - Amsterdam: no blob change; inherits BPO2 (no network declares an Amsterdam blob-schedule entry)
   *
-  * Sepolia BPO schedule (per geth `params.SepoliaChainConfig.BlobScheduleConfig`):
-  *   - osaka: 2025-10-14 11:36
-  *   - bpo1: 2025-10-21 06:46 (target=8, max=12)
-  *   - bpo2: 2025-10-28 02:36 (target=12, max=18)
+  * These are go-ethereum's `params.DefaultBPO1BlobConfig` / `DefaultBPO2BlobConfig`, which
+  * `params.SepoliaChainConfig.BlobScheduleConfig` uses. Sepolia schedule (`sepolia-chain.conf`):
+  *   - osaka: 1760427360 = 2025-10-14 07:36:00 UTC
+  *   - bpo1: 1761017184 = 2025-10-21 03:26:24 UTC (target=10, max=15)
+  *   - bpo2: 1761607008 = 2025-10-27 23:16:48 UTC (target=14, max=21)
   *
   * Use the fork-aware `targetBlobGasPerBlock(timestamp, config)` / `maxBlobGasPerBlock(timestamp, config)` for any
   * blob-gas validation; the static `*_TARGET_BLOB_GAS` / `*_MAX_BLOB_GAS` values are kept only as the ladder rungs.
