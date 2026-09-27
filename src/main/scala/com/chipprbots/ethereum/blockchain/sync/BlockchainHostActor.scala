@@ -7,8 +7,12 @@ import org.apache.pekko.actor.typed.scaladsl.Behaviors
 import org.apache.pekko.util.ByteString
 import org.apache.pekko.util.Timeout
 
+import scala.annotation.tailrec
 import scala.concurrent.ExecutionContext
 import scala.concurrent.duration.*
+import scala.util.Failure
+import scala.util.Success
+import scala.util.Try
 
 import com.chipprbots.ethereum.blockchain.sync.codec.MptNodeCodecs.*
 import com.chipprbots.ethereum.db.storage.EvmCodeStorage
@@ -35,6 +39,7 @@ import com.chipprbots.ethereum.rlp.RLPEncodeable
 import com.chipprbots.ethereum.rlp.RLPList
 import com.chipprbots.ethereum.rlp.RLPValue
 import com.chipprbots.ethereum.rlp.encode
+import com.chipprbots.ethereum.rlp.rawDecode
 import com.chipprbots.ethereum.transactions.PendingTransactionsManager
 import com.chipprbots.ethereum.transactions.PendingTransactionsManager.PendingTransactionsResponse
 import com.chipprbots.ethereum.utils.ByteStringUtils
@@ -57,6 +62,19 @@ object BlockchainHostActor:
       Codes.GetBlockAccessListsCode,
       Codes.GetCellsCode
     )
+
+  /** EIP-8159: "The recommended soft limit for `BlockAccessLists` responses is 2 MiB" (go-ethereum
+    * `softResponseLimit`).
+    */
+  private val BlockAccessListsSoftLimitBytes: Long = 2L * 1024 * 1024
+
+  /** Most entries one `BlockAccessLists` response carries, bounding the store reads a single request can cause
+    * (go-ethereum `maxBALsServe`; EIP-8159 leaves the count "subject to implementation-defined limits").
+    */
+  private val MaxBlockAccessListsServe: Int = 1024
+
+  /** An EIP-8159 entry for a list this node does not hold: the RLP empty string, 0x80. */
+  private val UnavailableBlockAccessList: RLPValue = RLPValue(Array.emptyByteArray)
 
   def apply(
       blockchainReader: BlockchainReader,
@@ -177,6 +195,56 @@ object BlockchainHostActor:
       }
       fitting
 
+    /** The EIP-8159 `BlockAccessLists` entries for a `GetBlockAccessLists` request, with how many of them are lists and
+      * their total size.
+      *
+      * One entry per requested hash, in request order ("Each element corresponds to a block hash from the request, in
+      * order"): the EIP-7928 list stored for that block (`BlockchainReader.getBlockAccessListByHash`) as it is stored —
+      * the canonical RLP written once the block validated against it, whose keccak256 is the header's
+      * `blockAccessListHash` — or, when this node holds none (an unknown block, a block before Amsterdam or on ETC, a
+      * list never stored), the RLP empty string: "The RLP empty string (`0x80`) is returned for blocks where the BAL is
+      * unavailable." An empty LIST (0xc0) is itself a valid access list, so it cannot stand for absence, and no entry
+      * is skipped: the requester matches entries to hashes by position.
+      *
+      * Stops before an entry, cutting the tail, once the lists already served reach the 2 MiB soft limit or the
+      * response holds 1,024 entries. That is go-ethereum `serviceGetBlockAccessListsQuery`
+      * (eth/protocols/eth/handlers.go), which checks `bytes >= softResponseLimit || bals.Len() >= maxBALsServe` ahead
+      * of each lookup and counts only served lists: the list that crosses the limit still ships, and one list over 2
+      * MiB is served alone — "the soft limit governs when to stop appending additional items, not the maximum size of
+      * an individual item" (EIP-8159).
+      *
+      * A stored list goes into the response through the RLP reader; the writer gives back exactly the bytes read for
+      * any canonical encoding, and every stored list is one (`BlockAccessList.toBytes`). One that cannot be read (a
+      * damaged store) is logged at ERROR and answered as unavailable, rather than failing the response and stopping
+      * this actor, which serves every peer.
+      */
+    def blockAccessListEntries(blockHashes: Seq[ByteString]): (Vector[RLPEncodeable], Int, Long) =
+      @tailrec
+      def serve(
+          requested: List[ByteString],
+          entries: Vector[RLPEncodeable],
+          lists: Int,
+          bytes: Long
+      ): (Vector[RLPEncodeable], Int, Long) =
+        requested match
+          case hash :: rest if bytes < BlockAccessListsSoftLimitBytes && entries.size < MaxBlockAccessListsServe =>
+            blockchainReader.getBlockAccessListByHash(BlockHash(hash)) match
+              case None => serve(rest, entries :+ UnavailableBlockAccessList, lists, bytes)
+              case Some(stored) =>
+                Try(rawDecode(stored.toArray)) match
+                  case Success(list) => serve(rest, entries :+ list, lists + 1, bytes + stored.length)
+                  case Failure(error) =>
+                    context.log.error(
+                      "HOST_BLOCK_ACCESS_LISTS: stored access list of block {} ({} bytes) is unreadable, " +
+                        "answering it as unavailable: {}",
+                      ByteStringUtils.hash2string(hash),
+                      stored.length,
+                      error.getMessage
+                    )
+                    serve(rest, entries :+ UnavailableBlockAccessList, lists, bytes)
+          case _ => (entries, lists, bytes)
+      serve(blockHashes.toList, Vector.empty, 0, 0L)
+
     /** Handles request for block data, which includes receipts, block bodies and headers (all requested by hash)
       *
       * @param message
@@ -282,17 +350,17 @@ object BlockchainHostActor:
       case ETHPackets.GetBlockHeaders(requestId, block, maxHeaders, skip, reverse) =>
         handleGetBlockHeadersRequest(block, maxHeaders, skip, reverse, Some(requestId))
 
-      // ETH71 GetBlockAccessLists (EIP-8159). fukuii has no EIP-7928 BAL storage, so every
-      // requested hash gets the empty-string sentinel — an honest "unavailable", not fabricated
-      // data, and the wire-correct answer regardless: an empty BAL response is spec-valid even for
-      // a node that HAS the block, as long as it's not silently claiming to have data it doesn't.
-      // Order is preserved 1:1 with the request; see ETHPackets.scala's GetBlockAccessLists doc.
+      // ETH71 GetBlockAccessLists (EIP-8159): the stored EIP-7928 lists, 0x80 for any this node does
+      // not hold, in request order — see blockAccessListEntries.
       case ETHPackets.GetBlockAccessLists(requestId, blockHashes) =>
-        val entries = blockHashes.map(_ => RLPValue(Array.emptyByteArray))
+        val (entries, lists, bytes) = blockAccessListEntries(blockHashes)
         context.log.debug(
-          "HOST_BLOCK_ACCESS_LISTS: requestId={} requested={} (all-empty, no BAL storage)",
+          "HOST_BLOCK_ACCESS_LISTS: requestId={} requested={} returned={} lists={} bytes={}",
           requestId,
-          blockHashes.size
+          blockHashes.size,
+          entries.size,
+          lists,
+          bytes
         )
         Some(ETHPackets.BlockAccessLists(requestId, entries))
 
