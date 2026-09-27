@@ -236,6 +236,52 @@ class PrecompiledContractsSpec extends AnyFunSuite with Matchers with ScalaCheck
     }
   }
 
+  // EIP-198: the input is right-padded with zeros, so an input that ends inside a length word supplies that word's
+  // HIGH-order bytes. go-ethereum reads every length through getData, which right-pads (core/vm/contracts.go).
+  test("MODEXP reads a truncated length word right-padded with zeros (EIP-198)") {
+    // 31 bytes 0x00..01: baseLen is 0x00..0100 = 256, expLen and modLen are 0.
+    val truncatedBaseLen = ByteString(Hex.decode("00" * 30 + "01"))
+    // EIP-198: mult_complexity(256) = 256^2/4 + 96*256 - 3072 = 37,888; / 20 = 1,894 (as for nagydani_3 below).
+    ModExp.gas(truncatedBaseLen, EtcForks.BeforeAtlantis, EthForks.BeforeByzantium) shouldEqual 1894
+    // EIP-2565: max(200, ceil(256/8)^2 / 3) = max(200, 341) = 341.
+    ModExp.gas(truncatedBaseLen, EtcForks.Magneto, EthForks.Berlin) shouldEqual 341
+    // EIP-7883: max(500, 2 * ceil(256/8)^2) = 2,048.
+    ModExp.gasWithOsaka(
+      truncatedBaseLen,
+      EtcForks.Magneto,
+      EthForks.Berlin,
+      eip7883Active = true,
+      isEthereum = true
+    ) shouldEqual 2048
+
+    // execution-specs test_modexp[truncated_lengths_2]: baseLen 1, then an expLen word cut to 26 bytes ending 0x05.
+    // Right-padded, expLen is 5 * 2^48, so the call runs out of gas at any block gas limit. Read as the 26-byte
+    // number 5, it cost the 200 minimum and succeeded, which forked the node off every other client.
+    val truncatedExpLen = ByteString(Hex.decode("00" * 31 + "01" + "00" * 25 + "05"))
+    ModExp.gas(truncatedExpLen, EtcForks.Magneto, EthForks.Berlin) should be > BigInt(1_000_000_000L)
+  }
+
+  test("MODEXP prices and runs a truncated input exactly as the same input padded to full length words") {
+    val inputs = Seq(
+      "",
+      "01",
+      "00" * 30 + "01",
+      "00" * 31 + "01" + "00" * 31 + "01" + "00" * 30 + "01",
+      "00" * 31 + "01" + "00" * 31 + "01" + "00" * 31 + "01" + "02",
+      "00" * 31 + "01" + "00" * 25 + "05"
+    )
+    forAll(Table("input", inputs*)) { hex =>
+      val input = ByteString(Hex.decode(hex))
+      val padded = input ++ ByteString(Array.fill[Byte](math.max(0, 96 - input.length))(0))
+      ModExp.gas(input, EtcForks.BeforeAtlantis, EthForks.BeforeByzantium) shouldEqual
+        ModExp.gas(padded, EtcForks.BeforeAtlantis, EthForks.BeforeByzantium)
+      ModExp.gas(input, EtcForks.Magneto, EthForks.Berlin) shouldEqual
+        ModExp.gas(padded, EtcForks.Magneto, EthForks.Berlin)
+      ModExp.gasWithOsaka(input, EtcForks.Magneto, EthForks.Berlin, eip7883Active = true, isEthereum = true) shouldEqual
+        ModExp.gasWithOsaka(padded, EtcForks.Magneto, EthForks.Berlin, eip7883Active = true, isEthereum = true)
+    }
+  }
+
   test("MODEXP cost post EIP 198") {
     val modexpPost198ExpectedCosts = Map(
       ("modexp_nagydani_1_square", 204),
