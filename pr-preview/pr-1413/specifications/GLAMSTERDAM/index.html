@@ -6046,7 +6046,7 @@ proposing), <a href="https://eips.ethereum.org/EIPS/eip-8061">8061</a> (increase
 <tr>
 <td><code>PayloadAttributesV4</code></td>
 <td><code>PayloadAttributesV3</code> + <code>slotNumber</code> + <code>targetGasLimit</code></td>
-<td>Implemented: <code>slotNumber</code> required, <code>targetGasLimit</code> optional (as in go-ethereum); both are in the payload ID</td>
+<td>Implemented: <code>slotNumber</code> required, <code>targetGasLimit</code> optional (as in go-ethereum); both are in the payload ID, and the builder steers the gas limit toward <code>targetGasLimit</code></td>
 </tr>
 <tr>
 <td><code>engine_newPayloadV5</code></td>
@@ -6056,7 +6056,7 @@ proposing), <a href="https://eips.ethereum.org/EIPS/eip-8061">8061</a> (increase
 <tr>
 <td><code>engine_getPayloadV6</code></td>
 <td>Returns <code>ExecutionPayloadV4</code></td>
-<td>Implemented, but there is nothing to serve yet (see below)</td>
+<td>Implemented: serves the Amsterdam payloads fukuii builds, block access list included (see below)</td>
 </tr>
 <tr>
 <td><code>engine_forkchoiceUpdatedV4</code></td>
@@ -6078,10 +6078,14 @@ proposing), <a href="https://eips.ethereum.org/EIPS/eip-8061">8061</a> (increase
 <p><code>engine_newPayloadV4</code>, <code>engine_getPayloadV5</code> and <code>engine_forkchoiceUpdatedV3</code> reject Amsterdam timestamps with
 <code>-38005 Unsupported fork</code>. <code>engine_exchangeCapabilities</code> advertises <code>engine_newPayloadV5</code>,
 <code>engine_forkchoiceUpdatedV4</code> and <code>engine_getPayloadV6</code> on every network, as go-ethereum does.</p>
-<p><strong>fukuii cannot propose Amsterdam blocks yet.</strong> An Amsterdam payload must commit to its block access list, which
-fukuii cannot build until <a href="https://github.com/chippr-robotics/fukuii/issues/1427">#1427</a>. Asked to build one,
-<code>engine_forkchoiceUpdatedV4</code> applies the forkchoice state, logs an error and answers <code>-38003</code> without a payload ID,
-rather than seal a Prague-shaped header that every client would reject. Following the chain is unaffected.</p>
+<p><strong>Proposing.</strong> fukuii builds Amsterdam payloads (<a href="https://github.com/chippr-robotics/fukuii/issues/1427">#1427</a>):
+the 23-field header carries the attributes' <code>slotNumber</code> (which <code>SLOTNUM</code> reads while the block executes) and the
+hash of the block access list its own execution builds, which <code>engine_getPayloadV6</code> serves as the payload's
+<code>blockAccessList</code>. <code>requestsHash</code> commits to the EIP-8282 builder requests, and gas used is EIP-8037's maximum of
+the execution and state dimensions. The gas limit moves toward <code>targetGasLimit</code> at go-ethereum's <code>CalcGasLimit</code>
+rate (the parent's limit is kept when the attributes carry none), and transactions are packed by EIP-8037's
+per-dimension capacity rule: one that would overflow either dimension is left out. Attributes without <code>slotNumber</code>
+at an Amsterdam timestamp are refused with <code>-38003</code>, after the forkchoice state is applied.</p>
 <p>The EEST engine fixtures (<code>tests@v21.0.0</code> <code>blockchain_tests_engine/for_amsterdam</code> and
 <code>for_bpo2toamsterdamattime15k</code>, 26,548 tests) replay through the real controller with <code>EestEngineFixtureCorpusSpec</code>.
 Every error code, genesis and forkchoice answer matches. The failures that remain are the same tests that fail over
@@ -6219,8 +6223,7 @@ exercising the Amsterdam implementation <strong>before Sepolia activates on 2026
 Amsterdam territory. fukuii can follow Platåberget only as far as its Amsterdam implementation allows — the
 <a href="#fukuii-implementation-status">status table</a> is the honest guide. In particular, a checkpoint-synced CL starts
 past the fork and calls <code>engine_newPayloadV5</code> / <code>engine_forkchoiceUpdatedV4</code> immediately; fukuii serves both (see
-<a href="#engine-api">Engine API</a>), so how far it follows depends on its Amsterdam execution, and its validators cannot
-propose. Today the most reliable checks are the offline ones — genesis hash, fork id, peering and the <code>Status</code>
+<a href="#engine-api">Engine API</a>), so how far it follows depends on its Amsterdam execution. Today the most reliable checks are the offline ones — genesis hash, fork id, peering and the <code>Status</code>
 handshake. Pre-Amsterdam blocks exercise genesis, Osaka and BPO rules; the first Amsterdam block
 exercises everything in #1409. Block gas limits reach 200M.</p>
 <h2 id="release-090">Release 0.9.0<a class="headerlink" href="#release-090" title="Permanent link">&para;</a></h2>
