@@ -148,13 +148,14 @@ class EngineApiAmsterdamBuildSpec extends AnyWordSpec with Matchers:
 
   /** One node: its own ephemeral storage, the real VM and the engine validators, on the genesis above. `withPool` gives
     * it a pool (the builder); without one it only validates. `gasCeil` is the node's builder gas ceiling, what it is
-    * handed from `mining.gas-limit-target`.
+    * handed from `mining.gas-limit-target`. `omit` leaves system contracts out of the genesis.
     */
   private class Node(
       network: String,
       genesisFields: HeaderExtraFields,
       withPool: Boolean,
-      gasCeil: BigInt = EngineApiService.DefaultBuilderGasCeil
+      gasCeil: BigInt = EngineApiService.DefaultBuilderGasCeil,
+      omit: Set[Address] = Set.empty
   ) extends EphemBlockchainTestSetup:
 
     val config: BlockchainConfig = EestBlockchainReplay
@@ -225,7 +226,8 @@ class EngineApiAmsterdamBuildSpec extends AnyWordSpec with Matchers:
 
     val genesis: Block =
       val empty = worldAt(ByteString(MerklePatriciaTrie.EmptyRootHash))
-      val contracts = systemContracts :+ ((SlotProbe, UInt256(1), UInt256.Zero, SlotProbeCode))
+      val contracts =
+        systemContracts.filterNot(c => omit(c._1)) :+ ((SlotProbe, UInt256(1), UInt256.Zero, SlotProbeCode))
       val deployed = contracts.foldLeft(empty) { case (w, (address, nonce, balance, code)) =>
         w.saveAccount(address, Account(nonce = nonce, balance = balance, codeHash = CodeHash(kec256(code))))
           .saveCode(address, code)
@@ -260,8 +262,9 @@ class EngineApiAmsterdamBuildSpec extends AnyWordSpec with Matchers:
   private def builderNode(
       network: String = "Amsterdam",
       genesis: HeaderExtraFields = amsterdamGenesisFields,
-      gasCeil: BigInt = EngineApiService.DefaultBuilderGasCeil
-  ) = new Node(network, genesis, withPool = true, gasCeil)
+      gasCeil: BigInt = EngineApiService.DefaultBuilderGasCeil,
+      omit: Set[Address] = Set.empty
+  ) = new Node(network, genesis, withPool = true, gasCeil, omit)
   private def validatorNode(network: String = "Amsterdam", genesis: HeaderExtraFields = amsterdamGenesisFields) =
     new Node(network, genesis, withPool = false)
 
@@ -560,6 +563,25 @@ class EngineApiAmsterdamBuildSpec extends AnyWordSpec with Matchers:
       // Without a target, the node's gas ceiling: go-ethereum's default, 60,000,000, the same step here.
       val untargeted = requestPayload(builder, 4, attributes(12, Some(BigInt(2))))
       builtBlock(builder, untargeted).header.gasLimit.value shouldBe BigInt(45_043_944)
+    }
+
+    "refuse (-32603) to serve the payload the build seals without executing, which has no access list" taggedAs (
+      UnitTest,
+      ConsensusTest
+    ) in {
+      // Without the EIP-8282 builder-deposit predeploy no Amsterdam block executes (SYSTEM_CONTRACT_EMPTY), the empty
+      // one included, so the lenient build's last resort seals the empty payload over its parent's state root, with no
+      // access list. forkchoiceUpdated still answers with a payload ID; getPayloadV6 must not serve that block.
+      val builder = builderNode(omit = Set(BlockExecution.BuilderDepositQueueAddress))
+      val payloadId = requestPayload(builder, 4, attributes(12, Some(BigInt(1))))
+      val block = builtBlock(builder, payloadId)
+      block.header.stateRoot shouldBe builder.genesis.header.stateRoot
+      block.header.blockAccessListHash shouldBe Some(BlockAccessList.EmptyHash)
+
+      val response = getPayload(builder, 6, payloadId)
+      response.result shouldBe None
+      response.error.map(_.code) shouldBe Some(-32603)
+      response.error.map(_.message).getOrElse("") should include("no block access list is held")
     }
 
     "without targetGasLimit, move toward the node's configured gas ceiling, as go-ethereum's GasCeil" taggedAs (
