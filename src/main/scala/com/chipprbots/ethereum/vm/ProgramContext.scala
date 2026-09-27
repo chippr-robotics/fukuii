@@ -281,5 +281,10 @@ case class ProgramContext[W <: WorldStateProxy[W, S], S <: Storage[S]](
     preExecutionOutOfGas: Boolean = false,
     // Optional opcode-level tracer (debug_trace*). None is the fast default; Some
     // enables per-step capture in the VM exec loop.
-    tracer: Option[ExecutionTracer] = None
+    tracer: Option[ExecutionTracer] = None,
+    /** EIP-7928: where every frame of this execution records the accounts and slots it reads. Set only while an
+      * Amsterdam block executes and handed to each child frame unchanged; see [[BlockAccessRecorder]]. `None` — every
+      * ETC and pre-Amsterdam path, and every RPC execution — records nothing.
+      */
+    accessRecorder: Option[BlockAccessRecorder] = None
 )
