@@ -193,9 +193,15 @@ object BlockImporter:
   case object DefaultBlockImport extends BlockImportType:
     override def recordMetric(nanos: Long): Unit = RegularSyncMetrics.recordDefaultBlockPropagationTimer(nanos)
 
+  /** @param deferredBatches
+    *   batches the fetcher delivered while an import was still running, oldest first. Only ever non-empty on a chain
+    *   that follows a consensus layer (see `BranchResolution.followsConsensusLayer`); on ETC/Mordor/Gorgoroth it stays
+    *   `Nil` and every picked batch is handled on arrival, exactly as before.
+    */
   case class ImporterState(
       importing: Boolean,
-      resolvingBranchFrom: Option[BigInt]
+      resolvingBranchFrom: Option[BigInt],
+      deferredBatches: List[NonEmptyList[Block]] = Nil
   ):
     def importingBlocks(): ImporterState = copy(importing = true)
 
@@ -206,6 +212,10 @@ object BlockImporter:
     def branchResolved(): ImporterState = copy(resolvingBranchFrom = None)
 
     def isResolvingBranch: Boolean = resolvingBranchFrom.isDefined
+
+    def deferBatch(blocks: NonEmptyList[Block]): ImporterState = copy(deferredBatches = deferredBatches :+ blocks)
+
+    def withoutDeferredBatches(): ImporterState = copy(deferredBatches = Nil)
 
   object ImporterState:
     def initial: ImporterState = ImporterState(
@@ -266,6 +276,24 @@ final private class BlockImporterLogic(
         selfRef ! PickBlocks
         Behaviors.same
 
+      case FetcherResponse(BlockFetcher.PickedBlocks(blocks: NonEmptyList[Block @unchecked]))
+          if state.importing && branchResolution.followsConsensusLayer =>
+        // The fetcher answers every PickBlocks it receives, and SyncRetryTick sends one every sync-retry-interval
+        // while idle, so two answers can be in flight when the first import starts. Resolving the second batch NOW
+        // would judge it against the head as it was before the running import commits: its parent is not there yet,
+        // so it reads as UnknownBranch and rewinds the fetcher 64 blocks (Platåberget #1432: `201..250` executing,
+        // `251..252` arrives 95 ms later → "Unknown branch, going back to block nr 136"). Worse, a batch that IS
+        // importable against that stale head would EXECUTE concurrently with the running import. Hold it and hand it
+        // back, in order, when that import is done. Gated on BranchResolution's PoS gate: a PoW chain handles every
+        // picked batch on arrival, as before.
+        log.debug(
+          "Picked batch deferred: from={} to={} reason=import-in-flight queued={}",
+          blocks.head.number,
+          blocks.last.number,
+          state.deferredBatches.size + 1
+        )
+        running(state.deferBatch(blocks))
+
       case FetcherResponse(BlockFetcher.PickedBlocks(blocks: NonEmptyList[Block @unchecked])) =>
         SignedTransaction.retrieveSendersInBackGround(blocks.toList.map(_.body))
         importBlocks(blocks, DefaultBlockImport)(state)
@@ -293,11 +321,20 @@ final private class BlockImporterLogic(
       case _: ImportNewBlock => Behaviors.same
 
       case ImportDone(newBehavior, importType) =>
-        val newState = state.notImportingBlocks().branchResolved()
+        // Always Nil on a PoW chain (nothing is ever deferred there), which leaves every arm below as it was.
+        val deferred = state.deferredBatches
+        val newState = state.notImportingBlocks().branchResolved().withoutDeferredBatches()
         newBehavior match
           case Running =>
+            // Oldest first, and ahead of the PickBlocks, so the batches reach importBlocks in fetch order. Each is then
+            // resolved against the head this import left behind. After a failed import the fetcher has already been
+            // rewound; a stale batch then resolves as UnknownBranch, which is what handling it on arrival did too.
+            deferred.foreach(blocks => selfRef ! FetcherResponse(BlockFetcher.PickedBlocks(blocks)))
             selfRef ! PickBlocks
           case r: ResolvingBranch =>
+            // The fetcher is being rewound (InvalidateBlocksFrom already sent): it re-serves these blocks.
+            if deferred.nonEmpty then
+              log.debug("Deferred batches dropped: count={} reason=fetcher-rewind from={}", deferred.size, r.from)
             log.info(
               "Branch resolution dispatch: StrictPickBlocks from={} bestKnown={}",
               r.from,
@@ -305,6 +342,9 @@ final private class BlockImporterLogic(
             )
             selfRef ! PickBlocks
           case _ =>
+            // ResolvingMissingNode retries its own blocks; that behaviour ignores picked batches, as it always has.
+            if deferred.nonEmpty then
+              log.debug("Deferred batches dropped: count={} reason=missing-state-node", deferred.size)
         nextBehavior(newBehavior, importType, newState)
 
       case PickBlocks if !state.importing =>
@@ -796,6 +836,23 @@ final private class BlockImporterLogic(
         // Add first block from branch as an ommer
         oldBranch.headOption.map(_.header).foreach(ommersPool ! AddOmmers(_))
         Right(blocks.toList)
+      case ExtendsCanonicalHead(alreadyCanonical) =>
+        // Post-merge only (BranchResolution.followsConsensusLayer). The first `alreadyCanonical` blocks ARE our
+        // canonical chain and the rest extend its head, so hand consensus only the rest: their parent is the head,
+        // which takes ConsensusImpl's importToTop. The whole batch would take importToNewBranch instead, where equal
+        // post-merge weight and an out-of-reach CL head answer KeptCurrentBestBranch and nothing is imported (#1432).
+        // Nothing is displaced, so there is no old branch to return to the pool and no ommer.
+        val extension = blocks.toList.drop(alreadyCanonical)
+        val importing = (extension.headOption, extension.lastOption) match
+          case (Some(first), Some(last)) => s"${first.number}-${last.number}"
+          case _                         => "-"
+        log.info(
+          "Canonical prefix dropped: batch={} alreadyCanonical={} importing={}",
+          s"${blocks.head.number}-${blocks.last.number}",
+          alreadyCanonical,
+          importing
+        )
+        Right(extension)
       case NoChainSwitch =>
         // Add first block from branch as an ommer
         ommersPool ! AddOmmers(blocks.head.header)
