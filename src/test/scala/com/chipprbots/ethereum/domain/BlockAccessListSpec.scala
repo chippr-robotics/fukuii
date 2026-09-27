@@ -411,3 +411,61 @@ class BlockAccessListSpec extends AnyFlatSpec with Matchers:
 
     BlockAccessList.decode(ByteString(out.toByteArray)).isLeft shouldBe true
   }
+
+  // ── Block-level validation (validateSize / validateFor) ─────────────────────────────────────────────────────────
+
+  "BlockAccessList.validateSize" should "accept a list at the gasLimit / 2000 boundary and reject one over" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in {
+    // fullList has itemCount 7 (1 account + 5 written slots + 1 read slot). 7 * 2000 = 14,000 is the tightest gas
+    // limit that still admits it; 13,999 gives limit 6 < 7.
+    fullList.validateSize(BigInt(14000)) shouldBe Right(())
+    fullList.validateSize(BigInt(13999)).isLeft shouldBe true
+    fullList.validateSize(BigInt(13999)).left.toOption.get should include("7 items exceed the limit of 6")
+  }
+
+  it should "admit any list under an empty one's zero item count" taggedAs (UnitTest) in {
+    BlockAccessList.Empty.validateSize(BigInt(0)) shouldBe Right(())
+  }
+
+  "BlockAccessList.validateFor" should "reject a block access index above transactionCount + 1" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in {
+    // A change at index 3 needs at least 2 transactions (indices 1, 2, and n+1 = 3). With one transaction the
+    // post-execution index is 2, so 3 is out of bounds.
+    val listAtIndex3 = BlockAccessList(
+      Seq(AccountChanges(address(1), Nil, Nil, Seq(BalanceChange(3, UInt256(1))), Nil, Nil))
+    )
+    listAtIndex3.validateFor(transactionCount = 2, gasLimit = BigInt(1_000_000)) shouldBe Right(())
+    listAtIndex3.validateFor(transactionCount = 1, gasLimit = BigInt(1_000_000)).isLeft shouldBe true
+    listAtIndex3
+      .validateFor(transactionCount = 1, gasLimit = BigInt(1_000_000))
+      .left
+      .toOption
+      .get should include("block access index 3 exceeds 2")
+  }
+
+  it should "check every change kind's index and the size bound together" taggedAs (UnitTest) in {
+    // A slot change at index 5, one transaction: post-execution index is 2, so 5 is rejected.
+    val storageAtIndex5 = BlockAccessList(
+      Seq(
+        AccountChanges(
+          address(1),
+          storageChanges = Seq(SlotChanges(UInt256(1), Seq(StorageChange(5, UInt256(9))))),
+          Nil,
+          Nil,
+          Nil,
+          Nil
+        )
+      )
+    )
+    storageAtIndex5.validateFor(transactionCount = 1, gasLimit = BigInt(1_000_000)).isLeft shouldBe true
+    // In bounds by index (post-execution index 2), but the size bound still applies.
+    val inBounds = BlockAccessList(
+      Seq(AccountChanges(address(1), Nil, Nil, Seq(BalanceChange(2, UInt256(1))), Nil, Nil))
+    )
+    inBounds.validateFor(transactionCount = 1, gasLimit = BigInt(2000)) shouldBe Right(())
+    inBounds.validateFor(transactionCount = 1, gasLimit = BigInt(1999)).isLeft shouldBe true
+  }
