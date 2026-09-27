@@ -598,7 +598,7 @@ class EngineApiAmsterdamBuildSpec extends AnyWordSpec with Matchers:
       validator.worldAt(block.header.stateRoot.value).getStorage(SlotProbe).load(BigInt(0)) shouldBe BigInt(1250)
     }
 
-    "build a pre-Amsterdam payload on the same schedule exactly as before: Prague-shaped, V5 only" taggedAs (
+    "build a pre-Amsterdam payload on the same schedule: Prague-shaped, V5 only" taggedAs (
       UnitTest,
       ConsensusTest
     ) in {
@@ -609,10 +609,53 @@ class EngineApiAmsterdamBuildSpec extends AnyWordSpec with Matchers:
       val block = builtBlock(builder, payloadId)
 
       block.header.extraFields shouldBe a[HefPostPrague]
+      // Toward go-ethereum's default gas ceiling, as its prepareWork steers on every fork: 45,000,000 + 43,944.
+      block.header.gasLimit.value shouldBe BigInt(45_043_944)
       getPayload(builder, 6, payloadId).error.map(_.code) shouldBe Some(-38005)
       val envelope = envelopeOf(getPayload(builder, 5, payloadId))
       envelope \ "executionPayload" \ "blockAccessList" shouldBe org.json4s.JNothing
       envelope \ "executionPayload" \ "slotNumber" shouldBe org.json4s.JNothing
       expectValid(validator, 4, envelope)
+    }
+  }
+
+  /** go-ethereum's `prepareWork` steers every payload toward the node's gas ceiling, before Amsterdam too
+    * (miner/worker.go:292,300 at 920c077). A payload that moves toward it must still be one every other node accepts.
+    */
+  "The builder before Amsterdam" should {
+
+    "move a Prague payload toward the gas ceiling, and an independent node validates it" taggedAs (
+      UnitTest,
+      ConsensusTest
+    ) in {
+      val builder = builderNode("Prague", pragueGenesisFields)
+      val validator = validatorNode("Prague", pragueGenesisFields)
+      builder.pool.set(Seq(tx(carol, Some(Sink), gas = 21_000) -> 1L))
+      val payloadId = requestPayload(builder, 3, attributes(12, slot = None))
+      val envelope = envelopeOf(getPayload(builder, 4, payloadId))
+      val block = builtBlock(builder, payloadId)
+
+      expectValid(validator, 4, envelope)
+      block.header.extraFields shouldBe a[HefPostPrague]
+      block.body.transactionList should have size 1
+      block.header.gasLimit.value shouldBe BigInt(45_043_944)
+      envelope \ "executionPayload" \ "gasLimit" shouldBe JString(quantity(45_043_944))
+    }
+
+    "move an Osaka payload toward a configured gas ceiling, and an independent node validates it" taggedAs (
+      UnitTest,
+      ConsensusTest
+    ) in {
+      val builder = builderNode("Osaka", pragueGenesisFields, gasCeil = 36_000_000)
+      val validator = validatorNode("Osaka", pragueGenesisFields)
+      builder.pool.set(Seq(tx(carol, Some(Sink), gas = 21_000) -> 1L))
+      val payloadId = requestPayload(builder, 3, attributes(12, slot = None))
+      val envelope = envelopeOf(getPayload(builder, 5, payloadId))
+      val block = builtBlock(builder, payloadId)
+
+      expectValid(validator, 4, envelope)
+      block.body.transactionList should have size 1
+      // CalcGasLimit(45,000,000, 36,000,000): one step down of 43,944.
+      block.header.gasLimit.value shouldBe BigInt(44_956_056)
     }
   }

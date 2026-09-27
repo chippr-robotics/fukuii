@@ -1172,10 +1172,9 @@ class EngineApiService(
   /** The gasLimit a proposer puts in the child header.
     *
     * @param target
-    *   `None` keeps the parent's gas limit (the engine API's policy when the CL names no target, see
-    *   [[enginePayloadGasLimit]]). `Some(t)` converges toward `t` at go-ethereum's `CalcGasLimit` rate; the `testing_*`
-    *   namespace uses this so fixtures generated against geth (which always has a `--miner.gaslimit`) match, and so
-    *   does an Amsterdam payload whose attributes carry `targetGasLimit`.
+    *   `None` keeps the parent's gas limit. `Some(t)` converges toward `t` at go-ethereum's `CalcGasLimit` rate: the
+    *   `testing_*` namespace passes its configured target, so fixtures generated against geth (which always has a
+    *   `--miner.gaslimit`) match, and the engine path passes the target or gas ceiling of [[enginePayloadGasLimit]].
     *
     * Both branches respect the one-shot EIP-1559 elasticity scale at London/Olympia activation: producer and validator
     * must agree, and BlockHeaderValidatorSkeleton.validateGasLimit centres its +-1/1024 window on the scaled parent at
@@ -1194,27 +1193,32 @@ class EngineApiService(
       case Some(t) =>
         GasAmount(com.chipprbots.ethereum.consensus.blocks.GasLimitCalculator.calcGasLimit(effectiveParent.value, t))
 
-  /** The gasLimit of the payload engine_forkchoiceUpdated builds on `parent` for `attrs`.
+  /** The gasLimit of the payload engine_forkchoiceUpdated builds on `parent` for `attrs`: go-ethereum's, on every fork
+    * (miner/worker.go `prepareWork` at 920c077).
+    *   - Lines 292-295: the desired limit is the node's gas ceiling `builderGasCeil` (`gasCeil :=
+    *     miner.config.GasCeil`), replaced by PayloadAttributesV4's `targetGasLimit` when the block is Amsterdam and the
+    *     field is present.
+    *   - Line 300: the header takes `core.CalcGasLimit(parent.GasLimit, desired)`, a step of at most parent/1024 - 1
+    *     toward it per block.
+    *   - Lines 316-321: at the London activation block, `CalcGasLimit(parent.GasLimit * ElasticityMultiplier,
+    *     GasCeil)`: [[proposerGasLimit]]'s one-shot elasticity scale. (That block precedes the merge on every real
+    *     network, and cannot be an Amsterdam block, where go-ethereum would take the ceiling over the target there.)
     *
-    * From Amsterdam it is go-ethereum's (miner/worker.go `prepareWork` at 920c077, lines 292-300): the desired limit is
-    * the node's gas ceiling `builderGasCeil` (`gasCeil := miner.config.GasCeil`), replaced by PayloadAttributesV4's
-    * `targetGasLimit` when the block is Amsterdam and the field is present, and the header takes
-    * `core.CalcGasLimit(parent.GasLimit, desired)`: a step of at most parent/1024 - 1 toward it per block.
-    * `CalcGasLimit` first raises a desired limit below MinGasLimit to 5,000. The shared
-    * [[com.chipprbots.ethereum.consensus.blocks.GasLimitCalculator.calcGasLimit]], which the ETC miner also uses, does
-    * not, and stays as it is: the raise is applied here, on the ETH engine path, so neither a target nor a configured
-    * ceiling can take the header below the minimum validation enforces.
+    * `CalcGasLimit` (core/block_validator.go:209) raises a desired limit below MinGasLimit to 5,000 first, on every
+    * fork. The shared [[com.chipprbots.ethereum.consensus.blocks.GasLimitCalculator.calcGasLimit]], which the ETC miner
+    * also uses, does not, and stays as it is: the raise is applied here, on the ETH engine path, so neither a target
+    * nor a configured ceiling can take the header below the minimum validation enforces.
     *
-    * Before Amsterdam the parent's gas limit is kept, the engine path's policy before PayloadAttributesV4 existed.
-    * go-ethereum steers toward its gas ceiling on every fork there too (the same lines).
+    * Before this, a payload kept its parent's gas limit unless the CL named a target: a fukuii-built chain never moved
+    * toward the ceiling every go-ethereum-built chain moves toward.
     */
   def enginePayloadGasLimit(parent: BlockHeader, attrs: PayloadAttributes): GasAmount =
-    val desired = Option.when(blockchainConfig.isAmsterdamTimestamp(Timestamp(attrs.timestamp)))(
-      attrs.targetGasLimit
-        .getOrElse(builderGasCeil)
-        .max(com.chipprbots.ethereum.consensus.validators.BlockHeaderValidator.MinGasLimit)
-    )
-    proposerGasLimit(parent, parent.number.value + 1, desired)
+    val amsterdamTarget =
+      attrs.targetGasLimit.filter(_ => blockchainConfig.isAmsterdamTimestamp(Timestamp(attrs.timestamp)))
+    val desired = amsterdamTarget
+      .getOrElse(builderGasCeil)
+      .max(com.chipprbots.ethereum.consensus.validators.BlockHeaderValidator.MinGasLimit)
+    proposerGasLimit(parent, parent.number.value + 1, Some(desired))
 
   /** Fork name for the proposer build log line. */
   private def forkNameAt(ts: Timestamp): String =

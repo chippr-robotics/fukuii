@@ -21,13 +21,13 @@ import com.chipprbots.ethereum.utils.Config
 // scalastyle:off magic.number
 /** The gas limit of a payload engine_forkchoiceUpdated builds ([[EngineApiService.enginePayloadGasLimit]]).
   *
-  * From Amsterdam it is go-ethereum's (miner/worker.go `prepareWork` at 920c077, lines 292-300): `GasLimit =
-  * core.CalcGasLimit(parent.GasLimit, desired)`, where `desired` is PayloadAttributesV4's `targetGasLimit` when present
-  * and otherwise the node's gas ceiling (go-ethereum's `GasCeil`, default 60,000,000 at miner/miner.go:57; fukuii's
-  * `mining.gas-limit-target`). The vectors are go-ethereum's own `TestCalcGasLimit` (core/block_validator_test.go) plus
-  * ones at the 5,000 floor and toward a ceiling, computed with a port of `CalcGasLimit` that reproduces those test
-  * values; `CalcGasLimit` raises a desired limit below MinGasLimit to 5,000 before stepping. Before Amsterdam the
-  * parent's gas limit is kept.
+  * It is go-ethereum's on every fork (miner/worker.go `prepareWork` at 920c077, lines 292-300): `GasLimit =
+  * core.CalcGasLimit(parent.GasLimit, desired)`, where `desired` is the node's gas ceiling (go-ethereum's `GasCeil`,
+  * default 60,000,000 at miner/miner.go:57; fukuii's `mining.gas-limit-target`), replaced by PayloadAttributesV4's
+  * `targetGasLimit` at Amsterdam when present. The vectors are go-ethereum's own `TestCalcGasLimit`
+  * (core/block_validator_test.go) plus ones at the 5,000 floor and toward a ceiling, computed with a port of
+  * `CalcGasLimit` that reproduces those test values; `CalcGasLimit` raises a desired limit below MinGasLimit to 5,000
+  * before stepping.
   */
 class EngineApiAmsterdamGasLimitSpec extends AnyWordSpec with Matchers:
 
@@ -41,6 +41,10 @@ class EngineApiAmsterdamGasLimitSpec extends AnyWordSpec with Matchers:
 
   /** BPO2 at genesis, Amsterdam at 15,000. */
   private val transition = configFor("BPO2ToAmsterdamAtTime15k")
+
+  /** Every fork through Prague, and through Osaka, at genesis. */
+  private val prague = configFor("Prague")
+  private val osaka = configFor("Osaka")
 
   private def service(config: BlockchainConfig, ceiling: BigInt) =
     new EngineApiService(null, null, null, null, None, builderGasCeil = ceiling)(config, null)
@@ -163,12 +167,46 @@ class EngineApiAmsterdamGasLimitSpec extends AnyWordSpec with Matchers:
 
   "enginePayloadGasLimit before Amsterdam" should {
 
-    "keep the parent's gas limit whatever the attributes carry, and use the target from the first Amsterdam block" taggedAs (
+    "step toward the node's gas ceiling on Prague, Osaka and BPO2, as go-ethereum's prepareWork does on every fork" taggedAs (
       UnitTest,
       ConsensusTest
     ) in {
-      gasLimit(transition, 30_000_000, 14_999, Some(60_000_000)) shouldBe 30_000_000
-      gasLimit(transition, 30_000_000, 14_999, None) shouldBe 30_000_000
+      // (parent gas limit, child gas limit) toward go-ethereum's default ceiling, 60,000,000.
+      val towardDefault = Seq[(BigInt, BigInt)](
+        (5_000, 5_003),
+        (30_000_000, 30_029_295),
+        (45_000_000, 45_043_944),
+        (60_000_000, 60_000_000),
+        (70_000_000, 69_931_642)
+      )
+      Seq("Prague" -> (prague, 12L), "Osaka" -> (osaka, 12L), "BPO2" -> (transition, 14_999L)).foreach {
+        case (fork, (config, timestamp)) =>
+          towardDefault.foreach { case (parentGasLimit, expected) =>
+            withClue(s"$fork, parent $parentGasLimit: ") {
+              gasLimit(config, parentGasLimit, timestamp, None) shouldBe expected
+            }
+          }
+          withClue(s"$fork, ceiling 36M: ") {
+            gasLimit(config, 45_000_000, timestamp, None, ceiling = 36_000_000) shouldBe 44_956_056
+            gasLimit(config, 40_000_000, timestamp, None, ceiling = 36_000_000) shouldBe 39_960_939
+          }
+          withClue(s"$fork, ceiling below 5,000: ") {
+            gasLimit(config, 5_000, timestamp, None, ceiling = 0) shouldBe 5_000
+            gasLimit(config, 6_000, timestamp, None, ceiling = 0) shouldBe 5_996
+          }
+      }
+    }
+
+    "ignore a targetGasLimit before Amsterdam, and follow it from the first Amsterdam block" taggedAs (
+      UnitTest,
+      ConsensusTest
+    ) in {
+      // go-ethereum reads the target only when the block is Amsterdam (worker.go:293). The V1-V3 decoders never
+      // produce one; if one arrives anyway, the ceiling decides.
+      gasLimit(transition, 40_000_000, 14_999, Some(60_000_000), ceiling = 36_000_000) shouldBe 39_960_939
+      gasLimit(transition, 40_000_000, 15_000, Some(60_000_000), ceiling = 36_000_000) shouldBe 40_039_061
+      gasLimit(transition, 30_000_000, 14_999, Some(60_000_000)) shouldBe 30_029_295
+      gasLimit(transition, 30_000_000, 14_999, None) shouldBe 30_029_295
       gasLimit(transition, 30_000_000, 15_000, Some(60_000_000)) shouldBe 30_029_295
     }
   }
