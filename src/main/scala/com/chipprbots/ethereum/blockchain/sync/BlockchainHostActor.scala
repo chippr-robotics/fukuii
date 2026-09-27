@@ -239,7 +239,8 @@ object BlockchainHostActor:
                         "answering it as unavailable: {}",
                       ByteStringUtils.hash2string(hash),
                       stored.length,
-                      error.getMessage
+                      error.getMessage,
+                      error
                     )
                     serve(rest, entries :+ UnavailableBlockAccessList, lists, bytes)
           case _ => (entries, lists, bytes)

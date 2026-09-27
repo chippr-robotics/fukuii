@@ -463,6 +463,65 @@ class BlockchainHostActorSpec extends AnyFlatSpec with Matchers:
 
     reply.entries.map(wireBytes) shouldBe Seq.fill(1024)(Unavailable)
 
+  // The two limits share one guard, checked before every entry. The count limit counts entries, not lists: after 1,023
+  // unavailable entries, a stored list as entry 1,024 is the last one served, and a stored list as entry 1,025 is cut
+  // exactly as an unavailable entry there is (above). Both lists are tiny, so the byte limit plays no part.
+  it should "cut at 1,024 entries whatever they hold: a list as entry 1,024 ships, a list as entry 1,025 does not" taggedAs (
+    UnitTest
+  ) in new TestSetup:
+    val unknowns: Seq[ByteString] = (0 until 1023).map(i => ByteString(Hex.decode(f"$i%064x")))
+    val (last, beyond) = (listOfSize(16), listOfSize(32))
+    val (lastHash, beyondHash) = (ByteString(Hex.decode("e1" * 32)), ByteString(Hex.decode("e2" * 32)))
+    blockchainWriter.storeBlockAccessList(BlockHash(lastHash), last).commit()
+    blockchainWriter.storeBlockAccessList(BlockHash(beyondHash), beyond).commit()
+
+    val (reply, _) = requestBlockAccessLists(unknowns ++ Seq(lastHash, beyondHash))
+
+    reply.entries should have size 1024
+    reply.entries.map(wireBytes) shouldBe (Seq.fill(1023)(Unavailable) :+ last.toBytes)
+
+  // The byte limit counts only lists, and stops before the next entry whatever it would be. Unavailable entries ahead
+  // of the crossing add nothing and ship; the list that crosses 2 MiB ships; the unavailable entry and the list after
+  // it are both cut.
+  it should "stop after the 2 MiB crossing with unavailable entries interleaved, cutting whatever follows" taggedAs (
+    UnitTest
+  ) in new TestSetup:
+    val (first, crossing, after) = (listOfSize(1536 * 1024), listOfSize(1024 * 1024), listOfSize(16))
+    val (firstHash, crossingHash, afterHash) =
+      (ByteString(Hex.decode("f1" * 32)), ByteString(Hex.decode("f2" * 32)), ByteString(Hex.decode("f3" * 32)))
+    Seq(firstHash -> first, crossingHash -> crossing, afterHash -> after).foreach((hash, list) =>
+      blockchainWriter.storeBlockAccessList(BlockHash(hash), list).commit()
+    )
+    def unknown(i: Int): ByteString = ByteString(Hex.decode(f"$i%064x"))
+
+    val (reply, _) = requestBlockAccessLists(
+      Seq(unknown(1), firstHash, unknown(2), unknown(3), crossingHash, unknown(4), afterHash)
+    )
+
+    reply.entries.map(wireBytes) shouldBe
+      Seq(Unavailable, first.toBytes, Unavailable, Unavailable, crossing.toBytes)
+
+  // go-ethereum stops on `bytes >= softResponseLimit`: lists totalling exactly 2 MiB end the reply, even ahead of an
+  // unavailable entry that would add nothing; one byte under, both the 0x80 and the next list still ship.
+  it should "stop at exactly 2 MiB served, and not one byte under it" taggedAs (UnitTest) in new TestSetup:
+    val Limit = 2 * 1024 * 1024
+    // listOfSize(n) encodes to n + 46 bytes once every length takes a three-byte prefix.
+    val (atLimit, underLimit, small) = (listOfSize(Limit - 46), listOfSize(Limit - 47), listOfSize(16))
+    atLimit.toBytes.length shouldBe Limit
+    underLimit.toBytes.length shouldBe Limit - 1
+    val (atHash, underHash, smallHash) =
+      (ByteString(Hex.decode("c1" * 32)), ByteString(Hex.decode("c2" * 32)), ByteString(Hex.decode("c3" * 32)))
+    Seq(atHash -> atLimit, underHash -> underLimit, smallHash -> small).foreach((hash, list) =>
+      blockchainWriter.storeBlockAccessList(BlockHash(hash), list).commit()
+    )
+    val unknown = ByteString(Hex.decode("88" * 32))
+
+    val (atReply, _) = requestBlockAccessLists(Seq(atHash, unknown, smallHash))
+    atReply.entries.map(wireBytes) shouldBe Seq(atLimit.toBytes)
+
+    val (underReply, _) = requestBlockAccessLists(Seq(underHash, unknown, smallHash))
+    underReply.entries.map(wireBytes) shouldBe Seq(underLimit.toBytes, Unavailable, small.toBytes)
+
   // Only a damaged store holds bytes the RLP reader rejects (every write is BlockAccessList.toBytes). Such an entry is
   // answered as unavailable, and logged at ERROR, rather than failing the reply and stopping the actor for every peer.
   it should "answer an unreadable stored list as unavailable, and keep serving" taggedAs (UnitTest) in new TestSetup:
