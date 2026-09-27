@@ -37,6 +37,21 @@ private[rlp] object RLP {
     */
   private val MaxItemLength: Double = Math.pow(256, 8)
 
+  /** Maximum nesting depth accepted by [[rawDecode]].
+    *
+    * Decoding a list recurses one JVM stack frame per level of nesting, and nothing else bounds that depth: a peer can
+    * send up to [[com.chipprbots.ethereum.network.rlpx.MessageCodec.MaxDecompressedLength]] (16 MB) of a byte such as
+    * `0xc1`, which is millions of nested single-element lists. That overflows the call stack, and a `StackOverflowError`
+    * is a `VirtualMachineError`, which `scala.util.Try` (and `scala.util.control.NonFatal`) does NOT catch, so it
+    * escapes every decode call site and, with Pekko's default `jvm-exit-on-fatal-error = on`, takes the whole node down.
+    *
+    * The cap turns that into an ordinary [[RLPException]], which the decode call sites already handle by dropping the
+    * message or the peer. 64 is far above every structure fukuii decodes — the deepest block RLP across the entire
+    * execution-spec Amsterdam corpus (72,613 blocks) is 4 deep, and an EIP-7928 block access list is 6 — and far below
+    * the ~1,000-level overflow threshold on the node's 1 MB (`-Xss1M`) dispatcher stack.
+    */
+  private[rlp] val MaxNestingDepth: Int = 64
+
   /** RLP encoding rules are defined as follows: */
 
   /*
@@ -78,7 +93,7 @@ private[rlp] object RLP {
     * @throws RLPException
     *   if there is any error
     */
-  private[rlp] def rawDecode(data: Array[Byte]): RLPEncodeable = decodeWithPos(data, 0)._1
+  private[rlp] def rawDecode(data: Array[Byte]): RLPEncodeable = decodeWithPos(data, 0, 0)._1
 
   /** This function encodes an RLPEncodeable instance
     *
@@ -234,14 +249,16 @@ private[rlp] object RLP {
       }
     }
 
-  private def decodeWithPos(data: Array[Byte], pos: Int): (RLPEncodeable, Int) =
+  private def decodeWithPos(data: Array[Byte], pos: Int, depth: Int): (RLPEncodeable, Int) =
     if (data.isEmpty) throw RLPException("data is too short")
     else {
       getItemBounds(data, pos) match {
         case ItemBounds(start, end, false, isEmpty) =>
           RLPValue(if (isEmpty) Array.empty[Byte] else data.slice(start, end + 1)) -> (end + 1)
         case ItemBounds(start, end, true, _) =>
-          RLPList(decodeListRecursive(data, start, end - start + 1, Queue())*) -> (end + 1)
+          if (depth >= MaxNestingDepth)
+            throw RLPException(s"RLP nesting depth exceeds maximum of $MaxNestingDepth")
+          RLPList(decodeListRecursive(data, start, end - start + 1, Queue(), depth + 1)*) -> (end + 1)
       }
     }
 
@@ -250,12 +267,13 @@ private[rlp] object RLP {
       data: Array[Byte],
       pos: Int,
       length: Int,
-      acum: Queue[RLPEncodeable]
+      acum: Queue[RLPEncodeable],
+      depth: Int
   ): Queue[RLPEncodeable] =
     if (length == 0) acum
     else {
-      val (decoded, decodedEnd) = decodeWithPos(data, pos)
-      decodeListRecursive(data, decodedEnd, length - (decodedEnd - pos), acum :+ decoded)
+      val (decoded, decodedEnd) = decodeWithPos(data, pos, depth)
+      decodeListRecursive(data, decodedEnd, length - (decodedEnd - pos), acum :+ decoded, depth)
     }
 }
 
