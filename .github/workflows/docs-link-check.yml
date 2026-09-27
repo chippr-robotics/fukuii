@@ -34,9 +34,19 @@ jobs:
       - name: Install MkDocs
         run: pip install -r requirements-docs.txt
 
+      # Build under _linkcheck/fukuii/ so the site sits at the same /fukuii/ path GitHub Pages serves it
+      # from (site_url in mkdocs.yml). Two things depend on that layout:
+      #   - the 404 page's nav links are root-relative (/fukuii/...), and --root-dir resolves them here;
+      #   - a relative link that escapes the site (../../ops/...) no longer lands inside the repo
+      #     checkout, where it used to resolve by accident while 404ing on the deployed site.
       - name: Build documentation
-        run: mkdocs build
+        run: mkdocs build --site-dir _linkcheck/fukuii
 
+      # Two remaps check links that point at this repo against this checkout instead of the network:
+      #   - the site's own deployed URLs (each page's rel=canonical) -> the local build, since the
+      #     deployed site lags a PR that adds pages;
+      #   - github.com/.../fukuii/blob|tree/main/<path> -> <path> in the checkout, since main lags
+      #     staging until release. A link to a file that does not exist in the tree still fails.
       - name: Link Checker
         id: lychee
         uses: lycheeverse/lychee-action@v2
@@ -45,11 +55,14 @@ jobs:
             --verbose
             --no-progress
             --accept 200,204
+            --root-dir '${{ github.workspace }}/_linkcheck'
+            --remap '^https://chippr-robotics\.github\.io/fukuii/ file://${{ github.workspace }}/_linkcheck/fukuii/'
+            --remap '^https://github\.com/chippr-robotics/fukuii/(?:blob|tree)/main/ file://${{ github.workspace }}/'
             --exclude 'localhost'
             --exclude '127.0.0.1'
             --exclude 'github.com/.*/edit/'
             --exclude 'github.com/.*/issues/new'
-            './site/**/*.html'
+            './_linkcheck/fukuii/**/*.html'
           fail: true
         continue-on-error: true
 

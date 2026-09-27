@@ -48,6 +48,8 @@ target/scala-*/scoverage-report/
 
 # MkDocs build output
 site/
+# docs-link-check.yml builds the site here (under /fukuii/, the path it is served from)
+_linkcheck/
 
 # Python cache
 __pycache__/
