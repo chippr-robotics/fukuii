@@ -166,7 +166,13 @@ trait DiscoveryConfigBuilder extends BlockchainConfigBuilder with StorageBuilder
       genesisHash = () => reader.genesisHeader.hash.value,
       genesisTimestamp = () => reader.genesisHeader.unixTimestamp.toLong,
       blockchainConfig = blockchainConfig,
-      currentBestBlock = () => reader.getBestBlockNumber
+      currentBestBlock = () => reader.getBestBlockNumber,
+      // Real head timestamp, not a hardcoded 0 — see ForkIdTag's identical comment (WI-13 / issue #1429).
+      currentBestBlockTimestamp = () =>
+        reader
+          .getBlockHeaderByNumber(reader.getBestBlockNumber)
+          .map(_.unixTimestamp.toLong)
+          .getOrElse(reader.genesisHeader.unixTimestamp.toLong)
     )
     DiscoveryConfig(
       instanceConfig.config,
@@ -218,7 +224,13 @@ trait PeerDiscoveryManagerBuilder:
                   genesisHash = () => blockchainReader.genesisHeader.hash.value,
                   genesisTimestamp = () => blockchainReader.genesisHeader.unixTimestamp.toLong,
                   blockchainConfig = blockchainConfig,
-                  currentBestBlock = () => blockchainReader.getBestBlockNumber
+                  currentBestBlock = () => blockchainReader.getBestBlockNumber,
+                  // Real head timestamp, not a hardcoded 0 — see ForkIdTag's own comment (WI-13 / issue #1429).
+                  currentBestBlockTimestamp = () =>
+                    blockchainReader
+                      .getBlockHeaderByNumber(blockchainReader.getBestBlockNumber)
+                      .map(_.unixTimestamp.toLong)
+                      .getOrElse(blockchainReader.genesisHeader.unixTimestamp.toLong)
                 )
               )
             ),

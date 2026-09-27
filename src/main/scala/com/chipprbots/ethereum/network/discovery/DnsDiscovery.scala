@@ -321,13 +321,15 @@ object DnsDiscovery extends Logger:
       genesisHash: () => ByteString,
       genesisTimestamp: () => Long,
       blockchainConfig: BlockchainConfig,
-      currentBestBlock: () => BigInt
+      currentBestBlock: () => BigInt,
+      currentBestBlockTimestamp: () => Long
   ):
     def accepts(remoteForkId: ForkId): Boolean =
       import ForkIdValidator.syncIoLogger
       ForkIdValidator
         .validatePeer[SyncIO](genesisHash(), genesisTimestamp(), blockchainConfig)(
           currentBestBlock(),
+          currentBestBlockTimestamp(),
           remoteForkId
         )
         .unsafeRunSync() match

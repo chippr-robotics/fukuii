@@ -32,13 +32,22 @@ class ForkIdTag(
     genesisHash: () => ByteString,
     genesisTimestamp: () => Long,
     blockchainConfig: BlockchainConfig,
-    currentBestBlock: () => BigInt
+    currentBestBlock: () => BigInt,
+    currentBestBlockTimestamp: () => Long
 ) extends KeyValueTag:
 
   private val ethKey: ByteVector = EthereumNodeRecord.Keys.key("eth")
 
   override def toAttr: Option[(ByteVector, ByteVector)] =
-    val forkId = ForkId.create(genesisHash(), genesisTimestamp(), blockchainConfig)(currentBestBlock())
+    // Must use the (head, headTimestamp) overload, not the 1-arg `create(head)` convenience (which fixes
+    // headTimestamp at 0). A timestamp-fork chain advertised with headTimestamp=0 emits the pre-genesis-era
+    // checksum forever — on Platåberget, the bare genesis id with next=1787212224 — which every up-to-date
+    // peer's discv4/ENR filter then rejects as stale. See WI-13 / issue #1429.
+    val forkId =
+      ForkId.create(genesisHash(), genesisTimestamp(), blockchainConfig)(
+        currentBestBlock(),
+        currentBestBlockTimestamp()
+      )
     Some(ethKey -> ForkIdTag.encodeEthEntry(forkId))
 
   override def toFilter: KeyValueTag.EnrFilter = enr =>
@@ -53,6 +62,7 @@ class ForkIdTag(
             ForkIdValidator
               .validatePeer[SyncIO](genesisHash(), genesisTimestamp(), blockchainConfig)(
                 currentBestBlock(),
+                currentBestBlockTimestamp(),
                 remoteForkId
               )
               .unsafeRunSync() match
