@@ -8,8 +8,10 @@ import com.chipprbots.ethereum.domain.BlockHeader
 import com.chipprbots.ethereum.domain.GasAmount
 import com.chipprbots.ethereum.domain.BlockchainImpl
 import com.chipprbots.ethereum.domain.BlockchainReader
+import com.chipprbots.ethereum.domain.SetCodeTransaction
 import com.chipprbots.ethereum.domain.SignedTransactionWithSender
 import com.chipprbots.ethereum.domain.Transaction
+import com.chipprbots.ethereum.domain.UInt256
 import com.chipprbots.ethereum.nodebuilder.BlockchainConfigBuilder
 import com.chipprbots.ethereum.vm.EvmConfig
 import com.chipprbots.ethereum.vm.ExecutionTracer
@@ -170,7 +172,7 @@ class StxLedger(
       blockHeader: BlockHeader,
       world: Option[InMemoryWorldStateProxy]
   ): BigInt =
-    val lowLimit = EvmConfig.forBlock(blockHeader.number.value, blockchainConfig).feeSchedule.G_transaction
+    val lowLimit = estimationLowerBound(stx, blockHeader)
     val tx = stx.tx
     val highLimit = tx.tx.gasLimit
 
@@ -194,6 +196,61 @@ class StxLedger(
         if result.codeDepositShortfall then Some(StxLedger.CodeDepositShortfall)
         else result.error.map(StxLedger.VmFailure.apply)
       }
+
+  /** Where [[binarySearchGasEstimation]] starts: the smallest gas limit it ever tries.
+    *
+    * Where a calldata floor is a validity rule, that is the least VALID gas limit, `max(intrinsic, floor)`, computed as
+    * `StdSignedTransactionValidator.validateGasLimitEnoughForIntrinsicGas` computes it: the same timestamp-aware
+    * config, the same functions and the same activation predicate, so the estimate and the rule cannot disagree.
+    *   - Amsterdam: EIP-7976's floor, 64 gas per calldata byte plus EIP-7981's access-list data cost, on EIP-2780's
+    *     base.
+    *   - Otherwise wherever [[BlockPreparator.eip7623Active]] holds (ETH Prague and Osaka, ETC Olympia): EIP-7623's
+    *     `21,000 + 10 * tokens`.
+    *
+    * The floor is charged after execution, not by the VM. The VM succeeds as soon as the intrinsic cost is covered, so
+    * a search starting at 21,000 settled on the intrinsic cost and returned a gas limit every node rejects: 37,000 for
+    * a zero-value call carrying 1,000 non-zero bytes on Prague (floor 61,000), 31,000 at Amsterdam (floor 79,000). At
+    * Amsterdam 21,000 was also too high a start: EIP-2780 makes a self-transfer valid at 12,000.
+    *
+    * Everywhere else (ETH before Prague, ETC before Olympia) the start is `G_transaction`, 21,000, exactly as before:
+    * gas below the rest of the intrinsic cost fails in the VM, so the search climbs past it.
+    *
+    * A transaction whose bound exceeds the gas cap is answered with the cap, as one that fails at every limit always
+    * was. At Amsterdam a bound above TX_MAX_GAS_LIMIT (2^24) cannot be valid at any gas limit; the search answers the
+    * bound all the same.
+    */
+  private[ledger] def estimationLowerBound(stx: SignedTransactionWithSender, blockHeader: BlockHeader): BigInt =
+    val number = blockHeader.number.value
+    val timestamp = blockHeader.unixTimestamp
+    val floorIsValidityRule =
+      blockchainConfig.isAmsterdamTimestamp(timestamp) || BlockPreparator.eip7623Active(number, timestamp)
+    if !floorIsValidityRule then EvmConfig.forBlock(number, blockchainConfig).feeSchedule.G_transaction
+    else
+      val tx = stx.tx.tx
+      val sender = stx.senderAddress
+      val config = EvmConfig.forBlock(number, timestamp, blockchainConfig)
+      val accessList = Transaction.accessList(tx)
+      val authorizations = tx match
+        case sct: SetCodeTransaction => sct.authorizationList.size
+        case _                       => 0
+      val intrinsic = config.calcTransactionIntrinsicGas(
+        tx.payload,
+        tx.isContractInit,
+        accessList,
+        authorizations,
+        tx.receivingAddress,
+        UInt256(tx.value),
+        sender
+      )
+      val floor =
+        if config.amsterdamEnabled then
+          config.calcAmsterdamCalldataFloorGas(tx.payload, accessList, tx.receivingAddress, UInt256(tx.value), sender)
+        else
+          BlockPreparator.calcFloorDataGas(
+            tx.payload,
+            config.transactionBaseCost(tx.receivingAddress, UInt256(tx.value), sender)
+          )
+      intrinsic.max(floor)
 
 object StxLedger:
 
