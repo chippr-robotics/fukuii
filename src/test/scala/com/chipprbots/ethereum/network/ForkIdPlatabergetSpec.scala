@@ -7,6 +7,8 @@ import org.scalatest.matchers.should.*
 import org.scalatest.wordspec.AnyWordSpec
 
 import com.chipprbots.ethereum.forkid.ForkId
+import com.chipprbots.ethereum.network.discovery.DnsDiscovery
+import com.chipprbots.ethereum.network.discovery.ForkIdTag
 import com.chipprbots.ethereum.testing.Tags.*
 import com.chipprbots.ethereum.utils.Config.*
 
@@ -60,5 +62,52 @@ class ForkIdPlatabergetSpec extends AnyWordSpec with Matchers:
     ) in {
       create(AmsterdamTimestamp) shouldBe ForkId(0x05842a50L, None)
       create(2000000000L) shouldBe ForkId(0x05842a50L, None)
+    }
+
+    /** WI-13 / issue #1429, acceptance criterion: the ENR `eth` entry ForkIdTag advertises must equal 0x05842a50 once
+      * the head is past Amsterdam — not the pre-Shanghai genesis id ForkIdTag emitted while its 1-arg
+      * `ForkId.create(head)` convenience call fixed headTimestamp at 0 (block number is irrelevant here, same as
+      * `create` above: Platåberget carries no block forks). Exercises `ForkIdTag.toAttr` directly, the actual ENR
+      * advertisement path — not `ForkId.create`, which the other tests in this file already cover directly.
+      */
+    "advertise 0x05842a50 through ForkIdTag.toAttr once the head is past Amsterdam" taggedAs (
+      UnitTest,
+      NetworkTest
+    ) in {
+      val tag = new ForkIdTag(
+        genesisHash = () => platabergetGenesisHash,
+        genesisTimestamp = () => GenesisTimestamp,
+        blockchainConfig = platabergetConf,
+        currentBestBlock = () => BigInt(0),
+        currentBestBlockTimestamp = () => AmsterdamTimestamp
+      )
+      val (_, value) = tag.toAttr.get
+      ForkIdTag.decodeEthEntry(value.toArray) shouldBe ForkId(0x05842a50L, None)
+    }
+
+    /** DNS seeding (EIP-1459) mirrors discv4's ForkIdTag filter at resolution time (DnsDiscovery.EnrForkIdFilter), so
+      * it needs the same fix. Block number pinned at a tiny value throughout — Platåberget has no block forks (see the
+      * first test in this file), so only the TIMESTAMP axis can be doing the work below.
+      */
+    "reject a stale pre-Amsterdam peer and accept an upgraded one through DnsDiscovery's EnrForkIdFilter" taggedAs (
+      UnitTest,
+      NetworkTest
+    ) in {
+      def filterAtHead(headTimestamp: Long) = new DnsDiscovery.EnrForkIdFilter(
+        genesisHash = () => platabergetGenesisHash,
+        genesisTimestamp = () => GenesisTimestamp,
+        blockchainConfig = platabergetConf,
+        currentBestBlock = () => BigInt(5),
+        currentBestBlockTimestamp = () => headTimestamp
+      )
+
+      // Local past Amsterdam. Remote is the bare genesis-era ForkId with next=None: software that predates
+      // every one of Platåberget's timestamp forks, not merely a peer that's behind but aware of what's next.
+      val staleRemote = ForkId(create(0L).hash, None)
+      filterAtHead(AmsterdamTimestamp).accepts(staleRemote) shouldBe false
+
+      // Same local state; an honestly upgraded, past-Amsterdam remote is accepted.
+      val upgradedRemote = create(AmsterdamTimestamp)
+      filterAtHead(AmsterdamTimestamp).accepts(upgradedRemote) shouldBe true
     }
   }
