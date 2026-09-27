@@ -975,12 +975,25 @@ final private class BlockImporterLogic(
           case None =>
             log.warning("SYNC-FORK: no header at resolver LCA {} — falling back to blind rewind", lca)
             blindRewind(capturedBest, snapPivot)
-        running(state)
+        // Every exit rewinds the fetcher (or escalates to SNAP), so a batch deferred before recovery is stale.
+        running(state.withoutDeferredBatches())
 
       case BranchResolverMsg(FastSyncBranchResolverActor.BranchResolutionFailed(_)) =>
         log.warning("SYNC-FORK: branch resolver failed — falling back to 128-block blind rewind")
         blindRewind(capturedBest, snapPivot)
-        running(state)
+        running(state.withoutDeferredBatches())
+
+      case ImportDone(_, _) =>
+        // The import that raised StartForkRecovery sent it from inside its own IO (tryImportBlocks, FORK-DETECT), so
+        // its ImportDone always arrives AFTER that, i.e. here. It used to fall into the catch-all below and be
+        // dropped, leaving `importing = true` for good: after recovery `PickBlocks if !state.importing` never matched
+        // again and regular sync was wedged — on every chain, ETC included. Apply exactly the state change that
+        // ImportDone makes in `running` (not importing, no branch resolution, no deferred batches — the fetcher is
+        // rewound at every exit). Its NewBehavior is moot: recovery supersedes whatever that import asked for.
+        // Resetting at the exits instead would be wrong: if the resolver answered first, a new import could start
+        // while this one still runs. If it does answer first, this ImportDone arrives in `running` and is handled
+        // there as usual.
+        resolvingFork(capturedBest, snapPivot, state.notImportingBlocks().branchResolved().withoutDeferredBatches())
 
       case _ => Behaviors.same
     }

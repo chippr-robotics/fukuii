@@ -1,5 +1,6 @@
 package com.chipprbots.ethereum.blockchain.sync.regular
 
+import java.net.InetSocketAddress
 import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
@@ -24,6 +25,7 @@ import com.chipprbots.ethereum.BlockHelpers
 import com.chipprbots.ethereum.blockchain.sync.CacheBasedBlacklist
 import com.chipprbots.ethereum.blockchain.sync.EphemBlockchainTestSetup
 import com.chipprbots.ethereum.blockchain.sync.TestSyncConfig
+import com.chipprbots.ethereum.blockchain.sync.fast.FastSyncBranchResolverActor
 import com.chipprbots.ethereum.consensus.ConsensusAdapter
 import com.chipprbots.ethereum.consensus.ConsensusImpl
 import com.chipprbots.ethereum.consensus.engine.DesignatedHead
@@ -39,7 +41,10 @@ import com.chipprbots.ethereum.ledger.BlockExecutionError
 import com.chipprbots.ethereum.ledger.BlockValidation
 import com.chipprbots.ethereum.ledger.BranchResolution
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor
+import com.chipprbots.ethereum.network.Peer
+import com.chipprbots.ethereum.network.PeerActor
 import com.chipprbots.ethereum.network.PeerEventBusActor
+import com.chipprbots.ethereum.network.PeerId
 import com.chipprbots.ethereum.ommers.OmmersPool
 import com.chipprbots.ethereum.testing.Tags.*
 import com.chipprbots.ethereum.transactions.PendingTransactionsManager
@@ -179,6 +184,37 @@ class PosRegularSyncImportSpec extends ScalaTestWithActorTestKit with AnyFlatSpe
     blockchainReader.getBestBlock.map(_.hash) shouldBe Some(side.last.hash)
     stop()
 
+  it should "pick again after a fork recovery raised mid-import while a batch was deferred" taggedAs (
+    UnitTest,
+    SyncTest,
+    ConsensusTest
+  ) in new ImporterFixture():
+    start()
+    requestPick()
+    requestPick()
+    val first = fetcher.expectMessageType[BlockFetcher.PickBlocks]
+    val second = fetcher.expectMessageType[BlockFetcher.PickBlocks]
+
+    val (started, release) = holdBatchStartingAt(head.number.value + 1)
+    raiseForkRecoveryFromImport(head.number.value + 1)
+    val finished = importsDone()
+    try
+      first.replyTo ! BlockFetcher.PickedBlocks(fromWire(ahead.take(50)))
+      started.await(10, TimeUnit.SECONDS) shouldBe true
+      second.replyTo ! BlockFetcher.PickedBlocks(fromWire(ahead.slice(50, 52))) // deferred: the import is running
+    finally release.countDown()
+    // The held import now raises StartForkRecovery from inside itself and then finishes, so its ImportDone reaches
+    // resolvingFork. Only once that ImportDone has been sent does the resolver answer.
+    awaitImportDoneSent(finished)
+    importer ! BlockImporter.BranchResolverMsg(FastSyncBranchResolverActor.BranchResolvedSuccessful(lca, resolverPeer))
+    fetcher.expectMessageType[BlockFetcher.InvalidateBlocksFrom](importTimeout).fromBlock shouldBe lca + 1
+
+    requestPick()
+    // Unfixed: resolvingFork dropped that ImportDone, `importing` stayed true, and this pick — like every later one —
+    // was ignored: regular sync wedged for good, with the deferred batch pinned.
+    fetcher.expectMessageType[BlockFetcher.PickBlocks](importTimeout)
+    stop()
+
   "BlockImporter on a PoW chain (the ETC/Mordor/Gorgoroth wiring)" should
     "handle the same post-rewind batch exactly as before: the whole batch, prefix included, re-executed" taggedAs (
       UnitTest,
@@ -218,6 +254,29 @@ class PosRegularSyncImportSpec extends ScalaTestWithActorTestKit with AnyFlatSpe
         .expectMessageType[BlockFetcher.InvalidateBlocksFrom](importTimeout)
         .fromBlock shouldBe head.number.value - 64
     finally release.countDown()
+    stop()
+
+  it should "pick again after a fork recovery raised mid-import — the stale importing flag is cleared here too" taggedAs (
+    UnitTest,
+    SyncTest,
+    ConsensusTest
+  ) in new ImporterFixture(postMerge = false):
+    // A liveness fix on ETC as well (forge review): resolvingFork used to drop the ImportDone of the import that
+    // raised StartForkRecovery, on every chain. The only ETC change is that flag — no consensus rule moves.
+    start()
+    requestPick()
+    val first = fetcher.expectMessageType[BlockFetcher.PickBlocks]
+
+    raiseForkRecoveryFromImport(head.number.value + 1)
+    val finished = importsDone()
+    first.replyTo ! BlockFetcher.PickedBlocks(fromWire(ahead.take(50)))
+    awaitImportDoneSent(finished)
+    importer ! BlockImporter.BranchResolverMsg(FastSyncBranchResolverActor.BranchResolvedSuccessful(lca, resolverPeer))
+    fetcher.expectMessageType[BlockFetcher.InvalidateBlocksFrom](importTimeout).fromBlock shouldBe lca + 1
+
+    requestPick()
+    // Unfixed: ignored, `importing` still true — wedged.
+    fetcher.expectMessageType[BlockFetcher.PickBlocks](importTimeout)
     stop()
 
   // ---------------------------------------------------------------------------------------------------------------
@@ -278,6 +337,12 @@ class PosRegularSyncImportSpec extends ScalaTestWithActorTestKit with AnyFlatSpe
     def executedNumbers: List[BigInt] = executed.asScala.toList.map(_.number.value)
 
     @volatile private var hold: Option[(BigInt, CountDownLatch, CountDownLatch)] = None
+    @volatile private var forkRecoveryFrom: Option[BigInt] = None
+
+    /** Have the import of the batch that starts at `firstBlock` raise StartForkRecovery from INSIDE itself, the way
+      * FORK-DETECT does (tryImportBlocks, on the import's own IO) — so that import's ImportDone is sent after it.
+      */
+    def raiseForkRecoveryFromImport(firstBlock: BigInt): Unit = forkRecoveryFrom = Some(firstBlock)
 
     /** Make the execution of the batch that starts at `firstBlock` block until released: an import still running. */
     def holdBatchStartingAt(firstBlock: BigInt): (CountDownLatch, CountDownLatch) =
@@ -303,6 +368,9 @@ class PosRegularSyncImportSpec extends ScalaTestWithActorTestKit with AnyFlatSpe
           executed.add(b)
           (next, acc :+ BlockData(b, Nil, next))
         }
+        forkRecoveryFrom.filter(first => blocks.headOption.exists(_.number.value == first)).foreach { first =>
+          importer ! BlockImporter.StartForkRecovery(first)
+        }
         (data.toList, Option.empty[BlockExecutionError])
       }
 
@@ -327,7 +395,7 @@ class PosRegularSyncImportSpec extends ScalaTestWithActorTestKit with AnyFlatSpe
     val fetcher: TestProbe[BlockFetcher.FetchCommand] = createTestProbe[BlockFetcher.FetchCommand]()
     private val supervisor = createTestProbe[RegularSync.Command]()
 
-    private val importer: ActorRef[BlockImporter.Command] = spawn(
+    val importer: ActorRef[BlockImporter.Command] = spawn(
       BlockImporter(
         fetcher.ref,
         consensusAdapter,
@@ -368,6 +436,25 @@ class PosRegularSyncImportSpec extends ScalaTestWithActorTestKit with AnyFlatSpe
       NonEmptyList.fromListUnsafe(blocks.map(b => b.copy(header = b.header.toBytes.toBlockHeader)))
 
     def stop(): Unit = testKit.stop(importer)
+
+    /** Where an injected fork resolution lands: ten blocks below the head. */
+    val lca: BigInt = head.number.value - 10
+
+    lazy val resolverPeer: Peer = Peer(
+      PeerId("fork-resolver-master"),
+      new InetSocketAddress("127.0.0.1", 30303),
+      createTestProbe[PeerActor.Command]().ref,
+      incomingConnection = false
+    )
+
+    /** How many imports have finished. `importWith` records this timer only AFTER it has sent that import's ImportDone,
+      * so once it moves past a reading, the ImportDone is in the importer's mailbox, ahead of anything the test sends
+      * next. Suites run one at a time in the forked test JVM (build.sbt: testForkedParallel := false).
+      */
+    def importsDone(): Long = RegularSyncMetrics.DefaultBlockPropagationTimer.count()
+
+    def awaitImportDoneSent(before: Long): Unit =
+      fetcher.awaitAssert(importsDone() should be > before, importTimeout, 10.millis)
 
   /** A PoW block as it crosses the wire: BlockHelpers' 1-byte nonce widened to the 8 bytes the decoder requires. */
   private def powBlock(block: Block): Block =
