@@ -581,7 +581,17 @@ object SignedTransactionWithSender:
     // is included in the intrinsic gas check (omitting it under-estimates cost for contract-creation
     // txs post-Shanghai). Use the latest configured fork timestamp as a stateless proxy for "now".
     // ETC uses the 2-arg path: timestamp forks do not exist on ETC.
-    val config =
+    //
+    // EIP-7623's `tx.gas >= floor` rule (the block validator's, BlockPreparator.eip7623Active) is applied at that same
+    // proxy, and only where the proxy names the fork whose floor applies: an ETH chain with no Amsterdam timestamp.
+    //   - Not on ETC. This filter cannot see the head, and its ETC config is Olympia's by construction (built at
+    //     olympiaBlockNumber), so the rule would refuse, on ETC mainnet and Mordor today, transactions that are valid
+    //     there until Olympia activates.
+    //   - Not where Amsterdam is scheduled (Sepolia, Platåberget). The proxy ignores the Amsterdam timestamp, so it
+    //     would hold Amsterdam transactions to the floor EIP-7976 replaced: a zero-value call with 200 non-zero bytes
+    //     at 28,000 gas is valid under Amsterdam (15,000 + 12,800) but below EIP-7623's 29,000.
+    // In both cases this filter stays as it was, and the block validator enforces the rule.
+    val (config, eip7623Floor) =
       if blockchainConfig.networkType == NetworkType.ETH then
         val ft = blockchainConfig.forkTimestamps
         val latestTimestamp: Long =
@@ -592,12 +602,13 @@ object SignedTransactionWithSender:
             .orElse(ft.cancunTimestamp)
             .orElse(ft.shanghaiTimestamp)
             .getOrElse(0L)
-        EvmConfig.forBlock(
-          blockchainConfig.forkBlockNumbers.olympiaBlockNumber,
-          Timestamp(latestTimestamp),
-          blockchainConfig
+        val olympiaBlock = blockchainConfig.forkBlockNumbers.olympiaBlockNumber
+        (
+          EvmConfig.forBlock(olympiaBlock, Timestamp(latestTimestamp), blockchainConfig),
+          com.chipprbots.ethereum.ledger.BlockPreparator.eip7623Active(olympiaBlock, Timestamp(latestTimestamp)) &&
+            ft.amsterdamTimestamp.isEmpty
         )
-      else EvmConfig.forBlock(blockchainConfig.forkBlockNumbers.olympiaBlockNumber, blockchainConfig)
+      else (EvmConfig.forBlock(blockchainConfig.forkBlockNumbers.olympiaBlockNumber, blockchainConfig), false)
 
     val eip2681NonceCap = BigInt(2).pow(64) - 2 // EIP-2681: nonces >= 2^64-1 rejected
     stxs.filter { stx =>
@@ -616,12 +627,13 @@ object SignedTransactionWithSender:
         val authListSize = tx match
           case sct: SetCodeTransaction => sct.authorizationList.size
           case _                       => 0
-        coversIntrinsicGas(config, stx, authListSize)
+        coversIntrinsicGas(config, stx, authListSize, eip7623Floor)
     }
 
   /** Whether `stx`'s gas limit covers its intrinsic gas under `config` — and, under Amsterdam, the rest of
     * execution-specs `validate_transaction`'s gas rule: `tx.gas >= max(intrinsic, calldata floor)` with both at most
     * TX_MAX_GAS_LIMIT (EIP-7976 / EIP-7981 / EIP-8037), the rule `StdSignedTransactionValidator` applies to blocks.
+    * Before Amsterdam, `eip7623Floor` adds EIP-7623's `tx.gas >= 21,000 + 10 * tokens` (see the caller for where).
     *
     * The sender enters intrinsic gas and the floor only through transactionBaseCost, and only from Amsterdam, where a
     * self-transfer (to == sender) costs less. Recovering the sender is an ECDSA public-key recovery, and the stateless
@@ -633,7 +645,8 @@ object SignedTransactionWithSender:
   private[domain] def coversIntrinsicGas(
       config: com.chipprbots.ethereum.vm.EvmConfig,
       stx: SignedTransaction,
-      authListSize: Int
+      authListSize: Int,
+      eip7623Floor: Boolean
   )(implicit blockchainConfig: BlockchainConfig): Boolean =
     val tx = stx.tx
     def covers(sender: Address): Boolean =
@@ -646,7 +659,15 @@ object SignedTransactionWithSender:
         UInt256(tx.value),
         sender
       )
-      if !config.amsterdamEnabled then tx.gasLimit.value >= intrinsicGas
+      if !config.amsterdamEnabled then
+        val floor: BigInt =
+          if !eip7623Floor then BigInt(0)
+          else
+            com.chipprbots.ethereum.ledger.BlockPreparator.calcFloorDataGas(
+              tx.payload,
+              config.transactionBaseCost(tx.receivingAddress, UInt256(tx.value), sender)
+            )
+        tx.gasLimit.value >= intrinsicGas.max(floor)
       else
         val floor = config.calcAmsterdamCalldataFloorGas(
           tx.payload,

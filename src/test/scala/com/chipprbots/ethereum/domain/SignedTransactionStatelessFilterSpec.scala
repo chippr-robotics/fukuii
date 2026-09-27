@@ -221,15 +221,21 @@ class SignedTransactionStatelessFilterSpec extends AnyFlatSpec with Matchers:
       config.calcTransactionIntrinsicGas(ByteString.empty, to.isEmpty, Nil, 0, to, UInt256(value), sender)
 
     val recipients = Seq(Some(sender), Some(Address(0)), Some(other), None)
+    // With no calldata EIP-7623's floor is the bare 21,000, so it never binds and both settings must agree.
     for
       config <- Seq(preAmsterdam, amsterdam)
+      eip7623Floor <- Seq(false, true)
       to <- recipients
       value <- Seq(BigInt(0), BigInt(1))
       exact = trueIntrinsic(config, to, value)
       gasLimit <- Seq(exact - 1, exact, exact + 1, BigInt(21_000), BigInt(30_000))
       if gasLimit > 0
     do
-      withClue(s"amsterdam=${config.amsterdamEnabled} to=$to value=$value gasLimit=$gasLimit exact=$exact: ") {
-        SignedTransactionWithSender.coversIntrinsicGas(config, tx(to, value, gasLimit), 0) shouldBe (gasLimit >= exact)
+      withClue(
+        s"amsterdam=${config.amsterdamEnabled} eip7623Floor=$eip7623Floor to=$to value=$value gasLimit=$gasLimit " +
+          s"exact=$exact: "
+      ) {
+        SignedTransactionWithSender.coversIntrinsicGas(config, tx(to, value, gasLimit), 0, eip7623Floor) shouldBe
+          (gasLimit >= exact)
       }
   }

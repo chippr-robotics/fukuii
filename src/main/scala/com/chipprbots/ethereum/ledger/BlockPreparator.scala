@@ -561,15 +561,9 @@ class BlockPreparator(
           s"gasToRefundBase=$totalGasToRefundBase executionGas=$executionGasBase"
       )
 
-    // EIP-7623 activation:
-    //   - ETH: Prague timestamp
-    //   - ETC: Olympia block (ECIP-1121)
-    // Do NOT use `blockHeader.number >= olympiaBlockNumber` alone — hive maps London→olympiaBlockNumber
-    // on ETH test chains, which would apply the floor pre-Prague.
-    val eip7623Active =
-      blockchainConfig.isPragueTimestamp(blockHeader.unixTimestamp) ||
-        (blockchainConfig.networkType == com.chipprbots.ethereum.utils.NetworkType.ETC &&
-          blockHeader.number.value >= blockchainConfig.forkBlockNumbers.olympiaBlockNumber)
+    // EIP-7623 activation — ETH Prague timestamp, ETC Olympia block (ECIP-1121). The validator's `tx.gas >= floor`
+    // rule reads the same predicate; see BlockPreparator.eip7623Active.
+    val eip7623Active = BlockPreparator.eip7623Active(blockHeader.number.value, blockHeader.unixTimestamp)
     // EIP-7623's floor sits on the transaction's base cost. Pre-Amsterdam that base is the flat 21,000;
     // EIP-2780 replaces it with the decomposed base, and that substitution is load-bearing rather than
     // cosmetic — a floor still anchored at 21,000 would drag the measured 12,000 self-transfer back up to
@@ -617,6 +611,18 @@ class BlockPreparator(
         (gasUsedBeforeRefund - txStateGas).max(floorDataGas)
 
     val totalGasToRefund = gasLimit - executionGasToPayToMiner
+
+    // Only the calldata floor can charge more than the gas limit, and only when tx.gas < floor — which EIP-7623 (ETH
+    // Prague, ETC Olympia) and EIP-7976 (Amsterdam) make INVALID, and StdSignedTransactionValidator rejects before
+    // anything executes. A negative refund here therefore means a transaction reached execution without that check
+    // (#1438). Carried on, `refundAmount.toUInt256` below would wrap it modulo 2^256 and silently credit the sender
+    // almost 2^256 wei, or debit it past its upfront payment. Fail loudly instead.
+    if totalGasToRefund < GasAmount.Zero then
+      throw new IllegalStateException(
+        s"transaction ${stx.hash.toHex} would be charged $executionGasToPayToMiner gas, above its gas limit $gasLimit " +
+          s"(calldata floor $floorDataGas): a transaction whose gas limit is below its calldata floor is invalid and " +
+          "must be rejected before execution"
+      )
 
     // Upfront in `updateSenderAccountBeforeExecution` is gasLimit * effectiveGasPrice
     // (post-EIP-1559: NOT maxFeePerGas — see comment there). So the refund only
@@ -1170,3 +1176,18 @@ object BlockPreparator:
     val nonZeroBytes = payload.length - zeroBytes
     val tokens = nonZeroBytes * 4 + zeroBytes
     baseCost + tokens * 10
+
+  /** Whether EIP-7623's calldata floor applies to a block: ETH from the Prague timestamp, ETC from the Olympia block
+    * (ECIP-1121).
+    *
+    * One definition for the two places that must agree: the floor [[BlockPreparator.executeTransaction]] charges, and
+    * the validity rule `tx.gas >= floor` that `StdSignedTransactionValidator` enforces. A transaction the charge could
+    * take above its gas limit is therefore always one the validator has already rejected.
+    *
+    * Do NOT test `number >= olympiaBlockNumber` alone: hive and the shipped ETH chain configs map London to
+    * `olympiaBlockNumber`, which would apply the floor on ETH from London on.
+    */
+  def eip7623Active(blockNumber: BigInt, timestamp: Timestamp)(implicit blockchainConfig: BlockchainConfig): Boolean =
+    blockchainConfig.isPragueTimestamp(timestamp) ||
+      (blockchainConfig.networkType == com.chipprbots.ethereum.utils.NetworkType.ETC &&
+        blockNumber >= blockchainConfig.forkBlockNumbers.olympiaBlockNumber)

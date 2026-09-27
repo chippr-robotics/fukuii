@@ -5,6 +5,7 @@ import com.chipprbots.ethereum.consensus.engine.BlobGasUtils
 import com.chipprbots.ethereum.consensus.validators.SignedTransactionError.*
 import com.chipprbots.ethereum.crypto.ECDSASignature
 import com.chipprbots.ethereum.domain.*
+import com.chipprbots.ethereum.ledger.BlockPreparator
 import com.chipprbots.ethereum.utils.BlockchainConfig
 import com.chipprbots.ethereum.vm.AmsterdamGas
 import com.chipprbots.ethereum.vm.EvmConfig
@@ -286,20 +287,24 @@ object StdSignedTransactionValidator extends SignedTransactionValidator:
           Right(SignedTransactionValid)
     else Right(SignedTransactionValid)
 
-  /** Validates the gas limit is no smaller than the intrinsic gas used by the transaction — and, at Amsterdam, no
-    * smaller than its calldata floor either.
+  /** Validates the gas limit is no smaller than the intrinsic gas used by the transaction — and, wherever a calldata
+    * floor applies, no smaller than that floor either.
     *
-    * The Amsterdam floor check is execution-specs `validate_transaction`'s second gas check, straight after the
-    * intrinsic one: `intrinsic.calldata_floor > tx.gas` makes the transaction invalid. Only at Amsterdam: EIP-7623
-    * states the same rule for its own floor, but fukuii has never enforced it on ETH Prague/Osaka or ETC Olympia, and
-    * adding it there is a separate, separately reviewed change.
+    * The floor check is execution-specs `validate_transaction`'s gas rule, `max(intrinsic, calldata_floor) > tx.gas`
+    * makes the transaction invalid (go-ethereum `ErrFloorDataGas`, checked in the state transition and the txpool from
+    * `IsPrague`). The intrinsic error is reported first when both fail. Two floors:
+    *   - Amsterdam: EIP-7976 / EIP-7981's, on EIP-2780's base.
+    *   - Before Amsterdam, wherever EIP-7623 is active (ETH Prague and Osaka, ETC Olympia): `21,000 + 10 * tokens`, the
+    *     very floor BlockPreparator charges, under the very activation predicate it charges it under
+    *     ([[BlockPreparator.eip7623Active]]). Without this rule a transaction below its floor executed, was charged the
+    *     floor above its own gas limit, and the negative refund wrapped in UInt256 (#1438).
     *
     * @param stx
     *   Transaction to validate
     * @param blockHeaderNumber
     *   Number of the block where the stx transaction was included
     * @return
-    *   Either the validated transaction, a TransactionNotEnoughGasForIntrinsicError or (Amsterdam) a
+    *   Either the validated transaction, a TransactionNotEnoughGasForIntrinsicError or a
     *   TransactionNotEnoughGasForFloorError
     */
   private def validateGasLimitEnoughForIntrinsicGas(
@@ -336,6 +341,14 @@ object StdSignedTransactionValidator extends SignedTransactionValidator:
         tx.receivingAddress,
         UInt256(tx.value),
         sender
+      )
+      if stx.tx.gasLimit < GasAmount(floor) then
+        Left(TransactionNotEnoughGasForFloorError(stx.tx.gasLimit.value, floor))
+      else Right(SignedTransactionValid)
+    else if BlockPreparator.eip7623Active(blockHeaderNumber, blockHeaderTimestamp) then
+      val floor = BlockPreparator.calcFloorDataGas(
+        tx.payload,
+        config.transactionBaseCost(tx.receivingAddress, UInt256(tx.value), sender)
       )
       if stx.tx.gasLimit < GasAmount(floor) then
         Left(TransactionNotEnoughGasForFloorError(stx.tx.gasLimit.value, floor))
