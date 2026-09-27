@@ -154,7 +154,8 @@ Chain configs define when specific protocol upgrades activate:
   spiral-block-number = "19250000"
 
   # Olympia (ECIP-1111/1112/1121: EIP-1559, EVM modernization, EIP-7702)
-  # olympia-block-number = "TBD"  # ~mid-June 2026
+  # Unscheduled: deferred on every chain until a confirmed test block number exists.
+  olympia-block-number = "1000000000000000000"
 }
 ```
 
@@ -432,19 +433,19 @@ fukuii {
 ```hocon
 fukuii {
   sync {
-    # Perform state sync as part of fast sync
-    do-fast-sync = true
+    # Initial sync: SNAP when true, otherwise import every block from genesis
+    # (fast sync was removed; do-fast-sync is ignored with a warning)
+    do-snap-sync = true
     
-    # Peers to use for fast sync
+    # How often to refresh the list of peers to sync from
     peers-scan-interval = 3.seconds
     
     # Block resolving properties
-    max-concurrent-requests = 10
     block-headers-per-request = 128
     block-bodies-per-request = 128
     
-    # Pivot block offset for fast sync
-    pivot-block-offset = 500
+    # SNAP pivot: this many blocks behind the network head
+    snap-sync.pivot-block-offset = 64
   }
   
   blockchain {

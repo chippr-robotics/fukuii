@@ -42,6 +42,12 @@ class AppStateStorage(val dataSource: DataSource) extends TransactionalKeyValueS
   def putBestBlockNumber(bestBlockNumber: BigInt): DataSourceBatchUpdate =
     put(Keys.BestBlockNumber, bestBlockNumber.toString)
 
+  /** Whether fast sync finished on this node. Fast sync was removed and nothing in the node sets this flag any more; a
+    * database that fast sync completed earlier still carries it. `SyncController` reads it in two places: to tell a
+    * stranded fast sync from a finished one, and, with SNAP on and not done, to send a node where fast sync finished
+    * and SNAP has no stake (accounts not complete, saved pivot not the best block) to regular sync instead of SNAP. Its
+    * recovery paths clear it.
+    */
   def isFastSyncDone(): Boolean =
     get(Keys.FastSyncDone).exists(_.toBoolean)
 
@@ -50,15 +56,6 @@ class AppStateStorage(val dataSource: DataSource) extends TransactionalKeyValueS
 
   def clearFastSyncDone(): DataSourceBatchUpdate =
     remove(Keys.FastSyncDone)
-
-  def getFastSyncCooldownUntilMillis(): Long =
-    get(Keys.FastSyncCooldownUntilMillis).flatMap(v => scala.util.Try(v.toLong).toOption).getOrElse(0L)
-
-  def putFastSyncCooldownUntilMillis(untilMillis: Long): DataSourceBatchUpdate =
-    put(Keys.FastSyncCooldownUntilMillis, untilMillis.toString)
-
-  def isFastSyncCoolingOff(nowMillis: Long): Boolean =
-    getFastSyncCooldownUntilMillis() > nowMillis
 
   def getEstimatedHighestBlock(): BigInt =
     getBigInt(Keys.EstimatedHighestBlock)
@@ -218,6 +215,19 @@ class AppStateStorage(val dataSource: DataSource) extends TransactionalKeyValueS
   def putSnapSyncPivotBlock(pivotBlock: BigInt): DataSourceBatchUpdate =
     put(Keys.SnapSyncPivotBlock, pivotBlock.toString)
 
+  /** The lowest block SNAP may take as its pivot, set when the node was found stranded by an interrupted fast sync: the
+    * best block that fast sync reached has no state behind it, so a pivot at or below it would pass for "already
+    * synced". Persisted so a restart before SNAP commits a pivot keeps the floor; cleared once SNAP finalizes.
+    */
+  def getSnapSyncMinPivotBlock(): Option[BigInt] =
+    get(Keys.SnapSyncMinPivotBlock).map(BigInt(_))
+
+  def putSnapSyncMinPivotBlock(minPivotBlock: BigInt): DataSourceBatchUpdate =
+    put(Keys.SnapSyncMinPivotBlock, minPivotBlock.toString)
+
+  def clearSnapSyncMinPivotBlock(): DataSourceBatchUpdate =
+    remove(Keys.SnapSyncMinPivotBlock)
+
   /** Get the SNAP sync state root hash
     * @return
     *   SNAP sync state root hash, or None if not set
@@ -301,16 +311,6 @@ class AppStateStorage(val dataSource: DataSource) extends TransactionalKeyValueS
     */
   def clearSnapSyncBootstrapTarget(): DataSourceBatchUpdate =
     update(toRemove = Seq(Keys.SnapSyncBootstrapTarget), toUpsert = Nil)
-
-  /** Get the SNAP/Fast sync bounce cycle count. */
-  def getSnapFastCycleCount(): Int =
-    get(Keys.SnapFastCycleCount).flatMap(v => scala.util.Try(v.toInt).toOption).getOrElse(0)
-
-  def putSnapFastCycleCount(count: Int): DataSourceBatchUpdate =
-    put(Keys.SnapFastCycleCount, count.toString)
-
-  def clearSnapFastCycleCount(): DataSourceBatchUpdate =
-    remove(Keys.SnapFastCycleCount)
 
   /** Check if SNAP sync account download phase has completed. Used to skip account re-download on process restart
     * during bytecode/storage phase.
@@ -496,17 +496,16 @@ object AppStateStorage:
     val BestBlockNumber = "BestBlockNumber"
     val BestBlockHash = "BestBlockHash"
     val FastSyncDone = "FastSyncDone"
-    val FastSyncCooldownUntilMillis = "FastSyncCooldownUntilMillis"
     val EstimatedHighestBlock = "EstimatedHighestBlock"
     val SyncStartingBlock = "SyncStartingBlock"
     val BootstrapPivotBlock = "BootstrapPivotBlock"
     val BootstrapPivotBlockHash = "BootstrapPivotBlockHash"
     val SnapSyncDone = "SnapSyncDone"
     val SnapSyncPivotBlock = "SnapSyncPivotBlock"
+    val SnapSyncMinPivotBlock = "SnapSyncMinPivotBlock"
     val SnapSyncStateRoot = "SnapSyncStateRoot"
     val SnapSyncProgress = "SnapSyncProgress"
     val SnapSyncBootstrapTarget = "SnapSyncBootstrapTarget"
-    val SnapFastCycleCount = "SnapFastCycleCount"
     val BytecodeRecoveryDone = "BytecodeRecoveryDone"
     val StorageRecoveryDone = "StorageRecoveryDone"
     val RecoveryProgress = "RecoveryProgress"

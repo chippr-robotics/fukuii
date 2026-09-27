@@ -714,14 +714,9 @@ trait SyncControllerRefBuilder:
   def syncController: org.apache.pekko.actor.typed.ActorRef[SyncController.Command]
 
 trait FukuiiServiceBuilder:
-  self: TransactionHistoryServiceBuilder & JSONRpcConfigBuilder & SyncControllerRefBuilder & ActorSystemBuilder =>
+  self: TransactionHistoryServiceBuilder & JSONRpcConfigBuilder =>
 
-  lazy val fukuiiService = new FukuiiService(
-    transactionHistoryService,
-    jsonRpcConfig,
-    syncController,
-    classicSystem.toTyped.scheduler
-  )
+  lazy val fukuiiService = new FukuiiService(transactionHistoryService, jsonRpcConfig)
 
 trait McpServiceBuilder:
   self: PeerManagerActorBuilder & SyncControllerBuilder & ActorSystemBuilder & BlockchainBuilder &
@@ -1087,10 +1082,8 @@ trait SyncControllerBuilder extends SyncControllerRefBuilder:
           blockchainReader,
           blockchainWriter,
           storagesInstance.storages.appStateStorage,
-          storagesInstance.storages.blockNumberMappingStorage,
           storagesInstance.storages.evmCodeStorage,
           storagesInstance.storages.stateStorage,
-          storagesInstance.storages.nodeStorage,
           storagesInstance.storages.flatSlotStorage,
           storagesInstance.storages.fastSyncStateStorage,
           consensusAdapter,

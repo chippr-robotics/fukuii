@@ -41,10 +41,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Comprehensive test suite with 11 tests covering gas cost changes and edge cases
 
 ### Changed
-- Gorgoroth devnet: Olympia-era gas now follows EIP-2537 (G1/G2 MSM discount tables) and EIP-7702
-  (authorization refunds, authority warming, delegation access cost). Gorgoroth datadirs that ran
-  past the Olympia block (15,800,850) with an older build must be reset. ETC mainnet and Mordor are
-  unaffected — Olympia is not active there.
+- **Olympia is deferred on every chain** until a confirmed test block number exists. Gorgoroth
+  (`gorgoroth-chain.conf`, was 15,800,850) and the private-network template
+  (`enterprise-template.conf`, was 0) now set `olympia-block-number` to the unscheduled sentinel
+  `1000000000000000000`, as ETC mainnet and Mordor already do. Everything keyed to that block stays
+  off with it, including the EIP-1559 base fee and ECIP-1111 treasury credit, the Olympia opcodes and
+  precompiles, EIP-7702, the Olympia gas-limit rules and the MESS reactivation window. ETC mainnet,
+  Mordor and the ETH-family chains are unchanged (on ETH-family configs `olympia-block-number` is the
+  London block).
+  - **Gorgoroth operators:** move every fukuii node to this build at the same time. A node left on
+    an older build activates Olympia at 15,800,850 and splits from the rest there. If your chain
+    already ran past 15,800,850 on an Olympia-active build, reset the datadir: this build rejects
+    those blocks, because their headers carry a base fee. The Gorgoroth fork ID no longer announces
+    15,800,850 as the next fork.
+  - **Private networks from the template:** new copies leave Olympia unscheduled, so genesis has no
+    base fee field. A network already running from an earlier copy keeps what that copy sets;
+    changing `olympia-block-number` on a live chain is a hard fork.
+- Olympia-era gas now follows EIP-2537 (G1/G2 MSM discount tables) and EIP-7702 (authorization
+  refunds, authority warming, delegation access cost). No ETC-family chain activates Olympia (see the
+  entry above), so ETC mainnet, Mordor and Gorgoroth are unaffected.
 - Renamed GHCR image path from `chordodes_fukuii` to `fukuii` across all CI/CD, docs, and scripts
 - Modernized CI apt-key pattern to use `signed-by` keyring (replaces deprecated `apt-key add`)
 - Renamed `logback-node2-sync-trace.xml` → `logback-sync-trace.xml` (not node-specific)
@@ -53,6 +68,53 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Enhanced release workflow to include all artifacts
 - Updated documentation for release process
 - Modified `ProgramState` initialization to conditionally include COINBASE in warm addresses set
+
+### Removed
+- **Fast sync.** It could not finish on current networks (eth/67 and later peers do not serve
+  `GetNodeData`), no other client supports it, and SNAP sync replaces it. A node now picks SNAP sync
+  when `fukuii.sync.do-snap-sync` is true and regular sync otherwise. When SNAP cannot proceed (no
+  snap-capable peers, repeated critical failures, no peers at all), it goes dormant and retries on a
+  fresh pivot after a back-off of 3 minutes doubling to 20. Before, it handed the node to fast sync.
+  - JSON-RPC: `fukuii_resetFastSync` and `fukuii_restartFastSync` (and `fukuii-cli reset-fast-sync`).
+  - Metrics (exported as `app_fastsync_*`): the gauges `fastsync.block.pivotBlock.number.gauge`,
+    `fastsync.block.bestFullBlock.number.gauge`, `fastsync.block.bestHeader.number.gauge`,
+    `fastsync.state.totalNodes.gauge`, `fastsync.state.downloadedNodes.gauge` and
+    `fastsync.totaltime.minutes.gauge`, and the timers `fastsync.block.downloadBlockHeaders.timer`,
+    `fastsync.block.downloadBlockBodies.timer`, `fastsync.block.downloadBlockReceipts.timer` and
+    `fastsync.state.downloadState.timer`. Dashboard panels built on them go empty.
+    `app_network_peers_blacklisted_fastSyncGroup_counter_total` stays: the SNAP chain downloader and
+    the branch resolver still count there.
+  - Configuration keys under `fukuii.sync`, now ignored with a startup warning (not an error):
+    `do-fast-sync`, `fast-sync-restart-cooloff`, `max-snap-fast-cycle-transitions`,
+    `start-retry-interval`, `sync-switch-delay`, `critical-blacklist-duration`,
+    `persist-state-snapshot-interval`, `max-concurrent-requests`, `nodes-per-request`,
+    `min-peers-to-choose-pivot-block`, `peers-to-choose-pivot-block-margin`, `pivot-block-offset`
+    (the top-level one; `snap-sync.pivot-block-offset` is unaffected),
+    `pivot-block-max-total-selection-attempts`, `pivot-block-reschedule-interval`,
+    `max-pivot-block-age`, `max-pivot-block-failures-count`, `max-target-difference`,
+    `maximum-target-update-failures`, `fastsync-block-chain-only-peers-pool`, `fastsync-throttle`,
+    `fast-sync-block-validation-k`, `fast-sync-block-validation-n`, `fast-sync-block-validation-x`,
+    `fast-sync-max-batch-retries`, `state-sync-bloom-filter-size`, `state-sync-persist-batch-size`.
+  - The `-Dfukuii.reset-fast-sync-done` system property (now only logs a warning).
+  - **Upgrading:** nothing has to be done first.
+    - A node stopped part-way through fast sync starts SNAP sync, with the pivot kept above the
+      block fast sync had reached (its best block has no state behind it). The floor is stored as
+      the `SnapSyncMinPivotBlock` app-state key, so it survives restarts, and is cleared when SNAP
+      completes. With `do-snap-sync = false` the node starts regular sync and logs an error:
+      regular sync fetches the missing state node by node and, if peers cannot serve it, re-syncs
+      with SNAP from a newer pivot, even with `do-snap-sync` off.
+    - A node where fast sync finished earlier continues with regular sync, even with
+      `do-snap-sync` on, unless SNAP has progress there (its saved pivot is the node's best block,
+      or its accounts are complete): then SNAP resumes. Regular sync does not need fast sync's trie
+      to be complete: it fetches missing state from peers node by node and, if that fails,
+      re-syncs with SNAP from a newer pivot.
+    - If your configuration set `do-fast-sync = false` to sync from genesis (an archive node, for
+      example), set `do-snap-sync = false`; otherwise the node uses SNAP sync.
+    - Fast sync's progress record (column family `f`, key `fast-sync-state`) is deleted at the
+      first start, once the node has checked whether fast sync left it stranded. The
+      `FastSyncCooldownUntilMillis` and `SnapFastCycleCount` app-state keys stay on disk, unread.
+      `FastSyncDone` is still read: with SNAP on, it sends a node where SNAP has no progress to
+      regular sync.
 
 ### Fixed
 - **Critical**: Fixed ETH68 peer connection failures due to incorrect message decoder order

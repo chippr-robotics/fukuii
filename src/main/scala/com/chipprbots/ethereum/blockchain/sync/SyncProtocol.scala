@@ -40,21 +40,6 @@ object SyncProtocol:
       with RegularSyncCommand
   case class MinedBlock(block: Block) extends SyncProtocolMsg with RegularSyncCommand
 
-  /** Clears persisted fast-sync markers so the next start can enter fast sync again. This is intentionally a "soft"
-    * reset: it does not wipe the chain DB.
-    */
-  final case class ResetFastSync(replyTo: org.apache.pekko.actor.typed.ActorRef[SyncProtocol.ResetFastSyncResponse])
-      extends SyncProtocolMsg
-  final case class ResetFastSyncResponse(reset: Boolean) extends SyncProtocolMsg
-
-  /** Requests a safe in-process restart of fast sync. The controller will apply a circuit-breaker cool-off period to
-    * avoid thrashing.
-    */
-  final case class RestartFastSync(
-      replyTo: org.apache.pekko.actor.typed.ActorRef[SyncProtocol.RestartFastSyncResponse]
-  ) extends SyncProtocolMsg
-  final case class RestartFastSyncResponse(started: Boolean, cooldownUntilMillis: Long) extends SyncProtocolMsg
-
   /** Signals that regular sync has hit a wall — repeated state-node fetch exhaustion on the same block, with no peer
     * able to serve our parent stateRoot (typical when the node is many thousands of blocks behind canonical tip and the
     * snap-serve window of every connected peer has moved far past us). The controller responds by clearing the
@@ -117,7 +102,7 @@ object SyncProtocol:
     case class Syncing(
         startingBlockNumber: BigInt,
         blocksProgress: Progress,
-        stateNodesProgress: Option[Progress] // relevant only in fast sync, but is required by RPC spec
+        stateNodesProgress: Option[Progress] // state download progress (SNAP sync); eth_syncing reports it
     ) extends Status
 
     case object NotSyncing extends Status

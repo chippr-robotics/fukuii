@@ -89,7 +89,7 @@
     },
     {
       "datasource": "Prometheus",
-      "description": "FastSync pivot block",
+      "description": "SNAP sync pivot block",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -133,123 +133,13 @@
       "pluginVersion": "7.3.6",
       "targets": [
         {
-          "expr": "app_fastsync_block_pivotBlock_number_gauge{instance=~\"$node\"}",
+          "expr": "app_snapsync_pivot_block_number_gauge{instance=~\"$node\"}",
           "interval": "",
           "legendFormat": "Pivot",
           "refId": "A"
         }
       ],
-      "title": "Pivot Block",
-      "type": "stat"
-    },
-    {
-      "datasource": "Prometheus",
-      "description": "FastSync total time",
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "mode": "thresholds"
-          },
-          "mappings": [],
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "purple",
-                "value": null
-              }
-            ]
-          },
-          "unit": "m"
-        },
-        "overrides": []
-      },
-      "gridPos": {
-        "h": 4,
-        "w": 6,
-        "x": 12,
-        "y": 1
-      },
-      "id": 4,
-      "options": {
-        "colorMode": "value",
-        "graphMode": "none",
-        "justifyMode": "auto",
-        "orientation": "auto",
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "",
-          "values": false
-        },
-        "textMode": "auto"
-      },
-      "pluginVersion": "7.3.6",
-      "targets": [
-        {
-          "expr": "app_fastsync_totaltime_minutes_gauge{instance=~\"$node\"}",
-          "interval": "",
-          "legendFormat": "Minutes",
-          "refId": "A"
-        }
-      ],
-      "title": "FastSync Total Time",
-      "type": "stat"
-    },
-    {
-      "datasource": "Prometheus",
-      "description": "Downloaded MPT Nodes",
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "mode": "thresholds"
-          },
-          "mappings": [],
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "orange",
-                "value": null
-              }
-            ]
-          },
-          "unit": "short"
-        },
-        "overrides": []
-      },
-      "gridPos": {
-        "h": 4,
-        "w": 6,
-        "x": 18,
-        "y": 1
-      },
-      "id": 5,
-      "options": {
-        "colorMode": "value",
-        "graphMode": "area",
-        "justifyMode": "auto",
-        "orientation": "auto",
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "",
-          "values": false
-        },
-        "textMode": "auto"
-      },
-      "pluginVersion": "7.3.6",
-      "targets": [
-        {
-          "expr": "app_fastsync_state_downloadedNodes_gauge{instance=~\"$node\"}",
-          "interval": "",
-          "legendFormat": "Nodes",
-          "refId": "A"
-        }
-      ],
-      "title": "Downloaded MPT Nodes",
+      "title": "SNAP Pivot Block",
       "type": "stat"
     },
     {

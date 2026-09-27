@@ -440,7 +440,7 @@ This is usually normal behavior as Fukuii filters incompatible peers. However, i
 
 ## Advanced Configuration
 
-### Optimizing for Fast Sync
+### Optimizing for Initial Sync
 
 For initial synchronization, maximize peers:
 
