@@ -183,7 +183,7 @@ class EngineApiBlockRlpSizeSpec extends AnyWordSpec with Matchers:
       )
       val body = BlockBody(txs, Nil, withdrawals = Some(Nil))
       blockExecution.executeBlockNoValidationWithRequests(Block(template, body)) match
-        case Right((receipts, gasUsed, stateRoot, requests)) =>
+        case Right((receipts, gasUsed, stateRoot, requests, _)) =>
           requests shouldBe empty
           Block(
             template.copy(
