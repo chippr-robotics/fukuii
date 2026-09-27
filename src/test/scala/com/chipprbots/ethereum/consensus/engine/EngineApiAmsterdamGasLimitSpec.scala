@@ -2,11 +2,13 @@ package com.chipprbots.ethereum.consensus.engine
 
 import org.apache.pekko.util.ByteString
 
+import com.typesafe.config.ConfigFactory
 import org.scalatest.matchers.should.Matchers
 import org.scalatest.wordspec.AnyWordSpec
 
 import com.chipprbots.ethereum.Fixtures
 import com.chipprbots.ethereum.consensus.blocks.GasLimitCalculator
+import com.chipprbots.ethereum.consensus.mining.MiningConfig
 import com.chipprbots.ethereum.domain.Address
 import com.chipprbots.ethereum.domain.BlockHeader
 import com.chipprbots.ethereum.domain.BlockNumber
@@ -19,11 +21,13 @@ import com.chipprbots.ethereum.utils.Config
 // scalastyle:off magic.number
 /** The gas limit of a payload engine_forkchoiceUpdated builds ([[EngineApiService.enginePayloadGasLimit]]).
   *
-  * From Amsterdam, PayloadAttributesV4's `targetGasLimit` drives it as go-ethereum's miner does (miner/worker.go
-  * `prepareWork` at 920c077): `GasLimit = core.CalcGasLimit(parent.GasLimit, targetGasLimit)`. The vectors are
-  * go-ethereum's own `TestCalcGasLimit` (core/block_validator_test.go) plus three at the 5,000 floor, derived by hand
-  * from `CalcGasLimit`, which raises a target below MinGasLimit to 5,000 before stepping. Without a target, and before
-  * Amsterdam, the parent's gas limit is kept.
+  * From Amsterdam it is go-ethereum's (miner/worker.go `prepareWork` at 920c077, lines 292-300): `GasLimit =
+  * core.CalcGasLimit(parent.GasLimit, desired)`, where `desired` is PayloadAttributesV4's `targetGasLimit` when present
+  * and otherwise the node's gas ceiling (go-ethereum's `GasCeil`, default 60,000,000 at miner/miner.go:57; fukuii's
+  * `mining.gas-limit-target`). The vectors are go-ethereum's own `TestCalcGasLimit` (core/block_validator_test.go) plus
+  * ones at the 5,000 floor and toward a ceiling, computed with a port of `CalcGasLimit` that reproduces those test
+  * values; `CalcGasLimit` raises a desired limit below MinGasLimit to 5,000 before stepping. Before Amsterdam the
+  * parent's gas limit is kept.
   */
 class EngineApiAmsterdamGasLimitSpec extends AnyWordSpec with Matchers:
 
@@ -38,7 +42,8 @@ class EngineApiAmsterdamGasLimitSpec extends AnyWordSpec with Matchers:
   /** BPO2 at genesis, Amsterdam at 15,000. */
   private val transition = configFor("BPO2ToAmsterdamAtTime15k")
 
-  private def service(config: BlockchainConfig) = new EngineApiService(null, null, null, null, None)(config, null)
+  private def service(config: BlockchainConfig, ceiling: BigInt) =
+    new EngineApiService(null, null, null, null, None, builderGasCeil = ceiling)(config, null)
 
   private def parent(gasLimit: BigInt): BlockHeader =
     Fixtures.Blocks.ValidBlock.header.copy(number = BlockNumber(100), gasLimit = GasAmount(gasLimit))
@@ -53,8 +58,14 @@ class EngineApiAmsterdamGasLimitSpec extends AnyWordSpec with Matchers:
     targetGasLimit = targetGasLimit
   )
 
-  private def gasLimit(config: BlockchainConfig, parentGasLimit: BigInt, timestamp: Long, target: Option[BigInt]) =
-    service(config).enginePayloadGasLimit(parent(parentGasLimit), attributes(timestamp, target)).value
+  private def gasLimit(
+      config: BlockchainConfig,
+      parentGasLimit: BigInt,
+      timestamp: Long,
+      target: Option[BigInt],
+      ceiling: BigInt = EngineApiService.DefaultBuilderGasCeil
+  ): BigInt =
+    service(config, ceiling).enginePayloadGasLimit(parent(parentGasLimit), attributes(timestamp, target)).value
 
   "enginePayloadGasLimit at Amsterdam" should {
 
@@ -100,11 +111,53 @@ class EngineApiAmsterdamGasLimitSpec extends AnyWordSpec with Matchers:
       GasLimitCalculator.calcGasLimit(5_000, 0) shouldBe 4_997
     }
 
-    "keep the parent's gas limit when the attributes carry no target, as the engine path always has" taggedAs (
+    "step toward the node's gas ceiling when the attributes carry no target, as go-ethereum's GasCeil" taggedAs (
       UnitTest,
       ConsensusTest
     ) in {
-      gasLimit(amsterdam, 30_000_000, 12, None) shouldBe 30_000_000
+      // The default ceiling is go-ethereum's, 60,000,000: (parent gas limit, child gas limit).
+      EngineApiService.DefaultBuilderGasCeil shouldBe BigInt(60_000_000)
+      val towardDefault = Seq[(BigInt, BigInt)](
+        (5_000, 5_003),
+        (20_000_000, 20_019_530),
+        (30_000_000, 30_029_295),
+        (45_000_000, 45_043_944),
+        (60_000_000, 60_000_000),
+        (70_000_000, 69_931_642)
+      )
+      towardDefault.foreach { case (parentGasLimit, expected) =>
+        withClue(s"parent $parentGasLimit: ")(gasLimit(amsterdam, parentGasLimit, 12, None) shouldBe expected)
+      }
+      // A configured ceiling, from either side.
+      val toward36M = Seq[(BigInt, BigInt)](
+        (30_000_000, 30_029_295),
+        (36_000_000, 36_000_000),
+        (40_000_000, 39_960_939),
+        (45_000_000, 44_956_056)
+      )
+      toward36M.foreach { case (parentGasLimit, expected) =>
+        withClue(s"parent $parentGasLimit, ceiling 36M: ") {
+          gasLimit(amsterdam, parentGasLimit, 12, None, ceiling = 36_000_000) shouldBe expected
+        }
+      }
+      // The attributes' target wins over the ceiling.
+      gasLimit(amsterdam, 40_000_000, 12, Some(60_000_000), ceiling = 36_000_000) shouldBe 40_039_061
+      // A ceiling below 5,000 is raised to 5,000, as a target is.
+      gasLimit(amsterdam, 5_000, 12, None, ceiling = 0) shouldBe 5_000
+      gasLimit(amsterdam, 5_002, 12, None, ceiling = 0) shouldBe 5_000
+      gasLimit(amsterdam, 6_000, 12, None, ceiling = 0) shouldBe 5_996
+    }
+
+    "take the ceiling from mining.gas-limit-target, which ships with go-ethereum's 60,000,000" taggedAs (
+      UnitTest,
+      ConsensusTest
+    ) in {
+      // What NodeBuilder hands the service: `mining.config.generic.gasLimitTarget`.
+      MiningConfig(Config.config).gasLimitTarget shouldBe EngineApiService.DefaultBuilderGasCeil
+      val overridden =
+        MiningConfig(ConfigFactory.parseString("mining.gas-limit-target = 36000000").withFallback(Config.config))
+      overridden.gasLimitTarget shouldBe BigInt(36_000_000)
+      gasLimit(amsterdam, 45_000_000, 12, None, ceiling = overridden.gasLimitTarget) shouldBe 44_956_056
     }
   }
 

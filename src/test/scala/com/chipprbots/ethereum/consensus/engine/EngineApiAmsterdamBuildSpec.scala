@@ -147,10 +147,15 @@ class EngineApiAmsterdamBuildSpec extends AnyWordSpec with Matchers:
     HefPostPrague(GenesisBaseFee, BlockHeader.EmptyMpt, BigInt(0), BigInt(0), Zero32, EmptyRequestsHash)
 
   /** One node: its own ephemeral storage, the real VM and the engine validators, on the genesis above. `withPool` gives
-    * it a pool (the builder); without one it only validates.
+    * it a pool (the builder); without one it only validates. `gasCeil` is the node's builder gas ceiling, what it is
+    * handed from `mining.gas-limit-target`.
     */
-  private class Node(network: String, genesisFields: HeaderExtraFields, withPool: Boolean)
-      extends EphemBlockchainTestSetup:
+  private class Node(
+      network: String,
+      genesisFields: HeaderExtraFields,
+      withPool: Boolean,
+      gasCeil: BigInt = EngineApiService.DefaultBuilderGasCeil
+  ) extends EphemBlockchainTestSetup:
 
     val config: BlockchainConfig = EestBlockchainReplay
       .configFor(blockchainConfig, network, ChainIdValue)
@@ -189,7 +194,8 @@ class EngineApiAmsterdamBuildSpec extends AnyWordSpec with Matchers:
           blockchainWriter,
           blockExecution,
           new ForkChoiceManager(blockchainReader, blockchainWriter),
-          Some(pendingTxManager)
+          Some(pendingTxManager),
+          builderGasCeil = gasCeil
         )(config, classicSystem.toTyped.scheduler)
       else
         new EngineApiService(
@@ -251,8 +257,11 @@ class EngineApiAmsterdamBuildSpec extends AnyWordSpec with Matchers:
     blockchainWriter.storeChainWeight(genesis.header.hash, ChainWeight.zero).commit()
     storagesInstance.storages.appStateStorage.putBestBlockNumber(0).commit()
 
-  private def builderNode(network: String = "Amsterdam", genesis: HeaderExtraFields = amsterdamGenesisFields) =
-    new Node(network, genesis, withPool = true)
+  private def builderNode(
+      network: String = "Amsterdam",
+      genesis: HeaderExtraFields = amsterdamGenesisFields,
+      gasCeil: BigInt = EngineApiService.DefaultBuilderGasCeil
+  ) = new Node(network, genesis, withPool = true, gasCeil)
   private def validatorNode(network: String = "Amsterdam", genesis: HeaderExtraFields = amsterdamGenesisFields) =
     new Node(network, genesis, withPool = false)
 
@@ -548,9 +557,24 @@ class EngineApiAmsterdamBuildSpec extends AnyWordSpec with Matchers:
       // CalcGasLimit(45,000,000, 60,000,000): one step of 45,000,000 / 1024 - 1 = 43,944.
       block.header.gasLimit.value shouldBe BigInt(45_043_944)
       envelope \ "executionPayload" \ "gasLimit" shouldBe JString(quantity(45_043_944))
-      // Without a target the parent's gas limit is kept.
+      // Without a target, the node's gas ceiling: go-ethereum's default, 60,000,000, the same step here.
       val untargeted = requestPayload(builder, 4, attributes(12, Some(BigInt(2))))
-      builtBlock(builder, untargeted).header.gasLimit.value shouldBe GenesisGasLimit
+      builtBlock(builder, untargeted).header.gasLimit.value shouldBe BigInt(45_043_944)
+    }
+
+    "without targetGasLimit, move toward the node's configured gas ceiling, as go-ethereum's GasCeil" taggedAs (
+      UnitTest,
+      ConsensusTest
+    ) in {
+      // mining.gas-limit-target = 36,000,000: CalcGasLimit(45,000,000, 36,000,000), one step down of 43,944.
+      val builder = builderNode(gasCeil = 36_000_000)
+      val validator = validatorNode()
+      val payloadId = requestPayload(builder, 4, attributes(12, Some(BigInt(1))))
+      val envelope = envelopeOf(getPayload(builder, 6, payloadId))
+
+      expectValid(validator, 5, envelope)
+      builtBlock(builder, payloadId).header.gasLimit.value shouldBe BigInt(44_956_056)
+      envelope \ "executionPayload" \ "gasLimit" shouldBe JString(quantity(44_956_056))
     }
   }
 

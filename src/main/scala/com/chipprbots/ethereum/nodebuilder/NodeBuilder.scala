@@ -902,7 +902,9 @@ trait EngineApiBuilder extends Logger:
       blockExecution,
       forkChoiceManager,
       Some(pendingTransactionsManagerTyped),
-      getPayloadRebuildBudget = EngineApiService.GetPayloadRebuildBudget
+      getPayloadRebuildBudget = EngineApiService.GetPayloadRebuildBudget,
+      // go-ethereum's --miner.gaslimit equivalent, as for the testing_* namespace: mining.gas-limit-target.
+      builderGasCeil = mining.config.generic.gasLimitTarget
     )(blockchainConfig, typedScheduler)
 
   // The controller's fork gates read the same schedule its service executes with (not the process-global config, which

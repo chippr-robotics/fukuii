@@ -37,7 +37,11 @@ class EngineApiService(
     // How long engine_getPayload may spend bringing a payload up to date with the pool before it serves the payload
     // as built (see resolvePayload). Unbounded here, which keeps the specs deterministic; the node passes
     // EngineApiService.GetPayloadRebuildBudget (NodeBuilder), because the CL gives engine_getPayload 1 s.
-    getPayloadRebuildBudget: scala.concurrent.duration.Duration = scala.concurrent.duration.Duration.Inf
+    getPayloadRebuildBudget: scala.concurrent.duration.Duration = scala.concurrent.duration.Duration.Inf,
+    // The gas limit this node's payloads move toward when the CL names none: go-ethereum's `--miner.gaslimit`
+    // (`miner.Config.GasCeil`), see enginePayloadGasLimit. The node passes its `mining.gas-limit-target`; the default is
+    // go-ethereum's own, which keeps the specs short.
+    builderGasCeil: BigInt = EngineApiService.DefaultBuilderGasCeil
 )(implicit blockchainConfig: BlockchainConfig, typedScheduler: org.apache.pekko.actor.typed.Scheduler)
     extends Logger:
 
@@ -1192,22 +1196,25 @@ class EngineApiService(
 
   /** The gasLimit of the payload engine_forkchoiceUpdated builds on `parent` for `attrs`.
     *
-    * From Amsterdam, PayloadAttributesV4's `targetGasLimit` sets it as go-ethereum's miner does (miner/worker.go
-    * `prepareWork`: the target replaces the node's gas ceiling when the block is Amsterdam and the field is present,
-    * and the header takes `core.CalcGasLimit(parent.GasLimit, target)`), a step of at most parent/1024 - 1 toward the
-    * target per block. `CalcGasLimit` first raises a target below MinGasLimit to 5,000. The shared
+    * From Amsterdam it is go-ethereum's (miner/worker.go `prepareWork` at 920c077, lines 292-300): the desired limit is
+    * the node's gas ceiling `builderGasCeil` (`gasCeil := miner.config.GasCeil`), replaced by PayloadAttributesV4's
+    * `targetGasLimit` when the block is Amsterdam and the field is present, and the header takes
+    * `core.CalcGasLimit(parent.GasLimit, desired)`: a step of at most parent/1024 - 1 toward it per block.
+    * `CalcGasLimit` first raises a desired limit below MinGasLimit to 5,000. The shared
     * [[com.chipprbots.ethereum.consensus.blocks.GasLimitCalculator.calcGasLimit]], which the ETC miner also uses, does
-    * not, and stays as it is: the raise is applied here, on the ETH engine path, so no target can take the header below
-    * the minimum validation enforces.
+    * not, and stays as it is: the raise is applied here, on the ETH engine path, so neither a target nor a configured
+    * ceiling can take the header below the minimum validation enforces.
     *
-    * Without a target, and before Amsterdam, the parent's gas limit is kept, the engine path's policy before
-    * PayloadAttributesV4 existed. go-ethereum falls back to its `--miner.gaslimit` there; this path has none.
+    * Before Amsterdam the parent's gas limit is kept, the engine path's policy before PayloadAttributesV4 existed.
+    * go-ethereum steers toward its gas ceiling on every fork there too (the same lines).
     */
   def enginePayloadGasLimit(parent: BlockHeader, attrs: PayloadAttributes): GasAmount =
-    val target = attrs.targetGasLimit
-      .filter(_ => blockchainConfig.isAmsterdamTimestamp(Timestamp(attrs.timestamp)))
-      .map(_.max(com.chipprbots.ethereum.consensus.validators.BlockHeaderValidator.MinGasLimit))
-    proposerGasLimit(parent, parent.number.value + 1, target)
+    val desired = Option.when(blockchainConfig.isAmsterdamTimestamp(Timestamp(attrs.timestamp)))(
+      attrs.targetGasLimit
+        .getOrElse(builderGasCeil)
+        .max(com.chipprbots.ethereum.consensus.validators.BlockHeaderValidator.MinGasLimit)
+    )
+    proposerGasLimit(parent, parent.number.value + 1, desired)
 
   /** Fork name for the proposer build log line. */
   private def forkNameAt(ts: Timestamp): String =
@@ -2329,6 +2336,12 @@ object EngineApiService:
     */
   val GetPayloadRebuildBudget: scala.concurrent.duration.FiniteDuration =
     scala.concurrent.duration.FiniteDuration(500, java.util.concurrent.TimeUnit.MILLISECONDS)
+
+  /** go-ethereum's default gas ceiling for the blocks it builds, `miner.DefaultConfig.GasCeil` (miner/miner.go:57 at
+    * 920c077; the `--miner.gaslimit` default, cmd/utils/flags.go:577-582). fukuii's `mining.gas-limit-target` ships
+    * with the same value, and the node passes that.
+    */
+  val DefaultBuilderGasCeil: BigInt = BigInt(60_000_000)
 
   /** Why no payload is built for Amsterdam attributes without `slotNumber`: an Amsterdam header carries the beacon slot
     * (EIP-7843) and nothing else can supply it. go-ethereum's text (miner/worker.go `prepareWork`); its
