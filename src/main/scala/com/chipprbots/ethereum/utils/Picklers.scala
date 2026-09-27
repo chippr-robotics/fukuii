@@ -58,7 +58,7 @@ object Picklers:
     .addConcreteType[HefPostCancun]
     .addConcreteType[HefPostPrague]
     // Appended last on purpose: boopickle assigns concrete-type indices in registration
-    // order, so appending leaves every already-persisted fast-sync record decodable.
+    // order, so appending leaves every already-persisted header decodable.
     .addConcreteType[HefPostAmsterdam]
 
   given addressPickler: Pickler[Address] =

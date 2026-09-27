@@ -318,7 +318,6 @@ class CalibratePivotTDSpec extends AnyFlatSpec with Matchers:
     override lazy val mining: TestMining = buildTestMining().withValidators(validators)
 
     override def defaultSyncConfig: SyncConfig = super.defaultSyncConfig.copy(
-      doFastSync = false,
       doSnapSync = false,
       peersScanInterval = 4.hours,
       checkForNewBlockInterval = 4.hours,
@@ -344,10 +343,8 @@ class CalibratePivotTDSpec extends AnyFlatSpec with Matchers:
           blockchainReader,
           blockchainWriter,
           storagesInstance.storages.appStateStorage,
-          storagesInstance.storages.blockNumberMappingStorage,
           storagesInstance.storages.evmCodeStorage,
           storagesInstance.storages.stateStorage,
-          storagesInstance.storages.nodeStorage,
           storagesInstance.storages.flatSlotStorage,
           storagesInstance.storages.fastSyncStateStorage,
           consensusAdapter,

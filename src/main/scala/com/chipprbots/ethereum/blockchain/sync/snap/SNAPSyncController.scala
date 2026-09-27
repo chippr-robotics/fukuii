@@ -241,8 +241,7 @@ private class SNAPSyncControllerImpl(
 
   private val progressMonitor = new SyncProgressMonitor(scheduler)
 
-  // Failure tracking — critical failures trigger dormant retry with exponential backoff
-  // instead of falling back to fast sync (useless on ETH68/69 networks).
+  // Failure tracking — critical failures trigger dormant retry with exponential backoff.
   private var criticalFailureCount: Int = 0
   private var accountsAtLastCriticalFailure: Long = 0L
   private val AccountProgressResetThreshold: Long = 100_000L
@@ -329,8 +328,8 @@ private class SNAPSyncControllerImpl(
   // pivot refreshes, it strongly indicates no peer has a snapshot database. Each
   // PivotStateUnservable increments this; any successful account download resets it.
   // After MaxConsecutivePivotRefreshes, we record a critical failure and enter dormant
-  // retry mode instead of falling back to fast sync. Set to 10 (was 3) to tolerate
-  // ETC mainnet's 1-5 SNAP peers needing 5+ minutes to re-index after serve-window expiry.
+  // retry mode. Set to 10 (was 3) to tolerate ETC mainnet's 1-5 SNAP peers needing
+  // 5+ minutes to re-index after serve-window expiry.
   private var consecutivePivotRefreshes: Int = 0
   private val MaxConsecutivePivotRefreshes = 10
 
@@ -801,7 +800,7 @@ private class SNAPSyncControllerImpl(
         if currentPhase == AccountRangeSync || currentPhase == ByteCodeAndStorageSync then restartSnapSync(reason)
         else Behaviors.same
 
-      // Snap capability grace period check: if still no snap/1 peers, fall back to fast sync
+      // Snap capability grace period check: if still no snap/1 peers, go dormant and retry on a fresh pivot
       case CheckSnapCapability =>
         val snapPeerCount = peersToDownloadFrom.count { case (_, p) =>
           p.peerInfo.remoteStatus.supportsSnap
@@ -812,10 +811,8 @@ private class SNAPSyncControllerImpl(
             s"Found $snapPeerCount snap-capable peer(s) during grace period, starting account range sync (concurrency=$effectiveConcurrency, peers=$snapPeerCount)"
           )
           stateRoot.foreach(launchAccountRangeWorkers(_, effectiveConcurrency))
-        else
-          ctx.log.warn("No snap-capable peers found after grace period. Falling back to fast sync.")
-          fallbackToFastSync()
-        Behaviors.same
+          Behaviors.same
+        else enterDormantMode("no snap-capable peers after the capability grace period")
 
       // Periodic request triggers
       case RequestAccountRanges =>
@@ -1109,9 +1106,8 @@ private class SNAPSyncControllerImpl(
               consecutivePivotRefreshes = 0 // Reset — accounts completing IS progress
               refreshPivotInPlace(reason)
             else
-              // Accounts still in progress. On ETH68/69 networks FastSync is useless (no
-              // GetNodeData), so instead of falling back we enter dormant retry mode —
-              // preserving all RocksDB data and waiting for peers with exponential backoff.
+              // Accounts still in progress. Enter dormant retry mode — preserving all RocksDB
+              // data and waiting for peers with exponential backoff.
               ctx.log.warn(
                 s"$consecutivePivotRefreshes consecutive pivot refreshes without progress. " +
                   "Peers likely lack snapshot databases."
@@ -2724,8 +2720,7 @@ private class SNAPSyncControllerImpl(
 
           case None =>
             ctx.log.error("Genesis block header not available - cannot start SNAP sync")
-            syncController ! FallbackToFastSync
-            break(bootstrapping())
+            break(enterDormantMode("genesis block header not available"))
 
       // With network-based pivot and 64-block offset, pivotBlockNumber should always be > 0
       // The genesis special case (above) handles when baseBlockForPivot <= 64
@@ -2870,15 +2865,13 @@ private class SNAPSyncControllerImpl(
     val delaySeconds = BootstrapRetryBaseDelay.toSeconds * math.pow(2, exponent).toLong
     math.min(delaySeconds, BootstrapRetryMaxDelay.toSeconds).seconds
 
-  /** Check if bootstrap retry has exceeded the maximum count. If so, fall back to fast sync and yield `Some(<completed
-    * behavior>)` for the caller to `break` on; otherwise `None` (caller continues / stays).
+  /** Check if bootstrap retry has exceeded the maximum count. If so, enter dormant mode and yield `Some(<dormant
+    * behavior>)` for the caller to `break` on; otherwise `None` (caller continues / stays). The dormant wake-up
+    * restarts SNAP on a fresh pivot once a snap-capable peer is connected.
     */
   private def checkBootstrapRetryTimeout(context: String): Option[Behavior[Command]] =
     if bootstrapRetryCount >= MaxBootstrapRetries then
-      ctx.log.warn(
-        s"No peers found after $bootstrapRetryCount bootstrap retries ($context). Falling back to fast sync."
-      )
-      Some(fallbackToFastSync())
+      Some(enterDormantMode(s"no peers found after $bootstrapRetryCount bootstrap retries ($context)"))
     else
       if bootstrapRetryCount > 0 && bootstrapRetryCount % 5 == 0 then
         ctx.log.info(
@@ -2889,12 +2882,12 @@ private class SNAPSyncControllerImpl(
         )
       None
 
-  /** Record a critical failure and check if we should fallback to fast sync. Critical failures are those that indicate
-    * SNAP sync cannot proceed.
+  /** Record a critical failure and check whether the threshold is reached. Critical failures are those that indicate
+    * SNAP sync cannot proceed on the current pivot.
     *
     * @param reason
-    *   Description of the failure Yields `true` if the retry limit is exceeded and the caller should fall back to fast
-    *   sync.
+    *   Description of the failure. Yields `true` if the retry limit is exceeded and the caller should enter dormant
+    *   mode.
     */
   private def recordCriticalFailure(reason: String): Boolean =
     SNAPSyncMetrics.incrementSyncError()
@@ -2907,51 +2900,10 @@ private class SNAPSyncControllerImpl(
       true
     else false
 
-  /** Trigger fallback to fast sync due to repeated SNAP sync failures */
-  private def fallbackToFastSync(): Behavior[Command] =
-    // Set phase to Completed FIRST so any in-flight stagnation handler (which checks currentPhase)
-    // does not re-trigger stagnation checks while we're tearing down.
-    currentPhase = Completed
-
-    ctx.log.warn("Triggering fallback to fast sync due to repeated SNAP sync failures")
-
-    // Cancel all scheduled tasks
-    timers.cancel(RequestAccountRanges)
-    timers.cancel(RequestByteCodes)
-    timers.cancel(RequestStorageRanges)
-    timers.cancel(RequestTrieNodeHealing)
-    timers.cancel(SnapCapabilityCheckKey)
-    timers.cancel(EvictNonSnapPeers)
-
-    // Stop progress monitoring
-    progressMonitor.stopPeriodicLogging()
-
-    // Clear persisted SNAP progress — fast sync will start fresh
-    stateRoot.foreach(root => snapProgressStorage.clearProgress(root.value))
-    appStateStorage
-      .putSnapSyncAccountsComplete(false)
-      .and(appStateStorage.putSnapSyncStorageComplete(false))
-      .and(appStateStorage.putSnapSyncBytecodeComplete(false))
-      .commit()
-    appStateStorage.putSnapSyncStorageFilePath("").commit()
-    preservedRangeProgress = Map.empty
-    preservedAtPivotBlock = None
-
-    // Stop chain downloader and peer scheduler
-    chainDownloader.foreach(ctx.stop)
-    chainDownloader = None
-    timers.cancel(EnsureSnapServerPeersConnected)
-
-    // Notify parent controller to switch to fast sync
-    syncController ! FallbackToFastSync
-    completed()
-
   /** Enter dormant mode: stop all coordinators and scheduled tasks, preserve all RocksDB data, and schedule a wake-up
-    * with exponential backoff. Replaces fallbackToFastSync() in the critical failure path — FastSync is useless on
-    * ETH68/69 (GetNodeData removed).
-    *
-    * Unlike fallbackToFastSync(), this does NOT clear persisted SNAP progress, does NOT send FallbackToFastSync to
-    * parent, and DOES preserve all downloaded trie data.
+    * with exponential backoff. SNAP's recovery when it cannot proceed — critical-failure threshold, bootstrap retries
+    * exhausted, no snap-capable peer after the capability grace period. The wake-up restarts SNAP on a fresh pivot once
+    * a snap-capable peer is connected (`dormantRetry`), and all persisted SNAP progress is kept.
     */
   private def enterDormantMode(reason: String): Behavior[Command] =
     currentPhase = Dormant
@@ -3023,6 +2975,9 @@ private class SNAPSyncControllerImpl(
     validationGeneration += 1
     validationInProgress = false
     consecutivePivotRefreshes = 0
+    // A fresh retry budget: going dormant on exhausted bootstrap retries leaves the counter at the limit, so without
+    // this the first retry after waking (a peer whose height is not known yet, say) would send it straight back.
+    bootstrapRetryCount = 0
 
     startSnapSync()
 
@@ -3142,7 +3097,7 @@ private class SNAPSyncControllerImpl(
     // Before starting workers, check if any connected peer supports the snap/1 protocol.
     // If no peers support snap, the workers will send requests that are silently ignored,
     // stalling sync until the 3-minute stagnation watchdog fires. Instead, check upfront
-    // and schedule a grace period for peers to connect before falling back to fast sync.
+    // and schedule a grace period for peers to connect before going dormant.
     val snapPeerCount = peersToDownloadFrom.count { case (_, p) =>
       p.peerInfo.remoteStatus.supportsSnap
     }
@@ -3150,7 +3105,7 @@ private class SNAPSyncControllerImpl(
     if snapPeerCount == 0 then
       val gracePeriod = snapSyncConfig.snapCapabilityGracePeriod
       ctx.log.warn(s"No peers with snap/1 capability found ($peersToDownloadFrom.size peers connected)")
-      ctx.log.warn(s"Scheduling snap capability check in ${gracePeriod.toSeconds}s before falling back to fast sync")
+      ctx.log.warn(s"Scheduling snap capability check in ${gracePeriod.toSeconds}s before entering dormant mode")
       timers.startSingleTimer(SnapCapabilityCheckKey, CheckSnapCapability, gracePeriod)
     else
       // Use the full configured account concurrency regardless of startup peer count.
@@ -4479,7 +4434,7 @@ private class SNAPSyncControllerImpl(
   // Reset to 0 on real progress (taskProgress || downloadProgress in maybeRestartIfAccountStagnant).
   private var consecutiveAccountStallRefreshes: Int = 0
 
-  // Hard cap so a wedged account phase escalates to FastSync fallback rather than refreshing
+  // Hard cap so a wedged account phase escalates to dormant mode rather than refreshing
   // forever. Higher than MaxConsecutivePivotRefreshes because account stalls can be transient
   // (peer churn, slow networks) and the stagnation threshold itself already takes minutes to fire.
   private val MaxConsecutiveAccountStallRefreshes = 10
@@ -4532,8 +4487,8 @@ private class SNAPSyncControllerImpl(
                   s"tasksPending=${progress.tasksPending}, tasksActive=${progress.tasksActive}, snapPeers=$snapPeerCount"
 
               // After enough refresh attempts without download progress, escalate so the node doesn't
-              // loop forever. recordCriticalFailure already trips fallbackToFastSync at the configured
-              // threshold; if that hasn't tripped yet, fall through to one more in-place refresh.
+              // loop forever. recordCriticalFailure trips dormant mode at the configured threshold;
+              // if that hasn't tripped yet, fall through to one more in-place refresh.
               val dormantTriggered =
                 if consecutiveAccountStallRefreshes > MaxConsecutiveAccountStallRefreshes then
                   ctx.log.error(
@@ -4915,8 +4870,6 @@ object SNAPSyncController:
   //   2. Done — backfill complete (or absent/disabled). SyncController poison-pills SNAPSyncController.
   // Sender always emits the same shape: Finalized first, then Done either immediately or after backfill.
   final case class SnapSyncFinalized(pivot: BigInt) extends SyncProtocol.SyncControllerReply
-  case object FallbackToFastSync
-      extends SyncProtocol.SyncControllerReply // Signal to fallback to fast sync due to repeated failures
   case class StartRegularSyncBootstrap(targetBlock: BigInt)
       extends SyncProtocol.SyncControllerReply // Request bootstrap from SyncController
   final case class BootstrapComplete(
@@ -5136,8 +5089,8 @@ object SNAPSyncController:
           validatorFactory
         ).start() // #1378: start() arms the 5s PollHandshakedPeers timer that populates the
         //          controller's peerListHelper. Calling startSnapSync() directly bypasses it,
-        //          leaving snapPeersForPivot permanently empty → pivot never selected →
-        //          FallbackToFastSync loop. Reverted by #1384's stale-base clobber; restored.
+        //          leaving snapPeersForPivot permanently empty → pivot never selected.
+        //          Reverted by #1384's stale-base clobber; restored.
       }
     }
 
@@ -5209,12 +5162,12 @@ case class SNAPSyncConfig(
     stateValidationEnabled: Boolean = true,
     maxRetries: Int = 3,
     timeout: FiniteDuration = 30.seconds,
-    maxSnapSyncFailures: Int = 5, // Max failures before fallback to fast sync
-    // Grace period after bootstrap to wait for snap/1-capable peers before falling back.
-    // If no connected peer advertises snap/1 within this window, fall back to fast sync.
+    maxSnapSyncFailures: Int = 5, // Max critical failures before entering dormant mode
+    // Grace period after bootstrap to wait for snap/1-capable peers. If no connected peer
+    // advertises snap/1 within this window, SNAP enters dormant mode and retries later.
     snapCapabilityGracePeriod: FiniteDuration = 30.seconds,
     // Account stagnation timeout: if no account range tasks complete within this window,
-    // record a critical failure (may trigger fallback). Reduced from 15 minutes to catch
+    // record a critical failure (may trigger dormant mode). Reduced from 15 minutes to catch
     // non-snap peers faster.
     accountStagnationTimeout: FiniteDuration = 10.minutes,
     maxInFlightPerPeer: Int = 5,

@@ -1304,7 +1304,7 @@ private class AccountRangeCoordinatorImpl(
     * The hard cap is the safety net for cases the proximate fixes miss — a task that keeps failing because every peer
     * is intermittently stateless, or returns malformed responses, or any other yet-unseen mode that would otherwise
     * loop forever. Escalation surfaces the problem as PivotStateUnservable, which the controller already escalates to
-    * recordCriticalFailure -> fallbackToFastSync after enough refreshes without progress.
+    * recordCriticalFailure -> enterDormantMode after enough refreshes without progress.
     */
   private def requeueOrEscalate(task: AccountTask, reason: String): Unit =
     val newCount = task.requeueCount + 1

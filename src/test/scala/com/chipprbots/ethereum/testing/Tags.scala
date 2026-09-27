@@ -205,7 +205,7 @@ object Tags:
   /** Tests for blockchain synchronization.
     *
     * Validates:
-    *   - Fast sync
+    *   - SNAP sync
     *   - Regular sync
     *   - Block download
     *   - State download

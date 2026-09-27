@@ -343,10 +343,10 @@ class StateNodeFetcher(
       case Failure(_)   => StateNodeFetcher.RetryStateNodeRequest
     }
 
-  /** Fetch a single contract bytecode by codeHash via SNAP GetByteCodes. Used when post-fast-sync regular sync hits a
-    * "Block has invalid gas used" error and findMissingContractCode identifies a missing bytecode. SNAP's GetByteCodes
-    * is served by every snap-capable peer regardless of their ETH version, so this works even when the entire peer set
-    * is ETH68+ (no GetNodeData).
+  /** Fetch a single contract bytecode by codeHash via SNAP GetByteCodes. Used when regular sync, running on state that
+    * SNAP (or a fast sync from before its removal) downloaded, hits a "Block has invalid gas used" error and
+    * findMissingContractCode identifies a missing bytecode. SNAP's GetByteCodes is served by every snap-capable peer
+    * regardless of their ETH version, so this works even when the entire peer set is ETH68+ (no GetNodeData).
     */
   private def sendGetByteCodes(codeHash: ByteString, excludePeers: Set[PeerId]): Unit =
     log.info(

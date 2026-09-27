@@ -347,8 +347,10 @@ final private class BlockImporterLogic(
         if BlockImporter.survivedExhausts >= BlockImporter.StuckEscapeThreshold then
           // Multiple consecutive exhausts mean peers genuinely don't have our parent state and
           // never will (we're far behind their snap-serve window). The only recovery is to re-pivot
-          // via SNAP. Reset our local counter so we don't re-fire if SyncController bounces us back
-          // to regular sync; the SnapFastEscapeHatch handles cycle limits.
+          // via SNAP (SyncController does so even with do-snap-sync off). Reset our local counter so
+          // we don't re-fire if SyncController bounces us back to regular sync. Nothing caps how often
+          // this cycle repeats (the SNAP↔fast escape hatch that used to was removed with fast sync);
+          // each SNAP re-sync starts from a pivot above the block we were stuck on.
           log.error(
             "Regular sync stuck on block {} after {} consecutive state-node exhausts (missing {}); requesting SNAP re-sync",
             blockNum,

@@ -15,19 +15,66 @@ import com.chipprbots.ethereum.utils.Logger
   */
 object ConfigValidator extends Logger:
 
+  /** Keys under `sync` that only fast sync read. Fast sync was removed, so a configuration that still sets one of them
+    * is not an error: the key is ignored and [[removedKeyWarnings]] reports it.
+    */
+  val RemovedFastSyncKeys: List[String] = List(
+    "do-fast-sync",
+    "fast-sync-restart-cooloff",
+    "max-snap-fast-cycle-transitions",
+    "start-retry-interval",
+    "sync-switch-delay",
+    "critical-blacklist-duration",
+    "persist-state-snapshot-interval",
+    "max-concurrent-requests",
+    "nodes-per-request",
+    "min-peers-to-choose-pivot-block",
+    "peers-to-choose-pivot-block-margin",
+    "pivot-block-offset",
+    "pivot-block-max-total-selection-attempts",
+    "pivot-block-reschedule-interval",
+    "max-pivot-block-age",
+    "max-pivot-block-failures-count",
+    "max-target-difference",
+    "maximum-target-update-failures",
+    "fastsync-block-chain-only-peers-pool",
+    "fastsync-throttle",
+    "fast-sync-block-validation-k",
+    "fast-sync-block-validation-n",
+    "fast-sync-block-validation-x",
+    "fast-sync-max-batch-retries",
+    "state-sync-bloom-filter-size",
+    "state-sync-persist-batch-size"
+  )
+
+  /** Returns the fatal errors in `config`. Warnings, including [[removedKeyWarnings]], are logged and do not stop
+    * startup.
+    */
   def validate(config: TypesafeConfig): List[String] =
+    removedKeyWarnings(config).foreach(warning => log.warn(warning))
+
     val errors = List.newBuilder[String]
-
-    validateSync(config, errors)
     checkPortClash(config, errors)
-
     errors.result()
 
-  private def validateSync(config: TypesafeConfig, errors: collection.mutable.Builder[String, List[String]]): Unit =
-    val doFastSync = config.getBoolean("sync.do-fast-sync")
-    val doSnapSync = config.getBoolean("sync.do-snap-sync")
-    if doSnapSync && !doFastSync then
-      errors += "SNAP sync (sync.do-snap-sync = true) requires fast sync to be enabled (sync.do-fast-sync = true)"
+  /** One warning for each removed fast-sync key that `config` (a `fukuii` block) still sets. */
+  def removedKeyWarnings(config: TypesafeConfig): List[String] =
+    RemovedFastSyncKeys.filter(key => config.hasPath(s"sync.$key")).map {
+      case "do-fast-sync" => doFastSyncWarning(config)
+      case key            => s"fukuii.sync.$key is ignored: fast sync, the only reader of this key, was removed."
+    }
+
+  /** `do-fast-sync = false` was the way to ask for a sync from genesis (archive nodes, for one). With SNAP on, that
+    * request is no longer honoured, so say which sync this node will run and how to get the old behaviour.
+    */
+  private def doFastSyncWarning(config: TypesafeConfig): String =
+    val snapOn = config.hasPath("sync.do-snap-sync") && config.getBoolean("sync.do-snap-sync")
+    val consequence =
+      if snapOn then
+        "This node will use SNAP sync (fukuii.sync.do-snap-sync = true); set fukuii.sync.do-snap-sync = false " +
+          "to import every block from genesis instead."
+      else "This node imports every block (fukuii.sync.do-snap-sync = false)."
+    s"fukuii.sync.do-fast-sync is ignored: fast sync was removed. $consequence"
 
   /** Besu reference: BesuCommand.checkPortClash() (line 2711) — Set-based duplicate detection. Collects all enabled
     * service ports into a Set; any port appearing more than once is a conflict. Checks P2P, JSON-RPC HTTP, JSON-RPC WS,
