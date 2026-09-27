@@ -232,7 +232,8 @@ class BlockPreparator(
         authExecutionGas,
         authStateGas,
         tracer,
-        extraWarmAddresses
+        extraWarmAddresses,
+        accessRecorder = None
       )
     )
 
@@ -248,7 +249,8 @@ class BlockPreparator(
       authExecutionGas: BigInt,
       authStateGas: BigInt,
       tracer: Option[com.chipprbots.ethereum.vm.ExecutionTracer],
-      extraWarmAddresses: Set[Address]
+      extraWarmAddresses: Set[Address],
+      accessRecorder: Option[BlockAccessRecorder]
   )(implicit blockchainConfig: BlockchainConfig): PC =
     val evmConfig = EvmConfig.forBlock(blockHeader.number.value, blockHeader.unixTimestamp, blockchainConfig)
     val context: PC =
@@ -269,6 +271,8 @@ class BlockPreparator(
       ctx = ctx.copy(precompileRelocations = _simulatePrecompileRelocations)
     if _simulateTraceTransfers then ctx = ctx.copy(traceTransfers = true)
     if tracer.isDefined then ctx = ctx.copy(tracer = tracer)
+    // EIP-7928: the transaction's block-access recorder, while an Amsterdam block executes.
+    if accessRecorder.isDefined then ctx = ctx.copy(accessRecorder = accessRecorder)
     ctx
 
   /** Like [[runVM]] but uses a one-off VM instance with the given [[ExecutionTracer]] attached. Called by
@@ -447,9 +451,13 @@ class BlockPreparator(
       stx: SignedTransaction,
       senderAddress: Address,
       blockHeader: BlockHeader,
-      world: InMemoryWorldStateProxy
+      world: InMemoryWorldStateProxy,
+      // EIP-7928: the transaction's block-access recorder. Present only when executing an Amsterdam block.
+      accessRecorder: Option[BlockAccessRecorder] = None
   )(implicit blockchainConfig: BlockchainConfig): TxResult =
     log.debug(s"Transaction ${stx.hash.toHex} execution start")
+    // EIP-7928: execution-specs `check_transaction` reads the sender before anything else.
+    BlockAccessRecorder.account(accessRecorder, senderAddress)
     val gasPrice = UInt256(Transaction.effectiveGasPrice(stx.tx, blockHeader.baseFee))
     val gasLimit = stx.tx.gasLimit
 
@@ -467,6 +475,7 @@ class BlockPreparator(
     var authExecutionGas: BigInt = 0
     var authStateGas: BigInt = 0
     var authorityWarmAddresses: Set[Address] = Set.empty
+    var authorizationsOutOfGas = false
     val worldAfterAuths = stx.tx match
       case sct: SetCodeTransaction if amsterdamActive =>
         // EIP-2780: the authorizations are charged one by one as they are applied, against the top frame's meter —
@@ -484,6 +493,7 @@ class BlockPreparator(
         authExecutionGas = applied.executionGas
         authStateGas = applied.stateGas
         authorityWarmAddresses = applied.warmAuthorities
+        authorizationsOutOfGas = applied.outOfGas
         applied.world
       case sct: SetCodeTransaction =>
         val (world, refund, warm) = applyAuthorizationsWithRefund(sct.authorizationList, checkpointWorldState)
@@ -500,8 +510,21 @@ class BlockPreparator(
       authExecutionGas,
       authStateGas,
       tracer = None,
-      extraWarmAddresses = authorityWarmAddresses
+      extraWarmAddresses = authorityWarmAddresses,
+      accessRecorder = accessRecorder
     )
+    accessRecorder.foreach { recorder =>
+      recordPreExecutionReads(
+        stx,
+        senderAddress,
+        worldAfterAuths,
+        context,
+        authorityWarmAddresses,
+        authorizationsOutOfGas
+      )(
+        recorder
+      )
+    }
     val result = vm.run(context)
 
     // A failed top-level frame reverts to the world as it stood when the frame was ENTERED, which is after the
@@ -644,6 +667,8 @@ class BlockPreparator(
       )
 
     val worldAfterPayments = refundGasFn.andThen(payMinerForGasFn)(resultWithErrorHandling.world)
+    // EIP-7928: execution-specs `disburse_gas_fees` credits the coinbase on every transaction, a zero fee included.
+    BlockAccessRecorder.account(accessRecorder, Address(blockHeader.beneficiary))
 
     // EIP-4844 blob gas cost is charged UPFRONT in updateSenderAccountBeforeExecution
     // (so BALANCE/SELFBALANCE within the VM see the correct post-upfront value). No
@@ -708,6 +733,36 @@ class BlockPreparator(
       stateGasUsed = txStateGas
     )
 
+  /** EIP-7928: the reads execution-specs `create_evm` makes before the top-level frame exists, in its order.
+    *
+    *   1. Every authority whose signature recovered, chain id and nonce bound permitting (`validate_authorization`
+    *      reads it before the code and nonce checks) — up to and including the tuple whose charge ran out of gas.
+    *   1. Unless the authorizations ran out of gas first: the recipient — the call target
+    *      (`resolve_delegated_code_address`, or the value-transfer existence check before it), or the creation address
+    *      (`account_deployable`).
+    *   1. A call target's EIP-7702 delegation target, once its access charge is paid (`get_account(code_address)`):
+    *      short of it, `ProgramContext.preExecutionOutOfGas` is set. A delegated account has code, so no
+    *      account-creation charge can come between.
+    *
+    * The sender (`check_transaction`) and the coinbase (`disburse_gas_fees`) are recorded by `executeTransaction`.
+    */
+  private def recordPreExecutionReads(
+      stx: SignedTransaction,
+      senderAddress: Address,
+      worldAfterAuths: InMemoryWorldStateProxy,
+      context: PC,
+      recoveredAuthorities: Set[Address],
+      authorizationsOutOfGas: Boolean
+  )(recorder: BlockAccessRecorder): Unit =
+    recoveredAuthorities.foreach(recorder.recordAccount)
+    if !authorizationsOutOfGas then
+      stx.tx.receivingAddress match
+        case None => recorder.recordAccount(worldAfterAuths.createAddress(senderAddress))
+        case Some(recipient) =>
+          recorder.recordAccount(recipient)
+          if !context.preExecutionOutOfGas && context.evmConfig.eip7702Enabled then
+            SetCodeTransaction.parseDelegation(worldAfterAuths.getCode(recipient)).foreach(recorder.recordAccount)
+
   // scalastyle:off method.length
   /** This functions executes all the signed transactions from a block (till one of those executions fails)
     *
@@ -733,7 +788,10 @@ class BlockPreparator(
       acumGas: BigInt = 0,
       acumReceipts: Seq[Receipt] = Nil,
       acumExecutionGas: BigInt = 0,
-      acumStateGas: BigInt = 0
+      acumStateGas: BigInt = 0,
+      // EIP-7928: the block's access-list builder, on an Amsterdam block only. Each executed transaction is folded in
+      // at block access index `receipts so far + 1`, which is its position among the block's transactions.
+      accessList: Option[BlockAccessListBuilder] = None
   )(implicit blockchainConfig: BlockchainConfig): Either[TxsExecutionError, BlockResult] =
     signedTransactions match
       case Nil =>
@@ -789,8 +847,13 @@ class BlockPreparator(
 
         validatedStx match
           case Right((account, address)) =>
+            val accessRecorder = accessList.map(_ => new BlockAccessRecorder)
             val TxResult(newWorld, gasUsed, logs, _, vmError, txExecutionGas, txStateGas) =
-              executeTransaction(stx, address, blockHeader, world.saveAccount(address, account))
+              executeTransaction(stx, address, blockHeader, world.saveAccount(address, account), accessRecorder)
+            for
+              builder <- accessList
+              recorder <- accessRecorder
+            do builder.addIndex(acumReceipts.size + 1L, recorder, world, newWorld)
 
             // spec: https://github.com/ethereum/EIPs/blob/master/EIPS/eip-658.md
             val transactionOutcome =
@@ -822,7 +885,8 @@ class BlockPreparator(
               receipt.cumulativeGasUsed,
               acumReceipts :+ receipt,
               acumExecutionGas + txExecutionGas,
-              acumStateGas + txStateGas
+              acumStateGas + txStateGas,
+              accessList
             )
           case Left(error) =>
             Left(
@@ -889,7 +953,7 @@ class BlockPreparator(
     val prepared = executePreparedTransactions(block.body.transactionList, initialWorld, block.header)
 
     prepared match
-      case (execResult @ BlockResult(resultingWorldStateProxy, _, _, _, _), txExecuted) =>
+      case (execResult @ BlockResult(resultingWorldStateProxy, _, _, _, _, _), txExecuted) =>
         val worldToPersist = payBlockReward(block, resultingWorldStateProxy)
         val worldPersisted = InMemoryWorldStateProxy.persistState(worldToPersist)
         PreparedBlock(

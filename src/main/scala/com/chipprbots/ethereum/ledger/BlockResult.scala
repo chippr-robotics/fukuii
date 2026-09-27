@@ -2,6 +2,7 @@ package com.chipprbots.ethereum.ledger
 
 import org.apache.pekko.util.ByteString
 
+import com.chipprbots.ethereum.domain.BlockAccessList
 import com.chipprbots.ethereum.domain.Receipt
 
 /** The outcome of executing a block's transaction list.
@@ -29,7 +30,12 @@ case class BlockResult(
     // deposits (0x00) → withdrawals (0x01) → consolidations (0x02), then, from
     // Amsterdam, builder deposit (0x03) → builder exit (0x04). Present only when
     // the block is post-Prague AND the request list is non-empty.
-    executionRequests: Seq[ByteString] = Nil
+    executionRequests: Seq[ByteString] = Nil,
+    /** EIP-7928: the block access list execution produced, in canonical order — what the header's `blockAccessListHash`
+      * must commit to, and what a proposer publishes. `Some` exactly when the block is an Amsterdam block, `None` on
+      * every earlier fork and every ETC chain.
+      */
+    blockAccessList: Option[BlockAccessList] = None
 ):
 
   /** The header's `gasUsed` field: `max(block_execution_gas_used, block_state_gas_used)` (EIP-8037). */
