@@ -494,6 +494,7 @@ private[actors] class StorageRangeCoordinatorImpl(
   // the peer's response-bytes target (<=2MiB) — a few tens of MiB worst case for a single
   // in-progress large account, bounded further by `maxConcurrentStorageAccounts`.
   private[actors] case class ReadyStorageChunk(
+      peer: Peer,
       task: StorageTask,
       accountSlots: Seq[(ByteString, ByteString)],
       proof: Seq[ByteString]
@@ -503,12 +504,25 @@ private[actors] class StorageRangeCoordinatorImpl(
     mutable.Map.empty
   private[actors] val zeroSlotHash: ByteString = ByteString(Array.fill(32)(0.toByte))
 
-  /** Discard the ordering-gate state for one account: its cursor and any buffered (verified but not-yet-applied)
-    * chunks. Called everywhere `pendingAccountTries` is reset/removed for that account, so the two stay consistent.
-    * Returns the discarded buffer (possibly empty) so callers can decide whether to re-queue or abandon its contents.
+  // Tracks, per account, the (key, value) of the LAST slot actually inserted into that account's
+  // trie — a different thing from `storageTrieCursor` (which tracks the next CHUNK-RANGE boundary,
+  // not individual slot keys). SNAP/1's `startingHash` origin is documented as inclusive, and
+  // go-ethereum's own genTrie/stacktrie boundary handling anticipates exactly this: a continuation
+  // or sub-range response whose FIRST key duplicates the last key this account's trie already has.
+  // Used by applyReadyStorageChunk to drop an exact (key, value) repeat silently (idempotent
+  // re-serve) rather than let it reach StackTrie.update's ascending-order `require`, while a
+  // DIFFERENT value under the same already-applied key rejects the whole response instead of
+  // silently accepting inconsistent peer data.
+  private[actors] val lastAppliedSlot: mutable.Map[ByteString, (ByteString, ByteString)] = mutable.Map.empty
+
+  /** Discard the ordering-gate state for one account: its cursor, last-applied-slot marker, and any buffered (verified
+    * but not-yet-applied) chunks. Called everywhere `pendingAccountTries` is reset/removed for that account, so the
+    * three stay consistent. Returns the discarded buffer (possibly empty) so callers can decide whether to re-queue or
+    * abandon its contents.
     */
   private[actors] def clearStorageOrderingState(accountHash: ByteString): Seq[StorageTask] =
     storageTrieCursor.remove(accountHash)
+    lastAppliedSlot.remove(accountHash)
     pendingOrderedChunks.remove(accountHash) match
       case Some(buffered) => buffered.values.map(_.task).toSeq
       case None           => Seq.empty
@@ -708,9 +722,11 @@ private[actors] class StorageRangeCoordinatorImpl(
       pendingAccountTries.values.foreach(_.reset())
       pendingAccountTries.clear()
       com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncMetrics.setStoragePendingTries(0L)
-    // Ordering-gate state (cursors + buffered out-of-order chunks) is discarded along with the
-    // tries above — the actor is stopping, so there is nothing left to drain or re-queue into.
+    // Ordering-gate state (cursors, last-applied-slot markers, buffered out-of-order chunks) is
+    // discarded along with the tries above — the actor is stopping, so there is nothing left to
+    // drain or re-queue into.
     storageTrieCursor.clear()
+    lastAppliedSlot.clear()
     pendingOrderedChunks.clear()
     // Best-effort: flush any tail of accumulated flat-slot entries synchronously here so we
     // don't lose data when the actor terminates (force-complete, restart).
@@ -888,6 +904,7 @@ private[actors] class StorageRangeCoordinatorImpl(
           com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncMetrics.setStoragePendingTries(0L)
           // Ordering-gate state follows the same "abandon, healing recovers" contract as the tries.
           storageTrieCursor.clear()
+          lastAppliedSlot.clear()
           pendingOrderedChunks.clear()
           // Hand off any flat-slot tail still in the accumulator.
           flushPendingFlatBatch()
@@ -987,6 +1004,10 @@ private[actors] class StorageRangeCoordinatorImpl(
           }
           log.info(s"Pivot refresh: re-queued $bufferedChunkCount buffered out-of-order storage chunk(s)")
         pendingOrderedChunks.clear()
+        // Unlike storageTrieCursor (re-derived below), lastAppliedSlot has no re-derivation: the
+        // tries were just wiped above, so NOTHING has been applied to the fresh trie generation yet
+        // — a plain clear is correct here, not a partial one.
+        lastAppliedSlot.clear()
         // Re-derive the cursor from this refresh's survivors — NOT a plain clear. A stale (or
         // missing-then-absent-check-bypassed) cursor would let a re-queued chunk skip the gate
         // entirely; explicitly setting it to each account's lowest surviving `next` keeps the
@@ -1208,7 +1229,7 @@ private[actors] class StorageRangeCoordinatorImpl(
       // completion — and any higher-range siblings already buffered behind it — until the whole
       // storage phase stalls out to the force-complete fallback.
       val task = tasks.head
-      applyOrderedStorageChunk(task, Seq.empty, response.proof)
+      applyOrderedStorageChunk(peer, task, Seq.empty, response.proof)
       log.warn(
         s"Storage proof-of-absence accepted: account=${task.accountString} " +
           s"storageRoot=${task.storageRoot.take(4).toHex} range=${task.rangeString} " +
@@ -1337,7 +1358,7 @@ private[actors] class StorageRangeCoordinatorImpl(
           totalReceivedBytes += slotBytes
           // Cross-chunk range ordering (storageConcurrency parallel subtasks racing on response
           // arrival) is enforced by the gate, not here — see applyOrderedStorageChunk.
-          applyOrderedStorageChunk(task, accountSlots, proofForThisTask)
+          applyOrderedStorageChunk(peer, task, accountSlots, proofForThisTask)
     }
 
     // Adjust per-peer byte budget based on total received bytes
@@ -1366,6 +1387,7 @@ private[actors] class StorageRangeCoordinatorImpl(
     * only exercised for chunks that out-race that re-derivation.
     */
   private[actors] def applyOrderedStorageChunk(
+      peer: Peer,
       task: StorageTask,
       accountSlots: Seq[(ByteString, ByteString)],
       proofForThisTask: Seq[ByteString]
@@ -1379,18 +1401,21 @@ private[actors] class StorageRangeCoordinatorImpl(
           accountHash,
           mutable.TreeMap.empty[ByteString, ReadyStorageChunk](ByteStringOrdering)
         )
-      perAccount.update(task.next, ReadyStorageChunk(task, accountSlots, proofForThisTask))
+      perAccount.update(task.next, ReadyStorageChunk(peer, task, accountSlots, proofForThisTask))
       log.debug(
         s"Storage chunk out of range-order for account ${task.accountString}: " +
           s"got next=${task.next.take(4).toHex} expected=${storageTrieCursor.get(accountHash).map(_.take(4).toHex)}; " +
           s"buffering (${perAccount.size} chunk(s) now waiting for this account)"
       )
     else
-      applyReadyStorageChunk(task, accountSlots, proofForThisTask)
+      applyReadyStorageChunk(peer, task, accountSlots, proofForThisTask)
       drainOrderedStorageChunks(accountHash)
 
   /** After applying a chunk (and possibly advancing the account's cursor), release any buffered chunks that are now
-    * next-in-line — repeating until either the buffer is empty or the next required position hasn't arrived yet.
+    * next-in-line — repeating until either the buffer is empty or the next required position hasn't arrived yet. Each
+    * drained chunk carries its OWN originating peer (stored in `ReadyStorageChunk`) — NOT necessarily the peer that
+    * answered whichever response triggered this drain — so a duplicate-value rejection discovered here penalises the
+    * peer that actually served the bad data.
     */
   private[actors] def drainOrderedStorageChunks(accountHash: ByteString): Unit =
     var draining = true
@@ -1409,16 +1434,18 @@ private[actors] class StorageRangeCoordinatorImpl(
           // "leftover" check and any external inspection (tests, metrics) accurate without relying
           // on every caller to also check `.isEmpty` on the inner map.
           if perAccount.isEmpty then pendingOrderedChunks.remove(accountHash)
-          applyReadyStorageChunk(chunk.task, chunk.accountSlots, chunk.proof)
+          applyReadyStorageChunk(chunk.peer, chunk.task, chunk.accountSlots, chunk.proof)
         case None => draining = false
 
   /** Apply one verified, in-order storage chunk: insert its slots into the account's shared streaming trie, stage the
     * flat-slot mirror, and either enqueue a continuation/subtask split or — once every subtask for the account has
     * landed — commit the trie. Only ever called (via `applyOrderedStorageChunk`) for a chunk whose `task.next` is
-    * exactly the position the trie is currently expecting, so `trie.update`'s strictly-ascending requirement can never
-    * be violated here by cross-chunk raciness (see StackTrie.scala).
+    * exactly the position the trie is currently expecting, so cross-CHUNK raciness can never violate ascending order
+    * here (see StackTrie.scala) — but a single chunk's response can still legitimately repeat the boundary slot the
+    * trie already has (see `lastAppliedSlot`'s doc), so that case is filtered/validated before any insert happens.
     */
   private[actors] def applyReadyStorageChunk(
+      peer: Peer,
       task0: StorageTask,
       accountSlots: Seq[(ByteString, ByteString)],
       proofForThisTask: Seq[ByteString]
@@ -1426,115 +1453,145 @@ private[actors] class StorageRangeCoordinatorImpl(
     val accountHash = task0.accountHash
     var task = task0
 
-    if accountSlots.nonEmpty then
-      // Stream slots directly into the per-account `SnapHashTrie`. Within one response, ordering is
-      // already validated by MerkleProofVerifier before verification succeeds; across responses for
-      // the same account, the caller (applyOrderedStorageChunk) guarantees this call only happens
-      // in range-ascending order.
-      if !deferredMerkleization then
-        val trie = getOrCreateAccountTrie(accountHash)
-        accountSlots.foreach { case (slotHash, slotValue) =>
-          trie.update(slotHash.toArray, slotValue.toArray)
+    // Drop an exact repeat of the last-applied (key, value) — SNAP/1's origin is inclusive, so a
+    // continuation or sub-range response's first slot legitimately CAN be the boundary slot this
+    // account's trie already has. A DIFFERENT value under that same key means the peer's data is
+    // inconsistent: reject the WHOLE response (peer penalty, retry) rather than accepting a
+    // possibly-wrong value or letting the mismatch reach StackTrie.update's `require`. This check
+    // runs before any insertion, so a rejected response never partially applies.
+    val dedupedOrRejected: Either[String, Seq[(ByteString, ByteString)]] =
+      lastAppliedSlot.get(accountHash) match
+        case None => Right(accountSlots)
+        case Some((lastKey, lastValue)) =>
+          accountSlots.find(_._1 == lastKey) match
+            case Some((_, repeatedValue)) if repeatedValue != lastValue =>
+              Left(
+                s"peer re-served slot ${lastKey.take(4).toHex} with a different value " +
+                  s"than already applied (had ${lastValue.take(4).toHex}, got ${repeatedValue.take(4).toHex})"
+              )
+            case _ => Right(accountSlots.filterNot(_._1 == lastKey))
+
+    dedupedOrRejected match
+      case Left(reason) =>
+        log.warn(s"Storage chunk rejected for account ${task.accountString}: $reason")
+        recordPeerCooldown(peer, s"duplicate-key value mismatch: $reason")
+        adjustResponseBytesOnFailure(peer, s"duplicate-key value mismatch: $reason")
+        this.tasks.enqueue(task.copy(pending = false))
+
+      case Right(dedupedSlots) =>
+        if dedupedSlots.nonEmpty then
+          // Stream slots directly into the per-account `SnapHashTrie`. Within one response, ordering
+          // is already validated by MerkleProofVerifier before verification succeeds; across
+          // responses for the same account, the caller (applyOrderedStorageChunk) guarantees this
+          // call only happens in range-ascending order, and the dedup above has already removed any
+          // exact repeat of the trie's current boundary key.
+          if !deferredMerkleization then
+            val trie = getOrCreateAccountTrie(accountHash)
+            dedupedSlots.foreach { case (slotHash, slotValue) =>
+              trie.update(slotHash.toArray, slotValue.toArray)
+            }
+            com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncMetrics
+              .setStoragePendingTries(pendingAccountTries.size.toLong)
+
+          // Flat-slot mirror — accountHash ++ slotHash → slotValue. Sorted in
+          // `stageFlatSlotChunk` and accumulated for an off-actor batched commit.
+          stageFlatSlotChunk(accountHash, dedupedSlots)
+          lastAppliedSlot(accountHash) = dedupedSlots.last
+
+          slotsDownloaded += dedupedSlots.size
+          bytesDownloaded += dedupedSlots.map { case (hash, value) => hash.size + value.size }.sum
+
+          snapSyncController ! SNAPSyncController.ProgressStorageSlotsSynced(dedupedSlots.size.toLong)
+
+        // Whether THIS chunk needs a further continuation. A response with slots and a non-empty
+        // proof that stops short of task.last means more remains in (lastSlot, task.last]. An EMPTY
+        // response — whether a batched fresh account's genuine "no storage at all", a solo
+        // subtask/continuation chunk's proof-of-absence for its OWN sub-range (routed here from
+        // handleProofOfAbsence, realistic for a sparse contract's sub-range and NOT rare), or this
+        // response's only slot having just been dropped as a boundary repeat — always means this
+        // chunk's range is fully served: per SNAP spec, a peer omits the proof only when returning
+        // the entire remainder, and includes one to prove absence otherwise, but either way there is
+        // nothing left to ask this chunk's [next, last] for. Deliberately uses the ORIGINAL
+        // `accountSlots` (not `dedupedSlots`): whether more data remains is a property of what the
+        // PEER reported, independent of whether this response's first entry duplicated the boundary.
+        val needsContinuation = accountSlots.nonEmpty && proofForThisTask.nonEmpty && {
+          val lastSlot = accountSlots.last._1
+          java.util.Arrays.compareUnsigned(lastSlot.toArray, task.last.toArray) < 0
         }
-        com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncMetrics
-          .setStoragePendingTries(pendingAccountTries.size.toLong)
 
-      // Flat-slot mirror — accountHash ++ slotHash → slotValue. Sorted in
-      // `stageFlatSlotChunk` and accumulated for an off-actor batched commit.
-      stageFlatSlotChunk(accountHash, accountSlots)
-
-      slotsDownloaded += accountSlots.size
-      bytesDownloaded += accountSlots.map { case (hash, value) => hash.size + value.size }.sum
-
-      snapSyncController ! SNAPSyncController.ProgressStorageSlotsSynced(accountSlots.size.toLong)
-
-    // Whether THIS chunk needs a further continuation. A response with slots and a non-empty proof
-    // that stops short of task.last means more remains in (lastSlot, task.last]. An EMPTY response
-    // — whether a batched fresh account's genuine "no storage at all", or a solo subtask/
-    // continuation chunk's proof-of-absence for its OWN sub-range (snap/1: 0 slots + a boundary
-    // proof is a valid, complete answer for that range, routed here from handleProofOfAbsence,
-    // which is realistic for a sparse contract's sub-range and NOT rare) — always means this
-    // chunk's range is fully served: per SNAP spec, a peer omits the proof only when returning the
-    // entire remainder, and includes one to prove absence otherwise, but either way there is
-    // nothing left to ask this chunk's [next, last] for.
-    val needsContinuation = accountSlots.nonEmpty && proofForThisTask.nonEmpty && {
-      val lastSlot = accountSlots.last._1
-      java.util.Arrays.compareUnsigned(lastSlot.toArray, task.last.toArray) < 0
-    }
-
-    if needsContinuation then
-      val lastSlot = accountSlots.last._1
-      // Explicitly (not lazily) fix the next-expected position: this is the only moment a new
-      // chunk/continuation for this account is created, so it is the only safe place to set the
-      // cursor. Inferring it later from "whichever sibling answers first" would reintroduce
-      // exactly the race this gate exists to prevent.
-      storageTrieCursor(accountHash) = StorageTask.incrementHash32(lastSlot)
-      if accountSubtaskCounters.contains(accountHash) then
-        // Already split into subtasks — this is a within-subtask continuation.
-        val cont = StorageTask.createContinuation(task, lastSlot)
-        this.tasks.enqueue(cont)
-        log.debug(s"Within-subtask continuation for account ${task.accountString}")
-      else
-        // First continuation for this account → split into N parallel subtasks.
-        val subtasks = createStorageSubTasks(task, lastSlot)
-        subtasks.foreach(st => this.tasks.enqueue(st))
-        accountSubtaskCounters(accountHash) = (subtasks.size, 0)
-        log.debug(
-          s"Large-storage account ${task.accountString}: " +
-            s"split into ${subtasks.size} parallel subtasks"
-        )
-      // Persist the advancing storage cursor for crash recovery. Best-effort: concurrent
-      // subtask writes for the same account may race, but worst case is a partial
-      // re-download on resume, never data corruption.
-      snapProgressStorage.foreach(
-        _.writeStorageCursor(stateRoot, accountHash, StorageTask.incrementHash32(lastSlot))
-      )
-    else
-      // This CHUNK's own assigned range is exhausted — either its slots reached task.last, or it
-      // is legitimately empty (proof-of-absence for its own sub-range, or a fresh account with no
-      // storage at all). Advance the cursor to the chunk's own upper bound, NOT
-      // incrementHash32(lastSlot): for a non-empty completing response nothing more will ever
-      // arrive between lastSlot and task.last, and for an empty one there is no lastSlot at all.
-      // Either way the next sibling chunk's `next` is defined as incrementHash32(task.last)
-      // (StorageTask.createSubTasks), so that is the only value that safely unblocks it — and the
-      // ONLY value, whether this chunk had slots or not: a sparse account with a legitimately-empty
-      // middle sub-range must complete like any other, not stall its siblings forever.
-      storageTrieCursor(accountHash) = StorageTask.incrementHash32(task.last)
-
-      // Gate the commit on the WHOLE ACCOUNT being done, not just this chunk: with
-      // storageConcurrency parallel subtasks, this chunk finishing first does not mean its
-      // siblings covering higher sub-ranges have landed yet. Committing unconditionally here (the
-      // pre-fix behaviour) would remove/finalise the shared trie while siblings are still in
-      // flight, corrupting the on-disk path-keyed nodes for this account.
-      val accountFullyDone =
-        if accountSubtaskCounters.contains(accountHash) then recordSubtaskCompletion(accountHash)
-        else
-          completedAccountCount += 1; true
-
-      if accountFullyDone then
-        // By construction this chunk was the account's range-highest surviving chunk (the gate
-        // only ever lets chunks apply in ascending order), so nothing should still be buffered.
-        // Defensive: re-queue anything found anyway rather than silently losing it.
-        val leftover = clearStorageOrderingState(accountHash)
-        if leftover.nonEmpty then
-          log.warn(
-            s"Account ${task.accountString} completed with ${leftover.size} orphaned buffered " +
-              s"storage chunk(s) — re-queueing rather than discarding"
-          )
-          leftover.foreach(t => this.tasks.enqueue(t.copy(pending = false)))
-
-        if deferredMerkleization then
-          log.debug(
-            s"Account ${accountHash.take(4).toHex} fully downloaded (deferred merkleization — flat-only)"
+        if needsContinuation then
+          val lastSlot = accountSlots.last._1
+          // Explicitly (not lazily) fix the next-expected position: this is the only moment a new
+          // chunk/continuation for this account is created, so it is the only safe place to set the
+          // cursor. Inferring it later from "whichever sibling answers first" would reintroduce
+          // exactly the race this gate exists to prevent.
+          storageTrieCursor(accountHash) = StorageTask.incrementHash32(lastSlot)
+          if accountSubtaskCounters.contains(accountHash) then
+            // Already split into subtasks — this is a within-subtask continuation.
+            val cont = StorageTask.createContinuation(task, lastSlot)
+            this.tasks.enqueue(cont)
+            log.debug(s"Within-subtask continuation for account ${task.accountString}")
+          else
+            // First continuation for this account → split into N parallel subtasks.
+            val subtasks = createStorageSubTasks(task, lastSlot)
+            subtasks.foreach(st => this.tasks.enqueue(st))
+            accountSubtaskCounters(accountHash) = (subtasks.size, 0)
+            log.debug(
+              s"Large-storage account ${task.accountString}: " +
+                s"split into ${subtasks.size} parallel subtasks"
+            )
+          // Persist the advancing storage cursor for crash recovery. Best-effort: concurrent
+          // subtask writes for the same account may race, but worst case is a partial
+          // re-download on resume, never data corruption.
+          snapProgressStorage.foreach(
+            _.writeStorageCursor(stateRoot, accountHash, StorageTask.incrementHash32(lastSlot))
           )
         else
-          val computedRoot = commitAccountTrie(accountHash, task.storageRoot)
-          log.debug(
-            s"Account ${accountHash.take(4).toHex} streaming trie committed: root=${computedRoot.take(4).toHex}"
-          )
+          // This CHUNK's own assigned range is exhausted — either its slots reached task.last, or it
+          // is legitimately empty (proof-of-absence for its own sub-range, or a fresh account with no
+          // storage at all). Advance the cursor to the chunk's own upper bound, NOT
+          // incrementHash32(lastSlot): for a non-empty completing response nothing more will ever
+          // arrive between lastSlot and task.last, and for an empty one there is no lastSlot at all.
+          // Either way the next sibling chunk's `next` is defined as incrementHash32(task.last)
+          // (StorageTask.createSubTasks), so that is the only value that safely unblocks it — and the
+          // ONLY value, whether this chunk had slots or not: a sparse account with a legitimately-empty
+          // middle sub-range must complete like any other, not stall its siblings forever.
+          storageTrieCursor(accountHash) = StorageTask.incrementHash32(task.last)
 
-    task = task.copy(done = true, pending = false)
-    recordCompletedTask(task)
+          // Gate the commit on the WHOLE ACCOUNT being done, not just this chunk: with
+          // storageConcurrency parallel subtasks, this chunk finishing first does not mean its
+          // siblings covering higher sub-ranges have landed yet. Committing unconditionally here (the
+          // pre-fix behaviour) would remove/finalise the shared trie while siblings are still in
+          // flight, corrupting the on-disk path-keyed nodes for this account.
+          val accountFullyDone =
+            if accountSubtaskCounters.contains(accountHash) then recordSubtaskCompletion(accountHash)
+            else
+              completedAccountCount += 1; true
+
+          if accountFullyDone then
+            // By construction this chunk was the account's range-highest surviving chunk (the gate
+            // only ever lets chunks apply in ascending order), so nothing should still be buffered.
+            // Defensive: re-queue anything found anyway rather than silently losing it.
+            val leftover = clearStorageOrderingState(accountHash)
+            if leftover.nonEmpty then
+              log.warn(
+                s"Account ${task.accountString} completed with ${leftover.size} orphaned buffered " +
+                  s"storage chunk(s) — re-queueing rather than discarding"
+              )
+              leftover.foreach(t => this.tasks.enqueue(t.copy(pending = false)))
+
+            if deferredMerkleization then
+              log.debug(
+                s"Account ${accountHash.take(4).toHex} fully downloaded (deferred merkleization — flat-only)"
+              )
+            else
+              val computedRoot = commitAccountTrie(accountHash, task.storageRoot)
+              log.debug(
+                s"Account ${accountHash.take(4).toHex} streaming trie committed: root=${computedRoot.take(4).toHex}"
+              )
+
+        task = task.copy(done = true, pending = false)
+        recordCompletedTask(task)
 
   private def handleTimeout(requestId: BigInt): Unit =
     activeTasks.remove(requestId).foreach { case (peer, batchTasks, _) =>

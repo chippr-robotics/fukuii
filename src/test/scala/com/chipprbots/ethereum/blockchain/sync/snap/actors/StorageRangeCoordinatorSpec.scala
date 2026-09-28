@@ -1008,6 +1008,7 @@ class StorageRangeCoordinatorSpec extends ScalaTestWithActorTestKit() with AnyFl
       snapSyncControllerRef = testKit.createTestProbe[SNAPSyncController.Command]().ref,
       deferredMerkleization = false // must build the real streaming trie to exercise StackTrie.update
     )
+    val peer = PeerTestHelpers.createTestPeer("scrambled-storage-peer", testKit.createTestProbe[Any]().ref.toClassic)
 
     // Three disjoint, range-ascending chunks — mirrors StorageTask.createSubTasks' output shape for
     // a large-storage account split into parallel subtasks. Each is a one-shot response here (empty
@@ -1027,12 +1028,13 @@ class StorageRangeCoordinatorSpec extends ScalaTestWithActorTestKit() with AnyFl
     // faster peer answering a higher sub-range before a slower peer's lower sub-range lands.
     noException should be thrownBy {
       impl.applyOrderedStorageChunk(
+        peer,
         chunk2,
         Seq(slotKey(0x50) -> ByteString("value-50"), slotKey(0x90) -> ByteString("value-90")),
         Seq.empty
       )
-      impl.applyOrderedStorageChunk(chunk0, Seq(slotKey(0x10) -> ByteString("value-10")), Seq.empty)
-      impl.applyOrderedStorageChunk(chunk1, Seq(slotKey(0x30) -> ByteString("value-30")), Seq.empty)
+      impl.applyOrderedStorageChunk(peer, chunk0, Seq(slotKey(0x10) -> ByteString("value-10")), Seq.empty)
+      impl.applyOrderedStorageChunk(peer, chunk1, Seq(slotKey(0x30) -> ByteString("value-30")), Seq.empty)
     }
 
     // chunk2 must have been buffered (not applied) until chunk0 and chunk1 landed, then drained
@@ -1055,6 +1057,7 @@ class StorageRangeCoordinatorSpec extends ScalaTestWithActorTestKit() with AnyFl
       snapSyncControllerRef = testKit.createTestProbe[SNAPSyncController.Command]().ref,
       deferredMerkleization = false
     )
+    val peer = PeerTestHelpers.createTestPeer("root-check-peer", testKit.createTestProbe[Any]().ref.toClassic)
 
     val chunk0 = StorageTask(accountHash, storageRoot, next = slotKey(0x01), last = slotKey(0x1f))
     val chunk1 = StorageTask(accountHash, storageRoot, next = slotKey(0x20), last = slotKey(0x3f))
@@ -1070,13 +1073,13 @@ class StorageRangeCoordinatorSpec extends ScalaTestWithActorTestKit() with AnyFl
     impl.storageTrieCursor(accountHash) = chunk0.next
 
     // Out-of-order arrival: chunk2 (highest range) before chunk0/chunk1.
-    impl.applyOrderedStorageChunk(chunk2, slots2, Seq.empty)
+    impl.applyOrderedStorageChunk(peer, chunk2, slots2, Seq.empty)
     impl.pendingOrderedChunks(accountHash) should have size 1 // buffered, not yet applied
 
-    impl.applyOrderedStorageChunk(chunk0, slots0, Seq.empty)
+    impl.applyOrderedStorageChunk(peer, chunk0, slots0, Seq.empty)
     impl.pendingOrderedChunks(accountHash) should have size 1 // chunk2 still waiting on chunk1
 
-    impl.applyOrderedStorageChunk(chunk1, slots1, Seq.empty)
+    impl.applyOrderedStorageChunk(peer, chunk1, slots1, Seq.empty)
     impl.pendingOrderedChunks.get(accountHash) shouldBe empty // chunk2 drained once chunk1 landed
 
     // Trie is still open (4th subtask never arrived) — safe to commit it directly for inspection.
@@ -1104,12 +1107,13 @@ class StorageRangeCoordinatorSpec extends ScalaTestWithActorTestKit() with AnyFl
     val storageRoot = kec256(ByteString("prefresh-storage-root"))
     val chunkLo = StorageTask(accountHash, storageRoot, next = slotKey(0x01), last = slotKey(0x1f))
     val chunkHi = StorageTask(accountHash, storageRoot, next = slotKey(0x20), last = slotKey(0x3f))
+    val peer = PeerTestHelpers.createTestPeer("prefresh-peer", testKit.createTestProbe[Any]().ref.toClassic)
 
     impl.accountSubtaskCounters(accountHash) = (2, 0)
     impl.storageTrieCursor(accountHash) = chunkLo.next
 
     // chunkHi arrives first and is buffered; chunkLo never arrives before the pivot refreshes.
-    impl.applyOrderedStorageChunk(chunkHi, Seq(slotKey(0x30) -> ByteString("value-30")), Seq.empty)
+    impl.applyOrderedStorageChunk(peer, chunkHi, Seq(slotKey(0x30) -> ByteString("value-30")), Seq.empty)
     impl.pendingOrderedChunks(accountHash) should have size 1
 
     impl.tasks.exists(_.next == chunkHi.next) shouldBe false // not yet in the retry queue
@@ -1140,10 +1144,11 @@ class StorageRangeCoordinatorSpec extends ScalaTestWithActorTestKit() with AnyFl
     val storageRoot = kec256(ByteString("force-complete-storage-root"))
     val chunkLo = StorageTask(accountHash, storageRoot, next = slotKey(0x01), last = slotKey(0x1f))
     val chunkHi = StorageTask(accountHash, storageRoot, next = slotKey(0x20), last = slotKey(0x3f))
+    val peer = PeerTestHelpers.createTestPeer("force-complete-peer", testKit.createTestProbe[Any]().ref.toClassic)
 
     impl.accountSubtaskCounters(accountHash) = (2, 0)
     impl.storageTrieCursor(accountHash) = chunkLo.next
-    impl.applyOrderedStorageChunk(chunkHi, Seq(slotKey(0x30) -> ByteString("value-30")), Seq.empty)
+    impl.applyOrderedStorageChunk(peer, chunkHi, Seq(slotKey(0x30) -> ByteString("value-30")), Seq.empty)
     impl.pendingOrderedChunks(accountHash) should have size 1
 
     kit.run(StorageRangeCoordinator.ForceCompleteStorage)
@@ -1192,6 +1197,7 @@ class StorageRangeCoordinatorSpec extends ScalaTestWithActorTestKit() with AnyFl
     val chunk1 = StorageTask(accountHash, storageRoot, next = slotKey(0x20), last = slotKey(0x3f))
     val chunk2 = StorageTask(accountHash, storageRoot, next = slotKey(0x40), last = slotKey(0xfe))
     val absenceProof = Seq(ByteString(Array.fill(32)(0xab.toByte)))
+    val peer = PeerTestHelpers.createTestPeer("sparse-empty-middle-peer", testKit.createTestProbe[Any]().ref.toClassic)
 
     impl.accountSubtaskCounters(accountHash) = (3, 0)
     impl.storageTrieCursor(accountHash) = chunk0.next
@@ -1199,9 +1205,9 @@ class StorageRangeCoordinatorSpec extends ScalaTestWithActorTestKit() with AnyFl
     // Scrambled arrival: both non-first chunks (one empty, one with real slots) land before the
     // chunk that establishes the ascending run.
     noException should be thrownBy {
-      impl.applyOrderedStorageChunk(chunk2, Seq(slotKey(0x50) -> ByteString("value-50")), Seq.empty)
-      impl.applyOrderedStorageChunk(chunk1, Seq.empty, absenceProof) // proof-of-absence, out of order
-      impl.applyOrderedStorageChunk(chunk0, Seq(slotKey(0x10) -> ByteString("value-10")), Seq.empty)
+      impl.applyOrderedStorageChunk(peer, chunk2, Seq(slotKey(0x50) -> ByteString("value-50")), Seq.empty)
+      impl.applyOrderedStorageChunk(peer, chunk1, Seq.empty, absenceProof) // proof-of-absence, out of order
+      impl.applyOrderedStorageChunk(peer, chunk0, Seq(slotKey(0x10) -> ByteString("value-10")), Seq.empty)
     }
 
     // The empty middle chunk must count towards subtask completion like any other, and must not
@@ -1231,6 +1237,11 @@ class StorageRangeCoordinatorSpec extends ScalaTestWithActorTestKit() with AnyFl
     val slots0 = Seq(slotKey(0x10) -> ByteString("value-10"))
     val slots2 = Seq(slotKey(0x50) -> ByteString("value-50"))
     val absenceProof = Seq(ByteString(Array.fill(32)(0xab.toByte)))
+    val peer =
+      PeerTestHelpers.createTestPeer(
+        "sparse-empty-middle-root-check-peer",
+        testKit.createTestProbe[Any]().ref.toClassic
+      )
 
     // Registered as 4 subtasks but only 3 are ever fed — deliberately left "incomplete" so the
     // shared trie is never auto-committed/removed, letting this test inspect it directly.
@@ -1238,13 +1249,13 @@ class StorageRangeCoordinatorSpec extends ScalaTestWithActorTestKit() with AnyFl
     impl.storageTrieCursor(accountHash) = chunk0.next
 
     // The empty middle chunk arrives before EITHER of its neighbours.
-    impl.applyOrderedStorageChunk(chunk1, Seq.empty, absenceProof)
+    impl.applyOrderedStorageChunk(peer, chunk1, Seq.empty, absenceProof)
     impl.pendingOrderedChunks(accountHash) should have size 1
 
-    impl.applyOrderedStorageChunk(chunk2, slots2, Seq.empty)
+    impl.applyOrderedStorageChunk(peer, chunk2, slots2, Seq.empty)
     impl.pendingOrderedChunks(accountHash) should have size 2 // both still waiting on chunk0
 
-    impl.applyOrderedStorageChunk(chunk0, slots0, Seq.empty)
+    impl.applyOrderedStorageChunk(peer, chunk0, slots0, Seq.empty)
     impl.pendingOrderedChunks.get(accountHash) shouldBe empty // both drained once chunk0 landed
 
     val actualRoot = impl.pendingAccountTries(accountHash).commit()
@@ -1255,4 +1266,121 @@ class StorageRangeCoordinatorSpec extends ScalaTestWithActorTestKit() with AnyFl
     val expectedRoot = reference.commit()
 
     actualRoot shouldEqual expectedRoot
+  }
+
+  // ── forge review follow-up: boundary DUPLICATE (new == last, not just out-of-order) ──────────
+  //
+  // Platåberget soak, 2026-09-27 23:51:04: `StackTrie keys must be strictly ascending: last=X >=
+  // new=X` — an EXACT repeat, not a reordering. SNAP/1's `startingHash` origin is documented as
+  // inclusive; go-ethereum's own genTrie/stacktrie boundary handling anticipates a continuation or
+  // sub-range response whose first key repeats the boundary this account's trie already has.
+  // applyReadyStorageChunk now filters an exact (key, value) repeat before it ever reaches
+  // `trie.update`, and rejects the whole response (peer penalty, retry) if the value differs under
+  // that same key. (Verified red-before-green-after: temporarily removing the dedup guard makes
+  // this test reproduce the exact `IllegalArgumentException` from the log.)
+
+  it should "silently drop an exact repeat of the last-applied boundary slot instead of tripping StackTrie's ascending-order invariant" taggedAs UnitTest in {
+    import com.chipprbots.ethereum.blockchain.sync.snap.SnapHashTrie
+
+    val accountHash = kec256(ByteString("boundary-duplicate-account"))
+    val storageRoot = kec256(ByteString("boundary-duplicate-root"))
+    val (impl, _) = newImpl(
+      stateRoot = kec256(ByteString("boundary-duplicate-state-root")),
+      flatSlotStorage = new FlatSlotStorage(EphemDataSource()),
+      snapSyncControllerRef = testKit.createTestProbe[SNAPSyncController.Command]().ref,
+      deferredMerkleization = false // must build the real streaming trie to exercise StackTrie.update
+    )
+    val peer = PeerTestHelpers.createTestPeer("boundary-duplicate-peer", testKit.createTestProbe[Any]().ref.toClassic)
+
+    val boundaryKey = slotKey(0x1f)
+    val boundaryValue = ByteString("value-boundary")
+
+    // chunk0's response includes the boundary slot as its LAST entry — after this lands, the trie's
+    // last-applied key/value is exactly (boundaryKey, boundaryValue).
+    val chunk0 = StorageTask(accountHash, storageRoot, next = slotKey(0x01), last = boundaryKey)
+    // chunk1 is this account's continuation: per SNAP/1, its `next` is startingHash =
+    // incrementHash32(boundaryKey) — but the crash's own evidence is a peer whose response
+    // nonetheless RE-INCLUDES boundaryKey as chunk1's first slot (same value: an inclusive-origin
+    // artifact, not corruption).
+    val chunk1 =
+      StorageTask(accountHash, storageRoot, next = StorageTask.incrementHash32(boundaryKey), last = slotKey(0xfe))
+
+    // Registered as 3 subtasks but only 2 are ever fed — deliberately left "incomplete" so the
+    // shared trie is never auto-committed/removed, letting this test inspect it directly.
+    impl.accountSubtaskCounters(accountHash) = (3, 0)
+    impl.storageTrieCursor(accountHash) = chunk0.next
+
+    val chunk0Slots = Seq(slotKey(0x10) -> ByteString("value-10"), boundaryKey -> boundaryValue)
+    // chunk1's response repeats boundaryKey (same value) as its FIRST slot, then continues ascending
+    // — exactly the shape of the crash: "last=X >= new=X" where X is the repeated boundary key.
+    val chunk1Slots = Seq(boundaryKey -> boundaryValue, slotKey(0x50) -> ByteString("value-50"))
+
+    noException should be thrownBy {
+      impl.applyOrderedStorageChunk(peer, chunk0, chunk0Slots, Seq.empty)
+      impl.applyOrderedStorageChunk(peer, chunk1, chunk1Slots, Seq.empty)
+    }
+
+    // Both chunks completed normally — the duplicate was dropped, not treated as a failure.
+    impl.accountSubtaskCounters.get(accountHash) shouldBe Some((3, 2))
+    impl.pendingOrderedChunks.get(accountHash) shouldBe empty
+
+    // Trie is still open (3rd subtask never arrived) — safe to commit it directly for inspection.
+    val actualRoot = impl.pendingAccountTries(accountHash).commit()
+
+    // Reference: the TRUE deduplicated slot set (boundaryKey inserted ONCE, not twice), true
+    // ascending order. If the duplicate had been inserted twice (or dropped along with a NEIGHBOUR),
+    // this would not match.
+    val reference = new SnapHashTrie(_ => ())
+    val dedupedExpected = Seq(
+      slotKey(0x10) -> ByteString("value-10"),
+      boundaryKey -> boundaryValue,
+      slotKey(0x50) -> ByteString("value-50")
+    )
+    dedupedExpected.foreach { case (k, v) => reference.update(k.toArray, v.toArray) }
+    val expectedRoot = reference.commit()
+
+    actualRoot shouldEqual expectedRoot
+  }
+
+  it should "reject (not silently accept) a boundary slot re-served with a DIFFERENT value under the same key" taggedAs UnitTest in {
+    val accountHash = kec256(ByteString("boundary-mismatch-account"))
+    val storageRoot = kec256(ByteString("boundary-mismatch-root"))
+    val (impl, _) = newImpl(
+      stateRoot = kec256(ByteString("boundary-mismatch-state-root")),
+      flatSlotStorage = new FlatSlotStorage(EphemDataSource()),
+      snapSyncControllerRef = testKit.createTestProbe[SNAPSyncController.Command]().ref,
+      deferredMerkleization = false
+    )
+    val peer = PeerTestHelpers.createTestPeer("boundary-mismatch-peer", testKit.createTestProbe[Any]().ref.toClassic)
+
+    val boundaryKey = slotKey(0x1f)
+    val originalValue = ByteString("value-original")
+    val mismatchedValue = ByteString("value-DIFFERENT")
+
+    val chunk0 = StorageTask(accountHash, storageRoot, next = slotKey(0x01), last = boundaryKey)
+    val chunk1 =
+      StorageTask(accountHash, storageRoot, next = StorageTask.incrementHash32(boundaryKey), last = slotKey(0xfe))
+
+    impl.accountSubtaskCounters(accountHash) = (2, 0)
+    impl.storageTrieCursor(accountHash) = chunk0.next
+
+    val chunk0Slots = Seq(slotKey(0x10) -> ByteString("value-10"), boundaryKey -> originalValue)
+    // chunk1's response re-serves boundaryKey with a DIFFERENT value — inconsistent peer data.
+    val chunk1Slots = Seq(boundaryKey -> mismatchedValue, slotKey(0x50) -> ByteString("value-50"))
+
+    impl.applyOrderedStorageChunk(peer, chunk0, chunk0Slots, Seq.empty)
+    val cursorAfterChunk0 = impl.storageTrieCursor(accountHash)
+    val tasksBefore = impl.tasks.size
+
+    noException should be thrownBy {
+      impl.applyOrderedStorageChunk(peer, chunk1, chunk1Slots, Seq.empty)
+    }
+
+    // Rejected, not applied: chunk1's data never reached the trie, the cursor did not move past it,
+    // subtask completion was not recorded, and the task is back in the retry queue.
+    impl.storageTrieCursor(accountHash) shouldEqual cursorAfterChunk0
+    impl.accountSubtaskCounters.get(accountHash) shouldBe Some((2, 1)) // only chunk0 recorded
+    impl.completedAccountCount shouldBe 0L
+    impl.tasks.size shouldBe tasksBefore + 1
+    impl.tasks.exists(t => t.accountHash == accountHash && t.next == chunk1.next) shouldBe true
   }
