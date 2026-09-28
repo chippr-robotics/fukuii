@@ -3916,7 +3916,7 @@ private class SNAPSyncControllerImpl(
         // though that should not happen for forkchoiceUpdated).
         val target = clHead - snapSyncConfig.pivotBlockOffset
         val currentPivot = pivotBlock.getOrElse(BigInt(0))
-        if target <= currentPivot then
+        if SNAPSyncController.clPivotNotYetAdvanced(clHead, snapSyncConfig.pivotBlockOffset, currentPivot) then
           ctx.log.info(
             s"CL-based pivot $target not strictly newer than current $currentPivot " +
               s"(CL head=$clHead, offset=${snapSyncConfig.pivotBlockOffset}). Skipping refresh."
@@ -5187,6 +5187,24 @@ object SNAPSyncController:
       // Pre-merge / pre-CL-hint state: no authoritative tip to compare against. Preserve the
       // legacy "take whatever peer offers" behavior.
       Right(())
+
+  /** True when a CL-anchored re-peg target (`clHead - pivotBlockOffset`) is not strictly newer than the current
+    * pivot — i.e. `refreshPivotInPlace`'s CL-anchored branch would find nothing to do because the CL hasn't
+    * produced a fresher head, NOT because anything is unservable.
+    *
+    * Extracted (BUG-BC3, 2nd follow-up, Platåberget soak 2026-09-28) as the single source of truth for
+    * `refreshPivotInPlace`'s inline check AND for `emptyBecauseClNotAdvanced`'s derivation, and given explicit
+    * parameters — rather than reading `isPoSChain`/`clPivotHint` off the enclosing actor — specifically so it can
+    * be unit-tested directly: `isPoSChain` is a `private val` fixed at actor-construction time from the global
+    * `com.chipprbots.ethereum.utils.Config.blockchains.blockchainConfig.terminalTotalDifficulty`, which the
+    * "test" network config (used throughout this module's test suite, no `terminal-total-difficulty` entry)
+    * always resolves to `false` — so no actor spawned in a test in this module can ever exercise the CL-anchored
+    * branch live (see `staleReferenceHead`'s tests for the same constraint). Taking `clHead` as a plain
+    * `Option[BigInt]` sidesteps that entirely: a test can simulate "PoS chain, live CL hint" by simply passing
+    * `Some(...)`, exactly as the `staleReferenceHead` tests already do for `clHeadNumber`.
+    */
+  private[snap] def clPivotNotYetAdvanced(clHead: BigInt, pivotBlockOffset: Long, currentPivot: BigInt): Boolean =
+    (clHead - pivotBlockOffset) <= currentPivot
 
   /** The reference head `maybeRequestHealingServeRoot` clocks its heal-root staleness check against.
     *
