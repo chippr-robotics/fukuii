@@ -404,6 +404,12 @@ class StorageRangeCoordinatorSpec extends ScalaTestWithActorTestKit() with AnyFl
     req2.accountHashes should have size 1
     req2.accountHashes.head shouldEqual account2
 
+    // Progress is now correctly reported for the completed (proof-of-absence) account1: 1 of the
+    // 2 contracts added via AddStorageTasks. Before the ordering-gate fix, handleProofOfAbsence
+    // bypassed completedAccountCount entirely (see applyOrderedStorageChunk /
+    // applyReadyStorageChunk in StorageRangeCoordinator.scala), so this message was silently never
+    // sent for a proof-of-absence account — progress reporting under-counted completed contracts.
+    snapSyncController.expectMessage(SNAPSyncController.ProgressStorageContracts(1, 2))
     // No pivot-refresh stall signal: peer served a valid proof-of-absence response.
     // Coordinator dispatches task2 immediately; no PivotStateUnservable expected.
     snapSyncController.expectNoMessage(300.millis)
@@ -1151,4 +1157,102 @@ class StorageRangeCoordinatorSpec extends ScalaTestWithActorTestKit() with AnyFl
     impl.pendingOrderedChunks shouldBe empty
     impl.storageTrieCursor shouldBe empty
     impl.pendingAccountTries shouldBe empty
+  }
+
+  // ── forge review follow-up: a legitimately-empty middle sub-range must not stall the account ──
+  //
+  // handleProofOfAbsence (servedCount==0, response.proof.nonEmpty, tasks.size==1 — always true for
+  // a solo subtask/continuation chunk per isInitialRange batching) used to bypass the ordering gate
+  // entirely: it marked the task done and returned without ever calling recordSubtaskCompletion or
+  // advancing storageTrieCursor. A sparse multi-chunk account whose middle sub-range genuinely has
+  // zero slots (a realistic, not rare, shape for large sparse contracts) could then never reach
+  // accountSubtaskCounters' total, so completedAccountCount never advanced for it AND any
+  // higher-range sibling already buffered behind that stuck cursor stayed buffered — until the
+  // whole storage phase reported 0 pending/0 active and the (now 60s, see StorageRestartedEmptyThreshold)
+  // force-complete fast path swept it up regardless. It never corrupted anything, but it defeated
+  // this fix's purpose of resolving ordering WITHOUT falling back to force-complete.
+  //
+  // handleProofOfAbsence now delegates to applyOrderedStorageChunk with an empty slot set (see
+  // StorageRangeCoordinator.scala) — these tests drive that exact call shape directly.
+
+  it should "let a sparse account complete normally (no force-complete) when one middle sub-range is a legitimate proof-of-absence, arriving out of order" taggedAs UnitTest in {
+    val accountHash = kec256(ByteString("sparse-empty-middle-account"))
+    val storageRoot = kec256(ByteString("sparse-empty-middle-root"))
+    val (impl, _) = newImpl(
+      stateRoot = kec256(ByteString("sparse-empty-middle-state-root")),
+      flatSlotStorage = new FlatSlotStorage(EphemDataSource()),
+      snapSyncControllerRef = testKit.createTestProbe[SNAPSyncController.Command]().ref,
+      deferredMerkleization = false
+    )
+
+    val chunk0 = StorageTask(accountHash, storageRoot, next = slotKey(0x01), last = slotKey(0x1f))
+    // chunk1 (the MIDDLE sub-range) is legitimately empty: a proof-of-absence response for
+    // [chunk1.next, chunk1.last] — zero slots, non-empty proof — exactly what handleProofOfAbsence
+    // routes here on a solo chunk request.
+    val chunk1 = StorageTask(accountHash, storageRoot, next = slotKey(0x20), last = slotKey(0x3f))
+    val chunk2 = StorageTask(accountHash, storageRoot, next = slotKey(0x40), last = slotKey(0xfe))
+    val absenceProof = Seq(ByteString(Array.fill(32)(0xab.toByte)))
+
+    impl.accountSubtaskCounters(accountHash) = (3, 0)
+    impl.storageTrieCursor(accountHash) = chunk0.next
+
+    // Scrambled arrival: both non-first chunks (one empty, one with real slots) land before the
+    // chunk that establishes the ascending run.
+    noException should be thrownBy {
+      impl.applyOrderedStorageChunk(chunk2, Seq(slotKey(0x50) -> ByteString("value-50")), Seq.empty)
+      impl.applyOrderedStorageChunk(chunk1, Seq.empty, absenceProof) // proof-of-absence, out of order
+      impl.applyOrderedStorageChunk(chunk0, Seq(slotKey(0x10) -> ByteString("value-10")), Seq.empty)
+    }
+
+    // The empty middle chunk must count towards subtask completion like any other, and must not
+    // leave itself or chunk2 stuck behind it.
+    impl.pendingOrderedChunks.get(accountHash) shouldBe empty
+    impl.storageTrieCursor.get(accountHash) shouldBe empty
+    impl.accountSubtaskCounters.get(accountHash) shouldBe None
+    impl.completedAccountCount shouldBe 1L
+    impl.pendingAccountTries.get(accountHash) shouldBe empty // auto-committed once all 3 landed
+  }
+
+  it should "produce the correct storage root when a sparse account's out-of-order middle sub-range is empty" taggedAs UnitTest in {
+    import com.chipprbots.ethereum.blockchain.sync.snap.SnapHashTrie
+
+    val accountHash = kec256(ByteString("sparse-empty-middle-root-check"))
+    val storageRoot = kec256(ByteString("sparse-empty-middle-root-check-root"))
+    val (impl, _) = newImpl(
+      stateRoot = kec256(ByteString("sparse-empty-middle-root-check-state")),
+      flatSlotStorage = new FlatSlotStorage(EphemDataSource()),
+      snapSyncControllerRef = testKit.createTestProbe[SNAPSyncController.Command]().ref,
+      deferredMerkleization = false
+    )
+
+    val chunk0 = StorageTask(accountHash, storageRoot, next = slotKey(0x01), last = slotKey(0x1f))
+    val chunk1 = StorageTask(accountHash, storageRoot, next = slotKey(0x20), last = slotKey(0x3f)) // empty
+    val chunk2 = StorageTask(accountHash, storageRoot, next = slotKey(0x40), last = slotKey(0xfe))
+    val slots0 = Seq(slotKey(0x10) -> ByteString("value-10"))
+    val slots2 = Seq(slotKey(0x50) -> ByteString("value-50"))
+    val absenceProof = Seq(ByteString(Array.fill(32)(0xab.toByte)))
+
+    // Registered as 4 subtasks but only 3 are ever fed — deliberately left "incomplete" so the
+    // shared trie is never auto-committed/removed, letting this test inspect it directly.
+    impl.accountSubtaskCounters(accountHash) = (4, 0)
+    impl.storageTrieCursor(accountHash) = chunk0.next
+
+    // The empty middle chunk arrives before EITHER of its neighbours.
+    impl.applyOrderedStorageChunk(chunk1, Seq.empty, absenceProof)
+    impl.pendingOrderedChunks(accountHash) should have size 1
+
+    impl.applyOrderedStorageChunk(chunk2, slots2, Seq.empty)
+    impl.pendingOrderedChunks(accountHash) should have size 2 // both still waiting on chunk0
+
+    impl.applyOrderedStorageChunk(chunk0, slots0, Seq.empty)
+    impl.pendingOrderedChunks.get(accountHash) shouldBe empty // both drained once chunk0 landed
+
+    val actualRoot = impl.pendingAccountTries(accountHash).commit()
+
+    // Reference: ONLY chunk0's and chunk2's slots (chunk1 contributes nothing), true ascending order.
+    val reference = new SnapHashTrie(_ => ())
+    (slots0 ++ slots2).foreach { case (k, v) => reference.update(k.toArray, v.toArray) }
+    val expectedRoot = reference.commit()
+
+    actualRoot shouldEqual expectedRoot
   }
