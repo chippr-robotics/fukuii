@@ -790,21 +790,37 @@ object PeerManagerActor:
         listening(connectedPeers)
       else if handshakedPeer.nodeId.exists(connectedPeers.hasHandshakedWith) then
         val nodeId = handshakedPeer.nodeId.get
-        val existingOutboundOpt = connectedPeers.peers.values
-          .find(p => p.nodeId.contains(nodeId) && !p.incomingConnection)
-        if handshakedPeer.incomingConnection && isMaintained && existingOutboundOpt.isDefined then
-          // Inbound wins for maintained peers — drop the outbound, keep the inbound.
-          // Mirrors go-ethereum's static-pool removal when a peer connects either direction,
-          // preventing core-geth's static-dial timer from firing a new outbound every 30-45s.
-          log.debug("Maintained peer {} inbound wins tiebreak — dropping outbound", handshakedPeer.remoteAddress)
-          existingOutboundOpt.foreach(_.ref ! PeerActor.DisconnectPeer(Disconnect.Reasons.AlreadyConnected))
-          pendingMaintainedConnections.remove(handshakedPeer.ref)
-          peerStatusCache = peerStatusCache + (handshakedPeer.id -> PeerActor.Status.Handshaked)
-          listening(connectedPeers.promotePeerToHandshaked(handshakedPeer))
-        else
-          log.debug(s"Disconnecting from ${handshakedPeer.remoteAddress} as we are already connected to them")
-          handshakedPeer.ref ! PeerActor.DisconnectPeer(Disconnect.Reasons.AlreadyConnected)
+        // Defense in depth (see PeerActor.handleHandshakedTerminated for the root-cause fix): if the
+        // already-connected entry for this nodeId IS this very actor (identical ref), it is
+        // re-publishing its own handshake success, not a genuine second connection. This is
+        // unreachable now that a HANDSHAKED PeerActor stops instead of self-reconnecting, but
+        // sending DisconnectPeer(AlreadyConnected) to your own
+        // live connection would disconnect a perfectly good peer, so guard the symptom here too.
+        val existingSameRef =
+          connectedPeers.peers.values.exists(p => p.nodeId.contains(nodeId) && p.ref == handshakedPeer.ref)
+        if existingSameRef then
+          log.warn(
+            "Ignoring duplicate PeerHandshakeSuccessful for {} — same ref ({}) already handshaked",
+            handshakedPeer.id,
+            handshakedPeer.ref
+          )
           listening(connectedPeers)
+        else
+          val existingOutboundOpt = connectedPeers.peers.values
+            .find(p => p.nodeId.contains(nodeId) && !p.incomingConnection)
+          if handshakedPeer.incomingConnection && isMaintained && existingOutboundOpt.isDefined then
+            // Inbound wins for maintained peers — drop the outbound, keep the inbound.
+            // Mirrors go-ethereum's static-pool removal when a peer connects either direction,
+            // preventing core-geth's static-dial timer from firing a new outbound every 30-45s.
+            log.debug("Maintained peer {} inbound wins tiebreak — dropping outbound", handshakedPeer.remoteAddress)
+            existingOutboundOpt.foreach(_.ref ! PeerActor.DisconnectPeer(Disconnect.Reasons.AlreadyConnected))
+            pendingMaintainedConnections.remove(handshakedPeer.ref)
+            peerStatusCache = peerStatusCache + (handshakedPeer.id -> PeerActor.Status.Handshaked)
+            listening(connectedPeers.promotePeerToHandshaked(handshakedPeer))
+          else
+            log.debug(s"Disconnecting from ${handshakedPeer.remoteAddress} as we are already connected to them")
+            handshakedPeer.ref ! PeerActor.DisconnectPeer(Disconnect.Reasons.AlreadyConnected)
+            listening(connectedPeers)
       else
         pendingMaintainedConnections.remove(handshakedPeer.ref)
         peerStatusCache = peerStatusCache + (handshakedPeer.id -> PeerActor.Status.Handshaked)

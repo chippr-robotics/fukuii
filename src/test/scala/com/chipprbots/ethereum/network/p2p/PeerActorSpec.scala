@@ -35,6 +35,7 @@ import com.chipprbots.ethereum.nodebuilder.PruningConfigBuilder
 import com.chipprbots.ethereum.domain.*
 import com.chipprbots.ethereum.forkid.ForkId
 import com.chipprbots.ethereum.network.*
+import com.chipprbots.ethereum.network.NetworkPeerManagerActor.PeerInfo
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor.RemoteStatus
 import com.chipprbots.ethereum.network.PeerActor.GetStatus
 import com.chipprbots.ethereum.network.PeerActor.Status.Handshaked
@@ -140,6 +141,85 @@ class PeerActorSpec extends ScalaTestWithActorTestKit(ManualTime.config) with An
     manualTime.timePasses(2.seconds)
     // After timer fires, factory returns conn2 → PeerActor sends ConnectTo to conn2
     conn2Spy.expectMessageType[RLPxConnectionHandler.ConnectTo]
+
+  it should "stop without self-reconnecting when a HANDSHAKED peer's rlpx connection terminates" taggedAs (
+    UnitTest,
+    NetworkTest
+  ) in new NodeStatusSetup:
+    // Regression test: the handshaked state used to call handleTerminated(rlpxConnection, 0), which
+    // — since 0 < connectMaxRetries — scheduled a reconnect on this SAME actor instead of stopping
+    // it. The fresh handshake ~connectRetryDelay later then collided with PeerManagerActor's
+    // "already connected" duplicate check (hasHandshakedWith found the OLD, never-removed entry
+    // for the same ref) and got disconnected as AlreadyConnected — losing a good peer ~30s after a
+    // transient TCP drop. A HANDSHAKED peer must stop immediately instead; PeerManagerActor's own
+    // death-watch + dial loop (and, for maintained peers, its dedicated reconnect branch) handles
+    // redial with a fresh actor.
+    val remoteStatus: RemoteStatus = RemoteStatus(
+      capability = Capability.ETH63,
+      networkId = peerConf.networkId,
+      chainWeight = ChainWeight.totalDifficultyOnly(BigInt(1000000)),
+      bestHash = ByteString("blockhash"),
+      genesisHash = Fixtures.Blocks.Genesis.header.hash.value
+    )
+
+    // Test probes live under /system and cannot be stopped via testKit.stop() (see the "try to
+    // reconnect" test above) — spawn a real user actor as the rlpx connection so it can be
+    // stopped to trigger RlpxTerminated via death-watch, exactly like a dropped TCP link would.
+    val connSpy = testKit.createTestProbe[RLPxConnectionHandler.Command]()
+    val conn: ActorRef[RLPxConnectionHandler.Command] = testKit.spawn(
+      Behaviors.receiveMessage[RLPxConnectionHandler.Command] { msg =>
+        connSpy.ref ! msg; Behaviors.same
+      },
+      s"rlpx-conn-handshaked-${java.util.UUID.randomUUID()}"
+    )
+
+    val peerMessageBus = testKit.spawn(PeerEventBusActor.behavior(), s"peer-event-bus-${java.util.UUID.randomUUID()}")
+    val knownNodesManager: TestProbe[KnownNodesManager.Command] = testKit.createTestProbe()
+    val handshakeEvents: TestProbe[PeerEventBusActor.PeerEvent] = testKit.createTestProbe()
+    peerMessageBus ! PeerEventBusActor.SubscribeCmd(
+      PeerEventBusActor.SubscriptionClassifier.PeerHandshaked,
+      handshakeEvents.ref
+    )
+
+    val peerUnderTest: ActorRef[PeerActor.Command] = testKit.spawn(
+      PeerActor.apply(
+        new InetSocketAddress("127.0.0.1", 0),
+        _ => conn,
+        peerConf,
+        peerMessageBus,
+        knownNodesManager.ref,
+        false,
+        Mocks.MockHandshakerAlwaysSucceeds(remoteStatus, 0, false)
+      )
+    )
+
+    peerUnderTest ! PeerActor.ConnectTo(new URI("encode://localhost:9000"))
+    connSpy.expectMessageType[RLPxConnectionHandler.ConnectTo]
+    peerUnderTest ! RLPxConnectionHandler.ConnectionEstablished(remoteNodeId)
+
+    // MockHandshakerAlwaysSucceeds starts in ConnectedState — handshake completes immediately,
+    // with no Hello/Status exchange needed (mirrors "stay connected to pre fork peer" above).
+    handshakeEvents.expectMessageType[PeerEventBusActor.PeerEvent.PeerHandshakeSuccessful[PeerInfo]]
+    knownNodesManager.expectMessageType[KnownNodesManager.AddKnownNode]
+
+    val statusProbe: TestProbe[StatusResponse] = testKit.createTestProbe()
+    peerUnderTest ! GetStatus(statusProbe.ref)
+    statusProbe.expectMessage(StatusResponse(Handshaked))
+
+    // Simulate a transient TCP drop: the underlying rlpx connection actor terminates.
+    testKit.stop(conn)
+
+    // The PeerActor must stop -- not schedule a reconnect. Before the fix this would time out:
+    // the buggy path transitions to waitingForRetry and stays alive without a manual-time advance.
+    val deathProbe = testKit.createTestProbe[Any]()
+    deathProbe.expectTerminated(peerUnderTest)
+
+    // No reconnect attempt anywhere (no new ConnectTo, no second handshake success), and the
+    // peer was NOT treated as bad: RemoveKnownNode must not fire for a peer whose TCP link
+    // merely dropped -- it was a good, already-vetted peer.
+    connSpy.expectNoMessage()
+    handshakeEvents.expectNoMessage()
+    knownNodesManager.expectNoMessage()
 
   it should "successfully connect to ETC peer" taggedAs (UnitTest, NetworkTest) in new TestSetup:
     val uri = new URI(s"enode://${Hex.toHexString(remoteNodeId.toArray[Byte])}@localhost:9000")

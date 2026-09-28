@@ -365,6 +365,30 @@ class PeerManagerSpec
     )
     peerAsOutgoingProbe.expectMsg(PeerActor.DisconnectPeer(Disconnect.Reasons.AlreadyConnected))
 
+  // Defense in depth for a handshaked peer that reconnected itself after a TCP drop. The root cause is fixed in PeerActor (a HANDSHAKED peer now stops instead of
+  // self-reconnecting), which means the same actor ref can no longer legitimately re-publish
+  // PeerHandshakeSuccessful for a nodeId it already handshaked. This test guards the symptom
+  // directly: IF a duplicate ever arrives from the exact same ref, PeerManagerActor must not send
+  // that actor DisconnectPeer(AlreadyConnected) -- that would disconnect a live peer from itself.
+  it should "not send AlreadyConnected to itself when the same actor ref re-publishes PeerHandshakeSuccessful" taggedAs (
+    UnitTest,
+    NetworkTest
+  ) in new TestSetup:
+    start()
+    handleInitialNodesDiscovery()
+
+    val TestPeer(peerAsOutgoing, peerAsOutgoingProbe) = createdPeers.head
+    val ConnectTo(uriConnectedTo) = peerAsOutgoingProbe.expectMsgClass(classOf[PeerActor.ConnectTo])
+    val nodeId: ByteString = ByteString(Hex.decode(uriConnectedTo.getUserInfo))
+    val handshakedPeer: Peer = peerAsOutgoing.copy(nodeId = Some(nodeId))
+
+    peerAsOutgoingProbe.reply(PeerEvent.PeerHandshakeSuccessful(handshakedPeer, initialPeerInfo))
+
+    // The SAME actor (identical ref) re-publishes handshake success a second time.
+    peerAsOutgoingProbe.reply(PeerEvent.PeerHandshakeSuccessful(handshakedPeer, initialPeerInfo))
+
+    peerAsOutgoingProbe.expectNoMessage(500.millis)
+
   // ── Suite 5: NB-8 — 5s reconnect + inbound-suppression (Fix-C) ──────────────────────────────
 
   behavior.of("maintained peer reconnect (NB-8 Fix-C)")
