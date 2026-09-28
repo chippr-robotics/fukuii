@@ -158,6 +158,55 @@ class SNAPLazyHealAnchorSpec extends ScalaTestWithActorTestKit() with AnyFlatSpe
       ) shouldBe clHead
     }
 
+  // forge review follow-up (2nd round): the two lastHealingServeRootBlockToRecord unit tests above pin the
+  // HELPER's own logic but not the CALL SITE's wiring to it — reverting the call site to the pre-fix
+  // `Some(staleClockNow)` left them green, since they invoke the (still-correct) helper directly. This drives
+  // the REAL maybeRequestHealingServeRoot -> refreshPivotInPlace path (via RequestTrieNodeHealing, not
+  // HealingAllPeersStateless — the latter never touches lastHealingServeRootBlock at all) on the non-PoS test
+  // config (isPoSChain = false throughout this suite, exercising the ETC path byte-for-byte): a first
+  // stale-triggered re-peg (from lastHealingServeRootBlock = None, unconditionally stale — identical under old
+  // and new code) sets the bookkeeping baseline, then networkBest advances by exactly 100 blocks — strictly
+  // between the correct threshold (> margin = 64, base's target-based bookkeeping) and the pre-fix bug's
+  // threshold (> 2margin = 128, from recording networkBest itself instead of target). Fixed: 100 > 64, a SECOND
+  // re-peg fires. Pre-fix bug: 100 <= 128, it does not — observed via updateBestBlockForPivot's unconditional
+  // AppStateStorage best-block write, the same fix-independent signal repegUntil uses elsewhere in this file.
+  it should
+    "fire a SECOND heal-root-stale re-peg once networkBest has advanced by more than margin (not 2xmargin) on a " +
+    "non-PoS chain, pinning the exact call site forge flagged" taggedAs UnitTest in new Fixture:
+      val pivot0 = BigInt(1_000)
+      val root0 = fakeRoot(0xaa)
+      val height1 = 2_000L
+      val pivot1 = BigInt(height1 - PivotOffset) // 1_936 — first stale-triggered re-peg's target
+      val root1 = fakeRoot(0xbb)
+      val height2 = height1 + 100 // strictly between the correct (+64) and pre-fix-buggy (+128) thresholds
+      val pivot2 = BigInt(height2 - PivotOffset) // 2_036 — reached only under the fix
+      val root2 = fakeRoot(0xcc)
+
+      storeGenesis()
+      storeHeaderAt(pivot0, root0)
+      storeHeaderAt(pivot1, root1)
+      storeHeaderAt(pivot2, root2)
+      seedResumeState(pivot0, root0)
+
+      peers.set(Map.empty)
+      val snap = spawnController(SNAPSyncConfig(deferredMerkleization = false, movingRootDeltaHeal = true))
+      awaitFirstPoll()
+      snap ! SNAPSyncController.Start
+
+      def staleRepegUntil(height: Long, targetPivot: BigInt): Unit =
+        peers.set(peersAt(height = height.toInt, snap = true))
+        eventually {
+          snap ! SNAPSyncController.PollHandshakedPeers
+          awaitProcessed(snap)
+          awaitProcessed(snap)
+          snap ! SNAPSyncController.RequestTrieNodeHealing
+          awaitProcessed(snap)
+          appStateStorage.getBestBlockNumber() shouldBe targetPivot
+        }
+
+      staleRepegUntil(height1, pivot1)
+      staleRepegUntil(height2, pivot2)
+
   "SNAPSyncController" should
     "anchor SnapSyncPivotBlock/SnapSyncStateRoot to the LAST re-pegged pivot before the HEAL-REPEG " +
     "budget-exhaustion lazy handoff, instead of aborting on the pre-healing anchor" taggedAs UnitTest in new Fixture:
