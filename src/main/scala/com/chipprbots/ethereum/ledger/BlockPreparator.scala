@@ -142,7 +142,9 @@ class BlockPreparator(
       stx: SignedTransaction,
       senderAddress: Address,
       worldStateProxy: InMemoryWorldStateProxy,
-      blockHeader: BlockHeader
+      blockHeader: BlockHeader,
+      // eth_simulateV1's overrides for this call; SimulationOverrides.Empty on every other path.
+      overrides: SimulationOverrides
   )(implicit blockchainConfig: BlockchainConfig): InMemoryWorldStateProxy =
     val account = worldStateProxy.getGuaranteedAccount(senderAddress)
     val blobGasCost = stx.tx match
@@ -151,7 +153,7 @@ class BlockPreparator(
         // eth_simulateV1's blockOverrides.blobBaseFee lets the caller force a
         // specific blob fee that doesn't necessarily match what excessBlobGas
         // would derive (e.g. blobBaseFee=0 when excessBlobGas=0 would yield 1).
-        val blobBaseFee = _simulateBlobBaseFeeOverride.getOrElse(
+        val blobBaseFee = overrides.blobBaseFeeOverride.getOrElse(
           blockHeader.excessBlobGas
             .map(eg => BlobGasUtils.getBlobGasPrice(eg, blockHeader.unixTimestamp, blockchainConfig))
             .getOrElse(BigInt(1))
@@ -221,7 +223,9 @@ class BlockPreparator(
       authStateGas: BigInt = 0,
       tracer: Option[com.chipprbots.ethereum.vm.ExecutionTracer] = None,
       // EIP-7702: authorities recovered while processing the authorization list, warm for the whole transaction.
-      extraWarmAddresses: Set[Address] = Set.empty
+      extraWarmAddresses: Set[Address] = Set.empty,
+      // eth_simulateV1's overrides, from executeTransactionForSimulation only. StxLedger's calls leave it Empty.
+      overrides: SimulationOverrides = SimulationOverrides.Empty
   )(implicit blockchainConfig: BlockchainConfig): PR =
     vm.run(
       topLevelContext(
@@ -233,7 +237,8 @@ class BlockPreparator(
         authStateGas,
         tracer,
         extraWarmAddresses,
-        accessRecorder = None
+        accessRecorder = None,
+        overrides = overrides
       )
     )
 
@@ -250,7 +255,9 @@ class BlockPreparator(
       authStateGas: BigInt,
       tracer: Option[com.chipprbots.ethereum.vm.ExecutionTracer],
       extraWarmAddresses: Set[Address],
-      accessRecorder: Option[BlockAccessRecorder]
+      accessRecorder: Option[BlockAccessRecorder],
+      // eth_simulateV1's overrides for this transaction; SimulationOverrides.Empty on every other path.
+      overrides: SimulationOverrides
   )(implicit blockchainConfig: BlockchainConfig): PC =
     val evmConfig = EvmConfig.forBlock(blockHeader.number.value, blockHeader.unixTimestamp, blockchainConfig)
     val context: PC =
@@ -264,12 +271,12 @@ class BlockPreparator(
         authStateGas,
         extraWarmAddresses
       )
-    // Apply simulation flags if set (for eth_simulateV1)
+    // Apply the eth_simulateV1 overrides, if this call carries any
     var ctx = context
     if extraWarmAddresses.nonEmpty then ctx = ctx.copy(warmAddresses = ctx.warmAddresses ++ extraWarmAddresses)
-    if _simulatePrecompileRelocations.nonEmpty then
-      ctx = ctx.copy(precompileRelocations = _simulatePrecompileRelocations)
-    if _simulateTraceTransfers then ctx = ctx.copy(traceTransfers = true)
+    if overrides.precompileRelocations.nonEmpty then
+      ctx = ctx.copy(precompileRelocations = overrides.precompileRelocations)
+    if overrides.traceTransfers then ctx = ctx.copy(traceTransfers = true)
     if tracer.isDefined then ctx = ctx.copy(tracer = tracer)
     // EIP-7928: the transaction's block-access recorder, while an Amsterdam block executes.
     if accessRecorder.isDefined then ctx = ctx.copy(accessRecorder = accessRecorder)
@@ -290,14 +297,9 @@ class BlockPreparator(
   )(implicit blockchainConfig: BlockchainConfig): PR =
     val tracerVm = new VMImpl(Some(tracer))
     val evmConfig = EvmConfig.forBlock(blockHeader.number.value, blockHeader.unixTimestamp, blockchainConfig)
+    // No eth_simulateV1 overrides: the debug and trace calls never carry any.
     val context: PC = ProgramContext(stx, blockHeader, senderAddress, world, evmConfig)
-    val contextWithSimFlags =
-      var ctx = context
-      if _simulatePrecompileRelocations.nonEmpty then
-        ctx = ctx.copy(precompileRelocations = _simulatePrecompileRelocations)
-      if _simulateTraceTransfers then ctx = ctx.copy(traceTransfers = true)
-      ctx
-    tracerVm.run(contextWithSimFlags)
+    tracerVm.run(context)
 
   /** Calculate total gas to be refunded See YP, eq (72)
     *
@@ -420,8 +422,12 @@ class BlockPreparator(
       .foldLeft(world)(deleteEmptyAccount)
       .clearTouchedAccounts
 
-  /** Public facade for eth_simulateV1 — delegates to the private executeTransaction. Supports optional precompile
-    * relocations for movePrecompileToAddress.
+  /** Public facade for eth_simulateV1: executes one transaction as block import does, under this call's overrides —
+    * precompile relocations for movePrecompileToAddress, traceTransfers, and the blobBaseFee block override.
+    *
+    * The overrides are passed down this call's stack as an immutable [[SimulationOverrides]] and exist nowhere else:
+    * block import, other eth_simulateV1 calls and StxLedger, which share this preparator and run concurrently, never
+    * see them.
     */
   def executeTransactionForSimulation(
       stx: SignedTransaction,
@@ -432,21 +438,19 @@ class BlockPreparator(
       traceTransfers: Boolean = false,
       blobBaseFeeOverride: Option[BigInt] = None
   )(implicit blockchainConfig: BlockchainConfig): TxResult =
-    // Store simulation flags temporarily for runVM to pick up
-    _simulatePrecompileRelocations = precompileRelocations
-    _simulateTraceTransfers = traceTransfers
-    _simulateBlobBaseFeeOverride = blobBaseFeeOverride
-    try executeTransaction(stx, senderAddress, blockHeader, world)
-    finally
-      _simulatePrecompileRelocations = Map.empty
-      _simulateTraceTransfers = false
-      _simulateBlobBaseFeeOverride = None
+    executeTransactionWithOverrides(
+      stx,
+      senderAddress,
+      blockHeader,
+      world,
+      SimulationOverrides(precompileRelocations, traceTransfers, blobBaseFeeOverride),
+      accessRecorder = None,
+      tracer = None
+    )
 
-  // Thread-local-like storage for precompile relocations during simulation
-  @volatile private var _simulatePrecompileRelocations: Map[Address, Address] = Map.empty
-  @volatile private var _simulateTraceTransfers: Boolean = false
-  @volatile private var _simulateBlobBaseFeeOverride: Option[BigInt] = None
-
+  /** Executes one transaction of a block, as block import does. There are no eth_simulateV1 overrides here, and no
+    * parameter through which any could arrive.
+    */
   private[ledger] def executeTransaction(
       stx: SignedTransaction,
       senderAddress: Address,
@@ -458,13 +462,36 @@ class BlockPreparator(
       // block building never pass one, and without one the frame runs on `vm` exactly as it always has.
       tracer: Option[ExecutionTracer] = None
   )(implicit blockchainConfig: BlockchainConfig): TxResult =
+    executeTransactionWithOverrides(
+      stx,
+      senderAddress,
+      blockHeader,
+      world,
+      SimulationOverrides.Empty,
+      accessRecorder,
+      tracer
+    )
+
+  /** The one transaction-execution path, shared by [[executeTransaction]] (overrides always Empty) and
+    * [[executeTransactionForSimulation]] (the simulate call's own overrides). Every parameter is explicit, so neither
+    * caller can drop the block-access recorder or the tracer by omission.
+    */
+  private def executeTransactionWithOverrides(
+      stx: SignedTransaction,
+      senderAddress: Address,
+      blockHeader: BlockHeader,
+      world: InMemoryWorldStateProxy,
+      overrides: SimulationOverrides,
+      accessRecorder: Option[BlockAccessRecorder],
+      tracer: Option[ExecutionTracer]
+  )(implicit blockchainConfig: BlockchainConfig): TxResult =
     log.debug(s"Transaction ${stx.hash.toHex} execution start")
     // EIP-7928: execution-specs `check_transaction` reads the sender before anything else.
     BlockAccessRecorder.account(accessRecorder, senderAddress)
     val gasPrice = UInt256(Transaction.effectiveGasPrice(stx.tx, blockHeader.baseFee))
     val gasLimit = stx.tx.gasLimit
 
-    val checkpointWorldState = updateSenderAccountBeforeExecution(stx, senderAddress, world, blockHeader)
+    val checkpointWorldState = updateSenderAccountBeforeExecution(stx, senderAddress, world, blockHeader, overrides)
 
     // EIP-7702: Process authorization list for Type-4 transactions before VM execution
     // Track refund for existing accounts (geth refunds CallNewAccountGas - TxAuthTupleGas per existing account)
@@ -514,7 +541,8 @@ class BlockPreparator(
       authStateGas,
       tracer = None,
       extraWarmAddresses = authorityWarmAddresses,
-      accessRecorder = accessRecorder
+      accessRecorder = accessRecorder,
+      overrides = overrides
     )
     accessRecorder.foreach { recorder =>
       recordPreExecutionReads(
