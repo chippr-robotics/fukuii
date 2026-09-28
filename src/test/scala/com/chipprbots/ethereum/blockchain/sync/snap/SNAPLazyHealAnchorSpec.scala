@@ -80,6 +80,51 @@ class SNAPLazyHealAnchorSpec extends ScalaTestWithActorTestKit() with AnyFlatSpe
 
   private def fakeRoot(tag: Int): ByteString = ByteString(Array.fill(32)(tag.toByte))
 
+  // BUG-BC3 (Platåberget ePBS-devnet soak, 2026-09-27): the heal-root staleness clock used networkBest
+  // (peer-reported) even under movingRootDeltaHeal on a PoS chain, where the actual re-peg decision is
+  // CL-anchored. A CL that cannot advance (Lighthouse stuck behind an EL reporting SYNCING) never produces a
+  // newer pivot, but peers kept gossiping a climbing STATUS height, so the mismatched clock kept re-triggering
+  // "heal root stale" checks that were guaranteed to find nothing. staleReferenceHead is the extracted decision;
+  // see its doc in SNAPSyncController.scala for why an actor-level (isPoSChain=true) test isn't used here — the
+  // "test" network config has no terminal-total-difficulty, so isPoSChain is false for every actor spawned in
+  // this module's test suite (confirmed by SNAPSyncControllerSpec's own PoSBlockHeaderValidator tests, which use
+  // the same standalone-pure-function pattern for the identical reason).
+  "SNAPSyncController.staleReferenceHead" should "use the CL head, not networkBest, under movingRootDeltaHeal on a PoS chain with a live CL hint" taggedAs UnitTest in {
+    SNAPSyncController.staleReferenceHead(
+      movingRootDeltaHeal = true,
+      isPoSChain = true,
+      clHeadNumber = Some(BigInt(284598)),
+      networkBest = BigInt(284670)
+    ) shouldBe BigInt(284598)
+  }
+
+  it should "fall back to networkBest when isPoSChain but no CL hint has arrived yet" taggedAs UnitTest in {
+    SNAPSyncController.staleReferenceHead(
+      movingRootDeltaHeal = true,
+      isPoSChain = true,
+      clHeadNumber = None,
+      networkBest = BigInt(284670)
+    ) shouldBe BigInt(284670)
+  }
+
+  it should "use networkBest, unchanged, on ETC/pre-merge (isPoSChain = false) regardless of movingRootDeltaHeal" taggedAs UnitTest in {
+    SNAPSyncController.staleReferenceHead(
+      movingRootDeltaHeal = true,
+      isPoSChain = false,
+      clHeadNumber = None,
+      networkBest = BigInt(284670)
+    ) shouldBe BigInt(284670)
+  }
+
+  it should "use networkBest, unchanged, on the decoupledHealServeRoot path (movingRootDeltaHeal = false) even on a PoS chain" taggedAs UnitTest in {
+    SNAPSyncController.staleReferenceHead(
+      movingRootDeltaHeal = false,
+      isPoSChain = true,
+      clHeadNumber = Some(BigInt(284598)),
+      networkBest = BigInt(284670)
+    ) shouldBe BigInt(284670)
+  }
+
   "SNAPSyncController" should
     "anchor SnapSyncPivotBlock/SnapSyncStateRoot to the LAST re-pegged pivot before the HEAL-REPEG " +
     "budget-exhaustion lazy handoff, instead of aborting on the pre-healing anchor" taggedAs UnitTest in new Fixture:
@@ -221,6 +266,78 @@ class SNAPLazyHealAnchorSpec extends ScalaTestWithActorTestKit() with AnyFlatSpe
 
       appStateStorage.getSnapSyncPivotBlock() shouldBe Some(pivot2)
       appStateStorage.getSnapSyncStateRoot() shouldBe Some(root2)
+
+  // BUG-BC3 regression: a "heal root stale" re-peg that finds no usable target must not count against the
+  // HEAL-REPEG budget, however many times it happens, while a genuine all-peers-stateless failure still must.
+  //
+  // isPoSChain is false throughout this module's test suite (see the staleReferenceHead tests' doc above), so
+  // this cannot drive the real-world trigger (a frozen CL head) — refreshPivotInPlace's peer-reported-best
+  // branch has no "must be strictly newer than current" check the way the CL-anchored branch does, so a stable
+  // or climbing peer height alone never reproduces a REPEATED no-target outcome there. Instead this drives
+  // maybeRequestHealingServeRoot's "heal root stale" trigger to repeatedly and genuinely find no usable target,
+  // using a large pivotBlockOffset (5000, comfortably above 2xHealingServeRootMarginBlocks=128) so that
+  // `networkBest - offset <= 0` while networkBest still climbs by enough each step (200 > 128) to keep re-tripping
+  // staleness: `refreshPivotInPlace`'s peer-fallback branch computes `networkBest - max(offset, margin)` with NO
+  // clamp (unlike recentRootTarget's outer check, which clamps to a minimum of 1), so it resolves to None on
+  // every one of these steps. Because countsTowardHealBudget is a plain boolean the call site passes — not a
+  // property of WHY newPivotOpt ended up empty — exercising "repeated genuine empty result via the heal-root-stale
+  // call site" this way exercises the exact same code (refreshPivotInPlace's countsTowardHealBudget=false branch)
+  // that a frozen CL head would.
+  it should
+    "not count a preemptive heal-root-stale re-peg that finds no usable target against the HEAL-REPEG budget, " +
+    "however many times it repeats, while a genuine all-peers-stateless failure still exhausts it" taggedAs UnitTest in new Fixture:
+      val pivot0 = BigInt(100)
+      val root0 = fakeRoot(0x77)
+      storeGenesis()
+      storeHeaderAt(pivot0, root0)
+      seedResumeState(pivot0, root0)
+
+      peers.set(Map.empty)
+      val snap = spawnController(
+        SNAPSyncConfig(deferredMerkleization = false, movingRootDeltaHeal = true, pivotBlockOffset = 5000)
+      )
+      awaitFirstPoll()
+      snap ! SNAPSyncController.Start
+
+      // 11 climbing heights (> MaxHealRepegNoRootAttempts), each re-tripping staleness (step 200 > margin*2=128)
+      // while staying low enough (<= 5000 = pivotBlockOffset) that refreshPivotInPlace's peer-fallback branch
+      // always resolves to None (target <= 0). Pre-fix, each of these would have counted, exhausting the budget
+      // (>=10) and handing off well before this loop even finishes.
+      (1 to 11).foreach { i =>
+        peers.set(peersAt(height = i * 200, snap = true))
+        snap ! SNAPSyncController.PollHandshakedPeers
+        awaitProcessed(snap)
+        awaitProcessed(snap)
+        snap ! SNAPSyncController.RequestTrieNodeHealing
+        awaitProcessed(snap)
+      }
+
+      // Not yet handed off: pivotBlock/stateRoot/AppStateStorage are all still exactly what they were seeded
+      // with — none of the 11 "stale, no target" attempts above should have touched them or the budget.
+      parent.expectNoMessage(500.millis)
+      appStateStorage.getSnapSyncPivotBlock() shouldBe Some(pivot0)
+      appStateStorage.getSnapSyncStateRoot() shouldBe Some(root0)
+
+      // Now exhaust the budget for real: MaxHealRepegNoRootAttempts consecutive genuine "all peers stateless"
+      // failures (peers empty). If the 11 prior attempts had counted (pre-fix), the budget would already have
+      // been spent and this would either hand off immediately on far fewer sends or have already fired above.
+      peers.set(Map.empty)
+      snap ! SNAPSyncController.PollHandshakedPeers
+      awaitProcessed(snap)
+      awaitProcessed(snap)
+      (1 to MaxHealRepegNoRootAttempts).foreach { _ =>
+        snap ! SNAPSyncController.HealingAllPeersStateless
+        awaitProcessed(snap)
+      }
+
+      parent.fishForMessage(10.seconds) {
+        case SNAPSyncController.SnapSyncFinalized(p) if p == pivot0 => FishingOutcomes.complete
+        case SyncProtocol.HealingImpossible =>
+          FishingOutcomes.fail(
+            "SNAP finalization aborted (HealingImpossible) — unexpected, since pivot/root never moved in this test"
+          )
+        case _ => FishingOutcomes.continueAndIgnore
+      }
 
   class Fixture extends EphemBlockchainTestSetup with TestSyncConfig:
     implicit override lazy val classicSystem: ActorSystem = SNAPLazyHealAnchorSpec.this.system.classicSystem
