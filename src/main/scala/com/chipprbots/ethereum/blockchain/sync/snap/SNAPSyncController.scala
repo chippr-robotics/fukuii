@@ -3896,7 +3896,20 @@ private class SNAPSyncControllerImpl(
     val clHeadNumber: Option[BigInt] =
       if isPoSChain then clPivotHint.flatMap(_.knownHeader).map(_.number.value) else None
 
-    val newPivotOpt: Option[BigInt] = clHeadNumber match
+    // emptyBecauseClNotAdvanced: true ONLY for the specific "CL-anchored target is not strictly newer than the
+    // current pivot" outcome — i.e. newPivotOpt is empty purely because the CL hasn't produced a fresher head
+    // since we last checked, NOT because no peer could serve anything. Platåberget soak, 2026-09-28 (BUG-BC3
+    // 2nd follow-up): computed HERE, from the computation's own outcome, rather than threaded through as a
+    // caller-supplied flag, because a caller-supplied flag only covers callers that remember to set it. The
+    // generic PivotBootstrapRetryKey/RetryPivotRefresh retry loop is exactly such a caller: armed from an
+    // EARLIER, unrelated stall (e.g. a storage-phase "all peers stateless" event, long before healing starts),
+    // it replays with a fixed "retry after bootstrap failure" reason and the DEFAULT countsTowardHealBudget =
+    // true on every 30s re-arm, with no memory of why it was originally armed. If StateHealing has begun by the
+    // time it fires and the CL-anchored branch below finds nothing newer, that replay would count against the
+    // budget even though the underlying cause is identical to the "heal root stale" case this ticket already
+    // exempted — deriving the flag from the computation itself closes that gap for this AND any future caller,
+    // without needing every call site to know it might land here.
+    val (newPivotOpt: Option[BigInt], emptyBecauseClNotAdvanced: Boolean) = clHeadNumber match
       case Some(clHead) =>
         // Post-merge: pivot = CL head - offset. Strict forward-only: never accept a
         // pivot below our current one (which could happen if the CL hint regressed,
@@ -3908,14 +3921,14 @@ private class SNAPSyncControllerImpl(
             s"CL-based pivot $target not strictly newer than current $currentPivot " +
               s"(CL head=$clHead, offset=${snapSyncConfig.pivotBlockOffset}). Skipping refresh."
           )
-          None
+          (None, true)
         else
           ctx.log.info(s"Selected CL-anchored pivot $target (CL head=$clHead, current=$currentPivot)")
-          Some(target).filter(_ > 0)
+          (Some(target).filter(_ > 0), false)
 
       case None =>
         // Pre-merge fallback: peer-reported best subject to freshness floor.
-        currentNetworkBestFromSnapPeers()
+        val pivotOpt = currentNetworkBestFromSnapPeers()
           .filter { networkBest =>
             SNAPSyncController.pivotPassesFreshnessFloor(
               networkBest = networkBest,
@@ -3940,6 +3953,7 @@ private class SNAPSyncControllerImpl(
           // offset=0; deferred — it fires rarely and has its own freshness-floor handling.
           .map(networkBest => networkBest - BigInt(snapSyncConfig.pivotBlockOffset).max(SnapServeWindowMargin))
           .filter(_ > 0)
+        (pivotOpt, false)
 
     if newPivotOpt.isEmpty then
       // spec 009 T014 (Moving-Root Delta Heal — bounded re-peg last-resort). Under `movingRootDeltaHeal`, a re-peg
@@ -3953,21 +3967,35 @@ private class SNAPSyncControllerImpl(
       // effects (currentPhase=Completed, syncController ! Done, child teardown) and discard the returned Behavior.
       // Outside healing or flag OFF: the unbounded 30s-retry stays byte-identical (SNAP peers are intermittent on ETC).
       if snapSyncConfig.movingRootDeltaHeal && currentPhase == StateHealing then
-        if !countsTowardHealBudget then
-          // Platåberget ePBS-devnet soak, 2026-09-27 (BUG-BC3): this is a PROACTIVE staleness check
-          // (maybeRequestHealingServeRoot's periodic "is there a fresher CL pivot yet" probe), not a report that
-          // the CURRENT heal root has become unservable — nothing told us peers can't serve it (that signal is
-          // HealingAllPeersStateless, which always calls this with the default countsTowardHealBudget=true).
-          // "No newer CL pivot yet" is the ordinary, expected outcome whenever the CL hasn't produced a fresher
-          // head since the last check — e.g. a Lighthouse CL that cannot advance while its EL reports SYNCING —
-          // and healing keeps progressing fine on the still-served current root throughout. Counting it here
-          // exhausted the budget in ~5 minutes (10 x 30s) while 3 peers were actively serving the root and
-          // healing was 88%->97% complete. Do not touch healRepegNoRootAttempts, and do not schedule the generic
-          // PivotBootstrapRetryKey/RetryPivotRefresh retry either: that timer always replays via
-          // refreshPivotInPlace("retry after bootstrap failure") — a different reason string with the DEFAULT
-          // countsTowardHealBudget=true — which would silently start counting on the very next tick and defeat
-          // this fix. maybeRequestHealingServeRoot's own staleness cadence (lastHealingServeRootBlock) already
-          // re-checks on its own schedule; no extra timer is needed.
+        // effectiveCountsTowardHealBudget: false either when the CALLER already knew this was a proactive check
+        // (countsTowardHealBudget=false — the "heal root stale" direct call site) OR when THIS computation
+        // independently determined the empty result is purely "CL hasn't advanced yet" (emptyBecauseClNotAdvanced
+        // — covers the generic PivotBootstrapRetryKey/RetryPivotRefresh retry replaying into StateHealing with
+        // no memory of its original trigger, BUG-BC3 2nd follow-up). Either signal alone is enough to not count;
+        // a genuine HealingAllPeersStateless failure (countsTowardHealBudget=true) still counts UNLESS the
+        // CL-anchored computation ALSO independently found nothing newer, in which case "CL hasn't advanced" is
+        // the operative reason regardless of what originally triggered the check.
+        val effectiveCountsTowardHealBudget = countsTowardHealBudget && !emptyBecauseClNotAdvanced
+        if !effectiveCountsTowardHealBudget then
+          // Platåberget ePBS-devnet soak, 2026-09-27/28 (BUG-BC3, both follow-ups): "no newer CL pivot yet" is the
+          // ordinary, expected outcome whenever the CL hasn't produced a fresher head since the last check — e.g.
+          // a Lighthouse CL that cannot advance while its EL reports SYNCING — and healing keeps progressing fine
+          // on the still-served current root throughout; it is not a report that the root is unservable (that
+          // signal is HealingAllPeersStateless). Counting it exhausted the budget in ~5 minutes (10 x 30s) while
+          // peers were actively serving the root, TWICE: once from the direct "heal root stale" call
+          // (countsTowardHealBudget=false fixes that), and once from PivotBootstrapRetryKey/RetryPivotRefresh — a
+          // generic retry armed from an EARLIER, unrelated stall (e.g. a storage-phase "all peers stateless"
+          // event, long before healing starts) that replays every 30s with reason "retry after bootstrap
+          // failure" and the DEFAULT countsTowardHealBudget=true, with no memory of why it was originally armed;
+          // once StateHealing began, each such replay landed here too (emptyBecauseClNotAdvanced fixes that).
+          // Do not touch healRepegNoRootAttempts, and do not re-arm PivotBootstrapRetryKey: for a direct "heal
+          // root stale" call, maybeRequestHealingServeRoot's own staleness cadence (lastHealingServeRootBlock)
+          // already re-checks on its own schedule; for a retry-timer replay landing here, StateHealing is by
+          // definition already active, so that SAME per-tick mechanism is already running and independently
+          // watching for the CL to advance — letting the timer lapse here hands off monitoring to it instead of
+          // duplicating work, which is exactly what stops this leftover pre-healing timer from outliving its
+          // original, unrelated purpose. Re-arming stays byte-identical for every other empty-result cause
+          // (genuinely no peers, freshness floor rejection, current-phase outside StateHealing).
           ctx.log.info(
             s"No newer pivot available yet ($reason) — continuing healing on the current root " +
               s"(pivot=${pivotBlock.getOrElse("?")}). Not counted against the re-peg budget."
