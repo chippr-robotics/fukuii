@@ -1440,6 +1440,15 @@ private class SNAPSyncControllerImpl(
         // healing-request scheduler, and stopStateSyncChildren() stops the idle healing coordinator. No manual
         // coordinator/scheduler teardown needed here (it would double-cancel). finalizeSnapSync still enforces the
         // snapStateRoot == pivotHeader.stateRoot anchor guard, so this is NOT a false completion.
+        //
+        // Platåberget soak, 2026-09-27: re-pegs during StateHealing deliberately skip persisting pivotBlock/
+        // stateRoot (BUG-006 guard, see completePivotRefreshWithStateRoot ~4222), so by the time a lazy handoff
+        // reaches here the persisted anchor can be several re-pegs behind the in-memory pivot. The A5 guard then
+        // compares that stale anchor against the CURRENT pivot's header and aborts on a self-inflicted mismatch
+        // between two different pivots. anchorPivotBeforeLazyHandoff re-anchors the persisted keys to the
+        // in-memory pivot/root immediately before this terminal, one-way handoff — see its doc for why this does
+        // not reintroduce BUG-006.
+        anchorPivotBeforeLazyHandoff("HEAL-ROOT-UNSERVABLE")
         completeSnapSync()
         Behaviors.same
 
@@ -3933,6 +3942,10 @@ private class SNAPSyncControllerImpl(
           )
           timers.cancel(PivotBootstrapRetryKey)
           healRepegNoRootAttempts = 0
+          // Platåberget soak, 2026-09-27: see anchorPivotBeforeLazyHandoff's doc (near completeSnapSync). This
+          // handoff fires after zero or more successful re-pegs that (correctly, per BUG-006) never persisted —
+          // anchor now, before the terminal handoff, so the A5 guard in finalizeSnapSync compares like-for-like.
+          anchorPivotBeforeLazyHandoff("HEAL-REPEG budget exhausted")
           completeSnapSync()
         else
           ctx.log.warn(
@@ -4524,6 +4537,49 @@ private class SNAPSyncControllerImpl(
       // end if workRemaining
   // end if currentPhase == AccountRangeSync
 
+  /** Persist the CURRENT in-memory pivot/root anchor immediately before a lazy-heal handoff to `completeSnapSync()`.
+    *
+    * Background (Platåberget soak, 2026-09-27): `completePivotRefreshWithStateRoot()` deliberately does NOT persist
+    * `pivotBlock`/`stateRoot` while `currentPhase == StateHealing` (the BUG-006 guard, ~4222) — persisting an advancing
+    * root mid-walk, before healing has proven it complete, is what BUG-006 was. That leaves `AppStateStorage`'s
+    * `SnapSyncPivotBlock`/`SnapSyncStateRoot` pinned to whatever pivot was current when `StateHealing` began, even
+    * after any number of in-place re-pegs (`HealingPivotRefreshed`) during healing.
+    *
+    * The lazy-heal handoffs (`HealingRootUnservable`, and the moving-root-delta-heal re-peg-budget exhaustion) call
+    * `completeSnapSync()` -> `finalizeSnapSync()` directly from inside `StateHealing`. `finalizeSnapSync`'s A5 guard
+    * reads the PERSISTED `SnapSyncStateRoot` and compares it against `pivotHeader.stateRoot`, where `pivotHeader` is
+    * looked up via the CURRENT in-memory `pivotBlock`. After any re-peg the two sides of that comparison describe two
+    * DIFFERENT pivots, so the guard trips — even though `pivotBlock`/`stateRoot` are, by construction, already
+    * self-consistent with a real, durably-stored header (`completePivotRefreshWithStateRoot` only ever sets them
+    * together, from a header already fetched via `blockchainReader`). That is a false positive, not a completeness
+    * failure: A5 exists to catch a genuine BUG-008-class divergence between the anchor and the block we are about to
+    * finalize on, not to re-prove healing completeness — the lazy handoff already documents that it is NOT claiming
+    * full completeness; it defers residual gaps to on-demand `GetTrieNodes` fetches during block execution, exactly as
+    * it did before this fix.
+    *
+    * Does this reintroduce BUG-006? No. BUG-006 was a MID-walk write: a root persisted while the walk could still
+    * re-peg again, and while `validateState()` might read the persisted value and assume it was already healed. A lazy
+    * handoff is a ONE-WAY terminal exit from walk-based healing — the healing coordinator is torn down inside
+    * `completeSnapSync()`/`finalizeSnapSync()`, `currentPhase` moves to `Completed`, and no further re-peg of THIS sync
+    * attempt can occur. There is no "next write" left to race, and this makes no new completeness claim — it only makes
+    * the persisted anchor match the pivot that is about to be finalized, exactly as the clean walk-complete paths
+    * (`TrieWalkComplete(0)`, `TrieWalkResult(empty)`, ~1462-1463/1491-1492) already do before THEY reach
+    * `completeSnapSync()` via `StateValidation`.
+    */
+  private def anchorPivotBeforeLazyHandoff(reason: String): Unit =
+    for
+      b <- pivotBlock
+      r <- stateRoot
+    do
+      ctx.log.info(
+        "[HEAL-LAZY-ANCHOR] pivot={} root={} reason={} - anchoring persisted SnapSyncPivotBlock/SnapSyncStateRoot " +
+          "to the in-memory pivot before the lazy-heal handoff, so finalizeSnapSync's A5 guard compares like-for-like",
+        b,
+        r.value.toHex.take(16),
+        reason
+      )
+      appStateStorage.putSnapSyncPivotBlock(b).and(appStateStorage.putSnapSyncStateRoot(r.value)).commit()
+
   /** State sync + healing + validation finished — anchor the pivot and hand off to regular sync immediately.
     *
     * Historical chain backfill (genesis → pivot) is decoupled: we do not block here waiting for it. Instead,
@@ -4535,6 +4591,17 @@ private class SNAPSyncControllerImpl(
     * Closes #1162.
     */
   private def completeSnapSync(): Behavior[Command] =
+    // Diagnostic (Platåberget soak, 2026-09-27): the ONLY way to know, after the fact, which of the four
+    // completeSnapSync() call sites fired and whether the in-memory pivot/root already matched the persisted
+    // anchor at that moment — without this, the shipped logback.xml silenced every INFO/WARN line from this
+    // actor's real runtime class (SNAPSyncControllerImpl), leaving only the eventual A5 ERROR as evidence.
+    ctx.log.info(
+      "[SNAP-COMPLETE] phase={} pivot={} inMemoryRoot={} persistedRoot={}",
+      currentPhase,
+      pivotBlock.getOrElse("none"),
+      stateRoot.map(_.value.toHex.take(16)).getOrElse("none"),
+      appStateStorage.getSnapSyncStateRoot().map(_.toHex.take(16)).getOrElse("none")
+    )
     pivotBlock.map(finalizeSnapSync).getOrElse(Behaviors.same)
 
   /** Anchor the pivot, mark SNAP state done, and hand off to the parent. Always emits `SnapSyncFinalized(pivot)`. Emits

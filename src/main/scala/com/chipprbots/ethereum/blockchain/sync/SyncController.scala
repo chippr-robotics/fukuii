@@ -575,6 +575,21 @@ object SyncController:
             // spec 004 MUST-FIX: clear the healing serve-root latch on every exit from runningSnapSync. The new SNAP
             // actor started below gets a fresh latch, so the stale requester here must not linger.
             abortHealingServeRootRequest("SNAP healing impossible — restarting snap sync")
+            // Platåberget soak, 2026-09-27 (BUG-006/A5 stale-anchor investigation): intentionally NOT clearing
+            // SnapSyncPivotBlock/SnapSyncStateRoot here, only the two *Done flags. The fresh SNAPSyncController
+            // spawned by startSnapSync() below re-reads those two keys via its accounts-complete recovery path
+            // (SNAPSyncController.startSnapSync(), the `isSnapSyncAccountsComplete()` branch) and resumes
+            // bytecodes/storage/healing from them rather than re-downloading complete, content-addressed data.
+            // Clearing them would force that branch's `case _ => ... Clearing and restarting fresh` fallback —
+            // a full account/bytecode/storage re-download — which is the wrong trade for what was, before the
+            // anchorPivotBeforeLazyHandoff fix above, the actual root cause of every observed HealingImpossible:
+            // a self-inflicted stale anchor, not a genuinely bad one. That fix makes the anchor persisted here
+            // match the pivot finalizeSnapSync() just tried and failed to commit, so a *residual* HealingImpossible
+            // after this fix indicates a real anchor/header divergence — and the resumed instance already has an
+            // existing, independent safety net for that: the accounts-complete recovery branch's own
+            // networkBest/maxPivotStalenessBlocks drift check, and normal operation's all-peers-stateless
+            // escalation, both of which re-peg away from a stale/unservable root without discarding downloaded
+            // progress. Revisit only if a residual HealingImpossible is ever observed looping on the same pivot.
             appStateStorage.clearSnapSyncDone().commit()
             appStateStorage.clearFastSyncDone().commit()
             startSnapSync()
