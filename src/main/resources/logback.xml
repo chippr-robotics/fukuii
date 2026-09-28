@@ -141,6 +141,14 @@
     <logger name="com.chipprbots.ethereum.blockchain.sync.StorageRecoveryActor" level="INFO" />
     <logger name="com.chipprbots.ethereum.blockchain.sync.regular.RegularSync" level="INFO" />
     <logger name="com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController" level="INFO" />
+    <!-- The Typed migration renamed the actor's runtime class to SNAPSyncControllerImpl (SNAPSyncController.scala
+         is now a `private class SNAPSyncControllerImpl` behind an `object SNAPSyncController` factory); ctx.log
+         resolves to the Impl class name, which the entry above never matched, so every INFO/WARN line from this
+         actor was silently dropped to the package-level ERROR default (line ~224) and only its ERRORs survived
+         (Platåberget soak, 2026-09-27 — the only clue to which lazy-heal handoff fired was a single ERROR line).
+         Keep both entries: this one in case any companion-object-level logging is ever added under the
+         un-suffixed name. -->
+    <logger name="com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncControllerImpl" level="INFO" />
     <logger name="com.chipprbots.ethereum.blockchain.sync.AdaptiveSyncStrategy" level="INFO" />
     
     <!-- Genesis and checkpoint loading -->
