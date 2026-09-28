@@ -507,6 +507,23 @@ private class SNAPSyncControllerImpl(
   // reading is stable across a couple of poll ticks. Force-complete triggers the SAME existing
   // healing-recovery path either way (ForceCompleteStorage) — only the trigger latency changes.
   private val StorageRestartedEmptyThreshold: FiniteDuration = 60.seconds
+  // Platåberget soak v6 (2026-09-28): lastStorageProgressMs (below) resets on ANY
+  // ProgressStorageSlotsSynced message carrying >10 slots — but that resets on progress from ANY
+  // account, not necessarily the ones actually stuck. A handful of accounts retried indefinitely
+  // (the unbounded-verification-failure-retry livelock, since bounded in
+  // StorageRangeCoordinatorImpl's staleRootFailuresByAccount) can loop forever while OTHER,
+  // unrelated accounts keep completing and resetting this clock — soak evidence: completed crept
+  // from 67268 to 67616 (~15/min) while [STORAGE-STATE] sat at a fixed 99% for over 25 minutes,
+  // pending oscillating 1-33 without ever draining. That is real, if slow, throughput and legitimately
+  // resets lastStorageProgressMs — masking a stall the way it's currently defined.
+  //
+  // lastStorageRemainingWork/-CheckMs track a DIFFERENT signal: pending+active (the actual
+  // remaining-work count), sampled every stagnation tick (DownloadStagnationCheckInterval, 30s).
+  // The baseline only advances when remaining work is STRICTLY SMALLER than the last baseline —
+  // oscillation without ever going lower doesn't count as progress. Reuses StorageStagnationThreshold
+  // as its window rather than a new constant, per "build on the existing thresholds".
+  private var lastStorageRemainingWork: Int = Int.MaxValue
+  private var lastStorageRemainingWorkCheckMs: Long = System.currentTimeMillis()
   private val AccountStagnationThreshold: FiniteDuration = snapSyncConfig.accountStagnationTimeout
   private var lastStorageProgressMs: Long = System.currentTimeMillis()
   private var lastBytecodeProgressMs: Long = System.currentTimeMillis()
@@ -1831,18 +1848,40 @@ private class SNAPSyncControllerImpl(
           val now = System.currentTimeMillis()
           val stalledForMs = now - lastStorageProgressMs
 
+          // Progress-based signal, independent of the slot-count-based one above: has the amount of
+          // REMAINING work (pending+active) ever shrunk below its last-seen low point in the last
+          // StorageStagnationThreshold? A tail livelock — a few accounts retried forever while
+          // unrelated ones complete — shows up here even when lastStorageProgressMs keeps resetting.
+          val remainingWork = stats.tasksPending + stats.tasksActive
+          if remainingWork < lastStorageRemainingWork then
+            lastStorageRemainingWork = remainingWork
+            lastStorageRemainingWorkCheckMs = now
+          val remainingWorkStalledForMs = now - lastStorageRemainingWorkCheckMs
+          val progressStalled = remainingWorkStalledForMs >= StorageStagnationThreshold.toMillis
+
           if !storageStagnationRefreshAttempted then
-            // First stall: needs full threshold before triggering
-            if stalledForMs >= StorageStagnationThreshold.toMillis && now - lastPivotRestartMs >= MinPivotRestartInterval.toMillis
+            // First stall: needs full threshold before triggering, on EITHER signal.
+            if (stalledForMs >= StorageStagnationThreshold.toMillis || progressStalled) &&
+              now - lastPivotRestartMs >= MinPivotRestartInterval.toMillis
             then
               lastPivotRestartMs = now
               storageStagnationRefreshAttempted = true
+              val reason =
+                if progressStalled && stalledForMs < StorageStagnationThreshold.toMillis then
+                  s"remaining work (pending+active) has not shrunk below $lastStorageRemainingWork " +
+                    s"for ${remainingWorkStalledForMs / 1000}s despite ongoing slot progress " +
+                    s"(tail livelock signature)"
+                else s"no progress for ${stalledForMs / 1000}s"
               ctx.log.warn(
-                s"Storage sync stalled: no progress for ${stalledForMs / 1000}s " +
+                s"Storage sync stalled: $reason " +
                   s"(threshold=${StorageStagnationThreshold.toSeconds}s). Attempting pivot refresh."
               )
               lastStorageProgressMs = now
-              refreshPivotInPlace(s"storage stagnation: no progress for ${stalledForMs / 1000}s")
+              // Give the post-refresh remaining-work baseline a fresh start too, so a refresh that
+              // genuinely helps isn't immediately re-flagged by a stale pre-refresh low point.
+              lastStorageRemainingWork = remainingWork
+              lastStorageRemainingWorkCheckMs = now
+              refreshPivotInPlace(s"storage stagnation: $reason")
           else
             // Second stall after refresh: short grace period (2 min), then force-complete.
             // The pivot refresh either works quickly or not at all.

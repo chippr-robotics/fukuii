@@ -1211,6 +1211,78 @@ class SNAPSyncControllerSpec extends AnyFlatSpec with Matchers:
     (stalledForMs > StorageRestartedEmptyThresholdMs) shouldBe true
   }
 
+  // ── Progress-based storage stagnation (tail livelock) ─────────────────────────────────────────
+  //
+  // Platåberget soak v6, 2026-09-28: maybeRestartIfStorageStagnant's slot-count-based
+  // lastStorageProgressMs resets on ANY ProgressStorageSlotsSynced message carrying >10 slots — but
+  // that fires on progress from ANY account, not necessarily the stuck ones. A handful of accounts
+  // retried indefinitely (now bounded — see StorageRangeCoordinatorImpl's staleRootFailuresByAccount
+  // and its own tests) could loop forever while UNRELATED accounts kept completing and resetting
+  // this clock: completed crept from 67268 to 67616 (~15/min) while [STORAGE-STATE] sat at a fixed
+  // 99% for 25+ minutes, `pending` oscillating 1-33 without ever draining below its first-seen low.
+  //
+  // lastStorageRemainingWork/-CheckMs track a DIFFERENT signal: pending+active (remaining work),
+  // sampled every stagnation tick. The baseline only advances when remaining work is STRICTLY
+  // SMALLER than the last baseline; oscillating without ever going lower doesn't count as progress.
+  // SNAPSyncControllerImpl is file-private (see the StorageRestartedEmptyThreshold section above for
+  // why these tests replicate the predicate/state-machine rather than driving the actor directly).
+
+  "Storage progress-based stagnation (tail livelock)" should "not flag stagnation while remaining work keeps setting new, lower low-points" taggedAs UnitTest in {
+    val StorageStagnationThresholdMs: Long = 10 * 60 * 1000L
+    var lastStorageRemainingWork = Int.MaxValue
+    var lastCheckMs = 0L
+    val remainingWorkSamples = Seq(500, 400, 300, 200, 100, 50, 10, 0) // strictly shrinking every tick
+    var now = 0L
+    val tickMs = 60_000L
+    remainingWorkSamples.foreach { remainingWork =>
+      now += tickMs
+      if remainingWork < lastStorageRemainingWork then
+        lastStorageRemainingWork = remainingWork
+        lastCheckMs = now
+    }
+    val remainingWorkStalledForMs = now - lastCheckMs
+    lastStorageRemainingWork shouldBe 0
+    (remainingWorkStalledForMs >= StorageStagnationThresholdMs) shouldBe false
+  }
+
+  it should "flag stagnation once remaining work has not set a new low-point for the full stagnation window, even while oscillating" taggedAs UnitTest in {
+    val StorageStagnationThresholdMs: Long = 10 * 60 * 1000L
+    var lastStorageRemainingWork = Int.MaxValue
+    var lastCheckMs = 0L
+    // Mirrors the soak exactly: pending oscillates between 1 and the low-30s without ever going
+    // below its first-seen floor of 1.
+    val remainingWorkSamples = Seq(33, 1, 20, 1, 15, 1, 33, 1)
+    var now = 0L
+    val tickMs = 2 * 60 * 1000L // 8 ticks x 2min = 16 simulated minutes, past the 10-minute threshold
+    remainingWorkSamples.foreach { remainingWork =>
+      now += tickMs
+      if remainingWork < lastStorageRemainingWork then
+        lastStorageRemainingWork = remainingWork
+        lastCheckMs = now
+    }
+    val remainingWorkStalledForMs = now - lastCheckMs
+    // The low-point really is 1 (set on the second sample) — everything after oscillates but never
+    // sets a NEW, lower low-point, so the clock keeps counting from there.
+    lastStorageRemainingWork shouldBe 1
+    (remainingWorkStalledForMs >= StorageStagnationThresholdMs) shouldBe true
+  }
+
+  it should "not be defeated by unrelated slot-count progress resetting the OTHER (lastStorageProgressMs) signal" taggedAs UnitTest in {
+    // The two signals are independent and OR'd together in maybeRestartIfStorageStagnant: even
+    // when the slot-count-based clock keeps getting reset by unrelated accounts (so stalledForMs
+    // stays low), the remaining-work signal alone is sufficient to flag a tail livelock.
+    val StorageStagnationThresholdMs: Long = 10 * 60 * 1000L
+    val now: Long = 960_000L
+    val lastStorageProgressMs: Long = now - 5_000L // reset moments ago by an unrelated account
+    val stalledForMs = now - lastStorageProgressMs
+    val remainingWorkStalledForMs = now - 240_000L // matches the low-point set at t=240s above
+    val progressStalled = remainingWorkStalledForMs >= StorageStagnationThresholdMs
+
+    (stalledForMs >= StorageStagnationThresholdMs) shouldBe false // this signal alone says "fine"
+    progressStalled shouldBe true // but the remaining-work signal says "stalled"
+    (stalledForMs >= StorageStagnationThresholdMs || progressStalled) shouldBe true // OR catches it
+  }
+
   // ── pivotPassesFreshnessFloor — regression for the sepolia oscillation ────
   // refreshPivotInPlace used to take max(snapPeer.maxBlockNumber) verbatim.
   // When the only SNAP-capable peer in the pool was stuck behind (block
