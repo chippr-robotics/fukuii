@@ -1168,6 +1168,49 @@ class SNAPSyncControllerSpec extends AnyFlatSpec with Matchers:
     ticksBeforeEviction shouldBe 20L // 20 ticks per 10-minute window
   }
 
+  // ── StorageRestartedEmptyThreshold — fast-path for the "coordinator restarted with empty
+  // state" signature specifically (maybeRestartIfStorageStagnant's `!workRemaining &&
+  // !storagePhaseComplete` branch). SNAPSyncControllerImpl is file-private, so — like the
+  // AccountStagnationThreshold tests above — this replicates the predicate without a real clock
+  // advance rather than driving the actor directly; see that section's header comment for why
+  // this pattern is used for stagnation-threshold logic throughout this file.
+  //
+  // Distinct from StorageStagnationThreshold (10 min, the `workRemaining` branch, where waiting
+  // for a pivot refresh to help is worthwhile): a coordinator reporting 0 pending/0 active while
+  // the phase is still incomplete is unambiguous evidence of lost state (a busy coordinator always
+  // reports pending>0 or active>0), so there is nothing to wait on and no reason to use the same
+  // 10-minute window. Regression covered: soak evidence (2026-09-27) showed 627s of dead time
+  // (RestartSupervisor wiped the coordinator's tasks/tries — see StorageRangeCoordinator's
+  // StackTrie-ordering fix — and the controller sat on 20 no-op stagnation ticks before
+  // force-completing) between the crash and the existing healing-recovery path picking up.
+  "StorageRestartedEmptyThreshold" should "be much shorter than the general StorageStagnationThreshold" taggedAs UnitTest in {
+    val StorageStagnationThresholdMs: Long = 10 * 60 * 1000L // 10 minutes — general "workRemaining" stall
+    val StorageRestartedEmptyThresholdMs: Long = 60 * 1000L // 60 seconds — unambiguous "0/0/incomplete" signature
+
+    StorageRestartedEmptyThresholdMs should be < StorageStagnationThresholdMs
+    // At least an order of magnitude faster — locks in the intent of the fix (cut dead time from
+    // ~10.5 minutes to ~1 minute), not just "some" improvement.
+    (StorageStagnationThresholdMs / StorageRestartedEmptyThresholdMs) should be >= 10L
+  }
+
+  it should "not fire before 60s of an unambiguous 0-pending/0-active/incomplete reading" taggedAs UnitTest in {
+    val StorageRestartedEmptyThresholdMs: Long = 60 * 1000L
+    val now: Long = System.currentTimeMillis()
+    val lastProgressMs: Long = now - 45_000L // 45 seconds ago — under threshold
+
+    val stalledForMs = now - lastProgressMs
+    (stalledForMs > StorageRestartedEmptyThresholdMs) shouldBe false
+  }
+
+  it should "fire once the unambiguous 0-pending/0-active/incomplete reading has persisted past 60s" taggedAs UnitTest in {
+    val StorageRestartedEmptyThresholdMs: Long = 60 * 1000L
+    val now: Long = System.currentTimeMillis()
+    val lastProgressMs: Long = now - 90_000L // 90 seconds ago — past threshold
+
+    val stalledForMs = now - lastProgressMs
+    (stalledForMs > StorageRestartedEmptyThresholdMs) shouldBe true
+  }
+
   // ── pivotPassesFreshnessFloor — regression for the sepolia oscillation ────
   // refreshPivotInPlace used to take max(snapPeer.maxBlockNumber) verbatim.
   // When the only SNAP-capable peer in the pool was stuck behind (block

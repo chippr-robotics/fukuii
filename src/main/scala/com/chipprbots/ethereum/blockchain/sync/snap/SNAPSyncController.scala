@@ -495,6 +495,18 @@ private class SNAPSyncControllerImpl(
   private val DownloadStagnationCheckInterval: FiniteDuration = 30.seconds
   private val StorageStagnationThreshold: FiniteDuration =
     10.minutes // CFG-2: 20→10min; second stall force-completes after 30s anyway
+  // Distinct, much shorter threshold for the "coordinator reports 0 pending/0 active but never
+  // sent StorageRangeSyncComplete" signature specifically. That reading is unambiguous: it means
+  // the coordinator actor was restarted (RestartSupervisor wiping its in-memory tasks/tries — see
+  // StorageRangeCoordinatorImpl's StackTrie-ordering crash history) or otherwise lost its state,
+  // NOT that it is merely slow — a genuinely busy coordinator always reports pending>0 or
+  // active>0, and a stats-fetch timeout is already excluded separately (isTimeoutResponse resets
+  // the clock instead of falling through here). Waiting the full StorageStagnationThreshold in
+  // this specific case is pure dead time: there is no in-flight work for a pivot refresh or
+  // anything else to wait on, so nothing is gained by waiting longer than it takes to confirm the
+  // reading is stable across a couple of poll ticks. Force-complete triggers the SAME existing
+  // healing-recovery path either way (ForceCompleteStorage) — only the trigger latency changes.
+  private val StorageRestartedEmptyThreshold: FiniteDuration = 60.seconds
   private val AccountStagnationThreshold: FiniteDuration = snapSyncConfig.accountStagnationTimeout
   private var lastStorageProgressMs: Long = System.currentTimeMillis()
   private var lastBytecodeProgressMs: Long = System.currentTimeMillis()
@@ -1798,12 +1810,15 @@ private class SNAPSyncControllerImpl(
         val workRemaining = stats.tasksPending > 0 || stats.tasksActive > 0
 
         // Special case: coordinator reports 0 pending + 0 active but never sent StorageRangeSyncComplete.
-        // This means trie construction is stuck (accountsInTrieConstruction/pendingAccountSlots not empty).
-        // After the stagnation threshold, force-complete to unstick it.
+        // This means trie construction is stuck (accountsInTrieConstruction/pendingAccountSlots not empty),
+        // most likely because the coordinator actor restarted and lost its in-memory task state. Unlike
+        // the `workRemaining` branch below (where waiting first for a pivot refresh is worthwhile), this
+        // reading is unambiguous on its own — use the much shorter StorageRestartedEmptyThreshold so the
+        // existing force-complete/healing recovery fires in ~1 minute instead of ~10.
         if !workRemaining && !storagePhaseComplete then
           val now = System.currentTimeMillis()
           val stalledForMs = now - lastStorageProgressMs
-          if stalledForMs > StorageStagnationThreshold.toMillis then
+          if stalledForMs > StorageRestartedEmptyThreshold.toMillis then
             ctx.log.warn(
               s"Storage coordinator reports 0 pending/0 active but never sent StorageRangeSyncComplete " +
                 s"(stalled ${stalledForMs / 1000}s). Trie construction likely stuck. Force-completing."
