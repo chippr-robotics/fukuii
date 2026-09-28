@@ -3675,13 +3675,22 @@ private class SNAPSyncControllerImpl(
         // Target a root inside peers' serve window: networkBest − margin (≥1). recentRootTarget caps at 1.
         val serveTarget = SyncController.recentRootTarget(Seq(networkBest), HealingServeRootMarginBlocks)
         serveTarget.foreach { target =>
+          // Staleness clock — see SNAPSyncController.staleReferenceHead's doc (BUG-BC3): CL-anchored instead of
+          // networkBest-anchored under movingRootDeltaHeal on a PoS chain with a live CL hint; byte-identical
+          // (networkBest) for ETC/pre-merge and for the decoupledHealServeRoot serve-root path.
+          val staleClockNow: BigInt = SNAPSyncController.staleReferenceHead(
+            movingRootDeltaHeal = snapSyncConfig.movingRootDeltaHeal,
+            isPoSChain = isPoSChain,
+            clHeadNumber = clPivotHint.flatMap(_.knownHeader).map(_.number.value),
+            networkBest = networkBest
+          )
           // Refresh cadence (U1): a serve root is fetched at `networkBest − margin`, so it STARTS `margin` blocks
           // behind the head. We refresh only once it has drifted a FULL window further back — i.e. when it is
           // > 2×margin behind the current head — giving ~margin blocks of runway between the ~1s peer round-trips
           // (never per-block). An unset lastHealingServeRootBlock means the coordinator is still fetching against
           // the walk root (coupled), so engage immediately.
           val stale = lastHealingServeRootBlock match
-            case Some(lastBlock) => (networkBest - lastBlock) > (HealingServeRootMarginBlocks * 2)
+            case Some(lastBlock) => (staleClockNow - lastBlock) > (HealingServeRootMarginBlocks * 2)
             case None            => true
           if stale then
             if snapSyncConfig.movingRootDeltaHeal then
@@ -3689,15 +3698,22 @@ private class SNAPSyncControllerImpl(
               // canonical header (networkBest − margin), fetches it, and emits HealingPivotRefreshed via
               // completePivotRefreshWithStateRoot — moving completeness AND fetch (one root) while RETAINING every
               // persisted verified node and resetting verificationPassComplete so a fresh pruned descent gates
-              // completion against the new root. Record the block so the cadence (≤ once per window) matches the
-              // serve-root path; the actual root lands when the refresh settles.
-              lastHealingServeRootBlock = Some(target)
+              // completion against the new root. Record the block (in the SAME clock as `stale` compared it in)
+              // so the cadence (≤ once per window) matches the serve-root path; the actual root lands when the
+              // refresh settles.
+              lastHealingServeRootBlock = Some(staleClockNow)
               ctx.log.info(
-                s"[HEAL-REPEG] Heal root stale (networkBest=$networkBest, target=$target, " +
+                // clock is CL-anchored iff it differs from networkBest (see staleReferenceHead); both are logged
+                // so an operator can tell which source drove this check without guessing from the numbers alone.
+                s"[HEAL-REPEG] Heal root stale (clock=$staleClockNow, networkBest=$networkBest, target=$target, " +
                   s"margin=$HealingServeRootMarginBlocks, lastRepegBlock=${lastHealingServeRootBlock.getOrElse("none")}) " +
                   s"— re-pegging the single heal root via refreshPivotInPlace (spec 009 moving-root delta heal)."
               )
-              refreshPivotInPlace("spec009 moving-root re-peg: heal root stale")
+              // countsTowardHealBudget=false: this is a proactive "is there a fresher CL pivot" probe, not a
+              // report that the current root is unservable. See refreshPivotInPlace's handling for the full
+              // rationale (BUG-BC3). HealingAllPeersStateless — the GENUINE unservable-root signal — still calls
+              // refreshPivotInPlace with the default (true), so the budget stays intact for that case.
+              refreshPivotInPlace("spec009 moving-root re-peg: heal root stale", countsTowardHealBudget = false)
             else
               healingServeRootRequestInFlight = true
               ctx.log.info(
@@ -3854,7 +3870,7 @@ private class SNAPSyncControllerImpl(
     * Downloaded trie nodes are content-addressed (keyed by keccak256 hash), so ~99.9% remain valid across pivot
     * changes. Root mismatch (if any) is resolved during the healing phase.
     */
-  private def refreshPivotInPlace(reason: String): Unit =
+  private def refreshPivotInPlace(reason: String, countsTowardHealBudget: Boolean = true): Unit =
     ctx.log.info(s"Refreshing pivot in-place: $reason")
 
     // CL-anchored pivot selection for post-merge chains (geth's BeaconSync pattern).
@@ -3932,28 +3948,48 @@ private class SNAPSyncControllerImpl(
       // effects (currentPhase=Completed, syncController ! Done, child teardown) and discard the returned Behavior.
       // Outside healing or flag OFF: the unbounded 30s-retry stays byte-identical (SNAP peers are intermittent on ETC).
       if snapSyncConfig.movingRootDeltaHeal && currentPhase == StateHealing then
-        healRepegNoRootAttempts += 1
-        if healRepegNoRootAttempts >= MaxHealRepegNoRootAttempts then
-          ctx.log.warn(
-            s"[HEAL-REPEG] No servable root for $healRepegNoRootAttempts consecutive re-peg attempts (budget " +
-              s"$MaxHealRepegNoRootAttempts exhausted, ~${MaxHealRepegNoRootAttempts * 30}s). Taking the fail-safe " +
-              s"lazy-heal handoff (completeSnapSync) — missing nodes fetched on-demand via GetTrieNodes during block " +
-              s"execution; the anchor guard still gates finalization. NOT a false completion."
+        if !countsTowardHealBudget then
+          // Platåberget ePBS-devnet soak, 2026-09-27 (BUG-BC3): this is a PROACTIVE staleness check
+          // (maybeRequestHealingServeRoot's periodic "is there a fresher CL pivot yet" probe), not a report that
+          // the CURRENT heal root has become unservable — nothing told us peers can't serve it (that signal is
+          // HealingAllPeersStateless, which always calls this with the default countsTowardHealBudget=true).
+          // "No newer CL pivot yet" is the ordinary, expected outcome whenever the CL hasn't produced a fresher
+          // head since the last check — e.g. a Lighthouse CL that cannot advance while its EL reports SYNCING —
+          // and healing keeps progressing fine on the still-served current root throughout. Counting it here
+          // exhausted the budget in ~5 minutes (10 x 30s) while 3 peers were actively serving the root and
+          // healing was 88%->97% complete. Do not touch healRepegNoRootAttempts, and do not schedule the generic
+          // PivotBootstrapRetryKey/RetryPivotRefresh retry either: that timer always replays via
+          // refreshPivotInPlace("retry after bootstrap failure") — a different reason string with the DEFAULT
+          // countsTowardHealBudget=true — which would silently start counting on the very next tick and defeat
+          // this fix. maybeRequestHealingServeRoot's own staleness cadence (lastHealingServeRootBlock) already
+          // re-checks on its own schedule; no extra timer is needed.
+          ctx.log.info(
+            s"No newer pivot available yet ($reason) — continuing healing on the current root " +
+              s"(pivot=${pivotBlock.getOrElse("?")}). Not counted against the re-peg budget."
           )
-          timers.cancel(PivotBootstrapRetryKey)
-          healRepegNoRootAttempts = 0
-          // Platåberget soak, 2026-09-27: see anchorPivotBeforeLazyHandoff's doc (near completeSnapSync). This
-          // handoff fires after zero or more successful re-pegs that (correctly, per BUG-006) never persisted —
-          // anchor now, before the terminal handoff, so the A5 guard in finalizeSnapSync compares like-for-like.
-          anchorPivotBeforeLazyHandoff("HEAL-REPEG budget exhausted")
-          completeSnapSync()
         else
-          ctx.log.warn(
-            s"Cannot re-peg heal root: no suitable SNAP peers available (attempt " +
-              s"$healRepegNoRootAttempts/$MaxHealRepegNoRootAttempts). Scheduling retry in 30s."
-          )
-          timers.cancel(PivotBootstrapRetryKey)
-          timers.startSingleTimer(PivotBootstrapRetryKey, RetryPivotRefresh, 30.seconds)
+          healRepegNoRootAttempts += 1
+          if healRepegNoRootAttempts >= MaxHealRepegNoRootAttempts then
+            ctx.log.warn(
+              s"[HEAL-REPEG] No servable root for $healRepegNoRootAttempts consecutive re-peg attempts (budget " +
+                s"$MaxHealRepegNoRootAttempts exhausted, ~${MaxHealRepegNoRootAttempts * 30}s). Taking the fail-safe " +
+                s"lazy-heal handoff (completeSnapSync) — missing nodes fetched on-demand via GetTrieNodes during block " +
+                s"execution; the anchor guard still gates finalization. NOT a false completion."
+            )
+            timers.cancel(PivotBootstrapRetryKey)
+            healRepegNoRootAttempts = 0
+            // Platåberget soak, 2026-09-27: see anchorPivotBeforeLazyHandoff's doc (near completeSnapSync). This
+            // handoff fires after zero or more successful re-pegs that (correctly, per BUG-006) never persisted —
+            // anchor now, before the terminal handoff, so the A5 guard in finalizeSnapSync compares like-for-like.
+            anchorPivotBeforeLazyHandoff("HEAL-REPEG budget exhausted")
+            completeSnapSync()
+          else
+            ctx.log.warn(
+              s"Cannot re-peg heal root: no suitable SNAP peers available (attempt " +
+                s"$healRepegNoRootAttempts/$MaxHealRepegNoRootAttempts). Scheduling retry in 30s."
+            )
+            timers.cancel(PivotBootstrapRetryKey)
+            timers.startSingleTimer(PivotBootstrapRetryKey, RetryPivotRefresh, 30.seconds)
       else
         ctx.log.warn(
           "Cannot refresh pivot: no suitable SNAP peers available. Scheduling retry in 30s."
@@ -5118,6 +5154,34 @@ object SNAPSyncController:
       // Pre-merge / pre-CL-hint state: no authoritative tip to compare against. Preserve the
       // legacy "take whatever peer offers" behavior.
       Right(())
+
+  /** The reference head `maybeRequestHealingServeRoot` clocks its heal-root staleness check against.
+    *
+    * Platåberget ePBS-devnet soak, 2026-09-27 (BUG-BC3): under `movingRootDeltaHeal`, `refreshPivotInPlace`'s OWN
+    * re-peg decision is CL-anchored on a PoS chain (peer `maxBlockNumber` is unreliable post-merge — see
+    * `refreshPivotInPlace`'s own comment). Clocking the STALENESS check against peer-reported `networkBest` instead let
+    * a frozen CL head (a Lighthouse CL that cannot advance while its EL reports SYNCING) trigger repeated staleness
+    * checks purely because peers kept gossiping a climbing STATUS height, even though the CL head — the only thing that
+    * could ever produce a newer pivot on that path — was not moving. Each such check correctly found no newer CL pivot,
+    * but (pre-fix) that failure counted against the bounded re-peg budget anyway, exhausting it in ~5 minutes while
+    * healing progressed normally on serving peers.
+    *
+    * Using the CL head as the clock here means a stuck CL simply stops triggering checks in the first place, rather
+    * than triggering ever more of them — a root-cause fix layered on top of (and independent from) the
+    * `refreshPivotInPlace(reason, countsTowardHealBudget = false)` fix for this same call site, which stops a "no newer
+    * pivot yet" outcome from counting against the budget regardless of what triggered the check.
+    *
+    * Byte-identical for ETC/pre-merge (`isPoSChain = false`) and for the `decoupledHealServeRoot` (non-
+    * `movingRootDeltaHeal`) serve-root path, which by design tracks newest-SERVABLE rather than canonical head
+    * (CON-010) — both always fall through to `networkBest`.
+    */
+  private[snap] def staleReferenceHead(
+      movingRootDeltaHeal: Boolean,
+      isPoSChain: Boolean,
+      clHeadNumber: Option[BigInt],
+      networkBest: BigInt
+  ): BigInt =
+    if movingRootDeltaHeal && isPoSChain then clHeadNumber.getOrElse(networkBest) else networkBest
 
   def apply(
       blockchainReader: BlockchainReader,
