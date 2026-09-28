@@ -3698,10 +3698,15 @@ private class SNAPSyncControllerImpl(
               // canonical header (networkBest − margin), fetches it, and emits HealingPivotRefreshed via
               // completePivotRefreshWithStateRoot — moving completeness AND fetch (one root) while RETAINING every
               // persisted verified node and resetting verificationPassComplete so a fresh pruned descent gates
-              // completion against the new root. Record the block (in the SAME clock as `stale` compared it in)
-              // so the cadence (≤ once per window) matches the serve-root path; the actual root lands when the
-              // refresh settles.
-              lastHealingServeRootBlock = Some(staleClockNow)
+              // completion against the new root. Record the bookkeeping baseline via the SAME rule
+              // staleReferenceHead used to pick the clock (see lastHealingServeRootBlockToRecord's doc — BUG-BC3
+              // follow-up): non-CL-anchored checks (ETC/pre-merge, or PoS before a CL hint arrives) MUST keep
+              // recording `target`, byte-identical to base, or the effective re-trigger threshold silently
+              // doubles (networkBest must then drift > 2×margin instead of > margin, roughly doubling the
+              // interval between re-pegs on ETC mainnet); the actual root lands when the refresh settles.
+              lastHealingServeRootBlock = Some(
+                SNAPSyncController.lastHealingServeRootBlockToRecord(staleClockNow, networkBest, target)
+              )
               ctx.log.info(
                 // clock is CL-anchored iff it differs from networkBest (see staleReferenceHead); both are logged
                 // so an operator can tell which source drove this check without guessing from the numbers alone.
@@ -5182,6 +5187,38 @@ object SNAPSyncController:
       networkBest: BigInt
   ): BigInt =
     if movingRootDeltaHeal && isPoSChain then clHeadNumber.getOrElse(networkBest) else networkBest
+
+  /** The value `maybeRequestHealingServeRoot` records as `lastHealingServeRootBlock` after a stale-triggered re-peg —
+    * i.e. the bookkeeping baseline the NEXT staleness check is compared against.
+    *
+    * forge review follow-up on b8f0700f6 (BUG-BC3): the fix originally recorded `staleClockNow` (the value
+    * `staleReferenceHead` picked for the CURRENT check) unconditionally. That is correct when `staleClockNow` is the CL
+    * head (`staleClockNow != networkBest`) — see below. But whenever `staleReferenceHead` fell through to `networkBest`
+    * (ETC/pre-merge, or a PoS chain before its first CL hint arrives — `staleClockNow == networkBest` in both), it
+    * silently replaced base's `target` (`networkBest − margin`, `recentRootTarget`) with the larger `networkBest`
+    * itself. Since `stale` is `(clockNow − lastBlock) > 2×margin`, recording `target` instead of `networkBest` is what
+    * makes the EFFECTIVE re-trigger threshold "`networkBest` has advanced by more than 1×margin since the last fire"
+    * (the `−margin` already baked into `target` cancels one of the two margins in the comparison) rather than 2×margin
+    * — recording `networkBest` instead silently DOUBLES the required advance (and so roughly doubles the wall-clock
+    * interval between re-pegs: on ETC mainnet, `moving-root-delta-heal = true` ships as the default with no ETC
+    * override, so this was a real, not merely theoretical, behavior change — from ~64 to ~128 blocks between checks,
+    * ~14 to ~28 minutes, approaching peers' ~128-block serve window). Recording `target` there instead is
+    * BYTE-IDENTICAL to base.
+    *
+    * Recording the raw CL head (not a `−margin`-shifted value) for the CL-anchored case is intentional, not an
+    * oversight to mirror: `target`'s `−margin` shift was calibrated specifically for the peer-reported-best/
+    * serve-window cadence (see `maybeRequestHealingServeRoot`'s "Refresh cadence (U1)" comment). The CL-anchored check
+    * exists for a different reason — avoiding spurious re-triggers while the CL head is not advancing at all (BUG-BC3)
+    * — for which "the CL head has advanced by more than 2×margin since the last check" is already a direct,
+    * self-justifying threshold; borrowing the peer-cadence's margin-shift would only make the CL path harder to reason
+    * about for no corresponding benefit.
+    */
+  private[snap] def lastHealingServeRootBlockToRecord(
+      staleClockNow: BigInt,
+      networkBest: BigInt,
+      target: BigInt
+  ): BigInt =
+    if staleClockNow == networkBest then target else staleClockNow
 
   def apply(
       blockchainReader: BlockchainReader,
