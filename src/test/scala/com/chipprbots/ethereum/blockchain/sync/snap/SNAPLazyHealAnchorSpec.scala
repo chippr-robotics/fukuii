@@ -107,39 +107,10 @@ class SNAPLazyHealAnchorSpec extends ScalaTestWithActorTestKit() with AnyFlatSpe
 
       // Two successful in-place re-pegs during StateHealing (pivot0 -> pivot1 -> pivot2). Per BUG-006, neither
       // persists — AppStateStorage's SnapSyncPivotBlock/SnapSyncStateRoot stay at pivot0/root0 while in-memory
-      // pivotBlock/stateRoot advance to pivot2/root2.
-      //
-      // Synchronization: the classic-actor peer-poll reply crosses a messageAdapter hop (a DIFFERENT sender than
-      // the test thread) before it lands in the controller's mailbox, so "the TestProbe answered the poll"
-      // (pollWith's own guarantee) does NOT imply "the controller has processed the updated peer set yet", and a
-      // send immediately following it can race ahead of that reply. GetProgress is processed in strict mailbox
-      // order relative to anything the TEST THREAD sent earlier (Pekko's same-sender FIFO guarantee), so
-      // round-tripping it acts as a barrier: awaiting its reply proves every send the test made before it has
-      // already been handled. It does not, by itself, order the adapter-hop reply — awaitProcessed() is called
-      // twice after each poll to give that reply two round-trips' worth of opportunity to land first; the
-      // eventually wrapper around the whole thing is the safety net if a CI machine is slow enough that two isn't
-      // enough. updateBestBlockForPivot() persists AppStateStorage's best-block number on EVERY successful re-peg
-      // UNCONDITIONALLY (unlike SnapSyncPivotBlock/SnapSyncStateRoot, it is not gated by the BUG-006 StateHealing
-      // guard), so it is a fix-independent, externally observable signal that a specific re-peg landed.
-      val progressProbe = testKit.createTestProbe[SyncProgress]()
-      def awaitProcessed(): Unit =
-        snap ! SNAPSyncController.GetProgress(progressProbe.ref)
-        progressProbe.receiveMessage(5.seconds)
-        ()
-
-      def repegUntil(targetHeight: Long, targetPivot: BigInt): Unit =
-        peers.set(peersAt(height = targetHeight.toInt, snap = true))
-        eventually {
-          snap ! SNAPSyncController.PollHandshakedPeers
-          awaitProcessed()
-          awaitProcessed()
-          snap ! SNAPSyncController.HealingAllPeersStateless
-          awaitProcessed()
-          appStateStorage.getBestBlockNumber() shouldBe targetPivot
-        }
-
-      repegUntil((pivot1 + PivotOffset).toLong, pivot1)
-      repegUntil((pivot2 + PivotOffset).toLong, pivot2)
+      // pivotBlock/stateRoot advance to pivot2/root2. See Fixture.repegUntil's doc for the synchronization
+      // rationale (GetProgress as a mailbox barrier, updateBestBlockForPivot as the fix-independent observable).
+      repegUntil(snap, (pivot1 + PivotOffset).toLong, pivot1)
+      repegUntil(snap, (pivot2 + PivotOffset).toLong, pivot2)
 
       // Exhaust the no-servable-root re-peg budget: with no peers, refreshPivotInPlace always resolves
       // newPivotOpt = None, so MaxHealRepegNoRootAttempts consecutive attempts trigger the lazy handoff. Each
@@ -147,12 +118,12 @@ class SNAPLazyHealAnchorSpec extends ScalaTestWithActorTestKit() with AnyFlatSpe
       // against its latest peer view — no flood of concurrent polls that could reorder relative to each other.
       peers.set(Map.empty)
       snap ! SNAPSyncController.PollHandshakedPeers
-      awaitProcessed()
-      awaitProcessed()
+      awaitProcessed(snap)
+      awaitProcessed(snap)
 
       (1 to MaxHealRepegNoRootAttempts).foreach { _ =>
         snap ! SNAPSyncController.HealingAllPeersStateless
-        awaitProcessed()
+        awaitProcessed(snap)
       }
 
       // Before the fix: finalizeSnapSync's A5 guard compares persisted root0 against pivot2's real header
@@ -198,6 +169,58 @@ class SNAPLazyHealAnchorSpec extends ScalaTestWithActorTestKit() with AnyFlatSpe
           FishingOutcomes.fail(s"A5 guard should have aborted on a genuine root divergence, but finalized: $f")
         case _ => FishingOutcomes.continueAndIgnore
       }
+
+  // forge review follow-up: HealingRootUnservable (~1443/1451) shares anchorPivotBeforeLazyHandoff with the
+  // HEAL-REPEG budget-exhaustion site above, but had no direct coverage. HealingRootUnservable is a public case
+  // class and its handler only guards on `currentPhase == StateHealing` (not movingRootDeltaHeal), so — unlike
+  // trying to make the real TrieNodeHealingCoordinator emit it under the flag — the test can just send it
+  // directly, exactly as HealingAllPeersStateless already is above.
+  it should
+    "anchor SnapSyncPivotBlock/SnapSyncStateRoot to the LAST re-pegged pivot before the HealingRootUnservable " +
+    "lazy handoff, instead of aborting on the pre-healing anchor" taggedAs UnitTest in new Fixture:
+      val pivot0 = BigInt(10_000)
+      val root0 = fakeRoot(0x44)
+      val pivot1 = BigInt(10_736)
+      val root1 = fakeRoot(0x55)
+      val pivot2 = BigInt(11_536)
+      val root2 = fakeRoot(0x66)
+
+      storeGenesis()
+      storeHeaderAt(pivot0, root0)
+      storeHeaderAt(pivot1, root1)
+      storeHeaderAt(pivot2, root2)
+      seedResumeState(pivot0, root0)
+
+      peers.set(Map.empty)
+      val snap = spawnController(SNAPSyncConfig(deferredMerkleization = false, movingRootDeltaHeal = true))
+      awaitFirstPoll()
+      snap ! SNAPSyncController.Start
+
+      // Two successful in-place re-pegs during StateHealing, same as the HEAL-REPEG test above.
+      repegUntil(snap, (pivot1 + PivotOffset).toLong, pivot1)
+      repegUntil(snap, (pivot2 + PivotOffset).toLong, pivot2)
+
+      // Send the coordinator's absent-root signal directly for the CURRENT (pivot2) root — this is the 1443
+      // handoff. The value carried on the message is only used for logging in the handler; the anchor decision
+      // reads the controller's OWN in-memory pivotBlock/stateRoot, not this field.
+      snap ! SNAPSyncController.HealingRootUnservable(root2)
+      awaitProcessed(snap)
+
+      // Before the fix: finalizeSnapSync's A5 guard compares persisted root0 against pivot2's real header
+      // (root2) and aborts with HealingImpossible. After the fix: anchorPivotBeforeLazyHandoff persists
+      // pivot2/root2 first, so A5 sees a match and finalization succeeds.
+      parent.fishForMessage(10.seconds) {
+        case SNAPSyncController.SnapSyncFinalized(p) if p == pivot2 => FishingOutcomes.complete
+        case SyncProtocol.HealingImpossible =>
+          FishingOutcomes.fail(
+            "SNAP finalization aborted (HealingImpossible) — the persisted anchor was not re-pegged before the " +
+              "HealingRootUnservable lazy handoff"
+          )
+        case _ => FishingOutcomes.continueAndIgnore
+      }
+
+      appStateStorage.getSnapSyncPivotBlock() shouldBe Some(pivot2)
+      appStateStorage.getSnapSyncStateRoot() shouldBe Some(root2)
 
   class Fixture extends EphemBlockchainTestSetup with TestSyncConfig:
     implicit override lazy val classicSystem: ActorSystem = SNAPLazyHealAnchorSpec.this.system.classicSystem
@@ -280,6 +303,37 @@ class SNAPLazyHealAnchorSpec extends ScalaTestWithActorTestKit() with AnyFlatSpe
 
     /** Wait for `start()`'s immediate peer poll to be answered. */
     def awaitFirstPoll(): Unit = eventually(pollsAnswered.get() should be >= 1)
+
+    private val progressProbe = testKit.createTestProbe[SyncProgress]()
+
+    /** Barrier: GetProgress is processed in strict mailbox order relative to anything the TEST THREAD sent earlier
+      * (Pekko's same-sender FIFO guarantee), so round-tripping it proves every send the test made before it has already
+      * been handled by `snap`. It does NOT, by itself, order a reply crossing a DIFFERENT sender (e.g. the
+      * classic-actor peer-poll reply, which hops through a messageAdapter) — callers that depend on that ordering call
+      * this twice to give such a reply two round-trips' worth of opportunity to land first.
+      */
+    def awaitProcessed(snap: TypedActorRef[SNAPSyncController.Command]): Unit =
+      snap ! SNAPSyncController.GetProgress(progressProbe.ref)
+      progressProbe.receiveMessage(5.seconds)
+      ()
+
+    /** Poll `peers` at `targetHeight`, then retry (poll + a HealingAllPeersStateless re-peg attempt, each drained via
+      * awaitProcessed) until the re-peg has actually landed. `updateBestBlockForPivot()` persists AppStateStorage's
+      * best-block number on EVERY successful re-peg UNCONDITIONALLY (unlike SnapSyncPivotBlock/SnapSyncStateRoot, it is
+      * not gated by the BUG-006 StateHealing guard), so it is a fix-independent, externally observable signal that a
+      * specific re-peg landed. The outer `eventually` is the safety net for a CI machine slow enough that the two
+      * awaitProcessed() barriers in a row aren't enough.
+      */
+    def repegUntil(snap: TypedActorRef[SNAPSyncController.Command], targetHeight: Long, targetPivot: BigInt): Unit =
+      peers.set(peersAt(height = targetHeight.toInt, snap = true))
+      eventually {
+        snap ! SNAPSyncController.PollHandshakedPeers
+        awaitProcessed(snap)
+        awaitProcessed(snap)
+        snap ! SNAPSyncController.HealingAllPeersStateless
+        awaitProcessed(snap)
+        appStateStorage.getBestBlockNumber() shouldBe targetPivot
+      }
 
     def peersAt(height: Int, snap: Boolean): Map[Peer, PeerInfo] =
       val status = RemoteStatus(
