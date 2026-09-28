@@ -125,6 +125,39 @@ class SNAPLazyHealAnchorSpec extends ScalaTestWithActorTestKit() with AnyFlatSpe
     ) shouldBe BigInt(284670)
   }
 
+  // forge review follow-up on b8f0700f6 (BUG-BC3): pins the lastHealingServeRootBlock bookkeeping choice — the
+  // value RECORDED after a stale-triggered re-peg, as distinct from staleReferenceHead (the value COMPARED
+  // against). Getting this wrong on ETC (moving-root-delta-heal ships true by default, base/sync.conf, no ETC
+  // override) silently doubled the effective networkBest-advance threshold between re-pegs (~64 -> ~128 blocks,
+  // ~14 -> ~28 min), approaching peers' serve window — see lastHealingServeRootBlockToRecord's doc for the full
+  // arithmetic. These pin BOTH branches directly and deterministically, without needing an actor at all.
+  "SNAPSyncController.lastHealingServeRootBlockToRecord" should
+    "record target (networkBest - margin), NOT networkBest, on a non-CL-anchored check (ETC/pre-merge, or PoS " +
+    "before a CL hint arrives) — byte-identical to base" taggedAs UnitTest in {
+      val networkBest = BigInt(284670)
+      val margin = BigInt(64)
+      val target = networkBest - margin // what recentRootTarget would have produced
+      // staleClockNow == networkBest is exactly what staleReferenceHead returns whenever it did NOT switch to
+      // the CL head (isPoSChain = false, or no CL hint yet) — see its own tests above.
+      SNAPSyncController.lastHealingServeRootBlockToRecord(
+        staleClockNow = networkBest,
+        networkBest = networkBest,
+        target = target
+      ) shouldBe target
+    }
+
+  it should
+    "record the CL head (staleClockNow) directly, NOT target, when the check WAS CL-anchored" taggedAs UnitTest in {
+      val networkBest = BigInt(284670)
+      val clHead = BigInt(284598) // staleReferenceHead's output when it switched to the CL head
+      val target = networkBest - BigInt(64)
+      SNAPSyncController.lastHealingServeRootBlockToRecord(
+        staleClockNow = clHead,
+        networkBest = networkBest,
+        target = target
+      ) shouldBe clHead
+    }
+
   "SNAPSyncController" should
     "anchor SnapSyncPivotBlock/SnapSyncStateRoot to the LAST re-pegged pivot before the HEAL-REPEG " +
     "budget-exhaustion lazy handoff, instead of aborting on the pre-healing anchor" taggedAs UnitTest in new Fixture:
