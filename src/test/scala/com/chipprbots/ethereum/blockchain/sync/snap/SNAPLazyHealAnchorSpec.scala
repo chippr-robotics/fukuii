@@ -158,6 +158,28 @@ class SNAPLazyHealAnchorSpec extends ScalaTestWithActorTestKit() with AnyFlatSpe
       ) shouldBe clHead
     }
 
+  // coordinator follow-up (3rd round), BUG-BC3 2nd follow-up: pins clPivotNotYetAdvanced using the EXACT
+  // Platåberget soak incident numbers (01:30:19.996 log line: "CL-based pivot 285486 not strictly newer than
+  // current 285486 (CL head=285550, offset=64). Skipping refresh."), plus the companion "CL genuinely advanced"
+  // case. See clPivotNotYetAdvanced's doc for why explicit parameters (rather than a live isPoSChain=true actor)
+  // are how this module's test suite can exercise the CL-anchored branch's decision at all.
+  "SNAPSyncController.clPivotNotYetAdvanced" should
+    "be true for the exact stalled-CL incident numbers (CL head=285550, offset=64, current pivot=285486)" taggedAs UnitTest in {
+      SNAPSyncController.clPivotNotYetAdvanced(
+        clHead = BigInt(285550),
+        pivotBlockOffset = 64,
+        currentPivot = BigInt(285486)
+      ) shouldBe true // target (285486) == currentPivot (285486): not STRICTLY newer
+    }
+
+  it should "be false once the CL head has advanced enough to produce a strictly newer target" taggedAs UnitTest in {
+    SNAPSyncController.clPivotNotYetAdvanced(
+      clHead = BigInt(285551), // one block further than the stalled incident value
+      pivotBlockOffset = 64,
+      currentPivot = BigInt(285486)
+    ) shouldBe false // target (285487) > currentPivot (285486): strictly newer
+  }
+
   // forge review follow-up (2nd round): the two lastHealingServeRootBlockToRecord unit tests above pin the
   // HELPER's own logic but not the CALL SITE's wiring to it — reverting the call site to the pre-fix
   // `Some(staleClockNow)` left them green, since they invoke the (still-correct) helper directly. This drives
@@ -409,6 +431,44 @@ class SNAPLazyHealAnchorSpec extends ScalaTestWithActorTestKit() with AnyFlatSpe
       awaitProcessed(snap)
       (1 to MaxHealRepegNoRootAttempts).foreach { _ =>
         snap ! SNAPSyncController.HealingAllPeersStateless
+        awaitProcessed(snap)
+      }
+
+      parent.fishForMessage(10.seconds) {
+        case SNAPSyncController.SnapSyncFinalized(p) if p == pivot0 => FishingOutcomes.complete
+        case SyncProtocol.HealingImpossible =>
+          FishingOutcomes.fail(
+            "SNAP finalization aborted (HealingImpossible) — unexpected, since pivot/root never moved in this test"
+          )
+        case _ => FishingOutcomes.continueAndIgnore
+      }
+
+  // coordinator follow-up (3rd round), BUG-BC3 2nd follow-up: regression guard for the SAME code path
+  // emptyBecauseClNotAdvanced now gates — the RetryPivotRefresh/PivotBootstrapRetryKey generic retry timer,
+  // rather than the direct HealingAllPeersStateless signal already covered above. Sends RetryPivotRefresh
+  // directly (private[snap], the same message the 30s timer replays) with peers genuinely empty throughout, so
+  // every attempt resolves via the peer-fallback branch (emptyBecauseClNotAdvanced always false there — never
+  // reaches the CL-anchored branch this ticket's fix targets) and MUST still count and hand off. This is the
+  // regression risk directly created by this round's fix: proving emptyBecauseClNotAdvanced does NOT also
+  // suppress counting for the retry timer's OTHER (genuinely-no-peer) failure mode, only the CL-stalled one
+  // clPivotNotYetAdvanced's tests pin (isPoSChain=false throughout this suite, so that branch cannot be driven
+  // live here — see its doc for why the pure-function tests are this ticket's evidence for that specific claim).
+  it should
+    "still exhaust the budget and hand off when the GENERIC retry timer (RetryPivotRefresh), not " +
+    "HealingAllPeersStateless, repeatedly finds genuinely no peer during StateHealing" taggedAs UnitTest in new Fixture:
+      val pivot0 = BigInt(2_000)
+      val root0 = fakeRoot(0xDD)
+      storeGenesis()
+      storeHeaderAt(pivot0, root0)
+      seedResumeState(pivot0, root0)
+
+      peers.set(Map.empty)
+      val snap = spawnController(SNAPSyncConfig(deferredMerkleization = false, movingRootDeltaHeal = true))
+      awaitFirstPoll()
+      snap ! SNAPSyncController.Start
+
+      (1 to MaxHealRepegNoRootAttempts).foreach { _ =>
+        snap ! SNAPSyncController.RetryPivotRefresh
         awaitProcessed(snap)
       }
 
