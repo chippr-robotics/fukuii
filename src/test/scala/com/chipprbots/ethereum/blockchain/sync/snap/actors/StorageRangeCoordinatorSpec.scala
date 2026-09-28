@@ -1384,3 +1384,148 @@ class StorageRangeCoordinatorSpec extends ScalaTestWithActorTestKit() with AnyFl
     impl.tasks.size shouldBe tasksBefore + 1
     impl.tasks.exists(t => t.accountHash == accountHash && t.next == chunk1.next) shouldBe true
   }
+
+  // ── forge review follow-up: bounded verification-failure retry (soak v6 tail livelock) ────────
+  //
+  // Platåberget soak v6, 2026-09-28: an account whose account-range record was fetched at an OLDER
+  // pivot carries a stale `storageRoot` no peer can ever satisfy. Before this guard,
+  // processServedTasks's verification-failure branch re-queued such a task unconditionally,
+  // forever: soak evidence showed ~1245 identical batched responses over 25+ minutes, the same
+  // handful of accounts re-failing every cycle with "complete-range hash mismatch" while `pending`
+  // oscillated 1-33 without ever draining — a livelock in the storage phase's tail, invisible to
+  // the (slot-count-based) stagnation watchdog because unrelated accounts kept completing and
+  // resetting its clock. These tests drive `processServedTasks` directly (widened to
+  // `private[actors]`) rather than through the full dispatch/response cycle, since what's under
+  // test is the verification-failure branch's bookkeeping, not request/response correlation;
+  // `activeTasks` is cleared after each call to mirror the production invariant that
+  // `handleResponse` always removes its entry before `processServedTasks` runs.
+
+  private def computeCompleteRangeRoot(slots: Seq[(ByteString, ByteString)]): ByteString =
+    val t = new SnapHashTrie(_ => ())
+    slots.foreach { case (k, v) => t.update(k.toArray, v.toArray) }
+    t.commit()
+
+  it should "drop an account to healing after maxStaleRootFailuresPerAccount consecutive complete-range verification failures spanning 2+ peers, and let the storage phase complete" taggedAs UnitTest in {
+    val stateRoot = kec256(ByteString("kcap-state-root"))
+    val snapSyncController = testKit.createTestProbe[SNAPSyncController.Command]()
+    val (impl, kit) = newImpl(
+      stateRoot = stateRoot,
+      flatSlotStorage = new FlatSlotStorage(EphemDataSource()),
+      snapSyncControllerRef = snapSyncController.ref,
+      deferredMerkleization = true
+    )
+
+    val peerA = PeerTestHelpers.createTestPeer("kcap-peer-a", testKit.createTestProbe[Any]().ref.toClassic)
+    val peerB = PeerTestHelpers.createTestPeer("kcap-peer-b", testKit.createTestProbe[Any]().ref.toClassic)
+
+    val badAccountHash = kec256(ByteString("kcap-bad-account"))
+    // Deliberately WRONG storageRoot: no slot data can ever produce a matching complete-range hash
+    // — simulates an account record fetched at an older pivot whose real storage root has moved.
+    val badStorageRoot = kec256(ByteString("kcap-bad-storage-root-stale"))
+    val badTask = StorageTask.createStorageTask(badAccountHash, badStorageRoot)
+    val badSlots = Seq(slotKey(0x10) -> ByteString("bad-value"))
+
+    // processServedTasks unconditionally pipelines more work to the responding peer at its end
+    // (dispatchIfPossible) — a just-re-queued retry can be immediately picked back up from `tasks`
+    // into `activeTasks` before this helper returns. Clearing BOTH after every call keeps each
+    // attempt self-contained (mirrors production: handleResponse always removes its activeTasks
+    // entry before processServedTasks runs) without caring which of the two queues a retry
+    // transiently landed in.
+    def feedBadAttempt(peer: com.chipprbots.ethereum.network.Peer, reqId: Int): Unit =
+      impl.processServedTasks(
+        peer,
+        Seq(badTask),
+        BigInt(1024),
+        StorageRanges(requestId = reqId, slots = Seq(badSlots), proof = Seq.empty),
+        servedCount = 1
+      )
+      impl.tasks.clear()
+      impl.activeTasks.clear()
+
+    // Attempts 1-2: below K=3 — retried each time, not yet given up on.
+    feedBadAttempt(peerA, 1)
+    impl.staleRootFailuresByAccount(badAccountHash) should have size 1
+
+    feedBadAttempt(peerB, 2)
+    impl.staleRootFailuresByAccount(badAccountHash) should have size 2
+
+    // Attempt 3: failures.size=3 >= K=3 AND distinctPeers=2 >= 2 -> give up, hand off to healing —
+    // exactly the same "mark done, discard partial trie, do not re-queue" pattern
+    // handleEmptyResponse already uses.
+    feedBadAttempt(peerA, 3)
+    impl.staleRootFailuresByAccount.get(badAccountHash) shouldBe None // cleared on give-up
+    impl.pendingAccountTries.get(badAccountHash) shouldBe empty
+    // Unlike attempts 1-2, a give-up must NOT re-queue: `tasks`/`activeTasks` were already cleared
+    // by the helper above, so their emptiness here would be trivial — the meaningful proof that
+    // nothing was re-queued is `staleRootFailuresByAccount` being gone (a give-up removes it; a
+    // retry would have left it present, as attempts 1-2 show) combined with completion succeeding
+    // below without this account ever answering again.
+
+    // A second, healthy account completes normally in the same phase.
+    val goodAccountHash = kec256(ByteString("kcap-good-account"))
+    val goodSlots = Seq(slotKey(0x20) -> ByteString("good-value"))
+    val goodStorageRoot = computeCompleteRangeRoot(goodSlots)
+    val goodTask = StorageTask.createStorageTask(goodAccountHash, goodStorageRoot)
+    impl.processServedTasks(
+      peerA,
+      Seq(goodTask),
+      BigInt(1024),
+      StorageRanges(requestId = 4, slots = Seq(goodSlots), proof = Seq.empty),
+      servedCount = 1
+    )
+    impl.tasks.clear()
+    impl.activeTasks.clear()
+    // The good account's successful insertion sends its own progress message first.
+    snapSyncController.expectMessageType[SNAPSyncController.ProgressStorageSlotsSynced]
+
+    // Both accounts are resolved (one via healing hand-off, one normally) — the phase completes.
+    kit.run(StorageRangeCoordinator.NoMoreStorageTasks)
+    drainSelf(kit) // NoMoreStorageTasks may itself trigger the flat-batch flush + FlatBatchFlushComplete
+    kit.run(StorageRangeCoordinator.StorageCheckCompletion)
+    drainSelf(kit)
+    snapSyncController.expectMessage(SNAPSyncController.StorageRangeSyncComplete)
+  }
+
+  it should "NOT drop an account that fails complete-range verification once and then succeeds" taggedAs UnitTest in {
+    val stateRoot = kec256(ByteString("kcap-recovers-state-root"))
+    val (impl, _) = newImpl(
+      stateRoot = stateRoot,
+      flatSlotStorage = new FlatSlotStorage(EphemDataSource()),
+      snapSyncControllerRef = testKit.createTestProbe[SNAPSyncController.Command]().ref,
+      deferredMerkleization = true
+    )
+    val peerA = PeerTestHelpers.createTestPeer("kcap-recovers-peer-a", testKit.createTestProbe[Any]().ref.toClassic)
+
+    val accountHash = kec256(ByteString("kcap-recovers-account"))
+    val slots = Seq(slotKey(0x30) -> ByteString("eventual-value"))
+    val realStorageRoot = computeCompleteRangeRoot(slots)
+    // The FIRST attempt's response uses the wrong root (transient corruption / a peer momentarily
+    // out of sync) — the second, with the correct root, succeeds.
+    val wrongStorageRoot = kec256(ByteString("kcap-recovers-wrong-root"))
+
+    val taskWithWrongRoot = StorageTask.createStorageTask(accountHash, wrongStorageRoot)
+    impl.processServedTasks(
+      peerA,
+      Seq(taskWithWrongRoot),
+      BigInt(1024),
+      StorageRanges(requestId = 1, slots = Seq(slots), proof = Seq.empty),
+      servedCount = 1
+    )
+    impl.staleRootFailuresByAccount(accountHash) should have size 1
+    impl.activeTasks.clear()
+    impl.tasks.clear()
+
+    // Second attempt: correct root this time (e.g. the account record was refreshed) — succeeds.
+    val taskWithRealRoot = StorageTask.createStorageTask(accountHash, realStorageRoot)
+    impl.processServedTasks(
+      peerA,
+      Seq(taskWithRealRoot),
+      BigInt(1024),
+      StorageRanges(requestId = 2, slots = Seq(slots), proof = Seq.empty),
+      servedCount = 1
+    )
+
+    // Success clears the failure history — this account is NOT on a path to being dropped.
+    impl.staleRootFailuresByAccount.get(accountHash) shouldBe None
+    impl.completedAccountCount shouldBe 1L
+  }
