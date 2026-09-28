@@ -463,14 +463,13 @@ object PeerActor:
       * `context.self` ref. If the underlying TCP link merely drops (a transient blip, not a bad peer), we must STOP
       * rather than self-reconnect:
       *
-      * Root cause (2026-09-27 dup-burst soak, peer 029bd467): this used to call `handleTerminated(rlpxConnection, 0)`,
-      * which — since 0 < connectMaxRetries — scheduled a reconnect on this SAME actor (`scheduleConnectRetry`).
-      * ~`connectRetryDelay` later the SAME actor completed a fresh handshake and published a SECOND
-      * `PeerHandshakeSuccessful` with the same `ref`. But PeerManagerActor's `connectedPeers` still held the OLD
-      * (stale) handshaked entry for this ref — the actor never stopped, so no `Terminated` ever fired to remove it.
-      * `hasHandshakedWith(nodeId)` was therefore true, so PeerManagerActor treated the actor's own fresh handshake as a
-      * duplicate and sent `DisconnectPeer(AlreadyConnected)` back to it — disconnecting a perfectly good peer ~30s
-      * (retry delay + disconnectPoisonPillTimeout) after a transient TCP drop.
+      * Previously this called `handleTerminated(rlpxConnection, 0)`, which — since 0 < connectMaxRetries — scheduled a
+      * reconnect on this SAME actor (`scheduleConnectRetry`). ~`connectRetryDelay` later the SAME actor completed a
+      * fresh handshake and published a SECOND `PeerHandshakeSuccessful` with the same `ref`. But PeerManagerActor's
+      * `connectedPeers` still held the OLD (stale) handshaked entry for this ref — the actor never stopped, so no
+      * `Terminated` ever fired to remove it. `hasHandshakedWith(nodeId)` was therefore true, so PeerManagerActor
+      * treated the actor's own fresh handshake as a duplicate and sent `DisconnectPeer(AlreadyConnected)` back to it —
+      * disconnecting a perfectly good peer ~30s (retry delay + disconnectPoisonPillTimeout) after a transient TCP drop.
       *
       * Stopping immediately instead lets PeerManagerActor's own death-watch (`PeerTerminated`) remove the stale entry
       * and publish `PeerDisconnected` right away. Maintained peers are still re-dialed — but by PeerManagerActor

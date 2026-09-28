@@ -793,14 +793,13 @@ object PeerManagerActor:
         // Defense in depth (see PeerActor.handleHandshakedTerminated for the root-cause fix): if the
         // already-connected entry for this nodeId IS this very actor (identical ref), it is
         // re-publishing its own handshake success, not a genuine second connection. This is
-        // unreachable now that a HANDSHAKED PeerActor stops instead of self-reconnecting — the
-        // duplicate-with-same-ref scenario from the dup-burst-20260927-2007.log soak (peer
-        // 029bd467) can no longer occur — but sending DisconnectPeer(AlreadyConnected) to your own
+        // unreachable now that a HANDSHAKED PeerActor stops instead of self-reconnecting, but
+        // sending DisconnectPeer(AlreadyConnected) to your own
         // live connection would disconnect a perfectly good peer, so guard the symptom here too.
         val existingSameRef =
           connectedPeers.peers.values.exists(p => p.nodeId.contains(nodeId) && p.ref == handshakedPeer.ref)
         if existingSameRef then
-          log.debug(
+          log.warn(
             "Ignoring duplicate PeerHandshakeSuccessful for {} — same ref ({}) already handshaked",
             handshakedPeer.id,
             handshakedPeer.ref

@@ -146,8 +146,7 @@ class PeerActorSpec extends ScalaTestWithActorTestKit(ManualTime.config) with An
     UnitTest,
     NetworkTest
   ) in new NodeStatusSetup:
-    // Regression test for the peer-reconnect-self-duplicate bug (dup-burst-20260927-2007.log,
-    // peer 029bd467): the handshaked state used to call handleTerminated(rlpxConnection, 0), which
+    // Regression test: the handshaked state used to call handleTerminated(rlpxConnection, 0), which
     // — since 0 < connectMaxRetries — scheduled a reconnect on this SAME actor instead of stopping
     // it. The fresh handshake ~connectRetryDelay later then collided with PeerManagerActor's
     // "already connected" duplicate check (hasHandshakedWith found the OLD, never-removed entry

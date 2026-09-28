@@ -365,8 +365,7 @@ class PeerManagerSpec
     )
     peerAsOutgoingProbe.expectMsg(PeerActor.DisconnectPeer(Disconnect.Reasons.AlreadyConnected))
 
-  // Defense in depth for the peer-reconnect-self-duplicate bug (dup-burst-20260927-2007.log,
-  // peer 029bd467). The root cause is fixed in PeerActor (a HANDSHAKED peer now stops instead of
+  // Defense in depth for a handshaked peer that reconnected itself after a TCP drop. The root cause is fixed in PeerActor (a HANDSHAKED peer now stops instead of
   // self-reconnecting), which means the same actor ref can no longer legitimately re-publish
   // PeerHandshakeSuccessful for a nodeId it already handshaked. This test guards the symptom
   // directly: IF a duplicate ever arrives from the exact same ref, PeerManagerActor must not send
