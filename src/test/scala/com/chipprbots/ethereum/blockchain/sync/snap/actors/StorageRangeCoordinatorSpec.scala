@@ -89,7 +89,12 @@ class StorageRangeCoordinatorSpec extends ScalaTestWithActorTestKit() with AnyFl
       maxAccountsPerBatch: Int = 8,
       maxInFlightRequests: Int = 8,
       backpressureHighWatermark: Int = 100000,
-      backpressureLowWatermark: Int = 50000
+      backpressureLowWatermark: Int = 50000,
+      // Defaults to the constructor's own default (true) to keep every EXISTING caller of newImpl
+      // unchanged. Tests that need to inspect `pendingAccountTries` (the ordering-gate tests) must
+      // pass `false` explicitly — with deferred merkleization on, applyReadyStorageChunk never
+      // builds a trie at all (flat-slot writes only).
+      deferredMerkleization: Boolean = true
   ): (StorageRangeCoordinatorImpl, BehaviorTestKit[StorageRangeCoordinator.Command]) =
     var captured: StorageRangeCoordinatorImpl = null
     val behavior = Behaviors.setup[StorageRangeCoordinator.Command] { ctx =>
@@ -109,7 +114,8 @@ class StorageRangeCoordinatorSpec extends ScalaTestWithActorTestKit() with AnyFl
           flatBatchEntryThreshold = flatBatchEntryThreshold,
           flatBatchEcOverride = flatBatchEcOverride,
           backpressureHighWatermark = backpressureHighWatermark,
-          backpressureLowWatermark = backpressureLowWatermark
+          backpressureLowWatermark = backpressureLowWatermark,
+          deferredMerkleization = deferredMerkleization
         )
         captured.start()
       }
@@ -964,4 +970,185 @@ class StorageRangeCoordinatorSpec extends ScalaTestWithActorTestKit() with AnyFl
 
     // After commit, all nodes have been emitted to the accumulator.
     accumulated.nonEmpty shouldBe true
+  }
+
+  // ========================================
+  // Storage-ordering gate (StackTrie "keys must be strictly ascending" crash fix)
+  // ========================================
+  //
+  // Root cause: storageConcurrency (16) parallel subtask chunks for one large-storage account
+  // share a single per-account StackTrie (pendingAccountTries, keyed only by accountHash) that
+  // requires strictly-ascending inserts across the FULL account key space. Nothing in
+  // dispatch/response handling guaranteed sibling chunk responses were PROCESSED back in range
+  // order — requestNextRanges' acceptsNewAccount explicitly allows unlimited concurrent dispatch
+  // once an account's trie exists, so a peer serving a higher sub-range could (and in the
+  // 2026-09-27 Platåberget soak, reliably did) answer before a peer serving a lower one, tripping
+  // StackTrie.update's `require` and crashing the actor (RestartSupervisor then restarted it with
+  // empty in-memory task state).
+  //
+  // These tests drive the ordering gate (applyOrderedStorageChunk / drainOrderedStorageChunks /
+  // applyReadyStorageChunk) directly via the white-box Impl, bypassing MerkleProofVerifier —
+  // verification's "monotonic WITHIN one response" guarantee (MerkleProofVerifierSpec) is a
+  // different property from "monotonic ACROSS sibling chunk responses", which is what these cover.
+
+  private def slotKey(lastByte: Int): ByteString = ByteString(Array.fill(31)(0x00.toByte) :+ lastByte.toByte)
+
+  it should "apply storageConcurrency-style parallel chunks fed out of range order without tripping the StackTrie ascending-order invariant" taggedAs UnitTest in {
+    val accountHash = kec256(ByteString("scrambled-storage-account"))
+    val storageRoot = kec256(ByteString("scrambled-storage-root"))
+    val (impl, _) = newImpl(
+      stateRoot = kec256(ByteString("ordering-gate-root")),
+      flatSlotStorage = new FlatSlotStorage(EphemDataSource()),
+      snapSyncControllerRef = testKit.createTestProbe[SNAPSyncController.Command]().ref,
+      deferredMerkleization = false // must build the real streaming trie to exercise StackTrie.update
+    )
+
+    // Three disjoint, range-ascending chunks — mirrors StorageTask.createSubTasks' output shape for
+    // a large-storage account split into parallel subtasks. Each is a one-shot response here (empty
+    // proof ⇒ per SNAP spec that chunk's own range is fully served, no further continuation).
+    val chunk0 = StorageTask(accountHash, storageRoot, next = slotKey(0x01), last = slotKey(0x1f))
+    val chunk1 = StorageTask(accountHash, storageRoot, next = slotKey(0x20), last = slotKey(0x3f))
+    val chunk2 = StorageTask(accountHash, storageRoot, next = slotKey(0x40), last = slotKey(0xfe))
+
+    // As if a prior (pre-split) response already established the cursor at chunk0's start, and the
+    // split into 3 parallel subtasks was already registered (StorageRangeCoordinatorImpl.scala's
+    // `createStorageSubTasks` call site does both together, atomically, when a response first needs
+    // continuation).
+    impl.accountSubtaskCounters(accountHash) = (3, 0)
+    impl.storageTrieCursor(accountHash) = chunk0.next
+
+    // Feed the HIGHEST-range chunk first, then the two lower ones — the exact shape of the crash: a
+    // faster peer answering a higher sub-range before a slower peer's lower sub-range lands.
+    noException should be thrownBy {
+      impl.applyOrderedStorageChunk(
+        chunk2,
+        Seq(slotKey(0x50) -> ByteString("value-50"), slotKey(0x90) -> ByteString("value-90")),
+        Seq.empty
+      )
+      impl.applyOrderedStorageChunk(chunk0, Seq(slotKey(0x10) -> ByteString("value-10")), Seq.empty)
+      impl.applyOrderedStorageChunk(chunk1, Seq(slotKey(0x30) -> ByteString("value-30")), Seq.empty)
+    }
+
+    // chunk2 must have been buffered (not applied) until chunk0 and chunk1 landed, then drained
+    // automatically once chunk1 completed the ascending run up to chunk2's start.
+    impl.pendingOrderedChunks.get(accountHash) shouldBe empty
+    impl.storageTrieCursor.get(accountHash) shouldBe empty // account fully done ⇒ cursor cleared
+    impl.accountSubtaskCounters.get(accountHash) shouldBe None // all 3 subtasks recorded complete
+    impl.completedAccountCount shouldBe 1L
+    impl.pendingAccountTries.get(accountHash) shouldBe empty // auto-committed on the final (range-highest) chunk
+  }
+
+  it should "buffer an out-of-order chunk and drain it once its predecessor lands, producing the same root as true in-order arrival" taggedAs UnitTest in {
+    import com.chipprbots.ethereum.blockchain.sync.snap.SnapHashTrie
+
+    val accountHash = kec256(ByteString("root-check-account"))
+    val storageRoot = kec256(ByteString("root-check-root"))
+    val (impl, _) = newImpl(
+      stateRoot = kec256(ByteString("ordering-gate-root-2")),
+      flatSlotStorage = new FlatSlotStorage(EphemDataSource()),
+      snapSyncControllerRef = testKit.createTestProbe[SNAPSyncController.Command]().ref,
+      deferredMerkleization = false
+    )
+
+    val chunk0 = StorageTask(accountHash, storageRoot, next = slotKey(0x01), last = slotKey(0x1f))
+    val chunk1 = StorageTask(accountHash, storageRoot, next = slotKey(0x20), last = slotKey(0x3f))
+    val chunk2 = StorageTask(accountHash, storageRoot, next = slotKey(0x40), last = slotKey(0xfe))
+    val slots0 = Seq(slotKey(0x10) -> ByteString("value-10"))
+    val slots1 = Seq(slotKey(0x30) -> ByteString("value-30"))
+    val slots2 = Seq(slotKey(0x50) -> ByteString("value-50"), slotKey(0x90) -> ByteString("value-90"))
+
+    // Registered as 4 subtasks but only 3 are ever fed — the account is deliberately left
+    // "incomplete" so the shared trie is never auto-committed/removed, letting this test inspect it
+    // directly afterward instead of racing the internal commit.
+    impl.accountSubtaskCounters(accountHash) = (4, 0)
+    impl.storageTrieCursor(accountHash) = chunk0.next
+
+    // Out-of-order arrival: chunk2 (highest range) before chunk0/chunk1.
+    impl.applyOrderedStorageChunk(chunk2, slots2, Seq.empty)
+    impl.pendingOrderedChunks(accountHash) should have size 1 // buffered, not yet applied
+
+    impl.applyOrderedStorageChunk(chunk0, slots0, Seq.empty)
+    impl.pendingOrderedChunks(accountHash) should have size 1 // chunk2 still waiting on chunk1
+
+    impl.applyOrderedStorageChunk(chunk1, slots1, Seq.empty)
+    impl.pendingOrderedChunks.get(accountHash) shouldBe empty // chunk2 drained once chunk1 landed
+
+    // Trie is still open (4th subtask never arrived) — safe to commit it directly for inspection.
+    val actualRoot = impl.pendingAccountTries(accountHash).commit()
+
+    // Independently-built reference: the SAME slots inserted in TRUE ascending order.
+    val reference = new SnapHashTrie(_ => ())
+    (slots0 ++ slots1 ++ slots2).foreach { case (k, v) => reference.update(k.toArray, v.toArray) }
+    val expectedRoot = reference.commit()
+
+    actualRoot shouldEqual expectedRoot
+  }
+
+  it should "re-queue (not lose) buffered out-of-order storage chunks on StoragePivotRefreshed" taggedAs UnitTest in {
+    val stateRoot = kec256(ByteString("prefresh-ordering-root"))
+    val snapSyncController = testKit.createTestProbe[SNAPSyncController.Command]()
+    val (impl, kit) = newImpl(
+      stateRoot = stateRoot,
+      flatSlotStorage = new FlatSlotStorage(EphemDataSource()),
+      snapSyncControllerRef = snapSyncController.ref,
+      deferredMerkleization = false
+    )
+
+    val accountHash = kec256(ByteString("prefresh-account"))
+    val storageRoot = kec256(ByteString("prefresh-storage-root"))
+    val chunkLo = StorageTask(accountHash, storageRoot, next = slotKey(0x01), last = slotKey(0x1f))
+    val chunkHi = StorageTask(accountHash, storageRoot, next = slotKey(0x20), last = slotKey(0x3f))
+
+    impl.accountSubtaskCounters(accountHash) = (2, 0)
+    impl.storageTrieCursor(accountHash) = chunkLo.next
+
+    // chunkHi arrives first and is buffered; chunkLo never arrives before the pivot refreshes.
+    impl.applyOrderedStorageChunk(chunkHi, Seq(slotKey(0x30) -> ByteString("value-30")), Seq.empty)
+    impl.pendingOrderedChunks(accountHash) should have size 1
+
+    impl.tasks.exists(_.next == chunkHi.next) shouldBe false // not yet in the retry queue
+
+    kit.run(StorageRangeCoordinator.StoragePivotRefreshed(kec256(ByteString("new-pivot-root"))))
+
+    // The buffered chunk must be re-queued, not silently dropped.
+    impl.tasks.exists(t => t.accountHash == accountHash && t.next == chunkHi.next) shouldBe true
+    impl.pendingOrderedChunks.get(accountHash) shouldBe empty
+
+    // Re-derived cursor = the lowest surviving chunk's start (chunkHi is the only survivor here —
+    // chunkLo was never buffered or active, so — like today's pre-fix trie discard — it is
+    // abandoned rather than fabricated from nothing; healing reconciles).
+    impl.storageTrieCursor.get(accountHash) shouldBe Some(chunkHi.next)
+  }
+
+  it should "force-complete cleanly (StorageRangeSyncForceCompleted) even with a buffered out-of-order storage chunk pending" taggedAs UnitTest in {
+    val stateRoot = kec256(ByteString("force-complete-ordering-root"))
+    val snapSyncController = testKit.createTestProbe[SNAPSyncController.Command]()
+    val (impl, kit) = newImpl(
+      stateRoot = stateRoot,
+      flatSlotStorage = new FlatSlotStorage(EphemDataSource()),
+      snapSyncControllerRef = snapSyncController.ref,
+      deferredMerkleization = false
+    )
+
+    val accountHash = kec256(ByteString("force-complete-account"))
+    val storageRoot = kec256(ByteString("force-complete-storage-root"))
+    val chunkLo = StorageTask(accountHash, storageRoot, next = slotKey(0x01), last = slotKey(0x1f))
+    val chunkHi = StorageTask(accountHash, storageRoot, next = slotKey(0x20), last = slotKey(0x3f))
+
+    impl.accountSubtaskCounters(accountHash) = (2, 0)
+    impl.storageTrieCursor(accountHash) = chunkLo.next
+    impl.applyOrderedStorageChunk(chunkHi, Seq(slotKey(0x30) -> ByteString("value-30")), Seq.empty)
+    impl.pendingOrderedChunks(accountHash) should have size 1
+
+    kit.run(StorageRangeCoordinator.ForceCompleteStorage)
+
+    // The existing "abandon and force-complete" recovery path must still fire cleanly — this is
+    // what a controller detecting the "restarted empty" signature (SNAPSyncController's
+    // StorageRestartedEmptyThreshold) actually triggers to avoid the silent stall.
+    snapSyncController.expectMessage(SNAPSyncController.StorageRangeSyncForceCompleted)
+    // No buffered chunk, cursor, or trie is left behind — nothing to leak or double-apply if this
+    // account's data is later re-synced.
+    impl.pendingOrderedChunks shouldBe empty
+    impl.storageTrieCursor shouldBe empty
+    impl.pendingAccountTries shouldBe empty
   }
