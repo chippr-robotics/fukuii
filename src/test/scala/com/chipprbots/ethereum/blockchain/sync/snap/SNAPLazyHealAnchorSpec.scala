@@ -634,6 +634,55 @@ class SNAPLazyHealAnchorSpec extends ScalaTestWithActorTestKit() with AnyFlatSpe
         case _ => FishingOutcomes.continueAndIgnore
       }
 
+  // The Path publish scans the whole state: it must run off the controller thread, report by message, and leave the
+  // controller answering status queries until it finishes.
+  it should
+    "publish the Path trie asynchronously: stay responsive to GetStatus mid-publish, then finalize on PublishDone" taggedAs UnitTest in new Fixture:
+      val pivot0 = BigInt(10_000)
+      val trie = PathHealPresenceFixtures.accountTrieNew()
+      storeGenesis()
+      storeHeaderAt(pivot0, trie.root.hash)
+      seedResumeState(pivot0, trie.root.hash)
+
+      val entered = new java.util.concurrent.CountDownLatch(1)
+      val release = new java.util.concurrent.CountDownLatch(1)
+      val gated = new com.chipprbots.ethereum.db.dataSource.EphemDataSource(Map.empty):
+        override def iterate(
+            namespace: com.chipprbots.ethereum.db.dataSource.DataSource.Namespace
+        ): fs2.Stream[cats.effect.IO, Either[
+          com.chipprbots.ethereum.db.dataSource.RocksDbDataSource.IterationError,
+          (Array[Byte], Array[Byte])
+        ]] =
+          entered.countDown()
+          release.await(30, java.util.concurrent.TimeUnit.SECONDS)
+          super.iterate(namespace)
+      PathHealPresenceFixtures.seedPath(new PathNodeStorage(gated), trie.nodes)
+
+      peers.set(Map.empty)
+      val snap = spawnController(
+        SNAPSyncConfig(deferredMerkleization = false, movingRootDeltaHeal = true, storageScheme = StorageScheme.Path),
+        flatSlot = new com.chipprbots.ethereum.db.storage.FlatSlotStorage(gated)
+      )
+      awaitFirstPoll()
+      snap ! SNAPSyncController.Start
+
+      // The publish worker is inside the scan, blocked on the gate ...
+      entered.await(20, java.util.concurrent.TimeUnit.SECONDS) shouldBe true
+      // ... and the controller still answers status and progress ...
+      val statusProbe = testKit.createTestProbe[SyncProtocol.Status]()
+      snap ! SNAPSyncController.GetStatus(statusProbe.ref)
+      statusProbe.expectMessageType[SyncProtocol.Status.Syncing](5.seconds)
+      awaitProcessed(snap)
+      // ... without having handed off to regular sync yet.
+      parent.expectNoMessage(300.millis)
+
+      release.countDown()
+      parent.fishForMessage(20.seconds) {
+        case SNAPSyncController.SnapSyncFinalized(p) if p == pivot0 => FishingOutcomes.complete
+        case SyncProtocol.HealingImpossible => FishingOutcomes.fail("publish failed (HealingImpossible)")
+        case _                              => FishingOutcomes.continueAndIgnore
+      }
+
   class Fixture extends EphemBlockchainTestSetup with TestSyncConfig:
     implicit override lazy val classicSystem: ActorSystem = SNAPLazyHealAnchorSpec.this.system.classicSystem
 
@@ -693,7 +742,11 @@ class SNAPLazyHealAnchorSpec extends ScalaTestWithActorTestKit() with AnyFlatSpe
         .and(appStateStorage.putSnapSyncStateRoot(root))
         .commit()
 
-    def spawnController(config: SNAPSyncConfig, isPoS: Boolean = false): TypedActorRef[SNAPSyncController.Command] =
+    def spawnController(
+        config: SNAPSyncConfig,
+        isPoS: Boolean = false,
+        flatSlot: com.chipprbots.ethereum.db.storage.FlatSlotStorage = storagesInstance.storages.flatSlotStorage
+    ): TypedActorRef[SNAPSyncController.Command] =
       given ExecutionContext = system.executionContext
       testKit.spawn(
         SNAPSyncController(
@@ -702,7 +755,7 @@ class SNAPLazyHealAnchorSpec extends ScalaTestWithActorTestKit() with AnyFlatSpe
           appStateStorage,
           storagesInstance.storages.stateStorage,
           storagesInstance.storages.evmCodeStorage,
-          storagesInstance.storages.flatSlotStorage,
+          flatSlot,
           networkPeerManager.ref.toTyped[NetworkPeerManagerActor.Command],
           testKit.spawn(PeerEventBusActor.behavior()),
           syncConfig,

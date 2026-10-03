@@ -242,4 +242,41 @@ class StateNodeFetcherSpec
         case _: PeersClient.Request[?] => true; case _ => false
       }
       second.asInstanceOf[PeersClient.Request[?]].message.asInstanceOf[GetTrieNodes].rootHash shouldBe fallbackRoot
+    "does not switch to the fallback root for the HP-encoded empty account path (0x00) either" taggedAs UnitTest in new TestSetup:
+      val stateRoot: ByteString = ByteString(Array.fill[Byte](32)(0x46.toByte))
+      val fallbackRoot: ByteString = ByteString(Array.fill[Byte](32)(0xdb.toByte))
+      fetcher ! StateNodeFetcher.FetchStateNode(
+        hash = targetHash,
+        originalSender = replyToProbe.ref,
+        stateRoot = Some(stateRoot),
+        paths = Some(Seq(Seq(ByteString(0.toByte)))),
+        fallbackStateRoot = Some(fallbackRoot)
+      )
+      peersClientProbe.expectMsgClass(3.seconds, classOf[PeersClient.Request[?]])
+      val peer = PeerTestHelpers.createTestPeer("p1", TestProbe().ref)
+      fetcher ! StateNodeFetcher.AdaptedMessage(peer, TrieNodes(1, Seq(ByteString(Array.fill[Byte](40)(1)))))
+      val msgs = peersClientProbe.receiveWhile(1.second) { case m => m }
+      msgs
+        .collect { case r: PeersClient.Request[?] => r.message }
+        .collect { case g: GetTrieNodes => g.rootHash }
+        .foreach(_ should not be fallbackRoot)
+
+    "still switches to the fallback root for a STORAGE-trie root (pathset [accountHash, 0x00])" taggedAs UnitTest in new TestSetup:
+      val stateRoot: ByteString = ByteString(Array.fill[Byte](32)(0x46.toByte))
+      val fallbackRoot: ByteString = ByteString(Array.fill[Byte](32)(0xdb.toByte))
+      val accountHash = ByteString(Array.fill[Byte](32)(0x77.toByte))
+      fetcher ! StateNodeFetcher.FetchStateNode(
+        hash = targetHash,
+        originalSender = replyToProbe.ref,
+        stateRoot = Some(stateRoot),
+        paths = Some(Seq(Seq(accountHash, ByteString(0.toByte)))),
+        fallbackStateRoot = Some(fallbackRoot)
+      )
+      peersClientProbe.expectMsgClass(3.seconds, classOf[PeersClient.Request[?]])
+      val peer = PeerTestHelpers.createTestPeer("p1", TestProbe().ref)
+      fetcher ! StateNodeFetcher.AdaptedMessage(peer, TrieNodes(1, Seq(ByteString(Array.fill[Byte](40)(1)))))
+      val second = peersClientProbe.fishForMessage(3.seconds) {
+        case _: PeersClient.Request[?] => true; case _ => false
+      }
+      second.asInstanceOf[PeersClient.Request[?]].message.asInstanceOf[GetTrieNodes].rootHash shouldBe fallbackRoot
   }

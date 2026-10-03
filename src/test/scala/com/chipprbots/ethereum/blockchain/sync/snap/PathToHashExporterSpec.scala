@@ -113,3 +113,23 @@ class PathToHashExporterSpec extends AnyFlatSpec with Matchers:
       trie.nodes.foreach(n => present(target, n.hash) shouldBe true)
     }
   }
+
+  it should "re-read sampled account leaves and storage roots through the trie when given the state root" taggedAs UnitTest in {
+    withPathStorage { pns =>
+      val trie = storageTrieNew()
+      seedPath(pns, trie.nodes)
+      val result = PathToHashExporter.publish(pns, new TestMptStorage, stateRoot = Some(trie.root.hash))
+      result.sampledAccountLeaves shouldBe 1
+      result.sampledStorageRoots shouldBe 1
+    }
+  }
+
+  it should "fail loudly when a sampled leaf is not reachable from the claimed state root" taggedAs UnitTest in {
+    withPathStorage { pns =>
+      val trie = storageTrieNew()
+      seedPath(pns, trie.nodes)
+      val wrongRoot = storageTrieOld().root.hash
+      an[IllegalStateException] should be thrownBy
+        PathToHashExporter.publish(pns, new TestMptStorage, stateRoot = Some(wrongRoot))
+    }
+  }
