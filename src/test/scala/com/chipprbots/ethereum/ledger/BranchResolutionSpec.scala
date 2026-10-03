@@ -13,13 +13,17 @@ import org.scalatest.matchers.should.Matchers
 import org.scalatest.wordspec.AnyWordSpec
 import org.scalatestplus.scalacheck.ScalaCheckPropertyChecks
 
+import com.chipprbots.ethereum.BlockHelpers
 import com.chipprbots.ethereum.ObjectGenerators
+import com.chipprbots.ethereum.blockchain.sync.EphemBlockchainTestSetup
 import com.chipprbots.ethereum.consensus.engine.DesignatedHead
 import com.chipprbots.ethereum.consensus.mess.MESSConfig
 import com.chipprbots.ethereum.domain.Difficulty
 import com.chipprbots.ethereum.domain.Block
 import com.chipprbots.ethereum.domain.BlockBody
 import com.chipprbots.ethereum.domain.BlockHeader
+import com.chipprbots.ethereum.domain.BlockHeader.HeaderExtraFields.HefEmpty
+import com.chipprbots.ethereum.domain.BlockHeader.HeaderExtraFields.HefPostOlympia
 import com.chipprbots.ethereum.domain.BlockNumber
 import com.chipprbots.ethereum.domain.BlockchainImpl
 import com.chipprbots.ethereum.domain.BlockchainReader
@@ -424,6 +428,64 @@ class BranchResolutionSpec
 
       misconfigured.compareBranch(NonEmptyList.one(heavierHeader)) shouldEqual NoChainSwitch
   }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // ETC/Mordor: A POST-REWIND BATCH THROUGH THE WIRE DECODER (forge review of #1432).
+  //
+  // After a rewind the fetcher re-serves from below the head, so a batch re-presents canonical blocks before it
+  // extends the head. compareBranch recognises that prefix by header EQUALITY between the stored header (boopickle)
+  // and the one just decoded off the wire (RLP). If the two ever disagreed, the prefix would be taken for displaced
+  // blocks and MESS would judge a harmless extension as a reorg. Pinned on the header shapes ETC actually carries —
+  // 15 fields, and 16 with the Olympia base fee — with no designated head (SyncController builds none without a
+  // terminal-total-difficulty) and MESS active. Real storage, no mocks: equality through the storage codec is the point.
+  // ─────────────────────────────────────────────────────────────────────────
+
+  "BranchResolution on an ETC chain (no designated head, MESS on)" should {
+
+    "take a post-rewind batch of 15- and 16-field wire headers as a plain extension: NewBetterBranch(Nil)" taggedAs (
+      UnitTest,
+      StateTest
+    ) in new EtcWireSetup:
+      val resolution = new BranchResolution(blockchainReader)
+      resolution.messConfig = Some(MESSConfig(enabled = true, activationBlock = Some(BigInt(1))))
+      resolution.followsConsensusLayer shouldBe false
+
+      // The re-presented prefix carries both header shapes (35..80: 15 fields; 81..100: 16), the extension 16.
+      postRewindBatch.map(_.header.extraFields).collect { case HefEmpty => 15 } should not be empty
+      postRewindBatch.map(_.header.extraFields).collect { case _: HefPostOlympia => 16 } should not be empty
+
+      // Nothing displaced (Nil), so MESS is never asked; the whole batch goes on to consensus, as before #1432.
+      resolution.resolveBranch(wireHeaders(postRewindBatch)) shouldEqual NewBetterBranch(Nil)
+  }
+
+  /** ETC-shaped PoW chain in real ephemeral storage: canonical 1..100, head N = 100, headers of 15 RLP fields below an
+    * Olympia-style boundary at 81 and 16 (base fee) from it; the post-rewind batch is canonical N-65..N plus N+1..N+10.
+    */
+  class EtcWireSetup extends EphemBlockchainTestSetup:
+    import com.chipprbots.ethereum.domain.BlockHeaderImplicits.*
+
+    private val genesisWeight = ChainWeight.totalDifficultyOnly(BlockHelpers.genesis.header.difficulty.value)
+    blockchainWriter.save(BlockHelpers.genesis, Nil, genesisWeight, saveAsBestBlock = true)
+
+    /** PoW difficulty kept; an 8-byte nonce (the strict decoder's size); base fee from block 81. */
+    private def etcBlock(block: Block): Block =
+      val nonce = ByteString(java.nio.ByteBuffer.allocate(8).putLong(block.number.value.toLong).array())
+      val extra = if block.number.value >= 81 then HefPostOlympia(BigInt(1000000000)) else HefEmpty
+      block.copy(header = block.header.copy(nonce = nonce, extraFields = extra))
+
+    val canonical: List[Block] = BlockHelpers.generateChain(100, BlockHelpers.genesis, etcBlock)
+    canonical.foldLeft(genesisWeight) { (w, b) =>
+      val next = w.increase(b.header)
+      blockchainWriter.save(b, Nil, next, saveAsBestBlock = true)
+      next
+    }
+
+    val postRewindBatch: List[Block] =
+      canonical.takeRight(66) ++ BlockHelpers.generateChain(10, canonical.last, etcBlock)
+
+    /** RLP-encoded by the sender, decoded by us — the strict field-count/size decoder. */
+    def wireHeaders(blocks: List[Block]): NonEmptyList[BlockHeader] =
+      NonEmptyList.fromListUnsafe(blocks.map(_.header.toBytes.toBlockHeader))
 
   class BranchResolutionTestSetupImpl extends TestSetupWithVmAndValidators with MockBlockchain:
     // Provide mock implementations - these are created in the test class context which has MockFactory

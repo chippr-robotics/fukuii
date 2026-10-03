@@ -1460,10 +1460,9 @@ object ETHPackets:
   //       BlockAccessLists:    [requestId, [entry, ...]]  — one entry per requested hash, in order.
   //       An unavailable BAL is the RLP empty string (0x80) — never a skipped position, since an
   //       empty LIST is itself a valid (empty) access list and must stay distinguishable from
-  //       "we don't have one". fukuii has no EIP-7928 BAL storage yet, so it always emits the
-  //       empty-string sentinel — honest "unavailable" rather than fabricated data — but the type
-  //       keeps entries as raw RLPEncodeable (same passthrough pattern as Receipts68.receiptsForBlocks)
-  //       so a real BAL can be served byte-for-byte once storage exists, with no wire-format change.
+  //       "we don't have one". Entries are raw RLPEncodeable (same passthrough pattern as
+  //       Receipts68.receiptsForBlocks): BlockchainHostActor serves each stored EIP-7928 list as the
+  //       RLP it was stored as, byte for byte, and 0x80 for a block it holds no list for.
   //
   // Reference: go-ethereum eth/protocols/eth/protocol.go GetBlockAccessListsPacket / BlockAccessListPacket
 

@@ -420,6 +420,6 @@ Before considering this issue resolved:
 
 **Document Generated**: 2025-12-19  
 **Analyzed By**: GitHub Copilot  
-**Log Source**: [Night Run Log](https://productionresultssa13.blob.core.windows.net/actions-results/...)  
+**Log Source**: nightly run log (a GitHub Actions log URL; it expired with the run's log retention and is no longer linkable)  
 **Total Execution Time**: 49m 10s  
 **Success Rate**: 79.9% (147/184 tests passed)

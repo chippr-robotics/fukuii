@@ -157,7 +157,7 @@ class AdminServiceSpec extends AnyFlatSpec with Matchers with BeforeAndAfterAll:
     val registry = new BlockedIPRegistry(Set.empty)
 
     /** Minimal BlockchainReader stub — only overrides the three methods used by nodeInfo. */
-    val stubBlockchainReader: BlockchainReader = new BlockchainReader(null, null, null, null, null, null, null):
+    val stubBlockchainReader: BlockchainReader = new BlockchainReader(null, null, null, null, null, null, null, null):
       override val genesisHeader = Fixtures.Blocks.Block3125369.header
       override def getBestBranch = EmptyBranch
       override def getChainWeightByHash(hash: BlockHash) = None

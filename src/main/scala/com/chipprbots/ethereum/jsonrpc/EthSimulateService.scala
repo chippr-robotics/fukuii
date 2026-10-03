@@ -497,7 +497,25 @@ class EthSimulateService(
         blockchainConfig
       )
     val extraFields =
-      if blockchainConfig.isPragueTimestamp(ts) then
+      if blockchainConfig.isAmsterdamTimestamp(ts) then
+        // The 23-field Amsterdam header (EIP-7928 blockAccessListHash, EIP-7843 slotNumber). A Prague-shaped header
+        // here gave a simulated Amsterdam block 21 fields, so its hash was not an Amsterdam hash, and SLOTNUM read
+        // `slotNumber` from a header that has none. Two of the fields are not computed:
+        //   - blockAccessListHash is the empty list's hash. eth_simulateV1 does not record an access list here, just as
+        //     `requestsHash` below is the empty requests hash rather than one computed from the simulated block.
+        //   - slotNumber is 0. A simulated block has no beacon slot. go-ethereum's simulator leaves the header's
+        //     SlotNumber unset, so SLOTNUM reads 0 there too.
+        HefPostAmsterdam(
+          baseFee,
+          EmptyWithdrawalsRoot,
+          BigInt(0),
+          simulatedExcessBlobGas,
+          parentBeaconBlockRoot,
+          EmptyRequestsHash,
+          BlockAccessList.EmptyHash,
+          slotNumber = BigInt(0)
+        )
+      else if blockchainConfig.isPragueTimestamp(ts) then
         HefPostPrague(
           baseFee,
           EmptyWithdrawalsRoot,

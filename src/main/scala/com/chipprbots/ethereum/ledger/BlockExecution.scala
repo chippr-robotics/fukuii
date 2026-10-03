@@ -18,6 +18,7 @@ import com.chipprbots.ethereum.utils.ByteStringUtils
 import com.chipprbots.ethereum.utils.DaoForkConfig
 import com.chipprbots.ethereum.utils.Logger
 import com.chipprbots.ethereum.vm.AmsterdamGas
+import com.chipprbots.ethereum.vm.BlockAccessRecorder
 import com.chipprbots.ethereum.vm.EvmConfig
 import com.chipprbots.ethereum.vm.ProgramContext
 
@@ -42,13 +43,16 @@ class BlockExecution(
     executeAndValidateBlockFull(block, alreadyValidated).map(_._1)
 
   /** Variant that also returns the EIP-7685 execution requests derived from block execution (deposits from receipts +
-    * system-call outputs). Used by the Engine API to additionally verify the header's requestsHash matches what
-    * execution actually produced.
+    * system-call outputs), and the EIP-7928 block access list it produced (`Some` on an Amsterdam block). Used by the
+    * Engine API to additionally verify the header's requestsHash matches what execution actually produced, and to keep
+    * the list of a block it accepts.
     */
   def executeAndValidateBlockFull(
       block: Block,
       alreadyValidated: Boolean = false
-  )(implicit blockchainConfig: BlockchainConfig): Either[BlockExecutionError, (Seq[Receipt], Seq[ByteString])] =
+  )(implicit
+      blockchainConfig: BlockchainConfig
+  ): Either[BlockExecutionError, (Seq[Receipt], Seq[ByteString], Option[BlockAccessList])] =
     val preExecValidationResult =
       if alreadyValidated then Right(block) else blockValidation.validateBlockBeforeExecution(block)
 
@@ -63,7 +67,8 @@ class BlockExecution(
           result.gasUsed
         )
         _ <- validateRequestsHash(block, result.executionRequests)
-      yield (result.receipts, result.executionRequests)
+        _ <- validateBlockAccessList(block, result.blockAccessList)
+      yield (result.receipts, result.executionRequests, result.blockAccessList)
 
     if blockExecResult.isRight then
       log.debug(s"Block ${block.header.number} (with hash: ${block.header.hashAsHexString}) executed correctly")
@@ -76,18 +81,27 @@ class BlockExecution(
   def executeBlockNoValidation(
       block: Block
   )(implicit blockchainConfig: BlockchainConfig): Either[BlockExecutionError, (Seq[Receipt], BigInt, ByteString)] =
-    executeBlockNoValidationWithRequests(block).map { case (receipts, gasUsed, root, _) => (receipts, gasUsed, root) }
+    executeBlockNoValidationWithRequests(block).map { case (receipts, gasUsed, root, _, _) =>
+      (receipts, gasUsed, root)
+    }
 
-  /** [[executeBlockNoValidation]] plus the EIP-7685 requests execution produced, so an import path that validates after
-    * the fact (ChainImporter) can check the header's `requestsHash` with [[validateRequestsHash]].
+  /** [[executeBlockNoValidation]] plus the EIP-7685 requests and the EIP-7928 block access list execution produced, so
+    * an import path that validates after the fact (ChainImporter) can check the header's `requestsHash` with
+    * [[validateRequestsHash]] and its `blockAccessListHash` with [[validateBlockAccessList]].
     */
   def executeBlockNoValidationWithRequests(
       block: Block
   )(implicit
       blockchainConfig: BlockchainConfig
-  ): Either[BlockExecutionError, (Seq[Receipt], BigInt, ByteString, Seq[ByteString])] =
+  ): Either[BlockExecutionError, (Seq[Receipt], BigInt, ByteString, Seq[ByteString], Option[BlockAccessList])] =
     executeBlock(block).map { result =>
-      (result.receipts, result.gasUsed, result.worldState.stateRootHash, result.executionRequests)
+      (
+        result.receipts,
+        result.gasUsed,
+        result.worldState.stateRootHash,
+        result.executionRequests,
+        result.blockAccessList
+      )
     }
 
   /** EIP-7685: a Prague+ header's `requestsHash` must commit to exactly the requests execution produced. Without this
@@ -111,6 +125,48 @@ class BlockExecution(
             )
           )
 
+  /** EIP-7928: an Amsterdam block's access list — the one its execution produced — must fit the block's gas limit
+    * (`BLOCK_ACCESS_LIST_GAS_LIMIT_EXCEEDED`) and be the list the header's `blockAccessListHash` commits to
+    * (`INVALID_BLOCK_ACCESS_LIST`): execution-specs `apply_body` / `execute_block`, go-ethereum `ValidateState`.
+    * Without it an Amsterdam block would be accepted whatever list it declares, over RLP / devp2p as through the Engine
+    * API.
+    *
+    * Checking the hash covers the list's content completely: the header binds `keccak256(rlp(list))`, and a CL-supplied
+    * list's bytes hash to the same value (`payloadToBlock`), so any difference in an account, slot, value or index, and
+    * any entry out of order, changes the hash. `None` on an Amsterdam block would be an execution defect, and is
+    * rejected rather than trusted. Every earlier fork and every ETC chain passes unchecked.
+    */
+  def validateBlockAccessList(block: Block, computed: Option[BlockAccessList])(implicit
+      blockchainConfig: BlockchainConfig
+  ): Either[BlockExecutionError, Unit] =
+    if !blockchainConfig.isAmsterdamTimestamp(block.header.unixTimestamp) then Right(())
+    else
+      computed match
+        case None =>
+          Left(
+            BlockExecutionError.ValidationAfterExecError(
+              "INVALID_BLOCK_ACCESS_LIST: execution produced no block access list for an Amsterdam block"
+            )
+          )
+        case Some(accessList) =>
+          accessList
+            .validateSize(block.header.gasLimit.value)
+            .left
+            .map(err => BlockExecutionError.ValidationAfterExecError(s"BLOCK_ACCESS_LIST_GAS_LIMIT_EXCEEDED: $err"))
+            .flatMap { _ =>
+              val computedHash = accessList.hash
+              if block.header.blockAccessListHash.contains(computedHash) then Right(())
+              else
+                Left(
+                  BlockExecutionError.ValidationAfterExecError(
+                    s"INVALID_BLOCK_ACCESS_LIST: header blockAccessListHash " +
+                      s"${block.header.blockAccessListHash.map(ByteStringUtils.hash2string)} != " +
+                      s"${ByteStringUtils.hash2string(computedHash)} computed from ${accessList.accounts.size} " +
+                      s"account(s) accessed in execution"
+                  )
+                )
+            }
+
   /** Proposer-mode execution. Runs all Prague preambles (EIP-4788, EIP-2935), transactions, withdrawals, and system
     * calls (EIP-7002/7251), collects deposit requests (EIP-6110), and returns the full BlockResult with receipts +
     * executionRequests populated. No pre- or post-execution validation against the header is performed — caller is
@@ -132,18 +188,23 @@ class BlockExecution(
       block: Block,
       isProposer: Boolean = false
   )(implicit blockchainConfig: BlockchainConfig): Either[BlockExecutionError, BlockResult] =
+    // EIP-7928: an Amsterdam block builds its access list as it executes, one block access index at a time — 0 for the
+    // preamble system calls, i + 1 per transaction, n + 1 for the withdrawals and the request system calls below.
+    val accessList =
+      Option.when(blockchainConfig.isAmsterdamTimestamp(block.header.unixTimestamp))(new BlockAccessListBuilder)
+    val postExecutionReads = accessList.map(_ => new BlockAccessRecorder)
     try
       for
         parentHeader <- blockchainReader
           .getBlockHeaderByHash(block.header.parentHash)
           .toRight(MissingParentError) // Should not never occur because validated earlier
         initialWorld = buildInitialWorld(block, parentHeader, isProposer)
-        execResult <- executeBlockTransactions(block, initialWorld)
+        execResult <- executeBlockTransactions(block, initialWorld, accessList)
         worldAfterReward <- Either
           .catchOnly[MPTException](blockPreparator.payBlockReward(block, execResult.worldState))
           .leftMap(BlockExecutionError.MPTError.apply)
         // EIP-4895: Process beacon chain withdrawals (Shanghai+)
-        worldAfterWithdrawals = processWithdrawals(block, worldAfterReward)
+        worldAfterWithdrawals = processWithdrawals(block, worldAfterReward, postExecutionReads)
         _ <- requireRequestPredeploysPresent(block, worldAfterWithdrawals)
         // Prague: Process system calls for withdrawal/consolidation requests; Amsterdam adds the two
         // EIP-8282 builder predeploys. The system-call outputs (types 0x01, 0x02 and, post-Amsterdam,
@@ -153,7 +214,7 @@ class BlockExecution(
         // Both halves can INVALIDATE the block (EIP-6110 / EIP-7002 / EIP-7251, EELS
         // `process_checked_system_transaction` / `extract_deposit_data`): a system call that halts or
         // reverts, and a DepositEvent log whose ABI layout is not the canonical one.
-        systemCallResult <- processPragueSystemCallsChecked(block, worldAfterWithdrawals)
+        systemCallResult <- processPragueSystemCallsChecked(block, worldAfterWithdrawals, postExecutionReads)
           .leftMap(BlockExecutionError.ValidationAfterExecError.apply)
         worldAfterSystemCalls = systemCallResult._1
         systemRequests = systemCallResult._2
@@ -166,10 +227,16 @@ class BlockExecution(
         // backing MPT storage is read-only, so persistState computes the trie hash in-memory without
         // writing to RocksDB — exactly what we want for a speculative payload.
         worldPersisted = InMemoryWorldStateProxy.persistState(worldAfterSystemCalls)
-      yield execResult.copy(
-        worldState = worldPersisted,
-        executionRequests = depositRequest.toSeq ++ systemRequests
-      )
+      yield
+        for
+          builder <- accessList
+          reads <- postExecutionReads
+        do builder.addIndex(block.body.transactionList.size + 1L, reads, execResult.worldState, worldPersisted)
+        execResult.copy(
+          worldState = worldPersisted,
+          executionRequests = depositRequest.toSeq ++ systemRequests,
+          blockAccessList = accessList.map(_.build)
+        )
     catch case e: MPTException => Left(BlockExecutionError.MPTError(e))
 
   protected def buildInitialWorld(block: Block, parentHeader: BlockHeader, isProposer: Boolean = false)(implicit
@@ -203,33 +270,48 @@ class BlockExecution(
     */
   protected[ledger] def executeBlockTransactions(
       block: Block,
-      initialWorld: InMemoryWorldStateProxy
+      initialWorld: InMemoryWorldStateProxy,
+      accessList: Option[BlockAccessListBuilder] = None
   )(implicit blockchainConfig: BlockchainConfig): Either[BlockExecutionError, BlockResult] =
     val blockHeaderNumber = block.header.number.value
-    executeBlockTransactions(block, blockHeaderNumber, initialWorld)
+    executeBlockTransactions(block, blockHeaderNumber, initialWorld, accessList)
 
   protected def executeBlockTransactions(
       block: Block,
       blockHeaderNumber: BigInt,
-      initialWorld: InMemoryWorldStateProxy
+      initialWorld: InMemoryWorldStateProxy,
+      accessList: Option[BlockAccessListBuilder]
   )(implicit blockchainConfig: BlockchainConfig): Either[BlockExecutionError.TxsExecutionError, BlockResult] =
     val worldAfterDao = blockchainConfig.daoForkConfig match
       case Some(daoForkConfig) if daoForkConfig.isDaoForkBlock(blockHeaderNumber) =>
         drainDaoForkAccounts(initialWorld, daoForkConfig)
       case _ => initialWorld
 
-    // EIP-4788: Store parent beacon block root in system contract (post-Cancun)
-    val worldAfterBeaconRoot = applyEip4788(block, worldAfterDao)
+    val inputWorld =
+      if blockchainConfig.isAmsterdamTimestamp(block.header.unixTimestamp) then
+        // Amsterdam: EIP-4788 and EIP-2935 run as real system calls (see `applyAmsterdamPreambleSystemCalls`), which
+        // share EIP-7928 block access index 0.
+        val preambleReads = accessList.map(_ => new BlockAccessRecorder)
+        val afterPreamble = BlockExecution.applyAmsterdamPreambleSystemCalls(block.header, worldAfterDao, preambleReads)
+        for
+          builder <- accessList
+          reads <- preambleReads
+        do builder.addIndex(0L, reads, worldAfterDao, afterPreamble)
+        afterPreamble
+      else
+        // EIP-4788: Store parent beacon block root in system contract (post-Cancun)
+        val worldAfterBeaconRoot = applyEip4788(block, worldAfterDao)
 
-    // EIP-2935: Store parent block hash in history storage contract
-    val inputWorld = applyEip2935(block, worldAfterBeaconRoot)
+        // EIP-2935: Store parent block hash in history storage contract
+        applyEip2935(block, worldAfterBeaconRoot)
 
     val hashAsHexString = block.header.hashAsHexString
     val transactionList = block.body.transactionList
     log.debug(
       s"About to execute ${transactionList.size} txs from block $blockHeaderNumber (with hash: $hashAsHexString)"
     )
-    val blockTxsExecResult = blockPreparator.executeTransactions(transactionList, inputWorld, block.header)
+    val blockTxsExecResult =
+      blockPreparator.executeTransactions(transactionList, inputWorld, block.header, accessList = accessList)
     blockTxsExecResult match
       case Right(_) => log.debug(s"All txs from block $hashAsHexString were executed successfully")
       case Left(error) =>
@@ -399,8 +481,8 @@ class BlockExecution(
         // single @tailrec loop on one thread, each iteration's `blockchainWriter.save`
         // completes before the next begins, and `executeBlock` already resolves the parent
         // header from the same storage at BlockExecution.scala:104-106.
-        executeAndValidateBlock(blockToExecute, alreadyValidated = false) match
-          case Right(receipts) =>
+        executeAndValidateBlockFull(blockToExecute, alreadyValidated = false) match
+          case Right((receipts, _, blockAccessList)) =>
             val newWeight = parentWeight.increase(blockToExecute.header)
             val newBlockData = BlockData(blockToExecute, receipts, newWeight)
             blockchainWriter.save(
@@ -408,6 +490,10 @@ class BlockExecution(
               newBlockData.receipts,
               newBlockData.weight,
               saveAsBestBlock = false
+            )
+            // EIP-7928: the list the block just validated against.
+            blockAccessList.foreach(bal =>
+              blockchainWriter.storeBlockAccessList(blockToExecute.header.hash, bal).commit()
             )
             blockchain.saveBlockState(blockToExecute.header.number.value)
             blockchainReader.recordBlockDifficulty(blockToExecute.header.difficulty)
@@ -422,12 +508,16 @@ class BlockExecution(
     */
   private def processWithdrawals(
       block: Block,
-      world: InMemoryWorldStateProxy
+      world: InMemoryWorldStateProxy,
+      accessRecorder: Option[BlockAccessRecorder]
   ): InMemoryWorldStateProxy =
     block.body.withdrawals match
       case Some(withdrawals) if withdrawals.nonEmpty =>
         val GweiToWei = BigInt("1000000000")
         withdrawals.foldLeft(world) { (w, withdrawal) =>
+          // EIP-7928: every recipient is read, a zero amount included (execution-specs `create_ether` in
+          // `process_withdrawals`), though a zero amount leaves the account untouched below.
+          BlockAccessRecorder.account(accessRecorder, withdrawal.address)
           // EIP-4895: amount-0 withdrawals must NOT touch the target account —
           // creating/saving an empty account here diverges from every other EL
           // client's state root for any block containing a zero-amount withdrawal.
@@ -500,11 +590,11 @@ class BlockExecution(
     */
   private[ledger] def processPragueSystemCallsChecked(
       block: Block,
-      world: InMemoryWorldStateProxy
+      world: InMemoryWorldStateProxy,
+      accessRecorder: Option[BlockAccessRecorder] = None
   )(implicit blockchainConfig: BlockchainConfig): Either[String, (InMemoryWorldStateProxy, Seq[ByteString])] =
     if !blockchainConfig.isPragueTimestamp(block.header.unixTimestamp) then return Right((world, Nil))
 
-    import BlockExecution.*
     val evmConfig = EvmConfig.forBlock(block.header.number.value, block.header.unixTimestamp, blockchainConfig)
     var w = world
     val outputs = scala.collection.mutable.ListBuffer.empty[ByteString]
@@ -516,44 +606,21 @@ class BlockExecution(
     // per-block slots its user path dirtied (for the builder deposit contract, slots 0x01 and 0x03), so skipping
     // the call leaves those slots set and forks the storage root -> account RLP -> STATE ROOT.
     //
-    // GAS CEILING, stated explicitly because it changes an already-shipped path. `SYSTEM_CALL_GAS_LIMIT` is one
-    // global constant, not a per-contract one: EIP-8037 raises it from 30,000,000 to 30,000,000 + 16 x
-    // GAS_STORAGE_SET so that a system call has state-dimension headroom, and it does so for EVERY system call,
-    // not only the two EIP-8282 ones. So on an Amsterdam block the pre-existing EIP-7002/7251 calls are funded at
-    // the raised ceiling too. That is deliberate: scoping the bump to the builder pair would invent a
-    // two-constant model no reference client has. EIP-2935 and EIP-4788 are unaffected here only because this
-    // client applies them as direct storage writes (the optimisation EIP-4788 explicitly permits) rather than as
-    // EVM calls, so they have no gas ceiling to raise — see `applyEip4788` / `applyEip2935`.
-    //
-    // The bump is strictly upward (30,000,000 -> 31,566,720) and the queue predeploys are bounded loops that
-    // never read GAS, so it is a no-op for 7002/7251. That is asserted, not assumed:
-    // `AmsterdamBuilderRequestsSpec` runs the fixture's real withdrawal and consolidation bytecode over a
-    // non-empty queue at both ceilings and requires byte-identical requests and storage.
-    val amsterdamActive = blockchainConfig.isAmsterdamTimestamp(block.header.unixTimestamp)
+    // GAS: on an Amsterdam block every system call, the pre-existing EIP-7002/7251 ones included, gets EIP-8037's
+    // state-gas reservoir BESIDE its unchanged 30,000,000 execution grant (see `systemCallContext`). The queue
+    // predeploys are bounded loops that never read GAS, so for them it changes nothing; that is asserted, not assumed:
+    // `AmsterdamBuilderRequestsSpec` runs the fixture's real withdrawal and consolidation bytecode over a non-empty
+    // queue on both sides of the fork and requires byte-identical requests and storage.
     var failure: Option[String] = None
     for (queueAddr, requestType) <- BlockExecution.systemCallTargets(block.header.unixTimestamp)
     do
       val code = w.getCode(queueAddr)
       if failure.isEmpty && code.nonEmpty then
-        val context = ProgramContext[InMemoryWorldStateProxy, InMemoryWorldStateProxyStorage](
-          callerAddr = SystemAddress,
-          originAddr = SystemAddress,
-          recipientAddr = Some(queueAddr),
-          gasPrice = com.chipprbots.ethereum.domain.UInt256.Zero,
-          startGas = if amsterdamActive then AmsterdamGas.SystemCallGasLimit else BigInt(30000000),
-          inputData = ByteString.empty,
-          value = com.chipprbots.ethereum.domain.UInt256.Zero,
-          endowment = com.chipprbots.ethereum.domain.UInt256.Zero,
-          doTransfer = false,
-          blockHeader = block.header,
-          callDepth = 0,
-          world = w,
-          initialAddressesToDelete = Set.empty,
-          evmConfig = evmConfig,
-          originalWorld = w,
-          warmAddresses = Set(queueAddr),
-          warmStorage = Set.empty
-        )
+        // EIP-7928: execution-specs `process_checked_system_transaction` checks the code on an untracked state, then
+        // makes the call, which reads the target as any call does. All four share block access index n + 1.
+        accessRecorder.foreach(BlockExecution.recordSystemCallTarget(w, queueAddr, _))
+        val context =
+          BlockExecution.systemCallContext(block.header, w, queueAddr, ByteString.empty, evmConfig, accessRecorder)
         val vm = new com.chipprbots.ethereum.vm.VM[InMemoryWorldStateProxy, InMemoryWorldStateProxyStorage]
         val result = vm.run(context)
         result.error match
@@ -570,18 +637,26 @@ class BlockExecution(
     * block execution and return one request entry: 0x00 || (pubkey || wc || amount || signature || index) per deposit,
     * or None if there were none.
     *
+    * The contract is the chain's own ([[BlockExecution.depositContractFor]]), not the mainnet constant: Sepolia's is
+    * `0x7f02c3e3…295d`. Scanning the mainnet address there finds no deposits, so every Sepolia block carrying one
+    * computed `sha256("")` instead of the header's `requestsHash` and was rejected as INVALID_REQUESTS (Sepolia block
+    * 11,321,359: 10 deposits, `SepoliaDepositRequestsSpec`).
+    *
     * A deposit log whose ABI layout is not exactly the canonical one — 576 bytes, offsets 160/256/320/384/512, sizes
     * 48/32/8/96/8 — makes the BLOCK invalid (EELS `extract_deposit_data`, EEST `test_invalid_layout` /
     * `test_invalid_log_length`: INVALID_DEPOSIT_EVENT_LAYOUT). Previously any log of at least 608 bytes was sliced at
     * fixed positions and any shorter one silently dropped, so a malformed event was misparsed or ignored, never
     * rejected.
     */
-  def collectDepositRequests(receipts: Seq[Receipt]): Either[String, Option[ByteString]] =
+  def collectDepositRequests(receipts: Seq[Receipt])(implicit
+      blockchainConfig: BlockchainConfig
+  ): Either[String, Option[ByteString]] =
     import BlockExecution.*
+    val depositContract = depositContractFor(blockchainConfig)
     val deposits = for
       receipt <- receipts
       log <- receipt.logs
-      if log.loggerAddress == DepositContractAddress
+      if log.loggerAddress == depositContract
       if log.logTopics.headOption.contains(DepositEventSignature)
     yield log.data
     deposits.toList
@@ -597,8 +672,23 @@ object BlockExecution:
 
   val SystemAddress: Address = Address("0xfffffffffffffffffffffffffffffffffffffffe")
 
-  /** EIP-6110: Deposit contract for on-chain validator deposits */
+  /** EIP-6110: the MAINNET beacon deposit contract, and the fallback for a chain that declares none. Never compare a
+    * log address with this directly; resolve the chain's contract with [[depositContractFor]].
+    */
   val DepositContractAddress: Address = Address("0x00000000219ab540356cBB839Cbe05303d7705Fa")
+
+  /** EIP-6110 `DEPOSIT_CONTRACT_ADDRESS` of the chain being executed: its `deposit-contract-address` if declared,
+    * otherwise the mainnet contract.
+    *
+    * EIP-6110 lists the address as network configuration ("Mainnet" row) that MUST ship with the client; go-ethereum
+    * reads `ChainConfig.DepositContractAddress` in `ParseDepositLogs` (Sepolia `0x7f02c3e3…295d`). The fallback is
+    * execution-specs': its `requests.py` hard-codes the mainnet address and EEST fixtures declare none. go-ethereum
+    * differs only for a custom genesis that omits the field, where its zero value scans address 0x0.
+    *
+    * Execution and `eth_config` both resolve through here, so the address a node advertises is the one it validates.
+    */
+  def depositContractFor(blockchainConfig: BlockchainConfig): Address =
+    blockchainConfig.depositContractAddress.getOrElse(DepositContractAddress)
 
   /** EIP-7002: Withdrawal request queue contract */
   val WithdrawalQueueAddress: Address = Address("0x00000961ef480eb55e80d19ad83579a64c007002")
@@ -640,6 +730,120 @@ object BlockExecution:
         (BuilderExitQueueAddress, BuilderExitRequestType)
       )
     else pragueTargets
+
+  /** The top-level context of a SYSTEM_ADDRESS call to `target`: value 0 and no transfer, `target` warm, gas price 0
+    * (go-ethereum's system `Message`).
+    *
+    * Gas: 30,000,000 of execution gas, on every fork. From Amsterdam (`evmConfig.amsterdamEnabled`) EIP-8037 adds a
+    * state-gas reservoir of 16 x GAS_STORAGE_SET = 1,566,720 BESIDE that grant, not inside it: execution-specs
+    * `process_unchecked_system_transaction` sets `execution_gas_grant = SYSTEM_TRANSACTION_GAS` and
+    * `state_gas_reservoir = STORAGE_SET * SYSTEM_MAX_SSTORES_PER_CALL`, and go-ethereum `systemCallGasBudget` does the
+    * same. So GAS reads 30,000,000 less what has been spent, a call that needs more than 30,000,000 of execution gas
+    * halts whatever reservoir is left, and state charges draw the reservoir first and only then the execution grant
+    * (EEST `test_system_call_execution_grant`, `_execution_boundary`, `_reservoir_boundary`). fukuii previously granted
+    * the 31,566,720 total as execution gas, with no reservoir.
+    *
+    * Pre-Amsterdam (ETH Prague/Osaka) the reservoir is 0 and the context is the one the EIP-7002/7251 calls always had.
+    * ETC never builds one: its only system-contract write, EIP-2935 at Olympia, is a direct storage write.
+    */
+  def systemCallContext(
+      header: BlockHeader,
+      world: InMemoryWorldStateProxy,
+      target: Address,
+      input: ByteString,
+      evmConfig: EvmConfig,
+      accessRecorder: Option[BlockAccessRecorder] = None
+  ): ProgramContext[InMemoryWorldStateProxy, InMemoryWorldStateProxyStorage] =
+    val stateGasReservoir = if evmConfig.amsterdamEnabled then AmsterdamGas.SystemCallStateGasReservoir else BigInt(0)
+    ProgramContext[InMemoryWorldStateProxy, InMemoryWorldStateProxyStorage](
+      callerAddr = SystemAddress,
+      originAddr = SystemAddress,
+      recipientAddr = Some(target),
+      gasPrice = UInt256.Zero,
+      startGas = AmsterdamGas.SystemCallExecutionGas,
+      inputData = input,
+      value = UInt256.Zero,
+      endowment = UInt256.Zero,
+      doTransfer = false,
+      blockHeader = header,
+      callDepth = 0,
+      world = world,
+      initialAddressesToDelete = Set.empty,
+      evmConfig = evmConfig,
+      originalWorld = world,
+      warmAddresses = Set(target),
+      warmStorage = Set.empty,
+      stateGasReservoir = stateGasReservoir,
+      initialStateGasReservoir = stateGasReservoir,
+      accessRecorder = accessRecorder
+    )
+
+  /** EIP-7928: what a SYSTEM_ADDRESS call reads before its code runs (execution-specs `create_evm` for a value-0 call):
+    * the target, and — should the target carry an EIP-7702 delegation indicator — the delegated address, whose access
+    * charge 30,000,000 of gas always covers. SYSTEM_ADDRESS itself is not read: a value-0 call moves no ether, so it
+    * enters the list only if the called code reads it (EIP-7928 "Scope and Inclusion").
+    */
+  private[ledger] def recordSystemCallTarget(
+      world: InMemoryWorldStateProxy,
+      target: Address,
+      recorder: BlockAccessRecorder
+  ): Unit =
+    recorder.recordAccount(target)
+    SetCodeTransaction.parseDelegation(world.getCode(target)).foreach(recorder.recordAccount)
+
+  /** Amsterdam: the EIP-4788 and EIP-2935 block preamble as execution-specs `apply_body` runs it — two
+    * `process_unchecked_system_transaction` calls from SYSTEM_ADDRESS, the beacon roots contract with the parent beacon
+    * block root, then the history contract with the parent hash — instead of the direct storage writes of the
+    * `BlockExecution` class's `applyEip4788` / `applyEip2935`.
+    *
+    * The direct writes are the shortcut EIP-4788 permits ("clients may decide to omit an explicit EVM call and directly
+    * set the storage values"), and they give the same storage only while the canonical contracts are the code at those
+    * addresses. On Amsterdam the shortcut stops being equivalent. EIP-8037 funds each call with an execution grant and
+    * a separate state-gas reservoir (see `systemCallContext`), and EEST checks that by putting its own code at both
+    * addresses (`test_system_call_execution_grant`, `_execution_boundary`, `_reservoir_boundary`, beacon and history
+    * variants): only running the code gives their storage. EIP-7928 also records the calls' reads and writes in the
+    * block access list at index 0, which needs the calls to run.
+    *
+    * With the canonical contracts the storage is the same as the direct writes: the beacon roots contract stores the
+    * timestamp and the root at slots `timestamp % 8191` and `timestamp % 8191 + 8191`, and the history contract stores
+    * the parent hash at slot `(number - 1) % 8191` (asserted in AmsterdamSystemCallSpec). Every earlier fork and every
+    * ETC fork keep the direct writes.
+    *
+    * Here in the companion rather than on the class so that block execution and the trace replays of an Amsterdam block
+    * (`StxLedger.advanceWorldToTx`) run one and the same preamble.
+    */
+  private[ledger] def applyAmsterdamPreambleSystemCalls(
+      header: BlockHeader,
+      world: InMemoryWorldStateProxy,
+      accessRecorder: Option[BlockAccessRecorder]
+  )(implicit blockchainConfig: BlockchainConfig): InMemoryWorldStateProxy =
+    val afterBeaconRoot = header.parentBeaconBlockRoot.fold(world) { root =>
+      uncheckedSystemCall(header, world, BeaconRootContractAddress, root.value, accessRecorder)
+    }
+    uncheckedSystemCall(header, afterBeaconRoot, HistoryStorageAddress, header.parentHash.value, accessRecorder)
+
+  /** execution-specs `process_unchecked_system_transaction`: a SYSTEM_ADDRESS call to `target`, whose failure is
+    * ignored — the call's state changes are dropped and the block stays valid. No code at `target` means nothing to run
+    * and nothing changes, as for any zero-value call to an account without code.
+    */
+  private def uncheckedSystemCall(
+      header: BlockHeader,
+      world: InMemoryWorldStateProxy,
+      target: Address,
+      input: ByteString,
+      accessRecorder: Option[BlockAccessRecorder]
+  )(implicit blockchainConfig: BlockchainConfig): InMemoryWorldStateProxy =
+    // EIP-7928: the target is read even when it has no code (execution-specs `create_evm` resolves its code first;
+    // EEST `bal_4788_absent_contract`), and its reads stay when the call fails
+    // (`bal_pre_execution_call_failure_keeps_read_drops_write`).
+    accessRecorder.foreach(recordSystemCallTarget(world, target, _))
+    if world.getCode(target).isEmpty then world
+    else
+      val evmConfig = EvmConfig.forBlock(header.number.value, header.unixTimestamp, blockchainConfig)
+      val context = systemCallContext(header, world, target, input, evmConfig, accessRecorder)
+      val result =
+        new com.chipprbots.ethereum.vm.VM[InMemoryWorldStateProxy, InMemoryWorldStateProxyStorage].run(context)
+      if result.error.isDefined then world else InMemoryWorldStateProxy.persistState(result.world)
 
   /** EIP-6110 `DepositEvent` ABI layout: (offset, size) of pubkey, withdrawal_credentials, amount, signature, index. */
   private val DepositEventLength = 576

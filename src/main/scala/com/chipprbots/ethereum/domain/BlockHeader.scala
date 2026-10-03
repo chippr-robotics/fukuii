@@ -82,6 +82,16 @@ case class BlockHeader(
     case HefPostAmsterdam(_, _, _, _, _, rh, _, _) => Some(rh)
     case _                                         => None
 
+  /** EIP-7928: `keccak256(rlp(block access list))`. Amsterdam headers only. */
+  val blockAccessListHash: Option[ByteString] = extraFields match
+    case HefPostAmsterdam(_, _, _, _, _, _, balh, _) => Some(balh)
+    case _                                           => None
+
+  /** EIP-7843: the beacon slot the block was built for. Amsterdam headers only. */
+  val slotNumber: Option[BigInt] = extraFields match
+    case HefPostAmsterdam(_, _, _, _, _, _, _, slot) => Some(slot)
+    case _                                           => None
+
   def isPoS: Boolean = difficulty == Difficulty.Zero && baseFee.isDefined
   def isPoW: Boolean = !isPoS
 

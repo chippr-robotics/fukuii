@@ -43,10 +43,10 @@ class NetworkForkIdFilteringSpec extends AnyWordSpec with Matchers:
     EthereumNodeRecord(dummySig, 0L, ethKey -> ByteVector(encode(forkId.toRLPEncodable)))
 
   private def etcTag(head: BigInt): ForkIdTag =
-    new ForkIdTag(() => etcGenesisHash, () => 0L, etcConf, () => head)
+    new ForkIdTag(() => etcGenesisHash, () => 0L, etcConf, () => head, () => 0L)
 
   private def mordorTag(head: BigInt): ForkIdTag =
-    new ForkIdTag(() => mordorGenesisHash, () => 0L, mordorConf, () => head)
+    new ForkIdTag(() => mordorGenesisHash, () => 0L, mordorConf, () => head, () => 0L)
 
   // Known forkId values, verified against core-geth reference implementation.
   private val EtcSpiralForkId = ForkId(0xbe46d57cL, None)
@@ -146,11 +146,11 @@ class NetworkForkIdFilteringSpec extends AnyWordSpec with Matchers:
       etcTag(20000000).toFilter(enrWith(EthPetersburgForkId)) shouldBe a[Left[?, ?]]
 
       // State 2: Olympia pending
-      val tag2 = new ForkIdTag(() => etcGenesisHash, () => 0L, olympiaConf, () => 25000000)
+      val tag2 = new ForkIdTag(() => etcGenesisHash, () => 0L, olympiaConf, () => 25000000, () => 0L)
       tag2.toFilter(enrWith(EthPetersburgForkId)) shouldBe a[Left[?, ?]]
 
       // State 3: Olympia activated
-      val tag3 = new ForkIdTag(() => etcGenesisHash, () => 0L, olympiaConf, () => 31000000)
+      val tag3 = new ForkIdTag(() => etcGenesisHash, () => 0L, olympiaConf, () => 31000000, () => 0L)
       tag3.toFilter(enrWith(EthPetersburgForkId)) shouldBe a[Left[?, ?]]
     }
 
@@ -158,7 +158,7 @@ class NetworkForkIdFilteringSpec extends AnyWordSpec with Matchers:
       // Local is past Olympia, remote is still at Spiral but reports next=Some(olympiaBlock).
       // Per EIP-2124 subset rule: Spiral checksum with correct next-pointer matches → Connect.
       val spiralWithOlympiaPending = ForkId(0xbe46d57cL, Some(30000000))
-      val tag = new ForkIdTag(() => etcGenesisHash, () => 0L, olympiaConf, () => 35000000)
+      val tag = new ForkIdTag(() => etcGenesisHash, () => 0L, olympiaConf, () => 35000000, () => 0L)
       tag.toFilter(enrWith(spiralWithOlympiaPending)) shouldBe Right(())
     }
   }

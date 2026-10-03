@@ -166,7 +166,13 @@ trait DiscoveryConfigBuilder extends BlockchainConfigBuilder with StorageBuilder
       genesisHash = () => reader.genesisHeader.hash.value,
       genesisTimestamp = () => reader.genesisHeader.unixTimestamp.toLong,
       blockchainConfig = blockchainConfig,
-      currentBestBlock = () => reader.getBestBlockNumber
+      currentBestBlock = () => reader.getBestBlockNumber,
+      // Real head timestamp, not a hardcoded 0 — see ForkIdTag's identical comment (WI-13 / issue #1429).
+      currentBestBlockTimestamp = () =>
+        reader
+          .getBlockHeaderByNumber(reader.getBestBlockNumber)
+          .map(_.unixTimestamp.toLong)
+          .getOrElse(reader.genesisHeader.unixTimestamp.toLong)
     )
     DiscoveryConfig(
       instanceConfig.config,
@@ -218,7 +224,13 @@ trait PeerDiscoveryManagerBuilder:
                   genesisHash = () => blockchainReader.genesisHeader.hash.value,
                   genesisTimestamp = () => blockchainReader.genesisHeader.unixTimestamp.toLong,
                   blockchainConfig = blockchainConfig,
-                  currentBestBlock = () => blockchainReader.getBestBlockNumber
+                  currentBestBlock = () => blockchainReader.getBestBlockNumber,
+                  // Real head timestamp, not a hardcoded 0 — see ForkIdTag's own comment (WI-13 / issue #1429).
+                  currentBestBlockTimestamp = () =>
+                    blockchainReader
+                      .getBlockHeaderByNumber(blockchainReader.getBestBlockNumber)
+                      .map(_.unixTimestamp.toLong)
+                      .getOrElse(blockchainReader.genesisHeader.unixTimestamp.toLong)
                 )
               )
             ),
@@ -885,10 +897,15 @@ trait EngineApiBuilder extends Logger:
       blockExecution,
       forkChoiceManager,
       Some(pendingTransactionsManagerTyped),
-      getPayloadRebuildBudget = EngineApiService.GetPayloadRebuildBudget
+      getPayloadRebuildBudget = EngineApiService.GetPayloadRebuildBudget,
+      // go-ethereum's --miner.gaslimit equivalent, as for the testing_* namespace: mining.gas-limit-target.
+      builderGasCeil = mining.config.generic.gasLimitTarget
     )(blockchainConfig, typedScheduler)
 
-  lazy val engineApiController: EngineApiController = new EngineApiController(engineApiService, Some(jsonRpcController))
+  // The controller's fork gates read the same schedule its service executes with (not the process-global config, which
+  // a ChainInstance with its own InstanceConfig does not share).
+  lazy val engineApiController: EngineApiController =
+    new EngineApiController(engineApiService, Some(jsonRpcController), blockchainConfig)
 
   /** Bind the p2p import path's invalid-chain channel to this node's Engine API registry. Called once, from
     * `StdNode.start()`, before sync begins.

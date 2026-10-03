@@ -165,7 +165,8 @@ class ProgramSpec extends AnyFlatSpec with Matchers with ScalaCheckPropertyCheck
       EvmConfig.LondonOpCodes,
       EvmConfig.ShanghaiOpCodes,
       EvmConfig.CancunOpCodes,
-      EvmConfig.OsakaOpCodes
+      EvmConfig.OsakaOpCodes,
+      EvmConfig.AmsterdamOpCodes
     )
     for
       table <- tables

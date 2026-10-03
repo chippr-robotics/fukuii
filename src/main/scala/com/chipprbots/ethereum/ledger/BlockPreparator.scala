@@ -227,19 +227,60 @@ class BlockPreparator(
       // eth_simulateV1's overrides, from executeTransactionForSimulation only. StxLedger's calls leave it Empty.
       overrides: SimulationOverrides = SimulationOverrides.Empty
   )(implicit blockchainConfig: BlockchainConfig): PR =
+    vm.run(
+      topLevelContext(
+        stx,
+        senderAddress,
+        blockHeader,
+        world,
+        authExecutionGas,
+        authStateGas,
+        tracer,
+        extraWarmAddresses,
+        accessRecorder = None,
+        overrides = overrides
+      )
+    )
+
+  /** The transaction's top-level frame context, as [[runVM]] runs it. Separate so `executeTransaction` can also read
+    * what the context decided about EIP-2780's pre-execution phase (`preExecutionOutOfGas`) — that decides how far a
+    * failed transaction rolls back.
+    */
+  private def topLevelContext(
+      stx: SignedTransaction,
+      senderAddress: Address,
+      blockHeader: BlockHeader,
+      world: InMemoryWorldStateProxy,
+      authExecutionGas: BigInt,
+      authStateGas: BigInt,
+      tracer: Option[com.chipprbots.ethereum.vm.ExecutionTracer],
+      extraWarmAddresses: Set[Address],
+      accessRecorder: Option[BlockAccessRecorder],
+      // eth_simulateV1's overrides for this transaction; SimulationOverrides.Empty on every other path.
+      overrides: SimulationOverrides
+  )(implicit blockchainConfig: BlockchainConfig): PC =
     val evmConfig = EvmConfig.forBlock(blockHeader.number.value, blockHeader.unixTimestamp, blockchainConfig)
     val context: PC =
-      ProgramContext(stx, blockHeader, senderAddress, world, evmConfig, authExecutionGas, authStateGas)
+      ProgramContext(
+        stx,
+        blockHeader,
+        senderAddress,
+        world,
+        evmConfig,
+        authExecutionGas,
+        authStateGas,
+        extraWarmAddresses
+      )
     // Apply the eth_simulateV1 overrides, if this call carries any
-    val contextWithSimFlags =
-      var ctx = context
-      if extraWarmAddresses.nonEmpty then ctx = ctx.copy(warmAddresses = ctx.warmAddresses ++ extraWarmAddresses)
-      if overrides.precompileRelocations.nonEmpty then
-        ctx = ctx.copy(precompileRelocations = overrides.precompileRelocations)
-      if overrides.traceTransfers then ctx = ctx.copy(traceTransfers = true)
-      if tracer.isDefined then ctx = ctx.copy(tracer = tracer)
-      ctx
-    vm.run(contextWithSimFlags)
+    var ctx = context
+    if extraWarmAddresses.nonEmpty then ctx = ctx.copy(warmAddresses = ctx.warmAddresses ++ extraWarmAddresses)
+    if overrides.precompileRelocations.nonEmpty then
+      ctx = ctx.copy(precompileRelocations = overrides.precompileRelocations)
+    if overrides.traceTransfers then ctx = ctx.copy(traceTransfers = true)
+    if tracer.isDefined then ctx = ctx.copy(tracer = tracer)
+    // EIP-7928: the transaction's block-access recorder, while an Amsterdam block executes.
+    if accessRecorder.isDefined then ctx = ctx.copy(accessRecorder = accessRecorder)
+    ctx
 
   /** Like [[runVM]] but uses a one-off VM instance with the given [[ExecutionTracer]] attached. Called by
     * [[StxLedger.simulateTransactionWithTracer]] for debug_traceTransaction / trace_call etc.
@@ -331,6 +372,27 @@ class BlockPreparator(
   ): InMemoryWorldStateProxy =
     addressesToDelete.foldLeft(worldStateProxy) { case (world, address) => world.deleteAccount(address) }
 
+  /** EIP-8246 (Amsterdam) finalization of the accounts SELFDESTRUCT marked for deletion — under EIP-6780 only accounts
+    * created in the same transaction. They are no longer deleted: the nonce is reset, the code and all storage are
+    * cleared, and the BALANCE IS KEPT, so no ether is burned (execution-specs `clear_account_preserving_balance`,
+    * go-ethereum `finaliseAmsterdam`). An account left with a zero balance is empty, and EIP-161 removes it —
+    * execution-specs does so in the same `modify_state` step, so it is removed here rather than left for the
+    * touched-account sweep.
+    *
+    * Deleting first and saving a fresh account is what clears the storage: the fresh account carries the empty storage
+    * root, and the deletion drops the in-transaction storage and code overlays for the address. The code itself stays
+    * in the code store (shared by hash), exactly as [[deleteAccounts]] leaves it.
+    */
+  private[ledger] def clearSelfDestructedAccounts(addressesToDelete: Set[Address])(
+      worldStateProxy: InMemoryWorldStateProxy
+  )(implicit blockchainConfig: BlockchainConfig): InMemoryWorldStateProxy =
+    addressesToDelete.foldLeft(worldStateProxy) { case (world, address) =>
+      val balance = world.getBalance(address)
+      val cleared = world.deleteAccount(address)
+      if balance.isZero then cleared
+      else cleared.saveAccount(address, Account.empty(blockchainConfig.accountStartNonce).copy(balance = balance))
+    }
+
   /** EIP161 - State trie clearing Delete all accounts that have been touched (involved in any potentially
     * state-changing operation) during transaction execution.
     *
@@ -381,7 +443,9 @@ class BlockPreparator(
       senderAddress,
       blockHeader,
       world,
-      SimulationOverrides(precompileRelocations, traceTransfers, blobBaseFeeOverride)
+      SimulationOverrides(precompileRelocations, traceTransfers, blobBaseFeeOverride),
+      accessRecorder = None,
+      tracer = None
     )
 
   /** Executes one transaction of a block, as block import does. There are no eth_simulateV1 overrides here, and no
@@ -391,21 +455,39 @@ class BlockPreparator(
       stx: SignedTransaction,
       senderAddress: Address,
       blockHeader: BlockHeader,
-      world: InMemoryWorldStateProxy
+      world: InMemoryWorldStateProxy,
+      // EIP-7928: the transaction's block-access recorder. Present only when executing an Amsterdam block.
+      accessRecorder: Option[BlockAccessRecorder] = None,
+      // An RPC tracer watching the top-level frame, for a trace replay (StxLedger.replayTransaction). Block import and
+      // block building never pass one, and without one the frame runs on `vm` exactly as it always has.
+      tracer: Option[ExecutionTracer] = None
   )(implicit blockchainConfig: BlockchainConfig): TxResult =
-    executeTransactionWithOverrides(stx, senderAddress, blockHeader, world, SimulationOverrides.Empty)
+    executeTransactionWithOverrides(
+      stx,
+      senderAddress,
+      blockHeader,
+      world,
+      SimulationOverrides.Empty,
+      accessRecorder,
+      tracer
+    )
 
   /** The one transaction-execution path, shared by [[executeTransaction]] (overrides always Empty) and
-    * [[executeTransactionForSimulation]] (the simulate call's own overrides).
+    * [[executeTransactionForSimulation]] (the simulate call's own overrides). Every parameter is explicit, so neither
+    * caller can drop the block-access recorder or the tracer by omission.
     */
   private def executeTransactionWithOverrides(
       stx: SignedTransaction,
       senderAddress: Address,
       blockHeader: BlockHeader,
       world: InMemoryWorldStateProxy,
-      overrides: SimulationOverrides
+      overrides: SimulationOverrides,
+      accessRecorder: Option[BlockAccessRecorder],
+      tracer: Option[ExecutionTracer]
   )(implicit blockchainConfig: BlockchainConfig): TxResult =
     log.debug(s"Transaction ${stx.hash.toHex} execution start")
+    // EIP-7928: execution-specs `check_transaction` reads the sender before anything else.
+    BlockAccessRecorder.account(accessRecorder, senderAddress)
     val gasPrice = UInt256(Transaction.effectiveGasPrice(stx.tx, blockHeader.baseFee))
     val gasLimit = stx.tx.gasLimit
 
@@ -419,45 +501,77 @@ class BlockPreparator(
     // give back part of that 25,000 — with the charge gone, the refund would be a credit against nothing
     // and would under-charge every Type-4 transaction after activation.
     val amsterdamActive = blockchainConfig.isAmsterdamTimestamp(blockHeader.unixTimestamp)
+    val evmConfigForTx = EvmConfig.forBlock(blockHeader.number.value, blockHeader.unixTimestamp, blockchainConfig)
     var authExecutionGas: BigInt = 0
     var authStateGas: BigInt = 0
     var authorityWarmAddresses: Set[Address] = Set.empty
+    var authorizationsOutOfGas = false
     val worldAfterAuths = stx.tx match
+      case sct: SetCodeTransaction if amsterdamActive =>
+        // EIP-2780: the authorizations are charged one by one as they are applied, against the top frame's meter —
+        // which is why they need the frame's gas split before the frame exists. The accounts whose first write the
+        // transaction already paid for: the sender (TX_BASE) and a value-bearing recipient (TX_VALUE_COST).
+        val (executionGrant, reservoir) = ProgramContext.evmGasAllocation(stx, senderAddress, evmConfigForTx)
+        val paidWrites = Set(senderAddress) ++ (if sct.value > 0 then sct.receivingAddress.toSet else Set.empty)
+        val applied = applyAmsterdamAuthorizations(
+          sct.authorizationList,
+          checkpointWorldState,
+          paidWrites,
+          executionGrant,
+          reservoir
+        )
+        authExecutionGas = applied.executionGas
+        authStateGas = applied.stateGas
+        authorityWarmAddresses = applied.warmAuthorities
+        authorizationsOutOfGas = applied.outOfGas
+        applied.world
       case sct: SetCodeTransaction =>
-        if amsterdamActive then
-          val (execGas, stateGas) = amsterdamAuthorizationCharges(
-            sct.authorizationList,
-            checkpointWorldState,
-            senderAddress,
-            sct.receivingAddress,
-            sct.value
-          )
-          authExecutionGas = execGas
-          authStateGas = stateGas
         val (world, refund, warm) = applyAuthorizationsWithRefund(sct.authorizationList, checkpointWorldState)
-        authExistingAccountRefund = if amsterdamActive then 0 else refund
+        authExistingAccountRefund = refund
         authorityWarmAddresses = warm
         world
       case _ => checkpointWorldState
 
-    val result = runVM(
+    val context = topLevelContext(
       stx,
       senderAddress,
       blockHeader,
       worldAfterAuths,
       authExecutionGas,
       authStateGas,
+      tracer = None,
       extraWarmAddresses = authorityWarmAddresses,
+      accessRecorder = accessRecorder,
       overrides = overrides
     )
+    accessRecorder.foreach { recorder =>
+      recordPreExecutionReads(
+        stx,
+        senderAddress,
+        worldAfterAuths,
+        context,
+        authorityWarmAddresses,
+        authorizationsOutOfGas
+      )(
+        recorder
+      )
+    }
+    // A tracer rides on a VM of its own, as runVMWithTracer's does: the VM's tracer is the one that sees sub-call
+    // entries and exits as well as steps. It is not also put on the context, which would report every step twice.
+    val result = tracer.fold(vm.run(context))(t => new VMImpl(Some(t)).run(context))
 
-    // A failed top-level frame reverts to the world as it stood when the frame was ENTERED. Pre-Amsterdam that is
-    // after the EIP-7702 authorizations: they are applied before the call snapshot (go-ethereum `execute`), so a
-    // reverting or exceptionally-halting Type-4 transaction still leaves its delegations and nonce bumps in place
-    // (EEST `test_full_gas_consumption[type_4]`, `test_set_code_to_sstore[invalid-*]`). For every other transaction
-    // type `worldAfterAuths` IS `checkpointWorldState`. Amsterdam keeps its existing rollback target, which spec 009
-    // owns (EIP-2780's pre-execution phase is rolled back as a whole).
-    val rollbackWorld = if amsterdamActive then checkpointWorldState else worldAfterAuths
+    // A failed top-level frame reverts to the world as it stood when the frame was ENTERED, which is after the
+    // EIP-7702 authorizations: they are applied before the call snapshot (go-ethereum `execute`, execution-specs
+    // `process_call` snapshots after `create_evm`), so a reverting or exceptionally-halting Type-4 transaction still
+    // leaves its delegations and nonce bumps in place (EEST `test_full_gas_consumption[type_4]`,
+    // `test_set_code_to_sstore[invalid-*]`, `test_delegation_persists_on_execution_oog`). For every other transaction
+    // type `worldAfterAuths` IS `checkpointWorldState`.
+    //
+    // Amsterdam adds the one exception: EIP-2780's pre-execution phase — the authorization charges, the recipient's
+    // account-creation charge and the delegation-target access — can itself run out of gas, and then the frame is
+    // never entered and the whole phase is rolled back, delegations included (execution-specs `process_top_level`
+    // restores `prep_snapshot`). `preExecutionOutOfGas` is only ever set on an Amsterdam block.
+    val rollbackWorld = if context.preExecutionOutOfGas then checkpointWorldState else worldAfterAuths
     val resultWithErrorHandling: PR =
       if result.error.isDefined then
         // Rollback to the world before transfer was done if an error happened
@@ -469,7 +583,6 @@ class BlockPreparator(
       if authExistingAccountRefund > 0 then
         resultWithErrorHandling.copy(gasRefund = resultWithErrorHandling.gasRefund + authExistingAccountRefund)
       else resultWithErrorHandling
-    val evmConfigForTx = EvmConfig.forBlock(blockHeader.number.value, blockHeader.unixTimestamp, blockchainConfig)
 
     // go-ethereum applies the refund counter on EVERY exit path (`st.gasRemaining += st.calcRefund()` after the call,
     // regardless of `vmerr`). A failed frame reverts the refunds it accrued itself, but the EIP-7702 existing-authority
@@ -504,23 +617,31 @@ class BlockPreparator(
           s"gasToRefundBase=$totalGasToRefundBase executionGas=$executionGasBase"
       )
 
-    // EIP-7623 activation:
-    //   - ETH: Prague timestamp
-    //   - ETC: Olympia block (ECIP-1121)
-    // Do NOT use `blockHeader.number >= olympiaBlockNumber` alone — hive maps London→olympiaBlockNumber
-    // on ETH test chains, which would apply the floor pre-Prague.
-    val eip7623Active =
-      blockchainConfig.isPragueTimestamp(blockHeader.unixTimestamp) ||
-        (blockchainConfig.networkType == com.chipprbots.ethereum.utils.NetworkType.ETC &&
-          blockHeader.number.value >= blockchainConfig.forkBlockNumbers.olympiaBlockNumber)
+    // EIP-7623 activation — ETH Prague timestamp, ETC Olympia block (ECIP-1121). The validator's `tx.gas >= floor`
+    // rule reads the same predicate; see BlockPreparator.eip7623Active.
+    val eip7623Active = BlockPreparator.eip7623Active(blockHeader.number.value, blockHeader.unixTimestamp)
     // EIP-7623's floor sits on the transaction's base cost. Pre-Amsterdam that base is the flat 21,000;
     // EIP-2780 replaces it with the decomposed base, and that substitution is load-bearing rather than
     // cosmetic — a floor still anchored at 21,000 would drag the measured 12,000 self-transfer back up to
     // 21,000 and the measured 17,201 `tx-callrevert` up to 21,040, contradicting the fixture on both.
-    val floorDataGas = BlockPreparator.calcFloorDataGas(
-      stx.tx.payload,
-      evmConfigForTx.transactionBaseCost(stx.tx.receivingAddress, UInt256(stx.tx.value), senderAddress)
-    )
+    //
+    // Amsterdam also reprices the floor itself: EIP-7976 charges 64 gas per calldata byte, zero or not, and
+    // EIP-7981 adds the access list's data cost. That is a different function, not a different base, so
+    // the pre-Amsterdam call below — ETH Prague/Osaka and ETC Olympia — is untouched.
+    val floorDataGas =
+      if evmConfigForTx.amsterdamEnabled then
+        evmConfigForTx.calcAmsterdamCalldataFloorGas(
+          stx.tx.payload,
+          Transaction.accessList(stx.tx),
+          stx.tx.receivingAddress,
+          UInt256(stx.tx.value),
+          senderAddress
+        )
+      else
+        BlockPreparator.calcFloorDataGas(
+          stx.tx.payload,
+          evmConfigForTx.transactionBaseCost(stx.tx.receivingAddress, UInt256(stx.tx.value), senderAddress)
+        )
 
     // `tx_gas_used = max(tx_gas_used_after_refund, calldata_floor_gas_cost)` (EIP-8037, unchanged in shape
     // from EIP-7623). This is what the sender pays and what the receipt accumulates.
@@ -547,6 +668,18 @@ class BlockPreparator(
 
     val totalGasToRefund = gasLimit - executionGasToPayToMiner
 
+    // Only the calldata floor can charge more than the gas limit, and only when tx.gas < floor — which EIP-7623 (ETH
+    // Prague, ETC Olympia) and EIP-7976 (Amsterdam) make INVALID, and StdSignedTransactionValidator rejects before
+    // anything executes. A negative refund here therefore means a transaction reached execution without that check
+    // (#1438). Carried on, `refundAmount.toUInt256` below would wrap it modulo 2^256 and silently credit the sender
+    // almost 2^256 wei, or debit it past its upfront payment. Fail loudly instead.
+    if totalGasToRefund < GasAmount.Zero then
+      throw new IllegalStateException(
+        s"transaction ${stx.hash.toHex} would be charged $executionGasToPayToMiner gas, above its gas limit $gasLimit " +
+          s"(calldata floor $floorDataGas): a transaction whose gas limit is below its calldata floor is invalid and " +
+          "must be rejected before execution"
+      )
+
     // Upfront in `updateSenderAccountBeforeExecution` is gasLimit * effectiveGasPrice
     // (post-EIP-1559: NOT maxFeePerGas — see comment there). So the refund only
     // needs to return the unused portion: (gasLimit - executionGas) * effectiveGasPrice.
@@ -567,13 +700,19 @@ class BlockPreparator(
       )
 
     val worldAfterPayments = refundGasFn.andThen(payMinerForGasFn)(resultWithErrorHandling.world)
+    // EIP-7928: execution-specs `disburse_gas_fees` credits the coinbase on every transaction, a zero fee included.
+    BlockAccessRecorder.account(accessRecorder, Address(blockHeader.beneficiary))
 
     // EIP-4844 blob gas cost is charged UPFRONT in updateSenderAccountBeforeExecution
     // (so BALANCE/SELFBALANCE within the VM see the correct post-upfront value). No
     // post-execution deduction needed here — would double-charge.
     val worldAfterBlobGas = worldAfterPayments
 
-    val deleteAccountsFn = deleteAccounts(resultWithErrorHandling.addressesToDelete)
+    // EIP-8246: from Amsterdam a self-destructed account keeps its balance; every earlier ETH fork and every ETC fork
+    // still deletes it outright, balance included.
+    val deleteAccountsFn =
+      if amsterdamActive then clearSelfDestructedAccounts(resultWithErrorHandling.addressesToDelete)
+      else deleteAccounts(resultWithErrorHandling.addressesToDelete)
     val deleteTouchedAccountsFn = deleteEmptyTouchedAccounts
     val persistStateFn = InMemoryWorldStateProxy.persistState
 
@@ -627,6 +766,36 @@ class BlockPreparator(
       stateGasUsed = txStateGas
     )
 
+  /** EIP-7928: the reads execution-specs `create_evm` makes before the top-level frame exists, in its order.
+    *
+    *   1. Every authority whose signature recovered, chain id and nonce bound permitting (`validate_authorization`
+    *      reads it before the code and nonce checks) — up to and including the tuple whose charge ran out of gas.
+    *   1. Unless the authorizations ran out of gas first: the recipient — the call target
+    *      (`resolve_delegated_code_address`, or the value-transfer existence check before it), or the creation address
+    *      (`account_deployable`).
+    *   1. A call target's EIP-7702 delegation target, once its access charge is paid (`get_account(code_address)`):
+    *      short of it, `ProgramContext.preExecutionOutOfGas` is set. A delegated account has code, so no
+    *      account-creation charge can come between.
+    *
+    * The sender (`check_transaction`) and the coinbase (`disburse_gas_fees`) are recorded by `executeTransaction`.
+    */
+  private def recordPreExecutionReads(
+      stx: SignedTransaction,
+      senderAddress: Address,
+      worldAfterAuths: InMemoryWorldStateProxy,
+      context: PC,
+      recoveredAuthorities: Set[Address],
+      authorizationsOutOfGas: Boolean
+  )(recorder: BlockAccessRecorder): Unit =
+    recoveredAuthorities.foreach(recorder.recordAccount)
+    if !authorizationsOutOfGas then
+      stx.tx.receivingAddress match
+        case None => recorder.recordAccount(worldAfterAuths.createAddress(senderAddress))
+        case Some(recipient) =>
+          recorder.recordAccount(recipient)
+          if !context.preExecutionOutOfGas && context.evmConfig.eip7702Enabled then
+            SetCodeTransaction.parseDelegation(worldAfterAuths.getCode(recipient)).foreach(recorder.recordAccount)
+
   // scalastyle:off method.length
   /** This functions executes all the signed transactions from a block (till one of those executions fails)
     *
@@ -652,7 +821,10 @@ class BlockPreparator(
       acumGas: BigInt = 0,
       acumReceipts: Seq[Receipt] = Nil,
       acumExecutionGas: BigInt = 0,
-      acumStateGas: BigInt = 0
+      acumStateGas: BigInt = 0,
+      // EIP-7928: the block's access-list builder, on an Amsterdam block only. Each executed transaction is folded in
+      // at block access index `receipts so far + 1`, which is its position among the block's transactions.
+      accessList: Option[BlockAccessListBuilder] = None
   )(implicit blockchainConfig: BlockchainConfig): Either[TxsExecutionError, BlockResult] =
     signedTransactions match
       case Nil =>
@@ -691,15 +863,30 @@ class BlockPreparator(
           }
           .toRight(TransactionSignatureError)
 
+        // All three counters: EIP-8037 checks block capacity per dimension (execution, state), not against the
+        // receipt sum `acumGas`. Before Amsterdam the execution counter equals `acumGas` and the state one is 0.
         val validatedStx = for
           accData <- accountDataOpt
-          _ <- signedTxValidator.validate(stx, accData._1, blockHeader, upfrontCost, acumGas)
+          _ <- signedTxValidator.validate(
+            stx,
+            accData._1,
+            blockHeader,
+            upfrontCost,
+            acumGas,
+            acumExecutionGas,
+            acumStateGas
+          )
         yield accData
 
         validatedStx match
           case Right((account, address)) =>
+            val accessRecorder = accessList.map(_ => new BlockAccessRecorder)
             val TxResult(newWorld, gasUsed, logs, _, vmError, txExecutionGas, txStateGas) =
-              executeTransaction(stx, address, blockHeader, world.saveAccount(address, account))
+              executeTransaction(stx, address, blockHeader, world.saveAccount(address, account), accessRecorder)
+            for
+              builder <- accessList
+              recorder <- accessRecorder
+            do builder.addIndex(acumReceipts.size + 1L, recorder, world, newWorld)
 
             // spec: https://github.com/ethereum/EIPs/blob/master/EIPS/eip-658.md
             val transactionOutcome =
@@ -731,7 +918,8 @@ class BlockPreparator(
               receipt.cumulativeGasUsed,
               acumReceipts :+ receipt,
               acumExecutionGas + txExecutionGas,
-              acumStateGas + txStateGas
+              acumStateGas + txStateGas,
+              accessList
             )
           case Left(error) =>
             Left(
@@ -798,7 +986,7 @@ class BlockPreparator(
     val prepared = executePreparedTransactions(block.body.transactionList, initialWorld, block.header)
 
     prepared match
-      case (execResult @ BlockResult(resultingWorldStateProxy, _, _, _, _), txExecuted) =>
+      case (execResult @ BlockResult(resultingWorldStateProxy, _, _, _, _, _), txExecuted) =>
         val worldToPersist = payBlockReward(block, resultingWorldStateProxy)
         val worldPersisted = InMemoryWorldStateProxy.persistState(worldToPersist)
         PreparedBlock(
@@ -829,59 +1017,114 @@ class BlockPreparator(
           (newWorld, if existed then refund + BigInt(25000 - 12500) else refund, warm + authority)
     }
 
-  /** EIP-2780's runtime charges for EIP-7702 authorization processing, computed against the world as it stood BEFORE
-    * any authorization was applied.
+  /** EIP-2780 authorization processing at Amsterdam (execution-specs `set_delegation`): the list is applied IN ORDER
+    * and every valid tuple is charged, as it is applied, against the top frame's gas meter — `gasLeft` is the
+    * execution-gas grant and `reservoir` the state-gas reservoir, and a state charge draws from the reservoir first.
     *
-    * The flat `PER_EMPTY_ACCOUNT_COST` is gone. In its place, at most once per authority and only for authorizations
-    * that pass validation:
-    *   - a non-existent authority pays `STATE_BYTES_PER_NEW_ACCOUNT x CPSB` in STATE gas for its new leaf;
-    *   - the first write to an authority pays `ACCOUNT_WRITE` in EXECUTION gas, skipped when that write is already paid
-    *     for — the authority is `tx.sender` (covered by TX_BASE_COST), was written by a preceding valid authorization,
-    *     or is `tx.to` of a value-bearing transaction (covered by TX_VALUE_COST);
-    *   - setting a non-zero delegation target on an authority that had no indicator at transaction start, and that no
-    *     earlier authorization in this transaction has already set one for, pays `STATE_BYTES_PER_AUTH_BASE x CPSB` in
-    *     STATE gas. Clearing an indicator refunds nothing and does not make a later set chargeable again.
+    * Each tuple is validated against the world the tuples before it left, so a second tuple for the same authority with
+    * nonce n+1 is valid once the first has applied. A valid tuple pays, in execution-specs' order:
+    *   - `STATE_BYTES_PER_NEW_ACCOUNT x CPSB` STATE gas when the authority's account does not EXIST (existence, as
+    *     `account_exists`; an existing empty account pays nothing);
+    *   - `ACCOUNT_WRITE` EXECUTION gas when the transaction has not paid for a write to the authority yet: `paidWrites`
+    *     holds the sender (TX_BASE_COST) and a value-bearing recipient (TX_VALUE_COST), and every authority charged
+    *     here joins it, so a repeated authority pays once;
+    *   - `STATE_BYTES_PER_AUTH_BASE x CPSB` STATE gas when it sets a non-zero target on an authority that held no
+    *     indicator BEFORE the transaction and has not had one set earlier in it. Clearing never refunds: set, clear,
+    *     set pays once; clear then set pays once too (the clear set nothing).
     *
-    * **UNTESTED.** No vector exercises this. The reference fixture contains exactly one Type-4 transaction and it is
-    * pre-activation, so neither the fixture nor hive's devp2p suite reaches this code. It is implemented rather than
-    * deferred because the intrinsic side already moved — `calcTransactionIntrinsicGas` charges
-    * EXECUTION_PER_AUTH_BASE_COST (7,816) instead of 25,000 — and shipping that reduction without the compensating
-    * runtime charges would under-price every Amsterdam Type-4 transaction by 17,184 per authorization.
+    * The first charge the meter cannot cover ends the list there: the authorities after it are never loaded, and the
+    * caller rolls the whole pre-execution phase back. The returned totals then INCLUDE that charge, so the frame's
+    * aggregate check (`ProgramContext.preExecutionOutOfGas`) sees exactly the shortfall the meter saw.
     *
-    * @return
-    *   (execution gas, state gas)
+    * `world` is the world after the sender's nonce and fee update: that update never touches code, so `world` also
+    * answers "did the authority hold an indicator before the transaction?" (execution-specs `get_pre_state_account`).
     */
-  private[ledger] def amsterdamAuthorizationCharges(
+  private[ledger] def applyAmsterdamAuthorizations(
       authList: List[SetCodeAuthorization],
       world: InMemoryWorldStateProxy,
-      senderAddress: Address,
-      txTo: Option[Address],
-      txValue: BigInt
-  )(implicit blockchainConfig: BlockchainConfig): (BigInt, BigInt) =
-    // Tracked across the list because each charge is "at most once per authority", and the decision must be
-    // made against the transaction-start world rather than the partially-updated one.
-    var written: Set[Address] = Set(senderAddress) ++
-      (if txValue > 0 then txTo.toSet else Set.empty[Address])
-    var delegationSet: Set[Address] = Set.empty
-    var executionGas: BigInt = 0
-    var stateGas: BigInt = 0
+      paidWrites: Set[Address],
+      gasLeft: BigInt,
+      reservoir: BigInt
+  )(implicit blockchainConfig: BlockchainConfig): AmsterdamAuthorizations =
 
-    authList.foreach { auth =>
-      // Only authorizations that pass validation incur these charges, so the same predicate that decides
-      // whether the authorization applies decides whether it is billed.
-      if applyAuthorization(auth, world).isDefined then
-        recoverAuthority(auth).foreach { authority =>
-          if world.isAccountDead(authority) && !written.contains(authority) then stateGas += AmsterdamGas.GasNewAccount
-          if !written.contains(authority) then
-            executionGas += AmsterdamGas.AccountWrite
-            written = written + authority
-          val hadIndicatorAtTxStart = SetCodeTransaction.isDelegation(world.getCode(authority))
-          if auth.address != Address(0L) && !hadIndicatorAtTxStart && !delegationSet.contains(authority) then
-            stateGas += AmsterdamGas.GasAuthBase
-            delegationSet = delegationSet + authority
-        }
-    }
-    (executionGas, stateGas)
+    @tailrec
+    def charge(
+        meter: AuthorizationMeter,
+        charges: List[AuthorizationCharge],
+        executionGas: BigInt,
+        stateGas: BigInt
+    ): (Option[AuthorizationMeter], BigInt, BigInt) =
+      charges match
+        case Nil => (Some(meter), executionGas, stateGas)
+        case AuthorizationCharge.Execution(amount) :: rest =>
+          meter.chargeExecution(amount) match
+            case Some(next) => charge(next, rest, executionGas + amount, stateGas)
+            case None       => (None, executionGas + amount, stateGas)
+        case AuthorizationCharge.State(amount) :: rest =>
+          meter.chargeState(amount) match
+            case Some(next) => charge(next, rest, executionGas, stateGas + amount)
+            case None       => (None, executionGas, stateGas + amount)
+
+    @tailrec
+    def loop(
+        remaining: List[SetCodeAuthorization],
+        applied: AmsterdamAuthorizations,
+        meter: AuthorizationMeter,
+        paid: Set[Address],
+        delegationSetFor: Set[Address]
+    ): AmsterdamAuthorizations =
+      remaining match
+        case Nil => applied
+        case auth :: rest =>
+          processAuthorization(auth, applied.world) match
+            case AuthorizationOutcome.Skipped => loop(rest, applied, meter, paid, delegationSetFor)
+            case AuthorizationOutcome.Invalid(authority) =>
+              loop(
+                rest,
+                applied.copy(warmAuthorities = applied.warmAuthorities + authority),
+                meter,
+                paid,
+                delegationSetFor
+              )
+            case AuthorizationOutcome.Applied(authority, newWorld, authorityExisted) =>
+              val setsIndicator = auth.address != Address(0L)
+              val charges = List(
+                AuthorizationCharge.State(if authorityExisted then BigInt(0) else AmsterdamGas.GasNewAccount),
+                AuthorizationCharge.Execution(
+                  if paid.contains(authority) then BigInt(0) else AmsterdamGas.AccountWrite
+                ),
+                AuthorizationCharge.State(
+                  if setsIndicator && !delegationSetFor.contains(authority) &&
+                    !SetCodeTransaction.isDelegation(world.getCode(authority))
+                  then AmsterdamGas.GasAuthBase
+                  else BigInt(0)
+                )
+              )
+              val warm = applied.warmAuthorities + authority
+              charge(meter, charges, applied.executionGas, applied.stateGas) match
+                case (None, executionGas, stateGas) =>
+                  applied.copy(
+                    warmAuthorities = warm,
+                    executionGas = executionGas,
+                    stateGas = stateGas,
+                    outOfGas = true
+                  )
+                case (Some(next), executionGas, stateGas) =>
+                  loop(
+                    rest,
+                    AmsterdamAuthorizations(newWorld, warm, executionGas, stateGas, outOfGas = false),
+                    next,
+                    paid + authority,
+                    if setsIndicator then delegationSetFor + authority else delegationSetFor
+                  )
+
+    loop(
+      authList,
+      AmsterdamAuthorizations(world, Set.empty, BigInt(0), BigInt(0), outOfGas = false),
+      AuthorizationMeter(gasLeft, reservoir),
+      paidWrites,
+      Set.empty
+    )
 
   /** EIP-7702 steps 1-3 (go-ethereum `validateAuthorization` up to `auth.Authority()`): the checks that decide whether
     * an authority can be recovered at all. `None` means the tuple is skipped WITHOUT warming anything.
@@ -927,15 +1170,6 @@ class BlockPreparator(
         if addrBytes.length == Address.Length then Some(Address(addrBytes)) else None
       }
 
-  /** Apply a single EIP-7702 authorization. Returns None if the authorization should be skipped. */
-  private def applyAuthorization(
-      auth: SetCodeAuthorization,
-      world: InMemoryWorldStateProxy
-  )(implicit blockchainConfig: BlockchainConfig): Option[InMemoryWorldStateProxy] =
-    processAuthorization(auth, world) match
-      case AuthorizationOutcome.Applied(_, newWorld, _) => Some(newWorld)
-      case _                                            => None
-
   /** One EIP-7702 authorization tuple, processed against the world as it stands after the tuples before it. */
   private def processAuthorization(
       auth: SetCodeAuthorization,
@@ -968,8 +1202,48 @@ private[ledger] enum AuthorizationOutcome:
   /** Authority recovered — and therefore warmed — but the tuple is skipped (authority has code, or nonce mismatch). */
   case Invalid(authority: Address)
 
-  /** Tuple applied; `authorityExisted` decides the PER_EMPTY_ACCOUNT_COST - PER_AUTH_BASE_COST refund. */
+  /** Tuple applied; `authorityExisted` decides the PER_EMPTY_ACCOUNT_COST - PER_AUTH_BASE_COST refund (pre-Amsterdam)
+    * and the NEW_ACCOUNT state charge (Amsterdam).
+    */
   case Applied(authority: Address, world: InMemoryWorldStateProxy, authorityExisted: Boolean)
+
+/** Amsterdam's EIP-2780 authorization processing, as far as it got (`BlockPreparator.applyAmsterdamAuthorizations`).
+  *
+  * @param world
+  *   the world after every tuple that was applied
+  * @param warmAuthorities
+  *   every authority recovered so far — warm for the rest of the transaction, valid tuple or not
+  * @param executionGas
+  *   ACCOUNT_WRITE charges; when `outOfGas`, including the one that did not fit
+  * @param stateGas
+  *   NEW_ACCOUNT and AUTH_BASE charges; when `outOfGas`, including the one that did not fit
+  * @param outOfGas
+  *   a charge exceeded the meter, so the list stopped there and the pre-execution phase fails
+  */
+final private[ledger] case class AmsterdamAuthorizations(
+    world: InMemoryWorldStateProxy,
+    warmAuthorities: Set[Address],
+    executionGas: BigInt,
+    stateGas: BigInt,
+    outOfGas: Boolean
+)
+
+/** The top frame's gas meter while EIP-2780 charges the authorizations, before the frame exists (execution-specs
+  * `charge_gas_from_meter` / `charge_state_gas_from_meter`). `None` is an out-of-gas.
+  */
+final private[ledger] case class AuthorizationMeter(gasLeft: BigInt, reservoir: BigInt):
+  def chargeExecution(amount: BigInt): Option[AuthorizationMeter] =
+    if gasLeft >= amount then Some(copy(gasLeft = gasLeft - amount)) else None
+
+  /** Reservoir first; the rest spills into `gasLeft`. */
+  def chargeState(amount: BigInt): Option[AuthorizationMeter] =
+    if reservoir >= amount then Some(copy(reservoir = reservoir - amount))
+    else if reservoir + gasLeft >= amount then Some(AuthorizationMeter(gasLeft - (amount - reservoir), BigInt(0)))
+    else None
+
+private[ledger] enum AuthorizationCharge:
+  case Execution(amount: BigInt)
+  case State(amount: BigInt)
 
 object BlockPreparator:
 
@@ -988,18 +1262,29 @@ object BlockPreparator:
     */
   def calcFloorDataGas(payload: ByteString): BigInt = calcFloorDataGas(payload, BigInt(21000))
 
-  /** EIP-7623's floor with an explicit base.
+  /** EIP-7623's floor with an explicit base: `baseCost + (nonzero_bytes * 4 + zero_bytes) * 10`.
     *
-    * EIP-2780 (Amsterdam) replaces the flat 21,000 with the transaction's *decomposed* base — TX_BASE_COST plus the
-    * applicable recipient and value primitives, excluding per-authorization and initcode-word charges. The calldata
-    * schedule itself is untouched; only the base the floor sits on moves.
-    *
-    * Two measured consequences, either of which fails if the base stays at 21,000: the self-transfer at block 165 costs
-    * 12,000 (a 21,000 floor would force 21,000), and `tx-callrevert` at block 40 costs 17,201 (a 21,000 base gives a
-    * floor of 21,040 and would force that instead).
+    * Pre-Amsterdam only. Amsterdam replaces the whole floor, not just its base — EIP-7976's 64 gas per byte and
+    * EIP-7981's access-list data cost on EIP-2780's decomposed base — with
+    * [[com.chipprbots.ethereum.vm.AmsterdamGas.calldataFloorGas]].
     */
   def calcFloorDataGas(payload: ByteString, baseCost: BigInt): BigInt =
     val zeroBytes = payload.count(_ == 0)
     val nonZeroBytes = payload.length - zeroBytes
     val tokens = nonZeroBytes * 4 + zeroBytes
     baseCost + tokens * 10
+
+  /** Whether EIP-7623's calldata floor applies to a block: ETH from the Prague timestamp, ETC from the Olympia block
+    * (ECIP-1121).
+    *
+    * One definition for the two places that must agree: the floor [[BlockPreparator.executeTransaction]] charges, and
+    * the validity rule `tx.gas >= floor` that `StdSignedTransactionValidator` enforces. A transaction the charge could
+    * take above its gas limit is therefore always one the validator has already rejected.
+    *
+    * Do NOT test `number >= olympiaBlockNumber` alone: hive and the shipped ETH chain configs map London to
+    * `olympiaBlockNumber`, which would apply the floor on ETH from London on.
+    */
+  def eip7623Active(blockNumber: BigInt, timestamp: Timestamp)(implicit blockchainConfig: BlockchainConfig): Boolean =
+    blockchainConfig.isPragueTimestamp(timestamp) ||
+      (blockchainConfig.networkType == com.chipprbots.ethereum.utils.NetworkType.ETC &&
+        blockNumber >= blockchainConfig.forkBlockNumbers.olympiaBlockNumber)

@@ -80,7 +80,7 @@ One binary, every major EVM network:
 
 - **ETC Mainnet** — full PoW node with SNAP sync
 - **Ethereum Mainnet** — full PoS execution layer via Engine API
-- **Sepolia, Holesky** — Ethereum testnets
+- **Sepolia, Platåberget** — Ethereum testnets, with Glamsterdam (Amsterdam) support from v0.9.0. Platåberget is the public Glamsterdam testnet; Sepolia activates Amsterdam on 2026-10-06 13:53:36 UTC
 - **Mordor** — ETC testnet
 - **Private and consortium chains** — custom genesis, no source modification required
 - **EVM-compatible L2s** — chains configured via custom genesis and derivation rules
@@ -151,7 +151,7 @@ schedules.
 
 > **Read the badges with [`docs/STATUS.md`](docs/STATUS.md) open.** A badge tells you whether
 > a workflow run succeeded; it does not tell you whether that workflow is allowed to block a
-> merge. As of v0.8.0 **no Hive suite is a required gate** — every one of them is
+> merge. As of v0.9.0 **no Hive suite is a required gate** — every one of them is
 > *informational*, and the tier of each is published, with its promotion deadline, in
 > [Verification Status](docs/STATUS.md), generated from
 > [`.github/gates.yml`](.github/gates.yml). We say this plainly because the previous wording

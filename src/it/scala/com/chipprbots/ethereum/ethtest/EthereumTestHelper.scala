@@ -30,6 +30,7 @@ class EthereumTestHelper(using bc: BlockchainConfig) extends ScenarioSetup:
   private def createEmptyStorages(): BlockchainStorages =
     new BlockchainStorages with AppCaches with EphemDataSourceComponent:
       override val receiptStorage: ReceiptStorage = new ReceiptStorage(this.dataSource)
+      override val blockAccessListStorage: BlockAccessListStorage = new BlockAccessListStorage(this.dataSource)
       override val evmCodeStorage: EvmCodeStorage = new EvmCodeStorage(this.dataSource)
       override val blockHeadersStorage: BlockHeadersStorage = new BlockHeadersStorage(this.dataSource)
       override val blockNumberMappingStorage: BlockNumberMappingStorage = new BlockNumberMappingStorage(this.dataSource)

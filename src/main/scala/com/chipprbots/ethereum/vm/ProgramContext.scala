@@ -16,7 +16,42 @@ object ProgramContext:
       world: W,
       evmConfig: EvmConfig
   ): ProgramContext[W, S] =
-    apply(stx, blockHeader, senderAddress, world, evmConfig, BigInt(0), BigInt(0))
+    apply(stx, blockHeader, senderAddress, world, evmConfig, BigInt(0), BigInt(0), Set.empty[Address])
+
+  /** The top-level frame's gas: `(execution-gas grant, state-gas reservoir)` after the intrinsic cost.
+    *
+    * EIP-8037 reservoir split (execution-specs `allocate_evm_gas`). Pre-Amsterdam this collapses to `(evmGas, 0)`,
+    * which is exactly the previous behaviour.
+    *
+    * R-1: every transaction in the reference fixture has `tx.gas <= 1,628,065`, far below TX_MAX_GAS_LIMIT = 2^24, so
+    * the reservoir is 0 in all 612 of them. Fixture-green says nothing about reservoir seeding — that needs
+    * execution-spec-tests vectors.
+    *
+    * Shared with `BlockPreparator`, whose EIP-2780 authorization processing charges against this same meter before the
+    * frame exists; one definition keeps the two from drifting apart.
+    */
+  def evmGasAllocation(stx: SignedTransaction, senderAddress: Address, evmConfig: EvmConfig): (BigInt, BigInt) =
+    import stx.tx
+    val authListSize = tx match
+      case sct: SetCodeTransaction => sct.authorizationList.size
+      case _                       => 0
+    val intrinsicGas = evmConfig.calcTransactionIntrinsicGas(
+      tx.payload,
+      tx.isContractInit,
+      Transaction.accessList(tx),
+      authListSize,
+      tx.receivingAddress,
+      UInt256(tx.value),
+      senderAddress
+    )
+    val evmGas = tx.gasLimit.value - intrinsicGas
+    if !evmConfig.amsterdamEnabled then (evmGas, BigInt(0))
+    else
+      // `.max(0)` is defensive only: EIP-8037 makes a transaction whose intrinsic gas exceeds
+      // TX_MAX_GAS_LIMIT invalid, so a negative budget should never reach here.
+      val executionGasBudget = (AmsterdamGas.TxMaxGasLimit - intrinsicGas).max(0)
+      val gl = executionGasBudget.min(evmGas)
+      (gl, evmGas - gl)
 
   def apply[W <: WorldStateProxy[W, S], S <: Storage[S]](
       stx: SignedTransaction,
@@ -24,41 +59,17 @@ object ProgramContext:
       senderAddress: Address,
       world: W,
       evmConfig: EvmConfig,
-      // EIP-2780 authorization-processing charges, already computed by the caller against the
-      // transaction-start world. Zero for every transaction that is not a Type-4 under Amsterdam.
+      // EIP-2780 authorization-processing charges, already computed by the caller while applying the list in
+      // order. Zero for every transaction that is not a Type-4 under Amsterdam.
       authExecutionGas: BigInt,
-      authStateGas: BigInt
+      authStateGas: BigInt,
+      // EIP-7702: every authority the caller recovered while processing the list. Warm for the whole transaction,
+      // and — under Amsterdam — part of the warm set the top frame's delegation-target access is priced against.
+      authorityWarmAddresses: Set[Address]
   ): ProgramContext[W, S] =
     import stx.tx
     val accessList = Transaction.accessList(tx)
-    val authListSize = tx match
-      case sct: SetCodeTransaction => sct.authorizationList.size
-      case _                       => 0
-    val intrinsicGas = evmConfig.calcTransactionIntrinsicGas(
-      tx.payload,
-      tx.isContractInit,
-      accessList,
-      authListSize,
-      tx.receivingAddress,
-      UInt256(tx.value),
-      senderAddress
-    )
-    val evmGas = tx.gasLimit.value - intrinsicGas
-
-    // EIP-8037 reservoir split. Pre-Amsterdam this collapses to `gasLimit = evmGas, reservoir = 0`,
-    // which is exactly the previous behaviour.
-    //
-    // R-1: every transaction in the reference fixture has `tx.gas <= 1,628,065`, far below
-    // TX_MAX_GAS_LIMIT = 2^24, so the reservoir is 0 in all 612 of them. Fixture-green says nothing
-    // about reservoir seeding — that needs execution-spec-tests vectors.
-    val (gasLimit, stateGasReservoir) =
-      if !evmConfig.amsterdamEnabled then (evmGas, BigInt(0))
-      else
-        // `.max(0)` is defensive only: EIP-8037 makes a transaction whose intrinsic gas exceeds
-        // TX_MAX_GAS_LIMIT invalid, so a negative budget should never reach here.
-        val executionGasBudget = (AmsterdamGas.TxMaxGasLimit - intrinsicGas).max(0)
-        val gl = executionGasBudget.min(evmGas)
-        (gl, evmGas - gl)
+    val (gasLimit, stateGasReservoir) = evmGasAllocation(stx, senderAddress, evmConfig)
 
     // EIP-2780 pre-execution phase: the state-dependent charges, applied after the transaction is already
     // deemed valid but before the first EVM frame is entered. Running out of gas here does NOT invalidate
@@ -79,15 +90,40 @@ object ProgramContext:
               AmsterdamGas.GasNewAccount
             else BigInt(0)
 
+    val warmAddresses: Set[Address] = accessList.map(_.address).toSet ++ authorityWarmAddresses
+
+    // EIP-2780 dispatch (execution-specs `create_evm` → `resolve_delegated_code_address`): a call whose recipient —
+    // as the authorizations above left it — carries a delegation indicator pays EXECUTION gas to read the delegation
+    // target: WARM_ACCESS if the target is already in the transaction's warm set, COLD_ACCOUNT_ACCESS otherwise. The
+    // warm set at that point is the one execution-specs builds before dispatch: the recovered authorities, the
+    // coinbase, the precompiles, the sender, the access-list addresses and the recipient itself. Before Amsterdam the
+    // top frame only warms the target (VM.call) and charges nothing for it.
+    val delegationAccessCharge: BigInt =
+      if !evmConfig.amsterdamEnabled then BigInt(0)
+      else
+        tx.receivingAddress.flatMap(r => SetCodeTransaction.parseDelegation(world.getCode(r)).map(r -> _)) match
+          case None => BigInt(0)
+          case Some((recipient, target)) =>
+            val warm =
+              target == recipient || target == senderAddress || warmAddresses.contains(target) ||
+                (evmConfig.eip3651Enabled && target == Address(blockHeader.beneficiary)) ||
+                PrecompiledContracts.getContracts(evmConfig, blockHeader).contains(target)
+            if warm then evmConfig.feeSchedule.G_warm_storage_read else evmConfig.feeSchedule.G_cold_account_access
+
     // ── The pre-execution phase, in EIP-2780's order ──────────────────────
     //
     // 1. authorizations are processed and charged;
     // 2. the frame COMMITS: the baseline moves to the post-authorization reservoir, so a rollback does
     //    not credit back gas that paid for delegations the rollback does not undo (EIP-8037);
-    // 3. the recipient / deployment account-creation charge is applied, INSIDE the refillable window.
+    // 3. the recipient / deployment account-creation charge is applied, INSIDE the refillable window;
+    // 4. the delegation-target access is charged (execution gas).
     //
     // The ordering is the whole of `state_gas_committed`'s purpose. Applied the other way round, a
     // reverting Type-4 transaction would be refunded for delegations that survive the revert.
+    //
+    // Running out of gas anywhere in 1-4 is a PRE-execution failure: the frame is never entered and the
+    // caller rolls the authorizations back with everything else (BlockPreparator). Only a failure after
+    // entry leaves them in place.
     val authFromReservoir = authStateGas.min(stateGasReservoir)
     val authFromGasLeft = authStateGas - authFromReservoir
     val reservoirAfterAuth = stateGasReservoir - authFromReservoir
@@ -112,7 +148,7 @@ object ProgramContext:
       // should be a no-op (100 gas) but was being charged as a fresh-slot reset (2900
       // gas) — the observed +2800 per-tx gas delta.
       gasPrice = UInt256(Transaction.effectiveGasPrice(tx, blockHeader.baseFee)),
-      startGas = gasLeftAfterAuth - chargeFromGasLeft,
+      startGas = gasLeftAfterAuth - chargeFromGasLeft - delegationAccessCharge,
       stateGasReservoir = reservoirAfterAuth - chargeFromReservoir,
       evmStateGasUsed = authStateGas + preExecutionStateCharge,
       // The committed authorization draw is deliberately NOT part of `stateGasFromGasLeft`: the commit in
@@ -129,8 +165,8 @@ object ProgramContext:
       initialStateGasReservoir = stateGasReservoir,
       // If the pre-execution charge cannot be met, the transaction is still valid and still included; it
       // simply consumes everything and reverts. Signalled rather than silently under-charged.
-      preExecutionOutOfGas =
-        evmConfig.amsterdamEnabled && (gasLeftAfterAuth < 0 || chargeFromGasLeft > gasLeftAfterAuth),
+      preExecutionOutOfGas = evmConfig.amsterdamEnabled &&
+        (gasLeftAfterAuth < 0 || chargeFromGasLeft + delegationAccessCharge > gasLeftAfterAuth),
       inputData = tx.payload,
       value = UInt256(tx.value),
       endowment = UInt256(tx.value),
@@ -141,7 +177,7 @@ object ProgramContext:
       initialAddressesToDelete = Set(),
       evmConfig = evmConfig,
       originalWorld = world,
-      warmAddresses = accessList.map(_.address).toSet,
+      warmAddresses = warmAddresses,
       warmStorage = accessList.flatMap(i => i.storageKeys.map(sk => (i.address, sk))).toSet,
       blobVersionedHashes = blobHashes
     )
@@ -245,5 +281,10 @@ case class ProgramContext[W <: WorldStateProxy[W, S], S <: Storage[S]](
     preExecutionOutOfGas: Boolean = false,
     // Optional opcode-level tracer (debug_trace*). None is the fast default; Some
     // enables per-step capture in the VM exec loop.
-    tracer: Option[ExecutionTracer] = None
+    tracer: Option[ExecutionTracer] = None,
+    /** EIP-7928: where every frame of this execution records the accounts and slots it reads. Set only while an
+      * Amsterdam block executes and handed to each child frame unchanged; see [[BlockAccessRecorder]]. `None` — every
+      * ETC and pre-Amsterdam path, and every RPC execution — records nothing.
+      */
+    accessRecorder: Option[BlockAccessRecorder] = None
 )

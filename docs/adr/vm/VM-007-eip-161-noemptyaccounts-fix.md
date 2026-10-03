@@ -231,7 +231,7 @@ Got:      225ce73da683bb17cd073a9c008b73ce25b6474a6fc32bd66836e04336e3d6a8
 - [EIP-161: State trie clearing](https://eips.ethereum.org/EIPS/eip-161)
 - [core-geth ETC Reference Implementation](https://github.com/etclabscore/core-geth)
 - [Ethereum Tests Repository](https://github.com/ethereum/tests)
-- [ETC Fork Timeline](https://etclabs.org/etc-forks)
+- [ETC Hard Forks (Meta ECIPs)](https://ecips.ethereumclassic.org/meta)
 - ADR-001: Scala 3 Migration (related Scala 3 compatibility considerations)
 
 ## Related Documentation

@@ -660,7 +660,8 @@ class RegularSyncSpec
           storagesInstance.storages.stateStorage,
           storagesInstance.storages.receiptStorage,
           storagesInstance.storages.appStateStorage,
-          storagesInstance.storages.chainWeightStorage
+          storagesInstance.storages.chainWeightStorage,
+          storagesInstance.storages.blockAccessListStorage
         ):
           override def getBestBlockNumber: BigInt = BigInt(0)
           override def getSnapSyncPivotBlock: Option[BigInt] = None
