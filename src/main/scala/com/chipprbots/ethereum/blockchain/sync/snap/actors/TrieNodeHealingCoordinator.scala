@@ -1831,6 +1831,8 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
     // correctness hole for bounded re-walks of shared subtries (de-duplicated downstream by
     // pendingHashSet). Access is synchronized: worker threads only touch it via markIfNew, and
     // per-check lock cost is negligible against the 50K-node multiGet I/O per chunk.
+    // What the set is keyed by depends on the storage scheme — see the `*VisitKey` helpers: the node hash under Hash,
+    // the node's location under Path.
     val visitedLru = TrieNodeHealingCoordinator.boundedVisitedSet(HealingVisitedCap)
     def markIfNew(h: ByteString): Boolean = visitedLru.synchronized {
       if visitedLru.contains(h) then false
@@ -1841,7 +1843,7 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
     // spec 003 C2: mark every seed hash as visited (level 0). For one seed this is the prior
     // markIfNew(startHash); for many it pre-loads the shared visited set so cross-seed shared
     // subtries are de-duplicated exactly as within a single walk.
-    seeds.foreach { case (h, _, _) => markIfNew(h) }
+    seeds.foreach { case (h, ps, _) => markIfNew(seedVisitKey(h, ps)) }
 
     val visitedCount = new java.util.concurrent.atomic.AtomicLong(0L)
     val frontierCount = new java.util.concurrent.atomic.AtomicLong(0L)
@@ -1936,7 +1938,7 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
                             val childHash = ByteString(hashChild.hashNode)
                             // Observation-only (FR-008/FR-023): count this child reference before the de-dup gate.
                             childRefsSeen.incrementAndGet()
-                            if markIfNew(childHash) then
+                            if markIfNew(branchChildVisitKey(childHash, entry, nibbles, i)) then
                               // spec 005 C2/T006: prune a present, recorded-complete child — do NOT enqueue it, so its
                               // whole subtree is skipped (descend-and-stop). Else descend exactly as today.
                               if !pruneIfSubtreeComplete(childHash) then
@@ -1955,7 +1957,7 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
                           val childHash = ByteString(hashChild.hashNode)
                           // Observation-only (FR-008/FR-023): count this child reference before the de-dup gate.
                           childRefsSeen.incrementAndGet()
-                          if markIfNew(childHash) then
+                          if markIfNew(extChildVisitKey(childHash, entry, nibbles, ext.sharedKey)) then
                             // spec 005 C2/T006: prune a present, recorded-complete child (descend-and-stop); else descend.
                             if !pruneIfSubtreeComplete(childHash) then
                               distinctEnqueued.incrementAndGet()
@@ -1973,7 +1975,7 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
                         // before the de-dup gate, when there is a non-empty storage root to follow.
                         if account.storageRoot != Account.EmptyStorageRootHash then childRefsSeen.incrementAndGet()
                         if account.storageRoot != Account.EmptyStorageRootHash &&
-                          markIfNew(account.storageRoot.value)
+                          markIfNew(storageRootVisitKey(account.storageRoot.value, nibbles, leaf.key))
                         then
                           // spec 005 C2/T006: prune a present, recorded-complete storage-trie root (descend-and-stop) —
                           // do NOT enqueue the storage subtree. Else descend it exactly as today.
@@ -2391,6 +2393,80 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
             s"[HEAL] Cannot decode healed node for child discovery: ${e.getMessage}. " +
               s"Skipping — trie walk will find these nodes."
           )
+
+  // ---- frontier-walk de-dup keys -----------------------------------------------------------------------------------
+  // `rebuildFrontierBFS` de-dups the nodes it enqueues in a bounded `visited` set, so a subtrie reachable by two
+  // references is walked once. What counts as "the same node" depends on the storage scheme:
+  //   - Hash: the node HASH. Storage is content-addressed — one copy per hash — so a second reference to a node already
+  //     walked needs no second visit. Unchanged.
+  //   - Path: the node's LOCATION (trie kind + account hash + compact path). `PathNodeStorage` holds one physical copy
+  //     per location, so two locations that happen to carry the same hash — e.g. the identical storage tries of two
+  //     accounts — are DISTINCT stored nodes and each must be verified. De-duping them by hash would let a hole at the
+  //     second location go undetected: the walk would report "complete" over missing state.
+  // The helpers take cheap references (no precomputed paths), so under Hash they return their hash argument at once —
+  // no allocation and no behavioural change on the ETC path.
+
+  /** Location identity of a node: trie kind (account / storage), account hash for a storage node, and the HP-encoded
+    * nibble path. Prefix-free (the account hash is a fixed 32 bytes), so distinct locations never collide.
+    */
+  private def locationKey(accountHash: Option[Array[Byte]], nibbles: Array[Byte]): ByteString =
+    val builder = ByteString.newBuilder
+    accountHash match
+      case Some(hash) => builder.putByte(1).putBytes(hash)
+      case None       => builder.putByte(0)
+    builder.putBytes(com.chipprbots.ethereum.mpt.HexPrefix.encode(nibbles, isLeaf = false)).result()
+
+  /** The account hash scoping `parent`'s storage trie, or `None` for an account-trie entry. */
+  private def storageOwner(parent: BfsEntry): Option[Array[Byte]] =
+    if parent.isStorage then Some(parent.pathset.head) else None
+
+  /** De-dup key for a walk seed (`seeds` carry HP-encoded pathsets, as `HealingEntry` does). */
+  private def seedVisitKey(hash: ByteString, pathset: Seq[ByteString]): ByteString =
+    storageScheme match
+      case StorageScheme.Hash => hash
+      case StorageScheme.Path =>
+        val owner = if pathset.size > 1 then Some(pathset.head.toArray) else None
+        locationKey(owner, com.chipprbots.ethereum.mpt.HexPrefix.decode(pathset.last.toArray)._1)
+
+  /** De-dup key for the child in branch slot `slot` of `parent`, whose own nibble path is `parentNibbles`. */
+  private def branchChildVisitKey(
+      childHash: ByteString,
+      parent: BfsEntry,
+      parentNibbles: Array[Byte],
+      slot: Int
+  ): ByteString =
+    storageScheme match
+      case StorageScheme.Hash => childHash
+      case StorageScheme.Path => locationKey(storageOwner(parent), parentNibbles :+ slot.toByte)
+
+  /** De-dup key for the child behind an extension node of `parent` (path `parentNibbles` ++ `sharedKey`). */
+  private def extChildVisitKey(
+      childHash: ByteString,
+      parent: BfsEntry,
+      parentNibbles: Array[Byte],
+      sharedKey: ByteString
+  ): ByteString =
+    storageScheme match
+      case StorageScheme.Hash => childHash
+      case StorageScheme.Path => locationKey(storageOwner(parent), parentNibbles ++ sharedKey.toArray)
+
+  /** De-dup key for the storage-trie root an account leaf references. Under Path it lives at (accountHash, empty path),
+    * the account hash being the leaf's full 64-nibble path packed into 32 bytes. A path of any other length is not a
+    * real account position; the enqueue below skips it, so its key is immaterial and falls back to the hash.
+    */
+  private def storageRootVisitKey(
+      storageRoot: ByteString,
+      parentNibbles: Array[Byte],
+      leafKey: ByteString
+  ): ByteString =
+    storageScheme match
+      case StorageScheme.Hash => storageRoot
+      case StorageScheme.Path =>
+        val accountNibbles = parentNibbles ++ leafKey.toArray
+        if accountNibbles.length == 64 then
+          val accountHash = accountNibbles.grouped(2).map(g => ((g(0) << 4) | g(1)).toByte).toArray
+          locationKey(Some(accountHash), Array.empty[Byte])
+        else storageRoot
 
   /** Path scheme only: the bytes stored at the task's OWN path in [[PathNodeStorage]], returned ONLY when their
     * keccak256 equals `hash` — otherwise `None`.

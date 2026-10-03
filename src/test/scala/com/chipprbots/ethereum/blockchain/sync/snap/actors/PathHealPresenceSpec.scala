@@ -298,6 +298,25 @@ class PathHealPresenceSpec extends ScalaTestWithActorTestKit() with AnyFlatSpecL
     }
   }
 
+  it should "verify BOTH locations that share a hash — identical storage tries under two accounts" taggedAs UnitTest in {
+    val trie = twinStorageTrie()
+    trie("s0").hash shouldBe trie("s1").hash // same node, same hash …
+    trie("s0").pathset should not be trie("s1").pathset // … at two different locations
+
+    withPathStorage { pns =>
+      seedPath(pns, trie.nodes.filterNot(_.label == "s1")) // account 1's copy of the storage root is MISSING
+
+      // A walk that de-dups by hash marks S seen at (A0, []) and never looks at (A1, []): it finds nothing missing and
+      // declares the trie complete over a hole. Keyed by location, it finds exactly the missing copy.
+      val requests = healAgainst(trie.served, trie.root.hash, StorageScheme.Path, Some(pns), new TestMptStorage()) {
+        coordinator => coordinator ! TrieNodeHealingCoordinator.StartTrieNodeHealing(trie.root.hash)
+      }
+
+      requests.map(_.toSet) shouldBe List(Set(trie("s1").pathset))
+      readAtPath(pns, trie("s1")).map(ByteString(_)) shouldBe Some(trie("s1").encoded)
+    }
+  }
+
   // ── Hash scheme (ETC): unchanged ─────────────────────────────────────────────────────────────────────────────────
 
   "SNAP state healing under the Hash storage scheme" should

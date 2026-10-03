@@ -154,6 +154,43 @@ object PathHealPresenceFixtures:
   def storageTrieOld(): Trie = storageTrie("path-heal-presence/storage/slot1-old")
   def storageTrieNew(): Trie = storageTrie("path-heal-presence/storage/slot1-new")
 
+  // ---- trie C: two accounts with IDENTICAL storage tries ------------------------------------------------------------
+
+  /** Two accounts whose storage tries are identical — one leaf, hence ONE storage root hash `S` — at two different
+    * account hashes. Under the Path scheme the two storage roots are separate stored nodes, at `(accountHash0, [])` and
+    * `(accountHash1, [])`, that happen to share a hash:
+    * {{{
+    *   root  (branch)  []
+    *     ├─[0] acct0 (account leaf, storageRoot S)   [0]       account hash A0
+    *     └─[1] acct1 (account leaf, storageRoot S)   [1]       account hash A1
+    *   s0 = storage leaf S at (A0, [])
+    *   s1 = storage leaf S at (A1, [])      ← the SAME node (same hash) at a different location
+    * }}}
+    * Identical contracts (clones with the same storage) make this common on a live chain. A walk that de-dups by hash
+    * visits `s0`, marks `S` seen, and never looks at `s1`.
+    */
+  def twinStorageTrie(): Trie =
+    val sLeaf = plainLeaf(Array[Byte](0x01), "path-heal-presence/twin/storage")
+    val rest0 = (0 until 63).map(i => ((i * 5 + 1) % 16).toByte).toArray
+    val rest1 = (0 until 63).map(i => ((i * 3 + 7) % 16).toByte).toArray
+    val account =
+      Account(nonce = UInt256(1L), balance = UInt256(1L), storageRoot = TrieRoot(ByteString(sLeaf.hash)))
+    val accountRlp = ByteString(Account.accountSerializer.toBytes(account))
+    val acct0 = LeafNode(ByteString(rest0), accountRlp)
+    val acct1 = LeafNode(ByteString(rest1), accountRlp)
+    val root = branch(0 -> acct0, 1 -> acct1)
+    val hash0 = packNibbles(0.toByte +: rest0)
+    val hash1 = packNibbles(1.toByte +: rest1)
+    Trie(
+      Seq(
+        Placed("root", None, Array.empty[Byte], root),
+        Placed("acct0", None, Array[Byte](0), acct0),
+        Placed("acct1", None, Array[Byte](1), acct1),
+        Placed("s0", Some(hash0), Array.empty[Byte], sLeaf),
+        Placed("s1", Some(hash1), Array.empty[Byte], sLeaf)
+      )
+    )
+
   // ---- seeding -----------------------------------------------------------------------------------------------------
 
   /** Write `nodes` into `pns`, each at its own trie path (account CF or per-account storage CF) — "present locally". */
