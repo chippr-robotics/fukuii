@@ -126,12 +126,10 @@ per-dimension capacity rule: one that would overflow either dimension is left ou
 at an Amsterdam timestamp are refused with `-38003`, after the forkchoice state is applied.
 
 The EEST engine fixtures (`tests@v21.0.0` `blockchain_tests_engine/for_amsterdam` and
-`for_bpo2toamsterdamattime15k`, 26,548 tests) replay through the real controller with `EestEngineFixtureCorpusSpec`.
-When the Engine API landed (WI-9), every error code, genesis and forkchoice answer matched, and the failures were the
-tests that also failed over RLP (`EestFixtureCorpusSpec`), that is block execution and access-list content, plus one
-EIP-7934 block-size case on the Engine API path. Those were fixed afterwards
-([#1426](https://github.com/chippr-robotics/fukuii/issues/1426),
-[#1439](https://github.com/chippr-robotics/fukuii/issues/1439)), and the RLP corpus now passes in full.
+`for_bpo2toamsterdamattime15k`, 26,548 tests in 3,339 files) replay through the real controller with
+`EestEngineFixtureCorpusSpec`. On v0.8.13 all 26,548 pass: every payload verdict, error code, genesis and
+forkchoice answer matches the fixture. This replay runs locally (`EEST_ENGINE_FIXTURES=…`) and is not a CI job; the
+import and builder replays are.
 
 ## JSON-RPC at Amsterdam
 
