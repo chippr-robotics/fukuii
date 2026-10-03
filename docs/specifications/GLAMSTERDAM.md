@@ -12,10 +12,10 @@ access lists ([EIP-7928](https://eips.ethereum.org/EIPS/eip-7928), EL).
     `amsterdam-timestamp`, which no ETC-family chain config declares — `ChainConfigMatrixSpec` fails the build
     if one ever does. ETC's own upgrade path is Olympia (ECIP-1111/1112/1121).
 
-**fukuii target release: 0.9.0.** Implementation is tracked in
-[#1409](https://github.com/chippr-robotics/fukuii/issues/1409) (spec `specs/009-amsterdam-fork-support/`).
-Nothing on this page is a claim that Glamsterdam is supported; the [status table](#fukuii-implementation-status)
-says what exists today.
+**Supported from fukuii 0.9.0**; the 0.8.13 build is the first to carry the whole rule set. Implementation was
+tracked in [#1409](https://github.com/chippr-robotics/fukuii/issues/1409) and the release in [#1415](https://github.com/chippr-robotics/fukuii/issues/1415) (spec `specs/009-amsterdam-fork-support/`). The
+[status table](#fukuii-implementation-status) says what each part does, and [Release 0.9.0](#release-090) says what
+has run on live networks.
 
 ## Activation schedule
 
@@ -53,9 +53,10 @@ timestamp are part of the genesis ruleset, not checksum entries, so Amsterdam is
 
 ### fukuii implementation status
 
-As of 2026-09-24, on the spec 009 branch ([#1408](https://github.com/chippr-robotics/fukuii/pull/1408)). "Implemented"
-means the rule exists in code with unit coverage, not that it has passed hive or followed Platåberget; those are
-0.9.0 release gates.
+As of 0.9.0. "Implemented" means the rule exists in code with unit coverage and the execution-specs
+`tests@v21.0.0` Amsterdam corpus passes: 26,503 / 26,503 `blockchain_tests` through block import, and the payload
+builder rebuilds all 27,352 blocks they accept with identical hashes. It does not mean the rule has followed a live
+network; see [Release 0.9.0](#release-090).
 
 **Execution layer** — fukuii's responsibility:
 
@@ -64,16 +65,16 @@ means the rule exists in code with unit coverage, not that it has passed hive or
 | [2780](https://eips.ethereum.org/EIPS/eip-2780) | Resource-based intrinsic transaction gas | Implemented |
 | [7708](https://eips.ethereum.org/EIPS/eip-7708) | ETH transfers emit a log | Implemented |
 | [7778](https://eips.ethereum.org/EIPS/eip-7778) | Block gas accounting without refunds | Implemented |
-| [7843](https://eips.ethereum.org/EIPS/eip-7843) | SLOTNUM opcode | Partial — header `slotNumber` only; no `SLOTNUM` (`0x4b`) opcode |
-| [7928](https://eips.ethereum.org/EIPS/eip-7928) | Block-level access lists | Partial — header `blockAccessListHash` only; no BAL construction or validation |
+| [7843](https://eips.ethereum.org/EIPS/eip-7843) | SLOTNUM opcode | Implemented: header `slotNumber` and the `SLOTNUM` opcode (`0x4b`) |
+| [7928](https://eips.ethereum.org/EIPS/eip-7928) | Block-level access lists | Implemented: the list is built while a block executes, checked against the header's `blockAccessListHash`, and stored |
 | [7954](https://eips.ethereum.org/EIPS/eip-7954) | Increase maximum contract size | Implemented |
-| [7976](https://eips.ethereum.org/EIPS/eip-7976) | Increase calldata floor cost | **Not implemented** — the floor still uses the pre-Amsterdam token cost |
-| [7981](https://eips.ethereum.org/EIPS/eip-7981) | Increase access list cost | **Not implemented** |
+| [7976](https://eips.ethereum.org/EIPS/eip-7976) | Increase calldata floor cost | Implemented |
+| [7981](https://eips.ethereum.org/EIPS/eip-7981) | Increase access list cost | Implemented |
 | [7997](https://eips.ethereum.org/EIPS/eip-7997) | Deterministic factory contract | No client code: the EIP forbids checking for the contract at the fork; networks provide it (Platåberget has it in genesis) |
-| [8024](https://eips.ethereum.org/EIPS/eip-8024) | Backward-compatible SWAPN, DUPN, EXCHANGE | **Not implemented** — no opcodes `0xe6`–`0xe8` |
+| [8024](https://eips.ethereum.org/EIPS/eip-8024) | Backward-compatible SWAPN, DUPN, EXCHANGE | Implemented: `DUPN`, `SWAPN` and `EXCHANGE` at `0xe6`–`0xe8` |
 | [8037](https://eips.ethereum.org/EIPS/eip-8037) | State creation gas cost increase | Implemented |
 | [8038](https://eips.ethereum.org/EIPS/eip-8038) | State-access gas cost update | Implemented |
-| [8246](https://eips.ethereum.org/EIPS/eip-8246) | Remove SELFDESTRUCT burn | **Not implemented** — same-transaction SELFDESTRUCT still burns |
+| [8246](https://eips.ethereum.org/EIPS/eip-8246) | Remove SELFDESTRUCT burn | Implemented |
 | [8282](https://eips.ethereum.org/EIPS/eip-8282) | Builder execution requests | Implemented. `eth_config` reports `BUILDER_DEPOSIT_CONTRACT_ADDRESS` and `BUILDER_EXIT_CONTRACT_ADDRESS` from Amsterdam (see [JSON-RPC at Amsterdam](#json-rpc-at-amsterdam)) |
 
 **Consensus layer** — implemented by the paired CL client, no fukuii code:
@@ -86,10 +87,10 @@ proposing), [8061](https://eips.ethereum.org/EIPS/eip-8061) (increase exit and c
 
 | EIP | Protocol | fukuii |
 |---|---|---|
-| [7975](https://eips.ethereum.org/EIPS/eip-7975) | eth/70 — partial block receipt lists | Partial — `eth/70` capability exists, opt-in |
-| [8159](https://eips.ethereum.org/EIPS/eip-8159) | eth/71 — block access list exchange | **Not implemented** |
-| [8070](https://eips.ethereum.org/EIPS/eip-8070) | eth/72 — sparse blobpool | **Not implemented** |
-| [8189](https://eips.ethereum.org/EIPS/eip-8189) | snap/2 — BAL-based state healing | **Not implemented** (fukuii speaks snap/1) |
+| [7975](https://eips.ethereum.org/EIPS/eip-7975) | eth/70 — partial block receipt lists | Implemented, opt-in (`network.protocols.eth70`, off by default) |
+| [8159](https://eips.ethereum.org/EIPS/eip-8159) | eth/71 — block access list exchange | Implemented, opt-in (`eth71`, off by default): serves stored access lists within go-ethereum's 2 MiB / 1,024-entry limits |
+| [8070](https://eips.ethereum.org/EIPS/eip-8070) | eth/72 — sparse blobpool | Capability only, opt-in (`eth72`, off by default); the sparse blobpool's cell exchange is **not implemented** ([#1431](https://github.com/chippr-robotics/fukuii/issues/1431)) |
+| [8189](https://eips.ethereum.org/EIPS/eip-8189) | snap/2 — BAL-based state healing | Opt-in (`snap2`, off by default); snap/1 otherwise. snap/2 drops `GetTrieNodes`, which trie healing needs on a chain without block access lists ([#1431](https://github.com/chippr-robotics/fukuii/issues/1431)) |
 | [8136](https://eips.ethereum.org/EIPS/eip-8136) | Cell-level deltas for data column broadcast | CL only |
 
 Informational: [7904](https://eips.ethereum.org/EIPS/eip-7904) (compute gas cost analysis),
@@ -103,11 +104,11 @@ From [execution-apis `src/engine/amsterdam.md`](https://github.com/ethereum/exec
 |---|---|---|
 | `ExecutionPayloadV4` | `ExecutionPayloadV3` + `blockAccessList` (RLP, EIP-7928) + `slotNumber` (EIP-7843) | Implemented: the header commits to `keccak256` of the list's bytes as sent |
 | `PayloadAttributesV4` | `PayloadAttributesV3` + `slotNumber` + `targetGasLimit` | Implemented: `slotNumber` required, `targetGasLimit` optional (as in go-ethereum); both are in the payload ID, and the builder steers the gas limit toward `targetGasLimit` |
-| `engine_newPayloadV5` | Takes `ExecutionPayloadV4`; missing `blockAccessList` → `-32602`; undecodable BAL → `INVALID` | Implemented. The access list is decoded strictly and bound to the header through the block hash; its **content is trusted**, not recomputed from execution, until [#1426](https://github.com/chippr-robotics/fukuii/issues/1426) |
+| `engine_newPayloadV5` | Takes `ExecutionPayloadV4`; missing `blockAccessList` → `-32602`; undecodable BAL → `INVALID` | Implemented. The access list is decoded strictly, bound to the header through the block hash, and checked against the list the block's own execution builds ([#1426](https://github.com/chippr-robotics/fukuii/issues/1426)) |
 | `engine_getPayloadV6` | Returns `ExecutionPayloadV4` | Implemented: serves the Amsterdam payloads fukuii builds, block access list included (see below) |
 | `engine_forkchoiceUpdatedV4` | Takes `PayloadAttributesV4` and `custodyColumns` | Implemented. `custodyColumns` must be 16-byte DATA or null (else `-32602`) and is otherwise ignored: fukuii does not sample blobs |
-| `engine_getPayloadBodiesByHashV2` / `ByRangeV2` | `ExecutionPayloadBodyV2` adds `blockAccessList` (`null` pre-Amsterdam or pruned) | **Not implemented** ([#1428](https://github.com/chippr-robotics/fukuii/issues/1428)) |
-| `engine_getBlobsV4` | Returns blob cells and proofs, partial responses allowed | **Not implemented** |
+| `engine_getPayloadBodiesByHashV2` / `ByRangeV2` | `ExecutionPayloadBodyV2` adds `blockAccessList` (`null` pre-Amsterdam or pruned) | Implemented ([#1428](https://github.com/chippr-robotics/fukuii/issues/1428)): the stored list, `null` before Amsterdam or once pruned |
+| `engine_getBlobsV4` | Returns blob cells and proofs, partial responses allowed | **Not implemented** ([#1431](https://github.com/chippr-robotics/fukuii/issues/1431)) |
 
 `engine_newPayloadV4`, `engine_getPayloadV5` and `engine_forkchoiceUpdatedV3` reject Amsterdam timestamps with
 `-38005 Unsupported fork`. `engine_exchangeCapabilities` advertises `engine_newPayloadV5`,
@@ -117,16 +118,20 @@ From [execution-apis `src/engine/amsterdam.md`](https://github.com/ethereum/exec
 the 23-field header carries the attributes' `slotNumber` (which `SLOTNUM` reads while the block executes) and the
 hash of the block access list its own execution builds, which `engine_getPayloadV6` serves as the payload's
 `blockAccessList`. `requestsHash` commits to the EIP-8282 builder requests, and gas used is EIP-8037's maximum of
-the execution and state dimensions. The gas limit moves toward `targetGasLimit` at go-ethereum's `CalcGasLimit`
-rate (the parent's limit is kept when the attributes carry none), and transactions are packed by EIP-8037's
+the execution and state dimensions. The gas limit moves at go-ethereum's `CalcGasLimit` rate toward
+`targetGasLimit` when the attributes carry one, and otherwise toward the node's gas ceiling `mining.gas-limit-target`
+(default 60,000,000, like go-ethereum's `--miner.gaslimit`); every engine payload does this, on every fork, as
+go-ethereum's builder does. Transactions are packed by EIP-8037's
 per-dimension capacity rule: one that would overflow either dimension is left out. Attributes without `slotNumber`
 at an Amsterdam timestamp are refused with `-38003`, after the forkchoice state is applied.
 
 The EEST engine fixtures (`tests@v21.0.0` `blockchain_tests_engine/for_amsterdam` and
 `for_bpo2toamsterdamattime15k`, 26,548 tests) replay through the real controller with `EestEngineFixtureCorpusSpec`.
-Every error code, genesis and forkchoice answer matches. The failures that remain are the same tests that fail over
-RLP (`EestFixtureCorpusSpec`), that is block execution and access-list content, plus one EIP-7934 block-size case
-the Engine API path does not check.
+When the Engine API landed (WI-9), every error code, genesis and forkchoice answer matched, and the failures were the
+tests that also failed over RLP (`EestFixtureCorpusSpec`), that is block execution and access-list content, plus one
+EIP-7934 block-size case on the Engine API path. Those were fixed afterwards
+([#1426](https://github.com/chippr-robotics/fukuii/issues/1426),
+[#1439](https://github.com/chippr-robotics/fukuii/issues/1439)), and the RLP corpus now passes in full.
 
 ## JSON-RPC at Amsterdam
 
@@ -207,16 +212,21 @@ exercising the Amsterdam implementation **before Sepolia activates on 2026-10-06
    or genesis is wrong.
 
 What to expect: Amsterdam has been active since epoch 1536, about seven days after genesis, so the chain head is
-Amsterdam territory. fukuii can follow Platåberget only as far as its Amsterdam implementation allows — the
-[status table](#fukuii-implementation-status) is the honest guide. In particular, a checkpoint-synced CL starts
-past the fork and calls `engine_newPayloadV5` / `engine_forkchoiceUpdatedV4` immediately; fukuii serves both (see
-[Engine API](#engine-api)), so how far it follows depends on its Amsterdam execution. Today the most reliable checks are the offline ones — genesis hash, fork id, peering and the `Status`
-handshake. Pre-Amsterdam blocks exercise genesis, Osaka and BPO rules; the first Amsterdam block
-exercises everything in #1409. Block gas limits reach 200M.
+Amsterdam territory. A checkpoint-synced CL starts past the fork and calls `engine_newPayloadV5` /
+`engine_forkchoiceUpdatedV4` immediately. fukuii serves both (see [Engine API](#engine-api)) and carries the whole
+Amsterdam rule set, so it is built to follow the head; the live soak, and what it has found, is tracked in
+[#1432](https://github.com/chippr-robotics/fukuii/issues/1432). Check the offline facts first — genesis hash, fork id, peering and the `Status` handshake — then
+watch the `engine_newPayloadV5` verdicts. Pre-Amsterdam blocks exercise genesis, Osaka and BPO rules; every block
+from the first Amsterdam one exercises the whole rule set. Block gas limits reach 200M.
 
 ## Release 0.9.0
 
-0.9.0 is the Glamsterdam release. Its task list — EIP coverage, Engine API, networking, hive gates, the
-Platåberget soak and the Sepolia activation — lives in the Glamsterdam release issue, which links back here.
-A fukuii Sepolia node running any build without Amsterdam support stops following the chain at the first
-Amsterdam block on 2026-10-06: it cannot validate that block, and its fork id no longer matches its peers'.
+0.9.0 is the Glamsterdam release: [release notes](../releases/0.9.0.md), gates on [#1415](https://github.com/chippr-robotics/fukuii/issues/1415). A fukuii
+Sepolia node on a build without Amsterdam support (anything before 0.8.13) stops following the chain at the first
+Amsterdam block, 2026-10-06 13:53:36 UTC: it cannot validate that block, and its fork id no longer matches its
+peers'.
+
+What has run at release: the execution-specs Amsterdam corpus, in full, through block import and through the
+payload builder, in CI. Still open: hive's `consume-engine`, `consume-rlp` and devp2p suites against Amsterdam
+fixtures ([#1419](https://github.com/chippr-robotics/fukuii/issues/1419)), the Platåberget soak ([#1432](https://github.com/chippr-robotics/fukuii/issues/1432)), and Sepolia crossing the fork, which can
+only happen at activation.
