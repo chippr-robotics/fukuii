@@ -68,6 +68,17 @@ object BlockImporter:
   // the progress toward StuckEscapeThreshold. Zeroed in apply() (fresh regular-sync session).
   private[regular] var survivedExhausts: Int = 0
 
+  // Bulk bytecode recovery is requested at most once per process: if the scan cannot find the code (an account outside
+  // the SNAP trie, or peers that cannot serve it), the next MissingCodeException falls back to fetching that hash alone
+  // instead of looping through recovery forever. NOT zeroed in apply(): the importer is re-created when regular sync
+  // restarts after the recovery, and zeroing there would be that loop.
+  private val bulkCodeRecoveryClaimed = new java.util.concurrent.atomic.AtomicBoolean(false)
+
+  /** True for the first caller only. */
+  private[regular] def claimBulkCodeRecovery(): Boolean = bulkCodeRecoveryClaimed.compareAndSet(false, true)
+
+  private[regular] def resetBulkCodeRecoveryForTests(): Unit = bulkCodeRecoveryClaimed.set(false)
+
   private[regular] case object SyncRetryTick extends Command
   private[regular] val RetryKey = "BlockImporterRetry"
 
@@ -610,6 +621,22 @@ final private class BlockImporterLogic(
                 pendingStateNodeHash = Some(e.hash)
                 fetcher ! BlockFetcher.FetchStateNode(e.hash, fetcherResponseAdapter, parentStateRoot, paths)
                 ResolvingMissingNode(NonEmptyList(notImportedBlocks.head, notImportedBlocks.tail))
+              case e: MissingCodeException if BlockImporter.claimBulkCodeRecovery() =>
+                // First missing contract code this process has seen. One missing contract is rarely alone: a node that
+                // took its state from SNAP can lack thousands (every contract created after the SNAP pivot and
+                // delivered by trie healing), and fetching them one by one costs a full re-execution of the block each.
+                // Hand off to SyncController, which stops regular sync, runs the bytecode recovery scan and fetches
+                // every gap in batches, then restarts regular sync. This importer waits to be stopped.
+                val failedBlock = notImportedBlocks.head
+                log.error(
+                  "Missing contract code {} for account {} during import of block {}: requesting bulk bytecode " +
+                    "recovery (scan of the SNAP state trie, batched GetByteCodes) instead of fetching one hash at a time",
+                  ByteStringUtils.hash2string(e.hash),
+                  ByteStringUtils.hash2string(e.accountAddress),
+                  failedBlock.number
+                )
+                supervisor ! SyncProtocol.MissingCodeNeedsBulkRecovery(failedBlock.number.value, e.hash)
+                ResolvingMissingNode(NonEmptyList(failedBlock, notImportedBlocks.tail))
               case e: MissingCodeException =>
                 // An account in the block's state has a codeHash whose bytecode this node never stored. Missing data,
                 // not an invalid block: fetch it over SNAP GetByteCodes (served by every snap-capable peer, ETH68+)

@@ -147,6 +147,13 @@ class AppStateStorage(val dataSource: DataSource) extends TransactionalKeyValueS
   def bytecodeRecoveryDone(): DataSourceBatchUpdate =
     put(Keys.BytecodeRecoveryDone, true.toString)
 
+  /** Mark bytecode recovery as NOT done, so the next start's recovery scan runs (or resumes). Written when block import
+    * finds contract code missing and escalates to a bulk bytecode recovery: whatever happens next, a node that stops
+    * part-way must not come back believing its bytecode is complete.
+    */
+  def clearBytecodeRecoveryDone(): DataSourceBatchUpdate =
+    put(Keys.BytecodeRecoveryDone, false.toString)
+
   /** Check if storage recovery scan has completed (Bug 20 hardening) */
   def isStorageRecoveryDone(): Boolean =
     get(Keys.StorageRecoveryDone).exists(_.toBoolean)

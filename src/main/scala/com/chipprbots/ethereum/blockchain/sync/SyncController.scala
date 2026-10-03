@@ -263,6 +263,9 @@ object SyncController:
     // PivotHeaderBootstrap (inline in `runningRecovery` — no transition into the deadlock-prone bootstrap
     // state) and reply with StorageRecoveryActor.RecentRoot. Only one request is serviced at a time.
     private var recentRootRequester: Option[TypedActorRef[StorageRecoveryActor.Command]] = None
+
+    // The codeHash that sent regular sync into a bulk bytecode recovery, until that recovery hands back to regular sync.
+    private var bulkCodeRecoveryTrigger: Option[ByteString] = None
     private var recentRootBootstrap
         : Option[(TypedActorRef[PeersClient.Command], TypedActorRef[PivotHeaderBootstrap.Command])] =
       None // (peersClient, headerBootstrap)
@@ -793,6 +796,30 @@ object SyncController:
         case RegularSyncTerminated(actor) if actor == regularSync =>
           log.error("RegularSync actor terminated unexpectedly — restarting regular sync.")
           startRegularSync(resumeBackfill = false)._2
+        case SyncProtocol.MissingCodeNeedsBulkRecovery(blockNumber, codeHash) =>
+          // Block import hit contract code this node never stored. Run the existing post-SNAP bytecode recovery now,
+          // rather than at the next start: it walks the SNAP state trie, collects EVERY non-empty codeHash absent from
+          // EvmCodeStorage, and fetches them in batched GetByteCodes (BytecodeRecoveryActor / CombinedRecoveryScan).
+          //
+          // Regular sync is stopped for the duration, not run alongside. Recovery registers its own SNAP response relay
+          // with NetworkPeerManagerActor and downloads through its own coordinator; regular sync's StateNodeFetcher uses
+          // PeersClient for the same GetByteCodes, and the two would compete for the same peers and responses. The node
+          // cannot import past the missing code anyway, so nothing is lost by pausing.
+          //
+          // One scan at a time follows from the state machine: this controller is in `runningRecovery` until the scan
+          // and downloads finish, and a repeat of this message there is dropped. BlockImporter also asks only once per
+          // process.
+          log.error(
+            "Block {} needs contract code {} that is not stored. Pausing regular sync for a bulk bytecode recovery.",
+            blockNumber,
+            com.chipprbots.ethereum.utils.ByteStringUtils.hash2string(codeHash)
+          )
+          ctx.unwatch(regularSync)
+          ctx.stop(regularSync)
+          // Un-done until the recovery finishes: if the node stops part-way, the next start resumes the scan.
+          appStateStorage.clearBytecodeRecoveryDone().commit()
+          bulkCodeRecoveryTrigger = Some(codeHash)
+          startRecovery(needBytecode = true, needStorage = false)
         case SyncProtocol.RegularSyncStuck(blockNumber, missingHash) =>
           // Regular sync can't make progress: state-node recovery has exhausted on the same hash
           // 3+ times. Local parent state is too far behind canonical tip for any peer's snap-serve
@@ -946,8 +973,9 @@ object SyncController:
       * delegating.
       */
     private def isRestartTrigger(msg: Any): Boolean = msg match // Any: Classic msg from adapter
-      case _: SyncProtocol.RegularSyncStuck => true
-      case _                                => false
+      case _: SyncProtocol.RegularSyncStuck             => true
+      case _: SyncProtocol.MissingCodeNeedsBulkRecovery => true
+      case _                                            => false
 
     /** Internal `Behavior[Command]` self / death-watch markers that must NEVER be forwarded to a Classic child. A
       * watched child can terminate after the parent has already transitioned to a state that does not handle its marker
@@ -1535,6 +1563,23 @@ object SyncController:
     def startRegularSync(resumeBackfill: Boolean = true): (TypedActorRef[RegularSync.Command], Behavior[Command]) =
       syncGeneration += 1
 
+      // Every route out of a bulk bytecode recovery ends here, so this is where its result is checked. The recovery
+      // actor marks itself done on abandonment, a crashed coordinator, or a failed scan, so success is read from the
+      // code store, not from that flag. FAIL LOUDLY: the importer will hit the same code again.
+      bulkCodeRecoveryTrigger.foreach { codeHash =>
+        bulkCodeRecoveryTrigger = None
+        if evmCodeStorage.get(codeHash).isDefined then
+          log.info("Bulk bytecode recovery finished: the code that triggered it is now stored. Resuming regular sync.")
+        else
+          log.error(
+            "Bulk bytecode recovery finished but contract code {} is STILL missing (peers could not serve it, or its " +
+              "account is not in the SNAP state trie). Leaving bytecodeRecoveryDone unset so the next start scans again; " +
+              "block import will now fetch that hash on its own.",
+            com.chipprbots.ethereum.utils.ByteStringUtils.hash2string(codeHash)
+          )
+          appStateStorage.clearBytecodeRecoveryDone().commit()
+      }
+
       // Operator escape hatch: seed exact chain-weight values before RegularSync starts.
       // Used when a node finished SNAP sync with a proxy TD (e.g. no ETH68 peers at finalize
       // time) and needs correcting without a full re-sync.
@@ -2076,6 +2121,9 @@ object SyncController:
           if bytecodeComplete then completeRecovery()
           else runningRecovery(bytecodeActor, storageActor = None, bytecodeComplete, storageComplete = true)
 
+        case _: SyncProtocol.MissingCodeNeedsBulkRecovery =>
+          log.info("Bulk bytecode recovery already in progress; ignoring a repeated request.")
+          Behaviors.same
         case msg if isInternalMarker(msg) =>
           // Late self/death-watch marker for a child stopped before this transition — drop silently.
           Behaviors.same

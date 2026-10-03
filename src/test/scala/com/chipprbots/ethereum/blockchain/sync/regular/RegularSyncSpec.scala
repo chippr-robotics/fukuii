@@ -655,8 +655,14 @@ class RegularSyncSpec
       // Devnet-8 block 318074: an account the node held had a codeHash and no bytecode, execution ran the call as a
       // call to an EOA, and the block was reported INVALID. Missing code is now a missing-data condition: the importer
       // asks a snap peer for it (GetNodeData has no peers on ETH68+) and retries the block.
-      "request missing contract code over SNAP GetByteCodes, not GetNodeData" taggedAs (UnitTest, SyncTest) in sync(
+      "request missing contract code over SNAP GetByteCodes, not GetNodeData, once bulk recovery has been tried" taggedAs (
+        UnitTest,
+        SyncTest
+      ) in sync(
         new Fixture:
+          // The bulk recovery is requested once per process; this is every miss after it.
+          BlockImporter.resetBulkCodeRecoveryForTests()
+          BlockImporter.claimBulkCodeRecovery() shouldBe true
           val failingBlock: Block = testBlocksChunked.head.head
           val codeHash: ByteString = kec256(ByteString("contract code this node never stored"))
           setImportResult(
@@ -675,6 +681,40 @@ class RegularSyncSpec
           peersClient.fishForSpecificMessage(max = 10.seconds) {
             case PeersClient.Request(GetByteCodes(_, hashes, _), _, _, _) if hashes == Seq(codeHash) => true
           }
+      )
+
+      // A node that took its state from SNAP can lack thousands of contracts' code; one fetch per contract is one full
+      // re-execution of the block each. The first miss asks SyncController for a bulk bytecode recovery instead, and
+      // does not fetch that hash on its own.
+      "ask SyncController for a bulk bytecode recovery on the first missing contract code" taggedAs (
+        UnitTest,
+        SyncTest
+      ) in sync(
+        new Fixture:
+          BlockImporter.resetBulkCodeRecoveryForTests()
+          val failingBlock: Block = testBlocksChunked.head.head
+          val codeHash: ByteString = kec256(ByteString("contract code this node never stored"))
+          setImportResult(
+            failingBlock,
+            IO.pure(
+              BlockImportFailedDueToMissingNode(
+                new MissingCodeException(codeHash, ByteString(Array.fill[Byte](20)(0x16)))
+              )
+            )
+          )
+          peersClient.setAutoPilot(new PeersClientAutoPilot)
+
+          regularSync ! SyncProtocol.Start
+
+          supervisor.fishForSpecificMessage(max = 10.seconds) {
+            case com.chipprbots.ethereum.blockchain.sync.SyncController.WrappedSyncProtocol(
+                  SyncProtocol.MissingCodeNeedsBulkRecovery(number, hash)
+                ) if number == failingBlock.number.value && hash == codeHash =>
+              true
+          }
+          // ...and it did NOT also start a single-hash fetch.
+          val seen = peersClient.receiveWhile(1.second) { case m => m }
+          seen.collect { case PeersClient.Request(_: GetByteCodes, _, _, _) => 1 } shouldBe empty
       )
 
       "save fetched node" in sync(new Fixture:
