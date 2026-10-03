@@ -208,6 +208,9 @@ private class SNAPSyncControllerImpl(
   private val requestTracker = new SNAPRequestTracker()(scheduler)
 
   private var currentPhase: SyncPhase = Idle
+
+  // Path scheme: set while the async path->hash publish runs (pivot, pivot state root). See startPathPublish.
+  private var pathPublish: Option[(BigInt, ByteString)] = None
   private var pivotBlock: Option[BigInt] = None
   private var stateRoot: Option[TrieRoot] = None
 
@@ -815,6 +818,20 @@ private class SNAPSyncControllerImpl(
 
   def syncing(): Behavior[Command] = Behaviors
     .receiveMessage[Command] {
+      // Path publish in flight: only its own messages and status/progress queries are served; stale SNAP responses,
+      // tickers and peer churn are dropped (the publish is terminal — nothing here can change the anchored state).
+      case PathPublishProgress(a, st) =>
+        ctx.log.info(s"[PATH-PUBLISH] account=$a storage=$st")
+        Behaviors.same
+      case PathPublishDone(result, millis) =>
+        onPathPublishDone(result, millis)
+      case PathPublishFailed(cause) =>
+        ctx.log.error("[PATH-PUBLISH] failed: escalating to SyncController for SNAP restart", cause)
+        pathPublish = None
+        syncController ! SyncProtocol.HealingImpossible
+        Behaviors.same
+      case msg if pathPublish.isDefined && !msg.isInstanceOf[GetStatus] && !msg.isInstanceOf[GetProgress] =>
+        Behaviors.same
       // C1: inlined rate-tracking peer-list arms
       case WrappedHandshakedPeers(peers) =>
         handleHandshakedPeersRateTracking(peers); Behaviors.same
@@ -4813,14 +4830,14 @@ private class SNAPSyncControllerImpl(
       stateRoot.map(_.value.toHex.take(16)).getOrElse("none"),
       appStateStorage.getSnapSyncStateRoot().map(_.toHex.take(16)).getOrElse("none")
     )
-    pivotBlock.map(finalizeSnapSync).getOrElse(Behaviors.same)
+    pivotBlock.map(p => finalizeSnapSync(p)).getOrElse(Behaviors.same)
 
   /** Anchor the pivot, mark SNAP state done, and hand off to the parent. Always emits `SnapSyncFinalized(pivot)`. Emits
     * `Done` either immediately (no backfill in flight) or later from `completedWithBackfill` after
     * `ChainDownloader.Done` arrives. SNAP-only schedules are cancelled before the handoff so eviction tickers and
     * stagnation checks don't keep firing while regular sync owns the peer pool.
     */
-  private def finalizeSnapSync(pivot: BigInt): Behavior[Command] =
+  private def finalizeSnapSync(pivot: BigInt, pathPublished: Boolean = false): Behavior[Command] =
     import scala.util.boundary, boundary.break
     boundary[Behavior[Command]] {
       // Look up the pivot header so we can store a complete "best block" anchor.
@@ -4844,6 +4861,15 @@ private class SNAPSyncControllerImpl(
               syncController ! SyncProtocol.HealingImpossible
               break(Behaviors.same)
           }
+
+          // Path scheme only: SNAP/healing wrote the trie path-keyed, but block execution reads hash-keyed nodes.
+          // Publish the completed trie to the hash-keyed store BEFORE anchoring/handing off, so the first imported
+          // block can read the pivot state. The scan is long (the whole state), so it runs on a blocking-dispatcher
+          // Future and this actor keeps serving status/progress queries (`syncing` serves them while `pathPublish` is set); it re-enters here with
+          // `pathPublished = true` once PathPublishDone arrives. Hash scheme (ETC) never enters this branch.
+          if pathNodeStorageOpt.isDefined && !pathPublished then
+            startPathPublish(pivot, pivotHeader.stateRoot.value)
+            break(Behaviors.same)
 
           val pivotHash = pivotHeader.hash
 
@@ -4943,6 +4969,63 @@ private class SNAPSyncControllerImpl(
         syncController ! Done
         completed()
     } // end boundary
+
+  /** Launch the Path-to-hash publish on the blocking dispatcher. The controller stays in its current behavior
+    * (`syncing`): the `completeSnapSync()` call sites discard the Behavior this returns, so a behavior switch would be
+    * silently lost. Instead `pathPublish` marks the publish in flight; `syncing` then serves only status/progress and
+    * the PathPublish* messages until [[PathPublishDone]] re-enters [[finalizeSnapSync]].
+    */
+  private def startPathPublish(pivot: BigInt, pivotRoot: ByteString): Unit =
+    val pns = pathNodeStorageOpt.getOrElse(throw new IllegalStateException("startPathPublish without PathNodeStorage"))
+    val target = getOrCreateMptStorage(pivot)
+    // Capture everything the worker needs on the actor thread: ActorContext accessors are actor-thread-only.
+    val self = ctx.self
+    val blockingEc = ctx.system.dispatchers.lookup(org.apache.pekko.actor.typed.DispatcherSelector.blocking())
+    ctx.log.info("[PATH-PUBLISH] publishing Path-scheme trie to hash-keyed storage for block execution (async)")
+    pathPublish = Some((pivot, pivotRoot))
+    val started = System.currentTimeMillis()
+    var lastLogged = 0L
+    val work = scala.concurrent.Future {
+      PathToHashExporter.publish(
+        pns,
+        target,
+        (a, s) =>
+          if a + s - lastLogged >= 1000000L then
+            lastLogged = a + s
+            self ! PathPublishProgress(a, s),
+        stateRoot = Some(pivotRoot)
+      )
+    }(blockingEc)
+    ctx.pipeToSelf(work) {
+      case scala.util.Success(r) => PathPublishDone(r, System.currentTimeMillis() - started)
+      case scala.util.Failure(e) => PathPublishFailed(e)
+    }
+
+  /** Handle the outcome of the async publish (called from `syncing`). On success re-checks the pivot root is readable
+    * (the check must hold before anchoring) and resumes [[finalizeSnapSync]]; on any failure escalates for a SNAP
+    * restart, exactly like the A5 root-mismatch guard.
+    */
+  private def onPathPublishDone(result: PathToHashExporter.Result, millis: Long): Behavior[Command] =
+    ctx.log.info(
+      s"[PATH-PUBLISH] done: ${result.accountNodes} account + ${result.storageNodes} storage nodes in $millis ms; " +
+        s"verified ${result.sampledAccountLeaves} sampled account leaves and ${result.sampledStorageRoots} storage roots"
+    )
+    pathPublish match
+      case Some((pivot, pivotRoot)) =>
+        pathPublish = None
+        if scala.util.Try(getOrCreateMptStorage(pivot).get(pivotRoot.toArray)).isSuccess then
+          finalizeSnapSync(pivot, pathPublished = true)
+        else
+          ctx.log.error(
+            "[PATH-PUBLISH] pivot state root {} absent after publish — path-keyed root node does not match the " +
+              "pivot header. Escalating to SyncController for SNAP restart.",
+            pivotRoot.toHex
+          )
+          syncController ! SyncProtocol.HealingImpossible
+          Behaviors.same
+      case None =>
+        ctx.log.warn("[PATH-PUBLISH] PathPublishDone with no publish in flight — ignored")
+        Behaviors.same
 
   /** Receive after SNAP state is finalised but `ChainDownloader` is still backfilling history.
     *
@@ -5232,6 +5315,11 @@ object SNAPSyncController:
   // a replyTo. Callers update in Phase 3 (Classic callers use the AskPattern adapter).
   final case class GetStatus(replyTo: org.apache.pekko.actor.typed.ActorRef[SyncProtocol.Status]) extends Command
   final case class GetProgress(replyTo: org.apache.pekko.actor.typed.ActorRef[SyncProgress]) extends Command
+
+  // Path scheme: asynchronous publish of the path-keyed trie to hash-keyed storage (see PathToHashExporter).
+  final case class PathPublishProgress(accountNodes: Long, storageNodes: Long) extends Command
+  final case class PathPublishDone(result: PathToHashExporter.Result, millis: Long) extends Command
+  final case class PathPublishFailed(cause: Throwable) extends Command
 
   /** spec 004 (Decoupled Heal Serve-Root) T011/T012: SNAPSyncController → SyncController (parent). During healing, ask
     * the parent to fetch a newest-servable canonical header (networkBest − RecentRootMarginBlocks) via its own

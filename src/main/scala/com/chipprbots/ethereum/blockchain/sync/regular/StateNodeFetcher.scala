@@ -247,11 +247,27 @@ class StateNodeFetcher(
   private def maybeSwitchToFallbackRoot(req: StateNodeRequester): Option[StateNodeRequester] =
     req.fallbackStateRoot
       .filter(fallback => !req.stateRoot.contains(fallback))
+      .filter(_ => !targetsTrieRoot(req))
       .map { fallback =>
         // New root ⇒ a different set of peers may be able to serve it, so reset the rotation
         // exclusion and re-evaluate the whole snap pool against the fallback root.
         req.copy(stateRoot = Some(fallback), fallbackStateRoot = None, triedPeers = Set.empty)
       }
+
+  /** True when the wanted node is the ACCOUNT-trie root: its hash is the request's own stateRoot, or every requested
+    * pathset is a single empty path. A root is addressed by (root, path []), so a different root can only ever return
+    * THAT root's node, never the wanted hash: switching to a fallback root would loop on guaranteed wrong-hash replies.
+    * Such a request can only be served by a peer that still holds the original root, so it rotates peers and exhausts
+    * instead.
+    *
+    * Callers pass HP/compact-encoded paths, so the empty path arrives as the single byte 0x00 (zero-length is accepted
+    * too). A storage-trie root is a two-element pathset `[accountHash, 0x00]` and is NOT matched here: at the fallback
+    * root the account's storage root is unchanged unless the account was touched, so that switch can succeed.
+    */
+  private def targetsTrieRoot(req: StateNodeRequester): Boolean =
+    def isEmptyPath(p: ByteString): Boolean = p.isEmpty || (p.length == 1 && p.head == 0.toByte)
+    req.stateRoot.contains(req.hash) ||
+    req.paths.exists(groups => groups.nonEmpty && groups.forall(g => g.size == 1 && isEmptyPath(g.head)))
 
   private def handleByteCodesValues(peer: Peer, codes: Seq[ByteString]): Behavior[StateNodeFetcherCommand] =
     requester
@@ -401,7 +417,7 @@ object StateNodeFetcher:
   ) extends StateNodeFetcherCommand
   case object RetryStateNodeRequest extends StateNodeFetcherCommand
   case object FireRequest extends StateNodeFetcherCommand
-  final private case class AdaptedMessage[T <: Message](peer: Peer, msg: T) extends StateNodeFetcherCommand
+  final private[regular] case class AdaptedMessage[T <: Message](peer: Peer, msg: T) extends StateNodeFetcherCommand
 
   final case class StateNodeRequester(
       hash: ByteString,
