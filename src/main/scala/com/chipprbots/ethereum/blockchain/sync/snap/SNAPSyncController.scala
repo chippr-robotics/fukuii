@@ -2259,10 +2259,19 @@ private class SNAPSyncControllerImpl(
             val storageTaskFileUnusable =
               !belowEscalationHint && !appStateStorage.isSnapSyncStorageComplete() &&
                 !savedStoragePath.filter(_.nonEmpty).exists(p => StorageTaskFile.isUsable(java.nio.file.Paths.get(p)))
-            if storageTaskFileUnusable then
+            val codeHashesFileUnusable =
+              !belowEscalationHint && !appStateStorage.isSnapSyncBytecodeComplete() &&
+                !appStateStorage
+                  .getSnapSyncCodeHashesPath()
+                  .filter(_.nonEmpty)
+                  .exists(p => StorageTaskFile.isUsable(java.nio.file.Paths.get(p), StorageTaskFile.CodeHashEntrySize))
+            val taskFilesUnusable = storageTaskFileUnusable || codeHashesFileUnusable
+            if taskFilesUnusable then
               ctx.log.warn(
-                s"Recovery: storage task file ${savedStoragePath.filter(_.nonEmpty).getOrElse("<none persisted>")} is " +
-                  "missing, empty or truncated while storage is incomplete. Restarting the accounts phase: clearing " +
+                s"Recovery: persisted task file unusable while its phase is incomplete " +
+                  s"(storage: ${savedStoragePath.filter(_.nonEmpty).getOrElse("<none persisted>")} unusable=$storageTaskFileUnusable; " +
+                  s"codeHashes: ${appStateStorage.getSnapSyncCodeHashesPath().filter(_.nonEmpty).getOrElse("<none persisted>")} unusable=$codeHashesFileUnusable). " +
+                  "A missing, empty or truncated file must not complete its phase. Restarting the accounts phase: clearing " +
                   "accounts/storage/bytecode-complete flags and the persisted storage and bytecode file paths."
               )
               appStateStorage
@@ -2276,7 +2285,7 @@ private class SNAPSyncControllerImpl(
             // Check if pivot is still fresh enough (skipped when belowEscalationHint forced clear)
             val networkBest = currentNetworkBestFromSnapPeers().getOrElse(BigInt(0))
             val drift = if networkBest > 0 then (networkBest - pivot).abs else BigInt(0)
-            if !belowEscalationHint && !storageTaskFileUnusable && networkBest > 0 && drift > snapSyncConfig.maxPivotStalenessBlocks
+            if !belowEscalationHint && !taskFilesUnusable && networkBest > 0 && drift > snapSyncConfig.maxPivotStalenessBlocks
             then
               val storageAlreadyDone = appStateStorage.isSnapSyncStorageComplete()
               val bytecodeAlreadyDone = appStateStorage.isSnapSyncBytecodeComplete()
@@ -2303,7 +2312,7 @@ private class SNAPSyncControllerImpl(
                   .and(appStateStorage.putSnapSyncBytecodeComplete(false))
                   .commit()
                 // Fall through to normal startup
-            else if !belowEscalationHint && !storageTaskFileUnusable then
+            else if !belowEscalationHint && !taskFilesUnusable then
               // Pivot is fresh enough — recover bytecodes + storage only
               pivotBlock = Some(pivot)
               stateRoot = Some(TrieRoot(rootBs))
@@ -2431,8 +2440,9 @@ private class SNAPSyncControllerImpl(
               val savedCodeHashesPath = appStateStorage.getSnapSyncCodeHashesPath()
               if !bytecodeAlreadyDone then
                 savedCodeHashesPath.foreach { pathStr =>
+                  // Usable per the pre-check above (non-empty, whole 32-byte entries).
                   val filePath = java.nio.file.Paths.get(pathStr)
-                  if java.nio.file.Files.exists(filePath) then
+                  locally {
                     val coordinator = bytecodeCoordinator.get
                     import ctx.executionContext
                     scala.concurrent
@@ -2459,13 +2469,8 @@ private class SNAPSyncControllerImpl(
                         asyncLog.info(s"Recovery: streamed $count codeHashes from ${filePath} for bytecode sync")
                         coordinator ! actors.ByteCodeCoordinator.NoMoreByteCodeTasks
                       }
-                  else
-                    ctx.log.warn(s"Recovery: codeHashes file $filePath not found. Sending NoMore immediately.")
-                    bytecodeCoordinator.foreach(_ ! actors.ByteCodeCoordinator.NoMoreByteCodeTasks)
+                  }
                 }
-              if savedCodeHashesPath.isEmpty then
-                ctx.log.warn("Recovery: no codeHashes file path persisted. Sending NoMore immediately.")
-                bytecodeCoordinator.foreach(_ ! actors.ByteCodeCoordinator.NoMoreByteCodeTasks)
 
               currentPhase = ByteCodeAndStorageSync
               lastStorageProgressMs = System.currentTimeMillis()

@@ -17,6 +17,7 @@ import java.nio.file.Path
 object StorageTaskFile:
 
   val EntrySize: Int = 64
+  val CodeHashEntrySize: Int = 32
   val DirName: String = "snap"
 
   /** Directory for the task files under a node datadir. */
@@ -30,9 +31,9 @@ object StorageTaskFile:
         Files.createTempFile(d, prefix, suffix)
       case None => Files.createTempFile(prefix, suffix)
 
-  /** A file is usable when it exists, is non-empty and holds a whole number of 64-byte entries. I/O errors mean
-    * unusable.
+  /** A file is usable when it exists, is non-empty and holds a whole number of `entrySize`-byte entries (64 for storage
+    * tasks, 32 for code hashes). I/O errors mean unusable.
     */
-  def isUsable(path: Path): Boolean =
-    try Files.isRegularFile(path) && Files.size(path) > 0 && Files.size(path) % EntrySize == 0
+  def isUsable(path: Path, entrySize: Int = EntrySize): Boolean =
+    try Files.isRegularFile(path) && Files.size(path) > 0 && Files.size(path) % entrySize == 0
     catch case _: java.io.IOException => false

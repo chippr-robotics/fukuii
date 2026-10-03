@@ -88,6 +88,15 @@ class SNAPStorageRecoverySpec extends ScalaTestWithActorTestKit() with AnyFlatSp
   it should "restart the accounts phase under the Path storage scheme too" taggedAs UnitTest in new Fixture:
     assertRestartsAccounts(None, scheme = com.chipprbots.ethereum.blockchain.sync.snap.StorageScheme.Path)
 
+  "SNAPSyncController recovery of bytecodes" should "restart the accounts phase when the codeHashes file is missing" taggedAs UnitTest in new Fixture:
+    assertBytecodeRestart(None)
+
+  it should "restart the accounts phase when the codeHashes file is empty" taggedAs UnitTest in new Fixture:
+    assertBytecodeRestart(Some(0))
+
+  it should "restart the accounts phase when the codeHashes file is truncated" taggedAs UnitTest in new Fixture:
+    assertBytecodeRestart(Some(33))
+
   it should "use a present task file unchanged" taggedAs UnitTest in new Fixture:
     val (root, _) = buildTrie()
     val present = taskDir.resolve("present.bin")
@@ -160,6 +169,25 @@ class SNAPStorageRecoverySpec extends ScalaTestWithActorTestKit() with AnyFlatSp
       appState.putSnapSyncCodeHashesPath("/tmp/some-codehashes.bin").commit()
 
       spawnController(scheme) ! SNAPSyncController.Start
+
+      eventually(timeout(10.seconds))(appState.isSnapSyncAccountsComplete() shouldBe false)
+      appState.isSnapSyncStorageComplete() shouldBe false
+      appState.isSnapSyncBytecodeComplete() shouldBe false
+      appState.getSnapSyncStorageFilePath().getOrElse("") shouldBe ""
+      appState.getSnapSyncCodeHashesPath().getOrElse("") shouldBe ""
+
+    /** Storage file valid, bytecode incomplete, codeHashes file missing (None) or of the given size in bytes. */
+    def assertBytecodeRestart(codeHashesBytes: Option[Int]): Unit =
+      val (root, _) = buildTrie()
+      Files.createDirectories(taskDir)
+      val storageFile = taskDir.resolve("storage.bin")
+      Files.write(storageFile, new Array[Byte](64))
+      val codeFile = taskDir.resolve("codehashes.bin")
+      codeHashesBytes.foreach(n => Files.write(codeFile, new Array[Byte](n)))
+      markAccountsComplete(root, Some(storageFile))
+      appState.putSnapSyncBytecodeComplete(false).and(appState.putSnapSyncCodeHashesPath(codeFile.toString)).commit()
+
+      spawnController() ! SNAPSyncController.Start
 
       eventually(timeout(10.seconds))(appState.isSnapSyncAccountsComplete() shouldBe false)
       appState.isSnapSyncStorageComplete() shouldBe false
