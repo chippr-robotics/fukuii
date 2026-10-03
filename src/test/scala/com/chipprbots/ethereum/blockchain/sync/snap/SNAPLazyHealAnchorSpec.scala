@@ -567,18 +567,18 @@ class SNAPLazyHealAnchorSpec extends ScalaTestWithActorTestKit() with AnyFlatSpe
     val pivot0 = BigInt(2_000)
     val pivot1 = BigInt(2_100)
     storeGenesis()
-    storeHeaderAt(pivot0, fakeRoot(0xE4))
+    storeHeaderAt(pivot0, fakeRoot(0xe4))
     // Post-merge-shaped pivot header so the PoS gate in completePivotRefreshWithStateRoot accepts the re-peg.
     val posHeader = Fixtures.Blocks.Genesis.header.copy(
       number = BlockNumber(pivot1),
-      stateRoot = TrieRoot(fakeRoot(0xE5)),
+      stateRoot = TrieRoot(fakeRoot(0xe5)),
       difficulty = com.chipprbots.ethereum.domain.Difficulty.Zero,
       nonce = ByteString(new Array[Byte](8)),
       ommersHash = com.chipprbots.ethereum.domain.BlockHash(com.chipprbots.ethereum.domain.BlockHeader.EmptyOmmers),
       extraFields = com.chipprbots.ethereum.domain.BlockHeader.HeaderExtraFields.HefEmpty
     )
     blockchainWriter.storeBlock(Block(posHeader, BlockBody.empty)).commit()
-    seedResumeState(pivot0, fakeRoot(0xE4))
+    seedResumeState(pivot0, fakeRoot(0xe4))
     peers.set(Map.empty)
     val snap = spawnController(SNAPSyncConfig(deferredMerkleization = false, movingRootDeltaHeal = true), isPoS = true)
     awaitFirstPoll()
