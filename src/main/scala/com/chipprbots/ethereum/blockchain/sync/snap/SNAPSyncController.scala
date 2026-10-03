@@ -4310,6 +4310,11 @@ private class SNAPSyncControllerImpl(
             // lazy-heal last-resort only fires after a fresh run of consecutive empty re-peg attempts. Harmless flag-OFF
             // (the budget is never incremented unless movingRootDeltaHeal && StateHealing).
             healRepegNoRootAttempts = 0
+            // PoS only (ETC/pre-merge byte-identical): a counted retry timer armed before this successful re-peg
+            // must not replay afterwards and count again against a stalled CL (forge, BUG-BC3 3rd follow-up).
+            if isPoSChain then
+              retryRefreshCounts = false
+              timers.cancel(PivotBootstrapRetryKey)
             trieNodeHealingCoordinator.foreach { coordinator =>
               coordinator ! actors.TrieNodeHealingCoordinator.HealingPivotRefreshed(newStateRoot.value)
             }

@@ -561,6 +561,46 @@ class SNAPLazyHealAnchorSpec extends ScalaTestWithActorTestKit() with AnyFlatSpe
       case _                              => FishingOutcomes.continueAndIgnore
     }
 
+  // forge warning: retryRefreshCounts must reset when a re-peg succeeds. A counted timer armed before a successful
+  // re-peg would otherwise replay with a stalled CL, count again, re-arm and reach a spurious handoff.
+  it should "not count a replay of a counted timer armed before a successful re-peg" taggedAs UnitTest in new Fixture:
+    val pivot0 = BigInt(2_000)
+    val pivot1 = BigInt(2_100)
+    storeGenesis()
+    storeHeaderAt(pivot0, fakeRoot(0xE4))
+    // Post-merge-shaped pivot header so the PoS gate in completePivotRefreshWithStateRoot accepts the re-peg.
+    val posHeader = Fixtures.Blocks.Genesis.header.copy(
+      number = BlockNumber(pivot1),
+      stateRoot = TrieRoot(fakeRoot(0xE5)),
+      difficulty = com.chipprbots.ethereum.domain.Difficulty.Zero,
+      nonce = ByteString(new Array[Byte](8)),
+      ommersHash = com.chipprbots.ethereum.domain.BlockHash(com.chipprbots.ethereum.domain.BlockHeader.EmptyOmmers),
+      extraFields = com.chipprbots.ethereum.domain.BlockHeader.HeaderExtraFields.HefEmpty
+    )
+    blockchainWriter.storeBlock(Block(posHeader, BlockBody.empty)).commit()
+    seedResumeState(pivot0, fakeRoot(0xE4))
+    peers.set(Map.empty)
+    val snap = spawnController(SNAPSyncConfig(deferredMerkleization = false, movingRootDeltaHeal = true), isPoS = true)
+    awaitFirstPoll()
+    snap ! SNAPSyncController.Start
+    stalledClHint(this, snap, pivot0)
+
+    // One counted attempt (stalled CL): count 1, arms a COUNTED timer.
+    snap ! SNAPSyncController.HealingAllPeersStateless
+    awaitProcessed(snap)
+    // CL advances: the next attempt re-pegs successfully (pivot0 -> pivot1) and must reset the provenance.
+    val advanced = Fixtures.Blocks.Genesis.header.copy(number = BlockNumber(pivot1 + PivotOffset))
+    snap ! SNAPSyncController.CLPivotHint(advanced.hash.value, Some(advanced))
+    snap ! SNAPSyncController.HealingAllPeersStateless
+    awaitProcessed(snap)
+    appStateStorage.getBestBlockNumber() shouldBe pivot1
+    // CL stalled again at the new pivot; the old timer's replays must not count.
+    (1 to MaxHealRepegNoRootAttempts * 2).foreach { _ =>
+      snap ! SNAPSyncController.RetryPivotRefresh
+      awaitProcessed(snap)
+    }
+    parent.expectNoMessage(500.millis)
+
   class Fixture extends EphemBlockchainTestSetup with TestSyncConfig:
     implicit override lazy val classicSystem: ActorSystem = SNAPLazyHealAnchorSpec.this.system.classicSystem
 
