@@ -7,7 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.0]
+
+Glamsterdam (Amsterdam) support for the ETH-family chains, released ahead of Sepolia's Amsterdam
+activation on 2026-10-06 13:53:36 UTC. This section covers everything merged into `staging` since 0.8.0
+(the 0.8.1 – 0.8.13 builds). Release notes: [`docs/releases/0.9.0.md`](docs/releases/0.9.0.md).
+
 ### Added
+- **Glamsterdam (Amsterdam) execution layer**, active on an ETH-family chain from its
+  `amsterdam-timestamp`; no ETC-family chain config declares one (#1409, #1413):
+  - EIP-2780, 7708, 7778, 7843 (`SLOTNUM`), 7928 (block-level access lists, built while a block executes,
+    checked against the header's `blockAccessListHash` and stored), 7954, 7976, 7981, 8024 (`DUPN`,
+    `SWAPN`, `EXCHANGE`), 8037, 8038, 8246 and 8282 (builder execution requests). EIP-7997 needs no
+    client code.
+  - Engine API: `engine_newPayloadV5`, `engine_forkchoiceUpdatedV4`, `engine_getPayloadV6`, and
+    `engine_getPayloadBodiesByHashV2` / `engine_getPayloadBodiesByRangeV2`, which add the stored access
+    list (`null` before Amsterdam or once pruned).
+  - Amsterdam block building: the 23-field header, the payload attributes' slot number, the block's own
+    access list, EIP-8282 builder requests, and EIP-8037's per-dimension transaction packing.
+  - eth/71 (EIP-8159) serves stored block access lists within go-ethereum's 2 MiB / 1,024-entry limits.
+    It is opt-in, like eth/70, eth/72 and snap/2 (below).
+  - The fork id follows the chain head's timestamp in the `Status` handshake, the ENR and DNS discovery.
+  - JSON-RPC at Amsterdam: `eth_config` reports the EIP-8282 builder contracts, `eth_simulateV1` builds
+    the 23-field header, and trace and debug replays of an Amsterdam block re-execute it as block import
+    did.
 - Platåberget, the public Glamsterdam testnet (chain id 7091047534), as a launcher network:
   `fukuii plataberget`. Ships the devnet-8 genesis (hash `0xee33ef92…2b31`) and EL bootnodes.
   Its Amsterdam fork activated 2026-08-20, so following the chain head needs the Amsterdam rule
@@ -20,27 +43,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Configurable external IP detection strategy via `network.server-address.external-ip-detection`
   (`none` | `upnp` | `full`, default `upnp`); every detected candidate is now validated as a public
   IPv4 address before being advertised to peers
-- Production release checklist in ETC-HANDOFF.md
-- Shared test helper library for Gorgoroth test scripts (`ops/gorgoroth/test-scripts/lib/test-helpers.sh`)
-- Static nodes configuration support via `static-nodes.json` file in datadir
-  - Nodes can now load peer configuration from `<datadir>/static-nodes.json`
-  - **Public mode**: Static nodes are merged with bootstrap nodes from chain config for better sync experience
-  - **Enterprise mode**: Uses ONLY static nodes, ignores bootstrap nodes to prevent unintentional public network connections
-  - Enables dynamic peer management for private/test networks without config file changes
-  - Fully integrated with existing peer discovery system
-  - Controlled via `public` and `enterprise` command-line modifiers
-- Release automation with one-click releases
-- Automated CHANGELOG generation from commit history
-- SBOM (Software Bill of Materials) generation in CycloneDX format
-- Assembly JAR attachment to GitHub releases
-- Release Drafter for auto-generated release notes
-- EIP-3651 implementation: Warm COINBASE address at transaction start (see VM-003)
-  - Added `eip3651Enabled` configuration flag to `EvmConfig`
-  - Added helper method to check EIP-3651 activation status
-  - COINBASE address is now marked as warm when EIP-3651 is enabled, reducing gas costs by 2500 for first access
-  - Comprehensive test suite with 11 tests covering gas cost changes and edge cases
+- Conformance runner for the execution-specs fixtures: `EestFixtureCorpusSpec` replays every
+  `blockchain_test` through block import, and `EngineApiAmsterdamBuilderEestSpec` rebuilds every block
+  those tests accept through the payload builder, which must reproduce the block hash. Against
+  `tests@v21.0.0` Amsterdam (26,503 tests, 27,352 blocks) both pass in full. The CI job `EEST Amsterdam`
+  runs both, at the informational tier (#1419, #1427).
+- eth/70 (EIP-7975), eth/71 (EIP-8159), eth/72 (EIP-8070) and snap/2 (EIP-8189) capabilities, each opt-in
+  under `network.protocols` and off by default (#1408).
+- CI gate matrix: `.github/gates.yml` declares every gate and its tier, Gate Integrity fails a public
+  claim that no check backs, and `docs/STATUS.md` is generated from it (#1406).
 
 ### Changed
+- **Engine API payloads move toward the node's gas ceiling on every fork**, as go-ethereum's builder
+  does: toward an Amsterdam payload's `targetGasLimit` when the attributes carry one, and otherwise toward
+  `mining.gas-limit-target` (default 60,000,000, go-ethereum's `--miner.gaslimit` default), at
+  `CalcGasLimit`'s rate. A payload used to keep its parent's gas limit, so a validator proposing through
+  fukuii now votes the limit toward 60M unless `mining.gas-limit-target` says otherwise (#1427).
+- The txpool's pre-filter for transactions from peers and re-orgs applies the rules of the fork active at
+  the chain head, as go-ethereum's pool does. It used to take the latest configured fork up to Osaka, so
+  on Sepolia before Amsterdam a peer's transaction below EIP-7623's floor is now refused, as it already
+  was on mainnet (#1430).
+- `eth_estimateGas` starts its search at `max(intrinsic gas, calldata floor)`, the least gas limit a node
+  accepts (EIP-7623 from Prague, EIP-7976 / EIP-7981 at Amsterdam). It could answer the intrinsic cost,
+  below the floor (#1430).
 - **Olympia is deferred on every chain** until a confirmed test block number exists. Gorgoroth
   (`gorgoroth-chain.conf`, was 15,800,850) and the private-network template
   (`enterprise-template.conf`, was 0) now set `olympia-block-number` to the unscheduled sentinel
@@ -60,14 +85,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Olympia-era gas now follows EIP-2537 (G1/G2 MSM discount tables) and EIP-7702 (authorization
   refunds, authority warming, delegation access cost). No ETC-family chain activates Olympia (see the
   entry above), so ETC mainnet, Mordor and Gorgoroth are unaffected.
-- Renamed GHCR image path from `chordodes_fukuii` to `fukuii` across all CI/CD, docs, and scripts
-- Modernized CI apt-key pattern to use `signed-by` keyring (replaces deprecated `apt-key add`)
-- Renamed `logback-node2-sync-trace.xml` → `logback-sync-trace.xml` (not node-specific)
-- Deduplicated `CONTRIBUTING.md` — root and `docs/` copies now redirect to canonical `docs/development/contributing.md`
-- Fixed confused rebrand text in contributing docs (was "Fukuii to Fukuii", now "Mantis to Fukuii")
-- Enhanced release workflow to include all artifacts
-- Updated documentation for release process
-- Modified `ProgramState` initialization to conditionally include COINBASE in warm addresses set
+- EVM interpreter: about 5x throughput on arithmetic-heavy code, with no differences across a
+  27,039-case ethereum/tests differential (#1408).
+- Engine API behaviour from hive's engine suite: payload building and transaction selection follow
+  go-ethereum; a sidechain block never overwrites a canonical one; `engine_forkchoiceUpdated*` keeps the
+  canonical index to exactly the head's ancestry and answers a VALID ancestor without rewinding;
+  `engine_getPayload*` is fork-windowed and includes transactions that arrived after the forkchoice
+  update (#1408).
+- P2P: eth/69 and later receipts use EIP-7642's encoding, and eth/68 typed receipts are one RLP byte
+  string (core-geth interop); the ENR `eth` entry is fixed, so go-ethereum dials fukuii; bodies and
+  receipts are served as prefixes under a 2 MiB soft limit, and backfilled ones are checked against
+  their header roots (#1408).
 
 ### Removed
 - **Fast sync.** It could not finish on current networks (eth/67 and later peers do not serve
@@ -117,6 +145,66 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
       regular sync.
 
 ### Fixed
+- **Sepolia: blocks carrying EIP-6110 deposits were rejected since Prague.** Execution read deposits
+  only from the mainnet deposit contract, so a Sepolia block with a deposit computed the wrong
+  `requestsHash` and was refused as `INVALID_REQUESTS`. Each chain's own deposit contract is now read
+  (#1416).
+- Consensus rules on live ETH networks, found by the Amsterdam corpus (#1413):
+  - from Prague, a transaction whose gas is below its EIP-7623 calldata floor is invalid; it was executed
+    (#1438);
+  - from Cancun, a successful precompile CALL keeps the caller's transient storage; it was wiped (#1439);
+  - from Osaka, P256VERIFY returns empty output when verification fails (#1439);
+  - from Osaka, the Engine API path enforces EIP-7934's block size limit (#1439).
+  - The same three rules apply from Olympia, which no chain schedules (see Changed).
+- MODEXP (EIP-198) reads a length word cut short by the end of its input as right-padded with zeros, on
+  every network that has the precompile (#1441, first in 0.8.6).
+- RLP decoding caps list nesting depth at 64, so a deeply nested message is refused instead of crashing
+  the node (#1442, first in 0.8.7).
+- `eth_simulateV1`'s per-call overrides (precompile moves, `traceTransfers`, the blob base fee) no longer
+  reach block import or other RPC calls running at the same time (#1446).
+- A handshaked peer no longer reconnects itself when its connection drops (#1447).
+- SNAP sync finishes after state healing re-pegs its pivot (#1448).
+- Post-merge regular sync imports the head's extension after a rewind instead of stalling, and fork
+  recovery no longer swallows an import's completion and wedges regular sync, on every chain (#1432).
+
+## Before 0.9.0
+
+The entries below were written under `[Unreleased]` between 0.1.0 and 0.8.0, before this file cut
+versioned sections; 0.9.0 is the first. They are kept as written. Release notes for some of those versions
+are in [`docs/releases/`](docs/releases/), and each GitHub release links its full commit range.
+
+### Added
+- Production release checklist in ETC-HANDOFF.md
+- Shared test helper library for Gorgoroth test scripts (`ops/gorgoroth/test-scripts/lib/test-helpers.sh`)
+- Static nodes configuration support via `static-nodes.json` file in datadir
+  - Nodes can now load peer configuration from `<datadir>/static-nodes.json`
+  - **Public mode**: Static nodes are merged with bootstrap nodes from chain config for better sync experience
+  - **Enterprise mode**: Uses ONLY static nodes, ignores bootstrap nodes to prevent unintentional public network connections
+  - Enables dynamic peer management for private/test networks without config file changes
+  - Fully integrated with existing peer discovery system
+  - Controlled via `public` and `enterprise` command-line modifiers
+- Release automation with one-click releases
+- Automated CHANGELOG generation from commit history
+- SBOM (Software Bill of Materials) generation in CycloneDX format
+- Assembly JAR attachment to GitHub releases
+- Release Drafter for auto-generated release notes
+- EIP-3651 implementation: Warm COINBASE address at transaction start (see VM-003)
+  - Added `eip3651Enabled` configuration flag to `EvmConfig`
+  - Added helper method to check EIP-3651 activation status
+  - COINBASE address is now marked as warm when EIP-3651 is enabled, reducing gas costs by 2500 for first access
+  - Comprehensive test suite with 11 tests covering gas cost changes and edge cases
+
+### Changed
+- Renamed GHCR image path from `chordodes_fukuii` to `fukuii` across all CI/CD, docs, and scripts
+- Modernized CI apt-key pattern to use `signed-by` keyring (replaces deprecated `apt-key add`)
+- Renamed `logback-node2-sync-trace.xml` → `logback-sync-trace.xml` (not node-specific)
+- Deduplicated `CONTRIBUTING.md` — root and `docs/` copies now redirect to canonical `docs/development/contributing.md`
+- Fixed confused rebrand text in contributing docs (was "Fukuii to Fukuii", now "Mantis to Fukuii")
+- Enhanced release workflow to include all artifacts
+- Updated documentation for release process
+- Modified `ProgramState` initialization to conditionally include COINBASE in warm addresses set
+
+### Fixed
 - **Critical**: Fixed ETH68 peer connection failures due to incorrect message decoder order
   - Network protocol messages (Hello, Disconnect, Ping, Pong) are now decoded before capability-specific messages
   - Resolves issue where peers would disconnect immediately after handshake with "Cannot decode Disconnect" error
@@ -160,5 +248,5 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-**Note:** This CHANGELOG is automatically generated during releases. For the most up-to-date
-information, see the [Releases page](https://github.com/chippr-robotics/fukuii/releases).
+**Note:** This changelog is written by hand; releases do not generate it. Each release on the
+[Releases page](https://github.com/chippr-robotics/fukuii/releases) links its full commit range.
