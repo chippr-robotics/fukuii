@@ -61,7 +61,7 @@ class ReferenceCountedStateStorage(
   /** Highest block number pruned by this instance (not persisted: after a restart the first save prunes one block, as
     * it always did). Used to catch up after a prune was deferred because the canonical head lagged the saved block.
     */
-  private var lastPruned: Option[BigInt] = None
+  @volatile private var lastPruned: Option[BigInt] = None
 
   /** Prunes the death row of `min(bn, canonicalBest + 1) - pruningHistory`, never `bn - pruningHistory` blindly.
     *
