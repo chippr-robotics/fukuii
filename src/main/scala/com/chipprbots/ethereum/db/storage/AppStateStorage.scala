@@ -346,6 +346,24 @@ class AppStateStorage(val dataSource: DataSource) extends TransactionalKeyValueS
   def putSnapSyncCodeHashesPath(path: String): DataSourceBatchUpdate =
     put(Keys.SnapSyncCodeHashesPath, path)
 
+  /** Entry count the codeHashes file held when it was finalized. Lets recovery tell an empty-by-design file (count 0)
+    * from a lost one. `None` for legacy data persisted before the count existed, or after a reset.
+    */
+  def getSnapSyncCodeHashesCount(): Option[Long] =
+    get(Keys.SnapSyncCodeHashesCount).filter(_.nonEmpty).flatMap(_.toLongOption)
+
+  /** Persist the codeHashes file entry count; an empty string clears it. */
+  def putSnapSyncCodeHashesCount(count: Option[Long]): DataSourceBatchUpdate =
+    put(Keys.SnapSyncCodeHashesCount, count.fold("")(_.toString))
+
+  /** Entry count the contract storage-task file held when it was finalized (see [[getSnapSyncCodeHashesCount]]). */
+  def getSnapSyncStorageFileCount(): Option[Long] =
+    get(Keys.SnapSyncStorageFileCount).filter(_.nonEmpty).flatMap(_.toLongOption)
+
+  /** Persist the storage-task file entry count; an empty string clears it. */
+  def putSnapSyncStorageFileCount(count: Option[Long]): DataSourceBatchUpdate =
+    put(Keys.SnapSyncStorageFileCount, count.fold("")(_.toString))
+
   /** Get the persisted path to the contract storage file for storage sync recovery. */
   def getSnapSyncStorageFilePath(): Option[String] =
     get(Keys.SnapSyncStorageFilePath)
@@ -514,6 +532,8 @@ object AppStateStorage:
     val SnapSyncBytecodeComplete = "SnapSyncBytecodeComplete"
     val SnapSyncCodeHashesPath = "SnapSyncCodeHashesPath"
     val SnapSyncStorageFilePath = "SnapSyncStorageFilePath"
+    val SnapSyncStorageFileCount = "SnapSyncStorageFileCount"
+    val SnapSyncCodeHashesCount = "SnapSyncCodeHashesCount"
     val SnapSyncFinalizedRoot = "SnapSyncFinalizedRoot"
     val BackfillTarget = "BackfillTarget"
     val BackfillBestHeader = "BackfillBestHeader"

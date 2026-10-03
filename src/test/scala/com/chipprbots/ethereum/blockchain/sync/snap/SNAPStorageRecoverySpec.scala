@@ -97,6 +97,41 @@ class SNAPStorageRecoverySpec extends ScalaTestWithActorTestKit() with AnyFlatSp
   it should "restart the accounts phase when the codeHashes file is truncated" taggedAs UnitTest in new Fixture:
     assertBytecodeRestart(Some(33))
 
+  it should "restart when the persisted codeHashes count does not match the file size" taggedAs UnitTest in new Fixture:
+    assertBytecodeRestart(Some(32), codeHashesCount = Some(2L))
+
+  it should "restart when the persisted storage count does not match the file size" taggedAs UnitTest in new Fixture:
+    val (root, _) = buildTrie()
+    Files.createDirectories(taskDir)
+    val storageFile = taskDir.resolve("storage.bin")
+    Files.write(storageFile, new Array[Byte](64))
+    markAccountsComplete(root, Some(storageFile))
+    appState.putSnapSyncStorageFileCount(Some(3L)).commit()
+    spawnController() ! SNAPSyncController.Start
+    eventually(timeout(10.seconds))(appState.isSnapSyncAccountsComplete() shouldBe false)
+    appState.isSnapSyncStorageComplete() shouldBe false
+    appState.getSnapSyncStorageFileCount() shouldBe None
+
+  it should "accept an empty codeHashes file when the persisted count is 0 and complete bytecode" taggedAs UnitTest in new Fixture:
+    val (root, _) = buildTrie()
+    Files.createDirectories(taskDir)
+    val storageFile = taskDir.resolve("storage.bin")
+    Files.write(storageFile, new Array[Byte](64))
+    val codeFile = taskDir.resolve("codehashes.bin")
+    Files.write(codeFile, new Array[Byte](0))
+    markAccountsComplete(root, Some(storageFile))
+    appState
+      .putSnapSyncBytecodeComplete(false)
+      .and(appState.putSnapSyncCodeHashesPath(codeFile.toString))
+      .and(appState.putSnapSyncCodeHashesCount(Some(0L)))
+      .commit()
+
+    spawnController() ! SNAPSyncController.Start
+
+    eventually(timeout(10.seconds))(appState.isSnapSyncBytecodeComplete() shouldBe true)
+    appState.isSnapSyncAccountsComplete() shouldBe true
+    appState.getSnapSyncCodeHashesPath() shouldBe Some(codeFile.toString)
+
   it should "use a present task file unchanged" taggedAs UnitTest in new Fixture:
     val (root, _) = buildTrie()
     val present = taskDir.resolve("present.bin")
@@ -177,7 +212,7 @@ class SNAPStorageRecoverySpec extends ScalaTestWithActorTestKit() with AnyFlatSp
       appState.getSnapSyncCodeHashesPath().getOrElse("") shouldBe ""
 
     /** Storage file valid, bytecode incomplete, codeHashes file missing (None) or of the given size in bytes. */
-    def assertBytecodeRestart(codeHashesBytes: Option[Int]): Unit =
+    def assertBytecodeRestart(codeHashesBytes: Option[Int], codeHashesCount: Option[Long] = None): Unit =
       val (root, _) = buildTrie()
       Files.createDirectories(taskDir)
       val storageFile = taskDir.resolve("storage.bin")
@@ -185,7 +220,11 @@ class SNAPStorageRecoverySpec extends ScalaTestWithActorTestKit() with AnyFlatSp
       val codeFile = taskDir.resolve("codehashes.bin")
       codeHashesBytes.foreach(n => Files.write(codeFile, new Array[Byte](n)))
       markAccountsComplete(root, Some(storageFile))
-      appState.putSnapSyncBytecodeComplete(false).and(appState.putSnapSyncCodeHashesPath(codeFile.toString)).commit()
+      appState
+        .putSnapSyncBytecodeComplete(false)
+        .and(appState.putSnapSyncCodeHashesPath(codeFile.toString))
+        .and(appState.putSnapSyncCodeHashesCount(codeHashesCount))
+        .commit()
 
       spawnController() ! SNAPSyncController.Start
 

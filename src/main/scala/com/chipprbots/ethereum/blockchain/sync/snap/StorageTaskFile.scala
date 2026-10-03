@@ -31,9 +31,19 @@ object StorageTaskFile:
         Files.createTempFile(d, prefix, suffix)
       case None => Files.createTempFile(prefix, suffix)
 
-  /** A file is usable when it exists, is non-empty and holds a whole number of `entrySize`-byte entries (64 for storage
-    * tasks, 32 for code hashes). I/O errors mean unusable.
+  /** Whether a persisted task file can be trusted.
+    *
+    * With a persisted `expectedCount` the file must exist and be exactly `expectedCount * entrySize` bytes; count 0
+    * with a zero-byte file is valid (a chain with no contracts). Without a count (legacy data) the file must exist, be
+    * non-empty and hold a whole number of entries: an empty legacy file cannot be told from a lost one. I/O errors mean
+    * unusable.
     */
-  def isUsable(path: Path, entrySize: Int = EntrySize): Boolean =
-    try Files.isRegularFile(path) && Files.size(path) > 0 && Files.size(path) % entrySize == 0
+  def isUsable(path: Path, entrySize: Int = EntrySize, expectedCount: Option[Long] = None): Boolean =
+    try
+      Files.isRegularFile(path) && {
+        val size = Files.size(path)
+        expectedCount match
+          case Some(n) => size == n * entrySize
+          case None    => size > 0 && size % entrySize == 0
+      }
     catch case _: java.io.IOException => false

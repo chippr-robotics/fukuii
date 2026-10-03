@@ -1258,7 +1258,10 @@ private class SNAPSyncControllerImpl(
                 actors.AccountRangeCoordinator.AccountGetStorageFileInfo(replyTo)
               )
               .foreach { info =>
-                appStateStorage.putSnapSyncStorageFilePath(info.filePath.toString).commit()
+                appStateStorage
+                  .putSnapSyncStorageFilePath(info.filePath.toString)
+                  .and(appStateStorage.putSnapSyncStorageFileCount(Some(info.count)))
+                  .commit()
                 ctx.log.info(s"Persisted storage file path for recovery: ${info.filePath} (${info.count} entries)")
               }
             coordinator
@@ -1266,7 +1269,10 @@ private class SNAPSyncControllerImpl(
                 actors.AccountRangeCoordinator.AccountGetCodeHashesFileInfo(replyTo)
               )
               .foreach { info =>
-                appStateStorage.putSnapSyncCodeHashesPath(info.filePath.toString).commit()
+                appStateStorage
+                  .putSnapSyncCodeHashesPath(info.filePath.toString)
+                  .and(appStateStorage.putSnapSyncCodeHashesCount(Some(info.count)))
+                  .commit()
                 ctx.log.info(s"Persisted codeHashes file path for recovery: ${info.filePath} (${info.count} entries)")
               }
           }
@@ -2258,13 +2264,26 @@ private class SNAPSyncControllerImpl(
             // tasks cannot be rebuilt reliably from an unhealed account trie, so restart the accounts phase.
             val storageTaskFileUnusable =
               !belowEscalationHint && !appStateStorage.isSnapSyncStorageComplete() &&
-                !savedStoragePath.filter(_.nonEmpty).exists(p => StorageTaskFile.isUsable(java.nio.file.Paths.get(p)))
+                !savedStoragePath
+                  .filter(_.nonEmpty)
+                  .exists(p =>
+                    StorageTaskFile.isUsable(
+                      java.nio.file.Paths.get(p),
+                      expectedCount = appStateStorage.getSnapSyncStorageFileCount()
+                    )
+                  )
             val codeHashesFileUnusable =
               !belowEscalationHint && !appStateStorage.isSnapSyncBytecodeComplete() &&
                 !appStateStorage
                   .getSnapSyncCodeHashesPath()
                   .filter(_.nonEmpty)
-                  .exists(p => StorageTaskFile.isUsable(java.nio.file.Paths.get(p), StorageTaskFile.CodeHashEntrySize))
+                  .exists(p =>
+                    StorageTaskFile.isUsable(
+                      java.nio.file.Paths.get(p),
+                      StorageTaskFile.CodeHashEntrySize,
+                      appStateStorage.getSnapSyncCodeHashesCount()
+                    )
+                  )
             val taskFilesUnusable = storageTaskFileUnusable || codeHashesFileUnusable
             if taskFilesUnusable then
               ctx.log.warn(
@@ -2280,6 +2299,8 @@ private class SNAPSyncControllerImpl(
                 .and(appStateStorage.putSnapSyncBytecodeComplete(false))
                 .and(appStateStorage.putSnapSyncStorageFilePath(""))
                 .and(appStateStorage.putSnapSyncCodeHashesPath(""))
+                .and(appStateStorage.putSnapSyncStorageFileCount(None))
+                .and(appStateStorage.putSnapSyncCodeHashesCount(None))
                 .commit()
 
             // Check if pivot is still fresh enough (skipped when belowEscalationHint forced clear)
@@ -4357,7 +4378,11 @@ private class SNAPSyncControllerImpl(
       .and(appStateStorage.putSnapSyncStorageComplete(false))
       .and(appStateStorage.putSnapSyncBytecodeComplete(false))
       .commit()
-    appStateStorage.putSnapSyncStorageFilePath("").commit()
+    appStateStorage
+      .putSnapSyncStorageFilePath("")
+      .and(appStateStorage.putSnapSyncStorageFileCount(None))
+      .and(appStateStorage.putSnapSyncCodeHashesCount(None))
+      .commit()
 
     // Reset pivot/state root and storage so a new selection is committed
     pivotBlock = None
