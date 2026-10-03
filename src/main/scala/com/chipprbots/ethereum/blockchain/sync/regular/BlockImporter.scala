@@ -687,10 +687,11 @@ final private class BlockImporterLogic(
                   case None =>
                     log.error("Gas mismatch on block {} but no missing contract code found", failedBlock.number)
                     // This arm — and ONLY this arm — is where a gas-used mismatch is proven to be a real consensus
-                    // failure rather than a missing-bytecode artifact. `InMemoryWorldStateProxy.getCode` returns
-                    // ByteString.empty instead of throwing when code is absent, so a partially-synced node
-                    // under-counts gas on an honest block and lands in the sibling `Some(codeHash)` arm above, which
-                    // fetches the code over SNAP and retries. Having positively excluded that reading, tell the
+                    // failure rather than a missing-bytecode artifact. `InMemoryWorldStateProxy.getCode` now throws
+                    // MissingCodeException when an account's code is absent, and the arm above fetches the code over
+                    // SNAP and retries. (It used to return ByteString.empty, so a partially-synced node under-counted
+                    // gas on an honest block and landed in that sibling arm.) Reaching this arm means no missing code
+                    // was found. Having positively excluded that reading, tell the
                     // Engine API so newPayload/forkchoiceUpdated can answer INVALID for this block and its
                     // descendants. latestValidHash = the failing block's parent: execution proceeds in order and
                     // stops at the first failure, so the parent is the last block we validated.

@@ -174,3 +174,30 @@ class SNAPHealedCodeFinalizeSpec extends ScalaTestWithActorTestKit() with AnyFla
       case _                                                     => FishingOutcomes.continueAndIgnore
     }
     appStateStorage.isBytecodeRecoveryDone() shouldBe true
+
+  it should
+    "not let a HealedCodeWaitTimeout from before a restart finalise the fresh sync" taggedAs UnitTest in new Fixture:
+      val snap = start()
+      snap ! SNAPSyncController.HealedCodeHashes(Seq(ByteString(codeHash)))
+      snap ! SNAPSyncController.HealingRootUnservable(root) // enters the hold
+      awaitProcessed(snap)
+      parent.expectNoMessage(500.millis)
+
+      snap ! SNAPSyncController.AccountTrieFinalizationFailed("test") // restartSnapSync: a fresh sync
+      awaitProcessed(snap)
+
+      snap ! SNAPSyncController.HealedCodeWaitTimeout // the old hold's timer firing late
+      awaitProcessed(snap)
+      val deadline = 1.second.fromNow
+      var seen = List.empty[SyncProtocol.SyncControllerReply]
+      while deadline.hasTimeLeft() do
+        scala.util.Try(parent.receiveMessage(deadline.timeLeft.max(10.millis))).foreach(m => seen = m :: seen)
+      seen.collect { case f: SNAPSyncController.SnapSyncFinalized => f } shouldBe empty
+      appStateStorage.isSnapSyncDone() shouldBe false
+
+  "SNAPSyncController.bytecodeRecoveryComplete" should
+    "be false after a force-completed bytecode phase, or while healed-account code is missing" taggedAs UnitTest in {
+      SNAPSyncController.bytecodeRecoveryComplete(0, bytecodePhaseForceCompleted = false) shouldBe true
+      SNAPSyncController.bytecodeRecoveryComplete(0, bytecodePhaseForceCompleted = true) shouldBe false
+      SNAPSyncController.bytecodeRecoveryComplete(3, bytecodePhaseForceCompleted = false) shouldBe false
+    }

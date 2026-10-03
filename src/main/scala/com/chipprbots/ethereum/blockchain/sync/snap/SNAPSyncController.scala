@@ -642,6 +642,7 @@ private class SNAPSyncControllerImpl(
   private def stopSnapOnlySchedules(): Unit =
     timers.cancel(RequestAccountRanges)
     timers.cancel(RequestByteCodes)
+    timers.cancel(HealedCodeWaitTimerKey)
     timers.cancel(RequestStorageRanges)
     timers.cancel(CheckDownloadStagnation)
     timers.cancel(RequestTrieNodeHealing)
@@ -3177,6 +3178,7 @@ private class SNAPSyncControllerImpl(
         s"criticalFailureCount=$criticalFailureCount. Restarting SNAP sync with fresh pivot."
     )
 
+    resetHealedCodeHold()
     accountsComplete = false
     bytecodePhaseComplete = false
     storagePhaseComplete = false
@@ -4591,6 +4593,7 @@ private class SNAPSyncControllerImpl(
     requestTracker.clear()
 
     // Clear concurrent download state and recovery data
+    resetHealedCodeHold()
     accountsComplete = false
     bytecodePhaseComplete = false
     storagePhaseComplete = false
@@ -4857,6 +4860,16 @@ private class SNAPSyncControllerImpl(
       )
       appStateStorage.putSnapSyncPivotBlock(b).and(appStateStorage.putSnapSyncStateRoot(r.value)).commit()
 
+  /** Forget everything the healed-code hold knows. A restart or re-peg starts a fresh sync: a stale hold, or a
+    * `HealedCodeWaitTimeout` still in flight from the old one, must not finalise it mid-download.
+    */
+  private def resetHealedCodeHold(): Unit =
+    healedCodeHashes.clear()
+    awaitingHealedCode = false
+    healedCodeWaitExhausted = false
+    bytecodeForceCompleted = false
+    timers.cancel(HealedCodeWaitTimerKey)
+
   /** Forget healed codeHashes whose bytecode has since been stored. */
   private def dropHealedCodeNowPresent(): Unit =
     healedCodeHashes.filterInPlace(h => evmCodeStorage.get(h).isEmpty)
@@ -5037,7 +5050,8 @@ private class SNAPSyncControllerImpl(
           // next start's recovery scan finds them. Previously it was set unconditionally, which is how a node came to
           // hold accounts with a codeHash and no code, forever.
           dropHealedCodeNowPresent()
-          val bytecodeComplete = healedCodeHashes.isEmpty && !bytecodeForceCompleted
+          val bytecodeComplete =
+            SNAPSyncController.bytecodeRecoveryComplete(healedCodeHashes.size, bytecodeForceCompleted)
           if !bytecodeComplete then
             ctx.log.warn(
               s"[HEAL-CODE] bytecode incomplete at finalisation (healed-account codeHashes missing: " +
@@ -5425,6 +5439,15 @@ object SNAPSyncController:
   case object StateHealingAbandoned extends Command
   /** TrieNodeHealingCoordinator -> controller: healed account leaves whose bytecode is not in `EvmCodeStorage`. */
   final case class HealedCodeHashes(codeHashes: Seq[ByteString]) extends Command
+
+  /** Whether SNAP may claim that no account's bytecode is missing (`bytecodeRecoveryDone`): nothing healed is still
+    * missing, and the bytecode phase was not force-completed with tasks abandoned.
+    */
+  private[snap] def bytecodeRecoveryComplete(
+      healedCodeStillMissing: Int,
+      bytecodePhaseForceCompleted: Boolean
+  ): Boolean =
+    healedCodeStillMissing == 0 && !bytecodePhaseForceCompleted
 
   /** The bounded wait for that bytecode ran out. */
   private[snap] case object HealedCodeWaitTimeout extends Command
