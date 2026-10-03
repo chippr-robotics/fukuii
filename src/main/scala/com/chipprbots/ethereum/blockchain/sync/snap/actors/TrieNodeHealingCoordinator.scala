@@ -19,6 +19,7 @@ import org.bouncycastle.util.encoders.Hex
 
 import com.chipprbots.ethereum.blockchain.sync.snap.*
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController
+import com.chipprbots.ethereum.crypto.kec256
 import com.chipprbots.ethereum.db.storage.BfsEntry
 import com.chipprbots.ethereum.db.storage.BfsQueueStorage
 import com.chipprbots.ethereum.db.storage.HealingFrontierStorage
@@ -653,7 +654,7 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
   def active(): Behavior[Command] = Behaviors.receiveMessage[Command] {
     case StartTrieNodeHealing(root) =>
       val emptyPath = ByteString(com.chipprbots.ethereum.mpt.HexPrefix.encode(Array.empty[Byte], isLeaf = false))
-      if isNodeInStorage(root) then
+      if isNodeInStorage(root, Seq(emptyPath)) then
         // ARCH-HEAL-RESTART: Root already healed — crash/restart mid-healing detected.
         // Rebuild the frontier by traversing locally-stored trie nodes instead of re-requesting
         // known nodes from the network (go-ethereum trie.Sync.Missing() analogue).
@@ -732,7 +733,7 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
         // below already does for an absent re-pegged root — do NOT hand off to lazy healing. Persisted nodes are NOT
         // discarded (this only ADDS the root task). `discoverMissingChildren` then drives the top-down delta from here.
         // Start-of-heal and re-peg therefore seed an absent root IDENTICALLY (one moving-root mechanism).
-        if !pendingHashSet.contains(root) && !isNodeInStorage(root) then
+        if !pendingHashSet.contains(root) && !isNodeInStorage(root, Seq(emptyPath)) then
           val seedEntry = HealingEntry(Seq(emptyPath), root)
           pendingTasks += seedEntry
           pendingHashSet += root
@@ -996,7 +997,7 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
         // top-down traversal of the updated trie.
         val pivotReseedPath =
           ByteString(com.chipprbots.ethereum.mpt.HexPrefix.encode(Array.empty[Byte], isLeaf = false))
-        if !pendingHashSet.contains(newStateRoot) && !isNodeInStorage(newStateRoot) then
+        if !pendingHashSet.contains(newStateRoot) && !isNodeInStorage(newStateRoot, Seq(pivotReseedPath)) then
           val reseedEntry = HealingEntry(Seq(pivotReseedPath), newStateRoot)
           pendingTasks += reseedEntry
           pendingHashSet += newStateRoot
@@ -1895,7 +1896,16 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
         if !hasNext then moreChunks = false
         else
           val trieReadStart = System.nanoTime()
-          val results = mptStorage.multiGetNodes(chunk.map(_.hash))
+          // Hash scheme: the original batched, content-addressed multiGetNodes (unchanged). Path scheme: PathNodeStorage
+          // is keyed by PATH, not hash, so a hash-keyed batch lookup can never find a Path-scheme node. Each entry
+          // carries its own pathset (it was enqueued with it), so read it at THAT path and count it present only if the
+          // stored bytes hash to the entry's hash (`readPathVerifiedNode`). Without this the walk read an empty
+          // hash-keyed store, reported the very first node missing, and never descended into a present trie.
+          val results: Seq[Option[com.chipprbots.ethereum.mpt.MptNode]] = storageScheme match
+            case StorageScheme.Hash =>
+              mptStorage.multiGetNodes(chunk.map(_.hash))
+            case StorageScheme.Path =>
+              chunk.map(e => readPathVerifiedNode(ByteString(e.hash), e.pathset.map(ByteString(_))))
           trieReadNanos.addAndGet(System.nanoTime() - trieReadStart)
           val nextBuf = mutable.ArrayBuffer[(Array[Byte], Seq[Array[Byte]], Boolean)]()
 
@@ -2228,6 +2238,11 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
     *
     * B3 FIX: branch children are checked with a single multiGetNodes call instead of up to 16 serial isNodeInStorage
     * calls on the actor thread. Extension child uses the same pattern for consistency.
+    *
+    * Presence is scheme-dependent. Hash scheme: content-addressed lookup by the child's hash (unchanged). Path scheme:
+    * `PathNodeStorage` is keyed by PATH, so each child is looked up at ITS OWN path (the same path it would be queued
+    * and fetched with) and counts as present only when the bytes stored there hash to the child's hash — see
+    * `readPathVerifiedRlp`. That is what lets a re-peg re-fetch only the delta instead of the whole trie.
     */
   private def discoverMissingChildren(nodeData: ByteString, pathset: Seq[ByteString], nodeHash: ByteString): Unit =
     import com.chipprbots.ethereum.mpt.{MptTraversals, BranchNode, ExtensionNode, HashNode, LeafNode}
@@ -2246,20 +2261,29 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
 
         decoded match
           case branch: BranchNode =>
-            // Collect all non-pending HashNode children, then check storage in one multiGetNodes call.
+            // The path a child at branch slot `i` is queued, fetched and (Path scheme) stored under.
+            def childPathsetAt(i: Int): Seq[ByteString] =
+              val childNibbles = parentNibbles :+ i.toByte
+              val childCompact = ByteString(HexPrefix.encode(childNibbles, isLeaf = false))
+              if isStorageTrie then Seq(pathset.head, childCompact) else Seq(childCompact)
+
+            // Collect all non-pending HashNode children, then check storage for them.
             val toCheck = branch.children.zipWithIndex
               .collect { case (hn: HashNode, i) =>
                 (i, ByteString(hn.hashNode))
               }
               .filterNot { case (_, h) => pendingHashSet.contains(h) }
             if toCheck.nonEmpty then
-              val storageResults = mptStorage.multiGetNodes(toCheck.map(_._2.toArray))
-              toCheck.zip(storageResults).foreach { case ((i, childHash), nodeOpt) =>
-                if nodeOpt.isEmpty then
-                  val childNibbles = parentNibbles :+ i.toByte
-                  val childCompact = ByteString(HexPrefix.encode(childNibbles, isLeaf = false))
-                  val childPathset = if isStorageTrie then Seq(pathset.head, childCompact) else Seq(childCompact)
-                  newEntries += HealingEntry(childPathset, childHash)
+              // Hash scheme: one batched content-addressed multiGetNodes call (unchanged). Path scheme: each child is
+              // looked up at its OWN path — a hash-keyed lookup can never find a Path-scheme node, which made every
+              // child look missing and re-queued the whole trie below the walk root on every re-peg.
+              val present: Seq[Boolean] = storageScheme match
+                case StorageScheme.Hash =>
+                  mptStorage.multiGetNodes(toCheck.map(_._2.toArray)).map(_.isDefined)
+                case StorageScheme.Path =>
+                  toCheck.toSeq.map { case (i, childHash) => isNodeInStorage(childHash, childPathsetAt(i)) }
+              toCheck.zip(present).foreach { case ((i, childHash), isPresent) =>
+                if !isPresent then newEntries += HealingEntry(childPathsetAt(i), childHash)
               }
 
           case ext: ExtensionNode =>
@@ -2267,20 +2291,22 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
               case hash: HashNode =>
                 val childHash = ByteString(hash.hashNode)
                 if !pendingHashSet.contains(childHash) then
-                  val storageResults = mptStorage.multiGetNodes(Seq(childHash.toArray))
-                  if storageResults.headOption.flatten.isEmpty then
-                    val childNibbles = parentNibbles ++ ext.sharedKey.toArray
-                    val childCompact = ByteString(HexPrefix.encode(childNibbles, isLeaf = false))
-                    val childPathset = if isStorageTrie then Seq(pathset.head, childCompact) else Seq(childCompact)
-                    newEntries += HealingEntry(childPathset, childHash)
+                  val childNibbles = parentNibbles ++ ext.sharedKey.toArray
+                  val childCompact = ByteString(HexPrefix.encode(childNibbles, isLeaf = false))
+                  val childPathset = if isStorageTrie then Seq(pathset.head, childCompact) else Seq(childCompact)
+                  val present = storageScheme match
+                    case StorageScheme.Hash =>
+                      mptStorage.multiGetNodes(Seq(childHash.toArray)).headOption.flatten.isDefined
+                    case StorageScheme.Path =>
+                      isNodeInStorage(childHash, childPathset)
+                  if !present then newEntries += HealingEntry(childPathset, childHash)
               case _ => // Already inline-encoded — no missing child
           case leaf: LeafNode if !isStorageTrie =>
             // ARCH-LEAF-SEED: Account trie leaf — decode account, seed storage trie if missing.
             // Besu equivalent: getChildRequests() → getStorageTrieNodeRequests() on account leaf values.
             Account(leaf.value).foreach { account =>
               if account.storageRoot != Account.EmptyStorageRootHash &&
-                !pendingHashSet.contains(account.storageRoot.value) &&
-                !isNodeInStorage(account.storageRoot.value)
+                !pendingHashSet.contains(account.storageRoot.value)
               then
                 val leafNibbles = leaf.key.toArray
                 val allNibbles = parentNibbles ++ leafNibbles
@@ -2293,11 +2319,15 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
                     .toArray
                   val accountHash = ByteString(accountHashBytes)
                   val emptyStoragePath = ByteString(HexPrefix.encode(Array.empty[Byte], isLeaf = false))
-                  newEntries += HealingEntry(Seq(accountHash, emptyStoragePath), account.storageRoot.value)
-                  log.debug(
-                    s"[HEAL-LEAF] Seeded storage trie root ${Hex.toHexString(account.storageRoot.value.take(4).toArray)} " +
-                      s"for account ${Hex.toHexString(accountHashBytes.take(4))}"
-                  )
+                  // Presence is checked here, once the account hash — hence the storage root's path — is known. Hash
+                  // scheme: content-addressed lookup by hash, exactly as before (the pathset is ignored). Path scheme:
+                  // the storage-trie root lives at (accountHash, empty path) and is checked THERE.
+                  if !isNodeInStorage(account.storageRoot.value, Seq(accountHash, emptyStoragePath)) then
+                    newEntries += HealingEntry(Seq(accountHash, emptyStoragePath), account.storageRoot.value)
+                    log.debug(
+                      s"[HEAL-LEAF] Seeded storage trie root ${Hex.toHexString(account.storageRoot.value.take(4).toArray)} " +
+                        s"for account ${Hex.toHexString(accountHashBytes.take(4))}"
+                    )
             }
 
           case _ => // storage trie LeafNode, NullNode, HashNode — no children to discover
@@ -2342,8 +2372,13 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
                   Seq(account.storageRoot.value)
                 case _ => Seq.empty
             case _ => Seq.empty
+          // `prunedEnabled` (this block's guard) requires the Hash scheme, so `isNodeInStorage` here is always the
+          // content-addressed lookup and takes no path. If pruning is ever enabled under Path, the empty pathset makes
+          // it conservatively false — no record is staged, the walk descends — never a false "closed".
           val subtreeClosed =
-            subtreeRoots.forall(c => isNodeInStorage(c) && healingFrontierStorage.exists(_.isSubtreeComplete(c)))
+            subtreeRoots.forall(c =>
+              isNodeInStorage(c, Seq.empty) && healingFrontierStorage.exists(_.isSubtreeComplete(c))
+            )
           if subtreeClosed then
             pendingSubtreeRecords += nodeHash
             log.debug(
@@ -2357,22 +2392,68 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
               s"Skipping — trie walk will find these nodes."
           )
 
-  private def isNodeInStorage(hash: ByteString): Boolean =
+  /** Path scheme only: the bytes stored at the task's OWN path in [[PathNodeStorage]], returned ONLY when their
+    * keccak256 equals `hash` — otherwise `None`.
+    *
+    * `pathset` is the same shape `HealingEntry` / `GetTrieNodes` use, HP/compact-encoded: `Seq(compactPath)` for an
+    * account-trie node, `Seq(accountHash32, compactStoragePath)` for a storage-trie node. It is decoded to the nibble
+    * path `PathNodeStorage.readAccountNode` / `readStorageNode` take (they HP-encode it back to the RocksDB key).
+    *
+    * Why the hash comparison is mandatory: `PathNodeStorage` keeps exactly ONE node per path slot, and a re-peg REUSES
+    * paths — a node healed against the previous root can sit at the very path the new root needs, with DIFFERENT
+    * content. "Something is stored at this path" is therefore NOT presence; only "the bytes at this path are the bytes
+    * whose keccak256 the parent references" is. A stale node, or the right bytes at the wrong path, both fall through
+    * to `None` and get re-fetched (an idempotent overwrite).
+    *
+    * Also `None`: no `PathNodeStorage` configured, nothing stored at the path, or a pathset of an unexpected shape (no
+    * path context ⇒ conservatively absent, never present).
+    */
+  private def readPathVerifiedRlp(hash: ByteString, pathset: Seq[ByteString]): Option[Array[Byte]] =
+    import com.chipprbots.ethereum.mpt.HexPrefix
+    pathNodeStorageOpt.flatMap { pns =>
+      val stored: Option[Array[Byte]] = pathset match
+        case Seq(compactPath) =>
+          pns.readAccountNode(HexPrefix.decode(compactPath.toArray)._1)
+        case Seq(accountHash, compactPath) =>
+          pns.readStorageNode(accountHash, HexPrefix.decode(compactPath.toArray)._1)
+        case _ => None
+      stored.filter(rlp => ByteString.fromArrayUnsafe(kec256(rlp)) == hash)
+    }
+
+  /** `readPathVerifiedRlp` plus decode, for the frontier-rebuild walk, which must traverse the node's children. Bytes
+    * that hash correctly but do not decode are reported absent (so they are re-fetched and overwritten) and logged: it
+    * should be unreachable — a node referenced by a valid trie decodes — but must never be counted present.
+    */
+  private def readPathVerifiedNode(
+      hash: ByteString,
+      pathset: Seq[ByteString]
+  ): Option[com.chipprbots.ethereum.mpt.MptNode] =
+    readPathVerifiedRlp(hash, pathset).flatMap { rlp =>
+      try Some(MptStorage.decodeNode(rlp, hash.toArray))
+      catch
+        case scala.util.control.NonFatal(e) =>
+          asyncLog.warn(
+            s"[HEAL-BFS] Path-scheme node ${Hex.toHexString(hash.take(4).toArray)} hashes correctly at its path but " +
+              s"does not decode (${e.getMessage}) — treating as missing so it is re-fetched"
+          )
+          None
+    }
+
+  /** Presence check that gates healing queue/skip decisions.
+    *
+    * Hash scheme: content-addressed lookup through `mptStorage` — byte-identical to the pre-existing behaviour,
+    * `pathset` is ignored. Path scheme: present ONLY when the bytes stored at `pathset`'s exact path hash to `hash`
+    * (`readPathVerifiedRlp`); path existence alone is never sufficient. An empty `pathset` means the call site has no
+    * path context, which under Path is conservatively absent (healing re-requests it; writes are idempotent).
+    */
+  private def isNodeInStorage(hash: ByteString, pathset: Seq[ByteString]): Boolean =
     storageScheme match
       case StorageScheme.Hash =>
         try
           mptStorage.get(hash.toArray); true
         catch case _: Exception => false
       case StorageScheme.Path =>
-        // PathScheme: nodes are path-keyed. Verify by reading the state root at the empty
-        // nibble path and hashing it. For non-root nodes we lack path context here — return
-        // false so healing re-requests them (idempotent: writes are safe to repeat).
-        pathNodeStorageOpt.exists { pns =>
-          pns.readAccountNode(Array.empty[Byte]).exists { rlp =>
-            val digest = new org.bouncycastle.jcajce.provider.digest.Keccak.Digest256()
-            ByteString(digest.digest(rlp)) == hash
-          }
-        }
+        readPathVerifiedRlp(hash, pathset).isDefined
 
 object TrieNodeHealingCoordinator:
 

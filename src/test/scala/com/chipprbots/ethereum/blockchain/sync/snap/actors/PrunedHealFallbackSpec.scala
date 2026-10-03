@@ -100,23 +100,40 @@ class PrunedHealFallbackSpec extends ScalaTestWithActorTestKit() with AnyFlatSpe
     storage.putNode(leaf)
     ByteString(leaf.hash)
 
+  /** Copy every node reachable from `rootHash` in the hash-keyed `storage` into `pns` at its account-trie nibble path
+    * (the root at the empty path, a branch child at `parentPath :+ slot`). Branch-only, which is all `presentSubtree`
+    * builds. Gives a Path-scheme coordinator the same "already fully present" trie the Hash-scheme cases get from
+    * `storage` itself.
+    */
+  private def mirrorIntoPathStorage(storage: TestMptStorage, rootHash: ByteString, pns: PathNodeStorage): Unit =
+    def walk(hash: Array[Byte], path: Array[Byte]): Unit =
+      val node = storage.get(hash)
+      pns.writeAccountNode(path, node.encode)
+      node match
+        case branch: BranchNode =>
+          branch.children.zipWithIndex.foreach {
+            case (child: HashNode, slot) => walk(child.hashNode, path :+ slot.toByte)
+            case _                       => ()
+          }
+        case _ => ()
+    walk(rootHash.toArray, Array.empty[Byte])
+
   /** Build a verification-driving fixture. `markComplete()` + empty frontier + `frontierPersistenceEnabled = true`
     * routes `StartTrieNodeHealing` to the verification pass (so we can drive the WALK directly). For the default-off
     * decoupling test we instead build with persistence OFF and drive the HEAL flow.
     *
-    * `seedPathRoot` is required only by the Path-scheme case: under the Path scheme the coordinator's `isNodeInStorage`
-    * gate reads the root through a `PathNodeStorage` (path-keyed), NOT through the hash-keyed `mptStorage` the BFS walk
-    * later traverses. Without a populated `PathNodeStorage` the gate returns false, `StartTrieNodeHealing` takes the
-    * fresh-root-seed branch (which waits for a peer that never arrives) instead of the verification pass, and the test
-    * times out. Seeding the root node's RLP at the empty account-trie path makes the gate match so the verification
-    * walk actually runs — the walk itself reads hash-keyed from `mptStorage`, so a single root entry is enough to enter
-    * and complete the Path-scheme walk over the already-present subtree.
+    * `seedPathTrie` is required only by the Path-scheme case. Under the Path scheme the coordinator reads EVERY node —
+    * the root gate in `StartTrieNodeHealing` and each node the verification walk visits — through a `PathNodeStorage`
+    * (path-keyed), never through the hash-keyed `mptStorage`. So a Path-scheme "already fully present" trie must live
+    * in `PathNodeStorage`, each node at its trie path: `mirrorIntoPathStorage` copies the whole trie reachable from
+    * `stateRoot` there (in this spec the three-node `presentSubtree`). Without it the walk (correctly) finds the
+    * present subtree missing, waits for a peer that never arrives, and the test times out.
     */
   private def withVerificationFixture(
       stateRoot: ByteString,
       storage: TestMptStorage,
       storageScheme: StorageScheme,
-      seedPathRoot: Boolean = false,
+      seedPathTrie: Boolean = false,
       prunedHealVerification: Boolean = true
   )(
       body: (
@@ -132,12 +149,11 @@ class PrunedHealFallbackSpec extends ScalaTestWithActorTestKit() with AnyFlatSpe
     val store = new HealingFrontierStorage(dataSource)
     store.markComplete()
 
-    // Path-scheme only: make the root readable through the path-keyed gate so the verification walk is entered.
+    // Path-scheme only: the present trie must be readable path-keyed, node by node, for the verification walk.
     val pathNodeStorageOpt: Option[PathNodeStorage] =
-      if seedPathRoot then
+      if seedPathTrie then
         val pns = new PathNodeStorage(dataSource)
-        val rootRlp = storage.get(stateRoot.toArray).encode // == kec256(rootRlp) == stateRoot by construction
-        pns.writeAccountNode(Array.empty[Byte], rootRlp)
+        mirrorIntoPathStorage(storage, stateRoot, pns)
         Some(pns)
       else None
 
@@ -202,13 +218,13 @@ class PrunedHealFallbackSpec extends ScalaTestWithActorTestKit() with AnyFlatSpe
     val storage = new TestMptStorage()
     val (root, subtreeRoot) = presentSubtree(storage)
     // Path scheme ⇒ prunedEnabled is false even with the flag on (D5: Hash-scheme only). The hash-keyed record must
-    // never gate a Path-scheme verification. `seedPathRoot = true` makes the path-keyed `isNodeInStorage` gate match so
-    // the verification walk is actually entered (the walk reads the present subtree hash-keyed from `mptStorage`).
+    // never gate a Path-scheme verification. `seedPathTrie = true` mirrors the present subtree into the path-keyed
+    // store, where a Path-scheme coordinator (root gate AND verification walk) actually reads it.
     withVerificationFixture(
       root,
       storage,
       storageScheme = StorageScheme.Path,
-      seedPathRoot = true
+      seedPathTrie = true
     ) { (coordinator, store, controller) =>
       store.markSubtreeComplete(subtreeRoot)
       SNAPSyncMetrics.setHealingPrunedVerification(-1L)
