@@ -1079,7 +1079,7 @@ private class SNAPSyncControllerImpl(
       case AccountTrieFinalized(finalizedRoot) =>
         // Persist the finalized trie root hash so we can recover after restart.
         // With pivot refreshes, the finalized root differs from the pivot block header's stateRoot.
-        // On startup, SyncController substitutes this root into the pivot block header.
+        // Diagnostic only: startup logs it against the pivot header, which is never rewritten (its hash covers stateRoot).
         ctx.log.info(
           "Persisting finalized account trie root: {}",
           finalizedRoot.take(8).toArray.map("%02x".format(_)).mkString

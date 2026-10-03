@@ -206,63 +206,223 @@ class SyncControllerSpec
       hashes.map(h => (h, validMptNodeRlp(h)))
     )
 
-  it should "update pivot header stateRoot to snapStateRoot when snapRoot differs but both are in MPT (SC-1a)" taggedAs (
-    UnitTest,
-    SyncTest
-  ) in withRecoveryTestSetup() { testSetup =>
+  // A header's hash covers its stateRoot, so rewriting it forges a block, and storeBlockHeader repoints number->hash at
+  // the forgery. The two tests that used to stand here (SC-1a, SC-1b) asserted exactly that rewrite; they are replaced
+  // by tests that the startup leaves every header and mapping untouched.
+  private def storeFullBlock(testSetup: TestSetup, header: BlockHeader): Unit =
+    testSetup.blockchainWriter.storeBlock(Block(header, BlockBody.empty)).commit()
+
+  private def snapshotOf(
+      testSetup: TestSetup,
+      numbers: Seq[Int]
+  ): Seq[(Int, Option[ByteString], Option[ByteString])] =
+    numbers.map { n =>
+      val hash = testSetup.blockchainReader.getCanonicalHashByNumber(n).map(_.value)
+      val headerBytes =
+        hash.flatMap(h => testSetup.blockchainReader.getBlockHeaderByHash(BlockHash(h))).map(_.hash.value)
+      (n, hash, headerBytes)
+    }
+
+  private def markSnapDone(testSetup: TestSetup): Unit =
+    val st = testSetup.storagesInstance.storages.appStateStorage
+    st.snapSyncDone().commit()
+    st.bytecodeRecoveryDone().commit()
+    st.storageRecoveryDone().commit()
+
+  private def awaitRegularSync(testSetup: TestSetup): Unit =
     import testSetup.*
-    val pivotNum = BigInt(100)
-    val rootA = ByteString(Array.fill[Byte](32)(0x11)) // stored in pivot header
-    val rootB = ByteString(Array.fill[Byte](32)(0x22)) // snapSyncStateRoot — differs from rootA
-    val pivotHeader = baseBlockHeader.copy(number = BlockNumber(pivotNum), stateRoot = TrieRoot(rootA))
-
-    // Both roots present in MPT — triggers SC-1a symmetric case
-    seedMptNode(testSetup, rootA, rootB)
-    blockchainWriter.storeBlockHeader(pivotHeader).commit()
-    storagesInstance.storages.appStateStorage.putBestBlockNumber(pivotNum).commit()
-
-    storagesInstance.storages.appStateStorage.snapSyncDone().commit()
-    storagesInstance.storages.appStateStorage.bytecodeRecoveryDone().commit()
-    storagesInstance.storages.appStateStorage.storageRecoveryDone().commit()
-    storagesInstance.storages.appStateStorage.putSnapSyncStateRoot(rootB).commit()
-
     syncController ! SyncController.WrappedSyncProtocol(SyncProtocol.Start)
-
     eventually {
       someTimePasses()
       assert(syncController.children.exists(_.path.name.startsWith("regular-sync")))
     }
-    // SyncController must have rewritten the pivot header's stateRoot from rootA to rootB
-    blockchainReader.getBlockHeaderByNumber(pivotNum).map(_.stateRoot) shouldBe Some(TrieRoot(rootB))
+
+  it should "leave headers and mappings byte-identical on restart after SNAP plus blocks above the pivot (SC-1a)" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in withRecoveryTestSetup() { testSetup =>
+    import testSetup.*
+    val rootPivot = ByteString(Array.fill[Byte](32)(0x11)) // pivot header's root, in the MPT
+    val rootSnap = ByteString(Array.fill[Byte](32)(0x22)) // snapSyncStateRoot, differs from the pivot's, in the MPT
+    val pivot = baseBlockHeader.copy(number = BlockNumber(100), stateRoot = TrieRoot(rootPivot))
+    val above1 = baseBlockHeader.copy(
+      number = BlockNumber(101),
+      parentHash = pivot.hash,
+      stateRoot = TrieRoot(ByteString(Array.fill[Byte](32)(0x55)))
+    )
+    val above2 = baseBlockHeader.copy(
+      number = BlockNumber(102),
+      parentHash = above1.hash,
+      stateRoot = TrieRoot(ByteString(Array.fill[Byte](32)(0x66)))
+    )
+    seedMptNode(testSetup, rootPivot, rootSnap)
+    storeFullBlock(testSetup, pivot)
+    storeFullBlock(testSetup, above1)
+    storeFullBlock(testSetup, above2)
+    val st = storagesInstance.storages.appStateStorage
+    st.putBestBlockInfo(com.chipprbots.ethereum.domain.appstate.BlockInfo(above2.hash.value, 102)).commit()
+    st.putSnapSyncPivotBlock(100).commit()
+    st.putSnapSyncStateRoot(rootSnap).commit()
+    markSnapDone(testSetup)
+
+    val before = snapshotOf(testSetup, 100 to 102)
+    awaitRegularSync(testSetup)
+
+    snapshotOf(testSetup, 100 to 102) shouldBe before
+    blockchainReader.getBlockHeaderByNumber(102).map(_.hash) shouldBe Some(above2.hash)
+    blockchainReader.getBlockHeaderByNumber(100) shouldBe Some(pivot)
+    st.getBestBlockInfo().hash shouldBe above2.hash.value
   }
 
-  it should "substitute finalized root into pivot header when pivot stateRoot is missing from MPT (SC-1b)" taggedAs (
+  it should "not rewrite the pivot header when its stateRoot is missing from the MPT and best block is the pivot (SC-1b)" taggedAs (
     UnitTest,
     SyncTest
   ) in withRecoveryTestSetup() { testSetup =>
     import testSetup.*
-    val pivotNum = BigInt(100)
-    val rootA = ByteString(Array.fill[Byte](32)(0x33)) // stored in pivot header, NOT in MPT
+    val rootA = ByteString(Array.fill[Byte](32)(0x33)) // in the pivot header, NOT in MPT
     val rootB = ByteString(Array.fill[Byte](32)(0x44)) // finalizedRoot, present in MPT
-    val pivotHeader = baseBlockHeader.copy(number = BlockNumber(pivotNum), stateRoot = TrieRoot(rootA))
-
-    // Only rootB in MPT — pivotRootExists=false → finalized substitution path
+    val pivot = baseBlockHeader.copy(number = BlockNumber(100), stateRoot = TrieRoot(rootA))
     seedMptNode(testSetup, rootB)
-    blockchainWriter.storeBlockHeader(pivotHeader).commit()
-    storagesInstance.storages.appStateStorage.putBestBlockNumber(pivotNum).commit()
+    storeFullBlock(testSetup, pivot)
+    val st = storagesInstance.storages.appStateStorage
+    st.putBestBlockInfo(com.chipprbots.ethereum.domain.appstate.BlockInfo(pivot.hash.value, 100)).commit()
+    st.putSnapSyncPivotBlock(100).commit()
+    st.putSnapSyncStateRoot(rootB).commit()
+    st.putSnapSyncFinalizedRoot(rootB).commit()
+    markSnapDone(testSetup)
 
-    storagesInstance.storages.appStateStorage.snapSyncDone().commit()
-    storagesInstance.storages.appStateStorage.bytecodeRecoveryDone().commit()
-    storagesInstance.storages.appStateStorage.storageRecoveryDone().commit()
-    storagesInstance.storages.appStateStorage.putSnapSyncFinalizedRoot(rootB).commit()
+    val before = snapshotOf(testSetup, 100 to 100)
+    awaitRegularSync(testSetup)
 
-    syncController ! SyncController.WrappedSyncProtocol(SyncProtocol.Start)
+    snapshotOf(testSetup, 100 to 100) shouldBe before
+    blockchainReader.getBlockHeaderByNumber(100).map(_.stateRoot) shouldBe Some(TrieRoot(rootA))
+  }
 
-    eventually {
-      someTimePasses()
-      assert(syncController.children.exists(_.path.name.startsWith("regular-sync")))
-    }
-    blockchainReader.getBlockHeaderByNumber(pivotNum).map(_.stateRoot) shouldBe Some(TrieRoot(rootB))
+  it should "restore a number->hash mapping that names a forged header, and the SyncController start leaves the restored index alone" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in withRecoveryTestSetup() { testSetup =>
+    import testSetup.*
+    val rootSnap = ByteString(Array.fill[Byte](32)(0x22))
+    val real =
+      baseBlockHeader.copy(number = BlockNumber(100), stateRoot = TrieRoot(ByteString(Array.fill[Byte](32)(0x11))))
+    val forged = real.copy(stateRoot = TrieRoot(rootSnap))
+    forged.hash should not be real.hash
+    seedMptNode(testSetup, real.stateRoot.value, rootSnap)
+    storeFullBlock(testSetup, real)
+    blockchainWriter.storeBlockHeader(forged).commit() // what the removed branch did: header only, mapping repointed
+    val st = storagesInstance.storages.appStateStorage
+    st.putBestBlockInfo(com.chipprbots.ethereum.domain.appstate.BlockInfo(real.hash.value, 100)).commit()
+    st.putSnapSyncPivotBlock(100).commit()
+    st.putSnapSyncStateRoot(rootSnap).commit()
+    markSnapDone(testSetup)
+    blockchainReader.getCanonicalHashByNumber(100).map(_.value) shouldBe Some(forged.hash.value)
+
+    // The repair runs in StdNode.start (before any server binds); SyncController.start must not touch the index.
+    blockchainWriter.repairBestBlockNumberMapping(blockchainReader) shouldBe
+      BestMappingRepair.Restored(100, real.hash, forged.hash, removedOrphan = true)
+    awaitRegularSync(testSetup)
+
+    blockchainReader.getCanonicalHashByNumber(100).map(_.value) shouldBe Some(real.hash.value)
+    blockchainReader.getBlockHeaderByHash(real.hash) shouldBe Some(real)
+    blockchainReader.getBlockHeaderByHash(forged.hash) shouldBe None // header-only orphan removed
+    blockchainReader.getBlockBodyByHash(real.hash) shouldBe Some(BlockBody.empty)
+  }
+
+  it should "repair only a mapping that disagrees with a fully stored best block, and refuse otherwise" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in withRecoveryTestSetup() { testSetup =>
+    import testSetup.*
+    val st = storagesInstance.storages.appStateStorage
+    val real = baseBlockHeader.copy(number = BlockNumber(100))
+    val forged = real.copy(stateRoot = TrieRoot(ByteString(Array.fill[Byte](32)(0x22))))
+
+    // Consistent: nothing to do.
+    storeFullBlock(testSetup, real)
+    st.putBestBlockInfo(com.chipprbots.ethereum.domain.appstate.BlockInfo(real.hash.value, 100)).commit()
+    blockchainWriter.repairBestBlockNumberMapping(blockchainReader) shouldBe BestMappingRepair.Consistent
+
+    // Broken mapping, best header and body present: restored.
+    blockchainWriter.storeBlockHeader(forged).commit()
+    blockchainWriter.repairBestBlockNumberMapping(blockchainReader) shouldBe
+      BestMappingRepair.Restored(100, real.hash, forged.hash, removedOrphan = true)
+    blockchainReader.getCanonicalHashByNumber(100).map(_.value) shouldBe Some(real.hash.value)
+    // Idempotent.
+    blockchainWriter.repairBestBlockNumberMapping(blockchainReader) shouldBe BestMappingRepair.Consistent
+
+    // Best block's body missing: refuse, touch nothing.
+    val other = baseBlockHeader.copy(number = BlockNumber(200))
+    val otherForged = other.copy(stateRoot = TrieRoot(ByteString(Array.fill[Byte](32)(0x77))))
+    blockchainWriter.storeBlockHeader(other).commit() // header, no body
+    blockchainWriter.storeBlockHeader(otherForged).commit() // mapping now names otherForged
+    st.putBestBlockInfo(com.chipprbots.ethereum.domain.appstate.BlockInfo(other.hash.value, 200)).commit()
+    blockchainWriter.repairBestBlockNumberMapping(blockchainReader) match
+      case BestMappingRepair.Refused(200, h, m, true, false, _) =>
+        h shouldBe other.hash
+        m shouldBe otherForged.hash.value
+      case unexpected => fail(s"expected Refused, got $unexpected")
+    blockchainReader.getBlockHeaderByHash(otherForged.hash) shouldBe Some(otherForged)
+
+    // Best block's header missing entirely: refuse.
+    st.putBestBlockInfo(com.chipprbots.ethereum.domain.appstate.BlockInfo(ByteString(Array.fill[Byte](32)(0x09)), 200))
+      .commit()
+    blockchainWriter.repairBestBlockNumberMapping(blockchainReader) match
+      case BestMappingRepair.Refused(200, _, _, false, false, _) => succeed
+      case unexpected                                            => fail(s"expected Refused, got $unexpected")
+  }
+
+  it should "refuse a mapping naming a fully stored different-parent block (interrupted reorg shape)" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in withRecoveryTestSetup() { testSetup =>
+    import testSetup.*
+    val st = storagesInstance.storages.appStateStorage
+    val best = baseBlockHeader.copy(number = BlockNumber(100))
+    val newBranch = best.copy(parentHash = BlockHash(ByteString(Array.fill[Byte](32)(0x0a))))
+    storeFullBlock(testSetup, best)
+    storeFullBlock(testSetup, newBranch) // mapping[100] now names the new-branch block, body stored
+    st.putBestBlockInfo(com.chipprbots.ethereum.domain.appstate.BlockInfo(best.hash.value, 100)).commit()
+    blockchainWriter.repairBestBlockNumberMapping(blockchainReader) match
+      case BestMappingRepair.Refused(100, _, _, true, true, _) => succeed
+      case unexpected                                          => fail(s"expected Refused, got $unexpected")
+    blockchainReader.getCanonicalHashByNumber(100).map(_.value) shouldBe Some(newBranch.hash.value)
+    blockchainReader.getBlockHeaderByHash(newBranch.hash) shouldBe Some(newBranch)
+  }
+
+  it should "restore a same-parent mapped block that has a body without deleting it" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in withRecoveryTestSetup() { testSetup =>
+    import testSetup.*
+    val st = storagesInstance.storages.appStateStorage
+    val best = baseBlockHeader.copy(number = BlockNumber(100))
+    val sibling = best.copy(stateRoot = TrieRoot(ByteString(Array.fill[Byte](32)(0x22))))
+    storeFullBlock(testSetup, best)
+    storeFullBlock(testSetup, sibling)
+    st.putBestBlockInfo(com.chipprbots.ethereum.domain.appstate.BlockInfo(best.hash.value, 100)).commit()
+    blockchainWriter.repairBestBlockNumberMapping(blockchainReader) shouldBe
+      BestMappingRepair.Restored(100, best.hash, sibling.hash, removedOrphan = false)
+    blockchainReader.getCanonicalHashByNumber(100).map(_.value) shouldBe Some(best.hash.value)
+    blockchainReader.getBlockHeaderByHash(sibling.hash) shouldBe Some(sibling)
+  }
+
+  it should "refuse and not delete a header-only mapped block with a different parent (SNAP header-only entries)" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in withRecoveryTestSetup() { testSetup =>
+    import testSetup.*
+    val st = storagesInstance.storages.appStateStorage
+    val best = baseBlockHeader.copy(number = BlockNumber(100))
+    val snapHeader = best.copy(parentHash = BlockHash(ByteString(Array.fill[Byte](32)(0x0b))))
+    storeFullBlock(testSetup, best)
+    blockchainWriter.storeBlockHeader(snapHeader).commit() // header only, mapping repointed
+    st.putBestBlockInfo(com.chipprbots.ethereum.domain.appstate.BlockInfo(best.hash.value, 100)).commit()
+    blockchainWriter.repairBestBlockNumberMapping(blockchainReader) match
+      case BestMappingRepair.Refused(100, _, _, true, true, _) => succeed
+      case unexpected                                          => fail(s"expected Refused, got $unexpected")
+    blockchainReader.getBlockHeaderByHash(snapHeader.hash) shouldBe Some(snapHeader)
+    blockchainReader.getCanonicalHashByNumber(100).map(_.value) shouldBe Some(snapHeader.hash.value)
   }
 
   it should "clear both done flags and restart SNAP when HealingImpossible is received" taggedAs (
