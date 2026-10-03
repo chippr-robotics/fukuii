@@ -58,9 +58,31 @@ class ReferenceCountedStateStorage(
 ) extends StateStorage:
   override def forcePersist(reason: FlushSituation): Boolean = true
 
+  /** Highest block number pruned by this instance (not persisted: after a restart the first save prunes one block, as
+    * it always did). Used to catch up after a prune was deferred because the canonical head lagged the saved block.
+    */
+  @volatile private var lastPruned: Option[BigInt] = None
+
+  /** Prunes the death row of `min(bn, canonicalBest + 1) - pruningHistory`, never `bn - pruningHistory` blindly.
+    *
+    * `bn` is the number of the block just SAVED, which is not necessarily canonical: execute-first reorganisation
+    * (`ConsensusImpl.reorganise`) saves a whole branch before it is adopted, and a branch that fails midway is retried.
+    * Pruning on `bn` alone let such a branch walk the prune cursor `bn - history` past the canonical head and delete
+    * the nodes of the head's own state, which the branch's blocks had replaced. A plain `canonicalBest + 1` ceiling is
+    * the next block extending the head (the only non-canonical-looking save on a linear chain, since the best block is
+    * only advanced after the executed batch), so single-block linear import prunes exactly as before; larger batches
+    * are deferred and caught up by the next save.
+    */
   override def onBlockSave(bn: BigInt, currentBestSavedBlock: BigInt)(updateBestBlocksData: () => Unit): Unit =
-    val blockToPrune = bn - pruningHistory
-    ReferenceCountNodeStorage.prune(blockToPrune, nodeStorage, inMemory = blockToPrune > currentBestSavedBlock)
+    val target = bn.min(currentBestSavedBlock + 1) - pruningHistory
+    val from = lastPruned match
+      case Some(done) if done < target => done + 1
+      case _                           => target
+    var blockToPrune = from
+    while blockToPrune <= target do
+      ReferenceCountNodeStorage.prune(blockToPrune, nodeStorage, inMemory = blockToPrune > currentBestSavedBlock)
+      blockToPrune += 1
+    if lastPruned.forall(_ < target) then lastPruned = Some(target)
     updateBestBlocksData()
 
   override def onBlockRollback(bn: BigInt, currentBestSavedBlock: BigInt)(updateBestBlocksData: () => Unit): Unit =
