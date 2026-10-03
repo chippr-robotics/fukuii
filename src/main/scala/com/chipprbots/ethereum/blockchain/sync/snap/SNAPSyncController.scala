@@ -4951,7 +4951,7 @@ private class SNAPSyncControllerImpl(
     else
       timers.cancel(HealedCodeWaitTimerKey)
       awaitingHealedCode = false
-      pivotBlock.map(finalizeSnapSync).getOrElse(Behaviors.same)
+      pivotBlock.map(p => finalizeSnapSync(p)).getOrElse(Behaviors.same)
 
   /** Anchor the pivot, mark SNAP state done, and hand off to the parent. Always emits `SnapSyncFinalized(pivot)`. Emits
     * `Done` either immediately (no backfill in flight) or later from `completedWithBackfill` after
@@ -5437,6 +5437,7 @@ object SNAPSyncController:
     * controller routes it to the lazy-heal handoff instead of declaring the trie validated.
     */
   case object StateHealingAbandoned extends Command
+
   /** TrieNodeHealingCoordinator -> controller: healed account leaves whose bytecode is not in `EvmCodeStorage`. */
   final case class HealedCodeHashes(codeHashes: Seq[ByteString]) extends Command
 
