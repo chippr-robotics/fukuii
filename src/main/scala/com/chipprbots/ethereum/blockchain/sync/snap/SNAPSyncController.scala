@@ -1310,7 +1310,10 @@ private class SNAPSyncControllerImpl(
                 actors.AccountRangeCoordinator.AccountGetStorageFileInfo(replyTo)
               )
               .foreach { info =>
-                appStateStorage.putSnapSyncStorageFilePath(info.filePath.toString).commit()
+                appStateStorage
+                  .putSnapSyncStorageFilePath(info.filePath.toString)
+                  .and(appStateStorage.putSnapSyncStorageFileCount(Some(info.count)))
+                  .commit()
                 ctx.log.info(s"Persisted storage file path for recovery: ${info.filePath} (${info.count} entries)")
               }
             coordinator
@@ -1318,7 +1321,10 @@ private class SNAPSyncControllerImpl(
                 actors.AccountRangeCoordinator.AccountGetCodeHashesFileInfo(replyTo)
               )
               .foreach { info =>
-                appStateStorage.putSnapSyncCodeHashesPath(info.filePath.toString).commit()
+                appStateStorage
+                  .putSnapSyncCodeHashesPath(info.filePath.toString)
+                  .and(appStateStorage.putSnapSyncCodeHashesCount(Some(info.count)))
+                  .commit()
                 ctx.log.info(s"Persisted codeHashes file path for recovery: ${info.filePath} (${info.count} entries)")
               }
           }
@@ -2337,10 +2343,55 @@ private class SNAPSyncControllerImpl(
                 .commit()
               // Fall through to normal startup (same path as drift-exceeded + phases incomplete)
 
+            // The persisted storage-task file is missing, unreadable, truncated or empty while storage is incomplete
+            // (a reboot wiped /tmp, the path was never persisted, ...). Storage must not be skipped for that, and the
+            // tasks cannot be rebuilt reliably from an unhealed account trie, so restart the accounts phase.
+            val storageTaskFileUnusable =
+              !belowEscalationHint && !appStateStorage.isSnapSyncStorageComplete() &&
+                !savedStoragePath
+                  .filter(_.nonEmpty)
+                  .exists(p =>
+                    StorageTaskFile.isUsable(
+                      java.nio.file.Paths.get(p),
+                      expectedCount = appStateStorage.getSnapSyncStorageFileCount()
+                    )
+                  )
+            val codeHashesFileUnusable =
+              !belowEscalationHint && !appStateStorage.isSnapSyncBytecodeComplete() &&
+                !appStateStorage
+                  .getSnapSyncCodeHashesPath()
+                  .filter(_.nonEmpty)
+                  .exists(p =>
+                    StorageTaskFile.isUsable(
+                      java.nio.file.Paths.get(p),
+                      StorageTaskFile.CodeHashEntrySize,
+                      appStateStorage.getSnapSyncCodeHashesCount()
+                    )
+                  )
+            val taskFilesUnusable = storageTaskFileUnusable || codeHashesFileUnusable
+            if taskFilesUnusable then
+              ctx.log.warn(
+                s"Recovery: persisted task file unusable while its phase is incomplete " +
+                  s"(storage: ${savedStoragePath.filter(_.nonEmpty).getOrElse("<none persisted>")} unusable=$storageTaskFileUnusable; " +
+                  s"codeHashes: ${appStateStorage.getSnapSyncCodeHashesPath().filter(_.nonEmpty).getOrElse("<none persisted>")} unusable=$codeHashesFileUnusable). " +
+                  "A missing, empty or truncated file must not complete its phase. Restarting the accounts phase: clearing " +
+                  "accounts/storage/bytecode-complete flags and the persisted storage and bytecode file paths."
+              )
+              appStateStorage
+                .putSnapSyncAccountsComplete(false)
+                .and(appStateStorage.putSnapSyncStorageComplete(false))
+                .and(appStateStorage.putSnapSyncBytecodeComplete(false))
+                .and(appStateStorage.putSnapSyncStorageFilePath(""))
+                .and(appStateStorage.putSnapSyncCodeHashesPath(""))
+                .and(appStateStorage.putSnapSyncStorageFileCount(None))
+                .and(appStateStorage.putSnapSyncCodeHashesCount(None))
+                .commit()
+
             // Check if pivot is still fresh enough (skipped when belowEscalationHint forced clear)
             val networkBest = currentNetworkBestFromSnapPeers().getOrElse(BigInt(0))
             val drift = if networkBest > 0 then (networkBest - pivot).abs else BigInt(0)
-            if !belowEscalationHint && networkBest > 0 && drift > snapSyncConfig.maxPivotStalenessBlocks then
+            if !belowEscalationHint && !taskFilesUnusable && networkBest > 0 && drift > snapSyncConfig.maxPivotStalenessBlocks
+            then
               val storageAlreadyDone = appStateStorage.isSnapSyncStorageComplete()
               val bytecodeAlreadyDone = appStateStorage.isSnapSyncBytecodeComplete()
               if storageAlreadyDone && bytecodeAlreadyDone then
@@ -2366,7 +2417,7 @@ private class SNAPSyncControllerImpl(
                   .and(appStateStorage.putSnapSyncBytecodeComplete(false))
                   .commit()
                 // Fall through to normal startup
-            else if !belowEscalationHint then
+            else if !belowEscalationHint && !taskFilesUnusable then
               // Pivot is fresh enough — recover bytecodes + storage only
               pivotBlock = Some(pivot)
               stateRoot = Some(TrieRoot(rootBs))
@@ -2449,58 +2500,54 @@ private class SNAPSyncControllerImpl(
               // Recovery budget: accounts done, bytecode=2, storage=3 (total 5 per peer)
               bytecodeCoordinator.foreach(_ ! actors.ByteCodeCoordinator.UpdateMaxInFlightPerPeer(2))
 
-              // Stream storage tasks from persisted file if available
+              // Stream storage tasks from the persisted file. If it is missing or damaged, re-derive the tasks from the
+              // account trie. Storage is never marked complete here without having been downloaded.
               if !storageAlreadyDone then
-                savedStoragePath.foreach { pathStr =>
-                  val filePath = java.nio.file.Paths.get(pathStr)
-                  if java.nio.file.Files.exists(filePath) then
-                    val coordinator = storageRangeCoordinator.get
-                    import ctx.executionContext
-                    scala.concurrent
-                      .Future {
-                        val emptyRoot = ByteString(com.chipprbots.ethereum.mpt.MerklePatriciaTrie.EmptyRootHash)
-                        val zeroHash = ByteString(new Array[Byte](32))
-                        val raf = new java.io.RandomAccessFile(filePath.toFile, "r")
-                        val buf = new Array[Byte](64)
-                        val batch = new scala.collection.mutable.ArrayBuffer[StorageTask](10000)
-                        var totalTasks = 0
-                        try
-                          while raf.getFilePointer < raf.length() do
-                            raf.readFully(buf)
-                            val accountHash = ByteString(java.util.Arrays.copyOfRange(buf, 0, 32))
-                            val storageRoot = ByteString(java.util.Arrays.copyOfRange(buf, 32, 64))
-                            if accountHash != zeroHash && storageRoot.nonEmpty && storageRoot != emptyRoot then
-                              batch += StorageTask.createStorageTask(accountHash, storageRoot)
-                            if batch.size >= 10000 then
-                              coordinator ! actors.StorageRangeCoordinator.AddStorageTasks(batch.toSeq)
-                              totalTasks += batch.size
-                              batch.clear()
-                          if batch.nonEmpty then
+                val coordinator = storageRangeCoordinator.get
+                import ctx.executionContext
+                // Usable per the pre-check above: whole 64-byte entries, non-empty.
+                val filePath = java.nio.file.Paths.get(savedStoragePath.get)
+                locally {
+                  scala.concurrent
+                    .Future {
+                      val emptyRoot = ByteString(com.chipprbots.ethereum.mpt.MerklePatriciaTrie.EmptyRootHash)
+                      val zeroHash = ByteString(new Array[Byte](32))
+                      val raf = new java.io.RandomAccessFile(filePath.toFile, "r")
+                      val buf = new Array[Byte](64)
+                      val batch = new scala.collection.mutable.ArrayBuffer[StorageTask](10000)
+                      var totalTasks = 0
+                      try
+                        while raf.getFilePointer < raf.length() do
+                          raf.readFully(buf)
+                          val accountHash = ByteString(java.util.Arrays.copyOfRange(buf, 0, 32))
+                          val storageRoot = ByteString(java.util.Arrays.copyOfRange(buf, 32, 64))
+                          if accountHash != zeroHash && storageRoot.nonEmpty && storageRoot != emptyRoot then
+                            batch += StorageTask.createStorageTask(accountHash, storageRoot)
+                          if batch.size >= 10000 then
                             coordinator ! actors.StorageRangeCoordinator.AddStorageTasks(batch.toSeq)
                             totalTasks += batch.size
-                        finally raf.close()
-                        totalTasks
-                      }
-                      .foreach { count =>
-                        asyncLog.info(s"Recovery: streamed $count storage tasks from ${filePath}")
-                        // Signal no more tasks — sentinel allows completion
-                        coordinator ! actors.StorageRangeCoordinator.NoMoreStorageTasks
-                      }
-                  else
-                    ctx.log.warn(s"Recovery: storage file $filePath not found. Sending NoMore immediately.")
-                    storageRangeCoordinator.foreach(_ ! actors.StorageRangeCoordinator.NoMoreStorageTasks)
+                            batch.clear()
+                        if batch.nonEmpty then
+                          coordinator ! actors.StorageRangeCoordinator.AddStorageTasks(batch.toSeq)
+                          totalTasks += batch.size
+                      finally raf.close()
+                      totalTasks
+                    }
+                    .foreach { count =>
+                      asyncLog.info(s"Recovery: streamed $count storage tasks from ${filePath}")
+                      // Signal no more tasks — sentinel allows completion
+                      coordinator ! actors.StorageRangeCoordinator.NoMoreStorageTasks
+                    }
                 }
-              if savedStoragePath.isEmpty then
-                ctx.log.warn("Recovery: no storage file path persisted. Sending NoMore immediately.")
-                storageRangeCoordinator.foreach(_ ! actors.StorageRangeCoordinator.NoMoreStorageTasks)
 
               // Bytecodes: stream codeHashes from persisted file if available. Each entry is 32 bytes
               // (raw keccak256 hash, written by AccountRangeCoordinator.uniqueCodeHashesOut).
               val savedCodeHashesPath = appStateStorage.getSnapSyncCodeHashesPath()
               if !bytecodeAlreadyDone then
                 savedCodeHashesPath.foreach { pathStr =>
+                  // Usable per the pre-check above (non-empty, whole 32-byte entries).
                   val filePath = java.nio.file.Paths.get(pathStr)
-                  if java.nio.file.Files.exists(filePath) then
+                  locally {
                     val coordinator = bytecodeCoordinator.get
                     import ctx.executionContext
                     scala.concurrent
@@ -2527,13 +2574,8 @@ private class SNAPSyncControllerImpl(
                         asyncLog.info(s"Recovery: streamed $count codeHashes from ${filePath} for bytecode sync")
                         coordinator ! actors.ByteCodeCoordinator.NoMoreByteCodeTasks
                       }
-                  else
-                    ctx.log.warn(s"Recovery: codeHashes file $filePath not found. Sending NoMore immediately.")
-                    bytecodeCoordinator.foreach(_ ! actors.ByteCodeCoordinator.NoMoreByteCodeTasks)
+                  }
                 }
-              if savedCodeHashesPath.isEmpty then
-                ctx.log.warn("Recovery: no codeHashes file path persisted. Sending NoMore immediately.")
-                bytecodeCoordinator.foreach(_ ! actors.ByteCodeCoordinator.NoMoreByteCodeTasks)
 
               currentPhase = ByteCodeAndStorageSync
               lastStorageProgressMs = System.currentTimeMillis()
@@ -3338,7 +3380,8 @@ private class SNAPSyncControllerImpl(
               initialResponseBytes = snapSyncConfig.accountInitialResponseBytes,
               minResponseBytes = snapSyncConfig.accountMinResponseBytes,
               storageScheme = snapSyncConfig.storageScheme,
-              pathNodeStorage = pathNodeStorageOpt
+              pathNodeStorage = pathNodeStorageOpt,
+              taskFileDir = snapSyncConfig.taskFileDir
             )
           )
           .onFailure[Throwable](
@@ -4464,7 +4507,11 @@ private class SNAPSyncControllerImpl(
       .and(appStateStorage.putSnapSyncStorageComplete(false))
       .and(appStateStorage.putSnapSyncBytecodeComplete(false))
       .commit()
-    appStateStorage.putSnapSyncStorageFilePath("").commit()
+    appStateStorage
+      .putSnapSyncStorageFilePath("")
+      .and(appStateStorage.putSnapSyncStorageFileCount(None))
+      .and(appStateStorage.putSnapSyncCodeHashesCount(None))
+      .commit()
 
     // Reset pivot/state root and storage so a new selection is committed
     pivotBlock = None
@@ -5534,7 +5581,11 @@ case class SNAPSyncConfig(
       * Override via `sync.snap-sync.storage-scheme = "path"` in the HOCON config. Do NOT add an explicit `= "hash"` to
       * ETC configs; the default is Hash and the DB is scheme-locked on first write (startup guard enforces this).
       */
-    storageScheme: StorageScheme = StorageScheme.Hash
+    storageScheme: StorageScheme = StorageScheme.Hash,
+    /** Directory for the persisted storage-task file (`<datadir>/snap`). `None` falls back to java.io.tmpdir, which a
+      * reboot wipes, so production wiring (SyncController) always sets it. See [[StorageTaskFile]].
+      */
+    taskFileDir: Option[java.nio.file.Path] = None
 )
 
 object SNAPSyncConfig:

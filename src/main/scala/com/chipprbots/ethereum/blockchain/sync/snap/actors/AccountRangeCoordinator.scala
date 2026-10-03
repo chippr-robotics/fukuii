@@ -79,7 +79,8 @@ private class AccountRangeCoordinatorImpl(
     minResponseBytesConfig: Int = 102400,
     accountTrieEcOverride: Option[ExecutionContext] = None,
     storageScheme: StorageScheme = StorageScheme.Hash,
-    pathNodeStorage: Option[PathNodeStorage] = None
+    pathNodeStorage: Option[PathNodeStorage] = None,
+    taskFileDir: Option[Path] = None
 ):
 
   import SNAPSyncController.PivotStateUnservable
@@ -401,8 +402,10 @@ private class AccountRangeCoordinatorImpl(
   // On ETC mainnet ~20% of ~67M accounts are contracts — ~13M entries × 64 bytes each
   // would consume ~1.6GB in memory. Writing to disk keeps memory usage near zero.
   // Each entry is 64 bytes: 32-byte accountHash + 32-byte codeHash (or storageRoot).
-  private val contractAccountsFile: Path = Files.createTempFile("fukuii-contract-accounts-", ".bin")
-  private val contractStorageFile: Path = Files.createTempFile("fukuii-contract-storage-", ".bin")
+  private val contractAccountsFile: Path = StorageTaskFile.createFile(taskFileDir, "fukuii-contract-accounts-", ".bin")
+  // The storage-task file is the one recovery needs after a restart, so it goes under the datadir (`taskFileDir`)
+  // rather than java.io.tmpdir, which a host reboot wipes. See StorageTaskFile.
+  private val contractStorageFile: Path = StorageTaskFile.createFile(taskFileDir, "fukuii-contract-storage-", ".bin")
   private val contractAccountsOut = new BufferedOutputStream(new FileOutputStream(contractAccountsFile.toFile), 65536)
   private val contractStorageOut = new BufferedOutputStream(new FileOutputStream(contractStorageFile.toFile), 65536)
   private var contractAccountsCount: Long = 0
@@ -420,7 +423,7 @@ private class AccountRangeCoordinatorImpl(
     3_000_000,
     0.0001 // ~4MB for 3M expected entries at 0.01% FPR
   )
-  private val uniqueCodeHashesFile: Path = Files.createTempFile("fukuii-unique-codehashes-", ".bin")
+  private val uniqueCodeHashesFile: Path = StorageTaskFile.createFile(taskFileDir, "fukuii-unique-codehashes-", ".bin")
   private val uniqueCodeHashesOut = new BufferedOutputStream(new FileOutputStream(uniqueCodeHashesFile.toFile), 65536)
   private var uniqueCodeHashesCount: Long = 0
 
@@ -1798,7 +1801,8 @@ object AccountRangeCoordinator:
       minResponseBytes: Int = 102400,
       accountTrieEcOverride: Option[ExecutionContext] = None,
       storageScheme: StorageScheme = StorageScheme.Hash,
-      pathNodeStorage: Option[PathNodeStorage] = None
+      pathNodeStorage: Option[PathNodeStorage] = None,
+      taskFileDir: Option[Path] = None
   ): Behavior[Command] =
     Behaviors.withTimers { timers =>
       Behaviors.setup { ctx =>
@@ -1817,7 +1821,8 @@ object AccountRangeCoordinator:
           minResponseBytesConfig = minResponseBytes,
           accountTrieEcOverride = accountTrieEcOverride,
           storageScheme = storageScheme,
-          pathNodeStorage = pathNodeStorage
+          pathNodeStorage = pathNodeStorage,
+          taskFileDir = taskFileDir
         )
         impl.onStart()
         impl.receive()
