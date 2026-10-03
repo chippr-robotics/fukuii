@@ -1462,7 +1462,15 @@ private class SNAPSyncControllerImpl(
       case StateHealingComplete =>
         progressMonitor.startPhase(StateHealing)
         ctx.log.info("Healing coordinator signaled complete (no pending tasks, no active requests).")
-        if trieWalkInProgress then
+        if snapSyncConfig.storageScheme == StorageScheme.Path then
+          // Path scheme: the controller's trie walk and StateValidator read the hash-keyed store, which Path never
+          // populates, so they would report the root missing every round and never reach "0 missing". The coordinator
+          // only sends StateHealingComplete after its path-aware verification walk found zero missing nodes against
+          // the current root (or it healed nothing and was idle), so that signal IS the clean walk: take the same
+          // exit as TrieWalkComplete(0) rather than running a second, blind, full-trie walk.
+          if currentPhase == StateHealing then completeHealingWalkClean()
+          else ctx.log.debug("Ignoring StateHealingComplete outside StateHealing (phase={})", currentPhase)
+        else if trieWalkInProgress then
           // A trie walk is already running — its result will determine next step
           ctx.log.info("Trie walk in progress, waiting for result...")
         else
@@ -3550,6 +3558,23 @@ private class SNAPSyncControllerImpl(
           coordinator ! actors.StorageRangeCoordinator.StoragePeerAvailable(peer)
         }
     }
+
+  /** Path-scheme exit from state healing: same effects as the clean `TrieWalkComplete(0)` branch (commit the pivot
+    * anchor, record the clean-walk signal, stop the heal scheduler, enter validation — which short-circuits on
+    * `healingValidatedRoot`), driven by the coordinator's verified `StateHealingComplete` instead of a controller walk.
+    */
+  private def completeHealingWalkClean(): Unit =
+    ctx.log.info(
+      "Path scheme: coordinator verification found no missing nodes — healing complete (no controller walk)."
+    )
+    healingRoundCount = 0
+    pivotBlock.foreach(b => appStateStorage.putSnapSyncPivotBlock(b).commit())
+    stateRoot.foreach(r => appStateStorage.putSnapSyncStateRoot(r.value).commit())
+    healingValidatedRoot = stateRoot
+    timers.cancel(RequestTrieNodeHealing)
+    progressMonitor.startPhase(StateValidation)
+    currentPhase = StateValidation
+    validateState()
 
   /** Start an async trie walk to discover missing nodes. Guards against concurrent walks. Uses streaming to emit
     * batches as they are found — critical for mainnet-scale tries where a full blocking walk can take hours before the
