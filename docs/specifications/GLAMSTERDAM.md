@@ -118,17 +118,20 @@ From [execution-apis `src/engine/amsterdam.md`](https://github.com/ethereum/exec
 the 23-field header carries the attributes' `slotNumber` (which `SLOTNUM` reads while the block executes) and the
 hash of the block access list its own execution builds, which `engine_getPayloadV6` serves as the payload's
 `blockAccessList`. `requestsHash` commits to the EIP-8282 builder requests, and gas used is EIP-8037's maximum of
-the execution and state dimensions. The gas limit moves toward `targetGasLimit` at go-ethereum's `CalcGasLimit`
-rate (the parent's limit is kept when the attributes carry none), and transactions are packed by EIP-8037's
-per-dimension capacity rule: one that would overflow either dimension is left out. Attributes without `slotNumber`
+the execution and state dimensions. The gas limit moves at go-ethereum's `CalcGasLimit` rate
+toward `targetGasLimit` when the attributes carry one, and otherwise toward the node's gas ceiling,
+`mining.gas-limit-target` (default 60,000,000); every engine payload does this, on every fork, as go-ethereum's
+builder does. Transactions are packed by EIP-8037's per-dimension capacity rule: one that would overflow either dimension is left out. Attributes without `slotNumber`
 at an Amsterdam timestamp are refused with `-38003`, after the forkchoice state is applied.
 
 Conformance, from execution-specs `tests@v21.0.0`, run by the CI job `EEST Amsterdam`:
 
 - the whole Amsterdam `blockchain_test` corpus replays through block import: 26,503 / 26,503 tests;
-- the payload builder rebuilds all 27,352 blocks of that corpus from their parents with identical block hashes;
-- the `blockchain_tests_engine` fixtures (`for_amsterdam`, `for_bpo2toamsterdamattime15k`) replay through the real
-  Engine API controller with `EestEngineFixtureCorpusSpec`.
+- the payload builder rebuilds all 27,352 blocks of that corpus from their parents with identical block hashes.
+
+The `blockchain_tests_engine` fixtures (`for_amsterdam`, `for_bpo2toamsterdamattime15k`, 26,548 tests) replay through
+the real Engine API controller with `EestEngineFixtureCorpusSpec`; on v0.8.13 all 26,548 pass. That replay runs
+locally (`EEST_ENGINE_FIXTURES=…`), not in the CI job.
 
 ## JSON-RPC at Amsterdam
 
