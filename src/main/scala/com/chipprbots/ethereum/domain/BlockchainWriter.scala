@@ -87,6 +87,47 @@ class BlockchainWriter(
     val hash = blockHeader.hash
     blockHeadersStorage.put(hash.value, blockHeader).and(saveBlockNumberMapping(blockHeader.number.value, hash))
 
+  /** Startup consistency repair for the number→hash index at the best block's height.
+    *
+    * An earlier SyncController start-up path re-stored the best block's header with a rewritten `stateRoot`.
+    * `storeBlockHeader` writes the number→hash index, so the best block's height then named a forged header (new hash,
+    * no body) while best-block info still named the real block. This puts the index back, and only that:
+    *
+    *   - no best-block hash recorded, mapping absent, or mapping equal to the best hash: nothing to do
+    *     ([[BestMappingRepair.Consistent]]);
+    *   - mapping differs, and the best block's header AND body are both stored under the best hash: the mapping is
+    *     rewritten to the best hash ([[BestMappingRepair.Restored]]). The old target is removed too when it is a
+    *     header-only orphan at the same height (no body, not the best hash), which is the forged header's shape;
+    *   - mapping differs and the best header or body is missing: nothing is touched ([[BestMappingRepair.Refused]]).
+    *     This does not guess which block is canonical.
+    *
+    * Idempotent: a second call finds the mapping consistent. A best block with a missing mapping is not "damaged by
+    * this bug" and is left to the existing paths.
+    */
+  def repairBestBlockNumberMapping(reader: BlockchainReader): BestMappingRepair =
+    val best = appStateStorage.getBestBlockInfo()
+    val bestHash = BlockHash(best.hash)
+    blockNumberMappingStorage.get(best.number) match
+      case _ if best.hash.isEmpty              => BestMappingRepair.Consistent // no best-block hash was ever recorded
+      case None                                => BestMappingRepair.Consistent
+      case Some(mapped) if mapped == best.hash => BestMappingRepair.Consistent
+      case Some(mapped) =>
+        val bestHeader = reader.getBlockHeaderByHash(bestHash)
+        val bestBody = reader.getBlockBodyByHash(bestHash)
+        if bestHeader.isEmpty || bestBody.isEmpty then
+          BestMappingRepair.Refused(best.number, bestHash, mapped, bestHeader.isDefined, bestBody.isDefined)
+        else
+          val mappedHash = BlockHash(mapped)
+          val mappedIsHeaderOnlyOrphan =
+            reader.getBlockHeaderByHash(mappedHash).exists(_.number.value == best.number) &&
+              reader.getBlockBodyByHash(mappedHash).isEmpty
+          val restore = blockNumberMappingStorage.put(best.number, best.hash)
+          val batch =
+            if mappedIsHeaderOnlyOrphan then restore.and(blockHeadersStorage.remove(mapped))
+            else restore
+          batch.commit()
+          BestMappingRepair.Restored(best.number, bestHash, mappedHash, removedOrphan = mappedIsHeaderOnlyOrphan)
+
   def storeBlockBody(blockHash: BlockHash, blockBody: BlockBody): DataSourceBatchUpdate =
     blockBodiesStorage.put(blockHash.value, blockBody).and(saveTxsLocations(blockHash, blockBody))
 
@@ -241,3 +282,17 @@ object BlockchainWriter:
       storages.appStateStorage,
       storages.blockAccessListStorage
     )
+
+/** Outcome of [[BlockchainWriter.repairBestBlockNumberMapping]]. */
+sealed trait BestMappingRepair
+object BestMappingRepair:
+  case object Consistent extends BestMappingRepair
+  final case class Restored(number: BigInt, bestHash: BlockHash, wasMappedTo: BlockHash, removedOrphan: Boolean)
+      extends BestMappingRepair
+  final case class Refused(
+      number: BigInt,
+      bestHash: BlockHash,
+      mappedTo: ByteString,
+      bestHeaderPresent: Boolean,
+      bestBodyPresent: Boolean
+  ) extends BestMappingRepair

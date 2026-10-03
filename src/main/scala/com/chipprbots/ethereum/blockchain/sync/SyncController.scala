@@ -35,8 +35,8 @@ import com.chipprbots.ethereum.db.storage.FlatSlotStorage
 import com.chipprbots.ethereum.db.storage.StateStorage
 import com.chipprbots.ethereum.domain.Blockchain
 import com.chipprbots.ethereum.domain.BlockchainReader
+import com.chipprbots.ethereum.domain.BestMappingRepair
 import com.chipprbots.ethereum.domain.BlockchainWriter
-import com.chipprbots.ethereum.domain.TrieRoot
 import com.chipprbots.ethereum.ledger.BranchResolution
 import com.chipprbots.ethereum.nodebuilder.BlockchainConfigBuilder
 import com.chipprbots.ethereum.utils.Config
@@ -1259,10 +1259,80 @@ object SyncController:
     private def clearSnapPivotFloor(): Unit =
       appStateStorage.clearSnapSyncMinPivotBlock().commit()
 
+    /** Restores the number->hash index at the best block's height if an earlier version rewrote the best block's header
+      * and left the index naming the forged copy. Narrow and loud: see
+      * [[BlockchainWriter.repairBestBlockNumberMapping]].
+      */
+    private def repairBestBlockMapping(): Unit =
+      blockchainWriter.repairBestBlockNumberMapping(blockchainReader) match
+        case BestMappingRepair.Consistent => ()
+        case BestMappingRepair.Restored(number, bestHash, wasMappedTo, removedOrphan) =>
+          log.warn(
+            "Repaired canonical index: block {} was mapped to {} (not the best block); restored mapping to best block {}. " +
+              "Header-only orphan removed: {}. Cause: an earlier version rewrote the best block's header after SNAP.",
+            number,
+            wasMappedTo.toHexString,
+            bestHash.toHexString,
+            removedOrphan
+          )
+        case BestMappingRepair.Refused(number, bestHash, mappedTo, headerPresent, bodyPresent) =>
+          log.error(
+            "Canonical index inconsistent at block {}: mapped to {} but best-block info names {} " +
+              "(header present={}, body present={}). Not repairing: the best block is not fully stored.",
+            number,
+            mappedTo.toArray.map("%02x".format(_)).mkString,
+            bestHash.toHexString,
+            headerPresent,
+            bodyPresent
+          )
+
+    /** Log-only: compare the stored SNAP state root with the SNAP pivot header and report whether the trie is there. */
+    private def logSnapStateRootDiagnostic(): Unit =
+      def short(b: ByteString): String = b.take(8).toArray.map("%02x".format(_)).mkString
+      val snapStateRoot = appStateStorage.getSnapSyncStateRoot()
+      val bestBlockNum = appStateStorage.getBestBlockNumber()
+      val mptStorage = stateStorage.getReadOnlyStorage
+      def rootExists(root: ByteString): Boolean =
+        try
+          mptStorage.get(root.toArray); true
+        catch case _: Exception => false
+      blockchainReader.getSnapSyncPivotBlock.flatMap(blockchainReader.getBlockHeaderByNumber) match
+        case None =>
+          log.info(
+            "SNAP state root diagnostic: stored snapStateRoot={}, no SNAP pivot header stored, bestBlock={}",
+            snapStateRoot.map(short).getOrElse("none"),
+            bestBlockNum
+          )
+        case Some(pivot) =>
+          val rootsMatch = snapStateRoot.contains(pivot.stateRoot.value)
+          log.info(
+            "SNAP state root diagnostic: stored snapStateRoot={}, pivotBlock={} pivotStateRoot={}, bestBlock={}, match={}",
+            snapStateRoot.map(short).getOrElse("none"),
+            pivot.number.value,
+            short(pivot.stateRoot.value),
+            bestBlockNum,
+            rootsMatch
+          )
+          // A difference is only worth reporting while the best block IS the pivot: above it, the best block's own
+          // root is not expected to equal snapStateRoot, and the pivot header is never the one executed against.
+          if !rootsMatch && bestBlockNum == pivot.number.value then
+            val finalized = appStateStorage.getSnapSyncFinalizedRoot()
+            log.warn(
+              "snapStateRoot({}) differs from the pivot header's stateRoot({}); header left untouched. " +
+                "pivotRoot={}, snapRoot={}, finalizedRoot={}. Regular sync fetches any missing state on demand.",
+              snapStateRoot.map(short).getOrElse("none"),
+              short(pivot.stateRoot.value),
+              if rootExists(pivot.stateRoot.value) then "EXISTS" else "MISSING",
+              snapStateRoot.map(r => if rootExists(r) then "EXISTS" else "MISSING").getOrElse("none"),
+              finalized.map(r => short(r) + (if rootExists(r) then ":EXISTS" else ":MISSING")).getOrElse("none")
+            )
+
     def start(): Behavior[Command] =
       val startMode = SyncController.selectSyncMode(syncConfig)
 
       val floorSetThisStart = adoptLeftoverFastSyncRecord()
+
+      repairBestBlockMapping()
 
       // Fast sync was removed, and with it this one-shot override (it cleared FastSyncDone so fast sync would run
       // again). Say so rather than ignore it silently.
@@ -1396,86 +1466,12 @@ object SyncController:
           startSnapSync(minPivotBlock = floor)
         case (true, SyncMode.Snap) =>
           log.warn("do-snap-sync is true but SNAP sync already completed")
-          // Diagnostic: log stored SNAP sync state root vs pivot block state root
-          val snapStateRoot = appStateStorage.getSnapSyncStateRoot()
-          val bestBlockNum = appStateStorage.getBestBlockNumber()
-          val bestBlockHeader = blockchainReader.getBlockHeaderByNumber(bestBlockNum)
-          val pivotStateRoot = bestBlockHeader.map(_.stateRoot)
-          log.info(
-            "SNAP state root diagnostic: stored snapStateRoot={}, pivotBlockStateRoot={}, bestBlock={}, match={}",
-            snapStateRoot.map(r => r.take(8).toArray.map("%02x".format(_)).mkString).getOrElse("none"),
-            pivotStateRoot.map(r => r.value.take(8).toArray.map("%02x".format(_)).mkString).getOrElse("none"),
-            bestBlockNum,
-            snapStateRoot == pivotStateRoot.map(_.value)
-          )
-          // After SNAP sync with deferred merkleization + pivot refreshes, the finalized trie root
-          // may differ from the pivot block header's stateRoot. The trie nodes are stored under
-          // the finalized root's hash, but the pivot header references the original (now orphaned) root.
-          // Fix: substitute the finalized root into the pivot block header.
-          bestBlockHeader.foreach { header =>
-            val mptStorage = stateStorage.getReadOnlyStorage
-            val pivotRootExists =
-              try
-                mptStorage.get(header.stateRoot.toArray); true
-              catch case _: Exception => false
-            log.info(
-              "State root availability check: pivotRoot({})={}",
-              header.stateRoot.value.take(8).toArray.map("%02x".format(_)).mkString,
-              if pivotRootExists then "EXISTS" else "MISSING"
-            )
-            if !pivotRootExists then
-              val finalizedRoot = appStateStorage.getSnapSyncFinalizedRoot()
-              finalizedRoot match
-                case Some(fRoot) =>
-                  val fRootExists =
-                    try
-                      mptStorage.get(fRoot.toArray); true
-                    catch case _: Exception => false
-                  log.info(
-                    "Finalized trie root {} availability: {}",
-                    fRoot.take(8).toArray.map("%02x".format(_)).mkString,
-                    if fRootExists then "EXISTS" else "MISSING"
-                  )
-                  if fRootExists then
-                    log.warn(
-                      "Substituting finalized trie root {} into pivot block header (replacing missing root {})",
-                      fRoot.take(8).toArray.map("%02x".format(_)).mkString,
-                      header.stateRoot.value.take(8).toArray.map("%02x".format(_)).mkString
-                    )
-                    val updatedHeader = header.copy(stateRoot = TrieRoot(fRoot))
-                    blockchainWriter.storeBlockHeader(updatedHeader).commit()
-                case None =>
-                  log.error(
-                    "Pivot state root {} MISSING and no finalized root stored! " +
-                      "Database is in an unrecoverable state — clear data and re-sync.",
-                    header.stateRoot.value.take(8).toArray.map("%02x".format(_)).mkString
-                  )
-            else
-              // Symmetric case (Run-26): pivot root EXISTS in MPT but differs from snapStateRoot.
-              // The downloaded account trie is stored under snapStateRoot; update the pivot header
-              // to match so the startup diagnostic passes and regular sync reads the correct trie.
-              snapStateRoot.foreach { snapRoot =>
-                if snapRoot != header.stateRoot.value then
-                  val snapRootExists =
-                    try
-                      mptStorage.get(snapRoot.toArray); true
-                    catch case _: Exception => false
-                  log.info(
-                    "snapStateRoot({}) availability: {}",
-                    snapRoot.take(8).toArray.map("%02x".format(_)).mkString,
-                    if snapRootExists then "EXISTS" else "MISSING"
-                  )
-                  if snapRootExists then
-                    log.warn(
-                      "snapStateRoot({}) differs from pivotHeader.stateRoot({}) — " +
-                        "updating pivot block header to use downloaded state root.",
-                      snapRoot.take(8).toArray.map("%02x".format(_)).mkString,
-                      header.stateRoot.value.take(8).toArray.map("%02x".format(_)).mkString
-                    )
-                    val updatedHeader = header.copy(stateRoot = TrieRoot(snapRoot))
-                    blockchainWriter.storeBlockHeader(updatedHeader).commit()
-              }
-          }
+          // Diagnostic only. Nothing here may write a block header: a header's hash covers its stateRoot, so rewriting
+          // it forges a block (new hash, no body) and, because storeBlockHeader also writes number->hash, repoints the
+          // canonical index at it. An earlier version did that to the BEST block and broke every node that had
+          // imported past its pivot. The comparison is against the SNAP pivot header, not the best block: once regular
+          // sync has imported blocks above the pivot, the best block's root legitimately differs from snapStateRoot.
+          logSnapStateRootDiagnostic()
           val needBytecode = !appStateStorage.isBytecodeRecoveryDone()
           val needStorage = !appStateStorage.isStorageRecoveryDone()
           if needBytecode || needStorage then startRecovery(needBytecode, needStorage)
