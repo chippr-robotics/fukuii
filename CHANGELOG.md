@@ -7,65 +7,117 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.9.0]
+## [0.9.0] - 2026-10-03
 
-Glamsterdam (Amsterdam) support for the ETH-family chains, released ahead of Sepolia's Amsterdam
-activation on 2026-10-06 13:53:36 UTC. This section covers everything merged into `staging` since 0.8.0
-(the 0.8.1 – 0.8.13 builds). Release notes: [`docs/releases/0.9.0.md`](docs/releases/0.9.0.md).
+The Glamsterdam release. Sepolia activates Amsterdam at timestamp 1791294816 (2026-10-06 13:53:36 UTC);
+every Sepolia node must run 0.9.0 before then. Tracking issue: #1415 (spec: `specs/009-amsterdam-fork-support`,
+#1409). ETC, Mordor and Gorgoroth do not activate any of it. See
+[docs/releases/0.9.0.md](docs/releases/0.9.0.md) and
+[docs/specifications/GLAMSTERDAM.md](docs/specifications/GLAMSTERDAM.md).
 
 ### Added
-- **Glamsterdam (Amsterdam) execution layer**, active on an ETH-family chain from its
-  `amsterdam-timestamp`; no ETC-family chain config declares one (#1409, #1413):
-  - EIP-2780, 7708, 7778, 7843 (`SLOTNUM`), 7928 (block-level access lists, built while a block executes,
-    checked against the header's `blockAccessListHash` and stored), 7954, 7976, 7981, 8024 (`DUPN`,
-    `SWAPN`, `EXCHANGE`), 8037, 8038, 8246 and 8282 (builder execution requests). EIP-7997 needs no
-    client code.
-  - Engine API: `engine_newPayloadV5`, `engine_forkchoiceUpdatedV4`, `engine_getPayloadV6`, and
-    `engine_getPayloadBodiesByHashV2` / `engine_getPayloadBodiesByRangeV2`, which add the stored access
-    list (`null` before Amsterdam or once pruned).
-  - Amsterdam block building: the 23-field header, the payload attributes' slot number, the block's own
-    access list, EIP-8282 builder requests, and EIP-8037's per-dimension transaction packing.
-  - eth/71 (EIP-8159) serves stored block access lists within go-ethereum's 2 MiB / 1,024-entry limits.
-    It is opt-in, like eth/70, eth/72 and snap/2 (below).
-  - The fork id follows the chain head's timestamp in the `Status` handshake, the ENR and DNS discovery.
-  - JSON-RPC at Amsterdam: `eth_config` reports the EIP-8282 builder contracts, `eth_simulateV1` builds
-    the 23-field header, and trace and debug replays of an Amsterdam block re-execute it as block import
-    did.
-- Platåberget, the public Glamsterdam testnet (chain id 7091047534), as a launcher network:
-  `fukuii plataberget`. Ships the devnet-8 genesis (hash `0xee33ef92…2b31`) and EL bootnodes.
-  Its Amsterdam fork activated 2026-08-20, so following the chain head needs the Amsterdam rule
-  set tracked in #1409
-- Sepolia Amsterdam (Glamsterdam) activation at timestamp 1791294816 (2026-10-06 13:53:36 UTC).
-  The Sepolia fork id now announces it as the next fork (`0x268956b6`, next `1791294816`), as
-  go-ethereum does
-- `docs/specifications/GLAMSTERDAM.md`: Glamsterdam EIP set, activation schedule, fukuii
-  implementation status and a Platåberget test guide
-- Configurable external IP detection strategy via `network.server-address.external-ip-detection`
-  (`none` | `upnp` | `full`, default `upnp`); every detected candidate is now validated as a public
-  IPv4 address before being advertised to peers
-- Conformance runner for the execution-specs fixtures: `EestFixtureCorpusSpec` replays every
-  `blockchain_test` through block import, and `EngineApiAmsterdamBuilderEestSpec` rebuilds every block
-  those tests accept through the payload builder, which must reproduce the block hash. Against
-  `tests@v21.0.0` Amsterdam (26,503 tests, 27,352 blocks) both pass in full. The CI job `EEST Amsterdam`
-  runs both, at the informational tier (#1419, #1427).
-- eth/70 (EIP-7975), eth/71 (EIP-8159), eth/72 (EIP-8070) and snap/2 (EIP-8189) capabilities, each opt-in
-  under `network.protocols` and off by default (#1408).
-- CI gate matrix: `.github/gates.yml` declares every gate and its tier, Gate Integrity fails a public
-  claim that no check backs, and `docs/STATUS.md` is generated from it (#1406).
+- **Networks.** Platåberget, the public Glamsterdam testnet (`glamsterdam-devnet-8`, chain id 7091047534), as
+  a launcher network: `fukuii plataberget` (#1417). It ships the devnet-8 genesis (hash `0xee33ef92…2b31`),
+  the 20 devnet-8 EL bootnodes and every fork through Osaka, BPO1 and BPO2 at genesis, with
+  `amsterdam-timestamp = 1787212224` (2026-08-20). Sepolia gets `amsterdam-timestamp = 1791294816`; its fork
+  id announces it as the next fork (`0x268956b6`, next `1791294816`), as go-ethereum does.
+- **Amsterdam (Glamsterdam) execution rules**, all gated on the Amsterdam timestamp and unreachable on any ETC
+  chain. EIP-2780, 8037, 8038, 7778, 7954 and 7708 first shipped in 0.8.5 (#1408); 0.9.0 completes them against
+  the execution-specs corpus and adds the rest:
+  - EIP-2780 resource-based intrinsic gas, with authorization processing and dispatch as execution-specs
+    `create_evm` (#1423)
+  - EIP-7778 block gas without refunds; EIP-7954 contract size limit 64 KiB (initcode 128 KiB); EIP-7708 ETH
+    transfer logs
+  - EIP-8037 state-creation gas: per-dimension block capacity (#1420); header `gasUsed` is the maximum of the
+    execution and state dimensions, receipts sum both; state-gas reservoir kept across precompile calls
+    (#1437); CALL's new-account charge before sizing the child's gas, and system calls (EIP-4788, EIP-2935) with
+    their own reservoir (#1440)
+  - EIP-8038 state-access gas, with the EXTCODESIZE / EXTCODECOPY code-read surcharge (#1440)
+  - EIP-7976 calldata floor and EIP-7981 access-list cost, with the floor as a validity rule (#1421)
+  - EIP-8246: SELFDESTRUCT no longer burns (#1422)
+  - EIP-7843 `SLOTNUM` opcode (`0x4b`) and EIP-8024 `DUPN` / `SWAPN` / `EXCHANGE` (`0xe6`-`0xe8`) (#1424)
+  - EIP-7928 block-level access lists: codec and header accessors (#1418); access recording through the VM,
+    per-index diff, validation against the header hash on import, and a `blockHash -> BAL RLP` store (#1426)
+  - EIP-8282 builder execution requests, with `eth_config` reporting the builder deposit and exit contracts
+    (#1430)
+  - EIP-7997 needs no client code (networks provide the factory contract); EIP-7688, 7732, 8045 and 8061 are
+    consensus-layer changes
+- **Engine API** (#1425, #1427, #1428):
+  - `engine_newPayloadV5` with `ExecutionPayloadV4` (`blockAccessList`, `slotNumber`); a missing list is
+    `-32602`, an undecodable one is `INVALID`
+  - `engine_forkchoiceUpdatedV4` with `PayloadAttributesV4` (`slotNumber`, optional `targetGasLimit`) and
+    `custodyColumns` (validated, otherwise ignored)
+  - `engine_getPayloadV6`
+  - `engine_getPayloadBodiesByHashV2` and `engine_getPayloadBodiesByRangeV2`, adding the stored access list
+    (`null` before Amsterdam or when pruned)
+  - `engine_newPayloadV4`, `engine_getPayloadV5` and `engine_forkchoiceUpdatedV3` refuse Amsterdam timestamps
+    with `-38005`; `engine_exchangeCapabilities` advertises the new methods
+  - `engine_getBlobsV3` / `V4` are not implemented (#1431)
+- **Amsterdam payload builder** (#1427): `forkchoiceUpdatedV4` -> `getPayloadV6` -> `newPayloadV5` produces a block
+  an independent node accepts as VALID. It builds the 23-field header, the slot number and the access list,
+  and steers the gas limit toward `targetGasLimit`.
+- **eth/71** block access list serving (EIP-8159, #1428): `GetBlockAccessLists` is answered from the stored
+  lists within a 2 MiB / 1,024-entry limit. Opt-in via `fukuii.network.protocols.eth71` (default `false`).
+  fukuii does not fetch lists from peers.
+- **Conformance:** the execution-specs `tests@v21.0.0` blockchain-test replay (`EestBlockchainReplay`,
+  `scripts/eest/fetch_fixtures.py`) and the CI job `EEST Amsterdam` (#1419): 26,503 / 26,503 Amsterdam tests
+  through block import, and the payload builder rebuilds the corpus's 27,352 blocks with identical hashes.
+- `docs/specifications/GLAMSTERDAM.md` (EIP set, schedule, implementation status, Platåberget test guide) and
+  the 0.9.0 release notes.
 
 ### Changed
-- **Engine API payloads move toward the node's gas ceiling on every fork**, as go-ethereum's builder
-  does: toward an Amsterdam payload's `targetGasLimit` when the attributes carry one, and otherwise toward
-  `mining.gas-limit-target` (default 60,000,000, go-ethereum's `--miner.gaslimit` default), at
-  `CalcGasLimit`'s rate. A payload used to keep its parent's gas limit, so a validator proposing through
-  fukuii now votes the limit toward 60M unless `mining.gas-limit-target` says otherwise (#1427).
-- The txpool's pre-filter for transactions from peers and re-orgs applies the rules of the fork active at
-  the chain head, as go-ethereum's pool does. It used to take the latest configured fork up to Osaka, so
-  on Sepolia before Amsterdam a peer's transaction below EIP-7623's floor is now refused, as it already
-  was on mainnet (#1430).
-- `eth_estimateGas` starts its search at `max(intrinsic gas, calldata floor)`, the least gas limit a node
-  accepts (EIP-7623 from Prague, EIP-7976 / EIP-7981 at Amsterdam). It could answer the intrinsic cost,
-  below the floor (#1430).
+- The fork id carries the head's timestamp in eth/68, 69 and 70+ `Status`, the ENR and DNS filters (#1429), so
+  peers at a timestamp fork agree on it.
+- Engine API payloads on every ETH-family fork steer the gas limit toward the node's gas ceiling
+  (`mining.gas-limit-target`, default 60,000,000), as go-ethereum does; an Amsterdam payload without
+  `targetGasLimit` does the same.
+- The txpool pre-filter for peer and re-org transactions admits under the fork active at the chain head: EIP-2780's
+  intrinsic cost and the EIP-7976 / EIP-7981 floor at Amsterdam, EIP-7623's floor before. `eth_sendRawTransaction`
+  does not use it (#1430).
+- `eth_estimateGas` starts its search at the least valid gas limit, `max(intrinsic, calldata floor)` (#1430).
+- `eth_simulateV1` builds the 23-field Amsterdam header at Amsterdam timestamps (#1430).
+- `debug_*` and `trace_*` replays of an Amsterdam block re-execute it as block import did (#1430).
+- The docs link check builds the site at its served `/fukuii/` path.
+
+### Fixed
+- Sepolia's EIP-6110 deposits are read from the chain's own deposit contract; it was wrong for Sepolia since
+  Prague (#1416).
+- A genesis that activates Amsterdam builds the 23-field header, and hive's genesis `slotNumber` is passed
+  through.
+- A successful precompile CALL keeps the caller's transient storage (Cancun and later); P256VERIFY returns empty
+  output on failure and takes exactly 160 bytes (Osaka); EIP-7934's block size cap is checked on
+  `engine_newPayload` from Osaka (#1439).
+- A transaction whose gas is below its EIP-7623 floor is invalid from Prague (#1438).
+- Post-merge regular sync imports the head's extension after a rewind, and fork recovery no longer swallows the
+  import's `ImportDone` and wedges regular sync (every chain, ETC included); deferred batches are dropped when
+  the failed import already rewound the fetcher (#1432).
+- The Platåberget configs no longer set the removed `do-fast-sync` key.
+
+### Known issues
+- SNAP sync on post-merge ETH networks (Sepolia, Platåberget) has open fixes in progress: parallel storage
+  ordering (#1449), the healing re-peg budget (#1450), and path-scheme healing re-fetch. Synced nodes are
+  unaffected; a fresh sync of a large chain may stall.
+- Sparse blobpool, `engine_getBlobsV3` / `V4` and fetching access lists over eth/71 are not implemented (#1431);
+  none is needed to follow the chain.
+
+## [0.8.12] - 2026-09-28
+
+### Fixed
+- SNAP sync finishes after state healing re-pegs its pivot (#1448)
+
+## [0.8.11] - 2026-09-28
+
+### Fixed
+- A handshaked peer no longer reconnects itself when its connection drops (#1447)
+
+## [0.8.10] - 2026-09-28
+
+### Fixed
+- `eth_simulateV1`'s per-call overrides are isolated from block import and other RPC calls (#1446)
+
+## [0.8.9] - 2026-09-27
+
+### Changed
 - **Olympia is deferred on every chain** until a confirmed test block number exists. Gorgoroth
   (`gorgoroth-chain.conf`, was 15,800,850) and the private-network template
   (`enterprise-template.conf`, was 0) now set `olympia-block-number` to the unscheduled sentinel
@@ -82,20 +134,8 @@ activation on 2026-10-06 13:53:36 UTC. This section covers everything merged int
   - **Private networks from the template:** new copies leave Olympia unscheduled, so genesis has no
     base fee field. A network already running from an earlier copy keeps what that copy sets;
     changing `olympia-block-number` on a live chain is a hard fork.
-- Olympia-era gas now follows EIP-2537 (G1/G2 MSM discount tables) and EIP-7702 (authorization
-  refunds, authority warming, delegation access cost). No ETC-family chain activates Olympia (see the
-  entry above), so ETC mainnet, Mordor and Gorgoroth are unaffected.
-- EVM interpreter: about 5x throughput on arithmetic-heavy code, with no differences across a
-  27,039-case ethereum/tests differential (#1408).
-- Engine API behaviour from hive's engine suite: payload building and transaction selection follow
-  go-ethereum; a sidechain block never overwrites a canonical one; `engine_forkchoiceUpdated*` keeps the
-  canonical index to exactly the head's ancestry and answers a VALID ancestor without rewinding;
-  `engine_getPayload*` is fork-windowed and includes transactions that arrived after the forkchoice
-  update (#1408).
-- P2P: eth/69 and later receipts use EIP-7642's encoding, and eth/68 typed receipts are one RLP byte
-  string (core-geth interop); the ENR `eth` entry is fixed, so go-ethereum dials fukuii; bodies and
-  receipts are served as prefixes under a 2 MiB soft limit, and backfilled ones are checked against
-  their header roots (#1408).
+
+## [0.8.8] - 2026-09-27
 
 ### Removed
 - **Fast sync.** It could not finish on current networks (eth/67 and later peers do not serve
@@ -144,34 +184,31 @@ activation on 2026-10-06 13:53:36 UTC. This section covers everything merged int
       `FastSyncDone` is still read: with SNAP on, it sends a node where SNAP has no progress to
       regular sync.
 
+## [0.8.7] - 2026-09-27
+
 ### Fixed
-- **Sepolia: blocks carrying EIP-6110 deposits were rejected since Prague.** Execution read deposits
-  only from the mainnet deposit contract, so a Sepolia block with a deposit computed the wrong
-  `requestsHash` and was refused as `INVALID_REQUESTS`. Each chain's own deposit contract is now read
-  (#1416).
-- Consensus rules on live ETH networks, found by the Amsterdam corpus (#1413):
-  - from Prague, a transaction whose gas is below its EIP-7623 calldata floor is invalid; it was executed
-    (#1438);
-  - from Cancun, a successful precompile CALL keeps the caller's transient storage; it was wiped (#1439);
-  - from Osaka, P256VERIFY returns empty output when verification fails (#1439);
-  - from Osaka, the Engine API path enforces EIP-7934's block size limit (#1439).
-  - The same three rules apply from Olympia, which no chain schedules (see Changed).
-- MODEXP (EIP-198) reads a length word cut short by the end of its input as right-padded with zeros, on
-  every network that has the precompile (#1441, first in 0.8.6).
-- RLP decoding caps list nesting depth at 64, so a deeply nested message is refused instead of crashing
-  the node (#1442, first in 0.8.7).
-- `eth_simulateV1`'s per-call overrides (precompile moves, `traceTransfers`, the blob base fee) no longer
-  reach block import or other RPC calls running at the same time (#1446).
-- A handshaked peer no longer reconnects itself when its connection drops (#1447).
-- SNAP sync finishes after state healing re-pegs its pivot (#1448).
-- Post-merge regular sync imports the head's extension after a rewind instead of stalling, and fork
-  recovery no longer swallows an import's completion and wedges regular sync, on every chain (#1432).
+- RLP decoding caps nesting depth (#1442)
 
-## Before 0.9.0
+## [0.8.6] - 2026-09-27
 
-The entries below were written under `[Unreleased]` between 0.1.0 and 0.8.0, before this file cut
-versioned sections; 0.9.0 is the first. They are kept as written. Release notes for some of those versions
-are in [`docs/releases/`](docs/releases/), and each GitHub release links its full commit range.
+### Fixed
+- MODEXP reads a truncated length word right-padded, as EIP-198 and other clients do (consensus fix, #1441)
+
+## [0.8.5] - 2026-09-26
+
+### Changed
+- Olympia-era gas now follows EIP-2537 (G1/G2 MSM discount tables) and EIP-7702 (authorization
+  refunds, authority warming, delegation access cost). No ETC-family chain activates Olympia (see 0.8.9), so ETC mainnet, Mordor and Gorgoroth are unaffected.
+- Hive compliance work (#1407, #1408): Engine API payload building and error codes, eth/69+ receipts, opt-in eth/70-72 and snap/2, and the first Amsterdam rules (EIP-2780, 8037, 8038, 7778, 7954, 7708).
+
+## [0.8.4] - 2026-09-23
+
+### Added
+- Configurable external IP detection strategy via `network.server-address.external-ip-detection`
+  (`none` | `upnp` | `full`, default `upnp`); every detected candidate is now validated as a public
+  IPv4 address before being advertised to peers
+
+## [0.8.2 and earlier] - not previously versioned
 
 ### Added
 - Production release checklist in ETC-HANDOFF.md
@@ -193,6 +230,7 @@ are in [`docs/releases/`](docs/releases/), and each GitHub release links its ful
   - Added helper method to check EIP-3651 activation status
   - COINBASE address is now marked as warm when EIP-3651 is enabled, reducing gas costs by 2500 for first access
   - Comprehensive test suite with 11 tests covering gas cost changes and edge cases
+
 
 ### Changed
 - Renamed GHCR image path from `chordodes_fukuii` to `fukuii` across all CI/CD, docs, and scripts
@@ -248,5 +286,5 @@ are in [`docs/releases/`](docs/releases/), and each GitHub release links its ful
 
 ---
 
-**Note:** This changelog is written by hand; releases do not generate it. Each release on the
-[Releases page](https://github.com/chippr-robotics/fukuii/releases) links its full commit range.
+**Note:** This CHANGELOG is automatically generated during releases. For the most up-to-date
+information, see the [Releases page](https://github.com/chippr-robotics/fukuii/releases).
