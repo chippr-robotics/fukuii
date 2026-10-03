@@ -9,6 +9,7 @@ import com.chipprbots.ethereum.domain
 import com.chipprbots.ethereum.domain.*
 import com.chipprbots.ethereum.mpt.MerklePatriciaTrie
 import com.chipprbots.ethereum.mpt.MerklePatriciaTrie.MissingAccountNodeException
+import com.chipprbots.ethereum.mpt.MerklePatriciaTrie.MissingCodeException
 import com.chipprbots.ethereum.mpt.MerklePatriciaTrie.MissingNodeException
 import com.chipprbots.ethereum.mpt.MerklePatriciaTrie.MissingStorageNodeException
 import com.chipprbots.ethereum.mpt.MptNode
@@ -214,10 +215,21 @@ class InMemoryWorldStateProxy(
       accountCodes = accountCodes - address
     )
 
+  /** The account's code. An account with a non-empty `codeHash` whose code is absent from `EvmCodeStorage` is a MISSING
+    * DATA condition, so it throws [[MissingCodeException]] rather than return empty code: an empty answer executes the
+    * contract as an EOA, and a node that then imports the block disagrees with every other client (SNAP healing used to
+    * leave exactly such accounts behind — devnet-8 block 318074).
+    */
   override def getCode(address: Address): ByteString =
     accountCodes.getOrElse(
       address,
-      getAccount(address).flatMap(account => evmCodeStorage.get(account.codeHash.value)).getOrElse(ByteString.empty)
+      getAccount(address) match
+        case None => ByteString.empty
+        case Some(account) =>
+          evmCodeStorage.get(account.codeHash.value) match
+            case Some(code)                                        => code
+            case None if account.codeHash == Account.EmptyCodeHash => ByteString.empty
+            case None => throw new MissingCodeException(account.codeHash.value, address.bytes)
     )
 
   override def getStorage(address: Address): InMemoryWorldStateProxyStorage =
