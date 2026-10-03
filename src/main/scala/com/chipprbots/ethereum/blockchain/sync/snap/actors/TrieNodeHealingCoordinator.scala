@@ -844,6 +844,11 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
             "walk via HealingCheckCompletion; skipping the redundant verification walk (spec 006)"
         )
 
+      // Path scheme: a heal response can land while this walk is still flagged running, in which case its
+      // HealingCheckCompletion was skipped (`!verificationBFSRunning`) and nothing else re-triggers it until the
+      // dead-pulse watchdog (minutes). Re-evaluate now that the flag is clear. Hash scheme: unchanged.
+      if storageScheme == StorageScheme.Path && missingEmitted > 0 then self ! HealingCheckCompletion
+
       Behaviors.same
 
     case FrontierWalkFailed =>
@@ -944,7 +949,12 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
         pendingTasks.clear()
         pendingHashSet.clear()
         clearHealedPathsSet() // spec 003 C1: abandonment — drop the scoped-verification scope (hygiene)
-        snapSyncController ! SNAPSyncController.StateHealingComplete
+        // Path scheme: the controller treats StateHealingComplete as a VERIFIED clean walk (it runs no walk of its own),
+        // and a force-complete has not verified anything — signal abandonment so it hands off to lazy healing instead.
+        // Hash scheme: unchanged (the controller's own trie walk verifies).
+        storageScheme match
+          case StorageScheme.Hash => snapSyncController ! SNAPSyncController.StateHealingComplete
+          case StorageScheme.Path => snapSyncController ! SNAPSyncController.StateHealingAbandoned
         // Classic `context.stop(self)` → Typed: return a stopped behavior so the actor terminates after this message.
         Behaviors.stopped
 

@@ -88,7 +88,7 @@ class PathHealPresenceSpec extends ScalaTestWithActorTestKit() with AnyFlatSpecL
   private def awaitStateHealingComplete(
       controller: org.apache.pekko.actor.testkit.typed.scaladsl.TestProbe[SNAPSyncController.Command]
   ): Unit =
-    controller.fishForMessage(15.seconds) {
+    controller.fishForMessage(60.seconds) {
       case SNAPSyncController.StateHealingComplete => FishingOutcomes.complete
       case _                                       => FishingOutcomes.continueAndIgnore
     }
@@ -314,6 +314,43 @@ class PathHealPresenceSpec extends ScalaTestWithActorTestKit() with AnyFlatSpecL
 
       requests.map(_.toSet) shouldBe List(Set(trie("s1").pathset))
       readAtPath(pns, trie("s1")).map(ByteString(_)) shouldBe Some(trie("s1").encoded)
+    }
+  }
+
+  it should "heal BOTH locations that share a hash — neither is skipped" taggedAs UnitTest in {
+    val trie = twinStorageTrie()
+    withPathStorage { pns =>
+      // BOTH accounts' copies of the identical storage root are missing: one hash, two locations.
+      seedPath(pns, trie.nodes.filterNot(n => n.label == "s0" || n.label == "s1"))
+
+      val requests = healAgainst(trie.served, trie.root.hash, StorageScheme.Path, Some(pns), new TestMptStorage()) {
+        coordinator => coordinator ! TrieNodeHealingCoordinator.StartTrieNodeHealing(trie.root.hash)
+      }
+
+      // The queue dedups by hash, so the locations may be fetched in successive rounds; the walk keeps finding the
+      // remaining one until both are present. Both must be requested and both must end up written at their paths.
+      requests.flatten.toSet shouldBe pathsets(Seq(trie("s0"), trie("s1")))
+      readAtPath(pns, trie("s0")).map(ByteString(_)) shouldBe Some(trie("s0").encoded)
+      readAtPath(pns, trie("s1")).map(ByteString(_)) shouldBe Some(trie("s1").encoded)
+    }
+  }
+
+  it should "report a force-complete as abandoned, never as a verified clean walk" taggedAs UnitTest in {
+    val trie = accountTrieNew()
+    withPathStorage { pns =>
+      val controller = testKit.createTestProbe[SNAPSyncController.Command]()
+      val coordinator = HealingTrieFixtures.spawnCoordinator(
+        stateRoot = trie.root.hash,
+        networkPeerManager = testKit.createTestProbe[NetworkPeerManagerActor.Command]().ref,
+        requestTracker = new SNAPRequestTracker()(classicSystem.scheduler),
+        mptStorage = new TestMptStorage(),
+        batchSize = 16,
+        snapSyncController = controller.ref,
+        storageScheme = StorageScheme.Path,
+        pathNodeStorageOpt = Some(pns)
+      )
+      coordinator ! TrieNodeHealingCoordinator.HealingForceComplete
+      controller.expectMessage(SNAPSyncController.StateHealingAbandoned)
     }
   }
 

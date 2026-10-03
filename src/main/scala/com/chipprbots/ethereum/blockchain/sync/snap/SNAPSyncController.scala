@@ -752,6 +752,7 @@ private class SNAPSyncControllerImpl(
         // The TNHC seed-guard (#1371) can emit HealingRootUnservable; if it lands after the controller has left
         // StateHealing it must be dropped, not MatchError-crash the idle behavior (the StateHealing handler is guarded).
         case _: HealingRootUnservable => ctx.log.debug("Dropping stale HealingRootUnservable in idle"); Behaviors.same
+        case StateHealingAbandoned    => ctx.log.debug("Dropping stale StateHealingAbandoned in idle"); Behaviors.same
         case _: ValidateAccountTrieResult =>
           ctx.log.debug("Dropping stale ValidateAccountTrieResult in idle"); Behaviors.same
         case _: ValidateStorageTriesResult =>
@@ -1497,6 +1498,15 @@ private class SNAPSyncControllerImpl(
       // exhausted (refreshPivotInPlace's MaxHealRepegNoRootAttempts, batch-4 H-S7) — that branch calls completeSnapSync()
       // directly (the same handoff below). This handler stays for the flag-OFF path (where the coordinator still emits
       // HealingRootUnservable) and as a defensive catch; either way it is fail-SAFE (anchor-guard gated), never fail-open.
+      case StateHealingAbandoned if currentPhase == StateHealing =>
+        ctx.log.warn(
+          "[HEAL-ABANDONED] Healing coordinator force-completed without a verification walk (Path scheme). The trie is " +
+            "NOT verified, so this is not a clean walk: handing off to lazy on-demand healing via completeSnapSync()."
+        )
+        anchorPivotBeforeLazyHandoff("HEAL-ABANDONED")
+        completeSnapSync()
+        Behaviors.same
+
       case HealingRootUnservable(root) if currentPhase == StateHealing =>
         ctx.log.warn(
           s"[HEAL-ROOT-UNSERVABLE] Heal walk root ${root.toHex.take(16)} is absent from local storage and cannot be " +
@@ -5207,6 +5217,11 @@ object SNAPSyncController:
       storageTasks: Seq[StorageTask]
   ) extends Command
   case object StateHealingComplete extends Command
+
+  /** Coordinator gave up (HealingForceComplete) WITHOUT a verification walk. Never a clean-walk signal: under Path the
+    * controller routes it to the lazy-heal handoff instead of declaring the trie validated.
+    */
+  case object StateHealingAbandoned extends Command
   case object HealingAllPeersStateless extends Command
   final case class HealingRootUnservable(root: ByteString) extends Command
   case object StateValidationComplete extends Command
