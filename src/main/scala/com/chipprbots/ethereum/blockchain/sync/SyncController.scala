@@ -22,6 +22,7 @@ import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController.PivotBoot
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController.StartRegularSyncBootstrap
 import com.chipprbots.ethereum.blockchain.sync.snap.ChainDownloader
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController.StartRegularSyncBootstrapByHash
+import com.chipprbots.ethereum.blockchain.sync.snap.StorageTaskFile
 import com.chipprbots.ethereum.consensus.ConsensusAdapter
 import com.chipprbots.ethereum.consensus.engine.DesignatedHead
 import com.chipprbots.ethereum.consensus.engine.ForkChoiceManager
@@ -425,7 +426,12 @@ object SyncController:
         s"storageScheme=${config.storageScheme} does not match expected $expectedScheme " +
           s"for networkType=$networkType — check sync.snap-sync.storage-scheme in reference.conf"
       )
-      config
+      // Keep the SNAP storage-task file under the datadir so it survives a reboot (/tmp does not).
+      val taskFileDir = scala.util
+        .Try(Config.config.getString("datadir"))
+        .toOption
+        .map(d => StorageTaskFile.dirUnder(java.nio.file.Paths.get(d)))
+      config.copy(taskFileDir = taskFileDir)
 
     def idle(): Behavior[Command] = Behaviors.receive { (_, cmd) =>
       val msg = unwrap(cmd)
