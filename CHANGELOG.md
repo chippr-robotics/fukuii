@@ -184,11 +184,10 @@ every Sepolia node must run 0.9.0 before then. Tracking issue: #1415 (spec: `spe
       `FastSyncDone` is still read: with SNAP on, it sends a node where SNAP has no progress to
       regular sync.
 
-
 ## [0.8.7] - 2026-09-27
 
 ### Fixed
-- RLP decoding caps nesting depth, so a deeply nested payload raises `RLPException` instead of crashing the node (#1442)
+- RLP decoding caps nesting depth (#1442)
 
 ## [0.8.6] - 2026-09-27
 
@@ -199,8 +198,7 @@ every Sepolia node must run 0.9.0 before then. Tracking issue: #1415 (spec: `spe
 
 ### Changed
 - Olympia-era gas now follows EIP-2537 (G1/G2 MSM discount tables) and EIP-7702 (authorization
-  refunds, authority warming, delegation access cost). No ETC-family chain activates Olympia (see the
-  entry above), so ETC mainnet, Mordor and Gorgoroth are unaffected.
+  refunds, authority warming, delegation access cost). No ETC-family chain activates Olympia (see 0.8.9), so ETC mainnet, Mordor and Gorgoroth are unaffected.
 - Hive compliance work (#1407, #1408): Engine API payload building and error codes, eth/69+ receipts, opt-in eth/70-72 and snap/2, and the first Amsterdam rules (EIP-2780, 8037, 8038, 7778, 7954, 7708).
 
 ## [0.8.4] - 2026-09-23
