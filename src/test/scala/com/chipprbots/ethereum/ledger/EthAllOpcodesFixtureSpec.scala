@@ -311,6 +311,7 @@ class EthAllOpcodesFixtureSpec extends AnyWordSpec with Matchers:
       codes(OpCodes.ShanghaiOpCodes) -- codes(OpCodes.LondonOpCodes) shouldBe Set(0x5f)
       codes(OpCodes.CancunOpCodes) -- codes(OpCodes.ShanghaiOpCodes) shouldBe Set(0x49, 0x4a, 0x5c, 0x5d, 0x5e)
       codes(OpCodes.OsakaOpCodes) -- codes(OpCodes.CancunOpCodes) shouldBe Set(0x1e)
+      codes(OpCodes.AmsterdamOpCodes) -- codes(OpCodes.OsakaOpCodes) shouldBe Set(0x4b, 0xe6, 0xe7, 0xe8)
     }
 
     "never be selected on a shipped ETC chain, at any block" taggedAs (UnitTest, VMTest, ConsensusTest) in {
@@ -320,7 +321,8 @@ class EthAllOpcodesFixtureSpec extends AnyWordSpec with Matchers:
         EvmConfig.LondonOpCodes,
         EvmConfig.ShanghaiOpCodes,
         EvmConfig.CancunOpCodes,
-        EvmConfig.OsakaOpCodes
+        EvmConfig.OsakaOpCodes,
+        EvmConfig.AmsterdamOpCodes
       )
       val etc = Config.blockchains.blockchains.filter(_._2.networkType == NetworkType.ETC)
       etc should not be empty

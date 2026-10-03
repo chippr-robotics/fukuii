@@ -27,7 +27,7 @@ class ForkIdTagSpec extends AnyWordSpec with Matchers:
   private val dummySig = Signature(BitVector.empty)
 
   private def makeTag(head: BigInt, conf: com.chipprbots.ethereum.utils.BlockchainConfig = etcConf): ForkIdTag =
-    new ForkIdTag(() => etcGenesis, () => 0L, conf, () => head)
+    new ForkIdTag(() => etcGenesis, () => 0L, conf, () => head, () => 0L)
 
   /** An ENR whose `eth` entry is in the standard form every other client writes: `[[fork-hash, fork-next], ...rest]`.
     * Built by hand, not with ForkIdTag.encodeEthEntry, so the filter tests do not just agree with our own encoder.

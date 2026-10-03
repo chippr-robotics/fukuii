@@ -3,6 +3,7 @@ package com.chipprbots.ethereum.domain
 import org.apache.pekko.util.ByteString
 
 import com.chipprbots.ethereum.db.storage.AppStateStorage
+import com.chipprbots.ethereum.db.storage.BlockAccessListStorage
 import com.chipprbots.ethereum.db.storage.BlockBodiesStorage
 import com.chipprbots.ethereum.db.storage.BlockHeadersStorage
 import com.chipprbots.ethereum.db.storage.BlockNumberMappingStorage
@@ -24,7 +25,8 @@ class BlockchainReader(
     stateStorage: StateStorage,
     receiptStorage: ReceiptStorage,
     appStateStorage: AppStateStorage,
-    chainWeightStorage: ChainWeightStorage
+    chainWeightStorage: ChainWeightStorage,
+    blockAccessListStorage: BlockAccessListStorage
 ) extends Logger:
 
   /** Allows to query a blockHeader by block hash
@@ -81,6 +83,12 @@ class BlockchainReader(
     *   Receipts if found
     */
   def getReceiptsByHash(blockhash: BlockHash): Option[Seq[Receipt]] = receiptStorage.get(blockhash.value)
+
+  /** EIP-7928: the block access list of the Amsterdam block `blockHash`, as the canonical RLP its header's
+    * `blockAccessListHash` commits to — the bytes `engine_getPayloadBodiesByHash/RangeV2` and eth/71 serve. `None` for
+    * a pre-Amsterdam or ETC block, and for one whose list was never stored or has been pruned.
+    */
+  def getBlockAccessListByHash(blockHash: BlockHash): Option[ByteString] = blockAccessListStorage.get(blockHash.value)
 
   /** get the current best stored branch */
   def getBestBranch: Branch =
@@ -307,5 +315,6 @@ object BlockchainReader:
     storages.stateStorage,
     storages.receiptStorage,
     storages.appStateStorage,
-    storages.chainWeightStorage
+    storages.chainWeightStorage,
+    storages.blockAccessListStorage
   )

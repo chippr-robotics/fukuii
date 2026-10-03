@@ -290,17 +290,22 @@ class EngineApiGasLimitElasticitySpec extends AnyWordSpec with Matchers:
   // would emit payloads its own newPayload round-trip rejects.
   "EngineApiService payload builder" should {
 
-    "double the parent gas limit at the EIP-1559 activation block when elasticity is Some(2)" taggedAs (
+    "double the parent gas limit at the EIP-1559 activation block when elasticity is Some(2), then step toward the gas ceiling" taggedAs (
       UnitTest,
       ConsensusTest
     ) in new EthSetup:
-      producedActivationGasLimit() shouldBe DoubledGasLimit
+      // go-ethereum at the London activation block (miner/worker.go:316-321 at 920c077):
+      // CalcGasLimit(parent.GasLimit * ElasticityMultiplier, GasCeil) = CalcGasLimit(6,000,000, 60,000,000), one step of
+      // 6,000,000 / 1024 - 1 = 5,858 above the doubled parent. Every engine payload moves toward the gas ceiling.
+      producedActivationGasLimit() shouldBe DoubledGasLimit + 5_858
 
-    "keep the parent gas limit at the Olympia activation block when elasticity is None (ETC)" taggedAs (
+    "not double the parent gas limit at the Olympia activation block when elasticity is None (ETC-shaped config)" taggedAs (
       UnitTest,
       ConsensusTest
     ) in new EtcSetup:
-      producedActivationGasLimit() shouldBe GenesisGasLimit
+      // No one-shot scale: one CalcGasLimit step from the RAW parent toward the 60,000,000 gas ceiling,
+      // 3,000,000 / 1024 - 1 = 2,928. (The engine builder is ETH-only; ETC's PoW miner does not come through here.)
+      producedActivationGasLimit() shouldBe GenesisGasLimit + 2_928
 
     "produce a payload its own newPayload accepts (producer/validator round-trip)" taggedAs (
       UnitTest,

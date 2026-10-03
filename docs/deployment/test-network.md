@@ -324,4 +324,4 @@ For issues specific to this test network setup:
 
 - [Fukuii Documentation](../index.md)
 - [Docker Deployment Guide](docker.md)
-- [Core-Geth Documentation](https://core-geth.org/)
+- [Core-Geth Documentation](https://etclabscore.github.io/core-geth/)

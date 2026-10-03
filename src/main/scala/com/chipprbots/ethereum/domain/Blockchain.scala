@@ -183,6 +183,9 @@ trait BlockchainStorages:
   val blockBodiesStorage: BlockBodiesStorage
   val blockNumberMappingStorage: BlockNumberMappingStorage
   val receiptStorage: ReceiptStorage
+
+  /** EIP-7928: the block access list of every Amsterdam block that validated here, by block hash. */
+  val blockAccessListStorage: BlockAccessListStorage
   val evmCodeStorage: EvmCodeStorage
   val chainWeightStorage: ChainWeightStorage
   val transactionMappingStorage: TransactionMappingStorage

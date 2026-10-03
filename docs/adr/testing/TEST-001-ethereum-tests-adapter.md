@@ -405,7 +405,7 @@ Storage persistence issue resolved by using `blockchain.getBackingMptStorage(0)`
 - [ethereum/tests Repository](https://github.com/ethereum/tests)
 - [Test Format Documentation](https://ethereum-tests.readthedocs.io/)
 - [VM-007: EIP-161 noEmptyAccounts Fix](../vm/VM-007-eip-161-noemptyaccounts-fix.md)
-- [ETC Fork Timeline](https://etclabs.org/etc-forks)
+- [ETC Hard Forks (Meta ECIPs)](https://ecips.ethereumclassic.org/meta)
 - [Contributing Guide](../../development/contributing.md)
 
 ## Related Files

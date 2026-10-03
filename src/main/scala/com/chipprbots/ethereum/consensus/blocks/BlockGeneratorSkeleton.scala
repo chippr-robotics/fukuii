@@ -98,7 +98,7 @@ abstract class BlockGeneratorSkeleton(
     val block = Block(header, body)
 
     blockPreparator.prepareBlock(evmCodeStorage, block, parent.header, initialWorldStateBeforeExecution) match
-      case PreparedBlock(prepareBlock, blockResult @ BlockResult(_, _, _, receipts, _), stateRoot, updatedWorld) =>
+      case PreparedBlock(prepareBlock, blockResult @ BlockResult(_, _, _, receipts, _, _), stateRoot, updatedWorld) =>
         // EIP-8037: the header reports max(execution, state), which `BlockResult.gasUsed` derives.
         val gasUsed = blockResult.gasUsed
         val receiptsLogs: Seq[Array[Byte]] =

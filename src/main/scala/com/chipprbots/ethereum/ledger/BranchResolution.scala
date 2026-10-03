@@ -26,6 +26,15 @@ class BranchResolution(
   /** Optional MESS config for anti-reorg protection. Set by SyncController when configured. */
   private[ethereum] var messConfig: Option[MESSConfig] = None
 
+  /** Does this import path follow a consensus layer, i.e. is this a post-merge (terminal-total-difficulty) chain?
+    *
+    * Exactly the gate of the PoS arm below: `designatedHead` is `Some` only when SyncController sees a configured
+    * terminal-total-difficulty, which no ETC/Mordor/Gorgoroth config sets. `BlockImporter` reads it so that every
+    * post-merge-only behaviour of the p2p import path hangs off this one gate rather than a second one that could
+    * disagree with it.
+    */
+  def followsConsensusLayer: Boolean = designatedHead.isDefined
+
   def resolveBranch(headers: NonEmptyList[BlockHeader]): BranchResolutionResult =
     if !doHeadersFormChain(headers) then InvalidBranch
     else
@@ -82,7 +91,19 @@ class BranchResolution(
           // Post-merge: all blocks have difficulty=0, so weight never increases.
           // If the new branch extends the chain without conflicting (no old blocks to replace),
           // accept it. This is the normal case for regular sync importing new blocks.
-          NewBetterBranch(Nil)
+          //
+          // When the batch also RE-PRESENTS blocks we already hold as canonical (commonPrefixLength > 0) the caller
+          // must be told how many, because handing consensus the whole batch sends it down the side-branch path:
+          // `ConsensusImpl.handleBranchImport` sees a parent that is not the head, `importToNewBranch` finds equal
+          // weight, the designated-head walk cannot reach a CL head the node is still far behind, and the answer is
+          // `KeptCurrentBestBranch` — the head's own extension silently dropped. Every post-rewind batch has this shape
+          // (the fetcher re-serves from below the head), so a post-merge node never recovered from its first rewind.
+          // Measured on Platåberget: head stuck at 200 for `135..210` → "Imported no blocks" → `211..260` → "Unknown
+          // branch" → rewind, forever (#1432). No side branch is accepted here: `oldBlocks` is empty, nothing is
+          // displaced. PoS only (`followsConsensusLayer`), so a PoW chain keeps `NewBetterBranch(Nil)` and its
+          // weight-selected re-execution of the whole batch exactly as before.
+          if commonPrefixLength > 0 && followsConsensusLayer then ExtendsCanonicalHead(commonPrefixLength)
+          else NewBetterBranch(Nil)
         else if newHeaders.nonEmpty && leadsToDesignatedHead(newHeaders) then
           // PoS arm. It replaces only the old final `else NoChainSwitch`, so whenever its predicate is false the
           // result is exactly what it was before. On ETC/Mordor/Gorgoroth the predicate is always false because
@@ -198,6 +219,15 @@ class BranchResolution(
 sealed trait BranchResolutionResult
 
 case class NewBetterBranch(oldBranch: Seq[Block]) extends BranchResolutionResult
+
+/** The batch is our own canonical chain for its first `alreadyCanonical` headers, followed by a pure extension of the
+  * canonical head: nothing is displaced, so this is not a side branch and no fork choice is being made. Only the
+  * extension — the batch minus that prefix — is left to import, and its parent is the head.
+  *
+  * Produced only on a chain that follows a consensus layer (see `BranchResolution.followsConsensusLayer`); a PoW chain
+  * gets `NewBetterBranch(Nil)` for the same input, as before.
+  */
+case class ExtendsCanonicalHead(alreadyCanonical: Int) extends BranchResolutionResult
 
 case object NoChainSwitch extends BranchResolutionResult
 

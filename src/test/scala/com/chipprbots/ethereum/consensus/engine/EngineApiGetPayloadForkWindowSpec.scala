@@ -30,7 +30,7 @@ import com.chipprbots.ethereum.utils.Config
   *   - V3: Cancun.
   *   - V4: Prague.
   *   - V5: Osaka and the blob-parameter-only forks after it (BPO1..).
-  *   - V6 (Amsterdam) does not exist here, so no version serves an Amsterdam payload.
+  *   - V6: Amsterdam.
   *
   * execution-apis states it per method: "Client software MUST return -38005: Unsupported fork error if the timestamp of
   * the built payload does not fall within the time frame of the <fork> fork" (cancun.md getPayloadV3, prague.md
@@ -73,7 +73,8 @@ class EngineApiGetPayloadForkWindowSpec extends AnyWordSpec with Matchers:
     2 -> Set("Paris", "Shanghai"),
     3 -> Set("Cancun"),
     4 -> Set("Prague"),
-    5 -> Set("Osaka", "BPO1")
+    5 -> Set("Osaka", "BPO1"),
+    6 -> Set("Amsterdam")
   )
 
   "EngineApiController.getPayloadForkError" should {
@@ -90,12 +91,24 @@ class EngineApiGetPayloadForkWindowSpec extends AnyWordSpec with Matchers:
     }
   }
 
-  /** A service whose payload is `block`, counting how often the controller resolves it. */
+  /** A service whose payload is `block`, counting how often the controller resolves it. Every payload is served with
+    * the empty block access list, which only V6 reads (and which the Amsterdam header below commits to).
+    */
   private class CountingService(block: Block) extends EngineApiService(null, null, null, null, None)(null, null):
     val resolved = new AtomicInteger(0)
     override def getPayload(payloadId: ByteString): IO[Either[String, Block]] = IO.pure(Right(block))
     override def resolvePayload(payloadId: ByteString): IO[Either[String, ServedPayload]] =
-      IO(resolved.incrementAndGet()).as(Right(ServedPayload(block, Nil, Nil, BlobsBundleData(Nil, Nil, Nil, Nil))))
+      IO(resolved.incrementAndGet()).as(
+        Right(
+          ServedPayload(
+            block,
+            Nil,
+            Nil,
+            BlobsBundleData(Nil, Nil, Nil, Nil),
+            blockAccessList = Some(BlockAccessList.Empty.toBytes)
+          )
+        )
+      )
 
   private def extraFieldsFor(fork: String): HeaderExtraFields =
     val zero32 = ByteString(new Array[Byte](32))
@@ -103,7 +116,18 @@ class EngineApiGetPayloadForkWindowSpec extends AnyWordSpec with Matchers:
       case "Paris"    => HefPostOlympia(BigInt("1000000000"))
       case "Shanghai" => HefPostShanghai(BigInt("1000000000"), BlockHeader.EmptyMpt)
       case "Cancun"   => HefPostCancun(BigInt("1000000000"), BlockHeader.EmptyMpt, BigInt(0), BigInt(0), zero32)
-      case _          => HefPostPrague(BigInt("1000000000"), BlockHeader.EmptyMpt, BigInt(0), BigInt(0), zero32, zero32)
+      case "Amsterdam" =>
+        HefPostAmsterdam(
+          BigInt("1000000000"),
+          BlockHeader.EmptyMpt,
+          BigInt(0),
+          BigInt(0),
+          zero32,
+          zero32,
+          BlockAccessList.EmptyHash,
+          BigInt(1)
+        )
+      case _ => HefPostPrague(BigInt("1000000000"), BlockHeader.EmptyMpt, BigInt(0), BigInt(0), zero32, zero32)
 
   private def payloadAt(fork: String, ts: Long): Block =
     val header = BlockHeader(
@@ -127,19 +151,19 @@ class EngineApiGetPayloadForkWindowSpec extends AnyWordSpec with Matchers:
     val withdrawals = Option.when(fork != "Paris")(Seq.empty[Withdrawal])
     Block(header, BlockBody(Nil, Nil, withdrawals = withdrawals))
 
-  "engine_getPayloadV1..V5" should {
+  "engine_getPayloadV1..V6" should {
 
     "answer -38005 outside the version's window, before resolving the payload, and serve it inside" taggedAs (
       UnitTest,
       ConsensusTest
     ) in {
-      // The controller reads the global test config, which declares forks up to Osaka.
+      // The controller is given the config that also declares BPO1 and Amsterdam, so every fork is exercised.
       val wrong =
         for
           (version, served) <- window
-          (fork, ts) <- forkAt.filterNot { case (fork, _) => fork == "BPO1" || fork == "Amsterdam" }
+          (fork, ts) <- forkAt
           service = new CountingService(payloadAt(fork, ts))
-          response = new EngineApiController(service)
+          response = new EngineApiController(service, None, withBpo1AndAmsterdam)
             .handleRequest(
               JsonRpcRequest(
                 "2.0",

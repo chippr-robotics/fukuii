@@ -6,6 +6,7 @@ import scala.annotation.tailrec
 
 import com.chipprbots.ethereum.db.dataSource.DataSourceBatchUpdate
 import com.chipprbots.ethereum.db.storage.AppStateStorage
+import com.chipprbots.ethereum.db.storage.BlockAccessListStorage
 import com.chipprbots.ethereum.db.storage.BlockBodiesStorage
 import com.chipprbots.ethereum.db.storage.BlockHeadersStorage
 import com.chipprbots.ethereum.db.storage.BlockNumberMappingStorage
@@ -23,7 +24,8 @@ class BlockchainWriter(
     transactionMappingStorage: TransactionMappingStorage,
     receiptStorage: ReceiptStorage,
     chainWeightStorage: ChainWeightStorage,
-    appStateStorage: AppStateStorage
+    appStateStorage: AppStateStorage,
+    blockAccessListStorage: BlockAccessListStorage
 ) extends Logger:
 
   def save(block: Block, receipts: Seq[Receipt], weight: ChainWeight, saveAsBestBlock: Boolean): Unit =
@@ -47,6 +49,13 @@ class BlockchainWriter(
 
   def storeChainWeight(blockHash: BlockHash, weight: ChainWeight): DataSourceBatchUpdate =
     chainWeightStorage.put(blockHash.value, weight)
+
+  /** EIP-7928: keeps the access list of an Amsterdam block that validated against it, as its canonical RLP (see
+    * [[com.chipprbots.ethereum.db.storage.BlockAccessListStorage]]). Written by every path that accepts an Amsterdam
+    * block after executing it; read back through `BlockchainReader.getBlockAccessListByHash`.
+    */
+  def storeBlockAccessList(blockHash: BlockHash, accessList: BlockAccessList): DataSourceBatchUpdate =
+    blockAccessListStorage.put(blockHash.value, accessList.toBytes)
 
   /** Persists a block in the underlying Blockchain Database Note: all store* do not update the database immediately,
     * rather they create a [[com.chipprbots.ethereum.db.dataSource.DataSourceBatchUpdate]] which then has to be
@@ -229,5 +238,6 @@ object BlockchainWriter:
       storages.transactionMappingStorage,
       storages.receiptStorage,
       storages.chainWeightStorage,
-      storages.appStateStorage
+      storages.appStateStorage,
+      storages.blockAccessListStorage
     )

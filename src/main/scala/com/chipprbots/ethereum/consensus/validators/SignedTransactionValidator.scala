@@ -1,5 +1,7 @@
 package com.chipprbots.ethereum.consensus.validators
 
+import scala.annotation.unused
+
 import com.chipprbots.ethereum.domain.*
 import com.chipprbots.ethereum.utils.BlockchainConfig
 
@@ -11,6 +13,23 @@ trait SignedTransactionValidator:
       upfrontGasCost: UInt256,
       accumGasUsed: BigInt
   )(implicit blockchainConfig: BlockchainConfig): Either[SignedTransactionError, SignedTransactionValid]
+
+  /** The form block execution calls: the block's gas so far in all three counters.
+    *
+    * `accumGasUsed` is the receipt sum. `accumExecutionGas` and `accumStateGas` are EIP-8037's two block dimensions,
+    * which Amsterdam checks block capacity against instead; before Amsterdam they are exactly `accumGasUsed` and 0. A
+    * validator that does not model EIP-8037 (a test double) keeps the single-counter form.
+    */
+  def validate(
+      stx: SignedTransaction,
+      senderAccount: Account,
+      blockHeader: BlockHeader,
+      upfrontGasCost: UInt256,
+      accumGasUsed: BigInt,
+      @unused accumExecutionGas: BigInt,
+      @unused accumStateGas: BigInt
+  )(implicit blockchainConfig: BlockchainConfig): Either[SignedTransactionError, SignedTransactionValid] =
+    validate(stx, senderAccount, blockHeader, upfrontGasCost, accumGasUsed)
 
 sealed trait SignedTransactionError
 
@@ -27,6 +46,23 @@ object SignedTransactionError:
       extends SignedTransactionError:
     override def toString: String =
       s"INTRINSIC_GAS_TOO_LOW: Tx gas limit ($txGasLimit) < tx intrinsic gas ($txIntrinsicGas)"
+
+  /** Amsterdam: `tx.gas` below the EIP-7976/EIP-7981 calldata floor (execution-specs `validate_transaction`,
+    * "Insufficient calldata floor").
+    */
+  case class TransactionNotEnoughGasForFloorError(txGasLimit: BigInt, floorGas: BigInt) extends SignedTransactionError:
+    override def toString: String =
+      s"INTRINSIC_GAS_BELOW_FLOOR_GAS_COST: Tx gas limit ($txGasLimit) < calldata floor gas ($floorGas)"
+
+  /** Amsterdam (EIP-8037): the intrinsic execution gas or the calldata floor exceeds TX_MAX_GAS_LIMIT. `tx.gas` itself
+    * may exceed it — the excess seeds the state-gas reservoir — but these two may not. execution-specs raises
+    * `InsufficientTransactionGasError` for both, which the fixtures expect as INTRINSIC_GAS_TOO_LOW.
+    */
+  case class TransactionIntrinsicCostExceedsCap(intrinsicGas: BigInt, floorGas: BigInt, cap: BigInt)
+      extends SignedTransactionError:
+    override def toString: String =
+      s"INTRINSIC_GAS_TOO_LOW: intrinsic execution gas ($intrinsicGas) or calldata floor ($floorGas) " +
+        s"exceeds TX_MAX_GAS_LIMIT ($cap)"
   case class TransactionSenderCantPayUpfrontCostError(upfrontCost: UInt256, senderBalance: UInt256)
       extends SignedTransactionError:
     override def toString: String =
@@ -35,6 +71,31 @@ object SignedTransactionError:
       extends SignedTransactionError:
     override def toString: String =
       s"GAS_LIMIT_EXCEEDS_BLOCK_GAS_LIMIT: Tx gas limit ($txGasLimit) + gas accum ($accumGasUsed) > block gas limit ($blockGasLimit)"
+
+  /** Amsterdam (EIP-8037): the transaction's execution-gas reservation, `min(TX_MAX_GAS_LIMIT, tx.gas)`, exceeds what
+    * is left of the block's execution dimension (execution-specs `check_block_gas_capacity`, "execution gas used
+    * exceeds limit").
+    */
+  case class TransactionExecutionGasExceedsBlockCapacity(
+      txExecutionReservation: BigInt,
+      blockExecutionGasUsed: BigInt,
+      blockGasLimit: BigInt
+  ) extends SignedTransactionError:
+    override def toString: String =
+      s"GAS_ALLOWANCE_EXCEEDED: Tx execution gas reservation ($txExecutionReservation) + block execution gas used " +
+        s"($blockExecutionGasUsed) > block gas limit ($blockGasLimit)"
+
+  /** Amsterdam (EIP-8037): the transaction's gas limit exceeds what is left of the block's state dimension
+    * (execution-specs `check_block_gas_capacity`, "state gas used exceeds limit").
+    */
+  case class TransactionStateGasExceedsBlockCapacity(
+      txGasLimit: BigInt,
+      blockStateGasUsed: BigInt,
+      blockGasLimit: BigInt
+  ) extends SignedTransactionError:
+    override def toString: String =
+      s"GAS_ALLOWANCE_EXCEEDED: Tx gas limit ($txGasLimit) + block state gas used ($blockStateGasUsed) > block gas " +
+        s"limit ($blockGasLimit)"
   case class TransactionInitCodeSizeError(actualSize: BigInt, maxSize: BigInt) extends SignedTransactionError:
     override def toString: String =
       s"INITCODE_SIZE_EXCEEDED: initcode size ($actualSize) exceeds maximum ($maxSize)"

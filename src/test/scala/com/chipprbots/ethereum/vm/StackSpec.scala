@@ -99,6 +99,21 @@ class StackSpec extends AnyFunSuite with Matchers with ScalaCheckPropertyChecks:
     }
   }
 
+  test("exchange elements (EIP-8024 EXCHANGE)", UnitTest, VMTest) {
+    forAll(stackGen, intGen, intGen) { (stack, i, j) =>
+      val stack1 = stack.exchange(i, j)
+
+      if i < j && j < stack.size then
+        val x = stack.toSeq(i)
+        val y = stack.toSeq(j)
+        stack1.toSeq shouldEqual stack.toSeq.updated(i, y).updated(j, x)
+        stack1.size shouldEqual stack.size
+        // swap(j) is exchange(0, j)
+        if i == 0 then stack1 shouldEqual stack.swap(j)
+      else stack1 shouldEqual stack
+    }
+  }
+
   /** The Vector-backed Stack this class used to be, verbatim, as an oracle: the list-backed one must give the same
     * results for every operation, in range or not.
     */

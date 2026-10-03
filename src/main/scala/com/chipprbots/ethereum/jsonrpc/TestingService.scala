@@ -169,7 +169,7 @@ class TestingService(
       // The execution-apis fixtures are generated against it (hive's rpc-compat sets
       // HIVE_TARGET_GAS_LIMIT=60000000 explicitly "so all clients build the same next-block gas
       // limit"), so a proposer that simply inherits the parent's gas limit produces a different
-      // block hash on every fixture. The engine path keeps its own policy — see proposerGasLimit.
+      // block hash on every fixture. The engine path moves toward the same ceiling (enginePayloadGasLimit).
       val gasLimit = engineApiService.proposerGasLimit(
         parent.header,
         parent.header.number.value + 1,

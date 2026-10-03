@@ -74,9 +74,10 @@ object NodeConfigResource:
       |  "chainId": ${cfg.chainId},
       |  "networkId": ${cfg.networkId},
       |  "network": "${cfg.chainId.value match
-        case id if id == BigInt(1)  => "ethereum"; case id if id == BigInt(61)     => "etc"
-        case id if id == BigInt(63) => "mordor"; case id if id == BigInt(11155111) => "sepolia"
-        case id                     => s"chain-$id"
+        case id if id == BigInt(1)           => "ethereum"; case id if id == BigInt(61)     => "etc"
+        case id if id == BigInt(63)          => "mordor"; case id if id == BigInt(11155111) => "sepolia"
+        case id if id == BigInt(7091047534L) => "plataberget"
+        case id                              => s"chain-$id"
       }",
       |  "accountStartNonce": ${cfg.accountStartNonce},
       |  "maxCodeSize": ${cfg.maxCodeSize.map(_.toString).getOrElse("null")},

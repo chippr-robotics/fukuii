@@ -63,6 +63,20 @@ class Stack private (private val underlying: List[UInt256], val size: Int, val m
         else rest.head :: exchange(rest.tail, k + 1)
       new Stack(underlying(i) :: exchange(underlying.tail, 1), size, maxSize)
 
+  /** Exchange the i-th and j-th elements of the stack, i=0 being the top-most. `swap(j)` is `exchange(0, j)`. Returns
+    * the stack unchanged unless 0 <= i < j < size (EIP-8024 EXCHANGE: i and j are its n and m, 1 <= n < m <= 29).
+    */
+  def exchange(i: Int, j: Int): Stack =
+    if i < 0 || j <= i || j >= size then this
+    else
+      val atI = underlying(i)
+      val atJ = underlying(j)
+      // Rebuilt from the top down to the j-th element with the two exchanged; below that the list is shared.
+      def rebuild(rest: List[UInt256], k: Int): List[UInt256] =
+        if k == j then atI :: rest.tail
+        else (if k == i then atJ else rest.head) :: rebuild(rest.tail, k + 1)
+      new Stack(rebuild(underlying, 0), size, maxSize)
+
   /** @return
     *   the elements of the stack as a sequence, with the top-most element of the stack as the first element in the
     *   sequence

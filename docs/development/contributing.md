@@ -506,7 +506,7 @@ When a release is created (via git tag `vX.Y.Z`), the release workflow automatic
 - ✅ Creates Software Bill of Materials (SBOM) in CycloneDX format
 - ✅ Attaches all artifacts to GitHub release
 - ✅ Builds and publishes container images to `ghcr.io/chippr-robotics/fukuii`
-- ✅ Signs images with [Cosign](https://docs.sigstore.dev/cosign/overview/) (keyless, GitHub OIDC)
+- ✅ Signs images with [Cosign](https://docs.sigstore.dev/cosign/signing/overview/) (keyless, GitHub OIDC)
 - ✅ Generates SLSA Level 3 provenance attestations
 - ✅ Outputs immutable digest references for tamper-proof deployments
 - ✅ Closes matching milestone
@@ -558,7 +558,7 @@ We have specialized agents with different areas of expertise:
 - **herald 🧭**: Fixes network protocol and peer communication issues
 - **Morgoth 🎯**: Shepherds all agents with process discipline and quality verification
 
-See [Agent Labels](https://github.com/chippr-robotics/fukuii/blob/develop/.github/AGENT_LABELS.md) for detailed descriptions. The agents are implemented as [Claude subagents](https://github.com/chippr-robotics/fukuii/tree/develop/.claude/agents/) (`forge`, `eye`, `wraith`, `herald`, `mithril`); the Morgoth and ICE coordination roles are documented in [CLAUDE.md](https://github.com/chippr-robotics/fukuii/blob/develop/CLAUDE.md), which the main session uses to orchestrate them.
+See [Agent Labels](https://github.com/chippr-robotics/fukuii/blob/main/.github/AGENT_LABELS.md) for detailed descriptions. The agents are implemented as [Claude subagents](https://github.com/chippr-robotics/fukuii/tree/main/.claude/agents/) (`forge`, `eye`, `wraith`, `herald`, `mithril`); the Morgoth and ICE coordination roles are documented in [CLAUDE.md](https://github.com/chippr-robotics/fukuii/blob/main/CLAUDE.md), which the main session uses to orchestrate them.
 
 ### Core Principles (Guided by Morgoth)
 

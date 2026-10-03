@@ -49,6 +49,7 @@ object FixtureProvider:
     val storages: BlockchainStorages = new BlockchainStorages with AppCaches with EphemDataSourceComponent:
 
       override val receiptStorage: ReceiptStorage = new ReceiptStorage(dataSource)
+      override val blockAccessListStorage: BlockAccessListStorage = new BlockAccessListStorage(dataSource)
       override val evmCodeStorage: EvmCodeStorage = new EvmCodeStorage(dataSource)
       override val blockHeadersStorage: BlockHeadersStorage = new BlockHeadersStorage(dataSource)
       override val blockNumberMappingStorage: BlockNumberMappingStorage = new BlockNumberMappingStorage(dataSource)
