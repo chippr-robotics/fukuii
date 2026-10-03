@@ -25,7 +25,7 @@
     
     
       
-        <title>0.9.0 — Glamsterdam (Amsterdam) for Ethereum networks - Fukuii Documentation</title>
+        <title>0.9.0 — Glamsterdam: Sepolia Amsterdam activation on 2026-10-06 - Fukuii Documentation</title>
       
     
     
@@ -90,7 +90,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#090-glamsterdam-amsterdam-for-ethereum-networks" class="md-skip">
+        <a href="#090-glamsterdam-sepolia-amsterdam-activation-on-2026-10-06" class="md-skip">
           Skip to content
         </a>
       
@@ -125,7 +125,7 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              0.9.0 — Glamsterdam (Amsterdam) for Ethereum networks
+              0.9.0 — Glamsterdam: Sepolia Amsterdam activation on 2026-10-06
             
           </span>
         </div>
@@ -5381,10 +5381,10 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#sepolia-operators-upgrade-before-2026-10-06-135336-utc" class="md-nav__link">
+  <a href="#who-must-upgrade-and-by-when" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Sepolia operators: upgrade before 2026-10-06 13:53:36 UTC
+        Who must upgrade, and by when
       
     </span>
   </a>
@@ -5392,10 +5392,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#networks-and-activation" class="md-nav__link">
+  <a href="#ethereum-classic-and-mordor-unaffected" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Networks and activation
+        Ethereum Classic and Mordor: unaffected
       
     </span>
   </a>
@@ -5403,10 +5403,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#glamsterdam-execution-layer" class="md-nav__link">
+  <a href="#eips-included-eip-7773" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Glamsterdam execution layer
+        EIPs included (EIP-7773)
       
     </span>
   </a>
@@ -5414,10 +5414,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#conformance" class="md-nav__link">
+  <a href="#upgrade-steps" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Conformance
+        Upgrade steps
       
     </span>
   </a>
@@ -5425,54 +5425,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#fixes-on-live-networks" class="md-nav__link">
+  <a href="#known-issues" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Fixes on live networks
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#also-in-the-08x-series" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Also in the 0.8.x series
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#known-limitations" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Known limitations
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#release-gates" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Release gates
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#upgrade-notes" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Upgrade notes
+        Known issues
       
     </span>
   </a>
@@ -5512,220 +5468,150 @@
   
 
 
-<h1 id="090-glamsterdam-amsterdam-for-ethereum-networks">0.9.0 — Glamsterdam (Amsterdam) for Ethereum networks<a class="headerlink" href="#090-glamsterdam-amsterdam-for-ethereum-networks" title="Permanent link">&para;</a></h1>
-<p>Promotion of <code>staging</code> (the 0.8.x series) to <code>main</code>. 0.9.0 is fukuii's Glamsterdam release: it carries
-the Amsterdam execution-layer rule set (<a href="https://eips.ethereum.org/EIPS/eip-7773">EIP-7773</a>) that
-Sepolia activates on <strong>2026-10-06 13:53:36 UTC</strong>. Per-EIP detail is in
-<a href="../../specifications/GLAMSTERDAM/">Glamsterdam</a>; the full change list is in the
-<a href="https://github.com/chippr-robotics/fukuii/blob/main/CHANGELOG.md">CHANGELOG</a>.</p>
-<h2 id="sepolia-operators-upgrade-before-2026-10-06-135336-utc">Sepolia operators: upgrade before 2026-10-06 13:53:36 UTC<a class="headerlink" href="#sepolia-operators-upgrade-before-2026-10-06-135336-utc" title="Permanent link">&para;</a></h2>
+<h1 id="090-glamsterdam-sepolia-amsterdam-activation-on-2026-10-06">0.9.0 — Glamsterdam: Sepolia Amsterdam activation on 2026-10-06<a class="headerlink" href="#090-glamsterdam-sepolia-amsterdam-activation-on-2026-10-06" title="Permanent link">&para;</a></h1>
+<p>Promotion of <code>staging</code> (0.8.x series, through 0.8.13) to <code>main</code>. 0.9.0 is the release that follows Ethereum's
+<strong>Amsterdam</strong> (Glamsterdam, execution layer) hard fork. <strong>Sepolia activates Amsterdam at timestamp <code>1791294816</code>,
+2026-10-06 13:53:36 UTC.</strong></p>
+<h2 id="who-must-upgrade-and-by-when">Who must upgrade, and by when<a class="headerlink" href="#who-must-upgrade-and-by-when" title="Permanent link">&para;</a></h2>
 <ul>
-<li>Sepolia activates Amsterdam at timestamp <code>1791294816</code>. A fukuii node on a build without Amsterdam
-  support stops following Sepolia at the first Amsterdam block: it cannot validate that block, and its
-  fork id no longer matches its peers'. The first build that carries the whole rule set is 0.8.13;
-  0.9.0 is the release to run.</li>
-<li>Upgrade from any earlier build regardless: before 0.8.13, a Sepolia block carrying an EIP-6110 deposit
-  was rejected as <code>INVALID_REQUESTS</code> (#1416, below).</li>
-<li>Pair fukuii with a Gloas-ready consensus client over the authenticated Engine API
-  (<code>fukuii.network.engine-api</code>, with a JWT secret). From Amsterdam the CL calls <code>engine_newPayloadV5</code>,
-  <code>engine_forkchoiceUpdatedV4</code> and <code>engine_getPayloadV6</code>.</li>
-<li>Until the fork, fukuii announces Sepolia's fork id as <code>0x268956b6</code> with next <code>1791294816</code>; from the
-  fork, <code>0x6c1d9423</code>. A peer that disagrees is refused at the <code>Status</code> handshake.</li>
-<li>Validators proposing through fukuii: see the gas-limit change under <a href="#upgrade-notes">Upgrade notes</a>.</li>
+<li><strong>Every Sepolia operator: upgrade to 0.9.0 before 2026-10-06 13:53 UTC.</strong> A node on an older build cannot
+  validate the first Amsterdam block, stops following the chain there, and its fork id (<code>0x268956b6</code>, next
+  <code>1791294816</code>) no longer matches its peers' (<code>0x6c1d9423</code>). It is refused at the <code>Status</code> handshake.</li>
+<li><strong>Platåberget</strong> (the public Glamsterdam testnet, chain id 7091047534) has been in Amsterdam since 2026-08-20;
+  following its head needs 0.9.0.</li>
+<li><strong>Ethereum mainnet</strong> has no Amsterdam date yet; none is scheduled in fukuii's config.</li>
+<li>Run the CL client your network's release names for Gloas (Sepolia: epoch 353024). The EL and CL fork at the same
+  time.</li>
 </ul>
-<p>Glamsterdam does not apply to Ethereum Classic, Mordor or Gorgoroth. Their operators should still read
-the Olympia and fast-sync notes under <a href="#upgrade-notes">Upgrade notes</a>.</p>
-<h2 id="networks-and-activation">Networks and activation<a class="headerlink" href="#networks-and-activation" title="Permanent link">&para;</a></h2>
+<h2 id="ethereum-classic-and-mordor-unaffected">Ethereum Classic and Mordor: unaffected<a class="headerlink" href="#ethereum-classic-and-mordor-unaffected" title="Permanent link">&para;</a></h2>
+<p>Every Amsterdam rule is gated on <code>amsterdam-timestamp</code>, which no ETC-family chain declares (a test fails the build
+if one ever does). ETC mainnet, Mordor and Gorgoroth need no action for Glamsterdam, and <strong>Olympia stays deferred
+on every chain</strong> until a confirmed test block exists (shipped in 0.8.9). Shared VM and ledger changes in this
+release were reviewed against ETC's rules, and the ETC suites pass.</p>
+<p>One fix reaches every chain, ETC included: fork recovery no longer swallows the import's <code>ImportDone</code> and wedges
+regular sync (#1432).</p>
+<h2 id="eips-included-eip-7773">EIPs included (EIP-7773)<a class="headerlink" href="#eips-included-eip-7773" title="Permanent link">&para;</a></h2>
+<p>Execution layer, tracked in <a href="https://github.com/chippr-robotics/fukuii/issues/1415">#1415</a>:</p>
 <table>
 <thead>
 <tr>
-<th>Network</th>
-<th>Chain ID</th>
-<th>Amsterdam (UTC)</th>
-<th><code>amsterdam-timestamp</code></th>
-<th>Fork id from Amsterdam</th>
+<th>EIP</th>
+<th>Title</th>
+<th>Issue</th>
 </tr>
 </thead>
 <tbody>
 <tr>
-<td>Platåberget</td>
-<td>7091047534</td>
-<td>2026-08-20 07:50:24 (active)</td>
-<td><code>1787212224</code></td>
-<td><code>0x05842a50</code></td>
+<td>2780</td>
+<td>Resource-based intrinsic transaction gas</td>
+<td><a href="https://github.com/chippr-robotics/fukuii/issues/1423">#1423</a></td>
 </tr>
 <tr>
-<td>Sepolia</td>
-<td>11155111</td>
-<td>2026-10-06 13:53:36</td>
-<td><code>1791294816</code></td>
-<td><code>0x6c1d9423</code></td>
+<td>7708</td>
+<td>ETH transfers emit a log</td>
+<td>#1415</td>
 </tr>
 <tr>
-<td>Ethereum mainnet</td>
-<td>1</td>
-<td>not scheduled</td>
-<td>—</td>
-<td>—</td>
+<td>7778</td>
+<td>Block gas accounting without refunds</td>
+<td>#1415</td>
 </tr>
 <tr>
-<td>Hoodi</td>
-<td>560048</td>
-<td>not scheduled</td>
-<td>—</td>
-<td>not a fukuii network</td>
+<td>7843</td>
+<td>SLOTNUM opcode</td>
+<td><a href="https://github.com/chippr-robotics/fukuii/issues/1424">#1424</a></td>
 </tr>
 <tr>
-<td>ETC, Mordor, Gorgoroth</td>
-<td>61, 63, 63</td>
-<td>does not apply</td>
-<td>—</td>
-<td>—</td>
+<td>7928</td>
+<td>Block-level access lists</td>
+<td><a href="https://github.com/chippr-robotics/fukuii/issues/1418">#1418</a>, <a href="https://github.com/chippr-robotics/fukuii/issues/1426">#1426</a></td>
+</tr>
+<tr>
+<td>7954</td>
+<td>Maximum contract size 64 KiB</td>
+<td>#1415</td>
+</tr>
+<tr>
+<td>7976 / 7981</td>
+<td>Calldata floor and access list cost</td>
+<td><a href="https://github.com/chippr-robotics/fukuii/issues/1421">#1421</a></td>
+</tr>
+<tr>
+<td>7997</td>
+<td>Deterministic factory contract</td>
+<td>no client code</td>
+</tr>
+<tr>
+<td>8024</td>
+<td>SWAPN, DUPN, EXCHANGE</td>
+<td><a href="https://github.com/chippr-robotics/fukuii/issues/1424">#1424</a></td>
+</tr>
+<tr>
+<td>8037</td>
+<td>State creation gas cost increase</td>
+<td><a href="https://github.com/chippr-robotics/fukuii/issues/1420">#1420</a>, <a href="https://github.com/chippr-robotics/fukuii/issues/1437">#1437</a>, <a href="https://github.com/chippr-robotics/fukuii/issues/1440">#1440</a></td>
+</tr>
+<tr>
+<td>8038</td>
+<td>State-access gas cost update</td>
+<td><a href="https://github.com/chippr-robotics/fukuii/issues/1440">#1440</a></td>
+</tr>
+<tr>
+<td>8246</td>
+<td>Remove SELFDESTRUCT burn</td>
+<td><a href="https://github.com/chippr-robotics/fukuii/issues/1422">#1422</a></td>
+</tr>
+<tr>
+<td>8282</td>
+<td>Builder execution requests</td>
+<td><a href="https://github.com/chippr-robotics/fukuii/issues/1430">#1430</a></td>
 </tr>
 </tbody>
 </table>
-<p>Platåberget, the public Glamsterdam testnet, is new in this series: <code>fukuii plataberget</code> ships its
-devnet-8 genesis and EL bootnodes.</p>
-<h2 id="glamsterdam-execution-layer">Glamsterdam execution layer<a class="headerlink" href="#glamsterdam-execution-layer" title="Permanent link">&para;</a></h2>
+<p>EIP-2780, 7708, 7778, 7954, 8037 and 8038 first shipped in 0.8.5; 0.9.0 completes them against the execution-specs
+corpus. EIP-7688, 7732, 8045 and 8061 are consensus-layer changes.</p>
+<p>Engine API: <code>engine_newPayloadV5</code>, <code>engine_forkchoiceUpdatedV4</code>, <code>engine_getPayloadV6</code>, and
+<code>engine_getPayloadBodiesByHashV2</code> / <code>ByRangeV2</code> (with the stored access list). fukuii also builds Amsterdam payloads
+for a proposing CL, steering the gas limit toward <code>targetGasLimit</code> (<code>mining.gas-limit-target</code>, default 60M, when
+absent). eth/71 serves block access lists to peers that negotiate it (opt-in: <code>fukuii.network.protocols.eth71</code>).
+JSON-RPC: <code>eth_config</code> reports the builder contracts, <code>eth_estimateGas</code> floors at the calldata floor,
+<code>eth_simulateV1</code> builds the 23-field header, and trace/debug replays of Amsterdam blocks re-execute them as import
+did. Details: <a href="https://github.com/chippr-robotics/fukuii/blob/main/docs/specifications/GLAMSTERDAM.md">Glamsterdam specification</a>.</p>
+<p>Also fixed: Sepolia's EIP-6110 deposit contract, a precompile CALL wiping transient storage, P256VERIFY output,
+EIP-7934's size cap on the Engine API path, and the EIP-7623 floor as a validity rule. See the
+<a href="https://github.com/chippr-robotics/fukuii/blob/main/CHANGELOG.md">changelog</a>.</p>
+<p>Evidence: the execution-specs <code>tests@v21.0.0</code> Amsterdam corpus passes 26,503 / 26,503 through block import in CI, the
+payload builder rebuilds its 27,352 blocks with identical hashes, and hive <code>rpc-compat</code> and <code>graphql</code> are unchanged.</p>
+<h2 id="upgrade-steps">Upgrade steps<a class="headerlink" href="#upgrade-steps" title="Permanent link">&para;</a></h2>
+<ol>
+<li>Download the 0.9.0 release assets (or pull the image) and verify them as for previous releases.</li>
+<li>Stop the node and replace the binary. A datadir from 0.8.x needs no migration step. Amsterdam block access lists are stored in a
+   new namespace.</li>
+<li>Start it with the same configuration and the same JWT secret. The Engine API must stay enabled for post-merge
+   networks (<code>fukuii.network.engine-api.enabled = true</code>).</li>
+<li>Confirm the version, that the CL is connected, and that the node is at the head. Peers should accept the fork
+   id <code>0x268956b6</code>, next <code>1791294816</code>.</li>
+<li>After 13:53:36 UTC on 2026-10-06, the head should pass the first Amsterdam block and the fork id become
+   <code>0x6c1d9423</code>.</li>
+</ol>
+<p>Do this before the fork, not at it.</p>
+<p>If a CL proposes through fukuii: since 0.8.13, every engine payload moves the gas limit toward
+<code>mining.gas-limit-target</code> (default 60,000,000), before Amsterdam too, as go-ethereum's builder does. It used to keep
+the parent's limit. Set <code>mining.gas-limit-target</code> to vote for a different limit.</p>
+<h2 id="known-issues">Known issues<a class="headerlink" href="#known-issues" title="Permanent link">&para;</a></h2>
 <ul>
-<li><strong>EIPs:</strong> 2780, 7708, 7778, 7843 (<code>SLOTNUM</code>), 7928 (block-level access lists), 7954, 7976, 7981, 8024
-  (<code>DUPN</code>, <code>SWAPN</code>, <code>EXCHANGE</code>), 8037, 8038, 8246 and 8282 (builder execution requests). EIP-7997 needs no
-  client code. Each rule is keyed on the chain's <code>amsterdam-timestamp</code>, which no ETC-family chain config
-  declares.</li>
-<li><strong>Block-level access lists (EIP-7928):</strong> built while a block executes, checked against the header's
-  <code>blockAccessListHash</code>, stored, and served by <code>engine_getPayloadBodiesBy*V2</code> and eth/71.</li>
-<li><strong>Engine API:</strong> <code>engine_newPayloadV5</code>, <code>engine_forkchoiceUpdatedV4</code>, <code>engine_getPayloadV6</code>,
-  <code>engine_getPayloadBodiesByHashV2</code> and <code>engine_getPayloadBodiesByRangeV2</code>.</li>
-<li><strong>Block building:</strong> fukuii proposes Amsterdam blocks, with the 23-field header, the payload attributes'
-  slot number, the block's own access list, EIP-8282 builder requests and EIP-8037's per-dimension
-  transaction packing.</li>
-<li><strong>Networking:</strong> the fork id follows the chain head's timestamp in the <code>Status</code> handshake, the ENR and
-  DNS discovery. eth/71 serves stored access lists within go-ethereum's 2 MiB / 1,024-entry limits
-  (opt-in, below).</li>
-<li><strong>JSON-RPC:</strong> <code>eth_config</code> reports the EIP-8282 builder contracts; the txpool's pre-filter follows the
-  fork active at the chain head; <code>eth_estimateGas</code> starts at <code>max(intrinsic gas, calldata floor)</code>;
-  <code>eth_simulateV1</code> builds the 23-field header; trace and debug replays of an Amsterdam block re-execute it
-  as block import did.</li>
+<li><strong>SNAP sync on post-merge ETH networks has open fixes in progress:</strong> parallel storage ordering
+  (<a href="https://github.com/chippr-robotics/fukuii/issues/1449">#1449</a>), the heal re-peg budget
+  (<a href="https://github.com/chippr-robotics/fukuii/issues/1450">#1450</a>), and path-scheme healing re-fetch. Nodes that are
+  already synced are unaffected. A fresh sync of a large chain may stall. Sync before the fork, or keep an
+  already-synced datadir. Regular sync (<code>fukuii.sync.do-snap-sync = false</code>) imports from genesis.</li>
+<li>Not implemented, and not needed to follow the chain: the sparse blobpool (eth/72), <code>engine_getBlobsV3</code> / <code>V4</code>
+  (<a href="https://github.com/chippr-robotics/fukuii/issues/1431">#1431</a>), and fetching access lists from peers over eth/71.</li>
+<li><code>eth_getBlockByNumber</code> and <code>eth_getBlockByHash</code> do not yet report an Amsterdam header's <code>blockAccessListHash</code> and
+  <code>slotNumber</code>.</li>
+<li>hive <code>consume-*</code> suites against Amsterdam have not been run yet, and the Sepolia fork boundary itself is validated live on 2026-10-06.</li>
 </ul>
-<h2 id="conformance">Conformance<a class="headerlink" href="#conformance" title="Permanent link">&para;</a></h2>
-<ul>
-<li><strong>execution-specs <code>tests@v21.0.0</code>, Amsterdam <code>blockchain_tests</code>:</strong> 26,503 / 26,503 through block import
-  (<code>EestFixtureCorpusSpec</code>), and the payload builder rebuilds all 27,352 blocks those tests accept with
-  identical block hashes (<code>EngineApiAmsterdamBuilderEestSpec</code>). The CI job <code>EEST Amsterdam</code> runs both on
-  every pull request; it is informational until promoted after this release.</li>
-<li><strong>execution-specs <code>tests@v21.0.0</code>, Amsterdam <code>blockchain_tests_engine</code>:</strong> 26,548 / 26,548 through the
-  Engine API (<code>EestEngineFixtureCorpusSpec</code>), measured on v0.8.13. This replay runs locally, not in CI.</li>
-<li><strong>hive</strong> (informational gates; <a href="../../STATUS/">Verification Status</a> lists each tier): engine 403/403,
-  devp2p eth 23/23 and discovery + snap 37/37, rpc-compat 247/247, graphql 51/51 and sync 18/18 at
-  #1408, before the Amsterdam fixtures. rpc-compat, graphql, sync and both smoke suites were green on
-  #1413's final head.</li>
-</ul>
-<h2 id="fixes-on-live-networks">Fixes on live networks<a class="headerlink" href="#fixes-on-live-networks" title="Permanent link">&para;</a></h2>
-<p>Found while bringing up the Amsterdam corpus; each applies before Amsterdam too.</p>
-<ul>
-<li><strong>Sepolia deposits (#1416):</strong> execution read EIP-6110 deposits only from the mainnet deposit contract,
-  so since Prague a Sepolia block carrying a deposit computed the wrong <code>requestsHash</code> and was rejected.</li>
-<li><strong>EIP-7623 (#1438):</strong> from Prague, a transaction whose gas is below its calldata floor is invalid; it
-  was executed.</li>
-<li><strong>Transient storage (#1439):</strong> from Cancun, a successful precompile CALL keeps the caller's transient
-  storage; it was wiped.</li>
-<li><strong>P256VERIFY (#1439):</strong> from Osaka, a failed verification returns empty output.</li>
-<li><strong>EIP-7934 (#1439):</strong> from Osaka, the Engine API path enforces the block size limit.</li>
-<li><strong>MODEXP (#1441, 0.8.6):</strong> a length word cut short by the end of the input is read right-padded with
-  zeros, on every network that has the precompile, ETC included.</li>
-<li><strong>RLP (#1442, 0.8.7):</strong> decoding caps list nesting depth at 64, so a deeply nested message is refused
-  instead of crashing the node.</li>
-</ul>
-<h2 id="also-in-the-08x-series">Also in the 0.8.x series<a class="headerlink" href="#also-in-the-08x-series" title="Permanent link">&para;</a></h2>
-<ul>
-<li><strong>Fast sync removed (#1436):</strong> SNAP or regular sync only. See <a href="#upgrade-notes">Upgrade notes</a>.</li>
-<li><strong>Olympia deferred on every chain (#1445)</strong> until a confirmed test block exists. Gorgoroth and the
-  private-network template now leave it unscheduled, as ETC mainnet and Mordor already did.</li>
-<li><strong>Sync:</strong> post-merge regular sync recovers from a rewind, and fork recovery no longer wedges regular
-  sync on any chain (#1432); SNAP sync finishes after state healing re-pegs its pivot (#1448).</li>
-<li><strong><code>eth_simulateV1</code> (#1446):</strong> per-call overrides no longer reach block import or other RPC calls.</li>
-<li><strong>Peers (#1447):</strong> a handshaked peer no longer reconnects itself when its connection drops.</li>
-<li><strong>External IP (#1410, #1411):</strong> detection is configurable, and every candidate is validated as a public
-  IPv4 address before it is advertised.</li>
-<li><strong>EVM (#1408):</strong> about 5x interpreter throughput on arithmetic-heavy code.</li>
-<li><strong>Engine API and P2P interop from hive (#1408):</strong> go-ethereum-compatible payload building, forkchoice
-  and receipt encoding; go-ethereum now dials fukuii.</li>
-<li><strong>CI (#1406):</strong> every gate's tier is declared in <code>.github/gates.yml</code> and published in
-  <a href="../../STATUS/">Verification Status</a>.</li>
-</ul>
-<h2 id="known-limitations">Known limitations<a class="headerlink" href="#known-limitations" title="Permanent link">&para;</a></h2>
-<ul>
-<li><strong>Sparse blobpool (EIP-8070, #1431):</strong> not implemented. The eth/72 capability is opt-in and off by
-  default; hive's <code>GetCells</code> and <code>BlobTxWithInvalidCells</code> are declared waivers.</li>
-<li><strong><code>engine_getBlobsV3</code> / <code>engine_getBlobsV4</code> (#1431):</strong> not implemented.</li>
-<li><strong>snap/2 (EIP-8189):</strong> opt-in and off by default. snap/2 drops <code>GetTrieNodes</code>, which trie healing needs
-  on a chain without block access lists; negotiating the snap version per peer is #1431.</li>
-<li><strong>eth/70, eth/71, eth/72 and snap/2</strong> are off by default (<code>network.protocols</code>); a network config has to
-  opt in (the hive config does).</li>
-<li><strong><code>eth_getBlockByNumber</code> / <code>eth_getBlockByHash</code></strong> do not report an Amsterdam header's
-  <code>blockAccessListHash</code> and <code>slotNumber</code>.</li>
-<li><strong><code>eth_simulateV1</code></strong> records no access list: a simulated Amsterdam block reports the empty list's hash
-  and slot number 0.</li>
-<li><strong>Calls built from RPC arguments</strong> (<code>eth_call</code>, <code>eth_createAccessList</code>, <code>debug_traceCall</code>, <code>trace_call</code>
-  and similar) run on the bare VM, without an EIP-7702 authorization list or the calldata floor; see
-  <a href="../../specifications/GLAMSTERDAM/#what-the-bare-vm-leaves-out">What the bare VM leaves out</a>.</li>
-</ul>
-<h2 id="release-gates">Release gates<a class="headerlink" href="#release-gates" title="Permanent link">&para;</a></h2>
-<p>The 0.9.0 gates are tracked on <a href="https://github.com/chippr-robotics/fukuii/issues/1415">#1415</a>. At the
-time of this promotion:</p>
-<table>
-<thead>
-<tr>
-<th>Gate</th>
-<th>State</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td>execution-specs Amsterdam corpus</td>
-<td>Passes in full, import and builder, in CI</td>
-</tr>
-<tr>
-<td><code>testEssential</code></td>
-<td>Green in CI on every push</td>
-</tr>
-<tr>
-<td><code>testStandard</code>, <code>testComprehensive</code></td>
-<td>To run before tagging</td>
-</tr>
-<tr>
-<td>hive <code>consume-engine</code> / <code>consume-rlp</code> / devp2p against Amsterdam fixtures</td>
-<td>Not yet run (<a href="https://github.com/chippr-robotics/fukuii/issues/1419">#1419</a>)</td>
-</tr>
-<tr>
-<td>Platåberget soak behind a devnet-8 CL</td>
-<td>In progress (<a href="https://github.com/chippr-robotics/fukuii/issues/1432">#1432</a>)</td>
-</tr>
-<tr>
-<td>Sepolia crossing the fork</td>
-<td>After activation, by definition (<a href="https://github.com/chippr-robotics/fukuii/issues/1432">#1432</a>)</td>
-</tr>
-<tr>
-<td>ETC unchanged</td>
-<td><code>forge</code> signed off on the shared VM and ledger changes; the Olympia-side rules (#1438, #1439) are reviewed before Olympia gets a block</td>
-</tr>
-</tbody>
-</table>
-<h2 id="upgrade-notes">Upgrade notes<a class="headerlink" href="#upgrade-notes" title="Permanent link">&para;</a></h2>
-<ul>
-<li><strong>Proposers, every fork:</strong> Engine API payloads now move the gas limit toward the node's gas ceiling,
-  as go-ethereum's builder does: an Amsterdam payload's <code>targetGasLimit</code> when the attributes carry one,
-  and otherwise <code>mining.gas-limit-target</code> (default 60,000,000). A payload used to keep its parent's
-  limit. Set <code>mining.gas-limit-target</code> to vote for a different limit.</li>
-<li><strong>Fast sync is gone.</strong> Its configuration keys under <code>fukuii.sync</code> are ignored with a startup warning;
-  <code>fukuii_resetFastSync</code>, <code>fukuii_restartFastSync</code> and the <code>app_fastsync_*</code> metrics are removed. A node
-  that set <code>do-fast-sync = false</code> to sync from genesis should set <code>do-snap-sync = false</code>. A node stopped
-  part-way through fast sync resumes with SNAP sync. Details are in the CHANGELOG.</li>
-<li><strong>Gorgoroth:</strong> Olympia is no longer scheduled at 15,800,850. Move every node to this release together,
-  and reset any datadir that ran past 15,800,850 on an Olympia-active build.</li>
-<li><strong>Ethereum mainnet:</strong> nothing is scheduled; the live-network fixes above apply from their own forks.</li>
-</ul>
-<p>Released from the <code>staging</code> promotion that follows v0.8.13.</p>
+<p>Released from the <code>staging</code> promotion of 2026-10-03.</p>
 
 
 
