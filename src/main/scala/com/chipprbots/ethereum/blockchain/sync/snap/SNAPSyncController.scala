@@ -4845,6 +4845,38 @@ private class SNAPSyncControllerImpl(
               break(Behaviors.same)
           }
 
+          // Path scheme only: SNAP/healing wrote the trie path-keyed, but block execution reads hash-keyed nodes.
+          // Publish the completed trie to the hash-keyed store BEFORE anchoring/handing off, so the first imported
+          // block can read the pivot state. Hash scheme (ETC) never enters this branch.
+          pathNodeStorageOpt.foreach { pns =>
+            val target = getOrCreateMptStorage(pivot)
+            val started = System.currentTimeMillis()
+            ctx.log.info("[PATH-PUBLISH] publishing Path-scheme trie to hash-keyed storage for block execution")
+            // The export streams on the IO pool: capture the logger here (ActorContext.log is actor-thread-only).
+            val publishLog = ctx.log
+            var lastLogged = 0L
+            val result = PathToHashExporter.publish(
+              pns,
+              target,
+              (a, s) =>
+                if a + s - lastLogged >= 1000000L then
+                  lastLogged = a + s
+                  publishLog.info(s"[PATH-PUBLISH] account=$a storage=$s")
+            )
+            ctx.log.info(
+              s"[PATH-PUBLISH] done: ${result.accountNodes} account + ${result.storageNodes} storage nodes in " +
+                s"${System.currentTimeMillis() - started} ms"
+            )
+            if scala.util.Try(target.get(pivotHeader.stateRoot.value.toArray)).isFailure then
+              ctx.log.error(
+                "[PATH-PUBLISH] pivot state root {} absent after publish — path-keyed root node does not match " +
+                  "the pivot header. Escalating to SyncController for SNAP restart.",
+                pivotHeader.stateRoot.value.toHex
+              )
+              syncController ! SyncProtocol.HealingImpossible
+              break(Behaviors.same)
+          }
+
           val pivotHash = pivotHeader.hash
 
           // Store the full block (header + empty body) so getBlockByHash(pivotHash) returns
