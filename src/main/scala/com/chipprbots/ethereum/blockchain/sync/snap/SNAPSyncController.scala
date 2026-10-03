@@ -2253,32 +2253,30 @@ private class SNAPSyncControllerImpl(
                 .commit()
               // Fall through to normal startup (same path as drift-exceeded + phases incomplete)
 
-            // The persisted storage-task file is gone (reboot wiped /tmp, never persisted, or truncated). The storage
-            // phase must not be skipped for that: re-derive the tasks from the account trie. If the trie itself is
-            // unreadable there is nothing to derive from, so restart the accounts phase explicitly.
-            val storageTaskFileUsable =
-              savedStoragePath.filter(_.nonEmpty).exists(p => StorageTaskFile.isUsable(java.nio.file.Paths.get(p)))
-            val storageNeedsRederive =
-              !belowEscalationHint && !appStateStorage.isSnapSyncStorageComplete() && !storageTaskFileUsable
-            val accountTrieUnreadable = storageNeedsRederive &&
-              scala.util.Try(stateStorage.getBackingStorage(pivot).get(rootBs.toArray)).isFailure
-            if accountTrieUnreadable then
+            // The persisted storage-task file is missing, unreadable, truncated or empty while storage is incomplete
+            // (a reboot wiped /tmp, the path was never persisted, ...). Storage must not be skipped for that, and the
+            // tasks cannot be rebuilt reliably from an unhealed account trie, so restart the accounts phase.
+            val storageTaskFileUnusable =
+              !belowEscalationHint && !appStateStorage.isSnapSyncStorageComplete() &&
+                !savedStoragePath.filter(_.nonEmpty).exists(p => StorageTaskFile.isUsable(java.nio.file.Paths.get(p)))
+            if storageTaskFileUnusable then
               ctx.log.warn(
                 s"Recovery: storage task file ${savedStoragePath.filter(_.nonEmpty).getOrElse("<none persisted>")} is " +
-                  s"missing or unusable and the account trie at pivot $pivot is not readable, so the storage tasks " +
-                  "cannot be re-derived. Restarting the accounts phase (clearing accounts/storage/bytecode-complete flags)."
+                  "missing, empty or truncated while storage is incomplete. Restarting the accounts phase: clearing " +
+                  "accounts/storage/bytecode-complete flags and the persisted storage and bytecode file paths."
               )
               appStateStorage
                 .putSnapSyncAccountsComplete(false)
                 .and(appStateStorage.putSnapSyncStorageComplete(false))
                 .and(appStateStorage.putSnapSyncBytecodeComplete(false))
                 .and(appStateStorage.putSnapSyncStorageFilePath(""))
+                .and(appStateStorage.putSnapSyncCodeHashesPath(""))
                 .commit()
 
             // Check if pivot is still fresh enough (skipped when belowEscalationHint forced clear)
             val networkBest = currentNetworkBestFromSnapPeers().getOrElse(BigInt(0))
             val drift = if networkBest > 0 then (networkBest - pivot).abs else BigInt(0)
-            if !belowEscalationHint && !accountTrieUnreadable && networkBest > 0 && drift > snapSyncConfig.maxPivotStalenessBlocks
+            if !belowEscalationHint && !storageTaskFileUnusable && networkBest > 0 && drift > snapSyncConfig.maxPivotStalenessBlocks
             then
               val storageAlreadyDone = appStateStorage.isSnapSyncStorageComplete()
               val bytecodeAlreadyDone = appStateStorage.isSnapSyncBytecodeComplete()
@@ -2305,7 +2303,7 @@ private class SNAPSyncControllerImpl(
                   .and(appStateStorage.putSnapSyncBytecodeComplete(false))
                   .commit()
                 // Fall through to normal startup
-            else if !belowEscalationHint && !accountTrieUnreadable then
+            else if !belowEscalationHint && !storageTaskFileUnusable then
               // Pivot is fresh enough — recover bytecodes + storage only
               pivotBlock = Some(pivot)
               stateRoot = Some(TrieRoot(rootBs))
@@ -2393,74 +2391,40 @@ private class SNAPSyncControllerImpl(
               if !storageAlreadyDone then
                 val coordinator = storageRangeCoordinator.get
                 import ctx.executionContext
-                val usableFile =
-                  savedStoragePath.filter(_.nonEmpty).map(java.nio.file.Paths.get(_)).filter(StorageTaskFile.isUsable)
-                usableFile match
-                  case Some(filePath) =>
-                    scala.concurrent
-                      .Future {
-                        val emptyRoot = ByteString(com.chipprbots.ethereum.mpt.MerklePatriciaTrie.EmptyRootHash)
-                        val zeroHash = ByteString(new Array[Byte](32))
-                        val raf = new java.io.RandomAccessFile(filePath.toFile, "r")
-                        val buf = new Array[Byte](64)
-                        val batch = new scala.collection.mutable.ArrayBuffer[StorageTask](10000)
-                        var totalTasks = 0
-                        try
-                          while raf.getFilePointer < raf.length() do
-                            raf.readFully(buf)
-                            val accountHash = ByteString(java.util.Arrays.copyOfRange(buf, 0, 32))
-                            val storageRoot = ByteString(java.util.Arrays.copyOfRange(buf, 32, 64))
-                            if accountHash != zeroHash && storageRoot.nonEmpty && storageRoot != emptyRoot then
-                              batch += StorageTask.createStorageTask(accountHash, storageRoot)
-                            if batch.size >= 10000 then
-                              coordinator ! actors.StorageRangeCoordinator.AddStorageTasks(batch.toSeq)
-                              totalTasks += batch.size
-                              batch.clear()
-                          if batch.nonEmpty then
+                // Usable per the pre-check above: whole 64-byte entries, non-empty.
+                val filePath = java.nio.file.Paths.get(savedStoragePath.get)
+                locally {
+                  scala.concurrent
+                    .Future {
+                      val emptyRoot = ByteString(com.chipprbots.ethereum.mpt.MerklePatriciaTrie.EmptyRootHash)
+                      val zeroHash = ByteString(new Array[Byte](32))
+                      val raf = new java.io.RandomAccessFile(filePath.toFile, "r")
+                      val buf = new Array[Byte](64)
+                      val batch = new scala.collection.mutable.ArrayBuffer[StorageTask](10000)
+                      var totalTasks = 0
+                      try
+                        while raf.getFilePointer < raf.length() do
+                          raf.readFully(buf)
+                          val accountHash = ByteString(java.util.Arrays.copyOfRange(buf, 0, 32))
+                          val storageRoot = ByteString(java.util.Arrays.copyOfRange(buf, 32, 64))
+                          if accountHash != zeroHash && storageRoot.nonEmpty && storageRoot != emptyRoot then
+                            batch += StorageTask.createStorageTask(accountHash, storageRoot)
+                          if batch.size >= 10000 then
                             coordinator ! actors.StorageRangeCoordinator.AddStorageTasks(batch.toSeq)
                             totalTasks += batch.size
-                        finally raf.close()
-                        totalTasks
-                      }
-                      .foreach { count =>
-                        asyncLog.info(s"Recovery: streamed $count storage tasks from ${filePath}")
-                        // Signal no more tasks — sentinel allows completion
-                        coordinator ! actors.StorageRangeCoordinator.NoMoreStorageTasks
-                      }
-                  case None =>
-                    val out = StorageTaskFile.createFile(
-                      snapSyncConfig.taskFileDir,
-                      "fukuii-contract-storage-",
-                      ".bin"
-                    )
-                    ctx.log.warn(
-                      s"Recovery: storage task file ${savedStoragePath.filter(_.nonEmpty).getOrElse("<none persisted>")} " +
-                        s"is missing or not a whole number of 64-byte entries. Re-deriving storage tasks by walking the " +
-                        s"account trie at pivot $pivot into $out. Storage will be downloaded, not skipped."
-                    )
-                    val trieStorage = stateStorage.getBackingStorage(pivot)
-                    scala.concurrent
-                      .Future {
-                        StorageTaskFile.rederive(
-                          trieStorage,
-                          rootBs,
-                          out,
-                          tasks => coordinator ! actors.StorageRangeCoordinator.AddStorageTasks(tasks)
-                        )
-                      }
-                      .onComplete {
-                        case scala.util.Success(count) =>
-                          appStateStorage.putSnapSyncStorageFilePath(out.toString).commit()
-                          asyncLog.info(s"Recovery: re-derived $count storage tasks from the account trie into $out")
-                          coordinator ! actors.StorageRangeCoordinator.NoMoreStorageTasks
-                        case scala.util.Failure(e) =>
-                          // Do NOT send NoMoreStorageTasks: that would complete storage without downloading it.
-                          asyncLog.error(
-                            s"Recovery: re-deriving storage tasks from the account trie failed; storage stays " +
-                              s"incomplete. A restart will retry.",
-                            e
-                          )
-                      }
+                            batch.clear()
+                        if batch.nonEmpty then
+                          coordinator ! actors.StorageRangeCoordinator.AddStorageTasks(batch.toSeq)
+                          totalTasks += batch.size
+                      finally raf.close()
+                      totalTasks
+                    }
+                    .foreach { count =>
+                      asyncLog.info(s"Recovery: streamed $count storage tasks from ${filePath}")
+                      // Signal no more tasks — sentinel allows completion
+                      coordinator ! actors.StorageRangeCoordinator.NoMoreStorageTasks
+                    }
+                }
 
               // Bytecodes: stream codeHashes from persisted file if available. Each entry is 32 bytes
               // (raw keccak256 hash, written by AccountRangeCoordinator.uniqueCodeHashesOut).

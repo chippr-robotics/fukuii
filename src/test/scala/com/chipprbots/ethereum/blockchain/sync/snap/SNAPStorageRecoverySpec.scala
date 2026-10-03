@@ -36,8 +36,8 @@ import com.chipprbots.ethereum.testing.Tags.*
 /** SNAP storage-phase recovery when the persisted storage-task file is gone.
   *
   * A host reboot used to wipe the file from /tmp. Recovery then sent NoMoreStorageTasks at once and persisted
-  * storage-complete without downloading any storage. Now it re-derives the tasks from the account trie (or, when the
-  * trie is unreadable, restarts the accounts phase) and never marks storage complete on its own.
+  * storage-complete without downloading any storage. Now a missing, empty or truncated file restarts the accounts phase
+  * and storage is never marked complete on its own.
   */
 class SNAPStorageRecoverySpec extends ScalaTestWithActorTestKit() with AnyFlatSpecLike with Matchers with Eventually:
 
@@ -62,47 +62,31 @@ class SNAPStorageRecoverySpec extends ScalaTestWithActorTestKit() with AnyFlatSp
     Files.exists(file) shouldBe true
   }
 
-  it should "re-derive exactly the accounts with a non-empty storage root" taggedAs UnitTest in new Fixture:
-    val (root, contracts) = buildTrie()
-    val out = Files.createTempFile("rederive", ".bin")
-    val emitted = scala.collection.mutable.ArrayBuffer.empty[StorageTask]
+  it should "treat an empty file as unusable" taggedAs UnitTest in {
+    val empty = Files.createTempFile("empty", ".bin")
+    StorageTaskFile.isUsable(empty) shouldBe false
+  }
 
-    val count = StorageTaskFile.rederive(
-      storagesInstance.storages.stateStorage.getBackingStorage(Pivot),
-      root,
-      out,
-      emitted ++= _
-    )
+  "SNAPSyncController recovery" should "restart the accounts phase when the file is missing" taggedAs UnitTest in new Fixture:
+    assertRestartsAccounts(None)
 
-    count shouldBe contracts.size
-    emitted.map(t => (t.accountHash, t.storageRoot)).toSet shouldBe contracts.toSet
-    Files.size(out) shouldBe contracts.size * 64L
-    StorageTaskFile.isUsable(out) shouldBe true
+  it should "restart the accounts phase when the file is empty" taggedAs UnitTest in new Fixture:
+    val f = taskDir.resolve("empty.bin")
+    Files.createDirectories(taskDir)
+    Files.write(f, new Array[Byte](0))
+    assertRestartsAccounts(Some(f))
 
-  "SNAPSyncController recovery" should "re-derive storage tasks, not mark storage complete, when the file is missing" taggedAs UnitTest in new Fixture:
-    val (root, contracts) = buildTrie()
-    val missing = taskDir.resolve("gone.bin")
-    markAccountsComplete(root, Some(missing))
+  it should "restart the accounts phase when the file is truncated" taggedAs UnitTest in new Fixture:
+    val f = taskDir.resolve("truncated.bin")
+    Files.createDirectories(taskDir)
+    Files.write(f, new Array[Byte](100))
+    assertRestartsAccounts(Some(f))
 
-    spawnController() ! SNAPSyncController.Start
+  it should "restart the accounts phase when no path was persisted" taggedAs UnitTest in new Fixture:
+    assertRestartsAccounts(None, persistPath = false)
 
-    // The re-derived file is written under the task dir and its path replaces the dead one.
-    eventually(timeout(10.seconds)) {
-      val path = appState.getSnapSyncStorageFilePath().getOrElse("")
-      path should not be missing.toString
-      Files.size(java.nio.file.Paths.get(path)) shouldBe contracts.size * 64L
-      java.nio.file.Paths.get(path).getParent shouldBe taskDir
-    }
-    appState.isSnapSyncStorageComplete() shouldBe false
-    appState.isSnapSyncAccountsComplete() shouldBe true
-
-  it should "restart the accounts phase, not mark storage complete, when the file is missing and the trie is unreadable" taggedAs UnitTest in new Fixture:
-    markAccountsComplete(ByteString(kec256("no such trie".getBytes)), Some(taskDir.resolve("gone.bin")))
-
-    spawnController() ! SNAPSyncController.Start
-
-    eventually(timeout(10.seconds))(appState.isSnapSyncAccountsComplete() shouldBe false)
-    appState.isSnapSyncStorageComplete() shouldBe false
+  it should "restart the accounts phase under the Path storage scheme too" taggedAs UnitTest in new Fixture:
+    assertRestartsAccounts(None, scheme = com.chipprbots.ethereum.blockchain.sync.snap.StorageScheme.Path)
 
   it should "use a present task file unchanged" taggedAs UnitTest in new Fixture:
     val (root, _) = buildTrie()
@@ -166,7 +150,24 @@ class SNAPStorageRecoverySpec extends ScalaTestWithActorTestKit() with AnyFlatSp
         .and(appState.putSnapSyncBytecodeComplete(true))
       filePath.fold(updates)(p => updates.and(appState.putSnapSyncStorageFilePath(p.toString))).commit()
 
-    def spawnController(): TypedActorRef[SNAPSyncController.Command] =
+    def assertRestartsAccounts(
+        file: Option[Path],
+        persistPath: Boolean = true,
+        scheme: StorageScheme = StorageScheme.Hash
+    ): Unit =
+      val (root, _) = buildTrie()
+      markAccountsComplete(root, if persistPath then file.orElse(Some(taskDir.resolve("gone.bin"))) else None)
+      appState.putSnapSyncCodeHashesPath("/tmp/some-codehashes.bin").commit()
+
+      spawnController(scheme) ! SNAPSyncController.Start
+
+      eventually(timeout(10.seconds))(appState.isSnapSyncAccountsComplete() shouldBe false)
+      appState.isSnapSyncStorageComplete() shouldBe false
+      appState.isSnapSyncBytecodeComplete() shouldBe false
+      appState.getSnapSyncStorageFilePath().getOrElse("") shouldBe ""
+      appState.getSnapSyncCodeHashesPath().getOrElse("") shouldBe ""
+
+    def spawnController(scheme: StorageScheme = StorageScheme.Hash): TypedActorRef[SNAPSyncController.Command] =
       given ExecutionContext = system.executionContext
       testKit.spawn(
         SNAPSyncController(
@@ -179,7 +180,7 @@ class SNAPStorageRecoverySpec extends ScalaTestWithActorTestKit() with AnyFlatSp
           networkPeerManager.ref.toTyped[NetworkPeerManagerActor.Command],
           testKit.spawn(PeerEventBusActor.behavior()),
           syncConfig,
-          SNAPSyncConfig(taskFileDir = Some(taskDir)),
+          SNAPSyncConfig(taskFileDir = Some(taskDir), storageScheme = scheme),
           system.classicSystem.scheduler,
           CacheBasedBlacklist.empty(100),
           parent.ref

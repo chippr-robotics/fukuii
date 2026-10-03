@@ -1,21 +1,7 @@
 package com.chipprbots.ethereum.blockchain.sync.snap
 
-import org.apache.pekko.util.ByteString
-
-import java.io.BufferedOutputStream
-import java.io.FileOutputStream
 import java.nio.file.Files
 import java.nio.file.Path
-
-import scala.collection.mutable
-import scala.util.Success
-
-import com.chipprbots.ethereum.db.storage.MptStorage
-import com.chipprbots.ethereum.domain.Account
-import com.chipprbots.ethereum.mpt.HashNode
-import com.chipprbots.ethereum.mpt.LeafNode
-import com.chipprbots.ethereum.mpt.MptTraversals
-import com.chipprbots.ethereum.mpt.MptVisitors.PathTrackingLeafWalkVisitor
 
 /** The persisted contract-storage task list that lets the SNAP storage phase resume after a restart.
   *
@@ -24,8 +10,9 @@ import com.chipprbots.ethereum.mpt.MptVisitors.PathTrackingLeafWalkVisitor
   * (`<datadir>/snap/`), not `java.io.tmpdir`: a host reboot wipes /tmp, and a missing file used to be read as "nothing
   * left to download", which marked storage complete and pushed every contract's storage onto trie healing.
   *
-  * When the file is absent or damaged, [[rederive]] rebuilds it by walking the finished account trie: the same accounts
-  * and storage roots the coordinator saw when it first wrote the file.
+  * When the file is missing, empty or truncated while storage is incomplete, recovery restarts the accounts phase. The
+  * tasks are not rebuilt from the account trie: that trie is unhealed at this point (and Path-scheme nodes are keyed
+  * differently), so a walk is unreliable.
   */
 object StorageTaskFile:
 
@@ -43,42 +30,9 @@ object StorageTaskFile:
         Files.createTempFile(d, prefix, suffix)
       case None => Files.createTempFile(prefix, suffix)
 
-  /** A file is usable when it exists and holds a whole number of 64-byte entries. */
-  def isUsable(path: Path): Boolean =
-    Files.isRegularFile(path) && Files.size(path) % EntrySize == 0
-
-  /** Walk the account trie at `stateRoot`, write a `(accountHash, storageRoot)` entry to `out` for every account with a
-    * non-empty storage root, and hand the tasks to `emit` in batches. Throws if the trie cannot be read. Returns the
-    * number of tasks.
+  /** A file is usable when it exists, is non-empty and holds a whole number of 64-byte entries. I/O errors mean
+    * unusable.
     */
-  def rederive(
-      storage: MptStorage,
-      stateRoot: ByteString,
-      out: Path,
-      emit: Seq[StorageTask] => Unit,
-      batchSize: Int = 10000
-  ): Long =
-    val emptyRoot = Account.EmptyStorageRootHash
-    val batch = mutable.ArrayBuffer.empty[StorageTask]
-    var total = 0L
-    val os = new BufferedOutputStream(new FileOutputStream(out.toFile), 65536)
-    try
-      val onLeaf: (ByteString, LeafNode) => Unit = (accountHash, leaf) =>
-        Account(leaf.value) match
-          case Success(account) if account.storageRoot != emptyRoot && account.storageRoot.value.nonEmpty =>
-            os.write(accountHash.toArray.padTo(32, 0.toByte), 0, 32)
-            os.write(account.storageRoot.value.toArray.padTo(32, 0.toByte), 0, 32)
-            batch += StorageTask.createStorageTask(accountHash, account.storageRoot.value)
-            total += 1
-            if batch.size >= batchSize then
-              emit(batch.toSeq)
-              batch.clear()
-          case _ => ()
-      MptTraversals.dispatch(
-        HashNode(stateRoot.toArray),
-        new PathTrackingLeafWalkVisitor(storage, ByteString.empty, onLeaf)
-      )
-      if batch.nonEmpty then emit(batch.toSeq)
-      os.flush()
-    finally os.close()
-    total
+  def isUsable(path: Path): Boolean =
+    try Files.isRegularFile(path) && Files.size(path) > 0 && Files.size(path) % EntrySize == 0
+    catch case _: java.io.IOException => false
