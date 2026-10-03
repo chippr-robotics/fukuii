@@ -22,10 +22,12 @@ import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController
 import com.chipprbots.ethereum.crypto.kec256
 import com.chipprbots.ethereum.db.storage.BfsEntry
 import com.chipprbots.ethereum.db.storage.BfsQueueStorage
+import com.chipprbots.ethereum.db.storage.EvmCodeStorage
 import com.chipprbots.ethereum.db.storage.HealingFrontierStorage
 import com.chipprbots.ethereum.db.storage.InMemoryBfsQueueStorage
 import com.chipprbots.ethereum.db.storage.MptStorage
 import com.chipprbots.ethereum.db.storage.PathNodeStorage
+import com.chipprbots.ethereum.domain.Account
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor
 import com.chipprbots.ethereum.network.Peer
 import com.chipprbots.ethereum.network.p2p.messages.SNAP.GetTrieNodes
@@ -93,7 +95,11 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
     // default false (bare construction stays on the spec-004 path); the production default-on flows from SNAPSyncConfig
     // via the spawn sites. The content-hash store gate and the finalizeSnapSync anchor guard are byte-untouched on BOTH
     // paths — under the flag the gate matches BY CONSTRUCTION (fetch root == completeness root), never by weakening it.
-    movingRootDeltaHeal: Boolean = false
+    movingRootDeltaHeal: Boolean = false,
+    // Where contract bytecode lives. A healed account leaf whose codeHash is not in here is reported to the controller
+    // (SNAPSyncController.HealedCodeHashes) so the bytecode is fetched before SNAP finalises. None (bare construction,
+    // most specs) reports nothing, byte-identical to before.
+    evmCodeStorage: Option[EvmCodeStorage] = None
 ):
 
   import TrieNodeHealingCoordinator.*
@@ -125,6 +131,10 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
     new java.util.concurrent.atomic.AtomicInteger(0)
   private var completedTaskCount: Int = 0
   private var healingMilestonePct: Int = -1
+
+  // codeHashes of account leaves healed in the response being processed whose bytecode is not in `evmCodeStorage`.
+  // Filled by discoverMissingChildren, drained and sent to the controller once per response.
+  private val healedCodeHashesThisResponse: mutable.LinkedHashSet[ByteString] = mutable.LinkedHashSet.empty
 
   /** Dedicated dispatcher for the batched raw-node RocksDB flush. Tests inject their own EC; production looks up
     * `healing-writer-dispatcher` from the actor system. Keeps the blocking write off `sync-dispatcher` so other sync
@@ -1630,6 +1640,12 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
           )
     }
 
+    // A healed account leaf brings an account that account-range sync never saw, so nothing else will ever fetch its
+    // bytecode (the code-hash list is built from account-range responses). Hand the missing ones to the controller,
+    // which fetches them before it finalises SNAP. Sent BEFORE any completion signal this actor emits afterwards
+    // (same sender, ordered), so the controller always knows of them by the time it is told healing is done.
+    flushHealedCodeHashes()
+
     // Re-queue tasks not satisfied by this response (server skipped or didn't have them).
     // Restore to dedup set so QueueMissingNodes doesn't add duplicates (BUG-H1 fix).
     tasksForRequest.foreach { task =>
@@ -2244,6 +2260,21 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
     val bfsSeeds = seeds.map(e => (e.hash, e.pathset, e.pathset.size > 1))
     startFrontierBFS(bfsSeeds, (_: Long) => selfRef ! VerificationBFSComplete)
 
+  /** Remember `account`'s codeHash for the controller if it names code this node does not hold. */
+  private def recordHealedCodeHash(account: Account): Unit =
+    evmCodeStorage.foreach { codes =>
+      val codeHash = account.codeHash
+      if codeHash != Account.EmptyCodeHash && codes.get(codeHash.value).isEmpty then
+        healedCodeHashesThisResponse += codeHash.value
+    }
+
+  private def flushHealedCodeHashes(): Unit =
+    if healedCodeHashesThisResponse.nonEmpty then
+      val hashes = healedCodeHashesThisResponse.toSeq
+      healedCodeHashesThisResponse.clear()
+      log.info(s"[HEAL-CODE] ${hashes.size} healed account(s) lack bytecode — reporting codeHashes to the controller")
+      snapSyncController ! SNAPSyncController.HealedCodeHashes(hashes)
+
   /** Inline child discovery after each healed node — Besu/geth scheduler-driven alignment. Decodes the healed node,
     * discovers child hashes, checks storage, queues missing children. Makes healing self-feeding: root → children →
     * grandchildren top-down without trie walk.
@@ -2317,6 +2348,7 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
             // ARCH-LEAF-SEED: Account trie leaf — decode account, seed storage trie if missing.
             // Besu equivalent: getChildRequests() → getStorageTrieNodeRequests() on account leaf values.
             Account(leaf.value).foreach { account =>
+              recordHealedCodeHash(account)
               if account.storageRoot != Account.EmptyStorageRootHash &&
                 !pendingHashSet.contains(account.storageRoot.value)
               then
@@ -2693,7 +2725,8 @@ object TrieNodeHealingCoordinator:
       decoupledHealServeRoot: Boolean = false,
       decoupledHealMaxAttemptsNoRefresh: Int = DefaultDecoupledHealMaxAttemptsNoRefresh,
       // spec 009 (Moving-Root Delta Heal) — plumbing only; no behavior reads it yet (see impl ctor).
-      movingRootDeltaHeal: Boolean = false
+      movingRootDeltaHeal: Boolean = false,
+      evmCodeStorage: Option[EvmCodeStorage] = None
   ): Behavior[Command] =
     Behaviors.setup { context =>
       Behaviors.withTimers { timers =>
@@ -2726,7 +2759,8 @@ object TrieNodeHealingCoordinator:
           frontierPersistenceEnabled = frontierPersistenceEnabled,
           decoupledHealServeRoot = decoupledHealServeRoot,
           decoupledHealMaxAttemptsNoRefresh = decoupledHealMaxAttemptsNoRefresh,
-          movingRootDeltaHeal = movingRootDeltaHeal
+          movingRootDeltaHeal = movingRootDeltaHeal,
+          evmCodeStorage = evmCodeStorage
         ).start()
       }
     }

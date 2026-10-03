@@ -32,6 +32,7 @@ import com.chipprbots.ethereum.db.storage.PathNodeStorage
 import com.chipprbots.ethereum.db.storage.RocksDbBfsQueueStorage
 import com.chipprbots.ethereum.db.storage.SnapSyncProgressStorage
 import com.chipprbots.ethereum.db.storage.StateStorage
+import com.chipprbots.ethereum.domain.Account
 import com.chipprbots.ethereum.domain.Block
 import com.chipprbots.ethereum.domain.BlockBody
 import com.chipprbots.ethereum.domain.BlockHeader
@@ -247,6 +248,18 @@ private class SNAPSyncControllerImpl(
   private var bytecodePhaseComplete: Boolean = false
   private var storagePhaseComplete: Boolean = false
   private var storagePhaseForceCompleted: Boolean = false
+
+  // Bytecode of accounts that arrived through trie HEALING. Account-range sync builds its code-hash list from the
+  // account responses it receives, so an account created after the pivot and delivered only by healing is invisible to
+  // it: the bytecode phase finishes with that code never requested. The healing coordinator reports those codeHashes
+  // (HealedCodeHashes); they are fetched through the bytecode coordinator and SNAP is not finalised until they are
+  // present (or `HealedCodeWaitMs` passes). Whatever is still missing at finalisation keeps `bytecodeRecoveryDone`
+  // unset, so the next start's recovery scan finds it, and the importer fetches it on demand in the meantime.
+  private val healedCodeHashes: mutable.LinkedHashSet[ByteString] = mutable.LinkedHashSet.empty
+  private var awaitingHealedCode: Boolean = false
+  private var healedCodeWaitExhausted: Boolean = false
+  // The bytecode phase was force-completed with tasks abandoned (stagnation): some bytecode was never fetched.
+  private var bytecodeForceCompleted: Boolean = false
 
   private val progressMonitor = new SyncProgressMonitor(scheduler)
 
@@ -781,6 +794,10 @@ private class SNAPSyncControllerImpl(
         case StateHealingComplete =>
           ctx.log.warn("Unexpected StateHealingComplete in idle — dropped")
           Behaviors.same
+        case _: HealedCodeHashes =>
+          ctx.log.debug("Dropping stale HealedCodeHashes in idle"); Behaviors.same
+        case HealedCodeWaitTimeout =>
+          ctx.log.debug("Dropping stale HealedCodeWaitTimeout in idle"); Behaviors.same
         case HealingAllPeersStateless =>
           ctx.log.debug("Dropping stale HealingAllPeersStateless in idle"); Behaviors.same
         case StateValidationComplete =>
@@ -1389,6 +1406,31 @@ private class SNAPSyncControllerImpl(
           checkAllDownloadsComplete()
         Behaviors.same
 
+      case HealedCodeHashes(codeHashes) =>
+        queueHealedCode(codeHashes)
+        Behaviors.same
+
+      // The bytecode coordinator re-announces completion every time its queue drains, so this is the answer to the
+      // tasks `queueHealedCode` added.
+      case ByteCodeSyncComplete if bytecodePhaseComplete && awaitingHealedCode =>
+        dropHealedCodeNowPresent()
+        if healedCodeHashes.isEmpty then
+          ctx.log.info("[HEAL-CODE] All bytecode of healed accounts is present — finalising SNAP")
+          completeSnapSync()
+        else ctx.log.info(s"[HEAL-CODE] ${healedCodeHashes.size} healed-account codeHash(es) still missing — waiting")
+        Behaviors.same
+
+      case HealedCodeWaitTimeout if awaitingHealedCode =>
+        dropHealedCodeNowPresent()
+        ctx.log.warn(
+          s"[HEAL-CODE] Gave up waiting for the bytecode of healed accounts after $HealedCodeWaitMs ms: " +
+            s"${healedCodeHashes.size} codeHash(es) still missing. Finalising SNAP without marking bytecode recovery " +
+            "done; the next start's recovery scan fetches them, and block import fetches them on demand."
+        )
+        healedCodeWaitExhausted = true
+        completeSnapSync()
+        Behaviors.same
+
       case ByteCodeSyncComplete if !bytecodePhaseComplete =>
         bytecodePhaseComplete = true
         appStateStorage.putSnapSyncBytecodeComplete(true).commit()
@@ -1971,8 +2013,12 @@ private class SNAPSyncControllerImpl(
 
   /** Force-complete bytecode sync if no progress for BytecodeStagnationThreshold.
     *
-    * Only fires during ByteCodeAndStorageSync when noMoreTasksExpected is set (post-AccountRange). Missing bytecodes
-    * are recovered per-block during import via BytecodeRecoveryActor.
+    * Only fires during ByteCodeAndStorageSync when noMoreTasksExpected is set (post-AccountRange). The abandoned
+    * bytecodes are NOT fetched by anything on the way to regular sync. Two things pick them up: `finalizeSnapSync`
+    * leaves `bytecodeRecoveryDone` unset after a force-completion, so the NEXT START's `BytecodeRecoveryActor` scan
+    * finds and downloads them; and until then `BlockImporter` fetches the code of a contract a block touches over SNAP
+    * GetByteCodes (`MissingCodeException`). This comment used to say they were recovered "per-block during import via
+    * BytecodeRecoveryActor", which nothing did: the actor runs only at startup, and finalisation marked its work done.
     */
   private def maybeForceCompleteIfBytecodeStagnant(progress: actors.ByteCodeCoordinator.ByteCodeProgress): Unit =
     if currentPhase == ByteCodeAndStorageSync && !bytecodePhaseComplete then
@@ -1985,8 +2031,9 @@ private class SNAPSyncControllerImpl(
           ctx.log.warn(
             s"ByteCode sync stalled: no progress for ${stalledForMs / 1000}s " +
               s"(threshold=${BytecodeStagnationThreshold.toSeconds}s, downloaded=${progress.bytecodesDownloaded}). " +
-              s"Force-completing — missing bytecodes deferred to import-time recovery."
+              s"Force-completing — missing bytecodes left to on-demand fetch at import and the next start's recovery scan."
           )
+          bytecodeForceCompleted = true
           bytecodeCoordinator.foreach(_ ! actors.ByteCodeCoordinator.ForceCompleteByteCodes)
 
   /** Geth-aligned: check if all 3 concurrent download phases are complete. Only transitions to healing when accounts +
@@ -3691,7 +3738,8 @@ private class SNAPSyncControllerImpl(
                   scopedHealMaxPaths = snapSyncConfig.scopedHealMaxPaths,
                   decoupledHealServeRoot = snapSyncConfig.decoupledHealServeRoot,
                   decoupledHealMaxAttemptsNoRefresh = snapSyncConfig.decoupledHealMaxAttemptsNoRefresh,
-                  movingRootDeltaHeal = snapSyncConfig.movingRootDeltaHeal
+                  movingRootDeltaHeal = snapSyncConfig.movingRootDeltaHeal,
+                  evmCodeStorage = Some(evmCodeStorage)
                 )
               )
               .onFailure[Throwable](
@@ -3769,7 +3817,8 @@ private class SNAPSyncControllerImpl(
                     scopedHealMaxPaths = snapSyncConfig.scopedHealMaxPaths,
                     decoupledHealServeRoot = snapSyncConfig.decoupledHealServeRoot,
                     decoupledHealMaxAttemptsNoRefresh = snapSyncConfig.decoupledHealMaxAttemptsNoRefresh,
-                    movingRootDeltaHeal = snapSyncConfig.movingRootDeltaHeal
+                    movingRootDeltaHeal = snapSyncConfig.movingRootDeltaHeal,
+                    evmCodeStorage = Some(evmCodeStorage)
                   )
                 )
                 .onFailure[Throwable](
@@ -4808,6 +4857,51 @@ private class SNAPSyncControllerImpl(
       )
       appStateStorage.putSnapSyncPivotBlock(b).and(appStateStorage.putSnapSyncStateRoot(r.value)).commit()
 
+  /** Forget healed codeHashes whose bytecode has since been stored. */
+  private def dropHealedCodeNowPresent(): Unit =
+    healedCodeHashes.filterInPlace(h => evmCodeStorage.get(h).isEmpty)
+
+  /** Record the codeHashes the healing coordinator reported and send the missing ones to the bytecode coordinator,
+    * spawning one if the SNAP children were already torn down.
+    */
+  private def queueHealedCode(codeHashes: Seq[ByteString]): Unit =
+    val missing = codeHashes.filter(h => h != Account.EmptyCodeHash.value && evmCodeStorage.get(h).isEmpty)
+    if missing.nonEmpty then
+      healedCodeHashes ++= missing
+      ctx.log.info(
+        s"[HEAL-CODE] Fetching ${missing.size} bytecode(s) of healed accounts (outstanding: ${healedCodeHashes.size})"
+      )
+      if bytecodeCoordinator.isEmpty then
+        coordinatorGeneration += 1
+        bytecodeCoordinator = Some(
+          ctx.spawn(
+            Behaviors
+              .supervise(
+                actors.ByteCodeCoordinator(
+                  evmCodeStorage = evmCodeStorage,
+                  networkPeerManager = networkPeerManager,
+                  requestTracker = requestTracker,
+                  batchSize = ByteCodeTask.DEFAULT_BATCH_SIZE,
+                  snapSyncController = ctx.self
+                )
+              )
+              .onFailure[Throwable](
+                SupervisorStrategy.restartWithBackoff(1.second, 10.seconds, 0.2).withMaxRestarts(3)
+              ),
+            s"bytecode-coordinator-$coordinatorGeneration",
+            org.apache.pekko.actor.typed.DispatcherSelector.fromConfig("sync-dispatcher")
+          )
+        )
+        bytecodeCoordinator.foreach(_ ! actors.ByteCodeCoordinator.StartByteCodeSync(Seq.empty))
+      bytecodeCoordinator.foreach { coordinator =>
+        coordinator ! actors.ByteCodeCoordinator.AddByteCodeTasks(missing)
+        // Answers `ByteCodeSyncComplete` when the queue drains, and keeps the coordinator from waiting for more.
+        coordinator ! actors.ByteCodeCoordinator.NoMoreByteCodeTasks
+      }
+      if !timers.isTimerActive(RequestByteCodes) then
+        timers.startTimerWithFixedDelay(RequestByteCodes, RequestByteCodes, 1.second)
+      requestByteCodes()
+
   /** State sync + healing + validation finished — anchor the pivot and hand off to regular sync immediately.
     *
     * Historical chain backfill (genesis → pivot) is decoupled: we do not block here waiting for it. Instead,
@@ -4830,7 +4924,21 @@ private class SNAPSyncControllerImpl(
       stateRoot.map(_.value.toHex.take(16)).getOrElse("none"),
       appStateStorage.getSnapSyncStateRoot().map(_.toHex.take(16)).getOrElse("none")
     )
-    pivotBlock.map(p => finalizeSnapSync(p)).getOrElse(Behaviors.same)
+    dropHealedCodeNowPresent()
+    if healedCodeHashes.nonEmpty && !healedCodeWaitExhausted then
+      // Healing delivered accounts whose bytecode is not here. Finalising now hands regular sync a state in which a
+      // call to one of them runs as a call to an EOA. Hold until the bytecode arrives or the wait runs out; every
+      // caller of this method ignores the Behavior when it is `Behaviors.same`, so holding is just not finalising.
+      if !awaitingHealedCode then
+        awaitingHealedCode = true
+        ctx.log.info(s"[HEAL-CODE] Holding SNAP finalisation for ${healedCodeHashes.size} healed-account bytecode(s)")
+        timers.startSingleTimer(HealedCodeWaitTimerKey, HealedCodeWaitTimeout, HealedCodeWaitMs.millis)
+        queueHealedCode(healedCodeHashes.toSeq)
+      Behaviors.same
+    else
+      timers.cancel(HealedCodeWaitTimerKey)
+      awaitingHealedCode = false
+      pivotBlock.map(finalizeSnapSync).getOrElse(Behaviors.same)
 
   /** Anchor the pivot, mark SNAP state done, and hand off to the parent. Always emits `SnapSyncFinalized(pivot)`. Emits
     * `Done` either immediately (no backfill in flight) or later from `completedWithBackfill` after
@@ -4923,11 +5031,21 @@ private class SNAPSyncControllerImpl(
           // → startup proceeds directly to regular sync. There is no inconsistent half-written
           // state. commitSync() flushes the OS write buffer to disk before returning, eliminating
           // the ~5-30s dirty-writeback window that previously caused spurious SNAP-RECOVERY.
-          appStateStorage
-            .snapSyncDone()
-            .and(appStateStorage.bytecodeRecoveryDone())
-            .and(appStateStorage.storageRecoveryDone())
-            .commitSync()
+          //
+          // `bytecodeRecoveryDone` is the claim "no account's bytecode is missing". Healing delivered accounts whose
+          // bytecode may still be absent (a peer would not serve it within the wait): leave the flag unset so the
+          // next start's recovery scan finds them. Previously it was set unconditionally, which is how a node came to
+          // hold accounts with a codeHash and no code, forever.
+          dropHealedCodeNowPresent()
+          val bytecodeComplete = healedCodeHashes.isEmpty && !bytecodeForceCompleted
+          if !bytecodeComplete then
+            ctx.log.warn(
+              s"[HEAL-CODE] bytecode incomplete at finalisation (healed-account codeHashes missing: " +
+                s"${healedCodeHashes.size}, bytecode phase force-completed: $bytecodeForceCompleted) — " +
+                "bytecodeRecoveryDone NOT set"
+            )
+          val doneFlags = appStateStorage.snapSyncDone().and(appStateStorage.storageRecoveryDone())
+          (if bytecodeComplete then doneFlags.and(appStateStorage.bytecodeRecoveryDone()) else doneFlags).commitSync()
 
           ctx.log.info(s"SNAP sync completed successfully at block $pivot (hash=${pivotHash.value.take(8).toHex})")
 
@@ -5305,6 +5423,15 @@ object SNAPSyncController:
     * controller routes it to the lazy-heal handoff instead of declaring the trie validated.
     */
   case object StateHealingAbandoned extends Command
+  /** TrieNodeHealingCoordinator -> controller: healed account leaves whose bytecode is not in `EvmCodeStorage`. */
+  final case class HealedCodeHashes(codeHashes: Seq[ByteString]) extends Command
+
+  /** The bounded wait for that bytecode ran out. */
+  private[snap] case object HealedCodeWaitTimeout extends Command
+
+  /** How long finalisation waits for the bytecode of healed accounts before giving up and leaving it to recovery. */
+  val HealedCodeWaitMs: Long = 5 * 60 * 1000L
+  private[snap] val HealedCodeWaitTimerKey: String = "healed-code-wait"
   case object HealingAllPeersStateless extends Command
   final case class HealingRootUnservable(root: ByteString) extends Command
   case object StateValidationComplete extends Command
