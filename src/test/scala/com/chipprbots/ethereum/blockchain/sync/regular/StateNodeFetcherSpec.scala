@@ -22,6 +22,8 @@ import com.chipprbots.ethereum.blockchain.sync.regular.BlockFetcher.FetchedState
 import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.NodeData
 import com.chipprbots.ethereum.network.p2p.messages.SNAP.GetByteCodes
 import com.chipprbots.ethereum.network.p2p.messages.SNAP.GetTrieNodes
+import com.chipprbots.ethereum.network.p2p.messages.SNAP.TrieNodes
+import com.chipprbots.ethereum.testing.PeerTestHelpers
 import com.chipprbots.ethereum.testing.Tags.*
 
 /** Targeted tests for the Bug 30 StateNodeFetcher fixes:
@@ -191,4 +193,53 @@ class StateNodeFetcherSpec
       }
 
       replyToProbe.expectNoMessage(500.millis)
+    "does not switch to a fallback root when the wanted node IS the state root (it can only return the other root's node)" taggedAs UnitTest in new TestSetup:
+      // Soak 2026-10-03: block 317603 needs the parent state root node (path []). A different root's path [] is a
+      // different node, so a switch can never match and used to burn the whole retry budget on wrong-hash replies.
+      val stateRoot: ByteString = ByteString(Array.fill[Byte](32)(0x46.toByte))
+      val fallbackRoot: ByteString = ByteString(Array.fill[Byte](32)(0xdb.toByte))
+      fetcher ! StateNodeFetcher.FetchStateNode(
+        hash = stateRoot,
+        originalSender = replyToProbe.ref,
+        stateRoot = Some(stateRoot),
+        paths = Some(Seq(Seq(ByteString.empty))),
+        fallbackStateRoot = Some(fallbackRoot)
+      )
+      peersClientProbe
+        .expectMsgClass(3.seconds, classOf[PeersClient.Request[?]])
+        .message
+        .asInstanceOf[GetTrieNodes]
+        .rootHash shouldBe stateRoot
+
+      // The peer answers with a node that is not the wanted hash.
+      val peer = PeerTestHelpers.createTestPeer("p1", TestProbe().ref)
+      fetcher ! StateNodeFetcher.AdaptedMessage(peer, TrieNodes(1, Seq(ByteString(Array.fill[Byte](40)(1)))))
+
+      // Must rotate peers on the SAME root (blacklist, then a retry after the backoff), never re-ask under fallbackRoot.
+      val msgs = peersClientProbe.receiveWhile(2.seconds) { case m => m }
+      msgs
+        .collect { case r: PeersClient.Request[?] => r.message }
+        .collect { case g: GetTrieNodes => g.rootHash }
+        .foreach(_ should not be fallbackRoot)
+      // Bounded: exhaustion still signals BlockImporter after the retry budget.
+      (1 to StateNodeFetcher.MaxStateNodeFetchRetries).foreach(_ => fetcher ! StateNodeFetcher.RetryStateNodeRequest)
+      replyToProbe.expectMsgPF(3.seconds) { case FetchedStateNode(NodeData(values)) => values shouldBe empty }
+
+    "still switches to the fallback root for a non-root node (existing behaviour preserved)" taggedAs UnitTest in new TestSetup:
+      val stateRoot: ByteString = ByteString(Array.fill[Byte](32)(0x46.toByte))
+      val fallbackRoot: ByteString = ByteString(Array.fill[Byte](32)(0xdb.toByte))
+      fetcher ! StateNodeFetcher.FetchStateNode(
+        hash = targetHash,
+        originalSender = replyToProbe.ref,
+        stateRoot = Some(stateRoot),
+        paths = Some(Seq(Seq(ByteString(Array(0x01.toByte, 0x02.toByte))))),
+        fallbackStateRoot = Some(fallbackRoot)
+      )
+      peersClientProbe.expectMsgClass(3.seconds, classOf[PeersClient.Request[?]])
+      val peer = PeerTestHelpers.createTestPeer("p1", TestProbe().ref)
+      fetcher ! StateNodeFetcher.AdaptedMessage(peer, TrieNodes(1, Seq(ByteString(Array.fill[Byte](40)(1)))))
+      val second = peersClientProbe.fishForMessage(3.seconds) {
+        case _: PeersClient.Request[?] => true; case _ => false
+      }
+      second.asInstanceOf[PeersClient.Request[?]].message.asInstanceOf[GetTrieNodes].rootHash shouldBe fallbackRoot
   }
