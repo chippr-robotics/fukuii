@@ -228,6 +228,14 @@ object RegularSync:
         if internally then fetcher ! InternalLastBlockImport(blockNumber)
         running(newState, fetcher, importer, supervisor, broadcaster, ctx, respawn)
 
+      case msg: SyncProtocol.MissingCodeNeedsBulkRecovery =>
+        ctx.log.warn(
+          "Block {} needs contract code this node never stored; forwarding to SyncController for bulk bytecode recovery",
+          msg.blockNumber
+        )
+        supervisor ! SyncController.WrappedSyncProtocol(msg)
+        Behaviors.same
+
       case msg: SyncProtocol.RegularSyncStuck =>
         // Forward escape-valve signal to SyncController. BlockImporter detects this condition and emits the
         // message; we just relay it up so SyncController can re-trigger SNAP sync from a recent pivot.

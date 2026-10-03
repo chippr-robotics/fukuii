@@ -819,6 +819,218 @@ class SyncControllerSpec
     second.exists(_.contains(stranded)) shouldBe false
   }
 
+  // ── Bulk bytecode recovery on a MissingCodeException at import ────────────────────────────────
+  // A SNAP-synced node can lack thousands of contracts' code. One fetch per contract is one full re-execution of the
+  // block each (devnet-8: ~20 s each, ~11 h for one chain). The first miss must instead run ONE recovery scan and fetch
+  // every gap in batched GetByteCodes, then resume regular sync.
+
+  /** N contracts whose accounts are in a real state trie and whose code is NOT stored, plus a network that serves it.
+    * `bestRootInTrie`: the trie is written under the best block (pivot's root then names nothing); otherwise under the
+    * pivot (best block's root names nothing: a pruned best root).
+    */
+  private class BulkScenario(
+      testSetup: TestSetup,
+      n: Int = 200,
+      trieAtBest: Boolean = false,
+      prunedEverywhere: Boolean = false
+  ):
+    import testSetup.*
+    import java.util.concurrent.ConcurrentLinkedQueue
+    val appState = storagesInstance.storages.appStateStorage
+    val evmCodes = storagesInstance.storages.evmCodeStorage
+    val codes: Vector[ByteString] =
+      (0 until n).map(i => ByteString(Array[Byte](0x60, (i >> 8).toByte, (i & 0xff).toByte, 0x00))).toVector
+    val codeHashes: Vector[ByteString] = codes.map(c => com.chipprbots.ethereum.crypto.kec256(c))
+    val codeByHash: Map[ByteString, ByteString] = codeHashes.zip(codes).toMap
+
+    private val world0 = com.chipprbots.ethereum.ledger.InMemoryWorldStateProxy(
+      evmCodes,
+      blockchain.getBackingMptStorage(100),
+      (_: BigInt) => None,
+      UInt256.Zero,
+      ByteString(com.chipprbots.ethereum.mpt.MerklePatriciaTrie.EmptyRootHash),
+      noEmptyAccounts = false,
+      ethCompatibleStorage = true
+    )
+    private val world = codeHashes.zipWithIndex.foldLeft(world0) { case (w, (h, i)) =>
+      w.saveAccount(
+        Address(ByteString(Array.fill[Byte](18)(0x07) ++ Array[Byte]((i >> 8).toByte, (i & 0xff).toByte))),
+        Account(nonce = UInt256(1), codeHash = CodeHash(h))
+      )
+    }
+    val trieRoot: ByteString = com.chipprbots.ethereum.ledger.InMemoryWorldStateProxy.persistState(world).stateRootHash
+    private val nowhere: ByteString = ByteString(Array.fill[Byte](32)(0x5a))
+    codeHashes.foreach(h => evmCodes.get(h) shouldBe None)
+
+    private val pivotRoot = if trieAtBest || prunedEverywhere then nowhere else trieRoot
+    private val bestRoot = if trieAtBest && !prunedEverywhere then trieRoot else nowhere
+    private val pivotHeader =
+      Fixtures.Blocks.Genesis.header.copy(number = BlockNumber(100), stateRoot = TrieRoot(pivotRoot))
+    private val bestHeader =
+      Fixtures.Blocks.Genesis.header.copy(number = BlockNumber(900), stateRoot = TrieRoot(bestRoot))
+    blockchainWriter.storeBlock(Block(pivotHeader, BlockBody.empty)).commit()
+    blockchainWriter.storeBlock(Block(bestHeader, BlockBody.empty)).commit()
+    appState
+      .snapSyncDone()
+      .and(appState.bytecodeRecoveryDone())
+      .and(appState.storageRecoveryDone())
+      .and(appState.putSnapSyncStateRoot(pivotRoot))
+      .and(appState.putSnapSyncPivotBlock(BigInt(100)))
+      .and(appState.putBestBlockInfo(com.chipprbots.ethereum.domain.appstate.BlockInfo(bestHeader.hash.value, 900)))
+      .commit()
+
+    val requests = new ConcurrentLinkedQueue[Seq[ByteString]]()
+    @volatile private var snapTarget
+        : Option[TypedActorRef[com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController.Command]] = None
+    @volatile var doneFlagAtFirstRequest: Option[Boolean] = None
+    networkPeerManager.setAutoPilot(
+      new AutoPilot:
+        override def run(sender: ActorRef, msg: Any): AutoPilot =
+          msg.asMatchable match
+            case NetworkPeerManagerActor.GetHandshakedPeersCmd(replyTo) =>
+              replyTo ! HandshakedPeers(snapPeerAt(100))
+            case NetworkPeerManagerActor.RegisterSnapSyncControllerCmd(ref) => snapTarget = Some(ref)
+            case NetworkPeerManagerActor.SendMessageCmd(message, _) =>
+              message.underlyingMsg.asMatchable match
+                case com.chipprbots.ethereum.network.p2p.messages.SNAP.GetByteCodes(requestId, hashes, _) =>
+                  if doneFlagAtFirstRequest.isEmpty then
+                    doneFlagAtFirstRequest = Some(appState.isBytecodeRecoveryDone())
+                  requests.add(hashes)
+                  snapTarget.foreach(
+                    _ ! SNAPSyncController.ByteCodesResponse(
+                      com.chipprbots.ethereum.network.p2p.messages.SNAP
+                        .ByteCodes(requestId, hashes.flatMap(codeByHash.get))
+                    )
+                  )
+                case _ => ()
+            case _ => ()
+          this
+    )
+
+    def regularSyncChild: Option[String] =
+      syncController.children.map(_.path.name).find(_.startsWith("regular-sync"))
+
+    /** Start regular sync, hit a missing code (twice: the repeat must not start a second scan), and wait for regular
+      * sync to be running again after the recovery.
+      */
+    def startRegularSync(): String =
+      syncController ! SyncController.WrappedSyncProtocol(SyncProtocol.Start)
+      eventually {
+        someTimePasses()
+        assert(regularSyncChild.isDefined)
+      }
+      regularSyncChild.get
+
+    /** Send the escalation request and let a few controller ticks pass; true if regular sync was left alone. */
+    def requestIsIgnored(first: String): Boolean =
+      syncController ! SyncController.WrappedSyncProtocol(
+        SyncProtocol.MissingCodeNeedsBulkRecovery(500, codeHashes.head)
+      )
+      (1 to 5).foreach(_ => someTimePasses())
+      regularSyncChild.contains(first) && requests.isEmpty && appState.isBytecodeRecoveryDone()
+
+    def runEscalation(): Unit =
+      val first = startRegularSync()
+      val trigger = SyncProtocol.MissingCodeNeedsBulkRecovery(500, codeHashes.head)
+      syncController ! SyncController.WrappedSyncProtocol(trigger)
+      syncController ! SyncController.WrappedSyncProtocol(trigger)
+      eventually {
+        someTimePasses()
+        assert(
+          regularSyncChild.exists(_ != first),
+          s"regular sync was not restarted after the recovery (children=${syncController.children.map(_.path.name).toList}, " +
+            s"requests=${requests.size}, stored=${codeHashes.count(h => evmCodes.get(h).isDefined)})"
+        )
+      }
+
+  private def hexOrder: Ordering[ByteString] = Ordering.by[ByteString, String](_.toArray.map("%02x".format(_)).mkString)
+
+  "SyncController" should
+    "run ONE bytecode recovery for a MissingCodeException at import: fetch all N missing codes in batches, then resume regular sync" taggedAs (
+      UnitTest,
+      SyncTest
+    ) in withRecoveryTestSetup() { testSetup =>
+      val sc = new BulkScenario(testSetup, trieAtBest = false)
+      sc.runEscalation()
+      import scala.jdk.CollectionConverters.*
+      val requested = sc.requests.asScala.toVector
+      withClue(s"request sizes ${requested.map(_.size)}: ") {
+        requested.map(_.size).sorted shouldBe Vector(30, 85, 85) // 200 codes in batches of 85
+        requested.flatten.sorted(hexOrder) shouldBe sc.codeHashes.sorted(hexOrder)
+      }
+      requested.flatten.distinct.size shouldBe sc.codeHashes.size // each fetched exactly once: one scan, not two
+      sc.codeHashes.foreach(h => sc.evmCodes.get(h) shouldBe defined)
+      sc.doneFlagAtFirstRequest shouldBe Some(false) // un-done while the recovery was running
+      sc.appState.isBytecodeRecoveryDone() shouldBe true // done again once every code is stored
+      sc.appState.bulkBytecodeRecoveryFailures() shouldBe 0
+    }
+
+  it should
+    "scan the best block's root, so a pruned SNAP pivot root does not hide the gaps" taggedAs (UnitTest, SyncTest) in
+    withRecoveryTestSetup() { testSetup =>
+      // The pivot's root names nothing (pruned); only the best block's root is readable.
+      val sc = new BulkScenario(testSetup, trieAtBest = true)
+      sc.runEscalation()
+      sc.codeHashes.foreach(h => sc.evmCodes.get(h) shouldBe defined)
+      sc.appState.isBytecodeRecoveryDone() shouldBe true
+    }
+
+  it should
+    "fail loudly when no readable root shows the gaps: code still missing, done flag stays clear, failure counted" taggedAs (
+      UnitTest,
+      SyncTest
+    ) in withRecoveryTestSetup() { testSetup =>
+      // Neither the best root nor the pivot root is readable: the scan sees nothing and nothing is fetched.
+      val sc = new BulkScenario(testSetup, prunedEverywhere = true)
+      sc.runEscalation()
+      sc.codeHashes.exists(h => sc.evmCodes.get(h).isDefined) shouldBe false
+      sc.appState.isBytecodeRecoveryDone() shouldBe false // so the next start scans again...
+      sc.appState.bulkBytecodeRecoveryFailures() shouldBe 1 // ...up to the cap
+    }
+
+  it should
+    "ignore a bulk-recovery request on a node whose state did not come from SNAP: no scan, regular sync untouched" taggedAs (
+      UnitTest,
+      SyncTest
+    ) in withRecoveryTestSetup() { testSetup =>
+      val sc = new BulkScenario(testSetup)
+      val first = sc.startRegularSync()
+      sc.appState.clearSnapSyncDone().commit() // as on a node that synced by executing blocks
+      sc.requestIsIgnored(first) shouldBe true
+    }
+
+  it should
+    "ignore a bulk-recovery request once the failure cap is reached: no scan, regular sync untouched" taggedAs (
+      UnitTest,
+      SyncTest
+    ) in withRecoveryTestSetup() { testSetup =>
+      val sc = new BulkScenario(testSetup)
+      sc.appState.putBulkBytecodeRecoveryFailures(SyncController.MaxBulkBytecodeRecoveryFailures).commit()
+      val first = sc.startRegularSync()
+      sc.requestIsIgnored(first) shouldBe true
+    }
+
+  it should "allow bulk recovery only for a SNAP-synced node under the failure cap" taggedAs (UnitTest, SyncTest) in {
+    SyncController.bulkCodeRecoveryAllowed(snapSyncDone = true, failures = 0) shouldBe true
+    SyncController.bulkCodeRecoveryAllowed(snapSyncDone = false, failures = 0) shouldBe false
+    SyncController.bulkCodeRecoveryAllowed(
+      snapSyncDone = true,
+      failures = SyncController.MaxBulkBytecodeRecoveryFailures
+    ) shouldBe false
+  }
+
+  it should
+    "stop repeating the scan once the failure cap is reached: mark bytecodeRecoveryDone and keep the count" taggedAs (
+      UnitTest,
+      SyncTest
+    ) in withRecoveryTestSetup() { testSetup =>
+      val sc = new BulkScenario(testSetup, prunedEverywhere = true)
+      sc.appState.putBulkBytecodeRecoveryFailures(SyncController.MaxBulkBytecodeRecoveryFailures - 1).commit()
+      sc.runEscalation()
+      sc.appState.bulkBytecodeRecoveryFailures() shouldBe SyncController.MaxBulkBytecodeRecoveryFailures
+      sc.appState.isBytecodeRecoveryDone() shouldBe true
+    }
+
   class TestSetup(
       _validators: Validators = new Mocks.MockValidatorsAlwaysSucceed
   ) extends EphemBlockchainTestSetup

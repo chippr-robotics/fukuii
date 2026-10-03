@@ -49,6 +49,16 @@ object SyncProtocol:
       extends SyncProtocolMsg
       with RegularSyncCommand
 
+  /** Block import found contract code missing from `EvmCodeStorage` (`MissingCodeException`) on a node whose state came
+    * from SNAP. Fetching it one hash at a time costs a full re-execution of the block per contract, and a SNAP-synced
+    * node can lack thousands. The controller stops regular sync, runs the bytecode recovery scan (every non-empty
+    * codeHash in the SNAP state trie that is absent from storage, fetched in batched GetByteCodes), then restarts
+    * regular sync. `codeHash` is the one that triggered it, checked afterwards.
+    */
+  final case class MissingCodeNeedsBulkRecovery(blockNumber: BigInt, codeHash: ByteString)
+      extends SyncProtocolMsg
+      with RegularSyncCommand
+
   /** Delivered to RegularSync via watchWith when BlockFetcher terminates (RF-2 Option A). RegularSync re-spawns both
     * BlockFetcher and BlockImporter: BlockImporter holds a captured fetcher ref in its constructor, so it must be
     * replaced together with BlockFetcher to avoid a dead-letter sink.

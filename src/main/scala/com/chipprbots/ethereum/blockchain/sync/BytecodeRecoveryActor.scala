@@ -213,6 +213,10 @@ object BytecodeRecoveryActor:
                   )
             ctx.watchWith(coordinator, CoordinatorTerminated)
             coordinator ! snap.actors.ByteCodeCoordinator.StartByteCodeSync(missing)
+            // The whole gap list is known up front. Without this the coordinator waits for more tasks that never come
+            // ("accumulating") and never announces completion, so recovery only ended when the no-progress abandon timer
+            // fired, however quickly the bytecodes had arrived.
+            coordinator ! snap.actors.ByteCodeCoordinator.NoMoreByteCodeTasks
             downloading(ctx, coordinator, missing.size, syncController, appStateStorage, snapSyncConfig)
 
         case _ => Behaviors.unhandled

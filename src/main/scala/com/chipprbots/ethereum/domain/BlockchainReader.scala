@@ -102,6 +102,12 @@ class BlockchainReader(
 
   def getSnapSyncPivotBlock: Option[BigInt] = appStateStorage.getSnapSyncPivotBlock()
 
+  /** Whether this node's state came from a completed SNAP sync. */
+  def isSnapSyncDone: Boolean = appStateStorage.isSnapSyncDone()
+
+  /** Bulk bytecode recoveries that finished with the triggering code still missing (see SyncController). */
+  def bulkBytecodeRecoveryFailures: Int = appStateStorage.bulkBytecodeRecoveryFailures()
+
   // returns the best known block if it's available in the storage
   def getBestBlock: Option[Block] =
     val bestKnownBlockinfo = appStateStorage.getBestBlockInfo()
