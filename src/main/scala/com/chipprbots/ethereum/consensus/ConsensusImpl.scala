@@ -271,10 +271,13 @@ class ConsensusImpl(
 
       case Some(MPTError(reason: MissingNodeException)) =>
         log.error(
-          "REORG-EXEC-FAIL blocks [{}-{}]: MissingNode({})",
+          "REORG-EXEC-FAIL blocks [{}-{}]: MissingNode({}). The branch executes against the state of its parent " +
+            "block {}; if that parent is (or was) canonical, its state may have been pruned: check pruning history vs " +
+            "reorg depth and earlier failed reorg attempts",
           newBranch.head.number,
           newBranch.last.number,
-          reason.getMessage
+          reason.getMessage,
+          newBranch.head.number - 1
         )
         ConsensusErrorDueToMissingNode(executedBlocks.map(_.block), reason)
 
