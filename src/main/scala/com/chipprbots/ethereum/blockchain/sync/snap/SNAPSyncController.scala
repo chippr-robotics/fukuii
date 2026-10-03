@@ -495,6 +495,42 @@ private class SNAPSyncControllerImpl(
   private val DownloadStagnationCheckInterval: FiniteDuration = 30.seconds
   private val StorageStagnationThreshold: FiniteDuration =
     10.minutes // CFG-2: 20→10min; second stall force-completes after 30s anyway
+  // Distinct, much shorter threshold for the "coordinator reports 0 pending/0 active but never
+  // sent StorageRangeSyncComplete" signature specifically. That reading is unambiguous: it means
+  // the coordinator actor was restarted (RestartSupervisor wiping its in-memory tasks/tries — see
+  // StorageRangeCoordinatorImpl's StackTrie-ordering crash history) or otherwise lost its state,
+  // NOT that it is merely slow — a genuinely busy coordinator always reports pending>0 or
+  // active>0, and a stats-fetch timeout is already excluded separately (isTimeoutResponse resets
+  // the clock instead of falling through here). Waiting the full StorageStagnationThreshold in
+  // this specific case is pure dead time: there is no in-flight work for a pivot refresh or
+  // anything else to wait on, so nothing is gained by waiting longer than it takes to confirm the
+  // reading is stable across a couple of poll ticks. Force-complete triggers the SAME existing
+  // healing-recovery path either way (ForceCompleteStorage) — only the trigger latency changes.
+  private val StorageRestartedEmptyThreshold: FiniteDuration = 60.seconds
+  // Platåberget soak v6 (2026-09-28): lastStorageProgressMs (below) resets on ANY
+  // ProgressStorageSlotsSynced message carrying >10 slots — but that resets on progress from ANY
+  // account, not necessarily the ones actually stuck. A handful of accounts retried indefinitely
+  // (the unbounded-verification-failure-retry livelock, since bounded in
+  // StorageRangeCoordinatorImpl's staleRootFailuresByAccount) can loop forever while OTHER,
+  // unrelated accounts keep completing and resetting this clock — soak evidence: completed crept
+  // from 67268 to 67616 (~15/min) while [STORAGE-STATE] sat at a fixed 99% for over 25 minutes,
+  // pending oscillating 1-33 without ever draining. That is real, if slow, throughput and legitimately
+  // resets lastStorageProgressMs — masking a stall the way it's currently defined.
+  //
+  // storageTailBaseline tracks a DIFFERENT signal: pending+active (the actual
+  // remaining-work count), sampled every stagnation tick (DownloadStagnationCheckInterval, 30s).
+  // The baseline only advances when remaining work is STRICTLY SMALLER than the last baseline —
+  // oscillation without ever going lower doesn't count as progress. Reuses StorageStagnationThreshold
+  // as its window rather than a new constant, per "build on the existing thresholds".
+  //
+  // Queue depth alone is NOT sufficient evidence of a livelock: pending+active also stays flat through huge-account
+  // continuation chains and regrows after subtask splits, so a depth-only trigger fires on healthy tails (and bypasses
+  // the late-stage guard on proactive pivot rolls). The signal therefore also requires the coordinator to report
+  // repeated stale-local-root verification failures accumulated over the same window — see
+  // SNAPSyncController.evaluateStorageTail. Reset at every storage-phase entry (restartSnapSync / wakeFromDormant
+  // reuse this instance, so a stale baseline would otherwise fire a spurious refresh on a second phase's first tick).
+  private var storageTailBaseline: SNAPSyncController.StorageTailBaseline =
+    SNAPSyncController.StorageTailBaseline.fresh(System.currentTimeMillis())
   private val AccountStagnationThreshold: FiniteDuration = snapSyncConfig.accountStagnationTimeout
   private var lastStorageProgressMs: Long = System.currentTimeMillis()
   private var lastBytecodeProgressMs: Long = System.currentTimeMillis()
@@ -1305,6 +1341,7 @@ private class SNAPSyncControllerImpl(
 
           // Start storage + bytecode stagnation watchdogs now that accounts are done
           lastStorageProgressMs = System.currentTimeMillis()
+          storageTailBaseline = SNAPSyncController.StorageTailBaseline.fresh(System.currentTimeMillis())
           lastBytecodeProgressMs = System.currentTimeMillis()
           lastBytecodeProgressCount = 0L
           scheduleStagnationChecks()
@@ -1798,12 +1835,15 @@ private class SNAPSyncControllerImpl(
         val workRemaining = stats.tasksPending > 0 || stats.tasksActive > 0
 
         // Special case: coordinator reports 0 pending + 0 active but never sent StorageRangeSyncComplete.
-        // This means trie construction is stuck (accountsInTrieConstruction/pendingAccountSlots not empty).
-        // After the stagnation threshold, force-complete to unstick it.
+        // This means trie construction is stuck (accountsInTrieConstruction/pendingAccountSlots not empty),
+        // most likely because the coordinator actor restarted and lost its in-memory task state. Unlike
+        // the `workRemaining` branch below (where waiting first for a pivot refresh is worthwhile), this
+        // reading is unambiguous on its own — use the much shorter StorageRestartedEmptyThreshold so the
+        // existing force-complete/healing recovery fires in ~1 minute instead of ~10.
         if !workRemaining && !storagePhaseComplete then
           val now = System.currentTimeMillis()
           val stalledForMs = now - lastStorageProgressMs
-          if stalledForMs > StorageStagnationThreshold.toMillis then
+          if stalledForMs > StorageRestartedEmptyThreshold.toMillis then
             ctx.log.warn(
               s"Storage coordinator reports 0 pending/0 active but never sent StorageRangeSyncComplete " +
                 s"(stalled ${stalledForMs / 1000}s). Trie construction likely stuck. Force-completing."
@@ -1816,18 +1856,46 @@ private class SNAPSyncControllerImpl(
           val now = System.currentTimeMillis()
           val stalledForMs = now - lastStorageProgressMs
 
+          // Tail-livelock signal, independent of the slot-count-based one above: remaining work (pending+active)
+          // has not set a new low point for a full StorageStagnationThreshold AND the coordinator kept recording
+          // stale-local-root verification failures over that window (see evaluateStorageTail).
+          val (nextBaseline, progressStalled) = SNAPSyncController.evaluateStorageTail(
+            storageTailBaseline,
+            remainingWork = stats.tasksPending + stats.tasksActive,
+            staleRootFailureEvents = stats.staleRootFailureEvents,
+            nowMs = now,
+            thresholdMs = StorageStagnationThreshold.toMillis
+          )
+          storageTailBaseline = nextBaseline
+          val remainingWorkStalledForMs = now - storageTailBaseline.sinceMs
+
           if !storageStagnationRefreshAttempted then
-            // First stall: needs full threshold before triggering
-            if stalledForMs >= StorageStagnationThreshold.toMillis && now - lastPivotRestartMs >= MinPivotRestartInterval.toMillis
+            // First stall: needs full threshold before triggering, on EITHER signal.
+            if (stalledForMs >= StorageStagnationThreshold.toMillis || progressStalled) &&
+              now - lastPivotRestartMs >= MinPivotRestartInterval.toMillis
             then
               lastPivotRestartMs = now
               storageStagnationRefreshAttempted = true
+              val reason =
+                if progressStalled && stalledForMs < StorageStagnationThreshold.toMillis then
+                  s"remaining work (pending+active) has not shrunk below ${storageTailBaseline.lowWork} " +
+                    s"for ${remainingWorkStalledForMs / 1000}s while verification failures kept recurring " +
+                    s"(tail livelock signature)"
+                else s"no progress for ${stalledForMs / 1000}s"
               ctx.log.warn(
-                s"Storage sync stalled: no progress for ${stalledForMs / 1000}s " +
+                s"Storage sync stalled: $reason " +
                   s"(threshold=${StorageStagnationThreshold.toSeconds}s). Attempting pivot refresh."
               )
               lastStorageProgressMs = now
-              refreshPivotInPlace(s"storage stagnation: no progress for ${stalledForMs / 1000}s")
+              // Give the post-refresh remaining-work baseline a fresh start too, so a refresh that
+              // genuinely helps isn't immediately re-flagged by a stale pre-refresh low point.
+              storageTailBaseline = SNAPSyncController.StorageTailBaseline
+                .fresh(now)
+                .copy(
+                  lowWork = stats.tasksPending + stats.tasksActive,
+                  staleFailuresAtLow = stats.staleRootFailureEvents
+                )
+              refreshPivotInPlace(s"storage stagnation: $reason")
           else
             // Second stall after refresh: short grace period (2 min), then force-complete.
             // The pivot refresh either works quickly or not at all.
@@ -2453,6 +2521,7 @@ private class SNAPSyncControllerImpl(
 
               currentPhase = ByteCodeAndStorageSync
               lastStorageProgressMs = System.currentTimeMillis()
+              storageTailBaseline = SNAPSyncController.StorageTailBaseline.fresh(System.currentTimeMillis())
               scheduleStagnationChecks()
               progressMonitor.startPhase(ByteCodeAndStorageSync)
 
@@ -5087,6 +5156,40 @@ object SNAPSyncController:
     // "exactly 1 node, healed=0 forever" stall). Force-completion does not invalidate the
     // freshly-built trie; only a resumed stale cursor does.
     snapSyncConfig.deferredMerkleization && !resumedStaleCursors
+
+  /** Baseline for the storage tail-livelock backstop: the lowest remaining-work (pending+active) seen so far, when it
+    * was set, and the coordinator's cumulative stale-local-root failure count at that moment.
+    */
+  final private[snap] case class StorageTailBaseline(lowWork: Int, sinceMs: Long, staleFailuresAtLow: Long)
+
+  private[snap] object StorageTailBaseline:
+    def fresh(nowMs: Long): StorageTailBaseline = StorageTailBaseline(Int.MaxValue, nowMs, 0L)
+
+  /** Minimum number of stale-root verification failures, within one stall window, that makes a flat queue evidence of a
+    * livelock rather than a healthy slow tail (matches the coordinator's per-account give-up count K=3: one account's
+    * worth of repeated failures).
+    */
+  private[snap] val MinStaleFailuresForTailLivelock: Long = 3L
+
+  /** Pure state machine for the storage tail-livelock backstop (extracted so it is unit-testable; the actor is
+    * file-private). The baseline advances only when remaining work is STRICTLY lower than the last low point
+    * (oscillation does not count as progress). The result is `true` only when the low point has stood for `thresholdMs`
+    * AND at least [[MinStaleFailuresForTailLivelock]] stale-root failures were recorded since it was set — a depth-only
+    * trigger would misfire on huge-account continuation chains and post-split regrowth.
+    */
+  private[snap] def evaluateStorageTail(
+      baseline: StorageTailBaseline,
+      remainingWork: Int,
+      staleRootFailureEvents: Long,
+      nowMs: Long,
+      thresholdMs: Long
+  ): (StorageTailBaseline, Boolean) =
+    val next =
+      if remainingWork < baseline.lowWork then StorageTailBaseline(remainingWork, nowMs, staleRootFailureEvents)
+      else baseline
+    val stalledMs = nowMs - next.sinceMs
+    val failuresInWindow = staleRootFailureEvents - next.staleFailuresAtLow
+    (next, stalledMs >= thresholdMs && failuresInWindow >= MinStaleFailuresForTailLivelock)
 
   /** Freshness gate for `refreshPivotInPlace`: reject candidate pivots whose source peer is more than `maxStaleness`
     * blocks behind the CL-driven head.

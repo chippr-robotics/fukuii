@@ -1168,6 +1168,133 @@ class SNAPSyncControllerSpec extends AnyFlatSpec with Matchers:
     ticksBeforeEviction shouldBe 20L // 20 ticks per 10-minute window
   }
 
+  // ── StorageRestartedEmptyThreshold — fast-path for the "coordinator restarted with empty
+  // state" signature specifically (maybeRestartIfStorageStagnant's `!workRemaining &&
+  // !storagePhaseComplete` branch). SNAPSyncControllerImpl is file-private, so — like the
+  // AccountStagnationThreshold tests above — this replicates the predicate without a real clock
+  // advance rather than driving the actor directly; see that section's header comment for why
+  // this pattern is used for stagnation-threshold logic throughout this file.
+  //
+  // Distinct from StorageStagnationThreshold (10 min, the `workRemaining` branch, where waiting
+  // for a pivot refresh to help is worthwhile): a coordinator reporting 0 pending/0 active while
+  // the phase is still incomplete is unambiguous evidence of lost state (a busy coordinator always
+  // reports pending>0 or active>0), so there is nothing to wait on and no reason to use the same
+  // 10-minute window. Regression covered: soak evidence (2026-09-27) showed 627s of dead time
+  // (RestartSupervisor wiped the coordinator's tasks/tries — see StorageRangeCoordinator's
+  // StackTrie-ordering fix — and the controller sat on 20 no-op stagnation ticks before
+  // force-completing) between the crash and the existing healing-recovery path picking up.
+  "StorageRestartedEmptyThreshold" should "be much shorter than the general StorageStagnationThreshold" taggedAs UnitTest in {
+    val StorageStagnationThresholdMs: Long = 10 * 60 * 1000L // 10 minutes — general "workRemaining" stall
+    val StorageRestartedEmptyThresholdMs: Long = 60 * 1000L // 60 seconds — unambiguous "0/0/incomplete" signature
+
+    StorageRestartedEmptyThresholdMs should be < StorageStagnationThresholdMs
+    // At least an order of magnitude faster — locks in the intent of the fix (cut dead time from
+    // ~10.5 minutes to ~1 minute), not just "some" improvement.
+    (StorageStagnationThresholdMs / StorageRestartedEmptyThresholdMs) should be >= 10L
+  }
+
+  it should "not fire before 60s of an unambiguous 0-pending/0-active/incomplete reading" taggedAs UnitTest in {
+    val StorageRestartedEmptyThresholdMs: Long = 60 * 1000L
+    val now: Long = System.currentTimeMillis()
+    val lastProgressMs: Long = now - 45_000L // 45 seconds ago — under threshold
+
+    val stalledForMs = now - lastProgressMs
+    (stalledForMs > StorageRestartedEmptyThresholdMs) shouldBe false
+  }
+
+  it should "fire once the unambiguous 0-pending/0-active/incomplete reading has persisted past 60s" taggedAs UnitTest in {
+    val StorageRestartedEmptyThresholdMs: Long = 60 * 1000L
+    val now: Long = System.currentTimeMillis()
+    val lastProgressMs: Long = now - 90_000L // 90 seconds ago — past threshold
+
+    val stalledForMs = now - lastProgressMs
+    (stalledForMs > StorageRestartedEmptyThresholdMs) shouldBe true
+  }
+
+  // ── Progress-based storage stagnation (tail livelock) ─────────────────────────────────────────
+  //
+  // Platåberget soak v6, 2026-09-28: maybeRestartIfStorageStagnant's slot-count-based
+  // lastStorageProgressMs resets on ANY ProgressStorageSlotsSynced message carrying >10 slots — but
+  // that fires on progress from ANY account, not necessarily the stuck ones. A handful of accounts
+  // retried indefinitely (now bounded — see StorageRangeCoordinatorImpl's staleRootFailuresByAccount
+  // and its own tests) could loop forever while UNRELATED accounts kept completing and resetting
+  // this clock: completed crept from 67268 to 67616 (~15/min) while [STORAGE-STATE] sat at a fixed
+  // 99% for 25+ minutes, `pending` oscillating 1-33 without ever draining below its first-seen low.
+  //
+  // lastStorageRemainingWork/-CheckMs track a DIFFERENT signal: pending+active (remaining work),
+  // sampled every stagnation tick. The baseline only advances when remaining work is STRICTLY
+  // SMALLER than the last baseline; oscillating without ever going lower doesn't count as progress.
+  // SNAPSyncControllerImpl is file-private (see the StorageRestartedEmptyThreshold section above for
+  // why these tests replicate the predicate/state-machine rather than driving the actor directly).
+
+  "Storage tail-livelock backstop (SNAPSyncController.evaluateStorageTail)" should "not flag while remaining work keeps setting new, lower low-points" taggedAs UnitTest in {
+    val thresholdMs = 10 * 60 * 1000L
+    var baseline = SNAPSyncController.StorageTailBaseline.fresh(0L)
+    var fired = false
+    var now = 0L
+    Seq(500, 400, 300, 200, 100, 50, 10, 0).foreach { work =>
+      now += 60_000L
+      // Even with failures recurring, a shrinking queue is progress.
+      val (b, f) = SNAPSyncController.evaluateStorageTail(baseline, work, now / 1000, now, thresholdMs)
+      baseline = b
+      fired ||= f
+    }
+    baseline.lowWork shouldBe 0
+    fired shouldBe false
+  }
+
+  it should "flag a flat, oscillating queue only when stale-root failures keep recurring over the window" taggedAs UnitTest in {
+    val thresholdMs = 10 * 60 * 1000L
+    def run(failuresPerTick: Long): Boolean =
+      var baseline = SNAPSyncController.StorageTailBaseline.fresh(0L)
+      var fired = false
+      var now = 0L
+      var failures = 0L
+      // Mirrors the soak: pending oscillates 1-33, never below its first-seen floor of 1.
+      Seq(33, 1, 20, 1, 15, 1, 33, 1).foreach { work =>
+        now += 2 * 60 * 1000L
+        failures += failuresPerTick
+        val (b, f) = SNAPSyncController.evaluateStorageTail(baseline, work, failures, now, thresholdMs)
+        baseline = b
+        fired ||= f
+      }
+      fired
+    run(failuresPerTick = 5L) shouldBe true
+  }
+
+  it should "NOT flag a healthy flat tail (huge-account continuation chain / post-split regrowth) with no verification failures" taggedAs UnitTest in {
+    val thresholdMs = 10 * 60 * 1000L
+    var baseline = SNAPSyncController.StorageTailBaseline.fresh(0L)
+    var fired = false
+    var now = 0L
+    // Queue depth flat/regrowing for 30 simulated minutes, zero stale-root failures reported.
+    Seq(8, 8, 16, 16, 12, 12, 16, 16, 8, 8, 16, 16, 12, 12, 16).foreach { work =>
+      now += 2 * 60 * 1000L
+      val (b, f) = SNAPSyncController.evaluateStorageTail(baseline, work, staleRootFailureEvents = 0L, now, thresholdMs)
+      baseline = b
+      fired ||= f
+    }
+    fired shouldBe false
+  }
+
+  it should "not flag before the full window has elapsed, nor on fewer than the minimum failures" taggedAs UnitTest in {
+    val thresholdMs = 10 * 60 * 1000L
+    val base = SNAPSyncController.StorageTailBaseline(lowWork = 1, sinceMs = 0L, staleFailuresAtLow = 0L)
+    SNAPSyncController.evaluateStorageTail(base, 5, 100L, nowMs = thresholdMs - 1, thresholdMs)._2 shouldBe false
+    SNAPSyncController.evaluateStorageTail(base, 5, 2L, nowMs = thresholdMs, thresholdMs)._2 shouldBe false
+    SNAPSyncController.evaluateStorageTail(base, 5, 3L, nowMs = thresholdMs, thresholdMs)._2 shouldBe true
+  }
+
+  it should "start from a fresh baseline each storage phase (no stale low point from a previous phase)" taggedAs UnitTest in {
+    val thresholdMs = 10 * 60 * 1000L
+    // Previous phase left a low point of 0 set long ago with many failures.
+    val stale = SNAPSyncController.StorageTailBaseline(lowWork = 0, sinceMs = 0L, staleFailuresAtLow = 0L)
+    SNAPSyncController.evaluateStorageTail(stale, 40, 50L, nowMs = 3 * thresholdMs, thresholdMs)._2 shouldBe true
+    // The phase-entry reset (StorageTailBaseline.fresh) must not: remaining work 40 < Int.MaxValue sets a new low point now.
+    val fresh = SNAPSyncController.StorageTailBaseline.fresh(3 * thresholdMs)
+    SNAPSyncController.evaluateStorageTail(fresh, 40, 50L, nowMs = 3 * thresholdMs, thresholdMs)._2 shouldBe false
+  }
+
   // ── pivotPassesFreshnessFloor — regression for the sepolia oscillation ────
   // refreshPivotInPlace used to take max(snapPeer.maxBlockNumber) verbatim.
   // When the only SNAP-capable peer in the pool was stuck behind (block
