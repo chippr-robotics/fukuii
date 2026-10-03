@@ -37,6 +37,7 @@ import com.chipprbots.ethereum.jsonrpc.NewBlockImported
 import com.chipprbots.ethereum.ledger.*
 import com.chipprbots.ethereum.mpt.*
 import com.chipprbots.ethereum.mpt.MerklePatriciaTrie.MissingAccountNodeException
+import com.chipprbots.ethereum.mpt.MerklePatriciaTrie.MissingCodeException
 import com.chipprbots.ethereum.mpt.MerklePatriciaTrie.MissingNodeException
 import com.chipprbots.ethereum.mpt.MerklePatriciaTrie.MissingStorageNodeException
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor
@@ -609,6 +610,33 @@ final private class BlockImporterLogic(
                 pendingStateNodeHash = Some(e.hash)
                 fetcher ! BlockFetcher.FetchStateNode(e.hash, fetcherResponseAdapter, parentStateRoot, paths)
                 ResolvingMissingNode(NonEmptyList(notImportedBlocks.head, notImportedBlocks.tail))
+              case e: MissingCodeException =>
+                // An account in the block's state has a codeHash whose bytecode this node never stored. Missing data,
+                // not an invalid block: fetch it over SNAP GetByteCodes (served by every snap-capable peer, ETH68+)
+                // and retry the same blocks. `e.hash` is the codeHash — the key GetByteCodes is addressed by.
+                val failedBlock = notImportedBlocks.head
+                val parentStateRoot =
+                  try
+                    Option(blockchainReader.getBlockHeaderByHash(failedBlock.header.parentHash)).flatten
+                      .map(_.stateRoot.value)
+                  catch
+                    case ex: Exception =>
+                      log.warning("Failed to get parent state root during code recovery: {}", ex.getMessage); None
+                log.warning(
+                  "Missing contract code {} for account {} during import of block {}. Fetching via SNAP GetByteCodes.",
+                  ByteStringUtils.hash2string(e.hash),
+                  ByteStringUtils.hash2string(e.accountAddress),
+                  failedBlock.number
+                )
+                pendingStateNodeHash = Some(e.hash)
+                fetcher ! BlockFetcher.FetchStateNode(
+                  e.hash,
+                  fetcherResponseAdapter,
+                  parentStateRoot,
+                  paths = None,
+                  isByteCode = true
+                )
+                ResolvingMissingNode(NonEmptyList(failedBlock, notImportedBlocks.tail))
               case e: MissingNodeException =>
                 val failedBlock = notImportedBlocks.head
                 val parentStateRoot =
