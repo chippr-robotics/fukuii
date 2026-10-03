@@ -298,7 +298,7 @@ class SyncControllerSpec
     blockchainReader.getBlockHeaderByNumber(100).map(_.stateRoot) shouldBe Some(TrieRoot(rootA))
   }
 
-  it should "restore a number->hash mapping that names a forged header, on startup" taggedAs (
+  it should "restore a number->hash mapping that names a forged header, and the SyncController start leaves the restored index alone" taggedAs (
     UnitTest,
     SyncTest
   ) in withRecoveryTestSetup() { testSetup =>
@@ -318,6 +318,9 @@ class SyncControllerSpec
     markSnapDone(testSetup)
     blockchainReader.getCanonicalHashByNumber(100).map(_.value) shouldBe Some(forged.hash.value)
 
+    // The repair runs in StdNode.start (before any server binds); SyncController.start must not touch the index.
+    blockchainWriter.repairBestBlockNumberMapping(blockchainReader) shouldBe
+      BestMappingRepair.Restored(100, real.hash, forged.hash, removedOrphan = true)
     awaitRegularSync(testSetup)
 
     blockchainReader.getCanonicalHashByNumber(100).map(_.value) shouldBe Some(real.hash.value)
@@ -354,23 +357,72 @@ class SyncControllerSpec
     blockchainWriter.storeBlockHeader(other).commit() // header, no body
     blockchainWriter.storeBlockHeader(otherForged).commit() // mapping now names otherForged
     st.putBestBlockInfo(com.chipprbots.ethereum.domain.appstate.BlockInfo(other.hash.value, 200)).commit()
-    blockchainWriter.repairBestBlockNumberMapping(blockchainReader) shouldBe
-      BestMappingRepair.Refused(
-        200,
-        other.hash,
-        otherForged.hash.value,
-        bestHeaderPresent = true,
-        bestBodyPresent = false
-      )
-    blockchainReader.getCanonicalHashByNumber(200).map(_.value) shouldBe Some(otherForged.hash.value)
+    blockchainWriter.repairBestBlockNumberMapping(blockchainReader) match
+      case BestMappingRepair.Refused(200, h, m, true, false, _) =>
+        h shouldBe other.hash
+        m shouldBe otherForged.hash.value
+      case unexpected => fail(s"expected Refused, got $unexpected")
     blockchainReader.getBlockHeaderByHash(otherForged.hash) shouldBe Some(otherForged)
 
     // Best block's header missing entirely: refuse.
     st.putBestBlockInfo(com.chipprbots.ethereum.domain.appstate.BlockInfo(ByteString(Array.fill[Byte](32)(0x09)), 200))
       .commit()
     blockchainWriter.repairBestBlockNumberMapping(blockchainReader) match
-      case BestMappingRepair.Refused(200, _, _, false, false) => succeed
-      case unexpected                                         => fail(s"expected Refused, got $unexpected")
+      case BestMappingRepair.Refused(200, _, _, false, false, _) => succeed
+      case unexpected                                            => fail(s"expected Refused, got $unexpected")
+  }
+
+  it should "refuse a mapping naming a fully stored different-parent block (interrupted reorg shape)" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in withRecoveryTestSetup() { testSetup =>
+    import testSetup.*
+    val st = storagesInstance.storages.appStateStorage
+    val best = baseBlockHeader.copy(number = BlockNumber(100))
+    val newBranch = best.copy(parentHash = BlockHash(ByteString(Array.fill[Byte](32)(0x0a))))
+    storeFullBlock(testSetup, best)
+    storeFullBlock(testSetup, newBranch) // mapping[100] now names the new-branch block, body stored
+    st.putBestBlockInfo(com.chipprbots.ethereum.domain.appstate.BlockInfo(best.hash.value, 100)).commit()
+    blockchainWriter.repairBestBlockNumberMapping(blockchainReader) match
+      case BestMappingRepair.Refused(100, _, _, true, true, _) => succeed
+      case unexpected                                          => fail(s"expected Refused, got $unexpected")
+    blockchainReader.getCanonicalHashByNumber(100).map(_.value) shouldBe Some(newBranch.hash.value)
+    blockchainReader.getBlockHeaderByHash(newBranch.hash) shouldBe Some(newBranch)
+  }
+
+  it should "restore a same-parent mapped block that has a body without deleting it" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in withRecoveryTestSetup() { testSetup =>
+    import testSetup.*
+    val st = storagesInstance.storages.appStateStorage
+    val best = baseBlockHeader.copy(number = BlockNumber(100))
+    val sibling = best.copy(stateRoot = TrieRoot(ByteString(Array.fill[Byte](32)(0x22))))
+    storeFullBlock(testSetup, best)
+    storeFullBlock(testSetup, sibling)
+    st.putBestBlockInfo(com.chipprbots.ethereum.domain.appstate.BlockInfo(best.hash.value, 100)).commit()
+    blockchainWriter.repairBestBlockNumberMapping(blockchainReader) shouldBe
+      BestMappingRepair.Restored(100, best.hash, sibling.hash, removedOrphan = false)
+    blockchainReader.getCanonicalHashByNumber(100).map(_.value) shouldBe Some(best.hash.value)
+    blockchainReader.getBlockHeaderByHash(sibling.hash) shouldBe Some(sibling)
+  }
+
+  it should "refuse and not delete a header-only mapped block with a different parent (SNAP header-only entries)" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in withRecoveryTestSetup() { testSetup =>
+    import testSetup.*
+    val st = storagesInstance.storages.appStateStorage
+    val best = baseBlockHeader.copy(number = BlockNumber(100))
+    val snapHeader = best.copy(parentHash = BlockHash(ByteString(Array.fill[Byte](32)(0x0b))))
+    storeFullBlock(testSetup, best)
+    blockchainWriter.storeBlockHeader(snapHeader).commit() // header only, mapping repointed
+    st.putBestBlockInfo(com.chipprbots.ethereum.domain.appstate.BlockInfo(best.hash.value, 100)).commit()
+    blockchainWriter.repairBestBlockNumberMapping(blockchainReader) match
+      case BestMappingRepair.Refused(100, _, _, true, true, _) => succeed
+      case unexpected                                          => fail(s"expected Refused, got $unexpected")
+    blockchainReader.getBlockHeaderByHash(snapHeader.hash) shouldBe Some(snapHeader)
+    blockchainReader.getCanonicalHashByNumber(100).map(_.value) shouldBe Some(snapHeader.hash.value)
   }
 
   it should "clear both done flags and restart SNAP when HealingImpossible is received" taggedAs (

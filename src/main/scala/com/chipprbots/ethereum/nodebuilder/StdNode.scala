@@ -20,6 +20,7 @@ import com.chipprbots.ethereum.console.Tui
 import com.chipprbots.ethereum.console.TuiConfig
 import com.chipprbots.ethereum.console.TuiUpdater
 import com.chipprbots.ethereum.db.dataSource.RocksDbCacheMetrics
+import com.chipprbots.ethereum.domain.BestMappingRepair
 import com.chipprbots.ethereum.metrics.Metrics
 import com.chipprbots.ethereum.metrics.MetricsConfig
 import com.chipprbots.ethereum.network.PeerManagerActor
@@ -51,6 +52,7 @@ abstract class BaseNode extends Node:
     // Phase 1: Essential initialization (must complete before anything else)
     startMetricsClient()
     fixDatabase()
+    repairBestBlockMapping() // before any server binds, so no newPayload/FCU races the read-then-write
     loadGenesisData()
     importChainData() // Must complete before APIs so queries return chain data
 
@@ -330,6 +332,33 @@ abstract class BaseNode extends Node:
     if jsonRpcConfig.ipcServerConfig.enabled then tryAndLogFailure(() => jsonRpcIpcServer.close())
     tryAndLogFailure(() => Metrics.get().close())
     tryAndLogFailure(() => storagesInstance.dataSource.close())
+
+  /** Restores the number->hash entry at the best block's height if an earlier version rewrote the best block's header
+    * (SNAP startup) and left the index naming the forged copy. See [[BlockchainWriter.repairBestBlockNumberMapping]].
+    */
+  def repairBestBlockMapping(): Unit =
+    blockchainWriter.repairBestBlockNumberMapping(blockchainReader) match
+      case BestMappingRepair.Consistent => ()
+      case BestMappingRepair.Restored(number, bestHash, wasMappedTo, removedOrphan) =>
+        log.warn(
+          "Repaired canonical index: block {} was mapped to {} (not the best block); restored mapping to best block {}. " +
+            "Forged header removed: {}. Cause: an earlier version rewrote the best block's header after SNAP.",
+          number,
+          wasMappedTo.toHexString,
+          bestHash.toHexString,
+          removedOrphan
+        )
+      case BestMappingRepair.Refused(number, bestHash, mappedTo, headerPresent, bodyPresent, reason) =>
+        log.error(
+          "Canonical index inconsistent at block {}: mapped to {} but best-block info names {} " +
+            "(best header present={}, body present={}). Not repairing: {}.",
+          number,
+          Hex.toHexString(mappedTo.toArray),
+          bestHash.toHexString,
+          headerPresent,
+          bodyPresent,
+          reason
+        )
 
   def fixDatabase(): Unit =
     val bestBlockInfo = storagesInstance.storages.appStateStorage.getBestBlockInfo()

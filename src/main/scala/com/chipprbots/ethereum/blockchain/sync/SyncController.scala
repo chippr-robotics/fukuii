@@ -35,7 +35,6 @@ import com.chipprbots.ethereum.db.storage.FlatSlotStorage
 import com.chipprbots.ethereum.db.storage.StateStorage
 import com.chipprbots.ethereum.domain.Blockchain
 import com.chipprbots.ethereum.domain.BlockchainReader
-import com.chipprbots.ethereum.domain.BestMappingRepair
 import com.chipprbots.ethereum.domain.BlockchainWriter
 import com.chipprbots.ethereum.ledger.BranchResolution
 import com.chipprbots.ethereum.nodebuilder.BlockchainConfigBuilder
@@ -1259,33 +1258,6 @@ object SyncController:
     private def clearSnapPivotFloor(): Unit =
       appStateStorage.clearSnapSyncMinPivotBlock().commit()
 
-    /** Restores the number->hash index at the best block's height if an earlier version rewrote the best block's header
-      * and left the index naming the forged copy. Narrow and loud: see
-      * [[BlockchainWriter.repairBestBlockNumberMapping]].
-      */
-    private def repairBestBlockMapping(): Unit =
-      blockchainWriter.repairBestBlockNumberMapping(blockchainReader) match
-        case BestMappingRepair.Consistent => ()
-        case BestMappingRepair.Restored(number, bestHash, wasMappedTo, removedOrphan) =>
-          log.warn(
-            "Repaired canonical index: block {} was mapped to {} (not the best block); restored mapping to best block {}. " +
-              "Header-only orphan removed: {}. Cause: an earlier version rewrote the best block's header after SNAP.",
-            number,
-            wasMappedTo.toHexString,
-            bestHash.toHexString,
-            removedOrphan
-          )
-        case BestMappingRepair.Refused(number, bestHash, mappedTo, headerPresent, bodyPresent) =>
-          log.error(
-            "Canonical index inconsistent at block {}: mapped to {} but best-block info names {} " +
-              "(header present={}, body present={}). Not repairing: the best block is not fully stored.",
-            number,
-            mappedTo.toArray.map("%02x".format(_)).mkString,
-            bestHash.toHexString,
-            headerPresent,
-            bodyPresent
-          )
-
     /** Log-only: compare the stored SNAP state root with the SNAP pivot header and report whether the trie is there. */
     private def logSnapStateRootDiagnostic(): Unit =
       def short(b: ByteString): String = b.take(8).toArray.map("%02x".format(_)).mkString
@@ -1331,8 +1303,6 @@ object SyncController:
       val startMode = SyncController.selectSyncMode(syncConfig)
 
       val floorSetThisStart = adoptLeftoverFastSyncRecord()
-
-      repairBestBlockMapping()
 
       // Fast sync was removed, and with it this one-shot override (it cleared FastSyncDone so fast sync would run
       // again). Say so rather than ignore it silently.

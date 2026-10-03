@@ -114,19 +114,24 @@ class BlockchainWriter(
       case Some(mapped) =>
         val bestHeader = reader.getBlockHeaderByHash(bestHash)
         val bestBody = reader.getBlockBodyByHash(bestHash)
-        if bestHeader.isEmpty || bestBody.isEmpty then
-          BestMappingRepair.Refused(best.number, bestHash, mapped, bestHeader.isDefined, bestBody.isDefined)
-        else
-          val mappedHash = BlockHash(mapped)
-          val mappedIsHeaderOnlyOrphan =
-            reader.getBlockHeaderByHash(mappedHash).exists(_.number.value == best.number) &&
-              reader.getBlockBodyByHash(mappedHash).isEmpty
-          val restore = blockNumberMappingStorage.put(best.number, best.hash)
-          val batch =
-            if mappedIsHeaderOnlyOrphan then restore.and(blockHeadersStorage.remove(mapped))
-            else restore
-          batch.commit()
-          BestMappingRepair.Restored(best.number, bestHash, mappedHash, removedOrphan = mappedIsHeaderOnlyOrphan)
+        def refuse(reason: String) =
+          BestMappingRepair.Refused(best.number, bestHash, mapped, bestHeader.isDefined, bestBody.isDefined, reason)
+        (bestHeader, bestBody) match
+          case (Some(bh), Some(_)) =>
+            val mappedHash = BlockHash(mapped)
+            reader.getBlockHeaderByHash(mappedHash) match
+              // The forged-sibling shape: same height AND same parent as the best block. A crash mid-reorg leaves a
+              // fully stored new-branch block at this height, but there the neighbouring heights name the new branch
+              // too, so rewriting one entry would break index linearity; such a block need not share the parent.
+              case Some(mh) if mh.number == bh.number && mh.parentHash == bh.parentHash =>
+                val orphan = reader.getBlockBodyByHash(mappedHash).isEmpty
+                val restore = blockNumberMappingStorage.put(best.number, best.hash)
+                (if orphan then restore.and(blockHeadersStorage.remove(mapped)) else restore).commit()
+                BestMappingRepair.Restored(best.number, bestHash, mappedHash, removedOrphan = orphan)
+              case Some(_) =>
+                refuse("mapped block is not a same-parent sibling of the best block (possible interrupted reorg)")
+              case None => refuse("mapped header is not stored")
+          case _ => refuse("best block is not fully stored")
 
   def storeBlockBody(blockHash: BlockHash, blockBody: BlockBody): DataSourceBatchUpdate =
     blockBodiesStorage.put(blockHash.value, blockBody).and(saveTxsLocations(blockHash, blockBody))
@@ -294,5 +299,6 @@ object BestMappingRepair:
       bestHash: BlockHash,
       mappedTo: ByteString,
       bestHeaderPresent: Boolean,
-      bestBodyPresent: Boolean
+      bestBodyPresent: Boolean,
+      reason: String
   ) extends BestMappingRepair
