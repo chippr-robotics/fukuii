@@ -20,6 +20,7 @@ import scala.concurrent.duration.*
 
 import com.chipprbots.ethereum.blockchain.sync.Blacklist
 import com.chipprbots.ethereum.blockchain.sync.Blacklist.BlacklistReason
+import com.chipprbots.ethereum.blockchain.sync.SyncController
 import com.chipprbots.ethereum.blockchain.sync.SyncProtocol
 import com.chipprbots.ethereum.blockchain.sync.fast.FastSyncBranchResolverActor
 import com.chipprbots.ethereum.blockchain.sync.regular.BlockBroadcast.BlockToBroadcast
@@ -621,7 +622,11 @@ final private class BlockImporterLogic(
                 pendingStateNodeHash = Some(e.hash)
                 fetcher ! BlockFetcher.FetchStateNode(e.hash, fetcherResponseAdapter, parentStateRoot, paths)
                 ResolvingMissingNode(NonEmptyList(notImportedBlocks.head, notImportedBlocks.tail))
-              case e: MissingCodeException if BlockImporter.claimBulkCodeRecovery() =>
+              case e: MissingCodeException
+                  if SyncController.bulkCodeRecoveryAllowed(
+                    blockchainReader.isSnapSyncDone,
+                    blockchainReader.bulkBytecodeRecoveryFailures
+                  ) && BlockImporter.claimBulkCodeRecovery() =>
                 // First missing contract code this process has seen. One missing contract is rarely alone: a node that
                 // took its state from SNAP can lack thousands (every contract created after the SNAP pivot and
                 // delivered by trie healing), and fetching them one by one costs a full re-execution of the block each.

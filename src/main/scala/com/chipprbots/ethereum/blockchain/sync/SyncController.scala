@@ -68,6 +68,18 @@ object SyncController:
     */
   val MaxBulkBytecodeRecoveryFailures: Int = 3
 
+  /** Whether a missing contract code at import may escalate to a bulk bytecode recovery.
+    *
+    *   - Only a node whose state came from SNAP: on a node that synced by executing blocks (ETC, Mordor), missing code
+    *     means a corrupt database, and a scan of the whole state trie would pause a PoW node for nothing the scan can
+    *     repair. It keeps fetching that hash alone.
+    *   - Not once the failure cap is reached. NOTE the cap is permanent: three bulk recoveries that failed for a
+    *     TRANSIENT reason (no snap peers, say) switch the startup scan off for good, and only single-hash fetching
+    *     remains. Clear `BulkBytecodeRecoveryFailures` in the database to re-enable it.
+    */
+  def bulkCodeRecoveryAllowed(snapSyncDone: Boolean, failures: Int): Boolean =
+    snapSyncDone && failures < MaxBulkBytecodeRecoveryFailures
+
   /** Sealed protocol for the top-level sync orchestrator (ROOT-a narrowing, Phase 1; OQ-5 complete).
     *
     * This ADT covers the messages SyncController OWNS: self/timer ticks, death-watch termination markers, and the
@@ -801,6 +813,22 @@ object SyncController:
         case RegularSyncTerminated(actor) if actor == regularSync =>
           log.error("RegularSync actor terminated unexpectedly — restarting regular sync.")
           startRegularSync(resumeBackfill = false)._2
+        case SyncProtocol.MissingCodeNeedsBulkRecovery(blockNumber, _)
+            if !SyncController.bulkCodeRecoveryAllowed(
+              appStateStorage.isSnapSyncDone(),
+              appStateStorage.bulkBytecodeRecoveryFailures()
+            ) =>
+          // BlockImporter checks the same condition before asking, so this is a race or a stale request. Leave regular
+          // sync running; the importer fetches the hash on its own.
+          log.warn(
+            "Ignoring a bulk bytecode recovery request for block {}: snapSyncDone={}, failed bulk recoveries={} " +
+              "(cap {}). Regular sync keeps fetching the missing code one hash at a time.",
+            blockNumber,
+            appStateStorage.isSnapSyncDone(),
+            appStateStorage.bulkBytecodeRecoveryFailures(),
+            SyncController.MaxBulkBytecodeRecoveryFailures
+          )
+          Behaviors.same
         case SyncProtocol.MissingCodeNeedsBulkRecovery(blockNumber, codeHash) =>
           // Block import hit contract code this node never stored. Run the existing post-SNAP bytecode recovery now,
           // rather than at the next start: it walks the SNAP state trie, collects EVERY non-empty codeHash absent from

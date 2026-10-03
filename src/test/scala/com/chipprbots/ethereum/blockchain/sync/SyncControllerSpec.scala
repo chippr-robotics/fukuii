@@ -913,13 +913,24 @@ class SyncControllerSpec
     /** Start regular sync, hit a missing code (twice: the repeat must not start a second scan), and wait for regular
       * sync to be running again after the recovery.
       */
-    def runEscalation(): Unit =
+    def startRegularSync(): String =
       syncController ! SyncController.WrappedSyncProtocol(SyncProtocol.Start)
       eventually {
         someTimePasses()
         assert(regularSyncChild.isDefined)
       }
-      val first = regularSyncChild.get
+      regularSyncChild.get
+
+    /** Send the escalation request and let a few controller ticks pass; true if regular sync was left alone. */
+    def requestIsIgnored(first: String): Boolean =
+      syncController ! SyncController.WrappedSyncProtocol(
+        SyncProtocol.MissingCodeNeedsBulkRecovery(500, codeHashes.head)
+      )
+      (1 to 5).foreach(_ => someTimePasses())
+      regularSyncChild.contains(first) && requests.isEmpty && appState.isBytecodeRecoveryDone()
+
+    def runEscalation(): Unit =
+      val first = startRegularSync()
       val trigger = SyncProtocol.MissingCodeNeedsBulkRecovery(500, codeHashes.head)
       syncController ! SyncController.WrappedSyncProtocol(trigger)
       syncController ! SyncController.WrappedSyncProtocol(trigger)
@@ -976,6 +987,37 @@ class SyncControllerSpec
       sc.appState.isBytecodeRecoveryDone() shouldBe false // so the next start scans again...
       sc.appState.bulkBytecodeRecoveryFailures() shouldBe 1 // ...up to the cap
     }
+
+  it should
+    "ignore a bulk-recovery request on a node whose state did not come from SNAP: no scan, regular sync untouched" taggedAs (
+      UnitTest,
+      SyncTest
+    ) in withRecoveryTestSetup() { testSetup =>
+      val sc = new BulkScenario(testSetup)
+      val first = sc.startRegularSync()
+      sc.appState.clearSnapSyncDone().commit() // as on a node that synced by executing blocks
+      sc.requestIsIgnored(first) shouldBe true
+    }
+
+  it should
+    "ignore a bulk-recovery request once the failure cap is reached: no scan, regular sync untouched" taggedAs (
+      UnitTest,
+      SyncTest
+    ) in withRecoveryTestSetup() { testSetup =>
+      val sc = new BulkScenario(testSetup)
+      sc.appState.putBulkBytecodeRecoveryFailures(SyncController.MaxBulkBytecodeRecoveryFailures).commit()
+      val first = sc.startRegularSync()
+      sc.requestIsIgnored(first) shouldBe true
+    }
+
+  it should "allow bulk recovery only for a SNAP-synced node under the failure cap" taggedAs (UnitTest, SyncTest) in {
+    SyncController.bulkCodeRecoveryAllowed(snapSyncDone = true, failures = 0) shouldBe true
+    SyncController.bulkCodeRecoveryAllowed(snapSyncDone = false, failures = 0) shouldBe false
+    SyncController.bulkCodeRecoveryAllowed(
+      snapSyncDone = true,
+      failures = SyncController.MaxBulkBytecodeRecoveryFailures
+    ) shouldBe false
+  }
 
   it should
     "stop repeating the scan once the failure cap is reached: mark bytecodeRecoveryDone and keep the count" taggedAs (

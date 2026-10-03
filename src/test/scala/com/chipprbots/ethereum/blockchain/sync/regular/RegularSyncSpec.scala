@@ -692,6 +692,7 @@ class RegularSyncSpec
       ) in sync(
         new Fixture:
           BlockImporter.resetBulkCodeRecoveryForTests()
+          storagesInstance.storages.appStateStorage.snapSyncDone().commit() // a SNAP-synced node
           val failingBlock: Block = testBlocksChunked.head.head
           val codeHash: ByteString = kec256(ByteString("contract code this node never stored"))
           setImportResult(
@@ -715,6 +716,34 @@ class RegularSyncSpec
           // ...and it did NOT also start a single-hash fetch.
           val seen = peersClient.receiveWhile(1.second) { case m => m }
           seen.collect { case PeersClient.Request(_: GetByteCodes, _, _, _) => 1 } shouldBe empty
+      )
+
+      "fetch missing contract code alone, without asking for a bulk recovery, on a node that did not SNAP-sync" taggedAs (
+        UnitTest,
+        SyncTest
+      ) in sync(
+        new Fixture:
+          BlockImporter.resetBulkCodeRecoveryForTests()
+          storagesInstance.storages.appStateStorage.clearSnapSyncDone().commit()
+          val failingBlock: Block = testBlocksChunked.head.head
+          val codeHash: ByteString = kec256(ByteString("contract code of a node that executed its way here"))
+          setImportResult(
+            failingBlock,
+            IO.pure(
+              BlockImportFailedDueToMissingNode(
+                new MissingCodeException(codeHash, ByteString(Array.fill[Byte](20)(0x16)))
+              )
+            )
+          )
+          peersClient.setAutoPilot(new PeersClientAutoPilot)
+
+          regularSync ! SyncProtocol.Start
+
+          peersClient.fishForSpecificMessage(max = 10.seconds) {
+            case PeersClient.Request(GetByteCodes(_, hashes, _), _, _, _) if hashes == Seq(codeHash) => true
+          }
+          // The bulk-recovery slot was NOT consumed by the refused escalation.
+          BlockImporter.claimBulkCodeRecovery() shouldBe true
       )
 
       "save fetched node" in sync(new Fixture:
