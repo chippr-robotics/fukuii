@@ -63,6 +63,11 @@ import com.chipprbots.ethereum.utils.NetworkType
   */
 object SyncController:
 
+  /** Bulk bytecode recoveries (triggered by block import) allowed to finish with the triggering code still missing
+    * before the node stops repeating the full trie scan on every restart.
+    */
+  val MaxBulkBytecodeRecoveryFailures: Int = 3
+
   /** Sealed protocol for the top-level sync orchestrator (ROOT-a narrowing, Phase 1; OQ-5 complete).
     *
     * This ADT covers the messages SyncController OWNS: self/timer ticks, death-watch termination markers, and the
@@ -819,7 +824,7 @@ object SyncController:
           // Un-done until the recovery finishes: if the node stops part-way, the next start resumes the scan.
           appStateStorage.clearBytecodeRecoveryDone().commit()
           bulkCodeRecoveryTrigger = Some(codeHash)
-          startRecovery(needBytecode = true, needStorage = false)
+          startRecovery(needBytecode = true, needStorage = false, scanRoot = bulkRecoveryScanRoot())
         case SyncProtocol.RegularSyncStuck(blockNumber, missingHash) =>
           // Regular sync can't make progress: state-node recovery has exhausted on the same hash
           // 3+ times. Local parent state is too far behind canonical tip for any peer's snap-serve
@@ -1570,14 +1575,33 @@ object SyncController:
         bulkCodeRecoveryTrigger = None
         if evmCodeStorage.get(codeHash).isDefined then
           log.info("Bulk bytecode recovery finished: the code that triggered it is now stored. Resuming regular sync.")
+          if appStateStorage.bulkBytecodeRecoveryFailures() != 0 then
+            appStateStorage.putBulkBytecodeRecoveryFailures(0).commit()
         else
+          val failures = appStateStorage.bulkBytecodeRecoveryFailures() + 1
           log.error(
-            "Bulk bytecode recovery finished but contract code {} is STILL missing (peers could not serve it, or its " +
-              "account is not in the SNAP state trie). Leaving bytecodeRecoveryDone unset so the next start scans again; " +
-              "block import will now fetch that hash on its own.",
-            com.chipprbots.ethereum.utils.ByteStringUtils.hash2string(codeHash)
+            "Bulk bytecode recovery finished but contract code {} is STILL missing (failure {} of {}). Possible causes: " +
+              "no peer served it; its account is not in the scanned trie; or the scanned state root was pruned or " +
+              "unreadable, so the scan saw no gaps at all. Block import will now fetch that hash on its own.",
+            com.chipprbots.ethereum.utils.ByteStringUtils.hash2string(codeHash),
+            failures,
+            SyncController.MaxBulkBytecodeRecoveryFailures
           )
-          appStateStorage.clearBytecodeRecoveryDone().commit()
+          if failures >= SyncController.MaxBulkBytecodeRecoveryFailures then
+            log.error(
+              "Giving up on bulk bytecode recovery after {} failures: marking bytecodeRecoveryDone so restarts stop " +
+                "repeating a full trie scan. Missing code is still fetched one hash at a time at import.",
+              failures
+            )
+            appStateStorage
+              .bytecodeRecoveryDone()
+              .and(appStateStorage.putBulkBytecodeRecoveryFailures(failures))
+              .commit()
+          else
+            appStateStorage
+              .clearBytecodeRecoveryDone()
+              .and(appStateStorage.putBulkBytecodeRecoveryFailures(failures))
+              .commit()
       }
 
       // Operator escape hatch: seed exact chain-weight values before RegularSync starts.
@@ -1765,10 +1789,46 @@ object SyncController:
             handleRegularSyncMsg(regularSync, m)
       }
 
-    def startRecovery(needBytecode: Boolean, needStorage: Boolean): Behavior[Command] =
+    /** The trie a bulk bytecode recovery scans: the CURRENT BEST block's state root, falling back to the SNAP pivot's.
+      *
+      * The best root is always intact (it is the state regular sync executes on) and covers contracts created after the
+      * pivot. The pivot root is not: with the default `basic` pruning (history 64) the pivot trie is pruned within
+      * about 64 blocks, so a missing code found days after SNAP would scan a root that no longer exists, find "no
+      * gaps", and blame the peers. Only a best root that cannot be read falls back to the pivot's.
+      *
+      * Startup recovery (`startRecovery` with no `scanRoot`) keeps the pivot root on purpose: it runs right after SNAP
+      * finishes, when the pivot trie is fresh, and its storage phase needs the pivot's storage tries.
+      */
+    private def bulkRecoveryScanRoot(): Option[(ByteString, BigInt)] =
+      def readable(root: ByteString, number: BigInt): Boolean =
+        try
+          stateStorage.getBackingStorage(number).get(root.toArray)
+          true
+        catch case _: Exception => false
+      val best = blockchainReader.getBestBlockHeader.map(h => (h.stateRoot.value, h.number.value))
+      val pivot = for
+        root <- appStateStorage.getSnapSyncStateRoot()
+        number <- appStateStorage.getSnapSyncPivotBlock()
+      yield (root, number)
+      best.filter { case (r, n) => readable(r, n) } match
+        case Some(ok) =>
+          log.info("Bulk bytecode recovery scans the best block's state root (block {}).", ok._2)
+          Some(ok)
+        case None =>
+          log.error(
+            "The best block's state root is not readable; the bulk bytecode recovery falls back to the SNAP pivot's root, " +
+              "which may be pruned."
+          )
+          pivot
+
+    def startRecovery(
+        needBytecode: Boolean,
+        needStorage: Boolean,
+        scanRoot: Option[(ByteString, BigInt)] = None
+    ): Behavior[Command] =
       syncGeneration += 1
-      val stateRootOpt = appStateStorage.getSnapSyncStateRoot()
-      val pivotBlockOpt = appStateStorage.getSnapSyncPivotBlock()
+      val stateRootOpt = scanRoot.map(_._1).orElse(appStateStorage.getSnapSyncStateRoot())
+      val pivotBlockOpt = scanRoot.map(_._2).orElse(appStateStorage.getSnapSyncPivotBlock())
 
       (stateRootOpt, pivotBlockOpt) match
         case (Some(stateRoot), Some(pivotBlock)) =>

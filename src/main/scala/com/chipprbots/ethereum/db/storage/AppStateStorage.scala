@@ -154,6 +154,15 @@ class AppStateStorage(val dataSource: DataSource) extends TransactionalKeyValueS
   def clearBytecodeRecoveryDone(): DataSourceBatchUpdate =
     put(Keys.BytecodeRecoveryDone, false.toString)
 
+  /** How many bulk bytecode recoveries (triggered by block import) have finished with the triggering code still
+    * missing. Persisted so that a code no peer serves stops costing a full trie scan on every restart.
+    */
+  def bulkBytecodeRecoveryFailures(): Int =
+    get(Keys.BulkBytecodeRecoveryFailures).flatMap(v => scala.util.Try(v.toInt).toOption).getOrElse(0)
+
+  def putBulkBytecodeRecoveryFailures(count: Int): DataSourceBatchUpdate =
+    put(Keys.BulkBytecodeRecoveryFailures, count.toString)
+
   /** Check if storage recovery scan has completed (Bug 20 hardening) */
   def isStorageRecoveryDone(): Boolean =
     get(Keys.StorageRecoveryDone).exists(_.toBoolean)
@@ -532,6 +541,7 @@ object AppStateStorage:
     val SnapSyncProgress = "SnapSyncProgress"
     val SnapSyncBootstrapTarget = "SnapSyncBootstrapTarget"
     val BytecodeRecoveryDone = "BytecodeRecoveryDone"
+    val BulkBytecodeRecoveryFailures = "BulkBytecodeRecoveryFailures"
     val StorageRecoveryDone = "StorageRecoveryDone"
     val RecoveryProgress = "RecoveryProgress"
     val SnapSyncAccountsComplete = "SnapSyncAccountsComplete"
