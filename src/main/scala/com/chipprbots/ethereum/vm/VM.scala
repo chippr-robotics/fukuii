@@ -120,8 +120,9 @@ class VM[W <: WorldStateProxy[W, S], S <: Storage[S]](
               if transferLogs.isEmpty then precompileResult
               else precompileResult.copy(logs = transferLogs ++ precompileResult.logs)
             else
-              val code = resolveCode(context1.evmConfig, world1, recipientAddr)
-              val env = ExecEnv(context1, code, ownerAddr)
+              val (code, codeHash) = resolveCode(context1.evmConfig, world1, recipientAddr)
+              ImportProfile.frame()
+              val env = ExecEnv(context1, code, ownerAddr, codeHash)
 
               // EIP-7702: If code was resolved from a delegation, warm the delegation target
               val delegationTarget =
@@ -152,13 +153,13 @@ class VM[W <: WorldStateProxy[W, S], S <: Storage[S]](
     * that the account's own code runs, and its leading 0xEF is an undefined opcode (go-ethereum `resolveCode` gates on
     * `IsPrague`; core-geth has no EIP-7702 at all).
     */
-  private def resolveCode(config: EvmConfig, world: W, addr: Address): ByteString =
-    val code = world.getCode(addr)
-    if !config.eip7702Enabled then code
+  private def resolveCode(config: EvmConfig, world: W, addr: Address): (ByteString, Option[ByteString]) =
+    val own @ (code, _) = world.getCodeAndHash(addr)
+    if !config.eip7702Enabled then own
     else
       SetCodeTransaction.parseDelegation(code) match
-        case Some(target) => world.getCode(target)
-        case None         => code
+        case Some(target) => world.getCodeAndHash(target)
+        case None         => own
 
   /** Contract creation - Λ function in YP salt is used to create contract by CREATE2 opcode. See
     * https://github.com/ethereum/EIPs/blob/master/EIPS/eip-1014.md

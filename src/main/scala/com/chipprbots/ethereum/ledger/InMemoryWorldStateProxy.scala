@@ -15,6 +15,7 @@ import com.chipprbots.ethereum.mpt.MerklePatriciaTrie.MissingStorageNodeExceptio
 import com.chipprbots.ethereum.mpt.MptNode
 import com.chipprbots.ethereum.rlp
 import com.chipprbots.ethereum.rlp.RLPImplicits.given
+import com.chipprbots.ethereum.vm.ImportProfile
 import com.chipprbots.ethereum.vm.Storage
 import com.chipprbots.ethereum.vm.WorldStateProxy
 
@@ -196,7 +197,7 @@ class InMemoryWorldStateProxy(
 ) extends WorldStateProxy[InMemoryWorldStateProxy, InMemoryWorldStateProxyStorage]:
 
   override def getAccount(address: Address): Option[Account] =
-    try accountsStateTrie.get(address)
+    try ImportProfile.account(accountsStateTrie.get(address))
     catch
       case e: MissingNodeException =>
         throw new MissingAccountNodeException(e.hash, address.bytes, e.location)
@@ -220,17 +221,27 @@ class InMemoryWorldStateProxy(
     * contract as an EOA, and a node that then imports the block disagrees with every other client (SNAP healing used to
     * leave exactly such accounts behind — devnet-8 block 318074).
     */
-  override def getCode(address: Address): ByteString =
-    accountCodes.getOrElse(
-      address,
-      getAccount(address) match
-        case None => ByteString.empty
-        case Some(account) =>
-          evmCodeStorage.get(account.codeHash.value) match
-            case Some(code)                                        => code
-            case None if account.codeHash == Account.EmptyCodeHash => ByteString.empty
-            case None => throw new MissingCodeException(account.codeHash.value, address.bytes)
-    )
+  override def getCode(address: Address): ByteString = getCodeAndHash(address)._1
+
+  /** [[getCode]] plus the account's `codeHash` when the code came from `EvmCodeStorage` under that hash. Code deployed
+    * earlier in the block and not yet persisted (`accountCodes`) has no hash at hand, so `None`.
+    */
+  override def getCodeAndHash(address: Address): (ByteString, Option[ByteString]) =
+    ImportProfile.code {
+      accountCodes.get(address) match
+        case Some(dirty) => (dirty, None)
+        case None =>
+          getAccount(address) match
+            case None => (ByteString.empty, None)
+            case Some(account) =>
+              val hash = account.codeHash.value
+              evmCodeStorage.get(hash) match
+                case Some(code) =>
+                  ImportProfile.codeBytesRead(code.length)
+                  (code, Some(hash))
+                case None if account.codeHash == Account.EmptyCodeHash => (ByteString.empty, None)
+                case None => throw new MissingCodeException(hash, address.bytes)
+    }
 
   override def getStorage(address: Address): InMemoryWorldStateProxyStorage =
     val proxy = contractStorages.getOrElse(address, getStorageForAddress(address, stateStorage))
