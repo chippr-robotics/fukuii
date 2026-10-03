@@ -66,7 +66,11 @@ private class SNAPSyncControllerImpl(
     // Factory for `StateValidator` so unit tests can inject a fake. Production
     // default is a thin `new StateValidator(_)` wrapper; tests can supply a
     // `FakeStateValidator` that returns canned results, delays, or throws.
-    validatorFactory: MptStorage => StateValidator
+    validatorFactory: MptStorage => StateValidator,
+    // Test seam: None (production) reads the process-global chain config exactly as before. The "test" network
+    // config has no terminal-total-difficulty, so without this no actor in this module's suite could ever
+    // exercise the PoS/CL-anchored paths live.
+    isPoSChainOverride: Option[Boolean] = None
 )(implicit ec: ExecutionContext):
 
   import SNAPSyncController.*
@@ -197,7 +201,9 @@ private class SNAPSyncControllerImpl(
   // Captured once at construction. ETC mainnet has TTD=None and never goes down the
   // CL-driven path; Sepolia/mainnet have TTD set and switch off TD-based pivot entirely.
   private val isPoSChain: Boolean =
-    com.chipprbots.ethereum.utils.Config.blockchains.blockchainConfig.terminalTotalDifficulty.isDefined
+    isPoSChainOverride.getOrElse(
+      com.chipprbots.ethereum.utils.Config.blockchains.blockchainConfig.terminalTotalDifficulty.isDefined
+    )
 
   private val requestTracker = new SNAPRequestTracker()(scheduler)
 
@@ -376,6 +382,10 @@ private class SNAPSyncControllerImpl(
   // RetryPivotRefresh forever (the heal-churn #1371 fought). Fail-SAFE (never force-marks-done / weakens any gate),
   // never fail-OPEN. Reset on any successful re-peg (completePivotRefreshWithStateRoot) and on entering healing.
   private var healRepegNoRootAttempts: Int = 0
+  // Provenance of the armed PivotBootstrapRetryKey/RetryPivotRefresh timer (BUG-BC3 3rd follow-up): true only when
+  // armed by a counted StateHealing attempt. A timer armed in an earlier phase (e.g. a storage-phase stall) carries
+  // false, so firing after StateHealing starts cannot spend the heal budget on a stalled CL. Consulted on PoS only.
+  private var retryRefreshCounts: Boolean = false
   private val MaxHealRepegNoRootAttempts: Int = 10 // 10 × 30s ≈ 5 min of no servable root before the lazy handoff
   // Suppress duplicate ConnectToPeer for snap-server-peers for 60s after a send attempt.
   // Prevents the race where the reconnect timer fires within the 5s peersScanInterval
@@ -495,6 +505,42 @@ private class SNAPSyncControllerImpl(
   private val DownloadStagnationCheckInterval: FiniteDuration = 30.seconds
   private val StorageStagnationThreshold: FiniteDuration =
     10.minutes // CFG-2: 20→10min; second stall force-completes after 30s anyway
+  // Distinct, much shorter threshold for the "coordinator reports 0 pending/0 active but never
+  // sent StorageRangeSyncComplete" signature specifically. That reading is unambiguous: it means
+  // the coordinator actor was restarted (RestartSupervisor wiping its in-memory tasks/tries — see
+  // StorageRangeCoordinatorImpl's StackTrie-ordering crash history) or otherwise lost its state,
+  // NOT that it is merely slow — a genuinely busy coordinator always reports pending>0 or
+  // active>0, and a stats-fetch timeout is already excluded separately (isTimeoutResponse resets
+  // the clock instead of falling through here). Waiting the full StorageStagnationThreshold in
+  // this specific case is pure dead time: there is no in-flight work for a pivot refresh or
+  // anything else to wait on, so nothing is gained by waiting longer than it takes to confirm the
+  // reading is stable across a couple of poll ticks. Force-complete triggers the SAME existing
+  // healing-recovery path either way (ForceCompleteStorage) — only the trigger latency changes.
+  private val StorageRestartedEmptyThreshold: FiniteDuration = 60.seconds
+  // Platåberget soak v6 (2026-09-28): lastStorageProgressMs (below) resets on ANY
+  // ProgressStorageSlotsSynced message carrying >10 slots — but that resets on progress from ANY
+  // account, not necessarily the ones actually stuck. A handful of accounts retried indefinitely
+  // (the unbounded-verification-failure-retry livelock, since bounded in
+  // StorageRangeCoordinatorImpl's staleRootFailuresByAccount) can loop forever while OTHER,
+  // unrelated accounts keep completing and resetting this clock — soak evidence: completed crept
+  // from 67268 to 67616 (~15/min) while [STORAGE-STATE] sat at a fixed 99% for over 25 minutes,
+  // pending oscillating 1-33 without ever draining. That is real, if slow, throughput and legitimately
+  // resets lastStorageProgressMs — masking a stall the way it's currently defined.
+  //
+  // storageTailBaseline tracks a DIFFERENT signal: pending+active (the actual
+  // remaining-work count), sampled every stagnation tick (DownloadStagnationCheckInterval, 30s).
+  // The baseline only advances when remaining work is STRICTLY SMALLER than the last baseline —
+  // oscillation without ever going lower doesn't count as progress. Reuses StorageStagnationThreshold
+  // as its window rather than a new constant, per "build on the existing thresholds".
+  //
+  // Queue depth alone is NOT sufficient evidence of a livelock: pending+active also stays flat through huge-account
+  // continuation chains and regrows after subtask splits, so a depth-only trigger fires on healthy tails (and bypasses
+  // the late-stage guard on proactive pivot rolls). The signal therefore also requires the coordinator to report
+  // repeated stale-local-root verification failures accumulated over the same window — see
+  // SNAPSyncController.evaluateStorageTail. Reset at every storage-phase entry (restartSnapSync / wakeFromDormant
+  // reuse this instance, so a stale baseline would otherwise fire a spurious refresh on a second phase's first tick).
+  private var storageTailBaseline: SNAPSyncController.StorageTailBaseline =
+    SNAPSyncController.StorageTailBaseline.fresh(System.currentTimeMillis())
   private val AccountStagnationThreshold: FiniteDuration = snapSyncConfig.accountStagnationTimeout
   private var lastStorageProgressMs: Long = System.currentTimeMillis()
   private var lastBytecodeProgressMs: Long = System.currentTimeMillis()
@@ -1172,6 +1218,7 @@ private class SNAPSyncControllerImpl(
             s"Pivot header bootstrap failed for block $pendingPivot (reason: $reason). " +
               s"Backtracked pivot below 0 — falling back to network-best recalculation after 60s."
           )
+          retryRefreshCounts = false
           timers.startSingleTimer(PivotBootstrapRetryKey, RetryPivotRefresh, 60.seconds)
         Behaviors.same
 
@@ -1203,7 +1250,12 @@ private class SNAPSyncControllerImpl(
         if currentPhase == AccountRangeSync || currentPhase == ByteCodeAndStorageSync || currentPhase == StateHealing
         then
           ctx.log.info("Retrying pivot refresh after bootstrap failure...")
-          refreshPivotInPlace("retry after bootstrap failure")
+          // PoS only: a replay counts toward the heal budget iff the timer was armed by a counted attempt.
+          // ETC/pre-merge (isPoSChain=false) keeps the unconditional default (byte-identical to base).
+          refreshPivotInPlace(
+            "retry after bootstrap failure",
+            countsTowardHealBudget = !isPoSChain || retryRefreshCounts
+          )
         else ctx.log.info(s"Skipping pivot refresh retry — phase=$currentPhase no longer needs it")
         Behaviors.same
 
@@ -1311,6 +1363,7 @@ private class SNAPSyncControllerImpl(
 
           // Start storage + bytecode stagnation watchdogs now that accounts are done
           lastStorageProgressMs = System.currentTimeMillis()
+          storageTailBaseline = SNAPSyncController.StorageTailBaseline.fresh(System.currentTimeMillis())
           lastBytecodeProgressMs = System.currentTimeMillis()
           lastBytecodeProgressCount = 0L
           scheduleStagnationChecks()
@@ -1804,12 +1857,15 @@ private class SNAPSyncControllerImpl(
         val workRemaining = stats.tasksPending > 0 || stats.tasksActive > 0
 
         // Special case: coordinator reports 0 pending + 0 active but never sent StorageRangeSyncComplete.
-        // This means trie construction is stuck (accountsInTrieConstruction/pendingAccountSlots not empty).
-        // After the stagnation threshold, force-complete to unstick it.
+        // This means trie construction is stuck (accountsInTrieConstruction/pendingAccountSlots not empty),
+        // most likely because the coordinator actor restarted and lost its in-memory task state. Unlike
+        // the `workRemaining` branch below (where waiting first for a pivot refresh is worthwhile), this
+        // reading is unambiguous on its own — use the much shorter StorageRestartedEmptyThreshold so the
+        // existing force-complete/healing recovery fires in ~1 minute instead of ~10.
         if !workRemaining && !storagePhaseComplete then
           val now = System.currentTimeMillis()
           val stalledForMs = now - lastStorageProgressMs
-          if stalledForMs > StorageStagnationThreshold.toMillis then
+          if stalledForMs > StorageRestartedEmptyThreshold.toMillis then
             ctx.log.warn(
               s"Storage coordinator reports 0 pending/0 active but never sent StorageRangeSyncComplete " +
                 s"(stalled ${stalledForMs / 1000}s). Trie construction likely stuck. Force-completing."
@@ -1822,18 +1878,46 @@ private class SNAPSyncControllerImpl(
           val now = System.currentTimeMillis()
           val stalledForMs = now - lastStorageProgressMs
 
+          // Tail-livelock signal, independent of the slot-count-based one above: remaining work (pending+active)
+          // has not set a new low point for a full StorageStagnationThreshold AND the coordinator kept recording
+          // stale-local-root verification failures over that window (see evaluateStorageTail).
+          val (nextBaseline, progressStalled) = SNAPSyncController.evaluateStorageTail(
+            storageTailBaseline,
+            remainingWork = stats.tasksPending + stats.tasksActive,
+            staleRootFailureEvents = stats.staleRootFailureEvents,
+            nowMs = now,
+            thresholdMs = StorageStagnationThreshold.toMillis
+          )
+          storageTailBaseline = nextBaseline
+          val remainingWorkStalledForMs = now - storageTailBaseline.sinceMs
+
           if !storageStagnationRefreshAttempted then
-            // First stall: needs full threshold before triggering
-            if stalledForMs >= StorageStagnationThreshold.toMillis && now - lastPivotRestartMs >= MinPivotRestartInterval.toMillis
+            // First stall: needs full threshold before triggering, on EITHER signal.
+            if (stalledForMs >= StorageStagnationThreshold.toMillis || progressStalled) &&
+              now - lastPivotRestartMs >= MinPivotRestartInterval.toMillis
             then
               lastPivotRestartMs = now
               storageStagnationRefreshAttempted = true
+              val reason =
+                if progressStalled && stalledForMs < StorageStagnationThreshold.toMillis then
+                  s"remaining work (pending+active) has not shrunk below ${storageTailBaseline.lowWork} " +
+                    s"for ${remainingWorkStalledForMs / 1000}s while verification failures kept recurring " +
+                    s"(tail livelock signature)"
+                else s"no progress for ${stalledForMs / 1000}s"
               ctx.log.warn(
-                s"Storage sync stalled: no progress for ${stalledForMs / 1000}s " +
+                s"Storage sync stalled: $reason " +
                   s"(threshold=${StorageStagnationThreshold.toSeconds}s). Attempting pivot refresh."
               )
               lastStorageProgressMs = now
-              refreshPivotInPlace(s"storage stagnation: no progress for ${stalledForMs / 1000}s")
+              // Give the post-refresh remaining-work baseline a fresh start too, so a refresh that
+              // genuinely helps isn't immediately re-flagged by a stale pre-refresh low point.
+              storageTailBaseline = SNAPSyncController.StorageTailBaseline
+                .fresh(now)
+                .copy(
+                  lowWork = stats.tasksPending + stats.tasksActive,
+                  staleFailuresAtLow = stats.staleRootFailureEvents
+                )
+              refreshPivotInPlace(s"storage stagnation: $reason")
           else
             // Second stall after refresh: short grace period (2 min), then force-complete.
             // The pivot refresh either works quickly or not at all.
@@ -2495,6 +2579,7 @@ private class SNAPSyncControllerImpl(
 
               currentPhase = ByteCodeAndStorageSync
               lastStorageProgressMs = System.currentTimeMillis()
+              storageTailBaseline = SNAPSyncController.StorageTailBaseline.fresh(System.currentTimeMillis())
               scheduleStagnationChecks()
               progressMonitor.startPhase(ByteCodeAndStorageSync)
 
@@ -3718,13 +3803,22 @@ private class SNAPSyncControllerImpl(
         // Target a root inside peers' serve window: networkBest − margin (≥1). recentRootTarget caps at 1.
         val serveTarget = SyncController.recentRootTarget(Seq(networkBest), HealingServeRootMarginBlocks)
         serveTarget.foreach { target =>
+          // Staleness clock — see SNAPSyncController.staleReferenceHead's doc (BUG-BC3): CL-anchored instead of
+          // networkBest-anchored under movingRootDeltaHeal on a PoS chain with a live CL hint; byte-identical
+          // (networkBest) for ETC/pre-merge and for the decoupledHealServeRoot serve-root path.
+          val staleClockNow: BigInt = SNAPSyncController.staleReferenceHead(
+            movingRootDeltaHeal = snapSyncConfig.movingRootDeltaHeal,
+            isPoSChain = isPoSChain,
+            clHeadNumber = clPivotHint.flatMap(_.knownHeader).map(_.number.value),
+            networkBest = networkBest
+          )
           // Refresh cadence (U1): a serve root is fetched at `networkBest − margin`, so it STARTS `margin` blocks
           // behind the head. We refresh only once it has drifted a FULL window further back — i.e. when it is
           // > 2×margin behind the current head — giving ~margin blocks of runway between the ~1s peer round-trips
           // (never per-block). An unset lastHealingServeRootBlock means the coordinator is still fetching against
           // the walk root (coupled), so engage immediately.
           val stale = lastHealingServeRootBlock match
-            case Some(lastBlock) => (networkBest - lastBlock) > (HealingServeRootMarginBlocks * 2)
+            case Some(lastBlock) => (staleClockNow - lastBlock) > (HealingServeRootMarginBlocks * 2)
             case None            => true
           if stale then
             if snapSyncConfig.movingRootDeltaHeal then
@@ -3732,15 +3826,27 @@ private class SNAPSyncControllerImpl(
               // canonical header (networkBest − margin), fetches it, and emits HealingPivotRefreshed via
               // completePivotRefreshWithStateRoot — moving completeness AND fetch (one root) while RETAINING every
               // persisted verified node and resetting verificationPassComplete so a fresh pruned descent gates
-              // completion against the new root. Record the block so the cadence (≤ once per window) matches the
-              // serve-root path; the actual root lands when the refresh settles.
-              lastHealingServeRootBlock = Some(target)
+              // completion against the new root. Record the bookkeeping baseline via the SAME rule
+              // staleReferenceHead used to pick the clock (see lastHealingServeRootBlockToRecord's doc — BUG-BC3
+              // follow-up): non-CL-anchored checks (ETC/pre-merge, or PoS before a CL hint arrives) MUST keep
+              // recording `target`, byte-identical to base, or the effective re-trigger threshold silently
+              // doubles (networkBest must then drift > 2×margin instead of > margin, roughly doubling the
+              // interval between re-pegs on ETC mainnet); the actual root lands when the refresh settles.
+              lastHealingServeRootBlock = Some(
+                SNAPSyncController.lastHealingServeRootBlockToRecord(staleClockNow, networkBest, target)
+              )
               ctx.log.info(
-                s"[HEAL-REPEG] Heal root stale (networkBest=$networkBest, target=$target, " +
+                // clock is CL-anchored iff it differs from networkBest (see staleReferenceHead); both are logged
+                // so an operator can tell which source drove this check without guessing from the numbers alone.
+                s"[HEAL-REPEG] Heal root stale (clock=$staleClockNow, networkBest=$networkBest, target=$target, " +
                   s"margin=$HealingServeRootMarginBlocks, lastRepegBlock=${lastHealingServeRootBlock.getOrElse("none")}) " +
                   s"— re-pegging the single heal root via refreshPivotInPlace (spec 009 moving-root delta heal)."
               )
-              refreshPivotInPlace("spec009 moving-root re-peg: heal root stale")
+              // countsTowardHealBudget=false: this is a proactive "is there a fresher CL pivot" probe, not a
+              // report that the current root is unservable. See refreshPivotInPlace's handling for the full
+              // rationale (BUG-BC3). HealingAllPeersStateless — the GENUINE unservable-root signal — still calls
+              // refreshPivotInPlace with the default (true), so the budget stays intact for that case.
+              refreshPivotInPlace("spec009 moving-root re-peg: heal root stale", countsTowardHealBudget = false)
             else
               healingServeRootRequestInFlight = true
               ctx.log.info(
@@ -3897,7 +4003,7 @@ private class SNAPSyncControllerImpl(
     * Downloaded trie nodes are content-addressed (keyed by keccak256 hash), so ~99.9% remain valid across pivot
     * changes. Root mismatch (if any) is resolved during the healing phase.
     */
-  private def refreshPivotInPlace(reason: String): Unit =
+  private def refreshPivotInPlace(reason: String, countsTowardHealBudget: Boolean = true): Unit =
     ctx.log.info(s"Refreshing pivot in-place: $reason")
 
     // CL-anchored pivot selection for post-merge chains (geth's BeaconSync pattern).
@@ -3925,7 +4031,7 @@ private class SNAPSyncControllerImpl(
         // though that should not happen for forkchoiceUpdated).
         val target = clHead - snapSyncConfig.pivotBlockOffset
         val currentPivot = pivotBlock.getOrElse(BigInt(0))
-        if target <= currentPivot then
+        if SNAPSyncController.clPivotNotYetAdvanced(clHead, snapSyncConfig.pivotBlockOffset, currentPivot) then
           ctx.log.info(
             s"CL-based pivot $target not strictly newer than current $currentPivot " +
               s"(CL head=$clHead, offset=${snapSyncConfig.pivotBlockOffset}). Skipping refresh."
@@ -3975,28 +4081,45 @@ private class SNAPSyncControllerImpl(
       // effects (currentPhase=Completed, syncController ! Done, child teardown) and discard the returned Behavior.
       // Outside healing or flag OFF: the unbounded 30s-retry stays byte-identical (SNAP peers are intermittent on ETC).
       if snapSyncConfig.movingRootDeltaHeal && currentPhase == StateHealing then
-        healRepegNoRootAttempts += 1
-        if healRepegNoRootAttempts >= MaxHealRepegNoRootAttempts then
-          ctx.log.warn(
-            s"[HEAL-REPEG] No servable root for $healRepegNoRootAttempts consecutive re-peg attempts (budget " +
-              s"$MaxHealRepegNoRootAttempts exhausted, ~${MaxHealRepegNoRootAttempts * 30}s). Taking the fail-safe " +
-              s"lazy-heal handoff (completeSnapSync) — missing nodes fetched on-demand via GetTrieNodes during block " +
-              s"execution; the anchor guard still gates finalization. NOT a false completion."
+        if !countsTowardHealBudget then
+          // Platåberget ePBS-devnet soak, 2026-09-27/28 (BUG-BC3 + follow-ups): this attempt is NOT a report that
+          // the current heal root is unservable (that signal is HealingAllPeersStateless, which counts). Either it
+          // is the proactive "heal root stale" probe, or a PoS leftover retry timer armed outside StateHealing
+          // (see retryRefreshCounts). "No newer CL pivot yet" is the ordinary outcome while the CL is stalled
+          // (Lighthouse cannot advance while its EL reports SYNCING) and healing keeps progressing on the
+          // still-served root. Do not touch healRepegNoRootAttempts and do not re-arm PivotBootstrapRetryKey:
+          // maybeRequestHealingServeRoot's own per-tick cadence already re-checks, and a genuine unservable-root
+          // report (HealingAllPeersStateless) arms its own COUNTED retry chain. Deliberately NOT keyed on WHY
+          // newPivotOpt is empty: with a live CL hint it is empty only via the CL-stalled branch, so a
+          // reason-keyed exemption would also swallow genuine stateless reports and wedge the handoff.
+          ctx.log.info(
+            s"No newer pivot available yet ($reason) — continuing healing on the current root " +
+              s"(pivot=${pivotBlock.getOrElse("?")}). Not counted against the re-peg budget."
           )
-          timers.cancel(PivotBootstrapRetryKey)
-          healRepegNoRootAttempts = 0
-          // Platåberget soak, 2026-09-27: see anchorPivotBeforeLazyHandoff's doc (near completeSnapSync). This
-          // handoff fires after zero or more successful re-pegs that (correctly, per BUG-006) never persisted —
-          // anchor now, before the terminal handoff, so the A5 guard in finalizeSnapSync compares like-for-like.
-          anchorPivotBeforeLazyHandoff("HEAL-REPEG budget exhausted")
-          completeSnapSync()
         else
-          ctx.log.warn(
-            s"Cannot re-peg heal root: no suitable SNAP peers available (attempt " +
-              s"$healRepegNoRootAttempts/$MaxHealRepegNoRootAttempts). Scheduling retry in 30s."
-          )
-          timers.cancel(PivotBootstrapRetryKey)
-          timers.startSingleTimer(PivotBootstrapRetryKey, RetryPivotRefresh, 30.seconds)
+          healRepegNoRootAttempts += 1
+          if healRepegNoRootAttempts >= MaxHealRepegNoRootAttempts then
+            ctx.log.warn(
+              s"[HEAL-REPEG] No servable root for $healRepegNoRootAttempts consecutive re-peg attempts (budget " +
+                s"$MaxHealRepegNoRootAttempts exhausted, ~${MaxHealRepegNoRootAttempts * 30}s). Taking the fail-safe " +
+                s"lazy-heal handoff (completeSnapSync) — missing nodes fetched on-demand via GetTrieNodes during block " +
+                s"execution; the anchor guard still gates finalization. NOT a false completion."
+            )
+            timers.cancel(PivotBootstrapRetryKey)
+            healRepegNoRootAttempts = 0
+            // Platåberget soak, 2026-09-27: see anchorPivotBeforeLazyHandoff's doc (near completeSnapSync). This
+            // handoff fires after zero or more successful re-pegs that (correctly, per BUG-006) never persisted —
+            // anchor now, before the terminal handoff, so the A5 guard in finalizeSnapSync compares like-for-like.
+            anchorPivotBeforeLazyHandoff("HEAL-REPEG budget exhausted")
+            completeSnapSync()
+          else
+            ctx.log.warn(
+              s"Cannot re-peg heal root: no suitable SNAP peers available (attempt " +
+                s"$healRepegNoRootAttempts/$MaxHealRepegNoRootAttempts). Scheduling retry in 30s."
+            )
+            timers.cancel(PivotBootstrapRetryKey)
+            retryRefreshCounts = true // armed by a COUNTED attempt: its replays count too
+            timers.startSingleTimer(PivotBootstrapRetryKey, RetryPivotRefresh, 30.seconds)
       else
         ctx.log.warn(
           "Cannot refresh pivot: no suitable SNAP peers available. Scheduling retry in 30s."
@@ -4005,6 +4128,7 @@ private class SNAPSyncControllerImpl(
         // The serve window is ~28 min; peers will reappear when new blocks are mined.
         // Restarting can't help with no peers, and it destroys all downloaded trie data.
         timers.cancel(PivotBootstrapRetryKey)
+        retryRefreshCounts = false // armed outside StateHealing: a replay landing in healing must not count (PoS)
         timers.startSingleTimer(PivotBootstrapRetryKey, RetryPivotRefresh, 30.seconds)
     else
       val newPivotBlock = newPivotOpt.get
@@ -4298,6 +4422,11 @@ private class SNAPSyncControllerImpl(
             // lazy-heal last-resort only fires after a fresh run of consecutive empty re-peg attempts. Harmless flag-OFF
             // (the budget is never incremented unless movingRootDeltaHeal && StateHealing).
             healRepegNoRootAttempts = 0
+            // PoS only (ETC/pre-merge byte-identical): a counted retry timer armed before this successful re-peg
+            // must not replay afterwards and count again against a stalled CL (forge, BUG-BC3 3rd follow-up).
+            if isPoSChain then
+              retryRefreshCounts = false
+              timers.cancel(PivotBootstrapRetryKey)
             trieNodeHealingCoordinator.foreach { coordinator =>
               coordinator ! actors.TrieNodeHealingCoordinator.HealingPivotRefreshed(newStateRoot.value)
             }
@@ -5135,6 +5264,40 @@ object SNAPSyncController:
     // freshly-built trie; only a resumed stale cursor does.
     snapSyncConfig.deferredMerkleization && !resumedStaleCursors
 
+  /** Baseline for the storage tail-livelock backstop: the lowest remaining-work (pending+active) seen so far, when it
+    * was set, and the coordinator's cumulative stale-local-root failure count at that moment.
+    */
+  final private[snap] case class StorageTailBaseline(lowWork: Int, sinceMs: Long, staleFailuresAtLow: Long)
+
+  private[snap] object StorageTailBaseline:
+    def fresh(nowMs: Long): StorageTailBaseline = StorageTailBaseline(Int.MaxValue, nowMs, 0L)
+
+  /** Minimum number of stale-root verification failures, within one stall window, that makes a flat queue evidence of a
+    * livelock rather than a healthy slow tail (matches the coordinator's per-account give-up count K=3: one account's
+    * worth of repeated failures).
+    */
+  private[snap] val MinStaleFailuresForTailLivelock: Long = 3L
+
+  /** Pure state machine for the storage tail-livelock backstop (extracted so it is unit-testable; the actor is
+    * file-private). The baseline advances only when remaining work is STRICTLY lower than the last low point
+    * (oscillation does not count as progress). The result is `true` only when the low point has stood for `thresholdMs`
+    * AND at least [[MinStaleFailuresForTailLivelock]] stale-root failures were recorded since it was set — a depth-only
+    * trigger would misfire on huge-account continuation chains and post-split regrowth.
+    */
+  private[snap] def evaluateStorageTail(
+      baseline: StorageTailBaseline,
+      remainingWork: Int,
+      staleRootFailureEvents: Long,
+      nowMs: Long,
+      thresholdMs: Long
+  ): (StorageTailBaseline, Boolean) =
+    val next =
+      if remainingWork < baseline.lowWork then StorageTailBaseline(remainingWork, nowMs, staleRootFailureEvents)
+      else baseline
+    val stalledMs = nowMs - next.sinceMs
+    val failuresInWindow = staleRootFailureEvents - next.staleFailuresAtLow
+    (next, stalledMs >= thresholdMs && failuresInWindow >= MinStaleFailuresForTailLivelock)
+
   /** Freshness gate for `refreshPivotInPlace`: reject candidate pivots whose source peer is more than `maxStaleness`
     * blocks behind the CL-driven head.
     *
@@ -5166,6 +5329,84 @@ object SNAPSyncController:
       // legacy "take whatever peer offers" behavior.
       Right(())
 
+  /** True when a CL-anchored re-peg target (`clHead - pivotBlockOffset`) is not strictly newer than the current pivot —
+    * i.e. `refreshPivotInPlace`'s CL-anchored branch would find nothing to do because the CL hasn't produced a fresher
+    * head, NOT because anything is unservable.
+    *
+    * Extracted (BUG-BC3, 2nd follow-up, Platåberget soak 2026-09-28) as the single source of truth for
+    * `refreshPivotInPlace`'s inline check, given explicit parameters — rather than reading `isPoSChain`/`clPivotHint`
+    * off the enclosing actor — specifically so it can be unit-tested directly: `isPoSChain` is a `private val` fixed at
+    * actor-construction time from the global
+    * `com.chipprbots.ethereum.utils.Config.blockchains.blockchainConfig.terminalTotalDifficulty`, which the "test"
+    * network config (used throughout this module's test suite, no `terminal-total-difficulty` entry) always resolves to
+    * `false` — so no actor spawned in a test in this module can ever exercise the CL-anchored branch live (see
+    * `staleReferenceHead`'s tests for the same constraint). Taking `clHead` as a plain `Option[BigInt]` sidesteps that
+    * entirely: a test can simulate "PoS chain, live CL hint" by simply passing `Some(...)`, exactly as the
+    * `staleReferenceHead` tests already do for `clHeadNumber`.
+    */
+  private[snap] def clPivotNotYetAdvanced(clHead: BigInt, pivotBlockOffset: Long, currentPivot: BigInt): Boolean =
+    (clHead - pivotBlockOffset) <= currentPivot
+
+  /** The reference head `maybeRequestHealingServeRoot` clocks its heal-root staleness check against.
+    *
+    * Platåberget ePBS-devnet soak, 2026-09-27 (BUG-BC3): under `movingRootDeltaHeal`, `refreshPivotInPlace`'s OWN
+    * re-peg decision is CL-anchored on a PoS chain (peer `maxBlockNumber` is unreliable post-merge — see
+    * `refreshPivotInPlace`'s own comment). Clocking the STALENESS check against peer-reported `networkBest` instead let
+    * a frozen CL head (a Lighthouse CL that cannot advance while its EL reports SYNCING) trigger repeated staleness
+    * checks purely because peers kept gossiping a climbing STATUS height, even though the CL head — the only thing that
+    * could ever produce a newer pivot on that path — was not moving. Each such check correctly found no newer CL pivot,
+    * but (pre-fix) that failure counted against the bounded re-peg budget anyway, exhausting it in ~5 minutes while
+    * healing progressed normally on serving peers.
+    *
+    * Using the CL head as the clock here means a stuck CL simply stops triggering checks in the first place, rather
+    * than triggering ever more of them — a root-cause fix layered on top of (and independent from) the
+    * `refreshPivotInPlace(reason, countsTowardHealBudget = false)` fix for this same call site, which stops a "no newer
+    * pivot yet" outcome from counting against the budget regardless of what triggered the check.
+    *
+    * Byte-identical for ETC/pre-merge (`isPoSChain = false`) and for the `decoupledHealServeRoot` (non-
+    * `movingRootDeltaHeal`) serve-root path, which by design tracks newest-SERVABLE rather than canonical head
+    * (CON-010) — both always fall through to `networkBest`.
+    */
+  private[snap] def staleReferenceHead(
+      movingRootDeltaHeal: Boolean,
+      isPoSChain: Boolean,
+      clHeadNumber: Option[BigInt],
+      networkBest: BigInt
+  ): BigInt =
+    if movingRootDeltaHeal && isPoSChain then clHeadNumber.getOrElse(networkBest) else networkBest
+
+  /** The value `maybeRequestHealingServeRoot` records as `lastHealingServeRootBlock` after a stale-triggered re-peg —
+    * i.e. the bookkeeping baseline the NEXT staleness check is compared against.
+    *
+    * forge review follow-up on b8f0700f6 (BUG-BC3): the fix originally recorded `staleClockNow` (the value
+    * `staleReferenceHead` picked for the CURRENT check) unconditionally. That is correct when `staleClockNow` is the CL
+    * head (`staleClockNow != networkBest`) — see below. But whenever `staleReferenceHead` fell through to `networkBest`
+    * (ETC/pre-merge, or a PoS chain before its first CL hint arrives — `staleClockNow == networkBest` in both), it
+    * silently replaced base's `target` (`networkBest − margin`, `recentRootTarget`) with the larger `networkBest`
+    * itself. Since `stale` is `(clockNow − lastBlock) > 2×margin`, recording `target` instead of `networkBest` is what
+    * makes the EFFECTIVE re-trigger threshold "`networkBest` has advanced by more than 1×margin since the last fire"
+    * (the `−margin` already baked into `target` cancels one of the two margins in the comparison) rather than 2×margin
+    * — recording `networkBest` instead silently DOUBLES the required advance (and so roughly doubles the wall-clock
+    * interval between re-pegs: on ETC mainnet, `moving-root-delta-heal = true` ships as the default with no ETC
+    * override, so this was a real, not merely theoretical, behavior change — from ~64 to ~128 blocks between checks,
+    * ~14 to ~28 minutes, approaching peers' ~128-block serve window). Recording `target` there instead is
+    * BYTE-IDENTICAL to base.
+    *
+    * Recording the raw CL head (not a `−margin`-shifted value) for the CL-anchored case is intentional, not an
+    * oversight to mirror: `target`'s `−margin` shift was calibrated specifically for the peer-reported-best/
+    * serve-window cadence (see `maybeRequestHealingServeRoot`'s "Refresh cadence (U1)" comment). The CL-anchored check
+    * exists for a different reason — avoiding spurious re-triggers while the CL head is not advancing at all (BUG-BC3)
+    * — for which "the CL head has advanced by more than 2×margin since the last check" is already a direct,
+    * self-justifying threshold; borrowing the peer-cadence's margin-shift would only make the CL path harder to reason
+    * about for no corresponding benefit.
+    */
+  private[snap] def lastHealingServeRootBlockToRecord(
+      staleClockNow: BigInt,
+      networkBest: BigInt,
+      target: BigInt
+  ): BigInt =
+    if staleClockNow == networkBest then target else staleClockNow
+
   def apply(
       blockchainReader: BlockchainReader,
       blockchainWriter: BlockchainWriter,
@@ -5180,7 +5421,8 @@ object SNAPSyncController:
       scheduler: Scheduler,
       blacklist: Blacklist,
       syncController: TypedActorRef[SyncProtocol.SyncControllerReply],
-      validatorFactory: MptStorage => StateValidator = new StateValidator(_)
+      validatorFactory: MptStorage => StateValidator = new StateValidator(_),
+      isPoSChainOverride: Option[Boolean] = None
   )(implicit ec: ExecutionContext): Behavior[Command] =
     Behaviors.setup[Command] { ctx =>
       Behaviors.withTimers[Command] { timers =>
@@ -5200,7 +5442,8 @@ object SNAPSyncController:
           scheduler,
           blacklist,
           syncController,
-          validatorFactory
+          validatorFactory,
+          isPoSChainOverride
         ).start() // #1378: start() arms the 5s PollHandshakedPeers timer that populates the
         //          controller's peerListHelper. Calling startSnapSync() directly bypasses it,
         //          leaving snapPeersForPivot permanently empty → pivot never selected.

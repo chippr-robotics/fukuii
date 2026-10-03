@@ -19,11 +19,15 @@ import com.chipprbots.ethereum.blockchain.sync.codec.MptNodeCodecs.*
 import com.chipprbots.ethereum.blockchain.sync.codec.ReceiptCodecs.*
 import com.chipprbots.ethereum.crypto
 import com.chipprbots.ethereum.domain.Address
+import com.chipprbots.ethereum.domain.BlockAccessList
+import com.chipprbots.ethereum.domain.BlockAccessList.AccountChanges
+import com.chipprbots.ethereum.domain.BlockAccessList.CodeChange
 import com.chipprbots.ethereum.domain.BlockBody
 import com.chipprbots.ethereum.domain.BlockHeader
 import com.chipprbots.ethereum.domain.BlockNumber
 import com.chipprbots.ethereum.domain.BloomFilter
 import com.chipprbots.ethereum.domain.LegacyReceipt
+import com.chipprbots.ethereum.domain.PlatabergetBalVectors
 import com.chipprbots.ethereum.domain.Receipt
 import com.chipprbots.ethereum.domain.BlockHash
 import com.chipprbots.ethereum.domain.SignedTransaction
@@ -40,6 +44,8 @@ import com.chipprbots.ethereum.network.PeerEventBusActor.SubscriptionClassifier.
 import com.chipprbots.ethereum.network.PeerId
 import com.chipprbots.ethereum.network.PeerManagerActor.FastSyncHostConfiguration
 import com.chipprbots.ethereum.network.PeerManagerActor.PeerConfiguration
+import com.chipprbots.ethereum.network.p2p.EthereumMessageDecoder
+import com.chipprbots.ethereum.network.p2p.messages.Capability
 import com.chipprbots.ethereum.network.p2p.messages.Codes
 import com.chipprbots.ethereum.network.p2p.messages.ETHPackets
 import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.BlockBodies
@@ -48,7 +54,9 @@ import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.GetBlockHeaders
 import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.GetNodeData
 import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.NodeData
 import com.chipprbots.ethereum.network.rlpx.RLPxConnectionHandler.RLPxConfiguration
+import com.chipprbots.ethereum.rlp.RLPEncodeable
 import com.chipprbots.ethereum.rlp.RLPList
+import com.chipprbots.ethereum.rlp.encode
 import com.chipprbots.ethereum.testing.Tags.*
 import com.chipprbots.ethereum.utils.Config
 
@@ -361,6 +369,176 @@ class BlockchainHostActorSpec extends AnyFlatSpec with Matchers:
         returned shouldBe Seq(oversizedBody)
       case other => fail(s"expected BlockBodies with the single oversized body, got $other")
 
+  // ── eth/71 GetBlockAccessLists (EIP-8159) ─────────────────────────────────────────────────────────────────────────
+
+  /** An entry's RLP, as it goes on the wire. */
+  private def wireBytes(entry: RLPEncodeable): ByteString = ByteString(encode(entry))
+
+  /** EIP-8159's entry for a list the server does not hold: the RLP empty string. */
+  private val Unavailable: ByteString = ByteString(Array(0x80.toByte))
+
+  /** A list of one account with one code change of `codeSize` bytes: an entry of about that size. */
+  private def listOfSize(codeSize: Int): BlockAccessList =
+    BlockAccessList(
+      Seq(
+        AccountChanges(
+          Address(ByteString(Array.fill(20)(0x11.toByte))),
+          Nil,
+          Nil,
+          Nil,
+          Nil,
+          Seq(CodeChange(1, ByteString(Array.fill(codeSize)(0x5b.toByte))))
+        )
+      )
+    )
+
+  // The acceptance case of #1428, and what hive's devp2p TestEth71GetBlockAccessLists checks of a served entry: the
+  // requester hashes the RAW entry bytes it received (no decode and re-encode) against the header's
+  // blockAccessListHash. A live Platåberget list, 65,994 bytes with a 64 KiB code change, so both it and that item
+  // carry three-byte RLP length prefixes: the writer must give back exactly the bytes the reader took in.
+  it should "serve a stored block access list byte for byte, and 0x80 for a block it holds none for, in order" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in new TestSetup:
+    val live = PlatabergetBalVectors.load(PlatabergetBalVectors.Block275654)
+    val unknown: ByteString = ByteString(Hex.decode("88" * 32))
+    blockchainWriter.storeBlockAccessList(BlockHash(live.blockHash), live.accessList).commit()
+    blockchainReader.getBlockAccessListByHash(BlockHash(live.blockHash)) shouldBe Some(live.bytes)
+    live.bytes.length shouldBe 65994
+
+    val (reply, wire) = requestBlockAccessLists(Seq(unknown, live.blockHash, unknown, live.blockHash))
+
+    reply.requestId shouldBe BigInt(7)
+    reply.entries.map(wireBytes) shouldBe Seq(Unavailable, live.bytes, Unavailable, live.bytes)
+    // The message as sent carries the stored bytes verbatim.
+    wire.containsSlice(live.bytes.toArray) shouldBe true
+    // And as an eth/71 peer decodes it: the entry's raw bytes are the stored list and hash to the live header's
+    // commitment.
+    EthereumMessageDecoder.ethMessageDecoder(Capability.ETH71).fromBytes(Codes.BlockAccessListsCode, wire) match
+      case Right(received: ETHPackets.BlockAccessLists) =>
+        received.requestId shouldBe BigInt(7)
+        received.entries.map(wireBytes) shouldBe Seq(Unavailable, live.bytes, Unavailable, live.bytes)
+        ByteString(crypto.kec256(wireBytes(received.entries(1)).toArray)) shouldBe live.blockAccessListHash
+      case other => fail(s"an eth/71 peer could not decode the reply: $other")
+
+  it should "answer an empty request with an empty BlockAccessLists" taggedAs (UnitTest) in new TestSetup:
+    val (reply, _) = requestBlockAccessLists(Nil)
+
+    reply.requestId shouldBe BigInt(7)
+    reply.entries shouldBe empty
+
+  // go-ethereum serviceGetBlockAccessListsQuery: `if bytes >= softResponseLimit ... { break }` BEFORE each lookup,
+  // counting only the lists served. The first list (1.5 MiB) leaves the total under 2 MiB, so the second (1 MiB) ships
+  // and crosses it; the third is never looked at. The 0x80 in front counts for nothing.
+  it should "stop at the 2 MiB soft limit after the list that crosses it, counting only served lists" taggedAs (
+    UnitTest
+  ) in new TestSetup:
+    val lists: Seq[BlockAccessList] = Seq(1536 * 1024, 1024 * 1024, 512 * 1024).map(listOfSize)
+    val hashes: Seq[ByteString] = Seq("a1", "a2", "a3").map(b => ByteString(Hex.decode(b * 32)))
+    hashes.zip(lists).foreach((hash, list) => blockchainWriter.storeBlockAccessList(BlockHash(hash), list).commit())
+    val unknown: ByteString = ByteString(Hex.decode("88" * 32))
+
+    val (reply, _) = requestBlockAccessLists(unknown +: hashes)
+
+    reply.entries.map(wireBytes) shouldBe Seq(Unavailable, lists(0).toBytes, lists(1).toBytes)
+
+  // EIP-8159: "Responses containing a single BAL that exceeds 2 MiB are still valid, as the soft limit governs when to
+  // stop appending additional items, not the maximum size of an individual item."
+  it should "serve one list over 2 MiB on its own" taggedAs (UnitTest) in new TestSetup:
+    val oversized = listOfSize(3 * 1024 * 1024)
+    val small = listOfSize(16)
+    val (bigHash, smallHash) = (ByteString(Hex.decode("b1" * 32)), ByteString(Hex.decode("b2" * 32)))
+    blockchainWriter.storeBlockAccessList(BlockHash(bigHash), oversized).commit()
+    blockchainWriter.storeBlockAccessList(BlockHash(smallHash), small).commit()
+
+    val (reply, _) = requestBlockAccessLists(Seq(bigHash, smallHash))
+
+    reply.entries.map(wireBytes) shouldBe Seq(oversized.toBytes)
+
+  // go-ethereum maxBALsServe: at most 1,024 entries, unavailable ones included, whatever the request asks for.
+  it should "answer at most 1,024 entries" taggedAs (UnitTest) in new TestSetup:
+    val hashes: Seq[ByteString] = (0 until 1030).map(i => ByteString(Hex.decode(f"$i%064x")))
+
+    val (reply, _) = requestBlockAccessLists(hashes)
+
+    reply.entries.map(wireBytes) shouldBe Seq.fill(1024)(Unavailable)
+
+  // The two limits share one guard, checked before every entry. The count limit counts entries, not lists: after 1,023
+  // unavailable entries, a stored list as entry 1,024 is the last one served, and a stored list as entry 1,025 is cut
+  // exactly as an unavailable entry there is (above). Both lists are tiny, so the byte limit plays no part.
+  it should "cut at 1,024 entries whatever they hold: a list as entry 1,024 ships, a list as entry 1,025 does not" taggedAs (
+    UnitTest
+  ) in new TestSetup:
+    val unknowns: Seq[ByteString] = (0 until 1023).map(i => ByteString(Hex.decode(f"$i%064x")))
+    val (last, beyond) = (listOfSize(16), listOfSize(32))
+    val (lastHash, beyondHash) = (ByteString(Hex.decode("e1" * 32)), ByteString(Hex.decode("e2" * 32)))
+    blockchainWriter.storeBlockAccessList(BlockHash(lastHash), last).commit()
+    blockchainWriter.storeBlockAccessList(BlockHash(beyondHash), beyond).commit()
+
+    val (reply, _) = requestBlockAccessLists(unknowns ++ Seq(lastHash, beyondHash))
+
+    reply.entries should have size 1024
+    reply.entries.map(wireBytes) shouldBe (Seq.fill(1023)(Unavailable) :+ last.toBytes)
+
+  // The byte limit counts only lists, and stops before the next entry whatever it would be. Unavailable entries ahead
+  // of the crossing add nothing and ship; the list that crosses 2 MiB ships; the unavailable entry and the list after
+  // it are both cut.
+  it should "stop after the 2 MiB crossing with unavailable entries interleaved, cutting whatever follows" taggedAs (
+    UnitTest
+  ) in new TestSetup:
+    val (first, crossing, after) = (listOfSize(1536 * 1024), listOfSize(1024 * 1024), listOfSize(16))
+    val (firstHash, crossingHash, afterHash) =
+      (ByteString(Hex.decode("f1" * 32)), ByteString(Hex.decode("f2" * 32)), ByteString(Hex.decode("f3" * 32)))
+    Seq(firstHash -> first, crossingHash -> crossing, afterHash -> after).foreach((hash, list) =>
+      blockchainWriter.storeBlockAccessList(BlockHash(hash), list).commit()
+    )
+    def unknown(i: Int): ByteString = ByteString(Hex.decode(f"$i%064x"))
+
+    val (reply, _) = requestBlockAccessLists(
+      Seq(unknown(1), firstHash, unknown(2), unknown(3), crossingHash, unknown(4), afterHash)
+    )
+
+    reply.entries.map(wireBytes) shouldBe
+      Seq(Unavailable, first.toBytes, Unavailable, Unavailable, crossing.toBytes)
+
+  // go-ethereum stops on `bytes >= softResponseLimit`: lists totalling exactly 2 MiB end the reply, even ahead of an
+  // unavailable entry that would add nothing; one byte under, both the 0x80 and the next list still ship.
+  it should "stop at exactly 2 MiB served, and not one byte under it" taggedAs (UnitTest) in new TestSetup:
+    val Limit = 2 * 1024 * 1024
+    // listOfSize(n) encodes to n + 46 bytes once every length takes a three-byte prefix.
+    val (atLimit, underLimit, small) = (listOfSize(Limit - 46), listOfSize(Limit - 47), listOfSize(16))
+    atLimit.toBytes.length shouldBe Limit
+    underLimit.toBytes.length shouldBe Limit - 1
+    val (atHash, underHash, smallHash) =
+      (ByteString(Hex.decode("c1" * 32)), ByteString(Hex.decode("c2" * 32)), ByteString(Hex.decode("c3" * 32)))
+    Seq(atHash -> atLimit, underHash -> underLimit, smallHash -> small).foreach((hash, list) =>
+      blockchainWriter.storeBlockAccessList(BlockHash(hash), list).commit()
+    )
+    val unknown = ByteString(Hex.decode("88" * 32))
+
+    val (atReply, _) = requestBlockAccessLists(Seq(atHash, unknown, smallHash))
+    atReply.entries.map(wireBytes) shouldBe Seq(atLimit.toBytes)
+
+    val (underReply, _) = requestBlockAccessLists(Seq(underHash, unknown, smallHash))
+    underReply.entries.map(wireBytes) shouldBe Seq(underLimit.toBytes, Unavailable, small.toBytes)
+
+  // Only a damaged store holds bytes the RLP reader rejects (every write is BlockAccessList.toBytes). Such an entry is
+  // answered as unavailable, and logged at ERROR, rather than failing the reply and stopping the actor for every peer.
+  it should "answer an unreadable stored list as unavailable, and keep serving" taggedAs (UnitTest) in new TestSetup:
+    val (damagedHash, goodHash) = (ByteString(Hex.decode("d1" * 32)), ByteString(Hex.decode("d2" * 32)))
+    val good = listOfSize(16)
+    // A list header promising three bytes, followed by one.
+    storagesInstance.storages.blockAccessListStorage
+      .put(damagedHash, ByteString(Array(0xc3, 0x01).map(_.toByte)))
+      .commit()
+    blockchainWriter.storeBlockAccessList(BlockHash(goodHash), good).commit()
+
+    val (reply, _) = requestBlockAccessLists(Seq(damagedHash, goodHash))
+    reply.entries.map(wireBytes) shouldBe Seq(Unavailable, good.toBytes)
+
+    val (next, _) = requestBlockAccessLists(Seq(goodHash))
+    next.entries.map(wireBytes) shouldBe Seq(good.toBytes)
+
   it should "return block headers by block number" taggedAs (UnitTest) in new TestSetup:
     // given
     val firstHeader: BlockHeader = baseBlockHeader.copy(number = BlockNumber(3))
@@ -633,3 +811,13 @@ class BlockchainHostActorSpec extends AnyFlatSpec with Matchers:
         ),
         s"blockchain-host-${System.nanoTime()}"
       )
+
+    /** Sends `GetBlockAccessLists(7, hashes)` and returns the `BlockAccessLists` reply with its wire payload. */
+    def requestBlockAccessLists(hashes: Seq[ByteString]): (ETHPackets.BlockAccessLists, Array[Byte]) =
+      blockchainHost ! BlockchainHostActor.PeerEventReceived(
+        MessageFromPeer(ETHPackets.GetBlockAccessLists(BigInt(7), hashes), peerId)
+      )
+      val sent = networkPeerManager.expectMsgType[NetworkPeerManagerActor.SendMessageCmd].message
+      sent.underlyingMsg match
+        case reply: ETHPackets.BlockAccessLists => (reply, sent.toBytes)
+        case other                              => fail(s"expected BlockAccessLists, got $other")

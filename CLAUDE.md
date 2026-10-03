@@ -7,7 +7,8 @@ It supports two independent chain families:
 - **Ethereum Classic (ETC/Mordor)** — PoW/Ethash, ECIP-1017 fixed-supply
   emission, block-number fork dispatch. Chain ID 61 (mainnet), 63 (Mordor).
 - **Ethereum (ETH/Sepolia)** — PoS (post-merge), timestamp fork dispatch.
-  Chain ID 1 (mainnet), 11155111 (Sepolia).
+  Chain ID 1 (mainnet), 11155111 (Sepolia), 7091047534 (Platåberget — public
+  Glamsterdam testnet; wider than 32 bits).
 
 ## ETC vs ETH — read this first
 
@@ -17,7 +18,10 @@ Agharta → Phoenix → Thanos (ECIP-1099) → Magneto → Mystique → **Olympi
 (planned: ECIP-1111/1112/1121).
 
 **ETH/Sepolia has**: PoS consensus, timestamp fork dispatch, EIP-1559 base-fee
-burned, validator withdrawals, blob transactions (EIP-4844), Osaka fork.
+burned, validator withdrawals, blob transactions (EIP-4844), Osaka fork. Next:
+**Amsterdam** (Glamsterdam, EIP-7773) — live on Platåberget since 2026-08-20,
+Sepolia 2026-10-06 (`amsterdam-timestamp = 1791294816`), mainnet unscheduled.
+Target release 0.9.0; status and schedule in `docs/specifications/GLAMSTERDAM.md`.
 
 **Do not mix these code paths.** ETC fork config uses `OlympiaOpCodes` /
 `forBlock()`; ETH fork config uses `OsakaOpCodes` / `forTimestamp()`.

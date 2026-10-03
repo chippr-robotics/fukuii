@@ -89,7 +89,7 @@ class EngineApiProposerBuildSpec extends AnyWordSpec with Matchers:
         Behaviors.receiveMessage[PendingTransactionsManager.Command] {
           case PendingTransactionsManager.GetPendingTransactionsReq(replyTo) =>
             val entries = poolContents.get().flatMap { case (stx, arrival) =>
-              SignedTransactionWithSender.getSignedTransactions(Seq(stx)).map { withSender =>
+              SignedTransactionWithSender.getSignedTransactions(Seq(stx), Timestamp.Zero).map { withSender =>
                 PendingTransactionsManager.PendingTransaction(withSender, arrival)
               }
             }

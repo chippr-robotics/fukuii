@@ -70,6 +70,10 @@ object BlockImporter:
   private[regular] case object SyncRetryTick extends Command
   private[regular] val RetryKey = "BlockImporterRetry"
 
+  // Above this many batches deferred behind one running import (post-merge only), BlockImporter warns: see the
+  // deferral arm in `running`.
+  private[regular] val DeferredBatchesWarnThreshold: Int = 5
+
   /** The block the gas-used arm may report as consensus-invalid, with its proven descendants — or `None` to report
     * nothing.
     *
@@ -178,6 +182,12 @@ object BlockImporter:
 
   sealed trait NewBehavior
   case object Running extends NewBehavior
+
+  /** [[Running]], but the import already sent the fetcher an `InvalidateBlocksFrom`: every batch picked before that is
+    * stale, so batches deferred during the import are dropped instead of handed back. Otherwise identical to
+    * [[Running]] — and on ETC/Mordor/Gorgoroth, where nothing is ever deferred, identical outright.
+    */
+  case object RunningAfterFetcherRewind extends NewBehavior
   case class ResolvingMissingNode(blocksToRetry: NonEmptyList[Block]) extends NewBehavior
   case class ResolvingBranch(from: BigInt) extends NewBehavior
 
@@ -193,9 +203,15 @@ object BlockImporter:
   case object DefaultBlockImport extends BlockImportType:
     override def recordMetric(nanos: Long): Unit = RegularSyncMetrics.recordDefaultBlockPropagationTimer(nanos)
 
+  /** @param deferredBatches
+    *   batches the fetcher delivered while an import was still running, oldest first. Only ever non-empty on a chain
+    *   that follows a consensus layer (see `BranchResolution.followsConsensusLayer`); on ETC/Mordor/Gorgoroth it stays
+    *   `Nil` and every picked batch is handled on arrival, exactly as before.
+    */
   case class ImporterState(
       importing: Boolean,
-      resolvingBranchFrom: Option[BigInt]
+      resolvingBranchFrom: Option[BigInt],
+      deferredBatches: List[NonEmptyList[Block]] = Nil
   ):
     def importingBlocks(): ImporterState = copy(importing = true)
 
@@ -206,6 +222,10 @@ object BlockImporter:
     def branchResolved(): ImporterState = copy(resolvingBranchFrom = None)
 
     def isResolvingBranch: Boolean = resolvingBranchFrom.isDefined
+
+    def deferBatch(blocks: NonEmptyList[Block]): ImporterState = copy(deferredBatches = deferredBatches :+ blocks)
+
+    def withoutDeferredBatches(): ImporterState = copy(deferredBatches = Nil)
 
   object ImporterState:
     def initial: ImporterState = ImporterState(
@@ -266,6 +286,34 @@ final private class BlockImporterLogic(
         selfRef ! PickBlocks
         Behaviors.same
 
+      case FetcherResponse(BlockFetcher.PickedBlocks(blocks: NonEmptyList[Block @unchecked]))
+          if state.importing && branchResolution.followsConsensusLayer =>
+        // The fetcher answers every PickBlocks it receives, and SyncRetryTick sends one every sync-retry-interval
+        // while idle, so two answers can be in flight when the first import starts. Resolving the second batch NOW
+        // would judge it against the head as it was before the running import commits: its parent is not there yet,
+        // so it reads as UnknownBranch and rewinds the fetcher 64 blocks (Platåberget #1432: `201..250` executing,
+        // `251..252` arrives 95 ms later → "Unknown branch, going back to block nr 136"). Worse, a batch that IS
+        // importable against that stale head would EXECUTE concurrently with the running import. Hold it and hand it
+        // back, in order, when that import is done. Gated on BranchResolution's PoS gate: a PoW chain handles every
+        // picked batch on arrival, as before.
+        val queued = state.deferredBatches.size + 1
+        log.debug(
+          "Picked batch deferred: from={} to={} reason=import-in-flight queued={}",
+          blocks.head.number,
+          blocks.last.number,
+          queued
+        )
+        // Batches queue here only when several pick requests were answered while one import runs, so more than a
+        // handful means imports are far slower than the pick cadence: a backlog worth seeing without DEBUG.
+        if queued > DeferredBatchesWarnThreshold then
+          log.warning(
+            "Picked batches backing up behind a slow import: queued={} from={} to={}",
+            queued,
+            blocks.head.number,
+            blocks.last.number
+          )
+        running(state.deferBatch(blocks))
+
       case FetcherResponse(BlockFetcher.PickedBlocks(blocks: NonEmptyList[Block @unchecked])) =>
         SignedTransaction.retrieveSendersInBackGround(blocks.toList.map(_.body))
         importBlocks(blocks, DefaultBlockImport)(state)
@@ -293,11 +341,26 @@ final private class BlockImporterLogic(
       case _: ImportNewBlock => Behaviors.same
 
       case ImportDone(newBehavior, importType) =>
-        val newState = state.notImportingBlocks().branchResolved()
+        // Always Nil on a PoW chain (nothing is ever deferred there), which leaves every arm below as it was.
+        val deferred = state.deferredBatches
+        val newState = state.notImportingBlocks().branchResolved().withoutDeferredBatches()
         newBehavior match
           case Running =>
+            // Oldest first, and ahead of the PickBlocks, so the batches reach importBlocks in fetch order. Each is then
+            // resolved against the head this import left behind.
+            deferred.foreach(blocks => selfRef ! FetcherResponse(BlockFetcher.PickedBlocks(blocks)))
+            selfRef ! PickBlocks
+          case RunningAfterFetcherRewind =>
+            // The import failed and already sent InvalidateBlocksFrom: the fetcher is re-serving from the failing
+            // block, so every deferred batch lies beyond a block that was never imported. Handing them back would
+            // only resolve as UnknownBranch and rewind the fetcher a second, deeper time.
+            if deferred.nonEmpty then
+              log.debug("Deferred batches dropped: count={} reason=import-failed-fetcher-rewound", deferred.size)
             selfRef ! PickBlocks
           case r: ResolvingBranch =>
+            // The fetcher is being rewound (InvalidateBlocksFrom already sent): it re-serves these blocks.
+            if deferred.nonEmpty then
+              log.debug("Deferred batches dropped: count={} reason=fetcher-rewind from={}", deferred.size, r.from)
             log.info(
               "Branch resolution dispatch: StrictPickBlocks from={} bestKnown={}",
               r.from,
@@ -305,6 +368,9 @@ final private class BlockImporterLogic(
             )
             selfRef ! PickBlocks
           case _ =>
+            // ResolvingMissingNode retries its own blocks; that behaviour ignores picked batches, as it always has.
+            if deferred.nonEmpty then
+              log.debug("Deferred batches dropped: count={} reason=missing-state-node", deferred.size)
         nextBehavior(newBehavior, importType, newState)
 
       case PickBlocks if !state.importing =>
@@ -425,7 +491,7 @@ final private class BlockImporterLogic(
       state: ImporterState
   ): Behavior[Command] =
     newBehavior match
-      case Running =>
+      case Running | RunningAfterFetcherRewind =>
         timers.startTimerWithFixedDelay(RetryKey, SyncRetryTick, syncConfig.syncRetryInterval)
         running(state)
       case ResolvingMissingNode(blocksToRetry) =>
@@ -634,11 +700,11 @@ final private class BlockImporterLogic(
                         )
                     val invalidBlockNr = failedBlock.number.value
                     fetcher ! BlockFetcher.InvalidateBlocksFrom(invalidBlockNr, err.toString)
-                    Running
+                    RunningAfterFetcherRewind
               case _ =>
                 val invalidBlockNr = notImportedBlocks.head.number.value
                 fetcher ! BlockFetcher.InvalidateBlocksFrom(invalidBlockNr, err.toString)
-                Running
+                RunningAfterFetcherRewind
       }
 
   private def tryImportBlocks(
@@ -798,6 +864,23 @@ final private class BlockImporterLogic(
         // Add first block from branch as an ommer
         oldBranch.headOption.map(_.header).foreach(ommersPool ! AddOmmers(_))
         Right(blocks.toList)
+      case ExtendsCanonicalHead(alreadyCanonical) =>
+        // Post-merge only (BranchResolution.followsConsensusLayer). The first `alreadyCanonical` blocks ARE our
+        // canonical chain and the rest extend its head, so hand consensus only the rest: their parent is the head,
+        // which takes ConsensusImpl's importToTop. The whole batch would take importToNewBranch instead, where equal
+        // post-merge weight and an out-of-reach CL head answer KeptCurrentBestBranch and nothing is imported (#1432).
+        // Nothing is displaced, so there is no old branch to return to the pool and no ommer.
+        val extension = blocks.toList.drop(alreadyCanonical)
+        val importing = (extension.headOption, extension.lastOption) match
+          case (Some(first), Some(last)) => s"${first.number}-${last.number}"
+          case _                         => "-"
+        log.info(
+          "Canonical prefix dropped: batch={} alreadyCanonical={} importing={}",
+          s"${blocks.head.number}-${blocks.last.number}",
+          alreadyCanonical,
+          importing
+        )
+        Right(extension)
       case NoChainSwitch =>
         // Add first block from branch as an ommer
         ommersPool ! AddOmmers(blocks.head.header)
@@ -920,12 +1003,25 @@ final private class BlockImporterLogic(
           case None =>
             log.warning("SYNC-FORK: no header at resolver LCA {} — falling back to blind rewind", lca)
             blindRewind(capturedBest, snapPivot)
-        running(state)
+        // Every exit rewinds the fetcher (or escalates to SNAP), so a batch deferred before recovery is stale.
+        running(state.withoutDeferredBatches())
 
       case BranchResolverMsg(FastSyncBranchResolverActor.BranchResolutionFailed(_)) =>
         log.warning("SYNC-FORK: branch resolver failed — falling back to 128-block blind rewind")
         blindRewind(capturedBest, snapPivot)
-        running(state)
+        running(state.withoutDeferredBatches())
+
+      case ImportDone(_, _) =>
+        // The import that raised StartForkRecovery sent it from inside its own IO (tryImportBlocks, FORK-DETECT), so
+        // its ImportDone always arrives AFTER that, i.e. here. It used to fall into the catch-all below and be
+        // dropped, leaving `importing = true` for good: after recovery `PickBlocks if !state.importing` never matched
+        // again and regular sync was wedged — on every chain, ETC included. Apply exactly the state change that
+        // ImportDone makes in `running` (not importing, no branch resolution, no deferred batches — the fetcher is
+        // rewound at every exit). Its NewBehavior is moot: recovery supersedes whatever that import asked for.
+        // Resetting at the exits instead would be wrong: if the resolver answered first, a new import could start
+        // while this one still runs. If it does answer first, this ImportDone arrives in `running` and is handled
+        // there as usual.
+        resolvingFork(capturedBest, snapPivot, state.notImportingBlocks().branchResolved().withoutDeferredBatches())
 
       case _ => Behaviors.same
     }

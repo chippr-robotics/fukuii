@@ -21,7 +21,8 @@ import Fixtures.blockchainConfig
   */
 class OpCodeContractSpec extends AnyFunSuite with Matchers with ScalaCheckPropertyChecks:
 
-  private val allOpCodes: List[OpCode] = List(
+  // Every table either chain selects before Amsterdam — all of ETC's among them.
+  private val preAmsterdamTables: List[EvmConfig.OpCodeList] = List(
     EvmConfig.FrontierOpCodes,
     EvmConfig.HomesteadOpCodes,
     EvmConfig.ByzantiumOpCodes,
@@ -34,7 +35,10 @@ class OpCodeContractSpec extends AnyFunSuite with Matchers with ScalaCheckProper
     EvmConfig.ShanghaiOpCodes,
     EvmConfig.CancunOpCodes,
     EvmConfig.OsakaOpCodes
-  ).flatMap(_.opCodes).distinct
+  )
+
+  private val allOpCodes: List[OpCode] =
+    (preAmsterdamTables :+ EvmConfig.AmsterdamOpCodes).flatMap(_.opCodes).distinct
 
   private val preAmsterdamConfigs: Seq[EvmConfig] = Seq(
     EvmConfig.FrontierConfigBuilder,
@@ -74,6 +78,18 @@ class OpCodeContractSpec extends AnyFunSuite with Matchers with ScalaCheckProper
       forAll(getProgramStateGen(stackGen = stackGen, evmConfig = config)) { state =>
         for op <- allOpCodes do withClue(s"$op: ")(op.stateGasDelta(state) shouldBe BigInt(0))
       }
+  }
+
+  test("SLOTNUM and DUPN/SWAPN/EXCHANGE are in the Amsterdam table and in no earlier one", UnitTest, VMTest) {
+    val amsterdamOnly = Seq(0x4b, 0xe6, 0xe7, 0xe8).map(_.toByte)
+    // ETC's tables (Frontier..Spiral, EtcOlympia) and ETH's before Amsterdam: none holds these bytes, so an ETC
+    // chain executing any of them keeps its pre-existing InvalidOpCode halt.
+    for table <- preAmsterdamTables; byte <- amsterdamOnly do
+      withClue(f"0x${byte & 0xff}%02x: ")(table.byteToOpCode.get(byte) shouldBe None)
+    EvmConfig.AmsterdamOpCodes.byteToOpCode.keySet should contain allElementsOf amsterdamOnly
+    // Amsterdam adds exactly these four to Osaka.
+    (EvmConfig.AmsterdamOpCodes.byteToOpCode.keySet -- EvmConfig.OsakaOpCodes.byteToOpCode.keySet) shouldBe
+      amsterdamOnly.toSet
   }
 
   test("the state-gas check is not vacuous: from Amsterdam an SSTORE creating a slot has a delta", UnitTest, VMTest) {

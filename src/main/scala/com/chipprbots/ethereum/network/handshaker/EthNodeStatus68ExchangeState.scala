@@ -119,11 +119,12 @@ case class EthNodeStatus68ExchangeState(
     else
       (for validationResult <-
           ForkIdValidator.validatePeer[SyncIO](
-            blockchainReader.genesisHeader.hash.value,
-            blockchainReader.genesisHeader.unixTimestamp.toLong,
+            localGenesisHash,
+            localGenesisHeader.unixTimestamp.toLong,
             blockchainConfig
           )(
-            blockchainReader.getBestBlockNumber,
+            localBestBlock,
+            localBestTimestamp.toLong,
             forkId
           )
       yield

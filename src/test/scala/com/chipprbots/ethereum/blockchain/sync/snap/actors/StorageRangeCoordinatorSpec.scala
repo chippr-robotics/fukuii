@@ -89,7 +89,12 @@ class StorageRangeCoordinatorSpec extends ScalaTestWithActorTestKit() with AnyFl
       maxAccountsPerBatch: Int = 8,
       maxInFlightRequests: Int = 8,
       backpressureHighWatermark: Int = 100000,
-      backpressureLowWatermark: Int = 50000
+      backpressureLowWatermark: Int = 50000,
+      // Defaults to the constructor's own default (true) to keep every EXISTING caller of newImpl
+      // unchanged. Tests that need to inspect `pendingAccountTries` (the ordering-gate tests) must
+      // pass `false` explicitly — with deferred merkleization on, applyReadyStorageChunk never
+      // builds a trie at all (flat-slot writes only).
+      deferredMerkleization: Boolean = true
   ): (StorageRangeCoordinatorImpl, BehaviorTestKit[StorageRangeCoordinator.Command]) =
     var captured: StorageRangeCoordinatorImpl = null
     val behavior = Behaviors.setup[StorageRangeCoordinator.Command] { ctx =>
@@ -109,7 +114,8 @@ class StorageRangeCoordinatorSpec extends ScalaTestWithActorTestKit() with AnyFl
           flatBatchEntryThreshold = flatBatchEntryThreshold,
           flatBatchEcOverride = flatBatchEcOverride,
           backpressureHighWatermark = backpressureHighWatermark,
-          backpressureLowWatermark = backpressureLowWatermark
+          backpressureLowWatermark = backpressureLowWatermark,
+          deferredMerkleization = deferredMerkleization
         )
         captured.start()
       }
@@ -398,6 +404,12 @@ class StorageRangeCoordinatorSpec extends ScalaTestWithActorTestKit() with AnyFl
     req2.accountHashes should have size 1
     req2.accountHashes.head shouldEqual account2
 
+    // Progress is now correctly reported for the completed (proof-of-absence) account1: 1 of the
+    // 2 contracts added via AddStorageTasks. Before the ordering-gate fix, handleProofOfAbsence
+    // bypassed completedAccountCount entirely (see applyOrderedStorageChunk /
+    // applyReadyStorageChunk in StorageRangeCoordinator.scala), so this message was silently never
+    // sent for a proof-of-absence account — progress reporting under-counted completed contracts.
+    snapSyncController.expectMessage(SNAPSyncController.ProgressStorageContracts(1, 2))
     // No pivot-refresh stall signal: peer served a valid proof-of-absence response.
     // Coordinator dispatches task2 immediately; no PivotStateUnservable expected.
     snapSyncController.expectNoMessage(300.millis)
@@ -964,4 +976,671 @@ class StorageRangeCoordinatorSpec extends ScalaTestWithActorTestKit() with AnyFl
 
     // After commit, all nodes have been emitted to the accumulator.
     accumulated.nonEmpty shouldBe true
+  }
+
+  // ========================================
+  // Storage-ordering gate (StackTrie "keys must be strictly ascending" crash fix)
+  // ========================================
+  //
+  // Root cause: storageConcurrency (16) parallel subtask chunks for one large-storage account
+  // share a single per-account StackTrie (pendingAccountTries, keyed only by accountHash) that
+  // requires strictly-ascending inserts across the FULL account key space. Nothing in
+  // dispatch/response handling guaranteed sibling chunk responses were PROCESSED back in range
+  // order — requestNextRanges' acceptsNewAccount explicitly allows unlimited concurrent dispatch
+  // once an account's trie exists, so a peer serving a higher sub-range could (and in the
+  // 2026-09-27 Platåberget soak, reliably did) answer before a peer serving a lower one, tripping
+  // StackTrie.update's `require` and crashing the actor (RestartSupervisor then restarted it with
+  // empty in-memory task state).
+  //
+  // These tests drive the ordering gate (applyOrderedStorageChunk / drainOrderedStorageChunks /
+  // applyReadyStorageChunk) directly via the white-box Impl, bypassing MerkleProofVerifier —
+  // verification's "monotonic WITHIN one response" guarantee (MerkleProofVerifierSpec) is a
+  // different property from "monotonic ACROSS sibling chunk responses", which is what these cover.
+
+  private def slotKey(lastByte: Int): ByteString = ByteString(Array.fill(31)(0x00.toByte) :+ lastByte.toByte)
+
+  it should "apply storageConcurrency-style parallel chunks fed out of range order without tripping the StackTrie ascending-order invariant" taggedAs UnitTest in {
+    val accountHash = kec256(ByteString("scrambled-storage-account"))
+    val storageRoot = kec256(ByteString("scrambled-storage-root"))
+    val (impl, _) = newImpl(
+      stateRoot = kec256(ByteString("ordering-gate-root")),
+      flatSlotStorage = new FlatSlotStorage(EphemDataSource()),
+      snapSyncControllerRef = testKit.createTestProbe[SNAPSyncController.Command]().ref,
+      deferredMerkleization = false // must build the real streaming trie to exercise StackTrie.update
+    )
+    val peer = PeerTestHelpers.createTestPeer("scrambled-storage-peer", testKit.createTestProbe[Any]().ref.toClassic)
+
+    // Three disjoint, range-ascending chunks — mirrors StorageTask.createSubTasks' output shape for
+    // a large-storage account split into parallel subtasks. Each is a one-shot response here (empty
+    // proof ⇒ per SNAP spec that chunk's own range is fully served, no further continuation).
+    val chunk0 = StorageTask(accountHash, storageRoot, next = slotKey(0x01), last = slotKey(0x1f))
+    val chunk1 = StorageTask(accountHash, storageRoot, next = slotKey(0x20), last = slotKey(0x3f))
+    val chunk2 = StorageTask(accountHash, storageRoot, next = slotKey(0x40), last = slotKey(0xfe))
+
+    // As if a prior (pre-split) response already established the cursor at chunk0's start, and the
+    // split into 3 parallel subtasks was already registered (StorageRangeCoordinatorImpl.scala's
+    // `createStorageSubTasks` call site does both together, atomically, when a response first needs
+    // continuation).
+    impl.accountSubtaskCounters(accountHash) = (3, 0)
+    impl.storageTrieCursor(accountHash) = chunk0.next
+
+    // Feed the HIGHEST-range chunk first, then the two lower ones — the exact shape of the crash: a
+    // faster peer answering a higher sub-range before a slower peer's lower sub-range lands.
+    noException should be thrownBy {
+      impl.applyOrderedStorageChunk(
+        peer,
+        chunk2,
+        Seq(slotKey(0x50) -> ByteString("value-50"), slotKey(0x90) -> ByteString("value-90")),
+        Seq.empty
+      )
+      impl.applyOrderedStorageChunk(peer, chunk0, Seq(slotKey(0x10) -> ByteString("value-10")), Seq.empty)
+      impl.applyOrderedStorageChunk(peer, chunk1, Seq(slotKey(0x30) -> ByteString("value-30")), Seq.empty)
+    }
+
+    // chunk2 must have been buffered (not applied) until chunk0 and chunk1 landed, then drained
+    // automatically once chunk1 completed the ascending run up to chunk2's start.
+    impl.pendingOrderedChunks.get(accountHash) shouldBe empty
+    impl.storageTrieCursor.get(accountHash) shouldBe empty // account fully done ⇒ cursor cleared
+    impl.accountSubtaskCounters.get(accountHash) shouldBe None // all 3 subtasks recorded complete
+    impl.completedAccountCount shouldBe 1L
+    impl.pendingAccountTries.get(accountHash) shouldBe empty // auto-committed on the final (range-highest) chunk
+  }
+
+  it should "buffer an out-of-order chunk and drain it once its predecessor lands, producing the same root as true in-order arrival" taggedAs UnitTest in {
+    import com.chipprbots.ethereum.blockchain.sync.snap.SnapHashTrie
+
+    val accountHash = kec256(ByteString("root-check-account"))
+    val storageRoot = kec256(ByteString("root-check-root"))
+    val (impl, _) = newImpl(
+      stateRoot = kec256(ByteString("ordering-gate-root-2")),
+      flatSlotStorage = new FlatSlotStorage(EphemDataSource()),
+      snapSyncControllerRef = testKit.createTestProbe[SNAPSyncController.Command]().ref,
+      deferredMerkleization = false
+    )
+    val peer = PeerTestHelpers.createTestPeer("root-check-peer", testKit.createTestProbe[Any]().ref.toClassic)
+
+    val chunk0 = StorageTask(accountHash, storageRoot, next = slotKey(0x01), last = slotKey(0x1f))
+    val chunk1 = StorageTask(accountHash, storageRoot, next = slotKey(0x20), last = slotKey(0x3f))
+    val chunk2 = StorageTask(accountHash, storageRoot, next = slotKey(0x40), last = slotKey(0xfe))
+    val slots0 = Seq(slotKey(0x10) -> ByteString("value-10"))
+    val slots1 = Seq(slotKey(0x30) -> ByteString("value-30"))
+    val slots2 = Seq(slotKey(0x50) -> ByteString("value-50"), slotKey(0x90) -> ByteString("value-90"))
+
+    // Registered as 4 subtasks but only 3 are ever fed — the account is deliberately left
+    // "incomplete" so the shared trie is never auto-committed/removed, letting this test inspect it
+    // directly afterward instead of racing the internal commit.
+    impl.accountSubtaskCounters(accountHash) = (4, 0)
+    impl.storageTrieCursor(accountHash) = chunk0.next
+
+    // Out-of-order arrival: chunk2 (highest range) before chunk0/chunk1.
+    impl.applyOrderedStorageChunk(peer, chunk2, slots2, Seq.empty)
+    impl.pendingOrderedChunks(accountHash) should have size 1 // buffered, not yet applied
+
+    impl.applyOrderedStorageChunk(peer, chunk0, slots0, Seq.empty)
+    impl.pendingOrderedChunks(accountHash) should have size 1 // chunk2 still waiting on chunk1
+
+    impl.applyOrderedStorageChunk(peer, chunk1, slots1, Seq.empty)
+    impl.pendingOrderedChunks.get(accountHash) shouldBe empty // chunk2 drained once chunk1 landed
+
+    // Trie is still open (4th subtask never arrived) — safe to commit it directly for inspection.
+    val actualRoot = impl.pendingAccountTries(accountHash).commit()
+
+    // Independently-built reference: the SAME slots inserted in TRUE ascending order.
+    val reference = new SnapHashTrie(_ => ())
+    (slots0 ++ slots1 ++ slots2).foreach { case (k, v) => reference.update(k.toArray, v.toArray) }
+    val expectedRoot = reference.commit()
+
+    actualRoot shouldEqual expectedRoot
+  }
+
+  it should "re-queue (not lose) buffered out-of-order storage chunks on StoragePivotRefreshed" taggedAs UnitTest in {
+    val stateRoot = kec256(ByteString("prefresh-ordering-root"))
+    val snapSyncController = testKit.createTestProbe[SNAPSyncController.Command]()
+    val (impl, kit) = newImpl(
+      stateRoot = stateRoot,
+      flatSlotStorage = new FlatSlotStorage(EphemDataSource()),
+      snapSyncControllerRef = snapSyncController.ref,
+      deferredMerkleization = false
+    )
+
+    val accountHash = kec256(ByteString("prefresh-account"))
+    val storageRoot = kec256(ByteString("prefresh-storage-root"))
+    val chunkLo = StorageTask(accountHash, storageRoot, next = slotKey(0x01), last = slotKey(0x1f))
+    val chunkHi = StorageTask(accountHash, storageRoot, next = slotKey(0x20), last = slotKey(0x3f))
+    val peer = PeerTestHelpers.createTestPeer("prefresh-peer", testKit.createTestProbe[Any]().ref.toClassic)
+
+    impl.accountSubtaskCounters(accountHash) = (2, 0)
+    impl.storageTrieCursor(accountHash) = chunkLo.next
+
+    // chunkHi arrives first and is buffered; chunkLo never arrives before the pivot refreshes.
+    impl.applyOrderedStorageChunk(peer, chunkHi, Seq(slotKey(0x30) -> ByteString("value-30")), Seq.empty)
+    impl.pendingOrderedChunks(accountHash) should have size 1
+
+    impl.tasks.exists(_.next == chunkHi.next) shouldBe false // not yet in the retry queue
+
+    kit.run(StorageRangeCoordinator.StoragePivotRefreshed(kec256(ByteString("new-pivot-root"))))
+
+    // The buffered chunk must be re-queued, not silently dropped.
+    impl.tasks.exists(t => t.accountHash == accountHash && t.next == chunkHi.next) shouldBe true
+    impl.pendingOrderedChunks.get(accountHash) shouldBe empty
+
+    // Re-derived cursor = the lowest surviving chunk's start (chunkHi is the only survivor here —
+    // chunkLo was never buffered or active, so — like today's pre-fix trie discard — it is
+    // abandoned rather than fabricated from nothing; healing reconciles).
+    impl.storageTrieCursor.get(accountHash) shouldBe Some(chunkHi.next)
+  }
+
+  it should "force-complete cleanly (StorageRangeSyncForceCompleted) even with a buffered out-of-order storage chunk pending" taggedAs UnitTest in {
+    val stateRoot = kec256(ByteString("force-complete-ordering-root"))
+    val snapSyncController = testKit.createTestProbe[SNAPSyncController.Command]()
+    val (impl, kit) = newImpl(
+      stateRoot = stateRoot,
+      flatSlotStorage = new FlatSlotStorage(EphemDataSource()),
+      snapSyncControllerRef = snapSyncController.ref,
+      deferredMerkleization = false
+    )
+
+    val accountHash = kec256(ByteString("force-complete-account"))
+    val storageRoot = kec256(ByteString("force-complete-storage-root"))
+    val chunkLo = StorageTask(accountHash, storageRoot, next = slotKey(0x01), last = slotKey(0x1f))
+    val chunkHi = StorageTask(accountHash, storageRoot, next = slotKey(0x20), last = slotKey(0x3f))
+    val peer = PeerTestHelpers.createTestPeer("force-complete-peer", testKit.createTestProbe[Any]().ref.toClassic)
+
+    impl.accountSubtaskCounters(accountHash) = (2, 0)
+    impl.storageTrieCursor(accountHash) = chunkLo.next
+    impl.applyOrderedStorageChunk(peer, chunkHi, Seq(slotKey(0x30) -> ByteString("value-30")), Seq.empty)
+    impl.pendingOrderedChunks(accountHash) should have size 1
+
+    kit.run(StorageRangeCoordinator.ForceCompleteStorage)
+
+    // The existing "abandon and force-complete" recovery path must still fire cleanly — this is
+    // what a controller detecting the "restarted empty" signature (SNAPSyncController's
+    // StorageRestartedEmptyThreshold) actually triggers to avoid the silent stall.
+    snapSyncController.expectMessage(SNAPSyncController.StorageRangeSyncForceCompleted)
+    // No buffered chunk, cursor, or trie is left behind — nothing to leak or double-apply if this
+    // account's data is later re-synced.
+    impl.pendingOrderedChunks shouldBe empty
+    impl.storageTrieCursor shouldBe empty
+    impl.pendingAccountTries shouldBe empty
+  }
+
+  // ── forge review follow-up: a legitimately-empty middle sub-range must not stall the account ──
+  //
+  // handleProofOfAbsence (servedCount==0, response.proof.nonEmpty, tasks.size==1 — always true for
+  // a solo subtask/continuation chunk per isInitialRange batching) used to bypass the ordering gate
+  // entirely: it marked the task done and returned without ever calling recordSubtaskCompletion or
+  // advancing storageTrieCursor. A sparse multi-chunk account whose middle sub-range genuinely has
+  // zero slots (a realistic, not rare, shape for large sparse contracts) could then never reach
+  // accountSubtaskCounters' total, so completedAccountCount never advanced for it AND any
+  // higher-range sibling already buffered behind that stuck cursor stayed buffered — until the
+  // whole storage phase reported 0 pending/0 active and the (now 60s, see StorageRestartedEmptyThreshold)
+  // force-complete fast path swept it up regardless. It never corrupted anything, but it defeated
+  // this fix's purpose of resolving ordering WITHOUT falling back to force-complete.
+  //
+  // handleProofOfAbsence now delegates to applyOrderedStorageChunk with an empty slot set (see
+  // StorageRangeCoordinator.scala) — these tests drive that exact call shape directly.
+
+  it should "let a sparse account complete normally (no force-complete) when one middle sub-range is a legitimate proof-of-absence, arriving out of order" taggedAs UnitTest in {
+    val accountHash = kec256(ByteString("sparse-empty-middle-account"))
+    val storageRoot = kec256(ByteString("sparse-empty-middle-root"))
+    val (impl, _) = newImpl(
+      stateRoot = kec256(ByteString("sparse-empty-middle-state-root")),
+      flatSlotStorage = new FlatSlotStorage(EphemDataSource()),
+      snapSyncControllerRef = testKit.createTestProbe[SNAPSyncController.Command]().ref,
+      deferredMerkleization = false
+    )
+
+    val chunk0 = StorageTask(accountHash, storageRoot, next = slotKey(0x01), last = slotKey(0x1f))
+    // chunk1 (the MIDDLE sub-range) is legitimately empty: a proof-of-absence response for
+    // [chunk1.next, chunk1.last] — zero slots, non-empty proof — exactly what handleProofOfAbsence
+    // routes here on a solo chunk request.
+    val chunk1 = StorageTask(accountHash, storageRoot, next = slotKey(0x20), last = slotKey(0x3f))
+    val chunk2 = StorageTask(accountHash, storageRoot, next = slotKey(0x40), last = slotKey(0xfe))
+    val absenceProof = Seq(ByteString(Array.fill(32)(0xab.toByte)))
+    val peer = PeerTestHelpers.createTestPeer("sparse-empty-middle-peer", testKit.createTestProbe[Any]().ref.toClassic)
+
+    impl.accountSubtaskCounters(accountHash) = (3, 0)
+    impl.storageTrieCursor(accountHash) = chunk0.next
+
+    // Scrambled arrival: both non-first chunks (one empty, one with real slots) land before the
+    // chunk that establishes the ascending run.
+    noException should be thrownBy {
+      impl.applyOrderedStorageChunk(peer, chunk2, Seq(slotKey(0x50) -> ByteString("value-50")), Seq.empty)
+      impl.applyOrderedStorageChunk(peer, chunk1, Seq.empty, absenceProof) // proof-of-absence, out of order
+      impl.applyOrderedStorageChunk(peer, chunk0, Seq(slotKey(0x10) -> ByteString("value-10")), Seq.empty)
+    }
+
+    // The empty middle chunk must count towards subtask completion like any other, and must not
+    // leave itself or chunk2 stuck behind it.
+    impl.pendingOrderedChunks.get(accountHash) shouldBe empty
+    impl.storageTrieCursor.get(accountHash) shouldBe empty
+    impl.accountSubtaskCounters.get(accountHash) shouldBe None
+    impl.completedAccountCount shouldBe 1L
+    impl.pendingAccountTries.get(accountHash) shouldBe empty // auto-committed once all 3 landed
+  }
+
+  it should "produce the correct storage root when a sparse account's out-of-order middle sub-range is empty" taggedAs UnitTest in {
+    import com.chipprbots.ethereum.blockchain.sync.snap.SnapHashTrie
+
+    val accountHash = kec256(ByteString("sparse-empty-middle-root-check"))
+    val storageRoot = kec256(ByteString("sparse-empty-middle-root-check-root"))
+    val (impl, _) = newImpl(
+      stateRoot = kec256(ByteString("sparse-empty-middle-root-check-state")),
+      flatSlotStorage = new FlatSlotStorage(EphemDataSource()),
+      snapSyncControllerRef = testKit.createTestProbe[SNAPSyncController.Command]().ref,
+      deferredMerkleization = false
+    )
+
+    val chunk0 = StorageTask(accountHash, storageRoot, next = slotKey(0x01), last = slotKey(0x1f))
+    val chunk1 = StorageTask(accountHash, storageRoot, next = slotKey(0x20), last = slotKey(0x3f)) // empty
+    val chunk2 = StorageTask(accountHash, storageRoot, next = slotKey(0x40), last = slotKey(0xfe))
+    val slots0 = Seq(slotKey(0x10) -> ByteString("value-10"))
+    val slots2 = Seq(slotKey(0x50) -> ByteString("value-50"))
+    val absenceProof = Seq(ByteString(Array.fill(32)(0xab.toByte)))
+    val peer =
+      PeerTestHelpers.createTestPeer(
+        "sparse-empty-middle-root-check-peer",
+        testKit.createTestProbe[Any]().ref.toClassic
+      )
+
+    // Registered as 4 subtasks but only 3 are ever fed — deliberately left "incomplete" so the
+    // shared trie is never auto-committed/removed, letting this test inspect it directly.
+    impl.accountSubtaskCounters(accountHash) = (4, 0)
+    impl.storageTrieCursor(accountHash) = chunk0.next
+
+    // The empty middle chunk arrives before EITHER of its neighbours.
+    impl.applyOrderedStorageChunk(peer, chunk1, Seq.empty, absenceProof)
+    impl.pendingOrderedChunks(accountHash) should have size 1
+
+    impl.applyOrderedStorageChunk(peer, chunk2, slots2, Seq.empty)
+    impl.pendingOrderedChunks(accountHash) should have size 2 // both still waiting on chunk0
+
+    impl.applyOrderedStorageChunk(peer, chunk0, slots0, Seq.empty)
+    impl.pendingOrderedChunks.get(accountHash) shouldBe empty // both drained once chunk0 landed
+
+    val actualRoot = impl.pendingAccountTries(accountHash).commit()
+
+    // Reference: ONLY chunk0's and chunk2's slots (chunk1 contributes nothing), true ascending order.
+    val reference = new SnapHashTrie(_ => ())
+    (slots0 ++ slots2).foreach { case (k, v) => reference.update(k.toArray, v.toArray) }
+    val expectedRoot = reference.commit()
+
+    actualRoot shouldEqual expectedRoot
+  }
+
+  // ── forge review follow-up: boundary DUPLICATE (new == last, not just out-of-order) ──────────
+  //
+  // Platåberget soak, 2026-09-27 23:51:04: `StackTrie keys must be strictly ascending: last=X >=
+  // new=X` — an EXACT repeat, not a reordering. SNAP/1's `startingHash` origin is documented as
+  // inclusive; go-ethereum's own genTrie/stacktrie boundary handling anticipates a continuation or
+  // sub-range response whose first key repeats the boundary this account's trie already has.
+  // applyReadyStorageChunk now filters an exact (key, value) repeat before it ever reaches
+  // `trie.update`, and rejects the whole response (peer penalty, retry) if the value differs under
+  // that same key. (Verified red-before-green-after: temporarily removing the dedup guard makes
+  // this test reproduce the exact `IllegalArgumentException` from the log.)
+
+  it should "silently drop an exact repeat of the last-applied boundary slot instead of tripping StackTrie's ascending-order invariant" taggedAs UnitTest in {
+    import com.chipprbots.ethereum.blockchain.sync.snap.SnapHashTrie
+
+    val accountHash = kec256(ByteString("boundary-duplicate-account"))
+    val storageRoot = kec256(ByteString("boundary-duplicate-root"))
+    val (impl, _) = newImpl(
+      stateRoot = kec256(ByteString("boundary-duplicate-state-root")),
+      flatSlotStorage = new FlatSlotStorage(EphemDataSource()),
+      snapSyncControllerRef = testKit.createTestProbe[SNAPSyncController.Command]().ref,
+      deferredMerkleization = false // must build the real streaming trie to exercise StackTrie.update
+    )
+    val peer = PeerTestHelpers.createTestPeer("boundary-duplicate-peer", testKit.createTestProbe[Any]().ref.toClassic)
+
+    val boundaryKey = slotKey(0x1f)
+    val boundaryValue = ByteString("value-boundary")
+
+    // chunk0's response includes the boundary slot as its LAST entry — after this lands, the trie's
+    // last-applied key/value is exactly (boundaryKey, boundaryValue).
+    val chunk0 = StorageTask(accountHash, storageRoot, next = slotKey(0x01), last = boundaryKey)
+    // chunk1 is this account's continuation: per SNAP/1, its `next` is startingHash =
+    // incrementHash32(boundaryKey) — but the crash's own evidence is a peer whose response
+    // nonetheless RE-INCLUDES boundaryKey as chunk1's first slot (same value: an inclusive-origin
+    // artifact, not corruption).
+    val chunk1 =
+      StorageTask(accountHash, storageRoot, next = StorageTask.incrementHash32(boundaryKey), last = slotKey(0xfe))
+
+    // Registered as 3 subtasks but only 2 are ever fed — deliberately left "incomplete" so the
+    // shared trie is never auto-committed/removed, letting this test inspect it directly.
+    impl.accountSubtaskCounters(accountHash) = (3, 0)
+    impl.storageTrieCursor(accountHash) = chunk0.next
+
+    val chunk0Slots = Seq(slotKey(0x10) -> ByteString("value-10"), boundaryKey -> boundaryValue)
+    // chunk1's response repeats boundaryKey (same value) as its FIRST slot, then continues ascending
+    // — exactly the shape of the crash: "last=X >= new=X" where X is the repeated boundary key.
+    val chunk1Slots = Seq(boundaryKey -> boundaryValue, slotKey(0x50) -> ByteString("value-50"))
+
+    noException should be thrownBy {
+      impl.applyOrderedStorageChunk(peer, chunk0, chunk0Slots, Seq.empty)
+      impl.applyOrderedStorageChunk(peer, chunk1, chunk1Slots, Seq.empty)
+    }
+
+    // Both chunks completed normally — the duplicate was dropped, not treated as a failure.
+    impl.accountSubtaskCounters.get(accountHash) shouldBe Some((3, 2))
+    impl.pendingOrderedChunks.get(accountHash) shouldBe empty
+
+    // Trie is still open (3rd subtask never arrived) — safe to commit it directly for inspection.
+    val actualRoot = impl.pendingAccountTries(accountHash).commit()
+
+    // Reference: the TRUE deduplicated slot set (boundaryKey inserted ONCE, not twice), true
+    // ascending order. If the duplicate had been inserted twice (or dropped along with a NEIGHBOUR),
+    // this would not match.
+    val reference = new SnapHashTrie(_ => ())
+    val dedupedExpected = Seq(
+      slotKey(0x10) -> ByteString("value-10"),
+      boundaryKey -> boundaryValue,
+      slotKey(0x50) -> ByteString("value-50")
+    )
+    dedupedExpected.foreach { case (k, v) => reference.update(k.toArray, v.toArray) }
+    val expectedRoot = reference.commit()
+
+    actualRoot shouldEqual expectedRoot
+  }
+
+  it should "reject (not silently accept) a boundary slot re-served with a DIFFERENT value under the same key" taggedAs UnitTest in {
+    val accountHash = kec256(ByteString("boundary-mismatch-account"))
+    val storageRoot = kec256(ByteString("boundary-mismatch-root"))
+    val (impl, _) = newImpl(
+      stateRoot = kec256(ByteString("boundary-mismatch-state-root")),
+      flatSlotStorage = new FlatSlotStorage(EphemDataSource()),
+      snapSyncControllerRef = testKit.createTestProbe[SNAPSyncController.Command]().ref,
+      deferredMerkleization = false
+    )
+    val peer = PeerTestHelpers.createTestPeer("boundary-mismatch-peer", testKit.createTestProbe[Any]().ref.toClassic)
+
+    val boundaryKey = slotKey(0x1f)
+    val originalValue = ByteString("value-original")
+    val mismatchedValue = ByteString("value-DIFFERENT")
+
+    val chunk0 = StorageTask(accountHash, storageRoot, next = slotKey(0x01), last = boundaryKey)
+    val chunk1 =
+      StorageTask(accountHash, storageRoot, next = StorageTask.incrementHash32(boundaryKey), last = slotKey(0xfe))
+
+    impl.accountSubtaskCounters(accountHash) = (2, 0)
+    impl.storageTrieCursor(accountHash) = chunk0.next
+
+    val chunk0Slots = Seq(slotKey(0x10) -> ByteString("value-10"), boundaryKey -> originalValue)
+    // chunk1's response re-serves boundaryKey with a DIFFERENT value — inconsistent peer data.
+    val chunk1Slots = Seq(boundaryKey -> mismatchedValue, slotKey(0x50) -> ByteString("value-50"))
+
+    impl.applyOrderedStorageChunk(peer, chunk0, chunk0Slots, Seq.empty)
+    val cursorAfterChunk0 = impl.storageTrieCursor(accountHash)
+    val tasksBefore = impl.tasks.size
+
+    noException should be thrownBy {
+      impl.applyOrderedStorageChunk(peer, chunk1, chunk1Slots, Seq.empty)
+    }
+
+    // Rejected, not applied: chunk1's data never reached the trie, the cursor did not move past it,
+    // subtask completion was not recorded, and the task is back in the retry queue.
+    impl.storageTrieCursor(accountHash) shouldEqual cursorAfterChunk0
+    impl.accountSubtaskCounters.get(accountHash) shouldBe Some((2, 1)) // only chunk0 recorded
+    impl.completedAccountCount shouldBe 0L
+    impl.tasks.size shouldBe tasksBefore + 1
+    impl.tasks.exists(t => t.accountHash == accountHash && t.next == chunk1.next) shouldBe true
+  }
+
+  // ── forge review follow-up: bounded verification-failure retry (soak v6 tail livelock) ────────
+  //
+  // Platåberget soak v6, 2026-09-28: an account whose account-range record was fetched at an OLDER
+  // pivot carries a stale `storageRoot` no peer can ever satisfy. Before this guard,
+  // processServedTasks's verification-failure branch re-queued such a task unconditionally,
+  // forever: soak evidence showed ~1245 identical batched responses over 25+ minutes, the same
+  // handful of accounts re-failing every cycle with "complete-range hash mismatch" while `pending`
+  // oscillated 1-33 without ever draining — a livelock in the storage phase's tail, invisible to
+  // the (slot-count-based) stagnation watchdog because unrelated accounts kept completing and
+  // resetting its clock. These tests drive `processServedTasks` directly (widened to
+  // `private[actors]`) rather than through the full dispatch/response cycle, since what's under
+  // test is the verification-failure branch's bookkeeping, not request/response correlation;
+  // `activeTasks` is cleared after each call to mirror the production invariant that
+  // `handleResponse` always removes its entry before `processServedTasks` runs.
+
+  private def computeCompleteRangeRoot(slots: Seq[(ByteString, ByteString)]): ByteString =
+    val t = new SnapHashTrie(_ => ())
+    slots.foreach { case (k, v) => t.update(k.toArray, v.toArray) }
+    t.commit()
+
+  it should "drop an account to healing after maxStaleRootFailuresPerAccount consecutive complete-range verification failures spanning 2+ peers, and let the storage phase complete" taggedAs UnitTest in {
+    val stateRoot = kec256(ByteString("kcap-state-root"))
+    val snapSyncController = testKit.createTestProbe[SNAPSyncController.Command]()
+    val (impl, kit) = newImpl(
+      stateRoot = stateRoot,
+      flatSlotStorage = new FlatSlotStorage(EphemDataSource()),
+      snapSyncControllerRef = snapSyncController.ref,
+      deferredMerkleization = true
+    )
+
+    val peerA = PeerTestHelpers.createTestPeer("kcap-peer-a", testKit.createTestProbe[Any]().ref.toClassic)
+    val peerB = PeerTestHelpers.createTestPeer("kcap-peer-b", testKit.createTestProbe[Any]().ref.toClassic)
+
+    val badAccountHash = kec256(ByteString("kcap-bad-account"))
+    // Deliberately WRONG storageRoot: no slot data can ever produce a matching complete-range hash
+    // — simulates an account record fetched at an older pivot whose real storage root has moved.
+    val badStorageRoot = kec256(ByteString("kcap-bad-storage-root-stale"))
+    val badTask = StorageTask.createStorageTask(badAccountHash, badStorageRoot)
+    val badSlots = Seq(slotKey(0x10) -> ByteString("bad-value"))
+
+    // processServedTasks unconditionally pipelines more work to the responding peer at its end
+    // (dispatchIfPossible) — a just-re-queued retry can be immediately picked back up from `tasks`
+    // into `activeTasks` before this helper returns. Clearing BOTH after every call keeps each
+    // attempt self-contained (mirrors production: handleResponse always removes its activeTasks
+    // entry before processServedTasks runs) without caring which of the two queues a retry
+    // transiently landed in.
+    def feedBadAttempt(peer: com.chipprbots.ethereum.network.Peer, reqId: Int): Unit =
+      impl.processServedTasks(
+        peer,
+        Seq(badTask),
+        BigInt(1024),
+        StorageRanges(requestId = reqId, slots = Seq(badSlots), proof = Seq.empty),
+        servedCount = 1
+      )
+      impl.tasks.clear()
+      impl.activeTasks.clear()
+
+    // Attempts 1-2: below K=3 — retried each time, not yet given up on.
+    feedBadAttempt(peerA, 1)
+    impl.staleRootFailuresByAccount(badAccountHash) should have size 1
+
+    feedBadAttempt(peerB, 2)
+    impl.staleRootFailuresByAccount(badAccountHash) should have size 2
+
+    // Attempt 3: failures.size=3 >= K=3 AND distinctPeers=2 >= 2 -> give up, hand off to healing —
+    // exactly the same "mark done, discard partial trie, do not re-queue" pattern
+    // handleEmptyResponse already uses.
+    feedBadAttempt(peerA, 3)
+    impl.staleRootFailuresByAccount.get(badAccountHash) shouldBe None // cleared on give-up
+    impl.pendingAccountTries.get(badAccountHash) shouldBe empty
+    // Unlike attempts 1-2, a give-up must NOT re-queue: `tasks`/`activeTasks` were already cleared
+    // by the helper above, so their emptiness here would be trivial — the meaningful proof that
+    // nothing was re-queued is `staleRootFailuresByAccount` being gone (a give-up removes it; a
+    // retry would have left it present, as attempts 1-2 show) combined with completion succeeding
+    // below without this account ever answering again.
+
+    // A second, healthy account completes normally in the same phase.
+    val goodAccountHash = kec256(ByteString("kcap-good-account"))
+    val goodSlots = Seq(slotKey(0x20) -> ByteString("good-value"))
+    val goodStorageRoot = computeCompleteRangeRoot(goodSlots)
+    val goodTask = StorageTask.createStorageTask(goodAccountHash, goodStorageRoot)
+    impl.processServedTasks(
+      peerA,
+      Seq(goodTask),
+      BigInt(1024),
+      StorageRanges(requestId = 4, slots = Seq(goodSlots), proof = Seq.empty),
+      servedCount = 1
+    )
+    impl.tasks.clear()
+    impl.activeTasks.clear()
+    // The good account's successful insertion sends its own progress message first.
+    snapSyncController.expectMessageType[SNAPSyncController.ProgressStorageSlotsSynced]
+
+    // Both accounts are resolved (one via healing hand-off, one normally) — the phase completes.
+    kit.run(StorageRangeCoordinator.NoMoreStorageTasks)
+    drainSelf(kit) // NoMoreStorageTasks may itself trigger the flat-batch flush + FlatBatchFlushComplete
+    kit.run(StorageRangeCoordinator.StorageCheckCompletion)
+    drainSelf(kit)
+    snapSyncController.expectMessage(SNAPSyncController.StorageRangeSyncComplete)
+  }
+
+  it should "NOT drop an account that fails complete-range verification once and then succeeds" taggedAs UnitTest in {
+    val stateRoot = kec256(ByteString("kcap-recovers-state-root"))
+    val (impl, _) = newImpl(
+      stateRoot = stateRoot,
+      flatSlotStorage = new FlatSlotStorage(EphemDataSource()),
+      snapSyncControllerRef = testKit.createTestProbe[SNAPSyncController.Command]().ref,
+      deferredMerkleization = true
+    )
+    val peerA = PeerTestHelpers.createTestPeer("kcap-recovers-peer-a", testKit.createTestProbe[Any]().ref.toClassic)
+
+    val accountHash = kec256(ByteString("kcap-recovers-account"))
+    val slots = Seq(slotKey(0x30) -> ByteString("eventual-value"))
+    val realStorageRoot = computeCompleteRangeRoot(slots)
+    // The FIRST attempt's response uses the wrong root (transient corruption / a peer momentarily
+    // out of sync) — the second, with the correct root, succeeds.
+    val wrongStorageRoot = kec256(ByteString("kcap-recovers-wrong-root"))
+
+    val taskWithWrongRoot = StorageTask.createStorageTask(accountHash, wrongStorageRoot)
+    impl.processServedTasks(
+      peerA,
+      Seq(taskWithWrongRoot),
+      BigInt(1024),
+      StorageRanges(requestId = 1, slots = Seq(slots), proof = Seq.empty),
+      servedCount = 1
+    )
+    impl.staleRootFailuresByAccount(accountHash) should have size 1
+    impl.activeTasks.clear()
+    impl.tasks.clear()
+
+    // Second attempt: correct root this time (e.g. the account record was refreshed) — succeeds.
+    val taskWithRealRoot = StorageTask.createStorageTask(accountHash, realStorageRoot)
+    impl.processServedTasks(
+      peerA,
+      Seq(taskWithRealRoot),
+      BigInt(1024),
+      StorageRanges(requestId = 2, slots = Seq(slots), proof = Seq.empty),
+      servedCount = 1
+    )
+
+    // Success clears the failure history — this account is NOT on a path to being dropped.
+    impl.staleRootFailuresByAccount.get(accountHash) shouldBe None
+    impl.completedAccountCount shouldBe 1L
+  }
+
+  // ── forge review follow-ups on the K-cap ──────────────────────────────────────────────────────
+
+  private def feedStaleRootAttempt(
+      impl: StorageRangeCoordinatorImpl,
+      peer: com.chipprbots.ethereum.network.Peer,
+      task: StorageTask,
+      reqId: Int,
+      clearQueues: Boolean = true
+  ): Unit =
+    impl.processServedTasks(
+      peer,
+      Seq(task),
+      BigInt(1024),
+      StorageRanges(requestId = reqId, slots = Seq(Seq(slotKey(0x40) -> ByteString("v"))), proof = Seq.empty),
+      servedCount = 1
+    )
+    if clearQueues then
+      impl.tasks.clear()
+      impl.activeTasks.clear()
+
+  it should "NOT give up on an account whose repeated stale-root failures all come from ONE peer under ONE root" taggedAs UnitTest in {
+    val (impl, _) = newImpl(
+      stateRoot = kec256(ByteString("kcap-single-root")),
+      flatSlotStorage = new FlatSlotStorage(EphemDataSource()),
+      snapSyncControllerRef = testKit.createTestProbe[SNAPSyncController.Command]().ref,
+      deferredMerkleization = true
+    )
+    val peerA = PeerTestHelpers.createTestPeer("kcap-single-a", testKit.createTestProbe[Any]().ref.toClassic)
+    val acct = kec256(ByteString("kcap-single-account"))
+    val task = StorageTask.createStorageTask(acct, kec256(ByteString("kcap-single-stale-root")))
+    (1 to 5).foreach(i => feedStaleRootAttempt(impl, peerA, task, i))
+    // Past K=3 but no diversity: could be one bad peer, so the account is still being retried.
+    impl.staleRootFailuresByAccount(acct) should have size 5
+    impl.abandonedAccounts should not contain acct
+  }
+
+  it should "give up once failures span 2+ distinct roots, even from a single peer" taggedAs UnitTest in {
+    val (impl, kit) = newImpl(
+      stateRoot = kec256(ByteString("kcap-roots-1")),
+      flatSlotStorage = new FlatSlotStorage(EphemDataSource()),
+      snapSyncControllerRef = testKit.createTestProbe[SNAPSyncController.Command]().ref,
+      deferredMerkleization = true
+    )
+    val peerA = PeerTestHelpers.createTestPeer("kcap-roots-a", testKit.createTestProbe[Any]().ref.toClassic)
+    val acct = kec256(ByteString("kcap-roots-account"))
+    val task = StorageTask.createStorageTask(acct, kec256(ByteString("kcap-roots-stale-root")))
+    feedStaleRootAttempt(impl, peerA, task, 1)
+    feedStaleRootAttempt(impl, peerA, task, 2)
+    impl.abandonedAccounts should not contain acct
+    kit.run(StorageRangeCoordinator.StoragePivotRefreshed(kec256(ByteString("kcap-roots-2"))))
+    feedStaleRootAttempt(impl, peerA, task, 3) // 3rd failure, 2nd distinct root, still ONE peer
+    impl.abandonedAccounts should contain(acct)
+    impl.staleRootFailuresByAccount.get(acct) shouldBe None
+  }
+
+  it should "keep stale-root failure history across StoragePivotRefreshed" taggedAs UnitTest in {
+    val (impl, kit) = newImpl(
+      stateRoot = kec256(ByteString("kcap-persist-1")),
+      flatSlotStorage = new FlatSlotStorage(EphemDataSource()),
+      snapSyncControllerRef = testKit.createTestProbe[SNAPSyncController.Command]().ref,
+      deferredMerkleization = true
+    )
+    val peerA = PeerTestHelpers.createTestPeer("kcap-persist-a", testKit.createTestProbe[Any]().ref.toClassic)
+    val acct = kec256(ByteString("kcap-persist-account"))
+    val task = StorageTask.createStorageTask(acct, kec256(ByteString("kcap-persist-stale-root")))
+    feedStaleRootAttempt(impl, peerA, task, 1)
+    feedStaleRootAttempt(impl, peerA, task, 2)
+    kit.run(StorageRangeCoordinator.StoragePivotRefreshed(kec256(ByteString("kcap-persist-2"))))
+    impl.staleRootFailuresByAccount(acct) should have size 2 // survived the refresh
+  }
+
+  it should "give up the WHOLE account on give-up: reset a live partial trie, drop queued sibling subtasks, ignore late sibling responses, no requeue" taggedAs UnitTest in {
+    val (impl, _) = newImpl(
+      stateRoot = kec256(ByteString("kcap-live-trie")),
+      flatSlotStorage = new FlatSlotStorage(EphemDataSource()),
+      snapSyncControllerRef = testKit.createTestProbe[SNAPSyncController.Command]().ref,
+      deferredMerkleization = false // a real partial trie exists
+    )
+    val peerA = PeerTestHelpers.createTestPeer("kcap-live-a", testKit.createTestProbe[Any]().ref.toClassic)
+    val peerB = PeerTestHelpers.createTestPeer("kcap-live-b", testKit.createTestProbe[Any]().ref.toClassic)
+    val acct = kec256(ByteString("kcap-live-account"))
+    val staleRoot = kec256(ByteString("kcap-live-stale-root"))
+
+    // First response needs continuation: builds a live partial trie and splits into parallel subtasks.
+    val seed = StorageTask.createStorageTask(acct, staleRoot)
+    impl.applyOrderedStorageChunk(
+      peerA,
+      seed,
+      Seq(slotKey(0x05) -> ByteString("v5")),
+      Seq(ByteString(Array.fill(32)(0xab.toByte)))
+    )
+    impl.pendingAccountTries.contains(acct) shouldBe true
+    impl.accountSubtaskCounters.contains(acct) shouldBe true
+    val sub = impl.tasks.find(_.accountHash == acct).get
+    impl.tasks.count(_.accountHash == acct) should be > 1
+
+    // 3 stale-root failures across 2 peers on ONE subtask (queues deliberately not cleared).
+    feedStaleRootAttempt(impl, peerA, sub, 1, clearQueues = false)
+    feedStaleRootAttempt(impl, peerB, sub, 2, clearQueues = false)
+    feedStaleRootAttempt(impl, peerA, sub, 3, clearQueues = false)
+
+    impl.abandonedAccounts should contain(acct)
+    impl.pendingAccountTries.contains(acct) shouldBe false // partial trie reset
+    impl.accountSubtaskCounters.contains(acct) shouldBe false // siblings do not each need K more failures
+    impl.tasks.exists(_.accountHash == acct) shouldBe false // no requeue, siblings dropped
+    impl.storageTrieCursor.contains(acct) shouldBe false
+
+    // A late response for a sibling that was already in flight is ignored (not verified, not applied).
+    val eventsBefore = impl.staleRootFailureEvents
+    feedStaleRootAttempt(impl, peerB, sub, 4, clearQueues = false)
+    impl.staleRootFailureEvents shouldBe eventsBefore
+    impl.pendingAccountTries.contains(acct) shouldBe false
+    impl.tasks.exists(_.accountHash == acct) shouldBe false
   }

@@ -5,6 +5,7 @@ import org.apache.pekko.util.ByteString
 
 import com.chipprbots.ethereum.domain.SignedTransaction
 import com.chipprbots.ethereum.domain.SignedTransactionWithSender
+import com.chipprbots.ethereum.domain.Timestamp
 import com.chipprbots.ethereum.transactions.PendingTransactionsManager.*
 import com.chipprbots.ethereum.utils.BlockchainConfig
 import com.chipprbots.ethereum.utils.Config
@@ -17,7 +18,7 @@ case class PendingTransactionsManagerAutoPilot(pendingTransactions: Set[PendingT
   def run(sender: ActorRef, msg: Any): AutoPilot =
     msg match
       case AddUncheckedTransactions(transactions) =>
-        val validTxs = SignedTransactionWithSender.getSignedTransactions(transactions)
+        val validTxs = SignedTransactionWithSender.getSignedTransactions(transactions, Timestamp.Zero)
         this.addTransactions(validTxs.toSet)
 
       case AddTransactions(signedTransactions) =>

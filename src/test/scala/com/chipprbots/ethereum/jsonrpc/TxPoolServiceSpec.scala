@@ -16,6 +16,7 @@ import org.scalatest.matchers.should.Matchers
 
 import com.chipprbots.ethereum.Fixtures
 import com.chipprbots.ethereum.domain.SignedTransactionWithSender
+import com.chipprbots.ethereum.domain.Timestamp
 import com.chipprbots.ethereum.testing.Tags.*
 import com.chipprbots.ethereum.transactions.PendingTransactionsManager
 import com.chipprbots.ethereum.transactions.PendingTransactionsManager.PendingTransaction
@@ -52,7 +53,7 @@ class TxPoolServiceSpec extends ScalaTestWithActorTestKit with AnyFlatSpecLike w
       stx: com.chipprbots.ethereum.domain.SignedTransaction,
       local: Boolean = false
   ): PendingTransaction =
-    val withSender = SignedTransactionWithSender.getSignedTransactions(Seq(stx))
+    val withSender = SignedTransactionWithSender.getSignedTransactions(Seq(stx), Timestamp.Zero)
     PendingTransaction(withSender.head, System.currentTimeMillis(), receivedFromLocalSource = local)
 
   trait TestSetup:

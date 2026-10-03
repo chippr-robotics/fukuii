@@ -17,11 +17,12 @@ import com.chipprbots.ethereum.testing.Tags.*
 /** Fork-version gating for engine_newPayloadV4 — Prague/Osaka acceptance window (T10-C).
   *
   * V4 must be accepted for Prague and Osaka timestamps, and rejected (UNSUPPORTED_FORK -38005) for any pre-Prague
-  * timestamp. When Amsterdam is defined, V4 should also be rejected at Amsterdam+ (V5 takes over), but that guard is
-  * not exercised here since Amsterdam is undefined.
+  * timestamp and from Amsterdam on (execution-apis amsterdam.md "Update the methods of previous forks"; V5 takes over).
+  * An ExecutionPayloadV4 field (`slotNumber`, `blockAccessList`) sent to V4 is -32602 (go-ethereum NewPayloadV4; EEST
+  * `bal_invalid_engine_payload_field_before_fork`, `invalid_pre_fork_block_with_slot_number`).
   *
   * Timestamps used are far-future sentinels from src/test/resources/application.conf: prague-timestamp = 9999999998
-  * osaka-timestamp = 9999999999
+  * osaka-timestamp = 9999999999. Amsterdam is declared on a copy of that config, which the controller is given.
   */
 class EngineApiNewPayloadV4Spec extends AnyWordSpec with Matchers:
 
@@ -29,6 +30,11 @@ class EngineApiNewPayloadV4Spec extends AnyWordSpec with Matchers:
 
   private val PragueTs: Long = 9999999998L
   private val PrePragueTs: Long = 9999999997L // one second before Prague
+  private val AmsterdamTs: Long = 10000000003L
+
+  private val amsterdamConfig =
+    val base = com.chipprbots.ethereum.utils.Config.blockchains.blockchainConfig
+    base.copy(forkTimestamps = base.forkTimestamps.copy(amsterdamTimestamp = Some(AmsterdamTs)))
 
   private val zeroHash32 = "0x" + "00" * 32
   private val zeroAddr20 = "0x" + "00" * 20
@@ -56,14 +62,14 @@ class EngineApiNewPayloadV4Spec extends AnyWordSpec with Matchers:
       "excessBlobGas" -> JString("0x0")
     )
 
-  private def newPayloadV4Request(timestamp: Long): JsonRpcRequest =
+  private def newPayloadV4Request(timestamp: Long, extraFields: (String, JString)*): JsonRpcRequest =
     JsonRpcRequest(
       "2.0",
       "engine_newPayloadV4",
       Some(
         JArray(
           List(
-            payloadJson(timestamp), // params[0]: execution payload
+            JObject(payloadJson(timestamp).obj ++ extraFields), // params[0]: execution payload
             JArray(Nil), // params[1]: expectedBlobVersionedHashes
             JString(zeroHash32), // params[2]: parentBeaconBlockRoot
             JArray(Nil) // params[3]: executionRequests
@@ -95,5 +101,38 @@ class EngineApiNewPayloadV4Spec extends AnyWordSpec with Matchers:
 
       response.error.map(_.code) shouldBe Some(-38005)
       response.result shouldBe None
+    }
+
+    "reject a payload at an Amsterdam timestamp with -38005 UNSUPPORTED_FORK (V5 serves Amsterdam)" taggedAs (
+      UnitTest,
+      ConsensusTest
+    ) in {
+      val controller = new EngineApiController(stubService, None, amsterdamConfig)
+      val response = controller.handleRequest(newPayloadV4Request(AmsterdamTs)).unsafeRunSync()
+
+      response.error.map(_.code) shouldBe Some(-38005)
+      response.error.map(_.message).getOrElse("") should include("V5")
+      response.result shouldBe None
+    }
+
+    "still serve Prague once Amsterdam is scheduled" taggedAs (UnitTest, ConsensusTest) in {
+      val controller = new EngineApiController(stubService, None, amsterdamConfig)
+      val response = controller.handleRequest(newPayloadV4Request(PragueTs)).unsafeRunSync()
+
+      response.error shouldBe None
+      response.result.isDefined shouldBe true
+    }
+
+    "reject either ExecutionPayloadV4 field with -32602, before the fork window" taggedAs (UnitTest, ConsensusTest) in {
+      val controller = new EngineApiController(stubService, None, amsterdamConfig)
+      Seq("slotNumber" -> JString("0x1"), "blockAccessList" -> JString("0xc0")).foreach { field =>
+        Seq(PragueTs, AmsterdamTs).foreach { ts =>
+          val response = controller.handleRequest(newPayloadV4Request(ts, field)).unsafeRunSync()
+          withClue(s"${field._1} at $ts: ") {
+            response.error.map(_.code) shouldBe Some(-32602)
+            response.error.map(_.message).getOrElse("") should include(field._1)
+          }
+        }
+      }
     }
   }

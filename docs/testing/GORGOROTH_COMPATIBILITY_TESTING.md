@@ -1001,7 +1001,7 @@ After completing compatibility testing:
 - Gorgoroth Quick Start - see `ops/gorgoroth/QUICKSTART.md` (internal)
 - Verification Complete Report - see `ops/gorgoroth/VERIFICATION_COMPLETE.md` (internal)
 - [Fukuii Documentation](../index.md)
-- [Core-Geth Documentation](https://core-geth.org/)
+- [Core-Geth Documentation](https://etclabscore.github.io/core-geth/)
 - [Hyperledger Besu Documentation](https://besu.hyperledger.org/)
 
 ## Support

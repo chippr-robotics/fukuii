@@ -392,10 +392,14 @@ trait TestSetupWithVmAndValidators extends EphemBlockchainTestSetup:
         testMining.blockPreparator,
         blockValidation
       ):
-        override def executeAndValidateBlock(
+        // Stubs the Full variant: executeAndValidateBlocks calls it directly (WI-10 needs the block access list it
+        // returns), and executeAndValidateBlock delegates to it, so both entry points skip execution here.
+        override def executeAndValidateBlockFull(
             block: Block,
             alreadyValidated: Boolean = false
-        )(implicit blockchainConfig: BlockchainConfig): Either[BlockExecutionError, Seq[Receipt]] =
+        )(implicit
+            blockchainConfig: BlockchainConfig
+        ): Either[BlockExecutionError, (Seq[Receipt], Seq[ByteString], Option[BlockAccessList])] =
           val emptyWorld = InMemoryWorldStateProxy(
             storagesInstance.storages.evmCodeStorage,
             blockchain.getBackingMptStorage(-1),
@@ -405,7 +409,7 @@ trait TestSetupWithVmAndValidators extends EphemBlockchainTestSetup:
             noEmptyAccounts = false,
             ethCompatibleStorage = true
           )
-          Right(BlockResult(emptyWorld).receipts)
+          Right((BlockResult(emptyWorld).receipts, Nil, None))
     )
     new ConsensusAdapter(
       consensus,

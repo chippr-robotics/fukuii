@@ -25,5 +25,8 @@ case class GenesisData(
     alloc: Map[String, GenesisAccount],
     baseFeePerGas: Option[String] = None,
     excessBlobGas: Option[String] = None,
-    blobGasUsed: Option[String] = None
+    blobGasUsed: Option[String] = None,
+    // EIP-7843 genesis `slotNumber` (hex quantity), read only when Amsterdam is active at the genesis timestamp;
+    // absent means 0 (go-ethereum core/genesis.go `IsAmsterdam`).
+    slotNumber: Option[String] = None
 )

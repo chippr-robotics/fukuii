@@ -244,6 +244,7 @@ class BlockchainSpec
           val blockBodiesStorage = storagesInstance.storages.blockBodiesStorage
           val blockNumberMappingStorage = storagesInstance.storages.blockNumberMappingStorage
           val receiptStorage = storagesInstance.storages.receiptStorage
+          val blockAccessListStorage = storagesInstance.storages.blockAccessListStorage
           val evmCodeStorage = storagesInstance.storages.evmCodeStorage
           val chainWeightStorage = storagesInstance.storages.chainWeightStorage
           val transactionMappingStorage = storagesInstance.storages.transactionMappingStorage

@@ -62,12 +62,14 @@ object EvmConfig:
     // branch is unreachable on ETC/Mordor/Gorgoroth — asserted by ChainConfigMatrixSpec against the
     // SHIPPED config files, not left to convention.
     //
-    // Adds no opcodes. What it changes is the gas model: EIP-8038 access/write repricing (fee schedule),
-    // EIP-8037 state-gas metering, EIP-2780 intrinsic decomposition, EIP-7778 block accounting,
-    // EIP-7708 transfer logs and EIP-7954 size limits — all behind `amsterdamEnabled`.
+    // Opcodes: EIP-7843 SLOTNUM and EIP-8024 DUPN/SWAPN/EXCHANGE (AmsterdamOpCodes, the only table that
+    // holds them). The rest is the gas model: EIP-8038 access/write repricing (fee schedule), EIP-8037
+    // state-gas metering, EIP-2780 intrinsic decomposition, EIP-7778 block accounting, EIP-7708 transfer
+    // logs and EIP-7954 size limits — all behind `amsterdamEnabled`.
     if blockchainConfig.isAmsterdamTimestamp(timestamp) then
       config = config.copy(
         feeSchedule = new FeeSchedule.AmsterdamFeeSchedule,
+        opCodeList = AmsterdamOpCodes,
         amsterdamEnabled = true
       )
     config
@@ -127,6 +129,7 @@ object EvmConfig:
   val ShanghaiOpCodes: OpCodeList = OpCodeList(OpCodes.ShanghaiOpCodes)
   val CancunOpCodes: OpCodeList = OpCodeList(OpCodes.CancunOpCodes)
   val OsakaOpCodes: OpCodeList = OpCodeList(OpCodes.OsakaOpCodes)
+  val AmsterdamOpCodes: OpCodeList = OpCodeList(OpCodes.AmsterdamOpCodes)
 
   val FrontierConfigBuilder: EvmConfigBuilder = config =>
     EvmConfig(
@@ -348,10 +351,12 @@ case class EvmConfig(
     val initCodeCost: BigInt = if isContractCreation then calcInitCodeCost(txData) else BigInt(0)
 
     if amsterdamEnabled then
-      // EIP-2780 replaces the flat base AND EIP-7702's flat PER_AUTH_BASE_COST. Calldata and access-list
-      // metering are explicitly unchanged.
+      // EIP-2780 replaces the flat base AND EIP-7702's flat PER_AUTH_BASE_COST. Calldata metering is
+      // unchanged; the access list keeps its per-entry charges (EIP-8038's 2,900 / 2,000) and gains
+      // EIP-7981's data surcharge, which the calldata floor carries too (AmsterdamGas.accessListDataCost).
       val authListPrice: BigInt = BigInt(authorizationListSize) * AmsterdamGas.ExecutionPerAuthBaseCost
-      transactionBaseCost(to, value, sender) + calldataPrice + accessListPrice + authListPrice + initCodeCost
+      transactionBaseCost(to, value, sender) + calldataPrice + accessListPrice +
+        AmsterdamGas.accessListDataCost(accessList) + authListPrice + initCodeCost
     else
       // EIP-7702: Per-authorization intrinsic gas = PER_AUTH_BASE_COST (25000) per EIP spec
       val authListPrice: BigInt = BigInt(authorizationListSize) * BigInt(25000)
@@ -388,6 +393,22 @@ case class EvmConfig(
         if value.isZero || isSelfTransfer || to.isEmpty then 0
         else AmsterdamGas.TxValueCost
       AmsterdamGas.TxBaseCost + recipientCost + valueCost
+
+  /** The Amsterdam calldata floor — EIP-7976's 64 gas per byte plus EIP-7981's access-list data cost, on EIP-2780's
+    * decomposed base ([[AmsterdamGas.calldataFloorGas]]).
+    *
+    * Amsterdam-only: every caller selects it inside an `amsterdamEnabled` branch. The pre-Amsterdam EIP-7623 floor (ETH
+    * Prague/Osaka, ETC Olympia) stays `BlockPreparator.calcFloorDataGas`; under a pre-Amsterdam config this method's
+    * base would be the legacy 21,000 and its result meaningless.
+    */
+  def calcAmsterdamCalldataFloorGas(
+      txData: ByteString,
+      accessList: Seq[AccessListItem],
+      to: Option[Address],
+      value: UInt256,
+      sender: Address
+  ): BigInt =
+    AmsterdamGas.calldataFloorGas(transactionBaseCost(to, value, sender), txData, accessList)
 
   /** If the initialization code completes successfully, a final contract-creation cost is paid, the code-deposit cost,
     * proportional to the size of the created contract’s code. See YP equation (96)

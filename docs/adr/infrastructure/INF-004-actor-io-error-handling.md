@@ -197,7 +197,7 @@ The following actors should be reviewed and potentially updated in future work:
 
 ## References
 
-- [Cats Effect IO](https://typelevel.org/cats-effect/docs/core/io)
+- [Cats Effect IO](https://typelevel.org/cats-effect/api/3.x/cats/effect/IO.html)
 - [Pekko Actor Error Handling](https://pekko.apache.org/docs/pekko/current/general/supervision.html)
 - [Pekko Status.Failure](https://pekko.apache.org/api/pekko/current/org/apache/pekko/actor/Status$$Failure.html)
 - Original issue: Fix flaky PeerDiscoveryManager tests

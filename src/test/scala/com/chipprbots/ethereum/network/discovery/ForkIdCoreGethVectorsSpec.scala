@@ -109,7 +109,7 @@ class ForkIdCoreGethVectorsSpec extends AnyWordSpec with Matchers:
     EthereumNodeRecord(dummySig, 0L, ethKey -> ByteVector(entry))
 
   private def tag(genesis: ByteString, conf: BlockchainConfig, head: BigInt) =
-    new ForkIdTag(() => genesis, () => 0L, conf, () => head)
+    new ForkIdTag(() => genesis, () => 0L, conf, () => head, () => 0L)
 
   /** go-rlp's strict view of an eth entry: [[4-byte string, canonical uint64], ...tail]. */
   private def strictCoreGethLoad(bytes: Array[Byte]): (Long, BigInt) = rawDecode(bytes) match
@@ -119,7 +119,7 @@ class ForkIdCoreGethVectorsSpec extends AnyWordSpec with Matchers:
 
   private def validate(genesis: ByteString, conf: BlockchainConfig, head: BigInt, id: ForkId) =
     import ForkIdValidator.syncIoLogger
-    ForkIdValidator.validatePeer[SyncIO](genesis, 0L, conf)(head, id).unsafeRunSync()
+    ForkIdValidator.validatePeer[SyncIO](genesis, 0L, conf)(head, 0L, id).unsafeRunSync()
 
   "fukuii's ETC and Mordor fork IDs" should {
     "equal core-geth's vectors (hash always; next except fukuii's Olympia placeholder past the last fork)" in {
@@ -198,7 +198,7 @@ class ForkIdCoreGethVectorsSpec extends AnyWordSpec with Matchers:
 
   "DnsDiscovery's EnrForkIdFilter" should {
     "agree with the discv4 filter on core-geth records (ETC tip)" in {
-      val f = new DnsDiscovery.EnrForkIdFilter(() => etcGenesis, () => 0L, etcConf, () => BigInt(22000000))
+      val f = new DnsDiscovery.EnrForkIdFilter(() => etcGenesis, () => 0L, etcConf, () => BigInt(22000000), () => 0L)
       for (_, hash, next) <- etcVectors do f.accepts(ForkIdTag.decodeEthEntry(coreGethEntry(hash, next))) shouldBe true
       for (_, hash, next) <- mordorVectors do
         f.accepts(ForkIdTag.decodeEthEntry(coreGethEntry(hash, next))) shouldBe false

@@ -83,7 +83,8 @@ case class EthNodeStatus69ExchangeState(
       latestBlockHash
     )
 
-    val localGenesisHash = blockchainReader.genesisHeader.hash.value
+    val localGenesisHeader = blockchainReader.genesisHeader
+    val localGenesisHash = localGenesisHeader.hash.value
 
     if networkId != peerConfiguration.networkId then
       log.debug(
@@ -100,13 +101,27 @@ case class EthNodeStatus69ExchangeState(
       )
       DisconnectedState[PeerInfo](Disconnect.Reasons.UselessPeer)
     else
+      val localBestBlock = blockchainReader.getBestBlockNumber
+      // A head timestamp of zero is DATA, not a missing value — see EthNodeStatus68ExchangeState's identical
+      // comment. Only a genuinely missing header falls back to genesis, logged as the anomaly it is.
+      val localBestTimestamp = blockchainReader
+        .getBlockHeaderByNumber(localBestBlock)
+        .map(_.unixTimestamp)
+        .getOrElse {
+          log.warn(
+            "ETH69_STATUS: no stored header for best block {} — falling back to the genesis timestamp for the fork id.",
+            localBestBlock
+          )
+          localGenesisHeader.unixTimestamp
+        }
       (for validationResult <-
           ForkIdValidator.validatePeer[SyncIO](
-            blockchainReader.genesisHeader.hash.value,
-            blockchainReader.genesisHeader.unixTimestamp.toLong,
+            localGenesisHash,
+            localGenesisHeader.unixTimestamp.toLong,
             blockchainConfig
           )(
-            blockchainReader.getBestBlockNumber,
+            localBestBlock,
+            localBestTimestamp.toLong,
             forkId
           )
       yield

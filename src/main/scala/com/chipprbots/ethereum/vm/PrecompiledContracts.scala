@@ -12,6 +12,7 @@ import com.chipprbots.ethereum.crypto.zksnark.BN128Fp
 import com.chipprbots.ethereum.crypto.zksnark.PairingCheck
 import com.chipprbots.ethereum.crypto.zksnark.PairingCheck.G1G2Pair
 import com.chipprbots.ethereum.domain.Address
+import com.chipprbots.ethereum.domain.BlockHeader
 import com.chipprbots.ethereum.utils.ByteStringUtils.*
 import com.chipprbots.ethereum.utils.ByteUtils
 import com.chipprbots.ethereum.vm.BlockchainConfigForEvm.EtcForks
@@ -117,19 +118,73 @@ object PrecompiledContracts:
           case None               => baseContracts.get(addr) // Normal precompile check
     }
 
+  /** The result a precompile frame hands back to its caller.
+    *
+    * EIP-8037: a precompile charges execution gas only and never touches state gas. Like any other frame it is handed
+    * the caller's reservoir in full, and the caller then ADOPTS the child's counters (`mergeSuccessfulChildStateGas` /
+    * `absorbFailedChildStateGas`), so the frame must hand them back. A result left at the defaults (0) wipes the
+    * caller's unspent reservoir and the transaction's state gas already charged — which moves the header's `gasUsed` by
+    * more than 2^24 on any Amsterdam transaction above TX_MAX_GAS_LIMIT that calls a precompile (#1437).
+    *
+    * The shape is what `ProgramState(vm, context, env).toResult` gives a frame that ran no opcode: the context's
+    * counters on success and, on failure, the restore-to-baseline every failed frame applies (execution-specs
+    * `process_call`: `restore_state_gas` then `forfeit_remaining_gas`). The restore only matters when a transaction
+    * targets a precompile directly and its EIP-2780 pre-execution account-creation charge must be refilled; for a
+    * sub-call nothing between frame entry and exit moved the counters.
+    *
+    * Before Amsterdam every counter in the context is 0, so the result is identical to the previous one on every ETH
+    * fork before Amsterdam and on every ETC fork.
+    *
+    * EIP-1153 transient storage is handed back for the same reason: a successful CALL-family frame ADOPTS the child's
+    * transient storage (`CallOp.exec`: `copy(transientStorage = result.transientStorage)`), and a precompile neither
+    * reads nor writes it. Left at the default (empty), a successful precompile call wiped every TSTORE the transaction
+    * had made so far — TSTORE(k, 42); CALL 0x04; TLOAD(k) gave 0 where execution-specs gives 42 (#1439). The access
+    * sets, logs and deletions stay empty: the caller MERGES those, so empty is exact.
+    */
+  private def frameResult[W <: WorldStateProxy[W, S], S <: Storage[S]](
+      context: ProgramContext[W, S],
+      returnData: ByteString,
+      gasRemaining: BigInt,
+      error: Option[ProgramError]
+  ): ProgramResult[W, S] =
+    val completed = ProgramResult[W, S](
+      returnData = returnData,
+      gasRemaining = gasRemaining,
+      world = context.world,
+      addressesToDelete = Set.empty,
+      logs = Nil,
+      internalTxs = Nil,
+      gasRefund = 0,
+      error = error,
+      accessedAddresses = Set.empty,
+      accessedStorageKeys = Set.empty,
+      transientStorage = context.transientStorage,
+      stateGasReservoir = context.stateGasReservoir,
+      evmStateGasUsed = context.evmStateGasUsed,
+      stateGasFromGasLeft = context.stateGasFromGasLeft,
+      stateGasBaseline = context.stateGasBaselineOverride.getOrElse(context.stateGasReservoir)
+    )
+    if error.isDefined then completed.withStateGasRestoredToBaseline else completed
+
   /** Check if an address is a known precompile address (without relocation) */
   def isPrecompileAddress(addr: Address, context: ProgramContext[?, ?]): Boolean =
     getContracts(context).contains(addr)
 
   def getContracts(context: ProgramContext[?, ?]): Map[Address, PrecompiledContract] =
-    val ethFork = context.evmConfig.blockchainConfig.ethForkForBlockNumber(context.blockHeader.number.value)
-    val etcFork = context.evmConfig.blockchainConfig.etcForkForBlockNumber(context.blockHeader.number.value)
+    getContracts(context.evmConfig, context.blockHeader)
+
+  /** The precompile set active for `blockHeader`. Depends on nothing but the fork, which is why a caller that has no
+    * frame yet (the EIP-2780 dispatch charge in `ProgramContext.apply`) can ask for it.
+    */
+  def getContracts(evmConfig: EvmConfig, blockHeader: BlockHeader): Map[Address, PrecompiledContract] =
+    val ethFork = evmConfig.blockchainConfig.ethForkForBlockNumber(blockHeader.number.value)
+    val etcFork = evmConfig.blockchainConfig.etcForkForBlockNumber(blockHeader.number.value)
     // Post-Cancun detection: check if block header has blob gas fields
-    val isCancun = context.blockHeader.blobGasUsed.isDefined || context.blockHeader.excessBlobGas.isDefined
+    val isCancun = blockHeader.blobGasUsed.isDefined || blockHeader.excessBlobGas.isDefined
     // EIP-2537 BLS12-381 precompiles activate at Prague timestamp on ETH chains
-    val isPrague = context.evmConfig.blockchainConfig.isPragueTimestamp(context.blockHeader.unixTimestamp)
+    val isPrague = evmConfig.blockchainConfig.isPragueTimestamp(blockHeader.unixTimestamp)
     // EIP-7951 P256VERIFY activates at Osaka timestamp on ETH chains
-    val isOsaka = context.evmConfig.blockchainConfig.isOsakaTimestamp(context.blockHeader.unixTimestamp)
+    val isOsaka = evmConfig.blockchainConfig.isOsakaTimestamp(blockHeader.unixTimestamp)
 
     if isOsaka then osakaContracts
     else if etcFork >= EtcForks.Olympia then
@@ -164,18 +219,7 @@ object PrecompiledContracts:
         else (ByteString.empty, Some(OutOfGas), BigInt(0))
       ): @unchecked
 
-      ProgramResult(
-        result,
-        gasRemaining,
-        context.world,
-        Set.empty,
-        Nil,
-        Nil,
-        0,
-        error,
-        Set.empty,
-        Set.empty
-      )
+      frameResult(context, result, gasRemaining, error)
 
   object EllipticCurveRecovery extends PrecompiledContract:
     private val secp256k1n: BigInt = BigInt(curve.getN)
@@ -272,17 +316,11 @@ object PrecompiledContracts:
           // value (ProgramResult / MODEXP output) is produced below. An expression rewrite would
           // require restructuring the validation into a separate boolean and is byte-level risky
           // for a precompile result that feeds state. Keep the short-circuit.
-          return ProgramResult( // scalafix:ok DisableSyntax.return
+          return frameResult( // scalafix:ok DisableSyntax.return
+            context,
             ByteString.empty,
             BigInt(0),
-            context.world,
-            Set.empty,
-            Nil,
-            Nil,
-            0,
-            Some(PreCompiledContractFail),
-            Set.empty,
-            Set.empty
+            Some(PreCompiledContractFail)
           )
 
       // EIP-7883: gas cost routing. On ETH chains, EIP-7883 activates at Osaka timestamp
@@ -298,18 +336,7 @@ object PrecompiledContracts:
         else (ByteString.empty, Some(OutOfGas), BigInt(0))
       ): @unchecked
 
-      ProgramResult(
-        result,
-        gasRemaining,
-        context.world,
-        Set.empty,
-        Nil,
-        Nil,
-        0,
-        error,
-        Set.empty,
-        Set.empty
-      )
+      frameResult(context, result, gasRemaining, error)
 
     def exec(inputData: ByteString): Option[ByteString] =
       val baseLength = getLength(inputData, 0)
@@ -574,26 +601,44 @@ object PrecompiledContracts:
         // bad input to contract, contract will not execute, set price to zero
         BigInt(0)
 
-  // Spec: https://eips.ethereum.org/EIPS/eip-7951
-  // EIP-7951: P256VERIFY — secp256r1 (P-256) signature verification
+  /** EIP-7951 P256VERIFY: secp256r1 (P-256) signature verification. Spec: https://eips.ethereum.org/EIPS/eip-7951
+    *
+    * Follows execution-specs `osaka/vm/precompiled_contracts/p256verify.py` step for step (go-ethereum `p256Verify`
+    * agrees): the 6,900 gas is charged first, whatever the input; then the call SUCCEEDS with EMPTY output unless the
+    * input is exactly 160 bytes — hash, r, s, qx, qy — and the signature verifies, in which case the output is 0x01
+    * left-padded to 32 bytes. There is no 32-byte zero word for "does not verify": a caller sees RETURNDATASIZE 0.
+    *
+    * The bound and curve checks are the reference's own, made here rather than left to the JDK's ECDSA provider so that
+    * the result cannot depend on which provider answers.
+    *
+    * Active on ETH from Osaka (timestamp) and on ETC from Olympia (block, ECIP-1121); see [[getContracts]].
+    */
   object P256Verify extends PrecompiledContract:
-    private val expectedInputLength = 160 // hash(32) + r(32) + s(32) + x(32) + y(32)
+    private val InputLength = 160 // hash(32) + r(32) + s(32) + qx(32) + qy(32)
+
+    /** execution-specs `SECP256R1N` / `SECP256R1P` / `SECP256R1A` / `SECP256R1B`. */
+    private val N = BigInt("ffffffff00000000ffffffffffffffffbce6faada7179e84f3b9cac2fc632551", 16)
+    private val P = BigInt("ffffffff00000001000000000000000000000000ffffffffffffffffffffffff", 16)
+    private val A = BigInt("ffffffff00000001000000000000000000000000fffffffffffffffffffffffc", 16)
+    private val B = BigInt("5ac635d8aa3a93e7b3ebbd55769886bc651d06b0cc53b0f63bce3c3e27d2604b", 16)
+
+    private val Verified: ByteString = ByteUtils.padLeft(ByteString(1), 32)
 
     def exec(inputData: ByteString): Option[ByteString] =
-      if inputData.length < expectedInputLength then Some(ByteString.empty) // Invalid input — return empty (failure)
-      else
-        val hash = inputData.slice(0, 32).toArray
-        val r = inputData.slice(32, 64).toArray
-        val s = inputData.slice(64, 96).toArray
-        val x = inputData.slice(96, 128).toArray
-        val y = inputData.slice(128, 160).toArray
+      Some(if verifies(inputData) then Verified else ByteString.empty)
 
-        if Secp256r1.verify(hash, r, s, x, y) then
-          // Valid signature: return 0x01 left-padded to 32 bytes
-          Some(ByteUtils.padLeft(ByteString(1), 32))
-        else
-          // Invalid signature: return 0x00 left-padded to 32 bytes
-          Some(ByteString(new Array[Byte](32)))
+    private def verifies(input: ByteString): Boolean =
+      input.length == InputLength && {
+        def word(i: Int): Array[Byte] = input.slice(32 * i, 32 * (i + 1)).toArray
+        val (hash, rBytes, sBytes, xBytes, yBytes) = (word(0), word(1), word(2), word(3), word(4))
+        val (r, s) = (BigInt(1, rBytes), BigInt(1, sBytes))
+        val (qx, qy) = (BigInt(1, xBytes), BigInt(1, yBytes))
+        r > 0 && r < N && s > 0 && s < N && // 0 < r < n and 0 < s < n
+        qx < P && qy < P && // 0 <= qx < p and 0 <= qy < p
+        !(qx == 0 && qy == 0) && // not the point at infinity
+        (qy * qy).mod(P) == (qx * qx * qx + A * qx + B).mod(P) && // on the curve
+        Secp256r1.verify(hash, rBytes, sBytes, xBytes, yBytes)
+      }
 
     def gas(inputData: ByteString, etcFork: EtcFork, ethFork: EthFork): BigInt = BigInt(6900)
 

@@ -77,11 +77,24 @@ class MerkleProofVerifier(rootHash: ByteString) extends Logger:
   // ─── Reconstruction algorithm ───────────────────────────────────────────────
 
   private def verifyCompleteRange(leaves: Seq[(ByteString, ByteString)]): Either[String, Unit] =
-    val snapTrie = new SnapHashTrie(_ => ())
-    leaves.foreach { case (k, v) => snapTrie.update(k.toArray, v.toArray) }
-    val computed = snapTrie.commit()
-    if computed == rootHash then Right(())
-    else Left(s"complete-range hash mismatch")
+    // Explicit pre-validation, mirroring the checks verifyRangeProofByReconstruction already
+    // applies on the proof-present path below. Without this, a single peer response with
+    // non-ascending keys (or an empty/deletion value) would reach SnapHashTrie.update ->
+    // StackTrie.update and rely on that method's `require` throwing to be rejected. The throw is
+    // still caught by verifyStorageRange/verifyAccountRange's surrounding try/catch — it can never
+    // escape to the caller — but validating explicitly here makes peer-data rejection an
+    // intentional, expected outcome instead of exception-driven control flow, and avoids building
+    // a doomed temporary trie first. Never weakens StackTrie's own `require`; this only stops
+    // clearly-invalid input from reaching it.
+    if (0 until leaves.length - 1).exists(i => cmpBytes(leaves(i)._1, leaves(i + 1)._1) >= 0) then
+      Left("range is not monotonically increasing")
+    else if leaves.exists(_._2.isEmpty) then Left("range contains deletion (empty value)")
+    else
+      val snapTrie = new SnapHashTrie(_ => ())
+      leaves.foreach { case (k, v) => snapTrie.update(k.toArray, v.toArray) }
+      val computed = snapTrie.commit()
+      if computed == rootHash then Right(())
+      else Left(s"complete-range hash mismatch")
 
   private def verifyRangeProofByReconstruction(
       firstKey: ByteString,

@@ -25,7 +25,8 @@ object ExecEnv:
       context.precompileRelocations,
       context.blobVersionedHashes,
       context.traceTransfers,
-      context.tracer
+      context.tracer,
+      context.accessRecorder
     )
 
 /** Execution environment constants of an EVM program. See section 9.3 in Yellow Paper for more detail.
@@ -51,6 +52,9 @@ object ExecEnv:
   *   gas provided for execution
   * @param evmConfig
   *   EVM configuration (forks)
+  * @param accessRecorder
+  *   EIP-7928: where this frame records the accounts and slots it reads. Present only while an Amsterdam block
+  *   executes; see [[BlockAccessRecorder]].
   */
 case class ExecEnv(
     ownerAddr: Address,
@@ -67,5 +71,6 @@ case class ExecEnv(
     precompileRelocations: Map[Address, Address] = Map.empty,
     blobVersionedHashes: Seq[ByteString] = Seq.empty,
     traceTransfers: Boolean = false,
-    tracer: Option[ExecutionTracer] = None
+    tracer: Option[ExecutionTracer] = None,
+    accessRecorder: Option[BlockAccessRecorder] = None
 )

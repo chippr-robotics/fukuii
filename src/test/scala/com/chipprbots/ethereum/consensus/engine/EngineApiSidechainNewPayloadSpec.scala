@@ -70,7 +70,7 @@ class EngineApiSidechainNewPayloadSpec extends AnyWordSpec with Matchers:
           case PendingTransactionsManager.GetPendingTransactionsReq(replyTo) =>
             poolQueries.incrementAndGet()
             val entries = poolContents.get().flatMap { stx =>
-              SignedTransactionWithSender.getSignedTransactions(Seq(stx)).map { withSender =>
+              SignedTransactionWithSender.getSignedTransactions(Seq(stx), Timestamp.Zero).map { withSender =>
                 PendingTransactionsManager.PendingTransaction(withSender, 0L)
               }
             }

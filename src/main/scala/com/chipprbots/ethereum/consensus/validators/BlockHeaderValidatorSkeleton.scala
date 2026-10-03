@@ -281,18 +281,27 @@ trait BlockHeaderValidatorSkeleton extends BlockHeaderValidator:
       blockHeader: BlockHeader
   )(implicit blockchainConfig: BlockchainConfig): Either[BlockHeaderError, BlockHeaderValid] =
     val isOlympiaActivated = blockHeader.number.value >= blockchainConfig.forkBlockNumbers.olympiaBlockNumber
+    // Timestamp-gated: no ETC-family config declares an Amsterdam timestamp, so this is false on every ETC chain.
+    val isAmsterdam = blockchainConfig.isAmsterdamTimestamp(blockHeader.unixTimestamp)
 
     blockHeader.extraFields match
       // Amsterdam (23 items). Slice A taught the decoder to produce this variant; without a case here it
       // falls to the catch-all below and every Amsterdam block is rejected with HeaderExtraFieldsError
       // before it reaches execution at all. `PoSBlockHeaderValidator` inherits this method without
       // overriding `validate`, so it runs on the live PoS import path.
-      case HefPostAmsterdam(_, _, _, _, _, _, _, _) if isOlympiaActivated => Right(BlockHeaderValid)
-      case HefPostPrague(_, _, _, _, _, _) if isOlympiaActivated          => Right(BlockHeaderValid)
-      case HefPostCancun(_, _, _, _, _) if isOlympiaActivated             => Right(BlockHeaderValid)
-      case HefPostShanghai(_, _) if isOlympiaActivated                    => Right(BlockHeaderValid)
-      case HefPostOlympia(_) if isOlympiaActivated                        => Right(BlockHeaderValid)
-      case HefEmpty if !isOlympiaActivated                                => Right(BlockHeaderValid)
+      //
+      // The shape and the fork go together, both ways (go-ethereum `BlockValidator.ValidateBody`: "block access list
+      // hash not set in header" / "block had access list before Amsterdam"): an Amsterdam header must carry
+      // blockAccessListHash and slotNumber — a 21-field Prague-shaped header at an Amsterdam timestamp commits to no
+      // block access list at all, and used to reach execution here because only sync ran
+      // `BlockHeader.validateFieldCount` — and a header before Amsterdam must not.
+      case HefPostAmsterdam(_, _, _, _, _, _, _, _) if isOlympiaActivated && isAmsterdam => Right(BlockHeaderValid)
+      case _ if isAmsterdam => Left(HeaderExtraFieldsError(blockHeader.extraFields))
+      case HefPostPrague(_, _, _, _, _, _) if isOlympiaActivated => Right(BlockHeaderValid)
+      case HefPostCancun(_, _, _, _, _) if isOlympiaActivated    => Right(BlockHeaderValid)
+      case HefPostShanghai(_, _) if isOlympiaActivated           => Right(BlockHeaderValid)
+      case HefPostOlympia(_) if isOlympiaActivated               => Right(BlockHeaderValid)
+      case HefEmpty if !isOlympiaActivated                       => Right(BlockHeaderValid)
       case _ =>
         Left(HeaderExtraFieldsError(blockHeader.extraFields))
 
