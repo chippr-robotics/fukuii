@@ -57,6 +57,23 @@ object MerklePatriciaTrie:
     override def withLocation(loc: ByteString): MissingAccountNodeException =
       new MissingAccountNodeException(hash, accountAddress, Some(loc))
 
+  /** An account carries a non-empty `codeHash` but the bytecode is not in `EvmCodeStorage`.
+    *
+    * It extends [[MissingNodeException]] on purpose: missing contract code is the same kind of fact as a missing trie
+    * node — the local store is incomplete, which says nothing about the block — and every consumer that already handles
+    * a missing node (the Engine API's SYNCING answer, the importer's fetch-and-retry, the RPC services' "state
+    * unavailable") handles this the same way. `hash` is the codeHash, which is the key to fetch it by (SNAP
+    * `GetByteCodes`).
+    *
+    * Execution must never see the alternative. Returning empty code for such an account runs a contract call as a
+    * transfer to an EOA, which silently produces a different state, gas and access list.
+    */
+  class MissingCodeException(codeHash: ByteString, val accountAddress: ByteString)
+      extends MissingNodeException(
+        codeHash,
+        s"Contract code ${Hex.toHexString(codeHash.toArray)} not found for account ${Hex.toHexString(accountAddress.toArray)}"
+      )
+
   val EmptyEncoded: Array[Byte] = encodeRLP(Array.empty[Byte])
   val EmptyRootHash: Array[Byte] = Node.hashFn(EmptyEncoded)
 

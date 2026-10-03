@@ -343,7 +343,7 @@ private class ByteCodeCoordinatorImpl(
         log.warn(
           s"Force-completing bytecode sync: $bytecodesDownloaded bytecodes downloaded, " +
             s"abandoning $abandonedTotal remaining tasks ($abandonedPending pending, $abandonedActive active). " +
-            "Missing bytecodes will be recovered post-SNAP via BytecodeRecoveryActor if needed."
+            "Missing bytecodes are fetched on demand at import, and by BytecodeRecoveryActor at the next start (bytecodeRecoveryDone stays unset)."
         )
         bytecodesAbandoned += abandonedTotal
         pendingTasks.clear()

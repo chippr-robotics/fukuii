@@ -37,6 +37,7 @@ import com.chipprbots.ethereum.jsonrpc.NewBlockImported
 import com.chipprbots.ethereum.ledger.*
 import com.chipprbots.ethereum.mpt.*
 import com.chipprbots.ethereum.mpt.MerklePatriciaTrie.MissingAccountNodeException
+import com.chipprbots.ethereum.mpt.MerklePatriciaTrie.MissingCodeException
 import com.chipprbots.ethereum.mpt.MerklePatriciaTrie.MissingNodeException
 import com.chipprbots.ethereum.mpt.MerklePatriciaTrie.MissingStorageNodeException
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor
@@ -609,6 +610,33 @@ final private class BlockImporterLogic(
                 pendingStateNodeHash = Some(e.hash)
                 fetcher ! BlockFetcher.FetchStateNode(e.hash, fetcherResponseAdapter, parentStateRoot, paths)
                 ResolvingMissingNode(NonEmptyList(notImportedBlocks.head, notImportedBlocks.tail))
+              case e: MissingCodeException =>
+                // An account in the block's state has a codeHash whose bytecode this node never stored. Missing data,
+                // not an invalid block: fetch it over SNAP GetByteCodes (served by every snap-capable peer, ETH68+)
+                // and retry the same blocks. `e.hash` is the codeHash — the key GetByteCodes is addressed by.
+                val failedBlock = notImportedBlocks.head
+                val parentStateRoot =
+                  try
+                    Option(blockchainReader.getBlockHeaderByHash(failedBlock.header.parentHash)).flatten
+                      .map(_.stateRoot.value)
+                  catch
+                    case ex: Exception =>
+                      log.warning("Failed to get parent state root during code recovery: {}", ex.getMessage); None
+                log.warning(
+                  "Missing contract code {} for account {} during import of block {}. Fetching via SNAP GetByteCodes.",
+                  ByteStringUtils.hash2string(e.hash),
+                  ByteStringUtils.hash2string(e.accountAddress),
+                  failedBlock.number
+                )
+                pendingStateNodeHash = Some(e.hash)
+                fetcher ! BlockFetcher.FetchStateNode(
+                  e.hash,
+                  fetcherResponseAdapter,
+                  parentStateRoot,
+                  paths = None,
+                  isByteCode = true
+                )
+                ResolvingMissingNode(NonEmptyList(failedBlock, notImportedBlocks.tail))
               case e: MissingNodeException =>
                 val failedBlock = notImportedBlocks.head
                 val parentStateRoot =
@@ -659,10 +687,11 @@ final private class BlockImporterLogic(
                   case None =>
                     log.error("Gas mismatch on block {} but no missing contract code found", failedBlock.number)
                     // This arm — and ONLY this arm — is where a gas-used mismatch is proven to be a real consensus
-                    // failure rather than a missing-bytecode artifact. `InMemoryWorldStateProxy.getCode` returns
-                    // ByteString.empty instead of throwing when code is absent, so a partially-synced node
-                    // under-counts gas on an honest block and lands in the sibling `Some(codeHash)` arm above, which
-                    // fetches the code over SNAP and retries. Having positively excluded that reading, tell the
+                    // failure rather than a missing-bytecode artifact. `InMemoryWorldStateProxy.getCode` now throws
+                    // MissingCodeException when an account's code is absent, and the arm above fetches the code over
+                    // SNAP and retries. (It used to return ByteString.empty, so a partially-synced node under-counted
+                    // gas on an honest block and landed in that sibling arm.) Reaching this arm means no missing code
+                    // was found. Having positively excluded that reading, tell the
                     // Engine API so newPayload/forkchoiceUpdated can answer INVALID for this block and its
                     // descendants. latestValidHash = the failing block's parent: execution proceeds in order and
                     // stops at the first failure, so the parent is the last block we validated.
