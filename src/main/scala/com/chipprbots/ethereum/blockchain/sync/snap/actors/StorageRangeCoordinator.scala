@@ -445,17 +445,42 @@ private[actors] class StorageRangeCoordinatorImpl(
       distinctPeers: Int,
       distinctRoots: Int
   ): Unit =
-    staleRootFailuresByAccount.remove(task.accountHash)
+    val accountHash = task.accountHash
+    staleRootFailuresByAccount.remove(accountHash)
+    // Give up the WHOLE account, not just the task that tripped the cap: a large account may be split into
+    // parallel subtasks sharing one stale `storageRoot`; if only this subtask were dropped, each sibling would need K
+    // more failures of its own (the failure history is keyed by account and was just cleared). Drop every queued
+    // sibling and tombstone the account so in-flight siblings (already dispatched, answering later) and
+    // timeout/peer-loss re-queues are ignored instead of rebuilding a partial trie that could never commit correctly.
+    val queuedSiblings = tasks.filter(_.accountHash == accountHash)
+    if queuedSiblings.nonEmpty then
+      val keep = tasks.filterNot(_.accountHash == accountHash)
+      tasks.clear()
+      tasks.enqueueAll(keep)
+      queuedSiblings.foreach(t => pendingTaskKeys -= ((t.accountHash, t.next)))
+    abandonedAccounts += accountHash
+    accountSubtaskCounters.remove(accountHash)
     val doneTask = task.copy(done = true, pending = false)
     recordCompletedTask(doneTask)
-    resetAccountTrie(task.accountHash)
+    resetAccountTrie(accountHash)
     com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncMetrics
       .setStoragePendingTries(pendingAccountTries.size.toLong)
     log.warn(
-      s"Giving up on storage for account ${task.accountHash.toHex} after $failureCount consecutive " +
+      s"Giving up on storage for account ${accountHash.toHex} after $failureCount consecutive " +
         s"stale-local-root verification failures across $distinctPeers peer(s)/$distinctRoots root(s) " +
-        s"(storageRoot=${task.storageRoot.toHex}) — deferring to healing"
+        s"(storageRoot=${task.storageRoot.toHex}; dropped ${queuedSiblings.size} queued sibling task(s)) — deferring to healing"
     )
+
+  /** Accounts given up on for healing (see `giveUpOnAccountForHealing`). Tasks for these are ignored wherever they
+    * resurface (late responses, timeout/peer-loss re-queues).
+    */
+  private[actors] val abandonedAccounts: mutable.Set[ByteString] = mutable.Set.empty
+
+  /** Cumulative count of stale-local-root verification failures observed (never reset on give-up). Reported to the
+    * controller so its tail-livelock backstop can require repeated verification failures as evidence, rather than
+    * inferring a stall from queue depth alone.
+    */
+  private[actors] var staleRootFailureEvents: Long = 0L
 
   // Sentinel: when true, no more AddStorageTasks will arrive (all accounts downloaded).
   // Completion is only reported after this is set AND pending+active tasks drain.
@@ -788,6 +813,7 @@ private[actors] class StorageRangeCoordinatorImpl(
     lastAppliedSlot.clear()
     pendingOrderedChunks.clear()
     staleRootFailuresByAccount.clear()
+    abandonedAccounts.clear()
     // Best-effort: flush any tail of accumulated flat-slot entries synchronously here so we
     // don't lose data when the actor terminates (force-complete, restart).
     if pendingFlatBatchAccounts.nonEmpty then
@@ -967,6 +993,7 @@ private[actors] class StorageRangeCoordinatorImpl(
           lastAppliedSlot.clear()
           pendingOrderedChunks.clear()
           staleRootFailuresByAccount.clear()
+          abandonedAccounts.clear()
           // Hand off any flat-slot tail still in the accumulator.
           flushPendingFlatBatch()
           log.info("Storage range sync force-completed (promoting to healing phase)")
@@ -1103,7 +1130,8 @@ private[actors] class StorageRangeCoordinatorImpl(
           tasksActive = activeTasks.values.map(_._2.size).sum,
           tasksPending = tasks.size,
           elapsedTimeMs = System.currentTimeMillis() - startTime,
-          progress = progress
+          progress = progress,
+          staleRootFailureEvents = staleRootFailureEvents
         )
         replyTo ! stats
         Behaviors.same
@@ -1325,7 +1353,7 @@ private[actors] class StorageRangeCoordinatorImpl(
       // Track empties per task to avoid re-queueing forever.
       // If the same task yields empty responses repeatedly, skip it with a loud warning.
       var skipped = 0
-      tasks.foreach { task =>
+      tasks.filterNot(t => abandonedAccounts.contains(t.accountHash)).foreach { task =>
         val key = StorageTaskKey(task.accountHash, task.next, task.last)
         val attempts = emptyResponsesByTask.getOrElse(key, 0) + 1
         emptyResponsesByTask.update(key, attempts)
@@ -1394,60 +1422,69 @@ private[actors] class StorageRangeCoordinatorImpl(
 
     if unservedTasks.nonEmpty then
       log.debug(s"Re-queueing ${unservedTasks.size} unserved storage tasks")
-      unservedTasks.foreach { task =>
+      unservedTasks.filterNot(t => abandonedAccounts.contains(t.accountHash)).foreach { task =>
         this.tasks.enqueue(task.copy(pending = false))
       }
 
     // Track total received bytes across all served tasks for adaptive byte budgeting
     var totalReceivedBytes: Long = 0
 
-    servedTasks.zipWithIndex.foreach { case (task0, idx) =>
-      val accountSlots =
-        if response.slots.nonEmpty && idx < response.slots.size then response.slots(idx)
-        else Seq.empty
+    // Given-up accounts (see giveUpOnAccountForHealing): a late/in-flight sibling response is ignored, not verified,
+    // applied or re-queued. Index alignment with `response.slots` is preserved by filtering AFTER zipWithIndex.
+    servedTasks.zipWithIndex
+      .filter { case (t, _) =>
+        val abandoned = abandonedAccounts.contains(t.accountHash)
+        if abandoned then recordCompletedTask(t.copy(done = true, pending = false))
+        !abandoned
+      }
+      .foreach { case (task0, idx) =>
+        val accountSlots =
+          if response.slots.nonEmpty && idx < response.slots.size then response.slots(idx)
+          else Seq.empty
 
-      // Best-practice: apply proof nodes only to the last served slot-set.
-      val proofForThisTask = if idx == servedCount - 1 then response.proof else Seq.empty
+        // Best-practice: apply proof nodes only to the last served slot-set.
+        val proofForThisTask = if idx == servedCount - 1 then response.proof else Seq.empty
 
-      val task = task0.copy(slots = accountSlots, proof = proofForThisTask)
+        val task = task0.copy(slots = accountSlots, proof = proofForThisTask)
 
-      val verifier = MerkleProofVerifier(task.storageRoot)
-      val storageEndHash = accountSlots.lastOption.map(_._1).getOrElse(task.last)
-      verifier.verifyStorageRange(accountSlots, proofForThisTask, task.next, storageEndHash) match
-        case Left(error) if isStaleLocalRootSignature(error) =>
-          // Not evidence of peer fault (see staleRootFailuresByAccount's doc) — no peer penalty.
-          val failures = staleRootFailuresByAccount.getOrElse(task.accountHash, Vector.empty) :+
-            StaleRootFailure(peer.id.value, stateRoot)
-          staleRootFailuresByAccount(task.accountHash) = failures
-          val distinctPeers = failures.map(_.peerId).distinct.size
-          val distinctRoots = failures.map(_.root).distinct.size
-          log.warn(
-            s"Storage proof verification failed for account ${task.accountString}: $error " +
-              s"(stale-local-root attempt ${failures.size}/$maxStaleRootFailuresPerAccount, " +
-              s"peers=$distinctPeers, roots=$distinctRoots)"
-          )
-          if failures.size >= maxStaleRootFailuresPerAccount && (distinctPeers >= 2 || distinctRoots >= 2) then
-            giveUpOnAccountForHealing(task, failures.size, distinctPeers, distinctRoots)
-            self ! StorageCheckCompletion
-          else this.tasks.enqueue(task.copy(pending = false))
+        val verifier = MerkleProofVerifier(task.storageRoot)
+        val storageEndHash = accountSlots.lastOption.map(_._1).getOrElse(task.last)
+        verifier.verifyStorageRange(accountSlots, proofForThisTask, task.next, storageEndHash) match
+          case Left(error) if isStaleLocalRootSignature(error) =>
+            // Not evidence of peer fault (see staleRootFailuresByAccount's doc) — no peer penalty.
+            val failures = staleRootFailuresByAccount.getOrElse(task.accountHash, Vector.empty) :+
+              StaleRootFailure(peer.id.value, stateRoot)
+            staleRootFailuresByAccount(task.accountHash) = failures
+            staleRootFailureEvents += 1
+            val distinctPeers = failures.map(_.peerId).distinct.size
+            val distinctRoots = failures.map(_.root).distinct.size
+            log.warn(
+              s"Storage proof verification failed for account ${task.accountString}: $error " +
+                s"(stale-local-root attempt ${failures.size}/$maxStaleRootFailuresPerAccount, " +
+                s"peers=$distinctPeers, roots=$distinctRoots)"
+            )
+            if failures.size >= maxStaleRootFailuresPerAccount && (distinctPeers >= 2 || distinctRoots >= 2) then
+              giveUpOnAccountForHealing(task, failures.size, distinctPeers, distinctRoots)
+              self ! StorageCheckCompletion
+            else this.tasks.enqueue(task.copy(pending = false))
 
-        case Left(error) =>
-          log.warn(s"Storage proof verification failed for account ${task.accountString}: $error")
-          recordPeerCooldown(peer, s"verification failed: $error")
-          adjustResponseBytesOnFailure(peer, s"verification failed: $error")
-          this.tasks.enqueue(task.copy(pending = false))
+          case Left(error) =>
+            log.warn(s"Storage proof verification failed for account ${task.accountString}: $error")
+            recordPeerCooldown(peer, s"verification failed: $error")
+            adjustResponseBytesOnFailure(peer, s"verification failed: $error")
+            this.tasks.enqueue(task.copy(pending = false))
 
-        case Right(_) =>
-          // A successful verification clears any stale-local-root failure history for this
-          // account (requirement: "an account that fails once and then succeeds is not dropped") —
-          // whatever caused the earlier mismatch no longer applies.
-          staleRootFailuresByAccount.remove(task.accountHash)
-          val slotBytes = accountSlots.map { case (hash, value) => hash.size + value.size }.sum
-          totalReceivedBytes += slotBytes
-          // Cross-chunk range ordering (storageConcurrency parallel subtasks racing on response
-          // arrival) is enforced by the gate, not here — see applyOrderedStorageChunk.
-          applyOrderedStorageChunk(peer, task, accountSlots, proofForThisTask)
-    }
+          case Right(_) =>
+            // A successful verification clears any stale-local-root failure history for this
+            // account (requirement: "an account that fails once and then succeeds is not dropped") —
+            // whatever caused the earlier mismatch no longer applies.
+            staleRootFailuresByAccount.remove(task.accountHash)
+            val slotBytes = accountSlots.map { case (hash, value) => hash.size + value.size }.sum
+            totalReceivedBytes += slotBytes
+            // Cross-chunk range ordering (storageConcurrency parallel subtasks racing on response
+            // arrival) is enforced by the gate, not here — see applyOrderedStorageChunk.
+            applyOrderedStorageChunk(peer, task, accountSlots, proofForThisTask)
+      }
 
     // Adjust per-peer byte budget based on total received bytes
     if totalReceivedBytes > 0 then adjustResponseBytesOnSuccess(peer, requestedBytes, BigInt(totalReceivedBytes))
@@ -2009,7 +2046,8 @@ object StorageRangeCoordinator:
       tasksActive: Int,
       tasksPending: Int,
       elapsedTimeMs: Long,
-      progress: Double
+      progress: Double,
+      staleRootFailureEvents: Long = 0L
   ):
     def throughputSlotsPerSec: Double =
       if elapsedTimeMs > 0 then slotsDownloaded.toDouble / (elapsedTimeMs / 1000.0)

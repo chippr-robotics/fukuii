@@ -1529,3 +1529,118 @@ class StorageRangeCoordinatorSpec extends ScalaTestWithActorTestKit() with AnyFl
     impl.staleRootFailuresByAccount.get(accountHash) shouldBe None
     impl.completedAccountCount shouldBe 1L
   }
+
+  // ── forge review follow-ups on the K-cap ──────────────────────────────────────────────────────
+
+  private def feedStaleRootAttempt(
+      impl: StorageRangeCoordinatorImpl,
+      peer: com.chipprbots.ethereum.network.Peer,
+      task: StorageTask,
+      reqId: Int,
+      clearQueues: Boolean = true
+  ): Unit =
+    impl.processServedTasks(
+      peer,
+      Seq(task),
+      BigInt(1024),
+      StorageRanges(requestId = reqId, slots = Seq(Seq(slotKey(0x40) -> ByteString("v"))), proof = Seq.empty),
+      servedCount = 1
+    )
+    if clearQueues then
+      impl.tasks.clear()
+      impl.activeTasks.clear()
+
+  it should "NOT give up on an account whose repeated stale-root failures all come from ONE peer under ONE root" taggedAs UnitTest in {
+    val (impl, _) = newImpl(
+      stateRoot = kec256(ByteString("kcap-single-root")),
+      flatSlotStorage = new FlatSlotStorage(EphemDataSource()),
+      snapSyncControllerRef = testKit.createTestProbe[SNAPSyncController.Command]().ref,
+      deferredMerkleization = true
+    )
+    val peerA = PeerTestHelpers.createTestPeer("kcap-single-a", testKit.createTestProbe[Any]().ref.toClassic)
+    val acct = kec256(ByteString("kcap-single-account"))
+    val task = StorageTask.createStorageTask(acct, kec256(ByteString("kcap-single-stale-root")))
+    (1 to 5).foreach(i => feedStaleRootAttempt(impl, peerA, task, i))
+    // Past K=3 but no diversity: could be one bad peer, so the account is still being retried.
+    impl.staleRootFailuresByAccount(acct) should have size 5
+    impl.abandonedAccounts should not contain acct
+  }
+
+  it should "give up once failures span 2+ distinct roots, even from a single peer" taggedAs UnitTest in {
+    val (impl, kit) = newImpl(
+      stateRoot = kec256(ByteString("kcap-roots-1")),
+      flatSlotStorage = new FlatSlotStorage(EphemDataSource()),
+      snapSyncControllerRef = testKit.createTestProbe[SNAPSyncController.Command]().ref,
+      deferredMerkleization = true
+    )
+    val peerA = PeerTestHelpers.createTestPeer("kcap-roots-a", testKit.createTestProbe[Any]().ref.toClassic)
+    val acct = kec256(ByteString("kcap-roots-account"))
+    val task = StorageTask.createStorageTask(acct, kec256(ByteString("kcap-roots-stale-root")))
+    feedStaleRootAttempt(impl, peerA, task, 1)
+    feedStaleRootAttempt(impl, peerA, task, 2)
+    impl.abandonedAccounts should not contain acct
+    kit.run(StorageRangeCoordinator.StoragePivotRefreshed(kec256(ByteString("kcap-roots-2"))))
+    feedStaleRootAttempt(impl, peerA, task, 3) // 3rd failure, 2nd distinct root, still ONE peer
+    impl.abandonedAccounts should contain(acct)
+    impl.staleRootFailuresByAccount.get(acct) shouldBe None
+  }
+
+  it should "keep stale-root failure history across StoragePivotRefreshed" taggedAs UnitTest in {
+    val (impl, kit) = newImpl(
+      stateRoot = kec256(ByteString("kcap-persist-1")),
+      flatSlotStorage = new FlatSlotStorage(EphemDataSource()),
+      snapSyncControllerRef = testKit.createTestProbe[SNAPSyncController.Command]().ref,
+      deferredMerkleization = true
+    )
+    val peerA = PeerTestHelpers.createTestPeer("kcap-persist-a", testKit.createTestProbe[Any]().ref.toClassic)
+    val acct = kec256(ByteString("kcap-persist-account"))
+    val task = StorageTask.createStorageTask(acct, kec256(ByteString("kcap-persist-stale-root")))
+    feedStaleRootAttempt(impl, peerA, task, 1)
+    feedStaleRootAttempt(impl, peerA, task, 2)
+    kit.run(StorageRangeCoordinator.StoragePivotRefreshed(kec256(ByteString("kcap-persist-2"))))
+    impl.staleRootFailuresByAccount(acct) should have size 2 // survived the refresh
+  }
+
+  it should "give up the WHOLE account on give-up: reset a live partial trie, drop queued sibling subtasks, ignore late sibling responses, no requeue" taggedAs UnitTest in {
+    val (impl, _) = newImpl(
+      stateRoot = kec256(ByteString("kcap-live-trie")),
+      flatSlotStorage = new FlatSlotStorage(EphemDataSource()),
+      snapSyncControllerRef = testKit.createTestProbe[SNAPSyncController.Command]().ref,
+      deferredMerkleization = false // a real partial trie exists
+    )
+    val peerA = PeerTestHelpers.createTestPeer("kcap-live-a", testKit.createTestProbe[Any]().ref.toClassic)
+    val peerB = PeerTestHelpers.createTestPeer("kcap-live-b", testKit.createTestProbe[Any]().ref.toClassic)
+    val acct = kec256(ByteString("kcap-live-account"))
+    val staleRoot = kec256(ByteString("kcap-live-stale-root"))
+
+    // First response needs continuation: builds a live partial trie and splits into parallel subtasks.
+    val seed = StorageTask.createStorageTask(acct, staleRoot)
+    impl.applyOrderedStorageChunk(
+      peerA,
+      seed,
+      Seq(slotKey(0x05) -> ByteString("v5")),
+      Seq(ByteString(Array.fill(32)(0xab.toByte)))
+    )
+    impl.pendingAccountTries.contains(acct) shouldBe true
+    impl.accountSubtaskCounters.contains(acct) shouldBe true
+    val sub = impl.tasks.find(_.accountHash == acct).get
+    impl.tasks.count(_.accountHash == acct) should be > 1
+
+    // 3 stale-root failures across 2 peers on ONE subtask (queues deliberately not cleared).
+    feedStaleRootAttempt(impl, peerA, sub, 1, clearQueues = false)
+    feedStaleRootAttempt(impl, peerB, sub, 2, clearQueues = false)
+    feedStaleRootAttempt(impl, peerA, sub, 3, clearQueues = false)
+
+    impl.abandonedAccounts should contain(acct)
+    impl.pendingAccountTries.contains(acct) shouldBe false // partial trie reset
+    impl.accountSubtaskCounters.contains(acct) shouldBe false // siblings do not each need K more failures
+    impl.tasks.exists(_.accountHash == acct) shouldBe false // no requeue, siblings dropped
+    impl.storageTrieCursor.contains(acct) shouldBe false
+
+    // A late response for a sibling that was already in flight is ignored (not verified, not applied).
+    val eventsBefore = impl.staleRootFailureEvents
+    feedStaleRootAttempt(impl, peerB, sub, 4, clearQueues = false)
+    impl.staleRootFailureEvents shouldBe eventsBefore
+    impl.pendingAccountTries.contains(acct) shouldBe false
+    impl.tasks.exists(_.accountHash == acct) shouldBe false
+  }

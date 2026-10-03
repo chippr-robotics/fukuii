@@ -1227,60 +1227,72 @@ class SNAPSyncControllerSpec extends AnyFlatSpec with Matchers:
   // SNAPSyncControllerImpl is file-private (see the StorageRestartedEmptyThreshold section above for
   // why these tests replicate the predicate/state-machine rather than driving the actor directly).
 
-  "Storage progress-based stagnation (tail livelock)" should "not flag stagnation while remaining work keeps setting new, lower low-points" taggedAs UnitTest in {
-    val StorageStagnationThresholdMs: Long = 10 * 60 * 1000L
-    var lastStorageRemainingWork = Int.MaxValue
-    var lastCheckMs = 0L
-    val remainingWorkSamples = Seq(500, 400, 300, 200, 100, 50, 10, 0) // strictly shrinking every tick
+  "Storage tail-livelock backstop (SNAPSyncController.evaluateStorageTail)" should "not flag while remaining work keeps setting new, lower low-points" taggedAs UnitTest in {
+    val thresholdMs = 10 * 60 * 1000L
+    var baseline = SNAPSyncController.StorageTailBaseline.fresh(0L)
+    var fired = false
     var now = 0L
-    val tickMs = 60_000L
-    remainingWorkSamples.foreach { remainingWork =>
-      now += tickMs
-      if remainingWork < lastStorageRemainingWork then
-        lastStorageRemainingWork = remainingWork
-        lastCheckMs = now
+    Seq(500, 400, 300, 200, 100, 50, 10, 0).foreach { work =>
+      now += 60_000L
+      // Even with failures recurring, a shrinking queue is progress.
+      val (b, f) = SNAPSyncController.evaluateStorageTail(baseline, work, now / 1000, now, thresholdMs)
+      baseline = b
+      fired ||= f
     }
-    val remainingWorkStalledForMs = now - lastCheckMs
-    lastStorageRemainingWork shouldBe 0
-    (remainingWorkStalledForMs >= StorageStagnationThresholdMs) shouldBe false
+    baseline.lowWork shouldBe 0
+    fired shouldBe false
   }
 
-  it should "flag stagnation once remaining work has not set a new low-point for the full stagnation window, even while oscillating" taggedAs UnitTest in {
-    val StorageStagnationThresholdMs: Long = 10 * 60 * 1000L
-    var lastStorageRemainingWork = Int.MaxValue
-    var lastCheckMs = 0L
-    // Mirrors the soak exactly: pending oscillates between 1 and the low-30s without ever going
-    // below its first-seen floor of 1.
-    val remainingWorkSamples = Seq(33, 1, 20, 1, 15, 1, 33, 1)
-    var now = 0L
-    val tickMs = 2 * 60 * 1000L // 8 ticks x 2min = 16 simulated minutes, past the 10-minute threshold
-    remainingWorkSamples.foreach { remainingWork =>
-      now += tickMs
-      if remainingWork < lastStorageRemainingWork then
-        lastStorageRemainingWork = remainingWork
-        lastCheckMs = now
-    }
-    val remainingWorkStalledForMs = now - lastCheckMs
-    // The low-point really is 1 (set on the second sample) — everything after oscillates but never
-    // sets a NEW, lower low-point, so the clock keeps counting from there.
-    lastStorageRemainingWork shouldBe 1
-    (remainingWorkStalledForMs >= StorageStagnationThresholdMs) shouldBe true
+  it should "flag a flat, oscillating queue only when stale-root failures keep recurring over the window" taggedAs UnitTest in {
+    val thresholdMs = 10 * 60 * 1000L
+    def run(failuresPerTick: Long): Boolean =
+      var baseline = SNAPSyncController.StorageTailBaseline.fresh(0L)
+      var fired = false
+      var now = 0L
+      var failures = 0L
+      // Mirrors the soak: pending oscillates 1-33, never below its first-seen floor of 1.
+      Seq(33, 1, 20, 1, 15, 1, 33, 1).foreach { work =>
+        now += 2 * 60 * 1000L
+        failures += failuresPerTick
+        val (b, f) = SNAPSyncController.evaluateStorageTail(baseline, work, failures, now, thresholdMs)
+        baseline = b
+        fired ||= f
+      }
+      fired
+    run(failuresPerTick = 5L) shouldBe true
   }
 
-  it should "not be defeated by unrelated slot-count progress resetting the OTHER (lastStorageProgressMs) signal" taggedAs UnitTest in {
-    // The two signals are independent and OR'd together in maybeRestartIfStorageStagnant: even
-    // when the slot-count-based clock keeps getting reset by unrelated accounts (so stalledForMs
-    // stays low), the remaining-work signal alone is sufficient to flag a tail livelock.
-    val StorageStagnationThresholdMs: Long = 10 * 60 * 1000L
-    val now: Long = 960_000L
-    val lastStorageProgressMs: Long = now - 5_000L // reset moments ago by an unrelated account
-    val stalledForMs = now - lastStorageProgressMs
-    val remainingWorkStalledForMs = now - 240_000L // matches the low-point set at t=240s above
-    val progressStalled = remainingWorkStalledForMs >= StorageStagnationThresholdMs
+  it should "NOT flag a healthy flat tail (huge-account continuation chain / post-split regrowth) with no verification failures" taggedAs UnitTest in {
+    val thresholdMs = 10 * 60 * 1000L
+    var baseline = SNAPSyncController.StorageTailBaseline.fresh(0L)
+    var fired = false
+    var now = 0L
+    // Queue depth flat/regrowing for 30 simulated minutes, zero stale-root failures reported.
+    Seq(8, 8, 16, 16, 12, 12, 16, 16, 8, 8, 16, 16, 12, 12, 16).foreach { work =>
+      now += 2 * 60 * 1000L
+      val (b, f) = SNAPSyncController.evaluateStorageTail(baseline, work, staleRootFailureEvents = 0L, now, thresholdMs)
+      baseline = b
+      fired ||= f
+    }
+    fired shouldBe false
+  }
 
-    (stalledForMs >= StorageStagnationThresholdMs) shouldBe false // this signal alone says "fine"
-    progressStalled shouldBe true // but the remaining-work signal says "stalled"
-    (stalledForMs >= StorageStagnationThresholdMs || progressStalled) shouldBe true // OR catches it
+  it should "not flag before the full window has elapsed, nor on fewer than the minimum failures" taggedAs UnitTest in {
+    val thresholdMs = 10 * 60 * 1000L
+    val base = SNAPSyncController.StorageTailBaseline(lowWork = 1, sinceMs = 0L, staleFailuresAtLow = 0L)
+    SNAPSyncController.evaluateStorageTail(base, 5, 100L, nowMs = thresholdMs - 1, thresholdMs)._2 shouldBe false
+    SNAPSyncController.evaluateStorageTail(base, 5, 2L, nowMs = thresholdMs, thresholdMs)._2 shouldBe false
+    SNAPSyncController.evaluateStorageTail(base, 5, 3L, nowMs = thresholdMs, thresholdMs)._2 shouldBe true
+  }
+
+  it should "start from a fresh baseline each storage phase (no stale low point from a previous phase)" taggedAs UnitTest in {
+    val thresholdMs = 10 * 60 * 1000L
+    // Previous phase left a low point of 0 set long ago with many failures.
+    val stale = SNAPSyncController.StorageTailBaseline(lowWork = 0, sinceMs = 0L, staleFailuresAtLow = 0L)
+    SNAPSyncController.evaluateStorageTail(stale, 40, 50L, nowMs = 3 * thresholdMs, thresholdMs)._2 shouldBe true
+    // The phase-entry reset (StorageTailBaseline.fresh) must not: remaining work 40 < Int.MaxValue sets a new low point now.
+    val fresh = SNAPSyncController.StorageTailBaseline.fresh(3 * thresholdMs)
+    SNAPSyncController.evaluateStorageTail(fresh, 40, 50L, nowMs = 3 * thresholdMs, thresholdMs)._2 shouldBe false
   }
 
   // ── pivotPassesFreshnessFloor — regression for the sepolia oscillation ────
