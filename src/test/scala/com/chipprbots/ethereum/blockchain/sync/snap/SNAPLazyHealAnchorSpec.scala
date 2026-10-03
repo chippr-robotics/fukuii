@@ -31,6 +31,8 @@ import com.chipprbots.ethereum.blockchain.sync.CacheBasedBlacklist
 import com.chipprbots.ethereum.blockchain.sync.EphemBlockchainTestSetup
 import com.chipprbots.ethereum.blockchain.sync.SyncProtocol
 import com.chipprbots.ethereum.blockchain.sync.TestSyncConfig
+import com.chipprbots.ethereum.blockchain.sync.snap.actors.PathHealPresenceFixtures
+import com.chipprbots.ethereum.db.storage.PathNodeStorage
 import com.chipprbots.ethereum.domain.Block
 import com.chipprbots.ethereum.domain.BlockBody
 import com.chipprbots.ethereum.domain.BlockNumber
@@ -600,6 +602,37 @@ class SNAPLazyHealAnchorSpec extends ScalaTestWithActorTestKit() with AnyFlatSpe
       awaitProcessed(snap)
     }
     parent.expectNoMessage(500.millis)
+
+  // Path scheme: the controller's own trie walk / StateValidator read the hash-keyed store, which Path never
+  // populates, so they could never report "0 missing". The coordinator's path-aware verification is the clean signal.
+  it should
+    "complete SNAP under the Path scheme once the coordinator verifies a fully healed trie (no blind controller walk)" taggedAs UnitTest in new Fixture:
+      val pivot0 = BigInt(10_000)
+      val trie = PathHealPresenceFixtures.accountTrieNew()
+      val root0 = trie.root.hash
+
+      storeGenesis()
+      storeHeaderAt(pivot0, root0)
+      seedResumeState(pivot0, root0)
+      // Fully healed trie: every node at its path in PathNodeStorage; the hash-keyed store stays empty, as under Path.
+      PathHealPresenceFixtures.seedPath(
+        new PathNodeStorage(storagesInstance.storages.flatSlotStorage.dataSource),
+        trie.nodes
+      )
+
+      peers.set(Map.empty)
+      val snap = spawnController(
+        SNAPSyncConfig(deferredMerkleization = false, movingRootDeltaHeal = true, storageScheme = StorageScheme.Path)
+      )
+      awaitFirstPoll()
+      snap ! SNAPSyncController.Start
+
+      parent.fishForMessage(20.seconds) {
+        case SNAPSyncController.SnapSyncFinalized(p) if p == pivot0 => FishingOutcomes.complete
+        case SyncProtocol.HealingImpossible =>
+          FishingOutcomes.fail("SNAP aborted (HealingImpossible) instead of completing a fully healed Path trie")
+        case _ => FishingOutcomes.continueAndIgnore
+      }
 
   class Fixture extends EphemBlockchainTestSetup with TestSyncConfig:
     implicit override lazy val classicSystem: ActorSystem = SNAPLazyHealAnchorSpec.this.system.classicSystem

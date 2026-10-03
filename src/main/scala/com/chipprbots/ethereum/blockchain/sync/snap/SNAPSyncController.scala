@@ -752,6 +752,7 @@ private class SNAPSyncControllerImpl(
         // The TNHC seed-guard (#1371) can emit HealingRootUnservable; if it lands after the controller has left
         // StateHealing it must be dropped, not MatchError-crash the idle behavior (the StateHealing handler is guarded).
         case _: HealingRootUnservable => ctx.log.debug("Dropping stale HealingRootUnservable in idle"); Behaviors.same
+        case StateHealingAbandoned    => ctx.log.debug("Dropping stale StateHealingAbandoned in idle"); Behaviors.same
         case _: ValidateAccountTrieResult =>
           ctx.log.debug("Dropping stale ValidateAccountTrieResult in idle"); Behaviors.same
         case _: ValidateStorageTriesResult =>
@@ -1462,7 +1463,15 @@ private class SNAPSyncControllerImpl(
       case StateHealingComplete =>
         progressMonitor.startPhase(StateHealing)
         ctx.log.info("Healing coordinator signaled complete (no pending tasks, no active requests).")
-        if trieWalkInProgress then
+        if snapSyncConfig.storageScheme == StorageScheme.Path then
+          // Path scheme: the controller's trie walk and StateValidator read the hash-keyed store, which Path never
+          // populates, so they would report the root missing every round and never reach "0 missing". The coordinator
+          // only sends StateHealingComplete after its path-aware verification walk found zero missing nodes against
+          // the current root (or it healed nothing and was idle), so that signal IS the clean walk: take the same
+          // exit as TrieWalkComplete(0) rather than running a second, blind, full-trie walk.
+          if currentPhase == StateHealing then completeHealingWalkClean()
+          else ctx.log.debug("Ignoring StateHealingComplete outside StateHealing (phase={})", currentPhase)
+        else if trieWalkInProgress then
           // A trie walk is already running — its result will determine next step
           ctx.log.info("Trie walk in progress, waiting for result...")
         else
@@ -1489,6 +1498,15 @@ private class SNAPSyncControllerImpl(
       // exhausted (refreshPivotInPlace's MaxHealRepegNoRootAttempts, batch-4 H-S7) — that branch calls completeSnapSync()
       // directly (the same handoff below). This handler stays for the flag-OFF path (where the coordinator still emits
       // HealingRootUnservable) and as a defensive catch; either way it is fail-SAFE (anchor-guard gated), never fail-open.
+      case StateHealingAbandoned if currentPhase == StateHealing =>
+        ctx.log.warn(
+          "[HEAL-ABANDONED] Healing coordinator force-completed without a verification walk (Path scheme). The trie is " +
+            "NOT verified, so this is not a clean walk: handing off to lazy on-demand healing via completeSnapSync()."
+        )
+        anchorPivotBeforeLazyHandoff("HEAL-ABANDONED")
+        completeSnapSync()
+        Behaviors.same
+
       case HealingRootUnservable(root) if currentPhase == StateHealing =>
         ctx.log.warn(
           s"[HEAL-ROOT-UNSERVABLE] Heal walk root ${root.toHex.take(16)} is absent from local storage and cannot be " +
@@ -3551,6 +3569,23 @@ private class SNAPSyncControllerImpl(
         }
     }
 
+  /** Path-scheme exit from state healing: same effects as the clean `TrieWalkComplete(0)` branch (commit the pivot
+    * anchor, record the clean-walk signal, stop the heal scheduler, enter validation — which short-circuits on
+    * `healingValidatedRoot`), driven by the coordinator's verified `StateHealingComplete` instead of a controller walk.
+    */
+  private def completeHealingWalkClean(): Unit =
+    ctx.log.info(
+      "Path scheme: coordinator verification found no missing nodes — healing complete (no controller walk)."
+    )
+    healingRoundCount = 0
+    pivotBlock.foreach(b => appStateStorage.putSnapSyncPivotBlock(b).commit())
+    stateRoot.foreach(r => appStateStorage.putSnapSyncStateRoot(r.value).commit())
+    healingValidatedRoot = stateRoot
+    timers.cancel(RequestTrieNodeHealing)
+    progressMonitor.startPhase(StateValidation)
+    currentPhase = StateValidation
+    validateState()
+
   /** Start an async trie walk to discover missing nodes. Guards against concurrent walks. Uses streaming to emit
     * batches as they are found — critical for mainnet-scale tries where a full blocking walk can take hours before the
     * coordinator sees any work.
@@ -5182,6 +5217,11 @@ object SNAPSyncController:
       storageTasks: Seq[StorageTask]
   ) extends Command
   case object StateHealingComplete extends Command
+
+  /** Coordinator gave up (HealingForceComplete) WITHOUT a verification walk. Never a clean-walk signal: under Path the
+    * controller routes it to the lazy-heal handoff instead of declaring the trie validated.
+    */
+  case object StateHealingAbandoned extends Command
   case object HealingAllPeersStateless extends Command
   final case class HealingRootUnservable(root: ByteString) extends Command
   case object StateValidationComplete extends Command
