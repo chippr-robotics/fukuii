@@ -1216,7 +1216,10 @@ private class SNAPSyncControllerImpl(
           ctx.log.info("Retrying pivot refresh after bootstrap failure...")
           // PoS only: a replay counts toward the heal budget iff the timer was armed by a counted attempt.
           // ETC/pre-merge (isPoSChain=false) keeps the unconditional default (byte-identical to base).
-          refreshPivotInPlace("retry after bootstrap failure", countsTowardHealBudget = !isPoSChain || retryRefreshCounts)
+          refreshPivotInPlace(
+            "retry after bootstrap failure",
+            countsTowardHealBudget = !isPoSChain || retryRefreshCounts
+          )
         else ctx.log.info(s"Skipping pivot refresh retry — phase=$currentPhase no longer needs it")
         Behaviors.same
 
@@ -5171,20 +5174,20 @@ object SNAPSyncController:
       // legacy "take whatever peer offers" behavior.
       Right(())
 
-  /** True when a CL-anchored re-peg target (`clHead - pivotBlockOffset`) is not strictly newer than the current
-    * pivot — i.e. `refreshPivotInPlace`'s CL-anchored branch would find nothing to do because the CL hasn't
-    * produced a fresher head, NOT because anything is unservable.
+  /** True when a CL-anchored re-peg target (`clHead - pivotBlockOffset`) is not strictly newer than the current pivot —
+    * i.e. `refreshPivotInPlace`'s CL-anchored branch would find nothing to do because the CL hasn't produced a fresher
+    * head, NOT because anything is unservable.
     *
     * Extracted (BUG-BC3, 2nd follow-up, Platåberget soak 2026-09-28) as the single source of truth for
-    * `refreshPivotInPlace`'s inline check, given explicit
-    * parameters — rather than reading `isPoSChain`/`clPivotHint` off the enclosing actor — specifically so it can
-    * be unit-tested directly: `isPoSChain` is a `private val` fixed at actor-construction time from the global
-    * `com.chipprbots.ethereum.utils.Config.blockchains.blockchainConfig.terminalTotalDifficulty`, which the
-    * "test" network config (used throughout this module's test suite, no `terminal-total-difficulty` entry)
-    * always resolves to `false` — so no actor spawned in a test in this module can ever exercise the CL-anchored
-    * branch live (see `staleReferenceHead`'s tests for the same constraint). Taking `clHead` as a plain
-    * `Option[BigInt]` sidesteps that entirely: a test can simulate "PoS chain, live CL hint" by simply passing
-    * `Some(...)`, exactly as the `staleReferenceHead` tests already do for `clHeadNumber`.
+    * `refreshPivotInPlace`'s inline check, given explicit parameters — rather than reading `isPoSChain`/`clPivotHint`
+    * off the enclosing actor — specifically so it can be unit-tested directly: `isPoSChain` is a `private val` fixed at
+    * actor-construction time from the global
+    * `com.chipprbots.ethereum.utils.Config.blockchains.blockchainConfig.terminalTotalDifficulty`, which the "test"
+    * network config (used throughout this module's test suite, no `terminal-total-difficulty` entry) always resolves to
+    * `false` — so no actor spawned in a test in this module can ever exercise the CL-anchored branch live (see
+    * `staleReferenceHead`'s tests for the same constraint). Taking `clHead` as a plain `Option[BigInt]` sidesteps that
+    * entirely: a test can simulate "PoS chain, live CL hint" by simply passing `Some(...)`, exactly as the
+    * `staleReferenceHead` tests already do for `clHeadNumber`.
     */
   private[snap] def clPivotNotYetAdvanced(clHead: BigInt, pivotBlockOffset: Long, currentPivot: BigInt): Boolean =
     (clHead - pivotBlockOffset) <= currentPivot

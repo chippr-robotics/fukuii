@@ -457,7 +457,7 @@ class SNAPLazyHealAnchorSpec extends ScalaTestWithActorTestKit() with AnyFlatSpe
     "still exhaust the budget and hand off when the GENERIC retry timer (RetryPivotRefresh), not " +
     "HealingAllPeersStateless, repeatedly finds genuinely no peer during StateHealing" taggedAs UnitTest in new Fixture:
       val pivot0 = BigInt(2_000)
-      val root0 = fakeRoot(0xDD)
+      val root0 = fakeRoot(0xdd)
       storeGenesis()
       storeHeaderAt(pivot0, root0)
       seedResumeState(pivot0, root0)
@@ -497,10 +497,11 @@ class SNAPLazyHealAnchorSpec extends ScalaTestWithActorTestKit() with AnyFlatSpe
     "still exhaust the heal budget and hand off on genuine all-peers-stateless reports" taggedAs UnitTest in new Fixture:
       val pivot0 = BigInt(2_000)
       storeGenesis()
-      storeHeaderAt(pivot0, fakeRoot(0xE1))
-      seedResumeState(pivot0, fakeRoot(0xE1))
+      storeHeaderAt(pivot0, fakeRoot(0xe1))
+      seedResumeState(pivot0, fakeRoot(0xe1))
       peers.set(Map.empty)
-      val snap = spawnController(SNAPSyncConfig(deferredMerkleization = false, movingRootDeltaHeal = true), isPoS = true)
+      val snap =
+        spawnController(SNAPSyncConfig(deferredMerkleization = false, movingRootDeltaHeal = true), isPoS = true)
       awaitFirstPoll()
       snap ! SNAPSyncController.Start
       stalledClHint(this, snap, pivot0)
@@ -512,7 +513,7 @@ class SNAPLazyHealAnchorSpec extends ScalaTestWithActorTestKit() with AnyFlatSpe
       parent.fishForMessage(10.seconds) {
         case SNAPSyncController.SnapSyncFinalized(p) if p == pivot0 => FishingOutcomes.complete
         case SyncProtocol.HealingImpossible => FishingOutcomes.fail("unexpected HealingImpossible")
-        case _ => FishingOutcomes.continueAndIgnore
+        case _                              => FishingOutcomes.continueAndIgnore
       }
 
   // (b) A leftover retry timer armed OUTSIDE StateHealing (provenance false -- the initial state here is exactly
@@ -521,8 +522,8 @@ class SNAPLazyHealAnchorSpec extends ScalaTestWithActorTestKit() with AnyFlatSpe
   it should "not spend the heal budget on a leftover retry timer firing during StateHealing" taggedAs UnitTest in new Fixture:
     val pivot0 = BigInt(2_000)
     storeGenesis()
-    storeHeaderAt(pivot0, fakeRoot(0xE2))
-    seedResumeState(pivot0, fakeRoot(0xE2))
+    storeHeaderAt(pivot0, fakeRoot(0xe2))
+    seedResumeState(pivot0, fakeRoot(0xe2))
     peers.set(Map.empty)
     val snap = spawnController(SNAPSyncConfig(deferredMerkleization = false, movingRootDeltaHeal = true), isPoS = true)
     awaitFirstPoll()
@@ -540,8 +541,8 @@ class SNAPLazyHealAnchorSpec extends ScalaTestWithActorTestKit() with AnyFlatSpe
   it should "count replays of a timer armed by a counted attempt, reaching the handoff" taggedAs UnitTest in new Fixture:
     val pivot0 = BigInt(2_000)
     storeGenesis()
-    storeHeaderAt(pivot0, fakeRoot(0xE3))
-    seedResumeState(pivot0, fakeRoot(0xE3))
+    storeHeaderAt(pivot0, fakeRoot(0xe3))
+    seedResumeState(pivot0, fakeRoot(0xe3))
     peers.set(Map.empty)
     val snap = spawnController(SNAPSyncConfig(deferredMerkleization = false, movingRootDeltaHeal = true), isPoS = true)
     awaitFirstPoll()
@@ -557,7 +558,7 @@ class SNAPLazyHealAnchorSpec extends ScalaTestWithActorTestKit() with AnyFlatSpe
     parent.fishForMessage(10.seconds) {
       case SNAPSyncController.SnapSyncFinalized(p) if p == pivot0 => FishingOutcomes.complete
       case SyncProtocol.HealingImpossible => FishingOutcomes.fail("unexpected HealingImpossible")
-      case _ => FishingOutcomes.continueAndIgnore
+      case _                              => FishingOutcomes.continueAndIgnore
     }
 
   class Fixture extends EphemBlockchainTestSetup with TestSyncConfig:
