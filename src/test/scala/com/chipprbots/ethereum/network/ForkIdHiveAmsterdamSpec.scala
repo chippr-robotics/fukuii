@@ -140,11 +140,14 @@ class ForkIdHiveAmsterdamSpec extends AnyWordSpec with Matchers:
 
     "omit a fork the chain has not scheduled" taggedAs (UnitTest, NetworkTest) in {
       // Guards the other direction: adding Amsterdam to the enumeration must not make it
-      // appear for chains that never declare it. Sepolia's schedule ends at BPO2, and its
-      // tail checksum is pinned by ForkIdSepoliaSpec — this asserts the input to that.
-      val sepolia = blockchains.blockchains("sepolia")
-      sepolia.forkTimestamps.amsterdamTimestamp shouldBe None
-      ForkId.gatherTimestampForks(sepolia, GenesisTimestamp) should not contain BigInt(360)
+      // appear for chains that never declare it. Mainnet's schedule ends at BPO2 — Amsterdam
+      // is unscheduled there — so its enumeration is exactly its six declared forks, and no
+      // seventh appears. (This used Sepolia until Sepolia scheduled Amsterdam at 1791294816;
+      // that schedule is now pinned in ForkIdSepoliaSpec.) Mainnet's genesis timestamp is 0.
+      val mainnet = blockchains.blockchains("eth")
+      mainnet.forkTimestamps.amsterdamTimestamp shouldBe None
+      ForkId.gatherTimestampForks(mainnet, 0L) shouldBe
+        List[BigInt](1681338455L, 1710338135L, 1746612311L, 1764798551L, 1765290071L, 1767747671L)
     }
 
     "treat a zero timestamp as genesis, not as a checksum entry" taggedAs (UnitTest, NetworkTest) in {

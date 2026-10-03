@@ -3,6 +3,7 @@ package com.chipprbots.ethereum.vm
 import org.apache.pekko.util.ByteString
 
 import com.chipprbots.ethereum.crypto.kec256
+import com.chipprbots.ethereum.domain.AccessListItem
 import com.chipprbots.ethereum.domain.Address
 import com.chipprbots.ethereum.domain.TxLogEntry
 import com.chipprbots.ethereum.domain.UInt256
@@ -94,14 +95,81 @@ object AmsterdamGas:
   /** EIP-8037: `tx.gas` ceiling, applied to the sum of both dimensions. */
   val TxMaxTotalGasLimit: BigInt = BigInt(2).pow(32) - 1
 
+  // ── EIP-7976 / EIP-7981: the calldata floor ─────────────────────────────────
+  //
+  // Values and formulas are execution-specs `forks/amsterdam` (`transactions.calculate_intrinsic_cost`,
+  // `GasCosts.TX_DATA_TOKEN_*`), which the EEST fixtures are generated from. Two places where the EIP texts read
+  // differently and execution-specs (and go-ethereum `FloorDataGas`) win:
+  //   - EIP-7976 anchors the floor on a flat 21,000; execution-specs anchors it on EIP-2780's decomposed base, the same
+  //     `TX_BASE + recipient_execution_gas` the intrinsic cost starts from;
+  //   - EIP-7981 lists EIP-2930's 2,400 / 1,900 per-entry charges; at Amsterdam those are EIP-8038's 2,900 / 2,000,
+  //     and the data surcharge below is added on top of them.
+
+  /** `TX_DATA_TOKEN_STANDARD`: floor tokens per calldata byte. Under EIP-7976 every byte, zero or not, counts 4. */
+  val TxDataTokenStandard: BigInt = 4
+
+  /** EIP-7976 `TX_DATA_TOKEN_FLOOR` (`TOTAL_COST_FLOOR_PER_TOKEN`): 10 -> 16, so 64 gas per calldata byte. */
+  val TxDataTokenFloor: BigInt = 16
+
+  /** EIP-7981: floor tokens for one access-list address, 20 bytes x 4. */
+  val AccessListAddressFloorTokens: BigInt = 80
+
+  /** EIP-7981: floor tokens for one access-list storage key, 32 bytes x 4. */
+  val AccessListStorageKeyFloorTokens: BigInt = 128
+
+  /** EIP-7981 `access_list_data_cost`: 1,280 gas per address and 2,048 per storage key.
+    *
+    * Charged on BOTH sides of `max(intrinsic + execution, floor)` — it is part of the intrinsic execution cost and of
+    * the floor — so an access list pays for its bytes whichever side decides `gas_used`. It is a surcharge: the
+    * per-entry access charges (`G_access_list_address` / `G_access_list_storage`) are still paid in addition.
+    */
+  def accessListDataCost(accessList: Seq[AccessListItem]): BigInt =
+    val addresses = BigInt(accessList.size)
+    val storageKeys = accessList.foldLeft(BigInt(0))((n, item) => n + item.storageKeys.size)
+    (addresses * AccessListAddressFloorTokens + storageKeys * AccessListStorageKeyFloorTokens) * TxDataTokenFloor
+
+  /** The Amsterdam calldata floor (`calldata_floor` in execution-specs `IntrinsicGasCost`):
+    * {{{
+    * baseExecutionGas + len(txData) * 4 * 16 + access_list_data_cost
+    * }}}
+    * `baseExecutionGas` is EIP-2780's `TX_BASE + recipient_execution_gas` — `EvmConfig.transactionBaseCost` under an
+    * Amsterdam config — and nothing else: initcode-word and per-authorization charges are intrinsic-only and never
+    * enter the floor.
+    *
+    * Amsterdam-only. The EIP-7623 floor of ETH Prague/Osaka and ETC Olympia is `BlockPreparator.calcFloorDataGas`,
+    * which this does not replace.
+    */
+  def calldataFloorGas(baseExecutionGas: BigInt, txData: ByteString, accessList: Seq[AccessListItem]): BigInt =
+    baseExecutionGas + BigInt(txData.length) * TxDataTokenStandard * TxDataTokenFloor + accessListDataCost(accessList)
+
   /** EIP-7954: contract code size limit, 24 KiB -> 64 KiB. */
   val MaxCodeSize: BigInt = 65536
 
   /** EIP-7954: initcode size limit, 48 KiB -> 128 KiB. */
   val MaxInitCodeSize: BigInt = 131072
 
-  /** EIP-8037: system-call gas limit, 30M plus a 16-slot state margin. */
-  val SystemCallGasLimit: BigInt = BigInt(30000000) + GasStorageSet * 16
+  /** execution-specs `SYSTEM_TRANSACTION_GAS`: the EXECUTION-gas grant of every system call, 30,000,000 as before
+    * Amsterdam (EIP-4788, EIP-2935, EIP-7002, EIP-7251 `SYSTEM_CALL_GAS_LIMIT`).
+    */
+  val SystemCallExecutionGas: BigInt = 30000000
+
+  /** execution-specs `SYSTEM_MAX_SSTORES_PER_CALL`: the number of new storage slots a system call is expected to write
+    * at most.
+    */
+  val SystemMaxSstoresPerCall: BigInt = 16
+
+  /** EIP-8037: a system call's STATE-gas reservoir, 16 x GAS_STORAGE_SET = 1,566,720. It sits beside the 30M execution
+    * grant, not inside it: execution-specs `process_unchecked_system_transaction` sets `execution_gas_grant =
+    * SYSTEM_TRANSACTION_GAS` and `state_gas_reservoir = STORAGE_SET * SYSTEM_MAX_SSTORES_PER_CALL`; go-ethereum
+    * `systemCallGasBudget` builds `NewGasBudget(30_000_000, stateBudget)` the same way.
+    */
+  val SystemCallStateGasReservoir: BigInt = GasStorageSet * SystemMaxSstoresPerCall
+
+  /** The two budgets together, 31,566,720 (EEST `fork.system_call_gas_limit()`). A total, never an execution grant:
+    * granting it all as execution gas lets a system call spend 1,566,720 more execution gas than execution-specs allows
+    * and pushes the wrong value for GAS.
+    */
+  val SystemCallGasLimit: BigInt = SystemCallExecutionGas + SystemCallStateGasReservoir
 
   /** EIP-7708 SYSTEM_ADDRESS `0xfffffffffffffffffffffffffffffffffffffffe`: the emitter of every protocol-generated
     * value-transfer log. Reused from EIP-4788 so these logs are distinguishable from contract-emitted ones.

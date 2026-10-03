@@ -8,6 +8,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Platåberget, the public Glamsterdam testnet (chain id 7091047534), as a launcher network:
+  `fukuii plataberget`. Ships the devnet-8 genesis (hash `0xee33ef92…2b31`) and EL bootnodes.
+  Its Amsterdam fork activated 2026-08-20, so following the chain head needs the Amsterdam rule
+  set tracked in #1409
+- Sepolia Amsterdam (Glamsterdam) activation at timestamp 1791294816 (2026-10-06 13:53:36 UTC).
+  The Sepolia fork id now announces it as the next fork (`0x268956b6`, next `1791294816`), as
+  go-ethereum does
+- `docs/specifications/GLAMSTERDAM.md`: Glamsterdam EIP set, activation schedule, fukuii
+  implementation status and a Platåberget test guide
 - Configurable external IP detection strategy via `network.server-address.external-ip-detection`
   (`none` | `upnp` | `full`, default `upnp`); every detected candidate is now validated as a public
   IPv4 address before being advertised to peers

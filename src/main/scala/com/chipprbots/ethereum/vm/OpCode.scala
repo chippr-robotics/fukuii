@@ -201,6 +201,13 @@ object OpCodes:
   /** ETH Osaka: Cancun + CLZ (EIP-7939). */
   val OsakaOpCodes: List[OpCode] = CLZ :: CancunOpCodes
 
+  /** ETH Amsterdam: Osaka + SLOTNUM (EIP-7843) + DUPN, SWAPN, EXCHANGE (EIP-8024) — execution-specs `forks/amsterdam`
+    * `Ops` less Osaka's, and go-ethereum `newAmsterdamInstructionSet` (enable7843, enable8024). Reached only through
+    * the Amsterdam branch of the timestamp cascade (`EvmConfig.forBlock`); no ETC table holds 0x4b or 0xe6..0xe8
+    * (OpCodeContractSpec).
+    */
+  val AmsterdamOpCodes: List[OpCode] = List(SLOTNUM, DUPN, SWAPN, EXCHANGE) ++ OsakaOpCodes
+
 object OpCode:
 
   /** Zero gas, as one shared value: the default state-gas delta and the variable gas of a constant-gas instruction are
@@ -255,6 +262,38 @@ object OpCode:
       else postColdGasFn(state.config.feeSchedule)
     else preGasFn(state.config.feeSchedule)
 
+  /** EIP-8038 (Amsterdam): EXTCODESIZE and EXTCODECOPY make a second database read, for the code itself, after the
+    * account read their access cost already prices. That read costs one WARM_ACCESS on top of the cold or warm account
+    * access. Zero before Amsterdam, and so on every ETC path.
+    *
+    * Only those two opcodes pay it. execution-specs `forks/amsterdam` adds `GasCosts.WARM_ACCESS` in `extcodesize` and
+    * `extcodecopy` alone: EXTCODEHASH and BALANCE read only the account, and the CALL family's code load is covered by
+    * its access charge (plus the delegation target's, under EIP-7702). The EIP-8038 text says the same.
+    */
+  private[vm] def codeReadSurcharge[S <: Storage[S], W <: WorldStateProxy[W, S]](state: ProgramState[W, S]): BigInt =
+    if state.config.amsterdamEnabled then state.config.feeSchedule.G_warm_storage_read else NoGas
+
+  // ── EIP-8024 immediate decoding (execution-specs forks/amsterdam vm/stack.py) ──────────────────
+  //
+  // `x` is the unsigned immediate byte, 0..255. The forbidden ranges keep an immediate from being 0x5b (JUMPDEST) or
+  // 0x60..0x7f (PUSH1..PUSH32), which is what lets JUMPDEST analysis stay unchanged.
+
+  /** Whether `x` is a valid DUPN/SWAPN immediate: 0..90 or 128..255. 91..127 is an exceptional halt. */
+  private[vm] def isValidSingleImmediate(x: Int): Boolean = x <= 90 || x >= 128
+
+  /** `decode_single`: the stack index n, 17 <= n <= 235, of a valid DUPN/SWAPN immediate. */
+  private[vm] def decodeSingle(x: Int): Int = (x + 145) % 256
+
+  /** Whether `x` is a valid EXCHANGE immediate: 0..81 or 128..255. 82..127 is an exceptional halt. */
+  private[vm] def isValidPairImmediate(x: Int): Boolean = x <= 81 || x >= 128
+
+  /** `decode_pair`: the stack indices (n, m), 1 <= n < m <= 30 - n, of a valid EXCHANGE immediate. */
+  private[vm] def decodePair(x: Int): (Int, Int) =
+    val k = x ^ 143
+    val q = k / 16
+    val r = k % 16
+    if q < r then (q + 1, r + 1) else (r + 1, 29 - q)
+
 /** Base class for all the opcodes of the EVM
   *
   * @param code
@@ -279,7 +318,11 @@ abstract class OpCode(val code: Byte, val delta: Int, val alpha: Int, val baseGa
     else if state.stack.size - delta + alpha > state.stack.maxSize then state.withError(StackOverflow)
     else
       val gas: BigInt = calcGas(state)
-      if gas > state.gas then state.copy(gas = 0).withError(OutOfGas)
+      if gas > state.gas then
+        // EIP-7928: an instruction whose full charge includes a state-dependent part may already have read its target
+        // under execution-specs' ordering before that part ran out. Asked only while an Amsterdam block executes.
+        if state.env.accessRecorder.isDefined then recordReadsBeforeOutOfGas(state)
+        state.copy(gas = 0).withError(OutOfGas)
       else
         // EIP-8037: state gas is metered at the END of a state-mutating opcode. The DECISION, though, is
         // made from the pre-execution state — the SSTORE table keys on the slot's original, current and
@@ -315,6 +358,22 @@ abstract class OpCode(val code: Byte, val delta: Int, val alpha: Int, val baseGa
       @unused state: ProgramState[W, S]
   ): BigInt =
     OpCode.NoGas
+
+  /** EIP-7928 "Gas Validation Before State Access": the reads this instruction makes when its full charge is not
+    * affordable but the part execution-specs checks BEFORE touching state is.
+    *
+    * fukuii prices an instruction in full — its state-dependent part included — before `execute`'s out-of-gas check,
+    * whereas execution-specs checks the state-independent part, reads, and only then charges the rest. Where the two
+    * disagree, the read happened in execution-specs and belongs in the block access list although fukuii never runs
+    * `exec`: SSTORE (its slot, once `max(access, CALL_STIPEND + 1)` is covered) and SELFDESTRUCT (its beneficiary, once
+    * `5,000 + cold access` is). Every other instruction's charge is state-independent, so it reads only when `exec`
+    * runs, which records it there. The CALL family and CREATE decide this in their own `execute` / `exec`.
+    *
+    * Called only with a recorder present (an Amsterdam block).
+    */
+  protected[vm] def recordReadsBeforeOutOfGas[S <: Storage[S], W <: WorldStateProxy[W, S]](
+      @unused state: ProgramState[W, S]
+  ): Unit = ()
 
   protected def baseGas[S <: Storage[S], W <: WorldStateProxy[W, S]](state: ProgramState[W, S]): BigInt = baseGasFn(
     state.config.feeSchedule
@@ -548,6 +607,8 @@ case object BALANCE extends OpCode(0x31, 1, 1, _.G_balance) with AddrAccessGas w
   protected def exec[S <: Storage[S], W <: WorldStateProxy[W, S]](state: ProgramState[W, S]): ProgramState[W, S] =
     val (accountAddress, stack1) = state.stack.pop()
     val addr = Address(accountAddress)
+    // EIP-7928: read once the access cost is paid, which is all BALANCE costs.
+    BlockAccessRecorder.account(state.env.accessRecorder, addr)
     val accountBalance = state.world.getBalance(addr)
     val stack2 = stack1.push(accountBalance)
     state.withStack(stack2).addAccessedAddress(addr).step()
@@ -573,6 +634,8 @@ case object EXTCODEHASH extends OpCode(0x3f, 1, 1, _.G_balance) with AddrAccessG
       * Example of existing check in geth:
       * https://github.com/ethereum/go-ethereum/blob/aad3c67a92cd4f3cc3a885fdc514ba2a7fb3e0a3/core/state/statedb.go#L203
       */
+    // EIP-7928: read once the access cost is paid, which is all EXTCODEHASH costs.
+    BlockAccessRecorder.account(state.env.accessRecorder, address)
     val accountExists = !state.world.isAccountDead(address)
 
     val codeHash =
@@ -636,9 +699,15 @@ case object CODECOPY extends OpCode(0x39, 3, 0, _.G_verylow):
 case object GASPRICE extends ConstOp(0x3a)(_.env.gasPrice)
 
 case object EXTCODESIZE extends OpCode(0x3b, 1, 1, _.G_extcode) with AddrAccessGas with ConstGas:
+  // The account access (AddrAccessGas), plus EIP-8038's code-read surcharge from Amsterdam on.
+  override protected def baseGas[S <: Storage[S], W <: WorldStateProxy[W, S]](state: ProgramState[W, S]): BigInt =
+    super.baseGas(state) + OpCode.codeReadSurcharge(state)
+
   protected def exec[S <: Storage[S], W <: WorldStateProxy[W, S]](state: ProgramState[W, S]): ProgramState[W, S] =
     val (addrUint, stack1) = state.stack.pop()
     val addr = Address(addrUint)
+    // EIP-7928: read once the access and code-read costs are paid, which is all EXTCODESIZE costs.
+    BlockAccessRecorder.account(state.env.accessRecorder, addr)
     val codeSize = state.world.getCode(addr).size
     val stack2 = stack1.push(UInt256(codeSize))
     state.withStack(stack2).addAccessedAddress(addr).step()
@@ -648,10 +717,15 @@ case object EXTCODESIZE extends OpCode(0x3b, 1, 1, _.G_extcode) with AddrAccessG
     Address(accountAddress)
 
 case object EXTCODECOPY extends OpCode(0x3c, 4, 0, _.G_extcode) with AddrAccessGas:
+  // The account access (AddrAccessGas), plus EIP-8038's code-read surcharge from Amsterdam on.
+  override protected def baseGas[S <: Storage[S], W <: WorldStateProxy[W, S]](state: ProgramState[W, S]): BigInt =
+    super.baseGas(state) + OpCode.codeReadSurcharge(state)
 
   protected def exec[S <: Storage[S], W <: WorldStateProxy[W, S]](state: ProgramState[W, S]): ProgramState[W, S] =
     val (Seq(address, memOffset, codeOffset, size), stack1) = state.stack.pop(4)
     val addr = Address(address)
+    // EIP-7928: read once access, code-read, memory and copy costs are paid, which is all EXTCODECOPY costs.
+    BlockAccessRecorder.account(state.env.accessRecorder, addr)
     val codeCopy = OpCode.sliceBytes(state.world.getCode(addr), codeOffset, size)
     val mem1 = state.memory.store(memOffset, codeCopy)
     state.withStack(stack1).withMemory(mem1).addAccessedAddress(addr).step()
@@ -741,6 +815,8 @@ case object MSTORE extends OpCode(0x52, 2, 0, _.G_verylow):
 case object SLOAD extends OpCode(0x54, 1, 1, _.G_sload) with StorageAccessGas with ConstGas:
   protected def exec[S <: Storage[S], W <: WorldStateProxy[W, S]](state: ProgramState[W, S]): ProgramState[W, S] =
     val (offset, stack1) = state.stack.pop()
+    // EIP-7928: read once the access cost is paid, which is all SLOAD costs.
+    BlockAccessRecorder.slot(state.env.accessRecorder, state.ownAddress, offset)
     val value = state.storage.load(offset)
     val stack2 = stack1.push(UInt256(value))
     state.withStack(stack2).addAccessedStorageKey(state.ownAddress, StorageKey(offset.toBigInt)).step()
@@ -772,6 +848,8 @@ case object SSTORE extends OpCode(0x55, 2, 0, _.G_zero):
     val eip1283Enabled = isEip1283Enabled(ethFork)
 
     val (Seq(offset, newValue), stack1) = state.stack.pop(2)
+    // EIP-7928: the current-value read. Reaching `exec` means the full charge was paid, the pre-state part included.
+    BlockAccessRecorder.slot(state.env.accessRecorder, state.ownAddress, offset)
     val currentValue = state.storage.load(offset)
 
     val refund: BigInt =
@@ -940,6 +1018,23 @@ case object SSTORE extends OpCode(0x55, 2, 0, _.G_zero):
   override protected[vm] def availableInContext[S <: Storage[S], W <: WorldStateProxy[W, S]]
       : ProgramState[W, S] => Boolean = !_.staticCtx
 
+  /** EIP-7928: execution-specs `sstore` checks `max(access, CALL_STIPEND + 1)` and then reads the slot's current value,
+    * BEFORE the write charge that value decides. fukuii's full charge includes that write charge, so a frame that can
+    * pay the check but not the write runs out of gas here, having read the slot (EEST `bal_sstore_and_oog`). The static
+    * context check precedes everything, as `availableInContext` does here.
+    */
+  override protected[vm] def recordReadsBeforeOutOfGas[S <: Storage[S], W <: WorldStateProxy[W, S]](
+      state: ProgramState[W, S]
+  ): Unit =
+    val (offset, _) = state.stack.pop()
+    val access = OpCode.storageAccessCost(state, state.ownAddress, StorageKey(offset.toBigInt))(
+      _ => 0,
+      _.G_cold_sload,
+      _.G_warm_storage_read
+    )
+    if state.gas >= access.max(state.config.feeSchedule.G_callstipend + 1) then
+      BlockAccessRecorder.slot(state.env.accessRecorder, state.ownAddress, offset)
+
   // https://eips.ethereum.org/EIPS/eip-1283
   private def isEip1283Enabled(ethFork: EthFork): Boolean = ethFork == EthForks.Constantinople
 
@@ -1085,6 +1180,62 @@ case object SWAP14 extends SwapOp(0x9d)
 case object SWAP15 extends SwapOp(0x9e)
 case object SWAP16 extends SwapOp(0x9f)
 
+/** EIP-8024 (Amsterdam) DUPN, SWAPN and EXCHANGE: stack access below depth 16 through a one-byte immediate.
+  *
+  * Each charges VERY_LOW (3), reads `x = code[pc + 1]` (0 past the end of the code, as for PUSH), decodes it and moves
+  * pc on by 2. An immediate in the forbidden range, or a stack too shallow for the decoded index, is an exceptional
+  * halt. execution-specs `vm/instructions/stack.py` charges the gas, then checks the immediate, then the depth, then
+  * (DUPN) the push; `execute` checks the bounds `delta`/`alpha` declare (nothing popped, DUPN's one push) before the
+  * gas. Every one of these halts consumes the frame's gas, so the order only changes which error is reported.
+  *
+  * JUMPDEST analysis is unchanged (EIP-8024; execution-specs `get_valid_jump_destinations` skips PUSH data only): the
+  * immediate is not skipped, and the forbidden ranges keep every valid immediate off 0x5b and 0x60..0x7f.
+  *
+  * The transition is written once, in `execAndSpendGas`, as for JUMP; `exec` is its zero-charge case. Not a
+  * `StackOnlyOp`, which never halts.
+  */
+sealed abstract class ImmediateStackOp(code: Int, alpha: Int) extends OpCode(code, 0, alpha, _.G_verylow) with ConstGas:
+
+  /** The stack after the instruction, given its immediate `x` (0..255), or the halt it causes. */
+  protected def nextStack(x: Int, stack: Stack): Either[ProgramError, Stack]
+
+  protected def exec[S <: Storage[S], W <: WorldStateProxy[W, S]](state: ProgramState[W, S]): ProgramState[W, S] =
+    execAndSpendGas(state, OpCode.NoGas)
+
+  override protected def execAndSpendGas[S <: Storage[S], W <: WorldStateProxy[W, S]](
+      state: ProgramState[W, S],
+      gas: BigInt
+  ): ProgramState[W, S] =
+    nextStack(state.program.getByte(state.pc + 1) & 0xff, state.stack) match
+      case Right(stack) => state.stepWithStack(stack, 2, gas)
+      case Left(error)  => state.withError(error).spendGas(gas)
+
+/** EIP-8024: duplicate the n-th stack item (1-based), 17 <= n <= 235, onto the top. */
+case object DUPN extends ImmediateStackOp(0xe6, alpha = 1):
+  protected def nextStack(x: Int, stack: Stack): Either[ProgramError, Stack] =
+    if !OpCode.isValidSingleImmediate(x) then Left(InvalidOpCode(code))
+    else
+      val n = OpCode.decodeSingle(x)
+      if n > stack.size then Left(StackUnderflow) else Right(stack.dup(n - 1))
+
+/** EIP-8024: swap the top with the (n + 1)-th stack item (1-based), 17 <= n <= 235. */
+case object SWAPN extends ImmediateStackOp(0xe7, alpha = 0):
+  protected def nextStack(x: Int, stack: Stack): Either[ProgramError, Stack] =
+    if !OpCode.isValidSingleImmediate(x) then Left(InvalidOpCode(code))
+    else
+      val n = OpCode.decodeSingle(x)
+      if n + 1 > stack.size then Left(StackUnderflow) else Right(stack.swap(n))
+
+/** EIP-8024: exchange the (n + 1)-th and (m + 1)-th stack items (1-based), 1 <= n < m <= 30 - n. */
+case object EXCHANGE extends ImmediateStackOp(0xe8, alpha = 0):
+  protected def nextStack(x: Int, stack: Stack): Either[ProgramError, Stack] =
+    if !OpCode.isValidPairImmediate(x) then Left(InvalidOpCode(code))
+    else
+      val (n, m) = OpCode.decodePair(x)
+      // Plain Int arithmetic: `n.max(m)` would resolve through UInt256's implicit conversion in this file.
+      val deeper = math.max(n, m)
+      if deeper + 1 > stack.size then Left(StackUnderflow) else Right(stack.exchange(math.min(n, m), deeper))
+
 sealed abstract class LogOp(code: Int, val i: Int) extends OpCode(code, i + 2, 0, _.G_log):
   def this(code: Int) = this(code, code - 0xa0)
 
@@ -1171,6 +1322,10 @@ abstract class CreateOp(code: Int, delta: Int) extends OpCode(code, delta, 1, _.
                 val (Seq(salt), _) = stack1.pop(1)
                 world1.create2Address(state0.ownAddress, salt, initCode)
               case _ => world1.createAddress(state0.ownAddress)
+            // EIP-7928: this is the destination's first read (execution-specs `generic_create`
+            // `is_account_alive`): recorded once the preflight above passes, and whatever follows — the state
+            // charge running out, a collision, the create frame failing.
+            BlockAccessRecorder.account(state0.env.accessRecorder, destination)
             if world1.isAccountDead(destination) then AmsterdamGas.GasNewAccount else BigInt(0)
 
       val stateGasShortfall = (newAccountStateGas - state0.stateGasReservoir).max(0)
@@ -1208,7 +1363,9 @@ abstract class CreateOp(code: Int, delta: Int) extends OpCode(code, delta, 1, _.
           traceTransfers = state.env.traceTransfers,
           // The reservoir passes to the child IN FULL; the 63/64 rule above applies to gas_left only.
           stateGasReservoir = state.stateGasReservoir,
-          evmStateGasUsed = state.evmStateGasUsed
+          evmStateGasUsed = state.evmStateGasUsed,
+          // EIP-7928: the create frame records into the same index's recorder, whatever its outcome.
+          accessRecorder = state.env.accessRecorder
         )
 
         val ((result, newAddress), stack2) = this match
@@ -1314,24 +1471,64 @@ abstract class CallOp(code: Int, delta: Int, alpha: Int) extends OpCode(code, de
     val endowment = if this == DELEGATECALL || this == STATICCALL then UInt256.Zero else callValue
     (Address(to), endowment)
 
+  /** EIP-7928 "Gas Validation Before State Access" for the CALL family, in execution-specs' order (`call`, `callcode`,
+    * `delegatecall`, `staticcall` in `vm/instructions/system.py`):
+    *
+    *   1. `check_gas(access + memory + CALL_VALUE if value)` — the pre-state cost. Short of it, nothing is read.
+    *   1. The target is read (`calculate_delegation_cost` → `get_account(to)`): CALL/STATICCALL's `to`, CALLCODE's and
+    *      DELEGATECALL's code address. fukuii takes both from the same stack slot.
+    *   1. If its code is an EIP-7702 delegation, `check_gas(... + delegation access)`; only then is the delegated
+    *      address read (`get_account(code_address)`).
+    *
+    * Everything after — the rest of the charge, the EIP-8037 account-creation state charge, the depth and balance
+    * checks, the child frame — can fail only after both reads, which is why this runs before `execute`'s own gas
+    * checks. At Amsterdam `G_newaccount` is 0, so fukuii's full execution charge is exactly this pre-state cost plus
+    * the delegation access plus the child's grant.
+    */
+  private def recordCallTargets[S <: Storage[S], W <: WorldStateProxy[W, S]](state: ProgramState[W, S]): Unit =
+    val (Seq(_, to, callValue, inOffset, inSize, outOffset, outSize), _) = getParams(state)
+    val target = Address(to)
+    val endowment = if this == DELEGATECALL || this == STATICCALL then UInt256.Zero else callValue
+    val transferCost: BigInt = if endowment.isZero then BigInt(0) else state.config.feeSchedule.G_callvalue
+    val preStateCost = calcMemCost(state, inOffset, inSize, outOffset, outSize) +
+      OpCode.addressAccessCost(state, target)(_.G_call, _.G_cold_account_access, _.G_warm_storage_read) + transferCost
+    if state.gas >= preStateCost then
+      BlockAccessRecorder.account(state.env.accessRecorder, target)
+      if state.config.eip7702Enabled then
+        SetCodeTransaction.parseDelegation(state.world.getCode(target)).foreach { delegated =>
+          if state.gas >= preStateCost + delegationAccessCost(state, target) then
+            BlockAccessRecorder.account(state.env.accessRecorder, delegated)
+        }
+
   override def execute[S <: Storage[S], W <: WorldStateProxy[W, S]](state0: ProgramState[W, S]): ProgramState[W, S] =
     if !availableInContext(state0) then state0.withError(OpCodeNotAvailableInStaticContext(code.toByte))
     else if state0.stack.size < delta then state0.withError(StackUnderflow)
     else if state0.stack.size - delta + alpha > state0.stack.maxSize then state0.withError(StackOverflow)
     else
+      // EIP-7928: before any out-of-gas outcome below, which may come after execution-specs has read the target.
+      if state0.env.accessRecorder.isDefined then recordCallTargets(state0)
       val executionCost: BigInt = calcGas(state0)
       if executionCost > state0.gas then state0.copy(gas = 0).withError(OutOfGas)
       else
         val (to, endowment) = callTarget(state0)
         val stateGas = newAccountStateGas(state0, to, endowment)
-        if (stateGas - state0.stateGasReservoir).max(0) > state0.gas - executionCost then
+        // EIP-8037, in execution-specs `call`'s order: the call's own execution charge is paid, THEN the
+        // account-creation state charge (reservoir first, then gas_left), and only THEN is the child's grant sized,
+        // at 63/64 of the gas left after both. So the state charge has to fit in the gas left after the call's own
+        // charge — not in what would be left after forwarding 63/64 to the child, which is at most 1/64 of it: a
+        // 1M-gas `call{value: 1}` with all gas to a fresh account then halted instead of creating the account.
+        //
+        // Only evaluated when there is a state charge. With none (every ETC and pre-Amsterdam CALL) the old
+        // condition, `0 > state0.gas - executionCost`, was false by the check above, so skipping it is the same.
+        if stateGas.signum > 0 && state0.stateGasShortfall(stateGas) > state0.gas - ownExecutionCost(state0) then
           // EIP-8037: a failed state charge exceptionally halts the calling frame.
           state0.copy(gas = 0).withError(OutOfGas)
         else
           // Charge BEFORE the 63/64 split so the portion drawn from gas_left reduces what the child
           // receives. `calcGas` is recomputed on the charged state because `calcStartGas` inside `exec`
           // derives the forwarded gas from the same `state.gas` — computing the two from different states
-          // is precisely how a gas-cap inconsistency gets introduced.
+          // is precisely how a gas-cap inconsistency gets introduced. The check above leaves at least the
+          // call's own charge in `state.gas`, so the recomputed charge always fits.
           val state = state0.chargeStateGas(stateGas)
           val gas: BigInt = calcGas(state)
           if gas > state.gas then state.copy(gas = 0).withError(OutOfGas)
@@ -1397,7 +1594,9 @@ abstract class CallOp(code: Int, delta: Int, alpha: Int) extends OpCode(code, de
       traceTransfers = state.env.traceTransfers,
       // The reservoir passes to the child IN FULL; the 63/64 rule applies to gas_left only.
       stateGasReservoir = state.stateGasReservoir,
-      evmStateGasUsed = state.evmStateGasUsed
+      evmStateGasUsed = state.evmStateGasUsed,
+      // EIP-7928: the child records into the same index's recorder, whatever its outcome.
+      accessRecorder = state.env.accessRecorder
     )
 
     // Recomputed rather than threaded: the world is unchanged since `execute` decided it, so this is the
@@ -1495,6 +1694,17 @@ abstract class CallOp(code: Int, delta: Int, alpha: Int) extends OpCode(code, de
     val gExtra: BigInt = gasExtra(state, endowment, Address(to))
     val gCap: BigInt = gasCap(state, gas, gExtra + memCost + delegationCost)
     memCost + gCap + gExtra + delegationCost
+
+  /** The call's own execution charge: everything `varGas` charges except the gas forwarded to the child — memory
+    * expansion, the access and value-transfer charges (`gasExtra`) and the EIP-7702 delegation-target access. This is
+    * execution-specs' `extra_gas + extend_memory.cost`, charged before the account-creation state charge (see
+    * `execute`).
+    */
+  private def ownExecutionCost[S <: Storage[S], W <: WorldStateProxy[W, S]](state: ProgramState[W, S]): BigInt =
+    val (Seq(_, to, callValue, inOffset, inSize, outOffset, outSize), _) = getParams(state)
+    val endowment = if this == DELEGATECALL || this == STATICCALL then UInt256.Zero else callValue
+    calcMemCost(state, inOffset, inSize, outOffset, outSize) + gasExtra(state, endowment, Address(to)) +
+      delegationAccessCost(state, Address(to))
 
   protected def calcMemCost[S <: Storage[S], W <: WorldStateProxy[W, S]](
       state: ProgramState[W, S],
@@ -1637,6 +1847,8 @@ case object SELFDESTRUCT extends OpCode(0xff, 1, 0, _.G_selfdestruct):
   protected def exec[S <: Storage[S], W <: WorldStateProxy[W, S]](state: ProgramState[W, S]): ProgramState[W, S] =
     val (refund, stack1) = state.stack.pop()
     val refundAddr: Address = Address(refund)
+    // EIP-7928: the beneficiary read. Reaching `exec` means the full charge was paid, the pre-state part included.
+    BlockAccessRecorder.account(state.env.accessRecorder, refundAddr)
     val gasRefund: BigInt =
       if state.addressesToDelete contains state.ownAddress then 0 else state.config.feeSchedule.R_selfdestruct
 
@@ -1663,9 +1875,12 @@ case object SELFDESTRUCT extends OpCode(0xff, 1, 0, _.G_selfdestruct):
     //  - !shouldDelete (Cancun+ pre-existing contract): balance must be preserved. The "transfer
     //    self → self" is a no-op in any rational accounting. Required by bcValidBlockTest/
     //    reentrencySuicide, which calls SELFDESTRUCT(self) and expects the balance to remain.
+    //  - Amsterdam (EIP-8246): nothing burns any more. A same-transaction selfdestruct to self keeps its
+    //    balance here, and finalization keeps it too (BlockPreparator.clearSelfDestructedAccounts) —
+    //    execution-specs `move_ether` to itself, go-ethereum `opSelfdestruct6780` skipping the burn.
     val world =
       if state.ownAddress == refundAddr then
-        if shouldDelete then state.world.removeAllEther(state.ownAddress)
+        if shouldDelete && !state.config.amsterdamEnabled then state.world.removeAllEther(state.ownAddress)
         else state.world.touchAccounts(state.ownAddress)
       else state.world.transfer(state.ownAddress, refundAddr, state.ownBalance)
 
@@ -1754,6 +1969,19 @@ case object SELFDESTRUCT extends OpCode(0xff, 1, 0, _.G_selfdestruct):
   override protected[vm] def availableInContext[S <: Storage[S], W <: WorldStateProxy[W, S]]
       : ProgramState[W, S] => Boolean = !_.staticCtx
 
+  /** EIP-7928: execution-specs `selfdestruct` checks `SELFDESTRUCT base + cold access` and then reads the beneficiary,
+    * BEFORE the EIP-8038 account-write charge that read decides. fukuii's full charge includes that charge, so a frame
+    * that can pay the check but not the write runs out of gas here, having read the beneficiary.
+    */
+  override protected[vm] def recordReadsBeforeOutOfGas[S <: Storage[S], W <: WorldStateProxy[W, S]](
+      state: ProgramState[W, S]
+  ): Unit =
+    val (refundAddr, _) = state.stack.pop()
+    val beneficiary = Address(refundAddr)
+    val preStateCost =
+      baseGas(state) + OpCode.addressAccessCost(state, beneficiary)(_ => 0, _.G_cold_account_access, _ => 0)
+    if state.gas >= preStateCost then BlockAccessRecorder.account(state.env.accessRecorder, beneficiary)
+
 case object CHAINID extends ConstOp(0x46)(state => UInt256(state.env.evmConfig.blockchainConfig.chainId.value))
 
 case object SELFBALANCE extends OpCode(0x47, 0, 1, _.G_low) with ConstGas:
@@ -1815,6 +2043,16 @@ case object BLOBBASEFEE extends OpCode(0x4a, 0, 1, _.G_base) with ConstGas:
       else CancunUpdateFraction
     val fee = calcBlobFee(excessBlobGas, fraction)
     state.withStack(state.stack.push(UInt256(fee))).step()
+
+/** EIP-7843 (Amsterdam): SLOTNUM pushes the beacon-chain slot of the block being executed, the header's `slotNumber`
+  * (field 22, a uint64). Gas BASE (2), like the other block-environment reads.
+  *
+  * The header is fukuii's block environment, carried by `ProgramContext.blockHeader` into every frame's `ExecEnv`:
+  * execution-specs reads `block_env.slot_number`, set from `block.header.slot_number`, and go-ethereum
+  * `BlockContext.SlotNum`, set from `header.SlotNumber`. An Amsterdam header (23 fields) always carries it; a header
+  * without the field pushes 0, as go-ethereum's `NewEVMBlockContext` does.
+  */
+case object SLOTNUM extends ConstOp(0x4b)(s => UInt256(s.env.blockHeader.slotNumber.getOrElse(BigInt(0))))
 
 /** EIP-1153: TLOAD — load from transient storage. Gas: G_warm_storage_read (100). */
 case object TLOAD extends OpCode(0x5c, 1, 1, _.G_warm_storage_read) with ConstGas:

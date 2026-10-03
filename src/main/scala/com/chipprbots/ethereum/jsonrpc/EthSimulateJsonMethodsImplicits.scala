@@ -193,9 +193,15 @@ object EthSimulateJsonMethodsImplicits extends JsonMethodsImplicits:
           h.parentBeaconBlockRoot.map(pb => "parentBeaconBlockRoot" -> encodeAsHex(pb.value)).toList
         val requestsField = h.requestsHash.map(rh => "requestsHash" -> encodeAsHex(rh)).toList
         val withdrawalsRootField = h.withdrawalsRoot.map(wr => "withdrawalsRoot" -> encodeAsHex(wr)).toList
+        // Amsterdam (EIP-7928, EIP-7843): only a 23-field header has them, as in go-ethereum's RPCMarshalHeader. The
+        // block `hash` above commits to both, so a response that left them out could not be checked against it.
+        val amsterdamFields =
+          h.blockAccessListHash.map(bal => "blockAccessListHash" -> encodeAsHex(bal)).toList :::
+            h.slotNumber.map(slot => "slotNumber" -> encodeAsHex(slot)).toList
 
         val headerFields =
-          baseFeeField ::: blobFields ::: baseHeaderFields ::: beaconField ::: requestsField ::: withdrawalsRootField
+          baseFeeField ::: blobFields ::: baseHeaderFields ::: beaconField ::: requestsField ::: withdrawalsRootField :::
+            amsterdamFields
 
         // Transactions: hashes or full objects depending on returnFullTransactions flag
         val txField =

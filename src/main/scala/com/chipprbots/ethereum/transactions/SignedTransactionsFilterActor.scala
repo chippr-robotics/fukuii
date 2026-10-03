@@ -9,6 +9,7 @@ import cats.effect.unsafe.IORuntime
 
 import com.chipprbots.ethereum.domain.SignedTransaction
 import com.chipprbots.ethereum.domain.SignedTransactionWithSender
+import com.chipprbots.ethereum.domain.Timestamp
 import com.chipprbots.ethereum.network.PeerEventBusActor.Command as PeerEventBusCommand
 import com.chipprbots.ethereum.network.PeerEventBusActor.PeerEvent
 import com.chipprbots.ethereum.network.PeerEventBusActor.PeerEvent.MessageFromPeer
@@ -50,9 +51,14 @@ object SignedTransactionsFilterActor:
       bufferedChunks: Map[Int, Set[SignedTransactionWithSender]]
   )
 
+  /** @param headTimestamp
+    *   the chain head's timestamp: the stateless filter admits a transaction under the rules of the fork active there.
+    *   Read only on ETH-family chains, and at most once per inbound message.
+    */
   def apply(
       pendingTransactionsManager: ActorRef[PendingTransactionsManager.Command],
-      peerEventBus: ActorRef[PeerEventBusCommand]
+      peerEventBus: ActorRef[PeerEventBusCommand],
+      headTimestamp: () => Timestamp
   ): Behavior[Command] = Behaviors.setup { context =>
 
     given blockchainConfig: BlockchainConfig = Config.blockchains.blockchainConfig
@@ -82,7 +88,7 @@ object SignedTransactionsFilterActor:
 
     def recoverSmallBatch(newTransactions: Seq[SignedTransaction], peerId: PeerId): Unit =
       IO {
-        SignedTransactionWithSender.getSignedTransactions(newTransactions).toSet
+        SignedTransactionWithSender.getSignedTransactions(newTransactions, headTimestamp()).toSet
       }.attempt
         .map {
           case Right(correctTransactions) =>
@@ -98,7 +104,7 @@ object SignedTransactionsFilterActor:
         }
         .unsafeRunAndForget()
 
-    def recoverLargeBatch(newTransactions: Seq[SignedTransaction], peerId: PeerId): Unit =
+    def recoverLargeBatch(newTransactions: Seq[SignedTransaction], peerId: PeerId, head: => Timestamp): Unit =
       val chunks = newTransactions
         .grouped(recoveryChunkSize)
         .zipWithIndex
@@ -121,7 +127,7 @@ object SignedTransactionsFilterActor:
       val parallelism = math.min(Runtime.getRuntime.availableProcessors, chunks.size).max(1)
       IO.parTraverseN(parallelism)(chunks) { case (chunkIndex, chunk) =>
         IO {
-          val recovered = SignedTransactionWithSender.getSignedTransactionsSequential(chunk).toSet
+          val recovered = SignedTransactionWithSender.getSignedTransactionsSequential(chunk, head).toSet
           context.self ! RecoveredChunk(recoveryId, chunkIndex, recovered)
         }.handleErrorWith { reason =>
           IO(context.self ! RecoveryFailed(recoveryId, chunkIndex, reason))
@@ -152,9 +158,11 @@ object SignedTransactionsFilterActor:
     Behaviors.receiveMessage {
       case PeerSignedTransactions(SignedTransactions(newTransactions), peerId) =>
         if newTransactions.size >= chunkedRecoveryThreshold then
-          val statelessValid = SignedTransactionWithSender.getStatelessValidTransactions(newTransactions)
+          // One head for the whole message, so every chunk is filtered under the same fork. Lazy: ETC never reads it.
+          lazy val head = headTimestamp()
+          val statelessValid = SignedTransactionWithSender.getStatelessValidTransactions(newTransactions, head)
           if statelessValid.nonEmpty then pendingTransactionsManager ! AnnounceTransactions(statelessValid, peerId)
-          recoverLargeBatch(statelessValid, peerId)
+          recoverLargeBatch(statelessValid, peerId, head)
         else recoverSmallBatch(newTransactions, peerId)
         Behaviors.same
 

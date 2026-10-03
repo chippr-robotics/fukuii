@@ -19,11 +19,14 @@ import com.chipprbots.ethereum.consensus.Consensus.*
 import com.chipprbots.ethereum.consensus.ConsensusImpl
 import com.chipprbots.ethereum.consensus.validators.BlockHeaderError
 import com.chipprbots.ethereum.domain.*
+import com.chipprbots.ethereum.domain.BlockHeader.HeaderExtraFields.HefPostAmsterdam
+import com.chipprbots.ethereum.domain.BlockHeaderImplicits.*
 import com.chipprbots.ethereum.ledger.BlockData
 import com.chipprbots.ethereum.ledger.BlockExecution
 import com.chipprbots.ethereum.ledger.BlockExecutionError
 import com.chipprbots.ethereum.ledger.BlockExecutionError.*
 import com.chipprbots.ethereum.ledger.BranchResolution
+import com.chipprbots.ethereum.ledger.ExtendsCanonicalHead
 import com.chipprbots.ethereum.ledger.NewBetterBranch
 import com.chipprbots.ethereum.ledger.NoChainSwitch
 import com.chipprbots.ethereum.testing.Tags.*
@@ -288,8 +291,116 @@ class PosForkChoiceSpec extends AnyFlatSpec with Matchers with ScalaFutures with
     resolution.resolveBranch(NonEmptyList.fromListUnsafe(sideBranch.map(_.header))) shouldBe NoChainSwitch
 
   // ---------------------------------------------------------------------------------------------------------------
+  // 5. Far behind the CL head (Platåberget #1432). The executed head is at N; the CL has designated a head ~278k
+  //    blocks above it that the node cannot walk to. Regular sync must keep importing the head's own extension.
+  //
+  //    The shape that broke is the batch the fetcher serves after ANY rewind: it restarts below the head, so it
+  //    re-presents canonical N-65..N before the extension N+1..N+10. The whole batch reaches ConsensusImpl with a
+  //    parent that is not the head, i.e. down the side-branch path, where equal post-merge weight and an unreachable
+  //    designated head answer KeptCurrentBestBranch. Section 3 above is untouched by any of this: a real side branch
+  //    still needs the CL to have designated it.
+  // ---------------------------------------------------------------------------------------------------------------
+
+  "BranchResolution far behind the CL head" should
+    "classify a post-rewind batch — canonical prefix, then the head's extension — as ExtendsCanonicalHead" taggedAs (
+      UnitTest,
+      ConsensusTest
+    ) in new FarBehindClHead:
+      val resolution = new BranchResolution(blockchainReader, Some(unreachableClHead))
+      resolution.resolveBranch(headersOf(postRewindBatch)) shouldBe ExtendsCanonicalHead(canonicalPrefix.size)
+      // The importer drops exactly that many blocks; what is left starts at the head's child.
+      postRewindBatch.drop(canonicalPrefix.size).map(_.number) shouldBe extension.take(10).map(_.number)
+      postRewindBatch.drop(canonicalPrefix.size).head.header.parentHash shouldBe head.hash
+
+  it should "keep NewBetterBranch(Nil) for a batch that starts at the head's child — no prefix, nothing to drop" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in new FarBehindClHead:
+    // The shape first suspected in #1432 (N+1..N+50). It was never the problem: it goes to importToTop as-is.
+    val resolution = new BranchResolution(blockchainReader, Some(unreachableClHead))
+    resolution.resolveBranch(headersOf(extension.take(50))) shouldBe NewBetterBranch(Nil)
+
+  it should "classify the post-rewind batch exactly as before on a PoW-configured resolution — the ETC gate" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in new FarBehindClHead:
+    // designatedHead = None is what SyncController builds on every chain without terminal-total-difficulty.
+    val resolution = new BranchResolution(blockchainReader, designatedHead = None)
+    resolution.followsConsensusLayer shouldBe false
+    resolution.resolveBranch(headersOf(postRewindBatch)) shouldBe NewBetterBranch(Nil)
+
+  it should "still REFUSE a side branch the CL did not designate, even behind a canonical prefix" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in new FarBehindClHead:
+    // Same batch shape as the fix targets (starts 65 below the head), but it leaves the canonical chain at N-2: the
+    // old blocks N-2..N are displaced, so this IS a side branch, and the CL head does not descend from it.
+    val resolution = new BranchResolution(blockchainReader, Some(unreachableClHead))
+    resolution.resolveBranch(headersOf(prefixedSideBranch)) shouldBe NoChainSwitch
+
+  "ConsensusImpl far behind the CL head" should
+    "refuse the whole post-rewind batch yet import its extension — which is why the importer drops the prefix" taggedAs (
+      UnitTest,
+      ConsensusTest
+    ) in new FarBehindClHead:
+      // Unchanged behaviour, pinned because it is the mechanism of #1432. The whole batch goes to importToNewBranch
+      // (parent N-66 is not the head): equal weight, CL head out of reach, so nothing executes.
+      val posConsensus = consensusWith(Some(unreachableClHead))
+      whenReady(posConsensus.evaluateBranch(NonEmptyList.fromListUnsafe(postRewindBatch)).unsafeToFuture()) {
+        _ shouldBe KeptCurrentBestBranch
+      }
+      executedBlocks shouldBe empty
+
+      // The same blocks minus the canonical prefix go to importToTop and execute.
+      val onlyTheExtension = NonEmptyList.fromListUnsafe(postRewindBatch.drop(canonicalPrefix.size))
+      whenReady(posConsensus.evaluateBranch(onlyTheExtension).unsafeToFuture()) {
+        _ shouldBe a[ExtendedCurrentBestBranch]
+      }
+      executedBlocks.toList.map(_.number) shouldBe onlyTheExtension.toList.map(_.number)
+      blockchainReader.getBestBlockNumber shouldBe onlyTheExtension.last.number.value
+
+  // ---------------------------------------------------------------------------------------------------------------
   // Fixtures
   // ---------------------------------------------------------------------------------------------------------------
+
+  /** The live Platåberget shape (#1432) at unit scale: canonical 1..100 executed, head N = 100; the CL has designated a
+    * head far above it. As on the live node, the few headers the CL pushed through `engine_newPayload` are stored BY
+    * HASH ONLY and their parent is unknown, so the designated-head walk stops after three hops without reaching N.
+    */
+  class FarBehindClHead extends PosChainSetup:
+    val farChain: List[Block] = BlockHelpers.generateChain(100, canonicalTip, amsterdamBlock)
+    farChain.foldLeft(ChainWeight.totalDifficultyOnly(BlockHelpers.genesis.header.difficulty.value)) { (w, b) =>
+      val next = w.increase(b.header)
+      blockchainWriter.save(b, Nil, next, saveAsBestBlock = true)
+      next
+    }
+    val head: Block = farChain.last
+
+    /** Mirrors `branchResolutionRequestSize = 64`: the rewind lands the fetcher at N - 64 and it re-serves from N - 65.
+      */
+    val canonicalPrefix: List[Block] = farChain.takeRight(66)
+    val extension: List[Block] = BlockHelpers.generateChain(60, head, amsterdamBlock)
+    val postRewindBatch: List[Block] = canonicalPrefix ++ extension.take(10)
+
+    /** Leaves the canonical chain at N-2: shares canonical N-65..N-3, then N-2'..N+2'. */
+    val prefixedSideBranch: List[Block] =
+      val keep = canonicalPrefix.takeWhile(_.number.value <= head.number.value - 3)
+      keep ++ BlockHelpers.generateChain(5, keep.last, amsterdamBlock)
+
+    private val clParent: Block = BlockHelpers.genesis.copy(
+      header = BlockHelpers.genesis.header.copy(number = BlockNumber(head.number.value + 278600))
+    )
+    val clHeaders: List[Block] = BlockHelpers.generateChain(3, clParent, posBlock)
+    clHeaders.foreach(b => blockchainWriter.storeBlockByHashOnly(b).commit())
+    val unreachableClHead: DesignatedHead = DesignatedHead(() => Some(clHeaders.last.hash.value))
+
+    /** The headers as a peer delivers them — RLP-encoded by the sender, decoded by us — while the canonical side comes
+      * back out of storage through boopickle. `compareBranch` finds the canonical prefix by header EQUALITY across
+      * exactly those two decoders, on 23-field Amsterdam headers as on Platåberget; if they ever disagreed, the prefix
+      * would read as a side branch and none of section 5 would hold.
+      */
+    def headersOf(blocks: List[Block]): NonEmptyList[BlockHeader] =
+      NonEmptyList.fromListUnsafe(blocks.map(_.header.toBytes.toBlockHeader))
 
   /** hive's sequence up to the moment the peer delivers the side branch: our canonical tip was applied by an executed
     * FCU; the CL then sent `engine_newPayload` for a side head whose parent we lack (stored by hash only, exactly what
@@ -391,4 +502,26 @@ class PosForkChoiceSpec extends AnyFlatSpec with Matchers with ScalaFutures with
     block.copy(
       header = block.header.copy(difficulty = Difficulty.Zero),
       body = block.body.copy(uncleNodesList = Nil)
+    )
+
+  /** A post-merge block with Platåberget's header shape: all 23 RLP fields (HefPostAmsterdam), and the 8-byte zero
+    * nonce EIP-3675 fixes — BlockHelpers makes a 1-byte one, which the strict wire decoder rightly rejects.
+    */
+  private def amsterdamBlock(block: Block): Block =
+    val pos = posBlock(block)
+    def b32(fill: Int): ByteString = ByteString(Array.fill[Byte](32)(fill.toByte))
+    pos.copy(header =
+      pos.header.copy(
+        nonce = ByteString(new Array[Byte](8)),
+        extraFields = HefPostAmsterdam(
+          baseFee = BigInt(7),
+          withdrawalsRoot = b32(0x11),
+          blobGasUsed = BigInt(0),
+          excessBlobGas = BigInt(0),
+          parentBeaconBlockRoot = b32(0x22),
+          requestsHash = b32(0x33),
+          blockAccessListHash = b32(0x44),
+          slotNumber = pos.header.number.value * 2
+        )
+      )
     )

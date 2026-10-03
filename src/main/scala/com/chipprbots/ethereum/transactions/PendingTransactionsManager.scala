@@ -17,6 +17,7 @@ import com.google.common.cache.RemovalNotification
 import com.chipprbots.ethereum.domain.Address
 import com.chipprbots.ethereum.domain.SignedTransaction
 import com.chipprbots.ethereum.domain.SignedTransactionWithSender
+import com.chipprbots.ethereum.domain.Timestamp
 import com.chipprbots.ethereum.jsonrpc.NewPendingTransaction
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor.PeerInfo
@@ -106,9 +107,16 @@ object PendingTransactionsManager:
 
     given blockchainConfig: BlockchainConfig = chainConfig
 
+    // The chain head's timestamp. The pool admits a transaction under the rules of the fork active at the head, as
+    // go-ethereum's pool does (txpool.ValidateTransaction against pool.currentHead). The stateless filter reads it
+    // only on ETH-family chains. Genesis rules (timestamp 0) when there is no head to read: a pool built without a
+    // reader, as some specs build one, or storage that holds no best block yet.
+    def headTimestamp(): Timestamp =
+      Option(blockchainReader).flatMap(_.getBestBlockHeader).map(_.unixTimestamp).getOrElse(Timestamp.Zero)
+
     // Spawn STFA as a child with a bounded mailbox (backpressure from network layer)
     context.spawn(
-      SignedTransactionsFilterActor(context.self, peerEventBus),
+      SignedTransactionsFilterActor(context.self, peerEventBus, () => headTimestamp()),
       "stfa",
       MailboxSelector.bounded(50000)
     )
@@ -375,7 +383,7 @@ object PendingTransactionsManager:
         Behaviors.same
 
       case AddUncheckedTransactions(transactions) =>
-        val validTxs = SignedTransactionWithSender.getSignedTransactions(transactions)
+        val validTxs = SignedTransactionWithSender.getSignedTransactions(transactions, headTimestamp())
         context.self ! AddTransactions(validTxs.toSet)
         Behaviors.same
 
@@ -517,7 +525,7 @@ object PendingTransactionsManager:
             msg.blobTxRawBytes.foreach { case (hash, rawBytes) =>
               blobTxNetworkBytes += (hash -> rawBytes)
             }
-            val validTxs = SignedTransactionWithSender.getSignedTransactions(msg.txs)
+            val validTxs = SignedTransactionWithSender.getSignedTransactions(msg.txs, headTimestamp())
             if validTxs.nonEmpty then
               context.self ! AddTransactions(validTxs.toSet)
               validTxs.foreach(stx => setTxKnown(stx.tx, peerId))

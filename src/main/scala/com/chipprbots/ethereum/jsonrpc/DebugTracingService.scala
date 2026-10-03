@@ -148,7 +148,7 @@ class DebugTracingService(
         parentHeader <- blockchainReader
           .getBlockHeaderByHash(block.header.parentHash)
           .toRight(JsonRpcError.LogicError("Parent block not found"))
-        stxs = SignedTransactionWithSender.getSignedTransactions(block.body.transactionList)
+        stxs = SignedTransactionWithSender.getSignedTransactionsOfBlock(block.header, block.body.transactionList)
         _ <- Either.cond(
           txIndex >= 0 && txIndex < stxs.length,
           (),
@@ -157,7 +157,7 @@ class DebugTracingService(
         targetStx = stxs(txIndex)
         world = stxLedger.advanceWorldToTx(block.header, stxs, txIndex, parentHeader.stateRoot.value)
         tracer = selectTracer(req.config, Some(world))
-        _ = stxLedger.simulateTransactionWithTracer(targetStx, block.header, Some(world), tracer)
+        _ = stxLedger.replayTransaction(targetStx, block.header, world, Some(tracer))
       yield TraceTransactionResponse(tracer.getResult)
     }.recover { case _: MissingNodeException =>
       Left(JsonRpcError.NodeNotFound)
@@ -252,24 +252,24 @@ class DebugTracingService(
     *
     * Threads the world state forward tx-by-tx instead of calling advanceWorldToTx per index: advanceWorldToTx replays
     * every prior tx from the parent state root, so calling it once per index makes this method O(n^2) in the
-    * transaction count. simulateTransactionWithTracer already returns the post-tx world in TxResult.worldState, so we
-    * carry that into the next iteration and only build the genuine parent-state world once (matches core-geth's
-    * traceBlock, which steps one statedb forward). advanceWorldToTx itself is untouched — traceTransaction legitimately
-    * uses it for a single index.
+    * transaction count. replayTransaction already returns the post-tx world in TxResult.worldState, so we carry that
+    * into the next iteration and only build the genuine parent-state world once (matches core-geth's traceBlock, which
+    * steps one statedb forward); for an Amsterdam block that first world already holds the block's system-call
+    * preamble. advanceWorldToTx itself is untouched — traceTransaction legitimately uses it for a single index.
     */
   private def traceAllTxsInBlock(block: Block, config: TraceConfig): Either[JsonRpcError, Seq[TxTraceResult]] =
     blockchainReader
       .getBlockHeaderByHash(block.header.parentHash)
       .toRight(JsonRpcError.LogicError("Parent block header not found"))
       .map { parentHeader =>
-        val stxs = SignedTransactionWithSender.getSignedTransactions(block.body.transactionList)
+        val stxs = SignedTransactionWithSender.getSignedTransactionsOfBlock(block.header, block.body.transactionList)
         if stxs.isEmpty then Seq.empty
         else
           var currentWorld = stxLedger.advanceWorldToTx(block.header, stxs, 0, parentHeader.stateRoot.value)
           val resultsBuf = scala.collection.mutable.ArrayBuffer[TxTraceResult]()
           stxs.foreach { stx =>
             val tracer = selectTracer(config, Some(currentWorld))
-            val txResult = stxLedger.simulateTransactionWithTracer(stx, block.header, Some(currentWorld), tracer)
+            val txResult = stxLedger.replayTransaction(stx, block.header, currentWorld, Some(tracer))
             resultsBuf += TxTraceResult(stx.tx.hash.value, tracer.getResult)
             currentWorld = txResult.worldState
           }
@@ -330,8 +330,11 @@ class DebugTracingService(
     *
     * Algorithm:
     *   1. Resolve block by hash (also check bad-block store — not implemented, skip) 2. Get parent block state root 3.
-    *      For each tx: simulate → capture worldState.stateRootHash (equivalent to statedb.IntermediateRoot) 4. Return
-    *      list of ByteString roots (one per tx)
+    *      For each tx: replay it (StxLedger.replayTransaction) → capture worldState.stateRootHash (equivalent to
+    *      statedb.IntermediateRoot) 4. Return list of ByteString roots (one per tx)
+    *
+    * For an Amsterdam block the replay is block execution's own (system-call preamble, then each transaction settled
+    * and persisted), so each root is the state root block execution reached after that transaction.
     */
   def intermediateRoots(req: IntermediateRootsRequest): ServiceResponse[IntermediateRootsResponse] =
     IO {
@@ -347,7 +350,7 @@ class DebugTracingService(
         parentHeader <- blockchainReader
           .getBlockHeaderByHash(block.header.parentHash)
           .toRight(JsonRpcError.LogicError("Parent block header not found"))
-        stxs = SignedTransactionWithSender.getSignedTransactions(block.body.transactionList)
+        stxs = SignedTransactionWithSender.getSignedTransactionsOfBlock(block.header, block.body.transactionList)
         roots =
           if stxs.isEmpty then Seq.empty
           else
@@ -356,7 +359,7 @@ class DebugTracingService(
             var currentWorld = stxLedger.advanceWorldToTx(block.header, stxs, 0, parentHeader.stateRoot.value)
             val rootBuf = scala.collection.mutable.ArrayBuffer[ByteString]()
             stxs.foreach { stx =>
-              val txResult = stxLedger.simulateTransaction(stx, block.header, Some(currentWorld))
+              val txResult = stxLedger.replayTransaction(stx, block.header, currentWorld, tracer = None)
               // stateRootHash computes the MPT root of the in-memory trie (equivalent to IntermediateRoot)
               rootBuf += txResult.worldState.stateRootHash
               currentWorld = txResult.worldState
@@ -389,11 +392,12 @@ class DebugTracingService(
           val branch = blockchainReader.getBestBranch
           blockchainReader.getBlockByNumber(branch, blockNum).flatMap { block =>
             blockchainReader.getBlockHeaderByHash(block.header.parentHash).map { parentHeader =>
-              val stxs = SignedTransactionWithSender.getSignedTransactions(block.body.transactionList)
+              val stxs =
+                SignedTransactionWithSender.getSignedTransactionsOfBlock(block.header, block.body.transactionList)
               val traces = stxs.zipWithIndex.map { case (stx, txIndex) =>
                 val world = stxLedger.advanceWorldToTx(block.header, stxs, txIndex, parentHeader.stateRoot.value)
                 val tracer = selectTracer(config, Some(world))
-                stxLedger.simulateTransactionWithTracer(stx, block.header, Some(world), tracer)
+                stxLedger.replayTransaction(stx, block.header, world, Some(tracer))
                 tracer.getResult
               }
               TraceChainBlockResult(block.header.number.value, block.header.hash.value, traces)

@@ -35,7 +35,13 @@ case class ExecutionPayload(
     // `blobVersionedHashes` in this payload, in order. None when the CL is a pre-Cancun client.
     expectedBlobVersionedHashes: Option[Seq[ByteString]] = None,
     // Prague/Electra+ (EIP-7685, passed as separate newPayload param)
-    executionRequests: Option[Seq[ByteString]] = None
+    executionRequests: Option[Seq[ByteString]] = None,
+    // Amsterdam+ (ExecutionPayloadV4). The EIP-7928 block access list exactly as the CL sent it: the header commits to
+    // keccak256 of THESE bytes, and engine_newPayloadV5 decodes them strictly (BlockAccessList.decode) before the
+    // block-hash check. None when the field is absent or null.
+    blockAccessList: Option[ByteString] = None,
+    // Amsterdam+ (ExecutionPayloadV4, EIP-7843): the beacon slot the payload was built for, a uint64.
+    slotNumber: Option[BigInt] = None
 )
 
 /** Payload attributes for engine_forkchoiceUpdated (optional payload building). */
@@ -46,7 +52,12 @@ case class PayloadAttributes(
     // Shanghai+
     withdrawals: Option[Seq[Withdrawal]] = None,
     // Cancun+
-    parentBeaconBlockRoot: Option[ByteString] = None
+    parentBeaconBlockRoot: Option[ByteString] = None,
+    // Amsterdam+ (PayloadAttributesV4). Decoded for engine_forkchoiceUpdatedV4 only; the V1-V3 methods never read them.
+    // `slotNumber` is the new payload's EIP-7843 slot (required); `targetGasLimit` the gas limit the CL wants the chain
+    // to converge on (optional, as in go-ethereum: see EngineApiController.payloadAttributesVersionError).
+    slotNumber: Option[BigInt] = None,
+    targetGasLimit: Option[BigInt] = None
 )
 
 /** Status values for PayloadStatusV1 */
@@ -80,6 +91,18 @@ case class ForkchoiceUpdatedResponse(
 /** Payload ID for tracking built payloads */
 case class PayloadId(id: ByteString)
 
+/** ExecutionPayloadBodyV2 (execution-apis amsterdam.md), one entry of engine_getPayloadBodiesByHashV2/ByRangeV2: the
+  * ExecutionPayloadBodyV1 of a block — its EIP-2718 `transactions`, and `withdrawals` (None, JSON `null`, before
+  * Shanghai), JSON-encoded by the same code as V1 so the two versions cannot disagree on them — plus `blockAccessList`:
+  * the block's EIP-7928 list, as the canonical RLP its header's `blockAccessListHash` commits to. None (JSON `null`)
+  * for a block before Amsterdam, and for an Amsterdam block whose list this node does not hold.
+  */
+final case class ExecutionPayloadBodyV2(
+    transactions: Seq[ByteString],
+    withdrawals: Option[Seq[org.json4s.JValue]],
+    blockAccessList: Option[ByteString]
+)
+
 /** BlobAndProofV2 per EIP-7594 / engine_getBlobsV2 — blob + CELLS_PER_EXT_BLOB cell proofs (48 bytes each). */
 case class BlobAndProofV2(blob: ByteString, cellProofs: Seq[ByteString])
 
@@ -96,14 +119,17 @@ case class BlobsBundleData(
     cellProofsPerBlob: Seq[Seq[ByteString]]
 )
 
-/** Result of a proposer-side block build: the sealed block plus the two derived artefacts callers need but that are not
-  * recoverable from the block alone (receipts drive `blockValue`; executionRequests are EIP-7685's pre-image, only the
-  * hash of which is in the header).
+/** Result of a proposer-side block build: the sealed block plus the derived artefacts callers need but that are not
+  * recoverable from the block alone (receipts drive `blockValue`; executionRequests are EIP-7685's pre-image and the
+  * block access list EIP-7928's, only the hashes of which are in the header).
   */
 case class BuiltBlock(
     block: com.chipprbots.ethereum.domain.Block,
     receipts: Seq[com.chipprbots.ethereum.domain.Receipt],
-    executionRequests: Seq[ByteString]
+    executionRequests: Seq[ByteString],
+    // EIP-7928: the access list the block's execution built — what an Amsterdam header's blockAccessListHash commits to
+    // and what engine_getPayloadV6 serves. None before Amsterdam.
+    blockAccessList: Option[com.chipprbots.ethereum.domain.BlockAccessList] = None
 )
 
 /** One engine_getPayload answer, whole: the block and everything its envelope carries that the block cannot give back —
@@ -115,5 +141,9 @@ final case class ServedPayload(
     block: com.chipprbots.ethereum.domain.Block,
     receipts: Seq[com.chipprbots.ethereum.domain.Receipt],
     executionRequests: Seq[ByteString],
-    blobsBundle: BlobsBundleData
+    blobsBundle: BlobsBundleData,
+    // EIP-7928: the RLP block access list of an Amsterdam payload, which engine_getPayloadV6 serves in its
+    // ExecutionPayloadV4 and the block itself does not carry (its header holds only the hash). The builder keeps it for
+    // every Amsterdam payload it executes; getPayloadV6 refuses a payload that lacks it.
+    blockAccessList: Option[ByteString] = None
 )

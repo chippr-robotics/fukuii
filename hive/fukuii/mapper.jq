@@ -13,6 +13,7 @@
   "baseFeePerGas": .baseFeePerGas,
   "excessBlobGas": .excessBlobGas,
   "blobGasUsed": .blobGasUsed,
+  "slotNumber": .slotNumber,
   "alloc": ((.alloc // {}) | to_entries | map({
     key: .key,
     value: {

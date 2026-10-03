@@ -80,7 +80,7 @@ One binary, every major EVM network:
 
 - **ETC Mainnet** — full PoW node with SNAP sync
 - **Ethereum Mainnet** — full PoS execution layer via Engine API
-- **Sepolia, Holesky** — Ethereum testnets
+- **Sepolia, Platåberget** — Ethereum testnets (Platåberget is the public Glamsterdam testnet)
 - **Mordor** — ETC testnet
 - **Private and consortium chains** — custom genesis, no source modification required
 - **EVM-compatible L2s** — chains configured via custom genesis and derivation rules

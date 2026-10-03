@@ -276,21 +276,39 @@ class EthInfoService(
       else PrecompiledContracts.istanbulPhoenixContracts
     active.keys.flatMap(addr => Eip7910PrecompileNames.get(addr).map(_ -> addr)).toMap
 
-  /** EIP-4788 lands the beacon-roots contract at Cancun; EIP-2935/6110/7002/7251 land the rest at Prague. */
+  /** The system contracts active at `ts`, cumulative by fork as go-ethereum's `ChainConfig.ActiveSystemContracts`
+    * builds them (same names):
+    *   - Cancun: EIP-4788's beacon-roots contract.
+    *   - Prague: EIP-2935's history contract, EIP-6110's deposit contract, EIP-7002's and EIP-7251's request queues.
+    *   - Amsterdam: EIP-8282's builder deposit and builder exit request queues. They are the addresses execution calls
+    *     at the end of an Amsterdam block (`BlockExecution.systemCallTargets`), so what the node advertises is what
+    *     enters its `requestsHash`.
+    */
   private def ethSystemContractsAt(ts: Timestamp): Map[String, Address] =
-    val beaconRoots = Map("BEACON_ROOTS_ADDRESS" -> BlockExecution.BeaconRootContractAddress)
-    if blockchainConfig.isPragueTimestamp(ts) then
-      beaconRoots ++ Map(
-        "CONSOLIDATION_REQUEST_PREDEPLOY_ADDRESS" -> BlockExecution.ConsolidationQueueAddress,
-        // Genesis-declared per chain (geth `config.depositContractAddress`); the mainnet
-        // contract is only the fallback when a chain does not declare one.
-        "DEPOSIT_CONTRACT_ADDRESS" -> blockchainConfig.depositContractAddress
-          .getOrElse(BlockExecution.DepositContractAddress),
-        "HISTORY_STORAGE_ADDRESS" -> HistoryStorageAddress,
-        "WITHDRAWAL_REQUEST_PREDEPLOY_ADDRESS" -> BlockExecution.WithdrawalQueueAddress
-      )
-    else if blockchainConfig.isCancunTimestamp(ts) then beaconRoots
-    else Map.empty
+    val cancun =
+      if blockchainConfig.isCancunTimestamp(ts) then
+        Map("BEACON_ROOTS_ADDRESS" -> BlockExecution.BeaconRootContractAddress)
+      else Map.empty[String, Address]
+    val prague =
+      if blockchainConfig.isPragueTimestamp(ts) then
+        Map(
+          "CONSOLIDATION_REQUEST_PREDEPLOY_ADDRESS" -> BlockExecution.ConsolidationQueueAddress,
+          // Genesis-declared per chain (geth `config.depositContractAddress`); the mainnet
+          // contract is only the fallback when a chain does not declare one. Same resolver as
+          // execution, so the advertised contract is the one whose logs become deposit requests.
+          "DEPOSIT_CONTRACT_ADDRESS" -> BlockExecution.depositContractFor(blockchainConfig),
+          "HISTORY_STORAGE_ADDRESS" -> HistoryStorageAddress,
+          "WITHDRAWAL_REQUEST_PREDEPLOY_ADDRESS" -> BlockExecution.WithdrawalQueueAddress
+        )
+      else Map.empty[String, Address]
+    val amsterdam =
+      if blockchainConfig.isAmsterdamTimestamp(ts) then
+        Map(
+          "BUILDER_DEPOSIT_CONTRACT_ADDRESS" -> BlockExecution.BuilderDepositQueueAddress,
+          "BUILDER_EXIT_CONTRACT_ADDRESS" -> BlockExecution.BuilderExitQueueAddress
+        )
+      else Map.empty[String, Address]
+    cancun ++ prague ++ amsterdam
 
   /** Block-numbered fork schedule. This is the ETC/Mordor path and its output is deliberately unchanged. */
   private def blockNumberedConfig: ConfigResponse =

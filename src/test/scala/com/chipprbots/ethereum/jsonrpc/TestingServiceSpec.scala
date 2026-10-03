@@ -262,11 +262,15 @@ class TestingServiceSpec extends AnyWordSpec with Matchers:
 
         viaService.block.header.hash shouldBe viaBuilder.block.header.hash
 
-    "keep the parent gas limit when no target is given (engine policy) and converge when one is" taggedAs
+    "keep the parent gas limit when proposerGasLimit gets no target, converge when it gets one" taggedAs
       UnitTest in new Setup:
         engineApi.proposerGasLimit(genesisHeader, 1, None).value shouldBe GenesisGasLimit
         engineApi.proposerGasLimit(genesisHeader, 1, Some(GasLimitTarget)).value shouldBe
           GasLimitCalculator.calcGasLimit(GenesisGasLimit, GasLimitTarget)
+        // The engine path no longer keeps the parent's limit: like go-ethereum's prepareWork it moves toward the
+        // node's gas ceiling on every fork, which by default is this namespace's 60,000,000 target.
+        engineApi.enginePayloadGasLimit(genesisHeader, attrs()).value shouldBe
+          GasLimitCalculator.calcGasLimit(GenesisGasLimit, EngineApiService.DefaultBuilderGasCeil)
   }
 
   "the testing_* codecs" should {

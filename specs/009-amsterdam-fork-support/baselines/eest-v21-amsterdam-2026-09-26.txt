@@ -1,0 +1,151 @@
+# EEST Amsterdam baseline — tests@v21.0.0, 2026-09-26
+#
+# Branch claude/glamsterdam-release-tasks-1plkfl @ 9dc0525 (staging 0.8.5 + #1413), before any Glamsterdam work beyond spec 009 slices A+B.
+# Corpus: blockchain_tests/for_amsterdam/** + for_bpo2toamsterdamattime15k/** (scripts/eest/fetch_fixtures.py defaults).
+# Runner: EEST_FIXTURES=<dir> sbt "testOnly *EestFixtureCorpusSpec". Per-test failure list omitted (3.9 MB); regenerate with the runner.
+#
+
+tests@v21.0.0 Amsterdam blockchain_tests
+26503 tests in 3335 files, 18081 passed, 8422 failed, 136 s
+
+passed / total by directory:
+     125 / 270    amsterdam/eip2780_reduce_intrinsic_tx_gas
+      70 / 77     amsterdam/eip7708_eth_transfer_logs
+      98 / 121    amsterdam/eip7778_block_gas_accounting_without_refunds
+       4 / 23     amsterdam/eip7843_slotnum
+     561 / 1210   amsterdam/eip7928_block_level_access_lists
+      66 / 85     amsterdam/eip7954_increase_max_contract_size
+     353 / 553    amsterdam/eip7976_increase_calldata_floor_cost
+      35 / 194    amsterdam/eip7981_increase_access_list_cost
+      41 / 47     amsterdam/eip7997_deterministic_factory_contract
+     177 / 278    amsterdam/eip8024_dupn_swapn_exchange
+     738 / 846    amsterdam/eip8037_state_creation_gas_cost_increase
+     161 / 274    amsterdam/eip8038_state_access_gas_cost_increase
+       1 / 658    amsterdam/eip8246_selfdestruct_no_burn
+     148 / 166    amsterdam/eip8282_builder_execution_requests
+      57 / 58     berlin/eip2929_gas_cost_increases
+     518 / 533    berlin/eip2930_access_list
+       8 / 176    byzantium/eip196_ec_add_mul
+       4 / 195    byzantium/eip197_ec_pairing
+      44 / 45     byzantium/eip198_modexp_precompile
+       4 / 4      byzantium/eip211_return_data
+      90 / 180    byzantium/eip214_staticcall
+      22 / 24     cancun/create
+     124 / 125    cancun/eip1153_tstore
+      43 / 64     cancun/eip4788_beacon_root
+    5500 / 6319   cancun/eip4844_blobs
+      59 / 99     cancun/eip5656_mcopy
+      68 / 230    cancun/eip6780_selfdestruct
+       4 / 4      cancun/eip7516_blobgasfee
+      27 / 27     constantinople/eip1014_create2
+       9 / 85     constantinople/eip1052_extcodehash
+       3 / 3      constantinople/eip145_bitwise_shift
+     116 / 119    frontier/create
+       3 / 3      frontier/eip2681_limit_account_nonce
+       1 / 1      frontier/examples
+       2 / 24     frontier/identity_precompile
+     626 / 641    frontier/opcodes
+       7 / 301    frontier/precompiles
+       0 / 34     frontier/scenarios
+      34 / 35     frontier/validation
+       1 / 1      homestead/coverage
+       0 / 8      homestead/identity_precompile
+       1 / 5      istanbul/eip1344_chainid
+       0 / 73     istanbul/eip152_blake2
+     774 / 774    istanbul/eip2200_net_gas_metering
+       6 / 6      london/eip1559_fee_market_change
+       1 / 1      london/validation
+      10 / 10     osaka/eip7594_peerdas
+      14 / 21     osaka/eip7823_modexp_upper_bounds
+      11 / 13     osaka/eip7825_transaction_gas_limit_cap
+       0 / 163    osaka/eip7883_modexp_gas_increase
+     150 / 150    osaka/eip7918_blob_reserve_price
+       1 / 10     osaka/eip7934_block_rlp_limit
+     589 / 596    osaka/eip7939_count_leading_zeros
+       0 / 395    osaka/eip7951_p256verify_precompiles
+       0 / 1      paris/security
+      91 / 96     ported_static/stArgsZeroOneBalance
+       2 / 2      ported_static/stAttackTest
+      86 / 108    ported_static/stBadOpcode
+       8 / 8      ported_static/stBugs
+      91 / 91     ported_static/stCallCodes
+      62 / 62     ported_static/stCallCreateCallCodeTest
+      57 / 57     ported_static/stCallDelegateCodesCallCodeHomestead
+      57 / 57     ported_static/stCallDelegateCodesHomestead
+       0 / 2      ported_static/stCodeCopyTest
+       4 / 5      ported_static/stCodeSizeLimit
+     156 / 168    ported_static/stCreate2
+     123 / 153    ported_static/stCreateTest
+      25 / 25     ported_static/stDelegatecallTestHomestead
+      48 / 48     ported_static/stEIP1153_transientStorage
+      85 / 87     ported_static/stEIP150Specific
+     157 / 230    ported_static/stEIP150singleCodeGasPrices
+      34 / 102    ported_static/stEIP1559
+      13 / 15     ported_static/stEIP158Specific
+      17 / 140    ported_static/stEIP2930
+      12 / 12     ported_static/stEIP3607
+      10 / 12     ported_static/stEIP3651_warmcoinbase
+       9 / 9      ported_static/stEIP3855_push0
+       3 / 5      ported_static/stEIP4844_blobtransactions
+      74 / 74     ported_static/stEIP5656_MCOPY
+      33 / 36     ported_static/stExample
+       6 / 6      ported_static/stHomesteadSpecific
+      21 / 22     ported_static/stInitCodeTest
+      46 / 46     ported_static/stLogTests
+       8 / 8      ported_static/stMemExpandingEIP150Calls
+      78 / 78     ported_static/stMemoryStressTest
+     571 / 598    ported_static/stMemoryTest
+      21 / 24     ported_static/stNonZeroCallsTest
+     370 / 463    ported_static/stPreCompiledContracts
+      71 / 76     ported_static/stPreCompiledContracts2
+       6 / 6      ported_static/stQuadraticComplexityTest
+     255 / 293    ported_static/stRandom
+     186 / 207    ported_static/stRandom2
+       1 / 1      ported_static/stRecursiveCreate
+      26 / 26     ported_static/stRefundTest
+     262 / 273    ported_static/stReturnDataTest
+     141 / 238    ported_static/stRevertTest
+     467 / 467    ported_static/stSStoreTest
+       7 / 7      ported_static/stSelfBalance
+      40 / 40     ported_static/stShift
+      17 / 17     ported_static/stSolidityTest
+      12 / 19     ported_static/stSpecialTest
+     344 / 377    ported_static/stStackTests
+     411 / 416    ported_static/stStaticCall
+       4 / 6      ported_static/stStaticFlagEnabled
+      75 / 78     ported_static/stSystemOperationsTest
+     270 / 279    ported_static/stTransactionTest
+       6 / 6      ported_static/stTransitionTest
+      45 / 46     ported_static/stWalletTest
+      16 / 16     ported_static/stZeroCallsRevert
+      20 / 24     ported_static/stZeroCallsTest
+      24 / 24     ported_static/stZeroKnowledge
+     121 / 219    ported_static/vmArithmeticTest
+      57 / 57     ported_static/vmBitwiseLogicOperation
+     162 / 162    ported_static/vmIOandFlowOperations
+      46 / 46     ported_static/vmLogTest
+      41 / 41     ported_static/vmTests
+       2 / 1015   prague/eip2537_bls_12_381_precompiles
+      15 / 15     prague/eip2935_historical_block_hashes_from_state
+      39 / 77     prague/eip6110_deposits
+      33 / 43     prague/eip7002_el_triggerable_withdrawals
+      35 / 46     prague/eip7251_consolidations
+     295 / 483    prague/eip7623_increase_calldata_cost
+      26 / 387    prague/eip7685_general_purpose_el_requests
+     440 / 797    prague/eip7702_set_code_tx
+      14 / 16     shanghai/eip3651_warm_coinbase
+      10 / 10     shanghai/eip3855_push0
+      16 / 26     shanghai/eip3860_initcode
+      58 / 58     shanghai/eip4895_withdrawals
+       4 / 84     spurious_dragon/eip161_state_trie_clearing
+      74 / 772    tangerine_whistle/eip150_operation_gas_costs
+
+divergence kinds (first divergence per failing test; numbers normalised to N):
+    6408  block[N] rejected: ValidationAfterExecError(Block has invalid gas used, expected N but got N)
+    1900  block[N] rejected: ValidationAfterExecError(Block has invalid state root hash, expected <hash> but got <hash>)
+      85  block[N] accepted, fixture expects BlockException.INVALID_BLOCK_ACCESS_LIST
+      18  block[N] rejected: GAS_LIMIT_EXCEEDS_BLOCK_GAS_LIMIT: Tx gas limit (N) + gas accum (N) > block gas limit (N)
+       7  block[N] accepted, fixture expects BlockException.BLOCK_ACCESS_LIST_GAS_LIMIT_EXCEEDED
+       2  block[N] accepted, fixture expects BlockException.INCORRECT_BLOCK_FORMAT
+       1  block[N] accepted, fixture expects BlockException.INVALID_BAL_HASH|BlockException.INVALID_BLOCK_HASH
+       1  block[N] accepted, fixture expects BlockException.INVALID_BLOCK_ACCESS_LIST|BlockException.INVALID_GAS_USED
