@@ -481,6 +481,85 @@ class SNAPLazyHealAnchorSpec extends ScalaTestWithActorTestKit() with AnyFlatSpe
         case _ => FishingOutcomes.continueAndIgnore
       }
 
+  // forge review of f2583dc42 (BUG-BC3 3rd follow-up). isPoSChainOverride makes the PoS/CL-anchored paths drivable
+  // live. A CL hint whose head - pivotBlockOffset == the current pivot is a STALLED CL (target not strictly newer),
+  // the Platåberget state: EL SYNCING keeps Lighthouse from advancing.
+  private def stalledClHint(f: Fixture, snap: TypedActorRef[SNAPSyncController.Command], pivot: BigInt): Unit =
+    val header = Fixtures.Blocks.Genesis.header.copy(number = BlockNumber(pivot + PivotOffset))
+    snap ! SNAPSyncController.CLPivotHint(header.hash.value, Some(header))
+    f.awaitProcessed(snap)
+
+  // (a) A GENUINE HealingAllPeersStateless with a stalled CL must count and reach the handoff after 10. With a live
+  // CL hint newPivotOpt is empty ONLY via the CL-stalled branch, so any exemption keyed on "CL has not advanced"
+  // makes the budget unreachable and wedges the node (the coordinator latches pivotRefreshRequested; only a
+  // 15-minute watchdog retries).
+  "SNAPSyncController on a PoS chain with a stalled CL" should
+    "still exhaust the heal budget and hand off on genuine all-peers-stateless reports" taggedAs UnitTest in new Fixture:
+      val pivot0 = BigInt(2_000)
+      storeGenesis()
+      storeHeaderAt(pivot0, fakeRoot(0xE1))
+      seedResumeState(pivot0, fakeRoot(0xE1))
+      peers.set(Map.empty)
+      val snap = spawnController(SNAPSyncConfig(deferredMerkleization = false, movingRootDeltaHeal = true), isPoS = true)
+      awaitFirstPoll()
+      snap ! SNAPSyncController.Start
+      stalledClHint(this, snap, pivot0)
+
+      (1 to MaxHealRepegNoRootAttempts).foreach { _ =>
+        snap ! SNAPSyncController.HealingAllPeersStateless
+        awaitProcessed(snap)
+      }
+      parent.fishForMessage(10.seconds) {
+        case SNAPSyncController.SnapSyncFinalized(p) if p == pivot0 => FishingOutcomes.complete
+        case SyncProtocol.HealingImpossible => FishingOutcomes.fail("unexpected HealingImpossible")
+        case _ => FishingOutcomes.continueAndIgnore
+      }
+
+  // (b) A leftover retry timer armed OUTSIDE StateHealing (provenance false -- the initial state here is exactly
+  // that, since nothing counted has armed it) firing repeatedly during StateHealing with a stalled CL must NOT
+  // count: healing is progressing on a still-served root.
+  it should "not spend the heal budget on a leftover retry timer firing during StateHealing" taggedAs UnitTest in new Fixture:
+    val pivot0 = BigInt(2_000)
+    storeGenesis()
+    storeHeaderAt(pivot0, fakeRoot(0xE2))
+    seedResumeState(pivot0, fakeRoot(0xE2))
+    peers.set(Map.empty)
+    val snap = spawnController(SNAPSyncConfig(deferredMerkleization = false, movingRootDeltaHeal = true), isPoS = true)
+    awaitFirstPoll()
+    snap ! SNAPSyncController.Start
+    stalledClHint(this, snap, pivot0)
+
+    (1 to MaxHealRepegNoRootAttempts * 2).foreach { _ =>
+      snap ! SNAPSyncController.RetryPivotRefresh
+      awaitProcessed(snap)
+    }
+    parent.expectNoMessage(500.millis)
+
+  // (c) Provenance true: a timer armed by a COUNTED attempt keeps counting, so the chain a genuine report starts
+  // reaches the handoff (1 counted report + 9 replays = 10).
+  it should "count replays of a timer armed by a counted attempt, reaching the handoff" taggedAs UnitTest in new Fixture:
+    val pivot0 = BigInt(2_000)
+    storeGenesis()
+    storeHeaderAt(pivot0, fakeRoot(0xE3))
+    seedResumeState(pivot0, fakeRoot(0xE3))
+    peers.set(Map.empty)
+    val snap = spawnController(SNAPSyncConfig(deferredMerkleization = false, movingRootDeltaHeal = true), isPoS = true)
+    awaitFirstPoll()
+    snap ! SNAPSyncController.Start
+    stalledClHint(this, snap, pivot0)
+
+    snap ! SNAPSyncController.HealingAllPeersStateless
+    awaitProcessed(snap)
+    (1 until MaxHealRepegNoRootAttempts).foreach { _ =>
+      snap ! SNAPSyncController.RetryPivotRefresh
+      awaitProcessed(snap)
+    }
+    parent.fishForMessage(10.seconds) {
+      case SNAPSyncController.SnapSyncFinalized(p) if p == pivot0 => FishingOutcomes.complete
+      case SyncProtocol.HealingImpossible => FishingOutcomes.fail("unexpected HealingImpossible")
+      case _ => FishingOutcomes.continueAndIgnore
+    }
+
   class Fixture extends EphemBlockchainTestSetup with TestSyncConfig:
     implicit override lazy val classicSystem: ActorSystem = SNAPLazyHealAnchorSpec.this.system.classicSystem
 
@@ -540,7 +619,7 @@ class SNAPLazyHealAnchorSpec extends ScalaTestWithActorTestKit() with AnyFlatSpe
         .and(appStateStorage.putSnapSyncStateRoot(root))
         .commit()
 
-    def spawnController(config: SNAPSyncConfig): TypedActorRef[SNAPSyncController.Command] =
+    def spawnController(config: SNAPSyncConfig, isPoS: Boolean = false): TypedActorRef[SNAPSyncController.Command] =
       given ExecutionContext = system.executionContext
       testKit.spawn(
         SNAPSyncController(
@@ -556,7 +635,8 @@ class SNAPLazyHealAnchorSpec extends ScalaTestWithActorTestKit() with AnyFlatSpe
           config,
           system.classicSystem.scheduler,
           CacheBasedBlacklist.empty(100),
-          parent.ref
+          parent.ref,
+          isPoSChainOverride = Option.when(isPoS)(true)
         )
       )
 
