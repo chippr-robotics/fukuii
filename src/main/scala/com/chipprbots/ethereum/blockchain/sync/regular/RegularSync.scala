@@ -129,7 +129,8 @@ object RegularSync:
                   networkPeerManager,
                   blockchain,
                   blacklist,
-                  configBuilder
+                  configBuilder,
+                  Some(peersClient)
                 )
               )
               .onFailure[Throwable](

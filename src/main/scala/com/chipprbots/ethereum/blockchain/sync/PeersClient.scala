@@ -23,6 +23,7 @@ import com.chipprbots.ethereum.network.PeerEventBusActor.SubscriptionClassifier.
 import com.chipprbots.ethereum.network.PeerId
 import com.chipprbots.ethereum.network.p2p.Message
 import com.chipprbots.ethereum.network.p2p.MessageSerializable
+import com.chipprbots.ethereum.network.p2p.messages.Capability
 import com.chipprbots.ethereum.network.p2p.messages.Codes
 import com.chipprbots.ethereum.network.p2p.messages.ETHPackets
 import com.chipprbots.ethereum.network.p2p.messages.SNAP
@@ -404,6 +405,15 @@ object PeersClient:
             )
             bestPeer(unknownHeadPeers, ctx.log)
 
+        case BestEth71PeerExcluding(exclude) =>
+          val eth71Peers = peerHelper.peersToDownloadFrom.filter { case (peerId, peerWithInfo) =>
+            !exclude.contains(peerId) && Capability.supportsBlockAccessLists(
+              peerWithInfo.peerInfo.remoteStatus.capability
+            )
+          }
+          ctx.log.debug("Selecting best eth/71 peer excluding {} ({} capable)", exclude.size, eth71Peers.size)
+          bestPeer(eth71Peers, ctx.log)
+
         case BestSnapPeerExcluding(exclude) =>
           val snapPeers = peerHelper.peersToDownloadFrom.filter { case (peerId, peerWithInfo) =>
             !exclude.contains(peerId) && peerWithInfo.peerInfo.remoteStatus.supportsSnap
@@ -465,6 +475,7 @@ object PeersClient:
         case _: ETHPackets.GetBlockBodies        => implicitly[ClassTag[ETHPackets.BlockBodies]]
         case _: ETHPackets.GetReceipts           => implicitly[ClassTag[ETHPackets.Receipts68]]
         case _: ETHPackets.GetPooledTransactions => implicitly[ClassTag[ETHPackets.PooledTransactions]]
+        case _: ETHPackets.GetBlockAccessLists   => implicitly[ClassTag[ETHPackets.BlockAccessLists]]
         case _: GetTrieNodes                     => implicitly[ClassTag[TrieNodes]]
         case _: GetByteCodes                     => implicitly[ClassTag[ByteCodes]]
 
@@ -474,6 +485,7 @@ object PeersClient:
         case _: ETHPackets.GetBlockBodies        => Codes.BlockBodiesCode
         case _: ETHPackets.GetReceipts           => Codes.ReceiptsCode
         case _: ETHPackets.GetPooledTransactions => Codes.PooledTransactionsCode
+        case _: ETHPackets.GetBlockAccessLists   => Codes.BlockAccessListsCode
         case _: GetTrieNodes                     => SNAP.Codes.TrieNodesCode
         case _: GetByteCodes                     => SNAP.Codes.ByteCodesCode
 
@@ -509,6 +521,9 @@ object PeersClient:
   case object BestSnapPeer extends PeerSelector
   case object BestNodeDataPeer extends PeerSelector
   case class ExcludingPeers(exclude: Set[PeerId]) extends PeerSelector
+
+  /** A peer that negotiated eth/71 or later (EIP-8159 `GetBlockAccessLists`), skipping `exclude`. */
+  case class BestEth71PeerExcluding(exclude: Set[PeerId]) extends PeerSelector
   case class BestSnapPeerExcluding(exclude: Set[PeerId]) extends PeerSelector
   case class BestNodeDataPeerExcluding(exclude: Set[PeerId]) extends PeerSelector
 

@@ -144,6 +144,9 @@ object Blacklist:
       case object BlockImportErrorType extends BlacklistReasonType with RegularSyncBlacklistGroup:
         val code: Int = 30
         val name: String = "BlockImportError"
+      case object InvalidBlockAccessListType extends BlacklistReasonType with RegularSyncBlacklistGroup:
+        val code: Int = 31
+        val name: String = "InvalidBlockAccessList"
 
     case object WrongBlockHeaders extends BlacklistReason:
       val reasonType: BlacklistReasonType = WrongBlockHeadersType
@@ -250,6 +253,13 @@ object Blacklist:
     final case class BlockImportError(error: String) extends BlacklistReason:
       val reasonType: BlacklistReasonType = BlockImportErrorType
       val description: String = s"Block import error: $error"
+
+    /** A peer served an EIP-7928 list (eth/71 `BlockAccessLists`) that does not hash to the header's
+      * `blockAccessListHash`, or is malformed.
+      */
+    final case class InvalidBlockAccessList(details: String) extends BlacklistReason:
+      val reasonType: BlacklistReasonType = InvalidBlockAccessListType
+      val description: String = s"Invalid block access list: $details"
 
     private val allP2PReasons = List(
       DisconnectRequested,
