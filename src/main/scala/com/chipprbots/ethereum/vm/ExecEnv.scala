@@ -8,6 +8,15 @@ import com.chipprbots.ethereum.domain.UInt256
 
 object ExecEnv:
   def apply(context: ProgramContext[?, ?], code: ByteString, ownerAddr: Address): ExecEnv =
+    apply(context, code, ownerAddr, None)
+
+  /** `codeHash`, when the world state holds it for exactly this `code`, lets the frames share the JUMPDEST analysis. */
+  def apply(
+      context: ProgramContext[?, ?],
+      code: ByteString,
+      ownerAddr: Address,
+      codeHash: Option[ByteString]
+  ): ExecEnv =
     import context.*
 
     ExecEnv(
@@ -17,7 +26,7 @@ object ExecEnv:
       gasPrice,
       inputData,
       value,
-      Program(code),
+      codeHash.fold(Program(code))(h => Program.withCodeHash(code, h)),
       blockHeader,
       callDepth,
       startGas,
