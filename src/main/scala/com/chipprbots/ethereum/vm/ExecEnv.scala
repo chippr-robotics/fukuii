@@ -26,7 +26,7 @@ object ExecEnv:
       gasPrice,
       inputData,
       value,
-      codeHash.fold(Program(code))(h => Program.withCodeHash(code, h)),
+      codeHash.fold(Program(code))(h => Program.withCodeHash(code, h, context.world.jumpDestMemo)),
       blockHeader,
       callDepth,
       startGas,
