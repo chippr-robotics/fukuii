@@ -30,6 +30,7 @@ import com.chipprbots.ethereum.blockchain.sync.EphemBlockchainTestSetup
 import com.chipprbots.ethereum.blockchain.sync.SyncProtocol
 import com.chipprbots.ethereum.blockchain.sync.TestSyncConfig
 import com.chipprbots.ethereum.domain.Block
+import com.chipprbots.ethereum.ledger.AncestorBlockHashes
 import com.chipprbots.ethereum.domain.BlockBody
 import com.chipprbots.ethereum.domain.BlockHeader
 import com.chipprbots.ethereum.domain.BlockNumber
@@ -84,7 +85,7 @@ class SNAPDeferredBackfillSpec extends ScalaTestWithActorTestKit() with AnyFlatS
       )
       if withAncestors then
         // pivot-256 .. pivot, linked by parentHash; the last one is the pivot header.
-        val chain = (pivot - SNAPSyncController.AncestryWindow to pivot)
+        val chain = (pivot - 256 to pivot)
           .foldLeft((genesis.hash, Vector.empty[BlockHeader])) { case ((parentHash, acc), n) =>
             val h = genesis.copy(number = BlockNumber(n), parentHash = parentHash, stateRoot = TrieRoot(root))
             (h.hash, acc :+ h)
@@ -137,29 +138,41 @@ class SNAPDeferredBackfillSpec extends ScalaTestWithActorTestKit() with AnyFlatS
     )
 
   "SNAPSyncController" should
-    "spawn the header-only downloader during state sync, and finalise with the backfill target persisted once the " +
-    "ancestor headers are stored" taggedAs UnitTest in new Fixture:
+    "spawn the header-only downloader during state sync, hold finalisation until the header cursor reaches the pivot, " +
+    "then finalise with the REAL pivot TD and a resolvable BLOCKHASH window" taggedAs UnitTest in new Fixture:
       val snap = start(cfg(defer = true), withAncestors = true)
       awaitProcessed(snap)
       // The downloader exists while state sync is not done (ChainDownloader.Start persists its target)...
       eventually(appStateStorage.getBackfillTarget() shouldBe pivot)
       appStateStorage.isSnapSyncDone() shouldBe false
 
+      // ...state completes but the forward header download is nowhere near the pivot: finalisation holds.
       snap ! SNAPSyncController.HealingRootUnservable(root)
-      parent.fishForMessage(10.seconds) {
+      awaitProcessed(snap)
+      parent.expectNoMessage(3.seconds) // longer than the 2 s hold tick: it re-checked and is still holding
+      appStateStorage.isSnapSyncDone() shouldBe false
+
+      // The header download reaches the pivot: the cursor advances and the real accumulated TD is stored.
+      val pivotHeader = blockchainReader.getBlockHeaderByNumber(pivot).get
+      val realTd = Fixtures.Blocks.Genesis.header.difficulty.value * 5000
+      blockchainWriter.storeChainWeight(pivotHeader.hash, ChainWeight.totalDifficultyOnly(realTd)).commit()
+      appStateStorage.putBackfillBestHeader(pivot).commit()
+
+      parent.fishForMessage(15.seconds) {
         case SNAPSyncController.SnapSyncFinalized(p) if p == pivot => FishingOutcomes.complete
         case _                                                     => FishingOutcomes.continueAndIgnore
       }
       appStateStorage.isSnapSyncDone() shouldBe true
       appStateStorage.getBackfillTarget() shouldBe pivot
       appStateStorage.needsBackfillResume() shouldBe true // a restart now resumes the backfill
+      blockchainReader.getChainWeightByHash(pivotHeader.hash).map(_.totalDifficulty.value) shouldBe Some(realTd)
 
-  it should "hold finalisation while the 256 headers below the pivot are missing and no peer can serve them" taggedAs UnitTest in new Fixture:
-    val snap = start(cfg(defer = true), withAncestors = false)
-    snap ! SNAPSyncController.HealingRootUnservable(root)
-    awaitProcessed(snap)
-    appStateStorage.isSnapSyncDone() shouldBe false
-    parent.expectNoMessage(500.millis)
+      // BLOCKHASH for the block after the pivot walks parentHash through the stored headers.
+      val executing = pivotHeader.copy(number = BlockNumber(pivot + 1), parentHash = pivotHeader.hash)
+      val blockHashes = AncestorBlockHashes.forBlock(executing, blockchainReader)
+      val byNumber = (pivot - 256 to pivot).map(n => n -> blockchainReader.getBlockHeaderByNumber(n).get).toMap
+      blockHashes(pivot - 1) shouldBe Some(byNumber(pivot - 1).hash.value)
+      blockHashes(pivot - 256) shouldBe Some(byNumber(pivot - 256).hash.value)
 
   it should "be unchanged with the switch off: the downloader starts during state sync, before finalisation" taggedAs UnitTest in new Fixture:
     val snap = start(cfg(defer = false))
