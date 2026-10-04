@@ -29,7 +29,7 @@ class ReferenceCountedStateReapplySpec extends AnyFlatSpec with Matchers:
   class Setup:
     val dataSource: EphemDataSource = EphemDataSource()
     val nodeStorage = new NodeStorage(dataSource)
-    val stateStorage = new ReferenceCountedStateStorage(nodeStorage, history)
+    val stateStorage = new ReferenceCountedStateStorage(nodeStorage, history, 8L * 1024 * 1024)
 
     /** Block bn: slot 0 alternates by parity until `idleAfter`, then the contract is idle and its root is stable. */
     def execute(bn: Int, parentRoot: ByteString): ByteString =
@@ -46,6 +46,12 @@ class ReferenceCountedStateReapplySpec extends AnyFlatSpec with Matchers:
         t.put(key(i), value("g", i))
       }
       ByteString(trie.getRootHash)
+
+    /** Reads through the decoded-node cache, as block execution does. */
+    def readThroughCache(root: ByteString, storage: ReferenceCountedStateStorage = stateStorage): Unit =
+      val cached = storage.getBackingStorage(0).asInstanceOf[SerializingMptStorage].cachedForExecution
+      val trie = MerklePatriciaTrie[ByteString, ByteString](root.toArray, cached)
+      (0 until keyCount).foreach(i => trie.get(key(i)))
 
     def readWholeState(root: ByteString): Unit =
       val trie = MerklePatriciaTrie[ByteString, ByteString](root.toArray, stateStorage.getReadOnlyStorage)
@@ -163,7 +169,8 @@ class ReferenceCountedStateReapplySpec extends AnyFlatSpec with Matchers:
     stateStorage.rollbackUnadoptedAbove(5, 512) shouldBe 0 // clean node
     roots = applyBatch(roots, 6, 8) // ... process killed here: best is still 5
 
-    val restarted = new ReferenceCountedStateStorage(nodeStorage, history) // fresh process, lastPruned = None
+    val restarted =
+      new ReferenceCountedStateStorage(nodeStorage, history, 8L * 1024 * 1024) // fresh process, lastPruned = None
     restarted.rollbackUnadoptedAbove(5, 512) shouldBe 3
     restarted.rollbackUnadoptedAbove(5, 512) shouldBe 0 // idempotent
 
@@ -188,3 +195,24 @@ class ReferenceCountedStateReapplySpec extends AnyFlatSpec with Matchers:
     inMemory.rollbackUnadoptedAbove(5, 512) shouldBe 0
     inMemory.rollbackUnadoptedBlock(10, 5)
   }
+
+  it should "evict a rolled-back node from the decoded-node cache, so the next read misses instead of being masked" taggedAs (
+    UnitTest,
+    DatabaseTest
+  ) in new Setup:
+    var roots = Map(0 -> genesis())
+    roots = applyBatch(roots, 1, 1) // block 1 creates new nodes (a new root)
+    readThroughCache(roots(1)) // caches them
+    stateStorage.rollbackUnadoptedBlock(1, 0)
+    a[MerklePatriciaTrie.MissingNodeException] should be thrownBy readThroughCache(roots(1))
+    noException should be thrownBy readThroughCache(roots(0)) // the parent state is untouched
+
+  it should "evict the nodes the startup sweep deletes from the decoded-node cache" taggedAs (
+    UnitTest,
+    DatabaseTest
+  ) in new Setup:
+    var roots = Map(0 -> genesis())
+    roots = applyBatch(roots, 1, 2)
+    readThroughCache(roots(2))
+    stateStorage.rollbackUnadoptedAbove(0, 512) shouldBe 2
+    a[MerklePatriciaTrie.MissingNodeException] should be thrownBy readThroughCache(roots(2))

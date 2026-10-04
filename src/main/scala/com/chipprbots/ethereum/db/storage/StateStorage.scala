@@ -122,13 +122,17 @@ class ReferenceCountedStateStorage(
     updateBestBlocksData()
 
   override def rollbackUnadoptedBlock(bn: BigInt, currentBestSavedBlock: BigInt): Unit =
-    if bn > currentBestSavedBlock then ReferenceCountNodeStorage.rollback(bn, nodeStorage, inMemory = true)
+    if bn > currentBestSavedBlock then
+      val removed = ReferenceCountNodeStorage.rollbackReporting(bn, nodeStorage, inMemory = true)
+      // A rolled-back node that stayed cached would be served instead of raising MissingNodeException.
+      decodedNodes.foreach(_.evict(removed))
 
   override def rollbackUnadoptedAbove(currentBestSavedBlock: BigInt, window: Int): Int =
     (window to 1 by -1).foldLeft(0) { (count, offset) =>
       val bn = currentBestSavedBlock + offset
       if ReferenceCountNodeStorage.hasSnapshots(bn, nodeStorage) then
-        ReferenceCountNodeStorage.rollback(bn, nodeStorage, inMemory = true)
+        val removed = ReferenceCountNodeStorage.rollbackReporting(bn, nodeStorage, inMemory = true)
+        decodedNodes.foreach(_.evict(removed))
         count + 1
       else count
     }
