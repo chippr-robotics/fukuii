@@ -31,6 +31,7 @@ import com.chipprbots.ethereum.blockchain.sync.SyncProtocol
 import com.chipprbots.ethereum.blockchain.sync.TestSyncConfig
 import com.chipprbots.ethereum.domain.Block
 import com.chipprbots.ethereum.domain.BlockBody
+import com.chipprbots.ethereum.domain.BlockHeader
 import com.chipprbots.ethereum.domain.BlockNumber
 import com.chipprbots.ethereum.domain.ChainWeight
 import com.chipprbots.ethereum.domain.TrieRoot
@@ -73,7 +74,7 @@ class SNAPDeferredBackfillSpec extends ScalaTestWithActorTestKit() with AnyFlatS
     val pivot = BigInt(10_000)
     val root = ByteString(Array.fill(32)(0x11.toByte))
 
-    def start(cfg: SNAPSyncConfig): TypedActorRef[SNAPSyncController.Command] =
+    def start(cfg: SNAPSyncConfig, withAncestors: Boolean = false): TypedActorRef[SNAPSyncController.Command] =
       val genesis = Fixtures.Blocks.Genesis.header
       blockchainWriter.save(
         Block(genesis, BlockBody.empty),
@@ -81,8 +82,19 @@ class SNAPDeferredBackfillSpec extends ScalaTestWithActorTestKit() with AnyFlatS
         ChainWeight.totalDifficultyOnly(genesis.difficulty.value),
         saveAsBestBlock = true
       )
-      val header = genesis.copy(number = BlockNumber(pivot), stateRoot = TrieRoot(root))
-      blockchainWriter.storeBlock(Block(header, BlockBody.empty)).commit()
+      if withAncestors then
+        // pivot-256 .. pivot, linked by parentHash; the last one is the pivot header.
+        val chain = (pivot - SNAPSyncController.AncestryWindow to pivot)
+          .foldLeft((genesis.hash, Vector.empty[BlockHeader])) { case ((parentHash, acc), n) =>
+            val h = genesis.copy(number = BlockNumber(n), parentHash = parentHash, stateRoot = TrieRoot(root))
+            (h.hash, acc :+ h)
+          }
+          ._2
+        chain.init.foreach(h => blockchainWriter.storeBlockHeader(h).commit())
+        blockchainWriter.storeBlock(Block(chain.last, BlockBody.empty)).commit()
+      else
+        val header = genesis.copy(number = BlockNumber(pivot), stateRoot = TrieRoot(root))
+        blockchainWriter.storeBlock(Block(header, BlockBody.empty)).commit()
       appStateStorage
         .putSnapSyncAccountsComplete(true)
         .and(appStateStorage.putSnapSyncStorageComplete(true))
@@ -125,10 +137,13 @@ class SNAPDeferredBackfillSpec extends ScalaTestWithActorTestKit() with AnyFlatS
     )
 
   "SNAPSyncController" should
-    "persist the backfill target with SnapSyncDone and keep backfilling after finalisation when deferred" taggedAs UnitTest in new Fixture:
-      val snap = start(cfg(defer = true))
+    "spawn the header-only downloader during state sync, and finalise with the backfill target persisted once the " +
+    "ancestor headers are stored" taggedAs UnitTest in new Fixture:
+      val snap = start(cfg(defer = true), withAncestors = true)
       awaitProcessed(snap)
-      appStateStorage.getBackfillTarget() shouldBe BigInt(0) // nothing started while state sync is incomplete
+      // The downloader exists while state sync is not done (ChainDownloader.Start persists its target)...
+      eventually(appStateStorage.getBackfillTarget() shouldBe pivot)
+      appStateStorage.isSnapSyncDone() shouldBe false
 
       snap ! SNAPSyncController.HealingRootUnservable(root)
       parent.fishForMessage(10.seconds) {
@@ -138,7 +153,13 @@ class SNAPDeferredBackfillSpec extends ScalaTestWithActorTestKit() with AnyFlatS
       appStateStorage.isSnapSyncDone() shouldBe true
       appStateStorage.getBackfillTarget() shouldBe pivot
       appStateStorage.needsBackfillResume() shouldBe true // a restart now resumes the backfill
-      parent.expectNoMessage(500.millis) // backfill is running in the background: no Done yet
+
+  it should "hold finalisation while the 256 headers below the pivot are missing and no peer can serve them" taggedAs UnitTest in new Fixture:
+    val snap = start(cfg(defer = true), withAncestors = false)
+    snap ! SNAPSyncController.HealingRootUnservable(root)
+    awaitProcessed(snap)
+    appStateStorage.isSnapSyncDone() shouldBe false
+    parent.expectNoMessage(500.millis)
 
   it should "be unchanged with the switch off: the downloader starts during state sync, before finalisation" taggedAs UnitTest in new Fixture:
     val snap = start(cfg(defer = false))
@@ -154,13 +175,8 @@ class SNAPDeferredBackfillSpec extends ScalaTestWithActorTestKit() with AnyFlatS
     }
     appStateStorage.getBackfillTarget() shouldBe pivot
 
-  "SNAPSyncController.chainDownloadRunsDuringStateSync" should
-    "be true only when download is enabled and not deferred" taggedAs UnitTest in {
-      SNAPSyncController.chainDownloadRunsDuringStateSync(cfg(defer = false)) shouldBe true
-      SNAPSyncController.chainDownloadRunsDuringStateSync(cfg(defer = true)) shouldBe false
-      SNAPSyncController.chainDownloadRunsDuringStateSync(
-        cfg(defer = false).copy(chainDownloadEnabled = false)
-      ) shouldBe false
+  "SNAPSyncController.chainBackfillDeferredToFinalization" should
+    "be true only when download is enabled and deferred" taggedAs UnitTest in {
       SNAPSyncController.chainBackfillDeferredToFinalization(cfg(defer = true)) shouldBe true
       SNAPSyncController.chainBackfillDeferredToFinalization(cfg(defer = false)) shouldBe false
       SNAPSyncController.chainBackfillDeferredToFinalization(

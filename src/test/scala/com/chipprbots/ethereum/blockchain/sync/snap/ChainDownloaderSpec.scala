@@ -234,6 +234,169 @@ class ChainDownloaderSpec
     testKit.stop(req.downloader)
   }
 
+  // ── Deferred backfill (SNAP IO-contention fix) ──────────────────────────────────────────────────────
+
+  final private case class PeerSetup(
+      storage: EphemBlockchainTestSetup,
+      downloader: TypedActorRef[ChainDownloader.Command],
+      networkPeerManager: TestProbe,
+      peerEventBus: TestProbe,
+      peerId: PeerId
+  )
+
+  /** A downloader with one registered ETH68 peer over real storage; the peer-list poll is answered and the registration
+    * barrier observed, so a dispatch after this call can see the peer.
+    */
+  private def peerSetup(
+      deferBodiesAndReceipts: Boolean,
+      configure: EphemBlockchainTestSetup => Unit
+  ): PeerSetup =
+    val storage = new EphemBlockchainTestSetup {}
+    configure(storage)
+    val networkPeerManager = TestProbe()
+    val peerEventBus = TestProbe()
+    val replyToProbe = TestProbe()
+    val peerId = PeerId("defer-peer")
+    val peer =
+      Peer(peerId, new InetSocketAddress("127.0.0.1", 0), TestProbe(peerId.value).ref, incomingConnection = false)
+    val status = RemoteStatus(
+      Capability.ETH68,
+      1,
+      ChainWeight.totalDifficultyOnly(1),
+      ByteString("best-hash"),
+      ByteString("genesis-hash")
+    )
+    val info = PeerInfo(status, status.chainWeight, forkAccepted = true, BigInt(1000), status.bestHash)
+    val downloader = testKit.spawn(
+      ChainDownloader(
+        blockchainReader = storage.blockchainReader,
+        blockchainWriter = storage.blockchainWriter,
+        appStateStorage = storage.storagesInstance.storages.appStateStorage,
+        networkPeerManager = networkPeerManager.ref,
+        peerEventBus = peerEventBus.ref,
+        syncConfig = defaultSyncConfig.copy(blockHeadersPerRequest = 1000),
+        replyTo = replyToProbe.ref,
+        maxConcurrentRequests = 4,
+        deferBodiesAndReceipts = deferBodiesAndReceipts
+      ),
+      s"chain-downloader-defer-${System.nanoTime()}"
+    )
+    networkPeerManager.expectMsgType[NetworkPeerManagerActor.GetHandshakedPeersCmd](5.seconds).replyTo !
+      NetworkPeerManagerActor.HandshakedPeers(Map(peer -> info))
+    peerEventBus.expectMsgType[SubscribeCmd](5.seconds).to shouldBe PeerDisconnectedClassifier(
+      PeerSelector.WithId(peerId)
+    )
+    // Later peer-list polls are noise for what the tests below assert.
+    networkPeerManager.ignoreMsg { case _: NetworkPeerManagerActor.GetHandshakedPeersCmd => true }
+    PeerSetup(storage, downloader, networkPeerManager, peerEventBus, peerId)
+
+  it should "fetch no body or receipt while deferred, and fetch them once released" taggedAs UnitTest in {
+    val header = BlockHelpers.generateBlock(BlockHelpers.genesis).header
+    val ps = peerSetup(
+      deferBodiesAndReceipts = true,
+      st =>
+        st.blockchainWriter.storeBlockHeader(header).commit()
+        st.storagesInstance.storages.appStateStorage.putBackfillBestHeader(BigInt(1)).commit()
+    )
+
+    ps.downloader ! ChainDownloader.Start(BigInt(1))
+    ps.downloader ! ChainDownloader.BoostConcurrency(4) // forces a synchronous dispatch
+    ps.downloader ! ChainDownloader.UpdateTarget(BigInt(1)) // pivot refresh while deferred: still nothing queued
+    expectProgress(ps.downloader) // barrier: everything above has been processed
+    ps.networkPeerManager.msgAvailable shouldBe false // no GetBlockBodies / GetReceipts / GetBlockHeaders sent
+
+    ps.downloader ! ChainDownloader.ReleaseBodiesAndReceipts
+    val sent = ps.networkPeerManager.expectMsgType[NetworkPeerManagerActor.SendMessageCmd](5.seconds)
+    sent.message.underlyingMsg match
+      case ETHPackets.GetBlockBodies(_, hashes) => hashes shouldBe Seq(header.hash.value)
+      case other => fail(s"expected the deferred body to be requested on release, got $other")
+
+    testKit.stop(ps.downloader)
+  }
+
+  // BLOCKHASH(n) for the first 256 blocks above the SNAP pivot walks parentHash through stored headers
+  // (AncestorBlockHashes). With the backfill deferred, forward header download may not have reached them, so the
+  // downloader fetches pivot-256..pivot-1 backward from the pivot by hash.
+  "ChainDownloader.EnsureAncestry" should
+    "fetch the 256 headers below the pivot backward by hash, verify them, and make BLOCKHASH resolve" taggedAs UnitTest in {
+      val pivot = 300
+      val floor = pivot - 256
+      val genesisHeader = BlockHelpers.genesis.header
+      val chain: Vector[BlockHeader] = (1 to pivot + 1)
+        .foldLeft((genesisHeader.hash, Vector.empty[BlockHeader])) { case ((parentHash, acc), n) =>
+          val h = genesisHeader.copy(number = com.chipprbots.ethereum.domain.BlockNumber(n), parentHash = parentHash)
+          (h.hash, acc :+ h)
+        }
+        ._2
+      val byNumber = chain.map(h => h.number.value.toInt -> h).toMap
+      val ps = peerSetup(
+        deferBodiesAndReceipts = true,
+        st => st.blockchainWriter.storeBlockHeader(byNumber(pivot)).commit()
+      )
+      val readyProbe = testKit.createTestProbe[ChainDownloader.AncestryReady]()
+
+      ps.downloader ! ChainDownloader.EnsureAncestry(BigInt(pivot), BigInt(floor), readyProbe.ref)
+
+      val sub = (1 to 2).map(_ => ps.peerEventBus.expectMsgType[SubscribeCmd](5.seconds))
+      val adapter = sub
+        .collectFirst {
+          case SubscribeCmd(MessageClassifier(codes, PeerSelector.WithId(pid)), ref)
+              if codes.contains(Codes.BlockHeadersCode) && pid == ps.peerId =>
+            ref
+        }
+        .getOrElse(fail(s"no MessageClassifier(BlockHeadersCode) among: $sub"))
+      val sent = ps.networkPeerManager.expectMsgType[NetworkPeerManagerActor.SendMessageCmd](5.seconds)
+      val (requestId, origin, reverse) = sent.message.underlyingMsg match
+        case ETHPackets.GetBlockHeaders(id, Right(hash), _, _, rev) => (id, hash, rev)
+        case other => fail(s"expected a by-hash GetBlockHeaders, got $other")
+      origin shouldBe byNumber(pivot - 1).hash.value // starts at the pivot's parent
+      reverse shouldBe true
+
+      val reply = (pivot - 1 to floor by -1).map(byNumber)
+      adapter ! PeerEvent.MessageFromPeer(ETHPackets.BlockHeaders(requestId, reply), ps.peerId)
+      readyProbe.expectMessage(10.seconds, ChainDownloader.AncestryReady(BigInt(pivot)))
+
+      // BLOCKHASH for the block after the pivot: n = pivot-1 and the 256-deep edge n = pivot-256.
+      val executing = byNumber(pivot + 1)
+      val blockHashes = ledger.AncestorBlockHashes.forBlock(executing, ps.storage.blockchainReader)
+      blockHashes(BigInt(pivot - 1)) shouldBe Some(byNumber(pivot - 1).hash.value)
+      blockHashes(BigInt(pivot - 256)) shouldBe Some(byNumber(pivot - 256).hash.value)
+
+      testKit.stop(ps.downloader)
+    }
+
+  it should "not store ancestor headers that do not link to the requested hash, and blacklist the peer" taggedAs UnitTest in {
+    val pivot = 300
+    val genesisHeader = BlockHelpers.genesis.header
+    val pivotHeader = genesisHeader.copy(number = com.chipprbots.ethereum.domain.BlockNumber(pivot))
+    val bogus = genesisHeader.copy(
+      number = com.chipprbots.ethereum.domain.BlockNumber(pivot - 1),
+      extraData = ByteString("not-the-parent")
+    )
+    val ps = peerSetup(deferBodiesAndReceipts = true, st => st.blockchainWriter.storeBlockHeader(pivotHeader).commit())
+    val readyProbe = testKit.createTestProbe[ChainDownloader.AncestryReady]()
+    ps.downloader ! ChainDownloader.EnsureAncestry(BigInt(pivot), BigInt(pivot - 256), readyProbe.ref)
+    val sub = (1 to 2).map(_ => ps.peerEventBus.expectMsgType[SubscribeCmd](5.seconds))
+    val adapter = sub
+      .collectFirst {
+        case SubscribeCmd(MessageClassifier(codes, PeerSelector.WithId(_)), ref)
+            if codes.contains(Codes.BlockHeadersCode) =>
+          ref
+      }
+      .getOrElse(fail("no header subscription"))
+    val sent = ps.networkPeerManager.expectMsgType[NetworkPeerManagerActor.SendMessageCmd](5.seconds)
+    val requestId = sent.message.underlyingMsg match
+      case ETHPackets.GetBlockHeaders(id, _, _, _, _) => id
+      case other                                      => fail(s"unexpected $other")
+
+    adapter ! PeerEvent.MessageFromPeer(ETHPackets.BlockHeaders(requestId, Seq(bogus)), ps.peerId)
+
+    expectProgress(ps.downloader) // barrier
+    ps.storage.blockchainReader.getBlockHeaderByHash(bogus.hash) shouldBe None
+    readyProbe.expectNoMessage(200.millis)
+    testKit.stop(ps.downloader)
+  }
+
   private val fixtureReceipt: Receipt =
     LegacyReceipt(SuccessOutcome, BigInt(21000), BloomFilter(ledger.BloomFilter.create(Nil)), Nil)
 

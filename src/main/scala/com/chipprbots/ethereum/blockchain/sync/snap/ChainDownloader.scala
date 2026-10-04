@@ -83,7 +83,8 @@ class ChainDownloader private (
     requestTimeout: FiniteDuration,
     snapServerPeerNodeIds: Set[ByteString],
     replyTo: TypedActorRef[ChainDownloader.Done.type],
-    cursorScanCap: Long
+    cursorScanCap: Long,
+    deferBodiesAndReceipts: Boolean
 ):
 
   import ChainDownloader.*
@@ -101,6 +102,15 @@ class ChainDownloader private (
   private var targetBlock: BigInt = 0
   private var bestHeaderNumber: BigInt = 0
   private var paused = false
+
+  // SNAP state-sync IO contention fix: while true, headers are downloaded as usual but NO body or receipt is queued or
+  // fetched (bodies/receipts are the column-family "b" write pressure). `ReleaseBodiesAndReceipts` clears it once SNAP
+  // state is finalised and rebuilds the queues from the stored headers. Never completes while true.
+  private var bodiesReceiptsDeferred: Boolean = deferBodiesAndReceipts
+
+  // BLOCKHASH ancestry (EnsureAncestry): at most one backward-header job and one request in flight.
+  private var ancestryJob: Option[AncestryJob] = None
+  private var ancestryPeer: Option[PeerId] = None
 
   // Queues of block hashes needing bodies/receipts
   private var bodiesQueue: Vector[ByteString] = Vector.empty
@@ -145,7 +155,145 @@ class ChainDownloader private (
     case PeerGone(peerId) =>
       peerListHelper.handlePeerDisconnected(peerId)
       Some(Behaviors.same)
+    case ReleaseBodiesAndReceipts =>
+      releaseBodiesAndReceipts()
+      Some(Behaviors.same)
+    case EnsureAncestry(pivot, floor, ancestryReplyTo) =>
+      startAncestryJob(pivot, floor, ancestryReplyTo)
+      Some(Behaviors.same)
     case _ => None
+
+  /** Stop deferring: queue every stored header's missing body/receipt (same rebuild a restart does) and let dispatch
+    * pick them up. `bestHeaderNumber` is re-derived by the same walk, which also re-verifies contiguity.
+    */
+  private def releaseBodiesAndReceipts(): Unit =
+    if bodiesReceiptsDeferred then
+      bodiesReceiptsDeferred = false
+      bestHeaderNumber = findBestStoredHeader()
+      log.info(
+        "Chain download: SNAP state complete, releasing bodies and receipts. headers={}, bodies queued={}, receipts queued={}",
+        bestHeaderNumber,
+        bodiesQueue.size,
+        receiptsQueue.size
+      )
+      scheduleDispatch(200.millis)
+
+  // --- Ancestry (BLOCKHASH window below the SNAP pivot) ---------------------------------------------------------
+
+  /** Make sure the headers `floor..pivot-1` are in storage, linked by parentHash from the pivot header. Whatever is
+    * missing is fetched BACKWARD from the lowest known header by hash (reverse GetBlockHeaders) and verified against
+    * the hash chain before it is stored. Replies `AncestryReady(pivot)` once complete; retries on peers until it is.
+    */
+  private def startAncestryJob(pivot: BigInt, floor: BigInt, ancestryReplyTo: TypedActorRef[AncestryReady]): Unit =
+    blockchainReader.getBlockHeaderByNumber(pivot) match
+      case None =>
+        // Cannot anchor the walk. The controller only asks once the pivot header is stored; stay silent so it keeps
+        // waiting (it re-asks on the next finalise attempt) rather than reporting a window we cannot vouch for.
+        log.warn("Ancestry job for pivot {}: pivot header not in storage", pivot)
+      case Some(pivotHeader) =>
+        nextMissingAncestor(pivotHeader, floor) match
+          case None => ancestryReplyTo ! AncestryReady(pivot)
+          case Some((hash, number)) =>
+            log.info(
+              "Fetching {} ancestor headers below pivot {} (down to {}) for BLOCKHASH, starting at {}",
+              number - floor + 1,
+              pivot,
+              floor,
+              number
+            )
+            ancestryJob = Some(AncestryJob(pivot, floor, hash, number, ancestryReplyTo))
+            dispatchAncestry()
+
+  /** First (hash, number) below `from` whose header is absent, walking parentHash links; None if `floor..from-1` all
+    * present.
+    */
+  private def nextMissingAncestor(from: BlockHeader, floor: BigInt): Option[(ByteString, BigInt)] =
+    var cur = from
+    var missing: Option[(ByteString, BigInt)] = None
+    var done = false
+    while !done do
+      val parentNumber = cur.number.value - 1
+      if parentNumber < floor || parentNumber < 0 then done = true
+      else
+        blockchainReader.getBlockHeaderByHash(cur.parentHash) match
+          case Some(h) if h.number.value == parentNumber => cur = h
+          case _ =>
+            missing = Some((cur.parentHash.value, parentNumber))
+            done = true
+    missing
+
+  private def dispatchAncestry(): Unit =
+    ancestryJob.foreach { job =>
+      if ancestryPeer.isEmpty then
+        val busy = headerRequestPeers ++ bodyRequestPeers.keySet ++ receiptRequestPeers.keySet
+        peersToDownloadFrom
+          .find { case (peerId, p) =>
+            !busy.contains(peerId) && !p.peer.nodeId.exists(snapServerPeerNodeIds.contains) &&
+            !emptyHeaderPeers.contains(peerId)
+          }
+          .foreach { case (peerId, pwi) =>
+            ancestryPeer = Some(peerId)
+            val count = (job.nextNumber - job.floor + 1).min(syncConfig.blockHeadersPerRequest)
+            val requestMsg = ETHPackets.GetBlockHeaders(
+              ETHPackets.nextRequestId,
+              Right(job.nextHash),
+              count,
+              skip = 0,
+              reverse = true
+            )
+            context.spawn(
+              PeerRequestHandler
+                .behavior[ETHPackets.GetBlockHeaders, ETHPackets.BlockHeaders](
+                  pwi.peer,
+                  requestTimeout,
+                  networkPeerManager,
+                  peerEventBus,
+                  requestMsg,
+                  Codes.BlockHeadersCode,
+                  replyTo = prhResultAdapter,
+                  requestId = 0
+                ),
+              s"chain-ancestry-${job.nextNumber}-${System.nanoTime()}"
+            )
+          }
+    }
+
+  /** A reply to the backward request. Only a prefix that starts at the requested hash and links by parentHash is
+    * accepted; anything else blacklists the peer and the request is retried elsewhere.
+    */
+  private def handleAncestryHeaders(peer: Peer, headers: Seq[BlockHeader]): Unit =
+    ancestryPeer = None
+    ancestryJob.foreach { job =>
+      var expectHash = job.nextHash
+      var expectNumber = job.nextNumber
+      val valid = Vector.newBuilder[BlockHeader]
+      val it = headers.iterator
+      var ok = true
+      while ok && it.hasNext && expectNumber >= job.floor do
+        val h = it.next()
+        if h.hash.value == expectHash && h.number.value == expectNumber then
+          valid += h
+          expectHash = h.parentHash.value
+          expectNumber -= 1
+        else ok = false
+      val accepted = valid.result()
+      if accepted.isEmpty then
+        emptyHeaderPeers += peer.id
+        blacklist.add(peer.id, syncConfig.blacklistDuration, ErrorInBlockHeaders)
+      else
+        accepted
+          .foldLeft(blockchainWriter.storeBlockHeader(accepted.head))((batch, h) =>
+            batch.and(blockchainWriter.storeBlockHeader(h))
+          )
+          .commit()
+        if expectNumber < job.floor || expectNumber < 0 then
+          log.info("Ancestor headers below pivot {} stored down to {}", job.pivot, accepted.last.number)
+          ancestryJob = None
+          job.replyTo ! AncestryReady(job.pivot)
+        else
+          ancestryJob = Some(job.copy(nextHash = expectHash, nextNumber = expectNumber))
+          dispatchAncestry()
+    }
 
   def idle(): Behavior[Command] =
     Behaviors.receiveMessage { message =>
@@ -216,6 +364,7 @@ class ChainDownloader private (
       handleCommon(message).getOrElse {
         message match
           case Dispatch =>
+            dispatchAncestry() // independent of pause and of the body/header concurrency cap
             // dispatchRequests()'s result must be the returned Behavior, not discarded: it can be idle() (via
             // checkCompletion, e.g. Done firing off a Dispatch tick) rather than always Behaviors.same. A `val
             // x = dispatchRequests(); Behaviors.same` shape here used to silently drop that transition, leaving
@@ -327,6 +476,14 @@ class ChainDownloader private (
     * outstanding request.
     */
   private def handleHeaderResult(peer: Peer, headers: Seq[BlockHeader]): Unit =
+    if ancestryPeer.contains(peer.id) then
+      if headers.nonEmpty then handleAncestryHeaders(peer, headers)
+      else
+        ancestryPeer = None
+        emptyHeaderPeers += peer.id
+    else handleForwardHeaderResult(peer, headers)
+
+  private def handleForwardHeaderResult(peer: Peer, headers: Seq[BlockHeader]): Unit =
     headerRequestPeers -= peer.id
     if headers.nonEmpty then
       emptyHeaderPeers -= peer.id
@@ -343,6 +500,7 @@ class ChainDownloader private (
     * why a request can still fail after Done already fired.
     */
   private def handleRequestFailed(peer: Peer, reason: String): Unit =
+    if ancestryPeer.contains(peer.id) then ancestryPeer = None
     headerRequestPeers -= peer.id
     bodyRequestPeers.get(peer.id).foreach { case (_, hashes) =>
       bodiesQueue = hashes.toVector ++ bodiesQueue
@@ -637,8 +795,9 @@ class ChainDownloader private (
                 .and(appStateStorage.putBackfillBestHeader(header.number.value))
                 .commit()
 
-              bodiesQueue :+= header.hash.value
-              receiptsQueue :+= header.hash.value
+              if !bodiesReceiptsDeferred then
+                bodiesQueue :+= header.hash.value
+                receiptsQueue :+= header.hash.value
               prevHash = Some(header.hash)
               validCount += 1
         else
@@ -1042,7 +1201,8 @@ class ChainDownloader private (
           )
 
   private def checkCompletion(): Behavior[Command] =
-    if bestHeaderNumber >= targetBlock &&
+    if !bodiesReceiptsDeferred &&
+      bestHeaderNumber >= targetBlock &&
       bodiesQueue.isEmpty &&
       receiptsQueue.isEmpty &&
       bodyRequestPeers.isEmpty &&
@@ -1162,10 +1322,12 @@ class ChainDownloader private (
           case Some(header) =>
             val needsBodyCheck = i > bodyFloor
             val needsReceiptCheck = i > receiptFloor
-            if needsBodyCheck && blockchainReader.getBlockBodyByHash(header.hash).isEmpty then
-              bodiesQueue :+= header.hash.value
-            if needsReceiptCheck && blockchainReader.getReceiptsByHash(header.hash).isEmpty then
-              receiptsQueue :+= header.hash.value
+            if !bodiesReceiptsDeferred && needsBodyCheck &&
+              blockchainReader.getBlockBodyByHash(header.hash).isEmpty
+            then bodiesQueue :+= header.hash.value
+            if !bodiesReceiptsDeferred && needsReceiptCheck &&
+              blockchainReader.getReceiptsByHash(header.hash).isEmpty
+            then receiptsQueue :+= header.hash.value
             i += 1
           case None =>
             contiguousBest = i - 1
@@ -1219,6 +1381,18 @@ object ChainDownloader:
   // Sent when SNAP state is finalised and regular sync is taking over. Backfill drops to a smaller
   // concurrency budget so it competes politely for peer slots. Mirrors `BoostConcurrency` but downward.
   case class YieldToRegularSync(maxConcurrent: Int) extends Command
+  // SNAP finalised: start fetching bodies and receipts (they were deferred at construction).
+  case object ReleaseBodiesAndReceipts extends Command
+  // Ensure headers floor..pivot-1 are stored (BLOCKHASH window); replies AncestryReady(pivot) when they are.
+  case class EnsureAncestry(pivot: BigInt, floor: BigInt, replyTo: TypedActorRef[AncestryReady]) extends Command
+  case class AncestryReady(pivot: BigInt) // outbound — NOT a Command
+  final private case class AncestryJob(
+      pivot: BigInt,
+      floor: BigInt,
+      nextHash: ByteString,
+      nextNumber: BigInt,
+      replyTo: TypedActorRef[AncestryReady]
+  )
   case class GetProgress(replyTo: TypedActorRef[Progress]) extends Command
   case class Progress( // outbound reply type — NOT a Command
       headersDownloaded: BigInt,
@@ -1260,7 +1434,9 @@ object ChainDownloader:
       // means the scan yields after cursorScanCap blocks; the next successful store continues it from the new
       // cursor. "A few thousand" per forge's review — 5000 is a few dispatch cycles' worth of throughput, not a
       // noticeable latency hit, while bounding worst-case single-message cost to a few thousand DB reads.
-      cursorScanCap: Long = 5000L
+      cursorScanCap: Long = 5000L,
+      // Download headers only; hold bodies/receipts until `ReleaseBodiesAndReceipts` (SNAP IO-contention fix).
+      deferBodiesAndReceipts: Boolean = false
   ): Behavior[Command] =
     Behaviors.setup { context =>
       Behaviors.withTimers { timers =>
@@ -1292,7 +1468,8 @@ object ChainDownloader:
           requestTimeout,
           snapServerPeerNodeIds,
           replyTo,
-          cursorScanCap
+          cursorScanCap,
+          deferBodiesAndReceipts
         )
 
         // Immediate poll, then periodic poll for handshaked peers (replaces PeerListSupportNg's scheduleWithFixedDelay).

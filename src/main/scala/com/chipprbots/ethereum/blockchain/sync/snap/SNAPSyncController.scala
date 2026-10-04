@@ -184,6 +184,10 @@ private class SNAPSyncControllerImpl(
   // ChainDownloader is Behavior[Command] (S6 narrowed); typed ref enables type-safe sends.
   private var chainDownloader: Option[org.apache.pekko.actor.typed.ActorRef[ChainDownloader.Command]] = None
   private var chainDownloadComplete: Boolean = false
+  // Pivot whose 256 ancestor headers the downloader has confirmed stored (deferred-backfill finalisation gate).
+  private var ancestryReadyFor: Option[BigInt] = None
+  private val ancestryReadyAdapter: TypedActorRef[ChainDownloader.AncestryReady] =
+    ctx.messageAdapter[ChainDownloader.AncestryReady](r => AncestryReadyForPivot(r.pivot))
 
   // Monotonic counter appended to coordinator actor names so restarts don't collide
   // with still-stopping actors from the previous cycle.
@@ -1885,6 +1889,12 @@ private class SNAPSyncControllerImpl(
       case ChainDownloaderProgress(h, b, r, t) =>
         progressMonitor.updateChainProgress(h, b, r, t)
         Behaviors.same
+
+      case AncestryReadyForPivot(p) =>
+        if pivotBlock.contains(p) then
+          ancestryReadyFor = Some(p)
+          finalizeSnapSync(p, pathPublished = true)
+        else Behaviors.same
 
       case ChainDownloaderDone =>
         ctx.log.info("Parallel chain download completed during SNAP state sync.")
@@ -4992,6 +5002,24 @@ private class SNAPSyncControllerImpl(
             startPathPublish(pivot, pivotHeader.stateRoot.value)
             break(Behaviors.same)
 
+          // Deferred backfill: BLOCKHASH(n) for the first 256 blocks above the pivot walks parentHash through stored
+          // headers, so the 256 below the pivot must be on disk before regular sync executes anything. Forward header
+          // download may not have reached them; the downloader fetches them backward from the pivot by hash and
+          // verifies the chain. Hold finalisation until it reports back (AncestryReadyForPivot re-enters here).
+          if SNAPSyncController.chainBackfillDeferredToFinalization(snapSyncConfig) &&
+            ancestryReadyFor != Some(pivot)
+          then
+            if chainDownloader.isEmpty then startChainDownloader()
+            ctx.log.info(s"Holding SNAP finalisation until the 256 headers below pivot $pivot are stored")
+            chainDownloader.foreach(
+              _ ! ChainDownloader.EnsureAncestry(
+                pivot,
+                (pivot - SNAPSyncController.AncestryWindow).max(0),
+                ancestryReadyAdapter
+              )
+            )
+            break(Behaviors.same)
+
           val pivotHash = pivotHeader.hash
 
           // Store the full block (header + empty body) so getBlockByHash(pivotHash) returns
@@ -5058,14 +5086,7 @@ private class SNAPSyncControllerImpl(
                 s"${healedCodeHashes.size}, bytecode phase force-completed: $bytecodeForceCompleted) — " +
                 "bytecodeRecoveryDone NOT set"
             )
-          val doneFlags0 = appStateStorage.snapSyncDone().and(appStateStorage.storageRecoveryDone())
-          // Deferred backfill: persist the target in the same atomic commit as SnapSyncDone, so a crash after this
-          // point resumes the backfill on the next start (needsBackfillResume) instead of silently never running it.
-          val doneFlags =
-            if SNAPSyncController.chainBackfillDeferredToFinalization(snapSyncConfig) && chainDownloader.isEmpty &&
-              pivot > 0
-            then doneFlags0.and(appStateStorage.putBackfillTarget(pivot))
-            else doneFlags0
+          val doneFlags = appStateStorage.snapSyncDone().and(appStateStorage.storageRecoveryDone())
           (if bytecodeComplete then doneFlags.and(appStateStorage.bytecodeRecoveryDone()) else doneFlags).commitSync()
 
           ctx.log.info(s"SNAP sync completed successfully at block $pivot (hash=${pivotHash.value.take(8).toHex})")
@@ -5089,8 +5110,8 @@ private class SNAPSyncControllerImpl(
       // Phase 1 of the handshake: tell the parent that pivot/state is anchored. Parent starts RegularSync.
       syncController ! SnapSyncFinalized(pivot)
 
-      // Deferred backfill starts only now that the state is complete (no-op unless the switch is on).
-      startDeferredChainBackfill(pivot)
+      // Deferred backfill: bodies and receipts start only now that the state is complete (no-op unless the switch is on).
+      releaseDeferredBodiesAndReceipts()
 
       val backfillStillRunning =
         snapSyncConfig.chainDownloadEnabled && chainDownloader.isDefined && !chainDownloadComplete
@@ -5206,22 +5227,17 @@ private class SNAPSyncControllerImpl(
         onStop(); Behaviors.same
       }
 
-  /** Start the chain downloader alongside SNAP state sync. A no-op when the backfill is deferred until the state is
-    * finalised ([[SNAPSyncController.chainDownloadRunsDuringStateSync]]); [[startDeferredChainBackfill]] starts it
-    * then.
+  /** Start the chain downloader alongside SNAP state sync. With the backfill deferred it downloads headers only; bodies
+    * and receipts are held until [[releaseDeferredBodiesAndReceipts]] runs at finalisation.
     */
   private def startChainDownloader(): Unit =
-    if SNAPSyncController.chainDownloadRunsDuringStateSync(snapSyncConfig) then
-      launchChainDownloader(pivotBlock.filter(_ > 0), snapSyncConfig.chainDownloadMaxConcurrentRequests)
+    launchChainDownloader(pivotBlock.filter(_ > 0), snapSyncConfig.chainDownloadMaxConcurrentRequests)
 
-  /** State is finalised and the backfill was deferred: start it now, at the post-SNAP backfill concurrency. The target
-    * was already persisted with the SNAP-done flags, so a restart before this point resumes it through
-    * `SyncController.maybeStartBackfillResume`.
-    */
-  private def startDeferredChainBackfill(pivot: BigInt): Unit =
-    if SNAPSyncController.chainBackfillDeferredToFinalization(snapSyncConfig) && chainDownloader.isEmpty then
-      ctx.log.info("SNAP state finalised; starting deferred chain backfill (bodies and receipts) to block {}", pivot)
-      launchChainDownloader(Some(pivot).filter(_ > 0), snapSyncConfig.chainBackfillConcurrentRequests)
+  /** State is finalised: let a deferred downloader start fetching bodies and receipts. */
+  private def releaseDeferredBodiesAndReceipts(): Unit =
+    if SNAPSyncController.chainBackfillDeferredToFinalization(snapSyncConfig) then
+      ctx.log.info("SNAP state finalised; releasing deferred body and receipt backfill")
+      chainDownloader.foreach(_ ! ChainDownloader.ReleaseBodiesAndReceipts)
 
   private def launchChainDownloader(pivotOpt: Option[BigInt], maxConcurrent: Int): Unit =
     if snapSyncConfig.chainDownloadEnabled then
@@ -5247,7 +5263,8 @@ private class SNAPSyncControllerImpl(
                 replyTo = chainDownloaderReplyAdapter,
                 maxConcurrentRequests = maxConcurrent,
                 requestTimeout = snapSyncConfig.chainDownloadTimeout,
-                snapServerPeerNodeIds = snapServerNodeIds
+                snapServerPeerNodeIds = snapServerNodeIds,
+                deferBodiesAndReceipts = SNAPSyncController.chainBackfillDeferredToFinalization(snapSyncConfig)
               ),
               s"chain-downloader-$coordinatorGeneration",
               DispatcherSelector.fromConfig("sync-dispatcher")
@@ -5285,11 +5302,10 @@ private class SNAPSyncControllerImpl(
 
 object SNAPSyncController:
 
-  /** Whether the chain downloader runs concurrently with SNAP state sync (the historical behaviour). */
-  private[snap] def chainDownloadRunsDuringStateSync(cfg: SNAPSyncConfig): Boolean =
-    cfg.chainDownloadEnabled && !cfg.deferChainBackfillUntilStateComplete
+  /** Headers below the pivot that must be stored before finalising (BLOCKHASH window). */
+  val AncestryWindow: Int = 256
 
-  /** Whether the chain downloader is held back until SNAP state is finalised. */
+  /** Whether bodies and receipts are held back until SNAP state is finalised (headers keep downloading). */
   private[snap] def chainBackfillDeferredToFinalization(cfg: SNAPSyncConfig): Boolean =
     cfg.chainDownloadEnabled && cfg.deferChainBackfillUntilStateComplete
 
@@ -5346,6 +5362,7 @@ object SNAPSyncController:
       targetBlock: BigInt
   ) extends Command
   private[snap] case object ChainDownloaderDone extends Command
+  private[snap] case class AncestryReadyForPivot(pivot: BigInt) extends Command
 
   // ── Group: Peer-event wrappers (OQ-3 — PeerListHelper bridge) ──────────────
   // SSC composes PeerListHelper (Group PLN). The handshaked-peers poll reply and
@@ -5850,8 +5867,8 @@ case class SNAPSyncConfig(
     // Concurrency budget for chain backfill once SNAP state is finalised and regular sync has started.
     // Smaller than `chainDownloadMaxConcurrentRequests` so backfill yields peer slots to regular sync.
     chainBackfillConcurrentRequests: Int = 2,
-    // When true, the chain downloader (headers, bodies, receipts) is NOT started while SNAP state sync runs: it starts
-    // once the state is finalised, so historical-body writes never compete with account/storage/bytecode/healing
+    // When true, the chain downloader fetches headers only while SNAP state sync runs: bodies and receipts are held
+    // until the state is finalised, so historical-body writes never compete with account/storage/bytecode/healing
     // writes for disk IO. Off by default; the post-merge ETH chain configs turn it on. The pivot header and the
     // CL-anchored header chain are fetched by PivotHeaderBootstrap, not by the chain downloader, so they are unaffected.
     deferChainBackfillUntilStateComplete: Boolean = false,
