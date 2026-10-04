@@ -179,23 +179,41 @@ object ReferenceCountNodeStorage extends PruneSupport with Logger:
   override def rollback(blockNumber: BigInt, nodeStorage: NodesStorage, inMemory: Boolean): Unit =
     val _ = rollbackReporting(blockNumber, nodeStorage, inMemory)
 
-  /** [[rollback]], returning the hashes of the trie nodes it removed, so a cache of decoded nodes can drop them. */
+  /** [[rollback]], returning the hashes of the trie nodes it removed, so a cache of decoded nodes can drop them.
+    *
+    * A block's snapshots are appended in write order, and one block can write the same node more than once (every
+    * transaction persists the trie, so a hot node is rewritten per transaction). Only the FIRST snapshot of a hash
+    * holds its value from before the block; the later ones are intermediate states the block itself produced. They are
+    * coalesced to that first value so each hash gets exactly one action: restored, or deleted when it did not exist
+    * before the block. Replaying them all emitted both a delete and an upsert for such a hash and the upsert won,
+    * leaving a node the block had created behind with a reference count.
+    *
+    * The individual snapshot keys go too, as [[pruneReporting]] does, so a rolled-back block leaves nothing behind.
+    *
+    * NOT a general undo. Snapshots hold absolute values, so restoring one overwrites any LATER writer of the same node.
+    * It is only correct for the tip of a chain whose later blocks have been undone first; the import path does not use
+    * it (a failed block stages nothing, see [[com.chipprbots.ethereum.db.storage.StagedBlockState]]).
+    */
   def rollbackReporting(blockNumber: BigInt, nodeStorage: NodesStorage, inMemory: Boolean): Seq[NodeHash] =
     var removed: Seq[NodeHash] = Nil
     withSnapshotCount(blockNumber, nodeStorage) { (snapshotsCountKey, snapshotCount) =>
-      // Get all the snapshots
-      val snapshots = snapshotKeysUpTo(blockNumber, snapshotCount)
+      val snapshotKeys = snapshotKeysUpTo(blockNumber, snapshotCount)
+      // Snapshots in write order; keep the earliest per node: that is the value from before the block.
+      val earliest = snapshotKeys
         .flatMap(key => nodeStorage.get(key).map(snapshotFromBytes))
+        .foldLeft(Vector.empty[StoredNodeSnapshot] -> Set.empty[NodeHash]) { case ((kept, seen), snapshot) =>
+          if seen.contains(snapshot.nodeKey) then (kept, seen) else (kept :+ snapshot, seen + snapshot.nodeKey)
+        }
+        ._1
       // We need to delete deathrow for rollbacked block
       val deathRowKey = drRowKey(blockNumber)
-      // Transform them to db operations
-      val (toRemove, toUpsert) = snapshots.foldLeft((Seq.empty[NodeHash], Seq.empty[(NodeHash, NodeEncoded)])) {
-        // Undo Actions
-        case ((r, u), StoredNodeSnapshot(nodeHash, Some(sn))) => (r, (nodeHash -> storedNodeToBytes(sn)) +: u)
-        case ((r, u), StoredNodeSnapshot(nodeHash, None))     => (nodeHash +: r, u)
+      // Transform them to db operations: disjoint by construction, one per node
+      val toRemove = earliest.collect { case StoredNodeSnapshot(nodeHash, None) => nodeHash }
+      val toUpsert = earliest.collect { case StoredNodeSnapshot(nodeHash, Some(sn)) =>
+        nodeHash -> storedNodeToBytes(sn)
       }
-      // also remove snapshot as we have done a rollback
-      nodeStorage.updateCond(toRemove :+ snapshotsCountKey :+ deathRowKey, toUpsert, inMemory)
+      // also remove the snapshots as we have done a rollback
+      nodeStorage.updateCond(toRemove ++ snapshotKeys :+ snapshotsCountKey :+ deathRowKey, toUpsert, inMemory)
       removed = toRemove ++ toUpsert.map(_._1) // upserted nodes get their old reference counts back; drop them too
     }
     removed

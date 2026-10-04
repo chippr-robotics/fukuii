@@ -387,10 +387,10 @@ class PosRegularSyncImportSpec extends ScalaTestWithActorTestKit with AnyFlatSpe
 
     private val execution: BlockExecution = stub[BlockExecution]
     (execution
-      .executeAndValidateBlocks(_: List[Block], _: ChainWeight)(_: BlockchainConfig))
-      .when(*, *, *)
+      .executeAndValidateBlocks(_: List[Block], _: ChainWeight, _: Boolean)(_: BlockchainConfig))
+      .when(*, *, *, *)
       .anyNumberOfTimes()
-      .onCall { (blocks, weight, _) =>
+      .onCall { (blocks, weight, _, _) =>
         hold.filter { case (first, _, _) => blocks.headOption.exists(_.number.value == first) }.foreach {
           case (_, started, release) =>
             started.countDown()

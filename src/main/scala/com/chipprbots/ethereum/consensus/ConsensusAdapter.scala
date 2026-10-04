@@ -165,9 +165,9 @@ class ConsensusAdapter(
         case ConsensusError(blocksToEnqueue, error) =>
           blocksToEnqueue.foreach(blockQueue.enqueueBlock(_))
           BlockImportFailed(error)
-        case ConsensusErrorDueToMissingNode(blocksToEnqueue, reason) =>
+        case ConsensusErrorDueToMissingNode(blocksToEnqueue, reason, imported) =>
           blocksToEnqueue.foreach(blockQueue.enqueueBlock(_))
-          BlockImportFailedDueToMissingNode(reason)
+          BlockImportFailedDueToMissingNode(reason, imported)
       }
 
   private def doBlockPreValidation(block: Block)(implicit

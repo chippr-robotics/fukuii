@@ -800,11 +800,14 @@ final private class BlockImporterLogic(
           case DuplicateBlock | BlockEnqueued =>
             IO.pure((importedBlocks, None))
 
-          case BlockImportFailedDueToMissingNode(missingNodeException) if syncConfig.redownloadMissingStateNodes =>
-            IO.pure((importedBlocks, Some(missingNodeException)))
+          case BlockImportFailedDueToMissingNode(missingNodeException, adopted)
+              if syncConfig.redownloadMissingStateNodes =>
+            // The validated prefix before the failing block is already adopted. Count it, so the retry starts at the
+            // failing block and does not re-apply what is already in the database.
+            IO.pure((adoptedPrefix(adopted, importedBlocks), Some(missingNodeException)))
 
-          case BlockImportFailedDueToMissingNode(missingNodeException) =>
-            IO.raiseError(missingNodeException)
+          case BlockImportFailedDueToMissingNode(missingNodeException, adopted) =>
+            IO(adoptedPrefix(adopted, importedBlocks)).flatMap(_ => IO.raiseError(missingNodeException))
 
           case err @ (UnknownParent | BlockImportFailed(_)) =>
             val failedBlock = nel.head
@@ -844,6 +847,19 @@ final private class BlockImporterLogic(
             IO.pure((importedBlocks, Some(err)))
         }
 
+  /** Accounting for the validated prefix of a batch whose later block hit a missing node: those blocks are adopted, so
+    * they are imported like any other (strikes cleared, progress reported) and prepended to `importedBlocks` (newest
+    * first), which is what makes the caller's `blocks.drop(importedBlocks.size)` start at the failing block.
+    */
+  private def adoptedPrefix(adopted: List[BlockData], importedBlocks: List[Block]): List[Block] =
+    val adoptedBlocks = adopted.map(_.block)
+    adoptedBlocks.foreach(b => unknownParentStrikes -= b.hash.value)
+    val imported = adoptedBlocks.reverse ::: importedBlocks
+    if adoptedBlocks.nonEmpty then
+      imported.headOption
+        .foreach(b => supervisor ! ProgressProtocol.ImportedBlock(b.number.value, internally = false))
+    imported
+
   private def importBlock(
       block: Block,
       importMessages: ImportMessages,
@@ -870,10 +886,13 @@ final private class BlockImporterLogic(
             newBranch.lastOption.foreach(block =>
               supervisor ! ProgressProtocol.ImportedBlock(block.number.value, internally)
             )
-          case BlockImportFailedDueToMissingNode(missingNodeException) if syncConfig.redownloadMissingStateNodes =>
+          case BlockImportFailedDueToMissingNode(missingNodeException, adopted)
+              if syncConfig.redownloadMissingStateNodes =>
+            announceAdopted(adopted, internally)
             // state node re-download will be handled when downloading headers
             doLog(importMessages.missingStateNode(missingNodeException))
-          case BlockImportFailedDueToMissingNode(missingNodeException) =>
+          case BlockImportFailedDueToMissingNode(missingNodeException, adopted) =>
+            announceAdopted(adopted, internally)
             IO.raiseError(missingNodeException)
           case BlockImportFailed(error) if informFetcherOnFail =>
             fetcher ! BlockFetcher.BlockImportFailed(block.number.value, BlacklistReason.BlockImportError(error))
@@ -882,6 +901,17 @@ final private class BlockImporterLogic(
         .map(_ => Running),
       blockImportType
     )(state)
+
+  /** The validated prefix of a branch whose later block hit a missing node is adopted exactly as if the shorter branch
+    * had imported: announced to peers, taken out of the tx pool, published, and reported as progress.
+    */
+  private def announceAdopted(adopted: List[BlockData], internally: Boolean): Unit =
+    if adopted.nonEmpty then
+      val (blocks, weights) = adopted.map(data => (data.block, data.weight)).unzip
+      broadcastBlocks(blocks, weights)
+      updateTxPool(blocks, Seq.empty)
+      blocks.foreach(b => blockTopic ! Topic.Publish(NewBlockImported(b)))
+      supervisor ! ProgressProtocol.ImportedBlock(blocks.last.number.value, internally)
 
   private def broadcastBlocks(blocks: List[Block], weights: List[ChainWeight]): Unit =
     val newBlocks = (blocks, weights).mapN(BlockToBroadcast.apply)

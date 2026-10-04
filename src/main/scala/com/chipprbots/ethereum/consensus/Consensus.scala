@@ -58,5 +58,13 @@ object Consensus:
     * this is due to an inconsistency in the database.
     */
   case class ConsensusError(blockToEnqueue: List[Block], err: String) extends ConsensusResult
-  case class ConsensusErrorDueToMissingNode(blockToEnqueue: List[Block], reason: MissingNodeException)
-      extends ConsensusResult
+
+  /** A block hit a missing state node. `imported` is the prefix of the batch that executed and validated BEFORE it:
+    * those blocks are already adopted (state and best block), exactly as a successful shorter batch would have left
+    * them, so the caller must account for them and retry from the failing block, not from the head of the batch.
+    */
+  case class ConsensusErrorDueToMissingNode(
+      blockToEnqueue: List[Block],
+      reason: MissingNodeException,
+      imported: List[BlockData] = Nil
+  ) extends ConsensusResult

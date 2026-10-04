@@ -98,6 +98,7 @@ jobs:
           FUKUII_DEV: true
           EEST_FIXTURES: ${{ github.workspace }}/eest-fixtures/fixtures
           EEST_REPORT: ${{ github.workspace }}/eest-report.txt
+          EEST_TRACE: "1"
           EEST_BUILDER_REPORT: ${{ github.workspace }}/eest-builder-report.txt
           SBT_OPTS: -Xmx6g -Xss4M
 
