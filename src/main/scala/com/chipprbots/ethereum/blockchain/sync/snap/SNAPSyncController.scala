@@ -5058,7 +5058,14 @@ private class SNAPSyncControllerImpl(
                 s"${healedCodeHashes.size}, bytecode phase force-completed: $bytecodeForceCompleted) — " +
                 "bytecodeRecoveryDone NOT set"
             )
-          val doneFlags = appStateStorage.snapSyncDone().and(appStateStorage.storageRecoveryDone())
+          val doneFlags0 = appStateStorage.snapSyncDone().and(appStateStorage.storageRecoveryDone())
+          // Deferred backfill: persist the target in the same atomic commit as SnapSyncDone, so a crash after this
+          // point resumes the backfill on the next start (needsBackfillResume) instead of silently never running it.
+          val doneFlags =
+            if SNAPSyncController.chainBackfillDeferredToFinalization(snapSyncConfig) && chainDownloader.isEmpty &&
+              pivot > 0
+            then doneFlags0.and(appStateStorage.putBackfillTarget(pivot))
+            else doneFlags0
           (if bytecodeComplete then doneFlags.and(appStateStorage.bytecodeRecoveryDone()) else doneFlags).commitSync()
 
           ctx.log.info(s"SNAP sync completed successfully at block $pivot (hash=${pivotHash.value.take(8).toHex})")
@@ -5081,6 +5088,9 @@ private class SNAPSyncControllerImpl(
 
       // Phase 1 of the handshake: tell the parent that pivot/state is anchored. Parent starts RegularSync.
       syncController ! SnapSyncFinalized(pivot)
+
+      // Deferred backfill starts only now that the state is complete (no-op unless the switch is on).
+      startDeferredChainBackfill(pivot)
 
       val backfillStillRunning =
         snapSyncConfig.chainDownloadEnabled && chainDownloader.isDefined && !chainDownloadComplete
@@ -5196,9 +5206,26 @@ private class SNAPSyncControllerImpl(
         onStop(); Behaviors.same
       }
 
+  /** Start the chain downloader alongside SNAP state sync. A no-op when the backfill is deferred until the state is
+    * finalised ([[SNAPSyncController.chainDownloadRunsDuringStateSync]]); [[startDeferredChainBackfill]] starts it
+    * then.
+    */
   private def startChainDownloader(): Unit =
+    if SNAPSyncController.chainDownloadRunsDuringStateSync(snapSyncConfig) then
+      launchChainDownloader(pivotBlock.filter(_ > 0), snapSyncConfig.chainDownloadMaxConcurrentRequests)
+
+  /** State is finalised and the backfill was deferred: start it now, at the post-SNAP backfill concurrency. The target
+    * was already persisted with the SNAP-done flags, so a restart before this point resumes it through
+    * `SyncController.maybeStartBackfillResume`.
+    */
+  private def startDeferredChainBackfill(pivot: BigInt): Unit =
+    if SNAPSyncController.chainBackfillDeferredToFinalization(snapSyncConfig) && chainDownloader.isEmpty then
+      ctx.log.info("SNAP state finalised; starting deferred chain backfill (bodies and receipts) to block {}", pivot)
+      launchChainDownloader(Some(pivot).filter(_ > 0), snapSyncConfig.chainBackfillConcurrentRequests)
+
+  private def launchChainDownloader(pivotOpt: Option[BigInt], maxConcurrent: Int): Unit =
     if snapSyncConfig.chainDownloadEnabled then
-      pivotBlock.filter(_ > 0).foreach { pivot =>
+      pivotOpt.foreach { pivot =>
         if chainDownloader.isEmpty then
           ctx.log.info("Starting parallel chain download from genesis to pivot block {}", pivot)
           coordinatorGeneration += 1
@@ -5218,7 +5245,7 @@ private class SNAPSyncControllerImpl(
                 peerEventBus = peerEventBus,
                 syncConfig = syncConfig,
                 replyTo = chainDownloaderReplyAdapter,
-                maxConcurrentRequests = snapSyncConfig.chainDownloadMaxConcurrentRequests,
+                maxConcurrentRequests = maxConcurrent,
                 requestTimeout = snapSyncConfig.chainDownloadTimeout,
                 snapServerPeerNodeIds = snapServerNodeIds
               ),
@@ -5257,6 +5284,14 @@ private class SNAPSyncControllerImpl(
     catch case _: Exception => None
 
 object SNAPSyncController:
+
+  /** Whether the chain downloader runs concurrently with SNAP state sync (the historical behaviour). */
+  private[snap] def chainDownloadRunsDuringStateSync(cfg: SNAPSyncConfig): Boolean =
+    cfg.chainDownloadEnabled && !cfg.deferChainBackfillUntilStateComplete
+
+  /** Whether the chain downloader is held back until SNAP state is finalised. */
+  private[snap] def chainBackfillDeferredToFinalization(cfg: SNAPSyncConfig): Boolean =
+    cfg.chainDownloadEnabled && cfg.deferChainBackfillUntilStateComplete
 
   /** Whether a handshaked peer can serve SNAP state for our pivot: SNAP-capable, on our fork, and not sitting at its
     * genesis block. Every phase that hands peers to a coordinator filters on this: account ranges, bytecodes, storage
@@ -5815,6 +5850,11 @@ case class SNAPSyncConfig(
     // Concurrency budget for chain backfill once SNAP state is finalised and regular sync has started.
     // Smaller than `chainDownloadMaxConcurrentRequests` so backfill yields peer slots to regular sync.
     chainBackfillConcurrentRequests: Int = 2,
+    // When true, the chain downloader (headers, bodies, receipts) is NOT started while SNAP state sync runs: it starts
+    // once the state is finalised, so historical-body writes never compete with account/storage/bytecode/healing
+    // writes for disk IO. Off by default; the post-merge ETH chain configs turn it on. The pivot header and the
+    // CL-anchored header chain are fetched by PivotHeaderBootstrap, not by the chain downloader, so they are unaffected.
+    deferChainBackfillUntilStateComplete: Boolean = false,
     chainDownloadTimeout: FiniteDuration = 10.seconds,
     minSnapPeers: Int = 3,
     snapPeerEvictionInterval: FiniteDuration = 15.seconds,
@@ -5974,6 +6014,10 @@ object SNAPSyncConfig:
         if snapConfig.hasPath("chain-backfill-concurrent-requests") then
           snapConfig.getInt("chain-backfill-concurrent-requests")
         else 2,
+      deferChainBackfillUntilStateComplete =
+        if snapConfig.hasPath("defer-chain-backfill-until-state-complete") then
+          snapConfig.getBoolean("defer-chain-backfill-until-state-complete")
+        else false,
       chainDownloadTimeout =
         if snapConfig.hasPath("chain-download-timeout") then
           snapConfig.getDuration("chain-download-timeout").toMillis.millis
