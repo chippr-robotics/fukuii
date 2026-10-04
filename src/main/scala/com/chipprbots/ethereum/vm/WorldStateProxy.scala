@@ -60,6 +60,9 @@ trait WorldStateProxy[WS <: WorldStateProxy[WS, S], S <: Storage[S]]:
     */
   def getCodeAndHash(address: Address): (ByteString, Option[ByteString]) = (getCode(address), None)
 
+  /** Length of the account's code (EXTCODESIZE). A world with a cheaper way than loading the code overrides it. */
+  def getCodeSize(address: Address): Int = getCode(address).size
+
   /** The JUMPDEST analysis memo of the block this world executes (see [[JumpDestAnalysis.BlockMemo]]); `None` for a
     * world that has none, which then uses the process-wide cache directly.
     */

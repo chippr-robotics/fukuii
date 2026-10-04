@@ -37,8 +37,20 @@ class EvmCodeStorage(val dataSource: DataSource) extends TransactionalKeyValueSt
       val read = dataSource
         .getOptimizedNoFill(namespace, hash.toArray)
         .map(ByteString.fromArrayUnsafe)
-      read.foreach(code => EvmCodeStorage.shared.put(cacheKey(hash), code))
+      read.foreach { code =>
+        EvmCodeStorage.shared.put(cacheKey(hash), code)
+        EvmCodeStorage.sizes.put(cacheKey(hash), Integer.valueOf(code.length))
+      }
       read
+
+  /** The length of the code under `hash`, without loading the code when it is remembered (this cache, or the code
+    * cache). Falls back to a full [[getForExecution]], so an absent code is absent here too.
+    */
+  def getSizeForExecution(hash: CodeHash): Option[Int] =
+    val key = cacheKey(hash)
+    val known = EvmCodeStorage.sizes.getOrNull(key)
+    if known != null then Some(known.intValue)
+    else getForExecution(hash).map(_.length)
 
   /** A removal through this storage evicts the code from the execution cache, so deleting code (the missing-code
     * scenarios in tests, a future repair path) is seen by the very next execution read. The eviction happens when the
@@ -46,7 +58,10 @@ class EvmCodeStorage(val dataSource: DataSource) extends TransactionalKeyValueSt
     * something that deletes code while executing blocks, and nothing does.
     */
   override def update(toRemove: Seq[CodeHash], toUpsert: Seq[(CodeHash, Code)]) =
-    toRemove.foreach(h => EvmCodeStorage.shared.remove(cacheKey(h)))
+    toRemove.foreach { h =>
+      EvmCodeStorage.shared.remove(cacheKey(h))
+      EvmCodeStorage.sizes.remove(cacheKey(h))
+    }
     super.update(toRemove, toUpsert)
 
   // overriding to avoid going through IndexedSeq[Byte]
@@ -67,6 +82,13 @@ object EvmCodeStorage:
     new com.chipprbots.ethereum.utils.ByteBoundedLru[CacheKey, ByteString](
       com.chipprbots.ethereum.utils.StateReadCacheConfig.codeCacheBytes,
       code => code.length.toLong + 96
+    )
+
+  /** Code lengths by hash, same ownership rule as [[shared]]: only successfully read code is recorded. */
+  private lazy val sizes: com.chipprbots.ethereum.utils.ByteBoundedLru[CacheKey, Integer] =
+    new com.chipprbots.ethereum.utils.ByteBoundedLru[CacheKey, Integer](
+      com.chipprbots.ethereum.utils.StateReadCacheConfig.codeSizeCacheBytes,
+      _ => 256L
     )
 
   type CodeHash = ByteString

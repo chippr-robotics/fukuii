@@ -38,6 +38,11 @@ object StateReadCacheConfig:
     */
   lazy val codeCacheBytes: Long = cappedByHeap(bytes("code-cache-bytes", 64L * 1024 * 1024), 0.03)
 
+  /** Process-wide budget of the code-size cache (code hash to length, so EXTCODESIZE-style checks never load code), at
+    * about 256 bytes an entry (geth keeps 1,000,000 entries); 0 disables it. At most 2% of the max heap.
+    */
+  lazy val codeSizeCacheBytes: Long = cappedByHeap(bytes("code-size-cache-bytes", 64L * 1024 * 1024), 0.02)
+
   /** Process-wide budget of the decoded-node cache, in estimated retained bytes (see `DecodedNodeCache`); 0 disables
     * it. At most 4% of the max heap.
     */
