@@ -51,3 +51,8 @@ object StateReadCacheConfig:
 
   /** Process-wide budget of the JUMPDEST analysis cache; 0 disables it. At most 1% of the max heap. */
   lazy val jumpDestCacheBytes: Long = cappedByHeap(bytes("jumpdest-cache-bytes", 32L * 1024 * 1024), 0.01)
+
+  /** Budget of one block's JUMPDEST analysis memo (`JumpDestAnalysis.BlockMemo`); 0 disables it. At most 2% of the max
+    * heap. Entries are truncated analyses (often a few words), so this is rarely approached.
+    */
+  lazy val jumpDestBlockMemoBytes: Long = cappedByHeap(bytes("jumpdest-block-memo-bytes", 64L * 1024 * 1024), 0.02)

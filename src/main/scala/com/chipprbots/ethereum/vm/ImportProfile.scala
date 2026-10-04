@@ -22,6 +22,7 @@ object ImportProfile:
   private val accountNs, accountCount = new AtomicLong
   private val codeNs, codeCount, codeBytes = new AtomicLong
   private val nodeHits, nodeMisses, memoHits, codeHits = new AtomicLong
+  private val jumpMemoHits, jumpMemoMisses = new AtomicLong
   private var startNanos = 0L
 
   final case class Snapshot(
@@ -39,7 +40,9 @@ object ImportProfile:
       nodeHits: Long,
       nodeMisses: Long,
       memoHits: Long,
-      codeHits: Long
+      codeHits: Long,
+      jumpMemoHits: Long,
+      jumpMemoMisses: Long
   )
 
   private def counting: Boolean =
@@ -64,7 +67,9 @@ object ImportProfile:
         nodeHits,
         nodeMisses,
         memoHits,
-        codeHits
+        codeHits,
+        jumpMemoHits,
+        jumpMemoMisses
       )
         .foreach(_.set(0L))
       startNanos = System.nanoTime()
@@ -89,7 +94,9 @@ object ImportProfile:
       nodeHits.get,
       nodeMisses.get,
       memoHits.get,
-      codeHits.get
+      codeHits.get,
+      jumpMemoHits.get,
+      jumpMemoMisses.get
     )
 
   def frame(): Unit = if counting then frames.incrementAndGet()
@@ -128,6 +135,8 @@ object ImportProfile:
   def nodeHit(): Unit = if counting then nodeHits.incrementAndGet()
   def nodeMiss(): Unit = if counting then nodeMisses.incrementAndGet()
   def memoHit(): Unit = if counting then memoHits.incrementAndGet()
+  def jumpMemoHit(): Unit = if counting then jumpMemoHits.incrementAndGet()
+  def jumpMemoMiss(): Unit = if counting then jumpMemoMisses.incrementAndGet()
   def codeHit(): Unit = if counting then codeHits.incrementAndGet()
 
   def codeBytesRead(n: Int): Unit = if counting then codeBytes.addAndGet(n)
@@ -135,6 +144,6 @@ object ImportProfile:
   def format(blockNumber: BigInt, gasUsed: BigInt, txs: Int, s: Snapshot): String =
     def ms(n: Long) = f"${n / 1e6}%.1f"
     s"[IMPORT-TIMING] block=$blockNumber gas=$gasUsed txs=$txs total=${ms(s.totalNanos)}ms frames=${s.frames} " +
-      s"scan=${ms(s.scanNanos)}ms(n=${s.scans},hits=${s.scanHits},${s.scanBytes / 1024}KiB) " +
+      s"scan=${ms(s.scanNanos)}ms(n=${s.scans},hits=${s.scanHits},memo=${s.jumpMemoHits}/${s.jumpMemoHits + s.jumpMemoMisses},${s.scanBytes / 1024}KiB) " +
       s"getAccount=${ms(s.accountNanos)}ms(n=${s.accounts}) getCode=${ms(s.codeNanos)}ms(n=${s.codes},${s.codeBytes / 1024}KiB,hits=${s.codeHits}) " +
       s"nodes(hit=${s.nodeHits},miss=${s.nodeMisses}) readMemoHits=${s.memoHits}"

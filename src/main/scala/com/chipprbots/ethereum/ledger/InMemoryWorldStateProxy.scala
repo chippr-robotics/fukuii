@@ -16,6 +16,7 @@ import com.chipprbots.ethereum.mpt.MptNode
 import com.chipprbots.ethereum.rlp
 import com.chipprbots.ethereum.rlp.RLPImplicits.given
 import com.chipprbots.ethereum.vm.ImportProfile
+import com.chipprbots.ethereum.vm.JumpDestAnalysis
 import com.chipprbots.ethereum.vm.Storage
 import com.chipprbots.ethereum.vm.WorldStateProxy
 
@@ -221,6 +222,8 @@ class InMemoryWorldStateProxy(
       contractStorages = contractStorages - address,
       accountCodes = accountCodes - address
     )
+
+  override def jumpDestMemo: Option[JumpDestAnalysis.BlockMemo] = readMemos.jumpDests
 
   /** The account's code. An account with a non-empty `codeHash` whose code is absent from `EvmCodeStorage` is a MISSING
     * DATA condition, so it throws [[MissingCodeException]] rather than return empty code: an empty answer executes the
