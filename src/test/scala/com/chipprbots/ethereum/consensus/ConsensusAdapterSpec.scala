@@ -210,8 +210,8 @@ class ConsensusAdapterSpec extends AnyFlatSpec with Matchers with ScalaFutures w
 
     val mockExecution: BlockExecution = mock[BlockExecution]
     (mockExecution
-      .executeAndValidateBlocks(_: List[Block], _: ChainWeight)(_: BlockchainConfig))
-      .expects(newBranch, *, *)
+      .executeAndValidateBlocks(_: List[Block], _: ChainWeight, _: Boolean)(_: BlockchainConfig))
+      .expects(newBranch, *, *, *)
       .returning((List(blockData2, blockData3), None))
 
     val withMockedBlockExecution: ConsensusAdapter = blockImportWithMockedBlockExecution(mockExecution)
@@ -260,9 +260,9 @@ class ConsensusAdapterSpec extends AnyFlatSpec with Matchers with ScalaFutures w
     // exactly as real executeAndValidateBlocks does — otherwise saveBestKnownBlocks updates
     // the chain pointer to a hash that isn't in the DB and getBestBlock() returns None
     (mockExecution
-      .executeAndValidateBlocks(_: List[Block], _: ChainWeight)(_: BlockchainConfig))
-      .expects(newBranch, *, *)
-      .onCall { (_, _, _) =>
+      .executeAndValidateBlocks(_: List[Block], _: ChainWeight, _: Boolean)(_: BlockchainConfig))
+      .expects(newBranch, *, *, *)
+      .onCall { (_, _, _, _) =>
         blockchainWriter.save(newBlock2, Seq.empty[Receipt], newWeight2, saveAsBestBlock = false)
         (List(blockData2), Some(execError))
       }
@@ -370,8 +370,8 @@ class ConsensusAdapterSpec extends AnyFlatSpec with Matchers with ScalaFutures w
 
     val mockExecution: BlockExecution = mock[BlockExecution]
     (mockExecution
-      .executeAndValidateBlocks(_: List[Block], _: ChainWeight)(_: BlockchainConfig))
-      .expects(newBranch, *, *)
+      .executeAndValidateBlocks(_: List[Block], _: ChainWeight, _: Boolean)(_: BlockchainConfig))
+      .expects(newBranch, *, *, *)
       .returning((List(blockData2, blockData3), None))
 
     val withMockedBlockExecution: ConsensusAdapter = blockImportWithMockedBlockExecution(mockExecution)
@@ -403,8 +403,8 @@ class ConsensusAdapterSpec extends AnyFlatSpec with Matchers with ScalaFutures w
     val newBlock2: Block = getBlock(bestNum, difficulty = 105, parent = newBlock1.header.hash.value)
 
     (mockExecution
-      .executeAndValidateBlocks(_: List[Block], _: ChainWeight)(_: BlockchainConfig))
-      .expects(List(newBlock1, newBlock2), *, *)
+      .executeAndValidateBlocks(_: List[Block], _: ChainWeight, _: Boolean)(_: BlockchainConfig))
+      .expects(List(newBlock1, newBlock2), *, *, *)
       .returning((Nil, Some(execError)))
     val consensusAdapterWithFailingExecution: ConsensusAdapter = blockImportWithMockedBlockExecution(mockExecution)
 
@@ -434,8 +434,8 @@ class ConsensusAdapterSpec extends AnyFlatSpec with Matchers with ScalaFutures w
     val newBlock2bis: Block = getBlock(bestNum + 2, difficulty = 50, parent = newBlock1.header.hash.value)
 
     (mockExecution
-      .executeAndValidateBlocks(_: List[Block], _: ChainWeight)(_: BlockchainConfig))
-      .expects(List(newBlock1, newBlock2), *, *)
+      .executeAndValidateBlocks(_: List[Block], _: ChainWeight, _: Boolean)(_: BlockchainConfig))
+      .expects(List(newBlock1, newBlock2), *, *, *)
       .returning((Nil, Some(execError)))
     val consensusAdapterWithFailingExecution: ConsensusAdapter = blockImportWithMockedBlockExecution(mockExecution)
 
@@ -469,8 +469,8 @@ class ConsensusAdapterSpec extends AnyFlatSpec with Matchers with ScalaFutures w
     val newBlock3bis: Block = getBlock(bestNum + 3, difficulty = 50, parent = newBlock2.header.hash.value)
 
     (mockExecution
-      .executeAndValidateBlocks(_: List[Block], _: ChainWeight)(_: BlockchainConfig))
-      .expects(List(newBlock1, newBlock2, newBlock3), *, *)
+      .executeAndValidateBlocks(_: List[Block], _: ChainWeight, _: Boolean)(_: BlockchainConfig))
+      .expects(List(newBlock1, newBlock2, newBlock3), *, *, *)
       .returning((List(BlockData(newBlock1, Nil, currentWeight.increase(newBlock1.header))), Some(execError)))
     val consensusAdapterWithFailingExecution: ConsensusAdapter = blockImportWithMockedBlockExecution(mockExecution)
 
@@ -509,8 +509,8 @@ class ConsensusAdapterSpec extends AnyFlatSpec with Matchers with ScalaFutures w
     val newBlock3bis: Block = getBlock(bestNum + 3, difficulty = 10, parent = badBlock.header.hash.value)
 
     (mockExecution
-      .executeAndValidateBlocks(_: List[Block], _: ChainWeight)(_: BlockchainConfig))
-      .expects(List(badBlock, newBlock3), *, *)
+      .executeAndValidateBlocks(_: List[Block], _: ChainWeight, _: Boolean)(_: BlockchainConfig))
+      .expects(List(badBlock, newBlock3), *, *, *)
       .returning((Nil, Some(execError)))
     val consensusAdapterWithFailingExecution: ConsensusAdapter = blockImportWithMockedBlockExecution(mockExecution)
 

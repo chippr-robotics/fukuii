@@ -40,6 +40,10 @@ case class BlockImportFailed(error: String) extends BlockImportResult
   */
 final class BlockImportFailedAt(message: String, val failingBlockHash: ByteString) extends BlockImportFailed(message)
 
-case class BlockImportFailedDueToMissingNode(reason: MissingNodeException) extends BlockImportResult
+/** `imported` is the validated prefix of the batch that was adopted before the missing node was hit; it is announced
+  * like any imported blocks, and the retry starts at the first block after it.
+  */
+case class BlockImportFailedDueToMissingNode(reason: MissingNodeException, imported: List[BlockData] = Nil)
+    extends BlockImportResult
 
 case object UnknownParent extends BlockImportResult

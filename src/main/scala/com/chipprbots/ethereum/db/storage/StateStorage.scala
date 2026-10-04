@@ -8,6 +8,7 @@ import com.chipprbots.ethereum.blockchain.sync.codec.MptNodeCodecs.*
 import com.chipprbots.ethereum.db.cache.LruCache
 import com.chipprbots.ethereum.db.cache.MapCache
 import com.chipprbots.ethereum.db.dataSource.DataSource
+import com.chipprbots.ethereum.db.dataSource.DataSourceBatchUpdate
 import com.chipprbots.ethereum.db.dataSource.EphemDataSource
 import com.chipprbots.ethereum.db.storage.NodeStorage.NodeEncoded
 import com.chipprbots.ethereum.db.storage.NodeStorage.NodeHash
@@ -18,9 +19,41 @@ import com.chipprbots.ethereum.db.storage.pruning.PruningMode
 import com.chipprbots.ethereum.mpt.MptNode
 import com.chipprbots.ethereum.utils.NodeCacheConfig
 
+/** The state writes of ONE block under execution, held back until the block is accepted.
+  *
+  * Execution persists the trie after every transaction, and under basic pruning each persist increments reference
+  * counts and writes snapshots and death rows. Applied straight to the database, a block that then fails (a missing
+  * node on transaction 5, a state-root mismatch after the last) leaves all of that behind, and the retry applies it a
+  * second time: counts skew, and a live node ends at zero references on a death row (devnet-8, block 320603).
+  *
+  * A staged block writes into a buffer instead. `pending` is the buffer as a batch update the caller commits in the
+  * SAME atomic write as the block's header, receipts, chain weight and best-block pointer, so a block's state exists if
+  * and only if the block does. A failed block is `discard`ed and leaves nothing. No snapshot is ever rolled back by
+  * block number: there is nothing to roll back.
+  */
+trait StagedBlockState:
+  /** The storage block execution reads and writes. */
+  def storage: MptStorage
+
+  /** Buffered writes to commit atomically with the block; `None` when this mode writes straight through. */
+  def pending: Option[DataSourceBatchUpdate]
+
+  /** Drop the buffered writes and evict what execution read back from them out of the decoded-node cache. */
+  def discard(): Unit
+
+object StagedBlockState:
+  /** Write-through, for the modes that never skewed (archive, in-memory pruning): nothing to hold back. */
+  def direct(backing: MptStorage): StagedBlockState = new StagedBlockState:
+    override def storage: MptStorage = backing
+    override def pending: Option[DataSourceBatchUpdate] = None
+    override def discard(): Unit = ()
+
 // scalastyle:off
 trait StateStorage:
   def getBackingStorage(bn: BigInt): MptStorage
+
+  /** Storage for executing block `bn` whose writes are held back until the caller commits them. */
+  def stageBlock(bn: BigInt): StagedBlockState = StagedBlockState.direct(getBackingStorage(bn))
   def getReadOnlyStorage: MptStorage
 
   def onBlockSave(bn: BigInt, currentBestSavedBlock: BigInt)(updateBestBlocksData: () => Unit): Unit
@@ -109,6 +142,17 @@ class ReferenceCountedStateStorage(
 
   override def getBackingStorage(bn: BigInt): MptStorage =
     new SerializingMptStorage(new ReferenceCountNodeStorage(nodeStorage, bn), decodedNodes)
+
+  override def stageBlock(bn: BigInt): StagedBlockState =
+    val buffered = new BufferedNodeStorage(nodeStorage)
+    new StagedBlockState:
+      override val storage: MptStorage =
+        new SerializingMptStorage(new ReferenceCountNodeStorage(buffered, bn), decodedNodes)
+      override def pending: Option[DataSourceBatchUpdate] = Option.when(!buffered.isEmpty)(buffered.pending)
+      override def discard(): Unit =
+        // Execution read nodes back out of the buffer through the decoded-node cache; they are not in the database, so
+        // the cache must forget them (a cached node must never outlive its presence in the database).
+        decodedNodes.foreach(_.evict(buffered.touchedKeys))
 
   override def getReadOnlyStorage: MptStorage =
     new SerializingMptStorage(ReadOnlyNodeStorage(new FastSyncNodeStorage(nodeStorage, 0)))

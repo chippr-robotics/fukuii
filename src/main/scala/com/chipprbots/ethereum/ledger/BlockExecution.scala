@@ -10,6 +10,7 @@ import com.chipprbots.ethereum.consensus.pow.validators.OmmersValidator.OmmersEr
 import com.chipprbots.ethereum.consensus.validators.BlockHeaderError
 import com.chipprbots.ethereum.consensus.validators.std.StdBlockValidator.BlockError
 import com.chipprbots.ethereum.db.storage.EvmCodeStorage
+import com.chipprbots.ethereum.db.storage.StagedBlockState
 import com.chipprbots.ethereum.domain.*
 import com.chipprbots.ethereum.ledger.BlockExecutionError.MissingParentError
 import com.chipprbots.ethereum.mpt.MerklePatriciaTrie.MPTException
@@ -56,13 +57,34 @@ class BlockExecution(
   )(implicit
       blockchainConfig: BlockchainConfig
   ): Either[BlockExecutionError, (Seq[Receipt], Seq[ByteString], Option[BlockAccessList])] =
+    val staged = blockchain.stageBlockState(block.header.number.value)
+    val result =
+      try executeAndValidateStaged(block, alreadyValidated, staged)
+      catch
+        case t: Throwable =>
+          staged.discard()
+          throw t
+    result match
+      // Accepted: its state goes to the database (nobody else commits it here). Rejected: it leaves nothing behind.
+      case Right(_) => staged.pending.foreach(_.commit())
+      case Left(_)  => staged.discard()
+    result
+
+  /** Executes and validates `block` against `staged`; the caller commits or discards what it staged. */
+  protected[ledger] def executeAndValidateStaged(
+      block: Block,
+      alreadyValidated: Boolean,
+      staged: StagedBlockState
+  )(implicit
+      blockchainConfig: BlockchainConfig
+  ): Either[BlockExecutionError, (Seq[Receipt], Seq[ByteString], Option[BlockAccessList])] =
     val preExecValidationResult =
       if alreadyValidated then Right(block) else blockValidation.validateBlockBeforeExecution(block)
 
     val blockExecResult =
       for
         _ <- preExecValidationResult
-        result <- executeBlock(block)
+        result <- executeBlock(block, staged = Some(staged))
         _ <- blockValidation.validateBlockAfterExecution(
           block,
           result.worldState.stateRootHash,
@@ -189,12 +211,13 @@ class BlockExecution(
   /** Executes a block (executes transactions and pays rewards), logging where its time went at INFO. */
   private def executeBlock(
       block: Block,
-      isProposer: Boolean = false
+      isProposer: Boolean = false,
+      staged: Option[StagedBlockState] = None
   )(implicit blockchainConfig: BlockchainConfig): Either[BlockExecutionError, BlockResult] =
     val timing = !isProposer && ImportProfile.begin()
     var snapshot: Option[ImportProfile.Snapshot] = None
     val result =
-      try executeBlockUntimed(block, isProposer)
+      try executeBlockUntimed(block, isProposer, staged)
       finally if timing then snapshot = Some(ImportProfile.end())
     snapshot.foreach { s =>
       val gas = result.toOption.fold(BigInt(0))(_.gasUsed)
@@ -205,7 +228,8 @@ class BlockExecution(
 
   private def executeBlockUntimed(
       block: Block,
-      isProposer: Boolean
+      isProposer: Boolean,
+      staged: Option[StagedBlockState]
   )(implicit blockchainConfig: BlockchainConfig): Either[BlockExecutionError, BlockResult] =
     // EIP-7928: an Amsterdam block builds its access list as it executes, one block access index at a time — 0 for the
     // preamble system calls, i + 1 per transaction, n + 1 for the withdrawals and the request system calls below.
@@ -217,7 +241,7 @@ class BlockExecution(
         parentHeader <- blockchainReader
           .getBlockHeaderByHash(block.header.parentHash)
           .toRight(MissingParentError) // Should not never occur because validated earlier
-        initialWorld = buildInitialWorld(block, parentHeader, isProposer)
+        initialWorld = buildInitialWorld(block, parentHeader, isProposer, staged)
         execResult <- executeBlockTransactions(block, initialWorld, accessList)
         worldAfterReward <- Either
           .catchOnly[MPTException](blockPreparator.payBlockReward(block, execResult.worldState))
@@ -258,7 +282,12 @@ class BlockExecution(
         )
     catch case e: MPTException => Left(BlockExecutionError.MPTError(e))
 
-  protected def buildInitialWorld(block: Block, parentHeader: BlockHeader, isProposer: Boolean = false)(implicit
+  protected def buildInitialWorld(
+      block: Block,
+      parentHeader: BlockHeader,
+      isProposer: Boolean = false,
+      staged: Option[StagedBlockState] = None
+  )(implicit
       blockchainConfig: BlockchainConfig
   ): InMemoryWorldStateProxy =
     // `isProposer` originally switched to `getReadOnlyMptStorage()` to keep proposer-mode tx
@@ -272,7 +301,7 @@ class BlockExecution(
     val _ = isProposer
     InMemoryWorldStateProxy(
       evmCodeStorage = evmCodeStorage,
-      blockchain.getBackingMptStorage(block.header.number.value) match
+      staged.fold(blockchain.getBackingMptStorage(block.header.number.value))(_.storage) match
         // Execution alone reads through the decoded-node cache; see DecodedNodeCache.
         case serializing: SerializingMptStorage => serializing.cachedForExecution
         case other                              => other,
@@ -464,6 +493,12 @@ class BlockExecution(
     *   blocks to be executed
     * @param parentChainWeight
     *   parent weight
+    * @param adoptEachBlock
+    *   make each block the best block in the same atomic write that stores it (the extends-best import path). False for
+    *   a side branch: `ConsensusImpl.settleHead` decides afterwards which head the node keeps.
+    *
+    * Each block's state writes are staged and committed with the block, or not at all: a block that fails leaves
+    * nothing behind, so a retry starting at it applies nothing twice. See [[StagedBlockState]].
     *
     * @return
     *   a list of blocks in incremental order that were correctly executed and an optional
@@ -471,7 +506,8 @@ class BlockExecution(
     */
   def executeAndValidateBlocks(
       blocks: List[Block],
-      parentChainWeight: ChainWeight
+      parentChainWeight: ChainWeight,
+      adoptEachBlock: Boolean = false
   )(implicit blockchainConfig: BlockchainConfig): (List[BlockData], Option[BlockExecutionError]) =
     @tailrec
     def go(
@@ -503,24 +539,37 @@ class BlockExecution(
         // single @tailrec loop on one thread, each iteration's `blockchainWriter.save`
         // completes before the next begins, and `executeBlock` already resolves the parent
         // header from the same storage at BlockExecution.scala:104-106.
-        executeAndValidateBlockFull(blockToExecute, alreadyValidated = false) match
+        val staged = blockchain.stageBlockState(blockToExecute.header.number.value)
+        val outcome =
+          try executeAndValidateStaged(blockToExecute, alreadyValidated = false, staged)
+          catch
+            case t: Throwable =>
+              staged.discard()
+              throw t
+        outcome match
           case Right((receipts, _, blockAccessList)) =>
             val newWeight = parentWeight.increase(blockToExecute.header)
             val newBlockData = BlockData(blockToExecute, receipts, newWeight)
-            blockchainWriter.save(
+            // ONE atomic write: the block, its receipts and weight, its access list, the state it wrote (trie nodes,
+            // reference counts, snapshots, death row) and, when adopting, the best-block pointer. A kill can no longer
+            // leave a block's state applied but the block not, and a block that failed above staged nothing at all.
+            val base = blockchainWriter.saveBatch(
               newBlockData.block,
               newBlockData.receipts,
               newBlockData.weight,
-              saveAsBestBlock = false
+              saveAsBestBlock = adoptEachBlock
             )
             // EIP-7928: the list the block just validated against.
-            blockAccessList.foreach(bal =>
-              blockchainWriter.storeBlockAccessList(blockToExecute.header.hash, bal).commit()
-            )
+            val withAccessList =
+              blockAccessList.fold(base)(bal =>
+                base.and(blockchainWriter.storeBlockAccessList(blockToExecute.header.hash, bal))
+              )
+            staged.pending.fold(withAccessList)(withAccessList.and).commit()
             blockchain.saveBlockState(blockToExecute.header.number.value)
             blockchainReader.recordBlockDifficulty(blockToExecute.header.difficulty)
             go(newBlockData :: executedBlocksDecOrder, remainingBlocksIncOrder.tail, newWeight)
           case Left(executionError) =>
+            staged.discard()
             (executedBlocksDecOrder.reverse, Some(executionError))
 
     go(List.empty[BlockData], blocks, parentChainWeight)

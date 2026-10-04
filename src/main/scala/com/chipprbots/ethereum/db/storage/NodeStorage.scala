@@ -8,6 +8,7 @@ import fs2.Stream
 
 import com.chipprbots.ethereum.db.cache.Cache
 import com.chipprbots.ethereum.db.dataSource.DataSource
+import com.chipprbots.ethereum.db.dataSource.DataSourceBatchUpdate
 import com.chipprbots.ethereum.db.dataSource.DataSourceUpdateOptimized
 import com.chipprbots.ethereum.db.dataSource.RocksDbDataSource.IterationError
 import com.chipprbots.ethereum.db.storage.NodeStorage.NodeEncoded
@@ -76,6 +77,54 @@ class CachedNodeStorage(val storage: NodeStorage, val cache: Cache[NodeHash, Nod
   override type I = NodeStorage
   override def apply(cache: Cache[NodeHash, NodeEncoded], storage: NodeStorage): CachedNodeStorage =
     new CachedNodeStorage(storage, cache)
+
+/** A write buffer over a [[NodeStorage]]: reads see the buffered writes first, nothing reaches the database until the
+  * caller commits [[pending]] (typically together with the block it belongs to, in ONE atomic batch), and dropping the
+  * buffer throws the lot away.
+  *
+  * It sits BELOW [[ReferenceCountNodeStorage]], which therefore computes reference counts, snapshots and death rows
+  * exactly as it does against the database: it re-reads `dr<bn>` and `sck<bn>` on every update to accumulate, and those
+  * reads are served from this buffer.
+  */
+final class BufferedNodeStorage(val base: NodeStorage) extends NodesStorage:
+  private val buffer = scala.collection.mutable.LinkedHashMap.empty[NodeHash, Option[NodeEncoded]]
+
+  override def get(key: NodeHash): Option[NodeEncoded] = buffer.get(key) match
+    case Some(buffered) => buffered
+    case None           => base.get(key)
+
+  override def multiGet(keys: Seq[NodeHash]): Seq[Option[NodeEncoded]] =
+    val misses = keys.filterNot(buffer.contains)
+    val fetched =
+      if misses.isEmpty then Map.empty[NodeHash, Option[NodeEncoded]] else misses.zip(base.multiGet(misses)).toMap
+    keys.map(k => buffer.getOrElse(k, fetched.getOrElse(k, None)))
+
+  override def update(toRemove: Seq[NodeHash], toUpsert: Seq[(NodeHash, NodeEncoded)]): NodesStorage =
+    toRemove.foreach(k => buffer.update(k, None))
+    toUpsert.foreach { case (k, v) => buffer.update(k, Some(v)) }
+    this
+
+  override def updateCond(
+      toRemove: Seq[NodeHash],
+      toUpsert: Seq[(NodeHash, NodeEncoded)],
+      inMemory: Boolean
+  ): NodesStorage = update(toRemove, toUpsert)
+
+  /** Every key written or removed, for evicting a discarded block's nodes from caches. */
+  def touchedKeys: Seq[NodeHash] = buffer.keys.toSeq
+
+  def isEmpty: Boolean = buffer.isEmpty
+
+  /** The buffered writes as one update on the node namespace, empty batch when nothing was written. */
+  def pending: DataSourceBatchUpdate =
+    val removes = buffer.collect { case (k, None) => k.toArray }.toSeq
+    val upserts = buffer.collect { case (k, Some(v)) => k.toArray -> v }.toSeq
+    if removes.isEmpty && upserts.isEmpty then DataSourceBatchUpdate(base.dataSource)
+    else
+      DataSourceBatchUpdate(
+        base.dataSource,
+        Array(DataSourceUpdateOptimized(Namespaces.NodeNamespace, removes, upserts))
+      )
 
 object NodeStorage:
   type NodeHash = ByteString

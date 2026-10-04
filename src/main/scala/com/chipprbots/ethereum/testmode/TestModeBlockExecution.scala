@@ -1,6 +1,7 @@
 package com.chipprbots.ethereum.testmode
 
 import com.chipprbots.ethereum.db.storage.EvmCodeStorage
+import com.chipprbots.ethereum.db.storage.StagedBlockState
 import com.chipprbots.ethereum.domain.Block
 import com.chipprbots.ethereum.domain.BlockHeader
 import com.chipprbots.ethereum.domain.BlockchainImpl
@@ -32,13 +33,16 @@ class TestModeBlockExecution(
       blockValidation
     ):
 
-  override protected def buildInitialWorld(block: Block, parentHeader: BlockHeader, isProposer: Boolean = false)(
-      implicit blockchainConfig: BlockchainConfig
-  ): InMemoryWorldStateProxy =
+  override protected def buildInitialWorld(
+      block: Block,
+      parentHeader: BlockHeader,
+      isProposer: Boolean = false,
+      staged: Option[StagedBlockState] = None
+  )(implicit blockchainConfig: BlockchainConfig): InMemoryWorldStateProxy =
     val _ = isProposer // see BlockExecution.buildInitialWorld: read-only did not hold invariants
     TestModeWorldStateProxy(
       evmCodeStorage = evmCodeStorage,
-      nodesKeyValueStorage = blockchain.getBackingMptStorage(block.header.number.value),
+      nodesKeyValueStorage = staged.fold(blockchain.getBackingMptStorage(block.header.number.value))(_.storage),
       getBlockHashByNumber = AncestorBlockHashes.forBlock(block.header, blockchainReader),
       accountStartNonce = blockchainConfig.accountStartNonce,
       stateRootHash = parentHeader.stateRoot.value,

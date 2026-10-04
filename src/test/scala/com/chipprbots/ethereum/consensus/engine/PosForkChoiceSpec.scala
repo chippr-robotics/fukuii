@@ -468,10 +468,10 @@ class PosForkChoiceSpec extends AnyFlatSpec with Matchers with ScalaFutures with
 
     override lazy val blockExecution: BlockExecution = stub[BlockExecution]
     (blockExecution
-      .executeAndValidateBlocks(_: List[Block], _: ChainWeight)(_: BlockchainConfig))
-      .when(*, *, *)
+      .executeAndValidateBlocks(_: List[Block], _: ChainWeight, _: Boolean)(_: BlockchainConfig))
+      .when(*, *, *, *)
       .anyNumberOfTimes()
-      .onCall { (blocks, weight, _) =>
+      .onCall { (blocks, weight, _, _) =>
         val ok = blocks.takeWhile(b => !failingBlockHash.contains(b.hash.value))
         executedBlocks ++= ok
         val executed = ok.foldLeft((weight, List.empty[BlockData])) { case ((w, acc), b) =>

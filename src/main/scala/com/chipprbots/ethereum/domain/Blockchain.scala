@@ -118,6 +118,10 @@ class BlockchainImpl(
 
   def getReadOnlyMptStorage(): MptStorage = stateStorage.getReadOnlyStorage
 
+  /** State storage for executing block `blockNumber`, its writes held back until committed. See [[StagedBlockState]].
+    */
+  def stageBlockState(blockNumber: BigInt): StagedBlockState = stateStorage.stageBlock(blockNumber)
+
   override def saveBlockState(bn: BigInt): Unit =
     stateStorage.onBlockSave(bn, appStateStorage.getBestBlockNumber())(() => ())
 

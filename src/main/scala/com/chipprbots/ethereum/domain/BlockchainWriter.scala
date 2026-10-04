@@ -29,6 +29,17 @@ class BlockchainWriter(
 ) extends Logger:
 
   def save(block: Block, receipts: Seq[Receipt], weight: ChainWeight, saveAsBestBlock: Boolean): Unit =
+    saveBatch(block, receipts, weight, saveAsBestBlock).commit()
+
+  /** [[save]] without committing, so a caller can add to the same atomic write (the block's staged state, its access
+    * list): a block's state must exist if and only if the block does.
+    */
+  def saveBatch(
+      block: Block,
+      receipts: Seq[Receipt],
+      weight: ChainWeight,
+      saveAsBestBlock: Boolean
+  ): DataSourceBatchUpdate =
     val updateBestBlocks = if saveAsBestBlock then
       log.debug(
         "New best known block number - {}",
@@ -42,7 +53,6 @@ class BlockchainWriter(
       .and(storeReceipts(block.header.hash, receipts))
       .and(storeChainWeight(block.header.hash, weight))
       .and(updateBestBlocks)
-      .commit()
 
   def storeReceipts(blockHash: BlockHash, receipts: Seq[Receipt]): DataSourceBatchUpdate =
     receiptStorage.put(blockHash.value, receipts)

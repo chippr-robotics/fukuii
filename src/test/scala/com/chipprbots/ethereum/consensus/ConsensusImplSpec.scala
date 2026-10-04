@@ -14,6 +14,7 @@ import com.chipprbots.ethereum.BlockHelpers
 import com.chipprbots.ethereum.NormalPatience
 import com.chipprbots.ethereum.blockchain.sync.EphemBlockchainTestSetup
 import com.chipprbots.ethereum.consensus.Consensus.BranchExecutionFailure
+import com.chipprbots.ethereum.consensus.Consensus.ConsensusErrorDueToMissingNode
 import com.chipprbots.ethereum.consensus.Consensus.ExtendedCurrentBestBranch
 import com.chipprbots.ethereum.consensus.Consensus.ExtendedCurrentBestBranchPartially
 import com.chipprbots.ethereum.consensus.Consensus.KeptCurrentBestBranch
@@ -24,7 +25,9 @@ import com.chipprbots.ethereum.domain.Block
 import com.chipprbots.ethereum.domain.ChainWeight
 import com.chipprbots.ethereum.ledger.BlockData
 import com.chipprbots.ethereum.ledger.BlockExecution
+import com.chipprbots.ethereum.ledger.BlockExecutionError.MPTError
 import com.chipprbots.ethereum.ledger.BlockExecutionError.ValidationAfterExecError
+import com.chipprbots.ethereum.mpt.MerklePatriciaTrie.MissingNodeException
 import com.chipprbots.ethereum.testing.Tags.*
 import com.chipprbots.ethereum.utils.BlockchainConfig
 
@@ -278,23 +281,59 @@ class ConsensusImplSpec extends AnyFlatSpec with Matchers with ScalaFutures with
       initialChain(3).hash
     )
 
+  it should "adopt the validated prefix when a later block hits a missing node, and return the error for that block only" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in new ConsensusSetup:
+    // b5 extends the best block; b6 executes; b7 hits a missing node. b5 and b6 are validated, so they are adopted
+    // exactly as a successful two-block batch would have been, and the retry starts at b7. Before, best stayed put
+    // and the whole batch was applied again, which skewed the reference counts of everything b5/b6 touched.
+    val branch: List[Block] = BlockHelpers.generateChain(3, initialBestBlock)
+    setMissingNodeAt(branch(2))
+
+    whenReady(consensus.evaluateBranch(NonEmptyList.fromListUnsafe(branch)).unsafeToFuture()) {
+      case ConsensusErrorDueToMissingNode(enqueue, _, imported) =>
+        enqueue shouldBe Nil
+        imported.map(_.block) shouldBe branch.take(2)
+      case other => fail(s"expected ConsensusErrorDueToMissingNode, got $other")
+    }
+    blockchainReader.getBestBlock shouldBe Some(branch(1))
+
+  it should "adopt nothing when the FIRST block of the branch hits a missing node" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in new ConsensusSetup:
+    val branch: List[Block] = BlockHelpers.generateChain(2, initialBestBlock)
+    setMissingNodeAt(branch.head)
+
+    whenReady(consensus.evaluateBranch(NonEmptyList.fromListUnsafe(branch)).unsafeToFuture()) {
+      case ConsensusErrorDueToMissingNode(_, _, imported) => imported shouldBe Nil
+      case other => fail(s"expected ConsensusErrorDueToMissingNode, got $other")
+    }
+    blockchainReader.getBestBlock shouldBe Some(initialBestBlock)
+
   // SCALA 3 MIGRATION: Moved ConsensusSetup inside class to access MockFactory context
   class ConsensusSetup extends EphemBlockchainTestSetup:
     override lazy val blockExecution: BlockExecution = stub[BlockExecution]
 
     // Set up stub behavior
     (blockExecution
-      .executeAndValidateBlocks(_: List[Block], _: ChainWeight)(_: BlockchainConfig))
-      .when(*, *, *)
+      .executeAndValidateBlocks(_: List[Block], _: ChainWeight, _: Boolean)(_: BlockchainConfig))
+      .when(*, *, *, *)
       .anyNumberOfTimes()
-      .onCall { (blocks, _, _) =>
+      .onCall { (blocks, _, _, _) =>
         val executedBlocks = blocks
           .takeWhile(b => !failingBlockHash.contains(b.hash))
           .map(b => BlockData(b, Nil, ChainWeight.zero))
         executedBlocks.foreach(b => blockchainWriter.save(b.block, b.receipts, b.weight, false))
         (
           executedBlocks,
-          blocks.find(b => failingBlockHash.contains(b.hash)).map(_ => ValidationAfterExecError("test error"))
+          blocks
+            .find(b => failingBlockHash.contains(b.hash))
+            .map(b =>
+              if missingNodeFailure then MPTError(new MissingNodeException(b.hash.value))
+              else ValidationAfterExecError("test error")
+            )
         )
       }
 
@@ -306,10 +345,14 @@ class ConsensusImplSpec extends AnyFlatSpec with Matchers with ScalaFutures with
     }
 
     private var failingBlockHash: Option[ByteString] = None
+    private var missingNodeFailure: Boolean = false
 
     implicit val runtime: IORuntime = IORuntime.global
 
     def setFailingBlock(block: Block): Unit = failingBlockHash = Some(block.hash.value)
+    def setMissingNodeAt(block: Block): Unit =
+      failingBlockHash = Some(block.hash.value)
+      missingNodeFailure = true
 
     def consensusWith(designatedHead: Option[DesignatedHead]): ConsensusImpl =
       new ConsensusImpl(blockchainReader, blockchainWriter, blockExecution, None, designatedHead)

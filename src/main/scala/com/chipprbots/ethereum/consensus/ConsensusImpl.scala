@@ -197,13 +197,17 @@ class ConsensusImpl(
   private def importToTop(branch: NonEmptyList[Block], currentBestBlockWeight: ChainWeight)(implicit
       blockchainConfig: BlockchainConfig
   ): ConsensusResult =
-    blockExecution.executeAndValidateBlocks(branch.toList, currentBestBlockWeight) match
+    blockExecution.executeAndValidateBlocks(branch.toList, currentBestBlockWeight, adoptEachBlock = true) match
       case (importedBlocks, None) =>
         saveLastBlock(importedBlocks)
         ExtendedCurrentBestBranch(importedBlocks)
 
-      case (_, Some(MPTError(reason: MissingNodeException))) =>
-        ConsensusErrorDueToMissingNode(Nil, reason)
+      case (importedBlocks, Some(MPTError(reason: MissingNodeException))) =>
+        // The blocks before the failing one executed and validated: adopt them, as a successful shorter batch would
+        // have, and return the error for the failing block alone. The retry then starts there and nothing is applied
+        // twice. (The failing block itself staged nothing; see BlockExecution.executeAndValidateBlocks.)
+        saveLastBlock(importedBlocks)
+        ConsensusErrorDueToMissingNode(Nil, reason, importedBlocks)
 
       case (Nil, Some(error)) =>
         // Nothing executed, so the failing block is the branch head and its parent is the current best block
@@ -333,6 +337,8 @@ class ConsensusImpl(
         blockImportData.foreach(blockData => BlockMetrics.measure(blockData.block, blockchainReader.getBlockByHash))
       case SelectedNewBestBranch(_, newBranch, _) =>
         newBranch.foreach(block => BlockMetrics.measure(block, blockchainReader.getBlockByHash))
+      case ConsensusErrorDueToMissingNode(_, _, adopted) =>
+        adopted.foreach(blockData => BlockMetrics.measure(blockData.block, blockchainReader.getBlockByHash))
       case _ => ()
 
   /** Decide which head the node keeps after executing (a prefix of) a new branch, and make the canonical index exactly

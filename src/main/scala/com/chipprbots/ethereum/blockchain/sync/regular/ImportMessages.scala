@@ -24,13 +24,13 @@ sealed abstract class ImportMessages(block: Block):
 
   def messageForImportResult(importResult: BlockImportResult): LogEntry =
     importResult match
-      case BlockImportedToTop(_)                     => importedToTheTop()
-      case BlockEnqueued                             => enqueued()
-      case DuplicateBlock                            => duplicated()
-      case UnknownParent                             => orphaned()
-      case ChainReorganised(oldBranch, newBranch, _) => reorganisedChain(oldBranch, newBranch)
-      case BlockImportFailed(error)                  => importFailed(error)
-      case BlockImportFailedDueToMissingNode(reason) => missingStateNode(reason)
+      case BlockImportedToTop(_)                        => importedToTheTop()
+      case BlockEnqueued                                => enqueued()
+      case DuplicateBlock                               => duplicated()
+      case UnknownParent                                => orphaned()
+      case ChainReorganised(oldBranch, newBranch, _)    => reorganisedChain(oldBranch, newBranch)
+      case BlockImportFailed(error)                     => importFailed(error)
+      case BlockImportFailedDueToMissingNode(reason, _) => missingStateNode(reason)
 
 object ImportMessages:
   type LogEntry = (LogLevel, String)

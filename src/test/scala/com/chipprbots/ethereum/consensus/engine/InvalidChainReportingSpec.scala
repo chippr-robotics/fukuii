@@ -679,10 +679,10 @@ class InvalidChainReportingSpec
     override lazy val blockExecution: BlockExecution = stub[BlockExecution]
 
     (blockExecution
-      .executeAndValidateBlocks(_: List[Block], _: ChainWeight)(_: BlockchainConfig))
-      .when(*, *, *)
+      .executeAndValidateBlocks(_: List[Block], _: ChainWeight, _: Boolean)(_: BlockchainConfig))
+      .when(*, *, *, *)
       .anyNumberOfTimes()
-      .onCall { (blocks, _, _) =>
+      .onCall { (blocks, _, _, _) =>
         val executed = blocks
           .takeWhile(b => !failingBlockHash.contains(b.hash.value))
           .map(b => BlockData(b, Nil, ChainWeight.zero))
@@ -767,10 +767,10 @@ class InvalidChainReportingSpec
 
     override lazy val blockExecution: BlockExecution = stub[BlockExecution]
     (blockExecution
-      .executeAndValidateBlocks(_: List[Block], _: ChainWeight)(_: BlockchainConfig))
-      .when(*, *, *)
+      .executeAndValidateBlocks(_: List[Block], _: ChainWeight, _: Boolean)(_: BlockchainConfig))
+      .when(*, *, *, *)
       .anyNumberOfTimes()
-      .onCall { (blocks, weight, _) =>
+      .onCall { (blocks, weight, _, _) =>
         val ok = blocks.takeWhile(_.hash != p8.hash)
         val executed = ok.foldLeft((weight, List.empty[BlockData])) { case ((w, acc), b) =>
           val next = w.increase(b.header)
