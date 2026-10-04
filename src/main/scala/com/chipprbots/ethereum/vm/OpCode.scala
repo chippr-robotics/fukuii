@@ -708,7 +708,7 @@ case object EXTCODESIZE extends OpCode(0x3b, 1, 1, _.G_extcode) with AddrAccessG
     val addr = Address(addrUint)
     // EIP-7928: read once the access and code-read costs are paid, which is all EXTCODESIZE costs.
     BlockAccessRecorder.account(state.env.accessRecorder, addr)
-    val codeSize = state.world.getCode(addr).size
+    val codeSize = state.world.getCodeSize(addr)
     val stack2 = stack1.push(UInt256(codeSize))
     state.withStack(stack2).addAccessedAddress(addr).step()
 

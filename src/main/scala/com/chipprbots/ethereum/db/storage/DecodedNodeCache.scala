@@ -37,7 +37,7 @@ object DecodedNodeCache:
     * little over 7x its RLP (the parsed RLP tree, a `HashNode` and hash array per child, the cached encoding and hash).
     * 8x plus a fixed header is the conservative estimate; the earlier 3x let the cache hold 2.5x its budget.
     */
-  private def weigh(node: MptNode): Long = node.cachedRlpEncoded.fold(512L)(_.length.toLong) * 8 + 160
+  private[storage] def weigh(node: MptNode): Long = node.cachedRlpEncoded.fold(512L)(_.length.toLong) * 8 + 160
 
   /** One cache for the whole process, so the budget bounds the heap however many state storages exist. */
   private lazy val shared: ByteBoundedLru[Key, MptNode] =
@@ -61,7 +61,7 @@ final class CachingMptStorage(underlying: MptStorage, cache: DecodedNodeCache) e
     val key = ByteString.fromArrayUnsafe(nodeId)
     val hit = cache.get(key)
     if hit != null then
-      ImportProfile.nodeHit()
+      ImportProfile.nodeHit(key)
       hit
     else
       val node = underlying.get(nodeId)

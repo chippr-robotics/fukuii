@@ -34,9 +34,14 @@ object StateReadCacheConfig:
     math.min(configured, (Runtime.getRuntime.maxMemory * fraction).toLong)
 
   /** Process-wide budget of the execution-side code cache (all `EvmCodeStorage` instances share it); 0 disables it. At
-    * most 3% of the max heap.
+    * most 5% of the max heap.
     */
-  lazy val codeCacheBytes: Long = cappedByHeap(bytes("code-cache-bytes", 64L * 1024 * 1024), 0.03)
+  lazy val codeCacheBytes: Long = cappedByHeap(bytes("code-cache-bytes", 256L * 1024 * 1024), 0.05)
+
+  /** Process-wide budget of the code-size cache (code hash to length, so EXTCODESIZE-style checks never load code), at
+    * about 256 bytes an entry (geth keeps 1,000,000 entries); 0 disables it. At most 2% of the max heap.
+    */
+  lazy val codeSizeCacheBytes: Long = cappedByHeap(bytes("code-size-cache-bytes", 64L * 1024 * 1024), 0.02)
 
   /** Process-wide budget of the decoded-node cache, in estimated retained bytes (see `DecodedNodeCache`); 0 disables
     * it. At most 4% of the max heap.
@@ -56,3 +61,27 @@ object StateReadCacheConfig:
     * heap. Entries are truncated analyses (often a few words), so this is rarely approached.
     */
   lazy val jumpDestBlockMemoBytes: Long = cappedByHeap(bytes("jumpdest-block-memo-bytes", 64L * 1024 * 1024), 0.02)
+
+  // BAL-driven prefetch (EIP-7928, Amsterdam blocks that arrive with their access list): see `BalPrefetcher`.
+
+  /** Master switch of the BAL prefetch; it only warms caches, so off changes timing, never results. */
+  lazy val balPrefetchEnabled: Boolean = flag("bal-prefetch-enabled", true)
+
+  /** Threads of the process-wide prefetch pool (bounded queue depth of the device: more is not monotonically better).
+    */
+  lazy val balPrefetchThreads: Int = math.max(1, bytes("bal-prefetch-threads", 16L).toInt)
+
+  /** Keys one prefetch task handles (accounts per task, slots per task). */
+  lazy val balPrefetchBatchSize: Int = math.max(1, bytes("bal-prefetch-batch-size", 64L).toInt)
+
+  /** Bytes of decoded trie nodes one block's prefetch may put in the decoded-node cache; 0 means half the cache. */
+  lazy val balPrefetchNodeBudgetBytes: Long =
+    val configured = bytes("bal-prefetch-node-budget-bytes", 0L)
+    if configured > 0 then configured else decodedNodeCacheBytes / 2
+
+  /** Bytes of contract code one block's prefetch may keep in the code cache; 0 means half the cache. Code beyond it is
+    * still read (it warms the OS page cache) but not kept.
+    */
+  lazy val balPrefetchCodeBudgetBytes: Long =
+    val configured = bytes("bal-prefetch-code-budget-bytes", 0L)
+    if configured > 0 then configured else codeCacheBytes / 2

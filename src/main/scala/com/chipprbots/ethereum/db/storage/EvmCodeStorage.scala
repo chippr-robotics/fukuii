@@ -29,12 +29,46 @@ class EvmCodeStorage(val dataSource: DataSource) extends TransactionalKeyValueSt
   def getForExecution(hash: CodeHash): Option[Code] =
     val hit = EvmCodeStorage.shared.getOrNull(cacheKey(hash))
     if hit != null then
-      com.chipprbots.ethereum.vm.ImportProfile.codeHit()
+      com.chipprbots.ethereum.vm.ImportProfile.codeHit(hash)
       Some(hit)
     else
-      val read = get(hash)
-      read.foreach(code => EvmCodeStorage.shared.put(cacheKey(hash), code))
+      // One native-to-heap copy, no block-cache fill, and the array is wrapped, not copied twice more (`get` goes
+      // through ArraySeq and `ByteString(code.toArray)`, two further copies of up to 64 KB per miss).
+      val read = dataSource
+        .getOptimizedNoFill(namespace, hash.toArray)
+        .map(ByteString.fromArrayUnsafe)
+      read.foreach { code =>
+        EvmCodeStorage.shared.put(cacheKey(hash), code)
+        EvmCodeStorage.sizes.put(cacheKey(hash), Integer.valueOf(code.length))
+      }
       read
+
+  /** BAL prefetch of one code: reads it (no block-cache fill) unless the execution cache already holds it, always
+    * records its length, and keeps the bytes in the execution cache only while `retain(length)` says the prefetch still
+    * has budget there. A code that is not retained was still read, so its file blocks are in the OS page cache for the
+    * execution's own read. An absent code is reported, never cached, as in [[getForExecution]].
+    */
+  def prefetchForExecution(hash: CodeHash, retain: Int => Boolean): EvmCodeStorage.PrefetchOutcome =
+    val key = cacheKey(hash)
+    if EvmCodeStorage.shared.getOrNull(key) != null then EvmCodeStorage.PrefetchOutcome.AlreadyCached
+    else
+      dataSource.getOptimizedNoFill(namespace, hash.toArray) match
+        case None => EvmCodeStorage.PrefetchOutcome.Absent
+        case Some(bytes) =>
+          val code = ByteString.fromArrayUnsafe(bytes)
+          EvmCodeStorage.sizes.put(key, Integer.valueOf(code.length))
+          val kept = retain(code.length)
+          if kept then EvmCodeStorage.shared.put(key, code)
+          EvmCodeStorage.PrefetchOutcome.Loaded(code.length, kept)
+
+  /** The length of the code under `hash`, without loading the code when it is remembered (this cache, or the code
+    * cache). Falls back to a full [[getForExecution]], so an absent code is absent here too.
+    */
+  def getSizeForExecution(hash: CodeHash): Option[Int] =
+    val key = cacheKey(hash)
+    val known = EvmCodeStorage.sizes.getOrNull(key)
+    if known != null then Some(known.intValue)
+    else getForExecution(hash).map(_.length)
 
   /** A removal through this storage evicts the code from the execution cache, so deleting code (the missing-code
     * scenarios in tests, a future repair path) is seen by the very next execution read. The eviction happens when the
@@ -42,7 +76,10 @@ class EvmCodeStorage(val dataSource: DataSource) extends TransactionalKeyValueSt
     * something that deletes code while executing blocks, and nothing does.
     */
   override def update(toRemove: Seq[CodeHash], toUpsert: Seq[(CodeHash, Code)]) =
-    toRemove.foreach(h => EvmCodeStorage.shared.remove(cacheKey(h)))
+    toRemove.foreach { h =>
+      EvmCodeStorage.shared.remove(cacheKey(h))
+      EvmCodeStorage.sizes.remove(cacheKey(h))
+    }
     super.update(toRemove, toUpsert)
 
   // overriding to avoid going through IndexedSeq[Byte]
@@ -64,6 +101,18 @@ object EvmCodeStorage:
       com.chipprbots.ethereum.utils.StateReadCacheConfig.codeCacheBytes,
       code => code.length.toLong + 96
     )
+
+  /** Code lengths by hash, same ownership rule as [[shared]]: only successfully read code is recorded. */
+  private lazy val sizes: com.chipprbots.ethereum.utils.ByteBoundedLru[CacheKey, Integer] =
+    new com.chipprbots.ethereum.utils.ByteBoundedLru[CacheKey, Integer](
+      com.chipprbots.ethereum.utils.StateReadCacheConfig.codeSizeCacheBytes,
+      _ => 256L
+    )
+
+  enum PrefetchOutcome:
+    case AlreadyCached
+    case Absent
+    case Loaded(length: Int, retained: Boolean)
 
   type CodeHash = ByteString
   type Code = ByteString

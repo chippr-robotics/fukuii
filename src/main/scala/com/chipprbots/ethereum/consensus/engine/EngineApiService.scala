@@ -332,8 +332,9 @@ class EngineApiService(
     // Until #1426 (EIP-7928 collection and validation) lands this is ALL the list is checked for: it is decoded, and
     // bound to the header through the block hash (payloadToBlock hashes these exact bytes), but its content is not
     // compared with what executing the block accesses. A well-formed list the CL supplies is trusted.
-    val blockAccessListError: Option[String] =
-      payload.blockAccessList.flatMap(bytes => BlockAccessList.decode(bytes).left.toOption)
+    val decodedBlockAccessList: Option[Either[String, BlockAccessList]] =
+      payload.blockAccessList.map(BlockAccessList.decode)
+    val blockAccessListError: Option[String] = decodedBlockAccessList.flatMap(_.left.toOption)
 
     if blockAccessListError.isDefined then
       log.warn(
@@ -581,7 +582,12 @@ class EngineApiService(
             Some(false)
           else if parentKnown && parentValidated then
             try
-              blockExecution.executeAndValidateBlockFull(block, alreadyValidated = true) match
+              blockExecution.executeAndValidateBlockFull(
+                block,
+                alreadyValidated = true,
+                // EIP-7928: the CL's list is only a prefetch hint here (checked against the header before use).
+                suppliedBlockAccessList = decodedBlockAccessList.flatMap(_.toOption)
+              ) match
                 case Right((receipts, derivedRequests, blockAccessList)) =>
                   // EIP-7685: Per Engine API spec, verify the CL-supplied executionRequests match
                   // what block execution actually produced. Mismatch → INVALID (e.g. CL attempted

@@ -161,7 +161,7 @@ class InMemoryWorldStateProxyStorage(
           case Some(value) => value
           case None        =>
             // 3. Fall back to MPT traversal (handles pre-sync data, missing flat entries)
-            wrapped.get(addr).getOrElse(0)
+            ImportProfile.storageRead(wrapped.get(addr)).getOrElse(0)
 
   /** O(1) flat storage lookup: accountHash ++ keccak256(pad32(slotIndex)) → RLP(value) */
   private def flatLookup(addr: BigInt): Option[BigInt] =
@@ -251,6 +251,24 @@ class InMemoryWorldStateProxy(
                 case None if account.codeHash == Account.EmptyCodeHash => (ByteString.empty, None)
                 case None => throw new MissingCodeException(hash, address.bytes)
     }
+
+  /** [[getCode]]'s length, answered from the code-size cache when the account's code was read before. An empty code
+    * hash is 0 whether or not an (empty) code row exists, so it never reads. Missing code still throws.
+    */
+  override def getCodeSize(address: Address): Int =
+    accountCodes.get(address) match
+      case Some(dirty) => dirty.length
+      case None =>
+        getAccount(address) match
+          case None                                                       => 0
+          case Some(account) if account.codeHash == Account.EmptyCodeHash => 0
+          case Some(account) =>
+            ImportProfile.code {
+              val hash = account.codeHash.value
+              evmCodeStorage.getSizeForExecution(hash) match
+                case Some(size) => size
+                case None       => throw new MissingCodeException(hash, address.bytes)
+            }
 
   override def getStorage(address: Address): InMemoryWorldStateProxyStorage =
     val proxy = contractStorages.getOrElse(address, getStorageForAddress(address, stateStorage))

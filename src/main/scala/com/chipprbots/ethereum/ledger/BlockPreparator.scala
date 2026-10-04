@@ -16,6 +16,7 @@ import com.chipprbots.ethereum.utils.ByteStringUtils.ByteStringOps
 import com.chipprbots.ethereum.utils.DebugTrace
 import com.chipprbots.ethereum.consensus.engine.BlobGasUtils
 import com.chipprbots.ethereum.utils.Logger
+import com.chipprbots.ethereum.vm.ImportProfile
 import com.chipprbots.ethereum.vm.{PC as _, *}
 
 /** This is used from a [[com.chipprbots.ethereum.consensus.blocks.BlockGenerator BlockGenerator]].
@@ -716,7 +717,9 @@ class BlockPreparator(
     val deleteTouchedAccountsFn = deleteEmptyTouchedAccounts
     val persistStateFn = InMemoryWorldStateProxy.persistState
 
-    val world2 = deleteAccountsFn.andThen(deleteTouchedAccountsFn).andThen(persistStateFn)(worldAfterBlobGas)
+    val world2 = deleteAccountsFn
+      .andThen(deleteTouchedAccountsFn)
+      .andThen(w => ImportProfile.txPersist(persistStateFn(w)))(worldAfterBlobGas)
 
     if DebugTrace.enabledForTx(blockHeader.number.value, stx.hash.toHex) then
       val tx = stx.tx
@@ -882,11 +885,13 @@ class BlockPreparator(
           case Right((account, address)) =>
             val accessRecorder = accessList.map(_ => new BlockAccessRecorder)
             val TxResult(newWorld, gasUsed, logs, _, vmError, txExecutionGas, txStateGas) =
-              executeTransaction(stx, address, blockHeader, world.saveAccount(address, account), accessRecorder)
+              ImportProfile.tx(
+                executeTransaction(stx, address, blockHeader, world.saveAccount(address, account), accessRecorder)
+              )
             for
               builder <- accessList
               recorder <- accessRecorder
-            do builder.addIndex(acumReceipts.size + 1L, recorder, world, newWorld)
+            do ImportProfile.balBuild(builder.addIndex(acumReceipts.size + 1L, recorder, world, newWorld))
 
             // spec: https://github.com/ethereum/EIPs/blob/master/EIPS/eip-658.md
             val transactionOutcome =
