@@ -151,16 +151,23 @@ object ReferenceCountNodeStorage extends PruneSupport with Logger:
     *   NodeStorage
     */
   override def prune(blockNumber: BigInt, nodeStorage: NodesStorage, inMemory: Boolean): Unit =
+    val _ = pruneReporting(blockNumber, nodeStorage, inMemory)
+
+  /** [[prune]], returning the hashes of the trie nodes it deleted, so a cache of decoded nodes can drop them. */
+  def pruneReporting(blockNumber: BigInt, nodeStorage: NodesStorage, inMemory: Boolean): Seq[NodeHash] =
     log.debug(s"Pruning block $blockNumber")
 
+    var removed: Seq[NodeHash] = Nil
     withSnapshotCount(blockNumber, nodeStorage) { (snapshotsCountKey, snapshotCount) =>
       val deathRowKey = drRowKey(blockNumber)
       val snapshotKeys: Seq[NodeHash] = snapshotKeysUpTo(blockNumber, snapshotCount)
       val toBeRemoved = getNodesToBeRemovedInPruning(blockNumber, deathRowKey, nodeStorage)
       nodeStorage.updateCond((deathRowKey +: snapshotsCountKey +: snapshotKeys) ++ toBeRemoved, Nil, inMemory)
+      removed = toBeRemoved
     }
 
     log.debug(s"Pruned block $blockNumber")
+    removed
 
   /** Looks for the StoredNode snapshots based on block number and saves (or deletes) them
     *
@@ -170,6 +177,11 @@ object ReferenceCountNodeStorage extends PruneSupport with Logger:
     *   NodeStorage
     */
   override def rollback(blockNumber: BigInt, nodeStorage: NodesStorage, inMemory: Boolean): Unit =
+    val _ = rollbackReporting(blockNumber, nodeStorage, inMemory)
+
+  /** [[rollback]], returning the hashes of the trie nodes it removed, so a cache of decoded nodes can drop them. */
+  def rollbackReporting(blockNumber: BigInt, nodeStorage: NodesStorage, inMemory: Boolean): Seq[NodeHash] =
+    var removed: Seq[NodeHash] = Nil
     withSnapshotCount(blockNumber, nodeStorage) { (snapshotsCountKey, snapshotCount) =>
       // Get all the snapshots
       val snapshots = snapshotKeysUpTo(blockNumber, snapshotCount)
@@ -184,7 +196,9 @@ object ReferenceCountNodeStorage extends PruneSupport with Logger:
       }
       // also remove snapshot as we have done a rollback
       nodeStorage.updateCond(toRemove :+ snapshotsCountKey :+ deathRowKey, toUpsert, inMemory)
+      removed = toRemove ++ toUpsert.map(_._1) // upserted nodes get their old reference counts back; drop them too
     }
+    removed
 
   private def withSnapshotCount(blockNumber: BigInt, nodeStorage: NodesStorage)(
       f: (ByteString, BigInt) => Unit

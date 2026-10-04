@@ -36,10 +36,8 @@ import com.chipprbots.ethereum.testing.Tags.*
   * were replayed). Each also has a `-Deest.engine.*` form. The report groups results by `for_<fork>/<fork>/<test
   * directory>` and lists every failing test with its first divergence.
   *
-  * Run it in its own sbt invocation, not together with EestFixtureCorpusSpec: every fixture's EphemBlockchainTestSetup,
-  * with its whole in-memory chain, stays reachable until the JVM exits (the ShutdownHookBuilder in its cake registers a
-  * shutdown hook that captures it), so the two ~26,500-fixture corpora together exhaust the default test heap, where
-  * either one alone fits.
+  * Each fixture's setup is collectable once its test ends: ScenarioSetup makes the shutdown hook its cake registers
+  * hold the builder weakly (`shutdownHookHoldsBuilderWeakly`), so ~26,500 fixtures need no more heap than one.
   *
   * With no corpus configured the test is canceled, not passed: a conformance claim needs the corpus to have run.
   */

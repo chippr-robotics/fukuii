@@ -2,7 +2,6 @@ package com.chipprbots.ethereum.vm
 
 import org.apache.pekko.util.ByteString
 
-import scala.annotation.tailrec
 import scala.collection.immutable.BitSet
 
 import com.chipprbots.ethereum.crypto.kec256
@@ -51,36 +50,33 @@ case class Program(code: ByteString):
 
   val length: Int = code.size
 
+  /** The hash of `code` when the caller knows it for free (the account's `codeHash` in the world state). Set only by
+    * [[Program.withCodeHash]]; it lets the JUMPDEST analysis come from [[JumpDestAnalysis.shared]]. It is not part of
+    * the case class's identity: two programs with the same code are equal whether or not either carries a hash.
+    */
+  private var knownCodeHash: ByteString = null
+
   /** The valid jump destinations of the program. See section 9.4.3 in Yellow Paper for more detail.
     *
-    * A bit set, one bit per code byte, like go-ethereum's `bitvec` code analysis. Every CALL frame builds its own
-    * `Program`, and a contract that recurses into itself holds one of these per frame. With a `HashSet[Int]` that cost
-    * ~45 bytes per JUMPDEST: ethereum/tests `JUMPDEST_AttackwithJump` (15 KB of JUMPDESTs, 1,024 self-calls deep on
-    * Homestead, which has no 63/64 rule) kept 681 MB live and died at `-Xmx512m`. Membership is unchanged.
+    * A bit set, one bit per code byte, like go-ethereum's `bitvec` code analysis (a HashSet cost ~45 bytes per
+    * JUMPDEST: ethereum/tests `JUMPDEST_AttackwithJump` kept 681 MB live at -Xmx512m). Every CALL frame builds its own
+    * `Program`, so the analysis is memoised across frames by code hash when the hash is known (see
+    * [[JumpDestAnalysis]]); otherwise it is computed here, once per `Program`. Membership is identical either way.
     */
-  lazy val validJumpDestinations: BitSet = validJumpDestinationsAfterPosition(0)
-
-  /** Returns the valid jump destinations of the program after a given position.
-    *
-    * @param start
-    *   from where to start searching for valid jump destinations in the code.
-    */
-  private def validJumpDestinationsAfterPosition(start: Int): BitSet =
-    val bits = new Array[Long]((length + 63) >>> 6)
-    @tailrec
-    def scan(pos: Int): Unit =
-      if pos >= 0 && pos < length then
-        val byte = code(pos)
-        // we only need to check PushOp and JUMPDEST, they are both present in Frontier
-        val opCode = EvmConfig.FrontierOpCodes.opCodeFor(byte)
-        opCode match
-          case Some(pushOp: PushOp) => scan(pos + pushOp.i + 2)
-          case Some(JUMPDEST) =>
-            bits(pos >>> 6) |= 1L << pos
-            scan(pos + 1)
-          case _ => scan(pos + 1)
-    scan(start)
-    BitSet.fromBitMaskNoCopy(bits) // `bits` never escapes otherwise
+  lazy val validJumpDestinations: BitSet =
+    val hash = knownCodeHash
+    if hash == null then ImportProfile.scan(length)(JumpDestAnalysis.analyse(code))
+    else JumpDestAnalysis.shared.getOrCompute(hash, code)
 
   lazy val codeHash: ByteString =
     kec256(code)
+
+object Program:
+
+  /** A program whose code is known to hash to `codeHash`, so its JUMPDEST analysis can be shared. The caller vouches
+    * for the hash: pass only the `codeHash` the world state holds for exactly this code.
+    */
+  def withCodeHash(code: ByteString, codeHash: ByteString): Program =
+    val program = Program(code)
+    program.knownCodeHash = codeHash
+    program

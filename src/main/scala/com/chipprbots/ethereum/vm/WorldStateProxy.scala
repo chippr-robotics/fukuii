@@ -53,6 +53,12 @@ trait WorldStateProxy[WS <: WorldStateProxy[WS, S], S <: Storage[S]]:
     )
 
   def getCode(address: Address): ByteString
+
+  /** The account's code together with its code hash, when the world state has the hash at hand (it is the account's
+    * `codeHash`, not computed from the code). `None` when it does not, e.g. code deployed earlier in the same block and
+    * not yet persisted. The hash lets the EVM share the code's JUMPDEST analysis across frames.
+    */
+  def getCodeAndHash(address: Address): (ByteString, Option[ByteString]) = (getCode(address), None)
   def getStorage(address: Address): S
   def getBlockHash(number: UInt256): Option[UInt256]
 

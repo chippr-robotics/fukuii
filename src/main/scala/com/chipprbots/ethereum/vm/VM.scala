@@ -120,15 +120,11 @@ class VM[W <: WorldStateProxy[W, S], S <: Storage[S]](
               if transferLogs.isEmpty then precompileResult
               else precompileResult.copy(logs = transferLogs ++ precompileResult.logs)
             else
-              val code = resolveCode(context1.evmConfig, world1, recipientAddr)
-              val env = ExecEnv(context1, code, ownerAddr)
+              val (code, codeHash, delegationTarget) = resolveCode(context1.evmConfig, world1, recipientAddr)
+              ImportProfile.frame()
+              val env = ExecEnv(context1, code, ownerAddr, codeHash)
 
-              // EIP-7702: If code was resolved from a delegation, warm the delegation target
-              val delegationTarget =
-                if !context1.evmConfig.eip7702Enabled then None
-                else
-                  try SetCodeTransaction.parseDelegation(world1.getCode(recipientAddr))
-                  catch case _: Exception => None
+              // EIP-7702: If code was resolved from a delegation, `delegationTarget` is warmed below
               val initialState: PS = ProgramState(this, context1, env).withLogs(transferLogs)
               val warmState = delegationTarget match
                 case Some(target) => initialState.addAccessedAddress(target)
@@ -152,13 +148,21 @@ class VM[W <: WorldStateProxy[W, S], S <: Storage[S]](
     * that the account's own code runs, and its leading 0xEF is an undefined opcode (go-ethereum `resolveCode` gates on
     * `IsPrague`; core-geth has no EIP-7702 at all).
     */
-  private def resolveCode(config: EvmConfig, world: W, addr: Address): ByteString =
-    val code = world.getCode(addr)
-    if !config.eip7702Enabled then code
+  private def resolveCode(
+      config: EvmConfig,
+      world: W,
+      addr: Address
+  ): (ByteString, Option[ByteString], Option[Address]) =
+    val (code, hash) = world.getCodeAndHash(addr)
+    if !config.eip7702Enabled then (code, hash, None)
     else
+      // The account's own code is read once: its delegation designator, if any, is both what redirects execution to
+      // the target's code and the address the frame must warm (it used to be parsed from a second getCode).
       SetCodeTransaction.parseDelegation(code) match
-        case Some(target) => world.getCode(target)
-        case None         => code
+        case Some(target) =>
+          val (targetCode, targetHash) = world.getCodeAndHash(target)
+          (targetCode, targetHash, Some(target))
+        case None => (code, hash, None)
 
   /** Contract creation - Λ function in YP salt is used to create contract by CREATE2 opcode. See
     * https://github.com/ethereum/EIPs/blob/master/EIPS/eip-1014.md

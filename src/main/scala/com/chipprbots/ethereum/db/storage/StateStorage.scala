@@ -54,9 +54,16 @@ class ArchiveStateStorage(private val nodeStorage: NodeStorage) extends StateSto
 
 class ReferenceCountedStateStorage(
     private val nodeStorage: NodeStorage,
-    private val pruningHistory: BigInt
+    private val pruningHistory: BigInt,
+    decodedNodeCacheBytes: Long = com.chipprbots.ethereum.utils.StateReadCacheConfig.decodedNodeCacheBytes
 ) extends StateStorage:
   override def forcePersist(reason: FlushSituation): Boolean = true
+
+  /** Decoded trie nodes for block execution (see [[DecodedNodeCache]]); owned here because this is where nodes are
+    * deleted, and the deletions evict from it.
+    */
+  private val decodedNodes: Option[DecodedNodeCache] =
+    DecodedNodeCache.forStorage(decodedNodeCacheBytes > 0)
 
   /** Highest block number pruned by this instance (not persisted: after a restart the first save prunes one block, as
     * it always did). Used to catch up after a prune was deferred because the canonical head lagged the saved block.
@@ -80,17 +87,28 @@ class ReferenceCountedStateStorage(
       case _                           => target
     var blockToPrune = from
     while blockToPrune <= target do
-      ReferenceCountNodeStorage.prune(blockToPrune, nodeStorage, inMemory = blockToPrune > currentBestSavedBlock)
+      val removed =
+        ReferenceCountNodeStorage.pruneReporting(
+          blockToPrune,
+          nodeStorage,
+          inMemory = blockToPrune > currentBestSavedBlock
+        )
+      // Evict AFTER the delete. Safe because blocks are imported, and state pruned, on one thread: no reader can
+      // re-insert a just-pruned node between the delete and this eviction. A concurrent block executor would need
+      // evict-before-delete plus a re-check on insert (a hit on a node the database no longer holds).
+      decodedNodes.foreach(_.evict(removed))
       blockToPrune += 1
     if lastPruned.forall(_ < target) then lastPruned = Some(target)
     updateBestBlocksData()
 
   override def onBlockRollback(bn: BigInt, currentBestSavedBlock: BigInt)(updateBestBlocksData: () => Unit): Unit =
-    ReferenceCountNodeStorage.rollback(bn, nodeStorage, inMemory = bn > currentBestSavedBlock)
+    val removed = ReferenceCountNodeStorage.rollbackReporting(bn, nodeStorage, inMemory = bn > currentBestSavedBlock)
+    // Same single-import-thread assumption as in onBlockSave: evict after the rollback has deleted.
+    decodedNodes.foreach(_.evict(removed))
     updateBestBlocksData()
 
   override def getBackingStorage(bn: BigInt): MptStorage =
-    new SerializingMptStorage(new ReferenceCountNodeStorage(nodeStorage, bn))
+    new SerializingMptStorage(new ReferenceCountNodeStorage(nodeStorage, bn), decodedNodes)
 
   override def getReadOnlyStorage: MptStorage =
     new SerializingMptStorage(ReadOnlyNodeStorage(new FastSyncNodeStorage(nodeStorage, 0)))

@@ -17,9 +17,12 @@ import com.chipprbots.ethereum.utils.BlockchainConfig
 import com.chipprbots.ethereum.utils.ByteStringUtils
 import com.chipprbots.ethereum.utils.DaoForkConfig
 import com.chipprbots.ethereum.utils.Logger
+import com.chipprbots.ethereum.utils.StateReadCacheConfig
+import com.chipprbots.ethereum.db.storage.SerializingMptStorage
 import com.chipprbots.ethereum.vm.AmsterdamGas
 import com.chipprbots.ethereum.vm.BlockAccessRecorder
 import com.chipprbots.ethereum.vm.EvmConfig
+import com.chipprbots.ethereum.vm.ImportProfile
 import com.chipprbots.ethereum.vm.ProgramContext
 
 class BlockExecution(
@@ -183,10 +186,26 @@ class BlockExecution(
   )(implicit blockchainConfig: BlockchainConfig): Either[BlockExecutionError, BlockResult] =
     executeBlock(block, isProposer = true)
 
-  /** Executes a block (executes transactions and pays rewards) */
+  /** Executes a block (executes transactions and pays rewards), logging where its time went at INFO. */
   private def executeBlock(
       block: Block,
       isProposer: Boolean = false
+  )(implicit blockchainConfig: BlockchainConfig): Either[BlockExecutionError, BlockResult] =
+    val timing = !isProposer && ImportProfile.begin()
+    var snapshot: Option[ImportProfile.Snapshot] = None
+    val result =
+      try executeBlockUntimed(block, isProposer)
+      finally if timing then snapshot = Some(ImportProfile.end())
+    snapshot.foreach { s =>
+      val gas = result.toOption.fold(BigInt(0))(_.gasUsed)
+      val line = ImportProfile.format(block.header.number.value, gas, block.body.transactionList.size, s)
+      if StateReadCacheConfig.importTimingLog then log.info(line) else log.debug(line)
+    }
+    result
+
+  private def executeBlockUntimed(
+      block: Block,
+      isProposer: Boolean
   )(implicit blockchainConfig: BlockchainConfig): Either[BlockExecutionError, BlockResult] =
     // EIP-7928: an Amsterdam block builds its access list as it executes, one block access index at a time — 0 for the
     // preamble system calls, i + 1 per transaction, n + 1 for the withdrawals and the request system calls below.
@@ -253,7 +272,10 @@ class BlockExecution(
     val _ = isProposer
     InMemoryWorldStateProxy(
       evmCodeStorage = evmCodeStorage,
-      blockchain.getBackingMptStorage(block.header.number.value),
+      blockchain.getBackingMptStorage(block.header.number.value) match
+        // Execution alone reads through the decoded-node cache; see DecodedNodeCache.
+        case serializing: SerializingMptStorage => serializing.cachedForExecution
+        case other                              => other,
       // BLOCKHASH walks this block's own ancestry (core-geth GetHashFn), never the canonical index — see
       // AncestorBlockHashes for why the index can name a different chain at the heights being asked about.
       AncestorBlockHashes.forBlock(block.header, blockchainReader),
