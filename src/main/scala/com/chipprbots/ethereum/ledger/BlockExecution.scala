@@ -53,13 +53,18 @@ class BlockExecution(
     */
   def executeAndValidateBlockFull(
       block: Block,
-      alreadyValidated: Boolean = false
+      alreadyValidated: Boolean = false,
+      suppliedBlockAccessList: Option[BlockAccessList] = None
   )(implicit
       blockchainConfig: BlockchainConfig
   ): Either[BlockExecutionError, (Seq[Receipt], Seq[ByteString], Option[BlockAccessList])] =
     val staged = blockchain.stageBlockState(block.header.number.value)
     val result =
-      try executeAndValidateStaged(block, alreadyValidated, staged)
+      try
+        // The 3-argument form stays the single seam subclasses (and tests) override; a block with a list goes
+        // through the one that carries it.
+        if suppliedBlockAccessList.isEmpty then executeAndValidateStaged(block, alreadyValidated, staged)
+        else executeAndValidateStagedWithList(block, alreadyValidated, staged, suppliedBlockAccessList)
       catch
         case t: Throwable =>
           staged.discard()
@@ -87,13 +92,24 @@ class BlockExecution(
   )(implicit
       blockchainConfig: BlockchainConfig
   ): Either[BlockExecutionError, (Seq[Receipt], Seq[ByteString], Option[BlockAccessList])] =
+    executeAndValidateStagedWithList(block, alreadyValidated, staged, None)
+
+  /** [[executeAndValidateStaged]] for a block that arrived with its EIP-7928 list (a prefetch hint, never trusted). */
+  protected[ledger] def executeAndValidateStagedWithList(
+      block: Block,
+      alreadyValidated: Boolean,
+      staged: StagedBlockState,
+      suppliedBlockAccessList: Option[BlockAccessList]
+  )(implicit
+      blockchainConfig: BlockchainConfig
+  ): Either[BlockExecutionError, (Seq[Receipt], Seq[ByteString], Option[BlockAccessList])] =
     val preExecValidationResult =
       if alreadyValidated then Right(block) else blockValidation.validateBlockBeforeExecution(block)
 
     val blockExecResult =
       for
         _ <- preExecValidationResult
-        result <- executeBlock(block, staged = Some(staged))
+        result <- executeBlock(block, staged = Some(staged), suppliedBlockAccessList = suppliedBlockAccessList)
         _ <- blockValidation.validateBlockAfterExecution(
           block,
           result.worldState.stateRootHash,
@@ -221,12 +237,13 @@ class BlockExecution(
   private def executeBlock(
       block: Block,
       isProposer: Boolean = false,
-      staged: Option[StagedBlockState] = None
+      staged: Option[StagedBlockState] = None,
+      suppliedBlockAccessList: Option[BlockAccessList] = None
   )(implicit blockchainConfig: BlockchainConfig): Either[BlockExecutionError, BlockResult] =
     val timing = !isProposer && ImportProfile.begin()
     var snapshot: Option[ImportProfile.Snapshot] = None
     val result =
-      try executeBlockUntimed(block, isProposer, staged)
+      try executeBlockUntimed(block, isProposer, staged, suppliedBlockAccessList)
       finally if timing then snapshot = Some(ImportProfile.end())
     snapshot.foreach { s =>
       val gas = result.toOption.fold(BigInt(0))(_.gasUsed)
@@ -238,19 +255,22 @@ class BlockExecution(
   private def executeBlockUntimed(
       block: Block,
       isProposer: Boolean,
-      staged: Option[StagedBlockState]
+      staged: Option[StagedBlockState],
+      suppliedBlockAccessList: Option[BlockAccessList]
   )(implicit blockchainConfig: BlockchainConfig): Either[BlockExecutionError, BlockResult] =
     // EIP-7928: an Amsterdam block builds its access list as it executes, one block access index at a time — 0 for the
     // preamble system calls, i + 1 per transaction, n + 1 for the withdrawals and the request system calls below.
     val accessList =
       Option.when(blockchainConfig.isAmsterdamTimestamp(block.header.unixTimestamp))(new BlockAccessListBuilder)
     val postExecutionReads = accessList.map(_ => new BlockAccessRecorder)
+    var prefetch: Option[BalPrefetcher.Run] = None
     try
       for
         parentHeader <- blockchainReader
           .getBlockHeaderByHash(block.header.parentHash)
           .toRight(MissingParentError) // Should not never occur because validated earlier
         initialWorld = buildInitialWorld(block, parentHeader, isProposer, staged)
+        _ = prefetch = startPrefetch(block, parentHeader, isProposer, staged, suppliedBlockAccessList)
         execResult <- executeBlockTransactions(block, initialWorld, accessList)
         worldAfterReward <- Either
           .catchOnly[MPTException](blockPreparator.payBlockReward(block, execResult.worldState))
@@ -293,6 +313,37 @@ class BlockExecution(
           blockAccessList = accessList.map(_.build)
         )
     catch case e: MPTException => Left(BlockExecutionError.MPTError(e))
+    finally
+      // Cancel and drain BEFORE this block's state is committed or pruned: no prefetch read outlives the execution.
+      prefetch.foreach(run => ImportProfile.recordPrefetch(run.finish()))
+
+  /** EIP-7928: starts the parent-state prefetch (see [[BalPrefetcher]]) for an Amsterdam block that arrived with its
+    * access list. Does nothing, and costs one `Option` test, for a block without a list, a proposer build, a node with
+    * no staged storage, and every pre-Amsterdam or ETC block. Consensus-neutral: it only warms caches.
+    */
+  private def startPrefetch(
+      block: Block,
+      parentHeader: BlockHeader,
+      isProposer: Boolean,
+      staged: Option[StagedBlockState],
+      candidate: Option[BlockAccessList]
+  )(implicit blockchainConfig: BlockchainConfig): Option[BalPrefetcher.Run] =
+    if isProposer || candidate.isEmpty || !blockchainConfig.isAmsterdamTimestamp(block.header.unixTimestamp) then None
+    else
+      val nodeKeys = new BalPrefetcher.Run.NodeKeys
+      val run = BalPrefetcher.start(
+        candidate,
+        block.header.blockAccessListHash,
+        block.header.gasLimit.value,
+        block.body.transactionList.size,
+        parentHeader.stateRoot.value,
+        staged.flatMap(_.prefetchReader(StateReadCacheConfig.balPrefetchNodeBudgetBytes, nodeKeys.add)),
+        evmCodeStorage,
+        blockchainConfig.ethCompatibleStorage,
+        nodeKeys
+      )
+      run.foreach(r => ImportProfile.attachPrefetch(r.attribution))
+      run
 
   protected def buildInitialWorld(
       block: Block,

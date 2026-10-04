@@ -2,6 +2,8 @@ package com.chipprbots.ethereum.vm
 
 import java.util.concurrent.atomic.AtomicLong
 
+import org.apache.pekko.util.ByteString
+
 /** Per-block timers for the block-import path: where one block's wall time goes. Logged once per imported block by
   * `BlockExecution` (INFO), so a throughput regression can be told apart without a profiler.
   *
@@ -25,7 +27,33 @@ object ImportProfile:
   private val jumpMemoHits, jumpMemoMisses = new AtomicLong
   private val storageNs, storageCount = new AtomicLong
   private val txNs, txPersistNs, balNs, finalPersistNs = new AtomicLong
+  private val codeHitsPrefetched, nodeHitsPrefetched = new AtomicLong
+  @volatile private var prefetchStats: Option[PrefetchStats] = None
+  @volatile private var prefetchedKeys: PrefetchedKeys = null
   private var startNanos = 0L
+
+  /** What the block's BAL prefetch did (see `BalPrefetcher`): counts of the reads it issued and its wall time. */
+  final case class PrefetchStats(
+      accounts: Long,
+      slots: Long,
+      codes: Long,
+      codeBytes: Long,
+      codesCached: Long,
+      nodes: Long,
+      errors: Long,
+      stoppedEarly: Boolean,
+      wallNanos: Long
+  )
+
+  /** The hashes the prefetch brought into the code and node caches, so a hit on one is attributable to it. */
+  trait PrefetchedKeys:
+    def code(hash: ByteString): Boolean
+    def node(hash: ByteString): Boolean
+
+  /** Registers the block's prefetch with the timed block (call from the import thread, after [[begin]]). */
+  def attachPrefetch(keys: PrefetchedKeys): Unit = if counting then prefetchedKeys = keys
+
+  def recordPrefetch(stats: PrefetchStats): Unit = if counting then prefetchStats = Some(stats)
 
   final case class Snapshot(
       totalNanos: Long,
@@ -50,7 +78,10 @@ object ImportProfile:
       txNanos: Long = 0L,
       txPersistNanos: Long = 0L,
       balNanos: Long = 0L,
-      finalPersistNanos: Long = 0L
+      finalPersistNanos: Long = 0L,
+      codeHitsPrefetched: Long = 0L,
+      nodeHitsPrefetched: Long = 0L,
+      prefetch: Option[PrefetchStats] = None
   )
 
   private def counting: Boolean =
@@ -83,9 +114,13 @@ object ImportProfile:
         txNs,
         txPersistNs,
         balNs,
-        finalPersistNs
+        finalPersistNs,
+        codeHitsPrefetched,
+        nodeHitsPrefetched
       )
         .foreach(_.set(0L))
+      prefetchStats = None
+      prefetchedKeys = null
       startNanos = System.nanoTime()
       owner = Thread.currentThread
       true
@@ -116,7 +151,10 @@ object ImportProfile:
       txNs.get,
       txPersistNs.get,
       balNs.get,
-      finalPersistNs.get
+      finalPersistNs.get,
+      codeHitsPrefetched.get,
+      nodeHitsPrefetched.get,
+      prefetchStats
     )
 
   def frame(): Unit = if counting then frames.incrementAndGet()
@@ -183,12 +221,20 @@ object ImportProfile:
   /** The block's closing `persistState` (after rewards, withdrawals and system calls). */
   inline def finalPersist[A](inline body: => A): A = timed(finalPersistNs)(body)
 
-  def nodeHit(): Unit = if counting then nodeHits.incrementAndGet()
+  def nodeHit(hash: ByteString): Unit =
+    if counting then
+      nodeHits.incrementAndGet()
+      val k = prefetchedKeys
+      if k != null && k.node(hash) then nodeHitsPrefetched.incrementAndGet()
   def nodeMiss(): Unit = if counting then nodeMisses.incrementAndGet()
   def memoHit(): Unit = if counting then memoHits.incrementAndGet()
   def jumpMemoHit(): Unit = if counting then jumpMemoHits.incrementAndGet()
   def jumpMemoMiss(): Unit = if counting then jumpMemoMisses.incrementAndGet()
-  def codeHit(): Unit = if counting then codeHits.incrementAndGet()
+  def codeHit(hash: ByteString): Unit =
+    if counting then
+      codeHits.incrementAndGet()
+      val k = prefetchedKeys
+      if k != null && k.code(hash) then codeHitsPrefetched.incrementAndGet()
 
   def codeBytesRead(n: Int): Unit = if counting then codeBytes.addAndGet(n)
 
@@ -199,4 +245,10 @@ object ImportProfile:
       s"getAccount=${ms(s.accountNanos)}ms(n=${s.accounts}) getCode=${ms(s.codeNanos)}ms(n=${s.codes},${s.codeBytes / 1024}KiB,hits=${s.codeHits}) " +
       s"nodes(hit=${s.nodeHits},miss=${s.nodeMisses}) readMemoHits=${s.memoHits} " +
       s"getStorage=${ms(s.storageNanos)}ms(n=${s.storageReads}) txs=${ms(s.txNanos)}ms txPersist=${ms(s.txPersistNanos)}ms " +
-      s"balBuild=${ms(s.balNanos)}ms finalPersist=${ms(s.finalPersistNanos)}ms"
+      s"balBuild=${ms(s.balNanos)}ms finalPersist=${ms(s.finalPersistNanos)}ms" +
+      s.prefetch.fold(" prefetch=off")(p =>
+        s" prefetch(accounts=${p.accounts},slots=${p.slots},codes=${p.codes}/${p.codeBytes / 1024}KiB," +
+          s"codesAlreadyCached=${p.codesCached},nodes=${p.nodes},errors=${p.errors},stoppedEarly=${p.stoppedEarly}," +
+          s"wall=${ms(p.wallNanos)}ms,codeHitsFromPrefetch=${s.codeHitsPrefetched}/${s.codeHits}," +
+          s"nodeHitsFromPrefetch=${s.nodeHitsPrefetched}/${s.nodeHits})"
+      )

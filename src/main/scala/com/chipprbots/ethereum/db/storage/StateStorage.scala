@@ -2,6 +2,8 @@ package com.chipprbots.ethereum.db.storage
 
 import java.util.concurrent.TimeUnit
 
+import org.apache.pekko.util.ByteString
+
 import scala.concurrent.duration.FiniteDuration
 
 import com.chipprbots.ethereum.blockchain.sync.codec.MptNodeCodecs.*
@@ -37,6 +39,11 @@ trait StagedBlockState:
 
   /** Buffered writes to commit atomically with the block; `None` when this mode writes straight through. */
   def pending: Option[DataSourceBatchUpdate]
+
+  /** A read-only, thread-safe view of the committed (parent) state for the BAL prefetch, or `None` when this mode has
+    * none. `budgetBytes` caps what it inserts into the decoded-node cache; `onLoaded` sees each inserted hash.
+    */
+  def prefetchReader(budgetBytes: Long, onLoaded: ByteString => Unit): Option[PrefetchNodeReader] = None
 
   /** Drop the buffered writes and evict what execution read back from them out of the decoded-node cache. */
   def discard(): Unit
@@ -78,6 +85,25 @@ class ArchiveStateStorage(private val nodeStorage: NodeStorage) extends StateSto
 
   override def getBackingStorage(bn: BigInt): MptStorage =
     new SerializingMptStorage(new ArchiveNodeStorage(nodeStorage))
+
+  /** Write-through as before; adds the prefetch reader (an archive node keeps no decoded-node cache, so the reader only
+    * warms the database's own caches).
+    */
+  override def stageBlock(bn: BigInt): StagedBlockState =
+    val backing = getBackingStorage(bn)
+    new StagedBlockState:
+      override def storage: MptStorage = backing
+      override def pending: Option[DataSourceBatchUpdate] = None
+      override def prefetchReader(budgetBytes: Long, onLoaded: ByteString => Unit): Option[PrefetchNodeReader] =
+        Some(
+          new PrefetchNodeReader(
+            new SerializingMptStorage(new ArchiveNodeStorage(nodeStorage)),
+            None,
+            budgetBytes,
+            onLoaded
+          )
+        )
+      override def discard(): Unit = ()
 
   override def saveNode(nodeHash: NodeHash, nodeEncoded: NodeEncoded, bn: BigInt): Unit =
     nodeStorage.put(nodeHash, nodeEncoded)
@@ -149,6 +175,15 @@ class ReferenceCountedStateStorage(
       override val storage: MptStorage =
         new SerializingMptStorage(new ReferenceCountNodeStorage(buffered, bn), decodedNodes)
       override def pending: Option[DataSourceBatchUpdate] = Option.when(!buffered.isEmpty)(buffered.pending)
+      override def prefetchReader(budgetBytes: Long, onLoaded: ByteString => Unit): Option[PrefetchNodeReader] =
+        Some(
+          new PrefetchNodeReader(
+            new SerializingMptStorage(new ReferenceCountNodeStorage(nodeStorage, bn)),
+            decodedNodes,
+            budgetBytes,
+            onLoaded
+          )
+        )
       override def discard(): Unit =
         // Execution read nodes back out of the buffer through the decoded-node cache; they are not in the database, so
         // the cache must forget them (a cached node must never outlive its presence in the database).
