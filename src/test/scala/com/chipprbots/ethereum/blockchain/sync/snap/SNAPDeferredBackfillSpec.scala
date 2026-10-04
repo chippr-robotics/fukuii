@@ -57,12 +57,15 @@ class SNAPDeferredBackfillSpec extends ScalaTestWithActorTestKit() with AnyFlatS
     val appStateStorage = storagesInstance.storages.appStateStorage
     val evmCodeStorage = storagesInstance.storages.evmCodeStorage
     private val pollsAnswered = new AtomicInteger(0)
+    // Each ChainDownloader instance polls with its own reply adapter, so a respawn shows up as a new reply ref.
+    val pollers = java.util.concurrent.ConcurrentHashMap.newKeySet[Any]()
     private val networkPeerManager: TestProbe = TestProbe()
     networkPeerManager.setAutoPilot(
       new AutoPilot:
         override def run(sender: ActorRef, msg: Any): AutoPilot =
           msg.asMatchable match
             case GetHandshakedPeersCmd(replyTo) =>
+              pollers.add(replyTo)
               replyTo ! HandshakedPeers(Map.empty)
               pollsAnswered.incrementAndGet()
             case _ => ()
@@ -149,7 +152,9 @@ class SNAPDeferredBackfillSpec extends ScalaTestWithActorTestKit() with AnyFlatS
       // ...state completes but the forward header download is nowhere near the pivot: finalisation holds.
       snap ! SNAPSyncController.HealingRootUnservable(root)
       awaitProcessed(snap)
-      parent.expectNoMessage(3.seconds) // longer than the 2 s hold tick: it re-checked and is still holding
+      snap ! SNAPSyncController.HeaderHoldTick // re-check now instead of waiting for the 2 s timer
+      awaitProcessed(snap)
+      parent.expectNoMessage(50.millis) // still holding: nothing finalised, nothing aborted
       appStateStorage.isSnapSyncDone() shouldBe false
 
       // The header download reaches the pivot: the cursor advances and the real accumulated TD is stored.
@@ -157,6 +162,7 @@ class SNAPDeferredBackfillSpec extends ScalaTestWithActorTestKit() with AnyFlatS
       val realTd = Fixtures.Blocks.Genesis.header.difficulty.value * 5000
       blockchainWriter.storeChainWeight(pivotHeader.hash, ChainWeight.totalDifficultyOnly(realTd)).commit()
       appStateStorage.putBackfillBestHeader(pivot).commit()
+      snap ! SNAPSyncController.HeaderHoldTick
 
       parent.fishForMessage(15.seconds) {
         case SNAPSyncController.SnapSyncFinalized(p) if p == pivot => FishingOutcomes.complete
@@ -173,6 +179,23 @@ class SNAPDeferredBackfillSpec extends ScalaTestWithActorTestKit() with AnyFlatS
       val byNumber = (pivot - 256 to pivot).map(n => n -> blockchainReader.getBlockHeaderByNumber(n).get).toMap
       blockHashes(pivot - 1) shouldBe Some(byNumber(pivot - 1).hash.value)
       blockHashes(pivot - 256) shouldBe Some(byNumber(pivot - 256).hash.value)
+
+  it should "restart the chain downloader, and keep holding, when the header cursor stalls during the hold" taggedAs UnitTest in new Fixture:
+    val snap = start(cfg(defer = true).copy(headerHoldStallTimeout = 1.second), withAncestors = true)
+    awaitProcessed(snap)
+    eventually(appStateStorage.getBackfillTarget() shouldBe pivot)
+    snap ! SNAPSyncController.HealingRootUnservable(root)
+    awaitProcessed(snap)
+    val before = pollers.size
+
+    // The cursor never advances: after the 1 s stall timeout a tick respawns the downloader (a new poll adapter).
+    eventually {
+      snap ! SNAPSyncController.HeaderHoldTick
+      awaitProcessed(snap)
+      pollers.size should be > before
+    }
+    parent.expectNoMessage(50.millis) // never finalised without the headers
+    appStateStorage.isSnapSyncDone() shouldBe false
 
   it should "be unchanged with the switch off: the downloader starts during state sync, before finalisation" taggedAs UnitTest in new Fixture:
     val snap = start(cfg(defer = false))

@@ -188,6 +188,9 @@ private class SNAPSyncControllerImpl(
   // download to reach the pivot. Keyed by hash, not number, so a pivot that changed is never mistaken for the old one.
   private var headerHold: Option[ByteString] = None
   private var lastHeaderHoldWarnMs: Long = 0L
+  // Stall watchdog for the hold: highest header cursor seen and when it last advanced.
+  private var holdLastCursor: BigInt = 0
+  private var holdLastAdvanceMs: Long = 0L
 
   // Monotonic counter appended to coordinator actor names so restarts don't collide
   // with still-stopping actors from the previous cycle.
@@ -4995,14 +4998,29 @@ private class SNAPSyncControllerImpl(
         d ! ChainDownloader.Resume // no-op unless paused for a pivot bootstrap that no longer matters
       }
       lastHeaderHoldWarnMs = now
+      holdLastCursor = cursor
+      holdLastAdvanceMs = now
     else if headerHold.exists(_ != pivotHash) then
       ctx.log.info(s"Header hold: pivot changed to $pivot (cursor=$cursor)")
       chainDownloader.foreach(_ ! ChainDownloader.UpdateTarget(pivot))
+    if cursor > holdLastCursor then
+      holdLastCursor = cursor
+      holdLastAdvanceMs = now
+    else if now - holdLastAdvanceMs >= snapSyncConfig.headerHoldStallTimeout.toMillis then
+      // Never finalise without the headers: restart the downloader (same flags, target = pivot) and keep holding.
+      ctx.log.error(
+        s"SNAP finalisation hold: header cursor stuck at $cursor (pivot $pivot) for " +
+          s"${(now - holdLastAdvanceMs) / 1000}s; restarting the chain downloader"
+      )
+      chainDownloader.foreach(ctx.stop)
+      chainDownloader = None
+      startChainDownloader()
+      holdLastAdvanceMs = now
     if now - lastHeaderHoldWarnMs >= SNAPSyncController.HeaderHoldWarnIntervalMs then
       lastHeaderHoldWarnMs = now
       ctx.log.warn(
         s"SNAP finalisation held for the header download: cursor=$cursor pivot=$pivot gap=${pivot - cursor} " +
-          s"peers=${peersToDownloadFrom.size}"
+          s"lastKnownPeers=${peersToDownloadFrom.size} (peer events are not processed during the hold)"
       )
     headerHold = Some(pivotHash)
 
@@ -5033,6 +5051,7 @@ private class SNAPSyncControllerImpl(
                 snapRoot.toHex,
                 pivotHeader.stateRoot.value.toHex
               )
+              leaveHeaderHold() // else the hold tick would re-run this guard and re-send HealingImpossible every 2 s
               syncController ! SyncProtocol.HealingImpossible
               break(Behaviors.same)
           }
@@ -5304,7 +5323,11 @@ private class SNAPSyncControllerImpl(
                 maxConcurrentRequests = maxConcurrent,
                 requestTimeout = snapSyncConfig.chainDownloadTimeout,
                 snapServerPeerNodeIds = snapServerNodeIds,
-                deferBodiesAndReceipts = SNAPSyncController.chainBackfillDeferredToFinalization(snapSyncConfig)
+                deferBodiesAndReceipts = SNAPSyncController.chainBackfillDeferredToFinalization(snapSyncConfig),
+                emptyHeaderBackoff =
+                  Option.when(SNAPSyncController.chainBackfillDeferredToFinalization(snapSyncConfig))(
+                    SNAPSyncController.EmptyHeaderBackoff
+                  )
               ),
               s"chain-downloader-$coordinatorGeneration",
               DispatcherSelector.fromConfig("sync-dispatcher")
@@ -5344,6 +5367,7 @@ object SNAPSyncController:
 
   private[snap] val HeaderHoldTickInterval = 2.seconds
   private[snap] val HeaderHoldWarnIntervalMs = 60000L
+  private[snap] val EmptyHeaderBackoff: FiniteDuration = 60.seconds
   private[snap] val HeaderHoldTimerKey = "HeaderHoldTick"
 
   /** Whether bodies and receipts are held back until SNAP state is finalised (headers keep downloading). */
@@ -5908,6 +5932,8 @@ case class SNAPSyncConfig(
     // Concurrency budget for chain backfill once SNAP state is finalised and regular sync has started.
     // Smaller than `chainDownloadMaxConcurrentRequests` so backfill yields peer slots to regular sync.
     chainBackfillConcurrentRequests: Int = 2,
+    // Deferred-backfill hold: if the header cursor has not advanced for this long, the chain downloader is restarted.
+    headerHoldStallTimeout: FiniteDuration = 5.minutes,
     // When true, the chain downloader fetches headers only while SNAP state sync runs: bodies and receipts are held
     // until the state is finalised, so historical-body writes never compete with account/storage/bytecode/healing
     // writes for disk IO. Off by default; the post-merge ETH chain configs turn it on. The pivot header and the
@@ -6072,6 +6098,10 @@ object SNAPSyncConfig:
         if snapConfig.hasPath("chain-backfill-concurrent-requests") then
           snapConfig.getInt("chain-backfill-concurrent-requests")
         else 2,
+      headerHoldStallTimeout =
+        if snapConfig.hasPath("header-hold-stall-timeout") then
+          snapConfig.getDuration("header-hold-stall-timeout").toMillis.millis
+        else 5.minutes,
       deferChainBackfillUntilStateComplete =
         if snapConfig.hasPath("defer-chain-backfill-until-state-complete") then
           snapConfig.getBoolean("defer-chain-backfill-until-state-complete")

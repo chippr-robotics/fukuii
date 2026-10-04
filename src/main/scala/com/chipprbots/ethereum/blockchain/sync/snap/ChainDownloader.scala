@@ -84,7 +84,8 @@ class ChainDownloader private (
     snapServerPeerNodeIds: Set[ByteString],
     replyTo: TypedActorRef[ChainDownloader.Done.type],
     cursorScanCap: Long,
-    deferBodiesAndReceipts: Boolean
+    deferBodiesAndReceipts: Boolean,
+    emptyHeaderBackoff: Option[FiniteDuration]
 ):
 
   import ChainDownloader.*
@@ -127,7 +128,18 @@ class ChainDownloader private (
 
   // go-ethereum behavioural backoff: peers that returned empty headers are excluded from
   // header dispatch (capacity-to-zero equivalent). Bodies/receipts/SNAP unaffected.
-  private var emptyHeaderPeers: Set[PeerId] = Set.empty
+  // With `emptyHeaderBackoff` set (deferred-backfill mode) an entry expires after that period: an excluded peer is never
+  // asked again, so nothing else would clear it, and one transient empty reply would otherwise exclude the peer for
+  // good (stalling the header download on a small peer set). Unset keeps the original permanent exclusion.
+  private var emptyHeaderPeers: Map[PeerId, Long] = Map.empty
+
+  private def headerExcluded(peerId: PeerId): Boolean =
+    emptyHeaderPeers.get(peerId) match
+      case Some(expiresAtMs) if expiresAtMs > System.currentTimeMillis() => true
+      case Some(_) =>
+        emptyHeaderPeers -= peerId
+        false
+      case None => false
 
   // ETH70 partial receipt tracking: hash → next resume index (receipts already received)
   private var partialReceiptState: Map[ByteString, Long] = Map.empty
@@ -185,22 +197,38 @@ class ChainDownloader private (
     * Bounded work per call (a few thousand header reads) and bounded heap, regardless of chain length.
     */
   private def refillQueuesWindow(): Unit =
+    // Both queues must be low: the scan is paced by the SLOWER of the two fetch types, so neither queue can grow past
+    // one low-water mark plus one window while the other lags.
     if !bodiesReceiptsDeferred && scanPos < scanLimit &&
-      (bodiesQueue.size < QueueLowWater || receiptsQueue.size < QueueLowWater)
+      bodiesQueue.size < QueueLowWater && receiptsQueue.size < QueueLowWater
     then
       val bodyFloor = appStateStorage.getBackfillBestBody()
       val receiptFloor = appStateStorage.getBackfillBestReceipt()
       val end = (scanPos + QueueWindow).min(scanLimit)
       var i = scanPos + 1
-      while i <= end do
-        blockchainReader.getBlockHeaderByNumber(i).foreach { header =>
-          if i > bodyFloor && blockchainReader.getBlockBodyByHash(header.hash).isEmpty then
-            bodiesQueue :+= header.hash.value
-          if i > receiptFloor && blockchainReader.getReceiptsByHash(header.hash).isEmpty then
-            receiptsQueue :+= header.hash.value
-        }
-        i += 1
-      scanPos = end
+      var stop = false
+      while i <= end && !stop do
+        blockchainReader.getBlockHeaderByNumber(i) match
+          case Some(header) =>
+            if i > bodyFloor && blockchainReader.getBlockBodyByHash(header.hash).isEmpty then
+              bodiesQueue :+= header.hash.value
+            if i > receiptFloor && blockchainReader.getReceiptsByHash(header.hash).isEmpty then
+              receiptsQueue :+= header.hash.value
+            i += 1
+          case None =>
+            // The header cursor claimed this block was stored contiguously. It is not: do not skip it silently. Re-derive
+            // from what is really on disk: pull the cursor and the live header position back so the forward download
+            // fetches it (and everything above) again, and stop scanning at the gap.
+            log.warn(
+              "Chain download: header {} missing although the header cursor covered it; re-downloading from there",
+              i
+            )
+            val lastGood = i - 1
+            bestHeaderNumber = bestHeaderNumber.min(lastGood)
+            scanLimit = scanLimit.min(lastGood)
+            appStateStorage.putBackfillBestHeader(lastGood).commit()
+            stop = true
+      scanPos = (i - 1).min(scanLimit)
 
   def idle(): Behavior[Command] =
     Behaviors.receiveMessage { message =>
@@ -401,7 +429,9 @@ class ChainDownloader private (
       emptyHeaderPeers -= peer.id
       handleHeaders(peer, headers)
     else
-      emptyHeaderPeers += peer.id
+      emptyHeaderPeers += peer.id -> emptyHeaderBackoff.fold(Long.MaxValue)(b =>
+        System.currentTimeMillis() + b.toMillis
+      )
       log.debug("Empty headers from {} — excluding from header dispatch", peer.id)
 
   /** Shared logic for a failed request of any kind (header/body/receipt) — a peer only ever has at most one category
@@ -434,7 +464,7 @@ class ChainDownloader private (
         bodyRequestPeers.contains(peerId) ||
         receiptRequestPeers.contains(peerId) ||
         p.peer.nodeId.exists(snapServerPeerNodeIds.contains) ||
-        emptyHeaderPeers.contains(peerId)
+        headerExcluded(peerId)
       }
 
       if available.isEmpty then Behaviors.same
@@ -1350,7 +1380,10 @@ object ChainDownloader:
       // noticeable latency hit, while bounding worst-case single-message cost to a few thousand DB reads.
       cursorScanCap: Long = 5000L,
       // Download headers only; hold bodies/receipts until `ReleaseBodiesAndReceipts` (SNAP IO-contention fix).
-      deferBodiesAndReceipts: Boolean = false
+      deferBodiesAndReceipts: Boolean = false,
+      // How long a peer that answered a header request with nothing stays excluded from header dispatch. None keeps the
+      // original permanent exclusion (ETC / switch off).
+      emptyHeaderBackoff: Option[FiniteDuration] = None
   ): Behavior[Command] =
     Behaviors.setup { context =>
       Behaviors.withTimers { timers =>
@@ -1383,7 +1416,8 @@ object ChainDownloader:
           snapServerPeerNodeIds,
           replyTo,
           cursorScanCap,
-          deferBodiesAndReceipts
+          deferBodiesAndReceipts,
+          emptyHeaderBackoff
         )
 
         // Immediate poll, then periodic poll for handshaked peers (replaces PeerListSupportNg's scheduleWithFixedDelay).
