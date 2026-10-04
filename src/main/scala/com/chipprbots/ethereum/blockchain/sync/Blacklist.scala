@@ -145,7 +145,7 @@ object Blacklist:
         val code: Int = 30
         val name: String = "BlockImportError"
       case object InvalidBlockAccessListType extends BlacklistReasonType with RegularSyncBlacklistGroup:
-        val code: Int = 31
+        val code: Int = 32
         val name: String = "InvalidBlockAccessList"
 
     case object WrongBlockHeaders extends BlacklistReason:
