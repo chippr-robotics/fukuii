@@ -529,10 +529,24 @@ class BlockExecution(
     * first. Only numbers strictly above the persisted best block are touched, so this can never undo canonical state; a
     * number that was never applied is a no-op. See
     * [[com.chipprbots.ethereum.db.storage.StateStorage.rollbackUnadoptedBlock]].
+    *
+    * On a node that runs both p2p import and the Engine API, `newPayload` may already have applied a DIFFERENT block at
+    * the same number (it persists state above best until forkchoiceUpdated, and writes the number->hash mapping).
+    * Rolling back by number would undo that block's state too, so a number whose canonical mapping names another block
+    * is left alone: the failing block's own partial application then stays, which costs liveness (a later retry
+    * re-applies it), never a deleted live node.
+    *
+    * Snapshots are keyed by number, so a stale side branch saved above a rolled-back number is left half-applied by the
+    * rollback; that too is a liveness cost only. InMemoryPruning keeps the old re-apply behaviour (no rollback).
     */
   def discardUnadoptedState(blocks: Seq[Block]): Unit =
     val best = blockchainReader.getBestBlockNumber
-    blocks.map(_.number.value).filter(_ > best).sorted(Ordering[BigInt].reverse).foreach(blockchain.rollbackBlockState)
+    blocks
+      .filter(_.number.value > best)
+      .filter(b => blockchainReader.getCanonicalHashByNumber(b.number.value).forall(_ == b.hash))
+      .map(_.number.value)
+      .sorted(Ordering[BigInt].reverse)
+      .foreach(blockchain.rollbackBlockState)
 
   /** EIP-4895: Process beacon chain withdrawals (Shanghai+). Each withdrawal credits `amount * 1 Gwei` to the target
     * address. No gas is charged. Creates the account if it doesn't exist.

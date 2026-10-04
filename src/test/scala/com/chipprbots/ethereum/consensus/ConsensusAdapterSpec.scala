@@ -95,6 +95,7 @@ class ConsensusAdapterSpec extends AnyFlatSpec with Matchers with ScalaFutures w
       .returning(storagesInstance.storages.stateStorage.getBackingStorage(6))
     blockchain.saveBlockState.expects(*).anyNumberOfTimes().returning(())
     blockchain.rollbackBlockState.expects(*).anyNumberOfTimes().returning(())
+    blockchainReader.getCanonicalHashByNumber.expects(*).anyNumberOfTimes().returning(None)
 
     whenReady(blockImportNotFailingAfterExecValidation.evaluateBranchBlock(block).unsafeToFuture()) {
       _ shouldEqual BlockImportedToTop(List(blockData))
@@ -126,6 +127,7 @@ class ConsensusAdapterSpec extends AnyFlatSpec with Matchers with ScalaFutures w
 
     blockchainReader.getBlockHeaderByHash.expects(*).anyNumberOfTimes().returning(Some(block.header))
     blockchain.rollbackBlockState.expects(*).anyNumberOfTimes().returning(())
+    blockchainReader.getCanonicalHashByNumber.expects(*).anyNumberOfTimes().returning(None)
     blockchainReader.getBlockHeaderByNumber.expects(*).anyNumberOfTimes().returning(Some(block.header))
     blockchain.getBackingMptStorage.expects(*).returning(mptStorage)
     mptStorage.get.expects(*).returning(mptNode)

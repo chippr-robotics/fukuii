@@ -334,24 +334,34 @@ abstract class BaseNode extends Node:
     tryAndLogFailure(() => Metrics.get().close())
     tryAndLogFailure(() => storagesInstance.dataSource.close())
 
-  /** Restores the number->hash entry at the best block's height if an earlier version rewrote the best block's header
-    * (SNAP startup) and left the index naming the forged copy. See [[BlockchainWriter.repairBestBlockNumberMapping]].
-    */
   /** A kill mid-batch leaves the batch's executed blocks applied (reference counts, death rows) above the persisted
     * best block, which only advances when the batch is adopted. The restart re-executes them, applying the same node
     * changes twice. Undo them first. No-op off basic pruning and on a clean node.
+    *
+    * NOT on a post-merge / Engine API node: there `newPayload` legitimately persists a block's state (and writes its
+    * number->hash mapping and receipts) above best, and best only moves at forkchoiceUpdated. A restart inside that
+    * window must keep the state, because the Engine "already executed" dedupe then answers VALID without re-executing.
+    * Same gate as `bindDesignatedHead`, widened to either condition to stay on the safe side.
     */
   def rollbackUnadoptedBlocks(): Unit =
-    val rolledBack = blockchain.rollbackUnadoptedBlocksAboveBest(StdNode.UnadoptedSweepWindow)
-    if rolledBack > 0 then
-      log.warn(
-        "Startup sweep: rolled back {} block(s) above best block {} that were applied by an interrupted import batch " +
-          "(window {}).",
-        rolledBack,
-        blockchainReader.getBestBlockNumber,
-        StdNode.UnadoptedSweepWindow
+    if !StdNode.startupSweepAllowed(engineApiConfig.enabled, blockchainConfig.terminalTotalDifficulty.isDefined) then
+      log.debug(
+        "Startup unadopted-batch sweep skipped: Engine API / post-merge node (state above best is Engine-owned)"
       )
+    else
+      val rolledBack = blockchain.rollbackUnadoptedBlocksAboveBest(StdNode.UnadoptedSweepWindow)
+      if rolledBack > 0 then
+        log.warn(
+          "Startup sweep: rolled back {} block(s) above best block {} that were applied by an interrupted import batch " +
+            "(window {}).",
+          rolledBack,
+          blockchainReader.getBestBlockNumber,
+          StdNode.UnadoptedSweepWindow
+        )
 
+  /** Restores the number->hash entry at the best block's height if an earlier version rewrote the best block's header
+    * (SNAP startup) and left the index naming the forged copy. See [[BlockchainWriter.repairBestBlockNumberMapping]].
+    */
   def repairBestBlockMapping(): Unit =
     blockchainWriter.repairBestBlockNumberMapping(blockchainReader) match
       case BestMappingRepair.Consistent => ()
@@ -397,6 +407,12 @@ object StdNode:
 
   /** Blocks above the persisted best examined by the startup unadopted-batch sweep (import batches are 50 blocks). */
   val UnadoptedSweepWindow: Int = 512
+
+  /** The startup unadopted-batch sweep may run only on a PoW-style node: neither the Engine API enabled nor a terminal
+    * total difficulty configured. See [[BaseNode.rollbackUnadoptedBlocks]].
+    */
+  def startupSweepAllowed(engineApiEnabled: Boolean, hasTerminalTotalDifficulty: Boolean): Boolean =
+    !engineApiEnabled && !hasTerminalTotalDifficulty
 
   /** Should the Engine API bind after the ETH JSON-RPC server rather than before it?
     *
