@@ -223,6 +223,32 @@ class StateReadCachesSpec extends AnyFlatSpec with Matchers:
     without.getForExecution(hash) shouldBe None // a different database: still missing
   }
 
+  "JUMPDEST block memo" should "belong to one world, shared by its copies and by no other world" taggedAs (
+    UnitTest,
+    StateTest
+  ) in {
+    def world() = InMemoryWorldStateProxy(
+      new EvmCodeStorage(EphemDataSource()),
+      new ReferenceCountedStateStorage(new NodeStorage(EphemDataSource()), history, 1024L * 1024).getBackingStorage(0),
+      (_: BigInt) => None,
+      com.chipprbots.ethereum.domain.UInt256.Zero,
+      ByteString(MerklePatriciaTrie.EmptyRootHash),
+      noEmptyAccounts = false,
+      ethCompatibleStorage = true
+    )
+    val block1 = world()
+    val block2 = world() // the next block, or an eth_call, builds its own world
+    val copy = block1.saveCode(com.chipprbots.ethereum.domain.Address(1), ByteString(0x5b))
+    block1.jumpDestMemo shouldBe defined
+    (copy.jumpDestMemo.get should be).theSameInstanceAs(block1.jumpDestMemo.get)
+    block2.jumpDestMemo.get should not be theSameInstanceAs(block1.jumpDestMemo.get)
+
+    val code = ByteString(0x5b, 0x5b)
+    block1.jumpDestMemo.get.getOrCompute(kec256(code), code)
+    block1.jumpDestMemo.get.entries shouldBe 1
+    block2.jumpDestMemo.get.entries shouldBe 0 // nothing leaked to the other world
+  }
+
   "StateReadCacheConfig" should "never size a cache beyond its fraction of the max heap" taggedAs (
     UnitTest,
     StateTest
@@ -231,5 +257,6 @@ class StateReadCachesSpec extends AnyFlatSpec with Matchers:
     com.chipprbots.ethereum.utils.StateReadCacheConfig.codeCacheBytes should be <= (heap * 0.03).toLong
     com.chipprbots.ethereum.utils.StateReadCacheConfig.decodedNodeCacheBytes should be <= (heap * 0.04).toLong
     com.chipprbots.ethereum.utils.StateReadCacheConfig.jumpDestCacheBytes should be <= (heap * 0.01).toLong
+    com.chipprbots.ethereum.utils.StateReadCacheConfig.jumpDestBlockMemoBytes should be <= (heap * 0.02).toLong
     com.chipprbots.ethereum.utils.StateReadCacheConfig.worldReadMemoEntries.toLong should be <= heap / 32768
   }

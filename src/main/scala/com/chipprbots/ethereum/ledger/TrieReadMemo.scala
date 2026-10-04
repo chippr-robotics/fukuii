@@ -7,6 +7,7 @@ import org.apache.pekko.util.ByteString
 
 import com.chipprbots.ethereum.utils.StateReadCacheConfig
 import com.chipprbots.ethereum.vm.ImportProfile
+import com.chipprbots.ethereum.vm.JumpDestAnalysis
 
 /** The entries one world (one block's execution) may spend on [[TrieReadMemo]]s, summed over all of them. Once spent,
   * reads simply stop being memoised: nothing is evicted and nothing is wrong, the world just reads the trie again.
@@ -50,6 +51,9 @@ final class TrieReadMemo[K, V](budget: ReadMemoBudget):
 final class WorldReadMemos(val budget: ReadMemoBudget = ReadMemoBudget.fromConfig()):
   private val maxStorageMemos = 16384
   private val storage = new ConcurrentHashMap[ByteString, TrieReadMemo[BigInt, BigInt]]
+
+  /** This world's JUMPDEST analysis memo: the world is one block's execution, so the memo has the block's lifetime. */
+  val jumpDests: Option[JumpDestAnalysis.BlockMemo] = JumpDestAnalysis.BlockMemo.forBlock()
 
   def accounts[K, V]: TrieReadMemo[K, V] = new TrieReadMemo[K, V](budget)
 

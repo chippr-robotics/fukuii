@@ -127,3 +127,119 @@ class JumpDestAnalysisSpec extends AnyFlatSpec with Matchers with ScalaCheckProp
     tiny.getOrCompute(kec256(code), code) shouldBe JumpDestAnalysis.analyse(code)
     tiny.entries shouldBe 0
   }
+
+  // ---- truncation and the per-block memo -------------------------------------------------------------------------
+
+  /** The truncated analysis answers every position 0..len+1 (and a few beyond, and negative) as the oracle's full scan.
+    */
+  private def sameEverywhere(code: ByteString): Unit =
+    val expected = oracle(code)
+    val bits = JumpDestAnalysis.analyse(code)
+    (-2 to code.length + 70).foreach(pos => bits.contains(pos) shouldBe expected.contains(pos))
+    // truncated at the last JUMPDEST's word: nothing past it is kept
+    JumpDestAnalysis.words(bits) shouldBe (if expected.isEmpty then 0 else (expected.max >>> 6) + 1)
+
+  "A truncated analysis" should "answer every position exactly as the full scan" taggedAs (UnitTest, VMTest) in {
+    val r = new java.util.Random(23)
+    (1 to 200).foreach { _ =>
+      val bytes = new Array[Byte](r.nextInt(600)); r.nextBytes(bytes)
+      sameEverywhere(ByteString(bytes))
+    }
+    sameEverywhere(ByteString(0x60, 0x5b, 0x5b)) // 0x5b inside PUSH data, then a real one
+    sameEverywhere(ByteString(0x5b, 0x60, 0x5b)) // the last 0x5b is PUSH data
+    sameEverywhere(ByteString(0x5b, 0x7f.toByte, 0x5b, 0x5b)) // truncated final PUSH32
+    (0x60 to 0x7f).foreach(push => sameEverywhere(ByteString(0x5b, push.toByte, 0x5b)))
+    sameEverywhere(ByteString(Array.fill(300)(0x00.toByte))) // no JUMPDEST at all
+    sameEverywhere(ByteString(Array.fill(300)(0x60.toByte)))
+    sameEverywhere(ByteString.empty)
+  }
+
+  it should "match on 64 KB code: padding, a JUMPDEST at the very end, and random" taggedAs (UnitTest, VMTest) in {
+    val padded = new Array[Byte](65536); padded(100) = 0x5b.toByte
+    sameEverywhere(ByteString(padded))
+    JumpDestAnalysis.words(JumpDestAnalysis.analyse(ByteString(padded))) shouldBe 2 // 8 KiB of bits kept as 16 bytes
+    val last = new Array[Byte](65536); last(65535) = 0x5b.toByte
+    sameEverywhere(ByteString(last))
+    val r = new java.util.Random(5)
+    val random = new Array[Byte](65536); r.nextBytes(random)
+    sameEverywhere(ByteString(random))
+    sameEverywhere(ByteString(new Array[Byte](65536)))
+  }
+
+  private def distinctPadded(i: Int): ByteString =
+    val a = new Array[Byte](65536)
+    a(0) = 0x5b.toByte
+    a(1) = (i & 0xff).toByte
+    a(2) = ((i >> 8) & 0xff).toByte
+    a(500 + i) = 0x5b.toByte
+    ByteString(a)
+
+  "JumpDestAnalysis.BlockMemo" should "analyse each distinct code once however often it is called in a cycle" taggedAs (
+    UnitTest,
+    VMTest
+  ) in {
+    val n = 300
+    val codes = (0 until n).map(distinctPadded)
+    val hashes = codes.map(kec256(_))
+    val rounds = 40
+    def run(memo: Option[JumpDestAnalysis.BlockMemo], lru: JumpDestAnalysis.Cache): ImportProfile.Snapshot =
+      ImportProfile.begin() shouldBe true
+      try
+        (0 until rounds).foreach { _ =>
+          (0 until n).foreach { i =>
+            val bits = memo.fold(lru.getOrCompute(hashes(i), codes(i)))(_.getOrCompute(hashes(i), codes(i)))
+            bits.contains(0) shouldBe true
+          }
+        }
+      finally ()
+      ImportProfile.end()
+
+    // Before: an LRU too small for the working set (the live case: a cycle larger than the cache) rescans every call.
+    val small = new JumpDestAnalysis.Cache(maxBytes = 50 * 1024)
+    val before = run(None, small)
+    // After: the same LRU behind the block memo.
+    val lru = new JumpDestAnalysis.Cache(maxBytes = 50 * 1024)
+    val memo = new JumpDestAnalysis.BlockMemo(maxBytes = 64L * 1024 * 1024, lru)
+    val after = run(Some(memo), lru)
+    info(
+      s"scans before=${before.scans} after=${after.scans} (calls=${n * rounds}), memo hits=${after.jumpMemoHits} " +
+        s"misses=${after.jumpMemoMisses}, memo bytes=${memo.sizeBytes}"
+    )
+    before.scans should be > (n * rounds / 2L)
+    after.scans shouldBe n.toLong
+    after.jumpMemoMisses shouldBe n.toLong
+    after.jumpMemoHits shouldBe (n * (rounds - 1)).toLong
+    memo.entries shouldBe n
+    // truncated: 64 KB contracts held as 8-16 bytes of bits each, not 8 KiB
+    memo.sizeBytes should be < (n * 300L)
+  }
+
+  it should "fall back to the cache, with identical answers, once its byte budget is spent" taggedAs (
+    UnitTest,
+    VMTest
+  ) in {
+    val lru = new JumpDestAnalysis.Cache(maxBytes = 1024 * 1024)
+    val memo = new JumpDestAnalysis.BlockMemo(maxBytes = 300, lru)
+    val codes = (0 until 20).map(distinctPadded)
+    codes.foreach(c => memo.getOrCompute(kec256(c), c) shouldBe JumpDestAnalysis.analyse(c))
+    memo.sizeBytes should be <= 300L
+    memo.entries should be < 20
+    codes.foreach(c => memo.getOrCompute(kec256(c), c) shouldBe JumpDestAnalysis.analyse(c))
+    val off = new JumpDestAnalysis.BlockMemo(maxBytes = 0, lru)
+    off.getOrCompute(kec256(codes.head), codes.head) shouldBe JumpDestAnalysis.analyse(codes.head)
+    off.entries shouldBe 0
+  }
+
+  it should "not be used for code without a known hash, and Program answers are the same with it" taggedAs (
+    UnitTest,
+    VMTest
+  ) in {
+    val memo = new JumpDestAnalysis.BlockMemo(1024 * 1024, new JumpDestAnalysis.Cache(1024 * 1024))
+    val code = distinctPadded(7)
+    Program(code).validJumpDestinations shouldBe Program
+      .withCodeHash(code, kec256(code), Some(memo))
+      .validJumpDestinations
+    memo.entries shouldBe 1 // only the hashed program entered it
+    Program(code).validJumpDestinations
+    memo.entries shouldBe 1
+  }
