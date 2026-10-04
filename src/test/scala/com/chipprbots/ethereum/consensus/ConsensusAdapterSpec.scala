@@ -25,6 +25,7 @@ import com.chipprbots.ethereum.consensus.validators.*
 import com.chipprbots.ethereum.consensus.validators.BlockHeaderError.HeaderDifficultyError
 import com.chipprbots.ethereum.consensus.validators.BlockHeaderError.HeaderParentNotFoundError
 import com.chipprbots.ethereum.db.storage.MptStorage
+import com.chipprbots.ethereum.db.storage.StagedBlockState
 import com.chipprbots.ethereum.domain.*
 import com.chipprbots.ethereum.domain.branch.Branch
 import com.chipprbots.ethereum.domain.branch.EmptyBranch
@@ -83,13 +84,21 @@ class ConsensusAdapterSpec extends AnyFlatSpec with Matchers with ScalaFutures w
     // BlockExecution records each executed block's difficulty into the TD ring buffer
     // (#1373) — an incidental call on the real-execution success path; allow it.
     blockchainReader.recordBlockDifficulty.expects(*).anyNumberOfTimes().returning(())
-    blockchainWriter.save.expects(*, *, *, *).returning(())
+    // the block, receipts, weight and (extends-best path) the best-block pointer are ONE batch now
+    blockchainWriter.saveBatch
+      .expects(*, *, *, true)
+      .returning(com.chipprbots.ethereum.db.dataSource.DataSourceBatchUpdate(storagesInstance.dataSource))
     blockchainWriter.saveBestKnownBlocks.expects(*, *).returning(())
 
     blockQueue.enqueueBlock.expects(block, bestNum).returning(Some(Leaf(hash, newWeight)))
     blockQueue.getBranch.expects(BlockHash(hash), true).returning(List(block))
 
     blockchainReader.getBlockHeaderByHash.expects(*).anyNumberOfTimes().returning(Some(block.header))
+    // BlockExecution asks for the block's staged state storage first (the stubbed execution below never uses it) ...
+    blockchain.stageBlockState
+      .expects(*)
+      .returning(StagedBlockState.direct(storagesInstance.storages.stateStorage.getBackingStorage(6)))
+    // ... and the stubbed execution builds its empty world from the backing storage, as it always did
     blockchain.getBackingMptStorage
       .expects(*)
       .returning(storagesInstance.storages.stateStorage.getBackingStorage(6))
@@ -125,7 +134,7 @@ class ConsensusAdapterSpec extends AnyFlatSpec with Matchers with ScalaFutures w
 
     blockchainReader.getBlockHeaderByHash.expects(*).anyNumberOfTimes().returning(Some(block.header))
     blockchainReader.getBlockHeaderByNumber.expects(*).anyNumberOfTimes().returning(Some(block.header))
-    blockchain.getBackingMptStorage.expects(*).returning(mptStorage)
+    blockchain.stageBlockState.expects(*).returning(StagedBlockState.direct(mptStorage))
     mptStorage.get.expects(*).returning(mptNode)
 
     blockQueue.removeSubtree.expects(*)
