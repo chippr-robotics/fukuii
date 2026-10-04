@@ -17,6 +17,15 @@ object StateReadCacheConfig:
   private def bytes(path: String, default: Long): Long =
     section.filter(_.hasPath(path)).map(_.getLong(path)).getOrElse(default)
 
+  private def flag(path: String, default: Boolean): Boolean =
+    section.filter(_.hasPath(path)).map(_.getBoolean(path)).getOrElse(default)
+
+  /** Whether the per-block `[IMPORT-TIMING]` line is logged at INFO (true) or DEBUG (false, the default). Lives in this
+    * section because the timers instrument these caches and `ImportProfile` already reads it without initialising the
+    * whole node [[Config]].
+    */
+  lazy val importTimingLog: Boolean = flag("import-timing-log", false)
+
   /** Budget of each `EvmCodeStorage`'s execution-side code cache; 0 disables it. */
   lazy val codeCacheBytes: Long = bytes("code-cache-bytes", 64L * 1024 * 1024)
 

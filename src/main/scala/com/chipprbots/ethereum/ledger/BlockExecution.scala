@@ -17,6 +17,7 @@ import com.chipprbots.ethereum.utils.BlockchainConfig
 import com.chipprbots.ethereum.utils.ByteStringUtils
 import com.chipprbots.ethereum.utils.DaoForkConfig
 import com.chipprbots.ethereum.utils.Logger
+import com.chipprbots.ethereum.utils.StateReadCacheConfig
 import com.chipprbots.ethereum.db.storage.SerializingMptStorage
 import com.chipprbots.ethereum.vm.AmsterdamGas
 import com.chipprbots.ethereum.vm.BlockAccessRecorder
@@ -197,7 +198,8 @@ class BlockExecution(
       finally if timing then snapshot = Some(ImportProfile.end())
     snapshot.foreach { s =>
       val gas = result.toOption.fold(BigInt(0))(_.gasUsed)
-      log.info(ImportProfile.format(block.header.number.value, gas, block.body.transactionList.size, s))
+      val line = ImportProfile.format(block.header.number.value, gas, block.body.transactionList.size, s)
+      if StateReadCacheConfig.importTimingLog then log.info(line) else log.debug(line)
     }
     result
 
