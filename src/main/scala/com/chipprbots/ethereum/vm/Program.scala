@@ -56,6 +56,9 @@ case class Program(code: ByteString):
     */
   private var knownCodeHash: ByteString = null
 
+  /** The executing block's analysis memo, when the world has one; set only by [[Program.withCodeHash]]. */
+  private var blockMemo: JumpDestAnalysis.BlockMemo = null
+
   /** The valid jump destinations of the program. See section 9.4.3 in Yellow Paper for more detail.
     *
     * A bit set, one bit per code byte, like go-ethereum's `bitvec` code analysis (a HashSet cost ~45 bytes per
@@ -66,6 +69,7 @@ case class Program(code: ByteString):
   lazy val validJumpDestinations: BitSet =
     val hash = knownCodeHash
     if hash == null then ImportProfile.scan(length)(JumpDestAnalysis.analyse(code))
+    else if blockMemo != null then blockMemo.getOrCompute(hash, code)
     else JumpDestAnalysis.shared.getOrCompute(hash, code)
 
   lazy val codeHash: ByteString =
@@ -76,7 +80,12 @@ object Program:
   /** A program whose code is known to hash to `codeHash`, so its JUMPDEST analysis can be shared. The caller vouches
     * for the hash: pass only the `codeHash` the world state holds for exactly this code.
     */
-  def withCodeHash(code: ByteString, codeHash: ByteString): Program =
+  def withCodeHash(
+      code: ByteString,
+      codeHash: ByteString,
+      memo: Option[JumpDestAnalysis.BlockMemo] = None
+  ): Program =
     val program = Program(code)
     program.knownCodeHash = codeHash
+    program.blockMemo = memo.orNull
     program

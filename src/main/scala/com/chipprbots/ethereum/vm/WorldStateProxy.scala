@@ -59,6 +59,12 @@ trait WorldStateProxy[WS <: WorldStateProxy[WS, S], S <: Storage[S]]:
     * not yet persisted. The hash lets the EVM share the code's JUMPDEST analysis across frames.
     */
   def getCodeAndHash(address: Address): (ByteString, Option[ByteString]) = (getCode(address), None)
+
+  /** The JUMPDEST analysis memo of the block this world executes (see [[JumpDestAnalysis.BlockMemo]]); `None` for a
+    * world that has none, which then uses the process-wide cache directly.
+    */
+  def jumpDestMemo: Option[JumpDestAnalysis.BlockMemo] = None
+
   def getStorage(address: Address): S
   def getBlockHash(number: UInt256): Option[UInt256]
 

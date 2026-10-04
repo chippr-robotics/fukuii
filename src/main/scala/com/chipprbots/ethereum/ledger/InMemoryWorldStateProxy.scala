@@ -16,6 +16,7 @@ import com.chipprbots.ethereum.mpt.MptNode
 import com.chipprbots.ethereum.rlp
 import com.chipprbots.ethereum.rlp.RLPImplicits.given
 import com.chipprbots.ethereum.vm.ImportProfile
+import com.chipprbots.ethereum.vm.JumpDestAnalysis
 import com.chipprbots.ethereum.vm.Storage
 import com.chipprbots.ethereum.vm.WorldStateProxy
 
@@ -227,6 +228,8 @@ class InMemoryWorldStateProxy(
     * contract as an EOA, and a node that then imports the block disagrees with every other client (SNAP healing used to
     * leave exactly such accounts behind — devnet-8 block 318074).
     */
+  override def jumpDestMemo: Option[JumpDestAnalysis.BlockMemo] = readMemos.jumpDests
+
   override def getCode(address: Address): ByteString = getCodeAndHash(address)._1
 
   /** [[getCode]] plus the account's `codeHash` when the code came from `EvmCodeStorage` under that hash. Code deployed
