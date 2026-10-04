@@ -260,7 +260,7 @@ class InMemoryWorldStateProxy(
       case Some(dirty) => dirty.length
       case None =>
         getAccount(address) match
-          case None => 0
+          case None                                                       => 0
           case Some(account) if account.codeHash == Account.EmptyCodeHash => 0
           case Some(account) =>
             ImportProfile.code {
