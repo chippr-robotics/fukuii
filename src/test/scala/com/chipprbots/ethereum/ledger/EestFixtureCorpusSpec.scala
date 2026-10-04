@@ -50,7 +50,10 @@ class EestFixtureCorpusSpec extends AnyFlatSpec with Matchers:
     */
   private def replayOne(t: JValue): Seq[String] =
     try EestBlockchainReplay.replay(t)
-    catch case e: Throwable => Seq(s"threw $e")
+    catch
+      case e: Throwable =>
+        if sys.env.contains("EEST_TRACE") then e.printStackTrace()
+        Seq(s"threw $e")
 
   /** The node runs the EVM on threads sized by `.jvmopts` (-Xss4M); a pool thread's default stack is smaller than a
     * 1024-frame call chain needs, so workers get the node's headroom and then some.
