@@ -559,6 +559,8 @@ class BlockExecution(
     * @param adoptEachBlock
     *   make each block the best block in the same atomic write that stores it (the extends-best import path). False for
     *   a side branch: `ConsensusImpl.settleHead` decides afterwards which head the node keeps.
+    * @param suppliedBlockAccessLists
+    *   peer-supplied EIP-7928 lists by block hash (regular-sync catch-up over eth/71). Prefetch hints only.
     *
     * Each block's state writes are staged and committed with the block, or not at all: a block that fails leaves
     * nothing behind, so a retry starting at it applies nothing twice. See [[StagedBlockState]].
@@ -571,6 +573,15 @@ class BlockExecution(
       blocks: List[Block],
       parentChainWeight: ChainWeight,
       adoptEachBlock: Boolean = false
+  )(implicit blockchainConfig: BlockchainConfig): (List[BlockData], Option[BlockExecutionError]) =
+    executeAndValidateBlocksWithAccessLists(blocks, parentChainWeight, adoptEachBlock, Map.empty)
+
+  /** [[executeAndValidateBlocks]] for blocks that arrived with peer-supplied EIP-7928 lists. */
+  def executeAndValidateBlocksWithAccessLists(
+      blocks: List[Block],
+      parentChainWeight: ChainWeight,
+      adoptEachBlock: Boolean,
+      suppliedBlockAccessLists: Map[ByteString, BlockAccessList]
   )(implicit blockchainConfig: BlockchainConfig): (List[BlockData], Option[BlockExecutionError]) =
     @tailrec
     def go(
@@ -604,7 +615,13 @@ class BlockExecution(
         // header from the same storage at BlockExecution.scala:104-106.
         val staged = blockchain.stageBlockState(blockToExecute.header.number.value)
         val outcome =
-          try executeAndValidateStaged(blockToExecute, alreadyValidated = false, staged)
+          try
+            // EIP-7928: a list a peer served for this block (eth/71) is a prefetch hint, checked against the header
+            // before use; a block without one takes the unchanged path.
+            suppliedBlockAccessLists.get(blockToExecute.hash.value) match
+              case None => executeAndValidateStaged(blockToExecute, alreadyValidated = false, staged)
+              case hint =>
+                executeAndValidateStagedWithList(blockToExecute, alreadyValidated = false, staged, hint)
           catch
             case t: Throwable =>
               staged.discard()

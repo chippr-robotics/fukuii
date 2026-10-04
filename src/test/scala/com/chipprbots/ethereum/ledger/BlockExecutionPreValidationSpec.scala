@@ -16,6 +16,7 @@ import com.chipprbots.ethereum.consensus.pow.validators.OmmersValidator.OmmersVa
 import com.chipprbots.ethereum.consensus.validators.BlockHeaderError
 import com.chipprbots.ethereum.consensus.validators.BlockHeaderValid
 import com.chipprbots.ethereum.consensus.validators.BlockHeaderValidator
+import com.chipprbots.ethereum.db.storage.StagedBlockState
 import com.chipprbots.ethereum.domain.*
 import com.chipprbots.ethereum.ledger.BlockExecutionError.ValidationBeforeExecError
 import com.chipprbots.ethereum.testing.Tags.*
@@ -181,4 +182,44 @@ class BlockExecutionPreValidationSpec
           blocks.map(_.block) shouldBe chain.take(1)
         }
         error.value shouldBe a[ValidationBeforeExecError]
+
+    "hand a peer-supplied access list to the block it belongs to, and to no other" taggedAs
+      (UnitTest, ConsensusTest) in new BlockchainSetup:
+        val chain: List[Block] = BlockHelpers.generateChain(3, validBlockParentBlock)
+        val list = BlockAccessList(Nil)
+        val seen = scala.collection.mutable.Map.empty[BigInt, Option[BlockAccessList]]
+        override lazy val blockExecution =
+          new BlockExecution(
+            blockchain,
+            blockchainReader,
+            blockchainWriter,
+            blockchainStorages.evmCodeStorage,
+            mining.blockPreparator,
+            blockValidation
+          ):
+            override protected[ledger] def executeAndValidateStagedWithList(
+                block: Block,
+                alreadyValidated: Boolean,
+                staged: StagedBlockState,
+                supplied: Option[BlockAccessList]
+            )(implicit
+                blockchainConfig: BlockchainConfig
+            ): Either[BlockExecutionError, (Seq[Receipt], Seq[ByteString], Option[BlockAccessList])] =
+              seen(block.number.value) = supplied
+              Right((Nil, Nil, None))
+
+        val (blocks, error) = blockExecution.executeAndValidateBlocksWithAccessLists(
+          chain,
+          defaultChainWeight,
+          adoptEachBlock = false,
+          Map(chain(1).hash.value -> list)
+        )
+
+        error shouldBe None
+        blocks.size shouldBe 3
+        seen.toMap shouldBe Map(
+          chain(0).number.value -> None,
+          chain(1).number.value -> Some(list),
+          chain(2).number.value -> None
+        )
   }

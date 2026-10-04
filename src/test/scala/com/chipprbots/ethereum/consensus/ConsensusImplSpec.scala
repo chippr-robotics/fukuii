@@ -22,6 +22,7 @@ import com.chipprbots.ethereum.consensus.Consensus.SelectedNewBestBranch
 import com.chipprbots.ethereum.consensus.engine.DesignatedHead
 import com.chipprbots.ethereum.domain.Difficulty
 import com.chipprbots.ethereum.domain.Block
+import com.chipprbots.ethereum.domain.BlockAccessList
 import com.chipprbots.ethereum.domain.ChainWeight
 import com.chipprbots.ethereum.ledger.BlockData
 import com.chipprbots.ethereum.ledger.BlockExecution
@@ -41,6 +42,25 @@ class ConsensusImplSpec extends AnyFlatSpec with Matchers with ScalaFutures with
     }
 
     blockchainReader.getBestBlock shouldBe Some(chainExtension.last)
+
+  it should "hand peer-supplied access lists to execution, and take the unchanged path without them" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in new ConsensusSetup:
+    val chainExtension: List[Block] = BlockHelpers.generateChain(2, initialBestBlock)
+    val lists = Map(chainExtension.head.hash.value -> BlockAccessList(Nil))
+
+    whenReady(
+      consensus.evaluateBranchWithAccessLists(NonEmptyList.fromListUnsafe(chainExtension), lists).unsafeToFuture()
+    )(_ shouldBe a[ExtendedCurrentBestBranch])
+    suppliedLists shouldBe Some(lists)
+
+    suppliedLists = None
+    val next: List[Block] = BlockHelpers.generateChain(1, chainExtension.last)
+    whenReady(consensus.evaluateBranch(NonEmptyList.fromListUnsafe(next)).unsafeToFuture())(
+      _ shouldBe a[ExtendedCurrentBestBranch]
+    )
+    suppliedLists shouldBe None
 
   it should "extends the branch partially if one block is invalid" taggedAs (
     UnitTest,
@@ -335,6 +355,26 @@ class ConsensusImplSpec extends AnyFlatSpec with Matchers with ScalaFutures with
               else ValidationAfterExecError("test error")
             )
         )
+      }
+
+    // The same behaviour for a branch that arrives with peer-supplied EIP-7928 lists; records what it was handed.
+    var suppliedLists: Option[Map[ByteString, BlockAccessList]] = None
+    (blockExecution
+      .executeAndValidateBlocksWithAccessLists(
+        _: List[Block],
+        _: ChainWeight,
+        _: Boolean,
+        _: Map[ByteString, BlockAccessList]
+      )(
+        _: BlockchainConfig
+      ))
+      .when(*, *, *, *, *)
+      .anyNumberOfTimes()
+      .onCall { (blocks, _, _, lists, _) =>
+        suppliedLists = Some(lists)
+        val executedBlocks = blocks.map(b => BlockData(b, Nil, ChainWeight.zero))
+        executedBlocks.foreach(b => blockchainWriter.save(b.block, b.receipts, b.weight, false))
+        (executedBlocks, None)
       }
 
     // Initialize chain
