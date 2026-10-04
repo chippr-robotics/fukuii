@@ -149,7 +149,7 @@ class StateReadCachesSpec extends AnyFlatSpec with Matchers:
       override def updateNodesInStorage(newRoot: Option[MptNode], toRemove: Seq[MptNode]) =
         real.updateNodesInStorage(newRoot, toRemove)
       override def persist(): Unit = real.persist()
-    val cache = new DecodedNodeCache(8L * 1024 * 1024)
+    val cache = DecodedNodeCache.withOwnBudget(8L * 1024 * 1024)
     val cached = new CachingMptStorage(counting, cache)
     readAll(root, cached)
     val firstPass = reads.get
@@ -208,4 +208,28 @@ class StateReadCachesSpec extends AnyFlatSpec with Matchers:
     // Deleting code through the storage is seen by the next execution read: a block that needs it must find it missing.
     storage.remove(hash).commit()
     storage.getForExecution(hash) shouldBe None
+  }
+
+  it should "not let one storage's cached code answer for another database that lacks it" taggedAs (
+    UnitTest,
+    StateTest
+  ) in {
+    val withCode = new EvmCodeStorage(EphemDataSource())
+    val without = new EvmCodeStorage(EphemDataSource())
+    val code = ByteString(Array.fill(100)(0x5b.toByte))
+    val hash = kec256(code)
+    withCode.put(hash, code).commit()
+    withCode.getForExecution(hash) shouldBe Some(code) // cached in the process-wide cache
+    without.getForExecution(hash) shouldBe None // a different database: still missing
+  }
+
+  "StateReadCacheConfig" should "never size a cache beyond its fraction of the max heap" taggedAs (
+    UnitTest,
+    StateTest
+  ) in {
+    val heap = Runtime.getRuntime.maxMemory
+    com.chipprbots.ethereum.utils.StateReadCacheConfig.codeCacheBytes should be <= (heap * 0.03).toLong
+    com.chipprbots.ethereum.utils.StateReadCacheConfig.decodedNodeCacheBytes should be <= (heap * 0.04).toLong
+    com.chipprbots.ethereum.utils.StateReadCacheConfig.jumpDestCacheBytes should be <= (heap * 0.01).toLong
+    com.chipprbots.ethereum.utils.StateReadCacheConfig.worldReadMemoEntries.toLong should be <= heap / 32768
   }

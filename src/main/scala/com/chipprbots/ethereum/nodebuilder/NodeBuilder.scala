@@ -1156,10 +1156,19 @@ trait ShutdownHookBuilder:
 
   lazy val shutdownTimeoutDuration: Duration = instanceConfig.shutdownTimeout
 
+  /** Whether the JVM shutdown hook holds this builder only weakly. False (a strong reference) for every node: nothing
+    * else need keep the builder reachable once `main` returns, and a collected builder would silently skip its
+    * `shutdown()` on SIGTERM. A test that wires a builder per case overrides this with true: the JVM keeps a registered
+    * hook for the life of the process, so a strong hook leaked every builder (actor system, storages, caches); the EEST
+    * corpus replays built ~26,000 and ran the CI JVM out of heap. Overridden with a constant `def`, since it is read
+    * while this trait initialises.
+    */
+  protected def shutdownHookHoldsBuilderWeakly: Boolean = false
+
+  // The hook thread is built in the companion, where it cannot capture `this`: an anonymous Thread written here would
+  // hold the builder through its outer reference whatever the targets below say.
   Runtime.getRuntime.addShutdownHook(
-    new Thread():
-      override def run(): Unit =
-        shutdown()
+    ShutdownHooks.hookThread(this, shutdownHookHoldsBuilderWeakly)
   )
 
   def shutdownOnError[A](f: => A): A =
@@ -1172,6 +1181,22 @@ trait ShutdownHookBuilder:
 
 object ShutdownHookBuilder extends ShutdownHookBuilder with Logger with InstanceConfigProvider:
   override def instanceConfig: InstanceConfig = Config
+
+/** Builds [[ShutdownHookBuilder]]'s JVM hook. A separate object, not the trait's companion: the companion is itself a
+  * ShutdownHookBuilder that registers a hook while it initialises, and must not be called into from there.
+  */
+private[nodebuilder] object ShutdownHooks:
+  /** The JVM shutdown hook of `builder`: it calls `builder.shutdown()`, holding the builder strongly unless `weakly`
+    * (see [[ShutdownHookBuilder.shutdownHookHoldsBuilderWeakly]]), in which case a collected builder is simply skipped.
+    * Defined here, not in the trait, so the thread captures no outer reference.
+    */
+  def hookThread(builder: ShutdownHookBuilder, weakly: Boolean): Thread =
+    val strong: ShutdownHookBuilder = if weakly then null else builder
+    val weak = new java.lang.ref.WeakReference[ShutdownHookBuilder](builder)
+    new Thread():
+      override def run(): Unit =
+        val target = if strong != null then strong else weak.get
+        if target != null then target.shutdown()
 
 trait GenesisDataLoaderBuilder:
   self: BlockchainBuilder & StorageBuilder =>

@@ -63,7 +63,7 @@ class ReferenceCountedStateStorage(
     * deleted, and the deletions evict from it.
     */
   private val decodedNodes: Option[DecodedNodeCache] =
-    Option.when(decodedNodeCacheBytes > 0)(new DecodedNodeCache(decodedNodeCacheBytes))
+    DecodedNodeCache.forStorage(decodedNodeCacheBytes > 0)
 
   /** Highest block number pruned by this instance (not persisted: after a restart the first save prunes one block, as
     * it always did). Used to catch up after a prune was deferred because the canonical head lagged the saved block.

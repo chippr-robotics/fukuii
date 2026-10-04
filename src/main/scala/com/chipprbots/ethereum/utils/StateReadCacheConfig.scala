@@ -26,14 +26,28 @@ object StateReadCacheConfig:
     */
   lazy val importTimingLog: Boolean = flag("import-timing-log", false)
 
-  /** Budget of each `EvmCodeStorage`'s execution-side code cache; 0 disables it. */
-  lazy val codeCacheBytes: Long = bytes("code-cache-bytes", 64L * 1024 * 1024)
+  /** The configured size, never more than `fraction` of the JVM's maximum heap. A fixed absolute default is right for a
+    * 4 GB node and fatal for a 1.5 GB test JVM (the EEST payload-builder corpus ran out of heap in CI with the caches
+    * at their absolute defaults); a configured size of 0 stays 0 (cache off).
+    */
+  private def cappedByHeap(configured: Long, fraction: Double): Long =
+    math.min(configured, (Runtime.getRuntime.maxMemory * fraction).toLong)
 
-  /** Budget of a state storage's decoded-node cache; 0 disables it. */
-  lazy val decodedNodeCacheBytes: Long = bytes("decoded-node-cache-bytes", 96L * 1024 * 1024)
+  /** Process-wide budget of the execution-side code cache (all `EvmCodeStorage` instances share it); 0 disables it. At
+    * most 3% of the max heap.
+    */
+  lazy val codeCacheBytes: Long = cappedByHeap(bytes("code-cache-bytes", 64L * 1024 * 1024), 0.03)
 
-  /** Entries one world's base-trie read memos may hold in total; 0 disables them. */
-  lazy val worldReadMemoEntries: Int = bytes("world-read-memo-entries", 250000L).toInt
+  /** Process-wide budget of the decoded-node cache, in estimated retained bytes (see `DecodedNodeCache`); 0 disables
+    * it. At most 4% of the max heap.
+    */
+  lazy val decodedNodeCacheBytes: Long = cappedByHeap(bytes("decoded-node-cache-bytes", 96L * 1024 * 1024), 0.04)
 
-  /** Budget of the JUMPDEST analysis cache; 0 disables it. */
-  lazy val jumpDestCacheBytes: Long = bytes("jumpdest-cache-bytes", 32L * 1024 * 1024)
+  /** Entries one world's base-trie read memos may hold in total; 0 disables them. At most one entry per 32 KiB of max
+    * heap (about 150 bytes each, so under 0.5%).
+    */
+  lazy val worldReadMemoEntries: Int =
+    math.min(bytes("world-read-memo-entries", 250000L), Runtime.getRuntime.maxMemory / 32768).toInt
+
+  /** Process-wide budget of the JUMPDEST analysis cache; 0 disables it. At most 1% of the max heap. */
+  lazy val jumpDestCacheBytes: Long = cappedByHeap(bytes("jumpdest-cache-bytes", 32L * 1024 * 1024), 0.01)

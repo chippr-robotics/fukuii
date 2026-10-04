@@ -30,6 +30,9 @@ trait ScenarioSetup
     extends StdTestMiningBuilder
     with StxLedgerBuilder
     with com.chipprbots.ethereum.TestInstanceConfigProvider:
+  // One setup per test case, thousands in the EEST corpora: a strong shutdown hook would keep every one alive.
+  override protected def shutdownHookHoldsBuilderWeakly: Boolean = true
+
   protected lazy val executionContextExecutor: ExecutionContextExecutor =
     ExecutionContext.fromExecutor(Executors.newFixedThreadPool(4))
   implicit protected lazy val ioRuntime: IORuntime = IORuntime.global

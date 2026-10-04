@@ -16,20 +16,40 @@ import com.chipprbots.ethereum.vm.ImportProfile
   * the hashes pruning and rollback delete, and only execution reads through this cache: SNAP, healing and the recovery
   * scanners use the storage directly and still see exactly what is on disk.
   */
-final class DecodedNodeCache(maxBytes: Long):
+final class DecodedNodeCache private (lru: ByteBoundedLru[DecodedNodeCache.Key, MptNode], owner: Long):
 
-  // Decoded objects are several times the size of their RLP; x3 plus a fixed header is a deliberate round estimate.
-  private val lru = new ByteBoundedLru[ByteString, MptNode](
-    maxBytes,
-    node => node.cachedRlpEncoded.fold(512L)(_.length.toLong) * 3 + 160
-  )
-
-  def get(hash: ByteString): MptNode = lru.getOrNull(hash)
-  def put(hash: ByteString, node: MptNode): Unit = lru.put(hash, node)
-  def evict(hashes: Iterable[NodeHash]): Unit = hashes.foreach(lru.remove)
-  def clear(): Unit = lru.clear()
+  def get(hash: ByteString): MptNode = lru.getOrNull(DecodedNodeCache.Key(owner, hash))
+  def put(hash: ByteString, node: MptNode): Unit = lru.put(DecodedNodeCache.Key(owner, hash), node)
+  def evict(hashes: Iterable[NodeHash]): Unit = hashes.foreach(h => lru.remove(DecodedNodeCache.Key(owner, h)))
   def sizeBytes: Long = lru.sizeBytes
   def entries: Int = lru.entries
+
+object DecodedNodeCache:
+
+  /** A cached node belongs to the state storage that read it: two databases (a test builds hundreds) never see each
+    * other's nodes, so "this node is missing from my database" stays true however many storages share the cache.
+    */
+  final case class Key(owner: Long, hash: ByteString)
+
+  private val owners = new java.util.concurrent.atomic.AtomicLong
+
+  /** Retained bytes of a decoded node, measured: a 532-byte branch node (16 hash children) decodes to about 3.9 KB, a
+    * little over 7x its RLP (the parsed RLP tree, a `HashNode` and hash array per child, the cached encoding and hash).
+    * 8x plus a fixed header is the conservative estimate; the earlier 3x let the cache hold 2.5x its budget.
+    */
+  private def weigh(node: MptNode): Long = node.cachedRlpEncoded.fold(512L)(_.length.toLong) * 8 + 160
+
+  /** One cache for the whole process, so the budget bounds the heap however many state storages exist. */
+  private lazy val shared: ByteBoundedLru[Key, MptNode] =
+    new ByteBoundedLru[Key, MptNode](com.chipprbots.ethereum.utils.StateReadCacheConfig.decodedNodeCacheBytes, weigh)
+
+  /** A view for one state storage on the process-wide cache, or `None` when `enabled` is false or the budget is 0. */
+  def forStorage(enabled: Boolean): Option[DecodedNodeCache] =
+    Option.when(enabled && shared.maxBytes > 0)(new DecodedNodeCache(shared, owners.incrementAndGet()))
+
+  /** A cache with its own budget, for tests that need a small or isolated one. */
+  def withOwnBudget(maxBytes: Long): DecodedNodeCache =
+    new DecodedNodeCache(new ByteBoundedLru[Key, MptNode](maxBytes, weigh), owners.incrementAndGet())
 
 /** [[MptStorage]] that answers `get` from a [[DecodedNodeCache]] before the wrapped storage. A miss, including a
   * missing node, goes to the wrapped storage unchanged: its `MissingNodeException` propagates and nothing is cached.
