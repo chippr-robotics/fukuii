@@ -34,9 +34,9 @@ object StateReadCacheConfig:
     math.min(configured, (Runtime.getRuntime.maxMemory * fraction).toLong)
 
   /** Process-wide budget of the execution-side code cache (all `EvmCodeStorage` instances share it); 0 disables it. At
-    * most 3% of the max heap.
+    * most 5% of the max heap.
     */
-  lazy val codeCacheBytes: Long = cappedByHeap(bytes("code-cache-bytes", 64L * 1024 * 1024), 0.03)
+  lazy val codeCacheBytes: Long = cappedByHeap(bytes("code-cache-bytes", 256L * 1024 * 1024), 0.05)
 
   /** Process-wide budget of the code-size cache (code hash to length, so EXTCODESIZE-style checks never load code), at
     * about 256 bytes an entry (geth keeps 1,000,000 entries); 0 disables it. At most 2% of the max heap.
