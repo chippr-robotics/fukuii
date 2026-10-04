@@ -525,6 +525,15 @@ class BlockExecution(
 
     go(List.empty[BlockData], blocks, parentChainWeight)
 
+  /** Undo the state application of blocks that were executed (fully or partly) but are not being adopted, highest
+    * first. Only numbers strictly above the persisted best block are touched, so this can never undo canonical state; a
+    * number that was never applied is a no-op. See
+    * [[com.chipprbots.ethereum.db.storage.StateStorage.rollbackUnadoptedBlock]].
+    */
+  def discardUnadoptedState(blocks: Seq[Block]): Unit =
+    val best = blockchainReader.getBestBlockNumber
+    blocks.map(_.number.value).filter(_ > best).sorted(Ordering[BigInt].reverse).foreach(blockchain.rollbackBlockState)
+
   /** EIP-4895: Process beacon chain withdrawals (Shanghai+). Each withdrawal credits `amount * 1 Gwei` to the target
     * address. No gas is charged. Creates the account if it doesn't exist.
     */

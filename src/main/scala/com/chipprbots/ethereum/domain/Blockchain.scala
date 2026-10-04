@@ -69,6 +69,14 @@ trait Blockchain:
     */
   def saveBlockState(bn: BigInt): Unit
 
+  /** Undo the state application of an executed-but-never-adopted block (see [[StateStorage.rollbackUnadoptedBlock]]).
+    * Ignored unless `bn` is strictly above the persisted best block.
+    */
+  def rollbackBlockState(bn: BigInt): Unit
+
+  /** Startup sweep for blocks applied above the persisted best block by an interrupted batch. Returns the count. */
+  def rollbackUnadoptedBlocksAboveBest(window: Int): Int
+
 class BlockchainImpl(
     protected val blockHeadersStorage: BlockHeadersStorage,
     protected val blockBodiesStorage: BlockBodiesStorage,
@@ -120,6 +128,12 @@ class BlockchainImpl(
 
   override def saveBlockState(bn: BigInt): Unit =
     stateStorage.onBlockSave(bn, appStateStorage.getBestBlockNumber())(() => ())
+
+  override def rollbackBlockState(bn: BigInt): Unit =
+    stateStorage.rollbackUnadoptedBlock(bn, appStateStorage.getBestBlockNumber())
+
+  override def rollbackUnadoptedBlocksAboveBest(window: Int): Int =
+    stateStorage.rollbackUnadoptedAbove(appStateStorage.getBestBlockNumber(), window)
 
   private def removeBlockNumberMapping(number: BigInt): DataSourceBatchUpdate =
     blockNumberMappingStorage.remove(number)

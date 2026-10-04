@@ -677,6 +677,7 @@ class InvalidChainReportingSpec
     }
 
     override lazy val blockExecution: BlockExecution = stub[BlockExecution]
+    (blockExecution.discardUnadoptedState(_: Seq[Block])).when(*).anyNumberOfTimes()
 
     (blockExecution
       .executeAndValidateBlocks(_: List[Block], _: ChainWeight)(_: BlockchainConfig))
@@ -766,6 +767,7 @@ class InvalidChainReportingSpec
     )
 
     override lazy val blockExecution: BlockExecution = stub[BlockExecution]
+    (blockExecution.discardUnadoptedState(_: Seq[Block])).when(*).anyNumberOfTimes()
     (blockExecution
       .executeAndValidateBlocks(_: List[Block], _: ChainWeight)(_: BlockchainConfig))
       .when(*, *, *)

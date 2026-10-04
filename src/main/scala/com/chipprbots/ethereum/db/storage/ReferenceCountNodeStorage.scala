@@ -200,6 +200,10 @@ object ReferenceCountNodeStorage extends PruneSupport with Logger:
     }
     removed
 
+  /** True when block `blockNumber` still has applied-but-unpruned updates (a snapshot count key). */
+  def hasSnapshots(blockNumber: BigInt, nodeStorage: NodesStorage): Boolean =
+    nodeStorage.get(getSnapshotsCountKey(blockNumber)).isDefined
+
   private def withSnapshotCount(blockNumber: BigInt, nodeStorage: NodesStorage)(
       f: (ByteString, BigInt) => Unit
   ): Unit =

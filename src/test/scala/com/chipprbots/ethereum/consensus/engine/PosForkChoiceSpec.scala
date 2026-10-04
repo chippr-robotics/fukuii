@@ -467,6 +467,7 @@ class PosForkChoiceSpec extends AnyFlatSpec with Matchers with ScalaFutures with
     def failAt(block: Block): Unit = failingBlockHash = Some(block.hash.value)
 
     override lazy val blockExecution: BlockExecution = stub[BlockExecution]
+    (blockExecution.discardUnadoptedState(_: Seq[Block])).when(*).anyNumberOfTimes()
     (blockExecution
       .executeAndValidateBlocks(_: List[Block], _: ChainWeight)(_: BlockchainConfig))
       .when(*, *, *)

@@ -53,6 +53,7 @@ abstract class BaseNode extends Node:
     startMetricsClient()
     fixDatabase()
     repairBestBlockMapping() // before any server binds, so no newPayload/FCU races the read-then-write
+    rollbackUnadoptedBlocks() // before any import, so a batch killed mid-way is not applied twice on restart
     loadGenesisData()
     importChainData() // Must complete before APIs so queries return chain data
 
@@ -336,6 +337,21 @@ abstract class BaseNode extends Node:
   /** Restores the number->hash entry at the best block's height if an earlier version rewrote the best block's header
     * (SNAP startup) and left the index naming the forged copy. See [[BlockchainWriter.repairBestBlockNumberMapping]].
     */
+  /** A kill mid-batch leaves the batch's executed blocks applied (reference counts, death rows) above the persisted
+    * best block, which only advances when the batch is adopted. The restart re-executes them, applying the same node
+    * changes twice. Undo them first. No-op off basic pruning and on a clean node.
+    */
+  def rollbackUnadoptedBlocks(): Unit =
+    val rolledBack = blockchain.rollbackUnadoptedBlocksAboveBest(StdNode.UnadoptedSweepWindow)
+    if rolledBack > 0 then
+      log.warn(
+        "Startup sweep: rolled back {} block(s) above best block {} that were applied by an interrupted import batch " +
+          "(window {}).",
+        rolledBack,
+        blockchainReader.getBestBlockNumber,
+        StdNode.UnadoptedSweepWindow
+      )
+
   def repairBestBlockMapping(): Unit =
     blockchainWriter.repairBestBlockNumberMapping(blockchainReader) match
       case BestMappingRepair.Consistent => ()
@@ -378,6 +394,9 @@ class StdNode(
   override lazy val instanceConfig: com.chipprbots.ethereum.utils.InstanceConfig = _instanceConfig
 
 object StdNode:
+
+  /** Blocks above the persisted best examined by the startup unadopted-batch sweep (import batches are 50 blocks). */
+  val UnadoptedSweepWindow: Int = 512
 
   /** Should the Engine API bind after the ETH JSON-RPC server rather than before it?
     *

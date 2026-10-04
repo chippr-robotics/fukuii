@@ -24,7 +24,10 @@ import com.chipprbots.ethereum.domain.Block
 import com.chipprbots.ethereum.domain.ChainWeight
 import com.chipprbots.ethereum.ledger.BlockData
 import com.chipprbots.ethereum.ledger.BlockExecution
+import com.chipprbots.ethereum.consensus.Consensus.ConsensusErrorDueToMissingNode
+import com.chipprbots.ethereum.ledger.BlockExecutionError.MPTError
 import com.chipprbots.ethereum.ledger.BlockExecutionError.ValidationAfterExecError
+import com.chipprbots.ethereum.mpt.MerklePatriciaTrie.MissingNodeException
 import com.chipprbots.ethereum.testing.Tags.*
 import com.chipprbots.ethereum.utils.BlockchainConfig
 
@@ -278,6 +281,58 @@ class ConsensusImplSpec extends AnyFlatSpec with Matchers with ScalaFutures with
       initialChain(3).hash
     )
 
+  // Reference-count bookkeeping: blocks of a failed batch that are not adopted must not stay applied, or the retry
+  // applies their node changes twice (ReferenceCountedStateReapplySpec).
+  it should "discard the executed prefix AND the failing block when a batch hits a missing node" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in new ConsensusSetup:
+    val chainExtension: List[Block] = BlockHelpers.generateChain(4, initialBestBlock)
+    failWithMissingNode = true
+    setFailingBlock(chainExtension(2))
+
+    whenReady(consensus.evaluateBranch(NonEmptyList.fromListUnsafe(chainExtension)).unsafeToFuture()) {
+      _ shouldBe a[ConsensusErrorDueToMissingNode]
+    }
+    (blockExecution.discardUnadoptedState(_: Seq[Block])).verify(chainExtension.take(3)).once()
+
+  it should "discard only the failing block when a partial batch is adopted" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in new ConsensusSetup:
+    val chainExtension: List[Block] = BlockHelpers.generateChain(3, initialBestBlock)
+    setFailingBlock(chainExtension(1))
+
+    whenReady(consensus.evaluateBranch(NonEmptyList.fromListUnsafe(chainExtension)).unsafeToFuture()) {
+      _ shouldBe a[ExtendedCurrentBestBranchPartially]
+    }
+    (blockExecution.discardUnadoptedState(_: Seq[Block])).verify(List(chainExtension(1))).once()
+
+  it should "discard nothing when the batch imports cleanly" taggedAs (UnitTest, ConsensusTest) in new ConsensusSetup:
+    val chainExtension: List[Block] = BlockHelpers.generateChain(3, initialBestBlock)
+    whenReady(consensus.evaluateBranch(NonEmptyList.fromListUnsafe(chainExtension)).unsafeToFuture()) {
+      _ shouldBe a[ExtendedCurrentBestBranch]
+    }
+    (blockExecution.discardUnadoptedState(_: Seq[Block])).verify(*).never()
+
+  it should "leave the reorg path untouched: a failing reorganisation discards nothing" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in new ConsensusSetup:
+    val newBetterBranch: List[Block] =
+      BlockHelpers.generateChain(
+        3,
+        initialChain(2),
+        b => b.copy(header = b.header.copy(difficulty = Difficulty(10000000)))
+      )
+    failWithMissingNode = true
+    setFailingBlock(newBetterBranch(1))
+
+    whenReady(consensus.evaluateBranch(NonEmptyList.fromListUnsafe(newBetterBranch)).unsafeToFuture()) {
+      _ shouldBe a[ConsensusErrorDueToMissingNode]
+    }
+    (blockExecution.discardUnadoptedState(_: Seq[Block])).verify(*).never()
+
   // SCALA 3 MIGRATION: Moved ConsensusSetup inside class to access MockFactory context
   class ConsensusSetup extends EphemBlockchainTestSetup:
     override lazy val blockExecution: BlockExecution = stub[BlockExecution]
@@ -294,7 +349,12 @@ class ConsensusImplSpec extends AnyFlatSpec with Matchers with ScalaFutures with
         executedBlocks.foreach(b => blockchainWriter.save(b.block, b.receipts, b.weight, false))
         (
           executedBlocks,
-          blocks.find(b => failingBlockHash.contains(b.hash)).map(_ => ValidationAfterExecError("test error"))
+          blocks
+            .find(b => failingBlockHash.contains(b.hash))
+            .map(_ =>
+              if failWithMissingNode then MPTError(new MissingNodeException(ByteString(Array.fill[Byte](32)(1))))
+              else ValidationAfterExecError("test error")
+            )
         )
       }
 
@@ -306,6 +366,7 @@ class ConsensusImplSpec extends AnyFlatSpec with Matchers with ScalaFutures with
     }
 
     private var failingBlockHash: Option[ByteString] = None
+    var failWithMissingNode: Boolean = false
 
     implicit val runtime: IORuntime = IORuntime.global
 

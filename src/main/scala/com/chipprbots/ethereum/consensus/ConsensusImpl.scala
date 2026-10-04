@@ -202,10 +202,16 @@ class ConsensusImpl(
         saveLastBlock(importedBlocks)
         ExtendedCurrentBestBranch(importedBlocks)
 
-      case (_, Some(MPTError(reason: MissingNodeException))) =>
+      case (importedBlocks, Some(MPTError(reason: MissingNodeException))) =>
+        // The executed prefix is NOT adopted (the best block does not advance) and BlockImporter re-executes the whole
+        // batch once the node is fetched, so undo every block this attempt applied, plus the failing block, which may
+        // be partly applied. Without this the retry applies the same node changes twice (see
+        // ReferenceCountedStateReapplySpec). Covers MissingCodeException too (bulk bytecode recovery).
+        blockExecution.discardUnadoptedState(branch.toList.take(importedBlocks.length + 1))
         ConsensusErrorDueToMissingNode(Nil, reason)
 
       case (Nil, Some(error)) =>
+        blockExecution.discardUnadoptedState(branch.toList.take(1))
         // Nothing executed, so the failing block is the branch head and its parent is the current best block
         // (guaranteed by handleBranchImport's `currentBestHeader.hash == branch.head.header.parentHash` guard).
         reportIfProvenInvalid(branch.head, error, branch.tail)
@@ -215,6 +221,8 @@ class ConsensusImpl(
         saveLastBlock(importedBlocks)
         val unexecuted = branch.toList.drop(importedBlocks.length)
         val failingBlock = unexecuted.head
+        // The prefix is adopted above; only the failing block may be (partly) applied and is not adopted.
+        blockExecution.discardUnadoptedState(List(failingBlock))
         // NB: this arm maps to `BlockImportedToTop` in ConsensusAdapter, which DISCARDS `error`. Reporting here is
         // the only signal that escapes a partially-successful batch at all.
         reportIfProvenInvalid(failingBlock, error, unexecuted.tail)

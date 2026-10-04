@@ -30,6 +30,20 @@ trait StateStorage:
   def getNode(nodeHash: NodeHash): Option[MptNode]
   def forcePersist(reason: FlushSituation): Boolean
 
+  /** Undo the state application of block `bn`, which was executed but never adopted (a failed or interrupted batch).
+    *
+    * Reference counts, death rows and snapshots are applied per block as it executes, while the best block only
+    * advances when the batch is adopted; re-executing the block without undoing it first applies its node changes twice
+    * and leaves live nodes at refs == 0, which a later prune deletes. Only meaningful for reference-counted pruning; a
+    * no-op elsewhere. Callers must guarantee `bn > best` (no canonical state lives at that number).
+    */
+  def rollbackUnadoptedBlock(bn: BigInt, currentBestSavedBlock: BigInt): Unit = ()
+
+  /** Startup sweep: undo every block in (best, best + window] that still holds applied updates, highest first. Returns
+    * how many blocks were rolled back. A no-op (0) unless reference-counted pruning.
+    */
+  def rollbackUnadoptedAbove(currentBestSavedBlock: BigInt, window: Int): Int = 0
+
 class ArchiveStateStorage(private val nodeStorage: NodeStorage) extends StateStorage:
 
   override def forcePersist(reason: FlushSituation): Boolean = true
@@ -106,6 +120,18 @@ class ReferenceCountedStateStorage(
     // Same single-import-thread assumption as in onBlockSave: evict after the rollback has deleted.
     decodedNodes.foreach(_.evict(removed))
     updateBestBlocksData()
+
+  override def rollbackUnadoptedBlock(bn: BigInt, currentBestSavedBlock: BigInt): Unit =
+    if bn > currentBestSavedBlock then ReferenceCountNodeStorage.rollback(bn, nodeStorage, inMemory = true)
+
+  override def rollbackUnadoptedAbove(currentBestSavedBlock: BigInt, window: Int): Int =
+    (window to 1 by -1).foldLeft(0) { (count, offset) =>
+      val bn = currentBestSavedBlock + offset
+      if ReferenceCountNodeStorage.hasSnapshots(bn, nodeStorage) then
+        ReferenceCountNodeStorage.rollback(bn, nodeStorage, inMemory = true)
+        count + 1
+      else count
+    }
 
   override def getBackingStorage(bn: BigInt): MptStorage =
     new SerializingMptStorage(new ReferenceCountNodeStorage(nodeStorage, bn), decodedNodes)

@@ -94,6 +94,7 @@ class ConsensusAdapterSpec extends AnyFlatSpec with Matchers with ScalaFutures w
       .expects(*)
       .returning(storagesInstance.storages.stateStorage.getBackingStorage(6))
     blockchain.saveBlockState.expects(*).anyNumberOfTimes().returning(())
+    blockchain.rollbackBlockState.expects(*).anyNumberOfTimes().returning(())
 
     whenReady(blockImportNotFailingAfterExecValidation.evaluateBranchBlock(block).unsafeToFuture()) {
       _ shouldEqual BlockImportedToTop(List(blockData))
@@ -124,6 +125,7 @@ class ConsensusAdapterSpec extends AnyFlatSpec with Matchers with ScalaFutures w
     )
 
     blockchainReader.getBlockHeaderByHash.expects(*).anyNumberOfTimes().returning(Some(block.header))
+    blockchain.rollbackBlockState.expects(*).anyNumberOfTimes().returning(())
     blockchainReader.getBlockHeaderByNumber.expects(*).anyNumberOfTimes().returning(Some(block.header))
     blockchain.getBackingMptStorage.expects(*).returning(mptStorage)
     mptStorage.get.expects(*).returning(mptNode)
@@ -209,6 +211,7 @@ class ConsensusAdapterSpec extends AnyFlatSpec with Matchers with ScalaFutures w
     val blockData3: BlockData = BlockData(newBlock3, Seq.empty[Receipt], newWeight3)
 
     val mockExecution: BlockExecution = mock[BlockExecution]
+    (mockExecution.discardUnadoptedState(_: Seq[Block])).expects(*).anyNumberOfTimes()
     (mockExecution
       .executeAndValidateBlocks(_: List[Block], _: ChainWeight)(_: BlockchainConfig))
       .expects(newBranch, *, *)
@@ -256,6 +259,7 @@ class ConsensusAdapterSpec extends AnyFlatSpec with Matchers with ScalaFutures w
     val blockData2: BlockData = BlockData(newBlock2, Seq.empty[Receipt], newWeight2)
 
     val mockExecution: BlockExecution = mock[BlockExecution]
+    (mockExecution.discardUnadoptedState(_: Seq[Block])).expects(*).anyNumberOfTimes()
     // simulate execute-first: the mock must persist newBlock2 (the block that succeeds)
     // exactly as real executeAndValidateBlocks does — otherwise saveBestKnownBlocks updates
     // the chain pointer to a hash that isn't in the DB and getBestBlock() returns None
@@ -369,6 +373,7 @@ class ConsensusAdapterSpec extends AnyFlatSpec with Matchers with ScalaFutures w
     val blockData3: BlockData = BlockData(newBlock3WithOmmer, Seq.empty[Receipt], newWeight3)
 
     val mockExecution: BlockExecution = mock[BlockExecution]
+    (mockExecution.discardUnadoptedState(_: Seq[Block])).expects(*).anyNumberOfTimes()
     (mockExecution
       .executeAndValidateBlocks(_: List[Block], _: ChainWeight)(_: BlockchainConfig))
       .expects(newBranch, *, *)
@@ -393,6 +398,7 @@ class ConsensusAdapterSpec extends AnyFlatSpec with Matchers with ScalaFutures w
     ConsensusTest
   ) in new EphemBlockchain:
     val mockExecution: BlockExecution = mock[BlockExecution]
+    (mockExecution.discardUnadoptedState(_: Seq[Block])).expects(*).anyNumberOfTimes()
 
     val currentBestBlock: Block = getBlock(bestNum - 2)
     val block1Weight: ChainWeight = ChainWeight.totalDifficultyOnly(currentBestBlock.header.difficulty.value + 999)
@@ -424,6 +430,7 @@ class ConsensusAdapterSpec extends AnyFlatSpec with Matchers with ScalaFutures w
     ConsensusTest
   ) in new EphemBlockchain:
     val mockExecution: BlockExecution = mock[BlockExecution]
+    (mockExecution.discardUnadoptedState(_: Seq[Block])).expects(*).anyNumberOfTimes()
 
     val currentBestBlock: Block = getBlock(bestNum)
 
@@ -458,6 +465,7 @@ class ConsensusAdapterSpec extends AnyFlatSpec with Matchers with ScalaFutures w
 
   it should "dequeue blocks that are children of a failing block taggedAs (UnitTest, ConsensusTest) in case of partial execution" in new EphemBlockchain:
     val mockExecution: BlockExecution = mock[BlockExecution]
+    (mockExecution.discardUnadoptedState(_: Seq[Block])).expects(*).anyNumberOfTimes()
 
     val currentBestBlock: Block = getBlock(bestNum)
 
@@ -496,6 +504,7 @@ class ConsensusAdapterSpec extends AnyFlatSpec with Matchers with ScalaFutures w
 
   it should "dequeue blocks that are children of a failing block taggedAs (UnitTest, ConsensusTest) in case of partial execution during a reorganisation" in new EphemBlockchain:
     val mockExecution: BlockExecution = mock[BlockExecution]
+    (mockExecution.discardUnadoptedState(_: Seq[Block])).expects(*).anyNumberOfTimes()
 
     val currentBestBlock: Block = getBlock(bestNum)
     val block1: Block = getBlock(bestNum + 1, difficulty = 101, parent = currentBestBlock.header.hash.value)
