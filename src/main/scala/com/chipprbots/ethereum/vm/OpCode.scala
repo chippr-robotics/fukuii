@@ -1386,6 +1386,11 @@ abstract class CreateOp(code: Int, delta: Int) extends OpCode(code, delta, 1, _.
               .absorbFailedChildStateGas(result.stateGasReservoir, result.evmStateGasUsed)
               .refillStateGas(newAccountStateGas)
               .withWorld(world2)
+              // The gas charged for this opcode includes the memory expansion over [inOffset, inOffset + inSize), so
+              // memory must be expanded on EVERY outcome (go-ethereum resizes memory in the interpreter loop before
+              // opCreate runs). Left unexpanded, the next memory-touching opcode charges the same expansion twice.
+              // Platåberget block 319453 tx 3: CREATE(value > balance, offset 0x40, size 0x574) then MSTORE = +142 gas.
+              .withMemory(memory1)
               .withStack(resultStack)
               .withReturnData(returnData)
               .addAccessedAddresses(if error == InvalidCall then Set.empty else Set(newAddress))
