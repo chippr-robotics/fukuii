@@ -5003,7 +5003,8 @@ private class SNAPSyncControllerImpl(
     else if headerHold.exists(_ != pivotHash) then
       ctx.log.info(s"Header hold: pivot changed to $pivot (cursor=$cursor)")
       chainDownloader.foreach(_ ! ChainDownloader.UpdateTarget(pivot))
-    if cursor > holdLastCursor then
+    // ANY change counts as progress (a cursor briefly pulled back after a respawn is not a stall).
+    if cursor != holdLastCursor then
       holdLastCursor = cursor
       holdLastAdvanceMs = now
     else if now - holdLastAdvanceMs >= snapSyncConfig.headerHoldStallTimeout.toMillis then

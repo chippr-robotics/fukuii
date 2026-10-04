@@ -85,7 +85,8 @@ class ChainDownloader private (
     replyTo: TypedActorRef[ChainDownloader.Done.type],
     cursorScanCap: Long,
     deferBodiesAndReceipts: Boolean,
-    emptyHeaderBackoff: Option[FiniteDuration]
+    emptyHeaderBackoff: Option[FiniteDuration],
+    nowMs: () => Long
 ):
 
   import ChainDownloader.*
@@ -135,7 +136,7 @@ class ChainDownloader private (
 
   private def headerExcluded(peerId: PeerId): Boolean =
     emptyHeaderPeers.get(peerId) match
-      case Some(expiresAtMs) if expiresAtMs > System.currentTimeMillis() => true
+      case Some(expiresAtMs) if expiresAtMs > nowMs() => true
       case Some(_) =>
         emptyHeaderPeers -= peerId
         false
@@ -429,9 +430,7 @@ class ChainDownloader private (
       emptyHeaderPeers -= peer.id
       handleHeaders(peer, headers)
     else
-      emptyHeaderPeers += peer.id -> emptyHeaderBackoff.fold(Long.MaxValue)(b =>
-        System.currentTimeMillis() + b.toMillis
-      )
+      emptyHeaderPeers += peer.id -> emptyHeaderBackoff.fold(Long.MaxValue)(b => nowMs() + b.toMillis)
       log.debug("Empty headers from {} — excluding from header dispatch", peer.id)
 
   /** Shared logic for a failed request of any kind (header/body/receipt) — a peer only ever has at most one category
@@ -1383,7 +1382,9 @@ object ChainDownloader:
       deferBodiesAndReceipts: Boolean = false,
       // How long a peer that answered a header request with nothing stays excluded from header dispatch. None keeps the
       // original permanent exclusion (ETC / switch off).
-      emptyHeaderBackoff: Option[FiniteDuration] = None
+      emptyHeaderBackoff: Option[FiniteDuration] = None,
+      // Clock for the empty-header exclusion; injectable so tests need not sleep.
+      nowMs: () => Long = () => System.currentTimeMillis()
   ): Behavior[Command] =
     Behaviors.setup { context =>
       Behaviors.withTimers { timers =>
@@ -1417,7 +1418,8 @@ object ChainDownloader:
           replyTo,
           cursorScanCap,
           deferBodiesAndReceipts,
-          emptyHeaderBackoff
+          emptyHeaderBackoff,
+          nowMs
         )
 
         // Immediate poll, then periodic poll for handshaked peers (replaces PeerListSupportNg's scheduleWithFixedDelay).

@@ -250,7 +250,8 @@ class ChainDownloaderSpec
   private def peerSetup(
       deferBodiesAndReceipts: Boolean,
       configure: EphemBlockchainTestSetup => Unit,
-      emptyHeaderBackoff: Option[FiniteDuration] = None
+      emptyHeaderBackoff: Option[FiniteDuration] = None,
+      nowMs: () => Long = () => System.currentTimeMillis()
   ): PeerSetup =
     val storage = new EphemBlockchainTestSetup {}
     configure(storage)
@@ -279,7 +280,8 @@ class ChainDownloaderSpec
         replyTo = replyToProbe.ref,
         maxConcurrentRequests = 4,
         deferBodiesAndReceipts = deferBodiesAndReceipts,
-        emptyHeaderBackoff = emptyHeaderBackoff
+        emptyHeaderBackoff = emptyHeaderBackoff,
+        nowMs = nowMs
       ),
       s"chain-downloader-defer-${System.nanoTime()}"
     )
@@ -319,7 +321,13 @@ class ChainDownloaderSpec
   // An excluded peer is never asked again, so nothing but the clock can end its exclusion. With a backoff set, one
   // transient empty reply must not exclude the peer for good (it would stall the header download on a small peer set).
   it should "ask a peer for headers again once its empty-reply exclusion has lapsed (and not before)" taggedAs UnitTest in {
-    val ps = peerSetup(deferBodiesAndReceipts = true, _ => (), emptyHeaderBackoff = Some(700.millis))
+    val clock = new java.util.concurrent.atomic.AtomicLong(1_000_000L)
+    val ps = peerSetup(
+      deferBodiesAndReceipts = true,
+      _ => (),
+      emptyHeaderBackoff = Some(700.millis),
+      nowMs = () => clock.get()
+    )
     ps.downloader ! ChainDownloader.Start(BigInt(10))
     ps.downloader ! ChainDownloader.BoostConcurrency(4)
     val sub = (1 to 2).map(_ => ps.peerEventBus.expectMsgType[SubscribeCmd](5.seconds))
@@ -341,7 +349,7 @@ class ChainDownloaderSpec
     expectProgress(ps.downloader)
     ps.networkPeerManager.msgAvailable shouldBe false // excluded: nothing sent
 
-    Thread.sleep(900) // the exclusion lapses (700 ms)
+    clock.addAndGet(701) // the exclusion lapses (700 ms) on the injected clock; no real waiting
     ps.downloader ! ChainDownloader.BoostConcurrency(4)
     ps.networkPeerManager.expectMsgType[NetworkPeerManagerActor.SendMessageCmd](5.seconds)
 

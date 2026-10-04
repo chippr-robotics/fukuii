@@ -154,7 +154,7 @@ class SNAPDeferredBackfillSpec extends ScalaTestWithActorTestKit() with AnyFlatS
       awaitProcessed(snap)
       snap ! SNAPSyncController.HeaderHoldTick // re-check now instead of waiting for the 2 s timer
       awaitProcessed(snap)
-      parent.expectNoMessage(50.millis) // still holding: nothing finalised, nothing aborted
+      parent.expectNoMessage(0.millis) // still holding: nothing finalised, nothing aborted
       appStateStorage.isSnapSyncDone() shouldBe false
 
       // The header download reaches the pivot: the cursor advances and the real accumulated TD is stored.
@@ -181,20 +181,20 @@ class SNAPDeferredBackfillSpec extends ScalaTestWithActorTestKit() with AnyFlatS
       blockHashes(pivot - 256) shouldBe Some(byNumber(pivot - 256).hash.value)
 
   it should "restart the chain downloader, and keep holding, when the header cursor stalls during the hold" taggedAs UnitTest in new Fixture:
-    val snap = start(cfg(defer = true).copy(headerHoldStallTimeout = 1.second), withAncestors = true)
+    val snap = start(cfg(defer = true).copy(headerHoldStallTimeout = 0.seconds), withAncestors = true)
     awaitProcessed(snap)
     eventually(appStateStorage.getBackfillTarget() shouldBe pivot)
     snap ! SNAPSyncController.HealingRootUnservable(root)
     awaitProcessed(snap)
     val before = pollers.size
 
-    // The cursor never advances: after the 1 s stall timeout a tick respawns the downloader (a new poll adapter).
+    // The cursor never advances: with a zero stall timeout the first tick respawns the downloader (a new poll adapter).
     eventually {
       snap ! SNAPSyncController.HeaderHoldTick
       awaitProcessed(snap)
       pollers.size should be > before
     }
-    parent.expectNoMessage(50.millis) // never finalised without the headers
+    parent.expectNoMessage(0.millis) // never finalised without the headers
     appStateStorage.isSnapSyncDone() shouldBe false
 
   it should "be unchanged with the switch off: the downloader starts during state sync, before finalisation" taggedAs UnitTest in new Fixture:
