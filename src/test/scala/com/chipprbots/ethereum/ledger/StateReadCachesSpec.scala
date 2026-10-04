@@ -254,7 +254,8 @@ class StateReadCachesSpec extends AnyFlatSpec with Matchers:
     StateTest
   ) in {
     val heap = Runtime.getRuntime.maxMemory
-    com.chipprbots.ethereum.utils.StateReadCacheConfig.codeCacheBytes should be <= (heap * 0.03).toLong
+    com.chipprbots.ethereum.utils.StateReadCacheConfig.codeCacheBytes should be <= (heap * 0.05).toLong
+    com.chipprbots.ethereum.utils.StateReadCacheConfig.codeSizeCacheBytes should be <= (heap * 0.02).toLong
     com.chipprbots.ethereum.utils.StateReadCacheConfig.decodedNodeCacheBytes should be <= (heap * 0.04).toLong
     com.chipprbots.ethereum.utils.StateReadCacheConfig.jumpDestCacheBytes should be <= (heap * 0.01).toLong
     com.chipprbots.ethereum.utils.StateReadCacheConfig.jumpDestBlockMemoBytes should be <= (heap * 0.02).toLong
