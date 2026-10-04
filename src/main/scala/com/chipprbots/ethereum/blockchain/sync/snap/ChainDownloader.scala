@@ -83,7 +83,10 @@ class ChainDownloader private (
     requestTimeout: FiniteDuration,
     snapServerPeerNodeIds: Set[ByteString],
     replyTo: TypedActorRef[ChainDownloader.Done.type],
-    cursorScanCap: Long
+    cursorScanCap: Long,
+    deferBodiesAndReceipts: Boolean,
+    emptyHeaderBackoff: Option[FiniteDuration],
+    nowMs: () => Long
 ):
 
   import ChainDownloader.*
@@ -102,6 +105,16 @@ class ChainDownloader private (
   private var bestHeaderNumber: BigInt = 0
   private var paused = false
 
+  // SNAP state-sync IO contention fix: while true, headers are downloaded as usual but NO body or receipt is queued or
+  // fetched (bodies/receipts are the column-family "b" write pressure). `ReleaseBodiesAndReceipts` clears it once SNAP
+  // state is finalised and rebuilds the queues from the stored headers. Never completes while true.
+  private var bodiesReceiptsDeferred: Boolean = deferBodiesAndReceipts
+
+  // Lazy body/receipt queue fill after ReleaseBodiesAndReceipts (see refillQueuesWindow): headers `scanPos+1..scanLimit`
+  // have not yet been checked for a missing body/receipt. Both are 0 outside that mode (nothing left to scan).
+  private var scanPos: BigInt = 0
+  private var scanLimit: BigInt = 0
+
   // Queues of block hashes needing bodies/receipts
   private var bodiesQueue: Vector[ByteString] = Vector.empty
   private var receiptsQueue: Vector[ByteString] = Vector.empty
@@ -116,7 +129,18 @@ class ChainDownloader private (
 
   // go-ethereum behavioural backoff: peers that returned empty headers are excluded from
   // header dispatch (capacity-to-zero equivalent). Bodies/receipts/SNAP unaffected.
-  private var emptyHeaderPeers: Set[PeerId] = Set.empty
+  // With `emptyHeaderBackoff` set (deferred-backfill mode) an entry expires after that period: an excluded peer is never
+  // asked again, so nothing else would clear it, and one transient empty reply would otherwise exclude the peer for
+  // good (stalling the header download on a small peer set). Unset keeps the original permanent exclusion.
+  private var emptyHeaderPeers: Map[PeerId, Long] = Map.empty
+
+  private def headerExcluded(peerId: PeerId): Boolean =
+    emptyHeaderPeers.get(peerId) match
+      case Some(expiresAtMs) if expiresAtMs > nowMs() => true
+      case Some(_) =>
+        emptyHeaderPeers -= peerId
+        false
+      case None => false
 
   // ETH70 partial receipt tracking: hash → next resume index (receipts already received)
   private var partialReceiptState: Map[ByteString, Long] = Map.empty
@@ -145,7 +169,67 @@ class ChainDownloader private (
     case PeerGone(peerId) =>
       peerListHelper.handlePeerDisconnected(peerId)
       Some(Behaviors.same)
+    case ReleaseBodiesAndReceipts =>
+      releaseBodiesAndReceipts()
+      Some(Behaviors.same)
     case _ => None
+
+  /** Stop deferring. Cheap by design: no walk over the chain. `bestHeaderNumber` is already live (every stored header
+    * advanced it, and the header cursor with it), so release only records the window of headers still to be checked for
+    * a missing body/receipt (`scanPos..scanLimit`, starting at the lower of the two cursors); `refillQueuesWindow` then
+    * feeds the queues a bounded window at a time. Headers downloaded after this point queue themselves in
+    * `handleHeaders`.
+    */
+  private def releaseBodiesAndReceipts(): Unit =
+    if bodiesReceiptsDeferred then
+      bodiesReceiptsDeferred = false
+      scanPos = appStateStorage.getBackfillBestBody().min(appStateStorage.getBackfillBestReceipt())
+      scanLimit = bestHeaderNumber
+      log.info(
+        "Chain download: SNAP state complete, releasing bodies and receipts. headers={}, scanning {}..{} lazily",
+        bestHeaderNumber,
+        scanPos + 1,
+        scanLimit
+      )
+      scheduleDispatch(200.millis)
+
+  /** Queue missing bodies/receipts for the next window of at most `QueueWindow` headers above `scanPos`, when either
+    * queue is running low. Ascending, so the lowest missing block is dispatched first (see findBestStoredHeader).
+    * Bounded work per call (a few thousand header reads) and bounded heap, regardless of chain length.
+    */
+  private def refillQueuesWindow(): Unit =
+    // Both queues must be low: the scan is paced by the SLOWER of the two fetch types, so neither queue can grow past
+    // one low-water mark plus one window while the other lags.
+    if !bodiesReceiptsDeferred && scanPos < scanLimit &&
+      bodiesQueue.size < QueueLowWater && receiptsQueue.size < QueueLowWater
+    then
+      val bodyFloor = appStateStorage.getBackfillBestBody()
+      val receiptFloor = appStateStorage.getBackfillBestReceipt()
+      val end = (scanPos + QueueWindow).min(scanLimit)
+      var i = scanPos + 1
+      var stop = false
+      while i <= end && !stop do
+        blockchainReader.getBlockHeaderByNumber(i) match
+          case Some(header) =>
+            if i > bodyFloor && blockchainReader.getBlockBodyByHash(header.hash).isEmpty then
+              bodiesQueue :+= header.hash.value
+            if i > receiptFloor && blockchainReader.getReceiptsByHash(header.hash).isEmpty then
+              receiptsQueue :+= header.hash.value
+            i += 1
+          case None =>
+            // The header cursor claimed this block was stored contiguously. It is not: do not skip it silently. Re-derive
+            // from what is really on disk: pull the cursor and the live header position back so the forward download
+            // fetches it (and everything above) again, and stop scanning at the gap.
+            log.warn(
+              "Chain download: header {} missing although the header cursor covered it; re-downloading from there",
+              i
+            )
+            val lastGood = i - 1
+            bestHeaderNumber = bestHeaderNumber.min(lastGood)
+            scanLimit = scanLimit.min(lastGood)
+            appStateStorage.putBackfillBestHeader(lastGood).commit()
+            stop = true
+      scanPos = (i - 1).min(scanLimit)
 
   def idle(): Behavior[Command] =
     Behaviors.receiveMessage { message =>
@@ -191,7 +275,14 @@ class ChainDownloader private (
             Behaviors.same
 
           case GetProgress(replyTo) =>
-            replyTo ! Progress(headersDownloaded, bodiesDownloaded, receiptsDownloaded, targetBlock)
+            replyTo ! Progress(
+              headersDownloaded,
+              bodiesDownloaded,
+              receiptsDownloaded,
+              targetBlock,
+              bodiesQueue.size,
+              receiptsQueue.size
+            )
             Behaviors.same
 
           // A header request outlived its downloading() phase: Done fired (bodies/receipts already complete)
@@ -264,7 +355,14 @@ class ChainDownloader private (
             Behaviors.same
 
           case GetProgress(replyTo) =>
-            replyTo ! Progress(headersDownloaded, bodiesDownloaded, receiptsDownloaded, targetBlock)
+            replyTo ! Progress(
+              headersDownloaded,
+              bodiesDownloaded,
+              receiptsDownloaded,
+              targetBlock,
+              bodiesQueue.size,
+              receiptsQueue.size
+            )
             Behaviors.same
 
           // --- Header responses ---
@@ -332,7 +430,7 @@ class ChainDownloader private (
       emptyHeaderPeers -= peer.id
       handleHeaders(peer, headers)
     else
-      emptyHeaderPeers += peer.id
+      emptyHeaderPeers += peer.id -> emptyHeaderBackoff.fold(Long.MaxValue)(b => nowMs() + b.toMillis)
       log.debug("Empty headers from {} — excluding from header dispatch", peer.id)
 
   /** Shared logic for a failed request of any kind (header/body/receipt) — a peer only ever has at most one category
@@ -356,6 +454,7 @@ class ChainDownloader private (
     blacklist.add(peer.id, syncConfig.blacklistDuration, FastSyncRequestFailed(reason))
 
   private def dispatchRequests(): Behavior[Command] =
+    refillQueuesWindow()
     val inFlightCount = headerRequestPeers.size + bodyRequestPeers.size + receiptRequestPeers.size
     if inFlightCount >= maxConcurrentRequests then Behaviors.same
     else
@@ -364,7 +463,7 @@ class ChainDownloader private (
         bodyRequestPeers.contains(peerId) ||
         receiptRequestPeers.contains(peerId) ||
         p.peer.nodeId.exists(snapServerPeerNodeIds.contains) ||
-        emptyHeaderPeers.contains(peerId)
+        headerExcluded(peerId)
       }
 
       if available.isEmpty then Behaviors.same
@@ -637,8 +736,9 @@ class ChainDownloader private (
                 .and(appStateStorage.putBackfillBestHeader(header.number.value))
                 .commit()
 
-              bodiesQueue :+= header.hash.value
-              receiptsQueue :+= header.hash.value
+              if !bodiesReceiptsDeferred then
+                bodiesQueue :+= header.hash.value
+                receiptsQueue :+= header.hash.value
               prevHash = Some(header.hash)
               validCount += 1
         else
@@ -1042,7 +1142,9 @@ class ChainDownloader private (
           )
 
   private def checkCompletion(): Behavior[Command] =
-    if bestHeaderNumber >= targetBlock &&
+    if !bodiesReceiptsDeferred &&
+      bestHeaderNumber >= targetBlock &&
+      scanPos >= scanLimit &&
       bodiesQueue.isEmpty &&
       receiptsQueue.isEmpty &&
       bodyRequestPeers.isEmpty &&
@@ -1105,8 +1207,12 @@ class ChainDownloader private (
         (cursorHeader + 1, cursorHeader)
       else (BigInt(0), BigInt(0))
 
+    // Deferred bodies/receipts: no queue is built, so the contiguity walk and the binary search (which could latch
+    // onto the isolated pivot header, Defect 9) have no job. The header cursor IS the contiguous best (written
+    // atomically with each stored header), so trust it; that also keeps a mid-SNAP restart O(1) on mainnet.
+    if bodiesReceiptsDeferred then best0
     // Quick check: if genesis+1 doesn't exist, start from 0 (only meaningful for fresh runs).
-    if best0 == 0 && blockchainReader.getBlockHeaderByNumber(1).isEmpty then 0
+    else if best0 == 0 && blockchainReader.getBlockHeaderByNumber(1).isEmpty then 0
     else
       // Binary search above the cursor for the highest stored header. With cursor-fast-skip
       // this almost always finds `best == cursorHeader` after one probe.
@@ -1162,10 +1268,12 @@ class ChainDownloader private (
           case Some(header) =>
             val needsBodyCheck = i > bodyFloor
             val needsReceiptCheck = i > receiptFloor
-            if needsBodyCheck && blockchainReader.getBlockBodyByHash(header.hash).isEmpty then
-              bodiesQueue :+= header.hash.value
-            if needsReceiptCheck && blockchainReader.getReceiptsByHash(header.hash).isEmpty then
-              receiptsQueue :+= header.hash.value
+            if !bodiesReceiptsDeferred && needsBodyCheck &&
+              blockchainReader.getBlockBodyByHash(header.hash).isEmpty
+            then bodiesQueue :+= header.hash.value
+            if !bodiesReceiptsDeferred && needsReceiptCheck &&
+              blockchainReader.getReceiptsByHash(header.hash).isEmpty
+            then receiptsQueue :+= header.hash.value
             i += 1
           case None =>
             contiguousBest = i - 1
@@ -1219,13 +1327,22 @@ object ChainDownloader:
   // Sent when SNAP state is finalised and regular sync is taking over. Backfill drops to a smaller
   // concurrency budget so it competes politely for peer slots. Mirrors `BoostConcurrency` but downward.
   case class YieldToRegularSync(maxConcurrent: Int) extends Command
+  // SNAP finalised: start fetching bodies and receipts (they were deferred at construction).
+  case object ReleaseBodiesAndReceipts extends Command
   case class GetProgress(replyTo: TypedActorRef[Progress]) extends Command
   case class Progress( // outbound reply type — NOT a Command
       headersDownloaded: BigInt,
       bodiesDownloaded: BigInt,
       receiptsDownloaded: BigInt,
-      targetBlock: BigInt
+      targetBlock: BigInt,
+      bodiesQueued: Int = 0,
+      receiptsQueued: Int = 0
   )
+
+  // Lazy queue fill after release: at most this many headers are examined per fill, when a queue holds fewer than
+  // QueueLowWater hashes. Bounds heap and per-message work independent of chain length.
+  private val QueueWindow: Int = 2000
+  private val QueueLowWater: Int = 1000
 
   // Internal — timer ticks
   private case object Dispatch extends Command
@@ -1260,7 +1377,14 @@ object ChainDownloader:
       // means the scan yields after cursorScanCap blocks; the next successful store continues it from the new
       // cursor. "A few thousand" per forge's review — 5000 is a few dispatch cycles' worth of throughput, not a
       // noticeable latency hit, while bounding worst-case single-message cost to a few thousand DB reads.
-      cursorScanCap: Long = 5000L
+      cursorScanCap: Long = 5000L,
+      // Download headers only; hold bodies/receipts until `ReleaseBodiesAndReceipts` (SNAP IO-contention fix).
+      deferBodiesAndReceipts: Boolean = false,
+      // How long a peer that answered a header request with nothing stays excluded from header dispatch. None keeps the
+      // original permanent exclusion (ETC / switch off).
+      emptyHeaderBackoff: Option[FiniteDuration] = None,
+      // Clock for the empty-header exclusion; injectable so tests need not sleep.
+      nowMs: () => Long = () => System.currentTimeMillis()
   ): Behavior[Command] =
     Behaviors.setup { context =>
       Behaviors.withTimers { timers =>
@@ -1292,7 +1416,10 @@ object ChainDownloader:
           requestTimeout,
           snapServerPeerNodeIds,
           replyTo,
-          cursorScanCap
+          cursorScanCap,
+          deferBodiesAndReceipts,
+          emptyHeaderBackoff,
+          nowMs
         )
 
         // Immediate poll, then periodic poll for handshaked peers (replaces PeerListSupportNg's scheduleWithFixedDelay).

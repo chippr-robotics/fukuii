@@ -234,6 +234,183 @@ class ChainDownloaderSpec
     testKit.stop(req.downloader)
   }
 
+  // ── Deferred backfill (SNAP IO-contention fix) ──────────────────────────────────────────────────────
+
+  final private case class PeerSetup(
+      storage: EphemBlockchainTestSetup,
+      downloader: TypedActorRef[ChainDownloader.Command],
+      networkPeerManager: TestProbe,
+      peerEventBus: TestProbe,
+      peerId: PeerId
+  )
+
+  /** A downloader with one registered ETH68 peer over real storage; the peer-list poll is answered and the registration
+    * barrier observed, so a dispatch after this call can see the peer.
+    */
+  private def peerSetup(
+      deferBodiesAndReceipts: Boolean,
+      configure: EphemBlockchainTestSetup => Unit,
+      emptyHeaderBackoff: Option[FiniteDuration] = None,
+      nowMs: () => Long = () => System.currentTimeMillis()
+  ): PeerSetup =
+    val storage = new EphemBlockchainTestSetup {}
+    configure(storage)
+    val networkPeerManager = TestProbe()
+    val peerEventBus = TestProbe()
+    val replyToProbe = TestProbe()
+    val peerId = PeerId("defer-peer")
+    val peer =
+      Peer(peerId, new InetSocketAddress("127.0.0.1", 0), TestProbe(peerId.value).ref, incomingConnection = false)
+    val status = RemoteStatus(
+      Capability.ETH68,
+      1,
+      ChainWeight.totalDifficultyOnly(1),
+      ByteString("best-hash"),
+      ByteString("genesis-hash")
+    )
+    val info = PeerInfo(status, status.chainWeight, forkAccepted = true, BigInt(1000), status.bestHash)
+    val downloader = testKit.spawn(
+      ChainDownloader(
+        blockchainReader = storage.blockchainReader,
+        blockchainWriter = storage.blockchainWriter,
+        appStateStorage = storage.storagesInstance.storages.appStateStorage,
+        networkPeerManager = networkPeerManager.ref,
+        peerEventBus = peerEventBus.ref,
+        syncConfig = defaultSyncConfig.copy(blockHeadersPerRequest = 1000),
+        replyTo = replyToProbe.ref,
+        maxConcurrentRequests = 4,
+        deferBodiesAndReceipts = deferBodiesAndReceipts,
+        emptyHeaderBackoff = emptyHeaderBackoff,
+        nowMs = nowMs
+      ),
+      s"chain-downloader-defer-${System.nanoTime()}"
+    )
+    networkPeerManager.expectMsgType[NetworkPeerManagerActor.GetHandshakedPeersCmd](5.seconds).replyTo !
+      NetworkPeerManagerActor.HandshakedPeers(Map(peer -> info))
+    peerEventBus.expectMsgType[SubscribeCmd](5.seconds).to shouldBe PeerDisconnectedClassifier(
+      PeerSelector.WithId(peerId)
+    )
+    // Later peer-list polls are noise for what the tests below assert.
+    networkPeerManager.ignoreMsg { case _: NetworkPeerManagerActor.GetHandshakedPeersCmd => true }
+    PeerSetup(storage, downloader, networkPeerManager, peerEventBus, peerId)
+
+  it should "fetch no body or receipt while deferred, and fetch them once released" taggedAs UnitTest in {
+    val header = BlockHelpers.generateBlock(BlockHelpers.genesis).header
+    val ps = peerSetup(
+      deferBodiesAndReceipts = true,
+      st =>
+        st.blockchainWriter.storeBlockHeader(header).commit()
+        st.storagesInstance.storages.appStateStorage.putBackfillBestHeader(BigInt(1)).commit()
+    )
+
+    ps.downloader ! ChainDownloader.Start(BigInt(1))
+    ps.downloader ! ChainDownloader.BoostConcurrency(4) // forces a synchronous dispatch
+    ps.downloader ! ChainDownloader.UpdateTarget(BigInt(1)) // pivot refresh while deferred: still nothing queued
+    expectProgress(ps.downloader) // barrier: everything above has been processed
+    ps.networkPeerManager.msgAvailable shouldBe false // no GetBlockBodies / GetReceipts / GetBlockHeaders sent
+
+    ps.downloader ! ChainDownloader.ReleaseBodiesAndReceipts
+    val sent = ps.networkPeerManager.expectMsgType[NetworkPeerManagerActor.SendMessageCmd](5.seconds)
+    sent.message.underlyingMsg match
+      case ETHPackets.GetBlockBodies(_, hashes) => hashes shouldBe Seq(header.hash.value)
+      case other => fail(s"expected the deferred body to be requested on release, got $other")
+
+    testKit.stop(ps.downloader)
+  }
+
+  // An excluded peer is never asked again, so nothing but the clock can end its exclusion. With a backoff set, one
+  // transient empty reply must not exclude the peer for good (it would stall the header download on a small peer set).
+  it should "ask a peer for headers again once its empty-reply exclusion has lapsed (and not before)" taggedAs UnitTest in {
+    val clock = new java.util.concurrent.atomic.AtomicLong(1_000_000L)
+    val ps = peerSetup(
+      deferBodiesAndReceipts = true,
+      _ => (),
+      emptyHeaderBackoff = Some(700.millis),
+      nowMs = () => clock.get()
+    )
+    ps.downloader ! ChainDownloader.Start(BigInt(10))
+    ps.downloader ! ChainDownloader.BoostConcurrency(4)
+    val sub = (1 to 2).map(_ => ps.peerEventBus.expectMsgType[SubscribeCmd](5.seconds))
+    val adapter = sub
+      .collectFirst {
+        case SubscribeCmd(MessageClassifier(codes, PeerSelector.WithId(_)), ref)
+            if codes.contains(Codes.BlockHeadersCode) =>
+          ref
+      }
+      .getOrElse(fail("no header subscription"))
+    val first = ps.networkPeerManager.expectMsgType[NetworkPeerManagerActor.SendMessageCmd](5.seconds)
+    val requestId = first.message.underlyingMsg match
+      case ETHPackets.GetBlockHeaders(id, _, _, _, _) => id
+      case other                                      => fail(s"unexpected $other")
+
+    adapter ! PeerEvent.MessageFromPeer(ETHPackets.BlockHeaders(requestId, Nil), ps.peerId)
+    expectProgress(ps.downloader) // the empty reply has been processed: the peer is now excluded
+    ps.downloader ! ChainDownloader.BoostConcurrency(4)
+    expectProgress(ps.downloader)
+    ps.networkPeerManager.msgAvailable shouldBe false // excluded: nothing sent
+
+    clock.addAndGet(701) // the exclusion lapses (700 ms) on the injected clock; no real waiting
+    ps.downloader ! ChainDownloader.BoostConcurrency(4)
+    ps.networkPeerManager.expectMsgType[NetworkPeerManagerActor.SendMessageCmd](5.seconds)
+
+    testKit.stop(ps.downloader)
+  }
+
+  it should "not refill the queues while either one is still above the low-water mark" taggedAs UnitTest in {
+    val total = 5000
+    val genesisHeader = BlockHelpers.genesis.header
+    val ps = peerSetup(
+      deferBodiesAndReceipts = true,
+      st =>
+        (1 to total).foreach { n =>
+          st.blockchainWriter
+            .storeBlockHeader(genesisHeader.copy(number = com.chipprbots.ethereum.domain.BlockNumber(n)))
+            .commit()
+        }
+        st.storagesInstance.storages.appStateStorage.putBackfillBestHeader(BigInt(total)).commit()
+    )
+    ps.downloader ! ChainDownloader.Start(BigInt(total))
+    ps.downloader ! ChainDownloader.ReleaseBodiesAndReceipts
+    ps.downloader ! ChainDownloader.BoostConcurrency(1)
+    val first = expectProgress(ps.downloader)
+    // Several dispatches while both queues hold ~2000 (> low water 1000): no further window is scanned.
+    (1 to 3).foreach(_ => ps.downloader ! ChainDownloader.BoostConcurrency(1))
+    val later = expectProgress(ps.downloader)
+    later.bodiesQueued should be <= first.bodiesQueued
+    later.receiptsQueued should be <= first.receiptsQueued
+    testKit.stop(ps.downloader)
+  }
+
+  // Release must not walk the chain: 24M RocksDB reads and millions of hashes in heap on mainnet. The queues are fed
+  // lazily, a bounded window of headers at a time.
+  it should "release a deferred backfill cheaply: bodies/receipts are queued in bounded windows, not over the whole chain" taggedAs UnitTest in {
+    val total = 20000
+    val genesisHeader = BlockHelpers.genesis.header
+    val ps = peerSetup(
+      deferBodiesAndReceipts = true,
+      st =>
+        (1 to total).foreach { n =>
+          st.blockchainWriter
+            .storeBlockHeader(genesisHeader.copy(number = com.chipprbots.ethereum.domain.BlockNumber(n)))
+            .commit()
+        }
+        st.storagesInstance.storages.appStateStorage.putBackfillBestHeader(BigInt(total)).commit()
+    )
+    ps.downloader ! ChainDownloader.Start(BigInt(total))
+    val beforeRelease = expectProgress(ps.downloader)
+    beforeRelease.bodiesQueued shouldBe 0 // deferred: nothing queued even with 20k headers stored
+    beforeRelease.receiptsQueued shouldBe 0
+
+    ps.downloader ! ChainDownloader.ReleaseBodiesAndReceipts
+    ps.downloader ! ChainDownloader.BoostConcurrency(1) // one dispatch -> one bounded refill
+    val afterRelease = expectProgress(ps.downloader)
+    afterRelease.bodiesQueued should be > 0
+    afterRelease.bodiesQueued should be <= 2000 + 50 // one window (minus the few requested), not 20000
+    afterRelease.receiptsQueued should be <= 2000 + 50
+
+    testKit.stop(ps.downloader)
+  }
+
   private val fixtureReceipt: Receipt =
     LegacyReceipt(SuccessOutcome, BigInt(21000), BloomFilter(ledger.BloomFilter.create(Nil)), Nil)
 
