@@ -43,6 +43,13 @@ trait DataSource:
     */
   def getOptimized(namespace: Namespace, key: Array[Byte]): Option[Array[Byte]]
 
+  /** [[getOptimized]] for a read whose value the caller keeps in its own cache (contract code): the storage should not
+    * also keep the block in its block cache, where one 64 KB value displaces a few dozen index, filter and data blocks
+    * of the state column families. The default is a plain [[getOptimized]]; [[RocksDbDataSource]] reads with
+    * `fill_cache=false`. The answer is identical either way.
+    */
+  def getOptimizedNoFill(namespace: Namespace, key: Array[Byte]): Option[Array[Byte]] = getOptimized(namespace, key)
+
   /** Batch point-lookup for multiple keys in the same namespace. Returns one `Option` per key — `None` for a cache
     * miss. The default implementation calls [[getOptimized]] sequentially; [[RocksDbDataSource]] overrides with a
     * single `multiGetAsList` JNI call, amortising per-call overhead and bloom-filter evaluation across the batch.

@@ -96,6 +96,18 @@ class RocksDbDataSource(
         throw RocksDbDataSourceException(s"Not found associated value to a key: $key", error)
     finally dbLock.readLock().unlock()
 
+  override def getOptimizedNoFill(namespace: Namespace, key: Array[Byte]): Option[Array[Byte]] =
+    dbLock.readLock().lock()
+    try
+      assureNotClosed()
+      Option(db.get(handles(namespace), scanReadOptions, key))
+    catch
+      case error: RocksDbDataSourceClosedException =>
+        throw error
+      case NonFatal(error) =>
+        throw RocksDbDataSourceException(s"Not found associated value to a key: $key", error)
+    finally dbLock.readLock().unlock()
+
   /** Batch point-lookup via a single JNI call. Amortises per-call overhead and bloom-filter evaluation across the
     * batch; up to 16 keys per branch node in the healing DFS. Null entries in the result list indicate a cache miss.
     */

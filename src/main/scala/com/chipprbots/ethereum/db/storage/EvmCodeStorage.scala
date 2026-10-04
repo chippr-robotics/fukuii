@@ -32,7 +32,11 @@ class EvmCodeStorage(val dataSource: DataSource) extends TransactionalKeyValueSt
       com.chipprbots.ethereum.vm.ImportProfile.codeHit()
       Some(hit)
     else
-      val read = get(hash)
+      // One native-to-heap copy, no block-cache fill, and the array is wrapped, not copied twice more (`get` goes
+      // through ArraySeq and `ByteString(code.toArray)`, two further copies of up to 64 KB per miss).
+      val read = dataSource
+        .getOptimizedNoFill(namespace, hash.toArray)
+        .map(ByteString.fromArrayUnsafe)
       read.foreach(code => EvmCodeStorage.shared.put(cacheKey(hash), code))
       read
 
