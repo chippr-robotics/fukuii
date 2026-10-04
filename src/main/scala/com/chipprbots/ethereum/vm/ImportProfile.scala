@@ -23,6 +23,8 @@ object ImportProfile:
   private val codeNs, codeCount, codeBytes = new AtomicLong
   private val nodeHits, nodeMisses, memoHits, codeHits = new AtomicLong
   private val jumpMemoHits, jumpMemoMisses = new AtomicLong
+  private val storageNs, storageCount = new AtomicLong
+  private val txNs, txPersistNs, balNs, finalPersistNs = new AtomicLong
   private var startNanos = 0L
 
   final case class Snapshot(
@@ -42,7 +44,13 @@ object ImportProfile:
       memoHits: Long,
       codeHits: Long,
       jumpMemoHits: Long,
-      jumpMemoMisses: Long
+      jumpMemoMisses: Long,
+      storageNanos: Long = 0L,
+      storageReads: Long = 0L,
+      txNanos: Long = 0L,
+      txPersistNanos: Long = 0L,
+      balNanos: Long = 0L,
+      finalPersistNanos: Long = 0L
   )
 
   private def counting: Boolean =
@@ -69,7 +77,13 @@ object ImportProfile:
         memoHits,
         codeHits,
         jumpMemoHits,
-        jumpMemoMisses
+        jumpMemoMisses,
+        storageNs,
+        storageCount,
+        txNs,
+        txPersistNs,
+        balNs,
+        finalPersistNs
       )
         .foreach(_.set(0L))
       startNanos = System.nanoTime()
@@ -96,7 +110,13 @@ object ImportProfile:
       memoHits.get,
       codeHits.get,
       jumpMemoHits.get,
-      jumpMemoMisses.get
+      jumpMemoMisses.get,
+      storageNs.get,
+      storageCount.get,
+      txNs.get,
+      txPersistNs.get,
+      balNs.get,
+      finalPersistNs.get
     )
 
   def frame(): Unit = if counting then frames.incrementAndGet()
@@ -132,6 +152,37 @@ object ImportProfile:
         codeCount.incrementAndGet()
     else body
 
+  /** Times one persisted-trie storage read (an SLOAD that missed the in-flight overlay), nested inside the tx time. */
+  inline def storageRead[A](inline body: => A): A =
+    if counting then
+      val t = System.nanoTime()
+      try body
+      finally
+        storageNs.addAndGet(System.nanoTime() - t)
+        storageCount.incrementAndGet()
+    else body
+
+  private inline def timed[A](counter: AtomicLong)(inline body: => A): A =
+    if counting then
+      val t = System.nanoTime()
+      try body
+      finally counter.addAndGet(System.nanoTime() - t)
+    else body
+
+  /** One whole transaction (validation, execution, refund, delete, persist); the persist is also in [[txPersist]]. */
+  inline def tx[A](inline body: => A): A = timed(txNs)(body)
+
+  /** The per-transaction `persistState`: code, storage tries and the account trie are hashed and written to the node
+    * storage after every transaction.
+    */
+  inline def txPersist[A](inline body: => A): A = timed(txPersistNs)(body)
+
+  /** EIP-7928 access-list construction for one block access index. */
+  inline def balBuild[A](inline body: => A): A = timed(balNs)(body)
+
+  /** The block's closing `persistState` (after rewards, withdrawals and system calls). */
+  inline def finalPersist[A](inline body: => A): A = timed(finalPersistNs)(body)
+
   def nodeHit(): Unit = if counting then nodeHits.incrementAndGet()
   def nodeMiss(): Unit = if counting then nodeMisses.incrementAndGet()
   def memoHit(): Unit = if counting then memoHits.incrementAndGet()
@@ -146,4 +197,6 @@ object ImportProfile:
     s"[IMPORT-TIMING] block=$blockNumber gas=$gasUsed txs=$txs total=${ms(s.totalNanos)}ms frames=${s.frames} " +
       s"scan=${ms(s.scanNanos)}ms(n=${s.scans},hits=${s.scanHits},memo=${s.jumpMemoHits}/${s.jumpMemoHits + s.jumpMemoMisses},${s.scanBytes / 1024}KiB) " +
       s"getAccount=${ms(s.accountNanos)}ms(n=${s.accounts}) getCode=${ms(s.codeNanos)}ms(n=${s.codes},${s.codeBytes / 1024}KiB,hits=${s.codeHits}) " +
-      s"nodes(hit=${s.nodeHits},miss=${s.nodeMisses}) readMemoHits=${s.memoHits}"
+      s"nodes(hit=${s.nodeHits},miss=${s.nodeMisses}) readMemoHits=${s.memoHits} " +
+      s"getStorage=${ms(s.storageNanos)}ms(n=${s.storageReads}) txs=${ms(s.txNanos)}ms txPersist=${ms(s.txPersistNanos)}ms " +
+      s"balBuild=${ms(s.balNanos)}ms finalPersist=${ms(s.finalPersistNanos)}ms"

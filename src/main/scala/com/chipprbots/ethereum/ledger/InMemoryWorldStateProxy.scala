@@ -161,7 +161,7 @@ class InMemoryWorldStateProxyStorage(
           case Some(value) => value
           case None        =>
             // 3. Fall back to MPT traversal (handles pre-sync data, missing flat entries)
-            wrapped.get(addr).getOrElse(0)
+            ImportProfile.storageRead(wrapped.get(addr)).getOrElse(0)
 
   /** O(1) flat storage lookup: accountHash ++ keccak256(pad32(slotIndex)) → RLP(value) */
   private def flatLookup(addr: BigInt): Option[BigInt] =

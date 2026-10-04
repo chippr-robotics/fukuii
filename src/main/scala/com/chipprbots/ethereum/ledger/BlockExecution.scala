@@ -66,9 +66,18 @@ class BlockExecution(
           throw t
     result match
       // Accepted: its state goes to the database (nobody else commits it here). Rejected: it leaves nothing behind.
-      case Right(_) => staged.pending.foreach(_.commit())
+      case Right(_) => timedCommit(block)(staged.pending.foreach(_.commit()))
       case Left(_)  => staged.discard()
     result
+
+  /** Times the block's database commit (one atomic batch since #1465), which `[IMPORT-TIMING]` ends before. */
+  private def timedCommit[A](block: Block)(body: => A): A =
+    val t = System.nanoTime()
+    try body
+    finally
+      val ms = (System.nanoTime() - t) / 1e6
+      val line = f"[IMPORT-COMMIT] block=${block.header.number.value} commit=$ms%.1fms"
+      if StateReadCacheConfig.importTimingLog then log.info(line) else log.debug(line)
 
   /** Executes and validates `block` against `staged`; the caller commits or discards what it staged. */
   protected[ledger] def executeAndValidateStaged(
@@ -269,12 +278,15 @@ class BlockExecution(
         // State root hash needs to be up-to-date for validateBlockAfterExecution. In proposer mode the
         // backing MPT storage is read-only, so persistState computes the trie hash in-memory without
         // writing to RocksDB — exactly what we want for a speculative payload.
-        worldPersisted = InMemoryWorldStateProxy.persistState(worldAfterSystemCalls)
+        worldPersisted = ImportProfile.finalPersist(InMemoryWorldStateProxy.persistState(worldAfterSystemCalls))
       yield
         for
           builder <- accessList
           reads <- postExecutionReads
-        do builder.addIndex(block.body.transactionList.size + 1L, reads, execResult.worldState, worldPersisted)
+        do
+          ImportProfile.balBuild(
+            builder.addIndex(block.body.transactionList.size + 1L, reads, execResult.worldState, worldPersisted)
+          )
         execResult.copy(
           worldState = worldPersisted,
           executionRequests = depositRequest.toSeq ++ systemRequests,
@@ -564,7 +576,7 @@ class BlockExecution(
               blockAccessList.fold(base)(bal =>
                 base.and(blockchainWriter.storeBlockAccessList(blockToExecute.header.hash, bal))
               )
-            staged.pending.fold(withAccessList)(withAccessList.and).commit()
+            timedCommit(blockToExecute)(staged.pending.fold(withAccessList)(withAccessList.and).commit())
             blockchain.saveBlockState(blockToExecute.header.number.value)
             blockchainReader.recordBlockDifficulty(blockToExecute.header.difficulty)
             go(newBlockData :: executedBlocksDecOrder, remainingBlocksIncOrder.tail, newWeight)
