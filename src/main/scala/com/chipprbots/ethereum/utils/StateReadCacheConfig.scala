@@ -17,5 +17,14 @@ object StateReadCacheConfig:
   private def bytes(path: String, default: Long): Long =
     section.filter(_.hasPath(path)).map(_.getLong(path)).getOrElse(default)
 
+  /** Budget of each `EvmCodeStorage`'s execution-side code cache; 0 disables it. */
+  lazy val codeCacheBytes: Long = bytes("code-cache-bytes", 64L * 1024 * 1024)
+
+  /** Budget of a state storage's decoded-node cache; 0 disables it. */
+  lazy val decodedNodeCacheBytes: Long = bytes("decoded-node-cache-bytes", 96L * 1024 * 1024)
+
+  /** Entries one world's base-trie read memos may hold in total; 0 disables them. */
+  lazy val worldReadMemoEntries: Int = bytes("world-read-memo-entries", 250000L).toInt
+
   /** Budget of the JUMPDEST analysis cache; 0 disables it. */
   lazy val jumpDestCacheBytes: Long = bytes("jumpdest-cache-bytes", 32L * 1024 * 1024)

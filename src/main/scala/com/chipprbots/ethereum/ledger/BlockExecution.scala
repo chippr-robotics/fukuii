@@ -17,6 +17,7 @@ import com.chipprbots.ethereum.utils.BlockchainConfig
 import com.chipprbots.ethereum.utils.ByteStringUtils
 import com.chipprbots.ethereum.utils.DaoForkConfig
 import com.chipprbots.ethereum.utils.Logger
+import com.chipprbots.ethereum.db.storage.SerializingMptStorage
 import com.chipprbots.ethereum.vm.AmsterdamGas
 import com.chipprbots.ethereum.vm.BlockAccessRecorder
 import com.chipprbots.ethereum.vm.EvmConfig
@@ -269,7 +270,10 @@ class BlockExecution(
     val _ = isProposer
     InMemoryWorldStateProxy(
       evmCodeStorage = evmCodeStorage,
-      blockchain.getBackingMptStorage(block.header.number.value),
+      blockchain.getBackingMptStorage(block.header.number.value) match
+        // Execution alone reads through the decoded-node cache; see DecodedNodeCache.
+        case serializing: SerializingMptStorage => serializing.cachedForExecution
+        case other                              => other,
       // BLOCKHASH walks this block's own ancestry (core-geth GetHashFn), never the canonical index — see
       // AncestorBlockHashes for why the index can name a different chain at the heights being asked about.
       AncestorBlockHashes.forBlock(block.header, blockchainReader),

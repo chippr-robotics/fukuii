@@ -53,7 +53,8 @@ object InMemoryWorldStateProxy:
       ethCompatibleStorage: Boolean,
       flatSlotStorage: Option[FlatSlotStorage]
   ): InMemoryWorldStateProxy =
-    val accountsStateTrieProxy = createProxiedAccountsStateTrie(nodesKeyValueStorage, stateRootHash)
+    val readMemos = new WorldReadMemos
+    val accountsStateTrieProxy = createProxiedAccountsStateTrie(nodesKeyValueStorage, stateRootHash, readMemos)
     new InMemoryWorldStateProxy(
       nodesKeyValueStorage,
       accountsStateTrieProxy,
@@ -65,7 +66,8 @@ object InMemoryWorldStateProxy:
       Set.empty,
       noEmptyAccounts,
       ethCompatibleStorage,
-      flatSlotStorage
+      flatSlotStorage,
+      readMemos
     )
 
   /** Updates state trie with current changes but does not persist them into the storages. To do so it:
@@ -125,13 +127,15 @@ object InMemoryWorldStateProxy:
     */
   private def createProxiedAccountsStateTrie(
       accountsStorage: MptStorage,
-      stateRootHash: ByteString
+      stateRootHash: ByteString,
+      readMemos: WorldReadMemos
   ): InMemorySimpleMapProxy[Address, Account, MerklePatriciaTrie[Address, Account]] =
     InMemorySimpleMapProxy.wrap[Address, Account, MerklePatriciaTrie[Address, Account]](
       MerklePatriciaTrie[Address, Account](
         stateRootHash.toArray[Byte],
         accountsStorage
-      )(Address.hashedAddressEncoder, accountSerializer)
+      )(Address.hashedAddressEncoder, accountSerializer),
+      readMemos.accounts[Address, Account]
     )
 
 class InMemoryWorldStateProxyStorage(
@@ -193,7 +197,9 @@ class InMemoryWorldStateProxy(
     val ethCompatibleStorage: Boolean,
     // Optional flat slot storage for O(1) SLOAD lookups (populated by SNAP sync).
     // When present, storage reads check flat storage before MPT traversal.
-    val flatSlotStorage: Option[FlatSlotStorage] = None
+    val flatSlotStorage: Option[FlatSlotStorage] = None,
+    // Memos of reads of the persisted base tries, shared by every copy of this world (see [[TrieReadMemo]]).
+    val readMemos: WorldReadMemos = new WorldReadMemos
 ) extends WorldStateProxy[InMemoryWorldStateProxy, InMemoryWorldStateProxyStorage]:
 
   override def getAccount(address: Address): Option[Account] =
@@ -235,7 +241,7 @@ class InMemoryWorldStateProxy(
             case None => (ByteString.empty, None)
             case Some(account) =>
               val hash = account.codeHash.value
-              evmCodeStorage.get(hash) match
+              evmCodeStorage.getForExecution(hash) match
                 case Some(code) =>
                   ImportProfile.codeBytesRead(code.length)
                   (code, Some(hash))
@@ -312,7 +318,8 @@ class InMemoryWorldStateProxy(
       touchedAccounts,
       noEmptyAccountsCond,
       ethCompatibleStorage,
-      flatSlotStorage
+      flatSlotStorage,
+      readMemos
     )
 
   override def getBlockHash(number: UInt256): Option[UInt256] = getBlockByNumber(number).map(UInt256(_))
@@ -336,4 +343,7 @@ class InMemoryWorldStateProxy(
       if ethCompatibleStorage then domain.EthereumUInt256Mpt.storageMpt(storageRoot, contractStorage)
       else domain.ArbitraryIntegerMpt.storageMpt(storageRoot, contractStorage)
 
-    InMemorySimpleMapProxy.wrap[BigInt, BigInt, MerklePatriciaTrie[BigInt, BigInt]](mpt)
+    InMemorySimpleMapProxy.wrap[BigInt, BigInt, MerklePatriciaTrie[BigInt, BigInt]](
+      mpt,
+      readMemos.storageFor(storageRoot)
+    )

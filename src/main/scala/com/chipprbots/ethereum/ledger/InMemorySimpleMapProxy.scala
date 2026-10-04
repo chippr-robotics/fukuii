@@ -4,7 +4,11 @@ import com.chipprbots.ethereum.common.SimpleMap
 
 object InMemorySimpleMapProxy:
   def wrap[K, V, I <: SimpleMap[K, V, I]](inner: I): InMemorySimpleMapProxy[K, V, I] =
-    new InMemorySimpleMapProxy(inner, Map.empty[K, Option[V]])
+    wrap(inner, new TrieReadMemo[K, V](ReadMemoBudget.fromConfig()))
+
+  /** Wraps `inner`, memoising its reads in `memo`, which must belong to this very trie (this root). */
+  def wrap[K, V, I <: SimpleMap[K, V, I]](inner: I, memo: TrieReadMemo[K, V]): InMemorySimpleMapProxy[K, V, I] =
+    new InMemorySimpleMapProxy(inner, Map.empty[K, Option[V]], memo)
 
 /** This class keeps holds changes made to the inner [[com.chipprbots.ethereum.common.SimpleMap]] until data is commited
   *
@@ -17,8 +21,11 @@ object InMemorySimpleMapProxy:
   * @tparam V
   *   data type of the value to be used within this Proxy
   */
-class InMemorySimpleMapProxy[K, V, I <: SimpleMap[K, V, I]] private (val inner: I, val cache: Map[K, Option[V]])
-    extends SimpleMap[K, V, InMemorySimpleMapProxy[K, V, I]]:
+class InMemorySimpleMapProxy[K, V, I <: SimpleMap[K, V, I]] private (
+    val inner: I,
+    val cache: Map[K, Option[V]],
+    memo: TrieReadMemo[K, V]
+) extends SimpleMap[K, V, InMemorySimpleMapProxy[K, V, I]]:
 
   type Changes = (Seq[K], Seq[(K, V)])
 
@@ -35,14 +42,19 @@ class InMemorySimpleMapProxy[K, V, I <: SimpleMap[K, V, I]] private (val inner: 
     */
   def persist(): InMemorySimpleMapProxy[K, V, I] =
     val changesToApply = changes
-    new InMemorySimpleMapProxy[K, V, I](inner.update(changesToApply._1, changesToApply._2), Map.empty)
+    // A new trie, a new root: nothing remembered about the old one applies. (The memo is a budget-sharing sibling.)
+    new InMemorySimpleMapProxy[K, V, I](
+      inner.update(changesToApply._1, changesToApply._2),
+      Map.empty,
+      memo.successor
+    )
 
   /** Clears the cache without applying the changes
     *
     * @return
     *   Updated proxy
     */
-  def rollback: InMemorySimpleMapProxy[K, V, I] = new InMemorySimpleMapProxy[K, V, I](inner, Map.empty)
+  def rollback: InMemorySimpleMapProxy[K, V, I] = new InMemorySimpleMapProxy[K, V, I](inner, Map.empty, memo)
 
   /** This function obtains the value asociated with the key passed, if there exists one.
     *
@@ -50,7 +62,7 @@ class InMemorySimpleMapProxy[K, V, I <: SimpleMap[K, V, I]] private (val inner: 
     * @return
     *   Option object with value if there exists one.
     */
-  def get(key: K): Option[V] = cache.getOrElse(key, inner.get(key))
+  def get(key: K): Option[V] = cache.getOrElse(key, memo.getOrLoad(key)(inner.get(key)))
 
   def wrapped: I = inner
 
@@ -69,4 +81,4 @@ class InMemorySimpleMapProxy[K, V, I <: SimpleMap[K, V, I]] private (val inner: 
     val afterInserts = toUpsert.foldLeft(afterRemoval) { (updated, toUpsert) =>
       updated + (toUpsert._1 -> Some(toUpsert._2))
     }
-    new InMemorySimpleMapProxy[K, V, I](inner, afterInserts)
+    new InMemorySimpleMapProxy[K, V, I](inner, afterInserts, memo)

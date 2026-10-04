@@ -21,6 +21,7 @@ object ImportProfile:
   private val scanNs, scanCount, scanHits, scanBytes = new AtomicLong
   private val accountNs, accountCount = new AtomicLong
   private val codeNs, codeCount, codeBytes = new AtomicLong
+  private val nodeHits, nodeMisses, memoHits, codeHits = new AtomicLong
   private var startNanos = 0L
 
   final case class Snapshot(
@@ -34,7 +35,11 @@ object ImportProfile:
       accounts: Long,
       codeNanos: Long,
       codes: Long,
-      codeBytes: Long
+      codeBytes: Long,
+      nodeHits: Long,
+      nodeMisses: Long,
+      memoHits: Long,
+      codeHits: Long
   )
 
   private def counting: Boolean =
@@ -45,7 +50,22 @@ object ImportProfile:
   def begin(): Boolean =
     if owner != null then false
     else
-      List(frames, scanNs, scanCount, scanHits, scanBytes, accountNs, accountCount, codeNs, codeCount, codeBytes)
+      List(
+        frames,
+        scanNs,
+        scanCount,
+        scanHits,
+        scanBytes,
+        accountNs,
+        accountCount,
+        codeNs,
+        codeCount,
+        codeBytes,
+        nodeHits,
+        nodeMisses,
+        memoHits,
+        codeHits
+      )
         .foreach(_.set(0L))
       startNanos = System.nanoTime()
       owner = Thread.currentThread
@@ -65,7 +85,11 @@ object ImportProfile:
       accountCount.get,
       codeNs.get,
       codeCount.get,
-      codeBytes.get
+      codeBytes.get,
+      nodeHits.get,
+      nodeMisses.get,
+      memoHits.get,
+      codeHits.get
     )
 
   def frame(): Unit = if counting then frames.incrementAndGet()
@@ -101,10 +125,16 @@ object ImportProfile:
         codeCount.incrementAndGet()
     else body
 
+  def nodeHit(): Unit = if counting then nodeHits.incrementAndGet()
+  def nodeMiss(): Unit = if counting then nodeMisses.incrementAndGet()
+  def memoHit(): Unit = if counting then memoHits.incrementAndGet()
+  def codeHit(): Unit = if counting then codeHits.incrementAndGet()
+
   def codeBytesRead(n: Int): Unit = if counting then codeBytes.addAndGet(n)
 
   def format(blockNumber: BigInt, gasUsed: BigInt, txs: Int, s: Snapshot): String =
     def ms(n: Long) = f"${n / 1e6}%.1f"
     s"[IMPORT-TIMING] block=$blockNumber gas=$gasUsed txs=$txs total=${ms(s.totalNanos)}ms frames=${s.frames} " +
       s"scan=${ms(s.scanNanos)}ms(n=${s.scans},hits=${s.scanHits},${s.scanBytes / 1024}KiB) " +
-      s"getAccount=${ms(s.accountNanos)}ms(n=${s.accounts}) getCode=${ms(s.codeNanos)}ms(n=${s.codes},${s.codeBytes / 1024}KiB)"
+      s"getAccount=${ms(s.accountNanos)}ms(n=${s.accounts}) getCode=${ms(s.codeNanos)}ms(n=${s.codes},${s.codeBytes / 1024}KiB,hits=${s.codeHits}) " +
+      s"nodes(hit=${s.nodeHits},miss=${s.nodeMisses}) readMemoHits=${s.memoHits}"
