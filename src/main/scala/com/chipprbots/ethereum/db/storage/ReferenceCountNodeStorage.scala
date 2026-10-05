@@ -251,6 +251,10 @@ object ReferenceCountNodeStorage extends PruneSupport with Logger:
   private val abandonIndexPrefix = ByteString("bdh".getBytes)
   private val deltaEntryLength = nodeKeyLength + 4
 
+  /** True when `blockHash` has a committed, not-undone record: its reference-count changes are applied right now. */
+  def isBlockApplied(blockHash: ByteString, nodeStorage: NodesStorage): Boolean =
+    nodeStorage.get(abandonRecordKey(blockHash)).exists(bytes => bytes.nonEmpty && bytes(0) == 1.toByte)
+
   /** `bd<blockHash>` -> flag byte (1 applied, 0 undone) ++ (32-byte node hash ++ 4-byte big-endian delta)*. */
   def abandonRecordKey(blockHash: ByteString): ByteString = abandonRecordPrefix ++ blockHash
 
