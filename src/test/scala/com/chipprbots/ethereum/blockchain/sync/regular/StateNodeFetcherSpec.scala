@@ -1,5 +1,7 @@
 package com.chipprbots.ethereum.blockchain.sync.regular
 import org.apache.pekko.actor.testkit.typed.scaladsl.ActorTestKit
+import org.apache.pekko.actor.testkit.typed.scaladsl.FishingOutcomes
+import org.apache.pekko.actor.testkit.typed.scaladsl.ManualTime
 import org.apache.pekko.actor.testkit.typed.scaladsl.ScalaTestWithActorTestKit
 import org.apache.pekko.actor.typed.ActorRef
 import org.apache.pekko.actor.typed.scaladsl.adapter.*
@@ -16,10 +18,12 @@ import org.scalatest.matchers.should.Matchers
 import com.chipprbots.ethereum.blockchain.sync.PeersClient
 import com.chipprbots.ethereum.blockchain.sync.PeersClient.BestSnapPeerExcluding
 import com.chipprbots.ethereum.blockchain.sync.PeersClient.Request
+import com.chipprbots.ethereum.crypto.kec256
 import com.chipprbots.ethereum.blockchain.sync.TestSyncConfig
 import com.chipprbots.ethereum.blockchain.sync.regular.BlockFetcher.FetchCommand
 import com.chipprbots.ethereum.blockchain.sync.regular.BlockFetcher.FetchedStateNode
 import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.NodeData
+import com.chipprbots.ethereum.network.p2p.messages.SNAP.ByteCodes as SNAPByteCodes
 import com.chipprbots.ethereum.network.p2p.messages.SNAP.GetByteCodes
 import com.chipprbots.ethereum.network.p2p.messages.SNAP.GetTrieNodes
 import com.chipprbots.ethereum.network.p2p.messages.SNAP.TrieNodes
@@ -52,8 +56,12 @@ class StateNodeFetcherSpec
   override def beforeEach(): Unit =
     typedKit = ActorTestKit("StateNodeFetcherTest-" + System.nanoTime())
 
+  private val manualKits = scala.collection.mutable.ListBuffer.empty[ActorTestKit]
+
   override def afterEach(): Unit =
     typedKit.shutdownTestKit()
+    manualKits.foreach(_.shutdownTestKit())
+    manualKits.clear()
 
   /** Fixture that wires up:
     *   - a classic TestProbe playing peersClient (catches outgoing Requests)
@@ -74,6 +82,31 @@ class StateNodeFetcherSpec
       )
 
     val targetHash: ByteString = ByteString(Array.fill[Byte](32)(0xab.toByte))
+
+  /** Same wiring as [[TestSetup]] but with a virtual clock, so backoff timing is asserted without real waiting. The
+    * peersClient is a typed probe here so ManualTime can assert the absence of messages.
+    */
+  private trait ManualClockSetup:
+    val manualKit: ActorTestKit = ActorTestKit("StateNodeFetcherManual-" + System.nanoTime(), ManualTime.config)
+    manualKits += manualKit
+    val manualTime: ManualTime = ManualTime()(using manualKit.system)
+    val replyToProbe: TestProbe = TestProbe()
+    val peersClientProbe: org.apache.pekko.actor.testkit.typed.scaladsl.TestProbe[PeersClient.Command] =
+      manualKit.createTestProbe[PeersClient.Command]()
+    val supervisorProbe: org.apache.pekko.actor.testkit.typed.scaladsl.TestProbe[FetchCommand] =
+      manualKit.createTestProbe[FetchCommand]()
+    val fetcher: ActorRef[StateNodeFetcher.StateNodeFetcherCommand] =
+      manualKit.spawn(StateNodeFetcher(peersClientProbe.ref, syncConfig, supervisorProbe.ref), "state-node-fetcher")
+    val targetHash: ByteString = ByteString(Array.fill[Byte](32)(0xab.toByte))
+
+    /** Next Request sent to peersClient, skipping the BlacklistPeer notifications interleaved with it. */
+    def nextRequest(): PeersClient.Request[?] =
+      peersClientProbe
+        .fishForMessage(3.seconds)(m =>
+          if m.isInstanceOf[PeersClient.Request[?]] then FishingOutcomes.complete else FishingOutcomes.continueAndIgnore
+        )
+        .last
+        .asInstanceOf[PeersClient.Request[?]]
 
   "StateNodeFetcher" - {
 
@@ -279,4 +312,70 @@ class StateNodeFetcherSpec
         case _: PeersClient.Request[?] => true; case _ => false
       }
       second.asInstanceOf[PeersClient.Request[?]].message.asInstanceOf[GetTrieNodes].rootHash shouldBe fallbackRoot
+
+    "rotates IMMEDIATELY to the next snap peer on a hash-mismatched reply (no backoff while untried peers remain)" taggedAs UnitTest in new ManualClockSetup:
+      val stateRoot: ByteString = ByteString(Array.fill[Byte](32)(0x11.toByte))
+      val goodNode: ByteString = ByteString(Array.fill[Byte](40)(7))
+      val wantedHash: ByteString = ByteString(kec256(goodNode.toArray))
+      fetcher ! StateNodeFetcher.FetchStateNode(
+        hash = wantedHash,
+        originalSender = replyToProbe.ref,
+        stateRoot = Some(stateRoot),
+        paths = Some(Seq(Seq(ByteString(Array(0x01.toByte))))),
+        isByteCode = false
+      )
+      val first = nextRequest()
+      first.peerSelector shouldBe BestSnapPeerExcluding(Set.empty)
+
+      // Peer p1 answers with a node whose keccak is not the wanted hash: it must be rejected...
+      val p1 = PeerTestHelpers.createTestPeer("p1", TestProbe().ref)
+      fetcher ! StateNodeFetcher.AdaptedMessage(p1, TrieNodes(1, Seq(ByteString(Array.fill[Byte](40)(1)))))
+
+      // ...and the next request must go out without any virtual time passing (BackoffInterval is 5s), excluding p1.
+      val second = nextRequest()
+      second.peerSelector shouldBe BestSnapPeerExcluding(Set(p1.id))
+      replyToProbe.expectNoMessage(100.millis)
+
+      // A second bad peer is again rotated immediately, excluding both.
+      val p2 = PeerTestHelpers.createTestPeer("p2", TestProbe().ref)
+      fetcher ! StateNodeFetcher.AdaptedMessage(p2, TrieNodes(1, Seq(ByteString(Array.fill[Byte](40)(2)))))
+      nextRequest().peerSelector shouldBe
+        BestSnapPeerExcluding(Set(p1.id, p2.id))
+
+      // The third peer returns the genuine node: it is verified by hash and delivered.
+      val p3 = PeerTestHelpers.createTestPeer("p3", TestProbe().ref)
+      fetcher ! StateNodeFetcher.AdaptedMessage(p3, TrieNodes(1, Seq(goodNode)))
+      replyToProbe.expectMsg(FetchedStateNode(NodeData(Seq(goodNode))))
+
+    "backs off by BackoffInterval only once every snap peer has been tried (NoSuitablePeer)" taggedAs UnitTest in new ManualClockSetup:
+      fetcher ! StateNodeFetcher.FetchStateNode(
+        hash = targetHash,
+        originalSender = replyToProbe.ref,
+        stateRoot = Some(ByteString(Array.fill[Byte](32)(0x11.toByte))),
+        paths = Some(Seq(Seq(ByteString(Array(0x01.toByte))))),
+        isByteCode = false
+      )
+      nextRequest()
+
+      // PeersClient found no un-tried snap peer: the fetcher is told to retry, which must wait out the backoff.
+      fetcher ! StateNodeFetcher.RetryStateNodeRequest
+      manualTime.expectNoMessageFor(StateNodeFetcher.BackoffInterval - 1.milli, peersClientProbe)
+      manualTime.timePasses(2.millis)
+      val retry = nextRequest()
+      // The rotation set was reset for the new pass over the pool.
+      retry.peerSelector shouldBe BestSnapPeerExcluding(Set.empty)
+
+    "a hash-mismatched ByteCodes reply rotates immediately and only the genuine bytecode is delivered" taggedAs UnitTest in new ManualClockSetup:
+      val code: ByteString = ByteString(Array.fill[Byte](16)(9))
+      val codeHash: ByteString = ByteString(kec256(code.toArray))
+      fetcher ! StateNodeFetcher.FetchStateNode(hash = codeHash, originalSender = replyToProbe.ref, isByteCode = true)
+      nextRequest()
+      val p1 = PeerTestHelpers.createTestPeer("p1", TestProbe().ref)
+      fetcher ! StateNodeFetcher.AdaptedMessage(p1, SNAPByteCodes(1, Seq(ByteString(Array.fill[Byte](16)(1)))))
+      nextRequest().peerSelector shouldBe
+        BestSnapPeerExcluding(Set(p1.id))
+      replyToProbe.expectNoMessage(100.millis)
+      val p2 = PeerTestHelpers.createTestPeer("p2", TestProbe().ref)
+      fetcher ! StateNodeFetcher.AdaptedMessage(p2, SNAPByteCodes(2, Seq(code)))
+      replyToProbe.expectMsg(FetchedStateNode(NodeData(Seq(code))))
   }

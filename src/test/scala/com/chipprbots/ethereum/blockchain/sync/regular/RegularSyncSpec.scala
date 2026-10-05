@@ -777,7 +777,9 @@ class RegularSyncSpec
               blockExecutionScheduler: IORuntime,
               blockchainConfig: BlockchainConfig
           ): IO[BlockImportResult] =
-            if saveNodeWasCalled then IO.pure(BlockImportedToTop(Nil))
+            if saveNodeWasCalled then
+              reimportedAfterSave = true
+              IO.pure(BlockImportedToTop(Nil))
             else IO.pure(BlockImportFailedDueToMissingNode(new MissingNodeException(failingBlock.hash.value)))
 
         override lazy val branchResolution: BranchResolution = new BranchResolution(blockchainReader):
@@ -786,6 +788,7 @@ class RegularSyncSpec
 
         peersClient.setAutoPilot(new PeersClientAutoPilot)
 
+        @volatile var reimportedAfterSave: Boolean = false
         var saveNodeWasCalled: Boolean = false
         val nodeData: List[ByteString] = List(ByteString(failingBlock.header.toBytes: Array[Byte]))
 
@@ -806,6 +809,9 @@ class RegularSyncSpec
         regularSync ! SyncProtocol.Start
 
         awaitCond(saveNodeWasCalled)
+        // The importer must resume the import as soon as the node arrives, not wait out the 30 s ResolvingMissingNode
+        // SyncRetryTick (which stays only as a fallback). The bound is far below that tick.
+        awaitCond(reimportedAfterSave, 10.seconds)
       )
     }
 

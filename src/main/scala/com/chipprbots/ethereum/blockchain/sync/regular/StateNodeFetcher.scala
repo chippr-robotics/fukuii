@@ -137,6 +137,10 @@ class StateNodeFetcher(
   /** Increment attempt counter and either schedule another request or signal exhaustion to the BlockImporter. Sending
     * an empty FetchedStateNode triggers BlockImporter's 5-minute backoff handler so the resolvingMissingNode →
     * import-fail → re-fetch loop can't spin indefinitely.
+    *
+    * This is the BACKOFF path: it is only reached when there is no un-tried snap peer left (peer-selection returned
+    * NoSuitablePeer / RequestFailed, i.e. [[StateNodeFetcher.RetryStateNodeRequest]]) or on the legacy GetNodeData
+    * path. A bad reply from one peer while other snap peers remain goes through [[rotateToNextPeer]] instead.
     */
   private def retryOrExhaust(req: StateNodeRequester): Unit =
     val nextAttempt = req.attempts + 1
@@ -151,6 +155,17 @@ class StateNodeFetcher(
     else
       requester = Some(req.copy(attempts = nextAttempt))
       context.scheduleOnce(BackoffInterval, context.self, StateNodeFetcher.FireRequest)
+
+  /** A peer answered empty / with a node that does not hash to the wanted hash. Mark it tried and immediately ask the
+    * next un-tried snap peer — no backoff while untried peers remain. When every snap peer has been tried the peers
+    * client answers NoSuitablePeer, which arrives as [[StateNodeFetcher.RetryStateNodeRequest]] and takes the
+    * [[retryOrExhaust]] backoff path (resetting the rotation set). The retry budget is therefore consumed per full
+    * rotation, not per peer, and this path is bounded by the number of snap peers (triedPeers strictly grows).
+    */
+  private def rotateToNextPeer(req: StateNodeRequester, badPeer: PeerId): Unit =
+    val updated = req.copy(triedPeers = req.triedPeers + badPeer)
+    requester = Some(updated)
+    requestStateNode(updated.hash, updated.stateRoot, updated.paths, updated.isByteCode, updated.triedPeers)
 
   private def handleNodeDataValues(peer: Peer, values: Seq[ByteString]): Behavior[StateNodeFetcherCommand] =
     requester
@@ -199,7 +214,7 @@ class StateNodeFetcher(
               // rotation exclusion is enough without a long blacklist.
               log.warn("SNAP TrieNodes response was empty, rotating to a different snap peer")
               peersClient ! BlacklistPeer(peer.id, BlacklistReason.EmptyStateNodeResponse)
-              retryOrExhaust(stateNodeRequester.copy(triedPeers = stateNodeRequester.triedPeers + peer.id))
+              rotateToNextPeer(stateNodeRequester, peer.id)
               Behaviors.same[StateNodeFetcherCommand]
         else
           // Multi-depth request: scan all returned nodes for one matching the target hash.
@@ -235,7 +250,7 @@ class StateNodeFetcher(
                 case None =>
                   log.warn("SNAP TrieNodes: got {} nodes but none matched target hash, rotating peer", nodes.size)
                   peersClient ! BlacklistPeer(peer.id, BlacklistReason.WrongStateNodeResponse)
-                  retryOrExhaust(stateNodeRequester.copy(triedPeers = stateNodeRequester.triedPeers + peer.id))
+                  rotateToNextPeer(stateNodeRequester, peer.id)
                   Behaviors.same[StateNodeFetcherCommand]
       }
       .getOrElse(Behaviors.same)
@@ -277,7 +292,7 @@ class StateNodeFetcher(
           // requested codes — equivalent to a stateless response. Retry against another peer.
           log.warn("SNAP ByteCodes response was empty, rotating to a different snap peer")
           peersClient ! BlacklistPeer(peer.id, BlacklistReason.EmptyStateNodeResponse)
-          retryOrExhaust(stateNodeRequester.copy(triedPeers = stateNodeRequester.triedPeers + peer.id))
+          rotateToNextPeer(stateNodeRequester, peer.id)
           Behaviors.same[StateNodeFetcherCommand]
         else
           // Codes are returned in the same order as requested hashes; we only request one hash
@@ -295,7 +310,7 @@ class StateNodeFetcher(
             case None =>
               log.warn("SNAP ByteCodes: got {} codes but none matched target codeHash, rotating peer", codes.size)
               peersClient ! BlacklistPeer(peer.id, BlacklistReason.WrongStateNodeResponse)
-              retryOrExhaust(stateNodeRequester.copy(triedPeers = stateNodeRequester.triedPeers + peer.id))
+              rotateToNextPeer(stateNodeRequester, peer.id)
               Behaviors.same[StateNodeFetcherCommand]
       }
       .getOrElse(Behaviors.same)
