@@ -378,4 +378,44 @@ class StateNodeFetcherSpec
       val p2 = PeerTestHelpers.createTestPeer("p2", TestProbe().ref)
       fetcher ! StateNodeFetcher.AdaptedMessage(p2, SNAPByteCodes(2, Seq(code)))
       replyToProbe.expectMsg(FetchedStateNode(NodeData(Seq(code))))
+
+    "an EMPTY TrieNodes reply rotates immediately WITHOUT blacklisting the peer" taggedAs UnitTest in new ManualClockSetup:
+      fetcher ! StateNodeFetcher.FetchStateNode(
+        hash = targetHash,
+        originalSender = replyToProbe.ref,
+        stateRoot = Some(ByteString(Array.fill[Byte](32)(0x11.toByte))),
+        paths = Some(Seq(Seq(ByteString(Array(0x01.toByte))))),
+        isByteCode = false
+      )
+      nextRequest()
+      val p1 = PeerTestHelpers.createTestPeer("p1", TestProbe().ref)
+      fetcher ! StateNodeFetcher.AdaptedMessage(p1, TrieNodes(1, Seq.empty))
+      // The very next message is the rotated request: no BlacklistPeer precedes it.
+      peersClientProbe.expectMessageType[PeersClient.Request[?]].peerSelector shouldBe
+        BestSnapPeerExcluding(Set(p1.id))
+      peersClientProbe.expectNoMessage(100.millis)
+
+    "an EMPTY ByteCodes reply rotates immediately WITHOUT blacklisting the peer" taggedAs UnitTest in new ManualClockSetup:
+      fetcher ! StateNodeFetcher.FetchStateNode(hash = targetHash, originalSender = replyToProbe.ref, isByteCode = true)
+      nextRequest()
+      val p1 = PeerTestHelpers.createTestPeer("p1", TestProbe().ref)
+      fetcher ! StateNodeFetcher.AdaptedMessage(p1, SNAPByteCodes(1, Seq.empty))
+      peersClientProbe.expectMessageType[PeersClient.Request[?]].peerSelector shouldBe
+        BestSnapPeerExcluding(Set(p1.id))
+      peersClientProbe.expectNoMessage(100.millis)
+
+    "drops a late reply to an abandoned fetch without blacklisting the honest peer" taggedAs UnitTest in new ManualClockSetup:
+      fetcher ! StateNodeFetcher.FetchStateNode(hash = targetHash, originalSender = replyToProbe.ref, isByteCode = true)
+      val oldId = nextRequest().message.asInstanceOf[GetByteCodes].requestId
+      val otherCode: ByteString = ByteString(Array.fill[Byte](16)(5))
+      val otherHash: ByteString = ByteString(kec256(otherCode.toArray))
+      fetcher ! StateNodeFetcher.FetchStateNode(hash = otherHash, originalSender = replyToProbe.ref, isByteCode = true)
+      nextRequest()
+      // Reply to the OLD request arrives now; it would not hash to otherHash, but must be ignored, not blacklisted.
+      val p1 = PeerTestHelpers.createTestPeer("p1", TestProbe().ref)
+      fetcher ! StateNodeFetcher.AdaptedMessage(p1, SNAPByteCodes(oldId, Seq(ByteString(Array.fill[Byte](16)(1)))))
+      peersClientProbe.expectNoMessage(200.millis)
+      // The live request is still answerable.
+      fetcher ! StateNodeFetcher.AdaptedMessage(p1, SNAPByteCodes(999, Seq(otherCode)))
+      replyToProbe.expectMsg(FetchedStateNode(NodeData(Seq(otherCode))))
   }
