@@ -49,14 +49,26 @@ class EngineApiSidechainNewPayloadSpec extends AnyWordSpec with Matchers:
     override lazy val blockQueue: BlockQueue = BlockQueue(blockchainReader, syncConfig)
     override lazy val blockValidation = new BlockValidation(mining, blockchainReader, blockQueue)
 
-    lazy val blockExec = new BlockExecution(
+    /** Block executions the engine API has run: a payload it already executed must not run again. */
+    val executions = new java.util.concurrent.atomic.AtomicInteger(0)
+
+    lazy val blockExec: BlockExecution = new BlockExecution(
       blockchain,
       blockchainReader,
       blockchainWriter,
       storagesInstance.storages.evmCodeStorage,
       mining.blockPreparator,
       blockValidation
-    )
+    ):
+      override def executeAndValidateBlockFull(
+          block: Block,
+          alreadyValidated: Boolean,
+          suppliedBlockAccessList: Option[BlockAccessList]
+      )(implicit
+          blockchainConfig: BlockchainConfig
+      ): Either[BlockExecutionError, (Seq[Receipt], Seq[ByteString], Option[BlockAccessList])] =
+        executions.incrementAndGet()
+        super.executeAndValidateBlockFull(block, alreadyValidated, suppliedBlockAccessList)
     lazy val forkChoiceManager = new ForkChoiceManager(blockchainReader, blockchainWriter)
 
     val poolContents: AtomicReference[Seq[SignedTransaction]] = new AtomicReference(Nil)
@@ -296,6 +308,51 @@ class EngineApiSidechainNewPayloadSpec extends AnyWordSpec with Matchers:
 
         forkchoice(block2)
         canonicalAt(2) shouldBe Some(block2.hash)
+
+    "answer VALID without executing again for a side payload it already executed" taggedAs (
+      UnitTest,
+      ConsensusTest
+    ) in new Setup:
+      // A CL whose newPayload call timed out re-sends the same payload. A side payload (stored by hash, no canonical
+      // entry) used to be re-executed every time; on Platåberget that never finished inside the CL's 8 s timeout.
+      val sibling = payloadOn(block1, Nil, randao = 0x0b)
+      val before = executions.get
+      newPayload(sibling).status shouldBe Valid
+      executions.get shouldBe (before + 1)
+      canonicalAt(2) shouldBe Some(block2.hash) // it is a side payload: block2 keeps the height
+
+      val again = newPayload(sibling)
+      again shouldBe PayloadStatusV1(Valid, latestValidHash = Some(sibling.hash.value))
+      executions.get shouldBe (before + 1)
+      canonicalAt(2) shouldBe Some(block2.hash)
+
+      // Its child still builds on it (the side payload counts as an executed parent) and is itself not re-executed.
+      val child = payloadOn(sibling, Seq(tx1), randao = 0x0c)
+      newPayload(child).status shouldBe Valid
+      executions.get shouldBe (before + 2)
+      newPayload(child).status shouldBe Valid
+      executions.get shouldBe (before + 2)
+
+    "keep a deduped side payload adoptable: forkchoiceUpdated to it, then a child executes on its state" taggedAs (
+      UnitTest,
+      ConsensusTest
+    ) in new Setup:
+      val sibling = payloadOn(block1, Nil, randao = 0x0b)
+      newPayload(sibling).status shouldBe Valid
+      val child = payloadOn(sibling, Seq(tx1), randao = 0x0c)
+      newPayload(child).status shouldBe Valid
+      val before = executions.get
+      newPayload(sibling).status shouldBe Valid // deduped re-send
+      newPayload(child).status shouldBe Valid // deduped re-send
+      executions.get shouldBe before
+
+      forkchoice(child) // adopts the side chain whose payloads were only ever executed once
+      canonicalAt(2) shouldBe Some(sibling.hash)
+      canonicalAt(3) shouldBe Some(child.hash)
+      val grandchild = payloadOn(child, Nil, randao = 0x0d) // needs the adopted state to be readable
+      newPayload(grandchild).status shouldBe Valid
+      forkchoice(grandchild)
+      canonicalAt(4) shouldBe Some(grandchild.hash)
 
     "still write the canonical entry of a payload that extends the head" taggedAs (UnitTest, ConsensusTest) in
       new Setup:

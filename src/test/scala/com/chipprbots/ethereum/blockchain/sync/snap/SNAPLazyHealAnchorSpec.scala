@@ -182,6 +182,46 @@ class SNAPLazyHealAnchorSpec extends ScalaTestWithActorTestKit() with AnyFlatSpe
     ) shouldBe false // target (285487) > currentPivot (285486): strictly newer
   }
 
+  // Platåberget 2026-10-05: the CL head lagged the network by ~110 blocks, both snap servers answered empty-without-
+  // proof for pivot 328440, and clHead - 64 was not newer than it, so the unservable pivot was kept (then 328542 vs
+  // CL head 328606, again equal). unservablePivotTarget is the way out.
+  "SNAPSyncController.unservablePivotTarget" should
+    "re-pivot to clHead - margin when the CL target equals the unservable pivot" taggedAs UnitTest in {
+      SNAPSyncController.unservablePivotTarget(
+        clHead = BigInt(328606),
+        currentPivot = BigInt(328542),
+        peerBest = None,
+        margin = BigInt(50)
+      ) shouldBe Some(BigInt(328556))
+    }
+
+  it should "prefer the peer tip minus margin when it is fresher, and the CL value when both are newer and the CL one is larger" taggedAs UnitTest in {
+    SNAPSyncController.unservablePivotTarget(BigInt(328470), BigInt(328440), Some(BigInt(328580)), BigInt(50)) shouldBe
+      Some(BigInt(328530))
+    // peer tip below the CL head: both candidates are newer than the pivot, the CL one (328556) is larger
+    SNAPSyncController.unservablePivotTarget(BigInt(328606), BigInt(328440), Some(BigInt(328600)), BigInt(50)) shouldBe
+      Some(BigInt(328556))
+  }
+
+  it should "cap a lying-high peer tip at clHead + the bounded lead" taggedAs UnitTest in {
+    SNAPSyncController.unservablePivotTarget(
+      clHead = BigInt(328606),
+      currentPivot = BigInt(328440),
+      peerBest = Some(BigInt(999_999_999)),
+      margin = BigInt(50)
+    ) shouldBe Some(BigInt(328606) + SNAPSyncController.MaxPeerTipLead - BigInt(50))
+  }
+
+  it should "not depend on a configured offset smaller than the margin (never offset-0-style tip pivots)" taggedAs UnitTest in {
+    // offset 10 would make the normal target clHead-10; the fallback never goes nearer the tip than the margin.
+    SNAPSyncController.unservablePivotTarget(BigInt(1000), BigInt(980), None, BigInt(50)) shouldBe None
+  }
+
+  it should "give None when nothing is newer than the unservable pivot, so a stale CL cannot make it flap" taggedAs UnitTest in {
+    SNAPSyncController.unservablePivotTarget(BigInt(328440), BigInt(328440), Some(BigInt(328440)), BigInt(50)) shouldBe
+      None
+  }
+
   // forge review follow-up (2nd round): the two lastHealingServeRootBlockToRecord unit tests above pin the
   // HELPER's own logic but not the CALL SITE's wiring to it — reverting the call site to the pre-fix
   // `Some(staleClockNow)` left them green, since they invoke the (still-correct) helper directly. This drives
