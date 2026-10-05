@@ -45,7 +45,15 @@ object JumpDestAnalysis:
     BitSet.fromBitMaskNoCopy(if words == bits.length then bits else java.util.Arrays.copyOf(bits, words))
 
   /** Words an analysis occupies (`nwords` is not public): up to and including the one holding the last JUMPDEST. */
-  def words(bits: BitSet): Int = bits.lastOption.fold(0)(last => (last >>> 6) + 1)
+  def words(bits: BitSet): Int =
+    // From the bit mask, O(words): `bits.lastOption` walks (and boxes) every element of the set, and a 64 KB contract
+    // holds thousands of JUMPDESTs. This ran on every block-memo miss, ~52k times per heavy devnet block, and was 31% of
+    // import CPU in a profile of the Platåberget soak (2026-10-04). Trailing zero words are skipped, so the answer is
+    // identical for any BitSet, truncated or not.
+    val mask = bits.toBitMask
+    var w = mask.length
+    while w > 0 && mask(w - 1) == 0L do w -= 1
+    w
 
   /** Process-wide cache of analyses by code hash, bounded by an approximate byte budget (LRU).
     *

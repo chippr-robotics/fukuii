@@ -2,6 +2,8 @@ package com.chipprbots.ethereum.vm
 
 import org.apache.pekko.util.ByteString
 
+import scala.collection.immutable.BitSet
+
 import org.scalacheck.Gen
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
@@ -242,4 +244,19 @@ class JumpDestAnalysisSpec extends AnyFlatSpec with Matchers with ScalaCheckProp
     memo.entries shouldBe 1 // only the hashed program entered it
     Program(code).validJumpDestinations
     memo.entries shouldBe 1
+  }
+
+  "JumpDestAnalysis.words" should "count up to the last non-empty word, for any BitSet" taggedAs (UnitTest, VMTest) in {
+    JumpDestAnalysis.words(BitSet.empty) shouldBe 0
+    // Not produced by `analyse` (always truncated), but the answer must not depend on trailing zero words.
+    JumpDestAnalysis.words(BitSet.fromBitMask(Array(1L, 0L, 0L))) shouldBe 1
+    JumpDestAnalysis.words(BitSet.fromBitMask(Array(0L, 0L, 1L << 63, 0L))) shouldBe 3
+    JumpDestAnalysis.words(BitSet(0, 63)) shouldBe 1
+    JumpDestAnalysis.words(BitSet(64)) shouldBe 2
+    JumpDestAnalysis.words(BitSet(65535)) shouldBe 1024
+    val r = new java.util.Random(11)
+    (1 to 200).foreach { _ =>
+      val set = BitSet((1 to r.nextInt(50)).map(_ => r.nextInt(70000))*)
+      JumpDestAnalysis.words(set) shouldBe set.lastOption.fold(0)(last => (last >>> 6) + 1)
+    }
   }
