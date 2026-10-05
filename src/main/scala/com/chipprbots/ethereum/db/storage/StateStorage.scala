@@ -152,9 +152,9 @@ class ReferenceCountedStateStorage(
           nodeStorage,
           inMemory = blockToPrune > currentBestSavedBlock
         )
-      // Evict AFTER the delete. Safe because blocks are imported, and state pruned, on one thread: no reader can
-      // re-insert a just-pruned node between the delete and this eviction. A concurrent block executor would need
-      // evict-before-delete plus a re-check on insert (a hit on a node the database no longer holds).
+      // Evict AFTER the delete. A concurrent reader (Engine API newPayload runs without the regular-sync importer's
+      // serialisation) may still re-read a node just before the delete; DecodedNodeCache.putIfCurrent drops such an
+      // insert, because evict bumps the generation the reader took before reading.
       decodedNodes.foreach(_.evict(removed))
       blockToPrune += 1
     if lastPruned.forall(_ < target) then lastPruned = Some(target)
@@ -162,7 +162,7 @@ class ReferenceCountedStateStorage(
 
   override def onBlockRollback(bn: BigInt, currentBestSavedBlock: BigInt)(updateBestBlocksData: () => Unit): Unit =
     val removed = ReferenceCountNodeStorage.rollbackReporting(bn, nodeStorage, inMemory = bn > currentBestSavedBlock)
-    // Same single-import-thread assumption as in onBlockSave: evict after the rollback has deleted.
+    // As in onBlockSave: evict after the rollback has deleted; racing inserts are dropped by putIfCurrent.
     decodedNodes.foreach(_.evict(removed))
     updateBestBlocksData()
 
