@@ -4172,13 +4172,13 @@ private class SNAPSyncControllerImpl(
           // CL head has not moved far enough to give a newer one: the CL can lag the network (Lighthouse catching up
           // on Platåberget lagged ~110 blocks), and the roots peers still serve are newer than the CL's head. Never
           // leave such a pivot in place: take a smaller offset below the CL head, or the snap peers' advertised
-          // tip minus the serve-window margin. The header is still fetched and installed by the normal pivot
-          // bootstrap; a wrong number can only yield an unservable root, which the anchor guard refuses to finalise.
+          // tip (capped to a bounded lead over the CL head), both minus the serve-window margin. The header is
+          // still fetched by the normal pivot bootstrap; the anchor guard does NOT authenticate it (snap root and
+          // stateRoot come from the same peer header), which is why the peer tip is capped.
           val fallback =
             if pivotUnservable then
               SNAPSyncController.unservablePivotTarget(
                 clHead,
-                snapSyncConfig.pivotBlockOffset,
                 currentPivot,
                 currentNetworkBestFromSnapPeers(),
                 SnapServeWindowMargin
@@ -4188,7 +4188,7 @@ private class SNAPSyncControllerImpl(
             case Some(t) =>
               ctx.log.warn(
                 s"CL-based pivot $target not newer than unservable pivot $currentPivot (CL head=$clHead); " +
-                  s"re-pivoting to $t (smaller offset / peer tip) instead of keeping a pivot peers cannot serve."
+                  s"re-pivoting to $t (clHead-margin / capped peer tip) instead of keeping a pivot peers cannot serve."
               )
               Some(t)
             case None =>
@@ -5767,6 +5767,31 @@ object SNAPSyncController:
       // legacy "take whatever peer offers" behavior.
       Right(())
 
+  /** Pivot to move to when the current one is known unservable and `clHead - pivotBlockOffset` is not newer than it:
+    * the larger of `clHead - margin` and `min(peerBest, clHead + MaxPeerTipLead) - margin`, if strictly newer than
+    * `currentPivot`; None when neither is. `margin` is [[SnapServeWindowMargin]] (roots nearer the tip than that are
+    * "not indexed" by peers; offset 0 froze the ETC pivot on 2026-06-01).
+    *
+    * `peerBest` is one peer's uncorroborated advertised tip. It is capped at `clHead + MaxPeerTipLead` so a peer that
+    * lies high cannot drag the pivot (and the bootstrap retry that backtracks from it) arbitrarily far from the
+    * CL-designated chain; the header itself is still fetched from peers by the normal bootstrap.
+    */
+  private[snap] def unservablePivotTarget(
+      clHead: BigInt,
+      currentPivot: BigInt,
+      peerBest: Option[BigInt],
+      margin: BigInt,
+      maxPeerTipLead: BigInt = MaxPeerTipLead
+  ): Option[BigInt] =
+    val fromCl = clHead - margin
+    val fromPeer = peerBest.map(_.min(clHead + maxPeerTipLead) - margin)
+    (Seq(fromCl) ++ fromPeer).filter(_ > currentPivot).maxOption
+
+  /** The most a snap peer's advertised tip may lead the CL head when choosing a replacement pivot (CL lag seen on
+    * Platåberget 2026-10-05: ~110 blocks).
+    */
+  private[snap] val MaxPeerTipLead: BigInt = BigInt(128)
+
   /** True when a CL-anchored re-peg target (`clHead - pivotBlockOffset`) is not strictly newer than the current pivot —
     * i.e. `refreshPivotInPlace`'s CL-anchored branch would find nothing to do because the CL hasn't produced a fresher
     * head, NOT because anything is unservable.
@@ -5782,20 +5807,6 @@ object SNAPSyncController:
     * entirely: a test can simulate "PoS chain, live CL hint" by simply passing `Some(...)`, exactly as the
     * `staleReferenceHead` tests already do for `clHeadNumber`.
     */
-  /** Pivot to move to when the current one is known unservable and `clHead - pivotBlockOffset` is not newer than it:
-    * the larger of `clHead - min(offset, 32)` and `peerBest - margin` (peerBest = the snap peers' advertised tip), if
-    * strictly newer than `currentPivot`; None when neither is.
-    */
-  private[snap] def unservablePivotTarget(
-      clHead: BigInt,
-      pivotBlockOffset: Long,
-      currentPivot: BigInt,
-      peerBest: Option[BigInt],
-      margin: BigInt
-  ): Option[BigInt] =
-    val smallerOffset = clHead - BigInt(math.min(pivotBlockOffset, 32L))
-    (Seq(smallerOffset) ++ peerBest.map(_ - margin)).filter(_ > currentPivot).maxOption
-
   private[snap] def clPivotNotYetAdvanced(clHead: BigInt, pivotBlockOffset: Long, currentPivot: BigInt): Boolean =
     (clHead - pivotBlockOffset) <= currentPivot
 
