@@ -23,7 +23,12 @@ import com.chipprbots.ethereum.utils.Logger
   *   - Response validation and matching
   *   - Peer management for SNAP requests
   */
-class SNAPRequestTracker(implicit scheduler: Scheduler) extends Logger:
+class SNAPRequestTracker(
+    // Monotonic: a wall-clock (NTP) step must not look like a process stall. Only differences are ever used.
+    nowMs: () => Long = () => System.nanoTime() / 1_000_000L,
+    stallPolicy: SNAPRequestTracker.StallPolicy = SNAPRequestTracker.StallPolicy.Default
+)(implicit scheduler: Scheduler)
+    extends Logger:
 
   import SNAPRequestTracker.*
 
@@ -111,32 +116,58 @@ class SNAPRequestTracker(implicit scheduler: Scheduler) extends Logger:
       requestId = requestId,
       peer = peer,
       requestType = requestType,
-      timestamp = System.currentTimeMillis()
+      timestamp = nowMs()
     )
+    pendingRequests.put(requestId, request.copy(timeoutTask = Some(armTimeout(requestId, effectiveTimeout, onTimeout))))
+    request
+  }
 
-    // Schedule timeout
-    val timeoutTask = scheduler.scheduleOnce(effectiveTimeout) {
+  /** Schedule the timeout for `requestId`. When the timer fires far later than its deadline the whole process was
+    * paused (host swap storm, long safepoint): the peer's reply is sitting unread in the socket buffer, so declaring a
+    * timeout now would blame the peer for our own stall, slash its rate capacity, cool it down and re-queue work whose
+    * answer is about to arrive. Grant one grace period instead and restart the request clock so the stall is not
+    * recorded as the peer's round-trip time. (plataberget soak 2026-10-05: during a ~78s stall, 30s storage timeouts
+    * fired ~48s past their deadline and the "timed out" replies were processed 15ms afterwards.)
+    */
+  private def armTimeout(
+      requestId: BigInt,
+      delay: FiniteDuration,
+      onTimeout: => Unit,
+      graceGranted: Boolean = false
+  ): Cancellable =
+    val scheduledAtMs = nowMs()
+    scheduler.scheduleOnce(delay) {
       synchronized {
         pendingRequests.get(requestId).foreach { req =>
-          val elapsed = System.currentTimeMillis() - req.timestamp
-          log.warn(
-            s"SNAP request ${req.requestType} timeout for request ID $requestId from peer ${peer.id} " +
-              s"(timeout=${effectiveTimeout.toSeconds}s, elapsed=${elapsed}ms)"
-          )
-          // Record timeout in rate tracker (items=0 slashes capacity to zero)
-          val msgType = requestTypeToMsgType(req.requestType)
-          rateTracker.update(peer.id.value, msgType, elapsed, items = 0)
-          SNAPSyncMetrics.incrementRequestTimeout()
-          recordFailureMetric(req.requestType)
-          pendingRequests.remove(requestId)
-          onTimeout
+          val now = nowMs()
+          val latenessMs = now - scheduledAtMs - delay.toMillis
+          // Note: after a grace the request clock restarts at the stall's end, so a reply arriving in the grace window
+          // is rated on its post-stall latency only (the peer's rate sample is not inflated by the stall).
+          if !graceGranted && stallPolicy.isStall(latenessMs) then
+            log.warn(
+              s"SNAP request ${req.requestType} timer for request ID $requestId fired ${latenessMs}ms late — " +
+                s"process stall, granting ${stallPolicy.grace.toMillis}ms grace instead of timing out peer ${req.peer.id}"
+            )
+            pendingRequests.put(
+              requestId,
+              req.copy(timestamp = now, timeoutTask = Some(armTimeout(requestId, stallPolicy.grace, onTimeout, true)))
+            )
+          else
+            val elapsed = now - req.timestamp
+            log.warn(
+              s"SNAP request ${req.requestType} timeout for request ID $requestId from peer ${req.peer.id} " +
+                s"(timeout=${delay.toSeconds}s, elapsed=${elapsed}ms)"
+            )
+            // Record timeout in rate tracker (items=0 slashes capacity to zero)
+            val msgType = requestTypeToMsgType(req.requestType)
+            rateTracker.update(req.peer.id.value, msgType, elapsed, items = 0)
+            SNAPSyncMetrics.incrementRequestTimeout()
+            recordFailureMetric(req.requestType)
+            pendingRequests.remove(requestId)
+            onTimeout
         }
       }
     }
-
-    pendingRequests.put(requestId, request.copy(timeoutTask = Some(timeoutTask)))
-    request
-  }
 
   /** Check if a request is pending
     *
@@ -173,7 +204,7 @@ class SNAPRequestTracker(implicit scheduler: Scheduler) extends Logger:
     pendingRequests.remove(requestId).map { request =>
       // Cancel timeout
       request.timeoutTask.foreach(_.cancel())
-      val elapsed = System.currentTimeMillis() - request.timestamp
+      val elapsed = nowMs() - request.timestamp
 
       // Record measurement in rate tracker
       val msgType = requestTypeToMsgType(request.requestType)
@@ -308,6 +339,20 @@ class SNAPRequestTracker(implicit scheduler: Scheduler) extends Logger:
     case RequestType.GetTrieNodes     => PeerRateTracker.MsgGetTrieNodes
 
 object SNAPRequestTracker:
+
+  /** When to treat a late timeout timer as a process stall rather than a slow peer.
+    *
+    * @param latenessThreshold
+    *   a timer firing more than this after its deadline means the process (not the peer) was paused. Normal scheduler
+    *   jitter is tens of milliseconds, so 5s is far above noise and far below the stalls seen in the field (78-155s).
+    * @param grace
+    *   extra time a request gets, once, after a detected stall before it times out for real.
+    */
+  final case class StallPolicy(latenessThreshold: FiniteDuration, grace: FiniteDuration):
+    def isStall(latenessMs: Long): Boolean = latenessMs > latenessThreshold.toMillis
+
+  object StallPolicy:
+    val Default: StallPolicy = StallPolicy(latenessThreshold = 5.seconds, grace = 10.seconds)
 
   /** Pending SNAP request */
   case class PendingRequest(

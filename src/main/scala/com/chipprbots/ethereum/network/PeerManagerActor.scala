@@ -466,7 +466,9 @@ object PeerManagerActor:
           Some(connectWith(uri, connectedPeers))
 
         case AddMaintainedPeerCmd(uri, replyTo) =>
-          val nodeId = uri.getUserInfo
+          // Key by lowercase hex: every lookup (handshake, terminate, prune) uses the lowercase form, so a mixed-case
+          // enode would otherwise never be recognised as maintained and would not be re-dialled (#57).
+          val nodeId = uri.getUserInfo.toLowerCase
           val wasAdded = !maintainedPeersByNodeId.contains(nodeId)
           maintainedPeersByNodeId = maintainedPeersByNodeId + (nodeId -> uri)
           replyTo ! AddMaintainedPeerResponse(wasAdded)
@@ -474,7 +476,7 @@ object PeerManagerActor:
           Some(connectWith(uri, connectedPeers))
 
         case RemoveMaintainedPeerCmd(nodeId) =>
-          maintainedPeersByNodeId = maintainedPeersByNodeId - nodeId
+          maintainedPeersByNodeId = maintainedPeersByNodeId - nodeId.toLowerCase
           peerEventBus ! PublishCmd(PeerEvent.MaintainedPeersChanged(maintainedPeersByNodeId.keySet))
           Some(Behaviors.same)
 

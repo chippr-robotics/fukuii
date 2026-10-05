@@ -28,6 +28,7 @@ import com.chipprbots.ethereum.network.p2p.NetworkMessageDecoder
 import com.chipprbots.ethereum.network.p2p.SNAPMessageDecoder
 import com.chipprbots.ethereum.network.p2p.SNAP2MessageDecoder
 import com.chipprbots.ethereum.network.p2p.messages.Capability
+import com.chipprbots.ethereum.network.p2p.messages.WireProtocol.Disconnect
 import com.chipprbots.ethereum.network.p2p.messages.WireProtocol.Hello
 import com.chipprbots.ethereum.network.p2p.messages.WireProtocol.Hello.HelloEnc
 import com.chipprbots.ethereum.network.rlpx.MessageCodec.CompressionPolicy
@@ -101,6 +102,11 @@ object RLPxConnectionHandler:
 
   final case class ConnectionEstablished(nodeId: ByteString) extends PeerActor.Command
   case object ConnectionFailed extends PeerActor.Command
+
+  /** The remote refused the connection with a Disconnect frame instead of a Hello. Carries the reason so the parent can
+    * tell a transient refusal (TooManyPeers, AlreadyConnected) from a permanent one.
+    */
+  final case class ConnectionRejected(reason: Long) extends PeerActor.Command
   final case class MessageReceived(message: Message) extends PeerActor.Command
   final case class InitialHelloReceived(message: Hello, capability: Capability) extends PeerActor.Command
 
@@ -172,6 +178,11 @@ object RLPxConnectionHandler:
   // HelloCodec (pure value, no actor lifecycle — unchanged)
   // =========================================================================
 
+  /** The remote sent a Disconnect frame where its Hello was expected. Control-flow signal from `HelloCodec.readHello`
+    * to `extractHelloAndTransition`.
+    */
+  final case class PreHelloDisconnect(reason: Long) extends RuntimeException(s"disconnected before Hello: $reason")
+
   case class HelloCodec(secrets: Secrets):
     import MessageCodec.*
     lazy val frameCodec = new FrameCodec(secrets)
@@ -190,12 +201,19 @@ object RLPxConnectionHandler:
       }
       frameCodec.writeFrames(frames)
 
-    private def extractHello(frame: Frame): Option[Hello] =
+    private[rlpx] def extractHello(frame: Frame): Option[Hello] =
       if frame.`type` == Hello.code then
         NetworkMessageDecoder.fromBytes(frame.`type`, frame.payload.toArray) match
           case Left(err)       => throw err
           case Right(h: Hello) => Some(h)
           case Right(_)        => None
+      else if frame.`type` == Disconnect.code then
+        // A peer that refuses us right after the auth handshake (geth/nethermind: TooManyPeers, AlreadyConnected)
+        // sends Disconnect INSTEAD of Hello. Silently waiting for a Hello that never comes made those rejections
+        // indistinguishable from TCP failures (plataberget soak, 2026-10-05).
+        NetworkMessageDecoder.fromBytes(frame.`type`, frame.payload.toArray) match
+          case Right(d: Disconnect) => throw PreHelloDisconnect(d.reason)
+          case _                    => None
       else None
 
   // =========================================================================
@@ -579,6 +597,16 @@ object RLPxConnectionHandler:
         seqNumber: Int = 0
     ): Behavior[Command] =
       Try(extractor.readHello(data)) match
+        case Failure(PreHelloDisconnect(reason)) =>
+          log.info(
+            "[RLPx] Peer {} refused the connection before Hello: reason 0x{} ({})",
+            peerId,
+            reason.toHexString,
+            Disconnect.reasonToString(reason)
+          )
+          parent ! ConnectionRejected(reason)
+          stopping()
+
         case Failure(err) =>
           log.warn("[RLPx] Malformed Hello from peer {}: {} — disconnecting", peerId, err.getMessage)
           parent ! ConnectionFailed
@@ -672,12 +700,14 @@ object RLPxConnectionHandler:
 
         case TcpConnectFailed =>
           tcpFailedCount.incrementAndGet()
-          log.debug("[Stopping Connection] TCP connection failed for peer {}", peerId)
+          // TODO: drop the pre-auth TCP-connect/close INFO logs below back to DEBUG for non-maintained peers once the
+          // re-dial failures of the plataberget soak (2026-10-05) are diagnosed.
+          log.info("[Stopping Connection] TCP connect failed for peer {}", peerId)
           parent ! ConnectionFailed
           stopping()
 
         case TcpConnectionTerminated =>
-          log.debug("[Stopping Connection] Bridge terminated while waiting for connect for peer {}", peerId)
+          log.info("[Stopping Connection] TCP connection terminated while connecting to peer {}", peerId)
           parent ! ConnectionFailed
           stopping()
 
@@ -818,7 +848,7 @@ object RLPxConnectionHandler:
         stopping()
 
       case TcpClosed(_) | TcpConnectionTerminated =>
-        log.debug("[Stopping Connection] TCP connection closed/terminated for peer {} during auth response", peerId)
+        log.info("[Stopping Connection] TCP connection closed by peer {} before its auth response arrived", peerId)
         parent ! ConnectionFailed
         stopping()
 
@@ -891,7 +921,7 @@ object RLPxConnectionHandler:
         stopping()
 
       case TcpClosed(_) | TcpConnectionTerminated =>
-        log.debug("[Stopping Connection] TCP connection closed/terminated for peer {} while awaiting Hello", peerId)
+        log.info("[Stopping Connection] TCP connection closed by peer {} while awaiting Hello", peerId)
         stopping()
 
       case _ => Behaviors.unhandled

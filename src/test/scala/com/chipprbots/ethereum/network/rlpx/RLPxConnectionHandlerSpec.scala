@@ -29,6 +29,7 @@ import com.chipprbots.ethereum.network.p2p.MessageDecoder
 import com.chipprbots.ethereum.network.p2p.MessageDecoder.DecodingError
 import com.chipprbots.ethereum.network.p2p.MessageSerializable
 import com.chipprbots.ethereum.network.p2p.messages.Capability
+import com.chipprbots.ethereum.network.p2p.messages.WireProtocol.Disconnect
 import com.chipprbots.ethereum.network.p2p.messages.WireProtocol.Hello
 import com.chipprbots.ethereum.network.p2p.messages.WireProtocol.Ping
 import com.chipprbots.ethereum.network.rlpx.MessageCodec.CompressionPolicy
@@ -210,6 +211,41 @@ class RLPxConnectionHandlerSpec
     // The actor should gracefully handle the message and terminate without dead letters
     rlpxConnectionParent.expectMsg(RLPxConnectionHandler.ConnectionFailed)
     rlpxConnectionParent.expectTerminated(rlpxConnection, max = Timeouts.normalTimeout)
+
+  // A peer at capacity (geth/nethermind) answers the auth handshake with Disconnect instead of Hello. HelloCodec must
+  // surface that as PreHelloDisconnect rather than waiting for a Hello that never comes.
+  private def helloCodec = RLPxConnectionHandler.HelloCodec(
+    new Secrets(
+      Array.empty[Byte],
+      Array.empty[Byte],
+      Array.empty[Byte],
+      new org.bouncycastle.crypto.digests.KeccakDigest(256),
+      new org.bouncycastle.crypto.digests.KeccakDigest(256)
+    )
+  )
+
+  private def frameOf(code: Int, payload: Array[Byte]): Frame =
+    Frame(Header(payload.length, 0, None, None), code, ByteString(payload))
+
+  "HelloCodec.extractHello" should "throw PreHelloDisconnect with the reason when the first frame is a Disconnect" taggedAs (
+    UnitTest,
+    NetworkTest
+  ) in {
+    import Disconnect.DisconnectEnc
+    val frame = frameOf(Disconnect.code, Disconnect(Disconnect.Reasons.TooManyPeers).toBytes)
+    val thrown = intercept[RLPxConnectionHandler.PreHelloDisconnect](helloCodec.extractHello(frame))
+    thrown.reason shouldBe Disconnect.Reasons.TooManyPeers
+  }
+
+  it should "return the Hello for a Hello frame" taggedAs (UnitTest, NetworkTest) in {
+    import Hello.HelloEnc
+    val hello = Hello(5, "client", Capability.ETH68 :: Nil, 30303, ByteString("abc"))
+    helloCodec.extractHello(frameOf(Hello.code, hello.toBytes)) shouldBe Some(hello)
+  }
+
+  it should "return None for any other frame" taggedAs (UnitTest, NetworkTest) in {
+    helloCodec.extractHello(frameOf(Ping.code, Array.empty[Byte])) shouldBe None
+  }
 
   it should "handle late Hello message after handshake without compression" taggedAs (
     UnitTest,

@@ -12,6 +12,8 @@ import org.apache.pekko.testkit.TestActorRef
 import org.apache.pekko.testkit.TestProbe
 import org.apache.pekko.util.ByteString
 
+import scala.concurrent.duration.*
+
 import com.typesafe.config.ConfigFactory
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
@@ -158,6 +160,59 @@ class PeerActorHandshakingSpec extends AnyFlatSpec with Matchers:
 
     // Test that the handshake succeeded
     expectStatus(peerActorHandshakeRequiresHello, StatusResponse(Handshaked))
+
+  it should "retry a TooManyPeers pre-Hello refusal after at least geth's 30s inbound throttle" taggedAs (
+    UnitTest,
+    NetworkTest
+  ) in new TestSetup:
+
+    import DefaultValues.*
+
+    val peer: TestActorRef[Nothing] = peerActor(MockHandshakerRequiresHello())
+    peer ! ConnectTo(uri)
+    rlpxConnectionProbe.expectMsg(RLPxConnectionHandler.ConnectTo(uri))
+    rlpxConnectionProbe.send(peer, RLPxConnectionHandler.ConnectionEstablished(ByteString()))
+    rlpxConnectionProbe.expectMsg(RLPxConnectionHandler.SendMessage(defaultHello))
+
+    rlpxConnectionProbe.send(peer, RLPxConnectionHandler.ConnectionRejected(Disconnect.Reasons.TooManyPeers))
+
+    testScheduler.timePasses(29.seconds) // inside geth's inbound throttle: no redial yet
+    rlpxConnectionProbe.expectNoMessage(200.millis)
+    testScheduler.timePasses(2.seconds)
+    rlpxConnectionProbe.expectMsgClass(classOf[RLPxConnectionHandler.ConnectTo]) // uri is rewritten after Established
+
+  it should "never remove a node from the known-nodes store because of transient pre-Hello refusals" taggedAs (
+    UnitTest,
+    NetworkTest
+  ) in new TestSetup:
+
+    val peer: TestActorRef[Nothing] = peerActor(MockHandshakerRequiresHello())
+    peer ! ConnectTo(uri)
+    rlpxConnectionProbe.expectMsg(RLPxConnectionHandler.ConnectTo(uri))
+
+    // Exhaust every retry with AlreadyConnected refusals (answered in waitingForConnectionResult).
+    (1 to Config.Network.peer.connectMaxRetries).foreach { _ =>
+      rlpxConnectionProbe.send(peer, RLPxConnectionHandler.ConnectionRejected(Disconnect.Reasons.AlreadyConnected))
+      testScheduler.timePasses(31.seconds)
+      rlpxConnectionProbe.expectMsgClass(classOf[RLPxConnectionHandler.ConnectTo])
+    }
+    rlpxConnectionProbe.send(peer, RLPxConnectionHandler.ConnectionRejected(Disconnect.Reasons.AlreadyConnected))
+
+    knownNodesManager.expectNoMessage(300.millis) // a permanent failure would send RemoveKnownNode here
+
+  "PeerActor.rejectionRetryDelay" should "treat only transient reasons as retryable" taggedAs (
+    UnitTest,
+    NetworkTest
+  ) in {
+    val base = 15.seconds
+    PeerActor.rejectionRetryDelay(Disconnect.Reasons.TooManyPeers, base) shouldBe Some(30.seconds)
+    PeerActor.rejectionRetryDelay(Disconnect.Reasons.TooManyPeers, 45.seconds) shouldBe Some(45.seconds)
+    PeerActor.rejectionRetryDelay(Disconnect.Reasons.AlreadyConnected, base) shouldBe Some(base)
+    PeerActor.rejectionRetryDelay(Disconnect.Reasons.ClientQuitting, base) shouldBe Some(base)
+    PeerActor.rejectionRetryDelay(Disconnect.Reasons.UselessPeer, base) shouldBe None
+    PeerActor.rejectionRetryDelay(Disconnect.Reasons.IncompatibleP2pProtocolVersion, base) shouldBe None
+    PeerActor.rejectionRetryDelay(Disconnect.Reasons.Other, base) shouldBe None
+  }
 
   trait TestSetup extends EphemBlockchainTestSetup:
     implicit override lazy val classicSystem: ActorSystem =

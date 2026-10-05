@@ -329,3 +329,78 @@ class SNAPRequestTrackerSpec extends ScalaTestWithActorTestKit() with AnyFlatSpe
     // are demonstrably faster than the default.
     converged should be <= initial
   }
+
+  // ── Process-stall tolerance ────────────────────────────────────────────────────────────────
+  // A frozen JVM fires every request timer late and at once while the peers' replies sit unread in the socket buffer.
+  // The fake clock lets a test "freeze" the process deterministically: the clock jumps, the real timer then fires.
+
+  private val stallPolicy = SNAPRequestTracker.StallPolicy(latenessThreshold = 50.millis, grace = 2.seconds)
+
+  "SNAPRequestTracker stall tolerance" should "not time out a request whose timer fired late, and accept the reply" taggedAs UnitTest in {
+    val clock = new java.util.concurrent.atomic.AtomicLong(1_000_000L)
+    val tracker = new SNAPRequestTracker(() => clock.get(), stallPolicy)
+    val peer = createTestPeer("stalled-peer", TestProbe().ref)
+    val timeouts = new java.util.concurrent.atomic.AtomicInteger(0)
+
+    val requestId = tracker.generateRequestId()
+    tracker.trackRequest(requestId, peer, SNAPRequestTracker.RequestType.GetStorageRanges, 100.millis) {
+      timeouts.incrementAndGet()
+    }
+    clock.addAndGet(78_000L) // the process is frozen for 78s; the 100ms timer then fires 77.9s late
+
+    // Wait for the (late) timer to run: it must re-arm for grace, restarting the request clock at the stall's end.
+    eventually(timeout(Span(2000, Millis))) {
+      tracker.getPendingRequest(requestId).map(_.timestamp) shouldBe Some(1_078_000L)
+    }
+    timeouts.get() shouldBe 0
+    tracker.isPending(requestId) shouldBe true
+
+    // The reply arrives within the grace period and is accepted; the stall is not recorded as peer latency.
+    tracker.completeRequest(requestId, responseItems = 10) shouldBe defined
+    tracker.isPending(requestId) shouldBe false
+    tracker.pendingCount shouldBe 0
+  }
+
+  it should "still time out after the grace period when no reply arrives" taggedAs UnitTest in {
+    val clock = new java.util.concurrent.atomic.AtomicLong(2_000_000L)
+    val tracker = new SNAPRequestTracker(() => clock.get(), stallPolicy)
+    val peer = createTestPeer("dead-peer", TestProbe().ref)
+    val timeouts = new java.util.concurrent.atomic.AtomicInteger(0)
+
+    val requestId = tracker.generateRequestId()
+    tracker.trackRequest(requestId, peer, SNAPRequestTracker.RequestType.GetByteCodes, 100.millis) {
+      timeouts.incrementAndGet()
+    }
+    clock.addAndGet(78_000L)
+
+    // Grace elapses on the (now unmoving) clock with no lateness, so the second firing is a real timeout.
+    eventually(timeout(Span(8000, Millis))) {
+      timeouts.get() shouldBe 1
+    }
+    tracker.isPending(requestId) shouldBe false
+  }
+
+  it should "time out on schedule when the timer is not late" taggedAs UnitTest in {
+    val clock = new java.util.concurrent.atomic.AtomicLong(3_000_000L)
+    val tracker = new SNAPRequestTracker(() => clock.get(), stallPolicy)
+    val peer = createTestPeer("slow-peer", TestProbe().ref)
+    val timeouts = new java.util.concurrent.atomic.AtomicInteger(0)
+
+    val requestId = tracker.generateRequestId()
+    tracker.trackRequest(requestId, peer, SNAPRequestTracker.RequestType.GetAccountRange, 100.millis) {
+      timeouts.incrementAndGet()
+    }
+    // Clock unchanged: lateness is ~0, so no grace is granted and the timeout fires once, immediately.
+    eventually(timeout(Span(1000, Millis))) {
+      timeouts.get() shouldBe 1
+    }
+    tracker.isPending(requestId) shouldBe false
+  }
+
+  it should "classify only timers later than the threshold as stalls" taggedAs UnitTest in {
+    stallPolicy.isStall(0L) shouldBe false
+    stallPolicy.isStall(50L) shouldBe false
+    stallPolicy.isStall(51L) shouldBe true
+    SNAPRequestTracker.StallPolicy.Default.isStall(4_999L) shouldBe false
+    SNAPRequestTracker.StallPolicy.Default.isStall(78_000L) shouldBe true
+  }

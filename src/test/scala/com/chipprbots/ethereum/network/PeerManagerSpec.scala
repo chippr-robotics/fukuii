@@ -436,6 +436,42 @@ class PeerManagerSpec
     // connectWith should have created a second peer and sent ConnectTo(maintainedUri)
     createdPeers(1).probe.expectMsgType[ConnectTo](3.seconds).uri shouldBe maintainedUri
 
+  it should "reconnect a maintained peer whose enode was written with uppercase hex (#57)" taggedAs (
+    UnitTest,
+    NetworkTest
+  ) in new TestSetup:
+    val hexNodeId: String = "ab" * 64
+    val nodeIdBytes: ByteString = ByteString(Hex.decode(hexNodeId))
+    val maintainedUri = new URI(s"enode://${hexNodeId.toUpperCase}@127.0.0.8:30303")
+
+    start()
+
+    peerManager ! PeerManagerActor.AddMaintainedPeerCmd(maintainedUri, discardReplyRef)
+    assert(createdPeerQueue.poll(3, TimeUnit.SECONDS) ne null, "peerFactory not called within 3s")
+    createdPeers(0).probe.expectMsgType[ConnectTo](3.seconds)
+    createdPeers(0).probe.reply(
+      PeerEvent.PeerHandshakeSuccessful(
+        Peer(
+          PeerId(hexNodeId), // handshaked peer ids are always lowercase hex
+          new InetSocketAddress("127.0.0.8", 30303),
+          createdPeers(0).probe.ref.toTyped[PeerActor.Command],
+          incomingConnection = false,
+          nodeId = Some(nodeIdBytes)
+        ),
+        initialPeerInfo
+      )
+    )
+
+    createdPeers(0).probe.ref ! PoisonPill
+    peerEventBus.fishForMessage(3.seconds, "waiting for PeerDisconnected") {
+      case PublishCmd(PeerDisconnected(_)) => true
+      case _                               => false
+    }
+
+    testScheduler.timePasses(5.seconds)
+
+    createdPeers(1).probe.expectMsgType[ConnectTo](3.seconds).uri shouldBe maintainedUri
+
   it should "suppress the 5s reconnect when an inbound from the same nodeId fills the slot before the timer fires" taggedAs (
     UnitTest,
     NetworkTest
