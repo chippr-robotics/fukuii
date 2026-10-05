@@ -1,5 +1,7 @@
 package com.chipprbots.ethereum.consensus
 
+import org.apache.pekko.util.ByteString
+
 import cats.data.NonEmptyList
 import cats.effect.IO
 import cats.effect.unsafe.IORuntime
@@ -11,6 +13,7 @@ import com.chipprbots.ethereum.consensus.ConsensusImpl.ForkPoint
 import com.chipprbots.ethereum.consensus.engine.DesignatedHead
 import com.chipprbots.ethereum.consensus.engine.InvalidChainReporter
 import com.chipprbots.ethereum.domain.Block
+import com.chipprbots.ethereum.domain.BlockAccessList
 import com.chipprbots.ethereum.domain.BlockHash
 import com.chipprbots.ethereum.domain.BlockHeader
 import com.chipprbots.ethereum.domain.BlockchainReader
@@ -121,6 +124,16 @@ class ConsensusImpl(
   override def evaluateBranch(
       branch: NonEmptyList[Block]
   )(implicit blockExecutionScheduler: IORuntime, blockchainConfig: BlockchainConfig): IO[ConsensusResult] =
+    evaluateBranchWithAccessLists(branch, Map.empty)
+
+  /** [[evaluateBranch]] for a branch that arrived with peer-supplied EIP-7928 lists (eth/71 `BlockAccessLists`), keyed
+    * by block hash. They are prefetch hints only: execution re-checks each against its header and still builds and
+    * validates its own list, so an empty or wrong map changes no outcome.
+    */
+  override def evaluateBranchWithAccessLists(
+      branch: NonEmptyList[Block],
+      accessLists: Map[ByteString, BlockAccessList]
+  )(implicit blockExecutionScheduler: IORuntime, blockchainConfig: BlockchainConfig): IO[ConsensusResult] =
     // Try the full-block lookup first (existing mock-based tests rely on it),
     // then fall back to header-only — that's the state right after PivotHeaderBootstrap
     // completes. handleBranchImport only consumes header.hash and header.number,
@@ -128,14 +141,15 @@ class ConsensusImpl(
     blockchainReader.getBestBlock.map(_.header).orElse(blockchainReader.getBestBlockHeader) match
       case Some(bestHeader) =>
         blockchainReader.getChainWeightByHash(bestHeader.hash) match
-          case Some(weight) => handleBranchImport(branch, bestHeader, weight)
+          case Some(weight) => handleBranchImport(branch, bestHeader, weight, accessLists)
           case None         => returnNoTotalDifficultyForHeader(bestHeader)
       case None => returnNoBestBlock()
 
   private def handleBranchImport(
       branch: NonEmptyList[Block],
       currentBestHeader: BlockHeader,
-      currentBestBlockWeight: ChainWeight
+      currentBestBlockWeight: ChainWeight,
+      accessLists: Map[ByteString, BlockAccessList]
   )(implicit
       blockExecutionScheduler: IORuntime,
       blockchainConfig: BlockchainConfig
@@ -143,10 +157,10 @@ class ConsensusImpl(
 
     val consensusResult: IO[ConsensusResult] =
       if currentBestHeader.hash == branch.head.header.parentHash then
-        IO.delay(importToTop(branch, currentBestBlockWeight)).evalOn(blockExecutionScheduler.compute)
+        IO.delay(importToTop(branch, currentBestBlockWeight, accessLists)).evalOn(blockExecutionScheduler.compute)
       else
         IO
-          .delay(importToNewBranch(branch, currentBestHeader.number.value, currentBestBlockWeight))
+          .delay(importToNewBranch(branch, currentBestHeader.number.value, currentBestBlockWeight, accessLists))
           .evalOn(blockExecutionScheduler.compute)
 
     consensusResult.flatTap(result => IO(measureBlockMetrics(result)))
@@ -154,7 +168,8 @@ class ConsensusImpl(
   private def importToNewBranch(
       branch: NonEmptyList[Block],
       currentBestBlockNumber: BigInt,
-      currentBestBlockWeight: ChainWeight
+      currentBestBlockWeight: ChainWeight,
+      accessLists: Map[ByteString, BlockAccessList]
   )(implicit
       blockchainConfig: BlockchainConfig
   ) =
@@ -186,7 +201,15 @@ class ConsensusImpl(
         val selectedByWeight = newBranchWeight(branch, parentWeight) > currentBestBlockWeight
         if selectedByWeight || leadsToDesignatedHead(branch)
         then
-          reorganise(currentBestBlockNumber, currentBestBlockWeight, branch, parentWeight, parentHash, selectedByWeight)
+          reorganise(
+            currentBestBlockNumber,
+            currentBestBlockWeight,
+            branch,
+            parentWeight,
+            parentHash,
+            selectedByWeight,
+            accessLists
+          )
         else KeptCurrentBestBranch
       case None =>
         ConsensusError(
@@ -194,10 +217,14 @@ class ConsensusImpl(
           s"Could not get weight for parent block ${Hex.toHexString(parentHash.toArray)} (number ${branch.head.number - 1})"
         )
 
-  private def importToTop(branch: NonEmptyList[Block], currentBestBlockWeight: ChainWeight)(implicit
+  private def importToTop(
+      branch: NonEmptyList[Block],
+      currentBestBlockWeight: ChainWeight,
+      accessLists: Map[ByteString, BlockAccessList]
+  )(implicit
       blockchainConfig: BlockchainConfig
   ): ConsensusResult =
-    blockExecution.executeAndValidateBlocks(branch.toList, currentBestBlockWeight, adoptEachBlock = true) match
+    executeBranch(branch.toList, currentBestBlockWeight, adoptEachBlock = true, accessLists) match
       case (importedBlocks, None) =>
         saveLastBlock(importedBlocks)
         ExtendedCurrentBestBranch(importedBlocks)
@@ -227,6 +254,16 @@ class ConsensusImpl(
           BranchExecutionFailure(Nil, failingBlock.hash.value, error.toString)
         )
 
+  /** A branch without peer-supplied lists (every ETC and pre-Amsterdam branch) takes the unchanged call. */
+  private def executeBranch(
+      blocks: List[Block],
+      parentWeight: ChainWeight,
+      adoptEachBlock: Boolean,
+      accessLists: Map[ByteString, BlockAccessList]
+  )(implicit blockchainConfig: BlockchainConfig): (List[BlockData], Option[BlockExecutionError]) =
+    if accessLists.isEmpty then blockExecution.executeAndValidateBlocks(blocks, parentWeight, adoptEachBlock)
+    else blockExecution.executeAndValidateBlocksWithAccessLists(blocks, parentWeight, adoptEachBlock, accessLists)
+
   private def saveLastBlock(blocks: List[BlockData]): Unit = blocks.lastOption.foreach(b =>
     blockchainWriter.saveBestKnownBlocks(
       b.block.hash,
@@ -245,7 +282,8 @@ class ConsensusImpl(
       newBranch: NonEmptyList[Block],
       parentWeight: ChainWeight,
       parentHash: BlockHash,
-      selectedByWeight: Boolean
+      selectedByWeight: Boolean,
+      accessLists: Map[ByteString, BlockAccessList]
   )(implicit
       blockchainConfig: BlockchainConfig
   ): ConsensusResult =
@@ -265,7 +303,8 @@ class ConsensusImpl(
     val oldBlocksData = collectOldBranch(oldCanonical)
 
     // Execute new branch against the unchanged parent canonical state
-    val (executedBlocks, maybeError) = blockExecution.executeAndValidateBlocks(newBranch.toList, parentWeight)
+    val (executedBlocks, maybeError) =
+      executeBranch(newBranch.toList, parentWeight, adoptEachBlock = false, accessLists)
 
     settleHead(executedBlocks, parentWeight, bestBlockNumber, bestBlockWeight, fork, oldCanonical, selectedByWeight)
 

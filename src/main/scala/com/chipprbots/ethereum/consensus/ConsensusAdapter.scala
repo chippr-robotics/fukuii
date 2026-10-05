@@ -23,6 +23,7 @@ import com.chipprbots.ethereum.consensus.Consensus.KeptCurrentBestBranch
 import com.chipprbots.ethereum.consensus.Consensus.SelectedNewBestBranch
 import com.chipprbots.ethereum.consensus.engine.InvalidChainReporter
 import com.chipprbots.ethereum.domain.Block
+import com.chipprbots.ethereum.domain.BlockAccessList
 import com.chipprbots.ethereum.domain.BlockHash
 import com.chipprbots.ethereum.domain.BlockHeader
 import com.chipprbots.ethereum.domain.BlockchainReader
@@ -121,7 +122,7 @@ class ConsensusAdapter(
               IO.pure(BlockImportFailed(error.describe))
             case Right(BlockExecutionSuccess) =>
               enqueueAndGetBranch(block, bestHeader.number.value)
-                .map(forwardAndTranslateConsensusResult) // a new branch was created so we give it to consensus
+                .map(forwardAndTranslateConsensusResult(_)) // a new branch was created so we give it to consensus
                 .getOrElse(IO.pure(BlockEnqueued)) // the block was not rooted so it was simply enqueued
           }
       case None =>
@@ -134,11 +135,22 @@ class ConsensusAdapter(
   ): IO[BlockImportResult] =
     forwardAndTranslateConsensusResult(blocks)
 
+  /** [[evaluateBranch]] for a batch that arrived with peer-supplied EIP-7928 lists (prefetch hints only). */
+  def evaluateBranchWithAccessLists(
+      blocks: NonEmptyList[Block],
+      accessLists: Map[ByteString, BlockAccessList]
+  )(implicit
+      blockExecutionScheduler: IORuntime,
+      blockchainConfig: BlockchainConfig
+  ): IO[BlockImportResult] =
+    forwardAndTranslateConsensusResult(blocks, accessLists)
+
   private def forwardAndTranslateConsensusResult(
-      newBranch: NonEmptyList[Block]
+      newBranch: NonEmptyList[Block],
+      accessLists: Map[ByteString, BlockAccessList] = Map.empty
   )(implicit blockExecutionScheduler: IORuntime, blockchainConfig: BlockchainConfig) =
-    consensus
-      .evaluateBranch(newBranch)
+    (if accessLists.isEmpty then consensus.evaluateBranch(newBranch)
+     else consensus.evaluateBranchWithAccessLists(newBranch, accessLists))
       .map {
         case SelectedNewBestBranch(oldBranch, newBranch, weights) =>
           oldBranch.foreach(blockQueue.enqueueBlock(_))

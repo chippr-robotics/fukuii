@@ -22,6 +22,7 @@ import com.chipprbots.ethereum.blockchain.sync.Blacklist
 import com.chipprbots.ethereum.blockchain.sync.Blacklist.BlacklistReason
 import com.chipprbots.ethereum.blockchain.sync.SyncController
 import com.chipprbots.ethereum.blockchain.sync.SyncProtocol
+import com.chipprbots.ethereum.blockchain.sync.PeersClient
 import com.chipprbots.ethereum.blockchain.sync.fast.FastSyncBranchResolverActor
 import com.chipprbots.ethereum.blockchain.sync.regular.BlockBroadcast.BlockToBroadcast
 import com.chipprbots.ethereum.blockchain.sync.regular.BlockBroadcasterActor.BroadcastBlocks
@@ -149,7 +150,8 @@ object BlockImporter:
       networkPeerManager: TypedActorRef[NetworkPeerManagerActor.Command],
       blockchain: Blockchain,
       blacklist: Blacklist,
-      configBuilder: BlockchainConfigBuilder
+      configBuilder: BlockchainConfigBuilder,
+      peersClient: Option[TypedActorRef[PeersClient.Command]] = None
   ): Behavior[Command] =
     Behaviors.setup { ctx =>
       Behaviors.withTimers { timers =>
@@ -174,7 +176,8 @@ object BlockImporter:
           networkPeerManager,
           blockchain,
           blacklist,
-          configBuilder
+          configBuilder,
+          peersClient.map(pc => new BlockAccessListFetcher(pc)(using ctx.system.scheduler))
         )
         timers.startTimerWithFixedDelay(RetryKey, SyncRetryTick, syncConfig.syncRetryInterval)
         logic.idle
@@ -266,7 +269,8 @@ final private class BlockImporterLogic(
     networkPeerManager: TypedActorRef[NetworkPeerManagerActor.Command],
     blockchain: Blockchain,
     blacklist: Blacklist,
-    configBuilder: BlockchainConfigBuilder
+    configBuilder: BlockchainConfigBuilder,
+    balFetcher: Option[BlockAccessListFetcher]
 ):
   import BlockImporter.*
   import configBuilder.*
@@ -781,7 +785,15 @@ final private class BlockImporterLogic(
         )
         IO.pure((importedBlocks, None))
       case Some(nel) =>
-        consensus.evaluateBranch(nel).flatMap {
+        // EIP-7928: for Amsterdam blocks, ask an eth/71 peer for their access lists so execution can prefetch. A
+        // hint only: bounded by a short timeout, and any failure imports without it. A batch without a
+        // `blockAccessListHash` (ETC, pre-Amsterdam) sends nothing and takes the plain call.
+        val evaluated =
+          balFetcher.fold(IO.pure(Map.empty[ByteString, BlockAccessList]))(_.fetch(nel.toList)).flatMap { accessLists =>
+            if accessLists.isEmpty then consensus.evaluateBranch(nel)
+            else consensus.evaluateBranchWithAccessLists(nel, accessLists)
+          }
+        evaluated.flatMap {
           case BlockImportedToTop(blockImportData) =>
             val importedNow = blockImportData.map(_.block)
             importedNow.foreach(b => unknownParentStrikes -= b.hash.value)

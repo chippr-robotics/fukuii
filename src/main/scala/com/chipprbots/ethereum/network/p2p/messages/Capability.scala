@@ -141,6 +141,11 @@ object Capability:
     case ETH69 | ETH70 | ETH71 | ETH72 => true
     case _                             => false
 
+  /** True for ETH71 and later: the versions that carry EIP-8159 `GetBlockAccessLists`/`BlockAccessLists`. */
+  def supportsBlockAccessLists(capability: Capability): Boolean = capability match
+    case ETH71 | ETH72 => true
+    case _             => false
+
   extension (msg: Capability) def toRLPEncodable: RLPEncodeable = RLPList(msg.name.toRLPEncodable, msg.version)
 
   extension (bytes: Array[Byte]) def toCapability: Option[Capability] = rawDecode(bytes).toCapability

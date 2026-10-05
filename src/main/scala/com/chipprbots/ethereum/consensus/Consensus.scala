@@ -8,6 +8,7 @@ import cats.effect.unsafe.IORuntime
 
 import com.chipprbots.ethereum.consensus.Consensus.ConsensusResult
 import com.chipprbots.ethereum.domain.Block
+import com.chipprbots.ethereum.domain.BlockAccessList
 import com.chipprbots.ethereum.domain.ChainWeight
 import com.chipprbots.ethereum.ledger.BlockData
 import com.chipprbots.ethereum.mpt.MerklePatriciaTrie.MissingNodeException
@@ -20,6 +21,16 @@ trait Consensus:
   def evaluateBranch(
       block: NonEmptyList[Block]
   )(implicit blockExecutionScheduler: IORuntime, blockchainConfig: BlockchainConfig): IO[ConsensusResult]
+
+  /** [[evaluateBranch]] with peer-supplied EIP-7928 lists keyed by block hash, used as execution prefetch hints only.
+    * The default ignores them, which is always correct.
+    */
+  def evaluateBranchWithAccessLists(
+      block: NonEmptyList[Block],
+      accessLists: Map[ByteString, BlockAccessList]
+  )(implicit blockExecutionScheduler: IORuntime, blockchainConfig: BlockchainConfig): IO[ConsensusResult] =
+    val _ = accessLists
+    evaluateBranch(block)
 
 object Consensus:
   /* This return type for consensus is probably overcomplicated for now because some information is needed

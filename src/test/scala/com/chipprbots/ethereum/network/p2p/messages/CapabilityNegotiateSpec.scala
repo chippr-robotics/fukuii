@@ -139,3 +139,24 @@ class CapabilityNegotiateSpec extends AnyWordSpec with Matchers:
       }
     }
   }
+
+  "Capability.supportsBlockAccessLists" should {
+
+    "be false for eth/68, eth/69 and eth/70 (no GetBlockAccessLists message), so ETC-shaped peers are never asked" taggedAs UnitTest in {
+      List(Capability.ETH68, Capability.ETH69, Capability.ETH70).foreach { cap =>
+        Capability.supportsBlockAccessLists(cap) shouldBe false
+      }
+    }
+
+    "be true for eth/71 and eth/72" taggedAs UnitTest in {
+      List(Capability.ETH71, Capability.ETH72).foreach { cap =>
+        Capability.supportsBlockAccessLists(cap) shouldBe true
+      }
+    }
+
+    "be false for snap capabilities" taggedAs UnitTest in {
+      List(Capability.SNAP1, Capability.SNAP2).foreach { cap =>
+        Capability.supportsBlockAccessLists(cap) shouldBe false
+      }
+    }
+  }
