@@ -87,8 +87,8 @@ proposing), [8061](https://eips.ethereum.org/EIPS/eip-8061) (increase exit and c
 
 | EIP | Protocol | fukuii |
 |---|---|---|
-| [7975](https://eips.ethereum.org/EIPS/eip-7975) | eth/70 — partial block receipt lists | Implemented, opt-in (`fukuii.network.protocols.eth70`, default `false`) |
-| [8159](https://eips.ethereum.org/EIPS/eip-8159) | eth/71 — block access list exchange | Serving implemented ([#1428](https://github.com/chippr-robotics/fukuii/issues/1428)): `GetBlockAccessLists` is answered from the stored lists within a 2 MiB / 1,024-entry limit. Opt-in (`fukuii.network.protocols.eth71`, default `false`); fukuii does not yet fetch lists from peers |
+| [7975](https://eips.ethereum.org/EIPS/eip-7975) | eth/70 — partial block receipt lists | Implemented. Advertised on Ethereum, Sepolia and Platåberget ([#1475](https://github.com/chippr-robotics/fukuii/pull/1475)); off by default elsewhere (`fukuii.network.protocols.eth70`) |
+| [8159](https://eips.ethereum.org/EIPS/eip-8159) | eth/71 — block access list exchange | Serving implemented ([#1428](https://github.com/chippr-robotics/fukuii/issues/1428)): `GetBlockAccessLists` is answered from the stored lists within a 2 MiB / 1,024-entry limit. Regular-sync catch-up also fetches the lists from an eth/71 peer and uses them only to prefetch state ([#1468](https://github.com/chippr-robotics/fukuii/pull/1468)). Advertised on Ethereum, Sepolia and Platåberget ([#1475](https://github.com/chippr-robotics/fukuii/pull/1475)); off by default elsewhere (`fukuii.network.protocols.eth71`) |
 | [8070](https://eips.ethereum.org/EIPS/eip-8070) | eth/72 — sparse blobpool | **Not implemented** ([#1431](https://github.com/chippr-robotics/fukuii/issues/1431)); not needed to follow the chain |
 | [8189](https://eips.ethereum.org/EIPS/eip-8189) | snap/2 — BAL-based state healing | Opt-in capability (`fukuii.network.protocols.snap2`, default `false`); fukuii's sync uses snap/1 |
 | [8136](https://eips.ethereum.org/EIPS/eip-8136) | Cell-level deltas for data column broadcast | CL only |
@@ -227,8 +227,9 @@ exercising the Amsterdam implementation **before Sepolia activates on 2026-10-06
 **SNAP or regular sync.** `conf/plataberget.conf` sets `fukuii.sync.do-snap-sync = false`: a fresh node imports
 the chain from genesis over devp2p, toward the head the CL designates with `forkchoiceUpdated`. Set
 `do-snap-sync = true` to SNAP-sync to the head instead (Platåberget uses `storage-scheme = "path"`, which the
-config already sets). SNAP on post-merge ETH networks has open fixes in progress; see the
-[0.9.0 release notes](https://github.com/chippr-robotics/fukuii/blob/main/docs/releases/0.9.0.md#known-issues).
+config already sets). A SNAP sync from an empty datadir to the head of Platåberget completed on 2026-10-05; see the
+[0.9.0 release notes](https://github.com/chippr-robotics/fukuii/blob/main/docs/releases/0.9.0.md#known-issues)
+for the known limits.
 
 **CPU.** discv4 can be switched off with `fukuii.network.discovery.discovery-enabled = false`, which saves CPU on a
 node that is busy importing blocks. With `reuse-known-nodes = true` (the default) the node still dials its
