@@ -20,7 +20,29 @@ final class DecodedNodeCache private (lru: ByteBoundedLru[DecodedNodeCache.Key, 
 
   def get(hash: ByteString): MptNode = lru.getOrNull(DecodedNodeCache.Key(owner, hash))
   def put(hash: ByteString, node: MptNode): Unit = lru.put(DecodedNodeCache.Key(owner, hash), node)
-  def evict(hashes: Iterable[NodeHash]): Unit = hashes.foreach(h => lru.remove(DecodedNodeCache.Key(owner, h)))
+
+  /** Bumped by every [[evict]]. A reader takes it BEFORE reading the database and hands it to [[putIfCurrent]]. */
+  private val evictions = new java.util.concurrent.atomic.AtomicLong
+
+  /** The eviction count to read before going to the database for a node that is then given to [[putIfCurrent]]. */
+  def generation: Long = evictions.get
+
+  /** Caches a node read from the database, unless an eviction ran since `generationBeforeRead` was taken.
+    *
+    * Closes the delete-then-evict race (task #74): a reader that loaded a node just before pruning deleted it could
+    * insert it just after [[evict]] ran, leaving a ghost that masks a later `MissingNodeException`. Insert first, then
+    * re-check: an eviction that ran before the check bumped the count (and the entry is dropped here); one that runs
+    * after the check removes the entry itself. Evictors bump before they remove and run after the delete, so a reader
+    * whose database read saw the node necessarily took its generation before that bump.
+    */
+  def putIfCurrent(hash: ByteString, node: MptNode, generationBeforeRead: Long): Unit =
+    val key = DecodedNodeCache.Key(owner, hash)
+    lru.put(key, node)
+    if evictions.get != generationBeforeRead then lru.remove(key)
+
+  def evict(hashes: Iterable[NodeHash]): Unit =
+    evictions.incrementAndGet()
+    hashes.foreach(h => lru.remove(DecodedNodeCache.Key(owner, h)))
   def sizeBytes: Long = lru.sizeBytes
   def entries: Int = lru.entries
 
@@ -64,9 +86,10 @@ final class CachingMptStorage(underlying: MptStorage, cache: DecodedNodeCache) e
       ImportProfile.nodeHit(key)
       hit
     else
+      val generation = cache.generation // before the read: see DecodedNodeCache.putIfCurrent
       val node = underlying.get(nodeId)
       ImportProfile.nodeMiss()
-      cache.put(key.compact, node)
+      cache.putIfCurrent(key.compact, node, generation)
       node
 
   override def updateNodesInStorage(newRoot: Option[MptNode], toRemove: Seq[MptNode]): Option[MptNode] =

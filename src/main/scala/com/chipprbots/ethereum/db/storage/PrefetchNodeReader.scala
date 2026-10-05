@@ -19,10 +19,9 @@ import com.chipprbots.ethereum.mpt.MptNode
   * so the reader stops inserting once it has spent `budgetBytes` (by the cache's own weights) and reports
   * [[exhausted]], at which point the prefetch stops issuing state reads for this block.
   *
-  * Why inserting is safe against pruning (task #74, evict-after-delete): nodes are deleted and evicted only on the
-  * import thread, in `onBlockSave` / `onBlockRollback`, after the block that triggered them has executed; the prefetch
-  * of a block is cancelled and drained before its execution returns, so no prefetch read is in flight when a delete and
-  * its eviction run, and none can re-insert a node the delete just removed.
+  * Why inserting is safe against pruning (task #74, evict-after-delete): inserts go through
+  * [[DecodedNodeCache.putIfCurrent]], which drops a node read before an eviction that has since run, so a read that
+  * raced a prune's delete cannot leave the pruned node cached.
   */
 final class PrefetchNodeReader(
     underlying: MptStorage,
@@ -44,12 +43,13 @@ final class PrefetchNodeReader(
     val key = ByteString.fromArrayUnsafe(nodeId)
     val hit = cache.flatMap(c => Option(c.get(key)))
     hit.getOrElse {
+      val generation = cache.fold(0L)(_.generation) // before the read: see DecodedNodeCache.putIfCurrent
       val node = underlying.get(nodeId)
       loaded.incrementAndGet()
       cache.foreach { c =>
         if spent.addAndGet(DecodedNodeCache.weigh(node)) <= budgetBytes then
           val compact = key.compact
-          c.put(compact, node)
+          c.putIfCurrent(compact, node, generation)
           onLoaded(compact)
       }
       node
