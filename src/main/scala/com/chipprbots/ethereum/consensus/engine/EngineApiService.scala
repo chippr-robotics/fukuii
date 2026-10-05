@@ -399,7 +399,13 @@ class EngineApiService(
         blockchainReader.getBlockHeaderByHash(BlockHash(payload.parentHash)).map(_.hash.value).getOrElse(zeroHash)
       PayloadStatusV1(Invalid, latestValidHash = Some(lvh), validationError = Some("INVALID_VERSIONED_HASHES"))
     else if blockchainReader.getBlockHeaderByHash(BlockHash(payload.blockHash)).exists { h =>
-        blockchainReader.getBlockHeaderByNumber(h.number.value).exists(_.hash.value == payload.blockHash) &&
+        // Stored AND executed. The receipts are the was-executed proof; the canonical number->hash mapping is NOT
+        // required. A payload executed as a side block (newPayload's `sidechain=true` path: stored by hash only, its
+        // receipts written, no mapping) has receipts and no mapping, and is just as executed. Requiring the mapping made
+        // every re-send of such a payload re-execute it from scratch: on Platåberget a 190M-gas side payload takes
+        // 6-60 s, Lighthouse's newPayload HTTP call times out at 8 s and re-sends, and each retry re-ran the block and
+        // lost the race again - 108+ executions of block 327706, the CL never saw VALID and never advanced.
+        // go-ethereum answers VALID for any block it already holds ("Ignoring already known beacon payload").
         blockchainReader.getReceiptsByHash(h.hash).isDefined
       }
     then
