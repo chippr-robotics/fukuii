@@ -420,6 +420,13 @@ object PeerActor:
     // -----------------------------------------------------------------------
 
     private def disconnectFromPeer(rlpxConnection: RLPxConnection, reason: Int): Behavior[Command] =
+      log.info(
+        "DISCONNECT_SENT: disconnecting {}:{} locally, reason 0x{} ({})",
+        peerAddress.getHostString,
+        peerAddress.getPort,
+        reason.toHexString,
+        Disconnect.reasonToString(reason)
+      )
       rlpxConnection.sendMessage(Disconnect(reason))
       schedule(peerConfiguration.disconnectPoisonPillTimeout, StopActor)
       disconnected()
@@ -481,7 +488,13 @@ object PeerActor:
       * exhausted retries.
       */
     private def handleHandshakedTerminated(): Behavior[Command] =
-      log.debug("Underlying rlpx connection with HANDSHAKED peer {} closed - stopping (no self-reconnect)", peerAddress)
+      // INFO, not DEBUG: this is the only trace that a handshaked peer vanished because its TCP connection closed (as
+      // opposed to a Disconnect frame or a local DisconnectPeer, both of which log). Without it a mass drop caused by a
+      // host stall is undiagnosable (plataberget soak, 2026-10-05).
+      log.info(
+        "TCP_CLOSED: underlying rlpx connection with handshaked peer {} closed without a Disconnect frame - stopping (no self-reconnect)",
+        peerAddress
+      )
       Behaviors.stopped
 
     private def handleDisconnect(
