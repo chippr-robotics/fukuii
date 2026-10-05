@@ -77,3 +77,22 @@ class DecodedNodeCacheRaceSpec extends AnyFlatSpec with Matchers:
     new CachingMptStorage(storage, cache).get(hash.toArray)
     cache.get(hash) should not be null
   }
+
+  "a strong-mode DecodedNodeCache" should "still honour evict and the putIfCurrent generation check" taggedAs (
+    UnitTest,
+    StateTest
+  ) in {
+    val cache = DecodedNodeCache.withOwnBudget(1024L * 1024, strongValues = true)
+    cache.put(hash, node)
+    (cache.get(hash) should be).theSameInstanceAs(node)
+    cache.evict(Seq(hash))
+    cache.get(hash) shouldBe null
+    // a reader that took its generation before an eviction must not leave a ghost
+    val gen = cache.generation
+    cache.evict(Seq(hash))
+    cache.putIfCurrent(hash, node, gen)
+    cache.get(hash) shouldBe null
+    // with no eviction in between it is cached
+    cache.putIfCurrent(hash, node, cache.generation)
+    (cache.get(hash) should be).theSameInstanceAs(node)
+  }

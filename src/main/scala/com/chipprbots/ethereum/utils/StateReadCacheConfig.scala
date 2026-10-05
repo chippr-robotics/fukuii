@@ -60,37 +60,83 @@ object StateReadCacheConfig:
         else explicit
       case None => math.min(default, (maxHeap * fraction).toLong)
 
-  /** Whether the operator set this size explicitly. Such a cache holds its values strongly (bounded by its budget),
-    * since the operator sized it to be effective; an unset one keeps soft references that give way under heap pressure.
+  /** Largest sum of the EXPLICITLY configured byte budgets (code, code-size, decoded-node, JUMPDEST, block memo) as a
+    * share of the max heap. Above it every explicit budget is scaled down proportionally (the per-cache ceiling alone
+    * would let five 50% caches commit 250% of the heap). The recommended total is 35% or less.
     */
-  private def isExplicit(path: String): Boolean = section.exists(_.hasPath(path))
+  val ExplicitTotalFraction: Double = 0.6
 
-  private def cappedByHeap(path: String, default: Long, fraction: Double): Long =
+  /** The size of one cache and whether the operator set it (`hasPath`). An explicit cache holds its values strongly
+    * (bounded by its budget): the operator sized it to be effective. An unset one keeps soft references that give way
+    * under heap pressure.
+    */
+  final case class Sizing(bytes: Long, explicit: Boolean)
+
+  def isExplicit(section: Option[TsConfig], path: String): Boolean = section.exists(_.hasPath(path))
+
+  /** (config key, absolute default, heap fraction capping the default) of every heap-bounded byte cache. */
+  private val cacheSpecs: Seq[(String, Long, Double)] = Seq(
+    ("code-cache-bytes", 256L * 1024 * 1024, 0.05),
+    ("code-size-cache-bytes", 64L * 1024 * 1024, 0.02),
+    ("decoded-node-cache-bytes", 96L * 1024 * 1024, 0.04),
+    ("jumpdest-cache-bytes", 32L * 1024 * 1024, 0.01),
+    ("jumpdest-block-memo-bytes", 64L * 1024 * 1024, 0.02)
+  )
+
+  /** Sizes of all heap-bounded caches: per cache [[effectiveBytes]], then, if the explicit budgets sum to more than
+    * [[ExplicitTotalFraction]] of `maxHeap`, the explicit ones scaled down proportionally (WARN with before and after).
+    */
+  def resolveAll(section: Option[TsConfig], maxHeap: Long): Map[String, Sizing] =
+    val each = cacheSpecs.map { (path, default, fraction) =>
+      path -> Sizing(effectiveBytes(section, path, default, fraction, maxHeap), isExplicit(section, path))
+    }
+    val explicitSum = each.collect { case (_, Sizing(b, true)) => b }.sum
+    val limit = (maxHeap * ExplicitTotalFraction).toLong
+    if explicitSum > limit then
+      val scale = limit.toDouble / explicitSum
+      val scaled = each.map {
+        case (path, Sizing(b, true)) => path -> Sizing((b * scale).toLong, true)
+        case other                   => other
+      }
+      val scaledMap = scaled.toMap
+      log.warn(
+        s"state-read-caches: explicit sizes total $explicitSum bytes, over ${(ExplicitTotalFraction * 100).toInt}% of " +
+          s"the max heap ($maxHeap); scaled to fit: " +
+          each.collect { case (p, Sizing(b, true)) => s"$p $b -> ${scaledMap(p).bytes}" }.mkString(", ")
+      )
+      scaledMap
+    else each.toMap
+
+  private lazy val resolved: Map[String, Sizing] =
     val maxHeap = Runtime.getRuntime.maxMemory
-    val v = effectiveBytes(section, path, default, fraction, maxHeap)
-    val origin =
-      if section.exists(_.hasPath(path)) then "configured" else s"default, capped at ${(fraction * 100).toInt}% of heap"
-    log.info(s"state-read-caches.$path effective size = $v bytes ($origin; max heap $maxHeap)")
-    v
+    val all = resolveAll(section, maxHeap)
+    cacheSpecs.foreach { (path, _, fraction) =>
+      val Sizing(v, explicit) = all(path)
+      val origin =
+        if explicit then "configured, strong refs"
+        else s"default capped at ${(fraction * 100).toInt}% of heap, soft refs"
+      log.info(s"state-read-caches.$path effective size = $v bytes ($origin; max heap $maxHeap)")
+    }
+    all
 
-  lazy val codeCacheStrong: Boolean = isExplicit("code-cache-bytes")
-  lazy val codeSizeCacheStrong: Boolean = isExplicit("code-size-cache-bytes")
-  lazy val decodedNodeCacheStrong: Boolean = isExplicit("decoded-node-cache-bytes")
+  lazy val codeCacheStrong: Boolean = resolved("code-cache-bytes").explicit
+  lazy val codeSizeCacheStrong: Boolean = resolved("code-size-cache-bytes").explicit
+  lazy val decodedNodeCacheStrong: Boolean = resolved("decoded-node-cache-bytes").explicit
 
   /** Process-wide budget of the execution-side code cache (all `EvmCodeStorage` instances share it); 0 disables it. At
     * most 5% of the max heap unless the key is set explicitly (then up to 50%).
     */
-  lazy val codeCacheBytes: Long = cappedByHeap("code-cache-bytes", 256L * 1024 * 1024, 0.05)
+  lazy val codeCacheBytes: Long = resolved("code-cache-bytes").bytes
 
   /** Process-wide budget of the code-size cache (code hash to length, so EXTCODESIZE-style checks never load code), at
-    * about 256 bytes an entry (geth keeps 1,000,000 entries); 0 disables it. At most 2% of the max heap.
+    * about 256 bytes an entry (geth keeps 1,000,000 entries); 0 disables it. At most 2% of the max heap by default.
     */
-  lazy val codeSizeCacheBytes: Long = cappedByHeap("code-size-cache-bytes", 64L * 1024 * 1024, 0.02)
+  lazy val codeSizeCacheBytes: Long = resolved("code-size-cache-bytes").bytes
 
   /** Process-wide budget of the decoded-node cache, in estimated retained bytes (see `DecodedNodeCache`); 0 disables
-    * it. At most 4% of the max heap.
+    * it. At most 4% of the max heap by default.
     */
-  lazy val decodedNodeCacheBytes: Long = cappedByHeap("decoded-node-cache-bytes", 96L * 1024 * 1024, 0.04)
+  lazy val decodedNodeCacheBytes: Long = resolved("decoded-node-cache-bytes").bytes
 
   /** Entries one world's base-trie read memos may hold in total; 0 disables them. At most one entry per 32 KiB of max
     * heap (about 150 bytes each, so under 0.5%).
@@ -99,12 +145,12 @@ object StateReadCacheConfig:
     math.min(bytes("world-read-memo-entries", 250000L), Runtime.getRuntime.maxMemory / 32768).toInt
 
   /** Process-wide budget of the JUMPDEST analysis cache; 0 disables it. At most 1% of the max heap. */
-  lazy val jumpDestCacheBytes: Long = cappedByHeap("jumpdest-cache-bytes", 32L * 1024 * 1024, 0.01)
+  lazy val jumpDestCacheBytes: Long = resolved("jumpdest-cache-bytes").bytes
 
   /** Budget of one block's JUMPDEST analysis memo (`JumpDestAnalysis.BlockMemo`); 0 disables it. At most 2% of the max
     * heap. Entries are truncated analyses (often a few words), so this is rarely approached.
     */
-  lazy val jumpDestBlockMemoBytes: Long = cappedByHeap("jumpdest-block-memo-bytes", 64L * 1024 * 1024, 0.02)
+  lazy val jumpDestBlockMemoBytes: Long = resolved("jumpdest-block-memo-bytes").bytes
 
   // BAL-driven prefetch (EIP-7928, Amsterdam blocks that arrive with their access list): see `BalPrefetcher`.
 

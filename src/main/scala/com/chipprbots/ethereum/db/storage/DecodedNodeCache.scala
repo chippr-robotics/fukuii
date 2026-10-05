@@ -74,8 +74,8 @@ object DecodedNodeCache:
     Option.when(enabled && shared.maxBytes > 0)(new DecodedNodeCache(shared, owners.incrementAndGet()))
 
   /** A cache with its own budget, for tests that need a small or isolated one. */
-  def withOwnBudget(maxBytes: Long): DecodedNodeCache =
-    new DecodedNodeCache(new ByteBoundedLru[Key, MptNode](maxBytes, weigh), owners.incrementAndGet())
+  def withOwnBudget(maxBytes: Long, strongValues: Boolean = false): DecodedNodeCache =
+    new DecodedNodeCache(new ByteBoundedLru[Key, MptNode](maxBytes, weigh, strongValues), owners.incrementAndGet())
 
 /** [[MptStorage]] that answers `get` from a [[DecodedNodeCache]] before the wrapped storage. A miss, including a
   * missing node, goes to the wrapped storage unchanged: its `MissingNodeException` propagates and nothing is cached.

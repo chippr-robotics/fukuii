@@ -355,3 +355,48 @@ class StateReadCachesSpec extends AnyFlatSpec with Matchers:
     com.chipprbots.ethereum.utils.StateReadCacheConfig.codeSizeCacheStrong shouldBe false
     com.chipprbots.ethereum.utils.StateReadCacheConfig.decodedNodeCacheStrong shouldBe false
   }
+
+  private def resolve(conf: String, heap: Long) =
+    com.chipprbots.ethereum.utils.StateReadCacheConfig
+      .resolveAll(Some(com.typesafe.config.ConfigFactory.parseString(conf)), heap)
+
+  "StateReadCacheConfig.resolveAll" should "mark exactly the explicitly set caches as strong" taggedAs (
+    UnitTest,
+    StateTest
+  ) in {
+    val r = resolve("code-cache-bytes = 1000000\njumpdest-cache-bytes = 0", 8L << 30)
+    r("code-cache-bytes") shouldBe com.chipprbots.ethereum.utils.StateReadCacheConfig.Sizing(1000000L, true)
+    r("jumpdest-cache-bytes").explicit shouldBe true
+    r("jumpdest-cache-bytes").bytes shouldBe 0L
+    Seq("code-size-cache-bytes", "decoded-node-cache-bytes", "jumpdest-block-memo-bytes").foreach { k =>
+      withClue(k)(r(k).explicit shouldBe false)
+    }
+    com.chipprbots.ethereum.utils.StateReadCacheConfig.isExplicit(None, "code-cache-bytes") shouldBe false
+  }
+
+  it should "not scale the soak sizes (about 35% of an 8 GiB heap)" taggedAs (UnitTest, StateTest) in {
+    val heap = 8L << 30
+    val r = resolve(
+      "code-cache-bytes = 2415919104\njumpdest-cache-bytes = 314572800\ndecoded-node-cache-bytes = 268435456",
+      heap
+    )
+    r("code-cache-bytes").bytes shouldBe 2415919104L
+    r("jumpdest-cache-bytes").bytes shouldBe 314572800L
+    r("decoded-node-cache-bytes").bytes shouldBe 268435456L
+  }
+
+  it should "scale explicit sizes down proportionally when they total more than 60% of the heap" taggedAs (
+    UnitTest,
+    StateTest
+  ) in {
+    val heap = 10L << 30
+    // each under the 50% per-cache ceiling, total 90% of the heap
+    val r = resolve(s"code-cache-bytes = ${heap * 4 / 10}\ndecoded-node-cache-bytes = ${heap * 5 / 10}", heap)
+    val limit = (heap * 0.6).toLong
+    val total = r("code-cache-bytes").bytes + r("decoded-node-cache-bytes").bytes
+    total should be <= limit
+    total should be >= limit - 2 // proportional, nothing wasted
+    r("code-cache-bytes").bytes.toDouble / r("decoded-node-cache-bytes").bytes shouldBe (0.8 +- 0.001)
+    // an unset cache is not scaled, still its default capped by its fraction
+    r("code-size-cache-bytes").bytes shouldBe math.min(64L << 20, (heap * 0.02).toLong)
+  }
