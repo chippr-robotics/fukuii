@@ -393,6 +393,9 @@ private class SNAPSyncControllerImpl(
   // current serve root has aged > HealingServeRootMarginBlocks behind the network head. A single in-flight latch
   // (the bootstrap is a ~1s peer round-trip — never per-block) and a block number of the last pushed serve root.
   private var healingServeRootRequestInFlight: Boolean = false
+  // Set by the healing coordinator while a frontier walk runs with nothing pending or in flight. The walk is local-only,
+  // so serve-window freshness is irrelevant, and a proactive heal-root re-peg would only supersede (and discard) it.
+  private val healingWalkLocalOnly = new java.util.concurrent.atomic.AtomicBoolean(false)
   private var lastHealingServeRootBlock: Option[BigInt] = None
   // The serve root is considered stale when it is more than this many blocks behind the network head. Matches
   // SyncController.RecentRootMarginBlocks (64) so the refreshed root lands comfortably inside peers' serve window.
@@ -679,7 +682,7 @@ private class SNAPSyncControllerImpl(
     storageRangeCoordinator = None
     forceCompleteStorageSent = false
     trieNodeHealingCoordinator.foreach(ctx.stop)
-    trieNodeHealingCoordinator = None
+    trieNodeHealingCoordinator = None; healingWalkLocalOnly.set(false)
 
   // ── Behaviors ────────────────────────────────────────────────────────────────────────────────
   // Each behavior is `Behaviors.receiveMessage` over the sealed Command, with a PostStop signal for
@@ -3162,7 +3165,7 @@ private class SNAPSyncControllerImpl(
     accountRangeCoordinator.foreach(ctx.stop); accountRangeCoordinator = None
     bytecodeCoordinator.foreach(ctx.stop); bytecodeCoordinator = None
     storageRangeCoordinator.foreach(ctx.stop); storageRangeCoordinator = None
-    trieNodeHealingCoordinator.foreach(ctx.stop); trieNodeHealingCoordinator = None
+    trieNodeHealingCoordinator.foreach(ctx.stop); trieNodeHealingCoordinator = None; healingWalkLocalOnly.set(false)
 
     requestTracker.clear()
     pendingPivotRefresh = None
@@ -3757,7 +3760,8 @@ private class SNAPSyncControllerImpl(
                   decoupledHealServeRoot = snapSyncConfig.decoupledHealServeRoot,
                   decoupledHealMaxAttemptsNoRefresh = snapSyncConfig.decoupledHealMaxAttemptsNoRefresh,
                   movingRootDeltaHeal = snapSyncConfig.movingRootDeltaHeal,
-                  evmCodeStorage = Some(evmCodeStorage)
+                  evmCodeStorage = Some(evmCodeStorage),
+                  walkLocalOnly = Some(healingWalkLocalOnly)
                 )
               )
               .onFailure[Throwable](
@@ -3836,7 +3840,8 @@ private class SNAPSyncControllerImpl(
                     decoupledHealServeRoot = snapSyncConfig.decoupledHealServeRoot,
                     decoupledHealMaxAttemptsNoRefresh = snapSyncConfig.decoupledHealMaxAttemptsNoRefresh,
                     movingRootDeltaHeal = snapSyncConfig.movingRootDeltaHeal,
-                    evmCodeStorage = Some(evmCodeStorage)
+                    evmCodeStorage = Some(evmCodeStorage),
+                    walkLocalOnly = Some(healingWalkLocalOnly)
                   )
                 )
                 .onFailure[Throwable](
@@ -3913,6 +3918,14 @@ private class SNAPSyncControllerImpl(
       currentPhase == StateHealing &&
       trieNodeHealingCoordinator.isDefined &&
       !healingServeRootRequestInFlight &&
+      // spec 009: a verification walk with no heal work pending needs no peers; re-pegging now only supersedes it
+      // (the stale walk is discarded and restarted, so a walk longer than the re-peg interval never finishes). Once a
+      // pass leaves pending tasks the flag clears and the normal re-peg rules apply again. Gated on movingRootDeltaHeal:
+      // the spec-004 serve-root path moves only the serve root and never invalidates the walk.
+      !SNAPSyncController.healRepegSuppressedByLocalWalk(
+        snapSyncConfig.movingRootDeltaHeal,
+        healingWalkLocalOnly.get()
+      ) &&
       // Don't contend with a pivot-refresh header bootstrap: while one is pending the parent is (or is about to be)
       // in runningPivotHeaderBootstrap, where a concurrent serve-root bootstrap completion could be mis-routed.
       // The request will fire on a later tick once the refresh settles.
@@ -4603,7 +4616,7 @@ private class SNAPSyncControllerImpl(
     accountRangeCoordinator.foreach(ctx.stop); accountRangeCoordinator = None
     bytecodeCoordinator.foreach(ctx.stop); bytecodeCoordinator = None
     storageRangeCoordinator.foreach(ctx.stop); storageRangeCoordinator = None
-    trieNodeHealingCoordinator.foreach(ctx.stop); trieNodeHealingCoordinator = None
+    trieNodeHealingCoordinator.foreach(ctx.stop); trieNodeHealingCoordinator = None; healingWalkLocalOnly.set(false)
 
     // Clear inflight request timeouts and internal phase state
     requestTracker.clear()
@@ -5743,6 +5756,15 @@ object SNAPSyncController:
     */
   private[snap] def clPivotNotYetAdvanced(clHead: BigInt, pivotBlockOffset: Long, currentPivot: BigInt): Boolean =
     (clHead - pivotBlockOffset) <= currentPivot
+
+  /** True when the proactive heal-root re-peg must not fire: under `movingRootDeltaHeal` a re-peg supersedes the
+    * running verification walk, whose completion is then discarded (the walk is restarted), so a walk that takes longer
+    * than the re-peg interval would never finish. While the walk is purely local (nothing pending, nothing in flight)
+    * serve-window freshness is irrelevant. Once a dirty pass leaves heal work, `walkLocalOnly` clears and the normal
+    * re-peg rules apply. The serve-root-only path (`decoupledHealServeRoot`) never invalidates the walk.
+    */
+  private[snap] def healRepegSuppressedByLocalWalk(movingRootDeltaHeal: Boolean, walkLocalOnly: Boolean): Boolean =
+    movingRootDeltaHeal && walkLocalOnly
 
   /** The reference head `maybeRequestHealingServeRoot` clocks its heal-root staleness check against.
     *

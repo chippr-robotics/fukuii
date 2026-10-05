@@ -1,5 +1,6 @@
 package com.chipprbots.ethereum.blockchain.sync.snap.actors
 
+import org.apache.pekko.actor.testkit.typed.scaladsl.FishingOutcomes
 import org.apache.pekko.actor.testkit.typed.scaladsl.ScalaTestWithActorTestKit
 import org.apache.pekko.actor.typed.ActorRef
 import org.apache.pekko.util.ByteString
@@ -98,3 +99,40 @@ class StaleVerificationWalkSpec extends ScalaTestWithActorTestKit() with AnyFlat
         controller.expectNoMessage(1.second) // and no StateHealingComplete was declared
       finally testKit.stop(coordinator)
     }
+
+  it should "hand off to lazy healing, never declare clean, once re-pegs keep superseding the verification walk" taggedAs UnitTest in {
+    val storage = new TestMptStorage()
+    val executor = new ManualExecutor
+    val roots = (1 to 6).map(accountLeaf(_, Account.EmptyStorageRootHash.value))
+    roots.foreach(storage.putNode)
+    val controller = testKit.createTestProbe[SNAPSyncController.Command]()
+    val coordinator = HealingTrieFixtures.spawnCoordinator(
+      stateRoot = ByteString(roots.head.hash),
+      networkPeerManager =
+        testKit.createTestProbe[com.chipprbots.ethereum.network.NetworkPeerManagerActor.Command]().ref,
+      requestTracker = new SNAPRequestTracker()(classicSystem.scheduler),
+      mptStorage = storage,
+      batchSize = 16,
+      snapSyncController = controller.ref,
+      healingWriterEcOverride = Some(executor)
+    )
+    try
+      // First walk, on roots(1). Every later walk is the re-verification of the previous discard.
+      coordinator ! TrieNodeHealingCoordinator.HealingPivotRefreshed(ByteString(roots(1).hash))
+      eventually(timeout(5.seconds), interval(20.millis))(executor.pending shouldBe 1)
+      // Each re-peg lands while a walk is in flight, so that walk's completion is stale. The first three are
+      // re-verified; the fourth exceeds the cap.
+      (2 to 5).foreach { i =>
+        coordinator ! TrieNodeHealingCoordinator.HealingPivotRefreshed(ByteString(roots(i).hash))
+        pendingTasks(coordinator) shouldBe 0 // mailbox barrier
+        executor.runPending()
+        if i < 5 then eventually(timeout(5.seconds), interval(20.millis))(executor.pending shouldBe 1)
+      }
+      controller.fishForMessage(5.seconds) {
+        case SNAPSyncController.StateHealingAbandoned => FishingOutcomes.complete
+        case SNAPSyncController.StateHealingComplete =>
+          fail("declared a verified completion on a root that was superseded under the walk")
+        case _ => FishingOutcomes.continueAndIgnore
+      }
+    finally testKit.stop(coordinator)
+  }

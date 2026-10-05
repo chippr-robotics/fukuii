@@ -18,7 +18,6 @@ import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 
 import com.chipprbots.ethereum.blockchain.sync.snap.*
-import com.chipprbots.ethereum.crypto.kec256
 import com.chipprbots.ethereum.domain.Account
 import com.chipprbots.ethereum.domain.TrieRoot
 import com.chipprbots.ethereum.mpt.*
@@ -79,83 +78,144 @@ class ForceCompletedStorageVerificationSpec
     coordinator ! TrieNodeHealingCoordinator.HealingGetProgress(probe.ref)
     probe.expectMessageType[HealingStatistics]
 
+  /** Everything a test needs once the walk is held with S healed. `q` is the leaf the dirty pass will find missing. */
+  final private class Fixture(
+      val storage: HoldingStorage,
+      val coordinator: ActorRef[TrieNodeHealingCoordinator.Command],
+      val npm: org.apache.pekko.actor.testkit.typed.scaladsl.TestProbe[NetworkPeerManagerActor.Command],
+      val controller: org.apache.pekko.actor.testkit.typed.scaladsl.TestProbe[SNAPSyncController.Command],
+      val localOnly: java.util.concurrent.atomic.AtomicBoolean,
+      val q: LeafNode,
+      val respond: (ActorRef[TrieNodeHealingCoordinator.Command], MptNode) => Unit
+  )
+
+  private def withFixture(body: Fixture => Unit): Unit =
+    // Storage side: S -> P -> Q, with Q the hole beneath a present node.
+    val q = LeafNode(ByteString(Array.fill[Byte](63)(5.toByte)), ByteString(Array.fill[Byte](40)(9.toByte)))
+    val p = branch(0 -> HashNode(q.hash))
+    val s = branch(0 -> HashNode(p.hash))
+    // Account side. X sits at root slot 0 (63 more key nibbles -> a 64-nibble path, so its storage root is followed).
+    val x = accountLeaf(63, ByteString(s.hash))
+    val chain3 = accountLeaf(63, Account.EmptyStorageRootHash.value)
+    val chain2 = branch(0 -> HashNode(chain3.hash))
+    val chain1 = branch(0 -> HashNode(chain2.hash))
+    val root = branch(0 -> HashNode(x.hash), 1 -> HashNode(chain1.hash))
+    val startRoot = accountLeaf(64, Account.EmptyStorageRootHash.value)
+
+    val storage = new HoldingStorage(holdOn = ByteString(chain3.hash))
+    Seq[MptNode](x, chain3, chain2, chain1, root, p, startRoot).foreach(storage.putNode) // S and Q are absent
+
+    val pool = Executors.newSingleThreadExecutor()
+    val ec = ExecutionContext.fromExecutorService(pool)
+    val npm = testKit.createTestProbe[NetworkPeerManagerActor.Command]()
+    val controller = testKit.createTestProbe[SNAPSyncController.Command]()
+    val localOnly = new java.util.concurrent.atomic.AtomicBoolean(false)
+    val coordinator = HealingTrieFixtures.spawnCoordinator(
+      stateRoot = ByteString(startRoot.hash),
+      networkPeerManager = npm.ref,
+      requestTracker = new SNAPRequestTracker()(classicSystem.scheduler),
+      mptStorage = storage,
+      batchSize = 16,
+      snapSyncController = controller.ref,
+      healingWriterEcOverride = Some(ec),
+      healingReaderEcOverride = Some(ec),
+      walkLocalOnly = Some(localOnly)
+    )
+    val respond: (ActorRef[TrieNodeHealingCoordinator.Command], MptNode) => Unit = (c, node) =>
+      val request = npm
+        .expectMessageType[NetworkPeerManagerActor.SendMessageCmd](10.seconds)
+        .message
+        .underlyingMsg
+        .asInstanceOf[SNAP.GetTrieNodes]
+      c ! TrieNodeHealingCoordinator.TrieNodesResponseMsg(
+        SNAP.TrieNodes(requestId = request.requestId, nodes = Seq(ByteString(node.encode)))
+      )
+    try
+      // Re-peg to the root (present): launches the verification walk, which emits S as missing and is then held.
+      coordinator ! TrieNodeHealingCoordinator.HealingPivotRefreshed(ByteString(root.hash))
+      storage.reached.await(10, TimeUnit.SECONDS) shouldBe true
+      eventually(timeout(5.seconds), interval(20.millis))(stats(coordinator).pendingTasks shouldBe 1) // S queued
+      localOnly.get() shouldBe false // heal work is pending: the walk is NOT local-only
+
+      // Heal S while the walk is still running. P is present, so inline discovery finds nothing more to fetch.
+      val peerProbe = testKit.createTestProbe[NetworkPeerManagerActor.SendMessageCmd]()
+      coordinator ! TrieNodeHealingCoordinator.HealingPeerAvailable(
+        PeerTestHelpers.createTestPeer("heal-peer", peerProbe.ref.toClassic)
+      )
+      respond(coordinator, s)
+      eventually(timeout(5.seconds), interval(20.millis)) {
+        val st = stats(coordinator)
+        st.totalNodes should be >= 1
+        st.pendingTasks + st.activeTasks shouldBe 0
+      }
+      body(new Fixture(storage, coordinator, npm, controller, localOnly, q, respond))
+    finally
+      storage.release.countDown()
+      testKit.stop(coordinator)
+      pool.shutdown()
+      pool.awaitTermination(5, TimeUnit.SECONDS)
+
+  private def completionSeen(
+      controller: org.apache.pekko.actor.testkit.typed.scaladsl.TestProbe[SNAPSyncController.Command],
+      window: FiniteDuration
+  ): Boolean =
+    try
+      controller.fishForMessage(window) {
+        case SNAPSyncController.StateHealingComplete => FishingOutcomes.complete
+        case _                                       => FishingOutcomes.continueAndIgnore
+      }
+      true
+    catch case _: AssertionError => false
+
   "TrieNodeHealingCoordinator" should
     "not report clean after a verification pass that found missing nodes, even once they are all healed" taggedAs UnitTest in {
-      // Storage side: S -> P -> Q, with Q the hole beneath a present node.
-      val missingQ = ByteString(kec256(ByteString("storage-slot-node-never-downloaded")))
-      val p = branch(0 -> HashNode(missingQ.toArray))
-      val s = branch(0 -> HashNode(p.hash))
-      // Account side. X sits at root slot 0 (63 more key nibbles -> a 64-nibble path, so its storage root is followed).
-      val x = accountLeaf(63, ByteString(s.hash))
-      val chain3 = accountLeaf(63, Account.EmptyStorageRootHash.value)
-      val chain2 = branch(0 -> HashNode(chain3.hash))
-      val chain1 = branch(0 -> HashNode(chain2.hash))
-      val root = branch(0 -> HashNode(x.hash), 1 -> HashNode(chain1.hash))
-      val startRoot = accountLeaf(64, Account.EmptyStorageRootHash.value)
-
-      val storage = new HoldingStorage(holdOn = ByteString(chain3.hash))
-      Seq[MptNode](x, chain3, chain2, chain1, root, p, startRoot).foreach(storage.putNode) // S and Q are absent
-
-      val pool = Executors.newSingleThreadExecutor()
-      val ec = ExecutionContext.fromExecutorService(pool)
-      val npm = testKit.createTestProbe[NetworkPeerManagerActor.Command]()
-      val controller = testKit.createTestProbe[SNAPSyncController.Command]()
-      val coordinator = HealingTrieFixtures.spawnCoordinator(
-        stateRoot = ByteString(startRoot.hash),
-        networkPeerManager = npm.ref,
-        requestTracker = new SNAPRequestTracker()(classicSystem.scheduler),
-        mptStorage = storage,
-        batchSize = 16,
-        snapSyncController = controller.ref,
-        healingWriterEcOverride = Some(ec),
-        healingReaderEcOverride = Some(ec)
-      )
-      try
-        // Re-peg to the root (present): launches the verification walk, which emits S as missing and is then held.
-        coordinator ! TrieNodeHealingCoordinator.HealingPivotRefreshed(ByteString(root.hash))
-        storage.reached.await(10, TimeUnit.SECONDS) shouldBe true
-        eventually(timeout(5.seconds), interval(20.millis))(stats(coordinator).pendingTasks shouldBe 1) // S queued
-
-        // Heal S while the walk is still running. P is present, so inline discovery finds nothing more to fetch.
-        val peerProbe = testKit.createTestProbe[NetworkPeerManagerActor.SendMessageCmd]()
-        coordinator ! TrieNodeHealingCoordinator.HealingPeerAvailable(
-          PeerTestHelpers.createTestPeer("heal-peer", peerProbe.ref.toClassic)
-        )
-        val request = npm
-          .expectMessageType[NetworkPeerManagerActor.SendMessageCmd](5.seconds)
-          .message
-          .underlyingMsg
-          .asInstanceOf[SNAP.GetTrieNodes]
-        coordinator ! TrieNodeHealingCoordinator.TrieNodesResponseMsg(
-          SNAP.TrieNodes(requestId = request.requestId, nodes = Seq(ByteString(s.encode)))
-        )
-        eventually(timeout(5.seconds), interval(20.millis)) {
-          val st = stats(coordinator)
-          st.totalNodes should be >= 1
-          st.pendingTasks + st.activeTasks shouldBe 0
-        }
-
+      withFixture { f =>
         // The walk now ends. It found S missing, so it is not a clean pass; the next pass must find Q.
-        storage.release.countDown()
+        f.storage.release.countDown()
         // Q is queued and, with the peer available, immediately requested: it is either pending or in flight.
         eventually(timeout(10.seconds), interval(20.millis)) {
-          val st = stats(coordinator)
+          val st = stats(f.coordinator)
           st.pendingTasks + st.activeTasks shouldBe 1
         }
-        val completed =
-          try
-            controller.fishForMessage(1.second) {
-              case SNAPSyncController.StateHealingComplete => FishingOutcomes.complete
-              case _                                       => FishingOutcomes.continueAndIgnore
-            }
-            true
-          catch case _: AssertionError => false
         withClue("StateHealingComplete declared while the storage trie still has a hole under a present node: ") {
-          completed shouldBe false
+          completionSeen(f.controller, 1.second) shouldBe false
         }
-      finally
-        storage.release.countDown()
-        testKit.stop(coordinator)
-        pool.shutdown()
-        pool.awaitTermination(5, TimeUnit.SECONDS)
+      }
     }
+
+  it should "declare exactly one completion once the dirty pass is healed and a later pass is clean" taggedAs UnitTest in {
+    withFixture { f =>
+      f.storage.release.countDown()
+      // Heal Q, the hole the second pass found. The pass after that finds nothing and is the clean one.
+      f.respond(f.coordinator, f.q)
+      withClue("no StateHealingComplete after the clean pass: ") {
+        completionSeen(f.controller, 10.seconds) shouldBe true
+      }
+      withClue("StateHealingComplete must be declared exactly once: ") {
+        completionSeen(f.controller, 1500.millis) shouldBe false
+      }
+    }
+  }
+
+  it should "report a purely local walk (nothing pending) so the controller can hold off a proactive re-peg" taggedAs UnitTest in {
+    withFixture { f =>
+      // Walk still held, S healed, nothing pending or in flight: the heal needs no peers.
+      eventually(timeout(5.seconds), interval(20.millis))(f.localOnly.get() shouldBe true)
+      f.storage.release.countDown()
+      // The walk ends dirty and Q is queued: heal work is pending again, so the re-peg rules apply as before.
+      eventually(timeout(10.seconds), interval(20.millis)) {
+        val st = stats(f.coordinator)
+        st.pendingTasks + st.activeTasks shouldBe 1
+        f.localOnly.get() shouldBe false
+      }
+    }
+  }
+
+  "SNAPSyncController" should "suppress the proactive heal re-peg only for a local-only walk under movingRootDeltaHeal" taggedAs UnitTest in {
+    SNAPSyncController.healRepegSuppressedByLocalWalk(movingRootDeltaHeal = true, walkLocalOnly = true) shouldBe true
+    // heal work pending: the normal re-peg rules (#59) apply
+    SNAPSyncController.healRepegSuppressedByLocalWalk(movingRootDeltaHeal = true, walkLocalOnly = false) shouldBe false
+    // the serve-root-only path never invalidates the walk, so it is never suppressed here
+    SNAPSyncController.healRepegSuppressedByLocalWalk(movingRootDeltaHeal = false, walkLocalOnly = true) shouldBe false
+    SNAPSyncController.healRepegSuppressedByLocalWalk(movingRootDeltaHeal = false, walkLocalOnly = false) shouldBe false
+  }

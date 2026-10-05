@@ -99,7 +99,11 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
     // Where contract bytecode lives. A healed account leaf whose codeHash is not in here is reported to the controller
     // (SNAPSyncController.HealedCodeHashes) so the bytecode is fetched before SNAP finalises. None (bare construction,
     // most specs) reports nothing, byte-identical to before.
-    evmCodeStorage: Option[EvmCodeStorage] = None
+    evmCodeStorage: Option[EvmCodeStorage] = None,
+    // Shared with the controller. True while a frontier walk is running and nothing is pending or in flight, i.e. the
+    // heal needs no peers and any re-peg of the heal root can only invalidate the walk. The controller's proactive
+    // heal-root re-peg (moving-root delta heal) is suppressed while it is set; None (bare construction) never suppresses.
+    walkLocalOnly: Option[java.util.concurrent.atomic.AtomicBoolean] = None
 ):
 
   import TrieNodeHealingCoordinator.*
@@ -184,6 +188,10 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
   // both producing garbage coverage. @volatile: set from the walk's EC thread, read on the actor
   // thread by the watchdog/completion/pivot gates.
   private var verificationPassComplete: Boolean = false
+  // Consecutive verification walks discarded because the heal root moved under them; reset by any walk of the current
+  // root that completes. Bounded so a root that outruns the walk cannot livelock the heal.
+  private var consecutiveStaleDiscards: Int = 0
+  private val MaxConsecutiveStaleDiscards: Int = 3
   // Was `@volatile` under Classic: the walk's EC thread wrote it and the actor thread read it. Under Typed all
   // reads AND writes happen on the actor dispatcher — the field is set true on the actor thread before launching a
   // walk Future (startFrontierBFS/startVerificationBFS/startScopedVerification) and set false only inside the
@@ -669,7 +677,24 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
     timers.startTimerWithFixedDelay(HealingStagnationCheck, 2.minutes)
     active()
 
-  def active(): Behavior[Command] = Behaviors.receiveMessage[Command] {
+  /** Publish whether the heal is currently a purely local walk (see `walkLocalOnly`) after every message. */
+  private def publishWalkLocality(): Unit =
+    walkLocalOnly.foreach(_.set(verificationBFSRunning && isComplete))
+
+  def active(): Behavior[Command] =
+    org.apache.pekko.actor.typed.scaladsl.Behaviors.intercept[Command, Command](() =>
+      new org.apache.pekko.actor.typed.BehaviorInterceptor[Command, Command]():
+        override def aroundReceive(
+            ctx: org.apache.pekko.actor.typed.TypedActorContext[Command],
+            msg: Command,
+            target: org.apache.pekko.actor.typed.BehaviorInterceptor.ReceiveTarget[Command]
+        ): Behavior[Command] =
+          val next = target(ctx, msg)
+          publishWalkLocality()
+          next
+    )(activeBehavior())
+
+  private def activeBehavior(): Behavior[Command] = Behaviors.receiveMessage[Command] {
     case StartTrieNodeHealing(root) =>
       val emptyPath = ByteString(com.chipprbots.ethereum.mpt.HexPrefix.encode(Array.empty[Byte], isLeaf = false))
       if isNodeInStorage(root, Seq(emptyPath)) then
@@ -1229,14 +1254,25 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
       // observability flags, then verify the CURRENT root explicitly. This cannot go through HealingCheckCompletion's
       // `|| totalNodesHealed == 0` arm, which would declare completion with no walk at all.
       verificationBFSRunning = false
+      consecutiveStaleDiscards += 1
       log.warn(
-        s"[HEAL-VERIFY] Discarding stale verification result: walk of root ${Hex.toHexString(walkRoot.take(4).toArray)} " +
+        s"[HEAL-VERIFY] Discarding stale verification result (#$consecutiveStaleDiscards): walk of root ${Hex.toHexString(walkRoot.take(4).toArray)} " +
           s"finished after re-peg to ${Hex.toHexString(stateRoot.take(4).toArray)} — re-verifying the current root"
       )
-      reverifyCurrentRoot()
+      if consecutiveStaleDiscards > MaxConsecutiveStaleDiscards then
+        // The root keeps moving faster than a verification walk can finish: this heal cannot converge to a verified
+        // root. Never declare clean on a stale root; hand off to lazy on-demand healing (fail-safe, anchor-guarded),
+        // exactly as a force-complete does.
+        log.error(
+          s"[HEAL-VERIFY] $consecutiveStaleDiscards consecutive verification walks were superseded by a re-peg — " +
+            "abandoning verified healing and handing off to lazy on-demand healing"
+        )
+        snapSyncController ! SNAPSyncController.StateHealingAbandoned
+      else reverifyCurrentRoot()
       Behaviors.same
 
     case VerificationBFSComplete(_, missingEmitted) if missingEmitted > 0 =>
+      consecutiveStaleDiscards = 0
       // DIRTY pass: the walk found (and queued) missing nodes. They may all have been healed by now, so `isComplete`
       // can already be true, but the walk did not descend below any node that was missing when it reached it, and
       // inline discovery only checks a healed node's direct children for presence. A present child whose own subtree
@@ -1252,6 +1288,7 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
 
     case VerificationBFSComplete(_, _) =>
       verificationBFSRunning = false
+      consecutiveStaleDiscards = 0
       if isComplete then
         // BFS traversed all locally-held nodes and found zero missing descendants — trie is complete.
         verificationPassComplete = true
@@ -2783,7 +2820,8 @@ object TrieNodeHealingCoordinator:
       decoupledHealMaxAttemptsNoRefresh: Int = DefaultDecoupledHealMaxAttemptsNoRefresh,
       // spec 009 (Moving-Root Delta Heal) — plumbing only; no behavior reads it yet (see impl ctor).
       movingRootDeltaHeal: Boolean = false,
-      evmCodeStorage: Option[EvmCodeStorage] = None
+      evmCodeStorage: Option[EvmCodeStorage] = None,
+      walkLocalOnly: Option[java.util.concurrent.atomic.AtomicBoolean] = None
   ): Behavior[Command] =
     Behaviors.setup { context =>
       Behaviors.withTimers { timers =>
@@ -2817,7 +2855,8 @@ object TrieNodeHealingCoordinator:
           decoupledHealServeRoot = decoupledHealServeRoot,
           decoupledHealMaxAttemptsNoRefresh = decoupledHealMaxAttemptsNoRefresh,
           movingRootDeltaHeal = movingRootDeltaHeal,
-          evmCodeStorage = evmCodeStorage
+          evmCodeStorage = evmCodeStorage,
+          walkLocalOnly = walkLocalOnly
         ).start()
       }
     }
