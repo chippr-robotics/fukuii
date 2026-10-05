@@ -51,6 +51,24 @@ trait StagedBlockState:
     */
   def pendingWith(@unused blockNumber: BigInt, @unused blockHash: ByteString): Option[DataSourceBatchUpdate] = pending
 
+  /** Commit this block's state (with `extra`, the block's other writes, in the SAME atomic batch), state ONCE.
+    * Execution reads reference counts while it runs and commits ABSOLUTE values, so committing the same block twice
+    * (the Engine API `newPayload` path and the regular-sync importer each execute a block the other has not committed
+    * yet) applies its count changes twice. A mode that keeps counts overrides this to drop the state half of a second
+    * commit; the others write straight through (or have nothing buffered) and just commit.
+    */
+  def commitWith(blockNumber: BigInt, blockHash: ByteString, extra: Option[DataSourceBatchUpdate]): Unit =
+    (pendingWith(blockNumber, blockHash), extra) match
+      case (Some(state), Some(other)) => other.and(state).commit()
+      case (Some(state), None)        => state.commit()
+      case (None, Some(other))        => other.commit()
+      case (None, None)               => ()
+
+  /** True when this block's state changes are committed and in force right now (committed, not undone). Only the mode
+    * that keeps per-block undo records can say so; the others answer false, which makes callers execute.
+    */
+  def isBlockApplied(@unused blockHash: ByteString): Boolean = false
+
   /** Drop the buffered writes and evict what execution read back from them out of the decoded-node cache. */
   def discard(): Unit
 
@@ -128,6 +146,11 @@ class ArchiveStateStorage(private val nodeStorage: NodeStorage) extends StateSto
   override def getNode(nodeHash: NodeHash): Option[MptNode] =
     nodeStorage.get(nodeHash).map(_.toMptNode)
 
+object ReferenceCountedStateStorage extends com.chipprbots.ethereum.utils.Logger:
+  /** One block commit (and one prune) at a time: the duplicate check reads the record the previous commit writes. */
+  private[storage] val commitLock = new Object
+  private[storage] def warnDuplicate(msg: String): Unit = log.warn(msg)
+
 class ReferenceCountedStateStorage(
     private val nodeStorage: NodeStorage,
     private val pruningHistory: BigInt,
@@ -157,6 +180,12 @@ class ReferenceCountedStateStorage(
     * are deferred and caught up by the next save.
     */
   override def onBlockSave(bn: BigInt, currentBestSavedBlock: BigInt)(updateBestBlocksData: () => Unit): Unit =
+    ReferenceCountedStateStorage.commitLock.synchronized {
+      pruneLocked(bn, currentBestSavedBlock)
+    }
+    updateBestBlocksData()
+
+  private def pruneLocked(bn: BigInt, currentBestSavedBlock: BigInt): Unit =
     val target = bn.min(currentBestSavedBlock + 1) - pruningHistory
     val from = lastPruned match
       case Some(done) if done < target => done + 1
@@ -175,7 +204,6 @@ class ReferenceCountedStateStorage(
       decodedNodes.foreach(_.evict(removed))
       blockToPrune += 1
     if lastPruned.forall(_ < target) then lastPruned = Some(target)
-    updateBestBlocksData()
 
   override def onBlockRollback(bn: BigInt, currentBestSavedBlock: BigInt)(updateBestBlocksData: () => Unit): Unit =
     val removed = ReferenceCountNodeStorage.rollbackReporting(bn, nodeStorage, inMemory = bn > currentBestSavedBlock)
@@ -187,10 +215,14 @@ class ReferenceCountedStateStorage(
     new SerializingMptStorage(new ReferenceCountNodeStorage(nodeStorage, bn), decodedNodes)
 
   override def onBlocksAbandoned(blocks: Seq[(BigInt, ByteString)]): Unit =
-    blocks.foreach { case (bn, hash) => ReferenceCountNodeStorage.undoBlock(bn, hash, nodeStorage, inMemory = false) }
+    ReferenceCountedStateStorage.commitLock.synchronized {
+      blocks.foreach { case (bn, hash) => ReferenceCountNodeStorage.undoBlock(bn, hash, nodeStorage, inMemory = false) }
+    }
 
   override def onBlocksReadopted(blocks: Seq[(BigInt, ByteString)]): Unit =
-    blocks.foreach { case (bn, hash) => ReferenceCountNodeStorage.redoBlock(bn, hash, nodeStorage, inMemory = false) }
+    ReferenceCountedStateStorage.commitLock.synchronized {
+      blocks.foreach { case (bn, hash) => ReferenceCountNodeStorage.redoBlock(bn, hash, nodeStorage, inMemory = false) }
+    }
 
   override def stageBlock(bn: BigInt): StagedBlockState =
     val buffered = new BufferedNodeStorage(nodeStorage)
@@ -202,6 +234,30 @@ class ReferenceCountedStateStorage(
         val writes = ReferenceCountNodeStorage.abandonRecordWrites(blockNumber, blockHash, counted.netDeltas, buffered)
         if writes.nonEmpty then buffered.update(Nil, writes)
         pending
+      override def isBlockApplied(blockHash: ByteString): Boolean =
+        ReferenceCountNodeStorage.isBlockApplied(blockHash, nodeStorage)
+      // Serialised and idempotent per block hash: the check and the write are one critical section, and the first
+      // commit's `bd<hash>` record (written atomically with its counts) is what the second one sees.
+      override def commitWith(
+          blockNumber: BigInt,
+          blockHash: ByteString,
+          extra: Option[DataSourceBatchUpdate]
+      ): Unit =
+        ReferenceCountedStateStorage.commitLock.synchronized {
+          if ReferenceCountNodeStorage.isBlockApplied(blockHash, nodeStorage) then
+            ReferenceCountedStateStorage.warnDuplicate(
+              s"Block $blockNumber ${blockHash.take(4).toArray.map("%02x".format(_)).mkString} is already committed; " +
+                "dropping the duplicate state commit (it would apply its reference-count changes twice)"
+            )
+            extra.foreach(_.commit())
+            decodedNodes.foreach(_.evict(buffered.touchedKeys))
+          else
+            (pendingWith(blockNumber, blockHash), extra) match
+              case (Some(state), Some(other)) => other.and(state).commit()
+              case (Some(state), None)        => state.commit()
+              case (None, Some(other))        => other.commit()
+              case (None, None)               => ()
+        }
       override def prefetchReader(budgetBytes: Long, onLoaded: ByteString => Unit): Option[PrefetchNodeReader] =
         Some(
           new PrefetchNodeReader(

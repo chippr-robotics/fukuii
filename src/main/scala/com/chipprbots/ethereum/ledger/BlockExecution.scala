@@ -58,23 +58,32 @@ class BlockExecution(
   )(implicit
       blockchainConfig: BlockchainConfig
   ): Either[BlockExecutionError, (Seq[Receipt], Seq[ByteString], Option[BlockAccessList])] =
-    val staged = blockchain.stageBlockState(block.header.number.value)
-    val result =
-      try
-        // The 3-argument form stays the single seam subclasses (and tests) override; a block with a list goes
-        // through the one that carries it.
-        if suppliedBlockAccessList.isEmpty then executeAndValidateStaged(block, alreadyValidated, staged)
-        else executeAndValidateStagedWithList(block, alreadyValidated, staged, suppliedBlockAccessList)
-      catch
-        case t: Throwable =>
-          staged.discard()
-          throw t
-    result match
-      // Accepted: its state goes to the database (nobody else commits it here). Rejected: it leaves nothing behind.
-      case Right(_) =>
-        timedCommit(block)(staged.pendingWith(block.header.number.value, block.header.hash.value).foreach(_.commit()))
-      case Left(_) => staged.discard()
-    result
+    val hash = block.header.hash.value
+    // One execution + commit per block hash at a time, across the Engine API and the regular-sync importer.
+    BlockImportGate.withBlock(hash) {
+      val staged = blockchain.stageBlockState(block.header.number.value)
+      BlockImportGate.alreadyExecuted(hash, staged) match
+        case Some(done) => Right(done.asTuple)
+        case None =>
+          val result =
+            try
+              // The 3-argument form stays the single seam subclasses (and tests) override; a block with a list goes
+              // through the one that carries it.
+              if suppliedBlockAccessList.isEmpty then executeAndValidateStaged(block, alreadyValidated, staged)
+              else executeAndValidateStagedWithList(block, alreadyValidated, staged, suppliedBlockAccessList)
+            catch
+              case t: Throwable =>
+                staged.discard()
+                throw t
+          result match
+            // Accepted: its state goes to the database (nobody else commits it here). Rejected: it leaves nothing
+            // behind.
+            case Right(executed) =>
+              timedCommit(block)(staged.commitWith(block.header.number.value, hash, None))
+              BlockImportGate.record(hash, executed)
+            case Left(_) => staged.discard()
+          result
+    }
 
   /** Times the block's database commit (one atomic batch since #1465), which `[IMPORT-TIMING]` ends before. */
   private def timedCommit[A](block: Block)(body: => A): A =
@@ -614,46 +623,61 @@ class BlockExecution(
         // single @tailrec loop on one thread, each iteration's `blockchainWriter.save`
         // completes before the next begins, and `executeBlock` already resolves the parent
         // header from the same storage at BlockExecution.scala:104-106.
-        val staged = blockchain.stageBlockState(blockToExecute.header.number.value)
-        val outcome =
-          try
-            // EIP-7928: a list a peer served for this block (eth/71) is a prefetch hint, checked against the header
-            // before use; a block without one takes the unchanged path.
-            suppliedBlockAccessLists.get(blockToExecute.hash.value) match
-              case None => executeAndValidateStaged(blockToExecute, alreadyValidated = false, staged)
-              case hint =>
-                executeAndValidateStagedWithList(blockToExecute, alreadyValidated = false, staged, hint)
-          catch
-            case t: Throwable =>
-              staged.discard()
-              throw t
-        outcome match
-          case Right((receipts, _, blockAccessList)) =>
-            val newWeight = parentWeight.increase(blockToExecute.header)
-            val newBlockData = BlockData(blockToExecute, receipts, newWeight)
-            // ONE atomic write: the block, its receipts and weight, its access list, the state it wrote (trie nodes,
-            // reference counts, snapshots, death row) and, when adopting, the best-block pointer. A kill can no longer
-            // leave a block's state applied but the block not, and a block that failed above staged nothing at all.
-            val base = blockchainWriter.saveBatch(
-              newBlockData.block,
-              newBlockData.receipts,
-              newBlockData.weight,
-              saveAsBestBlock = adoptEachBlock
-            )
-            // EIP-7928: the list the block just validated against.
-            val withAccessList =
-              blockAccessList.fold(base)(bal =>
-                base.and(blockchainWriter.storeBlockAccessList(blockToExecute.header.hash, bal))
+        val blockHash = blockToExecute.header.hash.value
+        // One execution + commit per block hash at a time, across the Engine API and this importer. A block the other
+        // path already executed and committed (and that is still applied) is not executed again: its recorded
+        // result is used and only the block's own records are written.
+        val step: Either[BlockExecutionError, BlockData] = BlockImportGate.withBlock(blockHash) {
+          val staged = blockchain.stageBlockState(blockToExecute.header.number.value)
+          val outcome =
+            try
+              BlockImportGate.alreadyExecuted(blockHash, staged) match
+                case Some(done) => Right(done.asTuple)
+                // EIP-7928: a list a peer served for this block (eth/71) is a prefetch hint, checked against the
+                // header before use; a block without one takes the unchanged path.
+                case None =>
+                  suppliedBlockAccessLists.get(blockToExecute.hash.value) match
+                    case None => executeAndValidateStaged(blockToExecute, alreadyValidated = false, staged)
+                    case hint =>
+                      executeAndValidateStagedWithList(blockToExecute, alreadyValidated = false, staged, hint)
+            catch
+              case t: Throwable =>
+                staged.discard()
+                throw t
+          outcome match
+            case Right(executed @ (receipts, _, blockAccessList)) =>
+              val newWeight = parentWeight.increase(blockToExecute.header)
+              val newBlockData = BlockData(blockToExecute, receipts, newWeight)
+              // ONE atomic write: the block, its receipts and weight, its access list, the state it wrote (trie
+              // nodes, reference counts, snapshots, death row) and, when adopting, the best-block pointer. A kill can
+              // no longer leave a block's state applied but the block not, and a block that failed above staged
+              // nothing at all.
+              val base = blockchainWriter.saveBatch(
+                newBlockData.block,
+                newBlockData.receipts,
+                newBlockData.weight,
+                saveAsBestBlock = adoptEachBlock
               )
-            val withState = staged
-              .pendingWith(blockToExecute.header.number.value, blockToExecute.header.hash.value)
-              .fold(withAccessList)(withAccessList.and)
-            timedCommit(blockToExecute)(withState.commit())
+              // EIP-7928: the list the block just validated against.
+              val withAccessList =
+                blockAccessList.fold(base)(bal =>
+                  base.and(blockchainWriter.storeBlockAccessList(blockToExecute.header.hash, bal))
+                )
+              timedCommit(blockToExecute)(
+                staged.commitWith(blockToExecute.header.number.value, blockHash, Some(withAccessList))
+              )
+              BlockImportGate.record(blockHash, executed)
+              Right(newBlockData)
+            case Left(executionError) =>
+              staged.discard()
+              Left(executionError)
+        }
+        step match
+          case Right(newBlockData) =>
             blockchain.saveBlockState(blockToExecute.header.number.value)
             blockchainReader.recordBlockDifficulty(blockToExecute.header.difficulty)
-            go(newBlockData :: executedBlocksDecOrder, remainingBlocksIncOrder.tail, newWeight)
+            go(newBlockData :: executedBlocksDecOrder, remainingBlocksIncOrder.tail, newBlockData.weight)
           case Left(executionError) =>
-            staged.discard()
             (executedBlocksDecOrder.reverse, Some(executionError))
 
     go(List.empty[BlockData], blocks, parentChainWeight)
@@ -1097,3 +1121,63 @@ object BlockExecutionError:
 
   final case class MPTError(error: MPTException) extends BlockExecutionError:
     def describe: String = error.toString
+
+/** Serialises block execution + commit per block hash, across every path that executes blocks (the Engine API's
+  * `newPayload` and the regular-sync importer).
+  *
+  * Why: the importer's duplicate check reads the best block, which `newPayload` does not advance until
+  * `forkchoiceUpdated`, so both paths executed AND committed the same block concurrently. Execution commits ABSOLUTE
+  * reference counts computed from a read-through, so a second commit double-applies them (a replaced node to -1, a
+  * created one to 2), and a later re-add lands a live node on 0, on the death row, pruned 64 blocks later: "Missing
+  * account trie node ... locationKnown=true" (Platåberget, block 329885+).
+  *
+  * Per hash, not global: different blocks keep executing concurrently exactly as before, so Engine API latency is
+  * unchanged; only two attempts at the SAME block meet here, and the loser waits for the winner (which is also the one
+  * whose result it can reuse, instead of executing a multi-second block twice).
+  *
+  * A waiter reuses the winner's result only while `StagedBlockState.isBlockApplied` still says the winner's state is in
+  * force; a block that was undone since (reorg, #1471) executes again. Modes without undo records never report applied,
+  * so there the gate only serialises.
+  */
+object BlockImportGate:
+  type Executed = (Seq[Receipt], Seq[ByteString], Option[BlockAccessList])
+
+  final case class Result(receipts: Seq[Receipt], requests: Seq[ByteString], accessList: Option[BlockAccessList]):
+    def asTuple: Executed = (receipts, requests, accessList)
+
+  final private class Holder:
+    val lock = new java.util.concurrent.locks.ReentrantLock()
+    var users = 0
+
+  private val holders = new java.util.concurrent.ConcurrentHashMap[ByteString, Holder]()
+  private val maxRemembered = 64
+  private val remembered = new java.util.LinkedHashMap[ByteString, Result](16, 0.75f, false):
+    override def removeEldestEntry(eldest: java.util.Map.Entry[ByteString, Result]): Boolean = size() > maxRemembered
+
+  def withBlock[A](blockHash: ByteString)(body: => A): A =
+    val holder = holders.compute(
+      blockHash,
+      (_, existing) =>
+        val h = if existing == null then new Holder else existing
+        h.users += 1
+        h
+    )
+    holder.lock.lock()
+    try body
+    finally
+      holder.lock.unlock()
+      holders.compute(
+        blockHash,
+        (_, h) =>
+          h.users -= 1
+          if h.users == 0 then null else h
+      )
+
+  /** The recorded result of an execution that is still in force, if any. Call under [[withBlock]]. */
+  def alreadyExecuted(blockHash: ByteString, staged: StagedBlockState): Option[Result] =
+    val known = remembered.synchronized(Option(remembered.get(blockHash)))
+    known.filter(_ => staged.isBlockApplied(blockHash))
+
+  /** Remember a committed execution for a waiter on the same hash. Call under [[withBlock]]. */
+  def record(blockHash: ByteString, executed: Executed): Unit =
+    remembered.synchronized { remembered.put(blockHash, Result(executed._1, executed._2, executed._3)); () }
