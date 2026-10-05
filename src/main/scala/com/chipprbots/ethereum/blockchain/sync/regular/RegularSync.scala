@@ -14,6 +14,7 @@ import com.chipprbots.ethereum.blockchain.sync.SyncProtocol.Status
 import com.chipprbots.ethereum.blockchain.sync.SyncProtocol.Status.Progress
 import com.chipprbots.ethereum.blockchain.sync.regular.BlockFetcher.InternalLastBlockImport
 import com.chipprbots.ethereum.consensus.ConsensusAdapter
+import com.chipprbots.ethereum.consensus.ReorgStateHandler
 import com.chipprbots.ethereum.consensus.validators.BlockValidator
 import com.chipprbots.ethereum.db.storage.EvmCodeStorage
 import com.chipprbots.ethereum.db.storage.StateStorage
@@ -65,7 +66,8 @@ object RegularSync:
         org.apache.pekko.actor.typed.pubsub.Topic.Command[com.chipprbots.ethereum.jsonrpc.NewBlockImported]
       ],
       configBuilder: BlockchainConfigBuilder,
-      supervisor: TypedActorRef[SyncController.Command]
+      supervisor: TypedActorRef[SyncController.Command],
+      reorgState: ReorgStateHandler = ReorgStateHandler.NoOp
   ): Behavior[Command] =
     Behaviors.setup { ctx =>
       Behaviors.withTimers { timers =>
@@ -130,7 +132,8 @@ object RegularSync:
                   blockchain,
                   blacklist,
                   configBuilder,
-                  Some(peersClient)
+                  Some(peersClient),
+                  reorgState
                 )
               )
               .onFailure[Throwable](

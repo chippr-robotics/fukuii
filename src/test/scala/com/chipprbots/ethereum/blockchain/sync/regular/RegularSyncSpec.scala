@@ -371,6 +371,17 @@ class RegularSyncSpec
           (() => blockchainReader.getBestBlockNumber).when().returns(capturedBest)
           (() => blockchainReader.getSnapSyncPivotBlock).when().returns(None)
           (blockchainReader.getBlockHeaderByNumber(_: BigInt)).when(lca).returns(Some(lcaHeader))
+          // the canonical index above the LCA, which the rewind must read BEFORE it deletes it
+          testBlocks.filter(b => b.number.value > lca).foreach { b =>
+            (blockchainReader.getCanonicalHashByNumber(_: BigInt)).when(b.number.value).returns(Some(b.hash))
+          }
+          val abandonedByRewind: java.util.concurrent.ConcurrentLinkedQueue[(BigInt, ByteString)] =
+            new java.util.concurrent.ConcurrentLinkedQueue()
+          val recordingReorgState: com.chipprbots.ethereum.consensus.ReorgStateHandler =
+            new com.chipprbots.ethereum.consensus.ReorgStateHandler:
+              override def abandonBlockStates(blocks: Seq[(BigInt, ByteString)]): Unit =
+                blocks.foreach(abandonedByRewind.add(_))
+              override def readoptBlockStates(blocks: Seq[(BigInt, ByteString)]): Unit = ()
 
           override lazy val blockchainWriter: BlockchainWriter = stub[BlockchainWriter]
 
@@ -410,7 +421,9 @@ class RegularSyncSpec
                 networkPeerManager.ref,
                 blockchain,
                 blacklist,
-                this
+                this,
+                None,
+                recordingReorgState
               ),
               "test-fork-recovery-importer"
             )
@@ -441,6 +454,11 @@ class RegularSyncSpec
             .setCanonicalChainHead(_: BigInt, _: com.chipprbots.ethereum.domain.BlockHash, _: BigInt))
             .verify(lca, lcaHeader.hash, capturedBest)
             .once()
+
+          // ... and the blocks the rewind un-canonicalised have their reference-count changes undone (#76).
+          import scala.jdk.CollectionConverters.*
+          abandonedByRewind.asScala.toList shouldBe
+            testBlocks.filter(_.number.value > lca).map(b => (b.number.value, b.hash.value))
 
           testKit.stop(importer)
       )
