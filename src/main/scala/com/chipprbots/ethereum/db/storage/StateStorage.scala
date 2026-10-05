@@ -4,6 +4,7 @@ import java.util.concurrent.TimeUnit
 
 import org.apache.pekko.util.ByteString
 
+import scala.annotation.unused
 import scala.concurrent.duration.FiniteDuration
 
 import com.chipprbots.ethereum.blockchain.sync.codec.MptNodeCodecs.*
@@ -45,6 +46,11 @@ trait StagedBlockState:
     */
   def prefetchReader(budgetBytes: Long, onLoaded: ByteString => Unit): Option[PrefetchNodeReader] = None
 
+  /** [[pending]] plus, for the modes that keep one, the block's undo record (see [[StateStorage.onBlocksAbandoned]]),
+    * which must be committed in the SAME atomic write as the block it describes. `pending` itself is unchanged.
+    */
+  def pendingWith(@unused blockNumber: BigInt, @unused blockHash: ByteString): Option[DataSourceBatchUpdate] = pending
+
   /** Drop the buffered writes and evict what execution read back from them out of the decoded-node cache. */
   def discard(): Unit
 
@@ -65,6 +71,17 @@ trait StateStorage:
 
   def onBlockSave(bn: BigInt, currentBestSavedBlock: BigInt)(updateBestBlocksData: () => Unit): Unit
   def onBlockRollback(bn: BigInt, currentBestSavedBlock: BigInt)(updateBestBlocksData: () => Unit): Unit
+
+  /** Blocks that were executed and committed, and then stopped being canonical (a reorganisation chose a sibling
+    * branch). A mode that counts references takes their reference-count changes back out, so a node only they replaced
+    * is not left at zero references while the new canonical chain still uses it. Modes that never skewed ignore it.
+    */
+  def onBlocksAbandoned(blocks: Seq[(BigInt, ByteString)]): Unit = ()
+
+  /** Blocks that became canonical again without being executed again (the already-executed parent of a new branch): the
+    * inverse of [[onBlocksAbandoned]].
+    */
+  def onBlocksReadopted(blocks: Seq[(BigInt, ByteString)]): Unit = ()
 
   def saveNode(nodeHash: NodeHash, nodeEncoded: NodeEncoded, bn: BigInt): Unit
   def getNode(nodeHash: NodeHash): Option[MptNode]
@@ -169,12 +186,22 @@ class ReferenceCountedStateStorage(
   override def getBackingStorage(bn: BigInt): MptStorage =
     new SerializingMptStorage(new ReferenceCountNodeStorage(nodeStorage, bn), decodedNodes)
 
+  override def onBlocksAbandoned(blocks: Seq[(BigInt, ByteString)]): Unit =
+    blocks.foreach { case (bn, hash) => ReferenceCountNodeStorage.undoBlock(bn, hash, nodeStorage, inMemory = false) }
+
+  override def onBlocksReadopted(blocks: Seq[(BigInt, ByteString)]): Unit =
+    blocks.foreach { case (bn, hash) => ReferenceCountNodeStorage.redoBlock(bn, hash, nodeStorage, inMemory = false) }
+
   override def stageBlock(bn: BigInt): StagedBlockState =
     val buffered = new BufferedNodeStorage(nodeStorage)
+    val counted = new ReferenceCountNodeStorage(buffered, bn)
     new StagedBlockState:
-      override val storage: MptStorage =
-        new SerializingMptStorage(new ReferenceCountNodeStorage(buffered, bn), decodedNodes)
+      override val storage: MptStorage = new SerializingMptStorage(counted, decodedNodes)
       override def pending: Option[DataSourceBatchUpdate] = Option.when(!buffered.isEmpty)(buffered.pending)
+      override def pendingWith(blockNumber: BigInt, blockHash: ByteString): Option[DataSourceBatchUpdate] =
+        val writes = ReferenceCountNodeStorage.abandonRecordWrites(blockNumber, blockHash, counted.netDeltas, buffered)
+        if writes.nonEmpty then buffered.update(Nil, writes)
+        pending
       override def prefetchReader(budgetBytes: Long, onLoaded: ByteString => Unit): Option[PrefetchNodeReader] =
         Some(
           new PrefetchNodeReader(

@@ -320,7 +320,8 @@ trait ConsensusBuilder:
       blockchainWriter,
       blockExecution,
       Some(invalidChainReporter),
-      Some(designatedHead)
+      Some(designatedHead),
+      blockchain
     )
 
   lazy val chainImporter: ChainImporter =

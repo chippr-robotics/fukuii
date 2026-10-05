@@ -155,7 +155,7 @@ class ImportBatchAtomicitySpec extends AnyFlatSpec with Matchers with MockFactor
         reader
       )
       val execution = new SimExecution(chain)
-      val consensus = new ConsensusImpl(reader, writer, execution)
+      val consensus = new ConsensusImpl(reader, writer, execution, reorgState = chain)
 
       def importBatch(blocks: List[Block]): ConsensusResult =
         consensus.evaluateBranch(NonEmptyList.fromListUnsafe(blocks)).unsafeRunSync()
@@ -321,11 +321,8 @@ class ImportBatchAtomicitySpec extends AnyFlatSpec with Matchers with MockFactor
       // PR #1464 swept the replaced block's snapshots by number on restart and deleted the shared node. Nothing here is
       // undone by number, so the reorg and the restart remove no key at all.
       //
-      // NOT covered, and not caused by this change: with execute-first reorganisation the replaced branch's reference
-      // count decrements stay in place (a2 and b2 share the death row dr2), so pruning dr2 `history` blocks later can
-      // delete a node that the new canonical state still uses. Verified separately by pruning dr2 right after the
-      // reorg (b2's state becomes unreadable). That needs its own fix (it is a reorg-vs-reference-count problem, not an
-      // import-batch one), so this test stops before the prune reaches dr2.
+      // This test stops before the prune reaches dr2; the reference-count side of an abandoned block (its decrements
+      // stay applied unless undone) is pinned by the two "abandoned block" tests below, which prune past it.
       initGenesis()
       val node = new Node()
       val oldChain = chain.take(3)
@@ -356,6 +353,78 @@ class ImportBatchAtomicitySpec extends AnyFlatSpec with Matchers with MockFactor
 
       readWholeState(roots(c3.hash.value))(9) shouldBe Some(value("shared"))
       readWholeState(roots(b2.hash.value))(9) shouldBe Some(value("shared"))
+
+  private val heavyAdjust: BigInt => Block => Block = d =>
+    b => b.copy(header = b.header.copy(difficulty = Difficulty(d)))
+
+  /** Blocks on top of `parent` that each write one slot nobody else touches (slot 20+n), so they never rewrite a node
+    * of the sibling branches under test.
+    */
+  private def extendQuiet(setup: Setup, parent: Block, count: Int): List[Block] =
+    val blocks = BlockHelpers.generateChain(count, parent)
+    blocks.foreach(b => setup.plans(b.hash.value) = Seq((20 + b.number.value.toInt) -> s"q${b.number}"))
+    blocks
+
+  "An abandoned sibling block" should
+    "not leave the node only it replaced pruned while the new canonical chain still uses it" taggedAs (
+      UnitTest,
+      DatabaseTest,
+      ConsensusTest
+    ) in new Setup:
+      // a2 replaces the leaf of slot 3; the heavier sibling b2 (same parent) does not touch it, so slot 3's old leaf is
+      // live in b2's state. Executing a2 left that leaf at zero references on dr2; the reorg to b2 used to keep it
+      // there, and the prune of dr2 (`history` blocks later) deleted a node the canonical chain reads.
+      initGenesis()
+      val node = new Node()
+      val a1 = chain.head
+      val a2 = chain(1)
+      plans(a1.hash.value) = Seq(1 -> "a1")
+      plans(a2.hash.value) = Seq(3 -> "aOnly")
+      phase("importing the old chain")(node.importEach(List(a1, a2)))
+      val b2 = BlockHelpers.generateChain(1, a1, heavyAdjust(BigInt(10).pow(12))).head
+      plans(b2.hash.value) = Seq(7 -> "bOnly")
+      phase("reorganising to the sibling")(node.importBatch(List(b2)) shouldBe a[SelectedNewBestBranch])
+      reader.getBestBlock.map(_.hash) shouldBe Some(b2.hash)
+
+      // carry on from b2 well past the point where dr2 is pruned (history = 2)
+      val tail = extendQuiet(this, b2, 5)
+      phase("extending the new chain")(node.importEach(tail))
+
+      val finalState = phase("reading the final state")(readWholeState(roots(tail.last.hash.value)))
+      finalState(3) shouldBe Some(value("g3"))
+      finalState(7) shouldBe Some(value("bOnly"))
+      finalState(1) shouldBe Some(value("a1"))
+
+  it should "be undone again, and its changes put back, when a new branch builds on it" taggedAs (
+    UnitTest,
+    DatabaseTest,
+    ConsensusTest
+  ) in new Setup:
+    // a1 a2 | b2 (heavier) | a3 on top of a2 (heaviest): the node goes back to the a-branch WITHOUT executing a2 again,
+    // so a2's changes (undone when b2 won) must be put back, and b2's taken out.
+    initGenesis()
+    val node = new Node()
+    val a1 = chain.head
+    val a2 = chain(1)
+    plans(a1.hash.value) = Seq(1 -> "a1")
+    plans(a2.hash.value) = Seq(3 -> "aOnly")
+    node.importEach(List(a1, a2))
+    val b2 = BlockHelpers.generateChain(1, a1, heavyAdjust(BigInt(10).pow(12))).head
+    plans(b2.hash.value) = Seq(7 -> "bOnly")
+    phase("reorganising to b2")(node.importBatch(List(b2)) shouldBe a[SelectedNewBestBranch])
+    val a3 = BlockHelpers.generateChain(1, a2, heavyAdjust(BigInt(10).pow(13))).head
+    plans(a3.hash.value) = Seq(8 -> "a3")
+    phase("reorganising back through a2")(node.importBatch(List(a3)) shouldBe a[SelectedNewBestBranch])
+    reader.getBestBlock.map(_.hash) shouldBe Some(a3.hash)
+
+    val tail = extendQuiet(this, a3, 5)
+    phase("extending the a chain")(node.importEach(tail))
+
+    val finalState = phase("reading the final state")(readWholeState(roots(tail.last.hash.value)))
+    finalState(3) shouldBe Some(value("aOnly"))
+    finalState(8) shouldBe Some(value("a3"))
+    finalState(7) shouldBe Some(value("g7"))
+    finalState(1) shouldBe Some(value("a1"))
 
   "A failed p2p batch" should "never leave a block the Engine API would call known without its state" taggedAs (
     UnitTest,
