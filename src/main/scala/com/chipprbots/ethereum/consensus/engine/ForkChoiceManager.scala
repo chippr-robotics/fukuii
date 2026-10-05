@@ -5,6 +5,7 @@ import java.util.concurrent.atomic.AtomicReference
 import org.apache.pekko.actor.typed.ActorRef as TypedActorRef
 import org.apache.pekko.util.ByteString
 
+import com.chipprbots.ethereum.consensus.ReorgStateHandler
 import com.chipprbots.ethereum.domain.BlockHash
 import com.chipprbots.ethereum.domain.BlockHeader
 import com.chipprbots.ethereum.domain.BlockchainReader
@@ -22,7 +23,11 @@ import com.chipprbots.ethereum.utils.Logger
   */
 class ForkChoiceManager(
     blockchainReader: BlockchainReader,
-    blockchainWriter: BlockchainWriter
+    blockchainWriter: BlockchainWriter,
+    // What the canonical index move means for the state's reference counts: the blocks it drops are undone, the ones it
+    // adopts are put back (idempotent). NoOp for callers with no reference-counted state; the node passes its
+    // BlockchainImpl.
+    reorgState: ReorgStateHandler = ReorgStateHandler.NoOp
 ) extends Logger:
 
   // EXECUTED heads only. Written solely by the head-known branch of `applyForkChoiceState`, never by
@@ -115,7 +120,13 @@ class ForkChoiceManager(
       // One batch: the number→hash index becomes exactly the head's ancestry (the new branch written, every entry
       // above the head deleted) and the best-block pointer moves to the head — whether the head moved up, sideways,
       // or DOWN to an ancestor or a shorter side chain.
-      maybeHeader.foreach(header => blockchainWriter.promoteToCanonicalHead(header, blockchainReader))
+      maybeHeader.foreach { header =>
+        val move = blockchainWriter.promoteToCanonicalHead(header, blockchainReader)
+        // Reference counts follow the canonical index: a block is applied exactly while it is canonical (see
+        // ReorgStateHandler). Abandon first, then re-adopt, as ConsensusImpl.settleHead does; both are idempotent.
+        reorgState.abandonBlockStates(move.dropped.map { case (n, h) => (n, h.value) })
+        reorgState.readoptBlockStates(move.adopted.map { case (n, h) => (n, h.value) })
+      }
 
       Right(())
 

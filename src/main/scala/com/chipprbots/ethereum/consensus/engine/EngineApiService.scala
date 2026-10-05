@@ -41,7 +41,11 @@ class EngineApiService(
     // The gas limit this node's payloads move toward when the CL names none: go-ethereum's `--miner.gaslimit`
     // (`miner.Config.GasCeil`), see enginePayloadGasLimit. The node passes its `mining.gas-limit-target`; the default is
     // go-ethereum's own, which keeps the specs short.
-    builderGasCeil: BigInt = EngineApiService.DefaultBuilderGasCeil
+    builderGasCeil: BigInt = EngineApiService.DefaultBuilderGasCeil,
+    // Reference-count side of an executed payload that does not become canonical (see ReorgStateHandler). NoOp for
+    // specs with no reference-counted state; the node passes its BlockchainImpl.
+    reorgState: com.chipprbots.ethereum.consensus.ReorgStateHandler =
+      com.chipprbots.ethereum.consensus.ReorgStateHandler.NoOp
 )(implicit blockchainConfig: BlockchainConfig, typedScheduler: org.apache.pekko.actor.typed.Scheduler)
     extends Logger:
 
@@ -597,6 +601,8 @@ class EngineApiService(
                     blockchainConfig.isPragueTimestamp(block.header.unixTimestamp) &&
                       suppliedRequests != derivedRequests
                   if requestsMismatch then
+                    // The block executed and its state is committed (applied); it will never be canonical.
+                    reorgState.abandonBlockStates(Seq((block.header.number.value, block.header.hash.value)))
                     val lvh = parentHeader.map(_.hash.value).getOrElse(zeroHash)
                     blockchainWriter.removeBlockByHash(BlockHash(payload.blockHash)).commit()
                     markInvalidRecursive(payload.blockHash, lvh)
@@ -627,7 +633,13 @@ class EngineApiService(
                       .getBlockHeaderByNumber(block.header.number.value)
                       .forall(_.hash == block.header.hash)
                     if extendsCanonical then blockchainWriter.storeBlock(block).commit()
-                    else blockchainWriter.storeBlockByHashOnly(block).commit()
+                    else
+                      blockchainWriter.storeBlockByHashOnly(block).commit()
+                      // A side payload is executed but not canonical: take its reference-count changes back out NOW,
+                      // not when it is eventually dropped. It shares nodes with the canonical chain (the one it
+                      // replaced is live there), so left applied it pushes them to zero references and the prune
+                      // deletes them. A forkchoiceUpdated that adopts it puts the changes back (ForkChoiceManager).
+                      reorgState.abandonBlockStates(Seq((block.header.number.value, block.header.hash.value)))
                     blockchainWriter.storeReceipts(block.header.hash, receipts).commit()
                     // EIP-7928: execution produced this list and validated the header against it (the CL's bytes
                     // hash to the same commitment), so it is the list to keep and to serve.

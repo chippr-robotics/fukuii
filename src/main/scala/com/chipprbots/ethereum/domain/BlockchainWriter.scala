@@ -227,7 +227,7 @@ class BlockchainWriter(
     *
     * Only the index, the lookups and the best-block pointer move; headers, bodies and receipts stay where they are.
     */
-  def promoteToCanonicalHead(head: BlockHeader, reader: BlockchainReader): Unit =
+  def promoteToCanonicalHead(head: BlockHeader, reader: BlockchainReader): CanonicalMove =
     val oldBest = reader.getBestBlockNumber
     val headNumber = head.number.value
 
@@ -252,9 +252,11 @@ class BlockchainWriter(
           .toList
 
     // Read before the batch: the blocks the index names now at the heights it is about to replace or delete.
-    val dropped: Seq[BlockHash] =
-      put.flatMap { case (number, hash) => reader.getCanonicalHashByNumber(number).filterNot(_ == hash) } ++
-        remove.flatMap(reader.getCanonicalHashByNumber)
+    val droppedAt: Seq[(BigInt, BlockHash)] =
+      put.flatMap { case (number, hash) =>
+        reader.getCanonicalHashByNumber(number).filterNot(_ == hash).map(number -> _)
+      } ++ remove.flatMap(n => reader.getCanonicalHashByNumber(n).map(n -> _))
+    val dropped: Seq[BlockHash] = droppedAt.map(_._2)
     def txHashes(blocks: Seq[BlockHash]): Set[ByteString] =
       blocks.flatMap(reader.getBlockBodyByHash).flatMap(_.transactionList.map(_.hash.value)).toSet
     val staleLookups = txHashes(dropped) -- txHashes(put.map(_._2))
@@ -275,6 +277,7 @@ class BlockchainWriter(
         acc.and(transactionMappingStorage.remove(tx))
       })
       .commit()
+    CanonicalMove(adopted = put, dropped = droppedAt)
 
   private def saveBlockNumberMapping(number: BigInt, hash: BlockHash): DataSourceBatchUpdate =
     blockNumberMappingStorage.put(number, hash.value)
@@ -284,6 +287,13 @@ class BlockchainWriter(
       case (updates, (tx, index)) =>
         updates.and(transactionMappingStorage.put(tx.hash.value, TransactionLocation(blockHash.value, index)))
     }
+
+/** What [[BlockchainWriter.promoteToCanonicalHead]] changed in the number→hash index, as `(height, block hash)` pairs:
+  * the blocks it wrote (`adopted`, ascending, including any the index already named above the old best block) and the
+  * ones it displaced or deleted (`dropped`). The caller owns the reference-count side of this (see
+  * `ReorgStateHandler`), which the index write cannot do atomically.
+  */
+final case class CanonicalMove(adopted: Seq[(BigInt, BlockHash)], dropped: Seq[(BigInt, BlockHash)])
 
 object BlockchainWriter:
   def apply(storages: BlockchainStorages): BlockchainWriter =

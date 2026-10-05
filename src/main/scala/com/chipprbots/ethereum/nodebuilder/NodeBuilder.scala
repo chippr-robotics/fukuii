@@ -888,7 +888,7 @@ trait EngineApiBuilder extends Logger:
       jwtSecretPath = engineConf.flatMap(c => scala.util.Try(c.getString("jwt-secret-path")).toOption)
     )
 
-  lazy val forkChoiceManager: ForkChoiceManager = new ForkChoiceManager(blockchainReader, blockchainWriter)
+  lazy val forkChoiceManager: ForkChoiceManager = new ForkChoiceManager(blockchainReader, blockchainWriter, blockchain)
 
   lazy val engineApiService: EngineApiService =
     given typedScheduler: org.apache.pekko.actor.typed.Scheduler = classicSystem.toTyped.scheduler
@@ -900,7 +900,8 @@ trait EngineApiBuilder extends Logger:
       Some(pendingTransactionsManagerTyped),
       getPayloadRebuildBudget = EngineApiService.GetPayloadRebuildBudget,
       // go-ethereum's --miner.gaslimit equivalent, as for the testing_* namespace: mining.gas-limit-target.
-      builderGasCeil = mining.config.generic.gasLimitTarget
+      builderGasCeil = mining.config.generic.gasLimitTarget,
+      reorgState = blockchain
     )(blockchainConfig, typedScheduler)
 
   // The controller's fork gates read the same schedule its service executes with (not the process-global config, which
