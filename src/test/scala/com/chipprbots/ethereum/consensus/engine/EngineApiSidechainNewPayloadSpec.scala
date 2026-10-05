@@ -333,6 +333,27 @@ class EngineApiSidechainNewPayloadSpec extends AnyWordSpec with Matchers:
       newPayload(child).status shouldBe Valid
       executions.get shouldBe (before + 2)
 
+    "keep a deduped side payload adoptable: forkchoiceUpdated to it, then a child executes on its state" taggedAs (
+      UnitTest,
+      ConsensusTest
+    ) in new Setup:
+      val sibling = payloadOn(block1, Nil, randao = 0x0b)
+      newPayload(sibling).status shouldBe Valid
+      val child = payloadOn(sibling, Seq(tx1), randao = 0x0c)
+      newPayload(child).status shouldBe Valid
+      val before = executions.get
+      newPayload(sibling).status shouldBe Valid // deduped re-send
+      newPayload(child).status shouldBe Valid // deduped re-send
+      executions.get shouldBe before
+
+      forkchoice(child) // adopts the side chain whose payloads were only ever executed once
+      canonicalAt(2) shouldBe Some(sibling.hash)
+      canonicalAt(3) shouldBe Some(child.hash)
+      val grandchild = payloadOn(child, Nil, randao = 0x0d) // needs the adopted state to be readable
+      newPayload(grandchild).status shouldBe Valid
+      forkchoice(grandchild)
+      canonicalAt(4) shouldBe Some(grandchild.hash)
+
     "still write the canonical entry of a payload that extends the head" taggedAs (UnitTest, ConsensusTest) in
       new Setup:
         val block3 = payloadOn(block2, Nil, randao = 0x03)

@@ -418,15 +418,18 @@ class EngineApiService(
       // we never ran. Receipts are the codebase's existing was-executed predicate (see
       // `parentValidated` below and EthBlocksService's `isExposed`).
       //
-      // Be precise about what this conjunct does and does not prove. Receipts are NOT a
-      // guarantee of local execution: ChainDownloader.scala:619/:703 and FastSync.scala:1170
-      // store peer-supplied receipts on the backfill path without executing anything, so on a
-      // fast/SNAP-synced node a block can have receipts it never earned. What the conjunct
-      // does give is a strictly tighter predicate than the mapping alone — every block it
-      // admits was already admitted before — so it can only move answers from VALID toward
-      // ACCEPTED/SYNCING, never the reverse. That direction is the safe one: re-executing a
-      // block we had already validated costs time, whereas skipping execution on a block we
-      // had not costs correctness.
+      // Be precise about what this predicate does and does not prove. Receipts are NOT a
+      // guarantee of local execution: ChainDownloader.scala:619/:703 store peer-supplied
+      // receipts on the backfill path without executing anything, so on a SNAP-synced node a
+      // block can have receipts it never earned. The predicate is header-by-hash AND receipts;
+      // it no longer also requires a canonical number→hash entry, so it admits MORE than the
+      // mapping-and-receipts form did: a side payload this node executed (stored by hash only,
+      // receipts written by the sidechain path above) is now answered VALID on a re-send.
+      // That widening is deliberate (a CL whose newPayload timed out re-sends the payload;
+      // re-executing it each time never finished inside the CL's timeout). The only
+      // non-newPayload receipt writers are the SNAP backfill (canonical blocks, which the old
+      // form admitted too) and the test-only TestingService, so the new admissions are blocks
+      // executed here.
       //
       // The one thing it does prove cleanly is the empty-block case: storeReceipts pickles a
       // non-empty value even for an empty Seq, so a zero-tx block yields Some(Nil), not None,
