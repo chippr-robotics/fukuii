@@ -559,7 +559,12 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
   // Internal message for async frontier rebuild completion (crash-recovery BFS or verification BFS)
   private case class FrontierRebuilt(entries: Seq[HealingEntry]) extends Command
   // Sent by startVerificationBFS when the BFS Future completes — gates verificationPassComplete.
-  private case object VerificationBFSComplete extends Command
+  // Carries the root the walk was LAUNCHED against (`walkRoot`), exactly as `FrontierRebuildComplete` does. A pivot
+  // re-peg does not cancel an in-flight verification walk, so its completion can land after `stateRoot` moved; the
+  // handler must not credit a clean walk of the OLD root as verification of the NEW one. This is decisive for the
+  // per-block-hot system-contract storage tries (EIP-4788/2935/8282): they differ between every pair of roots, while
+  // the cold bulk of the state is shared, so an old-root "clean" signal says nothing about them.
+  private case class VerificationBFSComplete(walkRoot: ByteString) extends Command
 
   // Layer 2: the full-state rebuild BFS finished — the persisted frontier is now a COMPLETE snapshot.
   // Sent after the final FrontierRebuilt so the completeness marker is set only once every node is persisted.
@@ -1215,7 +1220,29 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
 
       Behaviors.same
 
-    case VerificationBFSComplete =>
+    case VerificationBFSComplete(walkRoot) if walkRoot != stateRoot =>
+      // STALE: the walk traversed a root the heal has since re-pegged away from. Its result proves nothing about the
+      // current root, so it must NOT set verificationPassComplete. Release the single-flight gate and the per-run
+      // observability flags, then verify the CURRENT root explicitly. This cannot go through HealingCheckCompletion's
+      // `|| totalNodesHealed == 0` arm, which would declare completion with no walk at all.
+      verificationBFSRunning = false
+      scopedVerificationActive = false
+      prunedVerificationActive = false
+      verificationPassComplete = false
+      log.warn(
+        s"[HEAL-VERIFY] Discarding stale verification result: walk of root ${Hex.toHexString(walkRoot.take(4).toArray)} " +
+          s"finished after re-peg to ${Hex.toHexString(stateRoot.take(4).toArray)} — re-verifying the current root"
+      )
+      if isComplete && !flushing && !trieWalkInProgress then
+        startVerificationBFS(
+          stateRoot,
+          ByteString(com.chipprbots.ethereum.mpt.HexPrefix.encode(Array.empty[Byte], isLeaf = false))
+        )
+      // else: pending tasks / in-flight requests are healing the new root; the gate below verifies once they drain
+      // (verificationPassComplete == false forces a fresh walk, and the heal of an absent root makes totalNodesHealed > 0).
+      Behaviors.same
+
+    case VerificationBFSComplete(_) =>
       verificationBFSRunning = false
       if isComplete then
         // BFS traversed all locally-held nodes and found zero missing descendants — trie is complete.
@@ -2232,7 +2259,7 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
           s"store=${healingFrontierStorage.isDefined}) — full-trie verification on root " +
           s"${Hex.toHexString(root.take(4).toArray)}"
       )
-    startFrontierBFS(root, rootPath, isStor = false, (_: Long) => selfRef ! VerificationBFSComplete)
+    startFrontierBFS(root, rootPath, isStor = false, (_: Long) => selfRef ! VerificationBFSComplete(root))
 
   /** Launch a SCOPED verification BFS seeded from the healed-paths set (spec 003 C3/FR-002/FR-006). Each healed node's
     * subtree is re-walked to completion; any missing descendant is emitted via `FrontierRebuilt`. Sends
@@ -2258,7 +2285,8 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
     SNAPSyncMetrics.setHealingScopedVerification(1L)
     SNAPSyncMetrics.setHealingScopedSubtrees(seeds.size.toLong)
     val bfsSeeds = seeds.map(e => (e.hash, e.pathset, e.pathset.size > 1))
-    startFrontierBFS(bfsSeeds, (_: Long) => selfRef ! VerificationBFSComplete)
+    val walkRoot = stateRoot
+    startFrontierBFS(bfsSeeds, (_: Long) => selfRef ! VerificationBFSComplete(walkRoot))
 
   /** Remember `account`'s codeHash for the controller if it names code this node does not hold. */
   private def recordHealedCodeHash(account: Account): Unit =
