@@ -24,7 +24,8 @@ import com.chipprbots.ethereum.utils.Logger
   *   - Peer management for SNAP requests
   */
 class SNAPRequestTracker(
-    nowMs: () => Long = () => System.currentTimeMillis(),
+    // Monotonic: a wall-clock (NTP) step must not look like a process stall. Only differences are ever used.
+    nowMs: () => Long = () => System.nanoTime() / 1_000_000L,
     stallPolicy: SNAPRequestTracker.StallPolicy = SNAPRequestTracker.StallPolicy.Default
 )(implicit scheduler: Scheduler)
     extends Logger:
@@ -140,6 +141,8 @@ class SNAPRequestTracker(
         pendingRequests.get(requestId).foreach { req =>
           val now = nowMs()
           val latenessMs = now - scheduledAtMs - delay.toMillis
+          // Note: after a grace the request clock restarts at the stall's end, so a reply arriving in the grace window
+          // is rated on its post-stall latency only (the peer's rate sample is not inflated by the stall).
           if !graceGranted && stallPolicy.isStall(latenessMs) then
             log.warn(
               s"SNAP request ${req.requestType} timer for request ID $requestId fired ${latenessMs}ms late — " +

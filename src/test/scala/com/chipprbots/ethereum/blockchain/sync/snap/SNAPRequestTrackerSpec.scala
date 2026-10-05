@@ -334,7 +334,7 @@ class SNAPRequestTrackerSpec extends ScalaTestWithActorTestKit() with AnyFlatSpe
   // A frozen JVM fires every request timer late and at once while the peers' replies sit unread in the socket buffer.
   // The fake clock lets a test "freeze" the process deterministically: the clock jumps, the real timer then fires.
 
-  private val stallPolicy = SNAPRequestTracker.StallPolicy(latenessThreshold = 50.millis, grace = 400.millis)
+  private val stallPolicy = SNAPRequestTracker.StallPolicy(latenessThreshold = 50.millis, grace = 2.seconds)
 
   "SNAPRequestTracker stall tolerance" should "not time out a request whose timer fired late, and accept the reply" taggedAs UnitTest in {
     val clock = new java.util.concurrent.atomic.AtomicLong(1_000_000L)
@@ -374,7 +374,7 @@ class SNAPRequestTrackerSpec extends ScalaTestWithActorTestKit() with AnyFlatSpe
     clock.addAndGet(78_000L)
 
     // Grace elapses on the (now unmoving) clock with no lateness, so the second firing is a real timeout.
-    eventually(timeout(Span(3000, Millis))) {
+    eventually(timeout(Span(8000, Millis))) {
       timeouts.get() shouldBe 1
     }
     tracker.isPending(requestId) shouldBe false

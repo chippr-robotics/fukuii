@@ -102,6 +102,11 @@ object RLPxConnectionHandler:
 
   final case class ConnectionEstablished(nodeId: ByteString) extends PeerActor.Command
   case object ConnectionFailed extends PeerActor.Command
+
+  /** The remote refused the connection with a Disconnect frame instead of a Hello. Carries the reason so the parent can
+    * tell a transient refusal (TooManyPeers, AlreadyConnected) from a permanent one.
+    */
+  final case class ConnectionRejected(reason: Long) extends PeerActor.Command
   final case class MessageReceived(message: Message) extends PeerActor.Command
   final case class InitialHelloReceived(message: Hello, capability: Capability) extends PeerActor.Command
 
@@ -599,7 +604,7 @@ object RLPxConnectionHandler:
             reason.toHexString,
             Disconnect.reasonToString(reason)
           )
-          parent ! ConnectionFailed
+          parent ! ConnectionRejected(reason)
           stopping()
 
         case Failure(err) =>
@@ -695,6 +700,8 @@ object RLPxConnectionHandler:
 
         case TcpConnectFailed =>
           tcpFailedCount.incrementAndGet()
+          // TODO: drop the pre-auth TCP-connect/close INFO logs below back to DEBUG for non-maintained peers once the
+          // re-dial failures of the plataberget soak (2026-10-05) are diagnosed.
           log.info("[Stopping Connection] TCP connect failed for peer {}", peerId)
           parent ! ConnectionFailed
           stopping()
