@@ -46,7 +46,10 @@ class ConsensusImpl(
     // and requires network.engine-api.enabled AND a configured terminal-total-difficulty — so `headBlockHash` is
     // `None` and `leadsToDesignatedHead` is false. The `None` default only serves direct test construction.
     // See [[com.chipprbots.ethereum.consensus.engine.DesignatedHead]].
-    designatedHead: Option[DesignatedHead] = None
+    designatedHead: Option[DesignatedHead] = None,
+    // Takes the reference-count changes of an abandoned block back out (and puts a re-adopted side block's back). In
+    // production this is the BlockchainImpl; the NoOp default only serves test doubles that have no state storage.
+    reorgState: ReorgStateHandler = ReorgStateHandler.NoOp
 ) extends Consensus
     with Logger:
 
@@ -424,6 +427,11 @@ class ConsensusImpl(
             newBest = Some((tip.hash, tip.number.value)),
             reader = blockchainReader
           )
+          // The old head's blocks left the canonical chain with their state changes applied: take them back out, or a
+          // node only they replaced stays at zero references while the new chain uses it, and is pruned. The side
+          // blocks the new branch builds on are canonical again (their changes were taken out when they were dropped).
+          reorgState.abandonBlockStates(oldCanonical.map { case (n, h) => (n, h.value) })
+          reorgState.readoptBlockStates(fork.parentSideChain.map { case (n, h) => (n, h.value) })
         else
           val old = oldCanonical.toMap
           val executedHeights = executedBlocks.map(_.block.number.value)
@@ -442,6 +450,8 @@ class ConsensusImpl(
             newBest = None,
             reader = blockchainReader
           )
+          // The executed side blocks are committed but not canonical.
+          reorgState.abandonBlockStates(executedBlocks.map(b => (b.block.number.value, b.block.hash.value)))
     }
 
   /** Where a branch whose parent is `parentHash` leaves the canonical chain.

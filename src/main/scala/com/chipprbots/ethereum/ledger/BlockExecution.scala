@@ -71,8 +71,9 @@ class BlockExecution(
           throw t
     result match
       // Accepted: its state goes to the database (nobody else commits it here). Rejected: it leaves nothing behind.
-      case Right(_) => timedCommit(block)(staged.pending.foreach(_.commit()))
-      case Left(_)  => staged.discard()
+      case Right(_) =>
+        timedCommit(block)(staged.pendingWith(block.header.number.value, block.header.hash.value).foreach(_.commit()))
+      case Left(_) => staged.discard()
     result
 
   /** Times the block's database commit (one atomic batch since #1465), which `[IMPORT-TIMING]` ends before. */
@@ -644,7 +645,10 @@ class BlockExecution(
               blockAccessList.fold(base)(bal =>
                 base.and(blockchainWriter.storeBlockAccessList(blockToExecute.header.hash, bal))
               )
-            timedCommit(blockToExecute)(staged.pending.fold(withAccessList)(withAccessList.and).commit())
+            val withState = staged
+              .pendingWith(blockToExecute.header.number.value, blockToExecute.header.hash.value)
+              .fold(withAccessList)(withAccessList.and)
+            timedCommit(blockToExecute)(withState.commit())
             blockchain.saveBlockState(blockToExecute.header.number.value)
             blockchainReader.recordBlockDifficulty(blockToExecute.header.difficulty)
             go(newBlockData :: executedBlocksDecOrder, remainingBlocksIncOrder.tail, newWeight)
