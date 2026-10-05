@@ -211,6 +211,15 @@ class ForceCompletedStorageVerificationSpec
     }
   }
 
+  it should "clear the local-walk flag when it stops mid-walk, so a dead coordinator cannot hold off re-pegs" taggedAs UnitTest in {
+    withFixture { f =>
+      eventually(timeout(5.seconds), interval(20.millis))(f.localOnly.get() shouldBe true)
+      // Force-complete stops the coordinator while the walk is still held.
+      f.coordinator ! TrieNodeHealingCoordinator.HealingForceComplete
+      eventually(timeout(5.seconds), interval(20.millis))(f.localOnly.get() shouldBe false)
+    }
+  }
+
   "SNAPSyncController" should "suppress the proactive heal re-peg only for a local-only walk under movingRootDeltaHeal" taggedAs UnitTest in {
     SNAPSyncController.healRepegSuppressedByLocalWalk(movingRootDeltaHeal = true, walkLocalOnly = true) shouldBe true
     // heal work pending: the normal re-peg rules (#59) apply

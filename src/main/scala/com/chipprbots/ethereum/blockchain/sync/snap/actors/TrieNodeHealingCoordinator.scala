@@ -690,8 +690,18 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
             target: org.apache.pekko.actor.typed.BehaviorInterceptor.ReceiveTarget[Command]
         ): Behavior[Command] =
           val next = target(ctx, msg)
-          publishWalkLocality()
+          // A stopping coordinator (e.g. HealingForceComplete) must not leave `true` behind for a dead actor.
+          if org.apache.pekko.actor.typed.Behavior.isAlive(next) then publishWalkLocality()
+          else walkLocalOnly.foreach(_.set(false))
           next
+
+        override def aroundSignal(
+            ctx: org.apache.pekko.actor.typed.TypedActorContext[Command],
+            signal: org.apache.pekko.actor.typed.Signal,
+            target: org.apache.pekko.actor.typed.BehaviorInterceptor.SignalTarget[Command]
+        ): Behavior[Command] =
+          if signal == org.apache.pekko.actor.typed.PostStop then walkLocalOnly.foreach(_.set(false))
+          target(ctx, signal)
     )(activeBehavior())
 
   private def activeBehavior(): Behavior[Command] = Behaviors.receiveMessage[Command] {
