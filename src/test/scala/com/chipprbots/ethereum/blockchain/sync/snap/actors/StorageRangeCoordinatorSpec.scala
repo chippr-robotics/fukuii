@@ -1644,3 +1644,49 @@ class StorageRangeCoordinatorSpec extends ScalaTestWithActorTestKit() with AnyFl
     impl.pendingAccountTries.contains(acct) shouldBe false
     impl.tasks.exists(_.accountHash == acct) shouldBe false
   }
+
+  // ── Zombie coordinator (devnet-8, 2026-10-03) ─────────────────────────────
+  // The tracker's request timers outlive the coordinator. [STORAGE-FORCE-COMPLETE] kept firing for 6+ minutes after
+  // SNAP had completed and the coordinator had been stopped, because nothing cancelled the in-flight request timers.
+
+  private def startWithOneRequestInFlight(requestTracker: SNAPRequestTracker) =
+    val stateRoot = kec256(ByteString("zombie-root"))
+    val networkPeerManager = testKit.createTestProbe[NetworkPeerManagerActor.Command]()
+    val snapSyncController = testKit.createTestProbe[SNAPSyncController.Command]()
+    val peerProbe = testKit.createTestProbe[Any]()
+    val peer = PeerTestHelpers.createTestPeer("storage-peer-zombie", peerProbe.ref.toClassic)
+    val coordinator = srcProps(
+      stateRoot = stateRoot,
+      networkPeerManager = networkPeerManager.ref,
+      requestTracker = requestTracker,
+      mptStorage = new TestMptStorage(),
+      flatSlotStorage = new FlatSlotStorage(EphemDataSource()),
+      maxAccountsPerBatch = 1,
+      maxInFlightRequests = 2,
+      requestTimeout = 30.seconds,
+      snapSyncController = snapSyncController.ref
+    )
+    coordinator ! StorageRangeCoordinator.StartStorageRangeSync(stateRoot)
+    coordinator ! StorageRangeCoordinator.AddStorageTasks(
+      Seq(StorageTask.createStorageTask(kec256(ByteString("zombie-account")), kec256(ByteString("zombie-storage"))))
+    )
+    coordinator ! StorageRangeCoordinator.StoragePeerAvailable(peer)
+    networkPeerManager.expectMessageType[NetworkPeerManagerActor.SendMessageCmd]
+    requestTracker.pendingCount shouldBe 1
+    (coordinator, snapSyncController)
+
+  it should "cancel its in-flight request timers when it stops" taggedAs UnitTest in {
+    val requestTracker = new SNAPRequestTracker()(classicSystem.scheduler)
+    val (coordinator, _) = startWithOneRequestInFlight(requestTracker)
+    testKit.stop(coordinator)
+    requestTracker.pendingCount shouldBe 0
+  }
+
+  it should "cancel its in-flight request timers when it is force-completed" taggedAs UnitTest in {
+    val requestTracker = new SNAPRequestTracker()(classicSystem.scheduler)
+    val (coordinator, snapSyncController) = startWithOneRequestInFlight(requestTracker)
+    coordinator ! StorageRangeCoordinator.ForceCompleteStorage
+    snapSyncController.expectMessage(SNAPSyncController.StorageRangeSyncForceCompleted)
+    requestTracker.pendingCount shouldBe 0
+    testKit.stop(coordinator)
+  }

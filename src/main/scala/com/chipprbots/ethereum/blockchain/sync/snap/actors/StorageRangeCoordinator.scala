@@ -799,6 +799,8 @@ private[actors] class StorageRangeCoordinatorImpl(
     * Formerly `postStop`; now invoked from the `PostStop` signal handler in `active()`.
     */
   private def onPostStop(): Unit =
+    // The tracker's timers outlive this actor; cancel ours so none fires for a stopped coordinator.
+    activeTasks.keys.foreach(requestTracker.cancelRequest)
     // Discard any in-memory streaming tries — already-flushed nodes stay on disk
     // (content-addressed; healing reconciles).
     if pendingAccountTries.nonEmpty then
@@ -994,6 +996,10 @@ private[actors] class StorageRangeCoordinatorImpl(
           pendingOrderedChunks.clear()
           staleRootFailuresByAccount.clear()
           abandonedAccounts.clear()
+          // The in-flight requests are abandoned with the tasks: cancel their tracker timers so a timeout cannot
+          // re-count failures (and re-send ForceCompleteStorage) for work this coordinator no longer owns.
+          activeTasks.keys.foreach(requestTracker.cancelRequest)
+          activeTasks.clear()
           // Hand off any flat-slot tail still in the accumulator.
           flushPendingFlatBatch()
           log.info("Storage range sync force-completed (promoting to healing phase)")
@@ -1159,6 +1165,11 @@ private[actors] class StorageRangeCoordinatorImpl(
         self ! StorageCheckCompletion
         Behaviors.same
 
+      case StorageRequestTimedOut(requestId) =>
+        // A request already completed or abandoned (force-complete) is no longer in activeTasks: nothing to retry.
+        if activeTasks.contains(requestId) then handleTimeout(requestId)
+        Behaviors.same
+
       // Defensive: `Command` is non-sealed (cross-file constraint), so the compiler cannot prove
       // exhaustiveness. No production sender emits an un-handled Command; treat any as unhandled.
       case other =>
@@ -1246,7 +1257,10 @@ private[actors] class StorageRangeCoordinatorImpl(
           SNAPRequestTracker.RequestType.GetStorageRanges,
           timeout = requestTimeout
         ) {
-          handleTimeout(requestId)
+          // Runs on the scheduler's thread, not this actor's: hop onto the mailbox. Calling handleTimeout here mutated
+          // actor state from a foreign thread and, because the tracker timer outlives the actor, kept re-firing
+          // [STORAGE-FORCE-COMPLETE] for a coordinator that was already stopped (devnet-8, 2026-10-03).
+          self ! StorageRequestTimedOut(requestId)
         }
 
         log.info(
@@ -1979,6 +1993,9 @@ object StorageRangeCoordinator:
   // Sent to the coordinator (SSC forwards it via the Classic `!`), so it is also a Command.
   case class StorageRangesResponseMsg(response: StorageRanges) extends WorkerMessage with Command
   case class StorageRequestTimeout(requestId: BigInt) extends WorkerMessage
+
+  /** The request tracker's timeout for `requestId` fired; delivered through the mailbox. */
+  private[actors] case class StorageRequestTimedOut(requestId: BigInt) extends Command
   case object StorageCheckIdle extends WorkerMessage
 
   /** Behavior factory (Group S3). SSC and StorageRecoveryActor are still Classic / Classic-spawned at S3 time, so they

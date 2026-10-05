@@ -188,6 +188,14 @@ class SNAPRequestTracker(implicit scheduler: Scheduler) extends Logger:
     }
   }
 
+  /** Forget a pending request and cancel its timeout WITHOUT recording any rate or failure metric. For a requester that
+    * is abandoning or stopping, where the peer did nothing wrong (unlike [[completeRequest]], whose zero-item form
+    * would slash the peer's capacity).
+    */
+  def cancelRequest(requestId: BigInt): Unit = synchronized {
+    pendingRequests.remove(requestId).foreach(_.timeoutTask.foreach(_.cancel()))
+  }
+
   /** Validate AccountRange response
     *
     * @param response

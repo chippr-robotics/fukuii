@@ -564,7 +564,10 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
   // handler must not credit a clean walk of the OLD root as verification of the NEW one. This is decisive for the
   // per-block-hot system-contract storage tries (EIP-4788/2935/8282): they differ between every pair of roots, while
   // the cold bulk of the state is shared, so an old-root "clean" signal says nothing about them.
-  private case class VerificationBFSComplete(walkRoot: ByteString) extends Command
+  // `missingEmitted` is the number of missing nodes the walk found. A pass that found ANY is not a clean pass even if
+  // every one of them has been healed by the time it ends: the walk never descended below a node that was missing when
+  // it reached it, so the healed node's present children (and their subtrees) were not verified.
+  private case class VerificationBFSComplete(walkRoot: ByteString, missingEmitted: Long) extends Command
 
   // Layer 2: the full-state rebuild BFS finished — the persisted frontier is now a COMPLETE snapshot.
   // Sent after the final FrontierRebuilt so the completeness marker is set only once every node is persisted.
@@ -1220,29 +1223,34 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
 
       Behaviors.same
 
-    case VerificationBFSComplete(walkRoot) if walkRoot != stateRoot =>
+    case VerificationBFSComplete(walkRoot, _) if walkRoot != stateRoot =>
       // STALE: the walk traversed a root the heal has since re-pegged away from. Its result proves nothing about the
       // current root, so it must NOT set verificationPassComplete. Release the single-flight gate and the per-run
       // observability flags, then verify the CURRENT root explicitly. This cannot go through HealingCheckCompletion's
       // `|| totalNodesHealed == 0` arm, which would declare completion with no walk at all.
       verificationBFSRunning = false
-      scopedVerificationActive = false
-      prunedVerificationActive = false
-      verificationPassComplete = false
       log.warn(
         s"[HEAL-VERIFY] Discarding stale verification result: walk of root ${Hex.toHexString(walkRoot.take(4).toArray)} " +
           s"finished after re-peg to ${Hex.toHexString(stateRoot.take(4).toArray)} — re-verifying the current root"
       )
-      if isComplete && !flushing && !trieWalkInProgress then
-        startVerificationBFS(
-          stateRoot,
-          ByteString(com.chipprbots.ethereum.mpt.HexPrefix.encode(Array.empty[Byte], isLeaf = false))
-        )
-      // else: pending tasks / in-flight requests are healing the new root; the gate below verifies once they drain
-      // (verificationPassComplete == false forces a fresh walk, and the heal of an absent root makes totalNodesHealed > 0).
+      reverifyCurrentRoot()
       Behaviors.same
 
-    case VerificationBFSComplete(_) =>
+    case VerificationBFSComplete(_, missingEmitted) if missingEmitted > 0 =>
+      // DIRTY pass: the walk found (and queued) missing nodes. They may all have been healed by now, so `isComplete`
+      // can already be true, but the walk did not descend below any node that was missing when it reached it, and
+      // inline discovery only checks a healed node's direct children for presence. A present child whose own subtree
+      // has a hole (the storage-force-complete mosaic) is therefore unverified. Only a pass that finds NOTHING proves
+      // completeness (go-ethereum: loop until the sync scheduler has nothing pending, then re-walk).
+      verificationBFSRunning = false
+      log.info(
+        s"[HEAL-VERIFY] Verification pass found $missingEmitted missing nodes — not a clean pass; " +
+          s"re-verifying once pending=${pendingTasks.size} active=${activeRequests.size} drain"
+      )
+      if isComplete then reverifyCurrentRoot() else tryRedispatchPendingTasks()
+      Behaviors.same
+
+    case VerificationBFSComplete(_, _) =>
       verificationBFSRunning = false
       if isComplete then
         // BFS traversed all locally-held nodes and found zero missing descendants — trie is complete.
@@ -2221,6 +2229,22 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
           selfRef ! FrontierWalkFailed
     }(healingWriterEc)
 
+  /** Discard the verdict of the last verification pass and walk the CURRENT root again. Used when that pass was run
+    * against a superseded root or found missing nodes. Starts the walk directly (not via HealingCheckCompletion): the
+    * gate's `totalNodesHealed == 0` arm would declare completion without any walk. When work is still pending or a
+    * flush is in flight the normal gate re-verifies once it drains (`verificationPassComplete == false` forces a walk).
+    */
+  private def reverifyCurrentRoot(): Unit =
+    scopedVerificationActive = false
+    prunedVerificationActive = false
+    verificationPassComplete = false
+    if isComplete && !flushing && !trieWalkInProgress && !verificationBFSRunning then
+      startVerificationBFS(
+        stateRoot,
+        ByteString(com.chipprbots.ethereum.mpt.HexPrefix.encode(Array.empty[Byte], isLeaf = false))
+      )
+    else self ! HealingCheckCompletion
+
   /** Start a verification BFS (see [[startFrontierBFS]]).
     *
     * Traverses all locally-held trie nodes starting at `root` / `rootPath` and queues any missing descendants as
@@ -2259,7 +2283,12 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
           s"store=${healingFrontierStorage.isDefined}) — full-trie verification on root " +
           s"${Hex.toHexString(root.take(4).toArray)}"
       )
-    startFrontierBFS(root, rootPath, isStor = false, (_: Long) => selfRef ! VerificationBFSComplete(root))
+    startFrontierBFS(
+      root,
+      rootPath,
+      isStor = false,
+      (missing: Long) => selfRef ! VerificationBFSComplete(root, missing)
+    )
 
   /** Launch a SCOPED verification BFS seeded from the healed-paths set (spec 003 C3/FR-002/FR-006). Each healed node's
     * subtree is re-walked to completion; any missing descendant is emitted via `FrontierRebuilt`. Sends
@@ -2286,7 +2315,7 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
     SNAPSyncMetrics.setHealingScopedSubtrees(seeds.size.toLong)
     val bfsSeeds = seeds.map(e => (e.hash, e.pathset, e.pathset.size > 1))
     val walkRoot = stateRoot
-    startFrontierBFS(bfsSeeds, (_: Long) => selfRef ! VerificationBFSComplete(walkRoot))
+    startFrontierBFS(bfsSeeds, (missing: Long) => selfRef ! VerificationBFSComplete(walkRoot, missing))
 
   /** Remember `account`'s codeHash for the controller if it names code this node does not hold. */
   private def recordHealedCodeHash(account: Account): Unit =
