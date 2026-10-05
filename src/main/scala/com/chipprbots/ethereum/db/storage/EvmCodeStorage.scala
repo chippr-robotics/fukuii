@@ -99,14 +99,16 @@ object EvmCodeStorage:
   private lazy val shared: com.chipprbots.ethereum.utils.ByteBoundedLru[CacheKey, ByteString] =
     new com.chipprbots.ethereum.utils.ByteBoundedLru[CacheKey, ByteString](
       com.chipprbots.ethereum.utils.StateReadCacheConfig.codeCacheBytes,
-      code => code.length.toLong + 96
+      code => code.length.toLong + 96,
+      com.chipprbots.ethereum.utils.StateReadCacheConfig.codeCacheStrong
     )
 
   /** Code lengths by hash, same ownership rule as [[shared]]: only successfully read code is recorded. */
   private lazy val sizes: com.chipprbots.ethereum.utils.ByteBoundedLru[CacheKey, Integer] =
     new com.chipprbots.ethereum.utils.ByteBoundedLru[CacheKey, Integer](
       com.chipprbots.ethereum.utils.StateReadCacheConfig.codeSizeCacheBytes,
-      _ => 256L
+      _ => 256L,
+      com.chipprbots.ethereum.utils.StateReadCacheConfig.codeSizeCacheStrong
     )
 
   enum PrefetchOutcome:

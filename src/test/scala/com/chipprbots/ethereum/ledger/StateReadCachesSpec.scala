@@ -261,3 +261,142 @@ class StateReadCachesSpec extends AnyFlatSpec with Matchers:
     com.chipprbots.ethereum.utils.StateReadCacheConfig.jumpDestBlockMemoBytes should be <= (heap * 0.02).toLong
     com.chipprbots.ethereum.utils.StateReadCacheConfig.worldReadMemoEntries.toLong should be <= heap / 32768
   }
+
+  private def sizing(conf: String, path: String, default: Long, fraction: Double, heap: Long): Long =
+    com.chipprbots.ethereum.utils.StateReadCacheConfig.effectiveBytes(
+      Some(com.typesafe.config.ConfigFactory.parseString(conf)),
+      path,
+      default,
+      fraction,
+      heap
+    )
+
+  "StateReadCacheConfig.effectiveBytes" should "cap an unset default at its heap fraction" taggedAs (
+    UnitTest,
+    StateTest
+  ) in {
+    val heap = 1L << 30 // 1 GiB
+    sizing("", "code-cache-bytes", 256L << 20, 0.05, heap) shouldBe (heap * 0.05).toLong
+    sizing("other = 1", "code-cache-bytes", 256L << 20, 0.05, heap) shouldBe (heap * 0.05).toLong
+    // a default already below the fraction is unchanged
+    sizing("", "x", 1L << 20, 0.05, heap) shouldBe (1L << 20)
+  }
+
+  it should "honour an explicit value above the heap fraction" taggedAs (UnitTest, StateTest) in {
+    val heap = 8L << 30 // 8 GiB; 5% = ~410 MB
+    val want = 2560L << 20 // 2.5 GiB, 31% of heap
+    sizing(s"code-cache-bytes = $want", "code-cache-bytes", 256L << 20, 0.05, heap) shouldBe want
+    sizing("code-cache-bytes = 0", "code-cache-bytes", 256L << 20, 0.05, heap) shouldBe 0L
+  }
+
+  it should "clamp an explicit value to the safety ceiling of 50% of the heap" taggedAs (UnitTest, StateTest) in {
+    val heap = 8L << 30
+    sizing(s"code-cache-bytes = ${heap}", "code-cache-bytes", 256L << 20, 0.05, heap) shouldBe heap / 2
+  }
+
+  it should "ship the base config with the byte-size keys unset, so the fractions apply" taggedAs (
+    UnitTest,
+    StateTest
+  ) in {
+    val shipped = com.typesafe.config.ConfigFactory.parseResources("conf/base/state-read-caches.conf")
+    val sec = shipped.getConfig("state-read-caches")
+    Seq(
+      "code-cache-bytes",
+      "code-size-cache-bytes",
+      "decoded-node-cache-bytes",
+      "jumpdest-cache-bytes",
+      "jumpdest-block-memo-bytes"
+    ).foreach(k => withClue(k)(sec.hasPath(k) shouldBe false))
+  }
+
+  "EvmCodeStorage.getForExecution" should "serve a cache hit without copying the code" taggedAs (
+    UnitTest,
+    StateTest
+  ) in {
+    val storage = new EvmCodeStorage(EphemDataSource())
+    val code = ByteString(Array.fill[Byte](1024)(0x5b))
+    val hash = kec256(code)
+    storage.put(hash, code).commit()
+    val first = storage.getForExecution(hash).get // miss: fills the cache
+    val second = storage.getForExecution(hash).get
+    (second should be).theSameInstanceAs(first)
+    second.toArrayUnsafe() shouldBe code.toArray
+  }
+
+  "ByteBoundedLru" should "hold values strongly when strongValues is set, softly by default" taggedAs (
+    UnitTest,
+    StateTest
+  ) in {
+    val strong = new com.chipprbots.ethereum.utils.ByteBoundedLru[Int, ByteString](1024, _.length.toLong, true)
+    val soft = new com.chipprbots.ethereum.utils.ByteBoundedLru[Int, ByteString](1024, _.length.toLong)
+    strong.strongValues shouldBe true
+    soft.strongValues shouldBe false
+    val v = ByteString(1, 2, 3)
+    strong.put(1, v)
+    soft.put(1, v)
+    (strong.getOrNull(1) should be).theSameInstanceAs(v)
+    (soft.getOrNull(1) should be).theSameInstanceAs(v)
+    // Reference type, asserted directly: a soft entry is a SoftReference that still points at the value, a strong
+    // entry's SoftReference is empty (the value is held by the entry itself), so the collector cannot reclaim it.
+    def refs(c: com.chipprbots.ethereum.utils.ByteBoundedLru[Int, ByteString]) =
+      val m = c.getClass.getDeclaredField("map")
+      m.setAccessible(true)
+      m.get(c).asInstanceOf[java.util.LinkedHashMap[Int, java.lang.ref.SoftReference[ByteString]]].get(1)
+    (refs(soft).get() should be).theSameInstanceAs(v)
+    refs(strong).get() shouldBe null
+    // the byte bound still applies to strong caches
+    strong.put(2, ByteString(Array.fill[Byte](1022)(0)))
+    strong.getOrNull(1) shouldBe null
+    strong.sizeBytes should be <= 1024L
+  }
+
+  "StateReadCacheConfig" should "keep soft references for unset sizes (the default)" taggedAs (UnitTest, StateTest) in {
+    com.chipprbots.ethereum.utils.StateReadCacheConfig.codeCacheStrong shouldBe false
+    com.chipprbots.ethereum.utils.StateReadCacheConfig.codeSizeCacheStrong shouldBe false
+    com.chipprbots.ethereum.utils.StateReadCacheConfig.decodedNodeCacheStrong shouldBe false
+  }
+
+  private def resolve(conf: String, heap: Long) =
+    com.chipprbots.ethereum.utils.StateReadCacheConfig
+      .resolveAll(Some(com.typesafe.config.ConfigFactory.parseString(conf)), heap)
+
+  "StateReadCacheConfig.resolveAll" should "mark exactly the explicitly set caches as strong" taggedAs (
+    UnitTest,
+    StateTest
+  ) in {
+    val r = resolve("code-cache-bytes = 1000000\njumpdest-cache-bytes = 0", 8L << 30)
+    r("code-cache-bytes") shouldBe com.chipprbots.ethereum.utils.StateReadCacheConfig.Sizing(1000000L, true)
+    r("jumpdest-cache-bytes").explicit shouldBe true
+    r("jumpdest-cache-bytes").bytes shouldBe 0L
+    Seq("code-size-cache-bytes", "decoded-node-cache-bytes", "jumpdest-block-memo-bytes").foreach { k =>
+      withClue(k)(r(k).explicit shouldBe false)
+    }
+    com.chipprbots.ethereum.utils.StateReadCacheConfig.isExplicit(None, "code-cache-bytes") shouldBe false
+  }
+
+  it should "not scale the soak sizes (about 35% of an 8 GiB heap)" taggedAs (UnitTest, StateTest) in {
+    val heap = 8L << 30
+    val r = resolve(
+      "code-cache-bytes = 2415919104\njumpdest-cache-bytes = 314572800\ndecoded-node-cache-bytes = 268435456",
+      heap
+    )
+    r("code-cache-bytes").bytes shouldBe 2415919104L
+    r("jumpdest-cache-bytes").bytes shouldBe 314572800L
+    r("decoded-node-cache-bytes").bytes shouldBe 268435456L
+  }
+
+  it should "scale explicit sizes down proportionally when they total more than 60% of the heap" taggedAs (
+    UnitTest,
+    StateTest
+  ) in {
+    val heap = 10L << 30
+    // each under the 50% per-cache ceiling, total 90% of the heap
+    val r = resolve(s"code-cache-bytes = ${heap * 4 / 10}\ndecoded-node-cache-bytes = ${heap * 5 / 10}", heap)
+    val limit = (heap * 0.6).toLong
+    val total = r("code-cache-bytes").bytes + r("decoded-node-cache-bytes").bytes
+    total should be <= limit
+    total should be >= limit - 2 // proportional, nothing wasted
+    r("code-cache-bytes").bytes.toDouble / r("decoded-node-cache-bytes").bytes shouldBe (0.8 +- 0.001)
+    // an unset cache is not scaled, still its default capped by its fraction
+    r("code-size-cache-bytes").bytes shouldBe math.min(64L << 20, (heap * 0.02).toLong)
+  }

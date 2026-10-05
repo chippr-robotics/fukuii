@@ -15,12 +15,21 @@ import java.lang.ref.SoftReference
   * process, and they stay bounded by the budget when there is room. A cleared entry reads as a miss, is dropped from
   * the map and returns its weight to the budget.
   *
+  * `strongValues = true` holds the values strongly instead, still bounded by the byte budget: for a cache whose size
+  * the operator set explicitly, the collector must not empty it during heavy blocks, and the operator took on the heap
+  * commitment.
+  *
   * Callers decide what is safe to put in: these caches hold only values that are immutable under their key.
   */
-final class ByteBoundedLru[K, V](val maxBytes: Long, weigh: V => Long):
+final class ByteBoundedLru[K, V](val maxBytes: Long, weigh: V => Long, val strongValues: Boolean = false):
 
+  /** In soft mode the value lives only behind the [[SoftReference]]; in strong mode (`strongValues`: an operator-sized
+    * cache the collector must not shrink) it is held by `strong` and the reference is empty and never enqueued.
+    */
   final private class Entry(val key: K, value: V, val weight: Long, queue: ReferenceQueue[V])
-      extends SoftReference[V](value, queue)
+      extends SoftReference[V](if strongValues then null.asInstanceOf[V] else value, queue):
+    val strong: V = if strongValues then value else null.asInstanceOf[V]
+    def held(): V = if strongValues then strong else this.get()
 
   private val queue = new ReferenceQueue[V]
   private val map = new java.util.LinkedHashMap[K, Entry](256, 0.75f, true)
@@ -39,12 +48,13 @@ final class ByteBoundedLru[K, V](val maxBytes: Long, weigh: V => Long):
 
   def get(key: K): Option[V] = Option(getOrNull(key))
 
-  /** The value for `key`, or null (absent, evicted, or reclaimed by the collector). */
+  /** The value for `key`, or null (absent, evicted, or reclaimed by the collector; strong caches are never reclaimed).
+    */
   def getOrNull(key: K): V = synchronized {
     val e = map.get(key)
     if e == null then null.asInstanceOf[V]
     else
-      val v = e.get()
+      val v = e.held()
       if v == null then
         map.remove(key)
         used -= e.weight
