@@ -24,6 +24,7 @@ import com.chipprbots.ethereum.blockchain.sync.snap.ChainDownloader
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController.StartRegularSyncBootstrapByHash
 import com.chipprbots.ethereum.blockchain.sync.snap.StorageTaskFile
 import com.chipprbots.ethereum.consensus.ConsensusAdapter
+import com.chipprbots.ethereum.consensus.ReorgStateHandler
 import com.chipprbots.ethereum.consensus.engine.DesignatedHead
 import com.chipprbots.ethereum.consensus.engine.ForkChoiceManager
 import com.chipprbots.ethereum.consensus.mess.MESSConfig
@@ -199,7 +200,8 @@ object SyncController:
       configBuilder: BlockchainConfigBuilder,
       messConfig: Option[MESSConfig] = None,
       forkChoiceManagerOpt: Option[ForkChoiceManager] = None,
-      externalSchedulerOpt: Option[Scheduler] = None
+      externalSchedulerOpt: Option[Scheduler] = None,
+      reorgState: ReorgStateHandler = ReorgStateHandler.NoOp
   ): Behavior[Command] =
     Behaviors.setup { ctx =>
       Behaviors.withTimers { timers =>
@@ -226,7 +228,8 @@ object SyncController:
           configBuilder,
           messConfig,
           forkChoiceManagerOpt,
-          externalSchedulerOpt
+          externalSchedulerOpt,
+          reorgState
         )
         impl.setup()
         impl.withPostStop(impl.idle())
@@ -263,7 +266,8 @@ object SyncController:
       configBuilder: BlockchainConfigBuilder,
       messConfig: Option[MESSConfig],
       forkChoiceManagerOpt: Option[ForkChoiceManager],
-      externalSchedulerOpt: Option[Scheduler]
+      externalSchedulerOpt: Option[Scheduler],
+      reorgState: ReorgStateHandler
   ):
     // scalastyle:on parameter.number
 
@@ -1709,7 +1713,8 @@ object SyncController:
             pendingTransactionsManager,
             blockTopic,
             configBuilder,
-            ctx.self
+            ctx.self,
+            reorgState
           ),
           s"regular-sync-$syncGeneration",
           DispatcherSelector.fromConfig("sync-dispatcher")
@@ -2446,7 +2451,8 @@ object SyncController:
             pendingTransactionsManager,
             blockTopic,
             configBuilder,
-            ctx.self
+            ctx.self,
+            reorgState
           ),
           s"regular-sync-bootstrap-$gen"
         )

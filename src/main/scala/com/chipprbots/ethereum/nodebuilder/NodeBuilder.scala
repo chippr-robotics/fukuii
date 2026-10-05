@@ -1099,7 +1099,8 @@ trait SyncControllerBuilder extends SyncControllerRefBuilder:
           syncConfig,
           this,
           messConfigOpt,
-          forkChoiceManagerForSync
+          forkChoiceManagerForSync,
+          reorgState = blockchain
         ),
         "sync-controller"
       )

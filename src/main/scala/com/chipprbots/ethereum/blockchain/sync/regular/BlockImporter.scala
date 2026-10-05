@@ -29,6 +29,7 @@ import com.chipprbots.ethereum.blockchain.sync.regular.BlockBroadcasterActor.Bro
 import com.chipprbots.ethereum.blockchain.sync.regular.BlockImporter.Command
 import com.chipprbots.ethereum.blockchain.sync.regular.RegularSync.ProgressProtocol
 import com.chipprbots.ethereum.consensus.ConsensusAdapter
+import com.chipprbots.ethereum.consensus.ReorgStateHandler
 import com.chipprbots.ethereum.consensus.engine.InvalidChainReporter
 import com.chipprbots.ethereum.crypto.kec256
 import com.chipprbots.ethereum.db.storage.EvmCodeStorage
@@ -80,6 +81,30 @@ object BlockImporter:
   private[regular] def claimBulkCodeRecovery(): Boolean = bulkCodeRecoveryClaimed.compareAndSet(false, true)
 
   private[regular] def resetBulkCodeRecoveryForTests(): Unit = bulkCodeRecoveryClaimed.set(false)
+
+  /** SYNC-FORK rewind of the canonical index to `target`, plus the reference-count undo of the blocks it
+    * un-canonicalises.
+    *
+    * `setCanonicalChainHead` deletes the index entries target+1..currentBest and moves best, but never touches state
+    * bookkeeping: those blocks keep their applied `bd` records while no longer canonical, so under basic pruning the
+    * replacement branch's execution can prune nodes it still uses (MissingNode). Same undo `ConsensusImpl.settleHead`
+    * performs for a reorg (#1471). The hashes must be read BEFORE the rewind removes the index. A block with no record
+    * (SNAP-synced) is a no-op; a block later re-executed rewrites its record as applied, so the undo is safe.
+    */
+  private[regular] def rewindCanonicalChain(
+      reader: BlockchainReader,
+      writer: BlockchainWriter,
+      reorgState: ReorgStateHandler,
+      target: BigInt,
+      targetHash: BlockHash,
+      currentBest: BigInt
+  ): Unit =
+    val abandoned: Seq[(BigInt, ByteString)] =
+      if currentBest > target then
+        ((target + 1) to currentBest).flatMap(n => reader.getCanonicalHashByNumber(n).map(h => (n, h.value)))
+      else Nil
+    writer.setCanonicalChainHead(target, targetHash, currentBest)
+    if abandoned.nonEmpty then reorgState.abandonBlockStates(abandoned)
 
   private[regular] case object SyncRetryTick extends Command
   private[regular] val RetryKey = "BlockImporterRetry"
@@ -151,7 +176,8 @@ object BlockImporter:
       blockchain: Blockchain,
       blacklist: Blacklist,
       configBuilder: BlockchainConfigBuilder,
-      peersClient: Option[TypedActorRef[PeersClient.Command]] = None
+      peersClient: Option[TypedActorRef[PeersClient.Command]] = None,
+      reorgState: ReorgStateHandler = ReorgStateHandler.NoOp
   ): Behavior[Command] =
     Behaviors.setup { ctx =>
       Behaviors.withTimers { timers =>
@@ -177,7 +203,8 @@ object BlockImporter:
           blockchain,
           blacklist,
           configBuilder,
-          peersClient.map(pc => new BlockAccessListFetcher(pc)(using ctx.system.scheduler))
+          peersClient.map(pc => new BlockAccessListFetcher(pc)(using ctx.system.scheduler)),
+          reorgState
         )
         timers.startTimerWithFixedDelay(RetryKey, SyncRetryTick, syncConfig.syncRetryInterval)
         logic.idle
@@ -270,7 +297,8 @@ final private class BlockImporterLogic(
     blockchain: Blockchain,
     blacklist: Blacklist,
     configBuilder: BlockchainConfigBuilder,
-    balFetcher: Option[BlockAccessListFetcher]
+    balFetcher: Option[BlockAccessListFetcher],
+    reorgState: ReorgStateHandler
 ):
   import BlockImporter.*
   import configBuilder.*
@@ -1096,7 +1124,7 @@ final private class BlockImporterLogic(
               lca,
               capturedBest
             )
-            blockchainWriter.setCanonicalChainHead(lca, lcaHeader.hash, capturedBest)
+            rewindCanonicalChain(lca, lcaHeader.hash, capturedBest)
             unknownParentStrikes = Map.empty
             fetcher ! BlockFetcher.InvalidateBlocksFrom(
               lca + 1,
@@ -1139,7 +1167,7 @@ final private class BlockImporterLogic(
           floor,
           snapPivot
         )
-        blockchainWriter.setCanonicalChainHead(floor, floorHeader.hash, capturedBest)
+        rewindCanonicalChain(floor, floorHeader.hash, capturedBest)
         unknownParentStrikes = Map.empty
         fetcher ! BlockFetcher.InvalidateBlocksFrom(floor + 1, "SYNC-FORK rollback", shouldBlacklist = false)
       case None =>
@@ -1148,6 +1176,9 @@ final private class BlockImporterLogic(
           floor
         )
         supervisor ! SyncProtocol.RegularSyncStuck(floor, s"no header at fork recovery floor $floor")
+
+  private def rewindCanonicalChain(target: BigInt, targetHash: BlockHash, currentBest: BigInt): Unit =
+    BlockImporter.rewindCanonicalChain(blockchainReader, blockchainWriter, reorgState, target, targetHash, currentBest)
 
   private def bestKnownBlockNumber: BigInt = blockchainReader.getBestBlockNumber
 
