@@ -327,9 +327,25 @@ class PathHealPresenceSpec extends ScalaTestWithActorTestKit() with AnyFlatSpecL
         coordinator => coordinator ! TrieNodeHealingCoordinator.StartTrieNodeHealing(trie.root.hash)
       }
 
-      // The queue dedups by hash, so the locations may be fetched in successive rounds; the walk keeps finding the
-      // remaining one until both are present. Both must be requested and both must end up written at their paths.
-      requests.flatten.toSet shouldBe pathsets(Seq(trie("s0"), trie("s1")))
+      // The queue dedups by hash, so one location is requested and the node is written at both (path aliases).
+      requests.flatten.toSet.subsetOf(pathsets(Seq(trie("s0"), trie("s1")))) shouldBe true
+      readAtPath(pns, trie("s0")).map(ByteString(_)) shouldBe Some(trie("s0").encoded)
+      readAtPath(pns, trie("s1")).map(ByteString(_)) shouldBe Some(trie("s1").encoded)
+    }
+  }
+
+  it should "heal every location sharing a hash from ONE fetch — no per-pass trickle (path aliases)" taggedAs UnitTest in {
+    val trie = twinStorageTrie()
+    withPathStorage { pns =>
+      seedPath(pns, trie.nodes.filterNot(n => n.label == "s0" || n.label == "s1"))
+
+      val requests = healAgainst(trie.served, trie.root.hash, StorageScheme.Path, Some(pns), new TestMptStorage()) {
+        coordinator => coordinator ! TrieNodeHealingCoordinator.StartTrieNodeHealing(trie.root.hash)
+      }
+
+      // The queue dedups by hash, so exactly ONE location is requested; the node is written at BOTH. Without the
+      // alias write the other location stays missing and a second request round is needed (one per pass, live soak).
+      requests.flatten.size shouldBe 1
       readAtPath(pns, trie("s0")).map(ByteString(_)) shouldBe Some(trie("s0").encoded)
       readAtPath(pns, trie("s1")).map(ByteString(_)) shouldBe Some(trie("s1").encoded)
     }

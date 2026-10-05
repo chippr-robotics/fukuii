@@ -359,6 +359,12 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
   // Dedup set for pending tasks — prevents the same missing node from being queued multiple times
   private val pendingHashSet = mutable.Set[ByteString]()
 
+  // Path scheme only: a node hash can be missing at MANY paths (identical subtrees / shared nodes). pendingHashSet
+  // dedups the queue by hash, so only one path per hash is requested; the others were previously dropped and the
+  // next verification walk found them missing again (fixed ~10/pass convergence). Remember the dropped paths here
+  // and write the one fetched node at every path when it arrives.
+  private val pathAliases = mutable.Map[ByteString, mutable.LinkedHashMap[Seq[ByteString], HealingEntry]]()
+
   // --- spec 003: scoped post-heal verification (FR-001) ---
   // Bounded, per-round, in-memory accumulator of the nodes HEALED this round (their HealingEntry,
   // captured at the single heal site in handleResponse). Mirrors the pendingTasks/pendingHashSet
@@ -1001,6 +1007,7 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
         activeRequests.clear()
         pendingTasks.clear()
         pendingHashSet.clear()
+        pathAliases.clear()
         clearHealedPathsSet() // spec 003 C1: abandonment — drop the scoped-verification scope (hygiene)
         // Path scheme: the controller treats StateHealingComplete as a VERIFIED clean walk (it runs no walk of its own),
         // and a force-complete has not verified anything — signal abandonment so it hands off to lazy healing instead.
@@ -1041,6 +1048,7 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
         clearHealedPathsSet() // spec 003 C1/F5: old-root healed paths are stale — clear before next gate
         pendingTasks.clear() // Will be re-populated by root reseed + inline discovery / trie walk from controller
         pendingHashSet.clear()
+        pathAliases.clear()
         statelessPeers.clear()
         emptyResponseStrikes.clear() // fresh slate on the new root (mirrors statelessPeers clear)
         peerCooldownUntilMs.clear()
@@ -1529,6 +1537,13 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
         pendingHashSet += hash
         HealingEntry(pathset = pathset, hash = hash)
     }
+    if storageScheme == StorageScheme.Path then
+      // Only the paths NOT selected above are aliases (the selected path is written as the task itself).
+      val selected = entries.map(_.pathset).toSet
+      pathsAndHashes.foreach { case (pathset, hash) =>
+        if pendingHashSet.contains(hash) && !selected.contains(pathset) then
+          pathAliases.getOrElseUpdate(hash, mutable.LinkedHashMap.empty).update(pathset, HealingEntry(pathset, hash))
+      }
     val deduped = pathsAndHashes.size - entries.size
     pendingTasks ++= entries
     persistFrontier(entries) // Layer 2: mirror new frontier entries to the persisted CF
@@ -1683,12 +1698,14 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
               // PathScheme: write directly by nibble path (no batching needed — healing is low-volume).
               // pathset = [HP-path] for account trie, [accountHash32, HP-path] for storage trie.
               pathNodeStorageOpt.foreach { pns =>
-                taskByHash.get(nodeHash).foreach { task =>
+                def writeAt(task: HealingEntry): Unit =
                   val nibbles = com.chipprbots.ethereum.mpt.HexPrefix.decode(task.pathset.last.toArray)._1
                   if task.pathset.size > 1 then
                     pns.writeStorageNode(ByteString(task.pathset.head), nibbles, nodeData.toArray)
                   else pns.writeAccountNode(nibbles, nodeData.toArray)
-                }
+                taskByHash.get(nodeHash).foreach(writeAt)
+                // Same hash missing at other paths (deduped out of the queue): write at those paths too.
+                pathAliases.remove(nodeHash).foreach(_.values.foreach(writeAt))
               }
           healedCount += 1
           totalNodesHealed += 1
