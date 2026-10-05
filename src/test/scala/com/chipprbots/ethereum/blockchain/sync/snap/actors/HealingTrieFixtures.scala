@@ -87,7 +87,8 @@ object HealingTrieFixtures:
       // (unchanged); the moving-root tests pass true to exercise seed-from-absent-root / single-root fetch / re-peg.
       movingRootDeltaHeal: Boolean = false,
       // Where bytecode lives; Some(_) makes the coordinator report healed accounts whose code is absent from it.
-      evmCodeStorage: Option[com.chipprbots.ethereum.db.storage.EvmCodeStorage] = None
+      evmCodeStorage: Option[com.chipprbots.ethereum.db.storage.EvmCodeStorage] = None,
+      walkLocalOnly: Option[java.util.concurrent.atomic.AtomicBoolean] = None
   )(implicit testKit: ActorTestKit): TypedActorRef[TrieNodeHealingCoordinator.Command] =
     testKit.spawn(
       TrieNodeHealingCoordinator(
@@ -118,7 +119,8 @@ object HealingTrieFixtures:
         decoupledHealServeRoot = decoupledHealServeRoot,
         decoupledHealMaxAttemptsNoRefresh = decoupledHealMaxAttemptsNoRefresh,
         movingRootDeltaHeal = movingRootDeltaHeal,
-        evmCodeStorage = evmCodeStorage
+        evmCodeStorage = evmCodeStorage,
+        walkLocalOnly = walkLocalOnly
       )
     )
 

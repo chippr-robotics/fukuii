@@ -1644,3 +1644,92 @@ class StorageRangeCoordinatorSpec extends ScalaTestWithActorTestKit() with AnyFl
     impl.pendingAccountTries.contains(acct) shouldBe false
     impl.tasks.exists(_.accountHash == acct) shouldBe false
   }
+
+  // ── Zombie coordinator (devnet-8, 2026-10-03) ─────────────────────────────
+  // The tracker's request timers outlive the coordinator. [STORAGE-FORCE-COMPLETE] kept firing for 6+ minutes after
+  // SNAP had completed and the coordinator had been stopped, because nothing cancelled the in-flight request timers.
+
+  private def startWithOneRequestInFlight(requestTracker: SNAPRequestTracker) =
+    val stateRoot = kec256(ByteString("zombie-root"))
+    val networkPeerManager = testKit.createTestProbe[NetworkPeerManagerActor.Command]()
+    val snapSyncController = testKit.createTestProbe[SNAPSyncController.Command]()
+    val peerProbe = testKit.createTestProbe[Any]()
+    val peer = PeerTestHelpers.createTestPeer("storage-peer-zombie", peerProbe.ref.toClassic)
+    val coordinator = srcProps(
+      stateRoot = stateRoot,
+      networkPeerManager = networkPeerManager.ref,
+      requestTracker = requestTracker,
+      mptStorage = new TestMptStorage(),
+      flatSlotStorage = new FlatSlotStorage(EphemDataSource()),
+      maxAccountsPerBatch = 1,
+      maxInFlightRequests = 2,
+      requestTimeout = 30.seconds,
+      snapSyncController = snapSyncController.ref
+    )
+    coordinator ! StorageRangeCoordinator.StartStorageRangeSync(stateRoot)
+    coordinator ! StorageRangeCoordinator.AddStorageTasks(
+      Seq(StorageTask.createStorageTask(kec256(ByteString("zombie-account")), kec256(ByteString("zombie-storage"))))
+    )
+    coordinator ! StorageRangeCoordinator.StoragePeerAvailable(peer)
+    networkPeerManager.expectMessageType[NetworkPeerManagerActor.SendMessageCmd]
+    requestTracker.pendingCount shouldBe 1
+    (coordinator, snapSyncController)
+
+  it should "cancel its in-flight request timers when it stops" taggedAs UnitTest in {
+    val requestTracker = new SNAPRequestTracker()(classicSystem.scheduler)
+    val (coordinator, _) = startWithOneRequestInFlight(requestTracker)
+    testKit.stop(coordinator)
+    requestTracker.pendingCount shouldBe 0
+  }
+
+  it should "cancel its in-flight request timers when it is force-completed" taggedAs UnitTest in {
+    val requestTracker = new SNAPRequestTracker()(classicSystem.scheduler)
+    val (coordinator, snapSyncController) = startWithOneRequestInFlight(requestTracker)
+    coordinator ! StorageRangeCoordinator.ForceCompleteStorage
+    snapSyncController.expectMessage(SNAPSyncController.StorageRangeSyncForceCompleted)
+    requestTracker.pendingCount shouldBe 0
+    testKit.stop(coordinator)
+  }
+
+  // ── StorageRequestTimedOut mailbox path ───────────────────────────────────
+
+  private def implWithOneRequestInFlight() =
+    val (impl, kit) = newImpl(
+      stateRoot = kec256(ByteString("timedout-root")),
+      flatSlotStorage = new FlatSlotStorage(EphemDataSource()),
+      snapSyncControllerRef = testKit.createTestProbe[SNAPSyncController.Command]().ref,
+      maxAccountsPerBatch = 1
+    )
+    val peer = PeerTestHelpers.createTestPeer("timedout-peer", testKit.createTestProbe[Any]().ref.toClassic)
+    val task = StorageTask.createStorageTask(kec256(ByteString("timedout-account")), kec256(ByteString("timedout-sr")))
+    kit.run(StorageRangeCoordinator.AddStorageTasks(Seq(task)))
+    kit.run(StorageRangeCoordinator.StoragePeerAvailable(peer))
+    impl.activeTasks should have size 1
+    (impl, kit, task, impl.activeTasks.keys.head)
+
+  it should "requeue the task and count a failure when the tracker's timeout arrives through the mailbox" taggedAs UnitTest in {
+    val (impl, kit, task, requestId) = implWithOneRequestInFlight()
+    val failuresBefore = impl.consecutiveTaskFailures
+    kit.run(StorageRangeCoordinator.StorageRequestTimedOut(requestId))
+    impl.activeTasks.contains(requestId) shouldBe false
+    // Requeued, and (the peer being available) immediately re-dispatched under a NEW request id.
+    val requeued = impl.tasks.exists(_.accountHash == task.accountHash) ||
+      impl.activeTasks.values.exists(_._2.exists(_.accountHash == task.accountHash))
+    requeued shouldBe true
+    impl.consecutiveTaskFailures shouldBe failuresBefore + 1
+  }
+
+  it should "drop a timeout and a late response for a request abandoned by force-complete" taggedAs UnitTest in {
+    val (impl, kit, _, requestId) = implWithOneRequestInFlight()
+    kit.run(StorageRangeCoordinator.ForceCompleteStorage)
+    impl.activeTasks shouldBe empty
+    val failures = impl.consecutiveTaskFailures
+    val tasksBefore = impl.tasks.size
+    kit.run(StorageRangeCoordinator.StorageRequestTimedOut(requestId))
+    kit.run(
+      StorageRangeCoordinator.StorageRangesResponseMsg(StorageRanges(requestId, slots = Seq.empty, proof = Seq.empty))
+    )
+    impl.consecutiveTaskFailures shouldBe failures
+    impl.tasks.size shouldBe tasksBefore
+    impl.activeTasks shouldBe empty
+  }
