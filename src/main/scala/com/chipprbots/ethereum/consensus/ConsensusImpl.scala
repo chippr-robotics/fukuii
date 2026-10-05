@@ -220,6 +220,8 @@ class ConsensusImpl(
           s"Could not get weight for parent block ${Hex.toHexString(parentHash.toArray)} (number ${branch.head.number - 1})"
         )
 
+  private def followsConsensusLayer: Boolean = designatedHead.exists(_.headBlockHash.isDefined)
+
   private def importToTop(
       branch: NonEmptyList[Block],
       currentBestBlockWeight: ChainWeight,
@@ -227,7 +229,21 @@ class ConsensusImpl(
   )(implicit
       blockchainConfig: BlockchainConfig
   ): ConsensusResult =
-    executeBranch(branch.toList, currentBestBlockWeight, adoptEachBlock = true, accessLists) match
+    // PoS only: an Engine API payload that extended the head wrote its index entry ahead of the best block
+    // (`engine_newPayload` does, the best pointer moving only on forkchoiceUpdated). A different block imported at that
+    // height replaces the entry, and the payload is then non-canonical with its reference counts still applied. Read
+    // before execution overwrites the entries; on a PoW chain `followsConsensusLayer` is false and nothing is read.
+    val displaced: List[(BigInt, BlockHash)] =
+      if followsConsensusLayer then
+        branch.toList.flatMap(b =>
+          blockchainReader.getCanonicalHashByNumber(b.number.value).filterNot(_ == b.hash).map(b.number.value -> _)
+        )
+      else Nil
+    val result = executeBranch(branch.toList, currentBestBlockWeight, adoptEachBlock = true, accessLists)
+    if displaced.nonEmpty then
+      val executed = result._1.map(_.block.number.value).toSet
+      reorgState.abandonBlockStates(displaced.collect { case (n, h) if executed(n) => (n, h.value) })
+    result match
       case (importedBlocks, None) =>
         saveLastBlock(importedBlocks)
         ExtendedCurrentBestBranch(importedBlocks)
@@ -415,7 +431,14 @@ class ConsensusImpl(
   ): Unit =
     executedBlocks.lastOption.foreach { last =>
       val tip = last.block
-      if !selectedByWeight then blockchainWriter.saveBestKnownBlocks(tip.hash, tip.number.value)
+      if !selectedByWeight then
+        blockchainWriter.saveBestKnownBlocks(tip.hash, tip.number.value)
+        // The head moved to the new branch, so the old head's blocks above the fork point left the canonical chain with
+        // their reference-count changes applied: take them back out, and put back an already-executed side parent the
+        // branch builds on (undone when it was executed as a side payload or dropped). Counts only; the index is
+        // deliberately left as this arm always left it. Idempotent through the record's applied flag.
+        reorgState.abandonBlockStates(oldCanonical.map { case (n, h) => (n, h.value) })
+        reorgState.readoptBlockStates(fork.parentSideChain.map { case (n, h) => (n, h.value) })
       else
         // Recomputed from the headers rather than read from BlockData: it is exactly what BlockExecution computes, and
         // it does not depend on the executor having filled the weight in.
