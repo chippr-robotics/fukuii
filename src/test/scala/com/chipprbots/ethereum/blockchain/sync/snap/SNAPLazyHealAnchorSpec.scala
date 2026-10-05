@@ -182,6 +182,40 @@ class SNAPLazyHealAnchorSpec extends ScalaTestWithActorTestKit() with AnyFlatSpe
     ) shouldBe false // target (285487) > currentPivot (285486): strictly newer
   }
 
+  // Platåberget 2026-10-05: the CL head lagged the network by ~110 blocks, both snap servers answered empty-without-
+  // proof for pivot 328440, and clHead - 64 was not newer than it, so the unservable pivot was kept (then 328542 vs
+  // CL head 328606, again equal). unservablePivotTarget is the way out.
+  "SNAPSyncController.unservablePivotTarget" should
+    "re-pivot below the CL head with a smaller offset when the CL target equals the unservable pivot" taggedAs UnitTest in {
+      SNAPSyncController.unservablePivotTarget(
+        clHead = BigInt(328606),
+        pivotBlockOffset = 64,
+        currentPivot = BigInt(328542),
+        peerBest = None,
+        margin = BigInt(50)
+      ) shouldBe Some(BigInt(328574)) // 328606 - 32, strictly newer than 328542
+    }
+
+  it should "prefer the snap peers' tip minus the serve-window margin when that is fresher" taggedAs UnitTest in {
+    SNAPSyncController.unservablePivotTarget(
+      clHead = BigInt(328470),
+      pivotBlockOffset = 64,
+      currentPivot = BigInt(328440),
+      peerBest = Some(BigInt(328580)),
+      margin = BigInt(50)
+    ) shouldBe Some(BigInt(328530))
+  }
+
+  it should "give None when nothing is newer than the unservable pivot, so a stale CL cannot make it flap" taggedAs UnitTest in {
+    SNAPSyncController.unservablePivotTarget(
+      clHead = BigInt(328440),
+      pivotBlockOffset = 64,
+      currentPivot = BigInt(328440),
+      peerBest = Some(BigInt(328440)),
+      margin = BigInt(50)
+    ) shouldBe None
+  }
+
   // forge review follow-up (2nd round): the two lastHealingServeRootBlockToRecord unit tests above pin the
   // HELPER's own logic but not the CALL SITE's wiring to it — reverting the call site to the pre-fix
   // `Some(staleClockNow)` left them green, since they invoke the (still-correct) helper directly. This drives

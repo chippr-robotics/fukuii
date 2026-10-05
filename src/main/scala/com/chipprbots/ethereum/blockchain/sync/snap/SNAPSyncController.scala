@@ -1205,7 +1205,7 @@ private class SNAPSyncControllerImpl(
                   "Refreshing in-place (preserving accounts)."
               )
               consecutivePivotRefreshes = 0 // Reset — accounts completing IS progress
-              refreshPivotInPlace(reason)
+              refreshPivotInPlace(reason, pivotUnservable = true)
             else
               // Accounts still in progress. Enter dormant retry mode — preserving all RocksDB
               // data and waiting for peers with exponential backoff.
@@ -1234,7 +1234,7 @@ private class SNAPSyncControllerImpl(
                 else
                   earlyBehavior =
                     Some(restartSnapSync(s"consecutive stateless pivots ($consecutivePivotRefreshes): $reason"))
-          else refreshPivotInPlace(reason)
+          else refreshPivotInPlace(reason, pivotUnservable = true)
         else ctx.log.info(s"Ignoring PivotStateUnservable in phase=$currentPhase (reason=$reason)")
         earlyBehavior.getOrElse(Behaviors.same)
 
@@ -4135,7 +4135,11 @@ private class SNAPSyncControllerImpl(
     * Downloaded trie nodes are content-addressed (keyed by keccak256 hash), so ~99.9% remain valid across pivot
     * changes. Root mismatch (if any) is resolved during the healing phase.
     */
-  private def refreshPivotInPlace(reason: String, countsTowardHealBudget: Boolean = true): Unit =
+  private def refreshPivotInPlace(
+      reason: String,
+      countsTowardHealBudget: Boolean = true,
+      pivotUnservable: Boolean = false
+  ): Unit =
     ctx.log.info(s"Refreshing pivot in-place: $reason")
 
     // CL-anchored pivot selection for post-merge chains (geth's BeaconSync pattern).
@@ -4164,11 +4168,35 @@ private class SNAPSyncControllerImpl(
         val target = clHead - snapSyncConfig.pivotBlockOffset
         val currentPivot = pivotBlock.getOrElse(BigInt(0))
         if SNAPSyncController.clPivotNotYetAdvanced(clHead, snapSyncConfig.pivotBlockOffset, currentPivot) then
-          ctx.log.info(
-            s"CL-based pivot $target not strictly newer than current $currentPivot " +
-              s"(CL head=$clHead, offset=${snapSyncConfig.pivotBlockOffset}). Skipping refresh."
-          )
-          None
+          // The current pivot is KNOWN unservable (every snap peer answered empty-without-proof for its root) yet the
+          // CL head has not moved far enough to give a newer one: the CL can lag the network (Lighthouse catching up
+          // on Platåberget lagged ~110 blocks), and the roots peers still serve are newer than the CL's head. Never
+          // leave such a pivot in place: take a smaller offset below the CL head, or the snap peers' advertised
+          // tip minus the serve-window margin. The header is still fetched and installed by the normal pivot
+          // bootstrap; a wrong number can only yield an unservable root, which the anchor guard refuses to finalise.
+          val fallback =
+            if pivotUnservable then
+              SNAPSyncController.unservablePivotTarget(
+                clHead,
+                snapSyncConfig.pivotBlockOffset,
+                currentPivot,
+                currentNetworkBestFromSnapPeers(),
+                SnapServeWindowMargin
+              )
+            else None
+          fallback match
+            case Some(t) =>
+              ctx.log.warn(
+                s"CL-based pivot $target not newer than unservable pivot $currentPivot (CL head=$clHead); " +
+                  s"re-pivoting to $t (smaller offset / peer tip) instead of keeping a pivot peers cannot serve."
+              )
+              Some(t)
+            case None =>
+              ctx.log.info(
+                s"CL-based pivot $target not strictly newer than current $currentPivot " +
+                  s"(CL head=$clHead, offset=${snapSyncConfig.pivotBlockOffset}). Skipping refresh."
+              )
+              None
         else
           ctx.log.info(s"Selected CL-anchored pivot $target (CL head=$clHead, current=$currentPivot)")
           Some(target).filter(_ > 0)
@@ -5754,6 +5782,20 @@ object SNAPSyncController:
     * entirely: a test can simulate "PoS chain, live CL hint" by simply passing `Some(...)`, exactly as the
     * `staleReferenceHead` tests already do for `clHeadNumber`.
     */
+  /** Pivot to move to when the current one is known unservable and `clHead - pivotBlockOffset` is not newer than it:
+    * the larger of `clHead - min(offset, 32)` and `peerBest - margin` (peerBest = the snap peers' advertised tip), if
+    * strictly newer than `currentPivot`; None when neither is.
+    */
+  private[snap] def unservablePivotTarget(
+      clHead: BigInt,
+      pivotBlockOffset: Long,
+      currentPivot: BigInt,
+      peerBest: Option[BigInt],
+      margin: BigInt
+  ): Option[BigInt] =
+    val smallerOffset = clHead - BigInt(math.min(pivotBlockOffset, 32L))
+    (Seq(smallerOffset) ++ peerBest.map(_ - margin)).filter(_ > currentPivot).maxOption
+
   private[snap] def clPivotNotYetAdvanced(clHead: BigInt, pivotBlockOffset: Long, currentPivot: BigInt): Boolean =
     (clHead - pivotBlockOffset) <= currentPivot
 
