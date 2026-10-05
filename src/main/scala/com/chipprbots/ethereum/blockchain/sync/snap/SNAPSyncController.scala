@@ -3343,7 +3343,7 @@ private class SNAPSyncControllerImpl(
 
     if snapPeerCount == 0 then
       val gracePeriod = snapSyncConfig.snapCapabilityGracePeriod
-      ctx.log.warn(s"No peers with snap/1 capability found ($peersToDownloadFrom.size peers connected)")
+      ctx.log.warn(s"No peers with snap/1 capability found (${peersToDownloadFrom.size} peers connected, ${peersToDownloadFrom.size - snapPeerCount} without snap)")
       ctx.log.warn(s"Scheduling snap capability check in ${gracePeriod.toSeconds}s before entering dormant mode")
       timers.startSingleTimer(SnapCapabilityCheckKey, CheckSnapCapability, gracePeriod)
     else
