@@ -261,3 +261,64 @@ class StateReadCachesSpec extends AnyFlatSpec with Matchers:
     com.chipprbots.ethereum.utils.StateReadCacheConfig.jumpDestBlockMemoBytes should be <= (heap * 0.02).toLong
     com.chipprbots.ethereum.utils.StateReadCacheConfig.worldReadMemoEntries.toLong should be <= heap / 32768
   }
+
+  private def sizing(conf: String, path: String, default: Long, fraction: Double, heap: Long): Long =
+    com.chipprbots.ethereum.utils.StateReadCacheConfig.effectiveBytes(
+      Some(com.typesafe.config.ConfigFactory.parseString(conf)),
+      path,
+      default,
+      fraction,
+      heap
+    )
+
+  "StateReadCacheConfig.effectiveBytes" should "cap an unset default at its heap fraction" taggedAs (
+    UnitTest,
+    StateTest
+  ) in {
+    val heap = 1L << 30 // 1 GiB
+    sizing("", "code-cache-bytes", 256L << 20, 0.05, heap) shouldBe (heap * 0.05).toLong
+    sizing("other = 1", "code-cache-bytes", 256L << 20, 0.05, heap) shouldBe (heap * 0.05).toLong
+    // a default already below the fraction is unchanged
+    sizing("", "x", 1L << 20, 0.05, heap) shouldBe (1L << 20)
+  }
+
+  it should "honour an explicit value above the heap fraction" taggedAs (UnitTest, StateTest) in {
+    val heap = 8L << 30 // 8 GiB; 5% = ~410 MB
+    val want = 2560L << 20 // 2.5 GiB, 31% of heap
+    sizing(s"code-cache-bytes = $want", "code-cache-bytes", 256L << 20, 0.05, heap) shouldBe want
+    sizing("code-cache-bytes = 0", "code-cache-bytes", 256L << 20, 0.05, heap) shouldBe 0L
+  }
+
+  it should "clamp an explicit value to the safety ceiling of 50% of the heap" taggedAs (UnitTest, StateTest) in {
+    val heap = 8L << 30
+    sizing(s"code-cache-bytes = ${heap}", "code-cache-bytes", 256L << 20, 0.05, heap) shouldBe heap / 2
+  }
+
+  it should "ship the base config with the byte-size keys unset, so the fractions apply" taggedAs (
+    UnitTest,
+    StateTest
+  ) in {
+    val shipped = com.typesafe.config.ConfigFactory.parseResources("conf/base/state-read-caches.conf")
+    val sec = shipped.getConfig("state-read-caches")
+    Seq(
+      "code-cache-bytes",
+      "code-size-cache-bytes",
+      "decoded-node-cache-bytes",
+      "jumpdest-cache-bytes",
+      "jumpdest-block-memo-bytes"
+    ).foreach(k => withClue(k)(sec.hasPath(k) shouldBe false))
+  }
+
+  "EvmCodeStorage.getForExecution" should "serve a cache hit without copying the code" taggedAs (
+    UnitTest,
+    StateTest
+  ) in {
+    val storage = new EvmCodeStorage(EphemDataSource())
+    val code = ByteString(Array.fill[Byte](1024)(0x5b))
+    val hash = kec256(code)
+    storage.put(hash, code).commit()
+    val first = storage.getForExecution(hash).get // miss: fills the cache
+    val second = storage.getForExecution(hash).get
+    (second should be).theSameInstanceAs(first)
+    second.toArrayUnsafe() shouldBe code.toArray
+  }

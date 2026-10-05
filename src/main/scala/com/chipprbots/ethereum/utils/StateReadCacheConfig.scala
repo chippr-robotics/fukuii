@@ -1,6 +1,9 @@
 package com.chipprbots.ethereum.utils
 
+import com.typesafe.config.Config as TsConfig
 import com.typesafe.config.ConfigFactory
+
+import org.slf4j.LoggerFactory
 
 /** Sizes of the in-process read caches on the block-import path (`state-read-caches` in `base/state-read-caches.conf`).
   *
@@ -26,27 +29,59 @@ object StateReadCacheConfig:
     */
   lazy val importTimingLog: Boolean = flag("import-timing-log", false)
 
-  /** The configured size, never more than `fraction` of the JVM's maximum heap. A fixed absolute default is right for a
-    * 4 GB node and fatal for a 1.5 GB test JVM (the EEST payload-builder corpus ran out of heap in CI with the caches
-    * at their absolute defaults); a configured size of 0 stays 0 (cache off).
+  private lazy val log = LoggerFactory.getLogger(getClass)
+
+  /** An explicitly configured size is honoured as-is up to this share of the max heap (a safety ceiling: a typo such as
+    * a size in the wrong unit must not take the whole heap). Above it the size is clamped and a WARN is logged.
     */
-  private def cappedByHeap(configured: Long, fraction: Double): Long =
-    math.min(configured, (Runtime.getRuntime.maxMemory * fraction).toLong)
+  val ExplicitCeilingFraction: Double = 0.5
+
+  /** The size of one cache. The heap-fraction cap applies to the DEFAULT only: an absolute default is right for a 4 GB
+    * node and fatal for a 1.5 GB test JVM (the EEST payload-builder corpus ran out of heap in CI), so an unset key is
+    * `min(default, fraction x max heap)`. A key the operator SET (`hasPath`) is honoured, bounded only by the safety
+    * ceiling of [[ExplicitCeilingFraction]] of the max heap. A size of 0 stays 0 (cache off).
+    */
+  def effectiveBytes(
+      section: Option[TsConfig],
+      path: String,
+      default: Long,
+      fraction: Double,
+      maxHeap: Long
+  ): Long =
+    section.filter(_.hasPath(path)).map(_.getLong(path)) match
+      case Some(explicit) =>
+        val ceiling = (maxHeap * ExplicitCeilingFraction).toLong
+        if explicit > ceiling then
+          log.warn(
+            s"state-read-caches.$path = $explicit exceeds ${(ExplicitCeilingFraction * 100).toInt}% of the max heap " +
+              s"($maxHeap); clamped to $ceiling"
+          )
+          ceiling
+        else explicit
+      case None => math.min(default, (maxHeap * fraction).toLong)
+
+  private def cappedByHeap(path: String, default: Long, fraction: Double): Long =
+    val maxHeap = Runtime.getRuntime.maxMemory
+    val v = effectiveBytes(section, path, default, fraction, maxHeap)
+    val origin =
+      if section.exists(_.hasPath(path)) then "configured" else s"default, capped at ${(fraction * 100).toInt}% of heap"
+    log.info(s"state-read-caches.$path effective size = $v bytes ($origin; max heap $maxHeap)")
+    v
 
   /** Process-wide budget of the execution-side code cache (all `EvmCodeStorage` instances share it); 0 disables it. At
-    * most 5% of the max heap.
+    * most 5% of the max heap unless the key is set explicitly (then up to 50%).
     */
-  lazy val codeCacheBytes: Long = cappedByHeap(bytes("code-cache-bytes", 256L * 1024 * 1024), 0.05)
+  lazy val codeCacheBytes: Long = cappedByHeap("code-cache-bytes", 256L * 1024 * 1024, 0.05)
 
   /** Process-wide budget of the code-size cache (code hash to length, so EXTCODESIZE-style checks never load code), at
     * about 256 bytes an entry (geth keeps 1,000,000 entries); 0 disables it. At most 2% of the max heap.
     */
-  lazy val codeSizeCacheBytes: Long = cappedByHeap(bytes("code-size-cache-bytes", 64L * 1024 * 1024), 0.02)
+  lazy val codeSizeCacheBytes: Long = cappedByHeap("code-size-cache-bytes", 64L * 1024 * 1024, 0.02)
 
   /** Process-wide budget of the decoded-node cache, in estimated retained bytes (see `DecodedNodeCache`); 0 disables
     * it. At most 4% of the max heap.
     */
-  lazy val decodedNodeCacheBytes: Long = cappedByHeap(bytes("decoded-node-cache-bytes", 96L * 1024 * 1024), 0.04)
+  lazy val decodedNodeCacheBytes: Long = cappedByHeap("decoded-node-cache-bytes", 96L * 1024 * 1024, 0.04)
 
   /** Entries one world's base-trie read memos may hold in total; 0 disables them. At most one entry per 32 KiB of max
     * heap (about 150 bytes each, so under 0.5%).
@@ -55,12 +90,12 @@ object StateReadCacheConfig:
     math.min(bytes("world-read-memo-entries", 250000L), Runtime.getRuntime.maxMemory / 32768).toInt
 
   /** Process-wide budget of the JUMPDEST analysis cache; 0 disables it. At most 1% of the max heap. */
-  lazy val jumpDestCacheBytes: Long = cappedByHeap(bytes("jumpdest-cache-bytes", 32L * 1024 * 1024), 0.01)
+  lazy val jumpDestCacheBytes: Long = cappedByHeap("jumpdest-cache-bytes", 32L * 1024 * 1024, 0.01)
 
   /** Budget of one block's JUMPDEST analysis memo (`JumpDestAnalysis.BlockMemo`); 0 disables it. At most 2% of the max
     * heap. Entries are truncated analyses (often a few words), so this is rarely approached.
     */
-  lazy val jumpDestBlockMemoBytes: Long = cappedByHeap(bytes("jumpdest-block-memo-bytes", 64L * 1024 * 1024), 0.02)
+  lazy val jumpDestBlockMemoBytes: Long = cappedByHeap("jumpdest-block-memo-bytes", 64L * 1024 * 1024, 0.02)
 
   // BAL-driven prefetch (EIP-7928, Amsterdam blocks that arrive with their access list): see `BalPrefetcher`.
 
