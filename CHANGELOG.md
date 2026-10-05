@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.9.0] - 2026-10-03
+## [0.9.0] - 2026-10-05
 
 The Glamsterdam release. Sepolia activates Amsterdam at timestamp 1791294816 (2026-10-06 13:53:36 UTC);
 every Sepolia node must run 0.9.0 before then. Tracking issue: #1415 (spec: `specs/009-amsterdam-fork-support`,
@@ -64,6 +64,20 @@ every Sepolia node must run 0.9.0 before then. Tracking issue: #1415 (spec: `spe
   through block import, and the payload builder rebuilds the corpus's 27,352 blocks with identical hashes.
 - `docs/specifications/GLAMSTERDAM.md` (EIP set, schedule, implementation status, Platåberget test guide) and
   the 0.9.0 release notes.
+- **Block access list prefetch and fetch.** On an Amsterdam block whose access list hashes to the header's
+  `blockAccessListHash`, a bounded pool reads the listed accounts, storage slots and contract code from the
+  parent state in parallel with execution (`state-read-caches.bal-prefetch-*`, #1467). Regular-sync catch-up
+  fetches the lists from an eth/71 peer (`GetBlockAccessLists`); a list that does not match its header hash is
+  dropped and the peer blacklisted (#1468). A peer list is only a prefetch hint: block validity is decided by the
+  list fukuii computes itself. ETC never supplies a list and does not prefetch.
+- **SNAP sync option** `fukuii.sync.snap-sync.defer-chain-backfill-until-state-complete`: body and receipt backfill
+  waits until state is finalised while headers keep downloading. `true` on Ethereum, Sepolia and Platåberget,
+  `false` elsewhere (#1466).
+- **Read-cache controls** (`state-read-caches`): `jumpdest-block-memo-bytes` (#1460, #1463) and strongly held
+  explicit cache sizes (#1476, see Changed). `[IMPORT-TIMING]` reports where a block's import time went; it logs
+  at DEBUG unless `import-timing-log = true`.
+- Diagnostics: a Disconnect received instead of Hello is logged with its reason, as are `TCP_CLOSED` and
+  `DISCONNECT_SENT` for handshaked peers (#1479).
 
 ### Changed
 - The fork id carries the head's timestamp in eth/68, 69 and 70+ `Status`, the ENR and DNS filters (#1429), so
@@ -78,6 +92,23 @@ every Sepolia node must run 0.9.0 before then. Tracking issue: #1415 (spec: `spe
 - `eth_simulateV1` builds the 23-field Amsterdam header at Amsterdam timestamps (#1430).
 - `debug_*` and `trace_*` replays of an Amsterdam block re-execute it as block import did (#1430).
 - The docs link check builds the site at its served `/fukuii/` path.
+- **eth/70 and eth/71 are advertised on Ethereum, Sepolia and Platåberget** (`network.protocols { eth70 = true,
+  eth71 = true }` in their configs, #1475). Peers that offer only eth/68-69 negotiate down. ETC, Mordor and
+  Gorgoroth are unchanged; eth/72 and snap/2 stay off.
+- **`state-read-caches` explicit sizes (#1476).** A byte-size key that is set is used as given and held with strong
+  references, so the collector cannot empty it. Each explicit cache is clamped to 50% of the max heap; explicit
+  caches totalling more than 60% are scaled down proportionally with a WARN; the recommended total is 35% or less.
+  A key left unset keeps its default, capped at a fraction of the heap and held softly, as before. The shipped
+  `state-read-caches.conf` leaves the byte-size keys unset. Each cache's effective size and reference type is
+  logged at INFO at startup.
+- Block execution analyses each contract's JUMPDESTs once per block and caches decoded trie nodes and contract
+  code by hash (#1460, #1463); code reads no longer fill RocksDB's block cache (#1467); JUMPDEST sizing is
+  O(words) and `Address.hashCode` is computed once (#1477). State roots, gas and iteration order are unchanged.
+- Contract code that is missing is no longer executed as empty: the read throws, the node fetches the code over
+  SNAP `GetByteCodes`, and a node that was SNAP-synced recovers all missing code in one bulk scan (#1456, #1459).
+- SNAP sync fetches bytecode of healed accounts before it finalises (#1456). State-node fetches rotate across
+  snap peers at once instead of waiting 5 s per bad reply; an empty reply no longer blacklists the peer (#1470).
+  Snap-serving peers are kept through a local stall (#1479).
 
 ### Fixed
 - Sepolia's EIP-6110 deposits are read from the chain's own deposit contract; it was wrong for Sepolia since
@@ -92,13 +123,42 @@ every Sepolia node must run 0.9.0 before then. Tracking issue: #1415 (spec: `spe
   import's `ImportDone` and wedges regular sync (every chain, ETC included); deferred batches are dropped when
   the failed import already rewound the fetcher (#1432).
 - The Platåberget configs no longer set the removed `do-fast-sync` key.
+- **A failed CREATE / CREATE2 keeps its memory expansion** (devnet-8 block 319453 state root, #1461).
+- **Import atomicity and reference counts (basic pruning, the default; every chain).** Each block's state, block,
+  receipts and best-block pointer are committed in one batch, a failed block leaves nothing behind, and the
+  validated prefix of a failed batch is adopted rather than re-applied (#1465, which supersedes the closed #1464).
+  Block execution and commit are serialised per block hash, so Engine API `newPayload` and the
+  regular-sync importer cannot commit one block twice, and the commit is idempotent (#1481). Applying a block
+  twice skewed reference counts and could prune a live node 64 blocks later ("Missing account trie node").
+- **Reorg reference counts.** Each block records its own reference-count delta, which is undone when the block
+  stops being canonical: on a reorg (#1471), on an Engine API forkchoice move, side payload or rejected payload
+  (#1473), and on a SYNC-FORK rewind (#1474). Blocks committed before 0.9.0 have no record; undoing them is a
+  no-op. The additions to the database are new keys only. Basic pruning no longer prunes past the canonical head
+  (#1458).
+- A decoded-node cache insert that raced a prune's delete-then-evict is dropped (#1469).
+- Engine API: an already-executed side payload answers VALID without re-execution (#1478). A consensus client
+  that timed out and re-sent a slow payload previously caused repeated executions.
+- **SNAP sync:**
+  - parallel storage sub-ranges are applied in order and a restarted storage coordinator recovers quickly
+    (#1449); healing continues while the consensus client's head is not advancing (#1450); recovery task files
+    stay in the datadir and a phase is not completed without them (#1453)
+  - Path-scheme: healing presence is checked by path (#1454); the trie is published to hash-keyed storage so block
+    import can read it (#1455); every location that shares a node hash is healed (#1480)
+  - healing is not declared clean on a dirty or superseded verification pass (#1472)
+  - body and receipt backfill is deferred until state is finalised on ETH-family networks (#1466)
+  - an unservable pivot is replaced by a newer one (#1478)
+  - the best block's header is no longer rewritten at startup after SNAP (#1457)
 
 ### Known issues
-- SNAP sync on post-merge ETH networks (Sepolia, Platåberget) has open fixes in progress: parallel storage
-  ordering (#1449), the healing re-peg budget (#1450), and path-scheme healing re-fetch. Synced nodes are
-  unaffected; a fresh sync of a large chain may stall.
-- Sparse blobpool, `engine_getBlobsV3` / `V4` and fetching access lists over eth/71 are not implemented (#1431);
-  none is needed to follow the chain.
+- On a deliberately underpowered host (4 cores, 16 GB, DRAM-less SATA SSD with dm-crypt), heavy devnet blocks of
+  about 190M gas import in about 8-10 s warm, longer than the roughly 6.5 s slot. A consensus client can briefly
+  mark the execution client offline.
+- Memory: an 8 GB heap with large explicit `state-read-caches` sizes reached 11.5 GB resident on that host. Keep
+  explicit cache sizes at 35% of the heap or less and leave room for RocksDB and the page cache.
+- SNAP healing of a large or high-churn state can fall back to the lazy state fetch handoff instead of converging.
+  Follow-up work is tracked.
+- Sparse blobpool, `engine_getBlobsV3` / `V4` and negotiating a snap version are not implemented (#1431); none is
+  needed to follow the chain.
 
 ## [0.8.12] - 2026-09-28
 
@@ -286,5 +346,5 @@ every Sepolia node must run 0.9.0 before then. Tracking issue: #1415 (spec: `spe
 
 ---
 
-**Note:** This CHANGELOG is automatically generated during releases. For the most up-to-date
-information, see the [Releases page](https://github.com/chippr-robotics/fukuii/releases).
+**Note:** This CHANGELOG is maintained by hand and cut when a release is prepared. See the
+[Releases page](https://github.com/chippr-robotics/fukuii/releases) for published artifacts.
