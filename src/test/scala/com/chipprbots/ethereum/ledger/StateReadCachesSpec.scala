@@ -322,3 +322,36 @@ class StateReadCachesSpec extends AnyFlatSpec with Matchers:
     (second should be).theSameInstanceAs(first)
     second.toArrayUnsafe() shouldBe code.toArray
   }
+
+  "ByteBoundedLru" should "hold values strongly when strongValues is set, softly by default" taggedAs (
+    UnitTest,
+    StateTest
+  ) in {
+    val strong = new com.chipprbots.ethereum.utils.ByteBoundedLru[Int, ByteString](1024, _.length.toLong, true)
+    val soft = new com.chipprbots.ethereum.utils.ByteBoundedLru[Int, ByteString](1024, _.length.toLong)
+    strong.strongValues shouldBe true
+    soft.strongValues shouldBe false
+    val v = ByteString(1, 2, 3)
+    strong.put(1, v)
+    soft.put(1, v)
+    (strong.getOrNull(1) should be).theSameInstanceAs(v)
+    (soft.getOrNull(1) should be).theSameInstanceAs(v)
+    // Reference type, asserted directly: a soft entry is a SoftReference that still points at the value, a strong
+    // entry's SoftReference is empty (the value is held by the entry itself), so the collector cannot reclaim it.
+    def refs(c: com.chipprbots.ethereum.utils.ByteBoundedLru[Int, ByteString]) =
+      val m = c.getClass.getDeclaredField("map")
+      m.setAccessible(true)
+      m.get(c).asInstanceOf[java.util.LinkedHashMap[Int, java.lang.ref.SoftReference[ByteString]]].get(1)
+    (refs(soft).get() should be).theSameInstanceAs(v)
+    refs(strong).get() shouldBe null
+    // the byte bound still applies to strong caches
+    strong.put(2, ByteString(Array.fill[Byte](1022)(0)))
+    strong.getOrNull(1) shouldBe null
+    strong.sizeBytes should be <= 1024L
+  }
+
+  "StateReadCacheConfig" should "keep soft references for unset sizes (the default)" taggedAs (UnitTest, StateTest) in {
+    com.chipprbots.ethereum.utils.StateReadCacheConfig.codeCacheStrong shouldBe false
+    com.chipprbots.ethereum.utils.StateReadCacheConfig.codeSizeCacheStrong shouldBe false
+    com.chipprbots.ethereum.utils.StateReadCacheConfig.decodedNodeCacheStrong shouldBe false
+  }

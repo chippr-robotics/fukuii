@@ -63,7 +63,11 @@ object DecodedNodeCache:
 
   /** One cache for the whole process, so the budget bounds the heap however many state storages exist. */
   private lazy val shared: ByteBoundedLru[Key, MptNode] =
-    new ByteBoundedLru[Key, MptNode](com.chipprbots.ethereum.utils.StateReadCacheConfig.decodedNodeCacheBytes, weigh)
+    new ByteBoundedLru[Key, MptNode](
+      com.chipprbots.ethereum.utils.StateReadCacheConfig.decodedNodeCacheBytes,
+      weigh,
+      com.chipprbots.ethereum.utils.StateReadCacheConfig.decodedNodeCacheStrong
+    )
 
   /** A view for one state storage on the process-wide cache, or `None` when `enabled` is false or the budget is 0. */
   def forStorage(enabled: Boolean): Option[DecodedNodeCache] =

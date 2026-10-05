@@ -60,6 +60,11 @@ object StateReadCacheConfig:
         else explicit
       case None => math.min(default, (maxHeap * fraction).toLong)
 
+  /** Whether the operator set this size explicitly. Such a cache holds its values strongly (bounded by its budget),
+    * since the operator sized it to be effective; an unset one keeps soft references that give way under heap pressure.
+    */
+  private def isExplicit(path: String): Boolean = section.exists(_.hasPath(path))
+
   private def cappedByHeap(path: String, default: Long, fraction: Double): Long =
     val maxHeap = Runtime.getRuntime.maxMemory
     val v = effectiveBytes(section, path, default, fraction, maxHeap)
@@ -67,6 +72,10 @@ object StateReadCacheConfig:
       if section.exists(_.hasPath(path)) then "configured" else s"default, capped at ${(fraction * 100).toInt}% of heap"
     log.info(s"state-read-caches.$path effective size = $v bytes ($origin; max heap $maxHeap)")
     v
+
+  lazy val codeCacheStrong: Boolean = isExplicit("code-cache-bytes")
+  lazy val codeSizeCacheStrong: Boolean = isExplicit("code-size-cache-bytes")
+  lazy val decodedNodeCacheStrong: Boolean = isExplicit("decoded-node-cache-bytes")
 
   /** Process-wide budget of the execution-side code cache (all `EvmCodeStorage` instances share it); 0 disables it. At
     * most 5% of the max heap unless the key is set explicitly (then up to 50%).
