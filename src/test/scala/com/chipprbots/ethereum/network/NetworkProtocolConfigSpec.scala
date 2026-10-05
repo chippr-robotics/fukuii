@@ -107,6 +107,43 @@ class NetworkProtocolConfigSpec extends AnyFlatSpec with Matchers with ParallelT
     p.snap2 shouldBe false
   }
 
+  // ── Shipped per-network configs ───────────────────────────────────────────
+
+  private def shippedProtocols(network: String): NetworkProtocolConfig =
+    NetworkProtocolConfig.fromConfig(
+      ConfigFactory.load(s"conf/$network.conf").getConfig("fukuii.network.protocols")
+    )
+
+  "The shipped ETH-family configs (eth, sepolia, plataberget)" should
+    "advertise eth/70 and eth/71 but keep eth/72 and snap/2 off" taggedAs UnitTest in {
+      ConfigFactory.invalidateCaches()
+      Seq("eth", "sepolia", "plataberget").foreach { network =>
+        withClue(s"conf/$network.conf: ") {
+          val p = shippedProtocols(network)
+          p.eth68 shouldBe true
+          p.eth69 shouldBe true
+          p.eth70 shouldBe true
+          p.eth71 shouldBe true
+          p.eth72 shouldBe false
+          p.snap1 shouldBe true
+          p.snap2 shouldBe false // drops GetTrieNodes, which SNAP healing needs
+        }
+      }
+    }
+
+  "The shipped ETC configs (etc, mordor)" should "keep the conservative eth/68-69 + snap/1 set" taggedAs UnitTest in {
+    ConfigFactory.invalidateCaches()
+    Seq("etc", "mordor").foreach { network =>
+      withClue(s"conf/$network.conf: ") {
+        val p = shippedProtocols(network)
+        p.eth70 shouldBe false
+        p.eth71 shouldBe false
+        p.eth72 shouldBe false
+        p.snap2 shouldBe false
+      }
+    }
+  }
+
   // ── InstanceConfig.supportedCapabilities — ETC defaults ───────────────────
 
   "InstanceConfig.supportedCapabilities (ETC global defaults)" should
