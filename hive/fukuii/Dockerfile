@@ -12,6 +12,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 COPY fukuii.sh /fukuii.sh
 COPY mapper.jq /mapper.jq
+COPY dao-drain-list.txt /dao-drain-list.txt
 COPY enode.sh /hive-bin/enode.sh
 RUN chmod +x /fukuii.sh /hive-bin/enode.sh
 

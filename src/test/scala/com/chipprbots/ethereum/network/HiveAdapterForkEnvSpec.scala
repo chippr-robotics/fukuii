@@ -80,6 +80,13 @@ class HiveAdapterForkEnvSpec extends AnyWordSpec with Matchers:
   private val NonForkHiveEnv: Set[String] =
     Set("HIVE_BOOTNODE", "HIVE_MINER", "HIVE_SKIP_POW", "HIVE_CHECK_LIVE_PORT")
 
+  /** DAO-fork keys that only the ethereum/consensus simulator exports, so neither fixture above carries them. Verbatim
+    * from ethereum/hive `simulators/ethereum/consensus`: `forks.go` sets `HIVE_FORK_DAO_BLOCK` on the Frontier,
+    * Homestead, FrontierToHomesteadAt5 (2000) and HomesteadToDaoAt5 (5) rulesets, and `main.go` sets
+    * `HIVE_FORK_DAO_VOTE: "1"` on every test. fukuii.sh maps them to the hive chain's `dao` block.
+    */
+  private val ConsensusSimHiveEnv: Set[String] = Set("HIVE_FORK_DAO_BLOCK", "HIVE_FORK_DAO_VOTE")
+
   private val adapterPath = "hive/fukuii/fukuii.sh"
 
   /** sbt forks tests with the project base directory as cwd, but walk up anyway so the spec survives being run from a
@@ -105,7 +112,7 @@ class HiveAdapterForkEnvSpec extends AnyWordSpec with Matchers:
   "the hive adapter's fork environment" must {
 
     "reference only names hive actually exports" taggedAs (UnitTest, NetworkTest) in {
-      val invented = referenced -- CanonicalHiveForkEnv -- NonForkHiveEnv
+      val invented = referenced -- CanonicalHiveForkEnv -- NonForkHiveEnv -- ConsensusSimHiveEnv
       withClue(
         "fukuii.sh reads an environment variable hive never sets, so the value silently falls back to its default: "
       ) {
