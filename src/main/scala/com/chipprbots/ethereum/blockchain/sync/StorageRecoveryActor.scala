@@ -208,10 +208,10 @@ object StorageRecoveryActor:
 
             val srcAdapter: org.apache.pekko.actor.typed.ActorRef[snap.SNAPSyncController.Command] =
               ctx.messageAdapter {
-                case snap.SNAPSyncController.StorageRangeSyncComplete             => StorageRangeDone
-                case snap.SNAPSyncController.ProgressStorageSlotsSynced(n)        => StorageSlotProgress(n)
-                case snap.SNAPSyncController.PivotStateUnservable(r, reason, cnt) => PivotUnservable(r, reason, cnt)
-                case _                                                            => DroppedSrcMsg
+                case snap.SNAPSyncController.StorageRangeSyncComplete                => StorageRangeDone
+                case snap.SNAPSyncController.ProgressStorageSlotsSynced(n)           => StorageSlotProgress(n)
+                case snap.SNAPSyncController.PivotStateUnservable(r, reason, cnt, _) => PivotUnservable(r, reason, cnt)
+                case _                                                               => DroppedSrcMsg
               }
             val coordinator: org.apache.pekko.actor.typed.ActorRef[actors.StorageRangeCoordinator.Command] =
               coordinatorForTesting match

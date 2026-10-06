@@ -80,7 +80,13 @@ private class AccountRangeCoordinatorImpl(
     accountTrieEcOverride: Option[ExecutionContext] = None,
     storageScheme: StorageScheme = StorageScheme.Hash,
     pathNodeStorage: Option[PathNodeStorage] = None,
-    taskFileDir: Option[Path] = None
+    taskFileDir: Option[Path] = None,
+    // Contract task files of the previous coordinator, consistent with `resumeProgress` (see AccountResumeCheckpoint).
+    // When present, partially-downloaded ranges resume from their cursor; when absent (legacy progress record),
+    // partial ranges re-download from their start as before.
+    carriedTaskFiles: Option[ContractTaskFiles] = None,
+    // Echoed in every progress snapshot so the controller can drop snapshots from a superseded coordinator.
+    progressGeneration: Long = 0L
 ):
 
   import SNAPSyncController.PivotStateUnservable
@@ -111,6 +117,9 @@ private class AccountRangeCoordinatorImpl(
   // still over their mark, etc. Package-private for tests.
   private[actors] val backpressureSources: mutable.Set[String] = mutable.Set.empty[String]
   private def downstreamBackpressureActive: Boolean = backpressureSources.nonEmpty
+  // Dispatch is paused on purpose: a downstream queue is over its high-water mark, or the controller set the per-peer
+  // budget to 0. Neither is a stall, so neither may feed the stall watchdog or the pivot-refresh escalation.
+  private def dispatchDeliberatelyPaused: Boolean = downstreamBackpressureActive || maxInFlightPerPeer <= 0
   // Kept for spec compatibility; reflects whether the storage source is currently engaged.
   private[actors] def storageBackpressureActive: Boolean = backpressureSources.contains("storage")
 
@@ -219,7 +228,8 @@ private class AccountRangeCoordinatorImpl(
         snapSyncController ! PivotStateUnservable(
           rootHash = stateRoot,
           reason = "all peers snapless (no snapshot tree) for AccountRange root",
-          consecutiveEmptyResponses = knownAvailablePeers.size
+          consecutiveEmptyResponses = knownAvailablePeers.size,
+          cause = SNAPSyncController.UnservableCause.Snapless
         )
       else
         // If all NON-snapless peers are stateless, the current root has aged out of the
@@ -253,33 +263,56 @@ private class AccountRangeCoordinatorImpl(
             snapSyncController ! PivotStateUnservable(
               rootHash = stateRoot,
               reason = "all peers stateless for AccountRange root",
-              consecutiveEmptyResponses = statelessPeers.size
+              consecutiveEmptyResponses = statelessPeers.size,
+              cause = SNAPSyncController.UnservableCause.Stateless
             )
 
   // Task management — resume ranges from saved positions (core-geth parity).
   // On restart, each range resumes from its saved `next` position instead of starting from 0x00.
   private val allInitialTasks = AccountTask.createInitialTasks(stateRoot, concurrency)
+  // Carrying task files is only consistent if EVERY range has a cursor: a range restarted from its start would
+  // re-identify contracts whose work is already in the carried prefix. The controller validates this; fail loudly here.
+  require(
+    carriedTaskFiles.isEmpty || resumeProgress.keySet == allInitialTasks.map(_.last).toSet,
+    s"carried task files need a cursor for every range: ${resumeProgress.size} cursors vs ${allInitialTasks.size} ranges"
+  )
   private val (skippedTasks, remainingTasks) = if resumeProgress.nonEmpty then
+    val toBI = (bs: ByteString) => BigInt(1, bs.toArray.padTo(32, 0.toByte))
     val resumed = allInitialTasks.map { task =>
       resumeProgress.get(task.last) match
-        case Some(savedNext)
-            if BigInt(1, savedNext.toArray.padTo(32, 0.toByte)) >=
-              BigInt(1, task.last.toArray.padTo(32, 0.toByte)) =>
+        case Some(savedNext) if toBI(savedNext) >= toBI(task.last) =>
           // Range fully traversed — mark as done
           task.copy(next = task.last, done = true)
+        case Some(savedNext) if carriedTaskFiles.isDefined && toBI(savedNext) > toBI(task.next) =>
+          // Resume from a mid-range cursor (go-ethereum eth/protocols/snap/sync.go: tasks keep `Next`; on load a fresh
+          // StackTrie starts at `Next`). Why this is correct even though the StackTrie cannot "continue":
+          //   - Accounts in [start, savedNext) were inserted into the previous run's StackTrie. Every node it EMITTED
+          //     is a complete subtree (StackTrie emits bottom-up) and was flushed before the cursor was checkpointed
+          //     (`flushEmitted` / `suspend`). What was lost is only the open right spine (in memory).
+          //   - The fresh StackTrie for [savedNext, last) emits complete subtrees right of the cursor plus LEFT-boundary
+          //     nodes that lack their left siblings. Hash scheme: those get a hash no correct parent references —
+          //     unreferenced garbage, harmless. Path scheme: SnapPathTrie(skipLeftBoundary = true) drops them and
+          //     deletes stale ancestor stubs (geth pathTrie).
+          //   - The nodes that straddle the cursor (the lost spine + the skipped boundary, all ancestors of the seam)
+          //     are therefore missing or wrong on disk. The state healing walk from the pivot root fetches exactly
+          //     those (missing by hash; Path scheme also verifies keccak at the path) and stops at every subtree that
+          //     is present — so nothing is trusted that healing has not checked against the final root.
+          //   - `resumeProgress.nonEmpty` latches `resumedStaleCursors` in the controller, which forces that healing
+          //     walk even under deferred merkleization. Correctness never depends on the resumed StackTrie's root.
+          //   - Storage/bytecode work for accounts below the cursor is NOT re-derived from the network: it is the
+          //     carried prefix of the task files, replayed by `ReplayCarriedContracts`.
+          log.info(
+            s"Resuming partial range ${task.rangeString} from cursor ${savedNext.take(4).toHex} " +
+              "(prefix kept; the seam is repaired by state healing)"
+          )
+          task.copy(next = savedNext)
         case Some(savedNext) =>
-          // Partial range: the mid-range cursor is NOT safe to resume on the StackTrie path.
-          // The per-task SnapHashTrie is in-memory + write-only and was lost on restart; a fresh
-          // StackTrie resuming from `savedNext` would cover only [savedNext, last), orphaning the
-          // already-downloaded prefix (whose root/right-spine were never persisted — only the
-          // 8MiB-flushed left subtrees survived) and seaming an old-root prefix to a new-root
-          // suffix. Re-download the whole range from its pristine start (task.next is left
-          // untouched). Cheap — only the few in-flight ranges, not the completed ones. The
-          // healing walk from the new pivot reconciles any delta across the COMPLETE ranges.
+          // Legacy progress record without task files: the storage/bytecode work of the downloaded prefix cannot be
+          // replayed, so the range is re-downloaded from its start (its contracts are re-identified on the way).
           if savedNext != task.next then
             log.info(
               s"Re-downloading partial range ${task.rangeString} from start " +
-                "(saved mid-range cursor is not StackTrie-safe to resume)"
+                "(no contract task files carried with this cursor)"
             )
           task
         case None => task
@@ -406,11 +439,33 @@ private class AccountRangeCoordinatorImpl(
   // The storage-task file is the one recovery needs after a restart, so it goes under the datadir (`taskFileDir`)
   // rather than java.io.tmpdir, which a host reboot wipes. See StorageTaskFile.
   private val contractStorageFile: Path = StorageTaskFile.createFile(taskFileDir, "fukuii-contract-storage-", ".bin")
-  private val contractAccountsOut = new BufferedOutputStream(new FileOutputStream(contractAccountsFile.toFile), 65536)
-  private val contractStorageOut = new BufferedOutputStream(new FileOutputStream(contractStorageFile.toFile), 65536)
-  private var contractAccountsCount: Long = 0
-  private var contractStorageCount: Long = 0
   private val ContractEntrySize = 64 // 32 bytes hash + 32 bytes codeHash/storageRoot
+  private val uniqueCodeHashesFile: Path = StorageTaskFile.createFile(taskFileDir, "fukuii-unique-codehashes-", ".bin")
+
+  // Resume from mid-range cursors: the contract work derived from every account BELOW the cursors lives in the previous
+  // coordinator's task files. Copy exactly the checkpointed prefix of each into this coordinator's own (fresh) files
+  // BEFORE opening them for append, so this coordinator's files are self-contained (accounts-complete recovery persists
+  // one path) and the previous coordinator — which may still be in PostStop — is never written to by us. The copied
+  // prefix is replayed to the storage/bytecode coordinators by `ReplayCarriedContracts`; nothing is re-downloaded.
+  private val carriedStorageCount: Long = carriedTaskFiles.fold(0L) { f =>
+    AccountRangeCoordinator.copyPrefix(Path.of(f.storagePath), contractStorageFile, f.storageCount * ContractEntrySize)
+    f.storageCount
+  }
+  private val carriedCodeHashesCount: Long = carriedTaskFiles.fold(0L) { f =>
+    AccountRangeCoordinator.copyPrefix(
+      Path.of(f.codeHashesPath),
+      uniqueCodeHashesFile,
+      f.codeHashesCount * StorageTaskFile.CodeHashEntrySize
+    )
+    f.codeHashesCount
+  }
+
+  private val contractAccountsOut = new BufferedOutputStream(new FileOutputStream(contractAccountsFile.toFile), 65536)
+  // Append: the carried prefix (if any) is already in the file.
+  private val contractStorageFos = new FileOutputStream(contractStorageFile.toFile, true)
+  private val contractStorageOut = new BufferedOutputStream(contractStorageFos, 65536)
+  private var contractAccountsCount: Long = 0
+  private var contractStorageCount: Long = carriedStorageCount
 
   // Unique codeHashes for bytecode download — Bloom filter (~4MB) for dedup + temp file for storage.
   // At handoff, reads ~64MB (2M × 32 bytes) instead of the 4.7GB contractAccountsFile (73.5M × 64 bytes).
@@ -423,9 +478,21 @@ private class AccountRangeCoordinatorImpl(
     3_000_000,
     0.0001 // ~4MB for 3M expected entries at 0.01% FPR
   )
-  private val uniqueCodeHashesFile: Path = StorageTaskFile.createFile(taskFileDir, "fukuii-unique-codehashes-", ".bin")
-  private val uniqueCodeHashesOut = new BufferedOutputStream(new FileOutputStream(uniqueCodeHashesFile.toFile), 65536)
-  private var uniqueCodeHashesCount: Long = 0
+  private val uniqueCodeHashesFos = new FileOutputStream(uniqueCodeHashesFile.toFile, true)
+  private val uniqueCodeHashesOut = new BufferedOutputStream(uniqueCodeHashesFos, 65536)
+  private var uniqueCodeHashesCount: Long = carriedCodeHashesCount
+
+  // Replay of the carried prefix (entries [0, carried*Count) of this coordinator's own files). Account-range sync is
+  // not complete until both offsets reach their counts, so NoMore{Storage,ByteCode}Tasks can never overtake them.
+  private var replayStorageOffset: Long = 0L
+  private var replayCodeHashesOffset: Long = 0L
+  private def replayDone: Boolean =
+    replayStorageOffset >= carriedStorageCount && replayCodeHashesOffset >= carriedCodeHashesCount
+
+  // Tasks whose response is being inserted chunk-by-chunk (`StoreAccountChunk`). They are in neither `pendingTasks`
+  // nor `activeTasks` meanwhile; without this a snapshot taken in that window omits the range entirely and a resume
+  // would restart it from its start. Keyed by `task.last`; the task's `next` is already advanced past the response.
+  private val storingTasks = mutable.Map.empty[ByteString, AccountTask]
 
   // Track last known available peers so we can re-dispatch after task failures
   // without waiting for the next PeerAvailable message.
@@ -553,41 +620,97 @@ private class AccountRangeCoordinatorImpl(
     // 180 s `Account stall detected` watchdog escalates to a pivot refresh. Timer lifetime is
     // owned by `Behaviors.withTimers` — no manual cancel needed on stop.
     timers.startTimerWithFixedDelay(CheckDispatchStalled, dispatchStallCheckInterval, dispatchStallCheckInterval)
+    // Durable resume checkpoint cadence (cursor + task-file counts, after the emitted trie nodes and task files are
+    // made durable). Task completion and stop also checkpoint.
+    timers.startTimerWithFixedDelay(CheckpointTick, AccountRangeCoordinator.CheckpointInterval)
+    if carriedStorageCount > 0 || carriedCodeHashesCount > 0 then
+      // Re-arm the codeHash dedup with the carried codeHashes so re-downloaded accounts don't re-add them.
+      AccountRangeCoordinator.foreachEntry(
+        uniqueCodeHashesFile,
+        StorageTaskFile.CodeHashEntrySize,
+        0L,
+        carriedCodeHashesCount
+      )(entry => codeHashBloom.put(ByteString(entry)))
+      log.info(
+        s"Carried contract work from the previous attempt: $carriedStorageCount storage-task entries, " +
+          s"$carriedCodeHashesCount unique codeHashes — replaying to the storage/bytecode coordinators"
+      )
+      ctx.self ! ReplayCarriedContracts
     // If all tasks were already completed, report completion immediately
     if pendingTasks.isEmpty && activeTasks.isEmpty then ctx.scheduleOnce(100.millis, ctx.self, CheckCompletion)
 
+  // Set when async trie finalisation starts; the trie Future then owns `taskStackTries`.
+  private var finalizationStarted: Boolean = false
+
   /** Equivalent of the Classic `postStop`: invoked from the `PostStop` signal handler. */
   def onStop(): Unit =
-    // Send final progress snapshot so controller can resume from saved positions on restart
-    sendProgressSnapshot()
-    // Close and delete temporary files.
-    // Note: contractStorageFile is NOT deleted here — the controller reads it asynchronously
-    // during storage sync (Bug 20 fix: streaming from file to avoid OOM). The controller
-    // deletes it after streaming completes.
-    try contractAccountsOut.close()
-    catch
-      case _: Exception =>
-        try contractStorageOut.close()
-        catch
-          case _: Exception =>
-            try uniqueCodeHashesOut.close()
-            catch
-              case _: Exception =>
-                try Files.deleteIfExists(contractAccountsFile)
-                catch
-                  case _: Exception =>
-                    // contractStorageFile intentionally NOT deleted — controller manages its lifecycle
-                    // uniqueCodeHashesFile intentionally NOT deleted — controller manages its lifecycle
-                    // (needed for accounts-complete recovery across process restarts)
-                    log.info(
-                      s"AccountRangeCoordinator stopped. Downloaded $accountsDownloaded accounts, identified $contractAccountsCount contracts ($uniqueCodeHashesCount unique codeHashes)"
-                    )
+    // Suspend every in-progress range trie (keep + flush emitted nodes, drop the open spine) so the final snapshot's
+    // cursors never run ahead of durable trie nodes. Skipped once finalisation owns the tries.
+    if !finalizationStarted then
+      taskStackTries.values.foreach(_.suspend())
+      taskStackTries.clear()
+    // Final durable snapshot so the controller can resume from the cursors (needs the task streams still open).
+    sendProgressSnapshot(durableRequested = true)
+    // Close every stream (previously a nested try/catch closed only the first one unless it threw), then delete the
+    // contract-accounts file, which nothing reads after this coordinator. contractStorageFile and
+    // uniqueCodeHashesFile are NOT deleted — the controller owns them (storage-phase streaming, accounts-complete
+    // recovery, and the next coordinator's carried prefix).
+    Seq[java.io.Closeable](contractAccountsOut, contractStorageOut, uniqueCodeHashesOut).foreach { c =>
+      try c.close()
+      catch case e: java.io.IOException => log.warn(s"Failed to close account task file stream: ${e.getMessage}")
+    }
+    try Files.deleteIfExists(contractAccountsFile)
+    catch case e: java.io.IOException => log.warn(s"Failed to delete $contractAccountsFile: ${e.getMessage}")
+    log.info(
+      s"AccountRangeCoordinator stopped. Downloaded $accountsDownloaded accounts, identified $contractAccountsCount " +
+        s"contracts ($uniqueCodeHashesCount unique codeHashes, $contractStorageCount storage-task entries)"
+    )
 
-  /** Collect current task positions and send to controller for resume across restarts. */
-  private def sendProgressSnapshot(): Unit =
-    val allTasks = pendingTasks.iterator ++ activeTasks.values.map(_._1) ++ completedTasks
+  /** Collect current task positions and send them, with the task-file counts they correspond to, to the controller.
+    *
+    * `durable = true` first makes every emitted trie node and every task-file entry durable (trie batch flush + fsync),
+    * so a cursor persisted from this snapshot never runs ahead of the data it implies. Non-durable snapshots (per
+    * response) are only used in-process: their task-file entries are already flushed to the OS, which is all a reader
+    * in the same process needs.
+    *
+    * "Flushed before the checkpoint" means written to the node storage. Under archive/basic pruning that storage writes
+    * through to RocksDB. Under cached ("inmemory") pruning, CachedReferenceCountedStorage holds nodes in its LRU/change
+    * log until a block save, so a persisted cursor CAN run ahead of on-disk nodes; correctness then rests on the
+    * healing walk that every resume forces (missing nodes are fetched), not on this flush.
+    *
+    * Once trie finalisation has started, the finalisation Future owns the tries and nothing here may flush them, so a
+    * durable request is downgraded to an in-memory snapshot: an "all ranges complete" checkpoint must never be
+    * persisted ahead of the finalised nodes. (The controller retires the checkpoint at accounts-complete anyway.)
+    */
+  private def sendProgressSnapshot(durableRequested: Boolean = false): Unit =
+    val durable = durableRequested && !finalizationStarted
+    if durable then
+      taskStackTries.values.foreach(_.flushEmitted())
+      syncTaskFiles()
+    val allTasks =
+      pendingTasks.iterator ++ activeTasks.values.map(_._1) ++ storingTasks.values ++ completedTasks
     val progress: Map[ByteString, ByteString] = allTasks.map(t => t.last -> t.next).toMap
-    snapSyncController ! SNAPSyncController.AccountRangeProgressCmd(progress)
+    val files = ContractTaskFiles(
+      storagePath = contractStorageFile.toString,
+      storageCount = contractStorageCount,
+      codeHashesPath = uniqueCodeHashesFile.toString,
+      codeHashesCount = uniqueCodeHashesCount
+    )
+    snapSyncController ! SNAPSyncController.AccountRangeProgressCmd(
+      progress,
+      taskFiles = Some(files),
+      durable = durable,
+      generation = progressGeneration
+    )
+
+  /** Flush and fsync the storage-task and codeHash files. IO errors propagate: a checkpoint that cannot make its task
+    * files durable must not be persisted.
+    */
+  private def syncTaskFiles(): Unit =
+    contractStorageOut.flush()
+    uniqueCodeHashesOut.flush()
+    contractStorageFos.getFD.sync()
+    uniqueCodeHashesFos.getFD.sync()
 
   // Typed AccountRangeWorker children (Group W1) STOP on failure by default. The stop is caught by
   // the `WorkerTerminated` command (via `ctx.watchWith`), which removes the dead worker from the
@@ -789,6 +912,15 @@ private class AccountRangeCoordinatorImpl(
             // next time anyway.
             lastDispatchOrResponseMs = System.currentTimeMillis()
             tryRedispatchPendingTasks()
+          else if pendingTasks.nonEmpty && activeTasks.isEmpty && dispatchDeliberatelyPaused then
+            // Idle by design: downstream back-pressure (or a zero budget) is holding dispatch. Not a stall — reset
+            // the tick counter so a long pause never escalates to a pivot refresh or a restart.
+            pendingButIdleTicks = 0
+            log.info(
+              s"[ACCOUNT-IDLE] ${pendingTasks.size} tasks pending, dispatch paused " +
+                s"(back-pressure sources=${backpressureSources.mkString(",")}, maxInflight=$maxInFlightPerPeer) — " +
+                "not a stall"
+            )
           else if pendingTasks.nonEmpty && activeTasks.isEmpty then
             // Tasks are pending but nothing is in-flight — no eligible peers to dispatch to.
             // `lastDispatchOrResponseMs` resets on every drain (peer cycling) so the time-based
@@ -816,23 +948,45 @@ private class AccountRangeCoordinatorImpl(
               )
               pendingButIdleTicks = 0
               tryRedispatchPendingTasks()
-              // If floor revival also couldn't dispatch anything, escalate.
+              // If floor revival also couldn't dispatch anything, escalate — classified, so only genuine
+              // stateless/snapless evidence can count toward the controller's restart threshold.
               if activeTasks.isEmpty && !pivotRefreshRequested then
-                pivotRefreshRequested = true
-                lastPivotRefreshTimeMs = System.currentTimeMillis()
-                consecutiveUnproductiveRefreshes += 1
-                log.warn(
-                  s"[ACCOUNT-STALL] Floor revival exhausted — ${knownAvailablePeers.size} known peers, " +
-                    s"${statelessPeers.size} stateless, ${peerCooldownUntilMs.size} cooling. " +
-                    s"Requesting pivot refresh (attempt=$consecutiveUnproductiveRefreshes)."
-                )
-                snapSyncController ! PivotStateUnservable(
-                  rootHash = stateRoot,
-                  reason =
-                    s"tasks pending but no eligible peers after ${consecutiveUnproductiveRefreshes} stall cycles",
-                  consecutiveEmptyResponses = knownAvailablePeers.size
-                )
+                classifyIdleStall(
+                  dispatchPaused = dispatchDeliberatelyPaused,
+                  knownPeers = knownAvailablePeers.map(_.id).toSet,
+                  stateless = statelessPeers.toSet,
+                  snapless = snaplessPeers.toSet
+                ) match
+                  case IdleStallVerdict.Paused =>
+                    () // guarded by the branch above; kept so the match stays total
+                  case IdleStallVerdict.Stateless | IdleStallVerdict.Snapless =>
+                    // Root (or snapshot) unservable — the stateless/snapless escalation owns this case.
+                    maybeRequestPivotRefresh()
+                  case IdleStallVerdict.PeerScarcity =>
+                    // Peers are few / cooling / absent. A refresh keeps the root inside the serve window, but this is
+                    // not evidence that the root is gone: pivotRefreshRequested is NOT latched (a genuine stateless
+                    // signal must still be able to escalate) and the controller does not count it toward restart.
+                    log.warn(
+                      s"[ACCOUNT-STALL] Floor revival exhausted — ${knownAvailablePeers.size} known peers, " +
+                        s"${statelessPeers.size} stateless, ${snaplessPeers.size} snapless, " +
+                        s"${peerCooldownUntilMs.size} cooling. Peer scarcity, not a stateless root: requesting a " +
+                        "pivot refresh that does not count toward restart."
+                    )
+                    snapSyncController ! PivotStateUnservable(
+                      rootHash = stateRoot,
+                      reason = "tasks pending but no eligible peers (peer scarcity/cooling)",
+                      consecutiveEmptyResponses = knownAvailablePeers.size,
+                      cause = SNAPSyncController.UnservableCause.PeerScarcity
+                    )
           else pendingButIdleTicks = 0
+          Behaviors.same
+
+        case CheckpointTick =>
+          sendProgressSnapshot(durableRequested = true)
+          Behaviors.same
+
+        case ReplayCarriedContracts =>
+          replayCarriedChunk()
           Behaviors.same
 
         case TaskComplete(requestId, result) =>
@@ -900,6 +1054,7 @@ private class AccountRangeCoordinatorImpl(
             // dedicated `account-trie-dispatcher` so it can't squeeze the global pool or
             // sync-dispatcher. Generation token added defensively (mirrors PR #1163).
             trieFlushGeneration += 1
+            finalizationStarted = true
             val gen = trieFlushGeneration
             val selfRef = ctx.self
             Future {
@@ -1192,6 +1347,8 @@ private class AccountRangeCoordinatorImpl(
 
               // Start chunked async storage - this yields back to the actor mailbox between chunks
               // so the coordinator can still process PeerAvailable, AccountRangeResponseMsg, etc.
+              // Tracked in storingTasks meanwhile so a snapshot never drops this range's (advanced) cursor.
+              storingTasks.update(task.last, task)
               ctx.self ! StoreAccountChunk(
                 task,
                 accounts,
@@ -1212,9 +1369,10 @@ private class AccountRangeCoordinatorImpl(
     else
       val lastHash = accounts.last._1
       if isMaxHash(lastHash) then
-        // Cannot advance beyond 0xFF..; this must be the end.
+        // Cannot advance beyond 0xFF..; this must be the end. Move the cursor to `last` so any snapshot taken while
+        // this response is being stored already reports the range complete (its contracts are already identified).
         consumedKeyspace += task.remainingKeyspace
-        (true, task)
+        (true, task.copy(next = task.last))
       else
         val nextStart = incrementHash32(lastHash)
         // Track keyspace consumed: distance from old next to new next
@@ -1269,7 +1427,7 @@ private class AccountRangeCoordinatorImpl(
       s"Account range COMPLETE: $range by empty proof-of-absence " +
         s"(proofNodes=$proofNodes, ${completedTasks.size}/$concurrency ranges done, $accountsDownloaded accounts total)"
     )
-    sendProgressSnapshot()
+    sendProgressSnapshot(durableRequested = true)
     ctx.self ! CheckCompletion
 
   private def handleTaskFailed(requestId: BigInt, reason: String): Unit =
@@ -1327,10 +1485,17 @@ private class AccountRangeCoordinatorImpl(
       // gets a fresh escalation.
       if !pivotRefreshRequested then
         pivotRefreshRequested = true
+        // Requeues come from timeouts (scarcity) as well as empty-without-proof answers (stateless). Count toward
+        // restart only when the pool holds actual stateless/snapless evidence.
+        val cause =
+          if statelessPeers.nonEmpty || snaplessPeers.nonEmpty || emptyResponseStrikes.nonEmpty then
+            SNAPSyncController.UnservableCause.Stateless
+          else SNAPSyncController.UnservableCause.PeerScarcity
         snapSyncController ! PivotStateUnservable(
           rootHash = stateRoot,
           reason = s"task ${task.rangeString} hit MaxRequeuesPerTask: $reason",
-          consecutiveEmptyResponses = AccountRangeCoordinator.MaxRequeuesPerTask
+          consecutiveEmptyResponses = AccountRangeCoordinator.MaxRequeuesPerTask,
+          cause = cause
         )
     else
       log.info(
@@ -1459,6 +1624,7 @@ private class AccountRangeCoordinatorImpl(
       else
         // Mark task done / re-enqueue BEFORE potentially spawning async flush — so the
         // task tracking is up to date by the time we re-enter `receive` after flushing.
+        storingTasks.remove(task.last)
         if isTaskRangeComplete then
           completedTasks += task.copy(done = true)
           // On the StackTrie path, the task's per-range StackTrie has accumulated all of
@@ -1474,16 +1640,17 @@ private class AccountRangeCoordinatorImpl(
                 s"fragment root ${fragmentRoot.take(4).toArray.map("%02x".format(_)).mkString})"
             )
           }
-          // Send progress snapshot so controller can resume from saved positions
-          sendProgressSnapshot()
+          // Durable checkpoint: a completed range is the most valuable progress to keep.
+          sendProgressSnapshot(durableRequested = true)
         else
-          // Need more requests for the same interval; re-queue with updated `next`.
-          pendingTasks.enqueue(task)
+          // Need more requests for the same interval; re-queue with updated `next`. Re-tag with the CURRENT root: a
+          // pivot refresh while this response was being stored re-tagged pendingTasks only, not this task.
+          pendingTasks.enqueue(task.copy(rootHash = stateRoot))
           // Trigger immediate redispatch so the re-queued task is picked up without
           // waiting up to 1s for the next PeerAvailable message (BUG-DISPATCH-001).
           tryRedispatchPendingTasks()
-          // Persist partial range position so a crash mid-range resumes from here,
-          // not the beginning of the range (go-ethereum saveSyncStatus() parity).
+          // In-process snapshot of the advanced cursor (the durable checkpoint is CheckpointTick's job — it also
+          // flushes the trie batches and fsyncs the task files, which is too heavy per response).
           sendProgressSnapshot()
 
         // Each task's SnapHashTrie batches its emissions and flushes to RocksDB at the 8 MiB
@@ -1494,7 +1661,78 @@ private class AccountRangeCoordinatorImpl(
       case e: Exception =>
         log.error(s"Failed to store account chunk: ${e.getMessage}", e)
         // Re-queue task for retry
+        storingTasks.remove(task.last)
         pendingTasks.enqueue(task.copy(pending = false, done = false))
+
+  /** Replay one chunk of the carried contract work (entries `[0, carried*Count)` of this coordinator's own task files)
+    * to the storage/bytecode coordinators, exactly as `identifyContractAccounts` would have for freshly downloaded
+    * accounts. Paced, and held while downstream back-pressure is engaged, so a large carried prefix cannot flood the
+    * storage queue.
+    *
+    * Hash scheme only: a storage task whose storage root node is already present is skipped — StackTrie emits a trie's
+    * root last, after every descendant, so a present root means that storage trie was completed (and the forced healing
+    * walk re-verifies it anyway). Path scheme keeps every task: one node per path means a correct root node does not
+    * prove its descendants were not overwritten later.
+    */
+  private def replayCarriedChunk(): Unit =
+    if !replayDone then
+      if downstreamBackpressureActive then
+        timers.startSingleTimer(
+          ReplayCarriedContracts,
+          ReplayCarriedContracts,
+          AccountRangeCoordinator.ReplayPausedRetry
+        )
+      else
+        val emptyRoot = ByteString(MerklePatriciaTrie.EmptyRootHash)
+        val storageEnd = math.min(carriedStorageCount, replayStorageOffset + AccountRangeCoordinator.ReplayChunkEntries)
+        val candidates = mutable.ArrayBuffer.empty[StorageTask]
+        AccountRangeCoordinator.foreachEntry(contractStorageFile, ContractEntrySize, replayStorageOffset, storageEnd) {
+          entry =>
+            val storageRoot = ByteString(java.util.Arrays.copyOfRange(entry, 32, 64))
+            if storageRoot != emptyRoot then
+              candidates += StorageTask.createStorageTask(
+                ByteString(java.util.Arrays.copyOfRange(entry, 0, 32)),
+                storageRoot
+              )
+        }
+        val storageTasks = storageScheme match
+          case StorageScheme.Hash if candidates.nonEmpty =>
+            val roots = candidates.map(_.storageRoot).distinct.toSeq
+            val present = roots
+              .zip(mptStorage.multiGetNodes(roots.map(_.toArray)))
+              .collect { case (root, Some(_)) => root }
+              .toSet
+            candidates.filterNot(t => present.contains(t.storageRoot)).toSeq
+          case _ => candidates.toSeq
+        val codeEnd =
+          math.min(carriedCodeHashesCount, replayCodeHashesOffset + AccountRangeCoordinator.ReplayChunkEntries)
+        val codeHashes = mutable.ArrayBuffer.empty[ByteString]
+        AccountRangeCoordinator.foreachEntry(
+          uniqueCodeHashesFile,
+          StorageTaskFile.CodeHashEntrySize,
+          replayCodeHashesOffset,
+          codeEnd
+        )(entry => codeHashes += ByteString(entry))
+        replayStorageOffset = storageEnd
+        replayCodeHashesOffset = codeEnd
+        if storageTasks.nonEmpty || codeHashes.nonEmpty then
+          snapSyncController ! SNAPSyncController.IncrementalContractData(
+            codeHashes.toSeq,
+            storageTasks,
+            replayed = true
+          )
+        if replayDone then
+          log.info(
+            s"Replayed carried contract work: $carriedStorageCount storage-task entries, " +
+              s"$carriedCodeHashesCount codeHashes"
+          )
+          ctx.self ! CheckCompletion
+        else
+          timers.startSingleTimer(
+            ReplayCarriedContracts,
+            ReplayCarriedContracts,
+            AccountRangeCoordinator.ReplayChunkInterval
+          )
 
   /** Get-or-create the per-task [[SnapTrie]] for the StackTrie path. Each task gets its own streaming trie keyed by
     * `task.last` (the end-of-range boundary, unique per task).
@@ -1666,11 +1904,14 @@ private class AccountRangeCoordinatorImpl(
       tasksPending = pendingTasks.size,
       progress = progress,
       elapsedTimeMs = elapsedMs,
-      contractAccountsFound = contractAccountsCount
+      contractAccountsFound = contractAccountsCount,
+      dispatchPaused = dispatchDeliberatelyPaused
     )
 
+  // Also wait for responses still being inserted (storingTasks) and for the carried contract work to be replayed —
+  // completion sends NoMore{Storage,ByteCode}Tasks downstream, which must not overtake either.
   private def isComplete: Boolean =
-    pendingTasks.isEmpty && activeTasks.isEmpty
+    pendingTasks.isEmpty && activeTasks.isEmpty && storingTasks.isEmpty && replayDone
 
   /** Estimate total accounts from keyspace coverage. Uses completed tasks' ranges to compute keyspace density (accounts
     * per unit of keyspace), then extrapolates to the full 2^256 space. Only considers tasks that have actually been
@@ -1705,6 +1946,36 @@ private class AccountRangeCoordinatorImpl(
         else Some(estimatedBig.toLong)
 
 object AccountRangeCoordinator:
+
+  /** Why the account phase has tasks pending and nothing in flight. */
+  enum IdleStallVerdict:
+    /** Dispatch is held on purpose (downstream back-pressure / zero budget) — not a stall. */
+    case Paused
+
+    /** Every non-snapless peer is confirmed stateless for the current root — a fresher root may help. */
+    case Stateless
+
+    /** Every known peer lacks a snapshot tree. */
+    case Snapless
+
+    /** Peers are absent, cooling down after timeouts, or only partly stateless — the root is not known to be bad. */
+    case PeerScarcity
+
+  /** Pure classification of an idle account phase. See [[SNAPSyncController.UnservableCause]] for how each verdict is
+    * escalated; only `Stateless` and `Snapless` may count toward the controller's restart threshold.
+    */
+  def classifyIdleStall(
+      dispatchPaused: Boolean,
+      knownPeers: Set[com.chipprbots.ethereum.network.PeerId],
+      stateless: Set[com.chipprbots.ethereum.network.PeerId],
+      snapless: Set[com.chipprbots.ethereum.network.PeerId]
+  ): IdleStallVerdict =
+    if dispatchPaused then IdleStallVerdict.Paused
+    else
+      val nonSnapless = knownPeers -- snapless
+      if knownPeers.nonEmpty && nonSnapless.isEmpty then IdleStallVerdict.Snapless
+      else if nonSnapless.nonEmpty && nonSnapless.subsetOf(stateless) then IdleStallVerdict.Stateless
+      else IdleStallVerdict.PeerScarcity
 
   sealed trait Command
   case class StartAccountRangeSync(stateRoot: ByteString) extends Command
@@ -1745,6 +2016,58 @@ object AccountRangeCoordinator:
   case class StorageQueuePressure(paused: Boolean) extends Command
   case class ByteCodeQueuePressure(paused: Boolean) extends Command
   private[actors] case object CheckDispatchStalled extends Command
+  private[actors] case object CheckpointTick extends Command
+  private[actors] case object ReplayCarriedContracts extends Command
+
+  /** Cadence of durable resume checkpoints (trie batch flush + task-file fsync + persisted cursors). Bounds the account
+    * work a crash can lose to this window; in-process restarts use the latest per-response snapshot.
+    */
+  val CheckpointInterval: FiniteDuration = 30.seconds
+  private[actors] val ReplayChunkEntries: Int = 4096
+  private[actors] val ReplayChunkInterval: FiniteDuration = 50.millis
+  private[actors] val ReplayPausedRetry: FiniteDuration = 1.second
+
+  /** Copy exactly the first `bytes` bytes of `from` into the (empty) file `to` and fsync it. Throws if `from` is
+    * shorter than `bytes` — the controller validated the size, so a short file here is a real error, not something to
+    * paper over.
+    */
+  private[actors] def copyPrefix(from: Path, to: Path, bytes: Long): Unit =
+    if bytes > 0 then
+      val in = java.nio.channels.FileChannel.open(from, java.nio.file.StandardOpenOption.READ)
+      try
+        val out = java.nio.channels.FileChannel.open(
+          to,
+          java.nio.file.StandardOpenOption.WRITE,
+          java.nio.file.StandardOpenOption.TRUNCATE_EXISTING
+        )
+        try
+          var copied = 0L
+          while copied < bytes do
+            val n = in.transferTo(copied, bytes - copied, out)
+            if n <= 0 then
+              throw new java.io.IOException(s"$from ended after $copied of $bytes bytes while carrying task entries")
+            copied += n
+          out.force(true)
+        finally out.close()
+      finally in.close()
+
+  /** Read entries `[fromEntry, untilEntry)` of fixed size `entrySize` from `path`. The callback's array is reused. */
+  private[actors] def foreachEntry(path: Path, entrySize: Int, fromEntry: Long, untilEntry: Long)(
+      f: Array[Byte] => Unit
+  ): Unit =
+    if untilEntry > fromEntry then
+      val in = new java.io.BufferedInputStream(Files.newInputStream(path), 1 << 16)
+      try
+        in.skipNBytes(fromEntry * entrySize)
+        val buf = new Array[Byte](entrySize)
+        var i = fromEntry
+        while i < untilEntry do
+          in.readNBytes(buf, 0, entrySize) match
+            case n if n == entrySize => f(buf)
+            case n =>
+              throw new java.io.IOException(s"$path: short read at entry $i ($n of $entrySize bytes)")
+          i += 1
+      finally in.close()
   private[actors] case class StoreAccountChunk(
       task: AccountTask,
       remaining: Seq[(ByteString, com.chipprbots.ethereum.domain.Account)],
@@ -1802,7 +2125,9 @@ object AccountRangeCoordinator:
       accountTrieEcOverride: Option[ExecutionContext] = None,
       storageScheme: StorageScheme = StorageScheme.Hash,
       pathNodeStorage: Option[PathNodeStorage] = None,
-      taskFileDir: Option[Path] = None
+      taskFileDir: Option[Path] = None,
+      carriedTaskFiles: Option[ContractTaskFiles] = None,
+      progressGeneration: Long = 0L
   ): Behavior[Command] =
     Behaviors.withTimers { timers =>
       Behaviors.setup { ctx =>
@@ -1822,7 +2147,9 @@ object AccountRangeCoordinator:
           accountTrieEcOverride = accountTrieEcOverride,
           storageScheme = storageScheme,
           pathNodeStorage = pathNodeStorage,
-          taskFileDir = taskFileDir
+          taskFileDir = taskFileDir,
+          carriedTaskFiles = carriedTaskFiles,
+          progressGeneration = progressGeneration
         )
         impl.onStart()
         impl.receive()
@@ -1837,5 +2164,8 @@ case class AccountRangeStats(
     tasksPending: Int,
     progress: Double,
     elapsedTimeMs: Long,
-    contractAccountsFound: Long
+    contractAccountsFound: Long,
+    // True while dispatch is deliberately paused (downstream back-pressure or a zero per-peer budget). The
+    // controller's stagnation watchdog must not count a paused phase as stalled.
+    dispatchPaused: Boolean = false
 )

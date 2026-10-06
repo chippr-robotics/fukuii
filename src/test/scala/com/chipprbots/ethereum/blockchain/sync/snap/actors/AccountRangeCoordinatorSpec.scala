@@ -690,3 +690,342 @@ class AccountRangeCoordinatorSpec extends ScalaTestWithActorTestKit() with AnyFl
     coord ! AccountRangeCoordinator.ByteCodeQueuePressure(paused = false)
     networkPeerManager.expectMessageType[NetworkPeerManagerActor.SendMessageCmd]
   }
+
+  // ── Idle-stall classification (Sepolia 2026-10-06: scarcity refreshes reached the restart threshold) ──
+
+  private val pA = com.chipprbots.ethereum.network.PeerId("a")
+  private val pB = com.chipprbots.ethereum.network.PeerId("b")
+
+  "AccountRangeCoordinator.classifyIdleStall" should "treat a deliberate pause as Paused regardless of the pool" taggedAs UnitTest in {
+    AccountRangeCoordinator.classifyIdleStall(
+      dispatchPaused = true,
+      knownPeers = Set(pA, pB),
+      stateless = Set(pA, pB),
+      snapless = Set.empty
+    ) shouldBe AccountRangeCoordinator.IdleStallVerdict.Paused
+  }
+
+  it should "classify cooling / partly-stateless / empty pools as PeerScarcity" taggedAs UnitTest in {
+    import AccountRangeCoordinator.IdleStallVerdict.PeerScarcity
+    // Sepolia log: "2 known peers, 0 stateless, 1 cooling"
+    AccountRangeCoordinator.classifyIdleStall(false, Set(pA, pB), Set.empty, Set.empty) shouldBe PeerScarcity
+    AccountRangeCoordinator.classifyIdleStall(false, Set(pA, pB), Set(pA), Set.empty) shouldBe PeerScarcity
+    AccountRangeCoordinator.classifyIdleStall(false, Set.empty, Set.empty, Set.empty) shouldBe PeerScarcity
+  }
+
+  it should "classify all-non-snapless-stateless as Stateless and all-snapless as Snapless" taggedAs UnitTest in {
+    import AccountRangeCoordinator.IdleStallVerdict.*
+    AccountRangeCoordinator.classifyIdleStall(false, Set(pA, pB), Set(pA, pB), Set.empty) shouldBe Stateless
+    AccountRangeCoordinator.classifyIdleStall(false, Set(pA, pB), Set(pA), Set(pB)) shouldBe Stateless
+    AccountRangeCoordinator.classifyIdleStall(false, Set(pA, pB), Set.empty, Set(pA, pB)) shouldBe Snapless
+  }
+
+  "SNAPSyncController.countsTowardRestart" should "count stateless/snapless evidence but never peer scarcity" taggedAs UnitTest in {
+    SNAPSyncController.countsTowardRestart(SNAPSyncController.UnservableCause.Stateless) shouldBe true
+    SNAPSyncController.countsTowardRestart(SNAPSyncController.UnservableCause.Snapless) shouldBe true
+    SNAPSyncController.countsTowardRestart(SNAPSyncController.UnservableCause.PeerScarcity) shouldBe false
+  }
+
+  "AccountRangeCoordinator stall watchdog" should "not escalate while downstream back-pressure pauses dispatch" taggedAs UnitTest in {
+    val root = kec256(ByteString("backpressure-no-stall-root"))
+    val snapSyncController = testKit.createTestProbe[SNAPSyncController.Command]()
+    val coord = arcProps(
+      stateRoot = root,
+      networkPeerManager = testKit.createTestProbe[NetworkPeerManagerActor.Command]().ref,
+      requestTracker = new SNAPRequestTracker()(classicSystem.scheduler),
+      mptStorage = new TestMptStorage(),
+      concurrency = 4,
+      snapSyncController = snapSyncController.ref
+    )
+    coord ! AccountRangeCoordinator.StorageQueuePressure(paused = true)
+    // Far more than the 3-tick escalation threshold.
+    (1 to 10).foreach(_ => coord ! AccountRangeCoordinator.CheckDispatchStalled)
+    coord ! AccountRangeCoordinator.AccountGetProgress(statusProbe.ref)
+    statusProbe.expectMessageType[AccountRangeStats].dispatchPaused shouldBe true
+
+    // The progress reply above is a barrier: all ten ticks were processed. Before the fix the third tick sent
+    // PivotStateUnservable here; now nothing may reach the controller.
+    snapSyncController.expectNoMessage(300.millis)
+    testKit.stop(coord)
+  }
+
+  it should "escalate a peerless idle phase as PeerScarcity (refresh only, never counted toward restart)" taggedAs UnitTest in {
+    val root = kec256(ByteString("scarcity-stall-root"))
+    val snapSyncController = testKit.createTestProbe[SNAPSyncController.Command]()
+    val coord = arcProps(
+      stateRoot = root,
+      networkPeerManager = testKit.createTestProbe[NetworkPeerManagerActor.Command]().ref,
+      requestTracker = new SNAPRequestTracker()(classicSystem.scheduler),
+      mptStorage = new TestMptStorage(),
+      concurrency = 4,
+      snapSyncController = snapSyncController.ref
+    )
+    (1 to 3).foreach(_ => coord ! AccountRangeCoordinator.CheckDispatchStalled)
+    val fished = snapSyncController.fishForMessage(3.seconds) {
+      case _: SNAPSyncController.PivotStateUnservable =>
+        org.apache.pekko.actor.testkit.typed.FishingOutcome.Complete
+      case _ => org.apache.pekko.actor.testkit.typed.FishingOutcome.ContinueAndIgnore
+    }
+    val unservable = fished.collect { case m: SNAPSyncController.PivotStateUnservable => m }.head
+    unservable.cause shouldBe SNAPSyncController.UnservableCause.PeerScarcity
+    SNAPSyncController.countsTowardRestart(unservable.cause) shouldBe false
+    testKit.stop(coord)
+  }
+
+  // ── Resume from a mid-range cursor with carried contract task files (Sepolia 2026-10-06: 17.35M accounts lost) ──
+
+  private def entry(tag: String, i: Int, size: Int): Array[Byte] =
+    if size == 32 then kec256(ByteString(s"$tag-$i")).toArray
+    else (kec256(ByteString(s"$tag-acct-$i")) ++ kec256(ByteString(s"$tag-root-$i"))).toArray
+
+  /** Previous coordinator's task files: `counted` valid entries plus `trailing` entries written after the checkpoint
+    * (they belong to accounts above the cursor and must NOT be carried).
+    */
+  private def previousTaskFiles(dir: java.nio.file.Path, counted: Int, codeCounted: Int): ContractTaskFiles =
+    val storage = dir.resolve("prev-storage.bin")
+    val code = dir.resolve("prev-code.bin")
+    java.nio.file.Files.write(storage, (0 until counted + 2).flatMap(i => entry("s", i, 64)).toArray)
+    java.nio.file.Files.write(code, (0 until codeCounted + 2).flatMap(i => entry("c", i, 32)).toArray)
+    ContractTaskFiles(storage.toString, counted.toLong, code.toString, codeCounted.toLong)
+
+  private def spawnResumed(
+      root: ByteString,
+      networkPeerManager: org.apache.pekko.actor.typed.ActorRef[NetworkPeerManagerActor.Command],
+      controller: org.apache.pekko.actor.typed.ActorRef[SNAPSyncController.Command],
+      resumeProgress: Map[ByteString, ByteString],
+      carried: Option[ContractTaskFiles],
+      dir: java.nio.file.Path,
+      generation: Long
+  ): org.apache.pekko.actor.typed.ActorRef[AccountRangeCoordinator.Command] =
+    testKit.spawn(
+      AccountRangeCoordinator(
+        stateRoot = root,
+        networkPeerManager = networkPeerManager,
+        requestTracker = new SNAPRequestTracker()(classicSystem.scheduler),
+        mptStorage = new TestMptStorage(),
+        concurrency = 1,
+        snapSyncController = controller,
+        resumeProgress = resumeProgress,
+        accountTrieEcOverride = Some(classicSystem.dispatcher),
+        taskFileDir = Some(dir),
+        carriedTaskFiles = carried,
+        progressGeneration = generation
+      )
+    )
+
+  private def fish[T <: SNAPSyncController.Command](
+      probe: org.apache.pekko.actor.testkit.typed.scaladsl.TestProbe[SNAPSyncController.Command]
+  )(pf: PartialFunction[SNAPSyncController.Command, T]): T =
+    probe
+      .fishForMessage(5.seconds) { m =>
+        if pf.isDefinedAt(m) then org.apache.pekko.actor.testkit.typed.FishingOutcome.Complete
+        else org.apache.pekko.actor.testkit.typed.FishingOutcome.ContinueAndIgnore
+      }
+      .collect(pf)
+      .head
+
+  private def firstStartingHash(
+      networkPeerManager: org.apache.pekko.actor.testkit.typed.scaladsl.TestProbe[NetworkPeerManagerActor.Command]
+  ): ByteString =
+    networkPeerManager
+      .expectMessageType[NetworkPeerManagerActor.SendMessageCmd]
+      .message
+      .asInstanceOf[GetAccountRangeEnc]
+      .underlyingMsg
+      .startingHash
+
+  private val midCursor: ByteString = ByteString(Array.fill(32)(0x40.toByte))
+
+  "A resumed AccountRangeCoordinator" should "resume a partial range from its cursor and replay the carried contract work (pivot change / in-process restart)" taggedAs UnitTest in {
+    val dir = java.nio.file.Files.createTempDirectory("arc-resume-")
+    val carried = previousTaskFiles(dir, counted = 3, codeCounted = 2)
+    val nm = testKit.createTestProbe[NetworkPeerManagerActor.Command]()
+    val controller = testKit.createTestProbe[SNAPSyncController.Command]()
+    val peer = PeerTestHelpers.createTestPeer("resume-peer", testKit.createTestProbe[Any]().ref.toClassic)
+    val root = kec256(ByteString("resume-root"))
+
+    val coord =
+      spawnResumed(root, nm.ref, controller.ref, Map(AccountTask.MaxHash32 -> midCursor), Some(carried), dir, 7)
+    coord ! AccountRangeCoordinator.PeerAvailable(peer)
+
+    // The range is NOT restarted from 0x00: the first request starts at the saved cursor.
+    firstStartingHash(nm) shouldBe midCursor
+
+    // The contract work of the accounts below the cursor is replayed — exactly the counted entries, not the trailing.
+    val replay = fish(controller) { case m: SNAPSyncController.IncrementalContractData => m }
+    replay.replayed shouldBe true
+    replay.storageTasks.map(_.accountHash) shouldBe (0 until 3).map(i => ByteString(entry("s", i, 64).take(32)))
+    replay.codeHashes shouldBe (0 until 2).map(i => ByteString(entry("c", i, 32)))
+
+    // Stop (pivot-change restart): the final snapshot is durable, echoes the generation, keeps the cursor and points
+    // at this coordinator's OWN files, whose prefix is the carried prefix.
+    testKit.stop(coord)
+    val snap = fish(controller) { case m: SNAPSyncController.AccountRangeProgressCmd if m.durable => m }
+    snap.generation shouldBe 7L
+    snap.progress(AccountTask.MaxHash32) shouldBe midCursor
+    val files = snap.taskFiles.get
+    files.storageCount shouldBe 3L
+    files.codeHashesCount shouldBe 2L
+    files.storagePath should not be carried.storagePath
+    java.nio.file.Files.readAllBytes(java.nio.file.Path.of(files.storagePath)).toSeq shouldBe
+      java.nio.file.Files.readAllBytes(java.nio.file.Path.of(carried.storagePath)).toSeq.take(3 * 64)
+    java.nio.file.Files.readAllBytes(java.nio.file.Path.of(files.codeHashesPath)).toSeq shouldBe
+      java.nio.file.Files.readAllBytes(java.nio.file.Path.of(carried.codeHashesPath)).toSeq.take(2 * 32)
+  }
+
+  it should "resume the same way after a simulated process restart through the persisted checkpoint" taggedAs UnitTest in {
+    val dir = java.nio.file.Files.createTempDirectory("arc-restart-")
+    val carried = previousTaskFiles(dir, counted = 3, codeCounted = 2)
+    val root = kec256(ByteString("restart-root"))
+
+    // Run 1: resumed coordinator, stopped -> durable snapshot (what the controller persists).
+    val controller1 = testKit.createTestProbe[SNAPSyncController.Command]()
+    val coord1 = spawnResumed(
+      root,
+      testKit.createTestProbe[NetworkPeerManagerActor.Command]().ref,
+      controller1.ref,
+      Map(AccountTask.MaxHash32 -> midCursor),
+      Some(carried),
+      dir,
+      1
+    )
+    fish(controller1) { case m: SNAPSyncController.IncrementalContractData => m }
+    testKit.stop(coord1)
+    val snap = fish(controller1) { case m: SNAPSyncController.AccountRangeProgressCmd if m.durable => m }
+
+    // Persist / reload through the versioned checkpoint codec, then the controller's resumability gate.
+    val json = AccountResumeCheckpoint.encode(
+      AccountResumeCheckpoint(root, BigInt(11855776), snap.progress, snap.taskFiles.get)
+    )
+    val reloaded = AccountResumeCheckpoint.decode(json).fold(e => fail(e), identity)
+    reloaded.cursors shouldBe snap.progress
+    reloaded.pivotBlock shouldBe BigInt(11855776)
+    SNAPSyncController.checkResumable(reloaded.cursors, reloaded.taskFiles, concurrency = 1) shouldBe Right(())
+
+    // Run 2 (new process, new pivot root): resumes from the cursor and replays the same 3 tasks — no duplicates.
+    val nm2 = testKit.createTestProbe[NetworkPeerManagerActor.Command]()
+    val controller2 = testKit.createTestProbe[SNAPSyncController.Command]()
+    val coord2 = spawnResumed(
+      kec256(ByteString("restart-root-new-pivot")),
+      nm2.ref,
+      controller2.ref,
+      reloaded.cursors,
+      Some(reloaded.taskFiles),
+      dir,
+      2
+    )
+    coord2 ! AccountRangeCoordinator.PeerAvailable(
+      PeerTestHelpers.createTestPeer("restart-peer", testKit.createTestProbe[Any]().ref.toClassic)
+    )
+    firstStartingHash(nm2) shouldBe midCursor
+    val replay = fish(controller2) { case m: SNAPSyncController.IncrementalContractData => m }
+    replay.storageTasks.size shouldBe 3
+    replay.codeHashes.size shouldBe 2
+    testKit.stop(coord2)
+  }
+
+  it should "re-download a partial range from its start when no task files are carried (legacy record)" taggedAs UnitTest in {
+    val dir = java.nio.file.Files.createTempDirectory("arc-legacy-")
+    val nm = testKit.createTestProbe[NetworkPeerManagerActor.Command]()
+    val controller = testKit.createTestProbe[SNAPSyncController.Command]()
+    val coord = spawnResumed(
+      kec256(ByteString("legacy-root")),
+      nm.ref,
+      controller.ref,
+      Map(AccountTask.MaxHash32 -> midCursor),
+      None,
+      dir,
+      0
+    )
+    coord ! AccountRangeCoordinator.PeerAvailable(
+      PeerTestHelpers.createTestPeer("legacy-peer", testKit.createTestProbe[Any]().ref.toClassic)
+    )
+    firstStartingHash(nm) shouldBe ByteString(Array.fill(32)(0.toByte))
+    testKit.stop(coord)
+  }
+
+  "AccountResumeCheckpoint / checkResumable" should "reject other versions, a mismatched range layout and short task files" taggedAs UnitTest in {
+    val dir = java.nio.file.Files.createTempDirectory("arc-gate-")
+    val files = previousTaskFiles(dir, counted = 3, codeCounted = 2)
+    val cp = AccountResumeCheckpoint(
+      ByteString(Array.fill(32)(1.toByte)),
+      BigInt(5),
+      Map(AccountTask.MaxHash32 -> midCursor),
+      files
+    )
+    val json = AccountResumeCheckpoint.encode(cp)
+    AccountResumeCheckpoint.decode(json).map(_.taskFiles) shouldBe Right(files)
+    AccountResumeCheckpoint.decode(json.replace("\"version\":1", "\"version\":2")).isLeft shouldBe true
+    AccountResumeCheckpoint.decode("{}").isLeft shouldBe true
+    // 1 cursor but 16 ranges at concurrency 16 — a partial carry would duplicate contract work.
+    SNAPSyncController.checkResumable(cp.cursors, files, concurrency = 16).isLeft shouldBe true
+    // Counts larger than the files hold.
+    SNAPSyncController.checkResumable(cp.cursors, files.copy(storageCount = 100), concurrency = 1).isLeft shouldBe true
+    SNAPSyncController
+      .checkResumable(cp.cursors, files.copy(codeHashesPath = dir.resolve("gone").toString), 1)
+      .isLeft shouldBe
+      true
+  }
+
+  // ── Review nits N2 / N4 ──
+
+  "A finalising AccountRangeCoordinator" should "never emit a durable checkpoint once trie finalisation has started (N2)" taggedAs UnitTest in {
+    // A fully-complete range finalises right away; the PostStop snapshot that follows must be in-memory only.
+    val controller = testKit.createTestProbe[SNAPSyncController.Command]()
+    val coord = arcProps(
+      stateRoot = kec256(ByteString("n2-root")),
+      networkPeerManager = testKit.createTestProbe[NetworkPeerManagerActor.Command]().ref,
+      requestTracker = new SNAPRequestTracker()(classicSystem.scheduler),
+      mptStorage = new TestMptStorage(),
+      concurrency = 1,
+      snapSyncController = controller.ref,
+      resumeProgress = Map(AccountTask.MaxHash32 -> AccountTask.MaxHash32)
+    )
+    fish(controller) { case SNAPSyncController.AccountRangeSyncComplete => SNAPSyncController.AccountRangeSyncComplete }
+    val snap = fish(controller) { case m: SNAPSyncController.AccountRangeProgressCmd => m }
+    snap.durable shouldBe false
+    testKit.stop(coord)
+  }
+
+  "Superseded task files (N4)" should "be deleted only after a newer checkpoint exists, and a crash before that still resumes" taggedAs UnitTest in {
+    val dir = java.nio.file.Files.createTempDirectory("arc-sweep-")
+    // Source files named like real coordinator files, so the sweep recognises them.
+    val srcStorage = StorageTaskFile.createFile(Some(dir), "fukuii-contract-storage-", ".bin")
+    val srcCode = StorageTaskFile.createFile(Some(dir), "fukuii-unique-codehashes-", ".bin")
+    java.nio.file.Files.write(srcStorage, (0 until 3).flatMap(i => entry("s", i, 64)).toArray)
+    java.nio.file.Files.write(srcCode, (0 until 2).flatMap(i => entry("c", i, 32)).toArray)
+    val source = ContractTaskFiles(srcStorage.toString, 3, srcCode.toString, 2)
+    val oldCursors = Map(AccountTask.MaxHash32 -> midCursor)
+    val unrelated = java.nio.file.Files.write(dir.resolve("keep-me.bin"), Array[Byte](1, 2, 3))
+
+    val controller = testKit.createTestProbe[SNAPSyncController.Command]()
+    val coord = spawnResumed(
+      kec256(ByteString("sweep-root")),
+      testKit.createTestProbe[NetworkPeerManagerActor.Command]().ref,
+      controller.ref,
+      oldCursors,
+      Some(source),
+      dir,
+      3
+    )
+    fish(controller) { case m: SNAPSyncController.IncrementalContractData => m }
+
+    // "Crash" after the copy, before any new checkpoint: the previous record still points at the source, which the
+    // coordinator never deletes — it is still resumable.
+    java.nio.file.Files.exists(srcStorage) shouldBe true
+    SNAPSyncController.checkResumable(oldCursors, source, concurrency = 1) shouldBe Right(())
+
+    testKit.stop(coord)
+    val newFiles = fish(controller) {
+      case m: SNAPSyncController.AccountRangeProgressCmd if m.durable => m
+    }.taskFiles.get
+
+    // Once the new checkpoint is persisted the controller sweeps with keep = new record files (+ live carry source,
+    // here deliberately omitted to model the next generation): the source goes, the new files and others stay.
+    val deleted = SNAPSyncController.sweepTaskFiles(dir, SNAPSyncController.taskFilePaths(newFiles))
+    deleted.map(_.toString).toSet shouldBe Set(srcStorage.toString, srcCode.toString)
+    java.nio.file.Files.exists(java.nio.file.Path.of(newFiles.storagePath)) shouldBe true
+    java.nio.file.Files.exists(unrelated) shouldBe true
+    SNAPSyncController.checkResumable(oldCursors, newFiles, concurrency = 1) shouldBe Right(())
+    SNAPSyncController.checkResumable(oldCursors, source, concurrency = 1).isLeft shouldBe true
+  }
