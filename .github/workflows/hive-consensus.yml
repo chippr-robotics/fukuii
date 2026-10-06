@@ -25,6 +25,10 @@ on:
         description: 'Per-sim timelimit (e.g. 40m)'
         required: false
         default: '60m'
+      sim_limit:
+        description: 'Optional --sim.limit regex for a targeted run (e.g. ^legacy-cancun$/^/transitiontests/bchomesteadtodao/)'
+        required: false
+        default: ''
 
 permissions:
   contents: read
@@ -41,6 +45,8 @@ jobs:
       label: consensus
       # Declared in .github/gates.yml (gate `hive-consensus`). A run emitting fewer
       # than this many results is a truncated run, not a pass.
-      min_tests: 50
+      # A targeted run (sim_limit set) legitimately emits a handful of results.
+      min_tests: ${{ github.event.inputs.sim_limit != '' && 1 || 50 }}
       sim_timelimit: ${{ github.event.inputs.sim_timelimit || '60m' }}
+      sim_limit: ${{ github.event.inputs.sim_limit || '' }}
       hive_ref: ${{ github.event.inputs.hive_ref || 'master' }}

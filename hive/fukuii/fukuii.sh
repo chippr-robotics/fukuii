@@ -161,6 +161,56 @@ fi
 [ -n "$GRAY_GLACIER" ] && FLAGS="$FLAGS -Dfukuii.blockchains.hive.gray-glacier-block-number=$GRAY_GLACIER"
 [ -n "$MERGE_NETSPLIT" ] && FLAGS="$FLAGS -Dfukuii.blockchains.hive.merge-netsplit-block-number=$MERGE_NETSPLIT"
 
+# DAO hard fork. hive's consensus simulator sets HIVE_FORK_DAO_VOTE=1 on every test and
+# HIVE_FORK_DAO_BLOCK to the fork's own value (e.g. 5 for HomesteadToDaoAt5, 2000 where the
+# fork is out of reach); go-ethereum's mapper maps them to daoForkBlock / daoForkSupport=true.
+# hive-chain.conf has `dao = null`, so without this block the DAO fork did not exist here:
+# extraData in [fork, fork+10) was never checked (bcHomesteadToDao UncleExtradata) and the
+# 116 drain-list balances were never moved to the refund contract at the fork block (state
+# mismatch in DaoTransactions*). Only when BOTH are set, like geth's DAOForkSupport: a
+# simulator that sets a DAO block without the vote keeps `dao = null` and an unchanged
+# fork id.
+#
+# Every key DaoForkConfig reads is passed, because BlockchainConfig wraps it in
+# Try(...).toOption: a missing required key (fork-block-number, fork-block-hash,
+# include-on-fork-id-list) silently yields NO DAO fork rather than an error.
+#
+# fork-block-hash is consumed ONLY by the peer-handshake ForkResolver (it accepts a peer iff
+# its header at the fork block has this hash). The consensus sim has no peers, so a
+# well-formed all-zero hash is used; the mainnet hash would be equally meaningless here.
+#
+# The drain list is passed as numerically-indexed system properties
+# (...drain-list.0=, .1=, ...). Typesafe Config turns an object whose keys are all
+# non-negative integers into a list when a list is requested (HOCON spec, "numerically-indexed
+# objects"; DefaultTransformer), which is what getStringList does. Each entry is checked to
+# be exactly 40 hex chars, so nothing shell-special can reach $FLAGS.
+# HiveDaoForkConfigSpec loads properties of exactly this form and asserts 116 addresses.
+DAO_BLOCK=${HIVE_FORK_DAO_BLOCK:-}
+case "${HIVE_FORK_DAO_VOTE:-}" in 1|true|True|TRUE) DAO_VOTE=1 ;; *) DAO_VOTE= ;; esac
+if [ -n "$DAO_BLOCK" ] && [ -n "$DAO_VOTE" ]; then
+    DAO_PREFIX="-Dfukuii.blockchains.hive.dao"
+    FLAGS="$FLAGS $DAO_PREFIX.fork-block-number=$DAO_BLOCK"
+    FLAGS="$FLAGS $DAO_PREFIX.fork-block-hash=0000000000000000000000000000000000000000000000000000000000000000"
+    FLAGS="$FLAGS $DAO_PREFIX.block-extra-data=dao-hard-fork"
+    FLAGS="$FLAGS $DAO_PREFIX.block-extra-data-range=10"
+    FLAGS="$FLAGS $DAO_PREFIX.refund-contract-address=bf4ed7b27f1d666546e30d74d50d173d20bca754"
+    FLAGS="$FLAGS $DAO_PREFIX.include-on-fork-id-list=true"
+    DAO_I=0
+    while IFS= read -r DAO_ADDR; do
+        [ -z "$DAO_ADDR" ] && continue
+        if ! printf '%s' "$DAO_ADDR" | grep -Eq '^[0-9a-f]{40}$'; then
+            echo "dao-drain-list.txt: malformed address '$DAO_ADDR'" >&2
+            exit 1
+        fi
+        FLAGS="$FLAGS $DAO_PREFIX.drain-list.$DAO_I=$DAO_ADDR"
+        DAO_I=$((DAO_I + 1))
+    done < /dao-drain-list.txt
+    if [ "$DAO_I" -ne 116 ]; then
+        echo "dao-drain-list.txt: expected 116 addresses, found $DAO_I" >&2
+        exit 1
+    fi
+fi
+
 # RPC
 [ -n "$TARGET_GAS_LIMIT" ] && FLAGS="$FLAGS -Dfukuii.mining.gas-limit-target=$TARGET_GAS_LIMIT"
 
