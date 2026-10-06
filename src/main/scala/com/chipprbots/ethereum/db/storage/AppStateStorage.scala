@@ -136,7 +136,8 @@ class AppStateStorage(val dataSource: DataSource) extends TransactionalKeyValueS
     !isSnapSyncDone() && (
       getSnapSyncPivotBlock().isDefined ||
         getSnapSyncStateRoot().isDefined ||
-        getSnapSyncProgress().isDefined
+        getSnapSyncProgress().isDefined ||
+        getSnapAccountResumeCheckpoint().isDefined
     )
 
   /** Check if bytecode recovery scan has completed (Bug 20 hardening) */
@@ -302,6 +303,20 @@ class AppStateStorage(val dataSource: DataSource) extends TransactionalKeyValueS
     */
   def putSnapSyncProgress(progressJson: String): DataSourceBatchUpdate =
     put(Keys.SnapSyncProgress, progressJson)
+
+  /** Versioned account-phase resume checkpoint (JSON, see `snap.AccountResumeCheckpoint`): per-range cursors, the root
+    * and pivot they were downloaded against, and the contract task files (paths + entry counts) that hold the
+    * storage/bytecode work derived from every account below those cursors. Stored under a fixed key — NOT keyed by the
+    * state root — so a process restart that picks a fresh pivot still finds it.
+    */
+  def getSnapAccountResumeCheckpoint(): Option[String] =
+    get(Keys.SnapAccountResumeCheckpoint)
+
+  def putSnapAccountResumeCheckpoint(json: String): DataSourceBatchUpdate =
+    put(Keys.SnapAccountResumeCheckpoint, json)
+
+  def removeSnapAccountResumeCheckpoint(): DataSourceBatchUpdate =
+    remove(Keys.SnapAccountResumeCheckpoint)
 
   /** Get the target block number for SNAP sync bootstrap via regular sync. This is used when SNAP sync requires a
     * minimum number of blocks to start.
@@ -539,6 +554,7 @@ object AppStateStorage:
     val SnapSyncMinPivotBlock = "SnapSyncMinPivotBlock"
     val SnapSyncStateRoot = "SnapSyncStateRoot"
     val SnapSyncProgress = "SnapSyncProgress"
+    val SnapAccountResumeCheckpoint = "SnapAccountResumeCheckpoint"
     val SnapSyncBootstrapTarget = "SnapSyncBootstrapTarget"
     val BytecodeRecoveryDone = "BytecodeRecoveryDone"
     val BulkBytecodeRecoveryFailures = "BulkBytecodeRecoveryFailures"
