@@ -67,10 +67,13 @@ class HiveDaoForkConfigSpec extends AnyFlatSpec with Matchers:
     val layered = ConfigFactory.parseProperties(hiveDaoProps(forkBlock)).withFallback(shippedRoot).resolve()
     BlockchainConfig.fromRawConfig(layered.getConfig("fukuii.blockchains.hive"))
 
-  "hive adapter drain list" should "hold go-ethereum's 116 DAODrainList() addresses" taggedAs (UnitTest, ConsensusTest) in {
+  "hive adapter drain list" should "hold go-ethereum's 116 DAODrainList() addresses" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in {
     hiveDrainList should have size 116
     hiveDrainList.distinct should have size 116
-    all(hiveDrainList) should fullyMatch regex "[0-9a-f]{40}"
+    (all(hiveDrainList) should fullyMatch).regex("[0-9a-f]{40}")
     hiveDrainList.head shouldBe "d4fe7bc31cedb7bfb8a345f31e668033056b2728"
   }
 
