@@ -81,6 +81,16 @@ final class SnapHashTrie(
     pending.clear()
     pendingBytes = 0L
 
+  /** Write the pending batch now. Every buffered node is complete (StackTrie emits bottom-up), so a durable node never
+    * references a non-durable child.
+    */
+  override def flushEmitted(): Unit = flush()
+
+  /** Keep what was emitted (flush it), drop the open right-boundary spine. Content-addressed: nothing to delete. */
+  override def suspend(): Unit =
+    flush()
+    stackTrie.reset()
+
   /** Bytes currently buffered in the pending batch (not yet flushed). */
   def pendingBatchBytes: Long = pendingBytes
 
