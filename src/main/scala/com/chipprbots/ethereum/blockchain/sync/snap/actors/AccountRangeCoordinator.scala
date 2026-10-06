@@ -650,7 +650,7 @@ private class AccountRangeCoordinatorImpl(
       taskStackTries.values.foreach(_.suspend())
       taskStackTries.clear()
     // Final durable snapshot so the controller can resume from the cursors (needs the task streams still open).
-    sendProgressSnapshot(durable = true)
+    sendProgressSnapshot(durableRequested = true)
     // Close every stream (previously a nested try/catch closed only the first one unless it threw), then delete the
     // contract-accounts file, which nothing reads after this coordinator. contractStorageFile and
     // uniqueCodeHashesFile are NOT deleted — the controller owns them (storage-phase streaming, accounts-complete
@@ -672,10 +672,20 @@ private class AccountRangeCoordinatorImpl(
     * so a cursor persisted from this snapshot never runs ahead of the data it implies. Non-durable snapshots (per
     * response) are only used in-process: their task-file entries are already flushed to the OS, which is all a reader
     * in the same process needs.
+    *
+    * "Flushed before the checkpoint" means written to the node storage. Under archive/basic pruning that storage writes
+    * through to RocksDB. Under cached ("inmemory") pruning, CachedReferenceCountedStorage holds nodes in its LRU/change
+    * log until a block save, so a persisted cursor CAN run ahead of on-disk nodes; correctness then rests on the
+    * healing walk that every resume forces (missing nodes are fetched), not on this flush.
+    *
+    * Once trie finalisation has started, the finalisation Future owns the tries and nothing here may flush them, so a
+    * durable request is downgraded to an in-memory snapshot: an "all ranges complete" checkpoint must never be
+    * persisted ahead of the finalised nodes. (The controller retires the checkpoint at accounts-complete anyway.)
     */
-  private def sendProgressSnapshot(durable: Boolean = false): Unit =
+  private def sendProgressSnapshot(durableRequested: Boolean = false): Unit =
+    val durable = durableRequested && !finalizationStarted
     if durable then
-      if !finalizationStarted then taskStackTries.values.foreach(_.flushEmitted())
+      taskStackTries.values.foreach(_.flushEmitted())
       syncTaskFiles()
     val allTasks =
       pendingTasks.iterator ++ activeTasks.values.map(_._1) ++ storingTasks.values ++ completedTasks
@@ -972,7 +982,7 @@ private class AccountRangeCoordinatorImpl(
           Behaviors.same
 
         case CheckpointTick =>
-          sendProgressSnapshot(durable = true)
+          sendProgressSnapshot(durableRequested = true)
           Behaviors.same
 
         case ReplayCarriedContracts =>
@@ -1417,7 +1427,7 @@ private class AccountRangeCoordinatorImpl(
       s"Account range COMPLETE: $range by empty proof-of-absence " +
         s"(proofNodes=$proofNodes, ${completedTasks.size}/$concurrency ranges done, $accountsDownloaded accounts total)"
     )
-    sendProgressSnapshot(durable = true)
+    sendProgressSnapshot(durableRequested = true)
     ctx.self ! CheckCompletion
 
   private def handleTaskFailed(requestId: BigInt, reason: String): Unit =
@@ -1631,7 +1641,7 @@ private class AccountRangeCoordinatorImpl(
             )
           }
           // Durable checkpoint: a completed range is the most valuable progress to keep.
-          sendProgressSnapshot(durable = true)
+          sendProgressSnapshot(durableRequested = true)
         else
           // Need more requests for the same interval; re-queue with updated `next`. Re-tag with the CURRENT root: a
           // pivot refresh while this response was being stored re-tagged pendingTasks only, not this task.
