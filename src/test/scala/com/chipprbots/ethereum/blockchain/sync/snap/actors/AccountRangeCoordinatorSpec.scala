@@ -966,3 +966,66 @@ class AccountRangeCoordinatorSpec extends ScalaTestWithActorTestKit() with AnyFl
       .isLeft shouldBe
       true
   }
+
+  // ── Review nits N2 / N4 ──
+
+  "A finalising AccountRangeCoordinator" should "never emit a durable checkpoint once trie finalisation has started (N2)" taggedAs UnitTest in {
+    // A fully-complete range finalises right away; the PostStop snapshot that follows must be in-memory only.
+    val controller = testKit.createTestProbe[SNAPSyncController.Command]()
+    val coord = arcProps(
+      stateRoot = kec256(ByteString("n2-root")),
+      networkPeerManager = testKit.createTestProbe[NetworkPeerManagerActor.Command]().ref,
+      requestTracker = new SNAPRequestTracker()(classicSystem.scheduler),
+      mptStorage = new TestMptStorage(),
+      concurrency = 1,
+      snapSyncController = controller.ref,
+      resumeProgress = Map(AccountTask.MaxHash32 -> AccountTask.MaxHash32)
+    )
+    fish(controller) { case SNAPSyncController.AccountRangeSyncComplete => SNAPSyncController.AccountRangeSyncComplete }
+    val snap = fish(controller) { case m: SNAPSyncController.AccountRangeProgressCmd => m }
+    snap.durable shouldBe false
+    testKit.stop(coord)
+  }
+
+  "Superseded task files (N4)" should "be deleted only after a newer checkpoint exists, and a crash before that still resumes" taggedAs UnitTest in {
+    val dir = java.nio.file.Files.createTempDirectory("arc-sweep-")
+    // Source files named like real coordinator files, so the sweep recognises them.
+    val srcStorage = StorageTaskFile.createFile(Some(dir), "fukuii-contract-storage-", ".bin")
+    val srcCode = StorageTaskFile.createFile(Some(dir), "fukuii-unique-codehashes-", ".bin")
+    java.nio.file.Files.write(srcStorage, (0 until 3).flatMap(i => entry("s", i, 64)).toArray)
+    java.nio.file.Files.write(srcCode, (0 until 2).flatMap(i => entry("c", i, 32)).toArray)
+    val source = ContractTaskFiles(srcStorage.toString, 3, srcCode.toString, 2)
+    val oldCursors = Map(AccountTask.MaxHash32 -> midCursor)
+    val unrelated = java.nio.file.Files.write(dir.resolve("keep-me.bin"), Array[Byte](1, 2, 3))
+
+    val controller = testKit.createTestProbe[SNAPSyncController.Command]()
+    val coord = spawnResumed(
+      kec256(ByteString("sweep-root")),
+      testKit.createTestProbe[NetworkPeerManagerActor.Command]().ref,
+      controller.ref,
+      oldCursors,
+      Some(source),
+      dir,
+      3
+    )
+    fish(controller) { case m: SNAPSyncController.IncrementalContractData => m }
+
+    // "Crash" after the copy, before any new checkpoint: the previous record still points at the source, which the
+    // coordinator never deletes — it is still resumable.
+    java.nio.file.Files.exists(srcStorage) shouldBe true
+    SNAPSyncController.checkResumable(oldCursors, source, concurrency = 1) shouldBe Right(())
+
+    testKit.stop(coord)
+    val newFiles = fish(controller) {
+      case m: SNAPSyncController.AccountRangeProgressCmd if m.durable => m
+    }.taskFiles.get
+
+    // Once the new checkpoint is persisted the controller sweeps with keep = new record files (+ live carry source,
+    // here deliberately omitted to model the next generation): the source goes, the new files and others stay.
+    val deleted = SNAPSyncController.sweepTaskFiles(dir, SNAPSyncController.taskFilePaths(newFiles))
+    deleted.map(_.toString).toSet shouldBe Set(srcStorage.toString, srcCode.toString)
+    java.nio.file.Files.exists(java.nio.file.Path.of(newFiles.storagePath)) shouldBe true
+    java.nio.file.Files.exists(unrelated) shouldBe true
+    SNAPSyncController.checkResumable(oldCursors, newFiles, concurrency = 1) shouldBe Right(())
+    SNAPSyncController.checkResumable(oldCursors, source, concurrency = 1).isLeft shouldBe true
+  }

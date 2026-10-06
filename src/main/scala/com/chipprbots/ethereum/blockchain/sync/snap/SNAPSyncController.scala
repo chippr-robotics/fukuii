@@ -235,6 +235,22 @@ private class SNAPSyncControllerImpl(
   private var preservedTaskFiles: Option[ContractTaskFiles] = None
   // Generation of the most recently launched account coordinator; snapshots from older instances are dropped.
   private var launchedAccountGeneration: Long = -1L
+  // Task files the live account coordinator was carried from (its supervisor may re-copy from them).
+  private var currentCarrySource: Option[ContractTaskFiles] = None
+  // Storage-file path of the last persisted checkpoint for which superseded task files were already swept.
+  private var lastSweptForRecord: Option[String] = None
+
+  /** Task files handed to accounts-complete recovery (never swept while referenced). */
+  private def accountsCompleteTaskFilePaths: Set[String] =
+    (appStateStorage.getSnapSyncStorageFilePath().toSet ++ appStateStorage.getSnapSyncCodeHashesPath().toSet)
+      .filter(_.nonEmpty)
+
+  /** Delete contract task files in the task-file dir that are not in `keep`. IO errors are logged per file. */
+  private def sweepSupersededTaskFiles(keep: Set[String], reason: String): Unit =
+    snapSyncConfig.taskFileDir.foreach { dir =>
+      val deleted = SNAPSyncController.sweepTaskFiles(dir, keep, (p, e) => ctx.log.warn(s"Could not delete $p: $e"))
+      if deleted.nonEmpty then ctx.log.info(s"Deleted ${deleted.size} superseded SNAP contract task file(s) ($reason)")
+    }
   // Resume saved account-range cursors across this much pivot drift before falling back to a
   // full re-walk. Raised from 256 (~55 min ETC) to 50_000 (~1 week ETC) on 2026-06-01. The cap is
   // only a perf heuristic (very large drift => large healing delta where a cold re-walk may be
@@ -1102,6 +1118,20 @@ private class SNAPSyncControllerImpl(
                   s"Account resume checkpoint persisted: ${progress.size} ranges ($completedCount fully complete), " +
                     s"${files.storageCount} storage-task entries, ${files.codeHashesCount} codeHashes, pivot $pivot"
                 )
+                // The persisted record now references this coordinator's own files, so the files it was carried
+                // from (and any older ones) are no longer needed for a resume. Delete them only NOW — never before
+                // this commit, so a crash between the copy and here still resumes from the previous record. Keep the
+                // carry source of the live generation (a supervisor restart re-copies from it), whatever the
+                // in-memory snapshot points at, and the accounts-complete handoff files.
+                if !lastSweptForRecord.contains(files.storagePath) then
+                  lastSweptForRecord = Some(files.storagePath)
+                  sweepSupersededTaskFiles(
+                    keep = SNAPSyncController.taskFilePaths(files) ++
+                      currentCarrySource.toSet.flatMap(SNAPSyncController.taskFilePaths) ++
+                      preservedTaskFiles.toSet.flatMap(SNAPSyncController.taskFilePaths) ++
+                      accountsCompleteTaskFilePaths,
+                    reason = "new account resume checkpoint"
+                  )
               case _ =>
                 // Expected for the PostStop snapshot of a coordinator stopped by restartSnapSync (root already
                 // cleared); the progress is kept in memory and persisted by the next coordinator's checkpoint.
@@ -1412,8 +1442,8 @@ private class SNAPSyncControllerImpl(
                 actors.AccountRangeCoordinator.AccountGetStorageFileInfo(replyTo)
               )
               .foreach { info =>
-                // The account resume checkpoint is retired in the SAME commit that hands the storage-task file to
-                // accounts-complete recovery, so there is no crash window with neither persisted.
+                // Retire the account resume checkpoint with the storage-file handoff too (idempotent; it is also
+                // removed directly below so an ask timeout/failure cannot leave a stale all-complete record behind).
                 appStateStorage
                   .putSnapSyncStorageFilePath(info.filePath.toString)
                   .and(appStateStorage.putSnapSyncStorageFileCount(Some(info.count)))
@@ -1434,8 +1464,11 @@ private class SNAPSyncControllerImpl(
               }
           }
 
-          // Clear persisted range progress — account phase is done, no need to resume it
+          // Clear persisted range progress — account phase is done, no need to resume it. The resume checkpoint is
+          // removed here unconditionally: if the file-info ask above times out, a lingering all-complete record could
+          // otherwise be loaded by a later fresh SNAP cycle (e.g. a re-snap after clearSnapSyncDone) and skip accounts.
           stateRoot.foreach(root => snapProgressStorage.clearProgress(root.value))
+          appStateStorage.removeSnapAccountResumeCheckpoint().commit()
           preservedRangeProgress = Map.empty
           preservedAtPivotBlock = None
           preservedTaskFiles = None
@@ -3565,6 +3598,7 @@ private class SNAPSyncControllerImpl(
 
     val storage = getOrCreateMptStorage(currentPivot)
     launchedAccountGeneration = coordinatorGeneration
+    currentCarrySource = carriedTaskFiles
 
     accountRangeCoordinator = Some(
       ctx.spawn(
@@ -5315,6 +5349,11 @@ private class SNAPSyncControllerImpl(
       stopSnapOnlySchedules()
       stopStateSyncChildren()
 
+      // SNAP is done: no account resume can follow. Drop the checkpoint and every superseded contract task file,
+      // keeping only the files the accounts-complete recovery path was handed (conservative; they are not re-read).
+      appStateStorage.removeSnapAccountResumeCheckpoint().commit()
+      sweepSupersededTaskFiles(keep = accountsCompleteTaskFilePaths, reason = "SNAP complete")
+
       // Phase 1 of the handshake: tell the parent that pivot/state is anchored. Parent starts RegularSync.
       syncController ! SnapSyncFinalized(pivot)
 
@@ -5800,6 +5839,44 @@ object SNAPSyncController:
     * cursor (a range restarted from its start would duplicate carried contract work) and both task files hold at least
     * their counted entries.
     */
+  /** File-name prefixes of the contract task files a coordinator creates (see AccountRangeCoordinator). The
+    * contract-accounts file is not listed: its owner deletes it on stop and the live one is in use.
+    */
+  private[snap] val SweepableTaskFilePrefixes: Seq[String] =
+    Seq("fukuii-contract-storage-", "fukuii-unique-codehashes-")
+
+  private[snap] def taskFilePaths(f: ContractTaskFiles): Set[String] = Set(f.storagePath, f.codeHashesPath)
+
+  /** Delete every contract task file directly in `dir` whose normalised absolute path is not in `keep`. Returns the
+    * deleted paths; failures are reported to `onError` and skipped (a leftover file is harmless, a crash here is not).
+    */
+  private[snap] def sweepTaskFiles(
+      dir: java.nio.file.Path,
+      keep: Set[String],
+      onError: (java.nio.file.Path, String) => Unit = (_, _) => ()
+  ): Seq[java.nio.file.Path] =
+    import scala.jdk.CollectionConverters.*
+    def norm(p: java.nio.file.Path): String = p.toAbsolutePath.normalize.toString
+    val keepNorm = keep.map(s => norm(java.nio.file.Path.of(s)))
+    if !java.nio.file.Files.isDirectory(dir) then Seq.empty
+    else
+      val stream = java.nio.file.Files.list(dir)
+      try
+        stream.iterator.asScala.toList
+          .filter { p =>
+            val name = p.getFileName.toString
+            java.nio.file.Files.isRegularFile(p) && SweepableTaskFilePrefixes.exists(name.startsWith) &&
+            !keepNorm.contains(norm(p))
+          }
+          .filter { p =>
+            try java.nio.file.Files.deleteIfExists(p)
+            catch
+              case e: java.io.IOException =>
+                onError(p, e.getMessage)
+                false
+          }
+      finally stream.close()
+
   private[snap] def checkResumable(
       cursors: Map[ByteString, ByteString],
       files: ContractTaskFiles,
