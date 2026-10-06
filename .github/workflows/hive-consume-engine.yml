@@ -1,6 +1,6 @@
 name: Hive · consume-engine
 
-# Unfiltered consume-engine sweep (all forks).
+# consume-engine gate: one fixed shard (consume-engine-13) of the release shard plan.
 # hive-prague.yml and hive-osaka.yml run narrower per-fork sweeps with their
 # own pass thresholds; this workflow is the broad cross-fork companion.
 # Long-running (~60min); restricted to main-bound PRs + manual dispatch only.
@@ -20,6 +20,7 @@ on:
       - 'hive/**'
       - '.github/workflows/_hive-sim.yml'
       - '.github/workflows/hive-consume-engine.yml'
+      - '.github/hive-shards.json'
   workflow_dispatch:
     inputs:
       hive_ref:
@@ -43,26 +44,61 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  # The gate runs ONE fixed shard of the release shard plan (.github/hive-shards.json,
+  # generated and proven an exact partition by scripts/hive/gen-shards.py), so every run
+  # executes the same tests to completion against the fixtures that plan was built from.
+  #
+  # Before 2026-10-06 this gate ran the suite unfiltered: 42,234 items, of which an 80m
+  # --sim.timelimit reached ~1,700 (whatever pytest collected first, ~60% Cancun) before hive
+  # killed the run. The last ~4 tests always died waiting for container startup and were
+  # scored as failures, so the gate went red on wall-clock alone (PR #1484: 1,697/1,701).
+  # Full-suite coverage is the release-time `Hive · full pass` (hive-full.yml), which runs
+  # every shard to completion.
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      sim_limit: ${{ steps.p.outputs.sim_limit }}
+      buildarg: ${{ steps.p.outputs.buildarg }}
+      min_tests: ${{ steps.p.outputs.min_tests }}
+    steps:
+      - uses: actions/checkout@v5
+      - id: p
+        env:
+          SHARD: consume-engine-13
+          OVERRIDE: ${{ github.event.inputs.sim_limit || '' }}
+        run: |
+          python3 - <<'PY'
+          import json, os
+          plan = json.load(open(".github/hive-shards.json"))
+          shards = {s["name"]: s for s in plan["suites"]["consume-engine"]["shards"]}
+          shard = shards[os.environ["SHARD"]]
+          override = os.environ["OVERRIDE"]
+          # A dispatch with an explicit sim_limit is an ad-hoc run: no shard size to enforce.
+          sim_limit = override or shard["sim_limit"]
+          min_tests = 20 if override else shard["est_tests"]
+          # Pin the fixtures to the release the shard plan was generated from; with the
+          # simulator's default fixtures the shard regex would select a different set.
+          buildarg = f"fixtures={plan['eest_fixtures']}\ndisable_strict_exception_matching=nimbus-el,fukuii"
+          with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+              f.write(f"sim_limit={sim_limit}\n")
+              f.write(f"min_tests={min_tests}\n")
+              f.write(f"buildarg<<EOF_BUILDARG\n{buildarg}\nEOF_BUILDARG\n")
+          print(f"{os.environ['SHARD']}: {shard['est_tests']} tests, ~{shard['est_minutes']} min; "
+                f"min_tests={min_tests}; override={'yes' if override else 'no'}")
+          PY
+
   run:
+    needs: plan
     uses: ./.github/workflows/_hive-sim.yml
     with:
       sim: ethereum/eels/consume-engine
       label: consume-engine
-      # Declared in .github/gates.yml (gate `hive-consume-engine`). A run emitting fewer
-      # than this many results is a truncated run, not a pass.
-      min_tests: 20
-      # 80m, raised from 60m. This does NOT let the suite finish, and cannot: pytest collects
-      # 42,234 items for this simulator, and at --sim.parallelism 4 a 60m run launched only
-      # 1,473 of them (~3.5%). Measured on 501368ec9. Finishing would take on the order of a day.
-      #
-      # What the extra time buys is coverage: ~1/3 more tests exercised per run. It does not
-      # remove the timeout tail — every run still ends with `simulation timed out` and ~4 tests
-      # killed mid-launch (`timed out waiting for container startup`), scored "Test was terminated
-      # by host". Those are wall-clock artifacts, not client failures; which tests land in the tail
-      # depends on scheduling, which is why gates.yml records this suite as failing
-      # "only intermittently". Whether this gate should instead run a --sim.limit subset that can
-      # complete is a scoping decision, recorded in specs/009-amsterdam-fork-support/.
+      # The shard's exact test count (the plan is an exact partition of the pinned fixtures):
+      # any shortfall means the run was truncated, not that it passed.
+      min_tests: ${{ fromJSON(needs.plan.outputs.min_tests) }}
+      # consume-engine-13 is ~874 tests / ~44 min at --sim.parallelism 4; 80m leaves room for
+      # a slow runner without reintroducing the timeout tail.
       sim_timelimit: ${{ github.event.inputs.sim_timelimit || '80m' }}
-      sim_limit: ${{ github.event.inputs.sim_limit || '' }}
-      sim_buildarg: disable_strict_exception_matching=nimbus-el,fukuii
+      sim_limit: ${{ needs.plan.outputs.sim_limit }}
+      sim_buildarg: ${{ needs.plan.outputs.buildarg }}
       hive_ref: ${{ github.event.inputs.hive_ref || 'master' }}

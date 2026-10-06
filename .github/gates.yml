@@ -234,8 +234,10 @@ gates:
     owner: realcodywburns
     issue: 1402
     promote_by: 2027-03-31
-    min_tests: 20
-    covers: EELS consume-engine — payload import via Engine API.
+    min_tests: 874
+    covers: >-
+      EELS consume-engine — payload import via Engine API. Runs the fixed shard consume-engine-13
+      of .github/hive-shards.json (874 tests, ~44 min) to completion; the whole suite runs in hive-full.
 
   - id: hive-full
     workflow: hive-full.yml
