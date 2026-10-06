@@ -1371,6 +1371,14 @@ private class SNAPSyncControllerImpl(
         // ones present locally. Fresh codeHashes skip the lookup (they come from accounts downloaded just now).
         val codeHashes =
           if replayed then allCodeHashes.filter(h => evmCodeStorage.get(h).isEmpty) else allCodeHashes
+        // launchAccountRangeWorkers spawns both downstream coordinators in the same handler as the account coordinator,
+        // so this cannot happen today; make it loud if a future change breaks that ordering.
+        if (codeHashes.nonEmpty && bytecodeCoordinator.isEmpty) || (storageTasks.nonEmpty && storageRangeCoordinator.isEmpty)
+        then
+          ctx.log.error(
+            s"IncrementalContractData (replayed=$replayed) with no downstream coordinator: dropping " +
+              s"${codeHashes.size} codeHashes / ${storageTasks.size} storage tasks"
+          )
         if codeHashes.nonEmpty then
           bytecodeCoordinator.foreach(_ ! actors.ByteCodeCoordinator.AddByteCodeTasks(codeHashes))
           // Accumulate the running total of unique codeHashes for the dashboard. `codeHashes` is
