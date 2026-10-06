@@ -690,3 +690,84 @@ class AccountRangeCoordinatorSpec extends ScalaTestWithActorTestKit() with AnyFl
     coord ! AccountRangeCoordinator.ByteCodeQueuePressure(paused = false)
     networkPeerManager.expectMessageType[NetworkPeerManagerActor.SendMessageCmd]
   }
+
+  // ── Idle-stall classification (Sepolia 2026-10-06: scarcity refreshes reached the restart threshold) ──
+
+  private val pA = com.chipprbots.ethereum.network.PeerId("a")
+  private val pB = com.chipprbots.ethereum.network.PeerId("b")
+
+  "AccountRangeCoordinator.classifyIdleStall" should "treat a deliberate pause as Paused regardless of the pool" taggedAs UnitTest in {
+    AccountRangeCoordinator.classifyIdleStall(
+      dispatchPaused = true,
+      knownPeers = Set(pA, pB),
+      stateless = Set(pA, pB),
+      snapless = Set.empty
+    ) shouldBe AccountRangeCoordinator.IdleStallVerdict.Paused
+  }
+
+  it should "classify cooling / partly-stateless / empty pools as PeerScarcity" taggedAs UnitTest in {
+    import AccountRangeCoordinator.IdleStallVerdict.PeerScarcity
+    // Sepolia log: "2 known peers, 0 stateless, 1 cooling"
+    AccountRangeCoordinator.classifyIdleStall(false, Set(pA, pB), Set.empty, Set.empty) shouldBe PeerScarcity
+    AccountRangeCoordinator.classifyIdleStall(false, Set(pA, pB), Set(pA), Set.empty) shouldBe PeerScarcity
+    AccountRangeCoordinator.classifyIdleStall(false, Set.empty, Set.empty, Set.empty) shouldBe PeerScarcity
+  }
+
+  it should "classify all-non-snapless-stateless as Stateless and all-snapless as Snapless" taggedAs UnitTest in {
+    import AccountRangeCoordinator.IdleStallVerdict.*
+    AccountRangeCoordinator.classifyIdleStall(false, Set(pA, pB), Set(pA, pB), Set.empty) shouldBe Stateless
+    AccountRangeCoordinator.classifyIdleStall(false, Set(pA, pB), Set(pA), Set(pB)) shouldBe Stateless
+    AccountRangeCoordinator.classifyIdleStall(false, Set(pA, pB), Set.empty, Set(pA, pB)) shouldBe Snapless
+  }
+
+  "SNAPSyncController.countsTowardRestart" should "count stateless/snapless evidence but never peer scarcity" taggedAs UnitTest in {
+    SNAPSyncController.countsTowardRestart(SNAPSyncController.UnservableCause.Stateless) shouldBe true
+    SNAPSyncController.countsTowardRestart(SNAPSyncController.UnservableCause.Snapless) shouldBe true
+    SNAPSyncController.countsTowardRestart(SNAPSyncController.UnservableCause.PeerScarcity) shouldBe false
+  }
+
+  "AccountRangeCoordinator stall watchdog" should "not escalate while downstream back-pressure pauses dispatch" taggedAs UnitTest in {
+    val root = kec256(ByteString("backpressure-no-stall-root"))
+    val snapSyncController = testKit.createTestProbe[SNAPSyncController.Command]()
+    val coord = arcProps(
+      stateRoot = root,
+      networkPeerManager = testKit.createTestProbe[NetworkPeerManagerActor.Command]().ref,
+      requestTracker = new SNAPRequestTracker()(classicSystem.scheduler),
+      mptStorage = new TestMptStorage(),
+      concurrency = 4,
+      snapSyncController = snapSyncController.ref
+    )
+    coord ! AccountRangeCoordinator.StorageQueuePressure(paused = true)
+    // Far more than the 3-tick escalation threshold.
+    (1 to 10).foreach(_ => coord ! AccountRangeCoordinator.CheckDispatchStalled)
+    coord ! AccountRangeCoordinator.AccountGetProgress(statusProbe.ref)
+    statusProbe.expectMessageType[AccountRangeStats].dispatchPaused shouldBe true
+
+    // The progress reply above is a barrier: all ten ticks were processed. Before the fix the third tick sent
+    // PivotStateUnservable here; now nothing may reach the controller.
+    snapSyncController.expectNoMessage(300.millis)
+    testKit.stop(coord)
+  }
+
+  it should "escalate a peerless idle phase as PeerScarcity (refresh only, never counted toward restart)" taggedAs UnitTest in {
+    val root = kec256(ByteString("scarcity-stall-root"))
+    val snapSyncController = testKit.createTestProbe[SNAPSyncController.Command]()
+    val coord = arcProps(
+      stateRoot = root,
+      networkPeerManager = testKit.createTestProbe[NetworkPeerManagerActor.Command]().ref,
+      requestTracker = new SNAPRequestTracker()(classicSystem.scheduler),
+      mptStorage = new TestMptStorage(),
+      concurrency = 4,
+      snapSyncController = snapSyncController.ref
+    )
+    (1 to 3).foreach(_ => coord ! AccountRangeCoordinator.CheckDispatchStalled)
+    val fished = snapSyncController.fishForMessage(3.seconds) {
+      case _: SNAPSyncController.PivotStateUnservable =>
+        org.apache.pekko.actor.testkit.typed.FishingOutcome.Complete
+      case _ => org.apache.pekko.actor.testkit.typed.FishingOutcome.ContinueAndIgnore
+    }
+    val unservable = fished.collect { case m: SNAPSyncController.PivotStateUnservable => m }.head
+    unservable.cause shouldBe SNAPSyncController.UnservableCause.PeerScarcity
+    SNAPSyncController.countsTowardRestart(unservable.cause) shouldBe false
+    testKit.stop(coord)
+  }

@@ -1164,7 +1164,7 @@ private class SNAPSyncControllerImpl(
         accountRangeCoordinator.foreach(_ ! actors.AccountRangeCoordinator.ByteCodeQueuePressure(paused))
         Behaviors.same
 
-      case PivotStateUnservable(rootHash, reason, emptyResponses) =>
+      case PivotStateUnservable(rootHash, reason, emptyResponses, cause) =>
         // When peers can no longer serve the current state root, refresh the pivot in-place
         // instead of restarting. This preserves downloaded trie data (content-addressed nodes
         // are ~99.9% valid across pivot changes) and avoids the download-stall-restart loop.
@@ -1185,6 +1185,18 @@ private class SNAPSyncControllerImpl(
             accountRangeCoordinator.foreach(_ ! actors.AccountRangeCoordinator.PivotRefreshed(root.value))
             storageRangeCoordinator.foreach(_ ! actors.StorageRangeCoordinator.StoragePivotRefreshed(root.value))
           }
+        else if !SNAPSyncController.countsTowardRestart(cause) &&
+          (currentPhase == AccountRangeSync || currentPhase == ByteCodeAndStorageSync)
+        then
+          // Peer scarcity / cooling: nothing could be dispatched, but no peer said the root is gone. Refresh the
+          // pivot so the root stays inside the serve window, but do NOT count it toward the restart threshold and do
+          // NOT blacklist the pivot block — a restart cannot create peers, it only throws work away.
+          lastPivotRestartMs = now
+          ctx.log.info(
+            s"Pivot refresh for peer scarcity (not stateless; not counted toward restart, " +
+              s"stateless count stays $consecutivePivotRefreshes/$MaxConsecutivePivotRefreshes): $reason"
+          )
+          refreshPivotInPlace(reason)
         else if currentPhase == AccountRangeSync || currentPhase == ByteCodeAndStorageSync then
           lastPivotRestartMs = now
           // Record the current pivot block as failed so completePivotRefreshWithStateRoot can
@@ -4809,6 +4821,10 @@ private class SNAPSyncControllerImpl(
           lastAccountsDownloaded = progress.accountsDownloaded
           lastAccountProgressMs = System.currentTimeMillis()
           consecutiveAccountStallRefreshes = 0 // Reset on real progress
+        else if progress.dispatchPaused then
+          // The coordinator is deliberately not dispatching (downstream storage/bytecode back-pressure or a zero
+          // per-peer budget). That is flow control, not a stall: restart the stagnation clock instead of counting.
+          lastAccountProgressMs = System.currentTimeMillis()
         else
           val now = System.currentTimeMillis()
           val stalledForMs = now - lastAccountProgressMs
@@ -5651,8 +5667,33 @@ object SNAPSyncController:
     *
     * This is analogous to Nethermind's ExpiredRootHash detection (empty payload + empty proofs).
     */
-  final case class PivotStateUnservable(rootHash: ByteString, reason: String, consecutiveEmptyResponses: Int)
-      extends Command
+  final case class PivotStateUnservable(
+      rootHash: ByteString,
+      reason: String,
+      consecutiveEmptyResponses: Int,
+      cause: UnservableCause = UnservableCause.Stateless
+  ) extends Command
+
+  /** Why a coordinator asked for a pivot refresh. Only evidence that the ROOT is unservable may count toward the
+    * restart / dormant threshold (`MaxConsecutivePivotRefreshes`).
+    *
+    *   - `Stateless` — peers answered empty-without-proof for the root (confirmed stateless / strikes). Counts.
+    *   - `Snapless` — every peer has no snapshot tree at all. Counts (a fresher root will not help these peers, and the
+    *     controller has to be able to give up on the pool).
+    *   - `PeerScarcity` — nothing could be dispatched because peers are few, cooling down after timeouts, or absent.
+    *     The root itself is not known to be bad. A refresh keeps the root inside the serve window, but a restart cannot
+    *     create peers, so this never counts toward the restart threshold. (Sepolia 2026-10-06: ten scarcity refreshes
+    *     reached the threshold with `0 stateless` peers and the restart threw away ~9 h of account download.)
+    *
+    * Downstream back-pressure is not a cause at all: a deliberately paused dispatcher is not stalled, so the
+    * coordinator never escalates for it.
+    */
+  enum UnservableCause:
+    case Stateless, Snapless, PeerScarcity
+
+  /** Whether a [[PivotStateUnservable]] of this cause counts toward the consecutive-refresh restart threshold. */
+  private[snap] def countsTowardRestart(cause: UnservableCause): Boolean =
+    cause != UnservableCause.PeerScarcity
 
   /** Progress updates emitted by worker coordinators.
     *

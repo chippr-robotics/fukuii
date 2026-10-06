@@ -111,6 +111,9 @@ private class AccountRangeCoordinatorImpl(
   // still over their mark, etc. Package-private for tests.
   private[actors] val backpressureSources: mutable.Set[String] = mutable.Set.empty[String]
   private def downstreamBackpressureActive: Boolean = backpressureSources.nonEmpty
+  // Dispatch is paused on purpose: a downstream queue is over its high-water mark, or the controller set the per-peer
+  // budget to 0. Neither is a stall, so neither may feed the stall watchdog or the pivot-refresh escalation.
+  private def dispatchDeliberatelyPaused: Boolean = downstreamBackpressureActive || maxInFlightPerPeer <= 0
   // Kept for spec compatibility; reflects whether the storage source is currently engaged.
   private[actors] def storageBackpressureActive: Boolean = backpressureSources.contains("storage")
 
@@ -219,7 +222,8 @@ private class AccountRangeCoordinatorImpl(
         snapSyncController ! PivotStateUnservable(
           rootHash = stateRoot,
           reason = "all peers snapless (no snapshot tree) for AccountRange root",
-          consecutiveEmptyResponses = knownAvailablePeers.size
+          consecutiveEmptyResponses = knownAvailablePeers.size,
+          cause = SNAPSyncController.UnservableCause.Snapless
         )
       else
         // If all NON-snapless peers are stateless, the current root has aged out of the
@@ -253,7 +257,8 @@ private class AccountRangeCoordinatorImpl(
             snapSyncController ! PivotStateUnservable(
               rootHash = stateRoot,
               reason = "all peers stateless for AccountRange root",
-              consecutiveEmptyResponses = statelessPeers.size
+              consecutiveEmptyResponses = statelessPeers.size,
+              cause = SNAPSyncController.UnservableCause.Stateless
             )
 
   // Task management — resume ranges from saved positions (core-geth parity).
@@ -789,6 +794,15 @@ private class AccountRangeCoordinatorImpl(
             // next time anyway.
             lastDispatchOrResponseMs = System.currentTimeMillis()
             tryRedispatchPendingTasks()
+          else if pendingTasks.nonEmpty && activeTasks.isEmpty && dispatchDeliberatelyPaused then
+            // Idle by design: downstream back-pressure (or a zero budget) is holding dispatch. Not a stall — reset
+            // the tick counter so a long pause never escalates to a pivot refresh or a restart.
+            pendingButIdleTicks = 0
+            log.info(
+              s"[ACCOUNT-IDLE] ${pendingTasks.size} tasks pending, dispatch paused " +
+                s"(back-pressure sources=${backpressureSources.mkString(",")}, maxInflight=$maxInFlightPerPeer) — " +
+                "not a stall"
+            )
           else if pendingTasks.nonEmpty && activeTasks.isEmpty then
             // Tasks are pending but nothing is in-flight — no eligible peers to dispatch to.
             // `lastDispatchOrResponseMs` resets on every drain (peer cycling) so the time-based
@@ -816,22 +830,36 @@ private class AccountRangeCoordinatorImpl(
               )
               pendingButIdleTicks = 0
               tryRedispatchPendingTasks()
-              // If floor revival also couldn't dispatch anything, escalate.
+              // If floor revival also couldn't dispatch anything, escalate — classified, so only genuine
+              // stateless/snapless evidence can count toward the controller's restart threshold.
               if activeTasks.isEmpty && !pivotRefreshRequested then
-                pivotRefreshRequested = true
-                lastPivotRefreshTimeMs = System.currentTimeMillis()
-                consecutiveUnproductiveRefreshes += 1
-                log.warn(
-                  s"[ACCOUNT-STALL] Floor revival exhausted — ${knownAvailablePeers.size} known peers, " +
-                    s"${statelessPeers.size} stateless, ${peerCooldownUntilMs.size} cooling. " +
-                    s"Requesting pivot refresh (attempt=$consecutiveUnproductiveRefreshes)."
-                )
-                snapSyncController ! PivotStateUnservable(
-                  rootHash = stateRoot,
-                  reason =
-                    s"tasks pending but no eligible peers after ${consecutiveUnproductiveRefreshes} stall cycles",
-                  consecutiveEmptyResponses = knownAvailablePeers.size
-                )
+                classifyIdleStall(
+                  dispatchPaused = dispatchDeliberatelyPaused,
+                  knownPeers = knownAvailablePeers.map(_.id).toSet,
+                  stateless = statelessPeers.toSet,
+                  snapless = snaplessPeers.toSet
+                ) match
+                  case IdleStallVerdict.Paused =>
+                    () // guarded by the branch above; kept so the match stays total
+                  case IdleStallVerdict.Stateless | IdleStallVerdict.Snapless =>
+                    // Root (or snapshot) unservable — the stateless/snapless escalation owns this case.
+                    maybeRequestPivotRefresh()
+                  case IdleStallVerdict.PeerScarcity =>
+                    // Peers are few / cooling / absent. A refresh keeps the root inside the serve window, but this is
+                    // not evidence that the root is gone: pivotRefreshRequested is NOT latched (a genuine stateless
+                    // signal must still be able to escalate) and the controller does not count it toward restart.
+                    log.warn(
+                      s"[ACCOUNT-STALL] Floor revival exhausted — ${knownAvailablePeers.size} known peers, " +
+                        s"${statelessPeers.size} stateless, ${snaplessPeers.size} snapless, " +
+                        s"${peerCooldownUntilMs.size} cooling. Peer scarcity, not a stateless root: requesting a " +
+                        "pivot refresh that does not count toward restart."
+                    )
+                    snapSyncController ! PivotStateUnservable(
+                      rootHash = stateRoot,
+                      reason = "tasks pending but no eligible peers (peer scarcity/cooling)",
+                      consecutiveEmptyResponses = knownAvailablePeers.size,
+                      cause = SNAPSyncController.UnservableCause.PeerScarcity
+                    )
           else pendingButIdleTicks = 0
           Behaviors.same
 
@@ -1327,10 +1355,17 @@ private class AccountRangeCoordinatorImpl(
       // gets a fresh escalation.
       if !pivotRefreshRequested then
         pivotRefreshRequested = true
+        // Requeues come from timeouts (scarcity) as well as empty-without-proof answers (stateless). Count toward
+        // restart only when the pool holds actual stateless/snapless evidence.
+        val cause =
+          if statelessPeers.nonEmpty || snaplessPeers.nonEmpty || emptyResponseStrikes.nonEmpty then
+            SNAPSyncController.UnservableCause.Stateless
+          else SNAPSyncController.UnservableCause.PeerScarcity
         snapSyncController ! PivotStateUnservable(
           rootHash = stateRoot,
           reason = s"task ${task.rangeString} hit MaxRequeuesPerTask: $reason",
-          consecutiveEmptyResponses = AccountRangeCoordinator.MaxRequeuesPerTask
+          consecutiveEmptyResponses = AccountRangeCoordinator.MaxRequeuesPerTask,
+          cause = cause
         )
     else
       log.info(
@@ -1666,7 +1701,8 @@ private class AccountRangeCoordinatorImpl(
       tasksPending = pendingTasks.size,
       progress = progress,
       elapsedTimeMs = elapsedMs,
-      contractAccountsFound = contractAccountsCount
+      contractAccountsFound = contractAccountsCount,
+      dispatchPaused = dispatchDeliberatelyPaused
     )
 
   private def isComplete: Boolean =
@@ -1705,6 +1741,36 @@ private class AccountRangeCoordinatorImpl(
         else Some(estimatedBig.toLong)
 
 object AccountRangeCoordinator:
+
+  /** Why the account phase has tasks pending and nothing in flight. */
+  enum IdleStallVerdict:
+    /** Dispatch is held on purpose (downstream back-pressure / zero budget) — not a stall. */
+    case Paused
+
+    /** Every non-snapless peer is confirmed stateless for the current root — a fresher root may help. */
+    case Stateless
+
+    /** Every known peer lacks a snapshot tree. */
+    case Snapless
+
+    /** Peers are absent, cooling down after timeouts, or only partly stateless — the root is not known to be bad. */
+    case PeerScarcity
+
+  /** Pure classification of an idle account phase. See [[SNAPSyncController.UnservableCause]] for how each verdict is
+    * escalated; only `Stateless` and `Snapless` may count toward the controller's restart threshold.
+    */
+  def classifyIdleStall(
+      dispatchPaused: Boolean,
+      knownPeers: Set[com.chipprbots.ethereum.network.PeerId],
+      stateless: Set[com.chipprbots.ethereum.network.PeerId],
+      snapless: Set[com.chipprbots.ethereum.network.PeerId]
+  ): IdleStallVerdict =
+    if dispatchPaused then IdleStallVerdict.Paused
+    else
+      val nonSnapless = knownPeers -- snapless
+      if knownPeers.nonEmpty && nonSnapless.isEmpty then IdleStallVerdict.Snapless
+      else if nonSnapless.nonEmpty && nonSnapless.subsetOf(stateless) then IdleStallVerdict.Stateless
+      else IdleStallVerdict.PeerScarcity
 
   sealed trait Command
   case class StartAccountRangeSync(stateRoot: ByteString) extends Command
@@ -1837,5 +1903,8 @@ case class AccountRangeStats(
     tasksPending: Int,
     progress: Double,
     elapsedTimeMs: Long,
-    contractAccountsFound: Long
+    contractAccountsFound: Long,
+    // True while dispatch is deliberately paused (downstream back-pressure or a zero per-peer budget). The
+    // controller's stagnation watchdog must not count a paused phase as stalled.
+    dispatchPaused: Boolean = false
 )
