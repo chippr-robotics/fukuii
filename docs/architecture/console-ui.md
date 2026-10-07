@@ -95,9 +95,9 @@ The console UI uses a green color scheme to match the Ethereum Classic branding:
 ### Implementation
 
 - Built with JLine 3 for cross-platform terminal control
-- Non-blocking keyboard input for responsive control
-- Automatic terminal size detection and adjustment
-- Proper cleanup on exit (restores cursor, clears colors)
+- Keyboard input is read with a bounded timeout (never JLine's `0 == wait forever`)
+- Terminal resize is detected each frame and triggers a full redraw
+- Runs in the alternate screen buffer; on exit the terminal mode, cursor and scrollback are restored
 
 ### Terminal Requirements
 
@@ -121,37 +121,33 @@ For Windows users, we recommend:
 
 ### Fallback Behavior
 
-If the console UI fails to initialize (e.g., unsupported terminal), Fukuii will automatically:
+If the console UI fails to initialize (no TTY — output redirected, `docker run` without `-t`, a systemd unit — or a `dumb` terminal), Fukuii will automatically:
 1. Log a warning message
 2. Fall back to standard logging mode
 3. Continue running normally
 
 ## Architecture
 
-The console UI system consists of three main components:
+All TUI code lives in `com.chipprbots.ethereum.console`:
 
-### ConsoleUI
+| Component | Role |
+|-----------|------|
+| `Tui` | Owns the terminal: raw mode, alternate screen, frame drawing, key input, teardown. Refuses dumb/non-TTY terminals so escape codes never land in a log stream. |
+| `TuiRenderer` | Pure function `TuiState × width × height → lines`. Every frame is exactly `height` rows of exactly `width` columns, so drawing it never scrolls or wraps; the command footer always stays on the bottom row. |
+| `TuiState` | Immutable view model. Sync speed/ETA are measured from the first block the TUI observed (not from genesis). |
+| `TuiStatusProbe` | Polls the node: handshaked peers (`PeerManagerActor.GetPeersCmd`, same as `net_peerCount`), sync status (`SyncProtocol.GetStatus`, same as `eth_syncing`), local best block, and the latest SNAP progress sample. A slow actor shows as "Unresponsive" rather than freezing the display. |
+| `TuiUpdater` | Daemon thread looping poll → render → wait up to `updateIntervalMs` for a key. The key wait is the frame pacing. |
+| `TuiLogSuppressor` | Detaches the console appender while the TUI is active (file logging continues). |
 
-Main UI rendering class that:
-- Manages terminal initialization and cleanup
-- Handles keyboard input
-- Renders the display with sections and formatting
-- Maintains state (peer count, blocks, etc.)
+### Lifecycle
 
-### ConsoleUIUpdater
+1. `Fukuii.main` sees `--tui`, validates config (errors are still printed to the console), then initializes the TUI and registers a JVM shutdown hook that restores the terminal.
+2. `StdNode.start()` → `startTuiUpdater()` wires the probe and starts the updater.
+3. `Q` exits the JVM; the node's shutdown hook stops the updater and restores the terminal. `D` restores the terminal and console logging and the node keeps running. `Ctrl-C` behaves as without the TUI.
 
-Background updater that:
-- Periodically queries node status
-- Updates the ConsoleUI state
-- Triggers re-renders
-- Processes keyboard commands
+### Testing
 
-### Integration Points
-
-The console UI integrates with:
-- `Fukuii.scala`: Initialization and command-line flag parsing
-- `StdNode.scala`: Node lifecycle (start/stop)
-- Actor system: Queries PeerManager and SyncController for status
+`TuiSpec`, `TuiUpdaterSpec` and `TuiStatusProbeSpec` (under `src/test/.../console/`) drive the real classes against an in-memory xterm (`TuiTestTerminal`) and stub actors; `TuiRendererSpec` and `TuiStateSpec` cover layout and state.
 
 ## Future Enhancements
 
