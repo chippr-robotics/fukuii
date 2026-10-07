@@ -571,6 +571,121 @@ class JsonRpcControllerEthSpec
     val padded: Array[Byte] = Array.fill[Byte](32 - raw.length)(0) ++ raw
     response should haveResult(JString("0x" + Hex.toHexString(padded)))
 
+  it should "eth_getStorageValues" taggedAs (UnitTest, RPCTest) in new JsonRpcControllerFixture:
+    val mockEthUserService: EthUserService = mock[EthUserService]
+    override val jsonRpcController: JsonRpcController =
+      super.jsonRpcController.copy(ethUserService = mockEthUserService)
+
+    val addressStr = "0x7dcd17433742f4c0ca53122ab541d0ba67fc27df"
+    val slotZero = "0x0000000000000000000000000000000000000000000000000000000000000000"
+    val expectedDecodedRequest: GetStorageValuesRequest = GetStorageValuesRequest(
+      Seq(StorageValuesEntry(addressStr, Address(addressStr), Seq(BigInt(0)))),
+      BlockParam.Latest
+    )
+
+    mockEthUserService.getStorageValues
+      .expects(expectedDecodedRequest)
+      .returning(
+        IO.pure(
+          Right(GetStorageValuesResponse(Map(addressStr -> Seq(ByteString(Hex.decode("38"))))))
+        )
+      )
+
+    val request: JsonRpcRequest = newJsonRpcRequest(
+      "eth_getStorageValues",
+      List(
+        JObject(List(addressStr -> JArray(List(JString(slotZero))))),
+        JString("latest")
+      )
+    )
+
+    val response: JsonRpcResponse = jsonRpcController.handleRequest(request).unsafeRunSync()
+    response should haveObjectResult(
+      addressStr -> JArray(
+        List(JString("0x0000000000000000000000000000000000000000000000000000000000000038"))
+      )
+    )
+
+  it should "eth_getStorageValues with the block parameter omitted defaults to latest" taggedAs (
+    UnitTest,
+    RPCTest
+  ) in new JsonRpcControllerFixture:
+    val mockEthUserService: EthUserService = mock[EthUserService]
+    override val jsonRpcController: JsonRpcController =
+      super.jsonRpcController.copy(ethUserService = mockEthUserService)
+
+    val addressStr = "0x7dcd17433742f4c0ca53122ab541d0ba67fc27df"
+    val slotZero = "0x0000000000000000000000000000000000000000000000000000000000000000"
+    val expectedDecodedRequest: GetStorageValuesRequest = GetStorageValuesRequest(
+      Seq(StorageValuesEntry(addressStr, Address(addressStr), Seq(BigInt(0)))),
+      BlockParam.Latest
+    )
+
+    mockEthUserService.getStorageValues
+      .expects(expectedDecodedRequest)
+      .returning(
+        IO.pure(
+          Right(GetStorageValuesResponse(Map(addressStr -> Seq(ByteString(Hex.decode("38"))))))
+        )
+      )
+
+    // Only one params array element (the requests map) — no block parameter at all.
+    val request: JsonRpcRequest = newJsonRpcRequest(
+      "eth_getStorageValues",
+      List(JObject(List(addressStr -> JArray(List(JString(slotZero))))))
+    )
+
+    val response: JsonRpcResponse = jsonRpcController.handleRequest(request).unsafeRunSync()
+    response should haveObjectResult(
+      addressStr -> JArray(
+        List(JString("0x0000000000000000000000000000000000000000000000000000000000000038"))
+      )
+    )
+
+  it should "eth_getStorageValues with an empty request map returns an invalid params error" taggedAs (
+    UnitTest,
+    RPCTest
+  ) in new JsonRpcControllerFixture:
+    val request: JsonRpcRequest = newJsonRpcRequest(
+      "eth_getStorageValues",
+      List(JObject(Nil), JString("latest"))
+    )
+
+    val response: JsonRpcResponse = jsonRpcController.handleRequest(request).unsafeRunSync()
+    response should haveError(JsonRpcError.InvalidParams("empty request"))
+
+  it should "eth_baseFee" taggedAs (UnitTest, RPCTest) in new JsonRpcControllerFixture:
+    // Test network config has no olympia-block-number set (defaults to Long.MaxValue) — EIP-1559 base
+    // fees haven't activated on this chain, so the honest answer is 0x0, not a fabricated InitialBaseFee.
+    val request: JsonRpcRequest = newJsonRpcRequest("eth_baseFee")
+
+    val response: JsonRpcResponse = jsonRpcController.handleRequest(request).unsafeRunSync()
+    response should haveStringResult("0x0")
+
+  it should "eth_capabilities" taggedAs (UnitTest, RPCTest) in new JsonRpcControllerFixture:
+    val request: JsonRpcRequest = newJsonRpcRequest("eth_capabilities")
+
+    val bestBlock = blockchainReader.getBestBlock
+    val expectedHeadNumber =
+      "0x" + bestBlock.map(_.header.number.value).getOrElse(BigInt(0)).toString(16)
+    val expectedHeadHash =
+      "0x" + Hex.toHexString(
+        bestBlock.map(_.header.hash.value).getOrElse(ByteString(new Array[Byte](32))).toArray[Byte]
+      )
+
+    val response: JsonRpcResponse = jsonRpcController.handleRequest(request).unsafeRunSync()
+    // Fixture's ethBlocksService uses ArchivePruning (the EthBlocksService default) — every resource is
+    // fully retained, so no resource carries a deleteStrategy.
+    response should haveObjectResult(
+      "head" -> JObject("number" -> JString(expectedHeadNumber), "hash" -> JString(expectedHeadHash)),
+      "state" -> JObject("disabled" -> JBool(false), "oldestBlock" -> JString("0x0")),
+      "tx" -> JObject("disabled" -> JBool(false), "oldestBlock" -> JString("0x0")),
+      "logs" -> JObject("disabled" -> JBool(false), "oldestBlock" -> JString("0x0")),
+      "receipts" -> JObject("disabled" -> JBool(false), "oldestBlock" -> JString("0x0")),
+      "blocks" -> JObject("disabled" -> JBool(false), "oldestBlock" -> JString("0x0")),
+      "stateproofs" -> JObject("disabled" -> JBool(false), "oldestBlock" -> JString("0x0"))
+    )
+
   it should "eth_sign" taggedAs (UnitTest, RPCTest) in new JsonRpcControllerFixture:
 
     personalService.signFn = _ => IO.pure(Right(SignResponse(sig)))

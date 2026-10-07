@@ -15,8 +15,8 @@ This directory contains documentation for deploying and running Fukuii nodes usi
 - **[Kong Security](kong-security.md)** - Security considerations for Barad-dûr
 
 ### Multi-Client Testing
-- **[Gorgoroth Test Network](../../ops/gorgoroth/)** — Internal test network with Fukuii, core-geth, and Besu
-- **[Cirith Ungol](../../ops/cirith-ungol/)** — Mining validation testbed
+- **[Gorgoroth Test Network](https://github.com/chippr-robotics/fukuii/tree/main/ops/gorgoroth)** — Internal test network with Fukuii, core-geth, and Besu
+- **[Cirith Ungol](https://github.com/chippr-robotics/fukuii/tree/main/ops/cirith-ungol)** — Mining validation testbed
 
 ## Related Documentation
 

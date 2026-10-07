@@ -14,7 +14,7 @@ import org.apache.pekko.actor.typed.scaladsl.StashBuffer
 import org.apache.pekko.stream.scaladsl.Source
 import org.apache.pekko.util.ByteString
 
-import scala.concurrent.duration.FiniteDuration
+import scala.concurrent.duration.*
 
 import org.bouncycastle.util.encoders.Hex
 
@@ -52,6 +52,21 @@ import com.chipprbots.ethereum.network.rlpx.RLPxConnectionHandler.RLPxConfigurat
   * — any unhandled child exception escalates to (terminates) this actor implicitly.
   */
 object PeerActor:
+
+  /** geth throttles inbound connections from one IP for this long (`inboundThrottleTime`, p2p/server.go). */
+  val TooManyPeersRetryFloor: FiniteDuration = 30.seconds
+
+  /** How long to wait before redialling a peer that refused us pre-Hello with `reason`, or None when the refusal is
+    * permanent (the normal failure path then applies, including removal from the known-nodes store). Transient refusals
+    * mean the peer is healthy but full or busy, so it must stay known.
+    */
+  def rejectionRetryDelay(reason: Long, baseDelay: FiniteDuration): Option[FiniteDuration] =
+    import Disconnect.Reasons.*
+    reason match
+      case TooManyPeers => Some(baseDelay.max(TooManyPeersRetryFloor))
+      case AlreadyConnected | ClientQuitting | DisconnectRequested | TcpSubsystemError | TimeoutOnReceivingAMessage =>
+        Some(baseDelay)
+      case _ => None
 
   // =========================================================================
   // Command ADT — intentionally NOT sealed.
@@ -272,16 +287,12 @@ object PeerActor:
           )
 
         case RLPxConnectionHandler.ConnectionFailed =>
-          log.debug("Failed to establish RLPx connection")
-          rlpxConnection.uriOpt match
-            case Some(uri) if numRetries < peerConfiguration.connectMaxRetries =>
-              scheduleConnectRetry(uri, numRetries)
-            case Some(uri) =>
-              knownNodesManager ! KnownNodesManager.RemoveKnownNode(uri)
-              Behaviors.stopped
-            case None =>
-              log.debug("Connection was initiated by remote peer, not attempting to reconnect")
-              Behaviors.stopped
+          onConnectionFailed(rlpxConnection, numRetries)
+
+        case RLPxConnectionHandler.ConnectionRejected(reason) =>
+          PeerActor.rejectionRetryDelay(reason, peerConfiguration.connectRetryDelay) match
+            case Some(delay) => retryAfterTransientRejection(rlpxConnection, numRetries, delay, None)
+            case None        => onConnectionFailed(rlpxConnection, numRetries)
 
         case RlpxTerminated(ref) if ref == rlpxConnection.ref =>
           handleTerminated(rlpxConnection, numRetries)
@@ -296,6 +307,38 @@ object PeerActor:
 
         case _ => Behaviors.same
       }
+
+    private def onConnectionFailed(rlpxConnection: RLPxConnection, numRetries: Int): Behavior[Command] =
+      log.debug("Failed to establish RLPx connection")
+      rlpxConnection.uriOpt match
+        case Some(uri) if numRetries < peerConfiguration.connectMaxRetries =>
+          scheduleConnectRetry(uri, numRetries)
+        case Some(uri) =>
+          knownNodesManager ! KnownNodesManager.RemoveKnownNode(uri)
+          Behaviors.stopped
+        case None =>
+          log.debug("Connection was initiated by remote peer, not attempting to reconnect")
+          Behaviors.stopped
+
+    /** The remote answered with a transient Disconnect (TooManyPeers, AlreadyConnected, ...) instead of a Hello. Retry
+      * after `delay`, and when retries run out just stop: unlike a genuine connection failure this must NOT purge the
+      * node from the known-nodes store, since the peer is healthy and merely full (it may be one of very few snap
+      * servers).
+      */
+    private def retryAfterTransientRejection(
+        rlpxConnection: RLPxConnection,
+        numRetries: Int,
+        delay: FiniteDuration,
+        handshakeTimeout: Option[Cancellable]
+    ): Behavior[Command] =
+      handshakeTimeout.foreach(_.cancel())
+      rlpxConnection.uriOpt match
+        case Some(uri) if numRetries < peerConfiguration.connectMaxRetries =>
+          log.info("Peer {} refused us transiently - retrying in {}", peerAddress, delay)
+          schedule(delay, RetryConnectionTimeout)
+          waitingForRetry(uri, numRetries)
+        case _ =>
+          Behaviors.stopped
 
     // -----------------------------------------------------------------------
     // State 3: processingHandshaking
@@ -314,6 +357,11 @@ object PeerActor:
 
         case RLPxConnectionHandler.MessageReceived(d: Disconnect) =>
           handleDisconnect(rlpxConnection, d, Handshaking(numRetries))
+
+        case RLPxConnectionHandler.ConnectionRejected(reason) =>
+          PeerActor.rejectionRetryDelay(reason, peerConfiguration.connectRetryDelay) match
+            case Some(delay) => retryAfterTransientRejection(rlpxConnection, numRetries, delay, Some(timeout))
+            case None        => Behaviors.same // permanent: the rlpx termination that follows takes the normal path
 
         case RLPxConnectionHandler.MessageReceived(_: Ping) =>
           rlpxConnection.sendMessage(Pong())
@@ -420,6 +468,13 @@ object PeerActor:
     // -----------------------------------------------------------------------
 
     private def disconnectFromPeer(rlpxConnection: RLPxConnection, reason: Int): Behavior[Command] =
+      log.info(
+        "DISCONNECT_SENT: disconnecting {}:{} locally, reason 0x{} ({})",
+        peerAddress.getHostString,
+        peerAddress.getPort,
+        reason.toHexString,
+        Disconnect.reasonToString(reason)
+      )
       rlpxConnection.sendMessage(Disconnect(reason))
       schedule(peerConfiguration.disconnectPoisonPillTimeout, StopActor)
       disconnected()
@@ -437,6 +492,11 @@ object PeerActor:
     // Shared transitions
     // -----------------------------------------------------------------------
 
+    /** Handles RLPx termination for the PRE-handshake states only (waitingForConnectionResult, processingHandshaking).
+      * Retrying here is safe because no peer identity has been published yet — nothing else in the system references
+      * this connection attempt. Do NOT call this from the `handshaked` state: see `handleHandshakedTerminated` for why
+      * a HANDSHAKED peer must stop instead of self-reconnecting.
+      */
     private def handleTerminated(rlpxConnection: RLPxConnection, numRetries: Int): Behavior[Command] =
       rlpxConnection.uriOpt.foreach(uri => log.debug(s"Underlying rlpx connection with peer ${uri.getUserInfo} closed"))
       rlpxConnection.uriOpt match
@@ -452,6 +512,38 @@ object PeerActor:
           Behaviors.stopped
         case None =>
           Behaviors.stopped
+
+    /** Handles RLPx termination for the HANDSHAKED state. A handshaked peer has already been published to the peer
+      * event bus (`PeerHandshakeSuccessful`) and is tracked by PeerManagerActor's `connectedPeers` under this actor's
+      * `context.self` ref. If the underlying TCP link merely drops (a transient blip, not a bad peer), we must STOP
+      * rather than self-reconnect:
+      *
+      * Previously this called `handleTerminated(rlpxConnection, 0)`, which — since 0 < connectMaxRetries — scheduled a
+      * reconnect on this SAME actor (`scheduleConnectRetry`). ~`connectRetryDelay` later the SAME actor completed a
+      * fresh handshake and published a SECOND `PeerHandshakeSuccessful` with the same `ref`. But PeerManagerActor's
+      * `connectedPeers` still held the OLD (stale) handshaked entry for this ref — the actor never stopped, so no
+      * `Terminated` ever fired to remove it. `hasHandshakedWith(nodeId)` was therefore true, so PeerManagerActor
+      * treated the actor's own fresh handshake as a duplicate and sent `DisconnectPeer(AlreadyConnected)` back to it —
+      * disconnecting a perfectly good peer ~30s (retry delay + disconnectPoisonPillTimeout) after a transient TCP drop.
+      *
+      * Stopping immediately instead lets PeerManagerActor's own death-watch (`PeerTerminated`) remove the stale entry
+      * and publish `PeerDisconnected` right away. Maintained peers are still re-dialed — but by PeerManagerActor
+      * (`handleTerminated`'s `maintainedPeersByNodeId` branch, keyed on the peer's node ID) with a FRESH actor, not by
+      * this actor reconnecting itself; that branch fires on ANY termination of a maintained peer's actor and is
+      * independent of this code path. Non-maintained peers are picked up again by the normal dial loop / discovery
+      * demand. We also do NOT call `RemoveKnownNode`: this was a good, already-vetted peer — only the pre-handshake
+      * path (`handleTerminated`, used for connection attempts that never proved themselves) removes known nodes on
+      * exhausted retries.
+      */
+    private def handleHandshakedTerminated(): Behavior[Command] =
+      // INFO, not DEBUG: this is the only trace that a handshaked peer vanished because its TCP connection closed (as
+      // opposed to a Disconnect frame or a local DisconnectPeer, both of which log). Without it a mass drop caused by a
+      // host stall is undiagnosable (plataberget soak, 2026-10-05).
+      log.info(
+        "TCP_CLOSED: underlying rlpx connection with handshaked peer {} closed without a Disconnect frame - stopping (no self-reconnect)",
+        peerAddress
+      )
+      Behaviors.stopped
 
     private def handleDisconnect(
         rlpxConnection: RLPxConnection,
@@ -510,7 +602,7 @@ object PeerActor:
 
       Behaviors.receiveMessage {
         case RlpxTerminated(ref) if ref == rlpxConnection.ref =>
-          handleTerminated(rlpxConnection, 0)
+          handleHandshakedTerminated()
 
         case RLPxConnectionHandler.MessageReceived(d: Disconnect) =>
           handleDisconnect(rlpxConnection, d, Handshaked)

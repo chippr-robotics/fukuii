@@ -297,7 +297,7 @@ class ETH70ComplianceSpec extends AnyWordSpec with Matchers:
           case other => fail(s"Expected 3-field RLPList [reqId, incomplete, blocks], got $other")
       }
 
-      "carry bloom-absent 3-field receipts (EIP-7642 — same as ETH69)" taggedAs UnitTest in {
+      "carry bloom-absent four-item receipts (EIP-7642 — same as ETH69)" taggedAs UnitTest in {
         import com.chipprbots.ethereum.rlp.*
         import ETHPackets.ReceiptBloomFreeEnc
         import com.chipprbots.ethereum.domain.*
@@ -317,12 +317,12 @@ class ETH70ComplianceSpec extends AnyWordSpec with Matchers:
         val hasBloom = wireBytes.sliding(256).exists(window => window.sameElements(bloomBytes))
         hasBloom shouldBe false
 
-        // And the receipt inside should have 3 fields (no bloom field)
+        // And the receipt inside should be [txType, postStateOrStatus, cumulativeGasUsed, logs] (no bloom field)
         decoder(Capability.ETH70).fromBytes(Codes.ReceiptsCode, wireBytes) match
           case Right(r: ETHPackets.Receipts70) =>
             val blockReceipts = r.receiptsForBlocks.items.head.asInstanceOf[RLPList]
             val innerReceipt = blockReceipts.items.head.asInstanceOf[RLPList]
-            innerReceipt.items.size shouldEqual 3
+            innerReceipt.items.size shouldEqual 4
           case other => fail(s"Expected Receipts70, got $other")
       }
 

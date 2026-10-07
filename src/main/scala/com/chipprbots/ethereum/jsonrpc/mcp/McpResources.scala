@@ -74,9 +74,10 @@ object NodeConfigResource:
       |  "chainId": ${cfg.chainId},
       |  "networkId": ${cfg.networkId},
       |  "network": "${cfg.chainId.value match
-        case id if id == BigInt(1)  => "ethereum"; case id if id == BigInt(61)     => "etc"
-        case id if id == BigInt(63) => "mordor"; case id if id == BigInt(11155111) => "sepolia"
-        case id                     => s"chain-$id"
+        case id if id == BigInt(1)           => "ethereum"; case id if id == BigInt(61)     => "etc"
+        case id if id == BigInt(63)          => "mordor"; case id if id == BigInt(11155111) => "sepolia"
+        case id if id == BigInt(7091047534L) => "plataberget"
+        case id                              => s"chain-$id"
       }",
       |  "accountStartNonce": ${cfg.accountStartNonce},
       |  "maxCodeSize": ${cfg.maxCodeSize.map(_.toString).getOrElse("null")},
@@ -218,7 +219,7 @@ object LatestBlockResource:
           |  "totalDifficulty": "$td",
           |  "gasLimit": ${h.gasLimit},
           |  "gasUsed": ${h.gasUsed},
-          |  "timestamp": ${h.unixTimestamp},
+          |  "timestamp": ${h.unixTimestamp.toUnsignedBigInt},
           |  "transactionCount": $txCount,
           |  "stateRoot": "${ByteStringUtils.hash2string(h.stateRoot.value)}",
           |  "extraData": "0x${org.bouncycastle.util.encoders.Hex.toHexString(h.extraData.toArray)}"
@@ -251,7 +252,7 @@ object BlockByNumberResource:
           |  "totalDifficulty": "$td",
           |  "gasLimit": ${h.gasLimit},
           |  "gasUsed": ${h.gasUsed},
-          |  "timestamp": ${h.unixTimestamp},
+          |  "timestamp": ${h.unixTimestamp.toUnsignedBigInt},
           |  "stateRoot": "${ByteStringUtils.hash2string(h.stateRoot.value)}",
           |  "extraData": "0x${org.bouncycastle.util.encoders.Hex.toHexString(h.extraData.toArray)}"
           |}""".stripMargin

@@ -42,6 +42,12 @@ class AppStateStorage(val dataSource: DataSource) extends TransactionalKeyValueS
   def putBestBlockNumber(bestBlockNumber: BigInt): DataSourceBatchUpdate =
     put(Keys.BestBlockNumber, bestBlockNumber.toString)
 
+  /** Whether fast sync finished on this node. Fast sync was removed and nothing in the node sets this flag any more; a
+    * database that fast sync completed earlier still carries it. `SyncController` reads it in two places: to tell a
+    * stranded fast sync from a finished one, and, with SNAP on and not done, to send a node where fast sync finished
+    * and SNAP has no stake (accounts not complete, saved pivot not the best block) to regular sync instead of SNAP. Its
+    * recovery paths clear it.
+    */
   def isFastSyncDone(): Boolean =
     get(Keys.FastSyncDone).exists(_.toBoolean)
 
@@ -50,15 +56,6 @@ class AppStateStorage(val dataSource: DataSource) extends TransactionalKeyValueS
 
   def clearFastSyncDone(): DataSourceBatchUpdate =
     remove(Keys.FastSyncDone)
-
-  def getFastSyncCooldownUntilMillis(): Long =
-    get(Keys.FastSyncCooldownUntilMillis).flatMap(v => scala.util.Try(v.toLong).toOption).getOrElse(0L)
-
-  def putFastSyncCooldownUntilMillis(untilMillis: Long): DataSourceBatchUpdate =
-    put(Keys.FastSyncCooldownUntilMillis, untilMillis.toString)
-
-  def isFastSyncCoolingOff(nowMillis: Long): Boolean =
-    getFastSyncCooldownUntilMillis() > nowMillis
 
   def getEstimatedHighestBlock(): BigInt =
     getBigInt(Keys.EstimatedHighestBlock)
@@ -139,7 +136,8 @@ class AppStateStorage(val dataSource: DataSource) extends TransactionalKeyValueS
     !isSnapSyncDone() && (
       getSnapSyncPivotBlock().isDefined ||
         getSnapSyncStateRoot().isDefined ||
-        getSnapSyncProgress().isDefined
+        getSnapSyncProgress().isDefined ||
+        getSnapAccountResumeCheckpoint().isDefined
     )
 
   /** Check if bytecode recovery scan has completed (Bug 20 hardening) */
@@ -149,6 +147,22 @@ class AppStateStorage(val dataSource: DataSource) extends TransactionalKeyValueS
   /** Mark bytecode recovery as completed */
   def bytecodeRecoveryDone(): DataSourceBatchUpdate =
     put(Keys.BytecodeRecoveryDone, true.toString)
+
+  /** Mark bytecode recovery as NOT done, so the next start's recovery scan runs (or resumes). Written when block import
+    * finds contract code missing and escalates to a bulk bytecode recovery: whatever happens next, a node that stops
+    * part-way must not come back believing its bytecode is complete.
+    */
+  def clearBytecodeRecoveryDone(): DataSourceBatchUpdate =
+    put(Keys.BytecodeRecoveryDone, false.toString)
+
+  /** How many bulk bytecode recoveries (triggered by block import) have finished with the triggering code still
+    * missing. Persisted so that a code no peer serves stops costing a full trie scan on every restart.
+    */
+  def bulkBytecodeRecoveryFailures(): Int =
+    get(Keys.BulkBytecodeRecoveryFailures).flatMap(v => scala.util.Try(v.toInt).toOption).getOrElse(0)
+
+  def putBulkBytecodeRecoveryFailures(count: Int): DataSourceBatchUpdate =
+    put(Keys.BulkBytecodeRecoveryFailures, count.toString)
 
   /** Check if storage recovery scan has completed (Bug 20 hardening) */
   def isStorageRecoveryDone(): Boolean =
@@ -218,6 +232,19 @@ class AppStateStorage(val dataSource: DataSource) extends TransactionalKeyValueS
   def putSnapSyncPivotBlock(pivotBlock: BigInt): DataSourceBatchUpdate =
     put(Keys.SnapSyncPivotBlock, pivotBlock.toString)
 
+  /** The lowest block SNAP may take as its pivot, set when the node was found stranded by an interrupted fast sync: the
+    * best block that fast sync reached has no state behind it, so a pivot at or below it would pass for "already
+    * synced". Persisted so a restart before SNAP commits a pivot keeps the floor; cleared once SNAP finalizes.
+    */
+  def getSnapSyncMinPivotBlock(): Option[BigInt] =
+    get(Keys.SnapSyncMinPivotBlock).map(BigInt(_))
+
+  def putSnapSyncMinPivotBlock(minPivotBlock: BigInt): DataSourceBatchUpdate =
+    put(Keys.SnapSyncMinPivotBlock, minPivotBlock.toString)
+
+  def clearSnapSyncMinPivotBlock(): DataSourceBatchUpdate =
+    remove(Keys.SnapSyncMinPivotBlock)
+
   /** Get the SNAP sync state root hash
     * @return
     *   SNAP sync state root hash, or None if not set
@@ -277,6 +304,20 @@ class AppStateStorage(val dataSource: DataSource) extends TransactionalKeyValueS
   def putSnapSyncProgress(progressJson: String): DataSourceBatchUpdate =
     put(Keys.SnapSyncProgress, progressJson)
 
+  /** Versioned account-phase resume checkpoint (JSON, see `snap.AccountResumeCheckpoint`): per-range cursors, the root
+    * and pivot they were downloaded against, and the contract task files (paths + entry counts) that hold the
+    * storage/bytecode work derived from every account below those cursors. Stored under a fixed key — NOT keyed by the
+    * state root — so a process restart that picks a fresh pivot still finds it.
+    */
+  def getSnapAccountResumeCheckpoint(): Option[String] =
+    get(Keys.SnapAccountResumeCheckpoint)
+
+  def putSnapAccountResumeCheckpoint(json: String): DataSourceBatchUpdate =
+    put(Keys.SnapAccountResumeCheckpoint, json)
+
+  def removeSnapAccountResumeCheckpoint(): DataSourceBatchUpdate =
+    remove(Keys.SnapAccountResumeCheckpoint)
+
   /** Get the target block number for SNAP sync bootstrap via regular sync. This is used when SNAP sync requires a
     * minimum number of blocks to start.
     * @return
@@ -301,16 +342,6 @@ class AppStateStorage(val dataSource: DataSource) extends TransactionalKeyValueS
     */
   def clearSnapSyncBootstrapTarget(): DataSourceBatchUpdate =
     update(toRemove = Seq(Keys.SnapSyncBootstrapTarget), toUpsert = Nil)
-
-  /** Get the SNAP/Fast sync bounce cycle count. */
-  def getSnapFastCycleCount(): Int =
-    get(Keys.SnapFastCycleCount).flatMap(v => scala.util.Try(v.toInt).toOption).getOrElse(0)
-
-  def putSnapFastCycleCount(count: Int): DataSourceBatchUpdate =
-    put(Keys.SnapFastCycleCount, count.toString)
-
-  def clearSnapFastCycleCount(): DataSourceBatchUpdate =
-    remove(Keys.SnapFastCycleCount)
 
   /** Check if SNAP sync account download phase has completed. Used to skip account re-download on process restart
     * during bytecode/storage phase.
@@ -346,6 +377,24 @@ class AppStateStorage(val dataSource: DataSource) extends TransactionalKeyValueS
   def putSnapSyncCodeHashesPath(path: String): DataSourceBatchUpdate =
     put(Keys.SnapSyncCodeHashesPath, path)
 
+  /** Entry count the codeHashes file held when it was finalized. Lets recovery tell an empty-by-design file (count 0)
+    * from a lost one. `None` for legacy data persisted before the count existed, or after a reset.
+    */
+  def getSnapSyncCodeHashesCount(): Option[Long] =
+    get(Keys.SnapSyncCodeHashesCount).filter(_.nonEmpty).flatMap(_.toLongOption)
+
+  /** Persist the codeHashes file entry count; an empty string clears it. */
+  def putSnapSyncCodeHashesCount(count: Option[Long]): DataSourceBatchUpdate =
+    put(Keys.SnapSyncCodeHashesCount, count.fold("")(_.toString))
+
+  /** Entry count the contract storage-task file held when it was finalized (see [[getSnapSyncCodeHashesCount]]). */
+  def getSnapSyncStorageFileCount(): Option[Long] =
+    get(Keys.SnapSyncStorageFileCount).filter(_.nonEmpty).flatMap(_.toLongOption)
+
+  /** Persist the storage-task file entry count; an empty string clears it. */
+  def putSnapSyncStorageFileCount(count: Option[Long]): DataSourceBatchUpdate =
+    put(Keys.SnapSyncStorageFileCount, count.fold("")(_.toString))
+
   /** Get the persisted path to the contract storage file for storage sync recovery. */
   def getSnapSyncStorageFilePath(): Option[String] =
     get(Keys.SnapSyncStorageFilePath)
@@ -378,8 +427,25 @@ class AppStateStorage(val dataSource: DataSource) extends TransactionalKeyValueS
   //
   // Three separate cursors because `ChainDownloader` writes headers, bodies, and receipts on
   // independent commit paths — they don't all advance in lockstep and must be tracked
-  // separately. Each cursor is updated atomically with its corresponding storage commit so a
-  // crash mid-write never leaves the cursor ahead of the data on disk.
+  // separately. The header cursor is updated atomically with its `storeBlockHeader` commit (one
+  // write batch, headers validated and stored strictly in order) so a crash mid-write never
+  // leaves it ahead of the data on disk. Bodies and receipts are fetched by several peers
+  // concurrently and can complete out of order, so their cursors instead mean "every block at or
+  // below this number has its body/receipts stored" and are advanced by a separate
+  // contiguous-prefix scan AFTER each store commit (`ChainDownloader.advanceBodyCursor` /
+  // `advanceReceiptCursor`, #33) rather than bundled atomically with the store itself — but the
+  // scan only ever advances over what it has just verified is on disk, so the same
+  // never-ahead-of-data guarantee holds by construction, not by a single write batch.
+  //
+  // "The scan only ever advances over what it has just verified" is a claim about how FAR the scan trusts
+  // itself to advance — it does NOT mean a header existing at some number N is by itself evidence that 1..N
+  // are all present. `PivotHeaderBootstrap` (running(), Fetched branch) stores a SNAP pivot header directly,
+  // with no cursor update and nothing underneath it yet, so `getBlockHeaderByNumber` can return `Some` for a
+  // block far above a genuine gap. Neither the header cursor above nor a header existing at a high number
+  // implies contiguity below it (forge's ETC review of 43d1c3eee, Defect 9) — `ChainDownloader.
+  // findBestStoredHeader`'s own rebuild walk is what actually verifies the contiguous prefix (its own
+  // sequential, header-by-header check, independent of the cursor or the binary search that seeds it) and
+  // clamps `bestHeaderNumber` to the last confirmed-contiguous block rather than trusting an isolated header.
 
   /** Highest backfill target the node was working toward when it last saved progress. Set when `ChainDownloader`
     * starts; cleared after `Done` so future startups don't spuriously resume.
@@ -390,29 +456,48 @@ class AppStateStorage(val dataSource: DataSource) extends TransactionalKeyValueS
   def putBackfillTarget(target: BigInt): DataSourceBatchUpdate =
     put(Keys.BackfillTarget, target.toString)
 
-  /** Highest header number whose `storeBlockHeader` commit has succeeded. */
+  /** Highest header number whose `storeBlockHeader` commit has succeeded via `ChainDownloader`'s OWN sequential fetch
+    * path specifically — not merely "the highest block number with a header on disk from any source". A pivot header
+    * stored by `PivotHeaderBootstrap` doesn't advance this cursor and can leave a genuine gap beneath it;
+    * `ChainDownloader.findBestStoredHeader` accounts for that with its own contiguity walk rather than trusting this
+    * value (or a higher header found by its binary search) blindly.
+    */
   def getBackfillBestHeader(): BigInt =
     getBigInt(Keys.BackfillBestHeader)
 
   def putBackfillBestHeader(n: BigInt): DataSourceBatchUpdate =
     put(Keys.BackfillBestHeader, n.toString)
 
-  /** Highest block number whose `storeBlockBody` commit has succeeded. May lag the header cursor. */
+  /** Highest block number N such that every block from 1 to N has a `storeBlockBody` commit on disk — a verified
+    * contiguous prefix (`ChainDownloader.advanceBodyCursor`, #33), not merely the highest individual body that has ever
+    * been stored (bodies land out of order across concurrent peers). May lag the header cursor.
+    *
+    * "Every block from 1 to N" is only as trustworthy as the header cursor it walks against: `advanceBodyCursor` checks
+    * a block's body via its header, so a gap in the HEADERS themselves (see `getBackfillBestHeader`'s doc) bounds how
+    * far this can validly advance too, not just how far bodies happen to be fetched.
+    */
   def getBackfillBestBody(): BigInt =
     getBigInt(Keys.BackfillBestBody)
 
   def putBackfillBestBody(n: BigInt): DataSourceBatchUpdate =
     put(Keys.BackfillBestBody, n.toString)
 
-  /** Highest block number whose `storeReceipts` commit has succeeded. May lag the body cursor. */
+  /** Highest block number N such that every block from 1 to N has a `storeReceipts` commit on disk — a verified
+    * contiguous prefix (`ChainDownloader.advanceReceiptCursor`, #33), not merely the highest individual receipt set
+    * that has ever been stored. May lag the body cursor.
+    *
+    * Same header-contiguity caveat as `getBackfillBestBody`'s doc: this cursor's own scan is only as trustworthy as the
+    * headers it checks against.
+    */
   def getBackfillBestReceipt(): BigInt =
     getBigInt(Keys.BackfillBestReceipt)
 
   def putBackfillBestReceipt(n: BigInt): DataSourceBatchUpdate =
     put(Keys.BackfillBestReceipt, n.toString)
 
-  /** Clear all backfill cursors + target. Called on `ChainDownloader.Done` so the next startup doesn't try to resume an
-    * already-completed backfill.
+  /** Clear all backfill cursors + target. A full reset — no code currently calls this on the "backfill just finished,
+    * still-alive downloader may run again" path (see `removeBackfillTarget`); this remains for a genuine fresh-start
+    * reset (e.g. a future admin/debug entry point).
     */
   def clearBackfillCursors(): DataSourceBatchUpdate =
     update(
@@ -424,6 +509,22 @@ class AppStateStorage(val dataSource: DataSource) extends TransactionalKeyValueS
       ),
       toUpsert = Nil
     )
+
+  /** Remove only the backfill target, leaving the header/body/receipt cursors in place. `needsBackfillResume()`
+    * short-circuits to `false` as soon as `getBackfillTarget() <= 0`, so this alone is sufficient to tell a FRESH
+    * startup "no backfill to resume" — the same signal `clearBackfillCursors()` gave.
+    *
+    * `ChainDownloader.checkCompletion` uses this instead of `clearBackfillCursors()` on `Done` (a bug Forge's ETC
+    * review of the #33 follow-up found, ETC mainnet scale): `SNAPSyncController` keeps the downloader alive after
+    * `Done` and can send it `UpdateTarget` on a later pivot refresh, landing in `idle()`'s handler, which calls
+    * `findBestStoredHeader()` again. That rebuild trusts the header/body/receipt cursors as a floor to avoid re-walking
+    * everything already confirmed on disk (#33) — deleting them on every completion meant that floor reset to 0 every
+    * time, so the SAME already-backfilled range (potentially the whole chain) got walked from scratch on every single
+    * pivot refresh. Leaving the three cursors at their completed values means the next `findBestStoredHeader()` call
+    * only walks the NEW incremental range above them.
+    */
+  def removeBackfillTarget(): DataSourceBatchUpdate =
+    remove(Keys.BackfillTarget)
 
   /** True iff SNAP is done AND a backfill target was previously persisted AND any of the three cursors is below the
     * target. `SyncController.start()` uses this to spawn a standalone `ChainDownloader` alongside regular sync.
@@ -444,18 +545,19 @@ object AppStateStorage:
     val BestBlockNumber = "BestBlockNumber"
     val BestBlockHash = "BestBlockHash"
     val FastSyncDone = "FastSyncDone"
-    val FastSyncCooldownUntilMillis = "FastSyncCooldownUntilMillis"
     val EstimatedHighestBlock = "EstimatedHighestBlock"
     val SyncStartingBlock = "SyncStartingBlock"
     val BootstrapPivotBlock = "BootstrapPivotBlock"
     val BootstrapPivotBlockHash = "BootstrapPivotBlockHash"
     val SnapSyncDone = "SnapSyncDone"
     val SnapSyncPivotBlock = "SnapSyncPivotBlock"
+    val SnapSyncMinPivotBlock = "SnapSyncMinPivotBlock"
     val SnapSyncStateRoot = "SnapSyncStateRoot"
     val SnapSyncProgress = "SnapSyncProgress"
+    val SnapAccountResumeCheckpoint = "SnapAccountResumeCheckpoint"
     val SnapSyncBootstrapTarget = "SnapSyncBootstrapTarget"
-    val SnapFastCycleCount = "SnapFastCycleCount"
     val BytecodeRecoveryDone = "BytecodeRecoveryDone"
+    val BulkBytecodeRecoveryFailures = "BulkBytecodeRecoveryFailures"
     val StorageRecoveryDone = "StorageRecoveryDone"
     val RecoveryProgress = "RecoveryProgress"
     val SnapSyncAccountsComplete = "SnapSyncAccountsComplete"
@@ -463,6 +565,8 @@ object AppStateStorage:
     val SnapSyncBytecodeComplete = "SnapSyncBytecodeComplete"
     val SnapSyncCodeHashesPath = "SnapSyncCodeHashesPath"
     val SnapSyncStorageFilePath = "SnapSyncStorageFilePath"
+    val SnapSyncStorageFileCount = "SnapSyncStorageFileCount"
+    val SnapSyncCodeHashesCount = "SnapSyncCodeHashesCount"
     val SnapSyncFinalizedRoot = "SnapSyncFinalizedRoot"
     val BackfillTarget = "BackfillTarget"
     val BackfillBestHeader = "BackfillBestHeader"

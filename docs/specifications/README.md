@@ -10,6 +10,9 @@ This directory contains technical specifications and protocol documentation for 
 ### EVM Compatibility
 - **[Ethereum Mainnet EVM Compatibility](ETHEREUM_MAINNET_EVM_COMPATIBILITY.md)** - Comprehensive analysis of EIPs, VM opcodes, and protocol features required for full Ethereum mainnet execution client compatibility
 
+### Hard Forks
+- **[Glamsterdam (Amsterdam + Gloas)](GLAMSTERDAM.md)** - EIP-7773 scope, activation schedule (Platåberget, Sepolia), Engine API and networking changes, fukuii implementation status, and how to test against the Platåberget testnet
+
 ## Related Documentation
 
 - [ADRs](../adr/README.md) - Architecture Decision Records

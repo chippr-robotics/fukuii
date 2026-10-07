@@ -19,7 +19,14 @@ import com.chipprbots.ethereum.utils.ByteUtils
   *     because peers' RLP decoder reads `latestBlockHash` (32 bytes) into `latestBlock` (uint64) and rejects the
   *     handshake with `rlp: input string too long for uint64`. The 7-field layout is restored to match geth/besu.
   *   - Receipt encoding: removes bloom filter, uses flat RLP list with explicit tx-type field
-  *   - New BlockRangeUpdate (0x11) notification message — sent periodically AFTER the initial 7-field STATUS
+  *   - New BlockRangeUpdate (0x11) notification message — a change notification, NOT a handshake greeting. The initial
+  *     range is already carried inside STATUS itself (earliestBlock/latestBlock/latestBlockHash above);
+  *     BlockRangeUpdate is sent later, only when that range actually changes. fukuii's sender lives in
+  *     `BlockBroadcast.broadcastBlock` (new block imported) and `BlockBroadcast.announceCanonicalHead` (CL forkchoice
+  *     head advance) — never in the handshake-completion path
+  *     (`NetworkPeerManagerActor.handlePeerHandshakeSuccessful`). See EIP-7642 and go-ethereum's
+  *     `blockRangeLoop`/`broadcastBlockRange` (eth/handler.go), which broadcast to all connected peers on
+  *     `ChainHeadEvent`/snap-sync progress, gated by `shouldSend()` — never as a post-handshake one-off.
   *   - All other messages (GetBlockHeaders, BlockHeaders, etc.) unchanged from ETH/68
   */
 object ETH69:

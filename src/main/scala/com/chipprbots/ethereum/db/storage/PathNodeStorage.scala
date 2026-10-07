@@ -118,6 +118,36 @@ class PathNodeStorage(val dataSource: DataSource):
   /** True if the StateTriePathNamespace column family has at least one entry. Used by the startup guard. */
   def hasAccountData: Boolean = hasAnyEntry(acctNs)
 
+  /** Stream every stored `(key, rlp)` of the account-trie CF (`key` = HP-encoded path) in key order, in chunks of
+    * `chunkSize`, calling `f` once per chunk. Used to publish a Path-scheme trie to the hash-keyed store.
+    */
+  def foreachAccountNodeChunk(chunkSize: Int)(f: Seq[(Array[Byte], Array[Byte])] => Unit): Unit =
+    foreachChunk(acctNs, chunkSize)(f)
+
+  /** As [[foreachAccountNodeChunk]] for the storage-trie CF; `key` = accountHash (32 bytes) ++ HP-encoded path. */
+  def foreachStorageNodeChunk(chunkSize: Int)(f: Seq[(Array[Byte], Array[Byte])] => Unit): Unit =
+    foreachChunk(storageNs, chunkSize)(f)
+
+  private def foreachChunk(ns: IndexedSeq[Byte], chunkSize: Int)(f: Seq[(Array[Byte], Array[Byte])] => Unit): Unit =
+    import cats.effect.unsafe.implicits.global
+    // RocksDbDataSource yields keys WITHOUT the namespace byte; the in-memory EphemDataSource test double keeps it
+    // (see HealingFrontierStorageSpec). Normalise so callers always see the bare key.
+    val strip = if dataSource.isInstanceOf[com.chipprbots.ethereum.db.dataSource.EphemDataSource] then ns.length else 0
+    dataSource
+      .iterate(ns)
+      .chunkN(chunkSize)
+      .evalMap { chunk =>
+        cats.effect.IO {
+          f(chunk.toVector.map {
+            case Right((k, v)) => (k.drop(strip), v)
+            case Left(err)     => throw new IllegalStateException("Path node iteration failed", err.ex)
+          })
+        }
+      }
+      .compile
+      .drain
+      .unsafeRunSync()
+
   // ---- internals ----
 
   private def encodePath(nibbles: Array[Byte]): Array[Byte] =

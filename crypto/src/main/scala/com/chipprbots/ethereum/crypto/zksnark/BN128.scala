@@ -193,13 +193,19 @@ object BN128 {
       */
     val R: BigInt = BigInt("21888242871839275222246405745257275088548364400416034343698204186575808495617")
 
-    /** Constructs valid element of subgroup `G2` To be valid element of subgroup, elements needs to be valid point
-      * (have valid coordinates in Fp_2 and to be on curve Bn128 in Fp_2) and fullfill the equation `-1 * p + p == 0`
+    /** Constructs valid element of subgroup `G2`. To be valid element of subgroup, elements need to be valid point
+      * (have valid coordinates in Fp_2 and be on the twist curve over Fp_2) AND lie in the order-`R` subgroup, i.e.
+      * `R * p == 0`. The twist has a large cofactor, so being on the curve is not enough: EIP-197 requires the
+      * precompile to fail for a point outside G2, as go-ethereum/core-geth do (bn256 `twistPoint.IsOnCurve` multiplies
+      * by `Order` and checks for infinity).
       * @return
       *   [[scala.None]] if element is invald group element, [[com.chipprbots.ethereum.crypto.zksnark.BN128.BN128G2]]
       */
     def apply(a: ByteString, b: ByteString, c: ByteString, d: ByteString): Option[BN128G2] =
-      createPoint(a, b, c, d).map(BN128G2(_))
+      createPoint(a, b, c, d).filter(isInSubgroup).map(BN128G2(_))
+
+    private def isInSubgroup(p: Point[Fp2]): Boolean =
+      p.isZero || mul(p, R).isZero
 
     def mulByP(p: Point[Fp2]): Point[Fp2] = {
       val rx = Fp2.TWIST_MUL_BY_P_X * Fp2.frobeniusMap(p.x, 1)

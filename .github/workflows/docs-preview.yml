@@ -67,6 +67,12 @@ jobs:
         run: mkdocs build --strict
 
       - name: Deploy Preview
+        # Skip on fork PRs — pushing the preview to gh-pages needs a write token forks
+        # don't get (default GITHUB_TOKEN is read-only there; no `permissions:` block
+        # can override that platform-level restriction). Same fork-guard autofix.yml/
+        # pr-management.yml/docs-link-check.yml already use. `mkdocs build --strict`
+        # above still runs unconditionally and is the real correctness gate.
+        if: github.event.pull_request.head.repo.full_name == github.repository
         uses: rossjrw/pr-preview-action@v1
         with:
           source-dir: ./site/

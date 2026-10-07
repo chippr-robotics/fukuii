@@ -47,6 +47,7 @@ import com.chipprbots.ethereum.domain.ChainWeight
 import com.chipprbots.ethereum.domain.TrieRoot
 import com.chipprbots.ethereum.ledger.InMemoryWorldStateProxy
 import com.chipprbots.ethereum.mpt.MerklePatriciaTrie
+import com.chipprbots.ethereum.network.DetectionMode
 import com.chipprbots.ethereum.network.ForkResolver
 import com.chipprbots.ethereum.network.KnownNodesManager
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor
@@ -104,7 +105,7 @@ abstract class CommonFakePeer(peerName: String, fakePeerCustomConfig: FakePeerCu
       discoveryStatus = ServerStatus.NotListening
     )
 
-  lazy val tempDir: Path = Files.createTempDirectory("temp-fast-sync")
+  lazy val tempDir: Path = Files.createTempDirectory("temp-fake-peer")
 
   def getRockDbTestConfig(dbPath: String): RocksDbConfig =
     new RocksDbConfig:
@@ -288,27 +289,22 @@ abstract class CommonFakePeer(peerName: String, fakePeerCustomConfig: FakePeerCu
   lazy val vmConfig: VmConfig = VmConfig(Config.config)
 
   val testSyncConfig: Config.SyncConfig = syncConfig.copy(
-    minPeersToChoosePivotBlock = 1,
     peersScanInterval = 5.milliseconds,
     blockHeadersPerRequest = 200,
     blockBodiesPerRequest = 50,
     receiptsPerRequest = 50,
-    fastSyncThrottle = 10.milliseconds,
-    startRetryInterval = 50.milliseconds,
-    nodesPerRequest = 200,
-    maxTargetDifference = 1,
     syncRetryInterval = 50.milliseconds,
-    blacklistDuration = 100.seconds,
-    fastSyncMaxBatchRetries = 2,
-    fastSyncBlockValidationN = 200
+    blacklistDuration = 100.seconds
   )
 
   lazy val broadcaster = new BlockBroadcast(etcPeerManager)
 
+  // Not "block-broadcaster": RegularSyncItSpecUtils.FakePeer spawns its own top-level actor under that name in the same
+  // system, and this one is spawned lazily by the first broadcastBlock (InvalidActorNameException: not unique).
   lazy val broadcasterActor: org.apache.pekko.actor.typed.ActorRef[BlockBroadcasterActor.BroadcasterMsg] =
     system.spawn(
       BlockBroadcasterActor.apply(broadcaster, peerEventBus, etcPeerManager, blacklist, testSyncConfig),
-      "block-broadcaster"
+      "fake-peer-block-broadcaster"
     )
 
   private def getMptForBlock(block: Block) =
@@ -335,7 +331,9 @@ abstract class CommonFakePeer(peerName: String, fakePeerCustomConfig: FakePeerCu
     for
       _ <- IO {
         peerManager ! PeerManagerActor.StartConnectingCmd
-        server ! ServerActor.StartServer(listenAddress)
+        // listenAddress is a concrete (non-wildcard) address, so detection is never attempted regardless of
+        // mode — DetectionMode.None documents that intent explicitly.
+        server ! ServerActor.StartServer(listenAddress, detectionMode = DetectionMode.None)
       }
       _ <- retryUntilWithDelay(IO(nodeStatusHolder.get()), 1.second, 5) { status =>
         status.serverStatus == Listening(listenAddress)

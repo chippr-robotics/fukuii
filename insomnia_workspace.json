@@ -1080,6 +1080,38 @@
       "_type": "request"
     },
     {
+      "_id": "req_02a51d9c",
+      "parentId": "fld_008ddc46",
+      "modified": 1763690611321,
+      "created": 1763690611321,
+      "url": "{{ node_url }}",
+      "name": "eth_getStorageValues",
+      "description": "Get multiple storage slots across multiple addresses in a single request",
+      "method": "POST",
+      "body": {
+        "mimeType": "application/json",
+        "text": "{\n  \"jsonrpc\": \"2.0\",\n  \"id\": 1,\n  \"method\": \"eth_getStorageValues\",\n  \"params\": [\n    {\n      \"{{ address }}\": [\n        \"0x0\"\n      ]\n    },\n    \"latest\"\n  ]\n}"
+      },
+      "parameters": [],
+      "headers": [
+        {
+          "name": "Content-Type",
+          "value": "application/json",
+          "id": "pair_02a51d9c"
+        }
+      ],
+      "authentication": {},
+      "metaSortKey": -1763690611321,
+      "isPrivate": false,
+      "settingStoreCookies": true,
+      "settingSendCookies": true,
+      "settingDisableRenderRequestBody": false,
+      "settingEncodeUrl": true,
+      "settingRebuildPath": true,
+      "settingFollowRedirects": "global",
+      "_type": "request"
+    },
+    {
       "_id": "req_00bbc20e",
       "parentId": "fld_008ddc46",
       "modified": 1763690611321,
@@ -1834,6 +1866,38 @@
           "name": "Content-Type",
           "value": "application/json",
           "id": "pair_048a4758"
+        }
+      ],
+      "authentication": {},
+      "metaSortKey": -1763690611341,
+      "isPrivate": false,
+      "settingStoreCookies": true,
+      "settingSendCookies": true,
+      "settingDisableRenderRequestBody": false,
+      "settingEncodeUrl": true,
+      "settingRebuildPath": true,
+      "settingFollowRedirects": "global",
+      "_type": "request"
+    },
+    {
+      "_id": "req_02b41f7a",
+      "parentId": "fld_05619cc3",
+      "modified": 1763690611341,
+      "created": 1763690611341,
+      "url": "{{ node_url }}",
+      "name": "eth_baseFee",
+      "description": "Get the base fee per gas of the next block",
+      "method": "POST",
+      "body": {
+        "mimeType": "application/json",
+        "text": "{\n  \"jsonrpc\": \"2.0\",\n  \"id\": 1,\n  \"method\": \"eth_baseFee\",\n  \"params\": []\n}"
+      },
+      "parameters": [],
+      "headers": [
+        {
+          "name": "Content-Type",
+          "value": "application/json",
+          "id": "pair_02b41f7a"
         }
       ],
       "authentication": {},
@@ -2862,6 +2926,38 @@
       ],
       "authentication": {},
       "metaSortKey": -1763690611373,
+      "isPrivate": false,
+      "settingStoreCookies": true,
+      "settingSendCookies": true,
+      "settingDisableRenderRequestBody": false,
+      "settingEncodeUrl": true,
+      "settingRebuildPath": true,
+      "settingFollowRedirects": "global",
+      "_type": "request"
+    },
+    {
+      "_id": "req_02c72e8b",
+      "parentId": "fld_0044a95b",
+      "modified": 1763690611374,
+      "created": 1763690611374,
+      "url": "{{ node_url }}",
+      "name": "eth_capabilities",
+      "description": "Get the node's effective data-retention capabilities for RPC routing",
+      "method": "POST",
+      "body": {
+        "mimeType": "application/json",
+        "text": "{\n  \"jsonrpc\": \"2.0\",\n  \"id\": 1,\n  \"method\": \"eth_capabilities\",\n  \"params\": []\n}"
+      },
+      "parameters": [],
+      "headers": [
+        {
+          "name": "Content-Type",
+          "value": "application/json",
+          "id": "pair_02c72e8b"
+        }
+      ],
+      "authentication": {},
+      "metaSortKey": -1763690611374,
       "isPrivate": false,
       "settingStoreCookies": true,
       "settingSendCookies": true,

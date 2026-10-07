@@ -104,9 +104,9 @@ If ForkId validation is overly strict on some peers:
 2. **Bootstrap Nodes**: Ensure fukuii.pw bootstrap nodes are accessible
 3. **Peer Selection**: May need to implement retry logic for peer selection
 
-### Option 4: Enable Fast Sync
+### Option 4: Enable SNAP Sync
 
-Consider enabling fast/snap sync to quickly advance past block 0:
+Consider enabling SNAP sync (`do-snap-sync = true`, the default) to quickly advance past block 0:
 - This would change ForkId from `0xfc64ec04` to a later value
 - May improve peer acceptance rates
 - Check `use-bootstrap-checkpoints = true` in configuration

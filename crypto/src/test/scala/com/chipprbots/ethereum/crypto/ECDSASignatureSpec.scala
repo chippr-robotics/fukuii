@@ -29,6 +29,21 @@ class ECDSASignatureSpec extends AnyFlatSpec with Matchers with ScalaCheckProper
     sig.publicKey(bytesToSign).isEmpty shouldBe false
   }
 
+  it should "not recover a public key when recovery yields the point at infinity" taggedAs (UnitTest, CryptoTest) in {
+    // Q = r^-1 (s*R - e*G). R = G (r = Gx, even y -> v = 27), s = 1, e = 1 gives Q = O; so does the mirror R = -G
+    // (v = 28) with s = n - 1. libsecp256k1 secp256k1_ecdsa_sig_recover returns 0 for Q = O, so go-ethereum/core-geth
+    // Ecrecover fails. It must be None here, not the empty encoding (whose keccak256 is a fake address).
+    val n = BigInt("fffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364141", 16)
+    val gx = BigInt("79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798", 16)
+    val hash = Array.fill[Byte](31)(0) :+ 1.toByte
+
+    ECDSASignature(gx, BigInt(1), BigInt(27)).publicKey(hash) shouldBe None
+    ECDSASignature(gx, n - 1, BigInt(28)).publicKey(hash) shouldBe None
+    // Same R and s with a different hash is an ordinary recovery.
+    ECDSASignature(gx, BigInt(1), BigInt(27)).publicKey(Array.fill[Byte](31)(0) :+ 2.toByte).map(_.length) shouldBe
+      Some(64)
+  }
+
   it should "fail on case from transaction 74c45d0cf2332cc021bebdfee6b1c1da0b58e8f4154537adb79b025f722920a4" taggedAs (
     UnitTest,
     CryptoTest

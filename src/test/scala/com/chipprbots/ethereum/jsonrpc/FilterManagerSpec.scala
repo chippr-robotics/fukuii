@@ -226,6 +226,86 @@ class FilterManagerSpec
 
     changesResp2.logs.size shouldBe 1
 
+  it should "render blockTimestamp as an unsigned BigInt for timestamps at or above 2^63" taggedAs (
+    UnitTest,
+    RPCTest
+  ) in new TestSetup:
+
+    val address: Address = Address("0x1234")
+    val topics: Seq[Seq[ByteString]] = Seq(Seq(), Seq(ByteString(Hex.decode("4567"))))
+
+    (() => blockchainReader.getBestBlockNumber).expects().returning(2)
+
+    val createProbe: org.apache.pekko.actor.testkit.typed.scaladsl.TestProbe[NewFilterResponse] =
+      testKit.createTestProbe[NewFilterResponse]()
+    filterManager ! FilterManager.NewLogFilter(
+      Some(BlockParam.WithNumber(2)),
+      Some(BlockParam.WithNumber(2)),
+      Some(Seq(address)),
+      topics,
+      createProbe.ref
+    )
+    val createResp: NewFilterResponse = createProbe.expectMessageType[NewFilterResponse]
+
+    val logsExtreme: Seq[TxLogEntry] = Seq(
+      TxLogEntry(
+        Address("0x1234"),
+        Seq(ByteString("can be any"), ByteString(Hex.decode("4567"))),
+        ByteString(Hex.decode("99aaff"))
+      )
+    )
+    // 2^64 - 2: the uint64 bit pattern that reads as -2 through a signed Long. Must render as
+    // the unsigned decimal 18446744073709551614, never as a negative BigInt.
+    val bhExtreme: BlockHeader = blockHeader.copy(
+      number = BlockNumber(2),
+      logsBloom = BloomFilter(LedgerBloomFilter.create(logsExtreme)),
+      unixTimestamp = Timestamp(-2L)
+    )
+
+    (() => blockchainReader.getBestBlockNumber).expects().returning(2).twice()
+    blockchainReader.getBlockHeaderByNumber.expects(bhExtreme.number.value).returning(Some(bhExtreme))
+
+    val bbExtreme: BlockBody = BlockBody(
+      transactionList = Seq(
+        SignedTransaction(
+          tx = LegacyTransaction(
+            nonce = 0,
+            gasPrice = GasPrice(123),
+            gasLimit = GasAmount(123),
+            receivingAddress = Address("0x1234"),
+            value = 0,
+            payload = ByteString()
+          ),
+          signature = ECDSASignature(0, 0, 27)
+        )
+      ),
+      uncleNodesList = Nil
+    )
+
+    blockchainReader.getBlockBodyByHash.expects(bhExtreme.hash).returning(Some(bbExtreme))
+    blockchainReader.getReceiptsByHash
+      .expects(bhExtreme.hash)
+      .returning(
+        Some(
+          Seq(
+            LegacyReceipt.withHashOutcome(
+              postTransactionStateHash = ByteString(),
+              cumulativeGasUsed = 0,
+              logsBloomFilter = BloomFilter(LedgerBloomFilter.create(logsExtreme)),
+              logs = logsExtreme
+            )
+          )
+        )
+      )
+
+    val logsProbe: org.apache.pekko.actor.testkit.typed.scaladsl.TestProbe[FilterLogs] =
+      testKit.createTestProbe[FilterLogs]()
+    filterManager ! FilterManager.GetFilterLogs(createResp.id, logsProbe.ref)
+    val logsResp: LogFilterLogs = logsProbe.expectMessageType[LogFilterLogs]
+
+    logsResp.logs.size shouldBe 1
+    logsResp.logs.head.blockTimestamp shouldBe Some(BigInt("18446744073709551614"))
+
   it should "handle pending block filter" taggedAs (UnitTest, RPCTest) in new TestSetup:
 
     val address: Address = Address("0x1234")

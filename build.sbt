@@ -83,6 +83,13 @@ def commonSettings(projectName: String): Seq[sbt.Def.Setting[_]] = Seq(
     .Argument(TestFrameworks.ScalaTest, "-l", "EthashMinerSpec"), // miner tests disabled by default
   (Test / testOptions) += Tests
     .Argument(TestFrameworks.ScalaTest, "-l", "IntegrationTest"), // network-dependent tests excluded by default
+  // The `it` config extends Test, so without this it inherits the `-l IntegrationTest` exclusion above and silently
+  // skips every suite tagged IntegrationTest — `IntegrationTest / test`, `pp`, `testStandard` and `testComprehensive`
+  // were running only the untagged suites (EthSmokeSpec). Keep every other Test option; drop only that exclusion.
+  (Integration / testOptions) := (Test / testOptions).value.filterNot {
+    case Tests.Argument(_, args) => args == List("-l", "IntegrationTest")
+    case _                       => false
+  },
   // Configure scalacOptions for Scala 3
   scalacOptions := {
     val base = baseScalacOptions

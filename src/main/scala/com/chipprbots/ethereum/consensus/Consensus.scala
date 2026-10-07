@@ -8,6 +8,7 @@ import cats.effect.unsafe.IORuntime
 
 import com.chipprbots.ethereum.consensus.Consensus.ConsensusResult
 import com.chipprbots.ethereum.domain.Block
+import com.chipprbots.ethereum.domain.BlockAccessList
 import com.chipprbots.ethereum.domain.ChainWeight
 import com.chipprbots.ethereum.ledger.BlockData
 import com.chipprbots.ethereum.mpt.MerklePatriciaTrie.MissingNodeException
@@ -20,6 +21,16 @@ trait Consensus:
   def evaluateBranch(
       block: NonEmptyList[Block]
   )(implicit blockExecutionScheduler: IORuntime, blockchainConfig: BlockchainConfig): IO[ConsensusResult]
+
+  /** [[evaluateBranch]] with peer-supplied EIP-7928 lists keyed by block hash, used as execution prefetch hints only.
+    * The default ignores them, which is always correct.
+    */
+  def evaluateBranchWithAccessLists(
+      block: NonEmptyList[Block],
+      accessLists: Map[ByteString, BlockAccessList]
+  )(implicit blockExecutionScheduler: IORuntime, blockchainConfig: BlockchainConfig): IO[ConsensusResult] =
+    val _ = accessLists
+    evaluateBranch(block)
 
 object Consensus:
   /* This return type for consensus is probably overcomplicated for now because some information is needed
@@ -58,5 +69,13 @@ object Consensus:
     * this is due to an inconsistency in the database.
     */
   case class ConsensusError(blockToEnqueue: List[Block], err: String) extends ConsensusResult
-  case class ConsensusErrorDueToMissingNode(blockToEnqueue: List[Block], reason: MissingNodeException)
-      extends ConsensusResult
+
+  /** A block hit a missing state node. `imported` is the prefix of the batch that executed and validated BEFORE it:
+    * those blocks are already adopted (state and best block), exactly as a successful shorter batch would have left
+    * them, so the caller must account for them and retry from the failing block, not from the head of the batch.
+    */
+  case class ConsensusErrorDueToMissingNode(
+      blockToEnqueue: List[Block],
+      reason: MissingNodeException,
+      imported: List[BlockData] = Nil
+  ) extends ConsensusResult

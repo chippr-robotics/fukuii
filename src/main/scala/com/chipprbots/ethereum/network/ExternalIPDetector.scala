@@ -23,15 +23,48 @@ import org.jupnp.registry.Registry
 import org.jupnp.registry.RegistryListener
 import org.jupnp.support.igd.callback.GetExternalIP
 
-/** Detects the node's externally reachable IP address via a best-effort cascade:
-  *   1. UPnP IGD (GetExternalIP) — queries the local gateway router; works on most home NATs 2. STUN (RFC 5389 Binding
-  *      Request) — fast UDP, works through most NATs 3. HTTP probe — falls back if STUN is blocked 4. First
-  *      non-loopback IPv4 interface — last resort for air-gapped / firewalled hosts
+import com.chipprbots.ethereum.utils.Logger
+
+/** How aggressively [[ExternalIPDetector.detect]] is allowed to probe for this node's external address.
   *
-  * Mirrors the strategy used by core-geth (--nat=any: UPnP → STUN → HTTP) and Besu. Called once at startup when no
-  * explicit advertised-address is configured.
+  *   - `None` — no detection at all; only an explicitly configured advertised address is ever used.
+  *   - `Upnp` — UPnP IGD, then a local network interface. No traffic leaves the LAN.
+  *   - `Full` — UPnP, then STUN, then an HTTPS probe, then a local network interface.
+  *
+  * Configured via `network.server-address.external-ip-detection`.
   */
-object ExternalIPDetector:
+enum DetectionMode:
+  case None, Upnp, Full
+
+object DetectionMode:
+  def fromString(s: String): DetectionMode = s.trim.toLowerCase match
+    case "none" => DetectionMode.None
+    case "upnp" => DetectionMode.Upnp
+    case "full" => DetectionMode.Full
+    case other =>
+      throw new IllegalArgumentException(
+        s"Invalid value '$other' for network.server-address.external-ip-detection " +
+          "(expected one of: none, upnp, full)"
+      )
+
+/** Detects this node's externally reachable IPv4 address via a best-effort cascade of independent probes, validating
+  * every candidate before it is returned.
+  *
+  * Cascade order (bounded by the configured [[DetectionMode]]):
+  *   1. UPnP IGD (GetExternalIP) — asks the local gateway router for its WAN address 2. STUN (RFC 5389 Binding Request)
+  *      — fast UDP round trip against a public STUN server (`full` mode only) 3. HTTPS probe — a plaintext IPv4 literal
+  *      returned by a public "what's my IP" endpoint (`full` mode only) 4. First non-loopback, non-link-local IPv4
+  *      address bound to a local network interface
+  *
+  * Every candidate — regardless of which step produced it — is validated with [[isPublicIPv4]] before being accepted;
+  * private-use, loopback, link-local, CGNAT, documentation, benchmarking, multicast, and reserved ranges are all
+  * rejected and the cascade continues to the next step. A rejected candidate is logged at DEBUG and never propagates
+  * further.
+  *
+  * Called once at startup when no explicit advertised address is configured (see
+  * `network.server-address.advertised-address` and `network.server-address.external-ip-detection`).
+  */
+object ExternalIPDetector extends Logger:
 
   private val UpnpTimeoutMs = 3000
 
@@ -42,7 +75,7 @@ object ExternalIPDetector:
   )
   private val StunTimeoutMs = 2000
 
-  // Same canonical set as Besu HttpProbeIpDetector and Nethermind IPResolver (HTTPS only).
+  // Public HTTPS "what is my IP" endpoints, queried in order; the first plaintext IPv4 response wins.
   private val HttpProbeUrls: List[String] = List(
     "https://icanhazip.com",
     "https://checkip.amazonaws.com",
@@ -50,15 +83,106 @@ object ExternalIPDetector:
     "https://4.ident.me"
   )
   private val HttpTimeoutMs = 2000
+  private val HttpMaxBodyBytes = 64
 
-  /** Returns the best available externally reachable address, or None if all methods fail. */
-  def detect(): Option[InetAddress] =
-    tryUpnp().orElse(tryStun()).orElse(tryHttp()).orElse(tryLocalInterface())
+  /** Returns the best available externally reachable address for the given [[DetectionMode]], or None if every step
+    * permitted by that mode failed, produced only non-public candidates, or the mode is `None`.
+    *
+    * The four probe steps are individually injectable (each defaults to the real implementation) so tests can observe
+    * call order and count without touching the network.
+    */
+  def detect(
+      mode: DetectionMode = DetectionMode.Full,
+      upnpProbe: () => Option[InetAddress] = () => tryUpnp(),
+      stunProbe: () => Option[InetAddress] = () => tryStun(),
+      httpProbe: () => Option[InetAddress] = () => tryHttp(),
+      localInterfaceProbe: () => Option[InetAddress] = () => tryLocalInterface()
+  ): Option[InetAddress] =
+    mode match
+      case DetectionMode.None => None
+      case DetectionMode.Upnp => upnpProbe().orElse(localInterfaceProbe())
+      case DetectionMode.Full => upnpProbe().orElse(stunProbe()).orElse(httpProbe()).orElse(localInterfaceProbe())
+
+  /** True only for an IPv4 address outside every reserved/private/documentation/multicast range. Never true for an IPv6
+    * address. Checked as explicit prefix comparisons on the 32-bit value, not via `InetAddress`'s own
+    * `isSiteLocalAddress`/`isLoopbackAddress` helpers alone — those don't cover CGNAT, documentation, or benchmarking
+    * ranges.
+    */
+  def isPublicIPv4(addr: InetAddress): Boolean = addr match
+    case v4: Inet4Address =>
+      val bytes = v4.getAddress
+      val value = ip4(bytes(0) & 0xff, bytes(1) & 0xff, bytes(2) & 0xff, bytes(3) & 0xff)
+      !BlockedRanges.exists { case (base, prefixLen) => inRange(value, base, prefixLen) }
+    case _ => false
+
+  /** Parses a strict dotted-decimal IPv4 literal: exactly four decimal octets 0-255, no leading zeros (other than the
+    * literal digit "0"), nothing else. Never resolves a hostname — unlike `InetAddress.getByName`, this never performs
+    * a DNS lookup or blocks on I/O.
+    */
+  def parseIpv4Literal(raw: String): Option[Inet4Address] =
+    val trimmed = raw.trim
+    if trimmed.isEmpty then None
+    else
+      val parts = trimmed.split("\\.", -1)
+      if parts.length != 4 then None
+      else
+        val octets = parts.toList.map(parseOctet)
+        if octets.forall(_.isDefined) then
+          val bytes = octets.map(_.get.toByte).toArray
+          Try(InetAddress.getByAddress(bytes)).toOption.collect { case v4: Inet4Address => v4 }
+        else None
+
+  private def parseOctet(s: String): Option[Int] =
+    if s.isEmpty || s.length > 3 then None
+    else if !s.forall(c => c >= '0' && c <= '9') then None
+    else if s.length > 1 && s.charAt(0) == '0' then None // reject leading zeros, except the literal "0"
+    else
+      val v = s.toInt
+      if v >= 0 && v <= 255 then Some(v) else None
+
+  private def ip4(a: Int, b: Int, c: Int, d: Int): Int =
+    ((a & 0xff) << 24) | ((b & 0xff) << 16) | ((c & 0xff) << 8) | (d & 0xff)
+
+  private def prefixMask(prefixLen: Int): Int =
+    if prefixLen <= 0 then 0 else -1 << (32 - prefixLen)
+
+  private def inRange(value: Int, base: Int, prefixLen: Int): Boolean =
+    val mask = prefixMask(prefixLen)
+    (value & mask) == (base & mask)
+
+  // RFC 1918 / RFC 6598 / RFC 5735 / RFC 2544 reserved, private-use, documentation, benchmarking,
+  // multicast, and "reserved for future use" IPv4 ranges. A detected address inside any of these is not
+  // externally reachable and must never be advertised to peers.
+  private val BlockedRanges: List[(Int, Int)] = List(
+    ip4(0, 0, 0, 0) -> 8, // 0.0.0.0/8 — "this network"
+    ip4(10, 0, 0, 0) -> 8, // 10.0.0.0/8 — private-use
+    ip4(100, 64, 0, 0) -> 10, // 100.64.0.0/10 — shared address space (CGNAT)
+    ip4(127, 0, 0, 0) -> 8, // 127.0.0.0/8 — loopback
+    ip4(169, 254, 0, 0) -> 16, // 169.254.0.0/16 — link-local
+    ip4(172, 16, 0, 0) -> 12, // 172.16.0.0/12 — private-use
+    ip4(192, 0, 0, 0) -> 24, // 192.0.0.0/24 — IETF protocol assignments
+    ip4(192, 0, 2, 0) -> 24, // 192.0.2.0/24 — documentation (TEST-NET-1)
+    ip4(192, 168, 0, 0) -> 16, // 192.168.0.0/16 — private-use
+    ip4(198, 18, 0, 0) -> 15, // 198.18.0.0/15 — benchmarking
+    ip4(198, 51, 100, 0) -> 24, // 198.51.100.0/24 — documentation (TEST-NET-2)
+    ip4(203, 0, 113, 0) -> 24, // 203.0.113.0/24 — documentation (TEST-NET-3)
+    ip4(224, 0, 0, 0) -> 4, // 224.0.0.0/4 — multicast
+    ip4(240, 0, 0, 0) -> 4 // 240.0.0.0/4 — reserved for future use
+  )
+
+  /** Accepts `addr` only if it passes [[isPublicIPv4]]; otherwise logs the rejection at DEBUG and returns None so the
+    * cascade in [[detect]] moves on to the next step.
+    */
+  private def validate(source: String, addr: InetAddress): Option[InetAddress] =
+    if isPublicIPv4(addr) then Some(addr)
+    else
+      log.debug("Rejected external-ip candidate: source={} address={}", source, addr.getHostAddress)
+      None
 
   // Step 1: UPnP IGD GetExternalIP — asks the gateway for its WAN address.
   // Creates a short-lived UpnpServiceImpl (client-only, no stream server) and shuts it down after
   // collecting the result or timing out. Silent None on VPS / firewalled environments.
-  private def tryUpnp(): Option[InetAddress] = Try {
+  private[network] def tryUpnp(): Option[InetAddress] = Try {
     val ipFuture = new CompletableFuture[String]()
     val upnpSvc = new UpnpServiceImpl(new ClientOnlyUpnpServiceConfiguration())
     try
@@ -101,19 +225,25 @@ object ExternalIPDetector:
     finally
       try upnpSvc.shutdown()
       catch case _: Throwable => ()
-  }.toOption.flatten.flatMap(ip => Try(InetAddress.getByName(ip)).toOption)
+  }.toOption.flatten
+    .flatMap(parseIpv4Literal) // never InetAddress.getByName — the gateway-supplied string is untrusted input
+    .flatMap(addr => validate("upnp", addr))
 
   // Step 2: RFC 5389 STUN Binding Request — fast UDP, typically <100ms on internet-connected hosts.
-  private def tryStun(): Option[InetAddress] =
-    StunServers.iterator
-      .flatMap { case (host, port) =>
-        stunProbe(host, port).toOption
-      }
+  // `servers` is injectable so tests can point the cascade at a fake STUN server on loopback.
+  private[network] def tryStun(servers: List[(String, Int)] = StunServers): Option[InetAddress] =
+    servers.iterator
+      .flatMap { case (host, port) => stunProbe(host, port).toOption }
+      .flatMap(addr => validate("stun", addr))
       .nextOption()
 
   private def stunProbe(host: String, port: Int): Try[InetAddress] = Try {
+    val serverAddress = InetAddress.getByName(host)
     Using.resource(new DatagramSocket()) { socket =>
       socket.setSoTimeout(StunTimeoutMs)
+      // Connect the socket to the STUN server so the kernel drops any UDP datagram arriving from a
+      // different source address — an unconnected socket would happily hand a spoofed reply to receive().
+      socket.connect(serverAddress, port)
       // RFC 5389 Binding Request: 20-byte header, no attributes.
       // Layout: type(2) | length(2) | magic(4) | txId(12)
       val req = new Array[Byte](20)
@@ -124,7 +254,7 @@ object ExternalIPDetector:
       val txId = new Array[Byte](12)
       new java.security.SecureRandom().nextBytes(txId) // RFC 5389 §6: random 96-bit
       hdr.put(txId)
-      socket.send(new DatagramPacket(req, 20, InetAddress.getByName(host), port))
+      socket.send(new DatagramPacket(req, 20, serverAddress, port))
       val buf = new Array[Byte](1024)
       val recv = new DatagramPacket(buf, buf.length)
       socket.receive(recv)
@@ -132,12 +262,16 @@ object ExternalIPDetector:
     }
   }
 
-  private def parseXorMappedAddress(buf: Array[Byte], len: Int, txId: Array[Byte]): InetAddress =
+  private[network] def parseXorMappedAddress(buf: Array[Byte], len: Int, txId: Array[Byte]): InetAddress =
+    if len < 20 then throw new IllegalStateException("STUN response truncated: header requires 20 bytes")
     val resp = ByteBuffer.wrap(buf, 0, len)
     val msgType = resp.getShort() & 0xffff
     if msgType != 0x0101 then
       throw new IllegalStateException(s"Expected Binding Response (0x0101), got 0x${msgType.toHexString}")
     val msgLen = resp.getShort() & 0xffff
+    val bodyEnd = 20 + msgLen
+    if bodyEnd > len then
+      throw new IllegalStateException("STUN response: declared message length exceeds received bytes")
     resp.position(4) // skip type(2) + length(2), land at magic cookie
     if (resp.getInt() & 0xffffffffL) != 0x2112a442L then
       throw new IllegalStateException("STUN response: unexpected magic cookie")
@@ -146,55 +280,61 @@ object ExternalIPDetector:
     if !java.util.Arrays.equals(echoed, txId) then
       throw new IllegalStateException("STUN response transaction ID mismatch — possible spoofing or server reuse")
     // position is now at 20 — start of attribute section
-    val bodyEnd = 20 + msgLen
     var result: Option[InetAddress] = None
     while resp.position() < bodyEnd && result.isEmpty do
+      if bodyEnd - resp.position() < 4 then throw new IllegalStateException("STUN response: truncated attribute header")
       val attrType = resp.getShort() & 0xffff
       val attrLen = resp.getShort() & 0xffff
       val attrStart = resp.position() // start of attribute VALUE (after type+length headers)
+      if attrStart + attrLen > bodyEnd then
+        throw new IllegalStateException("STUN response: attribute length exceeds message bounds")
       if attrType == 0x0020 then // XOR-MAPPED-ADDRESS
+        if attrLen < 8 then throw new IllegalStateException("STUN response: XOR-MAPPED-ADDRESS attribute too short")
         resp.get() // reserved byte
         val family = resp.get() & 0xff
-        if family == 0x01 then // IPv4
+        if family == 0x01 then // IPv4 only — an IPv6 (0x02) family is skipped, never accepted
           resp.getShort() // xor-port (unused — we only need the IP)
           val xorAddr = resp.getInt() ^ 0x2112a442
           result = Some(InetAddress.getByAddress(ByteBuffer.allocate(4).putInt(xorAddr).array()))
       // Advance past the full padded attribute value (4-byte alignment)
-      resp.position(attrStart + ((attrLen + 3) & ~3))
+      val paddedLen = (attrLen + 3) & ~3
+      if attrStart + paddedLen > len then
+        throw new IllegalStateException("STUN response: attribute padding exceeds received bytes")
+      resp.position(attrStart + paddedLen)
     result.getOrElse(
       throw new IllegalStateException("STUN response contained no XOR-MAPPED-ADDRESS for IPv4")
     )
 
-  // Step 3: HTTPS probe — same approach as Besu HttpProbeIpDetector / Nethermind IPResolver.
-  private def tryHttp(): Option[InetAddress] =
-    HttpProbeUrls.iterator
-      .flatMap { url =>
-        Try {
-          val conn = new java.net.URI(url).toURL().openConnection()
-          conn.setConnectTimeout(HttpTimeoutMs)
-          conn.setReadTimeout(HttpTimeoutMs)
-          val reader =
-            new java.io.BufferedReader(
-              new java.io.InputStreamReader(conn.getInputStream(), StandardCharsets.UTF_8)
-            )
-          try
-            val line = reader.readLine()
-            if line == null || line.trim.isEmpty then throw new IllegalStateException(s"Empty response from $url")
-            InetAddress.getByName(line.trim)
-          finally reader.close()
-        }.toOption
-      }
+  // Step 3: HTTPS probe — reads at most HttpMaxBodyBytes of the response body and parses the first line
+  // as a strict IPv4 literal. `urls` is injectable for tests.
+  private[network] def tryHttp(urls: List[String] = HttpProbeUrls): Option[InetAddress] =
+    urls.iterator
+      .flatMap(url => httpProbe(url).toOption)
+      .flatMap(addr => validate("http", addr))
       .nextOption()
 
-  // Step 4: first non-loopback, non-link-local IPv4 interface address (LAN IP).
-  private def tryLocalInterface(): Option[InetAddress] =
+  private def httpProbe(url: String): Try[Inet4Address] = Try {
+    val conn = new java.net.URI(url).toURL().openConnection()
+    conn.setConnectTimeout(HttpTimeoutMs)
+    conn.setReadTimeout(HttpTimeoutMs)
+    Using.resource(conn.getInputStream()) { in =>
+      val buf = new Array[Byte](HttpMaxBodyBytes)
+      val n = in.read(buf)
+      if n <= 0 then throw new IllegalStateException("Empty HTTP probe response body")
+      val text = new String(buf, 0, n, StandardCharsets.UTF_8)
+      val firstLine = text.linesIterator.nextOption().getOrElse(text)
+      parseIpv4Literal(firstLine).getOrElse(
+        throw new IllegalStateException("HTTP probe response body is not an IPv4 literal")
+      )
+    }
+  }
+
+  // Step 4: first non-loopback, non-link-local IPv4 interface address.
+  private[network] def tryLocalInterface(): Option[InetAddress] =
     Option(NetworkInterface.getNetworkInterfaces)
       .map(_.asScala.flatMap(_.getInetAddresses.asScala))
       .getOrElse(Iterator.empty)
-      .find { addr =>
-        !addr.isLoopbackAddress &&
-        !addr.isLinkLocalAddress &&
-        (addr match
-          case _: Inet4Address => true; case _ => false
-        )
+      .collectFirst {
+        case addr: Inet4Address if !addr.isLoopbackAddress && !addr.isLinkLocalAddress => addr
       }
+      .flatMap(addr => validate("local-interface", addr))

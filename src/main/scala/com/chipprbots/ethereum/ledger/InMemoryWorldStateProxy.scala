@@ -9,11 +9,14 @@ import com.chipprbots.ethereum.domain
 import com.chipprbots.ethereum.domain.*
 import com.chipprbots.ethereum.mpt.MerklePatriciaTrie
 import com.chipprbots.ethereum.mpt.MerklePatriciaTrie.MissingAccountNodeException
+import com.chipprbots.ethereum.mpt.MerklePatriciaTrie.MissingCodeException
 import com.chipprbots.ethereum.mpt.MerklePatriciaTrie.MissingNodeException
 import com.chipprbots.ethereum.mpt.MerklePatriciaTrie.MissingStorageNodeException
 import com.chipprbots.ethereum.mpt.MptNode
 import com.chipprbots.ethereum.rlp
 import com.chipprbots.ethereum.rlp.RLPImplicits.given
+import com.chipprbots.ethereum.vm.ImportProfile
+import com.chipprbots.ethereum.vm.JumpDestAnalysis
 import com.chipprbots.ethereum.vm.Storage
 import com.chipprbots.ethereum.vm.WorldStateProxy
 
@@ -51,7 +54,8 @@ object InMemoryWorldStateProxy:
       ethCompatibleStorage: Boolean,
       flatSlotStorage: Option[FlatSlotStorage]
   ): InMemoryWorldStateProxy =
-    val accountsStateTrieProxy = createProxiedAccountsStateTrie(nodesKeyValueStorage, stateRootHash)
+    val readMemos = new WorldReadMemos
+    val accountsStateTrieProxy = createProxiedAccountsStateTrie(nodesKeyValueStorage, stateRootHash, readMemos)
     new InMemoryWorldStateProxy(
       nodesKeyValueStorage,
       accountsStateTrieProxy,
@@ -63,7 +67,8 @@ object InMemoryWorldStateProxy:
       Set.empty,
       noEmptyAccounts,
       ethCompatibleStorage,
-      flatSlotStorage
+      flatSlotStorage,
+      readMemos
     )
 
   /** Updates state trie with current changes but does not persist them into the storages. To do so it:
@@ -123,13 +128,15 @@ object InMemoryWorldStateProxy:
     */
   private def createProxiedAccountsStateTrie(
       accountsStorage: MptStorage,
-      stateRootHash: ByteString
+      stateRootHash: ByteString,
+      readMemos: WorldReadMemos
   ): InMemorySimpleMapProxy[Address, Account, MerklePatriciaTrie[Address, Account]] =
     InMemorySimpleMapProxy.wrap[Address, Account, MerklePatriciaTrie[Address, Account]](
       MerklePatriciaTrie[Address, Account](
         stateRootHash.toArray[Byte],
         accountsStorage
-      )(Address.hashedAddressEncoder, accountSerializer)
+      )(Address.hashedAddressEncoder, accountSerializer),
+      readMemos.accounts[Address, Account]
     )
 
 class InMemoryWorldStateProxyStorage(
@@ -154,7 +161,7 @@ class InMemoryWorldStateProxyStorage(
           case Some(value) => value
           case None        =>
             // 3. Fall back to MPT traversal (handles pre-sync data, missing flat entries)
-            wrapped.get(addr).getOrElse(0)
+            ImportProfile.storageRead(wrapped.get(addr)).getOrElse(0)
 
   /** O(1) flat storage lookup: accountHash ++ keccak256(pad32(slotIndex)) → RLP(value) */
   private def flatLookup(addr: BigInt): Option[BigInt] =
@@ -191,11 +198,13 @@ class InMemoryWorldStateProxy(
     val ethCompatibleStorage: Boolean,
     // Optional flat slot storage for O(1) SLOAD lookups (populated by SNAP sync).
     // When present, storage reads check flat storage before MPT traversal.
-    val flatSlotStorage: Option[FlatSlotStorage] = None
+    val flatSlotStorage: Option[FlatSlotStorage] = None,
+    // Memos of reads of the persisted base tries, shared by every copy of this world (see [[TrieReadMemo]]).
+    val readMemos: WorldReadMemos = new WorldReadMemos
 ) extends WorldStateProxy[InMemoryWorldStateProxy, InMemoryWorldStateProxyStorage]:
 
   override def getAccount(address: Address): Option[Account] =
-    try accountsStateTrie.get(address)
+    try ImportProfile.account(accountsStateTrie.get(address))
     catch
       case e: MissingNodeException =>
         throw new MissingAccountNodeException(e.hash, address.bytes, e.location)
@@ -214,11 +223,52 @@ class InMemoryWorldStateProxy(
       accountCodes = accountCodes - address
     )
 
-  override def getCode(address: Address): ByteString =
-    accountCodes.getOrElse(
-      address,
-      getAccount(address).flatMap(account => evmCodeStorage.get(account.codeHash.value)).getOrElse(ByteString.empty)
-    )
+  override def jumpDestMemo: Option[JumpDestAnalysis.BlockMemo] = readMemos.jumpDests
+
+  /** The account's code. An account with a non-empty `codeHash` whose code is absent from `EvmCodeStorage` is a MISSING
+    * DATA condition, so it throws [[MissingCodeException]] rather than return empty code: an empty answer executes the
+    * contract as an EOA, and a node that then imports the block disagrees with every other client (SNAP healing used to
+    * leave exactly such accounts behind — devnet-8 block 318074).
+    */
+  override def getCode(address: Address): ByteString = getCodeAndHash(address)._1
+
+  /** [[getCode]] plus the account's `codeHash` when the code came from `EvmCodeStorage` under that hash. Code deployed
+    * earlier in the block and not yet persisted (`accountCodes`) has no hash at hand, so `None`.
+    */
+  override def getCodeAndHash(address: Address): (ByteString, Option[ByteString]) =
+    ImportProfile.code {
+      accountCodes.get(address) match
+        case Some(dirty) => (dirty, None)
+        case None =>
+          getAccount(address) match
+            case None => (ByteString.empty, None)
+            case Some(account) =>
+              val hash = account.codeHash.value
+              evmCodeStorage.getForExecution(hash) match
+                case Some(code) =>
+                  ImportProfile.codeBytesRead(code.length)
+                  (code, Some(hash))
+                case None if account.codeHash == Account.EmptyCodeHash => (ByteString.empty, None)
+                case None => throw new MissingCodeException(hash, address.bytes)
+    }
+
+  /** [[getCode]]'s length, answered from the code-size cache when the account's code was read before. An empty code
+    * hash is 0 whether or not an (empty) code row exists, so it never reads. Missing code still throws.
+    */
+  override def getCodeSize(address: Address): Int =
+    accountCodes.get(address) match
+      case Some(dirty) => dirty.length
+      case None =>
+        getAccount(address) match
+          case None                                                       => 0
+          case Some(account) if account.codeHash == Account.EmptyCodeHash => 0
+          case Some(account) =>
+            ImportProfile.code {
+              val hash = account.codeHash.value
+              evmCodeStorage.getSizeForExecution(hash) match
+                case Some(size) => size
+                case None       => throw new MissingCodeException(hash, address.bytes)
+            }
 
   override def getStorage(address: Address): InMemoryWorldStateProxyStorage =
     val proxy = contractStorages.getOrElse(address, getStorageForAddress(address, stateStorage))
@@ -289,7 +339,8 @@ class InMemoryWorldStateProxy(
       touchedAccounts,
       noEmptyAccountsCond,
       ethCompatibleStorage,
-      flatSlotStorage
+      flatSlotStorage,
+      readMemos
     )
 
   override def getBlockHash(number: UInt256): Option[UInt256] = getBlockByNumber(number).map(UInt256(_))
@@ -313,4 +364,7 @@ class InMemoryWorldStateProxy(
       if ethCompatibleStorage then domain.EthereumUInt256Mpt.storageMpt(storageRoot, contractStorage)
       else domain.ArbitraryIntegerMpt.storageMpt(storageRoot, contractStorage)
 
-    InMemorySimpleMapProxy.wrap[BigInt, BigInt, MerklePatriciaTrie[BigInt, BigInt]](mpt)
+    InMemorySimpleMapProxy.wrap[BigInt, BigInt, MerklePatriciaTrie[BigInt, BigInt]](
+      mpt,
+      readMemos.storageFor(storageRoot)
+    )

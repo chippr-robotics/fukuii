@@ -144,7 +144,7 @@ gh workflow run fast-distro.yml
 - ✅ **Docker Image:** Signed container image with SBOM and provenance
 
 **Container Security Features:**
-- ✅ **Image Signing:** Uses [Cosign](https://docs.sigstore.dev/cosign/overview/) with keyless signing (GitHub OIDC)
+- ✅ **Image Signing:** Uses [Cosign](https://docs.sigstore.dev/cosign/signing/overview/) with keyless signing (GitHub OIDC)
 - ✅ **SLSA Provenance:** Generates [SLSA Level 3](https://slsa.dev/spec/v1.0/levels) attestations for build integrity
 - ✅ **SBOM:** Includes Software Bill of Materials in SPDX format
 - ✅ **Immutable Digests:** Outputs `sha256` digest for tamper-proof image references
@@ -469,5 +469,5 @@ When modifying workflows:
 
 - [GitHub Actions Documentation](https://docs.github.com/en/actions)
 - [Workflow Syntax Reference](https://docs.github.com/en/actions/reference/workflow-syntax-for-github-actions)
-- [SBT Documentation](https://www.scala-sbt.org/documentation.html)
+- [SBT Documentation](https://www.scala-sbt.org/1.x/docs/)
 - [Docker Build Reference](https://docs.docker.com/engine/reference/builder/)

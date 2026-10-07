@@ -219,6 +219,9 @@ object TestConverter:
   def networkToConfig(network: String, baseConfig: BlockchainConfig): BlockchainConfig =
     import com.chipprbots.ethereum.utils.ForkBlockNumbers
 
+    // EIP-155/160/161 activate together at Spurious Dragon (hive/fukuii/fukuii.sh sets all three at
+    // HIVE_FORK_SPURIOUS), so every network from EIP158 on carries eip161BlockNumber = 0.
+
     val forks = network.toLowerCase match
       case "frontier" =>
         ForkBlockNumbers.Empty.copy(frontierBlockNumber = 0)
@@ -239,7 +242,8 @@ object TestConverter:
           homesteadBlockNumber = 0,
           eip150BlockNumber = 0,
           eip160BlockNumber = 0,
-          eip155BlockNumber = 0
+          eip155BlockNumber = 0,
+          eip161BlockNumber = 0
         )
       case "byzantium" =>
         ForkBlockNumbers.Empty.copy(
@@ -248,6 +252,7 @@ object TestConverter:
           eip150BlockNumber = 0,
           eip160BlockNumber = 0,
           eip155BlockNumber = 0,
+          eip161BlockNumber = 0,
           byzantiumBlockNumber = 0
         )
       case "constantinople" =>
@@ -257,8 +262,21 @@ object TestConverter:
           eip150BlockNumber = 0,
           eip160BlockNumber = 0,
           eip155BlockNumber = 0,
+          eip161BlockNumber = 0,
           byzantiumBlockNumber = 0,
           constantinopleBlockNumber = 0
+        )
+      case "constantinoplefix" | "petersburg" =>
+        ForkBlockNumbers.Empty.copy(
+          frontierBlockNumber = 0,
+          homesteadBlockNumber = 0,
+          eip150BlockNumber = 0,
+          eip160BlockNumber = 0,
+          eip155BlockNumber = 0,
+          eip161BlockNumber = 0,
+          byzantiumBlockNumber = 0,
+          constantinopleBlockNumber = 0,
+          petersburgBlockNumber = 0
         )
       case "istanbul" =>
         ForkBlockNumbers.Empty.copy(
@@ -267,6 +285,7 @@ object TestConverter:
           eip150BlockNumber = 0,
           eip160BlockNumber = 0,
           eip155BlockNumber = 0,
+          eip161BlockNumber = 0,
           byzantiumBlockNumber = 0,
           constantinopleBlockNumber = 0,
           petersburgBlockNumber = 0,

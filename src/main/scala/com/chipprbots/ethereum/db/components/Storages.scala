@@ -28,6 +28,8 @@ object Storages:
 
       override val receiptStorage: ReceiptStorage = new ReceiptStorage(dataSource)
 
+      override val blockAccessListStorage: BlockAccessListStorage = new BlockAccessListStorage(dataSource)
+
       override val nodeStorage: NodeStorage = new NodeStorage(dataSource)
 
       override val fastSyncStateStorage: FastSyncStateStorage = new FastSyncStateStorage(dataSource)

@@ -16,6 +16,7 @@ on:
     branches:
       - main
       - master
+      - staging
       - develop
       - staging
 
@@ -29,7 +30,7 @@ concurrency:
 
 jobs:
   test:
-    name: Test and Build (JDK 25, Scala 3.3.7)
+    name: Test and Build (JDK 25, Scala 3.3.8)
     # Skip pure version-bump pushes (auto-version) — the merge that caused the bump already
     # ran full CI. pull_request events are unaffected (head_commit is empty there).
     if: >-
@@ -196,7 +197,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v6
         with:
-          name: coverage-reports-jdk25-scala-3.3.7
+          name: coverage-reports-jdk25-scala-3.3.8
           path: |
             **/target/scala-*/scoverage-report/**
             **/target/scala-*/scoverage-data/**
@@ -217,7 +218,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v6
         with:
-          name: test-results-jdk25-scala-3.3.7
+          name: test-results-jdk25-scala-3.3.8
           path: |
             **/target/test-reports/**
             **/target/scala-*/test-classes/**/*.log
@@ -229,7 +230,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v6
         with:
-          name: ethereum-tests-results-jdk25-scala-3.3.7
+          name: ethereum-tests-results-jdk25-scala-3.3.8
           path: |
             **/target/scala-*/it-classes/**/*.log
             /tmp/fukuii-it-test/**/*.log
@@ -239,7 +240,7 @@ jobs:
       - name: Upload build artifacts
         uses: actions/upload-artifact@v6
         with:
-          name: fukuii-distribution-jdk25-scala-3.3.7
+          name: fukuii-distribution-jdk25-scala-3.3.8
           path: |
             target/universal/*.zip
             **/target/scala-*/*-assembly-*.jar

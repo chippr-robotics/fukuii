@@ -466,7 +466,9 @@ object PeerManagerActor:
           Some(connectWith(uri, connectedPeers))
 
         case AddMaintainedPeerCmd(uri, replyTo) =>
-          val nodeId = uri.getUserInfo
+          // Key by lowercase hex: every lookup (handshake, terminate, prune) uses the lowercase form, so a mixed-case
+          // enode would otherwise never be recognised as maintained and would not be re-dialled (#57).
+          val nodeId = uri.getUserInfo.toLowerCase
           val wasAdded = !maintainedPeersByNodeId.contains(nodeId)
           maintainedPeersByNodeId = maintainedPeersByNodeId + (nodeId -> uri)
           replyTo ! AddMaintainedPeerResponse(wasAdded)
@@ -474,7 +476,7 @@ object PeerManagerActor:
           Some(connectWith(uri, connectedPeers))
 
         case RemoveMaintainedPeerCmd(nodeId) =>
-          maintainedPeersByNodeId = maintainedPeersByNodeId - nodeId
+          maintainedPeersByNodeId = maintainedPeersByNodeId - nodeId.toLowerCase
           peerEventBus ! PublishCmd(PeerEvent.MaintainedPeersChanged(maintainedPeersByNodeId.keySet))
           Some(Behaviors.same)
 
@@ -790,21 +792,37 @@ object PeerManagerActor:
         listening(connectedPeers)
       else if handshakedPeer.nodeId.exists(connectedPeers.hasHandshakedWith) then
         val nodeId = handshakedPeer.nodeId.get
-        val existingOutboundOpt = connectedPeers.peers.values
-          .find(p => p.nodeId.contains(nodeId) && !p.incomingConnection)
-        if handshakedPeer.incomingConnection && isMaintained && existingOutboundOpt.isDefined then
-          // Inbound wins for maintained peers — drop the outbound, keep the inbound.
-          // Mirrors go-ethereum's static-pool removal when a peer connects either direction,
-          // preventing core-geth's static-dial timer from firing a new outbound every 30-45s.
-          log.debug("Maintained peer {} inbound wins tiebreak — dropping outbound", handshakedPeer.remoteAddress)
-          existingOutboundOpt.foreach(_.ref ! PeerActor.DisconnectPeer(Disconnect.Reasons.AlreadyConnected))
-          pendingMaintainedConnections.remove(handshakedPeer.ref)
-          peerStatusCache = peerStatusCache + (handshakedPeer.id -> PeerActor.Status.Handshaked)
-          listening(connectedPeers.promotePeerToHandshaked(handshakedPeer))
-        else
-          log.debug(s"Disconnecting from ${handshakedPeer.remoteAddress} as we are already connected to them")
-          handshakedPeer.ref ! PeerActor.DisconnectPeer(Disconnect.Reasons.AlreadyConnected)
+        // Defense in depth (see PeerActor.handleHandshakedTerminated for the root-cause fix): if the
+        // already-connected entry for this nodeId IS this very actor (identical ref), it is
+        // re-publishing its own handshake success, not a genuine second connection. This is
+        // unreachable now that a HANDSHAKED PeerActor stops instead of self-reconnecting, but
+        // sending DisconnectPeer(AlreadyConnected) to your own
+        // live connection would disconnect a perfectly good peer, so guard the symptom here too.
+        val existingSameRef =
+          connectedPeers.peers.values.exists(p => p.nodeId.contains(nodeId) && p.ref == handshakedPeer.ref)
+        if existingSameRef then
+          log.warn(
+            "Ignoring duplicate PeerHandshakeSuccessful for {} — same ref ({}) already handshaked",
+            handshakedPeer.id,
+            handshakedPeer.ref
+          )
           listening(connectedPeers)
+        else
+          val existingOutboundOpt = connectedPeers.peers.values
+            .find(p => p.nodeId.contains(nodeId) && !p.incomingConnection)
+          if handshakedPeer.incomingConnection && isMaintained && existingOutboundOpt.isDefined then
+            // Inbound wins for maintained peers — drop the outbound, keep the inbound.
+            // Mirrors go-ethereum's static-pool removal when a peer connects either direction,
+            // preventing core-geth's static-dial timer from firing a new outbound every 30-45s.
+            log.debug("Maintained peer {} inbound wins tiebreak — dropping outbound", handshakedPeer.remoteAddress)
+            existingOutboundOpt.foreach(_.ref ! PeerActor.DisconnectPeer(Disconnect.Reasons.AlreadyConnected))
+            pendingMaintainedConnections.remove(handshakedPeer.ref)
+            peerStatusCache = peerStatusCache + (handshakedPeer.id -> PeerActor.Status.Handshaked)
+            listening(connectedPeers.promotePeerToHandshaked(handshakedPeer))
+          else
+            log.debug(s"Disconnecting from ${handshakedPeer.remoteAddress} as we are already connected to them")
+            handshakedPeer.ref ! PeerActor.DisconnectPeer(Disconnect.Reasons.AlreadyConnected)
+            listening(connectedPeers)
       else
         pendingMaintainedConnections.remove(handshakedPeer.ref)
         peerStatusCache = peerStatusCache + (handshakedPeer.id -> PeerActor.Status.Handshaked)

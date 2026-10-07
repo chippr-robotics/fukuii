@@ -60,8 +60,8 @@ final class SnapPathTrie(
   // Path of the most recently committed node; used for extension-gap detection and right-boundary cleanup.
   private var last: Array[Byte] = null
 
-  // Mutable skip-left flag; disabled once the first non-boundary node is encountered.
-  private var skipLeft: Boolean = skipLeftBoundary
+  // Left-boundary filter; armed for the whole run (see onTrieNode).
+  private val skipLeft: Boolean = skipLeftBoundary
 
   private val stackTrie: StackTrie = new StackTrie(onTrieNode)
 
@@ -88,6 +88,14 @@ final class SnapPathTrie(
     deleteRightBoundary()
     stackTrie.reset()
 
+  /** Nodes are written through `writePath` as they are emitted; nothing is buffered here. */
+  override def flushEmitted(): Unit = ()
+
+  /** Path scheme suspend is exactly geth `pathTrie.commit(false)`: delete stale right-boundary ancestor stubs, keep
+    * every emitted node.
+    */
+  override def suspend(): Unit = reset()
+
   // ---- internals ----
 
   private def onTrieNode(path: Array[Byte], hash: ByteString, blob: Array[Byte]): Unit =
@@ -106,9 +114,13 @@ final class SnapPathTrie(
           deleteExact(first.slice(0, i))
           i += 1
       // Skip writing if `path` is a prefix of `first` (path is an ancestor of first, or IS first).
+      //
+      // The filter stays armed for the whole run (geth `pathTrie.onTrieNode` parity). It used to disarm itself at the
+      // first non-boundary node, but StackTrie emits bottom-up: the ANCESTORS of `first` are emitted LATER, after
+      // non-boundary siblings. Disarmed, an ancestor whose content happened to be complete (no left siblings) was
+      // written while `first` itself was skipped — a node that verifies against the target hash with a missing child,
+      // so path-scheme healing (which stops at verified nodes) left a permanent hole. SnapResumeBoundarySpec.
       if hasPrefix(first, path) then return
-      // This node is not on the left boundary — disable the filter for all subsequent callbacks.
-      skipLeft = false
 
     // ---- extension-gap cleanup ----
     // If `path` is a strict prefix of `last` with a gap > 1 nibble, StackTrie is finalising an extension node that

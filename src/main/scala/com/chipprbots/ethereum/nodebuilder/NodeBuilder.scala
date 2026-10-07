@@ -164,8 +164,15 @@ trait DiscoveryConfigBuilder extends BlockchainConfigBuilder with StorageBuilder
     val reader = com.chipprbots.ethereum.domain.BlockchainReader(storagesInstance.storages)
     val enrFilter = new com.chipprbots.ethereum.network.discovery.DnsDiscovery.EnrForkIdFilter(
       genesisHash = () => reader.genesisHeader.hash.value,
+      genesisTimestamp = () => reader.genesisHeader.unixTimestamp.toLong,
       blockchainConfig = blockchainConfig,
-      currentBestBlock = () => reader.getBestBlockNumber
+      currentBestBlock = () => reader.getBestBlockNumber,
+      // Real head timestamp, not a hardcoded 0 — see ForkIdTag's identical comment (WI-13 / issue #1429).
+      currentBestBlockTimestamp = () =>
+        reader
+          .getBlockHeaderByNumber(reader.getBestBlockNumber)
+          .map(_.unixTimestamp.toLong)
+          .getOrElse(reader.genesisHeader.unixTimestamp.toLong)
     )
     DiscoveryConfig(
       instanceConfig.config,
@@ -215,8 +222,15 @@ trait PeerDiscoveryManagerBuilder:
               forkIdTag = Some(
                 new com.chipprbots.ethereum.network.discovery.ForkIdTag(
                   genesisHash = () => blockchainReader.genesisHeader.hash.value,
+                  genesisTimestamp = () => blockchainReader.genesisHeader.unixTimestamp.toLong,
                   blockchainConfig = blockchainConfig,
-                  currentBestBlock = () => blockchainReader.getBestBlockNumber
+                  currentBestBlock = () => blockchainReader.getBestBlockNumber,
+                  // Real head timestamp, not a hardcoded 0 — see ForkIdTag's own comment (WI-13 / issue #1429).
+                  currentBestBlockTimestamp = () =>
+                    blockchainReader
+                      .getBlockHeaderByNumber(blockchainReader.getBestBlockNumber)
+                      .map(_.unixTimestamp.toLong)
+                      .getOrElse(blockchainReader.genesisHeader.unixTimestamp.toLong)
                 )
               )
             ),
@@ -262,6 +276,9 @@ trait BlockQueueBuilder:
 trait ConsensusBuilder:
   self: BlockchainBuilder & BlockQueueBuilder & MiningBuilder & ActorSystemBuilder & StorageBuilder =>
 
+  import com.chipprbots.ethereum.consensus.engine.DesignatedHead
+  import com.chipprbots.ethereum.consensus.engine.InvalidChainReporter
+
   lazy val blockValidation = new BlockValidation(mining, blockchainReader, blockQueue)
   lazy val blockExecution = new BlockExecution(
     blockchain,
@@ -272,15 +289,51 @@ trait ConsensusBuilder:
     blockValidation
   )
 
+  /** Late-bound channel from the p2p import path into the Engine API's invalid-block registry.
+    *
+    * Constructed unconditionally and inert until something binds it. `EngineApiBuilder.bindInvalidChainReporter()` is
+    * the only binder and it is gated on `network.engine-api.enabled`, so on ETC/Mordor/Gorgoroth this stays unbound for
+    * the life of the node and every `reportInvalid` is a no-op.
+    *
+    * It has to be late-bound rather than injected: `EngineApiBuilder` already depends on `ConsensusBuilder` for
+    * `blockExecution`, so the reverse dependency would be a cake cycle.
+    */
+  lazy val invalidChainReporter: InvalidChainReporter.LateBound = new InvalidChainReporter.LateBound
+
+  /** Late-bound read side of PoS fork choice, for `ConsensusImpl.importToNewBranch`.
+    *
+    * Same shape and same reason as `invalidChainReporter` above: constructed unconditionally, inert until bound, and
+    * `EngineApiBuilder.bindDesignatedHead()` is the only binder. That binder is gated on `network.engine-api.enabled`
+    * AND a configured terminal-total-difficulty, so on ETC/Mordor/Gorgoroth this stays unbound for the life of the
+    * node, `headBlockHash` is always `None`, and `importToNewBranch` keeps its pre-merge weight comparison as the whole
+    * decision.
+    *
+    * Late-bound for the cake, not by preference: `EngineApiBuilder` already depends on `ConsensusBuilder`, so
+    * `ConsensusBuilder` cannot take a `ForkChoiceManager` at construction time. `SyncController` has no such problem
+    * and builds its own `Option[DesignatedHead]` straight from the `ForkChoiceManager` it is already handed.
+    */
+  lazy val designatedHead: DesignatedHead.LateBound = new DesignatedHead.LateBound
+
   lazy val consensus: Consensus =
     new ConsensusImpl(
       blockchainReader,
       blockchainWriter,
-      blockExecution
+      blockExecution,
+      Some(invalidChainReporter),
+      Some(designatedHead),
+      blockchain
     )
 
   lazy val chainImporter: ChainImporter =
-    new ChainImporter(blockchainReader, blockchainWriter, blockExecution, blockValidation)
+    new ChainImporter(
+      blockchainReader,
+      blockchainWriter,
+      blockExecution,
+      blockValidation,
+      Some((block: Block, config: BlockchainConfig) =>
+        consensusAdapter.evaluateBranchBlock(block)(IORuntime.global, config)
+      )
+    )
 
   lazy val consensusAdapter: ConsensusAdapter =
     new ConsensusAdapter(
@@ -288,7 +341,8 @@ trait ConsensusBuilder:
       blockchainReader,
       blockQueue,
       blockValidation,
-      IORuntime.global
+      IORuntime.global,
+      Some(invalidChainReporter)
     )
 
 trait ForkResolverBuilder:
@@ -600,13 +654,20 @@ trait EthTxServiceBuilder:
   )
 
 trait EthBlocksServiceBuilder:
-  self: BlockchainBuilder & MiningBuilder & BlockQueueBuilder =>
+  self: BlockchainBuilder & MiningBuilder & BlockQueueBuilder & StorageBuilder =>
 
   /** Override in subtraits that have access to ForkChoiceManager (e.g. EngineApiBuilder) */
   def forkChoiceManagerForRpc: Option[com.chipprbots.ethereum.consensus.engine.ForkChoiceManager] = None
 
   lazy val ethBlocksService =
-    new EthBlocksService(blockchain, blockchainReader, mining, blockQueue, forkChoiceManagerForRpc)
+    new EthBlocksService(
+      blockchain,
+      blockchainReader,
+      mining,
+      blockQueue,
+      forkChoiceManagerForRpc,
+      storagesInstance.pruningMode
+    )
 
 trait EthUserServiceBuilder:
   self: BlockchainBuilder & BlockchainConfigBuilder & MiningBuilder & StorageBuilder =>
@@ -654,14 +715,9 @@ trait SyncControllerRefBuilder:
   def syncController: org.apache.pekko.actor.typed.ActorRef[SyncController.Command]
 
 trait FukuiiServiceBuilder:
-  self: TransactionHistoryServiceBuilder & JSONRpcConfigBuilder & SyncControllerRefBuilder & ActorSystemBuilder =>
+  self: TransactionHistoryServiceBuilder & JSONRpcConfigBuilder =>
 
-  lazy val fukuiiService = new FukuiiService(
-    transactionHistoryService,
-    jsonRpcConfig,
-    syncController,
-    classicSystem.toTyped.scheduler
-  )
+  lazy val fukuiiService = new FukuiiService(transactionHistoryService, jsonRpcConfig)
 
 trait McpServiceBuilder:
   self: PeerManagerActorBuilder & SyncControllerBuilder & ActorSystemBuilder & BlockchainBuilder &
@@ -691,6 +747,11 @@ trait ApisBuilder extends ApisBase:
     val Debug = "debug"
     val Rpc = "rpc"
     val Test = "test"
+    // execution-apis `testing_*` block-production namespace. Deliberately NOT in `available`'s
+    // shipped defaults beyond being selectable: the spec says it "MUST NOT be exposed on
+    // public-facing RPC APIs" and "is strongly recommended to be disabled by default".
+    // Opt in with -Dfukuii.network.rpc.apis=...,testing
+    val Testing = "testing"
     val Qa = "qa"
     val Admin = "admin"
     val TxPool = "txpool"
@@ -699,7 +760,7 @@ trait ApisBuilder extends ApisBase:
 
   import Apis.*
   override def available: List[String] =
-    List(Eth, Web3, Net, Personal, Fukuii, Mcp, Debug, Test, Qa, Admin, TxPool, Trace, Subscribe)
+    List(Eth, Web3, Net, Personal, Fukuii, Mcp, Debug, Test, Testing, Qa, Admin, TxPool, Trace, Subscribe)
 
 trait AdminServiceBuilder:
   this: PeerManagerActorBuilder & NodeStatusBuilder & BlockchainBuilder & BlockchainConfigBuilder &
@@ -766,6 +827,12 @@ trait JSONRpcControllerBuilder:
 
   protected def testService: Option[TestService] = None
 
+  /** execution-apis `testing_*` namespace. None by default — the spec requires it be off unless explicitly enabled.
+    * Overridden in [[Node]], the only place where EngineApiBuilder's engineApiService and forkChoiceManager are both in
+    * scope.
+    */
+  protected def testingService: Option[TestingService] = None
+
   lazy val jsonRpcController =
     new JsonRpcController(
       web3Service,
@@ -778,6 +845,7 @@ trait JSONRpcControllerBuilder:
       ethFilterService,
       personalService,
       testService,
+      testingService,
       debugService,
       qaService,
       fukuiiService,
@@ -805,7 +873,7 @@ trait JSONRpcHealthcheckerBuilder:
       classicSystem.toTyped.scheduler
     )
 
-trait EngineApiBuilder:
+trait EngineApiBuilder extends Logger:
   self: ActorSystemBuilder & BlockchainBuilder & BlockchainConfigBuilder & ConsensusBuilder & StorageBuilder &
     MiningBuilder & PendingTransactionsManagerBuilder & InstanceConfigProvider & JSONRpcControllerBuilder =>
 
@@ -820,7 +888,7 @@ trait EngineApiBuilder:
       jwtSecretPath = engineConf.flatMap(c => scala.util.Try(c.getString("jwt-secret-path")).toOption)
     )
 
-  lazy val forkChoiceManager: ForkChoiceManager = new ForkChoiceManager(blockchainReader, blockchainWriter)
+  lazy val forkChoiceManager: ForkChoiceManager = new ForkChoiceManager(blockchainReader, blockchainWriter, blockchain)
 
   lazy val engineApiService: EngineApiService =
     given typedScheduler: org.apache.pekko.actor.typed.Scheduler = classicSystem.toTyped.scheduler
@@ -829,10 +897,54 @@ trait EngineApiBuilder:
       blockchainWriter,
       blockExecution,
       forkChoiceManager,
-      Some(pendingTransactionsManagerTyped)
+      Some(pendingTransactionsManagerTyped),
+      getPayloadRebuildBudget = EngineApiService.GetPayloadRebuildBudget,
+      // go-ethereum's --miner.gaslimit equivalent, as for the testing_* namespace: mining.gas-limit-target.
+      builderGasCeil = mining.config.generic.gasLimitTarget,
+      reorgState = blockchain
     )(blockchainConfig, typedScheduler)
 
-  lazy val engineApiController: EngineApiController = new EngineApiController(engineApiService, Some(jsonRpcController))
+  // The controller's fork gates read the same schedule its service executes with (not the process-global config, which
+  // a ChainInstance with its own InstanceConfig does not share).
+  lazy val engineApiController: EngineApiController =
+    new EngineApiController(engineApiService, Some(jsonRpcController), blockchainConfig)
+
+  /** Bind the p2p import path's invalid-chain channel to this node's Engine API registry. Called once, from
+    * `StdNode.start()`, before sync begins.
+    *
+    * Gated on `engineApiConfig.enabled`, NOT on the existence of an `EngineApiService`: `Node` constructs one
+    * unconditionally to back the `testing_*` JSON-RPC namespace, so on ETC/Mordor/Gorgoroth an instance exists but the
+    * server is off. Binding there would let the import path write INVALID verdicts into a registry nothing reads, on a
+    * chain family this feature has no business touching. With the config gate, ETC leaves the holder unbound and
+    * `BlockImporter`/`ConsensusImpl` behave exactly as before this feature existed.
+    */
+  def bindInvalidChainReporter(): Unit =
+    if engineApiConfig.enabled then
+      invalidChainReporter.bind(engineApiService.invalidChainReporter)
+      log.info("Engine API enabled: p2p import path can now report consensus-invalid chains to the CL")
+    else log.debug("Engine API disabled: p2p import path invalid-chain reporting stays inert")
+
+  /** Let `ConsensusImpl.importToNewBranch` see the CL's designated head. The mirror of [[bindInvalidChainReporter]],
+    * and deliberately adjacent to it so the two channels between the Engine API and the p2p import path are reviewed
+    * together.
+    *
+    * DOUBLE GATE, and both conjuncts are load-bearing for a different reason. `engineApiConfig.enabled` is the same
+    * gate the reporter uses and is what keeps a node with the Engine API switched off on its pre-existing behaviour.
+    * `terminalTotalDifficulty.isDefined` is the PoS predicate — the same one behind `SyncController.clPivotEnabled` —
+    * and is what makes this structurally unreachable on ETC/Mordor/Gorgoroth even if someone later enables an Engine
+    * API on a PoW chain for the `testing_*` namespace. Neither alone would be enough for both properties.
+    */
+  def bindDesignatedHead(): Unit =
+    if engineApiConfig.enabled && blockchainConfig.terminalTotalDifficulty.isDefined then
+      // getRequestedHeadBlockHash, NOT getHeadBlockHash: the latter only moves on EXECUTED heads, so it still names the
+      // old canonical head while the CL points at the side-chain head this binding exists to follow. See
+      // ForkChoiceManager.getRequestedHeadBlockHash.
+      designatedHead.bind(DesignatedHead(() => forkChoiceManager.getRequestedHeadBlockHash))
+      log.info("Post-merge chain with Engine API enabled: p2p branch resolution now follows the CL's designated head")
+    else
+      log.debug(
+        "Not a post-merge chain with a live Engine API: p2p branch resolution keeps chain-weight fork choice"
+      )
 
   lazy val maybeEngineApiServer: Option[EngineApiHttpServer] =
     if engineApiConfig.enabled then
@@ -972,10 +1084,8 @@ trait SyncControllerBuilder extends SyncControllerRefBuilder:
           blockchainReader,
           blockchainWriter,
           storagesInstance.storages.appStateStorage,
-          storagesInstance.storages.blockNumberMappingStorage,
           storagesInstance.storages.evmCodeStorage,
           storagesInstance.storages.stateStorage,
-          storagesInstance.storages.nodeStorage,
           storagesInstance.storages.flatSlotStorage,
           storagesInstance.storages.fastSyncStateStorage,
           consensusAdapter,
@@ -989,7 +1099,8 @@ trait SyncControllerBuilder extends SyncControllerRefBuilder:
           syncConfig,
           this,
           messConfigOpt,
-          forkChoiceManagerForSync
+          forkChoiceManagerForSync,
+          reorgState = blockchain
         ),
         "sync-controller"
       )
@@ -1048,10 +1159,19 @@ trait ShutdownHookBuilder:
 
   lazy val shutdownTimeoutDuration: Duration = instanceConfig.shutdownTimeout
 
+  /** Whether the JVM shutdown hook holds this builder only weakly. False (a strong reference) for every node: nothing
+    * else need keep the builder reachable once `main` returns, and a collected builder would silently skip its
+    * `shutdown()` on SIGTERM. A test that wires a builder per case overrides this with true: the JVM keeps a registered
+    * hook for the life of the process, so a strong hook leaked every builder (actor system, storages, caches); the EEST
+    * corpus replays built ~26,000 and ran the CI JVM out of heap. Overridden with a constant `def`, since it is read
+    * while this trait initialises.
+    */
+  protected def shutdownHookHoldsBuilderWeakly: Boolean = false
+
+  // The hook thread is built in the companion, where it cannot capture `this`: an anonymous Thread written here would
+  // hold the builder through its outer reference whatever the targets below say.
   Runtime.getRuntime.addShutdownHook(
-    new Thread():
-      override def run(): Unit =
-        shutdown()
+    ShutdownHooks.hookThread(this, shutdownHookHoldsBuilderWeakly)
   )
 
   def shutdownOnError[A](f: => A): A =
@@ -1064,6 +1184,22 @@ trait ShutdownHookBuilder:
 
 object ShutdownHookBuilder extends ShutdownHookBuilder with Logger with InstanceConfigProvider:
   override def instanceConfig: InstanceConfig = Config
+
+/** Builds [[ShutdownHookBuilder]]'s JVM hook. A separate object, not the trait's companion: the companion is itself a
+  * ShutdownHookBuilder that registers a hook while it initialises, and must not be called into from there.
+  */
+private[nodebuilder] object ShutdownHooks:
+  /** The JVM shutdown hook of `builder`: it calls `builder.shutdown()`, holding the builder strongly unless `weakly`
+    * (see [[ShutdownHookBuilder.shutdownHookHoldsBuilderWeakly]]), in which case a collected builder is simply skipped.
+    * Defined here, not in the trait, so the thread captures no outer reference.
+    */
+  def hookThread(builder: ShutdownHookBuilder, weakly: Boolean): Thread =
+    val strong: ShutdownHookBuilder = if weakly then null else builder
+    val weak = new java.lang.ref.WeakReference[ShutdownHookBuilder](builder)
+    new Thread():
+      override def run(): Unit =
+        val target = if strong != null then strong else weak.get
+        if target != null then target.shutdown()
 
 trait GenesisDataLoaderBuilder:
   self: BlockchainBuilder & StorageBuilder =>
@@ -1173,3 +1309,23 @@ trait Node
   // post-merge chains. Closes #1207.
   override def forkChoiceManagerForSync: Option[com.chipprbots.ethereum.consensus.engine.ForkChoiceManager] =
     Some(forkChoiceManager)
+
+  // execution-apis `testing_*` block-production namespace. Constructed here because this is the
+  // only assembly point where EngineApiBuilder (engineApiService, forkChoiceManager) and the
+  // JSON-RPC controller meet. Constructing it does NOT expose it: JsonRpcBaseController only
+  // dispatches namespaces present in `network.rpc.apis`, and `testing` is in none of the shipped
+  // configs.
+  override protected lazy val testingService: Option[TestingService] = Some(
+    new TestingService(
+      engineApiService,
+      blockchainReader,
+      blockchainWriter,
+      forkChoiceManager,
+      Some(pendingTransactionsManagerTyped),
+      Some(blockTopic),
+      // go-ethereum's --miner.gaslimit equivalent. hive's rpc-compat sets HIVE_TARGET_GAS_LIMIT
+      // to 60000000 so every client converges to the same next-block gas limit; fukuii's default
+      // mining.gas-limit-target is already 60000000.
+      miningConfig.gasLimitTarget
+    )(blockchainConfig)
+  )

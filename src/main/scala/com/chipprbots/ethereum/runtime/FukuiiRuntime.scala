@@ -5,6 +5,7 @@ import scala.util.Try
 
 import com.typesafe.config.Config as TypesafeConfig
 
+import com.chipprbots.ethereum.ConfigValidator
 import com.chipprbots.ethereum.utils.InstanceConfig
 import com.chipprbots.ethereum.utils.Logger
 
@@ -75,6 +76,8 @@ object FukuiiRuntime extends Logger:
         val instanceConf =
           if rawInstanceConf.hasPath("fukuii") then rawInstanceConf.getConfig("fukuii") else rawInstanceConf
         val ic = new InstanceConfig(instanceConf, instanceId)
+        // ConfigValidator.validate only runs for the single-instance launcher; report removed keys here too.
+        ConfigValidator.removedKeyWarnings(instanceConf).foreach(warning => log.warn(s"Instance $instanceId: $warning"))
         log.info(s"Parsed chain instance: $instanceId (network=${ic.blockchains.network})")
         instanceId -> new ChainInstance(instanceId, ic)
       }

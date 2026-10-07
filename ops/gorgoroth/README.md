@@ -576,6 +576,10 @@ The test suite includes 11 tests:
 - ECIP-1111 baseFee redirect verification (Olympia) — verifies baseFee goes to ECIP-1112 Treasury Address, not burned
 - ECIP-1112 Treasury Address verification (Olympia) — cross-client parity, address correctness, nonce zero
 
+Tests 6–11 exercise Olympia and need a chain where it is active. Olympia is deferred on every chain,
+Gorgoroth included, until a confirmed test block number exists (see `CHANGELOG.md`), so a devnet
+started from the shipped configuration is not such a chain.
+
 ### Individual Tests
 
 Run specific tests:

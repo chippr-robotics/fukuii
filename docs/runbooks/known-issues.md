@@ -998,7 +998,7 @@ val forkIdBlockNumber = if (bootstrapPivotBlock > 0) {
 **Benefits:**
 - Bootstrap pivot used for ForkId calculation during entire initial sync
 - Smooth transition from pivot to actual block number when close to synced
-- Both regular sync and fast sync now maintain stable peer connections
+- Both regular sync and fast sync (since removed) now maintain stable peer connections
 
 See [CON-006: ForkId Compatibility During Initial Sync](../adr/consensus/CON-006-forkid-compatibility-during-initial-sync.md) for details.
 

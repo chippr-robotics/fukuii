@@ -347,3 +347,26 @@ class UInt256Spec extends AnyFunSuite with ScalaCheckPropertyChecks:
       assert(x.byteSize === byteSize)
     }
   }
+
+  // UInt256(n) reduces n by keeping its low 256 bits. It used to compute (n % Modulus + Modulus) % Modulus; the two must
+  // agree on every integer, of either sign and any size (MUL reaches 2^512, SUB and negation go negative).
+  test("construction from a BigInt is the non-negative residue mod 2^256", UnitTest) {
+    def formerBound(n: BigInt): BigInt = (n % Modulus + Modulus) % Modulus
+    def check(n: BigInt): Unit =
+      val bounded = UInt256(n).toBigInt
+      assert(bounded == formerBound(n), s"n = $n")
+      assert(bounded == n.mod(Modulus), s"n = $n")
+
+    val bases = Seq(BigInt(0), BigInt(2).pow(63), BigInt(2).pow(64), BigInt(2).pow(255), Modulus, Modulus * 2)
+    for
+      base <- bases :+ Modulus * Modulus
+      delta <- -2 to 2
+      sign <- Seq(1, -1)
+    do check((base + delta) * sign)
+
+    // Two's-complement byte strings up to 70 bytes: both signs, magnitudes to ~2^560.
+    forAll(getByteStringGen(0, 70), minSuccessful(5000)) { bytes =>
+      check(BigInt(bytes.toArray.prepended(0.toByte)))
+      if bytes.nonEmpty then check(BigInt(bytes.toArray))
+    }
+  }

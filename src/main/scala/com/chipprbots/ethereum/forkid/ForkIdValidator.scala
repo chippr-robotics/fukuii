@@ -12,6 +12,7 @@ import org.typelevel.log4cats.Logger
 import org.typelevel.log4cats.SelfAwareStructuredLogger
 import org.typelevel.log4cats.slf4j.Slf4jLogger
 
+import com.chipprbots.ethereum.domain.Timestamp
 import com.chipprbots.ethereum.utils.BlockchainConfig
 import com.chipprbots.ethereum.utils.ByteUtils.*
 
@@ -29,15 +30,35 @@ object ForkIdValidator:
 
   val maxUInt64: BigInt = (BigInt(0x7fffffffffffffffL) << 1) + 1 // scalastyle:ignore magic.number
 
+  /** go-ethereum `core/forkid/forkid.go`'s `timestampThreshold`: the ETH mainnet genesis timestamp. Used only as a
+    * heuristic split point in `checkMatchingHashes` rule 1a, to recognise a remote-announced FORK_NEXT as a timestamp
+    * even when our own next-unpassed fork is still in the block domain (so `effectiveHead` alone is a block number). No
+    * real block number is ever this large, so this can never misfire on a pure block-fork chain (ETC).
+    */
+  private val timestampThreshold: BigInt = BigInt(1438269973L)
+
   /** Tells whether it makes sense to connect to a peer or gives a reason why it isn't a good idea.
+    *
+    * Mirrors go-ethereum's `newFilter` (`core/forkid/forkid.go`): block-number forks are compared against
+    * `currentHeight`, timestamp forks (EIP-6122) against `currentTimestamp` — never the other way around. Before this
+    * threaded a real timestamp through, every timestamp fork was compared against `currentHeight` alone; since block
+    * heights and unix timestamps live in disjoint numeric ranges (a Sepolia block number is ~9,000,000, a Sepolia
+    * timestamp fork is ~1,790,000,000), `currentHeight < fork` was true forever, so no timestamp fork ever counted as
+    * passed and a stale (pre-upgrade) peer was accepted as compatible. See WI-13 / issue #1429.
     *
     * @param genesisHash
     *   \- hash of the genesis block of the current chain
+    * @param genesisTimestamp
+    *   \- unix timestamp of the genesis block; forks at or before it are dropped per EIP-6122 (see
+    *   [[ForkId.gatherTimestampForks]])
     * @param config
     *   \- local client's blockchain configuration
     * @param currentHeight
     *   \- number of the block at the current tip
-    * @param remoteId
+    * @param currentTimestamp
+    *   \- unix timestamp of the block at the current tip, as a uint64 (see [[com.chipprbots.ethereum.domain.Timestamp]]
+    *   for why this is not a plain signed comparison)
+    * @param remoteForkId
     *   \- ForkId announced by the connecting peer
     * @return
     *   One of:
@@ -48,30 +69,71 @@ object ForkIdValidator:
     */
   def validatePeer[F[_]: Monad: Logger](
       genesisHash: ByteString,
+      genesisTimestamp: Long,
       config: BlockchainConfig
-  )(currentHeight: BigInt, remoteForkId: ForkId): F[ForkIdValidationResult] =
-    val forks = ForkId.gatherForks(config)
-    validatePeer[F](genesisHash, forks)(currentHeight, remoteForkId)
+  )(currentHeight: BigInt, currentTimestamp: Long, remoteForkId: ForkId): F[ForkIdValidationResult] =
+    // Same (block-forks-first, then timestamp-forks) shape as ForkId.create's `allForks` — the two MUST agree,
+    // or a peer validates its own announced fork id differently than we'd have computed it ourselves.
+    val taggedForks =
+      ForkId.gatherBlockForks(config).map((_, false)) ++
+        ForkId.gatherTimestampForks(config, genesisTimestamp).map((_, true))
+    // Sign-extension guard: see ForkId.create's identical comment. A currentTimestamp at or above 2^63 would
+    // otherwise read as negative and no timestamp fork would ever count as passed.
+    val currentTimestampUnsigned = Timestamp(currentTimestamp).toUnsignedBigInt
+    validatePeer[F](genesisHash, taggedForks)(currentHeight, currentTimestampUnsigned, remoteForkId)
 
+  /** Pure-block-domain core, preserved for callers with a single homogeneous block-number fork list and no timestamp
+    * axis at all — ETC/Mordor (`gatherTimestampForks` is always empty there) and the direct ETH-pre-merge assertions in
+    * [[ForkIdValidatorSpec]]. `currentTimestamp` is fixed at 0: the only place it is read is the OR-clause in
+    * `checkMatchingHashes`, which is unreachable unless a fork value exceeds `timestampThreshold` (~1.4 billion) — no
+    * real block number does.
+    */
   private[forkid] def validatePeer[F[_]: Monad: Logger](
       genesisHash: ByteString,
       forks: List[BigInt]
   )(currentHeight: BigInt, remoteId: ForkId): F[ForkIdValidationResult] =
-    val checksums: Vector[BigInt] = calculateChecksums(genesisHash, forks)
+    validatePeer[F](genesisHash, forks.map((_, false)))(currentHeight, BigInt(0), remoteId)
 
-    // find the first unpassed fork and it's index
-    val (unpassedFork, unpassedForkIndex) =
-      forks.zipWithIndex.find { case (fork, _) => currentHeight < fork }.getOrElse((maxUInt64, forks.length))
+  /** The domain-aware core every other overload delegates to. `forks` is `(value, isTimestamp)` pairs in go-ethereum's
+    * `forksByBlock ++ forksByTime` order — block forks first, then timestamp forks, NOT numerically merged. (Numeric
+    * merge is wrong even though it happens to coincide for realistic chains, because current block heights are far
+    * smaller than unix timestamps: it's the wrong axis, not a coincidentally-right one.)
+    */
+  private[forkid] def validatePeer[F[_]: Monad: Logger](
+      genesisHash: ByteString,
+      forks: List[(BigInt, Boolean)]
+  )(currentHeight: BigInt, currentTimestamp: BigInt, remoteId: ForkId): F[ForkIdValidationResult] =
+    val checksums: Vector[BigInt] = calculateChecksums(genesisHash, forks.map(_._1))
+    val hasTimestampForks = forks.exists(_._2)
+
+    def headFor(isTimestamp: Boolean): BigInt = if isTimestamp then currentTimestamp else currentHeight
+
+    // Find the first unpassed fork, its axis and its index — mirrors go-ethereum's `if head >= fork { continue }`
+    // loop, picking the axis-correct head per entry instead of one head for every entry.
+    val (unpassedForkIsTimestamp, unpassedForkIndex) =
+      forks.zipWithIndex
+        .find { case ((fork, isTimestamp), _) => headFor(isTimestamp) < fork }
+        .map { case ((_, isTimestamp), idx) => (isTimestamp, idx) }
+        // All forks passed. go-ethereum's sentinel (`forks = append(forks, math.MaxUint64)`) lands in the
+        // timestamp domain unless the chain has no timestamp forks at all, in which case it stays in the block
+        // domain (`newFilter`'s `if len(forksByTime) == 0` bump) — `hasTimestampForks` reproduces that split.
+        .getOrElse((hasTimestampForks, forks.length))
+
+    val effectiveHead = headFor(unpassedForkIsTimestamp)
 
     // The checks are left biased -> whenever a result is found we need to short circuit
     val validate = (for
       _ <- liftF(Logger[F].trace(s"Before checkMatchingHashes"))
       matching <- fromEither[F](
-        checkMatchingHashes(checksums(unpassedForkIndex), remoteId, currentHeight).toLeft("hashes didn't match")
+        checkMatchingHashes(checksums(unpassedForkIndex), remoteId, effectiveHead, currentTimestamp).toLeft(
+          "hashes didn't match"
+        )
       )
       _ <- liftF(Logger[F].trace(s"checkMatchingHashes result: $matching"))
       _ <- liftF(Logger[F].trace(s"Before checkSubset"))
-      sub <- fromEither[F](checkSubset(checksums, forks, remoteId, unpassedForkIndex).toLeft("not in subset"))
+      sub <- fromEither[F](
+        checkSubset(checksums, forks.map(_._1), remoteId, unpassedForkIndex).toLeft("not in subset")
+      )
       _ <- liftF(Logger[F].trace(s"checkSubset result: $sub"))
       _ <- liftF(Logger[F].trace(s"Before checkSuperset"))
       sup <- fromEither[F](checkSuperset(checksums, remoteId, unpassedForkIndex).toLeft("not in superset"))
@@ -83,7 +145,8 @@ object ForkIdValidator:
     for
       _ <- Logger[F].debug(s"FORKID_VALIDATION: Validating remote $remoteId against local state")
       _ <- Logger[F].debug(
-        s"FORKID_VALIDATION: Local height: $currentHeight, unpassed fork: $unpassedFork at index $unpassedForkIndex"
+        s"FORKID_VALIDATION: Local height: $currentHeight, timestamp: $currentTimestamp, " +
+          s"unpassed fork index: $unpassedForkIndex (isTimestamp=$unpassedForkIsTimestamp)"
       )
       _ <- Logger[F].debug(
         s"FORKID_VALIDATION: Local expected checksum: 0x${checksums(unpassedForkIndex).toString(16)}, remote hash: $remoteId"
@@ -112,16 +175,23 @@ object ForkIdValidator:
     * be postponed, nodes might be updated to match). 1a) A remotely announced but remotely not passed block is already
     * passed locally, disconnect, since the chains are incompatible. 1b) No remotely announced fork; or not yet passed
     * locally, connect.
+    *
+    * `effectiveHead` is the axis-correct head (block or timestamp) for OUR next-unpassed fork. The second disjunct in
+    * 1a mirrors go-ethereum's `id.Next > timestampThreshold && time >= id.Next`: it catches a remote `next` that is
+    * itself a timestamp — and already passed by our real clock — even while `effectiveHead` is still a block number
+    * (i.e. our own next-unpassed fork hasn't crossed into the timestamp domain yet).
     */
   private def checkMatchingHashes(
       checksum: BigInt,
       remoteId: ForkId,
-      currentHeight: BigInt
+      effectiveHead: BigInt,
+      currentTimestamp: BigInt
   ): Option[ForkIdValidationResult] =
     remoteId match
-      case ForkId(hash, _) if checksum != hash            => None
-      case ForkId(_, Some(next)) if currentHeight >= next => Some(ErrLocalIncompatibleOrStale)
-      case _                                              => Some(Connect)
+      case ForkId(hash, _) if checksum != hash => None
+      case ForkId(_, Some(next)) if effectiveHead >= next || (next > timestampThreshold && currentTimestamp >= next) =>
+        Some(ErrLocalIncompatibleOrStale)
+      case _ => Some(Connect)
 
   /** 2) If the remote FORK_HASH is a subset of the local past forks and the remote FORK_NEXT matches with the locally
     * following fork block number, connect. Remote node is currently syncing. It might eventually diverge from us, but

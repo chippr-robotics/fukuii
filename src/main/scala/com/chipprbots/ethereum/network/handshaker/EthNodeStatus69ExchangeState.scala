@@ -83,7 +83,8 @@ case class EthNodeStatus69ExchangeState(
       latestBlockHash
     )
 
-    val localGenesisHash = blockchainReader.genesisHeader.hash.value
+    val localGenesisHeader = blockchainReader.genesisHeader
+    val localGenesisHash = localGenesisHeader.hash.value
 
     if networkId != peerConfiguration.networkId then
       log.debug(
@@ -100,9 +101,27 @@ case class EthNodeStatus69ExchangeState(
       )
       DisconnectedState[PeerInfo](Disconnect.Reasons.UselessPeer)
     else
+      val localBestBlock = blockchainReader.getBestBlockNumber
+      // A head timestamp of zero is DATA, not a missing value — see EthNodeStatus68ExchangeState's identical
+      // comment. Only a genuinely missing header falls back to genesis, logged as the anomaly it is.
+      val localBestTimestamp = blockchainReader
+        .getBlockHeaderByNumber(localBestBlock)
+        .map(_.unixTimestamp)
+        .getOrElse {
+          log.warn(
+            "ETH69_STATUS: no stored header for best block {} — falling back to the genesis timestamp for the fork id.",
+            localBestBlock
+          )
+          localGenesisHeader.unixTimestamp
+        }
       (for validationResult <-
-          ForkIdValidator.validatePeer[SyncIO](blockchainReader.genesisHeader.hash.value, blockchainConfig)(
-            blockchainReader.getBestBlockNumber,
+          ForkIdValidator.validatePeer[SyncIO](
+            localGenesisHash,
+            localGenesisHeader.unixTimestamp.toLong,
+            blockchainConfig
+          )(
+            localBestBlock,
+            localBestTimestamp.toLong,
             forkId
           )
       yield
@@ -144,13 +163,18 @@ case class EthNodeStatus69ExchangeState(
   override protected def createStatusMsg(): MessageSerializable =
     val bestBlockHeader = getBestBlockHeader()
     val bestBlockNumber = blockchainReader.getBestBlockNumber
-    val genesisHash = blockchainReader.genesisHeader.hash.value
+    val genesisHeader = blockchainReader.genesisHeader
+    val genesisHash = genesisHeader.hash.value
 
-    // Compute ForkId from current block (same as ETH64-68)
-    val forkIdTimestamp =
-      if bestBlockHeader.unixTimestamp == Timestamp.Zero then Timestamp(System.currentTimeMillis() / 1000)
-      else bestBlockHeader.unixTimestamp
-    val forkId = ForkId.create(genesisHash, blockchainConfig)(bestBlockNumber, forkIdTimestamp.toLong)
+    // Compute ForkId from current block (same as ETH64-68). `bestBlockHeader` is a real header,
+    // so a zero timestamp is the chain's actual genesis time, not a missing value — substituting
+    // wall-clock here made every timestamp fork look passed and broke the status exchange on any
+    // chain whose genesis declares timestamp 0.
+    val forkId =
+      ForkId.create(genesisHash, genesisHeader.unixTimestamp.toLong, blockchainConfig)(
+        bestBlockNumber,
+        bestBlockHeader.unixTimestamp.toLong
+      )
 
     // ETH/69: no TD, use block range instead. Use ETHPackets.Status69.Status69 (canonical type).
     val status = ETHPackets.Status69.Status69(

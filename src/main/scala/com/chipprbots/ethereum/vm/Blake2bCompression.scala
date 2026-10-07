@@ -84,42 +84,110 @@ object Blake2bCompression:
       i += 1
     out
 
-  private def compress(rounds: Long, h: Array[Long], m: Array[Long], t: Array[Long], f: Boolean): Unit =
-    val v = new Array[Long](16)
-    val t0 = t(0)
-    val t1 = t(1)
-    System.arraycopy(h, 0, v, 0, 8)
-    System.arraycopy(IV, 0, v, 8, 8)
-    v(12) ^= t0
-    v(13) ^= t1
+  /** PRECOMPUTED flattened: round r uses message word `m(Sigma(16 * (r % 10) + k))`. */
+  private val Sigma: Array[Int] = PRECOMPUTED.flatMap(_.map(_.toInt))
 
-    if f then v(14) ^= 0xffffffffffffffffL
+  /** BLAKE2b F (RFC 7693 section 3.2) with a caller-chosen round count (EIP-152).
+    *
+    * The working vector lives in sixteen locals and the message schedule advances by a counter instead of `j % 10`, the
+    * shape of go-ethereum's `fGeneric`. It is the same computation as the array-and-`mix` version it replaces, step for
+    * step: each block below is G(a, b, c, d, x, y) with the rotations 32, 24, 16, 63. Why: the round count is
+    * caller-controlled up to 2^32 - 1 at one gas per round, so ethereum/tests `CALLBlake2f_MaxRounds` executes
+    * 4,294,967,295 rounds in one block; at ~21 ns/round that took 88 s and did not fit hive's 120 s startup limit.
+    */
+  private def compress(rounds: Long, h: Array[Long], m: Array[Long], t: Array[Long], f: Boolean): Unit =
+    var v0 = h(0); var v1 = h(1); var v2 = h(2); var v3 = h(3)
+    var v4 = h(4); var v5 = h(5); var v6 = h(6); var v7 = h(7)
+    var v8 = IV(0); var v9 = IV(1); var v10 = IV(2); var v11 = IV(3)
+    var v12 = IV(4) ^ t(0); var v13 = IV(5) ^ t(1)
+    var v14 = if f then IV(6) ^ 0xffffffffffffffffL else IV(6)
+    var v15 = IV(7)
 
     var j = 0L
+    var s = 0 // 16 * (j % 10)
     while j < rounds do
-      val s: Array[Byte] = PRECOMPUTED((j % 10).toInt)
-      mix(v, m(s(0)), m(s(4)), 0, 4, 8, 12)
-      mix(v, m(s(1)), m(s(5)), 1, 5, 9, 13)
-      mix(v, m(s(2)), m(s(6)), 2, 6, 10, 14)
-      mix(v, m(s(3)), m(s(7)), 3, 7, 11, 15)
-      mix(v, m(s(8)), m(s(12)), 0, 5, 10, 15)
-      mix(v, m(s(9)), m(s(13)), 1, 6, 11, 12)
-      mix(v, m(s(10)), m(s(14)), 2, 7, 8, 13)
-      mix(v, m(s(11)), m(s(15)), 3, 4, 9, 14)
+      // G(0, 4, 8, 12, m[s0], m[s4])
+      v0 += m(Sigma(s + 0)) + v4
+      v12 = java.lang.Long.rotateLeft(v12 ^ v0, -32)
+      v8 += v12
+      v4 = java.lang.Long.rotateLeft(v4 ^ v8, -24)
+      v0 += m(Sigma(s + 4)) + v4
+      v12 = java.lang.Long.rotateLeft(v12 ^ v0, -16)
+      v8 += v12
+      v4 = java.lang.Long.rotateLeft(v4 ^ v8, -63)
+      // G(1, 5, 9, 13, m[s1], m[s5])
+      v1 += m(Sigma(s + 1)) + v5
+      v13 = java.lang.Long.rotateLeft(v13 ^ v1, -32)
+      v9 += v13
+      v5 = java.lang.Long.rotateLeft(v5 ^ v9, -24)
+      v1 += m(Sigma(s + 5)) + v5
+      v13 = java.lang.Long.rotateLeft(v13 ^ v1, -16)
+      v9 += v13
+      v5 = java.lang.Long.rotateLeft(v5 ^ v9, -63)
+      // G(2, 6, 10, 14, m[s2], m[s6])
+      v2 += m(Sigma(s + 2)) + v6
+      v14 = java.lang.Long.rotateLeft(v14 ^ v2, -32)
+      v10 += v14
+      v6 = java.lang.Long.rotateLeft(v6 ^ v10, -24)
+      v2 += m(Sigma(s + 6)) + v6
+      v14 = java.lang.Long.rotateLeft(v14 ^ v2, -16)
+      v10 += v14
+      v6 = java.lang.Long.rotateLeft(v6 ^ v10, -63)
+      // G(3, 7, 11, 15, m[s3], m[s7])
+      v3 += m(Sigma(s + 3)) + v7
+      v15 = java.lang.Long.rotateLeft(v15 ^ v3, -32)
+      v11 += v15
+      v7 = java.lang.Long.rotateLeft(v7 ^ v11, -24)
+      v3 += m(Sigma(s + 7)) + v7
+      v15 = java.lang.Long.rotateLeft(v15 ^ v3, -16)
+      v11 += v15
+      v7 = java.lang.Long.rotateLeft(v7 ^ v11, -63)
+      // G(0, 5, 10, 15, m[s8], m[s12])
+      v0 += m(Sigma(s + 8)) + v5
+      v15 = java.lang.Long.rotateLeft(v15 ^ v0, -32)
+      v10 += v15
+      v5 = java.lang.Long.rotateLeft(v5 ^ v10, -24)
+      v0 += m(Sigma(s + 12)) + v5
+      v15 = java.lang.Long.rotateLeft(v15 ^ v0, -16)
+      v10 += v15
+      v5 = java.lang.Long.rotateLeft(v5 ^ v10, -63)
+      // G(1, 6, 11, 12, m[s9], m[s13])
+      v1 += m(Sigma(s + 9)) + v6
+      v12 = java.lang.Long.rotateLeft(v12 ^ v1, -32)
+      v11 += v12
+      v6 = java.lang.Long.rotateLeft(v6 ^ v11, -24)
+      v1 += m(Sigma(s + 13)) + v6
+      v12 = java.lang.Long.rotateLeft(v12 ^ v1, -16)
+      v11 += v12
+      v6 = java.lang.Long.rotateLeft(v6 ^ v11, -63)
+      // G(2, 7, 8, 13, m[s10], m[s14])
+      v2 += m(Sigma(s + 10)) + v7
+      v13 = java.lang.Long.rotateLeft(v13 ^ v2, -32)
+      v8 += v13
+      v7 = java.lang.Long.rotateLeft(v7 ^ v8, -24)
+      v2 += m(Sigma(s + 14)) + v7
+      v13 = java.lang.Long.rotateLeft(v13 ^ v2, -16)
+      v8 += v13
+      v7 = java.lang.Long.rotateLeft(v7 ^ v8, -63)
+      // G(3, 4, 9, 14, m[s11], m[s15])
+      v3 += m(Sigma(s + 11)) + v4
+      v14 = java.lang.Long.rotateLeft(v14 ^ v3, -32)
+      v9 += v14
+      v4 = java.lang.Long.rotateLeft(v4 ^ v9, -24)
+      v3 += m(Sigma(s + 15)) + v4
+      v14 = java.lang.Long.rotateLeft(v14 ^ v3, -16)
+      v9 += v14
+      v4 = java.lang.Long.rotateLeft(v4 ^ v9, -63)
+      s += 16
+      if s == 160 then s = 0
       j += 1
 
     // update h:
-    var offset = 0
-    while offset < h.length do
-      h(offset) ^= v(offset) ^ v(offset + 8)
-      offset += 1
-
-  private def mix(v: Array[Long], a: Long, b: Long, i: Int, j: Int, k: Int, l: Int): Unit =
-    v(i) += a + v(j)
-    v(l) = java.lang.Long.rotateLeft(v(l) ^ v(i), -32)
-    v(k) += v(l)
-    v(j) = java.lang.Long.rotateLeft(v(j) ^ v(k), -24)
-    v(i) += b + v(j)
-    v(l) = java.lang.Long.rotateLeft(v(l) ^ v(i), -16)
-    v(k) += v(l)
-    v(j) = java.lang.Long.rotateLeft(v(j) ^ v(k), -63)
+    h(0) ^= v0 ^ v8
+    h(1) ^= v1 ^ v9
+    h(2) ^= v2 ^ v10
+    h(3) ^= v3 ^ v11
+    h(4) ^= v4 ^ v12
+    h(5) ^= v5 ^ v13
+    h(6) ^= v6 ^ v14
+    h(7) ^= v7 ^ v15

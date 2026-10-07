@@ -3,6 +3,7 @@ package com.chipprbots.ethereum.domain
 import org.apache.pekko.util.ByteString
 
 import com.chipprbots.ethereum.db.storage.AppStateStorage
+import com.chipprbots.ethereum.db.storage.BlockAccessListStorage
 import com.chipprbots.ethereum.db.storage.BlockBodiesStorage
 import com.chipprbots.ethereum.db.storage.BlockHeadersStorage
 import com.chipprbots.ethereum.db.storage.BlockNumberMappingStorage
@@ -24,7 +25,8 @@ class BlockchainReader(
     stateStorage: StateStorage,
     receiptStorage: ReceiptStorage,
     appStateStorage: AppStateStorage,
-    chainWeightStorage: ChainWeightStorage
+    chainWeightStorage: ChainWeightStorage,
+    blockAccessListStorage: BlockAccessListStorage
 ) extends Logger:
 
   /** Allows to query a blockHeader by block hash
@@ -82,6 +84,12 @@ class BlockchainReader(
     */
   def getReceiptsByHash(blockhash: BlockHash): Option[Seq[Receipt]] = receiptStorage.get(blockhash.value)
 
+  /** EIP-7928: the block access list of the Amsterdam block `blockHash`, as the canonical RLP its header's
+    * `blockAccessListHash` commits to — the bytes `engine_getPayloadBodiesByHash/RangeV2` and eth/71 serve. `None` for
+    * a pre-Amsterdam or ETC block, and for one whose list was never stored or has been pruned.
+    */
+  def getBlockAccessListByHash(blockHash: BlockHash): Option[ByteString] = blockAccessListStorage.get(blockHash.value)
+
   /** get the current best stored branch */
   def getBestBranch: Branch =
     val number = getBestBlockNumber
@@ -93,6 +101,12 @@ class BlockchainReader(
   def getBestBlockNumber: BigInt = appStateStorage.getBestBlockNumber()
 
   def getSnapSyncPivotBlock: Option[BigInt] = appStateStorage.getSnapSyncPivotBlock()
+
+  /** Whether this node's state came from a completed SNAP sync. */
+  def isSnapSyncDone: Boolean = appStateStorage.isSnapSyncDone()
+
+  /** Bulk bytecode recoveries that finished with the triggering code still missing (see SyncController). */
+  def bulkBytecodeRecoveryFailures: Int = appStateStorage.bulkBytecodeRecoveryFailures()
 
   // returns the best known block if it's available in the storage
   def getBestBlock: Option[Block] =
@@ -132,6 +146,13 @@ class BlockchainReader(
       yield block
     case EmptyBranch | BestBranch(_, _) => None
 
+  /** The raw canonical number→hash index entry at `number`, whatever the current best block is — including entries
+    * above it, which [[getHashByBlockNumber]] hides. For code that has to read, and later put back, the index exactly
+    * as it stands (`ConsensusImpl.reorganise`).
+    */
+  def getCanonicalHashByNumber(number: BigInt): Option[BlockHash] =
+    blockNumberMappingStorage.get(number).map(BlockHash.apply)
+
   /** Returns a block hash for the block at the given height if any */
   def getHashByBlockNumber(branch: Branch, number: BigInt): Option[BlockHash] = branch match
     case BestBranch(_, tipBlockNumber) =>
@@ -163,6 +184,22 @@ class BlockchainReader(
       if blockNumber <= tipBlockNumber then getAccountMpt(blockNumber).flatMap(_.get(address))
       else None
     case EmptyBranch => None
+
+  /** The account at `address` in the state committed to by `stateRoot` — read-only, keyed by the ROOT, not by a block
+    * number.
+    *
+    * Why not [[getAccount]]: that resolves a block NUMBER through the canonical number→hash index, which names the
+    * wrong block whenever the caller holds a specific header that is not (or not yet, or no longer) the one the index
+    * points at. A proposer building on an explicit parent must read that parent's state and nothing else.
+    *
+    * `None` means the account does not exist in that state. A trie node missing from storage throws `MPTException`;
+    * callers decide what "cannot judge" means for them.
+    */
+  def getAccountAtStateRoot(stateRoot: ByteString, address: Address): Option[Account] =
+    MerklePatriciaTrie[Address, Account](
+      rootHash = stateRoot.toArray,
+      source = stateStorage.getReadOnlyStorage
+    ).get(address)
 
   def getAccountProof(branch: Branch, address: Address, blockNumber: BigInt): Option[Vector[MptNode]] =
     branch match
@@ -284,5 +321,6 @@ object BlockchainReader:
     storages.stateStorage,
     storages.receiptStorage,
     storages.appStateStorage,
-    storages.chainWeightStorage
+    storages.chainWeightStorage,
+    storages.blockAccessListStorage
   )

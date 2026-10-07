@@ -27,3 +27,9 @@ package object messages:
     val ReceiptsCode: Int = SubProtocolOffset + 0x10
     // ETH/69: Block range update notification
     val BlockRangeUpdateCode: Int = SubProtocolOffset + 0x11
+    // ETH/71 (EIP-8159): block access list exchange
+    val GetBlockAccessListsCode: Int = SubProtocolOffset + 0x12
+    val BlockAccessListsCode: Int = SubProtocolOffset + 0x13
+    // ETH/72 (EIP-8070): cell exchange for PeerDAS blob data availability
+    val GetCellsCode: Int = SubProtocolOffset + 0x14
+    val CellsCode: Int = SubProtocolOffset + 0x15

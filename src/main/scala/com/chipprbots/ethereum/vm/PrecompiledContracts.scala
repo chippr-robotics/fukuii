@@ -12,6 +12,7 @@ import com.chipprbots.ethereum.crypto.zksnark.BN128Fp
 import com.chipprbots.ethereum.crypto.zksnark.PairingCheck
 import com.chipprbots.ethereum.crypto.zksnark.PairingCheck.G1G2Pair
 import com.chipprbots.ethereum.domain.Address
+import com.chipprbots.ethereum.domain.BlockHeader
 import com.chipprbots.ethereum.utils.ByteStringUtils.*
 import com.chipprbots.ethereum.utils.ByteUtils
 import com.chipprbots.ethereum.vm.BlockchainConfigForEvm.EtcForks
@@ -117,19 +118,73 @@ object PrecompiledContracts:
           case None               => baseContracts.get(addr) // Normal precompile check
     }
 
+  /** The result a precompile frame hands back to its caller.
+    *
+    * EIP-8037: a precompile charges execution gas only and never touches state gas. Like any other frame it is handed
+    * the caller's reservoir in full, and the caller then ADOPTS the child's counters (`mergeSuccessfulChildStateGas` /
+    * `absorbFailedChildStateGas`), so the frame must hand them back. A result left at the defaults (0) wipes the
+    * caller's unspent reservoir and the transaction's state gas already charged — which moves the header's `gasUsed` by
+    * more than 2^24 on any Amsterdam transaction above TX_MAX_GAS_LIMIT that calls a precompile (#1437).
+    *
+    * The shape is what `ProgramState(vm, context, env).toResult` gives a frame that ran no opcode: the context's
+    * counters on success and, on failure, the restore-to-baseline every failed frame applies (execution-specs
+    * `process_call`: `restore_state_gas` then `forfeit_remaining_gas`). The restore only matters when a transaction
+    * targets a precompile directly and its EIP-2780 pre-execution account-creation charge must be refilled; for a
+    * sub-call nothing between frame entry and exit moved the counters.
+    *
+    * Before Amsterdam every counter in the context is 0, so the result is identical to the previous one on every ETH
+    * fork before Amsterdam and on every ETC fork.
+    *
+    * EIP-1153 transient storage is handed back for the same reason: a successful CALL-family frame ADOPTS the child's
+    * transient storage (`CallOp.exec`: `copy(transientStorage = result.transientStorage)`), and a precompile neither
+    * reads nor writes it. Left at the default (empty), a successful precompile call wiped every TSTORE the transaction
+    * had made so far — TSTORE(k, 42); CALL 0x04; TLOAD(k) gave 0 where execution-specs gives 42 (#1439). The access
+    * sets, logs and deletions stay empty: the caller MERGES those, so empty is exact.
+    */
+  private def frameResult[W <: WorldStateProxy[W, S], S <: Storage[S]](
+      context: ProgramContext[W, S],
+      returnData: ByteString,
+      gasRemaining: BigInt,
+      error: Option[ProgramError]
+  ): ProgramResult[W, S] =
+    val completed = ProgramResult[W, S](
+      returnData = returnData,
+      gasRemaining = gasRemaining,
+      world = context.world,
+      addressesToDelete = Set.empty,
+      logs = Nil,
+      internalTxs = Nil,
+      gasRefund = 0,
+      error = error,
+      accessedAddresses = Set.empty,
+      accessedStorageKeys = Set.empty,
+      transientStorage = context.transientStorage,
+      stateGasReservoir = context.stateGasReservoir,
+      evmStateGasUsed = context.evmStateGasUsed,
+      stateGasFromGasLeft = context.stateGasFromGasLeft,
+      stateGasBaseline = context.stateGasBaselineOverride.getOrElse(context.stateGasReservoir)
+    )
+    if error.isDefined then completed.withStateGasRestoredToBaseline else completed
+
   /** Check if an address is a known precompile address (without relocation) */
   def isPrecompileAddress(addr: Address, context: ProgramContext[?, ?]): Boolean =
     getContracts(context).contains(addr)
 
   def getContracts(context: ProgramContext[?, ?]): Map[Address, PrecompiledContract] =
-    val ethFork = context.evmConfig.blockchainConfig.ethForkForBlockNumber(context.blockHeader.number.value)
-    val etcFork = context.evmConfig.blockchainConfig.etcForkForBlockNumber(context.blockHeader.number.value)
+    getContracts(context.evmConfig, context.blockHeader)
+
+  /** The precompile set active for `blockHeader`. Depends on nothing but the fork, which is why a caller that has no
+    * frame yet (the EIP-2780 dispatch charge in `ProgramContext.apply`) can ask for it.
+    */
+  def getContracts(evmConfig: EvmConfig, blockHeader: BlockHeader): Map[Address, PrecompiledContract] =
+    val ethFork = evmConfig.blockchainConfig.ethForkForBlockNumber(blockHeader.number.value)
+    val etcFork = evmConfig.blockchainConfig.etcForkForBlockNumber(blockHeader.number.value)
     // Post-Cancun detection: check if block header has blob gas fields
-    val isCancun = context.blockHeader.blobGasUsed.isDefined || context.blockHeader.excessBlobGas.isDefined
+    val isCancun = blockHeader.blobGasUsed.isDefined || blockHeader.excessBlobGas.isDefined
     // EIP-2537 BLS12-381 precompiles activate at Prague timestamp on ETH chains
-    val isPrague = context.evmConfig.blockchainConfig.isPragueTimestamp(context.blockHeader.unixTimestamp)
+    val isPrague = evmConfig.blockchainConfig.isPragueTimestamp(blockHeader.unixTimestamp)
     // EIP-7951 P256VERIFY activates at Osaka timestamp on ETH chains
-    val isOsaka = context.evmConfig.blockchainConfig.isOsakaTimestamp(context.blockHeader.unixTimestamp)
+    val isOsaka = evmConfig.blockchainConfig.isOsakaTimestamp(blockHeader.unixTimestamp)
 
     if isOsaka then osakaContracts
     else if etcFork >= EtcForks.Olympia then
@@ -164,20 +219,11 @@ object PrecompiledContracts:
         else (ByteString.empty, Some(OutOfGas), BigInt(0))
       ): @unchecked
 
-      ProgramResult(
-        result,
-        gasRemaining,
-        context.world,
-        Set.empty,
-        Nil,
-        Nil,
-        0,
-        error,
-        Set.empty,
-        Set.empty
-      )
+      frameResult(context, result, gasRemaining, error)
 
   object EllipticCurveRecovery extends PrecompiledContract:
+    private val secp256k1n: BigInt = BigInt(curve.getN)
+
     def exec(inputData: ByteString): Option[ByteString] =
       val data: ByteString = inputData.padToByteString(128, 0.toByte)
       val h = data.slice(0, 32)
@@ -185,8 +231,16 @@ object PrecompiledContracts:
       val r = data.slice(64, 96)
       val s = data.slice(96, 128)
 
-      if hasOnlyLastByteSet(v) then
-        val recovered = Try(ECDSASignature(r, s, v.last).publicKey(h)).getOrElse(None)
+      // core-geth `ecrecover.Run` (core/vm/contracts.go): `crypto.ValidateSignatureValues(v, r, s, homestead =
+      // false)` — r and s must lie in [1, secp256k1n - 1], on every fork. High s is accepted: the Homestead low-s rule
+      // applies to transaction signatures only. Without this, s >= n reduces mod n inside the point multiplication
+      // and r in [n, p) is still a valid x-coordinate, so both recover an address where the reference returns empty.
+      // Precompile-scoped on purpose: transaction signatures are range-checked in StdSignedTransactionValidator.
+      if hasOnlyLastByteSet(v) && inSignatureRange(r) && inSignatureRange(s) then
+        // A recovery landing on the point at infinity encodes as zero bytes, not a 64-byte key: libsecp256k1 fails
+        // it, so it must yield empty output rather than keccak256("")[12:].
+        val recovered =
+          Try(ECDSASignature(r, s, v.last).publicKey(h)).getOrElse(None).filter(_.length == PublicKeyLength)
         Some(
           recovered
             .map { bytes =>
@@ -201,6 +255,12 @@ object PrecompiledContracts:
 
     private def hasOnlyLastByteSet(v: ByteString): Boolean =
       v.dropWhile(_ == 0).size == 1
+
+    private val PublicKeyLength = 64
+
+    private def inSignatureRange(word: ByteString): Boolean =
+      val x = BigInt(1, word.toArray)
+      x > 0 && x < secp256k1n
 
   object Sha256 extends PrecompiledContract:
     def exec(inputData: ByteString): Option[ByteString] =
@@ -256,17 +316,11 @@ object PrecompiledContracts:
           // value (ProgramResult / MODEXP output) is produced below. An expression rewrite would
           // require restructuring the validation into a separate boolean and is byte-level risky
           // for a precompile result that feeds state. Keep the short-circuit.
-          return ProgramResult( // scalafix:ok DisableSyntax.return
+          return frameResult( // scalafix:ok DisableSyntax.return
+            context,
             ByteString.empty,
             BigInt(0),
-            context.world,
-            Set.empty,
-            Nil,
-            Nil,
-            0,
-            Some(PreCompiledContractFail),
-            Set.empty,
-            Set.empty
+            Some(PreCompiledContractFail)
           )
 
       // EIP-7883: gas cost routing. On ETH chains, EIP-7883 activates at Osaka timestamp
@@ -282,18 +336,7 @@ object PrecompiledContracts:
         else (ByteString.empty, Some(OutOfGas), BigInt(0))
       ): @unchecked
 
-      ProgramResult(
-        result,
-        gasRemaining,
-        context.world,
-        Set.empty,
-        Nil,
-        Nil,
-        0,
-        error,
-        Set.empty,
-        Set.empty
-      )
+      frameResult(context, result, gasRemaining, error)
 
     def exec(inputData: ByteString): Option[ByteString] =
       val baseLength = getLength(inputData, 0)
@@ -417,9 +460,14 @@ object PrecompiledContracts:
       if value.isValidInt then value.toInt
       else Integer.MAX_VALUE
 
+    /** A length word is read from the input right-padded with zeros (EIP-198: "the input is padded with zeros"). An
+      * input that ends inside a length word keeps the bytes it has as the word's HIGH-order bytes: 31 bytes `00..01`
+      * are the length 256, not 1. Reading the short slice as a number of its own would give a smaller length, a
+      * different gas cost and a different result than every other client computes for the same call.
+      */
     private def getLength(bytes: ByteString, position: Int): Int =
       val start = position * lengthBytes
-      safeInt(ByteUtils.toBigInt(bytes.slice(start, start + lengthBytes)))
+      safeInt(ByteUtils.toBigInt(bytes.slice(start, start + lengthBytes).padToByteString(lengthBytes, 0.toByte)))
 
     private def adjustExpLength(expBytes: ByteString, expLength: Int): Long =
       val expHead =
@@ -553,26 +601,44 @@ object PrecompiledContracts:
         // bad input to contract, contract will not execute, set price to zero
         BigInt(0)
 
-  // Spec: https://eips.ethereum.org/EIPS/eip-7951
-  // EIP-7951: P256VERIFY — secp256r1 (P-256) signature verification
+  /** EIP-7951 P256VERIFY: secp256r1 (P-256) signature verification. Spec: https://eips.ethereum.org/EIPS/eip-7951
+    *
+    * Follows execution-specs `osaka/vm/precompiled_contracts/p256verify.py` step for step (go-ethereum `p256Verify`
+    * agrees): the 6,900 gas is charged first, whatever the input; then the call SUCCEEDS with EMPTY output unless the
+    * input is exactly 160 bytes — hash, r, s, qx, qy — and the signature verifies, in which case the output is 0x01
+    * left-padded to 32 bytes. There is no 32-byte zero word for "does not verify": a caller sees RETURNDATASIZE 0.
+    *
+    * The bound and curve checks are the reference's own, made here rather than left to the JDK's ECDSA provider so that
+    * the result cannot depend on which provider answers.
+    *
+    * Active on ETH from Osaka (timestamp) and on ETC from Olympia (block, ECIP-1121); see [[getContracts]].
+    */
   object P256Verify extends PrecompiledContract:
-    private val expectedInputLength = 160 // hash(32) + r(32) + s(32) + x(32) + y(32)
+    private val InputLength = 160 // hash(32) + r(32) + s(32) + qx(32) + qy(32)
+
+    /** execution-specs `SECP256R1N` / `SECP256R1P` / `SECP256R1A` / `SECP256R1B`. */
+    private val N = BigInt("ffffffff00000000ffffffffffffffffbce6faada7179e84f3b9cac2fc632551", 16)
+    private val P = BigInt("ffffffff00000001000000000000000000000000ffffffffffffffffffffffff", 16)
+    private val A = BigInt("ffffffff00000001000000000000000000000000fffffffffffffffffffffffc", 16)
+    private val B = BigInt("5ac635d8aa3a93e7b3ebbd55769886bc651d06b0cc53b0f63bce3c3e27d2604b", 16)
+
+    private val Verified: ByteString = ByteUtils.padLeft(ByteString(1), 32)
 
     def exec(inputData: ByteString): Option[ByteString] =
-      if inputData.length < expectedInputLength then Some(ByteString.empty) // Invalid input — return empty (failure)
-      else
-        val hash = inputData.slice(0, 32).toArray
-        val r = inputData.slice(32, 64).toArray
-        val s = inputData.slice(64, 96).toArray
-        val x = inputData.slice(96, 128).toArray
-        val y = inputData.slice(128, 160).toArray
+      Some(if verifies(inputData) then Verified else ByteString.empty)
 
-        if Secp256r1.verify(hash, r, s, x, y) then
-          // Valid signature: return 0x01 left-padded to 32 bytes
-          Some(ByteUtils.padLeft(ByteString(1), 32))
-        else
-          // Invalid signature: return 0x00 left-padded to 32 bytes
-          Some(ByteString(new Array[Byte](32)))
+    private def verifies(input: ByteString): Boolean =
+      input.length == InputLength && {
+        def word(i: Int): Array[Byte] = input.slice(32 * i, 32 * (i + 1)).toArray
+        val (hash, rBytes, sBytes, xBytes, yBytes) = (word(0), word(1), word(2), word(3), word(4))
+        val (r, s) = (BigInt(1, rBytes), BigInt(1, sBytes))
+        val (qx, qy) = (BigInt(1, xBytes), BigInt(1, yBytes))
+        r > 0 && r < N && s > 0 && s < N && // 0 < r < n and 0 < s < n
+        qx < P && qy < P && // 0 <= qx < p and 0 <= qy < p
+        !(qx == 0 && qy == 0) && // not the point at infinity
+        (qy * qy).mod(P) == (qx * qx * qx + A * qx + B).mod(P) && // on the curve
+        Secp256r1.verify(hash, rBytes, sBytes, xBytes, yBytes)
+      }
 
     def gas(inputData: ByteString, etcFork: EtcFork, ethFork: EthFork): BigInt = BigInt(6900)
 
@@ -722,30 +788,44 @@ object PrecompiledContracts:
       )
       Some(result)
 
-  /** EIP-2537 G1 MSM discount table (128 entries). max_discount=519 at k>=128. */
-  private def blsG1MsmDiscount(k: Int): Int =
-    val table = Array(
-      1000, 949, 848, 797, 764, 740, 721, 707, 695, 685, 677, 670, 664, 659, 654, 650, 646, 643, 640, 637, 634, 632,
-      630, 627, 625, 624, 622, 620, 618, 617, 615, 614, 613, 611, 610, 609, 608, 607, 606, 605, 604, 603, 602, 601, 600,
-      599, 598, 597, 596, 595, 594, 593, 592, 591, 590, 589, 588, 587, 586, 585, 584, 583, 582, 581, 580, 579, 578, 577,
-      576, 575, 574, 573, 572, 571, 570, 569, 568, 567, 566, 565, 564, 563, 562, 561, 560, 559, 558, 557, 556, 555, 554,
-      553, 552, 551, 550, 549, 548, 547, 546, 545, 544, 543, 542, 541, 540, 539, 538, 537, 536, 535, 534, 533, 532, 531,
-      530, 529, 528, 527, 526, 525, 524, 523, 522, 521, 520, 519, 519, 519
-    )
-    if k <= 0 then 1000
-    else if k <= table.length then table(k - 1)
-    else 519 // for k > 128
+  /** EIP-2537 G1 MSM discount table, k = 1..128, verbatim from the EIP ("Discounts table for G1 MSM") and identical to
+    * go-ethereum params.Bls12381G1MultiExpDiscountTable. max_discount = 519 for k > 128.
+    *
+    * An earlier hand-entered table diverged from the EIP at 116 of 128 entries from k = 6 onward (740 where the EIP has
+    * 750, ...), undercharging 47 values of k and overcharging 69. execution-spec-tests
+    * test_bls12_variable_length_input_contracts.py::test_invalid_gas_g1msm calls 0x0c with (EIP cost - 1) gas for k =
+    * 1..129 and expects every call to fail; the undercharged calls succeeded, and fukuii rejected the valid block.
+    */
+  private val BlsG1MsmDiscountTable: Array[Int] = Array(
+    1000, 949, 848, 797, 764, 750, 738, 728, 719, 712, 705, 698, 692, 687, 682, 677, 673, 669, 665, 661, 658, 654, 651,
+    648, 645, 642, 640, 637, 635, 632, 630, 627, 625, 623, 621, 619, 617, 615, 613, 611, 609, 608, 606, 604, 603, 601,
+    599, 598, 596, 595, 593, 592, 591, 589, 588, 586, 585, 584, 582, 581, 580, 579, 577, 576, 575, 574, 573, 572, 570,
+    569, 568, 567, 566, 565, 564, 563, 562, 561, 560, 559, 558, 557, 556, 555, 554, 553, 552, 551, 550, 549, 548, 547,
+    547, 546, 545, 544, 543, 542, 541, 540, 540, 539, 538, 537, 536, 536, 535, 534, 533, 532, 532, 531, 530, 529, 528,
+    528, 527, 526, 525, 525, 524, 523, 522, 522, 521, 520, 520, 519
+  )
 
-  /** EIP-2537 G2 MSM discount table (128 entries). max_discount=524 at k>=128. */
-  private def blsG2MsmDiscount(k: Int): Int =
-    val table = Array(
-      1000, 1000, 923, 884, 855, 832, 812, 796, 782, 770, 759, 750, 742, 734, 727, 721, 715, 709, 704, 699, 694, 689,
-      685, 681, 677, 673, 669, 666, 662, 659, 656, 653, 650, 647, 644, 641, 639, 636, 634, 631, 629, 627, 624, 622, 620,
-      618, 616, 614, 612, 610, 608, 606, 604, 603, 601, 599, 597, 596, 594, 593, 591, 590, 588, 587, 585, 584, 582, 581,
-      580, 578, 577, 576, 574, 573, 572, 571, 569, 568, 567, 566, 565, 564, 563, 562, 561, 560, 559, 558, 557, 556, 555,
-      554, 553, 552, 551, 550, 549, 548, 547, 547, 546, 545, 544, 543, 543, 542, 541, 540, 540, 539, 538, 537, 537, 536,
-      535, 535, 534, 533, 533, 532, 531, 531, 530, 530, 529, 528, 528, 527
-    )
+  /** EIP-2537 G2 MSM discount table, k = 1..128, verbatim from the EIP ("Discounts table for G2 MSM") and identical to
+    * go-ethereum params.Bls12381G2MultiExpDiscountTable. max_discount = 524 for k > 128.
+    *
+    * The earlier hand-entered table diverged at 117 of 128 entries from k = 12 onward, every one of them overcharging
+    * (750 where the EIP has 749, ...), so a G2 MSM given exactly the EIP cost ran out of gas.
+    */
+  private val BlsG2MsmDiscountTable: Array[Int] = Array(
+    1000, 1000, 923, 884, 855, 832, 812, 796, 782, 770, 759, 749, 740, 732, 724, 717, 711, 704, 699, 693, 688, 683, 679,
+    674, 670, 666, 663, 659, 655, 652, 649, 646, 643, 640, 637, 634, 632, 629, 627, 624, 622, 620, 618, 615, 613, 611,
+    609, 607, 606, 604, 602, 600, 598, 597, 595, 593, 592, 590, 589, 587, 586, 584, 583, 582, 580, 579, 578, 576, 575,
+    574, 573, 571, 570, 569, 568, 567, 566, 565, 563, 562, 561, 560, 559, 558, 557, 556, 555, 554, 553, 552, 552, 551,
+    550, 549, 548, 547, 546, 545, 545, 544, 543, 542, 541, 541, 540, 539, 538, 537, 537, 536, 535, 535, 534, 533, 532,
+    532, 531, 530, 530, 529, 528, 528, 527, 526, 526, 525, 524, 524
+  )
+
+  private def blsG1MsmDiscount(k: Int): Int =
     if k <= 0 then 1000
-    else if k <= table.length then table(k - 1)
-    else 524 // for k > 128
+    else if k <= BlsG1MsmDiscountTable.length then BlsG1MsmDiscountTable(k - 1)
+    else 519 // max_discount, k > 128
+
+  private def blsG2MsmDiscount(k: Int): Int =
+    if k <= 0 then 1000
+    else if k <= BlsG2MsmDiscountTable.length then BlsG2MsmDiscountTable(k - 1)
+    else 524 // max_discount, k > 128

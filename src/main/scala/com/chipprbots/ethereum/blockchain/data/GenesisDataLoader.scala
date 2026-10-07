@@ -95,7 +95,7 @@ class GenesisDataLoader(
 
   def loadGenesisData(genesisData: GenesisData)(implicit blockchainConfig: BlockchainConfig): Try[Unit] =
 
-    val storage = stateStorage.getReadOnlyStorage
+    val storage = GenesisDataLoader.AppendOnlyMptStorage(stateStorage.getReadOnlyStorage)
     val initalRootHash = MerklePatriciaTrie.EmptyRootHash
 
     val stateMptRootHash = getGenesisStateRoot(genesisData, initalRootHash, storage)
@@ -186,29 +186,50 @@ class GenesisDataLoader(
     // Empty trie root = keccak256(RLP("")) = keccak256(0x80) — NOT keccak of empty list
     val emptyWithdrawalsRoot = ByteString(crypto.kec256(rlp.encode(RLPValue(Array.empty[Byte]))))
 
-    val extraFields = if blockchainConfig.isPragueTimestamp(genesisTimestamp) then
-      val emptyRequestsHash = ByteString(java.security.MessageDigest.getInstance("SHA-256").digest(Array.empty[Byte]))
-      BlockHeader.HeaderExtraFields.HefPostPrague(
-        baseFee,
-        emptyWithdrawalsRoot,
-        parseOptQuantity(genesisData.blobGasUsed),
-        parseOptQuantity(genesisData.excessBlobGas),
-        zeros(hashLength),
-        emptyRequestsHash
-      )
-    else if blockchainConfig.isCancunTimestamp(genesisTimestamp) then
-      BlockHeader.HeaderExtraFields.HefPostCancun(
-        baseFee,
-        emptyWithdrawalsRoot,
-        parseOptQuantity(genesisData.blobGasUsed),
-        parseOptQuantity(genesisData.excessBlobGas),
-        zeros(hashLength)
-      )
-    else if blockchainConfig.isShanghaiTimestamp(genesisTimestamp) then
-      BlockHeader.HeaderExtraFields.HefPostShanghai(baseFee, emptyWithdrawalsRoot)
-    else if blockchainConfig.forkBlockNumbers.olympiaBlockNumber == 0 then
-      BlockHeader.HeaderExtraFields.HefPostOlympia(baseFee)
-    else BlockHeader.HeaderExtraFields.HefEmpty
+    // EIP-7685: sha256 of the empty request list, the genesis requestsHash from Prague on.
+    lazy val emptyRequestsHash =
+      ByteString(java.security.MessageDigest.getInstance("SHA-256").digest(Array.empty[Byte]))
+
+    // Amsterdam active at the genesis timestamp (go-ethereum core/genesis.go `IsAmsterdam`; every EEST
+    // `for_amsterdam` fixture): the Prague fields plus the 23-field header's two. `blockAccessListHash` commits
+    // to the EMPTY access list, since genesis executes nothing (keccak256(0xc0), BlockAccessList.EmptyHash);
+    // `slotNumber` is the genesis file's, 0 when absent. Built with the Prague shape instead, the genesis hash
+    // was wrong. Chains that activate Amsterdam later (Sepolia, Platåberget, hive's devp2p fixture) and every
+    // ETC chain never enter this branch.
+    val extraFields =
+      if blockchainConfig.isAmsterdamTimestamp(genesisTimestamp) then
+        BlockHeader.HeaderExtraFields.HefPostAmsterdam(
+          baseFee,
+          emptyWithdrawalsRoot,
+          parseOptQuantity(genesisData.blobGasUsed),
+          parseOptQuantity(genesisData.excessBlobGas),
+          zeros(hashLength),
+          emptyRequestsHash,
+          BlockAccessList.EmptyHash,
+          parseOptQuantity(genesisData.slotNumber)
+        )
+      else if blockchainConfig.isPragueTimestamp(genesisTimestamp) then
+        BlockHeader.HeaderExtraFields.HefPostPrague(
+          baseFee,
+          emptyWithdrawalsRoot,
+          parseOptQuantity(genesisData.blobGasUsed),
+          parseOptQuantity(genesisData.excessBlobGas),
+          zeros(hashLength),
+          emptyRequestsHash
+        )
+      else if blockchainConfig.isCancunTimestamp(genesisTimestamp) then
+        BlockHeader.HeaderExtraFields.HefPostCancun(
+          baseFee,
+          emptyWithdrawalsRoot,
+          parseOptQuantity(genesisData.blobGasUsed),
+          parseOptQuantity(genesisData.excessBlobGas),
+          zeros(hashLength)
+        )
+      else if blockchainConfig.isShanghaiTimestamp(genesisTimestamp) then
+        BlockHeader.HeaderExtraFields.HefPostShanghai(baseFee, emptyWithdrawalsRoot)
+      else if blockchainConfig.forkBlockNumbers.olympiaBlockNumber == 0 then
+        BlockHeader.HeaderExtraFields.HefPostOlympia(baseFee)
+      else BlockHeader.HeaderExtraFields.HefEmpty
 
     BlockHeader(
       parentHash = BlockHash(zeros(hashLength)),
@@ -245,6 +266,25 @@ class GenesisDataLoader(
     ByteString(Hex.decode(List.fill(length)("0").mkString))
 
 object GenesisDataLoader:
+
+  /** Genesis tries are built into ONE shared, content-addressed node buffer (`ReadOnlyNodeStorage`), and every MPT
+    * `put` reports the nodes it replaced as removals — which that buffer applies with `buffer -= hash`. Two accounts
+    * whose storage tries share a node therefore corrupt each other: EEST `stEIP2930/variedContext` gives 0x..f114
+    * storage {0: 0x0bad} (a single leaf, which is its root) and 0x..f115 {0: 0x0bad, 0x60a7: 0xdead}; building f115's
+    * trie creates that same leaf, then replaces it and "removes" it, deleting f114's storage root before `persist()`.
+    * The genesis state root is still right (it is computed, not read back), so the genesis hash matched and the first
+    * block that wrote f114's storage failed with MissingStorageNodeException -> newPayload `SYNCING`/ACCEPTED.
+    *
+    * Nothing a genesis build replaces can be garbage that must be deleted — the buffer's removals are never persisted
+    * anyway (`ReadOnlyNodeStorage.persist` only sees upserts) — so dropping removals here is exact.
+    */
+  final private[data] case class AppendOnlyMptStorage(underlying: MptStorage) extends MptStorage:
+    override def get(nodeId: Array[Byte]): com.chipprbots.ethereum.mpt.MptNode = underlying.get(nodeId)
+    override def updateNodesInStorage(
+        newRoot: Option[com.chipprbots.ethereum.mpt.MptNode],
+        toRemove: Seq[com.chipprbots.ethereum.mpt.MptNode]
+    ): Option[com.chipprbots.ethereum.mpt.MptNode] = underlying.updateNodesInStorage(newRoot, Nil)
+    override def persist(): Unit = underlying.persist()
   object JsonSerializers:
 
     def deserializeByteString(jv: JValue): ByteString = jv match

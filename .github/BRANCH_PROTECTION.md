@@ -61,15 +61,24 @@ To ensure good project hygiene, configure the following branch protection rules 
 
    ☑️ **Require status checks to pass before merging**
    - Require branches to be up to date before merging
-   - Status checks to require:
-     - `Test and Build` (from CI workflow)
-     - `Build Docker Images` (from Docker workflow)
+   - Status checks to require — **the authoritative list is `required_contexts`
+     in [`.github/gates.yml`](gates.yml)**; this section mirrors it:
+     - `Test and Build (JDK 25, Scala 3.3.7)` (from CI workflow)
+     - `Docker Build` (from Docker workflow)
+     - `Gate Integrity` (validates the gate matrix itself)
+
+   > GitHub branch-protection settings live outside the repository, so no check
+   > can verify them. `.github/gates.yml` is the source of truth a reviewer can
+   > read and diff; applying it here is a manual step for a maintainer with
+   > admin rights. If the two disagree, the matrix is right and the setting is
+   > the bug. See `specs/008-ci-gate-integrity/` and #1404.
 
    ☑️ **Require conversation resolution before merging**
    - Ensures all review comments are addressed
 
-   ☑️ **Require linear history** (optional)
-   - Prevents merge commits, enforces rebase or squash
+   ☑️ **Require linear history** — **ENABLED, not optional**
+   - Merge commits are rejected (`405 Merge commits are not allowed on this
+     repository`). Use squash or rebase.
 
    ☑️ **Do not allow bypassing the above settings**
    - Applies rules to administrators as well
@@ -87,7 +96,7 @@ If you have the GitHub CLI installed, you can configure branch protection with:
 
 gh api repos/{owner}/{repo}/branches/main/protection \
   --method PUT \
-  --field required_status_checks='{"strict":true,"contexts":["Test and Build","Build Docker Images"]}' \
+  --field required_status_checks='{"strict":true,"contexts":["Test and Build (JDK 25, Scala 3.3.7)","Docker Build","Gate Integrity"]}' \
   --field enforce_admins=true \
   --field required_pull_request_reviews='{"required_approving_review_count":1,"dismiss_stale_reviews":true}' \
   --field required_conversation_resolution=true \
@@ -199,3 +208,49 @@ sbt pp
 - [GitHub Actions Documentation](https://docs.github.com/en/actions)
 - [Branch Protection Rules](https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/defining-the-mergeability-of-pull-requests/about-protected-branches)
 - [GitHub Milestones](https://docs.github.com/en/issues/using-labels-and-milestones-to-track-work/about-milestones)
+
+
+---
+
+## Known drift — the live ruleset does not match this document
+
+**Discovered 2026-09-20 while attempting to merge #1406.** A merge was rejected with:
+
+```
+405 Repository rule violations found
+2 of 5 required status checks are failing.
+```
+
+Three different numbers were in play at once:
+
+| Source | Required checks |
+|---|---|
+| This document (before today) | 2 |
+| `.github/gates.yml` (as first written) | 3 |
+| **The live ruleset** | **5** |
+
+Two of the five are Hive suites, which `.github/gates.yml` declares
+`informational` — suites the matrix says cannot block a merge, but which in
+fact do. The repository cannot detect this: GitHub rulesets live outside it,
+which is why Constitution rule V.4 is labelled `aspirational` in
+[`docs/governance/constitution-enforcement.md`](../docs/governance/constitution-enforcement.md).
+
+**`required_contexts` in `.github/gates.yml` is the target, not an observation.**
+It has to be applied and verified by a maintainer with admin rights.
+
+### Reconciling
+
+The Hive suites are not passable today — see #1407 for the measured per-suite
+state. Requiring them blocks every PR on unrelated protocol work, which is how
+a required check ends up waived into meaninglessness. Until #1407 makes them
+green, they belong in the informational tier:
+
+1. **Settings → Rules → Rulesets** (or **Branches → branch protection**) for `main`.
+2. Under *Require status checks to pass*, remove the Hive contexts (`run / …`).
+3. Ensure the three contexts listed above are present — note `Gate Integrity`
+   is new, and `Docker Build` corrects the previously wrong `Build Docker Images`.
+4. Leave *Require linear history* enabled; squash or rebase, never a merge commit.
+
+Promote a Hive suite back to required only alongside its `tier: required`
+promotion in `.github/gates.yml`, which check C4 gates on an `evidence:` URL
+showing a green run on `main`.

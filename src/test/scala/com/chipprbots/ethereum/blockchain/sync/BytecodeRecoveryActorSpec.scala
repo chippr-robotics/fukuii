@@ -118,6 +118,8 @@ class BytecodeRecoveryActorSpec extends ScalaTestWithActorTestKit() with AnyFlat
         )
 
       coordinatorProbe.expectMsgType[snap.actors.ByteCodeCoordinator.StartByteCodeSync](2.seconds)
+      // The gap list is complete: the coordinator must be told, or it waits for more tasks and never announces completion.
+      coordinatorProbe.expectMsg(2.seconds, snap.actors.ByteCodeCoordinator.NoMoreByteCodeTasks)
 
       actor ! BytecodeRecoveryActor.ByteCodeDownloadComplete
 

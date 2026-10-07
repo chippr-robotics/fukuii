@@ -3,8 +3,8 @@
 This page narrates the full journey of a fukuii node from first start to following the chain
 tip: which phases run, what each looks like in the logs and metrics, what "normal" is at each
 step, and roughly how long things take. It reflects the current implementation (SNAP sync
-with stack-trie account building, BFS state healing, ConcurrentFetch block pipelines,
-eth/68 + eth/69 wire protocols).
+with stack-trie account building, BFS state healing, concurrent header/body/receipt
+download, eth/68 + eth/69 wire protocols).
 
 Companion pages: [State Healing — Operator's Guide](state-healing-operations.md),
 [Monitoring SNAP Sync](monitoring-snap-sync.md), and the
@@ -102,9 +102,8 @@ seeded from the network and accumulated normally from there).
 
 ## 5. Regular sync (phase 8 / steady state)
 
-Block-by-block import to the tip, through the concurrent fetch pipeline
-(`ConcurrentFetch` header/body/receipt queues with per-peer rate tracking). Catch-up imports
-in 50-block batches:
+Block-by-block import to the tip: the block fetcher requests headers and bodies through the
+peers client, which tracks per-peer response rates. Catch-up imports in 50-block batches:
 
 ```
 Imported blocks 16176171 - 16176220

@@ -8,6 +8,15 @@ import com.chipprbots.ethereum.domain.UInt256
 
 object ExecEnv:
   def apply(context: ProgramContext[?, ?], code: ByteString, ownerAddr: Address): ExecEnv =
+    apply(context, code, ownerAddr, None)
+
+  /** `codeHash`, when the world state holds it for exactly this `code`, lets the frames share the JUMPDEST analysis. */
+  def apply(
+      context: ProgramContext[?, ?],
+      code: ByteString,
+      ownerAddr: Address,
+      codeHash: Option[ByteString]
+  ): ExecEnv =
     import context.*
 
     ExecEnv(
@@ -17,7 +26,7 @@ object ExecEnv:
       gasPrice,
       inputData,
       value,
-      Program(code),
+      codeHash.fold(Program(code))(h => Program.withCodeHash(code, h, context.world.jumpDestMemo)),
       blockHeader,
       callDepth,
       startGas,
@@ -25,7 +34,8 @@ object ExecEnv:
       context.precompileRelocations,
       context.blobVersionedHashes,
       context.traceTransfers,
-      context.tracer
+      context.tracer,
+      context.accessRecorder
     )
 
 /** Execution environment constants of an EVM program. See section 9.3 in Yellow Paper for more detail.
@@ -51,6 +61,9 @@ object ExecEnv:
   *   gas provided for execution
   * @param evmConfig
   *   EVM configuration (forks)
+  * @param accessRecorder
+  *   EIP-7928: where this frame records the accounts and slots it reads. Present only while an Amsterdam block
+  *   executes; see [[BlockAccessRecorder]].
   */
 case class ExecEnv(
     ownerAddr: Address,
@@ -67,5 +80,6 @@ case class ExecEnv(
     precompileRelocations: Map[Address, Address] = Map.empty,
     blobVersionedHashes: Seq[ByteString] = Seq.empty,
     traceTransfers: Boolean = false,
-    tracer: Option[ExecutionTracer] = None
+    tracer: Option[ExecutionTracer] = None,
+    accessRecorder: Option[BlockAccessRecorder] = None
 )

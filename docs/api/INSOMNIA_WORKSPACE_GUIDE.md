@@ -280,7 +280,7 @@ Error: authentication needed: password or unlock
 ## Additional Resources
 
 - [Fukuii RPC API Analysis](./INSOMNIA_RPC_ANALYSIS.md) - Detailed comparison with Ethereum execution-apis
-- [Ethereum JSON-RPC Specification](https://ethereum.github.io/execution-apis/api-documentation/)
+- [Ethereum JSON-RPC Specification](https://ethereum.github.io/execution-apis/)
 - [Fukuii Documentation](../index.md)
 - [Getting Started Guide](../getting-started/index.md)
 

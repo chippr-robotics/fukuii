@@ -231,6 +231,7 @@ class GraphQLFakeServer(
     extends JsonRpcHttpServer
     with Logger:
 
-  def run(): Unit = ()
+  def run(): scala.concurrent.Future[org.apache.pekko.http.scaladsl.Http.ServerBinding] =
+    scala.concurrent.Future.failed(new UnsupportedOperationException("test stub: route-only server is never bound"))
   override def corsAllowedOrigins: HttpOriginMatcher = config.corsAllowedOrigins
   override protected val rateLimit: RateLimit = new RateLimit(config.rateLimit)

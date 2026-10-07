@@ -8,12 +8,14 @@ import com.chipprbots.ethereum.network.PeerEventBusActor.Command as PeerEventBus
 
 import com.chipprbots.ethereum.blockchain.sync.Blacklist
 import com.chipprbots.ethereum.blockchain.sync.PeerListHelper
+import com.chipprbots.ethereum.blockchain.sync.PeerListSupportNg.PeerWithInfo
 import com.chipprbots.ethereum.blockchain.sync.regular.BlockBroadcast.BlockToBroadcast
 import com.chipprbots.ethereum.domain.BlockHeader
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor.PeerInfo
 import com.chipprbots.ethereum.network.Peer
 import com.chipprbots.ethereum.network.PeerEventBusActor.PeerEvent
+import com.chipprbots.ethereum.network.PeerId
 import com.chipprbots.ethereum.network.PeerEventBusActor.PeerEvent.PeerDisconnected
 import com.chipprbots.ethereum.utils.Config.SyncConfig
 
@@ -39,6 +41,25 @@ object BlockBroadcasterActor:
   private case class WrappedPeerDisconnected(event: PeerDisconnected) extends BroadcasterMsg
   private case object ScanPeers extends BroadcasterMsg
   private val ScanKey = "BlockBroadcasterScanPeers"
+
+  /** Of `candidates` (newly-observed peers, per the `WrappedHandshakedPeers` scan-delta), the ones whose own STATUS
+    * handshake reports they are actually behind `head` — i.e. genuinely need the canonical-head catch-up.
+    * `PeerInfo.apply` seeds `maxBlockNumber` straight from that peer's own reported `Status.latestBlock` at handshake
+    * time (for ETH69+; always 0 pre-ETH69, since that Status has no `latestBlock` field at all), so this reads what the
+    * peer itself claimed, not a locally-stale cache.
+    *
+    * A peer that connected AFTER fukuii's local head already advanced learns the correct range from Status itself
+    * (earliestBlock/latestBlock/latestBlockHash) — re-announcing to it is not just redundant, it is exactly the
+    * unsolicited BlockRangeUpdate hive's devp2p `eth` suite panics on mid-test: its raw connections read one expected
+    * message at a time, and `Conn.ReadEth` has no case for an unexpected 0x11 (`TestLargeTxRequest`,
+    * `TestNewPooledTxs`: `panic: unhandled eth msg code 17`). A pre-ETH69 peer's `maxBlockNumber` is always 0, so this
+    * filter is a no-op for it — it keeps getting the unconditional NewBlockHashes catch-up exactly as before.
+    *
+    * Extracted as a pure function (no actor/timer machinery) so the filter itself is directly unit-testable — see
+    * `BlockBroadcasterActorSpec`.
+    */
+  private[regular] def staleAmong(head: BlockHeader, candidates: Map[PeerId, PeerWithInfo]): Map[PeerId, PeerWithInfo] =
+    candidates.filter { case (_, PeerWithInfo(_, info)) => info.maxBlockNumber < head.number.value }
 
   def apply(
       broadcast: BlockBroadcast,
@@ -94,7 +115,10 @@ object BlockBroadcasterActor:
           val newlyObserved = peerListHelper.handshakedPeers.filterNot { case (peerId, _) =>
             knownBefore.contains(peerId)
           }
-          if newlyObserved.nonEmpty then broadcast.announceCanonicalHead(head, newlyObserved)
+          // Only catch up peers that actually need it — see `staleAmong`'s doc.
+          val stalePeers = staleAmong(head, newlyObserved)
+          if stalePeers.nonEmpty then
+            broadcast.announceCanonicalHead(head, stalePeers, throttleBlockRangeUpdate = false)
         }
         Behaviors.same
 

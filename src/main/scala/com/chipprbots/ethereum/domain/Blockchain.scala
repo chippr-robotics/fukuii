@@ -2,6 +2,7 @@ package com.chipprbots.ethereum.domain
 
 import org.apache.pekko.util.ByteString
 
+import com.chipprbots.ethereum.consensus.ReorgStateHandler
 import com.chipprbots.ethereum.db.dataSource.DataSourceBatchUpdate
 import com.chipprbots.ethereum.db.storage.*
 import com.chipprbots.ethereum.domain
@@ -80,6 +81,7 @@ class BlockchainImpl(
     protected val stateStorage: StateStorage,
     blockchainReader: BlockchainReader
 ) extends Blockchain
+    with ReorgStateHandler
     with Logger:
 
   override def getAccountStorageAt(
@@ -117,6 +119,16 @@ class BlockchainImpl(
   def getBackingMptStorage(blockNumber: BigInt): MptStorage = stateStorage.getBackingStorage(blockNumber)
 
   def getReadOnlyMptStorage(): MptStorage = stateStorage.getReadOnlyStorage
+
+  /** State storage for executing block `blockNumber`, its writes held back until committed. See [[StagedBlockState]].
+    */
+  def stageBlockState(blockNumber: BigInt): StagedBlockState = stateStorage.stageBlock(blockNumber)
+
+  /** See [[StateStorage.onBlocksAbandoned]]. */
+  override def abandonBlockStates(blocks: Seq[(BigInt, ByteString)]): Unit = stateStorage.onBlocksAbandoned(blocks)
+
+  /** See [[StateStorage.onBlocksReadopted]]. */
+  override def readoptBlockStates(blocks: Seq[(BigInt, ByteString)]): Unit = stateStorage.onBlocksReadopted(blocks)
 
   override def saveBlockState(bn: BigInt): Unit =
     stateStorage.onBlockSave(bn, appStateStorage.getBestBlockNumber())(() => ())
@@ -183,6 +195,9 @@ trait BlockchainStorages:
   val blockBodiesStorage: BlockBodiesStorage
   val blockNumberMappingStorage: BlockNumberMappingStorage
   val receiptStorage: ReceiptStorage
+
+  /** EIP-7928: the block access list of every Amsterdam block that validated here, by block hash. */
+  val blockAccessListStorage: BlockAccessListStorage
   val evmCodeStorage: EvmCodeStorage
   val chainWeightStorage: ChainWeightStorage
   val transactionMappingStorage: TransactionMappingStorage

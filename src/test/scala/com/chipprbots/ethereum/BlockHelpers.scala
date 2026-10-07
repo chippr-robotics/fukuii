@@ -51,6 +51,7 @@ object BlockHelpers extends SecureRandomBuilder:
     case s: HeaderExtraFields.HefPostShanghai      => s
     case c: HeaderExtraFields.HefPostCancun        => c
     case p: HeaderExtraFields.HefPostPrague        => p
+    case a: HeaderExtraFields.HefPostAmsterdam     => a
 
   def generateBlock(parent: Block): Block =
     val header = parent.header.copy(

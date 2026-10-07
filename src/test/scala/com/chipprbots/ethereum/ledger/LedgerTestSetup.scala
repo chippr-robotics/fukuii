@@ -28,6 +28,7 @@ import com.chipprbots.ethereum.crypto.generateKeyPair
 import com.chipprbots.ethereum.crypto.kec256
 import com.chipprbots.ethereum.db.storage.EvmCodeStorage
 import com.chipprbots.ethereum.db.storage.MptStorage
+import com.chipprbots.ethereum.db.storage.StagedBlockState
 import com.chipprbots.ethereum.domain.*
 import com.chipprbots.ethereum.ledger.BlockExecutionError.ValidationAfterExecError
 import com.chipprbots.ethereum.mpt.MerklePatriciaTrie
@@ -392,10 +393,16 @@ trait TestSetupWithVmAndValidators extends EphemBlockchainTestSetup:
         testMining.blockPreparator,
         blockValidation
       ):
-        override def executeAndValidateBlock(
+        // Stubs the staged variant: executeAndValidateBlocks calls it directly (it commits the staged state together
+        // with the block), executeAndValidateBlockFull delegates to it, and executeAndValidateBlock to that, so every
+        // entry point skips execution here. WI-10 needs the block access list it returns.
+        override protected[ledger] def executeAndValidateStaged(
             block: Block,
-            alreadyValidated: Boolean = false
-        )(implicit blockchainConfig: BlockchainConfig): Either[BlockExecutionError, Seq[Receipt]] =
+            alreadyValidated: Boolean,
+            staged: StagedBlockState
+        )(implicit
+            blockchainConfig: BlockchainConfig
+        ): Either[BlockExecutionError, (Seq[Receipt], Seq[ByteString], Option[BlockAccessList])] =
           val emptyWorld = InMemoryWorldStateProxy(
             storagesInstance.storages.evmCodeStorage,
             blockchain.getBackingMptStorage(-1),
@@ -405,7 +412,7 @@ trait TestSetupWithVmAndValidators extends EphemBlockchainTestSetup:
             noEmptyAccounts = false,
             ethCompatibleStorage = true
           )
-          Right(BlockResult(emptyWorld).receipts)
+          Right((BlockResult(emptyWorld).receipts, Nil, None))
     )
     new ConsensusAdapter(
       consensus,

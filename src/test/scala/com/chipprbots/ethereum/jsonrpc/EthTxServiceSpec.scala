@@ -422,6 +422,40 @@ class EthTxServiceSpec
 
     res shouldBe PendingTransactionsResponse(Nil)
 
+  // eth_sendRawTransaction and blob txs. The execution-apis send-blob-tx vector (an EIP-7594 wrapper) is the tx with
+  // its sidecar; its first item, re-prefixed with the type byte, is the same tx without one.
+  private lazy val blobTxWithSidecar: Array[Byte] =
+    val is = getClass.getResourceAsStream("/eip7594-blob-tx-wrapper.rlp")
+    try is.readAllBytes()
+    finally is.close()
+
+  private def blobTxWithoutSidecar: Array[Byte] =
+    rlp.rawDecode(blobTxWithSidecar.tail) match
+      case wrapper: rlp.RLPList => Array(0x03.toByte) ++ rlp.encode(wrapper.items.head)
+      case other                => fail(s"not a blob tx wrapper: $other")
+
+  it should "reject a blob tx sent without its sidecar, as go-ethereum's pool does" taggedAs (
+    UnitTest,
+    RPCTest
+  ) in new TestSetup:
+    val res =
+      ethTxService.sendRawTransaction(SendRawTransactionRequest(ByteString(blobTxWithoutSidecar))).unsafeRunSync()
+
+    res shouldBe Left(JsonRpcError.LogicError("missing sidecar in blob transaction"))
+    pendingTransactionsManager.expectNoMessage(200.millis)
+
+  it should "hand a blob tx sent with its sidecar to the pool, sidecar included" taggedAs (
+    UnitTest,
+    RPCTest
+  ) in new TestSetup:
+    val res = ethTxService.sendRawTransaction(SendRawTransactionRequest(ByteString(blobTxWithSidecar))).unsafeRunSync()
+
+    res.map(r => Hex.toHexString(r.transactionHash.toArray)) shouldBe
+      Right("05d85f6a761cac82cfdf06dd168952838ac452b10641aabccdfdad46e03d2f0b")
+    pendingTransactionsManager.expectMsgPF() { case AddOrOverrideTransaction(_, rawBytes) =>
+      rawBytes.map(_.toArray.toSeq) shouldBe Some(blobTxWithSidecar.toSeq)
+    }
+
   // NOTE TestSetup uses Ethash consensus; check `consensusConfig`.
   class TestSetup(implicit system: ActorSystem) extends EphemBlockchainTestSetup:
     val appStateStorage: AppStateStorage = mock[AppStateStorage]

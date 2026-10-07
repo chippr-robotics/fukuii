@@ -27,7 +27,7 @@ class SecureJsonRpcHttpServer(
     extends JsonRpcHttpServer
     with Logger:
 
-  def run(): Unit =
+  def run(): scala.concurrent.Future[Http.ServerBinding] =
     given ec: scala.concurrent.ExecutionContext = actorSystem.dispatcher
 
     val maybeHttpsContext = getSSLContext().map(sslContext => ConnectionContext.httpsServer(sslContext))
@@ -41,6 +41,8 @@ class SecureJsonRpcHttpServer(
           case Success(serverBinding) => log.info(s"JSON RPC HTTPS server listening on ${serverBinding.localAddress}")
           case Failure(ex)            => log.error("Cannot start JSON HTTPS RPC server", ex)
         }
+
+        bindingResultF
       case Left(error) =>
         log.error(s"Cannot start JSON HTTPS RPC server due to: $error")
         throw new IllegalStateException(error.reason)

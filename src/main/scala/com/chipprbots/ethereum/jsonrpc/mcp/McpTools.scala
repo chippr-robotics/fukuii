@@ -256,6 +256,11 @@ object GetBlockTool:
     headerOpt match
       case Some(h) =>
         val td = deps.blockchainReader.getChainWeightByHash(h.hash).map(_.totalDifficulty.toString).getOrElse("unknown")
+        // uint64 bit pattern -> unsigned decimal for the raw Timestamp number below (see Timestamp.scala).
+        // The Instant conversion stays on the signed value on purpose: java.time.Instant's epoch-second
+        // range (roughly +/-31.7e15 s) is far too small to hold a true uint64 value near 2^64 at all, so
+        // there is no unsigned rendering of it that wouldn't throw DateTimeException.
+        val unsignedTimestamp = java.lang.Long.toUnsignedString(h.unixTimestamp.toLong)
         s"""Block #${h.number}:
           |  Hash: ${ByteStringUtils.hash2string(h.hash.value)}
           |  Parent: ${ByteStringUtils.hash2string(h.parentHash.value)}
@@ -264,7 +269,7 @@ object GetBlockTool:
           |  Total Difficulty: $td
           |  Gas Limit: ${h.gasLimit}
           |  Gas Used: ${h.gasUsed}
-          |  Timestamp: ${h.unixTimestamp.toLong} (${java.time.Instant.ofEpochSecond(h.unixTimestamp.toLong)})
+          |  Timestamp: $unsignedTimestamp (${java.time.Instant.ofEpochSecond(h.unixTimestamp.toLong)})
           |  Transactions Root: ${ByteStringUtils.hash2string(h.transactionsRoot.value)}
           |  State Root: ${ByteStringUtils.hash2string(h.stateRoot.value)}
           |  Extra Data: 0x${org.bouncycastle.util.encoders.Hex.toHexString(h.extraData.toArray)}""".stripMargin

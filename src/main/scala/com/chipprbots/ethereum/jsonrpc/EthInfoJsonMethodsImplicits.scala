@@ -50,9 +50,29 @@ object EthJsonMethodsImplicits extends JsonMethodsImplicits:
       private def encodeAddress(addr: Address): JString =
         JString(s"0x${Hex.toHexString(addr.bytes.toArray[Byte])}")
 
+      /** EIP-7910 renders the fork id as a 4-byte hex string (the EIP-2124 CRC32 checksum), zero-padded — `0xe272ecbe`,
+        * never `0xe272ecbe` truncated or `0x...` sign-extended.
+        */
+      private def encodeForkId(forkId: BigInt): JString =
+        JString(f"0x${forkId & BigInt("ffffffff", 16)}%08x")
+
+      /** Blob counts and the update fraction are plain JSON numbers in EIP-7910, not hex quantities. */
+      private def encodeBlobSchedule(bs: BlobScheduleConfig): JObject =
+        ("target" -> JInt(bs.target)) ~
+          ("max" -> JInt(bs.max)) ~
+          ("baseFeeUpdateFraction" -> JInt(bs.baseFeeUpdateFraction))
+
       private def encodeForkConfig(fc: ForkConfig): JObject =
-        ("activationBlock" -> encodeAsHex(fc.activationBlock)) ~
-          ("chainId" -> encodeAsHex(fc.chainId)) ~
+        // Field order follows EIP-7910's reference output. Optional fields are OMITTED rather
+        // than emitted as null: `activationBlock` is the ETC (block-gated) spelling and
+        // `activationTime` the ETH one, and a chain has exactly one of them.
+        val activation: JObject = fc.activationTime match
+          case Some(t) => "activationTime" -> JInt(BigInt(t))
+          case None    => "activationBlock" -> encodeAsHex(fc.activationBlock.getOrElse(BigInt(0)))
+        val withBlobs = fc.blobSchedule.fold(activation)(bs => activation ~ ("blobSchedule" -> encodeBlobSchedule(bs)))
+        val withChainId = withBlobs ~ ("chainId" -> encodeAsHex(fc.chainId))
+        val withForkId = fc.forkId.fold(withChainId)(id => withChainId ~ ("forkId" -> encodeForkId(id)))
+        withForkId ~
           ("precompiles" -> JObject(fc.precompiles.toList.sortBy(_._1).map { case (name, addr) =>
             JField(name, encodeAddress(addr))
           })) ~

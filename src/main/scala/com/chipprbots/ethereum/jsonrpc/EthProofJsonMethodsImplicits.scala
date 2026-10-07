@@ -32,6 +32,14 @@ object EthProofJsonMethodsImplicits extends JsonMethodsImplicits:
               storageKeysParsed <- extractStorageKeys(storageKeys)
               blockNumberParsed <- extractBlockParam(blockNumber)
             yield GetProofRequest(addressParsed, storageKeysParsed, blockNumberParsed)
+          // The block parameter is OPTIONAL in execution-apis and defaults to "latest".
+          // Without this case the omitted-param form fell through to InvalidParams (-32602),
+          // which is what rpc-compat's eth_getProof/get-account-proof-default-block sends.
+          case Some(JArray((address: JString) :: storageKeys :: Nil)) =>
+            for
+              addressParsed <- extractAddress(address)
+              storageKeysParsed <- extractStorageKeys(storageKeys)
+            yield GetProofRequest(addressParsed, storageKeysParsed, BlockParam.Latest)
           case _ => Left(InvalidParams())
 
       override def encodeJson(t: GetProofResponse): JValue =

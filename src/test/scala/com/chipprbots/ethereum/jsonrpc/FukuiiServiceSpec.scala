@@ -61,13 +61,6 @@ class FukuiiServiceSpec extends ScalaTestWithActorTestKit with FreeSpecBase with
     override lazy val syncController: TypedActorRef[SyncController.Command] =
       TestProbe().ref.toTyped[SyncController.Command]
 
-    // FukuiiServiceBuilder requires ActorSystemBuilder for the scheduler; override directly instead.
-    override lazy val fukuiiService: FukuiiService = new FukuiiService(
-      transactionHistoryService,
-      jsonRpcConfig,
-      syncController,
-      classicActorSystem.toTyped.scheduler
-    )
   def createFixture() = new Fixture
 
   "Fukuii Service" - {

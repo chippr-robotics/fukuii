@@ -14,16 +14,21 @@ import com.chipprbots.ethereum.BlockHelpers
 import com.chipprbots.ethereum.NormalPatience
 import com.chipprbots.ethereum.blockchain.sync.EphemBlockchainTestSetup
 import com.chipprbots.ethereum.consensus.Consensus.BranchExecutionFailure
+import com.chipprbots.ethereum.consensus.Consensus.ConsensusErrorDueToMissingNode
 import com.chipprbots.ethereum.consensus.Consensus.ExtendedCurrentBestBranch
 import com.chipprbots.ethereum.consensus.Consensus.ExtendedCurrentBestBranchPartially
 import com.chipprbots.ethereum.consensus.Consensus.KeptCurrentBestBranch
 import com.chipprbots.ethereum.consensus.Consensus.SelectedNewBestBranch
+import com.chipprbots.ethereum.consensus.engine.DesignatedHead
 import com.chipprbots.ethereum.domain.Difficulty
 import com.chipprbots.ethereum.domain.Block
+import com.chipprbots.ethereum.domain.BlockAccessList
 import com.chipprbots.ethereum.domain.ChainWeight
 import com.chipprbots.ethereum.ledger.BlockData
 import com.chipprbots.ethereum.ledger.BlockExecution
+import com.chipprbots.ethereum.ledger.BlockExecutionError.MPTError
 import com.chipprbots.ethereum.ledger.BlockExecutionError.ValidationAfterExecError
+import com.chipprbots.ethereum.mpt.MerklePatriciaTrie.MissingNodeException
 import com.chipprbots.ethereum.testing.Tags.*
 import com.chipprbots.ethereum.utils.BlockchainConfig
 
@@ -37,6 +42,25 @@ class ConsensusImplSpec extends AnyFlatSpec with Matchers with ScalaFutures with
     }
 
     blockchainReader.getBestBlock shouldBe Some(chainExtension.last)
+
+  it should "hand peer-supplied access lists to execution, and take the unchanged path without them" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in new ConsensusSetup:
+    val chainExtension: List[Block] = BlockHelpers.generateChain(2, initialBestBlock)
+    val lists = Map(chainExtension.head.hash.value -> BlockAccessList(Nil))
+
+    whenReady(
+      consensus.evaluateBranchWithAccessLists(NonEmptyList.fromListUnsafe(chainExtension), lists).unsafeToFuture()
+    )(_ shouldBe a[ExtendedCurrentBestBranch])
+    suppliedLists shouldBe Some(lists)
+
+    suppliedLists = None
+    val next: List[Block] = BlockHelpers.generateChain(1, chainExtension.last)
+    whenReady(consensus.evaluateBranch(NonEmptyList.fromListUnsafe(next)).unsafeToFuture())(
+      _ shouldBe a[ExtendedCurrentBestBranch]
+    )
+    suppliedLists shouldBe None
 
   it should "extends the branch partially if one block is invalid" taggedAs (
     UnitTest,
@@ -159,24 +183,198 @@ class ConsensusImplSpec extends AnyFlatSpec with Matchers with ScalaFutures with
     blockchainReader.getBestBlock shouldBe Some(newTip.head)
     blockchainReader.getBlockByHash(initialBestBlock.hash) shouldBe Some(initialBestBlock)
 
+  // ---------------------------------------------------------------------------------------------------------------
+  // PoW fork choice under the PRODUCTION wiring of the PoS arm.
+  //
+  // In production ConsensusImpl is never built with `designatedHead = None`: NodeBuilder passes
+  // `Some(designatedHead)`, a DesignatedHead.LateBound, on EVERY network. On ETC/Mordor/Gorgoroth that holder is
+  // never bound (EngineApiBuilder.bindDesignatedHead requires the Engine API AND a terminal-total-difficulty), so its
+  // `headBlockHash` is None. These cases pin that shape explicitly — an unbound LateBound — and show that the TD rule
+  // is the whole decision under it.
+  // ---------------------------------------------------------------------------------------------------------------
+
+  it should "KEEP the current chain for an equal-TD competing PoW branch, under an unbound LateBound" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in new ConsensusSetup:
+    // Same height as the tip and same per-block difficulty (generateBlock copies the parent's), so equal total
+    // difficulty. The TD rule is strict `>`, so a PoW node keeps its chain.
+    val equalTdBranch: List[Block] = BlockHelpers.generateChain(2, initialChain(2))
+    val etcShaped = consensusWith(Some(new DesignatedHead.LateBound))
+
+    whenReady(etcShaped.evaluateBranch(NonEmptyList.fromListUnsafe(equalTdBranch)).unsafeToFuture()) {
+      _ shouldBe KeptCurrentBestBranch
+    }
+    blockchainReader.getBestBlock shouldBe Some(initialBestBlock)
+
+  it should "SELECT a heavier competing PoW branch, under an unbound LateBound" taggedAs (UnitTest, ConsensusTest) in
+    new ConsensusSetup:
+      val heavierBranch: List[Block] =
+        BlockHelpers.generateChain(
+          2,
+          initialChain(2),
+          b => b.copy(header = b.header.copy(difficulty = Difficulty(10000000)))
+        )
+      val etcShaped = consensusWith(Some(new DesignatedHead.LateBound))
+
+      whenReady(etcShaped.evaluateBranch(NonEmptyList.fromListUnsafe(heavierBranch)).unsafeToFuture()) {
+        _ shouldBe a[SelectedNewBestBranch]
+      }
+      blockchainReader.getBestBlock shouldBe Some(heavierBranch.last)
+
+  it should "be sensitive to the binding — a BOUND holder does change the equal-TD outcome" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in new ConsensusSetup:
+    // The permanent form of the negative control for the two cases above. Same equal-TD branch, same constructor
+    // shape, the only difference is that the holder is bound to a head on that branch — and the result flips. So
+    // the unbound cases pass because the binding gate holds, not because nothing reaches the arm.
+    val equalTdBranch: List[Block] = BlockHelpers.generateChain(2, initialChain(2))
+    val holder = new DesignatedHead.LateBound
+    holder.bind(DesignatedHead(() => Some(equalTdBranch.last.hash.value)))
+
+    whenReady(consensusWith(Some(holder)).evaluateBranch(NonEmptyList.fromListUnsafe(equalTdBranch)).unsafeToFuture()) {
+      _ shouldBe a[SelectedNewBestBranch]
+    }
+
+  it should "read the cake's own DesignatedHead holder — the wiring every other case in this spec runs under" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in new ConsensusSetup:
+    // `consensus` in this spec is NodeBuilder's ConsensusBuilder.consensus (StdTestMiningBuilder mixes it in), i.e.
+    // `new ConsensusImpl(..., Some(invalidChainReporter), Some(designatedHead))`. Unbound, it keeps an equal-TD
+    // branch; binding THAT holder flips it. This proves every pre-existing case above already ran under the
+    // production shape, with an unbound LateBound.
+    val equalTdBranch: List[Block] = BlockHelpers.generateChain(2, initialChain(2))
+    designatedHead.isBound shouldBe false
+    whenReady(consensus.evaluateBranch(NonEmptyList.fromListUnsafe(equalTdBranch)).unsafeToFuture()) {
+      _ shouldBe KeptCurrentBestBranch
+    }
+
+    designatedHead.bind(DesignatedHead(() => Some(equalTdBranch.last.hash.value)))
+    whenReady(consensus.evaluateBranch(NonEmptyList.fromListUnsafe(equalTdBranch)).unsafeToFuture()) {
+      _ shouldBe a[SelectedNewBestBranch]
+    }
+
+  it should "leave the PoS designated-head arm's partial-failure handling as it was (best -> last executed)" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in new ConsensusSetup:
+    // Guard for the ETC BLOCKHASH/index parity change: only a branch selected BY WEIGHT gets the core-geth head rule.
+    // Equal-TD branch b3'..b4' (same height, same TD as b3..b4, so NOT heavier) is selected solely because the bound
+    // holder names b4'; b4' fails, so only b3' executes. b3' is lighter than the old head b4 — the weight rule would
+    // keep b4, but this arm is ETH's and must still move best to b3', exactly as before.
+    val equalTdBranch: List[Block] = BlockHelpers.generateChain(2, initialChain(2))
+    val holder = new DesignatedHead.LateBound
+    holder.bind(DesignatedHead(() => Some(equalTdBranch.last.hash.value)))
+    setFailingBlock(equalTdBranch(1))
+
+    whenReady(consensusWith(Some(holder)).evaluateBranch(NonEmptyList.fromListUnsafe(equalTdBranch)).unsafeToFuture()) {
+      _ shouldBe a[BranchExecutionFailure]
+    }
+    blockchainReader.getBestBlock shouldBe Some(equalTdBranch.head)
+
+  it should "keep the heavier old head when a weight-selected reorg executes only a lighter prefix (core-geth)" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in new ConsensusSetup:
+    // The weight-selected counterpart of the case above, with the ETC-shaped (unbound) holder: b3' at difficulty 1,
+    // b4'/b5' heavy. The whole branch outweighs b3..b4, so it is selected and executed; b4' fails, and b3' alone does
+    // not outweigh b4. core-geth's writeBlockAndSetHead keeps b4, and the index at height 3 goes back to b3.
+    val branch: List[Block] = BlockHelpers.generateChain(
+      3,
+      initialChain(2),
+      b =>
+        b.copy(header =
+          b.header.copy(difficulty =
+            Difficulty(if b.number.value == initialChain(2).number.value + 1 then 1 else 10000000)
+          )
+        )
+    )
+    setFailingBlock(branch(1))
+
+    whenReady(consensus.evaluateBranch(NonEmptyList.fromListUnsafe(branch)).unsafeToFuture()) {
+      _ shouldBe a[BranchExecutionFailure]
+    }
+    blockchainReader.getBestBlock shouldBe Some(initialBestBlock)
+    blockchainReader.getBlockHeaderByNumber(initialChain(3).number.value).map(_.hash) shouldBe Some(
+      initialChain(3).hash
+    )
+
+  it should "adopt the validated prefix when a later block hits a missing node, and return the error for that block only" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in new ConsensusSetup:
+    // b5 extends the best block; b6 executes; b7 hits a missing node. b5 and b6 are validated, so they are adopted
+    // exactly as a successful two-block batch would have been, and the retry starts at b7. Before, best stayed put
+    // and the whole batch was applied again, which skewed the reference counts of everything b5/b6 touched.
+    val branch: List[Block] = BlockHelpers.generateChain(3, initialBestBlock)
+    setMissingNodeAt(branch(2))
+
+    whenReady(consensus.evaluateBranch(NonEmptyList.fromListUnsafe(branch)).unsafeToFuture()) {
+      case ConsensusErrorDueToMissingNode(enqueue, _, imported) =>
+        enqueue shouldBe Nil
+        imported.map(_.block) shouldBe branch.take(2)
+      case other => fail(s"expected ConsensusErrorDueToMissingNode, got $other")
+    }
+    blockchainReader.getBestBlock shouldBe Some(branch(1))
+
+  it should "adopt nothing when the FIRST block of the branch hits a missing node" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in new ConsensusSetup:
+    val branch: List[Block] = BlockHelpers.generateChain(2, initialBestBlock)
+    setMissingNodeAt(branch.head)
+
+    whenReady(consensus.evaluateBranch(NonEmptyList.fromListUnsafe(branch)).unsafeToFuture()) {
+      case ConsensusErrorDueToMissingNode(_, _, imported) => imported shouldBe Nil
+      case other => fail(s"expected ConsensusErrorDueToMissingNode, got $other")
+    }
+    blockchainReader.getBestBlock shouldBe Some(initialBestBlock)
+
   // SCALA 3 MIGRATION: Moved ConsensusSetup inside class to access MockFactory context
   class ConsensusSetup extends EphemBlockchainTestSetup:
     override lazy val blockExecution: BlockExecution = stub[BlockExecution]
 
     // Set up stub behavior
     (blockExecution
-      .executeAndValidateBlocks(_: List[Block], _: ChainWeight)(_: BlockchainConfig))
-      .when(*, *, *)
+      .executeAndValidateBlocks(_: List[Block], _: ChainWeight, _: Boolean)(_: BlockchainConfig))
+      .when(*, *, *, *)
       .anyNumberOfTimes()
-      .onCall { (blocks, _, _) =>
+      .onCall { (blocks, _, _, _) =>
         val executedBlocks = blocks
           .takeWhile(b => !failingBlockHash.contains(b.hash))
           .map(b => BlockData(b, Nil, ChainWeight.zero))
         executedBlocks.foreach(b => blockchainWriter.save(b.block, b.receipts, b.weight, false))
         (
           executedBlocks,
-          blocks.find(b => failingBlockHash.contains(b.hash)).map(_ => ValidationAfterExecError("test error"))
+          blocks
+            .find(b => failingBlockHash.contains(b.hash))
+            .map(b =>
+              if missingNodeFailure then MPTError(new MissingNodeException(b.hash.value))
+              else ValidationAfterExecError("test error")
+            )
         )
+      }
+
+    // The same behaviour for a branch that arrives with peer-supplied EIP-7928 lists; records what it was handed.
+    var suppliedLists: Option[Map[ByteString, BlockAccessList]] = None
+    (blockExecution
+      .executeAndValidateBlocksWithAccessLists(
+        _: List[Block],
+        _: ChainWeight,
+        _: Boolean,
+        _: Map[ByteString, BlockAccessList]
+      )(
+        _: BlockchainConfig
+      ))
+      .when(*, *, *, *, *)
+      .anyNumberOfTimes()
+      .onCall { (blocks, _, _, lists, _) =>
+        suppliedLists = Some(lists)
+        val executedBlocks = blocks.map(b => BlockData(b, Nil, ChainWeight.zero))
+        executedBlocks.foreach(b => blockchainWriter.save(b.block, b.receipts, b.weight, false))
+        (executedBlocks, None)
       }
 
     // Initialize chain
@@ -187,10 +385,17 @@ class ConsensusImplSpec extends AnyFlatSpec with Matchers with ScalaFutures with
     }
 
     private var failingBlockHash: Option[ByteString] = None
+    private var missingNodeFailure: Boolean = false
 
     implicit val runtime: IORuntime = IORuntime.global
 
     def setFailingBlock(block: Block): Unit = failingBlockHash = Some(block.hash.value)
+    def setMissingNodeAt(block: Block): Unit =
+      failingBlockHash = Some(block.hash.value)
+      missingNodeFailure = true
+
+    def consensusWith(designatedHead: Option[DesignatedHead]): ConsensusImpl =
+      new ConsensusImpl(blockchainReader, blockchainWriter, blockExecution, None, designatedHead)
 
 object ConsensusImplSpec:
   val initialChain: List[Block] = BlockHelpers.genesis +: BlockHelpers.generateChain(4, BlockHelpers.genesis)

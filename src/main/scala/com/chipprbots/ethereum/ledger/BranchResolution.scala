@@ -2,6 +2,7 @@ package com.chipprbots.ethereum.ledger
 
 import cats.data.NonEmptyList
 
+import com.chipprbots.ethereum.consensus.engine.DesignatedHead
 import com.chipprbots.ethereum.consensus.mess.ArtificialFinality
 import com.chipprbots.ethereum.consensus.mess.MESSConfig
 import com.chipprbots.ethereum.domain.Block
@@ -12,10 +13,27 @@ import com.chipprbots.ethereum.domain.Timestamp
 import com.chipprbots.ethereum.utils.ByteStringUtils.hash2string
 import com.chipprbots.ethereum.utils.Logger
 
-class BranchResolution(blockchainReader: BlockchainReader) extends Logger:
+/** @param designatedHead
+  *   PoS fork choice, or `None`. `None` on every PoW chain: SyncController supplies a `Some` only when
+  *   terminal-total-difficulty is configured (see [[DesignatedHead]]). The default is `None` too, so any construction
+  *   site that does not explicitly opt in keeps the pre-merge behaviour untouched.
+  */
+class BranchResolution(
+    blockchainReader: BlockchainReader,
+    designatedHead: Option[DesignatedHead] = None
+) extends Logger:
 
   /** Optional MESS config for anti-reorg protection. Set by SyncController when configured. */
   private[ethereum] var messConfig: Option[MESSConfig] = None
+
+  /** Does this import path follow a consensus layer, i.e. is this a post-merge (terminal-total-difficulty) chain?
+    *
+    * Exactly the gate of the PoS arm below: `designatedHead` is `Some` only when SyncController sees a configured
+    * terminal-total-difficulty, which no ETC/Mordor/Gorgoroth config sets. `BlockImporter` reads it so that every
+    * post-merge-only behaviour of the p2p import path hangs off this one gate rather than a second one that could
+    * disagree with it.
+    */
+  def followsConsensusLayer: Boolean = designatedHead.isDefined
 
   def resolveBranch(headers: NonEmptyList[BlockHeader]): BranchResolutionResult =
     if !doHeadersFormChain(headers) then InvalidBranch
@@ -73,7 +91,38 @@ class BranchResolution(blockchainReader: BlockchainReader) extends Logger:
           // Post-merge: all blocks have difficulty=0, so weight never increases.
           // If the new branch extends the chain without conflicting (no old blocks to replace),
           // accept it. This is the normal case for regular sync importing new blocks.
-          NewBetterBranch(Nil)
+          //
+          // When the batch also RE-PRESENTS blocks we already hold as canonical (commonPrefixLength > 0) the caller
+          // must be told how many, because handing consensus the whole batch sends it down the side-branch path:
+          // `ConsensusImpl.handleBranchImport` sees a parent that is not the head, `importToNewBranch` finds equal
+          // weight, the designated-head walk cannot reach a CL head the node is still far behind, and the answer is
+          // `KeptCurrentBestBranch` — the head's own extension silently dropped. Every post-rewind batch has this shape
+          // (the fetcher re-serves from below the head), so a post-merge node never recovered from its first rewind.
+          // Measured on Platåberget: head stuck at 200 for `135..210` → "Imported no blocks" → `211..260` → "Unknown
+          // branch" → rewind, forever (#1432). No side branch is accepted here: `oldBlocks` is empty, nothing is
+          // displaced. PoS only (`followsConsensusLayer`), so a PoW chain keeps `NewBetterBranch(Nil)` and its
+          // weight-selected re-execution of the whole batch exactly as before.
+          if commonPrefixLength > 0 && followsConsensusLayer then ExtendsCanonicalHead(commonPrefixLength)
+          else NewBetterBranch(Nil)
+        else if newHeaders.nonEmpty && leadsToDesignatedHead(newHeaders) then
+          // PoS arm. It replaces only the old final `else NoChainSwitch`, so whenever its predicate is false the
+          // result is exactly what it was before. On ETC/Mordor/Gorgoroth the predicate is always false because
+          // `designatedHead` is `None`: SyncController builds it only when terminal-total-difficulty is configured,
+          // which no PoW chain config does. That TTD check is the ONLY gate on this path — Node always supplies a
+          // ForkChoiceManager to sync, Engine API enabled or not. See DesignatedHead's scaladoc.
+          //
+          // The arm exists because the two branches above cannot decide a post-merge fork AT ALL. Every header has
+          // difficulty 0, so newWeight == oldWeight always; the second branch then requires oldBlocks.isEmpty, which
+          // is precisely the non-reorg case. A genuine competing branch — oldBlocks non-empty — therefore always fell
+          // through to NoChainSwitch and was dropped WITHOUT BEING EXECUTED. Measured on hive `engine` 6c8bc97: that
+          // is 24 `Invalid Missing Ancestor Syncing ReOrg … CanonicalReOrg=True` failures plus 4
+          // `Withdrawals … Re-Org Sync` timeouts, all of which fetch the branch and then discard it here.
+          //
+          // The replacement test is not "heavier" — nothing is heavier post-merge — it is "did the consensus layer
+          // ask for this branch". That is the correct and only fork choice rule on PoS: the CL names a head and the
+          // EL follows. MESS is not consulted and must not be: it is an ECIP-1100 PoW anti-reorg rule and this arm is
+          // unreachable on the chains it governs.
+          NewBetterBranch(oldBlocks)
         else NoChainSwitch
 
       case Some(Left(err)) =>
@@ -84,6 +133,17 @@ class BranchResolution(blockchainReader: BlockchainReader) extends Logger:
         // after removing common prefix both 'new' and 'old` were empty
         log.warn("Attempted to compare identical branches")
         NoChainSwitch
+
+  /** Is the tip of this candidate branch on the path to the head the consensus layer designated?
+    *
+    * Delegates to the shared [[DesignatedHead.leadsToDesignatedHead]] so this and `ConsensusImpl.importToNewBranch` —
+    * the two sites that must agree — cannot drift apart. False whenever `designatedHead` is `None`, i.e. always on a
+    * PoW chain.
+    */
+  private def leadsToDesignatedHead(newHeaders: List[BlockHeader]): Boolean =
+    newHeaders.lastOption.exists { tip =>
+      DesignatedHead.leadsToDesignatedHead(designatedHead, blockchainReader, tip.hash.value)
+    }
 
   /** Check if MESS should reject the proposed reorg.
     *
@@ -159,6 +219,15 @@ class BranchResolution(blockchainReader: BlockchainReader) extends Logger:
 sealed trait BranchResolutionResult
 
 case class NewBetterBranch(oldBranch: Seq[Block]) extends BranchResolutionResult
+
+/** The batch is our own canonical chain for its first `alreadyCanonical` headers, followed by a pure extension of the
+  * canonical head: nothing is displaced, so this is not a side branch and no fork choice is being made. Only the
+  * extension — the batch minus that prefix — is left to import, and its parent is the head.
+  *
+  * Produced only on a chain that follows a consensus layer (see `BranchResolution.followsConsensusLayer`); a PoW chain
+  * gets `NewBetterBranch(Nil)` for the same input, as before.
+  */
+case class ExtendsCanonicalHead(alreadyCanonical: Int) extends BranchResolutionResult
 
 case object NoChainSwitch extends BranchResolutionResult
 

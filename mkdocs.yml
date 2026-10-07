@@ -122,6 +122,7 @@ extra_javascript:
 # Navigation structure
 nav:
   - Home: index.md
+  - Verification Status: STATUS.md
   
   - Getting Started:
     - getting-started/index.md
@@ -186,6 +187,7 @@ nav:
       - specifications/README.md
       - RLP Encoding: specifications/RLP_INTEGER_ENCODING_SPEC.md
       - EVM Compatibility: specifications/ETHEREUM_MAINNET_EVM_COMPATIBILITY.md
+      - Glamsterdam (Amsterdam): specifications/GLAMSTERDAM.md
     - ADRs:
       - adr/README.md
       - Infrastructure:

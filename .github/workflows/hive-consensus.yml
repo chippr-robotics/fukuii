@@ -1,6 +1,10 @@
 name: Hive · consensus
 
 on:
+  # Release-time only (plus workflow_dispatch). These suites hold a runner for 40-80 min per
+  # push and the org has a small shared runner pool; running them on every staging push
+  # blocked production CI. They gate the staging -> main release PR instead. Targeted runs
+  # belong on a local hive checkout (see docs/testing/hive-local.md).
   pull_request:
     branches: [main, master]
     paths:
@@ -21,6 +25,10 @@ on:
         description: 'Per-sim timelimit (e.g. 40m)'
         required: false
         default: '60m'
+      sim_limit:
+        description: 'Optional --sim.limit regex for a targeted run (e.g. ^legacy-cancun$/^/transitiontests/bchomesteadtodao/)'
+        required: false
+        default: ''
 
 permissions:
   contents: read
@@ -35,5 +43,10 @@ jobs:
     with:
       sim: ethereum/consensus
       label: consensus
+      # Declared in .github/gates.yml (gate `hive-consensus`). A run emitting fewer
+      # than this many results is a truncated run, not a pass.
+      # A targeted run (sim_limit set) legitimately emits a handful of results.
+      min_tests: ${{ github.event.inputs.sim_limit != '' && 1 || 50 }}
       sim_timelimit: ${{ github.event.inputs.sim_timelimit || '60m' }}
+      sim_limit: ${{ github.event.inputs.sim_limit || '' }}
       hive_ref: ${{ github.event.inputs.hive_ref || 'master' }}

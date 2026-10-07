@@ -26,7 +26,9 @@ import com.chipprbots.ethereum.network.p2p.MessageDecoder.*
 import com.chipprbots.ethereum.network.p2p.MessageSerializable
 import com.chipprbots.ethereum.network.p2p.NetworkMessageDecoder
 import com.chipprbots.ethereum.network.p2p.SNAPMessageDecoder
+import com.chipprbots.ethereum.network.p2p.SNAP2MessageDecoder
 import com.chipprbots.ethereum.network.p2p.messages.Capability
+import com.chipprbots.ethereum.network.p2p.messages.WireProtocol.Disconnect
 import com.chipprbots.ethereum.network.p2p.messages.WireProtocol.Hello
 import com.chipprbots.ethereum.network.p2p.messages.WireProtocol.Hello.HelloEnc
 import com.chipprbots.ethereum.network.rlpx.MessageCodec.CompressionPolicy
@@ -84,7 +86,15 @@ object RLPxConnectionHandler:
   val CanonicalEthBase: Int = 0x10
   val CanonicalEthSize: Int = 0x11
   val CanonicalSnapBase: Int = 0x30
-  val CanonicalSnapSize: Int = 0x08
+
+  /** snap/1 reserves 8 canonical slots (0x30-0x37); snap/2 (EIP-8189) adds GetAccessLists/AccessLists at relative
+    * 0x08/0x09, so the canonical window must cover 10 slots regardless of which snap version is actually negotiated on
+    * a given connection. Widening this is safe unconditionally: the DECODER chosen per negotiated snap version
+    * (SNAPMessageDecoder vs SNAP2MessageDecoder, see ethMessageCodecFactory) is what actually determines whether a
+    * translated code means anything — a snap/1 peer that somehow sent a code in the extra 2 slots would still get
+    * rejected as "unknown", just via a differently-numbered canonical id than before.
+    */
+  val CanonicalSnapSize: Int = 0x0a
 
   // =========================================================================
   // Parent-direction types — messages this actor sends to PeerActor
@@ -92,6 +102,11 @@ object RLPxConnectionHandler:
 
   final case class ConnectionEstablished(nodeId: ByteString) extends PeerActor.Command
   case object ConnectionFailed extends PeerActor.Command
+
+  /** The remote refused the connection with a Disconnect frame instead of a Hello. Carries the reason so the parent can
+    * tell a transient refusal (TooManyPeers, AlreadyConnected) from a permanent one.
+    */
+  final case class ConnectionRejected(reason: Long) extends PeerActor.Command
   final case class MessageReceived(message: Message) extends PeerActor.Command
   final case class InitialHelloReceived(message: Hello, capability: Capability) extends PeerActor.Command
 
@@ -111,9 +126,19 @@ object RLPxConnectionHandler:
   // Pure functions
   // =========================================================================
 
+  /** Message-ID slots an eth capability reserves, per go-ethereum's own `protocolLengths`
+    * (eth/protocols/eth/protocol.go): {66:17, 67:17, 68:17, 69:18, 70:18, 71:20, 72:22}.
+    *
+    * This is a property of the specific (name, version) pair, not a constant — devp2p's rlpx.md ("Message ID-based
+    * Multiplexing") says each capability statically specifies how many message IDs it requires, and offsets are
+    * assigned from that. Getting it wrong shifts the SNAP base and misroutes every snap message; see
+    * RLPxCapabilityOffsetsSpec for the regression cases.
+    */
   def ethWireSizeFor(cap: Capability): Int = cap match
-    case Capability.ETH69 => 0x12
-    case _                => 0x11
+    case Capability.ETH69 | Capability.ETH70 => 0x12
+    case Capability.ETH71                    => 0x14
+    case Capability.ETH72                    => 0x16
+    case _                                   => 0x11
 
   case class CapabilityOffsets(peerEthBase: Int, peerEthSize: Int, peerSnapBase: Option[Int])
 
@@ -122,7 +147,7 @@ object RLPxConnectionHandler:
       negotiatedEth: Capability,
       supportsSnap: Boolean
   ): CapabilityOffsets =
-    val snapPresent = peerCaps.contains(Capability.SNAP1)
+    val snapPresent = peerCaps.contains(Capability.SNAP1) || peerCaps.contains(Capability.SNAP2)
     val ethPresent = peerCaps.exists(_.name == com.chipprbots.ethereum.network.p2p.messages.ProtocolFamily.ETH)
     val snapOnlyPeer = snapPresent && !ethPresent
     val peerEthWireSize = ethWireSizeFor(negotiatedEth)
@@ -140,17 +165,23 @@ object RLPxConnectionHandler:
       p2pVersion: Long,
       clientId: String,
       compressionPolicy: CompressionPolicy,
-      supportsSnap: Boolean
+      negotiatedSnap: Option[Capability]
   ): MessageCodec =
     val ethDecoder = EthereumMessageDecoder.ethMessageDecoder(negotiated)
-    val decoderWithSnap =
-      if supportsSnap then NetworkMessageDecoder.orElse(ethDecoder).orElse(SNAPMessageDecoder)
-      else NetworkMessageDecoder.orElse(ethDecoder)
+    val decoderWithSnap = negotiatedSnap match
+      case Some(Capability.SNAP2) => NetworkMessageDecoder.orElse(ethDecoder).orElse(SNAP2MessageDecoder)
+      case Some(_)                => NetworkMessageDecoder.orElse(ethDecoder).orElse(SNAPMessageDecoder)
+      case None                   => NetworkMessageDecoder.orElse(ethDecoder)
     new MessageCodec(frameCodec, decoderWithSnap, p2pVersion, clientId, compressionPolicy)
 
   // =========================================================================
   // HelloCodec (pure value, no actor lifecycle — unchanged)
   // =========================================================================
+
+  /** The remote sent a Disconnect frame where its Hello was expected. Control-flow signal from `HelloCodec.readHello`
+    * to `extractHelloAndTransition`.
+    */
+  final case class PreHelloDisconnect(reason: Long) extends RuntimeException(s"disconnected before Hello: $reason")
 
   case class HelloCodec(secrets: Secrets):
     import MessageCodec.*
@@ -170,12 +201,19 @@ object RLPxConnectionHandler:
       }
       frameCodec.writeFrames(frames)
 
-    private def extractHello(frame: Frame): Option[Hello] =
+    private[rlpx] def extractHello(frame: Frame): Option[Hello] =
       if frame.`type` == Hello.code then
         NetworkMessageDecoder.fromBytes(frame.`type`, frame.payload.toArray) match
           case Left(err)       => throw err
           case Right(h: Hello) => Some(h)
           case Right(_)        => None
+      else if frame.`type` == Disconnect.code then
+        // A peer that refuses us right after the auth handshake (geth/nethermind: TooManyPeers, AlreadyConnected)
+        // sends Disconnect INSTEAD of Hello. Silently waiting for a Hello that never comes made those rejections
+        // indistinguishable from TCP failures (plataberget soak, 2026-10-05).
+        NetworkMessageDecoder.fromBytes(frame.`type`, frame.payload.toArray) match
+          case Right(d: Disconnect) => throw PreHelloDisconnect(d.reason)
+          case _                    => None
       else None
 
   // =========================================================================
@@ -260,7 +298,14 @@ object RLPxConnectionHandler:
   def apply(
       capabilities: List[Capability],
       authHandshaker: AuthHandshaker,
-      messageCodecFactory: (FrameCodec, Capability, Long, String, CompressionPolicy, Boolean) => MessageCodec,
+      messageCodecFactory: (
+          FrameCodec,
+          Capability,
+          Long,
+          String,
+          CompressionPolicy,
+          Option[Capability]
+      ) => MessageCodec,
       rlpxConfiguration: RLPxConfiguration,
       extractorFactory: Secrets => HelloCodec,
       parent: ActorRef[PeerActor.Command],
@@ -288,7 +333,14 @@ object RLPxConnectionHandler:
   final private class Impl(
       capabilities: List[Capability],
       authHandshaker: AuthHandshaker,
-      messageCodecFactory: (FrameCodec, Capability, Long, String, CompressionPolicy, Boolean) => MessageCodec,
+      messageCodecFactory: (
+          FrameCodec,
+          Capability,
+          Long,
+          String,
+          CompressionPolicy,
+          Option[Capability]
+      ) => MessageCodec,
       rlpxConfiguration: RLPxConfiguration,
       extractorFactory: Secrets => HelloCodec,
       parent: ActorRef[PeerActor.Command],
@@ -466,9 +518,9 @@ object RLPxConnectionHandler:
       Capability.negotiate(hello.capabilities.toList, capabilities).map { negotiated =>
         val compressionPolicy =
           CompressionPolicy.fromHandshake(HelloExchangeState.P2pVersion, hello.p2pVersion)
-        val supportsSnap =
-          capabilities.contains(Capability.SNAP1) && hello.capabilities.contains(Capability.SNAP1)
-        if supportsSnap then log.debug("[RLPx] SNAP/1 capability enabled for peer {}", peerId)
+        val negotiatedSnap = Capability.negotiateSnap(hello.capabilities.toList, capabilities)
+        val supportsSnap = negotiatedSnap.isDefined
+        if supportsSnap then log.debug("[RLPx] {} capability enabled for peer {}", negotiatedSnap.get, peerId)
         val inboundTranslator = computeInboundTranslator(hello, negotiated, supportsSnap)
         (
           messageCodecFactory(
@@ -477,7 +529,7 @@ object RLPxConnectionHandler:
             hello.p2pVersion,
             hello.clientId,
             compressionPolicy,
-            supportsSnap
+            negotiatedSnap
           ),
           negotiated,
           inboundTranslator
@@ -545,6 +597,16 @@ object RLPxConnectionHandler:
         seqNumber: Int = 0
     ): Behavior[Command] =
       Try(extractor.readHello(data)) match
+        case Failure(PreHelloDisconnect(reason)) =>
+          log.info(
+            "[RLPx] Peer {} refused the connection before Hello: reason 0x{} ({})",
+            peerId,
+            reason.toHexString,
+            Disconnect.reasonToString(reason)
+          )
+          parent ! ConnectionRejected(reason)
+          stopping()
+
         case Failure(err) =>
           log.warn("[RLPx] Malformed Hello from peer {}: {} — disconnecting", peerId, err.getMessage)
           parent ! ConnectionFailed
@@ -638,12 +700,14 @@ object RLPxConnectionHandler:
 
         case TcpConnectFailed =>
           tcpFailedCount.incrementAndGet()
-          log.debug("[Stopping Connection] TCP connection failed for peer {}", peerId)
+          // TODO: drop the pre-auth TCP-connect/close INFO logs below back to DEBUG for non-maintained peers once the
+          // re-dial failures of the plataberget soak (2026-10-05) are diagnosed.
+          log.info("[Stopping Connection] TCP connect failed for peer {}", peerId)
           parent ! ConnectionFailed
           stopping()
 
         case TcpConnectionTerminated =>
-          log.debug("[Stopping Connection] Bridge terminated while waiting for connect for peer {}", peerId)
+          log.info("[Stopping Connection] TCP connection terminated while connecting to peer {}", peerId)
           parent ! ConnectionFailed
           stopping()
 
@@ -784,7 +848,7 @@ object RLPxConnectionHandler:
         stopping()
 
       case TcpClosed(_) | TcpConnectionTerminated =>
-        log.debug("[Stopping Connection] TCP connection closed/terminated for peer {} during auth response", peerId)
+        log.info("[Stopping Connection] TCP connection closed by peer {} before its auth response arrived", peerId)
         parent ! ConnectionFailed
         stopping()
 
@@ -857,7 +921,7 @@ object RLPxConnectionHandler:
         stopping()
 
       case TcpClosed(_) | TcpConnectionTerminated =>
-        log.debug("[Stopping Connection] TCP connection closed/terminated for peer {} while awaiting Hello", peerId)
+        log.info("[Stopping Connection] TCP connection closed by peer {} while awaiting Hello", peerId)
         stopping()
 
       case _ => Behaviors.unhandled

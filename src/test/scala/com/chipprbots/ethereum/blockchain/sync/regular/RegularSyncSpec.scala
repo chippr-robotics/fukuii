@@ -40,6 +40,7 @@ import com.chipprbots.ethereum.db.storage.StateStorage
 import com.chipprbots.ethereum.domain.*
 import com.chipprbots.ethereum.domain.BlockHeaderImplicits.*
 import com.chipprbots.ethereum.ledger.*
+import com.chipprbots.ethereum.mpt.MerklePatriciaTrie.MissingCodeException
 import com.chipprbots.ethereum.mpt.MerklePatriciaTrie.MissingNodeException
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor.GetHandshakedPeersCmd
@@ -59,6 +60,7 @@ import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.BlockHeaders
 import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.GetBlockBodies as ETHGetBlockBodies
 import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.GetBlockHeaders as ETHGetBlockHeaders
 import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.GetNodeData
+import com.chipprbots.ethereum.network.p2p.messages.SNAP.GetByteCodes
 import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.NewBlock
 import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.NewBlockHashes.BlockHash
 import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.NewBlockHashes.NewBlockHashes
@@ -369,6 +371,17 @@ class RegularSyncSpec
           (() => blockchainReader.getBestBlockNumber).when().returns(capturedBest)
           (() => blockchainReader.getSnapSyncPivotBlock).when().returns(None)
           (blockchainReader.getBlockHeaderByNumber(_: BigInt)).when(lca).returns(Some(lcaHeader))
+          // the canonical index above the LCA, which the rewind must read BEFORE it deletes it
+          testBlocks.filter(b => b.number.value > lca).foreach { b =>
+            (blockchainReader.getCanonicalHashByNumber(_: BigInt)).when(b.number.value).returns(Some(b.hash))
+          }
+          val abandonedByRewind: java.util.concurrent.ConcurrentLinkedQueue[(BigInt, ByteString)] =
+            new java.util.concurrent.ConcurrentLinkedQueue()
+          val recordingReorgState: com.chipprbots.ethereum.consensus.ReorgStateHandler =
+            new com.chipprbots.ethereum.consensus.ReorgStateHandler:
+              override def abandonBlockStates(blocks: Seq[(BigInt, ByteString)]): Unit =
+                blocks.foreach(abandonedByRewind.add(_))
+              override def readoptBlockStates(blocks: Seq[(BigInt, ByteString)]): Unit = ()
 
           override lazy val blockchainWriter: BlockchainWriter = stub[BlockchainWriter]
 
@@ -408,7 +421,9 @@ class RegularSyncSpec
                 networkPeerManager.ref,
                 blockchain,
                 blacklist,
-                this
+                this,
+                None,
+                recordingReorgState
               ),
               "test-fork-recovery-importer"
             )
@@ -439,6 +454,11 @@ class RegularSyncSpec
             .setCanonicalChainHead(_: BigInt, _: com.chipprbots.ethereum.domain.BlockHash, _: BigInt))
             .verify(lca, lcaHeader.hash, capturedBest)
             .once()
+
+          // ... and the blocks the rewind un-canonicalised have their reference-count changes undone (#76).
+          import scala.jdk.CollectionConverters.*
+          abandonedByRewind.asScala.toList shouldBe
+            testBlocks.filter(_.number.value > lca).map(b => (b.number.value, b.hash.value))
 
           testKit.stop(importer)
       )
@@ -650,6 +670,100 @@ class RegularSyncSpec
           fishForFailingBlockNodeRequest()
       )
 
+      // Devnet-8 block 318074: an account the node held had a codeHash and no bytecode, execution ran the call as a
+      // call to an EOA, and the block was reported INVALID. Missing code is now a missing-data condition: the importer
+      // asks a snap peer for it (GetNodeData has no peers on ETH68+) and retries the block.
+      "request missing contract code over SNAP GetByteCodes, not GetNodeData, once bulk recovery has been tried" taggedAs (
+        UnitTest,
+        SyncTest
+      ) in sync(
+        new Fixture:
+          // The bulk recovery is requested once per process; this is every miss after it.
+          BlockImporter.resetBulkCodeRecoveryForTests()
+          BlockImporter.claimBulkCodeRecovery() shouldBe true
+          val failingBlock: Block = testBlocksChunked.head.head
+          val codeHash: ByteString = kec256(ByteString("contract code this node never stored"))
+          setImportResult(
+            failingBlock,
+            IO.pure(
+              BlockImportFailedDueToMissingNode(
+                new MissingCodeException(codeHash, ByteString(Array.fill[Byte](20)(0x16)))
+              )
+            )
+          )
+
+          peersClient.setAutoPilot(new PeersClientAutoPilot)
+
+          regularSync ! SyncProtocol.Start
+
+          peersClient.fishForSpecificMessage(max = 10.seconds) {
+            case PeersClient.Request(GetByteCodes(_, hashes, _), _, _, _) if hashes == Seq(codeHash) => true
+          }
+      )
+
+      // A node that took its state from SNAP can lack thousands of contracts' code; one fetch per contract is one full
+      // re-execution of the block each. The first miss asks SyncController for a bulk bytecode recovery instead, and
+      // does not fetch that hash on its own.
+      "ask SyncController for a bulk bytecode recovery on the first missing contract code" taggedAs (
+        UnitTest,
+        SyncTest
+      ) in sync(
+        new Fixture:
+          BlockImporter.resetBulkCodeRecoveryForTests()
+          storagesInstance.storages.appStateStorage.snapSyncDone().commit() // a SNAP-synced node
+          val failingBlock: Block = testBlocksChunked.head.head
+          val codeHash: ByteString = kec256(ByteString("contract code this node never stored"))
+          setImportResult(
+            failingBlock,
+            IO.pure(
+              BlockImportFailedDueToMissingNode(
+                new MissingCodeException(codeHash, ByteString(Array.fill[Byte](20)(0x16)))
+              )
+            )
+          )
+          peersClient.setAutoPilot(new PeersClientAutoPilot)
+
+          regularSync ! SyncProtocol.Start
+
+          supervisor.fishForSpecificMessage(max = 10.seconds) {
+            case com.chipprbots.ethereum.blockchain.sync.SyncController.WrappedSyncProtocol(
+                  SyncProtocol.MissingCodeNeedsBulkRecovery(number, hash)
+                ) if number == failingBlock.number.value && hash == codeHash =>
+              true
+          }
+          // ...and it did NOT also start a single-hash fetch.
+          val seen = peersClient.receiveWhile(1.second) { case m => m }
+          seen.collect { case PeersClient.Request(_: GetByteCodes, _, _, _) => 1 } shouldBe empty
+      )
+
+      "fetch missing contract code alone, without asking for a bulk recovery, on a node that did not SNAP-sync" taggedAs (
+        UnitTest,
+        SyncTest
+      ) in sync(
+        new Fixture:
+          BlockImporter.resetBulkCodeRecoveryForTests()
+          storagesInstance.storages.appStateStorage.clearSnapSyncDone().commit()
+          val failingBlock: Block = testBlocksChunked.head.head
+          val codeHash: ByteString = kec256(ByteString("contract code of a node that executed its way here"))
+          setImportResult(
+            failingBlock,
+            IO.pure(
+              BlockImportFailedDueToMissingNode(
+                new MissingCodeException(codeHash, ByteString(Array.fill[Byte](20)(0x16)))
+              )
+            )
+          )
+          peersClient.setAutoPilot(new PeersClientAutoPilot)
+
+          regularSync ! SyncProtocol.Start
+
+          peersClient.fishForSpecificMessage(max = 10.seconds) {
+            case PeersClient.Request(GetByteCodes(_, hashes, _), _, _, _) if hashes == Seq(codeHash) => true
+          }
+          // The bulk-recovery slot was NOT consumed by the refused escalation.
+          BlockImporter.claimBulkCodeRecovery() shouldBe true
+      )
+
       "save fetched node" in sync(new Fixture:
         val failingBlock: Block = testBlocksChunked.head.head
 
@@ -660,7 +774,8 @@ class RegularSyncSpec
           storagesInstance.storages.stateStorage,
           storagesInstance.storages.receiptStorage,
           storagesInstance.storages.appStateStorage,
-          storagesInstance.storages.chainWeightStorage
+          storagesInstance.storages.chainWeightStorage,
+          storagesInstance.storages.blockAccessListStorage
         ):
           override def getBestBlockNumber: BigInt = BigInt(0)
           override def getSnapSyncPivotBlock: Option[BigInt] = None
@@ -680,7 +795,9 @@ class RegularSyncSpec
               blockExecutionScheduler: IORuntime,
               blockchainConfig: BlockchainConfig
           ): IO[BlockImportResult] =
-            if saveNodeWasCalled then IO.pure(BlockImportedToTop(Nil))
+            if saveNodeWasCalled then
+              reimportedAfterSave = true
+              IO.pure(BlockImportedToTop(Nil))
             else IO.pure(BlockImportFailedDueToMissingNode(new MissingNodeException(failingBlock.hash.value)))
 
         override lazy val branchResolution: BranchResolution = new BranchResolution(blockchainReader):
@@ -689,6 +806,7 @@ class RegularSyncSpec
 
         peersClient.setAutoPilot(new PeersClientAutoPilot)
 
+        @volatile var reimportedAfterSave: Boolean = false
         var saveNodeWasCalled: Boolean = false
         val nodeData: List[ByteString] = List(ByteString(failingBlock.header.toBytes: Array[Byte]))
 
@@ -709,6 +827,9 @@ class RegularSyncSpec
         regularSync ! SyncProtocol.Start
 
         awaitCond(saveNodeWasCalled)
+        // The importer must resume the import as soon as the node arrives, not wait out the 30 s ResolvingMissingNode
+        // SyncRetryTick (which stays only as a fallback). The bound is far below that tick.
+        awaitCond(reimportedAfterSave, 10.seconds)
       )
     }
 
@@ -986,12 +1107,24 @@ class RegularSyncSpec
         yield assert(status === Status.Syncing(0, Progress(0, lastBlock), None))
       }
 
-      "return updated status after importing blocks" taggedAs DisabledTest in testCaseT { fixture =>
+      "return updated status after importing blocks" in testCaseT { fixture =>
         import fixture.*
 
         for
           _ <- IO {
-            testBlocks.take(5).foreach(setImportResult(_, IO(BlockImportedToTop(Nil))))
+            // BlockImporter imports a batch through evaluateBranch and reports progress for the blocks listed in
+            // BlockImportedToTop's data, as ConsensusAdapter fills it from ExtendedCurrentBestBranch. An empty list
+            // means nothing was imported, so the stub names each block it imports.
+            testBlocks
+              .take(5)
+              .foreach(block =>
+                setImportResult(
+                  block,
+                  IO(
+                    BlockImportedToTop(List(BlockData(block, Nil, ChainWeight.totalDifficultyOnly(block.number.value))))
+                  )
+                )
+              )
 
             peersClient.setAutoPilot(new PeersClientAutoPilot(testBlocks.take(5)))
 

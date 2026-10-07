@@ -15,6 +15,7 @@ import scala.util.Try
 import com.chipprbots.ethereum.consensus.mining.Mining
 import com.chipprbots.ethereum.db.storage.TransactionMappingStorage
 import com.chipprbots.ethereum.db.storage.TransactionMappingStorage.TransactionLocation
+import com.chipprbots.ethereum.domain.BlobTransaction
 import com.chipprbots.ethereum.domain.Block
 import com.chipprbots.ethereum.domain.BlockHash
 import com.chipprbots.ethereum.domain.Blockchain
@@ -26,6 +27,7 @@ import com.chipprbots.ethereum.transactions.PendingTransactionsManager
 import com.chipprbots.ethereum.transactions.PendingTransactionsManager.PendingTransaction
 import com.chipprbots.ethereum.transactions.TransactionPicker
 import com.chipprbots.ethereum.utils.BlockchainConfig
+import com.chipprbots.ethereum.utils.Logger
 
 object EthTxService:
   case class GetTransactionByHashRequest(txHash: ByteString) // rename to match request
@@ -54,7 +56,8 @@ class EthTxService(
     val scheduler: Scheduler
 )(implicit val blockchainConfig: BlockchainConfig)
     extends TransactionPicker
-    with ResolveBlock:
+    with ResolveBlock
+    with Logger:
   import EthTxService.*
   // blockchainConfig is taken as an implicit constructor parameter so multi-instance
   // runtime callers (NodeBuilder) automatically supply the per-instance config in scope
@@ -253,11 +256,15 @@ class EthTxService(
           val ts = tip.map(_.unixTimestamp).getOrElse(Timestamp.Zero)
           val evmConfig = com.chipprbots.ethereum.vm.EvmConfig.forBlock(bestNum, ts, blockchainConfig)
           val tx = signedTransaction.tx
+          // A blob tx submitted without its sidecar cannot be served to peers or proposed: nothing shows the blobs
+          // exist. go-ethereum's pool rejects it with this message (core/txpool/validation.go, validateBlobSidecar).
+          val missingSidecar = tx.isInstanceOf[BlobTransaction] && rawBytesOpt.isEmpty
           val initCodeTooLarge =
             tx.isContractInit &&
               evmConfig.eip3860Enabled &&
               evmConfig.maxInitCodeSize.exists(max => tx.payload.size > max)
-          if initCodeTooLarge then
+          if missingSidecar then IO.pure(Left(JsonRpcError.LogicError("missing sidecar in blob transaction")))
+          else if initCodeTooLarge then
             IO.pure(
               Left(
                 JsonRpcError.InvalidParams(
@@ -272,7 +279,12 @@ class EthTxService(
               rawBytesOpt.map(org.apache.pekko.util.ByteString(_))
             )
             IO.pure(Right(SendRawTransactionResponse(signedTransaction.hash.value)))
-      case Failure(_) =>
+      case Failure(e) =>
+        // Keep the wire response exactly as before (-32600), but do NOT swallow the cause:
+        // a raw-tx decode failure previously surfaced as a bare "not a valid Request object",
+        // which is indistinguishable from a malformed JSON envelope and cost real debugging
+        // time on the EIP-7594 blob wrapper. The decoder's message is the only signal here.
+        log.debug(s"eth_sendRawTransaction could not decode the supplied raw transaction: ${e.getMessage}", e)
         IO.pure(Left(JsonRpcError.InvalidRequest))
 
   /** eth_getTransactionByBlockNumberAndIndex Returns the information about a transaction with the block number and

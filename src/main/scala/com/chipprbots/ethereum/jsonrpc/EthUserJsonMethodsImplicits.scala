@@ -20,6 +20,13 @@ object EthUserJsonMethodsImplicits extends JsonMethodsImplicits:
               addr <- extractAddress(address)
               block <- extractBlockParam(blockValue)
             yield GetCodeRequest(addr, block)
+          // The block parameter is OPTIONAL in execution-apis; when omitted it defaults to
+          // "latest". Without this shorter-arity case the omitted-param form fell through to
+          // InvalidParams (-32602). rpc-compat's *-default-block fixtures send exactly that
+          // form, and five of them failed on this one missing case across this file and
+          // EthProofJsonMethodsImplicits.
+          case Some(JArray((address: JString) :: Nil)) =>
+            extractAddress(address).map(GetCodeRequest(_, BlockParam.Latest))
           case _ => Left(InvalidParams())
 
       def encodeJson(t: GetCodeResponse): JValue = encodeAsHex(t.result)
@@ -33,6 +40,9 @@ object EthUserJsonMethodsImplicits extends JsonMethodsImplicits:
               address <- extractAddress(addressStr)
               block <- extractBlockParam(blockValue)
             yield GetBalanceRequest(address, block)
+          // Optional block param — see eth_getCode above.
+          case Some(JArray((addressStr: JString) :: Nil)) =>
+            extractAddress(addressStr).map(GetBalanceRequest(_, BlockParam.Latest))
           case _ =>
             Left(InvalidParams())
 
@@ -52,6 +62,16 @@ object EthUserJsonMethodsImplicits extends JsonMethodsImplicits:
                 position <- extractQuantity(positionStr)
                 block <- extractBlockParam(blockValue)
               yield GetStorageAtRequest(address, position, block)
+          // Optional block param — see eth_getCode above.
+          case Some(JArray((addressStr: JString) :: (positionStr: JString) :: Nil)) =>
+            val keyHex = positionStr.s.stripPrefix("0x").stripPrefix("0X")
+            if keyHex.length > 64 then
+              Left(InvalidParams(s"""storage key too long (want at most 32 bytes): "${positionStr.s}""""))
+            else
+              for
+                address <- extractAddress(addressStr)
+                position <- extractQuantity(positionStr)
+              yield GetStorageAtRequest(address, position, BlockParam.Latest)
           case _ => Left(InvalidParams())
 
       def encodeJson(t: GetStorageAtResponse): JValue =
@@ -71,6 +91,9 @@ object EthUserJsonMethodsImplicits extends JsonMethodsImplicits:
               address <- extractAddress(addressStr)
               block <- extractBlockParam(blockValue)
             yield GetTransactionCountRequest(address, block)
+          // Optional block param — see eth_getCode above.
+          case Some(JArray((addressStr: JString) :: Nil)) =>
+            extractAddress(addressStr).map(GetTransactionCountRequest(_, BlockParam.Latest))
           case _ => Left(InvalidParams())
 
       def encodeJson(t: GetTransactionCountResponse): JValue = encodeAsHex(t.value)
@@ -84,6 +107,59 @@ object EthUserJsonMethodsImplicits extends JsonMethodsImplicits:
               address <- extractAddress(addressStr)
               block <- extractBlockParam(blockValue)
             yield GetStorageRootRequest(address, block)
+          // Optional block param — see eth_getCode above.
+          case Some(JArray((addressStr: JString) :: Nil)) =>
+            extractAddress(addressStr).map(GetStorageRootRequest(_, BlockParam.Latest))
           case _ => Left(InvalidParams())
 
       def encodeJson(t: GetStorageRootResponse): JValue = encodeAsHex(t.storageRoot)
+
+  given eth_getStorageValues: (JsonMethodDecoder[GetStorageValuesRequest] & JsonEncoder[GetStorageValuesResponse]) =
+    new JsonMethodDecoder[GetStorageValuesRequest] with JsonEncoder[GetStorageValuesResponse]:
+
+      private def decodeSlots(rawAddress: String, slotValues: List[JValue]): Either[JsonRpcError, List[BigInt]] =
+        slotValues.foldLeft[Either[JsonRpcError, List[BigInt]]](Right(Nil)) {
+          case (acc, slotValue: JString) =>
+            val keyHex = slotValue.s.stripPrefix("0x").stripPrefix("0X")
+            if keyHex.length > 64 then
+              Left(InvalidParams(s"""storage key too long (want at most 32 bytes): "${slotValue.s}""""))
+            else
+              for
+                positions <- acc
+                position <- extractQuantity(slotValue)
+              yield positions :+ position
+          case (_, _) => Left(InvalidParams(s"invalid storage key for address $rawAddress"))
+        }
+
+      private def decodeEntries(fields: List[(String, JValue)]): Either[JsonRpcError, Seq[StorageValuesEntry]] =
+        if fields.isEmpty then Left(InvalidParams("empty request"))
+        else
+          fields.foldLeft[Either[JsonRpcError, List[StorageValuesEntry]]](Right(Nil)) {
+            case (acc, (rawAddress, JArray(slotValues))) =>
+              for
+                entries <- acc
+                address <- extractAddress(rawAddress)
+                slots <- decodeSlots(rawAddress, slotValues)
+              yield entries :+ StorageValuesEntry(rawAddress, address, slots)
+            case (_, (rawAddress, _)) => Left(InvalidParams(s"invalid storage keys for address $rawAddress"))
+          }
+
+      def decodeJson(params: Option[JArray]): Either[JsonRpcError, GetStorageValuesRequest] =
+        params match
+          case Some(JArray(JObject(fields) :: Nil)) =>
+            // Block parameter omitted — defaults to latest.
+            decodeEntries(fields).map(GetStorageValuesRequest(_, BlockParam.Latest))
+          case Some(JArray(JObject(fields) :: (blockValue: JValue) :: Nil)) =>
+            for
+              entries <- decodeEntries(fields)
+              block <- extractBlockParam(blockValue)
+            yield GetStorageValuesRequest(entries, block)
+          case _ => Left(InvalidParams())
+
+      def encodeJson(t: GetStorageValuesResponse): JValue =
+        def pad(value: ByteString): ByteString =
+          if value.length < 32 then ByteString(new Array[Byte](32 - value.length)) ++ value else value
+
+        JObject(t.values.toList.map { case (rawAddress, values) =>
+          rawAddress -> JArray(values.map(v => encodeAsHex(pad(v))).toList)
+        })

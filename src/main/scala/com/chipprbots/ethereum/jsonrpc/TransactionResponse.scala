@@ -133,7 +133,8 @@ object TransactionResponse:
       v = Some(stx.signature.v),
       r = Some(stx.signature.r),
       s = Some(stx.signature.s),
-      blockTimestamp = blockHeader.map(h => BigInt(h.unixTimestamp.toLong))
+      // uint64 bit pattern -> unsigned BigInt; see BlockResponse.scala for the sign-extension bug this avoids.
+      blockTimestamp = blockHeader.map(h => h.unixTimestamp.toUnsignedBigInt)
     )
 
   private def encodeAccessList(accessList: List[AccessListItem]): Seq[Map[String, Any]] =

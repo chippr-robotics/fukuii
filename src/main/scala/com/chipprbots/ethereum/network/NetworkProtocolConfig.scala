@@ -4,44 +4,47 @@ import com.typesafe.config.Config as TypesafeConfig
 
 /** Per-network protocol capability gating.
   *
-  * Controls which devp2p protocol versions Fukuii advertises in the Hello handshake. The default values encode the
-  * conservative baseline: ETH68, ETH69, and SNAP1 are universally deployed; ETH70, ETH71, and SNAP2 are opt-in
-  * (disabled by default) because they are either absent from the ETC peer set or not yet in any production release.
+  * Controls which devp2p protocol versions Fukuii advertises in the Hello handshake. The defaults are the conservative
+  * baseline, ETH68 + ETH69 + SNAP1; newer versions are opt-in per network (`network.protocols` in the network's config,
+  * e.g. `conf/hive.conf`, or `-Dfukuii.network.protocols.<flag>=...`).
   *
-  * Parsed from `network.protocols.*` in the HOCON config. Per-network config files override individual flags; the
-  * global `base/network.conf` provides the conservative defaults.
+  * `Capability.negotiate` picks the highest version BOTH sides advertise, so offering more is harmless against peers
+  * that only speak eth/69 + snap/1 (core-geth, Besu-ETC). It is not harmless between two fukuii nodes on a chain
+  * without block access lists: they would settle on snap/2, which drops GetTrieNodes, and trie healing needs it. That
+  * is why the newer versions stay off by default rather than being advertised everywhere.
   *
-  * Reference survey (2026-06-11):
-  *   - eth68: universal — all production clients
-  *   - eth69: all modern clients (EIP-7642); ETC baseline at Olympia
-  *   - eth70: geth v1.17.3 + Besu 26.6.0 — ETH mainnet only, no ETC timeline
-  *   - eth71: Besu 26.6.0 only; geth upstream but not yet in a release
+  * Reference survey (2026-09-23; all versions implemented — see MessageDecoders.scala):
+  *   - eth68/eth69: universal — all production clients; ETC baseline at Olympia
+  *   - eth70 (EIP-7975 receipts), eth71 (EIP-8159 BALs), eth72 (EIP-8070 cells): geth master, ETH-family only
   *   - snap1: universal SNAP baseline
-  *   - snap2: explicitly commented out in geth ("not safe to advertise unconditionally yet")
+  *   - snap2 (EIP-8189): geth master; drops GetTrieNodes/TrieNodes, adds GetAccessLists/AccessLists; geth itself does
+  *     not advertise it unconditionally
   */
 final case class NetworkProtocolConfig(
     eth68: Boolean = true,
     eth69: Boolean = true,
     eth70: Boolean = false,
     eth71: Boolean = false,
+    eth72: Boolean = false,
     snap1: Boolean = true,
     snap2: Boolean = false
 )
 
 object NetworkProtocolConfig:
 
-  /** Parse from a `network.protocols` HOCON sub-config. All six keys must be present. */
+  /** Parse from a `network.protocols` HOCON sub-config. eth72 is optional and defaults to off, so a config written
+    * before it existed keeps loading; every other key must be present.
+    */
   def fromConfig(c: TypesafeConfig): NetworkProtocolConfig =
     NetworkProtocolConfig(
       eth68 = c.getBoolean("eth68"),
       eth69 = c.getBoolean("eth69"),
       eth70 = c.getBoolean("eth70"),
       eth71 = c.getBoolean("eth71"),
+      eth72 = c.hasPath("eth72") && c.getBoolean("eth72"),
       snap1 = c.getBoolean("snap1"),
       snap2 = c.getBoolean("snap2")
     )
 
-  /** Conservative default — ETH68, ETH69, SNAP1 only. Safe to use directly in tests or when a full HOCON config is not
-    * available.
-    */
+  /** The conservative baseline (ETH68, ETH69, SNAP1), for tests or when a full HOCON config is not available. */
   val default: NetworkProtocolConfig = NetworkProtocolConfig()

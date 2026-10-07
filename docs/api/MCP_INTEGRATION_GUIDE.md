@@ -1078,7 +1078,7 @@ app.get("/ready", async (req, res) => {
 ## References
 
 - [MCP Specification](https://modelcontextprotocol.io/specification/2025-03-26)
-- [MCP SDK Documentation](https://github.com/modelcontextprotocol/sdk)
+- [MCP TypeScript SDK (`@modelcontextprotocol/sdk`)](https://github.com/modelcontextprotocol/typescript-sdk)
 - [Fukuii JSON-RPC API Reference](./JSON_RPC_API_REFERENCE.md)
 - [Ethereum JSON-RPC Specification](https://ethereum.org/en/developers/docs/apis/json-rpc/)
 

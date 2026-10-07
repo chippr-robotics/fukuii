@@ -70,7 +70,9 @@ cat > /opt/fukuii/chains/myenterprise-chain.conf << 'EOF'
   magneto-block-number = "0"
   mystique-block-number = "0"
   spiral-block-number = "0"
-  olympia-block-number = "0"
+  # Olympia (ECIP-1111/1112/1121) is unscheduled, as on ETC mainnet and Mordor: deferred on
+  # every chain until a confirmed test block number exists.
+  olympia-block-number = "1000000000000000000"
 
   # Enable ETH-specific forks for maximum compatibility
   muir-glacier-block-number = "0"

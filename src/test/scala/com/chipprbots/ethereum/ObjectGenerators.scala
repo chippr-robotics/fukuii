@@ -9,7 +9,6 @@ import org.bouncycastle.crypto.AsymmetricCipherKeyPair
 import org.scalacheck.Arbitrary
 import org.scalacheck.Gen
 
-import com.chipprbots.ethereum.blockchain.sync.StateSyncUtils.MptNodeData
 import com.chipprbots.ethereum.crypto.ECDSASignature
 import com.chipprbots.ethereum.domain.*
 import com.chipprbots.ethereum.domain.BlockHeader.HeaderExtraFields
@@ -265,7 +264,9 @@ trait ObjectGenerators:
     gasUsed <- bigIntGen
     unixTimestamp <- intGen.map(_.abs)
     extraData <- byteStringOfLengthNGen(8)
-    mixHash <- byteStringOfLengthNGen(8)
+    // A header's mixHash is a 32-byte hash and its nonce 8 bytes; the decoder rejects any other length, as
+    // go-ethereum/core-geth do. An 8-byte mixHash was never a header any client could have sent.
+    mixHash <- byteStringOfLengthNGen(32)
     nonce <- byteStringOfLengthNGen(8)
   yield BlockHeader(
     parentHash = BlockHash(parentHash),
@@ -298,20 +299,6 @@ trait ObjectGenerators:
     size <- intGen(min, max)
     nodes <- Gen.listOfN(size, nodeGen)
   yield nodes
-
-  def genMptNodeData: Gen[MptNodeData] = for
-    receivingAddress <- addressGen
-    code <- byteStringOfLengthNGen(10)
-    storageSize <- intGen(1, 100)
-    storage <- Gen.listOfN(storageSize, intGen(1, 5000))
-    storageAsBigInts = storage.distinct.map(s => (BigInt(s), BigInt(s)))
-    value <- intGen(0, 2000)
-  yield MptNodeData(receivingAddress, Some(code), storageAsBigInts, value)
-
-  def genMultipleNodeData(max: Int): Gen[List[MptNodeData]] = for
-    n <- intGen(1, max)
-    list <- Gen.listOfN(n, genMptNodeData)
-  yield list
 
   val chainWeightGen: Gen[ChainWeight] =
     for td <- bigIntGen

@@ -49,7 +49,8 @@ class TestModeComponentsProvider(
       new ConsensusImpl(
         blockchainReader,
         blockchainWriter,
-        blockExecution
+        blockExecution,
+        reorgState = blockchain
       ),
       blockchainReader,
       node.blockQueue,

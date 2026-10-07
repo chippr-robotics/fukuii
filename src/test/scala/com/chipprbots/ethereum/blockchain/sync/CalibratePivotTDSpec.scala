@@ -23,8 +23,8 @@ import com.chipprbots.ethereum.consensus.mining.TestMining
 import com.chipprbots.ethereum.domain.*
 import com.chipprbots.ethereum.domain.appstate.BlockInfo
 import com.chipprbots.ethereum.ledger.VMImpl
-import com.chipprbots.ethereum.network.NetworkPeerManagerActor.CalibrateChainWeightNow
-import com.chipprbots.ethereum.network.NetworkPeerManagerActor.GetHandshakedPeers
+import com.chipprbots.ethereum.network.NetworkPeerManagerActor.CalibrateChainWeightNowCmd
+import com.chipprbots.ethereum.network.NetworkPeerManagerActor.GetHandshakedPeersCmd
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor.RegisterChainWeightCalibrationTargetCmd
 import com.chipprbots.ethereum.testing.Tags.*
 import com.chipprbots.ethereum.utils.Config.SyncConfig
@@ -245,7 +245,7 @@ class CalibratePivotTDSpec extends AnyFlatSpec with Matchers:
         SyncProtocol.CalibrateChainWeightFromPeer(BigInt(0), BigInt(0))
       )
       testScheduler.timePasses(30.minutes)
-      networkPeerManager.expectMsg(CalibrateChainWeightNow)
+      networkPeerManager.expectMsg(CalibrateChainWeightNowCmd)
 
       // Now install an anchor so attempt 2 succeeds
       val anchorTD: BigInt = BigInt("24640000000000000000000")
@@ -318,7 +318,6 @@ class CalibratePivotTDSpec extends AnyFlatSpec with Matchers:
     override lazy val mining: TestMining = buildTestMining().withValidators(validators)
 
     override def defaultSyncConfig: SyncConfig = super.defaultSyncConfig.copy(
-      doFastSync = false,
       doSnapSync = false,
       peersScanInterval = 4.hours,
       checkForNewBlockInterval = 4.hours,
@@ -344,10 +343,8 @@ class CalibratePivotTDSpec extends AnyFlatSpec with Matchers:
           blockchainReader,
           blockchainWriter,
           storagesInstance.storages.appStateStorage,
-          storagesInstance.storages.blockNumberMappingStorage,
           storagesInstance.storages.evmCodeStorage,
           storagesInstance.storages.stateStorage,
-          storagesInstance.storages.nodeStorage,
           storagesInstance.storages.flatSlotStorage,
           storagesInstance.storages.fastSyncStateStorage,
           consensusAdapter,
@@ -375,15 +372,17 @@ class CalibratePivotTDSpec extends AnyFlatSpec with Matchers:
       .commit()
     blockchainWriter.storeChainWeight(Fixtures.Blocks.Genesis.header.parentHash, ChainWeight.zero).commit()
 
+    @annotation.nowarn("msg=Matchable") // a classic TestProbe hands fishForMessage an Any
     def drainRegistration(): Unit =
       syncController ! SyncController.WrappedSyncProtocol(SyncProtocol.Start)
       networkPeerManager.expectMsgClass(classOf[RegisterChainWeightCalibrationTargetCmd])
       testScheduler.timePasses(31.seconds)
-      // Fish past N GetHandshakedPeers (one per PeerListSupportNg actor) until the T+30s startup
-      // CalibrateChainWeightNow is consumed, leaving the probe queue empty for test assertions.
+      // Fish past the startup GetHandshakedPeersCmd polls (one per peer-list actor: PeersClient,
+      // BlockBroadcasterActor, ...) until the T+30s startup CalibrateChainWeightNowCmd is consumed,
+      // leaving the probe queue empty for test assertions.
       networkPeerManager.fishForMessage(3.seconds) {
-        case CalibrateChainWeightNow => true
-        case GetHandshakedPeers      => false
+        case CalibrateChainWeightNowCmd => true
+        case _: GetHandshakedPeersCmd   => false
       }
 
     /** Store a best block with a specific stored chain weight (simulate pre-Fix-A state). */

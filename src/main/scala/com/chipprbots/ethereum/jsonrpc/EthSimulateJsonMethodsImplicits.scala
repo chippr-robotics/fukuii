@@ -179,7 +179,8 @@ object EthSimulateJsonMethodsImplicits extends JsonMethodsImplicits:
           "sha3Uncles" -> encodeAsHex(h.ommersHash.value),
           "size" -> encodeAsHex(BigInt(Block.size(Block(h, block.body)))),
           "stateRoot" -> encodeAsHex(h.stateRoot.value),
-          "timestamp" -> encodeAsHex(BigInt(h.unixTimestamp.toLong)),
+          // uint64 bit pattern -> unsigned BigInt; see BlockResponse.scala for the sign-extension bug this avoids.
+          "timestamp" -> encodeAsHex(h.unixTimestamp.toUnsignedBigInt),
           "transactionsRoot" -> encodeAsHex(h.transactionsRoot.value),
           "uncles" -> JArray(Nil)
         ) ++ (if h.withdrawalsRoot.isDefined then List("withdrawals" -> JArray(Nil)) else Nil)
@@ -192,9 +193,15 @@ object EthSimulateJsonMethodsImplicits extends JsonMethodsImplicits:
           h.parentBeaconBlockRoot.map(pb => "parentBeaconBlockRoot" -> encodeAsHex(pb.value)).toList
         val requestsField = h.requestsHash.map(rh => "requestsHash" -> encodeAsHex(rh)).toList
         val withdrawalsRootField = h.withdrawalsRoot.map(wr => "withdrawalsRoot" -> encodeAsHex(wr)).toList
+        // Amsterdam (EIP-7928, EIP-7843): only a 23-field header has them, as in go-ethereum's RPCMarshalHeader. The
+        // block `hash` above commits to both, so a response that left them out could not be checked against it.
+        val amsterdamFields =
+          h.blockAccessListHash.map(bal => "blockAccessListHash" -> encodeAsHex(bal)).toList :::
+            h.slotNumber.map(slot => "slotNumber" -> encodeAsHex(slot)).toList
 
         val headerFields =
-          baseFeeField ::: blobFields ::: baseHeaderFields ::: beaconField ::: requestsField ::: withdrawalsRootField
+          baseFeeField ::: blobFields ::: baseHeaderFields ::: beaconField ::: requestsField ::: withdrawalsRootField :::
+            amsterdamFields
 
         // Transactions: hashes or full objects depending on returnFullTransactions flag
         val txField =
@@ -236,7 +243,8 @@ object EthSimulateJsonMethodsImplicits extends JsonMethodsImplicits:
         val baseFields = List(
           "blockHash" -> encodeAsHex(blockHash),
           "blockNumber" -> encodeAsHex(header.number.value),
-          "blockTimestamp" -> encodeAsHex(BigInt(header.unixTimestamp.toLong)),
+          // uint64 bit pattern -> unsigned BigInt; see BlockResponse.scala for the sign-extension bug this avoids.
+          "blockTimestamp" -> encodeAsHex(header.unixTimestamp.toUnsignedBigInt),
           "from" -> encodeAsHex(sender),
           "gas" -> encodeAsHex(tx.gasLimit.value),
           "gasPrice" -> encodeAsHex(effectiveGasPrice),

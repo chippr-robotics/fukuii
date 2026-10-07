@@ -53,6 +53,11 @@ object SNAP:
     val ByteCodesCode: Int = SnapProtocolOffset + 0x05 // 0x35
     val GetTrieNodesCode: Int = SnapProtocolOffset + 0x06 // 0x36
     val TrieNodesCode: Int = SnapProtocolOffset + 0x07 // 0x37
+    // snap/2 (EIP-8189): replaces trie-node healing with BAL-based state catch-up.
+    // Adds GetAccessLists/AccessLists; snap/2 also DROPS GetTrieNodes/TrieNodes from its
+    // handler set (SNAP2MessageDecoder has no case for those two codes — see MessageDecoders.scala).
+    val GetAccessListsCode: Int = SnapProtocolOffset + 0x08 // 0x38
+    val AccessListsCode: Int = SnapProtocolOffset + 0x09 // 0x39
 
   /** GetAccountRange message (0x00)
     *
@@ -635,4 +640,121 @@ object SNAP:
         case other =>
           throw new RuntimeException(
             s"Cannot decode TrieNodes. Expected RLPList, got: ${other.getClass.getSimpleName}"
+          )
+
+  /** GetAccessLists message (0x08, snap/2 only — EIP-8189)
+    *
+    * Request for block access lists (EIP-7928) by block hash. Distinct from ETH/71's `GetBlockAccessLists` — same
+    * positional-response semantics (one entry per requested hash, RLP empty string for an unavailable BAL), served over
+    * the SNAP satellite protocol instead of the ETH base protocol so a snap-sync client can catch up state without also
+    * negotiating eth/71.
+    *
+    * @param requestId
+    *   Request ID to match up responses
+    * @param hashes
+    *   Block hashes to retrieve BALs for
+    * @param responseBytes
+    *   Soft limit at which to stop returning data
+    */
+  case class GetAccessLists(
+      requestId: BigInt,
+      hashes: Seq[ByteString],
+      responseBytes: BigInt
+  ) extends Message:
+    override def code: Int = Codes.GetAccessListsCode
+    override def toShortString: String =
+      s"GetAccessLists(reqId=$requestId, hashes=${hashes.size}, bytes=$responseBytes)"
+
+  object GetAccessLists:
+    implicit class GetAccessListsEnc(val underlyingMsg: GetAccessLists)
+        extends MessageSerializableImplicit[GetAccessLists](underlyingMsg)
+        with RLPSerializable:
+      override def code: Int = Codes.GetAccessListsCode
+      override def toRLPEncodable: RLPEncodeable =
+        import msg.*
+        RLPList(
+          RLPValue(ByteUtils.bigIntToUnsignedByteArray(requestId)),
+          RLPList(hashes.map(h => RLPValue(h.toArray[Byte]))*),
+          RLPValue(ByteUtils.bigIntToUnsignedByteArray(responseBytes))
+        )
+
+    extension (bytes: Array[Byte])
+      def toGetAccessLists: GetAccessLists = rawDecode(bytes) match
+        case RLPList(
+              RLPValue(requestIdBytes),
+              hashesList: RLPList,
+              RLPValue(responseBytesBytes)
+            ) =>
+          val hashes = hashesList.items.map {
+            case RLPValue(hashBytes) => ByteString(hashBytes)
+            case other =>
+              throw new RuntimeException(
+                s"Cannot decode block hash. Expected RLPValue, got: ${other.getClass.getSimpleName}"
+              )
+          }
+          GetAccessLists(
+            ByteUtils.bytesToBigInt(requestIdBytes),
+            hashes,
+            ByteUtils.bytesToBigInt(responseBytesBytes)
+          )
+        case rlpList: RLPList =>
+          throw new RuntimeException(
+            s"Cannot decode GetAccessLists. Expected RLPList[3] with structure " +
+              s"[requestId, hashes, responseBytes], but got RLPList[${rlpList.items.size}]"
+          )
+        case other =>
+          throw new RuntimeException(
+            s"Cannot decode GetAccessLists. Expected RLPList, got: ${other.getClass.getSimpleName}"
+          )
+
+  /** AccessLists message (0x09, snap/2 only — EIP-8189)
+    *
+    * Response to `GetAccessLists`. One entry per requested hash, in request order. Per EIP-8189/EIP-8159, an
+    * unavailable BAL is signalled by the RLP *empty string* (`0x80`) at that position — never by omitting the position,
+    * since an empty list `[]` is itself a valid (empty) access list and must stay distinguishable. Entries are kept as
+    * raw `RLPEncodeable` (opaque passthrough, same pattern as `Receipts68.receiptsForBlocks`) because fukuii does not
+    * decode BAL internals — it only ever originates or forwards the empty-string sentinel today.
+    *
+    * @param requestId
+    *   ID of the request this is a response for
+    * @param accessLists
+    *   One raw entry per requested hash
+    */
+  case class AccessLists(
+      requestId: BigInt,
+      accessLists: Seq[RLPEncodeable]
+  ) extends Message:
+    override def code: Int = Codes.AccessListsCode
+    override def toShortString: String = s"AccessLists(reqId=$requestId, entries=${accessLists.size})"
+
+  object AccessLists:
+    implicit class AccessListsEnc(val underlyingMsg: AccessLists)
+        extends MessageSerializableImplicit[AccessLists](underlyingMsg)
+        with RLPSerializable:
+      override def code: Int = Codes.AccessListsCode
+      override def toRLPEncodable: RLPEncodeable =
+        import msg.*
+        RLPList(
+          RLPValue(ByteUtils.bigIntToUnsignedByteArray(requestId)),
+          RLPList(accessLists*)
+        )
+
+    extension (bytes: Array[Byte])
+      def toAccessLists: AccessLists = rawDecode(bytes) match
+        case RLPList(
+              RLPValue(requestIdBytes),
+              accessListsList: RLPList
+            ) =>
+          AccessLists(
+            ByteUtils.bytesToBigInt(requestIdBytes),
+            accessListsList.items
+          )
+        case rlpList: RLPList =>
+          throw new RuntimeException(
+            s"Cannot decode AccessLists. Expected RLPList[2] with structure " +
+              s"[requestId, accessLists], but got RLPList[${rlpList.items.size}]"
+          )
+        case other =>
+          throw new RuntimeException(
+            s"Cannot decode AccessLists. Expected RLPList, got: ${other.getClass.getSimpleName}"
           )

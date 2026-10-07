@@ -34,6 +34,15 @@ class ReferenceCountNodeStorage(nodeStorage: NodesStorage, bn: BigInt) extends N
 
   import ReferenceCountNodeStorage.*
 
+  /** Net reference-count change this instance has applied per node (the sum over its `update` calls). A staged block
+    * owns one instance for its whole execution, so this is exactly what the block did to the counts; it becomes the
+    * block's undo record (see [[ReferenceCountNodeStorage.abandonRecordWrites]]).
+    */
+  private val netDeltaByNode = scala.collection.mutable.LinkedHashMap.empty[NodeHash, Int]
+
+  /** Non-zero net reference-count changes applied so far, in first-touched order. */
+  def netDeltas: Seq[(NodeHash, Int)] = netDeltaByNode.iterator.filter(_._2 != 0).toSeq
+
   def get(key: ByteString): Option[NodeEncoded] =
     nodeStorage.get(key).map(node => storedNodeFromBytes(node).nodeEncoded.toArray)
 
@@ -55,6 +64,11 @@ class ReferenceCountNodeStorage(nodeStorage: NodesStorage, bn: BigInt) extends N
     // within a map. There is also stored the snapshot version before changes
     val upsertChanges = prepareUpsertChanges(toUpsert, bn)
     val changes = prepareRemovalChanges(toRemove, upsertChanges, bn)
+
+    changes.foreach { case (key, (storedNode, snapshot)) =>
+      val delta = storedNode.references - snapshot.storedNode.fold(0)(_.references)
+      if delta != 0 then netDeltaByNode.update(key, netDeltaByNode.getOrElse(key, 0) + delta)
+    }
 
     val (toUpsertUpdated, snapshots) =
       // Use List prepend (O(1)) instead of Seq append (O(n)) to avoid O(n²) for large node sets
@@ -151,16 +165,25 @@ object ReferenceCountNodeStorage extends PruneSupport with Logger:
     *   NodeStorage
     */
   override def prune(blockNumber: BigInt, nodeStorage: NodesStorage, inMemory: Boolean): Unit =
+    val _ = pruneReporting(blockNumber, nodeStorage, inMemory)
+
+  /** [[prune]], returning the hashes of the trie nodes it deleted, so a cache of decoded nodes can drop them. */
+  def pruneReporting(blockNumber: BigInt, nodeStorage: NodesStorage, inMemory: Boolean): Seq[NodeHash] =
     log.debug(s"Pruning block $blockNumber")
 
+    var removed: Seq[NodeHash] = Nil
     withSnapshotCount(blockNumber, nodeStorage) { (snapshotsCountKey, snapshotCount) =>
       val deathRowKey = drRowKey(blockNumber)
       val snapshotKeys: Seq[NodeHash] = snapshotKeysUpTo(blockNumber, snapshotCount)
       val toBeRemoved = getNodesToBeRemovedInPruning(blockNumber, deathRowKey, nodeStorage)
       nodeStorage.updateCond((deathRowKey +: snapshotsCountKey +: snapshotKeys) ++ toBeRemoved, Nil, inMemory)
+      removed = toBeRemoved
     }
 
+    pruneAbandonRecords(blockNumber, nodeStorage, inMemory)
+
     log.debug(s"Pruned block $blockNumber")
+    removed
 
   /** Looks for the StoredNode snapshots based on block number and saves (or deletes) them
     *
@@ -170,20 +193,152 @@ object ReferenceCountNodeStorage extends PruneSupport with Logger:
     *   NodeStorage
     */
   override def rollback(blockNumber: BigInt, nodeStorage: NodesStorage, inMemory: Boolean): Unit =
+    val _ = rollbackReporting(blockNumber, nodeStorage, inMemory)
+
+  /** [[rollback]], returning the hashes of the trie nodes it removed, so a cache of decoded nodes can drop them.
+    *
+    * A block's snapshots are appended in write order, and one block can write the same node more than once (every
+    * transaction persists the trie, so a hot node is rewritten per transaction). Only the FIRST snapshot of a hash
+    * holds its value from before the block; the later ones are intermediate states the block itself produced. They are
+    * coalesced to that first value so each hash gets exactly one action: restored, or deleted when it did not exist
+    * before the block. Replaying them all emitted both a delete and an upsert for such a hash and the upsert won,
+    * leaving a node the block had created behind with a reference count.
+    *
+    * The individual snapshot keys go too, as [[pruneReporting]] does, so a rolled-back block leaves nothing behind.
+    *
+    * NOT a general undo. Snapshots hold absolute values, so restoring one overwrites any LATER writer of the same node.
+    * It is only correct for the tip of a chain whose later blocks have been undone first; the import path does not use
+    * it (a failed block stages nothing, see [[com.chipprbots.ethereum.db.storage.StagedBlockState]]).
+    */
+  def rollbackReporting(blockNumber: BigInt, nodeStorage: NodesStorage, inMemory: Boolean): Seq[NodeHash] =
+    var removed: Seq[NodeHash] = Nil
     withSnapshotCount(blockNumber, nodeStorage) { (snapshotsCountKey, snapshotCount) =>
-      // Get all the snapshots
-      val snapshots = snapshotKeysUpTo(blockNumber, snapshotCount)
+      val snapshotKeys = snapshotKeysUpTo(blockNumber, snapshotCount)
+      // Snapshots in write order; keep the earliest per node: that is the value from before the block.
+      val earliest = snapshotKeys
         .flatMap(key => nodeStorage.get(key).map(snapshotFromBytes))
+        .foldLeft(Vector.empty[StoredNodeSnapshot] -> Set.empty[NodeHash]) { case ((kept, seen), snapshot) =>
+          if seen.contains(snapshot.nodeKey) then (kept, seen) else (kept :+ snapshot, seen + snapshot.nodeKey)
+        }
+        ._1
       // We need to delete deathrow for rollbacked block
       val deathRowKey = drRowKey(blockNumber)
-      // Transform them to db operations
-      val (toRemove, toUpsert) = snapshots.foldLeft((Seq.empty[NodeHash], Seq.empty[(NodeHash, NodeEncoded)])) {
-        // Undo Actions
-        case ((r, u), StoredNodeSnapshot(nodeHash, Some(sn))) => (r, (nodeHash -> storedNodeToBytes(sn)) +: u)
-        case ((r, u), StoredNodeSnapshot(nodeHash, None))     => (nodeHash +: r, u)
+      // Transform them to db operations: disjoint by construction, one per node
+      val toRemove = earliest.collect { case StoredNodeSnapshot(nodeHash, None) => nodeHash }
+      val toUpsert = earliest.collect { case StoredNodeSnapshot(nodeHash, Some(sn)) =>
+        nodeHash -> storedNodeToBytes(sn)
       }
-      // also remove snapshot as we have done a rollback
-      nodeStorage.updateCond(toRemove :+ snapshotsCountKey :+ deathRowKey, toUpsert, inMemory)
+      // also remove the snapshots as we have done a rollback
+      nodeStorage.updateCond(toRemove ++ snapshotKeys :+ snapshotsCountKey :+ deathRowKey, toUpsert, inMemory)
+      removed = toRemove ++ toUpsert.map(_._1) // upserted nodes get their old reference counts back; drop them too
+    }
+    removed
+
+  // ---- Undo records for blocks that stop being canonical (execute-first reorganisation) ----
+  //
+  // Snapshots, `sck` and `dr` are keyed by block NUMBER and hold absolute pre-images: two siblings at one height write
+  // into the same rows and nothing separates one block's effect from the other's, so a block that is abandoned by a
+  // reorg cannot be undone by number (see [[rollbackReporting]]). Yet its reference-count decrements stay applied, and
+  // a node only that block replaced (the old coinbase leaf) is still live in the sibling that won, at refs 0 on
+  // `dr<number>`: pruned `history` blocks later, found missing much later.
+  //
+  // So each staged block also stores its NET per-node reference-count change, keyed by block HASH, and an abandoned
+  // block is undone RELATIVELY (refs -= delta), which commutes with every other block's writes. The record carries an
+  // applied flag so the undo is idempotent and reversible: a side block that is adopted again (as the parent of a new
+  // branch) has its delta put back.
+
+  private val abandonRecordPrefix = ByteString("bd".getBytes)
+  private val abandonIndexPrefix = ByteString("bdh".getBytes)
+  private val deltaEntryLength = nodeKeyLength + 4
+
+  /** True when `blockHash` has a committed, not-undone record: its reference-count changes are applied right now. */
+  def isBlockApplied(blockHash: ByteString, nodeStorage: NodesStorage): Boolean =
+    nodeStorage.get(abandonRecordKey(blockHash)).exists(bytes => bytes.nonEmpty && bytes(0) == 1.toByte)
+
+  /** `bd<blockHash>` -> flag byte (1 applied, 0 undone) ++ (32-byte node hash ++ 4-byte big-endian delta)*. */
+  def abandonRecordKey(blockHash: ByteString): ByteString = abandonRecordPrefix ++ blockHash
+
+  /** `bdh<blockNumber>` -> the 32-byte hashes of the blocks at that height that have a record; lets prune delete them.
+    */
+  def abandonIndexKey(bn: BigInt): ByteString = abandonIndexPrefix ++ ByteString(bn.toByteArray)
+
+  private def encodeAbandonRecord(applied: Boolean, deltas: Seq[(NodeHash, Int)]): Array[Byte] =
+    val buf = java.nio.ByteBuffer.allocate(1 + deltas.size * deltaEntryLength)
+    buf.put(if applied then 1.toByte else 0.toByte)
+    deltas.foreach { case (key, delta) => buf.put(key.toArray).putInt(delta) }
+    buf.array()
+
+  private def decodeAbandonRecord(bytes: Array[Byte]): (Boolean, Seq[(NodeHash, Int)]) =
+    val buf = java.nio.ByteBuffer.wrap(bytes)
+    val applied = buf.get() == 1.toByte
+    val entries = (0 until (bytes.length - 1) / deltaEntryLength).map { _ =>
+      val key = new Array[Byte](nodeKeyLength)
+      buf.get(key)
+      ByteString.fromArrayUnsafe(key) -> buf.getInt()
+    }
+    (applied, entries)
+
+  /** The writes that store a block's undo record next to the block: the record itself (applied) and its entry in the
+    * per-height index. Empty when the block changed no reference count.
+    */
+  def abandonRecordWrites(
+      bn: BigInt,
+      blockHash: ByteString,
+      deltas: Seq[(NodeHash, Int)],
+      nodeStorage: NodesStorage
+  ): Seq[(NodeHash, Array[Byte])] =
+    if deltas.isEmpty then Nil
+    else
+      val indexKey = abandonIndexKey(bn)
+      val index = ByteString(nodeStorage.get(indexKey).getOrElse(Array.emptyByteArray))
+      val known = index.grouped(nodeKeyLength).contains(blockHash)
+      val indexWrite = if known then Nil else Seq(indexKey -> (index ++ blockHash).toArray)
+      (abandonRecordKey(blockHash) -> encodeAbandonRecord(applied = true, deltas)) +: indexWrite
+
+  /** Take the reference-count changes of the block `blockHash` (at height `bn`) back out, because it is no longer
+    * canonical. No-op when there is no record (pruned, written before undo records existed, or already undone).
+    */
+  def undoBlock(bn: BigInt, blockHash: ByteString, nodeStorage: NodesStorage, inMemory: Boolean): Unit =
+    setBlockApplied(bn, blockHash, applied = false, nodeStorage, inMemory)
+
+  /** The inverse of [[undoBlock]]: the block is canonical again without being executed again. */
+  def redoBlock(bn: BigInt, blockHash: ByteString, nodeStorage: NodesStorage, inMemory: Boolean): Unit =
+    setBlockApplied(bn, blockHash, applied = true, nodeStorage, inMemory)
+
+  private def setBlockApplied(
+      bn: BigInt,
+      blockHash: ByteString,
+      applied: Boolean,
+      nodeStorage: NodesStorage,
+      inMemory: Boolean
+  ): Unit =
+    val recordKey = abandonRecordKey(blockHash)
+    nodeStorage.get(recordKey).map(decodeAbandonRecord).foreach { case (currentlyApplied, deltas) =>
+      if currentlyApplied != applied then
+        val sign = if applied then 1 else -1
+        val deathRowKey = drRowKey(bn)
+        var deathRow = getDeathRow(deathRowKey, nodeStorage)
+        val upserts = deltas.flatMap { case (key, delta) =>
+          nodeStorage.get(key).map(storedNodeFromBytes).map { node =>
+            val updated = node.copy(references = node.references + sign * delta)
+            // A node left unreferenced must be on a death row, or it is never deleted: nothing else will list it.
+            if updated.references == 0 && !deathRow.grouped(nodeKeyLength).contains(key) then deathRow = deathRow ++ key
+            key -> storedNodeToBytes(updated)
+          }
+        }
+        val deathRowWrite = if deathRow.nonEmpty then Seq(deathRowKey -> deathRow.toArray[Byte]) else Nil
+        nodeStorage.updateCond(
+          Nil,
+          upserts ++ deathRowWrite :+ (recordKey -> encodeAbandonRecord(applied, deltas)),
+          inMemory
+        )
+    }
+
+  private def pruneAbandonRecords(blockNumber: BigInt, nodeStorage: NodesStorage, inMemory: Boolean): Unit =
+    val indexKey = abandonIndexKey(blockNumber)
+    nodeStorage.get(indexKey).foreach { index =>
+      val hashes = ByteString(index).grouped(nodeKeyLength).toSeq
+      nodeStorage.updateCond(indexKey +: hashes.map(abandonRecordKey), Nil, inMemory)
     }
 
   private def withSnapshotCount(blockNumber: BigInt, nodeStorage: NodesStorage)(

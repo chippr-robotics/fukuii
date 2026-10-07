@@ -21,6 +21,8 @@ import com.chipprbots.ethereum.rlp.RLPImplicits.given
 import com.chipprbots.ethereum.rlp.{encode as rlpEncode, *}
 import com.chipprbots.ethereum.utils.BlockchainConfig
 import com.chipprbots.ethereum.utils.ByteUtils
+import com.chipprbots.ethereum.utils.NetworkType
+import com.chipprbots.ethereum.vm.EvmConfig
 
 object SignedTransaction:
 
@@ -547,58 +549,141 @@ case class SignedTransactionWithSender(tx: SignedTransaction, senderAddress: Add
 
 object SignedTransactionWithSender:
 
-  /** Validates and recovers senders for a batch of signed transactions. Performs stateless validation (chain ID,
-    * intrinsic gas) before expensive ECDSA recovery. Uses parallel ECDSA recovery across all CPU cores for large
-    * batches (>= 16 txs).
+  /** The rules one pass of the stateless filter applies: the EVM config intrinsic gas is priced under, and whether
+    * EIP-7623's `tx.gas >= floor` rule applies. `eip7623Floor` is consulted only before Amsterdam; an Amsterdam config
+    * carries its own floor rule (see [[coversIntrinsicGas]]).
+    */
+  final private[domain] case class StatelessRules(config: EvmConfig, eip7623Floor: Boolean)
+
+  /** Pool admission: validates and recovers senders for a batch of signed transactions a peer or a re-org hands the
+    * pool. Performs stateless validation (chain ID, nonce cap, intrinsic gas and the calldata floor) before the
+    * expensive ECDSA recovery, under the rules of the fork active at the chain head ([[admissionRules]]). Uses parallel
+    * ECDSA recovery across all CPU cores for large batches (>= 16 txs).
+    *
+    * @param headTimestamp
+    *   the chain head's timestamp. Read only on ETH-family chains, where it selects the timestamp fork; ETC ignores it.
     */
   def getSignedTransactions(
-      stxs: Seq[SignedTransaction]
+      stxs: Seq[SignedTransaction],
+      headTimestamp: => Timestamp
   )(implicit blockchainConfig: BlockchainConfig): Seq[SignedTransactionWithSender] =
-    // Cheap stateless pre-filters before expensive ECDSA recovery
-    val validated = getStatelessValidTransactions(stxs)
-
-    if validated.size < 16 then
-      // Small batch: sequential to avoid overhead
-      recoverSenders(validated)
-    else
-      // Large batch: parallel ECDSA recovery across all cores
-      getSignedTransactionsParallel(validated)
+    filterAndRecover(stxs, admissionRules(headTimestamp))
 
   /** Same validation as [[getSignedTransactions]], but sender recovery runs on the caller's thread. This is used by
     * upstream batch schedulers that already provide parallelism and need deterministic chunk admission order.
     */
   def getSignedTransactionsSequential(
+      stxs: Seq[SignedTransaction],
+      headTimestamp: => Timestamp
+  )(implicit blockchainConfig: BlockchainConfig): Seq[SignedTransactionWithSender] =
+    recoverSenders(statelessValid(stxs, admissionRules(headTimestamp)))
+
+  /** The stateless half of [[getSignedTransactions]]: what the pool would admit, before any sender is recovered. */
+  def getStatelessValidTransactions(
+      stxs: Seq[SignedTransaction],
+      headTimestamp: => Timestamp
+  )(implicit blockchainConfig: BlockchainConfig): Seq[SignedTransaction] =
+    statelessValid(stxs, admissionRules(headTimestamp))
+
+  /** The transactions a STORED block carries, with their senders, for re-executing that block (the debug_trace*,
+    * trace_* and debug_intermediateRoots replays).
+    *
+    * These are not candidates for admission: the block was validated when it was imported, under its own fork. So an
+    * Amsterdam block keeps every transaction whose sender recovers, whatever fork the head has since reached. Filtering
+    * them with the pool's rules dropped valid transactions from a replay; every transaction after a dropped one then
+    * replayed against the wrong state. At Amsterdam that was certain to happen: the pool filter never selected
+    * Amsterdam rules before WI-14, so a 12,000-gas self-transfer in an Amsterdam block (valid by EIP-2780) failed its
+    * 21,000 intrinsic check and vanished from the trace.
+    *
+    * A block before Amsterdam, and every ETC block, is filtered exactly as every replay always was, by
+    * [[latestConfiguredForkRules]], so pre-Amsterdam and ETC trace output does not move.
+    */
+  def getSignedTransactionsOfBlock(
+      header: BlockHeader,
       stxs: Seq[SignedTransaction]
   )(implicit blockchainConfig: BlockchainConfig): Seq[SignedTransactionWithSender] =
-    recoverSenders(getStatelessValidTransactions(stxs))
+    if blockchainConfig.isAmsterdamTimestamp(header.unixTimestamp) then recoverAll(stxs)
+    else filterAndRecover(stxs, latestConfiguredForkRules)
 
-  def getStatelessValidTransactions(
+  /** The pool's stateless rules: those of the fork ACTIVE AT THE CHAIN HEAD, as go-ethereum's pool applies them
+    * (`legacypool.ValidateTxBasics` → `txpool.ValidateTransaction(tx, pool.currentHead, …)`, which takes its `rules`
+    * from `head.Time`, then checks intrinsic gas, the floor from Prague and, at Amsterdam, both against `MaxTxGas`).
+    *
+    * ETH: the fork the head's timestamp selects, Amsterdam included, with EIP-7623's floor rule from Prague
+    * ([[com.chipprbots.ethereum.ledger.BlockPreparator.eip7623Active]], the block validator's own predicate). Before
+    * WI-14 the filter used the latest CONFIGURED fork up to Osaka as a proxy for "now". That proxy never named
+    * Amsterdam, and where Amsterdam was scheduled it could not tell which floor applied, so it applied none.
+    *
+    * The block-number coordinate stays `olympiaBlockNumber`, which on an ETH chain is London's block: every
+    * block-numbered fork an ETH-family chain has, as before.
+    *
+    * ETC: unchanged. Olympia's config by construction (built at `olympiaBlockNumber`), without EIP-7623's floor rule:
+    * this filter does not read the ETC head, so it cannot tell whether Olympia is active. The head is not read on ETC.
+    */
+  private[domain] def admissionRules(headTimestamp: => Timestamp)(implicit
+      blockchainConfig: BlockchainConfig
+  ): StatelessRules =
+    val olympiaBlock = blockchainConfig.forkBlockNumbers.olympiaBlockNumber
+    if blockchainConfig.networkType == NetworkType.ETH then
+      val head = headTimestamp
+      StatelessRules(
+        EvmConfig.forBlock(olympiaBlock, head, blockchainConfig),
+        com.chipprbots.ethereum.ledger.BlockPreparator.eip7623Active(olympiaBlock, head)
+      )
+    else StatelessRules(EvmConfig.forBlock(olympiaBlock, blockchainConfig), eip7623Floor = false)
+
+  /** The rules every replay of a stored block filtered its transactions with before WI-14, kept verbatim for the
+    * replays of pre-Amsterdam and ETC blocks so their output does not move ([[getSignedTransactionsOfBlock]]).
+    *
+    * ETH: the latest configured fork timestamp up to Osaka, as a proxy for "now"; EIP-7623's floor rule only on a chain
+    * with no Amsterdam timestamp. ETC: Olympia's config, no floor rule.
+    *
+    * Known limitation, deliberately not changed here because it is pre-Amsterdam behaviour: a block's transactions are
+    * filtered with rules that are not the block's own. On an ETH chain without Amsterdam (mainnet today) a pre-Prague
+    * block's transaction below EIP-7623's floor is dropped from the replay.
+    */
+  private[domain] def latestConfiguredForkRules(implicit blockchainConfig: BlockchainConfig): StatelessRules =
+    if blockchainConfig.networkType == NetworkType.ETH then
+      val ft = blockchainConfig.forkTimestamps
+      val latestTimestamp: Long =
+        ft.osakaTimestamp
+          .orElse(ft.bpo2Timestamp)
+          .orElse(ft.bpo1Timestamp)
+          .orElse(ft.pragueTimestamp)
+          .orElse(ft.cancunTimestamp)
+          .orElse(ft.shanghaiTimestamp)
+          .getOrElse(0L)
+      val olympiaBlock = blockchainConfig.forkBlockNumbers.olympiaBlockNumber
+      StatelessRules(
+        EvmConfig.forBlock(olympiaBlock, Timestamp(latestTimestamp), blockchainConfig),
+        com.chipprbots.ethereum.ledger.BlockPreparator.eip7623Active(olympiaBlock, Timestamp(latestTimestamp)) &&
+          ft.amsterdamTimestamp.isEmpty
+      )
+    else
+      StatelessRules(EvmConfig.forBlock(blockchainConfig.forkBlockNumbers.olympiaBlockNumber, blockchainConfig), false)
+
+  /** Stateless filter, then sender recovery: sequential for a small batch, across all cores for a large one. */
+  private def filterAndRecover(
+      stxs: Seq[SignedTransaction],
+      rules: StatelessRules
+  )(implicit blockchainConfig: BlockchainConfig): Seq[SignedTransactionWithSender] =
+    recoverAll(statelessValid(stxs, rules))
+
+  private def recoverAll(
       stxs: Seq[SignedTransaction]
-  )(implicit blockchainConfig: BlockchainConfig): Seq[SignedTransaction] =
-    import com.chipprbots.ethereum.vm.EvmConfig
-    import com.chipprbots.ethereum.utils.NetworkType
-    // For ETH chains, apply timestamp-based fork overrides so that EIP-3860 initcode metering
-    // is included in the intrinsic gas check (omitting it under-estimates cost for contract-creation
-    // txs post-Shanghai). Use the latest configured fork timestamp as a stateless proxy for "now".
-    // ETC uses the 2-arg path: timestamp forks do not exist on ETC.
-    val config =
-      if blockchainConfig.networkType == NetworkType.ETH then
-        val ft = blockchainConfig.forkTimestamps
-        val latestTimestamp: Long =
-          ft.osakaTimestamp
-            .orElse(ft.bpo2Timestamp)
-            .orElse(ft.bpo1Timestamp)
-            .orElse(ft.pragueTimestamp)
-            .orElse(ft.cancunTimestamp)
-            .orElse(ft.shanghaiTimestamp)
-            .getOrElse(0L)
-        EvmConfig.forBlock(
-          blockchainConfig.forkBlockNumbers.olympiaBlockNumber,
-          Timestamp(latestTimestamp),
-          blockchainConfig
-        )
-      else EvmConfig.forBlock(blockchainConfig.forkBlockNumbers.olympiaBlockNumber, blockchainConfig)
+  )(implicit blockchainConfig: BlockchainConfig): Seq[SignedTransactionWithSender] =
+    if stxs.size < 16 then
+      // Small batch: sequential to avoid overhead
+      recoverSenders(stxs)
+    else
+      // Large batch: parallel ECDSA recovery across all cores
+      getSignedTransactionsParallel(stxs)
 
+  private def statelessValid(
+      stxs: Seq[SignedTransaction],
+      rules: StatelessRules
+  )(implicit blockchainConfig: BlockchainConfig): Seq[SignedTransaction] =
+    val StatelessRules(config, eip7623Floor) = rules
     val eip2681NonceCap = BigInt(2).pow(64) - 2 // EIP-2681: nonces >= 2^64-1 rejected
     stxs.filter { stx =>
       val tx = stx.tx
@@ -616,10 +701,61 @@ object SignedTransactionWithSender:
         val authListSize = tx match
           case sct: SetCodeTransaction => sct.authorizationList.size
           case _                       => 0
-        val intrinsicGas =
-          config.calcTransactionIntrinsicGas(tx.payload, tx.isContractInit, Transaction.accessList(tx), authListSize)
-        tx.gasLimit.value >= intrinsicGas
+        coversIntrinsicGas(config, stx, authListSize, eip7623Floor)
     }
+
+  /** Whether `stx`'s gas limit covers its intrinsic gas under `config` — and, under Amsterdam, the rest of
+    * execution-specs `validate_transaction`'s gas rule: `tx.gas >= max(intrinsic, calldata floor)` with both at most
+    * TX_MAX_GAS_LIMIT (EIP-7976 / EIP-7981 / EIP-8037), the rule `StdSignedTransactionValidator` applies to blocks.
+    * Before Amsterdam, `eip7623Floor` adds EIP-7623's `tx.gas >= 21,000 + 10 * tokens` (see [[admissionRules]] and
+    * [[latestConfiguredForkRules]] for where).
+    *
+    * The sender enters intrinsic gas and the floor only through transactionBaseCost, and only from Amsterdam, where a
+    * self-transfer (to == sender) costs less. Recovering the sender is an ECDSA public-key recovery, and the stateless
+    * filter runs sequentially on its caller's thread for a whole announcement batch; for 2,000 txs that kept the
+    * SignedTransactionsFilterActor busy for seconds. So the check runs first with a sender that is never tx.to. Neither
+    * cost is ever below the true one, so passing it is exact. The real sender is recovered only when that check fails
+    * under Amsterdam. The fallback is harmless: `recoverSenders` drops txs whose sender cannot be recovered.
+    */
+  private[domain] def coversIntrinsicGas(
+      config: com.chipprbots.ethereum.vm.EvmConfig,
+      stx: SignedTransaction,
+      authListSize: Int,
+      eip7623Floor: Boolean
+  )(implicit blockchainConfig: BlockchainConfig): Boolean =
+    val tx = stx.tx
+    def covers(sender: Address): Boolean =
+      val intrinsicGas = config.calcTransactionIntrinsicGas(
+        tx.payload,
+        tx.isContractInit,
+        Transaction.accessList(tx),
+        authListSize,
+        tx.receivingAddress,
+        UInt256(tx.value),
+        sender
+      )
+      if !config.amsterdamEnabled then
+        val floor: BigInt =
+          if !eip7623Floor then BigInt(0)
+          else
+            com.chipprbots.ethereum.ledger.BlockPreparator.calcFloorDataGas(
+              tx.payload,
+              config.transactionBaseCost(tx.receivingAddress, UInt256(tx.value), sender)
+            )
+        tx.gasLimit.value >= intrinsicGas.max(floor)
+      else
+        val floor = config.calcAmsterdamCalldataFloorGas(
+          tx.payload,
+          Transaction.accessList(tx),
+          tx.receivingAddress,
+          UInt256(tx.value),
+          sender
+        )
+        val required = intrinsicGas.max(floor)
+        tx.gasLimit.value >= required && required <= com.chipprbots.ethereum.vm.AmsterdamGas.TxMaxGasLimit
+    val notTheRecipient = if tx.receivingAddress.contains(Address(0)) then Address(1) else Address(0)
+    covers(notTheRecipient) ||
+    (config.amsterdamEnabled && covers(SignedTransaction.getSender(stx).getOrElse(Address(0))))
 
   private def recoverSenders(
       stxs: Seq[SignedTransaction]

@@ -27,7 +27,15 @@ trait MptStorage:
   def storeRawNodes(nodes: Seq[(ByteString, Array[Byte])]): Unit =
     throw new UnsupportedOperationException("Raw node storage not supported by this implementation")
 
-class SerializingMptStorage(storage: NodesKeyValueStorage) extends MptStorage:
+class SerializingMptStorage(storage: NodesKeyValueStorage, val executionCache: Option[DecodedNodeCache] = None)
+    extends MptStorage:
+
+  /** This storage with its state storage's decoded-node cache in front, for BLOCK EXECUTION only. Everything else
+    * (SNAP, healing, recovery, presence checks) keeps using the storage itself, which never consults the cache.
+    */
+  def cachedForExecution: MptStorage =
+    executionCache.fold[MptStorage](this)(cache => new CachingMptStorage(this, cache))
+
   override def get(nodeId: Array[Byte]): MptNode =
     val key = ByteString(nodeId)
     storage

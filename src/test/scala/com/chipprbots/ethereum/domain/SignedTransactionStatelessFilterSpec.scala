@@ -49,6 +49,9 @@ class SignedTransactionStatelessFilterSpec extends AnyFlatSpec with Matchers:
       forkTimestamps = ForkTimestamps(shanghaiTimestamp = Some(0L)) // always activated
     )
 
+  // The chain head the pool filters under (WI-14: the fork active at the head). Past Shanghai on `ethConfig`.
+  private val HeadPastShanghai: Timestamp = Timestamp(1_000L)
+
   // 1024 non-zero bytes of initcode.  Non-zero matters: G_txdatanonzero = 16, G_txdatazero = 4.
   // Keeping it all non-zero gives a predictable data-cost calculation.
   private val initcode: ByteString = ByteString(Array.fill(1024)(0xff.toByte))
@@ -86,7 +89,7 @@ class SignedTransactionStatelessFilterSpec extends AnyFlatSpec with Matchers:
     implicit val cfg: BlockchainConfig = ethConfig
     val tx = makeCreateTx(LondonIntrinsicGas)
     // Post-fix: timestamp-aware forBlock is used → eip3860Enabled = true → tx rejected
-    SignedTransactionWithSender.getStatelessValidTransactions(Seq(tx)) shouldBe empty
+    SignedTransactionWithSender.getStatelessValidTransactions(Seq(tx), HeadPastShanghai) shouldBe empty
   }
 
   it should "admit a contract-creation tx whose gasLimit meets the Shanghai intrinsic gas (EIP-3860 included)" taggedAs (
@@ -95,7 +98,7 @@ class SignedTransactionStatelessFilterSpec extends AnyFlatSpec with Matchers:
   ) in {
     implicit val cfg: BlockchainConfig = ethConfig
     val tx = makeCreateTx(ShanghaiIntrinsicGas)
-    SignedTransactionWithSender.getStatelessValidTransactions(Seq(tx)) should have size 1
+    SignedTransactionWithSender.getStatelessValidTransactions(Seq(tx), HeadPastShanghai) should have size 1
   }
 
   it should "admit a non-creation tx unaffected by EIP-3860 (call tx with same payload)" taggedAs (
@@ -118,7 +121,7 @@ class SignedTransactionStatelessFilterSpec extends AnyFlatSpec with Matchers:
       signatureRandom = dummyR,
       signature = dummyS
     )
-    SignedTransactionWithSender.getStatelessValidTransactions(Seq(callTx)) should have size 1
+    SignedTransactionWithSender.getStatelessValidTransactions(Seq(callTx), HeadPastShanghai) should have size 1
   }
 
   // ── §ETH-T6-B: EIP-2681 nonce overflow in stateless mempool filter ───────────
@@ -147,7 +150,8 @@ class SignedTransactionStatelessFilterSpec extends AnyFlatSpec with Matchers:
   ) in {
     implicit val cfg: BlockchainConfig = ethConfig
     SignedTransactionWithSender.getStatelessValidTransactions(
-      Seq(makeCallTxWithNonce(BigInt(2).pow(64) - 2))
+      Seq(makeCallTxWithNonce(BigInt(2).pow(64) - 2)),
+      HeadPastShanghai
     ) should have size 1
   }
 
@@ -157,7 +161,8 @@ class SignedTransactionStatelessFilterSpec extends AnyFlatSpec with Matchers:
   ) in {
     implicit val cfg: BlockchainConfig = ethConfig
     SignedTransactionWithSender.getStatelessValidTransactions(
-      Seq(makeCallTxWithNonce(BigInt(2).pow(64) - 1))
+      Seq(makeCallTxWithNonce(BigInt(2).pow(64) - 1)),
+      HeadPastShanghai
     ) shouldBe empty
   }
 
@@ -167,7 +172,8 @@ class SignedTransactionStatelessFilterSpec extends AnyFlatSpec with Matchers:
   ) in {
     implicit val cfg: BlockchainConfig = ethConfig
     SignedTransactionWithSender.getStatelessValidTransactions(
-      Seq(makeCallTxWithNonce(BigInt(2).pow(64)))
+      Seq(makeCallTxWithNonce(BigInt(2).pow(64))),
+      HeadPastShanghai
     ) shouldBe empty
   }
 
@@ -176,7 +182,68 @@ class SignedTransactionStatelessFilterSpec extends AnyFlatSpec with Matchers:
     ConsensusTest
   ) in {
     implicit val cfg: BlockchainConfig = etcConfig
+    // The ETC filter never reads the head: this one fails the test if it is read.
     SignedTransactionWithSender.getStatelessValidTransactions(
-      Seq(makeCallTxWithNonce(BigInt(2).pow(64) - 1))
+      Seq(makeCallTxWithNonce(BigInt(2).pow(64) - 1)),
+      fail("the ETC stateless filter read the chain head")
     ) shouldBe empty
+  }
+
+  // ── coversIntrinsicGas: exact without recovering the sender ────────────────────
+  // The stateless filter used to recover every sender (ECDSA) before checking intrinsic gas, which kept the
+  // SignedTransactionsFilterActor busy for seconds on hive's 2,000-tx LargeTxRequest. It now checks first with a
+  // sender that is never tx.to and recovers only when that fails under Amsterdam. This pins that the answer is
+  // unchanged: for every case it must equal gasLimit >= intrinsic gas computed with the TRUE sender.
+
+  "coversIntrinsicGas" should "agree with the true-sender rule before and under Amsterdam" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in {
+    import com.chipprbots.ethereum.crypto
+    import com.chipprbots.ethereum.vm.EvmConfig
+    implicit val cfg: BlockchainConfig = ethConfig
+    val keyPair = crypto.generateKeyPair(new java.security.SecureRandom())
+    val sender = Address(keyPair)
+    val other = Address(Hex.decode("00000000000000000000000000000000000000aa"))
+    val preAmsterdam = EvmConfig.forBlock(BigInt(6_000_000), Timestamp(0L), ethConfig)
+    val amsterdam = preAmsterdam.copy(amsterdamEnabled = true)
+
+    def tx(to: Option[Address], value: BigInt, gasLimit: BigInt): SignedTransaction =
+      SignedTransaction.sign(
+        TransactionWithDynamicFee(
+          chainId = ethConfig.chainId.value,
+          nonce = BigInt(0),
+          maxPriorityFeePerGas = BigInt(1),
+          maxFeePerGas = BigInt(1000),
+          gasLimit = GasAmount(gasLimit),
+          receivingAddress = to,
+          value = value,
+          payload = ByteString.empty,
+          accessList = Nil
+        ),
+        keyPair,
+        Some(ethConfig.chainId.value)
+      )
+
+    def trueIntrinsic(config: EvmConfig, to: Option[Address], value: BigInt): BigInt =
+      config.calcTransactionIntrinsicGas(ByteString.empty, to.isEmpty, Nil, 0, to, UInt256(value), sender)
+
+    val recipients = Seq(Some(sender), Some(Address(0)), Some(other), None)
+    // With no calldata EIP-7623's floor is the bare 21,000, so it never binds and both settings must agree.
+    for
+      config <- Seq(preAmsterdam, amsterdam)
+      eip7623Floor <- Seq(false, true)
+      to <- recipients
+      value <- Seq(BigInt(0), BigInt(1))
+      exact = trueIntrinsic(config, to, value)
+      gasLimit <- Seq(exact - 1, exact, exact + 1, BigInt(21_000), BigInt(30_000))
+      if gasLimit > 0
+    do
+      withClue(
+        s"amsterdam=${config.amsterdamEnabled} eip7623Floor=$eip7623Floor to=$to value=$value gasLimit=$gasLimit " +
+          s"exact=$exact: "
+      ) {
+        SignedTransactionWithSender.coversIntrinsicGas(config, tx(to, value, gasLimit), 0, eip7623Floor) shouldBe
+          (gasLimit >= exact)
+      }
   }

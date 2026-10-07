@@ -165,7 +165,8 @@ object FilterManager:
                   address = log.loggerAddress,
                   data = log.data,
                   topics = log.logTopics,
-                  blockTimestamp = Some(BigInt(block.header.unixTimestamp.toLong))
+                  // uint64 bit pattern -> unsigned BigInt; see BlockResponse.scala for the sign-extension bug this avoids.
+                  blockTimestamp = Some(block.header.unixTimestamp.toUnsignedBigInt)
                 )
               }
           else Nil

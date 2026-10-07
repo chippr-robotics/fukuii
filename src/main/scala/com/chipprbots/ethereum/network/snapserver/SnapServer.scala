@@ -520,6 +520,17 @@ object SnapServer extends Logger:
         }
     ByteCodes(requestId = requestId, codes = collected.toList)
 
+  /** Serve an incoming `GetAccessLists` request (snap/2 only — EIP-8189).
+    *
+    * fukuii has no EIP-7928 block-access-list storage, so every requested hash gets the RLP empty-string sentinel
+    * (`0x80`) at its position — the honest "unavailable" answer per EIP-8189 (an empty *list* is itself a valid,
+    * distinguishable BAL, so a skipped position is not an option). Positional order matches the request 1:1. Shares the
+    * same response contract as ETH71's `GetBlockAccessLists` (BlockchainHostActor.handleBlockFastDownload) — both will
+    * start returning real BALs the moment BAL storage exists, with no wire-format change on either side.
+    */
+  def serveAccessLists(requestId: BigInt, hashes: Seq[ByteString]): AccessLists =
+    AccessLists(requestId, hashes.map(_ => RLPValue(Array.emptyByteArray)))
+
   /** Walk the trie following `nibbles` and return the encoded node found at that exact path (as a raw MPT node), or
     * None if the path doesn't terminate cleanly at a node.
     */

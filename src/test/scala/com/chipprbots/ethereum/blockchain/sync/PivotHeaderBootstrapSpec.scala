@@ -35,10 +35,10 @@ class PivotHeaderBootstrapSpec extends ScalaTestWithActorTestKit() with AnyFlatS
   val ds: EphemDataSource = EphemDataSource()
   val noopBatch: DataSourceBatchUpdate = DataSourceBatchUpdate(ds, Array.empty)
 
-  val noopWriter: BlockchainWriter = new BlockchainWriter(null, null, null, null, null, null, null):
+  val noopWriter: BlockchainWriter = new BlockchainWriter(null, null, null, null, null, null, null, null):
     override def storeBlockHeader(blockHeader: BlockHeader): DataSourceBatchUpdate = noopBatch
 
-  val throwingWriter: BlockchainWriter = new BlockchainWriter(null, null, null, null, null, null, null):
+  val throwingWriter: BlockchainWriter = new BlockchainWriter(null, null, null, null, null, null, null, null):
     override def storeBlockHeader(blockHeader: BlockHeader): DataSourceBatchUpdate =
       throw new RuntimeException("storage error")
 

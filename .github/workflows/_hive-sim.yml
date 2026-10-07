@@ -30,8 +30,19 @@ on:
         required: false
         type: string
         default: ''
+      sim_skip:
+        description: |
+          Optional `|`-separated list of exact test names the simulator must NOT run. It is for a
+          test that cannot fail cleanly, e.g. one whose tool waits forever, where skipping it is the
+          only way the rest of the suite runs at all. scripts/ci/hive_skip_regex.py turns the list
+          into a test regex matching every other name, so tests added upstream still run.
+          `sim_limit` must then name suites only (no `/`). Every name must be a declared waiver
+          in .github/gates.yml, checked by Gate Integrity (C7) exactly like a gate_exclude branch.
+        required: false
+        type: string
+        default: ''
       sim_buildarg:
-        description: 'Optional value for --sim.buildarg (e.g. disable_strict_exception_matching=fukuii)'
+        description: 'Optional --sim.buildarg values, one ARG=VALUE per line (e.g. disable_strict_exception_matching=fukuii)'
         required: false
         type: string
         default: ''
@@ -40,6 +51,22 @@ on:
         required: false
         type: string
         default: '40m'
+      timeout_minutes:
+        description: |
+          Job ceiling. 105 covers an 80m --sim.timelimit plus image builds and artifact upload.
+          The sharded full pass (hive-full.yml) runs 300m shards and raises this to 350, under
+          GitHub's 360-minute cap for hosted jobs. A job killed at the ceiling loses its artifacts.
+        required: false
+        type: number
+        default: 105
+      checktimelimit:
+        description: |
+          Value for --client.checktimelimit: how long hive waits for a client to open its RPC
+          port. For the consensus simulator that window includes importing the test's chain,
+          so it bounds the heaviest single vector, not only JVM startup.
+        required: false
+        type: string
+        default: '120s'
       parallelism:
         description: 'Value for --sim.parallelism'
         required: false
@@ -47,6 +74,20 @@ on:
         default: 4
       pass_threshold:
         description: 'Fail the run if passed < threshold (0 = never fail)'
+        required: false
+        type: number
+        default: 0
+      min_tests:
+        description: |
+          Minimum number of test results the simulator must produce for the run
+          to be considered meaningful. A run that emits fewer than this many
+          results FAILS, regardless of how many of them passed.
+
+          This exists because a simulator that never started and a simulator
+          that passed everything used to be indistinguishable: both ended with
+          passed=0 failed=0 and a green job. Absence of evidence is not
+          evidence of a pass. Suites declared `required` in .github/gates.yml
+          MUST set this above zero (enforced by the Gate Integrity check).
         required: false
         type: number
         default: 0
@@ -112,12 +153,16 @@ jobs:
   hive:
     name: ${{ inputs.label }}
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    # Default 105 (see the timeout_minutes input): an 80m --sim.timelimit plus image builds
+    # (~3-5m) and artifact upload must not push the job past its ceiling. A job killed at the
+    # ceiling loses its artifacts entirely, which is strictly worse than any test result.
+    timeout-minutes: ${{ inputs.timeout_minutes }}
 
     outputs:
       passed: ${{ steps.tab.outputs.passed }}
       failed: ${{ steps.tab.outputs.failed }}
       total: ${{ steps.tab.outputs.total }}
+      json_count: ${{ steps.tab.outputs.json_count }}
       gate_passed: ${{ steps.tab.outputs.gate_passed }}
       gate_failed: ${{ steps.tab.outputs.gate_failed }}
 
@@ -210,11 +255,10 @@ jobs:
       - name: Sync fukuii hive adapter
         run: |
           mkdir -p external/hive/clients/fukuii
-          cp -v "$GITHUB_WORKSPACE/hive/fukuii/Dockerfile" external/hive/clients/fukuii/Dockerfile
-          cp -v "$GITHUB_WORKSPACE/hive/fukuii/fukuii.sh" external/hive/clients/fukuii/fukuii.sh
-          cp -v "$GITHUB_WORKSPACE/hive/fukuii/mapper.jq" external/hive/clients/fukuii/mapper.jq
-          cp -v "$GITHUB_WORKSPACE/hive/fukuii/enode.sh" external/hive/clients/fukuii/enode.sh 2>/dev/null || true
-          cp -v "$GITHUB_WORKSPACE/hive/fukuii/hive.yaml" external/hive/clients/fukuii/hive.yaml 2>/dev/null || true
+          # Copy the WHOLE adapter directory: it is hive's docker build context, and the
+          # Dockerfile COPYs files a per-name list would silently miss (aot-train.sh broke
+          # every suite on 0146454e9 exactly that way).
+          cp -v "$GITHUB_WORKSPACE"/hive/fukuii/* external/hive/clients/fukuii/
           cp target/scala-3.*/fukuii-assembly-*.jar external/hive/clients/fukuii/
 
       - name: Set up Go
@@ -241,9 +285,11 @@ jobs:
         env:
           SIM: ${{ inputs.sim }}
           SIM_LIMIT: ${{ inputs.sim_limit }}
+          SIM_SKIP: ${{ inputs.sim_skip }}
           SIM_BUILDARG: ${{ inputs.sim_buildarg }}
           SIM_TIMELIMIT: ${{ inputs.sim_timelimit }}
           PARALLELISM: ${{ inputs.parallelism }}
+          CHECKTIMELIMIT: ${{ inputs.checktimelimit }}
           CLIENTS: ${{ inputs.clients }}
         # Do not inherit GitHub's default `-e -o pipefail` — hive returns
         # non-zero for a wide range of per-sim outcomes (test failures,
@@ -263,16 +309,72 @@ jobs:
             # sync target, tipping slow fukuii-sink sync tests over the deadline.
             # Benign for native clients (geth/nethermind respond well within 60s);
             # the timeout only matters when a client is genuinely slow to get ready.
-            --client.checktimelimit=120s
+            # Overridable per caller (checktimelimit input); the sharded full pass raises it.
+            --client.checktimelimit="$CHECKTIMELIMIT"
             --loglevel 3
           )
+          if [ -n "$SIM_SKIP" ]; then
+            # Declared waivers that cannot run (see the sim_skip input): select every test but these.
+            case "$SIM_LIMIT" in
+              */*) echo "::error::sim_skip needs a suite-only sim_limit, got '${SIM_LIMIT}'"; exit 1 ;;
+            esac
+            SIM_LIMIT="${SIM_LIMIT}/$(python3 "$GITHUB_WORKSPACE/scripts/ci/hive_skip_regex.py" "$SIM_SKIP")" || exit 1
+            echo "Not running (declared waivers): ${SIM_SKIP}"
+          fi
           [ -n "$SIM_LIMIT" ]   && args+=(--sim.limit   "$SIM_LIMIT")
-          [ -n "$SIM_BUILDARG" ] && args+=(--sim.buildarg "$SIM_BUILDARG")
+          # One build arg per line; hive accepts --sim.buildarg repeatedly (hive.go:94).
+          while IFS= read -r ba; do
+            [ -n "$ba" ] && args+=(--sim.buildarg "$ba")
+          done <<< "$SIM_BUILDARG"
 
-          ./hive "${args[@]}" 2>&1 | tee hive-run.log
-          hive_exit=${PIPESTATUS[0]}
+          run_hive() {
+            ./hive "${args[@]}" 2>&1 | tee hive-run.log
+            hive_exit=${PIPESTATUS[0]}
+            echo "Hive exited with code ${hive_exit}"
+          }
+          has_results() {
+            local jf
+            for jf in workspace/logs/*.json; do
+              [ -f "$jf" ] || continue
+              jq -e '(.testCases // {}) | length > 0' "$jf" >/dev/null 2>&1 && return 0
+            done
+            return 1
+          }
+          # A failure of the harness itself, before any client ran a test. The full pass of
+          # 2026-09-24 lost two shards this way: consume's image build failed fetching its
+          # fixtures ("consume cache ... returned a non-zero code"), and a consensus simulator
+          # started before hive's proxy was listening ("dial tcp ...:8081: connection refused").
+          # Neither says anything about fukuii. A client that fails to start leaves neither
+          # signature, so it is never retried.
+          harness_failure() {
+            local sl
+            if grep -q "image build failed" hive-run.log; then
+              echo "the simulator image build failed"
+              return 0
+            fi
+            for sl in workspace/logs/*-simulator-*.log; do
+              [ -f "$sl" ] || continue
+              if grep -qE 'dial tcp [0-9.]+:8081: connect: connection refused' "$sl"; then
+                echo "the simulator could not reach hive's proxy"
+                return 0
+              fi
+            done
+            return 1
+          }
+
+          run_hive
+          # One retry, and only for zero results plus a harness signature: an absent result
+          # still fails the gate after the retry. The first attempt's logs stay in the artifact.
+          if ! has_results && reason=$(harness_failure); then
+            echo "::warning::Hive produced no results because ${reason}; retrying once."
+            echo "retry_reason=${reason}" >> "$GITHUB_OUTPUT"
+            mkdir -p workspace/logs/attempt-1
+            find workspace/logs -maxdepth 1 -type f -exec mv {} workspace/logs/attempt-1/ \;
+            mv hive-run.log workspace/logs/attempt-1/hive-run.log
+            sleep 30
+            run_hive
+          fi
           echo "hive_exit=${hive_exit}" >> "$GITHUB_OUTPUT"
-          echo "Hive exited with code ${hive_exit}"
           exit 0
 
       - name: Tabulate results
@@ -290,8 +392,10 @@ jobs:
           SIM: ${{ inputs.sim }}
           THRESHOLD: ${{ inputs.pass_threshold }}
           HIVE_EXIT: ${{ steps.sim.outputs.hive_exit }}
+          RETRY_REASON: ${{ steps.sim.outputs.retry_reason }}
           GATE_PATTERN: ${{ inputs.gate_pattern }}
           GATE_EXCLUDE: ${{ inputs.gate_exclude }}
+          SIM_SKIP: ${{ inputs.sim_skip }}
         run: |
           set -uo pipefail
           shopt -s nullglob
@@ -398,6 +502,24 @@ jobs:
           fi
 
           total=$((passed + failed))
+
+          # Emit the counts THE MOMENT they are known, before any reporting.
+          #
+          # They used to be written ~60 lines further down, after the failing-name
+          # list and both histograms. Anything that went wrong in that reporting
+          # block — and this step runs under `set -u` — lost the counts entirely,
+          # and the gate then read empty outputs and declared "tabulation never
+          # ran / ZERO test results" for a run that had in fact produced results.
+          #
+          # That is not a cosmetic failure: it is indistinguishable, at the gate,
+          # from a simulator that genuinely produced nothing, so a complete engine
+          # run reports as a harness failure and the measurement is lost. Observed
+          # on engine twice, most recently run 35732925487, where the very same log
+          # carried a fully populated failure histogram — proof the loop had run —
+          # directly above "simulator produced ZERO test results".
+          #
+          # Reporting is best-effort; the counts are the product. Write the product
+          # first.
           {
             echo "passed=$passed"
             echo "failed=$failed"
@@ -406,6 +528,67 @@ jobs:
             echo "gate_failed=$gate_failed"
             echo "json_count=$json_count"
           } >> "$GITHUB_OUTPUT"
+
+
+          # Echo the failing test names to STDOUT, not only to the job summary.
+          #
+          # The summary is unreachable from the REST API, so a failure whose
+          # name lives only there cannot be triaged without downloading the
+          # log artifact by hand. That made the `sync` gate report "2 failing
+          # test(s) match gate 'fukuii'" with no way to learn WHICH two — a
+          # failure you cannot name is a failure you cannot fix (#1407).
+          if [ -n "$gate_failed_names" ]; then
+            # NOTE the empty-pattern case. With no gate_pattern every test name
+            # "contains" the empty substring, so this list is ALL failures, not
+            # a gated subset. Label it for what it actually is — the first
+            # version of this block said "matching gate ''", which read as a
+            # filter that had been applied when none had.
+            if [ -n "${GATE_PATTERN:-}" ]; then
+              echo "--- failing tests matching gate '${GATE_PATTERN}' ---"
+            else
+              echo "--- all failing tests (no gate_pattern set) ---"
+            fi
+            printf '%s' "$gate_failed_names" | sed '/^$/d' | sort -u
+            echo "--- end failing test list ---"
+
+            # Histogram by namespace/prefix. A raw list of 136 names is data;
+            # the count per prefix is a diagnosis. rpc-compat's failures turned
+            # out to cluster by RPC namespace — with `txpool_*` failing only
+            # because the hive adapter does not expose that namespace, not
+            # because the methods are wrong (#1407). That is the difference
+            # between "136 bugs" and "a handful of causes", and it is visible
+            # only once the names are bucketed.
+            # Also tee the histograms to a file. The gate step (the LAST step
+            # in the job) re-prints it, because GitHub's job-log API returns a
+            # bounded window from the END of the log: anything printed here, in
+            # the middle, is unreachable via `get_job_logs` no matter how large
+            # a tail is requested. Triage kept hitting that wall (#1407) — the
+            # diagnosis was in the log and still could not be read.
+            : > /tmp/hive-histogram.txt
+            {
+                echo "--- failing tests by namespace ---"
+              printf '%s' "$gate_failed_names" | sed '/^$/d' \
+                | sed -E 's#^([A-Za-z0-9]+)[_/].*#\1#; s#^([^ /]+)/.*#\1#' \
+                | sort | uniq -c | sort -rn | head -25
+              echo "--- end namespace histogram ---"
+
+              # Second level: bucket by METHOD, not just namespace. The namespace
+              # rollup said "115 eth" for rpc-compat, which is a number, not a
+              # lead — `eth` spans dozens of unrelated methods. Bucketing on the
+              # part before the first `/` gives `eth_simulateV1`, `eth_getLogs`
+              # and so on, which is the unit a fix actually targets (#1407).
+              echo "--- failing tests by method (top 30) ---"
+              printf '%s' "$gate_failed_names" | sed '/^$/d' \
+                | sed -E 's#^([^/]+)/.*#\1#' \
+                | sort | uniq -c | sort -rn | head -30
+                echo "--- end method histogram ---"
+            } | tee /tmp/hive-histogram.txt
+          fi
+          if [ -n "$sim_log" ] && [ "$failed" -gt 0 ]; then
+            echo "--- first 40 FAILED test lines ---"
+            grep -E '(\] FAILED |FAILED tests/|--- FAIL:)' "$sim_log" | head -40 || true
+            echo "--- end FAILED test lines ---"
+          fi
 
           if [ "$json_count" -gt 0 ]; then
             src="${json_count} JSON result(s)"
@@ -421,6 +604,14 @@ jobs:
             echo "| passed | failed | total | threshold | hive exit | source |"
             echo "|-------:|-------:|------:|----------:|----------:|:-------|"
             echo "| ${passed} | ${failed} | ${total} | ${THRESHOLD} | ${HIVE_EXIT:-?} | ${src} |"
+            if [ -n "${SIM_SKIP:-}" ]; then
+              echo
+              echo "Not run, as declared waivers in \`.github/gates.yml\`: \`${SIM_SKIP}\`"
+            fi
+            if [ -n "${RETRY_REASON:-}" ]; then
+              echo
+              echo "Retried once: the first attempt produced no results because ${RETRY_REASON}. Its logs are under \`attempt-1/\` in the artifact."
+            fi
             if [ -n "$GATE_PATTERN" ]; then
               echo
               echo "Gate (\`${GATE_PATTERN}\`-matching subset): **${gate_passed} passed, ${gate_failed} failed**"
@@ -469,7 +660,9 @@ jobs:
             } >> "$GITHUB_STEP_SUMMARY"
           fi
 
-          # Always succeed — the threshold gate runs as a separate step.
+          # Always succeed — the tabulate step REPORTS. The single terminal
+          # "Enforce gate" step below is what DECIDES. Keeping the two apart
+          # means a parse hiccup degrades the summary, never the verdict.
           exit 0
 
       - name: Upload simulator logs
@@ -483,26 +676,145 @@ jobs:
           retention-days: 14
           if-no-files-found: warn
 
-      - name: Enforce pass threshold
-        if: ${{ inputs.pass_threshold > 0 }}
+      # ---------------------------------------------------------------------
+      # THE GATE. One terminal step, always evaluated, decides the verdict.
+      #
+      # This replaces two conditional gate steps that between them let three
+      # distinct failures report green (spec 008 / #1402):
+      #
+      #   1. Zero results.      Threshold gate was `if: pass_threshold > 0`, so
+      #                         a suite with no threshold skipped it entirely;
+      #                         the subset gate then found zero failures in
+      #                         zero tests and passed. A simulator that crashed
+      #                         before running looked exactly like a clean run.
+      #   2. Truncated results. A suite that emitted 3 of 400 cases, all
+      #                         passing, was green.
+      #   3. Skipped gates.     A failure in an earlier step skipped the gate
+      #                         steps and the job was still reported green.
+      #
+      # `if: always()` fixes (3). `min_tests` and the zero-results rule fix (1)
+      # and (2). The step runs for EVERY caller, including ones that configure
+      # no threshold and no subset gate — those still cannot pass on a crash.
+      # ---------------------------------------------------------------------
+      - name: Enforce gate
+        if: always()
         env:
           PASSED: ${{ steps.tab.outputs.passed }}
+          FAILED: ${{ steps.tab.outputs.failed }}
+          TOTAL: ${{ steps.tab.outputs.total }}
+          JSON_COUNT: ${{ steps.tab.outputs.json_count }}
           THRESHOLD: ${{ inputs.pass_threshold }}
+          MIN_TESTS: ${{ inputs.min_tests }}
+          GATE_PATTERN: ${{ inputs.gate_pattern }}
+          GATE_FAILED: ${{ steps.tab.outputs.gate_failed }}
+          HIVE_EXIT: ${{ steps.sim.outputs.hive_exit }}
           LABEL: ${{ inputs.label }}
+          SIM: ${{ inputs.sim }}
+        shell: bash
         run: |
-          if [ "$PASSED" -lt "$THRESHOLD" ]; then
-            echo "::error::Hive ${LABEL} only passed ${PASSED} tests (threshold ${THRESHOLD})."
+          set -uo pipefail
+
+          # The tabulate step is `if: always()`, but if the job died before it
+          # ran at all these are empty strings rather than numbers. Empty means
+          # "we learned nothing", which is a failure, not a zero.
+          missing_tab=0
+          [ -z "${TOTAL:-}" ] && missing_tab=1
+          total=${TOTAL:-0};        [[ "$total"  =~ ^[0-9]+$ ]] || total=0
+          passed=${PASSED:-0};      [[ "$passed" =~ ^[0-9]+$ ]] || passed=0
+          failed=${FAILED:-0};      [[ "$failed" =~ ^[0-9]+$ ]] || failed=0
+          gate_failed=${GATE_FAILED:-0}; [[ "$gate_failed" =~ ^[0-9]+$ ]] || gate_failed=0
+          min_tests=${MIN_TESTS:-0};     [[ "$min_tests"   =~ ^[0-9]+$ ]] || min_tests=0
+          threshold=${THRESHOLD:-0};     [[ "$threshold"   =~ ^[0-9]+$ ]] || threshold=0
+
+          verdict=0
+          reasons=()
+
+          if [ "$missing_tab" -eq 1 ]; then
+            verdict=1
+            reasons+=("tabulation never ran — the job failed before results could be counted")
+          fi
+
+          # (1) Zero results is never a pass, whatever the thresholds say.
+          if [ "$total" -eq 0 ]; then
+            verdict=1
+            reasons+=("simulator produced ZERO test results (hive exit ${HIVE_EXIT:-unknown}) — absence of evidence is not a pass")
+          fi
+
+          # (2) A truncated run is not a pass either.
+          if [ "$min_tests" -gt 0 ] && [ "$total" -lt "$min_tests" ]; then
+            verdict=1
+            reasons+=("only ${total} test result(s); this suite declares min_tests=${min_tests} — the run was truncated")
+          fi
+
+          # (3) hive itself died AND left us nothing to judge by.
+          if [ -n "${HIVE_EXIT:-}" ] && [ "${HIVE_EXIT}" != "0" ] && [ "$total" -eq 0 ]; then
+            verdict=1
+            reasons+=("hive exited ${HIVE_EXIT} with no results — harness or client startup failure")
+          fi
+
+          # (4) Declared pass floor.
+          if [ "$threshold" -gt 0 ] && [ "$passed" -lt "$threshold" ]; then
+            verdict=1
+            reasons+=("only ${passed} test(s) passed; threshold is ${threshold}")
+          fi
+
+          # (5) Any failure inside the gated subset.
+          #
+          # A subset gate exists so that upstream failures between OTHER clients
+          # (geth<->nethermind) don't pollute our signal. That tolerance is the
+          # whole point of the pattern, so it applies only when one is set.
+          if [ -n "${GATE_PATTERN:-}" ] && [ "$gate_failed" -gt 0 ]; then
+            verdict=1
+            reasons+=("${gate_failed} failing test(s) match gate '${GATE_PATTERN}'")
+          fi
+
+          # (6) No subset gate configured -> the whole suite is ours, so ANY
+          # failing test is a real failure.
+          #
+          # Found by the devp2p run on this very PR: 5 results, all 5 failing,
+          # no gate_pattern, threshold 0 — caught only because min_tests was 10.
+          # Had it emitted 10 failing tests it would have gone GREEN, because
+          # condition (5) is guarded on a pattern this suite does not set. That
+          # is the same "cannot fail in this configuration" defect the gate was
+          # written to remove, reintroduced one level down. With no pattern
+          # there is no third-party result to tolerate: every test in the run is
+          # fukuii's own, and a failure is a failure.
+          if [ -z "${GATE_PATTERN:-}" ] && [ "$failed" -gt 0 ]; then
+            verdict=1
+            reasons+=("${failed} failing test(s) and no gate_pattern is set — with no subset filter the whole suite is in scope")
+          fi
+
+          {
+            echo
+            echo "#### Gate · ${LABEL}"
+            echo
+            echo "\`${SIM}\` — ${passed} passed, ${failed} failed, ${total} total "
+            echo "(min_tests=${min_tests}, threshold=${threshold}, hive exit ${HIVE_EXIT:-?})"
+            echo
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          if [ "$verdict" -ne 0 ]; then
+            # Re-print the histogram HERE, in the job's last step, so it lands
+            # inside the bounded window `get_job_logs` returns from the end of
+            # the log. Printed only in the tabulate step it is unreachable via
+            # the API — the diagnosis existed but could not be read (#1407).
+            if [ -s /tmp/hive-histogram.txt ]; then
+              echo
+              echo "===== failure breakdown (repeated here so it is reachable from the log tail) ====="
+              cat /tmp/hive-histogram.txt
+              echo "===== end failure breakdown ====="
+              echo
+            fi
+
+            for r in "${reasons[@]}"; do
+              echo "::error::Hive ${LABEL}: ${r}"
+              echo "- :x: ${r}" >> "$GITHUB_STEP_SUMMARY"
+            done
+            echo "See docs/STATUS.md for this suite's tier and .github/gates.yml for its gate." \
+              >> "$GITHUB_STEP_SUMMARY"
             exit 1
           fi
 
-      - name: Enforce gate (zero failures in subset)
-        if: ${{ inputs.gate_pattern != '' }}
-        env:
-          GATE_FAILED: ${{ steps.tab.outputs.gate_failed }}
-          GATE_PATTERN: ${{ inputs.gate_pattern }}
-          LABEL: ${{ inputs.label }}
-        run: |
-          if [ "$GATE_FAILED" -gt 0 ]; then
-            echo "::error::Hive ${LABEL} has ${GATE_FAILED} failing test(s) matching gate '${GATE_PATTERN}'."
-            exit 1
-          fi
+          echo ":white_check_mark: Gate passed." >> "$GITHUB_STEP_SUMMARY"
+          echo "Hive ${LABEL} gate passed: ${passed}/${total}."
+

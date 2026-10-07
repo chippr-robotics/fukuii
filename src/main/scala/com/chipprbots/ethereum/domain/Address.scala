@@ -49,7 +49,10 @@ class Address private (val bytes: ByteString):
       case addr: Address => addr.bytes == bytes
       case _             => false
 
-  override def hashCode: Int =
+  // Computed once: `ByteString.hashCode` is a MurmurHash over the bytes that boxes each one, and execution hashes the
+  // same addresses on every Set/Map lookup (accessed-address sets, world-state maps, read memos) — 15% of import CPU in
+  // a profile of the Platåberget soak (2026-10-04). Same value as before, so hash-ordered iteration is unchanged.
+  override val hashCode: Int =
     bytes.hashCode
 
   override def toString: String =

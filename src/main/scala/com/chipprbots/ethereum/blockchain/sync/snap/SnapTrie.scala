@@ -29,3 +29,14 @@ trait SnapTrie:
     * state healing is not disrupted.
     */
   def reset(): Unit
+
+  /** Make every node emitted so far durable, and keep building. Used before an account-range cursor is checkpointed, so
+    * a persisted cursor never runs ahead of the trie nodes it implies.
+    */
+  def flushEmitted(): Unit
+
+  /** Abandon a range mid-way so it can be resumed later from its cursor (geth `commit(false)` + batch write in
+    * `saveSyncStatus`): emitted nodes are kept and made durable; the in-memory right boundary (the open spine) is
+    * discarded — those nodes are incomplete and are rebuilt by state healing.
+    */
+  def suspend(): Unit

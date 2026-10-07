@@ -12,8 +12,9 @@ import com.chipprbots.ethereum.utils.Config.*
 
 /** ForkId CRC32 accumulation tests for Sepolia (ETH/Sepolia, timestamp-fork chain).
   *
-  * Ground truth: go-ethereum `core/forkid/forkid_test.go` Sepolia section (upstream branch, verified 2026-06-25).
-  * Sepolia genesis hash: 0x25a5cc106eea7138acab33231d7160d69cb777ee0c2c553fcddf5138993e6dd9
+  * Ground truth: go-ethereum `core/forkid/forkid_test.go` Sepolia section (upstream branch, verified 2026-06-25; the
+  * Amsterdam rows — "Last BPO2 block" and "First/Future Amsterdam block" — verified against master 2026-09-24). Sepolia
+  * genesis hash: 0x25a5cc106eea7138acab33231d7160d69cb777ee0c2c553fcddf5138993e6dd9
   *
   * Regression guard: a bug in `forTimestamp`-based ForkId accumulation (wrong order, wrong timestamp values) causes
   * every incoming Sepolia peer to disconnect at ETH handshake with ErrLocalIncompatibleOrStale. This is silent —
@@ -24,11 +25,17 @@ class ForkIdSepoliaSpec extends AnyWordSpec with Matchers:
   private val sepoliaConf = blockchains.blockchains("sepolia")
 
   // Sepolia genesis hash — go-ethereum params/config.go SepoliaGenesisHash
+  /** Sepolia's genesis header timestamp (0x6159af19). Unlike the other fixtures this is NOT zero, which is exactly why
+    * the EIP-6122 filter must compare against the genesis time rather than against a hardcoded zero. Every Sepolia fork
+    * is later than this, so no fork is dropped and the checksums below are unchanged.
+    */
+  private val SepoliaGenesisTimestamp: Long = 1633267481L
+
   private val sepoliaGenesisHash =
     ByteString(Hex.decode("25a5cc106eea7138acab33231d7160d69cb777ee0c2c553fcddf5138993e6dd9"))
 
   private def create(block: BigInt, ts: Long): ForkId =
-    ForkId.create(sepoliaGenesisHash, sepoliaConf)(block, ts)
+    ForkId.create(sepoliaGenesisHash, SepoliaGenesisTimestamp, sepoliaConf)(block, ts)
 
   "ForkId for Sepolia" must {
 
@@ -69,9 +76,19 @@ class ForkIdSepoliaSpec extends AnyWordSpec with Matchers:
       create(1735372, 1761607007) shouldBe ForkId(0x56078a1eL, Some(1761607008))
     }
 
-    "accumulate BPO2 timestamp (1761607008) into checksum — tail state, next=None" taggedAs (UnitTest, NetworkTest) in {
-      // BPO2 is the last known fork; next=None (go-ethereum Next: 0)
-      create(1735372, 1761607008) shouldBe ForkId(0x268956b6L, None)
-      create(1735372, 2000000000) shouldBe ForkId(0x268956b6L, None)
+    "accumulate BPO2 timestamp (1761607008) into checksum, with Amsterdam next" taggedAs (UnitTest, NetworkTest) in {
+      // Before Amsterdam was scheduled this was the tail state (next=None). Every BPO2-era Sepolia
+      // peer running a Glamsterdam-aware client now announces Next: 1791294816.
+      create(1735372, 1761607008) shouldBe ForkId(0x268956b6L, Some(1791294816))
+      create(1735372, 1791294815) shouldBe ForkId(0x268956b6L, Some(1791294816))
+    }
+
+    "accumulate Amsterdam timestamp (1791294816) into checksum — tail state, next=None" taggedAs (
+      UnitTest,
+      NetworkTest
+    ) in {
+      // Glamsterdam, 2026-10-06 13:53:36 UTC. Amsterdam is the last scheduled fork; next=None (go-ethereum Next: 0)
+      create(1735372, 1791294816) shouldBe ForkId(0x6c1d9423L, None)
+      create(1735372, 2000000000) shouldBe ForkId(0x6c1d9423L, None)
     }
   }

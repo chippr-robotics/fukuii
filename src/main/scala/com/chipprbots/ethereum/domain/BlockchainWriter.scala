@@ -1,7 +1,12 @@
 package com.chipprbots.ethereum.domain
 
+import org.apache.pekko.util.ByteString
+
+import scala.annotation.tailrec
+
 import com.chipprbots.ethereum.db.dataSource.DataSourceBatchUpdate
 import com.chipprbots.ethereum.db.storage.AppStateStorage
+import com.chipprbots.ethereum.db.storage.BlockAccessListStorage
 import com.chipprbots.ethereum.db.storage.BlockBodiesStorage
 import com.chipprbots.ethereum.db.storage.BlockHeadersStorage
 import com.chipprbots.ethereum.db.storage.BlockNumberMappingStorage
@@ -19,10 +24,22 @@ class BlockchainWriter(
     transactionMappingStorage: TransactionMappingStorage,
     receiptStorage: ReceiptStorage,
     chainWeightStorage: ChainWeightStorage,
-    appStateStorage: AppStateStorage
+    appStateStorage: AppStateStorage,
+    blockAccessListStorage: BlockAccessListStorage
 ) extends Logger:
 
   def save(block: Block, receipts: Seq[Receipt], weight: ChainWeight, saveAsBestBlock: Boolean): Unit =
+    saveBatch(block, receipts, weight, saveAsBestBlock).commit()
+
+  /** [[save]] without committing, so a caller can add to the same atomic write (the block's staged state, its access
+    * list): a block's state must exist if and only if the block does.
+    */
+  def saveBatch(
+      block: Block,
+      receipts: Seq[Receipt],
+      weight: ChainWeight,
+      saveAsBestBlock: Boolean
+  ): DataSourceBatchUpdate =
     val updateBestBlocks = if saveAsBestBlock then
       log.debug(
         "New best known block number - {}",
@@ -36,13 +53,19 @@ class BlockchainWriter(
       .and(storeReceipts(block.header.hash, receipts))
       .and(storeChainWeight(block.header.hash, weight))
       .and(updateBestBlocks)
-      .commit()
 
   def storeReceipts(blockHash: BlockHash, receipts: Seq[Receipt]): DataSourceBatchUpdate =
     receiptStorage.put(blockHash.value, receipts)
 
   def storeChainWeight(blockHash: BlockHash, weight: ChainWeight): DataSourceBatchUpdate =
     chainWeightStorage.put(blockHash.value, weight)
+
+  /** EIP-7928: keeps the access list of an Amsterdam block that validated against it, as its canonical RLP (see
+    * [[com.chipprbots.ethereum.db.storage.BlockAccessListStorage]]). Written by every path that accepts an Amsterdam
+    * block after executing it; read back through `BlockchainReader.getBlockAccessListByHash`.
+    */
+  def storeBlockAccessList(blockHash: BlockHash, accessList: BlockAccessList): DataSourceBatchUpdate =
+    blockAccessListStorage.put(blockHash.value, accessList.toBytes)
 
   /** Persists a block in the underlying Blockchain Database Note: all store* do not update the database immediately,
     * rather they create a [[com.chipprbots.ethereum.db.dataSource.DataSourceBatchUpdate]] which then has to be
@@ -74,6 +97,52 @@ class BlockchainWriter(
     val hash = blockHeader.hash
     blockHeadersStorage.put(hash.value, blockHeader).and(saveBlockNumberMapping(blockHeader.number.value, hash))
 
+  /** Startup consistency repair for the number→hash index at the best block's height.
+    *
+    * An earlier SyncController start-up path re-stored the best block's header with a rewritten `stateRoot`.
+    * `storeBlockHeader` writes the number→hash index, so the best block's height then named a forged header (new hash,
+    * no body) while best-block info still named the real block. This puts the index back, and only that:
+    *
+    *   - no best-block hash recorded, mapping absent, or mapping equal to the best hash: nothing to do
+    *     ([[BestMappingRepair.Consistent]]);
+    *   - mapping differs, and the best block's header AND body are both stored under the best hash: the mapping is
+    *     rewritten to the best hash ([[BestMappingRepair.Restored]]). The old target is removed too when it is a
+    *     header-only orphan at the same height (no body, not the best hash), which is the forged header's shape;
+    *   - mapping differs and the best header or body is missing: nothing is touched ([[BestMappingRepair.Refused]]).
+    *     This does not guess which block is canonical.
+    *
+    * Idempotent: a second call finds the mapping consistent. A best block with a missing mapping is not "damaged by
+    * this bug" and is left to the existing paths.
+    */
+  def repairBestBlockNumberMapping(reader: BlockchainReader): BestMappingRepair =
+    val best = appStateStorage.getBestBlockInfo()
+    val bestHash = BlockHash(best.hash)
+    blockNumberMappingStorage.get(best.number) match
+      case _ if best.hash.isEmpty              => BestMappingRepair.Consistent // no best-block hash was ever recorded
+      case None                                => BestMappingRepair.Consistent
+      case Some(mapped) if mapped == best.hash => BestMappingRepair.Consistent
+      case Some(mapped) =>
+        val bestHeader = reader.getBlockHeaderByHash(bestHash)
+        val bestBody = reader.getBlockBodyByHash(bestHash)
+        def refuse(reason: String) =
+          BestMappingRepair.Refused(best.number, bestHash, mapped, bestHeader.isDefined, bestBody.isDefined, reason)
+        (bestHeader, bestBody) match
+          case (Some(bh), Some(_)) =>
+            val mappedHash = BlockHash(mapped)
+            reader.getBlockHeaderByHash(mappedHash) match
+              // The forged-sibling shape: same height AND same parent as the best block. A crash mid-reorg leaves a
+              // fully stored new-branch block at this height, but there the neighbouring heights name the new branch
+              // too, so rewriting one entry would break index linearity; such a block need not share the parent.
+              case Some(mh) if mh.number == bh.number && mh.parentHash == bh.parentHash =>
+                val orphan = reader.getBlockBodyByHash(mappedHash).isEmpty
+                val restore = blockNumberMappingStorage.put(best.number, best.hash)
+                (if orphan then restore.and(blockHeadersStorage.remove(mapped)) else restore).commit()
+                BestMappingRepair.Restored(best.number, bestHash, mappedHash, removedOrphan = orphan)
+              case Some(_) =>
+                refuse("mapped block is not a same-parent sibling of the best block (possible interrupted reorg)")
+              case None => refuse("mapped header is not stored")
+          case _ => refuse("best block is not fully stored")
+
   def storeBlockBody(blockHash: BlockHash, blockBody: BlockBody): DataSourceBatchUpdate =
     blockBodiesStorage.put(blockHash.value, blockBody).and(saveTxsLocations(blockHash, blockBody))
 
@@ -99,50 +168,116 @@ class BlockchainWriter(
       }
       batch.and(appStateStorage.putBestBlockInfo(BlockInfo(targetHash.value, targetNumber))).commit()
 
-  /** Promote a block previously stored by hash only (sidechain) to the canonical chain. Walks back from `headHash`
-    * along parent pointers until it meets the current canonical chain (i.e. finds a header whose number→hash mapping
-    * already points to it) and rewrites number→hash for every block on the new branch. Receipts are already indexed by
-    * hash so no extra work.
+  /** Rewrite part of the canonical number→hash index in ONE atomic batch: write `put` (and re-point the transaction
+    * locations of those blocks at them), delete the `remove` heights, and move the best block if `newBest` is given.
     *
-    * Intended for use by `ForkChoiceManager.applyForkChoiceState` on reorgs.
-    *
-    * @return
-    *   unit; caller is responsible for also updating best-block pointer.
+    * The index half of core-geth's `reorg()` + `writeHeadBlock` (core/blockchain.go): after it, the index is exactly
+    * the head's ancestry — no entry from another chain below the head, none at all above it. `ConsensusImpl.reorganise`
+    * uses it both to adopt a new head and to put the old head's entries back when it keeps the old head.
     */
-  def promoteBranchToCanonical(
-      headHash: BlockHash,
-      reader: com.chipprbots.ethereum.domain.BlockchainReader
+  def rewriteCanonicalIndex(
+      put: Seq[(BigInt, BlockHash)],
+      remove: Seq[BigInt],
+      newBest: Option[(BlockHash, BigInt)],
+      reader: BlockchainReader
   ): Unit =
-    var cursor: Option[BlockHash] = Some(headHash)
-    val buf = scala.collection.mutable.ListBuffer.empty[(BigInt, BlockHash)]
-    while cursor.isDefined do
-      val hash = cursor.get
-      reader.getBlockHeaderByHash(hash) match
-        case None => cursor = None
-        case Some(header) =>
-          val canonicalHashAtNumber = reader.getBlockHeaderByNumber(header.number.value).map(_.hash)
-          if canonicalHashAtNumber.contains(hash) then
-            // reached existing canonical ancestor — stop
-            cursor = None
-          else
-            buf += ((header.number.value, hash))
-            if header.number == BlockNumber.Zero then cursor = None
-            else cursor = Some(header.parentHash)
-    if buf.nonEmpty then
-      // Rewrite number→hash AND tx-location for every block on the newly canonical branch.
-      // Without the tx-location rewrite, eth_getTransactionReceipt returns the old (now
-      // sidechain) block via the stale mapping — hive's 'Transaction Re-Org, Re-Org to
-      // Different Block' checks that the receipt reflects the new canonical block.
-      val batch = buf.foldLeft(blockNumberMappingStorage.emptyBatchUpdate) { case (acc, (num, hash)) =>
-        val withNumberMapping = acc.and(blockNumberMappingStorage.put(num, hash.value))
-        reader.getBlockBodyByHash(hash) match
-          case Some(body) =>
-            body.transactionList.zipWithIndex.foldLeft(withNumberMapping) { case (a, (tx, idx)) =>
-              a.and(transactionMappingStorage.put(tx.hash.value, TransactionLocation(hash.value, idx)))
-            }
-          case None => withNumberMapping
-      }
-      batch.commit()
+    canonicalIndexUpdate(put, remove, newBest, reader).commit()
+
+  /** The batch [[rewriteCanonicalIndex]] commits, uncommitted, so a caller can add to the same atomic write. */
+  private def canonicalIndexUpdate(
+      put: Seq[(BigInt, BlockHash)],
+      remove: Seq[BigInt],
+      newBest: Option[(BlockHash, BigInt)],
+      reader: BlockchainReader
+  ): DataSourceBatchUpdate =
+    val withPuts = put.foldLeft(blockNumberMappingStorage.emptyBatchUpdate) { case (acc, (number, hash)) =>
+      val withNumber = acc.and(blockNumberMappingStorage.put(number, hash.value))
+      reader.getBlockBodyByHash(hash).fold(withNumber)(body => withNumber.and(saveTxsLocations(hash, body)))
+    }
+    val withRemoves = remove.foldLeft(withPuts)((acc, number) => acc.and(blockNumberMappingStorage.remove(number)))
+    newBest.fold(withRemoves) { case (hash, number) =>
+      withRemoves.and(appStateStorage.putBestBlockInfo(BlockInfo(hash.value, number)))
+    }
+
+  /** Make `head` the canonical head, in ONE atomic batch: afterwards the number→hash index is exactly `head`'s ancestry
+    * — every height up to `head` names `head`'s ancestor, and no height above `head` has an entry — and the best block
+    * is `head`. go-ethereum's `BlockChain.SetCanonical` (core/blockchain.go: `reorg`, then `writeHeadBlock`). The
+    * post-merge fork choice's writer; `ForkChoiceManager.applyForkChoiceState` is its caller.
+    *
+    * THE BRANCH. Walk back from `head` along parent hashes to the first height AT OR BELOW the current best block whose
+    * entry already names the walked block. Up to the best block the index is the best block's ancestry, so that is
+    * where the two chains meet and nothing below it needs rewriting. Above the best block nothing guarantees the index
+    * — `engine_newPayload` writes entries ahead of the head, and the p2p import path's designated-head arm moves the
+    * best block without clearing what lies above it — so a match up there is not trusted: a forkchoiceUpdated back to a
+    * longer chain used to stop at such a leftover entry and keep the other branch's hashes below it. Every walked block
+    * gets its entry and its transaction locations rewritten; without the latter, eth_getTransactionReceipt answers from
+    * the block a side chain re-pointed the transaction at (hive 'Transaction Re-Org, Re-Org to Different Block'). The
+    * walk also ends at a missing header, and at genesis.
+    *
+    * ABOVE THE HEAD. Every height from `head + 1` up to the old best block, and on up while the index has an entry
+    * there, is deleted: go-ethereum `reorg` "Delete all hash markers that are not part of the new canonical chain". A
+    * head that moves DOWN — a forkchoiceUpdated to an ancestor, or to a shorter side chain — used to leave the old
+    * chain's entries above it.
+    *
+    * TRANSACTION LOOKUPS. The blocks this drops from the index — the ones it deletes above the head and the ones it
+    * replaces below it — lose the lookups of every transaction the new branch does not re-include: go-ethereum `reorg`,
+    * `types.HashDifference(deletedTxs, rebirthTxs)`. eth_getTransactionByHash follows a lookup to its block by hash
+    * without asking whether that block is still canonical, so it used to report such a transaction as included in a
+    * block that had left the chain.
+    *
+    * Only the index, the lookups and the best-block pointer move; headers, bodies and receipts stay where they are.
+    */
+  def promoteToCanonicalHead(head: BlockHeader, reader: BlockchainReader): CanonicalMove =
+    val oldBest = reader.getBestBlockNumber
+    val headNumber = head.number.value
+
+    @tailrec
+    def branch(header: BlockHeader, above: List[(BigInt, BlockHash)]): List[(BigInt, BlockHash)] =
+      val number = header.number.value
+      if number <= oldBest && reader.getCanonicalHashByNumber(number).contains(header.hash) then above
+      else
+        val withHeader = (number, header.hash) :: above
+        if number == 0 then withHeader
+        else
+          reader.getBlockHeaderByHash(header.parentHash) match
+            case Some(parent) => branch(parent, withHeader)
+            case None         => withHeader
+
+    val put = branch(head, Nil)
+    val remove =
+      ((headNumber + 1) to oldBest).toList ++
+        LazyList
+          .iterate(headNumber.max(oldBest) + 1)(_ + 1)
+          .takeWhile(n => reader.getCanonicalHashByNumber(n).isDefined)
+          .toList
+
+    // Read before the batch: the blocks the index names now at the heights it is about to replace or delete.
+    val droppedAt: Seq[(BigInt, BlockHash)] =
+      put.flatMap { case (number, hash) =>
+        reader.getCanonicalHashByNumber(number).filterNot(_ == hash).map(number -> _)
+      } ++ remove.flatMap(n => reader.getCanonicalHashByNumber(n).map(n -> _))
+    val dropped: Seq[BlockHash] = droppedAt.map(_._2)
+    def txHashes(blocks: Seq[BlockHash]): Set[ByteString] =
+      blocks.flatMap(reader.getBlockBodyByHash).flatMap(_.transactionList.map(_.hash.value)).toSet
+    val staleLookups = txHashes(dropped) -- txHashes(put.map(_._2))
+
+    // A plain extension rewrites only heights above the old best and clears nothing: not worth a line.
+    if remove.nonEmpty || put.exists(_._1 <= oldBest) then
+      log.info(
+        "Canonical head moved: head=#{} {} previousBest=#{} rewritten={} clearedAboveHead={} droppedTxLookups={}",
+        headNumber,
+        head.hash.toHexString,
+        oldBest,
+        put.size,
+        remove.size,
+        staleLookups.size
+      )
+    canonicalIndexUpdate(put, remove, Some((head.hash, headNumber)), reader)
+      .and(staleLookups.foldLeft(transactionMappingStorage.emptyBatchUpdate) { (acc, tx) =>
+        acc.and(transactionMappingStorage.remove(tx))
+      })
+      .commit()
+    CanonicalMove(adopted = put, dropped = droppedAt)
 
   private def saveBlockNumberMapping(number: BigInt, hash: BlockHash): DataSourceBatchUpdate =
     blockNumberMappingStorage.put(number, hash.value)
@@ -153,6 +288,13 @@ class BlockchainWriter(
         updates.and(transactionMappingStorage.put(tx.hash.value, TransactionLocation(blockHash.value, index)))
     }
 
+/** What [[BlockchainWriter.promoteToCanonicalHead]] changed in the number→hash index, as `(height, block hash)` pairs:
+  * the blocks it wrote (`adopted`, ascending, including any the index already named above the old best block) and the
+  * ones it displaced or deleted (`dropped`). The caller owns the reference-count side of this (see
+  * `ReorgStateHandler`), which the index write cannot do atomically.
+  */
+final case class CanonicalMove(adopted: Seq[(BigInt, BlockHash)], dropped: Seq[(BigInt, BlockHash)])
+
 object BlockchainWriter:
   def apply(storages: BlockchainStorages): BlockchainWriter =
     new BlockchainWriter(
@@ -162,5 +304,21 @@ object BlockchainWriter:
       storages.transactionMappingStorage,
       storages.receiptStorage,
       storages.chainWeightStorage,
-      storages.appStateStorage
+      storages.appStateStorage,
+      storages.blockAccessListStorage
     )
+
+/** Outcome of [[BlockchainWriter.repairBestBlockNumberMapping]]. */
+sealed trait BestMappingRepair
+object BestMappingRepair:
+  case object Consistent extends BestMappingRepair
+  final case class Restored(number: BigInt, bestHash: BlockHash, wasMappedTo: BlockHash, removedOrphan: Boolean)
+      extends BestMappingRepair
+  final case class Refused(
+      number: BigInt,
+      bestHash: BlockHash,
+      mappedTo: ByteString,
+      bestHeaderPresent: Boolean,
+      bestBodyPresent: Boolean,
+      reason: String
+  ) extends BestMappingRepair

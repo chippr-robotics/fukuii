@@ -85,7 +85,10 @@ object HealingTrieFixtures:
       decoupledHealMaxAttemptsNoRefresh: Int = TrieNodeHealingCoordinator.DefaultDecoupledHealMaxAttemptsNoRefresh,
       // spec 009 (Moving-Root Delta Heal). Default false so existing spec-004 tests spawn the flag-OFF coordinator
       // (unchanged); the moving-root tests pass true to exercise seed-from-absent-root / single-root fetch / re-peg.
-      movingRootDeltaHeal: Boolean = false
+      movingRootDeltaHeal: Boolean = false,
+      // Where bytecode lives; Some(_) makes the coordinator report healed accounts whose code is absent from it.
+      evmCodeStorage: Option[com.chipprbots.ethereum.db.storage.EvmCodeStorage] = None,
+      walkLocalOnly: Option[java.util.concurrent.atomic.AtomicBoolean] = None
   )(implicit testKit: ActorTestKit): TypedActorRef[TrieNodeHealingCoordinator.Command] =
     testKit.spawn(
       TrieNodeHealingCoordinator(
@@ -115,7 +118,9 @@ object HealingTrieFixtures:
         frontierPersistenceEnabled = frontierPersistenceEnabled,
         decoupledHealServeRoot = decoupledHealServeRoot,
         decoupledHealMaxAttemptsNoRefresh = decoupledHealMaxAttemptsNoRefresh,
-        movingRootDeltaHeal = movingRootDeltaHeal
+        movingRootDeltaHeal = movingRootDeltaHeal,
+        evmCodeStorage = evmCodeStorage,
+        walkLocalOnly = walkLocalOnly
       )
     )
 

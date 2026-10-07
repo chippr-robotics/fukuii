@@ -156,6 +156,26 @@ class SetCodeAuthorizationSpec extends AnyFlatSpec with Matchers:
     result.getCode(authority) shouldBe ByteString.empty
   }
 
+  // go-ethereum/core-geth SetCodeAuthorization.Authority -> crypto.Ecrecover fails for a recovery at the point at
+  // infinity (libsecp256k1), so the authorization is skipped. It must not delegate the keccak256("")[12:] address.
+  it should "skip an authorization whose signature recovers the point at infinity" taggedAs (
+    OlympiaTest,
+    ConsensusTest
+  ) in {
+    val chainId = olympiaConfig.chainId.value
+    val sigHash = kec256(
+      encode(
+        PrefixedRLPEncodable(0x05, RLPList(toEncodeable(chainId), toEncodeable(targetAddress.toArray), toEncodeable(0)))
+      )
+    )
+    val raw = PointAtInfinitySignature.rawFor(sigHash)
+    val yParity = raw.v - BigInt(ECDSASignature.negativePointSign)
+    val auth = SetCodeAuthorization(chainId, targetAddress, 0, yParity, raw.r, raw.s)
+    val result = execTx(makeSetCodeTx(List(auth)), buildWorld())
+    result.getCode(PointAtInfinitySignature.InfinityAddress) shouldBe ByteString.empty
+    result.getAccount(PointAtInfinitySignature.InfinityAddress) shouldBe None
+  }
+
   it should "skip authorization if authority nonce does not match" taggedAs (OlympiaTest, ConsensusTest) in {
     val authKeys = generateKeyPair(secureRandom)
     val authority = Address(authKeys)

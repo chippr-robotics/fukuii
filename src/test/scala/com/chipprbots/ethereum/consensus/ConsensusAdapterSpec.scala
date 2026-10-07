@@ -25,6 +25,7 @@ import com.chipprbots.ethereum.consensus.validators.*
 import com.chipprbots.ethereum.consensus.validators.BlockHeaderError.HeaderDifficultyError
 import com.chipprbots.ethereum.consensus.validators.BlockHeaderError.HeaderParentNotFoundError
 import com.chipprbots.ethereum.db.storage.MptStorage
+import com.chipprbots.ethereum.db.storage.StagedBlockState
 import com.chipprbots.ethereum.domain.*
 import com.chipprbots.ethereum.domain.branch.Branch
 import com.chipprbots.ethereum.domain.branch.EmptyBranch
@@ -83,13 +84,21 @@ class ConsensusAdapterSpec extends AnyFlatSpec with Matchers with ScalaFutures w
     // BlockExecution records each executed block's difficulty into the TD ring buffer
     // (#1373) — an incidental call on the real-execution success path; allow it.
     blockchainReader.recordBlockDifficulty.expects(*).anyNumberOfTimes().returning(())
-    blockchainWriter.save.expects(*, *, *, *).returning(())
+    // the block, receipts, weight and (extends-best path) the best-block pointer are ONE batch now
+    blockchainWriter.saveBatch
+      .expects(*, *, *, true)
+      .returning(com.chipprbots.ethereum.db.dataSource.DataSourceBatchUpdate(storagesInstance.dataSource))
     blockchainWriter.saveBestKnownBlocks.expects(*, *).returning(())
 
     blockQueue.enqueueBlock.expects(block, bestNum).returning(Some(Leaf(hash, newWeight)))
     blockQueue.getBranch.expects(BlockHash(hash), true).returning(List(block))
 
     blockchainReader.getBlockHeaderByHash.expects(*).anyNumberOfTimes().returning(Some(block.header))
+    // BlockExecution asks for the block's staged state storage first (the stubbed execution below never uses it) ...
+    blockchain.stageBlockState
+      .expects(*)
+      .returning(StagedBlockState.direct(storagesInstance.storages.stateStorage.getBackingStorage(6)))
+    // ... and the stubbed execution builds its empty world from the backing storage, as it always did
     blockchain.getBackingMptStorage
       .expects(*)
       .returning(storagesInstance.storages.stateStorage.getBackingStorage(6))
@@ -125,7 +134,7 @@ class ConsensusAdapterSpec extends AnyFlatSpec with Matchers with ScalaFutures w
 
     blockchainReader.getBlockHeaderByHash.expects(*).anyNumberOfTimes().returning(Some(block.header))
     blockchainReader.getBlockHeaderByNumber.expects(*).anyNumberOfTimes().returning(Some(block.header))
-    blockchain.getBackingMptStorage.expects(*).returning(mptStorage)
+    blockchain.stageBlockState.expects(*).returning(StagedBlockState.direct(mptStorage))
     mptStorage.get.expects(*).returning(mptNode)
 
     blockQueue.removeSubtree.expects(*)
@@ -210,8 +219,8 @@ class ConsensusAdapterSpec extends AnyFlatSpec with Matchers with ScalaFutures w
 
     val mockExecution: BlockExecution = mock[BlockExecution]
     (mockExecution
-      .executeAndValidateBlocks(_: List[Block], _: ChainWeight)(_: BlockchainConfig))
-      .expects(newBranch, *, *)
+      .executeAndValidateBlocks(_: List[Block], _: ChainWeight, _: Boolean)(_: BlockchainConfig))
+      .expects(newBranch, *, *, *)
       .returning((List(blockData2, blockData3), None))
 
     val withMockedBlockExecution: ConsensusAdapter = blockImportWithMockedBlockExecution(mockExecution)
@@ -260,9 +269,9 @@ class ConsensusAdapterSpec extends AnyFlatSpec with Matchers with ScalaFutures w
     // exactly as real executeAndValidateBlocks does — otherwise saveBestKnownBlocks updates
     // the chain pointer to a hash that isn't in the DB and getBestBlock() returns None
     (mockExecution
-      .executeAndValidateBlocks(_: List[Block], _: ChainWeight)(_: BlockchainConfig))
-      .expects(newBranch, *, *)
-      .onCall { (_, _, _) =>
+      .executeAndValidateBlocks(_: List[Block], _: ChainWeight, _: Boolean)(_: BlockchainConfig))
+      .expects(newBranch, *, *, *)
+      .onCall { (_, _, _, _) =>
         blockchainWriter.save(newBlock2, Seq.empty[Receipt], newWeight2, saveAsBestBlock = false)
         (List(blockData2), Some(execError))
       }
@@ -275,8 +284,13 @@ class ConsensusAdapterSpec extends AnyFlatSpec with Matchers with ScalaFutures w
       _ shouldBe a[BlockImportFailed]
     }
 
-    // execute-first: chain advances to the last successfully executed block, not reverted
-    blockchainReader.getBestBlock.get shouldEqual newBlock2
+    // core-geth parity (writeBlockAndSetHead: the head moves only to a heavier block). The executed prefix newBlock2
+    // (weight1 + 101) is lighter than the old head oldBlock3 (weight1 + 102 + 103), so the old head stays and the index
+    // entry execution overwrote is put back. newBlock2 is kept as an executed side block, with its weight. This used to
+    // assert best == newBlock2 — a lighter head than the one the node already had; see ReorgBlockhashParitySpec.
+    blockchainReader.getBestBlock.get shouldEqual oldBlock3
+    blockchainReader.getBlockHeaderByNumber(oldBlock2.number.value).map(_.hash) shouldEqual Some(oldBlock2.hash)
+    blockchainReader.getBlockByHash(newBlock2.hash) shouldEqual Some(newBlock2)
     blockchainReader.getChainWeightByHash(newBlock2.header.hash) shouldEqual Some(newWeight2)
 
     blockQueue.isQueued(newBlock2.header.hash) shouldBe true
@@ -365,8 +379,8 @@ class ConsensusAdapterSpec extends AnyFlatSpec with Matchers with ScalaFutures w
 
     val mockExecution: BlockExecution = mock[BlockExecution]
     (mockExecution
-      .executeAndValidateBlocks(_: List[Block], _: ChainWeight)(_: BlockchainConfig))
-      .expects(newBranch, *, *)
+      .executeAndValidateBlocks(_: List[Block], _: ChainWeight, _: Boolean)(_: BlockchainConfig))
+      .expects(newBranch, *, *, *)
       .returning((List(blockData2, blockData3), None))
 
     val withMockedBlockExecution: ConsensusAdapter = blockImportWithMockedBlockExecution(mockExecution)
@@ -398,8 +412,8 @@ class ConsensusAdapterSpec extends AnyFlatSpec with Matchers with ScalaFutures w
     val newBlock2: Block = getBlock(bestNum, difficulty = 105, parent = newBlock1.header.hash.value)
 
     (mockExecution
-      .executeAndValidateBlocks(_: List[Block], _: ChainWeight)(_: BlockchainConfig))
-      .expects(List(newBlock1, newBlock2), *, *)
+      .executeAndValidateBlocks(_: List[Block], _: ChainWeight, _: Boolean)(_: BlockchainConfig))
+      .expects(List(newBlock1, newBlock2), *, *, *)
       .returning((Nil, Some(execError)))
     val consensusAdapterWithFailingExecution: ConsensusAdapter = blockImportWithMockedBlockExecution(mockExecution)
 
@@ -429,8 +443,8 @@ class ConsensusAdapterSpec extends AnyFlatSpec with Matchers with ScalaFutures w
     val newBlock2bis: Block = getBlock(bestNum + 2, difficulty = 50, parent = newBlock1.header.hash.value)
 
     (mockExecution
-      .executeAndValidateBlocks(_: List[Block], _: ChainWeight)(_: BlockchainConfig))
-      .expects(List(newBlock1, newBlock2), *, *)
+      .executeAndValidateBlocks(_: List[Block], _: ChainWeight, _: Boolean)(_: BlockchainConfig))
+      .expects(List(newBlock1, newBlock2), *, *, *)
       .returning((Nil, Some(execError)))
     val consensusAdapterWithFailingExecution: ConsensusAdapter = blockImportWithMockedBlockExecution(mockExecution)
 
@@ -464,8 +478,8 @@ class ConsensusAdapterSpec extends AnyFlatSpec with Matchers with ScalaFutures w
     val newBlock3bis: Block = getBlock(bestNum + 3, difficulty = 50, parent = newBlock2.header.hash.value)
 
     (mockExecution
-      .executeAndValidateBlocks(_: List[Block], _: ChainWeight)(_: BlockchainConfig))
-      .expects(List(newBlock1, newBlock2, newBlock3), *, *)
+      .executeAndValidateBlocks(_: List[Block], _: ChainWeight, _: Boolean)(_: BlockchainConfig))
+      .expects(List(newBlock1, newBlock2, newBlock3), *, *, *)
       .returning((List(BlockData(newBlock1, Nil, currentWeight.increase(newBlock1.header))), Some(execError)))
     val consensusAdapterWithFailingExecution: ConsensusAdapter = blockImportWithMockedBlockExecution(mockExecution)
 
@@ -504,8 +518,8 @@ class ConsensusAdapterSpec extends AnyFlatSpec with Matchers with ScalaFutures w
     val newBlock3bis: Block = getBlock(bestNum + 3, difficulty = 10, parent = badBlock.header.hash.value)
 
     (mockExecution
-      .executeAndValidateBlocks(_: List[Block], _: ChainWeight)(_: BlockchainConfig))
-      .expects(List(badBlock, newBlock3), *, *)
+      .executeAndValidateBlocks(_: List[Block], _: ChainWeight, _: Boolean)(_: BlockchainConfig))
+      .expects(List(badBlock, newBlock3), *, *, *)
       .returning((Nil, Some(execError)))
     val consensusAdapterWithFailingExecution: ConsensusAdapter = blockImportWithMockedBlockExecution(mockExecution)
 

@@ -71,7 +71,12 @@ object PeerRequestHandler:
             case e                     => throw new MatchError(s"unexpected PeerEvent from bus: $e")
           }
 
-        networkPeerManager ! NetworkPeerManagerActor.SendMessageCmd(toSerializable(requestMsg), peer.id)
+        // Subscribe BEFORE sending. The response reaches the bus as a PublishCmd from PeerActor, a different sender
+        // than this handler, so nothing orders it after our SubscribeCmd except the order of the sends below. With the
+        // request sent first, a thread descheduled between the two sends lets a fast peer's reply (6 ms on loopback)
+        // be published to a bus with no subscriber: it is dropped, and the request waits out the full responseTimeout.
+        // Measured on hive "sync fukuii from fukuii": BlockBodies{requestId=55} decoded by PeerActor 6 ms after the
+        // request, never delivered, PEER_REQUEST_TIMEOUT 90 s later; about 2 in 5 local runs stalled, 0 in 15 after.
         peerEventBus ! SubscribeCmd(
           PeerDisconnectedClassifier(PeerSelector.WithId(peer.id)),
           peerEventAdapter
@@ -80,6 +85,7 @@ object PeerRequestHandler:
           MessageClassifier(Set(responseMsgCode), PeerSelector.WithId(peer.id)),
           peerEventAdapter
         )
+        networkPeerManager ! NetworkPeerManagerActor.SendMessageCmd(toSerializable(requestMsg), peer.id)
         timers.startSingleTimer("timeout", TimeoutCmd, responseTimeout)
 
         def timeTakenSoFar(): Long = System.currentTimeMillis() - startTime

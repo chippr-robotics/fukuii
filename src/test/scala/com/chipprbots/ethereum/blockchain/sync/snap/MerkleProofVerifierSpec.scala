@@ -193,6 +193,56 @@ class MerkleProofVerifierSpec extends AnyFlatSpec with Matchers:
     ) shouldBe a[Left[?, ?]]
   }
 
+  // ── Explicit (not exception-driven) peer-data rejection ──────────────────────
+  //
+  // verifyCompleteRange (the nil-proof path, used whenever a single response covers an account's
+  // or a batched request's ENTIRE remaining range) used to have no up-front ordering/value check
+  // of its own: a non-ascending or empty-value response would reach SnapHashTrie.update ->
+  // StackTrie.update, trip that method's `require`, and rely on the IllegalArgumentException being
+  // caught by verifyStorageRange/verifyAccountRange's surrounding try/catch. That already kept the
+  // throw from escaping to the caller, but the rejection was a side effect of an internal-invariant
+  // guard rather than an intentional check of untrusted peer data. These tests pin the EXACT
+  // messages produced by the explicit pre-validation now in verifyCompleteRange, so a regression
+  // that removes it (falling back to the old generic "Storage/Account verification error: ..."
+  // caught-exception message) fails loudly here rather than only being caught by StackTrieSpec.
+
+  it should "explicitly reject (not merely catch-and-convert) a non-ascending nil-proof storage response" taggedAs UnitTest in {
+    val slot1 = ByteString(Array.fill(31)(0x00.toByte) :+ 0x42.toByte)
+    val slot2 = ByteString(Array.fill(31)(0x00.toByte) :+ 0x10.toByte) // slot2 < slot1: descending
+    val result = MerkleProofVerifier(kec256(ByteString("storage-root"))).verifyStorageRange(
+      slots = Seq(slot1 -> ByteString("v1"), slot2 -> ByteString("v2")),
+      proof = Seq.empty,
+      startHash = ZeroKey,
+      endHash = MaxKey
+    )
+    // Exact message from the explicit check — NOT "Storage verification error: IllegalArgumentException: ...",
+    // which is what a caught StackTrie `require` failure would have produced instead.
+    result shouldBe Left("range is not monotonically increasing")
+  }
+
+  it should "explicitly reject (not merely catch-and-convert) a nil-proof storage response with an empty (deletion) value" taggedAs UnitTest in {
+    val slotHash = ByteString(Array.fill(32)(0x33.toByte))
+    val result = MerkleProofVerifier(kec256(ByteString("storage-root"))).verifyStorageRange(
+      slots = Seq(slotHash -> ByteString.empty),
+      proof = Seq.empty,
+      startHash = ZeroKey,
+      endHash = MaxKey
+    )
+    result shouldBe Left("range contains deletion (empty value)")
+  }
+
+  it should "explicitly reject a non-ascending nil-proof ACCOUNT response the same way (shared verifyCompleteRange)" taggedAs UnitTest in {
+    val hash1 = ByteString(Array.fill(31)(0x00.toByte) :+ 0x42.toByte)
+    val hash2 = ByteString(Array.fill(31)(0x00.toByte) :+ 0x10.toByte) // hash2 < hash1: descending
+    val result = MerkleProofVerifier(kec256(ByteString("state-root"))).verifyAccountRange(
+      accounts = Seq(hash1 -> Account(nonce = 1), hash2 -> Account(nonce = 2)),
+      proof = Seq.empty,
+      startHash = ZeroKey,
+      endHash = MaxKey
+    )
+    result shouldBe Left("range is not monotonically increasing")
+  }
+
   // ── Valid proof with reconstruction ─────────────────────────────────────────
 
   it should "verify account range with valid boundary proof" taggedAs UnitTest in {

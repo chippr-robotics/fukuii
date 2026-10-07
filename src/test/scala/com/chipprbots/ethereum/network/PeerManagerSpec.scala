@@ -365,6 +365,30 @@ class PeerManagerSpec
     )
     peerAsOutgoingProbe.expectMsg(PeerActor.DisconnectPeer(Disconnect.Reasons.AlreadyConnected))
 
+  // Defense in depth for a handshaked peer that reconnected itself after a TCP drop. The root cause is fixed in PeerActor (a HANDSHAKED peer now stops instead of
+  // self-reconnecting), which means the same actor ref can no longer legitimately re-publish
+  // PeerHandshakeSuccessful for a nodeId it already handshaked. This test guards the symptom
+  // directly: IF a duplicate ever arrives from the exact same ref, PeerManagerActor must not send
+  // that actor DisconnectPeer(AlreadyConnected) -- that would disconnect a live peer from itself.
+  it should "not send AlreadyConnected to itself when the same actor ref re-publishes PeerHandshakeSuccessful" taggedAs (
+    UnitTest,
+    NetworkTest
+  ) in new TestSetup:
+    start()
+    handleInitialNodesDiscovery()
+
+    val TestPeer(peerAsOutgoing, peerAsOutgoingProbe) = createdPeers.head
+    val ConnectTo(uriConnectedTo) = peerAsOutgoingProbe.expectMsgClass(classOf[PeerActor.ConnectTo])
+    val nodeId: ByteString = ByteString(Hex.decode(uriConnectedTo.getUserInfo))
+    val handshakedPeer: Peer = peerAsOutgoing.copy(nodeId = Some(nodeId))
+
+    peerAsOutgoingProbe.reply(PeerEvent.PeerHandshakeSuccessful(handshakedPeer, initialPeerInfo))
+
+    // The SAME actor (identical ref) re-publishes handshake success a second time.
+    peerAsOutgoingProbe.reply(PeerEvent.PeerHandshakeSuccessful(handshakedPeer, initialPeerInfo))
+
+    peerAsOutgoingProbe.expectNoMessage(500.millis)
+
   // ── Suite 5: NB-8 — 5s reconnect + inbound-suppression (Fix-C) ──────────────────────────────
 
   behavior.of("maintained peer reconnect (NB-8 Fix-C)")
@@ -410,6 +434,42 @@ class PeerManagerSpec
     testScheduler.timePasses(5.seconds)
 
     // connectWith should have created a second peer and sent ConnectTo(maintainedUri)
+    createdPeers(1).probe.expectMsgType[ConnectTo](3.seconds).uri shouldBe maintainedUri
+
+  it should "reconnect a maintained peer whose enode was written with uppercase hex (#57)" taggedAs (
+    UnitTest,
+    NetworkTest
+  ) in new TestSetup:
+    val hexNodeId: String = "ab" * 64
+    val nodeIdBytes: ByteString = ByteString(Hex.decode(hexNodeId))
+    val maintainedUri = new URI(s"enode://${hexNodeId.toUpperCase}@127.0.0.8:30303")
+
+    start()
+
+    peerManager ! PeerManagerActor.AddMaintainedPeerCmd(maintainedUri, discardReplyRef)
+    assert(createdPeerQueue.poll(3, TimeUnit.SECONDS) ne null, "peerFactory not called within 3s")
+    createdPeers(0).probe.expectMsgType[ConnectTo](3.seconds)
+    createdPeers(0).probe.reply(
+      PeerEvent.PeerHandshakeSuccessful(
+        Peer(
+          PeerId(hexNodeId), // handshaked peer ids are always lowercase hex
+          new InetSocketAddress("127.0.0.8", 30303),
+          createdPeers(0).probe.ref.toTyped[PeerActor.Command],
+          incomingConnection = false,
+          nodeId = Some(nodeIdBytes)
+        ),
+        initialPeerInfo
+      )
+    )
+
+    createdPeers(0).probe.ref ! PoisonPill
+    peerEventBus.fishForMessage(3.seconds, "waiting for PeerDisconnected") {
+      case PublishCmd(PeerDisconnected(_)) => true
+      case _                               => false
+    }
+
+    testScheduler.timePasses(5.seconds)
+
     createdPeers(1).probe.expectMsgType[ConnectTo](3.seconds).uri shouldBe maintainedUri
 
   it should "suppress the 5s reconnect when an inbound from the same nodeId fills the slot before the timer fires" taggedAs (

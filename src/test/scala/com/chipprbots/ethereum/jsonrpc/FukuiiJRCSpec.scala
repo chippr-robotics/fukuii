@@ -80,6 +80,7 @@ class FukuiiJRCSpec extends FreeSpecBase with SpecFixtures with AsyncMockFactory
         ethFilterService,
         personalService,
         None,
+        None, // testingService — execution-apis testing_* namespace, not exercised here
         debugService,
         qaService,
         fukuiiService,
