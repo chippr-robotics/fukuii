@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **TUI (`--tui`).** The terminal UI froze after its first frame: key input used JLine's `peek(0)`, which waits
+  forever, so the update loop blocked until a key was pressed. It also never showed real data, because the status
+  queries were never wired in, so peers, blocks and sync status sat at their defaults. It now polls the peer manager,
+  the sync controller (the same queries `net_peerCount` and `eth_syncing` answer), the best block and SNAP progress.
+  Further fixes: `D` no longer shuts down the node; `Q` exits through the normal shutdown hook instead of
+  interrupting its own shutdown; frames fit the terminal exactly (no scrolling or wrapping, footer pinned);
+  non-TTY/`dumb` terminals fall back to plain logging; the terminal mode and screen are restored on exit;
+  configuration errors are printed before the TUI suppresses console logging; sync speed/ETA is measured from
+  the first block observed rather than from genesis.
+
 ## [0.9.0] - 2026-10-05
 
 The Glamsterdam release. Sepolia activates Amsterdam at timestamp 1791294816 (2026-10-06 13:53:36 UTC);

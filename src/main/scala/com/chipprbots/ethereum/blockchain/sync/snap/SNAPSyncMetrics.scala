@@ -384,8 +384,17 @@ object SNAPSyncMetrics extends MetricsContainer:
   /** Update current phase time in seconds */
   def setPhaseTime(seconds: Double): Unit = PhaseTimeSecondsGauge.set(seconds)
 
+  @volatile private var latest: Option[(SyncProgress, Long)] = None
+
+  /** The most recent progress passed to [[measure]], if recorded within `maxAgeMillis` — read by the TUI, which has no
+    * handle on the SNAP controller. The age bound keeps a finished or abandoned SNAP run from being shown forever.
+    */
+  def latestProgress(maxAgeMillis: Long): Option[SyncProgress] =
+    latest.collect { case (p, at) if System.currentTimeMillis() - at <= maxAgeMillis => p }
+
   /** Record full sync progress from SyncProgress object */
   def measure(progress: SyncProgress): Unit =
+    latest = Some((progress, System.currentTimeMillis()))
     // Phase
     import SNAPSyncController.SyncPhase.*
     val phaseValue = progress.phase match

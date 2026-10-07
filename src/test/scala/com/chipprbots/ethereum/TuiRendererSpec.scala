@@ -210,3 +210,40 @@ class TuiRendererSpec extends AnyFlatSpec with Matchers:
     lines should not be empty
     lines.length should be >= height - 1
   }
+
+  // Frame geometry: Tui draws the frame from the home position with no trailing newline, so a frame that is taller or
+  // wider than the terminal scrolls or wraps it and corrupts the display.
+  it should "render exactly `height` lines of exactly `width` columns" taggedAs (UnitTest) in {
+    for (width, height) <- Seq((40, 10), (80, 24), (100, 40), (200, 60)) do
+      val lines = renderer.render(TuiState.initial.withBlockInfo(10, 100), width, height)
+      lines.length shouldBe height
+      all(lines.map(_.columnLength())) shouldBe width
+  }
+
+  it should "keep the keyboard commands on the bottom row when the content does not fit" taggedAs (UnitTest) in {
+    val lines = renderer.render(TuiState.initial, 80, 8)
+    lines.length shouldBe 8
+    lines.last.toString should include("[Q]uit")
+  }
+
+  it should "truncate an over-long value instead of wrapping" taggedAs (UnitTest) in {
+    val state = TuiState.initial.withNodeSettings(NodeSettings(dataDir = "/x" * 100, network = "etc"))
+    val lines = renderer.render(state, 60, 50)
+    all(lines.map(_.columnLength())) shouldBe 60
+  }
+
+  it should "show the logo only when it fits without truncating the body" taggedAs (UnitTest) in {
+    def hasLogo(height: Int) = renderer.render(TuiState.initial, 100, height).exists(_.toString.contains("=+#+."))
+    hasLogo(60) shouldBe true
+    hasLogo(25) shouldBe false
+  }
+
+  it should "show an unknown network head as 'unknown', not 0" taggedAs (UnitTest) in {
+    val output = renderer.render(TuiState.initial.withBlockInfo(5, 0), 100, 40).map(_.toString).mkString("\n")
+    output should include("Best Block: unknown")
+  }
+
+  it should "keep styles as attributes rather than embedded escape codes" taggedAs (UnitTest) in {
+    val lines = renderer.render(TuiState.initial.withPeerCount(3, 10), 100, 40)
+    (all(lines.map(_.toString)) should not).include("\u001b")
+  }
