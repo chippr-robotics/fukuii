@@ -217,6 +217,8 @@ object PeerManagerActor:
 
     // Subscribe the core to the handshake event of any peer.
     peerEventBus ! SubscribeCmd(SubscriptionClassifier.PeerHandshaked, peerEventAdapter)
+    // ...and to wrong-network handshake failures, so their node IDs stop being re-dialled (#88).
+    peerEventBus ! SubscribeCmd(SubscriptionClassifier.WrongNetworkPeersClassifier, peerEventAdapter)
 
     /** Maximum number of blacklisted nodes will never be larger than number of peers provided by discovery Discovery
       * provides remote nodes from all networks (ETC,ETH, Mordor etc.) only during handshake we learn that some of the
@@ -228,6 +230,18 @@ object PeerManagerActor:
     private val maxBlacklistedNodes: Int = 32 * 8 * discoveryConfig.kademliaBucketSize
 
     private val triedNodes: mutable.Set[ByteString] = lruSet[ByteString](maxBlacklistedNodes)
+
+    /** Node IDs whose STATUS named another network or genesis (#88). On Sepolia 94 of 133 handshakes were such peers
+      * (networkIds 9745, 137, 100, 1, ...), and the same node IDs were re-dialled within minutes: the soft-tier IP
+      * blacklist for `UselessPeer` is minutes long by design (it must not exile peers that merely rejected us). A node
+      * on another network will not change networks, so it is excluded by node ID for
+      * `peerConfiguration.wrongNetworkExclusionDuration` (24 h default). Node ID, not IP, so a good node behind the
+      * same NAT is unaffected. ForkId rejections never land here.
+      */
+    private val wrongNetworkNodes = new WrongNetworkExclusions(maxBlacklistedNodes)
+
+    private def isExcludedWrongNetwork(nodeId: ByteString): Boolean =
+      wrongNetworkNodes.isExcluded(nodeId, System.currentTimeMillis())
 
     /** In-process cache of peer statuses, updated reactively and via scheduled refresh. This allows GetPeers to return
       * immediately without querying individual peer actors.
@@ -296,7 +310,8 @@ object PeerManagerActor:
           connectedPeers.isConnectionHandled(socketAddress) ||
             connectedPeers.hasHandshakedWith(node.id)
 
-        !alreadyConnected && !blacklist.isBlacklisted(PeerAddress(socketAddress.getHostString))
+        !alreadyConnected && !blacklist.isBlacklisted(PeerAddress(socketAddress.getHostString)) &&
+        !isExcludedWrongNetwork(node.id)
 
     // -----------------------------------------------------------------------
     // State 1: waitingForStart (stash everything until StartConnecting)
@@ -608,6 +623,11 @@ object PeerManagerActor:
       yield validNumber
 
       validConnection match
+        case Right(_) if !isMaintainedOrTrusted && isExcludedWrongNetwork(nodeId) =>
+          // Known-nodes, ConnectToPeer and admin paths all funnel here; discovery is also filtered in canConnectTo.
+          log.debug("Not dialling {}: node is excluded as wrong-network", uri)
+          Behaviors.same
+
         case Right(address) =>
           val (peer, newConnectedPeers) = createPeer(address, incomingConnection = false, connectedPeers)
           peer.ref.toClassic.tell(PeerActor.ConnectTo(uri), peerEventAdapter.toClassic)
@@ -684,6 +704,26 @@ object PeerManagerActor:
 
         case PeerEventReceived(PeerEvent.PeerHandshakeSuccessful(handshakedPeer, handshakeResult)) =>
           Some(handlePeerHandshakeSuccessful(handshakedPeer, handshakeResult, connectedPeers))
+
+        case PeerEventReceived(PeerEvent.PeerOnWrongNetwork(nodeId, remoteHost)) =>
+          val nodeIdHex = Hex.toHexString(nodeId.toArray)
+          // An operator-configured maintained/trusted peer is the operator's call, not ours.
+          if maintainedPeersByNodeId.contains(nodeIdHex) || trustedPeersByNodeId.contains(nodeIdHex) then
+            log.warn("Maintained/trusted peer {} ({}) is on a different network or genesis", nodeIdHex, remoteHost)
+          else
+            val duration = peerConfiguration.wrongNetworkExclusionDuration
+            val isNew = wrongNetworkNodes.add(nodeId, System.currentTimeMillis() + duration.toMillis)
+            // INFO once per newly excluded node; a still-excluded node can only reappear by dialling us, so DEBUG.
+            if isNew then
+              log.info(
+                "WRONG_NETWORK: excluding node={} host={} from dialling for {} (excluded={})",
+                nodeIdHex.take(16),
+                remoteHost,
+                duration,
+                wrongNetworkNodes.size
+              )
+            else log.debug("WRONG_NETWORK: node={} host={} still excluded", nodeIdHex.take(16), remoteHost)
+          Some(Behaviors.same)
 
         case PeerEventReceived(_) =>
           Some(Behaviors.same)
@@ -1038,7 +1078,14 @@ object PeerManagerActor:
     val longBlacklistDuration: FiniteDuration
     val statSlotDuration: FiniteDuration
     val statSlotCount: Int
+
+    /** How long a node whose STATUS named another network or genesis is kept off the dial list (#88). Concrete so the
+      * many test configurations keep compiling; overridden from `network.peer.wrong-network-exclusion-duration`.
+      */
+    val wrongNetworkExclusionDuration: FiniteDuration = PeerConfiguration.DefaultWrongNetworkExclusionDuration
   object PeerConfiguration:
+    val DefaultWrongNetworkExclusionDuration: FiniteDuration = 24.hours
+
     trait ConnectionLimits:
       val minOutgoingPeers: Int
       val maxOutgoingPeers: Int
@@ -1197,6 +1244,32 @@ object PeerManagerActor:
         maybeAgeSeconds.map(age => stat.responsesReceived.toDouble / age)
       }
       .getOrElse(0.0)
+
+  /** Bounded node-ID exclusion list with per-entry expiry (wrong-network peers, #88). Insertion-ordered: past
+    * `maxEntries` the oldest entry is dropped. Not thread-safe; owned by the PeerManagerActor.
+    */
+  final class WrongNetworkExclusions(maxEntries: Int):
+    require(maxEntries >= 1, s"maxEntries must be >= 1, got $maxEntries")
+    private val untilMs = mutable.LinkedHashMap.empty[ByteString, Long]
+
+    /** Exclude `nodeId` until `expiresAtMs`. Returns true if the node was not already listed. */
+    def add(nodeId: ByteString, expiresAtMs: Long): Boolean =
+      val wasExcluded = untilMs.contains(nodeId)
+      untilMs.remove(nodeId)
+      untilMs.update(nodeId, expiresAtMs)
+      while untilMs.size > maxEntries do untilMs.remove(untilMs.head._1)
+      !wasExcluded
+
+    /** True while the exclusion has not expired. An expired entry is dropped on lookup. */
+    def isExcluded(nodeId: ByteString, nowMs: Long): Boolean =
+      untilMs.get(nodeId) match
+        case Some(until) if until > nowMs => true
+        case Some(_) =>
+          untilMs.remove(nodeId)
+          false
+        case None => false
+
+    def size: Int = untilMs.size
 
   def lruSet[A](maxEntries: Int): mutable.Set[A] =
     newSetFromMap[A](

@@ -111,8 +111,8 @@ class EthNodeStatusTimestampForkSpec extends AnyFlatSpec with Matchers:
       forkId = staleForkId
     )
     state.applyResponseMessage(remoteStatus) match
-      case DisconnectedState(Disconnect.Reasons.UselessPeer) => succeed
-      case other                                             => fail(s"expected a UselessPeer disconnect, got: $other")
+      case DisconnectedState(Disconnect.Reasons.UselessPeer, false) => succeed // ForkId reject, not wrong-network (#88)
+      case other => fail(s"expected a UselessPeer disconnect, got: $other")
 
   it should "accept an upgraded past-Amsterdam peer at the same tiny block count" taggedAs (
     UnitTest,
@@ -148,8 +148,8 @@ class EthNodeStatusTimestampForkSpec extends AnyFlatSpec with Matchers:
       latestBlockHash = bestHeader.hash.value
     )
     state.applyResponseMessage(remoteStatus) match
-      case DisconnectedState(Disconnect.Reasons.UselessPeer) => succeed
-      case other                                             => fail(s"expected a UselessPeer disconnect, got: $other")
+      case DisconnectedState(Disconnect.Reasons.UselessPeer, false) => succeed // ForkId reject, not wrong-network (#88)
+      case other => fail(s"expected a UselessPeer disconnect, got: $other")
 
   it should "accept an upgraded past-Amsterdam peer at the same tiny block count" taggedAs (
     UnitTest,
@@ -186,8 +186,8 @@ class EthNodeStatusTimestampForkSpec extends AnyFlatSpec with Matchers:
       latestBlockHash = bestHeader.hash.value
     )
     state.applyResponseMessage(remoteStatus) match
-      case DisconnectedState(Disconnect.Reasons.UselessPeer) => succeed
-      case other                                             => fail(s"expected a UselessPeer disconnect, got: $other")
+      case DisconnectedState(Disconnect.Reasons.UselessPeer, false) => succeed // ForkId reject, not wrong-network (#88)
+      case other => fail(s"expected a UselessPeer disconnect, got: $other")
 
   it should "accept an upgraded past-Amsterdam peer at the same tiny block count" taggedAs (
     UnitTest,
