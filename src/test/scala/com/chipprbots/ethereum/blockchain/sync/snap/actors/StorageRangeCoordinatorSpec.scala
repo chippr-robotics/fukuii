@@ -1733,3 +1733,68 @@ class StorageRangeCoordinatorSpec extends ScalaTestWithActorTestKit() with AnyFl
     impl.tasks.size shouldBe tasksBefore
     impl.activeTasks shouldBe empty
   }
+
+  // ── Peer health: penalised peers are skipped; probation peers get one slot (Sepolia 2026-10-07) ─────────────
+
+  private def implWithTasks(n: Int) =
+    val (impl, kit) = newImpl(
+      stateRoot = kec256(ByteString("health-root")),
+      flatSlotStorage = new FlatSlotStorage(EphemDataSource()),
+      snapSyncControllerRef = testKit.createTestProbe[SNAPSyncController.Command]().ref,
+      maxAccountsPerBatch = 1,
+      maxInFlightRequests = 16
+    )
+    val tasks = (1 to n).map { i =>
+      StorageTask.createStorageTask(kec256(ByteString("health-account-" + i)), kec256(ByteString("health-sr-" + i)))
+    }
+    kit.run(StorageRangeCoordinator.AddStorageTasks(tasks))
+    (impl, kit)
+
+  private def demote(impl: StorageRangeCoordinatorImpl, peerId: String): Unit =
+    val now = System.currentTimeMillis()
+    (1 to impl.peerHealth.timeoutThreshold).foreach(_ => impl.peerHealth.recordTimeout(peerId, now))
+    impl.peerHealth.isPenalised(peerId, now) shouldBe true
+
+  private def inFlightFor(impl: StorageRangeCoordinatorImpl, peerId: String): Int =
+    impl.activeTasks.values.count(_._1.id.value == peerId)
+
+  it should "not dispatch to a penalised peer on StoragePeerAvailable, but serve a healthy one with its full budget" taggedAs UnitTest in {
+    val (impl, kit) = implWithTasks(8)
+    val dead = PeerTestHelpers.createTestPeer("health-dead", testKit.createTestProbe[Any]().ref.toClassic)
+    val live = PeerTestHelpers.createTestPeer("health-live", testKit.createTestProbe[Any]().ref.toClassic)
+    demote(impl, dead.id.value)
+
+    kit.run(StorageRangeCoordinator.StoragePeerAvailable(dead))
+    inFlightFor(impl, dead.id.value) shouldBe 0
+
+    kit.run(StorageRangeCoordinator.StoragePeerAvailable(live))
+    inFlightFor(impl, live.id.value) shouldBe 5 // initialMaxInFlightPerPeer default
+
+    // The redispatch path (eligible set + floor) also skips the penalised peer while a healthy one exists.
+    kit.run(StorageRangeCoordinator.StorageCheckCompletion)
+    inFlightFor(impl, dead.id.value) shouldBe 0
+  }
+
+  it should "probe a penalised peer with a single slot only when it is the only servable peer" taggedAs UnitTest in {
+    val (impl, kit) = implWithTasks(8)
+    val dead = PeerTestHelpers.createTestPeer("health-only", testKit.createTestProbe[Any]().ref.toClassic)
+    demote(impl, dead.id.value)
+
+    kit.run(StorageRangeCoordinator.StoragePeerAvailable(dead)) // registers the peer, no dispatch
+    inFlightFor(impl, dead.id.value) shouldBe 0
+    kit.run(StorageRangeCoordinator.StorageCheckCompletion) // floor: last-resort probe
+    inFlightFor(impl, dead.id.value) shouldBe 1
+    kit.run(StorageRangeCoordinator.StorageCheckCompletion) // still bounded to one slot, penalty kept
+    inFlightFor(impl, dead.id.value) shouldBe 1
+    impl.peerHealth.isPenalised(dead.id.value, System.currentTimeMillis()) shouldBe true
+  }
+
+  it should "lift timeout penalties on StoragePivotRefreshed but keep the level" taggedAs UnitTest in {
+    val (impl, kit) = implWithTasks(2)
+    demote(impl, "health-pivot")
+    val level = impl.peerHealth.level("health-pivot")
+    kit.run(StorageRangeCoordinator.StoragePivotRefreshed(kec256(ByteString("health-root-2"))))
+    impl.peerHealth.isPenalised("health-pivot", System.currentTimeMillis()) shouldBe false
+    impl.peerHealth.isOnProbation("health-pivot") shouldBe false
+    impl.peerHealth.level("health-pivot") shouldBe level
+  }

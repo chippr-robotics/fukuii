@@ -163,10 +163,10 @@ private[actors] class StorageRangeCoordinatorImpl(
 
   // Liveness score per peer (see SnapPeerHealth). The 5 s cooldown above handles a transient hiccup; this handles a peer
   // that never answers. A peer with `timeoutThreshold` consecutive timeouts and no success is penalised (2 min, doubling
-  // to 30 min) and is skipped by normal dispatch AND by the cooldown floor; once the penalty lapses it gets one request
-  // slot until it answers. Not cleared on pivot refresh or disconnect: it is a liveness signal, not a root signal, and
-  // the key is the node ID so a reconnect does not reset it.
-  private val peerHealth = new com.chipprbots.ethereum.blockchain.sync.snap.SnapPeerHealth()
+  // to 30 min; capped at 5 min while a majority of the pool is penalised) and is skipped by normal dispatch AND by the
+  // cooldown floor; once the penalty lapses it gets one request slot until it answers. A pivot refresh lifts penalties
+  // but keeps levels; a disconnect keeps everything (the key is the node ID, so a reconnect does not reset it).
+  private[actors] val peerHealth = new com.chipprbots.ethereum.blockchain.sync.snap.SnapPeerHealth()
   private var lastPenalisedFloorLogMs: Long = 0L
 
   // Stateless peer tracking: peers CONFIRMED unable to serve the current state root after
@@ -1090,6 +1090,12 @@ private[actors] class StorageRangeCoordinatorImpl(
           snapSyncController ! SNAPSyncController.StorageBackpressureChanged(paused = false)
         lastDispatchOrResponseMs = System.currentTimeMillis()
         peerCooldownUntilMs.clear()
+        // A new root is a fresh chance: lift timeout penalties (levels kept, so a dead peer re-penalises on its next
+        // timeout). A stale root or a local stall times out every peer at once; without this the next root would be
+        // served by a single probe slot while the pool sits out 8-30 min penalties.
+        val liftedPenalties = peerHealth.liftPenalties()
+        if liftedPenalties > 0 then
+          log.info(s"[STORAGE-PEER-HEALTH] pivot refreshed: lifted timeout penalties for $liftedPenalties peer(s)")
         peerBatchSize.clear()
         peerBatchSuccessStreak.clear()
         peerResponseBytesTarget.clear()
@@ -1757,7 +1763,7 @@ private[actors] class StorageRangeCoordinatorImpl(
     activeTasks.remove(requestId).foreach { case (peer, batchTasks, _) =>
       log.warn(s"Storage range request timeout for ${batchTasks.size} accounts from peer ${peer.id.value}")
       recordPeerCooldown(peer, "request timeout")
-      peerHealth.recordTimeout(peer.id.value, System.currentTimeMillis()).foreach { penalty =>
+      peerHealth.recordTimeout(peer.id.value, System.currentTimeMillis(), knownAvailablePeers.size).foreach { penalty =>
         // At most once per penalty window per peer: a penalised peer is not dispatched to, so it cannot time out again
         // until the penalty lapses.
         log.info(

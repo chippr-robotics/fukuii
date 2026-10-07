@@ -149,6 +149,7 @@ private class SNAPSyncControllerImpl(
     * invisible (Sepolia 2026-10-07).
     */
   private def snapServingPeers(): List[com.chipprbots.ethereum.network.Peer] =
+    // Keyed by stable reasons only, so `changed` does not fire on every head update of an excluded peer.
     val exclusions: Map[String, String] = peerListHelper.handshakedPeers.flatMap { case (peerId, p) =>
       SNAPSyncController
         .snapExclusionReason(p.peerInfo, peerListHelper.blacklistReason(peerId))
@@ -165,7 +166,19 @@ private class SNAPSyncControllerImpl(
       val snapCapable = peerListHelper.handshakedPeers.values.count(_.peerInfo.remoteStatus.supportsSnap)
       val detail =
         if exclusions.isEmpty then "none"
-        else exclusions.toList.sorted.map { case (id, r) => s"${id.take(8)}:$r" }.mkString(", ")
+        else
+          val maxBlockById = peerListHelper.handshakedPeers.map { case (id, p) =>
+            id.value -> p.peerInfo.maxBlockNumber
+          }
+          exclusions.toList.sorted
+            .map { case (id, r) =>
+              val atBlock =
+                if r == SNAPSyncController.SnapExclusionAtGenesis then
+                  maxBlockById.get(id).fold("")(n => s"(maxBlock=$n)")
+                else ""
+              s"${id.take(8)}:$r$atBlock"
+            }
+            .mkString(", ")
       ctx.log.info(
         "[SNAP-PEERS] snapCapable={} excluded={} served={} exclusions=[{}]",
         snapCapable,
@@ -5648,8 +5661,13 @@ object SNAPSyncController:
       blacklistReason match
         case Some(reason) => Some(s"blacklisted($reason)")
         case None if peerInfo.bestBlockHash == peerInfo.remoteStatus.genesisHash =>
-          Some(s"best-block-is-genesis(maxBlock=${peerInfo.maxBlockNumber})")
+          Some(SnapExclusionAtGenesis)
         case None => None
+
+  /** Exclusion reason for a peer whose best block is its genesis. A stable key: the `[SNAP-PEERS]` change detection
+    * compares reasons, so it must not embed a moving value such as the block number (printed separately).
+    */
+  private[snap] val SnapExclusionAtGenesis: String = "best-block-is-genesis"
 
   /** Steady-state cadence of the `[SNAP-PEERS]` exclusion log while some snap-capable peer is excluded. */
   private[snap] val SnapExclusionLogIntervalMs: Long = 60_000L

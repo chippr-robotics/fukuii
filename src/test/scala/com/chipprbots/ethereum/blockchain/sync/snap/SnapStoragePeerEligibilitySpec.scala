@@ -115,3 +115,11 @@ class SnapStoragePeerEligibilitySpec extends AnyFlatSpec with Matchers:
     val moved = atGenesis.withBestBlockData(BigInt(7000), head)
     SNAPSyncController.snapExclusionReason(moved, None) shouldBe None
   }
+
+  it should "give a stable genesis reason that does not change with the peer's tracked block number" taggedAs UnitTest in {
+    // The [SNAP-PEERS] log re-fires when the reason map changes, so the reason must not embed a moving value.
+    val a = PeerInfo(status(Capability.ETH69, genesis, latestBlock = Some(BigInt(0))), forkAccepted = true)
+    val b = a.copy(maxBlockNumber = BigInt(42))
+    SNAPSyncController.snapExclusionReason(a, None) shouldBe Some(SNAPSyncController.SnapExclusionAtGenesis)
+    SNAPSyncController.snapExclusionReason(b, None) shouldBe SNAPSyncController.snapExclusionReason(a, None)
+  }

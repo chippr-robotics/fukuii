@@ -32,11 +32,13 @@ final class SnapPeerHealth(
     val timeoutThreshold: Int = SnapPeerHealth.DefaultTimeoutThreshold,
     val basePenalty: FiniteDuration = SnapPeerHealth.DefaultBasePenalty,
     val maxPenalty: FiniteDuration = SnapPeerHealth.DefaultMaxPenalty,
-    val maxTracked: Int = SnapPeerHealth.DefaultMaxTracked
+    val maxTracked: Int = SnapPeerHealth.DefaultMaxTracked,
+    val massPenaltyCap: FiniteDuration = SnapPeerHealth.DefaultMassPenaltyCap
 ):
   require(timeoutThreshold >= 1, s"timeoutThreshold must be >= 1, got $timeoutThreshold")
   require(basePenalty > Duration.Zero && maxPenalty >= basePenalty, s"invalid penalty bounds $basePenalty..$maxPenalty")
   require(maxTracked >= 1, s"maxTracked must be >= 1, got $maxTracked")
+  require(massPenaltyCap > Duration.Zero, s"massPenaltyCap must be positive, got $massPenaltyCap")
 
   import SnapPeerHealth.*
 
@@ -57,26 +59,62 @@ final class SnapPeerHealth(
 
   /** Record a request timeout. Returns `Some(penalty)` when this timeout demotes the peer (newly, or again after
     * probation), `None` while it is still below the threshold or already serving a penalty.
+    *
+    * @param poolSize
+    *   number of peers the caller currently knows (0 = unknown). If this demotion leaves a strict majority of the pool
+    *   penalised, the likelier cause is local (stalled/swapping host) or a root nobody serves, not every peer failing
+    *   at once: the new penalty, and every running one, is capped at `massPenaltyCap`. The level still escalates.
     */
-  def recordTimeout(peerId: String, nowMs: Long): Option[FiniteDuration] =
+  def recordTimeout(peerId: String, nowMs: Long, poolSize: Int = 0): Option[FiniteDuration] =
     val s = states.getOrElse(peerId, PeerState.Fresh)
     val timeouts = s.consecutiveTimeouts + 1
     val alreadyPenalised = s.penaltyUntilMs > nowMs
     val demote = !alreadyPenalised && (timeouts >= timeoutThreshold || s.probation)
+    val penalty =
+      if !demote then Duration.Zero
+      else
+        val othersPenalised = states.iterator.count { case (id, st) => id != peerId && st.penaltyUntilMs > nowMs }
+        val massDemotion = poolSize > 0 && (othersPenalised + 1) * 2 > poolSize
+        val base = penaltyFor(s.level + 1)
+        if massDemotion then
+          capRunningPenalties(nowMs)
+          base.min(massPenaltyCap)
+        else base
     val next =
       if demote then
-        val level = s.level + 1
         s.copy(
           consecutiveTimeouts = timeouts,
-          level = level,
-          penaltyUntilMs = nowMs + penaltyFor(level).toMillis,
+          level = s.level + 1,
+          penaltyUntilMs = nowMs + penalty.toMillis,
           probation = true
         )
       else s.copy(consecutiveTimeouts = timeouts)
     states.remove(peerId) // re-insert at the tail: the most recently touched entry is evicted last
     states.update(peerId, next)
     evictIfOversized()
-    if demote then Some(penaltyFor(next.level)) else None
+    if demote then Some(penalty) else None
+
+  /** Pivot refresh: a new root is a fresh chance for every peer. Lift all running penalties and probation, but keep
+    * `level` and the consecutive-timeout count, so a peer that is genuinely dead is re-penalised on its very next
+    * timeout, at the next (longer) level. Without this, a stale pivot or a local stall that times out every peer at
+    * once leaves level-3+ peers parked for 8-30 min although the new root would be served.
+    *
+    * @return
+    *   how many peers had a penalty or probation lifted
+    */
+  def liftPenalties(): Int =
+    var lifted = 0
+    states.mapValuesInPlace { (_, st) =>
+      if st.penaltyUntilMs != 0L || st.probation then
+        lifted += 1
+        st.copy(penaltyUntilMs = 0L, probation = false)
+      else st
+    }
+    lifted
+
+  private def capRunningPenalties(nowMs: Long): Unit =
+    val capUntil = nowMs + massPenaltyCap.toMillis
+    states.mapValuesInPlace((_, st) => if st.penaltyUntilMs > capUntil then st.copy(penaltyUntilMs = capUntil) else st)
 
   /** The peer is serving a demotion penalty and must not be selected (normal dispatch or the cooldown floor). */
   def isPenalised(peerId: String, nowMs: Long): Boolean =
@@ -112,6 +150,7 @@ object SnapPeerHealth:
   val DefaultBasePenalty: FiniteDuration = 2.minutes
   val DefaultMaxPenalty: FiniteDuration = 30.minutes
   val DefaultMaxTracked: Int = 1024
+  val DefaultMassPenaltyCap: FiniteDuration = 5.minutes
 
   final private case class PeerState(consecutiveTimeouts: Int, level: Int, penaltyUntilMs: Long, probation: Boolean)
   private object PeerState:

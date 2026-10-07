@@ -98,6 +98,41 @@ class SnapPeerHealthSpec extends AnyFlatSpec with Matchers:
     an[IllegalArgumentException] should be thrownBy new SnapPeerHealth(basePenalty = 5.minutes, maxPenalty = 1.minute)
   }
 
+  // Pivot refresh and mass demotion (a local stall or a stale root times out everyone at once)
+
+  it should "lift penalties and probation on liftPenalties but keep the level, so a dead peer re-penalises fast" taggedAs UnitTest in {
+    val h = health()
+    (1 to 3).foreach(_ => h.recordTimeout(peer, 0L))
+    h.recordTimeout(peer, 2.minutes.toMillis) // level 2, 4 min
+    h.liftPenalties() shouldBe 1
+    h.isPenalised(peer, 2.minutes.toMillis + 1) shouldBe false
+    h.isOnProbation(peer) shouldBe false
+    h.level(peer) shouldBe 2
+    // One more timeout (not a fresh threshold) re-penalises it at the next level.
+    h.recordTimeout(peer, 3.minutes.toMillis) shouldBe Some(8.minutes)
+    h.liftPenalties() shouldBe 1
+    h.liftPenalties() shouldBe 0
+  }
+
+  it should "cap the penalty when a majority of the pool is penalised at once" taggedAs UnitTest in {
+    val h = health()
+    def demoteAt(id: String, now: Long, pool: Int): Option[FiniteDuration] =
+      (1 to 3).map(_ => h.recordTimeout(id, now, poolSize = pool)).last
+    // Raise one peer to a high level first, in a big healthy pool: no cap.
+    demoteAt("a", 0L, pool = 10) shouldBe Some(2.minutes)
+    (1 to 3).foreach(i => h.recordTimeout("a", i * 31.minutes.toMillis, poolSize = 10))
+    h.level("a") shouldBe 4
+    val t = 3 * 31.minutes.toMillis
+    h.penaltyUntilMs("a") shouldBe t + 16.minutes.toMillis
+    // Pool of 3: "b" penalised makes 2 of 3 penalised -> majority: cap new AND running penalties at 5 min.
+    demoteAt("b", t + 1, pool = 3) shouldBe Some(2.minutes) // already below the cap
+    h.penaltyUntilMs("a") shouldBe t + 1 + 5.minutes.toMillis
+    // A minority demotion in the same pool is not capped.
+    val h2 = health()
+    (1 to 3).foreach(_ => h2.recordTimeout("x", 0L, poolSize = 3))
+    h2.penaltyUntilMs("x") shouldBe 2.minutes.toMillis
+  }
+
   // Storage in-flight budget during account sync
 
   "SNAPSyncConfig.fromConfig" should "default the storage in-flight budget during account sync to 3" taggedAs UnitTest in {
