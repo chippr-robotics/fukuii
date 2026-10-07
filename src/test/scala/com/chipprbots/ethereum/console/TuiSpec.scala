@@ -127,3 +127,10 @@ class TuiSpec extends AnyFlatSpec with Matchers:
     noException should be thrownBy tui.shutdown()
     tui.isEnabled shouldBe false
   }
+
+  it should "leave raw mode even when writing the reset sequence fails" taggedAs (UnitTest) in withTui() { (tui, tt) =>
+    tt.failWrites = true
+    tui.shutdown()
+    tui.isEnabled shouldBe false
+    tt.lastSetAttributes.map(_.getLocalFlag(LocalFlag.ICANON)) shouldBe Some(true)
+  }

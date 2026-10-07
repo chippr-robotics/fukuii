@@ -19,10 +19,16 @@ final class TuiTestTerminal(width: Int = 100, height: Int = 40, termType: String
   /** The attributes most recently applied — still readable after the terminal is closed. */
   @volatile var lastSetAttributes: Option[Attributes] = None
 
+  /** When set, `writer()` throws — simulates an output failure during teardown. */
+  @volatile var failWrites: Boolean = false
+
   // Built directly rather than via TerminalBuilder, which may allocate a real PTY whose output pump copies to `screen`
   // asynchronously. ExternalTerminal writes through synchronously, so assertions see every byte already written.
   val terminal: Terminal =
     val t = new ExternalTerminal("tui-test", termType, keyboardIn, screen, StandardCharsets.UTF_8):
+      override def writer(): java.io.PrintWriter =
+        if failWrites then throw new IllegalStateException("simulated output failure")
+        super.writer()
       override def setAttributes(attr: Attributes): Unit =
         lastSetAttributes = Some(new Attributes(attr))
         super.setAttributes(attr)

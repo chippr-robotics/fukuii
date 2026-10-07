@@ -56,10 +56,17 @@ class TuiUpdaterSpec extends AnyFlatSpec with Matchers:
 
   it should "run the quit hook off the updater thread on 'q'" taggedAs (UnitTest) in {
     val quitThread = Promise[Thread]()
-    withUpdater(onQuit = () => quitThread.success(Thread.currentThread())) { (updater, _, tt) =>
+    @volatile var tickThread: Thread = null
+    withUpdater(
+      statusSource = () =>
+        tickThread = Thread.currentThread(); snapshot
+      ,
+      onQuit = () => quitThread.success(Thread.currentThread())
+    ) { (updater, _, tt) =>
       tt.press("q")
       tickWithin(updater) shouldBe false
-      Await.result(quitThread.future, 5.seconds) should not be Thread.currentThread()
+      tickThread should not be null
+      Await.result(quitThread.future, 5.seconds) should not be tickThread
     }
   }
 

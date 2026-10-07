@@ -184,14 +184,14 @@ class Tui(config: TuiConfig = TuiConfig.default, terminalFactory: () => Terminal
 
   /** Restore the terminal to the state the user had before the TUI took it over. */
   private def releaseTerminal(): Unit =
+    // Each step runs regardless of the others: a failed write must not leave the terminal in raw mode.
     terminal.foreach { term =>
-      try
-        write(term, Tui.ResetColors + Tui.ShowCursor + Tui.ExitAltScreen)
-        savedAttributes.foreach(term.setAttributes)
-        term.close()
-      catch
-        case NonFatal(e) =>
-          log.error(s"Error shutting down TUI: ${e.getMessage}")
+      def attempt(step: String)(f: => Unit): Unit =
+        try f
+        catch case NonFatal(e) => log.error(s"Error shutting down TUI ($step): ${e.getMessage}")
+      attempt("reset screen")(write(term, Tui.ResetColors + Tui.ShowCursor + Tui.ExitAltScreen))
+      attempt("restore terminal mode")(savedAttributes.foreach(term.setAttributes))
+      attempt("close terminal")(term.close())
     }
     terminal = None
     savedAttributes = None
