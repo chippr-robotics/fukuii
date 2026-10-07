@@ -165,6 +165,9 @@ class IrregularStateChangeDaoForkHandshakerSpec extends AnyFlatSpec with Matcher
       handshakerAfterHelloOpt.get.applyMessage(newRemoteStatusMsg)
     assert(handshakerAfterStatusOpt.isDefined)
 
+    // A ForkId rejection is not a wrong-network failure (#88): it keeps the ordinary blacklist handling. On ETC this is
+    // how ETH-mainnet peers (same networkId 1, same genesis) are told apart.
+    handshakerAfterStatusOpt.get.failedOnWrongNetwork shouldBe false
     handshakerAfterStatusOpt.get.nextMessage match
       case Left(HandshakeFailure(Disconnect.Reasons.UselessPeer)) => succeed
       case other =>
@@ -285,6 +288,8 @@ class IrregularStateChangeDaoForkHandshakerSpec extends AnyFlatSpec with Matcher
     handshakerAfterStatusOpt.get.nextMessage.map(_.messageToSend) shouldBe Left(
       HandshakeFailure(Disconnect.Reasons.UselessPeer)
     )
+    // Wrong network/genesis: flagged so PeerManagerActor stops re-dialling the node ID (#88).
+    handshakerAfterStatusOpt.get.failedOnWrongNetwork shouldBe true
 
   it should "fail if a status msg is received with invalid genesisHash" taggedAs (
     UnitTest,
@@ -299,6 +304,8 @@ class IrregularStateChangeDaoForkHandshakerSpec extends AnyFlatSpec with Matcher
     handshakerAfterStatusOpt.get.nextMessage.map(_.messageToSend) shouldBe Left(
       HandshakeFailure(Disconnect.Reasons.UselessPeer)
     )
+    // Wrong network/genesis: flagged so PeerManagerActor stops re-dialling the node ID (#88).
+    handshakerAfterStatusOpt.get.failedOnWrongNetwork shouldBe true
 
   it should "fail if the remote peer doesn't support ETH68+" taggedAs (
     UnitTest,

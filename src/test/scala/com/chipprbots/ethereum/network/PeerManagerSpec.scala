@@ -44,6 +44,7 @@ import com.chipprbots.ethereum.network.PeerEventBusActor.PeerEvent.PeerDisconnec
 import com.chipprbots.ethereum.network.PeerEventBusActor.PublishCmd
 import com.chipprbots.ethereum.network.PeerEventBusActor.SubscribeCmd
 import com.chipprbots.ethereum.network.PeerEventBusActor.SubscriptionClassifier.PeerHandshaked
+import com.chipprbots.ethereum.network.PeerEventBusActor.SubscriptionClassifier.WrongNetworkPeersClassifier
 import com.chipprbots.ethereum.network.PeerManagerActor.PeerAddress
 import com.chipprbots.ethereum.network.PeerManagerActor.PeerConfiguration
 import com.chipprbots.ethereum.network.PeerManagerActor.Peers
@@ -1115,6 +1116,7 @@ class PeerManagerSpec
 
     def start(): Unit =
       peerEventBus.expectMsgType[SubscribeCmd].to shouldBe PeerHandshaked
+      peerEventBus.expectMsgType[SubscribeCmd].to shouldBe WrongNetworkPeersClassifier
 
       peerManager ! PeerManagerActor.StartConnectingCmd
 
@@ -1125,6 +1127,70 @@ class PeerManagerSpec
       req.replyTo ! PeerDiscoveryManager.DiscoveredNodesInfo(bootstrapNodes)
       val knownReq = knownNodesManager.expectMsgType[KnownNodesManager.GetKnownNodesReq]
       knownReq.replyTo ! KnownNodesManager.KnownNodes(knownNodes)
+
+  // ── Wrong-network exclusion (#88) ──────────────────────────────────────────
+
+  it should "not dial a node whose STATUS named another network, but still dial other nodes (#88)" taggedAs (
+    UnitTest,
+    NetworkTest
+  ) in new TestSetup:
+    start()
+    val wrongHex = "aa" * 64
+    val okHex = "bb" * 64
+    val wrongUri = new URI(s"enode://$wrongHex@10.0.0.9:30303")
+    val okUri = new URI(s"enode://$okHex@10.0.0.10:30303")
+
+    peerManager ! PeerManagerActor.PeerEventReceived(
+      PeerEvent.PeerOnWrongNetwork(ByteString(Hex.decode(wrongHex)), "10.0.0.9")
+    )
+    peerManager ! PeerManagerActor.ConnectToPeerCmd(wrongUri)
+    peerManager ! PeerManagerActor.ConnectToPeerCmd(okUri)
+
+    val dialled = createdPeerQueue.poll(3, java.util.concurrent.TimeUnit.SECONDS)
+    dialled should not be null
+    dialled.probe.expectMsgType[ConnectTo](3.seconds).uri shouldBe okUri
+    createdPeers.size shouldBe 1
+
+  it should "dial an excluded wrong-network node when the operator asks explicitly (#88)" taggedAs (
+    UnitTest,
+    NetworkTest
+  ) in new TestSetup:
+    start()
+    val wrongHex = "cc" * 64
+    val wrongUri = new URI(s"enode://$wrongHex@10.0.0.11:30303")
+    peerManager ! PeerManagerActor.PeerEventReceived(
+      PeerEvent.PeerOnWrongNetwork(ByteString(Hex.decode(wrongHex)), "10.0.0.11")
+    )
+    peerManager ! PeerManagerActor.ConnectToPeerCmd(wrongUri, explicit = true)
+
+    val dialled = createdPeerQueue.poll(3, java.util.concurrent.TimeUnit.SECONDS)
+    dialled should not be null
+    dialled.probe.expectMsgType[ConnectTo](3.seconds).uri shouldBe wrongUri
+
+  "PeerManagerActor.WrongNetworkExclusions" should "exclude a node until its expiry, then forget it" taggedAs UnitTest in {
+    val ex = new PeerManagerActor.WrongNetworkExclusions(maxEntries = 2)
+    val a = ByteString(1, 2, 3)
+    ex.add(a, expiresAtMs = 1000L) shouldBe true
+    ex.add(a, expiresAtMs = 2000L) shouldBe false // already excluded: refreshed, not new
+    ex.isExcluded(a, nowMs = 1999L) shouldBe true
+    ex.isExcluded(a, nowMs = 2000L) shouldBe false // expired
+    ex.size shouldBe 0 // expired entry dropped on lookup
+    ex.isExcluded(ByteString(9), nowMs = 0L) shouldBe false
+  }
+
+  it should "stay bounded, evicting the oldest entry" taggedAs UnitTest in {
+    val ex = new PeerManagerActor.WrongNetworkExclusions(maxEntries = 2)
+    ex.add(ByteString(1), 10_000L)
+    ex.add(ByteString(2), 10_000L)
+    ex.add(ByteString(3), 10_000L)
+    ex.size shouldBe 2
+    ex.isExcluded(ByteString(1), 0L) shouldBe false
+    ex.isExcluded(ByteString(3), 0L) shouldBe true
+  }
+
+  "PeerConfiguration.wrongNetworkExclusionDuration" should "default to 24 hours from the shipped config" taggedAs UnitTest in {
+    Config.Network.peer.wrongNetworkExclusionDuration shouldBe 24.hours
+  }
 
   // ── Regression tests for blacklistDurationForDisconnect ────────────────────
   // Sepolia 2026-05-13: when SNAP-syncing from genesis, ~40+ peers per minute were

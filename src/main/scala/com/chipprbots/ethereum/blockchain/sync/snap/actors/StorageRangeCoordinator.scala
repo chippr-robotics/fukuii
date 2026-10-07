@@ -161,6 +161,14 @@ private[actors] class StorageRangeCoordinatorImpl(
   private val peerCooldownUntilMs = mutable.Map[String, Long]()
   private val peerCooldownDefault = 5.seconds
 
+  // Liveness score per peer (see SnapPeerHealth). The 5 s cooldown above handles a transient hiccup; this handles a peer
+  // that never answers. A peer with `timeoutThreshold` consecutive timeouts and no success is penalised (2 min, doubling
+  // to 30 min; capped at 5 min while a majority of the pool is penalised) and is skipped by normal dispatch AND by the
+  // cooldown floor; once the penalty lapses it gets one request slot until it answers. A pivot refresh lifts penalties
+  // but keeps levels; a disconnect keeps everything (the key is the node ID, so a reconnect does not reset it).
+  private[actors] val peerHealth = new com.chipprbots.ethereum.blockchain.sync.snap.SnapPeerHealth()
+  private var lastPenalisedFloorLogMs: Long = 0L
+
   // Stateless peer tracking: peers CONFIRMED unable to serve the current state root after
   // crossing the strike threshold below. When ALL known peers are stateless, request a
   // pivot refresh from the controller.
@@ -256,6 +264,16 @@ private[actors] class StorageRangeCoordinatorImpl(
   /** Reset strike counter when peer produces a useful response. Cheap to over-invoke. */
   private def recordPeerSuccess(peerId: String): Unit =
     emptyResponseStrikes.remove(peerId)
+    recordPeerAnswered(peerId)
+
+  /** The peer answered a request with usable data: feed the liveness score and log a recovery from demotion. */
+  private def recordPeerAnswered(peerId: String): Unit =
+    peerHealth.recordSuccess(peerId).foreach { level =>
+      log.info(
+        s"[STORAGE-PEER-HEALTH] recovered peer=${peerId.take(8)} level=$level->${peerHealth.level(peerId)} " +
+          s"penalised=${peerHealth.penalisedCount(System.currentTimeMillis())}"
+      )
+    }
 
   // Low-eligible recovery: trigger pivot refresh when almost all peers are stateless but
   // one peer remains, preventing allStateless from ever becoming true. With the parallel
@@ -895,6 +913,8 @@ private[actors] class StorageRangeCoordinatorImpl(
           log.debug(s"Ignoring StoragePeerAvailable(${peer.id.value}) - peer is stateless for current root")
         else if isPeerCoolingDown(peer) then
           log.debug(s"Ignoring StoragePeerAvailable(${peer.id.value}) due to cooldown")
+        else if peerHealth.isPenalised(peer.id.value, System.currentTimeMillis()) then
+          log.debug(s"Ignoring StoragePeerAvailable(${peer.id.value}) - peer is penalised for repeated timeouts")
         else if !isComplete && tasks.nonEmpty then
           // Pipeline multiple requests per peer (core-geth parity).
           dispatchIfPossible(peer)
@@ -1070,6 +1090,12 @@ private[actors] class StorageRangeCoordinatorImpl(
           snapSyncController ! SNAPSyncController.StorageBackpressureChanged(paused = false)
         lastDispatchOrResponseMs = System.currentTimeMillis()
         peerCooldownUntilMs.clear()
+        // A new root is a fresh chance: lift timeout penalties (levels kept, so a dead peer re-penalises on its next
+        // timeout). A stale root or a local stall times out every peer at once; without this the next root would be
+        // served by a single probe slot while the pool sits out 8-30 min penalties.
+        val liftedPenalties = peerHealth.liftPenalties()
+        if liftedPenalties > 0 then
+          log.info(s"[STORAGE-PEER-HEALTH] pivot refreshed: lifted timeout penalties for $liftedPenalties peer(s)")
         peerBatchSize.clear()
         peerBatchSuccessStreak.clear()
         peerResponseBytesTarget.clear()
@@ -1347,6 +1373,7 @@ private[actors] class StorageRangeCoordinatorImpl(
       )
       // Peer is healthy — clear any penalty state it accumulated.
       statelessPeers.remove(peer.id.value)
+      recordPeerAnswered(peer.id.value)
       lastDispatchOrResponseMs = System.currentTimeMillis()
       consecutiveUnproductiveRefreshes = 0
       self ! StorageCheckCompletion
@@ -1736,6 +1763,16 @@ private[actors] class StorageRangeCoordinatorImpl(
     activeTasks.remove(requestId).foreach { case (peer, batchTasks, _) =>
       log.warn(s"Storage range request timeout for ${batchTasks.size} accounts from peer ${peer.id.value}")
       recordPeerCooldown(peer, "request timeout")
+      peerHealth.recordTimeout(peer.id.value, System.currentTimeMillis(), knownAvailablePeers.size).foreach { penalty =>
+        // At most once per penalty window per peer: a penalised peer is not dispatched to, so it cannot time out again
+        // until the penalty lapses.
+        log.info(
+          s"[STORAGE-PEER-HEALTH] demoted peer=${peer.id.value.take(8)} " +
+            s"consecutiveTimeouts=${peerHealth.consecutiveTimeouts(peer.id.value)} " +
+            s"level=${peerHealth.level(peer.id.value)} penalty=${penalty.toSeconds}s " +
+            s"penalised=${peerHealth.penalisedCount(System.currentTimeMillis())}/${knownAvailablePeers.size}"
+        )
+      }
       adjustResponseBytesOnFailure(peer, "request timeout")
 
       batchTasks.foreach { task =>
@@ -1762,7 +1799,8 @@ private[actors] class StorageRangeCoordinatorImpl(
   private def dispatchIfPossible(peer: Peer): Unit =
     var inflight = inFlightForPeer(peer)
     var continue = true
-    while continue && tasks.nonEmpty && inflight < maxInFlightPerPeer && activeTasks.size < maxInFlightRequests do
+    val peerLimit = perPeerInFlightLimit(peer)
+    while continue && tasks.nonEmpty && inflight < peerLimit && activeTasks.size < maxInFlightRequests do
       requestNextRanges(peer) match
         case Some(_) => inflight += 1
         case None    => continue = false
@@ -1778,27 +1816,37 @@ private[actors] class StorageRangeCoordinatorImpl(
     if tasks.nonEmpty && !isPostRefreshCooldownActive && !pivotRefreshRequested then redispatchEligible()
 
   private def redispatchEligible(): Unit =
+    val now = System.currentTimeMillis()
     var eligiblePeers = knownAvailablePeers
-      .filterNot(p => isPeerStateless(p) || isPeerCoolingDown(p))
+      .filterNot(p => isPeerStateless(p) || isPeerCoolingDown(p) || peerHealth.isPenalised(p.id.value, now))
       .toList
-    // Eligible-set floor (peer-retention): if the only thing excluding every non-stateless peer is a cooldown, revive
-    // the soonest-to-expire one rather than stalling at zero dispatchable peers. Mirrors AccountRangeCoordinator.
     if eligiblePeers.isEmpty then
-      knownAvailablePeers
-        .filterNot(isPeerStateless)
-        .filter(isPeerCoolingDown)
-        .toList
-        .sortBy(p => peerCooldownUntilMs.getOrElse(p.id.value, 0L))
-        .headOption
-        .foreach { peer =>
+      StorageRangeCoordinator.selectFloorPeer(
+        knownAvailablePeers.filterNot(isPeerStateless).toList,
+        isCooling = isPeerCoolingDown,
+        isPenalised = p => peerHealth.isPenalised(p.id.value, now),
+        cooldownUntilMs = p => peerCooldownUntilMs.getOrElse(p.id.value, 0L),
+        penaltyUntilMs = p => peerHealth.penaltyUntilMs(p.id.value)
+      ) match
+        case Some(StorageRangeCoordinator.FloorPick.Revive(peer)) =>
           peerCooldownUntilMs.remove(peer.id.value)
           log.info(
             s"[STORAGE-FLOOR] All servable peers were cooling and none eligible — " +
               s"reviving ${peer.id.value.take(8)} to keep the pipe fed (peer-scarce floor)"
           )
           eligiblePeers = List(peer)
-        }
-    val now = System.currentTimeMillis()
+        case Some(StorageRangeCoordinator.FloorPick.LastResortProbe(peer)) =>
+          // Every servable peer is penalised for repeated timeouts. Probe the one whose penalty lapses first, without
+          // lifting its penalty and with a single request slot (perPeerInFlightLimit), so a dead peer costs at most one
+          // timeout slot at a time instead of the full per-peer budget.
+          if now - lastPenalisedFloorLogMs >= StateLogIntervalMs then
+            lastPenalisedFloorLogMs = now
+            log.info(
+              s"[STORAGE-FLOOR] Only penalised peers remain (${peerHealth.penalisedCount(now)}) — " +
+                s"probing ${peer.id.value.take(8)} with a single request slot"
+            )
+          eligiblePeers = List(peer)
+        case None => ()
     val shouldLog = now - lastStateLogMs >= StateLogIntervalMs
     if shouldLog then
       lastStateLogMs = now
@@ -1808,7 +1856,8 @@ private[actors] class StorageRangeCoordinatorImpl(
           s"completed=$completedTaskCount " +
           s"workers-known=${knownAvailablePeers.size} stateless=${statelessPeers.size} " +
           s"cooling=${knownAvailablePeers.count(isPeerCoolingDown)} eligible=${eligiblePeers.size} " +
-          s"strikes=${emptyResponseStrikes.size} root=${stateRoot.take(4).toHex}"
+          s"strikes=${emptyResponseStrikes.size} penalised=${peerHealth.penalisedCount(now)} " +
+          s"root=${stateRoot.take(4).toHex}"
       )
       if noMoreTasksExpected then
         val activeCount = activeTasks.values.map(_._2.size).sum
@@ -1866,6 +1915,11 @@ private[actors] class StorageRangeCoordinatorImpl(
 
   private def isPeerCoolingDown(peer: Peer): Boolean =
     peerCooldownUntilMs.get(peer.id.value).exists(_ > System.currentTimeMillis())
+
+  /** A peer demoted for repeated timeouts gets one request slot until it answers again; everyone else gets the budget.
+    */
+  private def perPeerInFlightLimit(peer: Peer): Int =
+    if peerHealth.isOnProbation(peer.id.value) then maxInFlightPerPeer.min(1) else maxInFlightPerPeer
 
   private def recordPeerCooldown(peer: Peer, reason: String): Unit =
     val until = System.currentTimeMillis() + peerCooldownDefault.toMillis
@@ -1932,6 +1986,39 @@ private[actors] class StorageRangeCoordinatorImpl(
           false
 
 object StorageRangeCoordinator:
+
+  /** Outcome of the eligible-set floor when no peer is dispatchable. */
+  private[actors] enum FloorPick[+P]:
+    /** A peer excluded only by its short cooldown: lift the cooldown and dispatch normally. */
+    case Revive(peer: P)
+
+    /** Every servable peer is penalised for repeated timeouts: probe one with a single slot, penalty kept. */
+    case LastResortProbe(peer: P)
+
+  /** Eligible-set floor (peer-retention): when every non-stateless peer is excluded, pick one rather than stalling at
+    * zero dispatchable peers.
+    *
+    * A peer penalised for repeated timeouts is never revived while any other servable peer exists: before this rule the
+    * floor picked the soonest-to-expire cooldown, which is exactly the peer that just timed out, so a dead peer was
+    * revived over and over (Sepolia 2026-10-07: 230 revivals of a peer with 0/386 answers). Only when the penalised
+    * peers are all that is left is one probed, the one whose penalty lapses first, as [[FloorPick.LastResortProbe]].
+    *
+    * @param servable
+    *   known peers that are not stateless for the current root
+    */
+  private[actors] def selectFloorPeer[P](
+      servable: List[P],
+      isCooling: P => Boolean,
+      isPenalised: P => Boolean,
+      cooldownUntilMs: P => Long,
+      penaltyUntilMs: P => Long
+  ): Option[FloorPick[P]] =
+    val (penalised, healthy) = servable.partition(isPenalised)
+    healthy.filter(isCooling).sortBy(cooldownUntilMs).headOption match
+      case Some(peer) => Some(FloorPick.Revive(peer))
+      case None if healthy.isEmpty =>
+        penalised.sortBy(penaltyUntilMs).headOption.map(FloorPick.LastResortProbe(_))
+      case None => None
 
   /** Command protocol for the Typed coordinator (Group S3). All subtypes live in this companion so the trait is sealed
     * — Scala 3 file-scope sealing enables exhaustive match checking at every call site.

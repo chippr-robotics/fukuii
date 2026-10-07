@@ -138,6 +138,57 @@ private class SNAPSyncControllerImpl(
     peerListHelper.handshakedPeers
   private def peersToDownloadFrom: Map[com.chipprbots.ethereum.network.PeerId, PeerListSupportNg.PeerWithInfo] =
     peerListHelper.peersToDownloadFrom
+
+  // Exclusion visibility for the SNAP peer set (see snapServingPeers). Logged when the excluded set changes (at most
+  // every SnapExclusionMinLogIntervalMs) and otherwise once per SnapExclusionLogIntervalMs while non-empty.
+  private var lastSnapExclusions: Map[String, String] = Map.empty
+  private var lastSnapExclusionLogMs: Long = 0L
+
+  /** The peers handed to the SNAP coordinators: handshaked, not blacklisted, and `servesSnapState`. Also logs which
+    * snap-capable peers were left out and why, because "only 3 of 9 snap peers reach the coordinators" was otherwise
+    * invisible (Sepolia 2026-10-07).
+    */
+  private def snapServingPeers(): List[com.chipprbots.ethereum.network.Peer] =
+    // Keyed by stable reasons only, so `changed` does not fire on every head update of an excluded peer.
+    val exclusions: Map[String, String] = peerListHelper.handshakedPeers.flatMap { case (peerId, p) =>
+      SNAPSyncController
+        .snapExclusionReason(p.peerInfo, peerListHelper.blacklistReason(peerId))
+        .map(reason => peerId.value -> reason)
+    }
+    val now = System.currentTimeMillis()
+    val changed = exclusions != lastSnapExclusions
+    val elapsed = now - lastSnapExclusionLogMs
+    if (changed && elapsed >= SNAPSyncController.SnapExclusionMinLogIntervalMs) ||
+      (exclusions.nonEmpty && elapsed >= SNAPSyncController.SnapExclusionLogIntervalMs)
+    then
+      lastSnapExclusions = exclusions
+      lastSnapExclusionLogMs = now
+      val snapCapable = peerListHelper.handshakedPeers.values.count(_.peerInfo.remoteStatus.supportsSnap)
+      val detail =
+        if exclusions.isEmpty then "none"
+        else
+          val maxBlockById = peerListHelper.handshakedPeers.map { case (id, p) =>
+            id.value -> p.peerInfo.maxBlockNumber
+          }
+          exclusions.toList.sorted
+            .map { case (id, r) =>
+              val atBlock =
+                if r == SNAPSyncController.SnapExclusionAtGenesis then
+                  maxBlockById.get(id).fold("")(n => s"(maxBlock=$n)")
+                else ""
+              s"${id.take(8)}:$r$atBlock"
+            }
+            .mkString(", ")
+      ctx.log.info(
+        "[SNAP-PEERS] snapCapable={} excluded={} served={} exclusions=[{}]",
+        snapCapable,
+        exclusions.size,
+        snapCapable - exclusions.size,
+        detail
+      )
+    peersToDownloadFrom.collect {
+      case (_, peerWithInfo) if SNAPSyncController.servesSnapState(peerWithInfo.peerInfo) => peerWithInfo.peer
+    }.toList
   private def getSnapPeerWithHighestBlock: Option[PeerListSupportNg.PeerWithInfo] =
     peerListHelper.getSnapPeerWithHighestBlock
   private val bigIntReverseOrdering: Ordering[BigInt] = Ordering[BigInt].reverse
@@ -3718,14 +3769,20 @@ private class SNAPSyncControllerImpl(
 
       timers.startTimerWithFixedDelay(RequestStorageRanges, RequestStorageRanges, 1.second)
 
-    // ByteCode and storage start with budget=2 each during account phase (per-peer concurrent
+    // ByteCode and storage start with a reduced budget during account phase (per-peer concurrent
     // limit). On huge chains (sepolia, ETH mainnet) account ranges never fully complete within
     // a pivot serve window, so the old budget=0 path left storage/bytecode queues to grow until
     // OOM. PR #1237's strike-counted demotion + PR #1241's backpressure-release-on-pivot make
     // stale-root timeouts recoverable rather than failure cascades. See PR #1252.
-    // During AccountRangeSync: accounts=5, storage=2, bytecode=2 per peer.
+    // During AccountRangeSync: accounts=5, storage=3 (configurable), bytecode=2 per peer.
+    // Storage was 2: on Sepolia 2026-10-07 two peers carried ~80% of storage requests at 2 slots each while the pool
+    // was otherwise idle. 3 matches the post-account storage budget (see the AccountRangeSync completion handler).
     bytecodeCoordinator.foreach(_ ! actors.ByteCodeCoordinator.UpdateMaxInFlightPerPeer(2))
-    storageRangeCoordinator.foreach(_ ! actors.StorageRangeCoordinator.UpdateMaxInFlightPerPeer(2))
+    storageRangeCoordinator.foreach(
+      _ ! actors.StorageRangeCoordinator.UpdateMaxInFlightPerPeer(
+        SNAPSyncController.storageInFlightDuringAccounts(snapSyncConfig)
+      )
+    )
 
     progressMonitor.startPhase(AccountRangeSync)
 
@@ -3735,9 +3792,7 @@ private class SNAPSyncControllerImpl(
     // the coordinator. Stateless detection on the coordinator (strike-counted) handles peers
     // that actually can't serve the current pivot's state.
     accountRangeCoordinator.foreach { coordinator =>
-      val snapPeers = peersToDownloadFrom.collect {
-        case (_, peerWithInfo) if SNAPSyncController.servesSnapState(peerWithInfo.peerInfo) => peerWithInfo.peer
-      }
+      val snapPeers = snapServingPeers()
 
       SNAPSyncMetrics.setSnapCapablePeers(snapPeers.size)
 
@@ -3751,9 +3806,7 @@ private class SNAPSyncControllerImpl(
   private def requestByteCodes(): Unit =
     // Notify coordinator of available peers
     bytecodeCoordinator.foreach { coordinator =>
-      val snapPeers = peersToDownloadFrom.collect {
-        case (_, peerWithInfo) if SNAPSyncController.servesSnapState(peerWithInfo.peerInfo) => peerWithInfo.peer
-      }
+      val snapPeers = snapServingPeers()
 
       if snapPeers.isEmpty then ctx.log.debug("No SNAP-capable peers available for bytecode requests")
       else
@@ -3777,9 +3830,7 @@ private class SNAPSyncControllerImpl(
     // can't serve our pivot's state, the coordinator's strike-counted stateless detection
     // catches it (5 strikes → flagged stateless). Same applies to bytecode/account.
     storageRangeCoordinator.foreach { coordinator =>
-      val snapPeers = peersToDownloadFrom.collect {
-        case (_, peerWithInfo) if SNAPSyncController.servesSnapState(peerWithInfo.peerInfo) => peerWithInfo.peer
-      }
+      val snapPeers = snapServingPeers()
 
       SNAPSyncMetrics.setSnapCapablePeers(snapPeers.size)
 
@@ -4024,9 +4075,7 @@ private class SNAPSyncControllerImpl(
   private def requestTrieNodeHealing(): Unit =
     // Notify coordinator of available peers
     trieNodeHealingCoordinator.foreach { coordinator =>
-      val snapPeers = peersToDownloadFrom.collect {
-        case (_, peerWithInfo) if SNAPSyncController.servesSnapState(peerWithInfo.peerInfo) => peerWithInfo.peer
-      }
+      val snapPeers = snapServingPeers()
 
       if snapPeers.isEmpty then ctx.log.debug("No SNAP-capable peers available for healing requests")
       else
@@ -5562,6 +5611,12 @@ object SNAPSyncController:
   private[snap] def chainBackfillDeferredToFinalization(cfg: SNAPSyncConfig): Boolean =
     cfg.chainDownloadEnabled && cfg.deferChainBackfillUntilStateComplete
 
+  /** Storage per-peer in-flight budget during account sync: the configured value, clamped to `[1, maxInFlightPerPeer]`
+    * so a misconfiguration can neither stall storage (0) nor exceed the global per-peer budget.
+    */
+  private[snap] def storageInFlightDuringAccounts(cfg: SNAPSyncConfig): Int =
+    cfg.storageMaxInFlightPerPeerDuringAccounts.max(1).min(cfg.maxInFlightPerPeer.max(1))
+
   /** Whether a handshaked peer can serve SNAP state for our pivot: SNAP-capable, on our fork, and not sitting at its
     * genesis block. Every phase that hands peers to a coordinator filters on this: account ranges, bytecodes, storage
     * ranges, trie-node healing, and the post-sync recovery in `SyncController`. A peer at genesis holds no state and
@@ -5581,6 +5636,44 @@ object SNAPSyncController:
     peerInfo.remoteStatus.supportsSnap &&
       peerInfo.forkAccepted &&
       peerInfo.bestBlockHash != peerInfo.remoteStatus.genesisHash
+
+  /** Why a snap-capable handshaked peer is NOT handed to the SNAP coordinators, or `None` if it is (or if it does not
+    * advertise snap at all — those are not "excluded", they never qualified). Mirrors the two filters applied in order:
+    * `PeerListHelper.peersToDownloadFrom` (fork accepted, not blacklisted) and [[servesSnapState]] (best block is not
+    * genesis). Diagnostic only; the selection itself still goes through those two functions.
+    *
+    * On the genesis clause: `bestBlockHash` is seeded from the STATUS best/latest hash on every protocol version —
+    * eth/68 `bestHash`, eth/69 and eth/70 `latestBlockHash` — and moves forward on `BlockRangeUpdate`, `NewBlock`,
+    * `NewBlockHashes` and header responses (`NetworkPeerManagerActor.updateMaxBlock`). So a peer reads as "at genesis"
+    * only when it itself reported genesis as its head, which is what a node that has not finished its own sync (e.g. a
+    * snap-syncing geth) advertises. It cannot serve state, and excluding it is correct.
+    *
+    * @param blacklistReason
+    *   the sync blacklist's reason for this peer, if blacklisted
+    */
+  private[sync] def snapExclusionReason(
+      peerInfo: com.chipprbots.ethereum.network.NetworkPeerManagerActor.PeerInfo,
+      blacklistReason: Option[String]
+  ): Option[String] =
+    if !peerInfo.remoteStatus.supportsSnap then None
+    else if !peerInfo.forkAccepted then Some("fork-not-accepted")
+    else
+      blacklistReason match
+        case Some(reason) => Some(s"blacklisted($reason)")
+        case None if peerInfo.bestBlockHash == peerInfo.remoteStatus.genesisHash =>
+          Some(SnapExclusionAtGenesis)
+        case None => None
+
+  /** Exclusion reason for a peer whose best block is its genesis. A stable key: the `[SNAP-PEERS]` change detection
+    * compares reasons, so it must not embed a moving value such as the block number (printed separately).
+    */
+  private[snap] val SnapExclusionAtGenesis: String = "best-block-is-genesis"
+
+  /** Steady-state cadence of the `[SNAP-PEERS]` exclusion log while some snap-capable peer is excluded. */
+  private[snap] val SnapExclusionLogIntervalMs: Long = 60_000L
+
+  /** Minimum spacing of `[SNAP-PEERS]` lines triggered by a change in the excluded set (peer churn guard). */
+  private[snap] val SnapExclusionMinLogIntervalMs: Long = 10_000L
 
   // ───────────────────────────────────────────────────────────────────────────
   // Command ADT (SNAP1 migration — Pekko Classic→Typed)
@@ -6237,6 +6330,11 @@ case class SNAPSyncConfig(
     // non-snap peers faster.
     accountStagnationTimeout: FiniteDuration = 10.minutes,
     maxInFlightPerPeer: Int = 5,
+    /** Storage per-peer in-flight budget while account ranges are still downloading (the account coordinator holds the
+      * rest of the per-peer budget). Clamped to `[1, maxInFlightPerPeer]` by [[storageInFlightDuringAccounts]]. Key:
+      * `sync.snap-sync.storage-max-inflight-per-peer-during-accounts`.
+      */
+    storageMaxInFlightPerPeerDuringAccounts: Int = 3,
     accountInitialResponseBytes: Int = 524288,
     accountMinResponseBytes: Int = 102400,
     chainDownloadEnabled: Boolean = true,
@@ -6390,6 +6488,10 @@ object SNAPSyncConfig:
       maxInFlightPerPeer =
         if snapConfig.hasPath("max-inflight-per-peer") then snapConfig.getInt("max-inflight-per-peer")
         else 5,
+      storageMaxInFlightPerPeerDuringAccounts =
+        if snapConfig.hasPath("storage-max-inflight-per-peer-during-accounts") then
+          snapConfig.getInt("storage-max-inflight-per-peer-during-accounts")
+        else 3,
       accountInitialResponseBytes =
         if snapConfig.hasPath("account-initial-response-bytes") then snapConfig.getInt("account-initial-response-bytes")
         else 524288,

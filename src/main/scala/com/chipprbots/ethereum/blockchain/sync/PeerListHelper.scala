@@ -74,6 +74,11 @@ class PeerListHelper(
     log.debug("peersToDownloadFrom: {} available out of {} handshaked peers", available.size, peers.size)
     available
 
+  /** Why a handshaked peer is blacklisted (the reason-type name), or `None` if it is not. Diagnostic only. */
+  def blacklistReason(peerId: PeerId): Option[String] =
+    if blacklist.isBlacklisted(peerId) then Some(blacklist.reasonFor(peerId).map(_.name).getOrElse("unknown"))
+    else None
+
   def getPeerById(peerId: PeerId): Option[Peer] = peers.get(peerId).map(_.peer)
 
   def getPeerWithHighestBlock: Option[PeerWithInfo] =

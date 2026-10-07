@@ -21,6 +21,7 @@ import org.bouncycastle.util.encoders.Hex
 import com.chipprbots.ethereum.network.PeerActor.Status.*
 import com.chipprbots.ethereum.network.PeerEventBusActor.PeerEvent.MessageFromPeer
 import com.chipprbots.ethereum.network.PeerEventBusActor.PeerEvent.PeerHandshakeSuccessful
+import com.chipprbots.ethereum.network.PeerEventBusActor.PeerEvent.PeerOnWrongNetwork
 import com.chipprbots.ethereum.network.PeerEventBusActor.Command as PeerEventBusCommand
 import com.chipprbots.ethereum.network.PeerEventBusActor.PublishCmd
 import com.chipprbots.ethereum.network.PeerManagerActor.PeerConfiguration
@@ -433,6 +434,10 @@ object PeerActor:
             Disconnect.reasonToString(reason)
           )
           rlpxConnection.uriOpt.foreach(uri => knownNodesManager ! KnownNodesManager.RemoveKnownNode(uri))
+          // Different networkId or genesis: the node can never be useful, so tell PeerManagerActor to stop re-dialling
+          // its node ID (#88). ForkId rejections do not set this flag and keep the ordinary blacklist handling.
+          if handshaker.failedOnWrongNetwork then
+            peerEventBus ! PublishCmd(PeerOnWrongNetwork(remoteNodeId, peerAddress.getHostString))
           disconnectFromPeer(rlpxConnection, reason)
 
     // -----------------------------------------------------------------------

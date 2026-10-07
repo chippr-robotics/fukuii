@@ -107,7 +107,7 @@ case class EthNodeStatus68ExchangeState(
         peerConfiguration.networkId,
         networkId
       )
-      DisconnectedState[PeerInfo](Disconnect.Reasons.UselessPeer)
+      DisconnectedState[PeerInfo](Disconnect.Reasons.UselessPeer, wrongNetwork = true)
     else if genesisHash != localGenesisHash then
       log.debug(
         "ETH{}_STATUS: Genesis mismatch - local={}, remote={} - disconnecting",
@@ -115,7 +115,7 @@ case class EthNodeStatus68ExchangeState(
         localGenesisHash,
         genesisHash
       )
-      DisconnectedState[PeerInfo](Disconnect.Reasons.UselessPeer)
+      DisconnectedState[PeerInfo](Disconnect.Reasons.UselessPeer, wrongNetwork = true)
     else
       (for validationResult <-
           ForkIdValidator.validatePeer[SyncIO](

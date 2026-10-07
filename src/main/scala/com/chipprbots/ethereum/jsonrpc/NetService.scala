@@ -176,7 +176,7 @@ class NetService(
       // Note: This sends the connect message and returns immediately.
       // Success=true means the URI is valid and connection attempt was initiated,
       // not that the connection succeeded. Check net_listPeers to verify connection.
-      peerManager ! PeerManagerActor.ConnectToPeerCmd(uri)
+      peerManager ! PeerManagerActor.ConnectToPeerCmd(uri, explicit = true)
       IO.pure(Right(ConnectToPeerResponse(success = true)))
     catch
       case e: Exception =>

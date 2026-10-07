@@ -140,6 +140,10 @@ class InstanceConfig(val config: TypesafeConfig, val instanceId: String = "defau
 
       val shortBlacklistDuration: FiniteDuration = peerConfig.getDuration("short-blacklist-duration").toMillis.millis
       val longBlacklistDuration: FiniteDuration = peerConfig.getDuration("long-blacklist-duration").toMillis.millis
+      override val wrongNetworkExclusionDuration: FiniteDuration =
+        if peerConfig.hasPath("wrong-network-exclusion-duration") then
+          peerConfig.getDuration("wrong-network-exclusion-duration").toMillis.millis
+        else PeerConfiguration.DefaultWrongNetworkExclusionDuration
 
       val statSlotDuration: FiniteDuration = peerConfig.getDuration("stat-slot-duration").toMillis.millis
       val statSlotCount: Int = peerConfig.getInt("stat-slot-count")
