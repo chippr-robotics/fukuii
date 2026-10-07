@@ -20,7 +20,8 @@ case class TuiState(
     syncStatus: String = "Starting...",
     startTime: Instant = Instant.now(),
     nodeSettings: NodeSettings = NodeSettings(),
-    snapSyncState: Option[SnapSyncState] = None
+    snapSyncState: Option[SnapSyncState] = None,
+    syncBaseline: Option[SyncBaseline] = None
 ):
 
   import TuiState.MinUptimeForEstimationSeconds
@@ -43,34 +44,64 @@ case class TuiState(
   def uptimeSeconds: Long =
     Duration.between(startTime, Instant.now()).getSeconds
 
-  /** Estimate sync time based on current progress. Requires minimum uptime of MinUptimeForEstimationSeconds to provide
-    * accurate estimates.
-    */
+  /** Estimate sync time based on the observed sync speed. */
   def estimatedSyncTimeSeconds: Option[Long] =
-    val uptime = uptimeSeconds
-    if uptime > MinUptimeForEstimationSeconds && currentBlock > 0 then
-      val blocksPerSecond = currentBlock.toDouble / uptime.toDouble
-      if blocksPerSecond > 0 then Some((blocksRemaining / blocksPerSecond).toLong)
-      else None
-    else None
+    syncSpeedBlocksPerSec.map(speed => (blocksRemaining / speed).toLong)
 
-  /** Calculate sync speed in blocks per second. Requires minimum uptime of MinUptimeForEstimationSeconds to provide
-    * accurate estimates.
+  /** Sync speed in blocks per second, measured from the first block observed by this TUI (not from genesis — a node
+    * restarted at block 15M has not imported 15M blocks this session). Requires MinUptimeForEstimationSeconds of
+    * observation and forward progress.
     */
   def syncSpeedBlocksPerSec: Option[Double] =
-    val uptime = uptimeSeconds
-    if uptime > MinUptimeForEstimationSeconds && currentBlock > 0 then Some(currentBlock.toDouble / uptime.toDouble)
-    else None
+    syncBaseline.flatMap { baseline =>
+      val elapsed = Duration.between(baseline.observedAt, Instant.now()).getSeconds
+      val imported = currentBlock - baseline.block
+      if elapsed > MinUptimeForEstimationSeconds && imported > 0 then Some(imported.toDouble / elapsed.toDouble)
+      else None
+    }
 
   // Update methods return new instances (immutable)
   def withNetworkName(name: String): TuiState = copy(networkName = name)
   def withConnectionStatus(status: String): TuiState = copy(connectionStatus = status)
   def withPeerCount(count: Int, max: Int): TuiState = copy(peerCount = count, maxPeers = max)
-  def withBlockInfo(current: Long, best: Long): TuiState = copy(currentBlock = current, bestBlock = best)
+  def withBlockInfo(current: Long, best: Long): TuiState =
+    // Record the first non-zero block as the speed baseline; reset it if the chain moved backwards (rewind/reorg).
+    val baseline = syncBaseline match
+      case Some(b) if current >= b.block => Some(b)
+      case _ if current > 0              => Some(SyncBaseline(current, Instant.now()))
+      case _                             => None
+    copy(currentBlock = current, bestBlock = best, syncBaseline = baseline)
   def withSyncStatus(status: String): TuiState = copy(syncStatus = status)
   def withNodeSettings(settings: NodeSettings): TuiState = copy(nodeSettings = settings)
   def withSnapSyncState(state: SnapSyncState): TuiState = copy(snapSyncState = Some(state))
   def clearSnapSyncState(): TuiState = copy(snapSyncState = None)
+
+  /** Apply a status snapshot polled from the running node. */
+  def withStatus(status: NodeStatusSnapshot): TuiState =
+    withPeerCount(status.peerCount, status.maxPeers)
+      .withBlockInfo(status.currentBlock, status.bestBlock)
+      .withSyncStatus(status.syncStatus)
+      .withConnectionStatus(status.connectionStatus)
+      .copy(snapSyncState = status.snapSync)
+
+/** First block observed by the TUI and when — the reference point for sync-speed estimates. */
+case class SyncBaseline(block: Long, observedAt: Instant)
+
+/** A point-in-time view of the running node, produced by a status source (see [[TuiStatusProbe]]) and applied to the
+  * TUI state by [[TuiUpdater]].
+  *
+  * @param bestBlock
+  *   highest known block of the network, or 0 when unknown (e.g. the sync controller reports NotSyncing)
+  */
+case class NodeStatusSnapshot(
+    connectionStatus: String,
+    peerCount: Int,
+    maxPeers: Int,
+    currentBlock: Long,
+    bestBlock: Long,
+    syncStatus: String,
+    snapSync: Option[SnapSyncState] = None
+)
 
 /** Node settings displayed in the TUI. */
 case class NodeSettings(
