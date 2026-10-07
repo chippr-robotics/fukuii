@@ -22,6 +22,9 @@ trait Blacklist:
   def remove(id: BlacklistId): Unit
   def keys: Set[BlacklistId]
 
+  /** Why `id` is blacklisted, if it is and the implementation records it. Diagnostic only (exclusion logging). */
+  def reasonFor(id: BlacklistId): Option[BlacklistReasonType] = None
+
 // scalastyle:off number.of.types number.of.methods
 object Blacklist:
   import BlacklistReason.*
@@ -305,6 +308,8 @@ final case class CacheBasedBlacklist(cache: Cache[BlacklistId, BlacklistReasonTy
     // only updates when PeerManagerActor's periodic peer-discovery cycle calls keys.size,
     // which on high-churn nets can lag the actual blacklist by 10s+ and undercount peaks.
     NetworkMetrics.BlacklistedPeersSize.set(cache.underlying.estimatedSize())
+  override def reasonFor(id: BlacklistId): Option[BlacklistReasonType] = cache.getIfPresent(id)
+
   override def remove(id: BlacklistId): Unit =
     cache.invalidate(id)
     NetworkMetrics.BlacklistedPeersSize.set(cache.underlying.estimatedSize())
