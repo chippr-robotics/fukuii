@@ -34,17 +34,9 @@ object Fukuii extends Logger:
     // Check for --tui flag to enable console UI (disabled by default)
     val enableConsoleUI = args.contains("--tui")
 
-    // Initialize TUI if enabled (using new TUI module)
-    val tui = if enableConsoleUI then
-      val tuiInstance = Tui.getInstance(TuiConfig.default)
-      if tuiInstance.initialize() then Some(tuiInstance)
-      else None
-    else
+    if !enableConsoleUI then
       log.info("TUI disabled (use --tui flag to enable)")
-      None
-
-    // Display Fukuii ASCII art on startup (only if TUI is not enabled)
-    if tui.isEmpty then printBanner()
+      printBanner()
 
     log.info("Fukuii app {}", Config.clientVersion)
     log.info("Using network {}", Config.blockchains.network)
@@ -86,22 +78,24 @@ object Fukuii extends Logger:
               e.getMessage
             )
 
+    // Take over the terminal only after configuration has been validated: the TUI suppresses console logging, and a
+    // configuration error must reach the user's screen.
+    if enableConsoleUI then
+      val tui = Tui.getInstance(TuiConfig.default)
+      // Register the restore hook first, so the terminal leaves raw mode / the alternate screen on any exit path.
+      Runtime.getRuntime.addShutdownHook(new Thread(() => tui.shutdown(), "TuiRestore"))
+      if tui.initialize() then
+        tui.updateNetwork(Config.blockchains.network)
+        tui.updateConnectionStatus("Starting node...")
+        tui.render()
+      else printBanner()
+
     val node =
       if Config.testmode then
         log.info("Starting Fukuii in test mode")
         deleteRocksDBFiles()
         new TestNode
       else new StdNode
-
-    // Update TUI with network info
-    tui.foreach { ui =>
-      ui.updateNetwork(Config.blockchains.network)
-      ui.updateConnectionStatus("Starting node...")
-      ui.render()
-    }
-
-    // Add shutdown hook to cleanup TUI
-    Runtime.getRuntime.addShutdownHook(new Thread(() => tui.foreach(_.shutdown())))
 
     node.start()
 

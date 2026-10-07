@@ -16,8 +16,10 @@ import com.chipprbots.ethereum.blockchain.sync.SyncController
 import com.chipprbots.ethereum.blockchain.sync.SyncProtocol
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncMetrics
 import com.chipprbots.ethereum.consensus.mining.StdMiningBuilder
+import com.chipprbots.ethereum.console.NodeSettings
 import com.chipprbots.ethereum.console.Tui
 import com.chipprbots.ethereum.console.TuiConfig
+import com.chipprbots.ethereum.console.TuiStatusProbe
 import com.chipprbots.ethereum.console.TuiUpdater
 import com.chipprbots.ethereum.db.dataSource.RocksDbCacheMetrics
 import com.chipprbots.ethereum.domain.BestMappingRepair
@@ -280,16 +282,32 @@ abstract class BaseNode extends Node:
     val tui = Tui.getInstance()
     if tui.isEnabled then
       log.info("Starting TUI updater")
-      val updater = TuiUpdater(
-        tui,
-        TuiConfig.default,
-        Some(peerManager),
-        Some(syncController),
-        Config.blockchains.network,
-        shutdown
-      )(using system.classicSystem)
+      tui.updateNodeSettings(tuiNodeSettings())
+      val probe = new TuiStatusProbe(
+        peerManager,
+        syncController,
+        () => blockchainReader.getBestBlockNumber,
+        peerConfiguration.maxOutgoingPeers + peerConfiguration.maxIncomingPeers,
+        () => SNAPSyncMetrics.latestProgress(TuiStatusProbe.SnapProgressMaxAgeMillis)
+      )(using system.scheduler)
+      // `q` exits the JVM; the shutdown hook (ShutdownHooks) runs this node's shutdown(), which stops the updater.
+      val updater = TuiUpdater(tui, TuiConfig.default, probe, Config.blockchains.network, () => sys.exit(0))
       tuiUpdater = Some(updater)
       updater.start()
+
+  private def tuiNodeSettings(): NodeSettings =
+    val c = instanceConfig.config
+    def opt[A](f: => A): Option[A] = Try(f).toOption
+    NodeSettings(
+      dataDir = opt(c.getString("datadir")).getOrElse(""),
+      network = Config.blockchains.network,
+      syncMode = if syncConfig.doSnapSync then "SNAP" else "Full",
+      pruningMode = storagesInstance.pruningMode.toString,
+      maxPeers = peerConfiguration.maxOutgoingPeers + peerConfiguration.maxIncomingPeers,
+      rpcEnabled = opt(c.getBoolean("network.rpc.http.enabled")).getOrElse(false),
+      rpcPort = opt(c.getInt("network.rpc.http.port")).getOrElse(0),
+      miningEnabled = opt(c.getBoolean("mining.mining-enabled")).getOrElse(false)
+    )
 
   override def shutdown: () => Unit = () =>
     def tryAndLogFailure(f: () => Any): Unit = Try(f()) match // Any: accepts any thunk — return value discarded
