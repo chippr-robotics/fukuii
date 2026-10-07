@@ -185,8 +185,7 @@ class TuiRenderer(config: TuiConfig):
 
     banner.map { line =>
       val centered = " " * Math.max(0, (width - line.length) / 2) + line
-      val padded = centered + " " * Math.max(0, width - centered.length)
-      new AttributedString(padded, greenStyle)
+      fitToWidth(new AttributedString(centered, greenStyle), Math.max(width, 1))
     }
 
   private def createHeader(width: Int): AttributedString =

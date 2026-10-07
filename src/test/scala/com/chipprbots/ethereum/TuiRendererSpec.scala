@@ -247,3 +247,7 @@ class TuiRendererSpec extends AnyFlatSpec with Matchers:
     val lines = renderer.render(TuiState.initial.withPeerCount(3, 10), 100, 40)
     (all(lines.map(_.toString)) should not).include("\u001b")
   }
+
+  it should "fit the startup banner to a narrow terminal" taggedAs (UnitTest) in {
+    all(renderer.renderStartupBanner(12).map(_.columnLength())) shouldBe 12
+  }
