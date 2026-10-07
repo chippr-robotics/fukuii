@@ -344,7 +344,7 @@ object NetworkPeerManagerActor:
 
         case ConnectToPeerForwardCmd(uri) =>
           log.info("Forwarding ConnectToPeer({}) to PeerManagerActor", uri)
-          peerManagerActor ! PeerManagerActor.ConnectToPeerCmd(uri)
+          peerManagerActor ! PeerManagerActor.ConnectToPeerCmd(uri, explicit = true)
           Behaviors.same
 
         case DeferredBlacklistCmd(request) =>

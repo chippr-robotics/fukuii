@@ -74,7 +74,12 @@ object PeerManagerActor:
   // Fire-and-forget wire messages forwarded by the shell:
   case object StartConnectingCmd extends Command
   final case class HandlePeerConnectionCmd(connection: ActorRef, remoteAddress: InetSocketAddress) extends Command
-  final case class ConnectToPeerCmd(uri: URI) extends Command
+
+  /** Dial `uri`. `explicit` marks an operator request (net_connectToPeer, configured snap-server peers): it bypasses
+    * the wrong-network dial exclusion (#88), logged at INFO. Internal dial paths (known nodes, discovery) leave it
+    * false.
+    */
+  final case class ConnectToPeerCmd(uri: URI, explicit: Boolean = false) extends Command
   final case class RemoveMaintainedPeerCmd(nodeId: String) extends Command
   final case class DisconnectPeerFireAndForgetCmd(peerId: PeerId) extends Command
   final case class SendMessageCmd(message: MessageSerializable, peerId: PeerId) extends Command
@@ -477,8 +482,8 @@ object PeerManagerActor:
         case HandlePeerConnectionCmd(connection, remoteAddress) =>
           Some(handleConnection(connection, remoteAddress, connectedPeers))
 
-        case ConnectToPeerCmd(uri) =>
-          Some(connectWith(uri, connectedPeers))
+        case ConnectToPeerCmd(uri, explicit) =>
+          Some(connectWith(uri, connectedPeers, explicit))
 
         case AddMaintainedPeerCmd(uri, replyTo) =>
           // Key by lowercase hex: every lookup (handshake, terminate, prune) uses the lowercase form, so a mixed-case
@@ -597,7 +602,7 @@ object PeerManagerActor:
           handleConnectionErrors(error)
           Behaviors.same
 
-    private def connectWith(uri: URI, connectedPeers: ConnectedPeers): Behavior[Command] =
+    private def connectWith(uri: URI, connectedPeers: ConnectedPeers, explicit: Boolean = false): Behavior[Command] =
       val nodeIdHex = uri.getUserInfo.toLowerCase
       val nodeId = ByteString(Hex.decode(nodeIdHex))
       val remoteAddress = new InetSocketAddress(uri.getHost, uri.getPort)
@@ -622,13 +627,24 @@ object PeerManagerActor:
         validNumber <- validateConnection(validHandler, MaxOutgoingConnections, isOutgoingPeersNotMaxValue)
       yield validNumber
 
+      val excludedWrongNetwork = isExcludedWrongNetwork(nodeId)
+      // An operator's explicit request (admin_addPeer via maintained/trusted, net_connectToPeer, snap-server-peers)
+      // overrides the exclusion; internal dial paths do not.
+      val operatorRequested = isMaintainedOrTrusted || explicit
+
       validConnection match
-        case Right(_) if !isMaintainedOrTrusted && isExcludedWrongNetwork(nodeId) =>
-          // Known-nodes, ConnectToPeer and admin paths all funnel here; discovery is also filtered in canConnectTo.
+        case Right(_) if excludedWrongNetwork && !operatorRequested =>
+          // Known-nodes and other internal paths funnel here; discovery is also filtered in canConnectTo.
           log.debug("Not dialling {}: node is excluded as wrong-network", uri)
           Behaviors.same
 
         case Right(address) =>
+          if excludedWrongNetwork then
+            log.info(
+              "WRONG_NETWORK: dialling excluded node={} on explicit operator request; its last STATUS named another " +
+                "network or genesis, so the handshake will likely fail again",
+              nodeIdHex.take(16)
+            )
           val (peer, newConnectedPeers) = createPeer(address, incomingConnection = false, connectedPeers)
           peer.ref.toClassic.tell(PeerActor.ConnectTo(uri), peerEventAdapter.toClassic)
           if maintainedPeersByNodeId.values.exists(_ == uri) then pendingMaintainedConnections(peer.ref) = uri

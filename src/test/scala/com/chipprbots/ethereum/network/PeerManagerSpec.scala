@@ -1151,6 +1151,22 @@ class PeerManagerSpec
     dialled.probe.expectMsgType[ConnectTo](3.seconds).uri shouldBe okUri
     createdPeers.size shouldBe 1
 
+  it should "dial an excluded wrong-network node when the operator asks explicitly (#88)" taggedAs (
+    UnitTest,
+    NetworkTest
+  ) in new TestSetup:
+    start()
+    val wrongHex = "cc" * 64
+    val wrongUri = new URI(s"enode://$wrongHex@10.0.0.11:30303")
+    peerManager ! PeerManagerActor.PeerEventReceived(
+      PeerEvent.PeerOnWrongNetwork(ByteString(Hex.decode(wrongHex)), "10.0.0.11")
+    )
+    peerManager ! PeerManagerActor.ConnectToPeerCmd(wrongUri, explicit = true)
+
+    val dialled = createdPeerQueue.poll(3, java.util.concurrent.TimeUnit.SECONDS)
+    dialled should not be null
+    dialled.probe.expectMsgType[ConnectTo](3.seconds).uri shouldBe wrongUri
+
   "PeerManagerActor.WrongNetworkExclusions" should "exclude a node until its expiry, then forget it" taggedAs UnitTest in {
     val ex = new PeerManagerActor.WrongNetworkExclusions(maxEntries = 2)
     val a = ByteString(1, 2, 3)
