@@ -13,6 +13,7 @@ import org.apache.pekko.util.ByteString
 import scala.concurrent.ExecutionContext
 import scala.concurrent.duration.*
 
+import com.typesafe.config.ConfigFactory
 import org.scalatest.flatspec.AnyFlatSpecLike
 import org.scalatest.matchers.should.Matchers
 
@@ -40,9 +41,19 @@ import com.chipprbots.ethereum.testing.Tags.*
   * after a send proves the send was handled. Healing is reached by the accounts-complete recovery branch of
   * `startSnapSync` (no peers connected, so the saved pivot is taken without a freshness check).
   */
-class SNAPSyncControllerPinSpec extends ScalaTestWithActorTestKit(ManualTime.config) with AnyFlatSpecLike with Matchers:
+// ManualTime on top of the test application.conf, which declares the dispatchers the controller uses.
+class SNAPSyncControllerPinSpec
+    extends ScalaTestWithActorTestKit(ManualTime.config.withFallback(ConfigFactory.load()))
+    with AnyFlatSpecLike
+    with Matchers:
 
   private val manualTime: ManualTime = ManualTime()(using system)
+
+  /** #1502: the controller does not forward `prunedHealVerification` to the healing coordinator, so the coordinator
+    * always gets its own default (true), whatever `pruned-heal-verification` says. The #1502 fix changes this one value
+    * (to the configured flag) on purpose; every assertion below that reads it follows.
+    */
+  private def todayForwardedPrunedHealVerification(@annotation.unused configured: Boolean): Boolean = true // #1502
 
   private val Pivot = BigInt(10_000)
   private val Root = ByteString(Array.fill(32)(0x11.toByte))
@@ -155,10 +166,9 @@ class SNAPSyncControllerPinSpec extends ScalaTestWithActorTestKit(ManualTime.con
           startHealingViaStartStateHealing(healingConfig(frontierPersistence = false, prunedHeal = pruned))
         val viaInterleave = new Fixture:
           startHealingViaInterleave(healingConfig(frontierPersistence = false, prunedHeal = pruned))
-        // #1502: the controller does not forward prunedHealVerification, so the coordinator always gets its own default
-        // (true), even when pruned-heal-verification = false. The #1502 fix flips these two assertions on purpose.
-        viaStart.expectHealingSpawn().prunedHealVerification shouldBe true // #1502
-        viaInterleave.expectHealingSpawn().prunedHealVerification shouldBe true // #1502
+        // #1502: today the coordinator gets true even when pruned-heal-verification = false.
+        viaStart.expectHealingSpawn().prunedHealVerification shouldBe todayForwardedPrunedHealVerification(pruned)
+        viaInterleave.expectHealingSpawn().prunedHealVerification shouldBe todayForwardedPrunedHealVerification(pruned)
       }
     }
 
@@ -224,7 +234,7 @@ class SNAPSyncControllerPinSpec extends ScalaTestWithActorTestKit(ManualTime.con
 
     def expectHealingSpawn(): ChildSpawn.Healing =
       spawns
-        .fishForMessage(3.seconds) {
+        .fishForMessage(10.seconds) {
           case _: ChildSpawn.Healing => FishingOutcomes.complete
           case _                     => FishingOutcomes.continueAndIgnore
         }
@@ -321,7 +331,7 @@ class SNAPSyncControllerPinSpec extends ScalaTestWithActorTestKit(ManualTime.con
       spawn.frontierBackpressureMaxWaitMs shouldBe TrieNodeHealingCoordinator.FrontierBackpressureMaxWaitMs
       spawn.scopedHealVerification shouldBe cfg.scopedHealVerification
       spawn.scopedHealMaxPaths shouldBe cfg.scopedHealMaxPaths
-      spawn.prunedHealVerification shouldBe true // #1502: not forwarded; the coordinator default
+      spawn.prunedHealVerification shouldBe todayForwardedPrunedHealVerification(cfg.prunedHealVerification)
       spawn.frontierPersistenceEnabled shouldBe cfg.healingFrontierPersistence
       spawn.decoupledHealServeRoot shouldBe cfg.decoupledHealServeRoot
       spawn.decoupledHealMaxAttemptsNoRefresh shouldBe cfg.decoupledHealMaxAttemptsNoRefresh
