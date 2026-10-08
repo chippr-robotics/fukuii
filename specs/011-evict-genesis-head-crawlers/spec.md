@@ -40,10 +40,15 @@ Fixes:
 1. PeerManagerActor ignores a handshake whose actor it no longer tracks (`STALE_HANDSHAKE`) and publishes
    `PeerDisconnected` for it so subscribers drop it again.
 2. NetworkPeerManagerActor death-watches every handshaked peer actor and removes its entry on termination, so a lost
-   `PeerDisconnected` can no longer leave a stale entry. An inbound-wins swap whose inbound actor dies restores the
-   displaced outbound entry.
+   `PeerDisconnected` can no longer leave a stale entry. A second live connection for the same peer ID (the outbound
+   an inbound-wins swap displaced, or a dropped duplicate handshake) is kept as a standby and takes over when the
+   current entry's actor dies.
 3. An inbound handshake from a node ID in the exclusion set (genesis-head or wrong-network), unless maintained or
    trusted, is disconnected at once with `UselessPeer` (`EXCLUDED_PEER_REJECTED`) and gets no slot or grace period.
+4. PeerManagerActor remembers the handshake ID of every live actor whose handshake it processed. When a handshake it
+   did not promote (excluded, TooManyPeers, AlreadyConnected) ends, it publishes `PeerDisconnected` under that ID
+   unless another live connection has the node ID. Subscribers such as PendingTransactionsManager register the peer
+   on the handshake event, so without this each rejected crawler redial left a permanent entry.
 
 ## Config (`network.peer`)
 - `genesis-head-eviction-grace = 60.seconds` (0 disables)

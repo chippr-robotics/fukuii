@@ -56,6 +56,14 @@ case class ConnectedPeers(
     */
   def isTracked(peerRef: typed.ActorRef[PeerActor.Command]): Boolean = allPeers.values.exists(_.ref == peerRef)
 
+  /** True if a tracked peer other than `excludingRef` is known under `nodeId`. */
+  def hasOtherWithNodeId(nodeId: ByteString, excludingRef: typed.ActorRef[PeerActor.Command]): Boolean =
+    allPeers.values.exists(p => p.ref != excludingRef && p.nodeId.contains(nodeId))
+
+  /** True if a tracked peer other than `excludingRef` is known under `nodeId`. */
+  def hasOtherWithNodeId(nodeId: ByteString, excludingRef: typed.ActorRef[PeerActor.Command]): Boolean =
+    allPeers.values.exists(p => p.ref != excludingRef && p.nodeId.contains(nodeId))
+
   def addNewPendingPeer(pendingPeer: Peer): ConnectedPeers =
     if pendingPeer.incomingConnection then
       copy(incomingPendingPeers = incomingPendingPeers + (pendingPeer.id -> pendingPeer))

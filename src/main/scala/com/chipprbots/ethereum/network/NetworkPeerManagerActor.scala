@@ -274,10 +274,18 @@ object NetworkPeerManagerActor:
     private val pendingInboundWinsDisconnects: scala.collection.mutable.Set[PeerId] =
       scala.collection.mutable.Set.empty
 
-    // The entry an inbound-wins swap displaced, per peer. PeerManagerActor only lets the inbound win for maintained
-    // peers; for any other peer it disconnects the inbound duplicate (AlreadyConnected) and keeps the outbound. When the
-    // swapped-in inbound actor then dies, the displaced outbound entry is restored instead of the peer being dropped.
-    private val displacedByInboundWins = scala.collection.mutable.Map.empty[PeerId, PeerWithInfo]
+    // A second live connection for a peer ID that is not the current entry: the outbound an inbound-wins swap displaced,
+    // or a duplicate handshake that was not taken (DUPLICATE_HANDSHAKE_DROPPED). Which one PeerManagerActor keeps is
+    // its call (inbound wins only for maintained peers; otherwise the newer duplicate gets AlreadyConnected), and the
+    // current entry's actor may already be dead when the duplicate arrives. So when the current entry's actor dies, a
+    // live standby takes its place instead of the peer being dropped. One standby per peer ID; each is death-watched
+    // and removed when its own actor dies, so the map holds only live connections.
+    private val standbyEntries = scala.collection.mutable.Map.empty[PeerId, PeerWithInfo]
+
+    private def setStandby(peerId: PeerId, standby: PeerWithInfo, currentRef: typed.ActorRef[PeerActor.Command]): Unit =
+      standbyEntries.put(peerId, standby).foreach { previous =>
+        if previous.peer.ref != currentRef && previous.peer.ref != standby.peer.ref then ctx.unwatch(previous.peer.ref)
+      }
 
     // Cache of recent canonical state roots, refreshed lazily when the chain advances.
     private var freshRootCache: scala.collection.mutable.Set[ByteString] = scala.collection.mutable.Set.empty
@@ -675,20 +683,24 @@ object NetworkPeerManagerActor:
         // reaching the event bus. The entry stayed forever, so a genesis-head crawler was "evicted" every ~70 s while
         // DisconnectPeer went to dead letters. Death watch fires even for an already-dead ref, so it cannot be lost.
         case PeerActorTerminated(ref) =>
-          displacedByInboundWins.filterInPlace { case (_, displaced) => displaced.peer.ref != ref }
+          // A standby whose own actor died can never take over.
+          standbyEntries.filterInPlace { case (_, standby) => standby.peer.ref != ref }
           val owned = peersWithInfo.collect { case (id, pw) if pw.peer.ref == ref => id }
           val updated = owned.foldLeft(peersWithInfo) { (acc, peerId) =>
-            displacedByInboundWins.remove(peerId) match
-              case Some(displaced) =>
-                // The swapped-in inbound duplicate died; its displaced outbound connection is still alive.
+            standbyEntries.remove(peerId) match
+              case Some(standby) =>
+                // The current connection died; the standby connection to the same node is still alive.
                 pendingInboundWinsDisconnects -= peerId
                 log.info(
-                  "INBOUND_WINS_REVERTED: {} inbound {} terminated; restoring {}",
+                  "STANDBY_CONNECTION_PROMOTED: {} {} terminated; continuing on {}",
                   peerId,
                   acc(peerId).peer.remoteAddress,
-                  displaced.peer.remoteAddress
+                  standby.peer.remoteAddress
                 )
-                acc + (peerId -> displaced.copy(peerInfo = acc(peerId).peerInfo))
+                // Keep the dying entry's PeerInfo: it is the node's chain state (best block, max block number, fork
+                // acceptance) as updated by every message received under this peer ID since the standby's own
+                // handshake, which is newer than the snapshot the standby was stored with.
+                acc + (peerId -> standby.copy(peerInfo = acc(peerId).peerInfo))
               case None => removePeer(peerId, acc, "actor terminated")
           }
           if owned.isEmpty then Behaviors.same else handleMessages(updated)
@@ -711,7 +723,8 @@ object NetworkPeerManagerActor:
         eventAdapter
       )
       ctx.unwatch(pw.peer.ref)
-      displacedByInboundWins.remove(peerId).foreach(d => ctx.unwatch(d.peer.ref))
+      standbyEntries.remove(peerId).foreach(d => ctx.unwatch(d.peer.ref))
+      pendingInboundWinsDisconnects -= peerId
       NetworkMetrics.registerRemoveHandshakedPeer(pw.peer)
       PeerTelemetry.deregisterPeer(peerId)
       lastBlockSignalMs.remove(peerId)
@@ -830,7 +843,7 @@ object NetworkPeerManagerActor:
         if newIsInbound && existingIsOutbound then
           // Inbound-wins: swap peersWithInfo to the live inbound ref.
           pendingInboundWinsDisconnects += peer.id
-          displacedByInboundWins.update(peer.id, old)
+          setStandby(peer.id, old, peer.ref)
           ctx.watchWith(peer.ref, PeerActorTerminated(peer.ref))
           log.info(
             "DUPLICATE_HANDSHAKE_INBOUND_WINS: {} swapping {} → {} (outbound eviction suppressed)",
@@ -847,6 +860,10 @@ object NetworkPeerManagerActor:
               s"duplicate=${peer.remoteAddress} inbound=${peer.incomingConnection}) — " +
               s"keeping existing entry, duplicate will be dropped by PeerManagerActor"
           )
+          // Remember the duplicate in case the existing entry's actor is the one that is already gone.
+          if peer.ref != old.peer.ref then
+            setStandby(peer.id, PeerWithInfo(peer, peerInfo), old.peer.ref)
+            ctx.watchWith(peer.ref, PeerActorTerminated(peer.ref))
           Behaviors.same
       else
         ctx.watchWith(peer.ref, PeerActorTerminated(peer.ref))
