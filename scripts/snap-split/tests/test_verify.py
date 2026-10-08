@@ -137,10 +137,14 @@ class Fixture:
         return c
 
 
-def move_commit(f: Fixture, module=MODULE_MOVE, core=CORE_AFTER_MOVE, symbols="heal count"):
+def move_commit(f: Fixture, module=MODULE_MOVE, core=CORE_AFTER_MOVE, symbols="heal count", partial=False):
     f.write(f"{CTRL}/HealingOrchestrator.scala", module)
     f.write(CORE, core)
-    f.commit(f"refactor(snap): move heal (#1401)\n\n# moved: {symbols}\n")
+    extra = "# partial: test fixture, narrowed in a later commit\n" if partial else ""
+    f.commit(f"refactor(snap): move heal (#1401)\n\n# moved: {symbols}\n{extra}")
+
+
+NARROW_MSG = "refactor(snap): narrow (#1401)\n\n# new-tests: src/test/scala/x/StubSpec.scala\n"
 
 
 class VerifyTests(unittest.TestCase):
@@ -161,13 +165,13 @@ class VerifyTests(unittest.TestCase):
         move_commit(f)
         f.write(f"{CTRL}/HealingOrchestrator.scala", MODULE_NARROW)
         f.write("src/test/scala/x/StubSpec.scala", STUB_TEST)
-        f.commit("refactor(snap): narrow (#1401)")
+        f.commit(NARROW_MSG)
         out = self.ok(f)
         self.assertIn("[counts] HealingOrchestrator: State=HealingState(2)", out)
 
     def test_list_move_commits(self):
         f = Fixture()
-        move_commit(f)
+        move_commit(f, partial=True)
         rc, out = f.verify("--list-move-commits")
         self.assertEqual(rc, 0)
         self.assertEqual(len(out.split()), 1)
@@ -191,7 +195,7 @@ class VerifyTests(unittest.TestCase):
 
     def test_only_visibility_change_is_allowed(self):
         f = Fixture()
-        move_commit(f)
+        move_commit(f, partial=True)
         self.ok(f)
 
     # ---- (a)
@@ -240,9 +244,18 @@ class VerifyTests(unittest.TestCase):
         body = (
             "  private var a = 0\n  private var b = -1L\n  private var c = true\n  private var d = \"s\"\n"
             "  private var e: Option[Int] = None\n  private var g = Nil\n  private var h = Map.empty[String, Int]\n"
-            "  private var i = Foo.Bar.limit\n  var j: Int\n  def k: Int\n  type T = Int\n  import a.b\n  end M\n"
+            "  private var i = Foo.Bar.Limit\n  var f: Int => Int = Foo.Ident\n  var q: Map[String, Int => Int] = Map.empty\n  var j: Int\n  def k: Int\n  type T = Int\n  import a.b\n  end M\n"
         )
         self.ok(self.d_case(body))
+
+    def test_d_companion_method_call_fails(self):
+        self.bad(self.d_case("  private var t = Foo.compute\n"), "FR-016d")
+
+    def test_d_trait_nested_in_object_is_checked(self):
+        f = Fixture()
+        f.write(f"{CTRL}/M.scala", "package x\n\nobject O:\n  trait M:\n    val a = 1\n    def b = 2\n")
+        f.commit("add")
+        self.bad(f, "FR-016d")
 
     def test_d_object_members_not_checked(self):
         f = Fixture()
@@ -256,8 +269,9 @@ class VerifyTests(unittest.TestCase):
         move_commit(f)
         f.write(f"{CTRL}/HealingOrchestrator.scala", MODULE_NARROW.replace("count = tmp", "count = tmp + 1"))
         f.write("src/test/scala/x/StubSpec.scala", STUB_TEST)
-        f.commit("narrow")
-        self.bad(f, "step6")
+        f.commit(NARROW_MSG)
+        out = self.bad(f, "step6")
+        self.assertIn("count = tmp", out)
 
     def test_narrowing_without_stub_test_fails(self):
         f = Fixture()
@@ -299,11 +313,21 @@ class VerifyTests(unittest.TestCase):
         f.commit("sched")
         self.bad(f, "step3")
 
-    def test_refactor_new_test_file_is_exempt(self):
+    def test_refactor_new_test_file_needs_new_tests_trailer(self):
         f = Fixture()
         f.write("src/test/scala/x/NewSpec.scala", "class NewSpec { 1 shouldBe 1 }\n")
         f.commit("new")
-        self.ok(f)
+        self.bad(f, "step3")
+        g = Fixture()
+        g.write("src/test/scala/x/NewSpec.scala", "class NewSpec { 1 shouldBe 1 }\n")
+        g.commit("new\n\n# new-tests: src/test/scala/x/NewSpec.scala\n")
+        self.ok(g)
+
+    def test_new_tests_wildcard_rejected(self):
+        f = Fixture()
+        f.write("src/test/scala/x/NewSpec.scala", "class NewSpec\n")
+        f.commit("new\n\n# new-tests: src/test/scala/x/*.scala\n")
+        self.bad(f, "step3")
 
     def test_refactor_deleting_a_suite_fails(self):
         f = Fixture()
@@ -324,11 +348,12 @@ class VerifyTests(unittest.TestCase):
         f.commit("test(snap): pin\n\n# test-files: src/test/scala/com/chipprbots/ethereum/blockchain/sync/snap/FooSpec.scala\n")
         self.ok(f)
 
-    def test_test_branch_glob_trailer_passes(self):
+    def test_test_branch_glob_trailer_rejected(self):
         f = Fixture(branch="test/snap-016-s0c")
         f.write(TEST, SPEC_BASE + "\n")
         f.commit("test(snap): g\n\n# test-files: src/test/scala/**/FooSpec.scala\n")
-        self.ok(f)
+        out = self.bad(f, "step3")
+        self.assertIn("exact paths only", out)
 
     def test_test_branch_without_trailer_fails(self):
         f = Fixture(branch="test/snap-016-s0b")
@@ -370,13 +395,104 @@ class VerifyTests(unittest.TestCase):
         self.bad(f, "step4")
         g = Fixture(branch="test/snap-016-s0c")
         g.write("src/test/scala/golden/G.scala", "x\n")
-        g.commit("golden\n\n# test-files: src/test/scala/golden/*\n")
+        g.commit("golden\n\n# test-files: src/test/scala/golden/G.scala\n")
         self.ok(g)
+
+    # ---- review fixes
+    def test_narrowing_with_moved_trailer_fails(self):
+        f = Fixture()
+        move_commit(f, partial=True)
+        f.write(f"{CTRL}/HealingOrchestrator.scala", MODULE_NARROW)
+        f.commit("narrow and move\n\n# moved: heal\n")
+        out = self.bad(f, "step6")
+        self.assertIn("both removes the last impl-class mention", out)
+        self.assertIn("FR-016b", out)
+
+    def test_unlisted_removed_member_fails(self):
+        f = Fixture()
+        move_commit(f, symbols="heal", partial=True)
+        out = self.bad(f, "step2")
+        self.assertIn("count", out)
+
+    def test_move_commit_adding_logic_fails(self):
+        f = Fixture()
+        move_commit(f, module=MODULE_MOVE + "\n  def sneaky(): Int = 42\n", partial=True)
+        out = self.bad(f, "step1")
+        self.assertIn("sneaky", out)
+
+    def test_extra_tokens_in_test_hunks_fail(self):
+        for tok in ("x shouldEqual 1", "x mustBe 1", "awaitAssert { }", "fishForSpecificMessage() { }", "Thread.sleep(5)", "a != b", "x shouldNot be(1)", "receiveOne(1.second)"):
+            f = Fixture()
+            f.write(TEST, SPEC_BASE.replace("val fixture", f"{tok}\n  val fixture"))
+            f.commit("tok")
+            self.bad(f, "step3")
+
+    def test_narrowing_changed_case_guard_fails(self):
+        f = Fixture()
+        mod = MODULE_MOVE.replace("    println(tmp)", "    tmp match\n      case 1 if a > 0 =>\n        println(tmp)\n      case _ =>\n        ()")
+        move_commit(f, module=mod, partial=True)
+        narrow = MODULE_NARROW.replace("    println(tmp)", "    tmp match\n      case 1 if a > 5 =>\n        println(tmp)\n      case _ =>\n        ()")
+        f.write(f"{CTRL}/HealingOrchestrator.scala", narrow)
+        f.write("src/test/scala/x/StubSpec.scala", STUB_TEST)
+        f.commit(NARROW_MSG)
+        out = self.bad(f, "step6")
+        self.assertIn("case 1 if", out)
+
+    def test_merge_commit_on_spec_branch_fails_but_not_elsewhere(self):
+        for branch, good in (("refactor/snap-016-m2", False), ("ci/x", True)):
+            f = Fixture(branch=branch)
+            f.git("checkout", "-q", "-b", "side", "base")
+            f.write("docs/s.md", "s\n")
+            f.commit("side")
+            f.git("checkout", "-q", branch)
+            f.write("docs/b.md", "b\n")
+            f.commit("b")
+            f.git("merge", "-q", "--no-ff", "-m", "merge side", "side")
+            if good:
+                self.ok(f)
+            else:
+                self.bad(f, "merge")
+
+    def test_module_change_on_nonconforming_branch_fails(self):
+        f = Fixture(branch="feature/heal")
+        f.write(f"{CTRL}/M.scala", "package x\n\ntrait M:\n  def a = 1\n")
+        f.commit("add")
+        self.bad(f, "branch")
+
+    def test_snap_test_change_on_nonconforming_branch_fails_only_when_marked(self):
+        f = Fixture(branch="feature/heal")
+        f.write(TEST, SPEC_BASE.replace("1 shouldBe 1", "1 shouldBe 2"))
+        f.commit("fix heal")
+        self.ok(f)
+        g = Fixture(branch="feature/heal")
+        g.write(TEST, SPEC_BASE.replace("1 shouldBe 1", "1 shouldBe 2"))
+        g.commit("pins (#1401)")
+        self.bad(g, "branch")
+
+    def test_final_state_requires_narrowing_or_partial_marker(self):
+        f = Fixture()
+        move_commit(f)
+        out = self.bad(f, "final")
+        self.assertIn("still mentions the impl class", out)
+        g = Fixture()
+        move_commit(g, partial=True)
+        self.ok(g)
+
+    def test_file_defining_the_impl_is_exempt_from_mentions(self):
+        f = Fixture()
+        f.write(f"{CTRL}/Defs.scala", "package x\n\nclass SNAPSyncControllerImpl:\n  def a = 1\n")
+        f.commit("defs")
+        self.ok(f)
+
+    def test_protected_nmp_spec_pin_listed(self):
+        text = (Path(__file__).resolve().parents[1] / "protected-paths.txt").read_text()
+        self.assertIn("NetworkPeerManagerSpec.scala", text)
+
 
     # ---- compile hook and cheapness
     def test_compile_cmd_runs_on_move_commit_and_failure_fails(self):
         f = Fixture()
-        move_commit(f)
+        move_commit(f, partial=True)
         self.ok(f, "--compile", "--compile-cmd", "test -f src/main/scala/com/chipprbots/ethereum/blockchain/sync/snap/controller/HealingOrchestrator.scala")
         self.bad(f, "compile", "--compile", "--compile-cmd", "false")
 

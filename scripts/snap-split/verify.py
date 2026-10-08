@@ -32,6 +32,12 @@ SNAP = "src/main/scala/com/chipprbots/ethereum/blockchain/sync/snap"
 MODULE_DIRS = [f"{SNAP}/controller"] + [f"{SNAP}/actors/{d}" for d in ("account", "storage", "healing", "bytecode")]
 RESOURCES = "src/main/resources/"
 IMPL_RE = re.compile(r"SNAPSyncControllerImpl|CoordinatorImpl")
+IMPL_DEF_RE = re.compile(r"\b(?:class|object|trait)\s+(?:SNAPSyncControllerImpl|\w*CoordinatorImpl)\b")
+
+
+def impl_mentions(text: str) -> list[str]:
+    """Mentions of the impl classes in a module file; the file that defines an impl class is exempt."""
+    return [] if IMPL_DEF_RE.search(text) else IMPL_RE.findall(text)
 CAPABILITY_TRAITS = ("SnapSharedState", "SnapControllerEnv", "CoordinatorHandles", "PhaseFlags")
 EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -40,8 +46,9 @@ CONFIG_DIR = Path(os.environ.get("SNAP_VERIFY_CONFIG_DIR", SCRIPT_DIR))
 MODIFIER = r"(?:(?:private|protected)(?:\[\w+\])?|final|override|implicit|inline|transparent|abstract|sealed|open|infix|opaque)"
 VIS_RE = re.compile(r"\b(?:private|protected)(?:\[\w+\])?\s+")
 TOKEN_RE = re.compile(
-    r"\b(?:should|must|shouldBe|assert\w*|assume\w*|expect\w*|intercept|fishForMessage|within|eventually|"
-    r"verify\w*|taggedAs|ignore|pending|cancel|timeout|interval)\b|===|=="
+    r"\b(?:should|must)\w*|\w*[Aa]ssert\w*|\bassume\w*|\bexpect\w*|\bintercept\w*|\bfishFor\w*|\breceive\w*|"
+    r"\bwithin\b|\beventually\b|\bverify\w*|\btaggedAs\b|\bignore\b|\bpending\b|\bcancel\w*|\btimeout\b|"
+    r"\binterval\b|===|==|!=|Thread\.sleep"
 )
 
 
@@ -83,6 +90,26 @@ class Git:
 
     def tree_files(self, c: str, dirs) -> list[str]:
         return [f for f in self.run("ls-tree", "-r", "--name-only", c, "--", *dirs).splitlines() if f.endswith(".scala")]
+
+    def diff_numbered(self, p: str, c: str, path: str):
+        """-U0 diff of one file as ([(old_line_no, text)], [(new_line_no, text)]), blank lines dropped."""
+        removed, added, old, new, in_hunk = [], [], 0, 0, False
+        for l in self.run("diff", "--no-renames", "-U0", p, c, "--", path).splitlines():
+            m = re.match(r"^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@", l)
+            if m:
+                old, new, in_hunk = int(m.group(1)), int(m.group(2)), True
+            elif in_hunk and l.startswith("-"):
+                if l[1:].strip():
+                    removed.append((old, l[1:]))
+                old += 1
+            elif in_hunk and l.startswith("+"):
+                if l[1:].strip():
+                    added.append((new, l[1:]))
+                new += 1
+        return removed, added
+
+    def is_merge(self, c: str) -> bool:
+        return len(self.run("rev-list", "--parents", "-n", "1", c).split()) > 2
 
     def diff_lines(self, p: str, c: str, path_spec) -> tuple[list[str], list[str]]:
         removed, added = [], []
@@ -196,7 +223,7 @@ LITERAL_RE = re.compile(
     r"""^(?:-?\d[\d_]*(?:\.\d+)?(?:[eE][-+]?\d+)?[LlFfDd]?|0[xX][0-9a-fA-F_]+[Ll]?|true|false|"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)')$"""
 )
 EMPTY_RE = re.compile(r"^[A-Za-z_][\w.]*\.empty(?:\[.*\])?(?:\(\))?$")
-CONST_RE = re.compile(r"^[A-Z]\w*(?:\.\w+)*$")
+CONST_RE = re.compile(r"^[A-Z]\w*(?:\.[A-Z]\w*)*$")  # Foo.MaxLimit, not Foo.compute
 
 
 def var_init_ok(init: str) -> bool:
@@ -204,6 +231,23 @@ def var_init_ok(init: str) -> bool:
     return bool(
         init in ("None", "Nil") or LITERAL_RE.match(init) or EMPTY_RE.match(init) or CONST_RE.match(init)
     )
+
+
+def top_level_initializer(t: str):
+    """Text after the first top-level `=` of a declaration (not `=>`, `==`, `<=`...), or None if there is none."""
+    depth, in_str = 0, False
+    for i, ch in enumerate(t):
+        if ch == '"':
+            in_str = not in_str
+        elif in_str:
+            continue
+        elif ch in "([{":
+            depth += 1
+        elif ch in ")]}":
+            depth -= 1
+        elif depth == 0 and ch == "=" and t[i - 1 : i] == " " and t[i + 1 : i + 2] in ("", " "):
+            return t[i + 1 :].strip()
+    return None
 
 
 def member_issue(s: str) -> str | None:
@@ -222,20 +266,20 @@ def member_issue(s: str) -> str | None:
         return None
     if re.match(r"^val\b", t):
         return "concrete non-lazy `val` at member level"
-    m = re.match(r"^var\s+(\w+)\s*(?::[^=]*?)?\s*(?:=(?!=)\s*(.*))?$", t)
     if re.match(r"^var\b", t):
-        if not m:
+        if not re.match(r"^var\s+\w+", t):
             return "unparseable `var` declaration"
-        if m.group(2) is None and "=" not in t:
+        init = top_level_initializer(t)
+        if init is None:
             return None  # abstract var
-        if m.group(2) is None or not var_init_ok(m.group(2)):
-            return f"`var` initializer is not a literal, None/Nil, empty collection or companion constant: {m.group(2)!r}"
+        if not var_init_ok(init):
+            return f"`var` initializer is not a literal, None/Nil, empty collection or companion constant: {init!r}"
         return None
     return "top-level statement in a module trait"
 
 
 def member_check(text: str) -> list[tuple[int, str, str]]:
-    problems, in_trait, in_block = [], False, False
+    problems, trait_ind, in_block = [], None, False
     for no, l in enumerate(text.splitlines(), 1):
         s = l.strip()
         if not s:
@@ -248,12 +292,11 @@ def member_check(text: str) -> list[tuple[int, str, str]]:
             in_block = "*/" not in s
             continue
         ind = indent_of(l)
-        if ind == 0:
-            if TRAIT_RE.match(s):
-                in_trait = True
-            elif not re.match(r"^(end\b|import\b|package\b|//|@)", s):
-                in_trait = False
-        elif ind == 2 and in_trait:
+        if TRAIT_RE.match(s):
+            trait_ind = ind  # also traits nested in objects
+        elif trait_ind is not None and ind <= trait_ind and not re.match(r"^(end\b|import\b|package\b|//|@|[)}\]])", s):
+            trait_ind = None
+        elif trait_ind is not None and ind == trait_ind + 2:
             why = member_issue(s)
             if why:
                 problems.append((no, s, why))
@@ -327,6 +370,67 @@ def counts_report(g: Git, c: str) -> list[str]:
 
 # --------------------------------------------------------------------------- the verifier
 
+MEMBER_DECL_RE = re.compile(
+    r"^  (?:(?:" + MODIFIER + r")\s+|lazy\s+|case\s+)*(?:def|val|var|type|given|trait|class|object|enum)\s+(\w+)"
+)
+TYPE_HEADER_RE = re.compile(r"^\s*(?:(?:" + MODIFIER + r")\s+)*(?:case\s+)?(?:class|trait|object)\b")
+SELF_TYPE_RE = re.compile(r"^\s*\w+\s*:\s*\S")
+DECL_KW_RE = re.compile(r"^\s*(?:(?:" + MODIFIER + r")\s+)*(?:lazy\s+)?(?:def|val|var|type|given|import|case)\b")
+
+
+def member_names(text: str) -> Counter:
+    return Counter(m.group(1) for l in text.splitlines() if (m := MEMBER_DECL_RE.match(l)))
+
+
+def header_regions(text: str) -> set[int]:
+    """1-based line numbers of trait/class/object headers and of a trait's self-type lines."""
+    lines, reg = text.splitlines(), set()
+    for i, l in enumerate(lines):
+        if not TYPE_HEADER_RE.match(l):
+            continue
+        j = i
+        while j < len(lines) and j < i + 12:
+            reg.add(j + 1)
+            if lines[j].rstrip().endswith((":", "{", "=")):
+                break
+            j += 1
+        k = j + 1
+        if k < len(lines) and SELF_TYPE_RE.match(lines[k]) and not DECL_KW_RE.match(lines[k]):
+            m = k
+            while m < len(lines) and m < k + 12:
+                reg.add(m + 1)
+                if lines[m].rstrip().endswith("=>"):
+                    break
+                m += 1
+    return reg
+
+
+def declaration_only_regions(text: str) -> set[int]:
+    """Lines inside <X>State / <X>Api / capability traits, which hold abstract declarations only."""
+    lines, reg, i = text.splitlines(), set(), 0
+    while i < len(lines):
+        m = re.match(r"^(\s*)(?:(?:" + MODIFIER + r")\s+)*trait\s+(\w+)", lines[i])
+        if m and (m.group(2).endswith(("State", "Api")) or m.group(2) in CAPABILITY_TRAITS):
+            d, j = len(m.group(1)), i + 1
+            while j < len(lines) and (not lines[j].strip() or indent_of(lines[j]) > d):
+                reg.add(j + 1)
+                j += 1
+            i = j
+        else:
+            i += 1
+    return reg
+
+
+HEADER_EDIT_RE = re.compile(
+    r"\b(?:extends|with)\b|^\s*(?:(?:" + MODIFIER + r")\s+)*(?:case\s+)?(?:class|trait|object)\b|^\s*self\s*:|^\s*&|=>\s*$|&\s*$|^\s*\w+\s*:\s*[\w\[\]., &]+$"
+)
+
+
+def abstract_decl(s: str) -> bool:
+    t = s.strip()
+    return bool(re.match(r"^(?:(?:" + MODIFIER + r")\s+)*(?:def|var|type)\s+\w", t)) and top_level_initializer(t) is None and not t.endswith(("(", ","))
+
+
 class Verifier:
     def __init__(self, g: Git, branch: str, compile_cmd: str | None):
         self.g, self.branch, self.compile_cmd = g, branch, compile_cmd
@@ -344,15 +448,29 @@ class Verifier:
     def info(self, c: str, msg: str):
         print(f"     {c[:9]} {msg}")
 
-    # -- config files
     def patterns(self, name: str) -> list[str]:
         f = CONFIG_DIR / name
         if not f.exists():
             return []
         return [l.strip() for l in f.read_text().splitlines() if l.strip() and not l.strip().startswith("#")]
 
+    def exact_paths(self, c: str, check: str, vals, trailer_name: str) -> list[str]:
+        out = []
+        for t in split_list(vals):
+            if t == "none":
+                continue
+            if re.search(r"[*?\[\]]", t):
+                self.err(c, check, f"`# {trailer_name}:` takes exact paths only, got a wildcard: {t}")
+            else:
+                out.append(t)
+        return out
+
     def commit(self, c: str):
         g = self.g
+        if g.is_merge(c):
+            if self.kind in ("refactor", "test"):
+                self.err(c, "merge", "merge commit on a spec-016 branch: rebase onto staging instead")
+            return
         p = g.parent(c)
         msg = g.message(c)
         changed = g.changed(p, c)
@@ -360,17 +478,30 @@ class Verifier:
         is_move = moved is not None
         self.info(c, f"({self.kind} branch{', move commit' if is_move else ''}) {g.run('log', '-1', '--format=%s', c).strip()}")
 
+        # branch-name guard: spec-016 work on a non-conforming branch would silently skip steps 3 and 4
+        if self.kind == "other":
+            mod_changes = [f for f in changed if is_module(f)]
+            marked = is_move or trailer(msg, "test-files") is not None or "#1401" in msg
+            snap_tests = [f for f in changed if f.startswith("src/test/") and "/sync/snap/" in f]
+            if mod_changes or (marked and snap_tests):
+                self.err(
+                    c, "branch",
+                    f"changes {(mod_changes or snap_tests)[0]} on branch '{self.branch}', which is neither "
+                    "refactor/snap-016-* nor test/snap-016-*, so the test-hunk and drift checks would not run",
+                )
+
         # step 5 (a): impl-class mention
         narrowed = False
         for f in g.tree_files(c, MODULE_DIRS):
-            now = IMPL_RE.findall(g.show(c, f) or "")
-            before = IMPL_RE.findall((g.show(p, f) or "") if p != EMPTY_TREE else "")
+            text = g.show(c, f) or ""
+            now = impl_mentions(text)
+            before = impl_mentions((g.show(p, f) or "") if p != EMPTY_TREE else "")
             if before and not now:
                 narrowed = True
             if not now:
                 continue
             if is_move and len(now) == 1:
-                line = next(l for l in (g.show(c, f) or "").splitlines() if IMPL_RE.search(l))
+                line = next(l for l in text.splitlines() if IMPL_RE.search(l))
                 if re.match(r"^\s*\w+\s*:\s*\w*Impl\s*=>\s*$", line):
                     continue
                 self.err(c, "FR-016a", f"{f}: the one allowed mention must be the temporary self-type line, found: {line.strip()}")
@@ -379,7 +510,7 @@ class Verifier:
             else:
                 self.err(c, "FR-016a", f"{f}: mentions the impl class ({len(now)}x); only a `# moved:` commit may, once per file")
 
-        # step 5 (d): member-level rules, on the module files of this commit
+        # step 5 (d)
         for f in g.tree_files(c, MODULE_DIRS):
             for no, s, why in member_check(g.show(c, f) or ""):
                 self.err(c, "FR-016d", f"{f}:{no}: {why}: `{s[:90]}`")
@@ -388,10 +519,12 @@ class Verifier:
         if is_move:
             self.check_moved_blocks(c, p, changed)
             self.check_bodies(c, p, changed, split_list(moved))
+            if narrowed:
+                self.err(c, "step6", "commit both removes the last impl-class mention (narrowing) and carries `# moved:`; split it into two commits")
 
-        # step 6 + (b): narrowing commit
-        if narrowed and not is_move:
-            self.check_signature_only(c, p)
+        # step 6 + (b): every narrowing commit, whatever its trailers
+        if narrowed:
+            self.check_signature_only(c, p, changed)
             self.check_stub_test(c, p, changed)
         if any(is_module(f) for f in changed) or narrowed:
             for line in counts_report(g, c):
@@ -403,7 +536,7 @@ class Verifier:
                 if f.startswith(RESOURCES):
                     self.err(c, "step4", f"changes {f} (no format/config drift: src/main/resources must be untouched)")
         if self.kind == "refactor":
-            self.check_test_hunks(c, p, changed)
+            self.check_test_hunks(c, p, changed, msg)
             prot = self.patterns("protected-paths.txt")
             for f in changed:
                 if any(fnmatch.fnmatch(f, pat) for pat in prot):
@@ -417,7 +550,7 @@ class Verifier:
             "-c", "color.diff.oldMoved=magenta", "-c", "color.diff.newMoved=cyan",
             "-c", "color.diff.old=red", "-c", "color.diff.new=green",
             "diff", "--no-renames", "--color=always", "--color-moved=plain",
-            "--color-moved-ws=allow-indentation-change", p, c, "--", f"{SNAP}/*.scala", "src/main/**/*.scala",
+            "--color-moved-ws=allow-indentation-change", p, c, "--", "src/main/**/*.scala",
         )
         unmoved_rm, unmoved_add = [], []
         for raw in out.splitlines():
@@ -432,28 +565,43 @@ class Verifier:
                 unmoved_rm.append(body)
             elif sign == "+" and "36" not in codes:
                 unmoved_add.append(body)
-        pool = Counter(norm_line(a) for a in unmoved_add)
         header_ok = re.compile(
             r"^\s*(?:import|package)\b|^\s*(?:(?:private|protected)(?:\[\w+\])?\s+|final\s+|sealed\s+|abstract\s+)*(?:case\s+)?(?:class|trait|object)\b"
             r"|^\s*(?:extends|with)\b|\b(?:extends|with)\b.*[{:]\s*$"
         )
+        added_ok = re.compile(header_ok.pattern + r"|^\s*\w+\s*:\s*\w*Impl\s*=>\s*$|^\s*end\b|^\s*//|^\s*/?\*")
+        pool: dict[str, list[str]] = {}
+        for a in unmoved_add:
+            pool.setdefault(norm_line(a), []).append(a)
         bad = []
         for r in unmoved_rm:
             n = norm_line(r)
-            if pool[n] > 0:
-                pool[n] -= 1
+            if pool.get(n):
+                pool[n].pop()
             elif not header_ok.search(r):
                 bad.append(r.strip())
         for b in bad[:10]:
             self.err(c, "step1", f"removed line is not shown as moved: `{b[:100]}`")
         if len(bad) > 10:
             self.err(c, "step1", f"... and {len(bad) - 10} more removed lines not moved")
+        extra = [a.strip() for lines in pool.values() for a in lines if not added_ok.search(a)]
+        for a in extra[:10]:
+            self.err(c, "step1", f"added line is neither moved nor a header/import/visibility change: `{a[:100]}`")
+        if len(extra) > 10:
+            self.err(c, "step1", f"... and {len(extra) - 10} more added lines not moved")
 
     # -- step 2
     def check_bodies(self, c, p, changed, symbols):
-        files = [f for f, st in changed.items() if f.endswith(".scala") and f.startswith("src/main/")]
+        files = [f for f in changed if f.endswith(".scala") and f.startswith("src/main/")]
         if not symbols:
             self.err(c, "step2", "`# moved:` trailer lists no symbols")
+        removed_members: Counter = Counter()
+        for f in files:
+            old = (self.g.show(p, f) or "") if p != EMPTY_TREE else ""
+            removed_members += member_names(old) - member_names(self.g.show(c, f) or "")
+        unlisted = sorted(set(removed_members) - set(symbols))
+        if unlisted:
+            self.err(c, "step2", f"members removed from the parent are not listed in `# moved:` (their bodies are unverified): {', '.join(unlisted[:12])}")
         for sym in symbols:
             before, after = [], []
             for f in files:
@@ -469,31 +617,36 @@ class Verifier:
                 self.err(c, "step2", f"body of `{sym}` differs between parent and commit (after stripping visibility modifiers and result types)")
 
     # -- step 6
-    def check_signature_only(self, c, p):
-        removed, added = self.g.diff_lines(p, c, ["src/main/**/*.scala"])
-        pool = Counter(norm_sig(a) for a in added)
-        ok_header = re.compile(
-            r"^\s*import\b|^\s*(?:(?:private|protected)(?:\[\w+\])?\s+|final\s+|sealed\s+)*(?:case\s+)?(?:class|trait|object)\b"
-            r"|^\s*(?:extends|with)\b|\b(?:extends|with)\b|^\s*self\s*:|^\s*&|&\s*$|=>\s*$"
-        )
-
-        def abstract_decl(s: str) -> bool:
-            t = s.strip()
-            return bool(re.match(r"^(?:(?:private|protected)(?:\[\w+\])?\s+)?(?:def|var|type)\s+\w", t)) and " = " not in t and not t.endswith(" =")
-
-        for r in removed:
+    def check_signature_only(self, c, p, changed):
+        rem_left, add_left = [], []
+        for f, st in changed.items():
+            if not (f.startswith("src/main/") and f.endswith(".scala")):
+                continue
+            old = (self.g.show(p, f) or "") if p != EMPTY_TREE else ""
+            new = self.g.show(c, f) or ""
+            rem, add = self.g.diff_numbered(p, c, f)
+            for lines, text, out in ((rem, old, rem_left), (add, new, add_left)):
+                hdr, decl = header_regions(text), declaration_only_regions(text)
+                for no, l in lines:
+                    if re.match(r"^\s*import\b", l):
+                        continue
+                    if no in hdr and HEADER_EDIT_RE.search(l):
+                        continue
+                    if no in decl and abstract_decl(l):
+                        continue
+                    out.append(l)
+        pool: dict[str, list[str]] = {}
+        for a in add_left:
+            pool.setdefault(norm_sig(a), []).append(a)
+        for r in rem_left:
             n = norm_sig(r)
-            if pool[n] > 0:
-                pool[n] -= 1
-            elif not ok_header.search(r) and not abstract_decl(r):
+            if pool.get(n):
+                pool[n].pop()
+            else:
                 self.err(c, "step6", f"narrowing commit changes a non-signature line: -`{r.strip()[:90]}`")
-        leftovers = []
-        for a in added:
-            n = norm_sig(a)
-            if pool[n] > 0 and not ok_header.search(a) and not abstract_decl(a):
-                leftovers.append(a)
-        for a in leftovers:
-            self.err(c, "step6", f"narrowing commit adds a non-signature line: +`{a.strip()[:90]}`")
+        for lines in pool.values():
+            for a in lines:
+                self.err(c, "step6", f"narrowing commit adds a non-signature line: +`{a.strip()[:90]}`")
 
     # -- (b)
     def check_stub_test(self, c, p, changed):
@@ -506,9 +659,15 @@ class Verifier:
         self.err(c, "FR-016b", "narrowing commit adds no new Tier 1 test of the form `new Stub<Module>State with ...` (untagged by SyncTest/IntegrationTest/SlowTest/DisabledTest)")
 
     # -- step 3, refactor branches
-    def check_test_hunks(self, c, p, changed):
+    def check_test_hunks(self, c, p, changed, msg):
+        new_tests = trailer(msg, "new-tests")
+        allowed_new = self.exact_paths(c, "step3", new_tests, "new-tests") if new_tests else []
         for f, st in changed.items():
-            if not f.startswith("src/test/") or st == "A":
+            if not f.startswith("src/test/"):
+                continue
+            if st == "A":
+                if f not in allowed_new:
+                    self.err(c, "step3", f"adds test file {f}, which is not listed in a `# new-tests:` trailer (new suites must be named by the slice)")
                 continue
             if st == "D":
                 self.err(c, "step3", f"deletes existing test file {f}")
@@ -525,15 +684,25 @@ class Verifier:
     def check_test_files_trailer(self, c, msg, changed):
         tf = trailer(msg, "test-files")
         if tf is None:
-            self.err(c, "step3", "test/snap-016-* commit has no `# test-files:` trailer (list every src/test file it may touch, or `none`)")
+            self.err(c, "step3", "test/snap-016-* commit has no `# test-files:` trailer (list every src/test file it may touch by exact path, or `none`)")
             return
-        allowed = [t for t in split_list(tf) if t != "none"]
+        allowed = self.exact_paths(c, "step3", tf, "test-files")
+        # NOTE: test-branch-main-allow.txt is trust-based: it admits the whole seam file, not just the T012 seams.
         main_ok = self.patterns("test-branch-main-allow.txt")
         for f in changed:
-            if f.startswith("src/test/") and not any(fnmatch.fnmatch(f, a) for a in allowed):
+            if f.startswith("src/test/") and f not in allowed:
                 self.err(c, "step3", f"touches {f}, which is not listed in the `# test-files:` trailer")
             if f.startswith("src/main/") and not any(fnmatch.fnmatch(f, a) for a in main_ok):
                 self.err(c, "step3", f"test branch touches src/main file {f} (only the S0b seams in test-branch-main-allow.txt are allowed)")
+
+    # -- final state of the PR head
+    def check_final(self, head: str, commits: list[str]):
+        if any(trailer(self.g.message(c), "partial") is not None for c in commits):
+            return
+        for f in self.g.tree_files(head, MODULE_DIRS):
+            if impl_mentions(self.g.show(head, f) or ""):
+                self.err(head, "final", f"{f} still mentions the impl class at the PR head (move without narrowing). "
+                         "Narrow it, or mark the series with a `# partial: <reason>` trailer")
 
     # -- compile the move commit
     def compile_move(self, c: str):
@@ -565,18 +734,20 @@ def main(argv=None) -> int:
     toplevel = Path(g.run("rev-parse", "--show-toplevel").strip())
     g = Git(toplevel)
     branch = a.branch or g.run("rev-parse", "--abbrev-ref", "HEAD").strip()
-    commits = g.run("rev-list", "--reverse", "--no-merges", f"{a.base}..{a.head}").split()
+    commits = g.run("rev-list", "--reverse", f"{a.base}..{a.head}").split()
     if a.list_move_commits:
         for c in commits:
-            if trailer(g.message(c), "moved") is not None:
+            if not g.is_merge(c) and trailer(g.message(c), "moved") is not None:
                 print(c)
         return 0
     v = Verifier(g, branch, a.compile_cmd if a.compile else None)
     print(f"snap-split verify: {len(commits)} commit(s) in {a.base}..{a.head}, branch '{branch}' ({v.kind})")
     for c in commits:
         v.commit(c)
-        if v.compile_cmd and trailer(g.message(c), "moved") is not None:
+        if v.compile_cmd and not g.is_merge(c) and trailer(g.message(c), "moved") is not None:
             v.compile_move(c)
+    if commits:
+        v.check_final(commits[-1], commits)
     if v.errors:
         print(f"\nsnap-split verify: {len(v.errors)} failure(s)")
         return 1
