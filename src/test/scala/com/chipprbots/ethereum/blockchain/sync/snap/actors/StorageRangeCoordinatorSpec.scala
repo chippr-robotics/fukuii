@@ -1807,7 +1807,11 @@ class StorageRangeCoordinatorSpec extends ScalaTestWithActorTestKit() with AnyFl
   private val doneRootArg = kec256(ByteString("done-marker-root"))
   private val doneSlots = Seq(slotKey(0x10) -> ByteString("value-10"), slotKey(0x30) -> ByteString("value-30"))
 
-  private def doneMarkerFixture(recordStorageDone: Boolean = true): (
+  private def doneMarkerFixture(
+      recordStorageDone: Boolean = true,
+      flatBatchEc: scala.concurrent.ExecutionContext = scala.concurrent.ExecutionContext.parasitic,
+      flatBatchEntryThreshold: Int = 1000
+  ): (
       StorageRangeCoordinatorImpl,
       BehaviorTestKit[StorageRangeCoordinator.Command],
       FlatSlotStorage,
@@ -1818,10 +1822,19 @@ class StorageRangeCoordinatorSpec extends ScalaTestWithActorTestKit() with AnyFl
       stateRoot = doneRootArg,
       flatSlotStorage = flatSlots,
       snapSyncControllerRef = testKit.createTestProbe[SNAPSyncController.Command]().ref,
+      flatBatchEntryThreshold = flatBatchEntryThreshold,
+      flatBatchEcOverride = Some(flatBatchEc),
       deferredMerkleization = false, // production default: the storage trie is built and committed
       recordStorageDone = recordStorageDone
     )
     (impl, kit, flatSlots, new SnapStorageDoneStorage(flatSlots.dataSource))
+
+  /** A flat-batch writer that runs nothing until told to: lets a test hold a batch "in flight". */
+  final private class ManualEc extends scala.concurrent.ExecutionContext:
+    private val queue = mutable.Queue.empty[Runnable]
+    def execute(runnable: Runnable): Unit = queue.enqueue(runnable)
+    def reportFailure(cause: Throwable): Unit = ()
+    def runAll(): Unit = while queue.nonEmpty do queue.dequeue().run()
 
   private def storageRootOf(slots: Seq[(ByteString, ByteString)]): ByteString =
     val reference = new SnapHashTrie(_ => ())
@@ -1840,7 +1853,8 @@ class StorageRangeCoordinatorSpec extends ScalaTestWithActorTestKit() with AnyFl
 
     completeAccount(impl, account, root)
     impl.completedAccountCount shouldBe 1L
-    impl.pendingDoneMarkers.toSeq shouldBe Seq(account -> root)
+    // Its last slots are still buffered, so the marker waits on batch 1, the batch that will carry them.
+    impl.pendingDoneMarkers.toSeq shouldBe Seq((account, root, 1L))
     // A crash at this point loses the marker together with the slots: the task is re-queued on resume, never skipped.
     done.isDone(account, root) shouldBe false
     flatSlots.getSlot(account, doneSlots.head._1) shouldBe None
@@ -1853,21 +1867,29 @@ class StorageRangeCoordinatorSpec extends ScalaTestWithActorTestKit() with AnyFl
     done.isDone(account, kec256(ByteString("some-other-root"))) shouldBe false
   }
 
-  it should "hold a completion marker back while an earlier flat batch is still in flight" taggedAs UnitTest in {
-    val (impl, kit, _, done) = doneMarkerFixture()
+  it should "hold a completion marker back until the batch carrying the account's slots has committed" taggedAs UnitTest in {
+    val writer = new ManualEc
+    // Threshold 1: the account's slots go out in their own batch the moment they are staged, before the marker.
+    val (impl, kit, flatSlots, done) = doneMarkerFixture(flatBatchEc = writer, flatBatchEntryThreshold = 1)
     val account = kec256(ByteString("done-account-inflight"))
     val root = storageRootOf(doneSlots)
     completeAccount(impl, account, root)
+    impl.inFlightFlatBatches shouldBe 1 // batch 1 (the slots) submitted, not yet run
 
-    // An earlier batch (which may hold an earlier chunk of this account) has not committed yet.
-    impl.inFlightFlatBatches = 1
+    // Batch 1 has not committed: the marker must not ride in any batch yet (a crash now loses the slots).
     kit.run(StorageRangeCoordinator.FlushStorageDoneMarkers)
-    impl.pendingDoneMarkers.toSeq shouldBe Seq(account -> root)
+    impl.pendingDoneMarkers should have size 1
     done.isDone(account, root) shouldBe false
 
-    kit.run(StorageRangeCoordinator.FlatBatchFlushComplete(doneRootArg, entryCount = 0, elapsedMs = 0L))
+    writer.runAll() // batch 1 commits; its FlatBatchFlushComplete lands in the inbox
     drainSelf(kit)
-    kit.run(StorageRangeCoordinator.FlushStorageDoneMarkers)
+    impl.flatBatchesDoneThrough shouldBe 1L
+    doneSlots.foreach { case (k, v) => flatSlots.getSlot(account, k) shouldBe Some(v) }
+    done.isDone(account, root) shouldBe false
+
+    kit.run(StorageRangeCoordinator.FlushStorageDoneMarkers) // the marker may ride now
+    impl.pendingDoneMarkers shouldBe empty
+    writer.runAll()
     drainSelf(kit)
     done.isDone(account, root) shouldBe true
   }

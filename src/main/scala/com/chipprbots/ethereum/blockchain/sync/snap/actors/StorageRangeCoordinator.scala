@@ -717,33 +717,56 @@ private[actors] class StorageRangeCoordinatorImpl(
 
   // ── Storage-task completion markers (a resume skips finished tasks; see SnapStorageDoneStorage) ──
   //
-  // Crash-consistency rule: a marker may only become durable after every byte of the account's data. The trie nodes
-  // are written synchronously on this thread before the marker is staged (`commitAccountTrie`). The account's last
-  // flat slots are staged in `pendingFlatBatchAccounts` before it, and the marker rides in the SAME atomic WriteBatch
-  // (or a later one). Earlier chunks of a large account went out in earlier batches, so a marker is attached to a
-  // batch only when NO earlier batch is still in flight (`takeDoneMarkersForBatch`) — independent of how many threads
-  // the writer dispatcher has. A batch that fails disables markers for the rest of this coordinator's life: its slots
-  // are lost and any staged account could have had a chunk in it. Losing a staged marker (crash before its batch
-  // commits) only means the task is downloaded again after a restart — today's behaviour.
+  // Crash-consistency rule: a marker may only become durable after every byte of the account's data.
+  //   - Trie nodes: written synchronously on this thread before the marker is staged (`commitAccountTrie`).
+  //   - Flat slots: every flat batch gets a sequence number. When the marker is staged, the account's slots are in
+  //     batches <= `flatBatchSeq` (already submitted) or still in `pendingFlatBatchAccounts`, which the NEXT batch
+  //     (`flatBatchSeq + 1`) carries. The marker records that number as `lastSlotBatch` and may ride in batch `b` only
+  //     if every batch <= lastSlotBatch has committed, or `b` IS lastSlotBatch (same atomic WriteBatch) and every
+  //     earlier one has. This holds however many threads the writer dispatcher has, and a marker never waits on
+  //     batches submitted after it (no starvation under sustained load).
+  // A batch that fails disables markers for the rest of this coordinator's life: its slots are lost and any staged
+  // account could have had a chunk in it. Losing a staged marker (crash before its batch commits) only means the task
+  // is downloaded again after a restart — today's behaviour.
   private val storageDoneStorage: Option[SnapStorageDoneStorage] =
     Option.when(recordStorageDone)(new SnapStorageDoneStorage(flatSlotStorage.dataSource))
 
-  /** Fully-downloaded `(accountHash, storageRoot)` pairs whose marker is not written yet. Package-private for tests. */
-  private[actors] val pendingDoneMarkers = mutable.ArrayBuffer.empty[(ByteString, ByteString)]
+  /** Fully-downloaded `(accountHash, storageRoot, lastSlotBatch)` whose marker is not written yet. Package-private for
+    * tests.
+    */
+  private[actors] val pendingDoneMarkers = mutable.ArrayBuffer.empty[(ByteString, ByteString, Long)]
 
   /** Set once a flat batch failed: this coordinator writes no further markers. Package-private for tests. */
   private[actors] var doneMarkersDisabled: Boolean = false
 
-  /** The staged markers that may ride in the batch about to be committed — none while an earlier batch is still in
-    * flight (they then wait for a later batch; `FlushStorageDoneMarkers` retries periodically).
-    */
-  private def takeDoneMarkersForBatch(): Seq[(ByteString, ByteString)] =
-    if storageDoneStorage.isEmpty || doneMarkersDisabled || inFlightFlatBatches > 0 || pendingDoneMarkers.isEmpty
-    then Seq.empty
+  /** Sequence number of the last submitted flat batch (1-based). */
+  private var flatBatchSeq: Long = 0L
+
+  /** Every flat batch with a sequence number <= this has committed. Package-private for tests. */
+  private[actors] var flatBatchesDoneThrough: Long = 0L
+  private val flatBatchesDoneAhead = mutable.Set.empty[Long]
+
+  private def recordFlatBatchDone(seq: Long): Unit =
+    if seq > flatBatchesDoneThrough then
+      flatBatchesDoneAhead += seq
+      while flatBatchesDoneAhead.remove(flatBatchesDoneThrough + 1) do flatBatchesDoneThrough += 1
+
+  /** Stage the completion marker of an account whose data was just fully handed to storage. */
+  private def stageDoneMarker(accountHash: ByteString, storageRoot: ByteString): Unit =
+    if storageDoneStorage.isDefined && !doneMarkersDisabled then
+      pendingDoneMarkers += ((accountHash, storageRoot, flatBatchSeq + 1))
+
+  /** Remove and return the staged markers that may ride in batch `batchSeq` (see the rule above). */
+  private def takeDoneMarkersFor(batchSeq: Long): Seq[(ByteString, ByteString)] =
+    if storageDoneStorage.isEmpty || doneMarkersDisabled || pendingDoneMarkers.isEmpty then Seq.empty
     else
-      val taken = pendingDoneMarkers.toList
+      val (ride, wait) = pendingDoneMarkers.partition { case (_, _, lastSlotBatch) =>
+        flatBatchesDoneThrough >= lastSlotBatch ||
+        (batchSeq == lastSlotBatch && flatBatchesDoneThrough >= lastSlotBatch - 1)
+      }
       pendingDoneMarkers.clear()
-      taken
+      pendingDoneMarkers ++= wait
+      ride.map { case (account, root, _) => (account, root) }.toList
 
   /** Dedicated dispatcher for flat-batch RocksDB commits. Tests can inject their own ExecutionContext to keep timing
     * deterministic; production looks up `storage-writer-dispatcher` from the actor system.
@@ -771,8 +794,8 @@ private[actors] class StorageRangeCoordinatorImpl(
     * can drop bookkeeping for batches that pre-date a pivot refresh.
     */
   private def flushPendingFlatBatch(): Unit =
-    // Taken BEFORE `inFlightFlatBatches` counts this batch: markers ride only if no earlier batch is in flight.
-    val doneMarkers = takeDoneMarkersForBatch()
+    val batchSeq = flatBatchSeq + 1
+    val doneMarkers = takeDoneMarkersFor(batchSeq)
     if pendingFlatBatchAccounts.nonEmpty || doneMarkers.nonEmpty then
       val batchAccounts = pendingFlatBatchAccounts.toList // immutable snapshot
       val entries = pendingFlatBatchEntries
@@ -780,6 +803,7 @@ private[actors] class StorageRangeCoordinatorImpl(
       pendingFlatBatchAccounts.clear()
       pendingFlatBatchEntries = 0
       inFlightFlatBatches += 1
+      flatBatchSeq = batchSeq
 
       val selfRef = self
       val storage = flatSlotStorage // capture for Future
@@ -800,7 +824,7 @@ private[actors] class StorageRangeCoordinatorImpl(
         }
       }(ec).onComplete {
         case scala.util.Success(elapsedMs) =>
-          selfRef ! FlatBatchFlushComplete(forStateRoot, entries, elapsedMs)
+          selfRef ! FlatBatchFlushComplete(forStateRoot, entries, elapsedMs, batchSeq)
         case scala.util.Failure(e) =>
           selfRef ! FlatBatchFlushFailed(forStateRoot, entries, e.getMessage)
       }(ec)
@@ -876,8 +900,11 @@ private[actors] class StorageRangeCoordinatorImpl(
     abandonedAccounts.clear()
     // Best-effort: flush any tail of accumulated flat-slot entries synchronously here so we
     // don't lose data when the actor terminates (force-complete, restart).
-    // Markers ride only if no async batch is still in flight (this synchronous commit could otherwise overtake it).
-    val doneMarkers = takeDoneMarkersForBatch()
+    // This synchronous commit is the next batch in sequence; the same rule picks which staged markers may ride in it
+    // (an async batch still in flight blocks the markers whose slots it carries). The rest are dropped: re-downloaded.
+    val stopBatchSeq = flatBatchSeq + 1
+    val doneMarkers = takeDoneMarkersFor(stopBatchSeq)
+    flatBatchSeq = stopBatchSeq
     pendingDoneMarkers.clear()
     if pendingFlatBatchAccounts.nonEmpty || doneMarkers.nonEmpty then
       try
@@ -1217,11 +1244,13 @@ private[actors] class StorageRangeCoordinatorImpl(
         Behaviors.same
 
       case FlushStorageDoneMarkers =>
-        if pendingDoneMarkers.nonEmpty && inFlightFlatBatches == 0 then flushPendingFlatBatch()
+        // Submits the staged slots a marker waits on, and every marker whose slots have committed.
+        if pendingDoneMarkers.nonEmpty then flushPendingFlatBatch()
         Behaviors.same
 
-      case FlatBatchFlushComplete(forStateRoot, entryCount, elapsedMs) =>
+      case FlatBatchFlushComplete(forStateRoot, entryCount, elapsedMs, seq) =>
         inFlightFlatBatches = (inFlightFlatBatches - 1).max(0)
+        recordFlatBatchDone(seq)
         if forStateRoot != stateRoot then
           log.debug(
             s"Flat batch flush completed for stale root ${forStateRoot.take(4).toHex} " +
@@ -1821,8 +1850,7 @@ private[actors] class StorageRangeCoordinatorImpl(
             // Completion marker — ONLY on this path (every subtask applied in order, trie committed). The give-up,
             // max-empty skip, abandoned and force-complete paths never mark: a resume downloads those again. A root
             // mismatch is not marked either, so a restart retries it rather than leaving it all to healing.
-            if storageDoneStorage.isDefined && !doneMarkersDisabled && rootVerified then
-              pendingDoneMarkers += ((accountHash, task.storageRoot))
+            if rootVerified then stageDoneMarker(accountHash, task.storageRoot)
 
         task = task.copy(done = true, pending = false)
         recordCompletedTask(task)
@@ -2126,15 +2154,17 @@ object StorageRangeCoordinator:
   case class UpdateMaxInFlightPerPeer(newLimit: Int) extends Command
 
   /** An aggregated flat-slot batch (small-contract writes) finished committing on the storage-writer dispatcher.
-    * `forStateRoot` lets the coordinator drop completion messages from a superseded generation.
+    * `forStateRoot` lets the coordinator drop completion messages from a superseded generation. `seq` is the batch's
+    * sequence number (completion markers wait on it); 0 = unnumbered.
     */
   private[actors] case class FlatBatchFlushComplete(
       forStateRoot: ByteString,
       entryCount: Int,
-      elapsedMs: Long
+      elapsedMs: Long,
+      seq: Long = 0L
   ) extends Command
 
-  /** Periodic: write staged storage completion markers (with any buffered flat slots) once no batch is in flight. */
+  /** Periodic: submit buffered flat slots that staged completion markers wait on, and every marker that may ride. */
   private[actors] case object FlushStorageDoneMarkers extends Command
   private[actors] val DoneMarkerFlushInterval: FiniteDuration = 10.seconds
 
