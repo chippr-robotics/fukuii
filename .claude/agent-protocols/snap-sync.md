@@ -115,7 +115,10 @@ PR that changes pinned behaviour on purpose (for example #1502) edits the one as
 | #1371 | no `storagePhaseForceCompleted` term in the skip-healing decision, at the call site | `checkAllDownloadsComplete` + companion `shouldSkipHealingAfterDownloads` (→ `HealPolicy`, M1) | `SNAPSyncControllerPinSpec`: "#1371: skip healing … storage force-completed" (+ control case) (T016); the helper-level tests in `SNAPSyncControllerSpec` stay |
 | T012 seam | `ChildFactories` defaults equal each child `apply`'s defaults | `controller/ChildFactories.scala` | `ChildFactoriesSpec` (five tests) |
 
-Each S0b pin was shown to fail when its pinned expression is reverted (T017; run links in the S0b PR).
+Each S0b pin was shown to fail when its pinned expression is reverted (T017; run links in the S0b PR, #1512).
+
+The S0c golden vectors for every frozen on-disk format (`SnapFrozenFormatsGoldenSpec`) follow the same rule: never
+edited by a move PR.
 
 ## Characterization tests (S0d): today's behaviour, including what looks wrong
 
@@ -130,7 +133,11 @@ unchanged; a fix PR updates the assertion it changes on purpose.
 | Pivot refresh | `SNAPPivotRefreshCharacterizationSpec` (T023) | ETC/Hash: header bootstrap, child notifications, ChainDownloader `Pause`/`UpdateTarget`/`Resume`, persisted pivot/root, probe commit and probe timeout; ETH/Path/CL: re-peg on the CL head, no anchor write while healing | M10 (beacon reviews the ETH case) |
 | #1501 budget and watchdog | `SNAPBudgetWatchdogPinSpec` (T025) | `IncrementalContractData` credit release (idle; `syncing` without coordinators), `RecoveryReplayPausedRetry` = 1 s and the gated recovery stream, watchdog start / stop in `onStop` and `stopSnapOnlySchedules` | P1, M5, M9, M11 |
 | P1 fan-outs | `SNAPFanOutCharacterizationSpec` (T026) | peer-unavailable to every existing coordinator; each SNAP response to exactly its coordinator | P1 |
-| `syncing` dispatch | `SNAPSyncingDispatchTableSpec` (T027) | every Command × reachable `SyncPhase`: handled, catch-all ("Unhandled message in syncing state") or crash | P4a–e (arm-order oracle) |
+| `syncing` dispatch | `SNAPSyncingDispatchTableSpec` (T027) | every Command × each `SyncPhase` reachable in `syncing` (AccountRangeSync, ByteCodeAndStorageSync, StateHealing, StateValidation, Completed, Dormant): handled, catch-all ("Unhandled message in syncing state") or crash | P4a–e (arm-order oracle) |
+
+**T020 decision: `-Wsafe-init` is not enabled.** scalac options are set per sbt module, not per package, so it cannot be
+scoped to `snap`; on the whole root module it would report on code outside the split. The trait-initialization hazard
+is covered by FR-016 (d) (`scripts/snap-split/verify.sh`, S0f) and by every controller suite constructing the controller.
 
 **Known gap (needs a seam):** the storage-tail refresh/force-complete and the bytecode force-complete compare
 hard-coded thresholds (10 min, 60 s, 2 min, 10 min) with `System.currentTimeMillis()`, which `ManualTime` does not

@@ -16,6 +16,7 @@ import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController.*
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.AccountRangeStats
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.ByteCodeCoordinator
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.StorageRangeCoordinator
+import com.chipprbots.ethereum.db.storage.MptStorage
 import com.chipprbots.ethereum.network.PeerId
 import com.chipprbots.ethereum.network.p2p.messages.SNAP
 import com.chipprbots.ethereum.testing.Tags.*
@@ -38,10 +39,12 @@ import com.chipprbots.ethereum.testing.Tags.*
   *     `checkAllDownloadsComplete` discards the behaviour it returns, so the controller stays in `syncing` with
   *     `currentPhase = Completed`.
   *
-  * Not reachable inside `syncing` today, so not in the table: `ChainDownloadCompletion` (nothing assigns it), `Idle`
-  * (`restartSnapSync`/`wakeFromDormant` set it and then return whatever `startSnapSync` returns, which sets a phase
-  * before returning `syncing`), and `Dormant` (reachable only where `enterDormantMode`'s behaviour is discarded;
-  * `SNAPResetCharacterizationSpec` pins that state, including its catch-all of `DormantWakeUp`).
+  *   - `Dormant`: from `StateValidation`, validation-retry exhaustion enters dormant mode with its behaviour discarded,
+  *     so the controller stays in `syncing` (see `SNAPResetCharacterizationSpec`).
+  *
+  * Not in the table: `ChainDownloadCompletion` (no code assigns it) and `Idle` (`restartSnapSync`/`wakeFromDormant` set
+  * it, then return what `startSnapSync` returns; a grep of their call sites found none that discards that result, and
+  * every `startSnapSync` branch that returns `syncing` sets another phase first).
   *
   * On a mismatch the test prints the whole observed table.
   */
@@ -54,7 +57,8 @@ class SNAPSyncingDispatchTableSpec
     case Handled, CatchAll, Crashed
   import Dispatch.*
 
-  private val Phases = Seq("AccountRangeSync", "ByteCodeAndStorageSync", "StateHealing", "StateValidation", "Completed")
+  private val Phases =
+    Seq("AccountRangeSync", "ByteCodeAndStorageSync", "StateHealing", "StateValidation", "Completed", "Dormant")
 
   private val statusProbe = testKit.createTestProbe[SyncProtocol.Status]()
   private val progressProbe = testKit.createTestProbe[SyncProgress]()
@@ -165,8 +169,8 @@ class SNAPSyncingDispatchTableSpec
       // A second account launch reuses the account coordinator's name (same generation) and throws.
       "CheckSnapCapability" -> everywhere(Handled).updated("AccountRangeSync", Crashed),
       // Guarded on the phase-complete / healed-code flags.
-      "ByteCodeSyncComplete" -> handledOnlyIn("AccountRangeSync", "StateValidation"),
-      "HealedCodeWaitTimeout" -> handledOnlyIn("StateValidation"),
+      "ByteCodeSyncComplete" -> handledOnlyIn("AccountRangeSync", "StateValidation", "Dormant"),
+      "HealedCodeWaitTimeout" -> handledOnlyIn("StateValidation", "Dormant"),
       "StorageRangeSyncComplete" -> handledOnlyIn("AccountRangeSync", "ByteCodeAndStorageSync"),
       "StorageRangeSyncForceCompleted" -> handledOnlyIn("AccountRangeSync", "ByteCodeAndStorageSync"),
       // Guarded on currentPhase == StateHealing.
@@ -180,10 +184,11 @@ class SNAPSyncingDispatchTableSpec
       "ScheduledTrieWalk" -> handledOnlyIn("StateHealing"),
       "TrieWalkFailed" -> handledOnlyIn("StateHealing"),
       // Current-generation validation results are guarded on currentPhase == StateValidation (stale ones are dropped
-      // by an unguarded arm first, in every phase).
-      "ValidateAccountTrieResult(current gen)" -> handledOnlyIn("StateValidation"),
-      "ValidateStorageTriesResult(current gen)" -> handledOnlyIn("StateValidation"),
-      "ValidationRetry(current gen)" -> handledOnlyIn("StateValidation"),
+      // by an unguarded arm first, in every phase). Generation 0 is current everywhere except Dormant, whose route ran
+      // four validations (generation 4), so there the "current" samples are stale and dropped.
+      "ValidateAccountTrieResult(current gen)" -> handledOnlyIn("StateValidation", "Dormant"),
+      "ValidateStorageTriesResult(current gen)" -> handledOnlyIn("StateValidation", "Dormant"),
+      "ValidationRetry(current gen)" -> handledOnlyIn("StateValidation", "Dormant"),
       // Progress replies are guarded on the phase that asked.
       "AccountCoordinatorProgress" -> handledOnlyIn("AccountRangeSync"),
       "StorageCoordinatorProgress" -> handledOnlyIn("ByteCodeAndStorageSync"),
@@ -211,6 +216,31 @@ class SNAPSyncingDispatchTableSpec
       f.parent.fishForMessage(10.seconds) {
         case SnapSyncFinalized(_) => FishingOutcomes.complete
         case _                    => FishingOutcomes.continueAndIgnore
+      }
+      f.awaitProcessed(snap)
+      snap
+    case "Dormant" =>
+      // SNAPResetCharacterizationSpec's route: from the StateValidation hold above, validation finds the root missing
+      // four times; the critical failure enters dormant mode, but its behaviour is discarded, so the controller stays
+      // in `syncing` with currentPhase = Dormant (healing and bytecode children stopped, healed-code hold still set).
+      val missingRoot: MptStorage => StateValidator =
+        storage => new FakeStateValidator(storage, Left("Missing root node: s0d table"), Right(Seq.empty))
+      val snap = f.enterStateHealing(
+        SNAPSyncConfig(deferredMerkleization = false, maxSnapSyncFailures = 1),
+        validatorFactory = missingRoot
+      )
+      Using.resource(new SnapLogCapture) { log =>
+        snap ! HealedCodeHashes(Seq(ByteString(Array.fill(32)(0x44.toByte))))
+        snap ! TrieWalkComplete(0)
+        log.awaitLine("[HEAL-CODE] Holding SNAP finalisation")
+        f.awaitProcessed(snap)
+        snap ! ValidationRetry(0L)
+        (1 to 3).foreach { attempt =>
+          log.awaitLine(s"Root node is missing (retry attempt $attempt of 3)")
+          f.awaitProcessed(snap)
+          f.manualTime.timePasses(500.millis)
+        }
+        log.awaitLine("Entering dormant mode")
       }
       f.awaitProcessed(snap)
       snap
