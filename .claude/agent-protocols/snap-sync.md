@@ -35,8 +35,10 @@ unless stated.
   counts below in the same PR. A count must not grow without a justification line. `scripts/snap-split/verify.sh`
   (S0f) checks this, and so does the required CI job `snap-split-verify`.
 - **CI reality.** Staging PRs run Tier 1 only (`testEssential`, which excludes `SyncTest`). `SyncControllerSpec`,
-  `PivotHeaderBootstrapSpec` and `SnapServingActorSpec` run only in the `snap-synctest` job (S0e). Its one allowed
-  failure is task #68 (`SyncControllerSpec:762`).
+  `PivotHeaderBootstrapSpec` and `SnapServingActorSpec` run only in the `snap-synctest` job (S0e). That job runs on
+  every PR to staging, exits early when nothing under sync changed, and checks the JUnit reports against a one-entry
+  allow-list: task #68, `SyncControllerSpec:762`. It fails if #68 passes or is missing. One re-run of a
+  non-allow-listed failure is allowed (FR-039).
 
 ---
 

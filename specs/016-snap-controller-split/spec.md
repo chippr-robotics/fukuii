@@ -217,6 +217,7 @@ None names the Sepolia node.
     - The PR lists each converted val with "pure: yes" and the reviewer's grep of its initializer.
     - An impure initializer stays in the core, behind an abstract `def` in `<Module>State` or `SnapControllerEnv`.
       Making it lazy would move its side effect in time.
+    - The plan's initializer grep (plan.md D1) is a floor. The reviewer judges purity by reading the code.
   - **Acceptance, per module PR.** All four checks are scripted (FR-038) and run on **every commit** of the PR.
     - **(a)** No mention of the concrete impl class anywhere in the module's files, after commit 2: any occurrence of
       `SNAPSyncControllerImpl` or `CoordinatorImpl` fails the check, whether in a self-type, a comment or across
@@ -339,7 +340,8 @@ None names the Sepolia node.
   - The one known pre-existing failure (task #68) is `SyncControllerSpec` "leave SNAP's resume alone once SNAP has
     taken over the best block of an upgraded node" (`SyncControllerSpec.scala:762`). It is `SyncTest`-tagged, so it
     runs only in the S0e job (research.md R13a).
-  - In the S0e job, a slice is green if its failures are exactly that test, or none.
+  - In the S0e job, a slice is green only if its failures are exactly that test. The job parses the test reports
+    against a one-entry allow-list, and it also fails if #68 unexpectedly passes or is missing (T007).
   - In the Tier 1 job, a slice is green with zero failures, subject to the flake policy (FR-039).
 
 - **FR-034 Moves and renames are separate.** A slice PR has:
@@ -382,9 +384,16 @@ None names the Sepolia node.
     - the FR-032 test-hunk check;
     - the "no change under `src/main/resources`" and "goldens and pins untouched" checks;
     - a print of the FR-016 (c) counts for the PR body.
-  - It must exist and be green before the first non-test slice (P1).
-- **FR-039 Flake policy.**
-  - A Tier 1 failure in a test outside the slice's scope may be re-run **once**.
+  - It must exist and be green before the first non-test slice (P1). **It is not required on S0a–S0e**, which merge
+    before it exists. Those PRs are checked against the same rules by hand, and the reviewer says so.
+  - The test-hunk token check applies to `refactor/snap-016-*` branches only. `test/snap-016-*` branches (S0b, S0c,
+    S0d, S0g, C-X0) edit existing suites on purpose. They are checked instead against a per-commit `# test-files:`
+    trailer that lists the permitted files (plan.md §Move verification, step 3).
+- **FR-039 Flake policy (Tier 1 and `snap-synctest`).**
+  - A failure in a test outside the slice's scope may be re-run **once**, in either job. This matters most for
+    `snap-synctest`, whose suites are excluded from Tier 1 precisely because they time out under CI load.
+  - In `snap-synctest`, the #68 allow-list entry is not a flake and is never re-run for. Only a non-allow-listed
+    failure qualifies for the one re-run.
   - The slice is green only if:
     - the re-run passes;
     - the failing test's name is recorded with both run links;

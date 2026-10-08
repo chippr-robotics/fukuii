@@ -184,8 +184,10 @@ and it is listed in the PR.
 not at construction. For an impure initializer that is a behaviour change: spawning, timers, metric registration,
 subscriptions, `intakeBudget` reservation and logs would all move in time. So:
 - The PR lists each converted val with "pure: yes" and the grep of its initializer for
-  `ctx\.|timers\.|spawn|scheduleOnce|Metrics|metrics|register|subscribe|intakeBudget|log\.|asyncLog|Future|IO`.
-- The reviewer re-runs that grep.
+  `ctx\.|timers\.|spawn|actorOf|ActorRef|messageAdapter|scheduleOnce|Metrics|metrics|register|subscribe|intakeBudget|log\.|asyncLog|Future|IO|new |System\.|Random|Instant\.now|currentTimeMillis|nanoTime`.
+- The reviewer re-runs that grep. **The grep is a floor, not the test.** The reviewer judges purity by reading the
+  initializer and anything it calls. A clean grep does not make an initializer pure, and when in doubt the val stays
+  in the core.
 - An impure initializer stays a `val` in the core, and the module reaches it through an abstract `def` in
   `<Module>State` or `SnapControllerEnv`.
 
@@ -209,7 +211,8 @@ decides whether `-Wsafe-init` is turned on for the snap package as a second guar
   non-hub fields, which the core implements for each `<Module>State`.
 
 The Tier 1 job checks only the PR head (commit 2). `snap-split-verify` runs its checks on every commit. Commit 1 is
-also compiled on its own: the job runs `sbt compile` on `HEAD~1` of a module PR, the only extra compile. So both
+also compiled on its own: the job runs `sbt compile` on the move commit, the parent of the narrowing commit. The move
+commit is the one that carries the `# moved:` trailer. This is the only extra compile. So both
 commits are known to build, and bisects work.
 
 **Coordinators** follow the same two-commit pattern, with state interfaces derived in T060. The traits live in
@@ -350,7 +353,7 @@ Boundaries are preliminary (research.md R12) and are confirmed by T060 before C-
 
 | Order | Slice | Kind | Est. lines (main / test) | Reviewers | Validation beyond CI |
 |---|---|---|---|---|---|
-| 0a | **S0e** CI job `snap-synctest`: `sbt "testOnly *SyncControllerSpec *PivotHeaderBootstrapSpec *SnapServingActorSpec -- -n SyncTest"` on PRs to staging touching `blockchain/sync/**` (+ `workflow_dispatch`) | CI | workflow only | prism | — |
+| 0a | **S0e** CI job `snap-synctest`: `sbt "testOnly *SyncControllerSpec *PivotHeaderBootstrapSpec *SnapServingActorSpec -- -n SyncTest"` on **every** PR to staging (cheap early exit when no `blockchain/sync/**` change), report-parsed one-entry allow-list (#68) | CI | workflow + small report parser | prism | — |
 | 0b | **S0f** `scripts/snap-split/` verification tooling + self-tests + required job `snap-split-verify` | tooling | ~400 script / ~200 self-test | prism | — |
 | 0c | **S0g** stabilise `StaleVerificationWalkSpec` (deterministic sync, no wall-clock `eventually`; project task #85) | test | 0 / ~60 | prism, vault | — |
 | 1 | **S0a** #1367 pin (NPMA) | test | 0 / ~80 | herald | — |
@@ -387,7 +390,10 @@ Boundaries are preliminary (research.md R12) and are confirmed by T060 before C-
 ## Move verification (scripted, required CI job `snap-split-verify`)
 
 `scripts/snap-split/` ships in **S0f, before P1**, with fixture-based self-tests. The CI job `snap-split-verify` runs
-it on every commit of every spec-016 PR (`git rev-list origin/staging..HEAD`) and exits non-zero on any failure. A
+it on every commit of every spec-016 PR (`git rev-list origin/staging..HEAD`) and exits non-zero on any failure.
+**It is not required on S0a–S0e**, which merge before the script exists. Those PRs are checked by hand against the
+same rules, and the reviewer states so in the review. S0f checks itself (its self-tests), and every slice after S0f
+must pass the job. A
 reviewer re-runs it locally with `scripts/snap-split/verify.sh origin/staging`; it needs no JVM.
 
 **For a move commit:**
@@ -399,11 +405,18 @@ reviewer re-runs it locally with `scripts/snap-split/verify.sh origin/staging`; 
 
 **For every commit:**
 
-3. **Test-hunk guard.** In existing suites, every changed `src/test` hunk may touch only `import` lines and fixture
-   construction. A hunk that adds or removes a line containing an assertion or scheduling token fails. The tokens are
-   `should`, `must`, `shouldBe`, `===`, `==`, `assert`, `assume`, `expect`, `intercept`, `fishForMessage`, `within`,
-   `eventually`, `verify`, `taggedAs`, `ignore`, `pending`, `cancel`, `timeout` and `interval`. New test files are
-   allowed only when the slice's tasks name them.
+3. **Test-hunk guard.** It applies on `refactor/snap-016-*` branches (P*, M*, C-*, R1).
+   - In existing suites, every changed `src/test` hunk may touch only `import` lines and fixture construction.
+   - A hunk that adds or removes a line containing an assertion or scheduling token fails. The tokens are `should`,
+     `must`, `shouldBe`, `===`, `==`, `assert`, `assume`, `expect`, `intercept`, `fishForMessage`, `within`,
+     `eventually`, `verify`, `taggedAs`, `ignore`, `pending`, `cancel`, `timeout` and `interval`.
+   - New test files are allowed only when the slice's tasks name them.
+
+   **`test/snap-016-*` branches (S0b, S0c, S0d, S0g, C-X0) are exempt from the token check.** These slices edit
+   existing suites on purpose: S0b adds pins to `SNAPSyncControllerSpec`, and S0g rewrites `StaleVerificationWalkSpec`.
+   Instead, each commit on such a branch must carry a `# test-files:` trailer that lists every `src/test` file it may
+   touch. The script fails if the commit touches a `src/test` file that is not listed, or any `src/main` file other
+   than the S0b seams named in T012.
 4. **No format or config drift.** No change under `src/main/resources`. The S0c golden files and the S0a/S0b pin
    tests are byte-unchanged.
 5. **FR-016 (a) and (d)**, as described in D1.

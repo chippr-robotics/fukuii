@@ -27,12 +27,13 @@ only when every item on the per-slice checklist below holds.
   - **"Test and Build (JDK 25, Scala 3.3.8)"** (Tier 1 `testEssential`, the only test tier that runs on staging
     PRs);
   - **`snap-synctest`** (S0e, the SNAP `SyncTest` suites);
-  - **`snap-split-verify`** (S0f, run on every commit).
+  - **`snap-split-verify`** (S0f, run on every commit; required from S0f onward, and S0a–S0e are checked by hand).
 
   Tier 2 does not run on staging PRs, so no Tier 2 claim is made (research.md R13a).
 - [ ] **Per-suite counts pasted.** Total / passed / ignored for every R13 suite, from the Tier 1 job and from
   `snap-synctest`, equal to the T002 baseline, apart from tests the PR adds, which are listed by name.
-  - `snap-synctest`: the only failure allowed is task #68 (`SyncControllerSpec:762`).
+  - `snap-synctest`: the only failure is task #68 (`SyncControllerSpec:762`), and the job fails if #68 passes or is
+    missing. A single re-run of a non-allow-listed failure is allowed under FR-039, with both run links.
   - Tier 1: zero failures, or a single flake re-run under FR-039, with both run links.
 - [ ] **Zero assertion changes**: the `snap-split-verify` test-hunk guard is green (plan.md §Move verification
   step 3).
@@ -99,19 +100,39 @@ only when every item on the per-slice checklist below holds.
 
 ## S0e — SNAP `SyncTest` CI job (first)
 
-- [ ] T007 [S0e] Add the CI job `snap-synctest` (new workflow, or a job in `ci.yml`). It runs on PRs to `staging`
-  whose diff touches `src/main/scala/com/chipprbots/ethereum/blockchain/sync/**` or the matching tests, and on
-  `workflow_dispatch`. The command is
-  `sbt "testOnly *SyncControllerSpec *PivotHeaderBootstrapSpec *SnapServingActorSpec -- -n SyncTest"`.
-  - It publishes the test reports, so the per-suite counts can be pasted into PRs.
-  - It fails on any failure other than the task #68 test. The allow-list holds that test's name only.
-  - Make it a required check for spec-016 PRs.
+- [ ] T007 [S0e] Add the CI job `snap-synctest` (new workflow, or a job in `ci.yml`).
+  - **Triggers.** It runs on **every** PR to `staging` and on `workflow_dispatch`, with **no** `paths:` filter on the
+    trigger. A required check that never starts would block merges.
+  - **Early exit.** Its first step checks `git diff --name-only origin/staging...HEAD`. If nothing under
+    `src/main/scala/com/chipprbots/ethereum/blockchain/sync/**`, the matching `src/test` tree or `build.sbt` changed,
+    it reports success with a "skipped: no sync change" summary and stops before sbt.
+  - **Run.** Otherwise it runs
+    `sbt "testOnly *SyncControllerSpec *PivotHeaderBootstrapSpec *SnapServingActorSpec -- -n SyncTest"` and
+    publishes the reports. Per-suite counts come from those reports.
+  - **Allow-list mechanics.**
+    - A small script parses the JUnit XML reports (`target/test-reports/*.xml`).
+    - It builds the set of failed and errored test names, each as `<suite> :: <test name>`.
+    - It compares that set with a one-entry allow-list file, `scripts/snap-split/synctest-allowlist.txt`, which holds
+      `SyncControllerSpec :: SyncController should leave SNAP's resume alone once SNAP has taken over the best block
+      of an upgraded node` (task #68).
+  - **Pass/fail rules.** The job fails if:
+    - any failed name is not on the list;
+    - the #68 test **passes** unexpectedly (then the list is stale: remove the entry in that PR, or in a fix PR, and
+      say so);
+    - the #68 test is **missing** from the reports, which means renamed, deleted or not run;
+    - no report was produced at all.
+  - **Branch protection.** Make it a required check for PRs to staging. Because the trigger is unfiltered and the
+    early exit is cheap, requiring it never blocks unrelated PRs.
 
 ## S0f — Verification tooling (before P1)
 
 - [ ] T008 [S0f] Add `scripts/snap-split/verify.sh` (plus any helpers), with fixture-based self-tests under
-  `scripts/snap-split/tests/`. It implements plan.md §Move verification steps 1–7 and FR-016 (a), (c) and (d). For
-  module PRs it also runs `sbt compile` on commit 1.
+  `scripts/snap-split/tests/`. It implements plan.md §Move verification steps 1–7 and FR-016 (a), (c) and (d).
+  - Step 3 is branch-scoped: the token check runs on `refactor/snap-016-*` branches, and the `# test-files:` trailer
+    check on `test/snap-016-*` branches.
+  - For module PRs it also runs `sbt compile` on the move commit (the `# moved:` trailer, which is the parent of the
+    narrowing commit).
+  - It also ships the `snap-synctest` report parser and allow-list from T007, if S0e did not already ship them.
 - [ ] T009 [S0f] Add the required CI job `snap-split-verify`. It runs the self-tests, then `verify.sh` on every commit
   in `origin/staging..HEAD`, and exits non-zero on failure.
 
