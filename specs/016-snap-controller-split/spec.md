@@ -92,8 +92,10 @@ local builds, FR-035), and the result is recorded in the S0a/S0b PR.
 
 ### User Story 4 — The live Sepolia sync is never the test bed (Priority: P2)
 
-The Sepolia node is mid-SNAP, about two weeks from head, and stays on fix-only builds until it reaches head. Each
-extraction slice is validated on Mordor (ETC, Hash scheme) and on the Platåberget devnet (ETH, PoS, Path scheme).
+The Sepolia node is mid-SNAP, about two weeks from head, and stays on fix-only builds until it reaches head.
+Extraction does **not** wait for that: P1 starts as soon as #1501 merges (user decision, 2026-10-08). Sepolia hotfixes
+come from the `snap-split-base` tag and are forward-ported (FR-037). Each extraction slice is validated on Mordor (ETC,
+Hash scheme) and on the Platåberget devnet (ETH, PoS, Path scheme).
 
 **Why this priority**: debugging a structural refactor through a multi-week live sync is the wrong order of risk.
 
@@ -114,7 +116,7 @@ None names the Sepolia node.
 - **Partial resets are deliberate.** The three reset paths reset different sets (research.md R3a). `reset(kind)` keeps
   the differences.
 - **Slices interleave with fix PRs.** A hotfix that lands on staging during the split must be rebased through the
-  remaining slices, and a move PR that conflicts with it is redone, not hand-merged (FR-033).
+  remaining slices, and a move PR that conflicts with it is redone, not hand-merged (FR-037).
 
 ## Requirements *(mandatory)*
 
@@ -128,8 +130,9 @@ None names the Sepolia node.
   - **Controller**: one file per module in the map (plan.md §Module map).
   - **Coordinators**: one file per concern inside each coordinator (plan.md §Coordinator modules).
 - **FR-003** **Sequencing gate**: no slice except S0a–S0d and the routing doc may merge before PR #1501 (spec 014)
-  merges. The module map already places #1501's new types (research.md R11). T001 re-checks that placement against
-  #1501 as it merged.
+  merges. **P1 starts as soon as #1501 merges**; it does not wait for the Sepolia node to reach head (user decision,
+  2026-10-08). The module map already places #1501's new types (research.md R11). T001 re-checks that placement
+  against #1501 as it merged.
 
 ### Phase 0
 
@@ -183,11 +186,38 @@ None names the Sepolia node.
 
   The coordinators follow (C-B1, C-A1…, C-S1…, C-H1…, C-X). The plan gives each module's target file, owned state,
   Commands, config keys, metrics and log tags.
-- **FR-016 Moves keep bodies identical.** A module is moved into a self-typed trait in its own file (plan.md D1).
-  Method bodies and the declarations of vars the module owns exclusively are moved **unchanged**. The only allowed
-  edits in a move commit are: the enclosing `trait`/file header, imports, and visibility widening (`private` →
-  `private[snap]`) where another module calls the member. Each move commit carries a grep/diff recipe that shows the
-  moved bodies are byte-identical (plan.md §Move verification).
+- **FR-016 Move, then narrow (both required, in the same PR).** Decision recorded in ADR CON-013.
+  - **Commit 1, the move.** The module goes into a trait in its own file (plan.md D1). Its method bodies and the
+    declarations of vars it owns exclusively move **unchanged**. The self-type may temporarily name
+    `SNAPSyncControllerImpl`. The only allowed edits are the `trait`/file header, imports, and visibility widening
+    (`private` → `private[snap]`) where another module calls the member. The commit carries the grep/diff recipe
+    that shows the moved bodies are byte-identical (plan.md §Move verification).
+  - **Commit 2, the narrowing (required).** The self-type is replaced by
+    `self: <Module>State & <capability traits> =>`:
+    - `<Module>State` is an abstract interface listing exactly the shared fields the module reads or writes, as
+      derived from the var × method matrix (research.md R14) and confirmed by the compiler.
+    - The capability traits are `SnapSharedState` (the hubs), `CoordinatorHandles`, `PhaseFlags`, the controller
+      environment, and the API traits of any other module it calls.
+    - Exclusive vars become `private` state of the trait.
+    - Commit 2 may also turn a concrete `val` into a `lazy val` or `def` to satisfy (d). No other body change is
+      allowed.
+  - **Acceptance, per module PR:**
+    - **(a)** No module self-type names the concrete impl class:
+      `grep -rnE 'self: *SNAPSyncControllerImpl|this: *SNAPSyncControllerImpl' snap/controller/` is empty after the
+      narrowing commit. The same rule applies to the coordinator modules and their `*CoordinatorImpl` classes.
+    - **(b)** The module is unit-testable against a stub. The PR adds **at least one** test that mixes the module
+      trait into a stub implementing its state interface and capabilities, with no actor system beyond a
+      `BehaviorTestKit`/`ActorTestKit` where the capability needs one. The test is new; no existing assertion
+      changes.
+    - **(c)** Coupling is measured. The PR body and the routing doc record the module's interface size: the number
+      of members in `<Module>State`, plus the capability traits it requires. The number may never grow in a later PR
+      without a justification line in that PR. The research.md R14 baseline is the starting reference.
+    - **(d)** The trait-init hazard is ruled out by grep:
+      - A module trait has **no concrete `val`** that touches a self-type member: only `def` and `lazy val`. Check:
+        `grep -nE '^\s+(private(\[\w+\])? )?(override )?val ' <module files>` is empty.
+      - A trait `var` initializer is a literal or a companion constant only: every
+        `grep -nE '^\s+(private(\[\w+\])? )?var ' <module files>` hit matches the allow-list pattern in plan.md
+        D1.
 - **FR-017 Each slice ships on its own.** After any slice, staging compiles, every regression suite is green, and the
   node can be released. No slice depends on a later slice to be correct.
 
@@ -254,12 +284,13 @@ None names the Sepolia node.
   heal-verification family, storage, `SyncControllerSpec`; ETC/Hash and ETH/Path. Every one is green after each slice
   with **no assertion changes**. A slice may change only test imports, fixture construction and visibility-driven
   access. The diff must show this (T-review checklist).
-- **FR-033 Baseline failures are recorded, not hidden.** The pre-existing `SyncControllerSpec` failure tracked as task
-  #68 (research.md R13) is recorded by test name from the S0a CI run. A slice is green if its failures equal that
-  recorded baseline exactly.
+- **FR-033 Baseline failures are recorded, not hidden.** The one known pre-existing failure on staging (task #68) is
+  `SyncControllerSpec` "leave SNAP's resume alone once SNAP has taken over the best block of an upgraded node"
+  (`SyncControllerSpec.scala:762`). It is the **only** permitted failure. A slice is green if its failures are exactly
+  that test, or none. T002 confirms it against the S0a CI run.
 - **FR-034 Moves and renames are separate.** A slice PR has:
   1. a move commit, or commits;
-  2. optionally, a narrowing commit that reduces the self-type to declared capabilities;
+  2. the narrowing commit (required, FR-016);
   3. **no** renames.
 
   DFS → BFS wording is fixed afterwards in slice R1:
@@ -278,6 +309,14 @@ None names the Sepolia node.
   - `beacon` signs off on slices that move CL-pivot or Path-scheme code (M8, M10, M4 PathPublish).
 
   `loom` is not used: the actors are already Pekko Typed.
+- **FR-037 Sepolia hotfix line.**
+  - The tag `snap-split-base` is cut on staging immediately before P1 merges.
+  - While the Sepolia node is on fix-only builds, its hotfixes branch from that tag (or from the latest fix-only tag
+    after it) and ship from there.
+  - Each hotfix is then forward-ported to staging. The pins and the routing doc are anchored by symbol, so the
+    forward-port finds the moved code there.
+  - A move PR that conflicts with a forward-ported fix is redone from the new base, not hand-merged.
+  - A forward-port lands before the next slice that touches the same module.
 
 ### Non-goals
 
@@ -294,10 +333,14 @@ None names the Sepolia node.
 
 ### Key Entities
 
-- **Module (controller)**: a self-typed trait in `snap/controller/`. It owns a named set of vars, handles a named set
-  of Commands, and reads the shared hubs.
-- **Shared hubs**: `pivotBlock`, `stateRoot`, `currentPhase`, `PhaseFlags`, `CoordinatorHandles`, `progressMonitor`
-  and `requestTracker`. They stay in the controller core.
+- **Module (controller)**: a trait in `snap/controller/` whose self-type is `<Module>State & <capabilities>`, never
+  the impl class. It owns a named set of private vars and handles a named set of Commands. It also exposes a small API
+  trait for any other module that calls it.
+- **`SnapSharedState`**: the one explicit shared-state interface for the hubs: `pivotBlock`, `stateRoot`,
+  `currentPhase`, `progressMonitor` and `requestTracker`. The child refs sit behind `CoordinatorHandles`, and the phase
+  flags behind `PhaseFlags`. The controller core implements all three.
+- **`<Module>State`**: the per-module abstract interface of shared fields (FR-016). Its member count is the module's
+  coupling measure.
 - **Slice**: one PR. It is independently shippable and has one reviewer set.
 - **Pin test**: a test that fails if a named past fix is reverted.
 - **Golden vector**: a hex-encoded byte string committed in a test. The encoder must reproduce it, and the decoder
@@ -316,6 +359,9 @@ None names the Sepolia node.
   Platåberget at least at M5, M9, M10, C-A4, C-S3 and C-H1, the slices that move persistence or resets.
 - **SC-006** Every phase row in the routing doc is marked "target (post-split)" with files that exist and that pass the
   grep check.
+- **SC-007** After each module PR, criteria (a)–(d) of FR-016 hold for every module so far. After M11 no file under
+  `snap/controller/` names `SNAPSyncControllerImpl` in a self-type, and every module has at least one stub-based unit
+  test.
 
 ## Assumptions
 
@@ -324,18 +370,21 @@ None names the Sepolia node.
   (the same assumption spec 014 makes).
 - Mordor (Hash scheme, PoW) and Platåberget (Path scheme, PoS with a CL pivot) between them run every code path the
   split moves. Sepolia adds scale, not paths.
-- Self-typed traits are an acceptable intermediate module form (plan.md D1). Turning them into classes with explicit
-  interfaces is a possible later step and is not required by this spec.
+- Traits with **required** narrowing are the module form (ADR CON-013). Turning a narrowed trait into a class is a
+  later, optional step and is not required by this spec.
 
-## Open Questions (for the user)
+## Decisions (user, 2026-10-08)
 
-1. **Which test is task #68?** The only trace found is a flaky *fast-sync* `SyncControllerSpec` timing test, and fast
-   sync was removed in #1436. This spec uses the S0a CI result as the baseline.
-2. **Hotfix line for Sepolia.** While Sepolia stays on fix-only builds, should fixes come from a branch cut at the
-   last pre-split staging commit, and be forward-ported through the slices (plan.md D6)? Or should Sepolia take staging
-   once a slice has soaked on Platåberget?
-3. **ADR.** Should the module layout (D1 traits, D3 per-phase arms) be recorded as an ADR under `docs/adr/`
-   (Principle VII)?
-4. **CLAUDE.md.** Should the routing doc get a row in CLAUDE.md's shared-protocols table? This spec does not edit
-   CLAUDE.md.
-5. **P4 granularity.** Should P4 be one PR, or five (one phase's arms per PR)? The plan proposes five; see plan.md.
+1. **Module form.** Traits for the moves, then **required** narrowing to per-module state interfaces with criteria
+   (a)–(d) (FR-016; ADR `docs/adr/consensus/CON-013-snap-controller-module-form.md`).
+2. **Start time.** P1 starts as soon as #1501 merges. S0a–S0d come first. `snap-split-base` is cut just before P1
+   and governs the Sepolia hotfix line (FR-037).
+3. **Task #68.** It is `SyncControllerSpec` "leave SNAP's resume alone once SNAP has taken over the best block of an
+   upgraded node" (`:762`), the baseline exception (FR-033). It is not the old fast-sync timing test.
+4. **P4** is five PRs. The routing doc is listed in CLAUDE.md's "Shared agent protocols" table.
+5. The stale `healing-frontier-persistence` comment and the reset-path asymmetries are logged in CHASE-QUEUE
+   (CQ-SNAP-016-1…4).
+
+## Open Questions
+
+None blocking. T001 (re-check against #1501 as merged) is the first implementation task after S0.

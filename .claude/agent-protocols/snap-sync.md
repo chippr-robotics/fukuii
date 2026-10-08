@@ -29,6 +29,9 @@ unless stated.
   **beacon**.
 - **Do not route SNAP work to `loom`.** The SNAP actors are already Pekko Typed.
 - **No sbt on the soak host.** CI is the compiler.
+- **Module form (ADR CON-013).** Every module is a trait whose self-type is `<Module>State & <capabilities>`, never
+  `SNAPSyncControllerImpl` or a `*CoordinatorImpl`. To change what a module touches, change its `<Module>State`, and
+  update the interface size below in the same PR. The size must not grow without a justification line.
 
 ---
 
@@ -59,6 +62,26 @@ unless stated.
 | **Requests, proofs, metrics plumbing** | current (not split) | `SNAPRequestTracker.scala`, `MerkleProofVerifier.scala`, `SNAPSyncMetrics.scala`, `SyncProgressMonitor.scala` | unchanged | — | `snapsync.requests.*`, `snapsync.proofs.invalid.total`, `snapsync.responses.malformed.total` | `[PROOF]` | prism; forge/beacon for proof verification |
 
 ---
+
+## Module coupling: interface sizes (spec 016 FR-016 (c))
+
+The baseline is research.md R14: method-attributed, `syncing` arms excluded. "Recorded" is the compiler-confirmed
+`<Module>State` member count from the module's PR. It is filled in by each slice and may not grow afterwards without
+a justification line.
+
+| Module | `<Module>State` baseline (pre-P1/P2 → post) | Capability traits | Recorded (PR) |
+|---|---|---|---|
+| M2 StateValidationModule | 5 → 3 | SnapSharedState, SnapControllerEnv | — |
+| M3 SnapPeerPool | 8 → 2 | SnapSharedState, CoordinatorHandles, SnapControllerEnv | — |
+| M4 SnapFinalization | 11 → 3 | SnapSharedState, CoordinatorHandles (ChainDownloaderHandle), PhaseFlags, SnapControllerEnv | — |
+| M5 SnapResumePlanner | 2 → 1 (set at M5; resume code is inline today) | SnapSharedState, PhaseFlags, SnapControllerEnv | — |
+| M6 HealingOrchestrator | 20 → 10 | SnapSharedState, CoordinatorHandles, PhaseFlags, SnapControllerEnv, PivotRefreshApi | — |
+| M7 StagnationWatchdog | 15 → 5 | SnapSharedState, CoordinatorHandles, PhaseFlags, SnapControllerEnv | — |
+| M8 PivotSelector | 18 → 6 | SnapSharedState, CoordinatorHandles, PhaseFlags, SnapControllerEnv | — |
+| M9 SyncLifecycle | 31 → 16 | SnapSharedState, CoordinatorHandles, PhaseFlags, SnapControllerEnv | — |
+| M10 PivotRefresher | 20 → 11 | SnapSharedState, CoordinatorHandles, SnapControllerEnv, StagnationResetApi | — |
+| M11 DownloadSupervisor | 22 → 8 | SnapSharedState, CoordinatorHandles, PhaseFlags, SnapControllerEnv | — |
+| Coordinator modules (C-*) | derived in T060 | — | — |
 
 ## Pin tests (S0a/S0b): never edited by a move PR
 

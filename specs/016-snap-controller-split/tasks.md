@@ -29,6 +29,15 @@ only when every item on the per-slice checklist below holds.
 - [ ] S0c golden vectors and S0a/S0b pin tests are untouched. `src/main/resources` is unchanged.
 - [ ] Move commits carry the moved-symbol list and the identical-body check (plan.md, Move verification steps 1–2).
   Renames are not in this PR.
+- [ ] **Module PRs (M2–M11, C-*)**: the required narrowing commit follows the move commit (plan.md D1). The PR body
+  shows:
+  - **(a)** the grep proving no self-type names `SNAPSyncControllerImpl` / `*CoordinatorImpl`;
+  - **(b)** the new stub-based unit test;
+  - **(c)** the `<Module>State` member count and capability traits, against the research.md R14 baseline (a larger
+    count needs a justification line);
+  - **(d)** the `val`/`var` grep output.
+
+  The same count goes into the module's row of the routing doc.
 - [ ] No bug fix. Anything found goes to `.claude/agent-protocols/working-docs/CHASE-QUEUE.md` with a link to the
   slice.
 - [ ] Rows in `.claude/agent-protocols/snap-sync.md` are flipped to "target (post-split)" with the real file names.
@@ -53,9 +62,18 @@ only when every item on the per-slice checklist below holds.
   - re-measure the five file sizes in R1.
 
   Amend plan.md if anything moved. **P1 does not start until this is done.**
-- [ ] T002 Record the baseline from the S0a PR's CI run: the `SyncControllerSpec` result by test name, which settles
-  what task #68 is (spec Open Questions 1), and the pass counts of every R13 suite. Write it into research.md R13.
-- [ ] T003 With the user, decide on and create the `snap-split-base` tag and the Sepolia hotfix line (plan.md D6).
+- [ ] T002 Confirm from the S0a PR's CI run that the only failure is task #68: `SyncControllerSpec` "leave SNAP's
+  resume alone once SNAP has taken over the best block of an upgraded node" (`:762`). Record the pass counts of every
+  R13 suite in research.md R13.
+- [ ] T003 Cut the tag `snap-split-base` on staging immediately before P1 merges (decided: spec FR-037, plan.md D6).
+  Announce it as the Sepolia hotfix base.
+
+## Done in the spec PR (#1505)
+
+- [x] T004 ADR `docs/adr/consensus/CON-013-snap-controller-module-form.md` (traits, then required narrowing).
+- [x] T005 Routing doc row added to CLAUDE.md's "Shared agent protocols" table.
+- [x] T006 CHASE-QUEUE entries CQ-SNAP-016-1…4: the stale `healing-frontier-persistence` comment and three reset-path
+  asymmetries. CHASE-QUEUE is a local, gitignored working doc, so these entries are not in the PR diff.
 
 ## S0a — Pin #1367 (NetworkPeerManagerActor)
 
@@ -164,10 +182,16 @@ only when every item on the per-slice checklist below holds.
 
 ## M1–M11 — controller modules (one PR each, in this order)
 
+- [ ] T041a [M2, first module PR] Add `controller/SnapSharedState.scala` (the hub interface: `pivotBlock`,
+  `stateRoot`, `currentPhase`, `progressMonitor`, `requestTracker`) and `controller/SnapControllerEnv.scala` (`ctx`,
+  `timers`, config, logs, storages, metrics). The core implements both. All later narrowing commits reuse them.
 - [ ] T042 [M1] Move the companion pure helpers to `controller/{Resume,Stagnation,Pivot,Heal}Policy.scala`. Add
   `export` forwarders in `object SNAPSyncController`, so no test call site changes. Add `scripts/snap-split/` with the
   move-verification helper (prism reviews it).
-- [ ] T043 [M2] `StateValidationModule`.
+- [ ] T043 [M2] `StateValidationModule`: move, then narrow to
+  `StateValidationState & SnapSharedState & SnapControllerEnv`. Stub test: a stale-generation result is dropped.
+  **Every M task below (T044–T053) also has the narrowing commit and at least one stub test, per the per-slice
+  checklist.**
 - [ ] T044 [M3] `SnapPeerPool` (herald second review).
 - [ ] T045 [M4] `SnapFinalization` + `ChainDownloaderHandle` use. Run Platåberget to head.
 - [ ] T046 [M5] `SnapResumePlanner`, including #1501 `runGatedReplay`. vault reviews. Run Mordor and Platåberget
@@ -185,7 +209,9 @@ only when every item on the per-slice checklist below holds.
 ## Coordinators
 
 - [ ] T060 Coordinator characterization (docs PR): a var × method matrix and Command × behaviour table for ARC, SRC,
-  TNHC and BCC, using the research.md method. Confirm or amend the C-* boundaries in plan.md.
+  TNHC and BCC, using the research.md method. Confirm or amend the C-* boundaries in plan.md, and derive each
+  coordinator module's state-interface baseline (the R14 equivalent). Every C-* task below has the narrowing commit
+  and a stub test.
 - [ ] T061 [C-B1] ByteCode: `ByteCodeDispatch`, `ByteCodeResponseHandling` (the #1501 `skipPresent` check moves
   unchanged).
 - [ ] T062 [C-A1] `AccountPeerDispatch` (includes the #1501 intake gate).

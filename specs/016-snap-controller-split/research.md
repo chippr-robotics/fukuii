@@ -267,7 +267,8 @@ example `pivotBlock` in `wakeFromDormant`). P2 starts by classifying each W as *
 - Only `restartSnapSync` clears `lastHealingServeRootBlock` and `healingServeRootRequestInFlight`.
 - `enterDormantMode` leaves the phase-complete flags alone.
 
-Some of these differences may be bugs, but **this spec preserves them**. `reset(kind)` takes a per-kind field set
+Some of these differences may be bugs, but **this spec preserves them**. The three that look most like bugs are
+logged as CHASE-QUEUE CQ-SNAP-016-2…4. `reset(kind)` takes a per-kind field set
 equal to today's. Any difference a reviewer thinks is a bug goes into CHASE-QUEUE as a follow-up and is not fixed in
 P2 (FR-012).
 
@@ -484,7 +485,7 @@ defaults OFF. In fact:
 - The comment above the key in `sync.conf` ("Default false (ships dark)") is stale.
 
 So production nodes persist the frontier, and directly-built test configs do not. This is a note only; no fix is in
-scope here. It belongs in CHASE-QUEUE as a stale comment.
+scope here. It is logged as CHASE-QUEUE CQ-SNAP-016-1.
 
 **[016] Golden-bytes coverage**: a grep of `src/test` found no test that asserts the exact encoded bytes of any of
 these formats:
@@ -639,9 +640,48 @@ No `src/it` spec touches the snap package.
 - No test of `handleHandshakedPeersBootstrapReactivity`.
 - Each of the six `SNAP*Spec` controller fixtures builds its own stubbed NPMA. Fixture work comes first (S0d).
 
-**[016] Test baseline, task #68**: the brief records a pre-existing `SyncControllerSpec` failure as task #68. The only
-written trace found is in `.local/docs/continuations/Main-Glamsterdam-Soak.md`. It describes a flaky **fast-sync**
-`SyncControllerSpec` timing test (two isolated re-runs: one failure, then 21/21). Fast sync was removed by #1436, which
-is on staging, so that test may no longer exist. The baseline for this spec is therefore **the `SyncControllerSpec`
-result in the CI run of the S0a PR, recorded by test name** (T002). The identity of #68 is an open question for the
-user (spec.md, Open Questions).
+**[016] Test baseline, task #68 (user, 2026-10-08)**: the one known pre-existing failure on staging is
+`SyncControllerSpec` "leave SNAP's resume alone once SNAP has taken over the best block of an upgraded node"
+(`src/test/scala/com/chipprbots/ethereum/blockchain/sync/SyncControllerSpec.scala:762`). It is the only failure a
+slice may show (spec FR-033). An earlier draft guessed it was a fast-sync timing test from
+`Main-Glamsterdam-Soak.md`; that guess was wrong. T002 confirms the name against the S0a CI run and records the R13
+suite pass counts.
+
+## R14. [016] Module state interfaces: baseline sizes (input to FR-016 (c))
+
+The interfaces below are derived from the R3 matrix. Each module (plan.md module map) is given the methods it owns.
+For every item one of those methods reads or writes, the item is:
+- **private** if no other module's method touches it (`syncing` arms excluded);
+- otherwise **shared**, and placed in one of four groups: hubs (`SnapSharedState`), child refs
+  (`CoordinatorHandles`, P1), phase flags (`PhaseFlags`, P2), or other (the module's own `<Module>State`).
+
+`(W)` means the module writes the item.
+
+The last column is the `<Module>State` member count **before** P1/P2, when every shared item would be a member, and
+**after**, when the child refs and flags are capability traits and only "other shared" items are members.
+
+**Caveats:**
+1. Attribution is per method, by regex, with `syncing` arms excluded. The arms join their module in P4, so expect
+   some interfaces to grow by the arms' fields; the P4 arm-order table (T036) lists them.
+2. Some "private" items are written only by reset paths or by `syncing`. Examples are `bytecodesEstimatedTotal`,
+   `lastProbeAttemptMs` and `probeAttemptCount` under M9; after P2/P4 they may belong to another module.
+3. M5's resume code sits today inside `launchAccountRangeWorkers` and `startSnapSync`, so its row here is nearly
+   empty. Its real interface is set when M5 moves.
+
+The compiler-confirmed count recorded in each module PR replaces the number here. From then on that number may not
+grow without a justification line in the PR.
+
+| Module | Private (exclusive) | Hubs → `SnapSharedState` | Child refs → `CoordinatorHandles` | Flags → `PhaseFlags` | Other shared → `<Module>State` | `<Module>State` size (pre-P1/P2 → post) |
+|---|---|---|---|---|---|---|
+| M2 StateValidationModule | — | `pivotBlock`, `stateRoot` | — | — | `validationInProgress`(W), `validationGeneration`(W), `healingValidatedRoot`(W) | 5 → **3** |
+| M3 SnapPeerPool | `lastSnapExclusions`, `lastSnapExclusionLogMs`, `pendingDisconnectedPeers`, `fruitlessEvictionCycles`, `lastEvictionSnapCount`, `bestEth68PeerForCalibration`, `snapServerPeerLastConnectAttemptMs` | `stateRoot`, `requestTracker` | `accountRangeCoordinator`, `bytecodeCoordinator`, `storageRangeCoordinator`, `trieNodeHealingCoordinator` | — | `snapPeerEvictionStarted`(W), `snapServerPeersSchedulerStarted`(W) | 8 → **2** |
+| M4 SnapFinalization | `chainDownloadComplete`, `headerHold`, `lastHeaderHoldWarnMs`, `holdLastCursor`, `holdLastAdvanceMs`, `pathPublish` | `currentPhase`(W), `pivotBlock`, `stateRoot`(W), `progressMonitor`(W) | `chainDownloader`(W) | `awaitingHealedCode`(W), `healedCodeWaitExhausted`, `bytecodeForceCompleted` | `coordinatorGeneration`(W), `clPivotHint`, `healedCodeHashes` | 11 → **3** |
+| M5 SnapResumePlanner | — | `pivotBlock` | — | — | `mptStorage`(W) | 2 → **1** |
+| M6 HealingOrchestrator | `trieWalkInProgress`, `healingRoundCount` | `currentPhase`(W), `pivotBlock`, `stateRoot`(W), `requestTracker`(W), `progressMonitor` | `bytecodeCoordinator`(W), `trieNodeHealingCoordinator`(W) | `awaitingHealedCode`(W), `healedCodeWaitExhausted`(W), `bytecodeForceCompleted`(W) | `mptStorage`(W), `coordinatorGeneration`(W), `clPivotHint`, `healingValidatedRoot`(W), `pendingPivotRefresh`, `healingServeRootRequestInFlight`(W), `lastHealingServeRootBlock`(W), `healRepegNoRootAttempts`(W), `healedCodeHashes`(W), `healingWalkLocalOnly` | 20 → **10** |
+| M7 StagnationWatchdog | `lastPivotRestartMs`, `storageStagnationRefreshAttempted`, `lastBytecodeProgressMs`, `lastBytecodeProgressCount`, `consecutiveAccountStallRefreshes` | `currentPhase`, `pivotBlock`, `stateRoot` | `accountRangeCoordinator`, `bytecodeCoordinator`, `storageRangeCoordinator` | `bytecodePhaseComplete`, `storagePhaseComplete`, `bytecodeForceCompleted`(W), `forceCompleteStorageSent`(W) | `storageTailBaseline`(W), `lastStorageProgressMs`(W), `lastAccountProgressMs`(W), `lastAccountTasksCompleted`(W), `lastAccountsDownloaded`(W) | 15 → **5** |
+| M8 PivotSelector | `minPivotHint`, `clHintArrivedAtMs` | `currentPhase`(W), `pivotBlock`(W), `stateRoot`(W), `requestTracker`(W), `progressMonitor` | `bytecodeCoordinator`(W), `storageRangeCoordinator`(W) | `accountsComplete`(W), `bytecodePhaseComplete`(W), `storagePhaseComplete`(W), `storagePhaseForceCompleted`(W), `forceCompleteStorageSent`(W) | `mptStorage`(W), `coordinatorGeneration`(W), `clPivotHint`(W), `bootstrapRetryCount`(W), `storageTailBaseline`(W), `lastStorageProgressMs`(W) | 18 → **6** |
+| M9 SyncLifecycle | `criticalFailureCount`, `accountsAtLastCriticalFailure`, `dormantRetryCount`, `bytecodesEstimatedTotal`, `lastProbeAttemptMs`, `probeAttemptCount` | `currentPhase`(W), `pivotBlock`(W), `stateRoot`(W), `requestTracker`(W), `progressMonitor` | `accountRangeCoordinator`(W), `bytecodeCoordinator`(W), `storageRangeCoordinator`(W), `trieNodeHealingCoordinator`(W), `chainDownloader` | `accountsComplete`(W), `bytecodePhaseComplete`(W), `storagePhaseComplete`(W), `storagePhaseForceCompleted`(W), `forceCompleteStorageSent`(W) | `mptStorage`(W), `coordinatorGeneration`(W), `validationInProgress`(W), `validationGeneration`(W), `healingValidatedRoot`(W), `bootstrapRetryCount`(W), `pivotProbeRequestId`(W), `proactiveRollNeedsProbe`(W), `pendingProbeCommit`(W), `consecutivePivotRefreshes`(W), `pendingPivotRefresh`(W), `healingServeRootRequestInFlight`(W), `lastHealingServeRootBlock`(W), `snapPeerEvictionStarted`(W), `snapServerPeersSchedulerStarted`(W), `healingWalkLocalOnly`(W) | 31 → **16** |
+| M10 PivotRefresher | `lastProactivePivotBlock`, `retryRefreshCounts`, `failedPivotBlocks` | `currentPhase`, `pivotBlock`(W), `stateRoot`(W), `requestTracker` | `accountRangeCoordinator`, `bytecodeCoordinator`, `storageRangeCoordinator`, `trieNodeHealingCoordinator`, `chainDownloader` | — | `clPivotHint`, `preservedRangeProgress`, `preservedAtPivotBlock`(W), `validationGeneration`(W), `pivotProbeRequestId`(W), `proactiveRollNeedsProbe`(W), `pendingProbeCommit`(W), `consecutivePivotRefreshes`(W), `pendingPivotRefresh`(W), `healRepegNoRootAttempts`(W), `lastAccountProgressMs`(W) | 20 → **11** |
+| M11 DownloadSupervisor | `preservedTaskFiles`, `launchedAccountGeneration`, `currentCarrySource` | `currentPhase`(W), `pivotBlock`, `stateRoot`(W), `requestTracker`(W), `progressMonitor` | `accountRangeCoordinator`(W), `bytecodeCoordinator`(W), `storageRangeCoordinator`(W) | `resumedStaleCursors`(W), `accountsComplete`, `bytecodePhaseComplete`, `storagePhaseComplete`, `storagePhaseForceCompleted`, `forceCompleteStorageSent`(W) | `mptStorage`(W), `coordinatorGeneration`, `preservedRangeProgress`(W), `preservedAtPivotBlock`(W), `healingValidatedRoot`, `lastAccountProgressMs`(W), `lastAccountTasksCompleted`(W), `lastAccountsDownloaded`(W) | 22 → **8** |
+
+M1 (pure policy objects) has no state interface. The coordinator modules' interfaces are derived in T060.

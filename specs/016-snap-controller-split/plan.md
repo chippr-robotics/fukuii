@@ -20,12 +20,14 @@ behaviour. The work runs in this order:
    - P2 `PhaseFlags.reset(kind)`;
    - P3 a single peer-event handler;
    - P4 per-phase arms in `syncing`.
-3. **Controller modules (M1–M11)**, moved one per PR, lowest coupling first, into self-typed traits with identical
-   bodies.
+3. **Controller modules (M1–M11)**, one per PR, lowest coupling first. Each PR has two commits: a byte-identical
+   move into a trait, then a **required** narrowing of the self-type to a per-module state interface plus capability
+   traits (D1, ADR CON-013).
 4. **Coordinators**: the same method, after a short per-coordinator characterization.
 5. **R1**: DFS → BFS wording, after the moves.
 
-No extraction PR merges before PR #1501 (spec 014). The live Sepolia node is not used to validate any slice.
+No extraction PR merges before PR #1501 (spec 014). P1 starts as soon as #1501 merges, without waiting for Sepolia to
+reach head (D6). The live Sepolia node is not used to validate any slice.
 
 ## Technical Context
 
@@ -66,70 +68,116 @@ PoS + CL pivot)
 | IV. Scala 3 style | **Pass** | Self-types and `export` clauses are idiomatic Scala 3. scalafmt and scalafix run in CI. Widened members get explicit result types where scalafix asks for them. |
 | V. Quality gates | **Deviation** | `sbt pp` cannot run locally (the soak host is shared with the live node). See Complexity Tracking. |
 | VI. Security | **Pass** | No network-exposed surface or key handling changes. |
-| VII. Versioning / ADR | **Pass, pending** | Each PR uses a conventional prefix (`refactor(snap):`, `test(snap):`) and references #1401. Whether an ADR is needed is an open question (spec Open Questions 3). |
+| VII. Versioning / ADR | **Pass** | Each PR uses a conventional prefix (`refactor(snap):`, `test(snap):`) and references #1401. The module form is recorded in ADR `docs/adr/consensus/CON-013-snap-controller-module-form.md`. |
 
-Re-check after design: no new violations. The trait-mixin form (D1) is a deliberate intermediate step and is logged
+Re-check after design: no new violations. The two-commit trait form with required narrowing (D1) is logged
 below.
 
 ## Design decisions
 
-### D1 — Module form: self-typed traits, with identical bodies
+### D1 — Module form: move into a trait, then narrow (required). ADR CON-013
 
-Each controller module becomes a trait that is mixed into `SNAPSyncControllerImpl`:
+Every module PR has two commits.
+
+**Commit 1, the move.** The module becomes a trait, mixed into `SNAPSyncControllerImpl`. Its self-type temporarily
+names the impl class, so bodies move byte-identical:
 
 ```scala
-// snap/controller/SnapPeerPool.scala
+// snap/controller/HealingOrchestrator.scala — commit 1 (move)
 package com.chipprbots.ethereum.blockchain.sync.snap.controller
-private[snap] trait SnapPeerPool:
+private[snap] trait HealingOrchestrator:
   self: SNAPSyncControllerImpl =>
-  // the module's exclusive vars and its defs, bodies byte-identical to the baseline
+  // exclusive vars and defs, bodies byte-identical to the baseline
 ```
 
-**Why**: FR-016 requires grep-verifiable identical bodies. A trait whose self-type is the impl class can refer to
-every member it referred to before, so bodies need no `state.` prefixes or extra parameters.
+**Commit 2, the narrowing (required, never skipped).** The self-type is replaced by the module's own state interface
+plus capability traits:
 
-**Rejected alternative**: separate classes with an explicit context object. Every body would change, so a reviewer
-could not check the move mechanically, and that is exactly the risk this series has to avoid. The traits can be
-narrowed later (see "narrowing commit" below) and turned into classes when the explicit dependencies are small, but
-that is outside this spec.
+```scala
+// snap/controller/HealingOrchestrator.scala — commit 2 (narrowing)
+private[snap] trait HealingState:                       // exactly the shared fields this module reads/writes
+  def healRepegNoRootAttempts: Int
+  def healRepegNoRootAttempts_=(v: Int): Unit
+  def pendingPivotRefresh: Option[PendingPivotRefresh]
+  // … one getter (+ setter if written) per field in research.md R14, confirmed by the compiler
 
-**Rules for a move commit**:
+private[snap] trait HealingOrchestrator extends HealingApi:
+  self: HealingState & SnapSharedState & CoordinatorHandles & PhaseFlags & SnapControllerEnv & PivotRefreshApi =>
+  private var trieWalkInProgress = false                // exclusive state is private to the trait
+  private var healingRoundCount = 0
+  …
+```
+
+The pieces of the narrowed form:
+
+- **`SnapSharedState`** is the one explicit interface for the hubs: `pivotBlock`, `stateRoot`, `currentPhase`,
+  `progressMonitor`, `requestTracker` (getters, plus setters where written). The controller core implements it.
+- **`CoordinatorHandles`** (P1) holds the child refs, and **`PhaseFlags`** (P2) the phase flags.
+- **`SnapControllerEnv`** carries `ctx`, `timers`, `snapSyncConfig`, `log`/`asyncLog`, the storages and the metrics.
+  It is a capability trait, and it is counted separately from state.
+- **`<Module>State`** declares only the shared fields this module touches that are not hubs. Abstract `var`
+  declarations, or getter/setter pairs, keep each body unchanged: `x = y` still compiles against a setter.
+- **`<Other>Api`**: when one module calls another, it names the callee's small **API trait** (for example
+  `PivotRefreshApi`, `StagnationResetApi`), never the callee's implementation trait.
+
+The core class implements every `<Module>State` by keeping the shared fields as plain vars. Scala 3 lets a concrete
+`var` implement an abstract getter/setter pair.
+
+**Why traits first**: FR-016 requires the move commit to be mechanically verifiable (identical bodies). A
+`SNAPSyncControllerImpl` self-type lets every body compile unchanged.
+
+**Why narrowing is required**: a trait that keeps the impl-class self-type is a file split, not a module. It can
+still touch all 83 items, so coupling is neither visible nor bounded. Narrowing makes the compiler enumerate each
+module's real dependencies (`<Module>State` + capabilities). It makes each module unit-testable against a stub (b),
+and it gives a number that can be ratcheted (c).
+
+**Rejected alternative**: separate classes with a context object from the start. Every body would change in the
+same commit as the move, so the move could not be verified mechanically. The ADR records this choice. A narrowed trait
+can later become a class without touching its bodies again.
+
+**Acceptance per module PR** (spec FR-016 a–d), checked by the PR author and the reviewer:
+
+| | Check | Command / evidence |
+|---|---|---|
+| (a) | no self-type names the concrete impl class | `grep -rnE '(self\|this): *[A-Za-z]*(SNAPSyncControllerImpl\|CoordinatorImpl)\b' src/main/scala/com/chipprbots/ethereum/blockchain/sync/snap/{controller,actors/account,actors/storage,actors/healing,actors/bytecode}/` is empty |
+| (b) | stub-based unit test | ≥ 1 new test: `new Stub<Module>State with <capability stubs> with <Module>` (BehaviorTestKit for `ctx`/timers where needed) |
+| (c) | interface size recorded, never grows | PR body + routing doc row: `<Module>State` member count, plus the list of capability traits. The baseline is research.md R14 |
+| (d) | no trait-init hazard | `grep -nE '^\s+(private(\[\w+\])? )?(override )?val ' <module files>` is empty (only `def`/`lazy val`); every `grep -nE '^\s+(private(\[\w+\])? )?var ' <module files>` hit has an initializer matching `= (None\|Nil\|true\|false\|-?[0-9_]+L?\|[0-9.]+\|0L\|Map.empty.*\|Set.empty.*\|Vector.empty.*\|[A-Z][A-Za-z0-9_.]*)$` (a literal, an empty collection or a companion constant) |
+
+Commit 2 may turn a concrete `val` into a `lazy val` or `def` to pass (d). That is the only body-adjacent edit it
+may make, and the PR lists each one.
+
+**Why (d) matters.** Trait bodies run **before** the class body. A `val` or `var` initializer in a trait that reads a
+self-type member would see `null` or `0`. A `lazy val` or `def` is evaluated on first use, after construction. T020
+decides whether `-Wsafe-init` is turned on for the snap package as a second guard.
+
+**Rules for commit 1 (the move)**:
 
 - **What may change:**
   - the `trait` header and file;
   - imports;
-  - `private` → `private[snap]` on any member that another module or the core calls;
-  - an explicit result type added where scalafix demands one on a widened member.
+  - `private` → `private[snap]` on members another module or the core calls;
+  - explicit result types demanded by scalafix on widened members.
 - **What must not change:** any body.
 - **What moves with the module:**
-  - vars it owns exclusively (research.md R3, "exclusive" and "one module + syncing arms" once P4 has moved the arms);
-  - the `syncing` arms for its Commands;
+  - vars it owns exclusively (research.md R3; "one module + syncing arms" vars once P4 has moved those arms);
+  - the module's `syncing` arms;
   - its timer keys.
-- **What stays in the core:** the shared hubs (`pivotBlock`, `stateRoot`, `currentPhase`, `PhaseFlags`,
-  `CoordinatorHandles`, `progressMonitor`, `requestTracker`, the storages).
+- **What stays in the core:** the hubs (`SnapSharedState`), `CoordinatorHandles`, `PhaseFlags` and the shared
+  non-hub fields, which the core implements for each `<Module>State`.
 
-**Initialization order (hazard).** Trait bodies run **before** the class body, but after the class's constructor
-parameters are assigned. A var or val moved into a trait whose initializer reads a **class-body** member would see
-`null` or `0`. Constructor parameters are fine.
+CI checks only the PR head (commit 2). Commit 1 is still expected to compile, so that bisects work. Its moved-body
+check is mechanical (§Move verification).
 
-**Rule**: a declaration moves only if its initializer is a literal, a constructor parameter or a companion constant.
-Anything else stays in the core and is listed in the PR. Every controller spec constructs the controller, so a
-mistake shows up as a construction-time NPE across the whole suite, not as a silent fault. Turning on
-`-Wsafe-init` for the snap package is an option for the first M slice (T020 decides).
-
-**Optional narrowing commit, in the same PR, after the move**: replace `self: SNAPSyncControllerImpl =>` with the
-narrowest intersection of capability traits that compiles, for example
-`self: SnapControllerCore & CoordinatorHandlesAccess =>`. The compiler then documents the module's real dependencies.
-If narrowing needs more than trivial capability traits, skip it and list the dependencies in the PR body.
-
-**Coordinators** follow the same pattern. The traits live in sub-packages:
+**Coordinators** follow the same two-commit pattern, with state interfaces derived in T060. The traits live in
+sub-packages:
 - `snap/actors/account/`
 - `snap/actors/storage/`
 - `snap/actors/healing/`
 - `snap/actors/bytecode/`
 
-Each is mixed into its `*CoordinatorImpl`. The coordinator files and their public Command ADTs stay where they are,
-so no import outside the snap package changes.
+Each is mixed into its `*CoordinatorImpl`, and after narrowing no self-type names the `*CoordinatorImpl`. The
+coordinator files and their public Command ADTs stay where they are.
 
 ### D2 — Companion helpers move behind `export`
 
@@ -175,9 +223,17 @@ pin or characterization test on purpose. #1502 has a pin assertion written to be
 
 Extraction PRs merge to `staging`. The Sepolia node stays on fix-only builds until it reaches head.
 
-**Proposed** (spec Open Questions 2): tag `snap-split-base` at the staging commit just before P1 merges. Sepolia
-hotfixes branch from that tag, ship as fix-only builds, and are then forward-ported to staging. Pin and
-characterization tests are anchored by symbol, so a forward-port finds the moved code through the routing doc.
+**Decided (user, 2026-10-08)**: extraction (P1 onward) starts as soon as #1501 merges; it does not wait for Sepolia to
+reach head. S0a–S0d still come first.
+
+**The hotfix line (spec FR-037):**
+- Tag `snap-split-base` at the staging commit just before P1 merges.
+- Sepolia hotfixes branch from that tag (or the latest fix-only tag after it), ship as fix-only builds, and are then
+  forward-ported to staging.
+- Pin and characterization tests are anchored by symbol, so a forward-port finds the moved code through the routing
+  doc.
+- A forward-port lands before the next slice that touches the same module. A conflicting move PR is redone from the
+  new base.
 
 **Cost**: every Sepolia hotfix is written twice when it touches moved code. The window is about two weeks (Sepolia's
 remaining SNAP time), and P1–P4 can mostly land inside it, because they restructure code without moving it into new
@@ -199,6 +255,7 @@ the real file names. R1 runs the T090 grep check over the whole document.
 
 Line counts are estimates **before #1501** (research.md R6), plus the #1501 additions where noted. "Owns" lists vars
 that move with the module. Shared hubs stay in the core.
+Each module's baseline state-interface size (FR-016 (c)) is in research.md R14 and in the routing doc.
 
 | # | Module (trait) → file | Owns (moves with it) | Reads/writes in core | Commands handled | Config keys (`sync.snap-sync.*`) | Metrics | Log tags | Est. lines |
 |---|---|---|---|---|---|---|---|---|
@@ -293,7 +350,19 @@ Boundaries are preliminary (research.md R12) and are confirmed by T060 before C-
 4. **No format or config drift.** `git diff HEAD~1 HEAD -- src/main/resources` must be empty. The S0c goldens and the
    pin tests must be untouched.
 
-A small script under `scripts/snap-split/` may automate steps 2 and 3. It is added in the first M PR, and
+Steps 1–2 apply to commit 1 only. For commit 2 (narrowing):
+
+5. **Narrowing diff is signature-only.** `git diff HEAD~1 HEAD` may touch only these things:
+   - self-type lines;
+   - `<Module>State` / API trait declarations;
+   - the core's `extends` list and its shared-field declarations;
+   - `private` on exclusive vars;
+   - `val` → `lazy val`/`def` (each listed);
+   - the new stub-based test.
+6. **FR-016 (a)–(d)**: run the four checks in the D1 acceptance table. Paste the output and the interface member count
+   into the PR body.
+
+A small script under `scripts/snap-split/` may automate steps 2, 3 and 6. It is added in the first M PR, and
 `prism` reviews it.
 
 ## Risks
@@ -317,8 +386,17 @@ before either is touched:
   writes all go through named hooks (`watchdog.reset`, `PhaseFlags`, handles, `validationGeneration` bump). Its PR is
   mostly calls, not writes.
 
-**R-2: initialization order in traits.** See D1. This is caught at construction by every controller spec, and the
-rule keeps non-trivial initializers in the core.
+**R-2: initialization order in traits.** See D1. FR-016 (d) makes it grep-checkable (no concrete `val` in a
+module trait; `var` initializers on an allow-list). It is also caught at construction by every controller spec.
+
+**R-8: narrowing exposes more coupling than the matrix shows.** The R14 baseline is method-attributed and excludes
+`syncing` arms, so some interfaces will come out larger than R14 says. Mitigations:
+- The interface is whatever the compiler demands, and it is recorded (c).
+- A count above the R14 baseline needs a justification line in the PR.
+- After P1/P2 the child refs and phase flags collapse into two capability traits, which shrinks most interfaces.
+
+If narrowing a module needs a non-trivial body change, that is a signal of hidden coupling. Stop and raise it; do not
+work around it in the narrowing commit.
 
 **R-3: arm order in P4 and C-H0.** A reordered arm silently changes which handler wins. Mitigations: the arm-order
 table in each PR, S0d characterization tests, and keeping P4 as five small PRs.
@@ -342,9 +420,10 @@ unchanged, so only the source file a line comes from changes.
 - **Lines**: about 1,630 test lines added in S0, about 6,000 controller lines moved (`syncing` arms move twice: P4 and
   then M), and about 5,500 coordinator lines moved. Net `src/main` growth is small: trait headers, handles and
   `PhaseFlags`, less the deduplication.
-- **Time**: about 0.5–1 agent-day per move PR, plus review and CI. P2, P4 and M10 need 2–3 days each. With two
-  specialist reviews per PR and Mordor/Platåberget runs on about 14 slices, a realistic pace is 4–6 merges a week:
-  **about 8–11 weeks** for the whole series. The controller (slices 1–24) is roughly the first 5–6 weeks.
+- **Time**: about 0.5–1 agent-day per move, plus about 0.5 day for the required narrowing commit and its stub test
+  (about 1,500 extra test lines across 26 module PRs), plus review and CI. P2, P4 and M10 need 2–3 days each. With two
+  specialist reviews per PR and Mordor/Platåberget runs on about 14 slices, a realistic pace is 4–5 merges a week:
+  **about 9–12 weeks** for the whole series. The controller (slices 1–24) is roughly the first 6–7 weeks.
 
 ## Project Structure
 
@@ -367,6 +446,8 @@ src/main/scala/com/chipprbots/ethereum/blockchain/sync/snap/
 ├── controller/
 │   ├── CoordinatorHandles.scala        # P1
 │   ├── PhaseFlags.scala                # P2
+│   ├── SnapSharedState.scala, SnapControllerEnv.scala   # hub interface + environment capability (first M PR)
+│   ├── <Module>State / <Module>Api     # declared in each module's file (narrowing commit)
 │   ├── ChildFactories.scala            # S0b seam
 │   ├── ResumePolicy.scala, StagnationPolicy.scala, PivotPolicy.scala, HealPolicy.scala   # M1
 │   ├── StateValidationModule.scala     # M2
@@ -402,5 +483,5 @@ outside `snap` changes. The public Command ADTs stay in their current objects.
 | Constitution V: no local `sbt pp` before a PR | The only host is shared with the live Sepolia node; sbt next to the soak swaps it and breaks SNAP (memory: no builds during soak). | Running locally risks the live node. CI runs the same gates (`compile-all`, `scalafmtCheckAll`, Tier 1/2), and a PR is opened only after CI is green (FR-035). This is the precedent from spec 014. |
 | Constitution III: extraction PRs ship no new assertions | They change no behaviour, and FR-032 forbids assertion edits so the old suites stay a valid oracle. | Adding tests inside move PRs would mix oracle changes with code moves. The tests land in S0 instead. |
 | `src/main` change in a "test" slice (S0b `ChildFactories`) | Pins #1378, #1319 and #1371 cannot be observed without a spawn seam, because the impl class is private. | A test-only reflection hack is brittle and not idiomatic. A constructor seam with a production default has precedent (`validatorFactory`). |
-| Trait mixins (D1) as an intermediate form, rather than classes with explicit interfaces | Body-identical, mechanically checkable moves. | Classes change every body, so moves could not be verified. |
+| Two commits per module: a byte-identical trait move, then **required** narrowing to state interfaces (D1, ADR CON-013), rather than classes from the start | The move stays mechanically checkable, and narrowing still gives real module boundaries: (a) no impl self-type, (b) stub-testable, (c) measured coupling, (d) no init hazard. | Classes from the start change every body in the move commit, so the move cannot be verified. Traits without narrowing are only a file split. |
 | Five P4 PRs instead of one | Arm-order mistakes are silent. Smaller diffs keep the arm-order table reviewable. | One 1,150-line restructure is too large to review for arm order. |
