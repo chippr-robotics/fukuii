@@ -1,0 +1,129 @@
+name: SNAP SyncTest
+
+# Spec 016, slice S0e (task T007): runs the SNAP-relevant `SyncTest`-tagged suites, which Tier 1
+# (`testEssential`, `-l SyncTest`) never runs. See specs/016-snap-controller-split/{spec,plan,tasks}.md.
+#
+# The job `snap-synctest` has NO `paths:` filter on its trigger: a required check that never starts
+# blocks merges. Instead its first step decides, from the diff, whether sbt is needed at all, and
+# otherwise reports success with a "skipped: no sync change" summary.
+#
+# The one known failure (task #68, SyncControllerSpec) is allow-listed in
+# scripts/snap-split/synctest-allowlist.txt; scripts/snap-split/synctest_report.py enforces it.
+
+on:
+  pull_request:
+    branches:
+      - staging
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: snap-synctest-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  snap-synctest:
+    name: snap-synctest
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Decide whether the SNAP SyncTest suites are affected
+        id: diff
+        run: |
+          set -euo pipefail
+          if [ "${GITHUB_EVENT_NAME}" != "pull_request" ]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+            echo "reason=${GITHUB_EVENT_NAME}: always runs" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          git fetch --no-tags origin staging:refs/remotes/origin/staging
+          changed="$(git diff --name-only origin/staging...HEAD)"
+          echo "Changed files:"; echo "$changed"
+          # Sync trees (main + test), the directly-run SnapServingActor tree, build.sbt, and this job's own files.
+          pattern='^(src/(main|test)/scala/com/chipprbots/ethereum/blockchain/sync/|src/(main|test)/scala/com/chipprbots/ethereum/network/snapserver/|build\.sbt$|project/|scripts/snap-split/(synctest|tests/test_synctest)|\.github/workflows/snap-synctest\.yml$)'
+          if echo "$changed" | grep -Eq "$pattern"; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+            echo "reason=sync-related files changed" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=false" >> "$GITHUB_OUTPUT"
+            echo "reason=no sync change" >> "$GITHUB_OUTPUT"
+            {
+              echo "### snap-synctest"
+              echo "skipped: no sync change (nothing under blockchain/sync/**, its tests, snapserver, or build.sbt)"
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Self-test the report parser
+        if: steps.diff.outputs.run == 'true'
+        run: python3 scripts/snap-split/tests/test_synctest_report.py
+
+      - name: Set up JDK 25
+        if: steps.diff.outputs.run == 'true'
+        uses: actions/setup-java@v5
+        with:
+          distribution: 'temurin'
+          java-version: '25'
+          cache: 'sbt'
+
+      - name: Cache Coursier
+        if: steps.diff.outputs.run == 'true'
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cache/coursier
+            ~/.ivy2/cache
+            ~/.sbt
+          key: ${{ runner.os }}-sbt-25-${{ hashFiles('**/build.sbt', '**/build.properties', '**/Dependencies.scala', '**/plugins.sbt') }}
+          restore-keys: |
+            ${{ runner.os }}-sbt-25-
+            ${{ runner.os }}-sbt-
+
+      - name: Set up SBT
+        if: steps.diff.outputs.run == 'true'
+        run: |
+          curl -sL "https://keyserver.ubuntu.com/pks/lookup?op=get&search=0x2EE0EA64E40A89B84B2DF73499E82A75642AC823" | sudo gpg --dearmor -o /usr/share/keyrings/scalasbt-archive-keyring.gpg
+          echo "deb [signed-by=/usr/share/keyrings/scalasbt-archive-keyring.gpg] https://repo.scala-sbt.org/scalasbt/debian all main" | sudo tee /etc/apt/sources.list.d/sbt.list
+          sudo apt-get update
+          sudo apt-get install sbt
+
+      - name: Run the SNAP SyncTest suites
+        id: sbt
+        if: steps.diff.outputs.run == 'true'
+        run: |
+          rm -rf target/test-reports
+          set +e
+          sbt "testOnly *SyncControllerSpec *PivotHeaderBootstrapSpec *SnapServingActorSpec -- -n SyncTest" 2>&1 | tee /tmp/sbt-synctest.log
+          echo "exit=${PIPESTATUS[0]}" >> "$GITHUB_OUTPUT"
+        env:
+          FUKUII_DEV: true
+
+      - name: Judge the reports against the allow-list
+        if: steps.diff.outputs.run == 'true'
+        run: |
+          python3 scripts/snap-split/synctest_report.py \
+            --reports target/test-reports \
+            --allowlist scripts/snap-split/synctest-allowlist.txt \
+            --expect-suite SyncControllerSpec \
+            --expect-suite PivotHeaderBootstrapSpec \
+            --expect-suite SnapServingActorSpec \
+            --sbt-exit "${{ steps.sbt.outputs.exit }}" \
+            --summary "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload reports
+        if: always() && steps.diff.outputs.run == 'true'
+        uses: actions/upload-artifact@v6
+        with:
+          name: snap-synctest-reports
+          path: |
+            target/test-reports/*.xml
+            /tmp/sbt-synctest.log
+          if-no-files-found: warn
