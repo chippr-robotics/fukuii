@@ -6,6 +6,7 @@ import java.util.concurrent.atomic.AtomicInteger
 
 import org.apache.pekko.actor.typed.ActorRef
 import org.apache.pekko.actor.typed.Behavior
+import org.apache.pekko.actor.typed.PostStop
 import org.apache.pekko.actor.typed.scaladsl.Behaviors
 import org.apache.pekko.util.ByteString
 
@@ -149,10 +150,21 @@ object ChildSpawn:
       nowMs: () => Long
   ) extends ChildSpawn
 
+/** A stub child built by [[RecordingChildFactories]] has stopped (`kind` is one of the `ChildStopped` constants). */
+final case class ChildStopped(kind: String)
+
+object ChildStopped:
+  val Account = "account"
+  val Storage = "storage"
+  val Healing = "healing"
+  val ByteCode = "bytecode"
+  val Chain = "chain"
+
 /** `ChildFactories` that build no real child. Each spawn is reported to `spawns` with its full argument list and
   * counted, and the spawned child is a stub that forwards every message it receives to the matching inbox (or ignores
-  * it). The counters are bumped on the controller's thread before the factory returns, so a test that reads them after
-  * a controller round trip (for example a `GetProgress` reply) sees every spawn the controller made before it.
+  * it) and reports its own stop to `stopped`. The counters are bumped on the controller's thread before the factory
+  * returns, so a test that reads them after a controller round trip (for example a `GetProgress` reply) sees every
+  * spawn the controller made before it.
   */
 final class RecordingChildFactories(
     spawns: ActorRef[ChildSpawn],
@@ -160,7 +172,8 @@ final class RecordingChildFactories(
     storageInbox: Option[ActorRef[StorageRangeCoordinator.Command]] = None,
     healingInbox: Option[ActorRef[TrieNodeHealingCoordinator.Command]] = None,
     byteCodeInbox: Option[ActorRef[ByteCodeCoordinator.Command]] = None,
-    chainInbox: Option[ActorRef[ChainDownloader.Command]] = None
+    chainInbox: Option[ActorRef[ChainDownloader.Command]] = None,
+    stopped: Option[ActorRef[ChildStopped]] = None
 ) extends ChildFactories:
 
   val accountSpawns = new AtomicInteger(0)
@@ -169,14 +182,16 @@ final class RecordingChildFactories(
   val byteCodeSpawns = new AtomicInteger(0)
   val chainSpawns = new AtomicInteger(0)
 
-  private def stub[T](inbox: Option[ActorRef[T]]): Behavior[T] =
-    inbox match
-      case Some(ref) =>
-        Behaviors.receiveMessage[T] { msg =>
-          ref ! msg
-          Behaviors.same
-        }
-      case None => Behaviors.ignore[T]
+  private def stub[T](kind: String, inbox: Option[ActorRef[T]]): Behavior[T] =
+    Behaviors
+      .receiveMessage[T] { msg =>
+        inbox.foreach(_ ! msg)
+        Behaviors.same
+      }
+      .receiveSignal { case (_, PostStop) =>
+        stopped.foreach(_ ! ChildStopped(kind))
+        Behaviors.same
+      }
 
   override def accountRangeCoordinator(
       stateRoot: ByteString,
@@ -219,7 +234,7 @@ final class RecordingChildFactories(
       storageDone,
       intakeBudget
     )
-    stub(accountInbox)
+    stub(ChildStopped.Account, accountInbox)
 
   override def storageRangeCoordinator(
       stateRoot: ByteString,
@@ -272,7 +287,7 @@ final class RecordingChildFactories(
       recordStorageDone,
       intakeBudget
     )
-    stub(storageInbox)
+    stub(ChildStopped.Storage, storageInbox)
 
   override def trieNodeHealingCoordinator(
       stateRoot: ByteString,
@@ -337,7 +352,7 @@ final class RecordingChildFactories(
       evmCodeStorage,
       walkLocalOnly
     )
-    stub(healingInbox)
+    stub(ChildStopped.Healing, healingInbox)
 
   override def byteCodeCoordinator(
       evmCodeStorage: EvmCodeStorage,
@@ -362,7 +377,7 @@ final class RecordingChildFactories(
       backpressureLowWatermark,
       intakeBudget
     )
-    stub(byteCodeInbox)
+    stub(ChildStopped.ByteCode, byteCodeInbox)
 
   override def chainDownloader(
       blockchainReader: BlockchainReader,
@@ -399,4 +414,4 @@ final class RecordingChildFactories(
       emptyHeaderBackoff,
       nowMs
     )
-    stub(chainInbox)
+    stub(ChildStopped.Chain, chainInbox)
