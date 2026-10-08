@@ -84,6 +84,9 @@ object PeerManagerActor:
   final case class DisconnectPeerFireAndForgetCmd(peerId: PeerId) extends Command
   final case class SendMessageCmd(message: MessageSerializable, peerId: PeerId) extends Command
 
+  /** Outgoing slots above `maxOutgoingPeers` that remembered good snap peers may use (spec 012). */
+  val SnapGoodPeersReservedSlots: Int = 2
+
   /** SNAP data served by one peer since the last report (spec 012). */
   final case class SnapServed(responses: Int, bytes: Long)
 
@@ -431,6 +434,9 @@ object PeerManagerActor:
       * against the entry (it is dropped past `maxFailedDials`); wrong-network exclusions and IP blacklists are
       * respected (skipped without counting). Re-arms itself while any candidate is still unconnected.
       */
+    /** `uri.getHost` keeps the brackets of an IPv6 literal; InetSocketAddress and the blacklist want it bare. */
+    private def bareHost(uri: URI): String = uri.getHost.stripPrefix("[").stripSuffix("]")
+
     private def redialSnapGoodPeers(store: SnapGoodPeers, connectedPeers: ConnectedPeers): Unit =
       val now = System.currentTimeMillis()
       val pruned = store.prune(now)
@@ -440,10 +446,18 @@ object PeerManagerActor:
       var dialled = 0
       pending.foreach { case (id, uri) =>
         val nodeId = ByteString(Hex.decode(id))
-        if !isExcludedWrongNetwork(nodeId) && !blacklist.isBlacklisted(PeerAddress(uri.getHost)) then
+        val host = bareHost(uri)
+        // A strike is counted only when connectWith will really dial: not excluded, not blacklisted, not already
+        // handled/pending, and within the (reserved-budget-extended) outgoing limit. Otherwise a full table would
+        // strike every remembered peer without any dial and delete the best servers.
+        val handled = connectedPeers.isConnectionHandled(new InetSocketAddress(host, uri.getPort)) ||
+          connectedPeers.hasIncomingPendingFromHost(host)
+        val hasCapacity = connectedPeers.outgoingPeersCount < effectiveMaxOutgoing + SnapGoodPeersReservedSlots
+        if !isExcludedWrongNetwork(nodeId) && !blacklist.isBlacklisted(PeerAddress(host)) && !handled && hasCapacity
+        then
           store.recordDialAttempt(id)
           dialled += 1
-          log.info("SNAP_GOOD_PEERS: dialling remembered snap peer {}@{}", id.take(16), uri.getHost)
+          log.info("SNAP_GOOD_PEERS: dialling remembered snap peer {}@{}", id.take(16), host)
           context.self ! ConnectToPeerCmd(uri)
       }
       if pruned > 0 || dialled > 0 then store.save()
@@ -656,18 +670,24 @@ object PeerManagerActor:
     private def connectWith(uri: URI, connectedPeers: ConnectedPeers, explicit: Boolean = false): Behavior[Command] =
       val nodeIdHex = uri.getUserInfo.toLowerCase
       val nodeId = ByteString(Hex.decode(nodeIdHex))
-      val remoteAddress = new InetSocketAddress(uri.getHost, uri.getPort)
+      val host = bareHost(uri)
+      val remoteAddress = new InetSocketAddress(host, uri.getPort)
 
       val alreadyConnectedToPeer =
         connectedPeers.hasHandshakedWith(nodeId) ||
           connectedPeers.isConnectionHandled(remoteAddress) ||
-          connectedPeers.hasIncomingPendingFromHost(uri.getHost)
+          connectedPeers.hasIncomingPendingFromHost(host)
       // Trusted + maintained peers bypass the max outgoing limit.
       // Besu: DefaultPeerPrivileges.canExceedConnectionLimits checks maintainedPeers set.
       // go-ethereum: trustedConn flag skips maxPeers for trusted only; Fukuii extends this to maintained peers.
       val isMaintainedOrTrusted =
         trustedPeersByNodeId.contains(nodeIdHex) || maintainedPeersByNodeId.contains(nodeIdHex)
-      val isOutgoingPeersNotMaxValue = isMaintainedOrTrusted || connectedPeers.outgoingPeersCount < effectiveMaxOutgoing
+      // Remembered good snap peers (spec 012) may use a small reserved budget above the normal limit, so that slots
+      // full of crawlers/useless peers cannot keep the proven snap servers out.
+      val isRememberedGood = snapGoodPeers.exists(_.contains(nodeIdHex))
+      val outgoingLimit =
+        effectiveMaxOutgoing + (if isRememberedGood then PeerManagerActor.SnapGoodPeersReservedSlots else 0)
+      val isOutgoingPeersNotMaxValue = isMaintainedOrTrusted || connectedPeers.outgoingPeersCount < outgoingLimit
 
       val validConnection = for
         validHandler <- validateConnection(

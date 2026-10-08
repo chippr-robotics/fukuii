@@ -140,7 +140,9 @@ final class SnapGoodPeers(val config: SnapGoodPeersConfig):
               entries.remove(entries.minBy { case (_, e) => decayed(e, nowMs) }._1)
           else log.warn("SNAP_GOOD_PEERS: ignoring {}: unrecognised header/version", path)
 
-  /** Best-effort atomic write; a failure is logged, never thrown (the list is an optimisation, not state). */
+  /** Best-effort atomic write; a failure is logged, never thrown (the list is an optimisation, not state). This is
+    * small blocking file I/O (a few short lines, infrequent) on the owning actor's thread.
+    */
   def save(): Unit =
     val path = config.file
     val tmp = path.resolveSibling(path.getFileName.toString + ".tmp")
@@ -148,7 +150,10 @@ final class SnapGoodPeers(val config: SnapGoodPeersConfig):
       Option(path.getParent).foreach(Files.createDirectories(_))
       Files.write(tmp, render.getBytes(StandardCharsets.UTF_8))
       Files.move(tmp, path, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE)
-    }.failed.foreach(ex => log.warn("SNAP_GOOD_PEERS: cannot write {}: {}", path, ex.getMessage))
+    }.failed.foreach { ex =>
+      Try(Files.deleteIfExists(tmp))
+      log.warn("SNAP_GOOD_PEERS: cannot write {}: {}", path, ex.getMessage)
+    }
 
 object SnapGoodPeers:
   val Header = "fukuii-snap-good-peers v1"

@@ -1243,6 +1243,38 @@ class PeerManagerSpec
     val score = java.nio.file.Files.readAllLines(goodFile).get(1).split('\t')(3).toDouble
     score should be > 100.0 // 10 seeded + 50 + 100 weight
 
+  it should "dial a remembered snap peer within the reserved budget even when the outgoing limit is zero" taggedAs (
+    UnitTest,
+    NetworkTest
+  ) in new SnapGoodSetup:
+    val maxReply = testKit.createTestProbe[PeerManagerActor.SetMaxPeersResponse]()
+    peerManager ! PeerManagerActor.SetMaxPeersCmd(0, maxReply.ref)
+    start()
+    val tp = createdPeerQueue.poll(3, java.util.concurrent.TimeUnit.SECONDS)
+    tp should not be null
+    tp.probe.expectMsgType[ConnectTo](3.seconds).uri.getUserInfo shouldBe goodHex
+
+  it should "not take a failed-dial strike while the outgoing table is full" taggedAs (UnitTest, NetworkTest) in
+    new SnapGoodSetup:
+      val maxReply = testKit.createTestProbe[PeerManagerActor.SetMaxPeersResponse]()
+      peerManager ! PeerManagerActor.SetMaxPeersCmd(0, maxReply.ref)
+      // Maintained peers bypass the limit and fill the reserved budget (2 slots) before the first re-dial.
+      peerManager ! PeerManagerActor.AddMaintainedPeerCmd(
+        new URI(s"enode://${"11" * 64}@10.2.2.2:30303"),
+        discardReplyRef
+      )
+      peerManager ! PeerManagerActor.AddMaintainedPeerCmd(
+        new URI(s"enode://${"22" * 64}@10.2.2.3:30303"),
+        discardReplyRef
+      )
+      start()
+      createdPeerQueue.poll(3, java.util.concurrent.TimeUnit.SECONDS) should not be null
+      createdPeerQueue.poll(3, java.util.concurrent.TimeUnit.SECONDS) should not be null
+      testScheduler.timePasses(16.minutes) // three re-dial cycles
+      createdPeerQueue.poll(500, java.util.concurrent.TimeUnit.MILLISECONDS) shouldBe null
+      // No dial was issued, so no strike: the entry still has zero failed dials in the persisted file.
+      java.nio.file.Files.readString(goodFile) should include("\t0\n")
+
   it should "not dial a remembered snap peer that is excluded as wrong-network" taggedAs (UnitTest, NetworkTest) in
     new SnapGoodSetup:
       start()
