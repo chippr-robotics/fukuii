@@ -25,14 +25,34 @@ Sepolia, v0.9.1, restart 2026-10-07 20:53: the checkpoint carried 9,350,287 stor
 - **R1 — completion record.** Each storage task that finishes is recorded durably as `accountHash ++ storageRoot`
   (`SnapStorageDoneStorage`, keys prefixed `SnapStorageDone/` in the app-state column family). A resume, whether it
   replays carried task files or streams the accounts-complete file, re-queues only tasks that have no record.
-- **R2 — crash consistency.** A record never becomes durable before the data it vouches for. It is written in the
-  same RocksDB WriteBatch as the account's last flat slots, after the trie nodes are committed. It can also go in a
-  later batch, once every numbered flat batch up to the one carrying those slots has committed. It never waits on
-  batches submitted after it. A failed batch turns records off for that coordinator. Give-up,
-  max-empty skip, force-complete and root-mismatch completions are never recorded. A crash before the record lands
-  costs one re-download, which is what happens today.
+- **R2 — what a record guarantees.**
+  - **Always:** every slot of the account at that root was downloaded, every chunk was applied in order and none was
+    given up, and all of its flat slots are in RocksDB.
+  - **With `deferredMerkleization = false`** (production, `sync.conf:71`): in addition, the storage trie was built,
+    its computed root equalled `storageRoot`, and its nodes were written before the record was staged.
+  - **With `deferredMerkleization = true`** (the constructor default, `StorageRangeCoordinator.scala:64`): no trie is
+    built and no root is checked. The record vouches for the flat slots only, and the trie nodes come from healing,
+    which every resume forces.
+  - **Buffering node storage:** Hash scheme storage-trie nodes go to `mptStorage.storeRawNodes` →
+    `SerializingMptStorage.storeRawNodes` (`MptStorage.scala:62`) → `storage.update`. Under cached ("inmemory")
+    pruning that is `CachedReferenceCountedStorage.update` (`CachedReferenceCountedStorage.scala:49`, an in-memory
+    LRU/change log), and nothing stops SNAP running in that mode. So the controller records nothing for Hash scheme +
+    `deferredMerkleization = false` + `CachedReferenceCountedStateStorage`; that combination keeps today's
+    behaviour. The Path scheme writes through `PathNodeStorage` (`PathNodeStorage.scala:95`). Archive and basic
+    pruning also write through.
+- **R2a — crash consistency.** A record never becomes durable before that data:
+  - It is written in the same RocksDB WriteBatch as the account's last flat slots, or in a later batch once every
+    numbered flat batch up to the one carrying those slots has committed. It never waits on batches submitted after it.
+  - A failed batch turns records off for that coordinator.
+  - Give-up, max-empty skip, force-complete and root-mismatch completions are never recorded.
+  - A crash before the record lands costs one re-download, which is what happens today.
 - **R3 — scope and lifetime.** Records count for one SNAP cycle only. They are cleared when the account phase starts
-  without carried task files, and when the storage phase completes (persisted).
+  without carried task files, and when the storage phase completes (persisted). Each clear is one range tombstone
+  followed by a `compactRange` over the marker prefix. The compaction runs on the single-thread snap-validation
+  dispatcher, not the actor thread. It is blocking I/O of roughly the markers' size (~80 B each, ~750 MB on Sepolia),
+  so a validation walk queued behind it can be delayed by that long. A superseded storage coordinator that commits a
+  record after a clear states a download that really finished for that exact (account, root), so it cannot cause a
+  wrong skip.
 - **R4 — compatibility.** `AccountResumeCheckpoint` is unchanged and stays at version 1. An old checkpoint has no
   records yet, so the first restart replays everything, exactly as today. No new column family is added. RocksDB
   will not open a database unless every column family it contains is listed, so a new one would stop a downgrade to

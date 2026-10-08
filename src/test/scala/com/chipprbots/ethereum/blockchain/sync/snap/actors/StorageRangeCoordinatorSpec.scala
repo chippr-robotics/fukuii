@@ -1810,14 +1810,15 @@ class StorageRangeCoordinatorSpec extends ScalaTestWithActorTestKit() with AnyFl
   private def doneMarkerFixture(
       recordStorageDone: Boolean = true,
       flatBatchEc: scala.concurrent.ExecutionContext = scala.concurrent.ExecutionContext.parasitic,
-      flatBatchEntryThreshold: Int = 1000
+      flatBatchEntryThreshold: Int = 1000,
+      dataSource: EphemDataSource = EphemDataSource()
   ): (
       StorageRangeCoordinatorImpl,
       BehaviorTestKit[StorageRangeCoordinator.Command],
       FlatSlotStorage,
       SnapStorageDoneStorage
   ) =
-    val flatSlots = new FlatSlotStorage(EphemDataSource())
+    val flatSlots = new FlatSlotStorage(dataSource)
     val (impl, kit) = newImpl(
       stateRoot = doneRootArg,
       flatSlotStorage = flatSlots,
@@ -1892,6 +1893,42 @@ class StorageRangeCoordinatorSpec extends ScalaTestWithActorTestKit() with AnyFl
     writer.runAll()
     drainSelf(kit)
     done.isDone(account, root) shouldBe true
+  }
+
+  /** An in-memory store whose writes can be made to fail, to drive a real flat-batch commit failure. */
+  final private class FailingWritesDataSource extends EphemDataSource(Map.empty):
+    @volatile var failWrites: Boolean = false
+    override def update(
+        dataSourceUpdates: Seq[com.chipprbots.ethereum.db.dataSource.DataUpdate]
+    ): Unit =
+      if failWrites then throw new java.io.IOException("synthetic write failure")
+      else super.update(dataSourceUpdates)
+
+  it should "never make a staged marker durable when the batch carrying it and the account's slots fails" taggedAs UnitTest in {
+    val ds = new FailingWritesDataSource
+    val (impl, kit, flatSlots, done) = doneMarkerFixture(dataSource = ds)
+    val root = storageRootOf(doneSlots)
+    val account = kec256(ByteString("done-account-failed-batch"))
+    completeAccount(impl, account, root)
+    impl.pendingDoneMarkers should have size 1 // staged; its slots are still buffered
+
+    // The write batch (slots + marker) fails to commit.
+    ds.failWrites = true
+    kit.run(StorageRangeCoordinator.FlushStorageDoneMarkers)
+    drainSelf(kit) // FlatBatchFlushFailed
+    impl.doneMarkersDisabled shouldBe true
+    impl.pendingDoneMarkers shouldBe empty
+    ds.failWrites = false
+    done.isDone(account, root) shouldBe false
+    flatSlots.getSlot(account, doneSlots.head._1) shouldBe None
+
+    // Later completions are not marked either: the failed batch's slots are gone for good.
+    val later = kec256(ByteString("done-account-after-failed-batch"))
+    completeAccount(impl, later, root)
+    impl.pendingDoneMarkers shouldBe empty
+    kit.run(StorageRangeCoordinator.FlushStorageDoneMarkers)
+    drainSelf(kit)
+    done.isDone(later, root) shouldBe false
   }
 
   it should "stop writing completion markers once a flat batch has failed" taggedAs UnitTest in {

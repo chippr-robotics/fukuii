@@ -14,12 +14,20 @@ import com.chipprbots.ethereum.db.dataSource.DataSourceUpdateOptimized
   * family is never iterated, and its string keys never start with the binary-suffixed prefix, so the markers cannot be
   * confused with anything else there; `clear` is one range tombstone over exactly the prefix.
   *
-  * A marker means "the storage of this account at this storage root was fully downloaded in this SNAP cycle, and its
-  * flat slots and trie nodes are on disk". It is written by StorageRangeCoordinator in the SAME RocksDB write batch as
-  * the account's last flat slots, and only after every earlier flat-slot batch has committed — so a marker can never
-  * outlive the data it vouches for (one atomic WriteBatch; the WAL is replayed as a prefix). A resume uses the markers
-  * to re-queue only the storage tasks that were not finished (see AccountRangeCoordinator.replayCarriedChunk and the
-  * accounts-complete recovery stream in SNAPSyncController).
+  * What a marker guarantees: the previous run downloaded every slot of this account's storage at this storage root
+  * (every chunk applied in order, none given up), and ALL of those flat slots are in RocksDB — the marker is written in
+  * the same WriteBatch as the account's last flat slots, or in a later one after every batch carrying its slots has
+  * committed, so it can never outlive them (the WAL replays as a prefix). Beyond that it depends on the mode:
+  *   - `deferredMerkleization = false` (production, sync.conf): additionally, the account's storage trie was built from
+  *     those slots, its computed root equalled `storageRoot`, and its nodes were handed to node storage before the
+  *     marker was staged. They are on disk under the Path scheme (PathNodeStorage writes through) and under the Hash
+  *     scheme with archive/basic pruning. Under Hash + cached ("inmemory") pruning they would sit in an in-memory
+  *     cache, so SNAPSyncController does not record markers in that combination.
+  *   - `deferredMerkleization = true` (the constructor default): no trie is built during the download and no root is
+  *     checked; the marker vouches for the flat slots only. The storage trie nodes come from healing (a resume always
+  *     forces the full healing walk), exactly as they would have without a restart.
+  * A resume uses the markers to re-queue only the storage tasks that were not finished (see
+  * AccountRangeCoordinator.replayCarriedChunk and the accounts-complete recovery stream in SNAPSyncController).
   *
   * Keying on the storage root as well as the account means a marker never matches a task for a different root. Markers
   * are scoped to one SNAP cycle: [[clear]] runs whenever the account phase starts without carried task files and when
@@ -55,8 +63,14 @@ class SnapStorageDoneStorage(val dataSource: DataSource):
       )
       items.zip(flags).collect { case (t, None) => t }
 
-  /** Drop every marker (one range tombstone). */
+  /** Drop every marker (one range tombstone; cheap, safe on an actor thread). */
   def clear(): Unit = dataSource.deleteRange(namespace, LowestKey, AboveHighestKey)
+
+  /** Compact the marker key range so the space a [[clear]] tombstoned (~80 B per marker, ~750 MB for Sepolia's ~9.35M
+    * contracts) is reclaimed now rather than by background compaction. BLOCKING — it rewrites the app-state SST files
+    * overlapping the prefix (I/O roughly the size of the markers) — so run it off actor threads.
+    */
+  def compact(): Unit = dataSource.compactRange(namespace, LowestKey, AboveHighestKey)
 
 object SnapStorageDoneStorage:
   private val Marker: Array[Byte] = Array(1.toByte)

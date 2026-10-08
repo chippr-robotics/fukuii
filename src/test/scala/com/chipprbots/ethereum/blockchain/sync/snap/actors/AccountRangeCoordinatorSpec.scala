@@ -960,6 +960,42 @@ class AccountRangeCoordinatorSpec extends ScalaTestWithActorTestKit() with AnyFl
     testKit.stop(coord)
   }
 
+  it should "not skip a task because of a marker a superseded coordinator wrote after the clear" taggedAs UnitTest in {
+    val dir = java.nio.file.Files.createTempDirectory("arc-done-race-")
+    val account = kec256(ByteString("race-account"))
+    val oldRoot = kec256(ByteString("race-root-old"))
+    val newRoot = kec256(ByteString("race-root-new"))
+    val other = carriedTask(7)
+    val storage = dir.resolve("race-storage.bin")
+    val code = dir.resolve("race-code.bin")
+    java.nio.file.Files.write(storage, (account ++ newRoot ++ other._1 ++ other._2).toArray)
+    java.nio.file.Files.write(code, Array.emptyByteArray)
+    val carried = ContractTaskFiles(storage.toString, 2L, code.toString, 0L)
+
+    val done = new SnapStorageDoneStorage(EphemDataSource())
+    done.markDone(Seq(account -> oldRoot, other)).commit() // previous cycle
+    done.clear() // the account phase starts without carried files
+    // A superseded storage coordinator, still flushing, then commits the marker of a task it really finished — for the
+    // root it downloaded (the old one). The account was re-identified at the new root afterwards.
+    done.markDone(Seq(account -> oldRoot)).commit()
+
+    val controller = testKit.createTestProbe[SNAPSyncController.Command]()
+    val coord = spawnResumed(
+      kec256(ByteString("race-root")),
+      testKit.createTestProbe[NetworkPeerManagerActor.Command]().ref,
+      controller.ref,
+      Map(AccountTask.MaxHash32 -> midCursor),
+      Some(carried),
+      dir,
+      1,
+      storageDone = Some(done)
+    )
+    val replay = fish(controller) { case m: SNAPSyncController.IncrementalContractData => m }
+    // Both carried tasks are replayed: the late marker matches neither (other root), and the cleared one is gone.
+    replay.storageTasks.map(t => (t.accountHash, t.storageRoot)) shouldBe Seq(account -> newRoot, other)
+    testKit.stop(coord)
+  }
+
   it should "replay every carried storage task when no completion markers exist (old checkpoint, first restart)" taggedAs UnitTest in {
     val dir = java.nio.file.Files.createTempDirectory("arc-done-none-")
     val carried = previousTaskFiles(dir, counted = 3, codeCounted = 2)

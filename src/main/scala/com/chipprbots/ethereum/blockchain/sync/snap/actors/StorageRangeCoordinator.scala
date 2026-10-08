@@ -1847,7 +1847,9 @@ private[actors] class StorageRangeCoordinatorImpl(
                   s"Account ${accountHash.take(4).toHex} streaming trie committed: root=${computedRoot.take(4).toHex}"
                 )
                 computedRoot == task.storageRoot
-            // Completion marker — ONLY on this path (every subtask applied in order, trie committed). The give-up,
+            // Completion marker — ONLY on this path (every subtask applied in order; when not deferring merkleization,
+            // also trie committed with a matching root — deferred mode builds no trie, so the marker then vouches for
+            // the flat slots alone, see SnapStorageDoneStorage). The give-up,
             // max-empty skip, abandoned and force-complete paths never mark: a resume downloads those again. A root
             // mismatch is not marked either, so a restart retries it rather than leaving it all to healing.
             if rootVerified then stageDoneMarker(accountHash, task.storageRoot)

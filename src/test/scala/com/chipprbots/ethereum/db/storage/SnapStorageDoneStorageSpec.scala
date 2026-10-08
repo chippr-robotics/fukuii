@@ -98,6 +98,7 @@ class SnapStorageDoneStorageSpec extends AnyFlatSpec with Matchers:
       val ff = ByteString(Array.fill(32)(0xff.toByte))
       done.markDone(Seq(acct(1) -> root(1), zero -> zero, ff -> ff)).commit()
       done.clear()
+      done.compact() // reclaims the tombstoned range; must not disturb anything outside it
       done.isDone(acct(1), root(1)) shouldBe false
       done.isDone(zero, zero) shouldBe false
       done.isDone(ff, ff) shouldBe false
