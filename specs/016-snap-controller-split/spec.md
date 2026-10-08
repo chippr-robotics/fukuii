@@ -85,8 +85,8 @@ in `apply`. CI fails with a test that names the fix.
 that each move PR proves it kept them.
 
 **Independent Test**: for each pin, the test is written against the baseline and passes there. Reverting the pinned
-expression makes it fail; this is checked once with a local edit that is never committed (or in a throwaway CI run),
-and the result is recorded in the S0a/S0b PR.
+expression makes it fail; this is checked once in a throwaway CI run on a scratch branch that is never merged (no
+local builds, FR-035), and the result is recorded in the S0a/S0b PR.
 
 **Acceptance Scenarios**: one per pin, FR-020 to FR-024.
 

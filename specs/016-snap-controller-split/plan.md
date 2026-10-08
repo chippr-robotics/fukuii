@@ -153,7 +153,9 @@ Here `phaseArms` returns `accountRangeArms`, `byteCodeAndStorageArms`, `stateHea
 every value of `currentPhase`, the first arm that matches must be the same arm as before. The PR includes this table,
 and the characterization tests from S0d exercise it.
 
-**Why not separate `Behavior`s now**: `currentPhase` has 11 writers outside `syncing`. Each writer would also have to
+**Why not separate `Behavior`s now**: `currentPhase` is written by nine methods outside `syncing`
+(`bootstrapping`, `checkAllDownloadsComplete`, `completeHealingWalkClean`, `enterDormantMode`, `finalizeSnapSync`,
+`restartSnapSync`, `startSnapSync`, `triggerHealingForMissingNodes`, `wakeFromDormant`). Each writer would also have to
 return the next behaviour, which makes every phase transition a control-flow change. The partial-function form makes
 no control-flow change, and it still gives the M-slices one function per phase to move.
 
@@ -213,6 +215,10 @@ that move with the module. Shared hubs stay in the core.
 | M10 | `PivotRefresher` → `snap/controller/PivotRefresher.scala` (`refreshPivotInPlace`, `completePivotRefreshWithStateRoot`, probe, unservable and `RetryPivotRefresh` arms) | `lastProactivePivotBlock`, `pivotProbeRequestId`, `proactiveRollNeedsProbe`, `pendingProbeCommit`, `lastProbeAttemptMs`, `probeAttemptCount`, `consecutivePivotRefreshes`, `failedPivotBlocks` | **everything shared**: `pivotBlock`, `stateRoot`, `validationGeneration`, `preserved*`, `pendingPivotRefresh`, `healRepegNoRootAttempts`, `retryRefreshCounts`, stagnation `reset`, `CoordinatorHandles.pivotRefreshed`, `ChainDownloaderHandle` | `BootstrapComplete`/`PivotBootstrapFailed` (refresh, guarded by `pendingPivotRefresh`), `PivotProbeTimeout`, `RetryPivotRefresh` | `pivot-block-offset`, `max-pivot-staleness-blocks`, `moving-root-delta-heal` | `snapsync.pivot.refreshed.total` | `[PIVOT-PROBE]`, `[PIVOT-ROLL]`, `[HEAL-REPEG]` | ~570 |
 | M11 | `DownloadSupervisor` → `snap/controller/DownloadSupervisor.scala` (`launchAccountRangeWorkers` non-resume part, `startAccountRangeSync`, `request*` ticks, `checkAllDownloadsComplete`, `currentSyncStatus`, phase-completion, response-routing and progress arms, `IncrementalContractData` arm (#1501 budget release)) | `bytecodesEstimatedTotal`, `storageContractProgressPct` (`pendingPivotRefresh` and `preserved*` stay in the core: shared with M5, M6, M10) | `PhaseFlags`, `CoordinatorHandles`, `intakeBudget`, `progressMonitor` | `AccountRangeSyncComplete`, `ByteCodeSyncComplete`, `StorageRangeSyncComplete`, `StorageRangeSyncForceCompleted`, `AccountTrieFinalized`/`Failed`, `*Response`, `*CoordinatorProgress`, `Progress*`, `*BackpressureChanged`, `Request{AccountRanges,ByteCodes,StorageRanges}`, `IncrementalContractData` | `account-concurrency`, `storage-*`, `max-concurrent-storage-accounts`, `account-*-response-bytes`, `storage-max-inflight-per-peer-during-accounts`, `max-pending-storage-tasks`, `max-pending-bytecode-hashes` | `snapsync.{accounts,bytecodes,storage}.*`, `snapsync.phase.*`, `snapsync.memory.{storage,bytecode}.pending`, `snapsync.memory.intake.paused` | (untagged) | ~850 |
 | — | **Core** stays in `SNAPSyncController.scala`: constructor, hubs, `start`, `idle` shell, `peerEventArms`, `commonSyncingArms`, `onStop`, `syncing` dispatcher, companion `apply`, `SNAPSyncConfig` | hubs | — | `GetStatus`, `GetProgress` | (config parsing) | — | — | ~1,000 incl. config |
+
+**[016] Reassignment from research.md R3**: `calibratePivotTD` is listed under PIVOT-SEL in the R3 cluster mapping,
+but it moves with the Peer pool (M3), because the state it reads and writes (`bestEth68PeerForCalibration`) belongs
+to PEER. `updateBestBlockForPivot` stays in M8.
 
 Commands that sit on a boundary (for example `BootstrapComplete`, which has three different implementations) go to
 the module that owns the implementation for that behaviour. The table lists each case.
