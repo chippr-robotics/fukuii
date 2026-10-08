@@ -1209,9 +1209,9 @@ class PeerManagerSpec
   // ── Remembered good snap peers (spec 012) ──────────────────────────────────
 
   trait SnapGoodSetup extends TestSetup:
-    val goodHex: String = "ee" * 64
-    val goodNodeId: ByteString = ByteString(Hex.decode(goodHex))
-    val goodFile: java.nio.file.Path =
+    lazy val goodHex: String = "ee" * 64
+    lazy val goodNodeId: ByteString = ByteString(Hex.decode(goodHex))
+    lazy val goodFile: java.nio.file.Path =
       java.nio.file.Files.createTempDirectory("pma-snap-good").resolve("snap-good-peers.v1")
     override lazy val snapGoodPeersStore: Option[SnapGoodPeers] =
       val seed = new SnapGoodPeers(
