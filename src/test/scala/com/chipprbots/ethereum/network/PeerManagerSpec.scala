@@ -1206,6 +1206,78 @@ class PeerManagerSpec
     peerManager ! PeerManagerActor.EvictGenesisHeadPeerCmd(crawler.id, "enrscout")
     crawlerProbe.expectNoMessage(500.millis)
 
+  it should "reject an evicted genesis-head node that reconnects inbound, without a new grace period" taggedAs (
+    UnitTest,
+    NetworkTest
+  ) in new HandshakedCrawlerSetup:
+    peerManager ! PeerManagerActor.EvictGenesisHeadPeerCmd(crawler.id, "enrscout")
+    crawlerProbe.fishForMessage(3.seconds) {
+      case PeerActor.DisconnectPeer(r) => r == Disconnect.Reasons.UselessPeer
+      case _                           => false
+    }
+
+    // The same node ID dials us back.
+    peerManager ! PeerManagerActor.HandlePeerConnectionCmd(incomingConnection1.ref, incomingPeerAddress1)
+    val inboundProbe: TestProbe = Iterator
+      .continually(createdPeerQueue.poll(3, TimeUnit.SECONDS))
+      .map { tp =>
+        assert(tp ne null, "inbound PeerActor not created within 3s"); tp
+      }
+      .find(_.peer.remoteAddress == incomingPeerAddress1)
+      .get
+      .probe
+    inboundProbe.expectMsg(PeerActor.HandleConnection(incomingConnection1.ref, incomingPeerAddress1))
+    inboundProbe.reply(
+      PeerEvent.PeerHandshakeSuccessful(
+        Peer(
+          PeerId(crawlerHex),
+          incomingPeerAddress1,
+          inboundProbe.ref.toTyped[PeerActor.Command],
+          incomingConnection = true,
+          nodeId = Some(crawlerNodeId)
+        ),
+        initialPeerInfo
+      )
+    )
+    inboundProbe.expectMsg(3.seconds, PeerActor.DisconnectPeer(Disconnect.Reasons.UselessPeer))
+
+  // Sepolia v0.9.6: an enrscout crawler closed TCP right after STATUS. Its PeerActor stopped while
+  // PeerHandshakeSuccessful was still in flight, so the termination was processed first and the late handshake
+  // created a handshaked entry for a dead actor. It was then "evicted" every ~70 s, forever.
+  it should "not register a handshake whose peer actor has already terminated" taggedAs (
+    UnitTest,
+    NetworkTest
+  ) in new TestSetup:
+    start()
+    handleInitialNodesDiscovery()
+
+    val TestPeer(gone, goneProbe) = createdPeers.head
+    val ConnectTo(goneUri) = goneProbe.expectMsgClass(classOf[PeerActor.ConnectTo])
+    val goneHex: String = goneUri.getUserInfo
+    val goneNodeId: ByteString = ByteString(Hex.decode(goneHex))
+
+    val watcher: TestProbe = TestProbe()
+    watcher.watch(goneProbe.ref)
+    goneProbe.ref ! PoisonPill
+    watcher.expectTerminated(goneProbe.ref)
+    peerEventBus.fishForMessage(3.seconds, "waiting for the pending peer's PeerDisconnected") {
+      case PublishCmd(PeerDisconnected(id)) => id == PeerId(goneProbe.ref.path.name)
+      case _                                => false
+    }
+
+    peerManager ! PeerManagerActor.PeerEventReceived(
+      PeerEvent.PeerHandshakeSuccessful(gone.copy(id = PeerId(goneHex), nodeId = Some(goneNodeId)), initialPeerInfo)
+    )
+    // Subscribers that saw the late handshake are told to drop it again.
+    peerEventBus.fishForMessage(3.seconds, "waiting for PeerDisconnected of the stale handshake") {
+      case PublishCmd(PeerDisconnected(id)) => id == PeerId(goneHex)
+      case _                                => false
+    }
+
+    val requestSender: TestProbe = TestProbe()
+    peerManager ! PeerManagerActor.GetPeersCmd(requestSender.ref)
+    requestSender.expectMsgClass(classOf[Peers]).peers.keys.flatMap(_.nodeId) should not contain goneNodeId
+
   // ── Remembered good snap peers (spec 012) ──────────────────────────────────
 
   trait SnapGoodSetup extends TestSetup:

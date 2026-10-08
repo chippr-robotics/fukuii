@@ -759,6 +759,8 @@ object PeerManagerActor:
           Some(Behaviors.same)
 
         case EvictGenesisHeadPeerCmd(peerId, clientId) =>
+          if connectedPeers.getPeer(peerId).isEmpty then
+            log.debug("GENESIS_HEAD_EVICT: {} is no longer connected; nothing to evict", peerId.value.take(16))
           connectedPeers.getPeer(peerId).foreach { peer =>
             val nodeIdOpt = peer.nodeId
             val nodeIdHex = nodeIdOpt.map(n => Hex.toHexString(n.toArray)).getOrElse("")
@@ -955,6 +957,45 @@ object PeerManagerActor:
         case _ =>
       val isMaintained =
         handshakedPeer.nodeId.exists(nid => maintainedPeersByNodeId.contains(Hex.toHexString(nid.toArray)))
+      val isTrusted =
+        handshakedPeer.nodeId.exists(nid => trustedPeersByNodeId.contains(Hex.toHexString(nid.toArray)))
+      if !connectedPeers.isTracked(handshakedPeer.ref) then
+        // The PeerActor published PeerHandshakeSuccessful and then stopped (TCP closed right after STATUS, as the
+        // enrscout crawler does) and its termination was processed first: the death-watch notification comes straight
+        // here, while the handshake event takes an extra hop through the event bus. Promoting it now would leave a handshaked entry whose actor is
+        // gone and whose termination will never arrive again: it held a slot, blocked re-dials of the node ID, and was
+        // "evicted" every ~70 s by the genesis-head check with DisconnectPeer going to dead letters (Sepolia v0.9.6).
+        log.info(
+          "STALE_HANDSHAKE: ignoring handshake of {} from {}: its peer actor has already terminated",
+          handshakedPeer.id.value.take(16),
+          handshakedPeer.remoteAddress
+        )
+        // Subscribers that registered the handshake must drop it again, unless another live connection to the same
+        // node ID owns that peer ID.
+        if !handshakedPeer.nodeId.exists(connectedPeers.hasHandshakedWith) then
+          peerEventBus ! PublishCmd(PeerEvent.PeerDisconnected(handshakedPeer.id))
+        listening(connectedPeers)
+      else if handshakedPeer.incomingConnection && !isMaintained && !isTrusted &&
+        handshakedPeer.nodeId.exists(isExcludedWrongNetwork)
+      then
+        // Dial exclusion only stops OUR dials. A node excluded by node ID (wrong network #88, or a genesis-head crawler
+        // evicted under spec 011) must not take an inbound slot back for the rest of its exclusion either: reject it
+        // as soon as the handshake names it, with no new grace period. Outbound handshakes are already gated in
+        // connectWith, where an explicit operator dial may bypass the exclusion.
+        log.info(
+          "EXCLUDED_PEER_REJECTED: inbound node={} host={} is excluded; disconnecting",
+          handshakedPeer.id.value.take(16),
+          host
+        )
+        handshakedPeer.ref ! PeerActor.DisconnectPeer(Disconnect.Reasons.UselessPeer)
+        listening(connectedPeers)
+      else handleTrackedPeerHandshake(handshakedPeer, isMaintained, connectedPeers)
+
+    private def handleTrackedPeerHandshake(
+        handshakedPeer: Peer,
+        isMaintained: Boolean,
+        connectedPeers: ConnectedPeers
+    ): Behavior[Command] =
       snapGoodPeers.foreach { store =>
         if handshakedPeer.nodeId.exists(nid => store.markConnected(Hex.toHexString(nid.toArray))) then store.save()
       }
