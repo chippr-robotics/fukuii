@@ -5496,13 +5496,21 @@ unseen.</p>
      <code>CoordinatorHandles</code>, <code>PhaseFlags</code>, <code>SnapControllerEnv</code>, and the API traits of modules it calls.</li>
 </ol>
 <p>Exclusive vars become private to the trait. The only body-adjacent edit allowed is <code>val</code> → <code>lazy val</code>/<code>def</code>.</p>
-<p>Acceptance per module PR:
-- <strong>(a)</strong> No module self-type names the concrete impl class (grep).
-- <strong>(b)</strong> At least one unit test mixes the module into a stub of its state interface.
-- <strong>&copy;</strong> The interface member count is recorded in the PR and the routing doc, and may not grow without
-  justification.
-- <strong>(d)</strong> No concrete <code>val</code> in a module trait, and <code>var</code> initializers on an allow-list (grep). This rules out the
-  trait-before-class initialization hazard.</p>
+<p>Acceptance per module PR is scripted (<code>scripts/snap-split/</code>, the required CI job <code>snap-split-verify</code>) and checked on
+<strong>every commit</strong>:
+- <strong>(a)</strong> No mention of the concrete impl class in any module file after commit 2.
+- <strong>(b)</strong> At least one Tier 1 unit test mixes the module into a stub of its state interface, capabilities and Api
+  traits, and exercises a body that reads <strong>and</strong> writes that state.
+- <strong>&copy;</strong> Three numbers are recorded in the PR and the routing doc: the <code>&lt;Module&gt;State</code> member count, the Api members
+  required, and the member count of each shared capability trait. None may grow without justification.
+- <strong>(d)</strong> No trait-initialization hazard, checked at member level:
+  - no top-level statements and no concrete member <code>val</code>;
+  - member <code>var</code> initializers limited to literals, empty collections and companion constants.</p>
+<p>This also applies to commit 1, because even a byte-identical move into a trait can reorder initialization.
+- <code>val</code> → <code>lazy val</code>/<code>def</code> is allowed only for <strong>pure</strong> initializers, since laziness shifts side effects in time.
+  Impure initializers stay in the core, behind an abstract <code>def</code>.
+- Calls into another module, or into code not yet extracted, go through that callee's <code>&lt;Callee&gt;Api</code> trait. Those
+  members count towards &copy;.</p>
 <p>The coordinators follow the same rule, with no self-type naming a <code>*CoordinatorImpl</code>.</p>
 <h2 id="consequences">Consequences<a class="headerlink" href="#consequences" title="Permanent link">&para;</a></h2>
 <p><strong>Positive:</strong>
