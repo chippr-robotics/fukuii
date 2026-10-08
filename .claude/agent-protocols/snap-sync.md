@@ -100,15 +100,42 @@ causes it.
 | `PhaseFlags` | 9 flags + `reset(kind)` | P2 |
 | `SnapControllerEnv` | set at T041a | M2 |
 
-## Pin tests (S0a/S0b): never edited by a move PR (planned; these tests do not exist until S0a/S0b land)
+## Pin tests (S0a/S0b): never edited by a move PR
 
-| Pin | Fix | Where the pinned code lives | Test (planned, added by spec 016) |
+Each pin test names its fix in the test name (FR-025). A move PR must leave these files byte-unchanged and green; a fix
+PR that changes pinned behaviour on purpose (for example #1502) edits the one assertion it flips and says so.
+
+| Pin | Fix | Where the pinned code lives | Test (suite: test name, abbreviated) |
 |---|---|---|---|
-| #1367 | TD-PROXY-GAP guard `ourBest > 0` | `network/NetworkPeerManagerActor.scala` | `NetworkPeerManagerSpec` "#1367 …" (T010) |
-| #1378 | `apply()` calls `.start()`, arming the 5 s `PollHandshakedPeers` | `SSC` companion `apply` | controller spec "#1378 …" (T013) |
-| #1319 / spec-002 | `frontierPersistenceEnabled` at both TNHC spawns | Healing orchestration | "#1319 …" (T014) |
-| spec-005 | `prunedHealVerification` default, parse and store gate (+ #1502 note) | `SNAPSyncConfig`; Healing orchestration | "spec-005 …" (T015) |
-| #1371 | no `storagePhaseForceCompleted` term in `shouldSkipHealingAfterDownloads` | `SSC` companion (→ `HealPolicy`, M1); call site in the healing arms | "#1371 …" (T016) |
+| #1367 | TD-PROXY-GAP guard `ourBest > 0` | `network/NetworkPeerManagerActor.scala` | `NetworkPeerManagerSpec`: "#1367 TD-PROXY-GAP …" (S0a, T010) |
+| #1378 | `apply()` calls `.start()`, arming the 5 s `PollHandshakedPeers` | `SSC` companion `apply` | `SNAPSyncControllerPinSpec`: "#1378: arm the 5 s handshaked-peer poll …" (T013) |
+| #1319 / spec-002 | `frontierPersistenceEnabled` at both TNHC spawns; full spawn tuple on both routes | Healing orchestration (`startStateHealing`, `startStateHealingWithInterleave`) | `SNAPSyncControllerPinSpec`: four "#1319/spec-002: pass frontierPersistenceEnabled = true/false via …" tests and "#1319/spec-002: build the same healing coordinator via both routes" (T014) |
+| spec-005 | `prunedHealVerification` default (case class, absent key), parse, store gate | `SNAPSyncConfig`; `healingFrontierStorageOpt` | `SNAPSyncControllerSpec`: three "spec-005: …" config tests; `SNAPSyncControllerPinSpec`: three "spec-005: create … healing frontier store …" tests (T015) |
+| spec-005 / #1502 | the forwarded `prunedHealVerification` is asserted **as today** (always `true`) | Healing orchestration spawn args | `SNAPSyncControllerPinSpec`: "spec-005: forward pruned-heal-verification … as today (not forwarded, #1502)"; the value lives in one place, `todayForwardedPrunedHealVerification` (`// #1502`), which the #1502 fix flips |
+| #1371 | no `storagePhaseForceCompleted` term in the skip-healing decision, at the call site | `checkAllDownloadsComplete` + companion `shouldSkipHealingAfterDownloads` (→ `HealPolicy`, M1) | `SNAPSyncControllerPinSpec`: "#1371: skip healing … storage force-completed" (+ control case) (T016); the helper-level tests in `SNAPSyncControllerSpec` stay |
+| T012 seam | `ChildFactories` defaults equal each child `apply`'s defaults | `controller/ChildFactories.scala` | `ChildFactoriesSpec` (five tests) |
+
+Each S0b pin was shown to fail when its pinned expression is reverted (T017; run links in the S0b PR).
+
+## Characterization tests (S0d): today's behaviour, including what looks wrong
+
+They use the shared `SnapControllerFixture` (stubbed peer manager, `ManualTime`, recording `ChildFactories`, injected
+intake budget and heap-watchdog seam, ephemeral stores) and assert **today's** behaviour. A move PR keeps them green
+unchanged; a fix PR updates the assertion it changes on purpose.
+
+| Area | Suite | Pins | Used by |
+|---|---|---|---|
+| Stagnation watchdog | `SNAPStagnationCharacterizationSpec` (T021) | which coordinator each phase asks; account stall → `RecoverStalledAccountTasks` + in-place refresh (+ 30 s debounce, retry, no-peer wait, paused/progress/no-work non-stalls); storage and bytecode below their wall-clock thresholds | M7, P4 |
+| Reset completeness | `SNAPResetCharacterizationSpec` (T022) | `restartSnapSync`, `enterDormantMode` (critical failure), `wakeFromDormant`: children stopped/re-spawned (never the ChainDownloader), next spawn args, persisted flags, `GetStatus`, heap watchdog not stopped | P1, P2, M9 |
+| Pivot refresh | `SNAPPivotRefreshCharacterizationSpec` (T023) | ETC/Hash: header bootstrap, child notifications, ChainDownloader `Pause`/`UpdateTarget`/`Resume`, persisted pivot/root, probe commit and probe timeout; ETH/Path/CL: re-peg on the CL head, no anchor write while healing | M10 (beacon reviews the ETH case) |
+| #1501 budget and watchdog | `SNAPBudgetWatchdogPinSpec` (T025) | `IncrementalContractData` credit release (idle; `syncing` without coordinators), `RecoveryReplayPausedRetry` = 1 s and the gated recovery stream, watchdog start / stop in `onStop` and `stopSnapOnlySchedules` | P1, M5, M9, M11 |
+| P1 fan-outs | `SNAPFanOutCharacterizationSpec` (T026) | peer-unavailable to every existing coordinator; each SNAP response to exactly its coordinator | P1 |
+| `syncing` dispatch | `SNAPSyncingDispatchTableSpec` (T027) | every Command × reachable `SyncPhase`: handled, catch-all ("Unhandled message in syncing state") or crash | P4a–e (arm-order oracle) |
+
+**Known gap (needs a seam):** the storage-tail refresh/force-complete and the bytecode force-complete compare
+hard-coded thresholds (10 min, 60 s, 2 min, 10 min) with `System.currentTimeMillis()`, which `ManualTime` does not
+move. T021 pins only their below-threshold behaviour. Pinning the firing paths needs a `nowMs` clock seam on the
+controller (proposed amendment to T012, its own PR before P4a/M7).
 
 ## Open items: where they belong (fix PRs, not move PRs)
 
