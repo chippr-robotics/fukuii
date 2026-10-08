@@ -33,7 +33,7 @@ def suite_xml(suite, cases, suite_failures=None, suite_errors=0):
     )
 
 
-def run(reports, allow=None, expect=SUITES, sbt_exit=None):
+def run(reports, allow=None, expect=SUITES, sbt_exit=None, log=None):
     with tempfile.TemporaryDirectory() as d:
         d = Path(d)
         rdir = d / "r"
@@ -47,6 +47,9 @@ def run(reports, allow=None, expect=SUITES, sbt_exit=None):
             cmd += ["--expect-suite", s]
         if sbt_exit is not None:
             cmd += ["--sbt-exit", str(sbt_exit)]
+        if log is not None:
+            (d / "sbt.log").write_text(log, encoding="utf-8")
+            cmd += ["--sbt-log", str(d / "sbt.log")]
         p = subprocess.run(cmd, capture_output=True, text=True)
         return p.returncode, p.stdout
 
@@ -127,6 +130,28 @@ class SyncTestReport(unittest.TestCase):
         rc, out = run(r, allow="", sbt_exit=1)
         self.assertEqual(rc, 1)
         self.assertIn("sbt exited 1", out)
+
+    EPILOGUE = (
+        "[error] Failed tests:\n[error] \tcom.chipprbots.ethereum.blockchain.sync.SyncControllerSpec\n"
+        "[error] (Test / testOnly) sbt.TestsFailedException: Tests unsuccessful\n[error] Total time: 227 s\n"
+    )
+
+    def test_real_sbt_epilogue_with_only_t68_passes(self):
+        rc, out = run(good(), sbt_exit=1, log="[info] hi\n" + self.EPILOGUE)
+        self.assertEqual(rc, 0, out)
+
+    def test_sbt_failure_masked_by_t68_is_caught_via_log(self):
+        # forked JVM crash after #68's report: #68 is still the only failed case, but the log shows an error
+        log = self.EPILOGUE + "[error] Error during tests:\n[error] Forked test harness failed: crashed\n"
+        rc, out = run(good(), sbt_exit=1, log=log)
+        self.assertEqual(rc, 1)
+        self.assertIn("[error] line", out)
+
+    def test_extra_failure_count_with_nonzero_exit_fails(self):
+        r = good()
+        r["SnapServingActorSpec"] = suite_xml("SnapServingActorSpec", [("s should d", "pass")], suite_failures=1)
+        rc, out = run(r, sbt_exit=1, log=self.EPILOGUE)
+        self.assertEqual(rc, 1)
 
     def test_committed_allowlist_is_the_one_entry(self):
         lines = [l for l in ALLOW_FILE.read_text(encoding="utf-8").splitlines() if l.strip() and not l.startswith("#")]

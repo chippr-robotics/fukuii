@@ -46,7 +46,7 @@ jobs:
             exit 0
           fi
           git fetch --no-tags origin staging:refs/remotes/origin/staging
-          changed="$(git diff --name-only origin/staging...HEAD)"
+          changed="$(git diff --no-renames --name-only origin/staging...HEAD)"
           echo "Changed files:"; echo "$changed"
           # Sync trees (main + test), the directly-run SnapServingActor tree, build.sbt, and this job's own files.
           pattern='^(src/(main|test)/scala/com/chipprbots/ethereum/blockchain/sync/|src/(main|test)/scala/com/chipprbots/ethereum/network/snapserver/|build\.sbt$|project/|scripts/snap-split/(synctest|tests/test_synctest)|\.github/workflows/snap-synctest\.yml$)'
@@ -116,6 +116,7 @@ jobs:
             --expect-suite PivotHeaderBootstrapSpec \
             --expect-suite SnapServingActorSpec \
             --sbt-exit "${{ steps.sbt.outputs.exit }}" \
+            --sbt-log /tmp/sbt-synctest.log \
             --summary "$GITHUB_STEP_SUMMARY"
 
       - name: Upload reports
