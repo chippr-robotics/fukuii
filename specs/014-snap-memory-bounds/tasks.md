@@ -17,6 +17,10 @@
 - [x] T013 Tests: `SnapIntakeBudgetSpec` (ceiling, in-transit, release, attach, stale write-off, heap).
 - [x] T014 Tests: `SnapHeapWatchdogSpec` (engage, band, release, stale post-GC, watchdog → gate).
 - [x] T015 Tests: `GatedTaskFileReplaySpec` (chunks, order, gate pause/resume, bound under a slow consumer).
+- [x] T019 (review) Account-side liveness: `RecheckIntakeGate` timer while the gate holds dispatch; test that dispatch
+  resumes without PeerAvailable.
+- [x] T020 (review) Watchdog escape: ineffective-pause WARN plus a bounded force-release (`heap-watchdog-max-pause`).
+  The G1 engage lag is documented.
 - [ ] T016 Soak: Sepolia restart from the 12M-entry checkpoint on the new jar. Record the pending-task gauge, the
   live set and the fiber count.
 - [ ] T017 (deferred) Wire the legacy storage/bytecode watermarks to config, or retire them in favour of the gate.

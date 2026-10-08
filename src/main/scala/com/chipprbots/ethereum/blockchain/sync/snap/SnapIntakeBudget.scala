@@ -21,8 +21,8 @@ import com.chipprbots.ethereum.utils.Logger
   *
   * Failure direction. Undercounting only lets one more chunk through; overcounting would pause intake forever. Every
   * imprecise path therefore errs low: counters clamp at zero, a consumer (re)start resets its counters, and in-transit
-  * work that no consumer has acknowledged for `staleInTransitMs` while the gate is closed is written off with a WARN (a
-  * message lost to a dead coordinator must not wedge the sync).
+  * work that no consumer has acknowledged for `staleInTransitMs` is written off with a WARN whenever the gate is
+  * evaluated, open or closed (a message lost to a dead coordinator must not wedge the sync).
   *
   * @param maxPendingStorageTasks
   *   ceiling on storage tasks in transit plus queued in StorageRangeCoordinator

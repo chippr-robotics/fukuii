@@ -50,30 +50,100 @@ final class HeapPressureHysteresis(val highFraction: Double, val lowFraction: Do
 final case class OldGenReading(postGcUsed: Long, currentUsed: Long, max: Long):
   def postGcFraction: Double = if max > 0 then postGcUsed.toDouble / max else 0.0
 
+/** What the watchdog does when a pause is not helping (spec 014 review). */
+enum HeapWatchdogEscape:
+  /** Paused, yet the SNAP queues have been empty for `idleMs`: the heap is held by something the pause cannot drain. */
+  case PauseIneffective(pausedMs: Long, idleMs: Long)
+
+  /** Paused for `pausedMs` (>= the configured maximum) with the queues empty throughout the ineffective window: intake
+    * is released despite the heap reading. It stays released until occupancy falls below the resume threshold and rises
+    * past the pause threshold again.
+    */
+  case ForcedRelease(pausedMs: Long)
+
+/** @param ineffectiveAfterMs
+  *   how long the queues must be empty while paused before the pause is declared ineffective (WARN)
+  * @param maxPauseMs
+  *   force-release an ineffective pause once it has lasted this long; 0 = never force-release
+  */
+final case class HeapWatchdogEscapePolicy(ineffectiveAfterMs: Long, maxPauseMs: Long):
+  require(ineffectiveAfterMs >= 0 && maxPauseMs >= 0, s"negative escape policy: $this")
+
+object HeapWatchdogEscapePolicy:
+  val Default: HeapWatchdogEscapePolicy = HeapWatchdogEscapePolicy(ineffectiveAfterMs = 60000L, maxPauseMs = 300000L)
+
 /** Heap watchdog for SNAP sync (spec 014). Sets the old-gen pool's collection-usage threshold and listens for the JMX
   * MEMORY_COLLECTION_THRESHOLD_EXCEEDED notification (immediate engage), and polls the pool on a single daemon thread
   * (engage if a notification was missed; release, which JMX never signals). Transitions go to `onChange`, which the
   * controller wires to [[SnapIntakeBudget.setHeapPressure]] — a synchronous flag the producers read, so the pause never
   * waits on an actor mailbox.
   *
+  * Engage lag: on G1 the old pool's collection usage is updated by mixed and full collections (and the concurrent
+  * cycle), not by young-only GCs, so a reading can trail the live set by one marking cycle. Current usage is not used
+  * to engage because it includes garbage a collection would free; the pending-work ceilings bound SNAP's own growth in
+  * the meantime.
+  *
   * @param read
   *   source of old-gen readings; the JMX pool in production, a stub in tests
   * @param onChange
   *   called with `true` on engage and `false` on release, with the reading that caused it
+  * @param queuesEmpty
+  *   whether the SNAP storage and bytecode queues (in transit + queued) are empty
+  * @param onEscape
+  *   called when a pause is ineffective (once per pause) and when it is force-released
   */
 final class SnapHeapWatchdog(
     hysteresis: HeapPressureHysteresis,
     read: () => Option[OldGenReading],
-    onChange: (Boolean, OldGenReading) => Unit
+    onChange: (Boolean, OldGenReading) => Unit,
+    queuesEmpty: () => Boolean = () => false,
+    policy: HeapWatchdogEscapePolicy = HeapWatchdogEscapePolicy.Default,
+    onEscape: (HeapWatchdogEscape, OldGenReading) => Unit = (_, _) => (),
+    nowMs: () => Long = () => System.currentTimeMillis()
 ):
 
-  /** Evaluate one reading. Called from the poll thread and the JMX notification thread; the hysteresis is synchronized.
-    */
-  def evaluate(): Unit =
+  // Escape bookkeeping for the current pause. Guarded by `this` (evaluate is synchronized).
+  private var pausedSinceMs: Long = 0L
+  private var queuesEmptySinceMs: Option[Long] = None
+  private var warnedIneffective: Boolean = false
+  private var forcedRelease: Boolean = false
+
+  /** Evaluate one reading. Called from the poll thread and the JMX notification thread, hence synchronized. */
+  def evaluate(): Unit = synchronized {
     read().foreach { r =>
       SNAPSyncMetrics.setOldGenPostGc(r.postGcUsed, r.postGcFraction)
-      hysteresis.observe(r.postGcUsed, r.currentUsed, r.max).foreach(engaged => onChange(engaged, r))
+      hysteresis.observe(r.postGcUsed, r.currentUsed, r.max).foreach { engaged =>
+        pausedSinceMs = nowMs()
+        queuesEmptySinceMs = None
+        warnedIneffective = false
+        forcedRelease = false
+        onChange(engaged, r)
+      }
+      if hysteresis.isEngaged && !forcedRelease then checkEscape(r)
     }
+  }
+
+  /** A pause exists to let the SNAP queues drain. Once they are empty and stay empty, the heap is held by something
+    * else and pausing only stalls the sync: say so, and after `maxPauseMs` let intake run again.
+    */
+  private def checkEscape(r: OldGenReading): Unit =
+    val now = nowMs()
+    if !queuesEmpty() then queuesEmptySinceMs = None
+    else
+      val emptySince = queuesEmptySinceMs.getOrElse(now)
+      queuesEmptySinceMs = Some(emptySince)
+      val idleMs = now - emptySince
+      val pausedMs = now - pausedSinceMs
+      if idleMs >= policy.ineffectiveAfterMs then
+        if !warnedIneffective then
+          warnedIneffective = true
+          onEscape(HeapWatchdogEscape.PauseIneffective(pausedMs, idleMs), r)
+        if policy.maxPauseMs > 0 && pausedMs >= policy.maxPauseMs then
+          forcedRelease = true
+          onEscape(HeapWatchdogEscape.ForcedRelease(pausedMs), r)
+
+  /** True while intake was force-released and the hysteresis has not yet released on its own. */
+  def isForceReleased: Boolean = synchronized(forcedRelease)
 
   def isEngaged: Boolean = hysteresis.isEngaged
 
@@ -115,7 +185,10 @@ object SnapHeapWatchdog extends Logger:
       highFraction: Double,
       lowFraction: Double,
       pollInterval: FiniteDuration,
-      onChange: (Boolean, OldGenReading) => Unit
+      onChange: (Boolean, OldGenReading) => Unit,
+      queuesEmpty: () => Boolean,
+      policy: HeapWatchdogEscapePolicy,
+      onEscape: (HeapWatchdogEscape, OldGenReading) => Unit
   ): Option[Handle] =
     findOldGenPool() match
       case None =>
@@ -126,7 +199,8 @@ object SnapHeapWatchdog extends Logger:
         None
       case Some(pool) =>
         val hysteresis = new HeapPressureHysteresis(highFraction, lowFraction)
-        val watchdog = new SnapHeapWatchdog(hysteresis, () => readPool(pool), onChange)
+        val watchdog =
+          new SnapHeapWatchdog(hysteresis, () => readPool(pool), onChange, queuesEmpty, policy, onEscape)
         val threshold = (maxOf(pool) * highFraction).toLong
         pool.setCollectionUsageThreshold(threshold)
         val emitter = ManagementFactory.getMemoryMXBean.asInstanceOf[NotificationEmitter]

@@ -68,6 +68,20 @@ storage-task entries.
   - It releases when min(post-GC, current) occupancy is at or below `resume-fraction`. Current usage is never below
     the live set, so a stale post-GC reading cannot pin the pause.
   - Both transitions log at WARN with the queue sizes.
+- **R4a — liveness.** The intake gate sends no release message, unlike the watermarks' `*QueuePressure(false)`. Both
+  the bytecode ceiling and the heap watchdog close it silently. While the gate holds dispatch, AccountRangeCoordinator
+  re-checks it every second (`RecheckIntakeGate`), and the 30 s idle tick re-arms that check. Dispatch resumes on its
+  own, without waiting for a PeerAvailable re-announce.
+- **R4b — watchdog escape.** A live set held above the resume fraction by non-SNAP memory must not pause SNAP forever:
+  - Paused with empty storage/bytecode queues for `heap-watchdog-ineffective-after` (60 s): WARN once with queue sizes.
+  - Once such a pause has lasted `heap-watchdog-max-pause` (5 min; 0 = never), intake is force-released, logged at
+    ERROR. The ceilings still apply.
+  - The watchdog re-arms only after occupancy falls below the resume fraction.
+- **R4c — engage lag (documented, not compensated).** On G1, mixed and full collections update the old pool's
+  collection usage (so does the concurrent cycle); young-only GCs do not. A post-GC reading can therefore trail the
+  live set by up to one marking cycle. Current usage is not used to engage, because it includes garbage that the next
+  collection frees and would cause false pauses. During the lag, the pending-work ceilings still bound SNAP's own
+  growth.
 - **R5 — resume guarantees unchanged.**
   - `AccountResumeCheckpoint` (#1487) and the done-markers (#1498) are untouched.
   - The replay reads the same entries `[0, carried*Count)` once, with the same done-marker and Hash-scheme root
@@ -89,6 +103,8 @@ storage-task entries.
 | `heap-watchdog-pause-fraction` | 0.75 | With `-Xmx6g` the healthy live set is about 28%. 75% post-GC (4.5 GB live) is close to GC thrash. |
 | `heap-watchdog-resume-fraction` | 0.60 | A 15-point band, so the watchdog does not flap. |
 | `heap-watchdog-poll-interval` | 5 s | Release latency. Engagement is immediate through the JMX notification. |
+| `heap-watchdog-ineffective-after` | 60 s | How long the queues must stay empty before a pause counts as ineffective. |
+| `heap-watchdog-max-pause` | 5 min | Upper bound on an ineffective pause. 0 = never force-release. |
 
 ## Out of scope
 

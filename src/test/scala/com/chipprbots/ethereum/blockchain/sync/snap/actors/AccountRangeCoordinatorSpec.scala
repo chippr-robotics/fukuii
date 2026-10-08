@@ -47,7 +47,8 @@ class AccountRangeCoordinatorSpec extends ScalaTestWithActorTestKit() with AnyFl
       concurrency: Int,
       snapSyncController: org.apache.pekko.actor.typed.ActorRef[SNAPSyncController.Command],
       resumeProgress: Map[ByteString, ByteString] = Map.empty,
-      initialMaxInFlightPerPeer: Int = 5
+      initialMaxInFlightPerPeer: Int = 5,
+      intakeBudget: Option[SnapIntakeBudget] = None
   ): org.apache.pekko.actor.typed.ActorRef[AccountRangeCoordinator.Command] =
     testKit.spawn(
       AccountRangeCoordinator(
@@ -59,7 +60,8 @@ class AccountRangeCoordinatorSpec extends ScalaTestWithActorTestKit() with AnyFl
         snapSyncController = snapSyncController,
         resumeProgress = resumeProgress,
         initialMaxInFlightPerPeer = initialMaxInFlightPerPeer,
-        accountTrieEcOverride = Some(classicSystem.dispatcher)
+        accountTrieEcOverride = Some(classicSystem.dispatcher),
+        intakeBudget = intakeBudget
       )
     )
 
@@ -122,6 +124,40 @@ class AccountRangeCoordinatorSpec extends ScalaTestWithActorTestKit() with AnyFl
 
     networkPeerManager.expectMessageType[NetworkPeerManagerActor.SendMessageCmd]
   }
+
+  it should "resume dispatch on its own when the intake gate re-opens, with no PeerAvailable (spec 014)" taggedAs
+    UnitTest in {
+      val stateRoot = kec256(ByteString("test-state-root"))
+      val requestTracker = new SNAPRequestTracker()(classicSystem.scheduler)
+      val networkPeerManager = testKit.createTestProbe[NetworkPeerManagerActor.Command]()
+      val snapSyncController = testKit.createTestProbe[SNAPSyncController.Command]()
+      val peerProbe = testKit.createTestProbe[Any]()
+      val peer = PeerTestHelpers.createTestPeer("gate-peer", peerProbe.ref.toClassic)
+
+      // Close the gate through the bytecode ceiling: that path has no *QueuePressure(false) release message.
+      val budget = new SnapIntakeBudget(maxPendingStorageTasks = 1000L, maxPendingByteCodeHashes = 10L)
+      budget.byteCodeQueueDepth(10L)
+      budget.intakeAllowed shouldBe false
+
+      val coordinator = arcProps(
+        stateRoot = stateRoot,
+        networkPeerManager = networkPeerManager.ref,
+        requestTracker = requestTracker,
+        mptStorage = new TestMptStorage(),
+        concurrency = 1,
+        snapSyncController = snapSyncController.ref,
+        intakeBudget = Some(budget)
+      )
+      coordinator ! AccountRangeCoordinator.StartAccountRangeSync(stateRoot)
+      coordinator ! AccountRangeCoordinator.PeerAvailable(peer)
+      networkPeerManager.expectNoMessage(500.millis)
+
+      // The bytecode queue drains. Nothing is sent to the coordinator: its own recheck must notice.
+      budget.byteCodeQueueDepth(0L)
+      networkPeerManager.expectMessageType[NetworkPeerManagerActor.SendMessageCmd](
+        AccountRangeCoordinator.IntakeGateRecheckInterval * 5
+      )
+    }
 
   it should "handle task completion and report progress" taggedAs UnitTest in {
     val stateRoot = kec256(ByteString("test-state-root"))

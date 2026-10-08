@@ -91,6 +91,111 @@ class SnapHeapWatchdogSpec extends AnyFlatSpec with Matchers:
     watchdog.isEngaged shouldBe false
   }
 
+  /** A watchdog with a fake clock, stub reading and stub queue state, recording every callback. */
+  private class EscapeRig(policy: HeapWatchdogEscapePolicy):
+    var now: Long = 0L
+    var reading: Option[OldGenReading] = None
+    var empty: Boolean = false
+    val budget = new SnapIntakeBudget(100L, 100L)
+    val events = mutable.ArrayBuffer.empty[Any]
+    val watchdog = new SnapHeapWatchdog(
+      new HeapPressureHysteresis(0.75, 0.60),
+      () => reading,
+      (engaged, _) =>
+        events += engaged
+        budget.setHeapPressure(engaged)
+      ,
+      queuesEmpty = () => empty,
+      policy = policy,
+      onEscape = (escape, _) =>
+        events += escape
+        escape match
+          case HeapWatchdogEscape.ForcedRelease(_) => budget.setHeapPressure(false)
+          case _                                   => ()
+      ,
+      nowMs = () => now
+    )
+    def high(): Unit = reading = Some(OldGenReading(800L, 820L, Max))
+    def low(): Unit = reading = Some(OldGenReading(800L, 500L, Max))
+
+  "SnapHeapWatchdog escape" should "warn once, then force-release, when the queues stay empty while paused" taggedAs
+    UnitTest in {
+      val rig = EscapeRig(HeapWatchdogEscapePolicy(ineffectiveAfterMs = 60000L, maxPauseMs = 300000L))
+      rig.high()
+      rig.watchdog.evaluate()
+      rig.events.toList shouldBe List(true)
+
+      rig.empty = true
+      rig.now = 1000L
+      rig.watchdog.evaluate() // queues just went empty
+      rig.now = 60999L
+      rig.watchdog.evaluate()
+      rig.events.toList shouldBe List(true) // empty for 59.999 s: not yet ineffective
+
+      rig.now = 61000L
+      rig.watchdog.evaluate()
+      rig.events.toList shouldBe List(true, HeapWatchdogEscape.PauseIneffective(61000L, 60000L))
+      rig.now = 200000L
+      rig.watchdog.evaluate() // warned once only
+      rig.events.size shouldBe 2
+      rig.budget.heapPressureActive shouldBe true
+
+      rig.now = 300000L
+      rig.watchdog.evaluate()
+      rig.events.last shouldBe HeapWatchdogEscape.ForcedRelease(300000L)
+      rig.budget.intakeAllowed shouldBe true
+      rig.watchdog.isForceReleased shouldBe true
+      rig.now = 400000L
+      rig.watchdog.evaluate() // no repeat while force-released
+      rig.events.size shouldBe 3
+
+      // Occupancy really falls: the normal release resets the escape and the watchdog re-arms.
+      rig.low()
+      rig.watchdog.evaluate()
+      rig.events.last shouldBe false
+      rig.watchdog.isForceReleased shouldBe false
+      rig.high()
+      rig.watchdog.evaluate()
+      rig.events.last shouldBe true
+      rig.budget.heapPressureActive shouldBe true
+    }
+
+  it should "not escape while the pause is still draining SNAP work" taggedAs UnitTest in {
+    val rig = EscapeRig(HeapWatchdogEscapePolicy(ineffectiveAfterMs = 60000L, maxPauseMs = 300000L))
+    rig.high()
+    rig.watchdog.evaluate()
+    rig.empty = false
+    rig.now = 1000000L
+    rig.watchdog.evaluate()
+    rig.events.toList shouldBe List(true)
+    // Queues drain, then refill before the window ends: the empty window restarts.
+    rig.empty = true
+    rig.now = 1010000L
+    rig.watchdog.evaluate()
+    rig.empty = false
+    rig.now = 1050000L
+    rig.watchdog.evaluate()
+    rig.empty = true
+    rig.now = 1080000L
+    rig.watchdog.evaluate()
+    rig.now = 1139999L
+    rig.watchdog.evaluate()
+    rig.events.toList shouldBe List(true)
+    rig.budget.heapPressureActive shouldBe true
+  }
+
+  it should "warn but never force-release when max-pause is 0" taggedAs UnitTest in {
+    val rig = EscapeRig(HeapWatchdogEscapePolicy(ineffectiveAfterMs = 60000L, maxPauseMs = 0L))
+    rig.high()
+    rig.watchdog.evaluate()
+    rig.empty = true
+    rig.watchdog.evaluate()
+    rig.now = 10000000L
+    rig.watchdog.evaluate()
+    rig.events.toList shouldBe List(true, HeapWatchdogEscape.PauseIneffective(10000000L, 10000000L))
+    rig.budget.heapPressureActive shouldBe true
+  }
+
   "OldGenReading" should "report the post-GC fraction of the maximum" taggedAs UnitTest in {
     OldGenReading(postGcUsed = 250L, currentUsed = 400L, max = Max).postGcFraction shouldBe 0.25 +- 1e-12
     OldGenReading(postGcUsed = 250L, currentUsed = 400L, max = 0L).postGcFraction shouldBe 0.0

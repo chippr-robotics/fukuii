@@ -127,6 +127,15 @@ private class AccountRangeCoordinatorImpl(
   // The intake gate (spec 014): pending storage/bytecode work at its ceiling, or heap pressure. Read synchronously, so
   // unlike `backpressureSources` it never lags behind a busy mailbox.
   private def intakeGateClosed: Boolean = intakeBudget.exists(!_.intakeAllowed)
+
+  /** The intake gate has no release message (unlike the storage/bytecode watermarks, which send
+    * `*QueuePressure(false)`): the bytecode ceiling and the heap watchdog close it silently and it re-opens when the
+    * downstream queues drain. Poll it while it holds dispatch so the account side resumes on its own, not only when a
+    * peer is re-announced or a response lands.
+    */
+  private def armIntakeGateRecheck(): Unit =
+    if !timers.isTimerActive(RecheckIntakeGate) then
+      timers.startSingleTimer(RecheckIntakeGate, RecheckIntakeGate, AccountRangeCoordinator.IntakeGateRecheckInterval)
   // Dispatch is paused on purpose: a downstream queue is over its high-water mark, or the controller set the per-peer
   // budget to 0. Neither is a stall, so neither may feed the stall watchdog or the pivot-refresh escalation.
   private def dispatchDeliberatelyPaused: Boolean =
@@ -911,6 +920,16 @@ private class AccountRangeCoordinatorImpl(
           tryRedispatchPendingTasks()
           Behaviors.same
 
+        case RecheckIntakeGate =>
+          if pendingTasks.nonEmpty then
+            if intakeGateClosed then armIntakeGateRecheck()
+            else
+              log.info(
+                s"[ACCOUNT-INTAKE] intake gate re-opened (${intakeBudget.fold("")(_.describe)}) — resuming dispatch"
+              )
+              tryRedispatchPendingTasks()
+          Behaviors.same
+
         case CheckDispatchStalled =>
           val now = System.currentTimeMillis()
           val stalled = activeTasks.nonEmpty && (now - lastDispatchOrResponseMs) > noActivityTimeoutMs
@@ -931,6 +950,7 @@ private class AccountRangeCoordinatorImpl(
             // Idle by design: downstream back-pressure (or a zero budget) is holding dispatch. Not a stall — reset
             // the tick counter so a long pause never escalates to a pivot refresh or a restart.
             pendingButIdleTicks = 0
+            if intakeGateClosed then armIntakeGateRecheck()
             log.info(
               s"[ACCOUNT-IDLE] ${pendingTasks.size} tasks pending, dispatch paused " +
                 s"(back-pressure sources=${backpressureSources.mkString(",")}, maxInflight=$maxInFlightPerPeer, " +
@@ -1230,6 +1250,7 @@ private class AccountRangeCoordinatorImpl(
     * in turn enqueue more storage / bytecode work) until every signalling downstream has released.
     */
   private def dispatchIfPossible(peer: Peer): Unit =
+    if pendingTasks.nonEmpty && intakeGateClosed then armIntakeGateRecheck()
     if pendingTasks.nonEmpty && !downstreamBackpressureActive && !intakeGateClosed then
       var inflight = inFlightForPeer(peer)
       var noWorkerAvailable = false
@@ -2050,6 +2071,7 @@ object AccountRangeCoordinator:
   private[actors] case object CheckDispatchStalled extends Command
   private[actors] case object CheckpointTick extends Command
   private[actors] case object ReplayCarriedContracts extends Command
+  private[actors] case object RecheckIntakeGate extends Command
 
   /** Cadence of durable resume checkpoints (trie batch flush + task-file fsync + persisted cursors). Bounds the account
     * work a crash can lose to this window; in-process restarts use the latest per-response snapshot.
@@ -2058,6 +2080,9 @@ object AccountRangeCoordinator:
   private[actors] val ReplayChunkEntries: Int = 4096
   private[actors] val ReplayChunkInterval: FiniteDuration = 50.millis
   private[actors] val ReplayPausedRetry: FiniteDuration = 1.second
+
+  /** How often a dispatch held by the intake gate (spec 014) re-checks it. */
+  private[actors] val IntakeGateRecheckInterval: FiniteDuration = 1.second
 
   /** Copy exactly the first `bytes` bytes of `from` into the (empty) file `to` and fsync it. Throws if `from` is
     * shorter than `bytes` — the controller validated the size, so a short file here is a real error, not something to

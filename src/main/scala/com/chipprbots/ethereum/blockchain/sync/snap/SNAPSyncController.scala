@@ -100,9 +100,42 @@ private class SNAPSyncControllerImpl(
         highFraction = snapSyncConfig.heapWatchdogPauseFraction,
         lowFraction = snapSyncConfig.heapWatchdogResumeFraction,
         pollInterval = snapSyncConfig.heapWatchdogPollInterval,
-        onChange = onHeapPressureChange
+        onChange = onHeapPressureChange,
+        queuesEmpty = () => intakeBudget.pendingStorageTasks == 0L && intakeBudget.pendingByteCodeHashes == 0L,
+        policy = HeapWatchdogEscapePolicy(
+          ineffectiveAfterMs = snapSyncConfig.heapWatchdogIneffectiveAfter.toMillis,
+          maxPauseMs = snapSyncConfig.heapWatchdogMaxPause.toMillis
+        ),
+        onEscape = onHeapWatchdogEscape
       )
 
+  /** Runs on the watchdog thread, like `onHeapPressureChange`. */
+  private def onHeapWatchdogEscape(escape: HeapWatchdogEscape, reading: OldGenReading): Unit =
+    val mib = 1024L * 1024L
+    val occupancy =
+      s"old gen after GC ${reading.postGcUsed / mib} MiB (${(reading.postGcFraction * 100).round}% of " +
+        s"${reading.max / mib} MiB), now ${reading.currentUsed / mib} MiB"
+    escape match
+      case HeapWatchdogEscape.PauseIneffective(pausedMs, idleMs) =>
+        asyncLog.warn(
+          s"[SNAP-HEAP] SNAP intake paused for ${pausedMs / 1000}s but the storage/bytecode queues have been empty " +
+            s"for ${idleMs / 1000}s: the heap is held by something the pause cannot drain - $occupancy. " +
+            s"Pending: ${intakeBudget.describe}" +
+            (if snapSyncConfig.heapWatchdogMaxPause.toMillis > 0 then
+               s". Force-release after ${snapSyncConfig.heapWatchdogMaxPause.toSeconds}s paused"
+             else ". heap-watchdog-max-pause = 0: staying paused")
+        )
+      case HeapWatchdogEscape.ForcedRelease(pausedMs) =>
+        intakeBudget.setHeapPressure(false)
+        intakeBudget.publishMetrics()
+        asyncLog.error(
+          s"[SNAP-HEAP] FORCE-RELEASING SNAP intake after ${pausedMs / 1000}s of ineffective heap pause - " +
+            s"$occupancy. Pending: ${intakeBudget.describe}. The pending-work ceilings still apply; the heap watchdog " +
+            "re-arms once occupancy falls below the resume threshold. Investigate non-SNAP heap use."
+        )
+
+  // Stopped only by stopSnapOnlySchedules (SNAP completion, before regular sync) and onStop. Every coordinator launch
+  // (account phase, accounts-complete recovery) calls ensureHeapWatchdog, so a SNAP restart re-arms it.
   private def stopHeapWatchdog(): Unit =
     heapWatchdog.foreach(_.stop())
     heapWatchdog = None
@@ -6579,7 +6612,16 @@ case class SNAPSyncConfig(
     heapWatchdogEnabled: Boolean = false,
     heapWatchdogPauseFraction: Double = 0.75,
     heapWatchdogResumeFraction: Double = 0.60,
-    heapWatchdogPollInterval: FiniteDuration = 5.seconds
+    heapWatchdogPollInterval: FiniteDuration = 5.seconds,
+    /** A heap pause whose SNAP queues have stayed empty this long is not helping: WARN once. Key:
+      * `sync.snap-sync.heap-watchdog-ineffective-after`.
+      */
+    heapWatchdogIneffectiveAfter: FiniteDuration = 60.seconds,
+    /** Force-release such an ineffective pause once it has lasted this long, so a live set held above the resume
+      * threshold by non-SNAP memory cannot stall SNAP forever. 0 = never. Key:
+      * `sync.snap-sync.heap-watchdog-max-pause`.
+      */
+    heapWatchdogMaxPause: FiniteDuration = 5.minutes
 )
 
 object SNAPSyncConfig:
@@ -6772,7 +6814,15 @@ object SNAPSyncConfig:
       heapWatchdogPollInterval =
         if snapConfig.hasPath("heap-watchdog-poll-interval") then
           snapConfig.getDuration("heap-watchdog-poll-interval").toMillis.millis
-        else 5.seconds
+        else 5.seconds,
+      heapWatchdogIneffectiveAfter =
+        if snapConfig.hasPath("heap-watchdog-ineffective-after") then
+          snapConfig.getDuration("heap-watchdog-ineffective-after").toMillis.millis
+        else 60.seconds,
+      heapWatchdogMaxPause =
+        if snapConfig.hasPath("heap-watchdog-max-pause") then
+          snapConfig.getDuration("heap-watchdog-max-pause").toMillis.millis
+        else 5.minutes
     )
 
 // StateValidator has been extracted to StateValidator.scala
