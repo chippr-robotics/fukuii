@@ -86,6 +86,11 @@ object NetworkPeerManagerActor:
   // PeerEvent wrapper delivered via messageAdapter from the event bus:
   final case class PeerEventCmd(event: PeerEvent) extends Command
 
+  /** Death-watch notification for a handshaked peer's actor. Keyed on the ref alone: Pekko rejects a second `watchWith`
+    * on the same ref with a different message, and two entries may share a ref transiently (inbound-wins swap).
+    */
+  final private[network] case class PeerActorTerminated(ref: typed.ActorRef[PeerActor.Command]) extends Command
+
   // Deferred blacklist request: re-enters the actor mailbox via a single-shot
   // Typed timer (P7) instead of a Classic scheduler.scheduleOnce callback, which
   // would run on the HashedWheelTimer thread off the actor mailbox.
@@ -268,6 +273,19 @@ object NetworkPeerManagerActor:
     // shortly publish PeerDisconnected. That event must NOT evict the peer from peersWithInfo.
     private val pendingInboundWinsDisconnects: scala.collection.mutable.Set[PeerId] =
       scala.collection.mutable.Set.empty
+
+    // A second live connection for a peer ID that is not the current entry: the outbound an inbound-wins swap displaced,
+    // or a duplicate handshake that was not taken (DUPLICATE_HANDSHAKE_DROPPED). Which one PeerManagerActor keeps is
+    // its call (inbound wins only for maintained peers; otherwise the newer duplicate gets AlreadyConnected), and the
+    // current entry's actor may already be dead when the duplicate arrives. So when the current entry's actor dies, a
+    // live standby takes its place instead of the peer being dropped. One standby per peer ID; each is death-watched
+    // and removed when its own actor dies, so the map holds only live connections.
+    private val standbyEntries = scala.collection.mutable.Map.empty[PeerId, PeerWithInfo]
+
+    private def setStandby(peerId: PeerId, standby: PeerWithInfo, currentRef: typed.ActorRef[PeerActor.Command]): Unit =
+      standbyEntries.put(peerId, standby).foreach { previous =>
+        if previous.peer.ref != currentRef && previous.peer.ref != standby.peer.ref then ctx.unwatch(previous.peer.ref)
+      }
 
     // Cache of recent canonical state roots, refreshed lazily when the chain advances.
     private var freshRootCache: scala.collection.mutable.Set[ByteString] = scala.collection.mutable.Set.empty
@@ -657,29 +675,64 @@ object NetworkPeerManagerActor:
               peerId
             )
             Behaviors.same
-          else
-            val pw = peersWithInfo(peerId)
-            log.info(
-              s"PEER_DISCONNECTED: ${peerId.value} " +
-                s"addr=${pw.peer.remoteAddress} cap=${pw.peerInfo.remoteStatus.capability} " +
-                s"inbound=${pw.peer.incomingConnection}"
-            )
-            peerEventBusActor ! UnsubscribeCmd(PeerDisconnectedClassifier(PeerSelector.WithId(peerId)), eventAdapter)
-            peerEventBusActor ! UnsubscribeCmd(
-              MessageClassifier(msgCodesWithInfo, PeerSelector.WithId(peerId)),
-              eventAdapter
-            )
-            NetworkMetrics.registerRemoveHandshakedPeer(peersWithInfo(peerId).peer)
-            PeerTelemetry.deregisterPeer(peerId)
-            lastBlockSignalMs.remove(peerId)
-            laggingPeerSince.remove(peerId)
-            consecutiveUnchangedProbes.remove(peerId)
-            lastProbeMaxBlock.remove(peerId)
-            handleMessages(peersWithInfo - peerId)
+          else handleMessages(removePeer(peerId, peersWithInfo, "PeerDisconnected"))
+
+        // The peer's actor died. Normally PeerManagerActor follows up with PeerDisconnected, but that event can be lost:
+        // a crawler that closes TCP right after STATUS stops its PeerActor while PeerHandshakeSuccessful is still in
+        // flight, and PeerDisconnected is then published before (or instead of) this actor's per-peer subscription
+        // reaching the event bus. The entry stayed forever, so a genesis-head crawler was "evicted" every ~70 s while
+        // DisconnectPeer went to dead letters. Death watch fires even for an already-dead ref, so it cannot be lost.
+        case PeerActorTerminated(ref) =>
+          // A standby whose own actor died can never take over.
+          standbyEntries.filterInPlace { case (_, standby) => standby.peer.ref != ref }
+          val owned = peersWithInfo.collect { case (id, pw) if pw.peer.ref == ref => id }
+          val updated = owned.foldLeft(peersWithInfo) { (acc, peerId) =>
+            standbyEntries.remove(peerId) match
+              case Some(standby) =>
+                // The current connection died; the standby connection to the same node is still alive.
+                pendingInboundWinsDisconnects -= peerId
+                log.info(
+                  "STANDBY_CONNECTION_PROMOTED: {} {} terminated; continuing on {}",
+                  peerId,
+                  acc(peerId).peer.remoteAddress,
+                  standby.peer.remoteAddress
+                )
+                // Keep the dying entry's PeerInfo: it is the node's chain state (best block, max block number, fork
+                // acceptance) as updated by every message received under this peer ID since the standby's own
+                // handshake, which is newer than the snapshot the standby was stored with.
+                acc + (peerId -> standby.copy(peerInfo = acc(peerId).peerInfo))
+              case None => removePeer(peerId, acc, "actor terminated")
+          }
+          if owned.isEmpty then Behaviors.same else handleMessages(updated)
 
         case PeerEventCmd(_) =>
           Behaviors.same
       }
+
+    /** Drops a handshaked peer and its per-peer subscriptions and bookkeeping. */
+    private def removePeer(peerId: PeerId, peersWithInfo: PeersWithInfo, via: String): PeersWithInfo =
+      val pw = peersWithInfo(peerId)
+      log.info(
+        s"PEER_DISCONNECTED: ${peerId.value} " +
+          s"addr=${pw.peer.remoteAddress} cap=${pw.peerInfo.remoteStatus.capability} " +
+          s"inbound=${pw.peer.incomingConnection} via=$via"
+      )
+      peerEventBusActor ! UnsubscribeCmd(PeerDisconnectedClassifier(PeerSelector.WithId(peerId)), eventAdapter)
+      peerEventBusActor ! UnsubscribeCmd(
+        MessageClassifier(msgCodesWithInfo, PeerSelector.WithId(peerId)),
+        eventAdapter
+      )
+      ctx.unwatch(pw.peer.ref)
+      standbyEntries.remove(peerId).foreach(d => ctx.unwatch(d.peer.ref))
+      pendingInboundWinsDisconnects -= peerId
+      NetworkMetrics.registerRemoveHandshakedPeer(pw.peer)
+      PeerTelemetry.deregisterPeer(peerId)
+      lastBlockSignalMs.remove(peerId)
+      laggingPeerSince.remove(peerId)
+      genesisHeadSince.remove(peerId)
+      consecutiveUnchangedProbes.remove(peerId)
+      lastProbeMaxBlock.remove(peerId)
+      peersWithInfo - peerId
 
     private def handlePeerHandshakeSuccessful(
         peer: Peer,
@@ -790,6 +843,8 @@ object NetworkPeerManagerActor:
         if newIsInbound && existingIsOutbound then
           // Inbound-wins: swap peersWithInfo to the live inbound ref.
           pendingInboundWinsDisconnects += peer.id
+          setStandby(peer.id, old, peer.ref)
+          ctx.watchWith(peer.ref, PeerActorTerminated(peer.ref))
           log.info(
             "DUPLICATE_HANDSHAKE_INBOUND_WINS: {} swapping {} → {} (outbound eviction suppressed)",
             peer.id,
@@ -805,8 +860,13 @@ object NetworkPeerManagerActor:
               s"duplicate=${peer.remoteAddress} inbound=${peer.incomingConnection}) — " +
               s"keeping existing entry, duplicate will be dropped by PeerManagerActor"
           )
+          // Remember the duplicate in case the existing entry's actor is the one that is already gone.
+          if peer.ref != old.peer.ref then
+            setStandby(peer.id, PeerWithInfo(peer, peerInfo), old.peer.ref)
+            ctx.watchWith(peer.ref, PeerActorTerminated(peer.ref))
           Behaviors.same
       else
+        ctx.watchWith(peer.ref, PeerActorTerminated(peer.ref))
         peerEventBusActor ! SubscribeCmd(PeerDisconnectedClassifier(PeerSelector.WithId(peer.id)), eventAdapter)
         peerEventBusActor ! SubscribeCmd(
           MessageClassifier(msgCodesWithInfo, PeerSelector.WithId(peer.id)),

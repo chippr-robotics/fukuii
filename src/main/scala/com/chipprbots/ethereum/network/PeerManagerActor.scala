@@ -266,6 +266,24 @@ object PeerManagerActor:
       */
     private val wrongNetworkNodes = new WrongNetworkExclusions(maxBlacklistedNodes)
 
+    /** Every live PeerActor whose PeerHandshakeSuccessful we processed: its handshake peer ID and node ID. Subscribers
+      * (NetworkPeerManagerActor, PendingTransactionsManager, ...) register a peer under that ID on the handshake event
+      * whether or not we promote it, so a rejected handshake (excluded node, TooManyPeers, AlreadyConnected) must still
+      * end with PeerDisconnected under that ID, or each crawler redial leaves a permanent entry behind. An entry lives
+      * until the ref terminates, so the map is bounded by the number of live peer actors.
+      */
+    private val handshakeIdsByRef =
+      mutable.Map.empty[typed.ActorRef[PeerActor.Command], (PeerId, ByteString)]
+
+    /** True if a live connection other than `ref` is known under `nodeId`, promoted or not. */
+    private def nodeIdOwnedElsewhere(
+        nodeId: ByteString,
+        ref: typed.ActorRef[PeerActor.Command],
+        connectedPeers: ConnectedPeers
+    ): Boolean =
+      connectedPeers.hasOtherWithNodeId(nodeId, ref) ||
+        handshakeIdsByRef.exists { case (r, (_, nid)) => r != ref && nid == nodeId && connectedPeers.isTracked(r) }
+
     private def isExcludedWrongNetwork(nodeId: ByteString): Boolean =
       wrongNetworkNodes.isExcluded(nodeId, System.currentTimeMillis())
 
@@ -759,6 +777,8 @@ object PeerManagerActor:
           Some(Behaviors.same)
 
         case EvictGenesisHeadPeerCmd(peerId, clientId) =>
+          if connectedPeers.getPeer(peerId).isEmpty then
+            log.debug("GENESIS_HEAD_EVICT: {} is no longer connected; nothing to evict", peerId.value.take(16))
           connectedPeers.getPeer(peerId).foreach { peer =>
             val nodeIdOpt = peer.nodeId
             val nodeIdHex = nodeIdOpt.map(n => Hex.toHexString(n.toArray)).getOrElse("")
@@ -904,6 +924,13 @@ object PeerManagerActor:
             consecutiveTcpFailures.remove(ip)
       }
       val (terminatedPeersIds, newConnectedPeers) = connectedPeers.removeTerminatedPeer(ref)
+      // A handshake we saw but did not promote: subscribers know it only under its handshake ID, which
+      // removeTerminatedPeer (keyed on the pending path ID) never reports.
+      handshakeIdsByRef.remove(ref).foreach { case (handshakeId, nodeId) =>
+        if !terminatedPeersIds.exists(_ == handshakeId) && !nodeIdOwnedElsewhere(nodeId, ref, newConnectedPeers) then
+          log.debug("REJECTED_HANDSHAKE_GONE: publishing PeerDisconnected for {} ref={}", handshakeId, ref)
+          peerEventBus ! PublishCmd(PeerEvent.PeerDisconnected(handshakeId))
+      }
       terminatedPeersIds.foreach { peerId =>
         peerStatusCache = peerStatusCache - peerId
         // Pending peers have path-based IDs (non-hex). Only handshaked peers have real hex node
@@ -955,6 +982,57 @@ object PeerManagerActor:
         case _ =>
       val isMaintained =
         handshakedPeer.nodeId.exists(nid => maintainedPeersByNodeId.contains(Hex.toHexString(nid.toArray)))
+      val isTrusted =
+        handshakedPeer.nodeId.exists(nid => trustedPeersByNodeId.contains(Hex.toHexString(nid.toArray)))
+      if !connectedPeers.isTracked(handshakedPeer.ref) then
+        // The PeerActor published PeerHandshakeSuccessful and then stopped (TCP closed right after STATUS, as the
+        // enrscout crawler does) and its termination was processed first: the death-watch notification comes straight
+        // here, while the handshake event takes an extra hop through the event bus. Promoting it now would leave a
+        // handshaked entry whose actor is gone and whose termination will never arrive again: it held a slot, blocked
+        // re-dials of the node ID, and was "evicted" every ~70 s by the genesis-head check with DisconnectPeer going to
+        // dead letters (Sepolia v0.9.6).
+        log.info(
+          "STALE_HANDSHAKE: ignoring handshake of {} from {}: its peer actor has already terminated",
+          handshakedPeer.id.value.take(16),
+          handshakedPeer.remoteAddress
+        )
+        // Subscribers that registered the handshake must drop it again, unless another live connection to the same
+        // node ID (handshaked, or pending with its handshake seen) owns that peer ID.
+        if !handshakedPeer.nodeId.exists(nodeIdOwnedElsewhere(_, handshakedPeer.ref, connectedPeers)) then
+          peerEventBus ! PublishCmd(PeerEvent.PeerDisconnected(handshakedPeer.id))
+        listening(connectedPeers)
+      else
+        handshakedPeer.nodeId.foreach(nid => handshakeIdsByRef.update(handshakedPeer.ref, (handshakedPeer.id, nid)))
+        handleLiveHandshake(handshakedPeer, isMaintained, isTrusted, host, connectedPeers)
+
+    private def handleLiveHandshake(
+        handshakedPeer: Peer,
+        isMaintained: Boolean,
+        isTrusted: Boolean,
+        host: String,
+        connectedPeers: ConnectedPeers
+    ): Behavior[Command] =
+      if handshakedPeer.incomingConnection && !isMaintained && !isTrusted &&
+        handshakedPeer.nodeId.exists(isExcludedWrongNetwork)
+      then
+        // Dial exclusion only stops OUR dials. A node excluded by node ID (wrong network #88, or a genesis-head crawler
+        // evicted under spec 011) must not take an inbound slot back for the rest of its exclusion either: reject it
+        // as soon as the handshake names it, with no new grace period. Outbound handshakes are already gated in
+        // connectWith, where an explicit operator dial may bypass the exclusion.
+        log.info(
+          "EXCLUDED_PEER_REJECTED: inbound node={} host={} is excluded; disconnecting",
+          handshakedPeer.id.value.take(16),
+          host
+        )
+        handshakedPeer.ref ! PeerActor.DisconnectPeer(Disconnect.Reasons.UselessPeer)
+        listening(connectedPeers)
+      else handleTrackedPeerHandshake(handshakedPeer, isMaintained, connectedPeers)
+
+    private def handleTrackedPeerHandshake(
+        handshakedPeer: Peer,
+        isMaintained: Boolean,
+        connectedPeers: ConnectedPeers
+    ): Behavior[Command] =
       snapGoodPeers.foreach { store =>
         if handshakedPeer.nodeId.exists(nid => store.markConnected(Hex.toHexString(nid.toArray))) then store.save()
       }
