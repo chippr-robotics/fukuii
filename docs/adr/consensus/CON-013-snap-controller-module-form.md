@@ -48,13 +48,22 @@ Every module PR has two commits.
 
    Exclusive vars become private to the trait. The only body-adjacent edit allowed is `val` → `lazy val`/`def`.
 
-Acceptance per module PR:
-- **(a)** No module self-type names the concrete impl class (grep).
-- **(b)** At least one unit test mixes the module into a stub of its state interface.
-- **(c)** The interface member count is recorded in the PR and the routing doc, and may not grow without
-  justification.
-- **(d)** No concrete `val` in a module trait, and `var` initializers on an allow-list (grep). This rules out the
-  trait-before-class initialization hazard.
+Acceptance per module PR is scripted (`scripts/snap-split/`, the required CI job `snap-split-verify`) and checked on
+**every commit**:
+- **(a)** No mention of the concrete impl class in any module file after commit 2.
+- **(b)** At least one Tier 1 unit test mixes the module into a stub of its state interface, capabilities and Api
+  traits, and exercises a body that reads **and** writes that state.
+- **(c)** Three numbers are recorded in the PR and the routing doc: the `<Module>State` member count, the Api members
+  required, and the member count of each shared capability trait. None may grow without justification.
+- **(d)** No trait-initialization hazard, checked at member level:
+  - no top-level statements and no concrete member `val`;
+  - member `var` initializers limited to literals, empty collections and companion constants.
+
+  This also applies to commit 1, because even a byte-identical move into a trait can reorder initialization.
+- `val` → `lazy val`/`def` is allowed only for **pure** initializers, since laziness shifts side effects in time.
+  Impure initializers stay in the core, behind an abstract `def`.
+- Calls into another module, or into code not yet extracted, go through that callee's `<Callee>Api` trait. Those
+  members count towards (c).
 
 The coordinators follow the same rule, with no self-type naming a `*CoordinatorImpl`.
 

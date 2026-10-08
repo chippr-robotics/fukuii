@@ -24,18 +24,47 @@ spec still reads correctly if that working file goes away. Additions made while 
 
 ## R1. Measured size (the issue's "~2k lines" is stale)
 
-| File | staging@9a6681cc0 | after PR #1501 (`fix/snap-memory-bounds`) |
-|---|---|---|
-| `snap/SNAPSyncController.scala` | **6,646** (impl class L53–5669 ≈ 5,600; companion and config ≈ 980) | 6,779 |
-| `snap/actors/TrieNodeHealingCoordinator.scala` | 2,900 | 2,900 |
-| `snap/actors/StorageRangeCoordinator.scala` | 2,273 | 2,288 |
-| `snap/actors/AccountRangeCoordinator.scala` | 2,193 | 2,195 |
-| `snap/actors/ByteCodeCoordinator.scala` | 842 | 870 |
-| **Total in scope** | **14,854** | **15,032** |
+| File | staging@9a6681cc0 | #1501 branch snapshot (read 2026-10-08) | **post-#1501 staging (`d23932524`; #1501 merged as `dfa4a8836`, 2026-10-08 17:03Z)** |
+|---|---|---|---|
+| `snap/SNAPSyncController.scala` | 6,646 (impl class L53–5669 ≈ 5,600; companion and config ≈ 980) | 6,779 | **6,829** (impl L53–5794; companion from L5795) |
+| `snap/actors/TrieNodeHealingCoordinator.scala` | 2,900 | 2,900 | **2,900** |
+| `snap/actors/StorageRangeCoordinator.scala` | 2,273 | 2,288 | **2,288** |
+| `snap/actors/AccountRangeCoordinator.scala` | 2,193 | 2,195 | **2,220** |
+| `snap/actors/ByteCodeCoordinator.scala` | 842 | 870 | **870** |
+| **Total in scope** | 14,854 | 15,032 | **15,107** |
 
-PR #1501 also adds `snap/SnapIntakeBudget.scala` (161), `snap/SnapHeapWatchdog.scala` (156) and
-`snap/GatedTaskFileReplay.scala` (59). All three are already separate files; this spec places them and does not split
-them (R11).
+#1501 also adds three files: `snap/SnapIntakeBudget.scala` (161), `snap/SnapHeapWatchdog.scala` (**230** as merged;
+the branch snapshot had 156) and `snap/GatedTaskFileReplay.scala` (59). All three are already separate files. This
+spec places them and does not split them (R11).
+
+**[016] T001 result (done 2026-10-08).** These symbol anchors were re-measured on post-#1501 staging:
+
+| Symbol | Line |
+|---|---|
+| `syncing` | starts at 1061 (`bootstrapping` starts at 2385; there are helper defs between them, as at baseline) |
+| `bootstrapping` | 2385 |
+| `handleCLPivotHint` | 2678 |
+| `startSnapSync` | 2701 |
+| `launchAccountRangeWorkers` | 3696 |
+| `healingFrontierStorageOpt` | 4084 |
+| `startStateHealing` | 4095 |
+| `startStateHealingWithInterleave` | 4183 |
+| `frontierPersistenceEnabled =` | 4127, 4207 |
+| `refreshPivotInPlace` | 4515 |
+| `completePivotRefreshWithStateRoot` | 4785 |
+| `restartSnapSync` | 4990 |
+| `wakeFromDormant` | 3507 |
+| `enterDormantMode` | 3459 |
+| `onStop` | 832 |
+| `stopSnapOnlySchedules` | 863 |
+| `stopStateSyncChildren` | 888 |
+| `idle` | 905 |
+| `.start() // #1378` | 6444 |
+| `prunedHealVerification` parse | 6658 |
+| TD-PROXY-GAP guard | `NetworkPeerManagerActor.scala:798` (unchanged) |
+
+There are still 38 `currentPhase ==` tests in the file, and 77 `private var`s (76 + `heapWatchdog`). The rest of this
+document keeps the baseline (`9a6681cc0`) line numbers. Search by symbol.
 
 ## R2. Headline findings
 
@@ -187,6 +216,11 @@ This table counts the reset trio as part of DOWNLOAD and DORMANT, which is why 4
 | failedPivotBlocks (476) | PIVOT-REFRESH, SYNCING(W) | PIVOT-REFRESH + syncing-arms |
 | healingWalkLocalOnly (504) | DORMANT(W), DOWNLOAD(W), HEALING | SHARED(3) |
 | snapServerPeerLastConnectAttemptMs (525) | PEER(W) | exclusive: PEER |
+
+**[016] Note on `calibratePivotTD`.** The cluster mapping above (copied from the report) counts it under
+PIVOT-SEL, which is why `bestEth68PeerForCalibration` shows as `SHARED(2)`. Spec 016 assigns `calibratePivotTD` to
+the Peer pool (M3) instead, because the only state it touches is `bestEth68PeerForCalibration`, and that var is
+PEER-owned. Under the spec's module map the var is therefore **exclusive to M3**. R14 uses the spec's assignment.
 
 **Exclusive to one module (18)**:
 - PEER (8): `lastSnapExclusions`, `lastSnapExclusionLogMs`, `pendingDisconnectedPeers`, `snapPeerEvictionStarted`,
@@ -533,23 +567,29 @@ The report's issue table, extended **[016]** with #1502, #1503 and the project t
 | orphan "force-completed with deferred merkleization → starting healing" log (L2260) | wording is misleading; reachable only on a stale-cursor resume | **DownloadSupervisor** (M11), CHASE-QUEUE | — |
 | `MinPivotBlock` handled only in idle | dropped in other behaviours | **PivotSelector** (M8), relates to #1434 | — |
 
-## R11. [016] PR #1501 (spec 014) types in the module map
+## R11. [016] PR #1501 (spec 014) types in the module map, as merged
 
-This spec is rebased on PR #1501 as it stands on `fix/snap-memory-bounds` (open, not yet merged on 2026-10-08). If
-#1501 changes before it merges, T001 re-checks this table.
+**Re-checked against the merged commit `dfa4a8836` (T001).** The merged version adds, on top of the branch snapshot
+first read for this spec:
+- a watchdog **escape policy**: `HeapWatchdogEscapePolicy`, the `queuesEmpty` probe and `onHeapWatchdogEscape`,
+  which WARNs when a pause is ineffective and force-releases after `heap-watchdog-max-pause`;
+- two config keys;
+- 25 more lines in ARC.
+
+All the additions sit in elements this table already places.
 
 | #1501 element | Kind | Target module |
 |---|---|---|
-| `SnapIntakeBudget` (new file) | shared admission gate (atomics) | stays its own file; the controller-owned `intakeBudget` val is carried by **CoordinatorHandles** (P1) into every spawn |
-| `SnapHeapWatchdog` (new file), `heapWatchdog` var, `ensureHeapWatchdog`, `stopHeapWatchdog`, `onHeapPressureChange` | JVM-wide JMX listener | **SyncLifecycle** (M9). Call sites unchanged: start with coordinators, stop in `onStop` and `stopSnapOnlySchedules` only |
-| `GatedTaskFileReplay` (new file), `runGatedReplay`, `RecoveryReplayPausedRetry` | chunked, gated recovery reader | **ResumePlanner** (M5), which owns the accounts-complete recovery streams |
-| `IncrementalContractData` release on drop (idle arm and `syncing` arm) | budget bookkeeping | the idle arm stays in the shell; the `syncing` arm moves with **DownloadSupervisor** (M11) |
+| `SnapIntakeBudget` (new file) | shared admission gate (atomics) | stays its own file. The controller-owned `intakeBudget` val is exposed to modules as an **abstract `def intakeBudget: SnapIntakeBudget` in `CoordinatorHandles`**, implemented by the core (P1), and carried into every spawn |
+| `SnapHeapWatchdog` (new file), `heapWatchdog` var, `ensureHeapWatchdog`, `stopHeapWatchdog`, `onHeapPressureChange`, **`onHeapWatchdogEscape`, `HeapWatchdogEscapePolicy`** | JVM-wide JMX listener + escape policy | **SyncLifecycle** (M9). Call sites unchanged: start at the two coordinator-spawn clusters (`startSnapSync`, `launchAccountRangeWorkers`), stop in `onStop` and `stopSnapOnlySchedules` only |
+| `GatedTaskFileReplay` (new file), `runGatedReplay`, `RecoveryReplayPausedRetry` (1 s) | chunked, gated recovery reader | **ResumePlanner** (M5), which owns the accounts-complete recovery streams |
+| `IncrementalContractData` release on drop (idle arm and `syncing` arm) | budget bookkeeping | the idle arm stays in the shell; the `syncing` arm moves with **DownloadSupervisor** (M11). Pinned in S0d (T025) |
 | `AddByteCodeTasks(skipPresent)` | the presence check for replayed codeHashes moved into `ByteCodeCoordinator` | **ByteCodeCoordinator** (C-B1) |
-| `StorageTaskFile.foreachEntry` (moved from ARC) | shared reader | stays in `StorageTaskFile` |
+| `StorageTaskFile.foreachEntry` (moved from ARC) | shared reader | stays in `StorageTaskFile`. The file format is unchanged; S0c's goldens are the evidence (T001b) |
 | `StorageTask` shared full-range boundaries | allocation | unchanged |
-| config `max-pending-storage-tasks`, `max-pending-bytecode-hashes`, `heap-watchdog-{enabled,pause-fraction,resume-fraction,poll-interval}` | `sync.snap-sync` keys | routing doc: Lifecycle (watchdog) and CoordinatorHandles/intake (budget) |
-| metrics `snapsync.memory.{storage,bytecode}.pending`, `snapsync.memory.intake.paused`, `snapsync.memory.heap.pressure`, `snapsync.memory.oldgen.postgc.{bytes,ratio}`, `snapsync.{storage,bytecode}.inflight.requests` | gauges | routing doc |
-| log tag `[SNAP-HEAP]`; gate state in `[ACCOUNT-IDLE]` | logs | routing doc |
+| config `max-pending-storage-tasks`, `max-pending-bytecode-hashes`, `heap-watchdog-{enabled,pause-fraction,resume-fraction,poll-interval,ineffective-after,max-pause}` | `sync.snap-sync` keys | routing doc: Lifecycle (watchdog) and download/intake (budget) |
+| metrics `snapsync.memory.storage.pending.gauge`, `snapsync.memory.bytecode.pending.gauge`, `snapsync.memory.intake.paused.gauge`, `snapsync.memory.heap.pressure.gauge`, `snapsync.memory.oldgen.postgc.bytes.gauge`, `snapsync.memory.oldgen.postgc.ratio.gauge`, `snapsync.storage.inflight.requests.gauge`, `snapsync.bytecode.inflight.requests.gauge` | gauges | routing doc |
+| log tag `[SNAP-HEAP]` (pause, resume, ineffective, force-release); gate state in `[ACCOUNT-IDLE]` | logs | routing doc |
 
 ## R12. [016] Coordinators — preliminary characterization (completed in T060)
 
@@ -640,12 +680,42 @@ No `src/it` spec touches the snap package.
 - No test of `handleHandshakedPeersBootstrapReactivity`.
 - Each of the six `SNAP*Spec` controller fixtures builds its own stubbed NPMA. Fixture work comes first (S0d).
 
+### R13a. [016] What CI actually runs (corrects the earlier "Tier 1/2" wording)
+
+- **`testEssential` (Tier 1)** is `testOnly -- -l SlowTest -l IntegrationTest -l SyncTest -l DisabledTest`
+  (`build.sbt` ~L527–534). It runs in the CI job **"Test and Build (JDK 25, Scala 3.3.8)"** (`ci.yml` ~L90). This is
+  the **only test gate on PRs to `staging`**.
+- **`testStandard` (Tier 2)** also passes `-l SyncTest` (`build.sbt` ~L544). Its coverage job is **skipped** for PRs
+  to `staging` and for pushes to `staging` (`ci.yml` ~L110: `if: github.base_ref != 'staging' && …`). It runs only
+  on PRs to `main`.
+- **No workflow runs `SyncTest`-tagged tests.**
+
+Applied to the R13 suites (grep of tags, post-#1501 staging):
+
+| Suite | Tag | Runs in the staging PR gate? |
+|---|---|---|
+| `SyncControllerSpec` (~35 tests, incl. task #68 at `:762`) | `SyncTest` | **no** |
+| `PivotHeaderBootstrapSpec` (~9) | `SyncTest` | **no** |
+| `SnapServingActorSpec` (~5) | `SyncTest` | **no** |
+| every other R13 suite: all `SNAP*Spec` controller suites, all coordinator, worker and heal-verification suites, the storage specs, `NetworkPeerManagerSpec`, the #1501 specs | untagged (no excluding tag) | yes (Tier 1) |
+
+So until S0e adds a job, `SyncControllerSpec` (including the task #68 test) is not run by any PR check. This explains
+why the docs-only CI runs on this branch never showed #68: run `c311169f9` had 5,258 passed and 1 failed; run
+`cfb1d9eb6` had 5,287 passed and 0 failed. **S0e** adds a SNAP-scoped `SyncTest` job (T007), and the slice checklist
+requires it.
+
+**Known flake.** `StaleVerificationWalkSpec` (TNHC, Tier 1) has 4 wall-clock `eventually(timeout(5.seconds))` blocks
+at `:89`, `:95`, `:122` and `:129` (project task #85). It failed once on a docs-only commit (run for `c311169f9`:
+"should hand off to lazy healing, never declare clean, once re-pegs keep superseding the verification walk",
+`:129`, `0 was not equal to 1`). S0g stabilises it, test-only, before C-H0. Until then the flake policy (spec
+FR-039) applies.
+
 **[016] Test baseline, task #68 (user, 2026-10-08)**: the one known pre-existing failure on staging is
 `SyncControllerSpec` "leave SNAP's resume alone once SNAP has taken over the best block of an upgraded node"
 (`src/test/scala/com/chipprbots/ethereum/blockchain/sync/SyncControllerSpec.scala:762`). It is the only failure a
-slice may show (spec FR-033). An earlier draft guessed it was a fast-sync timing test from
-`Main-Glamsterdam-Soak.md`; that guess was wrong. T002 confirms the name against the S0a CI run and records the R13
-suite pass counts.
+slice may show (spec FR-033), and only in the S0e `SyncTest` job, because Tier 1 does not run it (R13a). An earlier draft guessed it was a fast-sync timing test from
+`Main-Glamsterdam-Soak.md`; that guess was wrong. T002 confirms it in the first S0e job run and records the per-suite counts (total/passed/ignored)
+for every R13 suite, from both the Tier 1 job and the S0e job.
 
 ## R14. [016] Module state interfaces: baseline sizes (input to FR-016 (c))
 
@@ -685,3 +755,44 @@ grow without a justification line in the PR.
 | M11 DownloadSupervisor | `preservedTaskFiles`, `launchedAccountGeneration`, `currentCarrySource` | `currentPhase`(W), `pivotBlock`, `stateRoot`(W), `requestTracker`(W), `progressMonitor` | `accountRangeCoordinator`(W), `bytecodeCoordinator`(W), `storageRangeCoordinator`(W) | `resumedStaleCursors`(W), `accountsComplete`, `bytecodePhaseComplete`, `storagePhaseComplete`, `storagePhaseForceCompleted`, `forceCompleteStorageSent`(W) | `mptStorage`(W), `coordinatorGeneration`, `preservedRangeProgress`(W), `preservedAtPivotBlock`(W), `healingValidatedRoot`, `lastAccountProgressMs`(W), `lastAccountTasksCompleted`(W), `lastAccountsDownloaded`(W) | 22 → **8** |
 
 M1 (pure policy objects) has no state interface. The coordinator modules' interfaces are derived in T060.
+
+### R14a. [016] Callee coupling: `<Callee>Api` baseline (input to FR-016 (c), prism C5)
+
+A module that calls a method of another module, or of code not yet extracted, must name that callee's
+`<Callee>Api` trait in its self-type. The callee is then reachable only through declared members, and each member
+counts towards the caller's coupling.
+
+The table below was derived on post-#1501 staging, using the same regex method as R3:
+- Every top-level `def` span in the impl class (from one `def` to the next at the same indent) is scanned for calls
+  to defs that the module map assigns to other modules.
+- The scan over-attributes: class-level vals and closures between two defs are counted in the preceding def's span.
+- So these counts are an **upper-bound baseline**. Each module PR records the compiler-confirmed set, which replaces
+  the number here.
+
+Calls into code that has not been extracted yet are declared against the **future** owner's Api trait, and the
+current core implements it. For example, M7 names `PivotRefreshApi` (`refreshPivotInPlace`,
+`completePivotRefreshWithStateRoot`) and `LifecycleApi` (`enterDormantMode`, `recordCriticalFailure`) long before
+M9/M10 move.
+
+| Module | Calls into other modules (→ `<Callee>Api` members) | Count | Calls into core / unassigned (incl. `syncing`, `idle`, …) |
+|---|---|---|---|
+| M2 | M5: `getOrCreateMptStorage` | 1 | `start` |
+| M3 | M4: `completed`; M9: `restartSnapSync`, `wakeFromDormant` | 3 | `handshakedPeers`, `idle`, `peersToDownloadFrom` |
+| M4 | M3: `calibratePivotTD`; M5: `accountsCompleteTaskFilePaths`, `getOrCreateMptStorage`, `sweepSupersededTaskFiles`; M6: `dropHealedCodeNowPresent`, `queueHealedCode`; M8: `startSnapSync`, `updateBestBlockForPivot`; M9: `restartSnapSync`, `stopSnapOnlySchedules`, `stopStateSyncChildren` | 11 | `onStop`, `peersToDownloadFrom`, `start`, `syncing` |
+| M5 | M2: `validateState`; M3: `calibratePivotTD`, `handleHandshakedPeersRateTracking`, `startSnapPeerEviction`; M4: `completeSnapSync`, `completed`, `startPathPublish`; M6: `maybeRequestHealingServeRoot`; M8: `bootstrapping`, `startSnapSync`; M9: `restartSnapSync`, `stopSnapOnlySchedules`; M10: `completePivotRefreshWithStateRoot`, `refreshPivotInPlace` | 14 | `handshakedPeers`, `start`, `syncing` |
+| M6 | M2: `validateState`; M3: `currentNetworkBestFromSnapPeers`, `snapServingPeers`, `startSnapServerPeersScheduler`; M4: `completedWithBackfill`, `finalizeSnapSync`; M5: `getOrCreateMptStorage`; M10: `completePivotRefreshWithStateRoot`, `refreshPivotInPlace`; M11: `checkAllDownloadsComplete`, `requestByteCodes` | 11 | `peersToDownloadFrom`, `start`, `syncing` |
+| M7 | M2: `validateState`; M4: `completeSnapSync`, `finalizeSnapSync`; M9: `enterDormantMode`, `recordCriticalFailure`; M10: `completePivotRefreshWithStateRoot`, `refreshPivotInPlace` | 7 | `handshakedPeers`, `start` |
+| M8 | M3: `calibratePivotTD`, `currentNetworkBestFromSnapPeers`, `evictNonSnapPeers`, `flushPeerDisconnects`, `handleHandshakedPeersBootstrapReactivity`, `handlePeerDisconnectedDebounced`, `pollHandshakedPeers`, `startSnapPeerEviction`, `startSnapServerPeersScheduler`; M4: `completed`, `startChainDownloader`; M5: `getOrCreateMptStorage`, `runGatedReplay`; M6: `startStateHealing`; M7: `scheduleStagnationChecks`; M9: `ensureHeapWatchdog`, `enterDormantMode`; M11: `checkAllDownloadsComplete`, `requestByteCodes`, `startAccountRangeSync` | 20 | `handshakedPeers`, `idle`, `onStop`, `peersToDownloadFrom`, `start`, `syncing` |
+| M9 | M2: `validateState`; M3: `flushPeerDisconnects`, `handleHandshakedPeersRateTracking`, `handlePeerDisconnectedDebounced`, `pollHandshakedPeers`; M4: `completed`, `completedWithBackfill`, `finalizeSnapSync`; M6: `resetHealedCodeHold`; M8: `handleCLPivotHint`, `startSnapSync`; M10: `refreshPivotInPlace` | 12 | `handshakedPeers`, `onStop`, `syncing` |
+| M10 | M2: `validateState`; M3: `bestSnapProbeTarget`, `currentNetworkBestFromSnapPeers`; M4: `completeSnapSync`, `completed`, `finalizeSnapSync`, `startChainDownloader`; M6: `anchorPivotBeforeLazyHandoff`, `maybeRequestHealingServeRoot`; M8: `startSnapSync`, `updateBestBlockForPivot`; M9: `restartSnapSync` | 12 | `peersToDownloadFrom`, `syncing` |
+| M11 | M3: `snapServingPeers`, `startSnapPeerEviction`, `startSnapServerPeersScheduler`; M4: `completeSnapSync`, `completed`, `startChainDownloader`; M5: `clearStorageDoneMarkers`, `deserializeSnapProgress`, `getOrCreateMptStorage`; M6: `startStateHealing`; M7: `maybeRestartIfAccountStagnant`, `scheduleStagnationChecks`; M9: `ensureHeapWatchdog` | 13 | `idle`, `peersToDownloadFrom`, `start` |
+
+**Shared capability traits are capped too.** Each one starts at the member count it has when it is created:
+- `SnapSharedState`: 5 hubs (getters, plus setters where written);
+- `CoordinatorHandles`: set in P1, including the abstract `def intakeBudget`;
+- `PhaseFlags`: 9 flags + `reset(kind)`;
+- `SnapControllerEnv`: set in T041a.
+
+A PR that adds a member to any of them states the new count and a justification line, and the routing doc's cap is
+updated in the same PR (FR-016 (c)).
+

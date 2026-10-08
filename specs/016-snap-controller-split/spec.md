@@ -129,10 +129,9 @@ None names the Sepolia node.
 - **FR-002** Every SNAP phase is a separately targetable module, meaning:
   - **Controller**: one file per module in the map (plan.md §Module map).
   - **Coordinators**: one file per concern inside each coordinator (plan.md §Coordinator modules).
-- **FR-003** **Sequencing gate**: no slice except S0a–S0d and the routing doc may merge before PR #1501 (spec 014)
-  merges. **P1 starts as soon as #1501 merges**; it does not wait for the Sepolia node to reach head (user decision,
-  2026-10-08). The module map already places #1501's new types (research.md R11). T001 re-checks that placement
-  against #1501 as it merged.
+- **FR-003** **Sequencing gate: met.** PR #1501 (spec 014) merged on 2026-10-08 (`dfa4a8836`). The S0 slices
+  (S0a–S0g) land first. P1 starts as soon as they have merged; it does not wait for the Sepolia node to reach head
+  (user decision, 2026-10-08). T001 (re-check against #1501 as merged) is done; see research.md R1 and R11.
 
 ### Phase 0
 
@@ -147,13 +146,19 @@ None names the Sepolia node.
   `stopStateSyncChildren` today), `broadcastPeerUnavailable`, `pivotRefreshed(root)` and the response fan-out. It
   carries `intakeBudget` into the spawn helpers. It replaces the copied stop/clear lines at
   `enterDormantMode`/`restartSnapSync`/`stopStateSyncChildren` and the per-site `foreach` fan-outs. There is still no
-  `ctx.watch` and no change to supervision.
+  `ctx.watch` and no change to supervision. Modules see the #1501 budget only through an **abstract
+  `def intakeBudget: SnapIntakeBudget`** declared in `CoordinatorHandles` and implemented by the core. Before P1, S0d
+  pins the fan-outs it replaces (T026).
 - **FR-011 `PhaseFlags` + `reset(kind)` (P2).** One holder for the phase-complete and force-complete flags:
   `accountsComplete`, `bytecodePhaseComplete`, `storagePhaseComplete`, `storagePhaseForceCompleted`,
   `bytecodeForceCompleted`, `forceCompleteStorageSent`, `awaitingHealedCode`, `healedCodeWaitExhausted` and
   `resumedStaleCursors`. A single `reset(kind: Start | Restart | Wake | Dormant)` replaces the reset writes in
   `startSnapSync`, `restartSnapSync`, `wakeFromDormant` and `enterDormantMode`. A single `cancelSyncTimers(keys)`
-  replaces the three hand-copied cancel lists, and each call site passes its own list, unchanged.
+  replaces the three hand-copied cancel lists, and each call site passes its own list, unchanged. The stagnation
+  clocks (`storageTailBaseline`, `lastStorageProgressMs`, `lastAccountProgressMs`, `lastAccountTasksCompleted`,
+  `lastAccountsDownloaded`, `lastBytecodeProgress*`) are **not** added to `PhaseFlags`. P2 leaves their reset writes
+  inline at today's sites. M7 replaces those writes with `watchdog.reset(reason)`, so `PhaseFlags` stays the nine
+  flags.
 - **FR-012 Reset sets are kept exactly.** P2's per-kind field sets equal today's write sets once each write is
   classified as reset or set (research.md R3a). A difference that looks like a bug is recorded in CHASE-QUEUE and not
   fixed in P2.
@@ -167,7 +172,10 @@ None names the Sepolia node.
   is handled. That removes the 28 `currentPhase ==` tests inside `syncing`. The arms for a given message type keep
   their original relative order, so a message that matched guarded arm A before unguarded arm B still does.
   `currentPhase` stays a var with the same writers, because status, metrics and `GetStatus` read it. Turning each
-  phase into its own Pekko `Behavior` value is **not** part of P4; it is a later option (plan.md D3).
+  phase into its own Pekko `Behavior` value is **not** part of P4; it is a later option (plan.md D3). Before P4a, a
+  table-driven Command × phase test from S0d (T027) pins today's dispatch for every Command in every `SyncPhase`,
+  including catch-all fall-through (for example `MinPivotBlock` in `syncing` logs "Unhandled message in syncing
+  state").
 
 ### Module extraction (one module per PR)
 
@@ -187,38 +195,52 @@ None names the Sepolia node.
   The coordinators follow (C-B1, C-A1…, C-S1…, C-H1…, C-X). The plan gives each module's target file, owned state,
   Commands, config keys, metrics and log tags.
 - **FR-016 Move, then narrow (both required, in the same PR).** Decision recorded in ADR CON-013.
-  - **Commit 1, the move.** The module goes into a trait in its own file (plan.md D1). Its method bodies and the
-    declarations of vars it owns exclusively move **unchanged**. The self-type may temporarily name
-    `SNAPSyncControllerImpl`. The only allowed edits are the `trait`/file header, imports, and visibility widening
-    (`private` → `private[snap]`) where another module calls the member. The commit carries the grep/diff recipe
-    that shows the moved bodies are byte-identical (plan.md §Move verification).
+  - **Commit 1, the move.**
+    - The module goes into a trait in its own file (plan.md D1). Its method bodies, and the declarations of vars it
+      owns exclusively, move **unchanged**.
+    - The self-type may temporarily name `SNAPSyncControllerImpl`.
+    - The only allowed edits are the `trait`/file header, imports, and visibility widening (`private` →
+      `private[snap]`) where another module calls the member.
+    - Rule (d) applies **already in commit 1**: a declaration whose initializer is not allowed by (d) does not move
+      and stays in the core.
   - **Commit 2, the narrowing (required).** The self-type is replaced by
-    `self: <Module>State & <capability traits> =>`:
-    - `<Module>State` is an abstract interface listing exactly the shared fields the module reads or writes, as
-      derived from the var × method matrix (research.md R14) and confirmed by the compiler.
-    - The capability traits are `SnapSharedState` (the hubs), `CoordinatorHandles`, `PhaseFlags`, the controller
-      environment, and the API traits of any other module it calls.
+    `self: <Module>State & <capability traits> & <Callee>Api… =>`:
+    - `<Module>State` lists exactly the shared non-hub fields the module reads or writes (research.md R14).
+    - The capability traits are `SnapSharedState` (the hubs), `CoordinatorHandles` (child refs and
+      `def intakeBudget`), `PhaseFlags` and `SnapControllerEnv`.
+    - There is one `<Callee>Api` trait for every other module, or not-yet-extracted code, that this module calls
+      (research.md R14a). The core implements the Api traits of code that has not moved yet.
     - Exclusive vars become `private` state of the trait.
-    - Commit 2 may also turn a concrete `val` into a `lazy val` or `def` to satisfy (d). No other body change is
-      allowed.
-  - **Acceptance, per module PR:**
-    - **(a)** No module self-type names the concrete impl class:
-      `grep -rnE 'self: *SNAPSyncControllerImpl|this: *SNAPSyncControllerImpl' snap/controller/` is empty after the
-      narrowing commit. The same rule applies to the coordinator modules and their `*CoordinatorImpl` classes.
-    - **(b)** The module is unit-testable against a stub. The PR adds **at least one** test that mixes the module
-      trait into a stub implementing its state interface and capabilities, with no actor system beyond a
-      `BehaviorTestKit`/`ActorTestKit` where the capability needs one. The test is new; no existing assertion
-      changes.
-    - **(c)** Coupling is measured. The PR body and the routing doc record the module's interface size: the number
-      of members in `<Module>State`, plus the capability traits it requires. The number may never grow in a later PR
-      without a justification line in that PR. The research.md R14 baseline is the starting reference.
-    - **(d)** The trait-init hazard is ruled out by grep:
-      - A module trait has **no concrete `val`** that touches a self-type member: only `def` and `lazy val`. Check:
-        `grep -nE '^\s+(private(\[\w+\])? )?(override )?val ' <module files>` is empty.
-      - A trait `var` initializer is a literal or a companion constant only: every
-        `grep -nE '^\s+(private(\[\w+\])? )?var ' <module files>` hit matches the allow-list pattern in plan.md
-        D1.
-- **FR-017 Each slice ships on its own.** After any slice, staging compiles, every regression suite is green, and the
+  - **The only body-adjacent edit in commit 2 is `val` → `lazy val`/`def`, and only for a *pure* initializer.**
+    - Pure means no `ctx.`, `timers.`, `spawn`, `scheduleOnce`, metric registration, subscription, logging,
+      `intakeBudget`, I/O or other side effect.
+    - The PR lists each converted val with "pure: yes" and the reviewer's grep of its initializer.
+    - An impure initializer stays in the core, behind an abstract `def` in `<Module>State` or `SnapControllerEnv`.
+      Making it lazy would move its side effect in time.
+  - **Acceptance, per module PR.** All four checks are scripted (FR-038) and run on **every commit** of the PR.
+    - **(a)** No mention of the concrete impl class anywhere in the module's files, after commit 2: any occurrence of
+      `SNAPSyncControllerImpl` or `CoordinatorImpl` fails the check, whether in a self-type, a comment or across
+      lines. The same applies to coordinator modules.
+    - **(b)** The PR adds **at least one** Tier 1 unit test (not tagged `SyncTest`, `IntegrationTest`, `SlowTest` or
+      `DisabledTest`). The test mixes the module trait into a stub implementing its state interface, capabilities and
+      Api traits, and exercises a module body that both **reads and writes** `<Module>State`. A `BehaviorTestKit` or
+      `ActorTestKit` is used only where a capability needs one. No existing assertion changes.
+    - **(c)** Coupling is measured and ratcheted. The PR body and the routing doc record three numbers:
+      - the `<Module>State` member count;
+      - the Api members the module requires, summed over its `<Callee>Api` traits;
+      - the member count of each shared capability trait.
+
+      None may grow in a later PR without a justification line in that PR. The baselines are research.md R14
+      (state) and R14a (Api, upper bound).
+    - **(d)** No trait-initialization hazard, checked at **member level**, outside def bodies:
+      - A module trait has **no top-level statements**. Its member-level lines are only `def`, `lazy val`,
+        `private var`/`var` with an allowed initializer, `type`, `given`, `import`, `end` or comments.
+      - It has **no concrete `val`** at member level.
+      - Every member-level `var` initializer is a literal, an empty collection or a companion constant.
+      - Vals and vars local to a def body are ignored.
+
+      The check is the FR-038 script, which works on member indentation under scalafmt (two-space members in a
+      top-level trait), not a raw grep.- **FR-017 Each slice ships on its own.** After any slice, staging compiles, every regression suite is green, and the
   node can be released. No slice depends on a later slice to be correct.
 
 ### Pin tests (the acceptance criteria; they land first, S0a/S0b)
@@ -233,7 +255,11 @@ None names the Sepolia node.
 - **FR-022 `frontierPersistenceEnabled` wiring, both sites.** The flag is passed at the `TrieNodeHealingCoordinator`
   spawn in `startStateHealing` (`:4003`) and in `startStateHealingWithInterleave` (`:4083`). Test: through a
   coordinator-factory seam (FR-026), spawning healing by each route with `healing-frontier-persistence = true` passes
-  `frontierPersistenceEnabled = true`, and passes `false` when the key is false.
+  `frontierPersistenceEnabled = true`, and passes `false` when the key is false. The test also records the **full
+  spawn-argument tuple** on both routes and asserts it field by field. Every argument is covered, including
+  `visitedCap`, the parallelism and water-mark settings, `scopedHealVerification`, the `decoupledHeal*` settings,
+  `movingRootDeltaHeal` and `intakeBudget`. The two spawn blocks are about 85% identical, and the M6a dedupe must
+  keep both tuples exactly (T014).
 - **FR-023 `prunedHealVerification`.** Tests:
   - the default is `true`, both in the case class (`:6346`) and when the key is absent from config (`:6503–6505`);
   - `pruned-heal-verification = false` parses to `false`;
@@ -250,7 +276,13 @@ None names the Sepolia node.
   `spec-005`, `#1371`) in the test name, and the routing doc lists it.
 - **FR-026 Test seams.** S0b may add constructor-level test seams to `src/main`, defaulting to production behaviour:
   a `ChildFactories` parameter for the four coordinators and the ChainDownloader, following the `validatorFactory`
-  precedent. It adds no logic. S0b is "tests + seams", **not** test-only (plan.md Complexity Tracking).
+  precedent.
+  - Each factory takes today's `apply` argument list as merged with #1501, including `intakeBudget`.
+  - It also has a `heapWatchdogStart` seam (default `SnapHeapWatchdog.start`) and an optional injected
+    `SnapIntakeBudget` (default: built from config, as today). Without them, the S0d watchdog and budget pins cannot
+    be observed.
+
+  The seams add no logic. S0b is "tests + seams", **not** test-only (plan.md Complexity Tracking).
 
 ### Characterization tests (S0d, before the moves that need them)
 
@@ -260,6 +292,19 @@ None names the Sepolia node.
     namely child spawns and stops, persisted `AppStateStorage` flags, `GetStatus`, and the next `Start*` arguments;
   - **pivot refresh**: the messages sent to each child and the ChainDownloader, persisted anchors, and the probe
     commit or abort.
+
+  - **reset vs heap watchdog**: none of `restartSnapSync`, `wakeFromDormant` or `enterDormantMode` stops the heap
+    watchdog. Only `onStop` and `stopSnapOnlySchedules` do, observed through the `heapWatchdogStart` seam.
+  - **#1501 budget pins**:
+    - an `IncrementalContractData` dropped in `idle`, and one dropped in `syncing` with no coordinator, both release
+      their reserved credit (observed on the injected budget);
+    - `RecoveryReplayPausedRetry` is 1 s, and a closed gate delays the recovery stream by one retry under
+      `ManualTime`.
+  - **P1 fan-outs**: a peer disconnect sends the peer-unavailable message to all four coordinators that exist, and
+    each SNAP response type is routed to exactly its coordinator. This pins what `CoordinatorHandles` replaces.
+  - **P4 dispatch table**: a table-driven test over every Command × every `SyncPhase` in `syncing` records which arm
+    handles it, or that it falls through to the "Unhandled message in syncing state" catch-all (for example
+    `MinPivotBlock`).
 
   These tests assert **today's** behaviour, including anything that looks wrong. A shared `SnapControllerFixture`
   replaces the six copied stubbed-NPMA fixtures. Existing suites move to the shared fixture only if their assertions
@@ -280,26 +325,44 @@ None names the Sepolia node.
 - **FR-031 Zero behaviour change.** The same messages are sent to the same recipients in the same order, and the same
   timers are armed. Log messages and tags may move between files but do not change text. Metrics names do not change.
   Config keys do not change.
-- **FR-032 Regression suites are unchanged.** The suites are listed in research.md R13: controller, coordinators,
-  heal-verification family, storage, `SyncControllerSpec`; ETC/Hash and ETH/Path. Every one is green after each slice
-  with **no assertion changes**. A slice may change only test imports, fixture construction and visibility-driven
-  access. The diff must show this (T-review checklist).
-- **FR-033 Baseline failures are recorded, not hidden.** The one known pre-existing failure on staging (task #68) is
-  `SyncControllerSpec` "leave SNAP's resume alone once SNAP has taken over the best block of an upgraded node"
-  (`SyncControllerSpec.scala:762`). It is the **only** permitted failure. A slice is green if its failures are exactly
-  that test, or none. T002 confirms it against the S0a CI run.
+- **FR-032 Regression suites are unchanged, and that is checked by a script and by counts.**
+  - **No assertion edits.** The suites are those listed in research.md R13: controller, coordinators,
+    heal-verification family, storage, `SyncControllerSpec`; ETC/Hash and ETH/Path. A slice may change only test
+    imports and fixture construction. The FR-038 test-hunk check fails if any changed `src/test` hunk in an existing
+    suite touches assertion-bearing or scheduling code. Watched tokens include `should`, `must`, `shouldBe`, `===`,
+    `==`, `assert`, `assume`, `expect`, `intercept`, `fishForMessage`, `within`, `eventually`, `verify`, `taggedAs`,
+    `ignore`, `pending`, `cancel` and `timeout`/`interval`.
+  - **Per-suite counts.** Every PR body pastes the per-suite counts (total / passed / ignored) for every R13 suite,
+    from the Tier 1 job and from the S0e `SyncTest` job. They must equal the T002 baseline, apart from tests the PR
+    adds on purpose, which are listed by name.
+- **FR-033 Baseline failures are recorded, not hidden.**
+  - The one known pre-existing failure (task #68) is `SyncControllerSpec` "leave SNAP's resume alone once SNAP has
+    taken over the best block of an upgraded node" (`SyncControllerSpec.scala:762`). It is `SyncTest`-tagged, so it
+    runs only in the S0e job (research.md R13a).
+  - In the S0e job, a slice is green if its failures are exactly that test, or none.
+  - In the Tier 1 job, a slice is green with zero failures, subject to the flake policy (FR-039).
+
 - **FR-034 Moves and renames are separate.** A slice PR has:
   1. a move commit, or commits;
   2. the narrowing commit (required, FR-016);
-  3. **no** renames.
+  3. **no** renames, and no other cleanup.
+
+  A cleanup such as removing the dead `isStarting` parameter is its own small PR after the move (M8b).
 
   DFS → BFS wording is fixed afterwards in slice R1:
   - comments, scaladoc and test descriptions only;
   - `StateValidator`'s `walkAccountTrieDFS`/`walkStorageTrieDFS` are a real DFS and are **not** renamed;
   - the config key `healing-visited-cap` is **not** renamed. If the user later wants it renamed, the old key stays as
     a read alias.
-- **FR-035 No local builds.** No sbt or JVM runs on the soak host. CI is the compiler. Each slice PR is opened only
-  after CI is green on the branch.
+- **FR-035 No local builds; the real CI gates.** No sbt or JVM runs on the soak host. CI is the compiler. On PRs to
+  `staging` the gates are:
+  - **"Test and Build (JDK 25, Scala 3.3.8)"**: `compile-all`, scalafmt and `testEssential` (Tier 1). Tier 1
+    excludes `SlowTest`, `IntegrationTest`, `SyncTest` and `DisabledTest`.
+  - **the S0e SNAP `SyncTest` job.**
+  - **the FR-038 `snap-split-verify` job.**
+
+  Tier 2 (`testStandard`) is **skipped** for PRs to `staging` (`ci.yml` ~L110), and it also excludes `SyncTest`. No
+  slice may claim Tier 2 evidence. Each slice PR is opened only after all three jobs are green on the branch.
 - **FR-036 Second-specialist review.** Every PR is reviewed by a specialist other than its author:
   - `prism` for structure;
   - `vault` for persistence and resume slices (S0c, M5, C-A4, C-S2, C-S3, C-H1);
@@ -309,6 +372,26 @@ None names the Sepolia node.
   - `beacon` signs off on slices that move CL-pivot or Path-scheme code (M8, M10, M4 PathPublish).
 
   `loom` is not used: the actors are already Pekko Typed.
+- **FR-038 Verification tooling is a required CI job (S0f, before P1).**
+  - `scripts/snap-split/` ships with its own fixture-based self-tests. It runs as the CI job `snap-split-verify`,
+    which exits non-zero on failure, on **every commit** of a PR (`git rev-list base..HEAD`). A reviewer can re-run
+    it locally with no JVM.
+  - It implements:
+    - the moved-block and identical-body check for move commits (plan.md §Move verification);
+    - FR-016 (a) and (d);
+    - the FR-032 test-hunk check;
+    - the "no change under `src/main/resources`" and "goldens and pins untouched" checks;
+    - a print of the FR-016 (c) counts for the PR body.
+  - It must exist and be green before the first non-test slice (P1).
+- **FR-039 Flake policy.**
+  - A Tier 1 failure in a test outside the slice's scope may be re-run **once**.
+  - The slice is green only if:
+    - the re-run passes;
+    - the failing test's name is recorded with both run links;
+    - the per-suite counts of the passing run equal the baseline.
+  - The same test failing twice blocks the slice.
+  - `StaleVerificationWalkSpec` (4 wall-clock `eventually(5 s)`; project task #85) is the known case. S0g stabilises
+    it, test-only, before C-H0.
 - **FR-037 Sepolia hotfix line.**
   - The tag `snap-split-base` is cut on staging immediately before P1 merges.
   - While the Sepolia node is on fix-only builds, its hotfixes branch from that tag (or from the latest fix-only tag
@@ -365,9 +448,9 @@ None names the Sepolia node.
 
 ## Assumptions
 
-- PR #1501 merges in substantially its current form. T001 re-checks R11 if it changes.
-- CI runs `compile-all`, scalafmt and Tier 1/2 on each PR, which is enough to act as the compiler and regression gate
-  (the same assumption spec 014 makes).
+- PR #1501 has merged (`dfa4a8836`). The module map is re-checked against the merged code (T001, research.md R11).
+- The staging PR gate is Tier 1 only (research.md R13a). The S0e `SyncTest` job and the S0f `snap-split-verify` job
+  are added to cover what Tier 1 does not run, which is enough to act as the compiler and regression gate.
 - Mordor (Hash scheme, PoW) and Platåberget (Path scheme, PoS with a CL pivot) between them run every code path the
   split moves. Sepolia adds scale, not paths.
 - Traits with **required** narrowing are the module form (ADR CON-013). Turning a narrowed trait into a class is a
@@ -377,7 +460,7 @@ None names the Sepolia node.
 
 1. **Module form.** Traits for the moves, then **required** narrowing to per-module state interfaces with criteria
    (a)–(d) (FR-016; ADR `docs/adr/consensus/CON-013-snap-controller-module-form.md`).
-2. **Start time.** P1 starts as soon as #1501 merges. S0a–S0d come first. `snap-split-base` is cut just before P1
+2. **Start time.** P1 starts as soon as #1501 merges (#1501 merged 2026-10-08). S0a–S0g come first. `snap-split-base` is cut just before P1
    and governs the Sepolia hotfix line (FR-037).
 3. **Task #68.** It is `SyncControllerSpec` "leave SNAP's resume alone once SNAP has taken over the best block of an
    upgraded node" (`:762`), the baseline exception (FR-033). It is not the old fast-sync timing test.

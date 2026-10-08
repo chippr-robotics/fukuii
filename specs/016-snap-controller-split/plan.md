@@ -15,6 +15,8 @@ behaviour. The work runs in this order:
 1. **Pins and characterization (S0).** Pin tests for the five #1385 fixes, golden-bytes tests for every on-disk
    format, and characterization tests for the stagnation watchdog, the resets and pivot refresh. These land before
    any code moves.
+   S0 also adds the missing CI coverage: a SNAP `SyncTest` job (S0e), the scripted verification job (S0f), and a fix
+   for the `StaleVerificationWalkSpec` flake (S0g).
 2. **Prerequisites (P1–P4)** remove the coupling the Phase 0 matrix found:
    - P1 `CoordinatorHandles`;
    - P2 `PhaseFlags.reset(kind)`;
@@ -26,8 +28,8 @@ behaviour. The work runs in this order:
 4. **Coordinators**: the same method, after a short per-coordinator characterization.
 5. **R1**: DFS → BFS wording, after the moves.
 
-No extraction PR merges before PR #1501 (spec 014). P1 starts as soon as #1501 merges, without waiting for Sepolia to
-reach head (D6). The live Sepolia node is not used to validate any slice.
+PR #1501 (spec 014) **merged on 2026-10-08** (`dfa4a8836`), so the gate is met. P1 starts as soon as S0a–S0g have
+merged, without waiting for Sepolia to reach head (D6). The live Sepolia node is not used to validate any slice.
 
 ## Technical Context
 
@@ -39,7 +41,9 @@ reach head (D6). The live Sepolia node is not used to validate any slice.
 `HealingFrontierStorage` (CF `g`), `BfsQueueStorage`, and the task files in the datadir. All of them are frozen
 (FR-030).
 
-**Testing**: ScalaTest + Pekko `ActorTestKit`/`ManualTime`, run by CI only (FR-035)
+**Testing**: ScalaTest + Pekko `ActorTestKit`/`ManualTime`, run by CI only (FR-035). The PR gate on staging is Tier 1
+(`testEssential`, which excludes `SyncTest`), plus the S0e `SyncTest` job and the S0f `snap-split-verify` job. Tier 2
+does not run on staging PRs (research.md R13a).
 
 **Target Platform**: the fukuii node on Linux, both chain families (ETC/Mordor: Hash scheme, PoW; ETH: Path scheme,
 PoS + CL pivot)
@@ -54,7 +58,7 @@ PoS + CL pivot)
 - no assertion change in existing suites;
 - one module per PR.
 
-**Scale/Scope**: about 42 PRs; about 11,500 lines moved (see Effort)
+**Scale/Scope**: about 47 PRs; about 11,500 lines moved (see Effort)
 
 ## Constitution Check
 
@@ -135,17 +139,55 @@ and it gives a number that can be ratcheted (c).
 same commit as the move, so the move could not be verified mechanically. The ADR records this choice. A narrowed trait
 can later become a class without touching its bodies again.
 
-**Acceptance per module PR** (spec FR-016 a–d), checked by the PR author and the reviewer:
+**Acceptance per module PR** (spec FR-016 a–d). All four are scripted in `scripts/snap-split/` (S0f, FR-038) and run
+by the required CI job `snap-split-verify` on **every commit** of the PR:
 
-| | Check | Command / evidence |
-|---|---|---|
-| (a) | no self-type names the concrete impl class | `grep -rnE '(self\|this): *[A-Za-z]*(SNAPSyncControllerImpl\|CoordinatorImpl)\b' src/main/scala/com/chipprbots/ethereum/blockchain/sync/snap/{controller,actors/account,actors/storage,actors/healing,actors/bytecode}/` is empty |
-| (b) | stub-based unit test | ≥ 1 new test: `new Stub<Module>State with <capability stubs> with <Module>` (BehaviorTestKit for `ctx`/timers where needed) |
-| (c) | interface size recorded, never grows | PR body + routing doc row: `<Module>State` member count, plus the list of capability traits. The baseline is research.md R14 |
-| (d) | no trait-init hazard | `grep -nE '^\s+(private(\[\w+\])? )?(override )?val ' <module files>` is empty (only `def`/`lazy val`); every `grep -nE '^\s+(private(\[\w+\])? )?var ' <module files>` hit has an initializer matching `= (None\|Nil\|true\|false\|-?[0-9_]+L?\|[0-9.]+\|0L\|Map.empty.*\|Set.empty.*\|Vector.empty.*\|[A-Z][A-Za-z0-9_.]*)$` (a literal, an empty collection or a companion constant) |
+- **(a) No impl-class mention.** Any occurrence of `SNAPSyncControllerImpl` or `CoordinatorImpl` in a module file fails
+  after commit 2, whether in a self-type, a comment or across lines. The check is a plain substring search over the
+  module directories:
 
-Commit 2 may turn a concrete `val` into a `lazy val` or `def` to pass (d). That is the only body-adjacent edit it
-may make, and the PR lists each one.
+  ```sh
+  ! grep -rn -e SNAPSyncControllerImpl -e CoordinatorImpl \
+      src/main/scala/com/chipprbots/ethereum/blockchain/sync/snap/controller \
+      src/main/scala/com/chipprbots/ethereum/blockchain/sync/snap/actors/{account,storage,healing,bytecode}
+  ```
+
+  In commit 1 the script allows exactly one occurrence per file: the temporary self-type line.
+- **(b) Stub test.** At least one new Tier 1 test (no `SyncTest`, `IntegrationTest`, `SlowTest` or `DisabledTest`
+  tag) of the form `new Stub<Module>State with <capability/Api stubs> with <Module>`. It calls a module body that
+  **reads and writes** `<Module>State`, and asserts on the stub's fields afterwards.
+- **(c) Coupling counts.** The script prints three numbers:
+  - the `<Module>State` member count;
+  - the Api members required (the sum over `<Callee>Api` traits in the self-type);
+  - the member count of each shared capability trait (`SnapSharedState`, `SnapControllerEnv`, `CoordinatorHandles`,
+    `PhaseFlags`).
+
+  The PR pastes them, and the routing doc records them. Growth over the previously recorded value, or over research.md
+  R14/R14a for a first recording, needs a justification line. The capability-trait caps live in the routing doc.
+- **(d) No init hazard, checked at member level.** The script reads each module file and checks only **member-level
+  lines**: under scalafmt, a top-level trait's members sit at exactly two spaces of indent. Lines inside def bodies
+  (deeper indent) are skipped, so local `val`/`var` never trip it. It fails on:
+  - any member-level line that is not one of `def`, `lazy val`, `var`/`private var`, `type`, `given`, `import`,
+    `end`, a modifier-prefixed form of those, or a comment, which means **no top-level statements**;
+  - any member-level `val` that is not `lazy`;
+  - any member-level `var` whose initializer is not a literal (number, boolean, string), `None`, `Nil`, an empty
+    collection (`…empty…`), or a companion constant (`[A-Z]\w*(\.\w+)*`).
+
+  Its self-tests include a local `val` inside a def (must pass), a member `val` (must fail), a top-level `println`
+  (must fail) and an impure `var` initializer (must fail).
+
+**Rule (d) also applies to commit 1.** A trait initializer runs before the impl class body, so even a byte-identical
+move can reorder initialization. Any declaration whose initializer fails (d) therefore stays in the core in commit 1,
+and it is listed in the PR.
+
+**`val` → `lazy val`/`def` in commit 2 only for pure initializers.** A `lazy val` runs its initializer at first use,
+not at construction. For an impure initializer that is a behaviour change: spawning, timers, metric registration,
+subscriptions, `intakeBudget` reservation and logs would all move in time. So:
+- The PR lists each converted val with "pure: yes" and the grep of its initializer for
+  `ctx\.|timers\.|spawn|scheduleOnce|Metrics|metrics|register|subscribe|intakeBudget|log\.|asyncLog|Future|IO`.
+- The reviewer re-runs that grep.
+- An impure initializer stays a `val` in the core, and the module reaches it through an abstract `def` in
+  `<Module>State` or `SnapControllerEnv`.
 
 **Why (d) matters.** Trait bodies run **before** the class body. A `val` or `var` initializer in a trait that reads a
 self-type member would see `null` or `0`. A `lazy val` or `def` is evaluated on first use, after construction. T020
@@ -166,8 +208,9 @@ decides whether `-Wsafe-init` is turned on for the snap package as a second guar
 - **What stays in the core:** the hubs (`SnapSharedState`), `CoordinatorHandles`, `PhaseFlags` and the shared
   non-hub fields, which the core implements for each `<Module>State`.
 
-CI checks only the PR head (commit 2). Commit 1 is still expected to compile, so that bisects work. Its moved-body
-check is mechanical (§Move verification).
+The Tier 1 job checks only the PR head (commit 2). `snap-split-verify` runs its checks on every commit. Commit 1 is
+also compiled on its own: the job runs `sbt compile` on `HEAD~1` of a module PR, the only extra compile. So both
+commits are known to build, and bisects work.
 
 **Coordinators** follow the same two-commit pattern, with state interfaces derived in T060. The traits live in
 sub-packages:
@@ -224,7 +267,7 @@ pin or characterization test on purpose. #1502 has a pin assertion written to be
 Extraction PRs merge to `staging`. The Sepolia node stays on fix-only builds until it reaches head.
 
 **Decided (user, 2026-10-08)**: extraction (P1 onward) starts as soon as #1501 merges; it does not wait for Sepolia to
-reach head. S0a–S0d still come first.
+reach head. S0a–S0g still come first.
 
 **The hotfix line (spec FR-037):**
 - Tag `snap-split-base` at the staging commit just before P1 merges.
@@ -307,11 +350,14 @@ Boundaries are preliminary (research.md R12) and are confirmed by T060 before C-
 
 | Order | Slice | Kind | Est. lines (main / test) | Reviewers | Validation beyond CI |
 |---|---|---|---|---|---|
+| 0a | **S0e** CI job `snap-synctest`: `sbt "testOnly *SyncControllerSpec *PivotHeaderBootstrapSpec *SnapServingActorSpec -- -n SyncTest"` on PRs to staging touching `blockchain/sync/**` (+ `workflow_dispatch`) | CI | workflow only | prism | — |
+| 0b | **S0f** `scripts/snap-split/` verification tooling + self-tests + required job `snap-split-verify` | tooling | ~400 script / ~200 self-test | prism | — |
+| 0c | **S0g** stabilise `StaleVerificationWalkSpec` (deterministic sync, no wall-clock `eventually`; project task #85) | test | 0 / ~60 | prism, vault | — |
 | 1 | **S0a** #1367 pin (NPMA) | test | 0 / ~80 | herald | — |
 | 2 | **S0b** controller pins #1378, #1319×2, spec-005 (+#1502 doc), #1371 + `ChildFactories` seam | tests + seam | ~60 / ~350 | prism, forge | — |
 | 3 | **S0c** golden-bytes for the frozen formats | test | 0 / ~300 | vault | — |
-| 4 | **S0d** `SnapControllerFixture` + characterization (stagnation, reset, pivot refresh) | test | 0 / ~900 | prism, forge, beacon (CL pivot cases) | — |
-| — | **gate: #1501 merged** (T001 re-checks R11) | | | | |
+| 4 | **S0d** `SnapControllerFixture` + characterization (stagnation, reset incl. heap-watchdog non-stop, pivot refresh, #1501 budget pins, P1 fan-outs, P4 Command × phase table) | test | 0 / ~1,200 | prism, forge, beacon (CL pivot cases) | — |
+| — | **gate: #1501 merged: MET** (`dfa4a8836`; T001 done). P1 waits only for S0a–S0g. | | | | |
 | 5 | **P1** `CoordinatorHandles` + `ChainDownloaderHandle` | refactor | ~+150 / −120 | prism, forge | Mordor restart |
 | 6 | **P2** `PhaseFlags` + `reset(kind)` + `cancelSyncTimers` | refactor | ~+200 / −250 | prism, vault, forge | Mordor + Platåberget restart and dormant |
 | 7 | **P3** `peerEventArms` | refactor | ~+60 / −90 | prism | — |
@@ -324,7 +370,8 @@ Boundaries are preliminary (research.md R12) and are confirmed by T060 before C-
 | 18 | **M6a** healing spawn dedupe | refactor | −80 | prism, vault | — |
 | 19 | **M6b** Healing orchestration | move | ~640 | prism, vault, forge | Mordor heal restart |
 | 20 | **M7** Stagnation watchdog | move | ~370 | prism | — |
-| 21 | **M8** Pivot selection (+ separate `isStarting` cleanup commit) | move | ~700 | prism, beacon, forge | Platåberget start from scratch |
+| 21 | **M8** Pivot selection | move | ~700 | prism, beacon, forge | Platåberget start from scratch |
+| 21b | **M8b** remove the dead `isStarting` parameter (cleanup, own PR; FR-034) | cleanup | ~−10 | prism | — |
 | 22 | **M9** Lifecycle/reset + dormant | move | ~390 | prism, vault, forge | Mordor dormant/wake |
 | 23 | **M10** Pivot refresher | move | ~570 | prism, beacon, forge | Platåberget across ≥ 3 refreshes; Mordor |
 | 24 | **M11** Download supervisor | move | ~850 | prism, forge | full Mordor SNAP |
@@ -333,37 +380,47 @@ Boundaries are preliminary (research.md R12) and are confirmed by T060 before C-
 | 27–30 | **C-A1…A4** | move | ~1,350 | prism; **vault** on A3 and A4 | Mordor restart mid-account after A4 |
 | 31–34 | **C-S1…S4** | move | ~1,370 | prism; **vault** on S2 and S3 | Mordor + Platåberget restart mid-storage after S3 |
 | 35–40 | **C-H0…H5** | restructure + move | ~2,520 | prism; **vault** on H1 and H3 | Mordor heal restart after H1 |
+| 40b | **C-X0** golden test of the response-size window (grow/shrink math and clamp, per coordinator) and of its DEBUG log text | test | 0 / ~120 | prism | — |
 | 41 | **C-X** `AdaptiveResponseBytes` | dedupe | −60 | prism | — |
 | 42 | **R1** DFS→BFS wording + routing-doc final check (T090) | rename | ~40 | prism | — |
 
-## Move verification (every move commit)
+## Move verification (scripted, required CI job `snap-split-verify`)
 
-1. **Moved blocks only.** Run
-   `git diff --color-moved=plain --color-moved-ws=allow-indentation-change HEAD~1 HEAD -- <snap paths>`. Every
-   removed line in the old file must show as moved. The only non-moved lines allowed are trait headers, imports,
-   `private`→`private[snap]` and scalafix result types.
-2. **Identical bodies.** For each `def` in the PR's symbol list, extract its body from `HEAD~1:old-file` and from
-   `HEAD:new-file`, strip the visibility modifier, and `diff` them. The diff must be empty. The PR body lists the
-   symbols and the command used.
-3. **No stray assertions.** Run `git diff HEAD~1 HEAD -- src/test | grep -E '^[+-].*(should|must|shouldBe|assert|expect)'`.
-   It must be empty, apart from lines whose only change is an import or a fixture constructor.
-4. **No format or config drift.** `git diff HEAD~1 HEAD -- src/main/resources` must be empty. The S0c goldens and the
-   pin tests must be untouched.
+`scripts/snap-split/` ships in **S0f, before P1**, with fixture-based self-tests. The CI job `snap-split-verify` runs
+it on every commit of every spec-016 PR (`git rev-list origin/staging..HEAD`) and exits non-zero on any failure. A
+reviewer re-runs it locally with `scripts/snap-split/verify.sh origin/staging`; it needs no JVM.
 
-Steps 1–2 apply to commit 1 only. For commit 2 (narrowing):
+**For a move commit:**
+1. **Moved blocks only.** Every removed line shows as moved
+   (`git diff --color-moved=plain --color-moved-ws=allow-indentation-change`). The only non-moved lines allowed are
+   trait headers, imports, `private`→`private[snap]` and scalafix result types.
+2. **Identical bodies.** For each symbol in the PR's list (read from a `# moved:` trailer in the commit message), the
+   body extracted from the parent and from the commit, with the visibility modifier stripped, is identical.
 
-5. **Narrowing diff is signature-only.** `git diff HEAD~1 HEAD` may touch only these things:
+**For every commit:**
+
+3. **Test-hunk guard.** In existing suites, every changed `src/test` hunk may touch only `import` lines and fixture
+   construction. A hunk that adds or removes a line containing an assertion or scheduling token fails. The tokens are
+   `should`, `must`, `shouldBe`, `===`, `==`, `assert`, `assume`, `expect`, `intercept`, `fishForMessage`, `within`,
+   `eventually`, `verify`, `taggedAs`, `ignore`, `pending`, `cancel`, `timeout` and `interval`. New test files are
+   allowed only when the slice's tasks name them.
+4. **No format or config drift.** No change under `src/main/resources`. The S0c golden files and the S0a/S0b pin
+   tests are byte-unchanged.
+5. **FR-016 (a) and (d)**, as described in D1.
+
+**For a narrowing commit, additionally:**
+
+6. **Signature-only diff.** The commit may touch only:
    - self-type lines;
-   - `<Module>State` / API trait declarations;
-   - the core's `extends` list and its shared-field declarations;
+   - `<Module>State` and Api trait declarations;
+   - the core's `extends` list and shared-field declarations;
    - `private` on exclusive vars;
-   - `val` → `lazy val`/`def` (each listed);
-   - the new stub-based test.
-6. **FR-016 (a)–(d)**: run the four checks in the D1 acceptance table. Paste the output and the interface member count
-   into the PR body.
+   - the listed pure `val` → `lazy val`/`def` conversions;
+   - the new stub test.
+7. **FR-016 (c) counts**, printed for the PR body.
 
-A small script under `scripts/snap-split/` may automate steps 2, 3 and 6. It is added in the first M PR, and
-`prism` reviews it.
+The **per-suite counts** (FR-032) come from the Tier 1 job's and the S0e job's test reports. The PR pastes them, and
+the reviewer compares them with the T002 baseline.
 
 ## Risks
 
@@ -401,8 +458,14 @@ work around it in the narrowing commit.
 **R-3: arm order in P4 and C-H0.** A reordered arm silently changes which handler wins. Mitigations: the arm-order
 table in each PR, S0d characterization tests, and keeping P4 as five small PRs.
 
-**R-4: #1501 churn.** #1501 is still open. If it changes the controller again, T001 re-maps R11 before P1. The S0
-slices do not depend on #1501.
+**R-4: #1501 churn: closed.** #1501 merged as `dfa4a8836` on 2026-10-08. The merged version added an escape policy
+and two keys beyond the snapshot first read. T001 re-mapped them (research.md R11), and no module boundary moved.
+S0b's seams and S0c's goldens are written against the merged code (T001b).
+
+**R-9: CI does not run what we think it runs.** `SyncControllerSpec`, `PivotHeaderBootstrapSpec` and
+`SnapServingActorSpec` are `SyncTest`-tagged, and Tier 2 is skipped on staging (research.md R13a). Mitigations: S0e
+adds a SNAP-scoped `SyncTest` job, every PR pastes per-suite counts, and the flake policy (FR-039) covers the known
+`StaleVerificationWalkSpec` flake until S0g fixes it.
 
 **R-5: hotfix forward-ports** while Sepolia is on fix-only builds (D6). Mitigations: symbol-anchored pins and the
 routing doc. A move PR that conflicts with a hotfix is redone from the new base, not hand-merged.
@@ -415,8 +478,8 @@ unchanged, so only the source file a line comes from changes.
 
 ## Effort estimate
 
-- **PRs**: 42. That is 4 S0, 8 prerequisites (P1, P2, P3, P4a–e), 12 controller (M1–M11 with M6 split in two),
-  1 coordinator characterization, 15 coordinator, 1 C-X and 1 R1.
+- **PRs**: 47. That is 7 S0 (S0a–S0g), 8 prerequisites (P1, P2, P3, P4a–e), 13 controller (M1–M11 with M6 split in
+  two, plus M8b), 1 coordinator characterization, 15 coordinator, 2 C-X (C-X0 pin, C-X) and 1 R1.
 - **Lines**: about 1,630 test lines added in S0, about 6,000 controller lines moved (`syncing` arms move twice: P4 and
   then M), and about 5,500 coordinator lines moved. Net `src/main` growth is small: trait headers, handles and
   `PhaseFlags`, less the deduplication.
@@ -446,7 +509,7 @@ src/main/scala/com/chipprbots/ethereum/blockchain/sync/snap/
 ├── controller/
 │   ├── CoordinatorHandles.scala        # P1
 │   ├── PhaseFlags.scala                # P2
-│   ├── SnapSharedState.scala, SnapControllerEnv.scala   # hub interface + environment capability (first M PR)
+│   ├── SnapSharedState.scala, SnapControllerEnv.scala   # hub interface + environment capability (M2, the first trait-based module PR)
 │   ├── <Module>State / <Module>Api     # declared in each module's file (narrowing commit)
 │   ├── ChildFactories.scala            # S0b seam
 │   ├── ResumePolicy.scala, StagnationPolicy.scala, PivotPolicy.scala, HealPolicy.scala   # M1
@@ -480,7 +543,7 @@ outside `snap` changes. The public Command ADTs stay in their current objects.
 
 | Deviation | Why needed | Simpler alternative rejected because |
 |---|---|---|
-| Constitution V: no local `sbt pp` before a PR | The only host is shared with the live Sepolia node; sbt next to the soak swaps it and breaks SNAP (memory: no builds during soak). | Running locally risks the live node. CI runs the same gates (`compile-all`, `scalafmtCheckAll`, Tier 1/2), and a PR is opened only after CI is green (FR-035). This is the precedent from spec 014. |
+| Constitution V: no local `sbt pp` before a PR | The only host is shared with the live Sepolia node; sbt next to the soak swaps it and breaks SNAP (memory: no builds during soak). | Running locally risks the live node. CI is the compiler and gate: Tier 1 (`compile-all`, `scalafmtCheckAll`, `testEssential`), the S0e `SyncTest` job and the S0f `snap-split-verify` job. Tier 2 is skipped on staging. A PR is opened only after all three are green (FR-035). This is the precedent from spec 014. |
 | Constitution III: extraction PRs ship no new assertions | They change no behaviour, and FR-032 forbids assertion edits so the old suites stay a valid oracle. | Adding tests inside move PRs would mix oracle changes with code moves. The tests land in S0 instead. |
 | `src/main` change in a "test" slice (S0b `ChildFactories`) | Pins #1378, #1319 and #1371 cannot be observed without a spawn seam, because the impl class is private. | A test-only reflection hack is brittle and not idiomatic. A constructor seam with a production default has precedent (`validatorFactory`). |
 | Two commits per module: a byte-identical trait move, then **required** narrowing to state interfaces (D1, ADR CON-013), rather than classes from the start | The move stays mechanically checkable, and narrowing still gives real module boundaries: (a) no impl self-type, (b) stub-testable, (c) measured coupling, (d) no init hazard. | Classes from the start change every body in the move commit, so the move cannot be verified. Traits without narrowing are only a file split. |
