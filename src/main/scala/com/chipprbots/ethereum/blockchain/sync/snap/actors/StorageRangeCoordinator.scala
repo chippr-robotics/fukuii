@@ -81,7 +81,10 @@ private[actors] class StorageRangeCoordinatorImpl(
     // Persist a completion marker per fully-downloaded account (SnapStorageDoneStorage) so a resume re-queues only
     // unfinished storage tasks. Off by default: only SNAPSyncController's account-phase and recovery coordinators read
     // the markers back.
-    recordStorageDone: Boolean = false
+    recordStorageDone: Boolean = false,
+    // Spec 014: shared admission gate. This coordinator acknowledges received tasks and publishes its queue depth so the
+    // producers can wait synchronously instead of through the mailbox-borne watermark signal. None = not wired (tests).
+    intakeBudget: Option[SnapIntakeBudget] = None
 ):
 
   import StorageRangeCoordinator.*
@@ -845,6 +848,11 @@ private[actors] class StorageRangeCoordinatorImpl(
   private def notifyBackpressureIfChanged(): Unit =
     val pending = tasks.size
     com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncMetrics.setStorageQueueDepth(pending.toLong)
+    com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncMetrics.setStorageInFlightRequests(activeTasks.size)
+    intakeBudget.foreach { budget =>
+      budget.storageQueueDepth(pending.toLong)
+      budget.publishMetrics()
+    }
     com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncMetrics.setStorageActivePeers(
       (knownAvailablePeers.size - statelessPeers.size).max(0)
     )
@@ -942,6 +950,8 @@ private[actors] class StorageRangeCoordinatorImpl(
     timers.startTimerWithFixedDelay(StorageCheckCompletion, 30.seconds)
     // Bounds how long a completion marker waits for a batch to ride in while slots trickle in below the threshold.
     if recordStorageDone then timers.startTimerWithFixedDelay(FlushStorageDoneMarkers, DoneMarkerFlushInterval)
+    // A new (or supervisor-restarted) instance starts with an empty queue: drop the previous instance's counts.
+    intakeBudget.foreach(_.attachStorageConsumer())
     active()
 
   def active(): Behavior[Command] = Behaviors
@@ -953,6 +963,7 @@ private[actors] class StorageRangeCoordinatorImpl(
 
       case AddStorageTasks(storageTasks) =>
         tasks.enqueueAll(storageTasks)
+        intakeBudget.foreach(_.storageReceived(storageTasks.size, tasks.size.toLong))
         totalStorageContracts += storageTasks.map(_.accountHash).distinct.size
         log.info(
           s"Added ${storageTasks.size} storage tasks to queue (total pending: ${tasks.size}, contracts: $totalStorageContracts)"
@@ -1346,6 +1357,8 @@ private[actors] class StorageRangeCoordinatorImpl(
             pendingTaskKeys -= ((t.accountHash, t.next))
             buf += t
           buf.toSeq
+      // Dispatch drains the queue: let a waiting producer see the room right away.
+      intakeBudget.foreach(_.storageQueueDepth(tasks.size.toLong))
 
       if batchTasks.isEmpty then None
       else
@@ -2215,7 +2228,8 @@ object StorageRangeCoordinator:
       snapProgressStorage: Option[SnapSyncProgressStorage] = None,
       storageScheme: StorageScheme = StorageScheme.Hash,
       pathNodeStorage: Option[PathNodeStorage] = None,
-      recordStorageDone: Boolean = false
+      recordStorageDone: Boolean = false,
+      intakeBudget: Option[SnapIntakeBudget] = None
   ): Behavior[Command] =
     Behaviors.setup { context =>
       Behaviors.withTimers { timers =>
@@ -2243,7 +2257,8 @@ object StorageRangeCoordinator:
           snapProgressStorage = snapProgressStorage,
           storageScheme = storageScheme,
           pathNodeStorage = pathNodeStorage,
-          recordStorageDone = recordStorageDone
+          recordStorageDone = recordStorageDone,
+          intakeBudget = intakeBudget
         ).start()
       }
     }

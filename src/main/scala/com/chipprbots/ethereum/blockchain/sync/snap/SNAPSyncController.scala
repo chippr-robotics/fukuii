@@ -83,6 +83,77 @@ private class SNAPSyncControllerImpl(
   // Used ONLY at the two Recovery-streaming Future `.foreach` sites; all on-thread logging uses ctx.log.
   private val asyncLog = org.slf4j.LoggerFactory.getLogger(getClass)
 
+  // ── Memory bounds (spec 014) ─────────────────────────────────────────────────────────────────
+  // Shared admission gate for SNAP contract work. Producers (AccountRangeCoordinator's account dispatch and carried
+  // replay, the accounts-complete recovery stream) read it synchronously before adding work; the storage and bytecode
+  // coordinators acknowledge receipt and publish their queue depth. Never a mailbox hop on the pause path.
+  private val intakeBudget = new SnapIntakeBudget(
+    maxPendingStorageTasks = snapSyncConfig.maxPendingStorageTasks,
+    maxPendingByteCodeHashes = snapSyncConfig.maxPendingByteCodeHashes
+  )
+  // Started with the first SNAP coordinators (not at construction: a node that never runs SNAP needs no watchdog).
+  private var heapWatchdog: Option[SnapHeapWatchdog.Handle] = None
+
+  private def ensureHeapWatchdog(): Unit =
+    if heapWatchdog.isEmpty && snapSyncConfig.heapWatchdogEnabled then
+      heapWatchdog = SnapHeapWatchdog.start(
+        highFraction = snapSyncConfig.heapWatchdogPauseFraction,
+        lowFraction = snapSyncConfig.heapWatchdogResumeFraction,
+        pollInterval = snapSyncConfig.heapWatchdogPollInterval,
+        onChange = onHeapPressureChange
+      )
+
+  private def stopHeapWatchdog(): Unit =
+    heapWatchdog.foreach(_.stop())
+    heapWatchdog = None
+    if intakeBudget.heapPressureActive then intakeBudget.setHeapPressure(false)
+
+  /** Drive a [[GatedTaskFileReplay]] to the end on Futures (spec 014). A paused step re-checks the gate after
+    * `RecoveryReplayPausedRetry` via the scheduler, holding no thread while it waits; file reads run under `blocking`.
+    * The pause is logged at most every 30 s with the gate's reason.
+    */
+  private def runGatedReplay(replay: GatedTaskFileReplay, what: String)(emit: Vector[Array[Byte]] => Unit)(using
+      replayEc: ExecutionContext
+  ): scala.concurrent.Future[Unit] =
+    def loop(lastPauseLogMs: Long): scala.concurrent.Future[Unit] =
+      scala.concurrent.Future(scala.concurrent.blocking(replay.step(emit))).flatMap {
+        case GatedTaskFileReplay.Step.Done    => scala.concurrent.Future.unit
+        case GatedTaskFileReplay.Step.Read(_) => loop(lastPauseLogMs)
+        case GatedTaskFileReplay.Step.Paused(reason) =>
+          val now = System.currentTimeMillis()
+          val loggedAt =
+            if now - lastPauseLogMs >= 30000L then
+              asyncLog.info(s"Recovery: $what replay waiting at entry ${replay.position} ($reason)")
+              now
+            else lastPauseLogMs
+          val resumed = scala.concurrent.Promise[Unit]()
+          val _ = scheduler.scheduleOnce(RecoveryReplayPausedRetry) {
+            resumed.completeWith(loop(loggedAt))
+            ()
+          }
+          resumed.future
+      }
+    loop(0L)
+
+  /** Runs on the watchdog / JMX notification thread: touches only the thread-safe gate, metrics and the SLF4J logger.
+    */
+  private def onHeapPressureChange(engaged: Boolean, reading: OldGenReading): Unit =
+    intakeBudget.setHeapPressure(engaged)
+    intakeBudget.publishMetrics()
+    val mib = 1024L * 1024L
+    val occupancy =
+      s"old gen after GC ${reading.postGcUsed / mib} MiB (${(reading.postGcFraction * 100).round}% of " +
+        s"${reading.max / mib} MiB), now ${reading.currentUsed / mib} MiB"
+    if engaged then
+      asyncLog.warn(
+        s"[SNAP-HEAP] heap pressure: PAUSING SNAP intake (account dispatch, carried replay, recovery stream) - " +
+          s"$occupancy. Storage/bytecode downloads keep draining. Pending: ${intakeBudget.describe}"
+      )
+    else
+      asyncLog.warn(
+        s"[SNAP-HEAP] heap pressure cleared: RESUMING SNAP intake - $occupancy. Pending: ${intakeBudget.describe}"
+      )
+
   // ── Timer keys (Behaviors.withTimers; replaces the Classic Cancellable fields) ───────────────
   // Recurring keys reuse the Command case object itself; one-shot keys are string literals.
   private val BootstrapCheckKey = "bootstrap-check"
@@ -727,6 +798,7 @@ private class SNAPSyncControllerImpl(
 
   private def onStop(): Unit =
     stopSnapOnlySchedules()
+    stopHeapWatchdog()
     // dormantWakeUp is now a timer — auto-cancelled on stop.
     ctx.log.info("SNAP Sync Controller stopped")
 
@@ -771,6 +843,7 @@ private class SNAPSyncControllerImpl(
     snapServerPeersSchedulerStarted = false
     snapPeerEvictionStarted = false
     progressMonitor.stopPeriodicLogging()
+    stopHeapWatchdog()
 
   /** Stop the SNAP state-sync child coordinators (account/bytecode/storage/healing) and clear their references. They do
     * not self-stop on completion, so when `SNAPSyncController` is kept alive past `finalizeSnapSync()` for background
@@ -906,7 +979,9 @@ private class SNAPSyncControllerImpl(
         case StorageRangeSyncForceCompleted =>
           ctx.log.warn("Unexpected StorageRangeSyncForceCompleted in idle — dropped")
           Behaviors.same
-        case _: IncrementalContractData =>
+        case IncrementalContractData(codeHashes, storageTasks, _) =>
+          // Reserved by the producer in the intake gate; no coordinator will acknowledge it.
+          intakeBudget.release(storageTasks.size, codeHashes.size)
           ctx.log.debug("Dropping stale IncrementalContractData in idle"); Behaviors.same
         case StateHealingComplete =>
           ctx.log.warn("Unexpected StateHealingComplete in idle — dropped")
@@ -1483,24 +1558,32 @@ private class SNAPSyncControllerImpl(
 
       // Geth-aligned: bytecodes and storage are dispatched inline from each account batch.
       // IncrementalContractData arrives from AccountRangeCoordinator after every identifyContractAccounts() call.
-      case IncrementalContractData(allCodeHashes, storageTasks, replayed) =>
-        // Replayed (carried) codeHashes were identified in an earlier attempt and many were already fetched: drop the
-        // ones present locally. Fresh codeHashes skip the lookup (they come from accounts downloaded just now).
-        val codeHashes =
-          if replayed then allCodeHashes.filter(h => evmCodeStorage.get(h).isEmpty) else allCodeHashes
+      case IncrementalContractData(codeHashes, storageTasks, replayed) =>
+        // Replayed (carried) codeHashes were identified in an earlier attempt and many were already fetched; the
+        // bytecode coordinator drops the ones present locally (`skipPresent`). That lookup used to run here, on this
+        // actor's thread: 2.5M RocksDB reads per Sepolia resume, minutes of mailbox lag (spec 014).
         // launchAccountRangeWorkers spawns both downstream coordinators in the same handler as the account coordinator,
-        // so this cannot happen today; make it loud if a future change breaks that ordering.
-        if (codeHashes.nonEmpty && bytecodeCoordinator.isEmpty) || (storageTasks.nonEmpty && storageRangeCoordinator.isEmpty)
-        then
+        // so a missing coordinator cannot happen today; make it loud if a future change breaks that ordering.
+        val noBytecodeCoordinator = codeHashes.nonEmpty && bytecodeCoordinator.isEmpty
+        val noStorageCoordinator = storageTasks.nonEmpty && storageRangeCoordinator.isEmpty
+        if noBytecodeCoordinator || noStorageCoordinator then
           ctx.log.error(
             s"IncrementalContractData (replayed=$replayed) with no downstream coordinator: dropping " +
               s"${codeHashes.size} codeHashes / ${storageTasks.size} storage tasks"
           )
+          // The producer reserved this work in the intake gate; nothing will acknowledge it.
+          intakeBudget.release(
+            if noStorageCoordinator then storageTasks.size else 0,
+            if noBytecodeCoordinator then codeHashes.size else 0
+          )
         if codeHashes.nonEmpty then
-          bytecodeCoordinator.foreach(_ ! actors.ByteCodeCoordinator.AddByteCodeTasks(codeHashes))
+          bytecodeCoordinator.foreach(
+            _ ! actors.ByteCodeCoordinator.AddByteCodeTasks(codeHashes, skipPresent = replayed)
+          )
           // Accumulate the running total of unique codeHashes for the dashboard. `codeHashes` is
           // already deduplicated upstream (Bloom filter in AccountRangeCoordinator), so summing
-          // batch sizes gives the unique total.
+          // batch sizes gives the unique total. Replayed hashes already present locally are reported back by the
+          // bytecode coordinator as downloaded, so the estimate and the progress count stay consistent.
           bytecodesEstimatedTotal += codeHashes.size
           progressMonitor.updateEstimates(bytecodes = bytecodesEstimatedTotal)
         if storageTasks.nonEmpty then
@@ -2713,6 +2796,7 @@ private class SNAPSyncControllerImpl(
 
               val storage = getOrCreateMptStorage(pivot)
               coordinatorGeneration += 1
+              ensureHeapWatchdog()
 
               if !bytecodeAlreadyDone then
                 bytecodeCoordinator = Some(
@@ -2724,7 +2808,8 @@ private class SNAPSyncControllerImpl(
                           networkPeerManager = networkPeerManager,
                           requestTracker = requestTracker,
                           batchSize = ByteCodeTask.DEFAULT_BATCH_SIZE,
-                          snapSyncController = ctx.self
+                          snapSyncController = ctx.self,
+                          intakeBudget = Some(intakeBudget)
                         )
                       )
                       .onFailure[Throwable](
@@ -2761,7 +2846,8 @@ private class SNAPSyncControllerImpl(
                           snapProgressStorage = Some(snapProgressStorage),
                           storageScheme = snapSyncConfig.storageScheme,
                           pathNodeStorage = pathNodeStorageOpt,
-                          recordStorageDone = recordStorageDone
+                          recordStorageDone = recordStorageDone,
+                          intakeBudget = Some(intakeBudget)
                         )
                       )
                       .onFailure[Throwable](
@@ -2779,96 +2865,97 @@ private class SNAPSyncControllerImpl(
 
               // Stream storage tasks from the persisted file. If it is missing or damaged, re-derive the tasks from the
               // account trie. Storage is never marked complete here without having been downloaded.
+              // Spec 014: read in bounded chunks and only while the intake gate is open. The previous single Future
+              // pushed the whole file (12M entries on Sepolia) into the coordinator's mailbox at once.
               if !storageAlreadyDone then
                 val coordinator = storageRangeCoordinator.get
                 import ctx.executionContext
                 // Usable per the pre-check above: whole 64-byte entries, non-empty.
                 val filePath = java.nio.file.Paths.get(savedStoragePath.get)
-                locally {
-                  scala.concurrent
-                    .Future {
-                      val emptyRoot = ByteString(com.chipprbots.ethereum.mpt.MerklePatriciaTrie.EmptyRootHash)
-                      val zeroHash = ByteString(new Array[Byte](32))
-                      val raf = new java.io.RandomAccessFile(filePath.toFile, "r")
-                      val buf = new Array[Byte](64)
-                      val batch = new scala.collection.mutable.ArrayBuffer[StorageTask](10000)
-                      var totalTasks = 0
-                      var skippedFinished = 0
-                      // Tasks finished before the restart carry a completion marker: re-queue only the rest.
-                      def send(): Unit =
-                        val unfinished =
-                          if recordStorageDone then
-                            storageDoneStorage.unfinished(batch.toSeq)(t => (t.accountHash, t.storageRoot))
-                          else batch.toSeq
-                        skippedFinished += batch.size - unfinished.size
-                        if unfinished.nonEmpty then
-                          coordinator ! actors.StorageRangeCoordinator.AddStorageTasks(unfinished)
-                          totalTasks += unfinished.size
-                        batch.clear()
-                      try
-                        while raf.getFilePointer < raf.length() do
-                          raf.readFully(buf)
-                          val accountHash = ByteString(java.util.Arrays.copyOfRange(buf, 0, 32))
-                          val storageRoot = ByteString(java.util.Arrays.copyOfRange(buf, 32, 64))
-                          if accountHash != zeroHash && storageRoot.nonEmpty && storageRoot != emptyRoot then
-                            batch += StorageTask.createStorageTask(accountHash, storageRoot)
-                          if batch.size >= 10000 then send()
-                        if batch.nonEmpty then send()
-                      finally raf.close()
-                      (totalTasks, skippedFinished)
-                    }
-                    .foreach { case (count, skipped) =>
-                      asyncLog.info(
-                        s"Recovery: streamed $count storage tasks from ${filePath} " +
-                          s"($skipped skipped as already finished)"
-                      )
-                      // Signal no more tasks — sentinel allows completion
-                      coordinator ! actors.StorageRangeCoordinator.NoMoreStorageTasks
-                    }
+                val emptyRoot = ByteString(com.chipprbots.ethereum.mpt.MerklePatriciaTrie.EmptyRootHash)
+                val zeroHash = ByteString(new Array[Byte](32))
+                val replay = new GatedTaskFileReplay(
+                  path = filePath,
+                  entrySize = StorageTaskFile.EntrySize,
+                  endEntry = java.nio.file.Files.size(filePath) / StorageTaskFile.EntrySize,
+                  chunkEntries = GatedTaskFileReplay.DefaultChunkEntries,
+                  gate = () => intakeBudget.intakeBlockedReason()
+                )
+                var totalTasks = 0L
+                var skippedFinished = 0L
+                runGatedReplay(replay, s"storage-task file $filePath") { entries =>
+                  val batch = entries.flatMap { entry =>
+                    val accountHash = ByteString(java.util.Arrays.copyOfRange(entry, 0, 32))
+                    val storageRoot = ByteString(java.util.Arrays.copyOfRange(entry, 32, 64))
+                    Option.when(accountHash != zeroHash && storageRoot != emptyRoot)(
+                      StorageTask.createStorageTask(accountHash, storageRoot)
+                    )
+                  }
+                  // Tasks finished before the restart carry a completion marker: re-queue only the rest.
+                  val unfinished =
+                    if recordStorageDone then storageDoneStorage.unfinished(batch)(t => (t.accountHash, t.storageRoot))
+                    else batch
+                  skippedFinished += batch.size - unfinished.size
+                  if unfinished.nonEmpty then
+                    intakeBudget.reserve(unfinished.size, 0)
+                    coordinator ! actors.StorageRangeCoordinator.AddStorageTasks(unfinished)
+                    totalTasks += unfinished.size
+                }.onComplete {
+                  case scala.util.Success(_) =>
+                    asyncLog.info(
+                      s"Recovery: streamed $totalTasks storage tasks from ${filePath} " +
+                        s"($skippedFinished skipped as already finished)"
+                    )
+                    // Signal no more tasks — sentinel allows completion
+                    coordinator ! actors.StorageRangeCoordinator.NoMoreStorageTasks
+                  case scala.util.Failure(e) =>
+                    // No NoMoreStorageTasks: storage cannot complete on a partial stream (the stagnation watchdog acts).
+                    asyncLog.error(
+                      s"Recovery: storage-task stream from $filePath FAILED at entry ${replay.position}: ${e.getMessage}",
+                      e
+                    )
                 }
 
               // Bytecodes: stream codeHashes from persisted file if available. Each entry is 32 bytes
-              // (raw keccak256 hash, written by AccountRangeCoordinator.uniqueCodeHashesOut).
+              // (raw keccak256 hash, written by AccountRangeCoordinator.uniqueCodeHashesOut). Same gated chunking.
               val savedCodeHashesPath = appStateStorage.getSnapSyncCodeHashesPath()
               if !bytecodeAlreadyDone then
                 savedCodeHashesPath.foreach { pathStr =>
                   // Usable per the pre-check above (non-empty, whole 32-byte entries).
                   val filePath = java.nio.file.Paths.get(pathStr)
-                  locally {
-                    val coordinator = bytecodeCoordinator.get
-                    import ctx.executionContext
-                    scala.concurrent
-                      .Future {
-                        val raf = new java.io.RandomAccessFile(filePath.toFile, "r")
-                        val buf = new Array[Byte](32)
-                        val batch = new scala.collection.mutable.ArrayBuffer[ByteString](10000)
-                        var totalHashes = 0
-                        var alreadyPresent = 0
-                        // Bytecode is content-addressed: a codeHash already in EvmCodeStorage was fetched (and
-                        // hash-checked) before the restart. Re-queue only the missing ones, as the carried replay does.
-                        def send(): Unit =
-                          val missing = batch.toSeq.filter(h => evmCodeStorage.get(h).isEmpty)
-                          alreadyPresent += batch.size - missing.size
-                          if missing.nonEmpty then
-                            coordinator ! actors.ByteCodeCoordinator.AddByteCodeTasks(missing)
-                            totalHashes += missing.size
-                          batch.clear()
-                        try
-                          while raf.getFilePointer < raf.length() do
-                            raf.readFully(buf)
-                            batch += ByteString(java.util.Arrays.copyOf(buf, 32))
-                            if batch.size >= 10000 then send()
-                          if batch.nonEmpty then send()
-                        finally raf.close()
-                        (totalHashes, alreadyPresent)
-                      }
-                      .foreach { case (count, present) =>
-                        asyncLog.info(
-                          s"Recovery: streamed $count codeHashes from ${filePath} for bytecode sync " +
-                            s"($present already present)"
-                        )
-                        coordinator ! actors.ByteCodeCoordinator.NoMoreByteCodeTasks
-                      }
+                  val coordinator = bytecodeCoordinator.get
+                  import ctx.executionContext
+                  val replay = new GatedTaskFileReplay(
+                    path = filePath,
+                    entrySize = StorageTaskFile.CodeHashEntrySize,
+                    endEntry = java.nio.file.Files.size(filePath) / StorageTaskFile.CodeHashEntrySize,
+                    chunkEntries = GatedTaskFileReplay.DefaultChunkEntries,
+                    gate = () => intakeBudget.intakeBlockedReason()
+                  )
+                  var totalHashes = 0L
+                  var alreadyPresent = 0L
+                  runGatedReplay(replay, s"codeHash file $filePath") { entries =>
+                    // Bytecode is content-addressed: a codeHash already in EvmCodeStorage was fetched (and
+                    // hash-checked) before the restart. Re-queue only the missing ones, as the carried replay does.
+                    // This runs on the replay's Future, off the controller thread.
+                    val missing = entries.map(ByteString(_)).filter(h => evmCodeStorage.get(h).isEmpty)
+                    alreadyPresent += entries.size - missing.size
+                    if missing.nonEmpty then
+                      intakeBudget.reserve(0, missing.size)
+                      coordinator ! actors.ByteCodeCoordinator.AddByteCodeTasks(missing)
+                      totalHashes += missing.size
+                  }.onComplete {
+                    case scala.util.Success(_) =>
+                      asyncLog.info(
+                        s"Recovery: streamed $totalHashes codeHashes from ${filePath} for bytecode sync " +
+                          s"($alreadyPresent already present)"
+                      )
+                      coordinator ! actors.ByteCodeCoordinator.NoMoreByteCodeTasks
+                    case scala.util.Failure(e) =>
+                      asyncLog.error(
+                        s"Recovery: codeHash stream from $filePath FAILED at entry ${replay.position}: ${e.getMessage}",
+                        e
+                      )
                   }
                 }
 
@@ -3714,6 +3801,7 @@ private class SNAPSyncControllerImpl(
 
     val storage = getOrCreateMptStorage(currentPivot)
     launchedAccountGeneration = coordinatorGeneration
+    ensureHeapWatchdog()
     currentCarrySource = carriedTaskFiles
 
     accountRangeCoordinator = Some(
@@ -3737,7 +3825,8 @@ private class SNAPSyncControllerImpl(
               taskFileDir = snapSyncConfig.taskFileDir,
               carriedTaskFiles = carriedTaskFiles,
               progressGeneration = coordinatorGeneration,
-              storageDone = Option.when(recordStorageDone)(storageDoneStorage)
+              storageDone = Option.when(recordStorageDone)(storageDoneStorage),
+              intakeBudget = Some(intakeBudget)
             )
           )
           .onFailure[Throwable](
@@ -3772,7 +3861,8 @@ private class SNAPSyncControllerImpl(
                 networkPeerManager = networkPeerManager,
                 requestTracker = requestTracker,
                 batchSize = ByteCodeTask.DEFAULT_BATCH_SIZE,
-                snapSyncController = ctx.self
+                snapSyncController = ctx.self,
+                intakeBudget = Some(intakeBudget)
               )
             )
             .onFailure[Throwable](
@@ -3821,7 +3911,8 @@ private class SNAPSyncControllerImpl(
                 snapProgressStorage = Some(snapProgressStorage),
                 storageScheme = snapSyncConfig.storageScheme,
                 pathNodeStorage = pathNodeStorageOpt,
-                recordStorageDone = recordStorageDone
+                recordStorageDone = recordStorageDone,
+                intakeBudget = Some(intakeBudget)
               )
             )
             .onFailure[Throwable](
@@ -5209,7 +5300,8 @@ private class SNAPSyncControllerImpl(
                   networkPeerManager = networkPeerManager,
                   requestTracker = requestTracker,
                   batchSize = ByteCodeTask.DEFAULT_BATCH_SIZE,
-                  snapSyncController = ctx.self
+                  snapSyncController = ctx.self,
+                  intakeBudget = Some(intakeBudget)
                 )
               )
               .onFailure[Throwable](
@@ -6068,6 +6160,9 @@ object SNAPSyncController:
     * controller forwards it to `AccountRangeCoordinator` as a `StorageQueuePressure` message so account workers stop
     * producing new storage tasks during back-pressure. Workers already in flight always run to completion.
     */
+  /** How long a gated recovery stream waits before re-checking a closed intake gate (spec 014). */
+  private[snap] val RecoveryReplayPausedRetry: FiniteDuration = 1.second
+
   final case class StorageBackpressureChanged(paused: Boolean) extends Command
 
   /** Sent by `ByteCodeCoordinator` to the controller when its pending-task queue crosses a watermark. Forwarded to
@@ -6466,7 +6561,25 @@ case class SNAPSyncConfig(
     /** Directory for the persisted storage-task file (`<datadir>/snap`). `None` falls back to java.io.tmpdir, which a
       * reboot wipes, so production wiring (SyncController) always sets it. See [[StorageTaskFile]].
       */
-    taskFileDir: Option[java.nio.file.Path] = None
+    taskFileDir: Option[java.nio.file.Path] = None,
+    /** Memory bounds (spec 014). Ceiling on storage tasks held for StorageRangeCoordinator (in transit + queued) before
+      * the producers (account-range dispatch, carried-task replay, accounts-complete recovery stream) wait. ~400 B per
+      * task, so 200,000 is about 80 MB whatever the chain size. Key: `sync.snap-sync.max-pending-storage-tasks`.
+      */
+    maxPendingStorageTasks: Long = 200000L,
+    /** Same ceiling for codeHashes held for ByteCodeCoordinator, counted in hashes (not 85-hash tasks). Key:
+      * `sync.snap-sync.max-pending-bytecode-hashes`.
+      */
+    maxPendingByteCodeHashes: Long = 200000L,
+    /** Heap watchdog (spec 014): pause SNAP intake while old-gen occupancy after a collection is at or above
+      * `heapWatchdogPauseFraction` of the max heap; resume at or below `heapWatchdogResumeFraction`. Keys under
+      * `sync.snap-sync.heap-watchdog-*`. Off in this case-class default so unit tests that build a config directly do
+      * not install a JVM-wide JMX listener; `base/sync.conf` turns it on for every real node.
+      */
+    heapWatchdogEnabled: Boolean = false,
+    heapWatchdogPauseFraction: Double = 0.75,
+    heapWatchdogResumeFraction: Double = 0.60,
+    heapWatchdogPollInterval: FiniteDuration = 5.seconds
 )
 
 object SNAPSyncConfig:
@@ -6639,7 +6752,27 @@ object SNAPSyncConfig:
         else 256,
       storageScheme =
         if snapConfig.hasPath("storage-scheme") then StorageScheme.fromString(snapConfig.getString("storage-scheme"))
-        else StorageScheme.Hash
+        else StorageScheme.Hash,
+      maxPendingStorageTasks =
+        if snapConfig.hasPath("max-pending-storage-tasks") then snapConfig.getLong("max-pending-storage-tasks")
+        else 200000L,
+      maxPendingByteCodeHashes =
+        if snapConfig.hasPath("max-pending-bytecode-hashes") then snapConfig.getLong("max-pending-bytecode-hashes")
+        else 200000L,
+      heapWatchdogEnabled =
+        if snapConfig.hasPath("heap-watchdog-enabled") then snapConfig.getBoolean("heap-watchdog-enabled")
+        else true,
+      heapWatchdogPauseFraction =
+        if snapConfig.hasPath("heap-watchdog-pause-fraction") then snapConfig.getDouble("heap-watchdog-pause-fraction")
+        else 0.75,
+      heapWatchdogResumeFraction =
+        if snapConfig.hasPath("heap-watchdog-resume-fraction") then
+          snapConfig.getDouble("heap-watchdog-resume-fraction")
+        else 0.60,
+      heapWatchdogPollInterval =
+        if snapConfig.hasPath("heap-watchdog-poll-interval") then
+          snapConfig.getDuration("heap-watchdog-poll-interval").toMillis.millis
+        else 5.seconds
     )
 
 // StateValidator has been extracted to StateValidator.scala

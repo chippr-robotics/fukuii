@@ -346,6 +346,36 @@ object SNAPSyncMetrics extends MetricsContainer:
   final private val ByteCodeBackpressureGauge =
     metrics.registry.gauge("snapsync.bytecode.backpressure.gauge", new AtomicLong(0L))
 
+  // ===== Memory bounds (spec 014) =====
+
+  /** Storage tasks counted by the intake gate: in transit to StorageRangeCoordinator plus queued there. */
+  final private val IntakeStoragePendingGauge =
+    metrics.registry.gauge("snapsync.memory.storage.pending.gauge", new AtomicLong(0L))
+
+  /** CodeHashes counted by the intake gate: in transit to ByteCodeCoordinator plus queued there (hashes, not tasks). */
+  final private val IntakeByteCodePendingGauge =
+    metrics.registry.gauge("snapsync.memory.bytecode.pending.gauge", new AtomicLong(0L))
+
+  /** 1 while the intake gate holds new SNAP contract work back (ceiling reached or heap pressure), else 0. */
+  final private val IntakePausedGauge =
+    metrics.registry.gauge("snapsync.memory.intake.paused.gauge", new AtomicLong(0L))
+
+  /** 1 while the heap watchdog reports old-gen pressure, else 0. */
+  final private val HeapPressureGauge =
+    metrics.registry.gauge("snapsync.memory.heap.pressure.gauge", new AtomicLong(0L))
+
+  /** Old-gen occupancy after the last collection of that pool, in bytes and as a fraction of the max heap. */
+  final private val OldGenPostGcBytesGauge =
+    metrics.registry.gauge("snapsync.memory.oldgen.postgc.bytes.gauge", new AtomicLong(0L))
+  final private val OldGenPostGcRatioGauge =
+    metrics.registry.gauge("snapsync.memory.oldgen.postgc.ratio.gauge", new AtomicDouble(0d))
+
+  /** Live in-flight SNAP requests per coordinator. */
+  final private val StorageInFlightRequestsGauge =
+    metrics.registry.gauge("snapsync.storage.inflight.requests.gauge", new AtomicLong(0L))
+  final private val ByteCodeInFlightRequestsGauge =
+    metrics.registry.gauge("snapsync.bytecode.inflight.requests.gauge", new AtomicLong(0L))
+
   /** Counter for total pivot refreshes since SNAP sync start */
   final private val PivotRefreshedCounter =
     metrics.counter("snapsync.pivot.refreshed.total")
@@ -515,6 +545,18 @@ object SNAPSyncMetrics extends MetricsContainer:
   def incrementLaggingPeerEvicted(): Unit = LaggingPeerEvictedCounter.increment()
   def incrementSnaplessPeerConfirmed(): Unit = SnaplessPeersConfirmedCounter.increment()
   def incrementStatelessPeerConfirmed(): Unit = StatelessPeersConfirmedCounter.increment()
+
+  // ===== Memory bounds (spec 014) =====
+
+  def setIntakeStoragePending(count: Long): Unit = IntakeStoragePendingGauge.set(count)
+  def setIntakeByteCodePending(count: Long): Unit = IntakeByteCodePendingGauge.set(count)
+  def setIntakePaused(paused: Boolean): Unit = IntakePausedGauge.set(if paused then 1L else 0L)
+  def setHeapPressure(active: Boolean): Unit = HeapPressureGauge.set(if active then 1L else 0L)
+  def setOldGenPostGc(bytes: Long, ratio: Double): Unit =
+    OldGenPostGcBytesGauge.set(bytes)
+    OldGenPostGcRatioGauge.set(ratio)
+  def setStorageInFlightRequests(count: Int): Unit = StorageInFlightRequestsGauge.set(count.toLong)
+  def setByteCodeInFlightRequests(count: Int): Unit = ByteCodeInFlightRequestsGauge.set(count.toLong)
 
   def setAccountActivePeers(count: Int): Unit = AccountActivePeersGauge.set(count.toLong)
   def setStorageActivePeers(count: Int): Unit = StorageActivePeersGauge.set(count.toLong)
