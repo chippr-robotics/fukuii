@@ -807,6 +807,66 @@ class NetworkPeerManagerSpec extends AnyFlatSpec with Matchers:
     holder ! CheckGenesisHeadPeersTick
     peerManager.expectNoMessage(300.millis)
 
+  // ── #1367 TD-PROXY-GAP pin (spec 016 S0a) ──────────────────────────────────
+
+  /** Drives the handshake-time TD-ratio check in NetworkPeerManagerActor against a real BlockchainReader. Our chain
+    * weight is 1 and the peer advertises 20,000, so the ratio is 20,000x (> the 10,000 threshold) in every case; only
+    * our best block number varies.
+    */
+  trait TdProxyGapSetup extends TestSetupWithReader:
+    val ourWeight: BigInt = BigInt(1)
+    val peerTD: BigInt = BigInt(20000)
+    val highTdPeerInfo: PeerInfo = initialPeerInfo.copy(
+      remoteStatus = peerStatus.copy(chainWeight = ChainWeight.totalDifficultyOnly(peerTD)),
+      chainWeight = ChainWeight.totalDifficultyOnly(peerTD)
+    )
+
+    /** Make `block` our best block (header + body + stored weight + best-block info). */
+    def setBestBlock(block: Block): Unit =
+      blockchainWriter.storeBlock(block).commit()
+      blockchainWriter.storeChainWeight(block.header.hash, ChainWeight.totalDifficultyOnly(ourWeight)).commit()
+      storagesInstance.storages.appStateStorage
+        .putBestBlockInfo(
+          com.chipprbots.ethereum.domain.appstate.BlockInfo(block.header.hash.value, block.header.number.value)
+        )
+        .commit()
+
+    /** Handshake the peer and drain the two per-peer subscriptions plus the best-block probe (ETH63, non-genesis). The
+      * TD check runs synchronously inside the handshake handler, so any DisconnectPeer is already in the peer probe by
+      * the time the probe on `peerManager` is observed.
+      */
+    def handshakeHighTdPeer(holder: org.apache.pekko.actor.ActorRef): Unit =
+      holder ! PeerEventCmd(PeerHandshakeSuccessful(peer1, highTdPeerInfo))
+      peerEventBus.expectMsgType[SubscribeCmd].to shouldBe PeerDisconnectedClassifier(PeerSelector.WithId(peer1.id))
+      peerEventBus.expectMsgType[SubscribeCmd]
+      peerManager.expectMsgClass(classOf[PeerManagerActor.SendMessageCmd]).peerId shouldBe peer1.id
+
+  it should "#1367 TD-PROXY-GAP: no disconnect while our best block is 0" taggedAs (UnitTest, NetworkTest) in
+    new TdProxyGapSetup:
+      expectInitialSubscriptions()
+      val holder = newReaderHolder()
+      expectInitialSubscriptions()
+      setBestBlock(Block(Genesis.header, BlockBody(Nil, Nil)))
+      blockchainReader.getBestBlock.map(_.header.number.value) shouldBe Some(BigInt(0))
+
+      handshakeHighTdPeer(holder)
+
+      peer1Probe.expectNoMessage(200.millis)
+
+  it should "#1367 TD-PROXY-GAP: disconnect a peer with TD ratio above 10,000 once our best block is past genesis" taggedAs (
+    UnitTest,
+    NetworkTest
+  ) in new TdProxyGapSetup:
+    expectInitialSubscriptions()
+    val holder = newReaderHolder()
+    expectInitialSubscriptions()
+    setBestBlock(baseBlock)
+    blockchainReader.getBestBlock.map(_.header.number.value).exists(_ > 0) shouldBe true
+
+    handshakeHighTdPeer(holder)
+
+    peer1Probe.expectMsg(DisconnectPeer(Disconnect.Reasons.UselessPeer))
+
   trait TestSetupWithSnapSync extends TestSetup:
     val snapSyncController: TestProbe = TestProbe()
 
