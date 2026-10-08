@@ -145,6 +145,15 @@ class InstanceConfig(val config: TypesafeConfig, val instanceId: String = "defau
           peerConfig.getDuration("wrong-network-exclusion-duration").toMillis.millis
         else PeerConfiguration.DefaultWrongNetworkExclusionDuration
 
+      override val genesisHeadEvictionGrace: FiniteDuration =
+        if peerConfig.hasPath("genesis-head-eviction-grace") then
+          peerConfig.getDuration("genesis-head-eviction-grace").toMillis.millis
+        else PeerConfiguration.DefaultGenesisHeadEvictionGrace
+      override val genesisHeadExclusionDuration: FiniteDuration =
+        if peerConfig.hasPath("genesis-head-exclusion-duration") then
+          peerConfig.getDuration("genesis-head-exclusion-duration").toMillis.millis
+        else PeerConfiguration.DefaultGenesisHeadExclusionDuration
+
       val statSlotDuration: FiniteDuration = peerConfig.getDuration("stat-slot-duration").toMillis.millis
       val statSlotCount: Int = peerConfig.getInt("stat-slot-count")
 

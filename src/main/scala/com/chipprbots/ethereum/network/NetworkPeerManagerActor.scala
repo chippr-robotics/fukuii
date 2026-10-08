@@ -55,6 +55,7 @@ object NetworkPeerManagerActor:
   private[network] case object LogNetworkSummaryTick extends Command
   private[network] case object RefreshPeerBestBlocksTick extends Command
   private[network] case object CheckLaggingPeersTick extends Command
+  private[network] case object CheckGenesisHeadPeersTick extends Command
 
   // Fire-and-forget registrations forwarded by the Classic shell:
   final case class RegisterSnapSyncControllerCmd(
@@ -109,7 +110,8 @@ object NetworkPeerManagerActor:
       evmCodeStorageOpt: Option[com.chipprbots.ethereum.db.storage.EvmCodeStorage] = None,
       mptStorageOpt: Option[com.chipprbots.ethereum.db.storage.MptStorage] = None,
       blockchainReader: Option[com.chipprbots.ethereum.domain.BlockchainReader] = None,
-      isPoWChain: Boolean = false
+      isPoWChain: Boolean = false,
+      genesisHeadEvictionGrace: FiniteDuration = 60.seconds
   ): Behavior[Command] =
     Behaviors.setup { ctx =>
       Behaviors.withTimers { timers =>
@@ -153,6 +155,12 @@ object NetworkPeerManagerActor:
           CheckLaggingPeersTick,
           LaggingPeerCheckInterval
         )
+        if genesisHeadEvictionGrace > Duration.Zero then
+          timers.startTimerWithFixedDelay(
+            CheckGenesisHeadPeersTick,
+            CheckGenesisHeadPeersTick,
+            GenesisHeadCheckInterval
+          )
 
         new Impl(
           ctx,
@@ -166,7 +174,8 @@ object NetworkPeerManagerActor:
           evmCodeStorageOpt,
           mptStorageOpt,
           blockchainReader,
-          isPoWChain
+          isPoWChain,
+          genesisHeadEvictionGrace
         ).handleMessages(Map.empty)
       }
     }
@@ -184,10 +193,14 @@ object NetworkPeerManagerActor:
       evmCodeStorageOpt: Option[com.chipprbots.ethereum.db.storage.EvmCodeStorage],
       mptStorageOpt: Option[com.chipprbots.ethereum.db.storage.MptStorage],
       blockchainReader: Option[com.chipprbots.ethereum.domain.BlockchainReader],
-      isPoWChain: Boolean
+      isPoWChain: Boolean,
+      genesisHeadEvictionGrace: FiniteDuration
   ):
 
     private val log = ctx.log
+
+    // First time each handshaked peer was seen with a genesis head (spec 011). Cleared when it advances.
+    private val genesisHeadSince = scala.collection.mutable.Map.empty[PeerId, Long]
 
     private[network] type PeersWithInfo = Map[PeerId, PeerWithInfo]
 
@@ -503,6 +516,26 @@ object NetworkPeerManagerActor:
                   )
                   laggingPeerSince.remove(peerId)
                 }
+          Behaviors.same
+
+        case CheckGenesisHeadPeersTick =>
+          // Only meaningful once our chain (or the network tip we have observed) is past genesis: on a private
+          // chain where we are at genesis too, genesis-head peers are normal.
+          val ownPastGenesis =
+            appStateStorage.getBestBlockNumber() > 0 || appStateStorage.getEstimatedHighestBlock() > 0
+          val now = System.currentTimeMillis()
+          val atGenesis = peersWithInfo.filter { case (_, PeerWithInfo(_, info)) =>
+            info.isAtGenesis && info.maxBlockNumber == 0
+          }
+          genesisHeadSince.keys.toList.foreach(id => if !atGenesis.contains(id) then genesisHeadSince.remove(id))
+          if ownPastGenesis then
+            atGenesis.foreach { case (peerId, PeerWithInfo(_, info)) =>
+              val first = genesisHeadSince.getOrElseUpdate(peerId, now)
+              if now - first >= genesisHeadEvictionGrace.toMillis then
+                genesisHeadSince.remove(peerId)
+                peerManagerActor ! PeerManagerActor.EvictGenesisHeadPeerCmd(peerId, info.remoteStatus.remoteClientId)
+            }
+          else genesisHeadSince.clear()
           Behaviors.same
 
         // ── SNAP server requests — matched BEFORE the general MessageFromPeer guard ──
@@ -1332,6 +1365,9 @@ object NetworkPeerManagerActor:
 
   /** Window after which we re-probe an ETH/69 peer even though it has already had a `BlockRangeUpdate` opportunity. */
   private[network] val BlockSignalStaleAfter: FiniteDuration = 150.seconds
+
+  /** How often handshaked peers are scanned for a stuck genesis head (spec 011). */
+  private[network] val GenesisHeadCheckInterval: FiniteDuration = 10.seconds
 
   /** Lagging-peer eviction parameters. */
   private[network] val LaggingPeerCheckInterval: FiniteDuration = 2.minutes
