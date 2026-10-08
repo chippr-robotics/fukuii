@@ -795,7 +795,7 @@ object NetworkPeerManagerActor:
                 // SNAP peer before the eager best-block probe runs → maxBlockNumber=0 everywhere →
                 // pivot=0 forever. TD-PROXY-GAP is only meaningful past genesis (post-SNAP genesis-
                 // proxy TD on a high best block). `number.value > 0` is the minimal, unambiguous guard.
-                if ratio > BigInt(10_000) && ourBest.header.number.value > 0 then
+                if ratio > BigInt(10_000) then
                   // TD-PROXY-GAP: stored TD is a genesis proxy from SNAP finalization.
                   chainWeightCalibrationTarget.foreach { target =>
                     target ! com.chipprbots.ethereum.blockchain.sync.SyncProtocol
