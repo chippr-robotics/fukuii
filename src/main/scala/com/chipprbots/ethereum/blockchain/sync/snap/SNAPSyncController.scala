@@ -30,6 +30,7 @@ import com.chipprbots.ethereum.db.storage.MptStorage
 import com.chipprbots.ethereum.db.storage.Namespaces
 import com.chipprbots.ethereum.db.storage.PathNodeStorage
 import com.chipprbots.ethereum.db.storage.RocksDbBfsQueueStorage
+import com.chipprbots.ethereum.db.storage.SnapStorageDoneStorage
 import com.chipprbots.ethereum.db.storage.SnapSyncProgressStorage
 import com.chipprbots.ethereum.db.storage.StateStorage
 import com.chipprbots.ethereum.domain.Account
@@ -211,6 +212,11 @@ private class SNAPSyncControllerImpl(
   private val pathNodeStorageOpt: Option[PathNodeStorage] =
     if snapSyncConfig.storageScheme == StorageScheme.Path then Some(new PathNodeStorage(flatSlotStorage.dataSource))
     else None
+
+  // Storage-task completion markers (prefixed keys in the app-state column family): written by StorageRangeCoordinator with each finished account's
+  // last flat slots; read on a resume so only unfinished storage tasks are re-queued. Scoped to one SNAP cycle —
+  // cleared when the account phase starts without carried task files and when the storage phase completes.
+  private val storageDoneStorage = new SnapStorageDoneStorage(flatSlotStorage.dataSource)
 
   private def getOrCreateMptStorage(pivotBlockNumber: BigInt): MptStorage =
     mptStorage.getOrElse {
@@ -1610,6 +1616,9 @@ private class SNAPSyncControllerImpl(
         storagePhaseComplete = true
         storagePhaseForceCompleted = false
         appStateStorage.putSnapSyncStorageComplete(true).commit()
+        // Storage is durably complete, so no resume replays storage tasks any more: the markers are garbage now.
+        // (Not on force-complete — storage-complete is not persisted there and the recovery stream still reads them.)
+        storageDoneStorage.clear()
         ctx.log.info(s"Storage range sync complete. ByteCode: $bytecodePhaseComplete, Accounts: $accountsComplete")
         checkAllDownloadsComplete()
         Behaviors.same
@@ -2721,7 +2730,8 @@ private class SNAPSyncControllerImpl(
                           maxConcurrentStorageAccounts = snapSyncConfig.maxConcurrentStorageAccounts,
                           snapProgressStorage = Some(snapProgressStorage),
                           storageScheme = snapSyncConfig.storageScheme,
-                          pathNodeStorage = pathNodeStorageOpt
+                          pathNodeStorage = pathNodeStorageOpt,
+                          recordStorageDone = true
                         )
                       )
                       .onFailure[Throwable](
@@ -2753,6 +2763,15 @@ private class SNAPSyncControllerImpl(
                       val buf = new Array[Byte](64)
                       val batch = new scala.collection.mutable.ArrayBuffer[StorageTask](10000)
                       var totalTasks = 0
+                      var skippedFinished = 0
+                      // Tasks finished before the restart carry a completion marker: re-queue only the rest.
+                      def send(): Unit =
+                        val unfinished = storageDoneStorage.unfinished(batch.toSeq)(t => (t.accountHash, t.storageRoot))
+                        skippedFinished += batch.size - unfinished.size
+                        if unfinished.nonEmpty then
+                          coordinator ! actors.StorageRangeCoordinator.AddStorageTasks(unfinished)
+                          totalTasks += unfinished.size
+                        batch.clear()
                       try
                         while raf.getFilePointer < raf.length() do
                           raf.readFully(buf)
@@ -2760,18 +2779,16 @@ private class SNAPSyncControllerImpl(
                           val storageRoot = ByteString(java.util.Arrays.copyOfRange(buf, 32, 64))
                           if accountHash != zeroHash && storageRoot.nonEmpty && storageRoot != emptyRoot then
                             batch += StorageTask.createStorageTask(accountHash, storageRoot)
-                          if batch.size >= 10000 then
-                            coordinator ! actors.StorageRangeCoordinator.AddStorageTasks(batch.toSeq)
-                            totalTasks += batch.size
-                            batch.clear()
-                        if batch.nonEmpty then
-                          coordinator ! actors.StorageRangeCoordinator.AddStorageTasks(batch.toSeq)
-                          totalTasks += batch.size
+                          if batch.size >= 10000 then send()
+                        if batch.nonEmpty then send()
                       finally raf.close()
-                      totalTasks
+                      (totalTasks, skippedFinished)
                     }
-                    .foreach { count =>
-                      asyncLog.info(s"Recovery: streamed $count storage tasks from ${filePath}")
+                    .foreach { case (count, skipped) =>
+                      asyncLog.info(
+                        s"Recovery: streamed $count storage tasks from ${filePath} " +
+                          s"($skipped skipped as already finished)"
+                      )
                       // Signal no more tasks — sentinel allows completion
                       coordinator ! actors.StorageRangeCoordinator.NoMoreStorageTasks
                     }
@@ -2793,22 +2810,30 @@ private class SNAPSyncControllerImpl(
                         val buf = new Array[Byte](32)
                         val batch = new scala.collection.mutable.ArrayBuffer[ByteString](10000)
                         var totalHashes = 0
+                        var alreadyPresent = 0
+                        // Bytecode is content-addressed: a codeHash already in EvmCodeStorage was fetched (and
+                        // hash-checked) before the restart. Re-queue only the missing ones, as the carried replay does.
+                        def send(): Unit =
+                          val missing = batch.toSeq.filter(h => evmCodeStorage.get(h).isEmpty)
+                          alreadyPresent += batch.size - missing.size
+                          if missing.nonEmpty then
+                            coordinator ! actors.ByteCodeCoordinator.AddByteCodeTasks(missing)
+                            totalHashes += missing.size
+                          batch.clear()
                         try
                           while raf.getFilePointer < raf.length() do
                             raf.readFully(buf)
                             batch += ByteString(java.util.Arrays.copyOf(buf, 32))
-                            if batch.size >= 10000 then
-                              coordinator ! actors.ByteCodeCoordinator.AddByteCodeTasks(batch.toSeq)
-                              totalHashes += batch.size
-                              batch.clear()
-                          if batch.nonEmpty then
-                            coordinator ! actors.ByteCodeCoordinator.AddByteCodeTasks(batch.toSeq)
-                            totalHashes += batch.size
+                            if batch.size >= 10000 then send()
+                          if batch.nonEmpty then send()
                         finally raf.close()
-                        totalHashes
+                        (totalHashes, alreadyPresent)
                       }
-                      .foreach { count =>
-                        asyncLog.info(s"Recovery: streamed $count codeHashes from ${filePath} for bytecode sync")
+                      .foreach { case (count, present) =>
+                        asyncLog.info(
+                          s"Recovery: streamed $count codeHashes from ${filePath} for bytecode sync " +
+                            s"($present already present)"
+                        )
                         coordinator ! actors.ByteCodeCoordinator.NoMoreByteCodeTasks
                       }
                   }
@@ -3647,6 +3672,13 @@ private class SNAPSyncControllerImpl(
               None
         }
 
+    // Without carried task files the account phase re-identifies every contract from scratch and nothing consults
+    // the completion markers; drop them so a later resume never trusts markers from before this point (an earlier SNAP
+    // cycle, whose storage tries may since have been rewritten by healing or block import).
+    if carriedTaskFiles.isEmpty then
+      storageDoneStorage.clear()
+      ctx.log.info("Account phase starts without carried task files: cleared storage-task completion markers")
+
     val storage = getOrCreateMptStorage(currentPivot)
     launchedAccountGeneration = coordinatorGeneration
     currentCarrySource = carriedTaskFiles
@@ -3671,7 +3703,8 @@ private class SNAPSyncControllerImpl(
               pathNodeStorage = pathNodeStorageOpt,
               taskFileDir = snapSyncConfig.taskFileDir,
               carriedTaskFiles = carriedTaskFiles,
-              progressGeneration = coordinatorGeneration
+              progressGeneration = coordinatorGeneration,
+              storageDone = Some(storageDoneStorage)
             )
           )
           .onFailure[Throwable](
@@ -3754,7 +3787,8 @@ private class SNAPSyncControllerImpl(
                 maxConcurrentStorageAccounts = snapSyncConfig.maxConcurrentStorageAccounts,
                 snapProgressStorage = Some(snapProgressStorage),
                 storageScheme = snapSyncConfig.storageScheme,
-                pathNodeStorage = pathNodeStorageOpt
+                pathNodeStorage = pathNodeStorageOpt,
+                recordStorageDone = true
               )
             )
             .onFailure[Throwable](

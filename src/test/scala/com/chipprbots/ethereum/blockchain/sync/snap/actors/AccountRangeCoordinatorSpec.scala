@@ -13,6 +13,8 @@ import org.scalatest.matchers.should.Matchers
 
 import com.chipprbots.ethereum.blockchain.sync.snap.*
 import com.chipprbots.ethereum.crypto.kec256
+import com.chipprbots.ethereum.db.dataSource.EphemDataSource
+import com.chipprbots.ethereum.db.storage.SnapStorageDoneStorage
 import com.chipprbots.ethereum.mpt.MerklePatriciaTrie
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor
 import com.chipprbots.ethereum.network.p2p.messages.SNAP.AccountRange
@@ -795,7 +797,8 @@ class AccountRangeCoordinatorSpec extends ScalaTestWithActorTestKit() with AnyFl
       resumeProgress: Map[ByteString, ByteString],
       carried: Option[ContractTaskFiles],
       dir: java.nio.file.Path,
-      generation: Long
+      generation: Long,
+      storageDone: Option[SnapStorageDoneStorage] = None
   ): org.apache.pekko.actor.typed.ActorRef[AccountRangeCoordinator.Command] =
     testKit.spawn(
       AccountRangeCoordinator(
@@ -809,7 +812,8 @@ class AccountRangeCoordinatorSpec extends ScalaTestWithActorTestKit() with AnyFl
         accountTrieEcOverride = Some(classicSystem.dispatcher),
         taskFileDir = Some(dir),
         carriedTaskFiles = carried,
-        progressGeneration = generation
+        progressGeneration = generation,
+        storageDone = storageDone
       )
     )
 
@@ -922,6 +926,57 @@ class AccountRangeCoordinatorSpec extends ScalaTestWithActorTestKit() with AnyFl
     replay.storageTasks.size shouldBe 3
     replay.codeHashes.size shouldBe 2
     testKit.stop(coord2)
+  }
+
+  /** (accountHash, storageRoot) of carried storage-task entry `i` (see `entry`). */
+  private def carriedTask(i: Int): (ByteString, ByteString) =
+    val e = entry("s", i, 64)
+    (ByteString(e.take(32)), ByteString(e.drop(32)))
+
+  it should "replay only the carried storage tasks that have no completion marker (restart after finished work)" taggedAs UnitTest in {
+    val dir = java.nio.file.Files.createTempDirectory("arc-done-")
+    val carried = previousTaskFiles(dir, counted = 4, codeCounted = 2)
+    val done = new SnapStorageDoneStorage(EphemDataSource())
+    // Tasks 0 and 2 finished before the restart. Task 1's account finished too, but under a DIFFERENT storage root
+    // (e.g. re-identified at another pivot) — that does not finish the carried (account, root) task.
+    done.markDone(Seq(carriedTask(0), carriedTask(2), carriedTask(1)._1 -> kec256(ByteString("other-root")))).commit()
+
+    val controller = testKit.createTestProbe[SNAPSyncController.Command]()
+    val coord = spawnResumed(
+      kec256(ByteString("done-root")),
+      testKit.createTestProbe[NetworkPeerManagerActor.Command]().ref,
+      controller.ref,
+      Map(AccountTask.MaxHash32 -> midCursor),
+      Some(carried),
+      dir,
+      1,
+      storageDone = Some(done)
+    )
+    val replay = fish(controller) { case m: SNAPSyncController.IncrementalContractData => m }
+    replay.replayed shouldBe true
+    replay.storageTasks.map(t => (t.accountHash, t.storageRoot)) shouldBe Seq(carriedTask(1), carriedTask(3))
+    // Bytecode is unaffected here (the controller drops codeHashes already in EvmCodeStorage).
+    replay.codeHashes.size shouldBe 2
+    testKit.stop(coord)
+  }
+
+  it should "replay every carried storage task when no completion markers exist (old checkpoint, first restart)" taggedAs UnitTest in {
+    val dir = java.nio.file.Files.createTempDirectory("arc-done-none-")
+    val carried = previousTaskFiles(dir, counted = 3, codeCounted = 2)
+    val controller = testKit.createTestProbe[SNAPSyncController.Command]()
+    val coord = spawnResumed(
+      kec256(ByteString("done-none-root")),
+      testKit.createTestProbe[NetworkPeerManagerActor.Command]().ref,
+      controller.ref,
+      Map(AccountTask.MaxHash32 -> midCursor),
+      Some(carried),
+      dir,
+      1,
+      storageDone = Some(new SnapStorageDoneStorage(EphemDataSource()))
+    )
+    val replay = fish(controller) { case m: SNAPSyncController.IncrementalContractData => m }
+    replay.storageTasks.map(t => (t.accountHash, t.storageRoot)) shouldBe (0 until 3).map(carriedTask)
+    testKit.stop(coord)
   }
 
   it should "re-download a partial range from its start when no task files are carried (legacy record)" taggedAs UnitTest in {

@@ -29,6 +29,7 @@ import com.chipprbots.ethereum.blockchain.sync.ProgressMilestones
 import com.chipprbots.ethereum.blockchain.sync.snap.*
 import com.chipprbots.ethereum.db.storage.MptStorage
 import com.chipprbots.ethereum.db.storage.PathNodeStorage
+import com.chipprbots.ethereum.db.storage.SnapStorageDoneStorage
 import com.chipprbots.ethereum.domain.Account
 import com.chipprbots.ethereum.mpt.MerklePatriciaTrie
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor
@@ -86,7 +87,10 @@ private class AccountRangeCoordinatorImpl(
     // partial ranges re-download from their start as before.
     carriedTaskFiles: Option[ContractTaskFiles] = None,
     // Echoed in every progress snapshot so the controller can drop snapshots from a superseded coordinator.
-    progressGeneration: Long = 0L
+    progressGeneration: Long = 0L,
+    // Storage-task completion markers: replaying the carried prefix skips tasks already finished (see
+    // `replayCarriedChunk`). None = replay every carried storage task (as before the markers existed).
+    storageDone: Option[SnapStorageDoneStorage] = None
 ):
 
   import SNAPSyncController.PivotStateUnservable
@@ -486,6 +490,10 @@ private class AccountRangeCoordinatorImpl(
   // not complete until both offsets reach their counts, so NoMore{Storage,ByteCode}Tasks can never overtake them.
   private var replayStorageOffset: Long = 0L
   private var replayCodeHashesOffset: Long = 0L
+  // Replay outcome, for the completion log line: carried storage tasks skipped because their completion marker exists,
+  // and tasks actually sent downstream (the Hash-scheme root-presence check accounts for the rest).
+  private var replaySkippedFinished: Long = 0L
+  private var replayQueuedStorage: Long = 0L
   private def replayDone: Boolean =
     replayStorageOffset >= carriedStorageCount && replayCodeHashesOffset >= carriedCodeHashesCount
 
@@ -1669,10 +1677,16 @@ private class AccountRangeCoordinatorImpl(
     * accounts. Paced, and held while downstream back-pressure is engaged, so a large carried prefix cannot flood the
     * storage queue.
     *
+    * Both schemes: a storage task with a completion marker (`storageDone`, written by StorageRangeCoordinator in the
+    * same RocksDB batch as the account's last flat slots, after its trie nodes) is skipped — the previous run finished
+    * it, so replaying it would only redo the work (Sepolia 2026-10-07: 9.35M carried entries re-queued ~818k finished
+    * tasks). The resumed state is then exactly what the previous run held, which never retried a finished task either.
+    *
     * Hash scheme only: a storage task whose storage root node is already present is skipped — StackTrie emits a trie's
     * root last, after every descendant, so a present root means that storage trie was completed (and the forced healing
-    * walk re-verifies it anyway). Path scheme keeps every task: one node per path means a correct root node does not
-    * prove its descendants were not overwritten later.
+    * walk re-verifies it anyway). Path scheme gets no such presence check: one node per path means a correct root node
+    * does not prove its descendants were not overwritten later (and the path-scheme healing walk stops at a node whose
+    * hash matches, so it would not notice), nor that the account's flat slots — flushed asynchronously — ever landed.
     */
   private def replayCarriedChunk(): Unit =
     if !replayDone then
@@ -1695,15 +1709,19 @@ private class AccountRangeCoordinatorImpl(
                 storageRoot
               )
         }
+        val unfinished =
+          storageDone.fold(candidates.toSeq)(_.unfinished(candidates.toSeq)(t => (t.accountHash, t.storageRoot)))
+        replaySkippedFinished += candidates.size - unfinished.size
         val storageTasks = storageScheme match
-          case StorageScheme.Hash if candidates.nonEmpty =>
-            val roots = candidates.map(_.storageRoot).distinct.toSeq
+          case StorageScheme.Hash if unfinished.nonEmpty =>
+            val roots = unfinished.map(_.storageRoot).distinct
             val present = roots
               .zip(mptStorage.multiGetNodes(roots.map(_.toArray)))
               .collect { case (root, Some(_)) => root }
               .toSet
-            candidates.filterNot(t => present.contains(t.storageRoot)).toSeq
-          case _ => candidates.toSeq
+            unfinished.filterNot(t => present.contains(t.storageRoot))
+          case _ => unfinished
+        replayQueuedStorage += storageTasks.size
         val codeEnd =
           math.min(carriedCodeHashesCount, replayCodeHashesOffset + AccountRangeCoordinator.ReplayChunkEntries)
         val codeHashes = mutable.ArrayBuffer.empty[ByteString]
@@ -1723,8 +1741,10 @@ private class AccountRangeCoordinatorImpl(
           )
         if replayDone then
           log.info(
-            s"Replayed carried contract work: $carriedStorageCount storage-task entries, " +
-              s"$carriedCodeHashesCount codeHashes"
+            s"Replayed carried contract work: $carriedStorageCount storage-task entries " +
+              s"($replayQueuedStorage queued, $replaySkippedFinished skipped as already finished" +
+              (if storageDone.isEmpty then ", no completion markers" else "") +
+              s"), $carriedCodeHashesCount codeHashes"
           )
           ctx.self ! CheckCompletion
         else
@@ -2127,7 +2147,8 @@ object AccountRangeCoordinator:
       pathNodeStorage: Option[PathNodeStorage] = None,
       taskFileDir: Option[Path] = None,
       carriedTaskFiles: Option[ContractTaskFiles] = None,
-      progressGeneration: Long = 0L
+      progressGeneration: Long = 0L,
+      storageDone: Option[SnapStorageDoneStorage] = None
   ): Behavior[Command] =
     Behaviors.withTimers { timers =>
       Behaviors.setup { ctx =>
@@ -2149,7 +2170,8 @@ object AccountRangeCoordinator:
           pathNodeStorage = pathNodeStorage,
           taskFileDir = taskFileDir,
           carriedTaskFiles = carriedTaskFiles,
-          progressGeneration = progressGeneration
+          progressGeneration = progressGeneration,
+          storageDone = storageDone
         )
         impl.onStart()
         impl.receive()
