@@ -38,15 +38,21 @@ Sepolia, v0.9.6, `-Xmx6g -XX:MaxDirectMemorySize=512M`, SNAP storage phase, 2026
   - memtable budget = `db-write-buffer-size`, capped at capacity / 2 when `memory-budget` is set.
   - blocks keep at least capacity minus the memtable budget.
   Both parts are floored at 1 MiB.
-- **R2. Circuit breaker.** `write-buffer-allow-stall = true` (default) makes writers wait for a flush while memtables
-  are over budget. The cache is not strict-capacity: with a strict limit a full cache fails the insert and RocksDB
-  returns `MemoryLimit` to the read or memtable reservation that needed it.
+- **R2. Circuit breaker (opt-in).** By default the WriteBufferManager flushes when memtables reach their budget, and
+  memtables can overshoot briefly while a flush catches up. `write-buffer-allow-stall = true` makes it a hard cap by
+  having writers wait for the flush. **A stall freezes all reads:** `doWrite` holds the process-wide `dbLock`
+  exclusively around `db.write`, so block import, SNAP serving, the Engine API and RPC all wait, possibly for tens of
+  seconds. So it is off by default and meant only for memory-constrained hosts. The cache is not strict-capacity:
+  with a strict limit a full cache fails the insert and RocksDB returns `MemoryLimit` to the read or memtable
+  reservation that needed it.
 - **R3. Per-CF memtables.** About 21 column families × `write_buffer_size` 64 MiB × `max_write_buffer_number` 2 is
   about 2.7 GiB in theory. The WriteBufferManager caps the sum, so per-CF options stay unchanged.
-- **R4. Partitioned index and filters.** `partition-index-and-filters = true` (default) applies to newly written SSTs:
-  `kTwoLevelIndexSearch`, partitioned filters, pinned top-level blocks only, and `metadata-block-size` 4 KiB
-  partitions. Existing SSTs stay readable and are rewritten by normal compaction. Turning it off again is also
-  readable. No resync.
+- **R4. Partitioned index and filters (opt-in for this release).** `partition-index-and-filters = true` applies to
+  newly written SSTs: `kTwoLevelIndexSearch`, partitioned filters, `optimize_filters_for_memory`, and
+  `metadata-block-size` 4 KiB partitions. Each file's top-level index/filter block is pinned; it grows with file size
+  and file count, and L0 blocks stay pinned as before. Existing SSTs stay readable and are rewritten by normal
+  compaction. Turning it off again is also readable. No resync. With the flag off (the default), the table format is
+  exactly what nodes write today.
 - **R5. Gauges.** Read per DB, at most once per 30 s, and served from that snapshot in between:
   `app_db_rocksdb_block_cache_usage_bytes` and `_pinned_usage_bytes` (from the shared `Cache` handle; the per-CF
   property would count the shared cache once per CF), `_capacity_bytes`,
@@ -54,26 +60,33 @@ Sepolia, v0.9.6, `-Xmx6g -XX:MaxDirectMemorySize=512M`, SNAP storage phase, 2026
   `app_db_rocksdb_table_readers_mem_bytes` (`rocksdb.estimate-table-readers-mem`, summed over CFs), and
   `app_db_rocksdb_statistics_enabled` (0/1, so a 0.0 hit rate can be told apart from "off").
   Block-cache usage includes the memtable reservation; do not add it to the memtable size.
-- **R6. Native safety.** Every gauge read and `cacheStats` takes the DB read lock and returns nothing once closed. The
-  cache, WriteBufferManager and filter are closed after the DB. `destroyDB` no longer leaks a full-size cache.
+- **R6. Native safety.** Every gauge read and `cacheStats` tries the DB read lock for at most 100 ms and returns
+  nothing if it times out or the DB is closed, so the sampler keeps its last value and scrapes never queue behind a
+  long write. `close()` releases the options, statistics, cache, WriteBufferManager and filter in a `finally`, even
+  if `db.close()` throws. A failed open closes every native object created so far. `destroyDB` no longer leaks a
+  full-size cache.
 - **R7. Compatibility.** Existing `block-cache-size` / `db-write-buffer-size` overrides keep their meaning: blocks keep
   at least `block-cache-size`, as before. All new `RocksDbConfig` members have defaults. No column family, key or
   value format changes.
 
 ## Expected effect on the live Sepolia node (defaults, no config change)
 
-RocksDB cache + memtables: at most 1 GiB, the same envelope as before (512 + 512 MiB), but now it is a hard limit (the
-write stall) rather than flush pressure alone, and it can be measured. Filters for new SSTs stop being whole-file
-blocks. Total RocksDB native is about 1.0 to 1.1 GiB plus allocator overhead. The rest of the 2.3 GiB native is JVM
+RocksDB cache + memtables: about 1 GiB, the same envelope as before (512 + 512 MiB). It is now one accounted budget
+that the gauges can measure. It is a hard limit only with the opt-in stall; with both opt-ins off, the on-disk table
+format is unchanged. Total RocksDB native is about 1.0 to 1.1 GiB plus allocator overhead. The rest of the 2.3 GiB native is JVM
 memory (about 1 GiB) and glibc arena fragmentation, which are outside `db/`. `MALLOC_ARENA_MAX` is handled in the
 service unit, not here. Expected RSS ceiling: 6 GiB heap + about 1 GiB JVM native + at most 0.5 GiB direct + about
 1.1 GiB RocksDB = about 8.6 GiB, provided arena fragmentation is capped.
 
 ## Acceptance
 
-- `RocksDbMemoryBudgetSpec`: budget formula (default, explicit, tight, zero); `memoryStats` reports capacity and
-  budget, sees memtable growth and is `None` after close; SSTs written with and without partitioning are readable in
-  both directions; the sampler reads at most once per interval and keeps the last value on `None` or an exception.
+- `RocksDbMemoryBudgetSpec`:
+  - the shipped config keeps both opt-ins off and resolves to 1 GiB / 512 MiB, and the overrides parse;
+  - the budget formula (default, explicit, tight, zero);
+  - `memoryStats` reports capacity and budget, sees memtable growth, and is `None` after close;
+  - SSTs written with and without partitioning (explicitly flushed, with `.sst` presence checked after each phase)
+    are readable in both directions;
+  - the sampler reads at most once per interval and keeps the last value on `None` or an exception.
 - Existing `RocksDbDataSourceSpec` (statistics tickers, iterator lifecycle) stays green.
 - On the node: the startup log prints the resolved budget, and `/metrics` shows the new series.
 

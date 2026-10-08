@@ -15,6 +15,8 @@
 - [X] T007 `RocksDbCacheMetrics`: the 30 s `MemorySampler`, six memory gauges and `statistics_enabled`.
 - [X] T008 `db.conf`: the formula, 16 GiB guidance and the new keys.
 - [X] T009 `RocksDbMemoryBudgetSpec`: formula, memoryStats lifecycle, partitioned/legacy SST compatibility, sampler.
+- [X] T009b Prism review: stall and partitioning opt-in (default false); tryLock(100 ms) on metric reads;
+  exception-safe open and close; the compat test flushes explicitly and checks for `.sst` files; config-default test.
 - [ ] T010 CI green: "Test and Build (JDK 25, Scala 3.3.8)".
 - [ ] T011 After the soak pause: deploy, confirm the budget log line and the `_bytes` gauges, and watch RSS through a
   SNAP storage phase.

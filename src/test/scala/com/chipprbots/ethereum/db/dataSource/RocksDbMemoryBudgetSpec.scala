@@ -3,6 +3,9 @@ package com.chipprbots.ethereum.db.dataSource
 import java.io.File
 import java.nio.file.Files
 
+import com.typesafe.config.ConfigFactory
+import com.typesafe.config.ConfigValueFactory
+
 import scala.collection.immutable.ArraySeq
 
 import org.scalatest.flatspec.AnyFlatSpec
@@ -12,6 +15,7 @@ import com.chipprbots.ethereum.db.dataSource.DataSource.Key
 import com.chipprbots.ethereum.db.dataSource.DataSource.Value
 import com.chipprbots.ethereum.db.storage.Namespaces
 import com.chipprbots.ethereum.testing.Tags.*
+import com.chipprbots.ethereum.utils.InstanceConfig
 
 /** spec 015: one bounded RocksDB memory budget and the memory gauges that report it.
   *
@@ -31,7 +35,7 @@ class RocksDbMemoryBudgetSpec extends AnyFlatSpec with Matchers:
       cache: Long = 32 * MiB,
       writeBuffers: Long = 16 * MiB,
       budget: Option[Long] = None,
-      partitioned: Boolean = true
+      partitioned: Boolean = false
   ): RocksDbConfig =
     new RocksDbConfig:
       override val createIfMissing: Boolean = true
@@ -51,12 +55,47 @@ class RocksDbMemoryBudgetSpec extends AnyFlatSpec with Matchers:
   private def value(i: Int): Value = ArraySeq.unsafeWrapArray(Array.fill(256)((i % 251).toByte))
   private val N = 2000
 
+  private def deleteRecursively(f: File): Unit =
+    Option(f.listFiles()).foreach(_.foreach(deleteRecursively))
+    val _ = f.delete()
+
   private def withTempDir(test: String => Unit): Unit =
     val dbPath = Files.createTempDirectory("rocksdb-budget-test").toAbsolutePath.toString
     try test(dbPath)
-    finally
-      val dir = new File(dbPath)
-      !dir.exists() || dir.delete()
+    finally deleteRecursively(new File(dbPath))
+
+  private def sstFiles(dbPath: String): Set[String] =
+    Option(new File(dbPath).listFiles()).toList.flatten.map(_.getName).filter(_.endsWith(".sst")).toSet
+
+  private def shippedRocksDbConfig(overrides: (String, AnyRef)*): RocksDbConfig =
+    val base = ConfigFactory.load().getConfig("fukuii")
+    val cfg = overrides.foldLeft(base) { case (c, (k, v)) => c.withValue(k, ConfigValueFactory.fromAnyRef(v)) }
+    new InstanceConfig(cfg, "rocksdb-budget-test").Db.RocksDb
+
+  "The shipped db.conf" should "keep the write stall and partitioned index/filters opt-in (default off)" taggedAs (
+    UnitTest,
+    DatabaseTest
+  ) in {
+    val rocks = shippedRocksDbConfig()
+    rocks.writeBufferAllowStall shouldBe false
+    rocks.partitionIndexAndFilters shouldBe false
+    rocks.memoryBudget shouldBe None
+    rocks.metadataBlockSize shouldBe 4096L
+    val budget = RocksDbMemoryBudget.resolve(rocks)
+    budget.cacheCapacity shouldBe 1024 * MiB
+    budget.memTableBudget shouldBe 512 * MiB
+  }
+
+  it should "parse the opt-in overrides" taggedAs (UnitTest, DatabaseTest) in {
+    val rocks = shippedRocksDbConfig(
+      "db.rocksdb.write-buffer-allow-stall" -> java.lang.Boolean.TRUE,
+      "db.rocksdb.partition-index-and-filters" -> java.lang.Boolean.TRUE,
+      "db.rocksdb.memory-budget" -> java.lang.Long.valueOf(768 * MiB)
+    )
+    rocks.writeBufferAllowStall shouldBe true
+    rocks.partitionIndexAndFilters shouldBe true
+    rocks.memoryBudget shouldBe Some(768 * MiB)
+  }
 
   "RocksDbMemoryBudget.resolve" should "default to block-cache-size + db-write-buffer-size" taggedAs (
     UnitTest,
@@ -115,16 +154,28 @@ class RocksDbMemoryBudgetSpec extends AnyFlatSpec with Matchers:
     UnitTest,
     DatabaseTest
   ) in withTempDir { dbPath =>
+    // close() does NOT flush WAL-backed memtables; the data would be replayed from the WAL on the next open and
+    // written in THAT open's table format. Each phase therefore flushes explicitly and checks that SST files exist,
+    // so the next phase really reads files written in the previous phase's format.
+
     // 1) Whole-file index/filters (the format every existing node has on disk).
     val legacy = RocksDbDataSource(config(dbPath, partitioned = false), Namespaces.nsSeq)
-    legacy.update(Seq(DataSourceUpdate(Ns, Nil, (0 until N).map(i => key(i) -> value(i)))))
-    legacy.close() // flushes the memtable to SST
+    try
+      legacy.update(Seq(DataSourceUpdate(Ns, Nil, (0 until N).map(i => key(i) -> value(i)))))
+      legacy.flushAll()
+    finally legacy.close()
+    val legacySsts = sstFiles(dbPath)
+    legacySsts should not be empty
 
-    // 2) Reopen partitioned: old SSTs are read as-is; new writes produce partitioned SSTs.
+    // 2) Reopen partitioned: legacy SSTs are read as-is; the new writes land in a partitioned SST.
     val partitioned = RocksDbDataSource(config(dbPath, partitioned = true), Namespaces.nsSeq)
-    (0 until N).foreach(i => partitioned.get(Ns, key(i)) shouldBe Some(value(i)))
-    partitioned.update(Seq(DataSourceUpdate(Ns, Nil, (N until 2 * N).map(i => key(i) -> value(i)))))
-    partitioned.close()
+    try
+      (0 until N).foreach(i => partitioned.get(Ns, key(i)) shouldBe Some(value(i)))
+      partitioned.update(Seq(DataSourceUpdate(Ns, Nil, (N until 2 * N).map(i => key(i) -> value(i)))))
+      partitioned.flushAll()
+    finally partitioned.close()
+    val partitionedSsts = sstFiles(dbPath) -- legacySsts
+    partitionedSsts should not be empty
 
     // 3) Reopen with partitioning off again (a rollback): both kinds of SST stay readable.
     val rolledBack = RocksDbDataSource(config(dbPath, partitioned = false), Namespaces.nsSeq)

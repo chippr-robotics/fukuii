@@ -23,15 +23,17 @@
 
 ## Risks
 
-- **Write stall.** When memtables reach the budget, writes wait for a flush, and a flush took 30 s on the soak SSD.
-  `doWrite` holds the DataSource write lock, so readers wait too. Flushes start at 7/8 of the budget, so a stall means
-  flushing has fallen behind, which is when the cap matters. It can be turned off with
-  `write-buffer-allow-stall = false`.
+- **Write stall (opt-in, default off).** With `write-buffer-allow-stall = true`, writes wait for a flush when
+  memtables reach the budget, and a flush took 30 s on the soak SSD. `doWrite` holds the process-wide lock
+  exclusively, so every reader, including the Engine API, freezes for that long. Default off, so the
+  WriteBufferManager only triggers flushes.
+- **Metrics vs the write lock.** Metric reads try the read lock for at most 100 ms and otherwise keep the last
+  sample.
 - **Blocks see less cache while memtables are full.** Capacity is the sum of the two old caps, so blocks never get
   less than the old 512 MiB.
-- **Format of new SSTs.** A partitioned index and filters are standard BlockBased table options, and older readers of
-  the same rocksdbjni line read them. Rolling back the binary keeps the data readable (tested by reopening with the
-  option off).
+- **Format of new SSTs (opt-in, default off).** A partitioned index and filters are standard BlockBased table
+  options, and older readers of the same rocksdbjni line read them. Turning the option off again keeps the data
+  readable (tested with explicit flushes).
 
 ## Verification
 

@@ -187,10 +187,11 @@ class InstanceConfig(val config: TypesafeConfig, val instanceId: String = "defau
       override val memoryBudget: Option[Long] =
         if rocksDbConfig.hasPath("memory-budget") then Some(rocksDbConfig.getBytes("memory-budget").longValue)
         else None
+      // Both opt-in (default false); see base/db.conf.
       override val writeBufferAllowStall: Boolean =
-        !rocksDbConfig.hasPath("write-buffer-allow-stall") || rocksDbConfig.getBoolean("write-buffer-allow-stall")
+        rocksDbConfig.hasPath("write-buffer-allow-stall") && rocksDbConfig.getBoolean("write-buffer-allow-stall")
       override val partitionIndexAndFilters: Boolean =
-        !rocksDbConfig.hasPath("partition-index-and-filters") ||
+        rocksDbConfig.hasPath("partition-index-and-filters") &&
           rocksDbConfig.getBoolean("partition-index-and-filters")
       override val metadataBlockSize: Long =
         if rocksDbConfig.hasPath("metadata-block-size") then rocksDbConfig.getLong("metadata-block-size") else 4096L

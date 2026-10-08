@@ -1,5 +1,6 @@
 package com.chipprbots.ethereum.db.dataSource
 
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.locks.ReentrantReadWriteLock
 
 import cats.effect.IO
@@ -36,29 +37,26 @@ class RocksDbDataSource(
   /** RocksDB block-cache tickers (spec 002 US2 / FR-005), or `None` when `rocksdb.enable-statistics` is off.
     *
     * Read under the DB read lock: `close()` frees the Statistics handle under the write lock, so an unlocked read could
-    * touch a freed native object.
+    * touch a freed native object. The lock is only TRIED (see [[withMetricsReadLock]]): `None` when a write holds it.
     *
     * @return
     *   `(blockCacheHit, blockCacheMiss, indexFilterHit, indexFilterMiss)` where the index/filter components sum the
     *   index- and filter-block tickers. The values are cumulative counts since DB open.
     */
   def cacheStats: Option[(Long, Long, Long, Long)] =
-    dbLock.readLock().lock()
-    try
-      if isClosed then None
-      else
-        statistics.map { stats =>
-          val hit = stats.getTickerCount(TickerType.BLOCK_CACHE_HIT)
-          val miss = stats.getTickerCount(TickerType.BLOCK_CACHE_MISS)
-          val idxFilterHit =
-            stats.getTickerCount(TickerType.BLOCK_CACHE_INDEX_HIT) +
-              stats.getTickerCount(TickerType.BLOCK_CACHE_FILTER_HIT)
-          val idxFilterMiss =
-            stats.getTickerCount(TickerType.BLOCK_CACHE_INDEX_MISS) +
-              stats.getTickerCount(TickerType.BLOCK_CACHE_FILTER_MISS)
-          (hit, miss, idxFilterHit, idxFilterMiss)
-        }
-    finally dbLock.readLock().unlock()
+    withMetricsReadLock {
+      statistics.map { stats =>
+        val hit = stats.getTickerCount(TickerType.BLOCK_CACHE_HIT)
+        val miss = stats.getTickerCount(TickerType.BLOCK_CACHE_MISS)
+        val idxFilterHit =
+          stats.getTickerCount(TickerType.BLOCK_CACHE_INDEX_HIT) +
+            stats.getTickerCount(TickerType.BLOCK_CACHE_FILTER_HIT)
+        val idxFilterMiss =
+          stats.getTickerCount(TickerType.BLOCK_CACHE_INDEX_MISS) +
+            stats.getTickerCount(TickerType.BLOCK_CACHE_FILTER_MISS)
+        (hit, miss, idxFilterHit, idxFilterMiss)
+      }
+    }
 
   /** True when a RocksDB `Statistics` object is attached (`rocksdb.enable-statistics = true`). */
   def statisticsEnabled: Boolean = statistics.isDefined
@@ -72,23 +70,46 @@ class RocksDbDataSource(
     * Block-cache usage INCLUDES the memtable reservation charged by the WriteBufferManager, so `blockCacheUsage` and
     * `memTables` overlap; do not add them.
     *
-    * Taken under the DB read lock, the same fence every read uses, so it never races `close()`.
+    * Taken under the DB read lock, the same fence every read uses, so it never races `close()`. The lock is only TRIED
+    * (see [[withMetricsReadLock]]): `None` when a write holds it, and the metrics sampler keeps its last sample.
     */
   def memoryStats: Option[RocksDbMemoryStats] =
+    withMetricsReadLock {
+      Some(
+        RocksDbMemoryStats(
+          blockCacheUsage = memory.cache.getUsage,
+          blockCachePinnedUsage = memory.cache.getPinnedUsage,
+          blockCacheCapacity = memory.budget.cacheCapacity,
+          memTables = db.getAggregatedLongProperty("rocksdb.cur-size-all-mem-tables"),
+          memTableBudget = memory.budget.memTableBudget,
+          tableReaders = db.getAggregatedLongProperty("rocksdb.estimate-table-readers-mem")
+        )
+      )
+    }
+
+  /** Run a metrics read under the DB read lock, waiting at most [[MetricsLockWaitMs]] for it.
+    *
+    * `doWrite` holds the process-wide lock exclusively for the whole `db.write`, which can last seconds (a write stall,
+    * a large batch). A scrape must not queue behind that and pile up scrape threads, so it gives up and returns `None`.
+    * Also `None` once closed, so no freed native handle is ever touched.
+    */
+  private def withMetricsReadLock[A](read: => Option[A]): Option[A] =
+    if !dbLock.readLock().tryLock(MetricsLockWaitMs, TimeUnit.MILLISECONDS) then None
+    else
+      try if isClosed then None else read
+      finally dbLock.readLock().unlock()
+
+  /** Flush every column family's memtables to SST files and wait for it. Test support: `close()` does not flush
+    * WAL-backed memtables, so a test that needs data in SST files (in a given table format) must call this first.
+    */
+  private[dataSource] def flushAll(): Unit =
+    import scala.jdk.CollectionConverters.*
     dbLock.readLock().lock()
     try
-      if isClosed then None
-      else
-        Some(
-          RocksDbMemoryStats(
-            blockCacheUsage = memory.cache.getUsage,
-            blockCachePinnedUsage = memory.cache.getPinnedUsage,
-            blockCacheCapacity = memory.budget.cacheCapacity,
-            memTables = db.getAggregatedLongProperty("rocksdb.cur-size-all-mem-tables"),
-            memTableBudget = memory.budget.memTableBudget,
-            tableReaders = db.getAggregatedLongProperty("rocksdb.estimate-table-readers-mem")
-          )
-        )
+      assureNotClosed()
+      withResources(new FlushOptions().setWaitForFlush(true)) { opts =>
+        db.flush(opts, handles.values.toList.asJava)
+      }
     finally dbLock.readLock().unlock()
 
   /** This function obtains the associated value to a key, if there exists one.
@@ -452,21 +473,23 @@ class RocksDbDataSource(
       isClosed = true
       // There is specific order for closing rocksdb with column families descibed in
       // https://github.com/facebook/rocksdb/wiki/RocksJava-Basics#opening-a-database-with-column-families
-      // 1. Free all column families handles
-      handles.values.foreach(_.close())
-      // 2. Free db and db options
-      db.close()
-      readOptions.close()
-      dbOptions.close()
-      // 3. Free column families options
-      cfOptions.close()
-      // 4. Free the Statistics handle (spec 002 US2), if statistics were enabled.
-      statistics.foreach(_.close())
-      statistics = None
-      // 5. Free the memory-budget objects (spec 015). The DB is closed, so nothing references them natively any more:
-      //    the WriteBufferManager first (it holds a reservation handle into the cache), then the table-config filter,
-      //    then the shared cache.
-      memory.close()
+      try
+        // 1. Free all column families handles
+        handles.values.foreach(_.close())
+        // 2. Free db
+        db.close()
+      finally
+        // Runs even when db.close() throws, so the options, statistics and memory-budget objects never leak.
+        // 3. Free db options and column families options
+        readOptions.close()
+        dbOptions.close()
+        cfOptions.close()
+        // 4. Free the Statistics handle (spec 002 US2), if statistics were enabled.
+        statistics.foreach(_.close())
+        statistics = None
+        // 5. Free the memory-budget objects (spec 015): the WriteBufferManager first (it holds a reservation handle into
+        //    the cache), then the table-config filter, then the shared cache.
+        memory.close()
       log.info(s"DataSource closed successfully in the path: ${rocksDbConfig.path}")
     catch
       case error: RocksDbDataSourceClosedException =>
@@ -539,11 +562,13 @@ trait RocksDbConfig:
   // spec 015: total RocksDB cache budget in bytes (blocks + memtables). `None` = blockCacheSize + dbWriteBufferSize.
   // A `def` (not a `val`) so the default reads the subclass's vals after they are initialised.
   def memoryBudget: Option[Long] = None
-  // spec 015: stall writes while memtables exceed their budget (the circuit breaker). Off = flush pressure only.
-  def writeBufferAllowStall: Boolean = true
-  // spec 015: two-level (partitioned) index + partitioned filters for newly written SST files, so index/filter memory
-  // is cached in metadata-block-size pieces instead of whole per-file blocks.
-  def partitionIndexAndFilters: Boolean = true
+  // spec 015: stall writes while memtables exceed their budget (hard cap). Opt-in: doWrite holds the process-wide
+  // dbLock exclusively around db.write, so a stall freezes ALL reads (Engine API included) until a flush completes.
+  // Off (default): the WriteBufferManager still triggers flushes at its budget; memtables can overshoot briefly.
+  def writeBufferAllowStall: Boolean = false
+  // spec 015: opt-in two-level (partitioned) index + partitioned filters for newly written SST files, so index/filter
+  // memory is cached in metadata-block-size pieces instead of whole per-file blocks.
+  def partitionIndexAndFilters: Boolean = false
   // spec 015: size of one index/filter partition.
   def metadataBlockSize: Long = 4096
   // Ceiling (bytes) on total live WAL across column families.
@@ -606,8 +631,8 @@ final class MemoryResources(
     val cache: Cache,
     val writeBufferManager: WriteBufferManager,
     val filter: Filter
-):
-  def close(): Unit =
+) extends AutoCloseable:
+  override def close(): Unit =
     writeBufferManager.close()
     filter.close()
     cache.close()
@@ -638,6 +663,16 @@ object RocksDbDataSource extends Logger:
     */
   private val dbLock = new ReentrantReadWriteLock()
 
+  /** Longest a metrics read waits for the DB read lock before giving up (spec 015). */
+  private[dataSource] val MetricsLockWaitMs: Long = 100L
+
+  /** Close `resources` in reverse order, adding any failure to `primary` as suppressed. Used on open failure. */
+  private def closeAllQuietly(resources: Iterable[AutoCloseable], primary: Throwable): Unit =
+    resources.toList.reverse.foreach { r =>
+      try r.close()
+      catch case NonFatal(e) => primary.addSuppressed(e)
+    }
+
   final private case class OpenedDb(
       db: RocksDB,
       handles: mutable.Buffer[ColumnFamilyHandle],
@@ -658,27 +693,39 @@ object RocksDbDataSource extends Logger:
     val budget = RocksDbMemoryBudget.resolve(config)
     // -1 = let RocksDB pick the shard count; 0.5 = up to half the cache is the high-priority pool, where index and
     // filter blocks live (cacheIndexAndFilterBlocksWithHighPriority) so data blocks cannot evict them first.
-    val cache = new LRUCache(budget.cacheCapacity, -1, false, 0.5)
-    val wbm = new WriteBufferManager(budget.memTableBudget, cache, config.writeBufferAllowStall)
-    val filter = new BloomFilter(10, false)
-    val tableCfg = new BlockBasedTableConfig()
-      .setBlockSize(config.blockSize)
-      .setBlockCache(cache)
-      .setCacheIndexAndFilterBlocks(true)
-      .setCacheIndexAndFilterBlocksWithHighPriority(true)
-      .setPinL0FilterAndIndexBlocksInCache(true)
-      .setFilterPolicy(filter)
-      .setOptimizeFiltersForMemory(true)
-    if config.partitionIndexAndFilters then
-      // Partitioned index + filters (new SST files only; existing files stay readable as they are). Only the small
-      // top-level index/filter of each file is pinned; partitions are cached and evicted like data blocks, so a DB
-      // with thousands of SST files does not need all its filters in memory at once.
-      val _ = tableCfg
-        .setIndexType(IndexType.kTwoLevelIndexSearch)
-        .setPartitionFilters(true)
-        .setPinTopLevelIndexAndFilter(true)
-        .setMetadataBlockSize(config.metadataBlockSize)
-    (new MemoryResources(budget, cache, wbm, filter), tableCfg)
+    val acquired = mutable.ArrayBuffer.empty[AutoCloseable]
+    try
+      val cache = new LRUCache(budget.cacheCapacity, -1, false, 0.5)
+      acquired += cache
+      val wbm = new WriteBufferManager(budget.memTableBudget, cache, config.writeBufferAllowStall)
+      acquired += wbm
+      val filter = new BloomFilter(10, false)
+      acquired += filter
+      val tableCfg = new BlockBasedTableConfig()
+        .setBlockSize(config.blockSize)
+        .setBlockCache(cache)
+        .setCacheIndexAndFilterBlocks(true)
+        .setCacheIndexAndFilterBlocksWithHighPriority(true)
+        .setPinL0FilterAndIndexBlocksInCache(true)
+        .setFilterPolicy(filter)
+      if config.partitionIndexAndFilters then
+        // Opt-in. Partitioned index + filters for NEW SST files; existing files stay readable as they are. Each file's
+        // top-level index/filter block is pinned (roughly one entry per partition, so it grows with file size and file
+        // count; L0 files additionally stay pinned as before). The partitions themselves are cached and evicted like
+        // data blocks, so a DB with thousands of SST files does not need all its filters in memory at once.
+        // optimizeFiltersForMemory (sizes filters to allocator-friendly lengths, fewer bytes per filter) rides on the
+        // same flag so the default table format is exactly what nodes write today.
+        val _ = tableCfg
+          .setIndexType(IndexType.kTwoLevelIndexSearch)
+          .setPartitionFilters(true)
+          .setPinTopLevelIndexAndFilter(true)
+          .setMetadataBlockSize(config.metadataBlockSize)
+          .setOptimizeFiltersForMemory(true)
+      (new MemoryResources(budget, cache, wbm, filter), tableCfg)
+    catch
+      case NonFatal(error) =>
+        closeAllQuietly(acquired, error)
+        throw error
 
   // scalastyle:off method.length
   private def createDB(
@@ -692,6 +739,8 @@ object RocksDbDataSource extends Logger:
     // Ensure native RocksDB library is loaded (only happens once per JVM)
     libraryLoaded
 
+    // Native objects created so far; closed (in reverse) if opening fails, so a failed open leaks nothing.
+    val acquired = mutable.ArrayBuffer.empty[AutoCloseable]
     RocksDbDataSource.dbLock.writeLock().lock()
     try
       // Validate and prepare database path
@@ -719,8 +768,10 @@ object RocksDbDataSource extends Logger:
             )
 
       val readOptions = new ReadOptions().setVerifyChecksums(rocksDbConfig.verifyChecksums)
+      acquired += readOptions
 
       val (memory, tableCfg) = memoryResources(rocksDbConfig)
+      acquired += memory
       log.info(
         s"RocksDB memory budget at $path: cache ${memory.budget.cacheCapacity / (1024 * 1024)} MiB shared by all " +
           s"column families, of which memtables <= ${memory.budget.memTableBudget / (1024 * 1024)} MiB " +
@@ -743,6 +794,7 @@ object RocksDbDataSource extends Logger:
         // Cap total live WAL across CFs; also forces a flush of the laggard CF so the
         // memtable pinning the oldest WAL is released rather than accumulating.
         .setMaxTotalWalSize(maxTotalWalSize)
+      acquired += options
 
       // spec 002 US2 (FR-005): optionally attach a Statistics object so block-cache hit/miss tickers
       // become observable. Off by default (~1-2% read overhead). The handle is returned so close()
@@ -751,6 +803,7 @@ object RocksDbDataSource extends Logger:
         if rocksDbConfig.enableStatistics then
           val stats = new Statistics()
           stats.setStatsLevel(StatsLevel.EXCEPT_DETAILED_TIMERS)
+          acquired += stats
           options.setStatistics(stats)
           Some(stats)
         else None
@@ -761,6 +814,7 @@ object RocksDbDataSource extends Logger:
           .setBottommostCompressionType(CompressionType.ZSTD_COMPRESSION)
           .setLevelCompactionDynamicLevelBytes(levelCompaction)
           .setTableFormatConfig(tableCfg)
+      acquired += cfOpts
 
       val cfDescriptors = List(new ColumnFamilyDescriptor(RocksDB.DEFAULT_COLUMN_FAMILY, cfOpts)) ++ namespaces.map {
         namespace =>
@@ -775,13 +829,11 @@ object RocksDbDataSource extends Logger:
         try RocksDB.open(options, path, cfDescriptors.asJava, columnFamilyHandleList.asJava)
         catch
           case error: RocksDBException =>
-            memory.close()
             throw RocksDbDataSourceException(
               s"RocksDB failed to open database at path: $path - ${error.getMessage}",
               error
             )
           case NonFatal(error) =>
-            memory.close()
             throw RocksDbDataSourceException(
               s"Unexpected error opening RocksDB at path: $path - ${error.getMessage}",
               error
@@ -792,9 +844,11 @@ object RocksDbDataSource extends Logger:
       OpenedDb(db, columnFamilyHandleList, readOptions, options, cfOpts, statistics, memory)
     catch
       case error: RocksDbDataSourceException =>
+        closeAllQuietly(acquired, error)
         // Re-throw our exception without additional logging (caller will log if needed)
         throw error
       case NonFatal(error) =>
+        closeAllQuietly(acquired, error)
         val errorMsg = s"Unexpected error creating RocksDB DataSource at path: $path - ${error.getMessage}"
         log.error(errorMsg, error)
         throw RocksDbDataSourceException(errorMsg, error)
