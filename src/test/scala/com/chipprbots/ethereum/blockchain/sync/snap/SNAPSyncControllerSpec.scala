@@ -63,6 +63,29 @@ class SNAPSyncControllerSpec extends AnyFlatSpec with Matchers:
     config.maxSnapSyncFailures should be > 0
   }
 
+  // spec-005 (spec 016 T015): the pruned post-heal verification is on by default, both in the case class and when the
+  // key is absent from config, and the key can turn it off. The store gate and the forwarded value are pinned through
+  // the controller in SNAPSyncControllerPinSpec.
+  it should "spec-005: default prunedHealVerification to true in the case class" taggedAs UnitTest in {
+    SNAPSyncConfig().prunedHealVerification shouldBe true
+  }
+
+  it should "spec-005: default prunedHealVerification to true when pruned-heal-verification is absent" taggedAs UnitTest in {
+    val sync = com.typesafe.config.ConfigFactory.load().getConfig("fukuii.sync")
+    val absent = sync.withoutPath("snap-sync.pruned-heal-verification")
+    absent.hasPath("snap-sync.pruned-heal-verification") shouldBe false
+    SNAPSyncConfig.fromConfig(absent).prunedHealVerification shouldBe true
+  }
+
+  it should "spec-005: parse pruned-heal-verification = false" taggedAs UnitTest in {
+    val sync = com.typesafe.config.ConfigFactory.load().getConfig("fukuii.sync")
+    val off = sync.withValue(
+      "snap-sync.pruned-heal-verification",
+      com.typesafe.config.ConfigValueFactory.fromAnyRef(false)
+    )
+    SNAPSyncConfig.fromConfig(off).prunedHealVerification shouldBe false
+  }
+
   // Regression for #1162: chain backfill is decoupled from SNAP completion. The new
   // `chainBackfillConcurrentRequests` budget controls how many in-flight ETH requests background
   // backfill is allowed once regular sync has taken over. Default must be small (yield to regular sync).
