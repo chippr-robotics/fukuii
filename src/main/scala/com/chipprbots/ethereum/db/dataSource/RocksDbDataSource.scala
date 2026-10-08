@@ -151,6 +151,19 @@ class RocksDbDataSource(
         throw RocksDbDataSourceException(s"DataSource error while deleting range", error)
     finally dbLock.writeLock().unlock()
 
+  // Read lock: compaction runs concurrently with reads and writes inside RocksDB; the lock only fences close().
+  override def compactRange(namespace: Namespace, fromKey: Array[Byte], toKeyExclusive: Array[Byte]): Unit =
+    dbLock.readLock().lock()
+    try
+      assureNotClosed()
+      db.compactRange(handles(namespace), fromKey, toKeyExclusive)
+    catch
+      case error: RocksDbDataSourceClosedException =>
+        throw error
+      case NonFatal(error) =>
+        throw RocksDbDataSourceException(s"DataSource error while compacting range", error)
+    finally dbLock.readLock().unlock()
+
   /** Forward range scan via a single seek+next over a bounded `[fromKey, toKeyExclusive)` window. Uses
     * `scanReadOptions` (fillCache=false) so a large queue scan does not evict the hot block cache. Drains the window
     * into a buffer and CLOSES the native iterator before returning, so no `RocksIterator` handle outlives the call —

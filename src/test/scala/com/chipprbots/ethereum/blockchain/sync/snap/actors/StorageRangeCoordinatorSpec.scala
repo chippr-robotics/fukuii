@@ -19,6 +19,7 @@ import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController
 import com.chipprbots.ethereum.crypto.kec256
 import com.chipprbots.ethereum.db.dataSource.EphemDataSource
 import com.chipprbots.ethereum.db.storage.FlatSlotStorage
+import com.chipprbots.ethereum.db.storage.SnapStorageDoneStorage
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor
 import com.chipprbots.ethereum.network.p2p.messages.SNAP.GetStorageRanges.GetStorageRangesEnc
 import com.chipprbots.ethereum.network.p2p.messages.SNAP.StorageRanges
@@ -94,7 +95,8 @@ class StorageRangeCoordinatorSpec extends ScalaTestWithActorTestKit() with AnyFl
       // unchanged. Tests that need to inspect `pendingAccountTries` (the ordering-gate tests) must
       // pass `false` explicitly — with deferred merkleization on, applyReadyStorageChunk never
       // builds a trie at all (flat-slot writes only).
-      deferredMerkleization: Boolean = true
+      deferredMerkleization: Boolean = true,
+      recordStorageDone: Boolean = false
   ): (StorageRangeCoordinatorImpl, BehaviorTestKit[StorageRangeCoordinator.Command]) =
     var captured: StorageRangeCoordinatorImpl = null
     val behavior = Behaviors.setup[StorageRangeCoordinator.Command] { ctx =>
@@ -115,7 +117,8 @@ class StorageRangeCoordinatorSpec extends ScalaTestWithActorTestKit() with AnyFl
           flatBatchEcOverride = flatBatchEcOverride,
           backpressureHighWatermark = backpressureHighWatermark,
           backpressureLowWatermark = backpressureLowWatermark,
-          deferredMerkleization = deferredMerkleization
+          deferredMerkleization = deferredMerkleization,
+          recordStorageDone = recordStorageDone
         )
         captured.start()
       }
@@ -1797,4 +1800,165 @@ class StorageRangeCoordinatorSpec extends ScalaTestWithActorTestKit() with AnyFl
     impl.peerHealth.isPenalised("health-pivot", System.currentTimeMillis()) shouldBe false
     impl.peerHealth.isOnProbation("health-pivot") shouldBe false
     impl.peerHealth.level("health-pivot") shouldBe level
+  }
+
+  // ── Storage-task completion markers: a resume re-queues only unfinished storage tasks ──
+
+  private val doneRootArg = kec256(ByteString("done-marker-root"))
+  private val doneSlots = Seq(slotKey(0x10) -> ByteString("value-10"), slotKey(0x30) -> ByteString("value-30"))
+
+  private def doneMarkerFixture(
+      recordStorageDone: Boolean = true,
+      flatBatchEc: scala.concurrent.ExecutionContext = scala.concurrent.ExecutionContext.parasitic,
+      flatBatchEntryThreshold: Int = 1000,
+      dataSource: EphemDataSource = EphemDataSource()
+  ): (
+      StorageRangeCoordinatorImpl,
+      BehaviorTestKit[StorageRangeCoordinator.Command],
+      FlatSlotStorage,
+      SnapStorageDoneStorage
+  ) =
+    val flatSlots = new FlatSlotStorage(dataSource)
+    val (impl, kit) = newImpl(
+      stateRoot = doneRootArg,
+      flatSlotStorage = flatSlots,
+      snapSyncControllerRef = testKit.createTestProbe[SNAPSyncController.Command]().ref,
+      flatBatchEntryThreshold = flatBatchEntryThreshold,
+      flatBatchEcOverride = Some(flatBatchEc),
+      deferredMerkleization = false, // production default: the storage trie is built and committed
+      recordStorageDone = recordStorageDone
+    )
+    (impl, kit, flatSlots, new SnapStorageDoneStorage(flatSlots.dataSource))
+
+  /** A flat-batch writer that runs nothing until told to: lets a test hold a batch "in flight". */
+  final private class ManualEc extends scala.concurrent.ExecutionContext:
+    private val queue = mutable.Queue.empty[Runnable]
+    def execute(runnable: Runnable): Unit = queue.enqueue(runnable)
+    def reportFailure(cause: Throwable): Unit = ()
+    def runAll(): Unit = while queue.nonEmpty do queue.dequeue().run()
+
+  private def storageRootOf(slots: Seq[(ByteString, ByteString)]): ByteString =
+    val reference = new SnapHashTrie(_ => ())
+    slots.foreach { case (k, v) => reference.update(k.toArray, v.toArray) }
+    reference.commit()
+
+  /** One whole-range response for a fresh account (empty proof ⇒ fully served): the account completes. */
+  private def completeAccount(impl: StorageRangeCoordinatorImpl, account: ByteString, claimedRoot: ByteString): Unit =
+    val peer = PeerTestHelpers.createTestPeer("done-marker-peer", testKit.createTestProbe[Any]().ref.toClassic)
+    impl.applyOrderedStorageChunk(peer, StorageTask.createStorageTask(account, claimedRoot), doneSlots, Seq.empty)
+
+  it should "make a completion marker durable only together with the account's flat slots" taggedAs UnitTest in {
+    val (impl, kit, flatSlots, done) = doneMarkerFixture()
+    val account = kec256(ByteString("done-account"))
+    val root = storageRootOf(doneSlots)
+
+    completeAccount(impl, account, root)
+    impl.completedAccountCount shouldBe 1L
+    // Its last slots are still buffered, so the marker waits on batch 1, the batch that will carry them.
+    impl.pendingDoneMarkers.toSeq shouldBe Seq((account, root, 1L))
+    // A crash at this point loses the marker together with the slots: the task is re-queued on resume, never skipped.
+    done.isDone(account, root) shouldBe false
+    flatSlots.getSlot(account, doneSlots.head._1) shouldBe None
+
+    kit.run(StorageRangeCoordinator.FlushStorageDoneMarkers)
+    drainSelf(kit)
+    impl.pendingDoneMarkers shouldBe empty
+    done.isDone(account, root) shouldBe true
+    doneSlots.foreach { case (k, v) => flatSlots.getSlot(account, k) shouldBe Some(v) }
+    done.isDone(account, kec256(ByteString("some-other-root"))) shouldBe false
+  }
+
+  it should "hold a completion marker back until the batch carrying the account's slots has committed" taggedAs UnitTest in {
+    val writer = new ManualEc
+    // Threshold 1: the account's slots go out in their own batch the moment they are staged, before the marker.
+    val (impl, kit, flatSlots, done) = doneMarkerFixture(flatBatchEc = writer, flatBatchEntryThreshold = 1)
+    val account = kec256(ByteString("done-account-inflight"))
+    val root = storageRootOf(doneSlots)
+    completeAccount(impl, account, root)
+    impl.inFlightFlatBatches shouldBe 1 // batch 1 (the slots) submitted, not yet run
+
+    // Batch 1 has not committed: the marker must not ride in any batch yet (a crash now loses the slots).
+    kit.run(StorageRangeCoordinator.FlushStorageDoneMarkers)
+    impl.pendingDoneMarkers should have size 1
+    done.isDone(account, root) shouldBe false
+
+    writer.runAll() // batch 1 commits; its FlatBatchFlushComplete lands in the inbox
+    drainSelf(kit)
+    impl.flatBatchesDoneThrough shouldBe 1L
+    doneSlots.foreach { case (k, v) => flatSlots.getSlot(account, k) shouldBe Some(v) }
+    done.isDone(account, root) shouldBe false
+
+    kit.run(StorageRangeCoordinator.FlushStorageDoneMarkers) // the marker may ride now
+    impl.pendingDoneMarkers shouldBe empty
+    writer.runAll()
+    drainSelf(kit)
+    done.isDone(account, root) shouldBe true
+  }
+
+  /** An in-memory store whose writes can be made to fail, to drive a real flat-batch commit failure. */
+  final private class FailingWritesDataSource extends EphemDataSource(Map.empty):
+    @volatile var failWrites: Boolean = false
+    override def update(
+        dataSourceUpdates: Seq[com.chipprbots.ethereum.db.dataSource.DataUpdate]
+    ): Unit =
+      if failWrites then throw new java.io.IOException("synthetic write failure")
+      else super.update(dataSourceUpdates)
+
+  it should "never make a staged marker durable when the batch carrying it and the account's slots fails" taggedAs UnitTest in {
+    val ds = new FailingWritesDataSource
+    val (impl, kit, flatSlots, done) = doneMarkerFixture(dataSource = ds)
+    val root = storageRootOf(doneSlots)
+    val account = kec256(ByteString("done-account-failed-batch"))
+    completeAccount(impl, account, root)
+    impl.pendingDoneMarkers should have size 1 // staged; its slots are still buffered
+
+    // The write batch (slots + marker) fails to commit.
+    ds.failWrites = true
+    kit.run(StorageRangeCoordinator.FlushStorageDoneMarkers)
+    drainSelf(kit) // FlatBatchFlushFailed
+    impl.doneMarkersDisabled shouldBe true
+    impl.pendingDoneMarkers shouldBe empty
+    ds.failWrites = false
+    done.isDone(account, root) shouldBe false
+    flatSlots.getSlot(account, doneSlots.head._1) shouldBe None
+
+    // Later completions are not marked either: the failed batch's slots are gone for good.
+    val later = kec256(ByteString("done-account-after-failed-batch"))
+    completeAccount(impl, later, root)
+    impl.pendingDoneMarkers shouldBe empty
+    kit.run(StorageRangeCoordinator.FlushStorageDoneMarkers)
+    drainSelf(kit)
+    done.isDone(later, root) shouldBe false
+  }
+
+  it should "stop writing completion markers once a flat batch has failed" taggedAs UnitTest in {
+    val (impl, kit, _, done) = doneMarkerFixture()
+    val root = storageRootOf(doneSlots)
+    val first = kec256(ByteString("done-account-before-failure"))
+    completeAccount(impl, first, root)
+
+    impl.inFlightFlatBatches = 1
+    kit.run(StorageRangeCoordinator.FlatBatchFlushFailed(doneRootArg, entryCount = 2, error = "synthetic"))
+    impl.doneMarkersDisabled shouldBe true
+    impl.pendingDoneMarkers shouldBe empty
+
+    val second = kec256(ByteString("done-account-after-failure"))
+    completeAccount(impl, second, root)
+    impl.pendingDoneMarkers shouldBe empty
+    kit.run(StorageRangeCoordinator.FlushStorageDoneMarkers)
+    drainSelf(kit)
+    done.isDone(first, root) shouldBe false
+    done.isDone(second, root) shouldBe false
+  }
+
+  it should "not mark an account whose computed storage root differs from the claimed one, nor when markers are off" taggedAs UnitTest in {
+    val (impl, _, _, _) = doneMarkerFixture()
+    completeAccount(impl, kec256(ByteString("done-account-mismatch")), kec256(ByteString("not-the-real-root")))
+    impl.completedAccountCount shouldBe 1L
+    impl.pendingDoneMarkers shouldBe empty
+
+    val (off, _, _, _) = doneMarkerFixture(recordStorageDone = false)
+    completeAccount(off, kec256(ByteString("done-account-off")), storageRootOf(doneSlots))
+    off.completedAccountCount shouldBe 1L
+    off.pendingDoneMarkers shouldBe empty
   }
