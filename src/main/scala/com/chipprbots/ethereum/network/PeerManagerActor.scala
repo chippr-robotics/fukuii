@@ -85,6 +85,12 @@ object PeerManagerActor:
   final case class SendMessageCmd(message: MessageSerializable, peerId: PeerId) extends Command
   final case class PeerClosedConnectionCmd(peerHostAddress: String, reason: Long) extends Command
 
+  /** Sent by NetworkPeerManagerActor for a handshaked peer whose head is still genesis after the grace period while our
+    * own chain is past genesis (spec 011). Policy (maintained/trusted exemption, disconnect, dial exclusion) is applied
+    * here, next to the wrong-network exclusion it reuses.
+    */
+  final case class EvictGenesisHeadPeerCmd(peerId: PeerId, clientId: String) extends Command
+
   /** A [[PeerEventBusActor.PeerEvent]] delivered to the shell (the subscriber) and forwarded to the core. */
   final case class PeerEventReceived(ev: PeerEvent) extends Command
 
@@ -687,6 +693,28 @@ object PeerManagerActor:
               replyTo ! DisconnectPeerResponse(disconnected = false)
           Some(Behaviors.same)
 
+        case EvictGenesisHeadPeerCmd(peerId, clientId) =>
+          connectedPeers.getPeer(peerId).foreach { peer =>
+            val nodeIdOpt = peer.nodeId
+            val nodeIdHex = nodeIdOpt.map(n => Hex.toHexString(n.toArray)).getOrElse("")
+            if maintainedPeersByNodeId.contains(nodeIdHex) || trustedPeersByNodeId.contains(nodeIdHex) then
+              log.debug("GENESIS_HEAD_EVICT: skipping maintained/trusted peer {}", nodeIdHex.take(16))
+            else
+              val duration = peerConfiguration.genesisHeadExclusionDuration
+              nodeIdOpt.foreach(n => wrongNetworkNodes.add(n, System.currentTimeMillis() + duration.toMillis))
+              log.info(
+                "GENESIS_HEAD_EVICT: disconnecting node={} host={} client={}; head still genesis after {}; " +
+                  "excluded from dialling for {}",
+                nodeIdHex.take(16),
+                peer.remoteAddress.getHostString,
+                clientId,
+                peerConfiguration.genesisHeadEvictionGrace,
+                duration
+              )
+              peer.ref ! PeerActor.DisconnectPeer(Disconnect.Reasons.UselessPeer)
+          }
+          Some(Behaviors.same)
+
         case DisconnectPeerFireAndForgetCmd(peerId) =>
           connectedPeers.getPeer(peerId).foreach { peer =>
             peer.ref ! PeerActor.DisconnectPeer(Disconnect.Reasons.DisconnectRequested)
@@ -1099,7 +1127,18 @@ object PeerManagerActor:
       * many test configurations keep compiling; overridden from `network.peer.wrong-network-exclusion-duration`.
       */
     val wrongNetworkExclusionDuration: FiniteDuration = PeerConfiguration.DefaultWrongNetworkExclusionDuration
+
+    /** Spec 011: how long a handshaked peer may keep a genesis head, while our chain is past genesis, before it is
+      * evicted. Zero disables. Overridden from `network.peer.genesis-head-eviction-grace`.
+      */
+    val genesisHeadEvictionGrace: FiniteDuration = PeerConfiguration.DefaultGenesisHeadEvictionGrace
+
+    /** How long an evicted genesis-head peer stays off the dial list (`network.peer.genesis-head-exclusion-duration`).
+      */
+    val genesisHeadExclusionDuration: FiniteDuration = PeerConfiguration.DefaultGenesisHeadExclusionDuration
   object PeerConfiguration:
+    val DefaultGenesisHeadEvictionGrace: FiniteDuration = 60.seconds
+    val DefaultGenesisHeadExclusionDuration: FiniteDuration = 1.hour
     val DefaultWrongNetworkExclusionDuration: FiniteDuration = 24.hours
 
     trait ConnectionLimits:

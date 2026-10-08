@@ -1167,6 +1167,41 @@ class PeerManagerSpec
     dialled should not be null
     dialled.probe.expectMsgType[ConnectTo](3.seconds).uri shouldBe wrongUri
 
+  // ── Genesis-head crawler eviction (spec 011) ───────────────────────────────
+
+  trait HandshakedCrawlerSetup extends TestSetup:
+    start()
+    handleInitialNodesDiscovery()
+    val TestPeer(crawler, crawlerProbe) = createdPeers.head
+    val ConnectTo(crawlerUri) = crawlerProbe.expectMsgClass(classOf[PeerActor.ConnectTo])
+    val crawlerHex: String = crawlerUri.getUserInfo
+    val crawlerNodeId: ByteString = ByteString(Hex.decode(crawlerHex))
+    peerManager ! PeerManagerActor.PeerEventReceived(
+      PeerEvent.PeerHandshakeSuccessful(crawler.copy(nodeId = Some(crawlerNodeId)), initialPeerInfo)
+    )
+
+  it should "disconnect an evicted genesis-head peer with UselessPeer" taggedAs (
+    UnitTest,
+    NetworkTest
+  ) in new HandshakedCrawlerSetup:
+    peerManager ! PeerManagerActor.EvictGenesisHeadPeerCmd(crawler.id, "enrscout")
+    crawlerProbe.fishForMessage(3.seconds) {
+      case PeerActor.DisconnectPeer(r) => r == Disconnect.Reasons.UselessPeer
+      case _                           => false
+    }
+
+  it should "not evict a maintained peer even if its head is genesis" taggedAs (
+    UnitTest,
+    NetworkTest
+  ) in new HandshakedCrawlerSetup:
+    val replyProbe = TestProbe()
+    peerManager ! PeerManagerActor.AddMaintainedPeerCmd(
+      crawlerUri,
+      replyProbe.ref.toTyped[PeerManagerActor.AddMaintainedPeerResponse]
+    )
+    peerManager ! PeerManagerActor.EvictGenesisHeadPeerCmd(crawler.id, "enrscout")
+    crawlerProbe.expectNoMessage(500.millis)
+
   "PeerManagerActor.WrongNetworkExclusions" should "exclude a node until its expiry, then forget it" taggedAs UnitTest in {
     val ex = new PeerManagerActor.WrongNetworkExclusions(maxEntries = 2)
     val a = ByteString(1, 2, 3)

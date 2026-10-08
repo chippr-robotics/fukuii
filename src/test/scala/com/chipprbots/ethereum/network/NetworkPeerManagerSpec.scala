@@ -689,6 +689,77 @@ class NetworkPeerManagerSpec extends AnyFlatSpec with Matchers:
         probe.peerId shouldBe peer.id
         probe.message.code shouldBe Codes.GetBlockHeadersCode
 
+  // ── Genesis-head crawler eviction (spec 011) ───────────────────────────────
+
+  trait GenesisHeadSetup extends TestSetupWithReader:
+    // grace = 0 disables the periodic timer; the tick is driven by hand so the test is deterministic.
+    def newGenesisHeadHolder(grace: FiniteDuration): org.apache.pekko.actor.ActorRef = classicSystem
+      .spawn(
+        NetworkPeerManagerActor.behavior(
+          peerManager.ref.toTyped[PeerManagerActor.Command],
+          peerEventBus.ref.toTyped[PeerEventBusActor.Command],
+          storagesInstance.storages.appStateStorage,
+          Some(forkResolver),
+          blockchainReader = Some(blockchainReader),
+          isPoWChain = true,
+          genesisHeadEvictionGrace = grace
+        ),
+        s"npma-genesis-head-${java.util.UUID.randomUUID()}"
+      )
+      .toClassic
+
+    val crawlerInfo: PeerInfo =
+      val g = createGenesisPeerInfo()
+      g.copy(remoteStatus = g.remoteStatus.copy(capability = Capability.ETH69, remoteClientId = "enrscout"))
+
+  it should "ask the peer manager to evict a genesis-head peer once past the grace, when our chain is past genesis" taggedAs (
+    UnitTest,
+    NetworkTest
+  ) in new GenesisHeadSetup:
+    expectInitialSubscriptions()
+    val holder = newGenesisHeadHolder(0.millis)
+    expectInitialSubscriptions()
+    storagesInstance.storages.appStateStorage.putBestBlockNumber(100).commit()
+    setupPeerOnHolder(holder, peer1, peer1Probe, crawlerInfo)
+
+    holder ! CheckGenesisHeadPeersTick
+    peerManager.expectMsg(PeerManagerActor.EvictGenesisHeadPeerCmd(peer1.id, "enrscout"))
+
+  it should "not evict a genesis-head peer before the grace period elapses" taggedAs (
+    UnitTest,
+    NetworkTest
+  ) in new GenesisHeadSetup:
+    expectInitialSubscriptions()
+    val holder = newGenesisHeadHolder(1.hour)
+    expectInitialSubscriptions()
+    storagesInstance.storages.appStateStorage.putBestBlockNumber(100).commit()
+    setupPeerOnHolder(holder, peer1, peer1Probe, crawlerInfo)
+
+    holder ! CheckGenesisHeadPeersTick
+    peerManager.expectNoMessage(300.millis)
+
+  it should "not evict genesis-head peers on a chain where we are at genesis too" taggedAs (
+    UnitTest,
+    NetworkTest
+  ) in new GenesisHeadSetup:
+    expectInitialSubscriptions()
+    val holder = newGenesisHeadHolder(0.millis)
+    expectInitialSubscriptions()
+    setupPeerOnHolder(holder, peer1, peer1Probe, crawlerInfo)
+
+    holder ! CheckGenesisHeadPeersTick
+    peerManager.expectNoMessage(300.millis)
+
+  it should "not evict a peer whose head is past genesis" taggedAs (UnitTest, NetworkTest) in new GenesisHeadSetup:
+    expectInitialSubscriptions()
+    val holder = newGenesisHeadHolder(0.millis)
+    expectInitialSubscriptions()
+    storagesInstance.storages.appStateStorage.putBestBlockNumber(100).commit()
+    setupPeerOnHolder(holder, peer1, peer1Probe, eth69PeerInfo)
+
+    holder ! CheckGenesisHeadPeersTick
+    peerManager.expectNoMessage(300.millis)
+
   trait TestSetupWithSnapSync extends TestSetup:
     val snapSyncController: TestProbe = TestProbe()
 

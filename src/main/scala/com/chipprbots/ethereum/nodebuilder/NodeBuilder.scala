@@ -455,7 +455,8 @@ trait NetworkPeerManagerActorBuilder:
           evmCodeStorageOpt = Some(storagesInstance.storages.evmCodeStorage),
           mptStorageOpt = Some(storagesInstance.storages.stateStorage.getReadOnlyStorage),
           blockchainReader = Some(blockchainReader),
-          isPoWChain = blockchainConfig.terminalTotalDifficulty.isEmpty
+          isPoWChain = blockchainConfig.terminalTotalDifficulty.isEmpty,
+          genesisHeadEvictionGrace = com.chipprbots.ethereum.utils.Config.Network.peer.genesisHeadEvictionGrace
         ),
         "network-peer-manager"
       )
