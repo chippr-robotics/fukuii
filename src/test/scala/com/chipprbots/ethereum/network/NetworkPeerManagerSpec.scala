@@ -30,6 +30,7 @@ import com.chipprbots.ethereum.network.PeerEventBusActor.PeerEvent.PeerHandshake
 import com.chipprbots.ethereum.network.PeerEventBusActor.PeerSelector
 import com.chipprbots.ethereum.network.PeerEventBusActor.SubscribeCmd
 import com.chipprbots.ethereum.network.PeerEventBusActor.SubscriptionClassifier.*
+import com.chipprbots.ethereum.network.PeerEventBusActor.UnsubscribeCmd
 import com.chipprbots.ethereum.network.p2p.messages.Capability
 import com.chipprbots.ethereum.network.p2p.messages.Codes
 import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.BlockRangeUpdate
@@ -779,6 +780,30 @@ class NetworkPeerManagerSpec extends AnyFlatSpec with Matchers:
     storagesInstance.storages.appStateStorage.putBestBlockNumber(100).commit()
     setupPeerOnHolder(holder, peer1, peer1Probe, eth69PeerInfo)
 
+    holder ! CheckGenesisHeadPeersTick
+    peerManager.expectNoMessage(300.millis)
+
+  // Sepolia v0.9.6: PeerDisconnected for an enrscout crawler was published before this actor's per-peer subscription
+  // reached the event bus, so its entry was never removed and the crawler was "evicted" every ~70 s for good.
+  it should "drop a peer whose actor terminated even when PeerDisconnected never arrives" taggedAs (
+    UnitTest,
+    NetworkTest
+  ) in new GenesisHeadSetup:
+    expectInitialSubscriptions()
+    val holder = newGenesisHeadHolder(0.millis)
+    expectInitialSubscriptions()
+    storagesInstance.storages.appStateStorage.putBestBlockNumber(100).commit()
+    setupPeerOnHolder(holder, peer1, peer1Probe, crawlerInfo)
+
+    // The PeerActor dies; no PeerDisconnected is delivered.
+    peer1Probe.ref ! org.apache.pekko.actor.PoisonPill
+    peerEventBus.fishForMessage(3.seconds, "waiting for the per-peer unsubscribe") {
+      case UnsubscribeCmd(PeerDisconnectedClassifier(PeerSelector.WithId(id)), _) => id == peer1.id
+      case _                                                                      => false
+    }
+
+    holder ! PeerInfoRequestCmd(peer1.id, requestSender.ref)
+    requestSender.expectMsg(PeerInfoResponse(None))
     holder ! CheckGenesisHeadPeersTick
     peerManager.expectNoMessage(300.millis)
 
