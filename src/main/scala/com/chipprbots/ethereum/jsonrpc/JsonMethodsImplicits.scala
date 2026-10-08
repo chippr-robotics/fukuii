@@ -150,14 +150,25 @@ trait JsonMethodsImplicits:
           .left
           .map(_ => JsonRpcError.InvalidParams(s"Invalid default block param: $input"))
       case JObject(fields) =>
-        // Support {"blockHash": "0x..."} object form
-        fields.collectFirst { case ("blockHash", JString(hash)) => hash } match
-          case Some(hash) =>
+        // EIP-1898 object forms: {"blockNumber": "0x.."|tag} or {"blockHash": "0x.."[, "requireCanonical": bool]}
+        val hashOpt = fields.collectFirst { case ("blockHash", v) => v }
+        val numOpt = fields.collectFirst { case ("blockNumber", v) => v }
+        (numOpt, hashOpt) match
+          case (Some(_), Some(_)) =>
+            Left(JsonRpcError.InvalidParams("cannot specify both BlockHash and BlockNumber, choose one or the other"))
+          case (Some(num), None) =>
+            num match
+              // a number object must carry a block number or tag, never a 32-byte hash
+              case JString(s) if s.startsWith("0x") && s.length == 66 =>
+                Left(JsonRpcError.InvalidParams(s"Invalid default block param: $input"))
+              case JString(_) | JInt(_) => extractBlockParam(num)
+              case _                    => Left(JsonRpcError.InvalidParams(s"Invalid default block param: $input"))
+          case (None, Some(JString(hash))) =>
             extractBytes(JString(hash))
               .map(h => BlockParam.WithHash(h))
               .left
               .map(_ => JsonRpcError.InvalidParams(s"Invalid block hash"))
-          case None =>
+          case _ =>
             Left(JsonRpcError.InvalidParams(s"Invalid default block param: $input"))
       case other =>
         extractQuantity(other)
