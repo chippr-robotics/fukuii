@@ -1,0 +1,5 @@
+# fnmatch patterns (repo-relative). On refactor/snap-016-* branches no commit may touch a matching file
+# (plan.md Move verification step 4: S0c golden vectors and S0a/S0b pin tests stay byte-unchanged).
+# Each S0 slice adds its golden/pin paths here when it merges, for example:
+#   src/test/scala/com/chipprbots/ethereum/blockchain/sync/snap/*Golden*Spec.scala
+#   src/test/resources/snap-golden/*

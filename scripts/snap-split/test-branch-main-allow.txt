@@ -1,0 +1,3 @@
+# fnmatch patterns (repo-relative) for the ONLY src/main files a test/snap-016-* commit may touch:
+# the S0b test seams (tasks.md T012: constructor parameters of the private impl and of SNAPSyncController.apply).
+src/main/scala/com/chipprbots/ethereum/blockchain/sync/snap/SNAPSyncController.scala

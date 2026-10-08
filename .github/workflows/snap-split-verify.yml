@@ -1,0 +1,102 @@
+name: SNAP Split Verify
+
+# Spec 016, slice S0f (tasks T008/T009): scripted move verification for the SNAP controller split.
+# Job `snap-split-verify` runs scripts/snap-split/ self-tests, then verify.sh on every commit of the PR
+# (`git rev-list origin/staging..HEAD`). See specs/016-snap-controller-split/plan.md "Move verification".
+#
+# No `paths:` filter on the trigger (a required check that never starts blocks merges). Instead the first
+# step decides whether the PR is a spec-016 PR (branch refactor|test/snap-016-*), touches the SNAP module
+# directories, or touches this tooling; otherwise the job reports success and stops, so it is cheap
+# everywhere else. sbt is installed only when a `# moved:` commit has to be compiled on its own.
+
+on:
+  pull_request:
+    branches:
+      - staging
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: snap-split-verify-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  snap-split-verify:
+    name: snap-split-verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout PR head
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Decide whether verification applies
+        id: applies
+        env:
+          BRANCH: ${{ github.head_ref || github.ref_name }}
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin staging:refs/remotes/origin/staging
+          if [ "${GITHUB_EVENT_NAME}" != "pull_request" ]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          snap=src/main/scala/com/chipprbots/ethereum/blockchain/sync/snap
+          changed="$(git diff --name-only origin/staging...HEAD)"
+          if echo "$BRANCH" | grep -Eq '^(refactor|test)/snap-016-' \
+             || echo "$changed" | grep -Eq "^(${snap}/controller/|${snap}/actors/(account|storage|healing|bytecode)/|scripts/snap-split/|\.github/workflows/snap-split-verify\.yml$)"; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=false" >> "$GITHUB_OUTPUT"
+            echo "### snap-split-verify: skipped (not a spec-016 branch, no SNAP module or tooling change)" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Self-test the verification tooling
+        if: steps.applies.outputs.run == 'true'
+        run: |
+          set -e
+          for t in scripts/snap-split/tests/test_*.py; do
+            echo "== $t"
+            python3 "$t"
+          done
+
+      - name: Verify every commit of the PR
+        id: verify
+        if: steps.applies.outputs.run == 'true'
+        env:
+          SNAP_VERIFY_BRANCH: ${{ github.head_ref || github.ref_name }}
+        run: |
+          set -euo pipefail
+          scripts/snap-split/verify.sh origin/staging HEAD | tee /tmp/verify.out
+          if [ -n "$(scripts/snap-split/verify.sh --list-move-commits origin/staging HEAD)" ]; then
+            echo "has_move=true" >> "$GITHUB_OUTPUT"
+          fi
+          { echo '### snap-split-verify'; echo '```'; cat /tmp/verify.out; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Set up JDK 25 (move commit present)
+        if: steps.verify.outputs.has_move == 'true'
+        uses: actions/setup-java@v5
+        with:
+          distribution: 'temurin'
+          java-version: '25'
+          cache: 'sbt'
+
+      - name: Set up SBT (move commit present)
+        if: steps.verify.outputs.has_move == 'true'
+        run: |
+          curl -sL "https://keyserver.ubuntu.com/pks/lookup?op=get&search=0x2EE0EA64E40A89B84B2DF73499E82A75642AC823" | sudo gpg --dearmor -o /usr/share/keyrings/scalasbt-archive-keyring.gpg
+          echo "deb [signed-by=/usr/share/keyrings/scalasbt-archive-keyring.gpg] https://repo.scala-sbt.org/scalasbt/debian all main" | sudo tee /etc/apt/sources.list.d/sbt.list
+          sudo apt-get update
+          sudo apt-get install sbt
+
+      - name: Compile each move commit on its own
+        if: steps.verify.outputs.has_move == 'true'
+        env:
+          SNAP_VERIFY_BRANCH: ${{ github.head_ref || github.ref_name }}
+          FUKUII_DEV: true
+        run: scripts/snap-split/verify.sh --compile --compile-cmd "sbt compile" origin/staging HEAD
