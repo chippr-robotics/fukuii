@@ -80,14 +80,17 @@ object StorageTask:
     *   Storage task covering full storage space
     */
   def createStorageTask(accountHash: ByteString, storageRoot: ByteString): StorageTask =
-    val min = ByteString(Array.fill(32)(0.toByte))
-    val max = ByteString(Array.fill(32)(0xff.toByte))
     StorageTask(
       accountHash = accountHash,
       storageRoot = storageRoot,
-      next = min, // 0x00... (start)
-      last = max // 0xFF... (end, exclusive)
+      next = FullRangeStart, // 0x00... (start)
+      last = FullRangeEnd // 0xFF... (end, exclusive)
     )
+
+  // Shared full-range boundaries (spec 014). ByteString is immutable, so every initial task can point at the same two
+  // instances instead of allocating two 32-byte ByteStrings each: on Sepolia 2.2M queued tasks carried ~9M ByteStrings.
+  private val FullRangeStart: ByteString = ByteString(Array.fill(32)(0.toByte))
+  private val FullRangeEnd: ByteString = ByteString(Array.fill(32)(0xff.toByte))
 
   /** Create storage tasks for multiple accounts
     *

@@ -90,7 +90,10 @@ private class AccountRangeCoordinatorImpl(
     progressGeneration: Long = 0L,
     // Storage-task completion markers: replaying the carried prefix skips tasks already finished (see
     // `replayCarriedChunk`). None = replay every carried storage task (as before the markers existed).
-    storageDone: Option[SnapStorageDoneStorage] = None
+    storageDone: Option[SnapStorageDoneStorage] = None,
+    // Spec 014: shared admission gate, read synchronously before new contract work is produced (fresh account-range
+    // dispatch and the carried replay). None = not wired (tests): only the mailbox-borne watermark signal applies.
+    intakeBudget: Option[SnapIntakeBudget] = None
 ):
 
   import SNAPSyncController.PivotStateUnservable
@@ -121,9 +124,22 @@ private class AccountRangeCoordinatorImpl(
   // still over their mark, etc. Package-private for tests.
   private[actors] val backpressureSources: mutable.Set[String] = mutable.Set.empty[String]
   private def downstreamBackpressureActive: Boolean = backpressureSources.nonEmpty
+  // The intake gate (spec 014): pending storage/bytecode work at its ceiling, or heap pressure. Read synchronously, so
+  // unlike `backpressureSources` it never lags behind a busy mailbox.
+  private def intakeGateClosed: Boolean = intakeBudget.exists(!_.intakeAllowed)
+
+  /** The intake gate has no release message (unlike the storage/bytecode watermarks, which send
+    * `*QueuePressure(false)`): the bytecode ceiling and the heap watchdog close it silently and it re-opens when the
+    * downstream queues drain. Poll it while it holds dispatch so the account side resumes on its own, not only when a
+    * peer is re-announced or a response lands.
+    */
+  private def armIntakeGateRecheck(): Unit =
+    if !timers.isTimerActive(RecheckIntakeGate) then
+      timers.startSingleTimer(RecheckIntakeGate, RecheckIntakeGate, AccountRangeCoordinator.IntakeGateRecheckInterval)
   // Dispatch is paused on purpose: a downstream queue is over its high-water mark, or the controller set the per-peer
   // budget to 0. Neither is a stall, so neither may feed the stall watchdog or the pivot-refresh escalation.
-  private def dispatchDeliberatelyPaused: Boolean = downstreamBackpressureActive || maxInFlightPerPeer <= 0
+  private def dispatchDeliberatelyPaused: Boolean =
+    downstreamBackpressureActive || intakeGateClosed || maxInFlightPerPeer <= 0
   // Kept for spec compatibility; reflects whether the storage source is currently engaged.
   private[actors] def storageBackpressureActive: Boolean = backpressureSources.contains("storage")
 
@@ -904,6 +920,16 @@ private class AccountRangeCoordinatorImpl(
           tryRedispatchPendingTasks()
           Behaviors.same
 
+        case RecheckIntakeGate =>
+          if pendingTasks.nonEmpty then
+            if intakeGateClosed then armIntakeGateRecheck()
+            else
+              log.info(
+                s"[ACCOUNT-INTAKE] intake gate re-opened (${intakeBudget.fold("")(_.describe)}) — resuming dispatch"
+              )
+              tryRedispatchPendingTasks()
+          Behaviors.same
+
         case CheckDispatchStalled =>
           val now = System.currentTimeMillis()
           val stalled = activeTasks.nonEmpty && (now - lastDispatchOrResponseMs) > noActivityTimeoutMs
@@ -924,9 +950,11 @@ private class AccountRangeCoordinatorImpl(
             // Idle by design: downstream back-pressure (or a zero budget) is holding dispatch. Not a stall — reset
             // the tick counter so a long pause never escalates to a pivot refresh or a restart.
             pendingButIdleTicks = 0
+            if intakeGateClosed then armIntakeGateRecheck()
             log.info(
               s"[ACCOUNT-IDLE] ${pendingTasks.size} tasks pending, dispatch paused " +
-                s"(back-pressure sources=${backpressureSources.mkString(",")}, maxInflight=$maxInFlightPerPeer) — " +
+                s"(back-pressure sources=${backpressureSources.mkString(",")}, maxInflight=$maxInFlightPerPeer, " +
+                s"intake gate=${intakeBudget.fold("n/a")(b => b.intakeBlockedReason().getOrElse("open") + "; " + b.describe)}) — " +
                 "not a stall"
             )
           else if pendingTasks.nonEmpty && activeTasks.isEmpty then
@@ -1222,7 +1250,8 @@ private class AccountRangeCoordinatorImpl(
     * in turn enqueue more storage / bytecode work) until every signalling downstream has released.
     */
   private def dispatchIfPossible(peer: Peer): Unit =
-    if pendingTasks.nonEmpty && !downstreamBackpressureActive then
+    if pendingTasks.nonEmpty && intakeGateClosed then armIntakeGateRecheck()
+    if pendingTasks.nonEmpty && !downstreamBackpressureActive && !intakeGateClosed then
       var inflight = inFlightForPeer(peer)
       var noWorkerAvailable = false
       while !noWorkerAvailable && pendingTasks.nonEmpty && inflight < maxInFlightPerPeer do
@@ -1690,7 +1719,9 @@ private class AccountRangeCoordinatorImpl(
     */
   private def replayCarriedChunk(): Unit =
     if !replayDone then
-      if downstreamBackpressureActive then
+      // Spec 014: the intake gate is read synchronously. The watermark signal alone arrived minutes late on Sepolia
+      // (it crosses two mailboxes), by which time this loop had pushed the whole 12M-entry prefix downstream.
+      if downstreamBackpressureActive || intakeGateClosed then
         timers.startSingleTimer(
           ReplayCarriedContracts,
           ReplayCarriedContracts,
@@ -1734,6 +1765,7 @@ private class AccountRangeCoordinatorImpl(
         replayStorageOffset = storageEnd
         replayCodeHashesOffset = codeEnd
         if storageTasks.nonEmpty || codeHashes.nonEmpty then
+          intakeBudget.foreach(_.reserve(storageTasks.size, codeHashes.size))
           snapSyncController ! SNAPSyncController.IncrementalContractData(
             codeHashes.toSeq,
             storageTasks,
@@ -1829,6 +1861,7 @@ private class AccountRangeCoordinatorImpl(
     // Geth-aligned: dispatch contract data inline to controller → bytecode/storage coordinators.
     // This eliminates the 6+ minute gap between account completion and first storage/bytecode request.
     if newCodeHashes.nonEmpty || newStorageTasks.nonEmpty then
+      intakeBudget.foreach(_.reserve(newStorageTasks.size, newCodeHashes.size))
       snapSyncController ! SNAPSyncController.IncrementalContractData(
         newCodeHashes.toSeq,
         newStorageTasks.toSeq
@@ -2038,6 +2071,7 @@ object AccountRangeCoordinator:
   private[actors] case object CheckDispatchStalled extends Command
   private[actors] case object CheckpointTick extends Command
   private[actors] case object ReplayCarriedContracts extends Command
+  private[actors] case object RecheckIntakeGate extends Command
 
   /** Cadence of durable resume checkpoints (trie batch flush + task-file fsync + persisted cursors). Bounds the account
     * work a crash can lose to this window; in-process restarts use the latest per-response snapshot.
@@ -2046,6 +2080,9 @@ object AccountRangeCoordinator:
   private[actors] val ReplayChunkEntries: Int = 4096
   private[actors] val ReplayChunkInterval: FiniteDuration = 50.millis
   private[actors] val ReplayPausedRetry: FiniteDuration = 1.second
+
+  /** How often a dispatch held by the intake gate (spec 014) re-checks it. */
+  private[actors] val IntakeGateRecheckInterval: FiniteDuration = 1.second
 
   /** Copy exactly the first `bytes` bytes of `from` into the (empty) file `to` and fsync it. Throws if `from` is
     * shorter than `bytes` — the controller validated the size, so a short file here is a real error, not something to
@@ -2075,19 +2112,7 @@ object AccountRangeCoordinator:
   private[actors] def foreachEntry(path: Path, entrySize: Int, fromEntry: Long, untilEntry: Long)(
       f: Array[Byte] => Unit
   ): Unit =
-    if untilEntry > fromEntry then
-      val in = new java.io.BufferedInputStream(Files.newInputStream(path), 1 << 16)
-      try
-        in.skipNBytes(fromEntry * entrySize)
-        val buf = new Array[Byte](entrySize)
-        var i = fromEntry
-        while i < untilEntry do
-          in.readNBytes(buf, 0, entrySize) match
-            case n if n == entrySize => f(buf)
-            case n =>
-              throw new java.io.IOException(s"$path: short read at entry $i ($n of $entrySize bytes)")
-          i += 1
-      finally in.close()
+    StorageTaskFile.foreachEntry(path, entrySize, fromEntry, untilEntry)(f)
   private[actors] case class StoreAccountChunk(
       task: AccountTask,
       remaining: Seq[(ByteString, com.chipprbots.ethereum.domain.Account)],
@@ -2148,7 +2173,8 @@ object AccountRangeCoordinator:
       taskFileDir: Option[Path] = None,
       carriedTaskFiles: Option[ContractTaskFiles] = None,
       progressGeneration: Long = 0L,
-      storageDone: Option[SnapStorageDoneStorage] = None
+      storageDone: Option[SnapStorageDoneStorage] = None,
+      intakeBudget: Option[SnapIntakeBudget] = None
   ): Behavior[Command] =
     Behaviors.withTimers { timers =>
       Behaviors.setup { ctx =>
@@ -2171,7 +2197,8 @@ object AccountRangeCoordinator:
           taskFileDir = taskFileDir,
           carriedTaskFiles = carriedTaskFiles,
           progressGeneration = progressGeneration,
-          storageDone = storageDone
+          storageDone = storageDone,
+          intakeBudget = intakeBudget
         )
         impl.onStart()
         impl.receive()

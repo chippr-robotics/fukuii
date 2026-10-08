@@ -128,10 +128,18 @@ object DiscoveryNetwork {
           channel: Channel[A, Packet],
           cancelToken: Deferred[IO, Unit]
       ): IO[Unit] = {
-        Stream.repeatEval(channel.nextChannelEvent)
+        // Idle eviction: a server channel exists per remote address and is only removed when this stream ends (the
+        // caller's `guarantee(release)`). Without a bound every address that ever sent us a datagram keeps a channel, a
+        // queue and several parked fibers for the life of the node — 35k channels / 224k fibers after 78 min on Sepolia
+        // (spec 014). A channel that stays silent for `messageExpiration` is released; a request older than that would
+        // be dropped as expired anyway, and a later datagram from the same address simply creates a fresh channel. The
+        // TimeoutException is swallowed by the caller's `recover`. `unNoneTerminate` ends the stream when the queue is
+        // closed (`next` returns None forever after close; looping on it would spin).
+        Stream.repeatEval(channel.nextChannelEvent.timeout(config.messageExpiration))
+          .unNoneTerminate
           .interruptWhen(cancelToken.get.attempt)
           .evalMap {
-            case Some(MessageReceived(receivedPacket: Packet)) =>
+            case MessageReceived(receivedPacket: Packet) =>
               currentTimeSeconds.flatMap { timestamp =>
                 Packet.unpack(receivedPacket).toEither match {
                   case Right((payload, remotePublicKey)) =>
@@ -153,18 +161,14 @@ object DiscoveryNetwork {
                 }
               }
 
-            case Some(DecodingError) =>
+            case DecodingError =>
               IO.raiseError(new PacketException("Failed to decode a message."))
 
-            case Some(UnexpectedError(ex)) =>
+            case UnexpectedError(ex) =>
               IO.raiseError(new PacketException(ex.getMessage))
 
-            case Some(ChannelIdle(_, _)) =>
-              // we do not use idle peer detection in discovery
-              IO.unit
-            
-            case None =>
-              // Channel closed
+            case ChannelIdle(_, _) =>
+              // Netty-level idle detection is not used here; the read timeout above does the eviction.
               IO.unit
           }
           .compile.drain

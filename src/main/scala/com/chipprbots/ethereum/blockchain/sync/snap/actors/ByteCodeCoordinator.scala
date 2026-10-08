@@ -40,7 +40,9 @@ private class ByteCodeCoordinatorImpl(
     cooldownConfig: ByteCodeCoordinator.ByteCodePeerCooldownConfig,
     snapSyncController: org.apache.pekko.actor.typed.ActorRef[SNAPSyncController.Command],
     backpressureHighWatermark: Int,
-    backpressureLowWatermark: Int
+    backpressureLowWatermark: Int,
+    // Spec 014: shared admission gate (counts codeHashes, not batched tasks). None = not wired (tests).
+    intakeBudget: Option[com.chipprbots.ethereum.blockchain.sync.snap.SnapIntakeBudget] = None
 ):
 
   import ByteCodeCoordinator.*
@@ -181,6 +183,8 @@ private class ByteCodeCoordinatorImpl(
     bytecodeStartMs = System.currentTimeMillis()
     timers.startTimerWithFixedDelay(ByteCodeStatusPulse, 30.seconds)
     log.info("ByteCodeCoordinator starting")
+    // A new (or supervisor-restarted) instance starts with an empty queue: drop the previous instance's counts.
+    intakeBudget.foreach(_.attachByteCodeConsumer())
     active()
 
   // The single operating behavior. Typed workers STOP on failure (no supervisorStrategy here); that stop is
@@ -197,7 +201,16 @@ private class ByteCodeCoordinatorImpl(
         log.info(s"Queued ${newTasks.size} bytecode tasks from ${filteredHashes.size} unique hashes")
         Behaviors.same
 
-      case AddByteCodeTasks(codeHashes) =>
+      case AddByteCodeTasks(received, skipPresent) =>
+        // Replayed (carried / recovered) codeHashes were identified before a restart and many were already fetched.
+        // Bytecode is content-addressed and hash-checked on write, so one already in EvmCodeStorage is done: skip it.
+        // This lookup used to run on the controller thread (2.5M RocksDB reads per Sepolia resume — the mailbox lag
+        // that delayed the back-pressure signal by minutes, spec 014); here it costs this coordinator, not the controller.
+        val codeHashes = if skipPresent then received.filter(h => evmCodeStorage.get(h).isEmpty) else received
+        val alreadyPresent = received.size - codeHashes.size
+        if alreadyPresent > 0 then
+          // Count them as done so the progress estimate (which includes every replayed hash) can still reach 100%.
+          snapSyncController ! SNAPSyncController.ProgressBytecodesDownloaded(alreadyPresent.toLong)
         val filtered = filterAndDedupeCodeHashes(codeHashes)
         if filtered.nonEmpty then
           val newTasks = ByteCodeTask.createBatchedTasks(filtered, batchSize)
@@ -208,6 +221,7 @@ private class ByteCodeCoordinatorImpl(
           // Account-range download is the only path that grows the queue faster than dispatch can
           // drain it. Mirrors the storage coordinator's pattern (#1233).
           notifyBackpressureIfChanged()
+        intakeBudget.foreach(_.byteCodeReceived(received.size, pendingHashCount))
         Behaviors.same
 
       case NoMoreByteCodeTasks =>
@@ -419,6 +433,11 @@ private class ByteCodeCoordinatorImpl(
       Behaviors.same
     }
 
+  /** Pending work in codeHashes (each queued task batches up to `batchSize`). The queue is bounded by the intake gate,
+    * so this walk stays a few thousand tasks long.
+    */
+  private def pendingHashCount: Long = pendingTasks.iterator.map(_.codeHashes.size.toLong).sum
+
   /** Emit a ByteCodeBackpressureChanged transition when the pending-task queue depth crosses a watermark. Forwarded by
     * SNAPSyncController to AccountRangeCoordinator as `ByteCodeQueuePressure` so account workers stop producing new
     * bytecode tasks during back-pressure. Mirrors `StorageRangeCoordinator.notifyBackpressureIfChanged` (#1233).
@@ -426,6 +445,11 @@ private class ByteCodeCoordinatorImpl(
   private def notifyBackpressureIfChanged(): Unit =
     val pending = pendingTasks.size
     com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncMetrics.setByteCodeQueueDepth(pending.toLong)
+    com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncMetrics.setByteCodeInFlightRequests(activeTasks.size)
+    intakeBudget.foreach { budget =>
+      budget.byteCodeQueueDepth(pendingHashCount)
+      budget.publishMetrics()
+    }
     com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncMetrics.setByteCodeActivePeers(knownAvailablePeers.size)
     if !backpressureActive && pending >= backpressureHighWatermark then
       backpressureActive = true
@@ -450,6 +474,8 @@ private class ByteCodeCoordinatorImpl(
       idleWorkers -= worker
 
       val task = pendingTasks.dequeue().copy(pending = true)
+      // Dispatch drains the queue: let a waiting producer see the room right away.
+      intakeBudget.foreach(_.byteCodeQueueDepth(pendingHashCount))
       val requestId = requestTracker.generateRequestId()
 
       val requestedBytes = responseBytesTargetFor(peer)
@@ -735,7 +761,7 @@ object ByteCodeCoordinator:
   /** Incrementally add bytecode download tasks (geth-aligned: inline dispatch from account responses). Coordinator
     * deduplicates and batches these into ByteCodeTasks.
     */
-  case class AddByteCodeTasks(codeHashes: Seq[ByteString]) extends Command
+  case class AddByteCodeTasks(codeHashes: Seq[ByteString], skipPresent: Boolean = false) extends Command
 
   /** Signal that no more bytecode tasks will arrive (all accounts downloaded). Coordinator may now report completion
     * when pending + active tasks drain.
@@ -822,7 +848,8 @@ object ByteCodeCoordinator:
       snapSyncController: org.apache.pekko.actor.typed.ActorRef[SNAPSyncController.Command],
       cooldownConfig: ByteCodePeerCooldownConfig = ByteCodePeerCooldownConfig.default,
       backpressureHighWatermark: Int = 50000,
-      backpressureLowWatermark: Int = 25000
+      backpressureLowWatermark: Int = 25000,
+      intakeBudget: Option[com.chipprbots.ethereum.blockchain.sync.snap.SnapIntakeBudget] = None
   ): Behavior[Command] =
     Behaviors.setup { context =>
       Behaviors.withTimers { timers =>
@@ -836,7 +863,8 @@ object ByteCodeCoordinator:
           cooldownConfig,
           snapSyncController,
           backpressureHighWatermark = backpressureHighWatermark,
-          backpressureLowWatermark = backpressureLowWatermark
+          backpressureLowWatermark = backpressureLowWatermark,
+          intakeBudget = intakeBudget
         ).start()
       }
     }
