@@ -66,6 +66,9 @@ object NetworkPeerManagerActor:
   ) extends Command
   case object CalibrateChainWeightNowCmd extends Command
 
+  /** Periodic flush of the per-peer SNAP-served counters to the PeerManagerActor (spec 012). */
+  private[network] case object FlushSnapServedTick extends Command
+
   // Wire protocol messages forwarded by the Classic shell:
   final case class SendMessageCmd(message: MessageSerializable, peerId: PeerId) extends Command
   final case class UpdateClHeadCmd(blockNumber: BigInt) extends Command
@@ -145,6 +148,7 @@ object NetworkPeerManagerActor:
 
         // Replace the 3 Classic scheduleWithFixedDelay calls with Behaviors.withTimers.
         timers.startTimerWithFixedDelay(LogNetworkSummaryTick, LogNetworkSummaryTick, 60.seconds)
+        timers.startTimerWithFixedDelay(FlushSnapServedTick, FlushSnapServedTick, SnapServedFlushInterval)
         timers.startTimerWithFixedDelay(
           RefreshPeerBestBlocksTick,
           RefreshPeerBestBlocksTick,
@@ -212,6 +216,13 @@ object NetworkPeerManagerActor:
       )
 
     private var emptyHeaderResponses: Int = 0
+
+    // SNAP responses that carried data, per peer, since the last flush (spec 012).
+    private val snapServedAcc = scala.collection.mutable.Map.empty[PeerId, PeerManagerActor.SnapServed]
+
+    private def noteSnapServed(peerId: PeerId, bytes: Long): Unit =
+      val prev = snapServedAcc.getOrElse(peerId, PeerManagerActor.SnapServed(0, 0L))
+      snapServedAcc(peerId) = PeerManagerActor.SnapServed(prev.responses + 1, prev.bytes + bytes)
 
     // Tracks whether our chain tip has advanced past block 0 for the first time. Used to trigger
     // a one-shot chain weight refresh for ETH69 peers whose weight was stuck at COLD_START (TD=0)
@@ -538,6 +549,12 @@ object NetworkPeerManagerActor:
           else genesisHeadSince.clear()
           Behaviors.same
 
+        case FlushSnapServedTick =>
+          if snapServedAcc.nonEmpty then
+            peerManagerActor ! PeerManagerActor.SnapServedReportCmd(snapServedAcc.toMap)
+            snapServedAcc.clear()
+          Behaviors.same
+
         // ── SNAP server requests — matched BEFORE the general MessageFromPeer guard ──
         // The hive devp2p snap test client fires these right after the RLPx hello, before
         // ETH-status exchange completes, so the per-peer subscription isn't yet installed.
@@ -570,21 +587,31 @@ object NetworkPeerManagerActor:
           // Messages are wrapped in Command ADT so the Typed SSC mailbox accepts them.
           message match
             case msg: AccountRange =>
+              if msg.accounts.nonEmpty then
+                noteSnapServed(peerId, msg.accounts.size.toLong * 100L + msg.proof.map(_.size.toLong).sum)
               log.debug("Routing AccountRange to SNAPSyncController from peer {}", peerId)
               snapSyncControllerOpt.foreach(
                 _ ! com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController.AccountRangeResponse(msg)
               )
             case msg: ByteCodes =>
+              if msg.codes.nonEmpty then noteSnapServed(peerId, msg.codes.map(_.size.toLong).sum)
               log.debug("Routing ByteCodes to SNAPSyncController from peer {}", peerId)
               snapSyncControllerOpt.foreach(
                 _ ! com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController.ByteCodesResponse(msg)
               )
             case msg: StorageRanges =>
+              if msg.slots.exists(_.nonEmpty) then
+                noteSnapServed(
+                  peerId,
+                  msg.slots.map(_.map { case (k, v) => k.size.toLong + v.size.toLong }.sum).sum +
+                    msg.proof.map(_.size.toLong).sum
+                )
               log.debug("Routing StorageRanges to SNAPSyncController from peer {}", peerId)
               snapSyncControllerOpt.foreach(
                 _ ! com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController.StorageRangesResponse(msg)
               )
             case msg: TrieNodes =>
+              if msg.nodes.nonEmpty then noteSnapServed(peerId, msg.nodes.map(_.size.toLong).sum)
               log.debug("Routing TrieNodes to SNAPSyncController from peer {}", peerId)
               snapSyncControllerOpt.foreach(
                 _ ! com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController.TrieNodesResponse(msg)
@@ -1368,6 +1395,9 @@ object NetworkPeerManagerActor:
 
   /** How often handshaked peers are scanned for a stuck genesis head (spec 011). */
   private[network] val GenesisHeadCheckInterval: FiniteDuration = 10.seconds
+
+  /** How often SNAP-served counters are reported for the good-peer list (spec 012). */
+  private[network] val SnapServedFlushInterval: FiniteDuration = 60.seconds
 
   /** Lagging-peer eviction parameters. */
   private[network] val LaggingPeerCheckInterval: FiniteDuration = 2.minutes
