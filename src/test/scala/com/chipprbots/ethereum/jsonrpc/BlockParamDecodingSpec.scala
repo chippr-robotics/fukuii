@@ -6,8 +6,6 @@ import org.json4s.JsonAST.*
 import org.scalatest.freespec.AnyFreeSpec
 import org.scalatest.matchers.should.Matchers
 
-import com.chipprbots.ethereum.jsonrpc.EthBlocksService.BlockParam
-
 /** EIP-1898 block-parameter decoding, mirroring geth's BlockNumberOrHash.UnmarshalJSON. */
 class BlockParamDecodingSpec extends AnyFreeSpec with Matchers:
 
