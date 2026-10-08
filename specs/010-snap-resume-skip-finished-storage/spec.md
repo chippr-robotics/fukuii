@@ -26,8 +26,9 @@ Sepolia, v0.9.1, restart 2026-10-07 20:53: the checkpoint carried 9,350,287 stor
   (`SnapStorageDoneStorage`, keys prefixed `SnapStorageDone/` in the app-state column family). A resume, whether it
   replays carried task files or streams the accounts-complete file, re-queues only tasks that have no record.
 - **R2 — crash consistency.** A record never becomes durable before the data it vouches for. It is written in the
-  same RocksDB WriteBatch as the account's last flat slots, after the trie nodes are committed, and only when no
-  earlier flat-slot batch is still in flight. A failed batch turns records off for that coordinator. Give-up,
+  same RocksDB WriteBatch as the account's last flat slots, after the trie nodes are committed. It can also go in a
+  later batch, once every numbered flat batch up to the one carrying those slots has committed. It never waits on
+  batches submitted after it. A failed batch turns records off for that coordinator. Give-up,
   max-empty skip, force-complete and root-mismatch completions are never recorded. A crash before the record lands
   costs one re-download, which is what happens today.
 - **R3 — scope and lifetime.** Records count for one SNAP cycle only. They are cleared when the account phase starts
