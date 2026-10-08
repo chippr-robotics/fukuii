@@ -83,6 +83,18 @@ object PeerManagerActor:
   final case class RemoveMaintainedPeerCmd(nodeId: String) extends Command
   final case class DisconnectPeerFireAndForgetCmd(peerId: PeerId) extends Command
   final case class SendMessageCmd(message: MessageSerializable, peerId: PeerId) extends Command
+
+  /** Outgoing slots above `maxOutgoingPeers` that remembered good snap peers may use (spec 012). */
+  val SnapGoodPeersReservedSlots: Int = 2
+
+  /** SNAP data served by one peer since the last report (spec 012). */
+  final case class SnapServed(responses: Int, bytes: Long)
+
+  /** Periodic report from NetworkPeerManagerActor of peers that answered SNAP requests with data. */
+  final case class SnapServedReportCmd(served: Map[PeerId, SnapServed]) extends Command
+
+  /** Self-scheduled: (re-)dial the remembered good snap peers that are not connected. */
+  private case object RedialSnapGoodPeers extends Command
   final case class PeerClosedConnectionCmd(peerHostAddress: String, reason: Long) extends Command
 
   /** Sent by NetworkPeerManagerActor for a handshaked peer whose head is still genesis after the grace period while our
@@ -142,7 +154,8 @@ object PeerManagerActor:
       peerFactory: (TypedActorContext[Command], InetSocketAddress, Boolean) => typed.ActorRef[PeerActor.Command],
       discoveryConfig: DiscoveryConfig,
       blacklist: Blacklist,
-      externalSchedulerOpt: Option[Scheduler] = None
+      externalSchedulerOpt: Option[Scheduler] = None,
+      snapGoodPeers: Option[SnapGoodPeers] = None
   ): Behavior[Command] =
     Behaviors.setup { context =>
       new Impl(
@@ -155,6 +168,7 @@ object PeerManagerActor:
         discoveryConfig,
         blacklist,
         externalSchedulerOpt,
+        snapGoodPeers,
         context
       ).waitingForStart()
     }
@@ -171,6 +185,7 @@ object PeerManagerActor:
       discoveryConfig: DiscoveryConfig,
       val blacklist: Blacklist,
       externalSchedulerOpt: Option[Scheduler],
+      snapGoodPeers: Option[SnapGoodPeers],
       context: TypedActorContext[Command]
   ):
 
@@ -340,6 +355,12 @@ object PeerManagerActor:
             // Without this, the first connection attempt waits for updateNodesInitialDelay.
             // Core-geth dials bootstrap nodes at t+0; we should too.
             requestDiscoveredNodes()
+            // Spec 012: remembered snap servers are dialled first, ahead of the discovery scan.
+            snapGoodPeers.foreach { store =>
+              store.load(System.currentTimeMillis())
+              log.info("SNAP_GOOD_PEERS: loaded {} remembered snap peers from {}", store.size, store.config.file)
+            }
+            context.self ! RedialSnapGoodPeers
             stash.unstashAll(listening(ConnectedPeers.empty))
           case other =>
             stash.stash(other)
@@ -395,6 +416,10 @@ object PeerManagerActor:
           requestDiscoveredNodes()
           Some(Behaviors.same)
 
+        case RedialSnapGoodPeers =>
+          snapGoodPeers.foreach(store => redialSnapGoodPeers(store, connectedPeers))
+          Some(Behaviors.same)
+
         case KnownNodesFailed =>
           log.debug("KnownNodesManager ask timed out or failed; starting with empty known-nodes list")
           Some(Behaviors.same)
@@ -404,6 +429,40 @@ object PeerManagerActor:
           Some(Behaviors.same)
 
         case _ => None
+
+    /** Dial remembered good snap peers that are not connected, best first. An attempt without a later handshake counts
+      * against the entry (it is dropped past `maxFailedDials`); wrong-network exclusions and IP blacklists are
+      * respected (skipped without counting). Re-arms itself while any candidate is still unconnected.
+      */
+    /** `uri.getHost` keeps the brackets of an IPv6 literal; InetSocketAddress and the blacklist want it bare. */
+    private def bareHost(uri: URI): String = uri.getHost.stripPrefix("[").stripSuffix("]")
+
+    private def redialSnapGoodPeers(store: SnapGoodPeers, connectedPeers: ConnectedPeers): Unit =
+      val now = System.currentTimeMillis()
+      val pruned = store.prune(now)
+      val pending = store.candidates(now).filterNot { case (id, _) =>
+        connectedPeers.hasHandshakedWith(ByteString(Hex.decode(id)))
+      }
+      var dialled = 0
+      pending.foreach { case (id, uri) =>
+        val nodeId = ByteString(Hex.decode(id))
+        val host = bareHost(uri)
+        // A strike is counted only when connectWith will really dial: not excluded, not blacklisted, not already
+        // handled/pending, and within the (reserved-budget-extended) outgoing limit. Otherwise a full table would
+        // strike every remembered peer without any dial and delete the best servers.
+        val handled = connectedPeers.isConnectionHandled(new InetSocketAddress(host, uri.getPort)) ||
+          connectedPeers.hasIncomingPendingFromHost(host)
+        val hasCapacity = connectedPeers.outgoingPeersCount < effectiveMaxOutgoing + SnapGoodPeersReservedSlots
+        if !isExcludedWrongNetwork(nodeId) && !blacklist.isBlacklisted(PeerAddress(host)) && !handled && hasCapacity
+        then
+          store.recordDialAttempt(id)
+          dialled += 1
+          log.info("SNAP_GOOD_PEERS: dialling remembered snap peer {}@{}", id.take(16), host)
+          context.self ! ConnectToPeerCmd(uri)
+      }
+      if pruned > 0 || dialled > 0 then store.save()
+      if pending.nonEmpty then
+        scheduler.scheduleOnce(store.config.redialInterval)(context.self ! RedialSnapGoodPeers)(ec)
 
     private def maybeConnectToRandomNode(connectedPeers: ConnectedPeers, node: Node): Unit =
       if connectedPeers.outgoingConnectionDemand > 0 then
@@ -611,18 +670,24 @@ object PeerManagerActor:
     private def connectWith(uri: URI, connectedPeers: ConnectedPeers, explicit: Boolean = false): Behavior[Command] =
       val nodeIdHex = uri.getUserInfo.toLowerCase
       val nodeId = ByteString(Hex.decode(nodeIdHex))
-      val remoteAddress = new InetSocketAddress(uri.getHost, uri.getPort)
+      val host = bareHost(uri)
+      val remoteAddress = new InetSocketAddress(host, uri.getPort)
 
       val alreadyConnectedToPeer =
         connectedPeers.hasHandshakedWith(nodeId) ||
           connectedPeers.isConnectionHandled(remoteAddress) ||
-          connectedPeers.hasIncomingPendingFromHost(uri.getHost)
+          connectedPeers.hasIncomingPendingFromHost(host)
       // Trusted + maintained peers bypass the max outgoing limit.
       // Besu: DefaultPeerPrivileges.canExceedConnectionLimits checks maintainedPeers set.
       // go-ethereum: trustedConn flag skips maxPeers for trusted only; Fukuii extends this to maintained peers.
       val isMaintainedOrTrusted =
         trustedPeersByNodeId.contains(nodeIdHex) || maintainedPeersByNodeId.contains(nodeIdHex)
-      val isOutgoingPeersNotMaxValue = isMaintainedOrTrusted || connectedPeers.outgoingPeersCount < effectiveMaxOutgoing
+      // Remembered good snap peers (spec 012) may use a small reserved budget above the normal limit, so that slots
+      // full of crawlers/useless peers cannot keep the proven snap servers out.
+      val isRememberedGood = snapGoodPeers.exists(_.contains(nodeIdHex))
+      val outgoingLimit =
+        effectiveMaxOutgoing + (if isRememberedGood then PeerManagerActor.SnapGoodPeersReservedSlots else 0)
+      val isOutgoingPeersNotMaxValue = isMaintainedOrTrusted || connectedPeers.outgoingPeersCount < outgoingLimit
 
       val validConnection = for
         validHandler <- validateConnection(
@@ -718,6 +783,30 @@ object PeerManagerActor:
         case DisconnectPeerFireAndForgetCmd(peerId) =>
           connectedPeers.getPeer(peerId).foreach { peer =>
             peer.ref ! PeerActor.DisconnectPeer(Disconnect.Reasons.DisconnectRequested)
+          }
+          Some(Behaviors.same)
+
+        case SnapServedReportCmd(served) =>
+          snapGoodPeers.foreach { store =>
+            val now = System.currentTimeMillis()
+            var changed = false
+            served.foreach { case (peerId, s) =>
+              connectedPeers.getPeer(peerId).foreach { peer =>
+                peer.nodeId.filterNot(_ => peer.incomingConnection).foreach { nid =>
+                  // 1 per answered request + 1 per 64 KiB: rewards both frequency and volume.
+                  val weight = s.responses.toDouble + s.bytes.toDouble / 65536.0
+                  store.recordServed(
+                    Hex.toHexString(nid.toArray),
+                    peer.remoteAddress.getHostString,
+                    peer.remoteAddress.getPort,
+                    weight,
+                    now
+                  )
+                  changed = true
+                }
+              }
+            }
+            if changed then store.save()
           }
           Some(Behaviors.same)
 
@@ -866,6 +955,9 @@ object PeerManagerActor:
         case _ =>
       val isMaintained =
         handshakedPeer.nodeId.exists(nid => maintainedPeersByNodeId.contains(Hex.toHexString(nid.toArray)))
+      snapGoodPeers.foreach { store =>
+        if handshakedPeer.nodeId.exists(nid => store.markConnected(Hex.toHexString(nid.toArray))) then store.save()
+      }
       if handshakedPeer.incomingConnection && connectedPeers.incomingHandshakedPeersCount >= peerConfiguration.maxIncomingPeers && !isMaintained
       then
         handshakedPeer.ref ! PeerActor.DisconnectPeer(Disconnect.Reasons.TooManyPeers)

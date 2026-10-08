@@ -1047,6 +1047,9 @@ class PeerManagerSpec
 
     val knownNodes: Set[URI] = Set.empty
 
+    /** Spec 012: remembered snap peers. None unless a test mixes in [[SnapGoodSetup]]. */
+    lazy val snapGoodPeersStore: Option[SnapGoodPeers] = None
+
     val peerFactory: (
         org.apache.pekko.actor.typed.scaladsl.ActorContext[PeerManagerActor.Command],
         InetSocketAddress,
@@ -1108,7 +1111,8 @@ class PeerManagerSpec
           peerFactory,
           discoveryConfig,
           blacklist,
-          Some(testScheduler)
+          Some(testScheduler),
+          snapGoodPeersStore
         ),
         s"pma-${java.util.UUID.randomUUID()}",
         typed.DispatcherSelector.fromConfig(org.apache.pekko.testkit.CallingThreadDispatcher.Id)
@@ -1201,6 +1205,85 @@ class PeerManagerSpec
     )
     peerManager ! PeerManagerActor.EvictGenesisHeadPeerCmd(crawler.id, "enrscout")
     crawlerProbe.expectNoMessage(500.millis)
+
+  // ── Remembered good snap peers (spec 012) ──────────────────────────────────
+
+  trait SnapGoodSetup extends TestSetup:
+    lazy val goodHex: String = "ee" * 64
+    lazy val goodNodeId: ByteString = ByteString(Hex.decode(goodHex))
+    lazy val goodFile: java.nio.file.Path =
+      java.nio.file.Files.createTempDirectory("pma-snap-good").resolve("snap-good-peers.v1")
+    override lazy val snapGoodPeersStore: Option[SnapGoodPeers] =
+      val seed = new SnapGoodPeers(
+        SnapGoodPeersConfig(true, 16, 12.hours, 10, 7.days, 5.minutes, goodFile)
+      )
+      seed.recordServed(goodHex, "10.1.1.1", 30303, 10.0, System.currentTimeMillis())
+      seed.save()
+      Some(new SnapGoodPeers(seed.config))
+
+  it should "dial remembered good snap peers at startup, and keep them after a handshake and a served report" taggedAs (
+    UnitTest,
+    NetworkTest
+  ) in new SnapGoodSetup:
+    start()
+    val tp = createdPeerQueue.poll(3, java.util.concurrent.TimeUnit.SECONDS)
+    tp should not be null
+    tp.probe.expectMsgType[ConnectTo](3.seconds).uri.getUserInfo shouldBe goodHex
+    // The dial attempt is counted (and persisted) until a handshake proves the peer is reachable.
+    java.nio.file.Files.readString(goodFile) should include("\t1\n")
+
+    peerManager ! PeerManagerActor.PeerEventReceived(
+      PeerEvent.PeerHandshakeSuccessful(tp.peer.copy(nodeId = Some(goodNodeId)), initialPeerInfo)
+    )
+    java.nio.file.Files.readString(goodFile) should include("\t0\n")
+
+    peerManager ! PeerManagerActor.SnapServedReportCmd(
+      Map(tp.peer.id -> PeerManagerActor.SnapServed(responses = 50, bytes = 6_553_600L))
+    )
+    val score = java.nio.file.Files.readAllLines(goodFile).get(1).split('\t')(3).toDouble
+    score should be > 100.0 // 10 seeded + 50 + 100 weight
+
+  it should "dial a remembered snap peer within the reserved budget even when the outgoing limit is zero" taggedAs (
+    UnitTest,
+    NetworkTest
+  ) in new SnapGoodSetup:
+    val maxReply = testKit.createTestProbe[PeerManagerActor.SetMaxPeersResponse]()
+    peerManager ! PeerManagerActor.SetMaxPeersCmd(0, maxReply.ref)
+    start()
+    val tp = createdPeerQueue.poll(3, java.util.concurrent.TimeUnit.SECONDS)
+    tp should not be null
+    tp.probe.expectMsgType[ConnectTo](3.seconds).uri.getUserInfo shouldBe goodHex
+
+  it should "not take a failed-dial strike while the outgoing table is full" taggedAs (UnitTest, NetworkTest) in
+    new SnapGoodSetup:
+      val maxReply = testKit.createTestProbe[PeerManagerActor.SetMaxPeersResponse]()
+      peerManager ! PeerManagerActor.SetMaxPeersCmd(0, maxReply.ref)
+      // Maintained peers bypass the limit and fill the reserved budget (2 slots) before the first re-dial.
+      peerManager ! PeerManagerActor.AddMaintainedPeerCmd(
+        new URI(s"enode://${"11" * 64}@10.2.2.2:30303"),
+        discardReplyRef
+      )
+      peerManager ! PeerManagerActor.AddMaintainedPeerCmd(
+        new URI(s"enode://${"22" * 64}@10.2.2.3:30303"),
+        discardReplyRef
+      )
+      start()
+      createdPeerQueue.poll(3, java.util.concurrent.TimeUnit.SECONDS) should not be null
+      createdPeerQueue.poll(3, java.util.concurrent.TimeUnit.SECONDS) should not be null
+      testScheduler.timePasses(16.minutes) // three re-dial cycles
+      createdPeerQueue.poll(500, java.util.concurrent.TimeUnit.MILLISECONDS) shouldBe null
+      // No dial was issued, so no strike: the entry still has zero failed dials in the persisted file.
+      java.nio.file.Files.readString(goodFile) should include("\t0\n")
+
+  it should "not dial a remembered snap peer that is excluded as wrong-network" taggedAs (UnitTest, NetworkTest) in
+    new SnapGoodSetup:
+      start()
+      createdPeerQueue.poll(3, java.util.concurrent.TimeUnit.SECONDS) should not be null
+      // A second, separate manager would be needed to observe startup exclusion; here assert the
+      // exclusion path directly: after PeerOnWrongNetwork a re-dial cycle creates no new peer.
+      peerManager ! PeerManagerActor.PeerEventReceived(PeerEvent.PeerOnWrongNetwork(goodNodeId, "10.1.1.1"))
+      testScheduler.timePasses(6.minutes)
+      createdPeerQueue.poll(500, java.util.concurrent.TimeUnit.MILLISECONDS) shouldBe null
 
   "PeerManagerActor.WrongNetworkExclusions" should "exclude a node until its expiry, then forget it" taggedAs UnitTest in {
     val ex = new PeerManagerActor.WrongNetworkExclusions(maxEntries = 2)

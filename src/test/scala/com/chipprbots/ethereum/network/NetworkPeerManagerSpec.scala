@@ -520,6 +520,28 @@ class NetworkPeerManagerSpec extends AnyFlatSpec with Matchers:
     snapSyncController.expectMsg(SNAPSyncController.TrieNodesResponse(trieNodes))
     snapSyncController.expectMsg(SNAPSyncController.ByteCodesResponse(byteCodes))
 
+  it should "report only data-bearing SNAP responses to the peer manager on flush (spec 012)" taggedAs (
+    UnitTest,
+    NetworkTest
+  ) in new TestSetup:
+    expectInitialSubscriptions()
+    setupNewPeer(peer1, peer1Probe, peer1Info)
+    import com.chipprbots.ethereum.network.p2p.messages.SNAP.*
+
+    peersInfoHolder ! PeerEventCmd(MessageFromPeer(AccountRange(BigInt(1), Seq.empty, Seq.empty), peer1.id))
+    peersInfoHolder ! PeerEventCmd(
+      MessageFromPeer(ByteCodes(BigInt(2), Seq(ByteString(1, 2, 3), ByteString(4, 5))), peer1.id)
+    )
+    peersInfoHolder ! PeerEventCmd(MessageFromPeer(TrieNodes(BigInt(3), Seq(ByteString(9))), peer1.id))
+    peersInfoHolder ! FlushSnapServedTick
+
+    peerManager.expectMsg(
+      PeerManagerActor.SnapServedReportCmd(Map(peer1.id -> PeerManagerActor.SnapServed(responses = 2, bytes = 6L)))
+    )
+    // Counters were cleared: a second flush with no new data reports nothing.
+    peersInfoHolder ! FlushSnapServedTick
+    peerManager.expectNoMessage(200.millis)
+
   it should "handle SNAP messages gracefully when SNAPSyncController is not registered" taggedAs (
     UnitTest,
     NetworkTest

@@ -412,6 +412,10 @@ trait PeerManagerActorBuilder:
 
   lazy val peerConfiguration: PeerConfiguration = instanceConfig.Network.peer
 
+  lazy val snapGoodPeersOpt: Option[SnapGoodPeers] =
+    val cfg = SnapGoodPeersConfig(instanceConfig.config, instanceConfig.config.getString("datadir"))
+    if cfg.enabled then Some(new SnapGoodPeers(cfg)) else None
+
   lazy val peerManager: TypedActorRef[PeerManagerActor.Command] =
     val ref = classicSystem.spawn(
       PeerManagerActor.behavior(
@@ -429,7 +433,8 @@ trait PeerManagerActorBuilder:
           instanceConfig.supportedCapabilities
         ),
         discoveryConfig,
-        blacklist
+        blacklist,
+        snapGoodPeers = snapGoodPeersOpt
       ),
       "peer-manager"
     )
