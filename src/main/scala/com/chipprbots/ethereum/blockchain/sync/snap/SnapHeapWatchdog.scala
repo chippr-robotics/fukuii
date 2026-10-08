@@ -170,7 +170,7 @@ object SnapHeapWatchdog extends Logger:
     }
 
   /** A running watchdog and the way to stop it. */
-  final class Handle private[SnapHeapWatchdog] (
+  final class Handle private[snap] (
       val watchdog: SnapHeapWatchdog,
       executor: ScheduledExecutorService,
       unregister: () => Unit
