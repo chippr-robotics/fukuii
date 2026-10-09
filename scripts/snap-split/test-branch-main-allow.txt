@@ -1,6 +1,4 @@
-# fnmatch patterns (repo-relative) for the ONLY src/main files a test/snap-016-* commit may touch:
-# the S0b test seams (tasks.md T012: constructor parameters of the private impl and of SNAPSyncController.apply).
-src/main/scala/com/chipprbots/ethereum/blockchain/sync/snap/SNAPSyncController.scala
-#
-# NOTE: this list is trust-based. It admits the WHOLE file, not only the T012 seams (constructor parameters
-# and ChildFactories). A content check (seam-only hunks) is a follow-up; the reviewer must read the src/main diff.
+# fnmatch patterns (repo-relative) for the ONLY src/main files a test/snap-016-* commit may touch.
+# Empty on purpose: the one slice that needed a seam (S0b, #1512) has merged, so test/ branches may no longer
+# change src/main at all. The mechanism stays: a future slice that needs a seam adds an explicit entry here
+# in a reviewed PR. Entries are trust-based (the whole file is admitted), so the reviewer must read the diff.

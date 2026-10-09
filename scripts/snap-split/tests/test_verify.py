@@ -132,8 +132,10 @@ class Fixture:
     def cfg(self):
         c = self.d / ".cfg"
         c.mkdir(exist_ok=True)
-        (c / "protected-paths.txt").write_text("# none\nsrc/test/scala/golden/*\n")
-        (c / "test-branch-main-allow.txt").write_text(f"{CORE}\n")
+        if not (c / "protected-paths.txt").exists():
+            (c / "protected-paths.txt").write_text("# none\nsrc/test/scala/golden/*\n")
+        if not (c / "test-branch-main-allow.txt").exists():
+            (c / "test-branch-main-allow.txt").write_text("# empty\n")
         return c
 
 
@@ -375,10 +377,11 @@ class VerifyTests(unittest.TestCase):
         f.commit("test(snap): seam\n\n# test-files: none\n")
         self.bad(f, "step3")
 
-    def test_test_branch_seam_file_passes(self):
+    def test_test_branch_explicit_allow_entry_still_works(self):
         f = Fixture(branch="test/snap-016-s0b")
         f.write(CORE, CORE_BASE + "\n// seam\n")
         f.commit("test(snap): seam\n\n# test-files: none\n")
+        (f.cfg() / "test-branch-main-allow.txt").write_text(f"{CORE}\n")
         self.ok(f)
 
     # ---- step 4
@@ -478,11 +481,37 @@ class VerifyTests(unittest.TestCase):
         move_commit(g, partial=True)
         self.ok(g)
 
-    def test_file_defining_the_impl_is_exempt_from_mentions(self):
+    def test_stray_impl_definition_in_module_dir_fails(self):
         f = Fixture()
         f.write(f"{CTRL}/Defs.scala", "package x\n\nclass SNAPSyncControllerImpl:\n  def a = 1\n")
         f.commit("defs")
-        self.ok(f)
+        self.bad(f, "FR-016a")
+
+    def test_partial_needs_reason_and_last_commit(self):
+        f = Fixture()
+        move_commit(f)
+        f.git("commit", "-q", "--amend", "-m", "move\n\n# moved: heal count\n# partial:\n")
+        self.bad(f, "final")
+        g = Fixture()
+        move_commit(g, partial=True)
+        g.write("docs/x.md", "x\n")
+        g.commit("later")
+        out = self.bad(g, "final")
+        self.assertIn("only on the PR's last commit", out)
+
+    def test_test_branch_touching_seam_file_now_fails(self):
+        f = Fixture(branch="test/snap-016-s0d")
+        f.write(CORE, CORE_BASE + "\n// seam\n")
+        f.commit("test(snap): seam\n\n# test-files: none\n")
+        self.bad(f, "step3")
+
+    def test_real_allow_list_is_empty_and_pins_protected(self):
+        d = Path(__file__).resolve().parents[1]
+        live = [l for l in (d / "test-branch-main-allow.txt").read_text().splitlines() if l.strip() and not l.startswith("#")]
+        self.assertEqual(live, [])
+        prot = (d / "protected-paths.txt").read_text()
+        for n in ("SNAPSyncControllerPinSpec", "ChildFactoriesSpec", "SnapFrozenFormatsGoldenSpec"):
+            self.assertIn(n, prot)
 
     def test_protected_nmp_spec_pin_listed(self):
         text = (Path(__file__).resolve().parents[1] / "protected-paths.txt").read_text()

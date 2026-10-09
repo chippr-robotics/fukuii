@@ -32,12 +32,10 @@ SNAP = "src/main/scala/com/chipprbots/ethereum/blockchain/sync/snap"
 MODULE_DIRS = [f"{SNAP}/controller"] + [f"{SNAP}/actors/{d}" for d in ("account", "storage", "healing", "bytecode")]
 RESOURCES = "src/main/resources/"
 IMPL_RE = re.compile(r"SNAPSyncControllerImpl|CoordinatorImpl")
-IMPL_DEF_RE = re.compile(r"\b(?:class|object|trait)\s+(?:SNAPSyncControllerImpl|\w*CoordinatorImpl)\b")
-
-
 def impl_mentions(text: str) -> list[str]:
-    """Mentions of the impl classes in a module file; the file that defines an impl class is exempt."""
-    return [] if IMPL_DEF_RE.search(text) else IMPL_RE.findall(text)
+    """Mentions of the impl classes in a module file. There is no exemption: the impl classes are defined
+    outside the module directories, so a stray definition inside one is itself reported by FR-016 (a)."""
+    return IMPL_RE.findall(text)
 CAPABILITY_TRAITS = ("SnapSharedState", "SnapControllerEnv", "CoordinatorHandles", "PhaseFlags")
 EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -697,7 +695,18 @@ class Verifier:
 
     # -- final state of the PR head
     def check_final(self, head: str, commits: list[str]):
-        if any(trailer(self.g.message(c), "partial") is not None for c in commits):
+        marked = False
+        for c in commits:
+            vals = trailer(self.g.message(c), "partial")
+            if vals is None:
+                continue
+            if c != commits[-1]:
+                self.err(c, "final", "`# partial:` is allowed only on the PR's last commit")
+            elif not any(v.strip() for v in vals):
+                self.err(c, "final", "`# partial:` needs a non-empty reason")
+            else:
+                marked = True
+        if marked:
             return
         for f in self.g.tree_files(head, MODULE_DIRS):
             if impl_mentions(self.g.show(head, f) or ""):
