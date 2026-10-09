@@ -67,7 +67,10 @@ object RegularSync:
       ],
       configBuilder: BlockchainConfigBuilder,
       supervisor: TypedActorRef[SyncController.Command],
-      reorgState: ReorgStateHandler = ReorgStateHandler.NoOp
+      reorgState: ReorgStateHandler = ReorgStateHandler.NoOp,
+      // Called whenever progress reaches SyncDone (imported up to the best block peers announced), or a block is mined:
+      // go-ethereum's downloader success callback / core-geth's StartMining, both `enableSyncedFeatures()`.
+      onCaughtUp: () => Unit = () => ()
   ): Behavior[Command] =
     Behaviors.setup { ctx =>
       Behaviors.withTimers { timers =>
@@ -153,6 +156,12 @@ object RegularSync:
         )
         timers.startTimerWithFixedDelay(PrintStatusKey, SyncProtocol.PrintStatusTick, 60.seconds)
 
+        def respawn(): (TypedActorRef[BlockFetcher.FetchCommand], TypedActorRef[BlockImporter.Command]) =
+          val epoch = spawnEpoch.getAndIncrement()
+          val f = spawnFetcher(epoch)
+          val i = spawnImporter(f, epoch)
+          (f, i)
+
         running(
           ProgressState(startedFetching = false, initialBlock = 0, currentBlock = 0, bestKnownNetworkBlock = 0),
           initialFetcher,
@@ -160,11 +169,8 @@ object RegularSync:
           supervisor,
           broadcaster,
           ctx,
-          respawn = () =>
-            val epoch = spawnEpoch.getAndIncrement()
-            val f = spawnFetcher(epoch)
-            val i = spawnImporter(f, epoch)
-            (f, i)
+          respawn = () => respawn(),
+          onCaughtUp = onCaughtUp
         )
       }
     }
@@ -176,7 +182,8 @@ object RegularSync:
       supervisor: TypedActorRef[SyncController.Command],
       broadcaster: TypedActorRef[BlockBroadcasterActor.BroadcasterMsg],
       ctx: org.apache.pekko.actor.typed.scaladsl.ActorContext[Command],
-      respawn: () => (TypedActorRef[BlockFetcher.FetchCommand], TypedActorRef[BlockImporter.Command])
+      respawn: () => (TypedActorRef[BlockFetcher.FetchCommand], TypedActorRef[BlockImporter.Command]),
+      onCaughtUp: () => Unit
   ): Behavior[Command] =
     Behaviors.receiveMessage {
       case SyncProtocol.BlockFetcherStopped =>
@@ -193,7 +200,8 @@ object RegularSync:
           supervisor,
           broadcaster,
           ctx,
-          respawn
+          respawn,
+          onCaughtUp
         )
 
       case SyncProtocol.Start =>
@@ -203,6 +211,7 @@ object RegularSync:
 
       case SyncProtocol.MinedBlock(block) =>
         ctx.log.info("Block mined [number = {}, hash = {}]", block.number, block.header.hashAsHexString)
+        onCaughtUp()
         importer ! BlockImporter.MinedBlock(block)
         Behaviors.same
 
@@ -211,26 +220,37 @@ object RegularSync:
         Behaviors.same
 
       case ProgressProtocol.StartedFetching =>
-        running(progressState.copy(startedFetching = true), fetcher, importer, supervisor, broadcaster, ctx, respawn)
+        running(
+          progressState.copy(startedFetching = true),
+          fetcher,
+          importer,
+          supervisor,
+          broadcaster,
+          ctx,
+          respawn,
+          onCaughtUp
+        )
 
       case ProgressProtocol.StartingFrom(blockNumber) =>
         val newState = progressState.copy(initialBlock = blockNumber, currentBlock = blockNumber)
         RegularSyncMetrics.setCurrentBlock(blockNumber)
-        running(newState, fetcher, importer, supervisor, broadcaster, ctx, respawn)
+        running(newState, fetcher, importer, supervisor, broadcaster, ctx, respawn, onCaughtUp)
 
       case ProgressProtocol.GotNewBlock(blockNumber) =>
         ctx.log.debug("Got information about new block [number = {}]", blockNumber)
         val newState = progressState.copy(bestKnownNetworkBlock = blockNumber)
         RegularSyncMetrics.setBestKnownNetworkBlock(blockNumber)
-        running(newState, fetcher, importer, supervisor, broadcaster, ctx, respawn)
+        if newState.toStatus == Status.SyncDone then onCaughtUp()
+        running(newState, fetcher, importer, supervisor, broadcaster, ctx, respawn, onCaughtUp)
 
       case ProgressProtocol.ImportedBlock(blockNumber, internally) =>
         ctx.log.debug("Imported new block [number = {}, internally = {}]", blockNumber, internally)
         val newState = progressState.copy(currentBlock = blockNumber)
         RegularSyncMetrics.setCurrentBlock(blockNumber)
         RegularSyncMetrics.incrementBlocksImported()
+        if newState.toStatus == Status.SyncDone then onCaughtUp()
         if internally then fetcher ! InternalLastBlockImport(blockNumber)
-        running(newState, fetcher, importer, supervisor, broadcaster, ctx, respawn)
+        running(newState, fetcher, importer, supervisor, broadcaster, ctx, respawn, onCaughtUp)
 
       case msg: SyncProtocol.MissingCodeNeedsBulkRecovery =>
         ctx.log.warn(
@@ -310,7 +330,8 @@ object RegularSync:
           supervisor,
           broadcaster,
           ctx,
-          respawn
+          respawn,
+          onCaughtUp
         )
 
     }

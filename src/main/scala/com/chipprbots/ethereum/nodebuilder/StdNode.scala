@@ -203,7 +203,11 @@ abstract class BaseNode extends Node:
   private def startSyncController(): Unit =
     syncController ! SyncController.WrappedSyncProtocol(SyncProtocol.Start)
 
-  private def startMining(): Unit = mining.startProtocol(this)
+  private def startMining(): Unit =
+    // A node that produces blocks takes transactions from peers: core-geth's StartMining calls
+    // `enableSyncedFeatures()` for the same reason, or a miner held behind the gate would mine empty blocks.
+    if mining.config.generic.miningEnabled then txGossipGate.markSynced("block production is enabled")
+    mining.startProtocol(this)
 
   private def startDiscoveryManager(): Unit = peerDiscoveryManagerTyped ! PeerDiscoveryManager.Start
 

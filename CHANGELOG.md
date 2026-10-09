@@ -8,6 +8,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **Tx pool memory leak (OOM).** A node that was not synced kept taking transactions from peers. During SNAP sync
+  the pool rejected every one (no state to check them against), but the EIP-4844 blob sidecars that came with them
+  (130-830 KB each) were stored before admission and never removed. A Sepolia node held 2.6 GB of them and was
+  OOM-killed every ~10 hours. Two changes. (1) As in go-ethereum (`AcceptTxs`), a node ignores
+  `NewPooledTransactionHashes`, `Transactions` and `PooledTransactions` from peers until it is synced: an Engine API
+  forkchoiceUpdated has set the head, regular sync has reached the best block peers announced, or block production
+  is enabled. It also ignores them while SNAP sync or state recovery runs. Transactions submitted over JSON-RPC are
+  not affected. This applies to ETC too: an ETC node stops taking peer transactions while it catches up. (2) The pool
+  keeps a blob sidecar only while its transaction is pooled, drops it on every removal path, and caps the total at
+  `txPool.blob-sidecar-budget` (default 256 MiB); past the cap the oldest blob transactions are evicted.
 - **TUI (`--tui`).** The terminal UI froze after its first frame: key input used JLine's `peek(0)`, which waits
   forever, so the update loop blocked until a key was pressed. It also never showed real data, because the status
   queries were never wired in, so peers, blocks and sync status sat at their defaults. It now polls the peer manager,

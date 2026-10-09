@@ -544,6 +544,45 @@ class SyncControllerSpec
     snapSync.toTyped[SNAPSyncController.Command] ! SNAPSyncController.GetProgress(progress.ref.toTyped)
     progress.expectMsgType[com.chipprbots.ethereum.blockchain.sync.snap.SyncProgress]
 
+  // ---- tx gossip gate (go-ethereum's `synced` flag; see TxGossipGate) ----------------------------------------------
+  //
+  // A Sepolia node in SNAP sync took blob txs from peers it could not validate, kept their sidecars and was OOM-killed.
+  // SNAP and state recovery must hold the gate shut whatever else says the node is synced; regular sync reopens it.
+
+  it should "hold tx gossip from peers shut while SNAP sync runs, even once the node is marked synced" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in withRecoveryTestSetup() { testSetup =>
+    import testSetup.*
+    syncController ! SyncController.WrappedSyncProtocol(SyncProtocol.Start)
+
+    eventually {
+      someTimePasses()
+      assert(syncController.children.exists(_.path.name.startsWith("snap-sync")))
+    }
+    // e.g. a forkchoiceUpdated naming SNAP's pivot, which SNAP stores as the best block before its state is complete
+    txGossipGate.markSynced("test")
+    txGossipGate.acceptTxs shouldBe false
+  }
+
+  it should "reopen tx gossip from peers when regular sync takes over from state sync" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in withTestSetup() { testSetup =>
+    import testSetup.*
+    txGossipGate.stateSyncStarted()
+    txGossipGate.markSynced("test")
+    txGossipGate.acceptTxs shouldBe false
+
+    syncController ! SyncController.WrappedSyncProtocol(SyncProtocol.Start)
+
+    eventually {
+      someTimePasses()
+      assert(childNamed(testSetup, "regular-sync"))
+    }
+    txGossipGate.acceptTxs shouldBe true
+  }
+
   it should "start regular sync when do-snap-sync is off" taggedAs (UnitTest, SyncTest) in withTestSetup() {
     testSetup =>
       import testSetup.*
@@ -1104,10 +1143,15 @@ class SyncControllerSpec
           blacklist,
           syncConfig,
           this,
-          externalSchedulerOpt = Some(system.scheduler)
+          externalSchedulerOpt = Some(system.scheduler),
+          txGossipGate = txGossipGate
         )
       )
     )
+
+    /** The node's tx gossip gate, as NodeBuilder shares it between SyncController, the Engine API and the pool. */
+    lazy val txGossipGate: com.chipprbots.ethereum.transactions.TxGossipGate =
+      new com.chipprbots.ethereum.transactions.TxGossipGate()
 
     /** A second SyncController on the same storages and peers: the node after a restart. */
     def restartedSyncController(): TestActorRef[Nothing] = TestActorRef(
