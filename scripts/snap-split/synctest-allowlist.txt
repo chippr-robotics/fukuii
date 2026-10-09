@@ -1,0 +1,1 @@
+SyncControllerSpec :: SyncController should leave SNAP's resume alone once SNAP has taken over the best block of an upgraded node
