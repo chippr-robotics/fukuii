@@ -10,6 +10,7 @@ import cats.effect.std.Semaphore
 import cats.effect.unsafe.implicits.global
 import cats.implicits.*
 
+import scala.concurrent.duration.*
 import scala.util.control.NonFatal
 
 import com.chipprbots.scalanet.peergroup.Channel
@@ -61,13 +62,26 @@ class StaticUDPPeerGroup[M] private (
     isShutdownRef: Ref[IO, Boolean],
     serverQueue: CloseableQueue[ServerEvent[InetMultiAddress, M]],
     serverChannelSemaphore: Semaphore[IO],
-    serverChannelsRef: Ref[IO, Map[InetSocketAddress, StaticUDPPeerGroup.ChannelAlloc[M]]],
+    serverChannelsRef: Ref[IO, Map[InetSocketAddress, StaticUDPPeerGroup.ServerAlloc[M]]],
     clientChannelsRef: Ref[IO, Map[InetSocketAddress, Set[StaticUDPPeerGroup.ChannelAlloc[M]]]]
 )(implicit codec: Codec[M])
     extends TerminalPeerGroup[InetMultiAddress, M]
     with StrictLogging:
 
-  import StaticUDPPeerGroup.{ChannelImpl, ChannelAlloc}
+  import StaticUDPPeerGroup.{ChannelImpl, ChannelAlloc, ServerAlloc}
+
+  // Number of server channels we refused to create because `config.maxServerChannels` was reached (or the
+  // server-event queue was full); exposed for metrics and tests.
+  private val droppedServerChannelCount = new java.util.concurrent.atomic.AtomicLong(0L)
+  // Last time (System.nanoTime) we logged an overflow WARN, to keep an address flood from flooding the log.
+  private val lastOverflowWarnNanos =
+    new java.util.concurrent.atomic.AtomicLong(System.nanoTime() - StaticUDPPeerGroup.OverflowWarnIntervalNanos)
+
+  /** Number of server channels refused because the cap was reached. */
+  def droppedServerChannels: IO[Long] = IO(droppedServerChannelCount.get())
+
+  /** Number of currently live server channels. */
+  def serverChannelCount: IO[Int] = serverChannelsRef.get.map(_.size)
 
   override val processAddress = config.processAddress
 
@@ -159,46 +173,117 @@ class StaticUDPPeerGroup[M] private (
       if removed.isEmpty then clientChannels - remoteAddress else clientChannels.updated(remoteAddress, removed)
     }
 
-  private def getOrCreateServerChannel(remoteAddress: InetSocketAddress): IO[ChannelImpl[M]] =
+  private def noteDropped(remoteAddress: InetSocketAddress, reason: String): IO[Unit] =
+    IO {
+      val total = droppedServerChannelCount.incrementAndGet()
+      val now = System.nanoTime()
+      val last = lastOverflowWarnNanos.get()
+      if now - last >= StaticUDPPeerGroup.OverflowWarnIntervalNanos && lastOverflowWarnNanos.compareAndSet(last, now)
+      then
+        logger.warn(
+          s"Refusing UDP server channel for $remoteAddress: $reason (limit ${config.maxServerChannels}); " +
+            s"$total refused so far. Further refusals are logged at most once a minute."
+        )
+    }
+
+  /** Remove the channel from the registry and release it. Idempotent, and only acts if the registered channel for the
+    * address is still this very one: a stale `release` (e.g. a ChannelCreated event consumed after the reaper already
+    * evicted the channel, followed by a new channel for the same address) must not remove its successor.
+    */
+  private def removeServerChannel(
+      remoteAddress: InetSocketAddress,
+      channel: ChannelImpl[M],
+      release: Release
+  ): IO[Unit] =
+    serverChannelsRef
+      .modify { channels =>
+        channels.get(remoteAddress) match
+          case Some(alloc) if alloc.channel eq channel => (channels - remoteAddress, true)
+          case _                                       => (channels, false)
+      }
+      .flatMap {
+        case true =>
+          release.attempt.void >> IO(logger.debug(s"Removed UDP server channel from $remoteAddress to $localAddress"))
+        case false => IO.unit
+      }
+
+  /** None if the channel could not be created because of the cap. */
+  private def getOrCreateServerChannel(remoteAddress: InetSocketAddress): IO[Option[ChannelImpl[M]]] =
+    def touch(alloc: ServerAlloc[M]): ChannelImpl[M] =
+      alloc.lastActiveNanos.set(System.nanoTime())
+      alloc.channel
+
     serverChannelsRef.get.map(_.get(remoteAddress)).flatMap {
-      case Some((channel, _)) =>
-        IO.pure(channel)
+      case Some(alloc) =>
+        IO.pure(Some(touch(alloc)))
 
       case None =>
         // Use a semaphore to make sure we only create one channel.
         // This way we can handle incoming messages asynchronously.
         serverChannelSemaphore.permit.use { _ =>
-          serverChannelsRef.get.map(_.get(remoteAddress)).flatMap {
-            case Some((channel, _)) =>
-              IO.pure(channel)
+          serverChannelsRef.get.flatMap { channels =>
+            channels.get(remoteAddress) match
+              case Some(alloc) =>
+                IO.pure(Some(touch(alloc)))
 
-            case None =>
-              val nettyChannel = boundChannelOpt.getOrElse(
-                throw new IllegalStateException("UDP server channel not initialized. Call initialize first.")
-              )
-              ChannelImpl[M](
-                nettyChannel = nettyChannel,
-                localAddress = config.bindAddress,
-                remoteAddress = remoteAddress,
-                role = ChannelImpl.Server,
-                capacity = config.channelCapacity
-              ).allocated.flatMap { case (channel, release) =>
-                val remove = for
-                  _ <- serverChannelsRef.update(_ - remoteAddress)
-                  _ <- release
-                  _ <- IO(logger.debug(s"Removed UDP server channel from $remoteAddress to $localAddress"))
-                yield ()
+              case None if config.maxServerChannels > 0 && channels.size >= config.maxServerChannels =>
+                noteDropped(remoteAddress, "too many live server channels").as(None)
 
-                val add = for
-                  _ <- serverChannelsRef.update(_.updated(remoteAddress, channel -> release))
-                  _ <- serverQueue.offer(ChannelCreated(channel, remove))
-                  _ <- IO(logger.debug(s"Added UDP server channel from $remoteAddress to $localAddress"))
-                yield channel
+              case None =>
+                val nettyChannel = boundChannelOpt.getOrElse(
+                  throw new IllegalStateException("UDP server channel not initialized. Call initialize first.")
+                )
+                ChannelImpl[M](
+                  nettyChannel = nettyChannel,
+                  localAddress = config.bindAddress,
+                  remoteAddress = remoteAddress,
+                  role = ChannelImpl.Server,
+                  capacity = config.channelCapacity
+                ).allocated.flatMap { case (channel, release) =>
+                  val remove = removeServerChannel(remoteAddress, channel, release)
+                  val alloc =
+                    ServerAlloc(channel, release, new java.util.concurrent.atomic.AtomicLong(System.nanoTime()))
 
-                add.as(channel)
-              }
+                  // The queue is bounded; if the consumer is not draining it we refuse the channel rather than
+                  // grow without bound (#1519).
+                  serverChannelsRef.update(_.updated(remoteAddress, alloc)) >>
+                    serverQueue.tryOffer(ChannelCreated(channel, remove)).flatMap {
+                      case Right(true) =>
+                        IO(logger.debug(s"Added UDP server channel from $remoteAddress to $localAddress"))
+                          .as(Option(channel))
+                      case _ =>
+                        remove >> noteDropped(remoteAddress, "server event queue full or closed").as(None)
+                    }
+                }
           }
         }
+    }
+
+  /** Backstop eviction: a server channel that has seen no datagram for `serverChannelIdleTimeout` is released, even if
+    * no consumer ever picked up its ChannelCreated event (a dead or starved consumer would otherwise leave it, its
+    * queue and its buffered messages in memory forever; #1519). Releasing closes the channel's queue, which ends any
+    * handler reading from it.
+    */
+  private def reapIdleServerChannels: IO[Unit] =
+    val timeoutNanos = config.serverChannelIdleTimeout.toNanos
+    val reap = for
+      now <- IO(System.nanoTime())
+      channels <- serverChannelsRef.get
+      idle = channels.collect {
+        case (address, alloc) if now - alloc.lastActiveNanos.get() >= timeoutNanos => (address, alloc)
+      }
+      _ <- idle.toList.traverse_ { case (address, alloc) =>
+        removeServerChannel(address, alloc.channel, alloc.release)
+      }
+      _ <- IO(logger.debug(s"Evicted ${idle.size} idle UDP server channels")).whenA(idle.nonEmpty)
+    yield ()
+
+    if timeoutNanos <= 0 then IO.unit
+    else {
+      val period = config.serverChannelIdleTimeout / 4
+      (IO.sleep(period) >> reap.handleErrorWith(ex =>
+        IO(logger.error("Idle server channel reaper failed", ex))
+      )).foreverM
     }
 
   private def getClientChannels(remoteAddress: InetSocketAddress): IO[Iterable[ChannelImpl[M]]] =
@@ -212,7 +297,7 @@ class StaticUDPPeerGroup[M] private (
       for
         serverChannel <- getOrCreateServerChannel(remoteAddress)
         clientChannels <- getClientChannels(remoteAddress)
-        channels = Iterable(serverChannel) ++ clientChannels
+        channels = serverChannel.toList ++ clientChannels
       yield channels
     )
 
@@ -426,9 +511,9 @@ class StaticUDPPeerGroup[M] private (
       _ <- isShutdownRef.set(true)
       _ <- serverQueue.close(discard = true)
       // Release client channels.
-      _ <- clientChannelsRef.get.map(_.values.flatten.toList.map(_._2.attempt).sequence)
+      _ <- clientChannelsRef.get.flatMap(_.values.flatten.toList.traverse_(_._2.attempt))
       // Release server channels.
-      _ <- serverChannelsRef.get.map(_.values.toList.map(_._2.attempt).sequence)
+      _ <- serverChannelsRef.get.flatMap(_.values.toList.traverse_(_.release.attempt))
     // Note: Channel closure now handled by Resource finalizer in createServerChannel
     yield ()
 
@@ -501,13 +586,38 @@ object StaticUDPPeerGroup extends StrictLogging:
       // No default here because Scala 3 forbids overloaded `apply` methods that
       // each carry default args. Callers either pass `NoSyncResponder` explicitly
       // or use the simpler bind-address-only companion `apply` below.
-      syncResponder: SyncResponder
+      syncResponder: SyncResponder,
+      // Maximum number of live server channels (one per remote address); datagrams from further addresses are
+      // dropped until channels are released. 0 means unlimited. Also bounds the server-event queue.
+      maxServerChannels: Int,
+      // A server channel with no incoming datagram for this long is evicted by the peer group itself, whether or
+      // not anyone consumed its ChannelCreated event; zero disables the reaper.
+      serverChannelIdleTimeout: FiniteDuration
   )
   object Config:
+    val DefaultMaxServerChannels: Int = 2048
+    val DefaultServerChannelIdleTimeout: FiniteDuration = 2.minutes
+
     def apply(bindAddress: InetSocketAddress, channelCapacity: Int = 0, receiveBufferSizeBytes: Int = 0): Config =
-      Config(bindAddress, InetMultiAddress(bindAddress), channelCapacity, receiveBufferSizeBytes, NoSyncResponder)
+      Config(
+        bindAddress,
+        InetMultiAddress(bindAddress),
+        channelCapacity,
+        receiveBufferSizeBytes,
+        NoSyncResponder,
+        DefaultMaxServerChannels,
+        DefaultServerChannelIdleTimeout
+      )
+
+  private val OverflowWarnIntervalNanos: Long = 1.minute.toNanos
 
   private type ChannelAlloc[M] = (ChannelImpl[M], Release)
+
+  final private case class ServerAlloc[M](
+      channel: ChannelImpl[M],
+      release: Release,
+      lastActiveNanos: java.util.concurrent.atomic.AtomicLong
+  )
 
   def apply[M: Codec](config: Config): Resource[IO, StaticUDPPeerGroup[M]] =
     // Create event loop group as a Resource
@@ -530,9 +640,9 @@ object StaticUDPPeerGroup extends StrictLogging:
       val peerGroupResource = Resource.eval {
         for
           isShutdownRef <- Ref[IO].of(false)
-          serverQueue <- CloseableQueue.unbounded[ServerEvent[InetMultiAddress, M]]
+          serverQueue <- CloseableQueue[ServerEvent[InetMultiAddress, M]](config.maxServerChannels)
           serverChannelSemaphore <- Semaphore[IO](1)
-          serverChannelsRef <- Ref[IO].of(Map.empty[InetSocketAddress, ChannelAlloc[M]])
+          serverChannelsRef <- Ref[IO].of(Map.empty[InetSocketAddress, ServerAlloc[M]])
           clientChannelsRef <- Ref[IO].of(Map.empty[InetSocketAddress, Set[ChannelAlloc[M]]])
         yield new StaticUDPPeerGroup[M](
           config,
@@ -548,11 +658,13 @@ object StaticUDPPeerGroup extends StrictLogging:
       peerGroupResource.flatMap { peerGroup =>
         // Create the server channel as a Resource
         peerGroup.createServerChannel.flatMap { _ =>
-          Resource.make {
-            IO(logger.debug("UDP server channel Resource is now active and will remain so until shutdown"))
-              .as(peerGroup)
-          } { _ =>
-            peerGroup.shutdown
+          peerGroup.reapIdleServerChannels.background.flatMap { _ =>
+            Resource.make {
+              IO(logger.debug("UDP server channel Resource is now active and will remain so until shutdown"))
+                .as(peerGroup)
+            } { _ =>
+              peerGroup.shutdown
+            }
           }
         }
       }
@@ -667,13 +779,13 @@ object StaticUDPPeerGroup extends StrictLogging:
         publish(UnexpectedError(error))
       )
 
-    private def close() =
-      for
-        _ <- raiseIfClosed
-        _ <- isClosedRef.set(true)
+    // Idempotent: the idle reaper, the peer group shutdown and the channel's own consumer may all release it.
+    private def close(): IO[Unit] =
+      isClosedRef.getAndSet(true).flatMap {
+        case true => IO.unit
         // Initiated by the consumer, so discard messages.
-        _ <- messageQueue.close(discard = true)
-      yield ()
+        case false => messageQueue.close(discard = true)
+      }
 
     private def publish(event: ChannelEvent[M]): IO[Unit] =
       messageQueue.tryOffer(event).void

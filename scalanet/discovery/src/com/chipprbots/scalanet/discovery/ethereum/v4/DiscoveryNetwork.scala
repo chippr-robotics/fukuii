@@ -7,6 +7,7 @@ import java.util.concurrent.TimeoutException
 import cats.Show
 import cats.effect.Deferred
 import cats.effect.IO
+import cats.effect.Outcome
 import cats.effect.Temporal
 import cats.implicits.*
 
@@ -61,6 +62,9 @@ object DiscoveryNetwork:
       override def getAddress(a: Peer[A]): InetSocketAddress =
         Addressable[A].getAddress(a.address)
 
+  // Pause before restarting a failed server-event consumer, so a persistent failure cannot spin.
+  private[v4] val ConsumerRestartDelay: FiniteDuration = 1.second
+
   // Errors that stop the processing of incoming messages on a channel.
   class PacketException(message: String) extends Exception(message) with NoStackTrace
 
@@ -96,31 +100,59 @@ object DiscoveryNetwork:
       override def startHandling(handler: DiscoveryRPC[Peer[A]]): IO[Deferred[IO, Unit]] =
         for
           cancelToken <- Deferred[IO, Unit]
-          _ <- Stream
-            .repeatEval(peerGroup.nextServerEvent)
-            .interruptWhen(cancelToken.get.attempt)
-            .evalMap {
-              case Some(ChannelCreated(channel: Channel[A, Packet], release)) =>
-                handleChannel(handler, channel, cancelToken)
-                  .guarantee(release)
-                  .recover {
-                    case _: TimeoutException =>
-                    case ex: PacketException =>
-                      logger.debug(s"Discovery packet decode failure from ${channel.to}: ${ex.getMessage}")
-                    case NonFatal(ex) =>
-                      logger.error(s"Error handling channel from ${channel.to}: $ex")
-                  }
-                  .start
-                  .void
-
-              case _ =>
-                IO.unit
-            }
-            .compile
-            .drain
-            .start
-            .void
+          _ <- supervise(consumeServerEvents(handler, cancelToken), cancelToken).start.void
         yield cancelToken
+
+      /** Accept incoming channels until the peer group is closed (`nextServerEvent` returns None) or the token fires.
+        * Failures while handling one channel are confined to that channel's fiber; anything that escapes here (e.g.
+        * `nextServerEvent` itself failing) ends the stream and is dealt with by [[supervise]].
+        */
+      private def consumeServerEvents(handler: DiscoveryRPC[Peer[A]], cancelToken: Deferred[IO, Unit]): IO[Unit] =
+        Stream
+          .repeatEval(peerGroup.nextServerEvent)
+          // None means the peer group is closed; it keeps returning None, so stop rather than spin.
+          .unNoneTerminate
+          .interruptWhen(cancelToken.get.attempt)
+          .evalMap {
+            case ChannelCreated(channel: Channel[A, Packet], release) =>
+              handleChannel(handler, channel, cancelToken)
+                .guarantee(
+                  release.handleErrorWith(ex => IO(logger.warn(s"Failed to release channel from ${channel.to}: $ex")))
+                )
+                .recover {
+                  case _: TimeoutException =>
+                  case ex: PacketException =>
+                    logger.debug(s"Discovery packet decode failure from ${channel.to}: ${ex.getMessage}")
+                  case NonFatal(ex) =>
+                    logger.error(s"Error handling channel from ${channel.to}: $ex")
+                }
+                .start
+                .void
+
+            case _ =>
+              IO.unit
+          }
+          .compile
+          .drain
+
+      /** Run the consumer in its own fiber and start it again if it dies or is cancelled, logging the outcome. A
+        * silently dead consumer leaves every new server channel unattended and its queue growing (#1519). It is only
+        * left stopped when it finished normally (peer group closed / handling cancelled via the token).
+        */
+      private def supervise(consumer: IO[Unit], cancelToken: Deferred[IO, Unit]): IO[Unit] =
+        def restart(reason: String): IO[Unit] =
+          cancelToken.tryGet.flatMap {
+            case Some(_) => IO.unit
+            case None =>
+              IO(logger.error(s"Discovery server-event consumer stopped unexpectedly ($reason); restarting")) >>
+                IO.sleep(ConsumerRestartDelay) >> supervise(consumer, cancelToken)
+          }
+
+        consumer.start.flatMap(_.join).flatMap {
+          case Outcome.Succeeded(_) => IO(logger.info("Discovery server-event consumer finished"))
+          case Outcome.Errored(ex)  => restart(s"failed with $ex")
+          case Outcome.Canceled()   => restart("cancelled")
+        }
 
       private def handleChannel(
           handler: DiscoveryRPC[Peer[A]],
