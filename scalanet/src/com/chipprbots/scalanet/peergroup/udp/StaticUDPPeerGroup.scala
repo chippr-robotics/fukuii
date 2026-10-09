@@ -42,22 +42,18 @@ import scodec.Attempt
 import scodec.Codec
 import scodec.bits.BitVector
 
-/**
-  * PeerGroup implementation on top of UDP that uses the same local port
-  * when creating channels to remote addresses as the one it listens on
-  * for incoming messages.
+/** PeerGroup implementation on top of UDP that uses the same local port when creating channels to remote addresses as
+  * the one it listens on for incoming messages.
   *
-  * This makes it compatible with protocols that update the peer's port
-  * to the last one it sent a message from.
+  * This makes it compatible with protocols that update the peer's port to the last one it sent a message from.
   *
-  * It also means that incoming messages cannot be tied to a specific channel,
-  * so if multiple channels are open to the same remote address,
-  * they will all see the same messages. The incoming responses will also
-  * cause a server channel to be opened, where response type messages have
-  * to be discarded, and the server channel can be discarded if there's no
+  * It also means that incoming messages cannot be tied to a specific channel, so if multiple channels are open to the
+  * same remote address, they will all see the same messages. The incoming responses will also cause a server channel to
+  * be opened, where response type messages have to be discarded, and the server channel can be discarded if there's no
   * request type message for a long time.
   *
-  * @tparam M the message type.
+  * @tparam M
+  *   the message type.
   */
 class StaticUDPPeerGroup[M] private (
     config: StaticUDPPeerGroup.Config,
@@ -69,7 +65,7 @@ class StaticUDPPeerGroup[M] private (
     clientChannelsRef: Ref[IO, Map[InetSocketAddress, Set[StaticUDPPeerGroup.ChannelAlloc[M]]]]
 )(implicit codec: Codec[M])
     extends TerminalPeerGroup[InetMultiAddress, M]
-    with StrictLogging {
+    with StrictLogging:
 
   import StaticUDPPeerGroup.{ChannelImpl, ChannelAlloc}
 
@@ -81,22 +77,20 @@ class StaticUDPPeerGroup[M] private (
     serverQueue.next
 
   def channelCount: IO[Int] =
-    for {
+    for
       serverChannels <- serverChannelsRef.get
       clientChannels <- clientChannelsRef.get
-    } yield serverChannels.size + clientChannels.values.map(_.size).sum
+    yield serverChannels.size + clientChannels.values.map(_.size).sum
 
-  /** Send raw bytes to a remote address, bypassing the typed `Codec[M]`.
-    * Used by side-channel consumers (e.g. the discv5 async pipeline) that
-    * own their own framing and need to write back without going through
-    * the v4 packet encoding path.
+  /** Send raw bytes to a remote address, bypassing the typed `Codec[M]`. Used by side-channel consumers (e.g. the
+    * discv5 async pipeline) that own their own framing and need to write back without going through the v4 packet
+    * encoding path.
     *
-    * Fire-and-forget at the IO level — the netty `writeAndFlush` is async.
-    * Errors are surfaced as IO failures.
+    * Fire-and-forget at the IO level — the netty `writeAndFlush` is async. Errors are surfaced as IO failures.
     */
   def sendRaw(remoteAddress: InetSocketAddress, bytes: scodec.bits.ByteVector): IO[Unit] =
     raiseIfShutdown >> IO {
-      boundChannelOpt match {
+      boundChannelOpt match
         case Some(channel) if channel.isActive =>
           val buf = io.netty.buffer.Unpooled.wrappedBuffer(bytes.toByteBuffer)
           val packet = new io.netty.channel.socket.DatagramPacket(buf, remoteAddress)
@@ -105,7 +99,6 @@ class StaticUDPPeerGroup[M] private (
           throw new IOException(s"Channel inactive; cannot send to $remoteAddress")
         case None =>
           throw new IllegalStateException("UDP server channel not initialized")
-      }
     }
 
   private val raiseIfShutdown =
@@ -113,14 +106,18 @@ class StaticUDPPeerGroup[M] private (
       .ifM(IO.raiseError(new IllegalStateException("The peer group has already been shut down.")), IO.unit)
 
   /** Create a new channel from the local server port to the remote address. */
-  override def client(to: InetMultiAddress): Resource[IO, Channel[InetMultiAddress, M]] = {
-    for {
+  override def client(to: InetMultiAddress): Resource[IO, Channel[InetMultiAddress, M]] =
+    for
       _ <- Resource.eval(raiseIfShutdown)
       remoteAddress = to.inetSocketAddress
       // Get the bound channel, which is guaranteed to be initialized
-      nettyChannel <- Resource.eval(IO(boundChannelOpt.getOrElse(
-        throw new IllegalStateException("UDP server channel not initialized. Call initialize first.")
-      )))
+      nettyChannel <- Resource.eval(
+        IO(
+          boundChannelOpt.getOrElse(
+            throw new IllegalStateException("UDP server channel not initialized. Call initialize first.")
+          )
+        )
+      )
       channel <- Resource {
         ChannelImpl[M](
           nettyChannel = nettyChannel,
@@ -128,26 +125,24 @@ class StaticUDPPeerGroup[M] private (
           remoteAddress = remoteAddress,
           role = ChannelImpl.Client,
           capacity = config.channelCapacity
-        ).allocated.flatMap {
-          case (channel, release) =>
-            // Register the channel as belonging to the remote address so that
-            // we can replicate incoming messages to it later.
-            val add = for {
-              _ <- addClientChannel(channel -> release)
-              _ <- IO(logger.debug(s"Added UDP client channel from $localAddress to $remoteAddress"))
-            } yield ()
+        ).allocated.flatMap { case (channel, release) =>
+          // Register the channel as belonging to the remote address so that
+          // we can replicate incoming messages to it later.
+          val add = for
+            _ <- addClientChannel(channel -> release)
+            _ <- IO(logger.debug(s"Added UDP client channel from $localAddress to $remoteAddress"))
+          yield ()
 
-            val remove = for {
-              _ <- removeClientChannel(channel -> release)
-              _ <- release
-              _ <- IO(logger.debug(s"Removed UDP client channel from $localAddress to $remoteAddress"))
-            } yield ()
+          val remove = for
+            _ <- removeClientChannel(channel -> release)
+            _ <- release
+            _ <- IO(logger.debug(s"Removed UDP client channel from $localAddress to $remoteAddress"))
+          yield ()
 
-            add.as(channel -> remove)
+          add.as(channel -> remove)
         }
       }
-    } yield channel
-  }
+    yield channel
 
   private def addClientChannel(channel: ChannelAlloc[M]) =
     clientChannelsRef.update { clientChannels =>
@@ -161,10 +156,10 @@ class StaticUDPPeerGroup[M] private (
       val remoteAddress = channel._1.to.inetSocketAddress
       val current = clientChannels.getOrElse(remoteAddress, Set.empty)
       val removed = current - channel
-      if (removed.isEmpty) clientChannels - remoteAddress else clientChannels.updated(remoteAddress, removed)
+      if removed.isEmpty then clientChannels - remoteAddress else clientChannels.updated(remoteAddress, removed)
     }
 
-  private def getOrCreateServerChannel(remoteAddress: InetSocketAddress): IO[ChannelImpl[M]] = {
+  private def getOrCreateServerChannel(remoteAddress: InetSocketAddress): IO[ChannelImpl[M]] =
     serverChannelsRef.get.map(_.get(remoteAddress)).flatMap {
       case Some((channel, _)) =>
         IO.pure(channel)
@@ -187,26 +182,24 @@ class StaticUDPPeerGroup[M] private (
                 remoteAddress = remoteAddress,
                 role = ChannelImpl.Server,
                 capacity = config.channelCapacity
-              ).allocated.flatMap {
-                case (channel, release) =>
-                  val remove = for {
-                    _ <- serverChannelsRef.update(_ - remoteAddress)
-                    _ <- release
-                    _ <- IO(logger.debug(s"Removed UDP server channel from $remoteAddress to $localAddress"))
-                  } yield ()
+              ).allocated.flatMap { case (channel, release) =>
+                val remove = for
+                  _ <- serverChannelsRef.update(_ - remoteAddress)
+                  _ <- release
+                  _ <- IO(logger.debug(s"Removed UDP server channel from $remoteAddress to $localAddress"))
+                yield ()
 
-                  val add = for {
-                    _ <- serverChannelsRef.update(_.updated(remoteAddress, channel -> release))
-                    _ <- serverQueue.offer(ChannelCreated(channel, remove))
-                    _ <- IO(logger.debug(s"Added UDP server channel from $remoteAddress to $localAddress"))
-                  } yield channel
+                val add = for
+                  _ <- serverChannelsRef.update(_.updated(remoteAddress, channel -> release))
+                  _ <- serverQueue.offer(ChannelCreated(channel, remove))
+                  _ <- IO(logger.debug(s"Added UDP server channel from $remoteAddress to $localAddress"))
+                yield channel
 
-                  add.as(channel)
+                add.as(channel)
               }
           }
         }
     }
-  }
 
   private def getClientChannels(remoteAddress: InetSocketAddress): IO[Iterable[ChannelImpl[M]]] =
     clientChannelsRef.get.map {
@@ -216,23 +209,23 @@ class StaticUDPPeerGroup[M] private (
   private def getChannels(remoteAddress: InetSocketAddress): IO[Iterable[ChannelImpl[M]]] =
     isShutdownRef.get.ifM(
       IO.pure(Iterable.empty),
-      for {
+      for
         serverChannel <- getOrCreateServerChannel(remoteAddress)
         clientChannels <- getClientChannels(remoteAddress)
         channels = Iterable(serverChannel) ++ clientChannels
-      } yield channels
+      yield channels
     )
 
   private def replicateToChannels(remoteAddress: InetSocketAddress)(
       f: ChannelImpl[M] => IO[Unit]
   ): IO[Unit] =
-    for {
+    for
       channels <- getChannels(remoteAddress)
       // Note: Using sequential traverse_ instead of parTraverse_ to avoid complexity with Parallel typeclass
       // Original code used parTraverseUnordered for performance, but sequential execution is acceptable
       // for the typical small number of channels per remote address
       _ <- channels.toList.traverse_(f)
-    } yield ()
+    yield ()
 
   /** Replicate the incoming message to the server channel and all client channels connected to the remote address. */
   private def handleMessage(
@@ -249,20 +242,18 @@ class StaticUDPPeerGroup[M] private (
     }
 
   // Execute the task asynchronously. Has to be thread safe.
-  private def executeAsync(task: IO[Unit]): Unit = {
+  private def executeAsync(task: IO[Unit]): Unit =
     task.unsafeRunAndForget()
-  }
 
   private def tryDecodeDatagram(datagram: DatagramPacket): Attempt[M] =
-    codec.decodeValue(BitVector(datagram.content.nioBuffer)) match {
+    codec.decodeValue(BitVector(datagram.content.nioBuffer)) match
       case failure @ Attempt.Failure(err) =>
         logger.debug(s"Message decoding failed due to ${err}", err)
         failure
       case success =>
         success
-    }
 
-  private def bufferAllocator: RecvByteBufAllocator = {
+  private def bufferAllocator: RecvByteBufAllocator =
     // `NioDatagramChannel.doReadMessages` allocates a new buffer for each read and
     // only reads one message at a time. UDP messages are independent, so if we know
     // our packages have a limited size (lower than the maximum 64KiB supported by UDP)
@@ -271,11 +262,10 @@ class StaticUDPPeerGroup[M] private (
     val maxBufferSize = 64 * 1024
 
     val bufferSize =
-      if (config.receiveBufferSizeBytes <= 0) maxBufferSize
+      if config.receiveBufferSizeBytes <= 0 then maxBufferSize
       else math.min(config.receiveBufferSizeBytes, maxBufferSize)
 
     new io.netty.channel.FixedRecvByteBufAllocator(bufferSize)
-  }
 
   // Store the bound channel after initialization completes
   @volatile private var boundChannelOpt: Option[io.netty.channel.Channel] = None
@@ -283,7 +273,7 @@ class StaticUDPPeerGroup[M] private (
   // Create the server channel as a Resource to keep it alive
   private def createServerChannel: Resource[IO, io.netty.channel.Channel] =
     Resource.make {
-      for {
+      for
         _ <- raiseIfShutdown
         _ <- IO(logger.info(s"Initializing UDP server, waiting for bind to complete..."))
         // Bind the channel
@@ -293,149 +283,144 @@ class StaticUDPPeerGroup[M] private (
               .group(workerGroup)
               .channel(classOf[NioDatagramChannel])
               .option[RecvByteBufAllocator](ChannelOption.RCVBUF_ALLOCATOR, bufferAllocator)
-              .handler(new ChannelInitializer[NioDatagramChannel]() {
-                override def initChannel(nettyChannel: NioDatagramChannel): Unit = {
-                  nettyChannel
-                    .pipeline()
-                    .addLast(new ChannelInboundHandlerAdapter() {
-                      override def channelRead(ctx: ChannelHandlerContext, msg: Any): Unit = {
-                        val datagram = msg.asInstanceOf[DatagramPacket]
-                        val remoteAddress = datagram.sender
-                        try {
-                          logger.debug(s"Server channel at $localAddress read message from $remoteAddress")
-                          // Read the incoming bytes once; both the sync responder and the
-                          // async decode path share this view. `nioBuffer` is a window over
-                          // the netty ByteBuf — it shares storage but advances independently.
-                          val incomingBits = BitVector(datagram.content.nioBuffer)
+              .handler(
+                new ChannelInitializer[NioDatagramChannel]():
+                  override def initChannel(nettyChannel: NioDatagramChannel): Unit =
+                    nettyChannel
+                      .pipeline()
+                      .addLast(new ChannelInboundHandlerAdapter():
+                        override def channelRead(ctx: ChannelHandlerContext, msg: Any): Unit =
+                          val datagram = msg.asInstanceOf[DatagramPacket]
+                          val remoteAddress = datagram.sender
+                          try
+                            logger.debug(s"Server channel at $localAddress read message from $remoteAddress")
+                            // Read the incoming bytes once; both the sync responder and the
+                            // async decode path share this view. `nioBuffer` is a window over
+                            // the netty ByteBuf — it shares storage but advances independently.
+                            val incomingBits = BitVector(datagram.content.nioBuffer)
 
-                          // Sync fast-path: dispatch to the configured responder.
-                          // The 3-state result decides whether to write a reply
-                          // and whether to fall through to the async path.
-                          val syncResult: StaticUDPPeerGroup.SyncResult =
-                            try config.syncResponder(remoteAddress, incomingBits)
-                            catch {
-                              case NonFatal(ex) =>
-                                logger.warn(
-                                  s"Sync responder threw for $remoteAddress: ${ex.getClass.getSimpleName}: ${ex.getMessage}"
-                                )
-                                StaticUDPPeerGroup.SyncResult.Pass
-                            }
-                          syncResult match {
-                            case StaticUDPPeerGroup.SyncResult.Reply(replyBits) =>
-                              try {
-                                val replyBuf = Unpooled.wrappedBuffer(replyBits.toByteBuffer)
-                                val replyPacket = new DatagramPacket(replyBuf, remoteAddress)
-                                ctx.writeAndFlush(replyPacket)
-                                ()
-                              } catch {
+                            // Sync fast-path: dispatch to the configured responder.
+                            // The 3-state result decides whether to write a reply
+                            // and whether to fall through to the async path.
+                            val syncResult: StaticUDPPeerGroup.SyncResult =
+                              try config.syncResponder(remoteAddress, incomingBits)
+                              catch
                                 case NonFatal(ex) =>
                                   logger.warn(
-                                    s"Sync responder write failed for $remoteAddress: ${ex.getClass.getSimpleName}: ${ex.getMessage}"
+                                    s"Sync responder threw for $remoteAddress: ${ex.getClass.getSimpleName}: ${ex.getMessage}"
                                   )
-                              }
-                              // Reply also runs the async path — the v4 dedup
-                              // pattern relies on async-side bookkeeping while
-                              // sync answers fast.
-                              handleMessage(remoteAddress, tryDecodeDatagram(datagram))
+                                  StaticUDPPeerGroup.SyncResult.Pass
+                            syncResult match
+                              case StaticUDPPeerGroup.SyncResult.Reply(replyBits) =>
+                                try
+                                  val replyBuf = Unpooled.wrappedBuffer(replyBits.toByteBuffer)
+                                  val replyPacket = new DatagramPacket(replyBuf, remoteAddress)
+                                  ctx.writeAndFlush(replyPacket)
+                                  ()
+                                catch
+                                  case NonFatal(ex) =>
+                                    logger.warn(
+                                      s"Sync responder write failed for $remoteAddress: ${ex.getClass.getSimpleName}: ${ex.getMessage}"
+                                    )
+                                // Reply also runs the async path — the v4 dedup
+                                // pattern relies on async-side bookkeeping while
+                                // sync answers fast.
+                                handleMessage(remoteAddress, tryDecodeDatagram(datagram))
 
-                            case StaticUDPPeerGroup.SyncResult.ClaimedReply(replyBits) =>
-                              try {
-                                val replyBuf = Unpooled.wrappedBuffer(replyBits.toByteBuffer)
-                                val replyPacket = new DatagramPacket(replyBuf, remoteAddress)
-                                ctx.writeAndFlush(replyPacket)
-                                ()
-                              } catch {
-                                case NonFatal(ex) =>
-                                  logger.warn(
-                                    s"Sync responder write failed for $remoteAddress: ${ex.getClass.getSimpleName}: ${ex.getMessage}"
-                                  )
-                              }
+                              case StaticUDPPeerGroup.SyncResult.ClaimedReply(replyBits) =>
+                                try
+                                  val replyBuf = Unpooled.wrappedBuffer(replyBits.toByteBuffer)
+                                  val replyPacket = new DatagramPacket(replyBuf, remoteAddress)
+                                  ctx.writeAndFlush(replyPacket)
+                                  ()
+                                catch
+                                  case NonFatal(ex) =>
+                                    logger.warn(
+                                      s"Sync responder write failed for $remoteAddress: ${ex.getClass.getSimpleName}: ${ex.getMessage}"
+                                    )
                               // ClaimedReply suppresses the async v4 decode path —
                               // the bytes are v5-format and would cause "Invalid hash"
                               // errors in the v4 codec if decoded as v4 Packets.
 
-                            case StaticUDPPeerGroup.SyncResult.Stop =>
-                              // Claimed via side channel (e.g. v5 demuxer
-                              // pushed to a v5 queue). Suppress the default
-                              // v4 async path to avoid DecodingError noise on
-                              // v5-shaped bytes that v4's codec won't parse.
-                              ()
+                              case StaticUDPPeerGroup.SyncResult.Stop =>
+                                // Claimed via side channel (e.g. v5 demuxer
+                                // pushed to a v5 queue). Suppress the default
+                                // v4 async path to avoid DecodingError noise on
+                                // v5-shaped bytes that v4's codec won't parse.
+                                ()
 
-                            case StaticUDPPeerGroup.SyncResult.Pass =>
-                              // Not claimed — fall through to the async path
-                              // for the v4 codec (existing default behavior).
-                              handleMessage(remoteAddress, tryDecodeDatagram(datagram))
-                          }
-                        } catch {
-                          case NonFatal(ex) =>
-                            handleError(remoteAddress, ex)
-                        } finally {
-                          datagram.content().release()
-                          ()
-                        }
-                      }
+                              case StaticUDPPeerGroup.SyncResult.Pass =>
+                                // Not claimed — fall through to the async path
+                                // for the v4 codec (existing default behavior).
+                                handleMessage(remoteAddress, tryDecodeDatagram(datagram))
+                          catch
+                            case NonFatal(ex) =>
+                              handleError(remoteAddress, ex)
+                          finally
+                            datagram.content().release()
+                            ()
 
-                      override def exceptionCaught(ctx: ChannelHandlerContext, cause: Throwable): Unit = {
-                        val remoteAddress = Option(ctx.channel.remoteAddress())
-                          .collect { case addr: InetSocketAddress => addr }
-                          .getOrElse(new InetSocketAddress(0))
-                        
-                        logger.debug(s"Exception in UDP channel from $remoteAddress: ${cause.getClass.getSimpleName}: ${cause.getMessage}")
-                        
-                        cause match {
-                          case NonFatal(ex) =>
-                            handleError(remoteAddress, ex)
-                          case fatal =>
-                            logger.error(s"Fatal exception in UDP channel from $remoteAddress", fatal)
-                        }
-                        // Don't call super.exceptionCaught for UDP - it may close the channel
-                        // UDP is connectionless and should stay open
-                      }
-                    })
-                  ()
-                }
-              })
+                        override def exceptionCaught(ctx: ChannelHandlerContext, cause: Throwable): Unit =
+                          val remoteAddress = Option(ctx.channel.remoteAddress())
+                            .collect { case addr: InetSocketAddress => addr }
+                            .getOrElse(new InetSocketAddress(0))
+
+                          logger.debug(
+                            s"Exception in UDP channel from $remoteAddress: ${cause.getClass.getSimpleName}: ${cause.getMessage}"
+                          )
+
+                          cause match
+                            case NonFatal(ex) =>
+                              handleError(remoteAddress, ex)
+                            case fatal =>
+                              logger.error(s"Fatal exception in UDP channel from $remoteAddress", fatal)
+                          // Don't call super.exceptionCaught for UDP - it may close the channel
+                          // UDP is connectionless and should stay open
+                      )
+                    ()
+              )
 
             val bindFuture = bootstrap.bind(localAddress)
-            bindFuture.addListener((future: io.netty.channel.ChannelFuture) => {
-              if (future.isSuccess) {
+            bindFuture.addListener { (future: io.netty.channel.ChannelFuture) =>
+              if future.isSuccess then
                 val ch = future.channel()
-                logger.info(s"Server bound to address ${config.bindAddress}. Channel state: isOpen=${ch.isOpen}, isActive=${ch.isActive}, isRegistered=${ch.isRegistered}")
+                logger.info(
+                  s"Server bound to address ${config.bindAddress}. Channel state: isOpen=${ch.isOpen}, isActive=${ch.isActive}, isRegistered=${ch.isRegistered}"
+                )
                 cb(Right(ch))
-              } else {
+              else {
                 logger.error(s"Failed to bind to ${config.bindAddress}", future.cause())
                 cb(Left(InitializationError(s"Failed to bind to ${config.bindAddress}", future.cause())))
               }
-            })
+            }
             // Return cancellation token
             Some(IO(bindFuture.cancel(false)).void)
           }
         }
         _ <- IO { boundChannelOpt = Some(channel) }
-      } yield channel
+      yield channel
     } { channel =>
       // Release: Close the channel
       IO.async_[Unit] { cb =>
         logger.info(s"Closing UDP server channel on ${config.bindAddress}")
         val closeFuture = channel.close()
-        closeFuture.addListener((future: io.netty.channel.ChannelFuture) => {
-          if (future.isSuccess || future.isCancelled) {
+        closeFuture.addListener { (future: io.netty.channel.ChannelFuture) =>
+          if future.isSuccess || future.isCancelled then
             logger.info(s"UDP channel closed successfully")
             cb(Right(()))
-          } else {
+          else {
             logger.error(s"Failed to close channel", future.cause())
             cb(Left(new Exception("Failed to close channel", future.cause())))
           }
-        })
+        }
       }
     }
 
   // Initialize by storing the channel - actual lifecycle managed by Resource
   // This method is no longer needed as initialization happens in createServerChannel Resource
 
-
-  private def shutdown: IO[Unit] = {
-    for {
+  private def shutdown: IO[Unit] =
+    for
       _ <- IO(logger.info(s"Shutting down UDP peer group for peer ${config.processAddress}"))
       // Mark the group as shutting down to stop accepting incoming connections.
       _ <- isShutdownRef.set(true)
@@ -444,77 +429,66 @@ class StaticUDPPeerGroup[M] private (
       _ <- clientChannelsRef.get.map(_.values.flatten.toList.map(_._2.attempt).sequence)
       // Release server channels.
       _ <- serverChannelsRef.get.map(_.values.toList.map(_._2.attempt).sequence)
-      // Note: Channel closure now handled by Resource finalizer in createServerChannel
-    } yield ()
-  }
+    // Note: Channel closure now handled by Resource finalizer in createServerChannel
+    yield ()
 
-}
-
-object StaticUDPPeerGroup extends StrictLogging {
-  /** Synchronous fast-path responder. Invoked on the netty event-loop thread for every
-    * inbound datagram BEFORE the async cats-effect channel-replication path runs.
+object StaticUDPPeerGroup extends StrictLogging:
+  /** Synchronous fast-path responder. Invoked on the netty event-loop thread for every inbound datagram BEFORE the
+    * async cats-effect channel-replication path runs.
     *
     * The return type is a 3-state ADT:
-    *   - [[SyncResult.Pass]]:        not handled — fall through to the async path
-    *                                  (existing v4 default; async also runs after).
-    *   - [[SyncResult.Reply(bytes)]]: write `bytes` back to the sender on the netty
-    *                                  thread, AND continue to the async path. This
-    *                                  keeps the v4 dedup pattern working — the sync
-    *                                  responder writes the Pong fast and the async
-    *                                  path still runs for bonding bookkeeping while
-    *                                  skipping its own duplicate Pong via dedup.
-    *   - [[SyncResult.Stop]]:        the responder claimed the packet by side
-    *                                  channel (e.g. a demuxer pushed bytes to a v5
-    *                                  dispatch queue). Suppress the default async
-    *                                  decode path so we don't emit DecodingError
-    *                                  noise on v5-shaped bytes.
+    *   - [[SyncResult.Pass]]: not handled — fall through to the async path (existing v4 default; async also runs
+    *     after).
+    *   - [[SyncResult.Reply(bytes)]]: write `bytes` back to the sender on the netty thread, AND continue to the async
+    *     path. This keeps the v4 dedup pattern working — the sync responder writes the Pong fast and the async path
+    *     still runs for bonding bookkeeping while skipping its own duplicate Pong via dedup.
+    *   - [[SyncResult.Stop]]: the responder claimed the packet by side channel (e.g. a demuxer pushed bytes to a v5
+    *     dispatch queue). Suppress the default async decode path so we don't emit DecodingError noise on v5-shaped
+    *     bytes.
     *
-    * Used by the discv4 layer to send `Pong` replies inside hive's 300 ms
-    * `waitTime` deadline that the cats-effect IO scheduler can't meet under load.
-    * Used by the discv5 demuxer to route discv5 packets to a side-channel queue
-    * for the v5 async pipeline without polluting the v4 codec's error stream.
+    * Used by the discv4 layer to send `Pong` replies inside hive's 300 ms `waitTime` deadline that the cats-effect IO
+    * scheduler can't meet under load. Used by the discv5 demuxer to route discv5 packets to a side-channel queue for
+    * the v5 async pipeline without polluting the v4 codec's error stream.
     *
-    * Implementations MUST be fast (< 5 ms) and MUST NOT throw — any exception is
-    * caught by the peer group and treated as [[SyncResult.Pass]].
+    * Implementations MUST be fast (< 5 ms) and MUST NOT throw — any exception is caught by the peer group and treated
+    * as [[SyncResult.Pass]].
     */
   type SyncResponder = (InetSocketAddress, BitVector) => SyncResult
 
   sealed trait SyncResult
-  object SyncResult {
+  object SyncResult:
 
     /** Not handled — continue with the async path. Default v4 behavior. */
     case object Pass extends SyncResult
 
-    /** Claimed with a reply written back to the sender, AND the async path
-      * still runs after (for v4 bonding/kademlia bookkeeping). */
+    /** Claimed with a reply written back to the sender, AND the async path still runs after (for v4 bonding/kademlia
+      * bookkeeping).
+      */
     final case class Reply(bytes: BitVector) extends SyncResult
 
-    /** Claimed with no reply, AND the async path is suppressed. The responder
-      * either completed handling via a side channel (v5 demuxer pushing to
-      * a separate queue) or deliberately silenced the packet (negative tests). */
+    /** Claimed with no reply, AND the async path is suppressed. The responder either completed handling via a side
+      * channel (v5 demuxer pushing to a separate queue) or deliberately silenced the packet (negative tests).
+      */
     case object Stop extends SyncResult
 
-    /** Claimed with a reply written back to the sender, but the async decode
-      * path is suppressed. Used by [[V5DemuxResponder]] when the inner v5
-      * responder sends a reply — the v5 bytes must not be fed into the v4
-      * codec, which would produce spurious "Invalid hash" errors. */
+    /** Claimed with a reply written back to the sender, but the async decode path is suppressed. Used by
+      * [[V5DemuxResponder]] when the inner v5 responder sends a reply — the v5 bytes must not be fed into the v4 codec,
+      * which would produce spurious "Invalid hash" errors.
+      */
     final case class ClaimedReply(bytes: BitVector) extends SyncResult
-  }
 
   /** Default no-op responder — always passes to the async path. */
   val NoSyncResponder: SyncResponder = (_, _) => SyncResult.Pass
 
-  /** Compose a list of [[SyncResponder]]s. Each is tried in order; the first
-    * non-`Pass` result wins. If all return `Pass`, the chain returns `Pass`. */
+  /** Compose a list of [[SyncResponder]]s. Each is tried in order; the first non-`Pass` result wins. If all return
+    * `Pass`, the chain returns `Pass`.
+    */
   def chainResponders(responders: SyncResponder*): SyncResponder =
-    (sender, bits) => {
+    (sender, bits) =>
       var result: SyncResult = SyncResult.Pass
       val it = responders.iterator
-      while (it.hasNext && result == SyncResult.Pass) {
-        result = it.next()(sender, bits)
-      }
+      while it.hasNext && result == SyncResult.Pass do result = it.next()(sender, bits)
       result
-    }
 
   case class Config(
       bindAddress: InetSocketAddress,
@@ -529,38 +503,38 @@ object StaticUDPPeerGroup extends StrictLogging {
       // or use the simpler bind-address-only companion `apply` below.
       syncResponder: SyncResponder
   )
-  object Config {
+  object Config:
     def apply(bindAddress: InetSocketAddress, channelCapacity: Int = 0, receiveBufferSizeBytes: Int = 0): Config =
       Config(bindAddress, InetMultiAddress(bindAddress), channelCapacity, receiveBufferSizeBytes, NoSyncResponder)
-  }
 
   private type ChannelAlloc[M] = (ChannelImpl[M], Release)
 
-  def apply[M: Codec](config: Config): Resource[IO, StaticUDPPeerGroup[M]] = {
+  def apply[M: Codec](config: Config): Resource[IO, StaticUDPPeerGroup[M]] =
     // Create event loop group as a Resource
     val eventLoopResource = Resource.make {
       IO(new NioEventLoopGroup(1))
     } { group =>
       IO(logger.debug(s"Shutting down NioEventLoopGroup")) *>
-      IO.async_[Unit] { cb =>
-        group.shutdownGracefully(0, 15, java.util.concurrent.TimeUnit.SECONDS)
-          .addListener((future: io.netty.util.concurrent.Future[_]) => {
-            if (future.isSuccess) cb(Right(()))
-            else cb(Left(new Exception("EventLoopGroup shutdown failed", future.cause())))
-          })
-      }
+        IO.async_[Unit] { cb =>
+          group
+            .shutdownGracefully(0, 15, java.util.concurrent.TimeUnit.SECONDS)
+            .addListener { (future: io.netty.util.concurrent.Future[?]) =>
+              if future.isSuccess then cb(Right(()))
+              else cb(Left(new Exception("EventLoopGroup shutdown failed", future.cause())))
+            }
+        }
     }
 
     eventLoopResource.flatMap { workerGroup =>
       // Create the peer group with all its dependencies
       val peerGroupResource = Resource.eval {
-        for {
+        for
           isShutdownRef <- Ref[IO].of(false)
           serverQueue <- CloseableQueue.unbounded[ServerEvent[InetMultiAddress, M]]
           serverChannelSemaphore <- Semaphore[IO](1)
           serverChannelsRef <- Ref[IO].of(Map.empty[InetSocketAddress, ChannelAlloc[M]])
           clientChannelsRef <- Ref[IO].of(Map.empty[InetSocketAddress, Set[ChannelAlloc[M]]])
-        } yield new StaticUDPPeerGroup[M](
+        yield new StaticUDPPeerGroup[M](
           config,
           workerGroup,
           isShutdownRef,
@@ -583,7 +557,6 @@ object StaticUDPPeerGroup extends StrictLogging {
         }
       }
     }
-  }
 
   private class ChannelImpl[M](
       nettyChannel: io.netty.channel.Channel,
@@ -594,7 +567,7 @@ object StaticUDPPeerGroup extends StrictLogging {
       role: ChannelImpl.Role
   )(implicit codec: Codec[M])
       extends Channel[InetMultiAddress, M]
-      with StrictLogging {
+      with StrictLogging:
 
     override val to: InetMultiAddress =
       InetMultiAddress(remoteAddress)
@@ -614,39 +587,39 @@ object StaticUDPPeerGroup extends StrictLogging {
       )
 
     override def sendMessage(message: M): IO[Unit] =
-      for {
+      for
         _ <- raiseIfClosed
         _ <- IO(
           logger.debug(s"Sending $role message ${message.toString.take(100)}... from $localAddress to $remoteAddress")
         )
         // Check if the Netty channel is actually open and active
         _ <- IO {
-          if (!nettyChannel.isOpen) {
-            logger.error(s"Netty channel is CLOSED when trying to send to $remoteAddress. Channel: ${nettyChannel.getClass.getSimpleName}, isActive: ${nettyChannel.isActive}, isRegistered: ${nettyChannel.isRegistered}")
-          } else if (!nettyChannel.isActive) {
-            logger.error(s"Netty channel is open but NOT ACTIVE when trying to send to $remoteAddress. isRegistered: ${nettyChannel.isRegistered}")
-          } else {
-            logger.debug(s"Netty channel is open and active for sending to $remoteAddress")
-          }
+          if !nettyChannel.isOpen then
+            logger.error(
+              s"Netty channel is CLOSED when trying to send to $remoteAddress. Channel: ${nettyChannel.getClass.getSimpleName}, isActive: ${nettyChannel.isActive}, isRegistered: ${nettyChannel.isRegistered}"
+            )
+          else if !nettyChannel.isActive then
+            logger.error(
+              s"Netty channel is open but NOT ACTIVE when trying to send to $remoteAddress. isRegistered: ${nettyChannel.isRegistered}"
+            )
+          else logger.debug(s"Netty channel is open and active for sending to $remoteAddress")
         }
         // Verify channel is open and active before attempting to send
-        _ <- if (!nettyChannel.isOpen) {
-          IO.raiseError(new IOException(s"Channel is closed, cannot send to $remoteAddress"))
-        } else if (!nettyChannel.isActive) {
-          IO.raiseError(new IOException(s"Channel is not active, cannot send to $remoteAddress"))
-        } else {
-          IO.unit
-        }
+        _ <-
+          if !nettyChannel.isOpen then
+            IO.raiseError(new IOException(s"Channel is closed, cannot send to $remoteAddress"))
+          else if !nettyChannel.isActive then
+            IO.raiseError(new IOException(s"Channel is not active, cannot send to $remoteAddress"))
+          else IO.unit
         encodedMessage <- IO.fromTry(codec.encode(message).toTry)
         asBuffer = encodedMessage.toByteBuffer
         // Check packet size before attempting to send
         // UDP supports up to 64KB theoretically, but practical MTU is typically 1280-1500 bytes
         // Using a conservative 64KB limit here to catch truly oversized packets
-        _ <- if (asBuffer.capacity > 65535) {
-          IO.raiseError(new MessageMTUException[InetMultiAddress](to, asBuffer.capacity))
-        } else {
-          IO.unit
-        }
+        _ <-
+          if asBuffer.capacity > 65535 then
+            IO.raiseError(new MessageMTUException[InetMultiAddress](to, asBuffer.capacity))
+          else IO.unit
         // Netty's 3-arg DatagramPacket sets the sender address. Passing
         // `localAddress` (which is the bind address `0.0.0.0:30303` for a wildcard
         // bind) confuses Netty's NIO driver: under strict source-routing it'll
@@ -659,26 +632,34 @@ object StaticUDPPeerGroup extends StrictLogging {
         _ <- toTask(nettyChannel.writeAndFlush(packet)).handleErrorWith {
           case ex: IOException =>
             // Log the actual IOException to help diagnose the real problem
-            IO(logger.error(s"Failed to send UDP packet to $remoteAddress: ${ex.getClass.getSimpleName}: ${ex.getMessage}", ex)) >>
-            IO.raiseError(ex)
+            IO(
+              logger.error(
+                s"Failed to send UDP packet to $remoteAddress: ${ex.getClass.getSimpleName}: ${ex.getMessage}",
+                ex
+              )
+            ) >>
+              IO.raiseError(ex)
           case ex: Throwable =>
             // Catch any other exceptions that might occur during send
-            IO(logger.error(s"Unexpected error sending UDP packet to $remoteAddress: ${ex.getClass.getSimpleName}: ${ex.getMessage}", ex)) >>
-            IO.raiseError(ex)
+            IO(
+              logger.error(
+                s"Unexpected error sending UDP packet to $remoteAddress: ${ex.getClass.getSimpleName}: ${ex.getMessage}",
+                ex
+              )
+            ) >>
+              IO.raiseError(ex)
         }
-      } yield ()
+      yield ()
 
-    def handleMessage(maybeMessage: Attempt[M]): IO[Unit] = {
+    def handleMessage(maybeMessage: Attempt[M]): IO[Unit] =
       isClosedRef.get.ifM(
         IO.unit,
-        maybeMessage match {
+        maybeMessage match
           case Attempt.Successful(message) =>
             publish(MessageReceived(message))
           case Attempt.Failure(_) =>
             publish(DecodingError)
-        }
       )
-    }
 
     def handleError(error: Throwable): IO[Unit] =
       isClosedRef.get.ifM(
@@ -687,24 +668,21 @@ object StaticUDPPeerGroup extends StrictLogging {
       )
 
     private def close() =
-      for {
+      for
         _ <- raiseIfClosed
         _ <- isClosedRef.set(true)
         // Initiated by the consumer, so discard messages.
         _ <- messageQueue.close(discard = true)
-      } yield ()
+      yield ()
 
     private def publish(event: ChannelEvent[M]): IO[Unit] =
       messageQueue.tryOffer(event).void
-  }
 
-  private object ChannelImpl {
-    sealed trait Role {
-      override def toString(): String = this match {
+  private object ChannelImpl:
+    sealed trait Role:
+      override def toString(): String = this match
         case Server => "server"
         case Client => "client"
-      }
-    }
     object Server extends Role
     object Client extends Role
 
@@ -716,7 +694,7 @@ object StaticUDPPeerGroup extends StrictLogging {
         capacity: Int
     ): Resource[IO, ChannelImpl[M]] =
       Resource.make {
-        for {
+        for
           isClosedRef <- Ref[IO].of(false)
           // The publishing of messages happens asynchronously in this class,
           // so there can be multiple publications going on at the same time.
@@ -729,7 +707,5 @@ object StaticUDPPeerGroup extends StrictLogging {
             isClosedRef,
             role
           )
-        } yield channel
+        yield channel
       }(_.close())
-  }
-}
