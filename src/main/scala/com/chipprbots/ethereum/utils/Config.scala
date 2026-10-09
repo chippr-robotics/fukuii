@@ -226,10 +226,23 @@ trait TxPoolConfig:
     */
   val blobSidecarBudgetBytes: Long = TxPoolConfig.DefaultBlobSidecarBudgetBytes
 
+  /** Most transaction hashes whose per-peer "known" sets are tracked, and how long an entry lives untouched. */
+  val knownTxMaxEntries: Int = TxPoolConfig.DefaultKnownTxMaxEntries
+  val knownTxTtl: FiniteDuration = TxPoolConfig.DefaultKnownTxTtl
+
+  /** Most outstanding announced-hash requests tracked, and how long to wait for the reply before forgetting one. */
+  val announcementMaxEntries: Int = TxPoolConfig.DefaultAnnouncementMaxEntries
+  val announcementTimeout: FiniteDuration = TxPoolConfig.DefaultAnnouncementTimeout
+
 object TxPoolConfig:
 
   /** 256 MiB: ~2,000 single-blob or ~330 six-blob transactions in network form. */
   val DefaultBlobSidecarBudgetBytes: Long = 256L * 1024 * 1024
+
+  val DefaultKnownTxMaxEntries: Int = 131072
+  val DefaultKnownTxTtl: FiniteDuration = 10.minutes
+  val DefaultAnnouncementMaxEntries: Int = 32768
+  val DefaultAnnouncementTimeout: FiniteDuration = 2.minutes
 
   def apply(etcClientConfig: com.typesafe.config.Config): TxPoolConfig =
     val txPoolConfig = etcClientConfig.getConfig("txPool")
@@ -238,6 +251,19 @@ object TxPoolConfig:
       override val blobSidecarBudgetBytes: Long =
         if txPoolConfig.hasPath("blob-sidecar-budget") then txPoolConfig.getBytes("blob-sidecar-budget").longValue
         else TxPoolConfig.DefaultBlobSidecarBudgetBytes
+      override val knownTxMaxEntries: Int =
+        if txPoolConfig.hasPath("known-tx-max-entries") then txPoolConfig.getInt("known-tx-max-entries")
+        else TxPoolConfig.DefaultKnownTxMaxEntries
+      override val knownTxTtl: FiniteDuration =
+        if txPoolConfig.hasPath("known-tx-ttl") then txPoolConfig.getDuration("known-tx-ttl").toMillis.millis
+        else TxPoolConfig.DefaultKnownTxTtl
+      override val announcementMaxEntries: Int =
+        if txPoolConfig.hasPath("announcement-max-entries") then txPoolConfig.getInt("announcement-max-entries")
+        else TxPoolConfig.DefaultAnnouncementMaxEntries
+      override val announcementTimeout: FiniteDuration =
+        if txPoolConfig.hasPath("announcement-timeout") then
+          txPoolConfig.getDuration("announcement-timeout").toMillis.millis
+        else TxPoolConfig.DefaultAnnouncementTimeout
       val txPoolSize: Int = txPoolConfig.getInt("tx-pool-size")
       val pendingTxManagerQueryTimeout: FiniteDuration =
         txPoolConfig.getDuration("pending-tx-manager-query-timeout").toMillis.millis
