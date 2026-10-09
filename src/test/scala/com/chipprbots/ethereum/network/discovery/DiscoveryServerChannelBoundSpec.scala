@@ -132,7 +132,6 @@ class DiscoveryServerChannelBoundSpec extends AnyFlatSpec with Matchers:
   // --- DiscoveryNetwork: consumer supervision -----------------------------------------------------------------
 
   private given sigalg: SigAlg = new Secp256k1SigAlg
-  private given packetCodec: Codec[Packet] = Packet.packetCodec(allowDecodeOverMaxPacketSize = true)
   private given payloadCodec: Codec[Payload] = RLPCodecs.payloadCodec
 
   private val remote = InetMultiAddress(new InetSocketAddress(loopback, 31000))
