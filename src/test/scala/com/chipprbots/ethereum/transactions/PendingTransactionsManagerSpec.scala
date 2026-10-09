@@ -488,7 +488,6 @@ class PendingTransactionsManagerSpec
       case other                                       => fail(s"Expected GetPooledTransactions, got $other")
 
   private def announceFrom(
-      setup: TestSetup,
       ptm: org.apache.pekko.actor.typed.ActorRef[Command],
       peer: Peer,
       hash: ByteString,
@@ -518,7 +517,7 @@ class PendingTransactionsManagerSpec
       override val announcementFetchTimeout: FiniteDuration = 500.millis
     val ptm = spawnPtm(config = shortFetchTimeout)
     val hash = ByteString(Array.fill[Byte](32)(7))
-    Seq(peer1, peer2, peer3).foreach(announceFrom(this, ptm, _, hash))
+    Seq(peer1, peer2, peer3).foreach(announceFrom(ptm, _, hash))
 
     requestedFrom(this) shouldBe ((peer1.id, Seq(hash)))
     etcPeerManager.expectNoMessage(200.millis) // not also from peer2 and peer3
@@ -530,8 +529,8 @@ class PendingTransactionsManagerSpec
     UnitTest
   ) in new TestSetup:
     val hash = ByteString(Array.fill[Byte](32)(8))
-    announceFrom(this, pendingTransactionsManager, peer1, hash)
-    announceFrom(this, pendingTransactionsManager, peer2, hash)
+    announceFrom(pendingTransactionsManager, peer1, hash)
+    announceFrom(pendingTransactionsManager, peer2, hash)
     requestedFrom(this) shouldBe ((peer1.id, Seq(hash)))
     pendingTransactionsManager ! WrappedPeerEvent(PeerEvent.PeerDisconnected(peer1.id))
     // Well inside the 5 s default fetch timeout: the disconnect, not the timer, moved the request.
@@ -542,8 +541,8 @@ class PendingTransactionsManagerSpec
   ) in new TestSetup:
     val stx: SignedTransaction = newStx().tx
     val hash = stx.hash.value
-    announceFrom(this, pendingTransactionsManager, peer1, hash, size = 120, txType = 0.toByte)
-    announceFrom(this, pendingTransactionsManager, peer2, hash, size = 110, txType = 0.toByte)
+    announceFrom(pendingTransactionsManager, peer1, hash, size = 120, txType = 0.toByte)
+    announceFrom(pendingTransactionsManager, peer2, hash, size = 110, txType = 0.toByte)
     requestedFrom(this) shouldBe ((peer1.id, Seq(hash)))
     pendingTransactionsManager ! WrappedPeerEvent(
       PeerEvent.MessageFromPeer(ETHPackets.PooledTransactions(BigInt(1), Seq(stx), Seq(110)), peer1.id)
