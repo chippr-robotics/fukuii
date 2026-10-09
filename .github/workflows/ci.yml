@@ -94,7 +94,7 @@ jobs:
           }
         env:
           FUKUII_DEV: true
-        timeout-minutes: 15
+        timeout-minutes: 25  # Tier 1 runs ~11–15 min on GitHub runners; 15 left no headroom (spec 016 S0d, #1514)
       
       - name: Run Standard Tests with Coverage (Tier 2)
         # Tier 2 runs `clean; coverage; testEssential; testStandard; coverageReport`
