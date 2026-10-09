@@ -219,11 +219,25 @@ trait TxPoolConfig:
   val transactionTimeout: FiniteDuration
   val getTransactionFromPoolTimeout: FiniteDuration
 
+  /** Upper bound on the bytes of EIP-4844 network-form sidecars (blobs, commitments, proofs) the pool keeps for the
+    * blob transactions it holds. Admitting a sidecar past it evicts the oldest blob transactions, sidecar and
+    * transaction together. go-ethereum's blobpool works to a byte budget the same way (`--blobpool.datacap`). Concrete
+    * here so pool configs that predate it keep the default.
+    */
+  val blobSidecarBudgetBytes: Long = TxPoolConfig.DefaultBlobSidecarBudgetBytes
+
 object TxPoolConfig:
+
+  /** 256 MiB: ~2,000 single-blob or ~330 six-blob transactions in network form. */
+  val DefaultBlobSidecarBudgetBytes: Long = 256L * 1024 * 1024
+
   def apply(etcClientConfig: com.typesafe.config.Config): TxPoolConfig =
     val txPoolConfig = etcClientConfig.getConfig("txPool")
 
     new TxPoolConfig:
+      override val blobSidecarBudgetBytes: Long =
+        if txPoolConfig.hasPath("blob-sidecar-budget") then txPoolConfig.getBytes("blob-sidecar-budget").longValue
+        else TxPoolConfig.DefaultBlobSidecarBudgetBytes
       val txPoolSize: Int = txPoolConfig.getInt("tx-pool-size")
       val pendingTxManagerQueryTimeout: FiniteDuration =
         txPoolConfig.getDuration("pending-tx-manager-query-timeout").toMillis.millis
