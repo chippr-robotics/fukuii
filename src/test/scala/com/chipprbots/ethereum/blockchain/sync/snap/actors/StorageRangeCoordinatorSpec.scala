@@ -1489,8 +1489,9 @@ class StorageRangeCoordinatorSpec extends ScalaTestWithActorTestKit() with AnyFl
     snapSyncController.expectMessage(SNAPSyncController.StorageRangeSyncComplete)
   }
 
-  // #1518: a re-queued task must re-request the same range and must NOT carry the rejected response payload.
-  it should "re-queue a task without its downloaded slots/proof after a proof-verification failure" taggedAs UnitTest in {
+  // A re-queued task must re-request exactly the range that was served (the rejected response payload is not
+  // carried: StorageTask has no slots/proof fields).
+  it should "re-queue the same task range after a proof-verification failure" taggedAs UnitTest in {
     val (impl, _) = newImpl(
       stateRoot = kec256(ByteString("requeue-payload-root")),
       flatSlotStorage = new FlatSlotStorage(EphemDataSource()),
@@ -1515,14 +1516,11 @@ class StorageRangeCoordinatorSpec extends ScalaTestWithActorTestKit() with AnyFl
     val requeued = (impl.tasks.toSeq ++ impl.activeTasks.values.flatMap(_._2)).filter(_.accountHash == accountHash)
     requeued should have size 1
     requeued.foreach { t =>
-      t.slots shouldBe empty
-      t.proof shouldBe empty
-      t.next shouldBe task.next
-      t.last shouldBe task.last
+      t.copy(pending = false) shouldBe task
     }
   }
 
-  it should "hold no slots/proof on tasks re-queued by StoragePivotRefreshed from buffered chunks" taggedAs UnitTest in {
+  it should "re-queue the buffered chunk's task range on StoragePivotRefreshed" taggedAs UnitTest in {
     val (impl, kit) = newImpl(
       stateRoot = kec256(ByteString("prefresh-payload-root")),
       flatSlotStorage = new FlatSlotStorage(EphemDataSource()),
@@ -1532,29 +1530,20 @@ class StorageRangeCoordinatorSpec extends ScalaTestWithActorTestKit() with AnyFl
     val accountHash = kec256(ByteString("prefresh-payload-account"))
     val storageRoot = kec256(ByteString("prefresh-payload-storage-root"))
     val chunkLo = StorageTask(accountHash, storageRoot, next = slotKey(0x01), last = slotKey(0x1f))
-    // Deliberately payload-carrying: the re-queue itself must strip it.
-    val chunkHi = StorageTask(
-      accountHash,
-      storageRoot,
-      next = slotKey(0x20),
-      last = slotKey(0x3f),
-      slots = Seq(slotKey(0x30) -> ByteString("value-30")),
-      proof = Seq(ByteString("p"))
-    )
+    val chunkHi = StorageTask(accountHash, storageRoot, next = slotKey(0x20), last = slotKey(0x3f))
+    val chunkHiSlots = Seq(slotKey(0x30) -> ByteString("value-30"))
     val peer = PeerTestHelpers.createTestPeer("prefresh-payload-peer", testKit.createTestProbe[Any]().ref.toClassic)
 
     impl.accountSubtaskCounters(accountHash) = (2, 0)
     impl.storageTrieCursor(accountHash) = chunkLo.next
-    impl.applyOrderedStorageChunk(peer, chunkHi, chunkHi.slots, chunkHi.proof)
+    impl.applyOrderedStorageChunk(peer, chunkHi, chunkHiSlots, Seq(ByteString("p")))
     impl.pendingOrderedChunks(accountHash) should have size 1
 
     kit.run(StorageRangeCoordinator.StoragePivotRefreshed(kec256(ByteString("new-pivot-root-2"))))
 
     val requeued = impl.tasks.filter(_.accountHash == accountHash)
     requeued should have size 1
-    requeued.head.next shouldBe chunkHi.next
-    requeued.head.slots shouldBe empty
-    requeued.head.proof shouldBe empty
+    requeued.head shouldBe chunkHi.copy(pending = false)
   }
 
   it should "NOT drop an account that fails complete-range verification once and then succeeds" taggedAs UnitTest in {
