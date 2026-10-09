@@ -147,8 +147,10 @@ object PendingTransactionsManager:
       peerEventAdapter
     )
 
-    /** stores information which tx hashes are "known" by which peers */
-    var knownTransactions: Map[ByteString, Set[PeerId]] = Map.empty
+    /** stores information which tx hashes are "known" by which peers; bounded by size and age (see
+      * [[KnownTransactions]])
+      */
+    val knownTransactions = new KnownTransactions(txPoolConfig.knownTxMaxEntries, txPoolConfig.knownTxTtl)
 
     /** Raw network-wrapped bytes for EIP-4844 blob txs (txHash → 0x03||rlp([payload,blobs,commitments,proofs])). Needed
       * to replay the sidecar in PooledTransactions responses (EIP-4844 requirement).
@@ -190,7 +192,7 @@ object PendingTransactionsManager:
               if notification.wasEvicted() then
                 context.log
                   .debug("Evicting transaction: {} due to {}", notification.getKey.toHex, notification.getCause)
-              knownTransactions -= notification.getKey
+              knownTransactions.remove(notification.getKey)
               dropSidecar(notification.getKey)
       )
       .build()
@@ -255,7 +257,8 @@ object PendingTransactionsManager:
       * responses — disconnect peers that send txs with type/size mismatched from their announcement (EIP-4844 blob
       * violations).
       */
-    var pendingAnnouncements: Map[ByteString, (Byte, BigInt, PeerId)] = Map.empty
+    val pendingAnnouncements =
+      new PendingAnnouncements(txPoolConfig.announcementMaxEntries, txPoolConfig.announcementTimeout)
 
     /** Announce transaction hashes to connected peers via NewPooledTransactionHashes. */
     def notifyPeersOfTransactions(txs: Seq[SignedTransaction], peers: Seq[Peer]): Unit =
@@ -317,8 +320,7 @@ object PendingTransactionsManager:
         // Only what is requested: an entry is cleared when its tx is delivered, so one for a hash never asked for
         // would stay forever.
         hashes.zip(types).zip(sizes).foreach { case ((hash, txType), size) =>
-          if requested.contains(hash) then
-            pendingAnnouncements = pendingAnnouncements.updated(hash, (txType, size, peerId))
+          if requested.contains(hash) then pendingAnnouncements.record(hash, txType, size, peerId)
         }
         val requestId = ETHPackets.nextRequestId
         networkPeerManager ! NetworkPeerManagerActor.SendMessageCmd(
@@ -427,12 +429,10 @@ object PendingTransactionsManager:
           afterTipCheck.filter(stx => pendingNonces.contains(stx.senderAddress))
 
     def isTxKnown(signedTransaction: SignedTransaction, peerId: PeerId): Boolean =
-      knownTransactions.getOrElse(signedTransaction.hash.value, Set.empty).contains(peerId)
+      knownTransactions.isKnown(signedTransaction.hash.value, peerId)
 
     def setTxKnown(signedTransaction: SignedTransaction, peerId: PeerId): Unit =
-      val currentPeers = knownTransactions.getOrElse(signedTransaction.hash.value, Set.empty)
-      val newPeers = currentPeers + peerId
-      knownTransactions += (signedTransaction.hash.value -> newPeers)
+      knownTransactions.markKnown(signedTransaction.hash.value, peerId)
 
     /** Record that `peerId` knows the txs it sent us, for those now in the pool. A tx the pool rejected has no entry to
       * remove it later, so marking it would leak; and it is never announced, so there is nothing to suppress.
@@ -493,7 +493,7 @@ object PendingTransactionsManager:
         connectedPeers -= peerId
         connectedPeerCapabilities -= peerId
         // Its outstanding requests will never be answered.
-        pendingAnnouncements = pendingAnnouncements.filterNot { case (_, (_, _, announcer)) => announcer == peerId }
+        pendingAnnouncements.removePeer(peerId)
         Behaviors.same
 
       case AddUncheckedTransactions(transactions) =>
@@ -589,30 +589,31 @@ object PendingTransactionsManager:
         import com.chipprbots.ethereum.domain.*
         val announcementViolation: Option[String] = msg.txs.zipWithIndex.iterator
           .flatMap { case (stx, idx) =>
-            pendingAnnouncements.get(stx.hash.value).flatMap { case (announcedType, announcedSize, _) =>
-              val actualType: Byte = stx.tx match
-                case _: LegacyTransaction         => 0.toByte
-                case _: TransactionWithAccessList => Transaction.Type01
-                case _: TransactionWithDynamicFee => Transaction.Type02
-                case _: BlobTransaction           => Transaction.Type03
-                case _: SetCodeTransaction        => Transaction.Type04
-              val typeMismatch = actualType != announcedType
-              // Wire size from the PooledTransactions decode, against the announcement with go-ethereum's slack: it
-              // drops a peer only when the two are more than 8 bytes apart (eth/fetcher/tx_fetcher.go), because the
-              // size it announces is not always the exact wire length. For a blob tx its Transaction.Size() prices the
-              // outer list header as if it wrapped the sidecar alone, one byte short when the sidecar is tiny — a blob
-              // tx sent without blobs. Dropping on any difference disconnected go-ethereum peers over that byte.
-              val deliveredSize = msg.originalSizes.lift(idx).map(BigInt(_))
-              val sizeMismatch = deliveredSize.exists(size => (size - announcedSize).abs > AnnouncedSizeSlackBytes)
-              Option.when(typeMismatch || sizeMismatch)(
-                s"tx ${stx.hash.toHex} announced as type $announcedType, $announcedSize bytes; " +
-                  s"delivered as type $actualType, ${deliveredSize.getOrElse("?")} bytes"
-              )
+            pendingAnnouncements.get(stx.hash.value).flatMap {
+              case PendingAnnouncements.Announcement(announcedType, announcedSize, _) =>
+                val actualType: Byte = stx.tx match
+                  case _: LegacyTransaction         => 0.toByte
+                  case _: TransactionWithAccessList => Transaction.Type01
+                  case _: TransactionWithDynamicFee => Transaction.Type02
+                  case _: BlobTransaction           => Transaction.Type03
+                  case _: SetCodeTransaction        => Transaction.Type04
+                val typeMismatch = actualType != announcedType
+                // Wire size from the PooledTransactions decode, against the announcement with go-ethereum's slack: it
+                // drops a peer only when the two are more than 8 bytes apart (eth/fetcher/tx_fetcher.go), because the
+                // size it announces is not always the exact wire length. For a blob tx its Transaction.Size() prices the
+                // outer list header as if it wrapped the sidecar alone, one byte short when the sidecar is tiny — a blob
+                // tx sent without blobs. Dropping on any difference disconnected go-ethereum peers over that byte.
+                val deliveredSize = msg.originalSizes.lift(idx).map(BigInt(_))
+                val sizeMismatch = deliveredSize.exists(size => (size - announcedSize).abs > AnnouncedSizeSlackBytes)
+                Option.when(typeMismatch || sizeMismatch)(
+                  s"tx ${stx.hash.toHex} announced as type $announcedType, $announcedSize bytes; " +
+                    s"delivered as type $actualType, ${deliveredSize.getOrElse("?")} bytes"
+                )
             }
           }
           .nextOption()
         // Clean up announcements for received txs
-        msg.txs.foreach(stx => pendingAnnouncements -= stx.hash.value)
+        msg.txs.foreach(stx => pendingAnnouncements.remove(stx.hash.value))
         announcementViolation match
           case Some(violation) =>
             context.log.info(
@@ -641,7 +642,7 @@ object PendingTransactionsManager:
         pendingTransactions.invalidateAll(signedTransactions.map(_.hash.value).asJava)
         context.log.debug("Removing transactions: {}", signedTransactions.map(_.hash.toHex))
         // The removal listener has dropped what was pooled; a hash that was not pooled may still have an entry.
-        knownTransactions = knownTransactions -- signedTransactions.map(_.hash.value)
+        knownTransactions.removeAll(signedTransactions.map(_.hash.value))
         signedTransactions.foreach(stx => dropSidecar(stx.hash.value))
         Behaviors.same
 
@@ -655,6 +656,8 @@ object PendingTransactionsManager:
         context.log.debug("Dropping all cached transactions")
         pendingTransactions.invalidateAll()
         pendingNonces = Map.empty
+        knownTransactions.clear()
+        pendingAnnouncements.clear()
         blobTxNetworkBytes = VectorMap.empty
         blobSidecarBytes = 0L
         Behaviors.same
