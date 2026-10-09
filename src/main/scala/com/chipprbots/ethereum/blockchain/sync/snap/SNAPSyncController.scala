@@ -21,6 +21,7 @@ import com.chipprbots.ethereum.blockchain.sync.PeerListSupportNg
 import com.chipprbots.ethereum.blockchain.sync.SyncController
 import com.chipprbots.ethereum.blockchain.sync.SyncProtocol
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.ChildFactories
+import com.chipprbots.ethereum.blockchain.sync.snap.controller.CoordinatorHandles
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.HeapWatchdogStart
 import com.chipprbots.ethereum.consensus.engine.PoSBlockHeaderValidator
 import com.chipprbots.ethereum.db.storage.AppStateStorage
@@ -80,7 +81,8 @@ private class SNAPSyncControllerImpl(
     childFactories: ChildFactories = ChildFactories.production,
     heapWatchdogStart: HeapWatchdogStart = HeapWatchdogStart.production,
     intakeBudgetOverride: Option[SnapIntakeBudget] = None
-)(implicit ec: ExecutionContext):
+)(implicit ec: ExecutionContext)
+    extends CoordinatorHandles:
 
   import SNAPSyncController.*
   import SyncPhase.*
@@ -93,7 +95,8 @@ private class SNAPSyncControllerImpl(
   // Shared admission gate for SNAP contract work. Producers (AccountRangeCoordinator's account dispatch and carried
   // replay, the accounts-complete recovery stream) read it synchronously before adding work; the storage and bytecode
   // coordinators acknowledge receipt and publish their queue depth. Never a mailbox hop on the pause path.
-  private val intakeBudget = intakeBudgetOverride.getOrElse(
+  // Implements `CoordinatorHandles.intakeBudget` (spec 016 P1). A strict val: the initializer must run at construction.
+  val intakeBudget: SnapIntakeBudget = intakeBudgetOverride.getOrElse(
     new SnapIntakeBudget(
       maxPendingStorageTasks = snapSyncConfig.maxPendingStorageTasks,
       maxPendingByteCodeHashes = snapSyncConfig.maxPendingByteCodeHashes
@@ -368,20 +371,13 @@ private class SNAPSyncControllerImpl(
       storage
     }
 
-  // Actor-based coordinators (OQ-6 Option A: Typed refs, spawned via ctx.spawn).
-  private var accountRangeCoordinator
-      : Option[org.apache.pekko.actor.typed.ActorRef[actors.AccountRangeCoordinator.Command]] =
-    None
-  private var bytecodeCoordinator: Option[org.apache.pekko.actor.typed.ActorRef[actors.ByteCodeCoordinator.Command]] =
-    None
-  private var storageRangeCoordinator
-      : Option[org.apache.pekko.actor.typed.ActorRef[actors.StorageRangeCoordinator.Command]] =
-    None
-  private var trieNodeHealingCoordinator
-      : Option[org.apache.pekko.actor.typed.ActorRef[actors.TrieNodeHealingCoordinator.Command]] =
-    None
-  // ChainDownloader is Behavior[Command] (S6 narrowed); typed ref enables type-safe sends.
-  private var chainDownloader: Option[org.apache.pekko.actor.typed.ActorRef[ChainDownloader.Command]] = None
+  // Actor-based coordinators (OQ-6 Option A: Typed refs, spawned via ctx.spawn) and the ChainDownloader live in
+  // `CoordinatorHandles` (spec 016 P1): `accountRangeCoordinator`, `bytecodeCoordinator`, `storageRangeCoordinator`,
+  // `trieNodeHealingCoordinator` and the `chainDownloader` handle.
+
+  // Implements `CoordinatorHandles.stopChild`.
+  protected def stopChild(child: TypedActorRef[Nothing]): Unit = ctx.stop(child)
+
   private var chainDownloadComplete: Boolean = false
   // Deferred-backfill finalisation hold: Some(pivot header hash) while finalisation waits for the forward header
   // download to reach the pivot. Keyed by hash, not number, so a pivot that changed is never mistaken for the old one.
@@ -1590,7 +1586,7 @@ private class SNAPSyncControllerImpl(
             case Some(header) =>
               completePivotRefreshWithStateRoot(blockNumber, header, "backtracked pivot (local header)")
             case None =>
-              chainDownloader.foreach(_ ! ChainDownloader.Pause)
+              chainDownloader.tell(ChainDownloader.Pause)
               pendingPivotRefresh = Some((blockNumber, "backtracked pivot"))
               syncController ! StartRegularSyncBootstrap(blockNumber)
               lastAccountProgressMs = System.currentTimeMillis()
@@ -4685,7 +4681,7 @@ private class SNAPSyncControllerImpl(
         // When BootstrapComplete arrives in the syncing state, the refresh is completed.
         ctx.log.info(s"Pivot header for block $newPivotBlock not available locally. Requesting header bootstrap...")
         // Pause chain download to free up peers for the pivot header bootstrap
-        chainDownloader.foreach(_ ! ChainDownloader.Pause)
+        chainDownloader.tell(ChainDownloader.Pause)
         pendingPivotRefresh = Some((newPivotBlock, reason))
         syncController ! StartRegularSyncBootstrap(newPivotBlock)
         // Reset account stagnation timer while we wait for the header.
@@ -4977,9 +4973,9 @@ private class SNAPSyncControllerImpl(
             }
             // Chain download target extends to the new pivot (chain data is canonical, never invalidated)
             if chainDownloader.isDefined then
-              chainDownloader.foreach(_ ! ChainDownloader.UpdateTarget(newPivotBlock))
+              chainDownloader.tell(ChainDownloader.UpdateTarget(newPivotBlock))
               // Resume chain download if it was paused during pivot header bootstrap
-              chainDownloader.foreach(_ ! ChainDownloader.Resume)
+              chainDownloader.tell(ChainDownloader.Resume)
             else
               // Start chain downloader if not yet started (e.g. pivot was 0 at initial bootstrap)
               startChainDownloader()
@@ -5424,16 +5420,14 @@ private class SNAPSyncControllerImpl(
         SNAPSyncController.HeaderHoldTickInterval
       )
       if chainDownloader.isEmpty then startChainDownloader()
-      chainDownloader.foreach { d =>
-        d ! ChainDownloader.UpdateTarget(pivot) // no-op unless the pivot is above its target
-        d ! ChainDownloader.Resume // no-op unless paused for a pivot bootstrap that no longer matters
-      }
+      chainDownloader.tell(ChainDownloader.UpdateTarget(pivot)) // no-op unless the pivot is above its target
+      chainDownloader.tell(ChainDownloader.Resume) // no-op unless paused for a pivot bootstrap that no longer matters
       lastHeaderHoldWarnMs = now
       holdLastCursor = cursor
       holdLastAdvanceMs = now
     else if headerHold.exists(_ != pivotHash) then
       ctx.log.info(s"Header hold: pivot changed to $pivot (cursor=$cursor)")
-      chainDownloader.foreach(_ ! ChainDownloader.UpdateTarget(pivot))
+      chainDownloader.tell(ChainDownloader.UpdateTarget(pivot))
     // ANY change counts as progress (a cursor briefly pulled back after a respawn is not a stall).
     if cursor != holdLastCursor then
       holdLastCursor = cursor
@@ -5444,8 +5438,7 @@ private class SNAPSyncControllerImpl(
         s"SNAP finalisation hold: header cursor stuck at $cursor (pivot $pivot) for " +
           s"${(now - holdLastAdvanceMs) / 1000}s; restarting the chain downloader"
       )
-      chainDownloader.foreach(ctx.stop)
-      chainDownloader = None
+      chainDownloader.stop()
       startChainDownloader()
       holdLastAdvanceMs = now
     if now - lastHeaderHoldWarnMs >= SNAPSyncController.HeaderHoldWarnIntervalMs then
@@ -5617,14 +5610,11 @@ private class SNAPSyncControllerImpl(
           s"SNAP state finalised at pivot=$pivot. Starting regular sync; chain backfill continues in background."
         )
         // Yield peer slots to regular sync — backfill keeps a small budget.
-        chainDownloader.foreach(
-          _ ! ChainDownloader.YieldToRegularSync(snapSyncConfig.chainBackfillConcurrentRequests)
-        )
+        chainDownloader.tell(ChainDownloader.YieldToRegularSync(snapSyncConfig.chainBackfillConcurrentRequests))
         completedWithBackfill()
       else
         // No backfill in flight — emit Done immediately. Parent poison-pills this actor.
-        chainDownloader.foreach(ctx.stop)
-        chainDownloader = None
+        chainDownloader.stop()
         syncController ! Done
         completed()
     } // end boundary
@@ -5702,8 +5692,7 @@ private class SNAPSyncControllerImpl(
         case ChainDownloaderDone =>
           ctx.log.info("Background chain backfill complete; SNAPSyncController shutting down.")
           chainDownloadComplete = true
-          chainDownloader.foreach(ctx.stop)
-          chainDownloader = None
+          chainDownloader.stop()
           syncController ! Done
           completed()
 
@@ -5733,7 +5722,7 @@ private class SNAPSyncControllerImpl(
   private def releaseDeferredBodiesAndReceipts(): Unit =
     if SNAPSyncController.chainBackfillDeferredToFinalization(snapSyncConfig) then
       ctx.log.info("SNAP state finalised; releasing deferred body and receipt backfill")
-      chainDownloader.foreach(_ ! ChainDownloader.ReleaseBodiesAndReceipts)
+      chainDownloader.tell(ChainDownloader.ReleaseBodiesAndReceipts)
 
   private def launchChainDownloader(pivotOpt: Option[BigInt], maxConcurrent: Int): Unit =
     if snapSyncConfig.chainDownloadEnabled then
@@ -5770,7 +5759,7 @@ private class SNAPSyncControllerImpl(
               DispatcherSelector.fromConfig("sync-dispatcher")
             )
           downloader ! ChainDownloader.Start(pivot)
-          chainDownloader = Some(downloader)
+          chainDownloader.attach(downloader)
           chainDownloadComplete = false
       }
   // end if chainDownloadEnabled
