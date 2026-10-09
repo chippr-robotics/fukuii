@@ -45,7 +45,10 @@ class EngineApiService(
     // Reference-count side of an executed payload that does not become canonical (see ReorgStateHandler). NoOp for
     // specs with no reference-counted state; the node passes its BlockchainImpl.
     reorgState: com.chipprbots.ethereum.consensus.ReorgStateHandler =
-      com.chipprbots.ethereum.consensus.ReorgStateHandler.NoOp
+      com.chipprbots.ethereum.consensus.ReorgStateHandler.NoOp,
+    // Marked synced by every forkchoiceUpdated that sets the head, as go-ethereum calls SetSynced() there; that is what
+    // lets the pool take transactions from peers. None for specs; the node passes its gate.
+    txGossipGate: Option[com.chipprbots.ethereum.transactions.TxGossipGate] = None
 )(implicit blockchainConfig: BlockchainConfig, typedScheduler: org.apache.pekko.actor.typed.Scheduler)
     extends Logger:
 
@@ -895,6 +898,9 @@ class EngineApiService(
             IO.pure(Right(ForkchoiceUpdatedResponse(payloadStatus = PayloadStatusV1(Syncing))))
 
           case Right(()) =>
+            // The head is set: go-ethereum's `api.eth.SetSynced()`, which opens tx gossip from peers (eth/catalyst/api.go,
+            // after SetCanonical and before the finalized/safe updates and payload building).
+            txGossipGate.foreach(_.markSynced("forkchoiceUpdated set the head"))
             // FCU has advanced best-block; purge the head block's txs from the mempool
             // so the next proposer build doesn't re-queue them (would cause
             // NONCE_MISMATCH_TOO_LOW).

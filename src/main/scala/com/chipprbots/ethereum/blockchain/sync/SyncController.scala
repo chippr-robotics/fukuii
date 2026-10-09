@@ -201,7 +201,9 @@ object SyncController:
       messConfig: Option[MESSConfig] = None,
       forkChoiceManagerOpt: Option[ForkChoiceManager] = None,
       externalSchedulerOpt: Option[Scheduler] = None,
-      reorgState: ReorgStateHandler = ReorgStateHandler.NoOp
+      reorgState: ReorgStateHandler = ReorgStateHandler.NoOp,
+      txGossipGate: com.chipprbots.ethereum.transactions.TxGossipGate =
+        com.chipprbots.ethereum.transactions.TxGossipGate.alwaysOpen
   ): Behavior[Command] =
     Behaviors.setup { ctx =>
       Behaviors.withTimers { timers =>
@@ -229,7 +231,8 @@ object SyncController:
           messConfig,
           forkChoiceManagerOpt,
           externalSchedulerOpt,
-          reorgState
+          reorgState,
+          txGossipGate
         )
         impl.setup()
         impl.withPostStop(impl.idle())
@@ -267,7 +270,10 @@ object SyncController:
       messConfig: Option[MESSConfig],
       forkChoiceManagerOpt: Option[ForkChoiceManager],
       externalSchedulerOpt: Option[Scheduler],
-      reorgState: ReorgStateHandler
+      reorgState: ReorgStateHandler,
+      // Closed while SNAP or state recovery runs (no complete state to validate a peer tx against), opened when
+      // regular sync takes over; regular sync marks the node synced once it reaches the network's best block.
+      txGossipGate: com.chipprbots.ethereum.transactions.TxGossipGate
   ):
     // scalastyle:on parameter.number
 
@@ -1540,6 +1546,7 @@ object SyncController:
       given scala.concurrent.ExecutionContext = ctx.executionContext
       log.info("Starting SNAP sync mode")
       syncGeneration += 1
+      txGossipGate.stateSyncStarted()
 
       val snapSyncConfig = loadSnapSyncConfig()
 
@@ -1599,6 +1606,7 @@ object SyncController:
       */
     def startRegularSync(resumeBackfill: Boolean = true): (TypedActorRef[RegularSync.Command], Behavior[Command]) =
       syncGeneration += 1
+      txGossipGate.stateSyncFinished()
 
       // Every route out of a bulk bytecode recovery ends here, so this is where its result is checked. The recovery
       // actor marks itself done on abandonment, a crashed coordinator, or a failed scan, so success is read from the
@@ -1714,7 +1722,8 @@ object SyncController:
             blockTopic,
             configBuilder,
             ctx.self,
-            reorgState
+            reorgState,
+            onCaughtUp = () => txGossipGate.markSynced("regular sync reached the best block peers announced")
           ),
           s"regular-sync-$syncGeneration",
           DispatcherSelector.fromConfig("sync-dispatcher")
@@ -1860,6 +1869,7 @@ object SyncController:
         scanRoot: Option[(ByteString, BigInt)] = None
     ): Behavior[Command] =
       syncGeneration += 1
+      txGossipGate.stateSyncStarted()
       val stateRootOpt = scanRoot.map(_._1).orElse(appStateStorage.getSnapSyncStateRoot())
       val pivotBlockOpt = scanRoot.map(_._2).orElse(appStateStorage.getSnapSyncPivotBlock())
 
