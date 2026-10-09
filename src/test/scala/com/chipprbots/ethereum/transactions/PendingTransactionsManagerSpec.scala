@@ -472,6 +472,87 @@ class PendingTransactionsManagerSpec
     announceThenDeliver(this, announcedSize = 120, deliveredSize = 110)
     peerManager.expectMsg(PeerManagerActor.DisconnectPeerFireAndForgetCmd(peer1.id))
 
+  // ---- one requester per announced hash, re-requested from another announcer on failure ---------------------
+  //
+  // hive devp2p TestBlobTxWithoutSidecar / TestBlobTxWithMismatchedSidecar (go-ethereum #35869): three peers announce
+  // one blob tx, the first one asked serves a bad copy and is dropped, and the test then waits 12 s for one of the
+  // other two to be asked. The pool used to ask all three at once (the test's reader swallowed the two duplicate
+  // requests while waiting for the first) and, after the drop, nobody: the dropped peer's PeerDisconnected only
+  // arrives after the 15 s disconnect-poison-pill-timeout. go-ethereum's tx fetcher asks one announcer at a time and
+  // moves on after txFetchTimeout.
+
+  private def requestedFrom(setup: TestSetup): (PeerId, Seq[ByteString]) =
+    val cmd = setup.etcPeerManager.expectMsgType[NetworkPeerManagerActor.SendMessageCmd]
+    cmd.message.underlyingMsg match
+      case ETHPackets.GetPooledTransactions(_, hashes) => (cmd.peerId, hashes)
+      case other                                       => fail(s"Expected GetPooledTransactions, got $other")
+
+  private def announceFrom(
+      setup: TestSetup,
+      ptm: org.apache.pekko.actor.typed.ActorRef[Command],
+      peer: Peer,
+      hash: ByteString,
+      size: Int = 100,
+      txType: Byte = Transaction.Type03
+  ): Unit =
+    ptm ! WrappedPeerEvent(
+      PeerEvent.MessageFromPeer(
+        ETHPackets.NewPooledTransactionHashes72(
+          Seq(txType),
+          Seq(BigInt(size)),
+          Seq(hash),
+          ETHPackets.NewPooledTransactionHashes72.NoCustody
+        ),
+        peer.id
+      )
+    )
+
+  it should "request an announced hash from one announcer only, and from the next once that request times out" taggedAs (
+    UnitTest
+  ) in new TestSetup:
+    val shortFetchTimeout: TxPoolConfig = new TxPoolConfig:
+      override val txPoolSize: Int = 300
+      override val pendingTxManagerQueryTimeout: FiniteDuration = Timeouts.veryLongTimeout
+      override val transactionTimeout: FiniteDuration = Timeouts.veryLongTimeout
+      override val getTransactionFromPoolTimeout: FiniteDuration = Timeouts.veryLongTimeout
+      override val announcementFetchTimeout: FiniteDuration = 500.millis
+    val ptm = spawnPtm(config = shortFetchTimeout)
+    val hash = ByteString(Array.fill[Byte](32)(7))
+    Seq(peer1, peer2, peer3).foreach(announceFrom(this, ptm, _, hash))
+
+    requestedFrom(this) shouldBe ((peer1.id, Seq(hash)))
+    etcPeerManager.expectNoMessage(200.millis) // not also from peer2 and peer3
+    requestedFrom(this) shouldBe ((peer2.id, Seq(hash))) // peer1 never answered
+    requestedFrom(this) shouldBe ((peer3.id, Seq(hash))) // nor did peer2
+    etcPeerManager.expectNoMessage(1.second) // nobody left to ask
+
+  it should "request a hash from the next announcer as soon as its requester disconnects" taggedAs (
+    UnitTest
+  ) in new TestSetup:
+    val hash = ByteString(Array.fill[Byte](32)(8))
+    announceFrom(this, pendingTransactionsManager, peer1, hash)
+    announceFrom(this, pendingTransactionsManager, peer2, hash)
+    requestedFrom(this) shouldBe ((peer1.id, Seq(hash)))
+    pendingTransactionsManager ! WrappedPeerEvent(PeerEvent.PeerDisconnected(peer1.id))
+    // Well inside the 5 s default fetch timeout: the disconnect, not the timer, moved the request.
+    requestedFrom(this) shouldBe ((peer2.id, Seq(hash)))
+
+  it should "request a hash from the next announcer as soon as its requester is dropped for a bad delivery" taggedAs (
+    UnitTest
+  ) in new TestSetup:
+    val stx: SignedTransaction = newStx().tx
+    val hash = stx.hash.value
+    announceFrom(this, pendingTransactionsManager, peer1, hash, size = 120, txType = 0.toByte)
+    announceFrom(this, pendingTransactionsManager, peer2, hash, size = 110, txType = 0.toByte)
+    requestedFrom(this) shouldBe ((peer1.id, Seq(hash)))
+    pendingTransactionsManager ! WrappedPeerEvent(
+      PeerEvent.MessageFromPeer(ETHPackets.PooledTransactions(BigInt(1), Seq(stx), Seq(110)), peer1.id)
+    )
+    peerManager.expectMsg(PeerManagerActor.DisconnectPeerFireAndForgetCmd(peer1.id))
+    // Asked at once, not after peer1's PeerDisconnected or the 5 s fetch timeout. Its reply will be checked against its
+    // own announcement (110 bytes), not peer1's.
+    requestedFrom(this) shouldBe ((peer2.id, Seq(hash)))
+
   it should "remove transaction on timeout" taggedAs (UnitTest) in new TestSetup:
     override val txPoolConfig: TxPoolConfig = new TxPoolConfig:
       override val txPoolSize: Int = 300

@@ -8,6 +8,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **Announced transactions are fetched from one peer at a time.** The pool requested an announced transaction from
+  every peer that announced it, and when the peer it got it from was dropped for serving a bad copy, it asked nobody
+  else. As in go-ethereum's tx fetcher, a hash is now requested from one announcer; the others are kept as
+  alternates and asked in turn when the request goes unanswered for `txPool.announcement-fetch-timeout` (default
+  5 s, go-ethereum's `txFetchTimeout`), when the requesting peer disconnects, or at once when it is dropped for a
+  delivery that contradicts its announcement. Each delivery is checked against its sender's own announcement. Fixes
+  hive devp2p `TestBlobTxWithoutSidecar` / `TestBlobTxWithMismatchedSidecar`, which go-ethereum #35869 rewrote to
+  have three peers announce the same blob transaction.
 - **Tx pool memory leak (OOM).** A node that was not synced kept taking transactions from peers. During SNAP sync
   the pool rejected every one (no state to check them against), but the EIP-4844 blob sidecars that came with them
   (130-830 KB each) were stored before admission and never removed. A Sepolia node held 2.6 GB of them and was
