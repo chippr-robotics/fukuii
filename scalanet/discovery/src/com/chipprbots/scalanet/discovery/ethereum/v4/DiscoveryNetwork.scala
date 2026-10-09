@@ -7,6 +7,7 @@ import java.util.concurrent.TimeoutException
 import cats.Show
 import cats.effect.Deferred
 import cats.effect.IO
+import cats.effect.Outcome
 import cats.effect.Temporal
 import cats.implicits.*
 
@@ -35,35 +36,34 @@ import fs2.Stream
 import scodec.Codec
 import scodec.bits.BitVector
 
-/** Present a stateless facade implementing the RPC methods
-  * that correspond to the discovery protocol messages on top
-  * of the peer group representing the other nodes.
+/** Present a stateless facade implementing the RPC methods that correspond to the discovery protocol messages on top of
+  * the peer group representing the other nodes.
   */
-trait DiscoveryNetwork[A] extends DiscoveryRPC[DiscoveryNetwork.Peer[A]] {
+trait DiscoveryNetwork[A] extends DiscoveryRPC[DiscoveryNetwork.Peer[A]]:
 
-  /** Start handling incoming requests using the local RPC interface.
-    * The remote side is identified by its ID and address.*/
-  def startHandling(handler: DiscoveryRPC[DiscoveryNetwork.Peer[A]]): IO[Deferred[IO, Unit]]
-}
-
-object DiscoveryNetwork {
-
-  /** The pair of node ID and the UDP socket where it can be contacted or where it contacted us from.
-    * We have to use the pair for addressing a peer as well to set an expectation of the identity we
-    * expect to talk to, i.e. who should sign the packets.
+  /** Start handling incoming requests using the local RPC interface. The remote side is identified by its ID and
+    * address.
     */
-  case class Peer[A](id: Node.Id, address: A) {
+  def startHandling(handler: DiscoveryRPC[DiscoveryNetwork.Peer[A]]): IO[Deferred[IO, Unit]]
+
+object DiscoveryNetwork:
+
+  /** The pair of node ID and the UDP socket where it can be contacted or where it contacted us from. We have to use the
+    * pair for addressing a peer as well to set an expectation of the identity we expect to talk to, i.e. who should
+    * sign the packets.
+    */
+  case class Peer[A](id: Node.Id, address: A):
     override def toString: String =
       s"Peer(id = ${id.value.toHex}, address = $address)"
 
     lazy val kademliaId: Hash = Node.kademliaId(id)
-  }
-  object Peer {
-    implicit def addressable[A: Addressable]: Addressable[Peer[A]] = new Addressable[Peer[A]] {
+  object Peer:
+    implicit def addressable[A: Addressable]: Addressable[Peer[A]] = new Addressable[Peer[A]]:
       override def getAddress(a: Peer[A]): InetSocketAddress =
         Addressable[A].getAddress(a.address)
-    }
-  }
+
+  // Pause before restarting a failed server-event consumer, so a persistent failure cannot spin.
+  private[v4] val ConsumerRestartDelay: FiniteDuration = 1.second
 
   // Errors that stop the processing of incoming messages on a channel.
   class PacketException(message: String) extends Exception(message) with NoStackTrace
@@ -82,7 +82,7 @@ object DiscoveryNetwork {
       // not in use (asynchronous pipeline becomes the sole Pong source).
       pingDedup: Discv4SyncResponder.PingDedup = new Discv4SyncResponder.PingDedup
   )(implicit codec: Codec[Payload], sigalg: SigAlg, temporal: Temporal[IO]): IO[DiscoveryNetwork[A]] = IO {
-    new DiscoveryNetwork[A] with LazyLogging {
+    new DiscoveryNetwork[A] with LazyLogging:
 
       import DiscoveryRPC.ENRSeq
       import Payload.*
@@ -93,41 +93,72 @@ object DiscoveryNetwork {
 
       private val maxNeighborsPerPacket = getMaxNeighborsPerPacket
 
-      /** Start a fiber that accepts incoming channels and starts a dedicated fiber
-        * to handle every channel separtely, processing their messages one by one.
-        * This is fair: every remote connection can be throttled independently
-        * of each other, as well as based on operation type by the `handler` itself.
+      /** Start a fiber that accepts incoming channels and starts a dedicated fiber to handle every channel separtely,
+        * processing their messages one by one. This is fair: every remote connection can be throttled independently of
+        * each other, as well as based on operation type by the `handler` itself.
         */
       override def startHandling(handler: DiscoveryRPC[Peer[A]]): IO[Deferred[IO, Unit]] =
-        for {
+        for
           cancelToken <- Deferred[IO, Unit]
-          _ <- Stream.repeatEval(peerGroup.nextServerEvent)
-            .interruptWhen(cancelToken.get.attempt)
-            .evalMap {
-              case Some(ChannelCreated(channel: Channel[A, Packet], release)) =>
-                handleChannel(handler, channel, cancelToken)
-                  .guarantee(release)
-                  .recover {
-                    case _: TimeoutException =>
-                    case ex: PacketException =>
-                      logger.debug(s"Discovery packet decode failure from ${channel.to}: ${ex.getMessage}")
-                    case NonFatal(ex) =>
-                      logger.error(s"Error handling channel from ${channel.to}: $ex")
-                  }
-                  .start.void
+          _ <- supervise(consumeServerEvents(handler, cancelToken), cancelToken).start.void
+        yield cancelToken
 
-              case _ =>
-                IO.unit
-            }
-            .compile.drain
-            .start.void
-        } yield cancelToken
+      /** Accept incoming channels until the peer group is closed (`nextServerEvent` returns None) or the token fires.
+        * Failures while handling one channel are confined to that channel's fiber; anything that escapes here (e.g.
+        * `nextServerEvent` itself failing) ends the stream and is dealt with by [[supervise]].
+        */
+      private def consumeServerEvents(handler: DiscoveryRPC[Peer[A]], cancelToken: Deferred[IO, Unit]): IO[Unit] =
+        Stream
+          .repeatEval(peerGroup.nextServerEvent)
+          // None means the peer group is closed; it keeps returning None, so stop rather than spin.
+          .unNoneTerminate
+          .interruptWhen(cancelToken.get.attempt)
+          .evalMap {
+            case ChannelCreated(channel: Channel[A, Packet], release) =>
+              handleChannel(handler, channel, cancelToken)
+                .guarantee(
+                  release.handleErrorWith(ex => IO(logger.warn(s"Failed to release channel from ${channel.to}: $ex")))
+                )
+                .recover {
+                  case _: TimeoutException =>
+                  case ex: PacketException =>
+                    logger.debug(s"Discovery packet decode failure from ${channel.to}: ${ex.getMessage}")
+                  case NonFatal(ex) =>
+                    logger.error(s"Error handling channel from ${channel.to}: $ex")
+                }
+                .start
+                .void
+
+            case _ =>
+              IO.unit
+          }
+          .compile
+          .drain
+
+      /** Run the consumer in its own fiber and start it again if it dies or is cancelled, logging the outcome. A
+        * silently dead consumer leaves every new server channel unattended and its queue growing (#1519). It is only
+        * left stopped when it finished normally (peer group closed / handling cancelled via the token).
+        */
+      private def supervise(consumer: IO[Unit], cancelToken: Deferred[IO, Unit]): IO[Unit] =
+        def restart(reason: String): IO[Unit] =
+          cancelToken.tryGet.flatMap {
+            case Some(_) => IO.unit
+            case None =>
+              IO(logger.error(s"Discovery server-event consumer stopped unexpectedly ($reason); restarting")) >>
+                IO.sleep(ConsumerRestartDelay) >> supervise(consumer, cancelToken)
+          }
+
+        consumer.start.flatMap(_.join).flatMap {
+          case Outcome.Succeeded(_) => IO(logger.info("Discovery server-event consumer finished"))
+          case Outcome.Errored(ex)  => restart(s"failed with $ex")
+          case Outcome.Canceled()   => restart("cancelled")
+        }
 
       private def handleChannel(
           handler: DiscoveryRPC[Peer[A]],
           channel: Channel[A, Packet],
           cancelToken: Deferred[IO, Unit]
-      ): IO[Unit] = {
+      ): IO[Unit] =
         // Idle eviction: a server channel exists per remote address and is only removed when this stream ends (the
         // caller's `guarantee(release)`). Without a bound every address that ever sent us a datagram keeps a channel, a
         // queue and several parked fibers for the life of the node — 35k channels / 224k fibers after 78 min on Sepolia
@@ -135,30 +166,29 @@ object DiscoveryNetwork {
         // be dropped as expired anyway, and a later datagram from the same address simply creates a fresh channel. The
         // TimeoutException is swallowed by the caller's `recover`. `unNoneTerminate` ends the stream when the queue is
         // closed (`next` returns None forever after close; looping on it would spin).
-        Stream.repeatEval(channel.nextChannelEvent.timeout(config.messageExpiration))
+        Stream
+          .repeatEval(channel.nextChannelEvent.timeout(config.messageExpiration))
           .unNoneTerminate
           .interruptWhen(cancelToken.get.attempt)
           .evalMap {
             case MessageReceived(receivedPacket: Packet) =>
               currentTimeSeconds.flatMap { timestamp =>
-                Packet.unpack(receivedPacket).toEither match {
+                Packet.unpack(receivedPacket).toEither match
                   case Right((payload, remotePublicKey)) =>
-                    payload match {
+                    payload match
                       case _: Payload.Response =>
                         // Not relevant on the server channel.
                         IO.unit
 
-                      case p: Payload.HasExpiration[_] if isExpired(p, timestamp) =>
+                      case p: Payload.HasExpiration[?] if isExpired(p, timestamp) =>
                         IO(logger.debug(s"Ignoring expired request from ${channel.to}; ${p.expiration} < $timestamp"))
 
                       case p: Payload.Request =>
                         handleRequest(handler, channel, remotePublicKey, receivedPacket.hash, p)
-                    }
 
                   case Left(err) =>
                     IO(logger.debug(s"Failed to unpack packet: $err; ${Show[Packet].show(receivedPacket)}")) >>
                       IO.raiseError(new PacketException(s"Failed to unpack message: $err"))
-                }
               }
 
             case DecodingError =>
@@ -171,8 +201,8 @@ object DiscoveryNetwork {
               // Netty-level idle detection is not used here; the read timeout above does the eviction.
               IO.unit
           }
-          .compile.drain
-      }
+          .compile
+          .drain
 
       private def handleRequest(
           handler: DiscoveryRPC[Peer[A]],
@@ -180,10 +210,10 @@ object DiscoveryNetwork {
           remotePublicKey: PublicKey,
           hash: Hash,
           payload: Payload.Request
-      ): IO[Unit] = {
+      ): IO[Unit] =
         val caller = Peer(remotePublicKey, channel.to)
 
-        payload match {
+        payload match
           case Ping(_, _, _, _, maybeRemoteEnrSeq) =>
             // Pong.to per discv4.md is "the address from which the packet was
             // received" — i.e., the SENDER's address as we observed it on the
@@ -199,11 +229,9 @@ object DiscoveryNetwork {
               // (spec compliance: hive's simulator counts and rejects duplicates).
               // `handler.ping` ran above for its bookkeeping side-effects, so the
               // bonding pipeline is unaffected by the deduplication.
-              if (pingDedup.isAlreadyResponded(hash)) {
+              if pingDedup.isAlreadyResponded(hash) then
                 IO(logger.debug(s"discv4 async-pong skipped — sync fast-path already responded for ${channel.to}"))
-              } else {
-                channel.send(Pong(pongTo, hash, 0, maybeLocalEnrSeq)).void
-              }
+              else channel.send(Pong(pongTo, hash, 0, maybeLocalEnrSeq)).void
             }
 
           case FindNode(target, expiration) =>
@@ -222,12 +250,10 @@ object DiscoveryNetwork {
                   .take(config.kademliaBucketSize)
                   .grouped(maxNeighborsPerPacket)
                   .toList
-              val toSend = if (groups.isEmpty) List(List.empty[Node]) else groups.map(_.toList)
-              toSend
-                .traverse { group =>
-                  channel.send(Neighbors(group, 0))
-                }
-                .void
+              val toSend = if groups.isEmpty then List(List.empty[Node]) else groups.map(_.toList)
+              toSend.traverse { group =>
+                channel.send(Neighbors(group, 0))
+              }.void
             }
 
           case ENRRequest(_) =>
@@ -236,17 +262,14 @@ object DiscoveryNetwork {
             } { enr =>
               channel.send(ENRResponse(hash, enr)).void
             }
-        }
-      }
 
       private def maybeRespond[Res](maybeResponse: IO[Option[Res]])(
           f: Res => IO[Unit]
       ): IO[Unit] =
         maybeResponse
-          .recoverWith {
-            case NonFatal(ex) =>
-              // Not responding to this one, but it shouldn't stop handling further requests.
-              IO(logger.error(s"Error handling incoming request: $ex")).as(None)
+          .recoverWith { case NonFatal(ex) =>
+            // Not responding to this one, but it shouldn't stop handling further requests.
+            IO(logger.error(s"Error handling incoming request: $ex")).as(None)
           }
           .flatMap(_.fold(IO.unit)(f))
 
@@ -260,25 +283,22 @@ object DiscoveryNetwork {
           )
 
       /** Set a future expiration time on the payload. */
-      private def setExpiration(payload: Payload): IO[Payload] = {
-        payload match {
-          case p: Payload.HasExpiration[_] =>
+      private def setExpiration(payload: Payload): IO[Payload] =
+        payload match
+          case p: Payload.HasExpiration[?] =>
             currentTimeSeconds.map(t => p.withExpiration(t + expirationSeconds))
           case p =>
             IO.pure(p)
-        }
-      }
 
-      /** Check whether an incoming packet is expired. According to the spec anyting with
-        * an absolute expiration timestamp in the past is expired, however it's a known
-        * issue that clock drift among nodes leads to dropped messages. Therefore we have
-        * the option to set an acceptable leeway period as well.
+      /** Check whether an incoming packet is expired. According to the spec anyting with an absolute expiration
+        * timestamp in the past is expired, however it's a known issue that clock drift among nodes leads to dropped
+        * messages. Therefore we have the option to set an acceptable leeway period as well.
         *
-        * For example if another node sets the expiration of its message 1 minute in the future,
-        * but our clock is 90 seconds ahead of time, we already see it as expired. Setting
-        * our expiration time to 1 hour wouldn't help in this case.
+        * For example if another node sets the expiration of its message 1 minute in the future, but our clock is 90
+        * seconds ahead of time, we already see it as expired. Setting our expiration time to 1 hour wouldn't help in
+        * this case.
         */
-      private def isExpired(payload: HasExpiration[_], now: Long): Boolean =
+      private def isExpired(payload: HasExpiration[?], now: Long): Boolean =
         payload.expiration < now - maxClockDriftSeconds
 
       /** Ping a peer. */
@@ -305,13 +325,11 @@ object DiscoveryNetwork {
 
       /** Ask a peer about neighbors of a target.
         *
-        * NOTE: There can be many responses to a request due to the size limits of packets.
-        * The responses cannot be tied to the request, so if we do multiple requests concurrently
-        * we might end up mixing the results. One option to remedy would be to make sure we
-        * only send one request to a given node at any time, waiting with the next until all
-        * responses are collected, which can be 16 nodes or 7 seconds, whichever comes first.
-        * However that would serialize all requests, might result in some of them taking much
-        * longer than expected.
+        * NOTE: There can be many responses to a request due to the size limits of packets. The responses cannot be tied
+        * to the request, so if we do multiple requests concurrently we might end up mixing the results. One option to
+        * remedy would be to make sure we only send one request to a given node at any time, waiting with the next until
+        * all responses are collected, which can be 16 nodes or 7 seconds, whichever comes first. However that would
+        * serialize all requests, might result in some of them taking much longer than expected.
         */
       override val findNode: Peer[A] => PublicKey => IO[Option[Seq[Node]]] = (peer: Peer[A]) =>
         (target: PublicKey) =>
@@ -320,8 +338,9 @@ object DiscoveryNetwork {
               channel.collectAndFoldResponses(peer.id, config.kademliaTimeout, Vector.empty[Node]) {
                 case Neighbors(nodes, _) => nodes
               } { (acc, nodes) =>
-                val found = (acc ++ nodes.filter(n => n.address.udpPort > 0 && n.address.tcpPort > 0)).take(config.kademliaBucketSize)
-                if (found.size < config.kademliaBucketSize) Left(found) else Right(found)
+                val found = (acc ++ nodes.filter(n => n.address.udpPort > 0 && n.address.tcpPort > 0))
+                  .take(config.kademliaBucketSize)
+                if found.size < config.kademliaBucketSize then Left(found) else Right(found)
               }
             }
           }
@@ -340,13 +359,12 @@ object DiscoveryNetwork {
               }
           }
 
-      private implicit class ChannelOps(channel: Channel[A, Packet]) {
+      implicit private class ChannelOps(channel: Channel[A, Packet]):
 
-        /** Set the expiration, pack and send the data.
-          * Return the packet so we can use the hash for expected responses.
+        /** Set the expiration, pack and send the data. Return the packet so we can use the hash for expected responses.
           */
-        def send(payload: Payload): IO[Packet] = {
-          for {
+        def send(payload: Payload): IO[Packet] =
+          for
             expiring <- setExpiration(payload)
             packet <- pack(expiring)
             _ <- IO(
@@ -354,8 +372,7 @@ object DiscoveryNetwork {
                 .debug(s"Sending ${payload.getClass.getSimpleName} from ${peerGroup.processAddress} to ${channel.to}")
             )
             _ <- channel.sendMessage(packet)
-          } yield packet
-        }
+          yield packet
 
         /** Collect responses that match a partial function or raise a timeout exception. */
         def collectResponses[T](
@@ -364,44 +381,43 @@ object DiscoveryNetwork {
             // The absolute end we are willing to wait for the correct message to arrive.
             deadline: Deadline
         )(pf: PartialFunction[Payload.Response, T]): Stream[IO, T] =
-          Stream.repeatEval(
-            channel.nextChannelEvent.timeoutTo(config.requestTimeout.min(deadline.timeLeft), IO.raiseError(new TimeoutException()))
-          )
-            .collect {
-              case Some(MessageReceived(pkt: Packet)) => pkt
+          Stream
+            .repeatEval(
+              channel.nextChannelEvent
+                .timeoutTo(config.requestTimeout.min(deadline.timeLeft), IO.raiseError(new TimeoutException()))
+            )
+            .collect { case Some(MessageReceived(pkt: Packet)) =>
+              pkt
             }
             .evalMap { receivedPacket =>
               currentTimeSeconds.flatMap { timestamp =>
                 val unpackResult = Packet.unpack(receivedPacket)
-                unpackResult.toEither match {
+                unpackResult.toEither match
                   case Right((payload, remotePublicKey)) =>
-                    if (remotePublicKey != publicKey) {
+                    if remotePublicKey != publicKey then
                       IO.raiseError(new PacketException("Remote public key did not match the expected peer ID."))
-                    } else {
-                      payload match {
+                    else
+                      payload match
                         case _: Payload.Request =>
                           // Not relevant on the client channel.
                           IO.pure(None)
 
-                        case p: Payload.HasExpiration[_] if isExpired(p, timestamp) =>
+                        case p: Payload.HasExpiration[?] if isExpired(p, timestamp) =>
                           IO(
                             logger.debug(s"Ignoring expired response from ${channel.to}; ${p.expiration} < $timestamp")
                           ).as(None)
 
                         case p: Payload.Response =>
                           IO.pure(Some(p))
-                      }
-                    }
 
                   case Left(err) =>
                     IO.raiseError(
                       new IllegalArgumentException(s"Failed to unpack message: $err")
                     )
-                }
               }
             }
-            .collect {
-              case Some(response) => response
+            .collect { case Some(response) =>
+              response
             }
             .collect(pf)
 
@@ -409,22 +425,23 @@ object DiscoveryNetwork {
         def collectFirstResponse[T](publicKey: PublicKey)(pf: PartialFunction[Payload.Response, T]): IO[Option[T]] =
           channel
             .collectResponses(publicKey: PublicKey, config.requestTimeout.fromNow)(pf)
-            .head.compile.last
-            .recoverWith {
-              case NonFatal(ex) =>
-                IO(logger.debug(s"Failed to collect response from ${channel.to}: ${ex.getMessage}")).as(None)
+            .head
+            .compile
+            .last
+            .recoverWith { case NonFatal(ex) =>
+              IO(logger.debug(s"Failed to collect response from ${channel.to}: ${ex.getMessage}")).as(None)
             }
 
-        /** Collect responses that match the partial function and fold them while the folder function returns Left.  */
+        /** Collect responses that match the partial function and fold them while the folder function returns Left. */
         def collectAndFoldResponses[T, Z](publicKey: PublicKey, timeout: FiniteDuration, seed: Z)(
             pf: PartialFunction[Payload.Response, T]
         )(
             f: (Z, T) => Either[Z, Z]
-        ): IO[Option[Z]] = {
+        ): IO[Option[Z]] =
           val responses = channel
             .collectResponses(publicKey, timeout.fromNow)(pf)
             .attempt
-          
+
           responses
             .evalScan[IO, Either[Option[(Z, Int)], Option[(Z, Int)]]](Left(Some((seed, 0)))) {
               case (Left(Some((acc, count))), Left(_: TimeoutException)) if count > 0 =>
@@ -445,7 +462,7 @@ object DiscoveryNetwork {
                 IO.raiseError(
                   new IllegalStateException(s"Unexpected state while collecting responses from ${channel.to}")
                 )
-              
+
               case (Right(result), _) =>
                 // Already finished, keep propagating the result
                 IO.pure(Right(result))
@@ -455,17 +472,14 @@ object DiscoveryNetwork {
             .last
             .map {
               case Some(Right(result)) => result.map(_._1)
-              case Some(Left(result)) => result.map(_._1)
-              case None => None
+              case Some(Left(result))  => result.map(_._1)
+              case None                => None
             }
-        }
 
-      }
-    }
   }
 
   /** Estimate how many neihbors we can fit in the maximum protol message size. */
-  def getMaxNeighborsPerPacket(implicit codec: Codec[Payload], sigalg: SigAlg): Int = {
+  def getMaxNeighborsPerPacket(implicit codec: Codec[Payload], sigalg: SigAlg): Int =
     val sampleNode = Node(
       id = PublicKey(BitVector(Array.fill[Byte](sigalg.PublicKeyBytesSize)(0xff.toByte))),
       address = Node.Address(
@@ -487,5 +501,3 @@ object DiscoveryNetwork {
       }
       .takeWhile(_ <= Packet.MaxPacketBitsSize)
       .length
-  }
-}

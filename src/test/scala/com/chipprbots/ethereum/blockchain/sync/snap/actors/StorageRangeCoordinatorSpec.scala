@@ -1489,6 +1489,63 @@ class StorageRangeCoordinatorSpec extends ScalaTestWithActorTestKit() with AnyFl
     snapSyncController.expectMessage(SNAPSyncController.StorageRangeSyncComplete)
   }
 
+  // A re-queued task must re-request exactly the range that was served (the rejected response payload is not
+  // carried: StorageTask has no slots/proof fields).
+  it should "re-queue the same task range after a proof-verification failure" taggedAs UnitTest in {
+    val (impl, _) = newImpl(
+      stateRoot = kec256(ByteString("requeue-payload-root")),
+      flatSlotStorage = new FlatSlotStorage(EphemDataSource()),
+      snapSyncControllerRef = testKit.createTestProbe[SNAPSyncController.Command]().ref,
+      deferredMerkleization = true
+    )
+    val peer = PeerTestHelpers.createTestPeer("requeue-peer", testKit.createTestProbe[Any]().ref.toClassic)
+    val accountHash = kec256(ByteString("requeue-account"))
+    val task = StorageTask.createStorageTask(accountHash, kec256(ByteString("requeue-wrong-storage-root")))
+    val slots = Seq(slotKey(0x10) -> ByteString("v10"), slotKey(0x11) -> ByteString("v11"))
+    val proof = Seq(ByteString("proof-node-1"))
+
+    impl.processServedTasks(
+      peer,
+      Seq(task),
+      BigInt(1024),
+      StorageRanges(requestId = 1, slots = Seq(slots), proof = proof),
+      servedCount = 1
+    )
+
+    // dispatchIfPossible may already have moved the retry from `tasks` into `activeTasks`; check both.
+    val requeued = (impl.tasks.toSeq ++ impl.activeTasks.values.flatMap(_._2)).filter(_.accountHash == accountHash)
+    requeued should have size 1
+    requeued.foreach { t =>
+      t.copy(pending = false) shouldBe task
+    }
+  }
+
+  it should "re-queue the buffered chunk's task range on StoragePivotRefreshed" taggedAs UnitTest in {
+    val (impl, kit) = newImpl(
+      stateRoot = kec256(ByteString("prefresh-payload-root")),
+      flatSlotStorage = new FlatSlotStorage(EphemDataSource()),
+      snapSyncControllerRef = testKit.createTestProbe[SNAPSyncController.Command]().ref,
+      deferredMerkleization = false
+    )
+    val accountHash = kec256(ByteString("prefresh-payload-account"))
+    val storageRoot = kec256(ByteString("prefresh-payload-storage-root"))
+    val chunkLo = StorageTask(accountHash, storageRoot, next = slotKey(0x01), last = slotKey(0x1f))
+    val chunkHi = StorageTask(accountHash, storageRoot, next = slotKey(0x20), last = slotKey(0x3f))
+    val chunkHiSlots = Seq(slotKey(0x30) -> ByteString("value-30"))
+    val peer = PeerTestHelpers.createTestPeer("prefresh-payload-peer", testKit.createTestProbe[Any]().ref.toClassic)
+
+    impl.accountSubtaskCounters(accountHash) = (2, 0)
+    impl.storageTrieCursor(accountHash) = chunkLo.next
+    impl.applyOrderedStorageChunk(peer, chunkHi, chunkHiSlots, Seq(ByteString("p")))
+    impl.pendingOrderedChunks(accountHash) should have size 1
+
+    kit.run(StorageRangeCoordinator.StoragePivotRefreshed(kec256(ByteString("new-pivot-root-2"))))
+
+    val requeued = impl.tasks.filter(_.accountHash == accountHash)
+    requeued should have size 1
+    requeued.head shouldBe chunkHi.copy(pending = false)
+  }
+
   it should "NOT drop an account that fails complete-range verification once and then succeeds" taggedAs UnitTest in {
     val stateRoot = kec256(ByteString("kcap-recovers-state-root"))
     val (impl, _) = newImpl(

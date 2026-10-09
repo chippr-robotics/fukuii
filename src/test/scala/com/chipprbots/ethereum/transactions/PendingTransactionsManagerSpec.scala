@@ -472,6 +472,86 @@ class PendingTransactionsManagerSpec
     announceThenDeliver(this, announcedSize = 120, deliveredSize = 110)
     peerManager.expectMsg(PeerManagerActor.DisconnectPeerFireAndForgetCmd(peer1.id))
 
+  // ---- one requester per announced hash, re-requested from another announcer on failure ---------------------
+  //
+  // hive devp2p TestBlobTxWithoutSidecar / TestBlobTxWithMismatchedSidecar (go-ethereum #35869): three peers announce
+  // one blob tx, the first one asked serves a bad copy and is dropped, and the test then waits 12 s for one of the
+  // other two to be asked. The pool used to ask all three at once (the test's reader swallowed the two duplicate
+  // requests while waiting for the first) and, after the drop, nobody: the dropped peer's PeerDisconnected only
+  // arrives after the 15 s disconnect-poison-pill-timeout. go-ethereum's tx fetcher asks one announcer at a time and
+  // moves on after txFetchTimeout.
+
+  private def requestedFrom(setup: TestSetup): (PeerId, Seq[ByteString]) =
+    val cmd = setup.etcPeerManager.expectMsgType[NetworkPeerManagerActor.SendMessageCmd]
+    cmd.message.underlyingMsg match
+      case ETHPackets.GetPooledTransactions(_, hashes) => (cmd.peerId, hashes)
+      case other                                       => fail(s"Expected GetPooledTransactions, got $other")
+
+  private def announceFrom(
+      ptm: org.apache.pekko.actor.typed.ActorRef[Command],
+      peer: Peer,
+      hash: ByteString,
+      size: Int = 100,
+      txType: Byte = Transaction.Type03
+  ): Unit =
+    ptm ! WrappedPeerEvent(
+      PeerEvent.MessageFromPeer(
+        ETHPackets.NewPooledTransactionHashes72(
+          Seq(txType),
+          Seq(BigInt(size)),
+          Seq(hash),
+          ETHPackets.NewPooledTransactionHashes72.NoCustody
+        ),
+        peer.id
+      )
+    )
+
+  it should "request an announced hash from one announcer only, and from the next once that request times out" taggedAs (
+    UnitTest
+  ) in new TestSetup:
+    val shortFetchTimeout: TxPoolConfig = new TxPoolConfig:
+      override val txPoolSize: Int = 300
+      override val pendingTxManagerQueryTimeout: FiniteDuration = Timeouts.veryLongTimeout
+      override val transactionTimeout: FiniteDuration = Timeouts.veryLongTimeout
+      override val getTransactionFromPoolTimeout: FiniteDuration = Timeouts.veryLongTimeout
+      override val announcementFetchTimeout: FiniteDuration = 500.millis
+    val ptm = spawnPtm(config = shortFetchTimeout)
+    val hash = ByteString(Array.fill[Byte](32)(7))
+    Seq(peer1, peer2, peer3).foreach(announceFrom(ptm, _, hash))
+
+    requestedFrom(this) shouldBe ((peer1.id, Seq(hash)))
+    etcPeerManager.expectNoMessage(200.millis) // not also from peer2 and peer3
+    requestedFrom(this) shouldBe ((peer2.id, Seq(hash))) // peer1 never answered
+    requestedFrom(this) shouldBe ((peer3.id, Seq(hash))) // nor did peer2
+    etcPeerManager.expectNoMessage(1.second) // nobody left to ask
+
+  it should "request a hash from the next announcer as soon as its requester disconnects" taggedAs (
+    UnitTest
+  ) in new TestSetup:
+    val hash = ByteString(Array.fill[Byte](32)(8))
+    announceFrom(pendingTransactionsManager, peer1, hash)
+    announceFrom(pendingTransactionsManager, peer2, hash)
+    requestedFrom(this) shouldBe ((peer1.id, Seq(hash)))
+    pendingTransactionsManager ! WrappedPeerEvent(PeerEvent.PeerDisconnected(peer1.id))
+    // Well inside the 5 s default fetch timeout: the disconnect, not the timer, moved the request.
+    requestedFrom(this) shouldBe ((peer2.id, Seq(hash)))
+
+  it should "request a hash from the next announcer as soon as its requester is dropped for a bad delivery" taggedAs (
+    UnitTest
+  ) in new TestSetup:
+    val stx: SignedTransaction = newStx().tx
+    val hash = stx.hash.value
+    announceFrom(pendingTransactionsManager, peer1, hash, size = 120, txType = 0.toByte)
+    announceFrom(pendingTransactionsManager, peer2, hash, size = 110, txType = 0.toByte)
+    requestedFrom(this) shouldBe ((peer1.id, Seq(hash)))
+    pendingTransactionsManager ! WrappedPeerEvent(
+      PeerEvent.MessageFromPeer(ETHPackets.PooledTransactions(BigInt(1), Seq(stx), Seq(110)), peer1.id)
+    )
+    peerManager.expectMsg(PeerManagerActor.DisconnectPeerFireAndForgetCmd(peer1.id))
+    // Asked at once, not after peer1's PeerDisconnected or the 5 s fetch timeout. Its reply will be checked against its
+    // own announcement (110 bytes), not peer1's.
+    requestedFrom(this) shouldBe ((peer2.id, Seq(hash)))
+
   it should "remove transaction on timeout" taggedAs (UnitTest) in new TestSetup:
     override val txPoolConfig: TxPoolConfig = new TxPoolConfig:
       override val txPoolSize: Int = 300
@@ -730,6 +810,206 @@ class PendingTransactionsManagerSpec
         resp.pendingTransactions.map(_.stx.tx) shouldBe Seq(amsterdamOnly)
       }
 
+  // ---- tx gossip gate and blob sidecar lifecycle --------------------------------------------------------------------
+  //
+  // A Sepolia node in SNAP sync OOM-killed itself every ~10 h: 2.6 GB of EIP-4844 network-form sidecars for blob txs
+  // that peers delivered and the pool rejected (no state to validate them against). The sidecars were stored before
+  // admission and removed only by the cache's eviction listener, which never fires for a tx that never entered the
+  // cache. Now an unsynced node ignores tx gossip altogether (go-ethereum's AcceptTxs), and a sidecar lives exactly as
+  // long as its tx is pooled, within a byte budget.
+
+  private def pool(setup: TestSetup, ptm: org.apache.pekko.actor.typed.ActorRef[Command]): PendingTransactionsResponse =
+    import setup.*
+    ptm.ask[PendingTransactionsResponse](ref => GetPendingTransactionsReq(ref)).futureValue
+
+  it should "ignore tx announcements and pooled tx responses from peers while the node is not synced" taggedAs (
+    UnitTest
+  ) in new TestSetup:
+    val gate = new TxGossipGate()
+    val ptm = spawnPtm(gate = gate)
+    val blob = blobStx(keyPair1)
+    val sidecar = networkForm(131330)
+
+    ptm ! WrappedPeerEvent(
+      PeerEvent.MessageFromPeer(
+        ETHPackets
+          .NewPooledTransactionHashes(Seq(Transaction.Type03), Seq(BigInt(sidecar.length)), Seq(blob.hash.value)),
+        peer1.id
+      )
+    )
+    ptm ! WrappedPeerEvent(
+      PeerEvent.MessageFromPeer(
+        ETHPackets.NewPooledTransactionHashes72(
+          Seq(Transaction.Type03),
+          Seq(BigInt(sidecar.length)),
+          Seq(blob.hash.value),
+          ETHPackets.NewPooledTransactionHashes72.NoCustody
+        ),
+        peer1.id
+      )
+    )
+    ptm ! WrappedPeerEvent(
+      PeerEvent.MessageFromPeer(
+        ETHPackets.PooledTransactions(BigInt(1), Seq(blob), blobTxRawBytes = Map(blob.hash.value -> sidecar)),
+        peer1.id
+      )
+    )
+
+    val response = pool(this, ptm)
+    response.pendingTransactions shouldBe empty
+    response.blobTxNetworkBytes shouldBe empty
+    etcPeerManager.expectNoMessage(300.millis) // no GetPooledTransactions
+    peerManager.expectNoMessage(100.millis)
+
+  it should "take tx gossip from peers once the node is synced, and stop again while state sync runs" taggedAs (
+    UnitTest
+  ) in new TestSetup:
+    val gate = new TxGossipGate()
+    val ptm = spawnPtm(gate = gate)
+    def announce(hash: ByteString): Unit =
+      ptm ! WrappedPeerEvent(
+        PeerEvent.MessageFromPeer(
+          ETHPackets.NewPooledTransactionHashes(Seq(Transaction.Type02), Seq(BigInt(100)), Seq(hash)),
+          peer1.id
+        )
+      )
+
+    gate.markSynced("test")
+    val first = ByteString(Array.fill[Byte](32)(3))
+    announce(first)
+    etcPeerManager.expectMsgType[NetworkPeerManagerActor.SendMessageCmd].message.underlyingMsg match
+      case ETHPackets.GetPooledTransactions(_, requested) => requested shouldBe Seq(first)
+      case other                                          => fail(s"Unexpected: $other")
+
+    gate.stateSyncStarted()
+    announce(ByteString(Array.fill[Byte](32)(4)))
+    etcPeerManager.expectNoMessage(300.millis)
+
+  it should "keep a delivered blob tx's sidecar only if the pool admits the tx" taggedAs (UnitTest) in new TestSetup:
+    // Sender 1 already has nonce 5 pending, so its blob tx at nonce 0 is rejected; sender 2's is admitted.
+    pendingTransactionsManager ! AddTransactions(newStx(5, tx.copy(nonce = 5), keyPair1))
+    val rejected = blobStx(keyPair1, nonce = 0)
+    val admitted = blobStx(keyPair2, nonce = 0)
+    val rejectedSidecar = networkForm(131330)
+    val admittedSidecar = networkForm(131331)
+
+    pendingTransactionsManager ! WrappedPeerEvent(
+      PeerEvent.MessageFromPeer(
+        ETHPackets.PooledTransactions(
+          BigInt(1),
+          Seq(rejected, admitted),
+          blobTxRawBytes = Map(rejected.hash.value -> rejectedSidecar, admitted.hash.value -> admittedSidecar)
+        ),
+        peer1.id
+      )
+    )
+
+    val response = pool(this, pendingTransactionsManager)
+    response.pendingTransactions.map(_.stx.tx.hash) should contain(admitted.hash)
+    response.pendingTransactions.map(_.stx.tx.hash) shouldNot contain(rejected.hash)
+    response.blobTxNetworkBytes shouldBe Map(admitted.hash.value -> admittedSidecar)
+
+  it should "drop a blob tx's sidecar when the tx is removed" taggedAs (UnitTest) in new TestSetup:
+    val blob = blobStx(keyPair1)
+    pendingTransactionsManager ! AddOrOverrideTransaction(blob, Some(networkForm(131330)))
+    pool(this, pendingTransactionsManager).blobTxNetworkBytes.keySet shouldBe Set(blob.hash.value)
+
+    pendingTransactionsManager ! RemoveTransactions(Seq(blob))
+    pool(this, pendingTransactionsManager).blobTxNetworkBytes shouldBe empty
+
+  it should "drop every sidecar when the pool is cleared" taggedAs (UnitTest) in new TestSetup:
+    pendingTransactionsManager ! AddOrOverrideTransaction(blobStx(keyPair1), Some(networkForm(131330)))
+    pendingTransactionsManager ! AddOrOverrideTransaction(blobStx(keyPair2), Some(networkForm(131330)))
+    pool(this, pendingTransactionsManager).blobTxNetworkBytes should have size 2
+
+    pendingTransactionsManager ! ClearPendingTransactions
+    val response = pool(this, pendingTransactionsManager)
+    response.pendingTransactions shouldBe empty
+    response.blobTxNetworkBytes shouldBe empty
+
+  it should "drop a blob tx's sidecar when a tx with the same sender and nonce replaces it" taggedAs (
+    UnitTest
+  ) in new TestSetup:
+    val blob = blobStx(keyPair1, nonce = 0)
+    pendingTransactionsManager ! AddOrOverrideTransaction(blob, Some(networkForm(131330)))
+    val replacement = newStx(0, tx.copy(nonce = 0), keyPair1).tx
+    pendingTransactionsManager ! AddOrOverrideTransaction(replacement)
+
+    val response = pool(this, pendingTransactionsManager)
+    response.pendingTransactions.map(_.stx.tx.hash) shouldBe Seq(replacement.hash)
+    response.blobTxNetworkBytes shouldBe empty
+
+  it should "keep a blob tx's sidecar when the same tx is submitted again" taggedAs (UnitTest) in new TestSetup:
+    val blob = blobStx(keyPair1)
+    val sidecar = networkForm(131330)
+    pendingTransactionsManager ! AddOrOverrideTransaction(blob, Some(sidecar))
+    pendingTransactionsManager ! AddOrOverrideTransaction(blob)
+
+    val response = pool(this, pendingTransactionsManager)
+    response.pendingTransactions.map(_.stx.tx.hash) shouldBe Seq(blob.hash)
+    response.blobTxNetworkBytes shouldBe Map(blob.hash.value -> sidecar)
+
+  it should "drop a blob tx's sidecar when the pool evicts the tx for size" taggedAs (UnitTest) in new TestSetup:
+    val ptm = spawnPtm(config = poolConfig(size = 1))
+    val blob = blobStx(keyPair1)
+    ptm ! AddOrOverrideTransaction(blob, Some(networkForm(131330)))
+    val other = newStx(0, tx, keyPair2).tx
+    ptm ! AddOrOverrideTransaction(other)
+
+    val response = pool(this, ptm)
+    response.pendingTransactions.map(_.stx.tx.hash) shouldBe Seq(other.hash)
+    response.blobTxNetworkBytes shouldBe empty
+
+  it should "drop a blob tx's sidecar when the tx times out" taggedAs (UnitTest) in new TestSetup:
+    val ptm = spawnPtm(config = poolConfig(timeout = 1.second))
+    ptm ! AddOrOverrideTransaction(blobStx(keyPair1), Some(networkForm(131330)))
+    pool(this, ptm).blobTxNetworkBytes should have size 1
+
+    eventually {
+      val response = pool(this, ptm)
+      response.pendingTransactions shouldBe empty
+      response.blobTxNetworkBytes shouldBe empty
+    }
+
+  it should "evict the oldest blob txs, sidecar and tx together, past the sidecar byte budget" taggedAs (
+    UnitTest
+  ) in new TestSetup:
+    val ptm = spawnPtm(config = poolConfig(sidecarBudget = 300000L))
+    val keyPair3 = crypto.generateKeyPair(secureRandom)
+    val blobs = Seq(keyPair1, keyPair2, keyPair3).map(blobStx(_))
+    blobs.foreach(blob => ptm ! AddOrOverrideTransaction(blob, Some(networkForm(131330))))
+
+    val response = pool(this, ptm)
+    response.blobTxNetworkBytes.keySet shouldBe blobs.drop(1).map(_.hash.value).toSet
+    response.blobTxNetworkBytes.values.map(_.length.toLong).sum should be <= 300000L
+    response.pendingTransactions.map(_.stx.tx.hash).toSet shouldBe blobs.drop(1).map(_.hash).toSet
+
+  it should "enforce the sidecar byte budget on blob txs delivered by peers" taggedAs (UnitTest) in new TestSetup:
+    val ptm = spawnPtm(config = poolConfig(sidecarBudget = 300000L))
+    val keyPair3 = crypto.generateKeyPair(secureRandom)
+    val blobs = Seq(keyPair1, keyPair2, keyPair3).map(blobStx(_))
+    blobs.zipWithIndex.foreach { case (blob, i) =>
+      ptm ! WrappedPeerEvent(
+        PeerEvent.MessageFromPeer(
+          ETHPackets
+            .PooledTransactions(BigInt(i), Seq(blob), blobTxRawBytes = Map(blob.hash.value -> networkForm(131330))),
+          peer1.id
+        )
+      )
+    }
+
+    val response = pool(this, ptm)
+    response.blobTxNetworkBytes.keySet shouldBe blobs.drop(1).map(_.hash.value).toSet
+    response.pendingTransactions.map(_.stx.tx.hash).toSet shouldBe blobs.drop(1).map(_.hash).toSet
+
+  it should "not pool a blob tx whose sidecar alone exceeds the sidecar byte budget" taggedAs (UnitTest) in new TestSetup:
+    val ptm = spawnPtm(config = poolConfig(sidecarBudget = 100000L))
+    ptm ! AddOrOverrideTransaction(blobStx(keyPair1), Some(networkForm(131330)))
+
+    val response = pool(this, ptm)
+    response.pendingTransactions shouldBe empty
+    response.blobTxNetworkBytes shouldBe empty
+
   /** A pool on an ETH chain with the Amsterdam fixture schedule (Prague 120, Osaka 180, Amsterdam 360), whose best
     * block header sits at `headTimestamp`. No state storage, so admission ends at the tip check.
     */
@@ -893,3 +1173,53 @@ class PendingTransactionsManagerSpec
       PendingTransactionsManager(txPoolConfig, peerManager.ref, etcPeerManager.ref, peerMessageBus.ref, pendingTxTopic),
       s"ptm-test-${java.util.UUID.randomUUID()}"
     )
+
+    /** A pool on this setup's probes with its own config and gossip gate. */
+    def spawnPtm(
+        config: TxPoolConfig = txPoolConfig,
+        gate: TxGossipGate = TxGossipGate.alwaysOpen
+    ): org.apache.pekko.actor.typed.ActorRef[Command] = testKit.spawn(
+      PendingTransactionsManager(
+        config,
+        peerManager.ref,
+        etcPeerManager.ref,
+        peerMessageBus.ref,
+        pendingTxTopic,
+        txGossipGate = gate
+      ),
+      s"ptm-test-custom-${java.util.UUID.randomUUID()}"
+    )
+
+    def poolConfig(
+        size: Int = 300,
+        timeout: FiniteDuration = Timeouts.veryLongTimeout,
+        sidecarBudget: Long = TxPoolConfig.DefaultBlobSidecarBudgetBytes
+    ): TxPoolConfig = new TxPoolConfig:
+      override val txPoolSize: Int = size
+      override val pendingTxManagerQueryTimeout: FiniteDuration = Timeouts.veryLongTimeout
+      override val transactionTimeout: FiniteDuration = timeout
+      override val getTransactionFromPoolTimeout: FiniteDuration = Timeouts.veryLongTimeout
+      override val blobSidecarBudgetBytes: Long = sidecarBudget
+
+    /** A one-blob EIP-4844 tx on the test chain (id 0x3d), with a tip well above any floor. */
+    def blobStx(keyPair: AsymmetricCipherKeyPair, nonce: BigInt = 0): SignedTransaction =
+      SignedTransaction.sign(
+        BlobTransaction(
+          chainId = 0x3d,
+          nonce = nonce,
+          maxPriorityFeePerGas = BigInt(10).pow(10),
+          maxFeePerGas = BigInt(10).pow(12),
+          gasLimit = GasAmount(21000),
+          receivingAddress = Some(Address(42)),
+          value = 0,
+          payload = ByteString.empty,
+          accessList = Nil,
+          maxFeePerBlobGas = 1,
+          blobVersionedHashes = List(BlobVersionedHash(ByteString(Array.fill[Byte](32)(1))))
+        ),
+        keyPair,
+        Some(0x3d)
+      )
+
+    /** Stand-in for a blob tx's network form: only its length matters to the pool. */
+    def networkForm(length: Int): ByteString = ByteString(Array.fill[Byte](length)(0))

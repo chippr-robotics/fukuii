@@ -519,6 +519,14 @@ trait NetServiceBuilder:
     classicSystem.toTyped.scheduler
   )
 
+/** The node's [[com.chipprbots.ethereum.transactions.TxGossipGate]]: shared by sync (SNAP/recovery close it, regular
+  * sync and mining mark the node synced), the Engine API (forkchoiceUpdated marks it synced) and the tx pool, which
+  * reads it on every peer tx message.
+  */
+trait TxGossipGateBuilder:
+  lazy val txGossipGate: com.chipprbots.ethereum.transactions.TxGossipGate =
+    new com.chipprbots.ethereum.transactions.TxGossipGate()
+
 trait PendingTransactionsManagerBuilder:
   def pendingTransactionsManager: org.apache.pekko.actor.typed.ActorRef[PendingTransactionsManager.Command]
   // Alias kept for callers that reference the Typed ref by the old name.
@@ -527,7 +535,7 @@ trait PendingTransactionsManagerBuilder:
 object PendingTransactionsManagerBuilder:
   trait Default extends PendingTransactionsManagerBuilder:
     self: ActorSystemBuilder & PeerManagerActorBuilder & NetworkPeerManagerActorBuilder & PeerEventBusBuilder &
-      TxPoolConfigBuilder & BlockchainBuilder & StorageBuilder & EventTopicsBuilder =>
+      TxPoolConfigBuilder & BlockchainBuilder & StorageBuilder & EventTopicsBuilder & TxGossipGateBuilder =>
 
     lazy val pendingTransactionsManager: org.apache.pekko.actor.typed.ActorRef[PendingTransactionsManager.Command] =
       classicSystem.spawn(
@@ -540,7 +548,8 @@ object PendingTransactionsManagerBuilder:
               peerEventBus,
               pendingTxTopic,
               blockchainReader,
-              storagesInstance.storages.stateStorage
+              storagesInstance.storages.stateStorage,
+              txGossipGate = txGossipGate
             )
           )
           .onFailure[Throwable](
@@ -881,7 +890,8 @@ trait JSONRpcHealthcheckerBuilder:
 
 trait EngineApiBuilder extends Logger:
   self: ActorSystemBuilder & BlockchainBuilder & BlockchainConfigBuilder & ConsensusBuilder & StorageBuilder &
-    MiningBuilder & PendingTransactionsManagerBuilder & InstanceConfigProvider & JSONRpcControllerBuilder =>
+    MiningBuilder & PendingTransactionsManagerBuilder & InstanceConfigProvider & JSONRpcControllerBuilder &
+    TxGossipGateBuilder =>
 
   import com.chipprbots.ethereum.consensus.engine.*
 
@@ -907,7 +917,8 @@ trait EngineApiBuilder extends Logger:
       getPayloadRebuildBudget = EngineApiService.GetPayloadRebuildBudget,
       // go-ethereum's --miner.gaslimit equivalent, as for the testing_* namespace: mining.gas-limit-target.
       builderGasCeil = mining.config.generic.gasLimitTarget,
-      reorgState = blockchain
+      reorgState = blockchain,
+      txGossipGate = Some(txGossipGate)
     )(blockchainConfig, typedScheduler)
 
   // The controller's fork gates read the same schedule its service executes with (not the process-global config, which
@@ -1072,7 +1083,7 @@ trait SyncControllerBuilder extends SyncControllerRefBuilder:
   self: ActorSystemBuilder & ServerActorBuilder & BlockchainBuilder & BlockchainConfigBuilder & ConsensusBuilder &
     NodeStatusBuilder & StorageBuilder & StxLedgerBuilder & PeerEventBusBuilder & PendingTransactionsManagerBuilder &
     OmmersPoolBuilder & NetworkPeerManagerActorBuilder & SyncConfigBuilder & ShutdownHookBuilder & MiningBuilder &
-    BlacklistBuilder & MESSBuilder & EventTopicsBuilder =>
+    BlacklistBuilder & MESSBuilder & EventTopicsBuilder & TxGossipGateBuilder =>
 
   /** Override in concrete builders that also mix in [[EngineApiBuilder]] to enable CL-driven SNAP pivot selection.
     * Defaults to `None` for setups without an Engine API (e.g. ETC mainnet pre-merge wiring). Closes #1207.
@@ -1106,7 +1117,8 @@ trait SyncControllerBuilder extends SyncControllerRefBuilder:
           this,
           messConfigOpt,
           forkChoiceManagerForSync,
-          reorgState = blockchain
+          reorgState = blockchain,
+          txGossipGate = txGossipGate
         ),
         "sync-controller"
       )
@@ -1281,6 +1293,7 @@ trait Node
     with BlockchainConfigBuilder
     with VmConfigBuilder
     with PeerEventBusBuilder
+    with TxGossipGateBuilder
     with PendingTransactionsManagerBuilder.Default
     with OmmersPoolBuilder
     with NetworkPeerManagerActorBuilder

@@ -20,6 +20,8 @@ import com.chipprbots.ethereum.blockchain.sync.PeerListHelper
 import com.chipprbots.ethereum.blockchain.sync.PeerListSupportNg
 import com.chipprbots.ethereum.blockchain.sync.SyncController
 import com.chipprbots.ethereum.blockchain.sync.SyncProtocol
+import com.chipprbots.ethereum.blockchain.sync.snap.controller.ChildFactories
+import com.chipprbots.ethereum.blockchain.sync.snap.controller.HeapWatchdogStart
 import com.chipprbots.ethereum.consensus.engine.PoSBlockHeaderValidator
 import com.chipprbots.ethereum.db.storage.AppStateStorage
 import com.chipprbots.ethereum.db.storage.BfsQueueStorage
@@ -73,7 +75,11 @@ private class SNAPSyncControllerImpl(
     // Test seam: None (production) reads the process-global chain config exactly as before. The "test" network
     // config has no terminal-total-difficulty, so without this no actor in this module's suite could ever
     // exercise the PoS/CL-anchored paths live.
-    isPoSChainOverride: Option[Boolean] = None
+    isPoSChainOverride: Option[Boolean] = None,
+    // Test seams (spec 016 T012). Production defaults build exactly what the code built before they existed.
+    childFactories: ChildFactories = ChildFactories.production,
+    heapWatchdogStart: HeapWatchdogStart = HeapWatchdogStart.production,
+    intakeBudgetOverride: Option[SnapIntakeBudget] = None
 )(implicit ec: ExecutionContext):
 
   import SNAPSyncController.*
@@ -87,16 +93,18 @@ private class SNAPSyncControllerImpl(
   // Shared admission gate for SNAP contract work. Producers (AccountRangeCoordinator's account dispatch and carried
   // replay, the accounts-complete recovery stream) read it synchronously before adding work; the storage and bytecode
   // coordinators acknowledge receipt and publish their queue depth. Never a mailbox hop on the pause path.
-  private val intakeBudget = new SnapIntakeBudget(
-    maxPendingStorageTasks = snapSyncConfig.maxPendingStorageTasks,
-    maxPendingByteCodeHashes = snapSyncConfig.maxPendingByteCodeHashes
+  private val intakeBudget = intakeBudgetOverride.getOrElse(
+    new SnapIntakeBudget(
+      maxPendingStorageTasks = snapSyncConfig.maxPendingStorageTasks,
+      maxPendingByteCodeHashes = snapSyncConfig.maxPendingByteCodeHashes
+    )
   )
   // Started with the first SNAP coordinators (not at construction: a node that never runs SNAP needs no watchdog).
   private var heapWatchdog: Option[SnapHeapWatchdog.Handle] = None
 
   private def ensureHeapWatchdog(): Unit =
     if heapWatchdog.isEmpty && snapSyncConfig.heapWatchdogEnabled then
-      heapWatchdog = SnapHeapWatchdog.start(
+      heapWatchdog = heapWatchdogStart(
         highFraction = snapSyncConfig.heapWatchdogPauseFraction,
         lowFraction = snapSyncConfig.heapWatchdogResumeFraction,
         pollInterval = snapSyncConfig.heapWatchdogPollInterval,
@@ -2836,7 +2844,7 @@ private class SNAPSyncControllerImpl(
                   ctx.spawn(
                     Behaviors
                       .supervise(
-                        actors.ByteCodeCoordinator(
+                        childFactories.byteCodeCoordinator(
                           evmCodeStorage = evmCodeStorage,
                           networkPeerManager = networkPeerManager,
                           requestTracker = requestTracker,
@@ -2861,7 +2869,7 @@ private class SNAPSyncControllerImpl(
                   ctx.spawn(
                     Behaviors
                       .supervise(
-                        actors.StorageRangeCoordinator(
+                        childFactories.storageRangeCoordinator(
                           stateRoot = rootBs,
                           networkPeerManager = networkPeerManager,
                           requestTracker = requestTracker,
@@ -3841,7 +3849,7 @@ private class SNAPSyncControllerImpl(
       ctx.spawn(
         Behaviors
           .supervise(
-            actors.AccountRangeCoordinator(
+            childFactories.accountRangeCoordinator(
               stateRoot = rootHash.value,
               networkPeerManager = networkPeerManager,
               requestTracker = requestTracker,
@@ -3889,7 +3897,7 @@ private class SNAPSyncControllerImpl(
         ctx.spawn(
           Behaviors
             .supervise(
-              actors.ByteCodeCoordinator(
+              childFactories.byteCodeCoordinator(
                 evmCodeStorage = evmCodeStorage,
                 networkPeerManager = networkPeerManager,
                 requestTracker = requestTracker,
@@ -3918,7 +3926,7 @@ private class SNAPSyncControllerImpl(
         ctx.spawn(
           Behaviors
             .supervise(
-              actors.StorageRangeCoordinator(
+              childFactories.storageRangeCoordinator(
                 stateRoot = rootHash.value,
                 networkPeerManager = networkPeerManager,
                 requestTracker = requestTracker,
@@ -4112,7 +4120,7 @@ private class SNAPSyncControllerImpl(
           ctx.spawn(
             Behaviors
               .supervise(
-                actors.TrieNodeHealingCoordinator(
+                childFactories.trieNodeHealingCoordinator(
                   stateRoot = root.value,
                   networkPeerManager = networkPeerManager,
                   requestTracker = requestTracker,
@@ -4192,7 +4200,7 @@ private class SNAPSyncControllerImpl(
             ctx.spawn(
               Behaviors
                 .supervise(
-                  actors.TrieNodeHealingCoordinator(
+                  childFactories.trieNodeHealingCoordinator(
                     stateRoot = root.value,
                     networkPeerManager = networkPeerManager,
                     requestTracker = requestTracker,
@@ -5328,7 +5336,7 @@ private class SNAPSyncControllerImpl(
           ctx.spawn(
             Behaviors
               .supervise(
-                actors.ByteCodeCoordinator(
+                childFactories.byteCodeCoordinator(
                   evmCodeStorage = evmCodeStorage,
                   networkPeerManager = networkPeerManager,
                   requestTracker = requestTracker,
@@ -5741,7 +5749,7 @@ private class SNAPSyncControllerImpl(
           import org.apache.pekko.actor.typed.DispatcherSelector
           val downloader = ctx
             .spawn(
-              ChainDownloader(
+              childFactories.chainDownloader(
                 blockchainReader = blockchainReader,
                 blockchainWriter = blockchainWriter,
                 appStateStorage = appStateStorage,
@@ -6419,7 +6427,11 @@ object SNAPSyncController:
       blacklist: Blacklist,
       syncController: TypedActorRef[SyncProtocol.SyncControllerReply],
       validatorFactory: MptStorage => StateValidator = new StateValidator(_),
-      isPoSChainOverride: Option[Boolean] = None
+      isPoSChainOverride: Option[Boolean] = None,
+      // Test seams (spec 016 T012); the defaults are today's construction.
+      childFactories: ChildFactories = ChildFactories.production,
+      heapWatchdogStart: HeapWatchdogStart = HeapWatchdogStart.production,
+      intakeBudgetOverride: Option[SnapIntakeBudget] = None
   )(implicit ec: ExecutionContext): Behavior[Command] =
     Behaviors.setup[Command] { ctx =>
       Behaviors.withTimers[Command] { timers =>
@@ -6440,7 +6452,10 @@ object SNAPSyncController:
           blacklist,
           syncController,
           validatorFactory,
-          isPoSChainOverride
+          isPoSChainOverride,
+          childFactories,
+          heapWatchdogStart,
+          intakeBudgetOverride
         ).start() // #1378: start() arms the 5s PollHandshakedPeers timer that populates the
         //          controller's peerListHelper. Calling startSnapSync() directly bypasses it,
         //          leaving snapPeersForPivot permanently empty → pivot never selected.

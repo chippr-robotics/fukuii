@@ -8,6 +8,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **Announced transactions are fetched from one peer at a time.** The pool requested an announced transaction from
+  every peer that announced it, and when the peer it got it from was dropped for serving a bad copy, it asked nobody
+  else. As in go-ethereum's tx fetcher, a hash is now requested from one announcer; the others are kept as
+  alternates and asked in turn when the request goes unanswered for `txPool.announcement-fetch-timeout` (default
+  5 s, go-ethereum's `txFetchTimeout`), when the requesting peer disconnects, or at once when it is dropped for a
+  delivery that contradicts its announcement. Each delivery is checked against its sender's own announcement. Fixes
+  hive devp2p `TestBlobTxWithoutSidecar` / `TestBlobTxWithMismatchedSidecar`, which go-ethereum #35869 rewrote to
+  have three peers announce the same blob transaction.
+- **Tx pool memory leak (OOM).** A node that was not synced kept taking transactions from peers. During SNAP sync
+  the pool rejected every one (no state to check them against), but the EIP-4844 blob sidecars that came with them
+  (130-830 KB each) were stored before admission and never removed. A Sepolia node held 2.6 GB of them and was
+  OOM-killed every ~10 hours. Two changes. (1) As in go-ethereum (`AcceptTxs`), a node ignores
+  `NewPooledTransactionHashes`, `Transactions` and `PooledTransactions` from peers until it is synced: an Engine API
+  forkchoiceUpdated has set the head, regular sync has reached the best block peers announced, or block production
+  is enabled. It also ignores them while SNAP sync or state recovery runs. Transactions submitted over JSON-RPC are
+  not affected. This applies to ETC too: an ETC node stops taking peer transactions while it catches up. (2) The pool
+  keeps a blob sidecar only while its transaction is pooled, drops it on every removal path, and caps the total at
+  `txPool.blob-sidecar-budget` (default 256 MiB); past the cap the oldest blob transactions are evicted.
 - **TUI (`--tui`).** The terminal UI froze after its first frame: key input used JLine's `peek(0)`, which waits
   forever, so the update loop blocked until a key was pressed. It also never showed real data, because the status
   queries were never wired in, so peers, blocks and sync status sat at their defaults. It now polls the peer manager,
