@@ -1,0 +1,4 @@
+# fnmatch patterns (repo-relative) for the ONLY src/main files a test/snap-016-* commit may touch.
+# Empty on purpose: the one slice that needed a seam (S0b, #1512) has merged, so test/ branches may no longer
+# change src/main at all. The mechanism stays: a future slice that needs a seam adds an explicit entry here
+# in a reviewed PR. Entries are trust-based (the whole file is admitted), so the reviewer must read the diff.
