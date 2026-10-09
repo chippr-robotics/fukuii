@@ -602,7 +602,9 @@ private[actors] class StorageRangeCoordinatorImpl(
   // Memory bound: buffering holds already-verified slot data, never partially-applied trie state.
   // At most `storageConcurrency` (16) chunk responses can be buffered per account, each capped by
   // the peer's response-bytes target (<=2MiB) — a few tens of MiB worst case for a single
-  // in-progress large account, bounded further by `maxConcurrentStorageAccounts`.
+  // in-progress large account, bounded further by `maxConcurrentStorageAccounts`. The payload lives in this
+  // chunk's `accountSlots`/`proof` only: `StorageTask` carries no slot/proof data, so a re-queued task is
+  // just its range and cannot retain a response.
   private[actors] case class ReadyStorageChunk(
       peer: Peer,
       task: StorageTask,
@@ -1204,7 +1206,7 @@ private[actors] class StorageRangeCoordinatorImpl(
         if bufferedChunkCount > 0 then
           pendingOrderedChunks.values.foreach { buffered =>
             buffered.values.foreach { chunk =>
-              tasks.enqueue(chunk.task.copy(pending = false, slots = Seq.empty, proof = Seq.empty)) // #1518: no payload
+              tasks.enqueue(chunk.task.copy(pending = false))
               trackSurvivor(chunk.task)
             }
           }
@@ -1580,19 +1582,13 @@ private[actors] class StorageRangeCoordinatorImpl(
         if abandoned then recordCompletedTask(t.copy(done = true, pending = false))
         !abandoned
       }
-      .foreach { case (task0, idx) =>
+      .foreach { case (task, idx) =>
         val accountSlots =
           if response.slots.nonEmpty && idx < response.slots.size then response.slots(idx)
           else Seq.empty
 
         // Best-practice: apply proof nodes only to the last served slot-set.
         val proofForThisTask = if idx == servedCount - 1 then response.proof else Seq.empty
-
-        // Deliberately NOT `task0.copy(slots = accountSlots, proof = proofForThisTask)`: nothing downstream reads
-        // task.slots/task.proof (the payload travels in accountSlots/proofForThisTask and ReadyStorageChunk), but every
-        // re-queue path does `tasks.enqueue(task.copy(pending = false))` — so attaching the response payload made
-        // each re-queued/buffered task retain it (313 MB in a Sepolia heap dump, #1518). Keep queued tasks payload-free.
-        val task = task0
 
         val verifier = MerkleProofVerifier(task.storageRoot)
         val storageEndHash = accountSlots.lastOption.map(_._1).getOrElse(task.last)
