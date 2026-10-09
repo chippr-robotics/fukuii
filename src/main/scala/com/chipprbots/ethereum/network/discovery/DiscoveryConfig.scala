@@ -21,7 +21,7 @@ case class DiscoveryConfig(
     kademliaAlpha: Int,
     channelCapacity: Int,
     // Cap on live server-side UDP channels (one per remote address); 0 = unlimited (#1519).
-    maxServerChannels: Int = 2048
+    maxServerChannels: Int
 )
 
 object DiscoveryConfig extends Logger:

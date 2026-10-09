@@ -267,7 +267,8 @@ class PortForwardingBuilderSpec extends AnyFlatSpec with Matchers with BeforeAnd
       kademliaTimeout = 10.seconds,
       kademliaBucketSize = 16,
       kademliaAlpha = 3,
-      channelCapacity = 100
+      channelCapacity = 100,
+      maxServerChannels = 2048
     )
 
     // Override the portForwarding to use a mock implementation
