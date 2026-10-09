@@ -234,6 +234,11 @@ trait TxPoolConfig:
   val announcementMaxEntries: Int = TxPoolConfig.DefaultAnnouncementMaxEntries
   val announcementTimeout: FiniteDuration = TxPoolConfig.DefaultAnnouncementTimeout
 
+  /** How long one peer has to answer a GetPooledTransactions before the hashes are asked of another peer that announced
+    * them (go-ethereum's `txFetchTimeout`).
+    */
+  val announcementFetchTimeout: FiniteDuration = TxPoolConfig.DefaultAnnouncementFetchTimeout
+
 object TxPoolConfig:
 
   /** 256 MiB: ~2,000 single-blob or ~330 six-blob transactions in network form. */
@@ -243,6 +248,7 @@ object TxPoolConfig:
   val DefaultKnownTxTtl: FiniteDuration = 10.minutes
   val DefaultAnnouncementMaxEntries: Int = 32768
   val DefaultAnnouncementTimeout: FiniteDuration = 2.minutes
+  val DefaultAnnouncementFetchTimeout: FiniteDuration = 5.seconds
 
   def apply(etcClientConfig: com.typesafe.config.Config): TxPoolConfig =
     val txPoolConfig = etcClientConfig.getConfig("txPool")
@@ -264,6 +270,10 @@ object TxPoolConfig:
         if txPoolConfig.hasPath("announcement-timeout") then
           txPoolConfig.getDuration("announcement-timeout").toMillis.millis
         else TxPoolConfig.DefaultAnnouncementTimeout
+      override val announcementFetchTimeout: FiniteDuration =
+        if txPoolConfig.hasPath("announcement-fetch-timeout") then
+          txPoolConfig.getDuration("announcement-fetch-timeout").toMillis.millis
+        else TxPoolConfig.DefaultAnnouncementFetchTimeout
       val txPoolSize: Int = txPoolConfig.getInt("tx-pool-size")
       val pendingTxManagerQueryTimeout: FiniteDuration =
         txPoolConfig.getDuration("pending-tx-manager-query-timeout").toMillis.millis

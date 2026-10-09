@@ -92,6 +92,9 @@ object PendingTransactionsManager:
 
   case object ClearPendingTransactions extends Command
 
+  /** Periodic: move GetPooledTransactions requests a peer has not answered in time to another announcer. */
+  private case object FetchTimeoutTick extends Command
+
   // Sent to PTM by SignedTransactionsFilterActor once sender recovery completes
   case class ProperSignedTransactions(signedTransactions: Set[SignedTransactionWithSender], peerId: PeerId)
       extends Command
@@ -258,7 +261,11 @@ object PendingTransactionsManager:
       * violations).
       */
     val pendingAnnouncements =
-      new PendingAnnouncements(txPoolConfig.announcementMaxEntries, txPoolConfig.announcementTimeout)
+      new PendingAnnouncements(
+        txPoolConfig.announcementMaxEntries,
+        txPoolConfig.announcementTimeout,
+        txPoolConfig.announcementFetchTimeout
+      )
 
     /** Announce transaction hashes to connected peers via NewPooledTransactionHashes. */
     def notifyPeersOfTransactions(txs: Seq[SignedTransaction], peers: Seq[Peer]): Unit =
@@ -302,11 +309,12 @@ object PendingTransactionsManager:
           txsToNotify.foreach(stx => setTxKnown(stx, peer.id))
       }
 
-    /** Handle an inbound NewPooledTransactionHashes announcement (ETH67+ 3-field, or ETH72's 4-field form): request
-      * every hash we don't already have pending, and record each announcement's (type, size) for later validation
-      * against the PooledTransactions reply. Shared by both wire shapes — ETH72's custody Mask is not consulted here
-      * (fukuii has no PeerDAS cell storage to fetch selectively against; see NewPooledTransactionHashes72's doc
-      * comment) — so fetching unknown hashes is identical either way.
+    /** Handle an inbound NewPooledTransactionHashes announcement (ETH67+ 3-field, or ETH72's 4-field form): record each
+      * announcement's (type, size) for later validation against this peer's PooledTransactions reply, and request the
+      * hashes we neither hold nor are already fetching from another peer (see [[PendingAnnouncements]]: one requester
+      * per hash, the other announcers are alternates). Shared by both wire shapes — ETH72's custody Mask is not
+      * consulted here (fukuii has no PeerDAS cell storage to fetch selectively against; see
+      * NewPooledTransactionHashes72's doc comment) — so fetching unknown hashes is identical either way.
       */
     def requestUnknownAnnouncedHashes(
         hashes: Seq[ByteString],
@@ -314,19 +322,26 @@ object PendingTransactionsManager:
         sizes: Seq[BigInt],
         peerId: PeerId
     ): Unit =
-      val unknownHashes = hashes.filterNot(h => pendingTransactions.asMap().containsKey(h))
-      if unknownHashes.nonEmpty then
-        val requested = unknownHashes.toSet
-        // Only what is requested: an entry is cleared when its tx is delivered, so one for a hash never asked for
-        // would stay forever.
-        hashes.zip(types).zip(sizes).foreach { case ((hash, txType), size) =>
-          if requested.contains(hash) then pendingAnnouncements.record(hash, txType, size, peerId)
-        }
-        val requestId = ETHPackets.nextRequestId
-        networkPeerManager ! NetworkPeerManagerActor.SendMessageCmd(
-          ETHPackets.GetPooledTransactions(requestId, unknownHashes),
-          peerId
-        )
+      val pool = pendingTransactions.asMap()
+      val toRequest = hashes.zip(types).zip(sizes).collect {
+        case ((hash, txType), size)
+            if !pool.containsKey(hash) && pendingAnnouncements.announce(hash, txType, size, peerId) =>
+          hash
+      }
+      if toRequest.nonEmpty then requestPooledTransactions(peerId, toRequest)
+
+    def requestPooledTransactions(peerId: PeerId, hashes: Seq[ByteString]): Unit =
+      networkPeerManager ! NetworkPeerManagerActor.SendMessageCmd(
+        ETHPackets.GetPooledTransactions(ETHPackets.nextRequestId, hashes),
+        peerId
+      )
+
+    /** Send the requests that moved to another announcer (its predecessor timed out, was dropped or disconnected). */
+    def requestFromAlternates(reassigned: Map[PeerId, Seq[ByteString]], why: String): Unit =
+      reassigned.foreach { case (peerId, hashes) =>
+        context.log.debug("Requesting {} announced tx(s) from alternate peer {} ({})", hashes.size, peerId, why)
+        requestPooledTransactions(peerId, hashes)
+      }
 
     /** Update pendingNonces high-water mark for accepted transactions. */
     def updatePendingNonces(txs: Iterable[SignedTransactionWithSender]): Unit =
@@ -478,7 +493,7 @@ object PendingTransactionsManager:
         admitted
 
     // scalastyle:off method.length
-    Behaviors.receiveMessage {
+    val receive: Behavior[Command] = Behaviors.receiveMessage {
       case WrappedPeerEvent(PeerEvent.PeerHandshakeSuccessful(peer, handshakeResult)) =>
         connectedPeers += (peer.id -> peer)
         handshakeResult match
@@ -492,8 +507,12 @@ object PendingTransactionsManager:
       case WrappedPeerEvent(PeerEvent.PeerDisconnected(peerId)) =>
         connectedPeers -= peerId
         connectedPeerCapabilities -= peerId
-        // Its outstanding requests will never be answered.
-        pendingAnnouncements.removePeer(peerId)
+        // Its outstanding requests will never be answered: ask the peers that also announced those txs.
+        requestFromAlternates(pendingAnnouncements.removePeer(peerId), "requester disconnected")
+        Behaviors.same
+
+      case FetchTimeoutTick =>
+        requestFromAlternates(pendingAnnouncements.timedOut(), "request timed out")
         Behaviors.same
 
       case AddUncheckedTransactions(transactions) =>
@@ -589,7 +608,7 @@ object PendingTransactionsManager:
         import com.chipprbots.ethereum.domain.*
         val announcementViolation: Option[String] = msg.txs.zipWithIndex.iterator
           .flatMap { case (stx, idx) =>
-            pendingAnnouncements.get(stx.hash.value).flatMap {
+            pendingAnnouncements.get(stx.hash.value, peerId).flatMap {
               case PendingAnnouncements.Announcement(announcedType, announcedSize, _) =>
                 val actualType: Byte = stx.tx match
                   case _: LegacyTransaction         => 0.toByte
@@ -612,8 +631,6 @@ object PendingTransactionsManager:
             }
           }
           .nextOption()
-        // Clean up announcements for received txs
-        msg.txs.foreach(stx => pendingAnnouncements.remove(stx.hash.value))
         announcementViolation match
           case Some(violation) =>
             context.log.info(
@@ -622,7 +639,11 @@ object PendingTransactionsManager:
               violation
             )
             peerManager ! PeerManagerActor.DisconnectPeerFireAndForgetCmd(peerId)
+            // Nothing it sent is taken, so the txs are still wanted: ask the other announcers now rather than when its
+            // PeerDisconnected arrives (only after the disconnect-poison-pill-timeout).
+            requestFromAlternates(pendingAnnouncements.removePeer(peerId), "requester dropped")
           case None =>
+            msg.txs.foreach(stx => pendingAnnouncements.remove(stx.hash.value))
             // Sidecars travel with the txs and are kept only for those admitted (see `blobTxNetworkBytes`).
             val validTxs = SignedTransactionWithSender.getSignedTransactions(msg.txs, headTimestamp())
             if validTxs.nonEmpty then
@@ -668,4 +689,10 @@ object PendingTransactionsManager:
         Behaviors.same
     }
     // scalastyle:on method.length
+
+    Behaviors.withTimers[Command] { timers =>
+      // A request is moved on between fetchTimeout and 1.2 x fetchTimeout after it was sent.
+      timers.startTimerWithFixedDelay(FetchTimeoutTick, (txPoolConfig.announcementFetchTimeout / 5).max(50.millis))
+      receive
+    }
   }
