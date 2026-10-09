@@ -731,12 +731,7 @@ private class SNAPSyncControllerImpl(
   private def flushPeerDisconnects(): Unit =
     val ids = pendingDisconnectedPeers
     pendingDisconnectedPeers = Set.empty
-    ids.foreach { id =>
-      accountRangeCoordinator.foreach(_ ! actors.AccountRangeCoordinator.PeerUnavailable(id))
-      storageRangeCoordinator.foreach(_ ! actors.StorageRangeCoordinator.StoragePeerUnavailable(id))
-      bytecodeCoordinator.foreach(_ ! actors.ByteCodeCoordinator.ByteCodePeerUnavailable(id))
-      trieNodeHealingCoordinator.foreach(_ ! actors.TrieNodeHealingCoordinator.HealingPeerUnavailable(id))
-    }
+    ids.foreach(broadcastPeerUnavailable)
 
   // Storage stagnation watchdog: if storage stops advancing while tasks remain, repivot/restart.
   // This addresses the common case where peers no longer serve the chosen pivot/state window.
@@ -890,15 +885,9 @@ private class SNAPSyncControllerImpl(
     * `chainDownloader` is NOT stopped here — it keeps running in `completedWithBackfill`.
     */
   private def stopStateSyncChildren(): Unit =
-    accountRangeCoordinator.foreach(ctx.stop)
-    accountRangeCoordinator = None
-    bytecodeCoordinator.foreach(ctx.stop)
-    bytecodeCoordinator = None
-    storageRangeCoordinator.foreach(ctx.stop)
-    storageRangeCoordinator = None
+    stopAll()
     forceCompleteStorageSent = false
-    trieNodeHealingCoordinator.foreach(ctx.stop)
-    trieNodeHealingCoordinator = None; healingWalkLocalOnly.set(false)
+    healingWalkLocalOnly.set(false)
 
   // ── Behaviors ────────────────────────────────────────────────────────────────────────────────
   // Each behavior is `Behaviors.receiveMessage` over the sealed Command, with a PostStop signal for
@@ -1239,21 +1228,21 @@ private class SNAPSyncControllerImpl(
           case _ =>
             ctx.log.debug(s"Received AccountRange response: requestId=${msg.requestId}, accounts=${msg.accounts.size}")
             // Forward to the account range coordinator (it owns the workers).
-            accountRangeCoordinator.foreach(_ ! actors.AccountRangeCoordinator.AccountRangeResponseMsg(msg))
+            forwardResponse(msg)
         Behaviors.same
 
       case ByteCodesResponse(msg) =>
         ctx.log.debug(s"Received ByteCodes response: requestId=${msg.requestId}, codes=${msg.codes.size}")
 
         // Forward to the bytecode coordinator (it owns the workers).
-        bytecodeCoordinator.foreach(_ ! actors.ByteCodeCoordinator.ByteCodesResponseMsg(msg))
+        forwardResponse(msg)
         Behaviors.same
 
       case StorageRangesResponse(msg) =>
         ctx.log.debug(s"Received StorageRanges response: requestId=${msg.requestId}, slots=${msg.slots.size}")
 
         // Forward to the storage range coordinator (it owns the workers).
-        storageRangeCoordinator.foreach(_ ! actors.StorageRangeCoordinator.StorageRangesResponseMsg(msg))
+        forwardResponse(msg)
         Behaviors.same
 
       case TrieNodesResponse(msg) =>
@@ -1263,8 +1252,7 @@ private class SNAPSyncControllerImpl(
         // Don't forward during validation — the healing coordinator has already
         // signalled complete and any responses still arriving from peers are
         // late chatter that must not race with the validation walk.
-        if currentPhase != StateValidation then
-          trieNodeHealingCoordinator.foreach(_ ! actors.TrieNodeHealingCoordinator.TrieNodesResponseMsg(msg))
+        if currentPhase != StateValidation then forwardResponse(msg)
         Behaviors.same
 
       case ProgressAccountsSynced(count) =>
@@ -1433,10 +1421,7 @@ private class SNAPSyncControllerImpl(
             s"Debouncing PivotStateUnservable (refresh in flight, phase=$currentPhase, " +
               s"emptyResponses=$emptyResponses, reason=$reason) — re-arming coordinators"
           )
-          stateRoot.foreach { root =>
-            accountRangeCoordinator.foreach(_ ! actors.AccountRangeCoordinator.PivotRefreshed(root.value))
-            storageRangeCoordinator.foreach(_ ! actors.StorageRangeCoordinator.StoragePivotRefreshed(root.value))
-          }
+          stateRoot.foreach(root => reArmRangeCoordinators(root.value))
         else if !SNAPSyncController.countsTowardRestart(cause) &&
           (currentPhase == AccountRangeSync || currentPhase == ByteCodeAndStorageSync)
         then
@@ -3479,10 +3464,8 @@ private class SNAPSyncControllerImpl(
     timers.cancel(SnapCapabilityCheckKey)
     timers.cancel(EvictNonSnapPeers)
 
-    accountRangeCoordinator.foreach(ctx.stop); accountRangeCoordinator = None
-    bytecodeCoordinator.foreach(ctx.stop); bytecodeCoordinator = None
-    storageRangeCoordinator.foreach(ctx.stop); storageRangeCoordinator = None
-    trieNodeHealingCoordinator.foreach(ctx.stop); trieNodeHealingCoordinator = None; healingWalkLocalOnly.set(false)
+    stopAll()
+    healingWalkLocalOnly.set(false)
 
     requestTracker.clear()
     pendingPivotRefresh = None
@@ -4837,8 +4820,7 @@ private class SNAPSyncControllerImpl(
               s"(root $newRoot). Fast-tracking consecutivePivotRefreshes to $MaxConsecutivePivotRefreshes."
           )
           consecutivePivotRefreshes = MaxConsecutivePivotRefreshes
-        accountRangeCoordinator.foreach(_ ! actors.AccountRangeCoordinator.PivotRefreshed(newStateRoot.value))
-        storageRangeCoordinator.foreach(_ ! actors.StorageRangeCoordinator.StoragePivotRefreshed(newStateRoot.value))
+        reArmRangeCoordinators(newStateRoot.value)
       else
 
         // Pivot readiness probe: for proactive rolls, verify the new root is indexed on at least
@@ -4949,16 +4931,12 @@ private class SNAPSyncControllerImpl(
             SNAPSyncMetrics.setPivotBlockNumber(newPivotBlock)
             SNAPSyncMetrics.incrementPivotRefreshed()
 
-            // Geth-aligned: send refresh signal to ALL active coordinators (all 3 run concurrently)
-            accountRangeCoordinator.foreach(_ ! actors.AccountRangeCoordinator.PivotRefreshed(newStateRoot.value))
-            storageRangeCoordinator.foreach(
-              _ ! actors.StorageRangeCoordinator.StoragePivotRefreshed(newStateRoot.value)
-            )
-            // Bytecodes are content-addressed (hash-keyed) so pivot changes don't invalidate them,
-            // but the coordinator should clear stale peer tracking.
-            bytecodeCoordinator.foreach(_ ! actors.ByteCodeCoordinator.ByteCodePivotRefreshed)
-            // Healing coordinator: update root, clear pending tasks and stateless peers.
-            // Then re-walk the trie with the new root to discover missing nodes.
+            // Geth-aligned: send refresh signal to ALL active coordinators (all 3 run concurrently), in order:
+            // account, storage, bytecode, healing. Bytecodes are content-addressed (hash-keyed) so pivot changes
+            // don't invalidate them, but the coordinator should clear stale peer tracking. Healing coordinator:
+            // update root, clear pending tasks and stateless peers, then re-walk the trie with the new root to
+            // discover missing nodes.
+            pivotRefreshed(newStateRoot.value)
             // spec 009 T014: a successful re-peg landed a fresh served root — reset the bounded no-root budget so the
             // lazy-heal last-resort only fires after a fresh run of consecutive empty re-peg attempts. Harmless flag-OFF
             // (the budget is never incremented unless movingRootDeltaHeal && StateHealing).
@@ -4968,9 +4946,6 @@ private class SNAPSyncControllerImpl(
             if isPoSChain then
               retryRefreshCounts = false
               timers.cancel(PivotBootstrapRetryKey)
-            trieNodeHealingCoordinator.foreach { coordinator =>
-              coordinator ! actors.TrieNodeHealingCoordinator.HealingPivotRefreshed(newStateRoot.value)
-            }
             // Chain download target extends to the new pivot (chain data is canonical, never invalidated)
             if chainDownloader.isDefined then
               chainDownloader.tell(ChainDownloader.UpdateTarget(newPivotBlock))
@@ -5022,10 +4997,8 @@ private class SNAPSyncControllerImpl(
     timers.cancel(TuneRateTracker)
 
     // Stop coordinators so we don't double-run phases
-    accountRangeCoordinator.foreach(ctx.stop); accountRangeCoordinator = None
-    bytecodeCoordinator.foreach(ctx.stop); bytecodeCoordinator = None
-    storageRangeCoordinator.foreach(ctx.stop); storageRangeCoordinator = None
-    trieNodeHealingCoordinator.foreach(ctx.stop); trieNodeHealingCoordinator = None; healingWalkLocalOnly.set(false)
+    stopAll()
+    healingWalkLocalOnly.set(false)
 
     // Clear inflight request timeouts and internal phase state
     requestTracker.clear()
