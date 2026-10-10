@@ -1051,13 +1051,14 @@ private class SNAPSyncControllerImpl(
 
   /** Spec 016 P4 (FR-014, plan.md D3): the arms `syncing` runs only in one `SyncPhase`, one partial function per phase.
     * `syncing` consults the current phase's function after its guard arms and before its common arms. P4a moved the
-    * `AccountRangeSync` arms, P4b the `ByteCodeAndStorageSync` arms and P4c the `StateHealing` arms; the other phases
-    * follow in P4d–e. The arm order is recorded in research.md R4b.
+    * `AccountRangeSync` arms, P4b the `ByteCodeAndStorageSync` arms, P4c the `StateHealing` arms and P4d the
+    * `StateValidation` arms; P4e follows. The arm order is recorded in research.md R4b.
     */
   private def phaseArms(phase: SyncPhase): PartialFunction[Command, Behavior[Command]] = phase match
     case AccountRangeSync       => accountRangeArms
     case ByteCodeAndStorageSync => byteCodeAndStorageArms
     case StateHealing           => stateHealingArms
+    case StateValidation        => stateValidationArms
     case _                      => PartialFunction.empty
 
   /** `syncing` arms guarded on `currentPhase == AccountRangeSync` (P4a). */
@@ -1259,6 +1260,121 @@ private class SNAPSyncControllerImpl(
       timers.startSingleTimer(ScheduledTrieWalkKey, ScheduledTrieWalk, 5.seconds)
       Behaviors.same
   }
+
+  /** The stale-generation drops for the validation results (#60-#62). They carry no phase guard, so they run in every
+    * phase: first in `stateValidationArms`, and from their original place in `commonSyncingArms` for the other phases
+    * (research.md R4b note 1).
+    */
+  private lazy val staleValidationDropArms: PartialFunction[Command, Behavior[Command]] = {
+    // Stale-generation drop. Anything that bumps `validationGeneration`
+    // (restartSnapSync, completePivotRefreshWithStateRoot, fresh validateState
+    // spawn) means an in-flight Future's result is no longer applicable —
+    // ignore quietly without mutating state.
+    case ValidateAccountTrieResult(gen, _, _) if gen != validationGeneration =>
+      ctx.log.debug(s"Dropping stale ValidateAccountTrieResult (gen=$gen, current=$validationGeneration)")
+      Behaviors.same
+
+    case ValidateStorageTriesResult(gen, _, _) if gen != validationGeneration =>
+      ctx.log.debug(s"Dropping stale ValidateStorageTriesResult (gen=$gen, current=$validationGeneration)")
+      Behaviors.same
+
+    case ValidationRetry(retryGen) if retryGen != validationGeneration =>
+      ctx.log.debug(s"Dropping stale ValidationRetry (gen=$retryGen, current=$validationGeneration)")
+      Behaviors.same
+  }
+
+  /** `syncing` arms guarded on `currentPhase == StateValidation` (P4d). */
+  private lazy val stateValidationResultArms: PartialFunction[Command, Behavior[Command]] = {
+    // Account trie validation result handlers. All gated on phase + generation
+    // match. Any state mutation lives only in these handlers (never inside the
+    // Future).
+    case ValidateAccountTrieResult(_, Right(missing), elapsedMs) =>
+      if missing.isEmpty then
+        ctx.log.info(s"Account trie validation successful - no missing nodes (${elapsedMs}ms)")
+        validationRetryCount = 0
+        // Spawn the storage pass on the same generation; result handlers below.
+        for root <- stateRoot; pivot <- pivotBlock do spawnStorageValidation(validationGeneration, root.value, pivot)
+      else
+        ctx.log.warn(
+          s"Account trie validation found ${missing.size} missing nodes — triggering healing"
+        )
+        SNAPSyncMetrics.setMissingNodesDetected(missing.size.toLong)
+        validationInProgress = false
+        triggerHealingForMissingNodes(missing)
+      Behaviors.same
+
+    case ValidateAccountTrieResult(_, Left(error), _) =>
+      SNAPSyncMetrics.incrementValidationFailure()
+      ctx.log.error(s"Account trie validation failed: $error")
+      var earlyBehavior: Option[Behavior[Command]] = None
+      if error.contains("Missing root node") then
+        validationRetryCount += 1
+        // Clear the in-progress flag *before* scheduling the retry. If we left
+        // it set, ValidationRetry would refuse to spawn and the path
+        // deadlocks silently. The retry handler kicks `validateState()` which
+        // bumps the generation again and sets the flag fresh.
+        validationInProgress = false
+        if validationRetryCount > MaxValidationRetries then
+          val retryMsg = s"root node missing after $validationRetryCount validation retries"
+          if recordCriticalFailure(retryMsg) then
+            ctx.log.error("Too many critical SNAP failures — entering dormant mode")
+            enterDormantMode(s"validation retry exhausted: $retryMsg")
+          else
+            ctx.log.warn(
+              s"Root node missing after $validationRetryCount validation attempts. " +
+                "Restarting SNAP sync with a fresh pivot to rebuild the state trie."
+            )
+            validationRetryCount = 0
+            earlyBehavior = Some(restartSnapSync(retryMsg))
+        else
+          ctx.log.error(s"Root node is missing (retry attempt $validationRetryCount of $MaxValidationRetries)")
+          val gen = validationGeneration
+          // Schedule on context.dispatcher (the actor's own scheduler), not
+          // snapValidationEc — the retry message is cheap and shouldn't be
+          // tied to the long-running pool's lifecycle.
+          timers.startSingleTimer("validation-retry", ValidationRetry(gen), ValidationRetryDelay)
+      else
+        ctx.log.error("Recovering through healing phase")
+        validationInProgress = false
+        currentPhase = StateHealing
+        startStateHealing()
+      earlyBehavior.getOrElse(Behaviors.same)
+
+    // Storage trie validation result handlers.
+    case ValidateStorageTriesResult(_, Right(missing), elapsedMs) =>
+      validationInProgress = false
+      SNAPSyncMetrics.setMissingNodesDetected(missing.size.toLong)
+      if missing.isEmpty then
+        ctx.log.info(s"Storage trie validation successful - no missing nodes (${elapsedMs}ms)")
+        ctx.log.info("✅ State validation COMPLETE - all tries are intact")
+        ctx.self ! StateValidationComplete
+      else
+        ctx.log.warn(
+          s"Storage trie validation found ${missing.size} missing nodes — triggering healing"
+        )
+        triggerHealingForMissingNodes(missing)
+      Behaviors.same
+
+    case ValidateStorageTriesResult(_, Left(error), _) =>
+      SNAPSyncMetrics.incrementValidationFailure()
+      ctx.log.error(s"Storage trie validation failed: $error. Recovering through healing phase")
+      validationInProgress = false
+      currentPhase = StateHealing
+      startStateHealing()
+      Behaviors.same
+
+    case ValidationRetry(_) =>
+      // Generation was already verified above by the stale-drop handler.
+      // `validateState()` bumps the generation again and spawns a fresh pass.
+      validateState()
+      Behaviors.same
+  }
+
+  /** The `StateValidation` phase function: the stale-generation drops first, as in `syncing` before P4d, then the
+    * `StateValidation` arms.
+    */
+  private lazy val stateValidationArms: PartialFunction[Command, Behavior[Command]] =
+    staleValidationDropArms.orElse(stateValidationResultArms)
 
   /** Dispatch order (spec 016 P4, research.md R4b): `syncingGuardArms` (the path-publish and header-hold arms with
     * their two guarded wildcards, then the `peerEventArms` delegation), then `phaseArms(currentPhase)`, then
@@ -2014,105 +2130,13 @@ private class SNAPSyncControllerImpl(
         completeSnapSync()
         Behaviors.same
 
-      // Stale-generation drop. Anything that bumps `validationGeneration`
-      // (restartSnapSync, completePivotRefreshWithStateRoot, fresh validateState
-      // spawn) means an in-flight Future's result is no longer applicable —
-      // ignore quietly without mutating state.
-      case ValidateAccountTrieResult(gen, _, _) if gen != validationGeneration =>
-        ctx.log.debug(s"Dropping stale ValidateAccountTrieResult (gen=$gen, current=$validationGeneration)")
-        Behaviors.same
+      // Stale-generation drops (#60-#62): staleValidationDropArms (P4d), consulted here for every phase and first in
+      // stateValidationArms for StateValidation.
+      case msg if staleValidationDropArms.isDefinedAt(msg) =>
+        staleValidationDropArms(msg)
 
-      case ValidateStorageTriesResult(gen, _, _) if gen != validationGeneration =>
-        ctx.log.debug(s"Dropping stale ValidateStorageTriesResult (gen=$gen, current=$validationGeneration)")
-        Behaviors.same
-
-      case ValidationRetry(retryGen) if retryGen != validationGeneration =>
-        ctx.log.debug(s"Dropping stale ValidationRetry (gen=$retryGen, current=$validationGeneration)")
-        Behaviors.same
-
-      // Account trie validation result handlers. All gated on phase + generation
-      // match. Any state mutation lives only in these handlers (never inside the
-      // Future).
-      case ValidateAccountTrieResult(_, Right(missing), elapsedMs) if currentPhase == StateValidation =>
-        if missing.isEmpty then
-          ctx.log.info(s"Account trie validation successful - no missing nodes (${elapsedMs}ms)")
-          validationRetryCount = 0
-          // Spawn the storage pass on the same generation; result handlers below.
-          for root <- stateRoot; pivot <- pivotBlock do spawnStorageValidation(validationGeneration, root.value, pivot)
-        else
-          ctx.log.warn(
-            s"Account trie validation found ${missing.size} missing nodes — triggering healing"
-          )
-          SNAPSyncMetrics.setMissingNodesDetected(missing.size.toLong)
-          validationInProgress = false
-          triggerHealingForMissingNodes(missing)
-        Behaviors.same
-
-      case ValidateAccountTrieResult(_, Left(error), _) if currentPhase == StateValidation =>
-        SNAPSyncMetrics.incrementValidationFailure()
-        ctx.log.error(s"Account trie validation failed: $error")
-        var earlyBehavior: Option[Behavior[Command]] = None
-        if error.contains("Missing root node") then
-          validationRetryCount += 1
-          // Clear the in-progress flag *before* scheduling the retry. If we left
-          // it set, ValidationRetry would refuse to spawn and the path
-          // deadlocks silently. The retry handler kicks `validateState()` which
-          // bumps the generation again and sets the flag fresh.
-          validationInProgress = false
-          if validationRetryCount > MaxValidationRetries then
-            val retryMsg = s"root node missing after $validationRetryCount validation retries"
-            if recordCriticalFailure(retryMsg) then
-              ctx.log.error("Too many critical SNAP failures — entering dormant mode")
-              enterDormantMode(s"validation retry exhausted: $retryMsg")
-            else
-              ctx.log.warn(
-                s"Root node missing after $validationRetryCount validation attempts. " +
-                  "Restarting SNAP sync with a fresh pivot to rebuild the state trie."
-              )
-              validationRetryCount = 0
-              earlyBehavior = Some(restartSnapSync(retryMsg))
-          else
-            ctx.log.error(s"Root node is missing (retry attempt $validationRetryCount of $MaxValidationRetries)")
-            val gen = validationGeneration
-            // Schedule on context.dispatcher (the actor's own scheduler), not
-            // snapValidationEc — the retry message is cheap and shouldn't be
-            // tied to the long-running pool's lifecycle.
-            timers.startSingleTimer("validation-retry", ValidationRetry(gen), ValidationRetryDelay)
-        else
-          ctx.log.error("Recovering through healing phase")
-          validationInProgress = false
-          currentPhase = StateHealing
-          startStateHealing()
-        earlyBehavior.getOrElse(Behaviors.same)
-
-      // Storage trie validation result handlers.
-      case ValidateStorageTriesResult(_, Right(missing), elapsedMs) if currentPhase == StateValidation =>
-        validationInProgress = false
-        SNAPSyncMetrics.setMissingNodesDetected(missing.size.toLong)
-        if missing.isEmpty then
-          ctx.log.info(s"Storage trie validation successful - no missing nodes (${elapsedMs}ms)")
-          ctx.log.info("✅ State validation COMPLETE - all tries are intact")
-          ctx.self ! StateValidationComplete
-        else
-          ctx.log.warn(
-            s"Storage trie validation found ${missing.size} missing nodes — triggering healing"
-          )
-          triggerHealingForMissingNodes(missing)
-        Behaviors.same
-
-      case ValidateStorageTriesResult(_, Left(error), _) if currentPhase == StateValidation =>
-        SNAPSyncMetrics.incrementValidationFailure()
-        ctx.log.error(s"Storage trie validation failed: $error. Recovering through healing phase")
-        validationInProgress = false
-        currentPhase = StateHealing
-        startStateHealing()
-        Behaviors.same
-
-      case ValidationRetry(_) if currentPhase == StateValidation =>
-        // Generation was already verified above by the stale-drop handler.
-        // `validateState()` bumps the generation again and spawns a fresh pass.
-        validateState()
-        Behaviors.same
+      // ValidateAccountTrieResult, ValidateStorageTriesResult, ValidationRetry (StateValidation only, current
+      // generation): stateValidationArms (P4d).
 
       // C2: inlined from aroundReceive — stagnation check dispatches to the active coordinator
       case CheckDownloadStagnation =>
