@@ -24,6 +24,8 @@ import com.chipprbots.ethereum.blockchain.sync.snap.controller.ChildFactories
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.CoordinatorHandles
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.HeapWatchdogStart
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.PhaseFlags
+import com.chipprbots.ethereum.blockchain.sync.snap.controller.SnapControllerEnv
+import com.chipprbots.ethereum.blockchain.sync.snap.controller.SnapSharedState
 import com.chipprbots.ethereum.consensus.engine.PoSBlockHeaderValidator
 import com.chipprbots.ethereum.db.storage.AppStateStorage
 import com.chipprbots.ethereum.db.storage.BfsQueueStorage
@@ -55,25 +57,25 @@ import com.chipprbots.ethereum.utils.Config.SyncConfig
 import com.chipprbots.ethereum.utils.Hex
 
 private class SNAPSyncControllerImpl(
-    ctx: ActorContext[SNAPSyncController.Command],
-    timers: TimerScheduler[SNAPSyncController.Command],
+    val ctx: ActorContext[SNAPSyncController.Command],
+    val timers: TimerScheduler[SNAPSyncController.Command],
     blockchainReader: BlockchainReader,
     blockchainWriter: BlockchainWriter,
-    appStateStorage: AppStateStorage,
-    stateStorage: StateStorage,
-    evmCodeStorage: EvmCodeStorage,
-    flatSlotStorage: FlatSlotStorage,
+    val appStateStorage: AppStateStorage,
+    val stateStorage: StateStorage,
+    val evmCodeStorage: EvmCodeStorage,
+    val flatSlotStorage: FlatSlotStorage,
     networkPeerManager: TypedActorRef[com.chipprbots.ethereum.network.NetworkPeerManagerActor.Command],
     peerEventBus: TypedActorRef[com.chipprbots.ethereum.network.PeerEventBusActor.Command],
-    syncConfig: SyncConfig,
-    snapSyncConfig: SNAPSyncConfig,
+    val syncConfig: SyncConfig,
+    val snapSyncConfig: SNAPSyncConfig,
     scheduler: Scheduler,
     blacklist: Blacklist,
     syncController: TypedActorRef[SyncProtocol.SyncControllerReply],
     // Factory for `StateValidator` so unit tests can inject a fake. Production
     // default is a thin `new StateValidator(_)` wrapper; tests can supply a
     // `FakeStateValidator` that returns canned results, delays, or throws.
-    validatorFactory: MptStorage => StateValidator,
+    val validatorFactory: MptStorage => StateValidator,
     // Test seam: None (production) reads the process-global chain config exactly as before. The "test" network
     // config has no terminal-total-difficulty, so without this no actor in this module's suite could ever
     // exercise the PoS/CL-anchored paths live.
@@ -84,14 +86,17 @@ private class SNAPSyncControllerImpl(
     intakeBudgetOverride: Option[SnapIntakeBudget] = None
 )(implicit ec: ExecutionContext)
     extends CoordinatorHandles
-    with PhaseFlags:
+    with PhaseFlags
+    with SnapSharedState
+    with SnapControllerEnv:
 
   import SNAPSyncController.*
   import SyncPhase.*
 
   // P11: plain SLF4J logger, safe to call from Future callbacks (off the actor thread).
   // Used ONLY at the two Recovery-streaming Future `.foreach` sites; all on-thread logging uses ctx.log.
-  private val asyncLog = org.slf4j.LoggerFactory.getLogger(getClass)
+  // Implements `SnapControllerEnv.asyncLog` (spec 016 T041a).
+  val asyncLog: org.slf4j.Logger = org.slf4j.LoggerFactory.getLogger(getClass)
 
   // ── Memory bounds (spec 014) ─────────────────────────────────────────────────────────────────
   // Shared admission gate for SNAP contract work. Producers (AccountRangeCoordinator's account dispatch and carried
@@ -212,8 +217,8 @@ private class SNAPSyncControllerImpl(
   // Probe timeouts are keyed by the probe's BigInt requestId (C4) — see startPivotProbe.
 
   // Dedicated dispatcher for the long-running synchronous trie walks inside
-  // `validateState()`. See `pekko.conf` for the rationale.
-  private val snapValidationEc: ExecutionContext =
+  // `validateState()`. See `pekko.conf` for the rationale. Implements `SnapControllerEnv.snapValidationEc`.
+  val snapValidationEc: ExecutionContext =
     ctx.system.classicSystem.dispatchers.lookup("snap-validation-dispatcher")
 
   // Typed-compatible peer-list management (Group PLN), replacing the Classic PeerListSupportNg mixin.
@@ -410,14 +415,15 @@ private class SNAPSyncControllerImpl(
       com.chipprbots.ethereum.utils.Config.blockchains.blockchainConfig.terminalTotalDifficulty.isDefined
     )
 
-  private val requestTracker = new SNAPRequestTracker()(scheduler)
+  // The hubs implement `SnapSharedState` (spec 016 T041a).
+  val requestTracker: SNAPRequestTracker = new SNAPRequestTracker()(scheduler)
 
-  private var currentPhase: SyncPhase = Idle
+  var currentPhase: SyncPhase = Idle
 
   // Path scheme: set while the async path->hash publish runs (pivot, pivot state root). See startPathPublish.
   private var pathPublish: Option[(BigInt, ByteString)] = None
-  private var pivotBlock: Option[BigInt] = None
-  private var stateRoot: Option[TrieRoot] = None
+  var pivotBlock: Option[BigInt] = None
+  var stateRoot: Option[TrieRoot] = None
 
   // Preserved account range progress across SNAP sync restarts (core-geth parity).
   // Maps range `last` hash → current `next` position for ALL ranges (not just completed ones).
@@ -469,7 +475,7 @@ private class SNAPSyncControllerImpl(
   // unset, so the next start's recovery scan finds it, and the importer fetches it on demand in the meantime.
   private val healedCodeHashes: mutable.LinkedHashSet[ByteString] = mutable.LinkedHashSet.empty
 
-  private val progressMonitor = new SyncProgressMonitor(scheduler)
+  val progressMonitor: SyncProgressMonitor = new SyncProgressMonitor(scheduler)
 
   // Failure tracking — critical failures trigger dormant retry with exponential backoff.
   private var criticalFailureCount: Int = 0
