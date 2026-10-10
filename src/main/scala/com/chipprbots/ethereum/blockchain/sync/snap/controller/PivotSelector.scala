@@ -327,7 +327,7 @@ private[snap] trait PivotSelector extends PivotSelectionApi:
     * On pre-merge chains (TTD = None): we still buffer for diagnostics but don't act — `startSnapSync()` ignores
     * `clPivotHint` when `!isPoSChain`.
     */
-  private[snap] def handleCLPivotHint(hint: CLPivotHint, isStarting: Boolean): Unit =
+  private[snap] def handleCLPivotHint(hint: CLPivotHint): Unit =
     val isNew = !clPivotHint.exists(_.headHash == hint.headHash)
     clPivotHint = Some(hint)
     if isNew then clHintArrivedAtMs = Some(System.currentTimeMillis())
@@ -348,7 +348,6 @@ private[snap] trait PivotSelector extends PivotSelectionApi:
     // Reactive starts: if we're already at idle and a hint arrives during operator-driven
     // startup, the `Start` handler will pick this up. We don't auto-start here because
     // SyncController's startSnapSync() drives the lifecycle.
-    val _ = isStarting
 
   /** Calculate exponential backoff delay for bootstrap retries. Backoff: 2s → 4s → 8s → 16s → 32s → 60s cap.
     */

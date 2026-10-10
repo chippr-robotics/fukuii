@@ -286,20 +286,20 @@ class PivotSelectorSpec extends AnyFlatSpec with Matchers:
     val h = new Harness()
     val known = CLPivotHint(header.hash.value, Some(header))
 
-    h.call(_.handleCLPivotHint(known, isStarting = false))
+    h.call(_.handleCLPivotHint(known))
 
     h.module.clPivotHint shouldBe Some(known)
     h.module.clHintArrivedAtMs shouldBe defined
     h.peerManager.receiveAll() shouldBe Seq(NetworkPeerManagerActor.UpdateClHeadCmd(pivot))
 
     h.module.clHintArrivedAtMs = Some(1L)
-    h.call(_.handleCLPivotHint(known, isStarting = false))
+    h.call(_.handleCLPivotHint(known))
 
     h.module.clHintArrivedAtMs shouldBe Some(1L)
     h.peerManager.receiveAll() shouldBe Seq(NetworkPeerManagerActor.UpdateClHeadCmd(pivot))
 
     val byHash = CLPivotHint(ByteString("newer-head"), None)
-    h.call(_.handleCLPivotHint(byHash, isStarting = false))
+    h.call(_.handleCLPivotHint(byHash))
 
     h.module.clPivotHint shouldBe Some(byHash)
     h.module.clHintArrivedAtMs should not be Some(1L)
