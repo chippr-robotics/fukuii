@@ -1049,8 +1049,28 @@ private class SNAPSyncControllerImpl(
         onStop(); Behaviors.same
       }
 
-  def syncing(): Behavior[Command] = Behaviors
-    .receiveMessage[Command] {
+  /** Spec 016 P4 (FR-014, plan.md D3): the arms `syncing` runs only in one `SyncPhase`, one partial function per phase.
+    * `syncing` consults the current phase's function after its guard arms and before its common arms. P4a moved the
+    * `AccountRangeSync` arms; the other phases follow in P4b–e. The arm order is recorded in research.md R4b.
+    */
+  private def phaseArms(phase: SyncPhase): PartialFunction[Command, Behavior[Command]] = phase match
+    case AccountRangeSync => accountRangeArms
+    case _                => PartialFunction.empty
+
+  /** `syncing` arms guarded on `currentPhase == AccountRangeSync` (P4a). */
+  private lazy val accountRangeArms: PartialFunction[Command, Behavior[Command]] = {
+    case AccountCoordinatorProgress(progress) =>
+      if progress.elapsedTimeMs > 0 || progress.tasksPending > 0 || progress.tasksActive > 0 || progress.tasksCompleted > 0
+      then maybeRestartIfAccountStagnant(progress)
+      Behaviors.same
+  }
+
+  /** Dispatch order (spec 016 P4, research.md R4b): `syncingGuardArms` (the path-publish and header-hold arms with
+    * their two guarded wildcards, then the `peerEventArms` delegation), then `phaseArms(currentPhase)`, then
+    * `commonSyncingArms`, then the "Unhandled message in syncing state" catch-all. `currentPhase` is read per message.
+    */
+  def syncing(): Behavior[Command] =
+    val syncingGuardArms: PartialFunction[Command, Behavior[Command]] = {
       // Path publish in flight: only its own messages and status/progress queries are served; stale SNAP responses,
       // tickers and peer churn are dropped (the publish is terminal — nothing here can change the anchored state).
       case PathPublishProgress(a, st) =>
@@ -1081,6 +1101,10 @@ private class SNAPSyncControllerImpl(
       // — content-addressed trie nodes are ~99.9% valid across pivot changes.
       case msg if peerEventArms.isDefinedAt(msg) =>
         peerEventArms(msg)
+    }
+
+    // The arms that run in every phase (or test the phase inside their body), in their original order.
+    val commonSyncingArms: PartialFunction[Command, Behavior[Command]] = {
 
       // Periodic rate tracker tuning (geth msgrate alignment)
       case TuneRateTracker =>
@@ -1470,8 +1494,9 @@ private class SNAPSyncControllerImpl(
                     restartDelay
                   )
                 else
-                  earlyBehavior =
-                    Some(restartSnapSync(s"consecutive stateless pivots ($consecutivePivotRefreshes): $reason"))
+                  earlyBehavior = Some(
+                    restartSnapSync(s"consecutive stateless pivots ($consecutivePivotRefreshes): $reason")
+                  )
           else refreshPivotInPlace(reason, pivotUnservable = true)
         else ctx.log.info(s"Ignoring PivotStateUnservable in phase=$currentPhase (reason=$reason)")
         earlyBehavior.getOrElse(Behaviors.same)
@@ -2146,10 +2171,7 @@ private class SNAPSyncControllerImpl(
           case _ => // No stagnation check needed in other phases
         Behaviors.same
 
-      case AccountCoordinatorProgress(progress) if currentPhase == AccountRangeSync =>
-        if progress.elapsedTimeMs > 0 || progress.tasksPending > 0 || progress.tasksActive > 0 || progress.tasksCompleted > 0
-        then maybeRestartIfAccountStagnant(progress)
-        Behaviors.same
+      // AccountCoordinatorProgress (AccountRangeSync only): accountRangeArms (P4a).
 
       case StorageCoordinatorProgress(stats) if currentPhase == ByteCodeAndStorageSync =>
         ctx.log.info(
@@ -2181,14 +2203,22 @@ private class SNAPSyncControllerImpl(
       case GetStatus(replyTo) =>
         replyTo ! currentSyncStatus
         Behaviors.same
+    }
 
-      case msg =>
-        ctx.log.debug(s"Unhandled message in syncing state: $msg")
-        Behaviors.same
-    }
-    .receiveSignal { case (_, PostStop) =>
-      onStop(); Behaviors.same
-    }
+    val unhandledInSyncing: Command => Behavior[Command] = msg =>
+      ctx.log.debug(s"Unhandled message in syncing state: $msg")
+      Behaviors.same
+
+    Behaviors
+      .receiveMessage[Command] { message =>
+        syncingGuardArms
+          .orElse(phaseArms(currentPhase))
+          .orElse(commonSyncingArms)
+          .applyOrElse(message, unhandledInSyncing)
+      }
+      .receiveSignal { case (_, PostStop) =>
+        onStop(); Behaviors.same
+      }
 
   private def scheduleStagnationChecks(): Unit =
     val interval = DownloadStagnationCheckInterval
