@@ -1,20 +1,45 @@
 package com.chipprbots.ethereum.blockchain.sync.snap.controller
 
+import org.apache.pekko.actor.typed.ActorRef as TypedActorRef
 import org.apache.pekko.actor.typed.Behavior
 import org.apache.pekko.actor.typed.PostStop
 import org.apache.pekko.actor.typed.scaladsl.Behaviors
 import org.apache.pekko.util.ByteString
 
+import scala.collection.mutable
 import scala.concurrent.duration.*
 
 import com.chipprbots.ethereum.blockchain.sync.SyncProtocol
-import com.chipprbots.ethereum.blockchain.sync.snap.*
+import com.chipprbots.ethereum.blockchain.sync.snap.ChainDownloader
+import com.chipprbots.ethereum.blockchain.sync.snap.PathToHashExporter
+import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController.*
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController.SyncPhase.*
 import com.chipprbots.ethereum.domain.Block
 import com.chipprbots.ethereum.domain.BlockBody
 import com.chipprbots.ethereum.domain.ChainWeight
 import com.chipprbots.ethereum.utils.ByteStringUtils.ByteStringOps
+
+private[snap] trait SnapFinalizationState:
+  var chainDownloadComplete: Boolean
+  var headerHold: Option[ByteString]
+  var pathPublish: Option[(BigInt, ByteString)]
+  var coordinatorGeneration: Long
+  def healedCodeHashes: mutable.LinkedHashSet[ByteString]
+  def chainDownloaderReplyAdapter: TypedActorRef[ChainDownloader.Done.type]
+
+private[snap] trait TaskFileSweepApi:
+  def accountsCompleteTaskFilePaths: Set[String]
+  def sweepSupersededTaskFiles(keep: Set[String], reason: String): Unit
+
+private[snap] trait HealedCodeApi:
+  def dropHealedCodeNowPresent(): Unit
+  def queueHealedCode(codeHashes: Seq[ByteString]): Unit
+
+private[snap] trait ShutdownApi:
+  def onStop(): Unit
+  def stopSnapOnlySchedules(): Unit
+  def stopStateSyncChildren(): Unit
 
 /** SNAP finalization (spec 016 M4, research.md R6 "Finalization / header-hold / path-publish / backfill handoff"): the
   * completion entry (`completeSnapSync`, with the healed-code hold), the deferred-backfill header hold
@@ -25,7 +50,8 @@ import com.chipprbots.ethereum.utils.ByteStringUtils.ByteStringOps
   * ChainDownloader arms call these members.
   */
 private[snap] trait SnapFinalization:
-  self: SNAPSyncControllerImpl =>
+  self: SnapFinalizationState & SnapSharedState & SnapControllerEnv & CoordinatorHandles & PhaseFlags & ResumeApi &
+    TaskFileSweepApi & HealedCodeApi & PeerPoolApi & ShutdownApi =>
 
   private var lastHeaderHoldWarnMs: Long = 0L
   // Stall watchdog for the hold: highest header cursor seen and when it last advanced.

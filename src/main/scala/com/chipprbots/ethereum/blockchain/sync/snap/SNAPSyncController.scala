@@ -22,18 +22,22 @@ import com.chipprbots.ethereum.blockchain.sync.SyncController
 import com.chipprbots.ethereum.blockchain.sync.SyncProtocol
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.ChildFactories
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.CoordinatorHandles
+import com.chipprbots.ethereum.blockchain.sync.snap.controller.HealedCodeApi
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.HealingApi
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.HeapWatchdogStart
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.LifecycleApi
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.PhaseFlags
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.ResumeApi
+import com.chipprbots.ethereum.blockchain.sync.snap.controller.ShutdownApi
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.SnapControllerEnv
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.SnapFinalization
+import com.chipprbots.ethereum.blockchain.sync.snap.controller.SnapFinalizationState
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.SnapPeerPool
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.SnapPeerPoolState
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.SnapSharedState
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.StateValidationModule
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.StateValidationState
+import com.chipprbots.ethereum.blockchain.sync.snap.controller.TaskFileSweepApi
 import com.chipprbots.ethereum.consensus.engine.PoSBlockHeaderValidator
 import com.chipprbots.ethereum.db.storage.AppStateStorage
 import com.chipprbots.ethereum.db.storage.BfsQueueStorage
@@ -102,7 +106,11 @@ private class SNAPSyncControllerImpl(
     with LifecycleApi
     with SnapPeerPool
     with SnapPeerPoolState
-    with SnapFinalization:
+    with SnapFinalization
+    with SnapFinalizationState
+    with TaskFileSweepApi
+    with HealedCodeApi
+    with ShutdownApi:
 
   import SNAPSyncController.*
   import SyncPhase.*
@@ -342,14 +350,14 @@ private class SNAPSyncControllerImpl(
   // Implements `CoordinatorHandles.stopChild`.
   protected def stopChild(child: TypedActorRef[Nothing]): Unit = ctx.stop(child)
 
-  private[snap] var chainDownloadComplete: Boolean = false
+  var chainDownloadComplete: Boolean = false
   // Deferred-backfill finalisation hold: Some(pivot header hash) while finalisation waits for the forward header
   // download to reach the pivot. Keyed by hash, not number, so a pivot that changed is never mistaken for the old one.
-  private[snap] var headerHold: Option[ByteString] = None
+  var headerHold: Option[ByteString] = None
 
   // Monotonic counter appended to coordinator actor names so restarts don't collide
   // with still-stopping actors from the previous cycle.
-  private[snap] var coordinatorGeneration: Long = 0
+  var coordinatorGeneration: Long = 0
 
   // Buffered CL-driven pivot hint. Populated whenever a `CLPivotHint` message arrives
   // from `SyncController`. Consumed by `startSnapSync()` to skip TD-based pivot selection
@@ -374,7 +382,7 @@ private class SNAPSyncControllerImpl(
   var currentPhase: SyncPhase = Idle
 
   // Path scheme: set while the async path->hash publish runs (pivot, pivot state root). See startPathPublish.
-  private[snap] var pathPublish: Option[(BigInt, ByteString)] = None
+  var pathPublish: Option[(BigInt, ByteString)] = None
   var pivotBlock: Option[BigInt] = None
   var stateRoot: Option[TrieRoot] = None
 
@@ -397,12 +405,12 @@ private class SNAPSyncControllerImpl(
   private var lastSweptForRecord: Option[String] = None
 
   /** Task files handed to accounts-complete recovery (never swept while referenced). */
-  private[snap] def accountsCompleteTaskFilePaths: Set[String] =
+  def accountsCompleteTaskFilePaths: Set[String] =
     (appStateStorage.getSnapSyncStorageFilePath().toSet ++ appStateStorage.getSnapSyncCodeHashesPath().toSet)
       .filter(_.nonEmpty)
 
   /** Delete contract task files in the task-file dir that are not in `keep`. IO errors are logged per file. */
-  private[snap] def sweepSupersededTaskFiles(keep: Set[String], reason: String): Unit =
+  def sweepSupersededTaskFiles(keep: Set[String], reason: String): Unit =
     snapSyncConfig.taskFileDir.foreach { dir =>
       val deleted = SNAPSyncController.sweepTaskFiles(dir, keep, (p, e) => ctx.log.warn(s"Could not delete $p: $e"))
       if deleted.nonEmpty then ctx.log.info(s"Deleted ${deleted.size} superseded SNAP contract task file(s) ($reason)")
@@ -426,7 +434,7 @@ private class SNAPSyncControllerImpl(
   // (HealedCodeHashes); they are fetched through the bytecode coordinator and SNAP is not finalised until they are
   // present (or `HealedCodeWaitMs` passes). Whatever is still missing at finalisation keeps `bytecodeRecoveryDone`
   // unset, so the next start's recovery scan finds it, and the importer fetches it on demand in the meantime.
-  private[snap] val healedCodeHashes: mutable.LinkedHashSet[ByteString] = mutable.LinkedHashSet.empty
+  val healedCodeHashes: mutable.LinkedHashSet[ByteString] = mutable.LinkedHashSet.empty
 
   val progressMonitor: SyncProgressMonitor = new SyncProgressMonitor(scheduler)
 
@@ -659,10 +667,10 @@ private class SNAPSyncControllerImpl(
     * this typed adapter, which bridges into SSC's sealed mailbox as ChainDownloaderDone. Progress is polled separately
     * via GetProgress — this adapter handles Done only.
     */
-  private[snap] val chainDownloaderReplyAdapter: TypedActorRef[ChainDownloader.Done.type] =
+  val chainDownloaderReplyAdapter: TypedActorRef[ChainDownloader.Done.type] =
     ctx.messageAdapter[ChainDownloader.Done.type](_ => ChainDownloaderDone)
 
-  private[snap] def onStop(): Unit =
+  def onStop(): Unit =
     stopSnapOnlySchedules()
     stopHeapWatchdog()
     // dormantWakeUp is now a timer — auto-cancelled on stop.
@@ -699,7 +707,7 @@ private class SNAPSyncControllerImpl(
     * lifecycle transition into `completedWithBackfill` (so eviction/tickers don't keep running while regular sync owns
     * the peer pool) and from the PostStop signal handler.
     */
-  private[snap] def stopSnapOnlySchedules(): Unit =
+  def stopSnapOnlySchedules(): Unit =
     cancelSyncTimers(
       RequestAccountRanges,
       RequestByteCodes,
@@ -726,7 +734,7 @@ private class SNAPSyncControllerImpl(
     *
     * `chainDownloader` is NOT stopped here — it keeps running in `completedWithBackfill`.
     */
-  private[snap] def stopStateSyncChildren(): Unit =
+  def stopStateSyncChildren(): Unit =
     stopAll()
     forceCompleteStorageSent = false
     healingWalkLocalOnly.set(false)
@@ -4805,13 +4813,13 @@ private class SNAPSyncControllerImpl(
     timers.cancel(HealedCodeWaitTimerKey)
 
   /** Forget healed codeHashes whose bytecode has since been stored. */
-  private[snap] def dropHealedCodeNowPresent(): Unit =
+  def dropHealedCodeNowPresent(): Unit =
     healedCodeHashes.filterInPlace(h => evmCodeStorage.get(h).isEmpty)
 
   /** Record the codeHashes the healing coordinator reported and send the missing ones to the bytecode coordinator,
     * spawning one if the SNAP children were already torn down.
     */
-  private[snap] def queueHealedCode(codeHashes: Seq[ByteString]): Unit =
+  def queueHealedCode(codeHashes: Seq[ByteString]): Unit =
     val missing = codeHashes.filter(h => h != Account.EmptyCodeHash.value && evmCodeStorage.get(h).isEmpty)
     if missing.nonEmpty then
       healedCodeHashes ++= missing

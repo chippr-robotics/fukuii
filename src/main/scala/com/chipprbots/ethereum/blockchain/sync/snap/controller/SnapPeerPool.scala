@@ -15,6 +15,10 @@ import com.chipprbots.ethereum.network.NetworkPeerManagerActor
 import com.chipprbots.ethereum.network.p2p.messages.Capability
 import com.chipprbots.ethereum.utils.Hex
 
+private[snap] trait PeerPoolApi:
+  def peersToDownloadFrom: Map[com.chipprbots.ethereum.network.PeerId, PeerListSupportNg.PeerWithInfo]
+  def calibratePivotTD(pivotBlockNumber: BigInt): Option[BigInt]
+
 private[snap] trait SnapPeerPoolState:
   def peerListHelper: PeerListHelper
   def handshakedPeersAdapter: TypedActorRef[NetworkPeerManagerActor.HandshakedPeers]
@@ -30,12 +34,12 @@ private[snap] trait SnapPeerPoolState:
   * (`calibratePivotTD`). The core keeps the dispatch: `peerEventArms`, the reactivity arm of `bootstrapping` and the
   * peer-tick arms of `commonSyncingArms` call these members.
   */
-private[snap] trait SnapPeerPool:
+private[snap] trait SnapPeerPool extends PeerPoolApi:
   self: SnapPeerPoolState & SnapSharedState & SnapControllerEnv & CoordinatorHandles =>
 
   private[snap] def handshakedPeers: Map[com.chipprbots.ethereum.network.PeerId, PeerListSupportNg.PeerWithInfo] =
     peerListHelper.handshakedPeers
-  private[snap] def peersToDownloadFrom: Map[com.chipprbots.ethereum.network.PeerId, PeerListSupportNg.PeerWithInfo] =
+  def peersToDownloadFrom: Map[com.chipprbots.ethereum.network.PeerId, PeerListSupportNg.PeerWithInfo] =
     peerListHelper.peersToDownloadFrom
 
   // Exclusion visibility for the SNAP peer set (see snapServingPeers). Logged when the excluded set changes (at most
@@ -329,7 +333,7 @@ private[snap] trait SnapPeerPool:
     * Returns None when no qualified ETH68 peers are connected (e.g. very early in startup before any handshakes). The
     * caller falls back to the block-number proxy in that case.
     */
-  private[snap] def calibratePivotTD(pivotBlockNumber: BigInt): Option[BigInt] =
+  def calibratePivotTD(pivotBlockNumber: BigInt): Option[BigInt] =
     val genesisBlockTD: BigInt = blockchainReader
       .getChainWeightByHash(blockchainReader.genesisHeader.hash)
       .map(_.totalDifficulty.value)
