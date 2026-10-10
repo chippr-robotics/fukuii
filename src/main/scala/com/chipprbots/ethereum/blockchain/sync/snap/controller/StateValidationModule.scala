@@ -9,7 +9,6 @@ import scala.concurrent.duration.*
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController.*
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController.SyncPhase.*
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncMetrics
-import com.chipprbots.ethereum.db.storage.MptStorage
 import com.chipprbots.ethereum.domain.TrieRoot
 import com.chipprbots.ethereum.utils.ByteStringUtils.ByteStringOps
 
@@ -17,9 +16,6 @@ private[snap] trait StateValidationState:
   var validationInProgress: Boolean
   var validationGeneration: Long
   var healingValidatedRoot: Option[TrieRoot]
-
-private[snap] trait ResumeApi:
-  def getOrCreateMptStorage(pivotBlockNumber: BigInt): MptStorage
 
 private[snap] trait HealingApi:
   def triggerHealingForMissingNodes(missingNodes: Seq[ByteString]): Unit

@@ -28,10 +28,6 @@ private[snap] trait SnapFinalizationState:
   def healedCodeHashes: mutable.LinkedHashSet[ByteString]
   def chainDownloaderReplyAdapter: TypedActorRef[ChainDownloader.Done.type]
 
-private[snap] trait TaskFileSweepApi:
-  def accountsCompleteTaskFilePaths: Set[String]
-  def sweepSupersededTaskFiles(keep: Set[String], reason: String): Unit
-
 private[snap] trait HealedCodeApi:
   def dropHealedCodeNowPresent(): Unit
   def queueHealedCode(codeHashes: Seq[ByteString]): Unit

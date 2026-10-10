@@ -369,8 +369,23 @@ only when every item on the per-slice checklist below holds.
     dispatch, the healed-code helpers and `anchorPivotBeforeLazyHandoff` (M6b) stay in the core. Stub test:
     `SnapFinalizationSpec` (seven cases). Platåberget to head: **pending** (to be run by the user on the slice jar after
     merge; no node run here).
-- [ ] T046 [M5] `SnapResumePlanner`, including #1501 `runGatedReplay`. vault reviews. Run Mordor and Platåberget
+- [x] T046 [M5] `SnapResumePlanner`, including #1501 `runGatedReplay`. vault reviews. Run Mordor and Platåberget
   restarts mid-account and mid-storage.
+  - As built: a prerequisite commit makes the core's `scheduler` constructor parameter a `val` (`runGatedReplay` re-arms
+    a paused replay on it). The move commit moves the whole-member resume helpers into
+    `controller/SnapResumePlanner.scala`: `checkStorageSchemeMismatch`, `getOrCreateMptStorage`,
+    `clearStorageDoneMarkers`, `accountsCompleteTaskFilePaths`, `sweepSupersededTaskFiles`, `runGatedReplay` and
+    `deserializeSnapProgress` (`SnapFrozenFormatsGoldenSpec` finds it through the impl's hierarchy, unchanged). Narrowed
+    self-type: `SnapResumePlannerState & SnapControllerEnv`; state 3 (R14: 1; `storageDoneStorage` and `scheduler` are
+    core values reached through abstract defs, kept out of `SnapControllerEnv`, which stays at 18), Api 0 (R14a: 14).
+    `ResumeApi` and `TaskFileSweepApi` move next to their implementer (`SnapResumePlanner extends` both;
+    CQ-SNAP-016-16). **Not moved**, because each is part of the body of a member that stays: the accounts-complete
+    recovery branch of `startSnapSync` (inside its `boundary`, ending in `break(syncing())`), the resume selection in
+    `launchAccountRangeWorkers`, the `AccountRangeProgressCmd` checkpoint arm (a local of `syncing()`), and with them the
+    vars they own (`preserved*`, `launchedAccountGeneration`, `currentCarrySource`, `lastSweptForRecord`). Moving them
+    needs a carve-out of those bodies first (CQ-SNAP-016-17), like P4 for the arms. #1434 and #1503 therefore still sit
+    in `startSnapSync`. No `val` -> `lazy val` conversion. Stub test: `SnapResumePlannerSpec` (six cases). Mordor and
+    Platåberget restarts: **pending** (to be run by the user on the slice jar after merge; no node run here).
 - [ ] T047 [M6a] Dedupe the two healing spawn blocks into `healingCoordinatorArgs`. The pins from T014 and T015 must
   stay green unchanged.
 - [ ] T048 [M6b] `HealingOrchestrator`. Run a Mordor heal restart.
