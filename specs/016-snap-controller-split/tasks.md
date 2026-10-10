@@ -88,7 +88,7 @@ only when every item on the per-slice checklist below holds.
     taken over the best block of an upgraded node" (`:762`).
 
   Write both into research.md R13/R13a.
-- [ ] T003 Cut the tag `snap-split-base` on staging immediately before P1 merges (decided: spec FR-037, plan.md D6).
+- [x] T003 Cut the tag `snap-split-base` on staging immediately before P1 merges (decided: spec FR-037, plan.md D6).
   Announce it as the Sepolia hotfix base.
 
 ## Done in the spec PR (#1505)
@@ -229,12 +229,12 @@ only when every item on the per-slice checklist below holds.
 
 ## P1 — `CoordinatorHandles` (after T001)
 
-- [ ] T030 [P1] Introduce `CoordinatorHandles` (four refs; `stopAll()` with the same set and order as
+- [x] T030 [P1] Introduce `CoordinatorHandles` (four refs; `stopAll()` with the same set and order as
   `stopStateSyncChildren`; `broadcastPeerUnavailable`; `pivotRefreshed(root)`; response fan-out; `intakeBudget`
   carried into the spawn helpers) and `ChainDownloaderHandle`. Replace the copied stop/clear lines in
   `enterDormantMode`, `restartSnapSync` and `stopStateSyncChildren`, and the per-site `foreach` fan-outs. There is no
   `ctx.watch`. The heap watchdog is **not** stopped here (spec Edge Cases).
-- [ ] T031 [P1] Before/after table in the PR: every send site, its recipients and message, and their order.
+- [x] T031 [P1] Before/after table in the PR: every send site, its recipients and message, and their order.
 
 ## P2 — `PhaseFlags` + `reset(kind)` + `cancelSyncTimers`
 
