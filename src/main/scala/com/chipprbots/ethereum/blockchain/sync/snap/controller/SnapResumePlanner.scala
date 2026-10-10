@@ -1,14 +1,30 @@
 package com.chipprbots.ethereum.blockchain.sync.snap.controller
 
+import org.apache.pekko.actor.Scheduler
 import org.apache.pekko.util.ByteString
 
 import scala.concurrent.ExecutionContext
 
-import com.chipprbots.ethereum.blockchain.sync.snap.*
+import com.chipprbots.ethereum.blockchain.sync.snap.GatedTaskFileReplay
+import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController.*
+import com.chipprbots.ethereum.blockchain.sync.snap.StorageScheme
 import com.chipprbots.ethereum.db.storage.MptStorage
 import com.chipprbots.ethereum.db.storage.Namespaces
+import com.chipprbots.ethereum.db.storage.SnapStorageDoneStorage
 import com.chipprbots.ethereum.utils.Hex
+
+private[snap] trait SnapResumePlannerState:
+  var mptStorage: Option[MptStorage]
+  def storageDoneStorage: SnapStorageDoneStorage
+  def scheduler: Scheduler
+
+private[snap] trait ResumeApi:
+  def getOrCreateMptStorage(pivotBlockNumber: BigInt): MptStorage
+
+private[snap] trait TaskFileSweepApi:
+  def accountsCompleteTaskFilePaths: Set[String]
+  def sweepSupersededTaskFiles(keep: Set[String], reason: String): Unit
 
 /** SNAP resume planner (spec 016 M5, research.md R6 "Persistence / resume"): the storage-scheme guard run at start
   * (`checkStorageSchemeMismatch`), the writable trie store for the pivot (`getOrCreateMptStorage`), the storage-task
@@ -17,8 +33,8 @@ import com.chipprbots.ethereum.utils.Hex
   * and the legacy progress parser (`deserializeSnapProgress`). The core keeps the resume decisions that sit inside
   * `startSnapSync` and `launchAccountRangeWorkers` and the checkpoint arm of `syncing`; they call these members.
   */
-private[snap] trait SnapResumePlanner:
-  self: SNAPSyncControllerImpl =>
+private[snap] trait SnapResumePlanner extends ResumeApi with TaskFileSweepApi:
+  self: SnapResumePlannerState & SnapControllerEnv =>
 
   /** Guard: fail fast if the DB was written with PathScheme but config says HashScheme (or vice versa).
     *

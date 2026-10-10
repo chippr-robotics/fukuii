@@ -27,7 +27,6 @@ import com.chipprbots.ethereum.blockchain.sync.snap.controller.HealingApi
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.HeapWatchdogStart
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.LifecycleApi
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.PhaseFlags
-import com.chipprbots.ethereum.blockchain.sync.snap.controller.ResumeApi
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.ShutdownApi
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.SnapControllerEnv
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.SnapFinalization
@@ -35,10 +34,10 @@ import com.chipprbots.ethereum.blockchain.sync.snap.controller.SnapFinalizationS
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.SnapPeerPool
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.SnapPeerPoolState
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.SnapResumePlanner
+import com.chipprbots.ethereum.blockchain.sync.snap.controller.SnapResumePlannerState
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.SnapSharedState
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.StateValidationModule
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.StateValidationState
-import com.chipprbots.ethereum.blockchain.sync.snap.controller.TaskFileSweepApi
 import com.chipprbots.ethereum.consensus.engine.PoSBlockHeaderValidator
 import com.chipprbots.ethereum.db.storage.AppStateStorage
 import com.chipprbots.ethereum.db.storage.BfsQueueStorage
@@ -102,17 +101,16 @@ private class SNAPSyncControllerImpl(
     with SnapControllerEnv
     with StateValidationModule
     with StateValidationState
-    with ResumeApi
     with HealingApi
     with LifecycleApi
     with SnapPeerPool
     with SnapPeerPoolState
     with SnapFinalization
     with SnapFinalizationState
-    with TaskFileSweepApi
     with HealedCodeApi
     with ShutdownApi
-    with SnapResumePlanner:
+    with SnapResumePlanner
+    with SnapResumePlannerState:
 
   import SNAPSyncController.*
   import SyncPhase.*
@@ -267,7 +265,7 @@ private class SNAPSyncControllerImpl(
   // Writable MptStorage, lazily created when pivot block number is known.
   // Uses getBackingStorage(pivotBlockNumber) to ensure nodes are tagged with the
   // correct block number for proper reference counting in pruning modes.
-  private[snap] var mptStorage: Option[MptStorage] = None
+  var mptStorage: Option[MptStorage] = None
 
   // PathScheme: create PathNodeStorage backed by the same RocksDB data source as flat storage.
   // None for HashScheme (default/ETC). Shared across coordinator restarts (data source is long-lived).
@@ -280,7 +278,7 @@ private class SNAPSyncControllerImpl(
   // with each finished account's last flat slots; read on a resume so only unfinished storage tasks are re-queued.
   // Scoped to one SNAP cycle — cleared when the account phase starts without carried task files and when the storage
   // phase completes. See SnapStorageDoneStorage for exactly what a marker guarantees in each mode.
-  private[snap] val storageDoneStorage = new SnapStorageDoneStorage(flatSlotStorage.dataSource)
+  val storageDoneStorage: SnapStorageDoneStorage = new SnapStorageDoneStorage(flatSlotStorage.dataSource)
 
   // Markers are recorded only where a marker's claim holds once written: under Hash scheme + building the trie during
   // the download (deferredMerkleization = false) + cached ("inmemory") pruning, storage trie nodes go through
