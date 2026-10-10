@@ -12,6 +12,7 @@ import com.chipprbots.ethereum.blockchain.sync.PeerListSupportNg
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController.*
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor
+import com.chipprbots.ethereum.network.Peer
 import com.chipprbots.ethereum.network.p2p.messages.Capability
 import com.chipprbots.ethereum.utils.Hex
 
@@ -21,6 +22,10 @@ private[snap] trait PeerPoolApi:
 
 private[snap] trait HandshakedPeersApi:
   def handshakedPeers: Map[com.chipprbots.ethereum.network.PeerId, PeerListSupportNg.PeerWithInfo]
+
+private[snap] trait BootstrapPeersApi:
+  def handleHandshakedPeersBootstrapReactivity(peers: Map[Peer, NetworkPeerManagerActor.PeerInfo]): Unit
+  def evictNonSnapPeers(): Unit
 
 private[snap] trait SnapServerPeersApi:
   def snapServingPeers(): List[com.chipprbots.ethereum.network.Peer]
@@ -41,7 +46,11 @@ private[snap] trait SnapPeerPoolState:
   * (`calibratePivotTD`). The core keeps the dispatch: `peerEventArms`, the reactivity arm of `bootstrapping` and the
   * peer-tick arms of `commonSyncingArms` call these members.
   */
-private[snap] trait SnapPeerPool extends PeerPoolApi with SnapServerPeersApi with HandshakedPeersApi:
+private[snap] trait SnapPeerPool
+    extends PeerPoolApi
+    with SnapServerPeersApi
+    with HandshakedPeersApi
+    with BootstrapPeersApi:
   self: SnapPeerPoolState & SnapSharedState & SnapControllerEnv & CoordinatorHandles =>
 
   def handshakedPeers: Map[com.chipprbots.ethereum.network.PeerId, PeerListSupportNg.PeerWithInfo] =
@@ -126,7 +135,7 @@ private[snap] trait SnapPeerPool extends PeerPoolApi with SnapServerPeersApi wit
     * arrive during the bootstrapping state. Without this, the node waits for the full exponential backoff timer (up to
     * 60s) even though peers are already available. Core-geth starts syncing within 200ms of first peer — we should too.
     */
-  private[snap] def handleHandshakedPeersBootstrapReactivity(
+  def handleHandshakedPeersBootstrapReactivity(
       peers: Map[com.chipprbots.ethereum.network.Peer, com.chipprbots.ethereum.network.NetworkPeerManagerActor.PeerInfo]
   ): Unit =
     val hadSnapPeers = handshakedPeers.values.exists(_.peerInfo.remoteStatus.supportsSnap)
@@ -209,7 +218,7 @@ private[snap] trait SnapPeerPool extends PeerPoolApi with SnapServerPeersApi wit
     * actively disconnects the oldest non-SNAP outgoing peers to free connection slots, allowing discovery to fill them
     * with SNAP-capable peers.
     */
-  private[snap] def evictNonSnapPeers(): Unit =
+  def evictNonSnapPeers(): Unit =
     val allPeers = handshakedPeers.values.toSeq
     val snapPeerCount = allPeers.count(_.peerInfo.remoteStatus.supportsSnap)
     val nonSnapOutgoing = allPeers

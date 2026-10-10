@@ -21,6 +21,7 @@ import com.chipprbots.ethereum.blockchain.sync.Blacklist
 import com.chipprbots.ethereum.blockchain.sync.PeerListHelper
 import com.chipprbots.ethereum.blockchain.sync.PeerListSupportNg
 import com.chipprbots.ethereum.blockchain.sync.SyncProtocol
+import com.chipprbots.ethereum.blockchain.sync.snap.controller.AccountRangeStartApi
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.ByteCodeRequestApi
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.ChildFactories
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.CoordinatorHandles
@@ -30,8 +31,8 @@ import com.chipprbots.ethereum.blockchain.sync.snap.controller.HeapWatchdogStart
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.LifecycleApi
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.PhaseFlags
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.PivotRefreshApi
-import com.chipprbots.ethereum.blockchain.sync.snap.controller.PivotSelectionApi
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.PivotSelector
+import com.chipprbots.ethereum.blockchain.sync.snap.controller.PivotSelectorState
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.ShutdownApi
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.SnapControllerEnv
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.SnapFinalization
@@ -41,10 +42,12 @@ import com.chipprbots.ethereum.blockchain.sync.snap.controller.SnapPeerPoolState
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.SnapResumePlanner
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.SnapResumePlannerState
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.SnapSharedState
+import com.chipprbots.ethereum.blockchain.sync.snap.controller.SnapStartApi
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.StagnationWatchdog
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.StagnationWatchdogState
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.StateValidationModule
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.StateValidationState
+import com.chipprbots.ethereum.blockchain.sync.snap.controller.SyncingApi
 import com.chipprbots.ethereum.consensus.engine.PoSBlockHeaderValidator
 import com.chipprbots.ethereum.db.storage.AppStateStorage
 import com.chipprbots.ethereum.db.storage.CachedReferenceCountedStateStorage
@@ -113,11 +116,14 @@ private class SNAPSyncControllerImpl(
     with PivotRefreshApi
     with HealingOrchestrator
     with HealingOrchestratorState
-    with PivotSelectionApi
     with ByteCodeRequestApi
     with StagnationWatchdog
     with StagnationWatchdogState
-    with PivotSelector:
+    with PivotSelector
+    with PivotSelectorState
+    with SnapStartApi
+    with SyncingApi
+    with AccountRangeStartApi:
 
   import SNAPSyncController.*
   import SyncPhase.*
@@ -258,7 +264,7 @@ private class SNAPSyncControllerImpl(
               )
           }
 
-  private[snap] val bigIntReverseOrdering: Ordering[BigInt] = Ordering[BigInt].reverse
+  val bigIntReverseOrdering: Ordering[BigInt] = Ordering[BigInt].reverse
 
   // SNAP download progress storage (namespace 'p'). Shares the same RocksDB DataSource as
   // AppStateStorage but uses a dedicated namespace so progress survives crash-restart without
@@ -323,7 +329,7 @@ private class SNAPSyncControllerImpl(
   // Minimum pivot block enforced when re-entering SNAP from a RegularSyncStuck escape.
   // Prevents re-selecting the same pivot that caused the regular-sync stall.
   private var minPivotHint: BigInt = BigInt(0)
-  private[snap] var clHintArrivedAtMs: Option[Long] = None
+  var clHintArrivedAtMs: Option[Long] = None
 
   // Captured once at construction. ETC mainnet has TTD=None and never goes down the
   // CL-driven path; Sepolia/mainnet have TTD set and switch off TD-based pivot entirely.
@@ -423,10 +429,7 @@ private class SNAPSyncControllerImpl(
   private var bytecodesEstimatedTotal: Long = 0L
 
   // Retry counter for bootstrap-to-SNAP transition (exponential backoff: 2s→60s cap, max 10 retries)
-  private[snap] var bootstrapRetryCount: Int = 0
-  private[snap] val BootstrapRetryBaseDelay = 2.seconds
-  private[snap] val BootstrapRetryMaxDelay = 60.seconds
-  private[snap] val MaxBootstrapRetries = 10
+  var bootstrapRetryCount: Int = 0
 
   // Pivot restart guard (prevents noisy rapid restarts if peer head fluctuates)
   var lastPivotRestartMs: Long = 0L
@@ -657,7 +660,7 @@ private class SNAPSyncControllerImpl(
     * this function. `syncing` consults it only after its path-publish and header-hold guards, exactly where the copies
     * stood. `completed` and `completedWithBackfill` do not use it.
     */
-  private[snap] lazy val peerEventArms: PartialFunction[Command, Behavior[Command]] = {
+  lazy val peerEventArms: PartialFunction[Command, Behavior[Command]] = {
     case WrappedHandshakedPeers(peers) =>
       handleHandshakedPeersRateTracking(peers); Behaviors.same
     case WrappedPeerDisconnected(peerId) =>
@@ -1761,7 +1764,7 @@ private class SNAPSyncControllerImpl(
         currentPhase = StateHealing
         startStateHealing()
 
-  private[snap] def startSnapSync(): Behavior[Command] =
+  def startSnapSync(): Behavior[Command] =
     import scala.util.boundary, boundary.break
     boundary[Behavior[Command]] {
       // Start evicting non-SNAP peers immediately to make room for SNAP-capable peers.
@@ -2604,7 +2607,7 @@ private class SNAPSyncControllerImpl(
         onStop(); Behaviors.same
       }
 
-  private[snap] def startAccountRangeSync(rootHash: TrieRoot): Unit =
+  def startAccountRangeSync(rootHash: TrieRoot): Unit =
     // Before starting workers, check if any connected peer supports the snap/1 protocol.
     // If no peers support snap, the workers will send requests that are silently ignored,
     // stalling sync until the 3-minute stagnation watchdog fires. Instead, check upfront

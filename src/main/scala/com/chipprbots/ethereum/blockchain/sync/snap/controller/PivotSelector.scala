@@ -7,14 +7,37 @@ import org.apache.pekko.actor.typed.scaladsl.Behaviors
 import scala.concurrent.duration.*
 
 import com.chipprbots.ethereum.blockchain.sync.SyncProtocol
-import com.chipprbots.ethereum.blockchain.sync.snap.*
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController.*
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController.SyncPhase.*
+import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncMetrics
+import com.chipprbots.ethereum.blockchain.sync.snap.SyncProgress
 import com.chipprbots.ethereum.consensus.engine.PoSBlockHeaderValidator
 import com.chipprbots.ethereum.domain.BlockHeader
 import com.chipprbots.ethereum.domain.ChainWeight
+import com.chipprbots.ethereum.domain.TrieRoot
 import com.chipprbots.ethereum.utils.BlockchainConfig
 import com.chipprbots.ethereum.utils.ByteStringUtils.ByteStringOps
+
+private[snap] trait PivotSelectionApi:
+  def currentNetworkBestFromSnapPeers(): Option[BigInt]
+
+private[snap] trait SnapStartApi:
+  def startSnapSync(): Behavior[Command]
+
+private[snap] trait SyncingApi:
+  def syncing(): Behavior[Command]
+
+private[snap] trait AccountRangeStartApi:
+  def startAccountRangeSync(rootHash: TrieRoot): Unit
+
+private[snap] trait PivotSelectorState:
+  var clPivotHint: Option[CLPivotHint]
+  var clHintArrivedAtMs: Option[Long]
+  var bootstrapRetryCount: Int
+  def isPoSChain: Boolean
+  def bigIntReverseOrdering: Ordering[BigInt]
+  def BootstrapCheckKey: String
+  def peerEventArms: PartialFunction[Command, Behavior[Command]]
 
 /** SNAP pivot selection (spec 016 M8, research.md R6 "Pivot selection + refresh" (a)): the `bootstrapping` behaviour
   * (the pivot-header bootstrap's completion, failure and retry, with the freshness check against the SNAP peers' best
@@ -25,8 +48,13 @@ import com.chipprbots.ethereum.utils.ByteStringUtils.ByteStringOps
   * selection; CQ-SNAP-016-22) and the dispatch: the `Start` and `MinPivotBlock` arms of `idle`, the `CLPivotHint` arm
   * of `peerEventArms` and the `RetryBootstrapAtBlock` arm of `commonSyncingArms`.
   */
-private[snap] trait PivotSelector:
-  self: SNAPSyncControllerImpl =>
+private[snap] trait PivotSelector extends PivotSelectionApi:
+  self: PivotSelectorState & SnapSharedState & SnapControllerEnv & PhaseFlags & PeerPoolApi & HandshakedPeersApi &
+    BootstrapPeersApi & HealingApi & LifecycleApi & ShutdownApi & SnapStartApi & SyncingApi & AccountRangeStartApi =>
+
+  private lazy val BootstrapRetryBaseDelay = 2.seconds
+  private lazy val BootstrapRetryMaxDelay = 60.seconds
+  private lazy val MaxBootstrapRetries = 10
 
   def bootstrapping(): Behavior[Command] =
     Behaviors
