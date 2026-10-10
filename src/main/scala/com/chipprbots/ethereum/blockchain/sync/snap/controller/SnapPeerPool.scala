@@ -1,15 +1,27 @@
 package com.chipprbots.ethereum.blockchain.sync.snap.controller
 
+import org.apache.pekko.actor.typed.ActorRef as TypedActorRef
 import org.apache.pekko.util.ByteString
 
+import scala.collection.mutable
 import scala.concurrent.duration.*
 import scala.util.Try
 
+import com.chipprbots.ethereum.blockchain.sync.PeerListHelper
 import com.chipprbots.ethereum.blockchain.sync.PeerListSupportNg
-import com.chipprbots.ethereum.blockchain.sync.snap.*
+import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController.*
+import com.chipprbots.ethereum.network.NetworkPeerManagerActor
 import com.chipprbots.ethereum.network.p2p.messages.Capability
 import com.chipprbots.ethereum.utils.Hex
+
+private[snap] trait SnapPeerPoolState:
+  def peerListHelper: PeerListHelper
+  def handshakedPeersAdapter: TypedActorRef[NetworkPeerManagerActor.HandshakedPeers]
+  var bestEth68PeerForCalibration: Option[(BigInt, BigInt)]
+  var snapPeerEvictionStarted: Boolean
+  var snapServerPeersSchedulerStarted: Boolean
+  def BootstrapCheckKey: String
 
 /** The SNAP peer pool (spec 016 M3, research.md R6 "Peer tracking / eviction"): the handshaked-peer view
   * (`handshakedPeers`, `peersToDownloadFrom`, `snapServingPeers` with its `[SNAP-PEERS]` exclusion log), the peer-list
@@ -19,7 +31,7 @@ import com.chipprbots.ethereum.utils.Hex
   * peer-tick arms of `commonSyncingArms` call these members.
   */
 private[snap] trait SnapPeerPool:
-  self: SNAPSyncControllerImpl =>
+  self: SnapPeerPoolState & SnapSharedState & SnapControllerEnv & CoordinatorHandles =>
 
   private[snap] def handshakedPeers: Map[com.chipprbots.ethereum.network.PeerId, PeerListSupportNg.PeerWithInfo] =
     peerListHelper.handshakedPeers
@@ -83,6 +95,7 @@ private[snap] trait SnapPeerPool:
   // Prevents a burst of TCP failures (e.g. 15 in 33 s) from draining all coordinator task queues
   // simultaneously, which would deplete the peer pool and trigger a cascade pivot refresh.
   private var pendingDisconnectedPeers: Set[String] = Set.empty
+  private lazy val DisconnectFlushKey = "disconnect-flush"
 
   // Eviction-churn guard: if eviction keeps firing without the snap-peer count ever rising, the network simply has no
   // more snap peers to find — continuing to evict non-snap peers every cycle only thrashes discovery slots (the "Too
@@ -90,6 +103,7 @@ private[snap] trait SnapPeerPool:
   // when the snap count actually improves.
   private var fruitlessEvictionCycles: Int = 0
   private var lastEvictionSnapCount: Int = -1
+  private lazy val MaxFruitlessEvictionCycles: Int = 5
 
   // C1: the two former `.orElse` peer-list partials become explicit private helper methods,
   // invoked from each behavior's match arms for WrappedHandshakedPeers / WrappedPeerDisconnected /
@@ -266,6 +280,11 @@ private[snap] trait SnapPeerPool:
           .map(p => (p, "snap-server-peer"))
       else None
     localPeer.orElse(getSnapPeerWithHighestBlock.map(p => (p, "external")))
+
+  // Suppress duplicate ConnectToPeer for snap-server-peers for 60s after a send attempt.
+  // Prevents the race where the reconnect timer fires within the 5s peersScanInterval
+  // window after STATUS_EXCHANGE completes (peer in ETH handshake but not yet in handshakedPeers).
+  private lazy val snapServerPeerLastConnectAttemptMs: mutable.Map[String, Long] = mutable.Map.empty
 
   /** Reconnect to any configured snap-server-peers that are not currently connected.
     *

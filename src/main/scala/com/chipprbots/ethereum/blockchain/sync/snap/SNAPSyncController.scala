@@ -29,6 +29,7 @@ import com.chipprbots.ethereum.blockchain.sync.snap.controller.PhaseFlags
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.ResumeApi
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.SnapControllerEnv
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.SnapPeerPool
+import com.chipprbots.ethereum.blockchain.sync.snap.controller.SnapPeerPoolState
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.SnapSharedState
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.StateValidationModule
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.StateValidationState
@@ -100,7 +101,8 @@ private class SNAPSyncControllerImpl(
     with ResumeApi
     with HealingApi
     with LifecycleApi
-    with SnapPeerPool:
+    with SnapPeerPool
+    with SnapPeerPoolState:
 
   import SNAPSyncController.*
   import SyncPhase.*
@@ -219,8 +221,7 @@ private class SNAPSyncControllerImpl(
 
   // ── Timer keys (Behaviors.withTimers; replaces the Classic Cancellable fields) ───────────────
   // Recurring keys reuse the Command case object itself; one-shot keys are string literals.
-  private[snap] val BootstrapCheckKey = "bootstrap-check"
-  private[snap] val DisconnectFlushKey = "disconnect-flush"
+  val BootstrapCheckKey = "bootstrap-check"
   private val PivotBootstrapRetryKey = "pivot-bootstrap-retry"
   private val SnapCapabilityCheckKey = "snap-capability-check"
   private val DormantWakeUpKey = "dormant-wakeup"
@@ -236,7 +237,7 @@ private class SNAPSyncControllerImpl(
   // Typed-compatible peer-list management (Group PLN), replacing the Classic PeerListSupportNg mixin.
   // The handshaked-peers poll (PollHandshakedPeers timer) and the PeerDisconnected bridge live in the
   // behaviors; bestEth68PeerForCalibration tracking is preserved via the onPeerListUpdated override.
-  private[snap] val peerListHelper: PeerListHelper =
+  val peerListHelper: PeerListHelper =
     new PeerListHelper(
       peerEventBus,
       blacklist,
@@ -560,24 +561,19 @@ private class SNAPSyncControllerImpl(
   // false, so firing after StateHealing starts cannot spend the heal budget on a stalled CL. Consulted on PoS only.
   private var retryRefreshCounts: Boolean = false
   private val MaxHealRepegNoRootAttempts: Int = 10 // 10 × 30s ≈ 5 min of no servable root before the lazy handoff
-  // Suppress duplicate ConnectToPeer for snap-server-peers for 60s after a send attempt.
-  // Prevents the race where the reconnect timer fires within the 5s peersScanInterval
-  // window after STATUS_EXCHANGE completes (peer in ETH handshake but not yet in handshakedPeers).
-  private[snap] val snapServerPeerLastConnectAttemptMs: mutable.Map[String, Long] = mutable.Map.empty
   // Tracks whether the SNAP peer eviction recurring timer is active (replaces the snapPeerEvictionTask
   // Cancellable). startSnapPeerEviction() is idempotent — it only starts the timer once per session.
-  private[snap] var snapPeerEvictionStarted: Boolean = false
+  var snapPeerEvictionStarted: Boolean = false
   // Tracks whether the snap-server-peers reconnect timer is active (replaces the snapServerPeersScheduler
   // Cancellable presence check). Reset on stopSnapOnlySchedules so a later phase can restart it.
-  private[snap] var snapServerPeersSchedulerStarted: Boolean = false
-  private[snap] val MaxFruitlessEvictionCycles: Int = 5
+  var snapServerPeersSchedulerStarted: Boolean = false
 
   // Best ETH68 peer (TD, maxBlockNumber) seen at any point during this SNAP session.
   // Preserved across peer disconnects so calibratePivotTD can use it at finalization even
   // if those peers have long since disconnected. Only updated when maxBlockNumber > 0
   // (eager probe has fired) — guards against the ETH68_BOOTSTRAP inflation pattern where
   // peerTD used directly without knowing peerBlock.
-  private[snap] var bestEth68PeerForCalibration: Option[(BigInt, BigInt)] = None
+  var bestEth68PeerForCalibration: Option[(BigInt, BigInt)] = None
 
   // Storage stagnation watchdog: if storage stops advancing while tasks remain, repivot/restart.
   // This addresses the common case where peers no longer serve the chosen pivot/state window.
@@ -654,7 +650,7 @@ private class SNAPSyncControllerImpl(
   /** OQ-3: ask NetworkPeerManagerActor for the current handshaked peers; the reply (`HandshakedPeers`) is bridged back
     * into the Command ADT via a Typed message adapter.
     */
-  private[snap] val handshakedPeersAdapter: org.apache.pekko.actor.typed.ActorRef[
+  val handshakedPeersAdapter: org.apache.pekko.actor.typed.ActorRef[
     com.chipprbots.ethereum.network.NetworkPeerManagerActor.HandshakedPeers
   ] =
     ctx
