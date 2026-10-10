@@ -494,6 +494,130 @@ commands imported from Messages.scala.
 * Gaps: `MinPivotBlock` is handled ONLY in idle (L811) — dropped silently in syncing/bootstrapping/dormant (relevant to #1434 because `belowEscalationHint` reads `minPivotHint`, L2610). `Start` only in idle; `RetrySnapSyncStart` only in bootstrapping; `DormantWakeUp` only in dormantRetry. `completed` (L2534) ignores everything but status/progress and `PostStop`.
 * Stale-generation guards duplicated in syncing for validation (L1871–1883) and coordinators (`AccountRangeProgressCmd.generation`, L1175).
 
+### R4b. [016] T036: `syncing` arm order (input to P4a–e)
+
+Read on `staging@89a3b46b7` (after P3), before P4a. `syncing` has **75 arms**. Arms are numbered in source order
+(`#`), with the staging line, the pattern, the dispatch guard (the `if` in the `case`), and any `currentPhase` test
+inside the body. P4 moves only **dispatch** guards; a body-level test leaves the arm "Handled" in every phase, so it
+is not a dispatch decision.
+
+**The invariant each P4 slice proves.** For every Command and every value of `currentPhase`, the first arm that
+matches after the slice is the same arm as before. Order matters only between arms that can match the same message:
+the type-pattern arms of that Command, the two guarded wildcards (#4, #6), the `peerEventArms` delegation (#7) and the
+catch-all (#75).
+
+**Dispatch after P4a** (`SNAPSyncController.syncing`):
+
+1. `syncingGuardArms`: arms #1–#7, verbatim and in order (a local `val` in `syncing`).
+2. `phaseArms(currentPhase)`: one partial function per phase (class members). After P4a only `accountRangeArms`
+   exists; every other phase maps to `PartialFunction.empty`.
+3. `commonSyncingArms`: every other arm, in its original order (a local `val` in `syncing`).
+4. The catch-all `unhandledInSyncing` ("Unhandled message in syncing state: $msg", DEBUG), unchanged text.
+
+The prefix (step 1) is needed because #4 and #6 match any message while a path publish or a header hold is active.
+A phase arm placed ahead of them would take messages the guards drop today. D3's formula
+`phaseArms orElse commonSyncingArms orElse catchAll` is therefore read as "guard arms, then phase arms, then common
+arms, then catch-all".
+
+| # | Line | Pattern | Dispatch guard | Body-level phase test | After P4a | Planned |
+|---|---|---|---|---|---|---|
+| 1 | L1056 | `PathPublishProgress` | — | — | guard arms | guard arms |
+| 2 | L1059 | `PathPublishDone` | — | — | guard arms | guard arms |
+| 3 | L1061 | `PathPublishFailed` | — | — | guard arms | guard arms |
+| 4 | L1066 | `msg` (any) | `pathPublish.isDefined`, not `GetStatus`/`GetProgress` | — | guard arms | guard arms |
+| 5 | L1069 | `HeaderHoldTick` | — | — | guard arms | guard arms |
+| 6 | L1073 | `msg` (any) | `headerHold.isDefined`, not `GetStatus`/`GetProgress`/`ChainDownloaderProgress`/`ChainDownloaderDone` | — | guard arms | guard arms |
+| 7 | L1082 | `msg` (delegation: `WrappedHandshakedPeers`, `WrappedPeerDisconnected`, `FlushPeerDisconnects`, `PollHandshakedPeers`, `CLPivotHint`, `GetProgress`) | `peerEventArms.isDefinedAt(msg)` | — | guard arms | guard arms |
+| 8 | L1086 | `TuneRateTracker` | — | — | common | common |
+| 9 | L1091 | `EvictNonSnapPeers` | — | — | common | common |
+| 10 | L1096 | `DelayedRestart` | — | `AccountRangeSync \|\| ByteCodeAndStorageSync` → restart, else same | common | common (body-level) |
+| 11 | L1101 | `CheckSnapCapability` | — | — | common | common |
+| 12 | L1115 | `RequestAccountRanges` | — | — | common | common |
+| 13 | L1119 | `RequestByteCodes` | — | — | common | common |
+| 14 | L1123 | `RequestStorageRanges` | — | — | common | common |
+| 15 | L1127 | `RequestTrieNodeHealing` | — | `StateHealing` → request + serve-root check | common | common (body-level) |
+| 16 | L1146 | `HealingServeRoot` | — | — | common | common |
+| 17 | L1175 | `EnsureSnapServerPeersConnected` | — | — | common | common |
+| 18 | L1180 | `AccountRangeResponse` | — | — | common | common |
+| 19 | L1223 | `ByteCodesResponse` | — | — | common | common |
+| 20 | L1230 | `StorageRangesResponse` | — | — | common | common |
+| 21 | L1237 | `TrieNodesResponse` | — | `!= StateValidation` → forward | common | common (body-level) |
+| 22 | L1247 | `ProgressAccountsSynced` | — | — | common | common |
+| 23 | L1264 | `AccountRangeProgressCmd` | — | — | common | common |
+| 24 | L1320 | `ProgressAccountsFinalizingTrie` | — | — | common | common |
+| 25 | L1327 | `AccountTrieFinalized` | — | — | common | common |
+| 26 | L1338 | `ProgressAccountsTrieFinalized` | — | — | common | common |
+| 27 | L1343 | `AccountTrieFinalizationFailed` | — | — | common | common |
+| 28 | L1351 | `ProgressBytecodesDownloaded` | — | — | common | common |
+| 29 | L1356 | `ProgressStorageSlotsSynced` | — | — | common | common |
+| 30 | L1366 | `ProgressNodesHealed` | — | — | common | common |
+| 31 | L1370 | `ProgressAccountEstimate` | — | — | common | common |
+| 32 | L1374 | `ProgressStorageContracts` | — | — | common | common |
+| 33 | L1383 | `StorageBackpressureChanged` | — | — | common | common |
+| 34 | L1389 | `ByteCodeBackpressureChanged` | — | — | common | common |
+| 35 | L1396 | `PivotStateUnservable` | — | `AccountRangeSync \|\| ByteCodeAndStorageSync` (twice, interleaved with the debounce and cause tests), else log | common | common (body-level) |
+| 36 | L1482 | `BootstrapComplete` | `pendingPivotRefresh.isDefined` (flag) | — | common | common |
+| 37 | L1498 | `PivotBootstrapFailed` | `pendingPivotRefresh.isDefined` (flag) | — | common | common |
+| 38 | L1518 | `PivotProbeTimeout` | — | — | common | common |
+| 39 | L1542 | `RetryPivotRefresh` | — | `AccountRangeSync \|\| ByteCodeAndStorageSync \|\| StateHealing` → refresh, else log | common | common (body-level) |
+| 40 | L1555 | `RetryBootstrapAtBlock` | — | same three phases → bootstrap, else log | common | common (body-level) |
+| 41 | L1572 | `IncrementalContractData` | — | — | common | common |
+| 42 | L1604 | `AccountRangeSyncComplete` | — | — (writes `currentPhase`) | common | common |
+| 43 | L1694 | `HealedCodeHashes` | — | — | common | common |
+| 44 | L1700 | `ByteCodeSyncComplete` | `bytecodePhaseComplete && awaitingHealedCode` (flag) | — | common | common |
+| 45 | L1708 | `HealedCodeWaitTimeout` | `awaitingHealedCode` (flag) | — | common | common |
+| 46 | L1719 | `ByteCodeSyncComplete` | `!bytecodePhaseComplete` (flag) | — | common | common |
+| 47 | L1739 | `StorageRangeSyncComplete` | `!storagePhaseComplete` (flag) | — | common | common |
+| 48 | L1750 | `StorageRangeSyncForceCompleted` | `!storagePhaseComplete` (flag) | `ByteCodeAndStorageSync \|\| StateHealing` → force-complete, else warn | common | common (body-level) |
+| 49 | L1767 | `HealingAllPeersStateless` | `currentPhase == StateHealing` | — | common | `stateHealingArms` (P4c) |
+| 50 | L1792 | `HealingStagnated` | `currentPhase == StateHealing` | — | common | `stateHealingArms` (P4c) |
+| 51 | L1810 | `StateHealingComplete` | — | `StateHealing` (Path scheme only) | common | common (body-level; unguarded on the Hash scheme) |
+| 52 | L1848 | `StateHealingAbandoned` | `currentPhase == StateHealing` | — | common | `stateHealingArms` (P4c) |
+| 53 | L1857 | `HealingRootUnservable` | `currentPhase == StateHealing` | — | common | `stateHealingArms` (P4c) |
+| 54 | L1880 | `TrieWalkBatch` | `currentPhase == StateHealing` | — | common | `stateHealingArms` (P4c) |
+| 55 | L1889 | `TrieWalkComplete` | `currentPhase == StateHealing` | — (writes `currentPhase`) | common | `stateHealingArms` (P4c) |
+| 56 | L1916 | `TrieWalkResult` | `currentPhase == StateHealing` | — (writes `currentPhase`) | common | `stateHealingArms` (P4c) |
+| 57 | L1945 | `ScheduledTrieWalk` | `currentPhase == StateHealing` | — | common | `stateHealingArms` (P4c) |
+| 58 | L1949 | `TrieWalkFailed` | `currentPhase == StateHealing` | — | common | `stateHealingArms` (P4c) |
+| 59 | L1956 | `StateValidationComplete` | — | — | common | common |
+| 60 | L1965 | `ValidateAccountTrieResult` | `gen != validationGeneration` (generation) | — | common | **ahead of** `stateValidationArms` (P4d; see note 1) |
+| 61 | L1969 | `ValidateStorageTriesResult` | `gen != validationGeneration` (generation) | — | common | **ahead of** `stateValidationArms` (P4d; note 1) |
+| 62 | L1973 | `ValidationRetry` | `retryGen != validationGeneration` (generation) | — | common | **ahead of** `stateValidationArms` (P4d; note 1) |
+| 63 | L1980 | `ValidateAccountTrieResult(_, Right, _)` | `currentPhase == StateValidation` | — | common | `stateValidationArms` (P4d) |
+| 64 | L1995 | `ValidateAccountTrieResult(_, Left, _)` | `currentPhase == StateValidation` | — (writes `currentPhase`) | common | `stateValidationArms` (P4d) |
+| 65 | L2033 | `ValidateStorageTriesResult(_, Right, _)` | `currentPhase == StateValidation` | — | common | `stateValidationArms` (P4d) |
+| 66 | L2047 | `ValidateStorageTriesResult(_, Left, _)` | `currentPhase == StateValidation` | — (writes `currentPhase`) | common | `stateValidationArms` (P4d) |
+| 67 | L2055 | `ValidationRetry` | `currentPhase == StateValidation` | — | common | `stateValidationArms` (P4d) |
+| 68 | L2062 | `CheckDownloadStagnation` | — | three tests plus a `currentPhase match` choosing which coordinators to ask | common | common (body-level) |
+| 69 | L2149 | `AccountCoordinatorProgress` | `currentPhase == AccountRangeSync` | — | **`accountRangeArms`** | `accountRangeArms` (P4a, done) |
+| 70 | L2154 | `StorageCoordinatorProgress` | `currentPhase == ByteCodeAndStorageSync` | — | common | `byteCodeAndStorageArms` (P4b) |
+| 71 | L2163 | `ByteCodeCoordinatorProgress` | `currentPhase == ByteCodeAndStorageSync` | — | common | `byteCodeAndStorageArms` (P4b) |
+| 72 | L2172 | `ChainDownloaderProgress` | — | — | common | common |
+| 73 | L2176 | `ChainDownloaderDone` | — | — | common | common |
+| 74 | L2181 | `GetStatus` | — | — | common | common |
+| 75 | L2185 | `msg` (catch-all) | — | — | `unhandledInSyncing` | `unhandledInSyncing` |
+
+**Commands with more than one arm** (the cases where order inside a Command matters): `ByteCodeSyncComplete` (#44
+then #46, flag guards, both common), `ValidateAccountTrieResult` (#60, #63, #64), `ValidateStorageTriesResult` (#61,
+#65, #66), `ValidationRetry` (#62, #67). Every Command can also be taken by #4 or #6 (except the ones they exempt) and
+by #75. The six `peerEventArms` types have no arm outside #7.
+
+**Notes for the later slices.**
+
+1. **P4d: the generation drops come first.** #60–#62 are unguarded by phase and sit **before** the
+   `StateValidation` arms #63–#67. With phase arms ahead of common arms, a stale-generation result in
+   `StateValidation` would reach #63/#64 instead of being dropped. P4d must place #60–#62 ahead of
+   `stateValidationArms`: either at the end of the guard arms, or first inside `stateValidationArms` **and** still in
+   common for the other phases. T027's "(stale gen)" samples in the `StateValidation` column are the oracle.
+2. **Body-level phase tests stay in their arm.** #10, #15, #21, #35, #39, #40, #48, #51 and #68 test `currentPhase`
+   inside the body; T027 sees all of them as `Handled` in every phase, so it cannot tell whether a lifted test still
+   picks the same branch. Splitting them into per-phase arms is a body change without an arm-order oracle. P4a leaves
+   them in common; P4e decides, with a body-level oracle (T021/T022 or a new test) if it lifts any.
+3. **P4e: `ChainDownloadCompletion` has no arms.** No `syncing` arm is guarded on it, and no code assigns it
+   (CQ-SNAP-016-9). Its function would be empty.
+4. **Three arms write `currentPhase` while running** (#42, #55/#56, #64/#66). The phase is read once per message,
+   before dispatch, as the old guards were, so a phase written by one message affects only the next.
+
 ## R5. Child-actor and worker ownership
 
 Controller-owned typed refs (all `var Option[ActorRef]`): `accountRangeCoordinator` L260, `bytecodeCoordinator` L263, `storageRangeCoordinator` L265, `trieNodeHealingCoordinator` L268, `chainDownloader` L272. Workers (AccountRangeWorker, ByteCodeWorker, StorageRangeWorker, TrieNodeHealingWorker) are spawned by their coordinators, never by the controller. No `ctx.watch`; supervision via `Behaviors.supervise` at each spawn.
