@@ -514,9 +514,14 @@ catch-all (#75).
    `ByteCodeAndStorageSync`: #70 `StorageCoordinatorProgress` and #71 `ByteCodeCoordinatorProgress`, in that order,
    guards dropped, bodies unchanged. **P4c** adds `stateHealingArms` for `StateHealing`: #49, #50 and #52–#58, in
    that order, guards dropped, bodies and comments unchanged. #51 `StateHealingComplete` (body-level test) stays in
-   common, between the two placeholder comments. The "After P4a" column is not edited; the "Planned" column marks
+   common, between the two placeholder comments. **P4d** adds `stateValidationArms` for `StateValidation`:
+   `staleValidationDropArms` (#60–#62 verbatim, generation guards kept) **then** `stateValidationResultArms` (#63–#67,
+   phase guards dropped). Because #60–#62 have no phase guard, `commonSyncingArms` also keeps a delegation arm
+   (`case msg if staleValidationDropArms.isDefinedAt(msg)`) where #60–#62 stood, so the drops still run in every
+   other phase (note 1). The "After P4a" column is not edited; the "Planned" column marks
    each slice's arms done.
-3. `commonSyncingArms`: every other arm, in its original order (a local `val` in `syncing`).
+3. `commonSyncingArms`: every other arm, in its original order (a local `val` in `syncing`); since P4d, #60–#62 are
+   reached there through the `staleValidationDropArms` delegation.
 4. The catch-all `unhandledInSyncing` ("Unhandled message in syncing state: $msg", DEBUG), unchanged text.
 
 The prefix (step 1) is needed because #4 and #6 match any message while a path publish or a header hold is active.
@@ -585,14 +590,14 @@ arms, then catch-all".
 | 57 | L1945 | `ScheduledTrieWalk` | `currentPhase == StateHealing` | — | common | `stateHealingArms` (P4c, done) |
 | 58 | L1949 | `TrieWalkFailed` | `currentPhase == StateHealing` | — | common | `stateHealingArms` (P4c, done) |
 | 59 | L1956 | `StateValidationComplete` | — | — | common | common |
-| 60 | L1965 | `ValidateAccountTrieResult` | `gen != validationGeneration` (generation) | — | common | **ahead of** `stateValidationArms` (P4d; see note 1) |
-| 61 | L1969 | `ValidateStorageTriesResult` | `gen != validationGeneration` (generation) | — | common | **ahead of** `stateValidationArms` (P4d; note 1) |
-| 62 | L1973 | `ValidationRetry` | `retryGen != validationGeneration` (generation) | — | common | **ahead of** `stateValidationArms` (P4d; note 1) |
-| 63 | L1980 | `ValidateAccountTrieResult(_, Right, _)` | `currentPhase == StateValidation` | — | common | `stateValidationArms` (P4d) |
-| 64 | L1995 | `ValidateAccountTrieResult(_, Left, _)` | `currentPhase == StateValidation` | — (writes `currentPhase`) | common | `stateValidationArms` (P4d) |
-| 65 | L2033 | `ValidateStorageTriesResult(_, Right, _)` | `currentPhase == StateValidation` | — | common | `stateValidationArms` (P4d) |
-| 66 | L2047 | `ValidateStorageTriesResult(_, Left, _)` | `currentPhase == StateValidation` | — (writes `currentPhase`) | common | `stateValidationArms` (P4d) |
-| 67 | L2055 | `ValidationRetry` | `currentPhase == StateValidation` | — | common | `stateValidationArms` (P4d) |
+| 60 | L1965 | `ValidateAccountTrieResult` | `gen != validationGeneration` (generation) | — | common | `staleValidationDropArms`: first in `stateValidationArms` and delegated from common (P4d, done; note 1) |
+| 61 | L1969 | `ValidateStorageTriesResult` | `gen != validationGeneration` (generation) | — | common | `staleValidationDropArms`: first in `stateValidationArms` and delegated from common (P4d, done; note 1) |
+| 62 | L1973 | `ValidationRetry` | `retryGen != validationGeneration` (generation) | — | common | `staleValidationDropArms`: first in `stateValidationArms` and delegated from common (P4d, done; note 1) |
+| 63 | L1980 | `ValidateAccountTrieResult(_, Right, _)` | `currentPhase == StateValidation` | — | common | `stateValidationArms` (P4d, done) |
+| 64 | L1995 | `ValidateAccountTrieResult(_, Left, _)` | `currentPhase == StateValidation` | — (writes `currentPhase`) | common | `stateValidationArms` (P4d, done) |
+| 65 | L2033 | `ValidateStorageTriesResult(_, Right, _)` | `currentPhase == StateValidation` | — | common | `stateValidationArms` (P4d, done) |
+| 66 | L2047 | `ValidateStorageTriesResult(_, Left, _)` | `currentPhase == StateValidation` | — (writes `currentPhase`) | common | `stateValidationArms` (P4d, done) |
+| 67 | L2055 | `ValidationRetry` | `currentPhase == StateValidation` | — | common | `stateValidationArms` (P4d, done) |
 | 68 | L2062 | `CheckDownloadStagnation` | — | three tests plus a `currentPhase match` choosing which coordinators to ask | common | common (body-level) |
 | 69 | L2149 | `AccountCoordinatorProgress` | `currentPhase == AccountRangeSync` | — | **`accountRangeArms`** | `accountRangeArms` (P4a, done) |
 | 70 | L2154 | `StorageCoordinatorProgress` | `currentPhase == ByteCodeAndStorageSync` | — | common | `byteCodeAndStorageArms` (P4b, done) |
@@ -614,6 +619,10 @@ by #75. The six `peerEventArms` types have no arm outside #7.
    `StateValidation` would reach #63/#64 instead of being dropped. P4d must place #60–#62 ahead of
    `stateValidationArms`: either at the end of the guard arms, or first inside `stateValidationArms` **and** still in
    common for the other phases. T027's "(stale gen)" samples in the `StateValidation` column are the oracle.
+   *P4d correction:* T027 records both #60 and #63 as `Handled`, so its `StateValidation` column cannot tell a drop from
+   a validation run; there the placement argument carries the proof. Its stale samples in the **other** phases do
+   catch a lost drop (the catch-all would run instead). P4d took the second option (drops first in
+   `stateValidationArms`, plus a delegation in common).
 2. **Body-level phase tests stay in their arm.** #10, #15, #21, #35, #39, #40, #48, #51 and #68 test `currentPhase`
    inside the body; T027 sees all of them as `Handled` in every phase, so it cannot tell whether a lifted test still
    picks the same branch. Splitting them into per-phase arms is a body change without an arm-order oracle. P4a leaves

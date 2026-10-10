@@ -278,7 +278,15 @@ only when every item on the per-slice checklist below holds.
     `ScheduledTrieWalk`, #58 `TrieWalkFailed`, guards dropped, bodies unchanged. Arms with a body-level `StateHealing`
     test (#15, #39, #40, #48, #51) stay in `commonSyncingArms` (R4b note 2). The CL/serve-root arms (#15
     `RequestTrieNodeHealing`, #16 `HealingServeRoot`) carry no phase guard, so none of them moved.
-- [ ] T040 [P4d] `stateValidationArms`.
+- [x] T040 [P4d] `stateValidationArms`.
+  - As built: `phaseArms(StateValidation)` returns `stateValidationArms` (class member) =
+    `staleValidationDropArms.orElse(stateValidationResultArms)`. `stateValidationResultArms` holds the five arms
+    guarded on `StateValidation`: #63/#64 `ValidateAccountTrieResult` (Right, Left), #65/#66
+    `ValidateStorageTriesResult` (Right, Left), #67 `ValidationRetry`, guards dropped, bodies unchanged. The
+    stale-generation drops #60–#62 (no phase guard) moved verbatim into `staleValidationDropArms`, which runs first in
+    `stateValidationArms` and from a delegation arm at their old place in `commonSyncingArms` for every other phase
+    (R4b note 1, second option). #21 `TrieNodesResponse` (body-level `!= StateValidation`) and #59
+    `StateValidationComplete` (no phase test) stay in `commonSyncingArms`.
 - [ ] T041 [P4e] `chainDownloadCompletionArms`. Check that no `currentPhase ==` remains inside `syncing`. Run a full
   SNAP on Platåberget.
 
