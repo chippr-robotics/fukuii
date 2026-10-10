@@ -6,6 +6,7 @@ import org.apache.pekko.actor.typed.scaladsl.TimerScheduler
 
 import scala.concurrent.ExecutionContext
 
+import com.chipprbots.ethereum.blockchain.sync.SyncProtocol
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncConfig
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController
 import com.chipprbots.ethereum.blockchain.sync.snap.StateValidator
@@ -13,9 +14,12 @@ import com.chipprbots.ethereum.db.storage.AppStateStorage
 import com.chipprbots.ethereum.db.storage.EvmCodeStorage
 import com.chipprbots.ethereum.db.storage.FlatSlotStorage
 import com.chipprbots.ethereum.db.storage.MptStorage
+import com.chipprbots.ethereum.db.storage.PathNodeStorage
 import com.chipprbots.ethereum.db.storage.StateStorage
 import com.chipprbots.ethereum.domain.BlockchainReader
+import com.chipprbots.ethereum.domain.BlockchainWriter
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor
+import com.chipprbots.ethereum.network.PeerEventBusActor
 import com.chipprbots.ethereum.utils.Config.SyncConfig
 
 /** The SNAP controller's environment (spec 016 T041a, plan.md D1): the actor context and timers, the configuration, the
@@ -27,9 +31,11 @@ import com.chipprbots.ethereum.utils.Config.SyncConfig
   * dispatcher lookup and the logger lookup run at construction). Metrics are not members: `SNAPSyncMetrics` is a global
   * object.
   *
-  * Member cap (FR-016 (c)): 13 (11 at T041a; M3 added `networkPeerManager` and `blockchainReader`, two constructor
-  * parameters the peer pool's bodies reach). A PR that adds a member states the new count and a justification line, and
-  * updates the cap in `.claude/agent-protocols/snap-sync.md`.
+  * Member cap (FR-016 (c)): 18 (11 at T041a; M3 added `networkPeerManager` and `blockchainReader`, two constructor
+  * parameters the peer pool's bodies reach; M4 added `blockchainWriter`, `peerEventBus`, `syncController` and
+  * `childFactories`, constructor parameters the finalization bodies reach, and `pathNodeStorageOpt`, the first derived
+  * store a module needs). A PR that adds a member states the new count and a justification line, and updates the cap in
+  * `.claude/agent-protocols/snap-sync.md`.
   */
 private[snap] trait SnapControllerEnv:
 
@@ -57,3 +63,18 @@ private[snap] trait SnapControllerEnv:
 
   /** Read access to the chain (genesis and stored chain weights for the pivot TD estimate). */
   def blockchainReader: BlockchainReader
+
+  /** Write access to the chain (the pivot block, its chain weight; passed to the ChainDownloader). */
+  def blockchainWriter: BlockchainWriter
+
+  /** The peer event bus, passed to the ChainDownloader. */
+  def peerEventBus: TypedActorRef[PeerEventBusActor.Command]
+
+  /** The parent `SyncController`: SNAP's replies (finalized, done, healing impossible, bootstrap requests). */
+  def syncController: TypedActorRef[SyncProtocol.SyncControllerReply]
+
+  /** How each child is built (spec 016 T012 test seam; production: the children's own `apply`s). */
+  def childFactories: ChildFactories
+
+  /** The Path-scheme node store (`None` on the Hash scheme, i.e. ETC). Built once at construction by the core. */
+  def pathNodeStorageOpt: Option[PathNodeStorage]

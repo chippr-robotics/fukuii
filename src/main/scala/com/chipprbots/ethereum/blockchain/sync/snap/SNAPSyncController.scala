@@ -67,18 +67,18 @@ private class SNAPSyncControllerImpl(
     val ctx: ActorContext[SNAPSyncController.Command],
     val timers: TimerScheduler[SNAPSyncController.Command],
     val blockchainReader: BlockchainReader,
-    blockchainWriter: BlockchainWriter,
+    val blockchainWriter: BlockchainWriter,
     val appStateStorage: AppStateStorage,
     val stateStorage: StateStorage,
     val evmCodeStorage: EvmCodeStorage,
     val flatSlotStorage: FlatSlotStorage,
     val networkPeerManager: TypedActorRef[com.chipprbots.ethereum.network.NetworkPeerManagerActor.Command],
-    peerEventBus: TypedActorRef[com.chipprbots.ethereum.network.PeerEventBusActor.Command],
+    val peerEventBus: TypedActorRef[com.chipprbots.ethereum.network.PeerEventBusActor.Command],
     val syncConfig: SyncConfig,
     val snapSyncConfig: SNAPSyncConfig,
     scheduler: Scheduler,
     blacklist: Blacklist,
-    syncController: TypedActorRef[SyncProtocol.SyncControllerReply],
+    val syncController: TypedActorRef[SyncProtocol.SyncControllerReply],
     // Factory for `StateValidator` so unit tests can inject a fake. Production
     // default is a thin `new StateValidator(_)` wrapper; tests can supply a
     // `FakeStateValidator` that returns canned results, delays, or throws.
@@ -88,7 +88,7 @@ private class SNAPSyncControllerImpl(
     // exercise the PoS/CL-anchored paths live.
     isPoSChainOverride: Option[Boolean] = None,
     // Test seams (spec 016 T012). Production defaults build exactly what the code built before they existed.
-    childFactories: ChildFactories = ChildFactories.production,
+    val childFactories: ChildFactories = ChildFactories.production,
     heapWatchdogStart: HeapWatchdogStart = HeapWatchdogStart.production,
     intakeBudgetOverride: Option[SnapIntakeBudget] = None
 )(implicit ec: ExecutionContext)
@@ -288,7 +288,8 @@ private class SNAPSyncControllerImpl(
 
   // PathScheme: create PathNodeStorage backed by the same RocksDB data source as flat storage.
   // None for HashScheme (default/ETC). Shared across coordinator restarts (data source is long-lived).
-  private val pathNodeStorageOpt: Option[PathNodeStorage] =
+  // Implements `SnapControllerEnv.pathNodeStorageOpt` (spec 016 M4); a strict val, built at construction as before.
+  val pathNodeStorageOpt: Option[PathNodeStorage] =
     if snapSyncConfig.storageScheme == StorageScheme.Path then Some(new PathNodeStorage(flatSlotStorage.dataSource))
     else None
 
@@ -4886,7 +4887,7 @@ private class SNAPSyncControllerImpl(
     // Diagnostic (Platåberget soak, 2026-09-27): the ONLY way to know, after the fact, which of the four
     // completeSnapSync() call sites fired and whether the in-memory pivot/root already matched the persisted
     // anchor at that moment — without this, the shipped logback.xml silenced every INFO/WARN line from this
-    // actor's real runtime class (SNAPSyncControllerImpl), leaving only the eventual A5 ERROR as evidence.
+    // actor's real runtime class (the controller's private impl class), leaving only the eventual A5 ERROR as evidence.
     ctx.log.info(
       "[SNAP-COMPLETE] phase={} pivot={} inMemoryRoot={} persistedRoot={}",
       currentPhase,

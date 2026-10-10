@@ -16,6 +16,7 @@ import org.scalatest.matchers.should.Matchers
 
 import com.chipprbots.ethereum.blockchain.sync.CacheBasedBlacklist
 import com.chipprbots.ethereum.blockchain.sync.PeerListHelper
+import com.chipprbots.ethereum.blockchain.sync.SyncProtocol
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPRequestTracker
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncConfig
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController
@@ -27,8 +28,10 @@ import com.chipprbots.ethereum.db.storage.AppStateStorage
 import com.chipprbots.ethereum.db.storage.EvmCodeStorage
 import com.chipprbots.ethereum.db.storage.FlatSlotStorage
 import com.chipprbots.ethereum.db.storage.MptStorage
+import com.chipprbots.ethereum.db.storage.PathNodeStorage
 import com.chipprbots.ethereum.db.storage.StateStorage
 import com.chipprbots.ethereum.domain.BlockchainReader
+import com.chipprbots.ethereum.domain.BlockchainWriter
 import com.chipprbots.ethereum.domain.TrieRoot
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor
 import com.chipprbots.ethereum.network.PeerEventBusActor
@@ -74,6 +77,11 @@ private[snap] class StubSnapPeerPoolState(
   def validatorFactory: MptStorage => StateValidator = notUsed("validatorFactory")
   def snapValidationEc: ExecutionContext = notUsed("snapValidationEc")
   def blockchainReader: BlockchainReader = notUsed("blockchainReader")
+  def blockchainWriter: BlockchainWriter = notUsed("blockchainWriter")
+  def peerEventBus: ActorRef[PeerEventBusActor.Command] = notUsed("peerEventBus")
+  def syncController: ActorRef[SyncProtocol.SyncControllerReply] = notUsed("syncController")
+  def childFactories: ChildFactories = notUsed("childFactories")
+  def pathNodeStorageOpt: Option[PathNodeStorage] = notUsed("pathNodeStorageOpt")
 
   // CoordinatorHandles (no coordinator exists, so the fan-outs send nothing)
   def intakeBudget: SnapIntakeBudget = notUsed("intakeBudget")
