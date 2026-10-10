@@ -1725,8 +1725,8 @@ private[actors] class StorageRangeCoordinatorImpl(
       tasks: Seq[StorageTask],
       requestedBytes: BigInt,
       response: StorageRanges,
-      verified: Option[VerifiedStorageResponse] = None,
-      dispatchToPeer: Boolean = true
+      verified: Option[VerifiedStorageResponse],
+      dispatchToPeer: Boolean
   ): Unit =
     // Count only responses that actually contain slot data as "served".
     // Proof-only responses (0 slot-sets, non-empty proofs) are NOT counted as served because:
