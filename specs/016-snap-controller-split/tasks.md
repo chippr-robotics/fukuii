@@ -397,7 +397,27 @@ only when every item on the per-slice checklist below holds.
     `startSnapServerPeersScheduler` + `startPhase` on the plain route, the `[HEAL-INTERLEAVE]` log + `startTrieWalk` on
     the interleave route) sits before or after that span and stays at its call site, in the same order. The code stays
     in the core until M6b. No test file changed.
-- [ ] T048 [M6b] `HealingOrchestrator`. Run a Mordor heal restart.
+- [x] T048 [M6b] `HealingOrchestrator`. Run a Mordor heal restart.
+  - As built: a prerequisite commit makes the core's implicit `ec` constructor parameter a `val` (the two trie walks
+    run their Futures on it) and declares `PivotRefreshApi` (`refreshPivotInPlace` with its three defaulted
+    parameters; scalafmt wraps the declaration, and step 6 admits only one-line abstract declarations, so it cannot go
+    into the narrowing commit), implemented by the core. The move commit moves into `controller/HealingOrchestrator.scala`
+    the `StateHealing` phase function `stateHealingArms` (as M2 moved `stateValidationArms`) with its exclusive
+    `healingRoundCount`, `completeHealingWalkClean`, `startTrieWalk`, `healingFrontierStorageOpt`, `bfsQueueStorage`,
+    `spawnHealingCoordinator`, `startStateHealing`, `startStateHealingWithInterleave`, `startHealingRequestScheduler`,
+    `requestTrieNodeHealing`, `maybeRequestHealingServeRoot`, `triggerHealingForMissingNodes`,
+    `anchorPivotBeforeLazyHandoff`, `resetHealedCodeHold`, `dropHealedCodeNowPresent` and `queueHealedCode` (17
+    symbols). Narrowed self-type: `HealingOrchestratorState & SnapSharedState & SnapControllerEnv & CoordinatorHandles &
+    PhaseFlags & ResumeApi & PeerPoolApi & SnapServerPeersApi & ValidationApi & FinalizationApi & PivotRefreshApi &
+    PivotSelectionApi & ByteCodeRequestApi`; state 12 (R14: 10; + `trieWalkInProgress`, `isPoSChain`, `ec`, −
+    `mptStorage`), Api 10 (R14a: 11). `HealingApi` and `HealedCodeApi` move next to their implementer
+    (`HealingOrchestrator extends` both; CQ-SNAP-016-16). `ScheduledTrieWalkKey` and `HealingServeRootMarginBlocks`
+    stayed in the core in the move (rule (d)) and became pure private lazy vals of the trait in the narrowing.
+    `SnapControllerEnv` stays at 18. **Not moved**: the healing arms of `commonSyncingArms` (a local of `syncing()`):
+    #15 `RequestTrieNodeHealing` (P4e earmarked it for M6b, but lifting it needs a delegation line in `syncing()`, a
+    body change), #16 `HealingServeRoot`, `StateHealingComplete`, `HealedCodeHashes` and the healed-code hold arms.
+    #1502 is unchanged (pinned). Stub test: `HealingOrchestratorSpec` (nine cases). Mordor heal restart: **pending**
+    (to be run by the user on the slice jar after merge; no node run here).
 - [ ] T049 [M7] `StagnationWatchdog`, with the `reset(reason)` hook used by launch, refresh and `startSnapSync`.
 - [ ] T050 [M8] `PivotSelector`. Run Platåberget from scratch.
 - [ ] T050b [M8b] Remove the dead `isStarting` parameter in its own PR (FR-034). The PR has no other change.

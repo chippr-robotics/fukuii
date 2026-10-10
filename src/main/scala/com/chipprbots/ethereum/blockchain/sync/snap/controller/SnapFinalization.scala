@@ -28,9 +28,8 @@ private[snap] trait SnapFinalizationState:
   def healedCodeHashes: mutable.LinkedHashSet[ByteString]
   def chainDownloaderReplyAdapter: TypedActorRef[ChainDownloader.Done.type]
 
-private[snap] trait HealedCodeApi:
-  def dropHealedCodeNowPresent(): Unit
-  def queueHealedCode(codeHashes: Seq[ByteString]): Unit
+private[snap] trait FinalizationApi:
+  def completeSnapSync(): Behavior[Command]
 
 private[snap] trait ShutdownApi:
   def onStop(): Unit
@@ -45,7 +44,7 @@ private[snap] trait ShutdownApi:
   * `completed`). The core keeps the dispatch: the path-publish and header-hold guard arms of `syncing` and its
   * ChainDownloader arms call these members.
   */
-private[snap] trait SnapFinalization:
+private[snap] trait SnapFinalization extends FinalizationApi:
   self: SnapFinalizationState & SnapSharedState & SnapControllerEnv & CoordinatorHandles & PhaseFlags & ResumeApi &
     TaskFileSweepApi & HealedCodeApi & PeerPoolApi & ShutdownApi =>
 
@@ -83,7 +82,7 @@ private[snap] trait SnapFinalization:
     *
     * Closes #1162.
     */
-  private[snap] def completeSnapSync(): Behavior[Command] =
+  def completeSnapSync(): Behavior[Command] =
     // Diagnostic (Platåberget soak, 2026-09-27): the ONLY way to know, after the fact, which of the four
     // completeSnapSync() call sites fired and whether the in-memory pivot/root already matched the persisted
     // anchor at that moment — without this, the shipped logback.xml silenced every INFO/WARN line from this

@@ -17,9 +17,8 @@ private[snap] trait StateValidationState:
   var validationGeneration: Long
   var healingValidatedRoot: Option[TrieRoot]
 
-private[snap] trait HealingApi:
-  def triggerHealingForMissingNodes(missingNodes: Seq[ByteString]): Unit
-  def startStateHealing(): Unit
+private[snap] trait ValidationApi:
+  def validateState(): Unit
 
 private[snap] trait LifecycleApi:
   def recordCriticalFailure(reason: String): Boolean
@@ -32,7 +31,7 @@ private[snap] trait LifecycleApi:
   * then the result handlers). The core's dispatcher consults `stateValidationArms` through
   * `phaseArms(StateValidation)`, and `staleValidationDropArms` from `commonSyncingArms` in every other phase.
   */
-private[snap] trait StateValidationModule:
+private[snap] trait StateValidationModule extends ValidationApi:
   self: StateValidationState & SnapSharedState & SnapControllerEnv & ResumeApi & HealingApi & LifecycleApi =>
 
   // Retry counter for validation failures to prevent infinite loops
@@ -195,7 +194,7 @@ private[snap] trait StateValidationModule:
           selfRef ! ValidateStorageTriesResult(generation, Left(e.getMessage), -1L)
       }(snapValidationEc)
 
-  private[snap] def validateState(): Unit =
+  def validateState(): Unit =
     if !snapSyncConfig.stateValidationEnabled then
       ctx.log.info("State validation disabled, skipping...")
       ctx.self ! StateValidationComplete

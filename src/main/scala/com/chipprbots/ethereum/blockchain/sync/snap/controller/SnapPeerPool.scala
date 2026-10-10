@@ -19,6 +19,10 @@ private[snap] trait PeerPoolApi:
   def peersToDownloadFrom: Map[com.chipprbots.ethereum.network.PeerId, PeerListSupportNg.PeerWithInfo]
   def calibratePivotTD(pivotBlockNumber: BigInt): Option[BigInt]
 
+private[snap] trait SnapServerPeersApi:
+  def snapServingPeers(): List[com.chipprbots.ethereum.network.Peer]
+  def startSnapServerPeersScheduler(): Unit
+
 private[snap] trait SnapPeerPoolState:
   def peerListHelper: PeerListHelper
   def handshakedPeersAdapter: TypedActorRef[NetworkPeerManagerActor.HandshakedPeers]
@@ -34,7 +38,7 @@ private[snap] trait SnapPeerPoolState:
   * (`calibratePivotTD`). The core keeps the dispatch: `peerEventArms`, the reactivity arm of `bootstrapping` and the
   * peer-tick arms of `commonSyncingArms` call these members.
   */
-private[snap] trait SnapPeerPool extends PeerPoolApi:
+private[snap] trait SnapPeerPool extends PeerPoolApi with SnapServerPeersApi:
   self: SnapPeerPoolState & SnapSharedState & SnapControllerEnv & CoordinatorHandles =>
 
   private[snap] def handshakedPeers: Map[com.chipprbots.ethereum.network.PeerId, PeerListSupportNg.PeerWithInfo] =
@@ -51,7 +55,7 @@ private[snap] trait SnapPeerPool extends PeerPoolApi:
     * snap-capable peers were left out and why, because "only 3 of 9 snap peers reach the coordinators" was otherwise
     * invisible (Sepolia 2026-10-07).
     */
-  private[snap] def snapServingPeers(): List[com.chipprbots.ethereum.network.Peer] =
+  def snapServingPeers(): List[com.chipprbots.ethereum.network.Peer] =
     // Keyed by stable reasons only, so `changed` does not fire on every head update of an excluded peer.
     val exclusions: Map[String, String] = peerListHelper.handshakedPeers.flatMap { case (peerId, p) =>
       SNAPSyncController
@@ -262,7 +266,7 @@ private[snap] trait SnapPeerPool extends PeerPoolApi:
   // Start (or re-use) the snap-server-peers reconnect scheduler.
   // Idempotent: does nothing if already running. 15s initial delay lets inbound connections
   // complete STATUS exchange before we fire an outbound ConnectToPeer (avoids AlreadyConnected races).
-  private[snap] def startSnapServerPeersScheduler(): Unit =
+  def startSnapServerPeersScheduler(): Unit =
     if snapSyncConfig.snapServerPeers.nonEmpty && !snapServerPeersSchedulerStarted then
       snapServerPeersSchedulerStarted = true
       timers.startTimerWithFixedDelay(EnsureSnapServerPeersConnected, EnsureSnapServerPeersConnected, 30.seconds)
