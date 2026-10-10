@@ -247,9 +247,12 @@ only when every item on the per-slice checklist below holds.
 
 ## P3 — single peer-event handler
 
-- [ ] T035 [P3] Add `peerEventArms` (quartet + `GetProgress` + `CLPivotHint`) and use it in `idle`, `syncing`,
+- [x] T035 [P3] Add `peerEventArms` (quartet + `GetProgress` + `CLPivotHint`) and use it in `idle`, `syncing`,
   `bootstrapping` and `dormantRetry`. `bootstrapping`'s reactivity `PollHandshakedPeers` arm stays ahead of it, and
   the `GetStatus` bodies stay per behaviour.
+  - As built (research.md R4, P3 correction): `bootstrapping`'s reactivity arm is `WrappedHandshakedPeers`, not
+    `PollHandshakedPeers`, and its `GetProgress` arm (bootstrap progress) also differs. Both stay inline ahead of
+    `peerEventArms`.
 
 ## P4 — per-phase arms in `syncing` (five PRs)
 
