@@ -419,6 +419,26 @@ only when every item on the per-slice checklist below holds.
     #1502 is unchanged (pinned). Stub test: `HealingOrchestratorSpec` (nine cases). Mordor heal restart: **pending**
     (to be run by the user on the slice jar after merge; no node run here).
 - [ ] T049 [M7] `StagnationWatchdog`, with the `reset(reason)` hook used by launch, refresh and `startSnapSync`.
+  - **As built (partial: the `reset(reason)` hook is open, CQ-SNAP-016-20):** no prerequisite commit. The move commit
+    moves into `controller/StagnationWatchdog.scala` the `AccountRangeSync` and `ByteCodeAndStorageSync` phase functions
+    `accountRangeArms` and `byteCodeAndStorageArms` (P4a/P4b; they hold only the three `*CoordinatorProgress` arms,
+    the answers to the progress asks, research.md R6 "progress forwarding", so they move whole as M2 and M6b moved
+    their phase functions; the plan's M11 row and the routing doc had listed these arms under M11),
+    `scheduleStagnationChecks`, `maybeRestartIfStorageStagnant`, `maybeForceCompleteIfBytecodeStagnant`,
+    `maybeRestartIfAccountStagnant` and the exclusive `consecutiveAccountStallRefreshes` (7 symbols). Narrowed
+    self-type: `StagnationWatchdogState & SnapSharedState & SnapControllerEnv & CoordinatorHandles & PhaseFlags &
+    HandshakedPeersApi & LifecycleApi & PivotRefreshApi`; state 11 (R14: 5; + `lastBytecodeProgressMs`,
+    `lastBytecodeProgressCount`, `storageStagnationRefreshAttempted`, `lastPivotRestartMs`, `MinPivotRestartInterval`,
+    `StorageRestartedEmptyThreshold`), Api 5 (R14a: 7). `HandshakedPeersApi` is new, declared in `SnapPeerPool.scala`
+    (`SnapPeerPool extends` it). Five constants used only by the moved bodies stayed in the core in the move (rule (d))
+    and became pure private lazy vals of the trait in the narrowing; a sixth, `StorageRestartedEmptyThreshold`, stays
+    in the core behind the state interface because its comment names `StorageRangeCoordinatorImpl` (FR-016 (a)). `SnapControllerEnv` stays at 18. **Not moved**: the `CheckDownloadStagnation` arm of
+    `commonSyncingArms` (a local of `syncing()`; lifting it needs a delegation line, CQ-SNAP-016-19), and the clock
+    vars, whose initializers are impure (`System.currentTimeMillis()`) or which code that stays also writes. **Not
+    built**: the `watchdog.reset(reason)` hook. Replacing the inline resets at launch, refresh and `startSnapSync` is a
+    body change in members that do not move, which neither the move nor the narrowing commit admits, and the sites
+    reset different clock sets; it needs a decision on where it lands and its per-reason sets (CQ-SNAP-016-20). The
+    resets are unchanged. Stub test: `StagnationWatchdogSpec` (eight cases).
 - [ ] T050 [M8] `PivotSelector`. Run Platåberget from scratch.
 - [ ] T050b [M8b] Remove the dead `isStarting` parameter in its own PR (FR-034). The PR has no other change.
 - [ ] T051 [M9] `SyncLifecycle`, including the #1501 heap watchdog (call sites unchanged). Run Mordor dormant/wake.

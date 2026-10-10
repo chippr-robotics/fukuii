@@ -19,6 +19,9 @@ private[snap] trait PeerPoolApi:
   def peersToDownloadFrom: Map[com.chipprbots.ethereum.network.PeerId, PeerListSupportNg.PeerWithInfo]
   def calibratePivotTD(pivotBlockNumber: BigInt): Option[BigInt]
 
+private[snap] trait HandshakedPeersApi:
+  def handshakedPeers: Map[com.chipprbots.ethereum.network.PeerId, PeerListSupportNg.PeerWithInfo]
+
 private[snap] trait SnapServerPeersApi:
   def snapServingPeers(): List[com.chipprbots.ethereum.network.Peer]
   def startSnapServerPeersScheduler(): Unit
@@ -38,10 +41,10 @@ private[snap] trait SnapPeerPoolState:
   * (`calibratePivotTD`). The core keeps the dispatch: `peerEventArms`, the reactivity arm of `bootstrapping` and the
   * peer-tick arms of `commonSyncingArms` call these members.
   */
-private[snap] trait SnapPeerPool extends PeerPoolApi with SnapServerPeersApi:
+private[snap] trait SnapPeerPool extends PeerPoolApi with SnapServerPeersApi with HandshakedPeersApi:
   self: SnapPeerPoolState & SnapSharedState & SnapControllerEnv & CoordinatorHandles =>
 
-  private[snap] def handshakedPeers: Map[com.chipprbots.ethereum.network.PeerId, PeerListSupportNg.PeerWithInfo] =
+  def handshakedPeers: Map[com.chipprbots.ethereum.network.PeerId, PeerListSupportNg.PeerWithInfo] =
     peerListHelper.handshakedPeers
   def peersToDownloadFrom: Map[com.chipprbots.ethereum.network.PeerId, PeerListSupportNg.PeerWithInfo] =
     peerListHelper.peersToDownloadFrom
