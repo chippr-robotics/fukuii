@@ -670,7 +670,7 @@ private class SNAPSyncControllerImpl(
     case PollHandshakedPeers =>
       pollHandshakedPeers(); Behaviors.same
     case hint: CLPivotHint =>
-      handleCLPivotHint(hint, isStarting = false)
+      handleCLPivotHint(hint)
       Behaviors.same
     case GetProgress(replyTo) =>
       replyTo ! progressMonitor.currentProgress

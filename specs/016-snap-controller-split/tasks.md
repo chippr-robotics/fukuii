@@ -461,7 +461,8 @@ only when every item on the per-slice checklist below holds.
     `RetryBootstrapAtBlock` arm of `commonSyncingArms`. Stub test: `PivotSelectorSpec` (eight cases). Platåberget from
     scratch: **pending** (to be run by the user on the slice jar after merge; no node run here). T050 stays open until
     `startSnapSync`'s pivot-selection part moves.
-- [ ] T050b [M8b] Remove the dead `isStarting` parameter in its own PR (FR-034). The PR has no other change.
+- [x] T050b [M8b] Remove the dead `isStarting` parameter in its own PR (FR-034). The PR has no other change.
+    As built: the parameter was on `handleCLPivotHint` (not `startSnapSync`), only ever read by `val _ = isStarting`; removed with its one main and three test call-site arguments.
 - [ ] T051 [M9] `SyncLifecycle`, including the #1501 heap watchdog (call sites unchanged). Run Mordor dormant/wake.
 - [ ] T052 [M10] `PivotRefresher`. Run Platåberget across at least 3 refreshes, and Mordor.
 - [ ] T053 [M11] `DownloadSupervisor`. Check SC-001 (core ≤ about 1,000 lines). Run a full Mordor SNAP.
