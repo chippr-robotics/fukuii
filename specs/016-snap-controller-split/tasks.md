@@ -256,9 +256,16 @@ only when every item on the per-slice checklist below holds.
 
 ## P4 — per-phase arms in `syncing` (five PRs)
 
-- [ ] T036 [P4a] Arm-order table for **all** of `syncing`: every Command, its arms in source order, and their guards.
+- [x] T036 [P4a] Arm-order table for **all** of `syncing`: every Command, its arms in source order, and their guards.
   This goes into research.md in P4a and is reused by P4b–e.
-- [ ] T037 [P4a] Introduce the dispatcher (plan.md D3), `commonSyncingArms` and `accountRangeArms`.
+  - As built: research.md R4b (75 arms, dispatch guard vs body-level phase test, planned target per arm, notes for
+    P4b–e).
+- [x] T037 [P4a] Introduce the dispatcher (plan.md D3), `commonSyncingArms` and `accountRangeArms`.
+  - As built: `syncing` dispatches `syncingGuardArms` (arms #1–#7: the path-publish and header-hold arms, their two
+    guarded wildcards and the `peerEventArms` delegation) → `phaseArms(currentPhase)` → `commonSyncingArms` → the
+    unchanged catch-all. The guard-arm prefix is needed because #4 and #6 match any message (R4b). `accountRangeArms`
+    holds the one arm guarded on `AccountRangeSync` (`AccountCoordinatorProgress`); arms that test the phase inside
+    their body stay in `commonSyncingArms` (R4b note 2).
 - [ ] T038 [P4b] `byteCodeAndStorageArms`.
 - [ ] T039 [P4c] `stateHealingArms` (beacon reviews the CL/serve-root arms).
 - [ ] T040 [P4d] `stateValidationArms`.
