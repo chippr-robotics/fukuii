@@ -99,6 +99,10 @@ class SNAPRequestTracker(
     *   the type of request
     * @param timeout
     *   explicit timeout override (None = use adaptive timeout from PeerRateTracker)
+    * @param ownerDecidesTimeout
+    *   when true the timer only calls `onTimeout`: the request stays pending, so a reply the owning actor processes
+    *   first is still accepted, and the owner must call [[expireRequest]] when it handles the timeout. When false
+    *   (default) the timer itself expires the request before calling `onTimeout`. See [[expireRequest]].
     * @param onTimeout
     *   callback when request times out
     * @return
@@ -108,7 +112,8 @@ class SNAPRequestTracker(
       requestId: BigInt,
       peer: Peer,
       requestType: RequestType,
-      timeout: FiniteDuration = Duration.Zero // Zero = use adaptive
+      timeout: FiniteDuration = Duration.Zero, // Zero = use adaptive
+      ownerDecidesTimeout: Boolean = false
   )(onTimeout: => Unit): PendingRequest = synchronized {
     val effectiveTimeout = if timeout == Duration.Zero then rateTracker.targetTimeout() else timeout
     recordDispatchMetric(requestType)
@@ -118,7 +123,10 @@ class SNAPRequestTracker(
       requestType = requestType,
       timestamp = nowMs()
     )
-    pendingRequests.put(requestId, request.copy(timeoutTask = Some(armTimeout(requestId, effectiveTimeout, onTimeout))))
+    pendingRequests.put(
+      requestId,
+      request.copy(timeoutTask = Some(armTimeout(requestId, effectiveTimeout, onTimeout, ownerDecidesTimeout)))
+    )
     request
   }
 
@@ -133,6 +141,7 @@ class SNAPRequestTracker(
       requestId: BigInt,
       delay: FiniteDuration,
       onTimeout: => Unit,
+      ownerDecidesTimeout: Boolean,
       graceGranted: Boolean = false
   ): Cancellable =
     val scheduledAtMs = nowMs()
@@ -150,24 +159,61 @@ class SNAPRequestTracker(
             )
             pendingRequests.put(
               requestId,
-              req.copy(timestamp = now, timeoutTask = Some(armTimeout(requestId, stallPolicy.grace, onTimeout, true)))
+              req.copy(
+                timestamp = now,
+                timeoutTask = Some(armTimeout(requestId, stallPolicy.grace, onTimeout, ownerDecidesTimeout, true))
+              )
             )
+          else if ownerDecidesTimeout then
+            // Leave the request pending: the owner's mailbox may already hold the reply (see expireRequest).
+            log.debug(
+              s"SNAP request ${req.requestType} timer for request ID $requestId fired after ${delay.toSeconds}s — " +
+                s"owner decides the timeout"
+            )
+            onTimeout
           else
-            val elapsed = now - req.timestamp
-            log.warn(
-              s"SNAP request ${req.requestType} timeout for request ID $requestId from peer ${req.peer.id} " +
-                s"(timeout=${delay.toSeconds}s, elapsed=${elapsed}ms)"
-            )
-            // Record timeout in rate tracker (items=0 slashes capacity to zero)
-            val msgType = requestTypeToMsgType(req.requestType)
-            rateTracker.update(req.peer.id.value, msgType, elapsed, items = 0)
-            SNAPSyncMetrics.incrementRequestTimeout()
-            recordFailureMetric(req.requestType)
-            pendingRequests.remove(requestId)
+            expire(requestId, req, delay)
             onTimeout
         }
       }
     }
+
+  /** Expire a request the owner has decided timed out: forget it, slash the peer's rate capacity and count the failure.
+    * Returns `None` if the request was already completed or cancelled — then nothing is recorded, because the reply
+    * won.
+    *
+    * Why the owner decides (requests tracked with `ownerDecidesTimeout = true`): the timer runs on the scheduler
+    * thread, but the reply is delivered to the owning actor's mailbox. When that actor is busy — Sepolia 2026-10-09:
+    * the storage coordinator spent 20-95 s inside single 128-account responses, 288 times in 7.7 h, while the rest of
+    * the node kept running, so the late-timer stall grace above did not apply — a timer that expired the request itself
+    * turned replies already waiting in the mailbox into "No pending request" discards (2,259 discarded replies against
+    * 2,746 storage timeouts), and the timeout messages queued behind them then demoted every peer at once. With the
+    * decision taken on the owner's thread, mailbox order is the arbiter: a reply enqueued before the timeout message
+    * completes the request, and the timeout then finds nothing to expire. go-ethereum's snap syncer does the same: its
+    * timer only schedules `revertStorageRequest` on the sync loop, and a response that reaches `OnStorage` first is
+    * still matched against `storageReqs`.
+    */
+  def expireRequest(requestId: BigInt): Option[PendingRequest] = synchronized {
+    pendingRequests.get(requestId).map { req =>
+      req.timeoutTask.foreach(_.cancel())
+      expire(requestId, req, Duration.Zero)
+      req
+    }
+  }
+
+  private def expire(requestId: BigInt, req: PendingRequest, delay: FiniteDuration): Unit =
+    val elapsed = nowMs() - req.timestamp
+    val timeoutLabel = if delay > Duration.Zero then s"timeout=${delay.toSeconds}s, " else ""
+    log.warn(
+      s"SNAP request ${req.requestType} timeout for request ID $requestId from peer ${req.peer.id} " +
+        s"(${timeoutLabel}elapsed=${elapsed}ms)"
+    )
+    // Record timeout in rate tracker (items=0 slashes capacity to zero)
+    val msgType = requestTypeToMsgType(req.requestType)
+    rateTracker.update(req.peer.id.value, msgType, elapsed, items = 0)
+    SNAPSyncMetrics.incrementRequestTimeout()
+    recordFailureMetric(req.requestType)
+    pendingRequests.remove(requestId)
 
   /** Check if a request is pending
     *

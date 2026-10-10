@@ -11,8 +11,11 @@ import org.apache.pekko.util.ByteString
 import scala.collection.mutable
 import scala.concurrent.duration.*
 
+import org.scalatest.concurrent.Eventually
 import org.scalatest.flatspec.AnyFlatSpecLike
 import org.scalatest.matchers.should.Matchers
+import org.scalatest.time.Millis
+import org.scalatest.time.Span
 
 import com.chipprbots.ethereum.blockchain.sync.snap.*
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController
@@ -28,7 +31,11 @@ import com.chipprbots.ethereum.testing.Tags.*
 import com.chipprbots.ethereum.testing.TestMptStorage
 import com.chipprbots.ethereum.utils.ByteStringUtils.ByteStringOps
 
-class StorageRangeCoordinatorSpec extends ScalaTestWithActorTestKit() with AnyFlatSpecLike with Matchers:
+class StorageRangeCoordinatorSpec
+    extends ScalaTestWithActorTestKit()
+    with AnyFlatSpecLike
+    with Matchers
+    with Eventually:
 
   implicit private val classicSystem: org.apache.pekko.actor.ActorSystem = system.classicSystem
   private val statusProbe = testKit.createTestProbe[StorageRangeCoordinator.SyncStatistics]()
@@ -96,7 +103,8 @@ class StorageRangeCoordinatorSpec extends ScalaTestWithActorTestKit() with AnyFl
       // pass `false` explicitly — with deferred merkleization on, applyReadyStorageChunk never
       // builds a trie at all (flat-slot writes only).
       deferredMerkleization: Boolean = true,
-      recordStorageDone: Boolean = false
+      recordStorageDone: Boolean = false,
+      requestTimeout: FiniteDuration = 30.seconds
   ): (StorageRangeCoordinatorImpl, BehaviorTestKit[StorageRangeCoordinator.Command]) =
     var captured: StorageRangeCoordinatorImpl = null
     val behavior = Behaviors.setup[StorageRangeCoordinator.Command] { ctx =>
@@ -111,7 +119,7 @@ class StorageRangeCoordinatorSpec extends ScalaTestWithActorTestKit() with AnyFl
           flatSlotStorage = flatSlotStorage,
           maxAccountsPerBatch = maxAccountsPerBatch,
           maxInFlightRequests = maxInFlightRequests,
-          requestTimeout = 30.seconds,
+          requestTimeout = requestTimeout,
           snapSyncController = snapSyncControllerRef,
           flatBatchEntryThreshold = flatBatchEntryThreshold,
           flatBatchEcOverride = flatBatchEcOverride,
@@ -1753,12 +1761,13 @@ class StorageRangeCoordinatorSpec extends ScalaTestWithActorTestKit() with AnyFl
 
   // ── StorageRequestTimedOut mailbox path ───────────────────────────────────
 
-  private def implWithOneRequestInFlight() =
+  private def implWithOneRequestInFlight(requestTimeout: FiniteDuration = 30.seconds) =
     val (impl, kit) = newImpl(
       stateRoot = kec256(ByteString("timedout-root")),
       flatSlotStorage = new FlatSlotStorage(EphemDataSource()),
       snapSyncControllerRef = testKit.createTestProbe[SNAPSyncController.Command]().ref,
-      maxAccountsPerBatch = 1
+      maxAccountsPerBatch = 1,
+      requestTimeout = requestTimeout
     )
     val peer = PeerTestHelpers.createTestPeer("timedout-peer", testKit.createTestProbe[Any]().ref.toClassic)
     val task = StorageTask.createStorageTask(kec256(ByteString("timedout-account")), kec256(ByteString("timedout-sr")))
@@ -1792,6 +1801,62 @@ class StorageRangeCoordinatorSpec extends ScalaTestWithActorTestKit() with AnyFl
     impl.consecutiveTaskFailures shouldBe failures
     impl.tasks.size shouldBe tasksBefore
     impl.activeTasks shouldBe empty
+  }
+
+  // ── A reply already in the mailbox beats its own timeout (Sepolia 2026-10-09) ──────────────────────────────
+  // The coordinator was busy 20-95 s inside single responses; the tracker's 30 s timer expired requests whose replies
+  // were already queued in the mailbox, so the replies were dropped as "No pending request" and the timeout messages
+  // queued behind them demoted every peer at once. The timer now only enqueues StorageRequestTimedOut; the coordinator
+  // decides in mailbox order. BehaviorTestKit queues the timer's self-send in `selfInbox` without running it, which
+  // reproduces "busy actor, timer already fired" deterministically.
+
+  // Waits until the tracker's timer has queued StorageRequestTimedOut(requestId) in the self-inbox. Other self-sends
+  // queued meanwhile are dropped: these tests only drive the reply/timeout ordering.
+  private def awaitTimerFired(kit: BehaviorTestKit[StorageRangeCoordinator.Command], requestId: BigInt): Unit =
+    val timedOut = StorageRangeCoordinator.StorageRequestTimedOut(requestId)
+    var seen = false
+    eventually(timeout(Span(5000, Millis)), interval(Span(10, Millis))) {
+      seen = seen || kit.selfInbox().receiveAll().contains(timedOut)
+      seen shouldBe true
+    }
+
+  it should "accept a reply that reached the mailbox before its timeout message, without blaming the peer" taggedAs UnitTest in {
+    val (impl, kit, _, requestId) = implWithOneRequestInFlight(requestTimeout = 50.millis)
+    val peerId = impl.activeTasks(requestId)._1.id.value
+    val failuresBefore = impl.consecutiveTaskFailures
+    // The timer fired while the actor was "busy": StorageRequestTimedOut is queued, not yet run.
+    awaitTimerFired(kit, requestId)
+
+    // The reply was enqueued first, so it is processed first — and is NOT discarded as "No pending request".
+    kit.run(
+      StorageRangeCoordinator.StorageRangesResponseMsg(StorageRanges(requestId, slots = Seq.empty, proof = Seq.empty))
+    )
+    impl.activeTasks.contains(requestId) shouldBe false
+
+    // The queued timeout then finds the request answered: no timeout strike, no task failure.
+    kit.run(StorageRangeCoordinator.StorageRequestTimedOut(requestId))
+    impl.peerHealth.consecutiveTimeouts(peerId) shouldBe 0
+    impl.consecutiveTaskFailures shouldBe failuresBefore
+  }
+
+  it should "still time out a request whose timeout message is processed before any reply" taggedAs UnitTest in {
+    val (impl, kit, _, requestId) = implWithOneRequestInFlight(requestTimeout = 50.millis)
+    val peerId = impl.activeTasks(requestId)._1.id.value
+    val failuresBefore = impl.consecutiveTaskFailures
+    awaitTimerFired(kit, requestId)
+
+    kit.run(StorageRangeCoordinator.StorageRequestTimedOut(requestId))
+    impl.peerHealth.consecutiveTimeouts(peerId) shouldBe 1
+    impl.consecutiveTaskFailures shouldBe failuresBefore + 1
+
+    // A reply arriving after the timeout was decided is late: it is discarded and changes nothing.
+    val tasksBefore = impl.tasks.size
+    kit.run(
+      StorageRangeCoordinator.StorageRangesResponseMsg(StorageRanges(requestId, slots = Seq.empty, proof = Seq.empty))
+    )
+    impl.peerHealth.consecutiveTimeouts(peerId) shouldBe 1
+    impl.consecutiveTaskFailures shouldBe failuresBefore + 1
+    impl.tasks.size shouldBe tasksBefore
   }
 
   // ── Peer health: penalised peers are skipped; probation peers get one slot (Sepolia 2026-10-07) ─────────────
