@@ -430,7 +430,9 @@ reviewer re-runs it locally with `scripts/snap-split/verify.sh origin/staging`; 
 6. **Signature-only diff.** The commit may touch only:
    - self-type lines;
    - `<Module>State` and Api trait declarations;
-   - the core's `extends` list and shared-field declarations;
+   - the core's `extends` list and shared-field declarations (the script finds the `extends`/`with` clause past a
+     constructor of up to 80 lines, but admits only the clause's own lines there; added in M2, whose narrowing is the first
+     to touch the core's 30-line constructor);
    - `private` on exclusive vars;
    - the listed pure `val` → `lazy val`/`def` conversions;
    - the new stub test.

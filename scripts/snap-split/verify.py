@@ -380,16 +380,31 @@ def member_names(text: str) -> Counter:
     return Counter(m.group(1) for l in text.splitlines() if (m := MEMBER_DECL_RE.match(l)))
 
 
+HEADER_SCAN_MAX = 80
+EXTENDS_LINE_RE = re.compile(r"^\s*(?:extends|with)\b")
+
+
 def header_regions(text: str) -> set[int]:
     """1-based line numbers of trait/class/object headers and of a trait's self-type lines."""
     lines, reg = text.splitlines(), set()
     for i, l in enumerate(lines):
         if not TYPE_HEADER_RE.match(l):
             continue
-        j = i
+        j, done = i, False
         while j < len(lines) and j < i + 12:
             reg.add(j + 1)
             if lines[j].rstrip().endswith((":", "{", "=")):
+                done = True
+                break
+            j += 1
+        # A long constructor (the controller core's runs to ~30 lines) pushes its `extends`/`with` clause past the
+        # first 12 lines. Keep scanning to the line that ends the header, but admit only the clause's own lines, so a
+        # narrowing commit can add `with <Module>State` to the core while the constructor parameters stay frozen.
+        while not done and j < len(lines) and j < i + HEADER_SCAN_MAX:
+            if EXTENDS_LINE_RE.match(lines[j]):
+                reg.add(j + 1)
+            if lines[j].rstrip().endswith((":", "{", "=")):
+                done = True
                 break
             j += 1
         k = j + 1
