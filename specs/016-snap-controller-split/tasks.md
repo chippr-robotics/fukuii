@@ -440,6 +440,27 @@ only when every item on the per-slice checklist below holds.
     reset different clock sets; it needs a decision on where it lands and its per-reason sets (CQ-SNAP-016-20). The
     resets are unchanged. Stub test: `StagnationWatchdogSpec` (eight cases).
 - [ ] T050 [M8] `PivotSelector`. Run Platåberget from scratch.
+  - As built: no prerequisite commit. The move commit moves into `controller/PivotSelector.scala` the whole members
+    `bootstrapping` (the behaviour: `BootstrapComplete` with the freshness check and the post-merge header gate,
+    `RetrySnapSyncStart`, the initial `PivotBootstrapFailed` backoff), `handleCLPivotHint`, `bootstrapRetryDelay`,
+    `checkBootstrapRetryTimeout`, `currentNetworkBestFromSnapPeers` and `updateBestBlockForPivot` (6 symbols); no var
+    moves (each pivot-selection var is also reached by code that stays). Narrowed self-type: `PivotSelectorState &
+    SnapSharedState & SnapControllerEnv & PhaseFlags & PeerPoolApi & HandshakedPeersApi & BootstrapPeersApi & HealingApi
+    & LifecycleApi & ShutdownApi & SnapStartApi & SyncingApi & AccountRangeStartApi`; state 7 (R14: 6; `clPivotHint`,
+    `clHintArrivedAtMs`, `bootstrapRetryCount`, `isPoSChain`, `bigIntReverseOrdering`, `BootstrapCheckKey`,
+    `peerEventArms`), Api 16 (R14a: 20). `PivotSelector extends PivotSelectionApi`, whose declaration moves next to it
+    from the healing file (CQ-SNAP-016-16); `BootstrapPeersApi` is new in `SnapPeerPool.scala` (`SnapPeerPool extends`
+    it); `SnapStartApi`, `SyncingApi` and `AccountRangeStartApi` are declared in the module file and implemented by the
+    core. `BootstrapRetryBaseDelay`, `BootstrapRetryMaxDelay` and `MaxBootstrapRetries` stayed in the core in the move
+    (rule (d)) and became pure private lazy vals of the trait in the narrowing. `SnapControllerEnv` stays at 18.
+    **Not moved**: `startSnapSync`. plan.md gives M8 only its pivot-selection parts (research.md R6: ~270 of ~710
+    lines); the rest is the accounts-complete recovery branch (M5, CQ-SNAP-016-17) and a copy of the coordinator spawns
+    (M11), so the byte-identical move cannot take it without carrying them into this module; it waits for a carve-out
+    (CQ-SNAP-016-22). With it stay `minPivotHint` and the `isStarting` parameter (M8b). The dispatch stays in the core:
+    the `Start` and `MinPivotBlock` arms of `idle`, the `CLPivotHint` arm of `peerEventArms`, the
+    `RetryBootstrapAtBlock` arm of `commonSyncingArms`. Stub test: `PivotSelectorSpec` (eight cases). Platåberget from
+    scratch: **pending** (to be run by the user on the slice jar after merge; no node run here). T050 stays open until
+    `startSnapSync`'s pivot-selection part moves.
 - [ ] T050b [M8b] Remove the dead `isStarting` parameter in its own PR (FR-034). The PR has no other change.
 - [ ] T051 [M9] `SyncLifecycle`, including the #1501 heap watchdog (call sites unchanged). Run Mordor dormant/wake.
 - [ ] T052 [M10] `PivotRefresher`. Run Platåberget across at least 3 refreshes, and Mordor.

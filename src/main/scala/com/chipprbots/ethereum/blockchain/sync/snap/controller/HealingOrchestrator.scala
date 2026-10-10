@@ -55,9 +55,6 @@ private[snap] trait PivotRefreshApi:
       pivotUnservable: Boolean = false
   ): Unit
 
-private[snap] trait PivotSelectionApi:
-  def currentNetworkBestFromSnapPeers(): Option[BigInt]
-
 private[snap] trait ByteCodeRequestApi:
   def requestByteCodes(): Unit
 
