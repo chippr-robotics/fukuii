@@ -276,6 +276,12 @@ private[actors] class StorageRangeCoordinatorImpl(
 
   /** The peer answered a request with usable data: feed the liveness score and log a recovery from demotion. */
   private def recordPeerAnswered(peerId: String): Unit =
+    // A served answer ends the failure run, as the counter's contract says. Before this the only reset outside a pivot
+    // refresh was the StorageTaskComplete handler, which nothing sends: on Sepolia 2026-10-09 the 100th timeout since
+    // startup (most of them replies dropped while this actor was busy) force-completed storage at 13:02, discarding the
+    // in-flight requests, 42 per-account tries and the ordering-gate state to healing, although ~1,800 responses had
+    // been processed in the same span.
+    consecutiveTaskFailures = 0
     peerHealth.recordSuccess(peerId).foreach { level =>
       log.info(
         s"[STORAGE-PEER-HEALTH] recovered peer=${peerId.take(8)} level=$level->${peerHealth.level(peerId)} " +

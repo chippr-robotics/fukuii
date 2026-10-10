@@ -1859,6 +1859,18 @@ class StorageRangeCoordinatorSpec
     impl.tasks.size shouldBe tasksBefore
   }
 
+  it should "reset the consecutive task-failure count when a peer answers" taggedAs UnitTest in {
+    val (impl, kit, _, requestId) = implWithOneRequestInFlight()
+    impl.consecutiveTaskFailures = 99 // one short of force-complete
+    // Proof-of-absence: a complete, served answer for the chunk.
+    kit.run(
+      StorageRangeCoordinator.StorageRangesResponseMsg(
+        StorageRanges(requestId, slots = Seq.empty, proof = Seq(ByteString(Array.fill(32)(0xab.toByte))))
+      )
+    )
+    impl.consecutiveTaskFailures shouldBe 0
+  }
+
   // ── Peer health: penalised peers are skipped; probation peers get one slot (Sepolia 2026-10-07) ─────────────
 
   private def implWithTasks(n: Int) =
