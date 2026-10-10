@@ -347,6 +347,9 @@ class HealingOrchestratorSpec extends ScalaTestWithActorTestKit(ManualTime.confi
     h.module.awaitingHealedCode = true
     h.module.healedCodeWaitExhausted = true
     h.module.bytecodeForceCompleted = true
+    // The kit records TimerCancelled only for an active timer, so arm the wait timer first.
+    h.call(_.timers.startSingleTimer(HealedCodeWaitTimerKey, HealedCodeWaitTimeout, 1.second))
+    h.effects()
 
     h.call(_.resetHealedCodeHold())
 
