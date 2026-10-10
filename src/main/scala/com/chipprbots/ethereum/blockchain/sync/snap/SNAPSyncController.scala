@@ -1051,17 +1051,39 @@ private class SNAPSyncControllerImpl(
 
   /** Spec 016 P4 (FR-014, plan.md D3): the arms `syncing` runs only in one `SyncPhase`, one partial function per phase.
     * `syncing` consults the current phase's function after its guard arms and before its common arms. P4a moved the
-    * `AccountRangeSync` arms; the other phases follow in P4b–e. The arm order is recorded in research.md R4b.
+    * `AccountRangeSync` arms and P4b the `ByteCodeAndStorageSync` arms; the other phases follow in P4c–e. The arm order
+    * is recorded in research.md R4b.
     */
   private def phaseArms(phase: SyncPhase): PartialFunction[Command, Behavior[Command]] = phase match
-    case AccountRangeSync => accountRangeArms
-    case _                => PartialFunction.empty
+    case AccountRangeSync       => accountRangeArms
+    case ByteCodeAndStorageSync => byteCodeAndStorageArms
+    case _                      => PartialFunction.empty
 
   /** `syncing` arms guarded on `currentPhase == AccountRangeSync` (P4a). */
   private lazy val accountRangeArms: PartialFunction[Command, Behavior[Command]] = {
     case AccountCoordinatorProgress(progress) =>
       if progress.elapsedTimeMs > 0 || progress.tasksPending > 0 || progress.tasksActive > 0 || progress.tasksCompleted > 0
       then maybeRestartIfAccountStagnant(progress)
+      Behaviors.same
+  }
+
+  /** `syncing` arms guarded on `currentPhase == ByteCodeAndStorageSync` (P4b). */
+  private lazy val byteCodeAndStorageArms: PartialFunction[Command, Behavior[Command]] = {
+    case StorageCoordinatorProgress(stats) =>
+      ctx.log.info(
+        s"Storage stagnation check: pending=${stats.tasksPending}, active=${stats.tasksActive}, " +
+          s"completed=${stats.tasksCompleted}, stalledMs=${System.currentTimeMillis() - lastStorageProgressMs}, " +
+          s"refreshAttempted=$storageStagnationRefreshAttempted"
+      )
+      maybeRestartIfStorageStagnant(stats)
+      Behaviors.same
+
+    case ByteCodeCoordinatorProgress(progress) =>
+      ctx.log.info(
+        s"ByteCode stagnation check: downloaded=${progress.bytecodesDownloaded}, " +
+          s"stalledMs=${System.currentTimeMillis() - lastBytecodeProgressMs}"
+      )
+      maybeForceCompleteIfBytecodeStagnant(progress)
       Behaviors.same
   }
 
@@ -2172,23 +2194,7 @@ private class SNAPSyncControllerImpl(
         Behaviors.same
 
       // AccountCoordinatorProgress (AccountRangeSync only): accountRangeArms (P4a).
-
-      case StorageCoordinatorProgress(stats) if currentPhase == ByteCodeAndStorageSync =>
-        ctx.log.info(
-          s"Storage stagnation check: pending=${stats.tasksPending}, active=${stats.tasksActive}, " +
-            s"completed=${stats.tasksCompleted}, stalledMs=${System.currentTimeMillis() - lastStorageProgressMs}, " +
-            s"refreshAttempted=$storageStagnationRefreshAttempted"
-        )
-        maybeRestartIfStorageStagnant(stats)
-        Behaviors.same
-
-      case ByteCodeCoordinatorProgress(progress) if currentPhase == ByteCodeAndStorageSync =>
-        ctx.log.info(
-          s"ByteCode stagnation check: downloaded=${progress.bytecodesDownloaded}, " +
-            s"stalledMs=${System.currentTimeMillis() - lastBytecodeProgressMs}"
-        )
-        maybeForceCompleteIfBytecodeStagnant(progress)
-        Behaviors.same
+      // Storage/ByteCodeCoordinatorProgress (ByteCodeAndStorageSync only): byteCodeAndStorageArms (P4b).
 
       // Chain download runs in parallel — track progress and completion
       case ChainDownloaderProgress(h, b, r, t) =>
