@@ -79,7 +79,7 @@ private class SNAPSyncControllerImpl(
     val peerEventBus: TypedActorRef[com.chipprbots.ethereum.network.PeerEventBusActor.Command],
     val syncConfig: SyncConfig,
     val snapSyncConfig: SNAPSyncConfig,
-    scheduler: Scheduler,
+    val scheduler: Scheduler,
     blacklist: Blacklist,
     val syncController: TypedActorRef[SyncProtocol.SyncControllerReply],
     // Factory for `StateValidator` so unit tests can inject a fake. Production
