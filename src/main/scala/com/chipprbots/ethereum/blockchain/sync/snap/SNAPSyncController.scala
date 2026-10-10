@@ -879,6 +879,29 @@ private class SNAPSyncControllerImpl(
     forceCompleteStorageSent = false
     healingWalkLocalOnly.set(false)
 
+  /** Spec 016 P3 (FR-013): the peer-event arms shared by `idle`, `syncing`, `bootstrapping` and `dormantRetry`. Each of
+    * those four behaviours carried an identical copy of these six arms. `bootstrapping` keeps its own
+    * `WrappedHandshakedPeers` arm (bootstrap reactivity) and its own `GetProgress` arm (bootstrap progress) ahead of
+    * this function. `syncing` consults it only after its path-publish and header-hold guards, exactly where the copies
+    * stood. `completed` and `completedWithBackfill` do not use it.
+    */
+  private lazy val peerEventArms: PartialFunction[Command, Behavior[Command]] = {
+    case WrappedHandshakedPeers(peers) =>
+      handleHandshakedPeersRateTracking(peers); Behaviors.same
+    case WrappedPeerDisconnected(peerId) =>
+      handlePeerDisconnectedDebounced(peerId); Behaviors.same
+    case FlushPeerDisconnects =>
+      flushPeerDisconnects(); Behaviors.same
+    case PollHandshakedPeers =>
+      pollHandshakedPeers(); Behaviors.same
+    case hint: CLPivotHint =>
+      handleCLPivotHint(hint, isStarting = false)
+      Behaviors.same
+    case GetProgress(replyTo) =>
+      replyTo ! progressMonitor.currentProgress
+      Behaviors.same
+  }
+
   // ── Behaviors ────────────────────────────────────────────────────────────────────────────────
   // Each behavior is `Behaviors.receiveMessage` over the sealed Command, with a PostStop signal for
   // cleanup. `context.become(X)` becomes `break(X())`; sender() becomes replyTo; the two peer-list
@@ -887,15 +910,8 @@ private class SNAPSyncControllerImpl(
 
   def idle(): Behavior[Command] =
     Behaviors
-      .receiveMessage[Command] {
-        case PollHandshakedPeers =>
-          pollHandshakedPeers(); Behaviors.same
-        case WrappedHandshakedPeers(peers) =>
-          handleHandshakedPeersRateTracking(peers); Behaviors.same
-        case WrappedPeerDisconnected(peerId) =>
-          handlePeerDisconnectedDebounced(peerId); Behaviors.same
-        case FlushPeerDisconnects =>
-          flushPeerDisconnects(); Behaviors.same
+      .receiveMessage[Command](peerEventArms.orElse[Command, Behavior[Command]] {
+        // Peer events, CLPivotHint and GetProgress: peerEventArms (P3).
 
         case MinPivotBlock(minBlock) =>
           ctx.log.info("Received MinPivotBlock hint: pivot must be >= {}", minBlock)
@@ -908,14 +924,6 @@ private class SNAPSyncControllerImpl(
 
         case GetStatus(replyTo) =>
           replyTo ! SyncProtocol.Status.NotSyncing
-          Behaviors.same
-
-        case hint: CLPivotHint =>
-          handleCLPivotHint(hint, isStarting = false)
-          Behaviors.same
-
-        case GetProgress(replyTo) =>
-          replyTo ! progressMonitor.currentProgress
           Behaviors.same
 
         // ── Unexpected bootstrap signals (should not arrive before sync starts) ────────
@@ -1036,7 +1044,7 @@ private class SNAPSyncControllerImpl(
         case _: ByteCodeBackpressureChanged =>
           ctx.log.debug("Dropping stale ByteCodeBackpressureChanged in idle"); Behaviors.same
         case _: HealingStagnated => ctx.log.debug("Dropping stale HealingStagnated in idle"); Behaviors.same
-      }
+      })
       .receiveSignal { case (_, PostStop) =>
         onStop(); Behaviors.same
       }
@@ -1066,22 +1074,13 @@ private class SNAPSyncControllerImpl(
           if headerHold.isDefined && !msg.isInstanceOf[GetStatus] && !msg.isInstanceOf[GetProgress] &&
             !msg.isInstanceOf[ChainDownloaderProgress] && msg != ChainDownloaderDone =>
         Behaviors.same
-      // C1: inlined rate-tracking peer-list arms
-      case WrappedHandshakedPeers(peers) =>
-        handleHandshakedPeersRateTracking(peers); Behaviors.same
-      case WrappedPeerDisconnected(peerId) =>
-        handlePeerDisconnectedDebounced(peerId); Behaviors.same
-      case FlushPeerDisconnects =>
-        flushPeerDisconnects(); Behaviors.same
-      case PollHandshakedPeers =>
-        pollHandshakedPeers(); Behaviors.same
-      case hint: CLPivotHint =>
-        // CL advanced its head while we're mid-snap. Update the buffer; the proactive
-        // pivot-rolling watcher (geth-style: re-pivot when `head > pivot + 2*offset - 8`)
-        // consumes this on its next tick. We deliberately don't restart the pipeline here
-        // — content-addressed trie nodes are ~99.9% valid across pivot changes.
-        handleCLPivotHint(hint, isStarting = false)
-        Behaviors.same
+      // Peer events, CLPivotHint and GetProgress: peerEventArms (P3), after the two guards above, where the
+      // inlined copies stood. CLPivotHint: CL advanced its head while we're mid-snap. Update the buffer; the proactive
+      // pivot-rolling watcher (geth-style: re-pivot when `head > pivot + 2*offset - 8`)
+      // consumes this on its next tick. We deliberately don't restart the pipeline here
+      // — content-addressed trie nodes are ~99.9% valid across pivot changes.
+      case msg if peerEventArms.isDefinedAt(msg) =>
+        peerEventArms(msg)
 
       // Periodic rate tracker tuning (geth msgrate alignment)
       case TuneRateTracker =>
@@ -2183,10 +2182,6 @@ private class SNAPSyncControllerImpl(
         replyTo ! currentSyncStatus
         Behaviors.same
 
-      case GetProgress(replyTo) =>
-        replyTo ! progressMonitor.currentProgress
-        Behaviors.same
-
       case msg =>
         ctx.log.debug(s"Unhandled message in syncing state: $msg")
         Behaviors.same
@@ -2364,23 +2359,10 @@ private class SNAPSyncControllerImpl(
   def bootstrapping(): Behavior[Command] =
     Behaviors
       .receiveMessage[Command] {
-        // C1: inlined peer-list arms with bootstrap reactivity
+        // C1: inlined peer-list arm with bootstrap reactivity. It differs from the shared copy, so it stays inline
+        // ahead of peerEventArms (P3), as does the bootstrap GetProgress arm below.
         case WrappedHandshakedPeers(peers) =>
           handleHandshakedPeersBootstrapReactivity(peers); Behaviors.same
-        case WrappedPeerDisconnected(peerId) =>
-          handlePeerDisconnectedDebounced(peerId); Behaviors.same
-        case FlushPeerDisconnects =>
-          flushPeerDisconnects(); Behaviors.same
-        case PollHandshakedPeers =>
-          pollHandshakedPeers(); Behaviors.same
-
-        case hint: CLPivotHint =>
-          // CL pushed a (potentially newer) head while we were bootstrapping the previous one.
-          // Buffer it; we'll re-evaluate on the next `startSnapSync()` if the in-flight bootstrap
-          // fails or the caller decides to re-pivot. We don't tear down a healthy in-flight
-          // bootstrap mid-stream — the original head is almost always sufficient.
-          handleCLPivotHint(hint, isStarting = false)
-          Behaviors.same
 
         case BootstrapComplete(pivotHeaderOpt) =>
           ctx.log.info("=" * 80)
@@ -2588,6 +2570,16 @@ private class SNAPSyncControllerImpl(
             phaseStartTime = System.currentTimeMillis()
           )
           Behaviors.same
+
+        // WrappedPeerDisconnected, FlushPeerDisconnects, PollHandshakedPeers and CLPivotHint: peerEventArms (P3),
+        // consulted only after the two bootstrap-specific arms (WrappedHandshakedPeers above, GetProgress here), so its
+        // own copies of those two are never reached in this behaviour. CLPivotHint: CL pushed a
+        // (potentially newer) head while we were bootstrapping the previous one.
+        // Buffer it; we'll re-evaluate on the next `startSnapSync()` if the in-flight bootstrap
+        // fails or the caller decides to re-pivot. We don't tear down a healthy in-flight
+        // bootstrap mid-stream — the original head is almost always sufficient.
+        case msg if peerEventArms.isDefinedAt(msg) =>
+          peerEventArms(msg)
 
         case GetStatus(replyTo) =>
           // During bootstrap, we're syncing via regular sync
@@ -3513,15 +3505,9 @@ private class SNAPSyncControllerImpl(
   def dormantRetry(): Behavior[Command] =
     Behaviors
       .receiveMessage[Command] {
-        // C1: rate-tracking peer-list arms
-        case WrappedHandshakedPeers(peers) =>
-          handleHandshakedPeersRateTracking(peers); Behaviors.same
-        case WrappedPeerDisconnected(peerId) =>
-          handlePeerDisconnectedDebounced(peerId); Behaviors.same
-        case FlushPeerDisconnects =>
-          flushPeerDisconnects(); Behaviors.same
-        case PollHandshakedPeers =>
-          pollHandshakedPeers(); Behaviors.same
+        // Peer events, CLPivotHint and GetProgress: peerEventArms (P3).
+        case msg if peerEventArms.isDefinedAt(msg) =>
+          peerEventArms(msg)
 
         case DormantWakeUp =>
           val snapPeerCount = handshakedPeers.values.count(_.peerInfo.remoteStatus.supportsSnap)
@@ -3532,10 +3518,6 @@ private class SNAPSyncControllerImpl(
             ctx.log.info(s"Dormant wake-up: still no SNAP peers. Re-entering dormant with extended backoff.")
             enterDormantMode(s"no SNAP peers at wake-up (attempt $dormantRetryCount)")
 
-        case hint: CLPivotHint =>
-          handleCLPivotHint(hint, isStarting = false)
-          Behaviors.same
-
         case GetStatus(replyTo) =>
           replyTo ! SyncProtocol.Status.Syncing(
             startingBlockNumber = appStateStorage.getSyncStartingBlock(),
@@ -3545,10 +3527,6 @@ private class SNAPSyncControllerImpl(
             ),
             stateNodesProgress = None
           )
-          Behaviors.same
-
-        case GetProgress(replyTo) =>
-          replyTo ! progressMonitor.currentProgress
           Behaviors.same
 
         case _ => // silently drop stale coordinator messages, SNAP responses, etc.
