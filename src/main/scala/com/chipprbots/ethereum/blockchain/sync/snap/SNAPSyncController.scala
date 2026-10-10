@@ -1051,12 +1051,13 @@ private class SNAPSyncControllerImpl(
 
   /** Spec 016 P4 (FR-014, plan.md D3): the arms `syncing` runs only in one `SyncPhase`, one partial function per phase.
     * `syncing` consults the current phase's function after its guard arms and before its common arms. P4a moved the
-    * `AccountRangeSync` arms and P4b the `ByteCodeAndStorageSync` arms; the other phases follow in P4c–e. The arm order
-    * is recorded in research.md R4b.
+    * `AccountRangeSync` arms, P4b the `ByteCodeAndStorageSync` arms and P4c the `StateHealing` arms; the other phases
+    * follow in P4d–e. The arm order is recorded in research.md R4b.
     */
   private def phaseArms(phase: SyncPhase): PartialFunction[Command, Behavior[Command]] = phase match
     case AccountRangeSync       => accountRangeArms
     case ByteCodeAndStorageSync => byteCodeAndStorageArms
+    case StateHealing           => stateHealingArms
     case _                      => PartialFunction.empty
 
   /** `syncing` arms guarded on `currentPhase == AccountRangeSync` (P4a). */
@@ -1084,6 +1085,178 @@ private class SNAPSyncControllerImpl(
           s"stalledMs=${System.currentTimeMillis() - lastBytecodeProgressMs}"
       )
       maybeForceCompleteIfBytecodeStagnant(progress)
+      Behaviors.same
+  }
+
+  /** `syncing` arms guarded on `currentPhase == StateHealing` (P4c). */
+  private lazy val stateHealingArms: PartialFunction[Command, Behavior[Command]] = {
+    case HealingAllPeersStateless =>
+      ctx.log.warn("All healing peers stateless — refreshing pivot in-place for healing")
+      refreshPivotInPlace("all healing peers stateless")
+      Behaviors.same
+
+    // Coordinator detected no healing progress (MaxConsecutiveStagnations 2-min cycles, or the
+    // healingStagnationTimeoutMs path). Stagnation means "healing is SLOW", NOT "the root is unservable".
+    //
+    // LIVELOCK (fixed by heal-hold-pivot-on-stagnation): rolling the pivot on stagnation resets the
+    // coordinator's verificationPassComplete=false and re-seeds a pending task, so a slow verification BFS
+    // (~16-20h on a slow SSD) is orphaned by a pivot roll (~28-min snap serve window) and can NEVER coincide
+    // with a quiet inter-roll window → completion gate never satisfied, regular sync never reached. The
+    // missing nodes DO heal (durable, content-addressed), but the gate can't close.
+    //
+    // FIX: HOLD the healing pivot fixed on stagnation — resume/retry dispatch against the held root instead
+    // of rolling. Consensus-safe: the healing pivot is a SYNC target, not a consensus rule. GetTrieNodes
+    // fetches missing nodes BY HASH (content-addressed), so a stale root's missing nodes stay ~99.9% servable
+    // by current peers. After healing converges against the held root → StateValidation → regular sync, which
+    // executes blocks forward and fetches any residual missing node on-demand by hash. No state-root / EVM /
+    // gas / reward / RLP output changes — this only changes WHEN the pivot rolls during the healing phase.
+    //
+    // The GENUINE-unservable path (HealingAllPeersStateless, above) is UNCHANGED: if the held root truly
+    // becomes unservable by ALL peers, we still MUST roll or healing stalls.
+    //
+    // Set heal-hold-pivot-on-stagnation = false to restore the legacy roll-on-stagnation behaviour.
+    case HealingStagnated(healed, pending) =>
+      if snapSyncConfig.healHoldPivotOnStagnation then
+        ctx.log.warn(
+          s"[HEAL-STAGNATED] Healing slow (healed=$healed pending=$pending) — HOLDING pivot (not rolling); " +
+            s"resuming dispatch on held root so the verification pass can converge"
+        )
+        trieNodeHealingCoordinator.foreach(_ ! actors.TrieNodeHealingCoordinator.HealingResumeDispatch)
+      else
+        // Legacy behaviour: refresh pivot — coordinator receives HealingPivotRefreshed, clears stale tasks +
+        // stateless peers, re-seeds new root top-down (Besu-aligned). Do NOT stop coordinator —
+        // refreshPivotInPlace sends HealingPivotRefreshed to it directly.
+        ctx.log.warn(
+          s"[HEAL-STAGNATED] Healing stuck: healed=$healed pending=$pending — " +
+            s"refreshing pivot for fresh healing round (legacy roll-on-stagnation)"
+        )
+        refreshPivotInPlace("healing-stagnated")
+      Behaviors.same
+
+    // Complementary guard (root-cause w98gfx4wn): the heal walk root's own bytes are absent from local node storage,
+    // so the coordinator REFUSED to seed it (seeding an unservable root stalls at "exactly 1 node, healed=0" forever —
+    // a root cannot be reconstructed from nothing and cannot be fetched against an advancing serve root). This fires at
+    // the SEED, so it covers every entry into healing — crucially the BootstrapComplete RESTART handlers that call
+    // startStateHealing() directly and bypass shouldSkipHealingAfterDownloads (the whole point of the seed-site guard).
+    //
+    // Hand off to lazy on-demand healing exactly as shouldSkipHealingAfterDownloads's deferred path does: stop the
+    // (idle) coordinator and call completeSnapSync(). The missing trie nodes are then fetched on-demand via GetTrieNodes
+    // during block execution (BlockImporter/StateNodeFetcher, with real parent-root context) — the established
+    // post-SNAP regular-sync fallback. This converges to a REAL Completed/regular-sync state; it is NOT a silent
+    // skip-and-mark-done (finalizeSnapSync still enforces the snapStateRoot == pivotHeader.stateRoot anchor guard).
+    //
+    // spec 009 FR-001/FR-008: under `movingRootDeltaHeal` this handler is the BOUNDED last-resort, NOT the default.
+    // The coordinator's absent-root branch SEEDS the served root and fetches it (batch-2 T006) instead of emitting
+    // HealingRootUnservable, so under the flag this is reached only when the controller's own re-peg budget is
+    // exhausted (refreshPivotInPlace's MaxHealRepegNoRootAttempts, batch-4 H-S7) — that branch calls completeSnapSync()
+    // directly (the same handoff below). This handler stays for the flag-OFF path (where the coordinator still emits
+    // HealingRootUnservable) and as a defensive catch; either way it is fail-SAFE (anchor-guard gated), never fail-open.
+    case StateHealingAbandoned =>
+      ctx.log.warn(
+        "[HEAL-ABANDONED] Healing coordinator force-completed without a verification walk (Path scheme). The trie is " +
+          "NOT verified, so this is not a clean walk: handing off to lazy on-demand healing via completeSnapSync()."
+      )
+      anchorPivotBeforeLazyHandoff("HEAL-ABANDONED")
+      completeSnapSync()
+      Behaviors.same
+
+    case HealingRootUnservable(root) =>
+      ctx.log.warn(
+        s"[HEAL-ROOT-UNSERVABLE] Heal walk root ${root.toHex.take(16)} is absent from local storage and cannot be " +
+          s"seeded (a heal cannot reconstruct an unservable root). Handing off to lazy on-demand healing via " +
+          s"completeSnapSync() — missing trie nodes will be fetched on-demand via GetTrieNodes during block execution."
+      )
+      // completeSnapSync() → finalizeSnapSync() performs ALL cleanup: stopSnapOnlySchedules() cancels the
+      // healing-request scheduler, and stopStateSyncChildren() stops the idle healing coordinator. No manual
+      // coordinator/scheduler teardown needed here (it would double-cancel). finalizeSnapSync still enforces the
+      // snapStateRoot == pivotHeader.stateRoot anchor guard, so this is NOT a false completion.
+      //
+      // Platåberget soak, 2026-09-27: re-pegs during StateHealing deliberately skip persisting pivotBlock/
+      // stateRoot (BUG-006 guard, see completePivotRefreshWithStateRoot ~4222), so by the time a lazy handoff
+      // reaches here the persisted anchor can be several re-pegs behind the in-memory pivot. The A5 guard then
+      // compares that stale anchor against the CURRENT pivot's header and aborts on a self-inflicted mismatch
+      // between two different pivots. anchorPivotBeforeLazyHandoff re-anchors the persisted keys to the
+      // in-memory pivot/root immediately before this terminal, one-way handoff — see its doc for why this does
+      // not reintroduce BUG-006.
+      anchorPivotBeforeLazyHandoff("HEAL-ROOT-UNSERVABLE")
+      completeSnapSync()
+      Behaviors.same
+
+    // Streaming batch from ongoing trie walk — forward immediately to coordinator for early healing
+    case TrieWalkBatch(missingNodes) =>
+      if missingNodes.nonEmpty then
+        ctx.log.info(s"Trie walk batch: ${missingNodes.size} missing nodes — queuing for healing")
+        trieNodeHealingCoordinator.foreach { coordinator =>
+          coordinator ! actors.TrieNodeHealingCoordinator.QueueMissingNodes(missingNodes)
+        }
+      Behaviors.same
+
+    // Streaming walk completed — all batches already sent via TrieWalkBatch
+    case TrieWalkComplete(totalFound) =>
+      trieWalkInProgress = false
+      trieNodeHealingCoordinator.foreach(_ ! actors.TrieNodeHealingCoordinator.WalkStateChanged(false))
+      if totalFound == 0 then
+        ctx.log.info("Trie walk found no missing nodes — healing complete after {} rounds!", healingRoundCount)
+        healingRoundCount = 0
+        pivotBlock.foreach(b => appStateStorage.putSnapSyncPivotBlock(b).commit())
+        stateRoot.foreach(r => appStateStorage.putSnapSyncStateRoot(r.value).commit())
+        // #1188: capture clean signal — the walk just visited every node.
+        healingValidatedRoot = stateRoot
+        // Stop the periodic healing-request scheduler before entering validation.
+        // It would otherwise keep firing 1-s ticks against a coordinator that's
+        // signalled complete; the phase gate on RequestTrieNodeHealing handles
+        // any tick already in the mailbox.
+        timers.cancel(RequestTrieNodeHealing)
+        progressMonitor.startPhase(StateValidation)
+        currentPhase = StateValidation
+        validateState()
+      else
+        // A2: Loop indefinitely until Pending==0 — mirrors go-ethereum sync.go:1400
+        healingRoundCount += 1
+        ctx.log.info(
+          s"Trie walk complete: $totalFound missing nodes queued across batches (round $healingRoundCount)"
+        )
+        timers.startSingleTimer(ScheduledTrieWalkKey, ScheduledTrieWalk, 2.minutes)
+      Behaviors.same
+
+    case TrieWalkResult(missingNodes) =>
+      trieWalkInProgress = false
+      trieNodeHealingCoordinator.foreach(_ ! actors.TrieNodeHealingCoordinator.WalkStateChanged(false))
+      if missingNodes.isEmpty then
+        ctx.log.info("Trie walk found no missing nodes — healing complete after {} rounds!", healingRoundCount)
+        healingRoundCount = 0
+        // Commit final pivot root — deferred from refreshPivotInPlace() to prevent BUG-006.
+        // AppStateStorage now reflects the root that healing actually completed against.
+        for b <- pivotBlock; r <- stateRoot do
+          appStateStorage.putSnapSyncPivotBlock(b).and(appStateStorage.putSnapSyncStateRoot(r.value)).commit()
+        // #1188: capture clean signal — same as the streaming TrieWalkComplete(0) path.
+        healingValidatedRoot = stateRoot
+        // Stop the periodic healing-request scheduler before entering validation.
+        // See companion handler above for rationale.
+        timers.cancel(RequestTrieNodeHealing)
+        progressMonitor.startPhase(StateValidation)
+        currentPhase = StateValidation
+        validateState()
+      else
+        healingRoundCount += 1
+        ctx.log.info(
+          s"Trie walk found ${missingNodes.size} missing nodes — queuing for healing (round $healingRoundCount)"
+        )
+        trieNodeHealingCoordinator.foreach { coordinator =>
+          coordinator ! actors.TrieNodeHealingCoordinator.QueueMissingNodes(missingNodes)
+        }
+        timers.startSingleTimer(ScheduledTrieWalkKey, ScheduledTrieWalk, 2.minutes)
+      Behaviors.same
+
+    case ScheduledTrieWalk =>
+      startTrieWalk()
+      Behaviors.same
+
+    case TrieWalkFailed(error) =>
+      trieWalkInProgress = false
+      trieNodeHealingCoordinator.foreach(_ ! actors.TrieNodeHealingCoordinator.WalkStateChanged(false))
+      ctx.log.error(s"Trie walk failed: $error. Retrying after delay...")
+      timers.startSingleTimer(ScheduledTrieWalkKey, ScheduledTrieWalk, 5.seconds)
       Behaviors.same
   }
 
@@ -1811,48 +1984,7 @@ private class SNAPSyncControllerImpl(
           )
         Behaviors.same
 
-      case HealingAllPeersStateless if currentPhase == StateHealing =>
-        ctx.log.warn("All healing peers stateless — refreshing pivot in-place for healing")
-        refreshPivotInPlace("all healing peers stateless")
-        Behaviors.same
-
-      // Coordinator detected no healing progress (MaxConsecutiveStagnations 2-min cycles, or the
-      // healingStagnationTimeoutMs path). Stagnation means "healing is SLOW", NOT "the root is unservable".
-      //
-      // LIVELOCK (fixed by heal-hold-pivot-on-stagnation): rolling the pivot on stagnation resets the
-      // coordinator's verificationPassComplete=false and re-seeds a pending task, so a slow verification BFS
-      // (~16-20h on a slow SSD) is orphaned by a pivot roll (~28-min snap serve window) and can NEVER coincide
-      // with a quiet inter-roll window → completion gate never satisfied, regular sync never reached. The
-      // missing nodes DO heal (durable, content-addressed), but the gate can't close.
-      //
-      // FIX: HOLD the healing pivot fixed on stagnation — resume/retry dispatch against the held root instead
-      // of rolling. Consensus-safe: the healing pivot is a SYNC target, not a consensus rule. GetTrieNodes
-      // fetches missing nodes BY HASH (content-addressed), so a stale root's missing nodes stay ~99.9% servable
-      // by current peers. After healing converges against the held root → StateValidation → regular sync, which
-      // executes blocks forward and fetches any residual missing node on-demand by hash. No state-root / EVM /
-      // gas / reward / RLP output changes — this only changes WHEN the pivot rolls during the healing phase.
-      //
-      // The GENUINE-unservable path (HealingAllPeersStateless, above) is UNCHANGED: if the held root truly
-      // becomes unservable by ALL peers, we still MUST roll or healing stalls.
-      //
-      // Set heal-hold-pivot-on-stagnation = false to restore the legacy roll-on-stagnation behaviour.
-      case HealingStagnated(healed, pending) if currentPhase == StateHealing =>
-        if snapSyncConfig.healHoldPivotOnStagnation then
-          ctx.log.warn(
-            s"[HEAL-STAGNATED] Healing slow (healed=$healed pending=$pending) — HOLDING pivot (not rolling); " +
-              s"resuming dispatch on held root so the verification pass can converge"
-          )
-          trieNodeHealingCoordinator.foreach(_ ! actors.TrieNodeHealingCoordinator.HealingResumeDispatch)
-        else
-          // Legacy behaviour: refresh pivot — coordinator receives HealingPivotRefreshed, clears stale tasks +
-          // stateless peers, re-seeds new root top-down (Besu-aligned). Do NOT stop coordinator —
-          // refreshPivotInPlace sends HealingPivotRefreshed to it directly.
-          ctx.log.warn(
-            s"[HEAL-STAGNATED] Healing stuck: healed=$healed pending=$pending — " +
-              s"refreshing pivot for fresh healing round (legacy roll-on-stagnation)"
-          )
-          refreshPivotInPlace("healing-stagnated")
-        Behaviors.same
+      // HealingAllPeersStateless, HealingStagnated (StateHealing only): stateHealingArms (P4c).
 
       case StateHealingComplete =>
         progressMonitor.startPhase(StateHealing)
@@ -1874,131 +2006,8 @@ private class SNAPSyncControllerImpl(
           startStateHealingWithInterleave()
         Behaviors.same
 
-      // Complementary guard (root-cause w98gfx4wn): the heal walk root's own bytes are absent from local node storage,
-      // so the coordinator REFUSED to seed it (seeding an unservable root stalls at "exactly 1 node, healed=0" forever —
-      // a root cannot be reconstructed from nothing and cannot be fetched against an advancing serve root). This fires at
-      // the SEED, so it covers every entry into healing — crucially the BootstrapComplete RESTART handlers that call
-      // startStateHealing() directly and bypass shouldSkipHealingAfterDownloads (the whole point of the seed-site guard).
-      //
-      // Hand off to lazy on-demand healing exactly as shouldSkipHealingAfterDownloads's deferred path does: stop the
-      // (idle) coordinator and call completeSnapSync(). The missing trie nodes are then fetched on-demand via GetTrieNodes
-      // during block execution (BlockImporter/StateNodeFetcher, with real parent-root context) — the established
-      // post-SNAP regular-sync fallback. This converges to a REAL Completed/regular-sync state; it is NOT a silent
-      // skip-and-mark-done (finalizeSnapSync still enforces the snapStateRoot == pivotHeader.stateRoot anchor guard).
-      //
-      // spec 009 FR-001/FR-008: under `movingRootDeltaHeal` this handler is the BOUNDED last-resort, NOT the default.
-      // The coordinator's absent-root branch SEEDS the served root and fetches it (batch-2 T006) instead of emitting
-      // HealingRootUnservable, so under the flag this is reached only when the controller's own re-peg budget is
-      // exhausted (refreshPivotInPlace's MaxHealRepegNoRootAttempts, batch-4 H-S7) — that branch calls completeSnapSync()
-      // directly (the same handoff below). This handler stays for the flag-OFF path (where the coordinator still emits
-      // HealingRootUnservable) and as a defensive catch; either way it is fail-SAFE (anchor-guard gated), never fail-open.
-      case StateHealingAbandoned if currentPhase == StateHealing =>
-        ctx.log.warn(
-          "[HEAL-ABANDONED] Healing coordinator force-completed without a verification walk (Path scheme). The trie is " +
-            "NOT verified, so this is not a clean walk: handing off to lazy on-demand healing via completeSnapSync()."
-        )
-        anchorPivotBeforeLazyHandoff("HEAL-ABANDONED")
-        completeSnapSync()
-        Behaviors.same
-
-      case HealingRootUnservable(root) if currentPhase == StateHealing =>
-        ctx.log.warn(
-          s"[HEAL-ROOT-UNSERVABLE] Heal walk root ${root.toHex.take(16)} is absent from local storage and cannot be " +
-            s"seeded (a heal cannot reconstruct an unservable root). Handing off to lazy on-demand healing via " +
-            s"completeSnapSync() — missing trie nodes will be fetched on-demand via GetTrieNodes during block execution."
-        )
-        // completeSnapSync() → finalizeSnapSync() performs ALL cleanup: stopSnapOnlySchedules() cancels the
-        // healing-request scheduler, and stopStateSyncChildren() stops the idle healing coordinator. No manual
-        // coordinator/scheduler teardown needed here (it would double-cancel). finalizeSnapSync still enforces the
-        // snapStateRoot == pivotHeader.stateRoot anchor guard, so this is NOT a false completion.
-        //
-        // Platåberget soak, 2026-09-27: re-pegs during StateHealing deliberately skip persisting pivotBlock/
-        // stateRoot (BUG-006 guard, see completePivotRefreshWithStateRoot ~4222), so by the time a lazy handoff
-        // reaches here the persisted anchor can be several re-pegs behind the in-memory pivot. The A5 guard then
-        // compares that stale anchor against the CURRENT pivot's header and aborts on a self-inflicted mismatch
-        // between two different pivots. anchorPivotBeforeLazyHandoff re-anchors the persisted keys to the
-        // in-memory pivot/root immediately before this terminal, one-way handoff — see its doc for why this does
-        // not reintroduce BUG-006.
-        anchorPivotBeforeLazyHandoff("HEAL-ROOT-UNSERVABLE")
-        completeSnapSync()
-        Behaviors.same
-
-      // Streaming batch from ongoing trie walk — forward immediately to coordinator for early healing
-      case TrieWalkBatch(missingNodes) if currentPhase == StateHealing =>
-        if missingNodes.nonEmpty then
-          ctx.log.info(s"Trie walk batch: ${missingNodes.size} missing nodes — queuing for healing")
-          trieNodeHealingCoordinator.foreach { coordinator =>
-            coordinator ! actors.TrieNodeHealingCoordinator.QueueMissingNodes(missingNodes)
-          }
-        Behaviors.same
-
-      // Streaming walk completed — all batches already sent via TrieWalkBatch
-      case TrieWalkComplete(totalFound) if currentPhase == StateHealing =>
-        trieWalkInProgress = false
-        trieNodeHealingCoordinator.foreach(_ ! actors.TrieNodeHealingCoordinator.WalkStateChanged(false))
-        if totalFound == 0 then
-          ctx.log.info("Trie walk found no missing nodes — healing complete after {} rounds!", healingRoundCount)
-          healingRoundCount = 0
-          pivotBlock.foreach(b => appStateStorage.putSnapSyncPivotBlock(b).commit())
-          stateRoot.foreach(r => appStateStorage.putSnapSyncStateRoot(r.value).commit())
-          // #1188: capture clean signal — the walk just visited every node.
-          healingValidatedRoot = stateRoot
-          // Stop the periodic healing-request scheduler before entering validation.
-          // It would otherwise keep firing 1-s ticks against a coordinator that's
-          // signalled complete; the phase gate on RequestTrieNodeHealing handles
-          // any tick already in the mailbox.
-          timers.cancel(RequestTrieNodeHealing)
-          progressMonitor.startPhase(StateValidation)
-          currentPhase = StateValidation
-          validateState()
-        else
-          // A2: Loop indefinitely until Pending==0 — mirrors go-ethereum sync.go:1400
-          healingRoundCount += 1
-          ctx.log.info(
-            s"Trie walk complete: $totalFound missing nodes queued across batches (round $healingRoundCount)"
-          )
-          timers.startSingleTimer(ScheduledTrieWalkKey, ScheduledTrieWalk, 2.minutes)
-        Behaviors.same
-
-      case TrieWalkResult(missingNodes) if currentPhase == StateHealing =>
-        trieWalkInProgress = false
-        trieNodeHealingCoordinator.foreach(_ ! actors.TrieNodeHealingCoordinator.WalkStateChanged(false))
-        if missingNodes.isEmpty then
-          ctx.log.info("Trie walk found no missing nodes — healing complete after {} rounds!", healingRoundCount)
-          healingRoundCount = 0
-          // Commit final pivot root — deferred from refreshPivotInPlace() to prevent BUG-006.
-          // AppStateStorage now reflects the root that healing actually completed against.
-          for b <- pivotBlock; r <- stateRoot do
-            appStateStorage.putSnapSyncPivotBlock(b).and(appStateStorage.putSnapSyncStateRoot(r.value)).commit()
-          // #1188: capture clean signal — same as the streaming TrieWalkComplete(0) path.
-          healingValidatedRoot = stateRoot
-          // Stop the periodic healing-request scheduler before entering validation.
-          // See companion handler above for rationale.
-          timers.cancel(RequestTrieNodeHealing)
-          progressMonitor.startPhase(StateValidation)
-          currentPhase = StateValidation
-          validateState()
-        else
-          healingRoundCount += 1
-          ctx.log.info(
-            s"Trie walk found ${missingNodes.size} missing nodes — queuing for healing (round $healingRoundCount)"
-          )
-          trieNodeHealingCoordinator.foreach { coordinator =>
-            coordinator ! actors.TrieNodeHealingCoordinator.QueueMissingNodes(missingNodes)
-          }
-          timers.startSingleTimer(ScheduledTrieWalkKey, ScheduledTrieWalk, 2.minutes)
-        Behaviors.same
-
-      case ScheduledTrieWalk if currentPhase == StateHealing =>
-        startTrieWalk()
-        Behaviors.same
-
-      case TrieWalkFailed(error) if currentPhase == StateHealing =>
-        trieWalkInProgress = false
-        trieNodeHealingCoordinator.foreach(_ ! actors.TrieNodeHealingCoordinator.WalkStateChanged(false))
-        ctx.log.error(s"Trie walk failed: $error. Retrying after delay...")
-        timers.startSingleTimer(ScheduledTrieWalkKey, ScheduledTrieWalk, 5.seconds)
-        Behaviors.same
+      // StateHealingAbandoned, HealingRootUnservable, TrieWalkBatch/Complete/Result, ScheduledTrieWalk, TrieWalkFailed
+      // (StateHealing only): stateHealingArms (P4c).
 
       case StateValidationComplete =>
         ctx.log.info("State validation complete. SNAP sync finished!")
