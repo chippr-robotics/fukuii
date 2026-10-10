@@ -1052,14 +1052,17 @@ private class SNAPSyncControllerImpl(
   /** Spec 016 P4 (FR-014, plan.md D3): the arms `syncing` runs only in one `SyncPhase`, one partial function per phase.
     * `syncing` consults the current phase's function after its guard arms and before its common arms. P4a moved the
     * `AccountRangeSync` arms, P4b the `ByteCodeAndStorageSync` arms, P4c the `StateHealing` arms and P4d the
-    * `StateValidation` arms; P4e follows. The arm order is recorded in research.md R4b.
+    * `StateValidation` arms; P4e added the (empty) `ChainDownloadCompletion` function. No `syncing` arm carries a
+    * `currentPhase` guard any more; the arms that test the phase inside their body stay in `commonSyncingArms`
+    * (research.md R4b note 2, decided per arm in P4e). The arm order is recorded in research.md R4b.
     */
   private def phaseArms(phase: SyncPhase): PartialFunction[Command, Behavior[Command]] = phase match
-    case AccountRangeSync       => accountRangeArms
-    case ByteCodeAndStorageSync => byteCodeAndStorageArms
-    case StateHealing           => stateHealingArms
-    case StateValidation        => stateValidationArms
-    case _                      => PartialFunction.empty
+    case AccountRangeSync        => accountRangeArms
+    case ByteCodeAndStorageSync  => byteCodeAndStorageArms
+    case StateHealing            => stateHealingArms
+    case StateValidation         => stateValidationArms
+    case ChainDownloadCompletion => chainDownloadCompletionArms
+    case _                       => PartialFunction.empty
 
   /** `syncing` arms guarded on `currentPhase == AccountRangeSync` (P4a). */
   private lazy val accountRangeArms: PartialFunction[Command, Behavior[Command]] = {
@@ -1283,11 +1286,13 @@ private class SNAPSyncControllerImpl(
       Behaviors.same
   }
 
-  /** `syncing` arms guarded on `currentPhase == StateValidation` (P4d). */
+  /** The `syncing` arms that were guarded on `currentPhase == StateValidation` (P4d, guards dropped). They are reached
+    * only through `phaseArms(StateValidation)`, after `staleValidationDropArms`.
+    */
   private lazy val stateValidationResultArms: PartialFunction[Command, Behavior[Command]] = {
-    // Account trie validation result handlers. All gated on phase + generation
-    // match. Any state mutation lives only in these handlers (never inside the
-    // Future).
+    // Account trie validation result handlers. Reached only in StateValidation (phaseArms) and only for the current
+    // generation (staleValidationDropArms runs first). Any state mutation lives only in these handlers (never inside
+    // the Future).
     case ValidateAccountTrieResult(_, Right(missing), elapsedMs) =>
       if missing.isEmpty then
         ctx.log.info(s"Account trie validation successful - no missing nodes (${elapsedMs}ms)")
@@ -1375,6 +1380,12 @@ private class SNAPSyncControllerImpl(
     */
   private lazy val stateValidationArms: PartialFunction[Command, Behavior[Command]] =
     staleValidationDropArms.orElse(stateValidationResultArms)
+
+  /** The `ChainDownloadCompletion` phase function (P4e). It is empty: no `syncing` arm was ever guarded on this phase,
+    * and no code assigns it (research.md R4b note 3, CQ-SNAP-016-9), so in that phase every message goes on to
+    * `commonSyncingArms`, as it did before P4.
+    */
+  private lazy val chainDownloadCompletionArms: PartialFunction[Command, Behavior[Command]] = PartialFunction.empty
 
   /** Dispatch order (spec 016 P4, research.md R4b): `syncingGuardArms` (the path-publish and header-hold arms with
     * their two guarded wildcards, then the `peerEventArms` delegation), then `phaseArms(currentPhase)`, then

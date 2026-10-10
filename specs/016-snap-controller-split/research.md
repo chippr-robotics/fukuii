@@ -518,8 +518,11 @@ catch-all (#75).
    `staleValidationDropArms` (#60–#62 verbatim, generation guards kept) **then** `stateValidationResultArms` (#63–#67,
    phase guards dropped). Because #60–#62 have no phase guard, `commonSyncingArms` also keeps a delegation arm
    (`case msg if staleValidationDropArms.isDefinedAt(msg)`) where #60–#62 stood, so the drops still run in every
-   other phase (note 1). The "After P4a" column is not edited; the "Planned" column marks
-   each slice's arms done.
+   other phase (note 1). **P4e** adds `chainDownloadCompletionArms` for `ChainDownloadCompletion`: an empty
+   function (note 3); `Idle`, `Completed` and `Dormant` keep the `PartialFunction.empty` default. P4e moves no arm:
+   it keeps the nine body-level arms in common, each with a reason in the "Planned" column (note 2). After P4e no
+   `syncing` arm carries a `currentPhase` dispatch guard. The "After P4a" column is not edited; the "Planned" column
+   marks each slice's arms done.
 3. `commonSyncingArms`: every other arm, in its original order (a local `val` in `syncing`); since P4d, #60–#62 are
    reached there through the `staleValidationDropArms` delegation.
 4. The catch-all `unhandledInSyncing` ("Unhandled message in syncing state: $msg", DEBUG), unchanged text.
@@ -540,18 +543,18 @@ arms, then catch-all".
 | 7 | L1082 | `msg` (delegation: `WrappedHandshakedPeers`, `WrappedPeerDisconnected`, `FlushPeerDisconnects`, `PollHandshakedPeers`, `CLPivotHint`, `GetProgress`) | `peerEventArms.isDefinedAt(msg)` | — | guard arms | guard arms |
 | 8 | L1086 | `TuneRateTracker` | — | — | common | common |
 | 9 | L1091 | `EvictNonSnapPeers` | — | — | common | common |
-| 10 | L1096 | `DelayedRestart` | — | `AccountRangeSync \|\| ByteCodeAndStorageSync` → restart, else same | common | common (body-level) |
+| 10 | L1096 | `DelayedRestart` | — | `AccountRangeSync \|\| ByteCodeAndStorageSync` → restart, else same | common | common (body-level; **P4e: keep**: M9 moves the Command whole; lifting splits it over 3 PFs) |
 | 11 | L1101 | `CheckSnapCapability` | — | — | common | common |
 | 12 | L1115 | `RequestAccountRanges` | — | — | common | common |
 | 13 | L1119 | `RequestByteCodes` | — | — | common | common |
 | 14 | L1123 | `RequestStorageRanges` | — | — | common | common |
-| 15 | L1127 | `RequestTrieNodeHealing` | — | `StateHealing` → request + serve-root check | common | common (body-level) |
+| 15 | L1127 | `RequestTrieNodeHealing` | — | `StateHealing` → request + serve-root check | common | common (body-level; **P4e: keep**: needs a no-op arm in common + an unnamed oracle test; M6b moves it with the healing arms) |
 | 16 | L1146 | `HealingServeRoot` | — | — | common | common |
 | 17 | L1175 | `EnsureSnapServerPeersConnected` | — | — | common | common |
 | 18 | L1180 | `AccountRangeResponse` | — | — | common | common |
 | 19 | L1223 | `ByteCodesResponse` | — | — | common | common |
 | 20 | L1230 | `StorageRangesResponse` | — | — | common | common |
-| 21 | L1237 | `TrieNodesResponse` | — | `!= StateValidation` → forward | common | common (body-level) |
+| 21 | L1237 | `TrieNodesResponse` | — | `!= StateValidation` → forward | common | common (body-level; **P4e: keep**: the debug log runs before the test; T027 cannot tell drop from forward) |
 | 22 | L1247 | `ProgressAccountsSynced` | — | — | common | common |
 | 23 | L1264 | `AccountRangeProgressCmd` | — | — | common | common |
 | 24 | L1320 | `ProgressAccountsFinalizingTrie` | — | — | common | common |
@@ -565,12 +568,12 @@ arms, then catch-all".
 | 32 | L1374 | `ProgressStorageContracts` | — | — | common | common |
 | 33 | L1383 | `StorageBackpressureChanged` | — | — | common | common |
 | 34 | L1389 | `ByteCodeBackpressureChanged` | — | — | common | common |
-| 35 | L1396 | `PivotStateUnservable` | — | `AccountRangeSync \|\| ByteCodeAndStorageSync` (twice, interleaved with the debounce and cause tests), else log | common | common (body-level) |
+| 35 | L1396 | `PivotStateUnservable` | — | `AccountRangeSync \|\| ByteCodeAndStorageSync` (twice, interleaved with the debounce and cause tests), else log | common | common (body-level; **P4e: keep**: the test is interleaved with the debounce and cause tests) |
 | 36 | L1482 | `BootstrapComplete` | `pendingPivotRefresh.isDefined` (flag) | — | common | common |
 | 37 | L1498 | `PivotBootstrapFailed` | `pendingPivotRefresh.isDefined` (flag) | — | common | common |
 | 38 | L1518 | `PivotProbeTimeout` | — | — | common | common |
-| 39 | L1542 | `RetryPivotRefresh` | — | `AccountRangeSync \|\| ByteCodeAndStorageSync \|\| StateHealing` → refresh, else log | common | common (body-level) |
-| 40 | L1555 | `RetryBootstrapAtBlock` | — | same three phases → bootstrap, else log | common | common (body-level) |
+| 39 | L1542 | `RetryPivotRefresh` | — | `AccountRangeSync \|\| ByteCodeAndStorageSync \|\| StateHealing` → refresh, else log | common | common (body-level; **P4e: keep**: one body in three phase PFs; M10 moves it whole) |
+| 40 | L1555 | `RetryBootstrapAtBlock` | — | same three phases → bootstrap, else log | common | common (body-level; **P4e: keep**: one body in three phase PFs; M10 moves it whole) |
 | 41 | L1572 | `IncrementalContractData` | — | — | common | common |
 | 42 | L1604 | `AccountRangeSyncComplete` | — | — (writes `currentPhase`) | common | common |
 | 43 | L1694 | `HealedCodeHashes` | — | — | common | common |
@@ -578,10 +581,10 @@ arms, then catch-all".
 | 45 | L1708 | `HealedCodeWaitTimeout` | `awaitingHealedCode` (flag) | — | common | common |
 | 46 | L1719 | `ByteCodeSyncComplete` | `!bytecodePhaseComplete` (flag) | — | common | common |
 | 47 | L1739 | `StorageRangeSyncComplete` | `!storagePhaseComplete` (flag) | — | common | common |
-| 48 | L1750 | `StorageRangeSyncForceCompleted` | `!storagePhaseComplete` (flag) | `ByteCodeAndStorageSync \|\| StateHealing` → force-complete, else warn | common | common (body-level) |
+| 48 | L1750 | `StorageRangeSyncForceCompleted` | `!storagePhaseComplete` (flag) | `ByteCodeAndStorageSync \|\| StateHealing` → force-complete, else warn | common | common (body-level; **P4e: keep**: flag guard + two-phase test; lifting copies the guard into three PFs) |
 | 49 | L1767 | `HealingAllPeersStateless` | `currentPhase == StateHealing` | — | common | `stateHealingArms` (P4c, done) |
 | 50 | L1792 | `HealingStagnated` | `currentPhase == StateHealing` | — | common | `stateHealingArms` (P4c, done) |
-| 51 | L1810 | `StateHealingComplete` | — | `StateHealing` (Path scheme only) | common | common (body-level; unguarded on the Hash scheme) |
+| 51 | L1810 | `StateHealingComplete` | — | `StateHealing` (Path scheme only) | common | common (body-level, Path scheme only; **P4e: keep**: the test is scheme-dependent and runs after shared lines) |
 | 52 | L1848 | `StateHealingAbandoned` | `currentPhase == StateHealing` | — | common | `stateHealingArms` (P4c, done) |
 | 53 | L1857 | `HealingRootUnservable` | `currentPhase == StateHealing` | — | common | `stateHealingArms` (P4c, done) |
 | 54 | L1880 | `TrieWalkBatch` | `currentPhase == StateHealing` | — | common | `stateHealingArms` (P4c, done) |
@@ -598,7 +601,7 @@ arms, then catch-all".
 | 65 | L2033 | `ValidateStorageTriesResult(_, Right, _)` | `currentPhase == StateValidation` | — | common | `stateValidationArms` (P4d, done) |
 | 66 | L2047 | `ValidateStorageTriesResult(_, Left, _)` | `currentPhase == StateValidation` | — (writes `currentPhase`) | common | `stateValidationArms` (P4d, done) |
 | 67 | L2055 | `ValidationRetry` | `currentPhase == StateValidation` | — | common | `stateValidationArms` (P4d, done) |
-| 68 | L2062 | `CheckDownloadStagnation` | — | three tests plus a `currentPhase match` choosing which coordinators to ask | common | common (body-level) |
+| 68 | L2062 | `CheckDownloadStagnation` | — | three tests plus a `currentPhase match` choosing which coordinators to ask | common | common (body-level; **P4e: keep**: three tests + a `match`, interleaved; body oracle is T021; M7 moves it whole) |
 | 69 | L2149 | `AccountCoordinatorProgress` | `currentPhase == AccountRangeSync` | — | **`accountRangeArms`** | `accountRangeArms` (P4a, done) |
 | 70 | L2154 | `StorageCoordinatorProgress` | `currentPhase == ByteCodeAndStorageSync` | — | common | `byteCodeAndStorageArms` (P4b, done) |
 | 71 | L2163 | `ByteCodeCoordinatorProgress` | `currentPhase == ByteCodeAndStorageSync` | — | common | `byteCodeAndStorageArms` (P4b, done) |
@@ -627,8 +630,18 @@ by #75. The six `peerEventArms` types have no arm outside #7.
    inside the body; T027 sees all of them as `Handled` in every phase, so it cannot tell whether a lifted test still
    picks the same branch. Splitting them into per-phase arms is a body change without an arm-order oracle. P4a leaves
    them in common; P4e decides, with a body-level oracle (T021/T022 or a new test) if it lifts any.
+   *P4e decision: keep all nine in `commonSyncingArms`.* Reasons per arm are in the "Planned" column. The common
+   ones: each Command moves whole into its M module (M6b, M7, M9, M10, M11), and splitting it over phase functions
+   first would make that module gather it from several places; four of them (#21, #35, #51, #68) run shared lines
+   before or between their tests, so a lift would copy or reorder code; and T041 names no body-level oracle test, so
+   a lift would also need a prior `test/snap-016-*` PR. #15 (`RequestTrieNodeHealing`) is the only clean single-phase
+   split (`StateHealing` → request + serve-root check, else no-op), and M6b can still lift it with an oracle when it
+   moves the healing arms. T041's check "no `currentPhase ==` remains inside `syncing`" is therefore read as "no
+   dispatch guard on `currentPhase` remains": the `currentPhase` reads left in `syncing` are the dispatch read
+   (`phaseArms(currentPhase)`), #42's write, log interpolations, and the tests inside these nine arms.
 3. **P4e: `ChainDownloadCompletion` has no arms.** No `syncing` arm is guarded on it, and no code assigns it
-   (CQ-SNAP-016-9). Its function would be empty.
+   (CQ-SNAP-016-9). Its function would be empty. *P4e:* `chainDownloadCompletionArms` is that empty function, named
+   in `phaseArms` so every phase in the plan has its function; CQ-SNAP-016-9 is not touched.
 4. **Three arms write `currentPhase` while running** (#42, #55/#56, #64/#66). The phase is read once per message,
    before dispatch, as the old guards were, so a phase written by one message affects only the next.
 
