@@ -287,8 +287,16 @@ only when every item on the per-slice checklist below holds.
     `stateValidationArms` and from a delegation arm at their old place in `commonSyncingArms` for every other phase
     (R4b note 1, second option). #21 `TrieNodesResponse` (body-level `!= StateValidation`) and #59
     `StateValidationComplete` (no phase test) stay in `commonSyncingArms`.
-- [ ] T041 [P4e] `chainDownloadCompletionArms`. Check that no `currentPhase ==` remains inside `syncing`. Run a full
+- [x] T041 [P4e] `chainDownloadCompletionArms`. Check that no `currentPhase ==` remains inside `syncing`. Run a full
   SNAP on Platåberget.
+  - As built: `phaseArms(ChainDownloadCompletion)` returns `chainDownloadCompletionArms` (class member), which is
+    empty: no arm was ever guarded on that phase and nothing assigns it (R4b note 3, CQ-SNAP-016-9). No arm moved.
+    The nine arms that test the phase inside their body (#10, #15, #21, #35, #39, #40, #48, #51, #68) stay in
+    `commonSyncingArms`, each with its reason in R4b (note 2, P4e decision), so the check is met as "no dispatch guard
+    on `currentPhase` remains in `syncing`"; the body-level tests stay until their M module moves the Command. The
+    P4d review's two doc nits on `stateValidationResultArms` are fixed.
+  - Platåberget full SNAP: **pending** (to be run by the user on the slice jar after merge; no node run here, and the
+    soak host takes no builds).
 
 ## M1–M11 — controller modules (one PR each, in this order)
 
