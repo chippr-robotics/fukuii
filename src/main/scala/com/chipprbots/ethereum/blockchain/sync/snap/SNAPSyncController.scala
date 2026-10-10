@@ -27,6 +27,7 @@ import com.chipprbots.ethereum.blockchain.sync.snap.controller.HealingApi
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.HeapWatchdogStart
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.LifecycleApi
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.PhaseFlags
+import com.chipprbots.ethereum.blockchain.sync.snap.controller.PivotRefreshApi
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.ShutdownApi
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.SnapControllerEnv
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.SnapFinalization
@@ -94,7 +95,7 @@ private class SNAPSyncControllerImpl(
     val childFactories: ChildFactories = ChildFactories.production,
     heapWatchdogStart: HeapWatchdogStart = HeapWatchdogStart.production,
     intakeBudgetOverride: Option[SnapIntakeBudget] = None
-)(implicit ec: ExecutionContext)
+)(implicit val ec: ExecutionContext)
     extends CoordinatorHandles
     with PhaseFlags
     with SnapSharedState
@@ -110,7 +111,8 @@ private class SNAPSyncControllerImpl(
     with HealedCodeApi
     with ShutdownApi
     with SnapResumePlanner
-    with SnapResumePlannerState:
+    with SnapResumePlannerState
+    with PivotRefreshApi:
 
   import SNAPSyncController.*
   import SyncPhase.*
@@ -3952,7 +3954,7 @@ private class SNAPSyncControllerImpl(
     * Downloaded trie nodes are content-addressed (keyed by keccak256 hash), so ~99.9% remain valid across pivot
     * changes. Root mismatch (if any) is resolved during the healing phase.
     */
-  private def refreshPivotInPlace(
+  def refreshPivotInPlace(
       reason: String,
       countsTowardHealBudget: Boolean = true,
       pivotUnservable: Boolean = false
