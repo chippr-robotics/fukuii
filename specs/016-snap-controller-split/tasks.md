@@ -350,7 +350,25 @@ only when every item on the per-slice checklist below holds.
     move (rule (d)) and became pure private lazy vals of the trait in the narrowing. The dispatch (`peerEventArms`, the
     `bootstrapping` reactivity arm, the peer-tick arms) and `currentNetworkBestFromSnapPeers` (M8) stay in the core. Stub
     test: `SnapPeerPoolSpec` (five cases).
-- [ ] T045 [M4] `SnapFinalization` + `ChainDownloaderHandle` use. Run Platåberget to head.
+- [x] T045 [M4] `SnapFinalization` + `ChainDownloaderHandle` use. Run Platåberget to head.
+  - As built: a prerequisite commit adds `blockchainWriter`, `peerEventBus`, `syncController`, `childFactories` (constructor
+    parameters, now `val`s) and `pathNodeStorageOpt` (the first derived store a module needs) to `SnapControllerEnv`
+    (13 -> 18), and rewords the one comment in `completeSnapSync` that named the impl class (FR-016 (a) covers comments).
+    The move commit moves `completeSnapSync`, `enterHeaderHold`, `leaveHeaderHold` (with the hold's exclusive vars
+    `lastHeaderHoldWarnMs`, `holdLastCursor`, `holdLastAdvanceMs`), `finalizeSnapSync`, `startPathPublish`,
+    `onPathPublishDone`, `completedWithBackfill`, `completed`, `startChainDownloader`, `releaseDeferredBodiesAndReceipts`
+    and `launchChainDownloader` into `controller/SnapFinalization.scala`, and `chainBackfillDeferredToFinalization` (the
+    config derivation M1 left for M4) with the header-hold constants and `EmptyHeaderBackoff` into
+    `controller/FinalizationPolicy.scala`, re-exported. Narrowed self-type: `SnapFinalizationState & SnapSharedState &
+    SnapControllerEnv & CoordinatorHandles & PhaseFlags & ResumeApi & TaskFileSweepApi & HealedCodeApi & PeerPoolApi &
+    ShutdownApi`; state 6 (R14: 3; `chainDownloadComplete`, `headerHold` and `pathPublish` stay in the core because the
+    `syncing` guard arms #1–#7 and the ChainDownloader arms that touch them stay there, and `chainDownloaderReplyAdapter`
+    is a strict core val), Api 10 (R14a: 11). `PeerPoolApi` is declared in `SnapPeerPool.scala` and `SnapPeerPool`
+    extends it; the other three new Api traits are declared in `SnapFinalization.scala` and implemented by the core. No
+    `val` -> `lazy val` conversion: the only vals the bodies reach have impure initializers and stay in the core. The
+    dispatch, the healed-code helpers and `anchorPivotBeforeLazyHandoff` (M6b) stay in the core. Stub test:
+    `SnapFinalizationSpec` (seven cases). Platåberget to head: **pending** (to be run by the user on the slice jar after
+    merge; no node run here).
 - [ ] T046 [M5] `SnapResumePlanner`, including #1501 `runGatedReplay`. vault reviews. Run Mordor and Platåberget
   restarts mid-account and mid-storage.
 - [ ] T047 [M6a] Dedupe the two healing spawn blocks into `healingCoordinatorArgs`. The pins from T014 and T015 must
