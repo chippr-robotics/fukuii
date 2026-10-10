@@ -426,7 +426,43 @@ HEADER_EDIT_RE = re.compile(
 
 # A one-line export clause re-exporting moved symbols (plan.md D2): `export a.b.Obj.name` or
 # `export a.b.Obj.{n1, n2}`. A wildcard (`*`), a rename or a hiding (`=>`) and a multi-line clause do not match.
+# Group 1 (the object path) must also resolve to the object that now holds each moved name: see `destinations`.
 EXPORT_RE = re.compile(r"^\s*export\s+([A-Za-z_][\w.]*?)\.(?:(\w+)|\{\s*(\w+(?:\s*,\s*\w+)*)\s*\})\s*$")
+
+
+def destinations(text: str, name: str) -> list[tuple[str, str]]:
+    """(package, enclosing object/trait/class) of each declaration of `name` in a Scala file's text."""
+    lines = text.splitlines()
+    pm = next((m for l in lines if (m := re.match(r"^package\s+([\w.]+)\s*$", l))), None)
+    pkg, rx, out = (pm.group(1) if pm else ""), decl_re(name), []
+    for i, l in enumerate(lines):
+        m = rx.match(l)
+        if not m:
+            continue
+        d = len(m.group(1))
+        for j in range(i - 1, -1, -1):
+            h = lines[j]
+            if h.strip() and indent_of(h) < d and TYPE_HEADER_RE.match(h):
+                t = re.search(r"\b(?:class|trait|object)\s+(\w+)", h)
+                if t:
+                    out.append((pkg, t.group(1)))
+                break
+    return out
+
+
+def export_prefix_ok(prefix: str, dests: list[tuple[str, str]], other_pkgs: set[str]) -> bool:
+    """The export's object path names one of `dests`: `Obj`, `rel.pkg.Obj` (a suffix of the package) or the full path."""
+    *qual, obj = prefix.split(".")
+    pre = ".".join(qual)
+    for pkg, o in dests:
+        if o != obj:
+            continue
+        if pre == "":
+            if pkg in other_pkgs:  # bare `Obj` only from a file in the same package
+                return True
+        elif pkg == pre or pkg.endswith("." + pre):
+            return True
+    return False
 
 
 def abstract_decl(s: str) -> bool:
@@ -588,6 +624,21 @@ class Verifier:
         if len(bad) > 10:
             self.err(c, "step1", f"... and {len(bad) - 10} more removed lines not moved")
         extra = []
+        dest: dict[str, list[tuple[str, str]]] = {}
+        pkgs: dict[str, str] = {}
+        for f in changed:
+            if f.startswith("src/main/") and f.endswith(".scala"):
+                t = self.g.show(c, f)
+                if t is not None:
+                    pm = next((m for l in t.splitlines() if (m := re.match(r"^package\s+([\w.]+)\s*$", l))), None)
+                    pkgs[f] = pm.group(1) if pm else ""
+                    found = False
+                    for sym in symbols:
+                        ds = destinations(t, sym)
+                        dest.setdefault(sym, []).extend(ds)
+                        found = found or bool(ds)
+                    if found:
+                        del pkgs[f]  # a file that now holds a moved symbol is a destination, not an exporter
         for a in (a for lines in pool.values() for a in lines if not added_ok.search(a)):
             m = EXPORT_RE.match(a)
             if m is None:
@@ -599,6 +650,9 @@ class Verifier:
             for n in names:
                 if n not in symbols:
                     self.err(c, "step1", f"export of `{n}`, which is not a `# moved:` symbol: `{a.strip()[:100]}`")
+                elif not export_prefix_ok(m.group(1), dest.get(n, []), set(pkgs.values())):
+                    where = ", ".join(sorted({f"{pk}.{o}" for pk, o in dest.get(n, [])})) or "not found in the commit's touched files"
+                    self.err(c, "step1", f"export of `{n}` forwards to `{m.group(1)}`, but the moved `{n}` now lives in: {where}: `{a.strip()[:100]}`")
         for a in extra[:10]:
             self.err(c, "step1", f"added line is neither moved nor a header/import/visibility change: `{a[:100]}`")
         if len(extra) > 10:

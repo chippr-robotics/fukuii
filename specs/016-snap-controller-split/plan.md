@@ -203,7 +203,8 @@ decides whether `-Wsafe-init` is turned on for the snap package as a second guar
   - `private` → `private[snap]` on members another module or the core calls;
   - explicit result types demanded by scalafix on widened members;
   - one-line `export` clauses, in the old object, that re-export `# moved:` symbols by name (D2; no wildcard, no
-    rename).
+    rename). The clause's object path must also resolve to the object that now holds each symbol (`Obj`, a package
+    suffix such as `controller.Obj`, or the full path), so an export cannot forward to a different member.
 - **What must not change:** any body.
 - **What moves with the module:**
   - vars it owns exclusively (research.md R3; "one module + syncing arms" vars once P4 has moved those arms);
@@ -402,7 +403,7 @@ reviewer re-runs it locally with `scripts/snap-split/verify.sh origin/staging`; 
 1. **Moved blocks only.** Every removed line shows as moved
    (`git diff --color-moved=plain --color-moved-ws=allow-indentation-change`). The only non-moved lines allowed are
    trait headers, imports, `private`→`private[snap]`, scalafix result types and one-line `export` clauses whose
-   selectors are all `# moved:` symbols (D2; added in M1, when the first companion move needed them).
+   selectors are all `# moved:` symbols and whose object path resolves to the object now holding them (D2; added in M1, when the first companion move needed them; the object check came after M1).
 2. **Identical bodies.** For each symbol in the PR's list (read from a `# moved:` trailer in the commit message), the
    body extracted from the parent and from the commit, with the visibility modifier stripped, is identical.
 
