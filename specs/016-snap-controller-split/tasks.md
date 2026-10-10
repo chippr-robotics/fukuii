@@ -337,7 +337,19 @@ only when every item on the per-slice checklist below holds.
     (four cases). verify.py step 6 now finds the core's `extends` clause past its 30-line constructor (first commit).
   **Every M task below (T044–T053) also has the narrowing commit and at least one stub test, per the per-slice
   checklist.**
-- [ ] T044 [M3] `SnapPeerPool` (herald second review).
+- [x] T044 [M3] `SnapPeerPool` (herald second review).
+  - As built: a prerequisite commit adds `networkPeerManager` and `blockchainReader` to `SnapControllerEnv` (11 -> 13;
+    constructor parameters become `val`s, as in T041a). The move commit moves the peer-list view (`handshakedPeers`,
+    `peersToDownloadFrom`, `snapServingPeers`, `getSnapPeerWithHighestBlock`), the refresh handlers, the disconnect
+    debounce, `pollHandshakedPeers`, eviction, snap-server dialling, `bestSnapProbeTarget` and `calibratePivotTD` into
+    `controller/SnapPeerPool.scala`, and the companion helpers M1 left (`servesSnapState`, `snapExclusionReason`,
+    `SnapExclusion*`) into `controller/SnapPeerPolicy.scala`, re-exported. Narrowed self-type: `SnapPeerPoolState &
+    SnapSharedState & SnapControllerEnv & CoordinatorHandles`; state 6 (R14: 2; `peerListHelper`,
+    `handshakedPeersAdapter`, `bestEth68PeerForCalibration` and `BootstrapCheckKey` stay in the core), Api 0 (R14a: 3).
+    `DisconnectFlushKey`, `MaxFruitlessEvictionCycles` and `snapServerPeerLastConnectAttemptMs` stayed in the core in the
+    move (rule (d)) and became pure private lazy vals of the trait in the narrowing. The dispatch (`peerEventArms`, the
+    `bootstrapping` reactivity arm, the peer-tick arms) and `currentNetworkBestFromSnapPeers` (M8) stay in the core. Stub
+    test: `SnapPeerPoolSpec` (five cases).
 - [ ] T045 [M4] `SnapFinalization` + `ChainDownloaderHandle` use. Run Platåberget to head.
 - [ ] T046 [M5] `SnapResumePlanner`, including #1501 `runGatedReplay`. vault reviews. Run Mordor and Platåberget
   restarts mid-account and mid-storage.
