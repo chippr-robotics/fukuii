@@ -271,7 +271,13 @@ only when every item on the per-slice checklist below holds.
     arms guarded on `ByteCodeAndStorageSync`: `StorageCoordinatorProgress` (#70) and `ByteCodeCoordinatorProgress`
     (#71), guards dropped, bodies unchanged. Arms with a body-level `ByteCodeAndStorageSync` test (#10, #35, #39,
     #40, #48, #68) stay in `commonSyncingArms` (R4b note 2).
-- [ ] T039 [P4c] `stateHealingArms` (beacon reviews the CL/serve-root arms).
+- [x] T039 [P4c] `stateHealingArms` (beacon reviews the CL/serve-root arms).
+  - As built: `phaseArms(StateHealing)` returns `stateHealingArms` (class member), holding the nine arms guarded on
+    `StateHealing`: #49 `HealingAllPeersStateless`, #50 `HealingStagnated`, #52 `StateHealingAbandoned`, #53
+    `HealingRootUnservable`, #54 `TrieWalkBatch`, #55 `TrieWalkComplete`, #56 `TrieWalkResult`, #57
+    `ScheduledTrieWalk`, #58 `TrieWalkFailed`, guards dropped, bodies unchanged. Arms with a body-level `StateHealing`
+    test (#15, #39, #40, #48, #51) stay in `commonSyncingArms` (R4b note 2). The CL/serve-root arms (#15
+    `RequestTrieNodeHealing`, #16 `HealingServeRoot`) carry no phase guard, so none of them moved.
 - [ ] T040 [P4d] `stateValidationArms`.
 - [ ] T041 [P4e] `chainDownloadCompletionArms`. Check that no `currentPhase ==` remains inside `syncing`. Run a full
   SNAP on Platåberget.

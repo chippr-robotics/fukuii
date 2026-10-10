@@ -512,8 +512,10 @@ catch-all (#75).
 2. `phaseArms(currentPhase)`: one partial function per phase (class members). After P4a only `accountRangeArms`
    exists; every other phase maps to `PartialFunction.empty`. **P4b** adds `byteCodeAndStorageArms` for
    `ByteCodeAndStorageSync`: #70 `StorageCoordinatorProgress` and #71 `ByteCodeCoordinatorProgress`, in that order,
-   guards dropped, bodies unchanged. The "After P4a" column is not edited; the "Planned" column marks each slice's
-   arms done.
+   guards dropped, bodies unchanged. **P4c** adds `stateHealingArms` for `StateHealing`: #49, #50 and #52–#58, in
+   that order, guards dropped, bodies and comments unchanged. #51 `StateHealingComplete` (body-level test) stays in
+   common, between the two placeholder comments. The "After P4a" column is not edited; the "Planned" column marks
+   each slice's arms done.
 3. `commonSyncingArms`: every other arm, in its original order (a local `val` in `syncing`).
 4. The catch-all `unhandledInSyncing` ("Unhandled message in syncing state: $msg", DEBUG), unchanged text.
 
@@ -572,16 +574,16 @@ arms, then catch-all".
 | 46 | L1719 | `ByteCodeSyncComplete` | `!bytecodePhaseComplete` (flag) | — | common | common |
 | 47 | L1739 | `StorageRangeSyncComplete` | `!storagePhaseComplete` (flag) | — | common | common |
 | 48 | L1750 | `StorageRangeSyncForceCompleted` | `!storagePhaseComplete` (flag) | `ByteCodeAndStorageSync \|\| StateHealing` → force-complete, else warn | common | common (body-level) |
-| 49 | L1767 | `HealingAllPeersStateless` | `currentPhase == StateHealing` | — | common | `stateHealingArms` (P4c) |
-| 50 | L1792 | `HealingStagnated` | `currentPhase == StateHealing` | — | common | `stateHealingArms` (P4c) |
+| 49 | L1767 | `HealingAllPeersStateless` | `currentPhase == StateHealing` | — | common | `stateHealingArms` (P4c, done) |
+| 50 | L1792 | `HealingStagnated` | `currentPhase == StateHealing` | — | common | `stateHealingArms` (P4c, done) |
 | 51 | L1810 | `StateHealingComplete` | — | `StateHealing` (Path scheme only) | common | common (body-level; unguarded on the Hash scheme) |
-| 52 | L1848 | `StateHealingAbandoned` | `currentPhase == StateHealing` | — | common | `stateHealingArms` (P4c) |
-| 53 | L1857 | `HealingRootUnservable` | `currentPhase == StateHealing` | — | common | `stateHealingArms` (P4c) |
-| 54 | L1880 | `TrieWalkBatch` | `currentPhase == StateHealing` | — | common | `stateHealingArms` (P4c) |
-| 55 | L1889 | `TrieWalkComplete` | `currentPhase == StateHealing` | — (writes `currentPhase`) | common | `stateHealingArms` (P4c) |
-| 56 | L1916 | `TrieWalkResult` | `currentPhase == StateHealing` | — (writes `currentPhase`) | common | `stateHealingArms` (P4c) |
-| 57 | L1945 | `ScheduledTrieWalk` | `currentPhase == StateHealing` | — | common | `stateHealingArms` (P4c) |
-| 58 | L1949 | `TrieWalkFailed` | `currentPhase == StateHealing` | — | common | `stateHealingArms` (P4c) |
+| 52 | L1848 | `StateHealingAbandoned` | `currentPhase == StateHealing` | — | common | `stateHealingArms` (P4c, done) |
+| 53 | L1857 | `HealingRootUnservable` | `currentPhase == StateHealing` | — | common | `stateHealingArms` (P4c, done) |
+| 54 | L1880 | `TrieWalkBatch` | `currentPhase == StateHealing` | — | common | `stateHealingArms` (P4c, done) |
+| 55 | L1889 | `TrieWalkComplete` | `currentPhase == StateHealing` | — (writes `currentPhase`) | common | `stateHealingArms` (P4c, done) |
+| 56 | L1916 | `TrieWalkResult` | `currentPhase == StateHealing` | — (writes `currentPhase`) | common | `stateHealingArms` (P4c, done) |
+| 57 | L1945 | `ScheduledTrieWalk` | `currentPhase == StateHealing` | — | common | `stateHealingArms` (P4c, done) |
+| 58 | L1949 | `TrieWalkFailed` | `currentPhase == StateHealing` | — | common | `stateHealingArms` (P4c, done) |
 | 59 | L1956 | `StateValidationComplete` | — | — | common | common |
 | 60 | L1965 | `ValidateAccountTrieResult` | `gen != validationGeneration` (generation) | — | common | **ahead of** `stateValidationArms` (P4d; see note 1) |
 | 61 | L1969 | `ValidateStorageTriesResult` | `gen != validationGeneration` (generation) | — | common | **ahead of** `stateValidationArms` (P4d; note 1) |
