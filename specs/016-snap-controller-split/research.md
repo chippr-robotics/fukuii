@@ -510,7 +510,10 @@ catch-all (#75).
 
 1. `syncingGuardArms`: arms #1–#7, verbatim and in order (a local `val` in `syncing`).
 2. `phaseArms(currentPhase)`: one partial function per phase (class members). After P4a only `accountRangeArms`
-   exists; every other phase maps to `PartialFunction.empty`.
+   exists; every other phase maps to `PartialFunction.empty`. **P4b** adds `byteCodeAndStorageArms` for
+   `ByteCodeAndStorageSync`: #70 `StorageCoordinatorProgress` and #71 `ByteCodeCoordinatorProgress`, in that order,
+   guards dropped, bodies unchanged. The "After P4a" column is not edited; the "Planned" column marks each slice's
+   arms done.
 3. `commonSyncingArms`: every other arm, in its original order (a local `val` in `syncing`).
 4. The catch-all `unhandledInSyncing` ("Unhandled message in syncing state: $msg", DEBUG), unchanged text.
 
@@ -590,8 +593,8 @@ arms, then catch-all".
 | 67 | L2055 | `ValidationRetry` | `currentPhase == StateValidation` | — | common | `stateValidationArms` (P4d) |
 | 68 | L2062 | `CheckDownloadStagnation` | — | three tests plus a `currentPhase match` choosing which coordinators to ask | common | common (body-level) |
 | 69 | L2149 | `AccountCoordinatorProgress` | `currentPhase == AccountRangeSync` | — | **`accountRangeArms`** | `accountRangeArms` (P4a, done) |
-| 70 | L2154 | `StorageCoordinatorProgress` | `currentPhase == ByteCodeAndStorageSync` | — | common | `byteCodeAndStorageArms` (P4b) |
-| 71 | L2163 | `ByteCodeCoordinatorProgress` | `currentPhase == ByteCodeAndStorageSync` | — | common | `byteCodeAndStorageArms` (P4b) |
+| 70 | L2154 | `StorageCoordinatorProgress` | `currentPhase == ByteCodeAndStorageSync` | — | common | `byteCodeAndStorageArms` (P4b, done) |
+| 71 | L2163 | `ByteCodeCoordinatorProgress` | `currentPhase == ByteCodeAndStorageSync` | — | common | `byteCodeAndStorageArms` (P4b, done) |
 | 72 | L2172 | `ChainDownloaderProgress` | — | — | common | common |
 | 73 | L2176 | `ChainDownloaderDone` | — | — | common | common |
 | 74 | L2181 | `GetStatus` | — | — | common | common |

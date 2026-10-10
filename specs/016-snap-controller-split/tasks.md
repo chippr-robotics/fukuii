@@ -266,7 +266,11 @@ only when every item on the per-slice checklist below holds.
     unchanged catch-all. The guard-arm prefix is needed because #4 and #6 match any message (R4b). `accountRangeArms`
     holds the one arm guarded on `AccountRangeSync` (`AccountCoordinatorProgress`); arms that test the phase inside
     their body stay in `commonSyncingArms` (R4b note 2).
-- [ ] T038 [P4b] `byteCodeAndStorageArms`.
+- [x] T038 [P4b] `byteCodeAndStorageArms`.
+  - As built: `phaseArms(ByteCodeAndStorageSync)` returns `byteCodeAndStorageArms` (class member), holding the two
+    arms guarded on `ByteCodeAndStorageSync`: `StorageCoordinatorProgress` (#70) and `ByteCodeCoordinatorProgress`
+    (#71), guards dropped, bodies unchanged. Arms with a body-level `ByteCodeAndStorageSync` test (#10, #35, #39,
+    #40, #48, #68) stay in `commonSyncingArms` (R4b note 2).
 - [ ] T039 [P4c] `stateHealingArms` (beacon reviews the CL/serve-root arms).
 - [ ] T040 [P4d] `stateValidationArms`.
 - [ ] T041 [P4e] `chainDownloadCompletionArms`. Check that no `currentPhase ==` remains inside `syncing`. Run a full
