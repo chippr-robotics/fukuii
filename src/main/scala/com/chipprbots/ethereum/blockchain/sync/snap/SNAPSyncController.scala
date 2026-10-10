@@ -41,6 +41,7 @@ import com.chipprbots.ethereum.blockchain.sync.snap.controller.SnapResumePlanner
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.SnapResumePlannerState
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.SnapSharedState
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.StagnationWatchdog
+import com.chipprbots.ethereum.blockchain.sync.snap.controller.StagnationWatchdogState
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.StateValidationModule
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.StateValidationState
 import com.chipprbots.ethereum.consensus.engine.PoSBlockHeaderValidator
@@ -114,7 +115,8 @@ private class SNAPSyncControllerImpl(
     with HealingOrchestratorState
     with PivotSelectionApi
     with ByteCodeRequestApi
-    with StagnationWatchdog:
+    with StagnationWatchdog
+    with StagnationWatchdogState:
 
   import SNAPSyncController.*
   import SyncPhase.*
@@ -426,8 +428,8 @@ private class SNAPSyncControllerImpl(
   private val MaxBootstrapRetries = 10
 
   // Pivot restart guard (prevents noisy rapid restarts if peer head fluctuates)
-  private[snap] var lastPivotRestartMs: Long = 0L
-  private[snap] val MinPivotRestartInterval: FiniteDuration = 30.seconds
+  var lastPivotRestartMs: Long = 0L
+  val MinPivotRestartInterval: FiniteDuration = 30.seconds
 
   // Proactive pivot rolling: keep pivot within core-geth's 128-block snapshot window.
   // ETC network is predominantly core-geth peers; once the pivot ages beyond 128 blocks,
@@ -479,7 +481,7 @@ private class SNAPSyncControllerImpl(
   // arrives in the syncing state, the refresh is completed.
   var pendingPivotRefresh: Option[(BigInt, String)] = None
 
-  private[snap] var storageStagnationRefreshAttempted: Boolean = false
+  var storageStagnationRefreshAttempted: Boolean = false
   var trieWalkInProgress: Boolean = false
   // spec 004 (Decoupled Heal Serve-Root) T011: serve-root refresh bookkeeping. The healing coordinator fetches
   // missing nodes against an advancing SERVE root while its completeness walk stays pinned to the walk root. We
@@ -518,13 +520,6 @@ private class SNAPSyncControllerImpl(
   // peerTD used directly without knowing peerBlock.
   var bestEth68PeerForCalibration: Option[(BigInt, BigInt)] = None
 
-  // Storage stagnation watchdog: if storage stops advancing while tasks remain, repivot/restart.
-  // This addresses the common case where peers no longer serve the chosen pivot/state window.
-  // Threshold must be generous enough to allow large chains to complete within the SNAP serve window.
-  // Unified stagnation watchdog thresholds — one check interval, phase-specific thresholds
-  private[snap] val DownloadStagnationCheckInterval: FiniteDuration = 30.seconds
-  private[snap] val StorageStagnationThreshold: FiniteDuration =
-    10.minutes // CFG-2: 20→10min; second stall force-completes after 30s anyway
   // Distinct, much shorter threshold for the "coordinator reports 0 pending/0 active but never
   // sent StorageRangeSyncComplete" signature specifically. That reading is unambiguous: it means
   // the coordinator actor was restarted (RestartSupervisor wiping its in-memory tasks/tries — see
@@ -536,7 +531,7 @@ private class SNAPSyncControllerImpl(
   // anything else to wait on, so nothing is gained by waiting longer than it takes to confirm the
   // reading is stable across a couple of poll ticks. Force-complete triggers the SAME existing
   // healing-recovery path either way (ForceCompleteStorage) — only the trigger latency changes.
-  private[snap] val StorageRestartedEmptyThreshold: FiniteDuration = 60.seconds
+  val StorageRestartedEmptyThreshold: FiniteDuration = 60.seconds
   // Platåberget soak v6 (2026-09-28): lastStorageProgressMs (below) resets on ANY
   // ProgressStorageSlotsSynced message carrying >10 slots — but that resets on progress from ANY
   // account, not necessarily the ones actually stuck. A handful of accounts retried indefinitely
@@ -559,15 +554,14 @@ private class SNAPSyncControllerImpl(
   // repeated stale-local-root verification failures accumulated over the same window — see
   // SNAPSyncController.evaluateStorageTail. Reset at every storage-phase entry (restartSnapSync / wakeFromDormant
   // reuse this instance, so a stale baseline would otherwise fire a spurious refresh on a second phase's first tick).
-  private[snap] var storageTailBaseline: SNAPSyncController.StorageTailBaseline =
+  var storageTailBaseline: SNAPSyncController.StorageTailBaseline =
     SNAPSyncController.StorageTailBaseline.fresh(System.currentTimeMillis())
-  private[snap] val AccountStagnationThreshold: FiniteDuration = snapSyncConfig.accountStagnationTimeout
-  private[snap] var lastStorageProgressMs: Long = System.currentTimeMillis()
-  private[snap] var lastBytecodeProgressMs: Long = System.currentTimeMillis()
-  private[snap] var lastBytecodeProgressCount: Long = 0L
-  private[snap] var lastAccountProgressMs: Long = System.currentTimeMillis()
-  private[snap] var lastAccountTasksCompleted: Int = 0
-  private[snap] var lastAccountsDownloaded: Long = 0
+  var lastStorageProgressMs: Long = System.currentTimeMillis()
+  var lastBytecodeProgressMs: Long = System.currentTimeMillis()
+  var lastBytecodeProgressCount: Long = 0L
+  var lastAccountProgressMs: Long = System.currentTimeMillis()
+  var lastAccountTasksCompleted: Int = 0
+  var lastAccountsDownloaded: Long = 0
   // Tracks storage contract completion (0.0–1.0) from push-based ProgressStorageContracts messages.
   // Used to suppress proactive pivot rolls when storage is nearly done (Bug 2 guard).
   private var storageContractProgressPct: Double = 0.0
@@ -1729,8 +1723,6 @@ private class SNAPSyncControllerImpl(
       .receiveSignal { case (_, PostStop) =>
         onStop(); Behaviors.same
       }
-
-  private[snap] val BytecodeStagnationThreshold: FiniteDuration = 10.minutes
 
   /** Geth-aligned: check if all 3 concurrent download phases are complete. Only transitions to healing when accounts +
     * bytecodes + storage are ALL done. The sentinel pattern (NoMoreByteCodeTasks/NoMoreStorageTasks) ensures bytecodes
@@ -3904,11 +3896,6 @@ private class SNAPSyncControllerImpl(
       blocksProgress = SyncProtocol.Status.Progress(currentBlock, currentBlock),
       stateNodesProgress = Some(SyncProtocol.Status.Progress(BigInt(pulledStates), BigInt(knownStates)))
     )
-
-  // Hard cap so a wedged account phase escalates to dormant mode rather than refreshing
-  // forever. Higher than MaxConsecutivePivotRefreshes because account stalls can be transient
-  // (peer churn, slow networks) and the stagnation threshold itself already takes minutes to fire.
-  private[snap] val MaxConsecutiveAccountStallRefreshes = 10
 
 object SNAPSyncController:
 

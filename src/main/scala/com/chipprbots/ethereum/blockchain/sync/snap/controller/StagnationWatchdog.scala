@@ -5,9 +5,23 @@ import org.apache.pekko.actor.typed.scaladsl.Behaviors
 
 import scala.concurrent.duration.*
 
-import com.chipprbots.ethereum.blockchain.sync.snap.*
+import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController.*
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController.SyncPhase.*
+import com.chipprbots.ethereum.blockchain.sync.snap.actors
+
+private[snap] trait StagnationWatchdogState:
+  var lastStorageProgressMs: Long
+  var lastBytecodeProgressMs: Long
+  var lastBytecodeProgressCount: Long
+  var lastAccountProgressMs: Long
+  var lastAccountTasksCompleted: Int
+  var lastAccountsDownloaded: Long
+  var storageTailBaseline: SNAPSyncController.StorageTailBaseline
+  var storageStagnationRefreshAttempted: Boolean
+  var lastPivotRestartMs: Long
+  def MinPivotRestartInterval: FiniteDuration
+  def StorageRestartedEmptyThreshold: FiniteDuration
 
 /** SNAP download stagnation watchdog (spec 016 M7, research.md R6 "Download-phase supervision + stagnation"): the 30 s
   * check timer (`scheduleStagnationChecks`), the answers to its progress asks, which are the whole `AccountRangeSync`
@@ -19,7 +33,22 @@ import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController.SyncPhase
   * and `startSnapSync`.
   */
 private[snap] trait StagnationWatchdog:
-  self: SNAPSyncControllerImpl =>
+  self: StagnationWatchdogState & SnapSharedState & SnapControllerEnv & CoordinatorHandles & PhaseFlags &
+    HandshakedPeersApi & LifecycleApi & PivotRefreshApi =>
+
+  // Storage stagnation watchdog: if storage stops advancing while tasks remain, repivot/restart.
+  // This addresses the common case where peers no longer serve the chosen pivot/state window.
+  // Threshold must be generous enough to allow large chains to complete within the SNAP serve window.
+  // Unified stagnation watchdog thresholds — one check interval, phase-specific thresholds
+  private lazy val DownloadStagnationCheckInterval: FiniteDuration = 30.seconds
+  private lazy val StorageStagnationThreshold: FiniteDuration =
+    10.minutes // CFG-2: 20→10min; second stall force-completes after 30s anyway
+  private lazy val AccountStagnationThreshold: FiniteDuration = snapSyncConfig.accountStagnationTimeout
+  private lazy val BytecodeStagnationThreshold: FiniteDuration = 10.minutes
+  // Hard cap so a wedged account phase escalates to dormant mode rather than refreshing
+  // forever. Higher than MaxConsecutivePivotRefreshes because account stalls can be transient
+  // (peer churn, slow networks) and the stagnation threshold itself already takes minutes to fire.
+  private lazy val MaxConsecutiveAccountStallRefreshes = 10
 
   /** `syncing` arms guarded on `currentPhase == AccountRangeSync` (P4a). */
   private[snap] lazy val accountRangeArms: PartialFunction[Command, Behavior[Command]] = {
