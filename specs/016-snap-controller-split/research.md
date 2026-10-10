@@ -310,6 +310,82 @@ The timer cancel lists are hand-copied in three places: `stopSnapOnlySchedules` 
 `enterDormantMode` L3347–3356 and `restartSnapSync` L4887–4894. They differ in length (8 to 12 keys), and P2 must keep
 each list exactly as it is.
 
+### R3b. [016] T032: each R3a write classified as reset or set (input to P2's `reset(kind)`)
+
+Read site by site on staging `150e47447` (post-P1), not regex-derived. Codes:
+
+- **R**: reset to the declared initial value (`false`, `0`, `None`, `Idle`, an empty collection, `clear()`).
+- **R\***: a reset that is conditional, or paired with one spawn. It stays inline: it is not a reset of the whole kind.
+- **S**: set to a computed or new value (`true`, a value read from disk, `Dormant`, `now`, a new pivot).
+- **B**: a generation or counter bump (`+= 1`). It is a set, not a reset.
+- **A**: not a write. R3a's regex matched a named spawn argument (`stateRoot = …`, `requestTracker = …`,
+  `mptStorage = …`).
+- **L**: not a write. R3a's regex matched a log interpolation.
+
+| item | startSnapSync | restartSnapSync | wakeFromDormant | enterDormantMode | stopStateSyncChildren | completePivotRefresh… | launchAccountRangeWorkers |
+|---|---|---|---|---|---|---|---|
+| mptStorage | S (`getOrCreateMptStorage`) | R | R |  |  |  | S (`getOrCreateMptStorage`) |
+| accountRangeCoordinator |  | R (`stopAll()`) |  | R (`stopAll()`) | R (`stopAll()`) |  | S (spawn) |
+| bytecodeCoordinator | S (recovery spawn) | R (`stopAll()`) |  | R (`stopAll()`) | R (`stopAll()`) |  | S (spawn) |
+| storageRangeCoordinator | S (recovery spawn) | R (`stopAll()`) |  | R (`stopAll()`) | R (`stopAll()`) |  | S (spawn) |
+| trieNodeHealingCoordinator |  | R (`stopAll()`) |  | R (`stopAll()`) | R (`stopAll()`) |  |  |
+| coordinatorGeneration | B | B | B |  |  |  | (read only) |
+| clHintArrivedAtMs | S (first CL wait); R\* (`= None` on the cl-wait-timeout fall-through) |  |  |  |  |  |  |
+| currentPhase | S | R (`Idle`) | R (`Idle`) | S (`Dormant`) |  |  |  |
+| pivotBlock | S | R | R |  |  | S |  |
+| stateRoot | S; A | R | R |  |  | S | A |
+| **accountsComplete** | S (`true`, two recovery branches) | R | R |  |  |  |  |
+| **bytecodePhaseComplete** | S (`true` / from disk) | R | R |  |  |  |  |
+| **storagePhaseComplete** | S (`true` / from disk) | R | R |  |  |  |  |
+| **storagePhaseForceCompleted** | **R** (fresh-pivot recovery branch, unconditional there) | R | R |  |  |  |  |
+| criticalFailureCount |  |  | L |  |  |  |  |
+| dormantRetryCount |  |  |  | B |  |  |  |
+| validationInProgress |  | R | R |  |  |  |  |
+| validationGeneration |  | B | B |  |  | B |  |
+| healingValidatedRoot |  | R | R |  |  |  |  |
+| bytecodesEstimatedTotal |  | R | R |  |  |  |  |
+| bootstrapRetryCount | B (each retry); R\* (`= 0` on bootstrap success) |  | R |  |  |  |  |
+| pivotProbeRequestId |  | R |  | R |  | S |  |
+| proactiveRollNeedsProbe |  | R |  | R |  | R\* (consumed by the probe branch) |  |
+| pendingProbeCommit |  | R |  | R |  | S |  |
+| lastProbeAttemptMs |  | R |  |  |  |  |  |
+| probeAttemptCount |  | R |  | R |  |  |  |
+| consecutivePivotRefreshes |  |  | R |  |  | S (`= MaxConsecutivePivotRefreshes`) |  |
+| pendingPivotRefresh |  | R |  | R |  |  |  |
+| **forceCompleteStorageSent** | R\* (with the recovery storage spawn) | R | R |  | R | | R\* (with the storage spawn) |
+| healingServeRootRequestInFlight |  | R |  |  |  |  |  |
+| lastHealingServeRootBlock |  | R |  |  |  |  |  |
+| storageTailBaseline | S (fresh baseline at `now`) |  |  |  |  |  |  |
+| lastStorageProgressMs | S (`now`) |  |  |  |  |  |  |
+| requestTracker | A | R (`clear()`) |  | R (`clear()`) |  |  | A |
+| healingWalkLocalOnly |  | R |  | R | R |  |  |
+| **awaitingHealedCode** (not in R3a) |  | R (`resetHealedCodeHold()`) | R (`resetHealedCodeHold()`) |  |  |  |  |
+| **healedCodeWaitExhausted** (not in R3a) |  | R (`resetHealedCodeHold()`) | R (`resetHealedCodeHold()`) |  |  |  |  |
+| **bytecodeForceCompleted** (not in R3a) |  | R (`resetHealedCodeHold()`) | R (`resetHealedCodeHold()`) |  |  |  |  |
+| **resumedStaleCursors** (not in R3a) |  |  |  |  |  |  | S (`true` when a resume is non-empty) |
+
+Bold rows are the nine `PhaseFlags` (FR-011). R3a missed four of them because their writes sit in
+`resetHealedCodeHold()` (three) or in `launchAccountRangeWorkers` behind an `if` (`resumedStaleCursors`).
+
+**Corrections to R3a.** `criticalFailureCount` in `wakeFromDormant` is read in a log line, not written.
+`requestTracker`, `stateRoot` and `mptStorage` in `startSnapSync` and `launchAccountRangeWorkers` are named spawn
+arguments (the `mptStorage` var is set through `getOrCreateMptStorage`).
+
+**What `PhaseFlags.reset(kind)` takes (P2).** P2 replaces only the R writes of the nine flags. Every other R stays
+inline at its site until the module that owns it moves (probe and refresh state with M9/M10, validation with M2,
+the stagnation clocks with M7, spec FR-011). The per-kind sets:
+
+| kind | site | flags cleared by `reset(kind)` | flags cleared at the site but outside `reset(kind)` |
+|---|---|---|---|
+| `Start` | `startSnapSync`, fresh-pivot recovery branch | `storagePhaseForceCompleted` | `forceCompleteStorageSent` (R\*: only when the recovery spawns a storage coordinator) |
+| `Restart` | `restartSnapSync` | `accountsComplete`, `bytecodePhaseComplete`, `storagePhaseComplete`, `storagePhaseForceCompleted`, `forceCompleteStorageSent` | `awaitingHealedCode`, `healedCodeWaitExhausted`, `bytecodeForceCompleted` (in `resetHealedCodeHold()`, together with `healedCodeHashes.clear()` and the `HealedCodeWaitTimerKey` cancel) |
+| `Wake` | `wakeFromDormant` | the same five as `Restart` | the same three as `Restart`, through `resetHealedCodeHold()` |
+| `Dormant` | `enterDormantMode` | none | none: dormancy leaves every phase flag alone |
+
+`resumedStaleCursors` is in no reset set: once set, it stays `true` for the life of the controller (CHASE-QUEUE
+CQ-SNAP-016-11). `resetHealedCodeHold()` keeps its three flag writes so that P2 reorders nothing; the healed-code hold
+moves as a unit with M6.
+
 ## R4. Command × behaviour matrix
 
 The six behaviours are `idle`, `syncing`, `bootstrapping`, `completed`, `dormantRetry` and `completedWithBackfill`.
