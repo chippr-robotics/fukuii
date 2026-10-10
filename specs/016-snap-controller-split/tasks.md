@@ -316,13 +316,25 @@ only when every item on the per-slice checklist below holds.
     and `storageInFlightDuringAccounts` (config derivations, M4/M11), and the timer and wait constants.
   - `snap-split-verify` step 1 gained the D2 export allowance (one-line clause, `# moved:` names only), with
     self-tests; plan.md §Move verification step 1 and D1 record it.
-- [ ] T041a [M2: the first trait-based module PR, after M1] Add `controller/SnapSharedState.scala` (the hub
+- [x] T041a [M2: the first trait-based module PR, after M1] Add `controller/SnapSharedState.scala` (the hub
   interface: `pivotBlock`, `stateRoot`, `currentPhase`, `progressMonitor`, `requestTracker`) and `controller/SnapControllerEnv.scala` (`ctx`,
   `timers`, config, logs, storages, metrics). The core implements both. All later narrowing commits reuse them.
-- [ ] T043 [M2] `StateValidationModule`: move, then narrow to
+  - As built: its own commit ahead of the move (a self-typed trait cannot see the impl's constructor parameters, and
+    the move commit may not turn parameters into members). `SnapSharedState` = 5 (three abstract `var`s, two `def`s);
+    `SnapControllerEnv` = 11 (`ctx`, `timers`, `snapSyncConfig`, `syncConfig`, `asyncLog`, the four constructor
+    storages, `validatorFactory`, `snapValidationEc`; metrics are a global object). The core's constructor parameters
+    became `val`s and its hub fields lost `private`; every initializer stays strict in the core.
+- [x] T043 [M2] `StateValidationModule`: move, then narrow to
   `StateValidationState & SnapSharedState & SnapControllerEnv & ResumeApi`. Stub test (Tier 1): a stale-generation
   validation result is dropped, and a current one clears `validationInProgress`. That body reads and writes the
   state.
+  - As built: moved `validationRetryCount`, the P4d arms (`staleValidationDropArms`, `stateValidationResultArms`,
+    `stateValidationArms`), `spawnAccountValidation`, `spawnStorageValidation`, `validateState`. Narrowed self-type:
+    `StateValidationState & SnapSharedState & SnapControllerEnv & ResumeApi & HealingApi & LifecycleApi`; state 3
+    (= R14), Api 6 (R14a: 1; the moved arms call M6 and M9). `MaxValidationRetries`/`ValidationRetryDelay` stayed in the
+    core in the move (rule (d)) and became pure private lazy vals of the trait in the narrowing. The dispatch, the
+    `StateValidationComplete` arm and the `idle` drops stay in the core. Stub test: `StateValidationModuleSpec`
+    (four cases). verify.py step 6 now finds the core's `extends` clause past its 30-line constructor (first commit).
   **Every M task below (T044–T053) also has the narrowing commit and at least one stub test, per the per-slice
   checklist.**
 - [ ] T044 [M3] `SnapPeerPool` (herald second review).

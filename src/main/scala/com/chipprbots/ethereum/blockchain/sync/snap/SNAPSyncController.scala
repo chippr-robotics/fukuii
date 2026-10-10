@@ -22,11 +22,15 @@ import com.chipprbots.ethereum.blockchain.sync.SyncController
 import com.chipprbots.ethereum.blockchain.sync.SyncProtocol
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.ChildFactories
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.CoordinatorHandles
+import com.chipprbots.ethereum.blockchain.sync.snap.controller.HealingApi
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.HeapWatchdogStart
+import com.chipprbots.ethereum.blockchain.sync.snap.controller.LifecycleApi
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.PhaseFlags
+import com.chipprbots.ethereum.blockchain.sync.snap.controller.ResumeApi
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.SnapControllerEnv
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.SnapSharedState
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.StateValidationModule
+import com.chipprbots.ethereum.blockchain.sync.snap.controller.StateValidationState
 import com.chipprbots.ethereum.consensus.engine.PoSBlockHeaderValidator
 import com.chipprbots.ethereum.db.storage.AppStateStorage
 import com.chipprbots.ethereum.db.storage.BfsQueueStorage
@@ -90,7 +94,11 @@ private class SNAPSyncControllerImpl(
     with PhaseFlags
     with SnapSharedState
     with SnapControllerEnv
-    with StateValidationModule:
+    with StateValidationModule
+    with StateValidationState
+    with ResumeApi
+    with HealingApi
+    with LifecycleApi:
 
   import SNAPSyncController.*
   import SyncPhase.*
@@ -372,7 +380,7 @@ private class SNAPSyncControllerImpl(
         snapValidationEc
       )
 
-  private[snap] def getOrCreateMptStorage(pivotBlockNumber: BigInt): MptStorage =
+  def getOrCreateMptStorage(pivotBlockNumber: BigInt): MptStorage =
     mptStorage.getOrElse {
       val storage = stateStorage.getBackingStorage(pivotBlockNumber)
       mptStorage = Some(storage)
@@ -490,9 +498,6 @@ private class SNAPSyncControllerImpl(
   private val DormantBaseDelay: FiniteDuration = 3.minutes
   private val DormantMaxDelay: FiniteDuration = 20.minutes
 
-  private[snap] val MaxValidationRetries = 3
-  private[snap] val ValidationRetryDelay = 500.millis
-
   // Async validation state. `validationInProgress` is the re-entrance guard
   // for the trie-walk Future. `validationGeneration` is bumped at every
   // (a) fresh validation spawn, (b) `restartSnapSync`, and (c) post-pivot
@@ -501,8 +506,8 @@ private class SNAPSyncControllerImpl(
   // than being applied against the wrong root. Both result-message handlers
   // and the scheduled `ValidationRetry` carry the generation they were
   // spawned/scheduled at and only honour matching values.
-  private[snap] var validationInProgress: Boolean = false
-  private[snap] var validationGeneration: Long = 0L
+  var validationInProgress: Boolean = false
+  var validationGeneration: Long = 0L
 
   // #1188: when the round-2 healing trie walk returns 0 missing, the entire
   // account+storage trie has just been DFS-walked end-to-end. Capture the root
@@ -512,7 +517,7 @@ private class SNAPSyncControllerImpl(
   // Belt-and-suspenders: only honoured when the captured root *equals* the
   // current `stateRoot`, so any pivot refresh / restart naturally invalidates
   // the signal and full validation runs.
-  private[snap] var healingValidatedRoot: Option[TrieRoot] = None
+  var healingValidatedRoot: Option[TrieRoot] = None
 
   // Running total of unique codeHashes streamed in via `IncrementalContractData`. Used to set
   // `progressMonitor.estimatedTotalBytecodes` so the SNAP-sync dashboard's
@@ -3380,7 +3385,7 @@ private class SNAPSyncControllerImpl(
     *   Description of the failure. Yields `true` if the retry limit is exceeded and the caller should enter dormant
     *   mode.
     */
-  private[snap] def recordCriticalFailure(reason: String): Boolean =
+  def recordCriticalFailure(reason: String): Boolean =
     SNAPSyncMetrics.incrementSyncError()
     criticalFailureCount += 1
     accountsAtLastCriticalFailure = progressMonitor.currentProgress.accountsSynced
@@ -3396,7 +3401,7 @@ private class SNAPSyncControllerImpl(
     * exhausted, no snap-capable peer after the capability grace period. The wake-up restarts SNAP on a fresh pivot once
     * a snap-capable peer is connected (`dormantRetry`), and all persisted SNAP progress is kept.
     */
-  private[snap] def enterDormantMode(reason: String): Behavior[Command] =
+  def enterDormantMode(reason: String): Behavior[Command] =
     currentPhase = Dormant
 
     ctx.log.warn(
@@ -4016,7 +4021,7 @@ private class SNAPSyncControllerImpl(
   private lazy val bfsQueueStorage: BfsQueueStorage =
     new RocksDbBfsQueueStorage(flatSlotStorage.dataSource, Namespaces.BfsQueueNamespace)
 
-  private[snap] def startStateHealing(): Unit =
+  def startStateHealing(): Unit =
     // Guard: prevent duplicate healing coordinator creation (Bug 27).
     // Can happen when ByteCodeSyncComplete and StorageRangeSyncComplete arrive in quick
     // succession — both call checkAllDownloadsComplete() which calls startStateHealing().
@@ -4831,7 +4836,7 @@ private class SNAPSyncControllerImpl(
       // end else (stateRoot changed)
     // end else (not StateValidation phase)
 
-  private[snap] def restartSnapSync(reason: String): Behavior[Command] =
+  def restartSnapSync(reason: String): Behavior[Command] =
     ctx.log.warn(s"Restarting SNAP sync with a fresher pivot: $reason")
 
     // Clear any pending pivot refresh (we're doing a full restart instead)
@@ -4912,7 +4917,7 @@ private class SNAPSyncControllerImpl(
   /** Trigger healing by re-running the trie walk with path tracking. Called from validateState() when missing nodes are
     * discovered. The passed hashes are just an indicator — we re-walk to get proper paths for GetTrieNodes.
     */
-  private[snap] def triggerHealingForMissingNodes(missingNodes: Seq[ByteString]): Unit =
+  def triggerHealingForMissingNodes(missingNodes: Seq[ByteString]): Unit =
     ctx.log.info(s"Validation found ${missingNodes.size} missing nodes — re-running trie walk with paths for healing")
     currentPhase = StateHealing
     stateRoot.foreach { root =>

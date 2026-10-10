@@ -4,10 +4,31 @@ import org.apache.pekko.actor.typed.Behavior
 import org.apache.pekko.actor.typed.scaladsl.Behaviors
 import org.apache.pekko.util.ByteString
 
-import com.chipprbots.ethereum.blockchain.sync.snap.*
+import scala.concurrent.duration.*
+
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController.*
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController.SyncPhase.*
+import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncMetrics
+import com.chipprbots.ethereum.db.storage.MptStorage
+import com.chipprbots.ethereum.domain.TrieRoot
 import com.chipprbots.ethereum.utils.ByteStringUtils.ByteStringOps
+
+private[snap] trait StateValidationState:
+  var validationInProgress: Boolean
+  var validationGeneration: Long
+  var healingValidatedRoot: Option[TrieRoot]
+
+private[snap] trait ResumeApi:
+  def getOrCreateMptStorage(pivotBlockNumber: BigInt): MptStorage
+
+private[snap] trait HealingApi:
+  def triggerHealingForMissingNodes(missingNodes: Seq[ByteString]): Unit
+  def startStateHealing(): Unit
+
+private[snap] trait LifecycleApi:
+  def recordCriticalFailure(reason: String): Boolean
+  def enterDormantMode(reason: String): Behavior[Command]
+  def restartSnapSync(reason: String): Behavior[Command]
 
 /** State validation (spec 016 M2, research.md R6 "Validation"): the post-heal account and storage trie walks
   * (`validateState`, `spawnAccountValidation`, `spawnStorageValidation`, run on `snapValidationEc` through
@@ -16,10 +37,12 @@ import com.chipprbots.ethereum.utils.ByteStringUtils.ByteStringOps
   * `phaseArms(StateValidation)`, and `staleValidationDropArms` from `commonSyncingArms` in every other phase.
   */
 private[snap] trait StateValidationModule:
-  self: SNAPSyncControllerImpl =>
+  self: StateValidationState & SnapSharedState & SnapControllerEnv & ResumeApi & HealingApi & LifecycleApi =>
 
   // Retry counter for validation failures to prevent infinite loops
   private var validationRetryCount: Int = 0
+  private lazy val MaxValidationRetries = 3
+  private lazy val ValidationRetryDelay = 500.millis
 
   /** The stale-generation drops for the validation results (#60-#62). They carry no phase guard, so they run in every
     * phase: first in `stateValidationArms`, and from their original place in `commonSyncingArms` for the other phases
