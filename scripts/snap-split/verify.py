@@ -424,6 +424,11 @@ HEADER_EDIT_RE = re.compile(
 )
 
 
+# A one-line export clause re-exporting moved symbols (plan.md D2): `export a.b.Obj.name` or
+# `export a.b.Obj.{n1, n2}`. A wildcard (`*`), a rename or a hiding (`=>`) and a multi-line clause do not match.
+EXPORT_RE = re.compile(r"^\s*export\s+([A-Za-z_][\w.]*?)\.(?:(\w+)|\{\s*(\w+(?:\s*,\s*\w+)*)\s*\})\s*$")
+
+
 def abstract_decl(s: str) -> bool:
     t = s.strip()
     return bool(re.match(r"^(?:(?:" + MODIFIER + r")\s+)*(?:def|var|type)\s+\w", t)) and top_level_initializer(t) is None and not t.endswith(("(", ","))
@@ -515,7 +520,7 @@ class Verifier:
 
         # steps 1-2: move commit
         if is_move:
-            self.check_moved_blocks(c, p, changed)
+            self.check_moved_blocks(c, p, changed, split_list(moved))
             self.check_bodies(c, p, changed, split_list(moved))
             if narrowed:
                 self.err(c, "step6", "commit both removes the last impl-class mention (narrowing) and carries `# moved:`; split it into two commits")
@@ -543,7 +548,7 @@ class Verifier:
             self.check_test_files_trailer(c, msg, changed)
 
     # -- step 1
-    def check_moved_blocks(self, c, p, changed):
+    def check_moved_blocks(self, c, p, changed, symbols=()):
         out = self.g.run(
             "-c", "color.diff.oldMoved=magenta", "-c", "color.diff.newMoved=cyan",
             "-c", "color.diff.old=red", "-c", "color.diff.new=green",
@@ -582,7 +587,18 @@ class Verifier:
             self.err(c, "step1", f"removed line is not shown as moved: `{b[:100]}`")
         if len(bad) > 10:
             self.err(c, "step1", f"... and {len(bad) - 10} more removed lines not moved")
-        extra = [a.strip() for lines in pool.values() for a in lines if not added_ok.search(a)]
+        extra = []
+        for a in (a for lines in pool.values() for a in lines if not added_ok.search(a)):
+            m = EXPORT_RE.match(a)
+            if m is None:
+                extra.append(a.strip())
+                continue
+            # plan.md D2: a moved helper may be re-exported from its old object, so its call sites stay unchanged.
+            # Only a one-line export of `# moved:` symbols, by name: no wildcard, no rename, nothing else.
+            names = [n.strip() for n in (m.group(2) or m.group(3)).split(",")]
+            for n in names:
+                if n not in symbols:
+                    self.err(c, "step1", f"export of `{n}`, which is not a `# moved:` symbol: `{a.strip()[:100]}`")
         for a in extra[:10]:
             self.err(c, "step1", f"added line is neither moved nor a header/import/visibility change: `{a[:100]}`")
         if len(extra) > 10:
@@ -716,18 +732,21 @@ class Verifier:
     # -- compile the move commit
     def compile_move(self, c: str):
         repo = self.g.repo
-        wt = Path(tempfile.mkdtemp(prefix="snap-verify-wt-"))
+        tmp = Path(tempfile.mkdtemp(prefix="snap-verify-wt-"))
+        wt = tmp / "src"
         try:
-            self.g.run("worktree", "add", "--detach", str(wt), c)
+            # A local `--shared` clone, not `git worktree add`: a linked worktree has a `.git` *file*, which JGit
+            # (sbt-git, loaded by the build) rejects with "Bare Repository has neither a working tree, nor an index".
+            self.g.run("clone", "-q", "--shared", "--no-checkout", str(repo), str(wt))
+            subprocess.run(["git", "checkout", "-q", "--detach", c], cwd=wt, check=True, capture_output=True)
             if (repo / ".gitmodules").exists():
                 subprocess.run(["git", "submodule", "update", "--init", "--recursive"], cwd=wt, capture_output=True)
             self.info(c, f"compiling move commit: {self.compile_cmd}")
-            r = subprocess.run(self.compile_cmd, shell=True, cwd=wt)
+            r = subprocess.run(self.compile_cmd, shell=True, cwd=wt, stdin=subprocess.DEVNULL)
             if r.returncode != 0:
                 self.err(c, "compile", f"`{self.compile_cmd}` failed on the move commit (exit {r.returncode})")
         finally:
-            subprocess.run(["git", "worktree", "remove", "--force", str(wt)], cwd=repo, capture_output=True)
-            shutil.rmtree(wt, ignore_errors=True)
+            shutil.rmtree(tmp, ignore_errors=True)
 
 
 def main(argv=None) -> int:

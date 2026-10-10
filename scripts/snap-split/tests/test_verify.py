@@ -88,6 +88,42 @@ class FooSpec:
 """
 
 
+COMPANION_BASE = """package x
+
+object SNAPSyncController:
+
+  /** Doc of a pure helper. */
+  private[snap] def pure(a: Int): Int =
+    a + 1
+
+  private[snap] val Limit: Long = 3L
+
+  def keep(): Int = 2
+"""
+
+COMPANION_AFTER_MOVE = """package x
+
+object SNAPSyncController:
+
+  // re-exported: call sites stay unchanged
+  export controller.FooPolicy.{Limit, pure}
+
+  def keep(): Int = 2
+"""
+
+POLICY = """package x.controller
+
+/** Pure decisions. */
+private[snap] object FooPolicy:
+
+  /** Doc of a pure helper. */
+  private[snap] def pure(a: Int): Int =
+    a + 1
+
+  private[snap] val Limit: Long = 3L
+"""
+
+
 _FIXTURES = []
 
 
@@ -97,14 +133,14 @@ def tearDownModule():
 
 
 class Fixture:
-    def __init__(self, branch="refactor/snap-016-m2"):
+    def __init__(self, branch="refactor/snap-016-m2", core_base=CORE_BASE):
         self.tmp = tempfile.TemporaryDirectory()
         _FIXTURES.append(self.tmp)
         self.d = Path(self.tmp.name)
         self.git("init", "-q", "-b", "main")
         self.git("config", "user.email", "t@t")
         self.git("config", "user.name", "t")
-        self.write(CORE, CORE_BASE)
+        self.write(CORE, core_base)
         self.write(TEST, SPEC_BASE)
         self.write("src/main/resources/application.conf", "a = 1\n")
         self.commit("base")
@@ -411,6 +447,39 @@ class VerifyTests(unittest.TestCase):
         self.assertIn("both removes the last impl-class mention", out)
         self.assertIn("FR-016b", out)
 
+    # ---- plan.md D2: companion helpers move into a policy object and are re-exported
+    def companion_move(self, core=COMPANION_AFTER_MOVE, symbols="pure Limit"):
+        f = Fixture(branch="refactor/snap-016-m1", core_base=COMPANION_BASE)
+        f.write(f"{CTRL}/FooPolicy.scala", POLICY)
+        f.write(CORE, core)
+        f.commit(f"refactor(snap): move helpers (#1401)\n\n# moved: {symbols}\n")
+        return f
+
+    def test_companion_move_with_export_of_moved_symbols_passes(self):
+        self.ok(self.companion_move())
+
+    def test_companion_move_single_name_exports_pass(self):
+        core = COMPANION_AFTER_MOVE.replace(
+            "  export controller.FooPolicy.{Limit, pure}\n",
+            "  export controller.FooPolicy.pure\n  export controller.FooPolicy.Limit\n",
+        )
+        self.ok(self.companion_move(core=core))
+
+    def test_export_of_unmoved_symbol_fails(self):
+        core = COMPANION_AFTER_MOVE.replace("{Limit, pure}", "{Limit, pure, other}")
+        out = self.bad(self.companion_move(core=core), "step1")
+        self.assertIn("export of `other`", out)
+
+    def test_wildcard_rename_and_multiline_exports_fail(self):
+        for clause in (
+            "export controller.FooPolicy.*",
+            "export controller.FooPolicy.{Limit, pure => p}",
+            "export controller.FooPolicy.{\n    Limit,\n    pure\n  }",
+        ):
+            core = COMPANION_AFTER_MOVE.replace("export controller.FooPolicy.{Limit, pure}", clause)
+            out = self.bad(self.companion_move(core=core), "step1")
+            self.assertIn("added line is neither moved", out)
+
     def test_unlisted_removed_member_fails(self):
         f = Fixture()
         move_commit(f, symbols="heal", partial=True)
@@ -524,6 +593,13 @@ class VerifyTests(unittest.TestCase):
         move_commit(f, partial=True)
         self.ok(f, "--compile", "--compile-cmd", "test -f src/main/scala/com/chipprbots/ethereum/blockchain/sync/snap/controller/HealingOrchestrator.scala")
         self.bad(f, "compile", "--compile", "--compile-cmd", "false")
+
+    def test_compile_checkout_is_a_full_repository_at_the_move_commit(self):
+        # sbt-git (JGit) cannot load a linked worktree, whose `.git` is a file: the checkout needs a `.git` directory
+        f = self.companion_move()
+        f.write("README.md", "after the move\n")
+        f.commit("docs")
+        self.ok(f, "--compile", "--compile-cmd", "test -d .git && test ! -e README.md && git rev-parse HEAD")
 
     def test_compile_not_run_without_move_commit(self):
         f = Fixture()
