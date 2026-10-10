@@ -2738,14 +2738,12 @@ object StorageRangeCoordinator:
       storageScheme: StorageScheme = StorageScheme.Hash,
       pathNodeStorage: Option[PathNodeStorage] = None,
       recordStorageDone: Boolean = false,
-      intakeBudget: Option[SnapIntakeBudget] = None,
-      // None = read `fukuii.sync.snap-sync.storage-off-actor-processing` etc. from the actor system's config.
-      processing: Option[ProcessingSettings] = None
+      intakeBudget: Option[SnapIntakeBudget] = None
   ): Behavior[Command] =
     Behaviors.setup { context =>
-      val processingSettings = processing.getOrElse(
+      // Read from the node config here rather than taken as a parameter: the spec 016 seam pins this apply's defaults.
+      val processingSettings =
         Try(context.system.settings.config).toOption.fold(ProcessingSettings.Inline)(ProcessingSettings.fromConfig)
-      )
       if processingSettings.offActor then
         context.log.info(
           s"StorageRangeCoordinator: off-actor response processing on ${processingSettings.threads} thread(s), " +
