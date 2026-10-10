@@ -404,3 +404,93 @@ class SNAPRequestTrackerSpec extends ScalaTestWithActorTestKit() with AnyFlatSpe
     SNAPRequestTracker.StallPolicy.Default.isStall(4_999L) shouldBe false
     SNAPRequestTracker.StallPolicy.Default.isStall(78_000L) shouldBe true
   }
+
+  // ── Owner-decided timeouts (Sepolia 2026-10-09) ───────────────────────────────────────────────────────────
+  // The timer runs on the scheduler thread; the reply lands in the owning actor's mailbox. With ownerDecidesTimeout the
+  // timer only notifies the owner, so a reply the owner reaches first still matches the pending request.
+
+  "SNAPRequestTracker owner-decided timeouts" should "keep the request pending after the timer fires so the reply is accepted" taggedAs UnitTest in {
+    val tracker = new SNAPRequestTracker()
+    val peer = createTestPeer("busy-owner-peer", TestProbe().ref)
+    val fired = new java.util.concurrent.atomic.AtomicInteger(0)
+
+    val requestId = tracker.generateRequestId()
+    tracker.trackRequest(
+      requestId,
+      peer,
+      SNAPRequestTracker.RequestType.GetStorageRanges,
+      timeout = 50.millis,
+      ownerDecidesTimeout = true
+    ) {
+      fired.incrementAndGet()
+    }
+    eventually(timeout(Span(5000, Millis))) {
+      fired.get() shouldBe 1
+    }
+
+    // The timer notified the owner but did not expire the request: the reply already in the owner's mailbox matches.
+    tracker.isPending(requestId) shouldBe true
+    val response = StorageRanges(requestId, slots = Seq.empty, proof = Seq.empty)
+    tracker.validateStorageRanges(response) shouldBe Right(response)
+    tracker.completeRequest(requestId) shouldBe defined
+
+    // The owner's queued timeout then has nothing to expire.
+    tracker.expireRequest(requestId) shouldBe None
+    tracker.pendingCount shouldBe 0
+  }
+
+  it should "expire the request when the owner handles the timeout before any reply" taggedAs UnitTest in {
+    val tracker = new SNAPRequestTracker()
+    val peer = createTestPeer("silent-peer", TestProbe().ref)
+    val fired = new java.util.concurrent.atomic.AtomicInteger(0)
+
+    val requestId = tracker.generateRequestId()
+    tracker.trackRequest(
+      requestId,
+      peer,
+      SNAPRequestTracker.RequestType.GetStorageRanges,
+      timeout = 50.millis,
+      ownerDecidesTimeout = true
+    ) {
+      fired.incrementAndGet()
+    }
+    eventually(timeout(Span(5000, Millis))) {
+      fired.get() shouldBe 1
+    }
+
+    tracker.expireRequest(requestId).map(_.peer) shouldBe Some(peer)
+    tracker.isPending(requestId) shouldBe false
+    val late = tracker.validateStorageRanges(StorageRanges(requestId, slots = Seq.empty, proof = Seq.empty))
+    late.swap.getOrElse(fail("Expected Left")) should include("No pending request")
+    tracker.completeRequest(requestId) shouldBe None
+    tracker.expireRequest(requestId) shouldBe None
+  }
+
+  it should "never notify the owner of a request it already expired" taggedAs UnitTest in {
+    val tracker = new SNAPRequestTracker()
+    val peer = createTestPeer("expired-early-peer", TestProbe().ref)
+    val fired = new java.util.concurrent.atomic.AtomicInteger(0)
+
+    val requestId = tracker.generateRequestId()
+    tracker.trackRequest(
+      requestId,
+      peer,
+      SNAPRequestTracker.RequestType.GetStorageRanges,
+      timeout = 200.millis,
+      ownerDecidesTimeout = true
+    ) {
+      fired.incrementAndGet()
+    }
+    tracker.expireRequest(requestId) shouldBe defined
+    tracker.isPending(requestId) shouldBe false
+    // The default-mode request below shares the scheduler: once its timer has fired, the cancelled 200 ms one is past due.
+    val probeId = tracker.generateRequestId()
+    val probeFired = new java.util.concurrent.atomic.AtomicInteger(0)
+    tracker.trackRequest(probeId, peer, SNAPRequestTracker.RequestType.GetStorageRanges, timeout = 400.millis) {
+      probeFired.incrementAndGet()
+    }
+    eventually(timeout(Span(5000, Millis))) {
+      probeFired.get() shouldBe 1
+    }
+    fired.get() shouldBe 0
+  }

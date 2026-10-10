@@ -276,6 +276,12 @@ private[actors] class StorageRangeCoordinatorImpl(
 
   /** The peer answered a request with usable data: feed the liveness score and log a recovery from demotion. */
   private def recordPeerAnswered(peerId: String): Unit =
+    // A served answer ends the failure run, as the counter's contract says. Before this the only reset outside a pivot
+    // refresh was the StorageTaskComplete handler, which nothing sends: on Sepolia 2026-10-09 the 100th timeout since
+    // startup (most of them replies dropped while this actor was busy) force-completed storage at 13:02, discarding the
+    // in-flight requests, 42 per-account tries and the ordering-gate state to healing, although ~1,800 responses had
+    // been processed in the same span.
+    consecutiveTaskFailures = 0
     peerHealth.recordSuccess(peerId).foreach { level =>
       log.info(
         s"[STORAGE-PEER-HEALTH] recovered peer=${peerId.take(8)} level=$level->${peerHealth.level(peerId)} " +
@@ -331,6 +337,8 @@ private[actors] class StorageRangeCoordinatorImpl(
             tasks.enqueue(task.copy(pending = false))
           }
         }
+        // With ownerDecidesTimeout the tracker keeps a request until it is completed, expired or cancelled.
+        activeTasks.keys.foreach(requestTracker.cancelRequest)
         activeTasks.clear()
         log.info(s"Re-queued $staleCount stale in-flight requests from ghost peers")
 
@@ -1019,6 +1027,7 @@ private[actors] class StorageRangeCoordinatorImpl(
         if inFlight.nonEmpty then
           log.debug(s"Peer $peerId disconnected — re-queuing ${inFlight.size} in-flight storage request(s)")
           inFlight.foreach { reqId =>
+            requestTracker.cancelRequest(reqId)
             activeTasks.remove(reqId).foreach { case (_, batchTasks, _) =>
               batchTasks.foreach { task =>
                 val key = (task.accountHash, task.next)
@@ -1148,6 +1157,8 @@ private[actors] class StorageRangeCoordinatorImpl(
             trackSurvivor(task)
           }
         }
+        // Old-root replies still in flight are discarded as "No pending request", as before.
+        activeTasks.keys.foreach(requestTracker.cancelRequest)
         activeTasks.clear()
         if cancelledCount > 0 then log.info(s"Cancelled $cancelledCount in-flight storage requests (stale root)")
 
@@ -1294,6 +1305,11 @@ private[actors] class StorageRangeCoordinatorImpl(
         Behaviors.same
 
       case StorageRequestTimedOut(requestId) =>
+        // The timeout is decided HERE, in mailbox order, not on the tracker's timer thread (ownerDecidesTimeout): a
+        // reply that reached the mailbox before this message has already completed the request, so expireRequest
+        // finds nothing and the peer is not blamed for the time this actor spent busy on earlier messages. Expire
+        // unconditionally so the tracker entry never outlives this message.
+        requestTracker.expireRequest(requestId)
         // A request already completed or abandoned (force-complete) is no longer in activeTasks: nothing to retry.
         if activeTasks.contains(requestId) then handleTimeout(requestId)
         Behaviors.same
@@ -1385,7 +1401,8 @@ private[actors] class StorageRangeCoordinatorImpl(
           requestId,
           peer,
           SNAPRequestTracker.RequestType.GetStorageRanges,
-          timeout = requestTimeout
+          timeout = requestTimeout,
+          ownerDecidesTimeout = true
         ) {
           // Runs on the scheduler's thread, not this actor's: hop onto the mailbox. Calling handleTimeout here mutated
           // actor state from a foreign thread and, because the tracker timer outlives the actor, kept re-firing
