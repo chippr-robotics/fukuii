@@ -845,6 +845,248 @@ private class SNAPSyncControllerImpl(
     */
   private lazy val chainDownloadCompletionArms: PartialFunction[Command, Behavior[Command]] = PartialFunction.empty
 
+  /** A `commonSyncingArms` arm lifted into a class member (spec 016 restructure, CQ-SNAP-016-18/19), body unchanged:
+    * `RequestTrieNodeHealing` (#15), the 1-s healing tick: request healing and check the serve root, in `StateHealing`
+    * only (the phase test stays in the body). `commonSyncingArms` delegates to it at the arm's original position, so
+    * the arm order is unchanged.
+    */
+  private[snap] lazy val requestTrieNodeHealingArms: PartialFunction[Command, Behavior[Command]] = {
+    case RequestTrieNodeHealing =>
+      // The 1-s scheduler keeps emitting these even after we transition out of
+      // healing. Once validation is async, these can fire concurrently with
+      // the validation Future and would feed a coordinator that's supposed to
+      // be quiescent. The phase gate is defensive; we also cancel the
+      // scheduler explicitly in `validateState()` callers.
+      if currentPhase == StateHealing then
+        requestTrieNodeHealing()
+        // spec 004 T011/U1: piggyback the serve-root staleness check on the existing 1-s healing tick (the only
+        // dispatch hook already present during healing). This does NOT issue a request per block — it only fires
+        // the ~1s parent bootstrap when the serve root is > HealingServeRootMarginBlocks behind the network head
+        // and no request is already in flight.
+        maybeRequestHealingServeRoot()
+      Behaviors.same
+  }
+
+  /** A `commonSyncingArms` arm lifted into a class member (spec 016 restructure, CQ-SNAP-016-18/19), body unchanged:
+    * `HealingServeRoot` (#16), the parent's reply to `RequestHealingServeRoot`. `commonSyncingArms` delegates to it at
+    * the arm's original position, so the arm order is unchanged.
+    */
+  private[snap] lazy val healingServeRootArms: PartialFunction[Command, Behavior[Command]] = {
+    // spec 004 T011/T012: parent's reply to RequestHealingServeRoot. Push the newest-servable root to the healing
+    // coordinator as HealingServeRootRefresh — NOT HealingPivotRefreshed (which would mutate the walk root). U2: a
+    // None/zero reply means no servable root could be fetched; KEEP the current serve root (do not push), and clear
+    // the in-flight latch so a later tick can retry.
+    case SNAPSyncController.HealingServeRoot(blockNumber, rootOpt) =>
+      healingServeRootRequestInFlight = false
+      // spec 009 T014/FR-010: under moving-root delta heal the stale-move trigger re-pegs the single heal root via
+      // refreshPivotInPlace → HealingPivotRefreshed (H-S6), NOT a serve-root push, so this reply is no longer
+      // solicited on the flag path. A late HealingServeRoot (e.g. an in-flight RequestHealingServeRoot from before the
+      // flag engaged) must NOT push a HealingServeRootRefresh — under single-root heal the serve root IS the walk root
+      // and a serve-root-only move would be meaningless. Flag OFF: byte-identical to the spec-004 push below.
+      if snapSyncConfig.movingRootDeltaHeal then
+        ctx.log.debug(
+          "[HEAL] late HealingServeRoot reply ignored — moving-root delta heal re-pegs via HealingPivotRefreshed"
+        )
+      else
+        rootOpt match
+          case Some(root) if root.value.nonEmpty =>
+            lastHealingServeRootBlock = Some(blockNumber)
+            ctx.log.info(
+              s"[HEAL-SERVE-ROOT] Pushing newest-servable serve root ${root.value.take(4).toHex} (block $blockNumber) " +
+                s"to healing coordinator (walk root unchanged)."
+            )
+            trieNodeHealingCoordinator.foreach(
+              _ ! actors.TrieNodeHealingCoordinator.HealingServeRootRefresh(root.value)
+            )
+          case _ =>
+            ctx.log.info(
+              "[HEAL-SERVE-ROOT] Parent could not fetch a newest-servable root (no peers / bootstrap failed). " +
+                "Keeping the current serve root; will retry on a later healing tick."
+            )
+      Behaviors.same
+  }
+
+  /** A `commonSyncingArms` arm lifted into a class member (spec 016 restructure, CQ-SNAP-016-18/19), body unchanged:
+    * `RetryBootstrapAtBlock`, the backtracked pivot-header bootstrap retry armed by `PivotBootstrapFailed`.
+    * `commonSyncingArms` delegates to it at the arm's original position, so the arm order is unchanged.
+    */
+  private[snap] lazy val retryBootstrapAtBlockArms: PartialFunction[Command, Behavior[Command]] = {
+    case RetryBootstrapAtBlock(blockNumber) =>
+      if currentPhase == AccountRangeSync || currentPhase == ByteCodeAndStorageSync || currentPhase == StateHealing
+      then
+        ctx.log.info(s"Retrying bootstrap at backtracked block $blockNumber...")
+        blockchainReader.getBlockHeaderByNumber(blockNumber) match
+          case Some(header) =>
+            completePivotRefreshWithStateRoot(blockNumber, header, "backtracked pivot (local header)")
+          case None =>
+            chainDownloader.tell(ChainDownloader.Pause)
+            pendingPivotRefresh = Some((blockNumber, "backtracked pivot"))
+            syncController ! StartRegularSyncBootstrap(blockNumber)
+            lastAccountProgressMs = System.currentTimeMillis()
+      else ctx.log.info(s"Skipping backtracked bootstrap — phase=$currentPhase no longer needs it")
+      Behaviors.same
+  }
+
+  /** A `commonSyncingArms` arm lifted into a class member (spec 016 restructure, CQ-SNAP-016-18/19), body unchanged:
+    * `HealedCodeHashes`: bytecode of accounts that arrived only through healing. `commonSyncingArms` delegates to it at
+    * the arm's original position, so the arm order is unchanged.
+    */
+  private[snap] lazy val healedCodeHashesArms: PartialFunction[Command, Behavior[Command]] = {
+    case HealedCodeHashes(codeHashes) =>
+      queueHealedCode(codeHashes)
+      Behaviors.same
+  }
+
+  /** A `commonSyncingArms` arm lifted into a class member (spec 016 restructure, CQ-SNAP-016-18/19), body unchanged:
+    * the healed-code finalisation hold: `ByteCodeSyncComplete` while `bytecodePhaseComplete && awaitingHealedCode`, and
+    * `HealedCodeWaitTimeout` while `awaitingHealedCode`. A message whose guard is false falls through to the next arm
+    * of `commonSyncingArms`, as before. `commonSyncingArms` delegates to it at the arm's original position, so the arm
+    * order is unchanged.
+    */
+  private[snap] lazy val healedCodeHoldArms: PartialFunction[Command, Behavior[Command]] = {
+    // The bytecode coordinator re-announces completion every time its queue drains, so this is the answer to the
+    // tasks `queueHealedCode` added.
+    case ByteCodeSyncComplete if bytecodePhaseComplete && awaitingHealedCode =>
+      dropHealedCodeNowPresent()
+      if healedCodeHashes.isEmpty then
+        ctx.log.info("[HEAL-CODE] All bytecode of healed accounts is present — finalising SNAP")
+        completeSnapSync()
+      else ctx.log.info(s"[HEAL-CODE] ${healedCodeHashes.size} healed-account codeHash(es) still missing — waiting")
+      Behaviors.same
+
+    case HealedCodeWaitTimeout if awaitingHealedCode =>
+      dropHealedCodeNowPresent()
+      ctx.log.warn(
+        s"[HEAL-CODE] Gave up waiting for the bytecode of healed accounts after $HealedCodeWaitMs ms: " +
+          s"${healedCodeHashes.size} codeHash(es) still missing. Finalising SNAP without marking bytecode recovery " +
+          "done; the next start's recovery scan fetches them, and block import fetches them on demand."
+      )
+      healedCodeWaitExhausted = true
+      completeSnapSync()
+      Behaviors.same
+  }
+
+  /** A `commonSyncingArms` arm lifted into a class member (spec 016 restructure, CQ-SNAP-016-18/19), body unchanged:
+    * `StateHealingComplete`, the healing coordinator's completion signal. `commonSyncingArms` delegates to it at the
+    * arm's original position, so the arm order is unchanged.
+    */
+  private[snap] lazy val stateHealingCompleteArms: PartialFunction[Command, Behavior[Command]] = {
+    case StateHealingComplete =>
+      progressMonitor.startPhase(StateHealing)
+      ctx.log.info("Healing coordinator signaled complete (no pending tasks, no active requests).")
+      if snapSyncConfig.storageScheme == StorageScheme.Path then
+        // Path scheme: the controller's trie walk and StateValidator read the hash-keyed store, which Path never
+        // populates, so they would report the root missing every round and never reach "0 missing". The coordinator
+        // only sends StateHealingComplete after its path-aware verification walk found zero missing nodes against
+        // the current root (or it healed nothing and was idle), so that signal IS the clean walk: take the same
+        // exit as TrieWalkComplete(0) rather than running a second, blind, full-trie walk.
+        if currentPhase == StateHealing then completeHealingWalkClean()
+        else ctx.log.debug("Ignoring StateHealingComplete outside StateHealing (phase={})", currentPhase)
+      else if trieWalkInProgress then
+        // A trie walk is already running — its result will determine next step
+        ctx.log.info("Trie walk in progress, waiting for result...")
+      else
+        // ARCH-WALK-HEAL-INTERLEAVE: Start walk with coordinator alive (if still running) or
+        // create a fresh coordinator before the walk so inline discovery can run concurrently.
+        startStateHealingWithInterleave()
+      Behaviors.same
+  }
+
+  /** A `commonSyncingArms` arm lifted into a class member (spec 016 restructure, CQ-SNAP-016-18/19), body unchanged:
+    * `CheckDownloadStagnation`, the 30-s stagnation tick: the proactive pivot roll, the zero-SNAP-peer log and the
+    * progress `ask`s whose answers `accountRangeArms` and `byteCodeAndStorageArms` handle. `commonSyncingArms`
+    * delegates to it at the arm's original position, so the arm order is unchanged.
+    */
+  private[snap] lazy val checkDownloadStagnationArms: PartialFunction[Command, Behavior[Command]] = {
+    // C2: inlined from aroundReceive — stagnation check dispatches to the active coordinator
+    case CheckDownloadStagnation =>
+      import org.apache.pekko.util.Timeout
+      import scala.util.{Success, Failure}
+      given timeout: Timeout = Timeout(2.seconds)
+      ctx.log.debug(
+        s"Stagnation check: phase=$currentPhase, stalledMs=${System.currentTimeMillis() - lastStorageProgressMs}"
+      )
+
+      // Proactive pivot roll: keep pivot within core-geth's 128-block snapshot window.
+      if (currentPhase == AccountRangeSync || currentPhase == ByteCodeAndStorageSync) &&
+        pivotBlock.isDefined
+      then
+        currentNetworkBestFromSnapPeers().foreach { networkBest =>
+          val pivotAge = networkBest - pivotBlock.get
+          val recentlyRolled = lastProactivePivotBlock.exists(last => (networkBest - last) <= BigInt(50))
+          val storageLateStage =
+            currentPhase == ByteCodeAndStorageSync && storageContractProgressPct >= 0.80
+          if pivotAge > SnapServeWindowBlocks && !recentlyRolled &&
+            pivotProbeRequestId.isEmpty && pendingProbeCommit.isEmpty &&
+            !storageLateStage
+          then
+            val now = System.currentTimeMillis
+            if now - lastProbeAttemptMs >= ProbeCooldownMs then
+              ctx.log.info(
+                s"[PIVOT-ROLL] Proactive pivot roll: pivot=${pivotBlock.get} " +
+                  s"network=$networkBest age=$pivotAge — readiness probe will fire after header fetch"
+              )
+              proactiveRollNeedsProbe = true
+              lastProbeAttemptMs = now
+              refreshPivotInPlace("proactive pivot roll")
+        }
+
+      val snapPeerCount = peersToDownloadFrom.values.count(_.peerInfo.remoteStatus.supportsSnap)
+      val totalPeerCount = peersToDownloadFrom.size
+      val stagnantMs = System.currentTimeMillis() - lastAccountProgressMs
+      if currentPhase == AccountRangeSync && snapPeerCount == 0 && stagnantMs > ZeroPeerStagnationMs then
+        ctx.log.info(
+          s"[STAGNATION] Zero SNAP peers for ${stagnantMs / 1000}s during account sync " +
+            s"($totalPeerCount total peers) — waiting for peers to reconnect; downloaded state is preserved " +
+            s"(no restart)"
+        )
+
+      currentPhase match
+        case AccountRangeSync =>
+          accountRangeCoordinator.foreach { coordinator =>
+            import org.apache.pekko.actor.typed.scaladsl.AskPattern.*
+            given typedScheduler: org.apache.pekko.actor.typed.Scheduler = ctx.system.scheduler
+            ctx.pipeToSelf(
+              coordinator.ask[actors.AccountRangeStats](replyTo =>
+                actors.AccountRangeCoordinator.AccountGetProgress(replyTo)
+              )
+            ) {
+              case Success(stats) => AccountCoordinatorProgress(stats)
+              case Failure(_)     => AccountCoordinatorProgress(actors.AccountRangeStats(0L, 0L, 0, 0, 0, 0.0, 0L, 0))
+            }
+          }
+        case ByteCodeAndStorageSync =>
+          storageRangeCoordinator.foreach { coordinator =>
+            import org.apache.pekko.actor.typed.scaladsl.AskPattern.*
+            given typedScheduler: org.apache.pekko.actor.typed.Scheduler = ctx.system.scheduler
+            ctx.pipeToSelf(
+              coordinator.ask[actors.StorageRangeCoordinator.SyncStatistics](replyTo =>
+                actors.StorageRangeCoordinator.StorageGetProgress(replyTo)
+              )
+            ) {
+              case Success(stats) => StorageCoordinatorProgress(stats)
+              case Failure(_) =>
+                StorageCoordinatorProgress(actors.StorageRangeCoordinator.SyncStatistics(0, 0, 0, 0, 0, 0, 0.0))
+            }
+          }
+          if !bytecodePhaseComplete then
+            bytecodeCoordinator.foreach { coordinator =>
+              import org.apache.pekko.actor.typed.scaladsl.AskPattern.*
+              given typedScheduler: org.apache.pekko.actor.typed.Scheduler = ctx.system.scheduler
+              ctx.pipeToSelf(
+                coordinator.ask[actors.ByteCodeCoordinator.ByteCodeProgress](replyTo =>
+                  actors.ByteCodeCoordinator.ByteCodeGetProgress(replyTo)
+                )
+              ) {
+                case Success(progress) => ByteCodeCoordinatorProgress(progress)
+                case Failure(_) =>
+                  ByteCodeCoordinatorProgress(actors.ByteCodeCoordinator.ByteCodeProgress(0.0, 0L, 0L))
+              }
+            }
+        case _ => // No stagnation check needed in other phases
+      Behaviors.same
+  }
+
   /** Dispatch order (spec 016 P4, research.md R4b): `syncingGuardArms` (the path-publish and header-hold arms with
     * their two guarded wildcards, then the `peerEventArms` delegation), then `phaseArms(currentPhase)`, then
     * `commonSyncingArms`, then the "Unhandled message in syncing state" catch-all. `currentPhase` is read per message.
@@ -928,53 +1170,13 @@ private class SNAPSyncControllerImpl(
         requestStorageRanges()
         Behaviors.same
 
-      case RequestTrieNodeHealing =>
-        // The 1-s scheduler keeps emitting these even after we transition out of
-        // healing. Once validation is async, these can fire concurrently with
-        // the validation Future and would feed a coordinator that's supposed to
-        // be quiescent. The phase gate is defensive; we also cancel the
-        // scheduler explicitly in `validateState()` callers.
-        if currentPhase == StateHealing then
-          requestTrieNodeHealing()
-          // spec 004 T011/U1: piggyback the serve-root staleness check on the existing 1-s healing tick (the only
-          // dispatch hook already present during healing). This does NOT issue a request per block — it only fires
-          // the ~1s parent bootstrap when the serve root is > HealingServeRootMarginBlocks behind the network head
-          // and no request is already in flight.
-          maybeRequestHealingServeRoot()
-        Behaviors.same
+      // requestTrieNodeHealingArms (spec 016 restructure): delegated here, at its original position.
+      case msg if requestTrieNodeHealingArms.isDefinedAt(msg) =>
+        requestTrieNodeHealingArms(msg)
 
-      // spec 004 T011/T012: parent's reply to RequestHealingServeRoot. Push the newest-servable root to the healing
-      // coordinator as HealingServeRootRefresh — NOT HealingPivotRefreshed (which would mutate the walk root). U2: a
-      // None/zero reply means no servable root could be fetched; KEEP the current serve root (do not push), and clear
-      // the in-flight latch so a later tick can retry.
-      case SNAPSyncController.HealingServeRoot(blockNumber, rootOpt) =>
-        healingServeRootRequestInFlight = false
-        // spec 009 T014/FR-010: under moving-root delta heal the stale-move trigger re-pegs the single heal root via
-        // refreshPivotInPlace → HealingPivotRefreshed (H-S6), NOT a serve-root push, so this reply is no longer
-        // solicited on the flag path. A late HealingServeRoot (e.g. an in-flight RequestHealingServeRoot from before the
-        // flag engaged) must NOT push a HealingServeRootRefresh — under single-root heal the serve root IS the walk root
-        // and a serve-root-only move would be meaningless. Flag OFF: byte-identical to the spec-004 push below.
-        if snapSyncConfig.movingRootDeltaHeal then
-          ctx.log.debug(
-            "[HEAL] late HealingServeRoot reply ignored — moving-root delta heal re-pegs via HealingPivotRefreshed"
-          )
-        else
-          rootOpt match
-            case Some(root) if root.value.nonEmpty =>
-              lastHealingServeRootBlock = Some(blockNumber)
-              ctx.log.info(
-                s"[HEAL-SERVE-ROOT] Pushing newest-servable serve root ${root.value.take(4).toHex} (block $blockNumber) " +
-                  s"to healing coordinator (walk root unchanged)."
-              )
-              trieNodeHealingCoordinator.foreach(
-                _ ! actors.TrieNodeHealingCoordinator.HealingServeRootRefresh(root.value)
-              )
-            case _ =>
-              ctx.log.info(
-                "[HEAL-SERVE-ROOT] Parent could not fetch a newest-servable root (no peers / bootstrap failed). " +
-                  "Keeping the current serve root; will retry on a later healing tick."
-              )
-        Behaviors.same
+      // healingServeRootArms (spec 016 restructure): delegated here, at its original position.
+      case msg if healingServeRootArms.isDefinedAt(msg) =>
+        healingServeRootArms(msg)
 
       case EnsureSnapServerPeersConnected =>
         ensureSnapServerPeersConnected()
@@ -1357,20 +1559,9 @@ private class SNAPSyncControllerImpl(
         else ctx.log.info(s"Skipping pivot refresh retry — phase=$currentPhase no longer needs it")
         Behaviors.same
 
-      case RetryBootstrapAtBlock(blockNumber) =>
-        if currentPhase == AccountRangeSync || currentPhase == ByteCodeAndStorageSync || currentPhase == StateHealing
-        then
-          ctx.log.info(s"Retrying bootstrap at backtracked block $blockNumber...")
-          blockchainReader.getBlockHeaderByNumber(blockNumber) match
-            case Some(header) =>
-              completePivotRefreshWithStateRoot(blockNumber, header, "backtracked pivot (local header)")
-            case None =>
-              chainDownloader.tell(ChainDownloader.Pause)
-              pendingPivotRefresh = Some((blockNumber, "backtracked pivot"))
-              syncController ! StartRegularSyncBootstrap(blockNumber)
-              lastAccountProgressMs = System.currentTimeMillis()
-        else ctx.log.info(s"Skipping backtracked bootstrap — phase=$currentPhase no longer needs it")
-        Behaviors.same
+      // retryBootstrapAtBlockArms (spec 016 restructure): delegated here, at its original position.
+      case msg if retryBootstrapAtBlockArms.isDefinedAt(msg) =>
+        retryBootstrapAtBlockArms(msg)
 
       // Geth-aligned: bytecodes and storage are dispatched inline from each account batch.
       // IncrementalContractData arrives from AccountRangeCoordinator after every identifyContractAccounts() call.
@@ -1496,30 +1687,13 @@ private class SNAPSyncControllerImpl(
           checkAllDownloadsComplete()
         Behaviors.same
 
-      case HealedCodeHashes(codeHashes) =>
-        queueHealedCode(codeHashes)
-        Behaviors.same
+      // healedCodeHashesArms (spec 016 restructure): delegated here, at its original position.
+      case msg if healedCodeHashesArms.isDefinedAt(msg) =>
+        healedCodeHashesArms(msg)
 
-      // The bytecode coordinator re-announces completion every time its queue drains, so this is the answer to the
-      // tasks `queueHealedCode` added.
-      case ByteCodeSyncComplete if bytecodePhaseComplete && awaitingHealedCode =>
-        dropHealedCodeNowPresent()
-        if healedCodeHashes.isEmpty then
-          ctx.log.info("[HEAL-CODE] All bytecode of healed accounts is present — finalising SNAP")
-          completeSnapSync()
-        else ctx.log.info(s"[HEAL-CODE] ${healedCodeHashes.size} healed-account codeHash(es) still missing — waiting")
-        Behaviors.same
-
-      case HealedCodeWaitTimeout if awaitingHealedCode =>
-        dropHealedCodeNowPresent()
-        ctx.log.warn(
-          s"[HEAL-CODE] Gave up waiting for the bytecode of healed accounts after $HealedCodeWaitMs ms: " +
-            s"${healedCodeHashes.size} codeHash(es) still missing. Finalising SNAP without marking bytecode recovery " +
-            "done; the next start's recovery scan fetches them, and block import fetches them on demand."
-        )
-        healedCodeWaitExhausted = true
-        completeSnapSync()
-        Behaviors.same
+      // healedCodeHoldArms (spec 016 restructure): delegated here, at its original position.
+      case msg if healedCodeHoldArms.isDefinedAt(msg) =>
+        healedCodeHoldArms(msg)
 
       case ByteCodeSyncComplete if !bytecodePhaseComplete =>
         bytecodePhaseComplete = true
@@ -1571,25 +1745,9 @@ private class SNAPSyncControllerImpl(
 
       // HealingAllPeersStateless, HealingStagnated (StateHealing only): stateHealingArms (P4c).
 
-      case StateHealingComplete =>
-        progressMonitor.startPhase(StateHealing)
-        ctx.log.info("Healing coordinator signaled complete (no pending tasks, no active requests).")
-        if snapSyncConfig.storageScheme == StorageScheme.Path then
-          // Path scheme: the controller's trie walk and StateValidator read the hash-keyed store, which Path never
-          // populates, so they would report the root missing every round and never reach "0 missing". The coordinator
-          // only sends StateHealingComplete after its path-aware verification walk found zero missing nodes against
-          // the current root (or it healed nothing and was idle), so that signal IS the clean walk: take the same
-          // exit as TrieWalkComplete(0) rather than running a second, blind, full-trie walk.
-          if currentPhase == StateHealing then completeHealingWalkClean()
-          else ctx.log.debug("Ignoring StateHealingComplete outside StateHealing (phase={})", currentPhase)
-        else if trieWalkInProgress then
-          // A trie walk is already running — its result will determine next step
-          ctx.log.info("Trie walk in progress, waiting for result...")
-        else
-          // ARCH-WALK-HEAL-INTERLEAVE: Start walk with coordinator alive (if still running) or
-          // create a fresh coordinator before the walk so inline discovery can run concurrently.
-          startStateHealingWithInterleave()
-        Behaviors.same
+      // stateHealingCompleteArms (spec 016 restructure): delegated here, at its original position.
+      case msg if stateHealingCompleteArms.isDefinedAt(msg) =>
+        stateHealingCompleteArms(msg)
 
       // StateHealingAbandoned, HealingRootUnservable, TrieWalkBatch/Complete/Result, ScheduledTrieWalk, TrieWalkFailed
       // (StateHealing only): stateHealingArms (P4c).
@@ -1607,93 +1765,9 @@ private class SNAPSyncControllerImpl(
       // ValidateAccountTrieResult, ValidateStorageTriesResult, ValidationRetry (StateValidation only, current
       // generation): stateValidationArms (P4d).
 
-      // C2: inlined from aroundReceive — stagnation check dispatches to the active coordinator
-      case CheckDownloadStagnation =>
-        import org.apache.pekko.util.Timeout
-        import scala.util.{Success, Failure}
-        given timeout: Timeout = Timeout(2.seconds)
-        ctx.log.debug(
-          s"Stagnation check: phase=$currentPhase, stalledMs=${System.currentTimeMillis() - lastStorageProgressMs}"
-        )
-
-        // Proactive pivot roll: keep pivot within core-geth's 128-block snapshot window.
-        if (currentPhase == AccountRangeSync || currentPhase == ByteCodeAndStorageSync) &&
-          pivotBlock.isDefined
-        then
-          currentNetworkBestFromSnapPeers().foreach { networkBest =>
-            val pivotAge = networkBest - pivotBlock.get
-            val recentlyRolled = lastProactivePivotBlock.exists(last => (networkBest - last) <= BigInt(50))
-            val storageLateStage =
-              currentPhase == ByteCodeAndStorageSync && storageContractProgressPct >= 0.80
-            if pivotAge > SnapServeWindowBlocks && !recentlyRolled &&
-              pivotProbeRequestId.isEmpty && pendingProbeCommit.isEmpty &&
-              !storageLateStage
-            then
-              val now = System.currentTimeMillis
-              if now - lastProbeAttemptMs >= ProbeCooldownMs then
-                ctx.log.info(
-                  s"[PIVOT-ROLL] Proactive pivot roll: pivot=${pivotBlock.get} " +
-                    s"network=$networkBest age=$pivotAge — readiness probe will fire after header fetch"
-                )
-                proactiveRollNeedsProbe = true
-                lastProbeAttemptMs = now
-                refreshPivotInPlace("proactive pivot roll")
-          }
-
-        val snapPeerCount = peersToDownloadFrom.values.count(_.peerInfo.remoteStatus.supportsSnap)
-        val totalPeerCount = peersToDownloadFrom.size
-        val stagnantMs = System.currentTimeMillis() - lastAccountProgressMs
-        if currentPhase == AccountRangeSync && snapPeerCount == 0 && stagnantMs > ZeroPeerStagnationMs then
-          ctx.log.info(
-            s"[STAGNATION] Zero SNAP peers for ${stagnantMs / 1000}s during account sync " +
-              s"($totalPeerCount total peers) — waiting for peers to reconnect; downloaded state is preserved " +
-              s"(no restart)"
-          )
-
-        currentPhase match
-          case AccountRangeSync =>
-            accountRangeCoordinator.foreach { coordinator =>
-              import org.apache.pekko.actor.typed.scaladsl.AskPattern.*
-              given typedScheduler: org.apache.pekko.actor.typed.Scheduler = ctx.system.scheduler
-              ctx.pipeToSelf(
-                coordinator.ask[actors.AccountRangeStats](replyTo =>
-                  actors.AccountRangeCoordinator.AccountGetProgress(replyTo)
-                )
-              ) {
-                case Success(stats) => AccountCoordinatorProgress(stats)
-                case Failure(_)     => AccountCoordinatorProgress(actors.AccountRangeStats(0L, 0L, 0, 0, 0, 0.0, 0L, 0))
-              }
-            }
-          case ByteCodeAndStorageSync =>
-            storageRangeCoordinator.foreach { coordinator =>
-              import org.apache.pekko.actor.typed.scaladsl.AskPattern.*
-              given typedScheduler: org.apache.pekko.actor.typed.Scheduler = ctx.system.scheduler
-              ctx.pipeToSelf(
-                coordinator.ask[actors.StorageRangeCoordinator.SyncStatistics](replyTo =>
-                  actors.StorageRangeCoordinator.StorageGetProgress(replyTo)
-                )
-              ) {
-                case Success(stats) => StorageCoordinatorProgress(stats)
-                case Failure(_) =>
-                  StorageCoordinatorProgress(actors.StorageRangeCoordinator.SyncStatistics(0, 0, 0, 0, 0, 0, 0.0))
-              }
-            }
-            if !bytecodePhaseComplete then
-              bytecodeCoordinator.foreach { coordinator =>
-                import org.apache.pekko.actor.typed.scaladsl.AskPattern.*
-                given typedScheduler: org.apache.pekko.actor.typed.Scheduler = ctx.system.scheduler
-                ctx.pipeToSelf(
-                  coordinator.ask[actors.ByteCodeCoordinator.ByteCodeProgress](replyTo =>
-                    actors.ByteCodeCoordinator.ByteCodeGetProgress(replyTo)
-                  )
-                ) {
-                  case Success(progress) => ByteCodeCoordinatorProgress(progress)
-                  case Failure(_) =>
-                    ByteCodeCoordinatorProgress(actors.ByteCodeCoordinator.ByteCodeProgress(0.0, 0L, 0L))
-                }
-              }
-          case _ => // No stagnation check needed in other phases
-        Behaviors.same
+      // checkDownloadStagnationArms (spec 016 restructure): delegated here, at its original position.
+      case msg if checkDownloadStagnationArms.isDefinedAt(msg) =>
+        checkDownloadStagnationArms(msg)
 
       // AccountCoordinatorProgress (AccountRangeSync only): accountRangeArms (P4a).
       // Storage/ByteCodeCoordinatorProgress (ByteCodeAndStorageSync only): byteCodeAndStorageArms (P4b).
