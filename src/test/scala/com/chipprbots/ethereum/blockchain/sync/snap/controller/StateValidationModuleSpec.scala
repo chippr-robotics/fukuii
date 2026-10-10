@@ -1,6 +1,7 @@
 package com.chipprbots.ethereum.blockchain.sync.snap.controller
 
 import org.apache.pekko.actor.testkit.typed.scaladsl.BehaviorTestKit
+import org.apache.pekko.actor.typed.ActorRef
 import org.apache.pekko.actor.typed.Behavior
 import org.apache.pekko.actor.typed.scaladsl.ActorContext
 import org.apache.pekko.actor.typed.scaladsl.Behaviors
@@ -24,7 +25,9 @@ import com.chipprbots.ethereum.db.storage.EvmCodeStorage
 import com.chipprbots.ethereum.db.storage.FlatSlotStorage
 import com.chipprbots.ethereum.db.storage.MptStorage
 import com.chipprbots.ethereum.db.storage.StateStorage
+import com.chipprbots.ethereum.domain.BlockchainReader
 import com.chipprbots.ethereum.domain.TrieRoot
+import com.chipprbots.ethereum.network.NetworkPeerManagerActor
 import com.chipprbots.ethereum.testing.Tags.UnitTest
 import com.chipprbots.ethereum.utils.Config.SyncConfig
 
@@ -64,6 +67,8 @@ private[snap] class StubStateValidationState(
   def flatSlotStorage: FlatSlotStorage = notUsed("flatSlotStorage")
   def validatorFactory: MptStorage => StateValidator = notUsed("validatorFactory")
   def snapValidationEc: ExecutionContext = notUsed("snapValidationEc")
+  def networkPeerManager: ActorRef[NetworkPeerManagerActor.Command] = notUsed("networkPeerManager")
+  def blockchainReader: BlockchainReader = notUsed("blockchainReader")
 
   // Callee Api traits
   val healingTriggeredFor: mutable.ArrayBuffer[Seq[ByteString]] = mutable.ArrayBuffer.empty

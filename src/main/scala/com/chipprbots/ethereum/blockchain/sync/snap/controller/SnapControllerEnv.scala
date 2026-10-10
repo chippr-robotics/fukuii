@@ -1,5 +1,6 @@
 package com.chipprbots.ethereum.blockchain.sync.snap.controller
 
+import org.apache.pekko.actor.typed.ActorRef as TypedActorRef
 import org.apache.pekko.actor.typed.scaladsl.ActorContext
 import org.apache.pekko.actor.typed.scaladsl.TimerScheduler
 
@@ -13,6 +14,8 @@ import com.chipprbots.ethereum.db.storage.EvmCodeStorage
 import com.chipprbots.ethereum.db.storage.FlatSlotStorage
 import com.chipprbots.ethereum.db.storage.MptStorage
 import com.chipprbots.ethereum.db.storage.StateStorage
+import com.chipprbots.ethereum.domain.BlockchainReader
+import com.chipprbots.ethereum.network.NetworkPeerManagerActor
 import com.chipprbots.ethereum.utils.Config.SyncConfig
 
 /** The SNAP controller's environment (spec 016 T041a, plan.md D1): the actor context and timers, the configuration, the
@@ -24,8 +27,9 @@ import com.chipprbots.ethereum.utils.Config.SyncConfig
   * dispatcher lookup and the logger lookup run at construction). Metrics are not members: `SNAPSyncMetrics` is a global
   * object.
   *
-  * Member cap (FR-016 (c)): 11. A PR that adds a member states the new count and a justification line, and updates the
-  * cap in `.claude/agent-protocols/snap-sync.md`.
+  * Member cap (FR-016 (c)): 13 (11 at T041a; M3 added `networkPeerManager` and `blockchainReader`, two constructor
+  * parameters the peer pool's bodies reach). A PR that adds a member states the new count and a justification line, and
+  * updates the cap in `.claude/agent-protocols/snap-sync.md`.
   */
 private[snap] trait SnapControllerEnv:
 
@@ -47,3 +51,9 @@ private[snap] trait SnapControllerEnv:
 
   /** The dedicated dispatcher for the long trie walks (`snap-validation-dispatcher`, see `pekko.conf`). */
   def snapValidationEc: ExecutionContext
+
+  /** The peer manager: the handshaked-peer poll, snap-server dialling, and the child spawns. */
+  def networkPeerManager: TypedActorRef[NetworkPeerManagerActor.Command]
+
+  /** Read access to the chain (genesis and stored chain weights for the pivot TD estimate). */
+  def blockchainReader: BlockchainReader
