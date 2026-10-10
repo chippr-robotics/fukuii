@@ -3705,6 +3705,73 @@ private class SNAPSyncControllerImpl(
   private lazy val bfsQueueStorage: BfsQueueStorage =
     new RocksDbBfsQueueStorage(flatSlotStorage.dataSource, Namespaces.BfsQueueNamespace)
 
+  /** spec 016 M6a: the healing-coordinator spawn shared by both healing routes, `startStateHealing` and
+    * `startStateHealingWithInterleave`. It opens the pivot's trie store, spawns the supervised coordinator with the
+    * forwarded healing settings, sends it `StartTrieNodeHealing`, the healing in-flight budget and the current snap
+    * peers, and (re)starts the 1 s peer-availability timer. Each route keeps its own guard, logs and follow-up around
+    * the call. `prunedHealVerification` is still not forwarded (#1502).
+    */
+  private def spawnHealingCoordinator(root: TrieRoot): Unit =
+    val storage = getOrCreateMptStorage(pivotBlock.getOrElse(BigInt(0)))
+
+    trieNodeHealingCoordinator = Some(
+      ctx.spawn(
+        Behaviors
+          .supervise(
+            childFactories.trieNodeHealingCoordinator(
+              stateRoot = root.value,
+              networkPeerManager = networkPeerManager,
+              requestTracker = requestTracker,
+              mptStorage = storage,
+              batchSize = snapSyncConfig.healingBatchSize,
+              snapSyncController = ctx.self,
+              concurrency = snapSyncConfig.healingConcurrency,
+              visitedCap = snapSyncConfig.healingVisitedCap,
+              healingFrontierStorage = healingFrontierStorageOpt,
+              // #1319/spec-002 (restored): gate the coordinator's frontier-mirror writes +
+              // completeness markers ON, matching store presence (dropped by #1384's stale base).
+              frontierPersistenceEnabled = snapSyncConfig.healingFrontierPersistence,
+              traversalParallelism = snapSyncConfig.healingTraversalParallelism,
+              healingMinParallelism = snapSyncConfig.healingMinParallelism,
+              healingReservedCores = snapSyncConfig.healingReservedCores,
+              bfsQueueStorageOpt = Some(bfsQueueStorage),
+              storageScheme = snapSyncConfig.storageScheme,
+              pathNodeStorageOpt = pathNodeStorageOpt,
+              frontierHighWater = snapSyncConfig.healingFrontierHighWater,
+              frontierLowWater = snapSyncConfig.healingFrontierLowWater,
+              scopedHealVerification = snapSyncConfig.scopedHealVerification,
+              scopedHealMaxPaths = snapSyncConfig.scopedHealMaxPaths,
+              decoupledHealServeRoot = snapSyncConfig.decoupledHealServeRoot,
+              decoupledHealMaxAttemptsNoRefresh = snapSyncConfig.decoupledHealMaxAttemptsNoRefresh,
+              movingRootDeltaHeal = snapSyncConfig.movingRootDeltaHeal,
+              evmCodeStorage = Some(evmCodeStorage),
+              walkLocalOnly = Some(healingWalkLocalOnly)
+            )
+          )
+          .onFailure[Throwable](
+            SupervisorStrategy.restartWithBackoff(1.second, 10.seconds, 0.2).withMaxRestarts(3)
+          ),
+        s"trie-node-healing-coordinator-$coordinatorGeneration",
+        org.apache.pekko.actor.typed.DispatcherSelector.fromConfig("sync-dispatcher")
+      )
+    )
+
+    // Start the coordinator — give healing full per-peer budget (accounts/storage/bytecode done)
+    trieNodeHealingCoordinator.foreach { coordinator =>
+      coordinator ! actors.TrieNodeHealingCoordinator.StartTrieNodeHealing(root.value)
+      coordinator ! actors.TrieNodeHealingCoordinator.UpdateMaxInFlightPerPeer(
+        snapSyncConfig.healingMaxInFlightPerPeer
+      )
+      // Flush current snap peers immediately — the 0-second scheduler delay is async; an explicit
+      // flush here ensures peers are available before any StartTrieNodeHealing dispatch attempt.
+      peersToDownloadFrom.values
+        .filter(p => SNAPSyncController.servesSnapState(p.peerInfo))
+        .foreach(p => coordinator ! actors.TrieNodeHealingCoordinator.HealingPeerAvailable(p.peer))
+    }
+
+    // Periodically send peer availability notifications (cancel any existing scheduler first)
+    startHealingRequestScheduler()
+
   def startStateHealing(): Unit =
     // Guard: prevent duplicate healing coordinator creation (Bug 27).
     // Can happen when ByteCodeSyncComplete and StorageRangeSyncComplete arrive in quick
@@ -3719,65 +3786,7 @@ private class SNAPSyncControllerImpl(
       stateRoot.foreach { root =>
         ctx.log.info("Using actor-based concurrency for state healing")
 
-        val storage = getOrCreateMptStorage(pivotBlock.getOrElse(BigInt(0)))
-
-        trieNodeHealingCoordinator = Some(
-          ctx.spawn(
-            Behaviors
-              .supervise(
-                childFactories.trieNodeHealingCoordinator(
-                  stateRoot = root.value,
-                  networkPeerManager = networkPeerManager,
-                  requestTracker = requestTracker,
-                  mptStorage = storage,
-                  batchSize = snapSyncConfig.healingBatchSize,
-                  snapSyncController = ctx.self,
-                  concurrency = snapSyncConfig.healingConcurrency,
-                  visitedCap = snapSyncConfig.healingVisitedCap,
-                  healingFrontierStorage = healingFrontierStorageOpt,
-                  // #1319/spec-002 (restored): gate the coordinator's frontier-mirror writes +
-                  // completeness markers ON, matching store presence (dropped by #1384's stale base).
-                  frontierPersistenceEnabled = snapSyncConfig.healingFrontierPersistence,
-                  traversalParallelism = snapSyncConfig.healingTraversalParallelism,
-                  healingMinParallelism = snapSyncConfig.healingMinParallelism,
-                  healingReservedCores = snapSyncConfig.healingReservedCores,
-                  bfsQueueStorageOpt = Some(bfsQueueStorage),
-                  storageScheme = snapSyncConfig.storageScheme,
-                  pathNodeStorageOpt = pathNodeStorageOpt,
-                  frontierHighWater = snapSyncConfig.healingFrontierHighWater,
-                  frontierLowWater = snapSyncConfig.healingFrontierLowWater,
-                  scopedHealVerification = snapSyncConfig.scopedHealVerification,
-                  scopedHealMaxPaths = snapSyncConfig.scopedHealMaxPaths,
-                  decoupledHealServeRoot = snapSyncConfig.decoupledHealServeRoot,
-                  decoupledHealMaxAttemptsNoRefresh = snapSyncConfig.decoupledHealMaxAttemptsNoRefresh,
-                  movingRootDeltaHeal = snapSyncConfig.movingRootDeltaHeal,
-                  evmCodeStorage = Some(evmCodeStorage),
-                  walkLocalOnly = Some(healingWalkLocalOnly)
-                )
-              )
-              .onFailure[Throwable](
-                SupervisorStrategy.restartWithBackoff(1.second, 10.seconds, 0.2).withMaxRestarts(3)
-              ),
-            s"trie-node-healing-coordinator-$coordinatorGeneration",
-            org.apache.pekko.actor.typed.DispatcherSelector.fromConfig("sync-dispatcher")
-          )
-        )
-
-        // Start the coordinator — give healing full per-peer budget (accounts/storage/bytecode done)
-        trieNodeHealingCoordinator.foreach { coordinator =>
-          coordinator ! actors.TrieNodeHealingCoordinator.StartTrieNodeHealing(root.value)
-          coordinator ! actors.TrieNodeHealingCoordinator.UpdateMaxInFlightPerPeer(
-            snapSyncConfig.healingMaxInFlightPerPeer
-          )
-          // Flush current snap peers immediately — the 0-second scheduler delay is async; an explicit
-          // flush here ensures peers are available before any StartTrieNodeHealing dispatch attempt.
-          peersToDownloadFrom.values
-            .filter(p => SNAPSyncController.servesSnapState(p.peerInfo))
-            .foreach(p => coordinator ! actors.TrieNodeHealingCoordinator.HealingPeerAvailable(p.peer))
-        }
-
-        // Periodically send peer availability notifications (cancel any existing scheduler first)
-        startHealingRequestScheduler()
+        spawnHealingCoordinator(root)
 
         // Ensure snap-server-peers scheduler is running (idempotent — already started at account sync).
         startSnapServerPeersScheduler()
@@ -3800,58 +3809,7 @@ private class SNAPSyncControllerImpl(
     else
       stateRoot match
         case Some(root) =>
-          val storage = getOrCreateMptStorage(pivotBlock.getOrElse(BigInt(0)))
-          trieNodeHealingCoordinator = Some(
-            ctx.spawn(
-              Behaviors
-                .supervise(
-                  childFactories.trieNodeHealingCoordinator(
-                    stateRoot = root.value,
-                    networkPeerManager = networkPeerManager,
-                    requestTracker = requestTracker,
-                    mptStorage = storage,
-                    batchSize = snapSyncConfig.healingBatchSize,
-                    snapSyncController = ctx.self,
-                    concurrency = snapSyncConfig.healingConcurrency,
-                    visitedCap = snapSyncConfig.healingVisitedCap,
-                    healingFrontierStorage = healingFrontierStorageOpt,
-                    // #1319/spec-002 (restored): gate frontier-mirror writes + completeness markers
-                    // ON, matching store presence (dropped by #1384's stale base).
-                    frontierPersistenceEnabled = snapSyncConfig.healingFrontierPersistence,
-                    traversalParallelism = snapSyncConfig.healingTraversalParallelism,
-                    healingMinParallelism = snapSyncConfig.healingMinParallelism,
-                    healingReservedCores = snapSyncConfig.healingReservedCores,
-                    bfsQueueStorageOpt = Some(bfsQueueStorage),
-                    storageScheme = snapSyncConfig.storageScheme,
-                    pathNodeStorageOpt = pathNodeStorageOpt,
-                    frontierHighWater = snapSyncConfig.healingFrontierHighWater,
-                    frontierLowWater = snapSyncConfig.healingFrontierLowWater,
-                    scopedHealVerification = snapSyncConfig.scopedHealVerification,
-                    scopedHealMaxPaths = snapSyncConfig.scopedHealMaxPaths,
-                    decoupledHealServeRoot = snapSyncConfig.decoupledHealServeRoot,
-                    decoupledHealMaxAttemptsNoRefresh = snapSyncConfig.decoupledHealMaxAttemptsNoRefresh,
-                    movingRootDeltaHeal = snapSyncConfig.movingRootDeltaHeal,
-                    evmCodeStorage = Some(evmCodeStorage),
-                    walkLocalOnly = Some(healingWalkLocalOnly)
-                  )
-                )
-                .onFailure[Throwable](
-                  SupervisorStrategy.restartWithBackoff(1.second, 10.seconds, 0.2).withMaxRestarts(3)
-                ),
-              s"trie-node-healing-coordinator-$coordinatorGeneration",
-              org.apache.pekko.actor.typed.DispatcherSelector.fromConfig("sync-dispatcher")
-            )
-          )
-          trieNodeHealingCoordinator.foreach { coordinator =>
-            coordinator ! actors.TrieNodeHealingCoordinator.StartTrieNodeHealing(root.value)
-            coordinator ! actors.TrieNodeHealingCoordinator.UpdateMaxInFlightPerPeer(
-              snapSyncConfig.healingMaxInFlightPerPeer
-            )
-            peersToDownloadFrom.values
-              .filter(p => SNAPSyncController.servesSnapState(p.peerInfo))
-              .foreach(p => coordinator ! actors.TrieNodeHealingCoordinator.HealingPeerAvailable(p.peer))
-          }
-          startHealingRequestScheduler()
+          spawnHealingCoordinator(root)
           ctx.log.info(
             s"[HEAL-INTERLEAVE] Healing coordinator created before walk — " +
               s"root=${root.value.take(8).toHex}, generation=$coordinatorGeneration"
