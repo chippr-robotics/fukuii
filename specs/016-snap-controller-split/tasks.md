@@ -300,9 +300,22 @@ only when every item on the per-slice checklist below holds.
 
 ## M1–M11 — controller modules (one PR each, in this order)
 
-- [ ] T042 [M1] Move the companion pure helpers to `controller/{Resume,Stagnation,Pivot,Heal}Policy.scala`. Add
+- [x] T042 [M1] Move the companion pure helpers to `controller/{Resume,Stagnation,Pivot,Heal}Policy.scala`. Add
   `export` forwarders in `object SNAPSyncController`, so no test call site changes. M1 is pure objects, not traits,
   so FR-016's narrowing does not apply. The S0f script still runs.
+  - As built: 14 symbols, byte-identical, into four `private[snap] object`s, re-exported by six one-line `export`
+    clauses: `StagnationPolicy` (`StorageTailBaseline` class + companion, `MinStaleFailuresForTailLivelock`,
+    `evaluateStorageTail`), `PivotPolicy` (`pivotPassesFreshnessFloor`, `unservablePivotTarget`, `MaxPeerTipLead`,
+    `clPivotNotYetAdvanced`), `HealPolicy` (`bytecodeRecoveryComplete`, `shouldSkipHealingAfterDownloads`,
+    `healRepegSuppressedByLocalWalk`, `staleReferenceHead`, `lastHealingServeRootBlockToRecord`), `ResumePolicy`
+    (`taskFilePaths`, `checkResumable`; the orphaned `checkResumable` scaladoc moved with it, verbatim).
+  - Criterion: a stateless, side-effect-free decision that belongs to one of the four policies. Not moved:
+    `deserializeSnapProgress` (an impl-class method, M5; the S0c golden finds it by reflection), `sweepTaskFiles` and
+    `SweepableTaskFilePrefixes` (file I/O), `countsTowardRestart` (tied to the `UnservableCause` ADT enum; M9),
+    `servesSnapState`/`snapExclusionReason`/`SnapExclusion*` (peer pool, M3), `chainBackfillDeferredToFinalization`
+    and `storageInFlightDuringAccounts` (config derivations, M4/M11), and the timer and wait constants.
+  - `snap-split-verify` step 1 gained the D2 export allowance (one-line clause, `# moved:` names only), with
+    self-tests; plan.md §Move verification step 1 and D1 record it.
 - [ ] T041a [M2: the first trait-based module PR, after M1] Add `controller/SnapSharedState.scala` (the hub
   interface: `pivotBlock`, `stateRoot`, `currentPhase`, `progressMonitor`, `requestTracker`) and `controller/SnapControllerEnv.scala` (`ctx`,
   `timers`, config, logs, storages, metrics). The core implements both. All later narrowing commits reuse them.

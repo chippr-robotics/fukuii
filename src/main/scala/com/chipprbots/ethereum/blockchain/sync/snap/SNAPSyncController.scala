@@ -6059,15 +6059,6 @@ object SNAPSyncController:
   /** TrieNodeHealingCoordinator -> controller: healed account leaves whose bytecode is not in `EvmCodeStorage`. */
   final case class HealedCodeHashes(codeHashes: Seq[ByteString]) extends Command
 
-  /** Whether SNAP may claim that no account's bytecode is missing (`bytecodeRecoveryDone`): nothing healed is still
-    * missing, and the bytecode phase was not force-completed with tasks abandoned.
-    */
-  private[snap] def bytecodeRecoveryComplete(
-      healedCodeStillMissing: Int,
-      bytecodePhaseForceCompleted: Boolean
-  ): Boolean =
-    healedCodeStillMissing == 0 && !bytecodePhaseForceCompleted
-
   /** The bounded wait for that bytecode ran out. */
   private[snap] case object HealedCodeWaitTimeout extends Command
 
@@ -6136,17 +6127,11 @@ object SNAPSyncController:
   private[snap] def countsTowardRestart(cause: UnservableCause): Boolean =
     cause != UnservableCause.PeerScarcity
 
-  /** Whether cursors + contract task files can drive a mid-range resume: every range of this concurrency's layout has a
-    * cursor (a range restarted from its start would duplicate carried contract work) and both task files hold at least
-    * their counted entries.
-    */
   /** File-name prefixes of the contract task files a coordinator creates (see AccountRangeCoordinator). The
     * contract-accounts file is not listed: its owner deletes it on stop and the live one is in use.
     */
   private[snap] val SweepableTaskFilePrefixes: Seq[String] =
     Seq("fukuii-contract-storage-", "fukuii-unique-codehashes-")
-
-  private[snap] def taskFilePaths(f: ContractTaskFiles): Set[String] = Set(f.storagePath, f.codeHashesPath)
 
   /** Delete every contract task file directly in `dir` whose normalised absolute path is not in `keep`. Returns the
     * deleted paths; failures are reported to `onError` and skipped (a leftover file is harmless, a crash here is not).
@@ -6177,18 +6162,6 @@ object SNAPSyncController:
                 false
           }
       finally stream.close()
-
-  private[snap] def checkResumable(
-      cursors: Map[ByteString, ByteString],
-      files: ContractTaskFiles,
-      concurrency: Int
-  ): Either[String, Unit] =
-    val expected = AccountTask.createInitialTasks(ByteString.empty, concurrency).map(_.last).toSet
-    if cursors.keySet != expected then
-      Left(
-        s"range layout mismatch: ${cursors.size} saved cursors vs ${expected.size} ranges at concurrency $concurrency"
-      )
-    else files.validate()
 
   /** Progress updates emitted by worker coordinators.
     *
@@ -6228,197 +6201,14 @@ object SNAPSyncController:
   // and updates TNHC's two send sites to SNAPSyncController.HealingStagnated.
   final case class HealingStagnated(healed: Long, pending: Long) extends Command
 
-  private[snap] def shouldSkipHealingAfterDownloads(
-      snapSyncConfig: SNAPSyncConfig,
-      resumedStaleCursors: Boolean
-  ): Boolean =
-    // The deferred-merkleization fast path (skip healing, lazy-heal during block execution) is
-    // ONLY safe when the trie was built fresh this session. If any account-range cursor was
-    // resumed from a prior session (against a possibly drifted root), the delta MUST be walked
-    // and re-fetched from the current pivot root before completion — otherwise the state is
-    // handed off with silent holes. So a resume forces the full healing walk.
-    // #1371 (restored — #1384's stale base re-added the `!storagePhaseForceCompleted` term, which
-    // routed force-completed deferred-merkleization back into the full heal walk → the
-    // "exactly 1 node, healed=0 forever" stall). Force-completion does not invalidate the
-    // freshly-built trie; only a resumed stale cursor does.
-    snapSyncConfig.deferredMerkleization && !resumedStaleCursors
-
-  /** Baseline for the storage tail-livelock backstop: the lowest remaining-work (pending+active) seen so far, when it
-    * was set, and the coordinator's cumulative stale-local-root failure count at that moment.
-    */
-  final private[snap] case class StorageTailBaseline(lowWork: Int, sinceMs: Long, staleFailuresAtLow: Long)
-
-  private[snap] object StorageTailBaseline:
-    def fresh(nowMs: Long): StorageTailBaseline = StorageTailBaseline(Int.MaxValue, nowMs, 0L)
-
-  /** Minimum number of stale-root verification failures, within one stall window, that makes a flat queue evidence of a
-    * livelock rather than a healthy slow tail (matches the coordinator's per-account give-up count K=3: one account's
-    * worth of repeated failures).
-    */
-  private[snap] val MinStaleFailuresForTailLivelock: Long = 3L
-
-  /** Pure state machine for the storage tail-livelock backstop (extracted so it is unit-testable; the actor is
-    * file-private). The baseline advances only when remaining work is STRICTLY lower than the last low point
-    * (oscillation does not count as progress). The result is `true` only when the low point has stood for `thresholdMs`
-    * AND at least [[MinStaleFailuresForTailLivelock]] stale-root failures were recorded since it was set — a depth-only
-    * trigger would misfire on huge-account continuation chains and post-split regrowth.
-    */
-  private[snap] def evaluateStorageTail(
-      baseline: StorageTailBaseline,
-      remainingWork: Int,
-      staleRootFailureEvents: Long,
-      nowMs: Long,
-      thresholdMs: Long
-  ): (StorageTailBaseline, Boolean) =
-    val next =
-      if remainingWork < baseline.lowWork then StorageTailBaseline(remainingWork, nowMs, staleRootFailureEvents)
-      else baseline
-    val stalledMs = nowMs - next.sinceMs
-    val failuresInWindow = staleRootFailureEvents - next.staleFailuresAtLow
-    (next, stalledMs >= thresholdMs && failuresInWindow >= MinStaleFailuresForTailLivelock)
-
-  /** Freshness gate for `refreshPivotInPlace`: reject candidate pivots whose source peer is more than `maxStaleness`
-    * blocks behind the CL-driven head.
-    *
-    * Background: the post-merge SNAP refresh path used to take `max(snapPeer.maxBlockNumber)` as the new pivot with no
-    * comparison against the actual chain tip. When the only SNAP-capable peers left in the pool were lagging (e.g. one
-    * still reporting block 10_447_000 while sepolia's CL head was at 10_847_xxx — observed May 13 2026), the refresh
-    * kept picking the stuck-peer's block, then immediately tripped the same-root fallback and restart. This filter
-    * blocks that path: on post-merge chains we know the authoritative tip (via `clPivotHint`), so we require pivot
-    * sources to be within `maxStaleness` of it. Pre-merge chains pass through unchanged (clHeadNumber=None).
-    *
-    * @param networkBest
-    *   the best SNAP peer's maxBlockNumber
-    * @param clHeadNumber
-    *   the consensus-layer head block number, when available
-    * @param maxStaleness
-    *   configured `maxPivotStalenessBlocks` (default 4096) Yields `Right(())` if the candidate is fresh enough, or
-    *   `Left(floor)` with the rejected freshness floor for diagnostic logging at the call site.
-    */
-  private[snap] def pivotPassesFreshnessFloor(
-      networkBest: BigInt,
-      clHeadNumber: Option[BigInt],
-      maxStaleness: Long
-  ): Either[BigInt, Unit] = clHeadNumber match
-    case Some(clHead) =>
-      val floor = clHead - maxStaleness
-      if networkBest < floor then Left(floor) else Right(())
-    case None =>
-      // Pre-merge / pre-CL-hint state: no authoritative tip to compare against. Preserve the
-      // legacy "take whatever peer offers" behavior.
-      Right(())
-
-  /** Pivot to move to when the current one is known unservable and `clHead - pivotBlockOffset` is not newer than it:
-    * the larger of `clHead - margin` and `min(peerBest, clHead + MaxPeerTipLead) - margin`, if strictly newer than
-    * `currentPivot`; None when neither is. `margin` is [[SnapServeWindowMargin]] (roots nearer the tip than that are
-    * "not indexed" by peers; offset 0 froze the ETC pivot on 2026-06-01).
-    *
-    * `peerBest` is one peer's uncorroborated advertised tip. It is capped at `clHead + MaxPeerTipLead` so a peer that
-    * lies high cannot drag the pivot (and the bootstrap retry that backtracks from it) arbitrarily far from the
-    * CL-designated chain; the header itself is still fetched from peers by the normal bootstrap.
-    */
-  private[snap] def unservablePivotTarget(
-      clHead: BigInt,
-      currentPivot: BigInt,
-      peerBest: Option[BigInt],
-      margin: BigInt,
-      maxPeerTipLead: BigInt = MaxPeerTipLead
-  ): Option[BigInt] =
-    val fromCl = clHead - margin
-    val fromPeer = peerBest.map(_.min(clHead + maxPeerTipLead) - margin)
-    (Seq(fromCl) ++ fromPeer).filter(_ > currentPivot).maxOption
-
-  /** The most a snap peer's advertised tip may lead the CL head when choosing a replacement pivot (CL lag seen on
-    * Platåberget 2026-10-05: ~110 blocks).
-    */
-  private[snap] val MaxPeerTipLead: BigInt = BigInt(128)
-
-  /** True when a CL-anchored re-peg target (`clHead - pivotBlockOffset`) is not strictly newer than the current pivot —
-    * i.e. `refreshPivotInPlace`'s CL-anchored branch would find nothing to do because the CL hasn't produced a fresher
-    * head, NOT because anything is unservable.
-    *
-    * Extracted (BUG-BC3, 2nd follow-up, Platåberget soak 2026-09-28) as the single source of truth for
-    * `refreshPivotInPlace`'s inline check, given explicit parameters — rather than reading `isPoSChain`/`clPivotHint`
-    * off the enclosing actor — specifically so it can be unit-tested directly: `isPoSChain` is a `private val` fixed at
-    * actor-construction time from the global
-    * `com.chipprbots.ethereum.utils.Config.blockchains.blockchainConfig.terminalTotalDifficulty`, which the "test"
-    * network config (used throughout this module's test suite, no `terminal-total-difficulty` entry) always resolves to
-    * `false` — so no actor spawned in a test in this module can ever exercise the CL-anchored branch live (see
-    * `staleReferenceHead`'s tests for the same constraint). Taking `clHead` as a plain `Option[BigInt]` sidesteps that
-    * entirely: a test can simulate "PoS chain, live CL hint" by simply passing `Some(...)`, exactly as the
-    * `staleReferenceHead` tests already do for `clHeadNumber`.
-    */
-  private[snap] def clPivotNotYetAdvanced(clHead: BigInt, pivotBlockOffset: Long, currentPivot: BigInt): Boolean =
-    (clHead - pivotBlockOffset) <= currentPivot
-
-  /** True when the proactive heal-root re-peg must not fire: under `movingRootDeltaHeal` a re-peg supersedes the
-    * running verification walk, whose completion is then discarded (the walk is restarted), so a walk that takes longer
-    * than the re-peg interval would never finish. While the walk is purely local (nothing pending, nothing in flight)
-    * serve-window freshness is irrelevant. Once a dirty pass leaves heal work, `walkLocalOnly` clears and the normal
-    * re-peg rules apply. The serve-root-only path (`decoupledHealServeRoot`) never invalidates the walk.
-    */
-  private[snap] def healRepegSuppressedByLocalWalk(movingRootDeltaHeal: Boolean, walkLocalOnly: Boolean): Boolean =
-    movingRootDeltaHeal && walkLocalOnly
-
-  /** The reference head `maybeRequestHealingServeRoot` clocks its heal-root staleness check against.
-    *
-    * Platåberget ePBS-devnet soak, 2026-09-27 (BUG-BC3): under `movingRootDeltaHeal`, `refreshPivotInPlace`'s OWN
-    * re-peg decision is CL-anchored on a PoS chain (peer `maxBlockNumber` is unreliable post-merge — see
-    * `refreshPivotInPlace`'s own comment). Clocking the STALENESS check against peer-reported `networkBest` instead let
-    * a frozen CL head (a Lighthouse CL that cannot advance while its EL reports SYNCING) trigger repeated staleness
-    * checks purely because peers kept gossiping a climbing STATUS height, even though the CL head — the only thing that
-    * could ever produce a newer pivot on that path — was not moving. Each such check correctly found no newer CL pivot,
-    * but (pre-fix) that failure counted against the bounded re-peg budget anyway, exhausting it in ~5 minutes while
-    * healing progressed normally on serving peers.
-    *
-    * Using the CL head as the clock here means a stuck CL simply stops triggering checks in the first place, rather
-    * than triggering ever more of them — a root-cause fix layered on top of (and independent from) the
-    * `refreshPivotInPlace(reason, countsTowardHealBudget = false)` fix for this same call site, which stops a "no newer
-    * pivot yet" outcome from counting against the budget regardless of what triggered the check.
-    *
-    * Byte-identical for ETC/pre-merge (`isPoSChain = false`) and for the `decoupledHealServeRoot` (non-
-    * `movingRootDeltaHeal`) serve-root path, which by design tracks newest-SERVABLE rather than canonical head
-    * (CON-010) — both always fall through to `networkBest`.
-    */
-  private[snap] def staleReferenceHead(
-      movingRootDeltaHeal: Boolean,
-      isPoSChain: Boolean,
-      clHeadNumber: Option[BigInt],
-      networkBest: BigInt
-  ): BigInt =
-    if movingRootDeltaHeal && isPoSChain then clHeadNumber.getOrElse(networkBest) else networkBest
-
-  /** The value `maybeRequestHealingServeRoot` records as `lastHealingServeRootBlock` after a stale-triggered re-peg —
-    * i.e. the bookkeeping baseline the NEXT staleness check is compared against.
-    *
-    * forge review follow-up on b8f0700f6 (BUG-BC3): the fix originally recorded `staleClockNow` (the value
-    * `staleReferenceHead` picked for the CURRENT check) unconditionally. That is correct when `staleClockNow` is the CL
-    * head (`staleClockNow != networkBest`) — see below. But whenever `staleReferenceHead` fell through to `networkBest`
-    * (ETC/pre-merge, or a PoS chain before its first CL hint arrives — `staleClockNow == networkBest` in both), it
-    * silently replaced base's `target` (`networkBest − margin`, `recentRootTarget`) with the larger `networkBest`
-    * itself. Since `stale` is `(clockNow − lastBlock) > 2×margin`, recording `target` instead of `networkBest` is what
-    * makes the EFFECTIVE re-trigger threshold "`networkBest` has advanced by more than 1×margin since the last fire"
-    * (the `−margin` already baked into `target` cancels one of the two margins in the comparison) rather than 2×margin
-    * — recording `networkBest` instead silently DOUBLES the required advance (and so roughly doubles the wall-clock
-    * interval between re-pegs: on ETC mainnet, `moving-root-delta-heal = true` ships as the default with no ETC
-    * override, so this was a real, not merely theoretical, behavior change — from ~64 to ~128 blocks between checks,
-    * ~14 to ~28 minutes, approaching peers' ~128-block serve window). Recording `target` there instead is
-    * BYTE-IDENTICAL to base.
-    *
-    * Recording the raw CL head (not a `−margin`-shifted value) for the CL-anchored case is intentional, not an
-    * oversight to mirror: `target`'s `−margin` shift was calibrated specifically for the peer-reported-best/
-    * serve-window cadence (see `maybeRequestHealingServeRoot`'s "Refresh cadence (U1)" comment). The CL-anchored check
-    * exists for a different reason — avoiding spurious re-triggers while the CL head is not advancing at all (BUG-BC3)
-    * — for which "the CL head has advanced by more than 2×margin since the last check" is already a direct,
-    * self-justifying threshold; borrowing the peer-cadence's margin-shift would only make the CL path harder to reason
-    * about for no corresponding benefit.
-    */
-  private[snap] def lastHealingServeRootBlockToRecord(
-      staleClockNow: BigInt,
-      networkBest: BigInt,
-      target: BigInt
-  ): BigInt =
-    if staleClockNow == networkBest then target else staleClockNow
+  // spec 016 M1: the pure policy helpers live in controller/*Policy.scala. They are re-exported here, so every
+  // `SNAPSyncController.<helper>` call site, and the impl class's `import SNAPSyncController.*`, stay unchanged.
+  export controller.StagnationPolicy.{evaluateStorageTail, MinStaleFailuresForTailLivelock, StorageTailBaseline}
+  export controller.PivotPolicy.{clPivotNotYetAdvanced, MaxPeerTipLead}
+  export controller.PivotPolicy.{pivotPassesFreshnessFloor, unservablePivotTarget}
+  export controller.HealPolicy.{bytecodeRecoveryComplete, healRepegSuppressedByLocalWalk}
+  export controller.HealPolicy.{lastHealingServeRootBlockToRecord, shouldSkipHealingAfterDownloads, staleReferenceHead}
+  export controller.ResumePolicy.{checkResumable, taskFilePaths}
 
   def apply(
       blockchainReader: BlockchainReader,
