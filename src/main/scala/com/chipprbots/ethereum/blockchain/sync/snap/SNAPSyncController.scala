@@ -31,6 +31,7 @@ import com.chipprbots.ethereum.blockchain.sync.snap.controller.LifecycleApi
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.PhaseFlags
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.PivotRefreshApi
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.PivotSelectionApi
+import com.chipprbots.ethereum.blockchain.sync.snap.controller.PivotSelector
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.ShutdownApi
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.SnapControllerEnv
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.SnapFinalization
@@ -57,7 +58,6 @@ import com.chipprbots.ethereum.db.storage.StateStorage
 import com.chipprbots.ethereum.domain.BlockHeader
 import com.chipprbots.ethereum.domain.BlockchainReader
 import com.chipprbots.ethereum.domain.BlockchainWriter
-import com.chipprbots.ethereum.domain.ChainWeight
 import com.chipprbots.ethereum.domain.TrieRoot
 import com.chipprbots.ethereum.network.p2p.messages.Capability
 import com.chipprbots.ethereum.network.p2p.messages.SNAP
@@ -116,7 +116,8 @@ private class SNAPSyncControllerImpl(
     with PivotSelectionApi
     with ByteCodeRequestApi
     with StagnationWatchdog
-    with StagnationWatchdogState:
+    with StagnationWatchdogState
+    with PivotSelector:
 
   import SNAPSyncController.*
   import SyncPhase.*
@@ -257,7 +258,7 @@ private class SNAPSyncControllerImpl(
               )
           }
 
-  private val bigIntReverseOrdering: Ordering[BigInt] = Ordering[BigInt].reverse
+  private[snap] val bigIntReverseOrdering: Ordering[BigInt] = Ordering[BigInt].reverse
 
   // SNAP download progress storage (namespace 'p'). Shares the same RocksDB DataSource as
   // AppStateStorage but uses a dedicated namespace so progress survives crash-restart without
@@ -322,7 +323,7 @@ private class SNAPSyncControllerImpl(
   // Minimum pivot block enforced when re-entering SNAP from a RegularSyncStuck escape.
   // Prevents re-selecting the same pivot that caused the regular-sync stall.
   private var minPivotHint: BigInt = BigInt(0)
-  private var clHintArrivedAtMs: Option[Long] = None
+  private[snap] var clHintArrivedAtMs: Option[Long] = None
 
   // Captured once at construction. ETC mainnet has TTD=None and never goes down the
   // CL-driven path; Sepolia/mainnet have TTD set and switch off TD-based pivot entirely.
@@ -422,10 +423,10 @@ private class SNAPSyncControllerImpl(
   private var bytecodesEstimatedTotal: Long = 0L
 
   // Retry counter for bootstrap-to-SNAP transition (exponential backoff: 2s→60s cap, max 10 retries)
-  private var bootstrapRetryCount: Int = 0
-  private val BootstrapRetryBaseDelay = 2.seconds
-  private val BootstrapRetryMaxDelay = 60.seconds
-  private val MaxBootstrapRetries = 10
+  private[snap] var bootstrapRetryCount: Int = 0
+  private[snap] val BootstrapRetryBaseDelay = 2.seconds
+  private[snap] val BootstrapRetryMaxDelay = 60.seconds
+  private[snap] val MaxBootstrapRetries = 10
 
   // Pivot restart guard (prevents noisy rapid restarts if peer head fluctuates)
   var lastPivotRestartMs: Long = 0L
@@ -656,7 +657,7 @@ private class SNAPSyncControllerImpl(
     * this function. `syncing` consults it only after its path-publish and header-hold guards, exactly where the copies
     * stood. `completed` and `completedWithBackfill` do not use it.
     */
-  private lazy val peerEventArms: PartialFunction[Command, Behavior[Command]] = {
+  private[snap] lazy val peerEventArms: PartialFunction[Command, Behavior[Command]] = {
     case WrappedHandshakedPeers(peers) =>
       handleHandshakedPeersRateTracking(peers); Behaviors.same
     case WrappedPeerDisconnected(peerId) =>
@@ -1760,300 +1761,6 @@ private class SNAPSyncControllerImpl(
         currentPhase = StateHealing
         startStateHealing()
 
-  def bootstrapping(): Behavior[Command] =
-    Behaviors
-      .receiveMessage[Command] {
-        // C1: inlined peer-list arm with bootstrap reactivity. It differs from the shared copy, so it stays inline
-        // ahead of peerEventArms (P3), as does the bootstrap GetProgress arm below.
-        case WrappedHandshakedPeers(peers) =>
-          handleHandshakedPeersBootstrapReactivity(peers); Behaviors.same
-
-        case BootstrapComplete(pivotHeaderOpt) =>
-          ctx.log.info("=" * 80)
-          ctx.log.info("✅ Bootstrap phase complete - transitioning to SNAP sync")
-          ctx.log.info("=" * 80)
-
-          // Get the bootstrap target that we synced to (this is the pivot we wanted)
-          val bootstrapTarget = appStateStorage.getSnapSyncBootstrapTarget()
-          val localBestBlock = appStateStorage.getBestBlockNumber()
-
-          ctx.log.info(s"Bootstrap target: ${bootstrapTarget.getOrElse("none")}, Local best block: $localBestBlock")
-
-          // Clear bootstrap target from storage now that we've read it
-          appStateStorage.clearSnapSyncBootstrapTarget().commit()
-
-          // Reset retry counter
-          bootstrapRetryCount = 0
-
-          // Helper: compute current best height from SNAP-capable peers (subject to bootstrapPivot floor).
-          // Peers whose STATUS hasn't arrived yet have maxBlockNumber=0 — exclude them, otherwise
-          // a fresh-startup race returns Some(0) and the caller commits to a genesis pivot before
-          // any real peer height is known.
-          def currentNetworkBestFromSnapPeers(bootstrapPivot: BigInt): Option[BigInt] =
-            // Peers whose STATUS hasn't arrived yet have maxBlockNumber=0 — exclude them, otherwise a
-            // fresh-startup race counts them as "network best=0" → pivot=-64 → genesis fallback.
-            val snapPeersForPivot =
-              peersToDownloadFrom.values.toList
-                .filter(p => p.peerInfo.remoteStatus.supportsSnap && p.peerInfo.forkAccepted)
-                .filter(_.peerInfo.maxBlockNumber > 0)
-                .filter(p => bootstrapPivot == 0 || p.peerInfo.maxBlockNumber >= bootstrapPivot)
-
-            snapPeersForPivot
-              .sortBy(_.peerInfo.maxBlockNumber)(bigIntReverseOrdering)
-              .headOption
-              .map(_.peerInfo.maxBlockNumber)
-
-          def pivotTooStaleAgainstNetworkHead(pivot: BigInt): Boolean =
-            val bootstrapPivot = appStateStorage.getBootstrapPivotBlock()
-            currentNetworkBestFromSnapPeers(bootstrapPivot) match
-              case Some(networkBest) if networkBest > 0 =>
-                val delta = networkBest - pivot
-                if delta > snapSyncConfig.maxPivotStalenessBlocks then
-                  ctx.log.warn(
-                    s"Bootstrapped pivot $pivot is now $delta blocks behind current network best $networkBest; " +
-                      s"exceeds maxPivotStaleness=${snapSyncConfig.maxPivotStalenessBlocks}. Re-selecting a fresher pivot."
-                  )
-                  true
-                else
-                  ctx.log.info(
-                    s"Bootstrapped pivot freshness: pivot=$pivot, networkBest=$networkBest, delta=$delta, " +
-                      s"maxPivotStaleness=${snapSyncConfig.maxPivotStalenessBlocks}"
-                  )
-                  false
-              case _ =>
-                // If we can't see any suitable SNAP peers right now, don't block on freshness.
-                false
-
-          // bestSnapPeerTD removed: pivot TD is no longer seeded from peer wire TD (ETH68_BOOTSTRAP).
-          // Using peer TD inflated every stored chain weight by (peerHead − pivot) × avgDifficulty.
-          // Pivot now uses pivotBlockNumber as a neutral proxy; real TDs are built by block import.
-
-          pivotHeaderOpt match
-            case Some(header) =>
-              val targetPivot = header.number.value
-
-              if pivotTooStaleAgainstNetworkHead(targetPivot) then
-                // Don't commit a pivot that peers are unlikely to serve.
-                startSnapSync()
-              else
-                // Gate on ETH/Sepolia only — ETC pivot headers use StdBlockHeaderValidator (PoW).
-                val pivotHeaderValid =
-                  if isPoSChain then
-                    given bc: BlockchainConfig =
-                      com.chipprbots.ethereum.utils.Config.blockchains.blockchainConfig
-                    BlockHeader.validateFieldCount(header, bc) match
-                      case Left(msg) =>
-                        ctx.log.error(
-                          "SNAP bootstrap pivot header field-count mismatch — aborting commit, restarting sync: {}",
-                          msg
-                        )
-                        false
-                      case Right(_) =>
-                        PoSBlockHeaderValidator.validateHeaderOnly(header) match
-                          case Left(err) =>
-                            ctx.log.error(
-                              "SNAP bootstrap pivot header failed post-merge validation — aborting commit, restarting sync: {}",
-                              err
-                            )
-                            false
-                          case Right(_) => true
-                  else true
-
-                if !pivotHeaderValid then startSnapSync()
-                else
-                  pivotBlock = Some(targetPivot)
-                  stateRoot = Some(header.stateRoot)
-                  appStateStorage
-                    .putSnapSyncPivotBlock(targetPivot)
-                    .and(appStateStorage.putSnapSyncStateRoot(header.stateRoot.value))
-                    .commit()
-                  updateBestBlockForPivot(header, targetPivot)
-
-                  SNAPSyncMetrics.setPivotBlockNumber(targetPivot)
-
-                  ctx.log.info("=" * 80)
-                  ctx.log.info("🎯 SNAP Sync Ready (from bootstrap)")
-                  ctx.log.info("=" * 80)
-                  ctx.log.info(s"Local best block: $localBestBlock")
-                  ctx.log.info(s"Using bootstrapped pivot block: $targetPivot")
-                  ctx.log.info(s"State root: ${header.stateRoot.value.toHex.take(16)}...")
-                  ctx.log.info("=" * 80)
-
-                  if accountsComplete && storagePhaseComplete && bytecodePhaseComplete then
-                    ctx.log.info("All data phases complete — skipping to state healing with fresh pivot")
-                    currentPhase = StateHealing
-                    startStateHealing()
-                  else
-                    ctx.log.info(
-                      s"Beginning fast state sync with ${snapSyncConfig.accountConcurrency} concurrent workers"
-                    )
-                    currentPhase = AccountRangeSync
-                    startAccountRangeSync(header.stateRoot)
-                  syncing()
-
-            case None =>
-              // Backward-compat / fallback: use the stored bootstrap target and local header.
-              bootstrapTarget match
-                case Some(targetPivot) =>
-                  if pivotTooStaleAgainstNetworkHead(targetPivot) then startSnapSync()
-                  else
-                    blockchainReader.getBlockHeaderByNumber(targetPivot) match
-                      case Some(header) =>
-                        pivotBlock = Some(targetPivot)
-                        stateRoot = Some(header.stateRoot)
-                        appStateStorage
-                          .putSnapSyncPivotBlock(targetPivot)
-                          .and(appStateStorage.putSnapSyncStateRoot(header.stateRoot.value))
-                          .commit()
-                        updateBestBlockForPivot(header, targetPivot)
-
-                        SNAPSyncMetrics.setPivotBlockNumber(targetPivot)
-
-                        ctx.log.info("=" * 80)
-                        ctx.log.info("🎯 SNAP Sync Ready (from bootstrap, local header)")
-                        ctx.log.info("=" * 80)
-                        ctx.log.info(s"Local best block: $localBestBlock")
-                        ctx.log.info(s"Using bootstrapped pivot block: $targetPivot")
-                        ctx.log.info(s"State root: ${header.stateRoot.value.toHex.take(16)}...")
-                        ctx.log.info("=" * 80)
-
-                        if accountsComplete && storagePhaseComplete && bytecodePhaseComplete then
-                          ctx.log.info("All data phases complete — skipping to state healing with fresh pivot")
-                          currentPhase = StateHealing
-                          startStateHealing()
-                        else
-                          ctx.log.info(
-                            s"Beginning fast state sync with ${snapSyncConfig.accountConcurrency} concurrent workers"
-                          )
-                          currentPhase = AccountRangeSync
-                          startAccountRangeSync(header.stateRoot)
-                        syncing()
-
-                      case None =>
-                        ctx.log.warn(s"Bootstrap complete but pivot header $targetPivot not available yet")
-                        ctx.log.warn("Falling back to recalculating pivot from current network state")
-                        startSnapSync()
-                case None =>
-                  ctx.log.info("No bootstrap target stored - calculating pivot from network state")
-                  startSnapSync()
-
-        case RetrySnapSyncStart =>
-          ctx.log.info("🔄 Retrying SNAP sync start after bootstrap delay...")
-          startSnapSync()
-
-        case GetProgress(replyTo) =>
-          // During bootstrap, report that we're preparing for SNAP sync
-          val currentBlock = appStateStorage.getBestBlockNumber()
-          val targetBlock = appStateStorage.getSnapSyncBootstrapTarget().getOrElse(BigInt(0))
-
-          ctx.log.info(s"Bootstrap progress: $currentBlock / $targetBlock blocks")
-
-          // Send a simple progress indicator - we're in bootstrap mode
-          replyTo ! SyncProgress(
-            phase = Idle,
-            accountsSynced = 0,
-            bytecodesDownloaded = 0,
-            storageSlotsSynced = 0,
-            nodesHealed = 0,
-            elapsedSeconds = 0,
-            phaseElapsedSeconds = 0,
-            accountsPerSec = 0,
-            bytecodesPerSec = 0,
-            slotsPerSec = 0,
-            nodesPerSec = 0,
-            recentAccountsPerSec = 0,
-            recentBytecodesPerSec = 0,
-            recentSlotsPerSec = 0,
-            recentNodesPerSec = 0,
-            phaseProgress =
-              if targetBlock == 0 then 0 else ((currentBlock.toDouble / targetBlock.toDouble) * 100).toInt,
-            estimatedTotalAccounts = 0,
-            estimatedTotalBytecodes = 0,
-            estimatedTotalSlots = 0,
-            startTime = System.currentTimeMillis(),
-            phaseStartTime = System.currentTimeMillis()
-          )
-          Behaviors.same
-
-        // WrappedPeerDisconnected, FlushPeerDisconnects, PollHandshakedPeers and CLPivotHint: peerEventArms (P3),
-        // consulted only after the two bootstrap-specific arms (WrappedHandshakedPeers above, GetProgress here), so its
-        // own copies of those two are never reached in this behaviour. CLPivotHint: CL pushed a
-        // (potentially newer) head while we were bootstrapping the previous one.
-        // Buffer it; we'll re-evaluate on the next `startSnapSync()` if the in-flight bootstrap
-        // fails or the caller decides to re-pivot. We don't tear down a healthy in-flight
-        // bootstrap mid-stream — the original head is almost always sufficient.
-        case msg if peerEventArms.isDefinedAt(msg) =>
-          peerEventArms(msg)
-
-        case GetStatus(replyTo) =>
-          // During bootstrap, we're syncing via regular sync
-          val currentBlock = appStateStorage.getBestBlockNumber()
-          val targetBlock = appStateStorage.getSnapSyncBootstrapTarget().getOrElse(BigInt(0))
-          val startingBlock = appStateStorage.getSyncStartingBlock()
-          replyTo ! SyncProtocol.Status.Syncing(
-            startingBlockNumber = startingBlock,
-            blocksProgress = SyncProtocol.Status.Progress(currentBlock, targetBlock),
-            stateNodesProgress = None
-          )
-          Behaviors.same
-
-        case PivotBootstrapFailed(reason) =>
-          ctx.log.warn(s"Pivot header bootstrap failed during initial startup: $reason")
-          bootstrapRetryCount += 1
-          checkBootstrapRetryTimeout(s"bootstrap failed: $reason") match
-            case Some(b) => b
-            case None =>
-              val delay = bootstrapRetryDelay
-              ctx.log.info(s"Retrying SNAP sync start in $delay (attempt $bootstrapRetryCount)")
-              timers.cancel(BootstrapCheckKey)
-              timers.startSingleTimer(BootstrapCheckKey, RetrySnapSyncStart, delay)
-              Behaviors.same
-
-        // SNAP peer eviction runs during bootstrap to free slots for SNAP-capable peers
-        case EvictNonSnapPeers =>
-          evictNonSnapPeers()
-          Behaviors.same
-
-        case msg =>
-          ctx.log.debug(s"Unhandled message in bootstrapping state: $msg")
-          Behaviors.same
-      }
-      .receiveSignal { case (_, PostStop) =>
-        onStop(); Behaviors.same
-      }
-
-  /** Buffer a CL-driven head hint and (optionally) react to the change.
-    *
-    * On post-merge chains: the hint's `headHash` becomes the SNAP pivot when `startSnapSync()` runs next. The hint's
-    * `knownHeader`, when present, lets us skip the peer round-trip entirely. When absent, we route through
-    * `StartRegularSyncBootstrapByHash` to fetch the header from a peer.
-    *
-    * On pre-merge chains (TTD = None): we still buffer for diagnostics but don't act — `startSnapSync()` ignores
-    * `clPivotHint` when `!isPoSChain`.
-    */
-  private def handleCLPivotHint(hint: CLPivotHint, isStarting: Boolean): Unit =
-    val isNew = !clPivotHint.exists(_.headHash == hint.headHash)
-    clPivotHint = Some(hint)
-    if isNew then clHintArrivedAtMs = Some(System.currentTimeMillis())
-    if isNew then
-      ctx.log.info(
-        "[CL-PIVOT] Received CL-driven head {} (knownHeader={}, isPoSChain={})",
-        com.chipprbots.ethereum.utils.ByteStringUtils.hash2string(hint.headHash),
-        hint.knownHeader.map(_.number).getOrElse("unknown"),
-        isPoSChain
-      )
-    // Forward the CL head number to the network peer manager so it can run lagging-peer
-    // eviction. Only valid when we know the actual block number (the by-hash bootstrap
-    // variant skips this — `knownHeader` is None — and `NetworkPeerManagerActor` correctly
-    // treats "never updated" as "pre-merge or unknown" → no-op).
-    hint.knownHeader.foreach { header =>
-      networkPeerManager ! com.chipprbots.ethereum.network.NetworkPeerManagerActor.UpdateClHeadCmd(header.number.value)
-    }
-    // Reactive starts: if we're already at idle and a hint arrives during operator-driven
-    // startup, the `Start` handler will pick this up. We don't auto-start here because
-    // SyncController's startSnapSync() drives the lifecycle.
-    val _ = isStarting
-
   private[snap] def startSnapSync(): Behavior[Command] =
     import scala.util.boundary, boundary.break
     boundary[Behavior[Command]] {
@@ -2765,30 +2472,6 @@ private class SNAPSyncControllerImpl(
       bootstrapping()
     } // end boundary
 
-  /** Calculate exponential backoff delay for bootstrap retries. Backoff: 2s → 4s → 8s → 16s → 32s → 60s cap.
-    */
-  private def bootstrapRetryDelay: FiniteDuration =
-    val exponent = math.min(bootstrapRetryCount, 5)
-    val delaySeconds = BootstrapRetryBaseDelay.toSeconds * math.pow(2, exponent).toLong
-    math.min(delaySeconds, BootstrapRetryMaxDelay.toSeconds).seconds
-
-  /** Check if bootstrap retry has exceeded the maximum count. If so, enter dormant mode and yield `Some(<dormant
-    * behavior>)` for the caller to `break` on; otherwise `None` (caller continues / stays). The dormant wake-up
-    * restarts SNAP on a fresh pivot once a snap-capable peer is connected.
-    */
-  private def checkBootstrapRetryTimeout(context: String): Option[Behavior[Command]] =
-    if bootstrapRetryCount >= MaxBootstrapRetries then
-      Some(enterDormantMode(s"no peers found after $bootstrapRetryCount bootstrap retries ($context)"))
-    else
-      if bootstrapRetryCount > 0 && bootstrapRetryCount % 5 == 0 then
-        ctx.log.info(
-          s"Bootstrap retry diagnostics ($context): " +
-            s"attempt=$bootstrapRetryCount/$MaxBootstrapRetries, " +
-            s"handshakedPeers=${handshakedPeers.size}, " +
-            s"snapCapable=${handshakedPeers.values.count(_.peerInfo.remoteStatus.supportsSnap)}"
-        )
-      None
-
   /** Record a critical failure and check whether the threshold is reached. Critical failures are those that indicate
     * SNAP sync cannot proceed on the current pivot.
     *
@@ -2921,7 +2604,7 @@ private class SNAPSyncControllerImpl(
         onStop(); Behaviors.same
       }
 
-  private def startAccountRangeSync(rootHash: TrieRoot): Unit =
+  private[snap] def startAccountRangeSync(rootHash: TrieRoot): Unit =
     // Before starting workers, check if any connected peer supports the snap/1 protocol.
     // If no peers support snap, the workers will send requests that are silently ignored,
     // stalling sync until the 3-minute stagnation watchdog fires. Instead, check upfront
@@ -3308,19 +2991,6 @@ private class SNAPSyncControllerImpl(
         }
     }
 
-  def currentNetworkBestFromSnapPeers(): Option[BigInt] =
-    val bootstrapPivotBlock = appStateStorage.getBootstrapPivotBlock()
-    // Peers whose STATUS hasn't arrived yet have maxBlockNumber=0 — exclude them, otherwise
-    // a fresh-startup race returns Some(0) and the caller commits to a genesis pivot before
-    // any real peer height is known.
-    peersToDownloadFrom.values.toList
-      .filter(_.peerInfo.remoteStatus.supportsSnap)
-      .filter(_.peerInfo.maxBlockNumber > 0)
-      .filter(p => bootstrapPivotBlock == 0 || p.peerInfo.maxBlockNumber >= bootstrapPivotBlock)
-      .sortBy(_.peerInfo.maxBlockNumber)(bigIntReverseOrdering)
-      .headOption
-      .map(_.peerInfo.maxBlockNumber)
-
   /** Refresh the pivot block and state root without destroying coordinators.
     *
     * Unlike restartSnapSync() which tears down every coordinator (account ranges then resume from their cursors with
@@ -3505,52 +3175,6 @@ private class SNAPSyncControllerImpl(
         // eventually trigger a full restart rather than cycling pivots indefinitely.
         lastAccountProgressMs = System.currentTimeMillis()
       else completePivotRefreshWithStateRoot(newPivotBlock, newPivotHeaderOpt.get, reason)
-
-  /** Update best block info and chain weight so ETH status handshake advertises the correct forkId.
-    *
-    * Without this, getBestBlockNumber() returns 0 (genesis) during SNAP sync, causing peers to reject us with
-    * incompatible forkId (e.g. Frontier vs Spiral). This stores the pivot header, chain weight, and best block info so
-    * that createStatusMsg() in EthNodeStatus68ExchangeState can build a valid status message referencing the pivot.
-    */
-  private def updateBestBlockForPivot(
-      header: BlockHeader,
-      pivotBlockNumber: BigInt
-  ): Unit =
-    val pivotHash = header.hash
-    // Priority:
-    //   (1) Real cumulative TD already in DB (ChainDownloader has backfilled it) — never overwrite.
-    //   (2) Peer-interpolated TD from a connected ETH68 peer — accurate to <0.0005% for typical gaps.
-    //       The old ETH68_BOOTSTRAP approach stored the peer's tip TD directly, inflating every
-    //       subsequent block by (peerHead − pivot) × avgDifficulty. Interpolation avoids that by
-    //       scaling to the pivot height.
-    //   (3) Block-number proxy — last resort when no ETH68 peers are connected yet (very early startup).
-    val (estimatedTotalDifficulty, tdSource) =
-      blockchainReader
-        .getChainWeightByHash(pivotHash)
-        .map(cw => (cw.totalDifficulty.value, "REAL_PIVOT_TD"))
-        .orElse(calibratePivotTD(pivotBlockNumber).map(td => (td, "PEER_INTERPOLATED_TD")))
-        .getOrElse {
-          val genesisTD: BigInt = blockchainReader
-            .getChainWeightByHash(blockchainReader.genesisHeader.hash)
-            .map(_.totalDifficulty.value)
-            .getOrElse(blockchainReader.genesisHeader.difficulty.value)
-          val proxy: BigInt =
-            if pivotBlockNumber == BigInt(0) then header.difficulty.value else pivotBlockNumber.max(genesisTD)
-          (proxy, "BLOCK_NUMBER_PROXY")
-        }
-    blockchainWriter.storeBlockHeader(header).commit()
-    blockchainWriter
-      .storeChainWeight(pivotHash, ChainWeight.totalDifficultyOnly(estimatedTotalDifficulty))
-      .commit()
-    // Always advance the self-reported best-block pointer so STATUS messages show the correct
-    // pivot block number.
-    appStateStorage
-      .putBestBlockInfo(com.chipprbots.ethereum.domain.appstate.BlockInfo(pivotHash.value, pivotBlockNumber))
-      .commit()
-    ctx.log.info(
-      s"Updated best block for ETH status: block=$pivotBlockNumber, hash=${pivotHash.value.toHex.take(16)}..., " +
-        s"estimatedTD=$estimatedTotalDifficulty (source=$tdSource)"
-    )
 
   /** Complete the pivot refresh once we have the header (either from local storage or bootstrapped from peer). */
   private def completePivotRefreshWithStateRoot(
