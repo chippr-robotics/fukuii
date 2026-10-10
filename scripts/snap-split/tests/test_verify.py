@@ -470,6 +470,28 @@ class VerifyTests(unittest.TestCase):
         out = self.bad(self.companion_move(core=core), "step1")
         self.assertIn("export of `other`", out)
 
+    def test_export_with_wrong_object_prefix_fails(self):
+        # `pure` and `Limit` are moved names, but these clauses would forward to a different object
+        for prefix in ("controller.BarPolicy", "controller.SNAPSyncController", "other.FooPolicy", "FooPolicy"):
+            core = COMPANION_AFTER_MOVE.replace("controller.FooPolicy", prefix)
+            out = self.bad(self.companion_move(core=core), "step1")
+            self.assertIn("now lives in: x.controller.FooPolicy", out)
+
+    def test_export_with_correct_object_prefix_passes(self):
+        for prefix in ("controller.FooPolicy", "x.controller.FooPolicy"):
+            core = COMPANION_AFTER_MOVE.replace("controller.FooPolicy", prefix)
+            self.ok(self.companion_move(core=core))
+
+    def test_narrowing_commit_with_export_line_fails(self):
+        f = Fixture()
+        move_commit(f)
+        f.write(f"{CTRL}/HealingOrchestrator.scala", MODULE_NARROW.replace("  private var count = 0\n", "  private var count = 0\n  export controller.FooPolicy.pure\n"))
+        f.write("src/test/scala/x/StubSpec.scala", STUB_TEST)
+        f.commit(NARROW_MSG)
+        out = self.bad(f, "step6")
+        self.assertIn("non-signature line", out)
+        self.assertIn("export controller.FooPolicy.pure", out)
+
     def test_wildcard_rename_and_multiline_exports_fail(self):
         for clause in (
             "export controller.FooPolicy.*",
