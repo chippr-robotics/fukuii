@@ -386,8 +386,17 @@ only when every item on the per-slice checklist below holds.
     needs a carve-out of those bodies first (CQ-SNAP-016-17), like P4 for the arms. #1434 and #1503 therefore still sit
     in `startSnapSync`. No `val` -> `lazy val` conversion. Stub test: `SnapResumePlannerSpec` (six cases). Mordor and
     Platåberget restarts: **pending** (to be run by the user on the slice jar after merge; no node run here).
-- [ ] T047 [M6a] Dedupe the two healing spawn blocks into `healingCoordinatorArgs`. The pins from T014 and T015 must
+- [x] T047 [M6a] Dedupe the two healing spawn blocks into `healingCoordinatorArgs`. The pins from T014 and T015 must
   stay green unchanged.
+  - **As built:** one private core member, `spawnHealingCoordinator(root: TrieRoot): Unit`, named for what it does
+    rather than `healingCoordinatorArgs`. The factory seam takes named parameters, so there is no args value to
+    extract without a new tuple or case class. It holds the span the two routes shared verbatim: open the pivot's trie
+    store, the supervised spawn (25 forwarded arguments, 4 factory defaults incl. `prunedHealVerification`, #1502
+    unchanged), the three sends (`StartTrieNodeHealing`, `UpdateMaxInFlightPerPeer`, the snap-peer flush) and
+    `startHealingRequestScheduler()`. No route-specific parameter was needed: every difference (guards, resets, logs,
+    `startSnapServerPeersScheduler` + `startPhase` on the plain route, the `[HEAL-INTERLEAVE]` log + `startTrieWalk` on
+    the interleave route) sits before or after that span and stays at its call site, in the same order. The code stays
+    in the core until M6b. No test file changed.
 - [ ] T048 [M6b] `HealingOrchestrator`. Run a Mordor heal restart.
 - [ ] T049 [M7] `StagnationWatchdog`, with the `reset(reason)` hook used by launch, refresh and `startSnapSync`.
 - [ ] T050 [M8] `PivotSelector`. Run Platåberget from scratch.
