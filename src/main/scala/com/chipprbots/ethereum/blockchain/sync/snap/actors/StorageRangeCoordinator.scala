@@ -8,10 +8,13 @@ import org.apache.pekko.util.ByteString
 
 import scala.collection.mutable
 import scala.concurrent.ExecutionContext
+import scala.concurrent.Future
 import scala.concurrent.duration.*
+import scala.util.Try
 
 import com.chipprbots.ethereum.blockchain.sync.snap.*
 import com.chipprbots.ethereum.db.dataSource.DataSourceBatchUpdate
+import com.chipprbots.ethereum.db.dataSource.DataUpdate
 import com.chipprbots.ethereum.db.storage.FlatSlotStorage
 import com.chipprbots.ethereum.db.storage.MptStorage
 import com.chipprbots.ethereum.db.storage.PathNodeStorage
@@ -84,7 +87,12 @@ private[actors] class StorageRangeCoordinatorImpl(
     recordStorageDone: Boolean = false,
     // Spec 014: shared admission gate. This coordinator acknowledges received tasks and publishes its queue depth so the
     // producers can wait synchronously instead of through the mailbox-borne watermark signal. None = not wired (tests).
-    intakeBudget: Option[SnapIntakeBudget] = None
+    intakeBudget: Option[SnapIntakeBudget] = None,
+    // #1533: where StorageRanges responses are verified (see "Off-actor response processing"). Inline = everything on
+    // this actor, the pre-#1533 behaviour and the default for direct construction; `apply` reads the node config.
+    processing: StorageRangeCoordinator.ProcessingSettings = StorageRangeCoordinator.ProcessingSettings.Inline,
+    // Tests: run the processing jobs on this ExecutionContext instead of an owned worker pool.
+    processingEcOverride: Option[ExecutionContext] = None
 ):
 
   import StorageRangeCoordinator.*
@@ -662,11 +670,13 @@ private[actors] class StorageRangeCoordinatorImpl(
           val pns = pathNodeStorage.getOrElse(
             throw new IllegalStateException("PathScheme requires pathNodeStorage to be set")
           )
+          // Nodes go to `trieNodeWrites` and are committed as one batch (flushTrieNodeWrites), not one RocksDB write
+          // each: same keys, values and order (#1533).
           new SnapPathTrie(
             owner = accountHash,
             skipLeftBoundary = false, // storage tasks are always fresh (no per-slot resume cursor)
-            writePath = (path, _, blob) => pns.writeStorageNode(accountHash, path, blob),
-            deleteExact = path => pns.deleteStorageNode(accountHash, path)
+            writePath = (path, _, blob) => trieNodeWrites += pns.storageNodeUpsert(accountHash, path, blob),
+            deleteExact = path => trieNodeWrites += pns.storageNodeRemoval(accountHash, path)
           )
     )
 
@@ -689,6 +699,21 @@ private[actors] class StorageRangeCoordinatorImpl(
         // First/only response for an account with no slots, or proof-of-absence path —
         // no trie was ever created. Caller still wants a non-null root reference.
         claimedRoot
+
+  /** [[commitAccountTrie]] for a trie a worker built whole (its nodes are already written): same check and log. */
+  private def commitPrebuiltRoot(
+      accountHash: ByteString,
+      claimedRoot: ByteString,
+      built: PrebuiltStorageTrie
+  ): ByteString =
+    if built.root != claimedRoot then
+      log.warn(
+        s"Storage root mismatch for account ${accountHash.take(4).toHex}: " +
+          s"computed=${built.root.take(4).toHex} claimed=${claimedRoot.take(4).toHex} — healing will reconcile"
+      )
+    com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncMetrics
+      .setStoragePendingTries(pendingAccountTries.size.toLong)
+    built.root
 
   /** Discard a partial trie when the account is aborted (pivot refresh, max-empty skip, force-complete).
     * Already-flushed content-addressed nodes stay on disk; only the in-memory stack-trie state is dropped.
@@ -807,6 +832,8 @@ private[actors] class StorageRangeCoordinatorImpl(
     * can drop bookkeeping for batches that pre-date a pivot refresh.
     */
   private def flushPendingFlatBatch(): Unit =
+    // A completion marker that rides in this batch vouches for its account's trie nodes: write them first.
+    flushTrieNodeWrites()
     val batchSeq = flatBatchSeq + 1
     val doneMarkers = takeDoneMarkersFor(batchSeq)
     if pendingFlatBatchAccounts.nonEmpty || doneMarkers.nonEmpty then
@@ -841,6 +868,185 @@ private[actors] class StorageRangeCoordinatorImpl(
         case scala.util.Failure(e) =>
           selfRef ! FlatBatchFlushFailed(forStateRoot, entries, e.getMessage)
       }(ec)
+
+  // ========================================
+  // Off-actor response processing (#1533)
+  // ========================================
+  //
+  // Sepolia 2026-10-09/10 (Path scheme, v0.9.17 and v0.9.24-sepolia.1): one 128-account / ~1 MiB StorageRanges response
+  // held this actor for 20-95 s, so replies queued behind it and storage throughput was capped by this one thread.
+  // Costs paid here per response before this change:
+  //   1. every emitted storage-trie node was its own RocksDB write (`PathNodeStorage.writeStorageNode`: one WriteBatch,
+  //      the DataSource write lock and a WAL append per node; the node's RocksDB LOG shows 64M writes for 102M keys).
+  //      The nodes are now buffered in `trieNodeWrites` and committed as one batch per response — same keys, values and
+  //      order, so the database ends up byte-identical.
+  //   2. proof verification (`MerkleProofVerifier`); for a whole account that means building and hashing its trie.
+  //   3. `slots(i)` on the RLP decoder's `immutable.Queue` is O(i), so the ascending-order checks in the tracker and the
+  //      verifier were O(n^2) per account. `handleResponse` now indexes the response once (Vector).
+  // (2) — and, for an account served whole in one response, building its trie nodes — runs on `processingEc`
+  // (go-ethereum hashes storage tries off its sync loop too). The job is a pure function of the response; its result
+  // comes back as `StorageResponseProcessed`. Everything that reads or writes coordinator state, and every RocksDB
+  // write, still runs on this actor, in arrival order: `pendingResponses` is applied strictly from its head, so a job
+  // that finishes early waits for the responses before it, and the ordering gate sees chunks in the same order as
+  // before. A reply completes its request on arrival (`handleResponse`), so it is never timed out (#1531) while its job
+  // runs. Responses received but not yet applied hold their slot in the in-flight budget (`dispatchIfPossible`), which
+  // bounds their memory to `maxInFlightRequests` responses (and `processing.maxPendingBytes`). A pivot refresh or a
+  // force-complete starts a new `processingGeneration`: unapplied responses are re-queued (refresh) or abandoned
+  // (force-complete), and results of the old generation are dropped — nothing is written for a superseded root.
+
+  /** A response that completed its request and waits to be applied. Mutable fields are touched only on the actor. */
+  final private[actors] class PendingResponse(
+      val seq: Long,
+      val generation: Long,
+      val peer: Peer,
+      val tasks: Seq[StorageTask],
+      val requestedBytes: BigInt,
+      val response: StorageRanges,
+      val bytes: Long,
+      val receivedAtNs: Long
+  ):
+    var verified: Option[VerifiedStorageResponse] = None
+    var ready: Boolean = false
+    var submitted: Boolean = false
+    // The peer disconnected after answering: apply its data, but do not dispatch to it again.
+    var peerGone: Boolean = false
+
+  /** Responses in arrival order, applied from the head only. Package-private for tests. */
+  private[actors] val pendingResponses = mutable.Queue.empty[PendingResponse]
+  private[actors] var pendingResponseBytes: Long = 0L
+  private[actors] var runningProcessingJobs: Int = 0
+  private[actors] var processingGeneration: Long = 0L
+  private var nextResponseSeq: Long = 0L
+
+  /** Owned worker pool (daemon threads, idle threads exit); shut down with the actor. None in inline mode or tests. */
+  private val processingPool: Option[java.util.concurrent.ThreadPoolExecutor] =
+    Option.when(processing.offActor && processingEcOverride.isEmpty)(newProcessingPool(processing.threads))
+
+  private val processingEc: ExecutionContext =
+    processingEcOverride
+      .orElse(processingPool.map(pool => ExecutionContext.fromExecutorService(pool)))
+      .getOrElse(ExecutionContext.parasitic)
+
+  /** Storage-trie node writes (Path scheme) not yet committed; see flushTrieNodeWrites. */
+  private val trieNodeWrites = mutable.ArrayBuffer.empty[DataUpdate]
+
+  // Per-applied-response timings for the [STORAGE-PERF] line.
+  private var trieWriteNanos: Long = 0L
+  private var inlineVerifyNanos: Long = 0L
+
+  /** Commit the buffered storage-trie nodes in one RocksDB batch. Called before anything that must not run ahead of
+    * them (a flat batch that may carry completion markers, a persisted storage cursor), after each applied response,
+    * and at the end of every message.
+    */
+  private[actors] def flushTrieNodeWrites(): Unit =
+    if trieNodeWrites.nonEmpty then
+      val startNs = System.nanoTime()
+      val updates = trieNodeWrites.toList
+      trieNodeWrites.clear()
+      val pns =
+        pathNodeStorage.getOrElse(throw new IllegalStateException("PathScheme requires pathNodeStorage to be set"))
+      pns.dataSource.update(updates)
+      trieWriteNanos += System.nanoTime() - startNs
+
+  /** Write the nodes a worker built for an account served whole in one response. */
+  private def writePrebuiltTrie(accountHash: ByteString, prebuilt: PrebuiltStorageTrie): Unit =
+    prebuilt match
+      case PrebuiltStorageTrie.Path(ops, _) =>
+        val pns =
+          pathNodeStorage.getOrElse(throw new IllegalStateException("PathScheme requires pathNodeStorage to be set"))
+        ops.foreach {
+          case PathNodeOp.Put(path, blob) => trieNodeWrites += pns.storageNodeUpsert(accountHash, path, blob)
+          case PathNodeOp.Delete(path)    => trieNodeWrites += pns.storageNodeRemoval(accountHash, path)
+        }
+      case PrebuiltStorageTrie.Hash(batches, _) =>
+        batches.foreach(mptStorage.storeRawNodes)
+
+  /** A reply completed its request: queue it for processing and apply whatever is ready. */
+  private def enqueueResponse(
+      peer: Peer,
+      batchTasks: Seq[StorageTask],
+      requestedBytes: BigInt,
+      response: StorageRanges
+  ): Unit =
+    val job = new PendingResponse(
+      seq = nextResponseSeq,
+      generation = processingGeneration,
+      peer = peer,
+      tasks = batchTasks,
+      requestedBytes = requestedBytes,
+      response = response,
+      bytes = responsePayloadBytes(response),
+      receivedAtNs = System.nanoTime()
+    )
+    nextResponseSeq += 1
+    // Inline mode, or nothing to verify (empty / proof-of-absence): ready now, processServedTasks verifies inline.
+    job.ready = !processing.offActor || !response.slots.exists(_.nonEmpty)
+    pendingResponses.enqueue(job)
+    pendingResponseBytes += job.bytes
+    submitProcessingJobs()
+    drainProcessedResponses()
+
+  /** Start jobs for queued responses, oldest first, up to `processing.maxInFlightJobs` running at once. */
+  private def submitProcessingJobs(): Unit =
+    val it = pendingResponses.iterator
+    while runningProcessingJobs < processing.maxInFlightJobs && it.hasNext do
+      val job = it.next()
+      if !job.ready && !job.submitted then
+        job.submitted = true
+        runningProcessingJobs += 1
+        val seq = job.seq
+        val generation = job.generation
+        val jobTasks = job.tasks
+        val jobResponse = job.response
+        // Accounts already given up on are skipped at apply time anyway; don't spend a worker on them.
+        val skip = jobTasks.iterator.map(_.accountHash).filter(abandonedAccounts.contains).toSet
+        val prebuildScheme = Option.when(!deferredMerkleization)(storageScheme)
+        val selfRef = self
+        Future(verifyServedSlots(jobTasks, jobResponse, skip, prebuildScheme))(processingEc)
+          .onComplete(outcome => selfRef ! StorageResponseProcessed(seq, generation, outcome))(
+            ExecutionContext.parasitic
+          )
+
+  /** Apply ready responses from the head of the queue, in arrival order. */
+  private def drainProcessedResponses(): Unit =
+    while pendingResponses.headOption.exists(_.ready) do
+      val job = pendingResponses.dequeue()
+      pendingResponseBytes = (pendingResponseBytes - job.bytes).max(0L)
+      val startNs = System.nanoTime()
+      trieWriteNanos = 0L
+      inlineVerifyNanos = 0L
+      processStorageRanges(
+        job.peer,
+        job.tasks,
+        job.requestedBytes,
+        job.response,
+        job.verified,
+        dispatchToPeer = !job.peerGone
+      )
+      flushTrieNodeWrites()
+      logStoragePerf(job, startNs, System.nanoTime() - startNs)
+
+  private def logStoragePerf(job: PendingResponse, startNs: Long, actorNanos: Long): Unit =
+    val served = job.response.slots.count(_.nonEmpty)
+    if served > 0 then
+      def ms(nanos: Long): Long = nanos / 1000000L
+      val slotCount = job.response.slots.iterator.map(_.size).sum
+      val verify = job.verified match
+        case Some(v) => s"${ms(v.workerNanos)}ms(worker)"
+        case None    => s"${ms(inlineVerifyNanos)}ms(actor)"
+      log.info(
+        s"[STORAGE-PERF] accounts=${job.tasks.size} served=$served slots=$slotCount bytes=${job.bytes} " +
+          s"verify=$verify actor=${ms(actorNanos)}ms trieWrite=${ms(trieWriteNanos)}ms " +
+          s"wait=${ms(startNs - job.receivedAtNs)}ms queued=${pendingResponses.size} jobs=$runningProcessingJobs"
+      )
+
+  /** Drop every response not yet applied and start a new generation (late results are then ignored). Returns them. */
+  private def abandonPendingResponses(): Seq[PendingResponse] =
+    val dropped = pendingResponses.toList
+    pendingResponses.clear()
+    pendingResponseBytes = 0L
+    processingGeneration += 1
+    dropped
 
   /** Aggregate-counter sink for completed StorageTask objects. Previously this appended into an unbounded
     * `mutable.ArrayBuffer[StorageTask]` (one of the leak vectors behind the May 13 sepolia OOM at ~22M completed
@@ -916,6 +1122,13 @@ private[actors] class StorageRangeCoordinatorImpl(
     pendingOrderedChunks.clear()
     staleRootFailuresByAccount.clear()
     abandonedAccounts.clear()
+    // Responses not yet applied are dropped like the in-flight requests; a job still running finishes on its worker and
+    // its result goes nowhere. Then the right-boundary deletes of the tries reset above are written.
+    val droppedResponses = abandonPendingResponses()
+    if droppedResponses.nonEmpty then
+      log.info(s"postStop: dropping ${droppedResponses.size} unapplied storage response(s)")
+    flushTrieNodeWrites()
+    shutdownProcessingPool()
     // Best-effort: flush any tail of accumulated flat-slot entries synchronously here so we
     // don't lose data when the actor terminates (force-complete, restart).
     // This synchronous commit is the next batch in sequence; the same rule picks which staged markers may ride in it
@@ -941,6 +1154,12 @@ private[actors] class StorageRangeCoordinatorImpl(
       pendingFlatBatchAccounts.clear()
       pendingFlatBatchEntries = 0
 
+  /** Tests: whether the owned worker pool has been shut down (None when there is none). */
+  private[actors] def processingPoolShutDown: Option[Boolean] = processingPool.map(_.isShutdown)
+
+  private def shutdownProcessingPool(): Unit =
+    processingPool.foreach(_.shutdown()) // running jobs finish (they hold no resources); nothing new is accepted
+
   // Storage management.
   // MerkleProofVerifier is constructed inline per response (see verifyStorageRange call).
   // It was previously cached per storage root in a mutable.Map cleared only on pivot
@@ -965,7 +1184,25 @@ private[actors] class StorageRangeCoordinatorImpl(
     active()
 
   def active(): Behavior[Command] = Behaviors
-    .receiveMessage[Command] {
+    .receiveMessage[Command] { msg =>
+      val next = handleCommand(msg)
+      // Nothing buffered for RocksDB outlives the message that produced it.
+      flushTrieNodeWrites()
+      next
+    }
+    .receiveSignal {
+      case (_, org.apache.pekko.actor.typed.PostStop) =>
+        // Formerly `postStop`: the recurring liveness timer auto-cancels with the behavior.
+        onPostStop()
+        Behaviors.same
+      case (_, org.apache.pekko.actor.typed.PreRestart) =>
+        // A supervisor restart builds a new instance (and pool); this one's workers must not linger.
+        shutdownProcessingPool()
+        Behaviors.same
+    }
+
+  private def handleCommand(msg: Command): Behavior[Command] =
+    msg match
       case StartStorageRangeSync(root) =>
         log.info(s"Starting storage range sync for state root ${root.take(8).toHex}")
 
@@ -1023,6 +1260,8 @@ private[actors] class StorageRangeCoordinatorImpl(
         knownAvailablePeers.find(_.id.value == peerId).foreach(knownAvailablePeers -= _)
         peerCooldownUntilMs.remove(peerId)
         emptyResponseStrikes.remove(peerId)
+        // Its answers already received are still applied; just don't pipeline more work to it afterwards.
+        pendingResponses.foreach(job => if job.peer.id.value == peerId then job.peerGone = true)
         val inFlight = activeTasks.filter { case (_, (peer, _, _)) => peer.id.value == peerId }.keys.toSeq
         if inFlight.nonEmpty then
           log.debug(s"Peer $peerId disconnected — re-queuing ${inFlight.size} in-flight storage request(s)")
@@ -1068,7 +1307,8 @@ private[actors] class StorageRangeCoordinatorImpl(
         // the queue below the low-water mark, release AccountRangeCoordinator's pause.
         notifyBackpressureIfChanged()
         // Drain the flat-batch accumulator once no more downloads are coming.
-        if noMoreTasksExpected && tasks.isEmpty && activeTasks.isEmpty then flushPendingFlatBatch()
+        if noMoreTasksExpected && tasks.isEmpty && activeTasks.isEmpty && pendingResponses.isEmpty then
+          flushPendingFlatBatch()
         if isComplete then
           log.debug("Storage range sync complete!")
           snapSyncController ! SNAPSyncController.StorageRangeSyncComplete
@@ -1086,7 +1326,7 @@ private[actors] class StorageRangeCoordinatorImpl(
             s"in-flight tries: ${pendingAccountTries.size}"
         )
         // Flush the final flat-slot tail if all downloads are done.
-        if tasks.isEmpty && activeTasks.isEmpty then flushPendingFlatBatch()
+        if tasks.isEmpty && activeTasks.isEmpty && pendingResponses.isEmpty then flushPendingFlatBatch()
         if isComplete then
           log.debug("Storage range sync complete!")
           snapSyncController ! SNAPSyncController.StorageRangeSyncComplete
@@ -1096,7 +1336,9 @@ private[actors] class StorageRangeCoordinatorImpl(
         if forceCompleteExecuted then log.debug("ForceCompleteStorage: already executed — ignoring duplicate")
         else
           forceCompleteExecuted = true
-          val abandoned = tasks.size + activeTasks.size
+          // Responses received but not applied are abandoned with the in-flight requests (healing recovers them).
+          val droppedResponses = abandonPendingResponses()
+          val abandoned = tasks.size + activeTasks.size + droppedResponses.size
           val abandonedTries = pendingAccountTries.size
           log.warn(
             s"Force-completing storage sync: $slotsDownloaded slots downloaded, " +
@@ -1157,6 +1399,19 @@ private[actors] class StorageRangeCoordinatorImpl(
             trackSurvivor(task)
           }
         }
+        // Responses received but not yet applied (#1533) answered for the OLD root: re-queue their tasks exactly like the
+        // cancelled requests, and start a new processing generation so their late results are dropped unwritten.
+        val unappliedResponses = abandonPendingResponses()
+        unappliedResponses.foreach { job =>
+          job.tasks.foreach { task =>
+            tasks.enqueue(task.copy(pending = false))
+            trackSurvivor(task)
+          }
+        }
+        if unappliedResponses.nonEmpty then
+          log.info(
+            s"Re-queued the tasks of ${unappliedResponses.size} storage response(s) not yet applied (stale root)"
+          )
         // Old-root replies still in flight are discarded as "No pending request", as before.
         activeTasks.keys.foreach(requestTracker.cancelRequest)
         activeTasks.clear()
@@ -1258,7 +1513,7 @@ private[actors] class StorageRangeCoordinatorImpl(
           slotsDownloaded = slotsDownloaded,
           bytesDownloaded = bytesDownloaded,
           tasksCompleted = completedTaskCount.toInt,
-          tasksActive = activeTasks.values.map(_._2.size).sum,
+          tasksActive = activeTasks.values.map(_._2.size).sum + pendingResponses.iterator.map(_.tasks.size).sum,
           tasksPending = tasks.size,
           elapsedTimeMs = System.currentTimeMillis() - startTime,
           progress = progress,
@@ -1316,15 +1571,28 @@ private[actors] class StorageRangeCoordinatorImpl(
 
       // Defensive: `Command` is non-sealed (cross-file constraint), so the compiler cannot prove
       // exhaustiveness. No production sender emits an un-handled Command; treat any as unhandled.
+      case StorageResponseProcessed(seq, generation, outcome) =>
+        runningProcessingJobs = (runningProcessingJobs - 1).max(0)
+        if generation != processingGeneration then
+          log.debug(s"Dropping storage processing result $seq of superseded generation $generation")
+        else
+          pendingResponses.find(_.seq == seq).foreach { job =>
+            outcome match
+              case scala.util.Success(verified) => job.verified = Some(verified)
+              case scala.util.Failure(e) =>
+                log.warn(
+                  s"Off-actor storage processing failed for response $seq " +
+                    s"(${e.getClass.getSimpleName}: ${e.getMessage}); verifying it on the coordinator"
+                )
+            job.ready = true
+          }
+        submitProcessingJobs()
+        drainProcessedResponses()
+        Behaviors.same
+
       case other =>
         log.debug(s"StorageRangeCoordinator received unhandled command: $other")
         Behaviors.unhandled
-    }
-    .receiveSignal { case (_, org.apache.pekko.actor.typed.PostStop) =>
-      // Formerly `postStop`: the recurring liveness timer auto-cancels with the behavior.
-      onPostStop()
-      Behaviors.same
-    }
 
   private def requestNextRanges(peer: Peer): Option[BigInt] =
     val min = ByteString(Array.fill(32)(0.toByte))
@@ -1428,7 +1696,10 @@ private[actors] class StorageRangeCoordinatorImpl(
 
         Some(requestId)
 
-  private def handleResponse(response: StorageRanges): Unit =
+  private def handleResponse(response0: StorageRanges): Unit =
+    // Index the decoded response once (O(n)): the decoder's Queue makes every `slots(i)` O(i), and the ascending-order
+    // checks below and in MerkleProofVerifier index by position (#1533).
+    val response = indexedResponse(response0)
     requestTracker.validateStorageRanges(response) match
       case Left(error) =>
         log.warn(s"Invalid StorageRanges response: $error")
@@ -1445,13 +1716,17 @@ private[actors] class StorageRangeCoordinatorImpl(
                 log.warn(s"No active tasks for request ID ${response.requestId}")
 
               case Some((peer, batchTasks, requestedBytes)) =>
-                processStorageRanges(peer, batchTasks, requestedBytes, validResponse)
+                // Answered: the request is complete (no timeout can blame the peer from here on). Processing happens
+                // when the response reaches the head of the queue — now, unless earlier responses are still verifying.
+                enqueueResponse(peer, batchTasks, requestedBytes, validResponse)
 
   private def processStorageRanges(
       peer: Peer,
       tasks: Seq[StorageTask],
       requestedBytes: BigInt,
-      response: StorageRanges
+      response: StorageRanges,
+      verified: Option[VerifiedStorageResponse],
+      dispatchToPeer: Boolean
   ): Unit =
     // Count only responses that actually contain slot data as "served".
     // Proof-only responses (0 slot-sets, non-empty proofs) are NOT counted as served because:
@@ -1498,7 +1773,7 @@ private[actors] class StorageRangeCoordinatorImpl(
       lastDispatchOrResponseMs = System.currentTimeMillis()
       consecutiveUnproductiveRefreshes = 0
       self ! StorageCheckCompletion
-      dispatchIfPossible(peer)
+      if dispatchToPeer then dispatchIfPossible(peer)
 
     // Empty response with no usable proof-of-absence: re-queue/skip tasks and mark peer stateless.
     def handleEmptyResponse(): Unit =
@@ -1553,7 +1828,7 @@ private[actors] class StorageRangeCoordinatorImpl(
     if servedCount == 0 then
       if response.proof.nonEmpty && tasks.size == 1 then handleProofOfAbsence()
       else handleEmptyResponse()
-    else processServedTasks(peer, tasks, requestedBytes, response, servedCount)
+    else processServedTasks(peer, tasks, requestedBytes, response, servedCount, verified, dispatchToPeer)
 
   /** Handle the non-empty (served) branch of a StorageRanges response: clear stateless marking, verify proofs, stream
     * slots into per-account tries, and stage flat-slot writes.
@@ -1563,7 +1838,9 @@ private[actors] class StorageRangeCoordinatorImpl(
       tasks: Seq[StorageTask],
       requestedBytes: BigInt,
       response: StorageRanges,
-      servedCount: Int
+      servedCount: Int,
+      verified: Option[VerifiedStorageResponse] = None,
+      dispatchToPeer: Boolean = true
   ): Unit =
     // Non-empty response with actual slot data — clear stateless marking and reset backoff.
     statelessPeers.remove(peer.id.value)
@@ -1600,16 +1877,20 @@ private[actors] class StorageRangeCoordinatorImpl(
         !abandoned
       }
       .foreach { case (task, idx) =>
-        val accountSlots =
-          if response.slots.nonEmpty && idx < response.slots.size then response.slots(idx)
-          else Seq.empty
+        val accountSlots = servedSlotsAt(response, idx)
 
         // Best-practice: apply proof nodes only to the last served slot-set.
-        val proofForThisTask = if idx == servedCount - 1 then response.proof else Seq.empty
+        val proofForThisTask = proofAt(response, idx, servedCount)
 
-        val verifier = MerkleProofVerifier(task.storageRoot)
-        val storageEndHash = accountSlots.lastOption.map(_._1).getOrElse(task.last)
-        verifier.verifyStorageRange(accountSlots, proofForThisTask, task.next, storageEndHash) match
+        // Verified off-actor when the response went through a worker (#1533); otherwise (inline mode, or an account the
+        // worker skipped) here, with the same function.
+        val verification = verified.flatMap(_.verifications.lift(idx).flatten).getOrElse {
+          val startNs = System.nanoTime()
+          val result = verifyStorageChunk(task, accountSlots, proofForThisTask)
+          inlineVerifyNanos += System.nanoTime() - startNs
+          result
+        }
+        verification match
           case Left(error) if isStaleLocalRootSignature(error) =>
             // Not evidence of peer fault (see staleRootFailuresByAccount's doc) — no peer penalty.
             val failures = staleRootFailuresByAccount.getOrElse(task.accountHash, Vector.empty) :+
@@ -1643,7 +1924,13 @@ private[actors] class StorageRangeCoordinatorImpl(
             totalReceivedBytes += slotBytes
             // Cross-chunk range ordering (storageConcurrency parallel subtasks racing on response
             // arrival) is enforced by the gate, not here — see applyOrderedStorageChunk.
-            applyOrderedStorageChunk(peer, task, accountSlots, proofForThisTask)
+            applyOrderedStorageChunk(
+              peer,
+              task,
+              accountSlots,
+              proofForThisTask,
+              verified.flatMap(_.prebuilt.get(idx))
+            )
       }
 
     // Adjust per-peer byte budget based on total received bytes
@@ -1653,7 +1940,7 @@ private[actors] class StorageRangeCoordinatorImpl(
     self ! StorageCheckCompletion
 
     // Immediately pipeline more work to this peer — don't wait for StoragePeerAvailable
-    dispatchIfPossible(peer)
+    if dispatchToPeer then dispatchIfPossible(peer)
 
   /** Ordering gate: apply a verified storage-range chunk to its account's shared trie immediately if it is the next
     * range-ascending chunk expected, otherwise buffer it until earlier sibling chunks have landed. See the
@@ -1675,7 +1962,8 @@ private[actors] class StorageRangeCoordinatorImpl(
       peer: Peer,
       task: StorageTask,
       accountSlots: Seq[(ByteString, ByteString)],
-      proofForThisTask: Seq[ByteString]
+      proofForThisTask: Seq[ByteString],
+      prebuilt: Option[PrebuiltStorageTrie] = None
   ): Unit =
     val accountHash = task.accountHash
     val outOfOrder =
@@ -1693,7 +1981,7 @@ private[actors] class StorageRangeCoordinatorImpl(
           s"buffering (${perAccount.size} chunk(s) now waiting for this account)"
       )
     else
-      applyReadyStorageChunk(peer, task, accountSlots, proofForThisTask)
+      applyReadyStorageChunk(peer, task, accountSlots, proofForThisTask, prebuilt)
       drainOrderedStorageChunks(accountHash)
 
   /** After applying a chunk (and possibly advancing the account's cursor), release any buffered chunks that are now
@@ -1733,10 +2021,20 @@ private[actors] class StorageRangeCoordinatorImpl(
       peer: Peer,
       task0: StorageTask,
       accountSlots: Seq[(ByteString, ByteString)],
-      proofForThisTask: Seq[ByteString]
+      proofForThisTask: Seq[ByteString],
+      prebuilt: Option[PrebuiltStorageTrie] = None
   ): Unit =
     val accountHash = task0.accountHash
     var task = task0
+
+    // Nodes a worker built for an account served whole in this one response (#1533). They are exactly the nodes this
+    // method would emit into a fresh trie, so they are used only when it would build a fresh one: no trie, no
+    // ordering-gate or subtask state for the account, the account's first chunk, and no continuation (empty proof).
+    val wholeAccountTrie = prebuilt.filter { _ =>
+      !deferredMerkleization && task0.next == zeroSlotHash && proofForThisTask.isEmpty &&
+      !pendingAccountTries.contains(accountHash) && !lastAppliedSlot.contains(accountHash) &&
+      !accountSubtaskCounters.contains(accountHash)
+    }
 
     // Drop an exact repeat of the last-applied (key, value) — SNAP/1's origin is inclusive, so a
     // continuation or sub-range response's first slot legitimately CAN be the boundary slot this
@@ -1771,12 +2069,15 @@ private[actors] class StorageRangeCoordinatorImpl(
           // call only happens in range-ascending order, and the dedup above has already removed any
           // exact repeat of the trie's current boundary key.
           if !deferredMerkleization then
-            val trie = getOrCreateAccountTrie(accountHash)
-            dedupedSlots.foreach { case (slotHash, slotValue) =>
-              trie.update(slotHash.toArray, slotValue.toArray)
-            }
-            com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncMetrics
-              .setStoragePendingTries(pendingAccountTries.size.toLong)
+            wholeAccountTrie match
+              case Some(built) => writePrebuiltTrie(accountHash, built)
+              case None =>
+                val trie = getOrCreateAccountTrie(accountHash)
+                dedupedSlots.foreach { case (slotHash, slotValue) =>
+                  trie.update(slotHash.toArray, slotValue.toArray)
+                }
+                com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncMetrics
+                  .setStoragePendingTries(pendingAccountTries.size.toLong)
 
           // Flat-slot mirror — accountHash ++ slotHash → slotValue. Sorted in
           // `stageFlatSlotChunk` and accumulated for an off-actor batched commit.
@@ -1827,7 +2128,8 @@ private[actors] class StorageRangeCoordinatorImpl(
             )
           // Persist the advancing storage cursor for crash recovery. Best-effort: concurrent
           // subtask writes for the same account may race, but worst case is a partial
-          // re-download on resume, never data corruption.
+          // re-download on resume, never data corruption. The trie nodes it implies are written first.
+          if snapProgressStorage.isDefined then flushTrieNodeWrites()
           snapProgressStorage.foreach(
             _.writeStorageCursor(stateRoot, accountHash, StorageTask.incrementHash32(lastSlot))
           )
@@ -1872,7 +2174,9 @@ private[actors] class StorageRangeCoordinatorImpl(
                 )
                 true
               else
-                val computedRoot = commitAccountTrie(accountHash, task.storageRoot)
+                val computedRoot = wholeAccountTrie match
+                  case Some(built) => commitPrebuiltRoot(accountHash, task.storageRoot, built)
+                  case None        => commitAccountTrie(accountHash, task.storageRoot)
                 log.debug(
                   s"Account ${accountHash.take(4).toHex} streaming trie committed: root=${computedRoot.take(4).toHex}"
                 )
@@ -1928,7 +2232,11 @@ private[actors] class StorageRangeCoordinatorImpl(
     var inflight = inFlightForPeer(peer)
     var continue = true
     val peerLimit = perPeerInFlightLimit(peer)
-    while continue && tasks.nonEmpty && inflight < peerLimit && activeTasks.size < maxInFlightRequests do
+    // A response received but not yet applied keeps its request's slot (#1533): bounds the responses held in memory.
+    while continue && tasks.nonEmpty && inflight < peerLimit &&
+      activeTasks.size + pendingResponses.size < maxInFlightRequests &&
+      pendingResponseBytes < processing.maxPendingBytes
+    do
       requestNextRanges(peer) match
         case Some(_) => inflight += 1
         case None    => continue = false
@@ -1985,6 +2293,7 @@ private[actors] class StorageRangeCoordinatorImpl(
           s"workers-known=${knownAvailablePeers.size} stateless=${statelessPeers.size} " +
           s"cooling=${knownAvailablePeers.count(isPeerCoolingDown)} eligible=${eligiblePeers.size} " +
           s"strikes=${emptyResponseStrikes.size} penalised=${peerHealth.penalisedCount(now)} " +
+          s"processing=${pendingResponses.size}/$runningProcessingJobs " +
           s"root=${stateRoot.take(4).toHex}"
       )
       if noMoreTasksExpected then
@@ -2018,13 +2327,13 @@ private[actors] class StorageRangeCoordinatorImpl(
       for peer <- eligiblePeers if tasks.nonEmpty do dispatchIfPossible(peer)
 
   private def progress: Double =
-    val activeCount = activeTasks.values.map(_._2.size).sum
+    val activeCount = activeTasks.values.map(_._2.size).sum + pendingResponses.iterator.map(_.tasks.size).sum
     val total = completedTaskCount + activeCount + tasks.size
     if total == 0 then 1.0
     else completedTaskCount.toDouble / total
 
   private def isComplete: Boolean =
-    noMoreTasksExpected && tasks.isEmpty && activeTasks.isEmpty &&
+    noMoreTasksExpected && tasks.isEmpty && activeTasks.isEmpty && pendingResponses.isEmpty &&
       pendingAccountTries.isEmpty &&
       pendingFlatBatchAccounts.isEmpty && inFlightFlatBatches == 0
 
@@ -2207,6 +2516,189 @@ object StorageRangeCoordinator:
       error: String
   ) extends Command
 
+  // ── Off-actor response processing (#1533) ───────────────────────────────
+
+  /** Where StorageRanges responses are verified.
+    *
+    * @param offActor
+    *   false = everything on the coordinator (the pre-#1533 behaviour)
+    * @param threads
+    *   worker threads of the coordinator's own pool
+    * @param maxInFlightJobs
+    *   jobs running at once; further responses wait, in order, on the coordinator
+    * @param maxPendingBytes
+    *   payload bytes of responses received but not yet applied above which no new request is dispatched (the in-flight
+    *   request budget already bounds them to `maxInFlightRequests` responses)
+    */
+  final case class ProcessingSettings(offActor: Boolean, threads: Int, maxInFlightJobs: Int, maxPendingBytes: Long)
+
+  object ProcessingSettings:
+    val Inline: ProcessingSettings =
+      ProcessingSettings(offActor = false, threads = 0, maxInFlightJobs = 0, maxPendingBytes = Long.MaxValue)
+
+    val ConfigPath: String = "fukuii.sync.snap-sync"
+
+    /** Default worker count: every core but one, which the coordinator and the rest of the node keep. */
+    def autoThreads: Int = (Runtime.getRuntime.availableProcessors() - 1).max(1)
+
+    /** Reads `storage-off-actor-processing` and friends under [[ConfigPath]]; Inline when they are absent. */
+    def fromConfig(root: com.typesafe.config.Config): ProcessingSettings =
+      if !root.hasPath(s"$ConfigPath.storage-off-actor-processing") then Inline
+      else
+        val c = root.getConfig(ConfigPath)
+        def intOr(path: String, default: Int): Int = if c.hasPath(path) then c.getInt(path) else default
+        if !c.getBoolean("storage-off-actor-processing") then Inline
+        else
+          val configuredThreads = intOr("storage-processing-threads", 0)
+          val threads = if configuredThreads > 0 then configuredThreads else autoThreads
+          val configuredJobs = intOr("storage-processing-max-inflight-jobs", 0)
+          val maxBytes =
+            if c.hasPath("storage-processing-max-bytes") then c.getBytes("storage-processing-max-bytes").longValue
+            else 128L * 1024 * 1024
+          ProcessingSettings(
+            offActor = true,
+            threads = threads,
+            maxInFlightJobs = if configuredJobs > 0 then configuredJobs else threads * 2,
+            maxPendingBytes = if maxBytes > 0 then maxBytes else Long.MaxValue
+          )
+
+  /** One storage-trie node write a worker recorded for the coordinator to replay (Path scheme). */
+  private[actors] enum PathNodeOp:
+    case Put(path: Array[Byte], blob: Array[Byte])
+    case Delete(path: Array[Byte])
+
+  /** The trie of an account served whole in one response, built by a worker: its node writes and root. */
+  private[actors] enum PrebuiltStorageTrie:
+    case Path(ops: Vector[PathNodeOp], rootHash: ByteString)
+    case Hash(batches: Vector[Seq[(ByteString, Array[Byte])]], rootHash: ByteString)
+
+    def root: ByteString = this match
+      case Path(_, r) => r
+      case Hash(_, r) => r
+
+  /** A worker's result for one response.
+    *
+    * @param verifications
+    *   per served index: the verification result, or None when the worker skipped it (the coordinator then verifies)
+    * @param prebuilt
+    *   per served index: the account's trie, for accounts served whole in this response
+    */
+  final private[actors] case class VerifiedStorageResponse(
+      verifications: Vector[Option[Either[String, Unit]]],
+      prebuilt: Map[Int, PrebuiltStorageTrie],
+      workerNanos: Long
+  )
+
+  /** A processing job finished (any thread) — delivered through the mailbox. */
+  final private[actors] case class StorageResponseProcessed(
+      seq: Long,
+      generation: Long,
+      outcome: Try[VerifiedStorageResponse]
+  ) extends Command
+
+  private val ZeroSlotHash: ByteString = ByteString(Array.fill(32)(0.toByte))
+
+  /** The slots served for the account at `idx` (empty when absent). Shared by the worker and the coordinator. */
+  private[actors] def servedSlotsAt(response: StorageRanges, idx: Int): Seq[(ByteString, ByteString)] =
+    if response.slots.nonEmpty && idx < response.slots.size then response.slots(idx) else Seq.empty
+
+  /** The proof applies only to the last served slot-set. */
+  private[actors] def proofAt(response: StorageRanges, idx: Int, servedCount: Int): Seq[ByteString] =
+    if idx == servedCount - 1 then response.proof else Seq.empty
+
+  /** Verify one account's served slots against its storage root (pure; any thread). */
+  private[actors] def verifyStorageChunk(
+      task: StorageTask,
+      accountSlots: Seq[(ByteString, ByteString)],
+      proof: Seq[ByteString]
+  ): Either[String, Unit] =
+    val storageEndHash = accountSlots.lastOption.map(_._1).getOrElse(task.last)
+    MerkleProofVerifier(task.storageRoot).verifyStorageRange(accountSlots, proof, task.next, storageEndHash)
+
+  /** The off-actor job: verify every served account of a response and, for an account served whole (first chunk, no
+    * proof), build its trie with the coordinator's scheme. Pure: reads only its arguments.
+    */
+  private[actors] def verifyServedSlots(
+      tasks: Seq[StorageTask],
+      response: StorageRanges,
+      skipAccounts: Set[ByteString],
+      prebuildScheme: Option[StorageScheme]
+  ): VerifiedStorageResponse =
+    val startNs = System.nanoTime()
+    val servedCount = response.slots.count(_.nonEmpty)
+    val servedTasks = tasks.take(servedCount).toVector
+    val verifications = Vector.newBuilder[Option[Either[String, Unit]]]
+    val prebuilt = Map.newBuilder[Int, PrebuiltStorageTrie]
+    servedTasks.indices.foreach { idx =>
+      val task = servedTasks(idx)
+      if skipAccounts.contains(task.accountHash) then verifications += None
+      else
+        val accountSlots = servedSlotsAt(response, idx)
+        val proof = proofAt(response, idx, servedCount)
+        val result = verifyStorageChunk(task, accountSlots, proof)
+        verifications += Some(result)
+        if result.isRight && proof.isEmpty && accountSlots.nonEmpty && task.next == ZeroSlotHash then
+          // A failure here only means the coordinator builds this trie itself, as before.
+          prebuildScheme.foreach { scheme =>
+            Try(buildWholeAccountTrie(scheme, task.accountHash, accountSlots)).foreach(t => prebuilt += idx -> t)
+          }
+    }
+    VerifiedStorageResponse(verifications.result(), prebuilt.result(), System.nanoTime() - startNs)
+
+  /** Build an account's whole storage trie, recording the writes the coordinator's own trie would make. */
+  private[actors] def buildWholeAccountTrie(
+      scheme: StorageScheme,
+      accountHash: ByteString,
+      slots: Seq[(ByteString, ByteString)]
+  ): PrebuiltStorageTrie =
+    scheme match
+      case StorageScheme.Hash =>
+        val batches = Vector.newBuilder[Seq[(ByteString, Array[Byte])]]
+        val trie = new SnapHashTrie(batch => batches += batch)
+        slots.foreach { case (k, v) => trie.update(k.toArray, v.toArray) }
+        val root = trie.commit()
+        PrebuiltStorageTrie.Hash(batches.result(), root)
+      case StorageScheme.Path =>
+        val ops = Vector.newBuilder[PathNodeOp]
+        val trie = new SnapPathTrie(
+          owner = accountHash,
+          skipLeftBoundary = false,
+          writePath = (path, _, blob) => ops += PathNodeOp.Put(path, blob),
+          deleteExact = path => ops += PathNodeOp.Delete(path)
+        )
+        slots.foreach { case (k, v) => trie.update(k.toArray, v.toArray) }
+        val root = trie.commit()
+        PrebuiltStorageTrie.Path(ops.result(), root)
+
+  /** The response with indexed (Vector) collections: the RLP decoder yields `immutable.Queue`, where `apply(i)` is
+    * O(i).
+    */
+  private[actors] def indexedResponse(response: StorageRanges): StorageRanges =
+    response.copy(slots = response.slots.iterator.map(_.toVector).toVector, proof = response.proof.toVector)
+
+  /** Payload bytes of a response (slot keys and values, proof nodes). */
+  private[actors] def responsePayloadBytes(response: StorageRanges): Long =
+    response.slots.iterator.flatMap(_.iterator).map { case (k, v) => (k.size + v.size).toLong }.sum +
+      response.proof.iterator.map(_.size.toLong).sum
+
+  /** The coordinator's worker pool: fixed size, daemon threads, idle threads exit. */
+  private[actors] def newProcessingPool(threads: Int): java.util.concurrent.ThreadPoolExecutor =
+    val counter = new java.util.concurrent.atomic.AtomicInteger(0)
+    val factory: java.util.concurrent.ThreadFactory = (r: Runnable) =>
+      val t = new Thread(r, s"snap-storage-processing-${counter.incrementAndGet()}")
+      t.setDaemon(true)
+      t
+    val pool = new java.util.concurrent.ThreadPoolExecutor(
+      threads,
+      threads,
+      60L,
+      java.util.concurrent.TimeUnit.SECONDS,
+      new java.util.concurrent.LinkedBlockingQueue[Runnable](),
+      factory
+    )
+    pool.allowCoreThreadTimeOut(true)
+    pool
+
   // ── Worker message protocol ────────────────────────────────────────────────
 
   sealed trait WorkerMessage
@@ -2249,6 +2741,14 @@ object StorageRangeCoordinator:
       intakeBudget: Option[SnapIntakeBudget] = None
   ): Behavior[Command] =
     Behaviors.setup { context =>
+      // Read from the node config here rather than taken as a parameter: the spec 016 seam pins this apply's defaults.
+      val processingSettings =
+        Try(context.system.settings.config).toOption.fold(ProcessingSettings.Inline)(ProcessingSettings.fromConfig)
+      if processingSettings.offActor then
+        context.log.info(
+          s"StorageRangeCoordinator: off-actor response processing on ${processingSettings.threads} thread(s), " +
+            s"max ${processingSettings.maxInFlightJobs} job(s) in flight"
+        )
       Behaviors.withTimers { timers =>
         new StorageRangeCoordinatorImpl(
           context,
@@ -2275,7 +2775,8 @@ object StorageRangeCoordinator:
           storageScheme = storageScheme,
           pathNodeStorage = pathNodeStorage,
           recordStorageDone = recordStorageDone,
-          intakeBudget = intakeBudget
+          intakeBudget = intakeBudget,
+          processing = processingSettings
         ).start()
       }
     }
