@@ -1,5 +1,7 @@
 package com.chipprbots.ethereum.blockchain.sync.snap
 
+import java.util.concurrent.atomic.AtomicBoolean
+
 import org.apache.pekko.actor.Scheduler
 import org.apache.pekko.actor.typed.ActorRef as TypedActorRef
 import org.apache.pekko.actor.typed.Behavior
@@ -19,15 +21,16 @@ import com.chipprbots.ethereum.blockchain.sync.Blacklist
 import com.chipprbots.ethereum.blockchain.sync.PeerListHelper
 import com.chipprbots.ethereum.blockchain.sync.PeerListSupportNg
 import com.chipprbots.ethereum.blockchain.sync.SyncProtocol
+import com.chipprbots.ethereum.blockchain.sync.snap.controller.ByteCodeRequestApi
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.ChildFactories
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.CoordinatorHandles
-import com.chipprbots.ethereum.blockchain.sync.snap.controller.HealedCodeApi
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.HealingOrchestrator
-import com.chipprbots.ethereum.blockchain.sync.snap.controller.HealingApi
+import com.chipprbots.ethereum.blockchain.sync.snap.controller.HealingOrchestratorState
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.HeapWatchdogStart
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.LifecycleApi
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.PhaseFlags
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.PivotRefreshApi
+import com.chipprbots.ethereum.blockchain.sync.snap.controller.PivotSelectionApi
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.ShutdownApi
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.SnapControllerEnv
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.SnapFinalization
@@ -97,18 +100,19 @@ private class SNAPSyncControllerImpl(
     with SnapControllerEnv
     with StateValidationModule
     with StateValidationState
-    with HealingApi
     with LifecycleApi
     with SnapPeerPool
     with SnapPeerPoolState
     with SnapFinalization
     with SnapFinalizationState
-    with HealedCodeApi
     with ShutdownApi
     with SnapResumePlanner
     with SnapResumePlannerState
     with PivotRefreshApi
-    with HealingOrchestrator:
+    with HealingOrchestrator
+    with HealingOrchestratorState
+    with PivotSelectionApi
+    with ByteCodeRequestApi:
 
   import SNAPSyncController.*
   import SyncPhase.*
@@ -204,7 +208,6 @@ private class SNAPSyncControllerImpl(
   private val PivotBootstrapRetryKey = "pivot-bootstrap-retry"
   private val SnapCapabilityCheckKey = "snap-capability-check"
   private val DormantWakeUpKey = "dormant-wakeup"
-  private[snap] val ScheduledTrieWalkKey = "scheduled-trie-walk"
   private val PollHandshakedPeersKey = "poll-handshaked-peers"
   // Probe timeouts are keyed by the probe's BigInt requestId (C4) — see startPivotProbe.
 
@@ -310,7 +313,7 @@ private class SNAPSyncControllerImpl(
   // Buffered CL-driven pivot hint. Populated whenever a `CLPivotHint` message arrives
   // from `SyncController`. Consumed by `startSnapSync()` to skip TD-based pivot selection
   // on post-merge chains. Only meaningful when `isPoSChain == true`. Closes #1207.
-  private[snap] var clPivotHint: Option[CLPivotHint] = None
+  var clPivotHint: Option[CLPivotHint] = None
 
   // Minimum pivot block enforced when re-entering SNAP from a RegularSyncStuck escape.
   // Prevents re-selecting the same pivot that caused the regular-sync stall.
@@ -319,7 +322,7 @@ private class SNAPSyncControllerImpl(
 
   // Captured once at construction. ETC mainnet has TTD=None and never goes down the
   // CL-driven path; Sepolia/mainnet have TTD set and switch off TD-based pivot entirely.
-  private[snap] val isPoSChain: Boolean =
+  val isPoSChain: Boolean =
     isPoSChainOverride.getOrElse(
       com.chipprbots.ethereum.utils.Config.blockchains.blockchainConfig.terminalTotalDifficulty.isDefined
     )
@@ -472,23 +475,20 @@ private class SNAPSyncControllerImpl(
   // Pending pivot refresh: when refreshPivotInPlace() needs a header from a peer,
   // it requests a bootstrap and stores the pending pivot here. When BootstrapComplete
   // arrives in the syncing state, the refresh is completed.
-  private[snap] var pendingPivotRefresh: Option[(BigInt, String)] = None
+  var pendingPivotRefresh: Option[(BigInt, String)] = None
 
   private var storageStagnationRefreshAttempted: Boolean = false
-  private[snap] var trieWalkInProgress: Boolean = false
+  var trieWalkInProgress: Boolean = false
   // spec 004 (Decoupled Heal Serve-Root) T011: serve-root refresh bookkeeping. The healing coordinator fetches
   // missing nodes against an advancing SERVE root while its completeness walk stays pinned to the walk root. We
   // ask the parent for a newest-servable root (networkBest − RecentRootMarginBlocks) on the healing tick when the
   // current serve root has aged > HealingServeRootMarginBlocks behind the network head. A single in-flight latch
   // (the bootstrap is a ~1s peer round-trip — never per-block) and a block number of the last pushed serve root.
-  private[snap] var healingServeRootRequestInFlight: Boolean = false
+  var healingServeRootRequestInFlight: Boolean = false
   // Set by the healing coordinator while a frontier walk runs with nothing pending or in flight. The walk is local-only,
   // so serve-window freshness is irrelevant, and a proactive heal-root re-peg would only supersede (and discard) it.
-  private[snap] val healingWalkLocalOnly = new java.util.concurrent.atomic.AtomicBoolean(false)
-  private[snap] var lastHealingServeRootBlock: Option[BigInt] = None
-  // The serve root is considered stale when it is more than this many blocks behind the network head. Matches
-  // SyncController.RecentRootMarginBlocks (64) so the refreshed root lands comfortably inside peers' serve window.
-  private[snap] val HealingServeRootMarginBlocks: BigInt = BigInt(64)
+  val healingWalkLocalOnly: AtomicBoolean = new java.util.concurrent.atomic.AtomicBoolean(false)
+  var lastHealingServeRootBlock: Option[BigInt] = None
   // spec 009 T009/T014 (Moving-Root Delta Heal — BOUNDED re-peg last-resort). Under `movingRootDeltaHeal` the heal
   // re-pegs the single heal root via refreshPivotInPlace (from maybeRequestHealingServeRoot). If a re-peg attempt
   // during StateHealing finds NO suitable served root (refreshPivotInPlace's newPivotOpt.isEmpty branch), this counter
@@ -496,7 +496,7 @@ private class SNAPSyncControllerImpl(
   // → on-demand GetTrieNodes during block execution, anchor guard STILL enforced) rather than looping the 30s
   // RetryPivotRefresh forever (the heal-churn #1371 fought). Fail-SAFE (never force-marks-done / weakens any gate),
   // never fail-OPEN. Reset on any successful re-peg (completePivotRefreshWithStateRoot) and on entering healing.
-  private[snap] var healRepegNoRootAttempts: Int = 0
+  var healRepegNoRootAttempts: Int = 0
   // Provenance of the armed PivotBootstrapRetryKey/RetryPivotRefresh timer (BUG-BC3 3rd follow-up): true only when
   // armed by a counted StateHealing attempt. A timer armed in an earlier phase (e.g. a storage-phase stall) carries
   // false, so firing after StateHealing starts cannot spend the heal budget on a stalled CL. Consulted on PoS only.
@@ -3432,7 +3432,7 @@ private class SNAPSyncControllerImpl(
         }
     }
 
-  private[snap] def requestByteCodes(): Unit =
+  def requestByteCodes(): Unit =
     // Notify coordinator of available peers
     bytecodeCoordinator.foreach { coordinator =>
       val snapPeers = snapServingPeers()
@@ -3470,7 +3470,7 @@ private class SNAPSyncControllerImpl(
         }
     }
 
-  private[snap] def currentNetworkBestFromSnapPeers(): Option[BigInt] =
+  def currentNetworkBestFromSnapPeers(): Option[BigInt] =
     val bootstrapPivotBlock = appStateStorage.getBootstrapPivotBlock()
     // Peers whose STATUS hasn't arrived yet have maxBlockNumber=0 — exclude them, otherwise
     // a fresh-startup race returns Some(0) and the caller commits to a genesis pivot before

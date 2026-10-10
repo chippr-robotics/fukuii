@@ -1,16 +1,23 @@
 package com.chipprbots.ethereum.blockchain.sync.snap.controller
 
+import java.util.concurrent.atomic.AtomicBoolean
+
 import org.apache.pekko.actor.typed.Behavior
 import org.apache.pekko.actor.typed.SupervisorStrategy
 import org.apache.pekko.actor.typed.scaladsl.Behaviors
 import org.apache.pekko.util.ByteString
 
+import scala.collection.mutable
+import scala.concurrent.ExecutionContext
 import scala.concurrent.duration.*
 
 import com.chipprbots.ethereum.blockchain.sync.SyncController
-import com.chipprbots.ethereum.blockchain.sync.snap.*
+import com.chipprbots.ethereum.blockchain.sync.snap.ByteCodeTask
+import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController.*
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController.SyncPhase.*
+import com.chipprbots.ethereum.blockchain.sync.snap.StateValidator
+import com.chipprbots.ethereum.blockchain.sync.snap.actors
 import com.chipprbots.ethereum.db.storage.BfsQueueStorage
 import com.chipprbots.ethereum.db.storage.HealingFrontierStorage
 import com.chipprbots.ethereum.db.storage.Namespaces
@@ -19,12 +26,40 @@ import com.chipprbots.ethereum.domain.Account
 import com.chipprbots.ethereum.domain.TrieRoot
 import com.chipprbots.ethereum.utils.ByteStringUtils.ByteStringOps
 
+private[snap] trait HealingOrchestratorState:
+  var trieWalkInProgress: Boolean
+  var healRepegNoRootAttempts: Int
+  var healingServeRootRequestInFlight: Boolean
+  var lastHealingServeRootBlock: Option[BigInt]
+  def healingWalkLocalOnly: AtomicBoolean
+  var pendingPivotRefresh: Option[(BigInt, String)]
+  var clPivotHint: Option[CLPivotHint]
+  var healingValidatedRoot: Option[TrieRoot]
+  var coordinatorGeneration: Long
+  def healedCodeHashes: mutable.LinkedHashSet[ByteString]
+  def isPoSChain: Boolean
+  def ec: ExecutionContext
+
+private[snap] trait HealingApi:
+  def triggerHealingForMissingNodes(missingNodes: Seq[ByteString]): Unit
+  def startStateHealing(): Unit
+
+private[snap] trait HealedCodeApi:
+  def dropHealedCodeNowPresent(): Unit
+  def queueHealedCode(codeHashes: Seq[ByteString]): Unit
+
 private[snap] trait PivotRefreshApi:
   def refreshPivotInPlace(
       reason: String,
       countsTowardHealBudget: Boolean = true,
       pivotUnservable: Boolean = false
   ): Unit
+
+private[snap] trait PivotSelectionApi:
+  def currentNetworkBestFromSnapPeers(): Option[BigInt]
+
+private[snap] trait ByteCodeRequestApi:
+  def requestByteCodes(): Unit
 
 /** SNAP healing orchestration (spec 016 M6b, research.md R6 "Healing orchestration"): the `StateHealing` arms of
   * `syncing` (`stateHealingArms`: stateless peers, stagnation, the lazy-heal handoffs, the trie-walk results), the
@@ -36,10 +71,16 @@ private[snap] trait PivotRefreshApi:
   * `dropHealedCodeNowPresent`, `queueHealedCode`). The core keeps the dispatch: `phaseArms(StateHealing)` and the
   * healing arms of `commonSyncingArms` call these members.
   */
-private[snap] trait HealingOrchestrator:
-  self: SNAPSyncControllerImpl =>
+private[snap] trait HealingOrchestrator extends HealingApi with HealedCodeApi:
+  self: HealingOrchestratorState & SnapSharedState & SnapControllerEnv & CoordinatorHandles & PhaseFlags & ResumeApi &
+    PeerPoolApi & SnapServerPeersApi & ValidationApi & FinalizationApi & PivotRefreshApi & PivotSelectionApi &
+    ByteCodeRequestApi =>
 
   private var healingRoundCount: Int = 0
+  private lazy val ScheduledTrieWalkKey = "scheduled-trie-walk"
+  // The serve root is considered stale when it is more than this many blocks behind the network head. Matches
+  // SyncController.RecentRootMarginBlocks (64) so the refreshed root lands comfortably inside peers' serve window.
+  private lazy val HealingServeRootMarginBlocks: BigInt = BigInt(64)
 
   /** `syncing` arms guarded on `currentPhase == StateHealing` (P4c). */
   private[snap] lazy val stateHealingArms: PartialFunction[Command, Behavior[Command]] = {
