@@ -922,7 +922,7 @@ private class SNAPSyncControllerImpl(
             chainDownloader.tell(ChainDownloader.Pause)
             pendingPivotRefresh = Some((blockNumber, "backtracked pivot"))
             syncController ! StartRegularSyncBootstrap(blockNumber)
-            lastAccountProgressMs = System.currentTimeMillis()
+            resetStagnationClocks(StagnationWatchdog.ResetReason.BootstrapRetryAtBlock)
       else ctx.log.info(s"Skipping backtracked bootstrap — phase=$currentPhase no longer needs it")
       Behaviors.same
   }
@@ -1678,10 +1678,7 @@ private class SNAPSyncControllerImpl(
           timers.cancel(RequestAccountRanges)
 
           // Start storage + bytecode stagnation watchdogs now that accounts are done
-          lastStorageProgressMs = System.currentTimeMillis()
-          storageTailBaseline = SNAPSyncController.StorageTailBaseline.fresh(System.currentTimeMillis())
-          lastBytecodeProgressMs = System.currentTimeMillis()
-          lastBytecodeProgressCount = 0L
+          resetStagnationClocks(StagnationWatchdog.ResetReason.StoragePhaseEntry)
           scheduleStagnationChecks()
 
           checkAllDownloadsComplete()
@@ -2083,8 +2080,7 @@ private class SNAPSyncControllerImpl(
               }
 
             currentPhase = ByteCodeAndStorageSync
-            lastStorageProgressMs = System.currentTimeMillis()
-            storageTailBaseline = SNAPSyncController.StorageTailBaseline.fresh(System.currentTimeMillis())
+            resetStagnationClocks(StagnationWatchdog.ResetReason.AccountsCompleteRecovery)
             scheduleStagnationChecks()
             progressMonitor.startPhase(ByteCodeAndStorageSync)
 
@@ -2766,9 +2762,7 @@ private class SNAPSyncControllerImpl(
   private def launchAccountRangeWorkers(rootHash: TrieRoot, concurrency: Int): Unit =
     val effectiveConcurrency = if concurrency > 0 then concurrency else snapSyncConfig.accountConcurrency
     // Reset stagnation tracking for this phase.
-    lastAccountProgressMs = System.currentTimeMillis()
-    lastAccountTasksCompleted = 0
-    lastAccountsDownloaded = 0
+    resetStagnationClocks(StagnationWatchdog.ResetReason.AccountLaunch)
 
     // Safety valve: only preserve range progress if pivot hasn't drifted too far.
     // Content-addressed MPT data is valid across adjacent pivots (~256 blocks apart),
@@ -3284,7 +3278,7 @@ private class SNAPSyncControllerImpl(
         // Note: do NOT reset lastStorageProgressMs here — if storage has been stalled with
         // no actual slot progress, the stagnation timer must continue counting so it can
         // eventually trigger a full restart rather than cycling pivots indefinitely.
-        lastAccountProgressMs = System.currentTimeMillis()
+        resetStagnationClocks(StagnationWatchdog.ResetReason.PivotRefreshHeaderFetch)
       else completePivotRefreshWithStateRoot(newPivotBlock, newPivotHeaderOpt.get, reason)
 
   /** Complete the pivot refresh once we have the header (either from local storage or bootstrapped from peer). */
@@ -3479,7 +3473,7 @@ private class SNAPSyncControllerImpl(
             // ProgressStorageSlotsSynced) should reset the storage stagnation timer.
             // This ensures that repeated stateless-peer pivot cycles don't prevent the
             // stagnation watchdog from eventually triggering a full restart.
-            lastAccountProgressMs = System.currentTimeMillis()
+            resetStagnationClocks(StagnationWatchdog.ResetReason.PivotRefreshCommit)
           // end if posValidationOk
         // end if !deferForProbe
       // end else (stateRoot changed)

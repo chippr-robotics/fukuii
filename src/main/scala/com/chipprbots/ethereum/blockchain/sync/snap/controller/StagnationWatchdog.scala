@@ -29,10 +29,18 @@ private[snap] trait StagnationWatchdogState:
   * checks they call: account stall -> in-place pivot refresh, then dormant mode (`maybeRestartIfAccountStagnant`);
   * storage stall or tail livelock -> one pivot refresh, then force-complete (`maybeRestartIfStorageStagnant`); bytecode
   * stall -> force-complete (`maybeForceCompleteIfBytecodeStagnant`). The core keeps the dispatch (`phaseArms`), the
-  * `CheckDownloadStagnation` arm of `commonSyncingArms` that sends the asks, and the clock resets at launch, refresh
-  * and `startSnapSync`.
+  * `CheckDownloadStagnation` arm (`checkDownloadStagnationArms`) that sends the asks. The clock resets at launch,
+  * refresh, `startSnapSync`'s recovery, the storage-phase entry and the bootstrap retry go through
+  * `resetStagnationClocks(reason)`, called from the core.
   */
-private[snap] trait StagnationWatchdog:
+/** The stagnation watchdog's clock-reset hook (spec 016 plan.md D1 `StagnationResetApi`, M7's `watchdog.reset(reason)`;
+  * CQ-SNAP-016-20). A module that moves out of the core and resets the clocks names this trait, not
+  * `StagnationWatchdog`.
+  */
+private[snap] trait StagnationResetApi:
+  def resetStagnationClocks(reason: StagnationWatchdog.ResetReason): Unit
+
+private[snap] trait StagnationWatchdog extends StagnationResetApi:
   self: StagnationWatchdogState & SnapSharedState & SnapControllerEnv & CoordinatorHandles & PhaseFlags &
     HandshakedPeersApi & LifecycleApi & PivotRefreshApi =>
 
@@ -77,6 +85,44 @@ private[snap] trait StagnationWatchdog:
       maybeForceCompleteIfBytecodeStagnant(progress)
       Behaviors.same
   }
+
+  /** Reset the stagnation clocks for `reason` (spec 016 restructure, CQ-SNAP-016-20). Each reason writes exactly what
+    * its call site wrote inline before, in the same order, with one `System.currentTimeMillis()` call per write as
+    * before. The reasons reset different sets on purpose; a set that looks wrong is fixed in its own PR as a change to
+    * this table (#1551), not here.
+    *
+    *   - `AccountLaunch` (`launchAccountRangeWorkers`): `lastAccountProgressMs`, `lastAccountTasksCompleted`,
+    *     `lastAccountsDownloaded`.
+    *   - `AccountsCompleteRecovery` (`startSnapSync`'s `recoverAccountsComplete`, bytecode + storage resumed):
+    *     `lastStorageProgressMs`, `storageTailBaseline`.
+    *   - `StoragePhaseEntry` (the `AccountRangeSyncComplete` arm): `lastStorageProgressMs`, `storageTailBaseline`,
+    *     `lastBytecodeProgressMs`, `lastBytecodeProgressCount`.
+    *   - `PivotRefreshHeaderFetch` (`refreshPivotInPlace`, header not local), `PivotRefreshCommit`
+    *     (`completePivotRefreshWithStateRoot`) and `BootstrapRetryAtBlock` (`retryBootstrapAtBlockArms`, header not
+    *     local): `lastAccountProgressMs` only.
+    *
+    * No reason resets `storageStagnationRefreshAttempted`, `lastPivotRestartMs` or `consecutiveAccountStallRefreshes`.
+    */
+  def resetStagnationClocks(reason: StagnationWatchdog.ResetReason): Unit =
+    reason match
+      case StagnationWatchdog.ResetReason.AccountLaunch =>
+        lastAccountProgressMs = System.currentTimeMillis()
+        lastAccountTasksCompleted = 0
+        lastAccountsDownloaded = 0
+      case StagnationWatchdog.ResetReason.AccountsCompleteRecovery =>
+        lastStorageProgressMs = System.currentTimeMillis()
+        storageTailBaseline = SNAPSyncController.StorageTailBaseline.fresh(System.currentTimeMillis())
+      case StagnationWatchdog.ResetReason.StoragePhaseEntry =>
+        lastStorageProgressMs = System.currentTimeMillis()
+        storageTailBaseline = SNAPSyncController.StorageTailBaseline.fresh(System.currentTimeMillis())
+        lastBytecodeProgressMs = System.currentTimeMillis()
+        lastBytecodeProgressCount = 0L
+      case StagnationWatchdog.ResetReason.PivotRefreshHeaderFetch =>
+        lastAccountProgressMs = System.currentTimeMillis()
+      case StagnationWatchdog.ResetReason.PivotRefreshCommit =>
+        lastAccountProgressMs = System.currentTimeMillis()
+      case StagnationWatchdog.ResetReason.BootstrapRetryAtBlock =>
+        lastAccountProgressMs = System.currentTimeMillis()
 
   private[snap] def scheduleStagnationChecks(): Unit =
     val interval = DownloadStagnationCheckInterval
@@ -208,7 +254,8 @@ private[snap] trait StagnationWatchdog:
 
   // Track consecutive account stall pivot refreshes to detect truly unrecoverable situations.
   // Reset to 0 on real progress (taskProgress || downloadProgress in maybeRestartIfAccountStagnant).
-  private var consecutiveAccountStallRefreshes: Int = 0
+  // private[snap] (not private) only so the reset-table pin test can show that no reset reason clears it (#1551).
+  private[snap] var consecutiveAccountStallRefreshes: Int = 0
 
   private def maybeRestartIfAccountStagnant(progress: actors.AccountRangeStats): Unit =
     if currentPhase == AccountRangeSync then
@@ -298,3 +345,10 @@ private[snap] trait StagnationWatchdog:
         // end else (no progress)
       // end if workRemaining
   // end if currentPhase == AccountRangeSync
+
+private[snap] object StagnationWatchdog:
+
+  /** The call sites that reset the stagnation clocks (spec 016 restructure, CQ-SNAP-016-20), one reason per site. */
+  enum ResetReason:
+    case AccountLaunch, AccountsCompleteRecovery, StoragePhaseEntry, PivotRefreshHeaderFetch, PivotRefreshCommit,
+      BootstrapRetryAtBlock
