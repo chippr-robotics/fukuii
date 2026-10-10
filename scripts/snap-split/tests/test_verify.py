@@ -532,6 +532,37 @@ class VerifyTests(unittest.TestCase):
         out = self.bad(f, "step6")
         self.assertIn("case 1 if", out)
 
+    # A core whose constructor is longer than the 12-line header window: its `extends`/`with` clause sits past it.
+    LONG_CTOR = "class SNAPSyncControllerImpl(\n" + "".join(f"    p{n}: Int,\n" for n in range(20)) + ")"
+
+    def long_ctor_series(self, core_narrow_extends, param_edit=None):
+        base = CORE_BASE.replace("class SNAPSyncControllerImpl:", self.LONG_CTOR + "\n    extends Base:")
+        f = Fixture(core_base=base)
+        after_move = CORE_AFTER_MOVE.replace(
+            "class SNAPSyncControllerImpl extends HealingOrchestrator:",
+            self.LONG_CTOR + "\n    extends Base\n    with HealingOrchestrator:",
+        )
+        move_commit(f, core=after_move)
+        narrowed = after_move.replace("    with HealingOrchestrator:", core_narrow_extends)
+        if param_edit:
+            narrowed = narrowed.replace(*param_edit)
+        f.write(CORE, narrowed)
+        f.write(f"{CTRL}/HealingOrchestrator.scala", MODULE_NARROW)
+        f.write("src/test/scala/x/StubSpec.scala", STUB_TEST)
+        f.commit(NARROW_MSG)
+        return f
+
+    def test_narrowing_extends_clause_after_long_constructor_passes(self):
+        f = self.long_ctor_series("    with HealingOrchestrator\n    with HealingState\n    with SnapSharedState:")
+        self.ok(f)
+
+    def test_narrowing_param_edit_in_long_constructor_fails(self):
+        f = self.long_ctor_series(
+            "    with HealingOrchestrator\n    with HealingState:", param_edit=("    p15: Int,", "    p15: Long,")
+        )
+        out = self.bad(f, "step6")
+        self.assertIn("p15", out)
+
     def test_merge_commit_on_spec_branch_fails_but_not_elsewhere(self):
         for branch, good in (("refactor/snap-016-m2", False), ("ci/x", True)):
             f = Fixture(branch=branch)
