@@ -238,12 +238,12 @@ only when every item on the per-slice checklist below holds.
 
 ## P2 — `PhaseFlags` + `reset(kind)` + `cancelSyncTimers`
 
-- [ ] T032 [P2] Classify every W in research.md R3a as **reset** (to initial value) or **set** (to a computed value).
+- [x] T032 [P2] Classify every W in research.md R3a as **reset** (to initial value) or **set** (to a computed value).
   Commit the table to research.md first, in its own docs commit.
-- [ ] T033 [P2] Introduce `PhaseFlags` (the nine flags of FR-011) and `reset(kind: Start | Restart | Wake | Dormant)`,
+- [x] T033 [P2] Introduce `PhaseFlags` (the nine flags of FR-011) and `reset(kind: Start | Restart | Wake | Dormant)`,
   with per-kind field sets equal to the T032 reset set. Replace the reset writes at the four sites. Introduce
   `cancelSyncTimers(keys)`, with each call site passing its own existing list.
-- [ ] T034 [P2] Log every per-kind asymmetry that looks like a bug to CHASE-QUEUE. **Do not unify them.**
+- [x] T034 [P2] Log every per-kind asymmetry that looks like a bug to CHASE-QUEUE. **Do not unify them.**
 
 ## P3 — single peer-event handler
 

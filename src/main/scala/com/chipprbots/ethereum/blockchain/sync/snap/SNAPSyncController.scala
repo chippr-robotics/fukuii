@@ -23,6 +23,7 @@ import com.chipprbots.ethereum.blockchain.sync.SyncProtocol
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.ChildFactories
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.CoordinatorHandles
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.HeapWatchdogStart
+import com.chipprbots.ethereum.blockchain.sync.snap.controller.PhaseFlags
 import com.chipprbots.ethereum.consensus.engine.PoSBlockHeaderValidator
 import com.chipprbots.ethereum.db.storage.AppStateStorage
 import com.chipprbots.ethereum.db.storage.BfsQueueStorage
@@ -82,7 +83,8 @@ private class SNAPSyncControllerImpl(
     heapWatchdogStart: HeapWatchdogStart = HeapWatchdogStart.production,
     intakeBudgetOverride: Option[SnapIntakeBudget] = None
 )(implicit ec: ExecutionContext)
-    extends CoordinatorHandles:
+    extends CoordinatorHandles
+    with PhaseFlags:
 
   import SNAPSyncController.*
   import SyncPhase.*
@@ -455,20 +457,9 @@ private class SNAPSyncControllerImpl(
   // AccountRangeCoordinator "Resume from a mid-range cursor") are both reconciled by it.
   private val MaxPreservedPivotDistance: BigInt = 50_000
 
-  // Set true whenever account-range cursors were resumed from a prior session (resumeProgress
-  // non-empty). Forces StateHealing to run at completion (overriding the deferred-merkleization
-  // skip-healing fast path) so a delta downloaded against a drifted root is never handed off
-  // unwalked. This is the single load-bearing anti-corruption guard for cursor resume.
-  private var resumedStaleCursors: Boolean = false
-
-  // Geth-aligned: all 3 coordinators run concurrently from first account response.
-  // accountsComplete is set when AccountRangeSyncComplete arrives and NoMore sentinels are sent.
-  private var accountsComplete: Boolean = false
-
-  // Concurrent phase completion tracking (all 3 coordinators run in parallel)
-  private var bytecodePhaseComplete: Boolean = false
-  private var storagePhaseComplete: Boolean = false
-  private var storagePhaseForceCompleted: Boolean = false
+  // The phase-complete and force-complete flags (`resumedStaleCursors`, `accountsComplete`, `bytecodePhaseComplete`,
+  // `storagePhaseComplete`, `storagePhaseForceCompleted`, `awaitingHealedCode`, `healedCodeWaitExhausted`,
+  // `bytecodeForceCompleted`, `forceCompleteStorageSent`) live in `PhaseFlags` (spec 016 P2), with `reset(kind)`.
 
   // Bytecode of accounts that arrived through trie HEALING. Account-range sync builds its code-hash list from the
   // account responses it receives, so an account created after the pivot and delivered only by healing is invisible to
@@ -477,10 +468,6 @@ private class SNAPSyncControllerImpl(
   // present (or `HealedCodeWaitMs` passes). Whatever is still missing at finalisation keeps `bytecodeRecoveryDone`
   // unset, so the next start's recovery scan finds it, and the importer fetches it on demand in the meantime.
   private val healedCodeHashes: mutable.LinkedHashSet[ByteString] = mutable.LinkedHashSet.empty
-  private var awaitingHealedCode: Boolean = false
-  private var healedCodeWaitExhausted: Boolean = false
-  // The bytecode phase was force-completed with tasks abandoned (stagnation): some bytecode was never fetched.
-  private var bytecodeForceCompleted: Boolean = false
 
   private val progressMonitor = new SyncProgressMonitor(scheduler)
 
@@ -594,11 +581,6 @@ private class SNAPSyncControllerImpl(
   private var pendingDisconnectedPeers: Set[String] = Set.empty
 
   private var storageStagnationRefreshAttempted: Boolean = false
-  // Prevent sending ForceCompleteStorage more than once per coordinator lifecycle.
-  // SNAPSyncController can queue 10+ StorageCoordinatorProgress responses before the first
-  // StorageRangeSyncForceCompleted reply arrives, causing storagePhaseComplete to still be false
-  // for all of them. Without this guard, each one sends a duplicate ForceCompleteStorage.
-  private var forceCompleteStorageSent: Boolean = false
   private var trieWalkInProgress: Boolean = false
   private var healingRoundCount: Int = 0
   // spec 004 (Decoupled Heal Serve-Root) T011: serve-root refresh bookkeeping. The healing coordinator fetches
@@ -855,23 +837,31 @@ private class SNAPSyncControllerImpl(
           "Either set storage-scheme = path in snap-sync config, or wipe the datadir and resync."
       )
 
+  /** Cancel the given timers in the given order (spec 016 P2, FR-011). Each caller passes its own list: the lists
+    * differ on purpose and are kept exactly as they were. `timers.cancel` tolerates unknown keys.
+    */
+  private def cancelSyncTimers(keys: Any*): Unit =
+    keys.foreach(timers.cancel)
+
   /** Cancel every SNAP-only scheduled timer. Idempotent — `timers.cancel` tolerates unknown keys. Called both at the
     * lifecycle transition into `completedWithBackfill` (so eviction/tickers don't keep running while regular sync owns
     * the peer pool) and from the PostStop signal handler.
     */
   private def stopSnapOnlySchedules(): Unit =
-    timers.cancel(RequestAccountRanges)
-    timers.cancel(RequestByteCodes)
-    timers.cancel(HealedCodeWaitTimerKey)
-    timers.cancel(RequestStorageRanges)
-    timers.cancel(CheckDownloadStagnation)
-    timers.cancel(RequestTrieNodeHealing)
-    timers.cancel(BootstrapCheckKey)
-    timers.cancel(PivotBootstrapRetryKey)
-    timers.cancel(SnapCapabilityCheckKey)
-    timers.cancel(EvictNonSnapPeers)
-    timers.cancel(TuneRateTracker)
-    timers.cancel(EnsureSnapServerPeersConnected)
+    cancelSyncTimers(
+      RequestAccountRanges,
+      RequestByteCodes,
+      HealedCodeWaitTimerKey,
+      RequestStorageRanges,
+      CheckDownloadStagnation,
+      RequestTrieNodeHealing,
+      BootstrapCheckKey,
+      PivotBootstrapRetryKey,
+      SnapCapabilityCheckKey,
+      EvictNonSnapPeers,
+      TuneRateTracker,
+      EnsureSnapServerPeersConnected
+    )
     snapServerPeersSchedulerStarted = false
     snapPeerEvictionStarted = false
     progressMonitor.stopPeriodicLogging()
@@ -2808,7 +2798,7 @@ private class SNAPSyncControllerImpl(
               val bytecodeAlreadyDone = appStateStorage.isSnapSyncBytecodeComplete()
               storagePhaseComplete = storageAlreadyDone
               bytecodePhaseComplete = bytecodeAlreadyDone
-              storagePhaseForceCompleted = false
+              reset(PhaseFlags.ResetKind.Start)
 
               if storageAlreadyDone then ctx.log.info("Recovery: storage phase already complete — skipping re-download")
               if bytecodeAlreadyDone then
@@ -3453,16 +3443,18 @@ private class SNAPSyncControllerImpl(
         s"All downloaded state preserved. Will retry after backoff."
     )
 
-    timers.cancel(RequestAccountRanges)
-    timers.cancel(RequestByteCodes)
-    timers.cancel(RequestStorageRanges)
-    timers.cancel(CheckDownloadStagnation)
-    timers.cancel(RequestTrieNodeHealing)
-    timers.cancel(BootstrapCheckKey)
-    timers.cancel(PivotBootstrapRetryKey)
-    timers.cancel(TuneRateTracker)
-    timers.cancel(SnapCapabilityCheckKey)
-    timers.cancel(EvictNonSnapPeers)
+    cancelSyncTimers(
+      RequestAccountRanges,
+      RequestByteCodes,
+      RequestStorageRanges,
+      CheckDownloadStagnation,
+      RequestTrieNodeHealing,
+      BootstrapCheckKey,
+      PivotBootstrapRetryKey,
+      TuneRateTracker,
+      SnapCapabilityCheckKey,
+      EvictNonSnapPeers
+    )
 
     stopAll()
     healingWalkLocalOnly.set(false)
@@ -3473,6 +3465,8 @@ private class SNAPSyncControllerImpl(
     pendingProbeCommit = None
     proactiveRollNeedsProbe = false
     probeAttemptCount = 0
+    // Dormancy leaves every phase flag as it is (an empty reset set, research.md R3b).
+    reset(PhaseFlags.ResetKind.Dormant)
 
     dormantRetryCount += 1
     val backoffMs = math.min(
@@ -3498,11 +3492,7 @@ private class SNAPSyncControllerImpl(
     )
 
     resetHealedCodeHold()
-    accountsComplete = false
-    bytecodePhaseComplete = false
-    storagePhaseComplete = false
-    storagePhaseForceCompleted = false
-    forceCompleteStorageSent = false
+    reset(PhaseFlags.ResetKind.Wake)
     bytecodesEstimatedTotal = 0L
     healingValidatedRoot = None
 
@@ -4987,14 +4977,16 @@ private class SNAPSyncControllerImpl(
     // actual account download progress (ProgressAccountsSynced) or at startSnapSync().
 
     // Cancel periodic phase request ticks
-    timers.cancel(RequestAccountRanges)
-    timers.cancel(RequestByteCodes)
-    timers.cancel(RequestStorageRanges)
-    timers.cancel(CheckDownloadStagnation)
-    timers.cancel(RequestTrieNodeHealing)
-    timers.cancel(BootstrapCheckKey)
-    timers.cancel(PivotBootstrapRetryKey)
-    timers.cancel(TuneRateTracker)
+    cancelSyncTimers(
+      RequestAccountRanges,
+      RequestByteCodes,
+      RequestStorageRanges,
+      CheckDownloadStagnation,
+      RequestTrieNodeHealing,
+      BootstrapCheckKey,
+      PivotBootstrapRetryKey,
+      TuneRateTracker
+    )
 
     // Stop coordinators so we don't double-run phases
     stopAll()
@@ -5005,11 +4997,7 @@ private class SNAPSyncControllerImpl(
 
     // Clear concurrent download state and recovery data
     resetHealedCodeHold()
-    accountsComplete = false
-    bytecodePhaseComplete = false
-    storagePhaseComplete = false
-    storagePhaseForceCompleted = false
-    forceCompleteStorageSent = false
+    reset(PhaseFlags.ResetKind.Restart)
     // Reset bytecode-estimate counter so it stays in sync with progressMonitor.reset()
     // (called below). IncrementalContractData will repopulate as accounts are re-identified.
     bytecodesEstimatedTotal = 0L
