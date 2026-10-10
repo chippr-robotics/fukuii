@@ -34,6 +34,7 @@ import com.chipprbots.ethereum.blockchain.sync.snap.controller.SnapFinalization
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.SnapFinalizationState
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.SnapPeerPool
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.SnapPeerPoolState
+import com.chipprbots.ethereum.blockchain.sync.snap.controller.SnapResumePlanner
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.SnapSharedState
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.StateValidationModule
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.StateValidationState
@@ -110,7 +111,8 @@ private class SNAPSyncControllerImpl(
     with SnapFinalizationState
     with TaskFileSweepApi
     with HealedCodeApi
-    with ShutdownApi:
+    with ShutdownApi
+    with SnapResumePlanner:
 
   import SNAPSyncController.*
   import SyncPhase.*
@@ -180,33 +182,6 @@ private class SNAPSyncControllerImpl(
     heapWatchdog.foreach(_.stop())
     heapWatchdog = None
     if intakeBudget.heapPressureActive then intakeBudget.setHeapPressure(false)
-
-  /** Drive a [[GatedTaskFileReplay]] to the end on Futures (spec 014). A paused step re-checks the gate after
-    * `RecoveryReplayPausedRetry` via the scheduler, holding no thread while it waits; file reads run under `blocking`.
-    * The pause is logged at most every 30 s with the gate's reason.
-    */
-  private def runGatedReplay(replay: GatedTaskFileReplay, what: String)(emit: Vector[Array[Byte]] => Unit)(using
-      replayEc: ExecutionContext
-  ): scala.concurrent.Future[Unit] =
-    def loop(lastPauseLogMs: Long): scala.concurrent.Future[Unit] =
-      scala.concurrent.Future(scala.concurrent.blocking(replay.step(emit))).flatMap {
-        case GatedTaskFileReplay.Step.Done    => scala.concurrent.Future.unit
-        case GatedTaskFileReplay.Step.Read(_) => loop(lastPauseLogMs)
-        case GatedTaskFileReplay.Step.Paused(reason) =>
-          val now = System.currentTimeMillis()
-          val loggedAt =
-            if now - lastPauseLogMs >= 30000L then
-              asyncLog.info(s"Recovery: $what replay waiting at entry ${replay.position} ($reason)")
-              now
-            else lastPauseLogMs
-          val resumed = scala.concurrent.Promise[Unit]()
-          val _ = scheduler.scheduleOnce(RecoveryReplayPausedRetry) {
-            resumed.completeWith(loop(loggedAt))
-            ()
-          }
-          resumed.future
-      }
-    loop(0L)
 
   /** Runs on the watchdog / JMX notification thread: touches only the thread-safe gate, metrics and the SLF4J logger.
     */
@@ -292,7 +267,7 @@ private class SNAPSyncControllerImpl(
   // Writable MptStorage, lazily created when pivot block number is known.
   // Uses getBackingStorage(pivotBlockNumber) to ensure nodes are tagged with the
   // correct block number for proper reference counting in pruning modes.
-  private var mptStorage: Option[MptStorage] = None
+  private[snap] var mptStorage: Option[MptStorage] = None
 
   // PathScheme: create PathNodeStorage backed by the same RocksDB data source as flat storage.
   // None for HashScheme (default/ETC). Shared across coordinator restarts (data source is long-lived).
@@ -305,7 +280,7 @@ private class SNAPSyncControllerImpl(
   // with each finished account's last flat slots; read on a resume so only unfinished storage tasks are re-queued.
   // Scoped to one SNAP cycle — cleared when the account phase starts without carried task files and when the storage
   // phase completes. See SnapStorageDoneStorage for exactly what a marker guarantees in each mode.
-  private val storageDoneStorage = new SnapStorageDoneStorage(flatSlotStorage.dataSource)
+  private[snap] val storageDoneStorage = new SnapStorageDoneStorage(flatSlotStorage.dataSource)
 
   // Markers are recorded only where a marker's claim holds once written: under Hash scheme + building the trie during
   // the download (deferredMerkleization = false) + cached ("inmemory") pruning, storage trie nodes go through
@@ -319,29 +294,6 @@ private class SNAPSyncControllerImpl(
       "Storage-task completion markers off (Hash scheme + in-memory pruning buffers storage trie nodes): " +
         "a SNAP resume re-downloads every carried storage task"
     )
-
-  /** Drop every completion marker (a cheap range tombstone, here), then compact the range off the actor thread so the
-    * tombstoned space (~80 B per marker, ~750 MB on Sepolia) is reclaimed now. The compaction is blocking I/O of about
-    * the markers' size; it runs on the single-thread snap-validation dispatcher, delaying a validation walk queued
-    * behind it by that long at most. A failure only leaves the space to background compaction.
-    */
-  private def clearStorageDoneMarkers(reason: String): Unit =
-    storageDoneStorage.clear()
-    ctx.log.info(s"Cleared storage-task completion markers ($reason); compacting their key range in the background")
-    scala.concurrent
-      .Future(scala.concurrent.blocking(storageDoneStorage.compact()))(snapValidationEc)
-      .failed
-      .foreach(e => asyncLog.warn(s"Compacting cleared storage-task completion markers failed: ${e.getMessage}"))(
-        snapValidationEc
-      )
-
-  def getOrCreateMptStorage(pivotBlockNumber: BigInt): MptStorage =
-    mptStorage.getOrElse {
-      val storage = stateStorage.getBackingStorage(pivotBlockNumber)
-      mptStorage = Some(storage)
-      ctx.log.info(s"Created writable MptStorage for pivot block $pivotBlockNumber")
-      storage
-    }
 
   // Actor-based coordinators (OQ-6 Option A: Typed refs, spawned via ctx.spawn) and the ChainDownloader live in
   // `CoordinatorHandles` (spec 016 P1): `accountRangeCoordinator`, `bytecodeCoordinator`, `storageRangeCoordinator`,
@@ -404,17 +356,6 @@ private class SNAPSyncControllerImpl(
   // Storage-file path of the last persisted checkpoint for which superseded task files were already swept.
   private var lastSweptForRecord: Option[String] = None
 
-  /** Task files handed to accounts-complete recovery (never swept while referenced). */
-  def accountsCompleteTaskFilePaths: Set[String] =
-    (appStateStorage.getSnapSyncStorageFilePath().toSet ++ appStateStorage.getSnapSyncCodeHashesPath().toSet)
-      .filter(_.nonEmpty)
-
-  /** Delete contract task files in the task-file dir that are not in `keep`. IO errors are logged per file. */
-  def sweepSupersededTaskFiles(keep: Set[String], reason: String): Unit =
-    snapSyncConfig.taskFileDir.foreach { dir =>
-      val deleted = SNAPSyncController.sweepTaskFiles(dir, keep, (p, e) => ctx.log.warn(s"Could not delete $p: $e"))
-      if deleted.nonEmpty then ctx.log.info(s"Deleted ${deleted.size} superseded SNAP contract task file(s) ($reason)")
-    }
   // Resume saved account-range cursors across this much pivot drift before falling back to a
   // full re-walk. Raised from 256 (~55 min ETC) to 50_000 (~1 week ETC) on 2026-06-01. The cap is
   // only a perf heuristic (very large drift => large healing delta where a cold re-walk may be
@@ -675,27 +616,6 @@ private class SNAPSyncControllerImpl(
     stopHeapWatchdog()
     // dormantWakeUp is now a timer — auto-cancelled on stop.
     ctx.log.info("SNAP Sync Controller stopped")
-
-  /** Guard: fail fast if the DB was written with PathScheme but config says HashScheme (or vice versa).
-    *
-    * Path-scheme data lives in [[Namespaces.StateTriePathNamespace]] (namespace 't'). We check for the root node at
-    * empty nibble path — HP([]) = 0x20. If it exists, a PathScheme SNAP sync was performed on this datadir. A
-    * HashScheme config at that point would silently ignore all path-keyed nodes, so we throw immediately.
-    *
-    * The reverse (HashScheme data + PathScheme config) is safe: PathScheme simply ignores the existing hash-keyed nodes
-    * and starts fresh. No silent data loss — just wasted disk space.
-    */
-  private def checkStorageSchemeMismatch(): Unit =
-    val emptyHp = com.chipprbots.ethereum.mpt.HexPrefix.encode(Array.empty[Byte], isLeaf = false)
-    val hasPathRoot = flatSlotStorage.dataSource
-      .getOptimized(Namespaces.StateTriePathNamespace, emptyHp)
-      .isDefined
-    if hasPathRoot && snapSyncConfig.storageScheme == StorageScheme.Hash then
-      throw new IllegalStateException(
-        "Storage scheme mismatch: DB contains path-scheme account trie data (root at empty path) " +
-          "but config has storage-scheme = hash. " +
-          "Either set storage-scheme = path in snap-sync config, or wipe the datadir and resync."
-      )
 
   /** Cancel the given timers in the given order (spec 016 P2, FR-011). Each caller passes its own list: the lists
     * differ on purpose and are kept exactly as they were. `timers.cancel` tolerates unknown keys.
@@ -4857,31 +4777,6 @@ private class SNAPSyncControllerImpl(
       if !timers.isTimerActive(RequestByteCodes) then
         timers.startTimerWithFixedDelay(RequestByteCodes, RequestByteCodes, 1.second)
       requestByteCodes()
-
-  // --- SNAP progress persistence helpers ---
-
-  /** Deserialize range progress from legacy AppStateStorage plain-text format (migration fallback). Yields
-    * `(pivotBlock, rangeProgress)` or `None` if parsing fails.
-    */
-  private def deserializeSnapProgress(data: String): Option[(BigInt, Map[ByteString, ByteString])] =
-    try
-      val lines = data.split('\n').filter(_.nonEmpty)
-      if lines.isEmpty then None
-      else
-        var pivot: Option[BigInt] = None
-        val ranges = scala.collection.mutable.Map.empty[ByteString, ByteString]
-
-        lines.foreach { line =>
-          val idx = line.indexOf('=')
-          if idx > 0 then
-            val key = line.substring(0, idx)
-            val value = line.substring(idx + 1)
-            if key == "pivotBlock" then pivot = Some(BigInt(value))
-            else ranges += (ByteString(Hex.decode(key)) -> ByteString(Hex.decode(value)))
-        }
-
-        pivot.map(p => (p, ranges.toMap))
-    catch case _: Exception => None
 
 object SNAPSyncController:
 
