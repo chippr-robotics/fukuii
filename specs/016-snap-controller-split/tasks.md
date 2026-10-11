@@ -824,13 +824,42 @@ only when every item on the per-slice checklist below holds.
     commit; the storage-reference baseline is unchanged (the core is outside `snap/controller/` and `snap/actors/`).
     `SNAPSyncController.scala` is 2,055 lines (the class 1,216, the companion 771; +22 for two scaladocs and a
     delegation). Next: M5c (T046c), M7b (T049b), M9b (T051b).
-- [ ] T046c [M5c] Byte-move `accountProgressCheckpointArms` (T053c) into `SnapResumePlanner`; the delegation line stays
+- [x] T046c [M5c] Byte-move `accountProgressCheckpointArms` (T053c) into `SnapResumePlanner`; the delegation line stays
   in `commonSyncingArms` at its position. The arm reads and writes `launchedAccountGeneration`, `currentCarrySource`,
   `lastSweptForRecord` (today `private var`) and `preserved*`, and calls `sweepSupersededTaskFiles` and
   `accountsCompleteTaskFilePaths` (already the module's), so the narrowing commit adds the fields that stay in the core
   (shared with the account launch and the refresher) to `SnapResumePlannerState`, with a justification line per
   member. `lastSweptForRecord` is written by this arm only and may move with it. `SnapResumePlannerSpec` is extended
   (`# extended-tests:`). Review: **vault** (the checkpoint format is frozen) + prism + forge.
+  - As built: two commits, after T054c (the core is in the storage ratchet's measured set). (1) The move commit moves
+    `lastSweptForRecord` (with its comment) and `accountProgressCheckpointArms` (with its scaladoc), byte-identical,
+    into a temporary trait `SnapResumePlannerCheckpoint` appended to the module file with the temporary self-type
+    `SNAPSyncControllerImpl` (the M8c pattern); the core gains `with SnapResumePlannerCheckpoint`, and the module file
+    imports `blockchain.sync.snap.*` (the self-type) and pekko's `Behaviors`. No `private` -> `private[snap]` change:
+    every core field the arm reads is already public or reached through a hub. The storage-reference rows move with
+    the code (`SNAPSyncController.scala` 64 -> 62, `controller/SnapResumePlanner.scala` 93 -> 95; total 692,
+    unchanged, no justification). (2) The narrowing commit drops the temporary trait's two header lines, so the members
+    fold into `SnapResumePlanner`; `lastSweptForRecord` stays a `private var` (initializer `None`, rule (d)), now of
+    the trait. Self-type unchanged.
+    - State 17 against M5b's 15: + `launchedAccountGeneration` and `currentCarrySource`, read by the arm and written by
+      the account launch (`DownloadSupervisor`), so they stay in the core; both are read-only `def`s here
+      (`DownloadSupervisorState` keeps them as `var`s).
+    - Api 12 against M5b's 12: the arm calls only the module's own members, and `accountsComplete` comes through
+      `PhaseFlags`, already in the self-type. No other module's count moves; the capability traits are unchanged
+      (5 / 18 / 12 / 10).
+    - Stub test: `SnapResumePlannerSpec` extended (`# extended-tests:`) with four cases (18 in all): the arm is defined
+      for `AccountRangeProgressCmd` only; a superseded generation's snapshot and one after accounts complete are
+      dropped (nothing preserved, persisted or swept); a durable snapshot with task files at a root and pivot is
+      persisted as the versioned checkpoint, sweeps superseded task files (keeping its own files and the carry
+      source), does not sweep again for the same record, and sweeps again for a record over new files; a durable
+      snapshot without task files, a non-durable one and one with no state root are kept in memory only, with the
+      tracked pivot following the current pivot or staying put without one.
+  - **Not moved**: the delegation line in `commonSyncingArms` and the two fields above. No fix. The scaladocs of
+    `SnapResumePlanner` ("the core keeps ... the checkpoint arm of `syncing`") and of the moved arm ("lifted into a
+    class member") still describe the old layout: a move or narrowing commit cannot edit comments (CQ-SNAP-016-37,
+    with CQ-SNAP-016-34). SC-001: **not met**. `SNAPSyncController.scala` is 1,989 lines (the class 1,150, the
+    companion 771) against about 1,000, down from 2,055. Mordor and Platåberget restarts mid-account: **pending** (to
+    be run by the user on the slice jar after merge; no node run here).
 - [ ] T049b [M7b] Byte-move the stagnation tick and its roll trigger (T053c) to their owners:
   `checkDownloadStagnationArms` into `StagnationWatchdog` (plan.md M7's `CheckDownloadStagnation` arm, with the
   progress `ask`s and `ZeroPeerStagnationMs`), and `maybeProactivePivotRoll` into `PivotRefresher` (plan.md M10's
