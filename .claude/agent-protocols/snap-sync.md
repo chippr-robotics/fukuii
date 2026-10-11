@@ -41,7 +41,8 @@ unless stated.
 - **Env freeze ratchet (T054, PR #1570).** `scripts/snap-split/verify.py` step 8 checks the PR head against
   `scripts/snap-split/storage-baseline.json`: the `SnapControllerEnv` member count (18) only goes down, and so does
   the storage-reference **total** (storage-type identifiers and storage member accesses, comments excluded) over
-  `snap/controller/` and `snap/actors/`; per-file counts may move between files. Calls on `StateIngest` are not
+  `snap/controller/`, `snap/actors/` and the core `SNAPSyncController.scala` (since T054c: the split's move source,
+  so a move out of the core is a per-file trade); per-file counts may move between files. Calls on `StateIngest` are not
   storage references. A PR that lowers a count records it in the baseline in the same PR. The coordinator stage pays
   the table down. T055 runs under the T054b verify mode.
 - **No sbt on the soak host.** CI is the compiler.

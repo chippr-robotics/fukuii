@@ -17,8 +17,9 @@ Implements plan.md "Move verification" steps 1-7 and FR-016 (a), (c), (d), per c
   +  `sbt compile` on each move commit (--compile).
   8  storage ratchet (env freeze, 2026-10-11 decision), once on the PR head against storage-baseline.json:
      [env-freeze]   no new storage-typed SnapControllerEnv member; its member count and header only go down / stay
-     [storage-refs] storage-reference total over snap/controller and snap/actors only goes down (files may trade)
-     [raw-import]   no new raw RocksDB / DataSource / WriteBatch import in those directories
+     [storage-refs] storage-reference total over snap/controller, snap/actors and the controller core
+                    (SNAPSyncController.scala, the split's move source) only goes down (files may trade)
+     [raw-import]   no new raw RocksDB / DataSource / WriteBatch import in those files
      See `Ratchet` for the exact predicates and the baseline-file rules.
 
 fix/* and hotfix/* branches (not containing `snap-016`) may edit existing module files. They are never moves:
@@ -943,14 +944,20 @@ class Verifier:
 #     lowering the baseline in the same PR, and a deleted file drops its entry.
 # What may go up, and how:
 #   - env member count, pinned storage members, env header (parents/self-type), raw imports: never.
-#   - a per-file storage-reference count: freely, as long as the TOTAL over RATCHET_DIRS does not go up (code moving
-#     between module files during the split). A higher total needs a `justifications["storage_refs.total"]` line that
+#   - a per-file storage-reference count: freely, as long as the TOTAL over RATCHET_DIRS + RATCHET_FILES does not go
+#     up (code moving between module files, or from the core into a module, during the split). A higher total needs a `justifications["storage_refs.total"]` line that
 #     this PR adds or changes.
 # Bootstrap: only when the baseline is absent at the merge-base AND at BASE. Once BASE (staging) has it, a merge-base
 # without it is an error (rebase). Present at the merge-base but not at HEAD: error. Absent everywhere: empty baseline.
 
 BASELINE_PATH = "scripts/snap-split/storage-baseline.json"
 RATCHET_DIRS = [f"{SNAP}/controller", f"{SNAP}/actors"]  # recursive: subdirectory modules are included
+# Top-level snap/ files that are move sources of the split, listed one by one (scope extension, spec 016 T054c). The
+# controller core loses code to the modules in the remaining slices (M5c, M7b, M9b); without it in the measured set, a
+# byte-identical move of a storage reference out of the core read as new coupling. With it, such a move is a per-file
+# trade and the total is unchanged. No other top-level snap/ file is a move source (tasks.md, the routing doc), so none
+# is listed; adding one is a reviewed tooling change with a re-baseline.
+RATCHET_FILES = [f"{SNAP}/SNAPSyncController.scala"]
 ENV_FILE = f"{SNAP}/controller/SnapControllerEnv.scala"
 ENV_TRAIT = "SnapControllerEnv"
 TOTAL_KEY = "storage_refs.total"
@@ -975,7 +982,7 @@ STORAGE_NAME_ALLOW = frozenset({
 ENV_STORAGE_IDENT_RE = re.compile(r"Storage|Store|DataSource|(?i:rocksdb)|^Blockchain(?:Reader|Writer)$|WriteBatch")
 
 # The storage-reference count: occurrences of this in code (comments removed by `strip_comments`), per .scala file
-# under RATCHET_DIRS. Alternatives, in order: a lower-case `.xStorageY` member access (`.stateStorageOf(...)`,
+# under RATCHET_DIRS and in RATCHET_FILES. Alternatives, in order: a lower-case `.xStorageY` member access (`.stateStorageOf(...)`,
 # `.putSnapSyncStorageComplete`; a capitalised `.StorageRanges` is a message or type selector and does not count unless
 # it ends in `Storage`), a capitalised `*Storage*|*Store*` name ending in Coordinator/Worker/Actor (a storage wrapper
 # dressed as an actor), an `xStorage` / `xStorages` / `xStorageOpt` identifier or type, `DataSource*` / `dataSource*`, `BlockchainReader|Writer` and the
@@ -1333,7 +1340,7 @@ def check_storage_ratchet(v: "Verifier", base: str, head: str):
     r = Ratchet(v, base, head)
     if not r.ok:
         return
-    files = {f[len(SNAP) + 1:]: v.g.show(head, f) or "" for f in v.g.tree_files(head, RATCHET_DIRS)}
+    files = {f[len(SNAP) + 1:]: v.g.show(head, f) or "" for f in v.g.tree_files(head, RATCHET_DIRS + RATCHET_FILES)}
     r.check_env()
     r.check_refs(files)
     r.check_raw(files)

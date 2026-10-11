@@ -484,16 +484,19 @@ reviewer re-runs it locally with `scripts/snap-split/verify.sh origin/staging`; 
      - Removing a pinned member passes.
      - Retyping a pinned member to another storage type passes.
      - Retyping any other member into a storage type fails.
-   - `[storage-refs]`: `STORAGE_REF_RE` (in `verify.py`) is counted in code under `snap/controller/` and `snap/actors/`.
-     A small tokenizer drops comments but keeps string literals. The rule is move-aware:
+   - `[storage-refs]`: `STORAGE_REF_RE` (in `verify.py`) is counted in code under `snap/controller/` and `snap/actors/`,
+     and in the controller core `snap/SNAPSyncController.scala` (`RATCHET_FILES`; T054c). The core is in the measured
+     set because it is the split's move source: without it, a byte-identical move of a storage reference out of the
+     core read as new coupling. No other top-level `snap/` file is a move source, so none is listed. A small tokenizer
+     drops comments but keeps string literals. The rule is move-aware:
      - The total must not rise. Per-file counts may move between files, so a split slice that moves references into a
-       new module file needs no justification.
+       new module file, or from the core into a module, needs no justification.
      - A higher total needs a new `justifications["storage_refs.total"]` line.
      - The table prints on every run.
      - The metric is a tripwire, not a proof. It matches identifiers and `.xStorage…` member accesses, so a determined
        alias can evade it, and reviewers still read the diff.
    - `[raw-import]`: no new import from `org.rocksdb` or `…db.dataSource`, and no new imported name containing
-     `WriteBatch` or inline fully qualified reference, in those directories. The baselined files keep only their
+     `WriteBatch` or inline fully qualified reference, in those files. The baselined files keep only their
      listed imports. There is no escape.
 
 The **per-suite counts** (FR-032) come from the Tier 1 job's and the S0e job's test reports. The PR pastes them, and
@@ -636,7 +639,7 @@ plan. Nothing above that is not marked "amended" changes.
 
 | Item | Where | Owner / review |
 |---|---|---|
-| Env freeze ratchet: `verify.py` step 8 against `scripts/snap-split/storage-baseline.json`: the `SnapControllerEnv` member count (18) and the storage-reference total over `snap/controller/` and `snap/actors/` (comments excluded; files may trade), which CI lets go **down only** (spec FR-043) | T054; PR #1570 on `test/snap-016-env-freeze` | prism |
+| Env freeze ratchet: `verify.py` step 8 against `scripts/snap-split/storage-baseline.json`: the `SnapControllerEnv` member count (18) and the storage-reference total over `snap/controller/`, `snap/actors/` and the core `SNAPSyncController.scala` (comments excluded; files may trade; the core since T054c), which CI lets go **down only** (spec FR-043) | T054; PR #1570 on `test/snap-016-env-freeze`; T054c on `test/snap-016-ratchet-core` | prism |
 | `verify.py` mode for a behaviour-neutral capability-introduction PR | T054b, owned by the T054 tooling line, before T055 | prism |
 | `StateIngest` capability trait | T055, one behaviour-neutral PR between M11 and T060 | forge, vault, Mordor run, perf parity |
 | Coordinator narrowings take `StateIngest`, never `StateAccess`, and each lowers the baseline total | T061–T075 (amended) | as in the slice list |

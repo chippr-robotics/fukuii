@@ -55,8 +55,8 @@ only when every item on the per-slice checklist below holds.
   The counts are copied into the routing doc's coupling table.
 - [ ] **Ratchet (amendment 2026-10-11, from T054 onward).** `verify.py` step 8 is green against
   `scripts/snap-split/storage-baseline.json`: the `SnapControllerEnv` member count is unchanged or lower, and the
-  storage-reference **total** over `snap/controller/` and `snap/actors/` is unchanged or lower (per-file counts may
-  move between files). A PR that lowers a count records it in the baseline file in the same PR and pastes the
+  storage-reference **total** over `snap/controller/`, `snap/actors/` and the core `SNAPSyncController.scala` (T054c)
+  is unchanged or lower (per-file counts may move between files, including from the core into a module). A PR that lowers a count records it in the baseline file in the same PR and pastes the
   before/after numbers. Calls on `StateIngest` are not storage references (FR-043).
 - [ ] No bug fix. Anything found goes to `.claude/agent-protocols/working-docs/CHASE-QUEUE.md` with a link to the
   slice.
@@ -866,6 +866,18 @@ controller modules and before T060. Spec 017 (`specs/017-state-capabilities-witn
   - A PR that lowers a count records it in the baseline file in the same PR.
   - The coordinator stage (T061–T075) pays the table down; each C-* task's done-criteria include lowering its
     coordinator's share of the total.
+- [x] T054c [FREEZE] **Ratchet scope: count the controller core** (branch `test/snap-016-ratchet-core`, before M5c).
+  Step 8 counted only `snap/controller/` and `snap/actors/`, so a byte-identical move out of `SNAPSyncController.scala`
+  (outside both) raised the total: M5c's `accountProgressCheckpointArms` carries 2 references (`appStateStorage`,
+  `.commit()`), 628 → 630, though no coupling was added. `verify.py` gains `RATCHET_FILES`
+  (`snap/SNAPSyncController.scala`, class and companion), counted for `[storage-refs]` and `[raw-import]` with its own
+  per-file row. No other top-level `snap/` file is a move source of the remaining slices (M5c, M7b and M9b move core
+  members; T055 and the C-* slices change `controller/` and `actors/` code in place), so none is listed. Re-baselined
+  in the same PR: the core counts 64 and has no raw import, so the total goes 628 → 692, recorded with
+  `justifications["storage_refs.total"]` ("scope extension: core added to the measured set; no code change"). This is
+  a scope extension, not a coupling increase. From here a move from the core into a module is a per-file trade, and
+  the total only goes down. Two self-tests: a byte-identical move of 2 references from the core into a module passes
+  with no justification; a core-only increase fails. plan.md step 8, FR-043 and the routing doc name the measured set.
 - [ ] T054b [FREEZE] **Verify mode for a capability-introduction PR** (owned by the T054 tooling line; needed before
   T055). Add a `verify.py` mode, with self-tests, for a behaviour-neutral PR that introduces a capability and moves call
   sites onto it, which is neither a move nor a narrowing (plan.md amendment, "Why T055 is not a move or a
@@ -931,7 +943,7 @@ controller modules and before T060. Spec 017 (`specs/017-state-capabilities-witn
 
 **Amendment 2026-10-11 (applies to T061–T075).** Every C-* narrowing self-type takes `StateIngest` for storage,
 **never `StateAccess`** and never a raw storage type (FR-042). Each C-* task is done only when it **lowers the T054
-baseline total** (the storage-reference total over `snap/controller/` and `snap/actors/`, FR-043), and the PR records
+baseline total** (the storage-reference total over `snap/controller/`, `snap/actors/` and the core, FR-043), and the PR records
 the new total in the baseline file. Its own coordinator file's figure normally falls too, but the gate is the total:
 per-file counts may move between files. The one exception is a slice whose moved code holds no storage reference at
 all: the PR says so, with the grep, and the total stays unchanged. It never rises. The "no `StateAccess`

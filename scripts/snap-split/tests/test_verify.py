@@ -1193,6 +1193,31 @@ class StorageRatchetTests(unittest.TestCase):
         out = self.bad(f, "storage-refs")
         self.assertIn(f"total: measured {ENV_REFS + COORD_REFS}", out)
 
+    # the controller core is in the measured set (scope extension, T054c): a move out of it is a per-file trade
+    def test_move_from_core_into_a_module_with_the_same_refs_passes_without_justification(self):
+        write = "appStateStorage.put(tmp).commit()"  # 2 refs: the handle and `.commit()`
+        core = CORE_BASE.replace("println(tmp)", write)
+        refs = {"controller/SnapControllerEnv.scala": ENV_REFS, "actors/FooCoordinator.scala": COORD_REFS}
+        f = Fixture(branch="refactor/snap-016-m5c",
+                    core_base=core, extra={ENV: ENV_BASE, COORD: COORD_BASE,
+                                           BASELINE: baseline(refs={**refs, "SNAPSyncController.scala": 2})})
+        f.write(BASELINE, baseline(refs={**refs, "controller/HealingOrchestrator.scala": 2}))
+        move_commit(f, module=MODULE_MOVE.replace("println(tmp)", write), partial=True)
+        out = self.ok(f)
+        self.assertIn("[storage] controller/HealingOrchestrator.scala: 2 (baseline 2, ceiling 0)", out)
+        self.assertIn("[storage] SNAPSyncController.scala: 0 (baseline 0)", out)
+        self.assertIn(f"[storage] total: {ENV_REFS + COORD_REFS + 2} (baseline {ENV_REFS + COORD_REFS + 2}, ceiling "
+                      f"{ENV_REFS + COORD_REFS + 2})", out)
+        self.assertNotIn("[storage-refs]", out)
+
+    def test_core_only_increase_fails(self):
+        f = ratchet_fixture(branch="feat/core")
+        f.write(CORE, CORE_BASE + "  def g(s: StateStorage) = s\n")
+        f.commit("feat: core")
+        out = self.bad(f, "storage-refs")
+        self.assertIn(f"SNAPSyncController.scala: measured 1, but {BASELINE} records 0", out)
+        self.assertIn(f"total storage references {ENV_REFS + COORD_REFS + 1}, above the ceiling {ENV_REFS + COORD_REFS}", out)
+
     # env header and the widened storage-type predicate
     def test_env_header_change_fails(self):
         for hdr in ("private[snap] trait SnapControllerEnv extends HasStores:",
