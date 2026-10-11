@@ -39,7 +39,7 @@ import com.chipprbots.ethereum.utils.Config.SyncConfig
   */
 private[snap] trait SnapControllerEnv:
 
-  def ctx: ActorContext[SNAPSyncController.Command]
+  val ctx: ActorContext[SNAPSyncController.Command]
   def timers: TimerScheduler[SNAPSyncController.Command]
   def snapSyncConfig: SNAPSyncConfig
   def syncConfig: SyncConfig

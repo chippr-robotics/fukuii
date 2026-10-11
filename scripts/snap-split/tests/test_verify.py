@@ -270,6 +270,13 @@ class VerifyTests(unittest.TestCase):
     def test_d_member_val_fails(self):
         self.bad(self.d_case("  val a = 1\n"), "FR-016d")
 
+    def test_d_abstract_val_passes(self):
+        self.ok(self.d_case("  val a: Int\n  val b: Map[String, Int]\n"))
+
+    def test_d_member_val_with_type_fails(self):
+        self.bad(self.d_case("  val a: Int = 1\n"), "FR-016d")
+        self.bad(self.d_case("  val a: Int =\n    compute()\n"), "FR-016d")
+
     def test_d_lazy_val_passes(self):
         self.ok(self.d_case("  lazy val a = compute()\n"))
 
