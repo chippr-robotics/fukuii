@@ -53,6 +53,11 @@ only when every item on the per-slice checklist below holds.
   - each `val` → `lazy val`/`def` conversion marked "pure: yes", with its initializer grep (plan.md D1).
 
   The counts are copied into the routing doc's coupling table.
+- [ ] **Ratchet (amendment 2026-10-11, from T054 onward).** `verify.py` step 8 is green against
+  `scripts/snap-split/storage-baseline.json`: the `SnapControllerEnv` member count is unchanged or lower, and the
+  storage-reference **total** over `snap/controller/` and `snap/actors/` is unchanged or lower (per-file counts may
+  move between files). A PR that lowers a count records it in the baseline file in the same PR and pastes the
+  before/after numbers. Calls on `StateIngest` are not storage references (FR-043).
 - [ ] No bug fix. Anything found goes to `.claude/agent-protocols/working-docs/CHASE-QUEUE.md` with a link to the
   slice.
 - [ ] Rows in `.claude/agent-protocols/snap-sync.md` are flipped to "target (post-split)" with the real file names.
@@ -782,30 +787,132 @@ only when every item on the per-slice checklist below holds.
     is `commonSyncingArms`. Mordor and Platåberget restarts mid-account and mid-storage: **pending** (to be run by the
     user on the slice jar after merge; no node run here).
 
+## Amendment 2026-10-11 — state capability boundary (after M11, before the coordinators)
+
+User decision of 2026-10-11 (spec.md "Amendment 2026-10-11"; plan.md, same section). These slices land after the
+controller modules and before T060. Spec 017 (`specs/017-state-capabilities-witnesses/`) depends on T055.
+
+- [ ] T054 [FREEZE] **Env freeze ratchet: the coupling we can measure.** Implemented by another agent in PR #1570
+  (branch `test/snap-016-env-freeze`). It is referenced here, not implemented by this spec PR.
+  - What counts is set by that tooling: `scripts/snap-split/verify.py` **step 8**, against the committed
+    `scripts/snap-split/storage-baseline.json` (FR-043):
+    - `[env-freeze]`: the `SnapControllerEnv` member count (18 today) and its storage-typed members only go down;
+    - `[storage-refs]`: storage-type identifiers and storage member accesses in code under `snap/controller/` and
+      `snap/actors/`, comments excluded. The **total** across both directories only goes down; per-file counts may
+      move between files;
+    - `[raw-import]`: no new raw RocksDB / `DataSource` / `WriteBatch` import there.
+  - Calls on `StateIngest` are **not** storage references. `StateIngest` gets its own member-cap row in the routing
+    doc.
+  - A PR that lowers a count records it in the baseline file in the same PR.
+  - The coordinator stage (T061–T075) pays the table down; each C-* task's done-criteria include lowering its
+    coordinator's share of the total.
+- [ ] T054b [FREEZE] **Verify mode for a capability-introduction PR** (owned by the T054 tooling line; needed before
+  T055). Add a `verify.py` mode, with self-tests, for a behaviour-neutral PR that introduces a capability and moves call
+  sites onto it, which is neither a move nor a narrowing (plan.md amendment, "Why T055 is not a move or a
+  narrowing"): every changed line in a module file replaces a storage handle with the matching capability member,
+  while (a), (d), `[counts]`, the test-hunk guard, pin and golden protection and step 8 still apply.
+- [ ] T055 [SI] **`StateIngest` capability** (one behaviour-neutral PR, branch `refactor/snap-016-state-ingest`).
+  - Introduce `controller/StateIngest.scala`, a capability trait over:
+    - the 8 storage handles now in `SnapControllerEnv`: `appStateStorage`, `stateStorage`, `evmCodeStorage`,
+      `flatSlotStorage`, `pathNodeStorageOpt`, `blockchainReader`, `blockchainWriter`,
+      `validatorFactory: MptStorage => StateValidator`;
+    - the Path-scheme batched storage-trie node-write path (`SnapPathTrie` → `PathNodeStorage.writeStorageNode`,
+      buffered in `StorageRangeCoordinator`'s `trieNodeWrites` and committed by `flushTrieNodeWrites`; introduced by
+      #1548). Hash scheme already batches at 8 MiB.
+  - It includes the **verification reads**: proof checks, healing presence checks, state validation and publish
+    verification. It exposes no EVM execution read or write (`StateAccess` is spec 017's).
+  - Move the controller modules onto it: the resume planner (checkpoints, done-markers, progress storage),
+    finalization (`appStateStorage`, `blockchainWriter`, the Path→hash publish), pivot selection (pivot persistence and
+    headers), healing (frontier and BFS stores, healed code), validation, and the peer pool's `blockchainReader` use.
+    Change the `ChildFactories` spawn arguments to pass a `StateIngest`, with production defaults, so the coordinator
+    narrowings can move their call sites later.
+  - `SnapControllerEnv` shrinks from 18 members to about 11 (18 − 8 + `stateIngest`). Record the lower count in the
+    T054 baseline (`[env-freeze]`), and update the cap row in the routing doc.
+  - **Durability policy.** `StateIngest` carries a per-capability durability policy whose default is today's
+    behaviour. No relaxed policy is enabled in this PR (that is T056).
+  - **Exporter durability property (FR-044), explicit on the trait.** `PathToHashExporter`'s publish is the
+    `StateIngest` **commit to the access store**. Its output must be durable (flushed and synced) before SNAP
+    finalization marks SNAP complete and before execution reads from it, even when ingest writes ran with relaxed WAL.
+    Otherwise a crash during finalization leaves execution reading a store that was never durably written. On Hash
+    scheme (ETC/Mordor), where SNAP writes the execution store directly and there is no export step, an explicit
+    durable flush/sync barrier runs before `completeSnapSync`. The scaladoc of `StateIngest` states the property, and
+    a new Tier 1 test checks the ordering on both schemes (flush/sync before the completion flag).
+  - **Design note: chain-data handles.** `blockchainReader` and `blockchainWriter` are chain-data handles (headers,
+    pivot, best block), not trie state. T055 decides whether to split a header/chain sub-interface out of
+    `StateIngest`, and records the decision in the ADR.
+  - Runs `snap-split-verify` in the T054b mode; T055 does not start until T054b has merged.
+  - ADR: record the capability boundary and the durability property under `docs/adr/infrastructure/` (next free
+    INF number), linked from plan.md.
+  - **Merge criteria (all required):**
+    - forge sign-off ("no ETC behaviour change", Hash-scheme barrier) and vault sign-off (DataSource contract,
+      WriteBatch, flush/sync); beacon reviews the Path-scheme publish;
+    - a full Mordor SNAP run on the slice jar;
+    - **storage-rate parity (SC-010).** The batched storage-trie node-write path is the hottest one, and a wrapper
+      that adds a virtual call or an allocation per node would show up there first. So:
+      - `[STORAGE-PERF]` parity on **the same physical host** that produced the ~1.7M entries/h figure (the
+        4-core / 16 GB / SATA BX500 soak host), with the host quiescent: no other node and no sbt running;
+      - on the same workload as the baseline, the Sepolia Path-scheme storage phase, against the ~1.7M entries/h
+        figure. How the wrapped build runs against that workload (on a copy of the Sepolia datadir, or on the live
+        node) is decided by the user at T055, because Sepolia otherwise stays on fix-only builds;
+      - in addition, an A/B on that same host (pre-wrap build vs post-wrap build, same chain, same starting state)
+        shows no regression. If the pre-wrap build cannot reproduce ~1.7M/h, the fresh same-host pre-wrap
+        measurement becomes the baseline, and the PR says so;
+    - the per-slice checklist, with the ratchet item showing `SnapControllerEnv` at about 11.
+- [ ] T056 [SI-WAL] **Lighter-WAL experiment, recorded as a `StateIngest` durability policy** (optional, after T055;
+  its own PR).
+  - A relaxed-WAL policy is a setting of `StateIngest`'s durability policy, never of `StateAccess` and never of the
+    execution store, on either scheme (FR-045).
+  - FR-044 holds unchanged: the exporter publish (Path) and the pre-`completeSnapSync` barrier (Hash) run at full
+    durability whatever the ingest policy.
+  - Reviews: vault and forge. Validation: Mordor and Platåberget SNAP runs, including a crash during finalization that
+    must resume without reading undurable state. The default stays today's policy until the user decides otherwise.
+
 ## Coordinators
+
+**Amendment 2026-10-11 (applies to T061–T075).** Every C-* narrowing self-type takes `StateIngest` for storage,
+**never `StateAccess`** and never a raw storage type (FR-042). Each C-* task is done only when it **lowers the T054
+baseline total** (the storage-reference total over `snap/controller/` and `snap/actors/`, FR-043), and the PR records
+the new total in the baseline file. Its own coordinator file's figure normally falls too, but the gate is the total:
+per-file counts may move between files. The one exception is a slice whose moved code holds no storage reference at
+all: the PR says so, with the grep, and the total stays unchanged. It never rises. The "no `StateAccess`
+under `snap/`" dependency check is delivered by spec 017 (DC-4); it extends the T054 ratchet tooling and is vacuous
+until `StateAccess` exists (FR-042).
 
 - [ ] T060 Coordinator characterization (docs PR): a var × method matrix and Command × behaviour table for ARC, SRC,
   TNHC and BCC, using the research.md method. Confirm or amend the C-* boundaries in plan.md, and derive each
   coordinator module's state-interface baseline (the R14 equivalent). Every C-* task below has the narrowing commit
   and a stub test.
 - [ ] T061 [C-B1] ByteCode: `ByteCodeDispatch`, `ByteCodeResponseHandling` (the #1501 `skipPresent` check moves
-  unchanged).
-- [ ] T062 [C-A1] `AccountPeerDispatch` (includes the #1501 intake gate).
-- [ ] T063 [C-A2] `AccountTaskLifecycle`.
-- [ ] T064 [C-A3] `AccountTrieAssembly` + `finalizing` (vault).
-- [ ] T065 [C-A4] `ContractWorkCarry` (vault). Run a Mordor restart mid-account. The #1487/#1498/#1501 replay
-  invariants are unchanged.
-- [ ] T066 [C-S1] `StoragePeerDispatch`.
-- [ ] T067 [C-S2] `StorageOrderedApply` (vault).
-- [ ] T068 [C-S3] `StorageDoneMarkers` (vault). The PR quotes spec 010 R2a and shows each clause still holds. Run
-  Mordor and Platåberget restarts mid-storage.
-- [ ] T069 [C-S4] `StorageResponseProcessing`.
+  unchanged). Narrowing takes `StateIngest` (code writes, presence check), never `StateAccess`; lowers the T054
+  baseline total.
+- [ ] T062 [C-A1] `AccountPeerDispatch` (includes the #1501 intake gate). Narrowing takes `StateIngest` where it touches
+  storage, never `StateAccess`; lowers the baseline total.
+- [ ] T063 [C-A2] `AccountTaskLifecycle`. Narrowing takes `StateIngest`, never `StateAccess`; lowers the baseline total.
+- [ ] T064 [C-A3] `AccountTrieAssembly` + `finalizing` (vault). Narrowing takes `StateIngest` (trie-node writes,
+  StackTrie commit), never `StateAccess`; lowers the baseline total.
+- [ ] T065 [C-A4] `ContractWorkCarry` (vault). Narrowing takes `StateIngest`, never `StateAccess`; lowers the baseline
+  total. Run a Mordor restart mid-account. The #1487/#1498/#1501 replay invariants are unchanged.
+- [ ] T066 [C-S1] `StoragePeerDispatch`. Narrowing takes `StateIngest` where it touches storage, never `StateAccess`;
+  lowers the baseline total.
+- [ ] T067 [C-S2] `StorageOrderedApply` (vault). Narrowing takes `StateIngest` (the batched storage-trie node-write
+  path, `flushTrieNodeWrites`), never `StateAccess`; lowers the baseline total.
+- [ ] T068 [C-S3] `StorageDoneMarkers` (vault). Narrowing takes `StateIngest` (flat slots, done markers), never
+  `StateAccess`; lowers the baseline total. The PR quotes spec 010 R2a and shows each clause still holds. Run Mordor and
+  Platåberget restarts mid-storage.
+- [ ] T069 [C-S4] `StorageResponseProcessing`. Narrowing takes `StateIngest` (proof verification reads), never
+  `StateAccess`; lowers the baseline total.
 - [ ] T070 [C-H0] Split TNHC `activeBehavior` into per-concern partial functions, with an arm-order table as in T036.
-- [ ] T071 [C-H1] `FrontierPersistence` (vault). Run a Mordor heal restart.
-- [ ] T072 [C-H2] `FrontierRebuildBfs`.
-- [ ] T073 [C-H3] `HealVerification` (vault).
-- [ ] T074 [C-H4] `HealDispatch`.
-- [ ] T075 [C-H5] `HealResponseProcessing`. Check SC-002.
+  (Restructure only, no narrowing; the baseline total must not rise.)
+- [ ] T071 [C-H1] `FrontierPersistence` (vault). Narrowing takes `StateIngest` (frontier and BFS stores), never
+  `StateAccess`; lowers the baseline total. Run a Mordor heal restart.
+- [ ] T072 [C-H2] `FrontierRebuildBfs`. Narrowing takes `StateIngest` (presence reads), never `StateAccess`; lowers the
+  baseline total.
+- [ ] T073 [C-H3] `HealVerification` (vault). Narrowing takes `StateIngest` (verification reads), never `StateAccess`;
+  lowers the baseline total.
+- [ ] T074 [C-H4] `HealDispatch`. Narrowing takes `StateIngest` where it touches storage, never `StateAccess`; lowers
+  the baseline total.
+- [ ] T075 [C-H5] `HealResponseProcessing`. Narrowing takes `StateIngest` (healed nodes and code), never `StateAccess`;
+  lowers the baseline total. Check SC-002.
 - [ ] T075b [C-X0] Test-only golden of the response-size window for ARC, SRC and TNHC: initial target, grow on a ≥90%
   fill, shrink on failure, min/max clamps, and the exact DEBUG log text with its per-coordinator label. It lands
   before C-X.

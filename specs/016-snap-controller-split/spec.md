@@ -4,7 +4,8 @@
 
 **Created**: 2026-10-08
 
-**Status**: Draft. Phase 0 (characterization) is complete for the controller.
+**Status**: Draft. Phase 0 (characterization) is complete for the controller. **Amended 2026-10-11**: state
+capability boundary (`StateIngest`, env freeze ratchet); see the amendment section near the end.
 
 **Issue**: #1401 "Split SNAPSyncController"
 
@@ -207,7 +208,8 @@ None names the Sepolia node.
     `self: <Module>State & <capability traits> & <Callee>Api… =>`:
     - `<Module>State` lists exactly the shared non-hub fields the module reads or writes (research.md R14).
     - The capability traits are `SnapSharedState` (the hubs), `CoordinatorHandles` (child refs and
-      `def intakeBudget`), `PhaseFlags` and `SnapControllerEnv`.
+      `def intakeBudget`), `PhaseFlags` and `SnapControllerEnv`, plus `StateIngest` from T055 (amendment
+      2026-10-11).
     - There is one `<Callee>Api` trait for every other module, or not-yet-extracted code, that this module calls
       (research.md R14a). The core implements the Api traits of code that has not moved yet.
     - Exclusive vars become `private` state of the trait.
@@ -413,7 +415,9 @@ None names the Sepolia node.
 ### Non-goals
 
 - **NG-1** No redesign. No new phases, no new actors, no change to supervision, no new Commands. Test seams are
-  constructor parameters with production defaults.
+  constructor parameters with production defaults. **Carve-out (amendment 2026-10-11):** the `StateIngest` capability
+  trait (FR-040) is allowed. It is a type boundary over existing storage handles, not a new phase, actor or Command,
+  and it lands in one behaviour-neutral slice (T055).
 - **NG-2** No Pekko API change. The controller and coordinators are already Typed.
 - **NG-3** No config-key renames. If one is ever made, the old key stays as an alias.
 - **NG-4** No bug fixes inside move PRs. The open items in R10 (#1434, #1435, #1502, #1503, #1350, #1349, #1431, and
@@ -476,6 +480,103 @@ None names the Sepolia node.
 4. **P4** is five PRs. The routing doc is listed in CLAUDE.md's "Shared agent protocols" table.
 5. The stale `healing-frontier-persistence` comment and the reset-path asymmetries are logged in CHASE-QUEUE
    (CQ-SNAP-016-1…4).
+
+## Amendment 2026-10-11: state capability boundary (user decision)
+
+**Decision, verbatim from the user (2026-10-11):** "Adopt the hybrid sequencing. Land the env freeze now, as a
+ratchet. Approve the Spec 016 amendment and the Spec 017 stub, with the exporter durability property and the
+prefetcher-through-recorder rule written into 017's design constraints. The other adjustments (StateIngest includes
+verification reads, SyncMode lives in SyncController, R4 scoped to Address/TrieKey/Wei, recording at MPT node
+resolution) are all accepted as written."
+
+Follow-up refinements from the user, the same day: the env freeze is a **metric** that CI only lets go down, not a
+one-off block; `PathToHashExporter` is the **durability boundary** and an explicit property of the capability; and the
+`StateIngest` wrap of the batched storage-trie write path (from #1548) is gated on same-host storage-rate parity. The
+prefetcher/recorder rule in the quote above was later superseded for spec 017 (user review of staging 0.9.59, same day):
+the witness recorder is an `MptStorage` decorator on the outermost execution layer, above `DecodedNodeCache`, so the BAL
+prefetcher stays enabled in capture mode (spec 017 DC-2, DC-3). None of this changes spec 016's own tasks.
+
+**Why.** The data plane has two kinds of state writer that today share the same handles:
+
+- **ingest**: bulk trie-range and trie-node writes with no execution (SNAP downloads, healing, snapshot import from
+  spec 013, era imports). It cannot be recorded as an execution witness, and it may use relaxed durability while it
+  runs;
+- **access**: EVM execution reads and writes (`ledger/BlockExecution`, `BlockPreparator`, through `Blockchain`'s
+  backing MPT storage). It is always fully durable, and it is the only path that can be wrapped to record an
+  execution witness (spec 017).
+
+Both share the node store. On Path scheme, SNAP writes `PathNodeStorage` and `PathToHashExporter` publishes into the
+hash-keyed store that execution reads. On Hash scheme (ETC/Mordor), SNAP writes the store execution reads directly.
+Today the boundary between the two is a convention. This amendment makes the SNAP side of it a type, `StateIngest`,
+and spec 017 adds the execution side, `StateAccess`.
+
+**What changes in this spec.** The controller modules (M1–M11) are done. Two slices are inserted after them and
+before the coordinator stage (T060), and every coordinator task is amended:
+
+1. **Env freeze ratchet (T054).** `SnapControllerEnv`'s member count (18) and per-module storage-reference counts for
+   `snap/controller/` and `snap/actors/` become a committed baseline that CI lets go **down only**. It is the
+   "coupling we can measure" metric. The tooling is a separate PR (branch `test/snap-016-env-freeze`).
+2. **`StateIngest` (T055).** One behaviour-neutral PR that introduces the capability trait over the 8 storage handles
+   in `SnapControllerEnv` and the Path-scheme batched storage-trie node-write path (`flushTrieNodeWrites`, from
+   #1548), moves the controller modules onto it, and shrinks
+   `SnapControllerEnv` from 18 members to about 11.
+3. **Coordinator stage (T061–T075).** Each C-* narrowing takes `StateIngest`, never `StateAccess`, and lowers the
+   T054 baseline total (its own coordinator file's figure normally falls too, but the gate is the total).
+4. **The lighter-WAL experiment (T056)** is a per-capability durability policy on `StateIngest`. It is never applied
+   to `StateAccess` or to the execution store.
+
+### Requirements added by the amendment
+
+- **FR-040** `StateIngest` is a capability trait in `snap/controller/`. It wraps the 8 storage handles of
+  `SnapControllerEnv` (`appStateStorage`, `stateStorage`, `evmCodeStorage`, `flatSlotStorage`, `pathNodeStorageOpt`,
+  `blockchainReader`, `blockchainWriter`, `validatorFactory: MptStorage => StateValidator`) and the Path-scheme
+  batched storage-trie node-write path (`SnapPathTrie` → `PathNodeStorage.writeStorageNode`, buffered in
+  `StorageRangeCoordinator`'s `trieNodeWrites` and committed by `flushTrieNodeWrites`; introduced by #1548). Hash
+  scheme already batches at 8 MiB. It includes the **verification reads** SNAP needs: proof checks, healing presence
+  checks, state validation and publish verification. It exposes no EVM
+  execution read or write.
+- **FR-041** After T055, `SnapControllerEnv` holds no storage handle. Its member count drops from 18 to about 11
+  (18 − 8 handles + 1 `stateIngest`). No module under `snap/controller/` names a storage type except through
+  `StateIngest`.
+- **FR-042** SNAP code never holds `StateAccess` (spec 017). Every coordinator narrowing (C-*) takes `StateIngest`.
+  The "no `StateAccess` under `snap/`" dependency check is delivered by spec 017 (DC-4). It extends the T054 ratchet
+  tooling, and it is vacuous until `StateAccess` exists.
+- **FR-043** The ratchet is a metric, and T054's tooling defines what counts: `scripts/snap-split/verify.py` step 8,
+  against the committed `scripts/snap-split/storage-baseline.json` (PR #1570). In short:
+  - `[env-freeze]`: the `SnapControllerEnv` member count (18) and its storage-typed members only go down;
+  - `[storage-refs]`: storage-type identifiers and storage member accesses in code under `snap/controller/` and
+    `snap/actors/`, with comments excluded. The **total across both directories only goes down**; per-file counts may
+    move between files, so a split slice that moves references into a new module file is not penalised;
+  - `[raw-import]`: no new raw RocksDB / `DataSource` / `WriteBatch` import in those directories.
+
+  Calls on `StateIngest` are **not** storage references. `StateIngest` itself is held to its own member cap (routing
+  doc, capability caps). A PR that lowers a count records the new value in the baseline file in the same PR.
+- **FR-044 (exporter durability property).** `PathToHashExporter`'s publish is `StateIngest`'s **commit to the
+  access store**. Its output is durable (flushed and synced) before SNAP finalization marks SNAP complete and before
+  execution reads from it, even when ingest writes ran under a relaxed-WAL policy. On Hash scheme, where there is no
+  export step, an explicit durable flush/sync barrier runs before `completeSnapSync`. Otherwise a crash during
+  finalization leaves execution reading a store that was never durably written. This is a property of the
+  capability, documented on the trait and tested, not an implementation detail of the exporter.
+- **FR-045** A durability policy is per capability. A relaxed policy (for example a lighter WAL) may be set on
+  `StateIngest` only, and it never reaches the execution store on either scheme.
+
+### Success criteria added by the amendment
+
+- **SC-008** After T055, `SnapControllerEnv` has about 11 members and no storage handle, and the T054 baseline shows
+  it.
+- **SC-009** After the last coordinator slice, no file under `snap/actors/` references a storage type except through
+  `StateIngest`, and the T054 storage-reference **total** is at its post-coordinator value or lower (per-file counts
+  may move between files, FR-043).
+- **SC-010** The `StateIngest` wrap of the batched storage-trie node-write path (`flushTrieNodeWrites`) shows no
+  storage-rate regression:
+  - `[STORAGE-PERF]` parity on **the same physical host** that produced the ~1.7M entries/h figure (the 4-core /
+    16 GB / SATA BX500 soak host), with the host quiescent: no other node and no sbt running;
+  - on the same workload as the baseline, the Sepolia Path-scheme storage phase, against the ~1.7M entries/h figure.
+    How the wrapped build runs against that workload (on a copy of the Sepolia datadir, or on the live node) is
+    decided by the user at T055, because Sepolia otherwise stays on fix-only builds;
+  - in addition, an A/B on that same host (pre-wrap build vs post-wrap build, same chain, same starting state) shows no
+    regression. If the pre-wrap build cannot reproduce ~1.7M/h, the fresh same-host pre-wrap measurement becomes the
+    baseline, and the PR says so.
 
 ## Open Questions
 

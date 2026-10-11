@@ -2,7 +2,7 @@
 
 **Branch**: `docs/spec-016-snap-split` (this plan). Each slice has its own branch, listed in `tasks.md`.
 
-**Date**: 2026-10-08
+**Date**: 2026-10-08. **Amended**: 2026-10-11 (state capability boundary; see the amendment section at the end)
 
 **Spec**: [spec.md](./spec.md) · **Phase 0**: [research.md](./research.md) · **Routing doc (draft)**:
 [`.claude/agent-protocols/snap-sync.md`](../../.claude/agent-protocols/snap-sync.md)
@@ -25,8 +25,11 @@ behaviour. The work runs in this order:
 3. **Controller modules (M1–M11)**, one per PR, lowest coupling first. Each PR has two commits: a byte-identical
    move into a trait, then a **required** narrowing of the self-type to a per-module state interface plus capability
    traits (D1, ADR CON-013).
-4. **Coordinators**: the same method, after a short per-coordinator characterization.
-5. **R1**: DFS → BFS wording, after the moves.
+4. **Amendment 2026-10-11 slices**: the env freeze ratchet (T054) and the `StateIngest` capability (T055), after
+   the controller modules and before the coordinators.
+5. **Coordinators**: the same method, after a short per-coordinator characterization. Each narrowing takes
+   `StateIngest`, never `StateAccess`.
+6. **R1**: DFS → BFS wording, after the moves.
 
 PR #1501 (spec 014) **merged on 2026-10-08** (`dfa4a8836`), so the gate is met. P1 starts as soon as S0a–S0g have
 merged, without waiting for Sepolia to reach head (D6). The live Sepolia node is not used to validate any slice.
@@ -118,7 +121,14 @@ The pieces of the narrowed form:
   `progressMonitor`, `requestTracker` (getters, plus setters where written). The controller core implements it.
 - **`CoordinatorHandles`** (P1) holds the child refs, and **`PhaseFlags`** (P2) the phase flags.
 - **`SnapControllerEnv`** carries `ctx`, `timers`, `snapSyncConfig`, `log`/`asyncLog`, the storages and the metrics.
-  It is a capability trait, and it is counted separately from state.
+  It is a capability trait, and it is counted separately from state. **Amended 2026-10-11:** the storages leave it.
+  T055 moves the 8 storage handles into **`StateIngest`**, and `SnapControllerEnv` drops from 18 members to about 11
+  (18 − 8 + 1 `stateIngest`). The count is a ratchet that only goes down (T054).
+- **`StateIngest`** (T055, amendment 2026-10-11) is the SNAP data-plane capability: bulk trie-range and trie-node
+  writes with no execution, plus the verification reads SNAP needs (proof checks, healing presence checks, state
+  validation, publish verification). It carries a per-capability durability policy, and its commit to the access
+  store (`PathToHashExporter` on Path scheme, a durable barrier on Hash scheme) is always fully durable (spec
+  FR-044). Its execution counterpart, `StateAccess`, belongs to spec 017, and SNAP code never holds it.
 - **`<Module>State`** declares only the shared fields this module touches that are not hubs. Abstract `var`
   declarations, or getter/setter pairs, keep each body unchanged: `x = y` still compiles against a setter.
 - **`<Other>Api`**: when one module calls another, it names the callee's small **API trait** (for example
@@ -160,7 +170,7 @@ by the required CI job `snap-split-verify` on **every commit** of the PR:
   - the `<Module>State` member count;
   - the Api members required (the sum over `<Callee>Api` traits in the self-type);
   - the member count of each shared capability trait (`SnapSharedState`, `SnapControllerEnv`, `CoordinatorHandles`,
-    `PhaseFlags`).
+    `PhaseFlags`, and `StateIngest` from T055).
 
   The PR pastes them, and the routing doc records them. Growth over the previously recorded value, or over research.md
   R14/R14a for a first recording, needs a justification line. The capability-trait caps live in the routing doc.
@@ -334,6 +344,11 @@ the module that owns the implementation for that behaviour. The table lists each
 
 Boundaries are preliminary (research.md R12) and are confirmed by T060 before C-B1.
 
+**Amendment 2026-10-11.** Every C-* narrowing self-type names `StateIngest` for storage, never `StateAccess` and never a
+raw storage type. Each C-* PR lowers the T054 storage-reference total (its coordinator file's figure normally falls too,
+but the gate is the total). The coordinators get their handles through `ChildFactories` today; T055 changes the spawn
+arguments to pass a `StateIngest`, and the C-* narrowing commits then move the call sites onto it.
+
 | # | Coordinator → trait / file | Contents | Notes | Est. lines |
 |---|---|---|---|---|
 | C-B1 | ByteCode → `actors/bytecode/ByteCodeDispatch.scala`, `ByteCodeResponseHandling.scala` | cooldown, response bytes, assign/dispatch/redispatch; `handleByteCodesResponse`, `validateReturnedCodes`, `storeBytecodesWithHashes`, `filterAndDedupeCodeHashes`, the #1501 `skipPresent` check | one PR (coordinator is 870 lines) | ~350 |
@@ -382,6 +397,10 @@ Boundaries are preliminary (research.md R12) and are confirmed by T060 before C-
 | 22 | **M9** Lifecycle/reset + dormant | move | ~390 | prism, vault, forge | Mordor dormant/wake |
 | 23 | **M10** Pivot refresher | move | ~570 | prism, beacon, forge | Platåberget across ≥ 3 refreshes; Mordor |
 | 24 | **M11** Download supervisor | move | ~850 | prism, forge | full Mordor SNAP |
+| 24a | **T054** env freeze ratchet: `verify.py` step 8 against `scripts/snap-split/storage-baseline.json` (`SnapControllerEnv` count 18; storage-reference total over `snap/controller/` + `snap/actors/`, down-only) (amendment 2026-10-11; PR #1570, `test/snap-016-env-freeze`) | tooling | script + baseline file | prism | — |
+| 24a′ | **T054b** `verify.py` mode for a behaviour-neutral capability-introduction PR (neither a move nor a narrowing); needed before T055; owned by the T054 tooling line | tooling | script + self-tests | prism | — |
+| 24b | **T055** `StateIngest` capability: 8 env storage handles + the batched storage-trie node-write path (`flushTrieNodeWrites`, from #1548); modules move to it; `SnapControllerEnv` 18 → ~11; exporter durability property (FR-044) | refactor | ~+250 / −150 (estimate) | **forge**, **vault**, prism; beacon for the Path-scheme publish | Mordor full SNAP; `[STORAGE-PERF]` parity on the same physical host that produced the ~1.7M entries/h figure (the 4-core/16 GB/SATA BX500 soak host, quiescent), on the same workload (the Sepolia Path-scheme storage phase), plus a same-host pre-wrap vs post-wrap A/B (SC-010) |
+| 24c | **T056** lighter-WAL experiment as a `StateIngest` durability policy (optional; after T055) | experiment | small | **vault**, forge | Mordor + Platåberget SNAP with a crash during finalization |
 | 25 | **T060** coordinator characterization (docs) | docs | — | — | — |
 | 26 | **C-B1** | move | ~350 | prism | — |
 | 27–30 | **C-A1…A4** | move | ~1,350 | prism; **vault** on A3 and A4 | Mordor restart mid-account after A4 |
@@ -568,6 +587,7 @@ src/main/scala/com/chipprbots/ethereum/blockchain/sync/snap/
 │   ├── CoordinatorHandles.scala        # P1
 │   ├── PhaseFlags.scala                # P2
 │   ├── SnapSharedState.scala, SnapControllerEnv.scala   # hub interface + environment capability (M2, the first trait-based module PR)
+│   ├── StateIngest.scala               # T055 (amendment 2026-10-11): SNAP data-plane capability + durability policy
 │   ├── <Module>State / <Module>Api     # declared in each module's file (narrowing commit)
 │   ├── ChildFactories.scala            # S0b seam
 │   ├── ResumePolicy.scala, StagnationPolicy.scala, PivotPolicy.scala, HealPolicy.scala   # M1
@@ -606,3 +626,68 @@ outside `snap` changes. The public Command ADTs stay in their current objects.
 | `src/main` change in a "test" slice (S0b `ChildFactories`) | Pins #1378, #1319 and #1371 cannot be observed without a spawn seam, because the impl class is private. | A test-only reflection hack is brittle and not idiomatic. A constructor seam with a production default has precedent (`validatorFactory`). |
 | Two commits per module: a byte-identical trait move, then **required** narrowing to state interfaces (D1, ADR CON-013), rather than classes from the start | The move stays mechanically checkable, and narrowing still gives real module boundaries: (a) no impl self-type, (b) stub-testable, (c) measured coupling, (d) no init hazard. | Classes from the start change every body in the move commit, so the move cannot be verified. Traits without narrowing are only a file split. |
 | Five P4 PRs instead of one | Arm-order mistakes are silent. Smaller diffs keep the arm-order table reviewable. | One 1,150-line restructure is too large to review for arm order. |
+
+## Amendment 2026-10-11: state capability boundary
+
+User decision of 2026-10-11, quoted in spec.md ("Amendment 2026-10-11"). This section records how it changes the
+plan. Nothing above that is not marked "amended" changes.
+
+### What the amendment adds
+
+| Item | Where | Owner / review |
+|---|---|---|
+| Env freeze ratchet: `verify.py` step 8 against `scripts/snap-split/storage-baseline.json`: the `SnapControllerEnv` member count (18) and the storage-reference total over `snap/controller/` and `snap/actors/` (comments excluded; files may trade), which CI lets go **down only** (spec FR-043) | T054; PR #1570 on `test/snap-016-env-freeze` | prism |
+| `verify.py` mode for a behaviour-neutral capability-introduction PR | T054b, owned by the T054 tooling line, before T055 | prism |
+| `StateIngest` capability trait | T055, one behaviour-neutral PR between M11 and T060 | forge, vault, Mordor run, perf parity |
+| Coordinator narrowings take `StateIngest`, never `StateAccess`, and each lowers the baseline total | T061–T075 (amended) | as in the slice list |
+| Lighter-WAL experiment as a per-capability durability policy on `StateIngest` | T056 (optional) | vault, forge |
+| `StateAccess`, execution witnesses, `SyncMode`, backfill, opaque `Address`/`TrieKey`/`Wei` | **spec 017** (`specs/017-state-capabilities-witnesses/`), which depends on T055 | beacon, forge, vault |
+
+### `StateIngest`: shape and rules
+
+- **Members.** It wraps the 8 storage handles now in `SnapControllerEnv`: `appStateStorage`, `stateStorage`,
+  `evmCodeStorage`, `flatSlotStorage`, `pathNodeStorageOpt`, `blockchainReader`, `blockchainWriter` and
+  `validatorFactory: MptStorage => StateValidator`. It also wraps the Path-scheme batched storage-trie node-write path
+  (`SnapPathTrie` → `PathNodeStorage.writeStorageNode`, buffered in `StorageRangeCoordinator`'s `trieNodeWrites` and
+  committed by `flushTrieNodeWrites`; introduced by #1548). Hash scheme already batches at 8 MiB. The exact method
+  surface is derived in T055 from the modules' real uses, the way R14 derived the state interfaces.
+- **Chain-data handles (design note, T055).** `blockchainReader` and `blockchainWriter` are chain-data handles
+  (headers, pivot, best block), not trie state. T055 decides whether to split a header/chain sub-interface out of
+  `StateIngest`, and records the decision in the ADR.
+- **Verification reads are in.** Proof checks, healing presence checks, state validation and the publish
+  verification are reads SNAP needs to decide what to write, so they belong to ingest, not to access.
+- **No execution.** `StateIngest` exposes no EVM account/storage read or write. Those are `StateAccess` (spec 017).
+- **Who uses it.** The controller modules (moved by T055), the coordinators (moved by their C-* narrowings), and,
+  later, snapshot import (spec 013) and era imports.
+- **Durability policy.** `StateIngest` carries a per-capability durability policy (default: today's behaviour). A
+  relaxed policy (T056) is allowed only here.
+- **The exporter is the durability boundary (FR-044).** `PathToHashExporter`'s publish is `StateIngest`'s commit to
+  the access store. It runs under full durability, and its output is flushed and synced before finalization marks
+  SNAP complete and before execution reads it, whatever policy the ingest writes used. On Hash scheme there is no
+  export step, so an explicit durable flush/sync barrier runs before `completeSnapSync`. Without this, a crash during
+  finalization leaves execution reading a store that was never durably written. Spec 017's DC-1 restates it as a
+  design constraint.
+
+### Why T055 is not a move or a narrowing (verify.sh)
+
+Wrapping the handles changes call sites (`appStateStorage.x` becomes a `StateIngest` call), so T055 is neither a
+byte-identical move (steps 1–2) nor a signature-only narrowing (step 6). It runs `snap-split-verify` in a mode that
+**T054b** adds (owned by the T054 tooling line): the move and signature checks are replaced by
+"call-site substitution only: every changed line in a module file replaces a storage handle with the matching
+`StateIngest` member", while (a), (d), `[counts]`, the test-hunk guard, the pin and golden protection and the ratchet
+still apply, and calls on `StateIngest` are not storage references. T055 does not start until T054b has merged.
+
+### ADR
+
+The capability boundary and the exporter durability property are an architectural decision (constitution VII). T055
+records them in a new ADR under `docs/adr/infrastructure/` (next free INF number; this is storage and durability, not a
+consensus rule), linked from this plan, in the T055 PR.
+
+### Constitution Check (amendment)
+
+- **I (consensus).** No consensus rule changes. Durability affects crash safety of state that execution reads, so
+  forge (ETC, Hash scheme) and beacon (Path-scheme publish) review T055 and T056; vault reviews both.
+- **III (tests).** T055 adds a Tier 1 test of the durability property on both schemes (a store fake that records
+  flush/sync ordering) and keeps every existing assertion.
+- **V (gates).** Unchanged: CI is the compiler (Complexity Tracking, row 1).
+

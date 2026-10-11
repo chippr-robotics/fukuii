@@ -6,6 +6,7 @@ doc to point an agent at **one** phase without having it read the 6,646-line con
 Used by: all agents touching `blockchain/sync/snap/`. The primary reviewers are named per row.
 
 Spec: `specs/016-snap-controller-split/` (#1401). Phase 0 data: `specs/016-snap-controller-split/research.md`.
+State capabilities and execution witnesses: `specs/017-state-capabilities-witnesses/` (stub; depends on T055).
 
 **Status of this doc**: **draft**. Rows marked **current** point at today's code (`staging@9a6681cc0`; line numbers
 moved when PR #1501 merged on 2026-10-08, so search by symbol; post-#1501 anchors are in research.md R1). Each spec-016 slice flips its rows to **target (post-split)**, with the
@@ -28,6 +29,21 @@ unless stated.
   CL pivot hint = ETH/Sepolia. ETC-reachable behaviour changes need **forge**; CL-pivot and Path-scheme changes need
   **beacon**.
 - **Do not route SNAP work to `loom`.** The SNAP actors are already Pekko Typed.
+- **State capability boundary (spec 016 amendment 2026-10-11; spec 017).** SNAP code reaches storage only through
+  **`StateIngest`** (from T055): bulk trie-range/node writes with no execution, plus SNAP's verification reads (proof
+  checks, healing presence checks, state validation, publish verification). SNAP code **never holds `StateAccess`**,
+  the EVM-execution capability of spec 017. The dependency check for this is delivered by spec 017 (DC-4); it will
+  extend the T054 ratchet tooling, and it is vacuous until `StateAccess` exists. A relaxed durability policy (for
+  example a lighter WAL, T056) may be set on `StateIngest` only. **The exporter is the durability boundary:** the
+  `PathToHashExporter` publish (Path scheme) and the explicit flush/sync barrier before `completeSnapSync` (Hash
+  scheme) always run at full durability, before SNAP is marked complete and before execution reads the store
+  (FR-044). Changes there need **vault** plus **forge** (Hash) or **beacon** (Path).
+- **Env freeze ratchet (T054, PR #1570).** `scripts/snap-split/verify.py` step 8 checks the PR head against
+  `scripts/snap-split/storage-baseline.json`: the `SnapControllerEnv` member count (18) only goes down, and so does
+  the storage-reference **total** (storage-type identifiers and storage member accesses, comments excluded) over
+  `snap/controller/` and `snap/actors/`; per-file counts may move between files. Calls on `StateIngest` are not
+  storage references. A PR that lowers a count records it in the baseline in the same PR. The coordinator stage pays
+  the table down. T055 runs under the T054b verify mode.
 - **No sbt on the soak host.** CI is the compiler.
 - **Module form (ADR CON-013).** Every module is a trait whose self-type is
   `<Module>State & <capabilities> & <Callee>Api…`. A module file never mentions `SNAPSyncControllerImpl` or a
@@ -98,7 +114,8 @@ causes it.
 | `SnapSharedState` | **5**: `pivotBlock`, `stateRoot`, `currentPhase` (abstract `var`s: getter and setter in one member), `progressMonitor`, `requestTracker`. Recorded at M2: 5 (`verify.sh` `[counts] SnapSharedState=5`) | T041a (M2) |
 | `CoordinatorHandles` | **12**: the 4 coordinator refs, `chainDownloader` (`ChainDownloaderHandle`), `def intakeBudget`, `stopChild`, `stopAll`, `broadcastPeerUnavailable`, `pivotRefreshed`, `reArmRangeCoordinators`, `forwardResponse`. Two more than the 10 the plan enumerated: `stopChild` (abstract, the core's `ctx.stop`; the trait cannot reach `ctx`, and `stopAll`/`ChainDownloaderHandle.stop` need it) and `reArmRangeCoordinators` (the two account + storage re-arm sites are a different fan-out from the four-way `pivotRefreshed`) | P1 |
 | `PhaseFlags` | **10**: the 9 flags of FR-011 + `reset(kind)`. Recorded at P2: 10 (`verify.sh` `[counts] PhaseFlags=10`), equal to the cap. The `ResetKind` enum lives in `object PhaseFlags` and is not a member. `cancelSyncTimers` stays in the core (it needs `timers`) and is not a member | P2 |
-| `SnapControllerEnv` | **18**: `ctx`, `timers`, `snapSyncConfig`, `syncConfig`, `asyncLog`, `appStateStorage`, `stateStorage`, `evmCodeStorage`, `flatSlotStorage`, `validatorFactory`, `snapValidationEc`, `networkPeerManager`, `blockchainReader`, `blockchainWriter`, `peerEventBus`, `syncController`, `childFactories`, `pathNodeStorageOpt`. Recorded at M2: 11; M3: 13 (`networkPeerManager`, `blockchainReader`: constructor parameters the peer pool's bodies reach, `pollHandshakedPeers` / `ensureSnapServerPeersConnected` and `calibratePivotTD`; the peer manager is also every child spawn's, so it is environment, not peer-pool state); M4: 18 (`blockchainWriter`, `peerEventBus`, `syncController`, `childFactories`: constructor parameters the finalization bodies reach, injected collaborators that the pivot, healing and spawn paths use too; `pathNodeStorageOpt`: the first derived store a module needs, a strict core val, also read by the healing, resume and account/storage spawns). M5: 18, unchanged (the resume planner's `storageDoneStorage` and `scheduler` went to `SnapResumePlannerState` instead, CQ-SNAP-016-16). M6b: 18, unchanged (healing's `isPoSChain` and `ec` went to `HealingOrchestratorState`). Metrics are not members (`SNAPSyncMetrics` is a global object); the other derived stores are added by the first module that needs them, with a justification line | T041a (M2), M3, M4 |
+| `SnapControllerEnv` | **18, frozen as a down-only ratchet (T054); target about 11 after T055**, when the 8 storage handles (`appStateStorage`, `stateStorage`, `evmCodeStorage`, `flatSlotStorage`, `validatorFactory`, `blockchainReader`, `blockchainWriter`, `pathNodeStorageOpt`) move to `StateIngest` and `stateIngest` joins (amendment 2026-10-11). Members today: `ctx`, `timers`, `snapSyncConfig`, `syncConfig`, `asyncLog`, `appStateStorage`, `stateStorage`, `evmCodeStorage`, `flatSlotStorage`, `validatorFactory`, `snapValidationEc`, `networkPeerManager`, `blockchainReader`, `blockchainWriter`, `peerEventBus`, `syncController`, `childFactories`, `pathNodeStorageOpt`. Recorded at M2: 11; M3: 13 (`networkPeerManager`, `blockchainReader`: constructor parameters the peer pool's bodies reach, `pollHandshakedPeers` / `ensureSnapServerPeersConnected` and `calibratePivotTD`; the peer manager is also every child spawn's, so it is environment, not peer-pool state); M4: 18 (`blockchainWriter`, `peerEventBus`, `syncController`, `childFactories`: constructor parameters the finalization bodies reach, injected collaborators that the pivot, healing and spawn paths use too; `pathNodeStorageOpt`: the first derived store a module needs, a strict core val, also read by the healing, resume and account/storage spawns). M5: 18, unchanged (the resume planner's `storageDoneStorage` and `scheduler` went to `SnapResumePlannerState` instead, CQ-SNAP-016-16). M6b: 18, unchanged (healing's `isPoSChain` and `ec` went to `HealingOrchestratorState`). Metrics are not members (`SNAPSyncMetrics` is a global object); the other derived stores are added by the first module that needs them, with a justification line | T041a (M2), M3, M4 |
+| `StateIngest` | **set at T055** (amendment 2026-10-11): the 8 storage handles above, the Path-scheme batched storage-trie node-write path (`flushTrieNodeWrites`, from #1548) and the durability policy, as the method surface T055 derives from the modules' real uses; the cap is that count, and it grows only with a justification line. Includes the verification reads. T055 decides whether `blockchainReader`/`blockchainWriter` move to a header/chain sub-interface (ADR). No EVM execution member: that is `StateAccess` (spec 017), which no SNAP file may name. The exporter durability property (FR-044) is documented on the trait | T055 |
 
 ## Pin tests (S0a/S0b): never edited by a move PR
 
