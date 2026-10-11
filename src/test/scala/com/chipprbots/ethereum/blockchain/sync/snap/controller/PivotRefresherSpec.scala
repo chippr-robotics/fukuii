@@ -89,6 +89,7 @@ private[snap] class StubPivotRefresherState(
   var pivotProbeRequestId: Option[BigInt] = None
   var proactiveRollNeedsProbe: Boolean = false
   var pendingProbeCommit: Option[(BigInt, BlockHeader, String)] = None
+  var lastProbeAttemptMs: Long = 0L
   var probeAttemptCount: Int = 0
   var consecutivePivotRefreshes: Int = 0
   var criticalFailureCount: Int = 0
@@ -97,6 +98,7 @@ private[snap] class StubPivotRefresherState(
   def PivotBootstrapRetryKey: String = "pivot-bootstrap-retry"
   def ProbeCooldownMs: Long = 30_000L
   def SnapServeWindowMargin: BigInt = BigInt(50)
+  var storageContractProgressPct: Double = 0.0
 
   // SnapSharedState
   var pivotBlock: Option[BigInt] = None
@@ -395,4 +397,104 @@ class PivotRefresherSpec extends AnyFlatSpec with Matchers:
     h.parent.receiveAll() shouldBe Seq(StartRegularSyncBootstrap(BigInt(1_000 - 64)))
     h.module.stagnationResets shouldBe Seq(StagnationWatchdog.ResetReason.PivotRefreshHeaderFetch)
     h.module.pivotBlock shouldBe Some(BigInt(400))
+  }
+
+  /** Run the proactive roll trigger once with the SNAP peers' best block at `best`. */
+  private def rollAt(h: Harness, best: BigInt): Unit =
+    h.module.networkBest = Some(best)
+    h.call(_.maybeProactivePivotRoll())
+
+  it should "roll the pivot once it is more than 100 blocks behind the SNAP peers' best block" taggedAs UnitTest in {
+    val h = new Harness()
+
+    rollAt(h, BigInt(500))
+    h.module.proactiveRollNeedsProbe shouldBe false
+    h.module.lastProbeAttemptMs shouldBe 0L
+    h.module.pendingPivotRefresh shouldBe None
+    h.parent.hasMessages shouldBe false
+
+    // Rolled: the probe flag is set, the cooldown clock is stamped, and the in-place refresh asks the parent for the
+    // header of the roll target, the best block minus the 64-block pivot offset.
+    rollAt(h, BigInt(501))
+    h.module.proactiveRollNeedsProbe shouldBe true
+    h.module.lastProbeAttemptMs should be > 0L
+    h.module.pendingPivotRefresh shouldBe Some((BigInt(501 - 64), "proactive pivot roll"))
+    h.parent.receiveAll() shouldBe Seq(StartRegularSyncBootstrap(BigInt(501 - 64)))
+    h.module.stagnationResets shouldBe Seq(StagnationWatchdog.ResetReason.PivotRefreshHeaderFetch)
+    h.module.pivotBlock shouldBe Some(BigInt(400))
+  }
+
+  it should "not roll again inside 50 blocks of the last committed roll, nor without a SNAP peer's best block" taggedAs UnitTest in {
+    val h = new Harness()
+    h.module.lastProactivePivotBlock = Some(BigInt(551))
+
+    rollAt(h, BigInt(601))
+    h.module.proactiveRollNeedsProbe shouldBe false
+    h.parent.hasMessages shouldBe false
+
+    h.module.networkBest = None
+    h.call(_.maybeProactivePivotRoll())
+    h.module.proactiveRollNeedsProbe shouldBe false
+    h.parent.hasMessages shouldBe false
+
+    rollAt(h, BigInt(602))
+    h.module.proactiveRollNeedsProbe shouldBe true
+    h.module.pendingPivotRefresh shouldBe Some((BigInt(602 - 64), "proactive pivot roll"))
+    h.parent.receiveAll() shouldBe Seq(StartRegularSyncBootstrap(BigInt(602 - 64)))
+  }
+
+  it should "not roll while a readiness probe is in flight or its commit is deferred" taggedAs UnitTest in {
+    val h = new Harness()
+    h.module.pivotProbeRequestId = Some(BigInt(7))
+
+    rollAt(h, BigInt(600))
+    h.module.proactiveRollNeedsProbe shouldBe false
+    h.parent.hasMessages shouldBe false
+
+    h.module.pivotProbeRequestId = None
+    h.module.pendingProbeCommit = Some((BigInt(500), headerAt(500, rootB), "proactive pivot roll"))
+    rollAt(h, BigInt(600))
+    h.module.proactiveRollNeedsProbe shouldBe false
+    h.module.lastProbeAttemptMs shouldBe 0L
+    h.module.pendingPivotRefresh shouldBe None
+    h.parent.hasMessages shouldBe false
+  }
+
+  it should "roll in the storage phase until 80% of the contracts are done" taggedAs UnitTest in {
+    val h = new Harness()
+    h.module.currentPhase = SyncPhase.ByteCodeAndStorageSync
+    h.module.storageContractProgressPct = 0.80
+
+    rollAt(h, BigInt(600))
+    h.module.proactiveRollNeedsProbe shouldBe false
+    h.parent.hasMessages shouldBe false
+
+    h.module.storageContractProgressPct = 0.79
+    rollAt(h, BigInt(600))
+    h.module.proactiveRollNeedsProbe shouldBe true
+    h.module.pendingPivotRefresh shouldBe Some((BigInt(600 - 64), "proactive pivot roll"))
+    h.parent.receiveAll() shouldBe Seq(StartRegularSyncBootstrap(BigInt(600 - 64)))
+  }
+
+  it should "not roll outside the two download phases, without a pivot, or inside the 30-second probe cooldown" taggedAs UnitTest in {
+    val h = new Harness()
+
+    h.module.currentPhase = SyncPhase.StateHealing
+    rollAt(h, BigInt(600))
+    h.module.proactiveRollNeedsProbe shouldBe false
+
+    h.module.currentPhase = SyncPhase.AccountRangeSync
+    h.module.pivotBlock = None
+    rollAt(h, BigInt(600))
+    h.module.proactiveRollNeedsProbe shouldBe false
+
+    // The last probe stamped an hour ahead: inside the cooldown however slow the run.
+    h.module.pivotBlock = Some(BigInt(400))
+    val stamped = System.currentTimeMillis() + 3_600_000L
+    h.module.lastProbeAttemptMs = stamped
+    rollAt(h, BigInt(600))
+    h.module.proactiveRollNeedsProbe shouldBe false
+    h.module.lastProbeAttemptMs shouldBe stamped
+    h.module.pendingPivotRefresh shouldBe None
+    h.parent.hasMessages shouldBe false
   }

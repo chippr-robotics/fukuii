@@ -7,7 +7,6 @@ import org.apache.pekko.util.ByteString
 import scala.collection.mutable
 import scala.concurrent.duration.*
 
-import com.chipprbots.ethereum.blockchain.sync.snap.*
 import com.chipprbots.ethereum.blockchain.sync.snap.ChainDownloader
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController.*
@@ -34,6 +33,7 @@ private[snap] trait PivotRefresherState:
   var pivotProbeRequestId: Option[BigInt]
   var proactiveRollNeedsProbe: Boolean
   var pendingProbeCommit: Option[(BigInt, BlockHeader, String)]
+  var lastProbeAttemptMs: Long
   var probeAttemptCount: Int
   var consecutivePivotRefreshes: Int
   var criticalFailureCount: Int
@@ -42,6 +42,7 @@ private[snap] trait PivotRefresherState:
   def PivotBootstrapRetryKey: String
   def ProbeCooldownMs: Long
   def SnapServeWindowMargin: BigInt
+  def storageContractProgressPct: Double
 
 private[snap] trait PivotRefreshApi:
   def refreshPivotInPlace(
@@ -49,6 +50,9 @@ private[snap] trait PivotRefreshApi:
       countsTowardHealBudget: Boolean = true,
       pivotUnservable: Boolean = false
   ): Unit
+
+private[snap] trait PivotRollTriggerApi:
+  def maybeProactivePivotRoll(): Unit
 
 private[snap] trait PivotRefreshCommitApi:
   def completePivotRefreshWithStateRoot(newPivotBlock: BigInt, newPivotHeader: BlockHeader, reason: String): Unit
@@ -70,13 +74,18 @@ private[snap] trait PivotProbeResponseApi:
   * matches the probe's request id. It also keeps the proactive roll's trigger (the `CheckDownloadStagnation` arm) and
   * the `DelayedRestart` arm.
   */
-private[snap] trait PivotRefresher extends PivotRefreshApi with PivotRefreshCommitApi with PivotProbeResponseApi:
+private[snap] trait PivotRefresher
+    extends PivotRefreshApi
+    with PivotRollTriggerApi
+    with PivotRefreshCommitApi
+    with PivotProbeResponseApi:
   self: PivotRefresherState & SnapSharedState & SnapControllerEnv & CoordinatorHandles & PhaseFlags & LifecycleApi &
     PeerPoolApi & PivotSelectionApi & PivotBestBlockApi & ProbeTargetApi & FinalizationApi & ChainDownloadStartApi &
     LazyHandoffApi & StagnationResetApi =>
 
   private lazy val MaxProbeAttempts: Int = 5 // 5 × 30s = 150s max deferral before forced roll
   private lazy val MaxConsecutivePivotRefreshes = 10
+  private lazy val SnapServeWindowBlocks: BigInt = BigInt(100)
   // Pivot blocks confirmed unservable in this session. When a refreshPivotInPlace resolves
   // to the same block as one in this set, fast-track consecutivePivotRefreshes to the
   // threshold so dormant mode activates after the next coordinator escalation (2–3 cycles
@@ -739,9 +748,6 @@ private[snap] trait PivotRefresher extends PivotRefreshApi with PivotRefreshComm
       // end else (stateRoot changed)
     // end else (not StateValidation phase)
 
-private[snap] trait PivotRefresherRoll:
-  self: SNAPSyncControllerImpl =>
-
   /** The proactive pivot roll's trigger (spec 016 T053c, CQ-SNAP-016-31), extracted verbatim from
     * `checkDownloadStagnationArms`, which calls it at the same point of the 30-s stagnation tick: in the two download
     * phases, roll the pivot in place (with a readiness probe) once it is more than `SnapServeWindowBlocks` behind the
@@ -749,7 +755,7 @@ private[snap] trait PivotRefresherRoll:
     * at least 80% done, or the 30-s probe cooldown has not elapsed. Pivot-refresh policy (`[PIVOT-ROLL]`): M7b moves it
     * to `PivotRefresher` and the arm to `StagnationWatchdog`.
     */
-  private[snap] def maybeProactivePivotRoll(): Unit =
+  def maybeProactivePivotRoll(): Unit =
     // Proactive pivot roll: keep pivot within core-geth's 128-block snapshot window.
     if (currentPhase == AccountRangeSync || currentPhase == ByteCodeAndStorageSync) &&
       pivotBlock.isDefined

@@ -28,7 +28,6 @@ import com.chipprbots.ethereum.blockchain.sync.snap.controller.HealingOrchestrat
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.HeapWatchdogStart
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.PhaseFlags
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.PivotRefresher
-import com.chipprbots.ethereum.blockchain.sync.snap.controller.PivotRefresherRoll
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.PivotRefresherState
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.PivotSelector
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.PivotSelectorState
@@ -124,7 +123,6 @@ private class SNAPSyncControllerImpl(
     with SyncLifecycleState
     with PivotRefresher
     with PivotRefresherState
-    with PivotRefresherRoll
     with DownloadSupervisor
     with DownloadSupervisorState:
 
@@ -368,7 +366,6 @@ private class SNAPSyncControllerImpl(
   // all external peers respond with accounts=[], proof=[] and only local Besu can serve.
   // Rolling proactively at 100 blocks preserves all downloaded state (unlike go-ethereum).
   var lastProactivePivotBlock: Option[BigInt] = None
-  private[snap] val SnapServeWindowBlocks: BigInt = BigInt(100)
 
   // Roll target margin: a proactive/reactive roll picks networkBest - max(pivotBlockOffset,
   // SnapServeWindowMargin) so the new root lands INSIDE peers' indexed snapshot window.
