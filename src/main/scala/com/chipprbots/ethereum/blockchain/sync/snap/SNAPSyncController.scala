@@ -19,7 +19,6 @@ import com.chipprbots.ethereum.blockchain.sync.Blacklist
 import com.chipprbots.ethereum.blockchain.sync.PeerListHelper
 import com.chipprbots.ethereum.blockchain.sync.PeerListSupportNg
 import com.chipprbots.ethereum.blockchain.sync.SyncProtocol
-import com.chipprbots.ethereum.blockchain.sync.snap.controller.AccountResumeSelectionApi
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.ChildFactories
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.CoordinatorHandles
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.DownloadSupervisor
@@ -39,7 +38,6 @@ import com.chipprbots.ethereum.blockchain.sync.snap.controller.SnapFinalizationS
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.SnapPeerPool
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.SnapPeerPoolState
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.SnapResumePlanner
-import com.chipprbots.ethereum.blockchain.sync.snap.controller.SnapResumePlannerRecovery
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.SnapResumePlannerState
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.SnapSharedState
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.SnapStartApi
@@ -113,7 +111,6 @@ private class SNAPSyncControllerImpl(
     with ShutdownApi
     with SnapResumePlanner
     with SnapResumePlannerState
-    with SnapResumePlannerRecovery
     with HealingOrchestrator
     with HealingOrchestratorState
     with StagnationWatchdog
@@ -127,8 +124,7 @@ private class SNAPSyncControllerImpl(
     with PivotRefresher
     with PivotRefresherState
     with DownloadSupervisor
-    with DownloadSupervisorState
-    with AccountResumeSelectionApi:
+    with DownloadSupervisorState:
 
   import SNAPSyncController.*
   import SyncPhase.*
@@ -309,7 +305,6 @@ private class SNAPSyncControllerImpl(
   // forces the healing walk from the new pivot root even under deferred-merkleization: complete
   // ranges and the prefixes of partial ranges (resumed mid-range since 2026-10-06, see
   // AccountRangeCoordinator "Resume from a mid-range cursor") are both reconciled by it.
-  private[snap] val MaxPreservedPivotDistance: BigInt = 50_000
 
   // The phase-complete and force-complete flags (`resumedStaleCursors`, `accountsComplete`, `bytecodePhaseComplete`,
   // `storagePhaseComplete`, `storagePhaseForceCompleted`, `awaitingHealedCode`, `healedCodeWaitExhausted`,

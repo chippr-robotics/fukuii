@@ -27,6 +27,9 @@ private[snap] trait SnapStartApi:
 private[snap] trait SyncingApi:
   def syncing(): Behavior[Command]
 
+private[snap] trait BootstrappingApi:
+  def bootstrapping(): Behavior[Command]
+
 private[snap] trait PivotBestBlockApi:
   def updateBestBlockForPivot(header: BlockHeader, pivotBlockNumber: BigInt): Unit
 
@@ -50,7 +53,7 @@ private[snap] trait PivotSelectorState:
   * selection; CQ-SNAP-016-22) and the dispatch: the `Start` and `MinPivotBlock` arms of `idle`, the `CLPivotHint` arm
   * of `peerEventArms` and the `RetryBootstrapAtBlock` arm of `commonSyncingArms`.
   */
-private[snap] trait PivotSelector extends PivotSelectionApi with PivotBestBlockApi:
+private[snap] trait PivotSelector extends PivotSelectionApi with PivotBestBlockApi with BootstrappingApi:
   self: PivotSelectorState & SnapSharedState & SnapControllerEnv & CoordinatorHandles & PhaseFlags & PeerPoolApi &
     HandshakedPeersApi & BootstrapPeersApi & HealingApi & LifecycleApi & ShutdownApi & SnapStartApi & SyncingApi &
     AccountRangeStartApi & StagnationResetApi & PivotRefreshCommitApi =>

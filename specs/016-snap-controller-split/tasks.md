@@ -725,6 +725,62 @@ only when every item on the per-slice checklist below holds.
     `commonSyncingArms`, `recoverAccountsComplete` (~290) and `selectAccountResume` (~130), so SC-001 needs M5b and the
     remaining small slices. A full Mordor SNAP: **pending** (to be run by the user on the slice jar after merge; no node
     run here).
+- [x] T046b [M5b] Byte-move the resume code M5 could not take (CQ-SNAP-016-17), now named core members, into
+  `SnapResumePlanner`: `recoverAccountsComplete` (T050c), its #1555 branch `healAtNewerPivot` (CQ-SNAP-016-29) and
+  `selectAccountResume` (T053a). Check SC-001 again.
+  - As built: three commits. (1) Prerequisite: the core's `failedFinalizationPivot` constructor parameter (#1555)
+    becomes a `val` (the recovery reads it; the M5 `scheduler` route); `AccountResumeSelectionApi` moves unchanged from
+    `controller/DownloadSupervisor.scala` to `controller/SnapResumePlanner.scala` (CQ-SNAP-016-16); and
+    `DownloadRecoveryApi` (`spawnRecoveryCoordinators`, `checkAllDownloadsComplete`) is declared in
+    `controller/DownloadSupervisor.scala`, because scalafmt wraps it (the M6b / M11b precedent); and
+    `SnapControllerEnv.ctx` becomes an abstract `val` (was a `def`; count unchanged), because the recovery's
+    `import ctx.executionContext` needs a stable import prefix through the narrowed self-type. Every implementer already
+    used a constructor `val`. verify.py's rule (d) now admits an abstract member `val` (no initializer, nothing runs at
+    construction), with two self-tests, and plan.md D1's (d) list says so. (2) The move commit
+    moves the 3 symbols, byte-identical, into a temporary trait `SnapResumePlannerRecovery` appended to the module file
+    with the temporary self-type `SNAPSyncControllerImpl` (the M8c pattern): `healAtNewerPivot`,
+    `recoverAccountsComplete`, `selectAccountResume`. `MaxPreservedPivotDistance` goes `private` -> `private[snap]` and
+    stays in the core (rule (d)); the core drops the `scala.util.Try` and `utils.Hex` imports only the moved code used.
+    (3) The narrowing commit drops the temporary trait's two header lines, so its members fold into
+    `SnapResumePlanner`; `MaxPreservedPivotDistance` becomes a pure private lazy val of the trait (pure: yes, the literal
+    50_000). Narrowed self-type: `SnapResumePlannerState & SnapSharedState & SnapControllerEnv & CoordinatorHandles &
+    PhaseFlags & PivotSelectionApi & BootstrappingApi & SyncingApi & HeapWatchdogApi & DownloadRecoveryApi &
+    ByteCodeRequestApi & StagnationResetApi & StagnationScheduleApi & ChainDownloadStartApi & SnapServerPeersApi`;
+    `SnapResumePlanner` also `extends AccountResumeSelectionApi`, and the core no longer lists it.
+    - State 15 against M5's 3: + `minPivotHint`, `isPoSChain`, `clPivotHint`, `failedFinalizationPivot`,
+      `coordinatorGeneration`, `recordStorageDone`, `SnapServeWindowMargin`, `BootstrapCheckKey`,
+      `preservedRangeProgress`, `preservedAtPivotBlock`, `preservedTaskFiles`, `snapProgressStorage`, each kept in the
+      core because code that stays also reads or writes it. The routing doc's counts row has the breakdown.
+    - Api 12 against M5's 0 (R14a: 14): eight reused whole (`PivotSelectionApi`, `SyncingApi`, `HeapWatchdogApi`,
+      `ByteCodeRequestApi`, `StagnationResetApi`, `StagnationScheduleApi`, `ChainDownloadStartApi`,
+      `SnapServerPeersApi`) and two new narrow traits, each declared next to its implementer: `BootstrappingApi`
+      (`bootstrapping`, `PivotSelector`) and `DownloadRecoveryApi` (`DownloadSupervisor`, whose two members lose
+      `private[snap]`). No other module's count moves; the capability traits are unchanged (5 / 18 / 12 / 10).
+    - How the boundary Label crosses: `recoverAccountsComplete` and `healAtNewerPivot` keep their `using
+      scala.util.boundary.Label[Behavior[Command]]` parameter. `startSnapSync` (still in the core) opens the boundary and
+      calls `recoverAccountsComplete`, which passes the Label on to `healAtNewerPivot`, so every `break` is unchanged and
+      still exits `startSnapSync`. No `try`/`Try`/`NonFatal` sits between a `break` and the boundary, and no `break`
+      runs inside a deferred callback (the three are in match arms and if branches, outside the `runGatedReplay` and
+      `onComplete` closures). The #1555 failed-pivot gating and the CL drift branch moved byte-identical.
+    - Stub test: `SnapResumePlannerSpec` extended (`# extended-tests:`) with eight cases (14 in all): the recovery falls
+      through with nothing saved and clears the flags of a recovery with no saved pivot; a fresh saved pivot resumes
+      bytecodes and storage and breaks out with `syncing()` (pivot, root, flags, generation, heap watchdog, recovery
+      spawns, phase, `AccountsCompleteRecovery` reset, the schedules and the completion check); a saved pivot below the
+      escalation hint clears the recovery and falls through; on PoS a failed-finalization pivot with no newer target
+      retries the start on `BootstrapCheckKey` in 30 s and breaks out with `bootstrapping()`, and with a CL head past it
+      bootstraps `clHead - pivotBlockOffset`; the resume selection keeps in-cap preserved cursors (latch, marker
+      clear), drops out-of-cap ones with their progress record and checkpoint, and recovers cursors from the progress
+      store. The two steps run under a `boundary` of the core's type, as `startSnapSync` runs them. Nothing waits on a
+      clock: the retry is a recorded timer.
+  - **Not moved**: `startSnapSync` (the boundary and the step sequence), the `AccountRangeProgressCmd` checkpoint arm
+    (still inline in `commonSyncingArms`, a local of `syncing()`; not lifted here, CQ-SNAP-016-36), and the fields
+    above. No fix. The scaladocs of `SnapResumePlanner` ("the core keeps the resume decisions that sit inside
+    `startSnapSync` and `launchAccountRangeWorkers`"), of `DownloadSupervisor` and of the moved members, and the core's
+    comment above the former `MaxPreservedPivotDistance`, still describe the old layout: a move or narrowing commit
+    cannot edit comments (CQ-SNAP-016-37, with CQ-SNAP-016-34). SC-001: **not met**. `SNAPSyncController.scala` is
+    2,033 lines (the class 1,262, the companion 771) against about 1,000, down from 2,518; the biggest remaining member
+    is `commonSyncingArms`. Mordor and Platåberget restarts mid-account and mid-storage: **pending** (to be run by the
+    user on the slice jar after merge; no node run here).
 
 ## Coordinators
 

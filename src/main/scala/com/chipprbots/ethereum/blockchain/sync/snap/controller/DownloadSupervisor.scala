@@ -69,7 +69,7 @@ private[snap] trait DownloadSupervisorState:
   * ticks, the response routing, the progress and backpressure arms, `IncrementalContractData` and the phase-completion
   * arms are inline in `commonSyncingArms`, and they call these members.
   */
-private[snap] trait DownloadSupervisor extends AccountRangeStartApi with ByteCodeRequestApi:
+private[snap] trait DownloadSupervisor extends AccountRangeStartApi with ByteCodeRequestApi with DownloadRecoveryApi:
   self: DownloadSupervisorState & SnapSharedState & SnapControllerEnv & CoordinatorHandles & PhaseFlags & PeerPoolApi &
     SnapServerPeersApi & SnapPeerEvictionApi & ChainDownloadStartApi & FinalizationApi & HealingApi & LifecycleApi &
     PivotProbeResponseApi & StagnationResetApi & StagnationScheduleApi & StorageDoneMarkersApi & ResumeApi &
@@ -81,7 +81,7 @@ private[snap] trait DownloadSupervisor extends AccountRangeStartApi with ByteCod
     * bytecodes + storage are ALL done. The sentinel pattern (NoMoreByteCodeTasks/NoMoreStorageTasks) ensures bytecodes
     * and storage cannot complete before accounts.
     */
-  private[snap] def checkAllDownloadsComplete(): Unit =
+  def checkAllDownloadsComplete(): Unit =
     if accountsComplete && bytecodePhaseComplete && storagePhaseComplete &&
       currentPhase != StateHealing && currentPhase != ChainDownloadCompletion && currentPhase != Completed
     then
@@ -116,7 +116,7 @@ private[snap] trait DownloadSupervisor extends AccountRangeStartApi with ByteCod
   /** The recovery branch's copy of the bytecode and storage coordinator spawns (spec 016 restructure, CQ-SNAP-016-22),
     * with the recovery per-peer budget (bytecode 2, storage 3). Extracted verbatim from `recoverAccountsComplete`.
     */
-  private[snap] def spawnRecoveryCoordinators(
+  def spawnRecoveryCoordinators(
       rootBs: ByteString,
       storage: MptStorage,
       bytecodeAlreadyDone: Boolean,

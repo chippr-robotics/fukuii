@@ -8,16 +8,20 @@ import scala.concurrent.ExecutionContext
 import scala.concurrent.duration.*
 import scala.util.Try
 
-import com.chipprbots.ethereum.blockchain.sync.snap.*
+import com.chipprbots.ethereum.blockchain.sync.snap.AccountResumeCheckpoint
 import com.chipprbots.ethereum.blockchain.sync.snap.ContractTaskFiles
 import com.chipprbots.ethereum.blockchain.sync.snap.GatedTaskFileReplay
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController.*
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController.SyncPhase.*
 import com.chipprbots.ethereum.blockchain.sync.snap.StorageScheme
+import com.chipprbots.ethereum.blockchain.sync.snap.StorageTask
+import com.chipprbots.ethereum.blockchain.sync.snap.StorageTaskFile
+import com.chipprbots.ethereum.blockchain.sync.snap.actors
 import com.chipprbots.ethereum.db.storage.MptStorage
 import com.chipprbots.ethereum.db.storage.Namespaces
 import com.chipprbots.ethereum.db.storage.SnapStorageDoneStorage
+import com.chipprbots.ethereum.db.storage.SnapSyncProgressStorage
 import com.chipprbots.ethereum.domain.TrieRoot
 import com.chipprbots.ethereum.utils.ByteStringUtils.ByteStringOps
 import com.chipprbots.ethereum.utils.Hex
@@ -26,6 +30,18 @@ private[snap] trait SnapResumePlannerState:
   var mptStorage: Option[MptStorage]
   def storageDoneStorage: SnapStorageDoneStorage
   def scheduler: Scheduler
+  def minPivotHint: BigInt
+  def isPoSChain: Boolean
+  def clPivotHint: Option[CLPivotHint]
+  def failedFinalizationPivot: Option[BigInt]
+  var coordinatorGeneration: Long
+  def recordStorageDone: Boolean
+  def SnapServeWindowMargin: BigInt
+  def BootstrapCheckKey: String
+  var preservedRangeProgress: Map[ByteString, ByteString]
+  var preservedAtPivotBlock: Option[BigInt]
+  var preservedTaskFiles: Option[ContractTaskFiles]
+  def snapProgressStorage: SnapSyncProgressStorage
 
 private[snap] trait ResumeApi:
   def getOrCreateMptStorage(pivotBlockNumber: BigInt): MptStorage
@@ -51,8 +67,16 @@ private[snap] trait AccountResumeSelectionApi:
   * and the legacy progress parser (`deserializeSnapProgress`). The core keeps the resume decisions that sit inside
   * `startSnapSync` and `launchAccountRangeWorkers` and the checkpoint arm of `syncing`; they call these members.
   */
-private[snap] trait SnapResumePlanner extends ResumeApi with TaskFileSweepApi with StorageDoneMarkersApi:
-  self: SnapResumePlannerState & SnapControllerEnv =>
+private[snap] trait SnapResumePlanner
+    extends ResumeApi
+    with TaskFileSweepApi
+    with StorageDoneMarkersApi
+    with AccountResumeSelectionApi:
+  self: SnapResumePlannerState & SnapSharedState & SnapControllerEnv & CoordinatorHandles & PhaseFlags &
+    PivotSelectionApi & BootstrappingApi & SyncingApi & HeapWatchdogApi & DownloadRecoveryApi & ByteCodeRequestApi &
+    StagnationResetApi & StagnationScheduleApi & ChainDownloadStartApi & SnapServerPeersApi =>
+
+  private lazy val MaxPreservedPivotDistance: BigInt = 50_000
 
   /** Guard: fail fast if the DB was written with PathScheme but config says HashScheme (or vice versa).
     *
@@ -161,9 +185,6 @@ private[snap] trait SnapResumePlanner extends ResumeApi with TaskFileSweepApi wi
 
         pivot.map(p => (p, ranges.toMap))
     catch case _: Exception => None
-
-private[snap] trait SnapResumePlannerRecovery:
-  self: SNAPSyncControllerImpl =>
 
   /** `recoverAccountsComplete`'s #1555 branch (PoS, every download phase complete): heal at a pivot newer than
     * `excluded` instead of resuming on the saved one. Like the drift branch's "all phases complete" case, the data
