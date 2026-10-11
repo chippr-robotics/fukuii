@@ -24,6 +24,7 @@ import org.scalatest.matchers.should.Matchers
 import com.chipprbots.ethereum.blockchain.sync.PeerListSupportNg
 import com.chipprbots.ethereum.blockchain.sync.SyncProtocol
 import com.chipprbots.ethereum.blockchain.sync.snap.ChildSpawn
+import com.chipprbots.ethereum.blockchain.sync.snap.ContractTaskFiles
 import com.chipprbots.ethereum.blockchain.sync.snap.RecordingChildFactories
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPRequestTracker
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncConfig
@@ -31,16 +32,19 @@ import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController.*
 import com.chipprbots.ethereum.blockchain.sync.snap.SnapIntakeBudget
 import com.chipprbots.ethereum.blockchain.sync.snap.StateValidator
+import com.chipprbots.ethereum.blockchain.sync.snap.StorageTask
 import com.chipprbots.ethereum.blockchain.sync.snap.SyncProgressMonitor
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.AccountRangeCoordinator
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.ByteCodeCoordinator
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.StorageRangeCoordinator
+import com.chipprbots.ethereum.blockchain.sync.snap.actors.TrieNodeHealingCoordinator
 import com.chipprbots.ethereum.db.dataSource.EphemDataSource
 import com.chipprbots.ethereum.db.storage.AppStateStorage
 import com.chipprbots.ethereum.db.storage.EvmCodeStorage
 import com.chipprbots.ethereum.db.storage.FlatSlotStorage
 import com.chipprbots.ethereum.db.storage.MptStorage
 import com.chipprbots.ethereum.db.storage.PathNodeStorage
+import com.chipprbots.ethereum.db.storage.SnapStorageDoneStorage
 import com.chipprbots.ethereum.db.storage.SnapSyncProgressStorage
 import com.chipprbots.ethereum.db.storage.StateStorage
 import com.chipprbots.ethereum.domain.BlockchainReader
@@ -55,6 +59,7 @@ import com.chipprbots.ethereum.network.PeerActor
 import com.chipprbots.ethereum.network.PeerEventBusActor
 import com.chipprbots.ethereum.network.PeerId
 import com.chipprbots.ethereum.network.p2p.messages.Capability
+import com.chipprbots.ethereum.network.p2p.messages.SNAP
 import com.chipprbots.ethereum.testing.Tags.UnitTest
 import com.chipprbots.ethereum.utils.Config.SyncConfig
 
@@ -81,7 +86,14 @@ private[snap] class StubDownloadSupervisorState(
     with ChainDownloadStartApi
     with FinalizationApi
     with HealingApi
-    with AccountRangeLaunchApi:
+    with LifecycleApi
+    with PivotProbeResponseApi
+    with StagnationResetApi
+    with StagnationScheduleApi
+    with StorageDoneMarkersApi
+    with ResumeApi
+    with HeapWatchdogApi
+    with AccountResumeSelectionApi:
 
   private val dataSource = EphemDataSource()
 
@@ -90,6 +102,24 @@ private[snap] class StubDownloadSupervisorState(
   val snapProgressStorage: SnapSyncProgressStorage = new SnapSyncProgressStorage(dataSource)
   var recordStorageDone: Boolean = false
   def SnapCapabilityCheckKey: String = "snap-capability-check"
+  var pivotProbeRequestId: Option[BigInt] = None
+  var consecutivePivotRefreshes: Int = 0
+  var criticalFailureCount: Int = 0
+  var accountsAtLastCriticalFailure: Long = 0L
+  var dormantRetryCount: Int = 0
+  var lastAccountProgressMs: Long = 0L
+  var lastBytecodeProgressMs: Long = 0L
+  var lastStorageProgressMs: Long = 0L
+  var storageStagnationRefreshAttempted: Boolean = false
+  var storageContractProgressPct: Double = 0.0
+  var bytecodesEstimatedTotal: Long = 0L
+  var preservedRangeProgress: Map[ByteString, ByteString] = Map.empty
+  var preservedAtPivotBlock: Option[BigInt] = None
+  var preservedTaskFiles: Option[ContractTaskFiles] = None
+  var launchedAccountGeneration: Long = -1L
+  var currentCarrySource: Option[ContractTaskFiles] = None
+  val storageDoneStorage: SnapStorageDoneStorage = new SnapStorageDoneStorage(dataSource)
+  def ec: ExecutionContext = notUsed("ec")
 
   // SnapSharedState
   var pivotBlock: Option[BigInt] = None
@@ -138,7 +168,39 @@ private[snap] class StubDownloadSupervisorState(
   var healingStarts: Int = 0
   def startStateHealing(): Unit = healingStarts += 1
   val launches: mutable.ArrayBuffer[(TrieRoot, Int)] = mutable.ArrayBuffer.empty
-  def launchAccountRangeWorkers(rootHash: TrieRoot, concurrency: Int): Unit = launches += ((rootHash, concurrency))
+  def recordCriticalFailure(reason: String): Boolean = notUsed("recordCriticalFailure")
+  val dormantReasons: mutable.ArrayBuffer[String] = mutable.ArrayBuffer.empty
+  def enterDormantMode(reason: String): Behavior[Command] =
+    dormantReasons += reason
+    Behaviors.same
+  val restartReasons: mutable.ArrayBuffer[String] = mutable.ArrayBuffer.empty
+  def restartSnapSync(reason: String): Behavior[Command] =
+    restartReasons += reason
+    Behaviors.same
+  val probeAnswers: mutable.ArrayBuffer[SNAP.AccountRange] = mutable.ArrayBuffer.empty
+  def handlePivotProbeResponse(msg: SNAP.AccountRange): Unit = probeAnswers += msg
+  val stagnationResets: mutable.ArrayBuffer[StagnationWatchdog.ResetReason] = mutable.ArrayBuffer.empty
+  def resetStagnationClocks(reason: StagnationWatchdog.ResetReason): Unit = stagnationResets += reason
+  var stagnationSchedules: Int = 0
+  def scheduleStagnationChecks(): Unit = stagnationSchedules += 1
+  val markerClears: mutable.ArrayBuffer[String] = mutable.ArrayBuffer.empty
+  def clearStorageDoneMarkers(reason: String): Unit = markerClears += reason
+  lazy val launchStorage: MptStorage = stateStorage.getBackingStorage(BigInt(0))
+  val mptStorageRequests: mutable.ArrayBuffer[BigInt] = mutable.ArrayBuffer.empty
+  def getOrCreateMptStorage(pivotBlockNumber: BigInt): MptStorage =
+    mptStorageRequests += pivotBlockNumber
+    launchStorage
+  var heapWatchdogStarts: Int = 0
+  def ensureHeapWatchdog(): Unit = heapWatchdogStarts += 1
+  var resumeSelection: (Map[ByteString, ByteString], Option[ContractTaskFiles]) = (Map.empty, None)
+  val resumeSelections: mutable.ArrayBuffer[(TrieRoot, Int, BigInt)] = mutable.ArrayBuffer.empty
+  def selectAccountResume(
+      rootHash: TrieRoot,
+      effectiveConcurrency: Int,
+      currentPivot: BigInt
+  ): (Map[ByteString, ByteString], Option[ContractTaskFiles]) =
+    resumeSelections += ((rootHash, effectiveConcurrency, currentPivot))
+    resumeSelection
 
   private def notUsed(what: String): Nothing =
     throw new UnsupportedOperationException(s"$what is not reached by DownloadSupervisorSpec")
@@ -155,7 +217,7 @@ class DownloadSupervisorSpec extends ScalaTestWithActorTestKit(ManualTime.config
   private val root = TrieRoot(ByteString(Array.fill[Byte](32)(5)))
 
   /** The module on its stub, the kit that runs it, and the recorded child spawns. */
-  final private class Harness(config: SNAPSyncConfig = SNAPSyncConfig()):
+  final private class Harness(config: SNAPSyncConfig = SNAPSyncConfig(), stubLaunch: Boolean = true):
     val spawns: TestInbox[ChildSpawn] = TestInbox[ChildSpawn]()
     val factories: RecordingChildFactories = new RecordingChildFactories(spawns.ref)
     private var action: () => Unit = () => ()
@@ -169,7 +231,11 @@ class DownloadSupervisorSpec extends ScalaTestWithActorTestKit(ManualTime.config
           TestInbox[NetworkPeerManagerActor.Command]().ref,
           factories,
           system.classicSystem.scheduler
-        ) with DownloadSupervisor
+        ) with DownloadSupervisor:
+          // The M11 cases stub the account launch, as the M11 stub did; the M11b launch case runs the module's own.
+          override def launchAccountRangeWorkers(rootHash: TrieRoot, concurrency: Int): Unit =
+            if stubLaunch then launches += ((rootHash, concurrency))
+            else super.launchAccountRangeWorkers(rootHash, concurrency)
         Behaviors.receiveMessage { _ =>
           action()
           Behaviors.same
@@ -404,5 +470,321 @@ class DownloadSupervisorSpec extends ScalaTestWithActorTestKit(ManualTime.config
 
     status.collect { case s: SyncProtocol.Status.Syncing => s.stateNodesProgress } shouldBe Some(
       Some(SyncProtocol.Status.Progress(BigInt(0), BigInt(0)))
+    )
+  }
+
+  // ── M11b (T053b): the arms lifted by T053a and the account launch, moved into the module ──────────────────────
+
+  private def hashes(n: Int): Seq[ByteString] = (1 to n).map(i => ByteString(Array.fill(32)(i.toByte)))
+
+  private def tasks(n: Int): Seq[StorageTask] =
+    (1 to n).map(i =>
+      StorageTask.createStorageTask(ByteString(Array.fill(32)(i.toByte)), ByteString(Array.fill(32)(9.toByte)))
+    )
+
+  it should "launch the account phase from the capability check on a snap peer, and go dormant without one" taggedAs UnitTest in {
+    val config = SNAPSyncConfig()
+    val h = new Harness(config)
+    h.module.stateRoot = Some(root)
+    h.module.downloadPeers = Map(peer("a"), peer("b", snap = false))
+    var result: Option[Behavior[Command]] = None
+
+    h.call(m => result = Some(m.checkSnapCapabilityArms(CheckSnapCapability)))
+
+    result shouldBe Some(Behaviors.same[Command])
+    h.module.launches.toSeq shouldBe Seq((root, config.accountConcurrency.max(1)))
+    h.module.dormantReasons shouldBe empty
+
+    h.module.downloadPeers = Map(peer("b", snap = false))
+    h.call(m => result = Some(m.checkSnapCapabilityArms(CheckSnapCapability)))
+
+    h.module.launches should have size 1
+    h.module.dormantReasons.toSeq shouldBe Seq("no snap-capable peers after the capability grace period")
+  }
+
+  it should "offer the snap-serving peers on each download tick arm" taggedAs UnitTest in {
+    val h = new Harness()
+    val bytecode = TestInbox[ByteCodeCoordinator.Command]()
+    val p = peer("a")._2.peer
+    h.module.servingPeers = List(p)
+    h.module.bytecodeCoordinator = Some(bytecode.ref)
+
+    h.call(m => m.downloadTickArms(RequestByteCodes))
+    h.call(m => m.downloadTickArms(RequestAccountRanges))
+
+    bytecode.receiveAll() shouldBe Seq(ByteCodeCoordinator.ByteCodePeerAvailable(p))
+    h.module.downloadTickArms.isDefinedAt(RequestStorageRanges) shouldBe true
+  }
+
+  it should "hand the pivot probe's answer to the refresher and route every other SNAP response to its coordinator" taggedAs UnitTest in {
+    val h = new Harness()
+    val accounts = TestInbox[AccountRangeCoordinator.Command]()
+    val healing = TestInbox[TrieNodeHealingCoordinator.Command]()
+    h.module.accountRangeCoordinator = Some(accounts.ref)
+    h.module.trieNodeHealingCoordinator = Some(healing.ref)
+    h.module.pivotProbeRequestId = Some(BigInt(7))
+    val probe = SNAP.AccountRange(BigInt(7), Seq.empty, Seq.empty)
+    val other = SNAP.AccountRange(BigInt(8), Seq.empty, Seq.empty)
+    val nodes = SNAP.TrieNodes(BigInt(9), Seq.empty)
+
+    h.call { m =>
+      m.snapResponseArms(AccountRangeResponse(probe)); m.snapResponseArms(AccountRangeResponse(other))
+    }
+
+    h.module.probeAnswers.toSeq shouldBe Seq(probe)
+    accounts.receiveAll() shouldBe Seq(AccountRangeCoordinator.AccountRangeResponseMsg(other))
+
+    // During validation a late TrieNodes answer is dropped; in healing it is forwarded.
+    h.module.currentPhase = SyncPhase.StateValidation
+    h.call(m => m.snapResponseArms(TrieNodesResponse(nodes)))
+    healing.hasMessages shouldBe false
+
+    h.module.currentPhase = SyncPhase.StateHealing
+    h.call(m => m.snapResponseArms(TrieNodesResponse(nodes)))
+    healing.receiveAll() shouldBe Seq(TrieNodeHealingCoordinator.TrieNodesResponseMsg(nodes))
+  }
+
+  it should "count synced accounts, reset the refresh counter, and reset the failure counters after 100,000 accounts" taggedAs UnitTest in {
+    val h = new Harness()
+    h.module.consecutivePivotRefreshes = 3
+    h.module.criticalFailureCount = 2
+    h.module.dormantRetryCount = 4
+
+    h.call(m => m.progressAccountsSyncedArms(ProgressAccountsSynced(10L)))
+
+    h.module.progressMonitor.currentProgress.accountsSynced shouldBe 10L
+    h.module.consecutivePivotRefreshes shouldBe 0
+    h.module.criticalFailureCount shouldBe 2
+    h.module.accountsAtLastCriticalFailure shouldBe 0L
+    h.module.dormantRetryCount shouldBe 4
+
+    h.module.consecutivePivotRefreshes = 1
+    h.call(m => m.progressAccountsSyncedArms(ProgressAccountsSynced(100000L)))
+
+    h.module.consecutivePivotRefreshes shouldBe 0
+    h.module.criticalFailureCount shouldBe 0
+    h.module.accountsAtLastCriticalFailure shouldBe 100010L
+    h.module.dormantRetryCount shouldBe 0
+  }
+
+  it should "track the account trie's finalization, persist its root, and restart when it fails" taggedAs UnitTest in {
+    val h = new Harness()
+    val finalized = ByteString(Array.fill[Byte](32)(3))
+
+    h.call(m => m.accountTrieFinalizationArms(ProgressAccountsFinalizingTrie))
+
+    h.module.progressMonitor.currentProgress.isFinalizingTrie shouldBe true
+    h.module.lastAccountProgressMs should be > 0L
+
+    h.call(m => m.accountTrieFinalizationArms(AccountTrieFinalized(finalized)))
+    h.module.appStateStorage.getSnapSyncFinalizedRoot() shouldBe Some(finalized)
+
+    h.call(m => m.accountTrieFinalizationArms(ProgressAccountsTrieFinalized))
+    h.module.progressMonitor.currentProgress.isFinalizingTrie shouldBe false
+
+    h.call(m => m.accountTrieFinalizationArms(ProgressAccountsFinalizingTrie))
+    h.call(m => m.accountTrieFinalizationArms(AccountTrieFinalizationFailed("root mismatch")))
+
+    h.module.restartReasons.toSeq shouldBe Seq("account trie finalization failed: root mismatch")
+    h.module.progressMonitor.currentProgress.isFinalizingTrie shouldBe false
+  }
+
+  it should "record bytecode and storage progress, the contract share and the extrapolated slot estimate" taggedAs UnitTest in {
+    val h = new Harness()
+    h.module.storageStagnationRefreshAttempted = true
+
+    h.call(m => m.downloadProgressArms(ProgressBytecodesDownloaded(3L)))
+    h.call(m => m.downloadProgressArms(ProgressStorageSlotsSynced(5L)))
+
+    h.module.lastBytecodeProgressMs should be > 0L
+    h.module.lastStorageProgressMs shouldBe 0L
+    h.module.storageStagnationRefreshAttempted shouldBe true
+
+    h.call(m => m.downloadProgressArms(ProgressStorageSlotsSynced(195L)))
+
+    h.module.lastStorageProgressMs should be > 0L
+    h.module.storageStagnationRefreshAttempted shouldBe false
+
+    h.call(m => m.downloadProgressArms(ProgressStorageContracts(2, 8)))
+
+    h.module.storageContractProgressPct shouldBe 0.25
+    val progress = h.module.progressMonitor.currentProgress
+    progress.bytecodesDownloaded shouldBe 3L
+    progress.storageSlotsSynced shouldBe 200L
+    progress.storageContractsCompleted shouldBe 2
+    progress.storageContractsTotal shouldBe 8
+    progress.estimatedTotalSlots shouldBe 800L
+  }
+
+  it should "forward both backpressure signals to the account coordinator, in order" taggedAs UnitTest in {
+    val h = new Harness()
+    val accounts = TestInbox[AccountRangeCoordinator.Command]()
+    h.module.accountRangeCoordinator = Some(accounts.ref)
+
+    h.call { m =>
+      m.downloadBackpressureArms(StorageBackpressureChanged(true))
+      m.downloadBackpressureArms(ByteCodeBackpressureChanged(false))
+    }
+
+    accounts.receiveAll() shouldBe Seq(
+      AccountRangeCoordinator.StorageQueuePressure(true),
+      AccountRangeCoordinator.ByteCodeQueuePressure(false)
+    )
+  }
+
+  it should "forward contract work and accumulate the bytecode estimate, releasing the credit of work no coordinator takes" taggedAs UnitTest in {
+    val h = new Harness()
+    h.module.intakeBudget.reserve(2, 3)
+
+    h.call(m => m.incrementalContractDataArms(IncrementalContractData(hashes(3), tasks(2))))
+
+    h.module.intakeBudget.pendingStorageTasks shouldBe 0L
+    h.module.intakeBudget.pendingByteCodeHashes shouldBe 0L
+    h.module.bytecodesEstimatedTotal shouldBe 3L
+
+    val bytecode = TestInbox[ByteCodeCoordinator.Command]()
+    val storage = TestInbox[StorageRangeCoordinator.Command]()
+    h.module.bytecodeCoordinator = Some(bytecode.ref)
+    h.module.storageRangeCoordinator = Some(storage.ref)
+    h.module.intakeBudget.reserve(1, 2)
+
+    h.call(m => m.incrementalContractDataArms(IncrementalContractData(hashes(2), tasks(1), replayed = true)))
+
+    bytecode.receiveAll() shouldBe Seq(ByteCodeCoordinator.AddByteCodeTasks(hashes(2), skipPresent = true))
+    storage.receiveAll() shouldBe Seq(StorageRangeCoordinator.AddStorageTasks(tasks(1)))
+    h.module.intakeBudget.pendingStorageTasks shouldBe 1L
+    h.module.intakeBudget.pendingByteCodeHashes shouldBe 2L
+    h.module.bytecodesEstimatedTotal shouldBe 5L
+    h.module.progressMonitor.currentProgress.estimatedTotalBytecodes shouldBe 5L
+  }
+
+  it should "enter the storage phase once on AccountRangeSyncComplete: persist, clear the preserved cursors, signal NoMore and rebalance" taggedAs UnitTest in {
+    val h = new Harness()
+    val bytecode = TestInbox[ByteCodeCoordinator.Command]()
+    val storage = TestInbox[StorageRangeCoordinator.Command]()
+    h.module.stateRoot = Some(root)
+    h.module.bytecodeCoordinator = Some(bytecode.ref)
+    h.module.storageRangeCoordinator = Some(storage.ref)
+    h.module.preservedRangeProgress = Map(ByteString(1) -> ByteString(2))
+    h.module.preservedAtPivotBlock = Some(BigInt(10))
+    h.module.preservedTaskFiles = Some(ContractTaskFiles("storage", 1L, "codes", 1L))
+    h.module.consecutivePivotRefreshes = 2
+
+    h.call(m => m.accountRangeSyncCompleteArms(AccountRangeSyncComplete))
+
+    h.module.accountsComplete shouldBe true
+    h.module.appStateStorage.isSnapSyncAccountsComplete() shouldBe true
+    h.module.preservedRangeProgress shouldBe empty
+    h.module.preservedAtPivotBlock shouldBe None
+    h.module.preservedTaskFiles shouldBe None
+    h.module.consecutivePivotRefreshes shouldBe 0
+    h.module.currentPhase shouldBe SyncPhase.ByteCodeAndStorageSync
+    bytecode.receiveAll() shouldBe Seq(
+      ByteCodeCoordinator.NoMoreByteCodeTasks,
+      ByteCodeCoordinator.UpdateMaxInFlightPerPeer(8),
+      ByteCodeCoordinator.ByteCodePivotRefreshed
+    )
+    storage.receiveAll() shouldBe Seq(
+      StorageRangeCoordinator.NoMoreStorageTasks,
+      StorageRangeCoordinator.UpdateMaxInFlightPerPeer(3)
+    )
+    h.module.stagnationResets.toSeq shouldBe Seq(StagnationWatchdog.ResetReason.StoragePhaseEntry)
+    h.module.stagnationSchedules shouldBe 1
+    h.module.healingStarts shouldBe 0
+
+    // A duplicate changes nothing.
+    h.call(m => m.accountRangeSyncCompleteArms(AccountRangeSyncComplete))
+
+    bytecode.hasMessages shouldBe false
+    storage.hasMessages shouldBe false
+    h.module.stagnationResets should have size 1
+    h.module.stagnationSchedules shouldBe 1
+  }
+
+  it should "complete the bytecode and storage phases, boost storage while it runs, and skip a force-complete during account sync" taggedAs UnitTest in {
+    val config = SNAPSyncConfig()
+    val h = new Harness(config)
+    val storage = TestInbox[StorageRangeCoordinator.Command]()
+    h.module.storageRangeCoordinator = Some(storage.ref)
+    h.module.currentPhase = SyncPhase.AccountRangeSync
+
+    h.call(m => m.downloadPhaseCompleteArms(ByteCodeSyncComplete))
+
+    h.module.bytecodePhaseComplete shouldBe true
+    h.module.appStateStorage.isSnapSyncBytecodeComplete() shouldBe true
+    storage.receiveAll() shouldBe Seq(StorageRangeCoordinator.UpdateMaxInFlightPerPeer(config.maxInFlightPerPeer))
+    h.module.downloadPhaseCompleteArms.isDefinedAt(ByteCodeSyncComplete) shouldBe false
+
+    h.call(m => m.downloadPhaseCompleteArms(StorageRangeSyncForceCompleted))
+
+    h.module.storagePhaseComplete shouldBe false
+    h.module.storagePhaseForceCompleted shouldBe false
+
+    h.call(m => m.downloadPhaseCompleteArms(StorageRangeSyncComplete))
+
+    h.module.storagePhaseComplete shouldBe true
+    h.module.storagePhaseForceCompleted shouldBe false
+    h.module.appStateStorage.isSnapSyncStorageComplete() shouldBe true
+    h.module.markerClears.toSeq shouldBe Seq("storage phase complete")
+    h.module.downloadPhaseCompleteArms.isDefinedAt(StorageRangeSyncComplete) shouldBe false
+    h.module.healingStarts shouldBe 0
+  }
+
+  it should "launch the account phase on the selected resume: spawns at the launch budgets, timers, carry source and generation" taggedAs UnitTest in {
+    val config = SNAPSyncConfig()
+    val h = new Harness(config, stubLaunch = false)
+    val resume = Map(ByteString(1) -> ByteString(2))
+    val carried = ContractTaskFiles("storage", 1L, "codes", 1L)
+    h.module.pivotBlock = Some(BigInt(100))
+    h.module.coordinatorGeneration = 3L
+    h.module.resumeSelection = (resume, Some(carried))
+
+    h.call(_.launchAccountRangeWorkers(root, 0))
+
+    h.module.resumeSelections.toSeq shouldBe Seq((root, config.accountConcurrency, BigInt(100)))
+    h.module.stagnationResets.toSeq shouldBe Seq(StagnationWatchdog.ResetReason.AccountLaunch)
+    h.module.launchedAccountGeneration shouldBe 3L
+    h.module.currentCarrySource shouldBe Some(carried)
+    h.module.heapWatchdogStarts shouldBe 1
+    h.module.stagnationSchedules shouldBe 1
+    h.module.mptStorageRequests.toSeq shouldBe Seq(BigInt(100), BigInt(100))
+    h.module.progressMonitor.currentProgress.phase shouldBe SyncPhase.AccountRangeSync
+    val effects = h.effects()
+    spawnedNames(effects) shouldBe Seq(
+      "account-range-coordinator-3",
+      "bytecode-coordinator-3",
+      "storage-range-coordinator-3"
+    )
+    scheduledTimers(effects) shouldBe Seq(
+      (RequestAccountRanges, RequestAccountRanges, 1.second),
+      (TuneRateTracker, TuneRateTracker, 5.seconds),
+      (RequestByteCodes, RequestByteCodes, 1.second),
+      (RequestStorageRanges, RequestStorageRanges, 1.second)
+    )
+    h.spawns.receiveAll() match
+      case Seq(a: ChildSpawn.AccountRange, b: ChildSpawn.ByteCode, s: ChildSpawn.StorageRange) =>
+        a.stateRoot shouldBe root.value
+        a.concurrency shouldBe config.accountConcurrency
+        a.resumeProgress shouldBe resume
+        a.carriedTaskFiles shouldBe Some(carried)
+        a.progressGeneration shouldBe 3L
+        a.initialMaxInFlightPerPeer shouldBe 5
+        a.storageDone shouldBe None
+        (a.mptStorage should be).theSameInstanceAs(h.module.launchStorage)
+        a.intakeBudget.exists(_ eq h.module.intakeBudget) shouldBe true
+        b.intakeBudget.exists(_ eq h.module.intakeBudget) shouldBe true
+        s.initialMaxInFlightPerPeer shouldBe 2
+        s.snapProgressStorage.exists(_ eq h.module.snapProgressStorage) shouldBe true
+      case other => fail(s"expected account, bytecode and storage spawns, got $other")
+    h.kit.childInbox[AccountRangeCoordinator.Command]("account-range-coordinator-3").receiveAll() shouldBe Seq(
+      AccountRangeCoordinator.StartAccountRangeSync(root.value)
+    )
+    h.kit.childInbox[ByteCodeCoordinator.Command]("bytecode-coordinator-3").receiveAll() shouldBe Seq(
+      ByteCodeCoordinator.StartByteCodeSync(Seq.empty),
+      ByteCodeCoordinator.UpdateMaxInFlightPerPeer(2)
+    )
+    h.kit.childInbox[StorageRangeCoordinator.Command]("storage-range-coordinator-3").receiveAll() shouldBe Seq(
+      StorageRangeCoordinator.StartStorageRangeSync(root.value),
+      StorageRangeCoordinator.UpdateMaxInFlightPerPeer(SNAPSyncController.storageInFlightDuringAccounts(config))
     )
   }

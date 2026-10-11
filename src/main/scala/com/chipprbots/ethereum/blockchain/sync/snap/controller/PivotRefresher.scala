@@ -52,6 +52,9 @@ private[snap] trait PivotRefreshApi:
 private[snap] trait PivotRefreshCommitApi:
   def completePivotRefreshWithStateRoot(newPivotBlock: BigInt, newPivotHeader: BlockHeader, reason: String): Unit
 
+private[snap] trait PivotProbeResponseApi:
+  def handlePivotProbeResponse(msg: SNAP.AccountRange): Unit
+
 /** SNAP pivot refresh (spec 016 M10, research.md R6 "Pivot selection + refresh" (b)): the in-place re-peg of the pivot
   * block and state root without tearing down the coordinators (`refreshPivotInPlace`: CL-anchored or peer-best target,
   * the #1555 unservable-pivot fallback, the bounded heal re-peg budget and the 30-s retry; the header fetch through the
@@ -66,7 +69,7 @@ private[snap] trait PivotRefreshCommitApi:
   * matches the probe's request id. It also keeps the proactive roll's trigger (the `CheckDownloadStagnation` arm) and
   * the `DelayedRestart` arm.
   */
-private[snap] trait PivotRefresher extends PivotRefreshApi with PivotRefreshCommitApi:
+private[snap] trait PivotRefresher extends PivotRefreshApi with PivotRefreshCommitApi with PivotProbeResponseApi:
   self: PivotRefresherState & SnapSharedState & SnapControllerEnv & CoordinatorHandles & PhaseFlags & LifecycleApi &
     PeerPoolApi & PivotSelectionApi & PivotBestBlockApi & ProbeTargetApi & FinalizationApi & ChainDownloadStartApi &
     LazyHandoffApi & StagnationResetApi =>
@@ -297,7 +300,7 @@ private[snap] trait PivotRefresher extends PivotRefreshApi with PivotRefreshComm
     * roll when it carries accounts, else defers it again, or forces it after `MaxProbeAttempts`. The arm still decides
     * whether `msg` is the probe's answer, and still forwards any other response to the account coordinator.
     */
-  private[snap] def handlePivotProbeResponse(msg: SNAP.AccountRange): Unit =
+  def handlePivotProbeResponse(msg: SNAP.AccountRange): Unit =
     pivotProbeRequestId = None
     if msg.accounts.nonEmpty then
       pendingProbeCommit.foreach { case (block, header, commitReason) =>

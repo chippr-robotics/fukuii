@@ -26,6 +26,9 @@ private[snap] trait TaskFileSweepApi:
   def accountsCompleteTaskFilePaths: Set[String]
   def sweepSupersededTaskFiles(keep: Set[String], reason: String): Unit
 
+private[snap] trait StorageDoneMarkersApi:
+  def clearStorageDoneMarkers(reason: String): Unit
+
 /** SNAP resume planner (spec 016 M5, research.md R6 "Persistence / resume"): the storage-scheme guard run at start
   * (`checkStorageSchemeMismatch`), the writable trie store for the pivot (`getOrCreateMptStorage`), the storage-task
   * completion markers' clear (`clearStorageDoneMarkers`), the contract task-file bookkeeping
@@ -33,7 +36,7 @@ private[snap] trait TaskFileSweepApi:
   * and the legacy progress parser (`deserializeSnapProgress`). The core keeps the resume decisions that sit inside
   * `startSnapSync` and `launchAccountRangeWorkers` and the checkpoint arm of `syncing`; they call these members.
   */
-private[snap] trait SnapResumePlanner extends ResumeApi with TaskFileSweepApi:
+private[snap] trait SnapResumePlanner extends ResumeApi with TaskFileSweepApi with StorageDoneMarkersApi:
   self: SnapResumePlannerState & SnapControllerEnv =>
 
   /** Guard: fail fast if the DB was written with PathScheme but config says HashScheme (or vice versa).
@@ -70,7 +73,7 @@ private[snap] trait SnapResumePlanner extends ResumeApi with TaskFileSweepApi:
     * the markers' size; it runs on the single-thread snap-validation dispatcher, delaying a validation walk queued
     * behind it by that long at most. A failure only leaves the space to background compaction.
     */
-  private[snap] def clearStorageDoneMarkers(reason: String): Unit =
+  def clearStorageDoneMarkers(reason: String): Unit =
     storageDoneStorage.clear()
     ctx.log.info(s"Cleared storage-task completion markers ($reason); compacting their key range in the background")
     scala.concurrent

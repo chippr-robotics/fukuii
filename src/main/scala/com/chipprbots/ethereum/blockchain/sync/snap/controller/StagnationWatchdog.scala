@@ -40,7 +40,10 @@ private[snap] trait StagnationWatchdogState:
 private[snap] trait StagnationResetApi:
   def resetStagnationClocks(reason: StagnationWatchdog.ResetReason): Unit
 
-private[snap] trait StagnationWatchdog extends StagnationResetApi:
+private[snap] trait StagnationScheduleApi:
+  def scheduleStagnationChecks(): Unit
+
+private[snap] trait StagnationWatchdog extends StagnationResetApi with StagnationScheduleApi:
   self: StagnationWatchdogState & SnapSharedState & SnapControllerEnv & CoordinatorHandles & PhaseFlags &
     HandshakedPeersApi & LifecycleApi & PivotRefreshApi =>
 
@@ -138,7 +141,7 @@ private[snap] trait StagnationWatchdog extends StagnationResetApi:
         storageStagnationRefreshAttempted = false
         consecutiveAccountStallRefreshes = 0
 
-  private[snap] def scheduleStagnationChecks(): Unit =
+  def scheduleStagnationChecks(): Unit =
     val interval = DownloadStagnationCheckInterval
     timers.startTimerWithFixedDelay(CheckDownloadStagnation, CheckDownloadStagnation, interval)
 

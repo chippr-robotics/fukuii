@@ -52,6 +52,9 @@ private[snap] trait LifecycleApi:
   def enterDormantMode(reason: String): Behavior[Command]
   def restartSnapSync(reason: String): Behavior[Command]
 
+private[snap] trait HeapWatchdogApi:
+  def ensureHeapWatchdog(): Unit
+
 /** SNAP sync lifecycle (spec 016 M9, research.md R6 "Dormant / critical-failure"): the critical-failure count and its
   * threshold (`recordCriticalFailure`), dormant mode (`enterDormantMode`, the `dormantRetry` behaviour and its
   * `DormantWakeUp` wake-up, `wakeFromDormant`), the full restart on a fresh pivot (`restartSnapSync`), and the #1501
@@ -61,7 +64,7 @@ private[snap] trait LifecycleApi:
   * `stopSnapOnlySchedules`. It also keeps the dispatch: the `DelayedRestart` and `PivotStateUnservable` arms of
   * `commonSyncingArms`.
   */
-private[snap] trait SyncLifecycle(val heapWatchdogStart: HeapWatchdogStart) extends LifecycleApi:
+private[snap] trait SyncLifecycle(val heapWatchdogStart: HeapWatchdogStart) extends LifecycleApi with HeapWatchdogApi:
   self: SyncLifecycleState & SnapSharedState & SnapControllerEnv & CoordinatorHandles & PhaseFlags &
     HandshakedPeersApi & HealedCodeHoldApi & ShutdownApi & SnapStartApi & StagnationResetApi =>
 
@@ -72,7 +75,7 @@ private[snap] trait SyncLifecycle(val heapWatchdogStart: HeapWatchdogStart) exte
   // Started with the first SNAP coordinators (not at construction: a node that never runs SNAP needs no watchdog).
   private var heapWatchdog: Option[SnapHeapWatchdog.Handle] = None
 
-  private[snap] def ensureHeapWatchdog(): Unit =
+  def ensureHeapWatchdog(): Unit =
     if heapWatchdog.isEmpty && snapSyncConfig.heapWatchdogEnabled then
       heapWatchdog = heapWatchdogStart(
         highFraction = snapSyncConfig.heapWatchdogPauseFraction,
