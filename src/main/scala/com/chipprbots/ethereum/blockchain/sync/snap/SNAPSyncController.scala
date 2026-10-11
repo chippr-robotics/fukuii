@@ -38,7 +38,6 @@ import com.chipprbots.ethereum.blockchain.sync.snap.controller.SnapFinalizationS
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.SnapPeerPool
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.SnapPeerPoolState
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.SnapResumePlanner
-import com.chipprbots.ethereum.blockchain.sync.snap.controller.SnapResumePlannerCheckpoint
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.SnapResumePlannerState
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.SnapSharedState
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.SnapStartApi
@@ -125,8 +124,7 @@ private class SNAPSyncControllerImpl(
     with PivotRefresher
     with PivotRefresherState
     with DownloadSupervisor
-    with DownloadSupervisorState
-    with SnapResumePlannerCheckpoint:
+    with DownloadSupervisorState:
 
   import SNAPSyncController.*
   import SyncPhase.*

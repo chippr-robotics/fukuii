@@ -27,6 +27,7 @@ import org.scalatest.matchers.should.Matchers
 
 import com.chipprbots.ethereum.Fixtures
 import com.chipprbots.ethereum.blockchain.sync.SyncProtocol
+import com.chipprbots.ethereum.blockchain.sync.snap.AccountResumeCheckpoint
 import com.chipprbots.ethereum.blockchain.sync.snap.ContractTaskFiles
 import com.chipprbots.ethereum.blockchain.sync.snap.GatedTaskFileReplay
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPRequestTracker
@@ -103,6 +104,8 @@ private[snap] class StubSnapResumePlannerState(
   var preservedAtPivotBlock: Option[BigInt] = None
   var preservedTaskFiles: Option[ContractTaskFiles] = None
   val snapProgressStorage: SnapSyncProgressStorage = new SnapSyncProgressStorage(dataSource)
+  var launchedAccountGeneration: Long = -1L
+  var currentCarrySource: Option[ContractTaskFiles] = None
 
   // SnapSharedState
   var pivotBlock: Option[BigInt] = None
@@ -518,4 +521,140 @@ class SnapResumePlannerSpec extends ScalaTestWithActorTestKit(ManualTime.config)
     h.module.preservedRangeProgress shouldBe Map(ByteString(last) -> ByteString(next))
     h.module.preservedAtPivotBlock shouldBe Some(BigInt(1_000))
     h.module.resumedStaleCursors shouldBe true
+  }
+
+  /** Two account ranges: the first complete (next >= last), the second not. */
+  private val checkpointCursors: Map[ByteString, ByteString] = Map(
+    ByteString(Array.fill[Byte](32)(0x7f)) -> ByteString(Array.fill[Byte](32)(0x80.toByte)),
+    ByteString(Array.fill[Byte](32)(0xff.toByte)) -> ByteString(Array.fill[Byte](32)(0x10))
+  )
+
+  /** A coordinator's contract task files, created in `dir` under the swept name prefixes. */
+  private def contractTaskFiles(dir: Path, tag: String): ContractTaskFiles =
+    ContractTaskFiles(
+      storagePath = Files.write(dir.resolve(s"fukuii-contract-storage-$tag"), Array[Byte](0)).toString,
+      storageCount = 3L,
+      codeHashesPath = Files.write(dir.resolve(s"fukuii-unique-codehashes-$tag"), Array[Byte](0)).toString,
+      codeHashesCount = 2L
+    )
+
+  /** Run the checkpoint arm on one snapshot; yields the behaviour it returns. */
+  private def checkpoint(h: Harness, cmd: AccountRangeProgressCmd): Behavior[Command] =
+    var next: Behavior[Command] = null
+    h.call(m => next = m.accountProgressCheckpointArms(cmd))
+    next
+
+  private def deleteDir(dir: Path): Unit =
+    (Files.list(dir).toArray.toSeq.map(_.asInstanceOf[Path]) :+ dir).foreach(Files.deleteIfExists)
+
+  it should "define the checkpoint arm for the account-progress snapshot only" taggedAs UnitTest in {
+    val h = new Harness()
+    h.module.accountProgressCheckpointArms.isDefinedAt(AccountRangeProgressCmd(Map.empty)) shouldBe true
+    h.module.accountProgressCheckpointArms.isDefinedAt(PollHandshakedPeers) shouldBe false
+  }
+
+  it should "drop a snapshot from a superseded coordinator generation, and one after accounts complete" taggedAs UnitTest in {
+    val dir = tempDir("snap-resume-planner-checkpoint-drop")
+    val h = new Harness(SNAPSyncConfig(taskFileDir = Some(dir)))
+    val files = contractTaskFiles(dir, "own")
+    val stale = Files.write(dir.resolve("fukuii-contract-storage-stale"), Array[Byte](0))
+    h.module.pivotBlock = Some(BigInt(1_000))
+    h.module.stateRoot = Some(TrieRoot(savedRoot))
+    h.module.launchedAccountGeneration = 5L
+
+    val superseded = AccountRangeProgressCmd(checkpointCursors, Some(files), durable = true, generation = 4L)
+    checkpoint(h, superseded) shouldBe Behaviors.same
+
+    h.module.preservedRangeProgress shouldBe empty
+    h.module.preservedTaskFiles shouldBe None
+    h.module.preservedAtPivotBlock shouldBe None
+    h.module.appStateStorage.getSnapAccountResumeCheckpoint() shouldBe None
+    Files.exists(stale) shouldBe true
+
+    h.module.accountsComplete = true
+    val late = AccountRangeProgressCmd(checkpointCursors, Some(files), durable = true, generation = 5L)
+    checkpoint(h, late) shouldBe Behaviors.same
+
+    h.module.preservedRangeProgress shouldBe empty
+    h.module.preservedTaskFiles shouldBe None
+    h.module.preservedAtPivotBlock shouldBe None
+    h.module.appStateStorage.getSnapAccountResumeCheckpoint() shouldBe None
+    Files.exists(stale) shouldBe true
+    deleteDir(dir)
+  }
+
+  it should "persist a durable snapshot with task files at the current root and pivot, sweeping once per record" taggedAs UnitTest in {
+    val dir = tempDir("snap-resume-planner-checkpoint-persist")
+    val h = new Harness(SNAPSyncConfig(taskFileDir = Some(dir)))
+    val own = contractTaskFiles(dir, "own")
+    val carried = contractTaskFiles(dir, "carried")
+    val stale = Files.write(dir.resolve("fukuii-contract-storage-stale"), Array[Byte](0))
+    val unrelated = Files.write(dir.resolve("not-a-task-file"), Array[Byte](0))
+    h.module.pivotBlock = Some(BigInt(1_000))
+    h.module.stateRoot = Some(TrieRoot(savedRoot))
+    h.module.launchedAccountGeneration = 3L
+    h.module.currentCarrySource = Some(carried)
+
+    val snapshot = AccountRangeProgressCmd(checkpointCursors, Some(own), durable = true, generation = 3L)
+    checkpoint(h, snapshot) shouldBe Behaviors.same
+
+    h.module.preservedRangeProgress shouldBe checkpointCursors
+    h.module.preservedTaskFiles shouldBe Some(own)
+    h.module.preservedAtPivotBlock shouldBe Some(BigInt(1_000))
+    h.module.appStateStorage.getSnapAccountResumeCheckpoint().map(AccountResumeCheckpoint.decode) shouldBe Some(
+      Right(AccountResumeCheckpoint(savedRoot, BigInt(1_000), checkpointCursors, own))
+    )
+    Files.exists(stale) shouldBe false
+    Seq(own.storagePath, own.codeHashesPath, carried.storagePath, carried.codeHashesPath)
+      .map(p => Files.exists(Path.of(p))) shouldBe Seq(true, true, true, true)
+    Files.exists(unrelated) shouldBe true
+
+    // The same record again: already swept for it, so a new stray file survives.
+    val stray = Files.write(dir.resolve("fukuii-contract-storage-stray"), Array[Byte](0))
+    checkpoint(h, snapshot) shouldBe Behaviors.same
+    Files.exists(stray) shouldBe true
+
+    // A record over new files sweeps again: the files it superseded go, the live carry source stays.
+    val newer = contractTaskFiles(dir, "newer")
+    checkpoint(h, snapshot.copy(taskFiles = Some(newer))) shouldBe Behaviors.same
+    Files.exists(stray) shouldBe false
+    Seq(own.storagePath, own.codeHashesPath, carried.storagePath, carried.codeHashesPath, newer.storagePath)
+      .map(p => Files.exists(Path.of(p))) shouldBe Seq(false, false, true, true, true)
+    h.module.preservedTaskFiles shouldBe Some(newer)
+    h.module.appStateStorage.getSnapAccountResumeCheckpoint().map(AccountResumeCheckpoint.decode) shouldBe Some(
+      Right(AccountResumeCheckpoint(savedRoot, BigInt(1_000), checkpointCursors, newer))
+    )
+    deleteDir(dir)
+  }
+
+  it should "keep a snapshot in memory only when it has no task files, no root, or is not durable" taggedAs UnitTest in {
+    val dir = tempDir("snap-resume-planner-checkpoint-memory")
+    val h = new Harness(SNAPSyncConfig(taskFileDir = Some(dir)))
+    val files = contractTaskFiles(dir, "own")
+    val stale = Files.write(dir.resolve("fukuii-contract-storage-stale"), Array[Byte](0))
+    h.module.stateRoot = Some(TrieRoot(savedRoot))
+    h.module.preservedAtPivotBlock = Some(BigInt(900))
+
+    // Durable without task files, and no current pivot: the tracked pivot stays where it was.
+    checkpoint(h, AccountRangeProgressCmd(checkpointCursors, None, durable = true)) shouldBe Behaviors.same
+    h.module.preservedRangeProgress shouldBe checkpointCursors
+    h.module.preservedTaskFiles shouldBe None
+    h.module.preservedAtPivotBlock shouldBe Some(BigInt(900))
+    h.module.appStateStorage.getSnapAccountResumeCheckpoint() shouldBe None
+
+    // Not durable, with a current pivot: the cursors are tracked against it.
+    h.module.pivotBlock = Some(BigInt(1_000))
+    checkpoint(h, AccountRangeProgressCmd(Map.empty, Some(files))) shouldBe Behaviors.same
+    h.module.preservedRangeProgress shouldBe empty
+    h.module.preservedTaskFiles shouldBe Some(files)
+    h.module.preservedAtPivotBlock shouldBe Some(BigInt(1_000))
+    h.module.appStateStorage.getSnapAccountResumeCheckpoint() shouldBe None
+
+    // Durable with task files but no state root (a coordinator stopped by a restart): kept in memory only.
+    h.module.stateRoot = None
+    checkpoint(h, AccountRangeProgressCmd(checkpointCursors, Some(files), durable = true)) shouldBe Behaviors.same
+    h.module.preservedRangeProgress shouldBe checkpointCursors
+    h.module.appStateStorage.getSnapAccountResumeCheckpoint() shouldBe None
+    Files.exists(stale) shouldBe true
+    deleteDir(dir)
   }

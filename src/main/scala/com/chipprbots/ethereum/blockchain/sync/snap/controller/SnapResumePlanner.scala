@@ -9,7 +9,6 @@ import scala.concurrent.ExecutionContext
 import scala.concurrent.duration.*
 import scala.util.Try
 
-import com.chipprbots.ethereum.blockchain.sync.snap.*
 import com.chipprbots.ethereum.blockchain.sync.snap.AccountResumeCheckpoint
 import com.chipprbots.ethereum.blockchain.sync.snap.ContractTaskFiles
 import com.chipprbots.ethereum.blockchain.sync.snap.GatedTaskFileReplay
@@ -44,6 +43,8 @@ private[snap] trait SnapResumePlannerState:
   var preservedAtPivotBlock: Option[BigInt]
   var preservedTaskFiles: Option[ContractTaskFiles]
   def snapProgressStorage: SnapSyncProgressStorage
+  def launchedAccountGeneration: Long
+  def currentCarrySource: Option[ContractTaskFiles]
 
 private[snap] trait ResumeApi:
   def getOrCreateMptStorage(pivotBlockNumber: BigInt): MptStorage
@@ -667,9 +668,6 @@ private[snap] trait SnapResumePlanner
     if carriedTaskFiles.isEmpty then clearStorageDoneMarkers("account phase starts without carried task files")
 
     (resumeProgress, carriedTaskFiles)
-
-private[snap] trait SnapResumePlannerCheckpoint:
-  self: SNAPSyncControllerImpl =>
 
   // Storage-file path of the last persisted checkpoint for which superseded task files were already swept.
   private var lastSweptForRecord: Option[String] = None
