@@ -15,6 +15,11 @@ Implements plan.md "Move verification" steps 1-7 and FR-016 (a), (c), (d), per c
      named in an `# extended-tests:` trailer: the narrowing commit may add new cases to it, but not remove or change an
      assertion, add an assertion inside an existing case, or add a skip/scheduling token; see `check_test_hunks`)
   +  `sbt compile` on each move commit (--compile).
+  8  storage ratchet (env freeze, 2026-10-11 decision), once on the PR head against storage-baseline.json:
+     [env-freeze]   no new storage-typed SnapControllerEnv member; the env's member count only goes down
+     [storage-refs] per-file storage-reference count in snap/controller and snap/actors only goes down
+     [raw-import]   no new raw RocksDB / DataSource / WriteBatch import in those directories
+     See `check_storage_ratchet` for the exact predicates and the baseline-file rules.
 
 fix/* and hotfix/* branches (not containing `snap-016`) may edit existing module files. They are never moves:
 `# moved:`, a narrowing, an added or deleted module file, and (without a `# fix:` trailer) a large net deletion are
@@ -27,6 +32,7 @@ from __future__ import annotations
 
 import argparse
 import fnmatch
+import json
 import os
 import re
 import shutil
@@ -923,6 +929,236 @@ class Verifier:
             shutil.rmtree(tmp, ignore_errors=True)
 
 
+# --------------------------------------------------------------------------- step 8: storage ratchet (env freeze)
+#
+# User decision 2026-10-11 ("state capabilities"): a later `StateIngest` capability removes the storage handles from
+# SnapControllerEnv. Until then the env must not grow storage handles, module and coordinator code must not take new raw
+# RocksDB/DataSource imports, and the per-file storage-reference count is a metric that only goes down.
+#
+# The baseline is BASELINE_PATH, read from git at two revisions:
+#   - the merge-base of BASE and HEAD is the ratchet: nothing may exceed it (so a PR cannot raise the baseline and the
+#     count together), and its pinned env members and raw-import lists can only shrink;
+#   - HEAD's copy must equal the measured values exactly (absent file entry = 0), so a decrease must be recorded by
+#     lowering the baseline in the same PR, and a deleted file must drop its entry. A count entry above the merge-base
+#     value (a new file with storage references, or an env member added) needs a `justifications` entry for that key
+#     that this PR adds or changes. Pinned env members and raw imports have no such escape.
+# Bootstrap: no baseline at the merge-base -> HEAD's copy is the ratchet. Baseline at the merge-base but not at HEAD ->
+# failure. No baseline at either -> an empty one (every count 0).
+
+BASELINE_PATH = "scripts/snap-split/storage-baseline.json"
+RATCHET_DIRS = [f"{SNAP}/controller", f"{SNAP}/actors"]  # recursive: subdirectory modules are included
+ENV_FILE = f"{SNAP}/controller/SnapControllerEnv.scala"
+ENV_TRAIT = "SnapControllerEnv"
+ENV_MEMBERS_KEY = "env.members"
+
+# Rule 1 (env freeze): a member is storage-typed when its declaration text after the name (the type, including inside
+# function types, Option[...] and so on, and any initializer) matches this. `\w*Storage\b` covers MptStorage,
+# PathNodeStorage, FlatSlotStorage and every domain storage, but not `StorageRangeCoordinator`.
+ENV_STORAGE_TYPE_RE = re.compile(r"\w*Storage\b|DataSource|(?i:rocksdb)|\bBlockchain(?:Reader|Writer)\b|WriteBatch")
+
+# The per-file storage-reference count: occurrences of this in code (comments excluded), over every .scala file under
+# RATCHET_DIRS. It counts type names and identifiers alike: `FooStorage` / `fooStorage` / `fooStorageOpt`, any
+# `DataSource*` / `dataSource*`, `BlockchainReader|Writer` / `blockchainReader|Writer`, `WriteBatch`, `RocksDb*`,
+# `org.rocksdb` and `.commit()`. Bare `storage` / `Storage` and `StorageRange*` do not count.
+STORAGE_REF_RE = re.compile(
+    r"\b[A-Za-z]\w*Storage(?:Opt)?\b|\b[Dd]ataSource\w*|\b[bB]lockchain(?:Reader|Writer)\b|\bWriteBatch\b|\bRocksDb\w*"
+    r"|\borg\.rocksdb\b|\.commit\(\)"
+)
+
+# Rule 2 (raw storage imports): an imported name is raw when its path is in `org.rocksdb` or `...db.dataSource`, or the
+# imported name contains `WriteBatch`. A fully qualified `org.rocksdb.X` / `db.dataSource.X` in code counts too.
+# Domain storages (`db.storage.*`, including `RocksDbBfsQueueStorage`) are not raw: they are counted by STORAGE_REF_RE.
+RAW_PKG_RE = re.compile(r"^(?:_root_\.)?org\.rocksdb(?:\.|$)|(?:^|\.)db\.dataSource(?:\.|$)")
+RAW_INLINE_RE = re.compile(r"\borg\.rocksdb\.\w+|\bdb\.dataSource\.\w+")
+
+
+def code_lines(text: str) -> list[str]:
+    """The file's lines with comments blanked (`//` to end of line, `/* ... */` blocks, scaladoc `*` lines)."""
+    out, in_block = [], False
+    for l in text.splitlines():
+        s = l.strip()
+        if in_block:
+            if "*/" in s:
+                in_block = False
+            out.append("")
+            continue
+        if s.startswith("/*"):
+            in_block = "*/" not in s
+            out.append("")
+            continue
+        if s.startswith(("//", "*")):
+            out.append("")
+            continue
+        out.append(re.sub(r"(?:^|\s)//.*$", "", l))
+    return out
+
+
+def storage_ref_count(text: str) -> int:
+    return sum(len(STORAGE_REF_RE.findall(l)) for l in code_lines(text))
+
+
+def split_top_commas(s: str) -> list[str]:
+    out, depth, cur = [], 0, ""
+    for ch in s:
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+        if ch == "," and depth == 0:
+            out.append(cur)
+            cur = ""
+        else:
+            cur += ch
+    return [x.strip() for x in out + [cur] if x.strip()]
+
+
+def expand_import(clause: str) -> list[str]:
+    """`a.b.{C, D => E, *}` -> [a.b.C, a.b.D, a.b.*]; `a.b.C as D` -> [a.b.C]."""
+    m = re.match(r"^([\w.]+?)\.\{(.*)\}$", clause)
+    if m:
+        names = [re.split(r"\s*=>\s*|\s+as\s+", n.strip())[0] for n in m.group(2).split(",") if n.strip()]
+        return [f"{m.group(1)}.{n}" for n in names]
+    return [re.split(r"\s+as\s+", clause)[0].strip()]
+
+
+def raw_imports(text: str) -> list[str]:
+    """Rule 2 entries of a file: raw imported names, and `inline <fqn>` for fully qualified raw references in code."""
+    out, buf = [], None
+    for l in code_lines(text):
+        s = l.strip()
+        if buf is not None:
+            buf += " " + s
+        elif re.match(r"^import\s", s):
+            buf = s[len("import"):].strip()
+        else:
+            out += [f"inline {m}" for m in RAW_INLINE_RE.findall(l)]
+            continue
+        if buf.count("{") > buf.count("}"):
+            continue
+        for clause in split_top_commas(buf):
+            for e in expand_import(clause):
+                if RAW_PKG_RE.search(e) or "WriteBatch" in e.rsplit(".", 1)[-1]:
+                    out.append(e)
+        buf = None
+    return out
+
+
+def env_members(text: str, trait: str = ENV_TRAIT) -> dict[str, str]:
+    """name -> declaration text after the name, for each member of `trait` (continuation lines joined)."""
+    out, on, cur = {}, False, None
+    for l in code_lines(text):
+        if not l.strip():
+            continue
+        ind = indent_of(l)
+        if ind == 0:
+            if re.match(r"^(?:(?:" + MODIFIER + r")\s+)*trait\s+" + re.escape(trait) + r"\b", l.strip()):
+                on, cur = True, None
+            elif on and not l.strip().startswith(("end", ")", "}", "@")):
+                on, cur = False, None
+            continue
+        if not on:
+            continue
+        m = MEMBER_DECL_RE.match(l)
+        if ind == 2 and m:
+            cur = m.group(1)
+            out[cur] = l[m.end():].strip()
+        elif ind > 2 and cur:
+            out[cur] += " " + l.strip()
+        else:
+            cur = None
+    return out
+
+
+def load_baseline(text: str | None) -> dict | None:
+    if text is None:
+        return None
+    b = json.loads(text)
+    b.setdefault("env", {})
+    b["env"].setdefault("members", 0)
+    b["env"].setdefault("storage_members", [])
+    for k in ("storage_refs", "raw_imports", "justifications"):
+        b.setdefault(k, {})
+    return b
+
+
+def check_storage_ratchet(v: "Verifier", base: str, head: str):
+    g = v.g
+    try:
+        mb = g.run("merge-base", base, head).strip()
+    except RuntimeError:
+        mb = base
+    try:
+        old, new = load_baseline(g.show(mb, BASELINE_PATH)), load_baseline(g.show(head, BASELINE_PATH))
+    except ValueError as e:
+        v.err(head, "storage-refs", f"{BASELINE_PATH} is not valid JSON: {e}")
+        return
+    if old is not None and new is None:
+        v.err(head, "storage-refs", f"{BASELINE_PATH} exists at the merge-base but not at the PR head: the ratchet cannot be deleted")
+        return
+    if new is None:
+        new = load_baseline("{}")
+    if old is None:
+        old = new  # bootstrap: the PR that introduces the baseline
+        v.info(head, f"[storage] {BASELINE_PATH} is new in this range: its values are the ratchet")
+
+    def fresh_justification(key: str) -> bool:
+        j = str(new["justifications"].get(key, "")).strip()
+        return bool(j) and j != str(old["justifications"].get(key, "")).strip()
+
+    def ratchet(check: str, key: str, label: str, actual: int, hb: int, ob: int):
+        if hb > ob and not fresh_justification(key):
+            v.err(head, check, f"{label}: baseline raised from {ob} to {hb} without a new `justifications[\"{key}\"]` line in {BASELINE_PATH}")
+        if actual > hb:
+            v.err(head, check, f"{label}: {actual}, above the baseline {hb}; the ratchet only goes down" +
+                  ("" if hb > ob or key in new["storage_refs"] or key == ENV_MEMBERS_KEY else
+                   " (a new file starts at 0: add it to the baseline with a `justifications` line, or keep storage out of it)"))
+        elif actual < hb:
+            v.err(head, check, f"{label}: {actual}, below the baseline {hb}: lower the entry in {BASELINE_PATH} to {actual}"
+                  + (" (remove it)" if actual == 0 and check == "storage-refs" else "") + " in this PR, so the ratchet keeps the gain")
+
+    # Rule 1: SnapControllerEnv
+    env_text = g.show(head, ENV_FILE)
+    members = env_members(env_text or "")
+    typed = {n: d for n, d in members.items() if ENV_STORAGE_TYPE_RE.search(d)}
+    pinned_old, pinned_new = set(old["env"]["storage_members"]), set(new["env"]["storage_members"])
+    v.info(head, f"[storage] {ENV_TRAIT}: members={len(members)} (baseline {new['env']['members']}), "
+                 f"storage-typed={len(typed)} (pinned {len(pinned_old)})")
+    ratchet("env-freeze", ENV_MEMBERS_KEY, f"{ENV_TRAIT} member count", len(members), int(new["env"]["members"]), int(old["env"]["members"]))
+    for n in sorted(set(typed) - pinned_old):
+        v.err(head, "env-freeze", f"{ENV_TRAIT} gains storage-typed member `{n}{typed[n][:80]}`: the env is frozen until "
+                                  "StateIngest removes its storage handles (2026-10-11 decision)")
+    for n in sorted(pinned_new - pinned_old):
+        v.err(head, "env-freeze", f"{BASELINE_PATH} adds `{n}` to env.storage_members: the pinned list may only shrink")
+    for n in sorted(pinned_new - set(typed)):
+        v.info(head, f"[storage] WARN pinned env member `{n}` is no longer storage-typed: drop it from env.storage_members")
+
+    # per-file counts and Rule 2
+    files = g.tree_files(head, RATCHET_DIRS)
+    counts, raws = {}, {}
+    for f in files:
+        rel, text = f[len(SNAP) + 1:], g.show(head, f) or ""
+        counts[rel] = storage_ref_count(text)
+        if r := raw_imports(text):
+            raws[rel] = r
+    keys = sorted(set(k for k, n in counts.items() if n) | set(new["storage_refs"]) | set(old["storage_refs"]))
+    for k in sorted(keys, key=lambda k: (-counts.get(k, 0), k)):
+        v.info(head, f"[storage] {k}: {counts.get(k, 0)} (baseline {new['storage_refs'].get(k, 0)})")
+    v.info(head, f"[storage] total: {sum(counts.values())} (baseline {sum(int(x) for x in new['storage_refs'].values())})")
+    for k in keys:
+        ratchet("storage-refs", k, k, counts.get(k, 0), int(new["storage_refs"].get(k, 0)), int(old["storage_refs"].get(k, 0)))
+
+    for k in sorted(set(raws) | set(new["raw_imports"])):
+        allowed, listed = set(old["raw_imports"].get(k, [])), set(new["raw_imports"].get(k, []))
+        for e in raws.get(k, []):
+            if e not in allowed:
+                v.err(head, "raw-import", f"{k}: raw storage import `{e}`; module and coordinator code goes through "
+                                          "domain storages / capabilities, not RocksDB or DataSource types")
+        for e in sorted(listed - allowed):
+            v.err(head, "raw-import", f"{BASELINE_PATH} adds `{e}` to raw_imports[{k}]: the list may only shrink")
+        for e in sorted(listed - set(raws.get(k, []))):
+            v.info(head, f"[storage] WARN {k} no longer has raw import `{e}`: drop it from raw_imports")
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("base")
@@ -950,6 +1186,7 @@ def main(argv=None) -> int:
             v.compile_move(c)
     if commits:
         v.check_final(commits[-1], commits)
+        check_storage_ratchet(v, a.base, commits[-1])
     if v.errors:
         print(f"\nsnap-split verify: {len(v.errors)} failure(s)")
         return 1

@@ -1,0 +1,47 @@
+{
+  "_doc": [
+    "Spec 016 storage ratchet (env freeze ratchet, 2026-10-11 decision). Enforced by scripts/snap-split/verify.py (check_storage_ratchet).",
+    "Every value here must equal what verify.py measures at the PR head, and may not exceed the copy at the merge-base with staging.",
+    "Lower an entry (or remove it at 0) in the PR that reduces a count. A raise or a new file needs a new justifications[key] line.",
+    "env.storage_members and raw_imports may only shrink; they have no justification escape."
+  ],
+  "env": {
+    "members": 18,
+    "storage_members": [
+      "appStateStorage",
+      "blockchainReader",
+      "blockchainWriter",
+      "evmCodeStorage",
+      "flatSlotStorage",
+      "pathNodeStorageOpt",
+      "stateStorage",
+      "validatorFactory"
+    ]
+  },
+  "storage_refs": {
+    "actors/TrieNodeHealingCoordinator.scala": 82,
+    "controller/SnapResumePlanner.scala": 79,
+    "controller/ChildFactories.scala": 72,
+    "actors/StorageRangeCoordinator.scala": 70,
+    "controller/DownloadSupervisor.scala": 52,
+    "controller/PivotSelector.scala": 51,
+    "controller/HealingOrchestrator.scala": 45,
+    "controller/SnapFinalization.scala": 34,
+    "actors/AccountRangeCoordinator.scala": 26,
+    "controller/SnapControllerEnv.scala": 23,
+    "controller/SyncLifecycle.scala": 14,
+    "actors/ByteCodeCoordinator.scala": 10,
+    "controller/PivotRefresher.scala": 8,
+    "controller/FinalizationPolicy.scala": 4,
+    "controller/SnapPeerPool.scala": 3,
+    "controller/StagnationWatchdog.scala": 2,
+    "controller/StateValidationModule.scala": 2
+  },
+  "raw_imports": {
+    "actors/StorageRangeCoordinator.scala": [
+      "com.chipprbots.ethereum.db.dataSource.DataSourceBatchUpdate",
+      "com.chipprbots.ethereum.db.dataSource.DataUpdate"
+    ]
+  },
+  "justifications": {}
+}

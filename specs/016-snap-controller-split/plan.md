@@ -448,6 +448,23 @@ reviewer re-runs it locally with `scripts/snap-split/verify.sh origin/staging`; 
    - the new stub test.
 7. **FR-016 (c) counts**, printed for the PR body.
 
+**For the PR head, once (env freeze ratchet, 2026-10-11 decision):**
+
+8. **Storage ratchet** against `scripts/snap-split/storage-baseline.json`. The copy at the merge-base with staging is
+   the ceiling, and HEAD's copy must equal the measured values, so a decrease is recorded in the same PR.
+   - `[env-freeze]`: `SnapControllerEnv` gains no storage-typed member. A member is storage-typed when its text after the
+     name matches `\w*Storage\b|DataSource|(?i:rocksdb)|\bBlockchain(?:Reader|Writer)\b|WriteBatch`, including inside
+     function and `Option` types. The 8 current members are pinned by name: `appStateStorage`, `stateStorage`,
+     `evmCodeStorage`, `flatSlotStorage`, `pathNodeStorageOpt`, `blockchainReader`, `blockchainWriter` and
+     `validatorFactory`. Removing a pinned member passes. Retyping a pinned member to another storage type passes.
+     Retyping any other member into a storage type fails. The env member count (18) only goes down.
+   - `[storage-refs]`: the per-file count of `STORAGE_REF_RE` in code (comments excluded) under `snap/controller/` and
+     `snap/actors/` only goes down. The regex is in `verify.py`. A new file starts at 0. Raising an entry, including
+     adding a new file, needs a new `justifications` line. The table prints on every run.
+   - `[raw-import]`: no new import from `org.rocksdb` or `…db.dataSource`, and no new imported name containing
+     `WriteBatch` or inline fully qualified reference, in those directories. The baselined files keep only their
+     listed imports. There is no escape.
+
 The **per-suite counts** (FR-032) come from the Tier 1 job's and the S0e job's test reports. The PR pastes them, and
 the reviewer compares them with the T002 baseline.
 

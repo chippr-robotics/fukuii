@@ -7,6 +7,7 @@ the commits under test, then runs verify.sh on base..HEAD and asserts pass/fail 
     python3 scripts/snap-split/tests/test_verify.py
 """
 
+import json
 import os
 import subprocess
 import tempfile
@@ -133,7 +134,7 @@ def tearDownModule():
 
 
 class Fixture:
-    def __init__(self, branch="refactor/snap-016-m2", core_base=CORE_BASE):
+    def __init__(self, branch="refactor/snap-016-m2", core_base=CORE_BASE, extra=None):
         self.tmp = tempfile.TemporaryDirectory()
         _FIXTURES.append(self.tmp)
         self.d = Path(self.tmp.name)
@@ -143,6 +144,8 @@ class Fixture:
         self.write(CORE, core_base)
         self.write(TEST, SPEC_BASE)
         self.write("src/main/resources/application.conf", "a = 1\n")
+        for path, text in (extra or {}).items():
+            self.write(path, text)
         self.commit("base")
         self.git("tag", "base")
         self.git("checkout", "-q", "-b", branch)
@@ -880,6 +883,281 @@ class VerifyTests(unittest.TestCase):
         f.write("docs/a.md", "x\n")
         f.commit("docs")
         self.ok(f)
+
+
+# ---- step 8: storage ratchet (env freeze, 2026-10-11 decision)
+
+ENV = f"{CTRL}/SnapControllerEnv.scala"
+COORD = f"{SNAP}/actors/FooCoordinator.scala"
+BASELINE = "scripts/snap-split/storage-baseline.json"
+
+ENV_BASE = """package x.controller
+
+private[snap] trait SnapControllerEnv:
+
+  val ctx: Ctx
+  def syncConfig: SyncConfig
+
+  /** The state storage (a comment naming AppStateStorage does not count). */
+  def stateStorage: StateStorage
+  def validatorFactory: MptStorage => StateValidator
+  def pathNodeStorageOpt: Option[PathNodeStorage]
+"""
+
+COORD_BASE = """package x.actors
+
+import com.chipprbots.ethereum.db.dataSource.DataSourceBatchUpdate
+import com.chipprbots.ethereum.db.storage.FlatSlotStorage
+
+class FooCoordinator(flatSlotStorage: FlatSlotStorage):
+  // a comment naming WriteBatch and appStateStorage does not count
+  def f(b: DataSourceBatchUpdate) = b.commit()
+"""
+
+ENV_REFS, COORD_REFS = 5, 7  # see STORAGE_REF_RE: comments excluded; `dataSource` in the import path counts
+
+
+def baseline(env_members=5, pinned=("stateStorage", "validatorFactory", "pathNodeStorageOpt"), refs=None, raw=None, just=None):
+    return json.dumps({
+        "env": {"members": env_members, "storage_members": list(pinned)},
+        "storage_refs": refs if refs is not None else {"controller/SnapControllerEnv.scala": ENV_REFS, "actors/FooCoordinator.scala": COORD_REFS},
+        "raw_imports": raw if raw is not None else {"actors/FooCoordinator.scala": ["com.chipprbots.ethereum.db.dataSource.DataSourceBatchUpdate"]},
+        "justifications": just or {},
+    }, indent=2) + "\n"
+
+
+def ratchet_fixture(branch="refactor/snap-016-r", with_baseline=True):
+    extra = {ENV: ENV_BASE, COORD: COORD_BASE}
+    if with_baseline:
+        extra[BASELINE] = baseline()
+    return Fixture(branch=branch, extra=extra)
+
+
+class StorageRatchetTests(unittest.TestCase):
+    ok = VerifyTests.ok
+    bad = VerifyTests.bad
+
+    def env_change(self, f, text, msg="refactor(snap): env", **bl):
+        f.write(ENV, text)
+        if bl:
+            f.write(BASELINE, baseline(**bl))
+        f.commit(msg)
+
+    def test_unchanged_baseline_passes_and_prints_table(self):
+        f = ratchet_fixture()
+        f.write("README.md", "x\n")
+        f.commit("docs")
+        out = self.ok(f)
+        self.assertIn(f"[storage] actors/FooCoordinator.scala: {COORD_REFS} (baseline {COORD_REFS})", out)
+        self.assertIn("[storage] SnapControllerEnv: members=5 (baseline 5), storage-typed=3 (pinned 3)", out)
+
+    # Rule 1: env freeze
+    def test_new_storage_member_fails_even_with_baseline_raised_and_justified(self):
+        f = ratchet_fixture()
+        new = ENV_BASE + "  def evmCodeStorage: EvmCodeStorage\n"
+        self.env_change(f, new, env_members=6, refs={"controller/SnapControllerEnv.scala": ENV_REFS + 2, "actors/FooCoordinator.scala": COORD_REFS},
+                        just={"env.members": "needed", "controller/SnapControllerEnv.scala": "needed"})
+        out = self.bad(f, "env-freeze")
+        self.assertIn("storage-typed member `evmCodeStorage", out)
+
+    def test_new_storage_type_nested_in_function_type_fails(self):
+        f = ratchet_fixture()
+        self.env_change(f, ENV_BASE + "  def batcher: Int => Option[WriteBatch]\n", env_members=6,
+                        refs={"controller/SnapControllerEnv.scala": ENV_REFS + 1, "actors/FooCoordinator.scala": COORD_REFS},
+                        just={"env.members": "x", "controller/SnapControllerEnv.scala": "x"})
+        out = self.bad(f, "env-freeze")
+        self.assertIn("`batcher", out)
+
+    def test_retyping_a_pinned_member_into_another_storage_type_passes(self):
+        # Decision: pinned by name. A member that already was a storage handle stays one; StateIngest removes it.
+        f = ratchet_fixture()
+        self.env_change(f, ENV_BASE.replace("def stateStorage: StateStorage", "def stateStorage: MptStorage"))
+        self.ok(f)
+
+    def test_retyping_a_non_storage_member_into_a_storage_type_fails(self):
+        f = ratchet_fixture()
+        self.env_change(f, ENV_BASE.replace("def syncConfig: SyncConfig", "def syncConfig: Option[BlockchainReader]"))
+        out = self.bad(f, "env-freeze")
+        self.assertIn("`syncConfig", out)
+
+    def test_removing_a_pinned_member_with_lowered_baseline_passes(self):
+        f = ratchet_fixture()
+        self.env_change(f, ENV_BASE.replace("  def stateStorage: StateStorage\n", ""), env_members=4,
+                        refs={"controller/SnapControllerEnv.scala": ENV_REFS - 2, "actors/FooCoordinator.scala": COORD_REFS})
+        out = self.ok(f)
+        self.assertIn("WARN pinned env member `stateStorage` is no longer storage-typed", out)
+
+    def test_removing_a_member_without_lowering_the_baseline_fails(self):
+        f = ratchet_fixture()
+        self.env_change(f, ENV_BASE.replace("  def stateStorage: StateStorage\n", ""))
+        out = self.bad(f, "env-freeze")
+        self.assertIn("member count: 4, below the baseline 5", out)
+        self.assertIn("[storage-refs]", out)
+
+    def test_new_non_storage_member_passes_with_justified_count(self):
+        f = ratchet_fixture()
+        self.env_change(f, ENV_BASE + "  def timeoutMs: Long\n", env_members=6, just={"env.members": "timeout for X, see #1"})
+        self.ok(f)
+
+    def test_env_member_count_up_without_justification_fails(self):
+        f = ratchet_fixture()
+        self.env_change(f, ENV_BASE + "  def timeoutMs: Long\n", env_members=6)
+        self.bad(f, "env-freeze")
+        g = ratchet_fixture()
+        self.env_change(g, ENV_BASE + "  def timeoutMs: Long\n")
+        out = self.bad(g, "env-freeze")
+        self.assertIn("above the baseline 5", out)
+
+    def test_baseline_cannot_grow_the_pinned_list(self):
+        f = ratchet_fixture()
+        f.write(BASELINE, baseline(pinned=("stateStorage", "validatorFactory", "pathNodeStorageOpt", "syncConfig")))
+        f.commit("chore: pin")
+        out = self.bad(f, "env-freeze")
+        self.assertIn("adds `syncConfig` to env.storage_members", out)
+
+    # per-file storage-reference counts
+    def test_count_increase_fails(self):
+        f = ratchet_fixture(branch="feat/coord")
+        f.write(COORD, COORD_BASE + "  def g(s: StateStorage) = s\n")
+        f.commit("feat: coordinator")
+        out = self.bad(f, "storage-refs")
+        self.assertIn(f"actors/FooCoordinator.scala: {COORD_REFS + 1}, above the baseline {COORD_REFS}", out)
+
+    def test_count_increase_with_baseline_raised_and_stale_justification_fails(self):
+        f = Fixture(branch="feat/coord", extra={ENV: ENV_BASE, COORD: COORD_BASE,
+                                                 BASELINE: baseline(just={"actors/FooCoordinator.scala": "old reason"})})
+        f.write(COORD, COORD_BASE + "  def g(s: StateStorage) = s\n")
+        f.write(BASELINE, baseline(refs={"controller/SnapControllerEnv.scala": ENV_REFS, "actors/FooCoordinator.scala": COORD_REFS + 1},
+                                   just={"actors/FooCoordinator.scala": "old reason"}))
+        f.commit("feat: coordinator")
+        out = self.bad(f, "storage-refs")
+        self.assertIn("without a new `justifications", out)
+
+    def test_count_decrease_with_lowered_baseline_passes(self):
+        f = ratchet_fixture(branch="feat/coord")
+        f.write(COORD, COORD_BASE.replace(" = b.commit()", " = b"))
+        f.write(BASELINE, baseline(refs={"controller/SnapControllerEnv.scala": ENV_REFS, "actors/FooCoordinator.scala": COORD_REFS - 1}))
+        f.commit("feat: coordinator")
+        self.ok(f)
+
+    def test_count_decrease_without_lowering_the_baseline_fails(self):
+        f = ratchet_fixture(branch="feat/coord")
+        f.write(COORD, COORD_BASE.replace(" = b.commit()", " = b"))
+        f.commit("feat: coordinator")
+        out = self.bad(f, "storage-refs")
+        self.assertIn(f"lower the entry in {BASELINE} to {COORD_REFS - 1}", out)
+
+    def test_comment_only_edit_does_not_move_the_count(self):
+        f = ratchet_fixture(branch="feat/coord")
+        f.write(COORD, COORD_BASE + "  // StateStorage, dataSource.commit() and WriteBatch in a comment\n")
+        f.commit("docs: comment")
+        self.ok(f)
+
+    def test_new_file_with_storage_refs_fails(self):
+        f = ratchet_fixture(branch="feat/coord")
+        f.write(f"{SNAP}/actors/BarCoordinator.scala", "package x\nclass Bar(s: EvmCodeStorage)\n")
+        f.commit("feat: bar")
+        out = self.bad(f, "storage-refs")
+        self.assertIn("actors/BarCoordinator.scala: 1, above the baseline 0", out)
+        self.assertIn("a new file starts at 0", out)
+
+    def test_new_file_added_to_baseline_with_justification_passes(self):
+        refs = {"controller/SnapControllerEnv.scala": ENV_REFS, "actors/FooCoordinator.scala": COORD_REFS, "actors/BarCoordinator.scala": 1}
+        f = ratchet_fixture(branch="feat/coord")
+        f.write(f"{SNAP}/actors/BarCoordinator.scala", "package x\nclass Bar(s: EvmCodeStorage)\n")
+        f.write(BASELINE, baseline(refs=refs))
+        f.commit("feat: bar")
+        self.bad(f, "storage-refs")  # no justification
+        f.write(BASELINE, baseline(refs=refs, just={"actors/BarCoordinator.scala": "split out of Foo; paid down by StateIngest"}))
+        f.commit("chore: justify")
+        self.ok(f)
+
+    def test_deleted_file_must_drop_its_entry(self):
+        f = ratchet_fixture(branch="feat/coord")
+        f.git("rm", "-q", COORD)
+        f.commit("feat: drop foo")
+        out = self.bad(f, "storage-refs")
+        self.assertIn("(remove it)", out)
+
+    def test_deleting_the_baseline_fails_and_bootstrap_passes(self):
+        f = ratchet_fixture()
+        f.git("rm", "-q", BASELINE)
+        f.commit("chore: drop")
+        self.bad(f, "storage-refs")
+        g = ratchet_fixture(with_baseline=False)
+        g.write(BASELINE, baseline())
+        g.commit("chore: add baseline")
+        out = self.ok(g)
+        self.assertIn("is new in this range", out)
+
+    # Rule 2: raw storage imports
+    def test_raw_import_in_controller_fails(self):
+        f = ratchet_fixture()
+        f.write(f"{CTRL}/FooPolicy.scala", "package x.controller\n\nimport org.rocksdb.RocksDB\n\nprivate[snap] object FooPolicy:\n  def a = 1\n")
+        f.commit("refactor(snap): policy")
+        out = self.bad(f, "raw-import")
+        self.assertIn("controller/FooPolicy.scala: raw storage import `org.rocksdb.RocksDB`", out)
+
+    def test_raw_import_in_actors_fails(self):
+        f = ratchet_fixture(branch="feat/coord")
+        f.write(f"{SNAP}/actors/BarCoordinator.scala",
+                "package x\n\nimport com.chipprbots.ethereum.db.dataSource.{DataSource, DataUpdate as DU}\n\nclass Bar\n")
+        f.write(BASELINE, baseline(refs={"controller/SnapControllerEnv.scala": ENV_REFS, "actors/FooCoordinator.scala": COORD_REFS,
+                                         "actors/BarCoordinator.scala": 3}, just={"actors/BarCoordinator.scala": "x"}))
+        f.commit("feat: bar")
+        out = self.bad(f, "raw-import")
+        self.assertIn("`com.chipprbots.ethereum.db.dataSource.DataSource`", out)
+        self.assertIn("`com.chipprbots.ethereum.db.dataSource.DataUpdate`", out)
+
+    def test_write_batch_and_inline_fqn_are_raw(self):
+        f = ratchet_fixture(branch="feat/coord")
+        f.write(f"{SNAP}/actors/BarCoordinator.scala",
+                "package x\n\nimport com.chipprbots.ethereum.db.storage.WriteBatchHelper\n\nclass Bar:\n  def b = new org.rocksdb.Options()\n")
+        f.commit("feat: bar")
+        out = self.bad(f, "raw-import")
+        self.assertIn("WriteBatchHelper`", out)
+        self.assertIn("`inline org.rocksdb.Options`", out)
+
+    def test_baselined_file_keeps_its_imports_but_cannot_add(self):
+        f = ratchet_fixture(branch="feat/coord")
+        f.write(COORD, COORD_BASE.replace("import com.chipprbots.ethereum.db.storage.FlatSlotStorage\n",
+                                          "import com.chipprbots.ethereum.db.storage.FlatSlotStorage\nimport x.Other\n"))
+        f.commit("feat: keep")
+        self.ok(f)
+        f.write(COORD, COORD_BASE.replace("dataSource.DataSourceBatchUpdate", "dataSource.{DataSourceBatchUpdate, DataUpdate}"))
+        f.write(BASELINE, baseline(refs={"controller/SnapControllerEnv.scala": ENV_REFS, "actors/FooCoordinator.scala": COORD_REFS}))
+        f.commit("feat: add")
+        out = self.bad(f, "raw-import")
+        self.assertIn("raw storage import `com.chipprbots.ethereum.db.dataSource.DataUpdate`", out)
+
+    def test_baseline_cannot_grow_raw_imports(self):
+        f = ratchet_fixture(branch="feat/coord")
+        f.write(BASELINE, baseline(raw={"actors/FooCoordinator.scala": ["com.chipprbots.ethereum.db.dataSource.DataSourceBatchUpdate",
+                                                                        "org.rocksdb.WriteBatch"]}))
+        f.commit("chore: widen")
+        self.bad(f, "raw-import")
+
+    def test_domain_storage_import_is_not_raw(self):
+        f = ratchet_fixture(branch="feat/coord")
+        f.write(f"{SNAP}/actors/BarCoordinator.scala", "package x\n\nimport com.chipprbots.ethereum.db.storage.RocksDbBfsQueueStorage\n\nclass Bar\n")
+        f.commit("feat: bar")
+        out = self.bad(f, "storage-refs")
+        self.assertNotIn("[raw-import]", out)
+
+    def test_coordinator_only_pr_runs_no_move_checks(self):
+        # actors/*.scala is not a module dir: a coordinator PR on any branch gets the ratchet, not the move checks
+        f = ratchet_fixture(branch="feat/coord")
+        f.write(COORD, COORD_BASE + "  def h = 1\n")
+        f.commit("feat: coordinator")
+        out = self.ok(f)
+        self.assertNotIn("[branch]", out)
+
+    def test_real_baseline_pins_the_eight_env_storage_members(self):
+        b = json.loads((Path(__file__).resolve().parents[1] / "storage-baseline.json").read_text())
+        self.assertEqual(b["env"]["members"], 18)
+        self.assertEqual(sorted(b["env"]["storage_members"]), sorted([
+            "appStateStorage", "stateStorage", "evmCodeStorage", "flatSlotStorage", "pathNodeStorageOpt",
+            "blockchainReader", "blockchainWriter", "validatorFactory"]))
 
 
 if __name__ == "__main__":
