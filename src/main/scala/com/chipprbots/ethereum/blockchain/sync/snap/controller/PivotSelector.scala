@@ -7,7 +7,7 @@ import org.apache.pekko.actor.typed.scaladsl.Behaviors
 import scala.concurrent.duration.*
 
 import com.chipprbots.ethereum.blockchain.sync.SyncProtocol
-import com.chipprbots.ethereum.blockchain.sync.snap.*
+import com.chipprbots.ethereum.blockchain.sync.snap.ChainDownloader
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController.*
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController.SyncPhase.*
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncMetrics
@@ -31,6 +31,9 @@ private[snap] trait SyncingApi:
 private[snap] trait AccountRangeStartApi:
   def startAccountRangeSync(rootHash: TrieRoot): Unit
 
+private[snap] trait PivotRefreshCommitApi:
+  def completePivotRefreshWithStateRoot(newPivotBlock: BigInt, newPivotHeader: BlockHeader, reason: String): Unit
+
 private[snap] trait PivotSelectorState:
   var clPivotHint: Option[CLPivotHint]
   var clHintArrivedAtMs: Option[Long]
@@ -39,6 +42,8 @@ private[snap] trait PivotSelectorState:
   def bigIntReverseOrdering: Ordering[BigInt]
   def BootstrapCheckKey: String
   def peerEventArms: PartialFunction[Command, Behavior[Command]]
+  var minPivotHint: BigInt
+  var pendingPivotRefresh: Option[(BigInt, String)]
 
 /** SNAP pivot selection (spec 016 M8, research.md R6 "Pivot selection + refresh" (a)): the `bootstrapping` behaviour
   * (the pivot-header bootstrap's completion, failure and retry, with the freshness check against the SNAP peers' best
@@ -50,8 +55,9 @@ private[snap] trait PivotSelectorState:
   * of `peerEventArms` and the `RetryBootstrapAtBlock` arm of `commonSyncingArms`.
   */
 private[snap] trait PivotSelector extends PivotSelectionApi:
-  self: PivotSelectorState & SnapSharedState & SnapControllerEnv & PhaseFlags & PeerPoolApi & HandshakedPeersApi &
-    BootstrapPeersApi & HealingApi & LifecycleApi & ShutdownApi & SnapStartApi & SyncingApi & AccountRangeStartApi =>
+  self: PivotSelectorState & SnapSharedState & SnapControllerEnv & CoordinatorHandles & PhaseFlags & PeerPoolApi &
+    HandshakedPeersApi & BootstrapPeersApi & HealingApi & LifecycleApi & ShutdownApi & SnapStartApi & SyncingApi &
+    AccountRangeStartApi & StagnationResetApi & PivotRefreshCommitApi =>
 
   private lazy val BootstrapRetryBaseDelay = 2.seconds
   private lazy val BootstrapRetryMaxDelay = 60.seconds
@@ -432,9 +438,6 @@ private[snap] trait PivotSelector extends PivotSelectionApi:
       s"Updated best block for ETH status: block=$pivotBlockNumber, hash=${pivotHash.value.toHex.take(16)}..., " +
         s"estimatedTD=$estimatedTotalDifficulty (source=$tdSource)"
     )
-
-private[snap] trait PivotSelectorStart:
-  self: SNAPSyncControllerImpl =>
 
   /** A `commonSyncingArms` arm lifted into a class member (spec 016 restructure, CQ-SNAP-016-18/19), body unchanged:
     * `RetryBootstrapAtBlock`, the backtracked pivot-header bootstrap retry armed by `PivotBootstrapFailed`.

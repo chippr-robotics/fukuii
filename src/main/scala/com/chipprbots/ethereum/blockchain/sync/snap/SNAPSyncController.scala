@@ -31,8 +31,8 @@ import com.chipprbots.ethereum.blockchain.sync.snap.controller.HeapWatchdogStart
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.LifecycleApi
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.PhaseFlags
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.PivotRefreshApi
+import com.chipprbots.ethereum.blockchain.sync.snap.controller.PivotRefreshCommitApi
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.PivotSelector
-import com.chipprbots.ethereum.blockchain.sync.snap.controller.PivotSelectorStart
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.PivotSelectorState
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.ShutdownApi
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.SnapControllerEnv
@@ -122,10 +122,10 @@ private class SNAPSyncControllerImpl(
     with StagnationWatchdogState
     with PivotSelector
     with PivotSelectorState
-    with PivotSelectorStart
     with SnapStartApi
     with SyncingApi
-    with AccountRangeStartApi:
+    with AccountRangeStartApi
+    with PivotRefreshCommitApi:
 
   import SNAPSyncController.*
   import SyncPhase.*
@@ -330,7 +330,7 @@ private class SNAPSyncControllerImpl(
 
   // Minimum pivot block enforced when re-entering SNAP from a RegularSyncStuck escape.
   // Prevents re-selecting the same pivot that caused the regular-sync stall.
-  private[snap] var minPivotHint: BigInt = BigInt(0)
+  var minPivotHint: BigInt = BigInt(0)
   var clHintArrivedAtMs: Option[Long] = None
 
   // Captured once at construction. ETC mainnet has TTD=None and never goes down the
@@ -2863,7 +2863,7 @@ private class SNAPSyncControllerImpl(
       else completePivotRefreshWithStateRoot(newPivotBlock, newPivotHeaderOpt.get, reason)
 
   /** Complete the pivot refresh once we have the header (either from local storage or bootstrapped from peer). */
-  private[snap] def completePivotRefreshWithStateRoot(
+  def completePivotRefreshWithStateRoot(
       newPivotBlock: BigInt,
       newPivotHeader: BlockHeader,
       reason: String
