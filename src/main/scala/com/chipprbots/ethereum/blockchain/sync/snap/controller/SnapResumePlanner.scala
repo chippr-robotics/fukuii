@@ -5,6 +5,7 @@ import org.apache.pekko.util.ByteString
 
 import scala.concurrent.ExecutionContext
 
+import com.chipprbots.ethereum.blockchain.sync.snap.ContractTaskFiles
 import com.chipprbots.ethereum.blockchain.sync.snap.GatedTaskFileReplay
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController.*
@@ -12,6 +13,7 @@ import com.chipprbots.ethereum.blockchain.sync.snap.StorageScheme
 import com.chipprbots.ethereum.db.storage.MptStorage
 import com.chipprbots.ethereum.db.storage.Namespaces
 import com.chipprbots.ethereum.db.storage.SnapStorageDoneStorage
+import com.chipprbots.ethereum.domain.TrieRoot
 import com.chipprbots.ethereum.utils.Hex
 
 private[snap] trait SnapResumePlannerState:
@@ -28,6 +30,13 @@ private[snap] trait TaskFileSweepApi:
 
 private[snap] trait StorageDoneMarkersApi:
   def clearStorageDoneMarkers(reason: String): Unit
+
+private[snap] trait AccountResumeSelectionApi:
+  def selectAccountResume(
+      rootHash: TrieRoot,
+      effectiveConcurrency: Int,
+      currentPivot: BigInt
+  ): (Map[ByteString, ByteString], Option[ContractTaskFiles])
 
 /** SNAP resume planner (spec 016 M5, research.md R6 "Persistence / resume"): the storage-scheme guard run at start
   * (`checkStorageSchemeMismatch`), the writable trie store for the pivot (`getOrCreateMptStorage`), the storage-task

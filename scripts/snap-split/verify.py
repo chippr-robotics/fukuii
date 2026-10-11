@@ -294,6 +294,8 @@ def member_issue(s: str) -> str | None:
     if re.match(r"^(def|type|given|import)\b", t) or re.match(r"^lazy\s+val\b", t):
         return None
     if re.match(r"^val\b", t):
+        if re.match(r"^val\s+\w+\s*:", t) and top_level_initializer(t) is None:
+            return None  # abstract val: no initializer to run, so no init-order hazard; a stable path for imports
         return "concrete non-lazy `val` at member level"
     if re.match(r"^var\b", t):
         if not re.match(r"^var\s+\w+", t):

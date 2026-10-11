@@ -99,7 +99,7 @@ private class SNAPSyncControllerImpl(
     intakeBudgetOverride: Option[SnapIntakeBudget] = None,
     // #1555: the pivot whose finalization failed in the previous SNAP controller (SyncController's HealingImpossible
     // restart), or None. On PoS, the accounts-complete recovery will not resume healing at or below it.
-    failedFinalizationPivot: Option[BigInt] = None
+    val failedFinalizationPivot: Option[BigInt] = None
 )(implicit val ec: ExecutionContext)
     extends CoordinatorHandles
     with PhaseFlags

@@ -27,12 +27,14 @@ private[snap] trait AccountRangeStartApi:
 private[snap] trait ByteCodeRequestApi:
   def requestByteCodes(): Unit
 
-private[snap] trait AccountResumeSelectionApi:
-  def selectAccountResume(
-      rootHash: TrieRoot,
-      effectiveConcurrency: Int,
-      currentPivot: BigInt
-  ): (Map[ByteString, ByteString], Option[ContractTaskFiles])
+private[snap] trait DownloadRecoveryApi:
+  def spawnRecoveryCoordinators(
+      rootBs: ByteString,
+      storage: MptStorage,
+      bytecodeAlreadyDone: Boolean,
+      storageAlreadyDone: Boolean
+  ): Unit
+  def checkAllDownloadsComplete(): Unit
 
 private[snap] trait DownloadSupervisorState:
   def coordinatorGeneration: Long

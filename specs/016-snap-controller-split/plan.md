@@ -169,7 +169,8 @@ by the required CI job `snap-split-verify` on **every commit** of the PR:
   (deeper indent) are skipped, so local `val`/`var` never trip it. It fails on:
   - any member-level line that is not one of `def`, `lazy val`, `var`/`private var`, `type`, `given`, `import`,
     `end`, a modifier-prefixed form of those, or a comment, which means **no top-level statements**;
-  - any member-level `val` that is not `lazy`;
+  - any member-level `val` that is not `lazy` (an abstract `val` declaration, with no initializer, is allowed: it runs
+    nothing at construction, and it gives a capability a stable path, e.g. for `import ctx.executionContext`);
   - any member-level `var` whose initializer is not a literal (number, boolean, string), `None`, `Nil`, an empty
     collection (`…empty…`), or a companion constant (`[A-Z]\w*(\.\w+)*`).
 
