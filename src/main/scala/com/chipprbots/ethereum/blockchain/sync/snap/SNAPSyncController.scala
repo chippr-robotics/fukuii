@@ -29,9 +29,8 @@ import com.chipprbots.ethereum.blockchain.sync.snap.controller.HealingOrchestrat
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.HealingOrchestratorState
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.HeapWatchdogStart
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.PhaseFlags
-import com.chipprbots.ethereum.blockchain.sync.snap.controller.PivotRefreshApi
-import com.chipprbots.ethereum.blockchain.sync.snap.controller.PivotRefreshCommitApi
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.PivotRefresher
+import com.chipprbots.ethereum.blockchain.sync.snap.controller.PivotRefresherState
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.PivotSelector
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.PivotSelectorState
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.ShutdownApi
@@ -115,7 +114,6 @@ private class SNAPSyncControllerImpl(
     with ShutdownApi
     with SnapResumePlanner
     with SnapResumePlannerState
-    with PivotRefreshApi
     with HealingOrchestrator
     with HealingOrchestratorState
     with ByteCodeRequestApi
@@ -126,10 +124,10 @@ private class SNAPSyncControllerImpl(
     with SnapStartApi
     with SyncingApi
     with AccountRangeStartApi
-    with PivotRefreshCommitApi
     with SyncLifecycle(heapWatchdogStart)
     with SyncLifecycleState
-    with PivotRefresher:
+    with PivotRefresher
+    with PivotRefresherState:
 
   import SNAPSyncController.*
   import SyncPhase.*
@@ -207,7 +205,7 @@ private class SNAPSyncControllerImpl(
   // AppStateStorage but uses a dedicated namespace so progress survives crash-restart without
   // interfering with other state. Replaces AppStateStorage's plain-text SnapSyncProgress entry
   // (namespace 's', account-only). Storage cursor persistence is new.
-  private[snap] val snapProgressStorage = new SnapSyncProgressStorage(appStateStorage.dataSource)
+  val snapProgressStorage = new SnapSyncProgressStorage(appStateStorage.dataSource)
 
   ctx.log.info("SNAPSyncController started with shared blacklist (cross-mode penalty propagation enabled)")
 
@@ -290,8 +288,8 @@ private class SNAPSyncControllerImpl(
   // Content-addressed MPT storage survives pivot changes (accounts keyed by keccak256 hash),
   // so already-traversed keyspace doesn't need re-downloading if the pivot
   // hasn't drifted too far (within MaxPreservedPivotDistance blocks).
-  private[snap] var preservedRangeProgress: Map[ByteString, ByteString] = Map.empty
-  private[snap] var preservedAtPivotBlock: Option[BigInt] = None
+  var preservedRangeProgress: Map[ByteString, ByteString] = Map.empty
+  var preservedAtPivotBlock: Option[BigInt] = None
   // Contract task files consistent with `preservedRangeProgress` (see AccountResumeCheckpoint). With them, partial
   // ranges resume from their cursor and the storage/bytecode work of the downloaded prefix is replayed, not re-derived
   // from the network. None => legacy behaviour (partial ranges restart from their start).
@@ -374,7 +372,7 @@ private class SNAPSyncControllerImpl(
   // ETC network is predominantly core-geth peers; once the pivot ages beyond 128 blocks,
   // all external peers respond with accounts=[], proof=[] and only local Besu can serve.
   // Rolling proactively at 100 blocks preserves all downloaded state (unlike go-ethereum).
-  private[snap] var lastProactivePivotBlock: Option[BigInt] = None
+  var lastProactivePivotBlock: Option[BigInt] = None
   private val SnapServeWindowBlocks: BigInt = BigInt(100)
 
   // Roll target margin: a proactive/reactive roll picks networkBest - max(pivotBlockOffset,
@@ -384,7 +382,7 @@ private class SNAPSyncControllerImpl(
   // "not indexed" forever → the pivot freezes (observed 2026-06-01: ETC stalled 70+ min
   // at 16.8M accounts). Margin ≈ half the serve window keeps the new pivot servable with
   // ~50 blocks of runway before it ages past the 100-block roll trigger.
-  private[snap] val SnapServeWindowMargin: BigInt = BigInt(50)
+  val SnapServeWindowMargin: BigInt = BigInt(50)
 
   // Pivot readiness probe: before committing a proactive pivot roll, we probe one peer with
   // the candidate root. Only if the peer's snapshot is indexed (returns ≥1 account) do we
@@ -394,9 +392,8 @@ private class SNAPSyncControllerImpl(
   var proactiveRollNeedsProbe: Boolean = false // flag: stagnation check → completePivotRefresh
   var pendingProbeCommit: Option[(BigInt, BlockHeader, String)] = None // deferred commit args
   var lastProbeAttemptMs: Long = 0L
-  private[snap] val ProbeCooldownMs: Long = 30_000L // match DownloadStagnationCheckInterval
+  val ProbeCooldownMs: Long = 30_000L // match DownloadStagnationCheckInterval
   var probeAttemptCount: Int = 0
-  private[snap] val MaxProbeAttempts: Int = 5 // 5 × 30s = 150s max deferral before forced roll
   private val ZeroPeerStagnationMs: Long = 3 * 60 * 1000L // 3 min zero-peer short-circuit
 
   // Consecutive pivot refresh counter: when all peers are repeatedly stateless after
@@ -406,14 +403,6 @@ private class SNAPSyncControllerImpl(
   // retry mode. Set to 10 (was 3) to tolerate ETC mainnet's 1-5 SNAP peers needing
   // 5+ minutes to re-index after serve-window expiry.
   var consecutivePivotRefreshes: Int = 0
-  private[snap] val MaxConsecutivePivotRefreshes = 10
-
-  // Pivot blocks confirmed unservable in this session. When a refreshPivotInPlace resolves
-  // to the same block as one in this set, fast-track consecutivePivotRefreshes to the
-  // threshold so dormant mode activates after the next coordinator escalation (2–3 cycles
-  // instead of 10). Entries are never cleared — a failed pivot block should not be retried
-  // within the same session.
-  private[snap] val failedPivotBlocks: mutable.Set[BigInt] = mutable.Set.empty
 
   // Pending pivot refresh: when refreshPivotInPlace() needs a header from a peer,
   // it requests a bootstrap and stores the pending pivot here. When BootstrapComplete
@@ -440,7 +429,6 @@ private class SNAPSyncControllerImpl(
   // RetryPivotRefresh forever (the heal-churn #1371 fought). Fail-SAFE (never force-marks-done / weakens any gate),
   // never fail-OPEN. Reset on any successful re-peg (completePivotRefreshWithStateRoot) and on entering healing.
   var healRepegNoRootAttempts: Int = 0
-  private[snap] val MaxHealRepegNoRootAttempts: Int = 10 // 10 × 30s ≈ 5 min of no servable root before the lazy handoff
   // Tracks whether the SNAP peer eviction recurring timer is active (replaces the snapPeerEvictionTask
   // Cancellable). startSnapPeerEviction() is idempotent — it only starts the timer once per session.
   var snapPeerEvictionStarted: Boolean = false

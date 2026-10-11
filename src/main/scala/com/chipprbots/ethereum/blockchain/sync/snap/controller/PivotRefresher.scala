@@ -4,17 +4,53 @@ import org.apache.pekko.actor.typed.Behavior
 import org.apache.pekko.actor.typed.scaladsl.Behaviors
 import org.apache.pekko.util.ByteString
 
+import scala.collection.mutable
 import scala.concurrent.duration.*
 
-import com.chipprbots.ethereum.blockchain.sync.snap.*
+import com.chipprbots.ethereum.blockchain.sync.snap.ChainDownloader
+import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController.*
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController.SyncPhase.*
+import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncMetrics
 import com.chipprbots.ethereum.consensus.engine.PoSBlockHeaderValidator
+import com.chipprbots.ethereum.db.storage.SnapSyncProgressStorage
 import com.chipprbots.ethereum.domain.BlockHeader
 import com.chipprbots.ethereum.network.p2p.messages.SNAP
 import com.chipprbots.ethereum.network.p2p.messages.SNAP.GetAccountRange
 import com.chipprbots.ethereum.utils.BlockchainConfig
 import com.chipprbots.ethereum.utils.ByteStringUtils.ByteStringOps
+
+private[snap] trait PivotRefresherState:
+  var clPivotHint: Option[CLPivotHint]
+  def isPoSChain: Boolean
+  var pendingPivotRefresh: Option[(BigInt, String)]
+  var healRepegNoRootAttempts: Int
+  var validationGeneration: Long
+  var preservedRangeProgress: Map[ByteString, ByteString]
+  var preservedAtPivotBlock: Option[BigInt]
+  def snapProgressStorage: SnapSyncProgressStorage
+  var lastProactivePivotBlock: Option[BigInt]
+  var pivotProbeRequestId: Option[BigInt]
+  var proactiveRollNeedsProbe: Boolean
+  var pendingProbeCommit: Option[(BigInt, BlockHeader, String)]
+  var probeAttemptCount: Int
+  var consecutivePivotRefreshes: Int
+  var criticalFailureCount: Int
+  var lastPivotRestartMs: Long
+  def MinPivotRestartInterval: FiniteDuration
+  def PivotBootstrapRetryKey: String
+  def ProbeCooldownMs: Long
+  def SnapServeWindowMargin: BigInt
+
+private[snap] trait PivotRefreshApi:
+  def refreshPivotInPlace(
+      reason: String,
+      countsTowardHealBudget: Boolean = true,
+      pivotUnservable: Boolean = false
+  ): Unit
+
+private[snap] trait PivotRefreshCommitApi:
+  def completePivotRefreshWithStateRoot(newPivotBlock: BigInt, newPivotHeader: BlockHeader, reason: String): Unit
 
 /** SNAP pivot refresh (spec 016 M10, research.md R6 "Pivot selection + refresh" (b)): the in-place re-peg of the pivot
   * block and state root without tearing down the coordinators (`refreshPivotInPlace`: CL-anchored or peer-best target,
@@ -30,9 +66,20 @@ import com.chipprbots.ethereum.utils.ByteStringUtils.ByteStringOps
   * matches the probe's request id. It also keeps the proactive roll's trigger (the `CheckDownloadStagnation` arm) and
   * the `DelayedRestart` arm.
   */
-private[snap] trait PivotRefresher:
-  self: SNAPSyncControllerImpl =>
+private[snap] trait PivotRefresher extends PivotRefreshApi with PivotRefreshCommitApi:
+  self: PivotRefresherState & SnapSharedState & SnapControllerEnv & CoordinatorHandles & PhaseFlags & LifecycleApi &
+    PeerPoolApi & PivotSelectionApi & PivotBestBlockApi & ProbeTargetApi & FinalizationApi & ChainDownloadStartApi &
+    LazyHandoffApi & StagnationResetApi =>
 
+  private lazy val MaxProbeAttempts: Int = 5 // 5 × 30s = 150s max deferral before forced roll
+  private lazy val MaxConsecutivePivotRefreshes = 10
+  // Pivot blocks confirmed unservable in this session. When a refreshPivotInPlace resolves
+  // to the same block as one in this set, fast-track consecutivePivotRefreshes to the
+  // threshold so dormant mode activates after the next coordinator escalation (2–3 cycles
+  // instead of 10). Entries are never cleared — a failed pivot block should not be retried
+  // within the same session.
+  private lazy val failedPivotBlocks: mutable.Set[BigInt] = mutable.Set.empty
+  private lazy val MaxHealRepegNoRootAttempts: Int = 10 // 10 × 30s ≈ 5 min of no servable root before the lazy handoff
   // Provenance of the armed PivotBootstrapRetryKey/RetryPivotRefresh timer (BUG-BC3 3rd follow-up): true only when
   // armed by a counted StateHealing attempt. A timer armed in an earlier phase (e.g. a storage-phase stall) carries
   // false, so firing after StateHealing starts cannot spend the heal budget on a stalled CL. Consulted on PoS only.

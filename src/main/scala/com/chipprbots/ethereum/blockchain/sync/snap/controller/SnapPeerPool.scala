@@ -31,6 +31,9 @@ private[snap] trait SnapServerPeersApi:
   def snapServingPeers(): List[com.chipprbots.ethereum.network.Peer]
   def startSnapServerPeersScheduler(): Unit
 
+private[snap] trait ProbeTargetApi:
+  def bestSnapProbeTarget(): Option[(PeerListSupportNg.PeerWithInfo, String)]
+
 private[snap] trait SnapPeerPoolState:
   def peerListHelper: PeerListHelper
   def handshakedPeersAdapter: TypedActorRef[NetworkPeerManagerActor.HandshakedPeers]
@@ -50,7 +53,8 @@ private[snap] trait SnapPeerPool
     extends PeerPoolApi
     with SnapServerPeersApi
     with HandshakedPeersApi
-    with BootstrapPeersApi:
+    with BootstrapPeersApi
+    with ProbeTargetApi:
   self: SnapPeerPoolState & SnapSharedState & SnapControllerEnv & CoordinatorHandles =>
 
   def handshakedPeers: Map[com.chipprbots.ethereum.network.PeerId, PeerListSupportNg.PeerWithInfo] =
@@ -289,7 +293,7 @@ private[snap] trait SnapPeerPool
     * latency, making them the most reliable probe targets. Falls back to the highest-block SNAP-capable external peer
     * when no snap-server-peer is connected.
     */
-  private[snap] def bestSnapProbeTarget() =
+  def bestSnapProbeTarget() =
     val snapServerNodeIds = snapSyncConfig.snapServerPeers.flatMap { uri =>
       Try(ByteString(Hex.decode(uri.getUserInfo))).toOption
     }.toSet
