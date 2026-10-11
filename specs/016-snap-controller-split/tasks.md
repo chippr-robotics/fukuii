@@ -638,6 +638,44 @@ only when every item on the per-slice checklist below holds.
     (~485 lines), `recoverAccountsComplete` (~290) and `launchAccountRangeWorkers` (~280), so SC-001 needs
     CQ-SNAP-016-32/33 and M5b. A full Mordor SNAP: **pending** (to be run by the user on the slice jar after merge; no
     node run here).
+- [x] T053a [LIFT] (after M11, before M11b and M5b; one behaviour-preserving PR, no module move; the third lift slice
+  after T050c and T052a) Lift M11's arms (and the `CheckSnapCapability` arm) out of `commonSyncingArms` (a local of
+  `syncing()`) into named core members, and extract the resume selection out of `launchAccountRangeWorkers`, so M11b
+  and M5b are whole-member moves. Characterization first. Resolves CQ-SNAP-016-32 and CQ-SNAP-016-33.
+  - As built: three commits after the characterization commit. (1) `SNAPDownloadArmsCharacterizationSpec` (new, Tier 1,
+    12 cases, `SnapControllerFixture`, ManualTime) pins what the existing suites left unasserted: `CheckSnapCapability`
+    with a snap peer launches the account phase at `accountConcurrency.max(1)` on the current root (reached from
+    `ByteCodeAndStorageSync`); each `Request*` tick offers the snap peer to its own coordinator only; the progress
+    counters, account estimate, storage-contract figures and the extrapolated slot estimate (none with no completed
+    contract); the trie-finalizing flag, the persisted finalized root and the restart on `AccountTrieFinalizationFailed`;
+    the backpressure forwards in order; `IncrementalContractData` forwarding (`replayed` -> `skipPresent`), the
+    accumulated bytecode estimate and no credit release; `AccountRangeSyncComplete` (accounts-complete persisted, resume
+    checkpoint retired, the two file-info asks, NoMore and the budget rebalance in order, `ByteCodeAndStorageSync`,
+    duplicate ignored); in `AccountRangeSync`, bytecode completion persists and boosts storage to `maxInFlightPerPeer`
+    only while storage is incomplete, storage completion persists, a second completion falls through to the catch-all,
+    and a storage force-complete is ignored without setting the flag. Not pinned: the wall-clock stagnation clocks the
+    progress arms write, the `consecutivePivotRefreshes` / critical-failure resets of `ProgressAccountsSynced` (behind
+    the wall-clock `MinPivotRestartInterval` debounce), the `TrieNodesResponse` drop in `StateValidation`. (2) Twenty-five
+    arms become ten `private[snap] lazy val` class members, bodies verbatim, each delegated from `commonSyncingArms` at
+    its original position (the T050c/T052a/P4d form); adjacent arms of one concern share a member, in their original
+    order: `checkSnapCapabilityArms`, `downloadTickArms` (the three ticks), `snapResponseArms` (the four `*Response`
+    arms; `AccountRangeResponse` still calls `handlePivotProbeResponse`), `progressAccountsSyncedArms`,
+    `accountTrieFinalizationArms` (`ProgressAccountsFinalizingTrie`, `AccountTrieFinalized`,
+    `ProgressAccountsTrieFinalized`, `AccountTrieFinalizationFailed`), `downloadProgressArms` (the other five
+    `Progress*` arms), `downloadBackpressureArms`, `incrementalContractDataArms`, `accountRangeSyncCompleteArms`,
+    `downloadPhaseCompleteArms` (the three guarded completion arms; the guards are pure flag reads). Replacing each
+    delegation line with its member's body gives back the old `commonSyncingArms` line for line; the 47 expanded case
+    headers are unchanged in content and order. (3) Extract-method: `launchAccountRangeWorkers`'s resume selection (126
+    lines, from the checkpoint read to the marker clear) becomes `selectAccountResume(rootHash, effectiveConcurrency,
+    currentPivot): (Map[ByteString, ByteString], Option[ContractTaskFiles])`, verbatim, called at the same point and
+    bound to the old names; `effectiveConcurrency`, the `AccountLaunch` stagnation reset and the single `currentPivot`
+    read stay in the caller (the spawns read them too). No `boundary`/`break` or `try` is involved. No existing test
+    changed; the `syncing()` composition is unchanged (T027 is the order oracle). Not lifted: `AccountRangeProgressCmd`
+    (M5's checkpoint arm, CQ-SNAP-016-17's residual; not in CQ-SNAP-016-32's list), and the non-M11 inline arms
+    (`TuneRateTracker`, `EvictNonSnapPeers`, `EnsureSnapServerPeersConnected`, `StateValidationComplete`,
+    `ChainDownloaderProgress`/`Done`, `GetStatus`). No fix. Next: M11b moves the ten members and the rest of
+    `launchAccountRangeWorkers` into `DownloadSupervisor` (dropping `AccountRangeLaunchApi`); M5b moves
+    `selectAccountResume` with `recoverAccountsComplete` into `SnapResumePlanner`.
 
 ## Coordinators
 
