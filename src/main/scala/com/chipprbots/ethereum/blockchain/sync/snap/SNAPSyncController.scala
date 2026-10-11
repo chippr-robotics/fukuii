@@ -99,7 +99,10 @@ private class SNAPSyncControllerImpl(
     // Test seams (spec 016 T012). Production defaults build exactly what the code built before they existed.
     val childFactories: ChildFactories = ChildFactories.production,
     heapWatchdogStart: HeapWatchdogStart = HeapWatchdogStart.production,
-    intakeBudgetOverride: Option[SnapIntakeBudget] = None
+    intakeBudgetOverride: Option[SnapIntakeBudget] = None,
+    // #1555: the pivot whose finalization failed in the previous SNAP controller (SyncController's HealingImpossible
+    // restart), or None. On PoS, the accounts-complete recovery will not resume healing at or below it.
+    failedFinalizationPivot: Option[BigInt] = None
 )(implicit val ec: ExecutionContext)
     extends CoordinatorHandles
     with PhaseFlags
@@ -1755,6 +1758,50 @@ private class SNAPSyncControllerImpl(
         currentPhase = StateHealing
         startStateHealing()
 
+  /** `recoverAccountsComplete`'s #1555 branch (PoS, every download phase complete): heal at a pivot newer than
+    * `excluded` instead of resuming on the saved one. Like the drift branch's "all phases complete" case, the data
+    * phases are marked complete and the new pivot's header is bootstrapped by number, so `bootstrapping`'s
+    * `BootstrapComplete` commits it and goes straight to `StateHealing`. With no newer target yet (CL head and snap
+    * peers not ahead), retry the start in 30 s; every retry re-enters this branch, because the saved pivot is still the
+    * excluded one.
+    */
+  private def healAtNewerPivot(excluded: BigInt, reason: String)(using
+      scala.util.boundary.Label[Behavior[Command]]
+  ): Unit =
+    import scala.util.boundary.break
+    accountsComplete = true
+    storagePhaseComplete = true
+    bytecodePhaseComplete = true
+    val clHead = clPivotHint.flatMap(_.knownHeader).map(_.number.value)
+    val peerBest = currentNetworkBestFromSnapPeers()
+    val target = clHead.flatMap(h =>
+      SNAPSyncController.healPivotAfterExcluded(
+        excluded,
+        h,
+        peerBest,
+        snapSyncConfig.pivotBlockOffset,
+        SnapServeWindowMargin
+      )
+    )
+    target match
+      case Some(t) =>
+        ctx.log.warn(
+          s"Recovery: not resuming healing on pivot $excluded ($reason). All data phases are complete; healing at " +
+            s"pivot $t instead (CL head=${clHead.getOrElse("?")}, snap peer best=${peerBest.getOrElse("none")}). " +
+            "Fetching its header."
+        )
+        appStateStorage.putSnapSyncBootstrapTarget(t).commit()
+        syncController ! StartRegularSyncBootstrap(t)
+        break(bootstrapping())
+      case None =>
+        ctx.log.warn(
+          s"Recovery: not resuming healing on pivot $excluded ($reason), and no newer pivot is available yet " +
+            s"(CL head=${clHead.getOrElse("unknown")}, snap peer best=${peerBest.getOrElse("none")}). Retrying in 30s."
+        )
+        timers.cancel(BootstrapCheckKey)
+        timers.startSingleTimer(BootstrapCheckKey, RetrySnapSyncStart, 30.seconds)
+        break(bootstrapping())
+
   def startSnapSync(): Behavior[Command] =
     import scala.util.boundary
     boundary[Behavior[Command]] {
@@ -1850,6 +1897,39 @@ private class SNAPSyncControllerImpl(
               .and(appStateStorage.putSnapSyncCodeHashesCount(None))
               .commit()
 
+          // #1555 (PoS): a heal-only recovery (every download phase complete) must not resume healing on a pivot that
+          // just failed finalization (Platåberget 2026-10-10: a frozen CL kept the heal on root 450887ee at 358880, no
+          // peer served it, the Path publish failed and this branch resumed on 358880 again, every 17-24 minutes), nor
+          // on one the CL head shows to be past maxPivotStalenessBlocks. Right after a restart no snap peer has been
+          // polled, so the peer-based drift check below sees networkBest = 0; the CL head SyncController primes before
+          // Start is the authoritative tip on PoS. Only this heal-only case uses it: with downloads incomplete, a
+          // CL-based drift must not trigger the wipe below (that would discard complete accounts that an in-place
+          // pivot refresh keeps). ETC/pre-merge (isPoSChain = false): unchanged.
+          val clHeadForRecovery: Option[BigInt] =
+            if isPoSChain then clPivotHint.flatMap(_.knownHeader).map(_.number.value) else None
+          if isPoSChain && !belowEscalationHint && !taskFilesUnusable &&
+            appStateStorage.isSnapSyncStorageComplete() && appStateStorage.isSnapSyncBytecodeComplete()
+          then
+            val failedHere = failedFinalizationPivot.exists(pivot <= _)
+            val clDrift = clHeadForRecovery.map(_ - pivot)
+            if failedHere then
+              healAtNewerPivot(
+                failedFinalizationPivot.fold(pivot)(_.max(pivot)),
+                s"finalization failed at pivot ${failedFinalizationPivot.getOrElse(pivot)}"
+              )
+            else if clDrift.exists(_ > snapSyncConfig.maxPivotStalenessBlocks) then
+              healAtNewerPivot(
+                pivot,
+                s"the CL head ${clHeadForRecovery.getOrElse("?")} is ${clDrift.getOrElse("?")} blocks ahead " +
+                  s"(> maxPivotStalenessBlocks=${snapSyncConfig.maxPivotStalenessBlocks})"
+              )
+          else if failedFinalizationPivot.exists(pivot <= _) then
+            ctx.log.warn(
+              s"Recovery: pivot $pivot failed finalization, but it is resumed: " +
+                (if !isPoSChain then "not a PoS chain (ETC keeps resuming on the saved pivot)"
+                 else "a download phase is incomplete or the saved state is being discarded") + "."
+            )
+
           // Check if pivot is still fresh enough (skipped when belowEscalationHint forced clear)
           val networkBest = currentNetworkBestFromSnapPeers().getOrElse(BigInt(0))
           val drift = if networkBest > 0 then (networkBest - pivot).abs else BigInt(0)
@@ -1895,7 +1975,13 @@ private class SNAPSyncControllerImpl(
             if storageAlreadyDone then ctx.log.info("Recovery: storage phase already complete — skipping re-download")
             if bytecodeAlreadyDone then ctx.log.info("Recovery: bytecode phase already complete — skipping re-download")
 
-            ctx.log.info(s"Recovery: resuming bytecodes + storage sync from pivot $pivot (drift=$drift blocks)")
+            // #1555: with no snap peer polled yet the drift is unknown, not 0.
+            val driftText =
+              if networkBest > 0 then s"drift=$drift blocks"
+              else
+                "drift unknown: no snap peer polled yet" +
+                  clHeadForRecovery.fold("")(h => s"; CL head $h is ${h - pivot} blocks ahead")
+            ctx.log.info(s"Recovery: resuming bytecodes + storage sync from pivot $pivot ($driftText)")
 
             val storage = getOrCreateMptStorage(pivot)
             coordinatorGeneration += 1
@@ -2617,7 +2703,25 @@ private class SNAPSyncControllerImpl(
           )
         else
           healRepegNoRootAttempts += 1
-          if healRepegNoRootAttempts >= MaxHealRepegNoRootAttempts then
+          if healRepegNoRootAttempts >= MaxHealRepegNoRootAttempts && lazyHandoffBlockedByAbsentPathRoot() then
+            // #1555: under the Path scheme the hand-off publishes the trie to the hash-keyed store and verifies it from
+            // the pivot root; with that root's node stored nowhere the publish scans the whole state (6-12 minutes on
+            // Platåberget), fails "Root node not found", and SyncController restarts SNAP. Keep healing on the current
+            // root instead and keep retrying the re-peg: a fresh budget, and the same counted, unservable-preserving
+            // 30 s retry as below. This repeats (one WARN per exhausted budget) until the CL head or a snap peer
+            // offers a newer target. Hash scheme (ETC) never reaches this branch.
+            ctx.log.warn(
+              s"[HEAL-REPEG] No servable root for $healRepegNoRootAttempts consecutive re-peg attempts, but the heal " +
+                s"root ${stateRoot.map(_.value.toHex.take(16)).getOrElse("?")} at pivot ${pivotBlock.getOrElse("?")} " +
+                "is not stored locally (Path scheme), so the lazy hand-off could not publish it. NOT handing off: " +
+                "continuing to heal and retrying the re-peg every 30s with a fresh budget."
+            )
+            healRepegNoRootAttempts = 0
+            timers.cancel(PivotBootstrapRetryKey)
+            retryRefreshCounts = true
+            retryRefreshUnservable = pivotUnservable
+            timers.startSingleTimer(PivotBootstrapRetryKey, RetryPivotRefresh, 30.seconds)
+          else if healRepegNoRootAttempts >= MaxHealRepegNoRootAttempts then
             ctx.log.warn(
               s"[HEAL-REPEG] No servable root for $healRepegNoRootAttempts consecutive re-peg attempts (budget " +
                 s"$MaxHealRepegNoRootAttempts exhausted, ~${MaxHealRepegNoRootAttempts * 30}s). Taking the fail-safe " +
@@ -3269,7 +3373,7 @@ object SNAPSyncController:
   // `SNAPSyncController.<helper>` call site, and the impl class's `import SNAPSyncController.*`, stay unchanged.
   export controller.StagnationPolicy.{evaluateStorageTail, MinStaleFailuresForTailLivelock, StorageTailBaseline}
   export controller.PivotPolicy.{clPivotNotYetAdvanced, MaxPeerTipLead}
-  export controller.PivotPolicy.{pivotPassesFreshnessFloor, unservablePivotTarget}
+  export controller.PivotPolicy.{healPivotAfterExcluded, pivotPassesFreshnessFloor, unservablePivotTarget}
   export controller.HealPolicy.{bytecodeRecoveryComplete, healRepegSuppressedByLocalWalk}
   export controller.HealPolicy.{lastHealingServeRootBlockToRecord, shouldSkipHealingAfterDownloads, staleReferenceHead}
   export controller.ResumePolicy.{checkResumable, taskFilePaths}
@@ -3297,7 +3401,8 @@ object SNAPSyncController:
       // Test seams (spec 016 T012); the defaults are today's construction.
       childFactories: ChildFactories = ChildFactories.production,
       heapWatchdogStart: HeapWatchdogStart = HeapWatchdogStart.production,
-      intakeBudgetOverride: Option[SnapIntakeBudget] = None
+      intakeBudgetOverride: Option[SnapIntakeBudget] = None,
+      failedFinalizationPivot: Option[BigInt] = None
   )(implicit ec: ExecutionContext): Behavior[Command] =
     Behaviors.setup[Command] { ctx =>
       Behaviors.withTimers[Command] { timers =>
@@ -3321,7 +3426,8 @@ object SNAPSyncController:
           isPoSChainOverride,
           childFactories,
           heapWatchdogStart,
-          intakeBudgetOverride
+          intakeBudgetOverride,
+          failedFinalizationPivot
         ).start() // #1378: start() arms the 5s PollHandshakedPeers timer that populates the
         //          controller's peerListHelper. Calling startSnapSync() directly bypasses it,
         //          leaving snapPeersForPivot permanently empty → pivot never selected.

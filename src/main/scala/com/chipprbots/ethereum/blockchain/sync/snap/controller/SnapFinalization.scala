@@ -201,6 +201,23 @@ private[snap] trait SnapFinalization extends FinalizationApi:
           // Future and this actor keeps serving status/progress queries (`syncing` serves them while `pathPublish` is set); it re-enters here with
           // `pathPublished = true` once PathPublishDone arrives. Hash scheme (ETC) never enters this branch.
           if pathNodeStorageOpt.isDefined && !pathPublished then
+            // #1555: never start the whole-state publish when the pivot root's node is stored nowhere: its verification
+            // cannot pass, so escalate now instead of after 6-12 minutes of scanning. SyncController's restart then
+            // heals at a newer pivot (PoS) rather than this one.
+            if FinalizationPolicy.pathPivotRootAbsent(
+                pathNodeStorageOpt.get,
+                pivotHeader.stateRoot.value,
+                getOrCreateMptStorage(pivot)
+              )
+            then
+              ctx.log.error(
+                "[PATH-PUBLISH] not publishing: pivot {} state root {} is not stored locally (Path scheme), so the " +
+                  "publish could not verify it. Escalating to SyncController for SNAP restart.",
+                pivot,
+                pivotHeader.stateRoot.value.toHex
+              )
+              syncController ! SyncProtocol.HealingImpossible
+              break(Behaviors.same)
             startPathPublish(pivot, pivotHeader.stateRoot.value)
             break(Behaviors.same)
 

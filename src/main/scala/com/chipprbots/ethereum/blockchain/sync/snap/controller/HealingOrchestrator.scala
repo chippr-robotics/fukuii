@@ -158,6 +158,18 @@ private[snap] trait HealingOrchestrator extends HealingApi with HealedCodeApi wi
       completeSnapSync()
       Behaviors.same
 
+    // #1555: under the Path scheme this hand-off can never finish: the root is, by this message, absent locally, so the
+    // Path-to-hash publish fails its verification after a whole-state scan and SyncController restarts SNAP. Re-peg
+    // instead (the root is known unservable) and keep healing; HealingPivotRefreshed seeds an absent new root. Hash
+    // scheme (ETC): unchanged.
+    case HealingRootUnservable(root) if lazyHandoffBlockedByAbsentPathRoot() =>
+      ctx.log.warn(
+        s"[HEAL-ROOT-UNSERVABLE] Heal walk root ${root.toHex.take(16)} is absent from local storage (Path scheme): the " +
+          "lazy hand-off could not publish it. NOT handing off: re-pegging to a newer root and continuing to heal."
+      )
+      refreshPivotInPlace("heal root absent locally (Path scheme, lazy hand-off blocked)", pivotUnservable = true)
+      Behaviors.same
+
     case HealingRootUnservable(root) =>
       ctx.log.warn(
         s"[HEAL-ROOT-UNSERVABLE] Heal walk root ${root.toHex.take(16)} is absent from local storage and cannot be " +
@@ -559,6 +571,17 @@ private[snap] trait HealingOrchestrator extends HealingApi with HealedCodeApi wi
           case Right(nodes) => ctx.self ! TrieWalkResult(nodes)
           case Left(error)  => ctx.self ! TrieWalkFailed(error)
         }(ec)
+    }
+
+  /** True when a lazy-heal hand-off is certain to fail (#1555): Path scheme, and the current pivot root's node is
+    * stored neither at the empty path nor by hash (see `FinalizationPolicy.pathPivotRootAbsent`). Always false under
+    * the Hash scheme (ETC), which publishes nothing at finalization.
+    */
+  private[snap] def lazyHandoffBlockedByAbsentPathRoot(): Boolean =
+    pathNodeStorageOpt.exists { pathNodes =>
+      (pivotBlock, stateRoot) match
+        case (Some(p), Some(r)) => FinalizationPolicy.pathPivotRootAbsent(pathNodes, r.value, getOrCreateMptStorage(p))
+        case _                  => false
     }
 
   /** Persist the CURRENT in-memory pivot/root anchor immediately before a lazy-heal handoff to `completeSnapSync()`.

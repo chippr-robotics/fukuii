@@ -54,6 +54,22 @@ private[snap] object PivotPolicy:
     val fromPeer = peerBest.map(_.min(clHead + maxPeerTipLead) - margin)
     (Seq(fromCl) ++ fromPeer).filter(_ > currentPivot).maxOption
 
+  /** Pivot for a heal-only recovery that must not resume on `excludedPivot` (#1555, PoS only): the normal CL target
+    * `clHead - pivotBlockOffset` when it is strictly newer, else the [[unservablePivotTarget]] fallback (the excluded
+    * pivot's root was refused or failed finalization, so it is treated as unservable). None when neither is newer: the
+    * caller waits for the CL head or a snap peer to advance rather than resume on the excluded pivot.
+    */
+  private[snap] def healPivotAfterExcluded(
+      excludedPivot: BigInt,
+      clHead: BigInt,
+      peerBest: Option[BigInt],
+      pivotBlockOffset: Long,
+      margin: BigInt
+  ): Option[BigInt] =
+    val target = clHead - pivotBlockOffset
+    if target > excludedPivot then Some(target)
+    else unservablePivotTarget(clHead, excludedPivot, peerBest, margin)
+
   /** The most a snap peer's advertised tip may lead the CL head when choosing a replacement pivot (CL lag seen on
     * Platåberget 2026-10-05: ~110 blocks).
     */
