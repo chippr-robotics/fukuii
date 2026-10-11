@@ -397,8 +397,9 @@ C-* narrowing commits then move the call sites onto it.
 | 22 | **M9** Lifecycle/reset + dormant | move | ~390 | prism, vault, forge | Mordor dormant/wake |
 | 23 | **M10** Pivot refresher | move | ~570 | prism, beacon, forge | Platåberget across ≥ 3 refreshes; Mordor |
 | 24 | **M11** Download supervisor | move | ~850 | prism, forge | full Mordor SNAP |
-| 24a | **T054** env freeze ratchet: `SnapControllerEnv` count (18) + per-module storage-reference baseline for `snap/controller/` and `snap/actors/`, down-only (amendment 2026-10-11; tooling PR on `test/snap-016-env-freeze`) | tooling | script + baseline file | prism | — |
-| 24b | **T055** `StateIngest` capability: 8 env storage handles + #1548's batched trie-write path; modules move to it; `SnapControllerEnv` 18 → ~11; exporter durability property (FR-044) | refactor | ~+250 / −150 (estimate) | **forge**, **vault**, prism; beacon for the Path-scheme publish | Mordor full SNAP; `[STORAGE-PERF]` parity on a 4-core/SATA host vs the ~1.7M entries/h baseline (SC-010) |
+| 24a | **T054** env freeze ratchet: `verify.py` step 8 against `scripts/snap-split/storage-baseline.json` (`SnapControllerEnv` count 18; storage-reference total over `snap/controller/` + `snap/actors/`, down-only) (amendment 2026-10-11; PR #1570, `test/snap-016-env-freeze`) | tooling | script + baseline file | prism | — |
+| 24a′ | **T054b** `verify.py` mode for a behaviour-neutral capability-introduction PR (neither a move nor a narrowing); needed before T055; owned by the T054 tooling line | tooling | script + self-tests | prism | — |
+| 24b | **T055** `StateIngest` capability: 8 env storage handles + the batched storage-trie node-write path (`flushTrieNodeWrites`, from #1548); modules move to it; `SnapControllerEnv` 18 → ~11; exporter durability property (FR-044) | refactor | ~+250 / −150 (estimate) | **forge**, **vault**, prism; beacon for the Path-scheme publish | Mordor full SNAP; `[STORAGE-PERF]` parity on the same physical host that produced the ~1.7M entries/h figure (the 4-core/16 GB/SATA BX500 soak host, quiescent), on the same workload (the Sepolia Path-scheme storage phase), plus a same-host pre-wrap vs post-wrap A/B (SC-010) |
 | 24c | **T056** lighter-WAL experiment as a `StateIngest` durability policy (optional; after T055) | experiment | small | **vault**, forge | Mordor + Platåberget SNAP with a crash during finalization |
 | 25 | **T060** coordinator characterization (docs) | docs | — | — | — |
 | 26 | **C-B1** | move | ~350 | prism | — |
@@ -606,7 +607,8 @@ plan. Nothing above that is not marked "amended" changes.
 
 | Item | Where | Owner / review |
 |---|---|---|
-| Env freeze ratchet: the `SnapControllerEnv` member count (18) and per-module storage-reference counts for `snap/controller/` and `snap/actors/`, in a committed baseline file that CI lets go **down only** | T054; tooling PR on branch `test/snap-016-env-freeze` (another agent; the baseline file's path is set by that PR, under `scripts/snap-split/`) | prism |
+| Env freeze ratchet: `verify.py` step 8 against `scripts/snap-split/storage-baseline.json`: the `SnapControllerEnv` member count (18) and the storage-reference total over `snap/controller/` and `snap/actors/` (comments excluded; files may trade), which CI lets go **down only** (spec FR-043) | T054; PR #1570 on `test/snap-016-env-freeze` | prism |
+| `verify.py` mode for a behaviour-neutral capability-introduction PR | T054b, owned by the T054 tooling line, before T055 | prism |
 | `StateIngest` capability trait | T055, one behaviour-neutral PR between M11 and T060 | forge, vault, Mordor run, perf parity |
 | Coordinator narrowings take `StateIngest`, never `StateAccess`, and each lowers its baseline row | T061–T075 (amended) | as in the slice list |
 | Lighter-WAL experiment as a per-capability durability policy on `StateIngest` | T056 (optional) | vault, forge |
@@ -616,9 +618,13 @@ plan. Nothing above that is not marked "amended" changes.
 
 - **Members.** It wraps the 8 storage handles now in `SnapControllerEnv`: `appStateStorage`, `stateStorage`,
   `evmCodeStorage`, `flatSlotStorage`, `pathNodeStorageOpt`, `blockchainReader`, `blockchainWriter` and
-  `validatorFactory: MptStorage => StateValidator`. It also wraps #1548's batched trie-write path (Path scheme;
-  `PathNodeStorage` batching on the storage-range path; Hash scheme already batches at 8 MiB). The exact method
+  `validatorFactory: MptStorage => StateValidator`. It also wraps the Path-scheme batched storage-trie node-write path
+  (`SnapPathTrie` → `PathNodeStorage.writeStorageNode`, buffered in `StorageRangeCoordinator`'s `trieNodeWrites` and
+  committed by `flushTrieNodeWrites`; introduced by #1548). Hash scheme already batches at 8 MiB. The exact method
   surface is derived in T055 from the modules' real uses, the way R14 derived the state interfaces.
+- **Chain-data handles (design note, T055).** `blockchainReader` and `blockchainWriter` are chain-data handles
+  (headers, pivot, best block), not trie state. T055 decides whether to split a header/chain sub-interface out of
+  `StateIngest`, and records the decision in the ADR.
 - **Verification reads are in.** Proof checks, healing presence checks, state validation and the publish
   verification are reads SNAP needs to decide what to write, so they belong to ingest, not to access.
 - **No execution.** `StateIngest` exposes no EVM account/storage read or write. Those are `StateAccess` (spec 017).
@@ -637,10 +643,10 @@ plan. Nothing above that is not marked "amended" changes.
 
 Wrapping the handles changes call sites (`appStateStorage.x` becomes a `StateIngest` call), so T055 is neither a
 byte-identical move (steps 1–2) nor a signature-only narrowing (step 6). It runs `snap-split-verify` in a mode that
-the env-freeze tooling PR, or a small follow-up to it, must add: the move and signature checks are replaced by
+**T054b** adds (owned by the T054 tooling line): the move and signature checks are replaced by
 "call-site substitution only: every changed line in a module file replaces a storage handle with the matching
 `StateIngest` member", while (a), (d), `[counts]`, the test-hunk guard, the pin and golden protection and the ratchet
-still apply. T055 does not start until that mode exists.
+still apply, and calls on `StateIngest` are not storage references. T055 does not start until T054b has merged.
 
 ### ADR
 

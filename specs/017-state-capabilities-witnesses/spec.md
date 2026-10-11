@@ -5,21 +5,21 @@
 **Created**: 2026-10-11
 
 **Status**: **Draft (stub).** Approved as a stub by the user on 2026-10-11. **Revised 2026-10-11** after the user's
-review of staging 0.9.59: the recorder is one `MptStorage` decorator at `BlockExecution.buildInitialWorld` (DC-3),
-the BAL prefetcher stays enabled (DC-2), and DC-6 to DC-10 name the gaps the decorator alone does not cover. To be fleshed out with `/speckit-specify`
-and `/speckit-clarify`, then `/speckit-plan` and `/speckit-tasks`. The Design constraints section below is binding
-on that later work.
+review of staging 0.9.59: the recorder is one `MptStorage` decorator at `BlockExecution.buildInitialWorld` (DC-3), the
+BAL prefetcher stays enabled (DC-2), and DC-6 to DC-10 name the gaps the decorator alone does not cover. To be fleshed
+out with `/speckit-specify` and `/speckit-clarify`, then `/speckit-plan` and `/speckit-tasks`. The Design constraints
+section below is binding on that later work.
 
 **Depends on**: spec 016's amendment of 2026-10-11, which delivers `StateIngest` (T055) and the env freeze ratchet
-(T054). Spec 017 starts after spec 016's coordinator stage, or at least after T055.
+(T054). **Spec 017 starts after spec 016 completes** (user decision: 017 comes after 016).
 
-**Input**: User decision, 2026-10-11: "Adopt the hybrid sequencing. Land the env freeze now, as a ratchet. Approve
-the Spec 016 amendment and the Spec 017 stub, with the exporter durability property and the prefetcher-through-recorder
-rule written into 017's design constraints. The other adjustments (StateIngest includes verification reads, SyncMode
-lives in SyncController, R4 scoped to Address/TrieKey/Wei, recording at MPT node resolution) are all accepted as
-written." The source recommendation split the data plane into two typed capabilities (R1), kept SNAP on the ingest
-side (R2), added a `SyncMode` ADT (R3), opaque domain types (R4), execution witnesses (R5) and a backfill mode for
-historical witnesses (R6).
+**Input**: User decision, 2026-10-11: "Adopt the hybrid sequencing. Land the env freeze now, as a ratchet. Approve the
+Spec 016 amendment and the Spec 017 stub, with the exporter durability property and the prefetcher-through-recorder rule
+[superseded by DC-2] written into 017's design constraints. The other adjustments (StateIngest includes verification
+reads, SyncMode lives in SyncController, R4 scoped to Address/TrieKey/Wei, recording at MPT node resolution) are all
+accepted as written." The source recommendation split the data plane into two typed capabilities (R1), kept SNAP on the
+ingest side (R2), added a `SyncMode` ADT (R3), opaque domain types (R4), execution witnesses (R5) and a backfill mode
+for historical witnesses (R6).
 
 ## Problem
 
@@ -48,12 +48,15 @@ This is a smaller change than the stub first assumed. All block execution builds
 `BlockExecution.buildInitialWorld` (`ledger/BlockExecution.scala`), from the parent root over
 `SerializingMptStorage.cachedForExecution` (`db/storage/MptStorage.scala`): one storage choice per block and a fresh
 world each time. Every trie walk, including the sibling fetches of deletion collapse, goes through
-`MptStorage.get(hash)`, and execution reads the hash-keyed store on both schemes. The decorator pattern is already
+`MptStorage.get(hash)`, and execution reads the hash-keyed store on both schemes. Two other kinds of site build
+worlds and are not covered by that seam: `BlockPreparator` builds a separate world for block preparation (the
+proposer / Engine API path) over `getReadOnlyMptStorage()`, and whether capture covers it is OQ-4; the RPC-only sites
+(`StxLedger`, GraphQL, `EthUserService`, `EthSimulateService`) are out of scope. The decorator pattern is already
 used three times (`CachingMptStorage`, `PrefetchNodeReader`, `StxLedger.ReplayMptStorage`).
 
-So witness capture is **one `MptStorage` decorator (`RecordingMptStorage`) plus two world-level hooks (code and
-block hashes), at a single construction site.** The `StatelessExecutor` reuses the existing world over an in-memory
-`MptStorage`. There is no second EVM and no second world implementation.
+So witness capture is **one `MptStorage` decorator (`RecordingMptStorage`) plus two world-level hooks (code and block
+hashes), at a single construction site for block import (`BlockExecution.buildInitialWorld`).** The `StatelessExecutor`
+reuses the existing world over an in-memory `MptStorage`. There is no second EVM and no second world implementation.
 
 ### Prior art: ExtVM
 
@@ -113,8 +116,8 @@ witness. The dead `vm.external.*` config that `VmConfig` still parses is removed
 3. **Backfill mode** (G-3, R6): produces witnesses for historical blocks. It is scheduled only after SNAP reaches
    head and never runs concurrently with state sync.
 4. **`SyncMode` ADT** (G-4, R3): `Snap` / `Full` / `Backfill`. It **lives in `SyncController`**, not in the SNAP
-   controller. Witness capture is constructible only in `Full` or `Backfill`, and a `Reverted` transition (a reorg
-   or a rollback across captured blocks) invalidates the witnesses of the blocks it reverts.
+   controller. Witness capture is constructible only in `Full` or `Backfill`. A reorg or rollback across captured
+   blocks invalidates the affected witnesses and emits revert events.
 5. **Opaque types** (G-5, R4): `Address`, `TrieKey` and `Wei` only, in the new signatures only.
 
 `StateIngest` itself is out of scope here: spec 016's amendment delivers it (T055), and this spec depends on it.
@@ -152,8 +155,9 @@ Hash schemes converge: execution reads the hash-keyed store on both, and every t
 fetches of deletion collapse, goes through `MptStorage.get(hash)`. Recording at the storage-key level is rejected:
 Path scheme keys nodes by path, but a witness needs hash-addressed nodes.
 
-**DC-4 — SNAP isolation boundary.** SNAP modules never hold `StateAccess`. A dependency check enforces it, extending
-spec 016's env freeze ratchet (T054) and its FR-042 check: no file under `blockchain/sync/snap/` may name
+**DC-4 — SNAP isolation boundary.** SNAP modules never hold `StateAccess`. The "no `StateAccess` under `snap/`"
+dependency check is delivered by this spec. It extends spec 016's T054 ratchet tooling (`scripts/snap-split/verify.py`),
+and it is vacuous until `StateAccess` exists (spec 016 FR-042): no file under `blockchain/sync/snap/` may name
 `StateAccess` or reach it transitively through a capability it holds.
 
 **DC-5 — Defaults.** Witness capture defaults to off. No witness is written to the state SSD during SNAP: witnesses
@@ -243,8 +247,8 @@ After SNAP reaches head, an operator schedules backfill to produce witnesses for
 
 1. **Given** SNAP has reached head, **When** backfill is scheduled, **Then** it runs in `Backfill` mode and never
    concurrently with state sync.
-2. **Given** a reorg reverts captured blocks, **When** the `Reverted` transition runs, **Then** their witnesses are
-   invalidated.
+2. **Given** captured blocks, **When** a reorg or rollback crosses them, **Then** the affected witnesses are
+   invalidated and revert events are emitted.
 
 ### Edge Cases
 
@@ -253,7 +257,7 @@ After SNAP reaches head, an operator schedules backfill to produce witnesses for
 - BLOCKHASH of an ancestor (DC-7).
 - A block executed over staged storage (DC-10).
 - A crash during SNAP finalization, on each scheme (DC-1).
-- A reorg across captured blocks (`Reverted`).
+- A reorg or rollback across captured blocks.
 - Capture switched on during `Snap` mode (US-3).
 
 ## Requirements *(mandatory)*
@@ -276,7 +280,8 @@ After SNAP reaches head, an operator schedules backfill to produce witnesses for
 - **FR-006** A differential test MUST compare fukuii's witnesses with geth's `debug_executionWitness` on Sepolia
   blocks.
 - **FR-007** `SyncController` MUST hold a `SyncMode` ADT (`Snap` / `Full` / `Backfill`). Witness capture MUST be
-  constructible only in `Full` or `Backfill`, and a `Reverted` transition MUST invalidate the affected witnesses.
+  constructible only in `Full` or `Backfill`. A reorg or rollback across captured blocks MUST invalidate the affected
+  witnesses and emit revert events.
 - **FR-008** Backfill MUST run only after SNAP reaches head and never concurrently with state sync.
 - **FR-009** New signatures MUST use opaque `Address`, `TrieKey` and `Wei`; existing signatures MUST NOT be retyped
   by this spec.
@@ -315,11 +320,12 @@ After SNAP reaches head, an operator schedules backfill to produce witnesses for
 
 ## Assumptions
 
-- Spec 016's T055 (`StateIngest`) has merged before any 017 implementation task starts.
+- Spec 016 has completed (including T055, `StateIngest`) before any 017 implementation task starts.
 - BALs (EIP-7928) are implemented for Amsterdam on staging, and the BAL prefetcher (#79) exists and warms
   `DecodedNodeCache` below `cachedForExecution`.
-- `buildInitialWorld` stays the single construction site of execution worlds. A second site would need its own
-  recorder installation and is a plan-time stop.
+- `buildInitialWorld` stays the single construction site of block-import worlds. A second block-import site would
+  need its own recorder installation and is a plan-time stop. `BlockPreparator`'s world is OQ-4; the RPC-only sites
+  are out of scope.
 - The slow-tier storage of #1483 exists or lands first; if not, the witness node store's placement is re-planned.
 - `[STORAGE-PERF]` and `[IMPORT-TIMING]` are the existing instrumentation and are reused, not replaced.
 - `beacon` owns the ETH execution side, `forge` signs off that ETC is unchanged, and `vault` reviews the stores and
@@ -332,6 +338,8 @@ After SNAP reaches head, an operator schedules backfill to produce witnesses for
 - **OQ-2 Witness storage sizing.** Bytes per block for Sepolia and ETC mainnet, the retention policy, and the slow-tier
   capacity it needs.
 - **OQ-3** Whether ETC needs witness capture in the first release (FR-013).
+- **OQ-4** Whether witness capture covers block preparation: `BlockPreparator` (around line 978) builds its own world
+  over `getReadOnlyMptStorage()` for the proposer / Engine API path, outside `buildInitialWorld`.
 
 ## Known tasks (seed for /speckit-tasks)
 
