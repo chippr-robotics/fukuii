@@ -8,6 +8,9 @@
 amendment (CG-1). To be fleshed out with `/speckit-specify` and `/speckit-clarify` once the spike has reported, then
 `/speckit-plan` and `/speckit-tasks`. The Gates and Design constraints sections are binding on that later work.
 
+**Roadmap facts are unverified.** The EF L1-zkEVM roadmap's asks, Ere and the phase numbering below were read on
+2026-10-11 from secondary sources and are to be re-verified at planning time; treat them as a working hypothesis.
+
 **Depends on**: spec 017's `StatelessExecutor` (G-2) existing and passing its differential test on the JVM, and on
 spec 017's DC-15 (narrow dependency boundary for the stateless core) and DC-11 (execution-specs witness format).
 
@@ -71,7 +74,15 @@ The open risks:
 
 **SP-1 — Phase 0 feasibility spike.** Compile an empty Scala Native program for RV64IM with no OS and run it on
 qemu-virt. Then repeat with a program that allocates, throws and catches an exception, and calls one C function. The
-spike takes days, not weeks. It reports one of three outcomes to the user:
+spike takes days, not weeks.
+
+**It runs off the node host.** The Scala Native cross-build plus qemu runs on a CI runner or a separate machine, never
+on the soak/node host: builds there swap the 16 GB host and break live sync.
+
+**Sequencing and approval.** The sequence is spec 016, then 017, then 018. The spike starts before specs 016 and 017
+complete only with the user's explicit approval.
+
+It reports one of three outcomes to the user:
 
 - **Go**: all three run. The spec proceeds.
 - **Go with constraints**: the empty program runs but something else does not (typically exceptions). The plan then
@@ -171,7 +182,9 @@ reproduces them bit for bit.
 
 ### Functional Requirements (stub level; refined by /speckit-specify)
 
-- **FR-001** SP-1 MUST run and report before any other task in this spec.
+- **FR-001** SP-1 MUST run and report before any other task in this spec. SP-1 MUST run on a CI runner or separate
+  machine, never on the node host, and MUST NOT start before specs 016 and 017 complete without the user's explicit
+  approval.
 - **FR-002** The constitution MUST be amended (CG-1) before any Scala Native build configuration merges.
 - **FR-003** The stateless core MUST cross-build to Scala Native for an RV64IM no-OS target, producing an ELF.
 - **FR-004** The guest MUST read the block and `ExecutionWitness` through the zkVM's input mechanism and write its
