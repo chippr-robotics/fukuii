@@ -671,6 +671,121 @@ class VerifyTests(unittest.TestCase):
             else:
                 self.bad(f, "merge")
 
+    def test_fix_branch_may_change_module_file(self):
+        for branch in ("fix/snap-bug", "hotfix/snap-bug"):
+            f = Fixture(branch=branch)
+            f.write(f"{CTRL}/M.scala", "package x\n\ntrait M:\n  def a = 1\n")
+            f.commit("seed")
+            f.git("tag", "-f", "base")
+            f.write(f"{CTRL}/M.scala", "package x\n\ntrait M:\n  def a = 2\n")
+            f.commit("fix: change body, not a move")
+            out = self.ok(f)
+            self.assertIn("(fix branch)", out)
+            self.assertIn("[counts]", out)
+
+    def test_fix_branch_impl_mention_in_module_fails(self):
+        f = Fixture(branch="fix/snap-bug")
+        f.write(f"{CTRL}/M.scala", "package x\n\ntrait M:\n  self: SNAPSyncControllerImpl =>\n  def a = 1\n")
+        f.commit("fix: reaches into the impl")
+        self.bad(f, "FR-016a")
+
+    def test_fix_branch_moved_trailer_fails(self):
+        f = Fixture(branch="fix/snap-bug")
+        move_commit(f)
+        out = self.bad(f, "fix-branch")
+        self.assertNotIn("[step1]", out)
+
+    def test_fix_branch_still_gets_member_rules(self):
+        f = Fixture(branch="fix/snap-bug")
+        f.write(f"{CTRL}/M.scala", "package x\n\ntrait M:\n  def a: Int = 1\n  def b: Int\n  val c = new Object\n")
+        f.commit("fix: state in a module trait")
+        self.bad(f, "FR-016d")
+
+    def test_fix_branch_narrowing_fails(self):
+        f = Fixture(branch="fix/snap-bug")
+        f.write(f"{CTRL}/M.scala", "package x\n\ntrait M:\n  self: SNAPSyncControllerImpl =>\n  def a = 1\n")
+        f.git("add", "-A")
+        f.git("commit", "-q", "-m", "seed", "--no-verify")
+        f.git("tag", "-f", "base")
+        f.write(f"{CTRL}/M.scala", "package x\n\ntrait M:\n  def a = 1\n")
+        f.commit("fix: drops the last impl mention")
+        self.bad(f, "fix-branch")
+
+    def test_fix_branch_adding_or_deleting_module_file_fails(self):
+        f = Fixture(branch="fix/snap-bug")
+        f.write(f"{CTRL}/New.scala", "package x\n\ntrait New:\n  def a = 1\n")
+        f.commit("fix: new module")
+        out = self.bad(f, "fix-branch")
+        self.assertIn("adds module file", out)
+        g = Fixture(branch="fix/snap-bug")
+        g.write(f"{CTRL}/Old.scala", "package x\n\ntrait Old:\n  def a = 1\n")
+        g.commit("seed")
+        g.git("tag", "-f", "base")
+        g.git("rm", "-q", f"{CTRL}/Old.scala")
+        g.commit("fix: delete module")
+        self.assertIn("deletes module file", self.bad(g, "fix-branch"))
+
+    def test_fix_branch_large_net_deletion_needs_fix_trailer(self):
+        body = "package x\n\ntrait Big:\n" + "".join(f"  def m{i}: Int = {i}\n" for i in range(200))
+        f = Fixture(branch="fix/snap-bug")
+        f.write(f"{CTRL}/Big.scala", body)
+        f.commit("seed")
+        f.git("tag", "-f", "base")
+        f.write(f"{CTRL}/Big.scala", "package x\n\ntrait Big:\n  def m0: Int = 0\n")
+        f.commit("fix: shrink")
+        self.assertIn("net deletion", self.bad(f, "fix-branch"))
+        g = Fixture(branch="fix/snap-bug")
+        g.write(f"{CTRL}/Big.scala", body)
+        g.commit("seed")
+        g.git("tag", "-f", "base")
+        g.write(f"{CTRL}/Big.scala", "package x\n\ntrait Big:\n  def m0: Int = 0\n")
+        g.commit("fix: shrink (#1555)\n\n# fix: #1555\n")
+        self.ok(g)
+
+    def test_fix_named_like_a_split_slice_is_kind_other(self):
+        f = Fixture(branch="fix/snap-016-m9")
+        f.write(f"{CTRL}/M.scala", "package x\n\ntrait M:\n  def a = 1\n")
+        f.commit("add")
+        self.bad(f, "branch")
+
+    def test_fix_branch_pins_need_trailer_and_must_be_modified(self):
+        pin = "src/test/scala/golden/pin.txt"
+        f = Fixture(branch="fix/snap-bug")
+        f.write(pin, "1\n")
+        f.commit("seed")
+        f.git("tag", "-f", "base")
+        f.write(pin, "2\n")
+        f.commit("fix: update pin")
+        self.bad(f, "step4")
+        g = Fixture(branch="fix/snap-bug")
+        g.write(pin, "1\n")
+        g.commit("seed")
+        g.git("tag", "-f", "base")
+        g.write(pin, "2\n")
+        g.commit(f"fix: update pin\n\n# pins: {pin}\n")
+        self.ok(g)
+        h = Fixture(branch="fix/snap-bug")
+        h.write("docs/x.md", "x\n")
+        h.commit(f"fix: nothing\n\n# pins: {pin}\n")
+        self.assertIn("does not modify", self.bad(h, "step4"))
+
+    def test_fix_branch_resources_change_fails(self):
+        f = Fixture(branch="fix/snap-bug")
+        f.write("src/main/resources/application.conf", "a = 2\n")
+        f.commit("fix: conf")
+        self.bad(f, "step4")
+
+    def test_fix_branch_merge_commit_fails(self):
+        f = Fixture(branch="fix/snap-bug")
+        f.git("checkout", "-q", "-b", "side", "base")
+        f.write("docs/s.md", "s\n")
+        f.commit("side")
+        f.git("checkout", "-q", "fix/snap-bug")
+        f.write("docs/b.md", "b\n")
+        f.commit("b")
+        f.git("merge", "-q", "--no-ff", "-m", "merge side", "side")
+        self.bad(f, "merge")
+
     def test_module_change_on_nonconforming_branch_fails(self):
         f = Fixture(branch="feature/heal")
         f.write(f"{CTRL}/M.scala", "package x\n\ntrait M:\n  def a = 1\n")

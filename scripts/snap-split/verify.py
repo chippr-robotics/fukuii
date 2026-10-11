@@ -6,7 +6,8 @@ Implements plan.md "Move verification" steps 1-7 and FR-016 (a), (c), (d), per c
   1  moved blocks only (git --color-moved=plain) .............. commits with a `# moved:` trailer
   2  identical bodies of the `# moved:` symbols ............... commits with a `# moved:` trailer
   3  test-hunk guard / `# test-files:` trailer ............... refactor/snap-016-* | test/snap-016-* branches
-  4  no src/main/resources change, protected paths untouched .. refactor/test snap-016 branches
+  4  no src/main/resources change, protected paths untouched .. refactor/test snap-016 branches; on fix/*,
+                                                                hotfix/* only resources, and pins need `# pins:`
   5  FR-016 (a) impl-class mention, (d) member-level init rules  every commit (module dirs only)
   6  narrowing commit touches signatures only ................ commits that remove the last impl mention
   7  FR-016 (c) counts, and (b) a stub test is added ......... narrowing commits (counts: module commits)
@@ -14,6 +15,10 @@ Implements plan.md "Move verification" steps 1-7 and FR-016 (a), (c), (d), per c
      named in an `# extended-tests:` trailer: the narrowing commit may add new cases to it, but not remove or change an
      assertion, add an assertion inside an existing case, or add a skip/scheduling token; see `check_test_hunks`)
   +  `sbt compile` on each move commit (--compile).
+
+fix/* and hotfix/* branches (not containing `snap-016`) may edit existing module files. They are never moves:
+`# moved:`, a narrowing, an added or deleted module file, and (without a `# fix:` trailer) a large net deletion are
+`[fix-branch]` errors, and steps 1, 2, 3, 6 are skipped. A fix named like a split slice is kind "other" (fails closed).
 
 Standard library only; needs git and python3, no JVM.
 """
@@ -39,6 +44,7 @@ def impl_mentions(text: str) -> list[str]:
     """Mentions of the impl classes in a module file. There is no exemption: the impl classes are defined
     outside the module directories, so a stray definition inside one is itself reported by FR-016 (a)."""
     return IMPL_RE.findall(text)
+FIX_MAX_NET_DELETIONS = 150
 CAPABILITY_TRAITS = ("SnapSharedState", "SnapControllerEnv", "CoordinatorHandles", "PhaseFlags")
 EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -517,6 +523,7 @@ class Verifier:
         self.kind = (
             "refactor" if re.match(r"^refactor/snap-016-", branch)
             else "test" if re.match(r"^test/snap-016-", branch)
+            else "fix" if re.match(r"^(?:fix|hotfix)/", branch) and "snap-016" not in branch
             else "other"
         )
 
@@ -547,7 +554,7 @@ class Verifier:
     def commit(self, c: str):
         g = self.g
         if g.is_merge(c):
-            if self.kind in ("refactor", "test"):
+            if self.kind in ("refactor", "test", "fix"):
                 self.err(c, "merge", "merge commit on a spec-016 branch: rebase onto staging instead")
             return
         p = g.parent(c)
@@ -569,6 +576,20 @@ class Verifier:
                     "refactor/snap-016-* nor test/snap-016-*, so the test-hunk and drift checks would not run",
                 )
 
+        # fix branches (fix/*, hotfix/*) may change module files, but a fix is never a move or a narrowing:
+        # `# moved:` is rejected outright, and steps 1, 2 and 6 below are skipped for them (CQ-SNAP-016-23).
+        if self.kind == "fix":
+            if is_move:
+                self.err(c, "fix-branch", f"`# moved:` trailer on fix branch '{self.branch}': moves belong on refactor/snap-016-*")
+            for f, st in changed.items():
+                if is_module(f) and st in ("A", "D"):
+                    self.err(c, "fix-branch", f"{'adds' if st == 'A' else 'deletes'} module file {f}: a fix edits existing modules only")
+            if trailer(msg, "fix") is None:
+                rem, add = g.diff_lines(p, c, [f for f in changed if is_module(f)]) if any(is_module(f) for f in changed) else ([], [])
+                if len(rem) - len(add) > FIX_MAX_NET_DELETIONS:
+                    self.err(c, "fix-branch", f"net deletion of {len(rem) - len(add)} lines in module files exceeds {FIX_MAX_NET_DELETIONS}: "
+                             "split-like change; add a `# fix: #<issue>` trailer if it is a genuine fix")
+
         # step 5 (a): impl-class mention
         narrowed = False
         for f in g.tree_files(c, MODULE_DIRS):
@@ -579,12 +600,12 @@ class Verifier:
                 narrowed = True
             if not now:
                 continue
-            if is_move and len(now) == 1:
+            if is_move and self.kind != "fix" and len(now) == 1:
                 line = next(l for l in text.splitlines() if IMPL_RE.search(l))
                 if re.match(r"^\s*\w+\s*:\s*\w*Impl\s*=>\s*$", line):
                     continue
                 self.err(c, "FR-016a", f"{f}: the one allowed mention must be the temporary self-type line, found: {line.strip()}")
-            elif is_move:
+            elif is_move and self.kind != "fix":
                 self.err(c, "FR-016a", f"{f}: {len(now)} mentions of the impl class; a move commit allows exactly one (the self-type)")
             else:
                 self.err(c, "FR-016a", f"{f}: mentions the impl class ({len(now)}x); only a `# moved:` commit may, once per file")
@@ -595,14 +616,16 @@ class Verifier:
                 self.err(c, "FR-016d", f"{f}:{no}: {why}: `{s[:90]}`")
 
         # steps 1-2: move commit
-        if is_move:
+        if is_move and self.kind != "fix":
             self.check_moved_blocks(c, p, changed, split_list(moved))
             self.check_bodies(c, p, changed, split_list(moved))
             if narrowed:
                 self.err(c, "step6", "commit both removes the last impl-class mention (narrowing) and carries `# moved:`; split it into two commits")
 
         # step 6 + (b): every narrowing commit, whatever its trailers
-        if narrowed:
+        if narrowed and self.kind == "fix":
+            self.err(c, "fix-branch", "fix commit removes the last impl-class mention (a narrowing): narrowing belongs on refactor/snap-016-*")
+        if narrowed and self.kind != "fix":
             self.check_signature_only(c, p, changed)
             self.check_stub_test(c, p, changed, msg)
         elif trailer(msg, "extended-tests") is not None:
@@ -612,10 +635,12 @@ class Verifier:
                 self.info(c, line)
 
         # steps 3-4
-        if self.kind in ("refactor", "test"):
+        if self.kind in ("refactor", "test", "fix"):
             for f in changed:
                 if f.startswith(RESOURCES):
                     self.err(c, "step4", f"changes {f} (no format/config drift: src/main/resources must be untouched)")
+        if self.kind == "fix":
+            self.check_pins(c, msg, changed)
         if self.kind == "refactor":
             self.check_test_hunks(c, p, changed, msg)
             prot = self.patterns("protected-paths.txt")
@@ -779,6 +804,18 @@ class Verifier:
                     continue  # an extended suite counts only if the commit adds at least one assertion to it
                 return
         self.err(c, "FR-016b", "narrowing commit adds no new Tier 1 test of the form `new Stub<Module>State with ...` (untagged by SyncTest/IntegrationTest/SlowTest/DisabledTest), and extends no such suite named in `# extended-tests:`")
+
+    # -- step 4, fix branches: protected pins only with an exact `# pins:` trailer
+    def check_pins(self, c, msg, changed):
+        vals = trailer(msg, "pins")
+        listed = self.exact_paths(c, "step4", vals, "pins") if vals else []
+        prot = self.patterns("protected-paths.txt")
+        for f in changed:
+            if any(fnmatch.fnmatch(f, pat) for pat in prot) and f not in listed:
+                self.err(c, "step4", f"touches protected golden/pin file {f} without listing it in a `# pins:` trailer")
+        for f in listed:
+            if f not in changed:
+                self.err(c, "step4", f"`# pins:` lists {f}, which this commit does not modify")
 
     # -- step 3, refactor branches
     def check_test_hunks(self, c, p, changed, msg):

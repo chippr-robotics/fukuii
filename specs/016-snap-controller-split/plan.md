@@ -409,6 +409,15 @@ reviewer re-runs it locally with `scripts/snap-split/verify.sh origin/staging`; 
 
 **For every commit:**
 
+- **Branch rule (CQ-SNAP-016-23).** A change to a module file needs a `refactor/snap-016-*` or `test/snap-016-*`
+  branch, or a `fix/*` or `hotfix/*` branch whose name does not contain `snap-016` (a fix named like a split slice is
+  kind "other" and fails `[branch]`). A fix commit is never a move or narrowing, and fails `[fix-branch]` if it:
+  carries `# moved:`; removes the last `*Impl` mention; adds or deletes a module file; or nets more than 150 deleted
+  lines in module files without a `# fix: #<issue>` trailer. Steps 1, 2, 3, 6 are skipped. Still enforced: FR-016 (a)
+  with no one-mention allowance, (d), `[counts]`, the merge-commit ban, the final-state check, and step 4's
+  `src/main/resources` rule. Protected pin files may change only if the commit lists each by exact path in a
+  `# pins: <paths>` trailer, and every listed path must be modified (a fix PR updates its pin on purpose, NG-4/D5).
+
 3. **Test-hunk guard.** It applies on `refactor/snap-016-*` branches (P*, M*, C-*, R1).
    - In existing suites, every changed `src/test` hunk may touch only `import` lines and fixture construction.
    - A hunk that adds or removes a line containing an assertion or scheduling token fails. The tokens are `should`,
