@@ -531,7 +531,29 @@ only when every item on the per-slice checklist below holds.
     cleared, then the no-peer backoff; network pivot; `MinPivotBlock` raise; genesis pivot; CL-head pivot; CL wait;
     the backtracked retry by header fetch and by in-place commit; the retry skipped outside the three phases.
     Platåberget from scratch: **pending** (to be run by the user on the slice jar after merge; no node run here).
-- [ ] T051 [M9] `SyncLifecycle`, including the #1501 heap watchdog (call sites unchanged). Run Mordor dormant/wake.
+- [x] T051 [M9] `SyncLifecycle`, including the #1501 heap watchdog (call sites unchanged). Run Mordor dormant/wake.
+  - As built: no prerequisite commit. The move commit moves into `controller/SyncLifecycle.scala` the #1501 heap
+    watchdog (its handle `heapWatchdog`, the one var the module owns, `ensureHeapWatchdog`, `onHeapWatchdogEscape`,
+    `stopHeapWatchdog`, `onHeapPressureChange`), `recordCriticalFailure`, `enterDormantMode`, `wakeFromDormant` (with
+    #1556's `resetStagnationClocks(ResetReason.Wake)` in its place, before `startSnapSync()`), the `dormantRetry`
+    behaviour and `restartSnapSync` (10 symbols). The heap-watchdog call sites are unchanged: start in
+    `spawnRecoveryCoordinators` and `launchAccountRangeWorkers`, stop in `onStop` and `stopSnapOnlySchedules`. The
+    watchdog's start seam reaches the module as the trait's parameter, `trait SyncLifecycle(val heapWatchdogStart:
+    HeapWatchdogStart)`, mixed in as `with SyncLifecycle(heapWatchdogStart)`; making the constructor parameter a `val`
+    (the T041a/M5/M6b route) would edit the line next to the one #1559 (#1555) changes and conflict with it. Narrowed
+    self-type: `SyncLifecycleState & SnapSharedState & SnapControllerEnv & CoordinatorHandles & PhaseFlags &
+    HandshakedPeersApi & HealedCodeHoldApi & ShutdownApi & SnapStartApi & StagnationResetApi`; state 25 (R14: 16; the
+    routing doc's counts row has the breakdown), Api 7 (R14a: 12). `SyncLifecycle extends LifecycleApi`, whose
+    declaration moves next to it from `StateValidationModule.scala` (CQ-SNAP-016-16); `HealedCodeHoldApi`
+    (`resetHealedCodeHold`) is new, declared in `HealingOrchestrator.scala` (`HealingOrchestrator extends` it).
+    `DormantBaseDelay`, `DormantMaxDelay` and `DormantWakeUpKey` stayed in the core in the move (rule (d)) and became
+    pure private lazy vals of the trait in the narrowing. `SnapControllerEnv` stays at 18. **Not moved**: the
+    `DelayedRestart` and `PivotStateUnservable` arms (inline in `commonSyncingArms`, a local of `syncing()`; lifting
+    them needs a delegation line, CQ-SNAP-016-27), the critical-failure and dormant counters (the
+    `ProgressAccountsSynced` arm resets them), and `stopSnapOnlySchedules` / `stopStateSyncChildren` (plan.md's M9 row
+    does not list them; they sit in `ShutdownApi` with the core's `onStop`; CQ-SNAP-016-26). #1555 (PR #1559) touches
+    no M9 symbol. Stub test: `SyncLifecycleSpec` (eight cases). Mordor dormant/wake: **pending** (to be run by the user
+    on the slice jar after merge; no node run here).
 - [ ] T052 [M10] `PivotRefresher`. Run Platåberget across at least 3 refreshes, and Mordor.
 - [ ] T053 [M11] `DownloadSupervisor`. Check SC-001 (core ≤ about 1,000 lines). Run a full Mordor SNAP.
 

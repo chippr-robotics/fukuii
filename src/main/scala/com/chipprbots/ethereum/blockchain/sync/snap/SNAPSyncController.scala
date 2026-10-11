@@ -28,7 +28,6 @@ import com.chipprbots.ethereum.blockchain.sync.snap.controller.CoordinatorHandle
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.HealingOrchestrator
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.HealingOrchestratorState
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.HeapWatchdogStart
-import com.chipprbots.ethereum.blockchain.sync.snap.controller.LifecycleApi
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.PhaseFlags
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.PivotRefreshApi
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.PivotRefreshCommitApi
@@ -49,6 +48,7 @@ import com.chipprbots.ethereum.blockchain.sync.snap.controller.StagnationWatchdo
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.StateValidationModule
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.StateValidationState
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.SyncLifecycle
+import com.chipprbots.ethereum.blockchain.sync.snap.controller.SyncLifecycleState
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.SyncingApi
 import com.chipprbots.ethereum.consensus.engine.PoSBlockHeaderValidator
 import com.chipprbots.ethereum.db.storage.AppStateStorage
@@ -107,7 +107,6 @@ private class SNAPSyncControllerImpl(
     with SnapControllerEnv
     with StateValidationModule
     with StateValidationState
-    with LifecycleApi
     with SnapPeerPool
     with SnapPeerPoolState
     with SnapFinalization
@@ -127,7 +126,8 @@ private class SNAPSyncControllerImpl(
     with SyncingApi
     with AccountRangeStartApi
     with PivotRefreshCommitApi
-    with SyncLifecycle(heapWatchdogStart):
+    with SyncLifecycle(heapWatchdogStart)
+    with SyncLifecycleState:
 
   import SNAPSyncController.*
   import SyncPhase.*
@@ -152,9 +152,8 @@ private class SNAPSyncControllerImpl(
   // ── Timer keys (Behaviors.withTimers; replaces the Classic Cancellable fields) ───────────────
   // Recurring keys reuse the Command case object itself; one-shot keys are string literals.
   val BootstrapCheckKey = "bootstrap-check"
-  private[snap] val PivotBootstrapRetryKey = "pivot-bootstrap-retry"
-  private[snap] val SnapCapabilityCheckKey = "snap-capability-check"
-  private[snap] val DormantWakeUpKey = "dormant-wakeup"
+  val PivotBootstrapRetryKey = "pivot-bootstrap-retry"
+  val SnapCapabilityCheckKey = "snap-capability-check"
   private val PollHandshakedPeersKey = "poll-handshaked-peers"
   // Probe timeouts are keyed by the probe's BigInt requestId (C4) — see startPivotProbe.
 
@@ -326,15 +325,13 @@ private class SNAPSyncControllerImpl(
   val progressMonitor: SyncProgressMonitor = new SyncProgressMonitor(scheduler)
 
   // Failure tracking — critical failures trigger dormant retry with exponential backoff.
-  private[snap] var criticalFailureCount: Int = 0
-  private[snap] var accountsAtLastCriticalFailure: Long = 0L
+  var criticalFailureCount: Int = 0
+  var accountsAtLastCriticalFailure: Long = 0L
   private val AccountProgressResetThreshold: Long = 100_000L
 
   // Dormant retry: when critical failures exhaust, preserve all RocksDB data and wait
   // for peers to re-index their snapshots with exponential backoff (3min–20min).
-  private[snap] var dormantRetryCount: Int = 0
-  private[snap] val DormantBaseDelay: FiniteDuration = 3.minutes
-  private[snap] val DormantMaxDelay: FiniteDuration = 20.minutes
+  var dormantRetryCount: Int = 0
 
   // Async validation state. `validationInProgress` is the re-entrance guard
   // for the trie-walk Future. `validationGeneration` is bumped at every
@@ -362,7 +359,7 @@ private class SNAPSyncControllerImpl(
   // `100 * downloaded / clamp_min(estimated_total, 1)` formula has a real denominator. Without
   // this, `estimated_total` stays at 0, the formula divides by 1 (the clamp floor), and the
   // dashboard reads `5,239,500%` for a normal in-flight bytecodes count.
-  private[snap] var bytecodesEstimatedTotal: Long = 0L
+  var bytecodesEstimatedTotal: Long = 0L
 
   // Retry counter for bootstrap-to-SNAP transition (exponential backoff: 2s→60s cap, max 10 retries)
   var bootstrapRetryCount: Int = 0
@@ -391,12 +388,12 @@ private class SNAPSyncControllerImpl(
   // the candidate root. Only if the peer's snapshot is indexed (returns ≥1 account) do we
   // dispatch PivotRefreshed to coordinators. Otherwise we defer and retry every 30s, letting
   // coordinators keep downloading on the old root. This eliminates the ~8-minute dead window.
-  private[snap] var pivotProbeRequestId: Option[BigInt] = None
-  private[snap] var proactiveRollNeedsProbe: Boolean = false // flag: stagnation check → completePivotRefresh
-  private[snap] var pendingProbeCommit: Option[(BigInt, BlockHeader, String)] = None // deferred commit args
-  private[snap] var lastProbeAttemptMs: Long = 0L
+  var pivotProbeRequestId: Option[BigInt] = None
+  var proactiveRollNeedsProbe: Boolean = false // flag: stagnation check → completePivotRefresh
+  var pendingProbeCommit: Option[(BigInt, BlockHeader, String)] = None // deferred commit args
+  var lastProbeAttemptMs: Long = 0L
   private val ProbeCooldownMs: Long = 30_000L // match DownloadStagnationCheckInterval
-  private[snap] var probeAttemptCount: Int = 0
+  var probeAttemptCount: Int = 0
   private val MaxProbeAttempts: Int = 5 // 5 × 30s = 150s max deferral before forced roll
   private val ZeroPeerStagnationMs: Long = 3 * 60 * 1000L // 3 min zero-peer short-circuit
 
@@ -406,7 +403,7 @@ private class SNAPSyncControllerImpl(
   // After MaxConsecutivePivotRefreshes, we record a critical failure and enter dormant
   // retry mode. Set to 10 (was 3) to tolerate ETC mainnet's 1-5 SNAP peers needing
   // 5+ minutes to re-index after serve-window expiry.
-  private[snap] var consecutivePivotRefreshes: Int = 0
+  var consecutivePivotRefreshes: Int = 0
   private val MaxConsecutivePivotRefreshes = 10
 
   // Pivot blocks confirmed unservable in this session. When a refreshPivotInPlace resolves
@@ -551,7 +548,7 @@ private class SNAPSyncControllerImpl(
   /** Cancel the given timers in the given order (spec 016 P2, FR-011). Each caller passes its own list: the lists
     * differ on purpose and are kept exactly as they were. `timers.cancel` tolerates unknown keys.
     */
-  private[snap] def cancelSyncTimers(keys: Any*): Unit =
+  def cancelSyncTimers(keys: Any*): Unit =
     keys.foreach(timers.cancel)
 
   /** Cancel every SNAP-only scheduled timer. Idempotent — `timers.cancel` tolerates unknown keys. Called both at the

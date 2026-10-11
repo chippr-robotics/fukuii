@@ -1,5 +1,7 @@
 package com.chipprbots.ethereum.blockchain.sync.snap.controller
 
+import java.util.concurrent.atomic.AtomicBoolean
+
 import org.apache.pekko.actor.typed.Behavior
 import org.apache.pekko.actor.typed.PostStop
 import org.apache.pekko.actor.typed.scaladsl.Behaviors
@@ -7,9 +9,48 @@ import org.apache.pekko.actor.typed.scaladsl.Behaviors
 import scala.concurrent.duration.*
 
 import com.chipprbots.ethereum.blockchain.sync.SyncProtocol
-import com.chipprbots.ethereum.blockchain.sync.snap.*
+import com.chipprbots.ethereum.blockchain.sync.snap.HeapWatchdogEscape
+import com.chipprbots.ethereum.blockchain.sync.snap.HeapWatchdogEscapePolicy
+import com.chipprbots.ethereum.blockchain.sync.snap.OldGenReading
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController.*
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController.SyncPhase.*
+import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncMetrics
+import com.chipprbots.ethereum.blockchain.sync.snap.SnapHeapWatchdog
+import com.chipprbots.ethereum.db.storage.MptStorage
+import com.chipprbots.ethereum.domain.BlockHeader
+import com.chipprbots.ethereum.domain.TrieRoot
+
+private[snap] trait SyncLifecycleState:
+  var criticalFailureCount: Int
+  var accountsAtLastCriticalFailure: Long
+  var dormantRetryCount: Int
+  var consecutivePivotRefreshes: Int
+  var bootstrapRetryCount: Int
+  var pendingPivotRefresh: Option[(BigInt, String)]
+  var pivotProbeRequestId: Option[BigInt]
+  var pendingProbeCommit: Option[(BigInt, BlockHeader, String)]
+  var proactiveRollNeedsProbe: Boolean
+  var probeAttemptCount: Int
+  var lastProbeAttemptMs: Long
+  var healingServeRootRequestInFlight: Boolean
+  var lastHealingServeRootBlock: Option[BigInt]
+  var healingValidatedRoot: Option[TrieRoot]
+  def healingWalkLocalOnly: AtomicBoolean
+  var bytecodesEstimatedTotal: Long
+  var mptStorage: Option[MptStorage]
+  var coordinatorGeneration: Long
+  var validationGeneration: Long
+  var validationInProgress: Boolean
+  def cancelSyncTimers(keys: Any*): Unit
+  def BootstrapCheckKey: String
+  def PivotBootstrapRetryKey: String
+  def SnapCapabilityCheckKey: String
+  def peerEventArms: PartialFunction[Command, Behavior[Command]]
+
+private[snap] trait LifecycleApi:
+  def recordCriticalFailure(reason: String): Boolean
+  def enterDormantMode(reason: String): Behavior[Command]
+  def restartSnapSync(reason: String): Behavior[Command]
 
 /** SNAP sync lifecycle (spec 016 M9, research.md R6 "Dormant / critical-failure"): the critical-failure count and its
   * threshold (`recordCriticalFailure`), dormant mode (`enterDormantMode`, the `dormantRetry` behaviour and its
@@ -20,8 +61,13 @@ import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController.SyncPhase
   * `stopSnapOnlySchedules`. It also keeps the dispatch: the `DelayedRestart` and `PivotStateUnservable` arms of
   * `commonSyncingArms`.
   */
-private[snap] trait SyncLifecycle(val heapWatchdogStart: HeapWatchdogStart):
-  self: SNAPSyncControllerImpl =>
+private[snap] trait SyncLifecycle(val heapWatchdogStart: HeapWatchdogStart) extends LifecycleApi:
+  self: SyncLifecycleState & SnapSharedState & SnapControllerEnv & CoordinatorHandles & PhaseFlags &
+    HandshakedPeersApi & HealedCodeHoldApi & ShutdownApi & SnapStartApi & StagnationResetApi =>
+
+  private lazy val DormantBaseDelay: FiniteDuration = 3.minutes
+  private lazy val DormantMaxDelay: FiniteDuration = 20.minutes
+  private lazy val DormantWakeUpKey = "dormant-wakeup"
 
   // Started with the first SNAP coordinators (not at construction: a node that never runs SNAP needs no watchdog).
   private var heapWatchdog: Option[SnapHeapWatchdog.Handle] = None
