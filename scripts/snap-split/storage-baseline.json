@@ -22,11 +22,11 @@
   },
   "storage_refs_total": 692,
   "storage_refs": {
-    "controller/SnapResumePlanner.scala": 93,
+    "controller/SnapResumePlanner.scala": 95,
     "actors/StorageRangeCoordinator.scala": 88,
     "actors/TrieNodeHealingCoordinator.scala": 84,
     "controller/ChildFactories.scala": 72,
-    "SNAPSyncController.scala": 64,
+    "SNAPSyncController.scala": 62,
     "controller/DownloadSupervisor.scala": 60,
     "controller/PivotSelector.scala": 51,
     "controller/HealingOrchestrator.scala": 45,

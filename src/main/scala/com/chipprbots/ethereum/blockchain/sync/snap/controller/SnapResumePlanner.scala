@@ -2,12 +2,14 @@ package com.chipprbots.ethereum.blockchain.sync.snap.controller
 
 import org.apache.pekko.actor.Scheduler
 import org.apache.pekko.actor.typed.Behavior
+import org.apache.pekko.actor.typed.scaladsl.Behaviors
 import org.apache.pekko.util.ByteString
 
 import scala.concurrent.ExecutionContext
 import scala.concurrent.duration.*
 import scala.util.Try
 
+import com.chipprbots.ethereum.blockchain.sync.snap.*
 import com.chipprbots.ethereum.blockchain.sync.snap.AccountResumeCheckpoint
 import com.chipprbots.ethereum.blockchain.sync.snap.ContractTaskFiles
 import com.chipprbots.ethereum.blockchain.sync.snap.GatedTaskFileReplay
@@ -665,3 +667,73 @@ private[snap] trait SnapResumePlanner
     if carriedTaskFiles.isEmpty then clearStorageDoneMarkers("account phase starts without carried task files")
 
     (resumeProgress, carriedTaskFiles)
+
+private[snap] trait SnapResumePlannerCheckpoint:
+  self: SNAPSyncControllerImpl =>
+
+  // Storage-file path of the last persisted checkpoint for which superseded task files were already swept.
+  private var lastSweptForRecord: Option[String] = None
+
+  /** A `commonSyncingArms` arm lifted into a class member (spec 016 T053c, CQ-SNAP-016-36), body unchanged:
+    * `AccountRangeProgressCmd`, the account coordinator's progress snapshot: the superseded-generation and
+    * accounts-complete drops, the `preserved*` update and the durable `AccountResumeCheckpoint` write with its
+    * once-per-record task-file sweep. `commonSyncingArms` delegates to it at the arm's original position, so the arm
+    * order is unchanged.
+    */
+  private[snap] lazy val accountProgressCheckpointArms: PartialFunction[Command, Behavior[Command]] = {
+    case AccountRangeProgressCmd(progress, taskFiles, durable, generation) =>
+      if generation < launchedAccountGeneration then
+        // A superseded coordinator's PostStop snapshot arriving after its successor launched: the successor already
+        // carries newer (or equal) progress, and this one may describe files the successor does not own.
+        ctx.log.debug(s"Dropping account progress snapshot from superseded coordinator generation $generation")
+      else if accountsComplete then
+        // The account phase is done and its checkpoint cleared; a late PostStop snapshot must not resurrect it.
+        ctx.log.debug("Dropping account progress snapshot after accounts complete")
+      else
+        preservedRangeProgress = progress
+        preservedTaskFiles = taskFiles
+        // Track the pivot the cursors were last advanced against. Drift is a perf heuristic only (see
+        // MaxPreservedPivotDistance); measuring it from the FIRST pivot of a multi-day account phase would discard
+        // every partial range once the phase itself outlasted the cap.
+        pivotBlock.orElse(preservedAtPivotBlock).foreach(p => preservedAtPivotBlock = Some(p))
+        if durable then
+          val completedCount = progress.count { case (last, next) =>
+            // A range is "complete" when next >= last (entire keyspace traversed)
+            BigInt(1, next.toArray.padTo(32, 0.toByte)) >= BigInt(1, last.toArray.padTo(32, 0.toByte))
+          }
+          // Persist the versioned checkpoint under a FIXED key (not keyed by root): a process restart selects a new
+          // pivot, and a root-keyed record was never found again (2026-10-05 22:12 restart began from zero).
+          (stateRoot, preservedAtPivotBlock, taskFiles) match
+            case (Some(sr), Some(pivot), Some(files)) =>
+              appStateStorage
+                .putSnapAccountResumeCheckpoint(
+                  AccountResumeCheckpoint.encode(AccountResumeCheckpoint(sr.value, pivot, progress, files))
+                )
+                .commit()
+              ctx.log.info(
+                s"Account resume checkpoint persisted: ${progress.size} ranges ($completedCount fully complete), " +
+                  s"${files.storageCount} storage-task entries, ${files.codeHashesCount} codeHashes, pivot $pivot"
+              )
+              // The persisted record now references this coordinator's own files, so the files it was carried
+              // from (and any older ones) are no longer needed for a resume. Delete them only NOW — never before
+              // this commit, so a crash between the copy and here still resumes from the previous record. Keep the
+              // carry source of the live generation (a supervisor restart re-copies from it), whatever the
+              // in-memory snapshot points at, and the accounts-complete handoff files.
+              if !lastSweptForRecord.contains(files.storagePath) then
+                lastSweptForRecord = Some(files.storagePath)
+                sweepSupersededTaskFiles(
+                  keep = SNAPSyncController.taskFilePaths(files) ++
+                    currentCarrySource.toSet.flatMap(SNAPSyncController.taskFilePaths) ++
+                    preservedTaskFiles.toSet.flatMap(SNAPSyncController.taskFilePaths) ++
+                    accountsCompleteTaskFilePaths,
+                  reason = "new account resume checkpoint"
+                )
+            case _ =>
+              // Expected for the PostStop snapshot of a coordinator stopped by restartSnapSync (root already
+              // cleared); the progress is kept in memory and persisted by the next coordinator's checkpoint.
+              ctx.log.info(
+                s"Account resume checkpoint kept in memory only (stateRoot=${stateRoot.isDefined}, " +
+                  s"pivot=${preservedAtPivotBlock.isDefined}, taskFiles=${taskFiles.isDefined})"
+              )
+      Behaviors.same
+  }
