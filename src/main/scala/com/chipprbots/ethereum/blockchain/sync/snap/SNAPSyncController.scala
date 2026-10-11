@@ -885,6 +885,38 @@ private class SNAPSyncControllerImpl(
       Behaviors.same
   }
 
+  /** The proactive pivot roll's trigger (spec 016 T053c, CQ-SNAP-016-31), extracted verbatim from
+    * `checkDownloadStagnationArms`, which calls it at the same point of the 30-s stagnation tick: in the two download
+    * phases, roll the pivot in place (with a readiness probe) once it is more than `SnapServeWindowBlocks` behind the
+    * SNAP peers' best block, unless a roll landed within 50 blocks, a probe is in flight or pending commit, storage is
+    * at least 80% done, or the 30-s probe cooldown has not elapsed. Pivot-refresh policy (`[PIVOT-ROLL]`): M7b moves it
+    * to `PivotRefresher` and the arm to `StagnationWatchdog`.
+    */
+  private[snap] def maybeProactivePivotRoll(): Unit =
+    // Proactive pivot roll: keep pivot within core-geth's 128-block snapshot window.
+    if (currentPhase == AccountRangeSync || currentPhase == ByteCodeAndStorageSync) &&
+      pivotBlock.isDefined
+    then
+      currentNetworkBestFromSnapPeers().foreach { networkBest =>
+        val pivotAge = networkBest - pivotBlock.get
+        val recentlyRolled = lastProactivePivotBlock.exists(last => (networkBest - last) <= BigInt(50))
+        val storageLateStage =
+          currentPhase == ByteCodeAndStorageSync && storageContractProgressPct >= 0.80
+        if pivotAge > SnapServeWindowBlocks && !recentlyRolled &&
+          pivotProbeRequestId.isEmpty && pendingProbeCommit.isEmpty &&
+          !storageLateStage
+        then
+          val now = System.currentTimeMillis
+          if now - lastProbeAttemptMs >= ProbeCooldownMs then
+            ctx.log.info(
+              s"[PIVOT-ROLL] Proactive pivot roll: pivot=${pivotBlock.get} " +
+                s"network=$networkBest age=$pivotAge — readiness probe will fire after header fetch"
+            )
+            proactiveRollNeedsProbe = true
+            lastProbeAttemptMs = now
+            refreshPivotInPlace("proactive pivot roll")
+      }
+
   /** A `commonSyncingArms` arm lifted into a class member (spec 016 restructure, CQ-SNAP-016-18/19), body unchanged:
     * `CheckDownloadStagnation`, the 30-s stagnation tick: the proactive pivot roll, the zero-SNAP-peer log and the
     * progress `ask`s whose answers `accountRangeArms` and `byteCodeAndStorageArms` handle. `commonSyncingArms`
@@ -900,29 +932,7 @@ private class SNAPSyncControllerImpl(
         s"Stagnation check: phase=$currentPhase, stalledMs=${System.currentTimeMillis() - lastStorageProgressMs}"
       )
 
-      // Proactive pivot roll: keep pivot within core-geth's 128-block snapshot window.
-      if (currentPhase == AccountRangeSync || currentPhase == ByteCodeAndStorageSync) &&
-        pivotBlock.isDefined
-      then
-        currentNetworkBestFromSnapPeers().foreach { networkBest =>
-          val pivotAge = networkBest - pivotBlock.get
-          val recentlyRolled = lastProactivePivotBlock.exists(last => (networkBest - last) <= BigInt(50))
-          val storageLateStage =
-            currentPhase == ByteCodeAndStorageSync && storageContractProgressPct >= 0.80
-          if pivotAge > SnapServeWindowBlocks && !recentlyRolled &&
-            pivotProbeRequestId.isEmpty && pendingProbeCommit.isEmpty &&
-            !storageLateStage
-          then
-            val now = System.currentTimeMillis
-            if now - lastProbeAttemptMs >= ProbeCooldownMs then
-              ctx.log.info(
-                s"[PIVOT-ROLL] Proactive pivot roll: pivot=${pivotBlock.get} " +
-                  s"network=$networkBest age=$pivotAge — readiness probe will fire after header fetch"
-              )
-              proactiveRollNeedsProbe = true
-              lastProbeAttemptMs = now
-              refreshPivotInPlace("proactive pivot roll")
-        }
+      maybeProactivePivotRoll()
 
       val snapPeerCount = peersToDownloadFrom.values.count(_.peerInfo.remoteStatus.supportsSnap)
       val totalPeerCount = peersToDownloadFrom.size
