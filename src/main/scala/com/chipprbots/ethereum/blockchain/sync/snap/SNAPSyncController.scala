@@ -43,6 +43,7 @@ import com.chipprbots.ethereum.blockchain.sync.snap.controller.SnapSharedState
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.SnapStartApi
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.StagnationWatchdog
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.StagnationWatchdogState
+import com.chipprbots.ethereum.blockchain.sync.snap.controller.StagnationWatchdogTick
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.StateValidationModule
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.StateValidationState
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.SyncLifecycle
@@ -115,6 +116,7 @@ private class SNAPSyncControllerImpl(
     with HealingOrchestratorState
     with StagnationWatchdog
     with StagnationWatchdogState
+    with StagnationWatchdogTick
     with PivotSelector
     with PivotSelectorState
     with SnapStartApi
@@ -386,7 +388,7 @@ private class SNAPSyncControllerImpl(
   var lastProbeAttemptMs: Long = 0L
   val ProbeCooldownMs: Long = 30_000L // match DownloadStagnationCheckInterval
   var probeAttemptCount: Int = 0
-  private val ZeroPeerStagnationMs: Long = 3 * 60 * 1000L // 3 min zero-peer short-circuit
+  private[snap] val ZeroPeerStagnationMs: Long = 3 * 60 * 1000L // 3 min zero-peer short-circuit
 
   // Consecutive pivot refresh counter: when all peers are repeatedly stateless after
   // pivot refreshes, it strongly indicates no peer has a snapshot database. Each
@@ -879,79 +881,6 @@ private class SNAPSyncControllerImpl(
         // ARCH-WALK-HEAL-INTERLEAVE: Start walk with coordinator alive (if still running) or
         // create a fresh coordinator before the walk so inline discovery can run concurrently.
         startStateHealingWithInterleave()
-      Behaviors.same
-  }
-
-  /** A `commonSyncingArms` arm lifted into a class member (spec 016 restructure, CQ-SNAP-016-18/19), body unchanged:
-    * `CheckDownloadStagnation`, the 30-s stagnation tick: the proactive pivot roll, the zero-SNAP-peer log and the
-    * progress `ask`s whose answers `accountRangeArms` and `byteCodeAndStorageArms` handle. `commonSyncingArms`
-    * delegates to it at the arm's original position, so the arm order is unchanged.
-    */
-  private[snap] lazy val checkDownloadStagnationArms: PartialFunction[Command, Behavior[Command]] = {
-    // C2: inlined from aroundReceive — stagnation check dispatches to the active coordinator
-    case CheckDownloadStagnation =>
-      import org.apache.pekko.util.Timeout
-      import scala.util.{Success, Failure}
-      given timeout: Timeout = Timeout(2.seconds)
-      ctx.log.debug(
-        s"Stagnation check: phase=$currentPhase, stalledMs=${System.currentTimeMillis() - lastStorageProgressMs}"
-      )
-
-      maybeProactivePivotRoll()
-
-      val snapPeerCount = peersToDownloadFrom.values.count(_.peerInfo.remoteStatus.supportsSnap)
-      val totalPeerCount = peersToDownloadFrom.size
-      val stagnantMs = System.currentTimeMillis() - lastAccountProgressMs
-      if currentPhase == AccountRangeSync && snapPeerCount == 0 && stagnantMs > ZeroPeerStagnationMs then
-        ctx.log.info(
-          s"[STAGNATION] Zero SNAP peers for ${stagnantMs / 1000}s during account sync " +
-            s"($totalPeerCount total peers) — waiting for peers to reconnect; downloaded state is preserved " +
-            s"(no restart)"
-        )
-
-      currentPhase match
-        case AccountRangeSync =>
-          accountRangeCoordinator.foreach { coordinator =>
-            import org.apache.pekko.actor.typed.scaladsl.AskPattern.*
-            given typedScheduler: org.apache.pekko.actor.typed.Scheduler = ctx.system.scheduler
-            ctx.pipeToSelf(
-              coordinator.ask[actors.AccountRangeStats](replyTo =>
-                actors.AccountRangeCoordinator.AccountGetProgress(replyTo)
-              )
-            ) {
-              case Success(stats) => AccountCoordinatorProgress(stats)
-              case Failure(_)     => AccountCoordinatorProgress(actors.AccountRangeStats(0L, 0L, 0, 0, 0, 0.0, 0L, 0))
-            }
-          }
-        case ByteCodeAndStorageSync =>
-          storageRangeCoordinator.foreach { coordinator =>
-            import org.apache.pekko.actor.typed.scaladsl.AskPattern.*
-            given typedScheduler: org.apache.pekko.actor.typed.Scheduler = ctx.system.scheduler
-            ctx.pipeToSelf(
-              coordinator.ask[actors.StorageRangeCoordinator.SyncStatistics](replyTo =>
-                actors.StorageRangeCoordinator.StorageGetProgress(replyTo)
-              )
-            ) {
-              case Success(stats) => StorageCoordinatorProgress(stats)
-              case Failure(_) =>
-                StorageCoordinatorProgress(actors.StorageRangeCoordinator.SyncStatistics(0, 0, 0, 0, 0, 0, 0.0))
-            }
-          }
-          if !bytecodePhaseComplete then
-            bytecodeCoordinator.foreach { coordinator =>
-              import org.apache.pekko.actor.typed.scaladsl.AskPattern.*
-              given typedScheduler: org.apache.pekko.actor.typed.Scheduler = ctx.system.scheduler
-              ctx.pipeToSelf(
-                coordinator.ask[actors.ByteCodeCoordinator.ByteCodeProgress](replyTo =>
-                  actors.ByteCodeCoordinator.ByteCodeGetProgress(replyTo)
-                )
-              ) {
-                case Success(progress) => ByteCodeCoordinatorProgress(progress)
-                case Failure(_) =>
-                  ByteCodeCoordinatorProgress(actors.ByteCodeCoordinator.ByteCodeProgress(0.0, 0L, 0L))
-              }
-            }
-        case _ => // No stagnation check needed in other phases
       Behaviors.same
   }
 
