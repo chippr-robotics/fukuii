@@ -826,8 +826,8 @@ controller modules and before T060. Spec 017 (`specs/017-state-capabilities-witn
     headers), healing (frontier and BFS stores, healed code), validation, and the peer pool's `blockchainReader` use.
     Change the `ChildFactories` spawn arguments to pass a `StateIngest`, with production defaults, so the coordinator
     narrowings can move their call sites later.
-  - `SnapControllerEnv` shrinks from 18 members to about 11 (18 − 8 + `stateIngest`). Lower its row in the T054
-    baseline, and update the cap row in the routing doc.
+  - `SnapControllerEnv` shrinks from 18 members to about 11 (18 − 8 + `stateIngest`). Record the lower count in the
+    T054 baseline (`[env-freeze]`), and update the cap row in the routing doc.
   - **Durability policy.** `StateIngest` carries a per-capability durability policy whose default is today's
     behaviour. No relaxed policy is enabled in this PR (that is T056).
   - **Exporter durability property (FR-044), explicit on the trait.** `PathToHashExporter`'s publish is the
@@ -870,10 +870,11 @@ controller modules and before T060. Spec 017 (`specs/017-state-capabilities-witn
 ## Coordinators
 
 **Amendment 2026-10-11 (applies to T061–T075).** Every C-* narrowing self-type takes `StateIngest` for storage,
-**never `StateAccess`** and never a raw storage type (FR-042). Each C-* task is done only when its coordinator's
-storage-reference total in the T054 baseline (the coordinator file plus its module files) is **lower** than before
-the PR, and the PR updates the baseline file. The one exception is a slice whose moved code holds no storage
-reference at all: the PR says so, with the grep, and the total stays unchanged. It never rises. The "no `StateAccess`
+**never `StateAccess`** and never a raw storage type (FR-042). Each C-* task is done only when it **lowers the T054
+baseline total** (the storage-reference total over `snap/controller/` and `snap/actors/`, FR-043), and the PR records
+the new total in the baseline file. Its own coordinator file's figure normally falls too, but the gate is the total:
+per-file counts may move between files. The one exception is a slice whose moved code holds no storage reference at
+all: the PR says so, with the grep, and the total stays unchanged. It never rises. The "no `StateAccess`
 under `snap/`" dependency check is delivered by spec 017 (DC-4); it extends the T054 ratchet tooling and is vacuous
 until `StateAccess` exists (FR-042).
 
@@ -882,36 +883,36 @@ until `StateAccess` exists (FR-042).
   coordinator module's state-interface baseline (the R14 equivalent). Every C-* task below has the narrowing commit
   and a stub test.
 - [ ] T061 [C-B1] ByteCode: `ByteCodeDispatch`, `ByteCodeResponseHandling` (the #1501 `skipPresent` check moves
-  unchanged). Narrowing takes `StateIngest` (code writes, presence check), never `StateAccess`; lowers the BCC row
-  of the T054 baseline.
-- [ ] T062 [C-A1] `AccountPeerDispatch` (includes the #1501 intake gate). Narrowing takes `StateIngest` where it
-  touches storage, never `StateAccess`; lowers the ARC row of the T054 baseline.
-- [ ] T063 [C-A2] `AccountTaskLifecycle`. Narrowing takes `StateIngest`, never `StateAccess`; lowers the ARC row.
+  unchanged). Narrowing takes `StateIngest` (code writes, presence check), never `StateAccess`; lowers the T054
+  baseline total.
+- [ ] T062 [C-A1] `AccountPeerDispatch` (includes the #1501 intake gate). Narrowing takes `StateIngest` where it touches
+  storage, never `StateAccess`; lowers the baseline total.
+- [ ] T063 [C-A2] `AccountTaskLifecycle`. Narrowing takes `StateIngest`, never `StateAccess`; lowers the baseline total.
 - [ ] T064 [C-A3] `AccountTrieAssembly` + `finalizing` (vault). Narrowing takes `StateIngest` (trie-node writes,
-  StackTrie commit), never `StateAccess`; lowers the ARC row.
-- [ ] T065 [C-A4] `ContractWorkCarry` (vault). Narrowing takes `StateIngest`, never `StateAccess`; lowers the ARC
-  row. Run a Mordor restart mid-account. The #1487/#1498/#1501 replay invariants are unchanged.
-- [ ] T066 [C-S1] `StoragePeerDispatch`. Narrowing takes `StateIngest` where it touches storage, never
-  `StateAccess`; lowers the SRC row.
+  StackTrie commit), never `StateAccess`; lowers the baseline total.
+- [ ] T065 [C-A4] `ContractWorkCarry` (vault). Narrowing takes `StateIngest`, never `StateAccess`; lowers the baseline
+  total. Run a Mordor restart mid-account. The #1487/#1498/#1501 replay invariants are unchanged.
+- [ ] T066 [C-S1] `StoragePeerDispatch`. Narrowing takes `StateIngest` where it touches storage, never `StateAccess`;
+  lowers the baseline total.
 - [ ] T067 [C-S2] `StorageOrderedApply` (vault). Narrowing takes `StateIngest` (the batched storage-trie node-write
-  path, `flushTrieNodeWrites`), never `StateAccess`; lowers the SRC row.
+  path, `flushTrieNodeWrites`), never `StateAccess`; lowers the baseline total.
 - [ ] T068 [C-S3] `StorageDoneMarkers` (vault). Narrowing takes `StateIngest` (flat slots, done markers), never
-  `StateAccess`; lowers the SRC row. The PR quotes spec 010 R2a and shows each clause still holds. Run Mordor and
+  `StateAccess`; lowers the baseline total. The PR quotes spec 010 R2a and shows each clause still holds. Run Mordor and
   Platåberget restarts mid-storage.
 - [ ] T069 [C-S4] `StorageResponseProcessing`. Narrowing takes `StateIngest` (proof verification reads), never
-  `StateAccess`; lowers the SRC row.
+  `StateAccess`; lowers the baseline total.
 - [ ] T070 [C-H0] Split TNHC `activeBehavior` into per-concern partial functions, with an arm-order table as in T036.
-  (Restructure only, no narrowing; the TNHC baseline row must not rise.)
+  (Restructure only, no narrowing; the baseline total must not rise.)
 - [ ] T071 [C-H1] `FrontierPersistence` (vault). Narrowing takes `StateIngest` (frontier and BFS stores), never
-  `StateAccess`; lowers the TNHC row. Run a Mordor heal restart.
-- [ ] T072 [C-H2] `FrontierRebuildBfs`. Narrowing takes `StateIngest` (presence reads), never `StateAccess`; lowers
-  the TNHC row.
-- [ ] T073 [C-H3] `HealVerification` (vault). Narrowing takes `StateIngest` (verification reads), never
-  `StateAccess`; lowers the TNHC row.
-- [ ] T074 [C-H4] `HealDispatch`. Narrowing takes `StateIngest` where it touches storage, never `StateAccess`;
-  lowers the TNHC row.
-- [ ] T075 [C-H5] `HealResponseProcessing`. Narrowing takes `StateIngest` (healed nodes and code), never
-  `StateAccess`; lowers the TNHC row. Check SC-002.
+  `StateAccess`; lowers the baseline total. Run a Mordor heal restart.
+- [ ] T072 [C-H2] `FrontierRebuildBfs`. Narrowing takes `StateIngest` (presence reads), never `StateAccess`; lowers the
+  baseline total.
+- [ ] T073 [C-H3] `HealVerification` (vault). Narrowing takes `StateIngest` (verification reads), never `StateAccess`;
+  lowers the baseline total.
+- [ ] T074 [C-H4] `HealDispatch`. Narrowing takes `StateIngest` where it touches storage, never `StateAccess`; lowers
+  the baseline total.
+- [ ] T075 [C-H5] `HealResponseProcessing`. Narrowing takes `StateIngest` (healed nodes and code), never `StateAccess`;
+  lowers the baseline total. Check SC-002.
 - [ ] T075b [C-X0] Test-only golden of the response-size window for ARC, SRC and TNHC: initial target, grow on a ≥90%
   fill, shrink on failure, min/max clamps, and the exact DEBUG log text with its per-coordinator label. It lands
   before C-X.

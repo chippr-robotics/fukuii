@@ -520,8 +520,8 @@ before the coordinator stage (T060), and every coordinator task is amended:
    in `SnapControllerEnv` and the Path-scheme batched storage-trie node-write path (`flushTrieNodeWrites`, from
    #1548), moves the controller modules onto it, and shrinks
    `SnapControllerEnv` from 18 members to about 11.
-3. **Coordinator stage (T061–T075).** Each C-* narrowing takes `StateIngest`, never `StateAccess`, and lowers its
-   row in the T054 baseline.
+3. **Coordinator stage (T061–T075).** Each C-* narrowing takes `StateIngest`, never `StateAccess`, and lowers the
+   T054 baseline total (its own coordinator file's figure normally falls too, but the gate is the total).
 4. **The lighter-WAL experiment (T056)** is a per-capability durability policy on `StateIngest`. It is never applied
    to `StateAccess` or to the execution store.
 
@@ -565,7 +565,8 @@ before the coordinator stage (T060), and every coordinator task is amended:
 - **SC-008** After T055, `SnapControllerEnv` has about 11 members and no storage handle, and the T054 baseline shows
   it.
 - **SC-009** After the last coordinator slice, no file under `snap/actors/` references a storage type except through
-  `StateIngest`, and every row of the T054 storage-reference baseline is at its post-coordinator value or lower.
+  `StateIngest`, and the T054 storage-reference **total** is at its post-coordinator value or lower (per-file counts
+  may move between files, FR-043).
 - **SC-010** The `StateIngest` wrap of the batched storage-trie node-write path (`flushTrieNodeWrites`) shows no
   storage-rate regression:
   - `[STORAGE-PERF]` parity on **the same physical host** that produced the ~1.7M entries/h figure (the 4-core /

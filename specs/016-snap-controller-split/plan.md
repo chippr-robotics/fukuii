@@ -344,10 +344,10 @@ the module that owns the implementation for that behaviour. The table lists each
 
 Boundaries are preliminary (research.md R12) and are confirmed by T060 before C-B1.
 
-**Amendment 2026-10-11.** Every C-* narrowing self-type names `StateIngest` for storage, never `StateAccess` and never
-a raw storage type. Each C-* PR lowers its coordinator's row in the T054 storage-reference baseline. The coordinators
-get their handles through `ChildFactories` today; T055 changes the spawn arguments to pass a `StateIngest`, and the
-C-* narrowing commits then move the call sites onto it.
+**Amendment 2026-10-11.** Every C-* narrowing self-type names `StateIngest` for storage, never `StateAccess` and never a
+raw storage type. Each C-* PR lowers the T054 storage-reference total (its coordinator file's figure normally falls too,
+but the gate is the total). The coordinators get their handles through `ChildFactories` today; T055 changes the spawn
+arguments to pass a `StateIngest`, and the C-* narrowing commits then move the call sites onto it.
 
 | # | Coordinator → trait / file | Contents | Notes | Est. lines |
 |---|---|---|---|---|
@@ -610,7 +610,7 @@ plan. Nothing above that is not marked "amended" changes.
 | Env freeze ratchet: `verify.py` step 8 against `scripts/snap-split/storage-baseline.json`: the `SnapControllerEnv` member count (18) and the storage-reference total over `snap/controller/` and `snap/actors/` (comments excluded; files may trade), which CI lets go **down only** (spec FR-043) | T054; PR #1570 on `test/snap-016-env-freeze` | prism |
 | `verify.py` mode for a behaviour-neutral capability-introduction PR | T054b, owned by the T054 tooling line, before T055 | prism |
 | `StateIngest` capability trait | T055, one behaviour-neutral PR between M11 and T060 | forge, vault, Mordor run, perf parity |
-| Coordinator narrowings take `StateIngest`, never `StateAccess`, and each lowers its baseline row | T061–T075 (amended) | as in the slice list |
+| Coordinator narrowings take `StateIngest`, never `StateAccess`, and each lowers the baseline total | T061–T075 (amended) | as in the slice list |
 | Lighter-WAL experiment as a per-capability durability policy on `StateIngest` | T056 (optional) | vault, forge |
 | `StateAccess`, execution witnesses, `SyncMode`, backfill, opaque `Address`/`TrieKey`/`Wei` | **spec 017** (`specs/017-state-capabilities-witnesses/`), which depends on T055 | beacon, forge, vault |
 
