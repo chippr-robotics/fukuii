@@ -4,7 +4,9 @@
 
 **Created**: 2026-10-11
 
-**Status**: **Draft (stub).** Approved as a stub by the user on 2026-10-11. To be fleshed out with `/speckit-specify`
+**Status**: **Draft (stub).** Approved as a stub by the user on 2026-10-11. **Revised 2026-10-11** after the user's
+review of staging 0.9.59: the recorder is one `MptStorage` decorator at `BlockExecution.buildInitialWorld` (DC-3),
+the BAL prefetcher stays enabled (DC-2), and DC-6 to DC-10 name the gaps the decorator alone does not cover. To be fleshed out with `/speckit-specify`
 and `/speckit-clarify`, then `/speckit-plan` and `/speckit-tasks`. The Design constraints section below is binding
 on that later work.
 
@@ -35,10 +37,31 @@ amendment makes the ingest side a type (`StateIngest`). The execution side has n
 - nothing stops SNAP code from reaching execution state, or execution from inheriting an ingest durability setting;
 - there is no single seam at which execution reads can be observed, so fukuii cannot produce an **execution witness**
   (the set of trie nodes and code a block's execution touches, in the geth/reth `debug_executionWitness` shape);
-- several read layers can answer a state read without a trie-node fetch: the BAL-driven prefetcher (task #79,
-  `bal-prefetch-threads`), the decoded-node cache (`decoded-node-cache-bytes`), the code cache (`code-cache-bytes`),
-  the world-read memo (`world-read-memo-entries`) and the account/storage caches. A witness recorded beside them
-  would silently miss nodes.
+- several read layers can answer a state read, and a recorder in the wrong place would miss what they serve: the
+  BAL-driven prefetcher (task #79, `bal-prefetch-threads`), the decoded-node cache (`decoded-node-cache-bytes`), the
+  code and code-size caches (`code-cache-bytes`), the world-read memo (`world-read-memo-entries`), and the ancestor
+  block hashes BLOCKHASH reads.
+
+### The seam already exists (staging 0.9.59)
+
+This is a smaller change than the stub first assumed. All block execution builds its world in **one place**,
+`BlockExecution.buildInitialWorld` (`ledger/BlockExecution.scala`), from the parent root over
+`SerializingMptStorage.cachedForExecution` (`db/storage/MptStorage.scala`): one storage choice per block and a fresh
+world each time. Every trie walk, including the sibling fetches of deletion collapse, goes through
+`MptStorage.get(hash)`, and execution reads the hash-keyed store on both schemes. The decorator pattern is already
+used three times (`CachingMptStorage`, `PrefetchNodeReader`, `StxLedger.ReplayMptStorage`).
+
+So witness capture is **one `MptStorage` decorator (`RecordingMptStorage`) plus two world-level hooks (code and
+block hashes), at a single construction site.** The `StatelessExecutor` reuses the existing world over an in-memory
+`MptStorage`. There is no second EVM and no second world implementation.
+
+### Prior art: ExtVM
+
+Mantis's external-VM adapter is gone and is not restored. `VmSetup` accepts only `vm.mode = internal`, and
+`src/main/protobuf/extvm/` keeps only a README and LICENSE. ExtVM was a per-transaction callback protocol: the VM
+asked the node for each account, slot and code blob as it ran. A prover or stateless verifier needs the opposite: the
+whole block's pre-state up front, plus the full block transition. Reviving it would add a protocol without giving the
+witness. The dead `vm.external.*` config that `VmConfig` still parses is removed by T-000 (below).
 
 ## Strategic motivation
 
@@ -52,8 +75,9 @@ amendment makes the ingest side a type (`StateIngest`). The execution side has n
 
 - G-1 A `StateAccess` capability for EVM-execution reads and writes: a single writer, concurrent readers via
   snapshots, always fully durable.
-- G-2 Execution witnesses: a recording wrapper over `StateAccess`, a content-addressed witness node store on the slow
-  tier, a `StatelessExecutor`, and a differential test against geth.
+- G-2 Execution witnesses: `RecordingMptStorage` (the `MptStorage` decorator under `StateAccess`'s execution world)
+  plus the code and block-hash hooks, a content-addressed witness node store on the slow tier, a
+  `StatelessExecutor`, and a differential test against geth.
 - G-3 A backfill mode that produces historical witnesses after SNAP reaches head.
 - G-4 A `SyncMode` ADT (`Snap` / `Full` / `Backfill`) in `SyncController` that decides when witness capture is
   possible.
@@ -77,10 +101,13 @@ amendment makes the ingest side a type (`StateIngest`). The execution side has n
 1. **`StateAccess`** (G-1). EVM-execution reads and writes, used by block import. One writer; concurrent readers
    through snapshots. Always fully durable: no relaxed durability policy may be set on it.
 2. **Execution witnesses** (G-2, recommendation R5):
-   - a **recording wrapper** over `StateAccess` that records every trie node and code blob execution resolves,
-     placed per DC-3;
+   - **`RecordingMptStorage`**, an `MptStorage` decorator installed at `buildInitialWorld` (DC-3, DC-10), plus the
+     world-level code hook (DC-6) and the ancestor-hash hook (DC-7);
    - a **content-addressed node store** for witnesses on the slow storage tier (#1483, tiered storage);
-   - a **`StatelessExecutor`**: `(block, witness, chainSpec) => Either[Error, postRoot]`;
+   - a **`StatelessExecutor`**: `(block, witness, chainSpec) => Either[Error, postRoot]`. It is the existing
+     `InMemoryWorldStateProxy` over a `WitnessMptStorage` (an in-memory hash → node map), with witness-backed code and
+     a witness-backed ancestor-hash function. `MptStorage.get` already throws `MissingRootNodeException` for an absent
+     node; that is the "witness incomplete" error;
    - a **differential test against geth's `debug_executionWitness`** on Sepolia blocks: same block, byte-comparable
      witness content, same post-state root.
 3. **Backfill mode** (G-3, R6): produces witnesses for historical blocks. It is scheduled only after SNAP reaches
@@ -106,22 +133,24 @@ leaks into the execution store on either scheme. Rationale: otherwise a crash du
 reading a store that was never durably written. (Spec 016 FR-044 and T055 state the same property for the
 `StateIngest` side.)
 
-**DC-2 — Prefetcher-through-recorder rule.** In witness capture mode, no layer may satisfy a state read without the
-recorder seeing the trie nodes behind it. (a) The BAL-driven prefetcher (#79) **MUST prefetch through the recording
-`StateAccess`**, not be disabled: BALs (EIP-7928) are consensus-validated and complete, so prefetching through the
-recorder captures the right read set and keeps capture-mode throughput. Extra nodes in a witness are harmless;
-missing nodes are fatal. (b) BALs do not cover the post-state root computation, so the recorder must still wrap it,
-to capture the sibling nodes that writes and deletion collapse resolve. (c) Disabling the prefetcher is only the
-fallback for blocks without BALs: pre-Amsterdam blocks and ETC. (d) Every other layer that can answer a read without
-a recorded node fetch — the decoded-node cache, the code cache, the world-read memo and the account/storage caches —
-either routes through the recorder or is bypassed in capture mode. A cache or prefetch hit that bypasses the recorder
-is a silent witness gap and is forbidden. (e) Test requirement: a capture run with every cache warm produces a
-witness byte-identical to one with every cache cold.
+**DC-2 — The prefetcher stays enabled; the recorder sits above every node cache.** *(Revised 2026-10-11; supersedes
+the earlier "route the prefetcher through the recorder" rule.)* The BAL-driven prefetcher (#79) stays **enabled** in
+capture mode. It warms `DecodedNodeCache`, which sits **below** `cachedForExecution` (`new CachingMptStorage(this,
+cache)`). A recorder on the outermost layer (DC-3) therefore sees every `get` the execution walk makes, whether the
+cache hits or not, so neither disabling the prefetcher nor a pre-Amsterdam/ETC fallback is needed. The same holds for
+any node cache below the recorder. The read layers that sit above `MptStorage` (code and code-size caches, the
+ancestor-hash function, the read memos) are covered by DC-6, DC-7 and DC-9. A read that bypasses the recorder is a
+silent witness gap and is forbidden. Test requirement (verification): a capture run with every cache warm (prefetcher
+on, decoded-node cache, code caches, memos) produces a witness byte-identical to one with every cache cold.
 
-**DC-3 — Recording at MPT node resolution.** The recorder sits at the layer where the Path and Hash schemes converge,
-which is MPT node resolution, not the storage-key level. Path scheme fetches nodes by path, but a witness needs
-hash-addressed nodes, including the siblings resolved for writes and for deletion collapse. Recording below that
-layer would see path keys on one scheme and hash keys on the other, and would miss nodes that come from caches.
+**DC-3 — Recording location: an `MptStorage` decorator on the outermost layer at `buildInitialWorld`.** The recorder
+is `RecordingMptStorage`, an `MptStorage` decorator in the pattern of `CachingMptStorage`, `PrefetchNodeReader` and
+`StxLedger.ReplayMptStorage`. It is installed in `BlockExecution.buildInitialWorld` on the **outermost** layer: it
+wraps the result of `cachedForExecution`, and it is installed **after** the `staged.fold(...)(_.storage)` match, so
+the backing-storage and the staged-storage paths are both covered. This is MPT node resolution, where the Path and
+Hash schemes converge: execution reads the hash-keyed store on both, and every trie walk, including the sibling
+fetches of deletion collapse, goes through `MptStorage.get(hash)`. Recording at the storage-key level is rejected:
+Path scheme keys nodes by path, but a witness needs hash-addressed nodes.
 
 **DC-4 — SNAP isolation boundary.** SNAP modules never hold `StateAccess`. A dependency check enforces it, extending
 spec 016's env freeze ratchet (T054) and its FR-042 check: no file under `blockchain/sync/snap/` may name
@@ -129,6 +158,30 @@ spec 016's env freeze ratchet (T054) and its FR-042 check: no file under `blockc
 
 **DC-5 — Defaults.** Witness capture defaults to off. No witness is written to the state SSD during SNAP: witnesses
 go only to the slow-tier node store, and only in `Full` or `Backfill` mode.
+
+**DC-6 — Code is recorded at the world level.** `EvmCodeStorage` is a concrete class with process-wide static
+caches, `shared` (code) and `sizes` (code lengths) (`db/storage/EvmCodeStorage.scala`). EXTCODESIZE can be answered
+from the size cache without the bytecode ever being read, yet a stateless verifier needs the code. So code hashes are
+recorded at the **world level**, in `getCodeAndHash` and `getCodeSize` of the world, and the bytes are resolved from
+`EvmCodeStorage` when the witness is finalized. The storage class is **not** wrapped.
+
+**DC-7 — BLOCKHASH ancestors are recorded.** `AncestorBlockHashes.forBlock` is a plain function passed into the world.
+In capture mode it is wrapped to record the ancestor headers it returns, so the witness carries the headers BLOCKHASH
+needs. The `StatelessExecutor` gets a witness-backed function of the same shape.
+
+**DC-8 — Capture implies no flat slot storage, by construction.** Block execution does not pass `flatSlotStorage` to
+the world today; only SNAP and recovery do. If execution ever used it, SLOADs would skip the trie and the witness
+would silently lose storage proofs. "Capture implies no flat storage" is enforced at constructor level: the types make
+a capturing world with flat slot storage **unconstructible**, not merely checked at run time.
+
+**DC-9 — Read memos never cross block boundaries.** `TrieReadMemo` is per world and keyed by trie root. Worlds are
+built fresh per block, so the first read in each block always walks the trie and is recorded. That assumption is what
+keeps the memos safe for capture, so a test asserts that a memo never carries entries from one block's world into the
+next.
+
+**DC-10 — Staged storage is covered.** Blocks executed over a `StagedBlockState` (the `staged` argument of
+`buildInitialWorld`) are recorded exactly like blocks over the backing storage, because the recorder is installed
+after the `staged.fold(...)(_.storage)` match (DC-3). A test captures one block on each path.
 
 ## User Scenarios & Testing *(mandatory)*
 
@@ -195,8 +248,10 @@ After SNAP reaches head, an operator schedules backfill to produce witnesses for
 
 ### Edge Cases
 
-- A cache is warm when capture is switched on (DC-2 (e)).
-- A pre-Amsterdam or ETC block, with no BAL (DC-2 (c)).
+- A cache is warm when capture is switched on (DC-2).
+- EXTCODESIZE answered from the code-size cache (DC-6).
+- BLOCKHASH of an ancestor (DC-7).
+- A block executed over staged storage (DC-10).
 - A crash during SNAP finalization, on each scheme (DC-1).
 - A reorg across captured blocks (`Reverted`).
 - Capture switched on during `Snap` mode (US-3).
@@ -207,13 +262,17 @@ After SNAP reaches head, an operator schedules backfill to produce witnesses for
 
 - **FR-001** The system MUST provide a `StateAccess` capability for EVM-execution reads and writes, with one writer,
   concurrent readers through snapshots, and full durability always.
-- **FR-002** The system MUST provide a recording wrapper over `StateAccess` that records at MPT node resolution
-  (DC-3).
-- **FR-003** In capture mode, every read layer MUST route through the recorder or be bypassed, and the BAL prefetcher
-  MUST prefetch through the recording `StateAccess` (DC-2).
+- **FR-002** The system MUST provide `RecordingMptStorage`, installed on the outermost `MptStorage` layer at
+  `buildInitialWorld`, after the staged-storage match (DC-3, DC-10).
+- **FR-003** In capture mode the BAL prefetcher MUST stay enabled, and no read may bypass the recorder: node caches sit
+  below it (DC-2), code and code sizes are recorded at the world level (DC-6), BLOCKHASH ancestors are recorded
+  (DC-7), and read memos never cross a block (DC-9).
+- **FR-003a** A capturing world MUST be unconstructible with flat slot storage (DC-8).
 - **FR-004** The system MUST store witnesses in a content-addressed node store on the slow tier (#1483), never on the
   state SSD during SNAP (DC-5).
-- **FR-005** The system MUST provide a `StatelessExecutor` `(block, witness, chainSpec) => Either[Error, postRoot]`.
+- **FR-005** The system MUST provide a `StatelessExecutor` `(block, witness, chainSpec) => Either[Error, postRoot]`
+  built on the existing `InMemoryWorldStateProxy` over a `WitnessMptStorage`, with witness-backed code and ancestor
+  hashes. An incomplete witness surfaces as `MissingRootNodeException`, mapped to the error side.
 - **FR-006** A differential test MUST compare fukuii's witnesses with geth's `debug_executionWitness` on Sepolia
   blocks.
 - **FR-007** `SyncController` MUST hold a `SyncMode` ADT (`Snap` / `Full` / `Backfill`). Witness capture MUST be
@@ -234,7 +293,8 @@ After SNAP reaches head, an operator schedules backfill to produce witnesses for
   execution, per-capability durability policy.
 - **`StateAccess`**: the execution capability. Single writer, snapshot readers, fully durable; the only path that can
   be recorded.
-- **Recording `StateAccess`**: the wrapper that records resolved nodes and code.
+- **`RecordingMptStorage`**: the `MptStorage` decorator that records every node `get` during execution.
+- **`WitnessMptStorage`**: an in-memory hash → node `MptStorage` the `StatelessExecutor` runs over.
 - **Execution witness**: the hash-addressed trie nodes, code and headers a block's execution needs, in the
   `debug_executionWitness` shape.
 - **Witness node store**: content-addressed, slow tier.
@@ -246,7 +306,7 @@ After SNAP reaches head, an operator schedules backfill to produce witnesses for
 
 - **SC-001** For every block in the differential test set, fukuii's witness re-executes to the header's state root,
   and contains every node and code blob in geth's witness for that block.
-- **SC-002** A warm-cache and a cold-cache capture run of the same blocks produce byte-identical witnesses (DC-2 (e)).
+- **SC-002** A warm-cache and a cold-cache capture run of the same blocks produce byte-identical witnesses (DC-2).
 - **SC-003** With capture off, block import throughput and every consensus output are unchanged against the
   `[IMPORT-TIMING]` baseline (within the constitution's ~10% budget for throughput, exact for consensus outputs).
 - **SC-004** The DC-4 dependency check is green, and a SNAP run with capture configured on writes no witness data.
@@ -256,7 +316,10 @@ After SNAP reaches head, an operator schedules backfill to produce witnesses for
 ## Assumptions
 
 - Spec 016's T055 (`StateIngest`) has merged before any 017 implementation task starts.
-- BALs (EIP-7928) are implemented for Amsterdam on staging, and the BAL prefetcher (#79) exists.
+- BALs (EIP-7928) are implemented for Amsterdam on staging, and the BAL prefetcher (#79) exists and warms
+  `DecodedNodeCache` below `cachedForExecution`.
+- `buildInitialWorld` stays the single construction site of execution worlds. A second site would need its own
+  recorder installation and is a plan-time stop.
 - The slow-tier storage of #1483 exists or lands first; if not, the witness node store's placement is re-planned.
 - `[STORAGE-PERF]` and `[IMPORT-TIMING]` are the existing instrumentation and are reused, not replaced.
 - `beacon` owns the ETH execution side, `forge` signs off that ETC is unchanged, and `vault` reviews the stores and
@@ -269,3 +332,10 @@ After SNAP reaches head, an operator schedules backfill to produce witnesses for
 - **OQ-2 Witness storage sizing.** Bytes per block for Sepolia and ETC mainnet, the retention policy, and the slow-tier
   capacity it needs.
 - **OQ-3** Whether ETC needs witness capture in the first release (FR-013).
+
+## Known tasks (seed for /speckit-tasks)
+
+- **T-000 (chore, prerequisite or standalone).** Remove the dead external-VM config: `VmConfig` still parses
+  `vm.external.*` (`VmMode.External`, `VmConfig.ExternalConfig`, `parseExternalConfig` in `utils/Config.scala`), while
+  `VmSetup` accepts only `internal`. Small, separate PR; not part of this docs PR. Keep `vm.mode = internal` parsing,
+  and fail loudly on `external`, as `VmSetup` does today.

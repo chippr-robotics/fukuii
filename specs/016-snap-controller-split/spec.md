@@ -490,9 +490,11 @@ verification reads, SyncMode lives in SyncController, R4 scoped to Address/TrieK
 resolution) are all accepted as written."
 
 Follow-up refinements from the user, the same day: the env freeze is a **metric** that CI only lets go down, not a
-one-off block; `PathToHashExporter` is the **durability boundary** and an explicit property of the capability; the
-BAL prefetcher is routed through the witness recorder rather than disabled (spec 017); and the `StateIngest` wrap of
-#1548's write path is gated on storage-rate parity.
+one-off block; `PathToHashExporter` is the **durability boundary** and an explicit property of the capability; and
+the `StateIngest` wrap of #1548's write path is gated on storage-rate parity. The prefetcher/recorder rule in the
+quote above was later superseded for spec 017 (user review of staging 0.9.59, same day): the witness recorder is an
+`MptStorage` decorator on the outermost execution layer, above `DecodedNodeCache`, so the BAL prefetcher stays enabled
+in capture mode (spec 017 DC-2, DC-3). None of this changes spec 016's own tasks.
 
 **Why.** The data plane has two kinds of state writer that today share the same handles:
 
