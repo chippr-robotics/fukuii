@@ -67,7 +67,7 @@ class StagnationResetTablePinSpec extends AnyFlatSpec with Matchers:
     PivotRefreshHeaderFetch -> Set("lastAccountProgressMs"),
     PivotRefreshCommit -> Set("lastAccountProgressMs"),
     BootstrapRetryAtBlock -> Set("lastAccountProgressMs"),
-    Wake -> Set("storageStagnationRefreshAttempted")
+    Wake -> Set("storageStagnationRefreshAttempted", "consecutiveAccountStallRefreshes")
   )
 
   private val OldBaseline = SNAPSyncController.StorageTailBaseline(lowWork = 7, sinceMs = 8L, staleFailuresAtLow = 9L)
@@ -115,6 +115,7 @@ class StagnationResetTablePinSpec extends AnyFlatSpec with Matchers:
       case ("lastAccountsDownloaded", v: Long)               => v == 0L
       case ("lastBytecodeProgressCount", v: Long)            => v == 0L
       case ("storageStagnationRefreshAttempted", v: Boolean) => !v
+      case ("consecutiveAccountStallRefreshes", v: Int)      => v == 0
       case ("storageTailBaseline", v: SNAPSyncController.StorageTailBaseline) =>
         v.lowWork == Int.MaxValue && v.staleFailuresAtLow == 0L && v.sinceMs >= t0 && v.sinceMs <= t1
       case (_, v: Long) => v >= t0 && v <= t1
@@ -171,9 +172,10 @@ class StagnationResetTablePinSpec extends AnyFlatSpec with Matchers:
     ResetReason.values.toSeq.map(_.toString).filter(_.toLowerCase.contains("restart")) shouldBe empty
   }
 
-  it should "not reset consecutiveAccountStallRefreshes for any reason (#1551 item 3, pinned as today)" taggedAs UnitTest in {
+  // #1551 item 3, fixed: this test pinned the gap (no reason reset the counter) and now asserts the fix, on wake only.
+  it should "reset consecutiveAccountStallRefreshes on Wake, and for no other reason (#1551 item 3)" taggedAs UnitTest in {
     ResetReason.values.foreach { reason =>
       val (_, after, _, _) = runReset(reason)
-      withClue(s"$reason: ")(after("consecutiveAccountStallRefreshes") shouldBe 11)
+      withClue(s"$reason: ")(after("consecutiveAccountStallRefreshes") shouldBe (if reason == Wake then 0 else 11))
     }
   }

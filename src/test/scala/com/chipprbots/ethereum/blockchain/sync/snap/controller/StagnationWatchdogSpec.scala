@@ -435,6 +435,62 @@ class StagnationWatchdogSpec extends ScalaTestWithActorTestKit(ManualTime.config
     h.storage.receiveAll() shouldBe Seq(StorageRangeCoordinator.ForceCompleteStorage)
   }
 
+  it should "start the account stall budget from 0 after a dormant wake (#1551 item 3)" taggedAs UnitTest in {
+    val h = new Harness()
+    h.module.peers = Map(snapPeer("snap-1"))
+    h.module.criticalFailureLimitReached = true
+    // The round that went dormant had spent 9 of its 10 account stall refreshes.
+    h.module.consecutiveAccountStallRefreshes = 9
+
+    h.call(_.resetStagnationClocks(StagnationWatchdog.ResetReason.Wake))
+
+    h.module.consecutiveAccountStallRefreshes shouldBe 0
+
+    // The new round launches its accounts and stalls from the start: a full budget of 10 refreshes before escalating.
+    h.call(_.resetStagnationClocks(StagnationWatchdog.ResetReason.AccountLaunch))
+    val stalled = AccountCoordinatorProgress(accountStats(downloaded = 0L, completed = 0, pending = 3))
+    (1 to 10).foreach { _ =>
+      h.module.lastAccountProgressMs = 0L
+      h.module.lastPivotRestartMs = 0L
+      h.call(_.accountRangeArms(stalled))
+    }
+
+    h.module.refreshes should have size 10
+    h.module.consecutiveAccountStallRefreshes shouldBe 10
+    h.module.criticalFailures shouldBe empty
+    h.module.dormantEntries shouldBe empty
+  }
+
+  it should "keep the account stall budget across a restart, so a stall -> refresh -> restart loop still goes dormant" taggedAs UnitTest in {
+    val h = new Harness()
+    h.module.peers = Map(snapPeer("snap-1"))
+    h.module.criticalFailureLimitReached = true
+    val stalled = AccountCoordinatorProgress(accountStats(downloaded = 0L, completed = 0, pending = 3))
+    def stall(): Unit =
+      h.module.lastAccountProgressMs = 0L
+      h.module.lastPivotRestartMs = 0L
+      h.call(_.accountRangeArms(stalled))
+
+    // Each refresh's header bootstrap returns nothing and restartSnapSync runs. It calls no reset; the new round
+    // resets only through its account launch.
+    (1 to 10).foreach { _ =>
+      stall()
+      h.call(_.resetStagnationClocks(StagnationWatchdog.ResetReason.AccountLaunch))
+    }
+
+    h.module.refreshes should have size 10
+    h.module.consecutiveAccountStallRefreshes shouldBe 10
+    h.module.criticalFailures shouldBe empty
+
+    // The 11th stall, in the 11th round, spends the budget: critical failure, then dormant.
+    stall()
+
+    h.module.refreshes should have size 10
+    h.module.criticalFailures should have size 1
+    h.module.criticalFailures.head should startWith("account stall refresh limit exceeded")
+    h.module.dormantEntries should have size 1
+  }
+
   it should "ignore progress reports outside their phase" taggedAs UnitTest in {
     val h = new Harness()
     h.module.currentPhase = SyncPhase.StateHealing

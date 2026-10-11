@@ -102,14 +102,15 @@ private[snap] trait StagnationWatchdog extends StagnationResetApi:
     *   - `PivotRefreshHeaderFetch` (`refreshPivotInPlace`, header not local), `PivotRefreshCommit`
     *     (`completePivotRefreshWithStateRoot`) and `BootstrapRetryAtBlock` (`retryBootstrapAtBlockArms`, header not
     *     local): `lastAccountProgressMs` only.
-    *   - `Wake` (`wakeFromDormant`, before its `startSnapSync()`): `storageStagnationRefreshAttempted`. Dormancy is
-    *     where the escalation ends, and the wake already gives fresh budgets (`consecutivePivotRefreshes`,
-    *     `bootstrapRetryCount`), so the next round's first storage stall gets its pivot refresh again (#1551 item 2).
+    *   - `Wake` (`wakeFromDormant`, before its `startSnapSync()`): `storageStagnationRefreshAttempted`,
+    *     `consecutiveAccountStallRefreshes`. Dormancy is where the escalation ends, and the wake already gives fresh
+    *     budgets (`consecutivePivotRefreshes`, `bootstrapRetryCount`), so the next round's first storage stall gets its
+    *     pivot refresh again (#1551 item 2) and its account stall budget starts from 0 (#1551 item 3).
     *
-    * No reason resets `lastPivotRestartMs` or `consecutiveAccountStallRefreshes`. `restartSnapSync` is deliberately not
-    * a reason: it is also the fallback of a failed in-round pivot refresh (`BootstrapComplete(None)`), so clearing the
-    * stall state there would let a stall -> refresh -> no header -> restart loop cycle forever instead of escalating,
-    * the reason it already keeps `consecutivePivotRefreshes`.
+    * No reason resets `lastPivotRestartMs`. `restartSnapSync` is deliberately not a reason: it is also the fallback of
+    * a failed in-round pivot refresh (`BootstrapComplete(None)`), so clearing the stall state there would let a stall
+    * -> refresh -> no header -> restart loop cycle forever instead of escalating, the reason it already keeps
+    * `consecutivePivotRefreshes`.
     */
   def resetStagnationClocks(reason: StagnationWatchdog.ResetReason): Unit =
     reason match
@@ -135,6 +136,7 @@ private[snap] trait StagnationWatchdog extends StagnationResetApi:
         lastAccountProgressMs = System.currentTimeMillis()
       case StagnationWatchdog.ResetReason.Wake =>
         storageStagnationRefreshAttempted = false
+        consecutiveAccountStallRefreshes = 0
 
   private[snap] def scheduleStagnationChecks(): Unit =
     val interval = DownloadStagnationCheckInterval
@@ -265,8 +267,9 @@ private[snap] trait StagnationWatchdog extends StagnationResetApi:
           bytecodeCoordinator.foreach(_ ! actors.ByteCodeCoordinator.ForceCompleteByteCodes)
 
   // Track consecutive account stall pivot refreshes to detect truly unrecoverable situations.
-  // Reset to 0 on real progress (taskProgress || downloadProgress in maybeRestartIfAccountStagnant).
-  // private[snap] (not private) only so the reset-table pin test can show that no reset reason clears it (#1551).
+  // Reset to 0 on real progress (taskProgress || downloadProgress in maybeRestartIfAccountStagnant), on budget
+  // exhaustion, and on a dormant wake (ResetReason.Wake, #1551); deliberately not on restartSnapSync.
+  // private[snap] (not private) only so the reset-table pin test can read it.
   private[snap] var consecutiveAccountStallRefreshes: Int = 0
 
   private def maybeRestartIfAccountStagnant(progress: actors.AccountRangeStats): Unit =
