@@ -5,7 +5,6 @@ import org.apache.pekko.actor.typed.scaladsl.Behaviors
 
 import scala.concurrent.duration.*
 
-import com.chipprbots.ethereum.blockchain.sync.snap.*
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController.*
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController.SyncPhase.*
@@ -46,7 +45,7 @@ private[snap] trait StagnationScheduleApi:
 
 private[snap] trait StagnationWatchdog extends StagnationResetApi with StagnationScheduleApi:
   self: StagnationWatchdogState & SnapSharedState & SnapControllerEnv & CoordinatorHandles & PhaseFlags &
-    HandshakedPeersApi & LifecycleApi & PivotRefreshApi =>
+    HandshakedPeersApi & PeerPoolApi & LifecycleApi & PivotRefreshApi & PivotRollTriggerApi =>
 
   // Storage stagnation watchdog: if storage stops advancing while tasks remain, repivot/restart.
   // This addresses the common case where peers no longer serve the chosen pivot/state window.
@@ -57,6 +56,7 @@ private[snap] trait StagnationWatchdog extends StagnationResetApi with Stagnatio
     10.minutes // CFG-2: 20→10min; second stall force-completes after 30s anyway
   private lazy val AccountStagnationThreshold: FiniteDuration = snapSyncConfig.accountStagnationTimeout
   private lazy val BytecodeStagnationThreshold: FiniteDuration = 10.minutes
+  private lazy val ZeroPeerStagnationMs: Long = 3 * 60 * 1000L // 3 min zero-peer short-circuit
   // Hard cap so a wedged account phase escalates to dormant mode rather than refreshing
   // forever. Higher than MaxConsecutivePivotRefreshes because account stalls can be transient
   // (peer churn, slow networks) and the stagnation threshold itself already takes minutes to fire.
@@ -364,9 +364,6 @@ private[snap] trait StagnationWatchdog extends StagnationResetApi with Stagnatio
         // end else (no progress)
       // end if workRemaining
   // end if currentPhase == AccountRangeSync
-
-private[snap] trait StagnationWatchdogTick:
-  self: SNAPSyncControllerImpl =>
 
   /** A `commonSyncingArms` arm lifted into a class member (spec 016 restructure, CQ-SNAP-016-18/19), body unchanged:
     * `CheckDownloadStagnation`, the 30-s stagnation tick: the proactive pivot roll, the zero-SNAP-peer log and the

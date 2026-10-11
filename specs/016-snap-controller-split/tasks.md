@@ -860,13 +860,58 @@ only when every item on the per-slice checklist below holds.
     with CQ-SNAP-016-34). SC-001: **not met**. `SNAPSyncController.scala` is 1,989 lines (the class 1,150, the
     companion 771) against about 1,000, down from 2,055. Mordor and Platåberget restarts mid-account: **pending** (to
     be run by the user on the slice jar after merge; no node run here).
-- [ ] T049b [M7b] Byte-move the stagnation tick and its roll trigger (T053c) to their owners:
+- [x] T049b [M7b] Byte-move the stagnation tick and its roll trigger (T053c) to their owners:
   `checkDownloadStagnationArms` into `StagnationWatchdog` (plan.md M7's `CheckDownloadStagnation` arm, with the
   progress `ask`s and `ZeroPeerStagnationMs`), and `maybeProactivePivotRoll` into `PivotRefresher` (plan.md M10's
   `[PIVOT-ROLL]` state), added to `PivotRefreshApi`, which the watchdog already names. `SnapServeWindowBlocks` moves with
   the trigger or joins `PivotRefresherState`; `lastProactivePivotBlock` and `ProbeCooldownMs` then need not stay in
   the core for the trigger (CQ-SNAP-016-31). The arm keeps its delegation line in `commonSyncingArms`. One PR or two
   (one per module), each with its move and narrowing commits; the stub suites of both modules are extended.
+  - As built: one PR, four commits, two per module, PivotRefresher first so the watchdog's narrowing can name the
+    new `PivotRollTriggerApi` (plan.md "one module per PR" is read against T049b's "one PR or two (one per module), each
+    with its move and narrowing commits"; `verify.py` checks every commit, and each move commit adds exactly one
+    temporary self-type to one module file). (1) Move: `maybeProactivePivotRoll` (with its scaladoc), byte-identical,
+    into a temporary trait `PivotRefresherRoll` appended to `controller/PivotRefresher.scala` with the temporary
+    self-type `SNAPSyncControllerImpl`; the core gains `with PivotRefresherRoll`, `SnapServeWindowBlocks` goes `private`
+    -> `private[snap]`. (2) Narrowing: the trait's two header lines go, so the member folds into `PivotRefresher`;
+    a new narrow trait `PivotRollTriggerApi` (`def maybeProactivePivotRoll(): Unit`), declared in the module file, is
+    extended by `PivotRefresher`, and the member loses `private[snap]` to implement it (review of #1576: the M8c
+    precedent, a new narrow trait rather than growing `PivotRefreshApi` as T053c first said, so healing's count stays);
+    `SnapServeWindowBlocks` becomes a pure private lazy val of the trait. (3) Move:
+    `checkDownloadStagnationArms` (with its scaladoc), byte-identical, into a temporary trait `StagnationWatchdogTick`
+    placed after `StagnationWatchdog` and before its companion object; the core gains `with StagnationWatchdogTick`,
+    `ZeroPeerStagnationMs` goes `private` -> `private[snap]`. (4) Narrowing: the header lines go, the member folds into
+    `StagnationWatchdog`, `PeerPoolApi` and `PivotRollTriggerApi` join its self-type, and `ZeroPeerStagnationMs` becomes a pure private lazy val
+    of the trait. Neither body carries a storage reference: every `storage-baseline.json` row and the total (692) are
+    unchanged, so the baseline file is untouched. The core needs no import change (the arm's `Timeout`,
+    `Success`/`Failure` and `AskPattern` imports are local to its body).
+    - PivotRefresher 22 / 13 against M10's 20 / 13: State + `lastProbeAttemptMs` (the probe cooldown clock; the
+      lifecycle's `restartSnapSync` also clears it) and `storageContractProgressPct` (written by the
+      `ProgressStorageContracts` arm; a read-only `def` here). `lastProactivePivotBlock` and `ProbeCooldownMs` stay State
+      members: `PivotRefresherSpec`'s stub implements both and an existing case asserts `lastProactivePivotBlock`
+      through it, so moving them into the trait would change an existing test.
+    - StagnationWatchdog 11 / 8 against M7's 11 / 5: Api + `PeerPoolApi` (2; the tick counts SNAP peers among
+      `peersToDownloadFrom`) and + `PivotRollTriggerApi` (1, `maybeProactivePivotRoll`; the watchdog's stub implements
+      it with a counting member). `PivotRefreshApi` is unchanged, so HealingOrchestrator stays 12 / 10 and no other
+      module's count moves. Capability traits unchanged (5 / 18 / 12 / 10).
+    - Stub tests (`# extended-tests:`): `PivotRefresherSpec` + 5 cases (15 in all): the 100/101-block age boundary
+      (probe flag, cooldown stamp, header request for best - 64, the `PivotRefreshHeaderFetch` reset); 50/51 blocks
+      past the last roll and no SNAP best block; a probe in flight or a deferred probed commit; 80 % / 79 % of contracts
+      in `ByteCodeAndStorageSync`; `StateHealing`, no pivot, and the 30-s cooldown (a stamp an hour ahead; T053c could
+      not pin the cooldown through the controller). `StagnationWatchdogSpec` + 5 cases (18 in all): the arm is defined
+      for `CheckDownloadStagnation` only; every tick runs the roll trigger and outside the download phases asks
+      nothing; the zero-SNAP-peer log after 3 minutes in account sync only, not with a SNAP peer or fresh progress; in a
+      live actor under ManualTime, the account ask's answer is piped back and an unanswered ask pipes zero stats after
+      2 s (the `given Timeout`); in the storage phase both storage and bytecode are asked, the unanswered bytecode ask
+      pipes zero progress, and a completed bytecode phase asks storage only.
+  - **Not moved**: the `CheckDownloadStagnation` delegation line in `commonSyncingArms`, and the State members above.
+    No fix. The scaladocs of `PivotRefresher` ("It also keeps the proactive roll's trigger (the
+    `CheckDownloadStagnation` arm)"), of `StagnationWatchdog` ("The core keeps ... the `CheckDownloadStagnation` arm"),
+    of the moved arm ("lifted into a class member") and of the moved trigger ("M7b moves it to `PivotRefresher`") still
+    describe the old layout: a move or narrowing commit cannot edit comments (CQ-SNAP-016-37, with CQ-SNAP-016-34).
+    SC-001: **not met**. `SNAPSyncController.scala` is 1,882 lines (the class 1,043, the companion 771) against about
+    1,000, down from 1,989. Platåberget across refreshes and a Mordor stall: **pending** (to be run by the user on the
+    slice jar after merge; no node run here).
 - [ ] T051b [M9b] Byte-move `delayedRestartArms` (T052a) and the stop helpers `stopSnapOnlySchedules` and
   `stopStateSyncChildren` into `SyncLifecycle` (CQ-SNAP-016-26, user decision 2026-10-11). Prerequisite: split
   `ShutdownApi` (`controller/SnapFinalization.scala`) so the core's `onStop` keeps its own declaration and the two

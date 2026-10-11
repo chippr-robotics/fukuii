@@ -69,8 +69,10 @@ private[snap] class StubStagnationWatchdogState(
     with CoordinatorHandles
     with PhaseFlags
     with HandshakedPeersApi
+    with PeerPoolApi
     with LifecycleApi
-    with PivotRefreshApi:
+    with PivotRefreshApi
+    with PivotRollTriggerApi:
 
   // StagnationWatchdogState
   var lastStorageProgressMs: Long = 0L
@@ -116,6 +118,9 @@ private[snap] class StubStagnationWatchdogState(
   // Callee Api traits
   var peers: Map[PeerId, PeerListSupportNg.PeerWithInfo] = Map.empty
   def handshakedPeers: Map[PeerId, PeerListSupportNg.PeerWithInfo] = peers
+  var downloadPeers: Map[PeerId, PeerListSupportNg.PeerWithInfo] = Map.empty
+  def peersToDownloadFrom: Map[PeerId, PeerListSupportNg.PeerWithInfo] = downloadPeers
+  def calibratePivotTD(pivotBlockNumber: BigInt): Option[BigInt] = notUsed("calibratePivotTD")
   val criticalFailures: mutable.ArrayBuffer[String] = mutable.ArrayBuffer.empty
   var criticalFailureLimitReached: Boolean = false
   def recordCriticalFailure(reason: String): Boolean =
@@ -132,6 +137,8 @@ private[snap] class StubStagnationWatchdogState(
       countsTowardHealBudget: Boolean = true,
       pivotUnservable: Boolean = false
   ): Unit = refreshes += reason
+  var rollChecks: Int = 0
+  def maybeProactivePivotRoll(): Unit = rollChecks += 1
 
   private def notUsed(what: String): Nothing =
     throw new UnsupportedOperationException(s"$what is not reached by StagnationWatchdogSpec")
@@ -506,4 +513,145 @@ class StagnationWatchdogSpec extends ScalaTestWithActorTestKit(ManualTime.config
     h.module.refreshes shouldBe empty
     h.storage.hasMessages shouldBe false
     h.bytecodes.hasMessages shouldBe false
+  }
+
+  /** Run the stagnation tick on the module in the kit; yields the behaviour it returns. */
+  private def tick(h: Harness): Behavior[Command] =
+    var next: Behavior[Command] = null
+    h.call(m => next = m.checkDownloadStagnationArms(CheckDownloadStagnation))
+    next
+
+  /** The kit's captured log lines that report the zero-SNAP-peer wait. */
+  private def zeroPeerLines(h: Harness): Seq[String] =
+    h.kit.logEntries().map(_.message).filter(_.startsWith("[STAGNATION] Zero SNAP peers"))
+
+  it should "define the stagnation tick for CheckDownloadStagnation only" taggedAs UnitTest in {
+    val h = new Harness()
+
+    h.module.checkDownloadStagnationArms.isDefinedAt(CheckDownloadStagnation) shouldBe true
+    h.module.checkDownloadStagnationArms.isDefinedAt(PollHandshakedPeers) shouldBe false
+  }
+
+  it should "run the proactive roll trigger on every tick, and ask no coordinator outside the download phases" taggedAs UnitTest in {
+    val h = new Harness()
+    h.module.currentPhase = SyncPhase.StateHealing
+
+    tick(h) shouldBe Behaviors.same
+    h.module.rollChecks shouldBe 1
+
+    h.module.currentPhase = SyncPhase.Completed
+    tick(h) shouldBe Behaviors.same
+    h.module.rollChecks shouldBe 2
+
+    h.accounts.hasMessages shouldBe false
+    h.storage.hasMessages shouldBe false
+    h.bytecodes.hasMessages shouldBe false
+    h.module.lastAccountProgressMs shouldBe 0L
+    h.module.lastStorageProgressMs shouldBe 0L
+    h.module.refreshes shouldBe empty
+  }
+
+  it should "log the zero-SNAP-peer wait after 3 minutes without account progress, and only in account sync" taggedAs UnitTest in {
+    val h = new Harness()
+    h.module.accountRangeCoordinator = None
+    h.module.storageRangeCoordinator = None
+    h.module.bytecodeCoordinator = None
+
+    // No SNAP peer and no account progress since long ago: the wait is logged, nothing is restarted.
+    tick(h) shouldBe Behaviors.same
+    zeroPeerLines(h) should have size 1
+    zeroPeerLines(h).head should include("waiting for peers to reconnect")
+    h.module.rollChecks shouldBe 1
+    h.module.refreshes shouldBe empty
+    h.module.criticalFailures shouldBe empty
+
+    // A SNAP peer to download from: no wait to report.
+    h.kit.clearLog()
+    h.module.downloadPeers = Map(snapPeer("snap-1"))
+    tick(h)
+    zeroPeerLines(h) shouldBe empty
+
+    // No SNAP peer, but account progress just now: not yet 3 minutes.
+    h.module.downloadPeers = Map.empty
+    h.module.lastAccountProgressMs = System.currentTimeMillis()
+    tick(h)
+    zeroPeerLines(h) shouldBe empty
+
+    // No SNAP peer and a stale clock, but in the storage phase: not reported.
+    h.module.lastAccountProgressMs = 0L
+    h.module.currentPhase = SyncPhase.ByteCodeAndStorageSync
+    tick(h)
+    zeroPeerLines(h) shouldBe empty
+    h.module.rollChecks shouldBe 4
+  }
+
+  /** The module in a live actor, so the progress asks run for real: `CheckDownloadStagnation` runs the tick, and every
+    * other message (the piped answers) is forwarded to `piped`.
+    */
+  private def spawnTick(piped: ActorRef[Command])(setUp: StubStagnationWatchdogState => Unit): ActorRef[Command] =
+    spawn(Behaviors.setup[Command] { ctx =>
+      Behaviors.withTimers { timers =>
+        val m = new StubStagnationWatchdogState(ctx, timers, SNAPSyncConfig()) with StagnationWatchdog
+        setUp(m)
+        Behaviors.receiveMessagePartial {
+          case CheckDownloadStagnation => m.checkDownloadStagnationArms(CheckDownloadStagnation)
+          case other =>
+            piped ! other
+            Behaviors.same
+        }
+      }
+    })
+
+  it should "ask the account coordinator for progress and pipe its answer, or zero stats after 2 seconds" taggedAs UnitTest in {
+    val manualTime = ManualTime()
+    val accounts = createTestProbe[AccountRangeCoordinator.Command]()
+    val piped = createTestProbe[Command]()
+    val live = spawnTick(piped.ref) { m =>
+      m.currentPhase = SyncPhase.AccountRangeSync
+      m.accountRangeCoordinator = Some(accounts.ref)
+    }
+
+    live ! CheckDownloadStagnation
+    val stats = accountStats(100L, 2, 3)
+    accounts.expectMessageType[AccountRangeCoordinator.AccountGetProgress].replyTo ! stats
+    piped.expectMessage(AccountCoordinatorProgress(stats))
+
+    // Unanswered: the 2-second ask fails and the arm pipes all-zero stats (which the account check reads as liveness).
+    live ! CheckDownloadStagnation
+    accounts.expectMessageType[AccountRangeCoordinator.AccountGetProgress]
+    manualTime.timePasses(2001.millis)
+    piped.expectMessage(AccountCoordinatorProgress(AccountRangeStats(0L, 0L, 0, 0, 0, 0.0, 0L, 0)))
+  }
+
+  it should "ask the storage and bytecode coordinators in the storage phase, and skip a completed bytecode phase" taggedAs UnitTest in {
+    val manualTime = ManualTime()
+    val storage = createTestProbe[StorageRangeCoordinator.Command]()
+    val bytecodes = createTestProbe[ByteCodeCoordinator.Command]()
+    val piped = createTestProbe[Command]()
+    val live = spawnTick(piped.ref) { m =>
+      m.currentPhase = SyncPhase.ByteCodeAndStorageSync
+      m.storageRangeCoordinator = Some(storage.ref)
+      m.bytecodeCoordinator = Some(bytecodes.ref)
+    }
+
+    live ! CheckDownloadStagnation
+    val storageAsk = storage.expectMessageType[StorageRangeCoordinator.StorageGetProgress]
+    bytecodes.expectMessageType[ByteCodeCoordinator.ByteCodeGetProgress]
+    val stats = storageStats(5, 2, 4)
+    storageAsk.replyTo ! stats
+    piped.expectMessage(StorageCoordinatorProgress(stats))
+    // The bytecode ask is left unanswered: after 2 seconds the arm pipes zero bytecode progress.
+    manualTime.timePasses(2001.millis)
+    piped.expectMessage(ByteCodeCoordinatorProgress(ByteCodeCoordinator.ByteCodeProgress(0.0, 0L, 0L)))
+
+    val done = spawnTick(piped.ref) { m =>
+      m.currentPhase = SyncPhase.ByteCodeAndStorageSync
+      m.storageRangeCoordinator = Some(storage.ref)
+      m.bytecodeCoordinator = Some(bytecodes.ref)
+      m.bytecodePhaseComplete = true
+    }
+    done ! CheckDownloadStagnation
+    storage.expectMessageType[StorageRangeCoordinator.StorageGetProgress].replyTo ! stats
+    piped.expectMessage(StorageCoordinatorProgress(stats))
+    bytecodes.expectNoMessage()
   }

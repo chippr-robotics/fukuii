@@ -43,7 +43,6 @@ import com.chipprbots.ethereum.blockchain.sync.snap.controller.SnapSharedState
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.SnapStartApi
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.StagnationWatchdog
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.StagnationWatchdogState
-import com.chipprbots.ethereum.blockchain.sync.snap.controller.StagnationWatchdogTick
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.StateValidationModule
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.StateValidationState
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.SyncLifecycle
@@ -116,7 +115,6 @@ private class SNAPSyncControllerImpl(
     with HealingOrchestratorState
     with StagnationWatchdog
     with StagnationWatchdogState
-    with StagnationWatchdogTick
     with PivotSelector
     with PivotSelectorState
     with SnapStartApi
@@ -388,7 +386,6 @@ private class SNAPSyncControllerImpl(
   var lastProbeAttemptMs: Long = 0L
   val ProbeCooldownMs: Long = 30_000L // match DownloadStagnationCheckInterval
   var probeAttemptCount: Int = 0
-  private[snap] val ZeroPeerStagnationMs: Long = 3 * 60 * 1000L // 3 min zero-peer short-circuit
 
   // Consecutive pivot refresh counter: when all peers are repeatedly stateless after
   // pivot refreshes, it strongly indicates no peer has a snapshot database. Each
