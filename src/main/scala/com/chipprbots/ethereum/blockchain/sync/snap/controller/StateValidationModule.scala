@@ -20,11 +20,6 @@ private[snap] trait StateValidationState:
 private[snap] trait ValidationApi:
   def validateState(): Unit
 
-private[snap] trait LifecycleApi:
-  def recordCriticalFailure(reason: String): Boolean
-  def enterDormantMode(reason: String): Behavior[Command]
-  def restartSnapSync(reason: String): Behavior[Command]
-
 /** State validation (spec 016 M2, research.md R6 "Validation"): the post-heal account and storage trie walks
   * (`validateState`, `spawnAccountValidation`, `spawnStorageValidation`, run on `snapValidationEc` through
   * `validatorFactory`) and the `StateValidation` arms of `syncing` (`stateValidationArms`: the stale-generation drops,

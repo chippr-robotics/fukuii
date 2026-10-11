@@ -48,6 +48,9 @@ private[snap] trait HealedCodeApi:
   def dropHealedCodeNowPresent(): Unit
   def queueHealedCode(codeHashes: Seq[ByteString]): Unit
 
+private[snap] trait HealedCodeHoldApi:
+  def resetHealedCodeHold(): Unit
+
 private[snap] trait PivotRefreshApi:
   def refreshPivotInPlace(
       reason: String,
@@ -68,7 +71,7 @@ private[snap] trait ByteCodeRequestApi:
   * `dropHealedCodeNowPresent`, `queueHealedCode`). The core keeps the dispatch: `phaseArms(StateHealing)` and the
   * healing arms of `commonSyncingArms` call these members.
   */
-private[snap] trait HealingOrchestrator extends HealingApi with HealedCodeApi:
+private[snap] trait HealingOrchestrator extends HealingApi with HealedCodeApi with HealedCodeHoldApi:
   self: HealingOrchestratorState & SnapSharedState & SnapControllerEnv & CoordinatorHandles & PhaseFlags & ResumeApi &
     PeerPoolApi & SnapServerPeersApi & ValidationApi & FinalizationApi & PivotRefreshApi & PivotSelectionApi &
     ByteCodeRequestApi =>
@@ -600,7 +603,7 @@ private[snap] trait HealingOrchestrator extends HealingApi with HealedCodeApi:
   /** Forget everything the healed-code hold knows. A restart or re-peg starts a fresh sync: a stale hold, or a
     * `HealedCodeWaitTimeout` still in flight from the old one, must not finalise it mid-download.
     */
-  private[snap] def resetHealedCodeHold(): Unit =
+  def resetHealedCodeHold(): Unit =
     healedCodeHashes.clear()
     awaitingHealedCode = false
     healedCodeWaitExhausted = false
