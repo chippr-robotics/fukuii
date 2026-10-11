@@ -25,6 +25,7 @@ import org.scalatest.matchers.should.Matchers
 
 import com.chipprbots.ethereum.blockchain.sync.PeerListSupportNg
 import com.chipprbots.ethereum.blockchain.sync.SyncProtocol
+import com.chipprbots.ethereum.blockchain.sync.snap.ChainDownloader
 import com.chipprbots.ethereum.blockchain.sync.snap.HeapPressureHysteresis
 import com.chipprbots.ethereum.blockchain.sync.snap.OldGenReading
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPRequestTracker
@@ -107,6 +108,8 @@ private[snap] class StubSyncLifecycleState(
   var coordinatorGeneration: Long = 0L
   var validationGeneration: Long = 0L
   var validationInProgress: Boolean = false
+  var snapPeerEvictionStarted: Boolean = false
+  var snapServerPeersSchedulerStarted: Boolean = false
   val cancelledTimerKeys: mutable.ArrayBuffer[Any] = mutable.ArrayBuffer.empty
   def cancelSyncTimers(keys: Any*): Unit = cancelledTimerKeys ++= keys
   def BootstrapCheckKey: String = "bootstrap-check"
@@ -153,8 +156,6 @@ private[snap] class StubSyncLifecycleState(
   def handshakedPeers: Map[PeerId, PeerListSupportNg.PeerWithInfo] = peers
   def resetHealedCodeHold(): Unit = calls += "resetHealedCodeHold"
   def onStop(): Unit = calls += "onStop"
-  def stopSnapOnlySchedules(): Unit = notUsed("stopSnapOnlySchedules")
-  def stopStateSyncChildren(): Unit = notUsed("stopStateSyncChildren")
   def startSnapSync(): Behavior[Command] =
     calls += "startSnapSync"
     Behaviors.same
@@ -442,4 +443,96 @@ class SyncLifecycleSpec extends ScalaTestWithActorTestKit(ManualTime.config) wit
     h.watchdogStarts shouldBe 0
     h.call(_.stopHeapWatchdog())
     h.watchdogStops shouldBe 0
+  }
+
+  it should "define the DelayedRestart arm for DelayedRestart only" taggedAs UnitTest in {
+    val h = new Harness()
+    h.module.delayedRestartArms.isDefinedAt(DelayedRestart("backoff")) shouldBe true
+    h.module.delayedRestartArms.isDefinedAt(DormantWakeUp) shouldBe false
+    h.module.delayedRestartArms.isDefinedAt(PollHandshakedPeers) shouldBe false
+  }
+
+  it should "restart on DelayedRestart in the account and the bytecode-and-storage phases" taggedAs UnitTest in {
+    for phase <- Seq(SyncPhase.AccountRangeSync, SyncPhase.ByteCodeAndStorageSync) do
+      val h = new Harness()
+      midRound(h)
+      h.module.currentPhase = phase
+      h.become(_.delayedRestartArms(DelayedRestart("critical failure backoff")))
+      val m = h.module
+      m.calls.toSeq shouldBe Seq("resetHealedCodeHold", "startSnapSync")
+      m.currentPhase shouldBe SyncPhase.Idle
+      m.pivotBlock shouldBe None
+      m.stateRoot shouldBe None
+      m.pendingPivotRefresh shouldBe None
+      m.stoppedChildren should have size 4
+      m.accountsComplete shouldBe false
+      m.coordinatorGeneration shouldBe 5L
+      m.validationGeneration shouldBe 7L
+  }
+
+  it should "do nothing on DelayedRestart in any other phase" taggedAs UnitTest in {
+    val others = Seq(
+      SyncPhase.Idle,
+      SyncPhase.StateHealing,
+      SyncPhase.StateValidation,
+      SyncPhase.ChainDownloadCompletion,
+      SyncPhase.Completed,
+      SyncPhase.Dormant
+    )
+    for phase <- others do
+      val h = new Harness()
+      midRound(h)
+      h.module.currentPhase = phase
+      h.become(_.delayedRestartArms(DelayedRestart("critical failure backoff")))
+      val m = h.module
+      m.calls shouldBe empty
+      m.currentPhase shouldBe phase
+      m.pivotBlock shouldBe Some(pivot)
+      m.pendingPivotRefresh shouldBe Some((pivot + 64, "refresh"))
+      m.stoppedChildren shouldBe empty
+      m.accountsComplete shouldBe true
+      m.coordinatorGeneration shouldBe 4L
+  }
+
+  it should "stop the SNAP-only schedules: clear both scheduler flags and stop the heap watchdog, idempotently" taggedAs UnitTest in {
+    val h = new Harness(SNAPSyncConfig(heapWatchdogEnabled = true))
+    h.call(_.ensureHeapWatchdog())
+    h.watchdogOnChange.foreach(_(true, OldGenReading(postGcUsed = 90L, currentUsed = 95L, max = 100L)))
+    val m = h.module
+    m.intakeBudget.heapPressureActive shouldBe true
+    m.snapPeerEvictionStarted = true
+    m.snapServerPeersSchedulerStarted = true
+    h.call(_.stopSnapOnlySchedules())
+    m.snapPeerEvictionStarted shouldBe false
+    m.snapServerPeersSchedulerStarted shouldBe false
+    h.watchdogStops shouldBe 1
+    m.intakeBudget.heapPressureActive shouldBe false
+    m.stoppedChildren shouldBe empty
+    m.calls shouldBe empty
+    h.call(_.stopSnapOnlySchedules())
+    h.watchdogStops shouldBe 1
+    m.snapPeerEvictionStarted shouldBe false
+  }
+
+  it should "stop the state-sync children, clear the force-complete and local-walk flags, and keep the ChainDownloader" taggedAs UnitTest in {
+    val h = new Harness()
+    midRound(h)
+    val downloader = TestInbox[ChainDownloader.Command]()
+    val m = h.module
+    m.chainDownloader.attach(downloader.ref)
+    h.call(_.stopStateSyncChildren())
+    m.stoppedChildren should have size 4
+    m.stoppedChildren should not contain downloader.ref
+    m.accountRangeCoordinator shouldBe None
+    m.bytecodeCoordinator shouldBe None
+    m.storageRangeCoordinator shouldBe None
+    m.trieNodeHealingCoordinator shouldBe None
+    m.chainDownloader.isDefined shouldBe true
+    m.forceCompleteStorageSent shouldBe false
+    m.healingWalkLocalOnly.get() shouldBe false
+    m.accountsComplete shouldBe true
+    m.storagePhaseComplete shouldBe true
+    m.pivotBlock shouldBe Some(pivot)
+    m.pendingPivotRefresh shouldBe Some((pivot + 64, "refresh"))
+    m.calls shouldBe empty
   }

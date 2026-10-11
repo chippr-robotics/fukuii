@@ -9,7 +9,6 @@ import org.apache.pekko.actor.typed.scaladsl.Behaviors
 import scala.concurrent.duration.*
 
 import com.chipprbots.ethereum.blockchain.sync.SyncProtocol
-import com.chipprbots.ethereum.blockchain.sync.snap.*
 import com.chipprbots.ethereum.blockchain.sync.snap.HeapWatchdogEscape
 import com.chipprbots.ethereum.blockchain.sync.snap.HeapWatchdogEscapePolicy
 import com.chipprbots.ethereum.blockchain.sync.snap.OldGenReading
@@ -42,6 +41,8 @@ private[snap] trait SyncLifecycleState:
   var coordinatorGeneration: Long
   var validationGeneration: Long
   var validationInProgress: Boolean
+  var snapPeerEvictionStarted: Boolean
+  var snapServerPeersSchedulerStarted: Boolean
   def cancelSyncTimers(keys: Any*): Unit
   def BootstrapCheckKey: String
   def PivotBootstrapRetryKey: String
@@ -69,7 +70,10 @@ private[snap] trait SnapStopApi:
   * `stopSnapOnlySchedules`. It also keeps the dispatch: the `DelayedRestart` and `PivotStateUnservable` arms of
   * `commonSyncingArms`.
   */
-private[snap] trait SyncLifecycle(val heapWatchdogStart: HeapWatchdogStart) extends LifecycleApi with HeapWatchdogApi:
+private[snap] trait SyncLifecycle(val heapWatchdogStart: HeapWatchdogStart)
+    extends LifecycleApi
+    with HeapWatchdogApi
+    with SnapStopApi:
   self: SyncLifecycleState & SnapSharedState & SnapControllerEnv & CoordinatorHandles & PhaseFlags &
     HandshakedPeersApi & HealedCodeHoldApi & ShutdownApi & SnapStartApi & StagnationResetApi =>
 
@@ -357,9 +361,6 @@ private[snap] trait SyncLifecycle(val heapWatchdogStart: HeapWatchdogStart) exte
 
     // Re-run pivot selection/bootstrap with the latest visible peer set
     startSnapSync()
-
-private[snap] trait SyncLifecycleStop:
-  self: SNAPSyncControllerImpl =>
 
   /** Cancel every SNAP-only scheduled timer. Idempotent — `timers.cancel` tolerates unknown keys. Called both at the
     * lifecycle transition into `completedWithBackfill` (so eviction/tickers don't keep running while regular sync owns

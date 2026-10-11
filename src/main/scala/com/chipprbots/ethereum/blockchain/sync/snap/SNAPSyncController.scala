@@ -41,14 +41,12 @@ import com.chipprbots.ethereum.blockchain.sync.snap.controller.SnapResumePlanner
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.SnapResumePlannerState
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.SnapSharedState
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.SnapStartApi
-import com.chipprbots.ethereum.blockchain.sync.snap.controller.SnapStopApi
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.StagnationWatchdog
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.StagnationWatchdogState
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.StateValidationModule
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.StateValidationState
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.SyncLifecycle
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.SyncLifecycleState
-import com.chipprbots.ethereum.blockchain.sync.snap.controller.SyncLifecycleStop
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.SyncingApi
 import com.chipprbots.ethereum.db.storage.AppStateStorage
 import com.chipprbots.ethereum.db.storage.CachedReferenceCountedStateStorage
@@ -111,7 +109,6 @@ private class SNAPSyncControllerImpl(
     with SnapFinalization
     with SnapFinalizationState
     with ShutdownApi
-    with SnapStopApi
     with SnapResumePlanner
     with SnapResumePlannerState
     with HealingOrchestrator
@@ -124,7 +121,6 @@ private class SNAPSyncControllerImpl(
     with SyncingApi
     with SyncLifecycle(heapWatchdogStart)
     with SyncLifecycleState
-    with SyncLifecycleStop
     with PivotRefresher
     with PivotRefresherState
     with DownloadSupervisor

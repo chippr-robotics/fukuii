@@ -912,7 +912,7 @@ only when every item on the per-slice checklist below holds.
     SC-001: **not met**. `SNAPSyncController.scala` is 1,882 lines (the class 1,043, the companion 771) against about
     1,000, down from 1,989. Platåberget across refreshes and a Mordor stall: **pending** (to be run by the user on the
     slice jar after merge; no node run here).
-- [ ] T051b [M9b] Byte-move `delayedRestartArms` (T052a) and the stop helpers `stopSnapOnlySchedules` and
+- [x] T051b [M9b] Byte-move `delayedRestartArms` (T052a) and the stop helpers `stopSnapOnlySchedules` and
   `stopStateSyncChildren` into `SyncLifecycle` (CQ-SNAP-016-26, user decision 2026-10-11). Prerequisite: split
   `ShutdownApi` (`controller/SnapFinalization.scala`) so the core's `onStop` keeps its own declaration and the two
   helpers get a narrow Api declared next to `SyncLifecycle`, which `SnapFinalization` then names. The narrowing commit
@@ -920,6 +920,54 @@ only when every item on the per-slice checklist below holds.
   `forceCompleteStorageSent`, `healingWalkLocalOnly`, the timer keys they cancel, `progressMonitor` if not already
   reachable) to `SyncLifecycleState`, with a justification line per member. The `DelayedRestart` delegation line stays
   in `commonSyncingArms`. `SyncLifecycleSpec` is extended; its two `notUsed` stop-helper stubs become real.
+  - As built: three commits. (1) Prerequisite (neither a move nor a narrowing; no body changes): `ShutdownApi` keeps
+    `def onStop(): Unit`, still implemented by the core and named by `SnapFinalization`, `PivotSelector` and
+    `SyncLifecycle` (each calls it from a PostStop handler). A new narrow trait, `SnapStopApi` (`stopSnapOnlySchedules`,
+    `stopStateSyncChildren`), is declared in `controller/SyncLifecycle.scala` and implemented by the core until the
+    move (`with SnapStopApi`). `SnapFinalization`'s self-type adds `& SnapStopApi` (`finalizeSnapSync` calls both
+    helpers). Test stubs: `SnapFinalizationSpec`'s stub adds `with SnapStopApi`, and `PivotSelectorSpec`'s stub drops
+    its two `notUsed` helper stubs, which implemented nothing once `ShutdownApi` lost the helpers. No assertion
+    changed. (2) The move commit moves `stopSnapOnlySchedules`, `stopStateSyncChildren` and `delayedRestartArms`, each
+    with its scaladoc and byte-identical, into a temporary trait `SyncLifecycleStop` appended to the module file. The
+    trait has the temporary self-type `SNAPSyncControllerImpl` (the M8c pattern). The core gains `with
+    SyncLifecycleStop`, and the module file imports `blockchain.sync.snap.*`. No `private` -> `private[snap]` change:
+    every core member the bodies reach is already public or reached through a trait, and `HealedCodeWaitTimerKey` is
+    the companion's. (3) The narrowing commit drops the temporary trait's two header lines, so its members fold into
+    `SyncLifecycle`, which now `extends LifecycleApi with HeapWatchdogApi with SnapStopApi`. The core drops `with
+    SnapStopApi`, `with SyncLifecycleStop` and their imports. Self-type unchanged.
+    - State 27 against M9's 25: + `snapPeerEvictionStarted` and `snapServerPeersSchedulerStarted`. The moved
+      `stopSnapOnlySchedules` clears them, and they stay in the core because the peer pool (`startSnapPeerEviction`,
+      `startSnapServerPeersScheduler`; `SnapPeerPoolState`) sets them. Nothing else from the task's list is added.
+      `forceCompleteStorageSent` is a `PhaseFlags` member, and `healingWalkLocalOnly` and the three core timer keys
+      (`BootstrapCheckKey`, `PivotBootstrapRetryKey`, `SnapCapabilityCheckKey`) were already `SyncLifecycleState`
+      members. The other keys (`HealedCodeWaitTimerKey` and the Command objects) are the companion's, `progressMonitor`
+      and `currentPhase` are `SnapSharedState`, and `stopAll` is `CoordinatorHandles`. `stopHeapWatchdog` and
+      `restartSnapSync` are the module's own.
+    - Api 5 against M9's 7 (M7b left it at 7): `ShutdownApi` 3 -> 1. The module now implements `SnapStopApi` rather
+      than naming it. Other modules: `SnapFinalization` 6 / 10, unchanged (`ShutdownApi` 1 + `SnapStopApi` 2);
+      `PivotSelector` 9 / 18 -> 9 / 16 (`ShutdownApi` 1; it never called the helpers). The capability traits are
+      unchanged (5 / 18 / 12 / 10).
+    - Storage ratchet: the moved bodies carry no storage reference. Every `storage-baseline.json` row and the total
+      (692) are unchanged, so the baseline file is untouched.
+    - Stub test: `SyncLifecycleSpec` extended (`# extended-tests:`). The stub loses its two `notUsed` helper stubs, so
+      the module's real members run, and gains the two flags as vars. Five new cases (13 in all): the arm is defined
+      for `DelayedRestart` only; `DelayedRestart` in `AccountRangeSync` and `ByteCodeAndStorageSync` runs the real
+      restart (healed-code hold reset, `startSnapSync`, `Idle`, pivot and refresh cleared, four children stopped, the
+      generations bumped); in every other phase (`Idle`, `StateHealing`, `StateValidation`, `ChainDownloadCompletion`,
+      `Completed`, `Dormant`) it changes nothing; `stopSnapOnlySchedules` clears both scheduler flags and stops the heap
+      watchdog with the intake pressure released, stops no child, and a second call stops nothing more;
+      `stopStateSyncChildren` stops the four coordinators and not an attached ChainDownloader, clears
+      `forceCompleteStorageSent` and the local-walk flag, and leaves the phase flags, the pivot and the refresh state.
+      Not pinned: the twelve timer keys `stopSnapOnlySchedules` cancels. The stub records them, but verify.py's
+      extended-suite rule rejects every added line that matches `\bcancel\w*`, so no added case can name the stub's
+      recorder. `stopPeriodicLogging` is not pinned either: the stub's progress monitor has no observation point.
+  - **Not moved**: the `DelayedRestart` delegation line in `commonSyncingArms`, the core's `onStop`, and the two flags.
+    No fix. Two scaladocs still describe the old layout: `SyncLifecycle`'s ("The core keeps the call sites: ... stops
+    in `onStop` and `stopSnapOnlySchedules`. It also keeps the dispatch: the `DelayedRestart` and
+    `PivotStateUnservable` arms") and the moved arm's ("lifted into a class member"). A move or narrowing commit cannot
+    edit comments (CQ-SNAP-016-37, with CQ-SNAP-016-34). SC-001: **not met**. `SNAPSyncController.scala` is 1,834 lines (the class 995, the companion 771)
+    against about 1,000, down from 1,882. A Mordor SNAP to completion (finalisation runs both helpers) and a dormant /
+    critical-failure restart: **pending** (to be run by the user on the slice jar after merge; no node run here).
 
 ## Amendment 2026-10-11 — state capability boundary (after M11, before the coordinators)
 
