@@ -7,6 +7,7 @@ import org.apache.pekko.actor.typed.scaladsl.Behaviors
 import scala.concurrent.duration.*
 
 import com.chipprbots.ethereum.blockchain.sync.SyncProtocol
+import com.chipprbots.ethereum.blockchain.sync.snap.*
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController.*
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController.SyncPhase.*
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncMetrics
@@ -431,3 +432,427 @@ private[snap] trait PivotSelector extends PivotSelectionApi:
       s"Updated best block for ETH status: block=$pivotBlockNumber, hash=${pivotHash.value.toHex.take(16)}..., " +
         s"estimatedTD=$estimatedTotalDifficulty (source=$tdSource)"
     )
+
+private[snap] trait PivotSelectorStart:
+  self: SNAPSyncControllerImpl =>
+
+  /** A `commonSyncingArms` arm lifted into a class member (spec 016 restructure, CQ-SNAP-016-18/19), body unchanged:
+    * `RetryBootstrapAtBlock`, the backtracked pivot-header bootstrap retry armed by `PivotBootstrapFailed`.
+    * `commonSyncingArms` delegates to it at the arm's original position, so the arm order is unchanged.
+    */
+  private[snap] lazy val retryBootstrapAtBlockArms: PartialFunction[Command, Behavior[Command]] = {
+    case RetryBootstrapAtBlock(blockNumber) =>
+      if currentPhase == AccountRangeSync || currentPhase == ByteCodeAndStorageSync || currentPhase == StateHealing
+      then
+        ctx.log.info(s"Retrying bootstrap at backtracked block $blockNumber...")
+        blockchainReader.getBlockHeaderByNumber(blockNumber) match
+          case Some(header) =>
+            completePivotRefreshWithStateRoot(blockNumber, header, "backtracked pivot (local header)")
+          case None =>
+            chainDownloader.tell(ChainDownloader.Pause)
+            pendingPivotRefresh = Some((blockNumber, "backtracked pivot"))
+            syncController ! StartRegularSyncBootstrap(blockNumber)
+            resetStagnationClocks(StagnationWatchdog.ResetReason.BootstrapRetryAtBlock)
+      else ctx.log.info(s"Skipping backtracked bootstrap — phase=$currentPhase no longer needs it")
+      Behaviors.same
+  }
+
+  /** `startSnapSync`, step 2 (spec 016 restructure, CQ-SNAP-016-22): resume an interrupted header bootstrap (and break
+    * out with `bootstrapping()`), or clear a target that was already reached and fall through. Extracted verbatim.
+    */
+  private[snap] def resumeInterruptedBootstrap()(using scala.util.boundary.Label[Behavior[Command]]): Unit =
+    import scala.util.boundary.break
+    // Check if there's an interrupted bootstrap to resume
+    appStateStorage.getSnapSyncBootstrapTarget() match
+      case Some(bootstrapTarget) =>
+        val bestBlockNumber = appStateStorage.getBestBlockNumber()
+
+        // Header-only bootstrap may not advance bestBlockNumber; allow resume if pivot header exists.
+        val hasPivotHeader = blockchainReader.getBlockHeaderByNumber(bootstrapTarget).isDefined
+
+        if bestBlockNumber >= bootstrapTarget || hasPivotHeader then
+          // Bootstrap already complete - clear the target and proceed with SNAP sync
+          ctx.log.info(s"Bootstrap target $bootstrapTarget already reached (current block: $bestBlockNumber)")
+          appStateStorage.clearSnapSyncBootstrapTarget().commit()
+          // Continue to normal SNAP sync logic below
+        else
+          // Resume interrupted bootstrap
+          ctx.log.info(s"Resuming interrupted bootstrap: current block $bestBlockNumber / target $bootstrapTarget")
+          syncController ! StartRegularSyncBootstrap(bootstrapTarget)
+          break(bootstrapping())
+      case None =>
+      // No bootstrap in progress - continue with normal logic
+
+  /** `startSnapSync`, step 3 (spec 016 restructure, CQ-SNAP-016-22): pivot selection. The CL-wait gate and the CL-hint
+    * pivot on post-merge chains, then the network / local / genesis pivot, each ending in a `break` with the next
+    * behaviour (account sync, a header bootstrap, a retry, regular sync or dormancy). Extracted verbatim; spec 016 M8c
+    * moves it into `PivotSelector`.
+    */
+  private[snap] def selectPivotAndStart()(using scala.util.boundary.Label[Behavior[Command]]): Unit =
+    import scala.util.boundary.break
+    // CL-wait gate (post-merge chains only). When TTD is configured but no CL hint has
+    // arrived yet, either wait indefinitely (`engine-api-required = true`, default) or
+    // fall back to peer-best-by-block-number after `cl-wait-timeout` elapsed since the
+    // first start attempt. Either way, we must NOT walk into TD-based selection here —
+    // TD is frozen at TTD on post-merge chains and pivot selection produces useless
+    // targets. Closes #1207.
+    if isPoSChain && clPivotHint.isEmpty then
+      val firstAttemptMs =
+        clHintArrivedAtMs.getOrElse {
+          // Reuse the same timestamp pattern as the hint to keep the wait window stable
+          // across retry calls. We initialise on the first wait attempt.
+          val now = System.currentTimeMillis()
+          if clHintArrivedAtMs.isEmpty then clHintArrivedAtMs = Some(now)
+          now
+        }
+      val waitedMs = System.currentTimeMillis() - firstAttemptMs
+      if syncConfig.engineApiRequired || waitedMs < syncConfig.clWaitTimeout.toMillis then
+        if bootstrapRetryCount % 10 == 0 then
+          ctx.log.info(
+            s"[CL-PIVOT] Post-merge chain (TTD configured), waiting for engine_forkchoiceUpdated " +
+              s"from CL (engineApiRequired=${syncConfig.engineApiRequired}, waited=${waitedMs / 1000}s)"
+          )
+        bootstrapRetryCount += 1
+        val delay = 5.seconds
+        timers.cancel(BootstrapCheckKey)
+        timers.startSingleTimer(BootstrapCheckKey, RetrySnapSyncStart, delay)
+        break(bootstrapping())
+      else
+        ctx.log.warn(
+          s"[CL-PIVOT] cl-wait-timeout elapsed (${syncConfig.clWaitTimeout}); engineApiRequired=false. " +
+            "Falling back to peer-best-by-block-number pivot selection."
+        )
+      // Fallthrough: engineApiRequired=false and timeout elapsed → continue to TD path below.
+      clHintArrivedAtMs = None // reset so the wait window restarts on next retry
+
+    // CL-driven pivot path (post-merge chains only). When the consensus layer has pushed a
+    // forkchoiceUpdated, prefer its head over TD-based peer selection. TD on post-merge
+    // chains is frozen at TerminalTotalDifficulty so peer-best-by-TD is unreliable. This
+    // is geth's "BeaconSync" pattern, plumbed via SyncController's BeaconHead listener.
+    // Closes #1207.
+    if isPoSChain && clPivotHint.isDefined then
+      val hint = clPivotHint.get
+      hint.knownHeader match
+        case Some(header) =>
+          ctx.log.info("=" * 80)
+          ctx.log.info("🛰  SNAP pivot from CL forkchoiceUpdated")
+          ctx.log.info("=" * 80)
+          ctx.log.info(
+            s"CL head: ${header.number} (${com.chipprbots.ethereum.utils.ByteStringUtils.hash2string(header.hash.value)})"
+          )
+          ctx.log.info(s"State root: ${header.stateRoot.value.toHex.take(16)}...")
+          ctx.log.info(s"Beginning fast state sync with ${snapSyncConfig.accountConcurrency} concurrent workers")
+          ctx.log.info("=" * 80)
+
+          pivotBlock = Some(header.number.value)
+          stateRoot = Some(header.stateRoot)
+          appStateStorage
+            .putSnapSyncPivotBlock(header.number.value)
+            .and(appStateStorage.putSnapSyncStateRoot(header.stateRoot.value))
+            .commit()
+          updateBestBlockForPivot(header, header.number.value)
+
+          SNAPSyncMetrics.setPivotBlockNumber(header.number.value)
+          bootstrapRetryCount = 0
+
+          currentPhase = AccountRangeSync
+          startAccountRangeSync(header.stateRoot)
+          break(syncing())
+
+        case None =>
+          // CL gave us a head hash but we don't have its header yet. Route through
+          // SyncController to fetch by hash (PivotHeaderBootstrap by-hash mode). The
+          // by-hash bootstrap reply re-enters via `BootstrapComplete(Some(header))`,
+          // and `bootstrapping`'s pivot-staleness check will allow it through (the CL
+          // head is by definition the freshest possible target).
+          ctx.log.info(
+            s"[CL-PIVOT] Head ${com.chipprbots.ethereum.utils.ByteStringUtils.hash2string(hint.headHash)} known by hash only — requesting by-hash bootstrap"
+          )
+          syncController ! StartRegularSyncBootstrapByHash(hint.headHash)
+          break(bootstrapping())
+
+    // Get local and network state for pivot selection
+    val localBestBlock = appStateStorage.getBestBlockNumber()
+
+    // If bootstrap checkpoints are configured, we should not start SNAP from a peer that is behind
+    // the highest trusted checkpoint. SNAP servers only guarantee serving very recent state; picking
+    // an ancient pivot (e.g. millions of blocks behind the network head) will cause peers to emit
+    // empty/no-proof AccountRange responses.
+    val bootstrapPivotBlock = appStateStorage.getBootstrapPivotBlock()
+
+    // Query SNAP-capable peers to find the highest block in the network.
+    // SNAP must NOT start until we have a SNAP-capable peer that is at/above the bootstrap pivot
+    // (when configured). Falling back to non-SNAP peers here would select an unreachable state root.
+    // Peers whose STATUS hasn't arrived yet have maxBlockNumber=0 — exclude them, otherwise a
+    // fresh-startup race counts them as "network best=0" → pivot=-64 → genesis fallback.
+    val snapPeersForPivot =
+      peersToDownloadFrom.values.toList
+        .filter(p => p.peerInfo.remoteStatus.supportsSnap && p.peerInfo.forkAccepted)
+        .filter(_.peerInfo.maxBlockNumber > 0)
+        .filter(p => bootstrapPivotBlock == 0 || p.peerInfo.maxBlockNumber >= bootstrapPivotBlock)
+
+    val networkBestBlockOpt =
+      snapPeersForPivot
+        .sortBy(_.peerInfo.maxBlockNumber)(bigIntReverseOrdering)
+        .headOption
+        .map(_.peerInfo.maxBlockNumber)
+
+    // Diagnostics: show what heights we can actually see from connected peers.
+    // If this list tops out near the Core-Geth "start height", it means we simply don't have any peer
+    // advertising the real network head yet (or those peers are excluded/blacklisted/disconnected).
+    val topPeerHeights =
+      peersToDownloadFrom.values.toList
+        .sortBy(_.peerInfo.maxBlockNumber)(bigIntReverseOrdering)
+        .take(5)
+        .map(p => s"${p.peer.remoteAddress}=${p.peerInfo.maxBlockNumber}")
+        .mkString(", ")
+    ctx.log.info(
+      s"SNAP pivot selection: bootstrapPivot=$bootstrapPivotBlock, visible peer heights (top 5) = [$topPeerHeights]"
+    )
+
+    // Core-geth approach: Calculate pivot from network height
+    // pivot = networkHeight - pivotBlockOffset (e.g., 23M - 64 = ~23M)
+    val (baseBlockForPivot, pivotSelectionSource) = networkBestBlockOpt match
+      case Some(networkBestBlock) =>
+        if networkBestBlock <= localBestBlock + snapSyncConfig.pivotBlockOffset then
+          ctx.log.warn(
+            s"Network best block ($networkBestBlock) is not significantly ahead of local ($localBestBlock)"
+          )
+          ctx.log.warn("This may indicate limited peer connectivity or already synced state")
+        // Always use network block when available, regardless of gap size
+        // This ensures we sync to the actual chain tip, not just our local view
+        // Reset bootstrap retry state since we have peers
+        bootstrapRetryCount = 0
+        (networkBestBlock, NetworkPivot)
+      case None =>
+        // No peers available yet - fall back to local best block
+        ctx.log.warn("No peers available for pivot selection, using local best block")
+        ctx.log.warn("SNAP sync may select a suboptimal pivot - will retry if peers become available")
+        (localBestBlock, LocalPivot)
+
+    val rawPivot = baseBlockForPivot - snapSyncConfig.pivotBlockOffset
+    val pivotBlockNumber = rawPivot.max(minPivotHint)
+    if pivotBlockNumber > rawPivot then
+      ctx.log.warn(
+        s"SNAP pivot raised from $rawPivot to $pivotBlockNumber to satisfy MinPivotBlock constraint " +
+          s"(regular sync was stuck near that block)"
+      )
+
+    ctx.log.info(
+      s"SNAP pivot selection: localBest=$localBestBlock, networkBest=${networkBestBlockOpt.getOrElse("none")}, " +
+        s"base=$baseBlockForPivot (source=${pivotSelectionSource.name}), offset=${snapSyncConfig.pivotBlockOffset}, " +
+        s"pivot=$pivotBlockNumber"
+    )
+
+    // Core-geth behavior: If chain height <= pivot offset, use genesis as pivot
+    // This allows SNAP sync to start immediately from any height
+    if baseBlockForPivot <= snapSyncConfig.pivotBlockOffset then
+      // IMPORTANT: Only apply the "start from genesis" behavior when we actually know
+      // the network height (i.e., we have peers). If we have no peers, the network height
+      // is unknown and treating it as 0 will cause us to request SNAP data for the genesis
+      // state root, which most peers won't serve.
+      pivotSelectionSource match
+        case CLDrivenPivot =>
+          // Unreachable: CLDrivenPivot returns earlier in startSnapSync. Defensive no-op.
+          ctx.log.warn("Unexpected CLDrivenPivot reaching TD-based pivot path; ignoring")
+          break(bootstrapping())
+        case LocalPivot =>
+          bootstrapRetryCount += 1
+          checkBootstrapRetryTimeout("no peers, network height unknown") match
+            case Some(b) => break(b); case None =>
+          val delay = bootstrapRetryDelay
+          ctx.log.warn(
+            s"No peers available yet; network height is unknown. Retrying in $delay (attempt $bootstrapRetryCount)"
+          )
+
+          timers.cancel(BootstrapCheckKey)
+          timers.startSingleTimer(BootstrapCheckKey, RetrySnapSyncStart, delay)
+          break(bootstrapping())
+
+        case NetworkPivot =>
+          // Guard: if ALL snap peers have maxBlockNumber=0, heights haven't been populated yet.
+          // ETH/63-68 peers initialize to 0 and only update on BlockHeaders/NewBlockHashes.
+          // ETH/69 peers may also show 0 if the remote peer is also initializing.
+          // Treat this as "heights unknown" — retry rather than committing to genesis.
+          // go-ethereum: findBestPeer() requires bestPeer.head > 0 before pivot selection.
+          if snapPeersForPivot.forall(_.peerInfo.maxBlockNumber == 0) then
+            bootstrapRetryCount += 1
+            checkBootstrapRetryTimeout("snap peers present but all heights unknown") match
+              case Some(b) => break(b); case None =>
+            val delay = 2.seconds
+            ctx.log.info(
+              s"[SNAP] ${snapPeersForPivot.size} snap peer(s) connected but all heights unknown — " +
+                s"waiting for ETH status exchange. Retrying in $delay (attempt $bootstrapRetryCount)."
+            )
+            timers.cancel(BootstrapCheckKey)
+            timers.startSingleTimer(BootstrapCheckKey, RetrySnapSyncStart, delay)
+            break(bootstrapping())
+        // else: ETH/69 peers genuinely confirmed low network height — proceed to genesis sync
+
+      ctx.log.info("=" * 80)
+      ctx.log.info("🚀 SNAP Sync Starting from Genesis")
+      ctx.log.info("=" * 80)
+      ctx.log.info(s"Network height: $baseBlockForPivot blocks")
+      ctx.log.info(s"Height below minimum threshold (${snapSyncConfig.pivotBlockOffset} blocks)")
+      ctx.log.info(s"Using genesis (block 0) as pivot for early chain bootstrap")
+      ctx.log.info("SNAP sync will effectively perform full sync for initial blocks")
+      ctx.log.info("=" * 80)
+
+      // Use genesis block as pivot (like core-geth does)
+      blockchainReader.getBlockHeaderByNumber(0) match
+        case Some(genesisHeader) =>
+          pivotBlock = Some(BigInt(0))
+          stateRoot = Some(genesisHeader.stateRoot)
+          appStateStorage
+            .putSnapSyncPivotBlock(0)
+            .and(appStateStorage.putSnapSyncStateRoot(genesisHeader.stateRoot.value))
+            .commit()
+          updateBestBlockForPivot(genesisHeader, BigInt(0))
+
+          SNAPSyncMetrics.setPivotBlockNumber(0)
+
+          // Reset bootstrap retry state
+          bootstrapRetryCount = 0
+
+          // Start account range sync with genesis state root
+          currentPhase = AccountRangeSync
+          startAccountRangeSync(genesisHeader.stateRoot)
+          break(syncing())
+
+        case None =>
+          ctx.log.error("Genesis block header not available - cannot start SNAP sync")
+          break(enterDormantMode("genesis block header not available"))
+
+    // With network-based pivot and 64-block offset, pivotBlockNumber should always be > 0
+    // The genesis special case (above) handles when baseBlockForPivot <= 64
+    // This remaining code handles the normal case where we have a valid pivot > localBestBlock
+
+    if pivotBlockNumber <= localBestBlock then
+      // Sanity check: pivot must be ahead of local state
+      ctx.log.warn("=" * 80)
+      ctx.log.warn("⚠️  SNAP Sync Pivot Issue Detected")
+      ctx.log.warn("=" * 80)
+      ctx.log.warn(s"Calculated pivot ($pivotBlockNumber) is not ahead of local state ($localBestBlock)")
+      ctx.log.warn(
+        s"Pivot source: ${pivotSelectionSource.name}, base block: $baseBlockForPivot, offset: ${snapSyncConfig.pivotBlockOffset}"
+      )
+
+      // LocalPivot is only used when no peers are available (see match expression above)
+      // This check determines whether to retry for peers or transition to regular sync
+      pivotSelectionSource match
+        case CLDrivenPivot =>
+          // Unreachable: CLDrivenPivot returns earlier in startSnapSync. Defensive no-op.
+          ctx.log.warn("Unexpected CLDrivenPivot in TD-based pivot-staleness check; ignoring")
+          break(bootstrapping())
+        case LocalPivot =>
+          // No peers available - schedule retry with backoff
+          bootstrapRetryCount += 1
+          checkBootstrapRetryTimeout("no peers for pivot selection") match
+            case Some(b) => break(b); case None =>
+          val delay = bootstrapRetryDelay
+          ctx.log.warn(s"No peers available for pivot selection. Retrying in $delay (attempt $bootstrapRetryCount)")
+
+          timers.cancel(BootstrapCheckKey)
+          timers.startSingleTimer(BootstrapCheckKey, RetrySnapSyncStart, delay)
+          break(bootstrapping())
+
+        case NetworkPivot =>
+          // Pivot is at or behind local state - this means we're already synced or very close
+          // Fall back to regular sync to catch up the remaining blocks
+          ctx.log.warn("Pivot block is not ahead of local state - likely already synced")
+          ctx.log.warn("Transitioning to regular sync for final block catch-up")
+          syncController ! Done // Signal completion, which will transition to regular sync
+          break(bootstrapping())
+    else
+      // Pivot is valid and ahead of local state
+
+      // Even if we have a local header for this block number, fetch the pivot header from the network
+      // to avoid starting SNAP from a stale/reorged or otherwise non-canonical header.
+      // This is a header-only bootstrap.
+      pivotSelectionSource match
+        case CLDrivenPivot =>
+          // Unreachable: CLDrivenPivot returns earlier in startSnapSync. Defensive no-op.
+          ctx.log.warn("Unexpected CLDrivenPivot in TD pivot-bootstrap branch; ignoring")
+          break(bootstrapping())
+        case NetworkPivot =>
+          ctx.log.info(s"Fetching pivot header from network for block $pivotBlockNumber before starting SNAP")
+          appStateStorage.putSnapSyncBootstrapTarget(pivotBlockNumber).commit()
+          syncController ! StartRegularSyncBootstrap(pivotBlockNumber)
+          break(bootstrapping())
+        case LocalPivot =>
+        // Fall through to local-header availability checks below
+
+      // Check if we have the pivot block header locally
+      blockchainReader.getBlockHeaderByNumber(pivotBlockNumber) match
+        case Some(header) =>
+          // Pivot header is available - proceed with SNAP sync
+          pivotBlock = Some(pivotBlockNumber)
+          stateRoot = Some(header.stateRoot)
+          appStateStorage
+            .putSnapSyncPivotBlock(pivotBlockNumber)
+            .and(appStateStorage.putSnapSyncStateRoot(header.stateRoot.value))
+            .commit()
+          updateBestBlockForPivot(header, pivotBlockNumber)
+
+          // Update metrics - pivot block
+          SNAPSyncMetrics.setPivotBlockNumber(pivotBlockNumber)
+
+          // Reset bootstrap retry state
+          bootstrapRetryCount = 0
+
+          ctx.log.info(s"Local pivot header available for block $pivotBlockNumber, starting SNAP sync")
+
+          // Start account range sync
+          currentPhase = AccountRangeSync
+          startAccountRangeSync(header.stateRoot)
+          break(syncing())
+
+        case None =>
+          // Pivot block header not available locally
+          // This happens when we select a pivot based on network best block
+          // but haven't synced that far yet
+
+          pivotSelectionSource match
+            case CLDrivenPivot =>
+              // Unreachable: CLDrivenPivot returns earlier in startSnapSync. Defensive no-op.
+              ctx.log.warn("Unexpected CLDrivenPivot in pivot-header-fetch branch; ignoring")
+              break(bootstrapping())
+            case NetworkPivot =>
+              // We selected a network-based pivot but don't have the header yet
+              // Need to bootstrap/sync to get closer to the pivot
+              val targetForBootstrap = pivotBlockNumber
+
+              ctx.log.info("=" * 80)
+              ctx.log.info("🔄 SNAP Sync Pivot Header Not Available")
+              ctx.log.info("=" * 80)
+              ctx.log.info(s"Selected pivot: $pivotBlockNumber (based on network best block)")
+              ctx.log.info(s"Local best block: $localBestBlock")
+              ctx.log.info(s"Gap: ${pivotBlockNumber - localBestBlock} blocks")
+              ctx.log.info("Need to sync headers/blocks to reach pivot point")
+              ctx.log.info(s"Continuing regular sync to block $targetForBootstrap")
+              ctx.log.info("Will automatically transition to SNAP sync once pivot is reached")
+              ctx.log.info("=" * 80)
+
+              // Store the bootstrap target
+              appStateStorage.putSnapSyncBootstrapTarget(targetForBootstrap).commit()
+
+              // Request regular sync to continue to the pivot point
+              syncController ! StartRegularSyncBootstrap(targetForBootstrap)
+              break(bootstrapping())
+
+            case LocalPivot =>
+              // Local pivot selected but header still not available
+              bootstrapRetryCount += 1
+              checkBootstrapRetryTimeout("pivot header not available") match
+                case Some(b) => break(b); case None =>
+              val delay = bootstrapRetryDelay
+              if bootstrapRetryCount == 1 then ctx.log.info("Waiting for pivot block header to become available...")
+              ctx.log.info(
+                s"   Pivot block $pivotBlockNumber not ready yet (attempt $bootstrapRetryCount), retrying in $delay"
+              )
+
+              // Schedule a retry and store the cancellable for proper cleanup
+              timers.cancel(BootstrapCheckKey)
+              timers.startSingleTimer(BootstrapCheckKey, RetrySnapSyncStart, delay)
+
+              break(bootstrapping())
