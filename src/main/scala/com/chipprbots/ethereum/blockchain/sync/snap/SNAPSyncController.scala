@@ -28,6 +28,7 @@ import com.chipprbots.ethereum.blockchain.sync.snap.controller.HealingOrchestrat
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.HeapWatchdogStart
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.PhaseFlags
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.PivotRefresher
+import com.chipprbots.ethereum.blockchain.sync.snap.controller.PivotRefresherRoll
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.PivotRefresherState
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.PivotSelector
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.PivotSelectorState
@@ -123,6 +124,7 @@ private class SNAPSyncControllerImpl(
     with SyncLifecycleState
     with PivotRefresher
     with PivotRefresherState
+    with PivotRefresherRoll
     with DownloadSupervisor
     with DownloadSupervisorState:
 
@@ -366,7 +368,7 @@ private class SNAPSyncControllerImpl(
   // all external peers respond with accounts=[], proof=[] and only local Besu can serve.
   // Rolling proactively at 100 blocks preserves all downloaded state (unlike go-ethereum).
   var lastProactivePivotBlock: Option[BigInt] = None
-  private val SnapServeWindowBlocks: BigInt = BigInt(100)
+  private[snap] val SnapServeWindowBlocks: BigInt = BigInt(100)
 
   // Roll target margin: a proactive/reactive roll picks networkBest - max(pivotBlockOffset,
   // SnapServeWindowMargin) so the new root lands INSIDE peers' indexed snapshot window.
@@ -882,38 +884,6 @@ private class SNAPSyncControllerImpl(
         startStateHealingWithInterleave()
       Behaviors.same
   }
-
-  /** The proactive pivot roll's trigger (spec 016 T053c, CQ-SNAP-016-31), extracted verbatim from
-    * `checkDownloadStagnationArms`, which calls it at the same point of the 30-s stagnation tick: in the two download
-    * phases, roll the pivot in place (with a readiness probe) once it is more than `SnapServeWindowBlocks` behind the
-    * SNAP peers' best block, unless a roll landed within 50 blocks, a probe is in flight or pending commit, storage is
-    * at least 80% done, or the 30-s probe cooldown has not elapsed. Pivot-refresh policy (`[PIVOT-ROLL]`): M7b moves it
-    * to `PivotRefresher` and the arm to `StagnationWatchdog`.
-    */
-  private[snap] def maybeProactivePivotRoll(): Unit =
-    // Proactive pivot roll: keep pivot within core-geth's 128-block snapshot window.
-    if (currentPhase == AccountRangeSync || currentPhase == ByteCodeAndStorageSync) &&
-      pivotBlock.isDefined
-    then
-      currentNetworkBestFromSnapPeers().foreach { networkBest =>
-        val pivotAge = networkBest - pivotBlock.get
-        val recentlyRolled = lastProactivePivotBlock.exists(last => (networkBest - last) <= BigInt(50))
-        val storageLateStage =
-          currentPhase == ByteCodeAndStorageSync && storageContractProgressPct >= 0.80
-        if pivotAge > SnapServeWindowBlocks && !recentlyRolled &&
-          pivotProbeRequestId.isEmpty && pendingProbeCommit.isEmpty &&
-          !storageLateStage
-        then
-          val now = System.currentTimeMillis
-          if now - lastProbeAttemptMs >= ProbeCooldownMs then
-            ctx.log.info(
-              s"[PIVOT-ROLL] Proactive pivot roll: pivot=${pivotBlock.get} " +
-                s"network=$networkBest age=$pivotAge — readiness probe will fire after header fetch"
-            )
-            proactiveRollNeedsProbe = true
-            lastProbeAttemptMs = now
-            refreshPivotInPlace("proactive pivot roll")
-      }
 
   /** A `commonSyncingArms` arm lifted into a class member (spec 016 restructure, CQ-SNAP-016-18/19), body unchanged:
     * `CheckDownloadStagnation`, the 30-s stagnation tick: the proactive pivot roll, the zero-SNAP-peer log and the
