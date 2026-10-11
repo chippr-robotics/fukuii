@@ -1209,10 +1209,19 @@ class StorageRatchetTests(unittest.TestCase):
             out = self.bad(f, "env-freeze")
             self.assertIn("storage-typed member `syncConfig", out)
 
-    def test_actor_command_types_are_not_storage(self):
-        f = ratchet_fixture()
-        self.env_change(f, ENV_BASE.replace("def syncConfig: SyncConfig", "def syncConfig: ActorRef[StorageRangeCoordinator.Command]"))
-        self.ok(f)
+    def test_allow_listed_actor_and_protocol_types_are_not_storage(self):
+        for t in ("ActorRef[StorageRangeCoordinator.Command]", "ActorRef[StorageRangeWorker.Command]", "StorageRanges => GetStorageRanges"):
+            f = ratchet_fixture()
+            self.env_change(f, ENV_BASE.replace("def syncConfig: SyncConfig", f"def syncConfig: {t}"))
+            self.ok(f)
+
+    def test_storage_wrappers_named_like_actors_are_flagged(self):
+        for t in ("FooStorageWorker", "ActorRef[ImmutableStorageActor.Command]", "TrieStoreCoordinator"):
+            f = ratchet_fixture()
+            self.env_change(f, ENV_BASE.replace("def syncConfig: SyncConfig", f"def syncConfig: {t}"))
+            out = self.bad(f, "env-freeze")
+            self.assertIn("storage-typed member `syncConfig", out)
+            self.assertIn("[storage-refs] controller/SnapControllerEnv.scala: measured 6", out)
 
     # bootstrap happens once
     def test_missing_baseline_at_merge_base_after_staging_has_it_fails(self):
@@ -1244,6 +1253,9 @@ class StorageRatchetTests(unittest.TestCase):
             "val e = '\\\\'; env.stateStorage": 1,
             "env.stateStorageOf(root).get; val s = x.putSnapSyncStorageComplete(1)": 2,  # member accesses
             "x.storageRoot; import a.actors.StorageRangeCoordinator; msg.StorageRanges": 0,
+            "val w: FooStorageWorker = ImmutableStorageActor(x)": 2,  # not allow-listed: counted
+            "StorageRangeCoordinator.Command; StorageRangeWorker(x); StorageRangesResponseMsg; noStorageCoordinator": 0,
+            "val stateStorages = env.stateStorages": 2,  # bare plural identifier, and its member access
         }
         for text, n in cases.items():
             self.assertEqual(V.storage_ref_count(text), n, text)

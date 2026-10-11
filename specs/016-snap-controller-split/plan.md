@@ -455,8 +455,11 @@ reviewer re-runs it locally with `scripts/snap-split/verify.sh origin/staging`; 
    bootstraps once: when staging has the file, a merge-base without it fails, and the PR must rebase.
    - `[env-freeze]`: `SnapControllerEnv` never grows. Its member count (18) and its header (parents and self-type) are
      pinned, and no justification can raise either. A member is storage-typed when an identifier in its text after the
-     name matches `Storage|Stores?$|DataSource|(?i:rocksdb)|^Blockchain(?:Reader|Writer)$|WriteBatch`, including inside
-     function and `Option` types. Actor names ending in `Coordinator`, `Worker` or `Actor` are excluded.
+     name matches `Storage|Store|DataSource|(?i:rocksdb)|^Blockchain(?:Reader|Writer)$|WriteBatch`, including inside
+     function and `Option` types. Only the names in `STORAGE_NAME_ALLOW` (`verify.py`) are exempt. These are
+     `StorageRangeCoordinator`, `StorageRangeWorker`, `StorageRangesResponseMsg`, `StorageCoordinatorProgress`,
+     `GetStorageRanges` and `StorageRanges`, enumerated from staging. Any other `…Storage…Worker`/`Actor`/`Coordinator`
+     name is flagged by this rule and counted below.
      - The 8 current storage-typed members are pinned by name: `appStateStorage`, `stateStorage`, `evmCodeStorage`,
        `flatSlotStorage`, `pathNodeStorageOpt`, `blockchainReader`, `blockchainWriter` and `validatorFactory`.
      - Removing a pinned member passes.

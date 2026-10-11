@@ -955,20 +955,36 @@ ENV_FILE = f"{SNAP}/controller/SnapControllerEnv.scala"
 ENV_TRAIT = "SnapControllerEnv"
 TOTAL_KEY = "storage_refs.total"
 
+# The actor and protocol types on staging whose names contain `Storage`/`Store` but are not stores (enumerated
+# 2026-10-11 from the class/object/trait definitions in src/main). Nothing else is exempt: a `FooStorageWorker` or an
+# `ImmutableStorageActor` is flagged by Rule 1 and counted by STORAGE_REF_RE. `StorageRecoveryActor` (blockchain/sync)
+# is deliberately not listed: it does storage recovery, and no module file references it today. Adding a name here is a
+# reviewed tooling change.
+STORAGE_NAME_ALLOW = frozenset({
+    "StorageRangeCoordinator",     # actors/: the storage-ranges phase coordinator (its `.Command` protocol)
+    "StorageRangeWorker",          # actors/: its worker
+    "StorageRangesResponseMsg",    # StorageRangeCoordinator's worker-message wrapper
+    "StorageCoordinatorProgress",  # SNAPSyncController's progress message from that coordinator
+    "GetStorageRanges",            # SNAP wire protocol request (network/p2p/messages/SNAP.scala)
+    "StorageRanges",               # SNAP wire protocol response
+})
+
 # Rule 1 (env freeze): a member is storage-typed when an identifier in its declaration text after the name (its type,
 # including inside function types, Option[...] and so on, and any initializer) matches ENV_STORAGE_IDENT_RE and is not
-# an actor name (ENV_ACTOR_IDENT_RE: `StorageRangeCoordinator.Command` is a coordinator's protocol, not a store).
-ENV_STORAGE_IDENT_RE = re.compile(r"Storage|Stores?$|DataSource|(?i:rocksdb)|^Blockchain(?:Reader|Writer)$|WriteBatch")
-ENV_ACTOR_IDENT_RE = re.compile(r"(?:Coordinator|Worker|Actor)$")
+# in STORAGE_NAME_ALLOW.
+ENV_STORAGE_IDENT_RE = re.compile(r"Storage|Store|DataSource|(?i:rocksdb)|^Blockchain(?:Reader|Writer)$|WriteBatch")
 
 # The storage-reference count: occurrences of this in code (comments removed by `strip_comments`), per .scala file
 # under RATCHET_DIRS. Alternatives, in order: a lower-case `.xStorageY` member access (`.stateStorageOf(...)`,
 # `.putSnapSyncStorageComplete`; a capitalised `.StorageRanges` is a message or type selector and does not count unless
-# it ends in `Storage`), an `xStorage` / `xStorageOpt` identifier or type, `DataSource*` / `dataSource*`, `BlockchainReader|Writer` and the
-# lower-case handles, `WriteBatch`, `RocksDb*`, `org.rocksdb`, `.commit()`. Bare `storage` / `Storage` do not count.
+# it ends in `Storage`), a capitalised `*Storage*|*Store*` name ending in Coordinator/Worker/Actor (a storage wrapper
+# dressed as an actor), an `xStorage` / `xStorages` / `xStorageOpt` identifier or type, `DataSource*` / `dataSource*`, `BlockchainReader|Writer` and the
+# lower-case handles, `WriteBatch`, `RocksDb*`, `org.rocksdb`, `.commit()`. Bare `storage` / `Storage` do not count, and
+# a match that is a STORAGE_NAME_ALLOW name is dropped.
 STORAGE_REF_RE = re.compile(
     r"\.[a-z]\w*Storage\w*"
-    r"|\b[A-Za-z]\w*Storage(?:Opt)?\b|\b[Dd]ataSource\w*|\b[bB]lockchain(?:Reader|Writer)\b|\bWriteBatch\b|\bRocksDb\w*"
+    r"|\b[A-Z]\w*Stor(?:age|e)\w*(?:Coordinator|Worker|Actor)\b"
+    r"|\b[A-Za-z]\w*Storages?(?:Opt)?\b|\b[Dd]ataSource\w*|\b[bB]lockchain(?:Reader|Writer)\b|\bWriteBatch\b|\bRocksDb\w*"
     r"|\borg\.rocksdb\b|\.commit\(\)"
 )
 
@@ -1079,7 +1095,7 @@ def code_lines(text: str) -> list[str]:
 
 
 def storage_ref_count(text: str) -> int:
-    return len(STORAGE_REF_RE.findall(strip_comments(text)))
+    return sum(1 for m in STORAGE_REF_RE.findall(strip_comments(text)) if m.lstrip(".") not in STORAGE_NAME_ALLOW)
 
 
 def split_top_commas(s: str) -> list[str]:
@@ -1184,7 +1200,7 @@ def env_members(text: str, trait: str = ENV_TRAIT) -> dict[str, str]:
 
 
 def storage_typed(decl: str) -> bool:
-    return any(ENV_STORAGE_IDENT_RE.search(t) and not ENV_ACTOR_IDENT_RE.search(t) for t in re.findall(r"\w+", decl))
+    return any(ENV_STORAGE_IDENT_RE.search(t) and t not in STORAGE_NAME_ALLOW for t in re.findall(r"\w+", decl))
 
 
 def load_baseline(text: str | None) -> dict | None:
