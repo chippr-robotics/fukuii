@@ -1221,6 +1221,45 @@ private class SNAPSyncControllerImpl(
       Behaviors.same
   }
 
+  /** The readiness-probe branch of `commonSyncingArms`' `AccountRangeResponse` arm (spec 016 lift before M10),
+    * extracted verbatim: the answer to the pending probe (`msg.requestId == pivotProbeRequestId`) commits the deferred
+    * roll when it carries accounts, else defers it again, or forces it after `MaxProbeAttempts`. The arm still decides
+    * whether `msg` is the probe's answer, and still forwards any other response to the account coordinator.
+    */
+  private[snap] def handlePivotProbeResponse(msg: SNAP.AccountRange): Unit =
+    pivotProbeRequestId = None
+    if msg.accounts.nonEmpty then
+      pendingProbeCommit.foreach { case (block, header, commitReason) =>
+        pendingProbeCommit = None
+        val attemptsNote = if probeAttemptCount > 0 then s" after $probeAttemptCount prior deferral(s)" else ""
+        ctx.log.info(
+          s"[PIVOT-PROBE] Snapshot ready at root ${header.stateRoot.value.take(4).toHex} block $block$attemptsNote — committing roll"
+        )
+        probeAttemptCount = 0
+        completePivotRefreshWithStateRoot(block, header, commitReason)
+      }
+    else
+      probeAttemptCount += 1
+      val commitArgs = pendingProbeCommit
+      pendingProbeCommit = None
+      if probeAttemptCount >= MaxProbeAttempts then
+        commitArgs.foreach { case (block, header, commitReason) =>
+          val pivotAge = currentNetworkBestFromSnapPeers().map(_ - block).getOrElse(BigInt(-1))
+          ctx.log.warn(
+            s"[PIVOT-PROBE] Max deferral reached ($MaxProbeAttempts/$MaxProbeAttempts attempts) — " +
+              s"forcing roll at root ${header.stateRoot.value.take(4).toHex} block $block (pivotAge≈$pivotAge). " +
+              s"Snapshot readiness unconfirmed — brief post-roll window may occur."
+          )
+          probeAttemptCount = 0
+          completePivotRefreshWithStateRoot(block, header, s"$commitReason (forced — max probe attempts)")
+        }
+      else
+        ctx.log.info(
+          s"[PIVOT-PROBE] Snapshot not indexed yet " +
+            s"(attempt $probeAttemptCount/$MaxProbeAttempts) — " +
+            s"deferring roll, coordinators unaffected (retry in ${ProbeCooldownMs / 1000}s)"
+        )
+
   /** Dispatch order (spec 016 P4, research.md R4b): `syncingGuardArms` (the path-publish and header-hold arms with
     * their two guarded wildcards, then the `peerEventArms` delegation), then `phaseArms(currentPhase)`, then
     * `commonSyncingArms`, then the "Unhandled message in syncing state" catch-all. `currentPhase` is read per message.
@@ -1320,38 +1359,7 @@ private class SNAPSyncControllerImpl(
         // Intercept pivot readiness probe responses before forwarding to coordinator.
         pivotProbeRequestId match
           case Some(probeId) if msg.requestId == probeId =>
-            pivotProbeRequestId = None
-            if msg.accounts.nonEmpty then
-              pendingProbeCommit.foreach { case (block, header, commitReason) =>
-                pendingProbeCommit = None
-                val attemptsNote = if probeAttemptCount > 0 then s" after $probeAttemptCount prior deferral(s)" else ""
-                ctx.log.info(
-                  s"[PIVOT-PROBE] Snapshot ready at root ${header.stateRoot.value.take(4).toHex} block $block$attemptsNote — committing roll"
-                )
-                probeAttemptCount = 0
-                completePivotRefreshWithStateRoot(block, header, commitReason)
-              }
-            else
-              probeAttemptCount += 1
-              val commitArgs = pendingProbeCommit
-              pendingProbeCommit = None
-              if probeAttemptCount >= MaxProbeAttempts then
-                commitArgs.foreach { case (block, header, commitReason) =>
-                  val pivotAge = currentNetworkBestFromSnapPeers().map(_ - block).getOrElse(BigInt(-1))
-                  ctx.log.warn(
-                    s"[PIVOT-PROBE] Max deferral reached ($MaxProbeAttempts/$MaxProbeAttempts attempts) — " +
-                      s"forcing roll at root ${header.stateRoot.value.take(4).toHex} block $block (pivotAge≈$pivotAge). " +
-                      s"Snapshot readiness unconfirmed — brief post-roll window may occur."
-                  )
-                  probeAttemptCount = 0
-                  completePivotRefreshWithStateRoot(block, header, s"$commitReason (forced — max probe attempts)")
-                }
-              else
-                ctx.log.info(
-                  s"[PIVOT-PROBE] Snapshot not indexed yet " +
-                    s"(attempt $probeAttemptCount/$MaxProbeAttempts) — " +
-                    s"deferring roll, coordinators unaffected (retry in ${ProbeCooldownMs / 1000}s)"
-                )
+            handlePivotProbeResponse(msg)
           // lastProbeAttemptMs stays set; next stagnation tick after cooldown will re-probe
           case _ =>
             ctx.log.debug(s"Received AccountRange response: requestId=${msg.requestId}, accounts=${msg.accounts.size}")
