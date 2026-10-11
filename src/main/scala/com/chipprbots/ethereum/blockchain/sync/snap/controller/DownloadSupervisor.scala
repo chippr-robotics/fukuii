@@ -5,10 +5,10 @@ import org.apache.pekko.actor.typed.SupervisorStrategy
 import org.apache.pekko.actor.typed.scaladsl.Behaviors
 import org.apache.pekko.util.ByteString
 
+import scala.concurrent.ExecutionContext
 import scala.concurrent.duration.*
 
 import com.chipprbots.ethereum.blockchain.sync.SyncProtocol
-import com.chipprbots.ethereum.blockchain.sync.snap.*
 import com.chipprbots.ethereum.blockchain.sync.snap.ByteCodeTask
 import com.chipprbots.ethereum.blockchain.sync.snap.ContractTaskFiles
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController
@@ -17,6 +17,7 @@ import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController.SyncPhase
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncMetrics
 import com.chipprbots.ethereum.blockchain.sync.snap.actors
 import com.chipprbots.ethereum.db.storage.MptStorage
+import com.chipprbots.ethereum.db.storage.SnapStorageDoneStorage
 import com.chipprbots.ethereum.db.storage.SnapSyncProgressStorage
 import com.chipprbots.ethereum.domain.TrieRoot
 
@@ -25,9 +26,6 @@ private[snap] trait AccountRangeStartApi:
 
 private[snap] trait ByteCodeRequestApi:
   def requestByteCodes(): Unit
-
-private[snap] trait AccountRangeLaunchApi:
-  def launchAccountRangeWorkers(rootHash: TrieRoot, concurrency: Int): Unit
 
 private[snap] trait AccountResumeSelectionApi:
   def selectAccountResume(
@@ -41,6 +39,24 @@ private[snap] trait DownloadSupervisorState:
   def snapProgressStorage: SnapSyncProgressStorage
   def recordStorageDone: Boolean
   def SnapCapabilityCheckKey: String
+  var pivotProbeRequestId: Option[BigInt]
+  var consecutivePivotRefreshes: Int
+  var criticalFailureCount: Int
+  var accountsAtLastCriticalFailure: Long
+  var dormantRetryCount: Int
+  var lastAccountProgressMs: Long
+  var lastBytecodeProgressMs: Long
+  var lastStorageProgressMs: Long
+  var storageStagnationRefreshAttempted: Boolean
+  var storageContractProgressPct: Double
+  var bytecodesEstimatedTotal: Long
+  var preservedRangeProgress: Map[ByteString, ByteString]
+  var preservedAtPivotBlock: Option[BigInt]
+  var preservedTaskFiles: Option[ContractTaskFiles]
+  var launchedAccountGeneration: Long
+  var currentCarrySource: Option[ContractTaskFiles]
+  def storageDoneStorage: SnapStorageDoneStorage
+  implicit def ec: ExecutionContext
 
 /** SNAP download supervision (spec 016 M11, research.md R6 "Download supervision"): the account phase's start with its
   * snap-capability grace check (`startAccountRangeSync`), the accounts-complete recovery's bytecode and storage
@@ -53,8 +69,11 @@ private[snap] trait DownloadSupervisorState:
   */
 private[snap] trait DownloadSupervisor extends AccountRangeStartApi with ByteCodeRequestApi:
   self: DownloadSupervisorState & SnapSharedState & SnapControllerEnv & CoordinatorHandles & PhaseFlags & PeerPoolApi &
-    SnapServerPeersApi & SnapPeerEvictionApi & ChainDownloadStartApi & FinalizationApi & HealingApi &
-    AccountRangeLaunchApi =>
+    SnapServerPeersApi & SnapPeerEvictionApi & ChainDownloadStartApi & FinalizationApi & HealingApi & LifecycleApi &
+    PivotProbeResponseApi & StagnationResetApi & StagnationScheduleApi & StorageDoneMarkersApi & ResumeApi &
+    HeapWatchdogApi & AccountResumeSelectionApi =>
+
+  private lazy val AccountProgressResetThreshold: Long = 100_000L
 
   /** Geth-aligned: check if all 3 concurrent download phases are complete. Only transitions to healing when accounts +
     * bytecodes + storage are ALL done. The sentinel pattern (NoMoreByteCodeTasks/NoMoreStorageTasks) ensures bytecodes
@@ -337,9 +356,6 @@ private[snap] trait DownloadSupervisor extends AccountRangeStartApi with ByteCod
       blocksProgress = SyncProtocol.Status.Progress(currentBlock, currentBlock),
       stateNodesProgress = Some(SyncProtocol.Status.Progress(BigInt(pulledStates), BigInt(knownStates)))
     )
-
-private[snap] trait DownloadSupervisorArms:
-  self: SNAPSyncControllerImpl =>
 
   /** A `commonSyncingArms` arm lifted into a class member (spec 016 lift before M11b, CQ-SNAP-016-32), body unchanged:
     * `CheckSnapCapability`, the end of the snap-capability grace period: launch the account phase if a snap peer is now

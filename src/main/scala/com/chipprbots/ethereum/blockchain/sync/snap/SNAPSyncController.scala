@@ -20,12 +20,10 @@ import com.chipprbots.ethereum.blockchain.sync.Blacklist
 import com.chipprbots.ethereum.blockchain.sync.PeerListHelper
 import com.chipprbots.ethereum.blockchain.sync.PeerListSupportNg
 import com.chipprbots.ethereum.blockchain.sync.SyncProtocol
-import com.chipprbots.ethereum.blockchain.sync.snap.controller.AccountRangeLaunchApi
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.AccountResumeSelectionApi
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.ChildFactories
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.CoordinatorHandles
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.DownloadSupervisor
-import com.chipprbots.ethereum.blockchain.sync.snap.controller.DownloadSupervisorArms
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.DownloadSupervisorState
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.HealingOrchestrator
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.HealingOrchestratorState
@@ -130,9 +128,7 @@ private class SNAPSyncControllerImpl(
     with PivotRefresherState
     with DownloadSupervisor
     with DownloadSupervisorState
-    with AccountRangeLaunchApi
-    with AccountResumeSelectionApi
-    with DownloadSupervisorArms:
+    with AccountResumeSelectionApi:
 
   import SNAPSyncController.*
   import SyncPhase.*
@@ -298,11 +294,11 @@ private class SNAPSyncControllerImpl(
   // Contract task files consistent with `preservedRangeProgress` (see AccountResumeCheckpoint). With them, partial
   // ranges resume from their cursor and the storage/bytecode work of the downloaded prefix is replayed, not re-derived
   // from the network. None => legacy behaviour (partial ranges restart from their start).
-  private[snap] var preservedTaskFiles: Option[ContractTaskFiles] = None
+  var preservedTaskFiles: Option[ContractTaskFiles] = None
   // Generation of the most recently launched account coordinator; snapshots from older instances are dropped.
-  private[snap] var launchedAccountGeneration: Long = -1L
+  var launchedAccountGeneration: Long = -1L
   // Task files the live account coordinator was carried from (its supervisor may re-copy from them).
-  private[snap] var currentCarrySource: Option[ContractTaskFiles] = None
+  var currentCarrySource: Option[ContractTaskFiles] = None
   // Storage-file path of the last persisted checkpoint for which superseded task files were already swept.
   private var lastSweptForRecord: Option[String] = None
 
@@ -332,7 +328,6 @@ private class SNAPSyncControllerImpl(
   // Failure tracking — critical failures trigger dormant retry with exponential backoff.
   var criticalFailureCount: Int = 0
   var accountsAtLastCriticalFailure: Long = 0L
-  private[snap] val AccountProgressResetThreshold: Long = 100_000L
 
   // Dormant retry: when critical failures exhaust, preserve all RocksDB data and wait
   // for peers to re-index their snapshots with exponential backoff (3min–20min).
@@ -492,7 +487,7 @@ private class SNAPSyncControllerImpl(
   var lastAccountsDownloaded: Long = 0
   // Tracks storage contract completion (0.0–1.0) from push-based ProgressStorageContracts messages.
   // Used to suppress proactive pivot rolls when storage is nearly done (Bug 2 guard).
-  private[snap] var storageContractProgressPct: Double = 0.0
+  var storageContractProgressPct: Double = 0.0
 
   /** Replaces preStart(): runs the initialization side effects, starts the handshaked-peers poll, and returns the
     * initial `idle` behavior. Called from `apply()`.

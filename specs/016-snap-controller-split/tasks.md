@@ -676,6 +676,55 @@ only when every item on the per-slice checklist below holds.
     `ChainDownloaderProgress`/`Done`, `GetStatus`). No fix. Next: M11b moves the ten members and the rest of
     `launchAccountRangeWorkers` into `DownloadSupervisor` (dropping `AccountRangeLaunchApi`); M5b moves
     `selectAccountResume` with `recoverAccountsComplete` into `SnapResumePlanner`.
+- [x] T053b [M11b] Byte-move the members T053a lifted, and the non-resume remainder of `launchAccountRangeWorkers`, into
+  `DownloadSupervisor`. Check SC-001 again.
+  - As built: three commits. (1) Prerequisite: `AccountResumeSelectionApi` (`selectAccountResume`) is declared in
+    `controller/DownloadSupervisor.scala` and implemented by the core, whose member loses `private[snap]`; scalafmt
+    wraps the declaration, so it cannot go into the narrowing commit (the M6b precedent). (2) The move commit moves 11
+    symbols, byte-identical, into a temporary trait `DownloadSupervisorArms` appended to the module file with the
+    temporary self-type `SNAPSyncControllerImpl` (the M8c pattern): `checkSnapCapabilityArms`, `downloadTickArms`,
+    `snapResponseArms`, `progressAccountsSyncedArms`, `accountTrieFinalizationArms`, `downloadProgressArms`,
+    `downloadBackpressureArms`, `incrementalContractDataArms`, `accountRangeSyncCompleteArms` (the routing doc lists
+    it for the M11b move with the other arms; its M5 persistence comes along unchanged), `downloadPhaseCompleteArms`
+    and `launchAccountRangeWorkers` (the stagnation reset, the call to `selectAccountResume`, the spawns, timers and
+    budgets). Five core fields go `private` -> `private[snap]` (`storageContractProgressPct`, `preservedTaskFiles`,
+    `launchedAccountGeneration`, `currentCarrySource`, `AccountProgressResetThreshold`), and the core drops the
+    `SupervisorStrategy` import only the launch used. `AccountProgressResetThreshold` stayed in the core in the move
+    (rule (d)). (3) The narrowing commit drops the temporary trait's two header lines, so its members fold into
+    `DownloadSupervisor`; `AccountProgressResetThreshold` becomes a pure private lazy val of the trait (pure: yes, a
+    literal); `AccountRangeLaunchApi` is deleted (the module now implements `launchAccountRangeWorkers`, and nothing
+    else named it). Narrowed self-type: `DownloadSupervisorState & SnapSharedState & SnapControllerEnv &
+    CoordinatorHandles & PhaseFlags & PeerPoolApi & SnapServerPeersApi & SnapPeerEvictionApi & ChainDownloadStartApi &
+    FinalizationApi & HealingApi & LifecycleApi & PivotProbeResponseApi & StagnationResetApi & StagnationScheduleApi &
+    StorageDoneMarkersApi & ResumeApi & HeapWatchdogApi & AccountResumeSelectionApi`.
+    - State 22 against M11's 4: + 18, each kept in the core because code that stays also reads or writes it (the M7
+      clocks, the M9 counters, the M10 probe and refresh state, the M5 resume state, `storageContractProgressPct`,
+      `bytecodesEstimatedTotal`, `storageDoneStorage`) and `ec`, the core's implicit constructor `val`, which the file-info
+      asks of `accountRangeSyncCompleteArms` run their callbacks on; it is declared `implicit def ec` so the body is
+      unchanged. The routing doc's counts row lists them.
+    - Api 19 against M11's 10: − `AccountRangeLaunchApi` (1); + `LifecycleApi` (3), `StagnationResetApi` (1) and
+      `ResumeApi` (1), reused whole; + five new narrow traits, each declared next to its implementer, whose member loses
+      `private[snap]`: `PivotProbeResponseApi` (`handlePivotProbeResponse`, `PivotRefresher`), `StagnationScheduleApi`
+      (`scheduleStagnationChecks`, `StagnationWatchdog`), `StorageDoneMarkersApi` (`clearStorageDoneMarkers`,
+      `SnapResumePlanner`), `HeapWatchdogApi` (`ensureHeapWatchdog`, `SyncLifecycle`), and `AccountResumeSelectionApi`
+      (`SSC` until M5b). No other module's count moves; the capability traits are unchanged (5 / 18 / 12 / 10).
+    - Stub test: `DownloadSupervisorSpec` extended (`# extended-tests:`) with eleven cases (19 in all): the capability
+      check's launch and dormant paths; a tick arm; the probe answer vs coordinator routing and the `StateValidation`
+      `TrieNodes` drop; the account-progress and failure-counter resets; trie finalization (flag, persisted root,
+      restart); the progress clocks, contract share and slot estimate; the backpressure forwards; the contract-data
+      forwards, estimate and credit release; the storage-phase entry and its duplicate; the phase completions and the
+      force-complete skip; and the real `launchAccountRangeWorkers` (resume selection, carry source, generation,
+      spawns, timers, budgets). The stub drops `AccountRangeLaunchApi`; the harness keeps M11's stubbed launch for the
+      existing cases by overriding `launchAccountRangeWorkers` in its anonymous module instance (fixture construction;
+      no existing assertion changes), and the launch case runs the module's own.
+  - **Not moved**: the dispatch (the ten delegation lines in `commonSyncingArms`), `selectAccountResume` and
+    `AccountRangeProgressCmd` (M5b), and the 18 fields above. No fix. The scaladocs of `DownloadSupervisor`,
+    `SnapResumePlanner`, `SyncLifecycle` and `PivotRefresher` still describe the arms and the launch as core code: a
+    move or narrowing commit cannot edit comments (CQ-SNAP-016-34). SC-001: **not met**. `SNAPSyncController.scala`
+    is 2,518 lines (the class 1,747, the companion 771) against about 1,000; the biggest remaining members are
+    `commonSyncingArms`, `recoverAccountsComplete` (~290) and `selectAccountResume` (~130), so SC-001 needs M5b and the
+    remaining small slices. A full Mordor SNAP: **pending** (to be run by the user on the slice jar after merge; no node
+    run here).
 
 ## Coordinators
 
