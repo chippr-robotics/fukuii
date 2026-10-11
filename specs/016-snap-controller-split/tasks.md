@@ -555,6 +555,31 @@ only when every item on the per-slice checklist below holds.
     does not list them; they sit in `ShutdownApi` with the core's `onStop`; CQ-SNAP-016-26). #1555 (PR #1559) touches
     no M9 symbol. Stub test: `SyncLifecycleSpec` (eight cases). Mordor dormant/wake: **pending** (to be run by the user
     on the slice jar after merge; no node run here).
+- [x] T052a [LIFT] (before M10; one behaviour-preserving PR, no module move; the second restructure slice after
+  T050c) Lift the pivot-refresh, probe, unservable and restart arms out of `commonSyncingArms` (a local of `syncing()`)
+  into named core members, so M10 (and an M9b, if the user wants `DelayedRestart` in `SyncLifecycle`) are whole-member
+  moves. Characterization first. Resolves CQ-SNAP-016-27.
+  - As built: three commits after the characterization commit. (1) `SNAPPivotRefreshArmsCharacterizationSpec` (new,
+    Tier 1, 11 cases) pins what the existing suites left unasserted: the refresh-side `BootstrapComplete(None)` → full
+    restart; `PivotBootstrapFailed` → backtrack by `pivotBlockOffset` and `RetryBootstrapAtBlock` after 5 s, or
+    `RetryPivotRefresh` after 60 s when the backtracked block is not positive; an empty probe answer deferred and not
+    forwarded, a non-probe `AccountRange` forwarded while the probe is pending, a late probe timeout ignored; on PoS in
+    `StateHealing`, a counted `RetryPivotRefresh` keeps the #1555 unservable fallback (`retryRefreshUnservable`) and
+    counts toward the re-peg budget; `PivotStateUnservable` counted refresh, the debounce re-arm (no count, no refresh),
+    ignored outside the download phases; `DelayedRestart` restarts in `ByteCodeAndStorageSync` and is ignored in
+    `StateHealing`. Not pinned: the forced roll after `MaxProbeAttempts` and the `MaxConsecutivePivotRefreshes`
+    threshold (both need wall-clock time: `ProbeCooldownMs`, `MinPivotRestartInterval`). (2) Six arms become
+    `private[snap] lazy val` class members, each delegated from `commonSyncingArms` at its original position (the
+    T050c/P4d form), bodies verbatim: `delayedRestartArms`, `pivotStateUnservableArms`,
+    `pivotRefreshBootstrapCompleteArms` (`BootstrapComplete if pendingPivotRefresh.isDefined`),
+    `pivotRefreshBootstrapFailedArms` (`PivotBootstrapFailed if pendingPivotRefresh.isDefined`),
+    `pivotProbeTimeoutArms`, `retryPivotRefreshArms`. The two moved guards are pure reads of `pendingPivotRefresh`; a
+    message whose guard is false still falls through to the next arm. (3) Extract-method: the probe branch of the
+    `AccountRangeResponse` arm becomes `handlePivotProbeResponse(msg)`, called from the same case; the arm keeps the
+    probe-id match and the forwarding. No existing test changed; the `syncing()` composition is unchanged (T027 is the
+    order oracle). Not done: no fix (#1561's gaps stay); the `AccountRangeResponse` arm itself stays inline (M11's
+    response routing). Next: M10 (T052) moves the refresh members whole; `delayedRestartArms` and
+    `pivotStateUnservableArms` go with M9b or M10, as the user decides (CQ-SNAP-016-27's note).
 - [ ] T052 [M10] `PivotRefresher`. Run Platåberget across at least 3 refreshes, and Mordor.
 - [ ] T053 [M11] `DownloadSupervisor`. Check SC-001 (core ≤ about 1,000 lines). Run a full Mordor SNAP.
 
