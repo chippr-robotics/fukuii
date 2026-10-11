@@ -786,6 +786,66 @@ only when every item on the per-slice checklist below holds.
     2,033 lines (the class 1,262, the companion 771) against about 1,000, down from 2,518; the biggest remaining member
     is `commonSyncingArms`. Mordor and Platåberget restarts mid-account and mid-storage: **pending** (to be run by the
     user on the slice jar after merge; no node run here).
+- [x] T053c [LIFT] (after M5b, before T054/T055; one behaviour-preserving PR, no module move; the fourth and last lift
+  slice after T050c, T052a and T053a) Lift the `AccountRangeProgressCmd` checkpoint arm out of `commonSyncingArms` (a
+  local of `syncing()`) into a named core member, and extract the proactive pivot-roll trigger out of
+  `checkDownloadStagnationArms` into a named helper, so M5c and M7b are whole-member moves; record the user's
+  CQ-SNAP-016-26 decision for M9b. Characterization first. Resolves CQ-SNAP-016-31 and CQ-SNAP-016-36.
+  - As built: three commits after the characterization commit (pushed alone first as the pre-refactor Tier 1
+    baseline). (1) `SNAPFinalLiftCharacterizationSpec` (new, Tier 1, 12 cases, `SnapControllerFixture`, ManualTime,
+    synchronous log capture) pins what the existing suites left unasserted: the checkpoint arm drops a superseded
+    generation's snapshot (nothing persisted, swept or kept for the next launch) and a snapshot after accounts
+    complete; persists a durable snapshot with task files as the versioned checkpoint at the current root and pivot,
+    logs its range counts, and sweeps superseded task files once per record; keeps a durable snapshot without task
+    files and a non-durable one in memory only (the next launch resumes from them); and records the pivot the cursors
+    were last advanced against after an in-place refresh. The roll trigger: 100 blocks of age does not roll, 101 does;
+    50 blocks past the last committed refresh does not roll, 51 does; in `ByteCodeAndStorageSync` 80 % of contracts
+    done does not roll, 79 % does; `StateHealing` does not roll; no second roll while the probe is in flight. At SNAP
+    finalisation the state-sync child is stopped and the ChainDownloader is not. Already pinned and not repeated: the
+    roll firing and its probe commit and timeout (T023), `delayedRestartArms` in `AccountRangeSync` (T022) and in
+    `ByteCodeAndStorageSync` / `StateHealing` (T052a), the heap-watchdog stop in `onStop` and `stopSnapOnlySchedules`
+    (T025). Not pinned (no deterministic observation point): the wall-clock 30-s probe cooldown, the timers and the two
+    scheduler flags `stopSnapOnlySchedules` clears (`completedWithBackfill` drops every leaked tick),
+    `stopPeriodicLogging`, and the two flags `stopStateSyncChildren` clears. (2) CQ-SNAP-016-36: the arm becomes
+    `private[snap] lazy val accountProgressCheckpointArms`, body verbatim (re-indented), delegated from
+    `commonSyncingArms` at its original position (between the `progressAccountsSyncedArms` and
+    `accountTrieFinalizationArms` delegations) with `case msg if X.isDefinedAt(msg) => X(msg)`. Its header has no
+    guard, so `isDefinedAt` is a pure pattern match. Replacing the delegation line with the body gives back the old
+    `commonSyncingArms` line for line (checked mechanically); the expanded case headers are unchanged in content and
+    order. (3) CQ-SNAP-016-31: extract-method. The `[PIVOT-ROLL]` block becomes `private[snap] def
+    maybeProactivePivotRoll(): Unit`, 23 lines verbatim, called by `checkDownloadStagnationArms` at the same point
+    (after the debug line, before the zero-peer check and the asks). Nothing flows in or out (the block reads class
+    state only; the arm's local `Timeout` given is unused by it), so the statement order and every read and write are
+    unchanged; inlining the call gives back the old arm line for line. **Owner: `PivotRefresher`.** plan.md's M10 row
+    gives the pivot refresher the vars the trigger writes (`proactiveRollNeedsProbe`, the probe state) and the
+    `[PIVOT-ROLL]` tag; M7 gets only the `CheckDownloadStagnation` arm. CQ-SNAP-016-26: the user decided the stop
+    helpers belong to `SyncLifecycle`; both are already whole `def` members of the core, so no code change. No existing
+    test changed; the `syncing()` composition is unchanged (T027 is the order oracle). No fix. `verify.sh` OK on every
+    commit; the storage-reference baseline is unchanged (the core is outside `snap/controller/` and `snap/actors/`).
+    `SNAPSyncController.scala` is 2,055 lines (the class 1,216, the companion 771; +22 for two scaladocs and a
+    delegation). Next: M5c (T046c), M7b (T049b), M9b (T051b).
+- [ ] T046c [M5c] Byte-move `accountProgressCheckpointArms` (T053c) into `SnapResumePlanner`; the delegation line stays
+  in `commonSyncingArms` at its position. The arm reads and writes `launchedAccountGeneration`, `currentCarrySource`,
+  `lastSweptForRecord` (today `private var`) and `preserved*`, and calls `sweepSupersededTaskFiles` and
+  `accountsCompleteTaskFilePaths` (already the module's), so the narrowing commit adds the fields that stay in the core
+  (shared with the account launch and the refresher) to `SnapResumePlannerState`, with a justification line per
+  member. `lastSweptForRecord` is written by this arm only and may move with it. `SnapResumePlannerSpec` is extended
+  (`# extended-tests:`). Review: **vault** (the checkpoint format is frozen) + prism + forge.
+- [ ] T049b [M7b] Byte-move the stagnation tick and its roll trigger (T053c) to their owners:
+  `checkDownloadStagnationArms` into `StagnationWatchdog` (plan.md M7's `CheckDownloadStagnation` arm, with the
+  progress `ask`s and `ZeroPeerStagnationMs`), and `maybeProactivePivotRoll` into `PivotRefresher` (plan.md M10's
+  `[PIVOT-ROLL]` state), added to `PivotRefreshApi`, which the watchdog already names. `SnapServeWindowBlocks` moves with
+  the trigger or joins `PivotRefresherState`; `lastProactivePivotBlock` and `ProbeCooldownMs` then need not stay in
+  the core for the trigger (CQ-SNAP-016-31). The arm keeps its delegation line in `commonSyncingArms`. One PR or two
+  (one per module), each with its move and narrowing commits; the stub suites of both modules are extended.
+- [ ] T051b [M9b] Byte-move `delayedRestartArms` (T052a) and the stop helpers `stopSnapOnlySchedules` and
+  `stopStateSyncChildren` into `SyncLifecycle` (CQ-SNAP-016-26, user decision 2026-10-11). Prerequisite: split
+  `ShutdownApi` (`controller/SnapFinalization.scala`) so the core's `onStop` keeps its own declaration and the two
+  helpers get a narrow Api declared next to `SyncLifecycle`, which `SnapFinalization` then names. The narrowing commit
+  adds what the helpers write that stays in the core (`snapPeerEvictionStarted`, `snapServerPeersSchedulerStarted`,
+  `forceCompleteStorageSent`, `healingWalkLocalOnly`, the timer keys they cancel, `progressMonitor` if not already
+  reachable) to `SyncLifecycleState`, with a justification line per member. The `DelayedRestart` delegation line stays
+  in `commonSyncingArms`. `SyncLifecycleSpec` is extended; its two `notUsed` stop-helper stubs become real.
 
 ## Amendment 2026-10-11 — state capability boundary (after M11, before the coordinators)
 
