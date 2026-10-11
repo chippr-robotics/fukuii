@@ -917,10 +917,13 @@ class FooCoordinator(flatSlotStorage: FlatSlotStorage):
 ENV_REFS, COORD_REFS = 5, 7  # see STORAGE_REF_RE: comments excluded; `dataSource` in the import path counts
 
 
-def baseline(env_members=5, pinned=("stateStorage", "validatorFactory", "pathNodeStorageOpt"), refs=None, raw=None, just=None):
+def baseline(env_members=5, pinned=("stateStorage", "validatorFactory", "pathNodeStorageOpt"), refs=None, raw=None, just=None,
+             header=":", total=None):
+    refs = refs if refs is not None else {"controller/SnapControllerEnv.scala": ENV_REFS, "actors/FooCoordinator.scala": COORD_REFS}
     return json.dumps({
-        "env": {"members": env_members, "storage_members": list(pinned)},
-        "storage_refs": refs if refs is not None else {"controller/SnapControllerEnv.scala": ENV_REFS, "actors/FooCoordinator.scala": COORD_REFS},
+        "env": {"members": env_members, "header": header, "storage_members": list(pinned)},
+        "storage_refs_total": total if total is not None else sum(refs.values()),
+        "storage_refs": refs,
         "raw_imports": raw if raw is not None else {"actors/FooCoordinator.scala": ["com.chipprbots.ethereum.db.dataSource.DataSourceBatchUpdate"]},
         "justifications": just or {},
     }, indent=2) + "\n"
@@ -991,12 +994,20 @@ class StorageRatchetTests(unittest.TestCase):
         f = ratchet_fixture()
         self.env_change(f, ENV_BASE.replace("  def stateStorage: StateStorage\n", ""))
         out = self.bad(f, "env-freeze")
-        self.assertIn("member count: 4, below the baseline 5", out)
+        self.assertIn("member count: measured 4, but", out)
         self.assertIn("[storage-refs]", out)
 
-    def test_new_non_storage_member_passes_with_justified_count(self):
+    def test_new_non_storage_member_fails_even_with_baseline_raised_and_justified(self):
+        # "only goes down": no justification escape for env.members
         f = ratchet_fixture()
         self.env_change(f, ENV_BASE + "  def timeoutMs: Long\n", env_members=6, just={"env.members": "timeout for X, see #1"})
+        out = self.bad(f, "env-freeze")
+        self.assertIn("raises env.members from 5 to 6", out)
+        self.assertIn("above the ceiling 5", out)
+
+    def test_retyping_a_non_storage_member_keeps_the_count_and_passes(self):
+        f = ratchet_fixture()
+        self.env_change(f, ENV_BASE.replace("def syncConfig: SyncConfig", "def syncConfig: Long"))
         self.ok(f)
 
     def test_env_member_count_up_without_justification_fails(self):
@@ -1006,7 +1017,7 @@ class StorageRatchetTests(unittest.TestCase):
         g = ratchet_fixture()
         self.env_change(g, ENV_BASE + "  def timeoutMs: Long\n")
         out = self.bad(g, "env-freeze")
-        self.assertIn("above the baseline 5", out)
+        self.assertIn("above the ceiling 5", out)
 
     def test_baseline_cannot_grow_the_pinned_list(self):
         f = ratchet_fixture()
@@ -1021,17 +1032,18 @@ class StorageRatchetTests(unittest.TestCase):
         f.write(COORD, COORD_BASE + "  def g(s: StateStorage) = s\n")
         f.commit("feat: coordinator")
         out = self.bad(f, "storage-refs")
-        self.assertIn(f"actors/FooCoordinator.scala: {COORD_REFS + 1}, above the baseline {COORD_REFS}", out)
+        self.assertIn(f"actors/FooCoordinator.scala: measured {COORD_REFS + 1}, but {BASELINE} records {COORD_REFS}", out)
+        self.assertIn(f"total storage references {ENV_REFS + COORD_REFS + 1}, above the ceiling {ENV_REFS + COORD_REFS}", out)
 
     def test_count_increase_with_baseline_raised_and_stale_justification_fails(self):
         f = Fixture(branch="feat/coord", extra={ENV: ENV_BASE, COORD: COORD_BASE,
-                                                 BASELINE: baseline(just={"actors/FooCoordinator.scala": "old reason"})})
+                                                 BASELINE: baseline(just={"storage_refs.total": "old reason"})})
         f.write(COORD, COORD_BASE + "  def g(s: StateStorage) = s\n")
         f.write(BASELINE, baseline(refs={"controller/SnapControllerEnv.scala": ENV_REFS, "actors/FooCoordinator.scala": COORD_REFS + 1},
-                                   just={"actors/FooCoordinator.scala": "old reason"}))
+                                   just={"storage_refs.total": "old reason"}))
         f.commit("feat: coordinator")
         out = self.bad(f, "storage-refs")
-        self.assertIn("without a new `justifications", out)
+        self.assertIn("needs a new `justifications[\"storage_refs.total\"]` line", out)
 
     def test_count_decrease_with_lowered_baseline_passes(self):
         f = ratchet_fixture(branch="feat/coord")
@@ -1045,7 +1057,7 @@ class StorageRatchetTests(unittest.TestCase):
         f.write(COORD, COORD_BASE.replace(" = b.commit()", " = b"))
         f.commit("feat: coordinator")
         out = self.bad(f, "storage-refs")
-        self.assertIn(f"lower the entry in {BASELINE} to {COORD_REFS - 1}", out)
+        self.assertIn(f"set storage_refs[\"actors/FooCoordinator.scala\"] to {COORD_REFS - 1} in this PR (the ratchet only goes down", out)
 
     def test_comment_only_edit_does_not_move_the_count(self):
         f = ratchet_fixture(branch="feat/coord")
@@ -1058,8 +1070,8 @@ class StorageRatchetTests(unittest.TestCase):
         f.write(f"{SNAP}/actors/BarCoordinator.scala", "package x\nclass Bar(s: EvmCodeStorage)\n")
         f.commit("feat: bar")
         out = self.bad(f, "storage-refs")
-        self.assertIn("actors/BarCoordinator.scala: 1, above the baseline 0", out)
-        self.assertIn("a new file starts at 0", out)
+        self.assertIn(f"actors/BarCoordinator.scala: measured 1, but {BASELINE} records 0", out)
+        self.assertIn("above the ceiling", out)
 
     def test_new_file_added_to_baseline_with_justification_passes(self):
         refs = {"controller/SnapControllerEnv.scala": ENV_REFS, "actors/FooCoordinator.scala": COORD_REFS, "actors/BarCoordinator.scala": 1}
@@ -1068,7 +1080,10 @@ class StorageRatchetTests(unittest.TestCase):
         f.write(BASELINE, baseline(refs=refs))
         f.commit("feat: bar")
         self.bad(f, "storage-refs")  # no justification
-        f.write(BASELINE, baseline(refs=refs, just={"actors/BarCoordinator.scala": "split out of Foo; paid down by StateIngest"}))
+        f.write(BASELINE, baseline(refs=refs, just={"actors/BarCoordinator.scala": "a per-file line does not license a higher total"}))
+        f.commit("chore: justify the file")
+        self.bad(f, "storage-refs")
+        f.write(BASELINE, baseline(refs=refs, just={"storage_refs.total": "Bar talks to EvmCodeStorage until StateIngest, see #1"}))
         f.commit("chore: justify")
         self.ok(f)
 
@@ -1077,7 +1092,7 @@ class StorageRatchetTests(unittest.TestCase):
         f.git("rm", "-q", COORD)
         f.commit("feat: drop foo")
         out = self.bad(f, "storage-refs")
-        self.assertIn("(remove it)", out)
+        self.assertIn("(remove the entry)", out)
 
     def test_deleting_the_baseline_fails_and_bootstrap_passes(self):
         f = ratchet_fixture()
@@ -1151,6 +1166,87 @@ class StorageRatchetTests(unittest.TestCase):
         f.commit("feat: coordinator")
         out = self.ok(f)
         self.assertNotIn("[branch]", out)
+
+    # move-aware total
+    def test_refs_moving_into_a_new_file_pass_without_justification(self):
+        f = ratchet_fixture(branch="refactor/snap-016-c1")
+        f.write(COORD, COORD_BASE.replace("  def f(b: DataSourceBatchUpdate) = b.commit()\n", ""))
+        f.write(f"{SNAP}/actors/storage/SlotWriter.scala", "package x\ntrait SlotWriter:\n  def f(b: DataSourceBatchUpdate) = b.commit()\n")
+        f.write(BASELINE, baseline(refs={"controller/SnapControllerEnv.scala": ENV_REFS, "actors/FooCoordinator.scala": COORD_REFS - 2,
+                                         "actors/storage/SlotWriter.scala": 2}))
+        f.commit("refactor(snap): split slot writer")
+        out = self.ok(f)
+        self.assertIn("[storage] actors/storage/SlotWriter.scala: 2 (baseline 2, ceiling 0)", out)
+
+    def test_total_increase_with_new_total_justification_passes(self):
+        f = ratchet_fixture(branch="feat/coord")
+        f.write(COORD, COORD_BASE + "  def g(s: StateStorage) = s\n")
+        f.write(BASELINE, baseline(refs={"controller/SnapControllerEnv.scala": ENV_REFS, "actors/FooCoordinator.scala": COORD_REFS + 1},
+                                   just={"storage_refs.total": "Foo needs StateStorage for X until StateIngest, see #1"}))
+        f.commit("feat: coordinator")
+        self.ok(f)
+
+    def test_recorded_total_must_match_the_measurement(self):
+        f = ratchet_fixture(branch="feat/coord")
+        f.write(BASELINE, baseline(total=ENV_REFS + COORD_REFS + 3))
+        f.commit("chore: total")
+        out = self.bad(f, "storage-refs")
+        self.assertIn(f"total: measured {ENV_REFS + COORD_REFS}", out)
+
+    # env header and the widened storage-type predicate
+    def test_env_header_change_fails(self):
+        for hdr in ("private[snap] trait SnapControllerEnv extends HasStores:",
+                    "private[snap] trait SnapControllerEnv:\n  self: StoreAccess =>"):
+            f = ratchet_fixture()
+            self.env_change(f, ENV_BASE.replace("private[snap] trait SnapControllerEnv:", hdr))
+            out = self.bad(f, "env-freeze")
+            self.assertIn("header", out)
+
+    def test_widened_storage_type_predicate(self):
+        for t in ("TrieNodeStore", "Option[StorageBackend]", "Int => KvStores", "RocksDBHandle"):
+            f = ratchet_fixture()
+            self.env_change(f, ENV_BASE.replace("def syncConfig: SyncConfig", f"def syncConfig: {t}"))
+            out = self.bad(f, "env-freeze")
+            self.assertIn("storage-typed member `syncConfig", out)
+
+    def test_actor_command_types_are_not_storage(self):
+        f = ratchet_fixture()
+        self.env_change(f, ENV_BASE.replace("def syncConfig: SyncConfig", "def syncConfig: ActorRef[StorageRangeCoordinator.Command]"))
+        self.ok(f)
+
+    # bootstrap happens once
+    def test_missing_baseline_at_merge_base_after_staging_has_it_fails(self):
+        f = ratchet_fixture(with_baseline=False)
+        f.git("checkout", "-q", "main")
+        f.write(BASELINE, baseline())
+        f.commit("chore: baseline lands on staging")
+        f.git("tag", "-f", "base")
+        f.git("checkout", "-q", f.branch)
+        f.write(BASELINE, baseline())
+        f.commit("chore: stale branch re-adds it")
+        out = self.bad(f, "storage-refs")
+        self.assertIn("rebase onto base", out)
+
+    # the tokenizer and the count predicate
+    def test_count_tokenizer(self):
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("snap_verify", Path(__file__).resolve().parents[1] / "verify.py")
+        V = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(V)
+        cases = {
+            "/* c */ val a = env.stateStorage.get": 1,
+            'log.info("a // b", env.stateStorage.get)': 1,
+            "/* a /* b */ env.stateStorage */ val x = env.stateStorage": 1,
+            'val s = """// x\n""" + env.stateStorage // env.stateStorage': 1,
+            "val q = '\"'; val y = env.stateStorage // c": 1,
+            "/**\n  * env.stateStorage\n  */\nval z = a\n  * env.stateStorage": 1,  # a `*` continuation line is code
+            's"${env.stateStorage} // ${"x"}" + env.flatSlotStorage': 2,
+            "val e = '\\\\'; env.stateStorage": 1,
+            "env.stateStorageOf(root).get; val s = x.putSnapSyncStorageComplete(1)": 2,  # member accesses
+            "x.storageRoot; import a.actors.StorageRangeCoordinator; msg.StorageRanges": 0,
+        }
+        for text, n in cases.items():
+            self.assertEqual(V.storage_ref_count(text), n, text)
 
     def test_real_baseline_pins_the_eight_env_storage_members(self):
         b = json.loads((Path(__file__).resolve().parents[1] / "storage-baseline.json").read_text())

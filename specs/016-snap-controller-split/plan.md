@@ -451,16 +451,25 @@ reviewer re-runs it locally with `scripts/snap-split/verify.sh origin/staging`; 
 **For the PR head, once (env freeze ratchet, 2026-10-11 decision):**
 
 8. **Storage ratchet** against `scripts/snap-split/storage-baseline.json`. The copy at the merge-base with staging is
-   the ceiling, and HEAD's copy must equal the measured values, so a decrease is recorded in the same PR.
-   - `[env-freeze]`: `SnapControllerEnv` gains no storage-typed member. A member is storage-typed when its text after the
-     name matches `\w*Storage\b|DataSource|(?i:rocksdb)|\bBlockchain(?:Reader|Writer)\b|WriteBatch`, including inside
-     function and `Option` types. The 8 current members are pinned by name: `appStateStorage`, `stateStorage`,
-     `evmCodeStorage`, `flatSlotStorage`, `pathNodeStorageOpt`, `blockchainReader`, `blockchainWriter` and
-     `validatorFactory`. Removing a pinned member passes. Retyping a pinned member to another storage type passes.
-     Retyping any other member into a storage type fails. The env member count (18) only goes down.
-   - `[storage-refs]`: the per-file count of `STORAGE_REF_RE` in code (comments excluded) under `snap/controller/` and
-     `snap/actors/` only goes down. The regex is in `verify.py`. A new file starts at 0. Raising an entry, including
-     adding a new file, needs a new `justifications` line. The table prints on every run.
+   the ceiling. HEAD's copy must equal the measured values, so a decrease is recorded in the same PR. The baseline
+   bootstraps once: when staging has the file, a merge-base without it fails, and the PR must rebase.
+   - `[env-freeze]`: `SnapControllerEnv` never grows. Its member count (18) and its header (parents and self-type) are
+     pinned, and no justification can raise either. A member is storage-typed when an identifier in its text after the
+     name matches `Storage|Stores?$|DataSource|(?i:rocksdb)|^Blockchain(?:Reader|Writer)$|WriteBatch`, including inside
+     function and `Option` types. Actor names ending in `Coordinator`, `Worker` or `Actor` are excluded.
+     - The 8 current storage-typed members are pinned by name: `appStateStorage`, `stateStorage`, `evmCodeStorage`,
+       `flatSlotStorage`, `pathNodeStorageOpt`, `blockchainReader`, `blockchainWriter` and `validatorFactory`.
+     - Removing a pinned member passes.
+     - Retyping a pinned member to another storage type passes.
+     - Retyping any other member into a storage type fails.
+   - `[storage-refs]`: `STORAGE_REF_RE` (in `verify.py`) is counted in code under `snap/controller/` and `snap/actors/`.
+     A small tokenizer drops comments but keeps string literals. The rule is move-aware:
+     - The total must not rise. Per-file counts may move between files, so a split slice that moves references into a
+       new module file needs no justification.
+     - A higher total needs a new `justifications["storage_refs.total"]` line.
+     - The table prints on every run.
+     - The metric is a tripwire, not a proof. It matches identifiers and `.xStorage…` member accesses, so a determined
+       alias can evade it, and reviewers still read the diff.
    - `[raw-import]`: no new import from `org.rocksdb` or `…db.dataSource`, and no new imported name containing
      `WriteBatch` or inline fully qualified reference, in those directories. The baselined files keep only their
      listed imports. There is no escape.
