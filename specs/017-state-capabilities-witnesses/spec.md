@@ -5,10 +5,15 @@
 **Created**: 2026-10-11
 
 **Status**: **Draft (stub).** Approved as a stub by the user on 2026-10-11. **Revised 2026-10-11** after the user's
-review of staging 0.9.59: the recorder is one `MptStorage` decorator at `BlockExecution.buildInitialWorld` (DC-3), the
-BAL prefetcher stays enabled (DC-2), and DC-6 to DC-10 name the gaps the decorator alone does not cover. To be fleshed
-out with `/speckit-specify` and `/speckit-clarify`, then `/speckit-plan` and `/speckit-tasks`. The Design constraints
-section below is binding on that later work.
+review of staging 0.9.59: the recorder is one `MptStorage` decorator at `BlockExecution.buildInitialWorld` (DC-3),
+the BAL prefetcher stays enabled (DC-2), and DC-6 to DC-10 name the gaps the decorator alone does not cover.
+**Revised again 2026-10-11 (Ethereum roadmap alignment)**: ETH mainnet is the design driver. The witness is now
+specified as the execution-specs `ExecutionWitness` served over `debug_executionWitness` (DC-11, DC-16), the model is
+free of MPT-specific types ahead of EIP-7864 (DC-12), every validity-relevant read is recorded (DC-13), BALs give a
+self-check (DC-14), and the stateless core keeps a dependency boundary that spec 018 (zkVM guest) builds on (DC-15).
+To be fleshed out with `/speckit-specify`
+and `/speckit-clarify`, then `/speckit-plan` and `/speckit-tasks`. The Design constraints section below is binding
+on that later work.
 
 **Depends on**: spec 016's amendment of 2026-10-11, which delivers `StateIngest` (T055) and the env freeze ratchet
 (T054). **Spec 017 starts after spec 016 completes** (user decision: 017 comes after 016).
@@ -68,6 +73,27 @@ witness. The dead `vm.external.*` config that `VmConfig` still parses is removed
 
 ## Strategic motivation
 
+**ETH mainnet is the design driver.** *(Every roadmap statement in this section, in DC-11 to DC-16 and in spec 018 is
+unverified as of this stub and is to be re-verified at `/speckit-plan` time: the EF L1-zkEVM roadmap's asks, FOCIL
+(EIP-7805) and frame transactions (EIP-8141) as Hegota must-ships, Ere, and the phase numbering. Treat them as the
+working hypothesis, not as settled.)* The decisive input is the Ethereum Foundation's L1-zkEVM roadmap (2026): L1 is
+moving toward accepting zkEVM proofs as an alternative to re-execution for attesters, with mandatory execution proofs
+on the longer-range fork plan. The pipeline is: stateful EL → `ExecutionWitness` → stateless guest program → zkVM →
+prover → CL verifier. The roadmap assigns EL clients two projects:
+
+1. **Witness production.** Generate execution witnesses for the last N blocks (N set by the client's reorg
+   tolerance) and serve them over `debug_executionWitness`. The witness format is specified in execution-specs, with
+   tests, and the RPC in execution-apis. Reth is named as the reference implementation, and Kona already consumes the
+   endpoint in production.
+2. **A guest program.** A stateless validation program built reproducibly for a standardized bare-metal RISC-V target.
+   That is spec 018, which builds on this spec's `StatelessExecutor`.
+
+This spec is fukuii's delivery of project 1. It also positions fukuii for the other roadmap items that change the
+witness: block-level access lists (EIP-7928, shipped in Amsterdam), FOCIL (EIP-7805) and frame
+transactions (EIP-8141), reported as Hegota must-ships (re-verify at planning), and the binary state tree (EIP-7864).
+
+The original motivations still hold:
+
 - **Independent-client verification**: re-execute history from witnesses and compare post-state roots with another
   client, block by block.
 - **A verifying-executor mode**: execute a block from its witness alone, without the full state.
@@ -85,6 +111,12 @@ witness. The dead `vm.external.*` config that `VmConfig` still parses is removed
 - G-4 A `SyncMode` ADT (`Snap` / `Full` / `Backfill`) in `SyncController` that decides when witness capture is
   possible.
 - G-5 Opaque `Address`, `TrieKey` (hashed trie key) and `Wei` in the new signatures.
+- G-6 `debug_executionWitness` served for the last N blocks, in the execution-apis shape, conformant with the
+  execution-specs `ExecutionWitness` format (DC-11, DC-16).
+- G-7 A witness model and recorder that are not tied to the hexary MPT, so EIP-7864 changes a backend, not the
+  design (DC-12).
+- G-8 A `StatelessExecutor` with a dependency boundary narrow enough for spec 018 to compile it for a zkVM target
+  (DC-15).
 
 ## Non-goals
 
@@ -98,6 +130,13 @@ witness. The dead `vm.external.*` config that `VmConfig` still parses is removed
   `Difficulty`, `TotalDifficulty`) are reused, not reworked.
 - **NG-5 Consensus changes.** Witness capture observes execution; it never changes a state root, gas figure or hash.
 - **NG-6 Witness capture during SNAP.** See DC-5.
+- **NG-7 The zkVM guest program.** Spec 018 owns it. This spec only keeps the stateless core buildable for it
+  (DC-15).
+- **NG-8 A proof-verifying validation mode.** Accepting a zk proof in place of re-execution is the roadmap's end
+  state, but it is out of scope here. `StateAccess` and `SyncMode` must not preclude it: a later spec adds block
+  validation as re-execute *or* verify-proof.
+- **NG-9 The binary state tree itself.** EIP-7864 is not implemented here. DC-12 only keeps the witness model from
+  hard-coding the MPT.
 
 ## Scope
 
@@ -111,8 +150,11 @@ witness. The dead `vm.external.*` config that `VmConfig` still parses is removed
      `InMemoryWorldStateProxy` over a `WitnessMptStorage` (an in-memory hash → node map), with witness-backed code and
      a witness-backed ancestor-hash function. `MptStorage.get` already throws `MissingRootNodeException` for an absent
      node; that is the "witness incomplete" error;
-   - a **differential test against geth's `debug_executionWitness`** on Sepolia blocks: same block, byte-comparable
-     witness content, same post-state root.
+   - a **differential test against reth's and geth's `debug_executionWitness`** on Sepolia blocks: same block,
+     byte-comparable witness content, same post-state root. Reth is the roadmap's reference implementation; geth is
+     the second independent check. Once execution-specs ships witness fixtures, they replace hand-picked blocks as the
+     primary oracle (DC-11);
+   - the **`debug_executionWitness` RPC** for the last N blocks (DC-16).
 3. **Backfill mode** (G-3, R6): produces witnesses for historical blocks. It is scheduled only after SNAP reaches
    head and never runs concurrently with state sync.
 4. **`SyncMode` ADT** (G-4, R3): `Snap` / `Full` / `Backfill`. It **lives in `SyncController`**, not in the SNAP
@@ -187,6 +229,64 @@ next.
 `buildInitialWorld`) are recorded exactly like blocks over the backing storage, because the recorder is installed
 after the `staged.fold(...)(_.storage)` match (DC-3). A test captures one block on each path.
 
+**DC-11 — The witness format is execution-specs', not ours.** The serialized witness follows the `ExecutionWitness`
+defined in execution-specs, and the RPC follows execution-apis. Until those are final, fukuii matches reth's
+`debug_executionWitness` output, and the plan tracks the upstream issues the EF milestone pages cite: execution-specs
+#1590 (the stateless validation API) and #1865 (state-access tracking for earlier forks). Verify both before planning.
+Fukuii never ships a private witness format. Internal storage may differ (DC-12, content-addressed nodes), but the
+format on the wire is the upstream one, and the serializer is tested against upstream fixtures as soon as they exist.
+Divergences found against reth or geth are filed upstream, not papered over.
+
+**DC-12 — No MPT-specific types in the witness model or wire format.** EIP-7864 replaces the hexary Keccak MPT with
+a binary tree and a different hash, which changes what a witness contains (stems and binary proofs instead of hexary
+nodes). So the witness model and `StatelessExecutor`'s input do not bake in MPT-specific types, and the wire format is
+the upstream `ExecutionWitness` (DC-11), which is itself commitment-neutral. That is the whole requirement. This
+spec does **not** introduce an abstract recorder or commitment interface with a single implementation (YAGNI):
+`RecordingMptStorage` stays a concrete `MptStorage` decorator (DC-3). The commitment abstraction is extracted when
+EIP-7864 code exists and there are two implementations to abstract over. Where the keys are already distinct, the
+MPT key space (`TrieKey`) stays an opaque type (G-5), so stem/suffix keys can be added later without mixing them. No
+binary-tree code lands here (NG-9).
+
+**DC-13 — Every validity-relevant read is recorded, not just EVM reads.** A stateless verifier must be able to
+reproduce *every* check that decides a block's validity, so every state read that check makes goes through the
+recorded world: system calls (beacon root, history storage), withdrawals, EIP-7685 requests, and **post-execution
+checks**. The known forward case is FOCIL (EIP-7805, reported as a Hegota must-ship; re-verify at planning). As currently specified, the EL checks after
+execution that each inclusion-list transaction missing from the block could not have been appended, which reads
+sender nonce and balance from the post-state. When FOCIL lands, those reads must be recorded too. Re-verify against
+the EIP text at planning time. Frame transactions (EIP-8141, reported as a Hegota must-ship; re-verify at planning) execute through the same world and
+need no special handling, but a frame-transaction block must be in the differential test set once Hegota devnets
+exist.
+
+**DC-14 — BALs give a free self-check.** On Amsterdam-and-later ETH blocks, the block-level access list (EIP-7928)
+is consensus-validated and names every account and slot the block touches. In capture mode, every BAL account and
+slot must have a resolvable proof path in the witness; a missing one is a recorder bug and fails loudly. This catches
+silent witness gaps on mainnet blocks without a reference client. ETC and pre-Amsterdam blocks have no BAL and rely
+on DC-2's warm-equals-cold test and the differential test.
+
+**DC-15 — The stateless core has a narrow dependency boundary.** `StatelessExecutor` and its transitive closure
+(the EVM in `vm/`, `mpt/`, `rlp`, the chain spec, the witness model) must not gain any new dependency on RocksDB,
+Pekko actors or streams, Cats Effect, Monix, or other JVM-runtime-only libraries. Its public API is pure: block bytes,
+witness bytes and chain spec in, `Either[Error, postRoot]` out, with no I/O and no threads. Existing JVM-only
+dependencies in that closure (Pekko `ByteString` across `vm`, `mpt`, `domain`, `rlp`, `bytes` and `crypto`;
+BouncyCastle hex and crypto) are **inventoried, not removed**, as input to spec 018. A dependency check in the
+style of DC-4 enforces "no new ones". Rationale: spec 018 compiles this closure for a bare-metal RISC-V zkVM target.
+Keeping it clean costs nothing now and is expensive to recover later.
+
+**DC-16 — RPC retention and serving.** `debug_executionWitness` is bounded by what can be produced, and that depends
+on whether witnesses are stored.
+- **Without stored witnesses (the default, per DC-5).** A witness is regenerated on demand by re-executing the block,
+  which needs the block's **parent state**. With basic pruning fukuii keeps only about 64 blocks of state history, so
+  N is bounded by that state-history window. Past it the RPC returns an explicit "not available" error, never a
+  partial witness.
+- **With stored witnesses.** Serving a larger N requires capture on **plus** the slow-tier witness store (DC-5's
+  `Full` or `Backfill` mode). That is an explicit operator opt-in. It squares with DC-5's default-off: the default
+  node serves only the state-history window, and a node that wants the roadmap's N (at least the maximum reorg depth
+  on that chain) enables capture. The default N on ETH mainnet is OQ-8.
+- **Never blocks import, by mechanism.** On-demand regeneration runs on a **bounded, dedicated executor** (fixed
+  thread count, bounded queue, per-request timeout) that is separate from block import's execution context and from
+  the RPC dispatcher. A full queue rejects the request with an explicit error. Regeneration reads state read-only and
+  takes no lock that import takes (FR-020 and the test in SC-009).
+
 ## User Scenarios & Testing *(mandatory)*
 
 ### User Story 1 — A verifier re-executes a block from its witness (Priority: P1)
@@ -206,9 +306,10 @@ compare the post-state roots with the imported headers.
 2. **Given** a witness with one node removed, **When** the `StatelessExecutor` runs, **Then** it returns a `Left`
    naming the missing node, never a wrong root.
 
-### User Story 2 — Witnesses match geth's (Priority: P1)
+### User Story 2 — Witnesses match the reference clients' (Priority: P1)
 
-A maintainer runs the differential test against geth's `debug_executionWitness` on the same Sepolia blocks.
+A maintainer runs the differential test against reth's (the roadmap reference) and geth's `debug_executionWitness`
+on the same Sepolia blocks.
 
 **Why this priority**: an independent reference is the only check that the recorder misses nothing.
 
@@ -217,8 +318,10 @@ A maintainer runs the differential test against geth's `debug_executionWitness` 
 
 **Acceptance Scenarios**:
 
-1. **Given** the same block, **When** both clients produce a witness, **Then** fukuii's witness contains every node
-   and code blob in geth's, and both execute to the same post-state root.
+1. **Given** the same block, **When** fukuii and a reference client produce a witness, **Then** fukuii's witness
+   contains every node and code blob in the reference's, and both execute to the same post-state root.
+2. **Given** execution-specs witness fixtures exist, **When** the fixture suite runs, **Then** fukuii's serialized
+   witness matches the fixture (DC-11).
 
 ### User Story 3 — SNAP is unaffected (Priority: P1)
 
@@ -259,6 +362,11 @@ After SNAP reaches head, an operator schedules backfill to produce witnesses for
 - A crash during SNAP finalization, on each scheme (DC-1).
 - A reorg or rollback across captured blocks.
 - Capture switched on during `Snap` mode (US-3).
+- An Amsterdam block whose BAL names an account the witness lacks (DC-14).
+- A block whose validity depends on a post-execution check, such as FOCIL inclusion-list satisfaction once Hegota is
+  specified (DC-13).
+- A frame-transaction block (EIP-8141), once Hegota devnets exist (DC-13).
+- A `debug_executionWitness` request for a block older than the retention window (DC-16).
 
 ## Requirements *(mandatory)*
 
@@ -277,8 +385,8 @@ After SNAP reaches head, an operator schedules backfill to produce witnesses for
 - **FR-005** The system MUST provide a `StatelessExecutor` `(block, witness, chainSpec) => Either[Error, postRoot]`
   built on the existing `InMemoryWorldStateProxy` over a `WitnessMptStorage`, with witness-backed code and ancestor
   hashes. An incomplete witness surfaces as `MissingRootNodeException`, mapped to the error side.
-- **FR-006** A differential test MUST compare fukuii's witnesses with geth's `debug_executionWitness` on Sepolia
-  blocks.
+- **FR-006** A differential test MUST compare fukuii's witnesses with reth's and geth's `debug_executionWitness` on
+  Sepolia blocks, and MUST adopt execution-specs witness fixtures as the primary oracle once they exist.
 - **FR-007** `SyncController` MUST hold a `SyncMode` ADT (`Snap` / `Full` / `Backfill`). Witness capture MUST be
   constructible only in `Full` or `Backfill`. A reorg or rollback across captured blocks MUST invalidate the affected
   witnesses and emit revert events.
@@ -290,7 +398,25 @@ After SNAP reaches head, an operator schedules backfill to produce witnesses for
 - **FR-012** Witness capture MUST default to off (DC-5).
 - **FR-013** Witness capture MUST NOT change any state root, gas figure, receipt or hash (constitution I). ETC/Mordor
   execution MUST be byte-for-byte unchanged with capture off. [NEEDS CLARIFICATION: whether ETC needs witness capture
-  at all in the first release, or only ETH/Sepolia.]
+  at all in the first release. Recommended default after the roadmap review: ETH/Sepolia first, because ETH is the
+  design driver and the L1-zkEVM effort is ETH-only. ETC follows, since the same code serves both chains and ETC
+  witnesses feed proof-backed sync and bridge work later.]
+- **FR-014** The system MUST serve `debug_executionWitness` for the window DC-16 defines (the state-history window
+  by default; at least N with capture and the slow-tier store opted in), in the execution-apis shape, returning an
+  explicit error (never a partial witness) outside it.
+- **FR-015** The serialized witness MUST follow the execution-specs `ExecutionWitness` format (DC-11). No
+  fukuii-private wire format.
+- **FR-016** The witness model and wire format MUST NOT contain MPT-specific types (DC-12). The recorder stays the
+  concrete `RecordingMptStorage` (DC-3); no abstract recorder or commitment interface is introduced until EIP-7864
+  code exists.
+- **FR-017** Every state read that a block-validity check depends on, including system calls, withdrawals, requests
+  and post-execution checks, MUST go through the recorded world (DC-13).
+- **FR-018** In capture mode on BAL-carrying blocks, every BAL account and slot MUST have a resolvable proof path in
+  the witness; otherwise capture fails loudly (DC-14).
+- **FR-019** `StatelessExecutor`'s transitive closure MUST NOT gain new JVM-runtime-only dependencies, enforced by a
+  dependency check; its public API MUST be pure (DC-15).
+- **FR-020** On-demand witness regeneration MUST run on a bounded, dedicated executor separate from block import and
+  the RPC dispatcher, with a bounded queue and a per-request timeout (DC-16).
 
 ### Key Entities
 
@@ -317,6 +443,16 @@ After SNAP reaches head, an operator schedules backfill to produce witnesses for
 - **SC-004** The DC-4 dependency check is green, and a SNAP run with capture configured on writes no witness data.
 - **SC-005** A crash injected during SNAP finalization, on each scheme, resumes without execution ever reading
   undurable state (DC-1).
+- **SC-006** `debug_executionWitness` responses for the differential test set are accepted by a reth-compatible
+  consumer (stateless re-execution of the response reaches the header's state root), and a hive test covers the
+  endpoint.
+- **SC-007** Over a Sepolia capture run of at least 10,000 Amsterdam blocks, the BAL self-check (DC-14) reports zero
+  gaps.
+- **SC-008** The DC-15 dependency check is green, and the inventory of existing JVM-only dependencies in the stateless
+  closure is published as an input to spec 018.
+- **SC-009** Under a saturating load of `debug_executionWitness` regeneration requests, block import time
+  (`[IMPORT-TIMING]`) does not regress beyond the agreed tolerance, excess requests are rejected with the explicit
+  error, and the import path is shown to share no executor or lock with regeneration.
 
 ## Assumptions
 
@@ -328,8 +464,11 @@ After SNAP reaches head, an operator schedules backfill to produce witnesses for
   are out of scope.
 - The slow-tier storage of #1483 exists or lands first; if not, the witness node store's placement is re-planned.
 - `[STORAGE-PERF]` and `[IMPORT-TIMING]` are the existing instrumentation and are reused, not replaced.
-- `beacon` owns the ETH execution side, `forge` signs off that ETC is unchanged, and `vault` reviews the stores and
-  durability.
+- `beacon` owns the ETH execution side, `forge` signs off that ETC is unchanged, `vault` reviews the stores and
+  durability, and `conduit` owns the `debug_executionWitness` endpoint.
+- Roadmap facts were read on 2026-10-11 from the EF L1-zkEVM roadmap (Ethereum Magicians), the EF EL milestone pages
+  (HackMD) and the Protocol Cluster's Hegota priorities (FOCIL and EIP-8141 must-ship, reported 2026-09-08). They move
+  quickly, so re-verify at `/speckit-plan` time.
 
 ## Open Questions
 
@@ -337,11 +476,34 @@ After SNAP reaches head, an operator schedules backfill to produce witnesses for
   reuse `[STORAGE-PERF]` (ingest) and `[IMPORT-TIMING]` (execution) rather than add a new timer family.
 - **OQ-2 Witness storage sizing.** Bytes per block for Sepolia and ETC mainnet, the retention policy, and the slow-tier
   capacity it needs.
-- **OQ-3** Whether ETC needs witness capture in the first release (FR-013).
+- **OQ-3** Whether ETC needs witness capture in the first release (FR-013). Recommended: ETH first.
 - **OQ-4** Whether witness capture covers block preparation: `BlockPreparator` (around line 978) builds its own world
   over `getReadOnlyMptStorage()` for the proposer / Engine API path, outside `buildInitialWorld`.
+- **OQ-5** The current state of the execution-specs `ExecutionWitness` definition and fixtures, and whether the
+  roadmap's proposed zk-optimized successor endpoint has replaced `debug_executionWitness`. If it has, FR-014 targets
+  the successor and keeps `debug_executionWitness` for compatibility.
+- **OQ-6** The value of N (DC-16) per chain, and whether witnesses older than the state-history window are retained
+  on the slow tier (opt-in) or simply unavailable. This ties into OQ-2.
+- **OQ-7** Whether fukuii joins the EL zkEVM working group now (recommended), so witness-format decisions are made
+  with it, not discovered after.
+- **OQ-8** The default N on ETH mainnet: the state-history window only (about 64 blocks under basic pruning), or a
+  larger default that would require capture and the slow-tier store on by default and so reopen DC-5.
+
+## Related specs
+
+- **Spec 016** (SNAP controller split and its 2026-10-11 amendment): delivers `StateIngest`; prerequisite.
+- **Spec 018** (zkVM guest program): compiles this spec's `StatelessExecutor` for a bare-metal RISC-V zkVM target.
+  Depends on DC-15 and on G-2's executor existing and passing the differential test on the JVM first.
 
 ## Known tasks (seed for /speckit-tasks)
+
+- **T-001 (017 planning task, DC-13 bypass audit).** Confirm that every system call (EIP-4788 beacon root, EIP-2935
+  history storage, EIP-7002, EIP-7251, EIP-8282), every withdrawal and every request computation runs through the world
+  built in `BlockExecution.buildInitialWorld`, and not through a direct `blockchainReader` or state-root read, which
+  would bypass the recorder. Method: trace each call site from `BlockExecution`, and grep the block-execution closure
+  for `blockchainReader` / `getStateRoot`-style reads outside the world. Any bypass found is a **must-fix before witness
+  capture ships**, and is listed in the plan with a test that captures a block exercising it (SC-004's differential
+  test must include one such block per system call).
 
 - **T-000 (chore, prerequisite or standalone).** Remove the dead external-VM config: `VmConfig` still parses
   `vm.external.*` (`VmMode.External`, `VmConfig.ExternalConfig`, `parseExternalConfig` in `utils/Config.scala`), while
