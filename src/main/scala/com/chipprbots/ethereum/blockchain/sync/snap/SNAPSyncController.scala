@@ -885,6 +885,38 @@ private class SNAPSyncControllerImpl(
       Behaviors.same
   }
 
+  /** The proactive pivot roll's trigger (spec 016 T053c, CQ-SNAP-016-31), extracted verbatim from
+    * `checkDownloadStagnationArms`, which calls it at the same point of the 30-s stagnation tick: in the two download
+    * phases, roll the pivot in place (with a readiness probe) once it is more than `SnapServeWindowBlocks` behind the
+    * SNAP peers' best block, unless a roll landed within 50 blocks, a probe is in flight or pending commit, storage is
+    * at least 80% done, or the 30-s probe cooldown has not elapsed. Pivot-refresh policy (`[PIVOT-ROLL]`): M7b moves it
+    * to `PivotRefresher` and the arm to `StagnationWatchdog`.
+    */
+  private[snap] def maybeProactivePivotRoll(): Unit =
+    // Proactive pivot roll: keep pivot within core-geth's 128-block snapshot window.
+    if (currentPhase == AccountRangeSync || currentPhase == ByteCodeAndStorageSync) &&
+      pivotBlock.isDefined
+    then
+      currentNetworkBestFromSnapPeers().foreach { networkBest =>
+        val pivotAge = networkBest - pivotBlock.get
+        val recentlyRolled = lastProactivePivotBlock.exists(last => (networkBest - last) <= BigInt(50))
+        val storageLateStage =
+          currentPhase == ByteCodeAndStorageSync && storageContractProgressPct >= 0.80
+        if pivotAge > SnapServeWindowBlocks && !recentlyRolled &&
+          pivotProbeRequestId.isEmpty && pendingProbeCommit.isEmpty &&
+          !storageLateStage
+        then
+          val now = System.currentTimeMillis
+          if now - lastProbeAttemptMs >= ProbeCooldownMs then
+            ctx.log.info(
+              s"[PIVOT-ROLL] Proactive pivot roll: pivot=${pivotBlock.get} " +
+                s"network=$networkBest age=$pivotAge — readiness probe will fire after header fetch"
+            )
+            proactiveRollNeedsProbe = true
+            lastProbeAttemptMs = now
+            refreshPivotInPlace("proactive pivot roll")
+      }
+
   /** A `commonSyncingArms` arm lifted into a class member (spec 016 restructure, CQ-SNAP-016-18/19), body unchanged:
     * `CheckDownloadStagnation`, the 30-s stagnation tick: the proactive pivot roll, the zero-SNAP-peer log and the
     * progress `ask`s whose answers `accountRangeArms` and `byteCodeAndStorageArms` handle. `commonSyncingArms`
@@ -900,29 +932,7 @@ private class SNAPSyncControllerImpl(
         s"Stagnation check: phase=$currentPhase, stalledMs=${System.currentTimeMillis() - lastStorageProgressMs}"
       )
 
-      // Proactive pivot roll: keep pivot within core-geth's 128-block snapshot window.
-      if (currentPhase == AccountRangeSync || currentPhase == ByteCodeAndStorageSync) &&
-        pivotBlock.isDefined
-      then
-        currentNetworkBestFromSnapPeers().foreach { networkBest =>
-          val pivotAge = networkBest - pivotBlock.get
-          val recentlyRolled = lastProactivePivotBlock.exists(last => (networkBest - last) <= BigInt(50))
-          val storageLateStage =
-            currentPhase == ByteCodeAndStorageSync && storageContractProgressPct >= 0.80
-          if pivotAge > SnapServeWindowBlocks && !recentlyRolled &&
-            pivotProbeRequestId.isEmpty && pendingProbeCommit.isEmpty &&
-            !storageLateStage
-          then
-            val now = System.currentTimeMillis
-            if now - lastProbeAttemptMs >= ProbeCooldownMs then
-              ctx.log.info(
-                s"[PIVOT-ROLL] Proactive pivot roll: pivot=${pivotBlock.get} " +
-                  s"network=$networkBest age=$pivotAge — readiness probe will fire after header fetch"
-              )
-              proactiveRollNeedsProbe = true
-              lastProbeAttemptMs = now
-              refreshPivotInPlace("proactive pivot roll")
-        }
+      maybeProactivePivotRoll()
 
       val snapPeerCount = peersToDownloadFrom.values.count(_.peerInfo.remoteStatus.supportsSnap)
       val totalPeerCount = peersToDownloadFrom.size
@@ -990,6 +1000,70 @@ private class SNAPSyncControllerImpl(
     case DelayedRestart(reason) =>
       if currentPhase == AccountRangeSync || currentPhase == ByteCodeAndStorageSync then restartSnapSync(reason)
       else Behaviors.same
+  }
+
+  /** A `commonSyncingArms` arm lifted into a class member (spec 016 T053c, CQ-SNAP-016-36), body unchanged:
+    * `AccountRangeProgressCmd`, the account coordinator's progress snapshot: the superseded-generation and
+    * accounts-complete drops, the `preserved*` update and the durable `AccountResumeCheckpoint` write with its
+    * once-per-record task-file sweep. `commonSyncingArms` delegates to it at the arm's original position, so the arm
+    * order is unchanged.
+    */
+  private[snap] lazy val accountProgressCheckpointArms: PartialFunction[Command, Behavior[Command]] = {
+    case AccountRangeProgressCmd(progress, taskFiles, durable, generation) =>
+      if generation < launchedAccountGeneration then
+        // A superseded coordinator's PostStop snapshot arriving after its successor launched: the successor already
+        // carries newer (or equal) progress, and this one may describe files the successor does not own.
+        ctx.log.debug(s"Dropping account progress snapshot from superseded coordinator generation $generation")
+      else if accountsComplete then
+        // The account phase is done and its checkpoint cleared; a late PostStop snapshot must not resurrect it.
+        ctx.log.debug("Dropping account progress snapshot after accounts complete")
+      else
+        preservedRangeProgress = progress
+        preservedTaskFiles = taskFiles
+        // Track the pivot the cursors were last advanced against. Drift is a perf heuristic only (see
+        // MaxPreservedPivotDistance); measuring it from the FIRST pivot of a multi-day account phase would discard
+        // every partial range once the phase itself outlasted the cap.
+        pivotBlock.orElse(preservedAtPivotBlock).foreach(p => preservedAtPivotBlock = Some(p))
+        if durable then
+          val completedCount = progress.count { case (last, next) =>
+            // A range is "complete" when next >= last (entire keyspace traversed)
+            BigInt(1, next.toArray.padTo(32, 0.toByte)) >= BigInt(1, last.toArray.padTo(32, 0.toByte))
+          }
+          // Persist the versioned checkpoint under a FIXED key (not keyed by root): a process restart selects a new
+          // pivot, and a root-keyed record was never found again (2026-10-05 22:12 restart began from zero).
+          (stateRoot, preservedAtPivotBlock, taskFiles) match
+            case (Some(sr), Some(pivot), Some(files)) =>
+              appStateStorage
+                .putSnapAccountResumeCheckpoint(
+                  AccountResumeCheckpoint.encode(AccountResumeCheckpoint(sr.value, pivot, progress, files))
+                )
+                .commit()
+              ctx.log.info(
+                s"Account resume checkpoint persisted: ${progress.size} ranges ($completedCount fully complete), " +
+                  s"${files.storageCount} storage-task entries, ${files.codeHashesCount} codeHashes, pivot $pivot"
+              )
+              // The persisted record now references this coordinator's own files, so the files it was carried
+              // from (and any older ones) are no longer needed for a resume. Delete them only NOW — never before
+              // this commit, so a crash between the copy and here still resumes from the previous record. Keep the
+              // carry source of the live generation (a supervisor restart re-copies from it), whatever the
+              // in-memory snapshot points at, and the accounts-complete handoff files.
+              if !lastSweptForRecord.contains(files.storagePath) then
+                lastSweptForRecord = Some(files.storagePath)
+                sweepSupersededTaskFiles(
+                  keep = SNAPSyncController.taskFilePaths(files) ++
+                    currentCarrySource.toSet.flatMap(SNAPSyncController.taskFilePaths) ++
+                    preservedTaskFiles.toSet.flatMap(SNAPSyncController.taskFilePaths) ++
+                    accountsCompleteTaskFilePaths,
+                  reason = "new account resume checkpoint"
+                )
+            case _ =>
+              // Expected for the PostStop snapshot of a coordinator stopped by restartSnapSync (root already
+              // cleared); the progress is kept in memory and persisted by the next coordinator's checkpoint.
+              ctx.log.info(
+                s"Account resume checkpoint kept in memory only (stateRoot=${stateRoot.isDefined}, " +
+                  s"pivot=${preservedAtPivotBlock.isDefined}, taskFiles=${taskFiles.isDefined})"
+              )
+      Behaviors.same
   }
 
   /** Dispatch order (spec 016 P4, research.md R4b): `syncingGuardArms` (the path-publish and header-hold arms with
@@ -1075,61 +1149,9 @@ private class SNAPSyncControllerImpl(
       case msg if progressAccountsSyncedArms.isDefinedAt(msg) =>
         progressAccountsSyncedArms(msg)
 
-      case AccountRangeProgressCmd(progress, taskFiles, durable, generation) =>
-        if generation < launchedAccountGeneration then
-          // A superseded coordinator's PostStop snapshot arriving after its successor launched: the successor already
-          // carries newer (or equal) progress, and this one may describe files the successor does not own.
-          ctx.log.debug(s"Dropping account progress snapshot from superseded coordinator generation $generation")
-        else if accountsComplete then
-          // The account phase is done and its checkpoint cleared; a late PostStop snapshot must not resurrect it.
-          ctx.log.debug("Dropping account progress snapshot after accounts complete")
-        else
-          preservedRangeProgress = progress
-          preservedTaskFiles = taskFiles
-          // Track the pivot the cursors were last advanced against. Drift is a perf heuristic only (see
-          // MaxPreservedPivotDistance); measuring it from the FIRST pivot of a multi-day account phase would discard
-          // every partial range once the phase itself outlasted the cap.
-          pivotBlock.orElse(preservedAtPivotBlock).foreach(p => preservedAtPivotBlock = Some(p))
-          if durable then
-            val completedCount = progress.count { case (last, next) =>
-              // A range is "complete" when next >= last (entire keyspace traversed)
-              BigInt(1, next.toArray.padTo(32, 0.toByte)) >= BigInt(1, last.toArray.padTo(32, 0.toByte))
-            }
-            // Persist the versioned checkpoint under a FIXED key (not keyed by root): a process restart selects a new
-            // pivot, and a root-keyed record was never found again (2026-10-05 22:12 restart began from zero).
-            (stateRoot, preservedAtPivotBlock, taskFiles) match
-              case (Some(sr), Some(pivot), Some(files)) =>
-                appStateStorage
-                  .putSnapAccountResumeCheckpoint(
-                    AccountResumeCheckpoint.encode(AccountResumeCheckpoint(sr.value, pivot, progress, files))
-                  )
-                  .commit()
-                ctx.log.info(
-                  s"Account resume checkpoint persisted: ${progress.size} ranges ($completedCount fully complete), " +
-                    s"${files.storageCount} storage-task entries, ${files.codeHashesCount} codeHashes, pivot $pivot"
-                )
-                // The persisted record now references this coordinator's own files, so the files it was carried
-                // from (and any older ones) are no longer needed for a resume. Delete them only NOW — never before
-                // this commit, so a crash between the copy and here still resumes from the previous record. Keep the
-                // carry source of the live generation (a supervisor restart re-copies from it), whatever the
-                // in-memory snapshot points at, and the accounts-complete handoff files.
-                if !lastSweptForRecord.contains(files.storagePath) then
-                  lastSweptForRecord = Some(files.storagePath)
-                  sweepSupersededTaskFiles(
-                    keep = SNAPSyncController.taskFilePaths(files) ++
-                      currentCarrySource.toSet.flatMap(SNAPSyncController.taskFilePaths) ++
-                      preservedTaskFiles.toSet.flatMap(SNAPSyncController.taskFilePaths) ++
-                      accountsCompleteTaskFilePaths,
-                    reason = "new account resume checkpoint"
-                  )
-              case _ =>
-                // Expected for the PostStop snapshot of a coordinator stopped by restartSnapSync (root already
-                // cleared); the progress is kept in memory and persisted by the next coordinator's checkpoint.
-                ctx.log.info(
-                  s"Account resume checkpoint kept in memory only (stateRoot=${stateRoot.isDefined}, " +
-                    s"pivot=${preservedAtPivotBlock.isDefined}, taskFiles=${taskFiles.isDefined})"
-                )
-        Behaviors.same
+      // accountProgressCheckpointArms (spec 016 T053c): delegated here, at its original position.
+      case msg if accountProgressCheckpointArms.isDefinedAt(msg) =>
+        accountProgressCheckpointArms(msg)
 
       // accountTrieFinalizationArms (spec 016 lift before M11b): delegated here, at its original position.
       case msg if accountTrieFinalizationArms.isDefinedAt(msg) =>
