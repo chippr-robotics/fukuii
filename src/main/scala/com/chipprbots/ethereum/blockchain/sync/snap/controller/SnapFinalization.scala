@@ -31,6 +31,9 @@ private[snap] trait SnapFinalizationState:
 private[snap] trait FinalizationApi:
   def completeSnapSync(): Behavior[Command]
 
+private[snap] trait ChainDownloadStartApi:
+  def startChainDownloader(): Unit
+
 private[snap] trait ShutdownApi:
   def onStop(): Unit
   def stopSnapOnlySchedules(): Unit
@@ -44,7 +47,7 @@ private[snap] trait ShutdownApi:
   * `completed`). The core keeps the dispatch: the path-publish and header-hold guard arms of `syncing` and its
   * ChainDownloader arms call these members.
   */
-private[snap] trait SnapFinalization extends FinalizationApi:
+private[snap] trait SnapFinalization extends FinalizationApi with ChainDownloadStartApi:
   self: SnapFinalizationState & SnapSharedState & SnapControllerEnv & CoordinatorHandles & PhaseFlags & ResumeApi &
     TaskFileSweepApi & HealedCodeApi & PeerPoolApi & ShutdownApi =>
 
@@ -446,7 +449,7 @@ private[snap] trait SnapFinalization extends FinalizationApi:
   /** Start the chain downloader alongside SNAP state sync. With the backfill deferred it downloads headers only; bodies
     * and receipts are held until [[releaseDeferredBodiesAndReceipts]] runs at finalisation.
     */
-  private[snap] def startChainDownloader(): Unit =
+  def startChainDownloader(): Unit =
     launchChainDownloader(pivotBlock.filter(_ > 0), snapSyncConfig.chainDownloadMaxConcurrentRequests)
 
   /** State is finalised: let a deferred downloader start fetching bodies and receipts. */

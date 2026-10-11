@@ -580,7 +580,33 @@ only when every item on the per-slice checklist below holds.
     order oracle). Not done: no fix (#1561's gaps stay); the `AccountRangeResponse` arm itself stays inline (M11's
     response routing). Next: M10 (T052) moves the refresh members whole; `delayedRestartArms` and
     `pivotStateUnservableArms` go with M9b or M10, as the user decides (CQ-SNAP-016-27's note).
-- [ ] T052 [M10] `PivotRefresher`. Run Platåberget across at least 3 refreshes, and Mordor.
+- [x] T052 [M10] `PivotRefresher`. Run Platåberget across at least 3 refreshes, and Mordor.
+  - As built: no prerequisite commit. The move commit moves into `controller/PivotRefresher.scala`
+    `refreshPivotInPlace`, `completePivotRefreshWithStateRoot`, the arms T052a lifted (`pivotRefreshBootstrapCompleteArms`,
+    `pivotRefreshBootstrapFailedArms`, `pivotProbeTimeoutArms`, `retryPivotRefreshArms`, and `pivotStateUnservableArms`,
+    which triggers a refresh), `handlePivotProbeResponse`, and the two vars only these bodies touch, `retryRefreshCounts`
+    and `retryRefreshUnservable` (10 symbols). `commonSyncingArms` still delegates to the five arms at their positions
+    and its `AccountRangeResponse` arm still calls `handlePivotProbeResponse`; only the definitions moved. The core loses
+    three imports only the moved bodies used (`SNAP.*`, `PoSBlockHeaderValidator`, `BlockchainConfig`). Narrowed
+    self-type: `PivotRefresherState & SnapSharedState & SnapControllerEnv & CoordinatorHandles & PhaseFlags &
+    LifecycleApi & PeerPoolApi & PivotSelectionApi & PivotBestBlockApi & ProbeTargetApi & FinalizationApi &
+    ChainDownloadStartApi & LazyHandoffApi & StagnationResetApi`; state 20 (R14: 11), Api 13 (R14a: 12); the routing
+    doc's counts row has the breakdown. `PivotRefresher extends PivotRefreshApi with PivotRefreshCommitApi`, whose
+    declarations move next to it from `controller/HealingOrchestrator.scala` and `controller/PivotSelector.scala`
+    (CQ-SNAP-016-16); the core no longer lists them. Four new narrow Api traits, each declared next to and
+    implemented by its module (members lose `private[snap]`), rather than growing an Api other modules already count:
+    `PivotBestBlockApi` (`updateBestBlockForPivot`, `PivotSelector`), `ProbeTargetApi` (`bestSnapProbeTarget`,
+    `SnapPeerPool`), `ChainDownloadStartApi` (`startChainDownloader`, `SnapFinalization`), `LazyHandoffApi`
+    (`lazyHandoffBlockedByAbsentPathRoot`, `anchorPivotBeforeLazyHandoff`, `HealingOrchestrator`). `MaxProbeAttempts`,
+    `MaxConsecutivePivotRefreshes`, `failedPivotBlocks` and `MaxHealRepegNoRootAttempts` stayed in the core in the move
+    (rule (d)) and became pure private lazy vals of the trait in the narrowing. `SnapControllerEnv` stays at 18; no
+    other module's count moves. **Not moved**: `delayedRestartArms` (a restart: SyncLifecycle, M9b),
+    `retryBootstrapAtBlockArms` (PivotSelector, M8c, CQ-SNAP-016-25), `healAtNewerPivot` (the #1555 branch of
+    `recoverAccountsComplete`, resume planning, M5b; CQ-SNAP-016-29), the proactive roll's trigger (in
+    `checkDownloadStagnationArms`, M7's), the dispatch (the five delegation lines and the probe-id match), and the
+    refresh and probe state the core, `SyncLifecycle`, `StagnationWatchdog`, `HealingOrchestrator` or `PivotSelector`
+    also read or write. No fix: #1561's gaps stay. Stub test: `PivotRefresherSpec` (ten cases). Platåberget across at
+    least 3 refreshes, and Mordor: **pending** (to be run by the user on the slice jar after merge; no node run here).
 - [ ] T053 [M11] `DownloadSupervisor`. Check SC-001 (core ≤ about 1,000 lines). Run a full Mordor SNAP.
 
 ## Coordinators

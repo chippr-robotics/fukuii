@@ -31,8 +31,8 @@ private[snap] trait SyncingApi:
 private[snap] trait AccountRangeStartApi:
   def startAccountRangeSync(rootHash: TrieRoot): Unit
 
-private[snap] trait PivotRefreshCommitApi:
-  def completePivotRefreshWithStateRoot(newPivotBlock: BigInt, newPivotHeader: BlockHeader, reason: String): Unit
+private[snap] trait PivotBestBlockApi:
+  def updateBestBlockForPivot(header: BlockHeader, pivotBlockNumber: BigInt): Unit
 
 private[snap] trait PivotSelectorState:
   var clPivotHint: Option[CLPivotHint]
@@ -54,7 +54,7 @@ private[snap] trait PivotSelectorState:
   * selection; CQ-SNAP-016-22) and the dispatch: the `Start` and `MinPivotBlock` arms of `idle`, the `CLPivotHint` arm
   * of `peerEventArms` and the `RetryBootstrapAtBlock` arm of `commonSyncingArms`.
   */
-private[snap] trait PivotSelector extends PivotSelectionApi:
+private[snap] trait PivotSelector extends PivotSelectionApi with PivotBestBlockApi:
   self: PivotSelectorState & SnapSharedState & SnapControllerEnv & CoordinatorHandles & PhaseFlags & PeerPoolApi &
     HandshakedPeersApi & BootstrapPeersApi & HealingApi & LifecycleApi & ShutdownApi & SnapStartApi & SyncingApi &
     AccountRangeStartApi & StagnationResetApi & PivotRefreshCommitApi =>
@@ -399,7 +399,7 @@ private[snap] trait PivotSelector extends PivotSelectionApi:
     * incompatible forkId (e.g. Frontier vs Spiral). This stores the pivot header, chain weight, and best block info so
     * that createStatusMsg() in EthNodeStatus68ExchangeState can build a valid status message referencing the pivot.
     */
-  private[snap] def updateBestBlockForPivot(
+  def updateBestBlockForPivot(
       header: BlockHeader,
       pivotBlockNumber: BigInt
   ): Unit =

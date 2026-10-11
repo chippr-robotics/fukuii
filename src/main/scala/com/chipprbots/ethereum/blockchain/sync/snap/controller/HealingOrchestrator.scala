@@ -51,12 +51,9 @@ private[snap] trait HealedCodeApi:
 private[snap] trait HealedCodeHoldApi:
   def resetHealedCodeHold(): Unit
 
-private[snap] trait PivotRefreshApi:
-  def refreshPivotInPlace(
-      reason: String,
-      countsTowardHealBudget: Boolean = true,
-      pivotUnservable: Boolean = false
-  ): Unit
+private[snap] trait LazyHandoffApi:
+  def lazyHandoffBlockedByAbsentPathRoot(): Boolean
+  def anchorPivotBeforeLazyHandoff(reason: String): Unit
 
 private[snap] trait ByteCodeRequestApi:
   def requestByteCodes(): Unit
@@ -71,7 +68,11 @@ private[snap] trait ByteCodeRequestApi:
   * `dropHealedCodeNowPresent`, `queueHealedCode`). The core keeps the dispatch: `phaseArms(StateHealing)` and the
   * healing arms of `commonSyncingArms` call these members.
   */
-private[snap] trait HealingOrchestrator extends HealingApi with HealedCodeApi with HealedCodeHoldApi:
+private[snap] trait HealingOrchestrator
+    extends HealingApi
+    with HealedCodeApi
+    with HealedCodeHoldApi
+    with LazyHandoffApi:
   self: HealingOrchestratorState & SnapSharedState & SnapControllerEnv & CoordinatorHandles & PhaseFlags & ResumeApi &
     PeerPoolApi & SnapServerPeersApi & ValidationApi & FinalizationApi & PivotRefreshApi & PivotSelectionApi &
     ByteCodeRequestApi =>
@@ -577,7 +578,7 @@ private[snap] trait HealingOrchestrator extends HealingApi with HealedCodeApi wi
     * stored neither at the empty path nor by hash (see `FinalizationPolicy.pathPivotRootAbsent`). Always false under
     * the Hash scheme (ETC), which publishes nothing at finalization.
     */
-  private[snap] def lazyHandoffBlockedByAbsentPathRoot(): Boolean =
+  def lazyHandoffBlockedByAbsentPathRoot(): Boolean =
     pathNodeStorageOpt.exists { pathNodes =>
       (pivotBlock, stateRoot) match
         case (Some(p), Some(r)) => FinalizationPolicy.pathPivotRootAbsent(pathNodes, r.value, getOrCreateMptStorage(p))
@@ -613,7 +614,7 @@ private[snap] trait HealingOrchestrator extends HealingApi with HealedCodeApi wi
     * (`TrieWalkComplete(0)`, `TrieWalkResult(empty)`, ~1462-1463/1491-1492) already do before THEY reach
     * `completeSnapSync()` via `StateValidation`.
     */
-  private[snap] def anchorPivotBeforeLazyHandoff(reason: String): Unit =
+  def anchorPivotBeforeLazyHandoff(reason: String): Unit =
     for
       b <- pivotBlock
       r <- stateRoot
