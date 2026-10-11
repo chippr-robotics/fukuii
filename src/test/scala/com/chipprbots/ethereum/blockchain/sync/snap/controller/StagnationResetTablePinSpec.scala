@@ -14,8 +14,8 @@ import com.chipprbots.ethereum.testing.Tags.UnitTest
 /** Spec 016 restructure slice (CQ-SNAP-016-20): pin of `StagnationWatchdog.resetStagnationClocks(reason)`, the
   * per-reason stagnation-clock reset table. For each reason it asserts exactly which watchdog fields are reset, and
   * that every other one keeps its value. The sets are today's inline resets, moved behind one call; the gaps #1551
-  * reports are pinned here as current behaviour (the bytecode clocks on the accounts-complete recovery, and the two
-  * stall counters on every reason). A #1551 fix changes one row of the table and the matching row below, on purpose.
+  * reports were pinned here as current behaviour, and #1551 changed the matching rows on purpose: the accounts-complete
+  * recovery now resets the bytecode clocks too.
   */
 class StagnationResetTablePinSpec extends AnyFlatSpec with Matchers:
 
@@ -51,7 +51,12 @@ class StagnationResetTablePinSpec extends AnyFlatSpec with Matchers:
   /** The table as pinned today: reason -> the fields it resets. Every other field of `AllFields` is left alone. */
   private val ResetTable: Map[ResetReason, Set[String]] = Map(
     AccountLaunch -> Set("lastAccountProgressMs", "lastAccountTasksCompleted", "lastAccountsDownloaded"),
-    AccountsCompleteRecovery -> Set("lastStorageProgressMs", "storageTailBaseline"),
+    AccountsCompleteRecovery -> Set(
+      "lastStorageProgressMs",
+      "storageTailBaseline",
+      "lastBytecodeProgressMs",
+      "lastBytecodeProgressCount"
+    ),
     StoragePhaseEntry -> Set(
       "lastStorageProgressMs",
       "storageTailBaseline",
@@ -137,10 +142,12 @@ class StagnationResetTablePinSpec extends AnyFlatSpec with Matchers:
       }
   }
 
-  it should "not reset the bytecode clocks on the accounts-complete recovery (#1551 item 1, pinned as today)" taggedAs UnitTest in {
-    val (before, after, _, _) = runReset(AccountsCompleteRecovery)
-    after("lastBytecodeProgressMs") shouldBe before("lastBytecodeProgressMs")
-    after("lastBytecodeProgressCount") shouldBe before("lastBytecodeProgressCount")
+  // #1551 item 1, fixed: this test pinned the gap (the bytecode clocks kept) and now asserts the fix.
+  it should "reset the bytecode clocks on the accounts-complete recovery, as on the storage-phase entry (#1551 item 1)" taggedAs UnitTest in {
+    val (_, recovery, t0, t1) = runReset(AccountsCompleteRecovery)
+    resetValueOk("lastBytecodeProgressMs", recovery("lastBytecodeProgressMs"), t0, t1) shouldBe true
+    recovery("lastBytecodeProgressCount") shouldBe 0L
+    ResetTable(AccountsCompleteRecovery) shouldBe ResetTable(StoragePhaseEntry)
   }
 
   it should "not clear storageStagnationRefreshAttempted for any reason (#1551 item 2, pinned as today)" taggedAs UnitTest in {

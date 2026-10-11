@@ -94,7 +94,9 @@ private[snap] trait StagnationWatchdog extends StagnationResetApi:
     *   - `AccountLaunch` (`launchAccountRangeWorkers`): `lastAccountProgressMs`, `lastAccountTasksCompleted`,
     *     `lastAccountsDownloaded`.
     *   - `AccountsCompleteRecovery` (`startSnapSync`'s `recoverAccountsComplete`, bytecode + storage resumed):
-    *     `lastStorageProgressMs`, `storageTailBaseline`.
+    *     `lastStorageProgressMs`, `storageTailBaseline`, `lastBytecodeProgressMs`, `lastBytecodeProgressCount`, the
+    *     same set as `StoragePhaseEntry`: the recovery spawns a new bytecode coordinator, so a stale clock would
+    *     force-complete it on its first progress tick (#1551 item 1).
     *   - `StoragePhaseEntry` (the `AccountRangeSyncComplete` arm): `lastStorageProgressMs`, `storageTailBaseline`,
     *     `lastBytecodeProgressMs`, `lastBytecodeProgressCount`.
     *   - `PivotRefreshHeaderFetch` (`refreshPivotInPlace`, header not local), `PivotRefreshCommit`
@@ -112,6 +114,8 @@ private[snap] trait StagnationWatchdog extends StagnationResetApi:
       case StagnationWatchdog.ResetReason.AccountsCompleteRecovery =>
         lastStorageProgressMs = System.currentTimeMillis()
         storageTailBaseline = SNAPSyncController.StorageTailBaseline.fresh(System.currentTimeMillis())
+        lastBytecodeProgressMs = System.currentTimeMillis()
+        lastBytecodeProgressCount = 0L
       case StagnationWatchdog.ResetReason.StoragePhaseEntry =>
         lastStorageProgressMs = System.currentTimeMillis()
         storageTailBaseline = SNAPSyncController.StorageTailBaseline.fresh(System.currentTimeMillis())

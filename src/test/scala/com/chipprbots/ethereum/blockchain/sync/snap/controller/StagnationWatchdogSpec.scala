@@ -362,6 +362,34 @@ class StagnationWatchdogSpec extends ScalaTestWithActorTestKit(ManualTime.config
     h.module.lastBytecodeProgressCount shouldBe 7L
   }
 
+  it should "not force-complete a recovered bytecode phase on its first tick after a stale clock (#1551 item 1)" taggedAs UnitTest in {
+    val h = new Harness()
+    // Left by a bootstrap that ran far longer than the bytecode threshold, and a count from an earlier coordinator.
+    h.module.lastBytecodeProgressMs = 0L
+    h.module.lastBytecodeProgressCount = 500L
+
+    // startSnapSync's accounts-complete recovery spawns a new bytecode coordinator, then resets the clocks.
+    h.call { m =>
+      m.currentPhase = SyncPhase.ByteCodeAndStorageSync
+      m.resetStagnationClocks(StagnationWatchdog.ResetReason.AccountsCompleteRecovery)
+    }
+
+    h.module.lastBytecodeProgressCount shouldBe 0L
+    h.module.lastBytecodeProgressMs should be > 0L
+
+    // The new coordinator's first tick: nothing downloaded yet. The clock was just reset, so this is no stall.
+    h.call(_.byteCodeAndStorageArms(ByteCodeCoordinatorProgress(ByteCodeCoordinator.ByteCodeProgress(0.0, 0L, 0L))))
+
+    h.module.bytecodeForceCompleted shouldBe false
+    h.bytecodes.hasMessages shouldBe false
+
+    // Its first real progress counts from zero, not from the old coordinator's 500.
+    h.call(_.byteCodeAndStorageArms(ByteCodeCoordinatorProgress(ByteCodeCoordinator.ByteCodeProgress(0.1, 3L, 0L))))
+
+    h.module.lastBytecodeProgressCount shouldBe 3L
+    h.module.bytecodeForceCompleted shouldBe false
+  }
+
   it should "ignore progress reports outside their phase" taggedAs UnitTest in {
     val h = new Harness()
     h.module.currentPhase = SyncPhase.StateHealing
