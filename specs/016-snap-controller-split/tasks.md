@@ -418,7 +418,8 @@ only when every item on the per-slice checklist below holds.
     body change), #16 `HealingServeRoot`, `StateHealingComplete`, `HealedCodeHashes` and the healed-code hold arms.
     #1502 is unchanged (pinned). Stub test: `HealingOrchestratorSpec` (nine cases). Mordor heal restart: **pending**
     (to be run by the user on the slice jar after merge; no node run here).
-- [ ] T049 [M7] `StagnationWatchdog`, with the `reset(reason)` hook used by launch, refresh and `startSnapSync`.
+- [x] T049 [M7] `StagnationWatchdog`, with the `reset(reason)` hook used by launch, refresh and `startSnapSync`.
+  - The hook was built in the restructure slice (T050c) as `resetStagnationClocks(reason)`; that closes T049.
   - **As built (partial: the `reset(reason)` hook is open, CQ-SNAP-016-20):** no prerequisite commit. The move commit
     moves into `controller/StagnationWatchdog.scala` the `AccountRangeSync` and `ByteCodeAndStorageSync` phase functions
     `accountRangeArms` and `byteCodeAndStorageArms` (P4a/P4b; they hold only the three `*CoordinatorProgress` arms,
@@ -463,6 +464,39 @@ only when every item on the per-slice checklist below holds.
     `startSnapSync`'s pivot-selection part moves.
 - [x] T050b [M8b] Remove the dead `isStarting` parameter in its own PR (FR-034). The PR has no other change.
     As built: the parameter was on `handleCLPivotHint` (not `startSnapSync`), only ever read by `val _ = isStarting`; removed with its one main and three test call-site arguments.
+- [x] T050c [RESTRUCTURE] (approved by the user 2026-10-10; one behaviour-preserving PR, no module move) Carve the
+  bodies that M5, M6b, M7 and M8 could not byte-move into named core members, so the remaining moves (M5b, M6c, M7b,
+  M8c) are whole-member moves: split `startSnapSync` (CQ-SNAP-016-22, CQ-SNAP-016-17's recovery branch), lift the
+  healing, stagnation and bootstrap-retry arms out of `commonSyncingArms` (CQ-SNAP-016-18/19), and add the
+  per-reason stagnation-clock reset table (CQ-SNAP-016-20) with a pin. Characterization first.
+  - As built: four commits. (1) `SNAPStartSnapSyncCharacterizationSpec` (new, Tier 1) pins `startSnapSync`'s main
+    paths that the S0d/fixture suites left unasserted: fresh start (network pivot requested and persisted as the
+    bootstrap target; no peer; genesis; CL-hint pivot), all phases complete → healing, the accounts-complete recovery
+    (spawn order and arguments, the bytecode child's start → budget 2 → budget 8 → cooldown reset, the task-file
+    streams, the escalation-hint and missing-anchor wipes), a stale pivot (flags wiped when a phase is incomplete,
+    kept when all are complete, then healing on the bootstrapped pivot) and bootstrap retry (interrupted bootstrap
+    resumed, reached target cleared, retry → network pivot). (2) `startSnapSync` = `startSnapPeerEviction()` →
+    `recoverAccountsComplete()` → `resumeInterruptedBootstrap()` → `selectPivotAndStart()` → `bootstrapping()`, plus
+    `spawnRecoveryCoordinators(rootBs, storage, bytecodeAlreadyDone, storageAlreadyDone)` called from the recovery
+    step; all `private[snap]`, bodies verbatim. The three boundary steps take `startSnapSync`'s
+    `boundary.Label[Behavior[Command]]` as a `using` parameter, so every `break(...)` is unchanged. (3) Seven
+    `commonSyncingArms` arms become `private[snap] lazy val` class members, each delegated from `commonSyncingArms` at
+    its original position (the P4d `staleValidationDropArms` form): `requestTrieNodeHealingArms`,
+    `healingServeRootArms`, `retryBootstrapAtBlockArms`, `healedCodeHashesArms`, `healedCodeHoldArms`,
+    `stateHealingCompleteArms`, `checkDownloadStagnationArms`; the two guards that moved are pure flag reads. (4)
+    `StagnationWatchdog extends StagnationResetApi` (`resetStagnationClocks(reason)`; not `reset`, which would overload
+    `PhaseFlags.reset(kind)` in the core) with `StagnationWatchdog.ResetReason` = `AccountLaunch`,
+    `AccountsCompleteRecovery`, `StoragePhaseEntry`, `PivotRefreshHeaderFetch`, `PivotRefreshCommit`,
+    `BootstrapRetryAtBlock`, one per call site, each writing exactly the site's former inline writes in order (one
+    `System.currentTimeMillis()` per write). The hook is a member of the `StagnationWatchdog` trait: it writes only
+    `StagnationWatchdogState` fields the module already declares, so no state moves. `StagnationResetTablePinSpec`
+    (new, Tier 1) pins, per reason, the fields reset and the fields kept, including the #1551 gaps (bytecode clocks
+    on `AccountsCompleteRecovery`; `storageStagnationRefreshAttempted` and `consecutiveAccountStallRefreshes`, now
+    `private[snap]` for the pin, on every reason). #1551 is not fixed. No existing test changed; counts unchanged
+    (StagnationWatchdog 11 / 5). Not done here: the other two CQ-SNAP-016-17 sites (the resume selection inside
+    `launchAccountRangeWorkers` and the `AccountRangeProgressCmd` checkpoint arm), and no `Restart`/`Wake` reason
+    (those paths reset no stagnation clock today, so #1551 items 2 and 3 need a new call site as well as a table row).
+    Next: M5b, M6c, M7b, M8c byte-moves of the named members.
 - [ ] T051 [M9] `SyncLifecycle`, including the #1501 heap watchdog (call sites unchanged). Run Mordor dormant/wake.
 - [ ] T052 [M10] `PivotRefresher`. Run Platåberget across at least 3 refreshes, and Mordor.
 - [ ] T053 [M11] `DownloadSupervisor`. Check SC-001 (core ≤ about 1,000 lines). Run a full Mordor SNAP.
