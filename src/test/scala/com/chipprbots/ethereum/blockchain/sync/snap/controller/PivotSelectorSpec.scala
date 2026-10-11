@@ -143,8 +143,6 @@ private[snap] class StubPivotSelectorState(
     Behaviors.same
   def restartSnapSync(reason: String): Behavior[Command] = notUsed("restartSnapSync")
   def onStop(): Unit = notUsed("onStop")
-  def stopSnapOnlySchedules(): Unit = notUsed("stopSnapOnlySchedules")
-  def stopStateSyncChildren(): Unit = notUsed("stopStateSyncChildren")
   var snapSyncStarts: Int = 0
   def startSnapSync(): Behavior[Command] =
     snapSyncStarts += 1

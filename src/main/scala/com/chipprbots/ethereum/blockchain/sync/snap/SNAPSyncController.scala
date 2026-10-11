@@ -528,42 +528,6 @@ private class SNAPSyncControllerImpl(
   def cancelSyncTimers(keys: Any*): Unit =
     keys.foreach(timers.cancel)
 
-  /** Cancel every SNAP-only scheduled timer. Idempotent — `timers.cancel` tolerates unknown keys. Called both at the
-    * lifecycle transition into `completedWithBackfill` (so eviction/tickers don't keep running while regular sync owns
-    * the peer pool) and from the PostStop signal handler.
-    */
-  def stopSnapOnlySchedules(): Unit =
-    cancelSyncTimers(
-      RequestAccountRanges,
-      RequestByteCodes,
-      HealedCodeWaitTimerKey,
-      RequestStorageRanges,
-      CheckDownloadStagnation,
-      RequestTrieNodeHealing,
-      BootstrapCheckKey,
-      PivotBootstrapRetryKey,
-      SnapCapabilityCheckKey,
-      EvictNonSnapPeers,
-      TuneRateTracker,
-      EnsureSnapServerPeersConnected
-    )
-    snapServerPeersSchedulerStarted = false
-    snapPeerEvictionStarted = false
-    progressMonitor.stopPeriodicLogging()
-    stopHeapWatchdog()
-
-  /** Stop the SNAP state-sync child coordinators (account/bytecode/storage/healing) and clear their references. They do
-    * not self-stop on completion, so when `SNAPSyncController` is kept alive past `finalizeSnapSync()` for background
-    * chain backfill (#1162), failing to stop them retains completed task buffers, worker actors, and rate trackers for
-    * the entire backfill window. The previous `PoisonPill` to the parent used to clean these up implicitly.
-    *
-    * `chainDownloader` is NOT stopped here — it keeps running in `completedWithBackfill`.
-    */
-  def stopStateSyncChildren(): Unit =
-    stopAll()
-    forceCompleteStorageSent = false
-    healingWalkLocalOnly.set(false)
-
   /** Spec 016 P3 (FR-013): the peer-event arms shared by `idle`, `syncing`, `bootstrapping` and `dormantRetry`. Each of
     * those four behaviours carried an identical copy of these six arms. `bootstrapping` keeps its own
     * `WrappedHandshakedPeers` arm (bootstrap reactivity) and its own `GetProgress` arm (bootstrap progress) ahead of
@@ -879,18 +843,6 @@ private class SNAPSyncControllerImpl(
         // create a fresh coordinator before the walk so inline discovery can run concurrently.
         startStateHealingWithInterleave()
       Behaviors.same
-  }
-
-  /** A `commonSyncingArms` arm lifted into a class member (spec 016 lift before M10, CQ-SNAP-016-27), body unchanged:
-    * `DelayedRestart`, the backed-off restart armed by `PivotStateUnservable`'s critical-failure path: restart in the
-    * two download phases, ignored in any other (the phase test stays in the body). `commonSyncingArms` delegates to it
-    * at the arm's original position, so the arm order is unchanged.
-    */
-  private[snap] lazy val delayedRestartArms: PartialFunction[Command, Behavior[Command]] = {
-    // Delayed restart after critical failure backoff
-    case DelayedRestart(reason) =>
-      if currentPhase == AccountRangeSync || currentPhase == ByteCodeAndStorageSync then restartSnapSync(reason)
-      else Behaviors.same
   }
 
   /** Dispatch order (spec 016 P4, research.md R4b): `syncingGuardArms` (the path-publish and header-hold arms with

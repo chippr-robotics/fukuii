@@ -36,8 +36,6 @@ private[snap] trait ChainDownloadStartApi:
 
 private[snap] trait ShutdownApi:
   def onStop(): Unit
-  def stopSnapOnlySchedules(): Unit
-  def stopStateSyncChildren(): Unit
 
 /** SNAP finalization (spec 016 M4, research.md R6 "Finalization / header-hold / path-publish / backfill handoff"): the
   * completion entry (`completeSnapSync`, with the healed-code hold), the deferred-backfill header hold
@@ -49,7 +47,7 @@ private[snap] trait ShutdownApi:
   */
 private[snap] trait SnapFinalization extends FinalizationApi with ChainDownloadStartApi:
   self: SnapFinalizationState & SnapSharedState & SnapControllerEnv & CoordinatorHandles & PhaseFlags & ResumeApi &
-    TaskFileSweepApi & HealedCodeApi & PeerPoolApi & ShutdownApi =>
+    TaskFileSweepApi & HealedCodeApi & PeerPoolApi & ShutdownApi & SnapStopApi =>
 
   private var lastHeaderHoldWarnMs: Long = 0L
   // Stall watchdog for the hold: highest header cursor seen and when it last advanced.

@@ -41,6 +41,8 @@ private[snap] trait SyncLifecycleState:
   var coordinatorGeneration: Long
   var validationGeneration: Long
   var validationInProgress: Boolean
+  var snapPeerEvictionStarted: Boolean
+  var snapServerPeersSchedulerStarted: Boolean
   def cancelSyncTimers(keys: Any*): Unit
   def BootstrapCheckKey: String
   def PivotBootstrapRetryKey: String
@@ -55,6 +57,10 @@ private[snap] trait LifecycleApi:
 private[snap] trait HeapWatchdogApi:
   def ensureHeapWatchdog(): Unit
 
+private[snap] trait SnapStopApi:
+  def stopSnapOnlySchedules(): Unit
+  def stopStateSyncChildren(): Unit
+
 /** SNAP sync lifecycle (spec 016 M9, research.md R6 "Dormant / critical-failure"): the critical-failure count and its
   * threshold (`recordCriticalFailure`), dormant mode (`enterDormantMode`, the `dormantRetry` behaviour and its
   * `DormantWakeUp` wake-up, `wakeFromDormant`), the full restart on a fresh pivot (`restartSnapSync`), and the #1501
@@ -64,7 +70,10 @@ private[snap] trait HeapWatchdogApi:
   * `stopSnapOnlySchedules`. It also keeps the dispatch: the `DelayedRestart` and `PivotStateUnservable` arms of
   * `commonSyncingArms`.
   */
-private[snap] trait SyncLifecycle(val heapWatchdogStart: HeapWatchdogStart) extends LifecycleApi with HeapWatchdogApi:
+private[snap] trait SyncLifecycle(val heapWatchdogStart: HeapWatchdogStart)
+    extends LifecycleApi
+    with HeapWatchdogApi
+    with SnapStopApi:
   self: SyncLifecycleState & SnapSharedState & SnapControllerEnv & CoordinatorHandles & PhaseFlags &
     HandshakedPeersApi & HealedCodeHoldApi & ShutdownApi & SnapStartApi & StagnationResetApi =>
 
@@ -352,3 +361,51 @@ private[snap] trait SyncLifecycle(val heapWatchdogStart: HeapWatchdogStart) exte
 
     // Re-run pivot selection/bootstrap with the latest visible peer set
     startSnapSync()
+
+  /** Cancel every SNAP-only scheduled timer. Idempotent — `timers.cancel` tolerates unknown keys. Called both at the
+    * lifecycle transition into `completedWithBackfill` (so eviction/tickers don't keep running while regular sync owns
+    * the peer pool) and from the PostStop signal handler.
+    */
+  def stopSnapOnlySchedules(): Unit =
+    cancelSyncTimers(
+      RequestAccountRanges,
+      RequestByteCodes,
+      HealedCodeWaitTimerKey,
+      RequestStorageRanges,
+      CheckDownloadStagnation,
+      RequestTrieNodeHealing,
+      BootstrapCheckKey,
+      PivotBootstrapRetryKey,
+      SnapCapabilityCheckKey,
+      EvictNonSnapPeers,
+      TuneRateTracker,
+      EnsureSnapServerPeersConnected
+    )
+    snapServerPeersSchedulerStarted = false
+    snapPeerEvictionStarted = false
+    progressMonitor.stopPeriodicLogging()
+    stopHeapWatchdog()
+
+  /** Stop the SNAP state-sync child coordinators (account/bytecode/storage/healing) and clear their references. They do
+    * not self-stop on completion, so when `SNAPSyncController` is kept alive past `finalizeSnapSync()` for background
+    * chain backfill (#1162), failing to stop them retains completed task buffers, worker actors, and rate trackers for
+    * the entire backfill window. The previous `PoisonPill` to the parent used to clean these up implicitly.
+    *
+    * `chainDownloader` is NOT stopped here — it keeps running in `completedWithBackfill`.
+    */
+  def stopStateSyncChildren(): Unit =
+    stopAll()
+    forceCompleteStorageSent = false
+    healingWalkLocalOnly.set(false)
+
+  /** A `commonSyncingArms` arm lifted into a class member (spec 016 lift before M10, CQ-SNAP-016-27), body unchanged:
+    * `DelayedRestart`, the backed-off restart armed by `PivotStateUnservable`'s critical-failure path: restart in the
+    * two download phases, ignored in any other (the phase test stays in the body). `commonSyncingArms` delegates to it
+    * at the arm's original position, so the arm order is unchanged.
+    */
+  private[snap] lazy val delayedRestartArms: PartialFunction[Command, Behavior[Command]] = {
+    // Delayed restart after critical failure backoff
+    case DelayedRestart(reason) =>
+      if currentPhase == AccountRangeSync || currentPhase == ByteCodeAndStorageSync then restartSnapSync(reason)
+      else Behaviors.same
+  }
