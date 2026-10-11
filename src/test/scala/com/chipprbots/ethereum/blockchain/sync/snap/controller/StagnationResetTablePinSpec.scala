@@ -15,7 +15,8 @@ import com.chipprbots.ethereum.testing.Tags.UnitTest
   * per-reason stagnation-clock reset table. For each reason it asserts exactly which watchdog fields are reset, and
   * that every other one keeps its value. The sets are today's inline resets, moved behind one call; the gaps #1551
   * reports were pinned here as current behaviour, and #1551 changed the matching rows on purpose: the accounts-complete
-  * recovery now resets the bytecode clocks too.
+  * recovery now resets the bytecode clocks too, and the new `Wake` reason clears the stall state of the round that went
+  * dormant. A restart still keeps it, on purpose (see the restart test below).
   */
 class StagnationResetTablePinSpec extends AnyFlatSpec with Matchers:
 
@@ -65,7 +66,8 @@ class StagnationResetTablePinSpec extends AnyFlatSpec with Matchers:
     ),
     PivotRefreshHeaderFetch -> Set("lastAccountProgressMs"),
     PivotRefreshCommit -> Set("lastAccountProgressMs"),
-    BootstrapRetryAtBlock -> Set("lastAccountProgressMs")
+    BootstrapRetryAtBlock -> Set("lastAccountProgressMs"),
+    Wake -> Set("storageStagnationRefreshAttempted")
   )
 
   private val OldBaseline = SNAPSyncController.StorageTailBaseline(lowWork = 7, sinceMs = 8L, staleFailuresAtLow = 9L)
@@ -109,15 +111,16 @@ class StagnationResetTablePinSpec extends AnyFlatSpec with Matchers:
   /** The value a reset writes into `field`: a fresh wall-clock time, a zero count or a fresh tail baseline. */
   private def resetValueOk(field: String, value: Matchable, t0: Long, t1: Long): Boolean =
     (field, value) match
-      case ("lastAccountTasksCompleted", v: Int)  => v == 0
-      case ("lastAccountsDownloaded", v: Long)    => v == 0L
-      case ("lastBytecodeProgressCount", v: Long) => v == 0L
+      case ("lastAccountTasksCompleted", v: Int)             => v == 0
+      case ("lastAccountsDownloaded", v: Long)               => v == 0L
+      case ("lastBytecodeProgressCount", v: Long)            => v == 0L
+      case ("storageStagnationRefreshAttempted", v: Boolean) => !v
       case ("storageTailBaseline", v: SNAPSyncController.StorageTailBaseline) =>
         v.lowWork == Int.MaxValue && v.staleFailuresAtLow == 0L && v.sinceMs >= t0 && v.sinceMs <= t1
       case (_, v: Long) => v >= t0 && v <= t1
       case _            => false
 
-  "StagnationWatchdog.resetStagnationClocks" should "have exactly the six reasons of today's six call sites" taggedAs UnitTest in {
+  "StagnationWatchdog.resetStagnationClocks" should "have exactly the seven reasons of the seven call sites" taggedAs UnitTest in {
     ResetReason.values.toSet shouldBe ResetTable.keySet
     ResetReason.values.toSet shouldBe Set(
       AccountLaunch,
@@ -125,7 +128,8 @@ class StagnationResetTablePinSpec extends AnyFlatSpec with Matchers:
       StoragePhaseEntry,
       PivotRefreshHeaderFetch,
       PivotRefreshCommit,
-      BootstrapRetryAtBlock
+      BootstrapRetryAtBlock,
+      Wake
     )
   }
 
@@ -150,11 +154,21 @@ class StagnationResetTablePinSpec extends AnyFlatSpec with Matchers:
     ResetTable(AccountsCompleteRecovery) shouldBe ResetTable(StoragePhaseEntry)
   }
 
-  it should "not clear storageStagnationRefreshAttempted for any reason (#1551 item 2, pinned as today)" taggedAs UnitTest in {
+  // #1551 item 2, fixed: this test pinned the gap (no reason cleared the flag) and now asserts the fix, on wake only.
+  it should "clear storageStagnationRefreshAttempted on Wake, and for no other reason (#1551 item 2)" taggedAs UnitTest in {
     ResetReason.values.foreach { reason =>
       val (_, after, _, _) = runReset(reason)
-      withClue(s"$reason: ")(after("storageStagnationRefreshAttempted") shouldBe true)
+      withClue(s"$reason: ")(after("storageStagnationRefreshAttempted") shouldBe (reason != Wake))
     }
+  }
+
+  // restartSnapSync is deliberately not a reset reason, so a restart keeps the stall state. It is also the fallback
+  // of a failed in-round pivot refresh (BootstrapComplete(None) -> restartSnapSync). If it cleared the stall state,
+  // a stall -> refresh -> no header -> restart loop would refresh forever: the storage stall would never reach its
+  // force-complete, and the account stall would never spend its budget of 10 and go dormant. restartSnapSync keeps
+  // consecutivePivotRefreshes for the same reason. #1551's restart half is closed as intended behaviour.
+  it should "have no restart reason: a restart keeps the stall state, so the escalation still completes" taggedAs UnitTest in {
+    ResetReason.values.toSeq.map(_.toString).filter(_.toLowerCase.contains("restart")) shouldBe empty
   }
 
   it should "not reset consecutiveAccountStallRefreshes for any reason (#1551 item 3, pinned as today)" taggedAs UnitTest in {

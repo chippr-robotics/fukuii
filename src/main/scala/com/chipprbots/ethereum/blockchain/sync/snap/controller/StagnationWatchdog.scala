@@ -30,7 +30,7 @@ private[snap] trait StagnationWatchdogState:
   * storage stall or tail livelock -> one pivot refresh, then force-complete (`maybeRestartIfStorageStagnant`); bytecode
   * stall -> force-complete (`maybeForceCompleteIfBytecodeStagnant`). The core keeps the dispatch (`phaseArms`), the
   * `CheckDownloadStagnation` arm (`checkDownloadStagnationArms`) that sends the asks. The clock resets at launch,
-  * refresh, `startSnapSync`'s recovery, the storage-phase entry and the bootstrap retry go through
+  * refresh, `startSnapSync`'s recovery, the storage-phase entry, the bootstrap retry and the dormant wake go through
   * `resetStagnationClocks(reason)`, called from the core.
   */
 /** The stagnation watchdog's clock-reset hook (spec 016 plan.md D1 `StagnationResetApi`, M7's `watchdog.reset(reason)`;
@@ -102,8 +102,14 @@ private[snap] trait StagnationWatchdog extends StagnationResetApi:
     *   - `PivotRefreshHeaderFetch` (`refreshPivotInPlace`, header not local), `PivotRefreshCommit`
     *     (`completePivotRefreshWithStateRoot`) and `BootstrapRetryAtBlock` (`retryBootstrapAtBlockArms`, header not
     *     local): `lastAccountProgressMs` only.
+    *   - `Wake` (`wakeFromDormant`, before its `startSnapSync()`): `storageStagnationRefreshAttempted`. Dormancy is
+    *     where the escalation ends, and the wake already gives fresh budgets (`consecutivePivotRefreshes`,
+    *     `bootstrapRetryCount`), so the next round's first storage stall gets its pivot refresh again (#1551 item 2).
     *
-    * No reason resets `storageStagnationRefreshAttempted`, `lastPivotRestartMs` or `consecutiveAccountStallRefreshes`.
+    * No reason resets `lastPivotRestartMs` or `consecutiveAccountStallRefreshes`. `restartSnapSync` is deliberately not
+    * a reason: it is also the fallback of a failed in-round pivot refresh (`BootstrapComplete(None)`), so clearing the
+    * stall state there would let a stall -> refresh -> no header -> restart loop cycle forever instead of escalating,
+    * the reason it already keeps `consecutivePivotRefreshes`.
     */
   def resetStagnationClocks(reason: StagnationWatchdog.ResetReason): Unit =
     reason match
@@ -127,6 +133,8 @@ private[snap] trait StagnationWatchdog extends StagnationResetApi:
         lastAccountProgressMs = System.currentTimeMillis()
       case StagnationWatchdog.ResetReason.BootstrapRetryAtBlock =>
         lastAccountProgressMs = System.currentTimeMillis()
+      case StagnationWatchdog.ResetReason.Wake =>
+        storageStagnationRefreshAttempted = false
 
   private[snap] def scheduleStagnationChecks(): Unit =
     val interval = DownloadStagnationCheckInterval
@@ -355,4 +363,4 @@ private[snap] object StagnationWatchdog:
   /** The call sites that reset the stagnation clocks (spec 016 restructure, CQ-SNAP-016-20), one reason per site. */
   enum ResetReason:
     case AccountLaunch, AccountsCompleteRecovery, StoragePhaseEntry, PivotRefreshHeaderFetch, PivotRefreshCommit,
-      BootstrapRetryAtBlock
+      BootstrapRetryAtBlock, Wake

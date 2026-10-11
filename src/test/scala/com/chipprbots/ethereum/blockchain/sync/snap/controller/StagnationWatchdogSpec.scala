@@ -390,6 +390,51 @@ class StagnationWatchdogSpec extends ScalaTestWithActorTestKit(ManualTime.config
     h.module.bytecodeForceCompleted shouldBe false
   }
 
+  it should "refresh the pivot first on the first storage stall after a dormant wake (#1551 item 2)" taggedAs UnitTest in {
+    val h = new Harness()
+    // The round that went dormant had spent its storage refresh.
+    h.module.storageStagnationRefreshAttempted = true
+
+    h.call(_.resetStagnationClocks(StagnationWatchdog.ResetReason.Wake))
+
+    h.module.storageStagnationRefreshAttempted shouldBe false
+
+    // The new round reaches the storage phase and stalls past the threshold: refresh, not force-complete.
+    h.module.currentPhase = SyncPhase.ByteCodeAndStorageSync
+    h.module.lastStorageProgressMs = 0L
+    h.call(_.byteCodeAndStorageArms(StorageCoordinatorProgress(storageStats(completed = 5, active = 2, pending = 4))))
+
+    h.module.refreshes should have size 1
+    h.module.refreshes.head should startWith("storage stagnation: no progress for")
+    h.module.storageStagnationRefreshAttempted shouldBe true
+    h.module.forceCompleteStorageSent shouldBe false
+    h.storage.hasMessages shouldBe false
+  }
+
+  it should "keep the spent storage refresh across a restart, so the next storage stall force-completes" taggedAs UnitTest in {
+    val h = new Harness()
+    h.module.currentPhase = SyncPhase.ByteCodeAndStorageSync
+    h.module.lastStorageProgressMs = 0L
+    h.call(_.byteCodeAndStorageArms(StorageCoordinatorProgress(storageStats(completed = 5, active = 2, pending = 4))))
+    h.module.refreshes should have size 1
+
+    // The refresh's header bootstrap returns nothing and restartSnapSync runs. It calls no reset; the new round
+    // resets only through its phase entries (account launch, then the storage-phase entry).
+    h.call { m =>
+      m.resetStagnationClocks(StagnationWatchdog.ResetReason.AccountLaunch)
+      m.resetStagnationClocks(StagnationWatchdog.ResetReason.StoragePhaseEntry)
+    }
+    h.module.storageStagnationRefreshAttempted shouldBe true
+
+    // The new round's storage stalls again: past the 2-minute grace it is force-completed, with no second refresh.
+    h.module.lastStorageProgressMs = 0L
+    h.call(_.byteCodeAndStorageArms(StorageCoordinatorProgress(storageStats(completed = 5, active = 2, pending = 4))))
+
+    h.module.refreshes should have size 1
+    h.module.forceCompleteStorageSent shouldBe true
+    h.storage.receiveAll() shouldBe Seq(StorageRangeCoordinator.ForceCompleteStorage)
+  }
+
   it should "ignore progress reports outside their phase" taggedAs UnitTest in {
     val h = new Harness()
     h.module.currentPhase = SyncPhase.StateHealing
