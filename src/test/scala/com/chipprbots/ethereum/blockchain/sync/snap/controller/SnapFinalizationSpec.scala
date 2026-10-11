@@ -110,7 +110,8 @@ private[snap] class StubSnapFinalizationState(
     with TaskFileSweepApi
     with HealedCodeApi
     with PeerPoolApi
-    with ShutdownApi:
+    with ShutdownApi
+    with SnapStopApi:
 
   // SnapFinalizationState (chainDownloaderReplyAdapter is a constructor val)
   var chainDownloadComplete: Boolean = false

@@ -55,6 +55,10 @@ private[snap] trait LifecycleApi:
 private[snap] trait HeapWatchdogApi:
   def ensureHeapWatchdog(): Unit
 
+private[snap] trait SnapStopApi:
+  def stopSnapOnlySchedules(): Unit
+  def stopStateSyncChildren(): Unit
+
 /** SNAP sync lifecycle (spec 016 M9, research.md R6 "Dormant / critical-failure"): the critical-failure count and its
   * threshold (`recordCriticalFailure`), dormant mode (`enterDormantMode`, the `dormantRetry` behaviour and its
   * `DormantWakeUp` wake-up, `wakeFromDormant`), the full restart on a fresh pivot (`restartSnapSync`), and the #1501
