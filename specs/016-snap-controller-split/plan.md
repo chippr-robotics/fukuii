@@ -409,6 +409,14 @@ reviewer re-runs it locally with `scripts/snap-split/verify.sh origin/staging`; 
 
 **For every commit:**
 
+- **Branch rule (CQ-SNAP-016-23).** A change to a module file needs a `refactor/snap-016-*` or `test/snap-016-*`
+  branch, or a `fix/*` or `hotfix/*` branch. A fix branch is checked as "fix" kind: its commits are never moves or
+  narrowings, so steps 1, 2 and 6 and the narrowing stub-test check are skipped, and a `# moved:` trailer on a fix
+  branch is rejected (`[fix-branch]`). Every other check still applies: FR-016 (a) (no `*Impl` mention, with no
+  one-mention allowance), FR-016 (d), the `[counts]` report, and the merge-commit and final-state checks. Steps 3 and 4
+  (test-hunk guard, resources, protected paths) stay refactor/test-only. Any other branch name that touches a module
+  file still fails `[branch]`.
+
 3. **Test-hunk guard.** It applies on `refactor/snap-016-*` branches (P*, M*, C-*, R1).
    - In existing suites, every changed `src/test` hunk may touch only `import` lines and fixture construction.
    - A hunk that adds or removes a line containing an assertion or scheduling token fails. The tokens are `should`,

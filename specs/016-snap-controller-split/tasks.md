@@ -16,6 +16,7 @@ only when every item on the per-slice checklist below holds.
 
 - **[P]**: can run in parallel with the other [P] tasks of the same slice (different files)
 - Branch names: `refactor/snap-016-<slice>`, or `test/snap-016-<slice>` for S0
+- Bug-fix PRs that touch a module file use `fix/*` or `hotfix/*`; verify.sh treats them as non-move branches (plan.md §Move verification, "Branch rule")
 - Line numbers are given as `staging@9a6681cc0 L####`, with post-#1501 anchors in research.md R1. Locate code by
   symbol.
 

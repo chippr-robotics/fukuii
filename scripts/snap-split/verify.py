@@ -5,6 +5,7 @@ Implements plan.md "Move verification" steps 1-7 and FR-016 (a), (c), (d), per c
 
   1  moved blocks only (git --color-moved=plain) .............. commits with a `# moved:` trailer
   2  identical bodies of the `# moved:` symbols ............... commits with a `# moved:` trailer
+  (fix/* and hotfix/* branches may change module files; `# moved:` is rejected there and steps 1, 2, 6 are skipped)
   3  test-hunk guard / `# test-files:` trailer ............... refactor/snap-016-* | test/snap-016-* branches
   4  no src/main/resources change, protected paths untouched .. refactor/test snap-016 branches
   5  FR-016 (a) impl-class mention, (d) member-level init rules  every commit (module dirs only)
@@ -517,6 +518,7 @@ class Verifier:
         self.kind = (
             "refactor" if re.match(r"^refactor/snap-016-", branch)
             else "test" if re.match(r"^test/snap-016-", branch)
+            else "fix" if re.match(r"^(?:fix|hotfix)/", branch)
             else "other"
         )
 
@@ -569,6 +571,11 @@ class Verifier:
                     "refactor/snap-016-* nor test/snap-016-*, so the test-hunk and drift checks would not run",
                 )
 
+        # fix branches (fix/*, hotfix/*) may change module files, but a fix is never a move or a narrowing:
+        # `# moved:` is rejected outright, and steps 1, 2 and 6 below are skipped for them (CQ-SNAP-016-23).
+        if self.kind == "fix" and is_move:
+            self.err(c, "fix-branch", f"`# moved:` trailer on fix branch '{self.branch}': moves belong on refactor/snap-016-*")
+
         # step 5 (a): impl-class mention
         narrowed = False
         for f in g.tree_files(c, MODULE_DIRS):
@@ -579,12 +586,12 @@ class Verifier:
                 narrowed = True
             if not now:
                 continue
-            if is_move and len(now) == 1:
+            if is_move and self.kind != "fix" and len(now) == 1:
                 line = next(l for l in text.splitlines() if IMPL_RE.search(l))
                 if re.match(r"^\s*\w+\s*:\s*\w*Impl\s*=>\s*$", line):
                     continue
                 self.err(c, "FR-016a", f"{f}: the one allowed mention must be the temporary self-type line, found: {line.strip()}")
-            elif is_move:
+            elif is_move and self.kind != "fix":
                 self.err(c, "FR-016a", f"{f}: {len(now)} mentions of the impl class; a move commit allows exactly one (the self-type)")
             else:
                 self.err(c, "FR-016a", f"{f}: mentions the impl class ({len(now)}x); only a `# moved:` commit may, once per file")
@@ -595,14 +602,14 @@ class Verifier:
                 self.err(c, "FR-016d", f"{f}:{no}: {why}: `{s[:90]}`")
 
         # steps 1-2: move commit
-        if is_move:
+        if is_move and self.kind != "fix":
             self.check_moved_blocks(c, p, changed, split_list(moved))
             self.check_bodies(c, p, changed, split_list(moved))
             if narrowed:
                 self.err(c, "step6", "commit both removes the last impl-class mention (narrowing) and carries `# moved:`; split it into two commits")
 
         # step 6 + (b): every narrowing commit, whatever its trailers
-        if narrowed:
+        if narrowed and self.kind != "fix":
             self.check_signature_only(c, p, changed)
             self.check_stub_test(c, p, changed, msg)
         elif trailer(msg, "extended-tests") is not None:

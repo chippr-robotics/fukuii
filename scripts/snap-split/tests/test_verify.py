@@ -671,6 +671,35 @@ class VerifyTests(unittest.TestCase):
             else:
                 self.bad(f, "merge")
 
+    def test_fix_branch_may_change_module_file(self):
+        for branch in ("fix/snap-bug", "hotfix/snap-bug"):
+            f = Fixture(branch=branch)
+            f.write(f"{CTRL}/M.scala", "package x\n\ntrait M:\n  def a = 1\n")
+            f.commit("add")
+            f.write(f"{CTRL}/M.scala", "package x\n\ntrait M:\n  def a = 2\n")
+            f.commit("fix: change body, not a move")
+            out = self.ok(f)
+            self.assertIn("(fix branch)", out)
+            self.assertIn("[counts]", out)
+
+    def test_fix_branch_impl_mention_in_module_fails(self):
+        f = Fixture(branch="fix/snap-bug")
+        f.write(f"{CTRL}/M.scala", "package x\n\ntrait M:\n  self: SNAPSyncControllerImpl =>\n  def a = 1\n")
+        f.commit("fix: reaches into the impl")
+        self.bad(f, "FR-016a")
+
+    def test_fix_branch_moved_trailer_fails(self):
+        f = Fixture(branch="fix/snap-bug")
+        move_commit(f)
+        out = self.bad(f, "fix-branch")
+        self.assertNotIn("[step1]", out)
+
+    def test_fix_branch_still_gets_member_rules(self):
+        f = Fixture(branch="fix/snap-bug")
+        f.write(f"{CTRL}/M.scala", "package x\n\ntrait M:\n  def a: Int = 1\n  def b: Int\n  val c = new Object\n")
+        f.commit("fix: state in a module trait")
+        self.bad(f, "FR-016d")
+
     def test_module_change_on_nonconforming_branch_fails(self):
         f = Fixture(branch="feature/heal")
         f.write(f"{CTRL}/M.scala", "package x\n\ntrait M:\n  def a = 1\n")
