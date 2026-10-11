@@ -9,6 +9,7 @@ import org.apache.pekko.actor.typed.scaladsl.Behaviors
 import scala.concurrent.duration.*
 
 import com.chipprbots.ethereum.blockchain.sync.SyncProtocol
+import com.chipprbots.ethereum.blockchain.sync.snap.*
 import com.chipprbots.ethereum.blockchain.sync.snap.HeapWatchdogEscape
 import com.chipprbots.ethereum.blockchain.sync.snap.HeapWatchdogEscapePolicy
 import com.chipprbots.ethereum.blockchain.sync.snap.OldGenReading
@@ -356,3 +357,54 @@ private[snap] trait SyncLifecycle(val heapWatchdogStart: HeapWatchdogStart) exte
 
     // Re-run pivot selection/bootstrap with the latest visible peer set
     startSnapSync()
+
+private[snap] trait SyncLifecycleStop:
+  self: SNAPSyncControllerImpl =>
+
+  /** Cancel every SNAP-only scheduled timer. Idempotent — `timers.cancel` tolerates unknown keys. Called both at the
+    * lifecycle transition into `completedWithBackfill` (so eviction/tickers don't keep running while regular sync owns
+    * the peer pool) and from the PostStop signal handler.
+    */
+  def stopSnapOnlySchedules(): Unit =
+    cancelSyncTimers(
+      RequestAccountRanges,
+      RequestByteCodes,
+      HealedCodeWaitTimerKey,
+      RequestStorageRanges,
+      CheckDownloadStagnation,
+      RequestTrieNodeHealing,
+      BootstrapCheckKey,
+      PivotBootstrapRetryKey,
+      SnapCapabilityCheckKey,
+      EvictNonSnapPeers,
+      TuneRateTracker,
+      EnsureSnapServerPeersConnected
+    )
+    snapServerPeersSchedulerStarted = false
+    snapPeerEvictionStarted = false
+    progressMonitor.stopPeriodicLogging()
+    stopHeapWatchdog()
+
+  /** Stop the SNAP state-sync child coordinators (account/bytecode/storage/healing) and clear their references. They do
+    * not self-stop on completion, so when `SNAPSyncController` is kept alive past `finalizeSnapSync()` for background
+    * chain backfill (#1162), failing to stop them retains completed task buffers, worker actors, and rate trackers for
+    * the entire backfill window. The previous `PoisonPill` to the parent used to clean these up implicitly.
+    *
+    * `chainDownloader` is NOT stopped here — it keeps running in `completedWithBackfill`.
+    */
+  def stopStateSyncChildren(): Unit =
+    stopAll()
+    forceCompleteStorageSent = false
+    healingWalkLocalOnly.set(false)
+
+  /** A `commonSyncingArms` arm lifted into a class member (spec 016 lift before M10, CQ-SNAP-016-27), body unchanged:
+    * `DelayedRestart`, the backed-off restart armed by `PivotStateUnservable`'s critical-failure path: restart in the
+    * two download phases, ignored in any other (the phase test stays in the body). `commonSyncingArms` delegates to it
+    * at the arm's original position, so the arm order is unchanged.
+    */
+  private[snap] lazy val delayedRestartArms: PartialFunction[Command, Behavior[Command]] = {
+    // Delayed restart after critical failure backoff
+    case DelayedRestart(reason) =>
+      if currentPhase == AccountRangeSync || currentPhase == ByteCodeAndStorageSync then restartSnapSync(reason)
+      else Behaviors.same
+  }
