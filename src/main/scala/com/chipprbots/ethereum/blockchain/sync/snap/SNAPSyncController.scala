@@ -48,6 +48,7 @@ import com.chipprbots.ethereum.blockchain.sync.snap.controller.StagnationWatchdo
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.StagnationWatchdogState
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.StateValidationModule
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.StateValidationState
+import com.chipprbots.ethereum.blockchain.sync.snap.controller.SyncLifecycle
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.SyncingApi
 import com.chipprbots.ethereum.consensus.engine.PoSBlockHeaderValidator
 import com.chipprbots.ethereum.db.storage.AppStateStorage
@@ -125,7 +126,8 @@ private class SNAPSyncControllerImpl(
     with SnapStartApi
     with SyncingApi
     with AccountRangeStartApi
-    with PivotRefreshCommitApi:
+    with PivotRefreshCommitApi
+    with SyncLifecycle(heapWatchdogStart):
 
   import SNAPSyncController.*
   import SyncPhase.*
@@ -146,81 +148,13 @@ private class SNAPSyncControllerImpl(
       maxPendingByteCodeHashes = snapSyncConfig.maxPendingByteCodeHashes
     )
   )
-  // Started with the first SNAP coordinators (not at construction: a node that never runs SNAP needs no watchdog).
-  private var heapWatchdog: Option[SnapHeapWatchdog.Handle] = None
-
-  private def ensureHeapWatchdog(): Unit =
-    if heapWatchdog.isEmpty && snapSyncConfig.heapWatchdogEnabled then
-      heapWatchdog = heapWatchdogStart(
-        highFraction = snapSyncConfig.heapWatchdogPauseFraction,
-        lowFraction = snapSyncConfig.heapWatchdogResumeFraction,
-        pollInterval = snapSyncConfig.heapWatchdogPollInterval,
-        onChange = onHeapPressureChange,
-        queuesEmpty = () => intakeBudget.pendingStorageTasks == 0L && intakeBudget.pendingByteCodeHashes == 0L,
-        policy = HeapWatchdogEscapePolicy(
-          ineffectiveAfterMs = snapSyncConfig.heapWatchdogIneffectiveAfter.toMillis,
-          maxPauseMs = snapSyncConfig.heapWatchdogMaxPause.toMillis
-        ),
-        onEscape = onHeapWatchdogEscape
-      )
-
-  /** Runs on the watchdog thread, like `onHeapPressureChange`. */
-  private def onHeapWatchdogEscape(escape: HeapWatchdogEscape, reading: OldGenReading): Unit =
-    val mib = 1024L * 1024L
-    val occupancy =
-      s"old gen after GC ${reading.postGcUsed / mib} MiB (${(reading.postGcFraction * 100).round}% of " +
-        s"${reading.max / mib} MiB), now ${reading.currentUsed / mib} MiB"
-    escape match
-      case HeapWatchdogEscape.PauseIneffective(pausedMs, idleMs) =>
-        asyncLog.warn(
-          s"[SNAP-HEAP] SNAP intake paused for ${pausedMs / 1000}s but the storage/bytecode queues have been empty " +
-            s"for ${idleMs / 1000}s: the heap is held by something the pause cannot drain - $occupancy. " +
-            s"Pending: ${intakeBudget.describe}" +
-            (if snapSyncConfig.heapWatchdogMaxPause.toMillis > 0 then
-               s". Force-release after ${snapSyncConfig.heapWatchdogMaxPause.toSeconds}s paused"
-             else ". heap-watchdog-max-pause = 0: staying paused")
-        )
-      case HeapWatchdogEscape.ForcedRelease(pausedMs) =>
-        intakeBudget.setHeapPressure(false)
-        intakeBudget.publishMetrics()
-        asyncLog.error(
-          s"[SNAP-HEAP] FORCE-RELEASING SNAP intake after ${pausedMs / 1000}s of ineffective heap pause - " +
-            s"$occupancy. Pending: ${intakeBudget.describe}. The pending-work ceilings still apply; the heap watchdog " +
-            "re-arms once occupancy falls below the resume threshold. Investigate non-SNAP heap use."
-        )
-
-  // Stopped only by stopSnapOnlySchedules (SNAP completion, before regular sync) and onStop. Every coordinator launch
-  // (account phase, accounts-complete recovery) calls ensureHeapWatchdog, so a SNAP restart re-arms it.
-  private def stopHeapWatchdog(): Unit =
-    heapWatchdog.foreach(_.stop())
-    heapWatchdog = None
-    if intakeBudget.heapPressureActive then intakeBudget.setHeapPressure(false)
-
-  /** Runs on the watchdog / JMX notification thread: touches only the thread-safe gate, metrics and the SLF4J logger.
-    */
-  private def onHeapPressureChange(engaged: Boolean, reading: OldGenReading): Unit =
-    intakeBudget.setHeapPressure(engaged)
-    intakeBudget.publishMetrics()
-    val mib = 1024L * 1024L
-    val occupancy =
-      s"old gen after GC ${reading.postGcUsed / mib} MiB (${(reading.postGcFraction * 100).round}% of " +
-        s"${reading.max / mib} MiB), now ${reading.currentUsed / mib} MiB"
-    if engaged then
-      asyncLog.warn(
-        s"[SNAP-HEAP] heap pressure: PAUSING SNAP intake (account dispatch, carried replay, recovery stream) - " +
-          s"$occupancy. Storage/bytecode downloads keep draining. Pending: ${intakeBudget.describe}"
-      )
-    else
-      asyncLog.warn(
-        s"[SNAP-HEAP] heap pressure cleared: RESUMING SNAP intake - $occupancy. Pending: ${intakeBudget.describe}"
-      )
 
   // ── Timer keys (Behaviors.withTimers; replaces the Classic Cancellable fields) ───────────────
   // Recurring keys reuse the Command case object itself; one-shot keys are string literals.
   val BootstrapCheckKey = "bootstrap-check"
-  private val PivotBootstrapRetryKey = "pivot-bootstrap-retry"
-  private val SnapCapabilityCheckKey = "snap-capability-check"
-  private val DormantWakeUpKey = "dormant-wakeup"
+  private[snap] val PivotBootstrapRetryKey = "pivot-bootstrap-retry"
+  private[snap] val SnapCapabilityCheckKey = "snap-capability-check"
+  private[snap] val DormantWakeUpKey = "dormant-wakeup"
   private val PollHandshakedPeersKey = "poll-handshaked-peers"
   // Probe timeouts are keyed by the probe's BigInt requestId (C4) — see startPivotProbe.
 
@@ -392,15 +326,15 @@ private class SNAPSyncControllerImpl(
   val progressMonitor: SyncProgressMonitor = new SyncProgressMonitor(scheduler)
 
   // Failure tracking — critical failures trigger dormant retry with exponential backoff.
-  private var criticalFailureCount: Int = 0
-  private var accountsAtLastCriticalFailure: Long = 0L
+  private[snap] var criticalFailureCount: Int = 0
+  private[snap] var accountsAtLastCriticalFailure: Long = 0L
   private val AccountProgressResetThreshold: Long = 100_000L
 
   // Dormant retry: when critical failures exhaust, preserve all RocksDB data and wait
   // for peers to re-index their snapshots with exponential backoff (3min–20min).
-  private var dormantRetryCount: Int = 0
-  private val DormantBaseDelay: FiniteDuration = 3.minutes
-  private val DormantMaxDelay: FiniteDuration = 20.minutes
+  private[snap] var dormantRetryCount: Int = 0
+  private[snap] val DormantBaseDelay: FiniteDuration = 3.minutes
+  private[snap] val DormantMaxDelay: FiniteDuration = 20.minutes
 
   // Async validation state. `validationInProgress` is the re-entrance guard
   // for the trie-walk Future. `validationGeneration` is bumped at every
@@ -428,7 +362,7 @@ private class SNAPSyncControllerImpl(
   // `100 * downloaded / clamp_min(estimated_total, 1)` formula has a real denominator. Without
   // this, `estimated_total` stays at 0, the formula divides by 1 (the clamp floor), and the
   // dashboard reads `5,239,500%` for a normal in-flight bytecodes count.
-  private var bytecodesEstimatedTotal: Long = 0L
+  private[snap] var bytecodesEstimatedTotal: Long = 0L
 
   // Retry counter for bootstrap-to-SNAP transition (exponential backoff: 2s→60s cap, max 10 retries)
   var bootstrapRetryCount: Int = 0
@@ -457,12 +391,12 @@ private class SNAPSyncControllerImpl(
   // the candidate root. Only if the peer's snapshot is indexed (returns ≥1 account) do we
   // dispatch PivotRefreshed to coordinators. Otherwise we defer and retry every 30s, letting
   // coordinators keep downloading on the old root. This eliminates the ~8-minute dead window.
-  private var pivotProbeRequestId: Option[BigInt] = None
-  private var proactiveRollNeedsProbe: Boolean = false // flag: stagnation check → completePivotRefresh
-  private var pendingProbeCommit: Option[(BigInt, BlockHeader, String)] = None // deferred commit args
-  private var lastProbeAttemptMs: Long = 0L
+  private[snap] var pivotProbeRequestId: Option[BigInt] = None
+  private[snap] var proactiveRollNeedsProbe: Boolean = false // flag: stagnation check → completePivotRefresh
+  private[snap] var pendingProbeCommit: Option[(BigInt, BlockHeader, String)] = None // deferred commit args
+  private[snap] var lastProbeAttemptMs: Long = 0L
   private val ProbeCooldownMs: Long = 30_000L // match DownloadStagnationCheckInterval
-  private var probeAttemptCount: Int = 0
+  private[snap] var probeAttemptCount: Int = 0
   private val MaxProbeAttempts: Int = 5 // 5 × 30s = 150s max deferral before forced roll
   private val ZeroPeerStagnationMs: Long = 3 * 60 * 1000L // 3 min zero-peer short-circuit
 
@@ -472,7 +406,7 @@ private class SNAPSyncControllerImpl(
   // After MaxConsecutivePivotRefreshes, we record a critical failure and enter dormant
   // retry mode. Set to 10 (was 3) to tolerate ETC mainnet's 1-5 SNAP peers needing
   // 5+ minutes to re-index after serve-window expiry.
-  private var consecutivePivotRefreshes: Int = 0
+  private[snap] var consecutivePivotRefreshes: Int = 0
   private val MaxConsecutivePivotRefreshes = 10
 
   // Pivot blocks confirmed unservable in this session. When a refreshPivotInPlace resolves
@@ -617,7 +551,7 @@ private class SNAPSyncControllerImpl(
   /** Cancel the given timers in the given order (spec 016 P2, FR-011). Each caller passes its own list: the lists
     * differ on purpose and are kept exactly as they were. `timers.cancel` tolerates unknown keys.
     */
-  private def cancelSyncTimers(keys: Any*): Unit =
+  private[snap] def cancelSyncTimers(keys: Any*): Unit =
     keys.foreach(timers.cancel)
 
   /** Cancel every SNAP-only scheduled timer. Idempotent — `timers.cancel` tolerates unknown keys. Called both at the
@@ -2160,140 +2094,6 @@ private class SNAPSyncControllerImpl(
     // Recovery budget: accounts done, bytecode=2, storage=3 (total 5 per peer)
     bytecodeCoordinator.foreach(_ ! actors.ByteCodeCoordinator.UpdateMaxInFlightPerPeer(2))
 
-  /** Record a critical failure and check whether the threshold is reached. Critical failures are those that indicate
-    * SNAP sync cannot proceed on the current pivot.
-    *
-    * @param reason
-    *   Description of the failure. Yields `true` if the retry limit is exceeded and the caller should enter dormant
-    *   mode.
-    */
-  def recordCriticalFailure(reason: String): Boolean =
-    SNAPSyncMetrics.incrementSyncError()
-    criticalFailureCount += 1
-    accountsAtLastCriticalFailure = progressMonitor.currentProgress.accountsSynced
-    ctx.log.warn(s"Critical SNAP sync failure ($criticalFailureCount/${snapSyncConfig.maxSnapSyncFailures}): $reason")
-
-    if criticalFailureCount >= snapSyncConfig.maxSnapSyncFailures then
-      ctx.log.error(s"SNAP sync failed ${criticalFailureCount} times — threshold reached")
-      true
-    else false
-
-  /** Enter dormant mode: stop all coordinators and scheduled tasks, preserve all RocksDB data, and schedule a wake-up
-    * with exponential backoff. SNAP's recovery when it cannot proceed — critical-failure threshold, bootstrap retries
-    * exhausted, no snap-capable peer after the capability grace period. The wake-up restarts SNAP on a fresh pivot once
-    * a snap-capable peer is connected (`dormantRetry`), and all persisted SNAP progress is kept.
-    */
-  def enterDormantMode(reason: String): Behavior[Command] =
-    currentPhase = Dormant
-
-    ctx.log.warn(
-      s"Entering dormant mode (attempt ${dormantRetryCount + 1}): $reason. " +
-        s"All downloaded state preserved. Will retry after backoff."
-    )
-
-    cancelSyncTimers(
-      RequestAccountRanges,
-      RequestByteCodes,
-      RequestStorageRanges,
-      CheckDownloadStagnation,
-      RequestTrieNodeHealing,
-      BootstrapCheckKey,
-      PivotBootstrapRetryKey,
-      TuneRateTracker,
-      SnapCapabilityCheckKey,
-      EvictNonSnapPeers
-    )
-
-    stopAll()
-    healingWalkLocalOnly.set(false)
-
-    requestTracker.clear()
-    pendingPivotRefresh = None
-    pivotProbeRequestId = None
-    pendingProbeCommit = None
-    proactiveRollNeedsProbe = false
-    probeAttemptCount = 0
-    // Dormancy leaves every phase flag as it is (an empty reset set, research.md R3b).
-    reset(PhaseFlags.ResetKind.Dormant)
-
-    dormantRetryCount += 1
-    val backoffMs = math.min(
-      DormantBaseDelay.toMillis * (1L << math.min(dormantRetryCount - 1, 10)),
-      DormantMaxDelay.toMillis
-    )
-    val backoff = backoffMs.millis
-
-    ctx.log.info(
-      s"Dormant backoff: ${backoff.toSeconds}s " +
-        s"(attempt $dormantRetryCount, criticalFailures=$criticalFailureCount)"
-    )
-
-    timers.cancel(DormantWakeUpKey)
-    timers.startSingleTimer(DormantWakeUpKey, DormantWakeUp, backoff)
-
-    dormantRetry()
-
-  private def wakeFromDormant(): Behavior[Command] =
-    ctx.log.info(
-      s"Waking from dormant mode after $dormantRetryCount attempt(s). " +
-        s"criticalFailureCount=$criticalFailureCount. Restarting SNAP sync with fresh pivot."
-    )
-
-    resetHealedCodeHold()
-    reset(PhaseFlags.ResetKind.Wake)
-    bytecodesEstimatedTotal = 0L
-    healingValidatedRoot = None
-
-    pivotBlock = None
-    stateRoot = None
-    mptStorage = None
-    currentPhase = Idle
-    coordinatorGeneration += 1
-    validationGeneration += 1
-    validationInProgress = false
-    consecutivePivotRefreshes = 0
-    // A fresh retry budget: going dormant on exhausted bootstrap retries leaves the counter at the limit, so without
-    // this the first retry after waking (a peer whose height is not known yet, say) would send it straight back.
-    bootstrapRetryCount = 0
-    // #1551: the stagnation stall state of the round that went dormant does not carry into the new round.
-    resetStagnationClocks(StagnationWatchdog.ResetReason.Wake)
-
-    startSnapSync()
-
-  def dormantRetry(): Behavior[Command] =
-    Behaviors
-      .receiveMessage[Command] {
-        // Peer events, CLPivotHint and GetProgress: peerEventArms (P3).
-        case msg if peerEventArms.isDefinedAt(msg) =>
-          peerEventArms(msg)
-
-        case DormantWakeUp =>
-          val snapPeerCount = handshakedPeers.values.count(_.peerInfo.remoteStatus.supportsSnap)
-          if snapPeerCount > 0 then
-            ctx.log.info(s"Dormant wake-up: $snapPeerCount SNAP peer(s) available. Restarting SNAP sync.")
-            wakeFromDormant()
-          else
-            ctx.log.info(s"Dormant wake-up: still no SNAP peers. Re-entering dormant with extended backoff.")
-            enterDormantMode(s"no SNAP peers at wake-up (attempt $dormantRetryCount)")
-
-        case GetStatus(replyTo) =>
-          replyTo ! SyncProtocol.Status.Syncing(
-            startingBlockNumber = appStateStorage.getSyncStartingBlock(),
-            blocksProgress = SyncProtocol.Status.Progress(
-              pivotBlock.getOrElse(BigInt(0)),
-              pivotBlock.getOrElse(BigInt(0))
-            ),
-            stateNodesProgress = None
-          )
-          Behaviors.same
-
-        case _ => // silently drop stale coordinator messages, SNAP responses, etc.
-          Behaviors.same
-      }
-      .receiveSignal { case (_, PostStop) =>
-        onStop(); Behaviors.same
-      }
-
   def startAccountRangeSync(rootHash: TrieRoot): Unit =
     // Before starting workers, check if any connected peer supports the snap/1 protocol.
     // If no peers support snap, the workers will send requests that are silently ignored,
@@ -3061,84 +2861,6 @@ private class SNAPSyncControllerImpl(
         // end if !deferForProbe
       // end else (stateRoot changed)
     // end else (not StateValidation phase)
-
-  def restartSnapSync(reason: String): Behavior[Command] =
-    ctx.log.warn(s"Restarting SNAP sync with a fresher pivot: $reason")
-
-    // Clear any pending pivot refresh (we're doing a full restart instead)
-    pendingPivotRefresh = None
-    pivotProbeRequestId = None
-    pendingProbeCommit = None
-    proactiveRollNeedsProbe = false
-    probeAttemptCount = 0
-    lastProbeAttemptMs = 0L
-    // spec 004 T011: a full restart spawns a fresh healing coordinator (serveRoot re-inits to the walk root);
-    // clear the serve-root bookkeeping so the first healing tick re-engages decoupling against the new round.
-    healingServeRootRequestInFlight = false
-    lastHealingServeRootBlock = None
-
-    // NOTE: do NOT reset consecutivePivotRefreshes here. restartSnapSync is often called
-    // from refreshPivotInPlace when no new pivot is available, which means the counter would
-    // reset on every failed cycle and never reach the threshold. The counter only resets on
-    // actual account download progress (ProgressAccountsSynced) or at startSnapSync().
-
-    // Cancel periodic phase request ticks
-    cancelSyncTimers(
-      RequestAccountRanges,
-      RequestByteCodes,
-      RequestStorageRanges,
-      CheckDownloadStagnation,
-      RequestTrieNodeHealing,
-      BootstrapCheckKey,
-      PivotBootstrapRetryKey,
-      TuneRateTracker
-    )
-
-    // Stop coordinators so we don't double-run phases
-    stopAll()
-    healingWalkLocalOnly.set(false)
-
-    // Clear inflight request timeouts and internal phase state
-    requestTracker.clear()
-
-    // Clear concurrent download state and recovery data
-    resetHealedCodeHold()
-    reset(PhaseFlags.ResetKind.Restart)
-    // Reset bytecode-estimate counter so it stays in sync with progressMonitor.reset()
-    // (called below). IncrementalContractData will repopulate as accounts are re-identified.
-    bytecodesEstimatedTotal = 0L
-    // #1188: invalidate clean-walk signal — the trie we're rebuilding is fresh state.
-    // Root-equality alone would catch this (stateRoot is reset below) but we clear
-    // explicitly so the field doesn't briefly hold a stale positive against a None root.
-    healingValidatedRoot = None
-    appStateStorage
-      .putSnapSyncAccountsComplete(false)
-      .and(appStateStorage.putSnapSyncStorageComplete(false))
-      .and(appStateStorage.putSnapSyncBytecodeComplete(false))
-      .commit()
-    appStateStorage
-      .putSnapSyncStorageFilePath("")
-      .and(appStateStorage.putSnapSyncStorageFileCount(None))
-      .and(appStateStorage.putSnapSyncCodeHashesCount(None))
-      .commit()
-
-    // Reset pivot/state root and storage so a new selection is committed
-    pivotBlock = None
-    stateRoot = None
-    mptStorage = None
-    currentPhase = Idle
-    coordinatorGeneration += 1
-    // Bump validation generation so any in-flight validation Future's result
-    // is dropped on arrival. Also clear the in-progress flag — the new sync
-    // attempt starts from scratch, no validation is active.
-    validationGeneration += 1
-    validationInProgress = false
-
-    // Reset progress counters so logs/ETA reflect the new attempt
-    progressMonitor.reset()
-
-    // Re-run pivot selection/bootstrap with the latest visible peer set
-    startSnapSync()
 
   /** Convert SNAP sync progress to SyncProtocol.Status for eth_syncing RPC endpoint.
     *
