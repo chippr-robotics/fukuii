@@ -3,7 +3,8 @@
     "Spec 016 storage ratchet (env freeze ratchet, 2026-10-11 decision), enforced by scripts/snap-split/verify.py step 8 (Ratchet).",
     "Every value must equal what verify.py measures at the PR head; the copy at the merge-base with staging is the ceiling.",
     "Lower a value (remove a per-file entry at 0) in the PR that reduces it. env.members, env.header, env.storage_members and raw_imports never go up.",
-    "Per-file counts may move between files while storage_refs_total does not rise; a higher total needs a new justifications[\"storage_refs.total\"] line."
+    "Per-file counts may move between files while storage_refs_total does not rise; a higher total needs a new justifications[\"storage_refs.total\"] line.",
+    "Measured set (keys relative to snap/): every .scala file under controller/ and actors/, plus SNAPSyncController.scala, the split's move source (RATCHET_FILES, T054c)."
   ],
   "env": {
     "members": 18,
@@ -19,12 +20,13 @@
       "validatorFactory"
     ]
   },
-  "storage_refs_total": 628,
+  "storage_refs_total": 692,
   "storage_refs": {
     "controller/SnapResumePlanner.scala": 93,
     "actors/StorageRangeCoordinator.scala": 88,
     "actors/TrieNodeHealingCoordinator.scala": 84,
     "controller/ChildFactories.scala": 72,
+    "SNAPSyncController.scala": 64,
     "controller/DownloadSupervisor.scala": 60,
     "controller/PivotSelector.scala": 51,
     "controller/HealingOrchestrator.scala": 45,
@@ -45,5 +47,7 @@
       "com.chipprbots.ethereum.db.dataSource.DataUpdate"
     ]
   },
-  "justifications": {}
+  "justifications": {
+    "storage_refs.total": "scope extension: core added to the measured set; no code change (spec 016 T054c: SNAPSyncController.scala, the split's move source, counts 64; 628 + 64 = 692. From here a move from the core into a module is a per-file trade and the total only goes down)"
+  }
 }

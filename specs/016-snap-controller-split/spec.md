@@ -545,9 +545,11 @@ before the coordinator stage (T060), and every coordinator task is amended:
   against the committed `scripts/snap-split/storage-baseline.json` (PR #1570). In short:
   - `[env-freeze]`: the `SnapControllerEnv` member count (18) and its storage-typed members only go down;
   - `[storage-refs]`: storage-type identifiers and storage member accesses in code under `snap/controller/` and
-    `snap/actors/`, with comments excluded. The **total across both directories only goes down**; per-file counts may
-    move between files, so a split slice that moves references into a new module file is not penalised;
-  - `[raw-import]`: no new raw RocksDB / `DataSource` / `WriteBatch` import in those directories.
+    `snap/actors/`, and in the controller core `snap/SNAPSyncController.scala` (the split's move source, added by
+    T054c), with comments excluded. The **total across the measured set only goes down**; per-file counts may move
+    between files, so a split slice that moves references into a new module file, or out of the core into a module,
+    is not penalised;
+  - `[raw-import]`: no new raw RocksDB / `DataSource` / `WriteBatch` import in those files.
 
   Calls on `StateIngest` are **not** storage references. `StateIngest` itself is held to its own member cap (routing
   doc, capability caps). A PR that lowers a count records the new value in the baseline file in the same PR.
