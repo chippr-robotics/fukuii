@@ -7,11 +7,30 @@ import org.apache.pekko.util.ByteString
 import scala.concurrent.duration.*
 
 import com.chipprbots.ethereum.blockchain.sync.SyncProtocol
-import com.chipprbots.ethereum.blockchain.sync.snap.*
+import com.chipprbots.ethereum.blockchain.sync.snap.ByteCodeTask
+import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController.*
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController.SyncPhase.*
+import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncMetrics
+import com.chipprbots.ethereum.blockchain.sync.snap.actors
 import com.chipprbots.ethereum.db.storage.MptStorage
+import com.chipprbots.ethereum.db.storage.SnapSyncProgressStorage
 import com.chipprbots.ethereum.domain.TrieRoot
+
+private[snap] trait AccountRangeStartApi:
+  def startAccountRangeSync(rootHash: TrieRoot): Unit
+
+private[snap] trait ByteCodeRequestApi:
+  def requestByteCodes(): Unit
+
+private[snap] trait AccountRangeLaunchApi:
+  def launchAccountRangeWorkers(rootHash: TrieRoot, concurrency: Int): Unit
+
+private[snap] trait DownloadSupervisorState:
+  def coordinatorGeneration: Long
+  def snapProgressStorage: SnapSyncProgressStorage
+  def recordStorageDone: Boolean
+  def SnapCapabilityCheckKey: String
 
 /** SNAP download supervision (spec 016 M11, research.md R6 "Download supervision"): the account phase's start with its
   * snap-capability grace check (`startAccountRangeSync`), the accounts-complete recovery's bytecode and storage
@@ -22,8 +41,10 @@ import com.chipprbots.ethereum.domain.TrieRoot
   * ticks, the response routing, the progress and backpressure arms, `IncrementalContractData` and the phase-completion
   * arms are inline in `commonSyncingArms`, and they call these members.
   */
-private[snap] trait DownloadSupervisor:
-  self: SNAPSyncControllerImpl =>
+private[snap] trait DownloadSupervisor extends AccountRangeStartApi with ByteCodeRequestApi:
+  self: DownloadSupervisorState & SnapSharedState & SnapControllerEnv & CoordinatorHandles & PhaseFlags & PeerPoolApi &
+    SnapServerPeersApi & SnapPeerEvictionApi & ChainDownloadStartApi & FinalizationApi & HealingApi &
+    AccountRangeLaunchApi =>
 
   /** Geth-aligned: check if all 3 concurrent download phases are complete. Only transitions to healing when accounts +
     * bytecodes + storage are ALL done. The sentinel pattern (NoMoreByteCodeTasks/NoMoreStorageTasks) ensures bytecodes

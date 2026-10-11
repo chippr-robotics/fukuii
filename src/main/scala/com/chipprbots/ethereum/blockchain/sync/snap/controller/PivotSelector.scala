@@ -15,7 +15,6 @@ import com.chipprbots.ethereum.blockchain.sync.snap.SyncProgress
 import com.chipprbots.ethereum.consensus.engine.PoSBlockHeaderValidator
 import com.chipprbots.ethereum.domain.BlockHeader
 import com.chipprbots.ethereum.domain.ChainWeight
-import com.chipprbots.ethereum.domain.TrieRoot
 import com.chipprbots.ethereum.utils.BlockchainConfig
 import com.chipprbots.ethereum.utils.ByteStringUtils.ByteStringOps
 
@@ -27,9 +26,6 @@ private[snap] trait SnapStartApi:
 
 private[snap] trait SyncingApi:
   def syncing(): Behavior[Command]
-
-private[snap] trait AccountRangeStartApi:
-  def startAccountRangeSync(rootHash: TrieRoot): Unit
 
 private[snap] trait PivotBestBlockApi:
   def updateBestBlockForPivot(header: BlockHeader, pivotBlockNumber: BigInt): Unit

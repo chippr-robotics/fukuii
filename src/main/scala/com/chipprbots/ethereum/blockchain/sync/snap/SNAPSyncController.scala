@@ -21,11 +21,11 @@ import com.chipprbots.ethereum.blockchain.sync.Blacklist
 import com.chipprbots.ethereum.blockchain.sync.PeerListHelper
 import com.chipprbots.ethereum.blockchain.sync.PeerListSupportNg
 import com.chipprbots.ethereum.blockchain.sync.SyncProtocol
-import com.chipprbots.ethereum.blockchain.sync.snap.controller.AccountRangeStartApi
-import com.chipprbots.ethereum.blockchain.sync.snap.controller.ByteCodeRequestApi
+import com.chipprbots.ethereum.blockchain.sync.snap.controller.AccountRangeLaunchApi
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.ChildFactories
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.CoordinatorHandles
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.DownloadSupervisor
+import com.chipprbots.ethereum.blockchain.sync.snap.controller.DownloadSupervisorState
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.HealingOrchestrator
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.HealingOrchestratorState
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.HeapWatchdogStart
@@ -117,19 +117,19 @@ private class SNAPSyncControllerImpl(
     with SnapResumePlannerState
     with HealingOrchestrator
     with HealingOrchestratorState
-    with ByteCodeRequestApi
     with StagnationWatchdog
     with StagnationWatchdogState
     with PivotSelector
     with PivotSelectorState
     with SnapStartApi
     with SyncingApi
-    with AccountRangeStartApi
     with SyncLifecycle(heapWatchdogStart)
     with SyncLifecycleState
     with PivotRefresher
     with PivotRefresherState
-    with DownloadSupervisor:
+    with DownloadSupervisor
+    with DownloadSupervisorState
+    with AccountRangeLaunchApi:
 
   import SNAPSyncController.*
   import SyncPhase.*
@@ -233,7 +233,7 @@ private class SNAPSyncControllerImpl(
   // the download (deferredMerkleization = false) + cached ("inmemory") pruning, storage trie nodes go through
   // CachedReferenceCountedStorage.update into an in-memory cache, not RocksDB, so they could be lost with a marker on
   // disk. Path scheme writes through PathNodeStorage; archive/basic pruning write through; deferred builds no trie.
-  private[snap] val recordStorageDone: Boolean =
+  val recordStorageDone: Boolean =
     snapSyncConfig.storageScheme == StorageScheme.Path || snapSyncConfig.deferredMerkleization ||
       !stateStorage.isInstanceOf[CachedReferenceCountedStateStorage]
   if !recordStorageDone then
@@ -1892,7 +1892,7 @@ private class SNAPSyncControllerImpl(
             .and(appStateStorage.putSnapSyncBytecodeComplete(false))
             .commit()
 
-  private[snap] def launchAccountRangeWorkers(rootHash: TrieRoot, concurrency: Int): Unit =
+  def launchAccountRangeWorkers(rootHash: TrieRoot, concurrency: Int): Unit =
     val effectiveConcurrency = if concurrency > 0 then concurrency else snapSyncConfig.accountConcurrency
     // Reset stagnation tracking for this phase.
     resetStagnationClocks(StagnationWatchdog.ResetReason.AccountLaunch)
