@@ -442,6 +442,10 @@ private class SNAPSyncControllerImpl(
   // armed by a counted StateHealing attempt. A timer armed in an earlier phase (e.g. a storage-phase stall) carries
   // false, so firing after StateHealing starts cannot spend the heal budget on a stalled CL. Consulted on PoS only.
   private var retryRefreshCounts: Boolean = false
+  // #1555: whether the counted attempt that armed that timer reported the pivot as KNOWN unservable (all healing peers
+  // stateless), so its replays keep the #1478 fallback. Set only together with retryRefreshCounts = true; cleared
+  // wherever retryRefreshCounts is cleared. Read on PoS only.
+  private var retryRefreshUnservable: Boolean = false
   private val MaxHealRepegNoRootAttempts: Int = 10 // 10 × 30s ≈ 5 min of no servable root before the lazy handoff
   // Tracks whether the SNAP peer eviction recurring timer is active (replaces the snapPeerEvictionTask
   // Cancellable). startSnapPeerEviction() is idempotent — it only starts the timer once per session.
@@ -1431,6 +1435,7 @@ private class SNAPSyncControllerImpl(
               s"Backtracked pivot below 0 — falling back to network-best recalculation after 60s."
           )
           retryRefreshCounts = false
+          retryRefreshUnservable = false
           timers.startSingleTimer(PivotBootstrapRetryKey, RetryPivotRefresh, 60.seconds)
         Behaviors.same
 
@@ -1464,9 +1469,12 @@ private class SNAPSyncControllerImpl(
           ctx.log.info("Retrying pivot refresh after bootstrap failure...")
           // PoS only: a replay counts toward the heal budget iff the timer was armed by a counted attempt.
           // ETC/pre-merge (isPoSChain=false) keeps the unconditional default (byte-identical to base).
+          // #1555: a replay of a timer armed by a counted "all healing peers stateless" attempt is still about a root
+          // every peer refused, so it keeps that attempt's pivotUnservable (PoS only; ETC passes false as before).
           refreshPivotInPlace(
             "retry after bootstrap failure",
-            countsTowardHealBudget = !isPoSChain || retryRefreshCounts
+            countsTowardHealBudget = !isPoSChain || retryRefreshCounts,
+            pivotUnservable = isPoSChain && retryRefreshCounts && retryRefreshUnservable
           )
         else ctx.log.info(s"Skipping pivot refresh retry — phase=$currentPhase no longer needs it")
         Behaviors.same
@@ -2630,6 +2638,7 @@ private class SNAPSyncControllerImpl(
             )
             timers.cancel(PivotBootstrapRetryKey)
             retryRefreshCounts = true // armed by a COUNTED attempt: its replays count too
+            retryRefreshUnservable = pivotUnservable // #1555: ... and keep its unservable-pivot fallback
             timers.startSingleTimer(PivotBootstrapRetryKey, RetryPivotRefresh, 30.seconds)
       else
         ctx.log.warn(
@@ -2640,6 +2649,7 @@ private class SNAPSyncControllerImpl(
         // Restarting can't help with no peers, and it destroys all downloaded trie data.
         timers.cancel(PivotBootstrapRetryKey)
         retryRefreshCounts = false // armed outside StateHealing: a replay landing in healing must not count (PoS)
+        retryRefreshUnservable = false
         timers.startSingleTimer(PivotBootstrapRetryKey, RetryPivotRefresh, 30.seconds)
     else
       val newPivotBlock = newPivotOpt.get
@@ -2838,6 +2848,7 @@ private class SNAPSyncControllerImpl(
             // must not replay afterwards and count again against a stalled CL (forge, BUG-BC3 3rd follow-up).
             if isPoSChain then
               retryRefreshCounts = false
+              retryRefreshUnservable = false
               timers.cancel(PivotBootstrapRetryKey)
             // Chain download target extends to the new pivot (chain data is canonical, never invalidated)
             if chainDownloader.isDefined then

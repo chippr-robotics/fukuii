@@ -393,6 +393,19 @@ class HealingOrchestratorSpec extends ScalaTestWithActorTestKit(ManualTime.confi
     scheduledTimers(h.effects()) shouldBe Seq(("scheduled-trie-walk", ScheduledTrieWalk, 2.minutes))
   }
 
+  // #1555 fix (a): "all healing peers stateless" is a report that the root is unservable, so the refresh must carry
+  // pivotUnservable = true (the #1478 fallback) and count toward the heal budget.
+  it should "refresh the pivot as KNOWN unservable when every healing peer is stateless" taggedAs UnitTest in {
+    val h = new Harness()
+    h.module.pivotBlock = Some(pivot)
+    h.module.stateRoot = Some(root)
+
+    h.call(_.stateHealingArms(HealingAllPeersStateless))
+
+    h.module.refreshes.toSeq shouldBe Seq(("all healing peers stateless", true, true))
+    h.module.completions shouldBe 0
+  }
+
   it should "anchor the in-memory pivot and hand off to lazy healing when healing is abandoned" taggedAs UnitTest in {
     val h = new Harness()
     h.module.pivotBlock = Some(pivot)

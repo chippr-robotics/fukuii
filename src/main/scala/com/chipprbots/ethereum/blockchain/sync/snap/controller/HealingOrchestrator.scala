@@ -86,7 +86,11 @@ private[snap] trait HealingOrchestrator extends HealingApi with HealedCodeApi wi
   private[snap] lazy val stateHealingArms: PartialFunction[Command, Behavior[Command]] = {
     case HealingAllPeersStateless =>
       ctx.log.warn("All healing peers stateless — refreshing pivot in-place for healing")
-      refreshPivotInPlace("all healing peers stateless")
+      // #1555: every healing peer answered empty for this root, so it is KNOWN unservable. Say so, so that on a PoS
+      // chain whose CL head has not advanced (clHead - offset <= pivot) the refresh can still move to the #1478
+      // fallback (clHead - margin, or the capped peer tip - margin) instead of skipping and burning the re-peg budget
+      // on the same dead root. Inert on ETC/pre-merge: the flag is read only in refreshPivotInPlace's CL-head branch.
+      refreshPivotInPlace("all healing peers stateless", pivotUnservable = true)
       Behaviors.same
 
     // Coordinator detected no healing progress (MaxConsecutiveStagnations 2-min cycles, or the
