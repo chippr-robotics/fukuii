@@ -440,7 +440,8 @@ only when every item on the per-slice checklist below holds.
     body change in members that do not move, which neither the move nor the narrowing commit admits, and the sites
     reset different clock sets; it needs a decision on where it lands and its per-reason sets (CQ-SNAP-016-20). The
     resets are unchanged. Stub test: `StagnationWatchdogSpec` (eight cases).
-- [ ] T050 [M8] `PivotSelector`. Run Platåberget from scratch.
+- [x] T050 [M8] `PivotSelector`. Run Platåberget from scratch.
+  - Closed by M8c (T050d): `startSnapSync`'s pivot-selection steps moved; Platåberget from scratch is still pending.
   - As built: no prerequisite commit. The move commit moves into `controller/PivotSelector.scala` the whole members
     `bootstrapping` (the behaviour: `BootstrapComplete` with the freshness check and the post-merge header gate,
     `RetrySnapSyncStart`, the initial `PivotBootstrapFailed` backoff), `handleCLPivotHint`, `bootstrapRetryDelay`,
@@ -497,6 +498,39 @@ only when every item on the per-slice checklist below holds.
     `launchAccountRangeWorkers` and the `AccountRangeProgressCmd` checkpoint arm), and no `Restart`/`Wake` reason
     (those paths reset no stagnation clock today, so #1551 items 2 and 3 need a new call site as well as a table row).
     Next: M5b, M6c, M7b, M8c byte-moves of the named members.
+- [x] T050d [M8c] Byte-move `startSnapSync`'s pivot-selection steps (named by T050c) into `PivotSelector`.
+  - As built: three commits. (1) Prerequisite: verify.py learns the `# extended-tests: <exact paths>` trailer. M8c is
+    the first slice to move more code into an already-narrowed module, and its narrowing extends M8's stub suite. On a
+    narrowing commit, a named suite must be a module stub suite (`new Stub<Module>State`). It may gain assertions only in
+    cases the commit adds (an added `... in {` opener earlier in the same hunk), never a skip, retagging or scheduling
+    token (`ignore`, `pending`, `cancel`, `assume`, a `taggedAs` other than `UnitTest`, `Thread.sleep`, `eventually`,
+    `within`, `timeout`, `interval`), and never loses one. It counts for FR-016 (b) if it gains at least one. Known
+    limit: the case-opener check is per -U0 hunk, so an added line that git aligns into an existing case's hunk is
+    attributed by position, not parsed. Nine new self-tests (73, OK). (2) The move commit moves `resumeInterruptedBootstrap`,
+    `selectPivotAndStart` and `retryBootstrapAtBlockArms` (3 symbols; plan.md's M8 row lists `RetryBootstrapAtBlock`)
+    into a temporary trait `PivotSelectorStart` appended to `controller/PivotSelector.scala` with the temporary
+    self-type `SNAPSyncControllerImpl`. `minPivotHint` and `completePivotRefreshWithStateRoot` go `private` →
+    `private[snap]`, and the core gains `with PivotSelectorStart`. (3) The narrowing commit drops that trait's two
+    header lines, so its members fold into `PivotSelector` unchanged. Narrowed self-type: `PivotSelectorState &
+    SnapSharedState & SnapControllerEnv & CoordinatorHandles & PhaseFlags & PeerPoolApi & HandshakedPeersApi &
+    BootstrapPeersApi & HealingApi & LifecycleApi & ShutdownApi & SnapStartApi & SyncingApi & AccountRangeStartApi &
+    StagnationResetApi & PivotRefreshCommitApi`.
+    - State 9 against M8's 7: + `minPivotHint` and `pendingPivotRefresh`.
+    - Api 18 against M8's 16: + `StagnationResetApi` (reused whole) and `PivotRefreshCommitApi`
+      (`completePivotRefreshWithStateRoot`). The latter is new, declared in the module file and implemented by the
+      core; a new trait, rather than growing `PivotRefreshApi`, keeps M6b's and M7's counts unchanged.
+    - `CoordinatorHandles` (the ChainDownloader pause) joins the self-type. `SnapControllerEnv` stays at 18.
+
+    The two steps keep their `using scala.util.boundary.Label[Behavior[Command]]` parameter. `startSnapSync` (still in
+    the core) opens the boundary and calls them, and the Label resolves there as a context argument, so every `break`
+    is unchanged and still exits `startSnapSync`. No `try`/`Try`/`NonFatal` sits between a `break` and the boundary.
+    **Not moved**: `startSnapSync` (the boundary and the step sequence), `recoverAccountsComplete` and
+    `spawnRecoveryCoordinators` (M5b / M11), `minPivotHint` (written by `idle`), and the dispatch (`idle`'s `Start` and
+    `MinPivotBlock` arms, the `CLPivotHint` arm of `peerEventArms`, the delegation line in `commonSyncingArms`). Stub
+    test: `PivotSelectorSpec` extended with nine cases (17 in all): interrupted bootstrap resumed; reached target
+    cleared, then the no-peer backoff; network pivot; `MinPivotBlock` raise; genesis pivot; CL-head pivot; CL wait;
+    the backtracked retry by header fetch and by in-place commit; the retry skipped outside the three phases.
+    Platåberget from scratch: **pending** (to be run by the user on the slice jar after merge; no node run here).
 - [ ] T051 [M9] `SyncLifecycle`, including the #1501 heap watchdog (call sites unchanged). Run Mordor dormant/wake.
 - [ ] T052 [M10] `PivotRefresher`. Run Platåberget across at least 3 refreshes, and Mordor.
 - [ ] T053 [M11] `DownloadSupervisor`. Check SC-001 (core ≤ about 1,000 lines). Run a full Mordor SNAP.

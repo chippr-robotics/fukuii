@@ -15,6 +15,7 @@ import org.apache.pekko.util.ByteString
 import scala.collection.mutable
 import scala.concurrent.ExecutionContext
 import scala.concurrent.duration.*
+import scala.util.boundary
 
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
@@ -28,6 +29,7 @@ import com.chipprbots.ethereum.blockchain.sync.snap.SNAPRequestTracker
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncConfig
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController.*
+import com.chipprbots.ethereum.blockchain.sync.snap.SnapIntakeBudget
 import com.chipprbots.ethereum.blockchain.sync.snap.StateValidator
 import com.chipprbots.ethereum.blockchain.sync.snap.SyncProgressMonitor
 import com.chipprbots.ethereum.db.storage.AppStateStorage
@@ -36,6 +38,8 @@ import com.chipprbots.ethereum.db.storage.FlatSlotStorage
 import com.chipprbots.ethereum.db.storage.MptStorage
 import com.chipprbots.ethereum.db.storage.PathNodeStorage
 import com.chipprbots.ethereum.db.storage.StateStorage
+import com.chipprbots.ethereum.domain.Block
+import com.chipprbots.ethereum.domain.BlockBody
 import com.chipprbots.ethereum.domain.BlockHeader
 import com.chipprbots.ethereum.domain.BlockchainReader
 import com.chipprbots.ethereum.domain.BlockchainWriter
@@ -75,13 +79,17 @@ private[snap] class StubPivotSelectorState(
     with ShutdownApi
     with SnapStartApi
     with SyncingApi
-    with AccountRangeStartApi:
+    with AccountRangeStartApi
+    with CoordinatorHandles
+    with StagnationResetApi
+    with PivotRefreshCommitApi:
 
   // PivotSelectorState
   var clPivotHint: Option[CLPivotHint] = None
   var clHintArrivedAtMs: Option[Long] = None
   var bootstrapRetryCount: Int = 0
-  def isPoSChain: Boolean = false
+  var posChain: Boolean = false
+  def isPoSChain: Boolean = posChain
   val bigIntReverseOrdering: Ordering[BigInt] = Ordering[BigInt].reverse
   def BootstrapCheckKey: String = "bootstrap-check"
   val forwardedPeerEvents: mutable.ArrayBuffer[Command] = mutable.ArrayBuffer.empty
@@ -89,6 +97,8 @@ private[snap] class StubPivotSelectorState(
     forwardedPeerEvents += FlushPeerDisconnects
     Behaviors.same
   }
+  var minPivotHint: BigInt = BigInt(0)
+  var pendingPivotRefresh: Option[(BigInt, String)] = None
 
   // SnapSharedState
   var pivotBlock: Option[BigInt] = None
@@ -109,7 +119,9 @@ private[snap] class StubPivotSelectorState(
   def blockchainReader: BlockchainReader = chain.blockchainReader
   def blockchainWriter: BlockchainWriter = chain.blockchainWriter
   def peerEventBus: ActorRef[PeerEventBusActor.Command] = notUsed("peerEventBus")
-  def syncController: ActorRef[SyncProtocol.SyncControllerReply] = notUsed("syncController")
+  var syncControllerRef: Option[ActorRef[SyncProtocol.SyncControllerReply]] = None
+  def syncController: ActorRef[SyncProtocol.SyncControllerReply] =
+    syncControllerRef.getOrElse(notUsed("syncController"))
   def childFactories: ChildFactories = notUsed("childFactories")
   def pathNodeStorageOpt: Option[PathNodeStorage] = None
 
@@ -143,6 +155,15 @@ private[snap] class StubPivotSelectorState(
     Behaviors.same
   val accountRangeStarts: mutable.ArrayBuffer[TrieRoot] = mutable.ArrayBuffer.empty
   def startAccountRangeSync(rootHash: TrieRoot): Unit = accountRangeStarts += rootHash
+  val stagnationResets: mutable.ArrayBuffer[StagnationWatchdog.ResetReason] = mutable.ArrayBuffer.empty
+  def resetStagnationClocks(reason: StagnationWatchdog.ResetReason): Unit = stagnationResets += reason
+  val pivotRefreshCommits: mutable.ArrayBuffer[(BigInt, BlockHeader, String)] = mutable.ArrayBuffer.empty
+  def completePivotRefreshWithStateRoot(newPivotBlock: BigInt, newPivotHeader: BlockHeader, reason: String): Unit =
+    pivotRefreshCommits += ((newPivotBlock, newPivotHeader, reason))
+
+  // CoordinatorHandles (the ChainDownloader handle is real and empty, so `tell` is a no-op)
+  def intakeBudget: SnapIntakeBudget = notUsed("intakeBudget")
+  protected def stopChild(child: ActorRef[Nothing]): Unit = notUsed("stopChild")
 
   private def notUsed(what: String): Nothing =
     throw new UnsupportedOperationException(s"$what is not reached by PivotSelectorSpec")
@@ -164,12 +185,14 @@ class PivotSelectorSpec extends AnyFlatSpec with Matchers:
   /** The module on its stub, the kit that runs it, and the peer manager inbox. */
   final private class Harness(bootstrapping: Boolean = false):
     val peerManager: TestInbox[NetworkPeerManagerActor.Command] = TestInbox[NetworkPeerManagerActor.Command]()
+    val parent: TestInbox[SyncProtocol.SyncControllerReply] = TestInbox[SyncProtocol.SyncControllerReply]()
     private val chain = new EphemBlockchainTestSetup with TestSyncConfig {}
     private var action: () => Unit = () => ()
     private var captured: StubPivotSelectorState & PivotSelector = null
     val kit: BehaviorTestKit[Command] = BehaviorTestKit(Behaviors.setup[Command] { ctx =>
       Behaviors.withTimers { timers =>
         captured = new StubPivotSelectorState(ctx, timers, SNAPSyncConfig(), peerManager.ref, chain) with PivotSelector
+        captured.syncControllerRef = Some(parent.ref)
         if bootstrapping then captured.bootstrapping()
         else
           Behaviors.receiveMessage { _ =>
@@ -184,6 +207,21 @@ class PivotSelectorSpec extends AnyFlatSpec with Matchers:
     def call(f: StubPivotSelectorState & PivotSelector => Unit): Unit =
       action = () => f(module)
       kit.run(PollHandshakedPeers)
+
+    /** Run `startSnapSync`'s two pivot steps under a boundary of the core's type, as `startSnapSync` does: the Label
+      * reaches the module's members as their `using` parameter. Yields true when both steps fell through.
+      */
+    def startSteps(): Boolean =
+      var fellThrough = false
+      call { m =>
+        boundary[Behavior[Command]] {
+          m.resumeInterruptedBootstrap()
+          m.selectPivotAndStart()
+          fellThrough = true
+          Behaviors.same
+        }
+      }
+      fellThrough
 
     def scheduledTimers(): Seq[(Any, Command, FiniteDuration)] =
       kit.retrieveAllEffects().collect { case t: Effect.TimerScheduled[?] =>
@@ -328,4 +366,145 @@ class PivotSelectorSpec extends AnyFlatSpec with Matchers:
     replies.receiveAll() shouldBe Seq(
       SyncProtocol.Status.Syncing(0, SyncProtocol.Status.Progress(0, pivot), stateNodesProgress = None)
     )
+  }
+
+  // ── spec 016 M8c: startSnapSync's pivot steps and the RetryBootstrapAtBlock arm ────────────────────────────────
+
+  it should "resume an interrupted header bootstrap and stop before pivot selection" taggedAs UnitTest in {
+    val h = new Harness()
+    h.module.appStateStorage.putSnapSyncBootstrapTarget(BigInt(500)).commit()
+
+    h.startSteps() shouldBe false
+
+    h.parent.receiveAll() shouldBe Seq(StartRegularSyncBootstrap(BigInt(500)))
+    h.module.appStateStorage.getSnapSyncBootstrapTarget() shouldBe Some(BigInt(500))
+    h.module.bootstrapRetryCount shouldBe 0
+    h.scheduledTimers() shouldBe empty
+  }
+
+  it should "clear a bootstrap target whose header is stored, then back off while no peer is visible" taggedAs UnitTest in {
+    val h = new Harness()
+    h.module.blockchainWriter.storeBlockHeader(header).commit()
+    h.module.appStateStorage.putSnapSyncBootstrapTarget(pivot).commit()
+
+    h.startSteps() shouldBe false
+
+    h.module.appStateStorage.getSnapSyncBootstrapTarget() shouldBe None
+    h.parent.hasMessages shouldBe false
+    h.module.bootstrapRetryCount shouldBe 1
+    h.scheduledTimers() shouldBe Seq(("bootstrap-check", RetrySnapSyncStart, 4.seconds))
+    h.module.pivotBlock shouldBe None
+  }
+
+  it should "take the SNAP peers' best block less the offset as the pivot and request its header" taggedAs UnitTest in {
+    val h = new Harness()
+    h.module.bootstrapRetryCount = 3
+    h.module.peers = Map(peer("snap", 10_000), peer("eth-only", 20_000, snap = false))
+
+    h.startSteps() shouldBe false
+
+    h.parent.receiveAll() shouldBe Seq(StartRegularSyncBootstrap(BigInt(10_000 - 64)))
+    h.module.appStateStorage.getSnapSyncBootstrapTarget() shouldBe Some(BigInt(10_000 - 64))
+    h.module.bootstrapRetryCount shouldBe 0
+    h.module.pivotBlock shouldBe None
+    h.module.syncingEntries shouldBe 0
+  }
+
+  it should "raise the network pivot to the MinPivotBlock hint" taggedAs UnitTest in {
+    val h = new Harness()
+    h.module.minPivotHint = BigInt(9_990)
+    h.module.peers = Map(peer("snap", 10_000))
+
+    h.startSteps() shouldBe false
+
+    h.parent.receiveAll() shouldBe Seq(StartRegularSyncBootstrap(BigInt(9_990)))
+    h.module.appStateStorage.getSnapSyncBootstrapTarget() shouldBe Some(BigInt(9_990))
+  }
+
+  it should "start account sync from genesis when the SNAP peers report a chain below the offset" taggedAs UnitTest in {
+    val h = new Harness()
+    val genesis = Fixtures.Blocks.Genesis.header
+    h.module.blockchainWriter.save(
+      Block(genesis, BlockBody.empty),
+      Nil,
+      ChainWeight.totalDifficultyOnly(genesis.difficulty.value),
+      saveAsBestBlock = true
+    )
+    h.module.peers = Map(peer("snap", 50))
+
+    h.startSteps() shouldBe false
+
+    h.module.pivotBlock shouldBe Some(BigInt(0))
+    h.module.stateRoot shouldBe Some(genesis.stateRoot)
+    h.module.appStateStorage.getSnapSyncPivotBlock() shouldBe Some(BigInt(0))
+    h.module.currentPhase shouldBe SyncPhase.AccountRangeSync
+    h.module.accountRangeStarts shouldBe Seq(genesis.stateRoot)
+    h.module.syncingEntries shouldBe 1
+    h.parent.hasMessages shouldBe false
+  }
+
+  it should "take a known CL head as the pivot on a post-merge chain" taggedAs UnitTest in {
+    val h = new Harness()
+    h.module.posChain = true
+    h.module.bootstrapRetryCount = 2
+    h.module.clPivotHint = Some(CLPivotHint(header.hash.value, Some(header)))
+    h.module.blockchainWriter.storeChainWeight(header.hash, ChainWeight.totalDifficultyOnly(BigInt(7))).commit()
+    h.module.peers = Map(peer("snap", pivot + 10_000))
+
+    h.startSteps() shouldBe false
+
+    h.module.pivotBlock shouldBe Some(pivot)
+    h.module.stateRoot shouldBe Some(header.stateRoot)
+    h.module.appStateStorage.getSnapSyncPivotBlock() shouldBe Some(pivot)
+    h.module.bootstrapRetryCount shouldBe 0
+    h.module.currentPhase shouldBe SyncPhase.AccountRangeSync
+    h.module.accountRangeStarts shouldBe Seq(header.stateRoot)
+    h.module.syncingEntries shouldBe 1
+    h.parent.hasMessages shouldBe false
+  }
+
+  it should "wait for the CL on a post-merge chain with no hint, without selecting a pivot" taggedAs UnitTest in {
+    val h = new Harness()
+    h.module.posChain = true
+    h.module.peers = Map(peer("snap", 10_000))
+
+    h.startSteps() shouldBe false
+
+    h.module.clHintArrivedAtMs shouldBe defined
+    h.module.bootstrapRetryCount shouldBe 1
+    h.scheduledTimers() shouldBe Seq(("bootstrap-check", RetrySnapSyncStart, 5.seconds))
+    h.parent.hasMessages shouldBe false
+    h.module.pivotBlock shouldBe None
+  }
+
+  it should "retry a backtracked bootstrap: header fetch when it is not stored, in-place commit when it is" taggedAs UnitTest in {
+    val h = new Harness()
+    h.module.currentPhase = SyncPhase.AccountRangeSync
+
+    h.call(m => m.retryBootstrapAtBlockArms(RetryBootstrapAtBlock(BigInt(777))))
+
+    h.module.pendingPivotRefresh shouldBe Some((BigInt(777), "backtracked pivot"))
+    h.parent.receiveAll() shouldBe Seq(StartRegularSyncBootstrap(BigInt(777)))
+    h.module.stagnationResets shouldBe Seq(StagnationWatchdog.ResetReason.BootstrapRetryAtBlock)
+    h.module.pivotRefreshCommits shouldBe empty
+
+    h.module.blockchainWriter.storeBlockHeader(header).commit()
+    h.call(m => m.retryBootstrapAtBlockArms(RetryBootstrapAtBlock(pivot)))
+
+    h.module.pivotRefreshCommits shouldBe Seq((pivot, header, "backtracked pivot (local header)"))
+    h.parent.hasMessages shouldBe false
+    h.module.stagnationResets.size shouldBe 1
+  }
+
+  it should "skip a backtracked bootstrap outside the download and healing phases" taggedAs UnitTest in {
+    val h = new Harness()
+
+    h.module.retryBootstrapAtBlockArms.isDefinedAt(RetryBootstrapAtBlock(BigInt(777))) shouldBe true
+    h.module.retryBootstrapAtBlockArms.isDefinedAt(RetrySnapSyncStart) shouldBe false
+    h.call(m => m.retryBootstrapAtBlockArms(RetryBootstrapAtBlock(BigInt(777))))
+
+    h.module.pendingPivotRefresh shouldBe None
+    h.parent.hasMessages shouldBe false
+    h.module.stagnationResets shouldBe empty
+    h.module.pivotRefreshCommits shouldBe empty
   }
