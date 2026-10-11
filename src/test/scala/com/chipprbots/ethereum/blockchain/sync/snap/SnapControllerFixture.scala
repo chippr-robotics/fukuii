@@ -152,7 +152,8 @@ class SnapControllerFixture(val testKit: ActorTestKit) extends EphemBlockchainTe
   def spawnController(
       config: SNAPSyncConfig,
       isPoS: Boolean = false,
-      validatorFactory: MptStorage => StateValidator = new StateValidator(_)
+      validatorFactory: MptStorage => StateValidator = new StateValidator(_),
+      failedFinalizationPivot: Option[BigInt] = None
   ): ActorRef[SNAPSyncController.Command] =
     given ExecutionContext = testKit.system.executionContext
     val snap = testKit.spawn(
@@ -174,7 +175,8 @@ class SnapControllerFixture(val testKit: ActorTestKit) extends EphemBlockchainTe
         isPoSChainOverride = Option.when(isPoS)(true),
         childFactories = factories,
         heapWatchdogStart = heapWatchdogStart,
-        intakeBudgetOverride = Some(budget)
+        intakeBudgetOverride = Some(budget),
+        failedFinalizationPivot = failedFinalizationPivot
       )
     )
     awaitPoll()

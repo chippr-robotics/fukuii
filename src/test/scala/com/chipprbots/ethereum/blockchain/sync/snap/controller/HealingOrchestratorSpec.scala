@@ -115,7 +115,7 @@ private[snap] class StubHealingOrchestratorState(
   def blockchainReader: BlockchainReader = notUsed("blockchainReader")
   def blockchainWriter: BlockchainWriter = notUsed("blockchainWriter")
   def peerEventBus: ActorRef[PeerEventBusActor.Command] = notUsed("peerEventBus")
-  def pathNodeStorageOpt: Option[PathNodeStorage] = None
+  var pathNodeStorageOpt: Option[PathNodeStorage] = None
 
   // CoordinatorHandles
   val intakeBudget: SnapIntakeBudget =
@@ -391,6 +391,46 @@ class HealingOrchestratorSpec extends ScalaTestWithActorTestKit(ManualTime.confi
     h.module.currentPhase shouldBe SyncPhase.StateHealing
     h.module.validations shouldBe 0
     scheduledTimers(h.effects()) shouldBe Seq(("scheduled-trie-walk", ScheduledTrieWalk, 2.minutes))
+  }
+
+  // #1555 fix (a): "all healing peers stateless" is a report that the root is unservable, so the refresh must carry
+  // pivotUnservable = true (the #1478 fallback) and count toward the heal budget.
+  it should "refresh the pivot as KNOWN unservable when every healing peer is stateless" taggedAs UnitTest in {
+    val h = new Harness()
+    h.module.pivotBlock = Some(pivot)
+    h.module.stateRoot = Some(root)
+
+    h.call(_.stateHealingArms(HealingAllPeersStateless))
+
+    h.module.refreshes.toSeq shouldBe Seq(("all healing peers stateless", true, true))
+    h.module.completions shouldBe 0
+  }
+
+  // #1555 fix (b): under the Path scheme a lazy hand-off with the pivot root absent can only fail the Path publish, so
+  // HealingRootUnservable re-pegs (as unservable) instead. Hash scheme: the hand-off is unchanged.
+  it should "re-peg instead of handing off when the heal root is unservable and absent under the Path scheme" taggedAs UnitTest in {
+    val h = new Harness()
+    h.module.pathNodeStorageOpt = Some(new PathNodeStorage(EphemDataSource()))
+    h.module.pivotBlock = Some(pivot)
+    h.module.stateRoot = Some(root)
+
+    h.call(_.stateHealingArms(HealingRootUnservable(root.value)))
+
+    h.module.completions shouldBe 0
+    h.module.refreshes.toSeq shouldBe Seq(("heal root absent locally (Path scheme, lazy hand-off blocked)", true, true))
+    h.module.appStateStorage.getSnapSyncPivotBlock() shouldBe None
+  }
+
+  it should "anchor and hand off to lazy healing when the heal root is unservable under the Hash scheme" taggedAs UnitTest in {
+    val h = new Harness()
+    h.module.pivotBlock = Some(pivot)
+    h.module.stateRoot = Some(root)
+
+    h.call(_.stateHealingArms(HealingRootUnservable(root.value)))
+
+    h.module.completions shouldBe 1
+    h.module.refreshes shouldBe empty
+    h.module.appStateStorage.getSnapSyncPivotBlock() shouldBe Some(pivot)
   }
 
   it should "anchor the in-memory pivot and hand off to lazy healing when healing is abandoned" taggedAs UnitTest in {

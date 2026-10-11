@@ -320,6 +320,11 @@ object SyncController:
     // and the existing TD-based pivot path is unaffected. Closes #1207.
     private var latestBeaconHead: Option[ForkChoiceManager.BeaconHead] = None
 
+    // #1555: the SNAP pivot whose finalization just failed (HealingImpossible), handed to every SNAP controller spawned
+    // until SNAP finalizes, so its accounts-complete recovery does not resume healing on that pivot. In memory only:
+    // after a process restart the recovery may resume on it once more, then the next failure records it again.
+    private var snapPivotFailedFinalization: Option[BigInt] = None
+
     // Whether SNAP should consume CL-driven pivot selection. Captured once at construction
     // because both `syncConfig` and the chain config are stable for the actor's lifetime.
     private val isPoSChain: Boolean = configBuilder.blockchainConfig.terminalTotalDifficulty.isDefined
@@ -604,8 +609,13 @@ object SyncController:
           case SyncProtocol.HealingImpossible =>
             ctx.unwatch(snapSync) // §7c-D4: intentional stop — drop the critical death-watch first.
             ctx.stop(snapSync)
+            // #1555: the pivot finalizeSnapSync just failed on is the persisted SNAP pivot (the lazy hand-offs anchor
+            // it first), which is exactly what the accounts-complete recovery would resume on.
+            snapPivotFailedFinalization = appStateStorage.getSnapSyncPivotBlock()
             log.warn(
-              "SNAP finalization aborted (state root mismatch). Clearing sync state and restarting SNAP with a fresh pivot."
+              s"SNAP finalization aborted at pivot ${snapPivotFailedFinalization.getOrElse("unknown")} (state root " +
+                "mismatch or Path publish failure). Clearing the SNAP done flags and restarting SNAP; on PoS chains a " +
+                "heal-only recovery takes a newer pivot than that one, otherwise recovery resumes on the saved pivot."
             )
             // spec 004 MUST-FIX: clear the healing serve-root latch on every exit from runningSnapSync. The new SNAP
             // actor started below gets a fresh latch, so the stale requester here must not linger.
@@ -625,6 +635,12 @@ object SyncController:
             // networkBest/maxPivotStalenessBlocks drift check, and normal operation's all-peers-stateless
             // escalation, both of which re-peg away from a stale/unservable root without discarding downloaded
             // progress. Revisit only if a residual HealingImpossible is ever observed looping on the same pivot.
+            //
+            // #1555 (Platåberget, 2026-10-10): it was observed looping on the same pivot. A frozen CL kept the heal
+            // pivot on a root no peer served; the lazy hand-off's Path publish then failed (root node absent) and this
+            // restart resumed healing on that same pivot, every 17-24 minutes. The keys are still NOT cleared (the
+            // downloaded data stays usable); instead the failed pivot is recorded above and passed to the new SNAP
+            // controller, whose recovery takes a newer pivot on PoS chains (SNAPSyncController.recoverAccountsComplete).
             appStateStorage.clearSnapSyncDone().commit()
             appStateStorage.clearFastSyncDone().commit()
             startSnapSync()
@@ -1328,6 +1344,7 @@ object SyncController:
     /** SNAP has finalized: whatever pivot floor it started with is spent. */
     private def clearSnapPivotFloor(): Unit =
       appStateStorage.clearSnapSyncMinPivotBlock().commit()
+      snapPivotFailedFinalization = None // #1555: a finalized SNAP has no failed pivot left to avoid
 
     /** Log-only: compare the stored SNAP state root with the SNAP pivot header and report whether the trie is there. */
     private def logSnapStateRootDiagnostic(): Unit =
@@ -1565,7 +1582,8 @@ object SyncController:
             snapSyncConfig,
             scheduler,
             blacklist,
-            syncController = snapAdapter
+            syncController = snapAdapter,
+            failedFinalizationPivot = snapPivotFailedFinalization
           ),
           s"snap-sync-$syncGeneration",
           DispatcherSelector.fromConfig("sync-dispatcher")
