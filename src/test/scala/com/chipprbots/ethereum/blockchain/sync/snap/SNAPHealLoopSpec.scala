@@ -46,8 +46,11 @@ class SNAPHealLoopSpec
     f.awaitProcessed(snap)
 
   /** Everything the parent receives within `quiet` of silence. */
-  private def drainParent(f: SnapControllerFixture, quiet: FiniteDuration = 500.millis): Seq[Any] =
-    val got = mutable.ArrayBuffer.empty[Any]
+  private def drainParent(
+      f: SnapControllerFixture,
+      quiet: FiniteDuration = 500.millis
+  ): Seq[SyncProtocol.SyncControllerReply] =
+    val got = mutable.ArrayBuffer.empty[SyncProtocol.SyncControllerReply]
     var more = true
     while more do
       try
@@ -56,7 +59,7 @@ class SNAPHealLoopSpec
       catch case _: AssertionError => more = false
     got.toSeq
 
-  private def isTerminal(m: Any): Boolean = m match
+  private def isTerminal(m: SyncProtocol.SyncControllerReply): Boolean = m match
     case SyncProtocol.HealingImpossible          => true
     case _: SNAPSyncController.SnapSyncFinalized => true
     case _                                       => false
