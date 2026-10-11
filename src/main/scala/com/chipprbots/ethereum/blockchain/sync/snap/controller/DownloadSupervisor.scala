@@ -8,6 +8,7 @@ import scala.concurrent.duration.*
 
 import com.chipprbots.ethereum.blockchain.sync.SyncProtocol
 import com.chipprbots.ethereum.blockchain.sync.snap.ByteCodeTask
+import com.chipprbots.ethereum.blockchain.sync.snap.ContractTaskFiles
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController.*
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController.SyncPhase.*
@@ -25,6 +26,13 @@ private[snap] trait ByteCodeRequestApi:
 
 private[snap] trait AccountRangeLaunchApi:
   def launchAccountRangeWorkers(rootHash: TrieRoot, concurrency: Int): Unit
+
+private[snap] trait AccountResumeSelectionApi:
+  def selectAccountResume(
+      rootHash: TrieRoot,
+      effectiveConcurrency: Int,
+      currentPivot: BigInt
+  ): (Map[ByteString, ByteString], Option[ContractTaskFiles])
 
 private[snap] trait DownloadSupervisorState:
   def coordinatorGeneration: Long

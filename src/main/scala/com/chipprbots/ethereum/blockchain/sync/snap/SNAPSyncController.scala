@@ -22,6 +22,7 @@ import com.chipprbots.ethereum.blockchain.sync.PeerListHelper
 import com.chipprbots.ethereum.blockchain.sync.PeerListSupportNg
 import com.chipprbots.ethereum.blockchain.sync.SyncProtocol
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.AccountRangeLaunchApi
+import com.chipprbots.ethereum.blockchain.sync.snap.controller.AccountResumeSelectionApi
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.ChildFactories
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.CoordinatorHandles
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.DownloadSupervisor
@@ -129,7 +130,8 @@ private class SNAPSyncControllerImpl(
     with PivotRefresherState
     with DownloadSupervisor
     with DownloadSupervisorState
-    with AccountRangeLaunchApi:
+    with AccountRangeLaunchApi
+    with AccountResumeSelectionApi:
 
   import SNAPSyncController.*
   import SyncPhase.*
@@ -2014,7 +2016,7 @@ private class SNAPSyncControllerImpl(
     * clear. It returns the cursors to resume from and the task files to carry; the account coordinator spawn and
     * everything after it stay in `launchAccountRangeWorkers`. `currentPivot` is the caller's value, read once.
     */
-  private[snap] def selectAccountResume(
+  def selectAccountResume(
       rootHash: TrieRoot,
       effectiveConcurrency: Int,
       currentPivot: BigInt
