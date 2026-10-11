@@ -2007,16 +2007,18 @@ private class SNAPSyncControllerImpl(
             .and(appStateStorage.putSnapSyncBytecodeComplete(false))
             .commit()
 
-  def launchAccountRangeWorkers(rootHash: TrieRoot, concurrency: Int): Unit =
-    val effectiveConcurrency = if concurrency > 0 then concurrency else snapSyncConfig.accountConcurrency
-    // Reset stagnation tracking for this phase.
-    resetStagnationClocks(StagnationWatchdog.ResetReason.AccountLaunch)
-
-    // Safety valve: only preserve range progress if pivot hasn't drifted too far.
-    // Content-addressed MPT data is valid across adjacent pivots (~256 blocks apart),
-    // but large drift means the state may have changed significantly.
-    val currentPivot = pivotBlock.getOrElse(BigInt(0))
-
+  /** The account phase's resume selection (spec 016 lift before M11b, CQ-SNAP-016-33), extracted verbatim from
+    * `launchAccountRangeWorkers`, which calls it at the same point: the versioned resume checkpoint, then the progress
+    * store, then the legacy record (each subject to the `MaxPreservedPivotDistance` drift cap), the drift check on the
+    * preserved cursors, the `resumedStaleCursors` latch, the carried contract task files and the storage-done marker
+    * clear. It returns the cursors to resume from and the task files to carry; the account coordinator spawn and
+    * everything after it stay in `launchAccountRangeWorkers`. `currentPivot` is the caller's value, read once.
+    */
+  private[snap] def selectAccountResume(
+      rootHash: TrieRoot,
+      effectiveConcurrency: Int,
+      currentPivot: BigInt
+  ): (Map[ByteString, ByteString], Option[ContractTaskFiles]) =
     // Try disk recovery first (cross-process restart), then fall back to in-memory.
     // Primary source: SnapSyncProgressStorage (namespace 'p', JSON, account + storage cursors).
     // Migration fallback: AppStateStorage plain-text (namespace 's', account-only, written by older builds).
@@ -2143,6 +2145,20 @@ private class SNAPSyncControllerImpl(
     // A superseded storage coordinator that is still flushing may write a marker after this clear: it is keyed by
     // (account, storageRoot) and states a download this cycle really finished, so it can only skip that exact task.
     if carriedTaskFiles.isEmpty then clearStorageDoneMarkers("account phase starts without carried task files")
+
+    (resumeProgress, carriedTaskFiles)
+
+  def launchAccountRangeWorkers(rootHash: TrieRoot, concurrency: Int): Unit =
+    val effectiveConcurrency = if concurrency > 0 then concurrency else snapSyncConfig.accountConcurrency
+    // Reset stagnation tracking for this phase.
+    resetStagnationClocks(StagnationWatchdog.ResetReason.AccountLaunch)
+
+    // Safety valve: only preserve range progress if pivot hasn't drifted too far.
+    // Content-addressed MPT data is valid across adjacent pivots (~256 blocks apart),
+    // but large drift means the state may have changed significantly.
+    val currentPivot = pivotBlock.getOrElse(BigInt(0))
+
+    val (resumeProgress, carriedTaskFiles) = selectAccountResume(rootHash, effectiveConcurrency, currentPivot)
 
     val storage = getOrCreateMptStorage(currentPivot)
     launchedAccountGeneration = coordinatorGeneration
