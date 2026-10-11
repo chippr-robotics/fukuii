@@ -448,6 +448,35 @@ reviewer re-runs it locally with `scripts/snap-split/verify.sh origin/staging`; 
    - the new stub test.
 7. **FR-016 (c) counts**, printed for the PR body.
 
+**For the PR head, once (env freeze ratchet, 2026-10-11 decision):**
+
+8. **Storage ratchet** against `scripts/snap-split/storage-baseline.json`. The copy at the merge-base with staging is
+   the ceiling. HEAD's copy must equal the measured values, so a decrease is recorded in the same PR. The baseline
+   bootstraps once: when staging has the file, a merge-base without it fails, and the PR must rebase.
+   - `[env-freeze]`: `SnapControllerEnv` never grows. Its member count (18) and its header (parents and self-type) are
+     pinned, and no justification can raise either. A member is storage-typed when an identifier in its text after the
+     name matches `Storage|Store|DataSource|(?i:rocksdb)|^Blockchain(?:Reader|Writer)$|WriteBatch`, including inside
+     function and `Option` types. Only the names in `STORAGE_NAME_ALLOW` (`verify.py`) are exempt. These are
+     `StorageRangeCoordinator`, `StorageRangeWorker`, `StorageRangesResponseMsg`, `StorageCoordinatorProgress`,
+     `GetStorageRanges` and `StorageRanges`, enumerated from staging. Any other `…Storage…Worker`/`Actor`/`Coordinator`
+     name is flagged by this rule and counted below.
+     - The 8 current storage-typed members are pinned by name: `appStateStorage`, `stateStorage`, `evmCodeStorage`,
+       `flatSlotStorage`, `pathNodeStorageOpt`, `blockchainReader`, `blockchainWriter` and `validatorFactory`.
+     - Removing a pinned member passes.
+     - Retyping a pinned member to another storage type passes.
+     - Retyping any other member into a storage type fails.
+   - `[storage-refs]`: `STORAGE_REF_RE` (in `verify.py`) is counted in code under `snap/controller/` and `snap/actors/`.
+     A small tokenizer drops comments but keeps string literals. The rule is move-aware:
+     - The total must not rise. Per-file counts may move between files, so a split slice that moves references into a
+       new module file needs no justification.
+     - A higher total needs a new `justifications["storage_refs.total"]` line.
+     - The table prints on every run.
+     - The metric is a tripwire, not a proof. It matches identifiers and `.xStorage…` member accesses, so a determined
+       alias can evade it, and reviewers still read the diff.
+   - `[raw-import]`: no new import from `org.rocksdb` or `…db.dataSource`, and no new imported name containing
+     `WriteBatch` or inline fully qualified reference, in those directories. The baselined files keep only their
+     listed imports. There is no escape.
+
 The **per-suite counts** (FR-032) come from the Tier 1 job's and the S0e job's test reports. The PR pastes them, and
 the reviewer compares them with the T002 baseline.
 

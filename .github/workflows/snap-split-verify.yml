@@ -6,7 +6,8 @@ name: SNAP Split Verify
 #
 # No `paths:` filter on the trigger (a required check that never starts blocks merges). Instead the first
 # step decides whether the PR is a spec-016 PR (branch refactor|test/snap-016-*), touches the SNAP module
-# directories, or touches this tooling; otherwise the job reports success and stops, so it is cheap
+# directories (snap/controller/, any file under snap/actors/ so the storage ratchet and the raw-import rule fire
+# on coordinator PRs), or touches this tooling; otherwise the job reports success and stops, so it is cheap
 # everywhere else. sbt is installed only when a `# moved:` commit has to be compiled on its own.
 
 on:
@@ -49,7 +50,7 @@ jobs:
           snap=src/main/scala/com/chipprbots/ethereum/blockchain/sync/snap
           changed="$(git diff --name-only origin/staging...HEAD)"
           if echo "$BRANCH" | grep -Eq '^(refactor|test)/snap-016-' \
-             || echo "$changed" | grep -Eq "^(${snap}/controller/|${snap}/SNAPSyncController\.scala$|${snap}/actors/[A-Za-z]*Coordinator\.scala$|${snap}/actors/(account|storage|healing|bytecode)/|scripts/snap-split/|\.github/workflows/snap-split-verify\.yml$)"; then
+             || echo "$changed" | grep -Eq "^(${snap}/controller/|${snap}/SNAPSyncController\.scala$|${snap}/actors/|scripts/snap-split/|\.github/workflows/snap-split-verify\.yml$)"; then
             echo "run=true" >> "$GITHUB_OUTPUT"
           else
             echo "run=false" >> "$GITHUB_OUTPUT"

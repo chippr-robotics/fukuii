@@ -1,0 +1,49 @@
+{
+  "_doc": [
+    "Spec 016 storage ratchet (env freeze ratchet, 2026-10-11 decision), enforced by scripts/snap-split/verify.py step 8 (Ratchet).",
+    "Every value must equal what verify.py measures at the PR head; the copy at the merge-base with staging is the ceiling.",
+    "Lower a value (remove a per-file entry at 0) in the PR that reduces it. env.members, env.header, env.storage_members and raw_imports never go up.",
+    "Per-file counts may move between files while storage_refs_total does not rise; a higher total needs a new justifications[\"storage_refs.total\"] line."
+  ],
+  "env": {
+    "members": 18,
+    "header": ":",
+    "storage_members": [
+      "appStateStorage",
+      "blockchainReader",
+      "blockchainWriter",
+      "evmCodeStorage",
+      "flatSlotStorage",
+      "pathNodeStorageOpt",
+      "stateStorage",
+      "validatorFactory"
+    ]
+  },
+  "storage_refs_total": 628,
+  "storage_refs": {
+    "controller/SnapResumePlanner.scala": 93,
+    "actors/StorageRangeCoordinator.scala": 88,
+    "actors/TrieNodeHealingCoordinator.scala": 84,
+    "controller/ChildFactories.scala": 72,
+    "controller/DownloadSupervisor.scala": 60,
+    "controller/PivotSelector.scala": 51,
+    "controller/HealingOrchestrator.scala": 45,
+    "controller/SnapFinalization.scala": 35,
+    "actors/AccountRangeCoordinator.scala": 28,
+    "controller/SnapControllerEnv.scala": 23,
+    "controller/SyncLifecycle.scala": 18,
+    "actors/ByteCodeCoordinator.scala": 10,
+    "controller/PivotRefresher.scala": 8,
+    "controller/FinalizationPolicy.scala": 4,
+    "controller/SnapPeerPool.scala": 3,
+    "controller/StagnationWatchdog.scala": 3,
+    "controller/StateValidationModule.scala": 3
+  },
+  "raw_imports": {
+    "actors/StorageRangeCoordinator.scala": [
+      "com.chipprbots.ethereum.db.dataSource.DataSourceBatchUpdate",
+      "com.chipprbots.ethereum.db.dataSource.DataUpdate"
+    ]
+  },
+  "justifications": {}
+}
