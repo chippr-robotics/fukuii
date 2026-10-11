@@ -1006,6 +1006,221 @@ private class SNAPSyncControllerImpl(
       Behaviors.same
   }
 
+  /** A `commonSyncingArms` arm lifted into a class member (spec 016 lift before M10, CQ-SNAP-016-27), body unchanged:
+    * `DelayedRestart`, the backed-off restart armed by `PivotStateUnservable`'s critical-failure path: restart in the
+    * two download phases, ignored in any other (the phase test stays in the body). `commonSyncingArms` delegates to it
+    * at the arm's original position, so the arm order is unchanged.
+    */
+  private[snap] lazy val delayedRestartArms: PartialFunction[Command, Behavior[Command]] = {
+    // Delayed restart after critical failure backoff
+    case DelayedRestart(reason) =>
+      if currentPhase == AccountRangeSync || currentPhase == ByteCodeAndStorageSync then restartSnapSync(reason)
+      else Behaviors.same
+  }
+
+  /** A `commonSyncingArms` arm lifted into a class member (spec 016 lift before M10, CQ-SNAP-016-27), body unchanged:
+    * `PivotStateUnservable`, a coordinator's report that peers no longer serve the root: the debounce, the
+    * peer-scarcity refresh, the counted stateless refresh and, at `MaxConsecutivePivotRefreshes`, the in-place refresh
+    * (accounts complete) or the critical failure (dormant or `DelayedRestart`). `commonSyncingArms` delegates to it at
+    * the arm's original position, so the arm order is unchanged.
+    */
+  private[snap] lazy val pivotStateUnservableArms: PartialFunction[Command, Behavior[Command]] = {
+    case PivotStateUnservable(rootHash, reason, emptyResponses, cause) =>
+      // When peers can no longer serve the current state root, refresh the pivot in-place
+      // instead of restarting. This preserves downloaded trie data (content-addressed nodes
+      // are ~99.9% valid across pivot changes) and avoids the download-stall-restart loop.
+      var earlyBehavior: Option[Behavior[Command]] = None
+      val now = System.currentTimeMillis()
+      if now - lastPivotRestartMs < MinPivotRestartInterval.toMillis then
+        // Within the debounce window a pivot refresh is already in flight (or just produced a
+        // same-root no-op). Do NOT swallow the escalation — that left the coordinators' stateless
+        // set full so they re-escalated forever and the node wedged on a dead pivot. Re-arm them
+        // against the current root so stateless tracking clears and dispatch resumes.
+        // INVARIANT: do not increment consecutivePivotRefreshes and do not call any destructive
+        // path here — only the consecutivePivotRefreshes>=Max branch may reach restart/dormant.
+        ctx.log.info(
+          s"Debouncing PivotStateUnservable (refresh in flight, phase=$currentPhase, " +
+            s"emptyResponses=$emptyResponses, reason=$reason) — re-arming coordinators"
+        )
+        stateRoot.foreach(root => reArmRangeCoordinators(root.value))
+      else if !SNAPSyncController.countsTowardRestart(cause) &&
+        (currentPhase == AccountRangeSync || currentPhase == ByteCodeAndStorageSync)
+      then
+        // Peer scarcity / cooling: nothing could be dispatched, but no peer said the root is gone. Refresh the
+        // pivot so the root stays inside the serve window, but do NOT count it toward the restart threshold and do
+        // NOT blacklist the pivot block — a restart cannot create peers, it only throws work away.
+        lastPivotRestartMs = now
+        ctx.log.info(
+          s"Pivot refresh for peer scarcity (not stateless; not counted toward restart, " +
+            s"stateless count stays $consecutivePivotRefreshes/$MaxConsecutivePivotRefreshes): $reason"
+        )
+        refreshPivotInPlace(reason)
+      else if currentPhase == AccountRangeSync || currentPhase == ByteCodeAndStorageSync then
+        lastPivotRestartMs = now
+        // Record the current pivot block as failed so completePivotRefreshWithStateRoot can
+        // detect when refreshPivotInPlace resolves back to the same block.
+        pivotBlock.foreach(failedPivotBlocks.add)
+        consecutivePivotRefreshes += 1
+        ctx.log.info(
+          s"Consecutive stateless pivot refreshes: $consecutivePivotRefreshes/$MaxConsecutivePivotRefreshes"
+        )
+        if consecutivePivotRefreshes >= MaxConsecutivePivotRefreshes then
+          if accountsComplete then
+            // Geth/Besu aligned: NEVER restart after accounts complete.
+            // Accounts are the most expensive phase (~85.9M on ETC). Bytecodes are
+            // content-addressed and don't depend on state root. Storage tasks can be
+            // refreshed in-place. Refresh pivot for storage coordinator only.
+            ctx.log.warn(
+              s"$consecutivePivotRefreshes consecutive unservable pivots during bytecode/storage. " +
+                "Refreshing in-place (preserving accounts)."
+            )
+            consecutivePivotRefreshes = 0 // Reset — accounts completing IS progress
+            refreshPivotInPlace(reason, pivotUnservable = true)
+          else
+            // Accounts still in progress. Enter dormant retry mode — preserving all RocksDB
+            // data and waiting for peers with exponential backoff.
+            ctx.log.warn(
+              s"$consecutivePivotRefreshes consecutive pivot refreshes without progress. " +
+                "Peers likely lack snapshot databases."
+            )
+            if recordCriticalFailure(s"$consecutivePivotRefreshes consecutive stateless pivot refreshes") then
+              enterDormantMode(
+                s"critical failure threshold reached: $consecutivePivotRefreshes consecutive stateless pivot refreshes"
+              )
+            else
+              val restartDelay = math.min(30 * criticalFailureCount, 120).seconds
+              if restartDelay > Duration.Zero then
+                ctx.log.info(
+                  s"Delaying SNAP restart by ${restartDelay.toSeconds}s " +
+                    s"(criticalFailureCount=$criticalFailureCount)"
+                )
+                timers.startSingleTimer(
+                  "delayed-restart",
+                  DelayedRestart(
+                    s"consecutive stateless pivots ($consecutivePivotRefreshes): $reason"
+                  ),
+                  restartDelay
+                )
+              else
+                earlyBehavior = Some(
+                  restartSnapSync(s"consecutive stateless pivots ($consecutivePivotRefreshes): $reason")
+                )
+        else refreshPivotInPlace(reason, pivotUnservable = true)
+      else ctx.log.info(s"Ignoring PivotStateUnservable in phase=$currentPhase (reason=$reason)")
+      earlyBehavior.getOrElse(Behaviors.same)
+  }
+
+  /** A `commonSyncingArms` arm lifted into a class member (spec 016 lift before M10), body unchanged:
+    * `BootstrapComplete` while `pendingPivotRefresh` is set, the header an in-place pivot refresh asked for: commit the
+    * refresh, or restart when no header came back. With no refresh pending the guard is false and the message falls
+    * through to the next arm of `commonSyncingArms`, as before. `commonSyncingArms` delegates to it at the arm's
+    * original position, so the arm order is unchanged.
+    */
+  private[snap] lazy val pivotRefreshBootstrapCompleteArms: PartialFunction[Command, Behavior[Command]] = {
+    // Handle pivot header bootstrap completion during active sync.
+    // This arrives when refreshPivotInPlace() requested a header from a peer because
+    // it wasn't available locally. The coordinator is still alive with all its state.
+    case BootstrapComplete(pivotHeaderOpt) if pendingPivotRefresh.isDefined =>
+      val (pendingPivot, reason) = pendingPivotRefresh.get
+      pendingPivotRefresh = None
+      pivotHeaderOpt match
+        case Some(header) =>
+          ctx.log.info(s"Pivot header bootstrap complete for block ${header.number} (requested $pendingPivot)")
+          completePivotRefreshWithStateRoot(pendingPivot, header, reason)
+          Behaviors.same
+        case None =>
+          ctx.log.warn(
+            s"Pivot header bootstrap for block $pendingPivot returned no header. Falling back to full restart."
+          )
+          restartSnapSync(s"pivot refresh bootstrap returned no header for $pendingPivot: $reason")
+  }
+
+  /** A `commonSyncingArms` arm lifted into a class member (spec 016 lift before M10), body unchanged:
+    * `PivotBootstrapFailed` while `pendingPivotRefresh` is set: backtrack by `pivotBlockOffset`
+    * (`RetryBootstrapAtBlock` in 5 s), or retry the refresh in 60 s when the backtracked block is not positive. With no
+    * refresh pending the guard is false and the message falls through to the next arm of `commonSyncingArms`, as
+    * before. `commonSyncingArms` delegates to it at the arm's original position, so the arm order is unchanged.
+    */
+  private[snap] lazy val pivotRefreshBootstrapFailedArms: PartialFunction[Command, Behavior[Command]] = {
+    // Handle pivot header bootstrap failure. Instead of recalculating from network-best (which advances
+    // the pivot to a block peers don't have yet), backtrack by pivotBlockOffset blocks (Besu pattern).
+    case PivotBootstrapFailed(reason) if pendingPivotRefresh.isDefined =>
+      val (pendingPivot, originalReason) = pendingPivotRefresh.get
+      pendingPivotRefresh = None
+      timers.cancel(PivotBootstrapRetryKey)
+      val backtrackedPivot = pendingPivot - snapSyncConfig.pivotBlockOffset
+      if backtrackedPivot > 0 then
+        ctx.log.warn(
+          s"Pivot header bootstrap failed for block $pendingPivot (reason: $reason, original: $originalReason). " +
+            s"Backtracking pivot to $backtrackedPivot (Besu pattern: decrement by ${snapSyncConfig.pivotBlockOffset})."
+        )
+        timers.startSingleTimer(PivotBootstrapRetryKey, RetryBootstrapAtBlock(backtrackedPivot), 5.seconds)
+      else
+        ctx.log.warn(
+          s"Pivot header bootstrap failed for block $pendingPivot (reason: $reason). " +
+            s"Backtracked pivot below 0 — falling back to network-best recalculation after 60s."
+        )
+        retryRefreshCounts = false
+        retryRefreshUnservable = false
+        timers.startSingleTimer(PivotBootstrapRetryKey, RetryPivotRefresh, 60.seconds)
+      Behaviors.same
+  }
+
+  /** A `commonSyncingArms` arm lifted into a class member (spec 016 lift before M10), body unchanged:
+    * `PivotProbeTimeout`, the 15-s timeout of a proactive roll's readiness probe: defer the roll, or force it after
+    * `MaxProbeAttempts`; a timeout for a probe that is no longer pending does nothing. `commonSyncingArms` delegates to
+    * it at the arm's original position, so the arm order is unchanged.
+    */
+  private[snap] lazy val pivotProbeTimeoutArms: PartialFunction[Command, Behavior[Command]] = {
+    case PivotProbeTimeout(requestId) =>
+      if pivotProbeRequestId.contains(requestId) then
+        probeAttemptCount += 1
+        val commitArgs = pendingProbeCommit
+        pivotProbeRequestId = None
+        pendingProbeCommit = None
+        if probeAttemptCount >= MaxProbeAttempts then
+          commitArgs.foreach { case (block, header, commitReason) =>
+            ctx.log.warn(
+              s"[PIVOT-PROBE] Max deferral reached after timeout ($MaxProbeAttempts/$MaxProbeAttempts) — " +
+                s"forcing roll at root ${header.stateRoot.value.take(4).toHex} block $block. " +
+                s"Snapshot readiness unconfirmed — brief post-roll window may occur."
+            )
+            probeAttemptCount = 0
+            completePivotRefreshWithStateRoot(block, header, s"$commitReason (forced — max probe attempts)")
+          }
+        else
+          ctx.log.info(
+            s"[PIVOT-PROBE] Probe timed out (attempt $probeAttemptCount/$MaxProbeAttempts) — " +
+              s"no response from probe peer, deferring roll (retry in ${ProbeCooldownMs / 1000}s)"
+          )
+          // lastProbeAttemptMs stays set — ProbeCooldownMs enforces a 30s minimum before next retry
+      Behaviors.same
+  }
+
+  /** A `commonSyncingArms` arm lifted into a class member (spec 016 lift before M10), body unchanged:
+    * `RetryPivotRefresh`, the 30-s/60-s pivot-refresh retry: refresh in place in the download and healing phases (the
+    * phase test stays in the body), passing on whether the timer was armed by a counted attempt (`retryRefreshCounts`)
+    * and that attempt's unservable-pivot fallback (`retryRefreshUnservable`, #1555). `commonSyncingArms` delegates to
+    * it at the arm's original position, so the arm order is unchanged.
+    */
+  private[snap] lazy val retryPivotRefreshArms: PartialFunction[Command, Behavior[Command]] = {
+    case RetryPivotRefresh =>
+      if currentPhase == AccountRangeSync || currentPhase == ByteCodeAndStorageSync || currentPhase == StateHealing
+      then
+        ctx.log.info("Retrying pivot refresh after bootstrap failure...")
+        // PoS only: a replay counts toward the heal budget iff the timer was armed by a counted attempt.
+        // ETC/pre-merge (isPoSChain=false) keeps the unconditional default (byte-identical to base).
+        // #1555: a replay of a timer armed by a counted "all healing peers stateless" attempt is still about a root
+        // every peer refused, so it keeps that attempt's pivotUnservable (PoS only; ETC passes false as before).
+        refreshPivotInPlace(
+          "retry after bootstrap failure",
+          countsTowardHealBudget = !isPoSChain || retryRefreshCounts,
+          pivotUnservable = isPoSChain && retryRefreshCounts && retryRefreshUnservable
+        )
+      else ctx.log.info(s"Skipping pivot refresh retry — phase=$currentPhase no longer needs it")
+      Behaviors.same
+  }
+
   /** Dispatch order (spec 016 P4, research.md R4b): `syncingGuardArms` (the path-publish and header-hold arms with
     * their two guarded wildcards, then the `peerEventArms` delegation), then `phaseArms(currentPhase)`, then
     * `commonSyncingArms`, then the "Unhandled message in syncing state" catch-all. `currentPhase` is read per message.
@@ -1057,10 +1272,9 @@ private class SNAPSyncControllerImpl(
         evictNonSnapPeers()
         Behaviors.same
 
-      // Delayed restart after critical failure backoff
-      case DelayedRestart(reason) =>
-        if currentPhase == AccountRangeSync || currentPhase == ByteCodeAndStorageSync then restartSnapSync(reason)
-        else Behaviors.same
+      // delayedRestartArms (spec 016 lift before M10): delegated here, at its original position.
+      case msg if delayedRestartArms.isDefinedAt(msg) =>
+        delayedRestartArms(msg)
 
       // Snap capability grace period check: if still no snap/1 peers, go dormant and retry on a fresh pivot
       case CheckSnapCapability =>
@@ -1318,169 +1532,25 @@ private class SNAPSyncControllerImpl(
         accountRangeCoordinator.foreach(_ ! actors.AccountRangeCoordinator.ByteCodeQueuePressure(paused))
         Behaviors.same
 
-      case PivotStateUnservable(rootHash, reason, emptyResponses, cause) =>
-        // When peers can no longer serve the current state root, refresh the pivot in-place
-        // instead of restarting. This preserves downloaded trie data (content-addressed nodes
-        // are ~99.9% valid across pivot changes) and avoids the download-stall-restart loop.
-        var earlyBehavior: Option[Behavior[Command]] = None
-        val now = System.currentTimeMillis()
-        if now - lastPivotRestartMs < MinPivotRestartInterval.toMillis then
-          // Within the debounce window a pivot refresh is already in flight (or just produced a
-          // same-root no-op). Do NOT swallow the escalation — that left the coordinators' stateless
-          // set full so they re-escalated forever and the node wedged on a dead pivot. Re-arm them
-          // against the current root so stateless tracking clears and dispatch resumes.
-          // INVARIANT: do not increment consecutivePivotRefreshes and do not call any destructive
-          // path here — only the consecutivePivotRefreshes>=Max branch may reach restart/dormant.
-          ctx.log.info(
-            s"Debouncing PivotStateUnservable (refresh in flight, phase=$currentPhase, " +
-              s"emptyResponses=$emptyResponses, reason=$reason) — re-arming coordinators"
-          )
-          stateRoot.foreach(root => reArmRangeCoordinators(root.value))
-        else if !SNAPSyncController.countsTowardRestart(cause) &&
-          (currentPhase == AccountRangeSync || currentPhase == ByteCodeAndStorageSync)
-        then
-          // Peer scarcity / cooling: nothing could be dispatched, but no peer said the root is gone. Refresh the
-          // pivot so the root stays inside the serve window, but do NOT count it toward the restart threshold and do
-          // NOT blacklist the pivot block — a restart cannot create peers, it only throws work away.
-          lastPivotRestartMs = now
-          ctx.log.info(
-            s"Pivot refresh for peer scarcity (not stateless; not counted toward restart, " +
-              s"stateless count stays $consecutivePivotRefreshes/$MaxConsecutivePivotRefreshes): $reason"
-          )
-          refreshPivotInPlace(reason)
-        else if currentPhase == AccountRangeSync || currentPhase == ByteCodeAndStorageSync then
-          lastPivotRestartMs = now
-          // Record the current pivot block as failed so completePivotRefreshWithStateRoot can
-          // detect when refreshPivotInPlace resolves back to the same block.
-          pivotBlock.foreach(failedPivotBlocks.add)
-          consecutivePivotRefreshes += 1
-          ctx.log.info(
-            s"Consecutive stateless pivot refreshes: $consecutivePivotRefreshes/$MaxConsecutivePivotRefreshes"
-          )
-          if consecutivePivotRefreshes >= MaxConsecutivePivotRefreshes then
-            if accountsComplete then
-              // Geth/Besu aligned: NEVER restart after accounts complete.
-              // Accounts are the most expensive phase (~85.9M on ETC). Bytecodes are
-              // content-addressed and don't depend on state root. Storage tasks can be
-              // refreshed in-place. Refresh pivot for storage coordinator only.
-              ctx.log.warn(
-                s"$consecutivePivotRefreshes consecutive unservable pivots during bytecode/storage. " +
-                  "Refreshing in-place (preserving accounts)."
-              )
-              consecutivePivotRefreshes = 0 // Reset — accounts completing IS progress
-              refreshPivotInPlace(reason, pivotUnservable = true)
-            else
-              // Accounts still in progress. Enter dormant retry mode — preserving all RocksDB
-              // data and waiting for peers with exponential backoff.
-              ctx.log.warn(
-                s"$consecutivePivotRefreshes consecutive pivot refreshes without progress. " +
-                  "Peers likely lack snapshot databases."
-              )
-              if recordCriticalFailure(s"$consecutivePivotRefreshes consecutive stateless pivot refreshes") then
-                enterDormantMode(
-                  s"critical failure threshold reached: $consecutivePivotRefreshes consecutive stateless pivot refreshes"
-                )
-              else
-                val restartDelay = math.min(30 * criticalFailureCount, 120).seconds
-                if restartDelay > Duration.Zero then
-                  ctx.log.info(
-                    s"Delaying SNAP restart by ${restartDelay.toSeconds}s " +
-                      s"(criticalFailureCount=$criticalFailureCount)"
-                  )
-                  timers.startSingleTimer(
-                    "delayed-restart",
-                    DelayedRestart(
-                      s"consecutive stateless pivots ($consecutivePivotRefreshes): $reason"
-                    ),
-                    restartDelay
-                  )
-                else
-                  earlyBehavior = Some(
-                    restartSnapSync(s"consecutive stateless pivots ($consecutivePivotRefreshes): $reason")
-                  )
-          else refreshPivotInPlace(reason, pivotUnservable = true)
-        else ctx.log.info(s"Ignoring PivotStateUnservable in phase=$currentPhase (reason=$reason)")
-        earlyBehavior.getOrElse(Behaviors.same)
+      // pivotStateUnservableArms (spec 016 lift before M10): delegated here, at its original position.
+      case msg if pivotStateUnservableArms.isDefinedAt(msg) =>
+        pivotStateUnservableArms(msg)
 
-      // Handle pivot header bootstrap completion during active sync.
-      // This arrives when refreshPivotInPlace() requested a header from a peer because
-      // it wasn't available locally. The coordinator is still alive with all its state.
-      case BootstrapComplete(pivotHeaderOpt) if pendingPivotRefresh.isDefined =>
-        val (pendingPivot, reason) = pendingPivotRefresh.get
-        pendingPivotRefresh = None
-        pivotHeaderOpt match
-          case Some(header) =>
-            ctx.log.info(s"Pivot header bootstrap complete for block ${header.number} (requested $pendingPivot)")
-            completePivotRefreshWithStateRoot(pendingPivot, header, reason)
-            Behaviors.same
-          case None =>
-            ctx.log.warn(
-              s"Pivot header bootstrap for block $pendingPivot returned no header. Falling back to full restart."
-            )
-            restartSnapSync(s"pivot refresh bootstrap returned no header for $pendingPivot: $reason")
+      // pivotRefreshBootstrapCompleteArms (spec 016 lift before M10): delegated here, at its original position.
+      case msg if pivotRefreshBootstrapCompleteArms.isDefinedAt(msg) =>
+        pivotRefreshBootstrapCompleteArms(msg)
 
-      // Handle pivot header bootstrap failure. Instead of recalculating from network-best (which advances
-      // the pivot to a block peers don't have yet), backtrack by pivotBlockOffset blocks (Besu pattern).
-      case PivotBootstrapFailed(reason) if pendingPivotRefresh.isDefined =>
-        val (pendingPivot, originalReason) = pendingPivotRefresh.get
-        pendingPivotRefresh = None
-        timers.cancel(PivotBootstrapRetryKey)
-        val backtrackedPivot = pendingPivot - snapSyncConfig.pivotBlockOffset
-        if backtrackedPivot > 0 then
-          ctx.log.warn(
-            s"Pivot header bootstrap failed for block $pendingPivot (reason: $reason, original: $originalReason). " +
-              s"Backtracking pivot to $backtrackedPivot (Besu pattern: decrement by ${snapSyncConfig.pivotBlockOffset})."
-          )
-          timers.startSingleTimer(PivotBootstrapRetryKey, RetryBootstrapAtBlock(backtrackedPivot), 5.seconds)
-        else
-          ctx.log.warn(
-            s"Pivot header bootstrap failed for block $pendingPivot (reason: $reason). " +
-              s"Backtracked pivot below 0 — falling back to network-best recalculation after 60s."
-          )
-          retryRefreshCounts = false
-          retryRefreshUnservable = false
-          timers.startSingleTimer(PivotBootstrapRetryKey, RetryPivotRefresh, 60.seconds)
-        Behaviors.same
+      // pivotRefreshBootstrapFailedArms (spec 016 lift before M10): delegated here, at its original position.
+      case msg if pivotRefreshBootstrapFailedArms.isDefinedAt(msg) =>
+        pivotRefreshBootstrapFailedArms(msg)
 
-      case PivotProbeTimeout(requestId) =>
-        if pivotProbeRequestId.contains(requestId) then
-          probeAttemptCount += 1
-          val commitArgs = pendingProbeCommit
-          pivotProbeRequestId = None
-          pendingProbeCommit = None
-          if probeAttemptCount >= MaxProbeAttempts then
-            commitArgs.foreach { case (block, header, commitReason) =>
-              ctx.log.warn(
-                s"[PIVOT-PROBE] Max deferral reached after timeout ($MaxProbeAttempts/$MaxProbeAttempts) — " +
-                  s"forcing roll at root ${header.stateRoot.value.take(4).toHex} block $block. " +
-                  s"Snapshot readiness unconfirmed — brief post-roll window may occur."
-              )
-              probeAttemptCount = 0
-              completePivotRefreshWithStateRoot(block, header, s"$commitReason (forced — max probe attempts)")
-            }
-          else
-            ctx.log.info(
-              s"[PIVOT-PROBE] Probe timed out (attempt $probeAttemptCount/$MaxProbeAttempts) — " +
-                s"no response from probe peer, deferring roll (retry in ${ProbeCooldownMs / 1000}s)"
-            )
-            // lastProbeAttemptMs stays set — ProbeCooldownMs enforces a 30s minimum before next retry
-        Behaviors.same
+      // pivotProbeTimeoutArms (spec 016 lift before M10): delegated here, at its original position.
+      case msg if pivotProbeTimeoutArms.isDefinedAt(msg) =>
+        pivotProbeTimeoutArms(msg)
 
-      case RetryPivotRefresh =>
-        if currentPhase == AccountRangeSync || currentPhase == ByteCodeAndStorageSync || currentPhase == StateHealing
-        then
-          ctx.log.info("Retrying pivot refresh after bootstrap failure...")
-          // PoS only: a replay counts toward the heal budget iff the timer was armed by a counted attempt.
-          // ETC/pre-merge (isPoSChain=false) keeps the unconditional default (byte-identical to base).
-          // #1555: a replay of a timer armed by a counted "all healing peers stateless" attempt is still about a root
-          // every peer refused, so it keeps that attempt's pivotUnservable (PoS only; ETC passes false as before).
-          refreshPivotInPlace(
-            "retry after bootstrap failure",
-            countsTowardHealBudget = !isPoSChain || retryRefreshCounts,
-            pivotUnservable = isPoSChain && retryRefreshCounts && retryRefreshUnservable
-          )
-        else ctx.log.info(s"Skipping pivot refresh retry — phase=$currentPhase no longer needs it")
-        Behaviors.same
+      // retryPivotRefreshArms (spec 016 lift before M10): delegated here, at its original position.
+      case msg if retryPivotRefreshArms.isDefinedAt(msg) =>
+        retryPivotRefreshArms(msg)
 
       // retryBootstrapAtBlockArms (spec 016 restructure): delegated here, at its original position.
       case msg if retryBootstrapAtBlockArms.isDefinedAt(msg) =>
