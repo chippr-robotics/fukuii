@@ -2674,6 +2674,8 @@ private class SNAPSyncControllerImpl(
     // A fresh retry budget: going dormant on exhausted bootstrap retries leaves the counter at the limit, so without
     // this the first retry after waking (a peer whose height is not known yet, say) would send it straight back.
     bootstrapRetryCount = 0
+    // #1551: the stagnation stall state of the round that went dormant does not carry into the new round.
+    resetStagnationClocks(StagnationWatchdog.ResetReason.Wake)
 
     startSnapSync()
 
