@@ -10,6 +10,9 @@ Implements plan.md "Move verification" steps 1-7 and FR-016 (a), (c), (d), per c
   5  FR-016 (a) impl-class mention, (d) member-level init rules  every commit (module dirs only)
   6  narrowing commit touches signatures only ................ commits that remove the last impl mention
   7  FR-016 (c) counts, and (b) a stub test is added ......... narrowing commits (counts: module commits)
+     (a later slice that narrows code moved into an existing module may instead extend that module's stub suite,
+     named in an `# extended-tests:` trailer: the narrowing commit may add new cases to it, but not remove or change an
+     assertion, add an assertion inside an existing case, or add a skip/scheduling token; see `check_test_hunks`)
   +  `sbt compile` on each move commit (--compile).
 
 Standard library only; needs git and python3, no JVM.
@@ -48,6 +51,18 @@ TOKEN_RE = re.compile(
     r"\bwithin\b|\beventually\b|\bverify\w*|\btaggedAs\b|\bignore\b|\bpending\b|\bcancel\w*|\btimeout\b|"
     r"\binterval\b|===|==|!=|Thread\.sleep"
 )
+
+
+# In a suite named by `# extended-tests:`, added lines may carry positive-assertion tokens (`should*`, `assert*`,
+# `expect*`, `==`, ...) in new cases, but never these: skipping, assumption, retagging and scheduling tokens. The one tag
+# admitted is `taggedAs UnitTest`, the Tier 1 tag every stub-suite case carries; any other tag (e.g. `SlowTest`,
+# `DisabledTest`) would move a case out of Tier 1.
+EXT_FORBIDDEN_RE = re.compile(
+    r"\bignore\b|\bpending\b|\bcancel\w*|\bassume\w*|\btaggedAs\b(?!\s+UnitTest\b)|Thread\.sleep|\beventually\b|"
+    r"\bwithin\b|\btimeout\b|\binterval\b"
+)
+STUB_SUITE_RE = re.compile(r"new\s+Stub\w*State\b")
+CASE_OPENER_RE = re.compile(r"\bin\s*\{\s*$")
 
 
 def is_module(path: str) -> bool:
@@ -105,6 +120,16 @@ class Git:
                     added.append((new, l[1:]))
                 new += 1
         return removed, added
+
+    def added_hunks(self, p: str, c: str, path: str) -> list[list[str]]:
+        """Added (non-blank) lines of one file, grouped by -U0 hunk."""
+        out: list[list[str]] = []
+        for l in self.run("diff", "--no-renames", "-U0", p, c, "--", path).splitlines():
+            if l.startswith("@@"):
+                out.append([])
+            elif out and l.startswith("+") and not l.startswith("+++") and l[1:].strip():
+                out[-1].append(l[1:])
+        return [h for h in out if h]
 
     def is_merge(self, c: str) -> bool:
         return len(self.run("rev-list", "--parents", "-n", "1", c).split()) > 2
@@ -579,7 +604,9 @@ class Verifier:
         # step 6 + (b): every narrowing commit, whatever its trailers
         if narrowed:
             self.check_signature_only(c, p, changed)
-            self.check_stub_test(c, p, changed)
+            self.check_stub_test(c, p, changed, msg)
+        elif trailer(msg, "extended-tests") is not None:
+            self.err(c, "step3", "`# extended-tests:` is allowed only on a narrowing commit (one that removes the last impl-class mention)")
         if any(is_module(f) for f in changed) or narrowed:
             for line in counts_report(g, c):
                 self.info(c, line)
@@ -731,20 +758,38 @@ class Verifier:
             for a in lines:
                 self.err(c, "step6", f"narrowing commit adds a non-signature line: +`{a.strip()[:90]}`")
 
+    def extended_tests(self, c, msg) -> list[str]:
+        """Existing stub suites a narrowing commit extends (`# extended-tests:`, exact paths): a later slice that moves
+        more code into an existing module (e.g. M8c into M8's PivotSelector) adds its cases to that module's suite."""
+        vals = trailer(msg, "extended-tests")
+        return self.exact_paths(c, "step3", vals, "extended-tests") if vals else []
+
     # -- (b)
-    def check_stub_test(self, c, p, changed):
+    def check_stub_test(self, c, p, changed, msg=""):
         excluded = re.compile(r"\b(?:SyncTest|IntegrationTest|SlowTest|DisabledTest)\b")
+        extended = self.extended_tests(c, msg)
         for f, st in changed.items():
-            if f.startswith("src/test/") and st == "A":
+            if not f.startswith("src/test/"):
+                continue
+            if st == "A" or (st == "M" and f in extended):
                 t = self.g.show(c, f) or ""
-                if re.search(r"new\s+Stub\w*State\b", t) and not excluded.search(t):
-                    return
-        self.err(c, "FR-016b", "narrowing commit adds no new Tier 1 test of the form `new Stub<Module>State with ...` (untagged by SyncTest/IntegrationTest/SlowTest/DisabledTest)")
+                if not (re.search(r"new\s+Stub\w*State\b", t) and not excluded.search(t)):
+                    continue
+                if st == "M" and not any(TOKEN_RE.search(l) for l in self.g.diff_lines(p, c, [f])[1]):
+                    continue  # an extended suite counts only if the commit adds at least one assertion to it
+                return
+        self.err(c, "FR-016b", "narrowing commit adds no new Tier 1 test of the form `new Stub<Module>State with ...` (untagged by SyncTest/IntegrationTest/SlowTest/DisabledTest), and extends no such suite named in `# extended-tests:`")
 
     # -- step 3, refactor branches
     def check_test_hunks(self, c, p, changed, msg):
         new_tests = trailer(msg, "new-tests")
         allowed_new = self.exact_paths(c, "step3", new_tests, "new-tests") if new_tests else []
+        extended = self.extended_tests(c, msg)
+        for f in extended:
+            if changed.get(f) != "M":
+                self.err(c, "step3", f"`# extended-tests:` names {f}, which this commit does not modify")
+            elif not STUB_SUITE_RE.search(self.g.show(c, f) or ""):
+                self.err(c, "step3", f"`# extended-tests:` names {f}, which is not a module stub suite (no `new Stub<Module>State`)")
         for f, st in changed.items():
             if not f.startswith("src/test/"):
                 continue
@@ -756,12 +801,33 @@ class Verifier:
                 self.err(c, "step3", f"deletes existing test file {f}")
                 continue
             removed, added = self.g.diff_lines(p, c, [f])
-            for sign, lines in (("-", removed), ("+", added)):
+            if f in extended:
+                self.check_extended_additions(c, p, f)
+            # An extended stub suite may gain assertions in new cases (checked above); removing one is still a change.
+            hunks = (("-", removed),) if f in extended else (("-", removed), ("+", added))
+            for sign, lines in hunks:
                 for l in lines:
                     if re.match(r"^\s*import\b", l):
                         continue
                     if TOKEN_RE.search(l):
                         self.err(c, "step3", f"{f}: {sign} line with an assertion/scheduling token: `{l.strip()[:90]}`")
+
+    def check_extended_additions(self, c, p, f):
+        """Added lines of an extended stub suite: no skip/assumption/retagging/scheduling token anywhere, and every added
+        assertion inside a case this commit adds (an added `... in {` opener earlier in the same hunk), so an existing
+        case cannot gain or change an assertion."""
+        for hunk in self.g.added_hunks(p, c, f):
+            opened = False
+            for l in hunk:
+                if re.match(r"^\s*import\b", l):
+                    continue
+                if EXT_FORBIDDEN_RE.search(l):
+                    self.err(c, "step3", f"{f}: + line with a skip/scheduling token, not allowed even in an extended suite: `{l.strip()[:90]}`")
+                    continue
+                if CASE_OPENER_RE.search(l):
+                    opened = True
+                elif TOKEN_RE.search(l) and not opened:
+                    self.err(c, "step3", f"{f}: + assertion outside a new case (extended suites may only add whole cases): `{l.strip()[:90]}`")
 
     # -- step 3, test branches
     def check_test_files_trailer(self, c, msg, changed):

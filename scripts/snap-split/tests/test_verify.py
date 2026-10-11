@@ -182,6 +182,8 @@ def move_commit(f: Fixture, module=MODULE_MOVE, core=CORE_AFTER_MOVE, symbols="h
     f.commit(f"refactor(snap): move heal (#1401)\n\n# moved: {symbols}\n{extra}")
 
 
+EXT_CASE = '  "other" should "be 2" taggedAs UnitTest in {\n    s.other() shouldBe 2\n  }\n'
+
 NARROW_MSG = "refactor(snap): narrow (#1401)\n\n# new-tests: src/test/scala/x/StubSpec.scala\n"
 
 
@@ -325,6 +327,97 @@ class VerifyTests(unittest.TestCase):
         f.write("src/test/scala/x/StubSpec.scala", STUB_TEST + "// taggedAs SyncTest\n")
         f.commit("narrow")
         self.bad(f, "FR-016b")
+
+    # ---- a later slice moves more code into an already-narrowed module (spec 016 M8c)
+    def second_move(self, stub=STUB_TEST):
+        """M2-style move + narrowing, then a second move of `other` into a temporary trait of the same file, whose
+        self-type is the impl, appended after the narrowed trait so the narrowing only drops its two header lines."""
+        f = Fixture()
+        move_commit(f)
+        f.write(f"{CTRL}/HealingOrchestrator.scala", MODULE_NARROW)
+        f.write("src/test/scala/x/StubSpec.scala", stub)
+        f.commit(NARROW_MSG)
+        f.write(f"{CTRL}/HealingOrchestrator.scala", MODULE_NARROW + "\nprivate[snap] trait HealingMore:\n  self: SNAPSyncControllerImpl =>\n\n  def other(): Int = 2\n")
+        f.write(CORE, CORE_AFTER_MOVE.replace("extends HealingOrchestrator:", "extends HealingOrchestrator with HealingMore:").replace("\n  def other(): Int = 2\n", ""))
+        f.commit("refactor(snap): move other (#1401)\n\n# moved: other\n")
+        f.write(f"{CTRL}/HealingOrchestrator.scala", MODULE_NARROW + "\n  def other(): Int = 2\n")
+        f.write(CORE, CORE_AFTER_MOVE.replace("\n  def other(): Int = 2\n", ""))
+        return f
+
+    def ext_bad(self, addition, check="step3"):
+        f = self.second_move()
+        f.write("src/test/scala/x/StubSpec.scala", STUB_TEST + EXT_CASE + addition)
+        f.commit(self.EXT_MSG)
+        return self.bad(f, check)
+
+    def test_extended_suite_rejects_skip_and_scheduling_tokens(self):
+        for addition in (
+            '  "skipped" should "x" ignore {\n    1 shouldBe 1\n  }\n',
+            '  "later" should "x" in pending\n',
+            '  "slow" should "x" in {\n    Thread.sleep(10)\n  }\n',
+            '  "slow" should "x" taggedAs SlowTest in {\n    1 shouldBe 1\n  }\n',
+            '  "waits" should "x" in {\n    eventually { 1 shouldBe 1 }\n  }\n',
+        ):
+            with self.subTest(addition=addition):
+                out = self.ext_bad(addition)
+                self.assertIn("skip/scheduling token", out)
+
+    def test_extended_suite_rejects_assertion_inside_an_existing_case(self):
+        f = self.second_move(stub=STUB_TEST + '  "old" should "work" taggedAs UnitTest in {\n    s.shared shouldBe 1\n  }\n')
+        f.write("src/test/scala/x/StubSpec.scala", STUB_TEST + '  "old" should "work" taggedAs UnitTest in {\n    s.shared shouldBe 1\n    s.other() shouldBe 2\n  }\n')
+        f.commit(self.EXT_MSG)
+        out = self.bad(f, "step3")
+        self.assertIn("outside a new case", out)
+
+    def test_extended_tests_trailer_on_a_non_stub_suite_fails(self):
+        f = self.second_move()
+        f.write("src/test/scala/x/StubSpec.scala", STUB_TEST + EXT_CASE)
+        f.write(TEST, SPEC_BASE + '  "bar" should "x" in {\n    2 shouldBe 2\n  }\n')
+        f.commit(self.EXT_MSG.replace("StubSpec.scala", f"StubSpec.scala {TEST}"))
+        out = self.bad(f, "step3")
+        self.assertIn("not a module stub suite", out)
+
+    EXT_MSG = "refactor(snap): narrow other (#1401)\n\n# extended-tests: src/test/scala/x/StubSpec.scala\n"
+
+    def test_second_move_narrowed_with_extended_suite_passes(self):
+        f = self.second_move()
+        f.write("src/test/scala/x/StubSpec.scala", STUB_TEST + EXT_CASE)
+        f.commit(self.EXT_MSG)
+        self.ok(f)
+
+    def test_extended_suite_without_trailer_fails(self):
+        f = self.second_move()
+        f.write("src/test/scala/x/StubSpec.scala", STUB_TEST + EXT_CASE)
+        f.commit("refactor(snap): narrow other (#1401)")
+        out = self.bad(f, "FR-016b")
+        self.assertIn("[step3]", out)
+
+    def test_extended_suite_without_new_assertion_fails(self):
+        f = self.second_move()
+        f.write("src/test/scala/x/StubSpec.scala", STUB_TEST + "  val t = 1\n")
+        f.commit(self.EXT_MSG)
+        self.bad(f, "FR-016b")
+
+    def test_extended_suite_removing_an_assertion_fails(self):
+        f = self.second_move(stub=STUB_TEST + "  1 shouldBe 1\n")
+        f.write("src/test/scala/x/StubSpec.scala", STUB_TEST + EXT_CASE)
+        f.commit(self.EXT_MSG)
+        out = self.bad(f, "step3")
+        self.assertIn("- line with an assertion", out)
+
+    def test_extended_tests_trailer_on_non_narrowing_commit_fails(self):
+        f = Fixture()
+        f.write(TEST, SPEC_BASE.replace("val fixture", "\"bar\" should \"x\" in { 2 shouldBe 2 }\n  val fixture"))
+        f.commit(f"refactor(snap): extend\n\n# extended-tests: {TEST}\n")
+        out = self.bad(f, "step3")
+        self.assertIn("only on a narrowing commit", out)
+
+    def test_extended_tests_trailer_naming_an_unmodified_file_fails(self):
+        f = self.second_move()
+        f.write("src/test/scala/x/StubSpec.scala", STUB_TEST + EXT_CASE)
+        f.commit(self.EXT_MSG.replace("StubSpec.scala", "StubSpec.scala src/test/scala/x/Other.scala"))
+        out = self.bad(f, "step3")
+        self.assertIn("does not modify", out)
 
     # ---- step 3 on refactor branches
     def test_refactor_import_only_test_change_passes(self):
