@@ -607,7 +607,37 @@ only when every item on the per-slice checklist below holds.
     refresh and probe state the core, `SyncLifecycle`, `StagnationWatchdog`, `HealingOrchestrator` or `PivotSelector`
     also read or write. No fix: #1561's gaps stay. Stub test: `PivotRefresherSpec` (ten cases). Platåberget across at
     least 3 refreshes, and Mordor: **pending** (to be run by the user on the slice jar after merge; no node run here).
-- [ ] T053 [M11] `DownloadSupervisor`. Check SC-001 (core ≤ about 1,000 lines). Run a full Mordor SNAP.
+- [x] T053 [M11] `DownloadSupervisor`. Check SC-001 (core ≤ about 1,000 lines). Run a full Mordor SNAP.
+  - As built (partial by design: whole members only, no lift; CQ-SNAP-016-32 and -33 hold the rest): no prerequisite
+    commit. The move commit moves into `controller/DownloadSupervisor.scala` `startAccountRangeSync`,
+    `spawnRecoveryCoordinators` (named by T050c), the three peer-availability ticks `requestAccountRanges`,
+    `requestByteCodes`, `requestStorageRanges`, `checkAllDownloadsComplete` and `currentSyncStatus` (7 symbols).
+    `launchAccountRangeWorkers` and `recordStorageDone` go `private` -> `private[snap]` (the moved bodies reach them),
+    and four moved members go `private` -> `private[snap]` (the core still calls them). Narrowed self-type:
+    `DownloadSupervisorState & SnapSharedState & SnapControllerEnv & CoordinatorHandles & PhaseFlags & PeerPoolApi &
+    SnapServerPeersApi & SnapPeerEvictionApi & ChainDownloadStartApi & FinalizationApi & HealingApi &
+    AccountRangeLaunchApi`; state 4 (R14: 8; `coordinatorGeneration`, `snapProgressStorage`, `recordStorageDone`,
+    `SnapCapabilityCheckKey`, all read-only here), Api 10 (R14a: 13). `DownloadSupervisor extends AccountRangeStartApi
+    with ByteCodeRequestApi`, whose declarations move next to it from `controller/PivotSelector.scala` and
+    `controller/HealingOrchestrator.scala` (CQ-SNAP-016-16); the core no longer lists them. Two new narrow Api traits:
+    `SnapPeerEvictionApi` (`startSnapPeerEviction`, declared in and implemented by `SnapPeerPool`, the member loses
+    `private[snap]`) and `AccountRangeLaunchApi` (`launchAccountRangeWorkers`, declared in the module file and
+    implemented by the core until its carve-out). The capability traits are unchanged (5 / 18 / 12 / 10); no other
+    module's count moves. The trait has no member `val` or `var`, so rule (d) held nothing back and no `val` became a
+    `lazy val`. **Not moved**: every M11 arm of `syncing` (the request ticks, the four `*Response` routing arms, the
+    `Progress*` arms, `AccountTrieFinalized`/`AccountTrieFinalizationFailed`, the two `*BackpressureChanged` arms,
+    `IncrementalContractData` and the four phase-completion arms), all inline in `commonSyncingArms` (a local of
+    `syncing()`), so neither commit can take them (CQ-SNAP-016-32: an M11 lift slice, then an M11b move);
+    `launchAccountRangeWorkers`, whose first ~130 lines are M5's inline resume selection (CQ-SNAP-016-33, the
+    CQ-SNAP-016-17 residual); `bytecodesEstimatedTotal` and `storageContractProgressPct` (written by those core arms;
+    no moved body reads them); `recoverAccountsComplete` and `healAtNewerPivot` (M5b, CQ-SNAP-016-29);
+    `delayedRestartArms` (M9b); `stopSnapOnlySchedules` / `stopStateSyncChildren` (CQ-SNAP-016-26);
+    `storageInFlightDuringAccounts` (a companion helper the plan does not list). No fix. Stub test:
+    `DownloadSupervisorSpec` (eight cases). SC-001: **not met** at this slice. `SNAPSyncController.scala` is 2,947 lines
+    (the class 2,176, the companion 771) against about 1,000; the biggest remaining members are `commonSyncingArms`
+    (~485 lines), `recoverAccountsComplete` (~290) and `launchAccountRangeWorkers` (~280), so SC-001 needs
+    CQ-SNAP-016-32/33 and M5b. A full Mordor SNAP: **pending** (to be run by the user on the slice jar after merge; no
+    node run here).
 
 ## Coordinators
 

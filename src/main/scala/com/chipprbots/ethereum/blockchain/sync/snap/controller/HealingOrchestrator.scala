@@ -55,9 +55,6 @@ private[snap] trait LazyHandoffApi:
   def lazyHandoffBlockedByAbsentPathRoot(): Boolean
   def anchorPivotBeforeLazyHandoff(reason: String): Unit
 
-private[snap] trait ByteCodeRequestApi:
-  def requestByteCodes(): Unit
-
 /** SNAP healing orchestration (spec 016 M6b, research.md R6 "Healing orchestration"): the `StateHealing` arms of
   * `syncing` (`stateHealingArms`: stateless peers, stagnation, the lazy-heal handoffs, the trie-walk results), the
   * healing-coordinator spawn and its two routes (`spawnHealingCoordinator`, `startStateHealing`,

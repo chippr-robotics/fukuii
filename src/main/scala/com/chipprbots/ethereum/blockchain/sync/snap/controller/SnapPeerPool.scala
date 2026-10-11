@@ -31,6 +31,9 @@ private[snap] trait SnapServerPeersApi:
   def snapServingPeers(): List[com.chipprbots.ethereum.network.Peer]
   def startSnapServerPeersScheduler(): Unit
 
+private[snap] trait SnapPeerEvictionApi:
+  def startSnapPeerEviction(): Unit
+
 private[snap] trait ProbeTargetApi:
   def bestSnapProbeTarget(): Option[(PeerListSupportNg.PeerWithInfo, String)]
 
@@ -54,7 +57,8 @@ private[snap] trait SnapPeerPool
     with SnapServerPeersApi
     with HandshakedPeersApi
     with BootstrapPeersApi
-    with ProbeTargetApi:
+    with ProbeTargetApi
+    with SnapPeerEvictionApi:
   self: SnapPeerPoolState & SnapSharedState & SnapControllerEnv & CoordinatorHandles =>
 
   def handshakedPeers: Map[com.chipprbots.ethereum.network.PeerId, PeerListSupportNg.PeerWithInfo] =
@@ -270,7 +274,7 @@ private[snap] trait SnapPeerPool
           }
 
   /** Start the periodic SNAP peer eviction task if not already running. */
-  private[snap] def startSnapPeerEviction(): Unit =
+  def startSnapPeerEviction(): Unit =
     if !snapPeerEvictionStarted then
       snapPeerEvictionStarted = true
       timers.startTimerWithFixedDelay(EvictNonSnapPeers, EvictNonSnapPeers, snapSyncConfig.snapPeerEvictionInterval)
