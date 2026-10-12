@@ -1195,18 +1195,19 @@ until `StateAccess` exists (FR-042).
     - seven ARC `Command` cases have no arm and no sender;
     - TNHC drops the worker-sent `HealingTaskFailed` in its catch-all;
     - the ratchet has false-positive floors (ARC 7, SRC 25, TNHC 14).
-  - **Open user decisions:**
+  - **User decisions (open at T060, decided 2026-10-12; see T060c, T060d and plan.md "Amendment 2026-10-12"):**
     - **D-T060-1** (before C-A3): `StateIngest` exposes no per-pivot `MptStorage`, `SnapStorageDoneStorage`,
-      `SnapSyncProgressStorage`, `HealingFrontierStorage` or `BfsQueueStorage`. The options are to keep them as
+      `SnapSyncProgressStorage`, `HealingFrontierStorage` or `BfsQueueStorage`. The options were to keep them as
       parameters, to add capability members, or to derive them in the coordinator (a behaviour change). See
-      characterization §4.3;
+      characterization §4.3. **Decided: add capability members** (T060d);
     - **D-T060-2** (before C-B1): `BytecodeRecoveryActor` and `StorageRecoveryActor` (`blockchain/sync`, outside
       `snap/`) call BCC's and SRC's `apply` with raw stores, and cannot see `private[snap] StateIngest`. See §4.4.
+      **Decided: option (a)**, `SyncController` builds one `StateIngest` for them (T060c).
   - **Tooling:** today's `verify.py` rejects the specified narrowing (step 6 rejects the `apply`, `ChildFactories`,
     constructor, spawn-site and call-site lines). Capability mode cannot carry it. A plain prerequisite commit would
     pass but is unchecked. → T060b.
-- [ ] T060b [TOOL] **`verify.py`: StateIngest adoption allowance for C-* narrowings** (owned by the T054 tooling line;
-  before T061; branch `test/snap-016-adoption-verify`). This is the change proposed in coordinator-characterization.md
+- [x] T060b [TOOL] **`verify.py`: StateIngest adoption allowance for C-* narrowings** (owned by the T054 tooling line;
+  before T061; branch `test/snap-016-coordinator-verify`). This is the change proposed in coordinator-characterization.md
   §6.3; it is not implemented by T060.
   - A narrowing commit with the trailer `# adopts: StateIngest <Coordinator>` may:
     - remove storage-typed parameters from that coordinator's Impl constructor, its companion `apply`, the
@@ -1224,14 +1225,103 @@ until `StateAccess` exists (FR-042).
     - if D-T060-2 chooses (a), admit the recovery actors under the same substitution rule.
   - Self-tests: a C-B1-shaped positive case, plus the negatives listed in §6.3 item 8. Replay the merged spec-016
     ranges and show identical output, as T054b did.
+  - **As built** (branch `test/snap-016-coordinator-verify`; the rules are in the routing doc, "Adoption mode (T060b)",
+    and in `verify.py`, "adoption mode"). No sbt or JVM was run.
+    - *Adoption mode (G1–G7).* The trailer `# adopts: StateIngest <Unit>`, on `refactor/snap-016-*` only, not with
+      `# moved:` or `# capability:`. `<Unit>` is one of the four coordinators, or `RecoveryActors` (D-T060-2). The
+      commit is the slice's narrowing commit, where the check replaces step 6 (the lines step 6 admits are dropped
+      first, and visibility modifiers may change), or a standalone commit. Every changed `src/main` file must belong to
+      the unit: the coordinator file and its `actors/<dir>/` modules, `ChildFactories`, the `DownloadSupervisor` and
+      `HealingOrchestrator` spawn sites, the recovery actors' coordinator calls; or, for `RecoveryActors`, the two
+      recovery actors, `SyncController` and the `StateIngest` visibility. The check is token level, like capability
+      mode's: declarations drop storage-typed parameters and take one `stateIngest: StateIngest` at the first dropped
+      position (kept parameters unchanged, each dropped one mapped to a parameterless member of the same type by a
+      `// adopt-map:` line or a bare `capability-map:` entry); calls drop those arguments, all or none, for one
+      `stateIngest`, and each dropped value must be `stateIngest.<member>` or a name equal to it in that file; dropped
+      parameters may stand as `stateIngest.<member>` in the coordinator and its modules. The `ChildFactories` method
+      must keep `apply`'s parameter list (names, defaults, the `stateIngest` type), so `ChildFactoriesSpec` holds by
+      construction and stays protected.
+    - *D-T060-2 support.* `SyncController` may add one `stateIngest` whose initializer is token-identical to
+      `SNAPSyncController`'s, plus the handles that initializer names which it lacks, each derived token-identically
+      (`pathNodeStorageOpt` from its `val`, `validatorFactory` from `SNAPSyncController.apply`'s default); its own `def`s
+      may gain a `stateIngest` parameter. `StateIngest.scala` may only widen the trait's and object's `private[snap]`
+      to `private[sync]`. No other logic may change.
+    - *D-T060-1 support (capability extension).* A capability-mode PR for a capability already in the merge-base
+      baseline may add members, map lines, forwarders and `apply` parameters; existing members and parameters keep
+      their declarations; map entries the file had at the merge-base are not re-checked against the empty pinned list.
+      The core's accessor gains only the new arguments (each checked like an introduction's), and `SyncController`'s
+      mirror follows in the same commit. `def trieStore(pivot: BigInt): MptStorage = stateTries.getBackingStorage(pivot)`
+      mapped from `stateStorage.getBackingStorage` passes as a pure forwarder, and `stateIngest.stateTries.getBackingStorage(n)`
+      may become `stateIngest.trieStore(n)` (the accessor-alias form). Member growth needs a fresh
+      `justifications["capabilities.StateIngest.members"]` line.
+    - *G8.* Without the trailer, dropping a storage-typed parameter from (or adding `StateIngest` to) a coordinator's
+      Impl constructor or `apply`, a `ChildFactories` coordinator method or a recovery actor `def`, or changing
+      `StateIngest`'s visibility, fails `[adopts]`.
+    - *G9.* A `<Coordinator>Env` trait (`ByteCodeEnv`, ...) is declaration-only for step 6 and reported on the
+      `[counts] capability traits` line. Baselined capabilities are also reported there (before, `StateIngest` was
+      listed as a module after T055).
+    - *G10, counter version 2.* The baseline's `counter` field selects the counter (absent = 1, so every old range
+      replays unchanged). Version 2 drops 21 reviewed false-positive names (`ForceCompleteStorage`, `isNodeInStorage`,
+      `.isStorage`, `replayQueuedStorage`, `.createStorageTask`, the `SNAPSyncMetrics.setStorage*` setters, the
+      `SyncProgressMonitor` and `SnapIntakeBudget` counters, `maxConcurrentStorageAccounts`/`maxPendingStorageTasks`,
+      `evaluateStorageTail`, `sampledStorageRoots`, `validateStorageRanges`, `verifyStorageRange`,
+      `attachStorageConsumer`: −53) and counts `storageDone` (+10). **Re-baselined 678 (v1) = 635 (v2)**, with a
+      `justifications["storage_refs.total"]` line. The counter only goes up, and a change needs a fresh justification.
+      Per-file: SRC 88 → 66, TNHC 84 → 70, ARC 28 → 29, `ChildFactories` 72 → 75, `DownloadSupervisor` 60 → 56,
+      `StagnationWatchdog` 3 → 0, and four −1s. The floors (characterization §4.2) fall to ARC 2 (`.commit()`), SRC 3
+      (`.commit()`), TNHC 0.
+    - *Extra gap found (step 1).* A coordinator's first move commit turns the Impl's multi-line constructor closer `):`
+      into `) extends <Module>`; step 1 now admits exactly those two header shapes.
+    - *Not covered:* `Option[StateIngest]` (T075) fails closed until T075 decides between `Option` and a flag; calls in
+      unchanged files are left to the compiler; SC-009's type-level check (characterization §6.3 item 6) is not built.
+    - *Self-tests.* 38 new (222 in all): 26 git-fixture adoption cases (C-B1, D-T060-2 and narrowing-combined positives;
+      negatives for a logic change in `apply`, in a spawn site and beside a substitution, a dropped non-storage
+      argument, another capability passed, the wrong member, a wrong-typed adopt-map, reordered/retyped/extra
+      parameters, `ChildFactories` out of step, a `ChildFactoriesSpec` edit, a file outside the unit, the wrong unit,
+      no trailer, the trailer on a move commit or a test branch, a narrowing body change, and for D-T060-2 an
+      accessor that does not mirror the core, a handle derived differently, logic changes, a stray `stateIngest` use,
+      a capability change beyond visibility, and visibility or signature changes without the trailer), 1 unit case for
+      the call rule (named, positional, partial, pure addition), 6 capability-extension cases (D-T060-1 positive, no
+      justification, impure `trieStore`, a changed core argument, `SyncController` out of step, a changed member) and
+      5 counter/G9 cases (v1 vs v2 counts, upgrade needs a justification, no downgrade, the real baseline matches
+      this tree, `ByteCodeEnv`).
+    - *Replay.* Old and new `verify.py` over the 29 merged spec-016 ranges (#1541–#1582, with #1543, #1558, #1570,
+      #1574, #1579, #1580, #1582): byte-identical output for all 29.
+    - *Dry run* (scratch clone of staging, not committed). A D-T060-2-shaped commit (`StateIngest` → `private[sync]`;
+      `SyncController` builds one `StateIngest`; both recovery actors' `apply`/`applyPreloaded`/`testApply`/
+      `scanning`/`downloading` take it) passes, total 678 unchanged. A C-B1-shaped commit on top (`ByteCodeCoordinator`
+      Impl/`apply`/`new`, `ChildFactories`, three spawn sites and `BytecodeRecoveryActor` take `stateIngest`;
+      `evmCodeStorage` → `bytecode`) passes with the total **678 → 662** (BCC 10 → 4, `ChildFactories` 72 → 68,
+      `DownloadSupervisor` 60 → 56, `HealingOrchestrator` 45 → 43), the characterization's projection exactly. Four
+      injected changes fail `[adopts]`: `batchSize * 2` in `apply`'s `new` call, a spawn site's `intakeBudget = None`,
+      `isEmpty` → `nonEmpty` beside the `skipPresent` substitution, and a changed `ChildFactories` default. Re-run on
+      top of the T060b commit (counter v2), the same two commits pass with **635 → 619** (BCC 10 → 4,
+      `ChildFactories` 75 → 71, `DownloadSupervisor` 56 → 52, `HealingOrchestrator` 45 → 43).
+- [ ] T060c [SI] **D-T060-2: recovery actors take `StateIngest`** (user decision 2026-10-12; before T061; its own PR,
+  `# adopts: StateIngest RecoveryActors`). `StateIngest` widens from `private[snap]` to `private[sync]`.
+  `SyncController` already holds 6 of the 8 stores; it builds one `StateIngest`, deriving `pathNodes` exactly as
+  `SNAPSyncController` does (and `validatorFactory` as its `apply` default), and passes it to `BytecodeRecoveryActor`
+  and `StorageRecoveryActor`, which pass it on to the coordinators once C-B1 and the storage slices adopt it. No other
+  logic changes. Reviews: forge (both actors run on ETC at startup), vault. Validation: a bytecode- or storage-recovery
+  start on Mordor.
+- [ ] T060d [SI] **D-T060-1: `StateIngest` members for the derived stores** (user decision 2026-10-12; before T064;
+  a capability-mode PR, `# capability: StateIngest`, an extension). Members for the per-pivot `MptStorage` (a method),
+  `SnapStorageDoneStorage`, `SnapSyncProgressStorage`, `HealingFrontierStorage` and `BfsQueueStorage`, handing out the
+  same instances, built where they are today, so the change is behaviour-neutral. The member cap grows with a
+  `justifications["capabilities.StateIngest.members"]` line; ADR INF-006 decision 1 gets a note. Open for vault: the
+  healing stores are lazy vals of `HealingOrchestrator` today (a strict accessor would build them at construction), and
+  a `getBackingStorage` forwarder returns a new `MptStorage` per call on the Hash scheme, so the core's per-pivot cache
+  stays the only caller (forge).
 - [ ] T061 [C-B1] ByteCode: `ByteCodeDispatch`, `ByteCodeResponseHandling` (the #1501 `skipPresent` check moves
   unchanged). Narrowing takes `StateIngest` (code writes, presence check), never `StateAccess`; lowers the T054
   baseline total.
-  - T060: needs T060b and D-T060-2.
+  - T060: needs T060b (done) and D-T060-2 (T060c merged first). Runs in adoption mode,
+    `# adopts: StateIngest ByteCodeCoordinator`, on the narrowing commit.
     - `skipPresent` is a line of the `AddByteCodeTasks` arm. Lift it into a method in a plain commit, or leave it in
       the core, where it is the core's one remaining reference.
     - Move `ActiveByteCodeRequest` and `WorkerRef` to the companion first.
-    - Adopts `evmCodeStorage` → `bytecode`. Projected total 678 → 662.
+    - Adopts `evmCodeStorage` → `bytecode`. Projected total 678 → 662 under counter v1, 635 → 619 under counter v2
+      (the baseline since T060b); the T060b dry run measured it.
     - Baselines: State 9 + 7, Api 1 + 9 (R14b). Add vault.
 - [ ] T062 [C-A1] `AccountPeerDispatch` (includes the #1501 intake gate; T060: plus `maybeRequestPivotRefresh`; a
   zero-reference slice, so the PR records the grep and the total is unchanged). Narrowing takes `StateIngest` where it touches

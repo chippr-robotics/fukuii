@@ -47,7 +47,12 @@ unless stated.
   `snap/controller/`, `snap/actors/` and the core `SNAPSyncController.scala` (since T054c: the split's move source,
   so a move out of the core is a per-file trade); per-file counts may move between files. Calls on `StateIngest` are not
   storage references. A PR that lowers a count records it in the baseline in the same PR. The coordinator stage pays
-  the table down. T055 runs under the T054b verify mode.
+  the table down. T055 runs under the T054b verify mode. **Counter version 2 (T060b):** the baseline's `counter` field
+  selects the counter (absent = 1, so old ranges replay unchanged). Version 2 no longer counts the coordinators'
+  reviewed false positives (`ForceCompleteStorage`, `isNodeInStorage`, `.isStorage`, the `setStorage*` metric setters,
+  progress and intake counters, config settings, pure validators; `STORAGE_NAME_ALLOW_V2`) and does count
+  `storageDone`. T060b re-baselined 678 (v1) = 635 (v2). The counter only goes up, and a change needs a fresh
+  `justifications["storage_refs.total"]` line.
 - **Capability mode (T054b).** A behaviour-neutral PR that introduces a capability and moves call sites onto it (T055,
   `StateIngest`) is neither a move nor a narrowing. It is selected by the commit trailer `# capability: <Trait>`, on a
   `refactor/snap-016-*` branch only. Once one commit of a PR carries it, every commit that touches a `src/main` file
@@ -83,7 +88,8 @@ unless stated.
     storage-typed abstract member. A dropped or added declaration must stand alone on its lines. No other file may be
     added or deleted, and no `src/main` file outside `snap/` may change;
   - `ChildFactories` signatures do not change: spawn sites pass `stateIngest.<handle>` to the existing handle parameters.
-    (`ChildFactoriesSpec`, a protected pin, compares each method's default positions with the child's `apply`.)
+    (`ChildFactoriesSpec`, a protected pin, compares each method's default positions with the child's `apply`.) They
+    change in the coordinator's adoption commit (T060b, below).
   Rule (a), rule (d), `[counts]`, the test-hunk guard, pin and golden protection and step 8 still apply. In step 8, the
   capability has a `capabilities` row in `storage-baseline.json` (file, member count, raw imports), recorded in the PR
   that introduces it. The member count only goes down unless a justification line is added. The raw-import list is
@@ -99,6 +105,55 @@ unless stated.
     ordinary core code: a later PR that edits it is checked only by that PR's own mode (move, narrowing or fix). The
     PR-head re-check of an existing capability file checks its shape and its forwarders, but not that each map root
     is a pinned handle, because the pinned list is empty after T055.
+  - **Extending a capability (T060b, D-T060-1).** A later capability PR for a capability that is already in the
+    merge-base baseline may add members, map lines, forwarders and `apply` parameters under the same structure rules
+    (a per-pivot `def trieStore(pivot: BigInt): MptStorage = stateTries.getBackingStorage(pivot)` mapped from
+    `stateStorage.getBackingStorage` is a pure forwarder). Existing members and `apply` parameters keep their
+    declarations and order. Map entries the file already had at the merge-base are not re-checked against the (empty)
+    pinned list. The core's accessor may gain the arguments of the new `apply` parameters only; its existing arguments
+    stay token-identical. If SyncController builds its own `StateIngest` (D-T060-2), it must keep mirroring the core's
+    accessor, so it changes in the same commit, under the mirror rule below. A call site already on the capability may
+    move to a new method member: `stateIngest.stateTries.getBackingStorage(n)` becomes `stateIngest.trieStore(n)` (the
+    accessor-alias form of the map entry). Member growth needs a fresh `justifications["capabilities.StateIngest.members"]`.
+- **Adoption mode (T060b).** A coordinator narrowing (C-*) moves the coordinator from raw storage parameters onto
+  `StateIngest`. The commit trailer `# adopts: StateIngest <Unit>` (on `refactor/snap-016-*` only; not with `# moved:`
+  or `# capability:`) selects the check. `<Unit>` is a coordinator (`ByteCodeCoordinator`, `AccountRangeCoordinator`,
+  `StorageRangeCoordinator`, `TrieNodeHealingCoordinator`) or `RecoveryActors` (D-T060-2). The commit is the slice's
+  narrowing commit, where the check replaces step 6, or a standalone commit. Every changed `src/main` file must belong
+  to the unit, and changes only as follows (token level, as in capability mode: comments, whitespace and imports are
+  ignored; the statement skeleton stays):
+  - **Declarations.** The Impl constructor, the companion `apply` and the `ChildFactories` method (RecoveryActors: the
+    recovery objects' `def`s, and SyncController `def`s) may drop storage-typed parameters and take one
+    `stateIngest: StateIngest`, at the first dropped parameter's position. Kept parameters keep their names, types,
+    defaults and order. Each dropped parameter maps to a parameterless `StateIngest` member of the same type: a
+    `// adopt-map: <param> -> <member>` line in the coordinator file (or a recovery actor file), or a bare
+    `capability-map:` entry (so `evmCodeStorage` maps to `bytecode` with no line). For a coordinator, the three
+    declarations drop the same parameters, and the `ChildFactories` method keeps `apply`'s parameter list exactly
+    (names, defaults, the `stateIngest` type), so `ChildFactoriesSpec` (protected, unchanged) holds by construction.
+  - **Calls** to those declarations, positional or named (`new <X>Impl(...)`, `X(...)`, `childFactories.x(...)`, the
+    spawn sites in `DownloadSupervisor` and `HealingOrchestrator`, the recovery actors' coordinator calls): the
+    dropped parameters' arguments go, all or none, and one `stateIngest` argument takes the first one's place. A
+    dropped argument is `stateIngest.<member>` for its parameter, or a name equal to it in that file (a dropped
+    parameter of the enclosing declaration; in SyncController a handle its `stateIngest` is built from). Kept
+    arguments are unchanged. A call that relied on the defaults may not start passing `stateIngest`.
+  - **Substitutions.** In the coordinator file and its `actors/<dir>/` modules (or a recovery actor file), a dropped
+    parameter may stand as `stateIngest.<member>`.
+  - **RecoveryActors (D-T060-2).** SyncController adds one `val stateIngest: StateIngest = StateIngest(...)` whose
+    initializer is token-identical to SNAPSyncController's, plus declarations of the handles it names that SyncController
+    lacks (`pathNodeStorageOpt`, `validatorFactory`), each token-identical to SNAPSyncController's derivation (a `val`
+    initializer or a parameter default). Its own `def`s may gain a `stateIngest` parameter (plumbing). `StateIngest.scala`
+    may only widen the trait's and object's `private[snap]` to `private[sync]`.
+  - **In a narrowing commit**, the lines step 6 admits (headers, self-types, abstract State/Api/capability members) are
+    dropped first, and visibility modifiers may change; any other change must be one of the rewrites above. This is
+    stricter than step 6's pairing of normalised lines: no result-type, `val`/`def` or line-order changes.
+  - **Guard (G8).** Without the trailer, a commit that drops a storage-typed parameter from (or adds a `StateIngest` to)
+    a coordinator's Impl constructor or `apply`, a `ChildFactories` coordinator method or a recovery actor `def`, or
+    changes `StateIngest`'s visibility, fails `[adopts]`.
+  - **Not covered yet:** `Option[StateIngest]` (T075's healed-code check) fails closed; T075 extends the rule when it
+    decides between `Option` and a flag. Calls in unchanged files are not checked (the compiler rejects a call left on
+    a dropped parameter). Step 1 admits a multi-line constructor's `):` becoming `) extends <Module>` in the
+    coordinator's first move commit. A `<Coordinator>Env` trait (`ByteCodeEnv`, ...) is declaration-only for step 6 and
+    reported on the `[counts] capability traits` line.
 - **No sbt on the soak host.** CI is the compiler.
 - **Module form (ADR CON-013).** Every module is a trait whose self-type is
   `<Module>State & <capabilities> & <Callee>Api…`. A module file never mentions `SNAPSyncControllerImpl` or a
