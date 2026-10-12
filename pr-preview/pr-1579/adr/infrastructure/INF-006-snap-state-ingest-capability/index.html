@@ -5459,10 +5459,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#6-childfactories-keeps-its-parameter-lists-in-t055" class="md-nav__link">
+  <a href="#6-childfactories-keeps-its-parameter-lists-in-t055-user-decision-2026-10-11-deferred-to-the-c-slices" class="md-nav__link">
     <span class="md-ellipsis">
       
-        6. ChildFactories keeps its parameter lists in T055
+        6. ChildFactories keeps its parameter lists in T055 (user decision 2026-10-11: deferred to the C-* slices)
       
     </span>
   </a>
@@ -5674,16 +5674,21 @@ durable flush/sync barrier before <code>completeSnapSync</code>. The scaladoc of
   <code>RocksDbDataSource.flushAll</code>, is <code>private[dataSource]</code> test support.</li>
 <li>What does hold: a synced write syncs the WAL up to and including itself. A crash therefore leaves a prefix of the
   writes, and if <code>snapSyncDone</code> survived, every earlier ingest and publish write survived too. That holds while every
-  ingest write goes through the WAL. It would <strong>not</strong> hold under a relaxed policy that skipped the WAL. Separately,
-  vault should confirm that the sync also covers WAL files rolled before it.</li>
+  ingest write goes through the WAL. It would <strong>not</strong> hold under a relaxed policy that skipped the WAL.</li>
 </ul>
-<p><strong>Decision for T055.</strong> T055 states the property on the trait and pins today's ordering with a new Tier 1 test,
-<code>StateIngestDurabilitySpec</code>. On both schemes, the test checks three things: the completion flags are the only synced
-write; they come after every ingest or publish write; and every replayed prefix that holds <code>snapSyncDone</code> also holds
-the pivot root node. T055 does <strong>not</strong> add an explicit barrier. Adding one changes the ETC path (an extra WAL sync, or
-a memtable flush, before completion), so it needs forge and vault sign-off and a user decision first. Before any
-relaxed policy (T056) is enabled, the barrier must exist, because the flags' WAL sync no longer covers writes that
-skip the WAL.</p>
+<p><strong>Open question (vault).</strong> Does the synced flags batch also make durable the WAL files that were rolled before it?
+The guarantee above assumes that a <code>sync = true</code> write fsyncs every WAL file still holding unflushed records, not only
+the current one. If it does not, the implicit guarantee has a gap even with the WAL on, and the T056 barrier must close
+it. vault answers this before T056 merges.</p>
+<p><strong>Decision (user, 2026-10-11): document now, add the barrier in T056.</strong> T055 stays behaviour-neutral. It states the
+property on the trait and pins today's implicit guarantee with a new Tier 1 test, <code>StateIngestDurabilitySpec</code>. On both
+schemes, the test checks three things: the completion flags are the only synced write; they come after every ingest or
+publish write; and every replayed prefix that holds <code>snapSyncDone</code> also holds the pivot root node. T055 does <strong>not</strong>
+add an explicit barrier, because that changes the ETC path (an extra WAL sync, or a memtable flush, before completion).</p>
+<p>The explicit durable barrier before <code>completeSnapSync</code> is added by <strong>T056</strong> and is a <strong>hard precondition</strong> of it: no
+relaxed WAL policy may be enabled, or even selectable, without the barrier, because the flags' WAL sync no longer
+covers writes that skip the WAL. T056 needs forge and vault sign-off, and extends <code>StateIngestDurabilitySpec</code> to expect
+the barrier before the flags on both schemes.</p>
 <h3 id="5-the-batched-storage-trie-node-write-path-sc-010">5. The batched storage-trie node-write path (SC-010)<a class="headerlink" href="#5-the-batched-storage-trie-node-write-path-sc-010" title="Permanent link">&para;</a></h3>
 <p>The hottest SNAP write is the Path-scheme storage-trie node write (#1548). <code>StorageRangeCoordinator</code> builds each
 update with <code>PathNodeStorage.storageNodeUpsert</code> / <code>storageNodeRemoval</code>, buffers it in <code>trieNodeWrites</code>, and commits one
@@ -5691,16 +5696,18 @@ batch per applied response in <code>flushTrieNodeWrites</code>. The capability's
 itself. The coordinator reads it once per batch, and the per-node calls stay direct calls on <code>PathNodeStorage</code>, so
 there is no wrapper call and no allocation per node. The production implementation is a <code>final class</code> of plain
 <code>val</code>s, built once, so every call through the trait has a single receiver class. T055 moves no coordinator call site;
-the coordinator's narrowing (C-S2, T067) does. The SC-010 same-host <code>[STORAGE-PERF]</code> parity run is still a merge gate,
-and the user runs it on the soak host.</p>
-<h3 id="6-childfactories-keeps-its-parameter-lists-in-t055">6. <code>ChildFactories</code> keeps its parameter lists in T055<a class="headerlink" href="#6-childfactories-keeps-its-parameter-lists-in-t055" title="Permanent link">&para;</a></h3>
+the coordinator's narrowing (C-S2, T067) does. <strong>User decision 2026-10-11:</strong> the SC-010 same-host <code>[STORAGE-PERF]</code>
+parity gate (quiescent soak host, the Sepolia Path-scheme storage phase against ~1.7M entries/h, plus a same-host
+pre-wrap vs post-wrap A/B) moves from T055 to T067, where the per-node write path actually moves.</p>
+<h3 id="6-childfactories-keeps-its-parameter-lists-in-t055-user-decision-2026-10-11-deferred-to-the-c-slices">6. <code>ChildFactories</code> keeps its parameter lists in T055 (user decision 2026-10-11: deferred to the C-* slices)<a class="headerlink" href="#6-childfactories-keeps-its-parameter-lists-in-t055-user-decision-2026-10-11-deferred-to-the-c-slices" title="Permanent link">&para;</a></h3>
 <p>T055 was to make the <code>ChildFactories</code> spawn arguments take a <code>StateIngest</code>. <code>ChildFactoriesSpec</code> compares each
 factory method's default arguments with the child <code>apply</code>'s, position by position (<code>&lt;method&gt;$default$&lt;n&gt;</code>), and the
 recording factories in the module stubs override every method with its exact parameter list. Adding or replacing
 parameters therefore means changing assertions in an existing spec, which a behaviour-neutral PR may not do. The
 spawn sites pass <code>stateIngest</code>'s members as the existing arguments (<code>flatSlotStorage = stateIngest.flatSlots</code>). Each
-factory method changes together with its child's <code>apply</code> in that coordinator's narrowing (C-*), which keeps the
-default-equality spec true by construction. Whether to change the spec in T055 instead is the user's call.</p>
+factory method changes together with its child's <code>apply</code> in that coordinator's narrowing (C-<em>), which keeps the
+default-equality spec true by construction. The user confirmed this deferral on 2026-10-11; it is a done criterion of
+every C-</em> slice (tasks.md, "Coordinators").</p>
 <h2 id="consequences">Consequences<a class="headerlink" href="#consequences" title="Permanent link">&para;</a></h2>
 <ul>
 <li><code>SnapControllerEnv</code> has 11 members and no storage handle. The storage-reference total over the measured set falls
@@ -5717,8 +5724,8 @@ default-equality spec true by construction. Whether to change the spec in T055 i
   was rejected for T055. It hides nothing that substitution does not already hide, inflates the cap, and makes every
   call site change more than its handle. Narrower members come with the callers that need them.</li>
 <li><strong>Splitting chain data into its own capability now.</strong> See decision 2.</li>
-<li><strong>Adding the Hash-scheme barrier in T055.</strong> See decision 4. It is a behaviour change on the ETC path, so it is held
-  for review.</li>
+<li><strong>Adding the Hash-scheme barrier in T055.</strong> See decision 4. It is a behaviour change on the ETC path; the user
+  placed it in T056 as a hard precondition of any relaxed WAL policy.</li>
 </ul>
 <h2 id="references">References<a class="headerlink" href="#references" title="Permanent link">&para;</a></h2>
 <ul>
