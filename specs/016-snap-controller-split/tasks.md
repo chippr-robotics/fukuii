@@ -1274,7 +1274,7 @@ until `StateAccess` exists (FR-042).
       into `) extends <Module>`; step 1 now admits exactly those two header shapes.
     - *Not covered:* `Option[StateIngest]` (T075) fails closed until T075 decides between `Option` and a flag; calls in
       unchanged files are left to the compiler; SC-009's type-level check (characterization §6.3 item 6) is not built.
-    - *Self-tests.* 38 new (222 in all): 26 git-fixture adoption cases (C-B1, D-T060-2 and narrowing-combined positives;
+    - *Self-tests.* 38 new (222 in all; 233 after the prism fixes): 26 git-fixture adoption cases (C-B1, D-T060-2 and narrowing-combined positives;
       negatives for a logic change in `apply`, in a spawn site and beside a substitution, a dropped non-storage
       argument, another capability passed, the wrong member, a wrong-typed adopt-map, reordered/retyped/extra
       parameters, `ChildFactories` out of step, a `ChildFactoriesSpec` edit, a file outside the unit, the wrong unit,
@@ -1285,6 +1285,18 @@ until `StateAccess` exists (FR-042).
       justification, impure `trieStore`, a changed core argument, `SyncController` out of step, a changed member) and
       5 counter/G9 cases (v1 vs v2 counts, upgrade needs a justification, no downgrade, the real baseline matches
       this tree, `ByteCodeEnv`).
+    - *Prism review of 4470da23c (changes requested, fixed in a second commit).* (1) An adopted file may add only the
+      capability's import or a once-qualified name: no wildcard, `given`, rename or rebinding import. (2) Step 1's
+      closer allowance is scoped to the coordinator Impl files, plain parent names that are traits of the
+      coordinator's `actors/<dir>/`, and only where the file gains such a closer; the adoption check's header lines
+      need plain parents too. Steps 1 and 6 elsewhere keep admitting parent arguments: tightening them changed the
+      replay of #1560 (M9's `with SyncLifecycle(heapWatchdogStart)`), so they stay, as a documented reviewer item.
+      (3) A counter change is measured against the merge-base re-measured under the new counter, with no
+      justification escape; the commit that changes it touches no `src/main`; and its justification names
+      `counter v<N>` in 40+ characters. (4) A rewrite of a dropped name under a shadowing declaration (a helper
+      parameter, a local `val`, a lambda binding) fails. (5) The mirrored `stateIngest` and handles are plain `val`s,
+      and the trait and object widen together. (6) An `adopt-map` line may not override a bare `capability-map:`
+      entry. Info: `STORAGE_NAME_ALLOW_V2` matches by name everywhere (routing doc). 11 new fixtures; 233 self-tests. SyncController may also add named imports of the types its mirrored declarations name (not already used bare): the D-T060-2 dry run re-done with those imports passes (635), and C-B1 on top passes (635 → 619).
     - *Replay.* Old and new `verify.py` over the 29 merged spec-016 ranges (#1541–#1582, with #1543, #1558, #1570,
       #1574, #1579, #1580, #1582): byte-identical output for all 29.
     - *Dry run* (scratch clone of staging, not committed). A D-T060-2-shaped commit (`StateIngest` → `private[sync]`;

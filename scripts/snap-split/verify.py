@@ -535,6 +535,20 @@ def export_prefix_ok(prefix: str, dests: list[tuple[str, str]], other_pkgs: set[
     return False
 
 
+def header_parents_ok(l: str) -> bool:
+    """T060b (prism): a header line's `extends`/`with` clause names parents only (identifiers, dotted paths, type
+    arguments), never a constructor call such as `with Audit(sideEffect())`, which would run code. Used by the adoption
+    check only: steps 1 and 6 keep admitting parent arguments, because a merged range relies on a trait parameter
+    (M9, #1560: `with SyncLifecycle(heapWatchdogStart)`), and the replay of merged ranges must stay byte-identical."""
+    code = strip_comments(l).strip()
+    if not code or re.match(r"^(?:import|package)\b|^\*", code):
+        return True
+    m = re.search(r"\b(?:extends|with)\b", code)
+    if not m:
+        return True
+    return bool(re.fullmatch(r"(?:(?:extends|with)\s+[\w.]+(?:\[[\w., \[\]]*\])?\s*)+[:{]?\s*", code[m.start():]))
+
+
 def abstract_decl(s: str) -> bool:
     t = s.strip()
     return bool(re.match(r"^(?:(?:" + MODIFIER + r")\s+)*(?:def|var|type)\s+\w", t)) and top_level_initializer(t) is None and not t.endswith(("(", ","))
@@ -915,13 +929,19 @@ class Verifier:
             "--color-moved-ws=allow-indentation-change", p, c, "--", "src/main/**/*.scala",
         )
         unmoved_rm, unmoved_add = [], []
+        cur = None
         for raw in out.splitlines():
+            plain = re.sub(r"\x1b\[[0-9;]*m", "", raw)
+            if plain.startswith("+++ "):
+                cur = plain[6:] if plain.startswith("+++ b/") else None
             m = re.match(r"^((?:\x1b\[[0-9;]*m)*)([-+])(.*)$", raw)
             if not m or raw.lstrip("\x1b[0123456789;m").startswith(("---", "+++")):
                 continue
             codes, sign, body = m.groups()
             body = re.sub(r"\x1b\[[0-9;]*m", "", body)
             if not body.strip():
+                continue
+            if self.coordinator_closer(c, cur, sign, body):
                 continue
             if sign == "-" and "35" not in codes:
                 unmoved_rm.append(body)
@@ -930,9 +950,6 @@ class Verifier:
         header_ok = re.compile(
             r"^\s*(?:import|package)\b|^\s*(?:(?:private|protected)(?:\[\w+\])?\s+|final\s+|sealed\s+|abstract\s+)*(?:case\s+)?(?:class|trait|object)\b"
             r"|^\s*(?:extends|with)\b|\b(?:extends|with)\b.*[{:]\s*$"
-            # T060b: a multi-line constructor's closer, when the first move gives a coordinator Impl its `extends`
-            # clause (`):` -> `) extends <Module>` / `with <Module>:`)
-            r"|^\s*\)\s*:\s*$|^\s*\)\s*extends\b"
         )
         added_ok = re.compile(header_ok.pattern + r"|^\s*\w+\s*:\s*\w*Impl\s*=>\s*$|^\s*end\b|^\s*//|^\s*/?\*")
         pool: dict[str, list[str]] = {}
@@ -983,6 +1000,24 @@ class Verifier:
             self.err(c, "step1", f"added line is neither moved nor a header/import/visibility change: `{a[:100]}`")
         if len(extra) > 10:
             self.err(c, "step1", f"... and {len(extra) - 10} more added lines not moved")
+
+    def coordinator_closer(self, c, path, sign, body) -> bool:
+        """T060b: the first move into a coordinator's modules gives its Impl an `extends` clause, so the multi-line
+        constructor's closer `):` becomes `) extends <Module>` (identifier parents only, each a trait declared in the
+        coordinator's `actors/<dir>/` at this commit). Only in the four coordinator Impl files."""
+        unit = next((x for x in ADOPT_COORDINATORS if path == f"{SNAP}/actors/{x}.scala"), None)
+        if unit is None:
+            return False
+        mod_dir = f"{SNAP}/actors/{ADOPT_COORDINATORS[unit]}"
+        declared = {t for f in self.g.tree_files(c, [mod_dir]) for t in toplevel_traits(self.g.show(c, f) or "")}
+
+        def valid(line):
+            m = re.match(r"^\s*\)\s*extends\s+(\w+(?:\s+with\s+\w+)*)\s*:?\s*$", line)
+            return bool(m) and all(x in declared for x in re.split(r"\s+with\s+", m.group(1)))
+        if sign == "-":
+            # the old closer goes only where the file gains a valid `) extends <Module>` closer
+            return bool(re.match(r"^\s*\)\s*:\s*$", body)) and any(valid(l) for l in (self.g.show(c, path) or "").splitlines())
+        return valid(body)
 
     # -- step 2
     def check_bodies(self, c, p, changed, symbols):
@@ -1542,6 +1577,7 @@ class Ratchet:
             mb = g.run("merge-base", base, self.head).strip()
         except RuntimeError:
             mb = base
+        self.mb = mb
         try:
             old = load_baseline(g.show(mb, BASELINE_PATH))
             new = load_baseline(g.show(self.head, BASELINE_PATH))
@@ -1612,14 +1648,18 @@ class Ratchet:
             counter = COUNTER_VERSIONS[-1]
         if counter < old_counter:
             self.err("storage-refs", f"{BASELINE_PATH} lowers counter from {old_counter} to {counter}: the counter version only goes up")
-        elif counter > old_counter:
-            self.info(f"counter version {old_counter} -> {counter} (re-baseline)")
-            if not self.fresh_justification(TOTAL_KEY):
-                self.err("storage-refs", f"{BASELINE_PATH} raises counter from {old_counter} to {counter}: a counter change "
-                                         f"re-baselines every row, so it needs a new `justifications[\"{TOTAL_KEY}\"]` line")
+        bump_ceiling = None
+        if counter > old_counter:
+            bump_ceiling = self.counter_bump(old_counter, counter)
         counts = {rel: storage_ref_count(t, exemptions, counter) for rel, t in files.items()}
         total = sum(counts.values())
         old_total, new_total = int(self.old["storage_refs_total"]), int(self.new["storage_refs_total"])
+        if bump_ceiling is not None:
+            old_total = bump_ceiling
+            if total > bump_ceiling:
+                self.err("storage-refs", f"total storage references {total} under counter {counter}, above the merge-base "
+                                         f"re-measured under counter {counter} ({bump_ceiling}): a counter change may not "
+                                         "raise the total (no justification escape; raise it in a PR of its own)")
         keys = sorted(set(k for k, n in counts.items() if n) | set(self.new["storage_refs"]) | set(self.old["storage_refs"]))
         for k in sorted(keys, key=lambda k: (-counts.get(k, 0), k)):
             ob = int(self.old["storage_refs"].get(k, 0))
@@ -1633,6 +1673,40 @@ class Ratchet:
         if total > old_total and not self.fresh_justification(TOTAL_KEY):
             self.err("storage-refs", f"total storage references {total}, above the ceiling {old_total}: per-file moves are free, but "
                                      f"a higher total needs a new `justifications[\"{TOTAL_KEY}\"]` line in {BASELINE_PATH}")
+
+    def counter_bump(self, old_counter: int, counter: int) -> int:
+        """A counter change (T060b, prism): the ceiling is the merge-base re-measured with the new counter, so the gap
+        between the versions cannot hide new references; the commit that changes `counter` changes no `src/main` file;
+        and the justification is substantive (names the new version, 40+ characters)."""
+        g = self.g
+        self.info(f"counter version {old_counter} -> {counter} (re-baseline)")
+        j = str(self.new["justifications"].get(TOTAL_KEY, "")).strip()
+        if not self.fresh_justification(TOTAL_KEY) or len(j) < 40 or not re.search(
+                rf"\bcounter\s*(?:v|version\s*){counter}\b", j):
+            self.err("storage-refs", f"{BASELINE_PATH} raises counter from {old_counter} to {counter}: a counter change "
+                                     f"re-baselines every row, so it needs a new `justifications[\"{TOTAL_KEY}\"]` line of "
+                                     f"40+ characters naming `counter v{counter}`")
+        for c in g.run("rev-list", "--reverse", f"{self.mb}..{self.head}").split():
+            if g.is_merge(c):
+                continue
+            p = g.parent(c)
+            try:
+                before = load_baseline(g.show(p, BASELINE_PATH)) if p != EMPTY_TREE else None
+                after = load_baseline(g.show(c, BASELINE_PATH))
+            except ValueError:
+                continue
+            if after and int(after.get("counter", 1)) != int((before or {}).get("counter", 1)):
+                touched = [f for f in g.changed(p, c) if f.startswith("src/main/")]
+                if touched:
+                    self.v.err(c, "storage-refs", f"commit changes `counter` and also {touched[0]}"
+                                                  f"{f' (+{len(touched) - 1} more)' if len(touched) > 1 else ''}: a counter change "
+                                                  "is a commit of its own, with no src/main change")
+        files = {f[len(SNAP) + 1:]: g.show(self.mb, f) or "" for f in g.tree_files(self.mb, RATCHET_DIRS + RATCHET_FILES)}
+        caps = {e.get("file"): n for n, e in self.old["capabilities"].items() if e.get("file") in files}
+        ex = [cap_exemption(n, files[k]) for k, n in caps.items()]
+        ceiling = sum(storage_ref_count(t, ex, counter) for k, t in files.items() if k not in caps)
+        self.info(f"merge-base re-measured under counter {counter}: {ceiling} (was {self.old['storage_refs_total']} under counter {old_counter})")
+        return ceiling
 
     # Rule 2
     def check_raw(self, files: dict[str, str]):
@@ -2427,7 +2501,7 @@ def substitution_check(path: str, old: str, new: str, cap: "CapabilitySpec | Non
                         getattr(cap, "alias_maps", list)() if cap else [])
 
 
-def align_tokens(path: str, ot: list, nt: list, old: str, new: str, map_items, extra_maps=()) -> tuple[list[str], int]:
+def align_tokens(path: str, ot: list, nt: list, old: str, new: str, map_items, extra_maps=(), sites=None) -> tuple[list[str], int]:
     """The alignment behind `substitution_check` (T054b), on token lists the caller has already filtered: equal tokens,
     or a mapped handle sequence `lhs` in `old` standing as `rhs` in `new`, with the same statement skeleton. `extra_maps`
     are matched like `map_items` but not listed in the error message (T060b: the accessor-alias forms)."""
@@ -2465,6 +2539,8 @@ def align_tokens(path: str, ot: list, nt: list, old: str, new: str, map_items, e
                 if tuple(t.t for t in ot[i : i + len(lhs)]) == lhs and tuple(t.t for t in nt[j : j + len(rhs)]) == rhs:
                     step = (len(lhs), len(rhs))
                     subs += 1
+                    if sites is not None:
+                        sites.append((lhs[0], nt[j].line))
                     break
         if step is None and ot[i].t == nt[j].t:
             step = (1, 1)
@@ -2662,7 +2738,7 @@ def step6_lines(text: str) -> set[int]:
     (`header_regions` + HEADER_EDIT_RE) and abstract declarations inside State/Api/capability traits."""
     hdr, decl, out = header_regions(text), declaration_only_regions(text), set()
     for no, l in enumerate(text.splitlines(), 1):
-        if (no in hdr and HEADER_EDIT_RE.search(l)) or (no in decl and abstract_decl(l)):
+        if (no in hdr and HEADER_EDIT_RE.search(l) and header_parents_ok(l)) or (no in decl and abstract_decl(l)):
             out.add(no)
     return out
 
@@ -2731,8 +2807,9 @@ def mirror_accessor(path: str, old: str, new: str, core: str, spec: "CapabilityS
         probs.append(f"{path}: declares `{ADOPT_ACCESSOR}` {len(new_acc)} times; it builds exactly one")
         return probs, drop_old, drop_new, equiv
     ls, init, decl = new_acc[0]
-    if not re.match(r"^(?:(?:" + MODIFIER + r")\s+)*(?:lazy\s+)?val\s+" + ADOPT_ACCESSOR + r"\s*:\s*" + ADOPT_CAP + r"\b", decl):
-        probs.append(f"{path}: declare it `val {ADOPT_ACCESSOR}: {ADOPT_CAP} = ...`, found `{decl[:90]}`")
+    if not re.match(r"^(?:(?:" + MODIFIER + r")\s+)*val\s+" + ADOPT_ACCESSOR + r"\s*:\s*" + ADOPT_CAP + r"\b", decl):
+        probs.append(f"{path}: declare it a plain `val {ADOPT_ACCESSOR}: {ADOPT_CAP} = ...` as the core does (not `def`, "
+                     f"`lazy val` or `var`), found `{decl[:90]}`")
     if init != want:
         probs.append(f"{path}: `{ADOPT_ACCESSOR}` initializer `{' '.join(init or ())[:90]}` is not SNAPSyncController's "
                      f"`{' '.join(want)[:90]}` (same handles, same order)")
@@ -2755,7 +2832,10 @@ def mirror_accessor(path: str, old: str, new: str, core: str, spec: "CapabilityS
                 continue  # an existing declaration of the handle: unchanged code
             binit = top_level_initializer(strip_result_type(VIS_RE.sub("", bdecl)))
             got = tuple(t.t for t in scala_tokens(binit)) if binit is not None else None
-            if got is None or got not in derivations(core, h):
+            if not re.match(r"^(?:(?:" + MODIFIER + r")\s+)*val\s+" + re.escape(h) + r"\b", bdecl):
+                probs.append(f"{path}: adds `{bdecl[:80]}`; a mirrored handle is a plain `val` (not `def`, `lazy val` or "
+                             "`var`: one instance, built with the capability)")
+            elif got is None or got not in derivations(core, h):
                 probs.append(f"{path}: adds `{bdecl[:80]}`, which is not derived exactly as SNAPSyncController derives `{h}`")
             elif ";" in bdecl:
                 probs.append(f"{path}: `{bdecl[:80]}` shares its line with another statement")
@@ -2764,6 +2844,90 @@ def mirror_accessor(path: str, old: str, new: str, core: str, spec: "CapabilityS
             if bdecl not in [d for _l, d in nb]:
                 probs.append(f"{path}: changes or removes `{bdecl[:80]}`")
     return probs, drop_old, drop_new, equiv
+
+
+def adoption_import_problems(path: str, old: str, new: str, spec: "CapabilitySpec", extra=frozenset()) -> list[str]:
+    """T060b (prism): an adopted file may add a named import of the capability itself, or a named import of a name the
+    file referred to only qualified before (so no existing bare use is rebound). No wildcard, `given`, rename, or
+    other import: any of them can change what an unchanged name in the file resolves to."""
+    probs = []
+    pm = re.search(r"^package\s+([\w.]+)\s*$", spec.text, re.M)
+    cap_path = f"{pm.group(1)}.{spec.name}" if pm else spec.name
+    code = [t.t for t in drop_lines(scala_tokens(old), import_lines(old))]
+    old_stmts = {re.sub(r"\s+", " ", l.strip()) for l in code_lines(old) if l.strip().startswith("import ")}
+    for l in code_lines(new):
+        st = re.sub(r"\s+", " ", l.strip())
+        if st.startswith("import ") and st not in old_stmts and re.search(r"=>|\bas\b", st):
+            probs.append(f"{path}: adds renaming import `{st[:80]}`; an adoption adds named imports only")
+    for e in sorted(import_entries(new) - import_entries(old)):
+        if is_wild_or_given_import(e):
+            probs.append(f"{path}: adds wildcard or given import `{e}`; an adoption adds named imports only")
+            continue
+        segs = e.split(".")
+        name = segs[-1]
+        if name == spec.name:
+            if not (e == cap_path or cap_path.endswith("." + e)):
+                probs.append(f"{path}: imports `{e}`, which is not the capability `{cap_path}`")
+            continue
+        bare = any(t == name and (k == 0 or code[k - 1] != ".") for k, t in enumerate(code))
+        if name in extra and not bare:
+            continue  # a type the mirrored declarations name (SyncController, D-T060-2), new to the file
+        qualified = any(code[k:k + 2 * n - 1] == [x for s in segs[-n:] for x in (s, ".")][:-1]
+                        for n in range(2, len(segs) + 1) for k in range(len(code)))
+        if bare or not qualified:
+            probs.append(f"{path}: adds import `{e}`: an adoption may add only the capability's import, or one of a name "
+                         "the file referred to only qualified before (this one " +
+                         ("would rebind its existing bare uses)" if bare else "is new to the file)"))
+    return probs
+
+
+def shadow_problems(path: str, new: str, sites) -> list[str]:
+    """T060b (prism): a substitution `<dropped>` -> `stateIngest.<member>` is only sound where `<dropped>` meant the
+    dropped parameter. A declaration of the same name in scope (a helper's parameter, a local `val`, a lambda or
+    pattern binding) means the old token read that binding instead, so the rewrite would change which value is read."""
+    if not sites:
+        return []
+    toks, lines = scala_tokens(new), code_lines(new)
+    names = {n for n, _l in sites}
+    probs, extents = [], {}
+
+    def end_after(start: int, base: int, closers: bool) -> int:
+        for no in range(start + 1, len(lines) + 1):
+            l = lines[no - 1]
+            if not l.strip():
+                continue
+            if indent_of(l) < base or (closers and indent_of(l) == base and not l.strip().startswith(")")):
+                return no - 1
+        return len(lines)
+
+    for k, t in enumerate(toks):
+        if t.t not in names:
+            continue
+        prev = toks[k - 1].t if k else ""
+        nxt = toks[k + 1].t if k + 1 < len(toks) else ""
+        if prev in ("(", ",") and nxt == ":":
+            d, j = 0, k - 1
+            while j >= 0:
+                if toks[j].t == ")":
+                    d += 1
+                elif toks[j].t == "(":
+                    if d == 0:
+                        break
+                    d -= 1
+                j -= 1
+            open_line = toks[j].line if j >= 0 else t.line
+            base = indent_of(lines[open_line - 1])
+            extents.setdefault(t.t, []).append((t.line, open_line, end_after(open_line, base, True)))
+        elif prev in ("val", "var", "def", "case") or (nxt in ("=>", "<-") and prev in ("(", ",", "{")):
+            base = indent_of(lines[t.line - 1])
+            extents.setdefault(t.t, []).append((t.line, t.line, end_after(t.line, base, False)))
+    for n, line in sites:
+        for decl, start, end in extents.get(n, []):
+            if start <= line <= end:
+                probs.append(f"{path}:{line}: `{n}` -> `{ADOPT_ACCESSOR}.<member>`, but line {decl} declares another `{n}` "
+                             "in scope here; the rewrite would change which value is read (rename the binding first)")
+                break
+    return probs
 
 
 class AdoptDecl:
@@ -2858,6 +3022,10 @@ class Adoption:
                         self.err(f"{f}:{no}: unparseable map line (want `// adopt-map: <parameter> -> <member>`): `{l.strip()[:80]}`")
                     continue
                 lhs, rhs = m.group(1), m.group(2)
+                if lhs in bare and bare[lhs] != rhs:
+                    self.err(f"{f}:{no}: adopt-map `{lhs} -> {rhs}` overrides the capability's bare entry "
+                             f"`capability-map: {lhs} -> {bare[lhs]}`; a parameter with a handle's name maps as the handle does")
+                    continue
                 if not IDENT_RE.match(lhs) or rhs not in self.members:
                     self.err(f"{f}:{no}: adopt-map `{lhs} -> {rhs}`: the left side is a parameter name, the right side a "
                              f"parameterless member of {ADOPT_CAP} ({', '.join(sorted(self.members))})")
@@ -3148,7 +3316,17 @@ class Adoption:
         nt2 = [t for t in collapse(nt, gn) if t.t.startswith(GROUP_MARK) or t.line not in drop_new]
         if self.narrowed and role in ("coordinator", "module"):
             ot2, nt2 = vis_free(ot2), vis_free(nt2)
-        probs, subs = align_tokens(f, ot2, nt2, old, new, free)
+        mirrored = set()
+        if role == "synccontroller":
+            nl_ = new.splitlines()
+            mirrored = {t.t for t in scala_tokens("\n".join(nl_[no - 1] for no in sorted(drop_new - import_lines(new))))
+                        if t.t[:1].isupper()}
+        for prob in adoption_import_problems(f, old, new, self.spec, mirrored):
+            self.err(prob)
+        sites: list = []
+        probs, subs = align_tokens(f, ot2, nt2, old, new, free, sites=sites)
+        for prob in shadow_problems(f, new, sites):
+            self.err(prob)
         for prob in probs:
             self.err(prob.replace("not a mapped handle substitution", "not an adoption rewrite (a dropped parameter "
                                   f"standing as `{ADOPT_ACCESSOR}.<member>`, or an adopted parameter or argument list)"))
@@ -3169,6 +3347,8 @@ class Adoption:
                 continue
             self.err(f"{f}: changes `{a.strip()[:70]}` -> `{b.strip()[:70]}`; a RecoveryActors adoption only widens the "
                      f"trait's and object's `private[snap]` to `private[sync]`")
+        if n == 1:
+            self.err(f"{f}: widens only one of `trait {ADOPT_CAP}` and `object {ADOPT_CAP}`; widen both together")
         self.info(f"{f}: visibility widened on {n} line(s)")
 
 

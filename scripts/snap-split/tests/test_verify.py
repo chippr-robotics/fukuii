@@ -2495,9 +2495,81 @@ class AdoptionModeTests(unittest.TestCase):
         out = self.neg({BCC: BCC_AFTER.replace("stateIngest.bytecode.get(h)", "stateIngest.stateTries.get(h)")})
         self.assertIn("not an adoption rewrite", out)
 
-    def test_adopt_map_to_a_member_of_another_type_fails(self):
+    def test_adopt_map_overriding_a_bare_capability_entry_fails(self):
+        # prism 6: `evmCodeStorage` already maps to `bytecode` through the capability's bare entry
         out = self.neg({BCC: "// adopt-map: evmCodeStorage -> appState\n" + BCC_AFTER})
-        self.assertIn("drops `evmCodeStorage: EvmCodeStorage`, but `stateIngest.appState` is `AppStateStorage`", out)
+        self.assertIn("adopt-map `evmCodeStorage -> appState` overrides the capability's bare entry", out)
+
+    def test_adopt_map_to_a_member_of_another_type_fails(self):
+        base = BCC_BASE.replace("evmCodeStorage", "codeStore")
+        f = adopt_fixture(files={**ADOPT_FILES, BCC: base})
+        self.recovery_first(f)
+        after = "// adopt-map: codeStore -> appState\n" + BCC_AFTER.replace("stateIngest.bytecode", "stateIngest.appState")
+        adopt_commit(f, {**CB1, BCC: after, BRA: BRA_CB1})
+        self.assertIn("drops `codeStore: EvmCodeStorage`, but `stateIngest.appState` is `AppStateStorage`", self.bad(f, "adopts"))
+
+    # ---- prism review of 4470da23c
+    def test_p1_imports_that_can_rebind_names_fail(self):
+        for imp, why in (("import scala.concurrent.ExecutionContext.Implicits.global", "is new to the file"),
+                         ("import x.other.Hash", "would rebind its existing bare uses"),
+                         ("import x.Syntax.given", "wildcard or given import"),
+                         ("import x.Evil.*", "wildcard or given import"),
+                         ("import x.evil.StateIngest", "which is not the capability"),
+                         ("import x.db.{EvmCodeStorage => Hash}", "renaming import")):
+            out = self.neg({BCC: BCC_AFTER.replace("import x.controller.StateIngest", "import x.controller.StateIngest\n" + imp)})
+            self.assertIn(why, out, imp)
+
+    def test_p1_capability_import_and_a_once_qualified_name_pass(self):
+        f = adopt_fixture(files={**ADOPT_FILES, BCC: BCC_BASE.replace("Behaviors.same\n", "x.util.Clock.now()\n    Behaviors.same\n")})
+        self.recovery_first(f)
+        after = BCC_AFTER.replace("Behaviors.same\n", "x.util.Clock.now()\n    Behaviors.same\n").replace(
+            "import x.controller.StateIngest", "import x.controller.StateIngest\nimport x.util.Clock")
+        adopt_commit(f, {**CB1, BCC: after, BRA: BRA_CB1})
+        self.ok(f)
+
+    def test_p4_rewrite_under_a_shadowing_binding_fails(self):
+        helper = "\n  def probe(h: Hash, evmCodeStorage: EvmCodeStorage): Boolean =\n    evmCodeStorage.get(h).isEmpty\n"
+        local = "\n  def local(h: Hash): Boolean =\n    val evmCodeStorage = backup\n    evmCodeStorage.get(h).isEmpty\n"
+        for extra, rewritten in ((helper, helper.replace("    evmCodeStorage.get", "    stateIngest.bytecode.get")),
+                                 (local, local.replace("    evmCodeStorage.get", "    stateIngest.bytecode.get"))):
+            anchor = "\nobject ByteCodeCoordinator:"
+            f = adopt_fixture(files={**ADOPT_FILES, BCC: BCC_BASE.replace(anchor, extra + anchor)})
+            self.recovery_first(f)
+            adopt_commit(f, {**CB1, BCC: BCC_AFTER.replace(anchor, rewritten + anchor), BRA: BRA_CB1})
+            self.assertIn("declares another `evmCodeStorage` in scope here", self.bad(f, "adopts"))
+        # the helper may keep its own parameter, unrewritten
+        f = adopt_fixture(files={**ADOPT_FILES, BCC: BCC_BASE.replace(anchor, helper + anchor)})
+        self.recovery_first(f)
+        adopt_commit(f, {**CB1, BCC: BCC_AFTER.replace(anchor, helper + anchor), BRA: BRA_CB1})
+        self.ok(f)
+
+    def p2_move(self, closer, mod_name="ByteCodeResponseHandling", path=None):
+        store = BCC_BASE[BCC_BASE.index("  def store("):BCC_BASE.index("object ByteCodeCoordinator:")]
+        f = adopt_fixture(files={**ADOPT_FILES, SC: SC_AFTER, BRA: BRA_AFTER, CAP: SI_SYNC})
+        core = BCC_BASE.replace("):\n\n  private val log", closer + "\n\n  private val log").replace(store, "")
+        module = (f"package x.actors.bytecode\n\nprivate[actors] trait {mod_name}:\n"
+                  "  self: ByteCodeCoordinatorImpl =>\n\n" + store)
+        adopt_commit(f, {path or BCC: core, f"{ACT}/bytecode/{mod_name}.scala": module},
+                     msg="refactor(snap): move store (#1401)\n\n# moved: store\n# partial: narrowed in a later commit\n")
+        return f
+
+    def test_p2_move_commit_closer_admits_module_parents_only(self):
+        self.ok(self.p2_move(") extends ByteCodeResponseHandling:"))
+        for closer in (") extends ByteCodeResponseHandling with Audit(sideEffect()):", ") extends X(sideEffect(1))",
+                       ") extends Unrelated:"):
+            out = self.bad(self.p2_move(closer), "step1")
+            self.assertIn("removed line is not shown as moved: `):`", out)
+
+    def test_p2_narrowing_header_with_a_constructor_call_fails(self):
+        f, store = self.narrowing_fixture()
+        store_after = BCC_AFTER[BCC_AFTER.index("  def store("):BCC_AFTER.index("object ByteCodeCoordinator:")]
+        core = BCC_AFTER.replace("):\n\n  private val log", ") extends ByteCodeResponseHandling\n    with Audit(sideEffect()):\n\n  private val log").replace(
+            store_after, "").replace("    stateIngest: StateIngest,\n    batchSize", "    val stateIngest: StateIngest,\n    batchSize")
+        module = ("package x.actors.bytecode\n\nprivate[actors] trait ByteCodeResponseHandlingState:\n  def stateIngest: StateIngest\n\n"
+                  "private[actors] trait ByteCodeResponseHandling:\n  self: ByteCodeResponseHandlingState =>\n\n" + store_after)
+        f.write("src/test/scala/x/StubSpec.scala", "package x\nclass S:\n  val s = new StubByteCodeResponseHandlingState with ByteCodeResponseHandling\n")
+        adopt_commit(f, {**CB1, BCC: core, BCC_MOD: module, BRA: BRA_CB1}, msg=ADOPT_MSG + "# new-tests: src/test/scala/x/StubSpec.scala\n")
+        self.assertIn("change is not an adoption rewrite", self.bad(f, "adopts"))
 
     def test_reordered_or_retyped_or_extra_parameter_fails(self):
         out = self.neg({BCC: BCC_AFTER.replace("      backpressureHighWatermark: Int = 50000,\n", "      backpressureHighWatermark: Int = 40000,\n")})
@@ -2579,6 +2651,25 @@ class AdoptionModeTests(unittest.TestCase):
     def test_recovery_dropping_a_handle_for_the_wrong_member_fails(self):
         out = self.rneg({SC: SC_AFTER.replace("      val bytecodeActor", "      val other = stateIngest\n      val bytecodeActor")})
         self.assertIn(f"{SC}: change is not an adoption rewrite", out)
+
+    def test_p5_mirror_must_use_plain_vals(self):
+        for a, bb in (("      val stateIngest: StateIngest = StateIngest(", "      lazy val stateIngest: StateIngest = StateIngest("),
+                      ("      val pathNodeStorageOpt: Option[PathNodeStorage] =", "      def pathNodeStorageOpt: Option[PathNodeStorage] ="),
+                      ("      val validatorFactory: MptStorage => StateValidator", "      lazy val validatorFactory: MptStorage => StateValidator")):
+            out = self.rneg({SC: SC_AFTER.replace(a, bb)})
+            self.assertIn("plain `val", out)
+
+    def test_p1_sync_controller_may_import_the_mirrored_types_only(self):
+        f = adopt_fixture(branch="refactor/snap-016-recovery-ingest")
+        sc = SC_AFTER.replace("object SyncController:", "import x.db.PathNodeStorage\nimport x.snap.StateValidator\n\nobject SyncController:")
+        adopt_commit(f, {SC: sc, BRA: BRA_AFTER, CAP: SI_SYNC}, msg=RECOVERY_MSG)
+        self.ok(f)
+        out = self.rneg({SC: SC_AFTER.replace("object SyncController:", "import x.other.Thing\n\nobject SyncController:")})
+        self.assertIn("adds import `x.other.Thing`", out)
+
+    def test_p5_trait_and_object_widen_together(self):
+        out = self.rneg({CAP: SI_FILE.replace("private[snap] trait StateIngest:", "private[sync] trait StateIngest:")})
+        self.assertIn("widens only one of `trait StateIngest` and `object StateIngest`", out)
 
     def test_capability_change_beyond_visibility_fails(self):
         out = self.rneg({CAP: SI_SYNC.replace("final private class Stores(", "final class Stores(")})
@@ -2733,6 +2824,25 @@ class CounterV2Tests(unittest.TestCase):
         self.assertIn("raises counter from 1 to 2", self.bad(self.ratchet(2, None), "storage-refs"))
         out = self.ok(self.ratchet(2, {"storage_refs.total": "counter v2: false positives out, storageDone in"}))
         self.assertIn("counter version 1 -> 2 (re-baseline)", out)
+
+    def test_p3_counter_bump_cannot_hide_new_references(self):
+        # the v1 -> v2 gap is 6 on this fixture's ForceCompleteStorage-style names; 6 new real refs keep the v2 total
+        # under the v1 ceiling, so the ceiling is the merge-base re-measured under v2
+        fp = "\n  def fp(): Unit =\n" + "".join(f"    self ! ForceCompleteStorage{''}\n    isNodeInStorage({i})\n" for i in range(3))
+        f = adopt_fixture(files={**ADOPT_FILES, PS: ADOPT_FILES[PS] + fp})
+        f.git("tag", "-f", "base")
+        real = "\n  def leak(): Unit =\n" + "".join(f"    mptStorage.get({i})\n" for i in range(6))
+        f.write(PS, ADOPT_FILES[PS] + fp + real)
+        f.files = {**f.files, PS: ADOPT_FILES[PS] + fp + real}
+        f.write(BASELINE, adopt_baseline(f.files, counter=2, just={"storage_refs.total": "counter v2: false positives out, storageDone in"}))
+        f.commit("test: re-baseline\n")
+        out = self.bad(f, "storage-refs")
+        self.assertIn("above the merge-base re-measured under counter 2", out)
+        self.assertIn("a counter change is a commit of its own, with no src/main change", out)
+
+    def test_p3_counter_bump_needs_a_substantive_justification(self):
+        out = self.bad(self.ratchet(2, {"storage_refs.total": "v2"}), "storage-refs")
+        self.assertIn("40+ characters naming `counter v2`", out)
 
     def test_counter_downgrade_fails(self):
         f = adopt_fixture()

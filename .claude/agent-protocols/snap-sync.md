@@ -51,8 +51,10 @@ unless stated.
   selects the counter (absent = 1, so old ranges replay unchanged). Version 2 no longer counts the coordinators'
   reviewed false positives (`ForceCompleteStorage`, `isNodeInStorage`, `.isStorage`, the `setStorage*` metric setters,
   progress and intake counters, config settings, pure validators; `STORAGE_NAME_ALLOW_V2`) and does count
-  `storageDone`. T060b re-baselined 678 (v1) = 635 (v2). The counter only goes up, and a change needs a fresh
-  `justifications["storage_refs.total"]` line.
+  `storageDone`. T060b re-baselined 678 (v1) = 635 (v2). The counter only goes up. A counter change is a commit with no
+  `src/main` change, carries a fresh `justifications["storage_refs.total"]` line of 40+ characters naming
+  `counter v<N>`, and is measured against the merge-base re-measured under the new counter, with no justification
+  escape, so the gap between the versions cannot hide new references.
 - **Capability mode (T054b).** A behaviour-neutral PR that introduces a capability and moves call sites onto it (T055,
   `StateIngest`) is neither a move nor a narrowing. It is selected by the commit trailer `# capability: <Trait>`, on a
   `refactor/snap-016-*` branch only. Once one commit of a PR carries it, every commit that touches a `src/main` file
@@ -145,15 +147,32 @@ unless stated.
     may only widen the trait's and object's `private[snap]` to `private[sync]`.
   - **In a narrowing commit**, the lines step 6 admits (headers, self-types, abstract State/Api/capability members) are
     dropped first, and visibility modifiers may change; any other change must be one of the rewrites above. This is
-    stricter than step 6's pairing of normalised lines: no result-type, `val`/`def` or line-order changes.
+    stricter than step 6 in two ways: no result-type, `val`/`def` or line-order changes, and a header line's
+    `extends`/`with` parents must be plain names (no constructor arguments such as `with Audit(sideEffect())`).
+  - **Imports.** An adopted file may add only a named import of the capability itself (its full path, or a suffix of
+    it), or a named import of a name the file referred to only qualified before. No wildcard, `given`, rename, or any
+    import of a name already used bare (it would rebind those uses).
+  - **Shadowing.** A dropped parameter may become `stateIngest.<member>` only where no other declaration of that name
+    is in scope (a helper's parameter, a local `val`, a lambda, `for` or `case` binding). The scope is indentation-based,
+    so it may over-approximate (fail closed); rename a shadowing binding first.
+  - **Mirror and map hygiene.** SyncController's `stateIngest` and the handles it mirrors are plain `val`s (not `def`,
+    `lazy val` or `var`). The trait and the object are widened together. An `// adopt-map:` line may not override a bare
+    `capability-map:` entry for the same name.
   - **Guard (G8).** Without the trailer, a commit that drops a storage-typed parameter from (or adds a `StateIngest` to)
     a coordinator's Impl constructor or `apply`, a `ChildFactories` coordinator method or a recovery actor `def`, or
     changes `StateIngest`'s visibility, fails `[adopts]`.
   - **Not covered yet:** `Option[StateIngest]` (T075's healed-code check) fails closed; T075 extends the rule when it
     decides between `Option` and a flag. Calls in unchanged files are not checked (the compiler rejects a call left on
     a dropped parameter). Step 1 admits a multi-line constructor's `):` becoming `) extends <Module>` in the
-    coordinator's first move commit. A `<Coordinator>Env` trait (`ByteCodeEnv`, ...) is declaration-only for step 6 and
-    reported on the `[counts] capability traits` line.
+    coordinator's first move commit, only in the four coordinator Impl files, only with plain parent names, each a
+    trait declared in the coordinator's `actors/<dir>/`, and only where the file gains such a closer. A
+    `<Coordinator>Env` trait (`ByteCodeEnv`, ...) is declaration-only for step 6 and reported on the
+    `[counts] capability traits` line.
+  - **What the gate cannot check (reviewer items):** steps 1 and 6 outside the adoption check still admit header lines
+    whose parents take arguments (`with SyncLifecycle(heapWatchdogStart)`, a Scala 3 trait parameter that M9, #1560,
+    relies on), so a parent argument in a plain move or narrowing commit is review's to check. Counter v2's allow-list
+    (`STORAGE_NAME_ALLOW_V2`) matches by name everywhere: a real store later named like one of its 21 entries would not
+    count, so a new name on that list is a reviewed tooling change.
 - **No sbt on the soak host.** CI is the compiler.
 - **Module form (ADR CON-013).** Every module is a trait whose self-type is
   `<Module>State & <capabilities> & <Callee>Api…`. A module file never mentions `SNAPSyncControllerImpl` or a
