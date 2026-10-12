@@ -346,8 +346,9 @@ Boundaries are preliminary (research.md R12) and are confirmed by T060 before C-
 
 **Amendment 2026-10-11.** Every C-* narrowing self-type names `StateIngest` for storage, never `StateAccess` and never a
 raw storage type. Each C-* PR lowers the T054 storage-reference total (its coordinator file's figure normally falls too,
-but the gate is the total). The coordinators get their handles through `ChildFactories` today; T055 changes the spawn
-arguments to pass a `StateIngest`, and the C-* narrowing commits then move the call sites onto it.
+but the gate is the total). The coordinators get their handles through `ChildFactories` today. **Amended (user
+decision 2026-10-11):** T055 does not change the spawn arguments; each C-* narrowing changes its coordinator's
+`ChildFactories` method and the coordinator's `apply` together, so `ChildFactoriesSpec` holds by construction.
 
 | # | Coordinator → trait / file | Contents | Notes | Est. lines |
 |---|---|---|---|---|
@@ -399,12 +400,12 @@ arguments to pass a `StateIngest`, and the C-* narrowing commits then move the c
 | 24 | **M11** Download supervisor | move | ~850 | prism, forge | full Mordor SNAP |
 | 24a | **T054** env freeze ratchet: `verify.py` step 8 against `scripts/snap-split/storage-baseline.json` (`SnapControllerEnv` count 18; storage-reference total over `snap/controller/` + `snap/actors/`, down-only) (amendment 2026-10-11; PR #1570, `test/snap-016-env-freeze`) | tooling | script + baseline file | prism | — |
 | 24a′ | **T054b** `verify.py` mode for a behaviour-neutral capability-introduction PR (neither a move nor a narrowing); needed before T055; owned by the T054 tooling line | tooling | script + self-tests | prism | — |
-| 24b | **T055** `StateIngest` capability: 8 env storage handles + the batched storage-trie node-write path (`flushTrieNodeWrites`, from #1548); modules move to it; `SnapControllerEnv` 18 → ~11; exporter durability property (FR-044) | refactor | ~+250 / −150 (estimate) | **forge**, **vault**, prism; beacon for the Path-scheme publish | Mordor full SNAP; `[STORAGE-PERF]` parity on the same physical host that produced the ~1.7M entries/h figure (the 4-core/16 GB/SATA BX500 soak host, quiescent), on the same workload (the Sepolia Path-scheme storage phase), plus a same-host pre-wrap vs post-wrap A/B (SC-010) |
-| 24c | **T056** lighter-WAL experiment as a `StateIngest` durability policy (optional; after T055) | experiment | small | **vault**, forge | Mordor + Platåberget SNAP with a crash during finalization |
+| 24b | **T055** `StateIngest` capability: 8 env storage handles + the batched storage-trie node-write path (`flushTrieNodeWrites`, from #1548); modules move to it; `SnapControllerEnv` 18 → ~11; exporter durability property (FR-044) | refactor | ~+250 / −150 (estimate) | **forge**, **vault**, prism; beacon for the Path-scheme publish | Mordor full SNAP (SC-010 perf parity moved to C-S2, user decision 2026-10-11) |
+| 24c | **T056** lighter-WAL experiment as a `StateIngest` durability policy (optional; after T055). Hard precondition: the explicit FR-044 barrier before `completeSnapSync` (user decision 2026-10-11) | experiment | small | **vault**, forge | Mordor + Platåberget SNAP with a crash during finalization |
 | 25 | **T060** coordinator characterization (docs) | docs | — | — | — |
 | 26 | **C-B1** | move | ~350 | prism | — |
 | 27–30 | **C-A1…A4** | move | ~1,350 | prism; **vault** on A3 and A4 | Mordor restart mid-account after A4 |
-| 31–34 | **C-S1…S4** | move | ~1,370 | prism; **vault** on S2 and S3 | Mordor + Platåberget restart mid-storage after S3 |
+| 31–34 | **C-S1…S4** | move | ~1,370 | prism; **vault** on S2 and S3 | Mordor + Platåberget restart mid-storage after S3; **C-S2: `[STORAGE-PERF]` parity on the same quiescent soak host against ~1.7M entries/h on the Sepolia Path-scheme storage phase, plus a same-host pre-wrap vs post-wrap A/B (SC-010, moved from T055 by user decision 2026-10-11)** |
 | 35–40 | **C-H0…H5** | restructure + move | ~2,520 | prism; **vault** on H1 and H3 | Mordor heal restart after H1 |
 | 40b | **C-X0** golden test of the response-size window (grow/shrink math and clamp, per coordinator) and of its DEBUG log text | test | 0 / ~120 | prism | — |
 | 41 | **C-X** `AdaptiveResponseBytes` | dedupe | −60 | prism | — |
@@ -669,7 +670,9 @@ plan. Nothing above that is not marked "amended" changes.
   SNAP complete and before execution reads it, whatever policy the ingest writes used. On Hash scheme there is no
   export step, so an explicit durable flush/sync barrier runs before `completeSnapSync`. Without this, a crash during
   finalization leaves execution reading a store that was never durably written. Spec 017's DC-1 restates it as a
-  design constraint.
+  design constraint. **Amended (user decision 2026-10-11):** T055 documents the property and pins today's implicit
+  guarantee (the completion flags' synced commit covers every earlier WAL record; no separate barrier exists on
+  either scheme). The explicit barrier lands in T056, as a hard precondition: no relaxed WAL policy without it.
 
 ### Why T055 is not a move or a narrowing (verify.sh)
 
@@ -686,11 +689,18 @@ The capability boundary and the exporter durability property are an architectura
 records them in a new ADR under `docs/adr/infrastructure/` (next free INF number; this is storage and durability, not a
 consensus rule), linked from this plan, in the T055 PR.
 
+Recorded: [ADR INF-006](../../docs/adr/infrastructure/INF-006-snap-state-ingest-capability.md) (T055): the capability
+boundary, the chain-data decision (no header/chain sub-interface for now), the durability policy, and the FR-044
+finding (today the completion flags' synced commit is the only sync; no separate barrier exists on either scheme).
+User decision 2026-10-11: document now; the barrier is added in T056 as a hard precondition of any relaxed WAL policy.
+Open for vault: whether the synced flags batch covers WAL files rolled before it.
+
 ### Constitution Check (amendment)
 
 - **I (consensus).** No consensus rule changes. Durability affects crash safety of state that execution reads, so
   forge (ETC, Hash scheme) and beacon (Path-scheme publish) review T055 and T056; vault reviews both.
 - **III (tests).** T055 adds a Tier 1 test of the durability property on both schemes (a store fake that records
-  flush/sync ordering) and keeps every existing assertion.
+  flush/sync ordering) and keeps every existing assertion. It pins today's ordering (the synced completion flags
+  after every ingest/publish write); T056 extends it to expect the explicit barrier.
 - **V (gates).** Unchanged: CI is the compiler (Complexity Tracking, row 1).
 

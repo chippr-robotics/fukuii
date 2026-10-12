@@ -76,13 +76,13 @@ private[snap] trait PivotSelector extends PivotSelectionApi with PivotBestBlockA
           ctx.log.info("=" * 80)
 
           // Get the bootstrap target that we synced to (this is the pivot we wanted)
-          val bootstrapTarget = appStateStorage.getSnapSyncBootstrapTarget()
-          val localBestBlock = appStateStorage.getBestBlockNumber()
+          val bootstrapTarget = stateIngest.appState.getSnapSyncBootstrapTarget()
+          val localBestBlock = stateIngest.appState.getBestBlockNumber()
 
           ctx.log.info(s"Bootstrap target: ${bootstrapTarget.getOrElse("none")}, Local best block: $localBestBlock")
 
           // Clear bootstrap target from storage now that we've read it
-          appStateStorage.clearSnapSyncBootstrapTarget().commit()
+          stateIngest.appState.clearSnapSyncBootstrapTarget().commit()
 
           // Reset retry counter
           bootstrapRetryCount = 0
@@ -106,7 +106,7 @@ private[snap] trait PivotSelector extends PivotSelectionApi with PivotBestBlockA
               .map(_.peerInfo.maxBlockNumber)
 
           def pivotTooStaleAgainstNetworkHead(pivot: BigInt): Boolean =
-            val bootstrapPivot = appStateStorage.getBootstrapPivotBlock()
+            val bootstrapPivot = stateIngest.appState.getBootstrapPivotBlock()
             currentNetworkBestFromSnapPeers(bootstrapPivot) match
               case Some(networkBest) if networkBest > 0 =>
                 val delta = networkBest - pivot
@@ -165,9 +165,9 @@ private[snap] trait PivotSelector extends PivotSelectionApi with PivotBestBlockA
                 else
                   pivotBlock = Some(targetPivot)
                   stateRoot = Some(header.stateRoot)
-                  appStateStorage
+                  stateIngest.appState
                     .putSnapSyncPivotBlock(targetPivot)
-                    .and(appStateStorage.putSnapSyncStateRoot(header.stateRoot.value))
+                    .and(stateIngest.appState.putSnapSyncStateRoot(header.stateRoot.value))
                     .commit()
                   updateBestBlockForPivot(header, targetPivot)
 
@@ -199,13 +199,13 @@ private[snap] trait PivotSelector extends PivotSelectionApi with PivotBestBlockA
                 case Some(targetPivot) =>
                   if pivotTooStaleAgainstNetworkHead(targetPivot) then startSnapSync()
                   else
-                    blockchainReader.getBlockHeaderByNumber(targetPivot) match
+                    stateIngest.chainReader.getBlockHeaderByNumber(targetPivot) match
                       case Some(header) =>
                         pivotBlock = Some(targetPivot)
                         stateRoot = Some(header.stateRoot)
-                        appStateStorage
+                        stateIngest.appState
                           .putSnapSyncPivotBlock(targetPivot)
-                          .and(appStateStorage.putSnapSyncStateRoot(header.stateRoot.value))
+                          .and(stateIngest.appState.putSnapSyncStateRoot(header.stateRoot.value))
                           .commit()
                         updateBestBlockForPivot(header, targetPivot)
 
@@ -245,8 +245,8 @@ private[snap] trait PivotSelector extends PivotSelectionApi with PivotBestBlockA
 
         case GetProgress(replyTo) =>
           // During bootstrap, report that we're preparing for SNAP sync
-          val currentBlock = appStateStorage.getBestBlockNumber()
-          val targetBlock = appStateStorage.getSnapSyncBootstrapTarget().getOrElse(BigInt(0))
+          val currentBlock = stateIngest.appState.getBestBlockNumber()
+          val targetBlock = stateIngest.appState.getSnapSyncBootstrapTarget().getOrElse(BigInt(0))
 
           ctx.log.info(s"Bootstrap progress: $currentBlock / $targetBlock blocks")
 
@@ -289,9 +289,9 @@ private[snap] trait PivotSelector extends PivotSelectionApi with PivotBestBlockA
 
         case GetStatus(replyTo) =>
           // During bootstrap, we're syncing via regular sync
-          val currentBlock = appStateStorage.getBestBlockNumber()
-          val targetBlock = appStateStorage.getSnapSyncBootstrapTarget().getOrElse(BigInt(0))
-          val startingBlock = appStateStorage.getSyncStartingBlock()
+          val currentBlock = stateIngest.appState.getBestBlockNumber()
+          val targetBlock = stateIngest.appState.getSnapSyncBootstrapTarget().getOrElse(BigInt(0))
+          val startingBlock = stateIngest.appState.getSyncStartingBlock()
           replyTo ! SyncProtocol.Status.Syncing(
             startingBlockNumber = startingBlock,
             blocksProgress = SyncProtocol.Status.Progress(currentBlock, targetBlock),
@@ -380,7 +380,7 @@ private[snap] trait PivotSelector extends PivotSelectionApi with PivotBestBlockA
       None
 
   def currentNetworkBestFromSnapPeers(): Option[BigInt] =
-    val bootstrapPivotBlock = appStateStorage.getBootstrapPivotBlock()
+    val bootstrapPivotBlock = stateIngest.appState.getBootstrapPivotBlock()
     // Peers whose STATUS hasn't arrived yet have maxBlockNumber=0 — exclude them, otherwise
     // a fresh-startup race returns Some(0) and the caller commits to a genesis pivot before
     // any real peer height is known.
@@ -411,26 +411,26 @@ private[snap] trait PivotSelector extends PivotSelectionApi with PivotBestBlockA
     //       scaling to the pivot height.
     //   (3) Block-number proxy — last resort when no ETH68 peers are connected yet (very early startup).
     val (estimatedTotalDifficulty, tdSource) =
-      blockchainReader
+      stateIngest.chainReader
         .getChainWeightByHash(pivotHash)
         .map(cw => (cw.totalDifficulty.value, "REAL_PIVOT_TD"))
         .orElse(calibratePivotTD(pivotBlockNumber).map(td => (td, "PEER_INTERPOLATED_TD")))
         .getOrElse {
-          val genesisTD: BigInt = blockchainReader
-            .getChainWeightByHash(blockchainReader.genesisHeader.hash)
+          val genesisTD: BigInt = stateIngest.chainReader
+            .getChainWeightByHash(stateIngest.chainReader.genesisHeader.hash)
             .map(_.totalDifficulty.value)
-            .getOrElse(blockchainReader.genesisHeader.difficulty.value)
+            .getOrElse(stateIngest.chainReader.genesisHeader.difficulty.value)
           val proxy: BigInt =
             if pivotBlockNumber == BigInt(0) then header.difficulty.value else pivotBlockNumber.max(genesisTD)
           (proxy, "BLOCK_NUMBER_PROXY")
         }
-    blockchainWriter.storeBlockHeader(header).commit()
-    blockchainWriter
+    stateIngest.chainWriter.storeBlockHeader(header).commit()
+    stateIngest.chainWriter
       .storeChainWeight(pivotHash, ChainWeight.totalDifficultyOnly(estimatedTotalDifficulty))
       .commit()
     // Always advance the self-reported best-block pointer so STATUS messages show the correct
     // pivot block number.
-    appStateStorage
+    stateIngest.appState
       .putBestBlockInfo(com.chipprbots.ethereum.domain.appstate.BlockInfo(pivotHash.value, pivotBlockNumber))
       .commit()
     ctx.log.info(
@@ -447,7 +447,7 @@ private[snap] trait PivotSelector extends PivotSelectionApi with PivotBestBlockA
       if currentPhase == AccountRangeSync || currentPhase == ByteCodeAndStorageSync || currentPhase == StateHealing
       then
         ctx.log.info(s"Retrying bootstrap at backtracked block $blockNumber...")
-        blockchainReader.getBlockHeaderByNumber(blockNumber) match
+        stateIngest.chainReader.getBlockHeaderByNumber(blockNumber) match
           case Some(header) =>
             completePivotRefreshWithStateRoot(blockNumber, header, "backtracked pivot (local header)")
           case None =>
@@ -465,17 +465,17 @@ private[snap] trait PivotSelector extends PivotSelectionApi with PivotBestBlockA
   private[snap] def resumeInterruptedBootstrap()(using scala.util.boundary.Label[Behavior[Command]]): Unit =
     import scala.util.boundary.break
     // Check if there's an interrupted bootstrap to resume
-    appStateStorage.getSnapSyncBootstrapTarget() match
+    stateIngest.appState.getSnapSyncBootstrapTarget() match
       case Some(bootstrapTarget) =>
-        val bestBlockNumber = appStateStorage.getBestBlockNumber()
+        val bestBlockNumber = stateIngest.appState.getBestBlockNumber()
 
         // Header-only bootstrap may not advance bestBlockNumber; allow resume if pivot header exists.
-        val hasPivotHeader = blockchainReader.getBlockHeaderByNumber(bootstrapTarget).isDefined
+        val hasPivotHeader = stateIngest.chainReader.getBlockHeaderByNumber(bootstrapTarget).isDefined
 
         if bestBlockNumber >= bootstrapTarget || hasPivotHeader then
           // Bootstrap already complete - clear the target and proceed with SNAP sync
           ctx.log.info(s"Bootstrap target $bootstrapTarget already reached (current block: $bestBlockNumber)")
-          appStateStorage.clearSnapSyncBootstrapTarget().commit()
+          stateIngest.appState.clearSnapSyncBootstrapTarget().commit()
           // Continue to normal SNAP sync logic below
         else
           // Resume interrupted bootstrap
@@ -548,9 +548,9 @@ private[snap] trait PivotSelector extends PivotSelectionApi with PivotBestBlockA
 
           pivotBlock = Some(header.number.value)
           stateRoot = Some(header.stateRoot)
-          appStateStorage
+          stateIngest.appState
             .putSnapSyncPivotBlock(header.number.value)
-            .and(appStateStorage.putSnapSyncStateRoot(header.stateRoot.value))
+            .and(stateIngest.appState.putSnapSyncStateRoot(header.stateRoot.value))
             .commit()
           updateBestBlockForPivot(header, header.number.value)
 
@@ -574,13 +574,13 @@ private[snap] trait PivotSelector extends PivotSelectionApi with PivotBestBlockA
           break(bootstrapping())
 
     // Get local and network state for pivot selection
-    val localBestBlock = appStateStorage.getBestBlockNumber()
+    val localBestBlock = stateIngest.appState.getBestBlockNumber()
 
     // If bootstrap checkpoints are configured, we should not start SNAP from a peer that is behind
     // the highest trusted checkpoint. SNAP servers only guarantee serving very recent state; picking
     // an ancient pivot (e.g. millions of blocks behind the network head) will cause peers to emit
     // empty/no-proof AccountRange responses.
-    val bootstrapPivotBlock = appStateStorage.getBootstrapPivotBlock()
+    val bootstrapPivotBlock = stateIngest.appState.getBootstrapPivotBlock()
 
     // Query SNAP-capable peers to find the highest block in the network.
     // SNAP must NOT start until we have a SNAP-capable peer that is at/above the bootstrap pivot
@@ -701,13 +701,13 @@ private[snap] trait PivotSelector extends PivotSelectionApi with PivotBestBlockA
       ctx.log.info("=" * 80)
 
       // Use genesis block as pivot (like core-geth does)
-      blockchainReader.getBlockHeaderByNumber(0) match
+      stateIngest.chainReader.getBlockHeaderByNumber(0) match
         case Some(genesisHeader) =>
           pivotBlock = Some(BigInt(0))
           stateRoot = Some(genesisHeader.stateRoot)
-          appStateStorage
+          stateIngest.appState
             .putSnapSyncPivotBlock(0)
-            .and(appStateStorage.putSnapSyncStateRoot(genesisHeader.stateRoot.value))
+            .and(stateIngest.appState.putSnapSyncStateRoot(genesisHeader.stateRoot.value))
             .commit()
           updateBestBlockForPivot(genesisHeader, BigInt(0))
 
@@ -778,21 +778,21 @@ private[snap] trait PivotSelector extends PivotSelectionApi with PivotBestBlockA
           break(bootstrapping())
         case NetworkPivot =>
           ctx.log.info(s"Fetching pivot header from network for block $pivotBlockNumber before starting SNAP")
-          appStateStorage.putSnapSyncBootstrapTarget(pivotBlockNumber).commit()
+          stateIngest.appState.putSnapSyncBootstrapTarget(pivotBlockNumber).commit()
           syncController ! StartRegularSyncBootstrap(pivotBlockNumber)
           break(bootstrapping())
         case LocalPivot =>
         // Fall through to local-header availability checks below
 
       // Check if we have the pivot block header locally
-      blockchainReader.getBlockHeaderByNumber(pivotBlockNumber) match
+      stateIngest.chainReader.getBlockHeaderByNumber(pivotBlockNumber) match
         case Some(header) =>
           // Pivot header is available - proceed with SNAP sync
           pivotBlock = Some(pivotBlockNumber)
           stateRoot = Some(header.stateRoot)
-          appStateStorage
+          stateIngest.appState
             .putSnapSyncPivotBlock(pivotBlockNumber)
-            .and(appStateStorage.putSnapSyncStateRoot(header.stateRoot.value))
+            .and(stateIngest.appState.putSnapSyncStateRoot(header.stateRoot.value))
             .commit()
           updateBestBlockForPivot(header, pivotBlockNumber)
 
@@ -836,7 +836,7 @@ private[snap] trait PivotSelector extends PivotSelectionApi with PivotBestBlockA
               ctx.log.info("=" * 80)
 
               // Store the bootstrap target
-              appStateStorage.putSnapSyncBootstrapTarget(targetForBootstrap).commit()
+              stateIngest.appState.putSnapSyncBootstrapTarget(targetForBootstrap).commit()
 
               // Request regular sync to continue to the pivot point
               syncController ! StartRegularSyncBootstrap(targetForBootstrap)

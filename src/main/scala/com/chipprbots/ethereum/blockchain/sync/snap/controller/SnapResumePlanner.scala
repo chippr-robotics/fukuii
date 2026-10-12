@@ -92,7 +92,7 @@ private[snap] trait SnapResumePlanner
     */
   private[snap] def checkStorageSchemeMismatch(): Unit =
     val emptyHp = com.chipprbots.ethereum.mpt.HexPrefix.encode(Array.empty[Byte], isLeaf = false)
-    val hasPathRoot = flatSlotStorage.dataSource
+    val hasPathRoot = stateIngest.flatSlots.dataSource
       .getOptimized(Namespaces.StateTriePathNamespace, emptyHp)
       .isDefined
     if hasPathRoot && snapSyncConfig.storageScheme == StorageScheme.Hash then
@@ -104,7 +104,7 @@ private[snap] trait SnapResumePlanner
 
   def getOrCreateMptStorage(pivotBlockNumber: BigInt): MptStorage =
     mptStorage.getOrElse {
-      val storage = stateStorage.getBackingStorage(pivotBlockNumber)
+      val storage = stateIngest.stateTries.getBackingStorage(pivotBlockNumber)
       mptStorage = Some(storage)
       ctx.log.info(s"Created writable MptStorage for pivot block $pivotBlockNumber")
       storage
@@ -127,7 +127,7 @@ private[snap] trait SnapResumePlanner
 
   /** Task files handed to accounts-complete recovery (never swept while referenced). */
   def accountsCompleteTaskFilePaths: Set[String] =
-    (appStateStorage.getSnapSyncStorageFilePath().toSet ++ appStateStorage.getSnapSyncCodeHashesPath().toSet)
+    (stateIngest.appState.getSnapSyncStorageFilePath().toSet ++ stateIngest.appState.getSnapSyncCodeHashesPath().toSet)
       .filter(_.nonEmpty)
 
   /** Delete contract task files in the task-file dir that are not in `keep`. IO errors are logged per file. */
@@ -221,7 +221,7 @@ private[snap] trait SnapResumePlanner
             s"pivot $t instead (CL head=${clHead.getOrElse("?")}, snap peer best=${peerBest.getOrElse("none")}). " +
             "Fetching its header."
         )
-        appStateStorage.putSnapSyncBootstrapTarget(t).commit()
+        stateIngest.appState.putSnapSyncBootstrapTarget(t).commit()
         syncController ! StartRegularSyncBootstrap(t)
         break(bootstrapping())
       case None =>
@@ -243,10 +243,10 @@ private[snap] trait SnapResumePlanner
     // Step 7: Check for accounts-complete recovery (process crash during bytecode/storage phase).
     // If accounts were previously completed and the pivot is still fresh, skip account download
     // and only re-run bytecodes + storage from the persisted storage file.
-    if appStateStorage.isSnapSyncAccountsComplete() then
-      val savedPivot = appStateStorage.getSnapSyncPivotBlock()
-      val savedRootOpt = appStateStorage.getSnapSyncStateRoot()
-      val savedStoragePath = appStateStorage.getSnapSyncStorageFilePath()
+    if stateIngest.appState.isSnapSyncAccountsComplete() then
+      val savedPivot = stateIngest.appState.getSnapSyncPivotBlock()
+      val savedRootOpt = stateIngest.appState.getSnapSyncStateRoot()
+      val savedStoragePath = stateIngest.appState.getSnapSyncStorageFilePath()
 
       (savedPivot, savedRootOpt) match
         case (Some(pivot), Some(rootBs)) if pivot > 0 =>
@@ -263,10 +263,10 @@ private[snap] trait SnapResumePlanner
               s"Recovery: saved pivot $pivot < RegularSync escalation hint $minPivotHint " +
                 s"— clearing accounts-complete flag and forcing fresh pivot selection"
             )
-            appStateStorage
+            stateIngest.appState
               .putSnapSyncAccountsComplete(false)
-              .and(appStateStorage.putSnapSyncStorageComplete(false))
-              .and(appStateStorage.putSnapSyncBytecodeComplete(false))
+              .and(stateIngest.appState.putSnapSyncStorageComplete(false))
+              .and(stateIngest.appState.putSnapSyncBytecodeComplete(false))
               .commit()
             // Fall through to normal startup (same path as drift-exceeded + phases incomplete)
 
@@ -274,25 +274,25 @@ private[snap] trait SnapResumePlanner
           // (a reboot wiped /tmp, the path was never persisted, ...). Storage must not be skipped for that, and the
           // tasks cannot be rebuilt reliably from an unhealed account trie, so restart the accounts phase.
           val storageTaskFileUnusable =
-            !belowEscalationHint && !appStateStorage.isSnapSyncStorageComplete() &&
+            !belowEscalationHint && !stateIngest.appState.isSnapSyncStorageComplete() &&
               !savedStoragePath
                 .filter(_.nonEmpty)
                 .exists(p =>
                   StorageTaskFile.isUsable(
                     java.nio.file.Paths.get(p),
-                    expectedCount = appStateStorage.getSnapSyncStorageFileCount()
+                    expectedCount = stateIngest.appState.getSnapSyncStorageFileCount()
                   )
                 )
           val codeHashesFileUnusable =
-            !belowEscalationHint && !appStateStorage.isSnapSyncBytecodeComplete() &&
-              !appStateStorage
+            !belowEscalationHint && !stateIngest.appState.isSnapSyncBytecodeComplete() &&
+              !stateIngest.appState
                 .getSnapSyncCodeHashesPath()
                 .filter(_.nonEmpty)
                 .exists(p =>
                   StorageTaskFile.isUsable(
                     java.nio.file.Paths.get(p),
                     StorageTaskFile.CodeHashEntrySize,
-                    appStateStorage.getSnapSyncCodeHashesCount()
+                    stateIngest.appState.getSnapSyncCodeHashesCount()
                   )
                 )
           val taskFilesUnusable = storageTaskFileUnusable || codeHashesFileUnusable
@@ -300,18 +300,18 @@ private[snap] trait SnapResumePlanner
             ctx.log.warn(
               s"Recovery: persisted task file unusable while its phase is incomplete " +
                 s"(storage: ${savedStoragePath.filter(_.nonEmpty).getOrElse("<none persisted>")} unusable=$storageTaskFileUnusable; " +
-                s"codeHashes: ${appStateStorage.getSnapSyncCodeHashesPath().filter(_.nonEmpty).getOrElse("<none persisted>")} unusable=$codeHashesFileUnusable). " +
+                s"codeHashes: ${stateIngest.appState.getSnapSyncCodeHashesPath().filter(_.nonEmpty).getOrElse("<none persisted>")} unusable=$codeHashesFileUnusable). " +
                 "A missing, empty or truncated file must not complete its phase. Restarting the accounts phase: clearing " +
                 "accounts/storage/bytecode-complete flags and the persisted storage and bytecode file paths."
             )
-            appStateStorage
+            stateIngest.appState
               .putSnapSyncAccountsComplete(false)
-              .and(appStateStorage.putSnapSyncStorageComplete(false))
-              .and(appStateStorage.putSnapSyncBytecodeComplete(false))
-              .and(appStateStorage.putSnapSyncStorageFilePath(""))
-              .and(appStateStorage.putSnapSyncCodeHashesPath(""))
-              .and(appStateStorage.putSnapSyncStorageFileCount(None))
-              .and(appStateStorage.putSnapSyncCodeHashesCount(None))
+              .and(stateIngest.appState.putSnapSyncStorageComplete(false))
+              .and(stateIngest.appState.putSnapSyncBytecodeComplete(false))
+              .and(stateIngest.appState.putSnapSyncStorageFilePath(""))
+              .and(stateIngest.appState.putSnapSyncCodeHashesPath(""))
+              .and(stateIngest.appState.putSnapSyncStorageFileCount(None))
+              .and(stateIngest.appState.putSnapSyncCodeHashesCount(None))
               .commit()
 
           // #1555 (PoS): a heal-only recovery (every download phase complete) must not resume healing on a pivot that
@@ -325,7 +325,7 @@ private[snap] trait SnapResumePlanner
           val clHeadForRecovery: Option[BigInt] =
             if isPoSChain then clPivotHint.flatMap(_.knownHeader).map(_.number.value) else None
           if isPoSChain && !belowEscalationHint && !taskFilesUnusable &&
-            appStateStorage.isSnapSyncStorageComplete() && appStateStorage.isSnapSyncBytecodeComplete()
+            stateIngest.appState.isSnapSyncStorageComplete() && stateIngest.appState.isSnapSyncBytecodeComplete()
           then
             val failedHere = failedFinalizationPivot.exists(pivot <= _)
             val clDrift = clHeadForRecovery.map(_ - pivot)
@@ -352,8 +352,8 @@ private[snap] trait SnapResumePlanner
           val drift = if networkBest > 0 then (networkBest - pivot).abs else BigInt(0)
           if !belowEscalationHint && !taskFilesUnusable && networkBest > 0 && drift > snapSyncConfig.maxPivotStalenessBlocks
           then
-            val storageAlreadyDone = appStateStorage.isSnapSyncStorageComplete()
-            val bytecodeAlreadyDone = appStateStorage.isSnapSyncBytecodeComplete()
+            val storageAlreadyDone = stateIngest.appState.isSnapSyncStorageComplete()
+            val bytecodeAlreadyDone = stateIngest.appState.isSnapSyncBytecodeComplete()
             if storageAlreadyDone && bytecodeAlreadyDone then
               // All data phases complete — content-addressed data is valid across pivot changes.
               // Match go-ethereum/Besu: do NOT wipe. Bootstrap acquires a fresh pivot and the
@@ -371,10 +371,10 @@ private[snap] trait SnapResumePlanner
                 s"Recovery: pivot $pivot drifted $drift blocks from network best $networkBest. " +
                   "Clearing accounts-complete flag and restarting fresh."
               )
-              appStateStorage
+              stateIngest.appState
                 .putSnapSyncAccountsComplete(false)
-                .and(appStateStorage.putSnapSyncStorageComplete(false))
-                .and(appStateStorage.putSnapSyncBytecodeComplete(false))
+                .and(stateIngest.appState.putSnapSyncStorageComplete(false))
+                .and(stateIngest.appState.putSnapSyncBytecodeComplete(false))
                 .commit()
               // Fall through to normal startup
           else if !belowEscalationHint && !taskFilesUnusable then
@@ -383,8 +383,8 @@ private[snap] trait SnapResumePlanner
             stateRoot = Some(TrieRoot(rootBs))
             accountsComplete = true
 
-            val storageAlreadyDone = appStateStorage.isSnapSyncStorageComplete()
-            val bytecodeAlreadyDone = appStateStorage.isSnapSyncBytecodeComplete()
+            val storageAlreadyDone = stateIngest.appState.isSnapSyncStorageComplete()
+            val bytecodeAlreadyDone = stateIngest.appState.isSnapSyncBytecodeComplete()
             storagePhaseComplete = storageAlreadyDone
             bytecodePhaseComplete = bytecodeAlreadyDone
             reset(PhaseFlags.ResetKind.Start)
@@ -461,7 +461,7 @@ private[snap] trait SnapResumePlanner
 
             // Bytecodes: stream codeHashes from persisted file if available. Each entry is 32 bytes
             // (raw keccak256 hash, written by AccountRangeCoordinator.uniqueCodeHashesOut). Same gated chunking.
-            val savedCodeHashesPath = appStateStorage.getSnapSyncCodeHashesPath()
+            val savedCodeHashesPath = stateIngest.appState.getSnapSyncCodeHashesPath()
             if !bytecodeAlreadyDone then
               savedCodeHashesPath.foreach { pathStr =>
                 // Usable per the pre-check above (non-empty, whole 32-byte entries).
@@ -481,7 +481,7 @@ private[snap] trait SnapResumePlanner
                   // Bytecode is content-addressed: a codeHash already in EvmCodeStorage was fetched (and
                   // hash-checked) before the restart. Re-queue only the missing ones, as the carried replay does.
                   // This runs on the replay's Future, off the controller thread.
-                  val missing = entries.map(ByteString(_)).filter(h => evmCodeStorage.get(h).isEmpty)
+                  val missing = entries.map(ByteString(_)).filter(h => stateIngest.bytecode.get(h).isEmpty)
                   alreadyPresent += entries.size - missing.size
                   if missing.nonEmpty then
                     intakeBudget.reserve(0, missing.size)
@@ -522,10 +522,10 @@ private[snap] trait SnapResumePlanner
             break(syncing())
         case _ =>
           ctx.log.warn("Recovery: accounts-complete flag set but missing pivot/root. Clearing and restarting fresh.")
-          appStateStorage
+          stateIngest.appState
             .putSnapSyncAccountsComplete(false)
-            .and(appStateStorage.putSnapSyncStorageComplete(false))
-            .and(appStateStorage.putSnapSyncBytecodeComplete(false))
+            .and(stateIngest.appState.putSnapSyncStorageComplete(false))
+            .and(stateIngest.appState.putSnapSyncBytecodeComplete(false))
             .commit()
 
   /** The account phase's resume selection (spec 016 lift before M11b, CQ-SNAP-016-33), extracted verbatim from
@@ -549,7 +549,7 @@ private[snap] trait SnapResumePlanner
     // this concurrency, drift past the cap — is logged and the record dropped; the phase then falls back to the legacy
     // record / a fresh start. It never resumes partially.
     if preservedRangeProgress.isEmpty then
-      appStateStorage.getSnapAccountResumeCheckpoint().foreach { json =>
+      stateIngest.appState.getSnapAccountResumeCheckpoint().foreach { json =>
         AccountResumeCheckpoint
           .decode(json)
           .flatMap { cp =>
@@ -572,7 +572,7 @@ private[snap] trait SnapResumePlanner
             preservedAtPivotBlock = Some(cp.pivotBlock)
           case Left(why) =>
             ctx.log.warn(s"Ignoring account resume checkpoint: $why. The account phase does not resume from it.")
-            appStateStorage.removeSnapAccountResumeCheckpoint().commit()
+            stateIngest.appState.removeSnapAccountResumeCheckpoint().commit()
       }
     if preservedRangeProgress.isEmpty then
       snapProgressStorage.readProgress(rootHash.value) match
@@ -598,7 +598,7 @@ private[snap] trait SnapResumePlanner
             )
         case _ =>
           // Migration fallback: read legacy AppStateStorage plain-text format (one-time, older builds)
-          appStateStorage.getSnapSyncProgress().foreach { saved =>
+          stateIngest.appState.getSnapSyncProgress().foreach { saved =>
             deserializeSnapProgress(saved).foreach { case (savedPivot, savedRanges) =>
               if savedRanges.nonEmpty && (currentPivot - savedPivot).abs <= MaxPreservedPivotDistance then
                 ctx.log.info(
@@ -638,7 +638,7 @@ private[snap] trait SnapResumePlanner
         preservedAtPivotBlock = None
         preservedTaskFiles = None
         snapProgressStorage.clearProgress(rootHash.value)
-        appStateStorage.removeSnapAccountResumeCheckpoint().commit()
+        stateIngest.appState.removeSnapAccountResumeCheckpoint().commit()
         Map.empty
       case None =>
         Map.empty
@@ -703,7 +703,7 @@ private[snap] trait SnapResumePlanner
           // pivot, and a root-keyed record was never found again (2026-10-05 22:12 restart began from zero).
           (stateRoot, preservedAtPivotBlock, taskFiles) match
             case (Some(sr), Some(pivot), Some(files)) =>
-              appStateStorage
+              stateIngest.appState
                 .putSnapAccountResumeCheckpoint(
                   AccountResumeCheckpoint.encode(AccountResumeCheckpoint(sr.value, pivot, progress, files))
                 )

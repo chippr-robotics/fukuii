@@ -18,6 +18,7 @@ Examples:
 - [INF-003: Apache HttpClient Transport for JupnP UPnP Port Forwarding](INF-003-jupnp-apache-httpclient-transport.md) - Accepted
 - [INF-004: Actor IO Error Handling Pattern with Cats Effect](INF-004-actor-io-error-handling.md) - Accepted
 - [INF-005: Docker Deployment Strategy and Container Best Practices](INF-005-docker-deployment-strategy.md) - Accepted
+- [INF-006: SNAP State-Ingest Capability and the Exporter Durability Boundary](INF-006-snap-state-ingest-capability.md) - Proposed
 
 ## Creating a New Infrastructure ADR
 

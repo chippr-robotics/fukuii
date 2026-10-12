@@ -125,6 +125,18 @@ private[snap] class StubPivotSelectorState(
   def childFactories: ChildFactories = notUsed("childFactories")
   def pathNodeStorageOpt: Option[PathNodeStorage] = None
 
+  // StateIngest (spec 016 T055): forwards to the stores above, read on each call.
+  val stateIngest: StateIngest = new ForwardingStateIngest(
+    appStateStorage,
+    stateStorage,
+    flatSlotStorage,
+    pathNodeStorageOpt,
+    evmCodeStorage,
+    blockchainReader,
+    blockchainWriter,
+    validatorFactory
+  )
+
   // Callee Api traits
   var peers: Map[PeerId, PeerListSupportNg.PeerWithInfo] = Map.empty
   def peersToDownloadFrom: Map[PeerId, PeerListSupportNg.PeerWithInfo] = peers

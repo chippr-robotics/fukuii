@@ -1060,8 +1060,9 @@ controller modules and before T060. Spec 017 (`specs/017-state-capabilities-witn
   - Move the controller modules onto it: the resume planner (checkpoints, done-markers, progress storage),
     finalization (`appStateStorage`, `blockchainWriter`, the Path→hash publish), pivot selection (pivot persistence and
     headers), healing (frontier and BFS stores, healed code), validation, and the peer pool's `blockchainReader` use.
-    Change the `ChildFactories` spawn arguments to pass a `StateIngest`, with production defaults, so the coordinator
-    narrowings can move their call sites later.
+    ~~Change the `ChildFactories` spawn arguments to pass a `StateIngest`~~ **Deferred to the C-* slices (user
+    decision 2026-10-11)**: each C-* narrowing changes its factory method and its child's `apply` together (see
+    "Coordinators").
   - `SnapControllerEnv` shrinks from 18 members to about 11 (18 − 8 + `stateIngest`). Record the lower count in the
     T054 baseline (`[env-freeze]`), and update the cap row in the routing doc.
   - **Durability policy.** `StateIngest` carries a per-capability durability policy whose default is today's
@@ -1073,6 +1074,8 @@ controller modules and before T060. Spec 017 (`specs/017-state-capabilities-witn
     scheme (ETC/Mordor), where SNAP writes the execution store directly and there is no export step, an explicit
     durable flush/sync barrier runs before `completeSnapSync`. The scaladoc of `StateIngest` states the property, and
     a new Tier 1 test checks the ordering on both schemes (flush/sync before the completion flag).
+    **Amended (user decision 2026-10-11):** T055 documents the property and stays behaviour-neutral; it pins today's
+    implicit guarantee (below) and adds no barrier. The explicit barrier is T056's, as a hard precondition.
   - **Design note: chain-data handles.** `blockchainReader` and `blockchainWriter` are chain-data handles (headers,
     pivot, best block), not trie state. T055 decides whether to split a header/chain sub-interface out of
     `StateIngest`, and records the decision in the ADR.
@@ -1080,30 +1083,75 @@ controller modules and before T060. Spec 017 (`specs/017-state-capabilities-witn
   - ADR: record the capability boundary and the durability property under `docs/adr/infrastructure/` (next free
     INF number), linked from plan.md.
   - **Merge criteria (all required):**
-    - forge sign-off ("no ETC behaviour change", Hash-scheme barrier) and vault sign-off (DataSource contract,
-      WriteBatch, flush/sync); beacon reviews the Path-scheme publish;
+    - forge sign-off ("no ETC behaviour change"; the Hash-scheme barrier is T056's, see the as-built note) and vault
+      sign-off (DataSource contract, WriteBatch, flush/sync); beacon reviews the Path-scheme publish;
     - a full Mordor SNAP run on the slice jar;
-    - **storage-rate parity (SC-010).** The batched storage-trie node-write path is the hottest one, and a wrapper
-      that adds a virtual call or an allocation per node would show up there first. So:
-      - `[STORAGE-PERF]` parity on **the same physical host** that produced the ~1.7M entries/h figure (the
-        4-core / 16 GB / SATA BX500 soak host), with the host quiescent: no other node and no sbt running;
-      - on the same workload as the baseline, the Sepolia Path-scheme storage phase, against the ~1.7M entries/h
-        figure. How the wrapped build runs against that workload (on a copy of the Sepolia datadir, or on the live
-        node) is decided by the user at T055, because Sepolia otherwise stays on fix-only builds;
-      - in addition, an A/B on that same host (pre-wrap build vs post-wrap build, same chain, same starting state)
-        shows no regression. If the pre-wrap build cannot reproduce ~1.7M/h, the fresh same-host pre-wrap
-        measurement becomes the baseline, and the PR says so;
+    - ~~storage-rate parity (SC-010)~~ **moved to C-S2 (T067), user decision 2026-10-11**: T055 moves no
+      coordinator call site, so the per-node write path does not change here;
     - the per-slice checklist, with the ratchet item showing `SnapControllerEnv` at about 11.
+  - **As built (PR #1579, branch `refactor/snap-016-state-ingest`).**
+    - `controller/StateIngest.scala`: one member per former env handle (`appState`, `stateTries`, `flatSlots`,
+      `pathNodes`, `bytecode`, `chainReader`, `chainWriter`, `validatorFactory`) plus `durability` (one value,
+      `Default` = today's behaviour); cap 9. Production implementation: a `final class` of plain vals built once by
+      the core. `SnapControllerEnv` 18 → 11. Storage-reference total **692 → 678** under T054b's counting (recorded
+      in the baseline at the rebase onto T054b, with a `capabilities["StateIngest"]` entry of 9 members). It is not
+      556 (the pre-T054b counter's figure): `stateIngest.<handle>` is a parameterless storage-typed member, so it
+      still counts once per use, as the handle did. That is honest, because the modules still reach the stores
+      through those handles. The real reduction comes in the C-* slices (user decision 2026-10-11: keep handle-level
+      members, ADR INF-006).
+    - Chain data: `chainReader`/`chainWriter` stay on `StateIngest`, no header/chain sub-interface for now
+      (ADR INF-006, decision 2).
+    - **FR-044 (user decision 2026-10-11: document now, barrier in T056).** Finding: no separate durable flush/sync
+      barrier exists today on either scheme. The WAL is on for every write; ingest and publish writes are plain
+      commits; the three completion flags are one `commitSync()` batch, the only synced write on the finalization
+      path. Its WAL sync persists every earlier WAL record, so, under archive and basic pruning, a recovered
+      `snapSyncDone` implies the ingest and publish writes were recovered. Under `inmemory` pruning it does not:
+      trie nodes stay in `CachedReferenceCountedStorage`'s cache and never reach the WAL before the flags, on either
+      scheme (vault review; shipped configs use basic or archive). That implicit guarantee is what T055 pins: the `StateIngest` scaladoc, ADR
+      INF-006 and `StateIngestDurabilitySpec` (both schemes: the flags are the only synced write, after every
+      ingest/publish write, and every replayed prefix holding `snapSyncDone` holds the pivot root). No barrier is
+      added; ETC behaviour is unchanged. The property is about execution reads: SNAP's own read-only checks of the
+      hash-keyed store before the flags (the #1555 pivot-root guard, the validation walks, the healing walks, the
+      post-publish root check) are ingest verification reads and are not covered (beacon note N1). **Open (vault):** confirm that the synced flags batch also covers WAL files
+      rolled before it (stated in the ADR).
+    - **`ChildFactories` (user decision 2026-10-11: deferred to the C-* slices).** The signatures are unchanged:
+      `ChildFactoriesSpec` checks each factory's defaults against its child's `apply` by position, so the change
+      belongs with the `apply` change. Spawn sites pass `stateIngest` members as the existing arguments.
+    - **SC-010 (user decision 2026-10-11: moved to C-S2, T067).**
 - [ ] T056 [SI-WAL] **Lighter-WAL experiment, recorded as a `StateIngest` durability policy** (optional, after T055;
   its own PR).
   - A relaxed-WAL policy is a setting of `StateIngest`'s durability policy, never of `StateAccess` and never of the
     execution store, on either scheme (FR-045).
   - FR-044 holds unchanged: the exporter publish (Path) and the pre-`completeSnapSync` barrier (Hash) run at full
     durability whatever the ingest policy.
+  - **Hard precondition (user decision 2026-10-11).** T055 found no explicit barrier today: the guarantee is implicit
+    (the completion flags' `commitSync()` WAL sync covers every earlier WAL record), and it breaks as soon as ingest
+    writes skip the WAL. So T056 first adds an explicit durable flush/sync barrier before `completeSnapSync`, covering
+    the publish output (Path) and the ingest writes (Hash), at full durability, with forge and vault sign-off (it
+    changes the ETC path). **No relaxed WAL policy may be enabled, or even selectable, without it.** The vault
+    question from T055 (does the synced flags batch cover earlier rolled WAL files?) is answered before T056 merges.
+    `StateIngestDurabilitySpec` is extended to expect the barrier before the flags on both schemes.
+  - **Barrier requirements (vault review of T055, 2026-10-11):**
+    - **What:** a memtable flush (`FlushOptions` with wait) across the node, path-node, flat-slot and code namespaces,
+      plus a WAL sync. A synced empty batch is not enough.
+    - **Inmemory pruning:** under `pruning.mode = "inmemory"`, flush the node cache (`CachedReferenceCountedStorage`)
+      first. Today those nodes never reach the WAL before the flags, on either scheme (ADR INF-006 §4).
+    - **Where:** Path scheme, after the publish and before the flags; Hash scheme, after the last ingest write and
+      before the flags.
+    - **Owner:** the barrier lives on `StateIngest`.
+    - **Tests:** extend `StateIngestDurabilitySpec`, and add a real-RocksDB kill -9 recovery test. It also confirms
+      vault's rolled-WAL answer (a synced write fsyncs every live, unsynced WAL), which is from RocksDB semantics, not
+      a read of the rocksdbjni 10.10.1.1 source.
   - Reviews: vault and forge. Validation: Mordor and Platåberget SNAP runs, including a crash during finalization that
     must resume without reading undurable state. The default stays today's policy until the user decides otherwise.
 
 ## Coordinators
+
+**`ChildFactories` (user decision 2026-10-11, deferred from T055; applies to T061–T075).** Each C-* narrowing that
+moves its coordinator onto `StateIngest` changes that coordinator's `ChildFactories` method and the coordinator's
+`apply` together, in the same commit, so `ChildFactoriesSpec`'s default-equality check holds by construction. Done
+criterion: the factory method and the `apply` take the same parameter list, and `ChildFactoriesSpec` is unchanged and
+green.
 
 **Amendment 2026-10-11 (applies to T061–T075).** Every C-* narrowing self-type takes `StateIngest` for storage,
 **never `StateAccess`** and never a raw storage type (FR-042). Each C-* task is done only when it **lowers the T054
@@ -1132,6 +1180,17 @@ until `StateAccess` exists (FR-042).
   lowers the baseline total.
 - [ ] T067 [C-S2] `StorageOrderedApply` (vault). Narrowing takes `StateIngest` (the batched storage-trie node-write
   path, `flushTrieNodeWrites`), never `StateAccess`; lowers the baseline total.
+  - **Storage-rate parity (SC-010), moved here from T055 (user decision 2026-10-11)**, because this is where the
+    per-node write path moves onto `StateIngest`. The batched storage-trie node-write path is the hottest one, and a
+    wrapper that adds a virtual call or an allocation per node would show up there first. Merge gate:
+    - `[STORAGE-PERF]` parity on **the same physical host** that produced the ~1.7M entries/h figure (the 4-core /
+      16 GB / SATA BX500 soak host), with the host quiescent: no other node and no sbt running;
+    - on the same workload as the baseline, the Sepolia Path-scheme storage phase, against the ~1.7M entries/h
+      figure. How the wrapped build runs against that workload (on a copy of the Sepolia datadir, or on the live
+      node) is decided by the user at T067, because Sepolia otherwise stays on fix-only builds;
+    - in addition, an A/B on that same host (pre-wrap build vs post-wrap build, same chain, same starting state)
+      shows no regression. If the pre-wrap build cannot reproduce ~1.7M/h, the fresh same-host pre-wrap measurement
+      becomes the baseline, and the PR says so.
 - [ ] T068 [C-S3] `StorageDoneMarkers` (vault). Narrowing takes `StateIngest` (flat slots, done markers), never
   `StateAccess`; lowers the baseline total. The PR quotes spec 010 R2a and shows each clause still holds. Run Mordor and
   Platåberget restarts mid-storage.

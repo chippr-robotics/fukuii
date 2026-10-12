@@ -163,7 +163,7 @@ private[snap] trait StateValidationModule extends ValidationApi:
     val start = System.currentTimeMillis()
     scala.concurrent
       .Future {
-        val v = validatorFactory(storage)
+        val v = stateIngest.validatorFactory(storage)
         (v.validateAccountTrie(expectedRoot), System.currentTimeMillis() - start)
       }(snapValidationEc)
       .onComplete {
@@ -179,7 +179,7 @@ private[snap] trait StateValidationModule extends ValidationApi:
     val start = System.currentTimeMillis()
     scala.concurrent
       .Future {
-        val v = validatorFactory(storage)
+        val v = stateIngest.validatorFactory(storage)
         (v.validateAllStorageTries(expectedRoot), System.currentTimeMillis() - start)
       }(snapValidationEc)
       .onComplete {

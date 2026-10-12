@@ -9,33 +9,27 @@ import scala.concurrent.ExecutionContext
 import com.chipprbots.ethereum.blockchain.sync.SyncProtocol
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncConfig
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController
-import com.chipprbots.ethereum.blockchain.sync.snap.StateValidator
-import com.chipprbots.ethereum.db.storage.AppStateStorage
-import com.chipprbots.ethereum.db.storage.EvmCodeStorage
-import com.chipprbots.ethereum.db.storage.FlatSlotStorage
-import com.chipprbots.ethereum.db.storage.MptStorage
-import com.chipprbots.ethereum.db.storage.PathNodeStorage
-import com.chipprbots.ethereum.db.storage.StateStorage
-import com.chipprbots.ethereum.domain.BlockchainReader
-import com.chipprbots.ethereum.domain.BlockchainWriter
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor
 import com.chipprbots.ethereum.network.PeerEventBusActor
 import com.chipprbots.ethereum.utils.Config.SyncConfig
 
 /** The SNAP controller's environment (spec 016 T041a, plan.md D1): the actor context and timers, the configuration, the
-  * off-thread logger, the storages, and the injected collaborators. It is a capability trait, counted apart from state:
-  * nothing here is a field a phase module owns or resets.
+  * off-thread logger, the storage capability, and the injected collaborators. It is a capability trait, counted apart
+  * from state: nothing here is a field a phase module owns or resets.
   *
   * The controller core mixes this trait in. Its constructor parameters implement the members directly (as `val`s), and
-  * so do its existing strict vals `asyncLog` and `snapValidationEc`, whose initializers stay in the core (the
-  * dispatcher lookup and the logger lookup run at construction). Metrics are not members: `SNAPSyncMetrics` is a global
-  * object.
+  * so do its existing strict vals `asyncLog`, `snapValidationEc` and `stateIngest`, whose initializers stay in the core
+  * (the dispatcher lookup and the logger lookup run at construction). Metrics are not members: `SNAPSyncMetrics` is a
+  * global object.
   *
-  * Member cap (FR-016 (c)): 18 (11 at T041a; M3 added `networkPeerManager` and `blockchainReader`, two constructor
+  * Member cap (FR-016 (c)): 11 (11 at T041a; M3 added `networkPeerManager` and `blockchainReader`, two constructor
   * parameters the peer pool's bodies reach; M4 added `blockchainWriter`, `peerEventBus`, `syncController` and
   * `childFactories`, constructor parameters the finalization bodies reach, and `pathNodeStorageOpt`, the first derived
-  * store a module needs). A PR that adds a member states the new count and a justification line, and updates the cap in
-  * `.claude/agent-protocols/snap-sync.md`.
+  * store a module needs: 18. T055 replaced the eight storage handles `appStateStorage`, `stateStorage`,
+  * `evmCodeStorage`, `flatSlotStorage`, `pathNodeStorageOpt`, `blockchainReader`, `blockchainWriter` and
+  * `validatorFactory` with `stateIngest`: 18 - 8 + 1 = 11, FR-041). The env holds no storage handle; the env freeze
+  * ratchet (`scripts/snap-split/storage-baseline.json`) keeps the count from rising. A PR that adds a member states the
+  * new count and a justification line, and updates the cap in `.claude/agent-protocols/snap-sync.md`.
   */
 private[snap] trait SnapControllerEnv:
 
@@ -47,25 +41,11 @@ private[snap] trait SnapControllerEnv:
   /** Plain SLF4J logger, safe off the actor thread (Future callbacks). On-thread logging uses `ctx.log`. */
   def asyncLog: org.slf4j.Logger
 
-  def appStateStorage: AppStateStorage
-  def stateStorage: StateStorage
-  def evmCodeStorage: EvmCodeStorage
-  def flatSlotStorage: FlatSlotStorage
-
-  /** Builds the `StateValidator` for a storage (test seam; production: `new StateValidator(_)`). */
-  def validatorFactory: MptStorage => StateValidator
-
   /** The dedicated dispatcher for the long trie walks (`snap-validation-dispatcher`, see `pekko.conf`). */
   def snapValidationEc: ExecutionContext
 
   /** The peer manager: the handshaked-peer poll, snap-server dialling, and the child spawns. */
   def networkPeerManager: TypedActorRef[NetworkPeerManagerActor.Command]
-
-  /** Read access to the chain (genesis and stored chain weights for the pivot TD estimate). */
-  def blockchainReader: BlockchainReader
-
-  /** Write access to the chain (the pivot block, its chain weight; passed to the ChainDownloader). */
-  def blockchainWriter: BlockchainWriter
 
   /** The peer event bus, passed to the ChainDownloader. */
   def peerEventBus: TypedActorRef[PeerEventBusActor.Command]
@@ -76,5 +56,5 @@ private[snap] trait SnapControllerEnv:
   /** How each child is built (spec 016 T012 test seam; production: the children's own `apply`s). */
   def childFactories: ChildFactories
 
-  /** The Path-scheme node store (`None` on the Hash scheme, i.e. ETC). Built once at construction by the core. */
-  def pathNodeStorageOpt: Option[PathNodeStorage]
+  /** SNAP's storage capability (spec 016 T055): every store a module reads or writes, built once by the core. */
+  def stateIngest: StateIngest
