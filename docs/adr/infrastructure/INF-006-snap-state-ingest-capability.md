@@ -102,16 +102,23 @@ durable flush/sync barrier before `completeSnapSync`. The scaladoc of `StateInge
   `RocksDbDataSource.flushAll`, is `private[dataSource]` test support.
 - What does hold: a synced write syncs the WAL up to and including itself. A crash therefore leaves a prefix of the
   writes, and if `snapSyncDone` survived, every earlier ingest and publish write survived too. That holds while every
-  ingest write goes through the WAL. It would **not** hold under a relaxed policy that skipped the WAL. Separately,
-  vault should confirm that the sync also covers WAL files rolled before it.
+  ingest write goes through the WAL. It would **not** hold under a relaxed policy that skipped the WAL.
 
-**Decision for T055.** T055 states the property on the trait and pins today's ordering with a new Tier 1 test,
-`StateIngestDurabilitySpec`. On both schemes, the test checks three things: the completion flags are the only synced
-write; they come after every ingest or publish write; and every replayed prefix that holds `snapSyncDone` also holds
-the pivot root node. T055 does **not** add an explicit barrier. Adding one changes the ETC path (an extra WAL sync, or
-a memtable flush, before completion), so it needs forge and vault sign-off and a user decision first. Before any
-relaxed policy (T056) is enabled, the barrier must exist, because the flags' WAL sync no longer covers writes that
-skip the WAL.
+**Open question (vault).** Does the synced flags batch also make durable the WAL files that were rolled before it?
+The guarantee above assumes that a `sync = true` write fsyncs every WAL file still holding unflushed records, not only
+the current one. If it does not, the implicit guarantee has a gap even with the WAL on, and the T056 barrier must close
+it. vault answers this before T056 merges.
+
+**Decision (user, 2026-10-11): document now, add the barrier in T056.** T055 stays behaviour-neutral. It states the
+property on the trait and pins today's implicit guarantee with a new Tier 1 test, `StateIngestDurabilitySpec`. On both
+schemes, the test checks three things: the completion flags are the only synced write; they come after every ingest or
+publish write; and every replayed prefix that holds `snapSyncDone` also holds the pivot root node. T055 does **not**
+add an explicit barrier, because that changes the ETC path (an extra WAL sync, or a memtable flush, before completion).
+
+The explicit durable barrier before `completeSnapSync` is added by **T056** and is a **hard precondition** of it: no
+relaxed WAL policy may be enabled, or even selectable, without the barrier, because the flags' WAL sync no longer
+covers writes that skip the WAL. T056 needs forge and vault sign-off, and extends `StateIngestDurabilitySpec` to expect
+the barrier before the flags on both schemes.
 
 ### 5. The batched storage-trie node-write path (SC-010)
 
@@ -121,10 +128,11 @@ batch per applied response in `flushTrieNodeWrites`. The capability's member for
 itself. The coordinator reads it once per batch, and the per-node calls stay direct calls on `PathNodeStorage`, so
 there is no wrapper call and no allocation per node. The production implementation is a `final class` of plain
 `val`s, built once, so every call through the trait has a single receiver class. T055 moves no coordinator call site;
-the coordinator's narrowing (C-S2, T067) does. The SC-010 same-host `[STORAGE-PERF]` parity run is still a merge gate,
-and the user runs it on the soak host.
+the coordinator's narrowing (C-S2, T067) does. **User decision 2026-10-11:** the SC-010 same-host `[STORAGE-PERF]`
+parity gate (quiescent soak host, the Sepolia Path-scheme storage phase against ~1.7M entries/h, plus a same-host
+pre-wrap vs post-wrap A/B) moves from T055 to T067, where the per-node write path actually moves.
 
-### 6. `ChildFactories` keeps its parameter lists in T055
+### 6. `ChildFactories` keeps its parameter lists in T055 (user decision 2026-10-11: deferred to the C-* slices)
 
 T055 was to make the `ChildFactories` spawn arguments take a `StateIngest`. `ChildFactoriesSpec` compares each
 factory method's default arguments with the child `apply`'s, position by position (`<method>$default$<n>`), and the
@@ -132,7 +140,8 @@ recording factories in the module stubs override every method with its exact par
 parameters therefore means changing assertions in an existing spec, which a behaviour-neutral PR may not do. The
 spawn sites pass `stateIngest`'s members as the existing arguments (`flatSlotStorage = stateIngest.flatSlots`). Each
 factory method changes together with its child's `apply` in that coordinator's narrowing (C-*), which keeps the
-default-equality spec true by construction. Whether to change the spec in T055 instead is the user's call.
+default-equality spec true by construction. The user confirmed this deferral on 2026-10-11; it is a done criterion of
+every C-* slice (tasks.md, "Coordinators").
 
 ## Consequences
 
@@ -150,8 +159,8 @@ default-equality spec true by construction. Whether to change the spec in T055 i
   was rejected for T055. It hides nothing that substitution does not already hide, inflates the cap, and makes every
   call site change more than its handle. Narrower members come with the callers that need them.
 - **Splitting chain data into its own capability now.** See decision 2.
-- **Adding the Hash-scheme barrier in T055.** See decision 4. It is a behaviour change on the ETC path, so it is held
-  for review.
+- **Adding the Hash-scheme barrier in T055.** See decision 4. It is a behaviour change on the ETC path; the user
+  placed it in T056 as a hard precondition of any relaxed WAL policy.
 
 ## References
 

@@ -559,6 +559,12 @@ before the coordinator stage (T060), and every coordinator task is amended:
   export step, an explicit durable flush/sync barrier runs before `completeSnapSync`. Otherwise a crash during
   finalization leaves execution reading a store that was never durably written. This is a property of the
   capability, documented on the trait and tested, not an implementation detail of the exporter.
+  **Amended (user decision 2026-10-11).** T055 documents the property and stays behaviour-neutral: the scaladoc, ADR
+  INF-006 and `StateIngestDurabilitySpec` pin today's implicit guarantee (the three completion flags are written in
+  one synced commit, the only synced write on the finalization path, whose WAL sync persists every earlier WAL
+  record; no separate barrier exists on either scheme). The explicit barrier before `completeSnapSync` is added by
+  T056 and is a hard precondition of it: no relaxed WAL policy without the barrier. Open for vault: whether the
+  synced flags batch also covers WAL files rolled before it.
 - **FR-045** A durability policy is per capability. A relaxed policy (for example a lighter WAL) may be set on
   `StateIngest` only, and it never reaches the execution store on either scheme.
 
@@ -570,12 +576,13 @@ before the coordinator stage (T060), and every coordinator task is amended:
   `StateIngest`, and the T054 storage-reference **total** is at its post-coordinator value or lower (per-file counts
   may move between files, FR-043).
 - **SC-010** The `StateIngest` wrap of the batched storage-trie node-write path (`flushTrieNodeWrites`) shows no
-  storage-rate regression:
+  storage-rate regression. **Amended (user decision 2026-10-11):** measured at C-S2 (T067), where the per-node write
+  path moves onto `StateIngest`, not at T055 (which moves no coordinator call site):
   - `[STORAGE-PERF]` parity on **the same physical host** that produced the ~1.7M entries/h figure (the 4-core /
     16 GB / SATA BX500 soak host), with the host quiescent: no other node and no sbt running;
   - on the same workload as the baseline, the Sepolia Path-scheme storage phase, against the ~1.7M entries/h figure.
     How the wrapped build runs against that workload (on a copy of the Sepolia datadir, or on the live node) is
-    decided by the user at T055, because Sepolia otherwise stays on fix-only builds;
+    decided by the user at T067, because Sepolia otherwise stays on fix-only builds;
   - in addition, an A/B on that same host (pre-wrap build vs post-wrap build, same chain, same starting state) shows no
     regression. If the pre-wrap build cannot reproduce ~1.7M/h, the fresh same-host pre-wrap measurement becomes the
     baseline, and the PR says so.

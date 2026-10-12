@@ -39,7 +39,8 @@ unless stated.
   scheme) always run at full durability, before SNAP is marked complete and before execution reads the store
   (FR-044). Changes there need **vault** plus **forge** (Hash) or **beacon** (Path). T055 finding (ADR INF-006): no
   separate barrier exists today on either scheme; the completion flags' `commitSync()` is the only synced write, and
-  its WAL sync covers every earlier write. Adding the barrier waits for forge/vault sign-off and the user.
+  its WAL sync covers every earlier write. User decision 2026-10-11: the barrier is added by T056 and is a hard
+  precondition of any relaxed WAL policy; vault still confirms the sync covers WAL files rolled before it.
 - **Env freeze ratchet (T054, PR #1570).** `scripts/snap-split/verify.py` step 8 checks the PR head against
   `scripts/snap-split/storage-baseline.json`: the `SnapControllerEnv` member count (11 since T055) only goes down, and so does
   the storage-reference **total** (storage-type identifiers and storage member accesses, comments excluded) over
