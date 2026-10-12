@@ -1274,7 +1274,7 @@ until `StateAccess` exists (FR-042).
       into `) extends <Module>`; step 1 now admits exactly those two header shapes.
     - *Not covered:* `Option[StateIngest]` (T075) fails closed until T075 decides between `Option` and a flag; calls in
       unchanged files are left to the compiler; SC-009's type-level check (characterization §6.3 item 6) is not built.
-    - *Self-tests.* 38 new (222 in all; 233 after the prism fixes): 26 git-fixture adoption cases (C-B1, D-T060-2 and narrowing-combined positives;
+    - *Self-tests.* 38 new (222 in all; 236 after the two prism rounds): 26 git-fixture adoption cases (C-B1, D-T060-2 and narrowing-combined positives;
       negatives for a logic change in `apply`, in a spawn site and beside a substitution, a dropped non-storage
       argument, another capability passed, the wrong member, a wrong-typed adopt-map, reordered/retyped/extra
       parameters, `ChildFactories` out of step, a `ChildFactoriesSpec` edit, a file outside the unit, the wrong unit,
@@ -1296,7 +1296,12 @@ until `StateAccess` exists (FR-042).
       `counter v<N>` in 40+ characters. (4) A rewrite of a dropped name under a shadowing declaration (a helper
       parameter, a local `val`, a lambda binding) fails. (5) The mirrored `stateIngest` and handles are plain `val`s,
       and the trait and object widen together. (6) An `adopt-map` line may not override a bare `capability-map:`
-      entry. Info: `STORAGE_NAME_ALLOW_V2` matches by name everywhere (routing doc). 11 new fixtures; 233 self-tests. SyncController may also add named imports of the types its mirrored declarations name (not already used bare): the D-T060-2 dry run re-done with those imports passes (635), and C-B1 on top passes (635 → 619).
+      entry. Info: `STORAGE_NAME_ALLOW_V2` matches by name everywhere (routing doc). Prism round 2 (on 4af2ce0f6):
+      (A) a mirrored type's import in SyncController must be the core's own fully-qualified entry (or, for a type the core uses from its own package without an import, that package's path), and no adopted file
+      may import a Scala/Predef name; (B) the shadow check counts every binding form (`case`/pattern/tuple positions,
+      `<-` without parentheses, `using`, class `val` parameters) and is file-wide in the coordinator and its modules,
+      member-wide in a recovery actor; optional, taken: steps 1 and 6 admit header parent arguments only as bare
+      identifiers (the 29-range replay stays byte-identical, #1560 included). 11 new fixtures; 233 self-tests. SyncController may also add named imports of the types its mirrored declarations name (not already used bare): the D-T060-2 dry run re-done with those imports passes (635), and C-B1 on top passes (635 → 619).
     - *Replay.* Old and new `verify.py` over the 29 merged spec-016 ranges (#1541–#1582, with #1543, #1558, #1570,
       #1574, #1579, #1580, #1582): byte-identical output for all 29.
     - *Dry run* (scratch clone of staging, not committed). A D-T060-2-shaped commit (`StateIngest` → `private[sync]`;

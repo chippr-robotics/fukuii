@@ -535,7 +535,7 @@ def export_prefix_ok(prefix: str, dests: list[tuple[str, str]], other_pkgs: set[
     return False
 
 
-def header_parents_ok(l: str) -> bool:
+def header_parents_ok(l: str, ident_args: bool = False) -> bool:
     """T060b (prism): a header line's `extends`/`with` clause names parents only (identifiers, dotted paths, type
     arguments), never a constructor call such as `with Audit(sideEffect())`, which would run code. Used by the adoption
     check only: steps 1 and 6 keep admitting parent arguments, because a merged range relies on a trait parameter
@@ -546,7 +546,8 @@ def header_parents_ok(l: str) -> bool:
     m = re.search(r"\b(?:extends|with)\b", code)
     if not m:
         return True
-    return bool(re.fullmatch(r"(?:(?:extends|with)\s+[\w.]+(?:\[[\w., \[\]]*\])?\s*)+[:{]?\s*", code[m.start():]))
+    args = r"(?:\(\s*\w+(?:\s*,\s*\w+)*\s*\))?" if ident_args else ""
+    return bool(re.fullmatch(r"(?:(?:extends|with)\s+[\w.]+(?:\[[\w., \[\]]*\])?" + args + r"\s*)+[:{]?\s*", code[m.start():]))
 
 
 def abstract_decl(s: str) -> bool:
@@ -960,7 +961,7 @@ class Verifier:
             n = norm_line(r)
             if pool.get(n):
                 pool[n].pop()
-            elif not header_ok.search(r):
+            elif not (header_ok.search(r) and header_parents_ok(r, ident_args=True)):
                 bad.append(r.strip())
         for b in bad[:10]:
             self.err(c, "step1", f"removed line is not shown as moved: `{b[:100]}`")
@@ -982,7 +983,7 @@ class Verifier:
                         found = found or bool(ds)
                     if found:
                         del pkgs[f]  # a file that now holds a moved symbol is a destination, not an exporter
-        for a in (a for lines in pool.values() for a in lines if not added_ok.search(a)):
+        for a in (a for lines in pool.values() for a in lines if not (added_ok.search(a) and header_parents_ok(a, ident_args=True))):
             m = EXPORT_RE.match(a)
             if m is None:
                 extra.append(a.strip())
@@ -1059,7 +1060,7 @@ class Verifier:
                 for no, l in lines:
                     if re.match(r"^\s*import\b", l):
                         continue
-                    if no in hdr and HEADER_EDIT_RE.search(l):
+                    if no in hdr and HEADER_EDIT_RE.search(l) and header_parents_ok(l, ident_args=True):
                         continue
                     if no in decl and abstract_decl(l):
                         continue
@@ -2846,6 +2847,14 @@ def mirror_accessor(path: str, old: str, new: str, core: str, spec: "CapabilityS
     return probs, drop_old, drop_new, equiv
 
 
+PREDEF_NAMES = frozenset({
+    "Some", "None", "Option", "List", "Nil", "Seq", "IndexedSeq", "Vector", "Map", "Set", "Array", "Iterator", "Iterable",
+    "String", "Int", "Long", "Short", "Byte", "Char", "Boolean", "Double", "Float", "Unit", "Any", "AnyRef", "AnyVal",
+    "Nothing", "Null", "BigInt", "BigDecimal", "Either", "Left", "Right", "Tuple2", "Tuple3", "Function1", "Ordering",
+    "Numeric", "Range", "StringContext", "Predef", "println", "require", "assert", "identity", "implicitly", "summon",
+})
+
+
 def adoption_import_problems(path: str, old: str, new: str, spec: "CapabilitySpec", extra=frozenset()) -> list[str]:
     """T060b (prism): an adopted file may add a named import of the capability itself, or a named import of a name the
     file referred to only qualified before (so no existing bare use is rebound). No wildcard, `given`, rename, or
@@ -2870,8 +2879,11 @@ def adoption_import_problems(path: str, old: str, new: str, spec: "CapabilitySpe
                 probs.append(f"{path}: imports `{e}`, which is not the capability `{cap_path}`")
             continue
         bare = any(t == name and (k == 0 or code[k - 1] != ".") for k, t in enumerate(code))
-        if name in extra and not bare:
-            continue  # a type the mirrored declarations name (SyncController, D-T060-2), new to the file
+        if name in PREDEF_NAMES:
+            probs.append(f"{path}: adds import `{e}`, which rebinds the standard name `{name}`")
+            continue
+        if e in extra and not bare:
+            continue  # the core's own import of a type the mirrored declarations name (SyncController, D-T060-2)
         qualified = any(code[k:k + 2 * n - 1] == [x for s in segs[-n:] for x in (s, ".")][:-1]
                         for n in range(2, len(segs) + 1) for k in range(len(code)))
         if bare or not qualified:
@@ -2881,52 +2893,61 @@ def adoption_import_problems(path: str, old: str, new: str, spec: "CapabilitySpe
     return probs
 
 
-def shadow_problems(path: str, new: str, sites) -> list[str]:
-    """T060b (prism): a substitution `<dropped>` -> `stateIngest.<member>` is only sound where `<dropped>` meant the
-    dropped parameter. A declaration of the same name in scope (a helper's parameter, a local `val`, a lambda or
-    pattern binding) means the old token read that binding instead, so the rewrite would change which value is read."""
-    if not sites:
-        return []
-    toks, lines = scala_tokens(new), code_lines(new)
-    names = {n for n, _l in sites}
-    probs, extents = [], {}
+BINDING_STARTERS = ("case", "val", "var", "for", "given")
 
-    def end_after(start: int, base: int, closers: bool) -> int:
-        for no in range(start + 1, len(lines) + 1):
-            l = lines[no - 1]
-            if not l.strip():
-                continue
-            if indent_of(l) < base or (closers and indent_of(l) == base and not l.strip().startswith(")")):
-                return no - 1
-        return len(lines)
 
+def binding_lines(toks, name: str) -> list[int]:
+    """Lines of `toks` that bind `name`, counting every form (over-approximate on purpose, T060b prism round 2): a
+    parameter or typed binding (`name:`, including `using` and class `val` parameters), `val`/`var`/`def`/`lazy`/
+    `given`/`case name`, a generator `name <-`, a lambda parameter `name =>`, and a pattern or tuple position (inside
+    a `case`/`val`/`var`/`for` statement, before its `=>`, `=` or `<-`)."""
+    out = []
     for k, t in enumerate(toks):
-        if t.t not in names:
+        if t.t != name or (k and toks[k - 1].t == "."):
             continue
         prev = toks[k - 1].t if k else ""
         nxt = toks[k + 1].t if k + 1 < len(toks) else ""
-        if prev in ("(", ",") and nxt == ":":
-            d, j = 0, k - 1
-            while j >= 0:
-                if toks[j].t == ")":
-                    d += 1
-                elif toks[j].t == "(":
-                    if d == 0:
-                        break
-                    d -= 1
+        hit = nxt in (":", "<-") or prev in ("val", "var", "def", "lazy", "given", "case") or \
+            (nxt == "=>" and prev in ("(", ",", "{"))
+        if not hit and prev in ("(", ","):
+            j = k - 1  # a pattern position: back to the statement keyword on the same line, before any `=`/`=>`/`<-`
+            while j >= 0 and toks[j].line == t.line and toks[j].t not in ("=", "=>", "<-"):
+                if toks[j].t in BINDING_STARTERS:
+                    hit = True
+                    break
                 j -= 1
-            open_line = toks[j].line if j >= 0 else t.line
-            base = indent_of(lines[open_line - 1])
-            extents.setdefault(t.t, []).append((t.line, open_line, end_after(open_line, base, True)))
-        elif prev in ("val", "var", "def", "case") or (nxt in ("=>", "<-") and prev in ("(", ",", "{")):
-            base = indent_of(lines[t.line - 1])
-            extents.setdefault(t.t, []).append((t.line, t.line, end_after(t.line, base, False)))
-    for n, line in sites:
-        for decl, start, end in extents.get(n, []):
-            if start <= line <= end:
-                probs.append(f"{path}:{line}: `{n}` -> `{ADOPT_ACCESSOR}.<member>`, but line {decl} declares another `{n}` "
-                             "in scope here; the rewrite would change which value is read (rename the binding first)")
-                break
+        if hit:
+            out.append(t.line)
+    return out
+
+
+def shadow_problems(path: str, new: str, sites, scope: str = "file") -> list[str]:
+    """T060b (prism): a substitution `<dropped>` -> `stateIngest.<member>` is only sound where `<dropped>` meant the
+    dropped parameter. With scope "file" (the coordinator and its modules) any remaining binding of a dropped name in
+    the new file rejects the rewrites of that name; with scope "member" (a recovery actor, whose unchanged helpers keep
+    their own raw parameters) a binding inside the same top-level member (indent <= 2) as a rewrite rejects it. No
+    finer scope analysis: over-rejecting is the intended failure mode."""
+    if not sites:
+        return []
+    toks, lines = scala_tokens(new), code_lines(new)
+
+    def member(line: int) -> int:
+        for no in range(line, 0, -1):
+            l = lines[no - 1]
+            if l.strip() and indent_of(l) <= 2 and not l.strip().startswith((")", "}", "]")):
+                return no
+        return 0
+
+    probs, done = [], set()
+    for n in sorted({n for n, _l in sites}):
+        bl = binding_lines(toks, n)
+        for _n, line in (x for x in sites if x[0] == n):
+            hit = bl[0] if scope == "file" and bl else next((b for b in bl if member(b) == member(line)), None)
+            if hit is not None and (n, hit) not in done:
+                done.add((n, hit))
+                probs.append(f"{path}:{line}: `{n}` -> `{ADOPT_ACCESSOR}.<member>`, but line {hit} binds another `{n}` "
+                             f"{'in this file' if scope == 'file' else 'in the same member'}; the rewrite could change "
+                             "which value is read (rename the binding first)")
     return probs
 
 
@@ -3319,13 +3340,21 @@ class Adoption:
         mirrored = set()
         if role == "synccontroller":
             nl_ = new.splitlines()
-            mirrored = {t.t for t in scala_tokens("\n".join(nl_[no - 1] for no in sorted(drop_new - import_lines(new))))
-                        if t.t[:1].isupper()}
+            names = {t.t for t in scala_tokens("\n".join(nl_[no - 1] for no in sorted(drop_new - import_lines(new))))
+                     if t.t[:1].isupper()}
+            # prism round 2: the same fully-qualified entry the core imports, never a Scala/Predef name
+            core_text = self.g.show(self.c, RATCHET_FILES[0]) or ""
+            core_entries = import_entries(core_text)
+            pm = re.search(r"^package\s+([\w.]+)\s*$", core_text, re.M)
+            # a name the core resolves without an import is its own package's member (StateValidator in `snap`)
+            same_pkg = {f"{pm.group(1)}.{n}" for n in names if pm and not any(e.rsplit(".", 1)[-1] == n for e in core_entries)}
+            mirrored = {e for e in core_entries | same_pkg
+                        if e.rsplit(".", 1)[-1] in names and e.rsplit(".", 1)[-1] not in PREDEF_NAMES}
         for prob in adoption_import_problems(f, old, new, self.spec, mirrored):
             self.err(prob)
         sites: list = []
         probs, subs = align_tokens(f, ot2, nt2, old, new, free, sites=sites)
-        for prob in shadow_problems(f, new, sites):
+        for prob in shadow_problems(f, new, sites, "member" if role == "recovery" else "file"):
             self.err(prob)
         for prob in probs:
             self.err(prob.replace("not a mapped handle substitution", "not an adoption rewrite (a dropped parameter "

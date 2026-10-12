@@ -148,13 +148,10 @@ unless stated.
   - **In a narrowing commit**, the lines step 6 admits (headers, self-types, abstract State/Api/capability members) are
     dropped first, and visibility modifiers may change; any other change must be one of the rewrites above. This is
     stricter than step 6 in two ways: no result-type, `val`/`def` or line-order changes, and a header line's
-    `extends`/`with` parents must be plain names (no constructor arguments such as `with Audit(sideEffect())`).
+    `extends`/`with` parents must be plain names, with no arguments at all.
   - **Imports.** An adopted file may add only a named import of the capability itself (its full path, or a suffix of
     it), or a named import of a name the file referred to only qualified before. No wildcard, `given`, rename, or any
     import of a name already used bare (it would rebind those uses).
-  - **Shadowing.** A dropped parameter may become `stateIngest.<member>` only where no other declaration of that name
-    is in scope (a helper's parameter, a local `val`, a lambda, `for` or `case` binding). The scope is indentation-based,
-    so it may over-approximate (fail closed); rename a shadowing binding first.
   - **Mirror and map hygiene.** SyncController's `stateIngest` and the handles it mirrors are plain `val`s (not `def`,
     `lazy val` or `var`). The trait and the object are widened together. An `// adopt-map:` line may not override a bare
     `capability-map:` entry for the same name.
@@ -168,9 +165,17 @@ unless stated.
     trait declared in the coordinator's `actors/<dir>/`, and only where the file gains such a closer. A
     `<Coordinator>Env` trait (`ByteCodeEnv`, ...) is declaration-only for step 6 and reported on the
     `[counts] capability traits` line.
-  - **What the gate cannot check (reviewer items):** steps 1 and 6 outside the adoption check still admit header lines
-    whose parents take arguments (`with SyncLifecycle(heapWatchdogStart)`, a Scala 3 trait parameter that M9, #1560,
-    relies on), so a parent argument in a plain move or narrowing commit is review's to check. Counter v2's allow-list
+  - **Binding check.** In the coordinator file and its modules, any remaining binding of a dropped name (a parameter,
+    `using` or class `val` parameter, `val`/`var`/`def`/`case`, a pattern or tuple position, a `<-` generator, a lambda
+    parameter) rejects its rewrites file-wide. In a recovery actor the scope is the top-level member, because its
+    unchanged helpers keep their own raw parameters. Over-rejection is intended: rename the binding first. A mirrored
+    type's import in SyncController must be the core's own fully-qualified import entry (or, for a type the core uses
+    from its own package without an import, `<core package>.<Name>`), and no adopted file may import
+    a standard Scala/Predef name (`Some`, `Option`, `List`, ...).
+  - **Parent arguments.** Steps 1 and 6 (outside the adoption check) admit a header parent's arguments only as bare
+    identifiers (`with SyncLifecycle(heapWatchdogStart)`, the Scala 3 trait parameter M9, #1560, relies on); an
+    expression argument (`with Audit(sideEffect())`) fails. The adoption check admits no parent arguments.
+  - **What the gate cannot check (reviewer items):** what a bare-identifier parent argument refers to. Counter v2's allow-list
     (`STORAGE_NAME_ALLOW_V2`) matches by name everywhere: a real store later named like one of its 21 entries would not
     count, so a new name on that list is a reviewed tooling change.
 - **No sbt on the soak host.** CI is the compiler.

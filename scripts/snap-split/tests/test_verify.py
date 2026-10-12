@@ -2536,12 +2536,38 @@ class AdoptionModeTests(unittest.TestCase):
             f = adopt_fixture(files={**ADOPT_FILES, BCC: BCC_BASE.replace(anchor, extra + anchor)})
             self.recovery_first(f)
             adopt_commit(f, {**CB1, BCC: BCC_AFTER.replace(anchor, rewritten + anchor), BRA: BRA_CB1})
-            self.assertIn("declares another `evmCodeStorage` in scope here", self.bad(f, "adopts"))
-        # the helper may keep its own parameter, unrewritten
+            self.assertIn("binds another `evmCodeStorage` in this file", self.bad(f, "adopts"))
+        # file-wide in the coordinator (prism round 2): even a helper keeping its own parameter unrewritten rejects
         f = adopt_fixture(files={**ADOPT_FILES, BCC: BCC_BASE.replace(anchor, helper + anchor)})
         self.recovery_first(f)
         adopt_commit(f, {**CB1, BCC: BCC_AFTER.replace(anchor, helper + anchor), BRA: BRA_CB1})
-        self.ok(f)
+        self.assertIn("binds another `evmCodeStorage` in this file", self.bad(f, "adopts"))
+
+    def test_p4b_every_binding_form_of_a_dropped_name_rejects(self):
+        anchor = "\nobject ByteCodeCoordinator:"
+        for form in ("  def a(o: Option[EvmCodeStorage]): Int = o match\n    case Some(evmCodeStorage) => 1\n    case None => 0\n",
+                     "  def b(xs: Seq[EvmCodeStorage]) = for evmCodeStorage <- xs yield 1\n",
+                     "  def c(t: (Int, EvmCodeStorage)) =\n    val (a, evmCodeStorage) = t\n    a\n",
+                     "  def d()(using evmCodeStorage: EvmCodeStorage): Int = 1\n",
+                     "  def e(xs: Seq[EvmCodeStorage]) = xs.map(evmCodeStorage => 1)\n"):
+            extra = "\n" + form
+            f = adopt_fixture(files={**ADOPT_FILES, BCC: BCC_BASE.replace(anchor, extra + anchor)})
+            self.recovery_first(f)
+            adopt_commit(f, {**CB1, BCC: BCC_AFTER.replace(anchor, extra + anchor), BRA: BRA_CB1})
+            self.assertIn("binds another `evmCodeStorage` in this file", self.bad(f, "adopts"), form)
+        helper = "\nclass Helper(val evmCodeStorage: EvmCodeStorage):\n  def g(h: Hash) = evmCodeStorage.get(h)\n"
+        f = adopt_fixture(files={**ADOPT_FILES, BCC: BCC_BASE + helper})
+        self.recovery_first(f)
+        adopt_commit(f, {**CB1, BCC: BCC_AFTER + helper, BRA: BRA_CB1})
+        self.assertIn("binds another `evmCodeStorage` in this file", self.bad(f, "adopts"))
+
+    def test_p4b_recovery_member_scope(self):
+        # a binding in the same member as a rewrite rejects; an unchanged helper's own parameter (another member) does not
+        ins = "      preloaded match\n        case Some(appStateStorage) => ()\n        case None => ()\n      if missing.isEmpty then\n"
+        f = adopt_fixture(branch="refactor/snap-016-recovery-ingest",
+                          files={**ADOPT_FILES, BRA: BRA_BASE.replace("      if missing.isEmpty then\n", ins)})
+        adopt_commit(f, {SC: SC_AFTER, BRA: BRA_AFTER.replace("      if missing.isEmpty then\n", ins), CAP: SI_SYNC}, msg=RECOVERY_MSG)
+        self.assertIn("binds another `appStateStorage` in the same member", self.bad(f, "adopts"))
 
     def p2_move(self, closer, mod_name="ByteCodeResponseHandling", path=None):
         store = BCC_BASE[BCC_BASE.index("  def store("):BCC_BASE.index("object ByteCodeCoordinator:")]
@@ -2559,6 +2585,17 @@ class AdoptionModeTests(unittest.TestCase):
                        ") extends Unrelated:"):
             out = self.bad(self.p2_move(closer), "step1")
             self.assertIn("removed line is not shown as moved: `):`", out)
+
+    def test_p2b_steps_1_and_6_admit_bare_identifier_parent_arguments_only(self):
+        # prism round 2 (optional, taken: the replay of #1560's `with SyncLifecycle(heapWatchdogStart)` is unchanged)
+        ok = CORE_AFTER_MOVE.replace("extends HealingOrchestrator:", "extends HealingOrchestrator with SyncLifecycle(heapWatchdogStart):")
+        f = Fixture()
+        move_commit(f, core=ok, partial=True)
+        self.ok(f)
+        for bad in ("with Audit(sideEffect()):", "with Audit(a + 1):"):
+            f = Fixture()
+            move_commit(f, core=CORE_AFTER_MOVE.replace("extends HealingOrchestrator:", "extends HealingOrchestrator " + bad), partial=True)
+            self.assertIn("added line is neither moved nor a header", self.bad(f, "step1"), bad)
 
     def test_p2_narrowing_header_with_a_constructor_call_fails(self):
         f, store = self.narrowing_fixture()
@@ -2660,12 +2697,24 @@ class AdoptionModeTests(unittest.TestCase):
             self.assertIn("plain `val", out)
 
     def test_p1_sync_controller_may_import_the_mirrored_types_only(self):
-        f = adopt_fixture(branch="refactor/snap-016-recovery-ingest")
-        sc = SC_AFTER.replace("object SyncController:", "import x.db.PathNodeStorage\nimport x.snap.StateValidator\n\nobject SyncController:")
-        adopt_commit(f, {SC: sc, BRA: BRA_AFTER, CAP: SI_SYNC}, msg=RECOVERY_MSG)
+        core = SI_CORE.replace("package x\n", "package x\n\nimport x.db.PathNodeStorage\nimport x.snap.StateValidator\n")
+        fix = lambda: adopt_fixture(branch="refactor/snap-016-recovery-ingest", files={**ADOPT_FILES, CORE: core})
+        sc = lambda imps: SC_AFTER.replace("object SyncController:", imps + "\n\nobject SyncController:")
+        f = fix()
+        adopt_commit(f, {SC: sc("import x.db.PathNodeStorage\nimport x.snap.StateValidator"), BRA: BRA_AFTER, CAP: SI_SYNC}, msg=RECOVERY_MSG)
         self.ok(f)
-        out = self.rneg({SC: SC_AFTER.replace("object SyncController:", "import x.other.Thing\n\nobject SyncController:")})
-        self.assertIn("adds import `x.other.Thing`", out)
+        # a type the core uses from its own package (package `x`, no import there) may be imported by that path only
+        f = adopt_fixture(branch="refactor/snap-016-recovery-ingest")
+        adopt_commit(f, {SC: sc("import x.StateValidator\nimport x.PathNodeStorage"), BRA: BRA_AFTER, CAP: SI_SYNC}, msg=RECOVERY_MSG)
+        self.ok(f)
+        # prism round 2: the import must be the core's own entry, and never a standard name
+        for imp, why in (("import x.evil.StateValidator", "adds import `x.evil.StateValidator`"),
+                         ("import x.evil.PathNodeStorage", "adds import `x.evil.PathNodeStorage`"),
+                         ("import x.evil.Some", "rebinds the standard name `Some`"),
+                         ("import x.other.Thing", "adds import `x.other.Thing`")):
+            f = fix()
+            adopt_commit(f, {SC: sc(imp), BRA: BRA_AFTER, CAP: SI_SYNC}, msg=RECOVERY_MSG)
+            self.assertIn(why, self.bad(f, "adopts"), imp)
 
     def test_p5_trait_and_object_widen_together(self):
         out = self.rneg({CAP: SI_FILE.replace("private[snap] trait StateIngest:", "private[sync] trait StateIngest:")})
