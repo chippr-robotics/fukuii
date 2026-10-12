@@ -1034,10 +1034,11 @@ controller modules and before T060. Spec 017 (`specs/017-state-capabilities-witn
       order>)`, and the class's params are apply's. B3: the core's accessor passes, position by position, the handle
       bare-mapped to each `apply` parameter, or a case of a declared enum; named arguments must name the parameter.
       Dropped or added env, State or accessor declarations must stand alone on their lines. B4: the test-hunk guard
-      admits non-assertion lines by design (routing doc). T055's draft must move `durability` from the `Stores` body
+      admits non-assertion lines by design (routing doc). F1 (prism on c4d99e3f6): the capability file imports only
+      at the top of the file, named members only (no wildcard, `given` or nested import). T055's draft must move `durability` from the `Stores` body
       into the constructor and `apply`, and the core passes `StateIngest.Durability.Default`. The remaining caveats
       are in the routing doc.
-    - *Self-tests.* 55 new (180 in all), plus the real-baseline test retargeted from literals (18, the 8 names) to consistency with the env on the tree (count, pins declared, every storage-typed member pinned), so T055 can lower both: 34 git-fixture cases (T055-shaped positive, plus negatives for a changed argument, an
+    - *Self-tests.* 59 new (184 in all), plus the real-baseline test retargeted from literals (18, the 8 names) to consistency with the env on the tree (count, pins declared, every storage-typed member pinned), so T055 can lower both: 34 git-fixture cases (T055-shaped positive, plus negatives for a changed argument, an
       extra, reordered, merged or re-indented statement, a new storage reference, the wrong member, a lying or
       impure forwarder, a mode trailer with `# moved:`, a move commit or plain commit beside a capability commit, the
       trailer on test/fix/other branches, a raw `DataSource` member, and the baseline rows) and 6 unit cases for the

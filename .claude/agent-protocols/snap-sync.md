@@ -59,7 +59,8 @@ unless stated.
     handle under the member name a bare `handle -> member` line gives it). A mapped handle is only wired in
     (constructor parameter or abstract member), never defined in the file;
   - the capability file has a fixed shape, checked on every capability commit and, after the capability exists, at the
-    head of every PR. It holds package and imports, `trait <Trait>:` with abstract `def`/`val` members only, and
+    head of every PR. It holds package and imports (top of the file only, named: no wildcard, `given` or nested
+    import), `trait <Trait>:` with abstract `def`/`val` members only, and
     `object <Trait>:` holding only `enum`s of plain `case` lines, `type` aliases, one
     `def apply(<params, no defaults>): <Trait> = new <Prod>(<its params, by name, in order>)`, and one
     `class <Prod>(<the same params>) extends <Trait>`. That class's body holds only forwarder `def`s of mapped members.

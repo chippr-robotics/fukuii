@@ -743,7 +743,7 @@ class Verifier:
             elif is_module(f):
                 drop_old = self.removed_state_handles(c, f, old, new)
             for e in sorted(import_entries(new) - import_entries(old)):
-                if re.search(r"(?:\.\*|\._|\bgiven)$", e) or " given" in e:
+                if is_wild_or_given_import(e):
                     self.err(c, "capability", f"{f}: adds wildcard or given import `{e}`: a capability commit adds named imports only")
             probs, subs = substitution_check(f, old, new, spec, drop_old, drop_new)
             for prob in probs:
@@ -1982,6 +1982,11 @@ def cap_exemption(name: str, text: str) -> tuple[str, set[str], set[str]]:
     return lower_camel(name), set(members) - handles, handles
 
 
+def is_wild_or_given_import(entry: str) -> bool:
+    """An expanded import entry (`expand_import`) that is a wildcard (`*`, `_`) or a given import (`given`, `given T`)."""
+    return bool(re.search(r"(?:\.\*|\._)$|(?:^|\.)given\b|\bimplicit\b", entry)) or " given" in entry
+
+
 def item_blocks(lines: list[str], start: int, end: int, d: int) -> list[tuple[int, int]]:
     """[start, end) line ranges of the items at indent `d` in lines[start:end]: an item runs while the next lines are
     blank, more indented, or a closing bracket or `end` at the same indent."""
@@ -2039,8 +2044,26 @@ def capability_structure(spec: "CapabilitySpec") -> list[str]:
     Records `spec.apply_params` and `spec.enums` for the core accessor check."""
     path, name, out = spec.path, spec.name, []
     lines = code_lines(spec.text)
-    skip = import_lines(spec.text)
-    lines = ["" if (k + 1) in skip or re.match(r"^package\s", l.strip()) else l for k, l in enumerate(lines)]
+    # Imports only at the top of the file (indent 0) and named only: a nested import, a wildcard or a `given` import
+    # could change how a forwarder's arguments resolve (T054b review F1). Only top-level import statements are blanked
+    # here, so a nested one is also reported by the item checks below.
+    skip, top = import_lines(spec.text), set()
+    starts = lambda k: k in skip and lines[k - 1].strip().startswith("import")
+    for k in sorted(skip):
+        if not starts(k):
+            continue  # a continuation line of a multi-line `import a.{...}`
+        end = k
+        while end + 1 in skip and not starts(end + 1):
+            end += 1
+        stmt = flat(lines, k - 1, end)
+        if indent_of(lines[k - 1]) != 0:
+            out.append(f"{path}:{k}: `{stmt[:80]}`: the capability file imports only at the top of the file")
+        else:
+            top |= set(range(k, end + 1))
+        for e in sorted(import_entries(stmt)):
+            if is_wild_or_given_import(e):
+                out.append(f"{path}:{k}: wildcard or given import `{e}`: the capability file imports named members only")
+    lines = ["" if (k + 1) in top or re.match(r"^package\s", l.strip()) else l for k, l in enumerate(lines)]
     mapped = set(t[2] for t in spec.maps.values())
     traits = objects = 0
     prod, apply_seen = None, False

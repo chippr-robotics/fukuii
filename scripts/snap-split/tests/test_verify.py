@@ -1772,6 +1772,29 @@ class CapabilityModeTests(unittest.TestCase):
         g.commit("feat: tweak StateIngest")
         self.assertIn("top-level `object Boot:`", self.bad(g, "capability"))
 
+    def test_f1_given_import_inside_the_object_fails(self):
+        cap = CAP_FILE.replace("private[snap] object StateIngest:\n", "private[snap] object StateIngest:\n  import x.Conversions.given\n")
+        out = self.neg(FIN_AFTER, cap=cap)
+        self.assertIn("the capability file imports only at the top of the file", out)
+        self.assertIn("wildcard or given import `x.Conversions.given`", out)
+
+    def test_f1_given_import_inside_the_production_class_fails(self):
+        cap = CAP_FILE.replace("  ) extends StateIngest:\n", "  ) extends StateIngest:\n    import x.Conversions.given\n")
+        out = self.neg(FIN_AFTER, cap=cap)
+        self.assertIn("the capability file imports only at the top of the file", out)
+
+    def test_f1_wildcard_or_given_import_at_the_top_fails(self):
+        for imp in ("import x.Conversions.*", "import x.Conversions.{given, Foo}"):
+            cap = CAP_FILE.replace("import x.db.dataSource.DataSourceBatchUpdate\n", f"import x.db.dataSource.DataSourceBatchUpdate\n{imp}\n")
+            out = self.neg(FIN_AFTER, cap=cap)
+            self.assertIn("wildcard or given import", out)
+
+    def test_f1_named_top_level_import_passes(self):
+        f = cap_fixture()
+        cap_commit(f, cap=CAP_FILE.replace("import x.db.dataSource.DataSourceBatchUpdate\n",
+                                           "import x.db.dataSource.DataSourceBatchUpdate\nimport x.domain.{BlockHeader, BlockchainReader}\n"))
+        self.ok(f)
+
     def test_b2_apply_must_pass_its_own_parameters_in_order(self):
         for body in ("new Production(appStateStorage, blockchainReader.other, validatorFactory, doneStorage)",
                      "new Production(appStateStorage, blockchainReader, validatorFactory, new NoopDone())",
