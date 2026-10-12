@@ -5715,8 +5715,8 @@ every C-</em> slice (tasks.md, "Coordinators").</p>
   <code>stateIngest.appState.putSnapSyncPivotBlock(...)</code> reaches a raw store through a parameterless storage-typed member,
   so <code>stateIngest.&lt;handle&gt;</code> still counts once, as <code>appStateStorage</code> did. The module rows therefore stay close to their
   old values (<code>StateValidationModule</code> rises 3 → 5, because <code>stateIngest.validatorFactory</code> is storage-typed; the gate is
-  the total). The drop of 14 is the env's 23 handle references gone, less the core's 7 new ones (building
-  <code>stateIngest</code>), less 2. The capability file itself is not a <code>storage_refs</code> row; it has its own member-cap entry (9)
+  the total). The drop of 14 is the env's 23 handle references gone, offset by the core's 7 new ones (building
+  <code>stateIngest</code>) and <code>StateValidationModule</code>'s 2: 692 − 23 + 7 + 2 = 678. The capability file itself is not a <code>storage_refs</code> row; it has its own member-cap entry (9)
   under <code>capabilities</code>. An earlier measurement of 556 used the pre-T054b counter, which did not count
   <code>stateIngest.&lt;handle&gt;</code>. That figure understated the remaining coupling. The real reduction comes in the C-* slices,
   as each coordinator narrows to calls on the capability (user decision 2026-10-11: handle-level members, as in
