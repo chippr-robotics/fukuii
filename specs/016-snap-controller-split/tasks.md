@@ -1314,13 +1314,41 @@ until `StateAccess` exists (FR-042).
       `isEmpty` → `nonEmpty` beside the `skipPresent` substitution, and a changed `ChildFactories` default. Re-run on
       top of the T060b commit (counter v2), the same two commits pass with **635 → 619** (BCC 10 → 4,
       `ChildFactories` 75 → 71, `DownloadSupervisor` 56 → 52, `HealingOrchestrator` 45 → 43).
-- [ ] T060c [SI] **D-T060-2: recovery actors take `StateIngest`** (user decision 2026-10-12; before T061; its own PR,
+- [x] T060c [SI] **D-T060-2: recovery actors take `StateIngest`** (user decision 2026-10-12; before T061; its own PR,
   `# adopts: StateIngest RecoveryActors`). `StateIngest` widens from `private[snap]` to `private[sync]`.
   `SyncController` already holds 6 of the 8 stores; it builds one `StateIngest`, deriving `pathNodes` exactly as
   `SNAPSyncController` does (and `validatorFactory` as its `apply` default), and passes it to `BytecodeRecoveryActor`
   and `StorageRecoveryActor`, which pass it on to the coordinators once C-B1 and the storage slices adopt it. No other
   logic changes. Reviews: forge (both actors run on ETC at startup), vault. Validation: a bytecode- or storage-recovery
   start on Mordor.
+  - **As built** (branch `refactor/snap-016-recovery-stateingest`, one commit with `# adopts: StateIngest RecoveryActors`;
+    no sbt or JVM run, CI compiles).
+    - `StateIngest.scala`: only the trait's and the object's `private[snap]` become `private[sync]`.
+    - `SyncController` has no `snapSyncConfig` field (it loads one per call), so the handle cannot be built at actor
+      construction with the core's derivation. `startRecovery` builds it, in its `(Some, Some)` arm right after
+      `loadSnapSyncConfig()`: `pathNodeStorageOpt` (the core's `val`, token for token), `validatorFactory`
+      (`SNAPSyncController.apply`'s default) and `stateIngest` (the core's initializer). So it is one `StateIngest`
+      per recovery start, passed to the four recovery spawn sites and, on the combined-scan path, to
+      `runningCombinedScan` as a new last parameter.
+    - **Construction timing.** On the Hash scheme (ETC/Mordor) `pathNodeStorageOpt` is `None`, so nothing new is
+      constructed: only the references are stored, plus the `new StateValidator(_)` function value, which builds no
+      validator. On the Path scheme (ETH/Sepolia) each recovery start now builds one `PathNodeStorage` over
+      `flatSlotStorage.dataSource` where none was built before. That class holds two namespace constants and the data
+      source reference, does no I/O, and nothing in recovery reads `stateIngest.pathNodes`.
+    - `BytecodeRecoveryActor` (`apply`, `applyPreloaded`, `testApply`, `scanning`, `downloading`) and
+      `StorageRecoveryActor` (the same five) take `stateIngest` in place of their raw stores, at the first dropped
+      position. Their bodies read the same instances as `stateIngest.appState` / `.stateTries` / `.bytecode` /
+      `.flatSlots`. The coordinators' `apply` signatures do not change: BCC still gets
+      `evmCodeStorage = stateIngest.bytecode`, SRC `flatSlotStorage = stateIngest.flatSlots` and the same
+      `getBackingStorage(pivotBlockNumber)` store. The scan helpers (`scanForMissingBytecodes`, `scanForMissingStorage`,
+      `logResidualGaps`) keep their raw parameters. `CombinedRecoveryScanActor` is unchanged.
+    - Tests: `BytecodeRecoveryActorSpec` (5 calls) and `StorageRecoveryActorSpec` (1 call) pass
+      `stateIngest = recoveryIngest(...)`, a local `StateIngest` over the spec's stores whose other members throw. No
+      assertion changed.
+    - `verify.py` (#1583's): OK. `[adopts]` BytecodeRecoveryActor 9 lists / 5 substitutions, StorageRecoveryActor 9 / 6,
+      SyncController 6 / 0, StateIngest visibility widened on 2 lines. Storage total 635, unchanged (the recovery actors
+      are outside `snap/`), so no baseline change.
+    - Owed: the forge and vault reviews, and the Mordor recovery-start validation run.
 - [ ] T060d [SI] **D-T060-1: `StateIngest` members for the derived stores** (user decision 2026-10-12; before T064;
   a capability-mode PR, `# capability: StateIngest`, an extension). Members for the per-pivot `MptStorage` (a method),
   `SnapStorageDoneStorage`, `SnapSyncProgressStorage`, `HealingFrontierStorage` and `BfsQueueStorage`, handing out the
