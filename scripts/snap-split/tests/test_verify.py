@@ -1289,13 +1289,45 @@ class StorageRatchetTests(unittest.TestCase):
         for text, n in cases.items():
             self.assertEqual(V.storage_ref_count(text), n, text)
 
-    def test_real_baseline_pins_the_eight_env_storage_members(self):
-        b = json.loads((Path(__file__).resolve().parents[1] / "storage-baseline.json").read_text())
-        self.assertEqual(b["env"]["members"], 18)
-        self.assertEqual(sorted(b["env"]["storage_members"]), sorted([
-            "appStateStorage", "stateStorage", "evmCodeStorage", "flatSlotStorage", "pathNodeStorageOpt",
-            "blockchainReader", "blockchainWriter", "validatorFactory"]))
+    # The real baseline must agree with the tree it sits in, not with today's numbers: T055 lowers env.members to about
+    # 11 and empties env.storage_members, and the C-* slices keep moving the counts (T054b review).
+    @staticmethod
+    def env_baseline_problems(env_text, b):
+        members = V().env_members(env_text)
+        typed = {n for n, d in members.items() if V().storage_typed(d)}
+        pinned = set(b["env"]["storage_members"])
+        out = []
+        if b["env"]["members"] != len(members):
+            out.append(f"env.members {b['env']['members']} != measured {len(members)}")
+        out += [f"pinned `{n}` is not declared on the env" for n in sorted(pinned - set(members))]
+        out += [f"storage-typed env member `{n}` is not pinned" for n in sorted(typed - pinned)]
+        return out
 
+    def test_real_baseline_is_consistent_with_the_env_on_this_tree(self):
+        root = Path(__file__).resolve().parents[3]
+        b = json.loads((root / BASELINE).read_text())
+        env_text = (root / ENV).read_text()
+        self.assertEqual(self.env_baseline_problems(env_text, b), [])
+        self.assertEqual(b["env"]["header"], V().env_header(env_text))
+
+    def test_env_baseline_consistency_check_on_fixture_shapes(self):
+        handles = ["appStateStorage: AppStateStorage", "stateStorage: StateStorage", "evmCodeStorage: EvmCodeStorage",
+                   "flatSlotStorage: FlatSlotStorage", "pathNodeStorageOpt: Option[PathNodeStorage]",
+                   "blockchainReader: BlockchainReader", "blockchainWriter: BlockchainWriter",
+                   "validatorFactory: MptStorage => StateValidator"]
+        others = [f"other{i}: Int" for i in range(10)]
+        env = lambda ms: "package x\n\nprivate[snap] trait SnapControllerEnv:\n" + "".join(f"  def {m}\n" for m in ms)
+        names = [h.split(":")[0] for h in handles]
+        bl = lambda n, pinned: {"env": {"members": n, "header": ":", "storage_members": list(pinned)}}
+        # the T054 shape (18 members, 8 pinned handles) and the post-T055 shape (11 members, none pinned) both hold
+        self.assertEqual(self.env_baseline_problems(env(handles + others), bl(18, names)), [])
+        self.assertEqual(self.env_baseline_problems(env(others + ["stateIngest: StateIngest"]), bl(11, [])), [])
+        # a wrong count, a stale pin and an unpinned storage handle are each reported
+        self.assertEqual(self.env_baseline_problems(env(handles + others), bl(17, names)), ["env.members 17 != measured 18"])
+        self.assertEqual(self.env_baseline_problems(env(handles[1:] + others), bl(17, names)),
+                         ["pinned `appStateStorage` is not declared on the env"])
+        self.assertEqual(self.env_baseline_problems(env(handles + others), bl(18, names[1:])),
+                         ["storage-typed env member `appStateStorage` is not pinned"])
 
 # ---- capability mode (spec 016 T054b): a behaviour-neutral PR that introduces a capability and moves call sites onto it
 
