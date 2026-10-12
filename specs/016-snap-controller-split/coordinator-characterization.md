@@ -89,7 +89,8 @@ The full matrices are in Appendix A. Each module's member list is in §3.
 6. **Armless messages** (Appendix A; local CHASE-QUEUE CQ-SNAP-016-38/39, no fix here):
    - seven ARC `Command` cases have no arm and no sender in `src/main`: `GetProgress`, `GetContractAccounts`,
      `GetContractStorageAccounts`, `GetUniqueCodeHashes`, `GetStorageFileInfo`, `GetCodeHashesFileInfo` and
-     `AccountRangeProgress`. They are dead ADT members. The four `*Response` cases are reply types sent to `replyTo`;
+     `AccountRangeProgress`. They are dead ADT members. The two `*Response` cases that extend `Command` (`ContractAccountsResponse`,
+     `ContractStorageAccountsResponse`) are reply types sent to `replyTo`;
    - `TrieNodeHealingWorker` sends `HealingTaskFailed` on its own request timeout, but TNHC has no arm for it, so its
      catch-all drops it (`unhandled`, DEBUG). The coordinator's own `HealingRequestTimeout` arm handles timeouts. Whether
      that makes the drop harmless still has to be characterized.
