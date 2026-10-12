@@ -1191,6 +1191,10 @@ until `StateAccess` exists (FR-042).
     coordinator's storage parameters therefore change in the first slice whose code uses them. That slice is named
     per task below.
   - **Projection for C-B1:** total 678 → 662, checked on a scratch tree with step 8's counter.
+  - **Armless messages** (local CHASE-QUEUE CQ-SNAP-016-38/39/40; no fix):
+    - seven ARC `Command` cases have no arm and no sender;
+    - TNHC drops the worker-sent `HealingTaskFailed` in its catch-all;
+    - the ratchet has false-positive floors (ARC 7, SRC 25, TNHC 14).
   - **Open user decisions:**
     - **D-T060-1** (before C-A3): `StateIngest` exposes no per-pivot `MptStorage`, `SnapStorageDoneStorage`,
       `SnapSyncProgressStorage`, `HealingFrontierStorage` or `BfsQueueStorage`. The options are to keep them as

@@ -10,7 +10,7 @@ reading this document against the baseline.
 
 | File (`snap/actors/`) | Lines | Impl class | Mutable fields | `Command` cases | Behaviours (arms) | Storage refs (`storage-baseline.json`) |
 |---|---|---|---|---|---|---|
-| `ByteCodeCoordinator.scala` (BCC) | 870 | `private class ByteCodeCoordinatorImpl` L33 | 20 | 15 | `active` (16 + catch-all + signal) | **10** |
+| `ByteCodeCoordinator.scala` (BCC) | 870 | `private class ByteCodeCoordinatorImpl` L33 | 20 | 15 | `active` (15 + catch-all + signal) | **10** |
 | `AccountRangeCoordinator.scala` (ARC) | 2,220 | `private class AccountRangeCoordinatorImpl` L68 | 39 | 35 | `receive` (25 + catch-all + signal), `finalizing` (14 + catch-all + signal) | **28** |
 | `StorageRangeCoordinator.scala` (SRC) | 2,806 | `private[actors] class StorageRangeCoordinatorImpl` L52 | 56 | 19 | `active` (one arm, delegates to `handleCommand`: 18 + catch-all; 2 signals) | **88** |
 | `TrieNodeHealingCoordinator.scala` (TNHC) | 2,900 | `private[actors] class TrieNodeHealingCoordinatorImpl` L45 | 49 | 24 (8 declared inside the Impl) | `activeBehavior` (25 + catch-all) | **84** |
@@ -60,7 +60,7 @@ The full matrices are in Appendix A. Each module's member list is in §3.
 
 ## 2. Findings in one place
 
-1. **Boundaries: confirmed, with nine amendments** (§3). No C-* row moves wholesale. The amendments:
+1. **Boundaries: confirmed, with the amendments below** (§3). No C-* row moves wholesale.
    - #1501's `skipPresent` check is inside BCC's `AddByteCodeTasks` arm, not in a method;
    - #1533's off-actor response pipeline (eight members) postdates R12 and is assigned to C-S4;
    - SRC `handleTimeout`, ARC `maybeRequestPivotRefresh`/`drainActiveTasks` and TNHC `isNodeInStorage`/`readPathVerified*`
@@ -86,7 +86,14 @@ The full matrices are in Appendix A. Each module's member list is in §3.
    `ChildFactories` signature changes. A plain prerequisite commit would pass, but with no structural check, so the one
    commit that lowers the total would be the least-checked kind. The proposed fix is new task **T060b**; nothing is
    implemented here.
-6. **Order** (§7): tasks.md order stands, and BCC first is still the lowest-coupling start. Prerequisites: T060b, then
+6. **Armless messages** (Appendix A; local CHASE-QUEUE CQ-SNAP-016-38/39, no fix here):
+   - seven ARC `Command` cases have no arm and no sender in `src/main`: `GetProgress`, `GetContractAccounts`,
+     `GetContractStorageAccounts`, `GetUniqueCodeHashes`, `GetStorageFileInfo`, `GetCodeHashesFileInfo` and
+     `AccountRangeProgress`. They are dead ADT members. The four `*Response` cases are reply types sent to `replyTo`;
+   - `TrieNodeHealingWorker` sends `HealingTaskFailed` on its own request timeout, but TNHC has no arm for it, so its
+     catch-all drops it (`unhandled`, DEBUG). The coordinator's own `HealingRequestTimeout` arm handles timeouts. Whether
+     that makes the drop harmless still has to be characterized.
+7. **Order** (§7): tasks.md order stands, and BCC first is still the lowest-coupling start. Prerequisites: T060b, then
    D-T060-2 before C-B1, and D-T060-1 before C-A3. Vault reviews and node runs are listed per slice.
 
 ## 3. Module boundaries: confirmed or amended
@@ -134,8 +141,9 @@ them, with the genuine handle uses in brackets; **SI** = `StateIngest` members t
 
 - Placements (amendments to plan.md): `maybeRequestPivotRefresh` → C-A1 (it is driven by the stateless marking and
   reads only peer-side state); `drainActiveTasks` → C-A2. `classifyIdleStall` and `copyPrefix` are companion helpers.
-  The first is used only by the `CheckDispatchStalled` arm, which stays in the core. The second is used by
-  `syncTaskFiles` and follows it into C-A4 behind an `export` (D2) or stays in the companion.
+  The first is used only by the `CheckDispatchStalled` arm, which stays in the core. The second is called only by
+  the initializers of the core vals `carriedStorageCount` / `carriedCodeHashesCount` (L470–483), which rule (d) keeps
+  in the core, so it stays in the companion.
 - Stay in the core: `onStart`, `onStop`, `sendProgressSnapshot`, `receive` (all arms, including the 87-line
   `CheckDispatchStalled` that consults `classifyIdleStall`), `calculateProgress`, `isComplete`,
   `computeKeyspaceEstimate`.
@@ -213,8 +221,8 @@ them, with the genuine handle uses in brackets; **SI** = `StateIngest` members t
   no `isInstanceOf` relies on the path. This touches the `Command` ADT's file but not its wire format: the messages are
   actor-local and never leave the process.
 - **`evmCodeStorage: Option[EvmCodeStorage] = None`** (TNHC `apply` and constructor). Production always passes
-  `Some(stateIngest.bytecode)`. `HealingTrieFixtures` relies on the `None` default, which turns the healed-code check
-  off. A non-optional `stateIngest` would turn that check on in every healing test. The narrowing therefore needs
+  `Some(stateIngest.bytecode)`. `HealingTrieFixtures`' builder has its own `evmCodeStorage: Option[...] = None` and
+  forwards it (L90, L122), so the healing tests run with the healed-code check off. A non-optional `stateIngest` would turn that check on in every healing test. The narrowing therefore needs
   `Option[StateIngest]`, or a separate `healedCodeCheck: Boolean`. Record that choice in T075.
 - `SNAPSyncControllerPinSpec` is protected and asserts on `ChildSpawn.Healing.{mptStorage, healingFrontierStorage,
   bfsQueueStorageOpt, pathNodeStorageOpt, evmCodeStorage}`, building a copy with named arguments (L344–355). When
