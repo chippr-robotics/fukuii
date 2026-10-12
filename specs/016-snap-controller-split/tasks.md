@@ -1000,11 +1000,53 @@ controller modules and before T060. Spec 017 (`specs/017-state-capabilities-witn
   a scope extension, not a coupling increase. From here a move from the core into a module is a per-file trade, and
   the total only goes down. Two self-tests: a byte-identical move of 2 references from the core into a module passes
   with no justification; a core-only increase fails. plan.md step 8, FR-043 and the routing doc name the measured set.
-- [ ] T054b [FREEZE] **Verify mode for a capability-introduction PR** (owned by the T054 tooling line; needed before
+- [x] T054b [FREEZE] **Verify mode for a capability-introduction PR** (owned by the T054 tooling line; needed before
   T055). Add a `verify.py` mode, with self-tests, for a behaviour-neutral PR that introduces a capability and moves call
   sites onto it, which is neither a move nor a narrowing (plan.md amendment, "Why T055 is not a move or a
   narrowing"): every changed line in a module file replaces a storage handle with the matching capability member,
   while (a), (d), `[counts]`, the test-hunk guard, pin and golden protection and step 8 still apply.
+  - **As built** (branch `test/snap-016-capability-verify`). The rules are in the routing doc ("Capability mode") and
+    in `verify.py` ("capability mode").
+    - *Selection.* The commit trailer `# capability: <Trait>`, on `refactor/snap-016-*` only; there is no new branch
+      kind, so T055 keeps `refactor/snap-016-state-ingest`. With the trailer on one commit, the PR is a capability PR:
+      every commit that touches `snap/` code needs the trailer, and no commit may be a move or a narrowing. The trailer
+      is rejected next to `# moved:` and on `test/`, `fix/` and other branches. A PR that removes a pinned
+      `SnapControllerEnv` storage handle must be a capability PR. This one existing self-test changed on purpose:
+      such a removal on a plain refactor branch used to pass with a WARN, and now fails `[capability]`.
+    - *Mapping.* The capability file declares the map in comment lines (`// capability-map: handle[.member] ->
+      member`). Each mapped member's production implementation is in that file and is checked as a pure forwarder:
+      the same call, with its own parameters in order, and no default parameters. Call sites are checked by
+      whole-file token alignment, not line pairs, so multi-line chains, interpolated `${...}` and named-argument
+      values work. A statement skeleton check rejects a reordered, extra, merged or re-indented statement. Comments,
+      whitespace and named imports may change.
+    - *Wiring.* The env may only drop pinned handles and add the accessor `: <Trait>`. The core may add one accessor
+      declaration, whose initializer is a single constructor call over handles. A `<X>State` may drop a storage-typed
+      member. Nothing outside `snap/` may change, and no file may be added except the capability file.
+      `ChildFactories` signatures stay as they are: `ChildFactoriesSpec` (protected) compares default positions.
+    - *Step 8.* The new baseline section `capabilities` holds the file, the member count (it only goes down unless
+      justified) and the raw imports (fixed at introduction). The capability file is not a `storage_refs` row, but
+      `[raw-import]` still measures it. `<accessor>.<call>` is not a storage reference, while `<accessor>.<handle>`
+      (a parameterless storage-typed member) counts once.
+    - *Review hardening (prism on f43aa3309).* B1: the capability file has an allow-listed shape, rechecked at every
+      PR head once the capability exists: the trait with abstract members; a companion holding only plain enums, type
+      aliases, one `apply` and one production class whose body holds only mapped forwarders. An unforwarded member
+      such as `durability` is a `val` constructor parameter. B2: `apply` is exactly `new <Prod>(<its params in
+      order>)`, and the class's params are apply's. B3: the core's accessor passes, position by position, the handle
+      bare-mapped to each `apply` parameter, or a case of a declared enum; named arguments must name the parameter.
+      Dropped or added env, State or accessor declarations must stand alone on their lines. B4: the test-hunk guard
+      admits non-assertion lines by design (routing doc). F1 (prism on c4d99e3f6): the capability file imports only
+      at the top of the file, named members only (no wildcard, `given` or nested import). T055's draft must move `durability` from the `Stores` body
+      into the constructor and `apply`, and the core passes `StateIngest.Durability.Default`. The remaining caveats
+      are in the routing doc.
+    - *Self-tests.* 59 new (184 in all), plus the real-baseline test retargeted from literals (18, the 8 names) to consistency with the env on the tree (count, pins declared, every storage-typed member pinned), so T055 can lower both: 34 git-fixture cases (T055-shaped positive, plus negatives for a changed argument, an
+      extra, reordered, merged or re-indented statement, a new storage reference, the wrong member, a lying or
+      impure forwarder, a mode trailer with `# moved:`, a move commit or plain commit beside a capability commit, the
+      trailer on test/fix/other branches, a raw `DataSource` member, and the baseline rows) and 6 unit cases for the
+      token matcher.
+    - *Replay.* The 25 merged spec-016 PR ranges (M2–M11b, M5b/c, M7b, M9b, lifts, T050c, T054, T054c, #1558) give
+      byte-identical verifier output before and after. A dry run on the real tree forwards all 8 handles plus one
+      method: 154 substitutions in 9 modules, env 18 → 11, total 692 → 674. It passes, and two injected changes
+      (`.commit()` → `.commitSync()`, `pivot` → `pivot - 1`) fail.
 - [ ] T055 [SI] **`StateIngest` capability** (one behaviour-neutral PR, branch `refactor/snap-016-state-ingest`).
   - Introduce `controller/StateIngest.scala`, a capability trait over:
     - the 8 storage handles now in `SnapControllerEnv`: `appStateStorage`, `stateStorage`, `evmCodeStorage`,
