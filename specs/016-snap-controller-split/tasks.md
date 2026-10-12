@@ -1162,23 +1162,94 @@ all: the PR says so, with the grep, and the total stays unchanged. It never rise
 under `snap/`" dependency check is delivered by spec 017 (DC-4); it extends the T054 ratchet tooling and is vacuous
 until `StateAccess` exists (FR-042).
 
-- [ ] T060 Coordinator characterization (docs PR): a var × method matrix and Command × behaviour table for ARC, SRC,
+- [x] T060 Coordinator characterization (docs PR): a var × method matrix and Command × behaviour table for ARC, SRC,
   TNHC and BCC, using the research.md method. Confirm or amend the C-* boundaries in plan.md, and derive each
   coordinator module's state-interface baseline (the R14 equivalent). Every C-* task below has the narrowing commit
   and a stub test.
+  - **As built** (`staging@7d2edf157`; static only, no JVM). New file
+    [coordinator-characterization.md](./coordinator-characterization.md) holds:
+    - the matrices for 164 mutable fields against every method and behaviour arm;
+    - the Command × behaviour tables;
+    - per-slice storage references, measured with `verify.py`'s own counter, which reproduces the baseline (10 / 28 /
+      88 / 84, `ChildFactories` 72);
+    - the tooling gap analysis and the order.
+
+    research.md R12 is completed, and R14b holds the State/Api baselines for the 15 coordinator modules. plan.md's
+    rows carry the amendments, marked "(T060)".
+  - **Boundaries confirmed, with these amendments:**
+    - #1501's `skipPresent` is a line of BCC's `AddByteCodeTasks` arm. It moves only after a lift commit carves it
+      into a method;
+    - #1533's off-actor pipeline goes to C-S4, and `writePrebuiltTrie` to C-S2;
+    - `handleTimeout` goes to C-S1 (SRC) and C-H4 (TNHC);
+    - `maybeRequestPivotRefresh` goes to C-A1, `drainActiveTasks` to C-A2, `isNodeInStorage` to C-H5, and
+      `readPathVerified*` to C-H3;
+    - C-S4 reads no store, because proof verification is pure;
+    - the Impl-nested message and helper types move to the companion before narrowing. TNHC declares 8 `Command`s
+      inside its Impl.
+  - **Zero-reference slices:** C-A1, C-A2, C-H4 and BCC's dispatch half. C-S1 and C-S4 are zero-reference in
+    substance: the only matches are `ForceCompleteStorage`, metric setters and `validateStorageRanges`. Each
+    coordinator's storage parameters therefore change in the first slice whose code uses them. That slice is named
+    per task below.
+  - **Projection for C-B1:** total 678 → 662, checked on a scratch tree with step 8's counter.
+  - **Armless messages** (local CHASE-QUEUE CQ-SNAP-016-38/39/40; no fix):
+    - seven ARC `Command` cases have no arm and no sender;
+    - TNHC drops the worker-sent `HealingTaskFailed` in its catch-all;
+    - the ratchet has false-positive floors (ARC 7, SRC 25, TNHC 14).
+  - **Open user decisions:**
+    - **D-T060-1** (before C-A3): `StateIngest` exposes no per-pivot `MptStorage`, `SnapStorageDoneStorage`,
+      `SnapSyncProgressStorage`, `HealingFrontierStorage` or `BfsQueueStorage`. The options are to keep them as
+      parameters, to add capability members, or to derive them in the coordinator (a behaviour change). See
+      characterization §4.3;
+    - **D-T060-2** (before C-B1): `BytecodeRecoveryActor` and `StorageRecoveryActor` (`blockchain/sync`, outside
+      `snap/`) call BCC's and SRC's `apply` with raw stores, and cannot see `private[snap] StateIngest`. See §4.4.
+  - **Tooling:** today's `verify.py` rejects the specified narrowing (step 6 rejects the `apply`, `ChildFactories`,
+    constructor, spawn-site and call-site lines). Capability mode cannot carry it. A plain prerequisite commit would
+    pass but is unchecked. → T060b.
+- [ ] T060b [TOOL] **`verify.py`: StateIngest adoption allowance for C-* narrowings** (owned by the T054 tooling line;
+  before T061; branch `test/snap-016-adoption-verify`). This is the change proposed in coordinator-characterization.md
+  §6.3; it is not implemented by T060.
+  - A narrowing commit with the trailer `# adopts: StateIngest <Coordinator>` may:
+    - remove storage-typed parameters from that coordinator's Impl constructor, its companion `apply`, the
+      `new <Coordinator>Impl(...)` call and the matching `ChildFactories` method, and add one
+      `stateIngest: StateIngest` (or `Option[StateIngest]`) in their place. The remaining parameters keep their
+      names, defaults and order, and the forwarding lines stay `name = name`;
+    - substitute call sites (`<removed param>` → `stateIngest.<member>`) under `substitution_check`, with a map
+      declared in the coordinator file (`// adopt-map: ...`);
+    - replace the spawn-site arguments of removed parameters with one `stateIngest = stateIngest`.
+  - `STORAGE_NAME_ALLOW += ForceCompleteStorage`, with SRC re-baselined in the same PR. Optionally, exempt the
+    metric setters and the `isNodeInStorage` / `.isStorage` names.
+  - Optionally:
+    - treat `<Coordinator>Env` traits under `snap/actors/` as capability traits;
+    - add a type-level SC-009 check;
+    - if D-T060-2 chooses (a), admit the recovery actors under the same substitution rule.
+  - Self-tests: a C-B1-shaped positive case, plus the negatives listed in §6.3 item 8. Replay the merged spec-016
+    ranges and show identical output, as T054b did.
 - [ ] T061 [C-B1] ByteCode: `ByteCodeDispatch`, `ByteCodeResponseHandling` (the #1501 `skipPresent` check moves
   unchanged). Narrowing takes `StateIngest` (code writes, presence check), never `StateAccess`; lowers the T054
   baseline total.
-- [ ] T062 [C-A1] `AccountPeerDispatch` (includes the #1501 intake gate). Narrowing takes `StateIngest` where it touches
+  - T060: needs T060b and D-T060-2.
+    - `skipPresent` is a line of the `AddByteCodeTasks` arm. Lift it into a method in a plain commit, or leave it in
+      the core, where it is the core's one remaining reference.
+    - Move `ActiveByteCodeRequest` and `WorkerRef` to the companion first.
+    - Adopts `evmCodeStorage` → `bytecode`. Projected total 678 → 662.
+    - Baselines: State 9 + 7, Api 1 + 9 (R14b). Add vault.
+- [ ] T062 [C-A1] `AccountPeerDispatch` (includes the #1501 intake gate; T060: plus `maybeRequestPivotRefresh`; a
+  zero-reference slice, so the PR records the grep and the total is unchanged). Narrowing takes `StateIngest` where it touches
   storage, never `StateAccess`; lowers the baseline total.
 - [ ] T063 [C-A2] `AccountTaskLifecycle`. Narrowing takes `StateIngest`, never `StateAccess`; lowers the baseline total.
-- [ ] T064 [C-A3] `AccountTrieAssembly` + `finalizing` (vault). Narrowing takes `StateIngest` (trie-node writes,
+  (T060: plus `drainActiveTasks`. A zero-reference slice: grep recorded, total unchanged.)
+- [ ] T064 [C-A3] `AccountTrieAssembly` + `finalizing` (vault; T060: the first ARC slice that touches storage. It
+  adopts `pathNodeStorage` → `pathNodes`, and `mptStorage` per D-T060-1, which must be decided first). Narrowing takes `StateIngest` (trie-node writes,
   StackTrie commit), never `StateAccess`; lowers the baseline total.
-- [ ] T065 [C-A4] `ContractWorkCarry` (vault). Narrowing takes `StateIngest`, never `StateAccess`; lowers the baseline
+- [ ] T065 [C-A4] `ContractWorkCarry` (vault; T060: adopts `storageDone` per D-T060-1. The task-file stream vals stay in
+  the core under rule (d)). Narrowing takes `StateIngest`, never `StateAccess`; lowers the baseline
   total. Run a Mordor restart mid-account. The #1487/#1498/#1501 replay invariants are unchanged.
-- [ ] T066 [C-S1] `StoragePeerDispatch`. Narrowing takes `StateIngest` where it touches storage, never `StateAccess`;
+- [ ] T066 [C-S1] `StoragePeerDispatch` (T060: plus `handleTimeout`. Zero-reference in substance: its 2 matches are
+  `ForceCompleteStorage`, which T060b allow-lists. Grep recorded, total unchanged). Narrowing takes `StateIngest` where it touches storage, never `StateAccess`;
   lowers the baseline total.
-- [ ] T067 [C-S2] `StorageOrderedApply` (vault). Narrowing takes `StateIngest` (the batched storage-trie node-write
+- [ ] T067 [C-S2] `StorageOrderedApply` (vault; T060: plus `writePrebuiltTrie`. It adopts `pathNodeStorage`, and
+  `mptStorage`/`snapProgressStorage` per D-T060-1. `flushTrieNodeWrites` writes via `pns.dataSource.update`, a raw
+  call that a per-batch `StateIngest` member could replace; decide at T067). Narrowing takes `StateIngest` (the batched storage-trie node-write
   path, `flushTrieNodeWrites`), never `StateAccess`; lowers the baseline total.
   - **Storage-rate parity (SC-010), moved here from T055 (user decision 2026-10-11)**, because this is where the
     per-node write path moves onto `StateIngest`. The batched storage-trie node-write path is the hottest one, and a
@@ -1191,22 +1262,31 @@ until `StateAccess` exists (FR-042).
     - in addition, an A/B on that same host (pre-wrap build vs post-wrap build, same chain, same starting state)
       shows no regression. If the pre-wrap build cannot reproduce ~1.7M/h, the fresh same-host pre-wrap measurement
       becomes the baseline, and the PR says so.
-- [ ] T068 [C-S3] `StorageDoneMarkers` (vault). Narrowing takes `StateIngest` (flat slots, done markers), never
+- [ ] T068 [C-S3] `StorageDoneMarkers` (vault; T060: adopts `flatSlotStorage` → `flatSlots`. `storageDoneStorage` is a
+  core val under rule (d)). Narrowing takes `StateIngest` (flat slots, done markers), never
   `StateAccess`; lowers the baseline total. The PR quotes spec 010 R2a and shows each clause still holds. Run Mordor and
   Platåberget restarts mid-storage.
-- [ ] T069 [C-S4] `StorageResponseProcessing`. Narrowing takes `StateIngest` (proof verification reads), never
+- [ ] T069 [C-S4] `StorageResponseProcessing` (T060: plus #1533's off-actor pipeline. Proof verification is pure,
+  with no store read, so this is zero-reference in substance: grep recorded, total unchanged). Narrowing takes `StateIngest` (proof verification reads), never
   `StateAccess`; lowers the baseline total.
 - [ ] T070 [C-H0] Split TNHC `activeBehavior` into per-concern partial functions, with an arm-order table as in T036.
+  (T060: a plain restructure commit with no `# moved:` trailer, like P4 and the lift PRs. 25 arms + catch-all, listed
+  in characterization Appendix A. Then a `# moved:` commit of the 8 Impl-nested messages and the helper classes to the
+  companion.)
   (Restructure only, no narrowing; the baseline total must not rise.)
-- [ ] T071 [C-H1] `FrontierPersistence` (vault). Narrowing takes `StateIngest` (frontier and BFS stores), never
+- [ ] T071 [C-H1] `FrontierPersistence` (vault; T060: the first TNHC slice that touches storage. It adopts `mptStorage`
+  and `healingFrontierStorage` per D-T060-1). Narrowing takes `StateIngest` (frontier and BFS stores), never
   `StateAccess`; lowers the baseline total. Run a Mordor heal restart.
-- [ ] T072 [C-H2] `FrontierRebuildBfs`. Narrowing takes `StateIngest` (presence reads), never `StateAccess`; lowers the
+- [ ] T072 [C-H2] `FrontierRebuildBfs` (T060: adopts `bfsQueueStorageOpt` per D-T060-1; add vault). Narrowing takes `StateIngest` (presence reads), never `StateAccess`; lowers the
   baseline total.
-- [ ] T073 [C-H3] `HealVerification` (vault). Narrowing takes `StateIngest` (verification reads), never `StateAccess`;
+- [ ] T073 [C-H3] `HealVerification` (vault; T060: plus `readPathVerifiedRlp`/`Node`. Adopts `pathNodeStorageOpt` →
+  `pathNodes`). Narrowing takes `StateIngest` (verification reads), never `StateAccess`;
   lowers the baseline total.
-- [ ] T074 [C-H4] `HealDispatch`. Narrowing takes `StateIngest` where it touches storage, never `StateAccess`; lowers
+- [ ] T074 [C-H4] `HealDispatch` (T060: a zero-reference slice; grep recorded, total unchanged). Narrowing takes `StateIngest` where it touches storage, never `StateAccess`; lowers
   the baseline total.
-- [ ] T075 [C-H5] `HealResponseProcessing`. Narrowing takes `StateIngest` (healed nodes and code), never `StateAccess`;
+- [ ] T075 [C-H5] `HealResponseProcessing` (T060: plus `isNodeInStorage`. It adopts `evmCodeStorage`, whose `None` test
+  default turns the healed-code check off, so the narrowing needs `Option[StateIngest]` or a flag. `RecordingChildFactories`
+  keeps `ChildSpawn.Healing`'s fields for the protected pin. Add vault, and a Mordor heal restart). Narrowing takes `StateIngest` (healed nodes and code), never `StateAccess`;
   lowers the baseline total. Check SC-002.
 - [ ] T075b [C-X0] Test-only golden of the response-size window for ARC, SRC and TNHC: initial target, grow on a ≥90%
   fill, shrink on failure, min/max clamps, and the exact DEBUG log text with its per-coordinator label. It lands

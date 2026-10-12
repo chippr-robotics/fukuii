@@ -1,7 +1,7 @@
 # Phase 0 Research: SNAPSyncController and Coordinator Characterization (spec 016, #1401)
 
-**Status**: Complete for the controller; preliminary for the four coordinators (finished per coordinator in task
-T060, before the first coordinator slice).
+**Status**: Complete for the controller and, since T060, for the four coordinators: the matrices are in
+[coordinator-characterization.md](./coordinator-characterization.md), and the baselines are in R12 and R14b.
 
 **Source**: the static characterization report `/home/dontpanic/work/snap-characterization.md` (written 2026-10-08
 against `origin/staging`). This file copies the matrices and verdicts that the spec, plan and tasks depend on, so the
@@ -825,6 +825,34 @@ The report covered only the controller. The structure below comes from a top-lev
 (`grep` of `def`/`case class` spans) and is enough to set slice boundaries. Before the first coordinator slice, T060
 builds the same var × method matrix for each coordinator and either confirms these boundaries or moves them.
 
+**[016] T060 result** (`staging@7d2edf157`; full matrices, Command × behaviour tables, storage-reference breakdown and
+tooling analysis in [coordinator-characterization.md](./coordinator-characterization.md)). The outline below is
+superseded where they differ. Measured sizes:
+
+| Coordinator | Lines | Mutable fields | `Command` cases | Behaviours | Storage refs |
+|---|---|---|---|---|---|
+| ByteCodeCoordinator | 870 | 20 | 15 | `active` | 10 |
+| AccountRangeCoordinator | 2,220 | 39 | 35 | `receive`, `finalizing` | 28 |
+| StorageRangeCoordinator | 2,806 | 56 | 19 | `active` → `handleCommand` | 88 |
+| TrieNodeHealingCoordinator | 2,900 | 49 | 24 (8 declared inside the Impl) | `activeBehavior` (821 lines) | 84 |
+
+The boundaries hold, with these amendments:
+- #1501's `skipPresent` check is an arm line of BCC's `active`, not a method;
+- #1533's off-actor pipeline goes to C-S4, and `writePrebuiltTrie` to C-S2;
+- SRC `handleTimeout` goes to C-S1;
+- ARC `maybeRequestPivotRefresh` goes to C-A1, and `drainActiveTasks` to C-A2;
+- TNHC `isNodeInStorage` goes to C-H5, and `readPathVerified*` to C-H3;
+- C-S4 reads no store, because proof verification is pure;
+- the Impl-nested message and helper types move to the companion before narrowing.
+
+Two user decisions are open:
+- **D-T060-1**: `StateIngest` has no member for the per-pivot `MptStorage` or the derived SNAP stores, which ARC, SRC
+  and TNHC take;
+- **D-T060-2**: `BytecodeRecoveryActor` and `StorageRecoveryActor` call the coordinators' `apply` with raw stores from
+  outside `snap/`.
+
+`verify.py` cannot verify the specified narrowing (`apply` + `ChildFactories` + call sites) without the T060b change.
+
 | Coordinator | Vars | Command cases | Largest units (staging lines) |
 |---|---|---|---|
 | AccountRangeCoordinator | 34 | 34 | `receive` L731–1097 (366); `finalizing` L1097–1189; `handleStoreAccountChunk` L1582–1691; `replayCarriedChunk` L1691–1764; task-file/contract I/O L1788–1914 |
@@ -1024,3 +1052,31 @@ M9/M10 move.
 A PR that adds a member to any of them states the new count and a justification line, and the routing doc's cap is
 updated in the same PR (FR-016 (c)).
 
+### R14b. [016] Coordinator module state interfaces (T060; input to FR-016 (c) for C-*)
+
+The same derivation as R14/R14a, with one difference. A coordinator's behaviour arms stay in its core (no C-* row moves
+an arm), so they count as "other code": a field a module shares with an arm is a State member. **State** = shared
+mutable fields + the module's own fields that rule (d) keeps in the core. **Api** = distinct `def`s of other modules or
+the core that the module calls. It is an upper bound by name match, like R14a; sibling modules of the same coordinator
+count. Constructor parameters and immutable `val`s are not in either count. A coordinator has no
+`SnapControllerEnv`, so the compiler will demand them unless a per-coordinator env exists (T060b item 5). Each C-* PR
+records the compiler-confirmed counts, which replace these. Members and field lists: coordinator-characterization.md
+§3.
+
+| Module | Lines | State | Api | Storage refs moved (genuine) | `StateIngest` members / other stores |
+|---|---|---|---|---|---|
+| C-B1 `ByteCodeDispatch` | 128 | 9 | 1 | 0 | — |
+| C-B1 `ByteCodeResponseHandling` | 192 | 7 | 9 | 3 (3) | `bytecode` |
+| C-A1 `AccountPeerDispatch` | 301 | 17 | 1 | 0 | — |
+| C-A2 `AccountTaskLifecycle` | 320 | 18 | 15 | 0 | — |
+| C-A3 `AccountTrieAssembly` | 171 | 12 | 3 | 5 (3) | `pathNodes`; `MptStorage` |
+| C-A4 `ContractWorkCarry` | 192 | 4 (about 15 with the task-file I/O vals) | 2 | 6 (1, + `storageDone`, uncounted) | `MptStorage`, `SnapStorageDoneStorage` |
+| C-S1 `StoragePeerDispatch` | 481 | 23 | 1 | 2 (0) | — |
+| C-S2 `StorageOrderedApply` | 359 | 11 | 7 | 16 (12) | `pathNodes`; `MptStorage`, `SnapSyncProgressStorage` |
+| C-S3 `StorageDoneMarkers` | 112 | 9 | 1 | 8 (8) | `flatSlots`; `SnapStorageDoneStorage` |
+| C-S4 `StorageResponseProcessing` (+ #1533 pipeline) | 476 | 19 | 14 | 3 (0) | — |
+| C-H1 `FrontierPersistence` | 133 | 9 | 0 | 11 (11) | `MptStorage`, `HealingFrontierStorage` |
+| C-H2 `FrontierRebuildBfs` | 437 | 2 | 2 | 10 (4) | `MptStorage`, `HealingFrontierStorage`, `BfsQueueStorage` |
+| C-H3 `HealVerification` | 122 | 11 | 2 | 4 (4) | `pathNodes`; `HealingFrontierStorage` |
+| C-H4 `HealDispatch` | 241 | 18 | 1 | 0 | — |
+| C-H5 `HealResponseProcessing` | 440 | 23 | 11 | 12 (7) | `bytecode` (`Option`), `pathNodes`; `MptStorage`, `HealingFrontierStorage` |
