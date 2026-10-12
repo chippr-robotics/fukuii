@@ -32,6 +32,7 @@ Platform, language, runtime, and build system decisions.
 - [INF-002: Actor System Architecture - Untyped vs Typed Actors](infrastructure/INF-002-actor-system-architecture.md) - Accepted
 - [INF-003: Apache HttpClient Transport for JupnP UPnP Port Forwarding](infrastructure/INF-003-jupnp-apache-httpclient-transport.md) - Accepted
 - [INF-004: Actor IO Error Handling Pattern with Cats Effect](infrastructure/INF-004-actor-io-error-handling.md) - Accepted
+- [INF-006: SNAP State-Ingest Capability and the Exporter Durability Boundary](infrastructure/INF-006-snap-state-ingest-capability.md) - Proposed
 
 [View all Infrastructure ADRs →](infrastructure/README.md)
 

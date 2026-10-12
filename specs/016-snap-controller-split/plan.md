@@ -686,6 +686,11 @@ The capability boundary and the exporter durability property are an architectura
 records them in a new ADR under `docs/adr/infrastructure/` (next free INF number; this is storage and durability, not a
 consensus rule), linked from this plan, in the T055 PR.
 
+Recorded: [ADR INF-006](../../docs/adr/infrastructure/INF-006-snap-state-ingest-capability.md) (T055): the capability
+boundary, the chain-data decision (no header/chain sub-interface for now), the durability policy, and the FR-044
+finding (today the completion flags' synced commit is the only sync; no separate barrier exists on either scheme, and
+adding one is held for forge/vault sign-off and a user decision).
+
 ### Constitution Check (amendment)
 
 - **I (consensus).** No consensus rule changes. Durability affects crash safety of state that execution reads, so
