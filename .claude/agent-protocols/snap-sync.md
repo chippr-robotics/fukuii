@@ -45,6 +45,35 @@ unless stated.
   so a move out of the core is a per-file trade); per-file counts may move between files. Calls on `StateIngest` are not
   storage references. A PR that lowers a count records it in the baseline in the same PR. The coordinator stage pays
   the table down. T055 runs under the T054b verify mode.
+- **Capability mode (T054b).** A behaviour-neutral PR that introduces a capability and moves call sites onto it (T055,
+  `StateIngest`) is neither a move nor a narrowing. It is selected by the commit trailer `# capability: <Trait>`, on a
+  `refactor/snap-016-*` branch only. Once one commit of a PR carries it, every commit that touches a `src/main` file
+  under `snap/` must carry it, and no commit may be a move (`# moved:`) or a narrowing. A PR that removes a pinned
+  `SnapControllerEnv` storage handle must be a capability PR. In a capability commit:
+  - the capability file is the one file under `snap/controller` or `snap/actors` that declares `trait <Trait>` at the
+    top level; the accessor is the trait name in lower camel case (`stateIngest`);
+  - the file declares the call-site map in comment lines, `// capability-map: <handle>[.<member>...] -> <member>`. The
+    handle is a pinned env storage member or a name the ratchet counts as a storage reference; the member is declared
+    in the trait. The production implementation lives in the same file, and each mapped member is a pure forwarder:
+    its body is the left side applied to its own parameters in order, with no default parameters. A mapped handle is
+    only wired in (constructor parameter or abstract member), never defined in the file;
+  - every change to another `.scala` file under `snap/` is checked at token level over the whole file: only mapped
+    substitutions (`<handle>[.<member>]` becomes `<accessor>.<member>`), comment and whitespace changes, and named
+    (not wildcard or `given`) imports. Statement lines keep their position and indentation; an argument list may be
+    re-wrapped, and a single-expression body may join its `=` line. Interpolated `${...}` code is checked like other
+    code;
+  - `SnapControllerEnv` may only lose pinned storage handles and gain the accessor, declared `: <Trait>`. The core
+    `SNAPSyncController.scala` may add one accessor declaration whose initializer is a single constructor call over
+    handles, literals and types the capability file declares. A module's `<X>State` may drop a storage-typed abstract
+    member. No other file may be added or deleted, and no `src/main` file outside `snap/` may change;
+  - `ChildFactories` signatures do not change: spawn sites pass `stateIngest.<handle>` to the existing handle parameters.
+    (`ChildFactoriesSpec`, a protected pin, compares each method's default positions with the child's `apply`.)
+  Rule (a), rule (d), `[counts]`, the test-hunk guard, pin and golden protection and step 8 still apply. In step 8, the
+  capability has a `capabilities` row in `storage-baseline.json` (file, member count, raw imports), recorded in the PR
+  that introduces it. The member count only goes down unless a justification line is added. The raw-import list is
+  fixed at introduction and only shrinks. The capability file is not a `storage_refs` row. Elsewhere,
+  `<accessor>.<call>` is not a storage reference, while `<accessor>.<handle>` (a parameterless storage-typed member)
+  counts once. In a capability PR, removed env handles must also leave `env.storage_members`.
 - **No sbt on the soak host.** CI is the compiler.
 - **Module form (ADR CON-013).** Every module is a trait whose self-type is
   `<Module>State & <capabilities> & <Callee>Api…`. A module file never mentions `SNAPSyncControllerImpl` or a
@@ -116,7 +145,7 @@ causes it.
 | `CoordinatorHandles` | **12**: the 4 coordinator refs, `chainDownloader` (`ChainDownloaderHandle`), `def intakeBudget`, `stopChild`, `stopAll`, `broadcastPeerUnavailable`, `pivotRefreshed`, `reArmRangeCoordinators`, `forwardResponse`. Two more than the 10 the plan enumerated: `stopChild` (abstract, the core's `ctx.stop`; the trait cannot reach `ctx`, and `stopAll`/`ChainDownloaderHandle.stop` need it) and `reArmRangeCoordinators` (the two account + storage re-arm sites are a different fan-out from the four-way `pivotRefreshed`) | P1 |
 | `PhaseFlags` | **10**: the 9 flags of FR-011 + `reset(kind)`. Recorded at P2: 10 (`verify.sh` `[counts] PhaseFlags=10`), equal to the cap. The `ResetKind` enum lives in `object PhaseFlags` and is not a member. `cancelSyncTimers` stays in the core (it needs `timers`) and is not a member | P2 |
 | `SnapControllerEnv` | **18, frozen as a down-only ratchet (T054); target about 11 after T055**, when the 8 storage handles (`appStateStorage`, `stateStorage`, `evmCodeStorage`, `flatSlotStorage`, `validatorFactory`, `blockchainReader`, `blockchainWriter`, `pathNodeStorageOpt`) move to `StateIngest` and `stateIngest` joins (amendment 2026-10-11). Members today: `ctx`, `timers`, `snapSyncConfig`, `syncConfig`, `asyncLog`, `appStateStorage`, `stateStorage`, `evmCodeStorage`, `flatSlotStorage`, `validatorFactory`, `snapValidationEc`, `networkPeerManager`, `blockchainReader`, `blockchainWriter`, `peerEventBus`, `syncController`, `childFactories`, `pathNodeStorageOpt`. Recorded at M2: 11; M3: 13 (`networkPeerManager`, `blockchainReader`: constructor parameters the peer pool's bodies reach, `pollHandshakedPeers` / `ensureSnapServerPeersConnected` and `calibratePivotTD`; the peer manager is also every child spawn's, so it is environment, not peer-pool state); M4: 18 (`blockchainWriter`, `peerEventBus`, `syncController`, `childFactories`: constructor parameters the finalization bodies reach, injected collaborators that the pivot, healing and spawn paths use too; `pathNodeStorageOpt`: the first derived store a module needs, a strict core val, also read by the healing, resume and account/storage spawns). M5: 18, unchanged (the resume planner's `storageDoneStorage` and `scheduler` went to `SnapResumePlannerState` instead, CQ-SNAP-016-16). M6b: 18, unchanged (healing's `isPoSChain` and `ec` went to `HealingOrchestratorState`). Metrics are not members (`SNAPSyncMetrics` is a global object); the other derived stores are added by the first module that needs them, with a justification line | T041a (M2), M3, M4 |
-| `StateIngest` | **set at T055** (amendment 2026-10-11): the 8 storage handles above, the Path-scheme batched storage-trie node-write path (`flushTrieNodeWrites`, from #1548) and the durability policy, as the method surface T055 derives from the modules' real uses; the cap is that count, and it grows only with a justification line. Includes the verification reads. T055 decides whether `blockchainReader`/`blockchainWriter` move to a header/chain sub-interface (ADR). No EVM execution member: that is `StateAccess` (spec 017), which no SNAP file may name. The exporter durability property (FR-044) is documented on the trait | T055 |
+| `StateIngest` | **set at T055** (amendment 2026-10-11; recorded mechanically as `capabilities["StateIngest"].members` in `storage-baseline.json`, T054b): the 8 storage handles above, the Path-scheme batched storage-trie node-write path (`flushTrieNodeWrites`, from #1548) and the durability policy, as the method surface T055 derives from the modules' real uses; the cap is that count, and it grows only with a justification line. Includes the verification reads. T055 decides whether `blockchainReader`/`blockchainWriter` move to a header/chain sub-interface (ADR). No EVM execution member: that is `StateAccess` (spec 017), which no SNAP file may name. The exporter durability property (FR-044) is documented on the trait | T055 |
 
 ## Pin tests (S0a/S0b): never edited by a move PR
 

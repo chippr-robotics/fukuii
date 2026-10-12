@@ -983,11 +983,15 @@ class StorageRatchetTests(unittest.TestCase):
         out = self.bad(f, "env-freeze")
         self.assertIn("`syncConfig", out)
 
-    def test_removing_a_pinned_member_with_lowered_baseline_passes(self):
+    def test_removing_a_pinned_member_outside_a_capability_pr_fails(self):
+        # T054b changed this on purpose: it passed before (with a WARN). Removing a pinned storage handle from the env is
+        # what a capability PR does; outside one, its call sites would move with no substitution check.
         f = ratchet_fixture()
         self.env_change(f, ENV_BASE.replace("  def stateStorage: StateStorage\n", ""), env_members=4,
                         refs={"controller/SnapControllerEnv.scala": ENV_REFS - 2, "actors/FooCoordinator.scala": COORD_REFS})
-        out = self.ok(f)
+        out = self.bad(f, "capability")
+        self.assertIn("removes pinned storage handle `stateStorage`", out)
+        self.assertNotIn("[env-freeze]", out)
         self.assertIn("WARN pinned env member `stateStorage` is no longer storage-typed", out)
 
     def test_removing_a_member_without_lowering_the_baseline_fails(self):
@@ -1291,6 +1295,490 @@ class StorageRatchetTests(unittest.TestCase):
         self.assertEqual(sorted(b["env"]["storage_members"]), sorted([
             "appStateStorage", "stateStorage", "evmCodeStorage", "flatSlotStorage", "pathNodeStorageOpt",
             "blockchainReader", "blockchainWriter", "validatorFactory"]))
+
+
+# ---- capability mode (spec 016 T054b): a behaviour-neutral PR that introduces a capability and moves call sites onto it
+
+import importlib.util as _ilu
+
+_V_MOD = None
+
+
+def V():
+    global _V_MOD
+    if _V_MOD is None:
+        spec = _ilu.spec_from_file_location("snap_verify", Path(__file__).resolve().parents[1] / "verify.py")
+        _V_MOD = _ilu.module_from_spec(spec)
+        spec.loader.exec_module(_V_MOD)
+    return _V_MOD
+
+
+CAP = f"{CTRL}/StateIngest.scala"
+FIN = f"{CTRL}/SnapFinalization.scala"
+CAP_MSG = "refactor(snap): StateIngest (#1401)\n\n# capability: StateIngest\n"
+PINNED = ("appStateStorage", "blockchainReader", "validatorFactory", "doneStorage")
+
+ENV_CAP_BASE = """package x.controller
+
+private[snap] trait SnapControllerEnv:
+
+  val ctx: Ctx
+  def syncConfig: SyncConfig
+
+  /** App state (a comment). */
+  def appStateStorage: AppStateStorage
+  def blockchainReader: BlockchainReader
+  def validatorFactory: MptStorage => StateValidator
+"""
+
+ENV_CAP_AFTER = """package x.controller
+
+private[snap] trait SnapControllerEnv:
+
+  val ctx: Ctx
+  def syncConfig: SyncConfig
+
+  /** SNAP's storage capability (spec 016 T055). */
+  def stateIngest: StateIngest
+"""
+
+FIN_BASE = """package x.controller
+
+import x.db.storage.SnapStorageDoneStorage
+
+private[snap] trait SnapFinalizationState:
+  def pivot: BigInt
+  def doneStorage: SnapStorageDoneStorage
+
+private[snap] trait SnapFinalization:
+  self: SnapFinalizationState & SnapControllerEnv =>
+
+  def finish(b: BigInt): Unit =
+    appStateStorage.putSnapSyncPivotBlock(b).commit()
+    val header = blockchainReader.getBlockHeaderByNumber(b)
+    appStateStorage
+      .putBestBlockNumber(b)
+      .and(appStateStorage.putSnapSyncStateRoot(header.root))
+      .commit()
+    doneStorage.markDone(b)
+    log.info(s"pivot ${appStateStorage.getSnapSyncPivotBlock()} done")
+
+  def maybe(b: BigInt, on: Boolean): Unit =
+    if on then
+      appStateStorage.putSnapSyncPivotBlock(b).commit()
+    log.info("done")
+
+  def validate(s: MptStorage) =
+    val v = validatorFactory(s)
+    v.run()
+"""
+
+# the T055 shape: every handle use becomes a StateIngest call (method forwards, handle forwards, a multi-line chain, an
+# interpolation), the State trait loses its storage handle, an import goes
+FIN_AFTER = """package x.controller
+
+private[snap] trait SnapFinalizationState:
+  def pivot: BigInt
+
+private[snap] trait SnapFinalization:
+  self: SnapFinalizationState & SnapControllerEnv =>
+
+  def finish(b: BigInt): Unit =
+    stateIngest.putPivotBlock(b).commit()
+    val header = stateIngest.headerByNumber(b)
+    stateIngest.appStateStorage
+      .putBestBlockNumber(b)
+      .and(stateIngest.appStateStorage.putSnapSyncStateRoot(header.root))
+      .commit()
+    stateIngest.markDone(b)
+    log.info(s"pivot ${stateIngest.pivotBlock()} done")
+
+  def maybe(b: BigInt, on: Boolean): Unit =
+    if on then
+      stateIngest.putPivotBlock(b).commit()
+    log.info("done")
+
+  def validate(s: MptStorage) =
+    val v = stateIngest.validatorFactory(s)
+    v.run()
+"""
+
+CAP_FILE = """package x.controller
+
+import x.db.dataSource.DataSourceBatchUpdate
+
+/** SNAP's storage capability (spec 016 T055). The call-site map, checked by scripts/snap-split/verify.py (T054b):
+  *
+  * capability-map: appStateStorage.putSnapSyncPivotBlock -> putPivotBlock
+  * capability-map: appStateStorage.getSnapSyncPivotBlock -> pivotBlock
+  * capability-map: appStateStorage -> appStateStorage
+  * capability-map: blockchainReader.getBlockHeaderByNumber -> headerByNumber
+  * capability-map: validatorFactory -> validatorFactory
+  * capability-map: doneStorage.markDone -> markDone
+  */
+private[snap] trait StateIngest:
+  def appStateStorage: AppStateStorage
+  def putPivotBlock(b: BigInt): DataSourceBatchUpdate
+  def pivotBlock(): Option[BigInt]
+  def headerByNumber(n: BigInt): Option[BlockHeader]
+  def validatorFactory: MptStorage => StateValidator
+  def markDone(b: BigInt): Unit
+
+private[snap] object StateIngest:
+
+  def apply(
+      appStateStorage: AppStateStorage,
+      blockchainReader: BlockchainReader,
+      validatorFactory: MptStorage => StateValidator,
+      doneStorage: SnapStorageDoneStorage
+  ): StateIngest = new Production(appStateStorage, blockchainReader, validatorFactory, doneStorage)
+
+  private final class Production(
+      val appStateStorage: AppStateStorage,
+      blockchainReader: BlockchainReader,
+      val validatorFactory: MptStorage => StateValidator,
+      doneStorage: SnapStorageDoneStorage
+  ) extends StateIngest:
+    def putPivotBlock(b: BigInt): DataSourceBatchUpdate = appStateStorage.putSnapSyncPivotBlock(b)
+    def pivotBlock(): Option[BigInt] = appStateStorage.getSnapSyncPivotBlock()
+    def headerByNumber(n: BigInt): Option[BlockHeader] =
+      blockchainReader.getBlockHeaderByNumber(n)
+    def markDone(b: BigInt): Unit = doneStorage.markDone(b)
+"""
+CAP_RAW = ["x.db.dataSource.DataSourceBatchUpdate"]
+
+CORE_CAP_BASE = """package x
+
+class SNAPSyncControllerImpl(
+    val appStateStorage: AppStateStorage,
+    val blockchainReader: BlockchainReader,
+    val validatorFactory: MptStorage => StateValidator,
+    val doneStorage: SnapStorageDoneStorage
+) extends SnapControllerEnv
+    with SnapFinalization:
+  var shared = 1
+
+  def other(): Int = appStateStorage.getBestBlockNumber()
+"""
+
+CORE_CAP_AFTER = CORE_CAP_BASE.replace(
+    "  var shared = 1\n",
+    "  var shared = 1\n\n  // Implements SnapControllerEnv.stateIngest (spec 016 T055).\n"
+    "  val stateIngest: StateIngest =\n    StateIngest(appStateStorage, blockchainReader, validatorFactory, doneStorage)\n")
+
+
+def measure(files, caps=None):
+    """storage_refs for a fixture's measured files (keys relative to snap/), as the verifier counts them."""
+    caps = caps or {}
+    ex = [V().cap_exemption(n, files[k]) for k, n in caps.items()]
+    return {k: n for k, t in files.items() if k not in caps and (n := V().storage_ref_count(t, ex))}
+
+
+def cap_baseline(files, pinned=PINNED, env_members=5, caps=None, header=":", raw=None, just=None):
+    refs = measure(files, {e["file"]: n for n, e in (caps or {}).items()})
+    return json.dumps({
+        "env": {"members": env_members, "header": header, "storage_members": list(pinned)},
+        "storage_refs_total": sum(refs.values()),
+        "storage_refs": refs,
+        "raw_imports": raw or {},
+        "capabilities": caps or {},
+        "justifications": just or {},
+    }, indent=2) + "\n"
+
+
+def rel(path):
+    return path[len(SNAP) + 1:]
+
+
+BASE_FILES = {rel(ENV): ENV_CAP_BASE, rel(FIN): FIN_BASE, rel(CORE): CORE_CAP_BASE}
+
+
+def cap_fixture(branch="refactor/snap-016-state-ingest"):
+    return Fixture(branch=branch, core_base=CORE_CAP_BASE,
+                   extra={ENV: ENV_CAP_BASE, FIN: FIN_BASE, BASELINE: cap_baseline(BASE_FILES)})
+
+
+def cap_commit(f, fin=FIN_AFTER, env=ENV_CAP_AFTER, core=CORE_CAP_AFTER, cap=CAP_FILE, msg=CAP_MSG, members=6,
+               raw=CAP_RAW, pinned=(), env_members=3, with_baseline=True, extra=None):
+    for path, text in ((FIN, fin), (ENV, env), (CORE, core), (CAP, cap), *((extra or {}).items())):
+        if text is not None:
+            f.write(path, text)
+    if with_baseline:
+        files = {rel(ENV): env, rel(FIN): fin, rel(CORE): core, rel(CAP): cap,
+                 **{rel(k): v for k, v in (extra or {}).items() if k.startswith(SNAP)}}
+        f.write(BASELINE, cap_baseline(files, pinned=pinned, env_members=env_members,
+                                       caps={"StateIngest": {"file": rel(CAP), "members": members, "raw_imports": list(raw)}}))
+    f.commit(msg)
+
+
+class CapabilityModeTests(unittest.TestCase):
+    ok = VerifyTests.ok
+    bad = VerifyTests.bad
+
+    # ---- positive: the T055 shape
+    def test_t055_shaped_substitution_passes(self):
+        f = cap_fixture()
+        cap_commit(f)
+        out = self.ok(f)
+        self.assertIn("[capability] StateIngest in " + CAP + ": accessor `stateIngest`, 6 map entries, 6 members", out)
+        self.assertIn(f"[capability] {FIN}: 8 substitution(s)", out)
+        self.assertIn(f"[capability] {CORE}: 0 substitution(s)", out)
+        self.assertIn("capability traits: SnapControllerEnv=3 StateIngest=6", out)
+        self.assertIn("[storage] capability StateIngest (controller/StateIngest.scala): members=6 (baseline 6, new)", out)
+        self.assertIn("[storage] SnapControllerEnv: members=3 (baseline 3)", out)
+        # hand count of SnapFinalization (STORAGE_REF_RE): before, `appStateStorage` x5, `.commit()` x3,
+        # `blockchainReader`, `doneStorage` x2 (State member, call), `SnapStorageDoneStorage` x2 (import, type),
+        # `MptStorage` = 14; after, `.commit()` x3, `stateIngest.appStateStorage` x2 and `stateIngest.validatorFactory`
+        # (storage-typed members: a raw handle reached through the capability still counts, once), `MptStorage` = 7.
+        # The StateIngest calls (putPivotBlock, headerByNumber, markDone, pivotBlock) are not storage references.
+        self.assertEqual(V().storage_ref_count(FIN_BASE), 14)
+        self.assertEqual(V().storage_ref_count(FIN_AFTER, [V().cap_exemption("StateIngest", CAP_FILE)]), 7)
+        self.assertIn("[storage] controller/SnapFinalization.scala: 7 (baseline 7)", out)
+        self.assertNotIn("[storage] controller/StateIngest.scala", out)  # the capability file is not a storage_refs row
+
+    def test_capability_call_on_a_storage_named_member_is_not_a_storage_reference(self):
+        cap = "trait StateIngest:\n  def putSnapSyncStorageComplete(b: Boolean): Unit\n  def flatSlotStorage: FlatSlotStorage\n"
+        ex = [V().cap_exemption("StateIngest", cap)]
+        self.assertEqual(V().storage_ref_count("stateIngest.putSnapSyncStorageComplete(true)", ex), 0)
+        self.assertEqual(V().storage_ref_count("stateIngest\n  .putSnapSyncStorageComplete(true)", ex), 0)
+        self.assertEqual(V().storage_ref_count("other.putSnapSyncStorageComplete(true)", ex), 1)  # keyed on the accessor
+        self.assertEqual(V().storage_ref_count("stateIngest.flatSlotStorage.dataSource", ex), 2)  # storage-typed member
+        # a storage-typed member counts once whatever its name: renaming a raw handle does not hide it
+        cap2 = cap + "  def slotSource: DataSource\n"
+        self.assertEqual(V().storage_ref_count("stateIngest.slotSource.get(k)", [V().cap_exemption("StateIngest", cap2)]), 1)
+
+    def test_reformatted_chain_and_comment_edits_pass(self):
+        f = cap_fixture()
+        fin = FIN_AFTER.replace(
+            "    stateIngest.putPivotBlock(b).commit()\n    val header",
+            "    // now through the capability\n    stateIngest\n      .putPivotBlock(b)\n      .commit()\n    val header")
+        cap_commit(f, fin=fin)
+        self.ok(f)
+
+    # ---- negatives: disguised logic changes
+    def neg(self, fin, check="capability", **kw):
+        f = cap_fixture()
+        cap_commit(f, fin=fin, **kw)
+        return self.bad(f, check)
+
+    def test_changed_argument_fails(self):
+        out = self.neg(FIN_AFTER.replace("stateIngest.headerByNumber(b)", "stateIngest.headerByNumber(b + 1)"))
+        self.assertIn("not a mapped handle substitution", out)
+
+    def test_extra_statement_fails(self):
+        out = self.neg(FIN_AFTER.replace("    stateIngest.markDone(b)\n", "    stateIngest.markDone(b)\n    stateIngest.markDone(b)\n"))
+        self.assertIn("SnapFinalization.scala: change is not a mapped handle substitution", out)
+
+    def test_reordered_call_fails(self):
+        out = self.neg(FIN_AFTER.replace(
+            "    stateIngest.putPivotBlock(b).commit()\n    val header = stateIngest.headerByNumber(b)\n",
+            "    val header = stateIngest.headerByNumber(b)\n    stateIngest.putPivotBlock(b).commit()\n"))
+        self.assertIn("not a mapped handle substitution", out)
+
+    def test_statement_moved_into_a_block_fails(self):
+        out = self.neg(FIN_AFTER.replace('    log.info("done")', '      log.info("done")'))
+        self.assertIn("statement indentation changed (4 -> 6)", out)
+
+    def test_statements_merged_onto_one_line_fails(self):
+        out = self.neg(FIN_AFTER.replace("      .commit()\n    stateIngest.markDone(b)", "      .commit(); stateIngest.markDone(b)"))
+        self.assertIn("SnapFinalization.scala: change is not a mapped handle substitution", out)
+
+    def test_new_storage_reference_fails(self):
+        out = self.neg(FIN_AFTER.replace("header.root", "appStateStorage.getSnapSyncStateRoot()"))
+        self.assertIn("not a mapped handle substitution", out)
+
+    def test_kept_handle_where_the_map_is_new_code_fails(self):
+        # an unmapped storage call is not a substitution, even of a handle the capability exposes
+        out = self.neg(FIN_AFTER.replace("stateIngest.markDone(b)", "stateIngest.appStateStorage.markDone(b)"))
+        self.assertIn("not a mapped handle substitution", out)
+
+    def test_handle_replaced_by_the_wrong_member_fails(self):
+        out = self.neg(FIN_AFTER.replace("stateIngest.putPivotBlock(b).commit()\n    val header",
+                                         "stateIngest.pivotBlock(b).commit()\n    val header"))
+        self.assertIn("not a mapped handle substitution", out)
+
+    def test_forwarder_that_calls_another_operation_fails(self):
+        cap = CAP_FILE.replace("= appStateStorage.putSnapSyncPivotBlock(b)", "= appStateStorage.putSnapSyncStateRoot(b)")
+        out = self.neg(FIN_AFTER, cap=cap)
+        self.assertIn("forwarder `putPivotBlock` is not a pure forwarder of `appStateStorage.putSnapSyncPivotBlock`", out)
+
+    def test_forwarder_with_reordered_or_extra_work_fails(self):
+        for body in ("= { appStateStorage.flush(); appStateStorage.putSnapSyncPivotBlock(b) }",
+                     "= appStateStorage.putSnapSyncPivotBlock(b + 1)"):
+            cap = CAP_FILE.replace("= appStateStorage.putSnapSyncPivotBlock(b)", body)
+            out = self.neg(FIN_AFTER, cap=cap)
+            self.assertIn("is not a pure forwarder", out)
+
+    def test_mapped_member_with_a_default_parameter_fails(self):
+        cap = CAP_FILE.replace("  def markDone(b: BigInt): Unit\n", "  def markDone(b: BigInt = 0): Unit\n", 1)
+        out = self.neg(FIN_AFTER, cap=cap)
+        self.assertIn("mapped member `markDone` declares a default parameter", out)
+
+    def test_mapped_method_without_a_forwarder_fails(self):
+        cap = CAP_FILE.replace("    def markDone(b: BigInt): Unit = doneStorage.markDone(b)\n", "")
+        out = self.neg(FIN_AFTER, cap=cap)
+        self.assertIn("mapped member `markDone` (`doneStorage.markDone`) has no forwarder body", out)
+
+    def test_capability_file_redefining_a_handle_fails(self):
+        cap = CAP_FILE.replace("    def markDone(b: BigInt)", "    private def blockchainReader = OtherReader\n    def markDone(b: BigInt)")
+        out = self.neg(FIN_AFTER, cap=cap)
+        self.assertIn("defines handle `blockchainReader` with a body", out)
+
+    def test_map_root_that_is_not_a_storage_handle_fails(self):
+        cap = CAP_FILE.replace("  */\n", "  * capability-map: ctx.log -> log\n  */\n", 1).replace(
+            "  def markDone(b: BigInt): Unit\n", "  def markDone(b: BigInt): Unit\n  def log: Logger\n", 1)
+        out = self.neg(FIN_AFTER, cap=cap, members=7)
+        self.assertIn("`ctx` is not a storage handle", out)
+
+    def test_wrong_import_kinds_fail(self):
+        out = self.neg(FIN_AFTER.replace("package x.controller\n", "package x.controller\n\nimport x.Conversions.given\n", 1))
+        self.assertIn("adds wildcard or given import", out)
+
+    # ---- the wiring files
+    def test_env_may_only_lose_pinned_handles_and_gain_the_accessor(self):
+        out = self.neg(FIN_AFTER, env=ENV_CAP_AFTER + "  def extra: Int\n", env_members=4)
+        self.assertIn("adds `extra`; a capability commit adds only the accessor `stateIngest`", out)
+        out = self.neg(FIN_AFTER, env=ENV_CAP_AFTER.replace("def stateIngest: StateIngest", "def stateIngest: Option[StateIngest]"))
+        self.assertIn("must be declared `: StateIngest`", out)
+        out = self.neg(FIN_AFTER, env=ENV_CAP_AFTER.replace("  def syncConfig: SyncConfig\n", ""), env_members=2)
+        self.assertIn("removes `syncConfig`, which is not a pinned storage member", out)
+
+    def test_core_accessor_may_only_wire_handles(self):
+        core = CORE_CAP_AFTER.replace("StateIngest(appStateStorage,", "StateIngest(new AppStateStorage(otherSource),")
+        out = self.neg(FIN_AFTER, core=core)
+        self.assertIn("passes `new`: each argument is a storage handle", out)
+        # a block that builds the capability and calls it is not a production default
+        core = CORE_CAP_AFTER.replace(
+            "StateIngest(appStateStorage, blockchainReader, validatorFactory, doneStorage)",
+            "StateIngest(appStateStorage, blockchainReader, validatorFactory, doneStorage).markDone(0)")
+        out = self.neg(FIN_AFTER, core=core)
+        self.assertIn("continues after the constructor call", out)
+
+    def test_core_logic_change_fails(self):
+        out = self.neg(FIN_AFTER, core=CORE_CAP_AFTER.replace("appStateStorage.getBestBlockNumber()", "0"))
+        self.assertIn(f"{CORE}: ", out)
+
+    def test_other_src_main_change_fails(self):
+        out = self.neg(FIN_AFTER, extra={"src/main/scala/x/db/storage/AppStateStorage.scala": "package x\nclass AppStateStorage\n"})
+        self.assertIn("outside snap/: a capability commit changes no storage or other code", out)
+
+    def test_second_new_module_file_fails(self):
+        out = self.neg(FIN_AFTER, extra={f"{CTRL}/Helper.scala": "package x.controller\nobject Helper\n"})
+        self.assertIn(f"adds {CTRL}/Helper.scala: a capability commit adds only the capability file", out)
+
+    # ---- selection: the trailer cannot disguise a move or a narrowing, nor hide beside a plain commit
+    def test_capability_and_moved_trailers_together_fail(self):
+        out = self.neg(FIN_AFTER, msg=CAP_MSG + "# moved: finish\n")
+        self.assertIn("`# capability:` and `# moved:` on one commit", out)
+
+    def test_move_commit_in_a_capability_pr_fails(self):
+        f = cap_fixture()
+        cap_commit(f)
+        move_commit(f, partial=True)
+        out = self.bad(f, "capability")
+        self.assertIn("in a capability PR without a `# capability:` trailer", out)
+
+    def test_plain_commit_beside_the_capability_commit_fails(self):
+        f = cap_fixture()
+        cap_commit(f)
+        f.write(FIN, FIN_AFTER.replace("v.run()", "v.run(); v.run()"))
+        f.commit("refactor(snap): tidy (#1401)")
+        out = self.bad(f, "capability")
+        self.assertIn("in a capability PR without a `# capability:` trailer", out)
+
+    def test_trailer_on_test_fix_and_other_branches_fails(self):
+        for branch in ("test/snap-016-state-ingest", "fix/state-ingest", "feat/state-ingest"):
+            f = cap_fixture(branch=branch)
+            cap_commit(f, msg=CAP_MSG + "# test-files: none\n")
+            out = self.bad(f, "capability")
+            self.assertIn("a capability PR is a refactor/snap-016-* branch", out)
+
+    def test_two_capabilities_or_a_bad_name_fail(self):
+        out = self.neg(FIN_AFTER, msg=CAP_MSG + "# capability: StateAccess\n")
+        self.assertIn("one capability per PR", out)
+        out = self.neg(FIN_AFTER, msg="refactor(snap): x\n\n# capability: stateIngest\n")
+        self.assertIn("takes one trait name", out)
+
+    # ---- step 8 in a capability PR
+    def test_capability_needs_its_baseline_entry(self):
+        f = cap_fixture()
+        cap_commit(f, with_baseline=False)
+        out = self.bad(f, "capability")
+        self.assertIn("has no `capabilities[\"StateIngest\"]` entry", out)
+
+    def test_capability_member_count_is_exact(self):
+        out = self.neg(FIN_AFTER, check="capability", members=5)
+        self.assertIn("StateIngest member count: measured 6", out)
+
+    def test_stale_pinned_member_in_a_capability_pr_fails(self):
+        out = self.neg(FIN_AFTER, check="env-freeze", pinned=PINNED)
+        self.assertIn("capability PR removes pinned env member `appStateStorage`", out)
+
+    def test_capability_raw_imports_are_measured(self):
+        # a DataSource-returning member needs a raw import, which the capability's own list must name
+        cap = CAP_FILE.replace("import x.db.dataSource.DataSourceBatchUpdate\n",
+                               "import x.db.dataSource.DataSourceBatchUpdate\nimport x.db.dataSource.DataSource\n").replace(
+            "  def markDone(b: BigInt): Unit\n", "  def markDone(b: BigInt): Unit\n  def rawSource: DataSource\n", 1)
+        out = self.neg(FIN_AFTER, check="raw-import", cap=cap, members=7)
+        self.assertIn("raw storage import `x.db.dataSource.DataSource` in capability StateIngest", out)
+
+    def test_capability_added_outside_a_capability_pr_fails(self):
+        f = cap_fixture()
+        f.write(CAP, CAP_FILE)
+        files = {**BASE_FILES, rel(CAP): CAP_FILE}
+        f.write(BASELINE, cap_baseline(files, caps={"StateIngest": {"file": rel(CAP), "members": 6, "raw_imports": CAP_RAW}}))
+        f.commit("refactor(snap): add StateIngest (#1401)")
+        out = self.bad(f, "capability")
+        self.assertIn("adds capability `StateIngest` outside a `# capability: StateIngest` PR", out)
+
+    def test_later_pr_keeps_the_capability_entry_and_its_caps(self):
+        # once StateIngest is on staging, its member cap and raw-import list only shrink, like the env's
+        f = cap_fixture()
+        cap_commit(f)
+        f.git("tag", "-f", "base")
+        cap2 = CAP_FILE.replace("  def markDone(b: BigInt): Unit\n", "  def markDone(b: BigInt): Unit\n  def extra(): Unit\n", 1)
+        f.write(CAP, cap2)
+        files = {rel(ENV): ENV_CAP_AFTER, rel(FIN): FIN_AFTER, rel(CORE): CORE_CAP_AFTER, rel(CAP): cap2}
+        f.write(BASELINE, cap_baseline(files, pinned=(), env_members=3,
+                                       caps={"StateIngest": {"file": rel(CAP), "members": 7, "raw_imports": CAP_RAW}}))
+        f.commit("feat: grow StateIngest")
+        out = self.bad(f, "capability")
+        self.assertIn("StateIngest has 7 members, above the ceiling 6", out)
+
+
+class SubstitutionUnitTests(unittest.TestCase):
+    """The token-level substitution check of the capability mode, without git (T054b)."""
+
+    class Cap:
+        maps = {("appStateStorage", ".", "get"): ("stateIngest", ".", "get"),
+                ("appStateStorage",): ("stateIngest", ".", "appStateStorage")}
+
+    def check(self, old, new):
+        return V().substitution_check("F.scala", old, new, self.Cap)[0]
+
+    def test_single_expression_body_may_join_its_equals_line(self):
+        self.assertEqual(self.check("  def f =\n    val x =\n      appStateStorage.get()\n    x\n",
+                                    "  def f =\n    val x = stateIngest.get()\n    x\n"), [])
+
+    def test_two_statement_body_may_not_join_its_equals_line(self):
+        probs = self.check("  def f =\n    val x =\n      appStateStorage.get()\n      b()\n    x\n",
+                           "  def f =\n    val x = stateIngest.get()\n      b()\n    x\n")
+        self.assertIn("a statement starts a line on one side only", probs[0])
+
+    def test_argument_lists_may_be_rewrapped(self):
+        self.assertEqual(self.check("  foo(\n    a,\n    appStateStorage.get()\n  )\n", "  foo(a, stateIngest.get())\n"), [])
+
+    def test_interpolations_are_code(self):
+        self.assertEqual(self.check('  log(s"x ${appStateStorage.get()} $y")\n', '  log(s"x ${stateIngest.get()} $y")\n'), [])
+        self.assertTrue(self.check('  log(s"x ${appStateStorage.get()} $y")\n', '  log(s"x ${stateIngest.get()} $z")\n'))
+        self.assertTrue(self.check('  log("appStateStorage.get()")\n', '  log("stateIngest.get()")\n'))  # a plain string is data
+
+    def test_only_a_bare_handle_is_substituted(self):
+        self.assertTrue(self.check("  other.appStateStorage.get()\n", "  other.stateIngest.get()\n"))
+        self.assertEqual(self.check("  f(appStateStorage = appStateStorage)\n", "  f(appStateStorage = stateIngest.appStateStorage)\n"), [])
+
+    def test_keeping_a_handle_is_allowed_and_a_comment_or_import_change_is_ignored(self):
+        self.assertEqual(self.check("import a.B\n  appStateStorage.get() // x\n", "import a.C\n  // y\n  appStateStorage.get()\n"), [])
 
 
 if __name__ == "__main__":

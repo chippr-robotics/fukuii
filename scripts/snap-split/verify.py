@@ -20,7 +20,16 @@ Implements plan.md "Move verification" steps 1-7 and FR-016 (a), (c), (d), per c
      [storage-refs] storage-reference total over snap/controller, snap/actors and the controller core
                     (SNAPSyncController.scala, the split's move source) only goes down (files may trade)
      [raw-import]   no new raw RocksDB / DataSource / WriteBatch import in those files
+     [capability]   each capability trait (T054b) has a `capabilities` row: its file, member count (down only, growth needs
+                    a justification) and raw imports (fixed at introduction, down only); its file is not a storage_refs row,
+                    and `<accessor>.<call>` is not a storage reference elsewhere
      See `Ratchet` for the exact predicates and the baseline-file rules.
+
+Capability mode (T054b, see "capability mode" below): a commit with `# capability: <Trait>` on refactor/snap-016-* introduces
+a capability trait and moves call sites onto it. Steps 1, 2 and 6 are replaced by a token-level substitution check (every
+change in a snap/ src/main file replaces a storage handle with the matching capability member, per the map declared in
+the capability file, whose forwarders must be pure); every other check still applies. A PR with the trailer on one commit
+needs it on every commit that touches snap/ code, and may contain no move or narrowing.
 
 fix/* and hotfix/* branches (not containing `snap-016`) may edit existing module files. They are never moves:
 `# moved:`, a narrowing, an added or deleted module file, and (without a `# fix:` trailer) a large net deletion are
@@ -381,7 +390,8 @@ def self_type_names(text: str, trait: str) -> list[str]:
     return names
 
 
-def counts_report(g: Git, c: str) -> list[str]:
+def counts_report(g: Git, c: str, extra_caps=()) -> list[str]:
+    caps_all = CAPABILITY_TRAITS + tuple(n for n in sorted(extra_caps) if n not in CAPABILITY_TRAITS)
     files = g.tree_files(c, MODULE_DIRS)
     texts = {f: g.show(c, f) or "" for f in files}
     members: dict[str, int] = {}
@@ -390,7 +400,7 @@ def counts_report(g: Git, c: str) -> list[str]:
     out = []
     for f, t in sorted(texts.items()):
         for tr in trait_members(t):
-            if tr.endswith(("State", "Api")) or tr in CAPABILITY_TRAITS:
+            if tr.endswith(("State", "Api")) or tr in caps_all:
                 continue
             names = self_type_names(t, tr)
             states = [n for n in names if n.endswith("State") and n != "SnapSharedState"]
@@ -400,7 +410,7 @@ def counts_report(g: Git, c: str) -> list[str]:
             out.append(
                 f"[counts] {tr}: State={'+'.join(states) or '-'}({st}) Api={'+'.join(apis) or '-'}({api})"
             )
-    caps = " ".join(f"{n}={members[n]}" for n in CAPABILITY_TRAITS if n in members)
+    caps = " ".join(f"{n}={members[n]}" for n in caps_all if n in members)
     if caps:
         out.append(f"[counts] capability traits: {caps}")
     return out
@@ -529,6 +539,8 @@ class Verifier:
     def __init__(self, g: Git, branch: str, compile_cmd: str | None):
         self.g, self.branch, self.compile_cmd = g, branch, compile_cmd
         self.errors: list[str] = []
+        self.cap_names: set[str] = set()  # capability traits named by `# capability:` trailers in the range (T054b)
+        self.pinned: set[str] = set()     # SnapControllerEnv storage members pinned at the merge-base (T054b map roots)
         self.kind = (
             "refactor" if re.match(r"^refactor/snap-016-", branch)
             else "test" if re.match(r"^test/snap-016-", branch)
@@ -559,6 +571,26 @@ class Verifier:
             else:
                 out.append(t)
         return out
+
+    def prepare(self, base: str, commits: list[str]):
+        """PR-level facts for the capability mode (T054b): the pinned env storage handles at the merge-base, and the
+        capability named by the range's `# capability:` trailers (at most one, on refactor/snap-016-* only)."""
+        g = self.g
+        try:
+            mb = g.run("merge-base", base, commits[-1]).strip() if commits else base
+            b = load_baseline(g.show(mb, BASELINE_PATH))
+        except (RuntimeError, ValueError):
+            b = None
+        self.pinned = set(b["env"]["storage_members"]) if b else set()
+        for c in commits:
+            for v in trailer(g.message(c), "capability") or []:
+                name = v.strip()
+                if not IDENT_RE.match(name) or not name[:1].isupper():
+                    self.err(c, "capability", f"`# capability:` takes one trait name (e.g. `StateIngest`), got `{v}`")
+                    continue
+                self.cap_names.add(name)
+        if len(self.cap_names) > 1:
+            self.err(commits[-1], "capability", f"one capability per PR, the trailers name {', '.join(sorted(self.cap_names))}")
 
     def commit(self, c: str):
         g = self.g
@@ -639,8 +671,18 @@ class Verifier:
             self.check_stub_test(c, p, changed, msg)
         elif trailer(msg, "extended-tests") is not None:
             self.err(c, "step3", "`# extended-tests:` is allowed only on a narrowing commit (one that removes the last impl-class mention)")
+        # capability mode (T054b): replaces steps 1, 2 and 6 for a capability commit
+        cap = trailer(msg, "capability")
+        if cap is not None:
+            self.check_capability_commit(c, p, changed, cap[0].strip(), is_move, narrowed)
+        elif self.cap_names:
+            for f in changed:
+                if f.startswith(f"{SNAP}/") and f.endswith(".scala"):
+                    self.err(c, "capability", f"changes {f} in a capability PR without a `# capability:` trailer: every commit "
+                                              "of a capability PR that touches snap/ code is substitution-checked")
+                    break
         if any(is_module(f) for f in changed) or narrowed:
-            for line in counts_report(g, c):
+            for line in counts_report(g, c, self.cap_names):
                 self.info(c, line)
 
         # steps 3-4
@@ -658,6 +700,109 @@ class Verifier:
                     self.err(c, "step4", f"touches protected golden/pin file {f}")
         elif self.kind == "test":
             self.check_test_files_trailer(c, msg, changed)
+
+    # -- capability mode (T054b)
+    def check_capability_commit(self, c, p, changed, name, is_move, narrowed):
+        g = self.g
+        if self.kind != "refactor":
+            self.err(c, "capability", f"`# capability:` on branch '{self.branch}': a capability PR is a refactor/snap-016-* branch")
+            return
+        if is_move:
+            self.err(c, "capability", "`# capability:` and `# moved:` on one commit: a capability commit is not a move")
+        if narrowed:
+            self.err(c, "capability", "capability commit removes the last impl-class mention (a narrowing): narrow in its own PR")
+        if not IDENT_RE.match(name) or name not in self.cap_names:
+            return  # reported by prepare()
+        paths = find_capability_file(g, c, name)
+        if len(paths) != 1:
+            self.err(c, "capability", f"`trait {name}` must be declared at the top level of exactly one file under "
+                                      f"snap/controller or snap/actors at this commit, found {len(paths) or 'none'}{': ' + ', '.join(paths) if paths else ''}")
+            return
+        spec = CapabilitySpec(name, paths[0], g.show(c, paths[0]) or "", self.pinned)
+        for prob in spec.problems:
+            self.err(c, "capability", prob)
+        self.info(c, f"[capability] {name} in {paths[0]}: accessor `{spec.accessor}`, {len(spec.maps)} map entries, "
+                     f"{len(spec.members)} members")
+        for f, st in sorted(changed.items()):
+            if not f.endswith(".scala") or not f.startswith("src/main/"):
+                continue
+            if not f.startswith(f"{SNAP}/"):
+                self.err(c, "capability", f"changes {f}, outside snap/: a capability commit changes no storage or other code")
+                continue
+            if f == spec.path:
+                continue  # the capability itself: checked through CapabilitySpec
+            if st != "M":
+                self.err(c, "capability", f"{'adds' if st == 'A' else 'deletes'} {f}: a capability commit adds only the capability file")
+                continue
+            old, new = g.show(p, f) or "", g.show(c, f) or ""
+            drop_old, drop_new = set(), set()
+            if f == ENV_FILE:
+                drop_old, drop_new = self.capability_env(c, spec, old, new)
+            elif f in RATCHET_FILES:
+                drop_old, drop_new = self.capability_core(c, f, spec, old, new)
+            elif is_module(f):
+                drop_old = self.removed_state_handles(c, f, old, new)
+            for e in sorted(import_entries(new) - import_entries(old)):
+                if re.search(r"(?:\.\*|\._|\bgiven)$", e) or " given" in e:
+                    self.err(c, "capability", f"{f}: adds wildcard or given import `{e}`: a capability commit adds named imports only")
+            probs, subs = substitution_check(f, old, new, spec, drop_old, drop_new)
+            for prob in probs:
+                self.err(c, "capability", prob)
+            if not probs:
+                self.info(c, f"[capability] {f}: {subs} substitution(s)")
+
+    def capability_env(self, c, spec, old, new):
+        """SnapControllerEnv in a capability commit: it may lose pinned storage handles and gain the accessor (declared
+        with exactly the capability type); every other member and line stays."""
+        om, nm = env_members(old), env_members(new)
+        for n in sorted(set(om) - set(nm)):
+            if n not in self.pinned:
+                self.err(c, "capability", f"{ENV_FILE}: removes `{n}`, which is not a pinned storage member (env.storage_members)")
+        for n in sorted(set(nm) - set(om)):
+            if n != spec.accessor:
+                self.err(c, "capability", f"{ENV_FILE}: adds `{n}`; a capability commit adds only the accessor `{spec.accessor}`")
+            elif re.sub(r"\s+", "", nm[n]) != f":{spec.name}":
+                self.err(c, "capability", f"{ENV_FILE}: accessor `{n}{nm[n]}` must be declared `: {spec.name}`")
+        for n in sorted(set(om) & set(nm)):
+            if re.sub(r"\s+", " ", om[n]).strip() != re.sub(r"\s+", " ", nm[n]).strip():
+                self.err(c, "capability", f"{ENV_FILE}: changes member `{n}`")
+        drop_old = set().union(*(ls for n in set(om) - set(nm) for ls, _ in member_blocks(old, ENV_TRAIT, n)))
+        drop_new = set().union(*(ls for n in set(nm) - set(om) for ls, _ in member_blocks(new, ENV_TRAIT, n)))
+        return drop_old, drop_new
+
+    def capability_core(self, c, f, spec, old, new):
+        """The controller core may add one declaration of the accessor (its production default). Its initializer may name
+        only the capability, the handles, names the capability file declares, and constructor keywords."""
+        blocks_new, blocks_old = decl_blocks(new, spec.accessor), decl_blocks(old, spec.accessor)
+        if len(blocks_new) > 1:
+            self.err(c, "capability", f"{f}: declares `{spec.accessor}` {len(blocks_new)} times")
+        drop_new = set().union(*(ls for ls, _ in blocks_new)) if blocks_new else set()
+        drop_old = set().union(*(ls for ls, _ in blocks_old)) if blocks_old else set()
+        for _ls, decl in blocks_new:
+            if not re.match(r"^(?:(?:" + MODIFIER + r")\s+)*(?:lazy\s+)?(?:val|def)\s+" + re.escape(spec.accessor) + r"\s*:\s*"
+                            + re.escape(spec.name) + r"\b", decl):
+                self.err(c, "capability", f"{f}: the accessor is declared `val|def {spec.accessor}: {spec.name} = ...`, found `{decl[:90]}`")
+            init = top_level_initializer(decl) or ""
+            why = constructor_call_problem([t.t for t in scala_tokens(init)], spec, self.pinned)
+            if why:
+                self.err(c, "capability", f"{f}: the `{spec.accessor}` initializer `{init[:90]}` {why}")
+        if blocks_old and [d for _, d in blocks_old] != [d for _, d in blocks_new]:
+            self.err(c, "capability", f"{f}: changes the existing `{spec.accessor}` declaration")
+        return drop_old, drop_new
+
+    def removed_state_handles(self, c, f, old, new) -> set[int]:
+        """Lines of storage-typed abstract members removed from a module's `<X>State` trait (the handle now comes from the
+        capability); any other State or Api change is not a substitution and fails the token check."""
+        drop = set()
+        for tr in toplevel_traits(old):
+            if not tr.endswith("State"):
+                continue
+            om, nm = env_members(old, tr), env_members(new, tr)
+            for n in set(om) - set(nm):
+                if storage_typed(om[n]) and top_level_initializer(om[n]) is None:
+                    for ls, _ in member_blocks(old, tr, n):
+                        drop |= ls
+        return drop
 
     # -- step 1
     def check_moved_blocks(self, c, p, changed, symbols=()):
@@ -1101,8 +1246,18 @@ def code_lines(text: str) -> list[str]:
     return strip_comments(text).split("\n")
 
 
-def storage_ref_count(text: str) -> int:
-    return sum(1 for m in STORAGE_REF_RE.findall(strip_comments(text)) if m.lstrip(".") not in STORAGE_NAME_ALLOW)
+def storage_ref_count(text: str, exemptions=()) -> int:
+    """Storage references in `text`. `exemptions` is [(accessor, {calls}, {handles})] of the baselined capabilities
+    (`cap_exemption`): a selection `accessor.call` of a non-storage-typed member is a call on the capability, not a
+    storage reference (T054); a selection `accessor.handle` of a storage-typed member counts exactly once, whatever the
+    member's name (a raw handle reached through the capability is still one)."""
+    code = strip_comments(text)
+    for acc, calls, handles in exemptions:
+        for names, repl in ((calls, "capabilityCall"), (handles, "capabilityStorage")):
+            if names:
+                code = re.sub(r"\b" + re.escape(acc) + r"(\s*\.\s*)(?:" + "|".join(map(re.escape, sorted(names))) + r")\b",
+                              lambda m, r=repl: acc + m.group(1) + r, code)
+    return sum(1 for m in STORAGE_REF_RE.findall(code) if m.lstrip(".") not in STORAGE_NAME_ALLOW)
 
 
 def split_top_commas(s: str) -> list[str]:
@@ -1218,7 +1373,7 @@ def load_baseline(text: str | None) -> dict | None:
     b["env"].setdefault("members", 0)
     b["env"].setdefault("header", "")
     b["env"].setdefault("storage_members", [])
-    for k in ("storage_refs", "raw_imports", "justifications"):
+    for k in ("storage_refs", "raw_imports", "justifications", "capabilities"):
         b.setdefault(k, {})
     b.setdefault("storage_refs_total", sum(int(x) for x in b["storage_refs"].values()))
     return b
@@ -1300,11 +1455,15 @@ class Ratchet:
         for n in sorted(pinned_new - pinned_old):
             self.err("env-freeze", f"{BASELINE_PATH} adds `{n}` to env.storage_members: the pinned list may only shrink")
         for n in sorted(pinned_new - set(typed)):
-            self.info(f"WARN pinned env member `{n}` is no longer storage-typed: drop it from env.storage_members")
+            if self.v.cap_names and n not in members:
+                self.err("env-freeze", f"capability PR removes pinned env member `{n}` but {BASELINE_PATH} still lists it in "
+                                       "env.storage_members: drop it in the same PR")
+            else:
+                self.info(f"WARN pinned env member `{n}` is no longer storage-typed: drop it from env.storage_members")
 
     # per-file counts, move-aware
-    def check_refs(self, files: dict[str, str]):
-        counts = {rel: storage_ref_count(t) for rel, t in files.items()}
+    def check_refs(self, files: dict[str, str], exemptions=()):
+        counts = {rel: storage_ref_count(t, exemptions) for rel, t in files.items()}
         total = sum(counts.values())
         old_total, new_total = int(self.old["storage_refs_total"]), int(self.new["storage_refs_total"])
         keys = sorted(set(k for k, n in counts.items() if n) | set(self.new["storage_refs"]) | set(self.old["storage_refs"]))
@@ -1336,15 +1495,594 @@ class Ratchet:
                 self.info(f"WARN {k} no longer has raw import `{e}`: drop it from raw_imports")
 
 
+    # capability traits (T054b): their own member-cap rows; the capability file is the storage boundary
+    def check_capabilities(self, files: dict[str, str]) -> dict[str, str]:
+        """Validate `capabilities` ({TraitName: {file, members, raw_imports}}) and return {file key: TraitName} of the
+        capability files at the PR head, which [storage-refs] does not measure (it is where storage belongs); their raw
+        imports are checked against the entry's own list by `check_capability_raw`."""
+        old, new, out = self.old["capabilities"], self.new["capabilities"], {}
+        for name in sorted(set(old) - set(new)):
+            self.err("capability", f"{BASELINE_PATH} drops capability `{name}`: a capability entry is never removed")
+        for name in sorted(self.v.cap_names - set(new)):
+            self.err("capability", f"capability PR for `{name}` has no `capabilities[\"{name}\"]` entry in {BASELINE_PATH}: "
+                                   "record its file, member count and raw imports in this PR")
+        for name, e in sorted(new.items()):
+            key, members = e.get("file", ""), e.get("members")
+            if name not in old and name not in self.v.cap_names:
+                self.err("capability", f"{BASELINE_PATH} adds capability `{name}` outside a `# capability: {name}` PR")
+            if name in old and old[name].get("file") != key:
+                self.err("capability", f"capability `{name}` moves from {old[name].get('file')} to {key}: the file is pinned")
+            text = files.get(key)
+            if text is None or name not in toplevel_traits(text):
+                self.err("capability", f"capability `{name}`: {key or '<no file>'} is not a measured file declaring `trait {name}`")
+                continue
+            out[key] = name
+            n = len(env_members(text, name))
+            self.info(f"capability {name} ({key}): members={n} (baseline {members}"
+                      + (f", ceiling {old[name].get('members')}" if name in old else ", new") + ")")
+            self.exact("capability", f"{name} member count", n, int(members or 0), f"capabilities[\"{name}\"].members")
+            jkey = f"capabilities.{name}.members"
+            if name in old and n > int(old[name].get("members", 0)) and not self.fresh_justification(jkey):
+                self.err("capability", f"{name} has {n} members, above the ceiling {old[name].get('members')}: growth needs a new "
+                                       f"`justifications[\"{jkey}\"]` line")
+        return out
+
+    def check_capability_raw(self, files: dict[str, str], caps: dict[str, str]):
+        """[raw-import] still measures a capability file: its raw imports are allowed only as listed in its entry, and the
+        list is fixed when the capability is introduced and may only shrink afterwards."""
+        old, new = self.old["capabilities"], self.new["capabilities"]
+        for key, name in caps.items():
+            listed = set(new[name].get("raw_imports", []))
+            allowed = set(old[name].get("raw_imports", [])) if name in old else listed
+            for e in raw_imports(files[key]):
+                if e not in allowed:
+                    self.err("raw-import", f"{key}: raw storage import `{e}` in capability {name}, not listed in "
+                                           f"`capabilities[\"{name}\"].raw_imports`" + (" (the list may only shrink)" if name in old else ""))
+            for e in sorted(listed - allowed):
+                self.err("raw-import", f"{BASELINE_PATH} adds `{e}` to capabilities[{name}].raw_imports: the list may only shrink")
+            for e in sorted(listed - set(raw_imports(files[key]))):
+                self.info(f"WARN {key} no longer has raw import `{e}`: drop it from capabilities[{name}].raw_imports")
+
+
 def check_storage_ratchet(v: "Verifier", base: str, head: str):
     r = Ratchet(v, base, head)
     if not r.ok:
         return
     files = {f[len(SNAP) + 1:]: v.g.show(head, f) or "" for f in v.g.tree_files(head, RATCHET_DIRS + RATCHET_FILES)}
+    caps = r.check_capabilities(files)
     r.check_env()
-    r.check_refs(files)
-    r.check_raw(files)
+    measured = {k: t for k, t in files.items() if k not in caps}
+    r.check_refs(measured, exemptions=[cap_exemption(n, files[k]) for k, n in caps.items()])
+    r.check_raw(measured)
+    r.check_capability_raw({k: files[k] for k in caps}, caps)
 
+
+# --------------------------------------------------------------------------- capability mode (spec 016 T054b)
+#
+# A behaviour-neutral PR that introduces a capability trait (T055: `StateIngest`) and moves call sites onto it is
+# neither a move (steps 1-2) nor a narrowing (step 6). It is selected per commit by the trailer
+#     # capability: <TraitName>
+# on a refactor/snap-016-* branch only. A PR with the trailer on any commit is a capability PR: every commit that
+# touches a src/main .scala file under snap/ must carry the same trailer, and no commit may be a move or a narrowing.
+# In a capability commit, steps 1, 2 and 6 are replaced by the substitution check below; (a), (d), [counts], the
+# test-hunk guard, pin and golden protection and step 8 still apply.
+#
+# The capability file is the one .scala file under snap/controller or snap/actors that declares `trait <TraitName>` at
+# the top level. Its accessor is the trait name in lower camel case (`StateIngest` -> `stateIngest`). It declares the
+# call-site map in comment lines, one entry per line:
+#     // capability-map: appStateStorage.putSnapSyncPivotBlock -> putSnapSyncPivotBlock
+#     // capability-map: blockchainReader -> blockchainReader
+# The left side is a storage handle (a pinned SnapControllerEnv storage member at the merge-base, or an identifier the
+# ratchet counts as a storage reference) optionally followed by member selections; the right side is a member of the
+# trait. At a call site, the token sequence of the left side may be replaced by `<accessor>.<right side>`. The
+# production implementation of every mapped member lives in the capability file and is a pure forwarder: its body is
+# exactly the left side applied to the member's own parameters, in order. See `CapabilitySpec`.
+
+CAP_MAP_RE = re.compile(r"^\s*(?://+|/?\*+)\s*capability-map:\s*(\S+)\s*->\s*(\S+)\s*$")
+CAP_LHS_RE = re.compile(r"^[a-z]\w*(?:\.[A-Za-z_]\w*)*$")
+IDENT_RE = re.compile(r"^[A-Za-z_]\w*$")
+# An identifier the ratchet counts as a storage reference (see STORAGE_REF_RE), as a handle name.
+HANDLE_NAME_RE = re.compile(r"^(?:[a-z]\w*Storages?(?:Opt)?|blockchain(?:Reader|Writer)|dataSource\w*)$")
+CONT_START = {".", ")", "]", ","}
+CONT_END = {"(", "[", ",", "."}
+OPCHARS = set("!#%&*+-/:<=>?@\\^|~")
+NUM_RE = re.compile(r"0[xX][0-9a-fA-F_]+[Ll]?|\d[\d_]*(?:\.\d[\d_]*)?(?:[eE][-+]?\d+)?[LlFfDd]?")
+WORD_RE = re.compile(r"[A-Za-z_][\w]*|`[^`\n]+`")
+
+
+def lower_camel(name: str) -> str:
+    return name[:1].lower() + name[1:]
+
+
+class Tok:
+    __slots__ = ("t", "line")
+
+    def __init__(self, t: str, line: int):
+        self.t, self.line = t, line
+
+    def __repr__(self):
+        return f"{self.t}@{self.line}"
+
+
+def scala_tokens(text: str) -> list[Tok]:
+    """Scala tokens of `text` with their 1-based line: comments dropped, whitespace dropped. A plain string literal is one
+    token; an interpolated string is split into its literal chunks and the tokens of each `${...}` / `$name`, so a
+    handle inside an interpolation is substituted like any other."""
+    out: list[Tok] = []
+    n = len(text)
+
+    def lex(i: int, line: int, interp: bool) -> tuple[int, int]:
+        depth = 0
+        while i < n:
+            ch = text[i]
+            if ch == "\n":
+                line += 1
+                i += 1
+            elif ch.isspace():
+                i += 1
+            elif text.startswith("//", i):
+                j = text.find("\n", i)
+                i = n if j < 0 else j
+            elif text.startswith("/*", i):
+                d, j = 1, i + 2
+                while j < n and d:
+                    if text.startswith("/*", j):
+                        d, j = d + 1, j + 2
+                    elif text.startswith("*/", j):
+                        d, j = d - 1, j + 2
+                    else:
+                        j += 1
+                line += text.count("\n", i, j)
+                i = j
+            elif ch == '"':
+                i, line = lex_string(i, line)
+            elif ch == "'" and (m := CHAR_LIT_RE.match(text, i)):
+                out.append(Tok(m.group(0), line))
+                i = m.end()
+            elif interp and ch == "{":
+                depth += 1
+                out.append(Tok(ch, line))
+                i += 1
+            elif interp and ch == "}":
+                if depth == 0:
+                    return i + 1, line
+                depth -= 1
+                out.append(Tok(ch, line))
+                i += 1
+            elif ch.isdigit():
+                m = NUM_RE.match(text, i)
+                out.append(Tok(m.group(0), line))
+                i = m.end()
+            elif (m := WORD_RE.match(text, i)):
+                out.append(Tok(m.group(0), line))
+                i = m.end()
+            elif ch in OPCHARS:
+                j = i
+                while j < n and text[j] in OPCHARS and not text.startswith("//", j) and not text.startswith("/*", j):
+                    j += 1
+                out.append(Tok(text[i:j], line))
+                i = j
+            else:
+                out.append(Tok(ch, line))
+                i += 1
+        return i, line
+
+    def lex_string(i: int, line: int) -> tuple[int, int]:
+        interp = i > 0 and (text[i - 1].isalnum() or text[i - 1] == "_")
+        triple = text.startswith('"""', i)
+        q = '"""' if triple else '"'
+        start_line, buf, j = line, q, i + len(q)
+        while j < n:
+            if triple and text.startswith('"""', j):
+                k = j + 3
+                while k < n and text[k] == '"':
+                    k += 1
+                buf += text[j:k]
+                j = k
+                break
+            if not triple and text[j] == "\\":
+                buf += text[j : j + 2]
+                j += 2
+                continue
+            if not triple and text[j] in '"\n':
+                buf += text[j]
+                j += 1
+                break
+            if interp and text.startswith("$$", j):
+                buf += "$$"
+                j += 2
+                continue
+            if interp and text.startswith("${", j):
+                out.append(Tok(buf, start_line))
+                out.append(Tok("${", line))
+                j, line = lex(j + 2, line, True)
+                out.append(Tok("}", line))
+                buf, start_line = "", line
+                continue
+            if interp and text[j] == "$" and (m := re.compile(r"[A-Za-z_]\w*").match(text, j + 1)):
+                out.append(Tok(buf, start_line))
+                out.append(Tok("$", line))
+                out.append(Tok(m.group(0), line))
+                buf, start_line, j = "", line, m.end()
+                continue
+            if text[j] == "\n":
+                line += 1
+            buf += text[j]
+            j += 1
+        out.append(Tok(buf, start_line))
+        return j, line
+
+    lex(0, 1, False)
+    return out
+
+
+def statement_starts(toks: list[Tok], text: str) -> dict[int, int]:
+    """token index -> indent, for the first token of each line that starts a statement. A line is a continuation (not
+    a statement start) when it starts with `.`, `)`, `]` or `,`, follows a line ending in `(`, `[`, `,` or `.`, or is the
+    single-expression body after a line ending in `=` (the next statement line is not indented past the `=` line, so the
+    body has one statement and may be joined onto the `=` line). Lines inside one expression may be re-wrapped; a
+    statement may not move into or out of a line start, or change its indentation."""
+    src = text.splitlines()
+    rows = []  # [first token index, indent, last token text]
+    for k, tk in enumerate(toks):
+        if k == 0 or toks[k - 1].line != tk.line:
+            rows.append([k, indent_of(src[tk.line - 1]) if tk.line - 1 < len(src) else 0, tk.t])
+        else:
+            rows[-1][2] = tk.t
+    cont = [r > 0 and (toks[rows[r][0]].t in CONT_START or rows[r - 1][2] in CONT_END) for r in range(len(rows))]
+    for r in range(1, len(rows)):
+        if cont[r] or rows[r - 1][2] != "=":
+            continue
+        q = r - 1
+        while q > 0 and cont[q]:
+            q -= 1  # the line that starts the `=` definition
+        nxt = next((m for m in range(r + 1, len(rows)) if not cont[m]), None)
+        if nxt is None or rows[nxt][1] <= rows[q][1]:
+            cont[r] = True
+    return {rows[r][0]: rows[r][1] for r in range(len(rows)) if not cont[r]}
+
+
+def drop_lines(toks: list[Tok], drop: set[int]) -> list[Tok]:
+    return [t for t in toks if t.line not in drop]
+
+
+def import_lines(text: str) -> set[int]:
+    """1-based lines of import statements (multi-line brace imports included), comments ignored."""
+    out, open_braces = set(), 0
+    for no, l in enumerate(code_lines(text), 1):
+        s = l.strip()
+        if open_braces > 0:
+            out.add(no)
+            open_braces += s.count("{") - s.count("}")
+        elif re.match(r"^import\s", s):
+            out.add(no)
+            open_braces = s.count("{") - s.count("}")
+    return out
+
+
+def import_entries(text: str) -> set[str]:
+    out, buf = set(), None
+    for l in code_lines(text):
+        s = l.strip()
+        if buf is not None:
+            buf += " " + s
+        elif re.match(r"^import\s", s):
+            buf = s[len("import"):].strip()
+        else:
+            continue
+        if buf.count("{") > buf.count("}"):
+            continue
+        for clause in split_top_commas(buf):
+            out.update(e.strip() for e in expand_import(clause))
+        buf = None
+    return out
+
+
+def decl_blocks(text: str, name: str) -> list[tuple[set[int], str]]:
+    """(1-based lines, flattened code text) of each declaration of `name` in comment-stripped `text`: its line plus the
+    more-indented continuation lines (and a closing bracket line at the same indent)."""
+    lines, rx, out = code_lines(text), decl_re(name), []
+    for i, l in enumerate(lines):
+        m = rx.match(l)
+        if not m:
+            continue
+        d, j = len(m.group(1)), i + 1
+        while j < len(lines) and (not lines[j].strip() or indent_of(lines[j]) > d or
+                                  (indent_of(lines[j]) == d and lines[j].strip()[:1] in ")]}")):
+            j += 1
+        while j > i + 1 and not lines[j - 1].strip():
+            j -= 1
+        out.append((set(range(i + 1, j + 1)), " ".join(x.strip() for x in lines[i:j] if x.strip())))
+    return out
+
+
+def param_lists(decl: str, name: str) -> list[tuple[bool, list[str], list[str]]]:
+    """The parameter lists of a `def name[...](...)(using ...): T = ...` declaration: [(is_using, [names], [raw params])]."""
+    m = re.search(r"\b(?:def|val|var)\s+" + re.escape(name) + r"(?![\w$])", decl)
+    if not m:
+        return []
+    s, i, groups = decl, m.end(), []
+    while i < len(s) and s[i] == " ":
+        i += 1
+    if i < len(s) and s[i] == "[":
+        d = 0
+        while i < len(s):
+            d += s[i] == "["
+            d -= s[i] == "]"
+            i += 1
+            if d == 0:
+                break
+    while i < len(s) and s[i] == "(":
+        d, j = 0, i
+        while j < len(s):
+            d += s[j] in "(["
+            d -= s[j] in ")]"
+            j += 1
+            if d == 0:
+                break
+        inner = s[i + 1 : j - 1].strip()
+        using = bool(re.match(r"^(?:using|implicit)\b", inner))
+        inner = re.sub(r"^(?:using|implicit)\s+", "", inner)
+        raw = split_top_level(inner)
+        names = [pm.group(1) for p in raw if (pm := re.match(r"^\s*(?:(?:val|var)\s+)?(\w+)\s*:", p))]
+        groups.append((using, names, raw))
+        i = j
+        while i < len(s) and s[i] == " ":
+            i += 1
+    return groups
+
+
+def has_default_param(decl: str, name: str) -> bool:
+    """True if a parameter of `def name(...)` in the flattened `decl` has a default value (` = ` at its top level)."""
+    return any(top_level_initializer(p.strip()) is not None for _u, _n, raw in param_lists(decl, name) for p in raw)
+
+
+def split_top_level(s: str) -> list[str]:
+    out, depth, cur = [], 0, ""
+    for ch in s:
+        if ch in "([{":
+            depth += 1
+        elif ch in ")]}":
+            depth -= 1
+        if ch == "," and depth == 0:
+            out.append(cur)
+            cur = ""
+        else:
+            cur += ch
+    return [x for x in out + [cur] if x.strip()]
+
+
+def toplevel_traits(text: str) -> list[str]:
+    return [m.group(1) for l in code_lines(text) if indent_of(l) == 0 and (m := re.match(r"^(?:" + MODIFIER + r"\s+)*trait\s+(\w+)", l.strip()))]
+
+
+def find_capability_file(g: "Git", rev: str, name: str) -> list[str]:
+    return [f for f in g.tree_files(rev, RATCHET_DIRS) if name in toplevel_traits(g.show(rev, f) or "")]
+
+
+def is_handle_root(name: str, pinned: set[str]) -> bool:
+    return name in pinned or (bool(HANDLE_NAME_RE.match(name)) and name not in STORAGE_NAME_ALLOW)
+
+
+class CapabilitySpec:
+    """The capability trait `name` as declared at one revision in `path`: its accessor, members, call-site map, and the
+    problems found in the file (an unparseable or unknown map entry, a mapped member without a pure forwarder)."""
+
+    def __init__(self, name: str, path: str, text: str, pinned: set[str]):
+        self.name, self.path, self.text = name, path, text
+        self.accessor = lower_camel(name)
+        self.members = env_members(text, name)  # name -> declaration text after the name
+        self.problems: list[str] = []
+        self.maps: dict[tuple[str, ...], tuple[str, ...]] = {}
+        code = strip_comments(text)
+        targets: dict[str, str] = {}
+        for no, l in enumerate(text.splitlines(), 1):
+            m = CAP_MAP_RE.match(l)
+            if not m:
+                if "capability-map:" in l:
+                    self.problems.append(f"{path}:{no}: unparseable map line (want `// capability-map: handle[.member] -> member`): `{l.strip()[:90]}`")
+                continue
+            lhs, rhs = m.group(1), m.group(2)
+            if not CAP_LHS_RE.match(lhs) or not IDENT_RE.match(rhs):
+                self.problems.append(f"{path}:{no}: map entry `{lhs} -> {rhs}`: the left side is `handle[.member...]`, the right side one member name")
+                continue
+            root = lhs.split(".")[0]
+            if not is_handle_root(root, pinned):
+                self.problems.append(f"{path}:{no}: map entry `{lhs} -> {rhs}`: `{root}` is not a storage handle (a pinned "
+                                     "SnapControllerEnv storage member, or a name the ratchet counts as a storage reference)")
+                continue
+            if rhs not in self.members:
+                self.problems.append(f"{path}:{no}: map entry `{lhs} -> {rhs}`: `{rhs}` is not a member of trait {name}")
+                continue
+            key = tuple(t.t for t in scala_tokens(lhs))
+            if key in self.maps:
+                self.problems.append(f"{path}:{no}: `{lhs}` is mapped twice")
+                continue
+            if rhs in targets:
+                self.problems.append(f"{path}:{no}: `{rhs}` is the target of both `{targets[rhs]}` and `{lhs}`: one member forwards one operation")
+                continue
+            targets[rhs] = lhs
+            self.maps[key] = (self.accessor, ".", rhs)
+            self.check_forwarder(lhs, rhs, code)
+        # A handle the map reads from is wired in (a constructor parameter or an abstract member); the capability file may
+        # not define it, or the forwarders would read something else under the handle's name.
+        for root in sorted({k[0] for k in self.maps}):
+            for _lines, decl in decl_blocks(text, root):
+                if top_level_initializer(strip_result_type(VIS_RE.sub("", decl))) is not None:
+                    self.problems.append(f"{path}: defines handle `{root}` with a body; a mapped handle is only wired in "
+                                         f"(constructor parameter or abstract member): `{decl[:90]}`")
+
+    def check_forwarder(self, lhs: str, rhs: str, code: str):
+        bodies = []
+        for _lines, decl in decl_blocks(code, rhs):
+            init = top_level_initializer(strip_result_type(VIS_RE.sub("", decl)))
+            if init is not None:
+                bodies.append((decl, init))
+        lhs_toks = [t.t for t in scala_tokens(lhs)]
+        decls = [d for _ls, d in decl_blocks(code, rhs)]
+        if any(has_default_param(d, rhs) for d in decls):
+            self.problems.append(f"{self.path}: mapped member `{rhs}` declares a default parameter: a call site that omits it "
+                                 f"would get the capability's default instead of `{lhs}`'s")
+        if not bodies:
+            decl = self.members.get(rhs, "")
+            if "." not in lhs and not decl.lstrip().startswith(("(", "[")):
+                return  # a handle accessor implemented by a constructor parameter: wired by the core's accessor
+            self.problems.append(f"{self.path}: mapped member `{rhs}` (`{lhs}`) has no forwarder body in this file: the "
+                                 "production implementation of a mapped member lives in the capability file")
+            return
+        for decl, init in bodies:
+            want = list(lhs_toks)
+            for using, names, _raw in param_lists(decl, rhs):
+                want += ["("] + (["using"] if using else [])
+                for k, p in enumerate(names):
+                    want += ([","] if k else []) + [p]
+                want += [")"]
+            got = [t.t for t in scala_tokens(init)]
+            if got != want:
+                self.problems.append(f"{self.path}: forwarder `{rhs}` is not a pure forwarder of `{lhs}`: body `{init[:80]}`, "
+                                     f"expected `{' '.join(want)}` (the mapped call with the member's own parameters, in order)")
+
+    def declared_types(self) -> set[str]:
+        """Objects, classes, traits, enums and type aliases the capability file declares."""
+        return set(re.findall(r"\b(?:class|object|trait|type|enum)\s+([A-Z]\w*)", strip_comments(self.text)))
+
+
+def cap_exemption(name: str, text: str) -> tuple[str, set[str], set[str]]:
+    """(accessor, calls, handles) of capability trait `name` in `text`. A handle is a parameterless storage-typed member
+    (`def appStateStorage: AppStateStorage`, `def slotSource: DataSource`): a raw store reached through the capability.
+    Every other member is a call, whatever it returns (`def putPivotBlock(b: BigInt): DataSourceBatchUpdate`)."""
+    members = env_members(text, name)
+    handles = {n for n, d in members.items() if not d.lstrip().startswith(("(", "[")) and storage_typed(d)}
+    return lower_camel(name), set(members) - handles, handles
+
+
+def constructor_call_problem(toks: list[str], spec: "CapabilitySpec", pinned: set[str]) -> str | None:
+    """None if `toks` is one constructor call `[new] Type(.Name)*(args)(args)...` where Type is the capability or a type
+    the capability file declares, and each argument is `[name =] path` or a literal, each path starting at a storage
+    handle or a capability-file type. Anything else (a block, a second statement, a call on the result) is rejected."""
+    types = spec.declared_types() | {spec.name}
+    i, n = 0, len(toks)
+
+    def path(first_ok) -> bool:
+        nonlocal i
+        if i >= n or not IDENT_RE.match(toks[i]) or not first_ok(toks[i]):
+            return False
+        i += 1
+        while i + 1 < n and toks[i] == "." and IDENT_RE.match(toks[i + 1]):
+            i += 2
+        return True
+
+    if i < n and toks[i] == "new":
+        i += 1
+    if not path(lambda t: t in types):
+        return f"must start with `{spec.name}(` or a type the capability file declares ({', '.join(sorted(types))})"
+    if i >= n or toks[i] != "(":
+        return "must be one constructor call with arguments"
+    while i < n and toks[i] == "(":
+        i += 1
+        while i < n and toks[i] != ")":
+            if i + 1 < n and IDENT_RE.match(toks[i]) and toks[i + 1] == "=":
+                i += 2
+            if i < n and (toks[i] in ("true", "false", "None") or NUM_RE.fullmatch(toks[i]) or toks[i].startswith('"')):
+                i += 1
+            elif not path(lambda t: t in types or is_handle_root(t, pinned)):
+                return (f"passes `{toks[i] if i < n else ''}`: each argument is a storage handle, a literal, or a path into "
+                        "a type the capability file declares")
+            if i < n and toks[i] == ",":
+                i += 1
+            elif i < n and toks[i] != ")":
+                return f"has `{toks[i]}` inside an argument: arguments are plain handles or paths, not expressions"
+        if i >= n:
+            return "is unbalanced"
+        i += 1
+    if i != n:
+        return f"continues after the constructor call at `{toks[i]}`"
+    return None
+
+
+def substitution_check(path: str, old: str, new: str, cap: "CapabilitySpec | None", drop_old=frozenset(),
+                       drop_new=frozenset()) -> tuple[list[str], int]:
+    """Whole-file token alignment of `old` and `new` (comments, whitespace and import statements ignored, plus the
+    excised lines), where a mapped handle sequence in `old` may stand as `<accessor>.<member>` in `new`, and the
+    statement skeleton (which tokens start a statement line, at which indentation) is the same. Returns (problems,
+    number of substitutions)."""
+    ot = drop_lines(scala_tokens(old), set(drop_old) | import_lines(old))
+    nt = drop_lines(scala_tokens(new), set(drop_new) | import_lines(new))
+    ost, nst = statement_starts(ot, old), statement_starts(nt, new)
+    ol, nl = old.splitlines(), new.splitlines()
+    maps = sorted((cap.maps.items() if cap else []), key=lambda kv: -len(kv[0]))
+    by_root: dict[str, list] = {}
+    for lhs, rhs in maps:
+        by_root.setdefault(lhs[0], []).append((lhs, rhs))
+
+    def where(i, j):
+        o = ol[ot[i].line - 1].strip() if i < len(ot) else "<end of file>"
+        nw = nl[nt[j].line - 1].strip() if j < len(nt) else "<end of file>"
+        return (f"old line {ot[i].line if i < len(ot) else '-'} `{o[:90]}` / new line {nt[j].line if j < len(nt) else '-'} "
+                f"`{nw[:90]}`")
+
+    def skeleton(i, j, ilen, jlen):
+        so, sn = ost.get(i), nst.get(j)
+        if (so is None) != (sn is None):
+            return "a statement starts a line on one side only (re-wrapped or merged statements)"
+        if so is not None and so != sn:
+            return f"statement indentation changed ({so} -> {sn})"
+        if any(k in ost for k in range(i + 1, i + ilen)) or any(k in nst for k in range(j + 1, j + jlen)):
+            return "a statement starts inside a substituted handle expression"
+        return None
+
+    i = j = subs = 0
+    while i < len(ot) and j < len(nt):
+        step = None
+        if ot[i].t == nt[j].t:
+            step = (1, 1)
+        elif ot[i].t in by_root and (i == 0 or ot[i - 1].t != "."):
+            for lhs, rhs in by_root[ot[i].t]:
+                if tuple(t.t for t in ot[i : i + len(lhs)]) == lhs and tuple(t.t for t in nt[j : j + len(rhs)]) == rhs:
+                    step = (len(lhs), len(rhs))
+                    subs += 1
+                    break
+        if step is None:
+            mapped = f"; mapped handles: {', '.join(sorted(by_root))}" if by_root else "; no capability map applies to this file"
+            return [f"{path}: change is not a mapped handle substitution: {where(i, j)}{mapped}"], subs
+        why = skeleton(i, j, *step)
+        if why:
+            return [f"{path}: {why}: {where(i, j)}"], subs
+        i, j = i + step[0], j + step[1]
+    if i < len(ot) or j < len(nt):
+        return [f"{path}: {'removed' if i < len(ot) else 'added'} code that is not a mapped handle substitution: {where(i, j)}"], subs
+    return [], subs
+
+
+
+def member_blocks(text: str, trait: str, name: str) -> list[tuple[set[int], str]]:
+    """decl_blocks of `name`, limited to direct members (indent 2) of the top-level `trait`."""
+    lines, start, end = code_lines(text), None, None
+    for i, l in enumerate(lines):
+        if indent_of(l) == 0 and l.strip():
+            if env_trait_re(trait).match(l.strip()):
+                start = i
+            elif start is not None and end is None and not l.strip().startswith(("end", ")", "}", "@")):
+                end = i
+    if start is None:
+        return []
+    end = end if end is not None else len(lines)
+    return [(ls, d) for ls, d in decl_blocks(text, name) if start < min(ls) <= end and indent_of(lines[min(ls) - 1]) == 2]
+
+
+def check_capability_required(v: "Verifier", base: str, head: str):
+    """Removing a pinned storage handle from SnapControllerEnv is what a capability PR does; outside one it would move
+    call sites with no substitution check. So a range that removes one must be a `# capability:` PR."""
+    if v.cap_names:
+        return
+    try:
+        mb = v.g.run("merge-base", base, head).strip()
+    except RuntimeError:
+        return
+    before, after = env_members(v.g.show(mb, ENV_FILE) or ""), env_members(v.g.show(head, ENV_FILE) or "")
+    for n in sorted((set(before) - set(after)) & v.pinned):
+        v.err(head, "capability", f"removes pinned storage handle `{n}` from {ENV_TRAIT} outside a capability PR: a PR that moves "
+                                  "storage handles onto a capability carries `# capability: <Trait>` (refactor/snap-016-* only)")
 
 
 def main(argv=None) -> int:
@@ -1368,12 +2106,14 @@ def main(argv=None) -> int:
         return 0
     v = Verifier(g, branch, a.compile_cmd if a.compile else None)
     print(f"snap-split verify: {len(commits)} commit(s) in {a.base}..{a.head}, branch '{branch}' ({v.kind})")
+    v.prepare(a.base, commits)
     for c in commits:
         v.commit(c)
         if v.compile_cmd and not g.is_merge(c) and trailer(g.message(c), "moved") is not None:
             v.compile_move(c)
     if commits:
         v.check_final(commits[-1], commits)
+        check_capability_required(v, a.base, commits[-1])
         check_storage_ratchet(v, a.base, commits[-1])
     if v.errors:
         print(f"\nsnap-split verify: {len(v.errors)} failure(s)")
