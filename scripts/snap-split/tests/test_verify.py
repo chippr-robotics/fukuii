@@ -1499,6 +1499,61 @@ CORE_CAP_AFTER = CORE_CAP_BASE.replace(
     "  val stateIngest: StateIngest =\n    StateIngest(appStateStorage, blockchainReader, validatorFactory, doneStorage)\n")
 
 
+# The T055 shape (T054b review): members renamed from their handles, and a durability policy that is a constructor
+# parameter typed by an enum the capability file declares.
+DURABLE_CAP = """package x.controller
+
+// capability-map: appStateStorage -> appState
+// capability-map: blockchainReader -> chainReader
+// capability-map: validatorFactory -> validatorFactory
+// capability-map: doneStorage -> done
+// capability-map: appStateStorage.putSnapSyncPivotBlock -> putPivotBlock
+// capability-map: appStateStorage.getSnapSyncPivotBlock -> pivotBlock
+private[snap] trait StateIngest:
+  def appState: AppStateStorage
+  def chainReader: BlockchainReader
+  def validatorFactory: MptStorage => StateValidator
+  def done: SnapStorageDoneStorage
+  def putPivotBlock(b: BigInt): DataSourceBatchUpdate
+  def pivotBlock(): Option[BigInt]
+  def durability: StateIngest.Durability
+
+private[snap] object StateIngest:
+
+  /** The policies. */
+  enum Durability:
+    case Default
+
+  def apply(
+      appState: AppStateStorage,
+      chainReader: BlockchainReader,
+      validatorFactory: MptStorage => StateValidator,
+      done: SnapStorageDoneStorage,
+      durability: Durability
+  ): StateIngest =
+    new Stores(appState, chainReader, validatorFactory, done, durability)
+
+  final private class Stores(
+      val appState: AppStateStorage,
+      val chainReader: BlockchainReader,
+      val validatorFactory: MptStorage => StateValidator,
+      val done: SnapStorageDoneStorage,
+      val durability: Durability
+  ) extends StateIngest:
+    def putPivotBlock(b: BigInt): DataSourceBatchUpdate = appState.putSnapSyncPivotBlock(b)
+    def pivotBlock(): Option[BigInt] = appState.getSnapSyncPivotBlock()
+"""
+
+DURABLE_CORE = CORE_CAP_BASE.replace(
+    "  var shared = 1\n",
+    "  var shared = 1\n\n  val stateIngest: StateIngest =\n"
+    "    StateIngest(appStateStorage, blockchainReader, validatorFactory, doneStorage, StateIngest.Durability.Default)\n")
+
+FIN_AFTER_RENAMED = FIN_AFTER.replace("stateIngest.appStateStorage", "stateIngest.appState").replace(
+    "stateIngest.headerByNumber(b)", "stateIngest.chainReader.getBlockHeaderByNumber(b)").replace(
+    "stateIngest.markDone(b)", "stateIngest.done.markDone(b)")
+
+
 def measure(files, caps=None):
     """storage_refs for a fixture's measured files (keys relative to snap/), as the verifier counts them."""
     caps = caps or {}
@@ -1666,6 +1721,111 @@ class CapabilityModeTests(unittest.TestCase):
         out = self.neg(FIN_AFTER.replace("package x.controller\n", "package x.controller\n\nimport x.Conversions.given\n", 1))
         self.assertIn("adds wildcard or given import", out)
 
+    # ---- T054b review (prism, f43aa3309): the capability file's structure and its wiring
+    def test_b1_statement_in_the_production_class_fails(self):
+        cap = CAP_FILE.replace("    def markDone(b: BigInt): Unit = doneStorage.markDone(b)\n",
+                               "    def markDone(b: BigInt): Unit = doneStorage.markDone(b)\n    appStateStorage.putBestBlockNumber(0).commit()\n")
+        out = self.neg(FIN_AFTER, cap=cap)
+        self.assertIn("production class body holds only forwarder `def`s of mapped members", out)
+
+    def test_b1_unmapped_def_with_a_body_fails(self):
+        cap = CAP_FILE.replace("    def markDone(b: BigInt): Unit = doneStorage.markDone(b)\n",
+                               "    def markDone(b: BigInt): Unit = doneStorage.markDone(b)\n    def junk(): Unit = appStateStorage.flush()\n")
+        out = self.neg(FIN_AFTER, cap=cap)
+        self.assertIn("`def junk` in the production class is not a mapped member", out)
+
+    def test_b1_extra_top_level_object_fails(self):
+        out = self.neg(FIN_AFTER, cap=CAP_FILE + "\nobject Boot:\n  val x = sideEffect()\n")
+        self.assertIn("top-level `object Boot:`: the capability file holds only", out)
+
+    def test_b1_extra_member_in_the_companion_fails(self):
+        cap = CAP_FILE.replace("  def apply(", "  val cache = Cache.build()\n\n  def apply(", 1)
+        out = self.neg(FIN_AFTER, cap=cap)
+        self.assertIn("object StateIngest holds only enums, type aliases, one `apply` and one production class", out)
+
+    def test_b1_class_body_val_with_an_initializer_fails(self):
+        # T055's first draft set `durability` in the class body; an unforwarded member is a constructor parameter instead
+        cap = CAP_FILE.replace("    def markDone(b: BigInt): Unit = doneStorage.markDone(b)\n",
+                               "    def markDone(b: BigInt): Unit = doneStorage.markDone(b)\n    val durability: Int = 0\n")
+        out = self.neg(FIN_AFTER, cap=cap)
+        self.assertIn("`val durability: Int = 0` is not one (an unforwarded member is a `val` constructor parameter)", out)
+
+    def test_b1_concrete_trait_member_and_enum_with_a_body_fail(self):
+        cap = CAP_FILE.replace("  def markDone(b: BigInt): Unit\n", "  def markDone(b: BigInt): Unit\n  def extra: Int = 1\n", 1)
+        out = self.neg(FIN_AFTER, cap=cap, members=7)
+        self.assertIn("trait StateIngest holds abstract `def`/`val` members only", out)
+        cap = DURABLE_CAP.replace("    case Default\n", "    case Default\n    def flush(): Unit = sync()\n")
+        out = self.neg(FIN_AFTER, cap=cap, core=DURABLE_CORE, members=7)
+        self.assertIn("enum Durability holds plain `case A, B` lines only", out)
+
+    def test_b1_capability_file_edited_alone_is_checked(self):
+        # a later commit of the capability PR that edits only the capability file; and a later PR, via the head re-check
+        f = cap_fixture()
+        cap_commit(f)
+        f.write(CAP, CAP_FILE + "\nobject Boot:\n  val x = sideEffect()\n")
+        f.commit(CAP_MSG)
+        self.assertIn("top-level `object Boot:`", self.bad(f, "capability"))
+        g = cap_fixture()
+        cap_commit(g)
+        g.git("tag", "-f", "base")
+        g.write(CAP, CAP_FILE + "\nobject Boot:\n  val x = sideEffect()\n")
+        g.commit("feat: tweak StateIngest")
+        self.assertIn("top-level `object Boot:`", self.bad(g, "capability"))
+
+    def test_b2_apply_must_pass_its_own_parameters_in_order(self):
+        for body in ("new Production(appStateStorage, blockchainReader.other, validatorFactory, doneStorage)",
+                     "new Production(appStateStorage, blockchainReader, validatorFactory, new NoopDone())",
+                     "new Production(appStateStorage, validatorFactory, blockchainReader, doneStorage)"):
+            cap = CAP_FILE.replace("new Production(appStateStorage, blockchainReader, validatorFactory, doneStorage)", body)
+            out = self.neg(FIN_AFTER, cap=cap)
+            self.assertIn("`apply` body must be exactly `new Production ( appStateStorage , blockchainReader ,", out)
+
+    def test_b2_apply_defaults_and_class_parameter_names_fail(self):
+        cap = CAP_FILE.replace("      doneStorage: SnapStorageDoneStorage\n  ): StateIngest",
+                               "      doneStorage: SnapStorageDoneStorage = NoopDone\n  ): StateIngest")
+        self.assertIn("`apply` parameters take no defaults", self.neg(FIN_AFTER, cap=cap))
+        cap = CAP_FILE.replace("      doneStorage: SnapStorageDoneStorage\n  ) extends", "      done: SnapStorageDoneStorage\n  ) extends")
+        self.assertIn("production class `Production` parameters", self.neg(FIN_AFTER, cap=cap))
+
+    def test_b3_core_swapping_two_handles_fails(self):
+        core = CORE_CAP_AFTER.replace("StateIngest(appStateStorage, blockchainReader,", "StateIngest(blockchainReader, appStateStorage,")
+        out = self.neg(FIN_AFTER, core=core)
+        self.assertIn("passes `blockchainReader` as argument 1 (`appStateStorage`); it must be the handle `appStateStorage`", out)
+
+    def test_b3_core_named_argument_must_name_the_parameter(self):
+        core = CORE_CAP_AFTER.replace("StateIngest(appStateStorage, blockchainReader,",
+                                      "StateIngest(blockchainReader = appStateStorage, blockchainReader,")
+        out = self.neg(FIN_AFTER, core=core)
+        self.assertIn("names argument 1 `blockchainReader`, but `apply`'s parameter 1 is `appStateStorage`", out)
+
+    def test_b3_renamed_members_take_the_mapped_handle_and_the_enum_policy_passes(self):
+        # the T055 shape: members renamed from their handles (`appStateStorage -> appState`), and a durability policy
+        # that is a constructor parameter typed by a declared enum, passed by the core as a path to one of its cases
+        f = cap_fixture()
+        cap_commit(f, cap=DURABLE_CAP, core=DURABLE_CORE, fin=FIN_AFTER_RENAMED, members=7)
+        out = self.ok(f)
+        self.assertIn("accessor `stateIngest`, 6 map entries, 7 members", out)
+
+    def test_b3_durability_must_be_a_case_of_the_declared_enum(self):
+        for arg in ("makeDurability()", "StateIngest.Durability.Relaxed", "appStateStorage"):
+            core = DURABLE_CORE.replace("StateIngest.Durability.Default", arg)
+            out = self.neg(FIN_AFTER_RENAMED, cap=DURABLE_CAP, core=core, members=7)
+            self.assertIn("for `durability: Durability`: it must be a case of the declared enum", out)
+
+    def test_dropped_or_added_declaration_must_be_alone_on_its_line(self):
+        env = ENV_CAP_AFTER.replace("  def stateIngest: StateIngest\n", "  def stateIngest: StateIngest; def extraCall = ctx.stop()\n")
+        out = self.neg(FIN_AFTER, env=env)
+        self.assertIn("shares its line with another statement", out)
+        f = cap_fixture()
+        cap_commit(f, env=ENV_CAP_BASE.replace("  def appStateStorage: AppStateStorage\n",
+                                               "  def appStateStorage: AppStateStorage; def x: Int\n"), with_baseline=False)
+        g = Fixture(branch="refactor/snap-016-state-ingest", core_base=CORE_CAP_BASE,
+                    extra={ENV: ENV_CAP_BASE.replace("  def appStateStorage: AppStateStorage\n",
+                                                     "  def appStateStorage: AppStateStorage; val y = 1\n"),
+                           FIN: FIN_BASE, BASELINE: cap_baseline(BASE_FILES)})
+        cap_commit(g)
+        self.assertIn("shares its line with another statement", self.bad(g, "capability"))
+
     # ---- the wiring files
     def test_env_may_only_lose_pinned_handles_and_gain_the_accessor(self):
         out = self.neg(FIN_AFTER, env=ENV_CAP_AFTER + "  def extra: Int\n", env_members=4)
@@ -1678,7 +1838,7 @@ class CapabilityModeTests(unittest.TestCase):
     def test_core_accessor_may_only_wire_handles(self):
         core = CORE_CAP_AFTER.replace("StateIngest(appStateStorage,", "StateIngest(new AppStateStorage(otherSource),")
         out = self.neg(FIN_AFTER, core=core)
-        self.assertIn("passes `new`: each argument is a storage handle", out)
+        self.assertIn("as argument 1 (`appStateStorage`); it must be the handle `appStateStorage`", out)
         # a block that builds the capability and calls it is not a production default
         core = CORE_CAP_AFTER.replace(
             "StateIngest(appStateStorage, blockchainReader, validatorFactory, doneStorage)",

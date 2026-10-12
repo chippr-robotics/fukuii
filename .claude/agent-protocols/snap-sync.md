@@ -55,17 +55,29 @@ unless stated.
   - the file declares the call-site map in comment lines, `// capability-map: <handle>[.<member>...] -> <member>`. The
     handle is a pinned env storage member or a name the ratchet counts as a storage reference; the member is declared
     in the trait. The production implementation lives in the same file, and each mapped member is a pure forwarder:
-    its body is the left side applied to its own parameters in order, with no default parameters. A mapped handle is
-    only wired in (constructor parameter or abstract member), never defined in the file;
+    its body is the left side applied to its own parameters in order, with no default parameters (it may read the
+    handle under the member name a bare `handle -> member` line gives it). A mapped handle is only wired in
+    (constructor parameter or abstract member), never defined in the file;
+  - the capability file has a fixed shape, checked on every capability commit and, after the capability exists, at the
+    head of every PR. It holds package and imports, `trait <Trait>:` with abstract `def`/`val` members only, and
+    `object <Trait>:` holding only `enum`s of plain `case` lines, `type` aliases, one
+    `def apply(<params, no defaults>): <Trait> = new <Prod>(<its params, by name, in order>)`, and one
+    `class <Prod>(<the same params>) extends <Trait>`. That class's body holds only forwarder `def`s of mapped members.
+    A member that is not forwarded (a handle under its member name, or a policy such as `durability`) is a `val`
+    constructor parameter, never a body `val` with an initializer. Nothing else is allowed: no statements, no extra
+    objects or classes, no unmapped `def` with a body, and no declaration sharing a line (`;`) with another;
   - every change to another `.scala` file under `snap/` is checked at token level over the whole file: only mapped
     substitutions (`<handle>[.<member>]` becomes `<accessor>.<member>`), comment and whitespace changes, and named
     (not wildcard or `given`) imports. Statement lines keep their position and indentation; an argument list may be
     re-wrapped, and a single-expression body may join its `=` line. Interpolated `${...}` code is checked like other
     code;
   - `SnapControllerEnv` may only lose pinned storage handles and gain the accessor, declared `: <Trait>`. The core
-    `SNAPSyncController.scala` may add one accessor declaration whose initializer is a single constructor call over
-    handles, literals and types the capability file declares. A module's `<X>State` may drop a storage-typed abstract
-    member. No other file may be added or deleted, and no `src/main` file outside `snap/` may change;
+    `SNAPSyncController.scala` may add one accessor declaration, `<Trait>(a1, ..., an)`, with one argument per
+    `apply` parameter in order. The i-th argument is the handle bare-mapped to that parameter (or the handle with the
+    parameter's name), or, for a parameter typed by a declared enum, one of its cases
+    (`StateIngest.Durability.Default`). A named argument must name the parameter. A module's `<X>State` may drop a
+    storage-typed abstract member. A dropped or added declaration must stand alone on its lines. No other file may be
+    added or deleted, and no `src/main` file outside `snap/` may change;
   - `ChildFactories` signatures do not change: spawn sites pass `stateIngest.<handle>` to the existing handle parameters.
     (`ChildFactoriesSpec`, a protected pin, compares each method's default positions with the child's `apply`.)
   Rule (a), rule (d), `[counts]`, the test-hunk guard, pin and golden protection and step 8 still apply. In step 8, the
@@ -74,6 +86,15 @@ unless stated.
   fixed at introduction and only shrinks. The capability file is not a `storage_refs` row. Elsewhere,
   `<accessor>.<call>` is not a storage reference, while `<accessor>.<handle>` (a parameterless storage-typed member)
   counts once. In a capability PR, removed env handles must also leave `env.storage_members`.
+  - **Test files.** A capability commit edits tests under the same test-hunk guard as any refactor commit (S0f, step 3).
+    Lines with an assertion or scheduling token may not be added or removed, while other lines (fixtures, a new
+    `val`) may. That is the guard's intent, unchanged by T054b.
+  - **What the gate cannot check (review covers it):** types, and that every trait member is implemented (the compiler
+    does both); what a test-file fixture edit means; and the semantics of the storage classes' own methods, which
+    are outside `snap/` and so cannot change in the PR. After the capability PR, the core's accessor declaration is
+    ordinary core code: a later PR that edits it is checked only by that PR's own mode (move, narrowing or fix). The
+    PR-head re-check of an existing capability file checks its shape and its forwarders, but not that each map root
+    is a pinned handle, because the pinned list is empty after T055.
 - **No sbt on the soak host.** CI is the compiler.
 - **Module form (ADR CON-013).** Every module is a trait whose self-type is
   `<Module>State & <capabilities> & <Callee>Api…`. A module file never mentions `SNAPSyncControllerImpl` or a

@@ -766,9 +766,17 @@ class Verifier:
         for n in sorted(set(om) & set(nm)):
             if re.sub(r"\s+", " ", om[n]).strip() != re.sub(r"\s+", " ", nm[n]).strip():
                 self.err(c, "capability", f"{ENV_FILE}: changes member `{n}`")
-        drop_old = set().union(*(ls for n in set(om) - set(nm) for ls, _ in member_blocks(old, ENV_TRAIT, n)))
-        drop_new = set().union(*(ls for n in set(nm) - set(om) for ls, _ in member_blocks(new, ENV_TRAIT, n)))
-        return drop_old, drop_new
+        rem = [b for n in set(om) - set(nm) for b in member_blocks(old, ENV_TRAIT, n)]
+        add = [b for n in set(nm) - set(om) for b in member_blocks(new, ENV_TRAIT, n)]
+        self.alone(c, ENV_FILE, rem + add)
+        return set().union(*(ls for ls, _ in rem)), set().union(*(ls for ls, _ in add))
+
+    def alone(self, c, f, blocks):
+        """A removed or added declaration is excused from the token check by its lines, so it must be alone on them."""
+        for _ls, decl in blocks:
+            if ";" in decl:
+                self.err(c, "capability", f"{f}: `{decl[:80]}` shares its line with another statement: a dropped or added "
+                                          "declaration stands alone on its lines")
 
     def capability_core(self, c, f, spec, old, new):
         """The controller core may add one declaration of the accessor (its production default). Its initializer may name
@@ -776,6 +784,7 @@ class Verifier:
         blocks_new, blocks_old = decl_blocks(new, spec.accessor), decl_blocks(old, spec.accessor)
         if len(blocks_new) > 1:
             self.err(c, "capability", f"{f}: declares `{spec.accessor}` {len(blocks_new)} times")
+        self.alone(c, f, blocks_new)
         drop_new = set().union(*(ls for ls, _ in blocks_new)) if blocks_new else set()
         drop_old = set().union(*(ls for ls, _ in blocks_old)) if blocks_old else set()
         for _ls, decl in blocks_new:
@@ -783,7 +792,7 @@ class Verifier:
                             + re.escape(spec.name) + r"\b", decl):
                 self.err(c, "capability", f"{f}: the accessor is declared `val|def {spec.accessor}: {spec.name} = ...`, found `{decl[:90]}`")
             init = top_level_initializer(decl) or ""
-            why = constructor_call_problem([t.t for t in scala_tokens(init)], spec, self.pinned)
+            why = core_init_problem([t.t for t in scala_tokens(init)], spec, self.pinned)
             if why:
                 self.err(c, "capability", f"{f}: the `{spec.accessor}` initializer `{init[:90]}` {why}")
         if blocks_old and [d for _, d in blocks_old] != [d for _, d in blocks_new]:
@@ -800,7 +809,9 @@ class Verifier:
             om, nm = env_members(old, tr), env_members(new, tr)
             for n in set(om) - set(nm):
                 if storage_typed(om[n]) and top_level_initializer(om[n]) is None:
-                    for ls, _ in member_blocks(old, tr, n):
+                    blocks = member_blocks(old, tr, n)
+                    self.alone(c, f, blocks)
+                    for ls, _ in blocks:
                         drop |= ls
         return drop
 
@@ -1517,6 +1528,9 @@ class Ratchet:
                 self.err("capability", f"capability `{name}`: {key or '<no file>'} is not a measured file declaring `trait {name}`")
                 continue
             out[key] = name
+            if not self.v.cap_names:  # in a capability PR every commit already checks it; elsewhere, check the head
+                for prob in CapabilitySpec(name, key, text, None).problems:
+                    self.err("capability", prob)
             n = len(env_members(text, name))
             self.info(f"capability {name} ({key}): members={n} (baseline {members}"
                       + (f", ceiling {old[name].get('members')}" if name in old else ", new") + ")")
@@ -1576,7 +1590,10 @@ def check_storage_ratchet(v: "Verifier", base: str, head: str):
 # ratchet counts as a storage reference) optionally followed by member selections; the right side is a member of the
 # trait. At a call site, the token sequence of the left side may be replaced by `<accessor>.<right side>`. The
 # production implementation of every mapped member lives in the capability file and is a pure forwarder: its body is
-# exactly the left side applied to the member's own parameters, in order. See `CapabilitySpec`.
+# exactly the left side applied to the member's own parameters, in order. The file itself has an allow-listed shape
+# (`capability_structure`), `apply` passes its own parameters to the production class by name and in order, and the
+# core's accessor passes, position by position, the handle mapped to each `apply` parameter or a case of a declared
+# enum (`core_init_problem`). See `CapabilitySpec`.
 
 CAP_MAP_RE = re.compile(r"^\s*(?://+|/?\*+)\s*capability-map:\s*(\S+)\s*->\s*(\S+)\s*$")
 CAP_LHS_RE = re.compile(r"^[a-z]\w*(?:\.[A-Za-z_]\w*)*$")
@@ -1868,11 +1885,16 @@ class CapabilitySpec:
     """The capability trait `name` as declared at one revision in `path`: its accessor, members, call-site map, and the
     problems found in the file (an unparseable or unknown map entry, a mapped member without a pure forwarder)."""
 
-    def __init__(self, name: str, path: str, text: str, pinned: set[str]):
+    def __init__(self, name: str, path: str, text: str, pinned: set[str] | None):
+        """`pinned` is the env's pinned storage handles at the merge-base, the roots a map entry may start from; None
+        skips that check (the PR-head re-check of an existing capability, after T055 emptied the pinned list)."""
         self.name, self.path, self.text = name, path, text
         self.accessor = lower_camel(name)
         self.members = env_members(text, name)  # name -> declaration text after the name
         self.problems: list[str] = []
+        self.apply_params: list[tuple[str, str]] = []  # (name, type) of `apply`, in order
+        self.enums: dict[str, set[str]] = {}           # enum name -> its cases
+        self._apply_body: tuple[int, list[str]] = (0, [])
         self.maps: dict[tuple[str, ...], tuple[str, ...]] = {}
         code = strip_comments(text)
         targets: dict[str, str] = {}
@@ -1887,7 +1909,7 @@ class CapabilitySpec:
                 self.problems.append(f"{path}:{no}: map entry `{lhs} -> {rhs}`: the left side is `handle[.member...]`, the right side one member name")
                 continue
             root = lhs.split(".")[0]
-            if not is_handle_root(root, pinned):
+            if pinned is not None and not is_handle_root(root, pinned):
                 self.problems.append(f"{path}:{no}: map entry `{lhs} -> {rhs}`: `{root}` is not a storage handle (a pinned "
                                      "SnapControllerEnv storage member, or a name the ratchet counts as a storage reference)")
                 continue
@@ -1903,7 +1925,11 @@ class CapabilitySpec:
                 continue
             targets[rhs] = lhs
             self.maps[key] = (self.accessor, ".", rhs)
-            self.check_forwarder(lhs, rhs, code)
+        # a bare `handle -> member` line makes `member` the production class's name for that handle (apply and the core
+        # pass it by name and position, see capability_structure / core_init_problem), so a forwarder may read either
+        self.aliases = {lhs[0]: rhs[2] for lhs, rhs in self.maps.items() if len(lhs) == 1}
+        for member, handle_path in targets.items():
+            self.check_forwarder(handle_path, member, code)
         # A handle the map reads from is wired in (a constructor parameter or an abstract member); the capability file may
         # not define it, or the forwarders would read something else under the handle's name.
         for root in sorted({k[0] for k in self.maps}):
@@ -1911,6 +1937,7 @@ class CapabilitySpec:
                 if top_level_initializer(strip_result_type(VIS_RE.sub("", decl))) is not None:
                     self.problems.append(f"{path}: defines handle `{root}` with a body; a mapped handle is only wired in "
                                          f"(constructor parameter or abstract member): `{decl[:90]}`")
+        self.problems += capability_structure(self)
 
     def check_forwarder(self, lhs: str, rhs: str, code: str):
         bodies = []
@@ -1930,6 +1957,7 @@ class CapabilitySpec:
             self.problems.append(f"{self.path}: mapped member `{rhs}` (`{lhs}`) has no forwarder body in this file: the "
                                  "production implementation of a mapped member lives in the capability file")
             return
+        roots = [lhs_toks[0]] + ([self.aliases[lhs_toks[0]]] if lhs_toks[0] in self.aliases else [])
         for decl, init in bodies:
             want = list(lhs_toks)
             for using, names, _raw in param_lists(decl, rhs):
@@ -1938,13 +1966,11 @@ class CapabilitySpec:
                     want += ([","] if k else []) + [p]
                 want += [")"]
             got = [t.t for t in scala_tokens(init)]
+            if got[:1] and got[0] in roots:
+                got = [lhs_toks[0]] + got[1:]
             if got != want:
                 self.problems.append(f"{self.path}: forwarder `{rhs}` is not a pure forwarder of `{lhs}`: body `{init[:80]}`, "
                                      f"expected `{' '.join(want)}` (the mapped call with the member's own parameters, in order)")
-
-    def declared_types(self) -> set[str]:
-        """Objects, classes, traits, enums and type aliases the capability file declares."""
-        return set(re.findall(r"\b(?:class|object|trait|type|enum)\s+([A-Z]\w*)", strip_comments(self.text)))
 
 
 def cap_exemption(name: str, text: str) -> tuple[str, set[str], set[str]]:
@@ -1956,47 +1982,221 @@ def cap_exemption(name: str, text: str) -> tuple[str, set[str], set[str]]:
     return lower_camel(name), set(members) - handles, handles
 
 
-def constructor_call_problem(toks: list[str], spec: "CapabilitySpec", pinned: set[str]) -> str | None:
-    """None if `toks` is one constructor call `[new] Type(.Name)*(args)(args)...` where Type is the capability or a type
-    the capability file declares, and each argument is `[name =] path` or a literal, each path starting at a storage
-    handle or a capability-file type. Anything else (a block, a second statement, a call on the result) is rejected."""
-    types = spec.declared_types() | {spec.name}
-    i, n = 0, len(toks)
+def item_blocks(lines: list[str], start: int, end: int, d: int) -> list[tuple[int, int]]:
+    """[start, end) line ranges of the items at indent `d` in lines[start:end]: an item runs while the next lines are
+    blank, more indented, or a closing bracket or `end` at the same indent."""
+    out, i = [], start
+    while i < end:
+        if not lines[i].strip():
+            i += 1
+            continue
+        j = i + 1
+        while j < end and (not lines[j].strip() or indent_of(lines[j]) > d or
+                           (indent_of(lines[j]) == d and (lines[j].strip()[:1] in ")]}" or lines[j].strip().startswith("end ")))):
+            j += 1
+        out.append((i, j))
+        i = j
+    return out
 
-    def path(first_ok) -> bool:
-        nonlocal i
-        if i >= n or not IDENT_RE.match(toks[i]) or not first_ok(toks[i]):
-            return False
-        i += 1
-        while i + 1 < n and toks[i] == "." and IDENT_RE.match(toks[i + 1]):
-            i += 2
-        return True
 
-    if i < n and toks[i] == "new":
-        i += 1
-    if not path(lambda t: t in types):
-        return f"must start with `{spec.name}(` or a type the capability file declares ({', '.join(sorted(types))})"
-    if i >= n or toks[i] != "(":
-        return "must be one constructor call with arguments"
-    while i < n and toks[i] == "(":
-        i += 1
-        while i < n and toks[i] != ")":
-            if i + 1 < n and IDENT_RE.match(toks[i]) and toks[i + 1] == "=":
-                i += 2
-            if i < n and (toks[i] in ("true", "false", "None") or NUM_RE.fullmatch(toks[i]) or toks[i].startswith('"')):
-                i += 1
-            elif not path(lambda t: t in types or is_handle_root(t, pinned)):
-                return (f"passes `{toks[i] if i < n else ''}`: each argument is a storage handle, a literal, or a path into "
-                        "a type the capability file declares")
-            if i < n and toks[i] == ",":
-                i += 1
-            elif i < n and toks[i] != ")":
-                return f"has `{toks[i]}` inside an argument: arguments are plain handles or paths, not expressions"
-        if i >= n:
-            return "is unbalanced"
-        i += 1
-    if i != n:
-        return f"continues after the constructor call at `{toks[i]}`"
+def flat(lines: list[str], i: int, j: int) -> str:
+    return " ".join(x.strip() for x in lines[i:j] if x.strip())
+
+
+DECL_HEAD_RE = re.compile(r"^(?:" + MODIFIER + r"\s+)*(?:case\s+)?(def|val|var|lazy|type|given|trait|class|object|enum)\b\s*(\w*)")
+
+
+def ctor_params(header: str, cls: str) -> list[tuple[bool, str, str]] | None:
+    """(is_val, name, raw) of `class cls(...)`'s one parameter list, from its flattened header; None if unparseable."""
+    m = re.search(r"\bclass\s+" + re.escape(cls) + r"\s*\(", header)
+    if not m:
+        return None
+    i, d = m.end() - 1, 0
+    for j in range(i, len(header)):
+        d += header[j] in "(["
+        d -= header[j] in ")]"
+        if d == 0:
+            break
+    out = []
+    for p in split_top_level(header[i + 1 : j]):
+        pm = re.match(r"^\s*(?:(?:" + MODIFIER + r")\s+)*(val\s+)?(\w+)\s*:(.*)$", p.strip())
+        if not pm:
+            return None
+        out.append((bool(pm.group(1)), pm.group(2), p.strip()))
+    if header[j + 1 :].strip() and not re.match(r"^extends\b", header[j + 1 :].strip()):
+        return None
+    return out
+
+
+def capability_structure(spec: "CapabilitySpec") -> list[str]:
+    """The capability file's allow-listed shape (T054b review B1/B2). Top level: package and imports, the trait, and its
+    companion object, nothing else. The trait holds abstract `def`/`val` members only. The object holds only:
+      - `enum E:` whose body is `case` lines without parameters or bodies, and `type T = ...` aliases;
+      - one `def apply(<params, no defaults>): <Trait> = new <Prod>(<the params, by name, in order>)`;
+      - one `class <Prod>(<params>) extends <Trait>:`, whose parameter names are apply's, in order, and whose body holds only
+        forwarder `def`s of mapped members (each checked as a pure forwarder). A member that is not forwarded (a handle,
+        a policy such as `durability`) is a `val` constructor parameter, never a body `val` with an initializer.
+    Records `spec.apply_params` and `spec.enums` for the core accessor check."""
+    path, name, out = spec.path, spec.name, []
+    lines = code_lines(spec.text)
+    skip = import_lines(spec.text)
+    lines = ["" if (k + 1) in skip or re.match(r"^package\s", l.strip()) else l for k, l in enumerate(lines)]
+    mapped = set(t[2] for t in spec.maps.values())
+    traits = objects = 0
+    prod, apply_seen = None, False
+    for i, j in item_blocks(lines, 0, len(lines), 0):
+        head = lines[i].strip()
+        m = DECL_HEAD_RE.match(head)
+        kind, nm = (m.group(1), m.group(2)) if m else (None, None)
+        if indent_of(lines[i]) != 0 or kind not in ("trait", "object") or nm != name:
+            out.append(f"{path}:{i + 1}: top-level `{head[:70]}`: the capability file holds only `trait {name}` and "
+                       f"`object {name}` (plus package and imports)")
+            continue
+        if kind == "trait":
+            traits += 1
+            if not re.match(r"^(?:" + MODIFIER + r"\s+)*trait\s+" + name + r"\s*:\s*$", head):
+                out.append(f"{path}:{i + 1}: the trait header is `trait {name}:` (no parents, no self-type): `{head[:70]}`")
+            for a, b2 in item_blocks(lines, i + 1, j, 2):
+                d = flat(lines, a, b2)
+                dm = DECL_HEAD_RE.match(d)
+                if indent_of(lines[a]) != 2 or not dm or dm.group(1) not in ("def", "val") or top_level_initializer(d) is not None \
+                        or ";" in d:
+                    out.append(f"{path}:{a + 1}: trait {name} holds abstract `def`/`val` members only: `{d[:80]}`")
+            continue
+        objects += 1
+        if not re.match(r"^(?:" + MODIFIER + r"\s+)*object\s+" + name + r"\s*:\s*$", head):
+            out.append(f"{path}:{i + 1}: the companion header is `object {name}:`: `{head[:70]}`")
+        for a, b2 in item_blocks(lines, i + 1, j, 2):
+            d = flat(lines, a, b2)
+            dm = DECL_HEAD_RE.match(d)
+            kind2, nm2 = (dm.group(1), dm.group(2)) if dm else (None, None)
+            if indent_of(lines[a]) != 2 or ";" in d:
+                out.append(f"{path}:{a + 1}: unexpected line in object {name}: `{d[:80]}`")
+            elif kind2 == "enum":
+                cases = set()
+                if not re.match(r"^(?:" + MODIFIER + r"\s+)*enum\s+\w+\s*:\s*$", lines[a].strip()):
+                    out.append(f"{path}:{a + 1}: enum header is `enum {nm2}:` (no parameters or parents): `{lines[a].strip()[:80]}`")
+                for x in range(a + 1, b2):
+                    l = lines[x].strip()
+                    if not l:
+                        continue
+                    cm = re.match(r"^case\s+(\w+(?:\s*,\s*\w+)*)\s*$", l)
+                    if not cm:
+                        out.append(f"{path}:{x + 1}: enum {nm2} holds plain `case A, B` lines only: `{l[:80]}`")
+                    else:
+                        cases |= {c.strip() for c in cm.group(1).split(",")}
+                spec.enums[nm2] = cases
+            elif kind2 == "type" and re.match(r"^(?:" + MODIFIER + r"\s+)*type\s+\w+(?:\[[^\]]*\])?\s*=\s*[\w.\[\], =>]+$", d):
+                pass
+            elif kind2 == "def" and nm2 == "apply" and not apply_seen:
+                apply_seen = True
+                groups = param_lists(d, "apply")
+                if len(groups) != 1 or groups[0][0]:
+                    out.append(f"{path}:{a + 1}: `apply` takes one plain parameter list: `{d[:80]}`")
+                    continue
+                _u, names, raw = groups[0]
+                if any(top_level_initializer(r.strip()) is not None for r in raw):
+                    out.append(f"{path}:{a + 1}: `apply` parameters take no defaults (the core passes every argument)")
+                spec.apply_params = [(n, r.split(":", 1)[1].strip()) for n, r in zip(names, (r.strip() for r in raw))]
+                sig = d[: len(d) - len(top_level_initializer(d) or "")]
+                if not re.search(r"\)\s*:\s*" + re.escape(name) + r"\s*=$", sig.strip()):
+                    out.append(f"{path}:{a + 1}: `apply` is declared `def apply(...): {name} = new <Prod>(...)`")
+                body = [t.t for t in scala_tokens(top_level_initializer(d) or "")]
+                spec._apply_body = (a + 1, body)
+            elif kind2 == "class" and prod is None:
+                hdr_end = a
+                while hdr_end < b2 - 1 and not (lines[hdr_end].rstrip().endswith(":") and
+                                                flat(lines, a, hdr_end + 1).count("(") == flat(lines, a, hdr_end + 1).count(")")):
+                    hdr_end += 1  # the header ends at its `:`, or at the block's last line when the class has no body
+                header = flat(lines, a, hdr_end + 1)
+                params = ctor_params(header, nm2)
+                if params is None or not re.search(r"\)\s*extends\s+" + re.escape(name) + r"\s*:?$", header):
+                    out.append(f"{path}:{a + 1}: the production class is `class <Prod>(<params>) extends {name}:`, with no "
+                               f"other parent and no default: `{header[:90]}`")
+                    params = params or []
+                if any(top_level_initializer(r) is not None for _v, _n, r in params):
+                    out.append(f"{path}:{a + 1}: production class parameters take no defaults")
+                prod = (nm2, a + 1, params)
+                for v, pn, _r in params:
+                    if v and pn not in spec.members:
+                        out.append(f"{path}:{a + 1}: `val {pn}` is not a member of trait {name}")
+                for x, y in item_blocks(lines, hdr_end + 1, b2, 4):
+                    dd = flat(lines, x, y)
+                    m3 = DECL_HEAD_RE.match(dd)
+                    if indent_of(lines[x]) != 4 or not m3 or m3.group(1) != "def" or ";" in dd:
+                        out.append(f"{path}:{x + 1}: production class body holds only forwarder `def`s of mapped members; "
+                                   f"`{dd[:80]}` is not one (an unforwarded member is a `val` constructor parameter)")
+                    elif m3.group(2) not in mapped:
+                        out.append(f"{path}:{x + 1}: `def {m3.group(2)}` in the production class is not a mapped member "
+                                   "(declare it with a `capability-map:` line, or make it a `val` constructor parameter)")
+            else:
+                out.append(f"{path}:{a + 1}: object {name} holds only enums, type aliases, one `apply` and one production "
+                           f"class: `{d[:80]}`")
+    if traits != 1:
+        out.append(f"{path}: declares `trait {name}` {traits} times")
+    if objects > 1:
+        out.append(f"{path}: declares `object {name}` {objects} times")
+    if not apply_seen or prod is None:
+        out.append(f"{path}: object {name} must declare `apply` and one production class")
+    else:
+        pname, _line, params = prod
+        want = ["new", pname, "("] + [t for k, (n, _t) in enumerate(spec.apply_params) for t in ([","] if k else []) + [n]] + [")"]
+        line, body = spec._apply_body
+        if body != want:
+            out.append(f"{path}:{line}: `apply` body must be exactly `{' '.join(want)}` (its own parameters, by name, in "
+                       f"order), found `{' '.join(body)[:90]}`")
+        if [n for _v, n, _r in params] != [n for n, _t in spec.apply_params]:
+            out.append(f"{path}: production class `{pname}` parameters {[n for _v, n, _r in params]} must be `apply`'s, "
+                       f"in order: {[n for n, _t in spec.apply_params]}")
+    return out
+
+
+def core_init_problem(toks: list[str], spec: "CapabilitySpec", pinned: set[str]) -> str | None:
+    """None if `toks` is exactly `<Trait>(a1, ..., an)` (or `<Trait>.apply(...)`) where the i-th argument fits `apply`'s
+    i-th parameter p (T054b review B3): the handle mapped to member p by a bare `capability-map: <handle> -> p` line,
+    else the handle named p; or, for a parameter typed by an enum the capability file declares, a path to one of its
+    cases (`<Trait>.E.Case`). A named argument must name p."""
+    params, n = spec.apply_params, len(toks)
+    head = [spec.name, "("] if toks[1:2] == ["("] else [spec.name, ".", "apply", "("]
+    if toks[: len(head)] != head or not toks or toks[-1] != ")":
+        return f"must be exactly `{spec.name}(<one argument per apply parameter>)`"
+    args, cur, depth = [], [], 0
+    for t in toks[len(head) : -1]:
+        if t in "([{":
+            depth += 1
+        elif t in ")]}":
+            depth -= 1
+            if depth < 0:
+                return "continues after the constructor call"
+        if t == "," and depth == 0:
+            args.append(cur)
+            cur = []
+        else:
+            cur.append(t)
+    if cur:
+        args.append(cur)
+    if depth != 0:
+        return "is unbalanced"
+    if len(args) != len(params):
+        return f"passes {len(args)} arguments; `{spec.name}.apply` takes {len(params)}: {', '.join(p for p, _ in params)}"
+    bare = {lhs[0]: rhs[2] for lhs, rhs in spec.maps.items() if len(lhs) == 1}
+    by_member = {m: h for h, m in bare.items()}
+    for k, ((p, ptype), arg) in enumerate(zip(params, args)):
+        if len(arg) >= 2 and arg[1] == "=":
+            if arg[0] != p:
+                return f"names argument {k + 1} `{arg[0]}`, but `apply`'s parameter {k + 1} is `{p}`"
+            arg = arg[2:]
+        enum = next((e for e in spec.enums if re.fullmatch(r"(?:" + re.escape(spec.name) + r"\.)?" + re.escape(e), ptype)), None)
+        if enum:
+            ok = [[spec.name, ".", enum, ".", c] for c in spec.enums[enum]] + [[enum, ".", c] for c in spec.enums[enum]]
+            if arg not in ok:
+                return f"passes `{''.join(arg)}` for `{p}: {ptype}`: it must be a case of the declared enum ({spec.name}.{enum}.<Case>)"
+            continue
+        want = by_member.get(p, p)
+        if not is_handle_root(want, pinned):
+            return f"has `apply` parameter `{p}`, which is neither mapped from a storage handle nor typed by a declared enum"
+        if arg != [want]:
+            return f"passes `{''.join(arg)}` as argument {k + 1} (`{p}`); it must be the handle `{want}`"
     return None
 
 

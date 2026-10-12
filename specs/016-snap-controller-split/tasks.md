@@ -1027,7 +1027,17 @@ controller modules and before T060. Spec 017 (`specs/017-state-capabilities-witn
       justified) and the raw imports (fixed at introduction). The capability file is not a `storage_refs` row, but
       `[raw-import]` still measures it. `<accessor>.<call>` is not a storage reference, while `<accessor>.<handle>`
       (a parameterless storage-typed member) counts once.
-    - *Self-tests.* 40 new (165 in all): 34 git-fixture cases (T055-shaped positive, plus negatives for a changed argument, an
+    - *Review hardening (prism on f43aa3309).* B1: the capability file has an allow-listed shape, rechecked at every
+      PR head once the capability exists: the trait with abstract members; a companion holding only plain enums, type
+      aliases, one `apply` and one production class whose body holds only mapped forwarders. An unforwarded member
+      such as `durability` is a `val` constructor parameter. B2: `apply` is exactly `new <Prod>(<its params in
+      order>)`, and the class's params are apply's. B3: the core's accessor passes, position by position, the handle
+      bare-mapped to each `apply` parameter, or a case of a declared enum; named arguments must name the parameter.
+      Dropped or added env, State or accessor declarations must stand alone on their lines. B4: the test-hunk guard
+      admits non-assertion lines by design (routing doc). T055's draft must move `durability` from the `Stores` body
+      into the constructor and `apply`, and the core passes `StateIngest.Durability.Default`. The remaining caveats
+      are in the routing doc.
+    - *Self-tests.* 55 new (180 in all), plus the real-baseline test retargeted from literals (18, the 8 names) to consistency with the env on the tree (count, pins declared, every storage-typed member pinned), so T055 can lower both: 34 git-fixture cases (T055-shaped positive, plus negatives for a changed argument, an
       extra, reordered, merged or re-indented statement, a new storage reference, the wrong member, a lying or
       impure forwarder, a mode trailer with `# moved:`, a move commit or plain commit beside a capability commit, the
       trailer on test/fix/other branches, a raw `DataSource` member, and the baseline rows) and 6 unit cases for the
