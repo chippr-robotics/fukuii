@@ -342,7 +342,16 @@ the module that owns the implementation for that behaviour. The table lists each
 
 ## Coordinator modules
 
-Boundaries are preliminary (research.md R12) and are confirmed by T060 before C-B1.
+Boundaries were preliminary (research.md R12). **T060 confirmed them with amendments**
+([coordinator-characterization.md](./coordinator-characterization.md) §3; baselines in research.md R14b). The rows
+below carry the amendments, marked "(T060)". Two user decisions gate the storage slices:
+- **D-T060-1**: `StateIngest` has no member for the per-pivot `MptStorage` or the derived stores (`SnapStorageDone`,
+  `SnapSyncProgress`, `HealingFrontier`, `BfsQueue`); it gates C-A3.
+- **D-T060-2**: the recovery actors call BCC's and SRC's `apply` with raw stores from outside `snap/`; it gates C-B1.
+
+A tooling task, **T060b**, lets `verify.py` check the `apply` + `ChildFactories` + call-site change (§6 of the
+characterization). Each coordinator's storage parameters change in the first slice whose code uses them, not in a
+zero-reference slice (C-A1, C-A2, C-S1, C-S4, C-H4).
 
 **Amendment 2026-10-11.** Every C-* narrowing self-type names `StateIngest` for storage, never `StateAccess` and never a
 raw storage type. Each C-* PR lowers the T054 storage-reference total (its coordinator file's figure normally falls too,
@@ -352,21 +361,21 @@ decision 2026-10-11):** T055 does not change the spawn arguments; each C-* narro
 
 | # | Coordinator → trait / file | Contents | Notes | Est. lines |
 |---|---|---|---|---|
-| C-B1 | ByteCode → `actors/bytecode/ByteCodeDispatch.scala`, `ByteCodeResponseHandling.scala` | cooldown, response bytes, assign/dispatch/redispatch; `handleByteCodesResponse`, `validateReturnedCodes`, `storeBytecodesWithHashes`, `filterAndDedupeCodeHashes`, the #1501 `skipPresent` check | one PR (coordinator is 870 lines) | ~350 |
-| C-A1 | Account → `actors/account/AccountPeerDispatch.scala` | stateless/snapless marking, cooldown, response bytes, `inFlightForPeer`, `dispatchIfPossible`, backpressure + #1501 intake gate | `[ACCOUNT-COOLDOWN]`, `[ACCOUNT-IDLE]` | ~350 |
-| C-A2 | Account → `actors/account/AccountTaskLifecycle.scala` | `handleTaskComplete`/`Failed`, `requeueOrEscalate`, redispatch, 32-byte hash math, `completeEmptyTaskRange`, `classifyIdleStall` use | site of "stale-pivot empty ranges as scarcity" | ~350 |
+| C-B1 | ByteCode → `actors/bytecode/ByteCodeDispatch.scala`, `ByteCodeResponseHandling.scala` | cooldown, response bytes, assign/dispatch/redispatch; `handleByteCodesResponse`, `validateReturnedCodes`, `storeBytecodesWithHashes`, `filterAndDedupeCodeHashes`, the #1501 `skipPresent` check (T060: it is a line of the `AddByteCodeTasks` arm, so it moves only after a lift commit carves it into a method; otherwise it stays in the core) | one PR (coordinator is 870 lines); adopts `bytecode` (gated by D-T060-2) | ~320 |
+| C-A1 | Account → `actors/account/AccountPeerDispatch.scala` | stateless/snapless marking (with `maybeRequestPivotRefresh`, T060), cooldown, response bytes, `inFlightForPeer`, `dispatchIfPossible`, backpressure + #1501 intake gate | `[ACCOUNT-COOLDOWN]`, `[ACCOUNT-IDLE]`; zero-reference (T060) | ~300 |
+| C-A2 | Account → `actors/account/AccountTaskLifecycle.scala` | `handleTaskComplete`/`Failed`, `requeueOrEscalate`, redispatch, `drainActiveTasks` (T060), 32-byte hash math, `completeEmptyTaskRange`; `classifyIdleStall` stays with the core's `CheckDispatchStalled` arm (T060) | site of "stale-pivot empty ranges as scarcity"; zero-reference (T060) | ~320 |
 | C-A3 | Account → `actors/account/AccountTrieAssembly.scala` | `getOrCreateTaskStackTrie`, `handleStoreAccountChunk`, `finalizeTrie`, `finalizing` behaviour | StackTrie resume (#1487) | ~300 |
 | C-A4 | Account → `actors/account/ContractWorkCarry.scala` | `identifyContractAccounts`, task-file writing, `syncTaskFiles`, `replayCarriedChunk`, `readContractFile`, `readUniqueCodeHashes`, `copyPrefix` | **vault**; #1453/#1487/#1498 and #1501 invariants | ~350 |
-| C-S1 | Storage → `actors/storage/StoragePeerDispatch.scala` | stateless, `SnapPeerHealth`, cooldown, batch sizing, response bytes, `selectFloorPeer` use, `redispatchEligible` | `[STORAGE-PEER-HEALTH]`, `[STORAGE-FLOOR]` | ~350 |
-| C-S2 | Storage → `actors/storage/StorageOrderedApply.scala` | `ReadyStorageChunk` ordering, `drainOrderedStorageChunks`, `applyReadyStorageChunk`, per-account trie get/commit/**reset** | **vault**; site of the "pivot refresh discards in-flight tries" task | ~400 |
+| C-S1 | Storage → `actors/storage/StoragePeerDispatch.scala` | stateless, `SnapPeerHealth` (with `handleTimeout`, T060), cooldown, batch sizing, response bytes, `selectFloorPeer` use, `redispatchEligible` | `[STORAGE-PEER-HEALTH]`, `[STORAGE-FLOOR]`; zero-reference in substance (T060) | ~480 |
+| C-S2 | Storage → `actors/storage/StorageOrderedApply.scala` | `ReadyStorageChunk` ordering, `drainOrderedStorageChunks`, `applyReadyStorageChunk`, per-account trie get/commit/**reset**, `flushTrieNodeWrites`, `writePrebuiltTrie` (#1533, T060) | **vault**; site of the "pivot refresh discards in-flight tries" task; `flushTrieNodeWrites` writes through `pns.dataSource.update` (raw, T060) | ~360 |
 | C-S3 | Storage → `actors/storage/StorageDoneMarkers.scala` | `recordFlatBatchDone`, `stageDoneMarker`, `takeDoneMarkersFor`, `stageFlatSlotChunk`, `flushPendingFlatBatch`, `recordCompletedTask` | **vault**; spec 010 R2a is kept word for word (a record is never durable before its flat slots) | ~170 |
-| C-S4 | Storage → `actors/storage/StorageResponseProcessing.scala` | `handleResponse`, `processStorageRanges`, `processServedTasks`, `createStorageSubTasks`, `recordSubtaskCompletion`, stale-root give-up | `[STORAGE-FORCE-COMPLETE]` | ~450 |
+| C-S4 | Storage → `actors/storage/StorageResponseProcessing.scala` | `handleResponse`, `processStorageRanges`, `processServedTasks`, `createStorageSubTasks`, `recordSubtaskCompletion`, stale-root give-up, and #1533's off-actor pipeline (`PendingResponse`, `enqueueResponse`, `submitProcessingJobs`, `drainProcessedResponses`, `logStoragePerf`, `abandonPendingResponses`, pool shutdown; T060) | `[STORAGE-FORCE-COMPLETE]`; reads no store: proof verification is pure (T060) | ~480 |
 | C-H0 | Healing: split `activeBehavior` (821 lines) into per-concern partial functions inside the file (the D3 pattern) | arm-order table as in P4 | prerequisite for C-H1…H5 | ~820 restructured |
 | C-H1 | Healing → `actors/healing/FrontierPersistence.scala` | `persistFrontier`, `unpersistFrontier`, `clearPersistedFrontier`, `awaitFrontierDrain`, `writeDurableSubtreeRecords`, `flushRawNodes*`, gauges | **vault**; CF `g` format frozen | ~250 |
-| C-H2 | Healing → `actors/healing/FrontierRebuildBfs.scala` | `rebuildFrontierBFS`, `startFrontierBFS`×2, visit keys, `boundedVisitedSet`, `computeEffectiveParallelism` | site of #1350 and #1349 | ~500 |
-| C-H3 | Healing → `actors/healing/HealVerification.scala` | `reverifyCurrentRoot`, `startVerificationBFS`, `startScopedVerification`, pruned verification | `[HEAL-VERIFY*]`; spec 003/005 | ~200 |
+| C-H2 | Healing → `actors/healing/FrontierRebuildBfs.scala` | `rebuildFrontierBFS`, `startFrontierBFS`×2, visit keys; `boundedVisitedSet` and `computeEffectiveParallelism` are companion helpers (follow behind `export` or stay, T060) | site of #1350 and #1349 | ~440 |
+| C-H3 | Healing → `actors/healing/HealVerification.scala` | `reverifyCurrentRoot`, `startVerificationBFS`, `startScopedVerification`, pruned verification, `readPathVerifiedRlp`/`Node` (T060) | `[HEAL-VERIFY*]`; spec 003/005 | ~120 |
 | C-H4 | Healing → `actors/healing/HealDispatch.scala` | cooldown, response bytes, `dispatchIfPossible`, `requestNextBatch`, `handleTimeout`, redispatch, `noteUnservableAttempt`, `updateHealThrottle` | `[HEAL-FLOOR]`, `[HEAL-WATCHDOG]` | ~350 |
-| C-H5 | Healing → `actors/healing/HealResponseProcessing.scala` | `processActiveResponse`, `discoverMissingChildren`, `queueNodes`, healed code hashes, `isComplete` | site of the heal-convergence latch | ~400 |
+| C-H5 | Healing → `actors/healing/HealResponseProcessing.scala` | `processActiveResponse`, `discoverMissingChildren`, `queueNodes`, healed code hashes, `isComplete`, `isNodeInStorage` (T060) | site of the heal-convergence latch; `evmCodeStorage` is `Option` with a `None` test default (T060) | ~440 |
 | C-X | `snap/AdaptiveResponseBytes.scala` shared by ARC, SRC, TNHC | the three identical windows, with the log label as a parameter (R12) | ByteCode excluded (NG-5) | −60 net |
 
 ## Slice list, order and estimates
@@ -403,10 +412,11 @@ decision 2026-10-11):** T055 does not change the spawn arguments; each C-* narro
 | 24b | **T055** `StateIngest` capability: 8 env storage handles + the batched storage-trie node-write path (`flushTrieNodeWrites`, from #1548); modules move to it; `SnapControllerEnv` 18 → ~11; exporter durability property (FR-044) | refactor | ~+250 / −150 (estimate) | **forge**, **vault**, prism; beacon for the Path-scheme publish | Mordor full SNAP (SC-010 perf parity moved to C-S2, user decision 2026-10-11) |
 | 24c | **T056** lighter-WAL experiment as a `StateIngest` durability policy (optional; after T055). Hard precondition: the explicit FR-044 barrier before `completeSnapSync` (user decision 2026-10-11) | experiment | small | **vault**, forge | Mordor + Platåberget SNAP with a crash during finalization |
 | 25 | **T060** coordinator characterization (docs) | docs | — | — | — |
-| 26 | **C-B1** | move | ~350 | prism | — |
+| 25a | **T060b** `verify.py` StateIngest-adoption allowance for C-* narrowings (characterization §6.3); decisions D-T060-1/2 recorded | tooling | script + self-tests | prism | — |
+| 26 | **C-B1** | move | ~320 | prism; **vault** (T060: code-write path, recovery wiring) | Mordor bytecode phase or recovery start if D-T060-2 rewires `BytecodeRecoveryActor` |
 | 27–30 | **C-A1…A4** | move | ~1,350 | prism; **vault** on A3 and A4 | Mordor restart mid-account after A4 |
 | 31–34 | **C-S1…S4** | move | ~1,370 | prism; **vault** on S2 and S3 | Mordor + Platåberget restart mid-storage after S3; **C-S2: `[STORAGE-PERF]` parity on the same quiescent soak host against ~1.7M entries/h on the Sepolia Path-scheme storage phase, plus a same-host pre-wrap vs post-wrap A/B (SC-010, moved from T055 by user decision 2026-10-11)** |
-| 35–40 | **C-H0…H5** | restructure + move | ~2,520 | prism; **vault** on H1 and H3 | Mordor heal restart after H1 |
+| 35–40 | **C-H0…H5** | restructure + move | ~2,520 | prism; **vault** on H1 and H3 (T060: also H2 and H5) | Mordor heal restart after H1 (T060: recommended after H5 too) |
 | 40b | **C-X0** golden test of the response-size window (grow/shrink math and clamp, per coordinator) and of its DEBUG log text | test | 0 / ~120 | prism | — |
 | 41 | **C-X** `AdaptiveResponseBytes` | dedupe | −60 | prism | — |
 | 42 | **R1** DFS→BFS wording + routing-doc final check (T090) | rename | ~40 | prism | — |
