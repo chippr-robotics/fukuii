@@ -81,6 +81,18 @@ private[snap] class StubStateValidationState(
   def childFactories: ChildFactories = notUsed("childFactories")
   def pathNodeStorageOpt: Option[PathNodeStorage] = notUsed("pathNodeStorageOpt")
 
+  // StateIngest (spec 016 T055): forwards to the stores above, read on each call.
+  val stateIngest: StateIngest = new ForwardingStateIngest(
+    appStateStorage,
+    stateStorage,
+    flatSlotStorage,
+    pathNodeStorageOpt,
+    evmCodeStorage,
+    blockchainReader,
+    blockchainWriter,
+    validatorFactory
+  )
+
   // Callee Api traits
   val healingTriggeredFor: mutable.ArrayBuffer[Seq[ByteString]] = mutable.ArrayBuffer.empty
   var stateHealingStarts: Int = 0

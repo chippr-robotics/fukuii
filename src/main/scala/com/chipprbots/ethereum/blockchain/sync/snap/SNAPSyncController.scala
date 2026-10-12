@@ -43,6 +43,7 @@ import com.chipprbots.ethereum.blockchain.sync.snap.controller.SnapSharedState
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.SnapStartApi
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.StagnationWatchdog
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.StagnationWatchdogState
+import com.chipprbots.ethereum.blockchain.sync.snap.controller.StateIngest
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.StateValidationModule
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.StateValidationState
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.SyncLifecycle
@@ -213,10 +214,25 @@ private class SNAPSyncControllerImpl(
 
   // PathScheme: create PathNodeStorage backed by the same RocksDB data source as flat storage.
   // None for HashScheme (default/ETC). Shared across coordinator restarts (data source is long-lived).
-  // Implements `SnapControllerEnv.pathNodeStorageOpt` (spec 016 M4); a strict val, built at construction as before.
+  // The Path store `stateIngest.pathNodes` hands to the modules (spec 016 T055); a strict val, built at construction.
   val pathNodeStorageOpt: Option[PathNodeStorage] =
     if snapSyncConfig.storageScheme == StorageScheme.Path then Some(new PathNodeStorage(flatSlotStorage.dataSource))
     else None
+
+  // Implements `SnapControllerEnv.stateIngest` (spec 016 T055): the modules' only way to the stores. A strict val built
+  // at construction from the constructor's stores and `pathNodeStorageOpt` above (so it must follow it); building it
+  // only stores the references.
+  val stateIngest: StateIngest = StateIngest(
+    appStateStorage,
+    stateStorage,
+    flatSlotStorage,
+    pathNodeStorageOpt,
+    evmCodeStorage,
+    blockchainReader,
+    blockchainWriter,
+    validatorFactory,
+    StateIngest.Durability.Default
+  )
 
   // Storage-task completion markers (prefixed keys in the app-state column family): written by StorageRangeCoordinator
   // with each finished account's last flat slots; read on a resume so only unfinished storage tasks are re-queued.

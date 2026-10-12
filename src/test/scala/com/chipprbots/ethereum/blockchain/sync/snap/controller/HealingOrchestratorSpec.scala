@@ -117,6 +117,18 @@ private[snap] class StubHealingOrchestratorState(
   def peerEventBus: ActorRef[PeerEventBusActor.Command] = notUsed("peerEventBus")
   var pathNodeStorageOpt: Option[PathNodeStorage] = None
 
+  // StateIngest (spec 016 T055): forwards to the stores above, read on each call.
+  val stateIngest: StateIngest = new ForwardingStateIngest(
+    appStateStorage,
+    stateStorage,
+    flatSlotStorage,
+    pathNodeStorageOpt,
+    evmCodeStorage,
+    blockchainReader,
+    blockchainWriter,
+    validatorFactory
+  )
+
   // CoordinatorHandles
   val intakeBudget: SnapIntakeBudget =
     new SnapIntakeBudget(maxPendingStorageTasks = 10L, maxPendingByteCodeHashes = 10L)

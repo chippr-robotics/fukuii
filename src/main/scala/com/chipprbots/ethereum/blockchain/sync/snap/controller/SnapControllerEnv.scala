@@ -78,3 +78,6 @@ private[snap] trait SnapControllerEnv:
 
   /** The Path-scheme node store (`None` on the Hash scheme, i.e. ETC). Built once at construction by the core. */
   def pathNodeStorageOpt: Option[PathNodeStorage]
+
+  /** SNAP's storage capability (spec 016 T055): every store a module reads or writes, built once by the core. */
+  def stateIngest: StateIngest

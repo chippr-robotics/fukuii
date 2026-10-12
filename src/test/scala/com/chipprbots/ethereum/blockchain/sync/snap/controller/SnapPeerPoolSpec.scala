@@ -83,6 +83,18 @@ private[snap] class StubSnapPeerPoolState(
   def childFactories: ChildFactories = notUsed("childFactories")
   def pathNodeStorageOpt: Option[PathNodeStorage] = notUsed("pathNodeStorageOpt")
 
+  // StateIngest (spec 016 T055): forwards to the stores above, read on each call.
+  val stateIngest: StateIngest = new ForwardingStateIngest(
+    appStateStorage,
+    stateStorage,
+    flatSlotStorage,
+    pathNodeStorageOpt,
+    evmCodeStorage,
+    blockchainReader,
+    blockchainWriter,
+    validatorFactory
+  )
+
   // CoordinatorHandles (no coordinator exists, so the fan-outs send nothing)
   def intakeBudget: SnapIntakeBudget = notUsed("intakeBudget")
   protected def stopChild(child: ActorRef[Nothing]): Unit = notUsed("stopChild")
