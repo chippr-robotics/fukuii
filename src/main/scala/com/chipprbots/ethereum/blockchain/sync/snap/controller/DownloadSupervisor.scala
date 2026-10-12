@@ -128,7 +128,7 @@ private[snap] trait DownloadSupervisor extends AccountRangeStartApi with ByteCod
           Behaviors
             .supervise(
               childFactories.byteCodeCoordinator(
-                evmCodeStorage = evmCodeStorage,
+                evmCodeStorage = stateIngest.bytecode,
                 networkPeerManager = networkPeerManager,
                 requestTracker = requestTracker,
                 batchSize = ByteCodeTask.DEFAULT_BATCH_SIZE,
@@ -157,7 +157,7 @@ private[snap] trait DownloadSupervisor extends AccountRangeStartApi with ByteCod
                 networkPeerManager = networkPeerManager,
                 requestTracker = requestTracker,
                 mptStorage = storage,
-                flatSlotStorage = flatSlotStorage,
+                flatSlotStorage = stateIngest.flatSlots,
                 maxAccountsPerBatch = snapSyncConfig.storageBatchSize,
                 maxInFlightRequests = snapSyncConfig.storageConcurrency,
                 requestTimeout = snapSyncConfig.timeout,
@@ -169,7 +169,7 @@ private[snap] trait DownloadSupervisor extends AccountRangeStartApi with ByteCod
                 maxConcurrentStorageAccounts = snapSyncConfig.maxConcurrentStorageAccounts,
                 snapProgressStorage = Some(snapProgressStorage),
                 storageScheme = snapSyncConfig.storageScheme,
-                pathNodeStorage = pathNodeStorageOpt,
+                pathNodeStorage = stateIngest.pathNodes,
                 recordStorageDone = recordStorageDone,
                 intakeBudget = Some(intakeBudget)
               )
@@ -301,7 +301,7 @@ private[snap] trait DownloadSupervisor extends AccountRangeStartApi with ByteCod
     */
   private[snap] def currentSyncStatus: SyncProtocol.Status =
     val progress = progressMonitor.currentProgress
-    val startingBlock = appStateStorage.getSyncStartingBlock()
+    val startingBlock = stateIngest.appState.getSyncStartingBlock()
     val currentBlock = pivotBlock.getOrElse(startingBlock)
 
     /** Helper to get estimate or actual count, whichever is larger. Used as a defensive fallback when estimates are not
@@ -492,7 +492,7 @@ private[snap] trait DownloadSupervisor extends AccountRangeStartApi with ByteCod
         "Persisting finalized account trie root: {}",
         finalizedRoot.take(8).toArray.map("%02x".format(_)).mkString
       )
-      appStateStorage.putSnapSyncFinalizedRoot(finalizedRoot).commit()
+      stateIngest.appState.putSnapSyncFinalizedRoot(finalizedRoot).commit()
       Behaviors.same
 
     case ProgressAccountsTrieFinalized =>
@@ -623,7 +623,7 @@ private[snap] trait DownloadSupervisor extends AccountRangeStartApi with ByteCod
         ctx.log.info("Account range sync complete. Signaling NoMore to bytecode/storage coordinators.")
 
         // Persist accounts-complete flag for crash recovery (Step 7)
-        appStateStorage.putSnapSyncAccountsComplete(true).commit()
+        stateIngest.appState.putSnapSyncAccountsComplete(true).commit()
 
         // Persist temp file paths for crash recovery (non-blocking ask — if this fails,
         // recovery will do a full restart which is acceptable since account trie data survives)
@@ -639,10 +639,10 @@ private[snap] trait DownloadSupervisor extends AccountRangeStartApi with ByteCod
             .foreach { info =>
               // Retire the account resume checkpoint with the storage-file handoff too (idempotent; it is also
               // removed directly below so an ask timeout/failure cannot leave a stale all-complete record behind).
-              appStateStorage
+              stateIngest.appState
                 .putSnapSyncStorageFilePath(info.filePath.toString)
-                .and(appStateStorage.putSnapSyncStorageFileCount(Some(info.count)))
-                .and(appStateStorage.removeSnapAccountResumeCheckpoint())
+                .and(stateIngest.appState.putSnapSyncStorageFileCount(Some(info.count)))
+                .and(stateIngest.appState.removeSnapAccountResumeCheckpoint())
                 .commit()
               ctx.log.info(s"Persisted storage file path for recovery: ${info.filePath} (${info.count} entries)")
             }
@@ -651,9 +651,9 @@ private[snap] trait DownloadSupervisor extends AccountRangeStartApi with ByteCod
               actors.AccountRangeCoordinator.AccountGetCodeHashesFileInfo(replyTo)
             )
             .foreach { info =>
-              appStateStorage
+              stateIngest.appState
                 .putSnapSyncCodeHashesPath(info.filePath.toString)
-                .and(appStateStorage.putSnapSyncCodeHashesCount(Some(info.count)))
+                .and(stateIngest.appState.putSnapSyncCodeHashesCount(Some(info.count)))
                 .commit()
               ctx.log.info(s"Persisted codeHashes file path for recovery: ${info.filePath} (${info.count} entries)")
             }
@@ -663,7 +663,7 @@ private[snap] trait DownloadSupervisor extends AccountRangeStartApi with ByteCod
         // removed here unconditionally: if the file-info ask above times out, a lingering all-complete record could
         // otherwise be loaded by a later fresh SNAP cycle (e.g. a re-snap after clearSnapSyncDone) and skip accounts.
         stateRoot.foreach(root => snapProgressStorage.clearProgress(root.value))
-        appStateStorage.removeSnapAccountResumeCheckpoint().commit()
+        stateIngest.appState.removeSnapAccountResumeCheckpoint().commit()
         preservedRangeProgress = Map.empty
         preservedAtPivotBlock = None
         preservedTaskFiles = None
@@ -713,7 +713,7 @@ private[snap] trait DownloadSupervisor extends AccountRangeStartApi with ByteCod
   private[snap] lazy val downloadPhaseCompleteArms: PartialFunction[Command, Behavior[Command]] = {
     case ByteCodeSyncComplete if !bytecodePhaseComplete =>
       bytecodePhaseComplete = true
-      appStateStorage.putSnapSyncBytecodeComplete(true).commit()
+      stateIngest.appState.putSnapSyncBytecodeComplete(true).commit()
       progressMonitor.setBytecodeComplete()
       val downloaded = progressMonitor.currentProgress.bytecodesDownloaded
       ctx.log.info(
@@ -734,7 +734,7 @@ private[snap] trait DownloadSupervisor extends AccountRangeStartApi with ByteCod
     case StorageRangeSyncComplete if !storagePhaseComplete =>
       storagePhaseComplete = true
       storagePhaseForceCompleted = false
-      appStateStorage.putSnapSyncStorageComplete(true).commit()
+      stateIngest.appState.putSnapSyncStorageComplete(true).commit()
       // Storage is durably complete, so no resume replays storage tasks any more: the markers are garbage now.
       // (Not on force-complete — storage-complete is not persisted there and the recovery stream still reads them.)
       clearStorageDoneMarkers("storage phase complete")
@@ -794,7 +794,7 @@ private[snap] trait DownloadSupervisor extends AccountRangeStartApi with ByteCod
               initialResponseBytes = snapSyncConfig.accountInitialResponseBytes,
               minResponseBytes = snapSyncConfig.accountMinResponseBytes,
               storageScheme = snapSyncConfig.storageScheme,
-              pathNodeStorage = pathNodeStorageOpt,
+              pathNodeStorage = stateIngest.pathNodes,
               taskFileDir = snapSyncConfig.taskFileDir,
               carriedTaskFiles = carriedTaskFiles,
               progressGeneration = coordinatorGeneration,
@@ -830,7 +830,7 @@ private[snap] trait DownloadSupervisor extends AccountRangeStartApi with ByteCod
           Behaviors
             .supervise(
               childFactories.byteCodeCoordinator(
-                evmCodeStorage = evmCodeStorage,
+                evmCodeStorage = stateIngest.bytecode,
                 networkPeerManager = networkPeerManager,
                 requestTracker = requestTracker,
                 batchSize = ByteCodeTask.DEFAULT_BATCH_SIZE,
@@ -863,7 +863,7 @@ private[snap] trait DownloadSupervisor extends AccountRangeStartApi with ByteCod
                 networkPeerManager = networkPeerManager,
                 requestTracker = requestTracker,
                 mptStorage = storage,
-                flatSlotStorage = flatSlotStorage,
+                flatSlotStorage = stateIngest.flatSlots,
                 maxAccountsPerBatch = snapSyncConfig.storageBatchSize,
                 maxInFlightRequests = snapSyncConfig.storageConcurrency,
                 requestTimeout = snapSyncConfig.timeout,
@@ -883,7 +883,7 @@ private[snap] trait DownloadSupervisor extends AccountRangeStartApi with ByteCod
                 maxConcurrentStorageAccounts = snapSyncConfig.maxConcurrentStorageAccounts,
                 snapProgressStorage = Some(snapProgressStorage),
                 storageScheme = snapSyncConfig.storageScheme,
-                pathNodeStorage = pathNodeStorageOpt,
+                pathNodeStorage = stateIngest.pathNodes,
                 recordStorageDone = recordStorageDone,
                 intakeBudget = Some(intakeBudget)
               )

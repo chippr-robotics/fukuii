@@ -358,10 +358,10 @@ private[snap] trait SnapPeerPool
     * caller falls back to the block-number proxy in that case.
     */
   def calibratePivotTD(pivotBlockNumber: BigInt): Option[BigInt] =
-    val genesisBlockTD: BigInt = blockchainReader
-      .getChainWeightByHash(blockchainReader.genesisHeader.hash)
+    val genesisBlockTD: BigInt = stateIngest.chainReader
+      .getChainWeightByHash(stateIngest.chainReader.genesisHeader.hash)
       .map(_.totalDifficulty.value)
-      .getOrElse(blockchainReader.genesisHeader.difficulty.value)
+      .getOrElse(stateIngest.chainReader.genesisHeader.difficulty.value)
 
     // Current peers + best peer seen historically this session (fallback when all ETH68
     // peers have disconnected by the time finalization runs, which is common on long syncs).

@@ -206,8 +206,8 @@ private[snap] trait HealingOrchestrator
       if totalFound == 0 then
         ctx.log.info("Trie walk found no missing nodes — healing complete after {} rounds!", healingRoundCount)
         healingRoundCount = 0
-        pivotBlock.foreach(b => appStateStorage.putSnapSyncPivotBlock(b).commit())
-        stateRoot.foreach(r => appStateStorage.putSnapSyncStateRoot(r.value).commit())
+        pivotBlock.foreach(b => stateIngest.appState.putSnapSyncPivotBlock(b).commit())
+        stateRoot.foreach(r => stateIngest.appState.putSnapSyncStateRoot(r.value).commit())
         // #1188: capture clean signal — the walk just visited every node.
         healingValidatedRoot = stateRoot
         // Stop the periodic healing-request scheduler before entering validation.
@@ -236,7 +236,7 @@ private[snap] trait HealingOrchestrator
         // Commit final pivot root — deferred from refreshPivotInPlace() to prevent BUG-006.
         // AppStateStorage now reflects the root that healing actually completed against.
         for b <- pivotBlock; r <- stateRoot do
-          appStateStorage.putSnapSyncPivotBlock(b).and(appStateStorage.putSnapSyncStateRoot(r.value)).commit()
+          stateIngest.appState.putSnapSyncPivotBlock(b).and(stateIngest.appState.putSnapSyncStateRoot(r.value)).commit()
         // #1188: capture clean signal — same as the streaming TrieWalkComplete(0) path.
         healingValidatedRoot = stateRoot
         // Stop the periodic healing-request scheduler before entering validation.
@@ -277,8 +277,8 @@ private[snap] trait HealingOrchestrator
       "Path scheme: coordinator verification found no missing nodes — healing complete (no controller walk)."
     )
     healingRoundCount = 0
-    pivotBlock.foreach(b => appStateStorage.putSnapSyncPivotBlock(b).commit())
-    stateRoot.foreach(r => appStateStorage.putSnapSyncStateRoot(r.value).commit())
+    pivotBlock.foreach(b => stateIngest.appState.putSnapSyncPivotBlock(b).commit())
+    stateRoot.foreach(r => stateIngest.appState.putSnapSyncStateRoot(r.value).commit())
     healingValidatedRoot = stateRoot
     timers.cancel(RequestTrieNodeHealing)
     progressMonitor.startPhase(StateValidation)
@@ -322,11 +322,11 @@ private[snap] trait HealingOrchestrator
     // (prunedHealVerification default true) — without it the first verification reverts to a full
     // ~90M-node trie walk. Dropped by #1384's stale base.
     if snapSyncConfig.healingFrontierPersistence || snapSyncConfig.prunedHealVerification then
-      Some(new HealingFrontierStorage(flatSlotStorage.dataSource))
+      Some(new HealingFrontierStorage(stateIngest.flatSlots.dataSource))
     else None
 
   private lazy val bfsQueueStorage: BfsQueueStorage =
-    new RocksDbBfsQueueStorage(flatSlotStorage.dataSource, Namespaces.BfsQueueNamespace)
+    new RocksDbBfsQueueStorage(stateIngest.flatSlots.dataSource, Namespaces.BfsQueueNamespace)
 
   /** spec 016 M6a: the healing-coordinator spawn shared by both healing routes, `startStateHealing` and
     * `startStateHealingWithInterleave`. It opens the pivot's trie store, spawns the supervised coordinator with the
@@ -359,7 +359,7 @@ private[snap] trait HealingOrchestrator
               healingReservedCores = snapSyncConfig.healingReservedCores,
               bfsQueueStorageOpt = Some(bfsQueueStorage),
               storageScheme = snapSyncConfig.storageScheme,
-              pathNodeStorageOpt = pathNodeStorageOpt,
+              pathNodeStorageOpt = stateIngest.pathNodes,
               frontierHighWater = snapSyncConfig.healingFrontierHighWater,
               frontierLowWater = snapSyncConfig.healingFrontierLowWater,
               scopedHealVerification = snapSyncConfig.scopedHealVerification,
@@ -367,7 +367,7 @@ private[snap] trait HealingOrchestrator
               decoupledHealServeRoot = snapSyncConfig.decoupledHealServeRoot,
               decoupledHealMaxAttemptsNoRefresh = snapSyncConfig.decoupledHealMaxAttemptsNoRefresh,
               movingRootDeltaHeal = snapSyncConfig.movingRootDeltaHeal,
-              evmCodeStorage = Some(evmCodeStorage),
+              evmCodeStorage = Some(stateIngest.bytecode),
               walkLocalOnly = Some(healingWalkLocalOnly)
             )
           )
@@ -576,7 +576,7 @@ private[snap] trait HealingOrchestrator
     * the Hash scheme (ETC), which publishes nothing at finalization.
     */
   def lazyHandoffBlockedByAbsentPathRoot(): Boolean =
-    pathNodeStorageOpt.exists { pathNodes =>
+    stateIngest.pathNodes.exists { pathNodes =>
       (pivotBlock, stateRoot) match
         case (Some(p), Some(r)) => FinalizationPolicy.pathPivotRootAbsent(pathNodes, r.value, getOrCreateMptStorage(p))
         case _                  => false
@@ -623,7 +623,7 @@ private[snap] trait HealingOrchestrator
         r.value.toHex.take(16),
         reason
       )
-      appStateStorage.putSnapSyncPivotBlock(b).and(appStateStorage.putSnapSyncStateRoot(r.value)).commit()
+      stateIngest.appState.putSnapSyncPivotBlock(b).and(stateIngest.appState.putSnapSyncStateRoot(r.value)).commit()
 
   /** Forget everything the healed-code hold knows. A restart or re-peg starts a fresh sync: a stale hold, or a
     * `HealedCodeWaitTimeout` still in flight from the old one, must not finalise it mid-download.
@@ -637,13 +637,13 @@ private[snap] trait HealingOrchestrator
 
   /** Forget healed codeHashes whose bytecode has since been stored. */
   def dropHealedCodeNowPresent(): Unit =
-    healedCodeHashes.filterInPlace(h => evmCodeStorage.get(h).isEmpty)
+    healedCodeHashes.filterInPlace(h => stateIngest.bytecode.get(h).isEmpty)
 
   /** Record the codeHashes the healing coordinator reported and send the missing ones to the bytecode coordinator,
     * spawning one if the SNAP children were already torn down.
     */
   def queueHealedCode(codeHashes: Seq[ByteString]): Unit =
-    val missing = codeHashes.filter(h => h != Account.EmptyCodeHash.value && evmCodeStorage.get(h).isEmpty)
+    val missing = codeHashes.filter(h => h != Account.EmptyCodeHash.value && stateIngest.bytecode.get(h).isEmpty)
     if missing.nonEmpty then
       healedCodeHashes ++= missing
       ctx.log.info(
@@ -656,7 +656,7 @@ private[snap] trait HealingOrchestrator
             Behaviors
               .supervise(
                 childFactories.byteCodeCoordinator(
-                  evmCodeStorage = evmCodeStorage,
+                  evmCodeStorage = stateIngest.bytecode,
                   networkPeerManager = networkPeerManager,
                   requestTracker = requestTracker,
                   batchSize = ByteCodeTask.DEFAULT_BATCH_SIZE,

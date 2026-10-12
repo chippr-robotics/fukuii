@@ -268,7 +268,7 @@ private[snap] trait SyncLifecycle(val heapWatchdogStart: HeapWatchdogStart)
 
         case GetStatus(replyTo) =>
           replyTo ! SyncProtocol.Status.Syncing(
-            startingBlockNumber = appStateStorage.getSyncStartingBlock(),
+            startingBlockNumber = stateIngest.appState.getSyncStartingBlock(),
             blocksProgress = SyncProtocol.Status.Progress(
               pivotBlock.getOrElse(BigInt(0)),
               pivotBlock.getOrElse(BigInt(0))
@@ -333,15 +333,15 @@ private[snap] trait SyncLifecycle(val heapWatchdogStart: HeapWatchdogStart)
     // Root-equality alone would catch this (stateRoot is reset below) but we clear
     // explicitly so the field doesn't briefly hold a stale positive against a None root.
     healingValidatedRoot = None
-    appStateStorage
+    stateIngest.appState
       .putSnapSyncAccountsComplete(false)
-      .and(appStateStorage.putSnapSyncStorageComplete(false))
-      .and(appStateStorage.putSnapSyncBytecodeComplete(false))
+      .and(stateIngest.appState.putSnapSyncStorageComplete(false))
+      .and(stateIngest.appState.putSnapSyncBytecodeComplete(false))
       .commit()
-    appStateStorage
+    stateIngest.appState
       .putSnapSyncStorageFilePath("")
-      .and(appStateStorage.putSnapSyncStorageFileCount(None))
-      .and(appStateStorage.putSnapSyncCodeHashesCount(None))
+      .and(stateIngest.appState.putSnapSyncStorageFileCount(None))
+      .and(stateIngest.appState.putSnapSyncCodeHashesCount(None))
       .commit()
 
     // Reset pivot/state root and storage so a new selection is committed

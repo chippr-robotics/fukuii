@@ -93,7 +93,7 @@ private[snap] trait SnapFinalization extends FinalizationApi with ChainDownloadS
       currentPhase,
       pivotBlock.getOrElse("none"),
       stateRoot.map(_.value.toHex.take(16)).getOrElse("none"),
-      appStateStorage.getSnapSyncStateRoot().map(_.toHex.take(16)).getOrElse("none")
+      stateIngest.appState.getSnapSyncStateRoot().map(_.toHex.take(16)).getOrElse("none")
     )
     dropHealedCodeNowPresent()
     if healedCodeHashes.nonEmpty && !healedCodeWaitExhausted then
@@ -177,13 +177,13 @@ private[snap] trait SnapFinalization extends FinalizationApi with ChainDownloadS
       // RegularSync's BranchResolution needs: header, body, number→hash mapping,
       // ChainWeight, and BestBlockInfo (hash + number) to accept blocks that chain
       // from the pivot.
-      blockchainReader.getBlockHeaderByNumber(pivot) match
+      stateIngest.chainReader.getBlockHeaderByNumber(pivot) match
         case Some(pivotHeader) =>
           // A5: Root match guard — snapStateRoot must equal pivotHeader.stateRoot before
           // marking sync done. Mirrors Besu SnapWorldDownloadState.saveWorldState() implicit
           // verification. If they diverge (BUG-008 class), restart SNAP rather than committing
           // a broken state.
-          appStateStorage.getSnapSyncStateRoot().foreach { snapRoot =>
+          stateIngest.appState.getSnapSyncStateRoot().foreach { snapRoot =>
             if snapRoot != pivotHeader.stateRoot.value then
               ctx.log.error(
                 "SNAP finalization aborted: snapStateRoot={} != pivotHeader.stateRoot={}. " +
@@ -201,12 +201,12 @@ private[snap] trait SnapFinalization extends FinalizationApi with ChainDownloadS
           // block can read the pivot state. The scan is long (the whole state), so it runs on a blocking-dispatcher
           // Future and this actor keeps serving status/progress queries (`syncing` serves them while `pathPublish` is set); it re-enters here with
           // `pathPublished = true` once PathPublishDone arrives. Hash scheme (ETC) never enters this branch.
-          if pathNodeStorageOpt.isDefined && !pathPublished then
+          if stateIngest.pathNodes.isDefined && !pathPublished then
             // #1555: never start the whole-state publish when the pivot root's node is stored nowhere: its verification
             // cannot pass, so escalate now instead of after 6-12 minutes of scanning. SyncController's restart then
             // heals at a newer pivot (PoS) rather than this one.
             if FinalizationPolicy.pathPivotRootAbsent(
-                pathNodeStorageOpt.get,
+                stateIngest.pathNodes.get,
                 pivotHeader.stateRoot.value,
                 getOrCreateMptStorage(pivot)
               )
@@ -230,7 +230,7 @@ private[snap] trait SnapFinalization extends FinalizationApi with ChainDownloadS
           // number with ETH69-only peers, and every block above the pivot inherits whatever is stored here).
           // The header cursor is written atomically with each stored header, so cursor >= pivot means contiguous.
           if SNAPSyncController.chainBackfillDeferredToFinalization(snapSyncConfig) then
-            val cursor = appStateStorage.getBackfillBestHeader()
+            val cursor = stateIngest.appState.getBackfillBestHeader()
             if cursor < pivot then
               enterHeaderHold(pivot, pivotHeader.hash.value, cursor)
               break(Behaviors.same)
@@ -242,19 +242,19 @@ private[snap] trait SnapFinalization extends FinalizationApi with ChainDownloadS
           // a Block AND the number→hash mapping is written. PivotHeaderBootstrap already stored
           // the header, but storeBlock ensures the mapping is present even if the header was
           // stored by a different code path during pivot refresh.
-          blockchainWriter.storeBlock(Block(pivotHeader, BlockBody.empty)).commit()
+          stateIngest.chainWriter.storeBlock(Block(pivotHeader, BlockBody.empty)).commit()
 
           // Store a ChainWeight so compareBranch() can evaluate new blocks.
           // Priority: (1) real cumulative TD from ChainDownloader — only accepted if it exceeds
           // 1000× genesis TD (rejects genesis-proxy values written by earlier updateBestBlockForPivot
           // calls). (2) Peer-interpolated TD from a connected ETH68 peer. (3) Block-number proxy as
           // last resort (no ETH68 peers at all — rare but possible in isolated test environments).
-          val genesisBlockTD: BigInt = blockchainReader
-            .getChainWeightByHash(blockchainReader.genesisHeader.hash)
+          val genesisBlockTD: BigInt = stateIngest.chainReader
+            .getChainWeightByHash(stateIngest.chainReader.genesisHeader.hash)
             .map(_.totalDifficulty.value)
-            .getOrElse(blockchainReader.genesisHeader.difficulty.value)
+            .getOrElse(stateIngest.chainReader.genesisHeader.difficulty.value)
           val (finalTD, tdSource) =
-            blockchainReader
+            stateIngest.chainReader
               .getChainWeightByHash(pivotHash)
               .map(_.totalDifficulty.value)
               .filter(_ > genesisBlockTD * BigInt(1000))
@@ -262,7 +262,7 @@ private[snap] trait SnapFinalization extends FinalizationApi with ChainDownloadS
               .orElse(calibratePivotTD(pivot).map(td => (td, "PEER_INTERPOLATED_TD")))
               .getOrElse((pivot.max(genesisBlockTD), "BLOCK_NUMBER_PROXY"))
           ctx.log.info("SNAP finalize pivot TD: block={} td={} source={}", pivot, finalTD, tdSource)
-          blockchainWriter
+          stateIngest.chainWriter
             .storeChainWeight(
               pivotHash,
               ChainWeight.totalDifficultyOnly(finalTD)
@@ -271,7 +271,7 @@ private[snap] trait SnapFinalization extends FinalizationApi with ChainDownloadS
 
           // Set best block info with BOTH hash and number (putBestBlockNumber only
           // sets the number, leaving getBestBlockInfo().hash empty).
-          appStateStorage
+          stateIngest.appState
             .putBestBlockInfo(
               com.chipprbots.ethereum.domain.appstate.BlockInfo(pivotHash.value, pivot)
             )
@@ -302,15 +302,16 @@ private[snap] trait SnapFinalization extends FinalizationApi with ChainDownloadS
                 s"${healedCodeHashes.size}, bytecode phase force-completed: $bytecodeForceCompleted) — " +
                 "bytecodeRecoveryDone NOT set"
             )
-          val doneFlags = appStateStorage.snapSyncDone().and(appStateStorage.storageRecoveryDone())
-          (if bytecodeComplete then doneFlags.and(appStateStorage.bytecodeRecoveryDone()) else doneFlags).commitSync()
+          val doneFlags = stateIngest.appState.snapSyncDone().and(stateIngest.appState.storageRecoveryDone())
+          (if bytecodeComplete then doneFlags.and(stateIngest.appState.bytecodeRecoveryDone()) else doneFlags)
+            .commitSync()
 
           ctx.log.info(s"SNAP sync completed successfully at block $pivot (hash=${pivotHash.value.take(8).toHex})")
 
         case None =>
           // Fallback: shouldn't happen since PivotHeaderBootstrap stored the header
           ctx.log.warn(s"Pivot header for block $pivot not found in storage — setting best block number only")
-          appStateStorage.putBestBlockNumber(pivot).commit()
+          stateIngest.appState.putBestBlockNumber(pivot).commit()
 
       progressMonitor.complete()
       ctx.log.info(progressMonitor.currentProgress.toString)
@@ -325,7 +326,7 @@ private[snap] trait SnapFinalization extends FinalizationApi with ChainDownloadS
 
       // SNAP is done: no account resume can follow. Drop the checkpoint and every superseded contract task file,
       // keeping only the files the accounts-complete recovery path was handed (conservative; they are not re-read).
-      appStateStorage.removeSnapAccountResumeCheckpoint().commit()
+      stateIngest.appState.removeSnapAccountResumeCheckpoint().commit()
       sweepSupersededTaskFiles(keep = accountsCompleteTaskFilePaths, reason = "SNAP complete")
 
       // Phase 1 of the handshake: tell the parent that pivot/state is anchored. Parent starts RegularSync.
@@ -357,7 +358,8 @@ private[snap] trait SnapFinalization extends FinalizationApi with ChainDownloadS
     * the PathPublish* messages until [[PathPublishDone]] re-enters [[finalizeSnapSync]].
     */
   private def startPathPublish(pivot: BigInt, pivotRoot: ByteString): Unit =
-    val pns = pathNodeStorageOpt.getOrElse(throw new IllegalStateException("startPathPublish without PathNodeStorage"))
+    val pns =
+      stateIngest.pathNodes.getOrElse(throw new IllegalStateException("startPathPublish without PathNodeStorage"))
     val target = getOrCreateMptStorage(pivot)
     // Capture everything the worker needs on the actor thread: ActorContext accessors are actor-thread-only.
     val self = ctx.self
@@ -471,9 +473,9 @@ private[snap] trait SnapFinalization extends FinalizationApi with ChainDownloadS
           val downloader = ctx
             .spawn(
               childFactories.chainDownloader(
-                blockchainReader = blockchainReader,
-                blockchainWriter = blockchainWriter,
-                appStateStorage = appStateStorage,
+                blockchainReader = stateIngest.chainReader,
+                blockchainWriter = stateIngest.chainWriter,
+                appStateStorage = stateIngest.appState,
                 networkPeerManager = networkPeerManager,
                 peerEventBus = peerEventBus,
                 syncConfig = syncConfig,

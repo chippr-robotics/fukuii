@@ -531,7 +531,7 @@ private[snap] trait PivotRefresher
         timers.startSingleTimer(PivotBootstrapRetryKey, RetryPivotRefresh, 30.seconds)
     else
       val newPivotBlock = newPivotOpt.get
-      val newPivotHeaderOpt = blockchainReader.getBlockHeaderByNumber(newPivotBlock)
+      val newPivotHeaderOpt = stateIngest.chainReader.getBlockHeaderByNumber(newPivotBlock)
 
       if newPivotHeaderOpt.isEmpty then
         // Header not available locally — request it from a peer via the bootstrap mechanism.
@@ -704,9 +704,9 @@ private[snap] trait PivotRefresher
             // succeeds (trie walk finds 0 missing nodes). Mid-healing writes cause root mismatch (BUG-006):
             // the new root is stored before all its nodes are healed, then validateState() sees a mismatch.
             if currentPhase != StateHealing then
-              appStateStorage
+              stateIngest.appState
                 .putSnapSyncPivotBlock(newPivotBlock)
-                .and(appStateStorage.putSnapSyncStateRoot(newStateRoot.value))
+                .and(stateIngest.appState.putSnapSyncStateRoot(newStateRoot.value))
                 .commit()
             updateBestBlockForPivot(newPivotHeader, newPivotBlock)
             SNAPSyncMetrics.setPivotBlockNumber(newPivotBlock)
