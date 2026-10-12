@@ -1093,17 +1093,26 @@ controller modules and before T060. Spec 017 (`specs/017-state-capabilities-witn
     - `controller/StateIngest.scala`: one member per former env handle (`appState`, `stateTries`, `flatSlots`,
       `pathNodes`, `bytecode`, `chainReader`, `chainWriter`, `validatorFactory`) plus `durability` (one value,
       `Default` = today's behaviour); cap 9. Production implementation: a `final class` of plain vals built once by
-      the core. `SnapControllerEnv` 18 → 11; storage-reference total 692 → 556 (baseline recorded in the PR).
+      the core. `SnapControllerEnv` 18 → 11. Storage-reference total **692 → 678** under T054b's counting (recorded
+      in the baseline at the rebase onto T054b, with a `capabilities["StateIngest"]` entry of 9 members). It is not
+      556 (the pre-T054b counter's figure): `stateIngest.<handle>` is a parameterless storage-typed member, so it
+      still counts once per use, as the handle did. That is honest, because the modules still reach the stores
+      through those handles. The real reduction comes in the C-* slices (user decision 2026-10-11: keep handle-level
+      members, ADR INF-006).
     - Chain data: `chainReader`/`chainWriter` stay on `StateIngest`, no header/chain sub-interface for now
       (ADR INF-006, decision 2).
     - **FR-044 (user decision 2026-10-11: document now, barrier in T056).** Finding: no separate durable flush/sync
       barrier exists today on either scheme. The WAL is on for every write; ingest and publish writes are plain
       commits; the three completion flags are one `commitSync()` batch, the only synced write on the finalization
-      path. Its WAL sync persists every earlier WAL record, so a recovered `snapSyncDone` implies the ingest and
-      publish writes were recovered. That implicit guarantee is what T055 pins: the `StateIngest` scaladoc, ADR
+      path. Its WAL sync persists every earlier WAL record, so, under archive and basic pruning, a recovered
+      `snapSyncDone` implies the ingest and publish writes were recovered. Under `inmemory` pruning it does not:
+      trie nodes stay in `CachedReferenceCountedStorage`'s cache and never reach the WAL before the flags, on either
+      scheme (vault review; shipped configs use basic or archive). That implicit guarantee is what T055 pins: the `StateIngest` scaladoc, ADR
       INF-006 and `StateIngestDurabilitySpec` (both schemes: the flags are the only synced write, after every
       ingest/publish write, and every replayed prefix holding `snapSyncDone` holds the pivot root). No barrier is
-      added; ETC behaviour is unchanged. **Open (vault):** confirm that the synced flags batch also covers WAL files
+      added; ETC behaviour is unchanged. The property is about execution reads: SNAP's own read-only checks of the
+      hash-keyed store before the flags (the #1555 pivot-root guard, the validation walks, the healing walks, the
+      post-publish root check) are ingest verification reads and are not covered (beacon note N1). **Open (vault):** confirm that the synced flags batch also covers WAL files
       rolled before it (stated in the ADR).
     - **`ChildFactories` (user decision 2026-10-11: deferred to the C-* slices).** The signatures are unchanged:
       `ChildFactoriesSpec` checks each factory's defaults against its child's `apply` by position, so the change
@@ -1122,6 +1131,17 @@ controller modules and before T060. Spec 017 (`specs/017-state-capabilities-witn
     changes the ETC path). **No relaxed WAL policy may be enabled, or even selectable, without it.** The vault
     question from T055 (does the synced flags batch cover earlier rolled WAL files?) is answered before T056 merges.
     `StateIngestDurabilitySpec` is extended to expect the barrier before the flags on both schemes.
+  - **Barrier requirements (vault review of T055, 2026-10-11):**
+    - **What:** a memtable flush (`FlushOptions` with wait) across the node, path-node, flat-slot and code namespaces,
+      plus a WAL sync. A synced empty batch is not enough.
+    - **Inmemory pruning:** under `pruning.mode = "inmemory"`, flush the node cache (`CachedReferenceCountedStorage`)
+      first. Today those nodes never reach the WAL before the flags, on either scheme (ADR INF-006 §4).
+    - **Where:** Path scheme, after the publish and before the flags; Hash scheme, after the last ingest write and
+      before the flags.
+    - **Owner:** the barrier lives on `StateIngest`.
+    - **Tests:** extend `StateIngestDurabilitySpec`, and add a real-RocksDB kill -9 recovery test. It also confirms
+      vault's rolled-WAL answer (a synced write fsyncs every live, unsynced WAL), which is from RocksDB semantics, not
+      a read of the rocksdbjni 10.10.1.1 source.
   - Reviews: vault and forge. Validation: Mordor and Platåberget SNAP runs, including a crash during finalization that
     must resume without reading undurable state. The default stays today's policy until the user decides otherwise.
 
