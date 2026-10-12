@@ -5668,8 +5668,16 @@ reads (decision 1), not execution reads, and the property does not cover them (b
 <ul>
 <li>The node runs one RocksDB instance (<code>RocksDbDataSource</code>) with all column families in it. The WAL is on for every
   write: nothing sets <code>disableWAL</code>, and there is no manual WAL flush.</li>
-<li>Ingest writes, and the publish's writes (<code>MptStorage.storeRawNodes</code>, then <code>persist()</code>, a no-op on the archive
-  store), are plain <code>commit()</code>s: <code>WriteOptions.setSync(false)</code>. The WAL record is appended but not fsynced.</li>
+<li>Under archive and basic pruning (basic is the default in <code>conf/base/pruning.conf</code>; hive runs archive), ingest
+  writes and the publish's writes (<code>MptStorage.storeRawNodes</code>, then <code>persist()</code>) reach RocksDB as plain <code>commit()</code>s:
+  <code>WriteOptions.setSync(false)</code>. The WAL record is appended but not fsynced. What <code>persist()</code> does depends on the
+  pruning mode, so it is not a general no-op.</li>
+<li>Under <code>pruning.mode = "inmemory"</code> (<code>CachedReferenceCountedStateStorage</code>, <code>StateStorage.scala</code> ~314), the trie store
+  (<code>getBackingStorage</code>, a <code>CachedReferenceCountedStorage</code>) writes only to its LRU cache and change log, and its
+  <code>persist()</code> is <code>()</code>. Those nodes are <strong>not in the WAL</strong> when the flags sync, on either scheme: the Path publish's
+  target is <code>stateTries.getBackingStorage</code> too. The codebase already says so (<code>SNAPSyncController</code>'s
+  <code>recordStorageDone</code> comment, ~243-250; <code>AccountRangeCoordinator</code> ~701, where correctness rests on the healing walk
+  every resume forces). Shipped configs (basic, archive) are not affected.</li>
 <li>On both schemes, <code>SnapFinalization.finalizeSnapSync</code> writes the pivot block, its chain weight and the best-block
   info with plain commits. It then writes the three completion flags (<code>snapSyncDone</code>, <code>storageRecoveryDone</code>, and
   <code>bytecodeRecoveryDone</code> when bytecode is complete) in <strong>one batch with <code>commitSync()</code></strong>, which uses
@@ -5677,14 +5685,17 @@ reads (decision 1), not execution reads, and the property does not cover them (b
 <li>So there is <strong>no separate flush/sync barrier before <code>completeSnapSync</code></strong>, on either scheme. The publish output is
   not synced when the publish ends. The memtables are not flushed. The only flush in the codebase,
   <code>RocksDbDataSource.flushAll</code>, is <code>private[dataSource]</code> test support.</li>
-<li>What does hold: a synced write syncs the WAL up to and including itself. A crash therefore leaves a prefix of the
-  writes, and if <code>snapSyncDone</code> survived, every earlier ingest and publish write survived too. That holds while every
-  ingest write goes through the WAL. It would <strong>not</strong> hold under a relaxed policy that skipped the WAL.</li>
+<li>What does hold, <strong>under archive and basic pruning</strong>: a synced write syncs the WAL up to and including itself. A
+  crash therefore leaves a prefix of the writes, and if <code>snapSyncDone</code> survived, every earlier ingest and publish write
+  survived too. That holds while every ingest write goes into the WAL. It does <strong>not</strong> hold under <code>inmemory</code> pruning
+  (above), and it would not hold under a relaxed policy that skipped the WAL.</li>
 </ul>
-<p><strong>Open question (vault).</strong> Does the synced flags batch also make durable the WAL files that were rolled before it?
-The guarantee above assumes that a <code>sync = true</code> write fsyncs every WAL file still holding unflushed records, not only
-the current one. If it does not, the implicit guarantee has a gap even with the WAL on, and the T056 barrier must close
-it. vault answers this before T056 merges.</p>
+<p><strong>Rolled WAL files (vault's answer).</strong> A <code>sync = true</code> write fsyncs every live WAL not yet synced (those still in
+<code>logs_</code>), not only the current one. A memtable flush syncs the closed logs before it writes the SST. All column
+families share one WAL. With point-in-time recovery's prefix rule, that gives "recovered flag ⇒ every earlier write
+recovered", including writes in WAL files rolled before the flags. <strong>Caveat:</strong> this comes from RocksDB's documented
+semantics, not from a read of the rocksdbjni 10.10.1.1 source. T056 confirms it, against the pinned source or with a
+kill -9 test across a forced WAL roll.</p>
 <p><strong>Decision (user, 2026-10-11): document now, add the barrier in T056.</strong> T055 stays behaviour-neutral. It states the
 property on the trait and pins today's implicit guarantee with a new Tier 1 test, <code>StateIngestDurabilitySpec</code>. On both
 schemes, the test checks three things: the completion flags are the only synced write; they come after every ingest or
@@ -5692,8 +5703,17 @@ publish write; and every replayed prefix that holds <code>snapSyncDone</code> al
 add an explicit barrier, because that changes the ETC path (an extra WAL sync, or a memtable flush, before completion).</p>
 <p>The explicit durable barrier before <code>completeSnapSync</code> is added by <strong>T056</strong> and is a <strong>hard precondition</strong> of it: no
 relaxed WAL policy may be enabled, or even selectable, without the barrier, because the flags' WAL sync no longer
-covers writes that skip the WAL. T056 needs forge and vault sign-off, and extends <code>StateIngestDurabilitySpec</code> to expect
-the barrier before the flags on both schemes.</p>
+covers writes that skip the WAL. T056 needs forge and vault sign-off. vault's requirements for the barrier:</p>
+<ul>
+<li><strong>What:</strong> a memtable flush (<code>FlushOptions</code> with wait) across the node, path-node, flat-slot and code namespaces, plus
+  a WAL sync. Not a synced empty batch.</li>
+<li><strong>Inmemory pruning:</strong> flush the node cache to RocksDB first, so the barrier also closes the <code>inmemory</code> gap.</li>
+<li><strong>Where:</strong> on the Path scheme, after the publish and before the flags; on the Hash scheme, after the last ingest
+  write and before the flags.</li>
+<li><strong>Owner:</strong> the barrier lives on <code>StateIngest</code>.</li>
+<li><strong>Tests:</strong> extend <code>StateIngestDurabilitySpec</code> to expect the barrier before the flags on both schemes, and add a
+  real-RocksDB kill -9 recovery test (which also settles the rolled-WAL caveat).</li>
+</ul>
 <h3 id="5-the-batched-storage-trie-node-write-path-sc-010">5. The batched storage-trie node-write path (SC-010)<a class="headerlink" href="#5-the-batched-storage-trie-node-write-path-sc-010" title="Permanent link">&para;</a></h3>
 <p>The hottest SNAP write is the Path-scheme storage-trie node write (#1548). <code>StorageRangeCoordinator</code> builds each
 update with <code>PathNodeStorage.storageNodeUpsert</code> / <code>storageNodeRemoval</code>, buffers it in <code>trieNodeWrites</code>, and commits one
