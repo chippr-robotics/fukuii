@@ -8,39 +8,29 @@
     "capabilities (T054b; first entry at T055): {TraitName: {file, members, raw_imports}}. Added only by a `# capability: TraitName` PR; never removed. members only goes down (growth needs justifications[\"capabilities.TraitName.members\"]); raw_imports is fixed when the capability is introduced and only shrinks. The capability file is the storage boundary, so it is not a storage_refs row; elsewhere `accessor.call` is not a storage reference, while `accessor.handle` (a parameterless storage-typed member) counts once."
   ],
   "env": {
-    "members": 18,
+    "members": 11,
     "header": ":",
-    "storage_members": [
-      "appStateStorage",
-      "blockchainReader",
-      "blockchainWriter",
-      "evmCodeStorage",
-      "flatSlotStorage",
-      "pathNodeStorageOpt",
-      "stateStorage",
-      "validatorFactory"
-    ]
+    "storage_members": []
   },
-  "storage_refs_total": 692,
+  "storage_refs_total": 678,
   "storage_refs": {
     "controller/SnapResumePlanner.scala": 95,
     "actors/StorageRangeCoordinator.scala": 88,
     "actors/TrieNodeHealingCoordinator.scala": 84,
     "controller/ChildFactories.scala": 72,
-    "SNAPSyncController.scala": 62,
+    "SNAPSyncController.scala": 69,
     "controller/DownloadSupervisor.scala": 60,
     "controller/PivotSelector.scala": 51,
     "controller/HealingOrchestrator.scala": 45,
     "controller/SnapFinalization.scala": 35,
     "actors/AccountRangeCoordinator.scala": 28,
-    "controller/SnapControllerEnv.scala": 23,
     "controller/SyncLifecycle.scala": 18,
     "actors/ByteCodeCoordinator.scala": 10,
     "controller/PivotRefresher.scala": 8,
+    "controller/StateValidationModule.scala": 5,
     "controller/FinalizationPolicy.scala": 4,
     "controller/SnapPeerPool.scala": 3,
-    "controller/StagnationWatchdog.scala": 3,
-    "controller/StateValidationModule.scala": 3
+    "controller/StagnationWatchdog.scala": 3
   },
   "raw_imports": {
     "actors/StorageRangeCoordinator.scala": [
@@ -50,5 +40,12 @@
   },
   "justifications": {
     "storage_refs.total": "scope extension: core added to the measured set; no code change (spec 016 T054c: SNAPSyncController.scala, the split's move source, counts 64; 628 + 64 = 692. From here a move from the core into a module is a per-file trade and the total only goes down)"
+  },
+  "capabilities": {
+    "StateIngest": {
+      "file": "controller/StateIngest.scala",
+      "members": 9,
+      "raw_imports": []
+    }
   }
 }
