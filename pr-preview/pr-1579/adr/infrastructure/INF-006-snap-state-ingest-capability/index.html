@@ -5659,6 +5659,11 @@ execution store on either scheme (FR-045).</p>
 durable (flushed and synced) before SNAP finalization marks SNAP complete (<code>snapSyncDone</code>), and before execution reads
 it, whatever policy the ingest writes used. On the Hash scheme there is no export step, so the property needs a
 durable flush/sync barrier before <code>completeSnapSync</code>. The scaladoc of <code>StateIngest</code> states it.</p>
+<p>The property is about <strong>execution</strong> reads. SNAP itself reads the hash-keyed store before the publish and before the
+flags, read-only, to decide what to do: the #1555 pivot-root guard (<code>FinalizationPolicy.pathPivotRootAbsent</code>, from
+<code>SnapFinalization.finalizeSnapSync</code> and <code>HealingOrchestrator</code>), the state-validation walks (<code>StateValidationModule</code>),
+the healing coordinator's walks, and the post-publish root check in <code>onPathPublishDone</code>. These are ingest verification
+reads (decision 1), not execution reads, and the property does not cover them (beacon review note N1).</p>
 <p><strong>What the code does today (T055 finding, on <code>staging@2be66fe3c</code>):</strong></p>
 <ul>
 <li>The node runs one RocksDB instance (<code>RocksDbDataSource</code>) with all column families in it. The WAL is on for every
