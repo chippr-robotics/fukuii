@@ -5711,7 +5711,16 @@ every C-</em> slice (tasks.md, "Coordinators").</p>
 <h2 id="consequences">Consequences<a class="headerlink" href="#consequences" title="Permanent link">&para;</a></h2>
 <ul>
 <li><code>SnapControllerEnv</code> has 11 members and no storage handle. The storage-reference total over the measured set falls
-  from 692 to 556. <code>StateIngest.scala</code> counts 32 of those, unless the T054b mode exempts the capability file.</li>
+  from <strong>692 to 678</strong> under the T054b capability-mode counting. That counting is deliberate: a call such as
+  <code>stateIngest.appState.putSnapSyncPivotBlock(...)</code> reaches a raw store through a parameterless storage-typed member,
+  so <code>stateIngest.&lt;handle&gt;</code> still counts once, as <code>appStateStorage</code> did. The module rows therefore stay close to their
+  old values (<code>StateValidationModule</code> rises 3 → 5, because <code>stateIngest.validatorFactory</code> is storage-typed; the gate is
+  the total). The drop of 14 is the env's 23 handle references gone, less the core's 7 new ones (building
+  <code>stateIngest</code>), less 2. The capability file itself is not a <code>storage_refs</code> row; it has its own member-cap entry (9)
+  under <code>capabilities</code>. An earlier measurement of 556 used the pre-T054b counter, which did not count
+  <code>stateIngest.&lt;handle&gt;</code>. That figure understated the remaining coupling. The real reduction comes in the C-* slices,
+  as each coordinator narrows to calls on the capability (user decision 2026-10-11: handle-level members, as in
+  decision 1).</li>
 <li>The coordinators still take raw stores until their C-* narrowings. Each narrowing takes <code>StateIngest</code>, never
   <code>StateAccess</code>, and lowers the total.</li>
 <li>The module stubs in the controller test suites gain a <code>stateIngest</code> that forwards, by name, to their existing stores
