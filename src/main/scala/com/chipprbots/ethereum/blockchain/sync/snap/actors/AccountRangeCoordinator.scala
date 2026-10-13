@@ -26,8 +26,8 @@ import com.google.common.hash.PrimitiveSink
 
 import com.chipprbots.ethereum.blockchain.sync.snap.*
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.account.*
+import com.chipprbots.ethereum.blockchain.sync.snap.controller.StateIngest
 import com.chipprbots.ethereum.db.storage.MptStorage
-import com.chipprbots.ethereum.db.storage.PathNodeStorage
 import com.chipprbots.ethereum.db.storage.SnapStorageDoneStorage
 import com.chipprbots.ethereum.domain.Account
 import com.chipprbots.ethereum.mpt.MerklePatriciaTrie
@@ -35,6 +35,11 @@ import com.chipprbots.ethereum.network.NetworkPeerManagerActor
 import com.chipprbots.ethereum.network.Peer
 import com.chipprbots.ethereum.network.p2p.messages.SNAP.AccountRange
 import com.chipprbots.ethereum.utils.ByteStringUtils.ByteStringOps
+
+// The call-site map for the snap-split verify adoption mode (spec 016 T064, C-A3): the dropped parameter and the
+// StateIngest member that replaces it. `mptStorage` (the core's per-pivot trie store) and `storageDone` stay explicit
+// parameters: session values, not capabilities (the named FR-042 exception, user decision 2026-10-13).
+// adopt-map: pathNodeStorage -> pathNodes
 
 /** AccountRangeCoordinator manages account range download workers.
   *
@@ -79,7 +84,7 @@ private[actors] class AccountRangeCoordinatorImpl(
     val minResponseBytesConfig: Int = 102400,
     accountTrieEcOverride: Option[ExecutionContext] = None,
     val storageScheme: StorageScheme = StorageScheme.Hash,
-    val pathNodeStorage: Option[PathNodeStorage] = None,
+    val stateIngest: StateIngest,
     taskFileDir: Option[Path] = None,
     // Contract task files of the previous coordinator, consistent with `resumeProgress` (see AccountResumeCheckpoint).
     // When present, partially-downloaded ranges resume from their cursor; when absent (legacy progress record),
@@ -100,7 +105,10 @@ private[actors] class AccountRangeCoordinatorImpl(
     with AccountPeerDispatchState
     with AccountTaskLifecycleState
     with AccountProgressApi
-    with ContractWorkCarryApi:
+    with ContractWorkCarryApi
+    with AccountTrieAssemblyState
+    with AccountRangeCoreApi
+    with ContractTaskFilesApi:
 
   import SNAPSyncController.PivotStateUnservable
   import AccountRangeCoordinator.*
@@ -1274,7 +1282,7 @@ object AccountRangeCoordinator:
       minResponseBytes: Int = 102400,
       accountTrieEcOverride: Option[ExecutionContext] = None,
       storageScheme: StorageScheme = StorageScheme.Hash,
-      pathNodeStorage: Option[PathNodeStorage] = None,
+      stateIngest: StateIngest,
       taskFileDir: Option[Path] = None,
       carriedTaskFiles: Option[ContractTaskFiles] = None,
       progressGeneration: Long = 0L,
@@ -1298,7 +1306,7 @@ object AccountRangeCoordinator:
           minResponseBytesConfig = minResponseBytes,
           accountTrieEcOverride = accountTrieEcOverride,
           storageScheme = storageScheme,
-          pathNodeStorage = pathNodeStorage,
+          stateIngest = stateIngest,
           taskFileDir = taskFileDir,
           carriedTaskFiles = carriedTaskFiles,
           progressGeneration = progressGeneration,

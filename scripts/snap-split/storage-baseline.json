@@ -14,24 +14,26 @@
     "storage_members": []
   },
   "counter": 2,
-  "storage_refs_total": 619,
+  "storage_refs_total": 609,
   "storage_refs": {
     "controller/SnapResumePlanner.scala": 92,
-    "controller/ChildFactories.scala": 71,
     "actors/TrieNodeHealingCoordinator.scala": 70,
     "SNAPSyncController.scala": 70,
+    "controller/ChildFactories.scala": 67,
     "actors/StorageRangeCoordinator.scala": 66,
-    "controller/DownloadSupervisor.scala": 52,
     "controller/PivotSelector.scala": 51,
+    "controller/DownloadSupervisor.scala": 50,
     "controller/HealingOrchestrator.scala": 43,
     "controller/SnapFinalization.scala": 34,
-    "actors/AccountRangeCoordinator.scala": 29,
+    "actors/AccountRangeCoordinator.scala": 17,
     "controller/SyncLifecycle.scala": 17,
     "controller/PivotRefresher.scala": 8,
     "controller/StateValidationModule.scala": 5,
+    "actors/account/AccountTrieAssembly.scala": 5,
     "actors/bytecode/ByteCodeResponseHandling.scala": 4,
     "controller/FinalizationPolicy.scala": 4,
-    "controller/SnapPeerPool.scala": 3
+    "controller/SnapPeerPool.scala": 3,
+    "actors/account/AccountRangeEnv.scala": 3
   },
   "raw_imports": {
     "actors/StorageRangeCoordinator.scala": [

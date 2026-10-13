@@ -794,7 +794,7 @@ private[snap] trait DownloadSupervisor extends AccountRangeStartApi with ByteCod
               initialResponseBytes = snapSyncConfig.accountInitialResponseBytes,
               minResponseBytes = snapSyncConfig.accountMinResponseBytes,
               storageScheme = snapSyncConfig.storageScheme,
-              pathNodeStorage = stateIngest.pathNodes,
+              stateIngest = stateIngest,
               taskFileDir = snapSyncConfig.taskFileDir,
               carriedTaskFiles = carriedTaskFiles,
               progressGeneration = coordinatorGeneration,

@@ -10,6 +10,7 @@ import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController
 import com.chipprbots.ethereum.blockchain.sync.snap.SnapIntakeBudget
 import com.chipprbots.ethereum.blockchain.sync.snap.StorageScheme
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.AccountRangeCoordinator
+import com.chipprbots.ethereum.blockchain.sync.snap.controller.StateIngest
 import com.chipprbots.ethereum.db.storage.MptStorage
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor
 
@@ -25,7 +26,7 @@ import com.chipprbots.ethereum.network.NetworkPeerManagerActor
   * `ctx.log` is thread-confined), the resume cursors and the storage scheme the per-range StackTrie is built from, and
   * `mptStorage`, the pivot-bound trie store the Hash-scheme StackTrie flushes to. `mptStorage` stays an explicit
   * parameter, not a `StateIngest` member: it is a session value (the core's per-pivot instance), the named FR-042
-  * exception recorded at T064.
+  * exception recorded at T064. The Path-scheme node store comes from `stateIngest.pathNodes`.
   */
 private[actors] trait AccountRangeEnv:
   def ctx: ActorContext[AccountRangeCoordinator.Command]
@@ -42,3 +43,4 @@ private[actors] trait AccountRangeEnv:
   def resumeProgress: Map[ByteString, ByteString]
   def storageScheme: StorageScheme
   def mptStorage: MptStorage
+  def stateIngest: StateIngest

@@ -16,7 +16,6 @@ import com.chipprbots.ethereum.blockchain.sync.snap.SnapHashTrie
 import com.chipprbots.ethereum.blockchain.sync.snap.SnapPathTrie
 import com.chipprbots.ethereum.blockchain.sync.snap.SnapTrie
 import com.chipprbots.ethereum.blockchain.sync.snap.StorageScheme
-import com.chipprbots.ethereum.blockchain.sync.snap.actors.*
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.AccountRangeCoordinator.AccountGetCodeHashesFileInfo
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.AccountRangeCoordinator.AccountGetContractAccounts
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.AccountRangeCoordinator.AccountGetContractStorageAccounts
@@ -90,7 +89,8 @@ private[actors] trait ContractTaskFilesApi:
   * `finalizing` behaviour that waits for it. The coordinator core keeps the behaviour arms that call it.
   */
 private[actors] trait AccountTrieAssembly:
-  self: AccountRangeCoordinatorImpl =>
+  self: AccountTrieAssemblyState & AccountRangeEnv & AccountActivePeersApi & AccountTaskLifecycleApi &
+    AccountProgressApi & AccountRangeCoreApi & ContractTaskFilesApi =>
 
   private var lastProgressLogAt: Long = 0 // accounts count at last periodic log
   private lazy val ProgressLogInterval: Long = 100_000 // log every 100K accounts
@@ -302,7 +302,7 @@ private[actors] trait AccountTrieAssembly:
         case StorageScheme.Hash =>
           new SnapHashTrie(batch => mptStorage.storeRawNodes(batch))
         case StorageScheme.Path =>
-          val pns = pathNodeStorage.getOrElse(
+          val pns = stateIngest.pathNodes.getOrElse(
             throw new IllegalStateException("PathScheme requires pathNodeStorage to be set")
           )
           val skipLeft = resumeProgress.contains(task.last)
