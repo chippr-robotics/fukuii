@@ -76,7 +76,7 @@ import com.chipprbots.ethereum.domain.BlockchainWriter
   * as a hard precondition of any relaxed WAL policy (user decision 2026-10-11). `StateIngestDurabilitySpec` pins
   * today's call ordering on both schemes.
   */
-private[snap] trait StateIngest:
+private[sync] trait StateIngest:
 
   /** SNAP progress, resume checkpoints, completion markers and pivot persistence (the app-state column family). */
   def appState: AppStateStorage
@@ -106,7 +106,7 @@ private[snap] trait StateIngest:
   /** This capability's durability policy (FR-045). */
   def durability: StateIngest.Durability
 
-private[snap] object StateIngest:
+private[sync] object StateIngest:
 
   /** Durability policies for ingest writes (FR-045). `Default` is today's behaviour: the WAL on for every write, plain
     * commits for ingest writes, and the completion flags in one synced commit. A relaxed policy is T056's.

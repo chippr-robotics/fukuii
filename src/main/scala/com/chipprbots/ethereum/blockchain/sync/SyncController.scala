@@ -22,7 +22,9 @@ import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController.PivotBoot
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController.StartRegularSyncBootstrap
 import com.chipprbots.ethereum.blockchain.sync.snap.ChainDownloader
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController.StartRegularSyncBootstrapByHash
+import com.chipprbots.ethereum.blockchain.sync.snap.StateValidator
 import com.chipprbots.ethereum.blockchain.sync.snap.StorageTaskFile
+import com.chipprbots.ethereum.blockchain.sync.snap.controller.StateIngest
 import com.chipprbots.ethereum.consensus.ConsensusAdapter
 import com.chipprbots.ethereum.consensus.ReorgStateHandler
 import com.chipprbots.ethereum.consensus.engine.DesignatedHead
@@ -33,6 +35,8 @@ import com.chipprbots.ethereum.db.storage.AppStateStorage
 import com.chipprbots.ethereum.db.storage.EvmCodeStorage
 import com.chipprbots.ethereum.db.storage.FastSyncStateStorage
 import com.chipprbots.ethereum.db.storage.FlatSlotStorage
+import com.chipprbots.ethereum.db.storage.MptStorage
+import com.chipprbots.ethereum.db.storage.PathNodeStorage
 import com.chipprbots.ethereum.db.storage.StateStorage
 import com.chipprbots.ethereum.domain.Blockchain
 import com.chipprbots.ethereum.domain.BlockchainReader
@@ -1900,6 +1904,28 @@ object SyncController:
 
           val snapSyncConfig = loadSnapSyncConfig()
 
+          // D-T060-2 (spec 016 T060c): the recovery actors reach the stores through one `StateIngest`, built here
+          // as SNAPSyncController builds its own: the same constructor stores, `pathNodeStorageOpt` derived as it
+          // derives it (`None` on the Hash scheme, i.e. ETC), `validatorFactory` as its `apply` default. Building it
+          // only stores the references; on the Path scheme it also wraps the flat-slot data source in a new
+          // `PathNodeStorage`, which holds no state of its own and which the recovery actors do not read.
+          val pathNodeStorageOpt: Option[PathNodeStorage] =
+            if snapSyncConfig.storageScheme == StorageScheme.Path then
+              Some(new PathNodeStorage(flatSlotStorage.dataSource))
+            else None
+          val validatorFactory: MptStorage => StateValidator = new StateValidator(_)
+          val stateIngest: StateIngest = StateIngest(
+            appStateStorage,
+            stateStorage,
+            flatSlotStorage,
+            pathNodeStorageOpt,
+            evmCodeStorage,
+            blockchainReader,
+            blockchainWriter,
+            validatorFactory,
+            StateIngest.Durability.Default
+          )
+
           if snapSyncConfig.parallelRecoveryScan then
             // Combined path: ONE parallel, resumable single-pass scan finds both gap sets; downloads start
             // once it reports (in `runningCombinedScan`).
@@ -1930,7 +1956,7 @@ object SyncController:
               s"combined-recovery-scan-$syncGeneration",
               DispatcherSelector.fromConfig("sync-dispatcher")
             )
-            runningCombinedScan(needBytecode, needStorage, stateRoot, pivotBlock, snapSyncConfig)
+            runningCombinedScan(needBytecode, needStorage, stateRoot, pivotBlock, snapSyncConfig, stateIngest)
           else
             // Legacy path: each phase scans the full trie independently, then downloads.
             val bytecodeActor =
@@ -1942,9 +1968,7 @@ object SyncController:
                         .supervise(
                           BytecodeRecoveryActor(
                             stateRoot,
-                            stateStorage,
-                            evmCodeStorage,
-                            appStateStorage,
+                            stateIngest,
                             networkPeerManager,
                             bytecodeRecoveryAdapter,
                             pivotBlock,
@@ -1970,9 +1994,7 @@ object SyncController:
                         .supervise(
                           StorageRecoveryActor(
                             stateRoot,
-                            stateStorage,
-                            appStateStorage,
-                            flatSlotStorage,
+                            stateIngest,
                             networkPeerManager,
                             storageRecoveryAdapter,
                             pivotBlock,
@@ -2010,7 +2032,8 @@ object SyncController:
         needStorage: Boolean,
         stateRoot: ByteString,
         pivotBlock: BigInt,
-        snapSyncConfig: com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncConfig
+        snapSyncConfig: com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncConfig,
+        stateIngest: StateIngest
     ): Behavior[Command] = Behaviors.receive { (_, cmd) =>
       val msg = unwrap(cmd)
       msg match
@@ -2031,9 +2054,7 @@ object SyncController:
                       .supervise(
                         BytecodeRecoveryActor.applyPreloaded(
                           stateRoot,
-                          stateStorage,
-                          evmCodeStorage,
-                          appStateStorage,
+                          stateIngest,
                           networkPeerManager,
                           bytecodeRecoveryAdapter,
                           pivotBlock,
@@ -2060,9 +2081,7 @@ object SyncController:
                       .supervise(
                         StorageRecoveryActor.applyPreloaded(
                           stateRoot,
-                          stateStorage,
-                          appStateStorage,
-                          flatSlotStorage,
+                          stateIngest,
                           networkPeerManager,
                           storageRecoveryAdapter,
                           pivotBlock,
