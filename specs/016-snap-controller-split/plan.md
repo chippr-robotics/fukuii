@@ -344,14 +344,18 @@ the module that owns the implementation for that behaviour. The table lists each
 
 Boundaries were preliminary (research.md R12). **T060 confirmed them with amendments**
 ([coordinator-characterization.md](./coordinator-characterization.md) §3; baselines in research.md R14b). The rows
-below carry the amendments, marked "(T060)". Two user decisions gate the storage slices:
-- **D-T060-1**: `StateIngest` has no member for the per-pivot `MptStorage` or the derived stores (`SnapStorageDone`,
-  `SnapSyncProgress`, `HealingFrontier`, `BfsQueue`); it gates C-A3.
-- **D-T060-2**: the recovery actors call BCC's and SRC's `apply` with raw stores from outside `snap/`; it gates C-B1.
+below carry the amendments, marked "(T060)". Two user decisions gate the storage slices (both decided 2026-10-12,
+see "Amendment 2026-10-12" below):
+- **D-T060-1** (before C-A3): `StateIngest` gains members for the per-pivot `MptStorage` (a method) and the derived
+  stores (`SnapStorageDoneStorage`, `SnapSyncProgressStorage`, `HealingFrontierStorage`, `BfsQueueStorage`), through a
+  capability-mode PR. The members hand out the same instances, built where they are today.
+- **D-T060-2** (before C-B1): `SyncController` builds one `StateIngest` and passes it to `BytecodeRecoveryActor` and
+  `StorageRecoveryActor`, which pass it to the coordinators. `StateIngest` widens from `private[snap]` to
+  `private[sync]`.
 
-A tooling task, **T060b**, lets `verify.py` check the `apply` + `ChildFactories` + call-site change (§6 of the
-characterization). Each coordinator's storage parameters change in the first slice whose code uses them, not in a
-zero-reference slice (C-A1, C-A2, C-S1, C-S4, C-H4).
+The tooling task **T060b** (done) lets `verify.py` check the `apply` + `ChildFactories` + spawn-site + call-site change
+(§6 of the characterization) under the `# adopts: StateIngest <Unit>` trailer. Each coordinator's storage parameters
+change in the first slice whose code uses them, not in a zero-reference slice (C-A1, C-A2, C-S1, C-S4, C-H4).
 
 **Amendment 2026-10-11.** Every C-* narrowing self-type names `StateIngest` for storage, never `StateAccess` and never a
 raw storage type. Each C-* PR lowers the T054 storage-reference total (its coordinator file's figure normally falls too,
@@ -412,7 +416,9 @@ decision 2026-10-11):** T055 does not change the spawn arguments; each C-* narro
 | 24b | **T055** `StateIngest` capability: 8 env storage handles + the batched storage-trie node-write path (`flushTrieNodeWrites`, from #1548); modules move to it; `SnapControllerEnv` 18 → ~11; exporter durability property (FR-044) | refactor | ~+250 / −150 (estimate) | **forge**, **vault**, prism; beacon for the Path-scheme publish | Mordor full SNAP (SC-010 perf parity moved to C-S2, user decision 2026-10-11) |
 | 24c | **T056** lighter-WAL experiment as a `StateIngest` durability policy (optional; after T055). Hard precondition: the explicit FR-044 barrier before `completeSnapSync` (user decision 2026-10-11) | experiment | small | **vault**, forge | Mordor + Platåberget SNAP with a crash during finalization |
 | 25 | **T060** coordinator characterization (docs) | docs | — | — | — |
-| 25a | **T060b** `verify.py` StateIngest-adoption allowance for C-* narrowings (characterization §6.3); decisions D-T060-1/2 recorded | tooling | script + self-tests | prism | — |
+| 25a | **T060b** `verify.py` StateIngest-adoption allowance for C-* narrowings (characterization §6.3); decisions D-T060-1/2 recorded (done; adoption mode, capability extension, counter v2) | tooling | script + self-tests | prism | — |
+| 25b | **D-T060-2** recovery wiring: `SyncController` builds one `StateIngest` for the two recovery actors; `StateIngest` → `private[sync]` (`# adopts: StateIngest RecoveryActors`) | refactor | ~60 | prism; **forge** (both run on ETC at startup); vault | a bytecode- or storage-recovery start on Mordor |
+| 25c | **D-T060-1** `StateIngest` members for the per-pivot `MptStorage` and the derived stores (`# capability: StateIngest`, an extension; before C-A3) | refactor | ~80 | prism; **vault** (lazy healing stores, see Amendment 2026-10-12) | — |
 | 26 | **C-B1** | move | ~320 | prism; **vault** (T060: code-write path, recovery wiring) | Mordor bytecode phase or recovery start if D-T060-2 rewires `BytecodeRecoveryActor` |
 | 27–30 | **C-A1…A4** | move | ~1,350 | prism; **vault** on A3 and A4 | Mordor restart mid-account after A4 |
 | 31–34 | **C-S1…S4** | move | ~1,370 | prism; **vault** on S2 and S3 | Mordor + Platåberget restart mid-storage after S3; **C-S2: `[STORAGE-PERF]` parity on the same quiescent soak host against ~1.7M entries/h on the Sepolia Path-scheme storage phase, plus a same-host pre-wrap vs post-wrap A/B (SC-010, moved from T055 by user decision 2026-10-11)** |
@@ -714,3 +720,35 @@ Open for vault: whether the synced flags batch covers WAL files rolled before it
   after every ingest/publish write); T056 extends it to expect the explicit barrier.
 - **V (gates).** Unchanged: CI is the compiler (Complexity Tracking, row 1).
 
+## Amendment 2026-10-12: coordinator adoption (T060b, D-T060-1, D-T060-2)
+
+User decisions of 2026-10-12, after T060 (coordinator-characterization.md §4.3, §4.4, §6). Nothing above that is not
+marked changes.
+
+- **D-T060-2 (before C-B1).** `BytecodeRecoveryActor` and `StorageRecoveryActor` (package `blockchain.sync`) get a
+  `StateIngest` built by `SyncController`. `StateIngest` widens from `private[snap]` to `private[sync]`. `SyncController`
+  already holds 6 of the 8 stores; it builds one `StateIngest`, deriving `pathNodes` exactly as `SNAPSyncController`
+  does (`Some(new PathNodeStorage(flatSlotStorage.dataSource))` on the Path scheme, else `None`) and `validatorFactory`
+  as `SNAPSyncController.apply`'s default (`new StateValidator(_)`). It passes it to the recovery actors, which pass it
+  to the coordinators (after C-B1 / C-S*). Its own PR (slice 25b), `# adopts: StateIngest RecoveryActors`; forge signs
+  off (both actors run on ETC at startup).
+- **D-T060-1 (before C-A3).** `StateIngest` gains members for the derived stores through a capability-mode PR (slice
+  25c), an *extension* of the existing capability: the per-pivot `MptStorage` as a method (a pure forwarder of
+  `stateStorage.getBackingStorage`, or a member that hands out the core's cached instance), `SnapStorageDoneStorage`,
+  `SnapSyncProgressStorage`, `HealingFrontierStorage` and `BfsQueueStorage`. They are the same instances, built where
+  they are today, so the change is behaviour-neutral. The member cap (9) grows only with a
+  `justifications["capabilities.StateIngest.members"]` line, and ADR INF-006 decision 1 ("members narrow with their
+  callers") gets a note. Open for vault: `HealingOrchestrator` builds the healing stores lazily; handing them to the
+  core's strict accessor would build them at construction, which changes when their column family / namespace is first
+  touched. A per-pivot `getBackingStorage` forwarder returns a new `MptStorage` per call on the Hash scheme (ETC); the
+  core's cache must stay the only caller per pivot (forge, vault).
+- **T060b (verify.py).** Three additions, routing doc "Adoption mode (T060b)":
+  - *Adoption mode.* `# adopts: StateIngest <Unit>` admits a C-* narrowing commit (or a standalone commit) that moves
+    a coordinator onto `StateIngest`: its Impl constructor, `apply`, `new <X>Impl(...)`, `ChildFactories` method,
+    spawn sites, recovery-actor calls and in-coordinator call sites, by parameter-list, argument-list and handle
+    rewrites only. In a narrowing commit step 6 runs inside this check. `Unit = RecoveryActors` admits D-T060-2.
+  - *Capability extension.* A capability-mode PR for an existing capability may add members, map lines, forwarders
+    and `apply` parameters; the core's accessor gains only the new arguments, and SyncController's mirror follows.
+  - *Counter version 2.* The ratchet no longer counts the coordinators' reviewed false positives and does count
+    `storageDone`: 678 (v1) = 635 (v2), re-baselined with a justification line. C-B1's projection is 635 → 619
+    (678 → 662 under v1).

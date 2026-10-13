@@ -1996,5 +1996,930 @@ class SubstitutionUnitTests(unittest.TestCase):
         self.assertEqual(self.check("import a.B\n  appStateStorage.get() // x\n", "import a.C\n  // y\n  appStateStorage.get()\n"), [])
 
 
+# ---- adoption mode (spec 016 T060b): a coordinator, its factory, its spawn sites and the recovery actors move from raw
+# storage parameters onto StateIngest
+
+ACT = f"{SNAP}/actors"
+BCC = f"{ACT}/ByteCodeCoordinator.scala"
+BCC_MOD = f"{ACT}/bytecode/ByteCodeResponseHandling.scala"
+CF = f"{CTRL}/ChildFactories.scala"
+DS = f"{CTRL}/DownloadSupervisor.scala"
+HO = f"{CTRL}/HealingOrchestrator.scala"
+PS = f"{CTRL}/PivotSelector.scala"
+SYNC = "src/main/scala/com/chipprbots/ethereum/blockchain/sync"
+BRA = f"{SYNC}/BytecodeRecoveryActor.scala"
+SC = f"{SYNC}/SyncController.scala"
+CFS = "src/test/scala/com/chipprbots/ethereum/blockchain/sync/snap/ChildFactoriesSpec.scala"
+ADOPT_MSG = "refactor(snap): ByteCodeCoordinator takes StateIngest (#1401)\n\n# adopts: StateIngest ByteCodeCoordinator\n"
+RECOVERY_MSG = "refactor(sync): recovery actors take StateIngest (#1401)\n\n# adopts: StateIngest RecoveryActors\n"
+
+# the real StateIngest's shape (T055): nine members, eight bare map lines, an enum policy, apply and Stores
+SI_FILE = """package x.controller
+
+// capability-map: appStateStorage -> appState
+// capability-map: stateStorage -> stateTries
+// capability-map: flatSlotStorage -> flatSlots
+// capability-map: pathNodeStorageOpt -> pathNodes
+// capability-map: evmCodeStorage -> bytecode
+// capability-map: blockchainReader -> chainReader
+// capability-map: blockchainWriter -> chainWriter
+// capability-map: validatorFactory -> validatorFactory
+private[snap] trait StateIngest:
+  def appState: AppStateStorage
+  def stateTries: StateStorage
+  def flatSlots: FlatSlotStorage
+  def pathNodes: Option[PathNodeStorage]
+  def bytecode: EvmCodeStorage
+  def chainReader: BlockchainReader
+  def chainWriter: BlockchainWriter
+  def validatorFactory: MptStorage => StateValidator
+  def durability: StateIngest.Durability
+
+private[snap] object StateIngest:
+
+  enum Durability:
+    case Default
+
+  def apply(
+      appState: AppStateStorage,
+      stateTries: StateStorage,
+      flatSlots: FlatSlotStorage,
+      pathNodes: Option[PathNodeStorage],
+      bytecode: EvmCodeStorage,
+      chainReader: BlockchainReader,
+      chainWriter: BlockchainWriter,
+      validatorFactory: MptStorage => StateValidator,
+      durability: Durability
+  ): StateIngest =
+    new Stores(appState, stateTries, flatSlots, pathNodes, bytecode, chainReader, chainWriter, validatorFactory, durability)
+
+  final private class Stores(
+      val appState: AppStateStorage,
+      val stateTries: StateStorage,
+      val flatSlots: FlatSlotStorage,
+      val pathNodes: Option[PathNodeStorage],
+      val bytecode: EvmCodeStorage,
+      val chainReader: BlockchainReader,
+      val chainWriter: BlockchainWriter,
+      val validatorFactory: MptStorage => StateValidator,
+      val durability: Durability
+  ) extends StateIngest
+"""
+
+# the controller core: the accessor (T055) and the derivations SyncController mirrors (D-T060-2)
+SI_CORE = """package x
+
+class SNAPSyncControllerImpl(
+    val appStateStorage: AppStateStorage,
+    val stateStorage: StateStorage,
+    val evmCodeStorage: EvmCodeStorage,
+    val flatSlotStorage: FlatSlotStorage,
+    val blockchainReader: BlockchainReader,
+    val blockchainWriter: BlockchainWriter,
+    val validatorFactory: MptStorage => StateValidator,
+    val snapSyncConfig: SNAPSyncConfig
+) extends SnapControllerEnv:
+
+  val pathNodeStorageOpt: Option[PathNodeStorage] =
+    if snapSyncConfig.storageScheme == StorageScheme.Path then Some(new PathNodeStorage(flatSlotStorage.dataSource))
+    else None
+
+  val stateIngest: StateIngest = StateIngest(
+    appStateStorage,
+    stateStorage,
+    flatSlotStorage,
+    pathNodeStorageOpt,
+    evmCodeStorage,
+    blockchainReader,
+    blockchainWriter,
+    validatorFactory,
+    StateIngest.Durability.Default
+  )
+
+  val storageDoneStorage = new SnapStorageDoneStorage(flatSlotStorage.dataSource)
+
+  def other(): Int = stateIngest.appState.getBestBlockNumber()
+
+object SNAPSyncControllerImpl:
+
+  def apply(
+      appStateStorage: AppStateStorage,
+      validatorFactory: MptStorage => StateValidator = new StateValidator(_)
+  ): Behavior[Command] = ???
+"""
+
+BCC_BASE = """package x.actors
+
+import x.db.storage.EvmCodeStorage
+
+/** Bytecode download coordinator (fixture of the real shape). */
+private class ByteCodeCoordinatorImpl(
+    context: ActorContext[ByteCodeCoordinator.Command],
+    timers: TimerScheduler[ByteCodeCoordinator.Command],
+    evmCodeStorage: EvmCodeStorage,
+    batchSize: Int,
+    intakeBudget: Option[SnapIntakeBudget] = None
+):
+
+  private val log = context.log
+
+  def start(received: Seq[Hash], skipPresent: Boolean): Behavior[Command] =
+    val codeHashes = if skipPresent then received.filter(h => evmCodeStorage.get(h).isEmpty) else received
+    log.info(s"queued ${codeHashes.size}")
+    Behaviors.same
+
+  def store(codesByHash: Map[Hash, Code]): Unit =
+    val updates = codesByHash.foldLeft(evmCodeStorage.emptyBatchUpdate) { case (batchUpdate, (codeHash, code)) =>
+      batchUpdate.and(evmCodeStorage.put(codeHash, code))
+    }
+    updates.commit()
+
+object ByteCodeCoordinator:
+
+  sealed trait Command
+
+  def apply(
+      evmCodeStorage: EvmCodeStorage,
+      batchSize: Int,
+      backpressureHighWatermark: Int = 50000,
+      intakeBudget: Option[SnapIntakeBudget] = None
+  ): Behavior[Command] =
+    Behaviors.setup { context =>
+      Behaviors.withTimers { timers =>
+        new ByteCodeCoordinatorImpl(
+          context,
+          timers,
+          evmCodeStorage,
+          batchSize,
+          intakeBudget = intakeBudget
+        ).start(Nil, false)
+      }
+    }
+"""
+
+# the C-B1 shape: Impl constructor, apply and its `new` call take `stateIngest`; the body reads `stateIngest.bytecode`
+BCC_AFTER = (BCC_BASE
+             .replace("import x.db.storage.EvmCodeStorage", "import x.controller.StateIngest")
+             .replace("    evmCodeStorage: EvmCodeStorage,\n    batchSize", "    stateIngest: StateIngest,\n    batchSize")
+             .replace("evmCodeStorage.get(h)", "stateIngest.bytecode.get(h)")
+             .replace("evmCodeStorage.emptyBatchUpdate", "stateIngest.bytecode.emptyBatchUpdate")
+             .replace("evmCodeStorage.put(codeHash", "stateIngest.bytecode.put(codeHash")
+             .replace("      evmCodeStorage: EvmCodeStorage,\n      batchSize", "      stateIngest: StateIngest,\n      batchSize")
+             .replace("          evmCodeStorage,\n", "          stateIngest,\n"))
+
+CF_BASE = """package x.controller
+
+trait ChildFactories:
+
+  def byteCodeCoordinator(
+      evmCodeStorage: EvmCodeStorage,
+      batchSize: Int,
+      backpressureHighWatermark: Int = 50000,
+      intakeBudget: Option[SnapIntakeBudget] = None
+  ): Behavior[ByteCodeCoordinator.Command] =
+    ByteCodeCoordinator(
+      evmCodeStorage = evmCodeStorage,
+      batchSize = batchSize,
+      backpressureHighWatermark = backpressureHighWatermark,
+      intakeBudget = intakeBudget
+    )
+
+  def storageRangeCoordinator(
+      mptStorage: MptStorage,
+      flatSlotStorage: FlatSlotStorage
+  ): Behavior[StorageRangeCoordinator.Command] =
+    StorageRangeCoordinator(mptStorage = mptStorage, flatSlotStorage = flatSlotStorage)
+"""
+
+CF_AFTER = (CF_BASE
+            .replace("      evmCodeStorage: EvmCodeStorage,\n", "      stateIngest: StateIngest,\n")
+            .replace("      evmCodeStorage = evmCodeStorage,\n", "      stateIngest = stateIngest,\n"))
+
+DS_BASE = """package x.controller
+
+private[snap] trait DownloadSupervisor:
+  self: DownloadSupervisorState & SnapControllerEnv =>
+
+  def launchBytecode(): Unit =
+    bytecodeCoordinator = Some(
+      ctx.spawn(
+        Behaviors
+          .supervise(
+            childFactories.byteCodeCoordinator(
+              evmCodeStorage = stateIngest.bytecode,
+              batchSize = ByteCodeTask.DEFAULT_BATCH_SIZE,
+              intakeBudget = Some(intakeBudget)
+            )
+          )
+          .onFailure[Throwable](SupervisorStrategy.restart),
+        s"bytecode-coordinator-$coordinatorGeneration"
+      )
+    )
+"""
+DS_AFTER = DS_BASE.replace("evmCodeStorage = stateIngest.bytecode,", "stateIngest = stateIngest,")
+
+HO_BASE = """package x.controller
+
+private[snap] trait HealingOrchestrator:
+  self: HealingOrchestratorState & SnapControllerEnv =>
+
+  def healCode(): Unit =
+    ctx.spawn(childFactories.byteCodeCoordinator(evmCodeStorage = stateIngest.bytecode, batchSize = 16), "bcc")
+    ctx.spawn(childFactories.trieNodeHealingCoordinator(evmCodeStorage = Some(stateIngest.bytecode)), "heal")
+"""
+HO_AFTER = HO_BASE.replace("byteCodeCoordinator(evmCodeStorage = stateIngest.bytecode,", "byteCodeCoordinator(stateIngest = stateIngest,")
+
+# the D-T060-2 shape: SyncController builds one StateIngest and hands it to the recovery actor
+BRA_BASE = """package x.sync
+
+object BytecodeRecoveryActor:
+
+  def apply(
+      stateRoot: ByteString,
+      stateStorage: StateStorage,
+      evmCodeStorage: EvmCodeStorage,
+      appStateStorage: AppStateStorage,
+      networkPeerManager: PeerManager,
+      pivotBlockNumber: BigInt
+  ): Behavior[Command] = scanning(
+    stateRoot,
+    stateStorage,
+    evmCodeStorage,
+    appStateStorage,
+    networkPeerManager,
+    pivotBlockNumber,
+    preloaded = None
+  )
+
+  private def scanning(
+      stateRoot: ByteString,
+      stateStorage: StateStorage,
+      evmCodeStorage: EvmCodeStorage,
+      appStateStorage: AppStateStorage,
+      networkPeerManager: PeerManager,
+      pivotBlockNumber: BigInt,
+      preloaded: Option[Seq[ByteString]]
+  ): Behavior[Command] =
+    Behaviors.setup { ctx =>
+      val missing = preloaded.getOrElse(scanForMissingBytecodes(stateRoot, stateStorage, evmCodeStorage, pivotBlockNumber))
+      if missing.isEmpty then
+        appStateStorage.bytecodeRecoveryDone().commit()
+        Behaviors.stopped
+      else
+        val coordinator = ctx.spawn(
+          snap.actors.ByteCodeCoordinator(
+            evmCodeStorage = evmCodeStorage,
+            batchSize = snap.ByteCodeTask.DEFAULT_BATCH_SIZE
+          ),
+          "bytecode-recovery-coordinator"
+        )
+        downloading(ctx, coordinator, missing.size, appStateStorage)
+    }
+
+  private def downloading(ctx: Ctx, coordinator: Ref, total: Int, appStateStorage: AppStateStorage): Behavior[Command] =
+    Behaviors.receiveMessage { case Done =>
+      appStateStorage.bytecodeRecoveryDone().commit()
+      Behaviors.stopped
+    }
+
+  private def scanForMissingBytecodes(
+      stateRoot: ByteString,
+      stateStorage: StateStorage,
+      evmCodeStorage: EvmCodeStorage,
+      pivot: BigInt
+  ): Seq[ByteString] = stateStorage.getReadOnlyStorage.missing(evmCodeStorage)
+"""
+
+BRA_AFTER = (BRA_BASE
+             .replace("      stateStorage: StateStorage,\n      evmCodeStorage: EvmCodeStorage,\n      appStateStorage: AppStateStorage,\n"
+                      "      networkPeerManager", "      stateIngest: StateIngest,\n      networkPeerManager")
+             .replace("    stateStorage,\n    evmCodeStorage,\n    appStateStorage,\n", "    stateIngest,\n")
+             .replace("scanForMissingBytecodes(stateRoot, stateStorage, evmCodeStorage, pivotBlockNumber)",
+                      "scanForMissingBytecodes(stateRoot, stateIngest.stateTries, stateIngest.bytecode, pivotBlockNumber)")
+             .replace("        appStateStorage.bytecodeRecoveryDone()", "        stateIngest.appState.bytecodeRecoveryDone()")
+             .replace("evmCodeStorage = evmCodeStorage,", "evmCodeStorage = stateIngest.bytecode,")
+             .replace("downloading(ctx, coordinator, missing.size, appStateStorage)", "downloading(ctx, coordinator, missing.size, stateIngest)")
+             .replace("total: Int, appStateStorage: AppStateStorage)", "total: Int, stateIngest: StateIngest)")
+             .replace("      appStateStorage.bytecodeRecoveryDone()", "      stateIngest.appState.bytecodeRecoveryDone()"))
+
+# after C-B1 the recovery actor passes the capability itself
+BRA_CB1 = BRA_AFTER.replace("evmCodeStorage = stateIngest.bytecode,", "stateIngest = stateIngest,")
+
+SC_BASE = """package x.sync
+
+object SyncController:
+
+  private class Impl(
+      blockchainReader: BlockchainReader,
+      blockchainWriter: BlockchainWriter,
+      appStateStorage: AppStateStorage,
+      evmCodeStorage: EvmCodeStorage,
+      stateStorage: StateStorage,
+      flatSlotStorage: FlatSlotStorage,
+      networkPeerManager: PeerManager
+  ):
+
+    def startRecovery(stateRoot: ByteString, pivotBlock: BigInt): Behavior[Command] =
+      val snapSyncConfig = loadSnapSyncConfig()
+      val bytecodeActor = ctx.spawn(
+        BytecodeRecoveryActor(
+          stateRoot,
+          stateStorage,
+          evmCodeStorage,
+          appStateStorage,
+          networkPeerManager,
+          pivotBlock
+        ),
+        s"bytecode-recovery-$syncGeneration"
+      )
+      runningRecovery(bytecodeActor, snapSyncConfig)
+
+    def runningRecovery(actor: Ref, snapSyncConfig: SNAPSyncConfig): Behavior[Command] =
+      Behaviors.same
+"""
+
+SC_INGEST = """      val pathNodeStorageOpt: Option[PathNodeStorage] =
+        if snapSyncConfig.storageScheme == StorageScheme.Path then Some(new PathNodeStorage(flatSlotStorage.dataSource))
+        else None
+      val validatorFactory: MptStorage => StateValidator = new StateValidator(_)
+      val stateIngest: StateIngest = StateIngest(
+        appStateStorage,
+        stateStorage,
+        flatSlotStorage,
+        pathNodeStorageOpt,
+        evmCodeStorage,
+        blockchainReader,
+        blockchainWriter,
+        validatorFactory,
+        StateIngest.Durability.Default
+      )
+"""
+
+SC_AFTER = (SC_BASE
+            .replace("      val snapSyncConfig = loadSnapSyncConfig()\n", "      val snapSyncConfig = loadSnapSyncConfig()\n" + SC_INGEST)
+            .replace("          stateStorage,\n          evmCodeStorage,\n          appStateStorage,\n", "          stateIngest,\n")
+            .replace("runningRecovery(bytecodeActor, snapSyncConfig)", "runningRecovery(bytecodeActor, snapSyncConfig, stateIngest)")
+            .replace("snapSyncConfig: SNAPSyncConfig): Behavior", "snapSyncConfig: SNAPSyncConfig, stateIngest: StateIngest): Behavior"))
+
+SI_SYNC = SI_FILE.replace("private[snap] trait StateIngest:", "private[sync] trait StateIngest:").replace(
+    "private[snap] object StateIngest:", "private[sync] object StateIngest:")
+
+ADOPT_FILES = {CORE: SI_CORE, CAP: SI_FILE, BCC: BCC_BASE, CF: CF_BASE, DS: DS_BASE, HO: HO_BASE, BRA: BRA_BASE, SC: SC_BASE,
+               PS: "package x.controller\n\nprivate[snap] trait PivotSelector:\n  def pick(): Int = 1\n"}
+
+
+def adopt_baseline(files, members=9, just=None, counter=None, caps_members=None):
+    measured = {rel(k): v for k, v in files.items() if k.startswith(SNAP + "/")}
+    b = json.loads(cap_baseline(measured, pinned=(), env_members=0, header="", just=just,
+                                caps={"StateIngest": {"file": rel(CAP), "members": caps_members or members, "raw_imports": []}}))
+    if counter:
+        b["counter"] = counter
+        refs = {k: n for k, t in measured.items() if k != rel(CAP) and (n := V().storage_ref_count(
+            t, [V().cap_exemption("StateIngest", measured[rel(CAP)])], counter))}
+        b["storage_refs"], b["storage_refs_total"] = refs, sum(refs.values())
+    return json.dumps(b, indent=2) + "\n"
+
+
+def adopt_fixture(branch="refactor/snap-016-bcc", files=None, protect=False):
+    files = dict(files or ADOPT_FILES)
+    f = Fixture(branch=branch, core_base=files[CORE], extra={**{k: v for k, v in files.items() if k != CORE},
+                                                              BASELINE: adopt_baseline(files)})
+    f.files = files
+    if protect:
+        (f.cfg() / "protected-paths.txt").write_text(CFS + "\n")
+    return f
+
+
+def adopt_commit(f, changes, msg=ADOPT_MSG, **bl):
+    f.files = {**f.files, **{k: v for k, v in changes.items() if v is not None}}
+    for path, text in changes.items():
+        f.write(path, text)
+    f.write(BASELINE, adopt_baseline(f.files, **bl))
+    f.commit(msg)
+
+
+CB1 = {BCC: BCC_AFTER, CF: CF_AFTER, DS: DS_AFTER, HO: HO_AFTER}
+
+
+class AdoptionModeTests(unittest.TestCase):
+    ok = VerifyTests.ok
+    bad = VerifyTests.bad
+
+    def recovery_first(self, f):
+        """D-T060-2 lands first: SyncController builds StateIngest and the recovery actor takes it."""
+        adopt_commit(f, {SC: SC_AFTER, BRA: BRA_AFTER, CAP: SI_SYNC}, msg=RECOVERY_MSG)
+
+    # ---- positives
+    def test_cb1_shaped_adoption_passes_and_lowers_the_total(self):
+        f = adopt_fixture()
+        self.recovery_first(f)
+        adopt_commit(f, {**CB1, BRA: BRA_CB1})
+        out = self.ok(f)
+        self.assertIn("[adopts] StateIngest ByteCodeCoordinator (standalone commit)", out)
+        self.assertIn("[adopts] ByteCodeCoordinator: drops evmCodeStorage -> stateIngest.bytecode", out)
+        self.assertIn(f"[adopts] {BCC}: 3 adopted declaration/call list(s), 3 substitution(s)", out)
+        self.assertIn(f"[adopts] {CF}: 2 adopted declaration/call list(s), 0 substitution(s)", out)
+        self.assertIn(f"[adopts] {DS}: 1 adopted declaration/call list(s)", out)
+        self.assertIn(f"[adopts] {BRA}: 1 adopted declaration/call list(s)", out)
+        # BCC 10 -> 4, ChildFactories 12 -> 8, HealingOrchestrator 4 -> 2, DownloadSupervisor 2 -> 0
+        self.assertIn("[storage] total: 47 (baseline 47, ceiling 61)", out)
+
+    def test_recovery_actors_shaped_adoption_passes(self):
+        f = adopt_fixture(branch="refactor/snap-016-recovery-ingest")
+        self.recovery_first(f)
+        out = self.ok(f)
+        self.assertIn("[adopts] StateIngest RecoveryActors (standalone commit)", out)
+        self.assertIn(f"[adopts] {CAP}: visibility widened on 2 line(s)", out)
+        self.assertIn(f"[adopts] {BRA}: 5 adopted declaration/call list(s), 5 substitution(s)", out)
+        self.assertIn(f"[adopts] {SC}: 3 adopted declaration/call list(s), 0 substitution(s)", out)
+
+    def narrowing_fixture(self, module_body=None):
+        """D-T060-2 already merged; the slice's move commit puts store() into a module with the temporary self-type."""
+        store = BCC_BASE[BCC_BASE.index("  def store("):BCC_BASE.index("object ByteCodeCoordinator:")]
+        f = adopt_fixture(files={**ADOPT_FILES, SC: SC_AFTER, BRA: BRA_AFTER, CAP: SI_SYNC})
+        moved_core = BCC_BASE.replace("):\n\n  private val log", ") extends ByteCodeResponseHandling:\n\n  private val log").replace(store, "")
+        module = ("package x.actors.bytecode\n\nprivate[actors] trait ByteCodeResponseHandling:\n"
+                  "  self: ByteCodeCoordinatorImpl =>\n\n" + (module_body or store))
+        adopt_commit(f, {BCC: moved_core, BCC_MOD: module}, msg="refactor(snap): move store (#1401)\n\n# moved: store\n")
+        return f, store
+
+    def test_adoption_in_the_narrowing_commit_passes(self):
+        # the narrowing commit swaps the self-type for a State trait and adopts StateIngest in the same commit
+        f, store = self.narrowing_fixture()
+        store_after = BCC_AFTER[BCC_AFTER.index("  def store("):BCC_AFTER.index("object ByteCodeCoordinator:")]
+        narrowed_core = BCC_AFTER.replace("):\n\n  private val log", ") extends ByteCodeResponseHandling\n    with ByteCodeResponseHandlingState:\n\n  private val log").replace(
+            store_after, "").replace("    stateIngest: StateIngest,\n    batchSize", "    val stateIngest: StateIngest,\n    batchSize")
+        narrowed_module = ("package x.actors.bytecode\n\nprivate[actors] trait ByteCodeResponseHandlingState:\n"
+                           "  def stateIngest: StateIngest\n\nprivate[actors] trait ByteCodeResponseHandling:\n"
+                           "  self: ByteCodeResponseHandlingState =>\n\n" + store_after)
+        f.write("src/test/scala/x/StubSpec.scala",
+                "package x\nclass StubSpec:\n  val s = new StubByteCodeResponseHandlingState with ByteCodeResponseHandling\n")
+        adopt_commit(f, {**CB1, BCC: narrowed_core, BCC_MOD: narrowed_module, BRA: BRA_CB1},
+                     msg=ADOPT_MSG + "# new-tests: src/test/scala/x/StubSpec.scala\n")
+        out = self.ok(f)
+        self.assertIn("narrowing commit: step 6 runs inside the adoption check", out)
+        self.assertIn(f"[adopts] {BCC_MOD}: 0 adopted declaration/call list(s), 2 substitution(s)", out)
+        self.assertIn(f"[adopts] {BCC}: 3 adopted declaration/call list(s), 1 substitution(s)", out)
+        self.assertIn("[counts] ByteCodeResponseHandling: State=ByteCodeResponseHandlingState(1)", out)
+
+    # ---- negatives: logic hidden in the adoption
+    def neg(self, changes, check="adopts", msg=ADOPT_MSG, recovery=True, fixture=None, **bl):
+        f = fixture or adopt_fixture()
+        if recovery:
+            self.recovery_first(f)
+        adopt_commit(f, {**CB1, BRA: BRA_CB1, **changes}, msg=msg, **bl)
+        return self.bad(f, check)
+
+    def test_logic_change_in_apply_fails(self):
+        out = self.neg({BCC: BCC_AFTER.replace("          batchSize,\n", "          batchSize * 2,\n")})
+        self.assertIn("a call to `new ByteCodeCoordinatorImpl` changes an argument it keeps", out)
+
+    def test_logic_change_in_a_spawn_site_fails(self):
+        out = self.neg({DS: DS_AFTER.replace("batchSize = ByteCodeTask.DEFAULT_BATCH_SIZE,", "batchSize = ByteCodeTask.DEFAULT_BATCH_SIZE + 1,")})
+        self.assertIn("a call to `byteCodeCoordinator` changes an argument it keeps", out)
+
+    def test_spawn_site_dropping_a_non_storage_argument_fails(self):
+        out = self.neg({DS: DS_AFTER.replace("              intakeBudget = Some(intakeBudget)\n", "").replace(
+            "batchSize = ByteCodeTask.DEFAULT_BATCH_SIZE,", "batchSize = ByteCodeTask.DEFAULT_BATCH_SIZE")})
+        self.assertIn("changes an argument it keeps", out)
+
+    def test_spawn_site_passing_another_capability_fails(self):
+        out = self.neg({DS: DS_AFTER.replace("stateIngest = stateIngest,", "stateIngest = otherIngest,")})
+        self.assertIn("pass the capability `stateIngest` itself", out)
+
+    def test_logic_change_beside_a_substitution_fails(self):
+        out = self.neg({BCC: BCC_AFTER.replace("updates.commit()", "updates.commitSync()")})
+        self.assertIn("not an adoption rewrite", out)
+
+    def test_substitution_to_the_wrong_member_fails(self):
+        out = self.neg({BCC: BCC_AFTER.replace("stateIngest.bytecode.get(h)", "stateIngest.stateTries.get(h)")})
+        self.assertIn("not an adoption rewrite", out)
+
+    def test_adopt_map_overriding_a_bare_capability_entry_fails(self):
+        # prism 6: `evmCodeStorage` already maps to `bytecode` through the capability's bare entry
+        out = self.neg({BCC: "// adopt-map: evmCodeStorage -> appState\n" + BCC_AFTER})
+        self.assertIn("adopt-map `evmCodeStorage -> appState` overrides the capability's bare entry", out)
+
+    def test_adopt_map_to_a_member_of_another_type_fails(self):
+        base = BCC_BASE.replace("evmCodeStorage", "codeStore")
+        f = adopt_fixture(files={**ADOPT_FILES, BCC: base})
+        self.recovery_first(f)
+        after = "// adopt-map: codeStore -> appState\n" + BCC_AFTER.replace("stateIngest.bytecode", "stateIngest.appState")
+        adopt_commit(f, {**CB1, BCC: after, BRA: BRA_CB1})
+        self.assertIn("drops `codeStore: EvmCodeStorage`, but `stateIngest.appState` is `AppStateStorage`", self.bad(f, "adopts"))
+
+    # ---- prism review of 4470da23c
+    def test_p1_imports_that_can_rebind_names_fail(self):
+        for imp, why in (("import scala.concurrent.ExecutionContext.Implicits.global", "is new to the file"),
+                         ("import x.other.Hash", "would rebind its existing bare uses"),
+                         ("import x.Syntax.given", "wildcard or given import"),
+                         ("import x.Evil.*", "wildcard or given import"),
+                         ("import x.evil.StateIngest", "which is not the capability"),
+                         ("import x.db.{EvmCodeStorage => Hash}", "renaming import")):
+            out = self.neg({BCC: BCC_AFTER.replace("import x.controller.StateIngest", "import x.controller.StateIngest\n" + imp)})
+            self.assertIn(why, out, imp)
+
+    def test_p1_capability_import_and_a_once_qualified_name_pass(self):
+        f = adopt_fixture(files={**ADOPT_FILES, BCC: BCC_BASE.replace("Behaviors.same\n", "x.util.Clock.now()\n    Behaviors.same\n")})
+        self.recovery_first(f)
+        after = BCC_AFTER.replace("Behaviors.same\n", "x.util.Clock.now()\n    Behaviors.same\n").replace(
+            "import x.controller.StateIngest", "import x.controller.StateIngest\nimport x.util.Clock")
+        adopt_commit(f, {**CB1, BCC: after, BRA: BRA_CB1})
+        self.ok(f)
+
+    def test_p4_rewrite_under_a_shadowing_binding_fails(self):
+        helper = "\n  def probe(h: Hash, evmCodeStorage: EvmCodeStorage): Boolean =\n    evmCodeStorage.get(h).isEmpty\n"
+        local = "\n  def local(h: Hash): Boolean =\n    val evmCodeStorage = backup\n    evmCodeStorage.get(h).isEmpty\n"
+        for extra, rewritten in ((helper, helper.replace("    evmCodeStorage.get", "    stateIngest.bytecode.get")),
+                                 (local, local.replace("    evmCodeStorage.get", "    stateIngest.bytecode.get"))):
+            anchor = "\nobject ByteCodeCoordinator:"
+            f = adopt_fixture(files={**ADOPT_FILES, BCC: BCC_BASE.replace(anchor, extra + anchor)})
+            self.recovery_first(f)
+            adopt_commit(f, {**CB1, BCC: BCC_AFTER.replace(anchor, rewritten + anchor), BRA: BRA_CB1})
+            self.assertIn("binds another `evmCodeStorage` in this file", self.bad(f, "adopts"))
+        # file-wide in the coordinator (prism round 2): even a helper keeping its own parameter unrewritten rejects
+        f = adopt_fixture(files={**ADOPT_FILES, BCC: BCC_BASE.replace(anchor, helper + anchor)})
+        self.recovery_first(f)
+        adopt_commit(f, {**CB1, BCC: BCC_AFTER.replace(anchor, helper + anchor), BRA: BRA_CB1})
+        self.assertIn("binds another `evmCodeStorage` in this file", self.bad(f, "adopts"))
+
+    def test_p4b_every_binding_form_of_a_dropped_name_rejects(self):
+        anchor = "\nobject ByteCodeCoordinator:"
+        for form in ("  def a(o: Option[EvmCodeStorage]): Int = o match\n    case Some(evmCodeStorage) => 1\n    case None => 0\n",
+                     "  def b(xs: Seq[EvmCodeStorage]) = for evmCodeStorage <- xs yield 1\n",
+                     "  def c(t: (Int, EvmCodeStorage)) =\n    val (a, evmCodeStorage) = t\n    a\n",
+                     "  def d()(using evmCodeStorage: EvmCodeStorage): Int = 1\n",
+                     "  def e(xs: Seq[EvmCodeStorage]) = xs.map(evmCodeStorage => 1)\n"):
+            extra = "\n" + form
+            f = adopt_fixture(files={**ADOPT_FILES, BCC: BCC_BASE.replace(anchor, extra + anchor)})
+            self.recovery_first(f)
+            adopt_commit(f, {**CB1, BCC: BCC_AFTER.replace(anchor, extra + anchor), BRA: BRA_CB1})
+            self.assertIn("binds another `evmCodeStorage` in this file", self.bad(f, "adopts"), form)
+        helper = "\nclass Helper(val evmCodeStorage: EvmCodeStorage):\n  def g(h: Hash) = evmCodeStorage.get(h)\n"
+        f = adopt_fixture(files={**ADOPT_FILES, BCC: BCC_BASE + helper})
+        self.recovery_first(f)
+        adopt_commit(f, {**CB1, BCC: BCC_AFTER + helper, BRA: BRA_CB1})
+        self.assertIn("binds another `evmCodeStorage` in this file", self.bad(f, "adopts"))
+
+    def test_p4b_recovery_member_scope(self):
+        # a binding in the same member as a rewrite rejects; an unchanged helper's own parameter (another member) does not
+        ins = "      preloaded match\n        case Some(appStateStorage) => ()\n        case None => ()\n      if missing.isEmpty then\n"
+        f = adopt_fixture(branch="refactor/snap-016-recovery-ingest",
+                          files={**ADOPT_FILES, BRA: BRA_BASE.replace("      if missing.isEmpty then\n", ins)})
+        adopt_commit(f, {SC: SC_AFTER, BRA: BRA_AFTER.replace("      if missing.isEmpty then\n", ins), CAP: SI_SYNC}, msg=RECOVERY_MSG)
+        self.assertIn("binds another `appStateStorage` in the same member", self.bad(f, "adopts"))
+
+    def p2_move(self, closer, mod_name="ByteCodeResponseHandling", path=None):
+        store = BCC_BASE[BCC_BASE.index("  def store("):BCC_BASE.index("object ByteCodeCoordinator:")]
+        f = adopt_fixture(files={**ADOPT_FILES, SC: SC_AFTER, BRA: BRA_AFTER, CAP: SI_SYNC})
+        core = BCC_BASE.replace("):\n\n  private val log", closer + "\n\n  private val log").replace(store, "")
+        module = (f"package x.actors.bytecode\n\nprivate[actors] trait {mod_name}:\n"
+                  "  self: ByteCodeCoordinatorImpl =>\n\n" + store)
+        adopt_commit(f, {path or BCC: core, f"{ACT}/bytecode/{mod_name}.scala": module},
+                     msg="refactor(snap): move store (#1401)\n\n# moved: store\n# partial: narrowed in a later commit\n")
+        return f
+
+    def test_p2_move_commit_closer_admits_module_parents_only(self):
+        self.ok(self.p2_move(") extends ByteCodeResponseHandling:"))
+        for closer in (") extends ByteCodeResponseHandling with Audit(sideEffect()):", ") extends X(sideEffect(1))",
+                       ") extends Unrelated:"):
+            out = self.bad(self.p2_move(closer), "step1")
+            self.assertIn("removed line is not shown as moved: `):`", out)
+
+    def test_p2b_steps_1_and_6_admit_bare_identifier_parent_arguments_only(self):
+        # prism round 2 (optional, taken: the replay of #1560's `with SyncLifecycle(heapWatchdogStart)` is unchanged)
+        ok = CORE_AFTER_MOVE.replace("extends HealingOrchestrator:", "extends HealingOrchestrator with SyncLifecycle(heapWatchdogStart):")
+        f = Fixture()
+        move_commit(f, core=ok, partial=True)
+        self.ok(f)
+        for bad in ("with Audit(sideEffect()):", "with Audit(a + 1):"):
+            f = Fixture()
+            move_commit(f, core=CORE_AFTER_MOVE.replace("extends HealingOrchestrator:", "extends HealingOrchestrator " + bad), partial=True)
+            self.assertIn("added line is neither moved nor a header", self.bad(f, "step1"), bad)
+
+    def test_p2_narrowing_header_with_a_constructor_call_fails(self):
+        f, store = self.narrowing_fixture()
+        store_after = BCC_AFTER[BCC_AFTER.index("  def store("):BCC_AFTER.index("object ByteCodeCoordinator:")]
+        core = BCC_AFTER.replace("):\n\n  private val log", ") extends ByteCodeResponseHandling\n    with Audit(sideEffect()):\n\n  private val log").replace(
+            store_after, "").replace("    stateIngest: StateIngest,\n    batchSize", "    val stateIngest: StateIngest,\n    batchSize")
+        module = ("package x.actors.bytecode\n\nprivate[actors] trait ByteCodeResponseHandlingState:\n  def stateIngest: StateIngest\n\n"
+                  "private[actors] trait ByteCodeResponseHandling:\n  self: ByteCodeResponseHandlingState =>\n\n" + store_after)
+        f.write("src/test/scala/x/StubSpec.scala", "package x\nclass S:\n  val s = new StubByteCodeResponseHandlingState with ByteCodeResponseHandling\n")
+        adopt_commit(f, {**CB1, BCC: core, BCC_MOD: module, BRA: BRA_CB1}, msg=ADOPT_MSG + "# new-tests: src/test/scala/x/StubSpec.scala\n")
+        self.assertIn("change is not an adoption rewrite", self.bad(f, "adopts"))
+
+    def test_reordered_or_retyped_or_extra_parameter_fails(self):
+        out = self.neg({BCC: BCC_AFTER.replace("      backpressureHighWatermark: Int = 50000,\n", "      backpressureHighWatermark: Int = 40000,\n")})
+        self.assertIn("`apply` changes or reorders a parameter it keeps", out)
+        out = self.neg({BCC: BCC_AFTER.replace("    stateIngest: StateIngest,\n    batchSize: Int,\n", "    batchSize: Int,\n    stateIngest: StateIngest,\n")})
+        self.assertIn("takes `stateIngest` at position 4; it goes where the first dropped parameter `evmCodeStorage` was (position 3)", out)
+        out = self.neg({BCC: BCC_AFTER.replace("      batchSize: Int,\n      backpressure", "      batchSize: Int,\n      extra: Int = 1,\n      backpressure")})
+        self.assertIn("`apply` adds stateIngest, extra", out)
+
+    def test_child_factories_out_of_step_with_apply_fails(self):
+        out = self.neg({CF: CF_AFTER.replace("backpressureHighWatermark: Int = 50000", "backpressureHighWatermark: Int = 1")})
+        self.assertIn("`byteCodeCoordinator` changes or reorders a parameter it keeps", out)
+
+    def test_child_factories_spec_edit_fails(self):
+        f = adopt_fixture(protect=True)
+        f.write(CFS, "package x\nclass ChildFactoriesSpec\n")
+        f.commit("test: seam")
+        f.git("tag", "-f", "base")
+        self.recovery_first(f)
+        f.write(CFS, "package x\nclass ChildFactoriesSpec // edited\n")
+        adopt_commit(f, {**CB1, BRA: BRA_CB1})
+        self.assertIn("touches protected golden/pin file " + CFS, self.bad(f, "step4"))
+
+    def test_change_outside_the_adoption_files_fails(self):
+        out = self.neg({PS: "package x.controller\n\nprivate[snap] trait PivotSelector:\n  def pick(): Int = 2\n"})
+        self.assertIn(f"changes {PS}, which is not part of the `ByteCodeCoordinator` adoption", out)
+
+    def test_trailer_naming_a_coordinator_the_commit_does_not_adopt_fails(self):
+        out = self.neg({}, msg=ADOPT_MSG.replace("ByteCodeCoordinator\n", "AccountRangeCoordinator\n"))
+        self.assertIn("changes " + BCC + ", which is not part of the `AccountRangeCoordinator` adoption", out)
+
+    def test_adoption_without_the_trailer_fails(self):
+        out = self.neg({}, msg="refactor(snap): ByteCodeCoordinator takes StateIngest (#1401)\n")
+        self.assertIn("drops storage parameter(s) evmCodeStorage outside an adoption commit", out)
+
+    def test_trailer_on_a_move_commit_or_another_branch_fails(self):
+        out = self.neg({}, msg=ADOPT_MSG + "# moved: store\n")
+        self.assertIn("`# adopts:` on a `# moved:` commit", out)
+        f = adopt_fixture(branch="test/snap-016-bcc")
+        adopt_commit(f, CB1, msg=ADOPT_MSG + "# test-files: none\n")
+        self.assertIn("an adoption is a refactor/snap-016-* commit", self.bad(f, "adopts"))
+
+    def test_spawn_site_passing_both_the_store_and_the_capability_fails(self):
+        out = self.neg({DS: DS_AFTER.replace("stateIngest = stateIngest,", "stateIngest = stateIngest,\n              evmCodeStorage = stateIngest.bytecode,")})
+        self.assertIn("a call to `byteCodeCoordinator` whose arguments do not bind to its parameters", out)
+
+    def test_narrowing_commit_with_a_body_change_fails(self):
+        f, store = self.narrowing_fixture()
+        store_after = BCC_AFTER[BCC_AFTER.index("  def store("):BCC_AFTER.index("object ByteCodeCoordinator:")]
+        core = BCC_AFTER.replace("):\n\n  private val log", ") extends ByteCodeResponseHandling\n    with ByteCodeResponseHandlingState:\n\n  private val log").replace(
+            store_after, "").replace("    stateIngest: StateIngest,\n    batchSize", "    val stateIngest: StateIngest,\n    batchSize")
+        module = ("package x.actors.bytecode\n\nprivate[actors] trait ByteCodeResponseHandlingState:\n  def stateIngest: StateIngest\n\n"
+                  "private[actors] trait ByteCodeResponseHandling:\n  self: ByteCodeResponseHandlingState =>\n\n"
+                  + store_after.replace("updates.commit()", "if codesByHash.nonEmpty then updates.commit()"))
+        f.write("src/test/scala/x/StubSpec.scala", "package x\nclass S:\n  val s = new StubByteCodeResponseHandlingState with ByteCodeResponseHandling\n")
+        adopt_commit(f, {**CB1, BCC: core, BCC_MOD: module, BRA: BRA_CB1}, msg=ADOPT_MSG + "# new-tests: src/test/scala/x/StubSpec.scala\n")
+        self.assertIn(f"{BCC_MOD}: change is not an adoption rewrite", self.bad(f, "adopts"))
+
+    # ---- RecoveryActors (D-T060-2)
+    def rneg(self, changes):
+        f = adopt_fixture(branch="refactor/snap-016-recovery-ingest")
+        adopt_commit(f, {SC: SC_AFTER, BRA: BRA_AFTER, CAP: SI_SYNC, **changes}, msg=RECOVERY_MSG)
+        return self.bad(f, "adopts")
+
+    def test_recovery_accessor_not_mirroring_the_core_fails(self):
+        out = self.rneg({SC: SC_AFTER.replace("        stateStorage,\n        flatSlotStorage,\n", "        flatSlotStorage,\n        stateStorage,\n")})
+        self.assertIn("is not SNAPSyncController's", out)
+
+    def test_recovery_handle_derived_differently_fails(self):
+        out = self.rneg({SC: SC_AFTER.replace("Some(new PathNodeStorage(flatSlotStorage.dataSource))", "Some(new PathNodeStorage(appStateStorage.dataSource))")})
+        self.assertIn("which is not derived exactly as SNAPSyncController derives `pathNodeStorageOpt`", out)
+
+    def test_recovery_logic_change_fails(self):
+        out = self.rneg({BRA: BRA_AFTER.replace("if missing.isEmpty then", "if missing.size < 2 then")})
+        self.assertIn(f"{BRA}: change is not an adoption rewrite", out)
+        out = self.rneg({SC: SC_AFTER.replace("          pivotBlock\n", "          pivotBlock + 1\n")})
+        self.assertIn("a call to `BytecodeRecoveryActor.apply` changes an argument it keeps", out)
+
+    def test_recovery_dropping_a_handle_for_the_wrong_member_fails(self):
+        out = self.rneg({SC: SC_AFTER.replace("      val bytecodeActor", "      val other = stateIngest\n      val bytecodeActor")})
+        self.assertIn(f"{SC}: change is not an adoption rewrite", out)
+
+    def test_p5_mirror_must_use_plain_vals(self):
+        for a, bb in (("      val stateIngest: StateIngest = StateIngest(", "      lazy val stateIngest: StateIngest = StateIngest("),
+                      ("      val pathNodeStorageOpt: Option[PathNodeStorage] =", "      def pathNodeStorageOpt: Option[PathNodeStorage] ="),
+                      ("      val validatorFactory: MptStorage => StateValidator", "      lazy val validatorFactory: MptStorage => StateValidator")):
+            out = self.rneg({SC: SC_AFTER.replace(a, bb)})
+            self.assertIn("plain `val", out)
+
+    def test_p1_sync_controller_may_import_the_mirrored_types_only(self):
+        core = SI_CORE.replace("package x\n", "package x\n\nimport x.db.PathNodeStorage\nimport x.snap.StateValidator\n")
+        fix = lambda: adopt_fixture(branch="refactor/snap-016-recovery-ingest", files={**ADOPT_FILES, CORE: core})
+        sc = lambda imps: SC_AFTER.replace("object SyncController:", imps + "\n\nobject SyncController:")
+        f = fix()
+        adopt_commit(f, {SC: sc("import x.db.PathNodeStorage\nimport x.snap.StateValidator"), BRA: BRA_AFTER, CAP: SI_SYNC}, msg=RECOVERY_MSG)
+        self.ok(f)
+        # a type the core uses from its own package (package `x`, no import there) may be imported by that path only
+        f = adopt_fixture(branch="refactor/snap-016-recovery-ingest")
+        adopt_commit(f, {SC: sc("import x.StateValidator\nimport x.PathNodeStorage"), BRA: BRA_AFTER, CAP: SI_SYNC}, msg=RECOVERY_MSG)
+        self.ok(f)
+        # prism round 2: the import must be the core's own entry, and never a standard name
+        for imp, why in (("import x.evil.StateValidator", "adds import `x.evil.StateValidator`"),
+                         ("import x.evil.PathNodeStorage", "adds import `x.evil.PathNodeStorage`"),
+                         ("import x.evil.Some", "rebinds the standard name `Some`"),
+                         ("import x.other.Thing", "adds import `x.other.Thing`")):
+            f = fix()
+            adopt_commit(f, {SC: sc(imp), BRA: BRA_AFTER, CAP: SI_SYNC}, msg=RECOVERY_MSG)
+            self.assertIn(why, self.bad(f, "adopts"), imp)
+
+    def test_p5_trait_and_object_widen_together(self):
+        out = self.rneg({CAP: SI_FILE.replace("private[snap] trait StateIngest:", "private[sync] trait StateIngest:")})
+        self.assertIn("widens only one of `trait StateIngest` and `object StateIngest`", out)
+
+    def test_capability_change_beyond_visibility_fails(self):
+        out = self.rneg({CAP: SI_SYNC.replace("final private class Stores(", "final class Stores(")})
+        self.assertIn("a RecoveryActors adoption only widens", out)
+
+    def test_visibility_widening_without_the_trailer_fails(self):
+        f = adopt_fixture(branch="refactor/snap-016-recovery-ingest")
+        adopt_commit(f, {CAP: SI_SYNC}, msg="refactor: widen\n")
+        self.assertIn("changes the visibility of StateIngest outside", self.bad(f, "adopts"))
+
+    def test_recovery_actor_signature_change_without_the_trailer_fails(self):
+        f = adopt_fixture(branch="refactor/snap-016-recovery-ingest")
+        adopt_commit(f, {SC: SC_AFTER, BRA: BRA_AFTER}, msg="refactor: recovery\n")
+        self.assertIn("drops storage parameter(s) stateStorage, evmCodeStorage, appStateStorage outside an adoption commit",
+                      self.bad(f, "adopts"))
+
+
+class AdoptionCallUnitTests(unittest.TestCase):
+    """`Adoption.call_problem` without git: named and positional calls, partial and pure-addition cases."""
+
+    def decl(self, old, new, member):
+        p = lambda s: V().parse_param([t.t for t in V().scala_tokens(s)])
+        d = V().AdoptDecl(("F", "f"), [p(x) for x in old], [p(x) for x in new])
+        d.member = member
+        return d
+
+    def problem(self, d, old_call, new_call, equiv=None):
+        a = V().Adoption.__new__(V().Adoption)
+        items = lambda s: V().group_items([t.t for t in V().scala_tokens(s)])
+        return a.call_problem(d, items(old_call), items(new_call), equiv or {})
+
+    def test_named_positional_partial_and_pure_addition_calls(self):
+        d = self.decl(["a: Int", "pathNodeStorage: Option[PathNodeStorage] = None", "storageDone: Option[SnapStorageDoneStorage] = None"],
+                      ["a: Int", "stateIngest: StateIngest"], {"pathNodeStorage": "pathNodes", "storageDone": "storageDone"})
+        ok = "a = 1, pathNodeStorage = stateIngest.pathNodes, storageDone = stateIngest.storageDone"
+        self.assertIsNone(self.problem(d, ok, "a = 1, stateIngest = stateIngest"))
+        self.assertIsNone(self.problem(d, "1, stateIngest.pathNodes, stateIngest.storageDone", "1, stateIngest"))
+        # a call that relied on one default would now read it from the capability
+        self.assertIn("took their defaults", self.problem(d, "a = 1, pathNodeStorage = stateIngest.pathNodes", "a = 1, stateIngest = stateIngest"))
+        # a call that relied on every default may not start passing the capability
+        self.assertIn("a behaviour change", self.problem(d, "a = 1", "a = 1, stateIngest = stateIngest"))
+        # a dropped argument that is not the member it maps to
+        self.assertIn("not `stateIngest.storageDone`", self.problem(
+            d, "a = 1, pathNodeStorage = stateIngest.pathNodes, storageDone = None", "a = 1, stateIngest = stateIngest"))
+        # a name equal to the member in this file (a dropped parameter, or a handle the file's capability is built from)
+        self.assertIsNone(self.problem(d, "1, pns, done", "1, stateIngest", {("pns",): "pathNodes", ("done",): "storageDone"}))
+        pure = self.decl(["a: Int"], ["a: Int", "stateIngest: StateIngest"], {})
+        self.assertIsNone(self.problem(pure, "a", "a, stateIngest"))
+        self.assertIn("exactly once", self.problem(pure, "a", "a"))
+
+
+class CapabilityExtensionTests(unittest.TestCase):
+    """D-T060-1: a later capability-mode PR adds members to StateIngest (a per-pivot trie-store method and a derived
+    store), with the core's accessor, SyncController's mirror and the member cap moving together."""
+    ok = VerifyTests.ok
+    bad = VerifyTests.bad
+
+    EXT_CAP = (SI_SYNC
+               .replace("// capability-map: validatorFactory -> validatorFactory\n",
+                        "// capability-map: validatorFactory -> validatorFactory\n"
+                        "// capability-map: stateStorage.getBackingStorage -> trieStore\n"
+                        "// capability-map: storageDoneStorage -> storageDone\n")
+               .replace("  def durability: StateIngest.Durability\n",
+                        "  def durability: StateIngest.Durability\n  def trieStore(pivot: BigInt): MptStorage\n"
+                        "  def storageDone: SnapStorageDoneStorage\n")
+               .replace("      durability: Durability\n  ): StateIngest =", "      durability: Durability,\n      storageDone: SnapStorageDoneStorage\n  ): StateIngest =")
+               .replace("validatorFactory, durability)\n", "validatorFactory, durability, storageDone)\n")
+               .replace("      val durability: Durability\n  ) extends StateIngest\n",
+                        "      val durability: Durability,\n      val storageDone: SnapStorageDoneStorage\n  ) extends StateIngest:\n"
+                        "    def trieStore(pivot: BigInt): MptStorage = stateTries.getBackingStorage(pivot)\n"))
+    EXT_CORE = (SI_CORE
+                .replace("    StateIngest.Durability.Default\n  )\n\n  val storageDoneStorage = new SnapStorageDoneStorage(flatSlotStorage.dataSource)\n",
+                         "    StateIngest.Durability.Default,\n    storageDoneStorage\n  )\n")
+                .replace("  val stateIngest: StateIngest = StateIngest(",
+                         "  val storageDoneStorage = new SnapStorageDoneStorage(flatSlotStorage.dataSource)\n\n  val stateIngest: StateIngest = StateIngest(")
+                .replace("stateIngest.appState.getBestBlockNumber()", "stateIngest.trieStore(1).root"))
+    BASE_CORE = SI_CORE.replace("stateIngest.appState.getBestBlockNumber()", "stateIngest.stateTries.getBackingStorage(1).root")
+    EXT_SC = SC_AFTER.replace("        StateIngest.Durability.Default\n      )\n",
+                              "        StateIngest.Durability.Default,\n        storageDoneStorage\n      )\n").replace(
+        "      val stateIngest: StateIngest", "      val storageDoneStorage = new SnapStorageDoneStorage(flatSlotStorage.dataSource)\n      val stateIngest: StateIngest")
+    MSG = "refactor(snap): StateIngest derived stores (#1401)\n\n# capability: StateIngest\n"
+    JUST = {"capabilities.StateIngest.members": "D-T060-1: trieStore (per-pivot MptStorage) and storageDone, same instances"}
+
+    def fixture(self):
+        files = {**ADOPT_FILES, CORE: self.BASE_CORE, CAP: SI_SYNC, SC: SC_AFTER, BRA: BRA_AFTER}
+        f = Fixture(branch="refactor/snap-016-ingest-derived", core_base=files[CORE],
+                    extra={**{k: v for k, v in files.items() if k != CORE}, BASELINE: adopt_baseline(files)})
+        f.files = files
+        return f
+
+    def commit(self, f, changes, just=JUST, members=11):
+        adopt_commit(f, changes, msg=self.MSG, just=just, members=members)
+
+    def test_extension_shaped_like_d_t060_1_passes(self):
+        f = self.fixture()
+        self.commit(f, {CAP: self.EXT_CAP, CORE: self.EXT_CORE, SC: self.EXT_SC})
+        out = self.ok(f)
+        self.assertIn("(extension)", out)
+        self.assertIn("[capability] extension: +2 member(s), new `apply` parameter(s): storageDone", out)
+        self.assertIn(f"[capability] {SC}: mirrors the core's `stateIngest`", out)
+        self.assertIn(f"[capability] {CORE}: 1 substitution(s)", out)
+        self.assertIn("capability StateIngest (controller/StateIngest.scala): members=11 (baseline 11, ceiling 9)", out)
+
+    def test_member_growth_without_a_justification_fails(self):
+        f = self.fixture()
+        self.commit(f, {CAP: self.EXT_CAP, CORE: self.EXT_CORE, SC: self.EXT_SC}, just={})
+        self.assertIn("StateIngest has 11 members, above the ceiling 9", self.bad(f, "capability"))
+
+    def test_impure_trie_store_forwarder_fails(self):
+        f = self.fixture()
+        self.commit(f, {CAP: self.EXT_CAP.replace("getBackingStorage(pivot)\n", "getBackingStorage(pivot + 1)\n"),
+                        CORE: self.EXT_CORE, SC: self.EXT_SC})
+        self.assertIn("forwarder `trieStore` is not a pure forwarder", self.bad(f, "capability"))
+
+    def test_changing_an_existing_core_argument_fails(self):
+        f = self.fixture()
+        core = self.EXT_CORE.replace("    stateStorage,\n    flatSlotStorage,\n", "    stateStorage,\n    flatSlotStorage2,\n")
+        self.commit(f, {CAP: self.EXT_CAP, CORE: core, SC: self.EXT_SC})
+        self.assertIn("changes the existing argument for `flatSlots`", self.bad(f, "capability"))
+
+    def test_sync_controller_out_of_step_with_the_core_fails(self):
+        f = self.fixture()
+        self.commit(f, {CAP: self.EXT_CAP, CORE: self.EXT_CORE})
+        self.assertIn("is not SNAPSyncController's", self.bad(f, "capability"))
+
+    def test_changing_an_existing_member_fails(self):
+        f = self.fixture()
+        self.commit(f, {CAP: self.EXT_CAP.replace("  def bytecode: EvmCodeStorage\n", "  def bytecode: Option[EvmCodeStorage]\n"),
+                        CORE: self.EXT_CORE, SC: self.EXT_SC})
+        self.assertIn("changes existing member `bytecode", self.bad(f, "capability"))
+
+
+class CounterV2Tests(unittest.TestCase):
+    """Counter version 2 (T060b, G10): the coordinators' false positives no longer count and `storageDone` does; the
+    baseline's `counter` field selects it, only goes up, and a change needs a fresh total justification."""
+    ok = VerifyTests.ok
+    bad = VerifyTests.bad
+
+    def test_v2_drops_false_positives_and_counts_storage_done(self):
+        text = ("  self ! StorageRangeCoordinator.ForceCompleteStorage\n  if isNodeInStorage(h) && entry.isStorage then\n"
+                "    SNAPSyncMetrics.setStoragePendingTries(1)\n  replayQueuedStorage += StorageTask.createStorageTask(a, b).size\n"
+                "  storageDone.fold(x)(_.unfinished(x))\n  mptStorage.get(k)\n")
+        self.assertEqual(V().storage_ref_count(text, counter=1), 7)  # 6 false positives + mptStorage
+        self.assertEqual(V().storage_ref_count(text, counter=2), 2)  # storageDone + mptStorage
+
+    def ratchet(self, counter, just):
+        f = adopt_fixture()
+        adopt_commit(f, {}, msg="test: re-baseline\n", counter=counter, just=just)
+        return f
+
+    def test_counter_upgrade_needs_a_fresh_justification(self):
+        self.assertIn("raises counter from 1 to 2", self.bad(self.ratchet(2, None), "storage-refs"))
+        out = self.ok(self.ratchet(2, {"storage_refs.total": "counter v2: false positives out, storageDone in"}))
+        self.assertIn("counter version 1 -> 2 (re-baseline)", out)
+
+    def test_p3_counter_bump_cannot_hide_new_references(self):
+        # the v1 -> v2 gap is 6 on this fixture's ForceCompleteStorage-style names; 6 new real refs keep the v2 total
+        # under the v1 ceiling, so the ceiling is the merge-base re-measured under v2
+        fp = "\n  def fp(): Unit =\n" + "".join(f"    self ! ForceCompleteStorage{''}\n    isNodeInStorage({i})\n" for i in range(3))
+        f = adopt_fixture(files={**ADOPT_FILES, PS: ADOPT_FILES[PS] + fp})
+        f.git("tag", "-f", "base")
+        real = "\n  def leak(): Unit =\n" + "".join(f"    mptStorage.get({i})\n" for i in range(6))
+        f.write(PS, ADOPT_FILES[PS] + fp + real)
+        f.files = {**f.files, PS: ADOPT_FILES[PS] + fp + real}
+        f.write(BASELINE, adopt_baseline(f.files, counter=2, just={"storage_refs.total": "counter v2: false positives out, storageDone in"}))
+        f.commit("test: re-baseline\n")
+        out = self.bad(f, "storage-refs")
+        self.assertIn("above the merge-base re-measured under counter 2", out)
+        self.assertIn("a counter change is a commit of its own, with no src/main change", out)
+
+    def test_p3_counter_bump_needs_a_substantive_justification(self):
+        out = self.bad(self.ratchet(2, {"storage_refs.total": "v2"}), "storage-refs")
+        self.assertIn("40+ characters naming `counter v2`", out)
+
+    def test_counter_downgrade_fails(self):
+        f = adopt_fixture()
+        adopt_commit(f, {}, msg="test: v2\n", counter=2, just={"storage_refs.total": "v2"})
+        f.git("tag", "-f", "base")
+        adopt_commit(f, {}, msg="test: back to v1\n", just={"storage_refs.total": "v1 again"})
+        self.assertIn("lowers counter from 2 to 1", self.bad(f, "storage-refs"))
+
+    def test_real_baseline_matches_this_tree(self):
+        root = Path(__file__).resolve().parents[3]
+        b = json.loads((root / BASELINE).read_text())
+        snap = root / SNAP
+        files = {str(p.relative_to(snap)): p.read_text() for d in ("controller", "actors") for p in (snap / d).rglob("*.scala")}
+        files["SNAPSyncController.scala"] = (snap / "SNAPSyncController.scala").read_text()
+        caps = {e["file"]: n for n, e in b["capabilities"].items()}
+        ex = [V().cap_exemption(n, files[k]) for k, n in caps.items()]
+        refs = {k: n for k, t in files.items() if k not in caps and (n := V().storage_ref_count(t, ex, b.get("counter", 1)))}
+        self.assertEqual(refs, b["storage_refs"])
+        self.assertEqual(sum(refs.values()), b["storage_refs_total"])
+
+    def test_coordinator_env_trait_is_declaration_only_and_reported_as_a_capability(self):
+        text = "package x\n\nprivate[actors] trait ByteCodeEnv:\n  def stateIngest: StateIngest\n  def log: Logger\n"
+        self.assertEqual(V().declaration_only_regions(text), {4, 5})
+        f = adopt_fixture()
+        f.write(f"{ACT}/bytecode/ByteCodeEnv.scala", text)
+        adopt_commit(f, {f"{ACT}/bytecode/ByteCodeEnv.scala": text}, msg="refactor: env (#1401)\n")
+        self.assertIn("ByteCodeEnv=2", [l for l in self.ok(f).splitlines() if "[counts] capability traits:" in l][0])
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=1)
