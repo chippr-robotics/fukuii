@@ -94,7 +94,7 @@ private[actors] class AccountRangeCoordinatorImpl(
     progressGeneration: Long = 0L,
     // Storage-task completion markers: replaying the carried prefix skips tasks already finished (see
     // `replayCarriedChunk`). None = replay every carried storage task (as before the markers existed).
-    storageDone: Option[SnapStorageDoneStorage] = None,
+    val storageDone: Option[SnapStorageDoneStorage] = None,
     // Spec 014: shared admission gate, read synchronously before new contract work is produced (fresh account-range
     // dispatch and the carried replay). None = not wired (tests): only the mailbox-borne watermark signal applies.
     val intakeBudget: Option[SnapIntakeBudget] = None

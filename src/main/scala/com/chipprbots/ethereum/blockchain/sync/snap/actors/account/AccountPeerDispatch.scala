@@ -73,6 +73,13 @@ private[actors] trait AccountPeerDispatchApi:
 private[actors] trait AccountActivePeersApi:
   def activePeerCount: Int
 
+/** What `ContractWorkCarry` (C-A4) calls in `AccountPeerDispatch`: the downstream back-pressure and the spec 014 intake
+  * gate, read synchronously before the carried replay pushes contract work downstream.
+  */
+private[actors] trait AccountIntakeGateApi:
+  def downstreamBackpressureActive: Boolean
+  def intakeGateClosed: Boolean
+
 /** Account-range peer dispatch (spec 016 C-A1, coordinator-characterization.md §3.2): the #1501 intake gate and the
   * downstream back-pressure that pause new dispatch; stateless/snapless peer tracking with its empty-proof strikes and
   * the pivot-refresh escalation it drives; the per-peer cooldowns (scaled down on a scarce pool); the per-peer

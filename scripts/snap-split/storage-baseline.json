@@ -14,7 +14,7 @@
     "storage_members": []
   },
   "counter": 2,
-  "storage_refs_total": 609,
+  "storage_refs_total": 612,
   "storage_refs": {
     "controller/SnapResumePlanner.scala": 92,
     "actors/TrieNodeHealingCoordinator.scala": 70,
@@ -28,12 +28,12 @@
     "actors/AccountRangeCoordinator.scala": 17,
     "controller/SyncLifecycle.scala": 17,
     "controller/PivotRefresher.scala": 8,
+    "actors/account/AccountRangeEnv.scala": 6,
     "controller/StateValidationModule.scala": 5,
     "actors/account/AccountTrieAssembly.scala": 5,
     "actors/bytecode/ByteCodeResponseHandling.scala": 4,
     "controller/FinalizationPolicy.scala": 4,
-    "controller/SnapPeerPool.scala": 3,
-    "actors/account/AccountRangeEnv.scala": 3
+    "controller/SnapPeerPool.scala": 3
   },
   "raw_imports": {
     "actors/StorageRangeCoordinator.scala": [
@@ -42,7 +42,7 @@
     ]
   },
   "justifications": {
-    "storage_refs.total": "counter v2 (spec 016 T060b, re-baseline, no code change): the coordinators' false positives no longer count (ForceCompleteStorage, isNodeInStorage, .isStorage, replayQueuedStorage, .createStorageTask, the SNAPSyncMetrics setStorage* setters, the SyncProgressMonitor and SnapIntakeBudget counters, the maxConcurrentStorageAccounts/maxPendingStorageTasks settings, evaluateStorageTail, sampledStorageRoots, validateStorageRanges, verifyStorageRange, attachStorageConsumer: -53) and AccountRangeCoordinator's storageDone store now counts (+10: its constructor and apply parameters, body uses, the ChildFactories forwarding and the DownloadSupervisor spawn label). 678 under counter 1 = 635 under counter 2",
+    "storage_refs.total": "spec 016 T065 (C-A4), +3 exactly, 609 -> 612, one-off: the session-value Env declaration cost under the named FR-042 exception (Coordinators \"Amendment 2026-10-13\", user decision 2026-10-13). The carried replay moved into ContractWorkCarry reads AccountRangeCoordinator's per-spawn storageDone (Option[SnapStorageDoneStorage]), a session value that stays an explicit parameter, so AccountRangeEnv declares `def storageDone: Option[SnapStorageDoneStorage]` and imports the type (AccountRangeEnv.scala 3 -> 6). C-A4 holds no adoptable store: its only other reference, mptStorage.multiGetNodes (the Hash-scheme root-presence check), reads the pivot-bound MptStorage, the other session value, already in AccountRangeEnv since C-A3; no parameterless StateIngest member replaces either. Every other reference only moves file to file",
     "capabilities.StateIngest.members": "spec 016 T060d (D-T060-1, user decision 2026-10-12): 9 -> 12. StateIngest gains the derived stores the coordinators take: trieStore(pivot) (a pure forwarder of stateStorage.getBackingStorage, called only by the core's per-pivot cache getOrCreateMptStorage), snapProgress (the core's snapProgressStorage) and storageDone (the core's storageDoneStorage, by-name because the core builds it after the capability). Same instances, built where they are today. The healing stores (HealingFrontierStorage, BfsQueueStorage) are deferred to C-H1 (#1584)"
   },
   "capabilities": {
