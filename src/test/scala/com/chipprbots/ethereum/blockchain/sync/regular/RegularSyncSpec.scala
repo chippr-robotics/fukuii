@@ -469,6 +469,8 @@ class RegularSyncSpec
           override lazy val blockchainReader: BlockchainReader = stub[BlockchainReader]
           (() => blockchainReader.getBestBlockNumber).when().onCall(() => bestBlock.number.value)
           (() => blockchainReader.getSnapSyncPivotBlock).when().returns(None) // no SNAP sync pivot
+          // No canonical index in this stubbed world, so the importer's PoW prefix trim (#1592) drops nothing.
+          (blockchainReader.getCanonicalHashByNumber(_: BigInt)).when(*).returns(None)
           override lazy val consensusAdapter: ConsensusAdapter = stub[ConsensusAdapter]
           (consensusAdapter
             .evaluateBranchBlock(_: Block)(_: IORuntime, _: BlockchainConfig))
@@ -536,6 +538,8 @@ class RegularSyncSpec
         override lazy val blockchain: BlockchainImpl = stub[BlockchainImpl]
         (() => blockchainReader.getBestBlockNumber).when().onCall(() => bestBlock.number.value)
         (() => blockchainReader.getSnapSyncPivotBlock).when().returns(None) // no SNAP sync pivot
+        // No canonical index in this stubbed world, so the importer's PoW prefix trim (#1592) drops nothing.
+        (blockchainReader.getCanonicalHashByNumber(_: BigInt)).when(*).returns(None)
         override lazy val consensusAdapter: ConsensusAdapter = stub[ConsensusAdapter]
         (consensusAdapter
           .evaluateBranchBlock(_: Block)(_: IORuntime, _: BlockchainConfig))

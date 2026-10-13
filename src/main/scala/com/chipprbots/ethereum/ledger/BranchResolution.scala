@@ -100,8 +100,8 @@ class BranchResolution(
           // (the fetcher re-serves from below the head), so a post-merge node never recovered from its first rewind.
           // Measured on Platåberget: head stuck at 200 for `135..210` → "Imported no blocks" → `211..260` → "Unknown
           // branch" → rewind, forever (#1432). No side branch is accepted here: `oldBlocks` is empty, nothing is
-          // displaced. PoS only (`followsConsensusLayer`), so a PoW chain keeps `NewBetterBranch(Nil)` and its
-          // weight-selected re-execution of the whole batch exactly as before.
+          // displaced. PoS only (`followsConsensusLayer`), so a PoW chain keeps `NewBetterBranch(Nil)` here; on PoW
+          // the importer drops the canonical prefix itself (BlockImporter.resolveBranch, #1592).
           if commonPrefixLength > 0 && followsConsensusLayer then ExtendsCanonicalHead(commonPrefixLength)
           else NewBetterBranch(Nil)
         else if newHeaders.nonEmpty && leadsToDesignatedHead(newHeaders) then
@@ -225,7 +225,7 @@ case class NewBetterBranch(oldBranch: Seq[Block]) extends BranchResolutionResult
   * extension — the batch minus that prefix — is left to import, and its parent is the head.
   *
   * Produced only on a chain that follows a consensus layer (see `BranchResolution.followsConsensusLayer`); a PoW chain
-  * gets `NewBetterBranch(Nil)` for the same input, as before.
+  * gets `NewBetterBranch(Nil)` for the same input, as before, and `BlockImporter` drops the prefix from it (#1592).
   */
 case class ExtendsCanonicalHead(alreadyCanonical: Int) extends BranchResolutionResult
 

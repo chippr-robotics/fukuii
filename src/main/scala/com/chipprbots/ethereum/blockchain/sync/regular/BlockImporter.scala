@@ -980,12 +980,28 @@ final private class BlockImporterLogic(
   private def resolveBranch(blocks: NonEmptyList[Block]): Either[BigInt, List[Block]] =
     branchResolution.resolveBranch(blocks.map(_.header)) match
       case NewBetterBranch(oldBranch) =>
+        // PoW only (#1592): drop the leading blocks that ARE our canonical chain, as core-geth's insertChain skips
+        // known canonical blocks below the head. After a rewind the fetcher re-serves from below the head, so the batch
+        // opens with canonical blocks; handed over whole, its parent is not the head and consensus re-executes that
+        // prefix through reorganise, against a parent state basic pruning may already have deleted, and then treats
+        // the prefix as the old chain it replaced. What is left starts at the head's child (importToTop) or, for a
+        // real fork, at the fork point. The fork choice is unchanged: the same blocks are added on the same parent
+        // weight. A chain following a consensus layer keeps its own path (ExtendsCanonicalHead below), untouched.
+        val alreadyCanonical = if branchResolution.followsConsensusLayer then 0 else canonicalPrefixLength(blocks)
+        val toImport = blocks.toList.drop(alreadyCanonical)
+        if alreadyCanonical > 0 then
+          log.info(
+            "Canonical prefix dropped: batch={} alreadyCanonical={} importing={}",
+            s"${blocks.head.number}-${blocks.last.number}",
+            alreadyCanonical,
+            toImport.headOption.zip(toImport.lastOption).fold("-") { case (f, l) => s"${f.number}-${l.number}" }
+          )
         val depth = oldBranch.size
         if depth > 0 then
           log.info(
             "Chain reorg: evicting {} minority-fork blocks, importing {} canonical (depth={})",
             depth,
-            blocks.size,
+            toImport.size,
             depth
           )
           RegularSyncMetrics.incrementReorgTotal()
@@ -994,7 +1010,7 @@ final private class BlockImporterLogic(
         pendingTransactionsManager ! PendingTransactionsManager.AddUncheckedTransactions(transactionsToAdd)
         // Add first block from branch as an ommer
         oldBranch.headOption.map(_.header).foreach(ommersPool ! AddOmmers(_))
-        Right(blocks.toList)
+        Right(toImport)
       case ExtendsCanonicalHead(alreadyCanonical) =>
         // Post-merge only (BranchResolution.followsConsensusLayer). The first `alreadyCanonical` blocks ARE our
         // canonical chain and the rest extend its head, so hand consensus only the rest: their parent is the head,
@@ -1050,6 +1066,16 @@ final private class BlockImporterLogic(
         log.warning(msg)
         fetcher ! BlockFetcher.InvalidateBlocksFrom(goingBackTo, msg)
         Right(Nil)
+
+  /** How many leading blocks of `blocks` are already our canonical chain: at or below the best block, and the very
+    * block the canonical index names at that height. Stops at the first block that is not, so nothing after it is ever
+    * skipped.
+    */
+  private def canonicalPrefixLength(blocks: NonEmptyList[Block]): Int =
+    val best = blockchainReader.getBestBlockNumber
+    blocks.toList.takeWhile { b =>
+      b.number.value <= best && blockchainReader.getCanonicalHashByNumber(b.number.value).contains(b.hash)
+    }.size
 
   /** Check if a block's transactions touch any contract whose code is missing from local storage. Returns the codeHash
     * of the first missing contract found.

@@ -634,7 +634,9 @@ private[snap] trait PivotSelector extends PivotSelectionApi with PivotBestBlockA
 
     val rawPivot = baseBlockForPivot - snapSyncConfig.pivotBlockOffset
     val pivotBlockNumber = rawPivot.max(minPivotHint)
-    if pivotBlockNumber > rawPivot then
+    // Only a real hint raises the pivot. With none (0) the max merely floors a negative raw pivot on a fresh datadir
+    // that has no peer heights yet, which is not a stuck regular sync and needs no warning.
+    if minPivotHint > 0 && pivotBlockNumber > rawPivot then
       ctx.log.warn(
         s"SNAP pivot raised from $rawPivot to $pivotBlockNumber to satisfy MinPivotBlock constraint " +
           s"(regular sync was stuck near that block)"
