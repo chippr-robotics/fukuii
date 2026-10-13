@@ -192,11 +192,7 @@ private class ByteCodeCoordinatorImpl(
         Behaviors.same
 
       case AddByteCodeTasks(received, skipPresent) =>
-        // Replayed (carried / recovered) codeHashes were identified before a restart and many were already fetched.
-        // Bytecode is content-addressed and hash-checked on write, so one already in EvmCodeStorage is done: skip it.
-        // This lookup used to run on the controller thread (2.5M RocksDB reads per Sepolia resume — the mailbox lag
-        // that delayed the back-pressure signal by minutes, spec 014); here it costs this coordinator, not the controller.
-        val codeHashes = if skipPresent then received.filter(h => evmCodeStorage.get(h).isEmpty) else received
+        val codeHashes = skipPresentCodeHashes(received, skipPresent)
         val alreadyPresent = received.size - codeHashes.size
         if alreadyPresent > 0 then
           // Count them as done so the progress estimate (which includes every replayed hash) can still reach 100%.
@@ -703,6 +699,14 @@ private class ByteCodeCoordinatorImpl(
   private def markWorkerIdle(worker: WorkerRef): Unit =
     // Only track workers we created.
     if workers.contains(worker) then idleWorkers += worker
+
+  /** The #1501 `skipPresent` check of `AddByteCodeTasks` (lifted into a method, spec 016 C-B1). */
+  private def skipPresentCodeHashes(received: Seq[ByteString], skipPresent: Boolean): Seq[ByteString] =
+    // Replayed (carried / recovered) codeHashes were identified before a restart and many were already fetched.
+    // Bytecode is content-addressed and hash-checked on write, so one already in EvmCodeStorage is done: skip it.
+    // This lookup used to run on the controller thread (2.5M RocksDB reads per Sepolia resume — the mailbox lag
+    // that delayed the back-pressure signal by minutes, spec 014); here it costs this coordinator, not the controller.
+    if skipPresent then received.filter(h => evmCodeStorage.get(h).isEmpty) else received
 
   /** Filter and deduplicate codeHashes. Input is already Bloom-filtered by AccountRangeCoordinator (~0.01% FPR), so
     * this is a final dedup pass over ~2M entries (not 73.5M). Bug 20 fix.
