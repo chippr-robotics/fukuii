@@ -94,7 +94,9 @@ private[actors] class StorageRangeCoordinatorImpl(
     // Tests: run the processing jobs on this ExecutionContext instead of an owned worker pool.
     processingEcOverride: Option[ExecutionContext] = None
 ) extends StoragePeerDispatch
-    with StorageRangeEnv:
+    with StorageRangeEnv
+    with StoragePeerDispatchState
+    with StorageRangeCoreApi:
 
   import StorageRangeCoordinator.*
 

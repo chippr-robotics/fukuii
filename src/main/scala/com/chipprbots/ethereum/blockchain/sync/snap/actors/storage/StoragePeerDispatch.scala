@@ -10,7 +10,7 @@ import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController
 import com.chipprbots.ethereum.blockchain.sync.snap.SnapPeerHealth
 import com.chipprbots.ethereum.blockchain.sync.snap.SnapTrie
 import com.chipprbots.ethereum.blockchain.sync.snap.StorageTask
-import com.chipprbots.ethereum.blockchain.sync.snap.actors.*
+import com.chipprbots.ethereum.blockchain.sync.snap.actors.StorageRangeCoordinator
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.StorageRangeCoordinator.ForceCompleteStorage
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.StorageRangeCoordinator.PendingResponse
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.StorageRangeCoordinator.StorageCheckCompletion
@@ -67,7 +67,7 @@ private[actors] trait StorageRangeCoreApi:
   * the behaviour arms that call it.
   */
 private[actors] trait StoragePeerDispatch:
-  this: StorageRangeCoordinatorImpl =>
+  this: StoragePeerDispatchState & StorageRangeEnv & StorageRangeCoreApi =>
 
   private lazy val maxConsecutiveTaskFailures: Int = 100
   private lazy val peerCooldownDefault = 5.seconds
