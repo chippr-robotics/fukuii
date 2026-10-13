@@ -10,7 +10,6 @@ import com.chipprbots.ethereum.blockchain.sync.snap.SnapPathTrie
 import com.chipprbots.ethereum.blockchain.sync.snap.SnapTrie
 import com.chipprbots.ethereum.blockchain.sync.snap.StorageScheme
 import com.chipprbots.ethereum.blockchain.sync.snap.StorageTask
-import com.chipprbots.ethereum.blockchain.sync.snap.actors.*
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.StorageRangeCoordinator.ByteStringOrdering
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.StorageRangeCoordinator.PathNodeOp
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.StorageRangeCoordinator.PrebuiltStorageTrie
@@ -58,7 +57,7 @@ private[actors] trait StorageApplyCoreApi:
   * flushes the node buffer after every message.
   */
 private[actors] trait StorageOrderedApply:
-  this: StorageRangeCoordinatorImpl =>
+  this: StorageOrderedApplyState & StorageRangeEnv & StorageApplyCoreApi & StoragePeerFeedbackApi =>
 
   /** Discard the ordering-gate state for one account: its cursor, last-applied-slot marker, and any buffered (verified
     * but not-yet-applied) chunks. Called everywhere `pendingAccountTries` is reset/removed for that account, so the
@@ -84,7 +83,7 @@ private[actors] trait StorageOrderedApply:
         case StorageScheme.Hash =>
           new SnapHashTrie(batch => mptStorage.storeRawNodes(batch))
         case StorageScheme.Path =>
-          val pns = pathNodeStorage.getOrElse(
+          val pns = stateIngest.pathNodes.getOrElse(
             throw new IllegalStateException("PathScheme requires pathNodeStorage to be set")
           )
           // Nodes go to `trieNodeWrites` and are committed as one batch (flushTrieNodeWrites), not one RocksDB write
@@ -154,8 +153,9 @@ private[actors] trait StorageOrderedApply:
       val startNs = System.nanoTime()
       val updates = trieNodeWrites.toList
       trieNodeWrites.clear()
-      val pns =
-        pathNodeStorage.getOrElse(throw new IllegalStateException("PathScheme requires pathNodeStorage to be set"))
+      val pns = stateIngest.pathNodes.getOrElse(
+        throw new IllegalStateException("PathScheme requires pathNodeStorage to be set")
+      )
       pns.dataSource.update(updates)
       trieWriteNanos += System.nanoTime() - startNs
 
@@ -163,8 +163,9 @@ private[actors] trait StorageOrderedApply:
   private def writePrebuiltTrie(accountHash: ByteString, prebuilt: PrebuiltStorageTrie): Unit =
     prebuilt match
       case PrebuiltStorageTrie.Path(ops, _) =>
-        val pns =
-          pathNodeStorage.getOrElse(throw new IllegalStateException("PathScheme requires pathNodeStorage to be set"))
+        val pns = stateIngest.pathNodes.getOrElse(
+          throw new IllegalStateException("PathScheme requires pathNodeStorage to be set")
+        )
         ops.foreach {
           case PathNodeOp.Put(path, blob) => trieNodeWrites += pns.storageNodeUpsert(accountHash, path, blob)
           case PathNodeOp.Delete(path)    => trieNodeWrites += pns.storageNodeRemoval(accountHash, path)

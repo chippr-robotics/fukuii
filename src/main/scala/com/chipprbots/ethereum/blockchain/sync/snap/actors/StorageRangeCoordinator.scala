@@ -14,17 +14,23 @@ import scala.util.Try
 
 import com.chipprbots.ethereum.blockchain.sync.snap.*
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.storage.*
+import com.chipprbots.ethereum.blockchain.sync.snap.controller.StateIngest
 import com.chipprbots.ethereum.db.dataSource.DataSourceBatchUpdate
 import com.chipprbots.ethereum.db.dataSource.DataUpdate
 import com.chipprbots.ethereum.db.storage.FlatSlotStorage
 import com.chipprbots.ethereum.db.storage.MptStorage
-import com.chipprbots.ethereum.db.storage.PathNodeStorage
 import com.chipprbots.ethereum.db.storage.SnapStorageDoneStorage
 import com.chipprbots.ethereum.db.storage.SnapSyncProgressStorage
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor
 import com.chipprbots.ethereum.network.Peer
 import com.chipprbots.ethereum.network.p2p.messages.SNAP.*
 import com.chipprbots.ethereum.utils.ByteStringUtils.ByteStringOps
+
+// The call-site map for the snap-split verify adoption mode (spec 016 T067, C-S2): the dropped parameter and the
+// StateIngest member that replaces it. `mptStorage` (the core's per-pivot trie store) and `snapProgressStorage` (the
+// per-spawn cursor store) stay explicit parameters: session values, not capabilities (the named FR-042 exception, user
+// decisions 2026-10-13).
+// adopt-map: pathNodeStorage -> pathNodes
 
 /** StorageRangeCoordinator manages storage range download workers and orchestrates the storage sync phase.
   *
@@ -80,7 +86,7 @@ private[actors] class StorageRangeCoordinatorImpl(
     val maxConcurrentStorageAccounts: Int = 256,
     val snapProgressStorage: Option[SnapSyncProgressStorage] = None,
     val storageScheme: StorageScheme = StorageScheme.Hash,
-    val pathNodeStorage: Option[PathNodeStorage] = None,
+    val stateIngest: StateIngest,
     // Persist a completion marker per fully-downloaded account (SnapStorageDoneStorage) so a resume re-queues only
     // unfinished storage tasks. Off by default: only SNAPSyncController's account-phase and recovery coordinators read
     // the markers back.
@@ -97,7 +103,9 @@ private[actors] class StorageRangeCoordinatorImpl(
     with StorageOrderedApply
     with StorageRangeEnv
     with StoragePeerDispatchState
-    with StorageRangeCoreApi:
+    with StorageRangeCoreApi
+    with StorageOrderedApplyState
+    with StorageApplyCoreApi:
 
   import StorageRangeCoordinator.*
 
@@ -1920,7 +1928,7 @@ object StorageRangeCoordinator:
       maxConcurrentStorageAccounts: Int = 256,
       snapProgressStorage: Option[SnapSyncProgressStorage] = None,
       storageScheme: StorageScheme = StorageScheme.Hash,
-      pathNodeStorage: Option[PathNodeStorage] = None,
+      stateIngest: StateIngest,
       recordStorageDone: Boolean = false,
       intakeBudget: Option[SnapIntakeBudget] = None
   ): Behavior[Command] =
@@ -1957,7 +1965,7 @@ object StorageRangeCoordinator:
           maxConcurrentStorageAccounts = maxConcurrentStorageAccounts,
           snapProgressStorage = snapProgressStorage,
           storageScheme = storageScheme,
-          pathNodeStorage = pathNodeStorage,
+          stateIngest = stateIngest,
           recordStorageDone = recordStorageDone,
           intakeBudget = intakeBudget,
           processing = processingSettings

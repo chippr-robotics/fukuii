@@ -19,10 +19,19 @@ import org.scalatest.time.Span
 
 import com.chipprbots.ethereum.blockchain.sync.snap.*
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController
+import com.chipprbots.ethereum.blockchain.sync.snap.controller.StateIngest
 import com.chipprbots.ethereum.crypto.kec256
 import com.chipprbots.ethereum.db.dataSource.EphemDataSource
+import com.chipprbots.ethereum.db.storage.AppStateStorage
+import com.chipprbots.ethereum.db.storage.EvmCodeStorage
 import com.chipprbots.ethereum.db.storage.FlatSlotStorage
+import com.chipprbots.ethereum.db.storage.MptStorage
+import com.chipprbots.ethereum.db.storage.PathNodeStorage
 import com.chipprbots.ethereum.db.storage.SnapStorageDoneStorage
+import com.chipprbots.ethereum.db.storage.SnapSyncProgressStorage
+import com.chipprbots.ethereum.db.storage.StateStorage
+import com.chipprbots.ethereum.domain.BlockchainReader
+import com.chipprbots.ethereum.domain.BlockchainWriter
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor
 import com.chipprbots.ethereum.network.p2p.messages.SNAP.GetStorageRanges.GetStorageRangesEnc
 import com.chipprbots.ethereum.network.p2p.messages.SNAP.StorageRanges
@@ -70,9 +79,30 @@ class StorageRangeCoordinatorSpec
         snapSyncController = snapSyncController,
         initialMaxInFlightPerPeer = initialMaxInFlightPerPeer,
         backpressureHighWatermark = backpressureHighWatermark,
-        backpressureLowWatermark = backpressureLowWatermark
+        backpressureLowWatermark = backpressureLowWatermark,
+        stateIngest = hashSchemeIngest
       )
     )
+
+  // The coordinator's StateIngest (spec 016 C-S2): these tests run the Hash scheme, so the coordinator reads only
+  // `pathNodes` (None) from it; every other member throws.
+  private def hashSchemeIngest: StateIngest =
+    new StateIngest:
+      def appState: AppStateStorage = notReached("appState")
+      def stateTries: StateStorage = notReached("stateTries")
+      def flatSlots: FlatSlotStorage = notReached("flatSlots")
+      def pathNodes: Option[PathNodeStorage] = None
+      def bytecode: EvmCodeStorage = notReached("bytecode")
+      def chainReader: BlockchainReader = notReached("chainReader")
+      def chainWriter: BlockchainWriter = notReached("chainWriter")
+      def validatorFactory: MptStorage => StateValidator = notReached("validatorFactory")
+      def durability: StateIngest.Durability = StateIngest.Durability.Default
+      def trieStore(pivot: BigInt): MptStorage = notReached("trieStore")
+      def snapProgress: SnapSyncProgressStorage = notReached("snapProgress")
+      def storageDone: SnapStorageDoneStorage = notReached("storageDone")
+
+  private def notReached(member: String): Nothing =
+    throw new UnsupportedOperationException(s"StorageRangeCoordinator read StateIngest.$member")
 
   // Typed `StorageGetProgress` carries a `replyTo: ActorRef[SyncStatistics]`. In these Classic tests the reply target
   // is the test actor (ImplicitSender); adapt it to a typed ref so the coordinator can reply.
@@ -126,6 +156,7 @@ class StorageRangeCoordinatorSpec
           backpressureHighWatermark = backpressureHighWatermark,
           backpressureLowWatermark = backpressureLowWatermark,
           deferredMerkleization = deferredMerkleization,
+          stateIngest = hashSchemeIngest,
           recordStorageDone = recordStorageDone
         )
         captured.start()

@@ -221,7 +221,7 @@ object StorageRecoveryActor:
                           snapSyncController = srcAdapter,
                           initialResponseBytes = snapSyncConfig.storageInitialResponseBytes,
                           minResponseBytes = snapSyncConfig.storageMinResponseBytes,
-                          pathNodeStorage = stateIngest.pathNodes
+                          stateIngest = stateIngest
                         )
                       )
                       .onFailure[Throwable](

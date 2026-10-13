@@ -115,7 +115,7 @@ trait ChildFactories:
       maxConcurrentStorageAccounts: Int = 256,
       snapProgressStorage: Option[SnapSyncProgressStorage] = None,
       storageScheme: StorageScheme = StorageScheme.Hash,
-      pathNodeStorage: Option[PathNodeStorage] = None,
+      stateIngest: StateIngest,
       recordStorageDone: Boolean = false,
       intakeBudget: Option[SnapIntakeBudget] = None
   ): Behavior[StorageRangeCoordinator.Command] =
@@ -140,7 +140,7 @@ trait ChildFactories:
       maxConcurrentStorageAccounts = maxConcurrentStorageAccounts,
       snapProgressStorage = snapProgressStorage,
       storageScheme = storageScheme,
-      pathNodeStorage = pathNodeStorage,
+      stateIngest = stateIngest,
       recordStorageDone = recordStorageDone,
       intakeBudget = intakeBudget
     )
