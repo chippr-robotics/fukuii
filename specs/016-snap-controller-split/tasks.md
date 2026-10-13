@@ -1583,9 +1583,49 @@ plan.md ("Amendment 2026-10-13") and ADR INF-006 (decision 1, note).
   "Amendment 2026-10-13": `storageDone` and `mptStorage` stay explicit parameters. The task-file stream vals stay in
   the core under rule (d)). Narrowing takes `StateIngest`, never `StateAccess`; lowers the baseline
   total. Run a Mordor restart mid-account. The #1487/#1498/#1501 replay invariants are unchanged.
-- [ ] T066 [C-S1] `StoragePeerDispatch` (T060: plus `handleTimeout`. Zero-reference in substance: its 2 matches are
+- [x] T066 [C-S1] `StoragePeerDispatch` (T060: plus `handleTimeout`. Zero-reference in substance: its 2 matches are
   `ForceCompleteStorage`, which T060b allow-lists. Grep recorded, total unchanged). Narrowing takes `StateIngest` where it touches storage, never `StateAccess`;
   lowers the baseline total.
+  - **As built** (branch `refactor/snap-016-cs1-storage-dispatch`, four code commits and this docs commit; no sbt or
+    JVM run, CI compiles and tests). The C-A1 (T062) shape. (1) `# moved: PendingResponse`: the Impl-nested #1533
+    pipeline class goes to the companion (visibility unchanged, `final private[actors]`), so the State trait can name
+    `pendingResponses`' element type; no test names it. No lift: every S1 member was already an indent-2 member, and
+    `handleTimeout` is called from the `StorageRequestTimedOut` arm. (2) Prerequisite: `StorageRangeEnv` (new
+    `actors/storage/StorageRangeEnv.scala`), `StoragePeerDispatchState` and `StorageRangeCoreApi` (`progress`, the
+    core's) are declared in the new `actors/storage/StoragePeerDispatch.scala`; the thirteen constructor parameters the
+    module reads become `val`s (`context`, `networkPeerManager`, `requestTracker`, `maxAccountsPerBatch`,
+    `maxInFlightRequests`, `requestTimeout`, `snapSyncController`, `configInitialResponseBytes`,
+    `configMinResponseBytes`, `deferredMerkleization`, `maxConcurrentStorageAccounts`, `intakeBudget`, `processing`);
+    the sixteen module-only constants become `private lazy val`s (pure: yes, literals or a constructor `val`;
+    `minResponseBytes` wraps after `=` to stay within 120 columns). The storage parameters are untouched. (3) The move
+    commit takes 42 members byte-identical into `StoragePeerDispatch`: 21 methods (`isPostRefreshCooldownActive`,
+    `isPeerStateless`, `markPeerStateless`, `recordPeerSuccess`, `recordPeerAnswered`, `maybeRequestPivotRefresh`,
+    `batchSizeFor`, `reduceBatchSize`, `maybeIncreaseBatchSize`, `inFlightForPeer`, the three response-budget methods,
+    `requestNextRanges`, `handleTimeout`, `dispatchIfPossible`, `tryRedispatchPendingTasks`, `redispatchEligible`,
+    `isPeerCoolingDown`, `perPeerInFlightLimit`, `recordPeerCooldown`), the five private vars (rule (d):
+    `lastPenalisedFloorLogMs`, `lastPivotRefreshTimeMs`, `storageIdleChecks`, `storageMilestonePct`,
+    `lastStateLogMs`) and the sixteen constants. The Impl closes `) extends StoragePeerDispatch` /
+    `with StorageRangeEnv:`; the core members the module reaches become public (`log`, `self`, the 24 State fields,
+    `progress`); the core imports `actors.storage.*` and drops `MessageSerializable`. The module's self-type is
+    `this:`, not `self:`: three moved bodies send to the coordinator's `self` (`context.self`, an Env member), which a
+    `self` alias would shadow. (4) The narrowing commit: the self-type names
+    `StoragePeerDispatchState & StorageRangeEnv & StorageRangeCoreApi`, the Impl adds the State and Api parents, the
+    module swaps the `actors.*` wildcard for a named import. No `# adopts:`, and `apply`, `ChildFactories` and
+    `ChildFactoriesSpec` are unchanged (the tasks.md exception).
+    - Counts against R14b: State 24 (R14b 23, plus `peerHealth`, the #1491 `SnapPeerHealth` score: a concrete `val` of a
+      mutable object that the core's arms also read; R14b's matrix lists mutable fields and collections and missed
+      it), Api 1 (= 1, `progress`). `StorageRangeEnv` 15, reported as a capability trait (G9), with no store.
+    - Storage total **609, unchanged** (zero-reference slice). The characterization §5 grep over
+      `actors/storage/StoragePeerDispatch.scala` prints three `ForceCompleteStorage` under `STORAGE_NAME_ALLOW` (v1:
+      `handleTimeout`'s two, as T060 predicted, plus the module's named import of the Command object) and `[]` under
+      `STORAGE_NAME_ALLOW_V2`, the baseline's counter; `StorageRangeEnv.scala` prints `[]` under both. SRC stays at 66;
+      `storage-baseline.json` is unchanged.
+    - Stub test (`# new-tests:`): `StoragePeerDispatchSpec` (8 cases, in a `BehaviorTestKit`). No existing test changed.
+    - Left as they were (FR-034, no cleanups in a move PR): the fields the module reaches are now public, and the moved
+      constants sit in the trait without the comments of the fields they were declared beside (those stay with the
+      fields).
+    - Owed: the second-specialist review (prism) and forge's "no ETC behaviour change" sign-off (SRC runs on ETC). No
+      vault review and no node run (characterization §7: none for C-S1; no storage path changes).
 - [ ] T067 [C-S2] `StorageOrderedApply` (vault; T060: plus `writePrebuiltTrie`. It adopts `pathNodeStorage`, and
   `mptStorage`/`snapProgressStorage` per D-T060-1. `flushTrieNodeWrites` writes via `pns.dataSource.update`, a raw
   call that a per-batch `StateIngest` member could replace; decide at T067). Narrowing takes `StateIngest` (the batched storage-trie node-write
