@@ -95,7 +95,9 @@ private[actors] class AccountRangeCoordinatorImpl(
     // dispatch and the carried replay). None = not wired (tests): only the mailbox-borne watermark signal applies.
     val intakeBudget: Option[SnapIntakeBudget] = None
 ) extends AccountPeerDispatch
-    with AccountRangeEnv:
+    with AccountRangeEnv
+    with AccountPeerDispatchState
+    with AccountTaskLifecycleApi:
 
   import SNAPSyncController.PivotStateUnservable
   import AccountRangeCoordinator.*

@@ -10,12 +10,13 @@ import scala.concurrent.duration.*
 import com.chipprbots.ethereum.blockchain.sync.snap.AccountTask
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController.PivotStateUnservable
-import com.chipprbots.ethereum.blockchain.sync.snap.actors.*
+import com.chipprbots.ethereum.blockchain.sync.snap.actors.AccountRangeCoordinator
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.AccountRangeCoordinator.CheckCompletion
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.AccountRangeCoordinator.FetchAccountRange
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.AccountRangeCoordinator.RecheckIntakeGate
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.AccountRangeCoordinator.WorkerRef
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.AccountRangeCoordinator.WorkerTerminated
+import com.chipprbots.ethereum.blockchain.sync.snap.actors.AccountRangeWorker
 import com.chipprbots.ethereum.network.Peer
 import com.chipprbots.ethereum.network.PeerId
 import com.chipprbots.ethereum.utils.ByteStringUtils.ByteStringOps
@@ -57,7 +58,7 @@ private[actors] trait AccountTaskLifecycleApi:
   * pending task. The coordinator core keeps the behaviour arms that call it.
   */
 private[actors] trait AccountPeerDispatch:
-  self: AccountRangeCoordinatorImpl =>
+  self: AccountPeerDispatchState & AccountRangeEnv & AccountTaskLifecycleApi =>
 
   def downstreamBackpressureActive: Boolean = backpressureSources.nonEmpty
   // The intake gate (spec 014): pending storage/bytecode work at its ceiling, or heap pressure. Read synchronously, so
