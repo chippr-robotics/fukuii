@@ -85,13 +85,17 @@ instance) and ARC's per-spawn `Option[SnapStorageDoneStorage]` are session value
 counting them. `trieStore` cannot stand in for the first: it returns a new `MptStorage` per call on the Hash scheme, and
 the caching decision above keeps the core's cache its only caller. `storageDone` cannot stand in for the second: the spawn
 decides whether markers are read. It covers C-A3, C-A4, C-S2 and C-H1 (spec 016 tasks.md, "Amendment 2026-10-13");
-everything else those slices take adopts the capability (C-A3: `pathNodes`).
+everything else those slices take adopts the capability (C-A3, C-S2: `pathNodes`). SRC's per-spawn
+`Option[SnapSyncProgressStorage]` is a third session value (user decision 2026-10-13, found at T067): the spawn decides
+whether the storage cursor is persisted (recovery persists none), which `snapProgress`, a plain store, cannot express.
+
 Declaring a session value on a coordinator's Env is itself a storage reference, so a slice may raise the ratchet total
 for it (user decision 2026-10-13, found at T065; tightened after the #1591 reviews), and only when: the value is one of
-the two above (`mptStorage`, `storageDone`; the list is closed, and another needs a new user decision); the rise is
-net of the slice's own adoptions, applied first; it equals exactly the Env file's count increase for the declaration
-and its import; and a fresh justification line names it and states the amount, keeping the previous line as history.
-C-A4 is the first instance: `storageDone` on `AccountRangeEnv`, +3, 609 → 612.
+the three above (`mptStorage`, `storageDone`, `snapProgressStorage`; the list is closed, and another needs a new user
+decision); the rise is net of the slice's own adoptions, applied first; it equals exactly the Env file's count increase
+for the declaration and its import; and a fresh justification line names it and states the amount, keeping the previous
+line as history. C-S2 declares `mptStorage` and `snapProgressStorage` on `StorageRangeEnv` (+6) after adopting
+`pathNodes` (−15): 612 → 603, no rise. C-A4 was the first instance: `storageDone` on `AccountRangeEnv`, +3, 609 → 612.
 
 ### 2. Chain-data handles stay on `StateIngest` (no header/chain sub-interface now)
 
