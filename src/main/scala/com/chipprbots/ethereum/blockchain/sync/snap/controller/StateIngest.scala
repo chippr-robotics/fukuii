@@ -6,6 +6,8 @@ import com.chipprbots.ethereum.db.storage.EvmCodeStorage
 import com.chipprbots.ethereum.db.storage.FlatSlotStorage
 import com.chipprbots.ethereum.db.storage.MptStorage
 import com.chipprbots.ethereum.db.storage.PathNodeStorage
+import com.chipprbots.ethereum.db.storage.SnapStorageDoneStorage
+import com.chipprbots.ethereum.db.storage.SnapSyncProgressStorage
 import com.chipprbots.ethereum.db.storage.StateStorage
 import com.chipprbots.ethereum.domain.BlockchainReader
 import com.chipprbots.ethereum.domain.BlockchainWriter
@@ -20,6 +22,9 @@ import com.chipprbots.ethereum.domain.BlockchainWriter
 // capability-map: blockchainReader -> chainReader
 // capability-map: blockchainWriter -> chainWriter
 // capability-map: validatorFactory -> validatorFactory
+// capability-map: stateStorage.getBackingStorage -> trieStore
+// capability-map: snapProgressStorage -> snapProgress
+// capability-map: storageDoneStorage -> storageDone
 
 /** SNAP's state-ingest capability (spec 016 T055, FR-040/041/044/045; ADR INF-006).
   *
@@ -35,7 +40,12 @@ import com.chipprbots.ethereum.domain.BlockchainWriter
   *   - chain data (headers, pivot block, chain weight, best block): [[chainReader]], [[chainWriter]]. These are not
   *     trie state; ADR INF-006 records why they stay on this trait for now instead of a separate header/chain
   *     capability;
-  *   - verification: [[validatorFactory]].
+  *   - verification: [[validatorFactory]];
+  *   - derived stores (spec 016 T060d, D-T060-1): [[trieStore]] (the per-pivot trie store), [[snapProgress]] (download
+  *     progress, namespace `p`), [[storageDone]] (storage-task completion markers). They hand out what the core hands
+  *     out today, built where it builds them. The healing stores (`HealingFrontierStorage`, `BfsQueueStorage`) are not
+  *     members yet: they are `HealingOrchestrator`'s lazy vals, and the gate cannot mirror a lazy handle (decided at
+  *     C-H1, #1584).
   *
   * '''Verification reads are ingest.''' SNAP reads what it needs to decide what to write, and those reads belong here,
   * not to `StateAccess`: proof checks (the coordinators' `MerkleProofVerifier` over the trie store), healing presence
@@ -106,6 +116,19 @@ private[sync] trait StateIngest:
   /** This capability's durability policy (FR-045). */
   def durability: StateIngest.Durability
 
+  /** The writable trie store for `pivot` (`stateTries.getBackingStorage`). On the Hash scheme each call returns a new
+    * `MptStorage`, so the core's per-pivot cache (`getOrCreateMptStorage`) is its only caller; never call it per use.
+    */
+  def trieStore(pivot: BigInt): MptStorage
+
+  /** SNAP download progress and resume cursors (namespace `p`): the core's `snapProgressStorage`. */
+  def snapProgress: SnapSyncProgressStorage
+
+  /** Storage-task completion markers: the core's `storageDoneStorage`. A by-name parameter of `apply`, because the core
+    * builds that store after this capability; each read returns the core's one instance.
+    */
+  def storageDone: SnapStorageDoneStorage
+
 private[sync] object StateIngest:
 
   /** Durability policies for ingest writes (FR-045). `Default` is today's behaviour: the WAL on for every write, plain
@@ -124,7 +147,9 @@ private[sync] object StateIngest:
       chainReader: BlockchainReader,
       chainWriter: BlockchainWriter,
       validatorFactory: MptStorage => StateValidator,
-      durability: Durability
+      durability: Durability,
+      snapProgress: SnapSyncProgressStorage,
+      storageDoneStorage: => SnapStorageDoneStorage
   ): StateIngest =
     new Stores(
       appState,
@@ -135,11 +160,15 @@ private[sync] object StateIngest:
       chainReader,
       chainWriter,
       validatorFactory,
-      durability
+      durability,
+      snapProgress,
+      storageDoneStorage
     )
 
-  /** A final class of constructor `val`s and nothing else: the controller makes one at construction, and every member
-    * is a field read. It is the only production implementation, so each call through the trait has one receiver class.
+  /** A final class of constructor `val`s and pure forwarders: the controller makes one at construction. Every member is
+    * a field read, except [[trieStore]] (a call on `stateTries`) and [[storageDone]] (a read of the core's store
+    * through the by-name parameter). It is the only production implementation, so each call through the trait has one
+    * receiver class.
     */
   final private class Stores(
       val appState: AppStateStorage,
@@ -150,5 +179,9 @@ private[sync] object StateIngest:
       val chainReader: BlockchainReader,
       val chainWriter: BlockchainWriter,
       val validatorFactory: MptStorage => StateValidator,
-      val durability: Durability
-  ) extends StateIngest
+      val durability: Durability,
+      val snapProgress: SnapSyncProgressStorage,
+      storageDoneStorage: => SnapStorageDoneStorage
+  ) extends StateIngest:
+    def trieStore(pivot: BigInt): MptStorage = stateTries.getBackingStorage(pivot)
+    def storageDone: SnapStorageDoneStorage = storageDoneStorage
