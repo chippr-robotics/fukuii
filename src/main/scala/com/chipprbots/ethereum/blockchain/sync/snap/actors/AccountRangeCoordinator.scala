@@ -71,16 +71,16 @@ private[actors] class AccountRangeCoordinatorImpl(
     initialStateRoot: ByteString,
     val networkPeerManager: org.apache.pekko.actor.typed.ActorRef[NetworkPeerManagerActor.Command],
     val requestTracker: SNAPRequestTracker,
-    mptStorage: MptStorage,
+    val mptStorage: MptStorage,
     val concurrency: Int,
     val snapSyncController: org.apache.pekko.actor.typed.ActorRef[SNAPSyncController.Command],
-    resumeProgress: Map[ByteString, ByteString] = Map.empty,
+    val resumeProgress: Map[ByteString, ByteString] = Map.empty,
     initialMaxInFlightPerPeer: Int = 5,
     val initialResponseBytesConfig: Int = 524288,
     val minResponseBytesConfig: Int = 102400,
     accountTrieEcOverride: Option[ExecutionContext] = None,
-    storageScheme: StorageScheme = StorageScheme.Hash,
-    pathNodeStorage: Option[PathNodeStorage] = None,
+    val storageScheme: StorageScheme = StorageScheme.Hash,
+    val pathNodeStorage: Option[PathNodeStorage] = None,
     taskFileDir: Option[Path] = None,
     // Contract task files of the previous coordinator, consistent with `resumeProgress` (see AccountResumeCheckpoint).
     // When present, partially-downloaded ranges resume from their cursor; when absent (legacy progress record),
@@ -109,7 +109,7 @@ private[actors] class AccountRangeCoordinatorImpl(
   // (see `finalizeTrie`). For the actor-thread code below we use `ctx.log`; the Future uses
   // `futureLog` (a plain SLF4J logger) instead.
   val log = ctx.log
-  private val futureLog = org.slf4j.LoggerFactory.getLogger(classOf[AccountRangeCoordinatorImpl])
+  val futureLog = org.slf4j.LoggerFactory.getLogger(classOf[AccountRangeCoordinatorImpl])
 
   // Mutable state root — updated in-place when the controller refreshes the pivot.
   var stateRoot: ByteString = initialStateRoot
@@ -249,9 +249,9 @@ private[actors] class AccountRangeCoordinatorImpl(
   var bytesDownloaded: Long = 0
   private val startTime = System.currentTimeMillis()
   private var lastProgressLogAt: Long = 0 // accounts count at last periodic log
-  private val ProgressLogInterval: Long = 100_000 // log every 100K accounts
+  private lazy val ProgressLogInterval: Long = 100_000 // log every 100K accounts
   private var lastFlatMilestonePct: Int = -1
-  private val totalKeyspace: BigInt = BigInt(2).pow(256)
+  private lazy val totalKeyspace: BigInt = BigInt(2).pow(256)
   // Cumulative keyspace consumed: incremented each time a task's `next` advances.
   // On restart, derive from restored task positions so progress % and ETA are accurate.
   var consumedKeyspace: BigInt =
@@ -958,7 +958,7 @@ private[actors] class AccountRangeCoordinatorImpl(
 
   // How many accounts to insert per chunk before yielding to the actor mailbox.
   // SnapHashTrie inserts are O(depth) memory + O(1) amortised compute (~2-20ms per 2000 accounts).
-  private val storeChunkSize = 2000
+  private lazy val storeChunkSize = 2000
 
   /** Handle a chunk of account storage, inserting a batch into the per-task SnapHashTrie and yielding back to the actor
     * mailbox between chunks. Nodes batch-flush to RocksDB inside SnapHashTrie at the 8 MiB threshold.

@@ -21,11 +21,13 @@ import com.chipprbots.ethereum.blockchain.sync.snap.AccountTask
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPRequestTracker
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController
 import com.chipprbots.ethereum.blockchain.sync.snap.SnapIntakeBudget
+import com.chipprbots.ethereum.blockchain.sync.snap.StorageScheme
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.AccountRangeCoordinator
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.AccountRangeCoordinator.StoreAccountChunk
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.AccountRangeCoordinator.WorkerRef
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.AccountRangeCoordinator.WorkerRequestCancelled
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.AccountRangeWorker
+import com.chipprbots.ethereum.db.storage.MptStorage
 import com.chipprbots.ethereum.domain.Account
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor
 import com.chipprbots.ethereum.network.Peer
@@ -77,6 +79,10 @@ private[actors] class StubAccountTaskLifecycleState(
   val initialResponseBytesConfig: Int = 524288
   val minResponseBytesConfig: Int = 102400
   val intakeBudget: Option[SnapIntakeBudget] = None
+  val futureLog: org.slf4j.Logger = log
+  val resumeProgress: Map[ByteString, ByteString] = Map.empty
+  val storageScheme: StorageScheme = StorageScheme.Hash
+  def mptStorage: MptStorage = throw new UnsupportedOperationException("AccountTaskLifecycle read mptStorage")
 
   // AccountPeerDispatchApi
   val markedStateless: mutable.ArrayBuffer[(PeerId, String)] = mutable.ArrayBuffer.empty
