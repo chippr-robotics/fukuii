@@ -105,10 +105,6 @@ private class AccountRangeCoordinatorImpl(
   private val log = ctx.log
   private val futureLog = org.slf4j.LoggerFactory.getLogger(classOf[AccountRangeCoordinatorImpl])
 
-  // Typed leaf worker (Group W1). The coordinator is now Typed and spawns Typed children directly;
-  // it holds typed refs and sends commands with the typed `!`.
-  private type WorkerRef = org.apache.pekko.actor.typed.ActorRef[AccountRangeWorker.Command]
-
   // Mutable state root — updated in-place when the controller refreshes the pivot.
   private var stateRoot: ByteString = initialStateRoot
 
@@ -2149,6 +2145,10 @@ object AccountRangeCoordinator:
     * Typed equivalent). Carries the finalisation `generation` for stale-drop, mirroring `TrieFlushComplete`.
     */
   private[actors] case class TrieFlushFailed(generation: Long, error: String) extends Command
+
+  // Typed leaf worker (Group W1). The coordinator is now Typed and spawns Typed children directly;
+  // it holds typed refs and sends commands with the typed `!`.
+  private[actors] type WorkerRef = org.apache.pekko.actor.typed.ActorRef[AccountRangeWorker.Command]
 
   /** Internal command: a Typed `AccountRangeWorker` child stopped (via `ctx.watchWith`). Replaces the Classic
     * `Terminated` signal. The coordinator removes the dead worker from the pool and re-queues its in-flight task.
