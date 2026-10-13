@@ -407,12 +407,6 @@ private[actors] class StorageRangeCoordinatorImpl(
   // in-progress large account, bounded further by `maxConcurrentStorageAccounts`. The payload lives in this
   // chunk's `accountSlots`/`proof` only: `StorageTask` carries no slot/proof data, so a re-queued task is
   // just its range and cannot retain a response.
-  private[actors] case class ReadyStorageChunk(
-      peer: Peer,
-      task: StorageTask,
-      accountSlots: Seq[(ByteString, ByteString)],
-      proof: Seq[ByteString]
-  )
   private[actors] val storageTrieCursor: mutable.Map[ByteString, ByteString] = mutable.Map.empty
   private[actors] val pendingOrderedChunks: mutable.Map[ByteString, mutable.TreeMap[ByteString, ReadyStorageChunk]] =
     mutable.Map.empty
@@ -857,18 +851,6 @@ private[actors] class StorageRangeCoordinatorImpl(
           s"Signalling AccountRangeCoordinator to resume dispatch."
       )
       snapSyncController ! SNAPSyncController.StorageBackpressureChanged(paused = false)
-
-  /** ByteString ordering for sorted insertion — compares bytes lexicographically. */
-  private object ByteStringOrdering extends Ordering[ByteString]:
-    def compare(a: ByteString, b: ByteString): Int =
-      val len = math.min(a.length, b.length)
-      var i = 0
-      var result = 0
-      while i < len && result == 0 do
-        val diff = (a(i) & 0xff) - (b(i) & 0xff)
-        if diff != 0 then result = diff
-        i += 1
-      if result != 0 then result else a.length - b.length
 
   /** Discard any in-memory streaming tries and flush the tail of accumulated flat-slot writes when the actor stops.
     * Formerly `postStop`; now invoked from the `PostStop` signal handler in `active()`.
@@ -2131,6 +2113,25 @@ object StorageRangeCoordinator:
     var submitted: Boolean = false
     // The peer disconnected after answering: apply its data, but do not dispatch to it again.
     var peerGone: Boolean = false
+
+  private[actors] case class ReadyStorageChunk(
+      peer: Peer,
+      task: StorageTask,
+      accountSlots: Seq[(ByteString, ByteString)],
+      proof: Seq[ByteString]
+  )
+
+  /** ByteString ordering for sorted insertion — compares bytes lexicographically. */
+  private[actors] object ByteStringOrdering extends Ordering[ByteString]:
+    def compare(a: ByteString, b: ByteString): Int =
+      val len = math.min(a.length, b.length)
+      var i = 0
+      var result = 0
+      while i < len && result == 0 do
+        val diff = (a(i) & 0xff) - (b(i) & 0xff)
+        if diff != 0 then result = diff
+        i += 1
+      if result != 0 then result else a.length - b.length
 
   private val ZeroSlotHash: ByteString = ByteString(Array.fill(32)(0.toByte))
 
