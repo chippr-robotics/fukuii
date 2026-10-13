@@ -25,15 +25,16 @@
     "controller/DownloadSupervisor.scala": 50,
     "controller/HealingOrchestrator.scala": 43,
     "controller/SnapFinalization.scala": 34,
-    "actors/AccountRangeCoordinator.scala": 17,
     "controller/SyncLifecycle.scala": 17,
+    "actors/AccountRangeCoordinator.scala": 14,
     "controller/PivotRefresher.scala": 8,
     "actors/account/AccountRangeEnv.scala": 6,
     "controller/StateValidationModule.scala": 5,
     "actors/account/AccountTrieAssembly.scala": 5,
     "actors/bytecode/ByteCodeResponseHandling.scala": 4,
     "controller/FinalizationPolicy.scala": 4,
-    "controller/SnapPeerPool.scala": 3
+    "controller/SnapPeerPool.scala": 3,
+    "actors/account/ContractWorkCarry.scala": 3
   },
   "raw_imports": {
     "actors/StorageRangeCoordinator.scala": [

@@ -103,10 +103,9 @@ private[actors] class AccountRangeCoordinatorImpl(
     with AccountPeerDispatchState
     with AccountTaskLifecycleState
     with AccountProgressApi
-    with ContractWorkCarryApi
     with AccountTrieAssemblyState
     with AccountRangeCoreApi
-    with ContractTaskFilesApi:
+    with ContractWorkCarryState:
 
   import SNAPSyncController.PivotStateUnservable
   import AccountRangeCoordinator.*

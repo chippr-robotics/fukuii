@@ -15,7 +15,7 @@ import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController
 import com.chipprbots.ethereum.blockchain.sync.snap.StorageScheme
 import com.chipprbots.ethereum.blockchain.sync.snap.StorageTask
 import com.chipprbots.ethereum.blockchain.sync.snap.StorageTaskFile
-import com.chipprbots.ethereum.blockchain.sync.snap.actors.*
+import com.chipprbots.ethereum.blockchain.sync.snap.actors.AccountRangeCoordinator
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.AccountRangeCoordinator.CheckCompletion
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.AccountRangeCoordinator.ContractEntrySize
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.AccountRangeCoordinator.ReplayCarriedContracts
@@ -49,8 +49,8 @@ private[actors] trait ContractWorkCarryState:
   * scheme, the root-presence check (#1487/#1498/#1501); making the task files durable for a checkpoint; and reading
   * them back for the controller. The coordinator core keeps the behaviour arms that call it and the task files.
   */
-private[actors] trait ContractWorkCarry:
-  self: AccountRangeCoordinatorImpl =>
+private[actors] trait ContractWorkCarry extends ContractWorkCarryApi with ContractTaskFilesApi:
+  self: ContractWorkCarryState & AccountRangeEnv & AccountIntakeGateApi =>
 
   // Replay of the carried prefix (entries [0, carried*Count) of this coordinator's own files). Account-range sync is
   // not complete until both offsets reach their counts, so NoMore{Storage,ByteCode}Tasks can never overtake them.
