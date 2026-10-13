@@ -78,6 +78,15 @@ to 12 (`justifications["capabilities.StateIngest.members"]`):
   the core also needs a visibility change, which capability mode rejects. A small verify change at C-H1 admits
   by-name/lazy members (#1584).
 
+**Note: session values stay explicit parameters (spec 016 T064, user decision 2026-10-13).** A named exception to
+"storage only through `StateIngest`" (FR-042). A coordinator's pivot-bound `MptStorage` (the core's per-pivot cached
+instance) and ARC's per-spawn `Option[SnapStorageDoneStorage]` are session values, not capabilities: they stay explicit
+`apply` parameters, reached by the coordinator's modules through its `<Coordinator>Env`, and the storage ratchet keeps
+counting them. `trieStore` cannot stand in for the first: it returns a new `MptStorage` per call on the Hash scheme, and
+the caching decision above keeps the core's cache its only caller. `storageDone` cannot stand in for the second: the spawn
+decides whether markers are read. It covers C-A3, C-A4, C-S2 and C-H1 (spec 016 tasks.md, "Amendment 2026-10-13");
+everything else those slices take adopts the capability (C-A3: `pathNodes`).
+
 ### 2. Chain-data handles stay on `StateIngest` (no header/chain sub-interface now)
 
 `chainReader` and `chainWriter` are chain-data handles (headers, pivot, best block), not trie state. We considered

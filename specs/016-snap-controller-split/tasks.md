@@ -1162,6 +1162,24 @@ all: the PR says so, with the grep, and the total stays unchanged. It never rise
 under `snap/`" dependency check is delivered by spec 017 (DC-4); it extends the T054 ratchet tooling and is vacuous
 until `StateAccess` exists (FR-042).
 
+**Amendment 2026-10-13: session values stay explicit parameters (named FR-042 exception; user decision 2026-10-13,
+found at T064; applies to C-A3, C-A4, C-S2, C-H1 and every later C-* slice that takes these stores).** A coordinator's
+pivot-bound trie store (`mptStorage: MptStorage`, the core's per-pivot cached instance from `getOrCreateMptStorage`)
+and its per-spawn `storageDone: Option[SnapStorageDoneStorage]` (`Option.when(recordStorageDone)(storageDoneStorage)`
+at the spawn site) are **session values, not capabilities**. They stay explicit `apply` parameters, in the Impl
+constructor, `ChildFactories` and the spawn sites, and the module traits reach them through the coordinator's
+`<Coordinator>Env`. Everything else adopts `StateIngest`. Why:
+- `StateIngest` has no parameterless member that hands out the cached `MptStorage`. `trieStore(pivot)` returns a new
+  `MptStorage` per call on the Hash scheme (ETC), and its doc requires the core's cache to be its only caller. A
+  coordinator calling it would flush the StackTrie (or apply storage, or heal) through a different instance, a
+  behaviour change. `verify.py`'s adoption mode also maps a dropped parameter only to a parameterless member;
+- `stateIngest.storageDone` is the core's store, not the spawn's `Option`: whether markers are read is decided per
+  spawn (`recordStorageDone`).
+
+The ratchet keeps counting both (they are still storage references), so a slice that keeps them lowers the total only by
+what it adopts; the PR says so. SC-009 ("storage only through `StateIngest`") reads with this exception. Recorded in
+plan.md ("Amendment 2026-10-13") and ADR INF-006 (decision 1, note).
+
 - [x] T060 Coordinator characterization (docs PR): a var × method matrix and Command × behaviour table for ARC, SRC,
   TNHC and BCC, using the research.md method. Confirm or amend the C-* boundaries in plan.md, and derive each
   coordinator module's state-interface baseline (the R14 equivalent). Every C-* task below has the narrowing commit
@@ -1503,10 +1521,66 @@ until `StateAccess` exists (FR-042).
       public.
     - Owed: the second-specialist review (prism) and forge's "no ETC behaviour change" sign-off. No vault review and
       no node run (characterization §7: none for C-A2); the Mordor restart mid-account comes after C-A4.
-- [ ] T064 [C-A3] `AccountTrieAssembly` + `finalizing` (vault; T060: the first ARC slice that touches storage. It
+- [x] T064 [C-A3] `AccountTrieAssembly` + `finalizing` (vault; T060: the first ARC slice that touches storage. It
   adopts `pathNodeStorage` → `pathNodes`, and `mptStorage` per D-T060-1, which must be decided first). Narrowing takes `StateIngest` (trie-node writes,
   StackTrie commit), never `StateAccess`; lowers the baseline total.
-- [ ] T065 [C-A4] `ContractWorkCarry` (vault; T060: adopts `storageDone` per D-T060-1. The task-file stream vals stay in
+  - **Stop and decision.** The first attempt stopped before any code: `mptStorage` maps to no parameterless
+    `StateIngest` member (`trieStore(pivot)` takes a parameter, and on the Hash scheme returns a new `MptStorage` per
+    call, while the spawn site passes the core's cached instance), so the adoption gate rejects it and a substitution
+    would change the StackTrie's store. User decision 2026-10-13: the pivot-bound `MptStorage` and the per-spawn
+    `storageDone` are session values and stay explicit parameters, the named FR-042 exception (Coordinators,
+    "Amendment 2026-10-13"). A3 adopts `pathNodeStorage` → `pathNodes` only.
+  - **As built** (branch `refactor/snap-016-ca3-account-trie`, three code commits and this docs commit; no sbt or JVM
+    run, CI compiles and tests). No `# moved:` type commit and no lift: A3's code names no Impl-nested type, and every
+    A3 member was already an indent-2 member. (1) Prerequisite: `AccountTrieAssemblyState`, `AccountRangeCoreApi`
+    (`calculateProgress`, `onStop`, the core's) and `ContractTaskFilesApi` (`readContractFile`,
+    `readUniqueCodeHashes`, the core's until C-A4) are declared in the new `actors/account/AccountTrieAssembly.scala`,
+    and `AccountActivePeersApi` (`activePeerCount`) in `AccountPeerDispatch.scala`, a separate trait so C-A2's
+    `AccountPeerDispatchApi` does not grow. `AccountRangeEnv` gains `futureLog`, `resumeProgress`, `storageScheme` and
+    `mptStorage`; those constructor parameters (and `pathNodeStorage`, for the temporary self-type) become `val`s and
+    `futureLog` loses `private`. The three module-only constants become `private lazy val`s (pure: yes:
+    `ProgressLogInterval`, `totalKeyspace = BigInt(2).pow(256)`, `storeChunkSize`). The C-A1/C-A2 stub states gain the
+    four env members. (2) The move commit takes 9 members byte-identical into `AccountTrieAssembly`: `lastProgressLogAt`,
+    `ProgressLogInterval`, `lastFlatMilestonePct`, `totalKeyspace` (the two vars are private vars, rule (d)),
+    `finalizing` (a whole behaviour), `storeChunkSize`, `handleStoreAccountChunk`, `getOrCreateTaskStackTrie`,
+    `finalizeTrie`. The Impl gains `with AccountTrieAssembly`; the core members the module reaches become public
+    (`startTime`, `trieFlushGeneration`, `taskStackTries`, the six task-file handles and three counts,
+    `calculateProgress`, `readContractFile`, `readUniqueCodeHashes`); the core drops its `ProgressMilestones` import.
+    (3) The narrowing commit, `# adopts: StateIngest AccountRangeCoordinator`: the self-type names
+    `AccountTrieAssemblyState & AccountRangeEnv & AccountActivePeersApi & AccountTaskLifecycleApi & AccountProgressApi &
+    AccountRangeCoreApi & ContractTaskFilesApi`; `AccountPeerDispatch` also extends `AccountActivePeersApi`; the Impl
+    adds the State and the two core Api parents. `pathNodeStorage: Option[PathNodeStorage] = None` → `stateIngest:
+    StateIngest` in the Impl constructor, `apply`, `new`, `ChildFactories.accountRangeCoordinator` and the
+    `DownloadSupervisor` spawn site (`stateIngest = stateIngest` where it passed `stateIngest.pathNodes`); the one call
+    site in `getOrCreateTaskStackTrie` reads `stateIngest.pathNodes` (`// adopt-map: pathNodeStorage -> pathNodes`);
+    `AccountRangeEnv` gains `stateIngest`. `mptStorage` and `storageDone` are unchanged. `ChildFactoriesSpec` unchanged.
+    - Trie-node write path (for vault): the Hash-scheme `SnapHashTrie` flushes to the same `mptStorage` instance (the
+      spawn site's `getOrCreateMptStorage(currentPivot)`), the Path-scheme `SnapPathTrie` writes to the same
+      `PathNodeStorage` (production's `Stores.pathNodes` is a constructor `val`; it is now read when a range's trie is
+      first built instead of at spawn), and the range-complete `trie.commit()` and `finalizeTrie`'s straggler commits
+      run where and in the order they ran.
+    - Counts: `AccountTrieAssembly` State 20 (R14b 12, which counted mutable fields only; plus `trieFlushGeneration`,
+      `startTime` and the six task-file handles the `finalizing` arms read), Api 7 (R14b 3, an upper bound by name:
+      `activePeerCount`, `tryRedispatchPendingTasks`, `sendProgressSnapshot`, `calculateProgress`, `onStop`,
+      `readContractFile`, `readUniqueCodeHashes`). `AccountPeerDispatch` 17 / 1 and `AccountTaskLifecycle` 18 / 15
+      unchanged. `AccountRangeEnv` 10 → 15 (G9): `futureLog`, `resumeProgress`, `storageScheme`, `mptStorage`,
+      `stateIngest`.
+    - Storage total **619 → 609** (counter v2): `AccountRangeCoordinator.scala` 29 → 17, `actors/account/
+      AccountTrieAssembly.scala` 0 → 5 (`mptStorage`, `stateIngest.pathNodes`, the `pathNodeStorage` in the exception
+      message, the two StackTrie `.commit()`), `actors/account/AccountRangeEnv.scala` 0 → 3 (the explicit
+      `mptStorage` and its import), `ChildFactories` 71 → 67, `DownloadSupervisor` 52 → 50. The 606 projected for this
+      route plus those 3. `storage-baseline.json` records it.
+    - Tests (`# new-tests:`): `AccountTrieAssemblySpec` (8 cases, in a `BehaviorTestKit`; Hash and Path schemes, the
+      chunk yield, the missing Path store, `finalizeTrie`, `finalizing`'s stale drops, query, teardown, success and
+      failure). `AccountRangeCoordinatorSpec`'s two spawn helpers pass a local `StateIngest` whose `pathNodes` is
+      `None`; `RecordingChildFactories`' override takes `stateIngest` and records `stateIngest.pathNodes` in the
+      unchanged `ChildSpawn.AccountRange.pathNodeStorage`; the C-A1/C-A2 stubs gain the env members. No assertion
+      changed.
+    - Owed: the vault review (the trie-node write path and the StackTrie commit above), the second-specialist review
+      (prism) and forge's "no ETC behaviour change" sign-off (the Hash-scheme path is ETC's). Node run: the Mordor
+      restart mid-account comes after C-A4 (T065).
+- [ ] T065 [C-A4] `ContractWorkCarry` (vault; T060: adopts `storageDone` per D-T060-1, superseded by the Coordinators
+  "Amendment 2026-10-13": `storageDone` and `mptStorage` stay explicit parameters. The task-file stream vals stay in
   the core under rule (d)). Narrowing takes `StateIngest`, never `StateAccess`; lowers the baseline
   total. Run a Mordor restart mid-account. The #1487/#1498/#1501 replay invariants are unchanged.
 - [ ] T066 [C-S1] `StoragePeerDispatch` (T060: plus `handleTimeout`. Zero-reference in substance: its 2 matches are
