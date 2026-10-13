@@ -278,7 +278,6 @@ private[actors] class AccountRangeCoordinatorImpl(
   // The storage-task file is the one recovery needs after a restart, so it goes under the datadir (`taskFileDir`)
   // rather than java.io.tmpdir, which a host reboot wipes. See StorageTaskFile.
   val contractStorageFile: Path = StorageTaskFile.createFile(taskFileDir, "fukuii-contract-storage-", ".bin")
-  private val ContractEntrySize = 64 // 32 bytes hash + 32 bytes codeHash/storageRoot
   val uniqueCodeHashesFile: Path = StorageTaskFile.createFile(taskFileDir, "fukuii-unique-codehashes-", ".bin")
 
   // Resume from mid-range cursors: the contract work derived from every account BELOW the cursors lives in the previous
@@ -1189,6 +1188,7 @@ object AccountRangeCoordinator:
   private[actors] val ReplayChunkEntries: Int = 4096
   private[actors] val ReplayChunkInterval: FiniteDuration = 50.millis
   private[actors] val ReplayPausedRetry: FiniteDuration = 1.second
+  private[actors] val ContractEntrySize = 64 // 32 bytes hash + 32 bytes codeHash/storageRoot
 
   /** How often a dispatch held by the intake gate (spec 014) re-checks it. */
   private[actors] val IntakeGateRecheckInterval: FiniteDuration = 1.second
