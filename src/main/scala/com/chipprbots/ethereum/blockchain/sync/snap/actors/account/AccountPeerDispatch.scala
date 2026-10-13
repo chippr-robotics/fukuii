@@ -51,13 +51,31 @@ private[actors] trait AccountPeerDispatchState:
 private[actors] trait AccountTaskLifecycleApi:
   def tryRedispatchPendingTasks(): Unit
 
+/** What `AccountTaskLifecycle` (C-A2) calls in `AccountPeerDispatch`: the stateless strikes and their reset, the
+  * cooldowns, the per-peer response budget, and the worker pool's idle set, in-flight count and dispatch.
+  */
+private[actors] trait AccountPeerDispatchApi:
+  def isPeerStateless(peer: Peer): Boolean
+  def isPeerSnapless(peer: Peer): Boolean
+  def markPeerStateless(peer: Peer, reason: String): Unit
+  def recordPeerSuccess(peerId: PeerId): Unit
+  def effectivePeerCooldown: FiniteDuration
+  def isPeerCoolingDown(peer: Peer): Boolean
+  def recordPeerCooldown(peer: Peer, reason: String, duration: FiniteDuration): Unit
+  def responseBytesTargetFor(peer: Peer): BigInt
+  def adjustResponseBytesOnSuccess(peer: Peer, requested: BigInt, received: BigInt): Unit
+  def adjustResponseBytesOnFailure(peer: Peer, reason: String): Unit
+  def inFlightForPeer(peer: Peer): Int
+  def markWorkerIdle(worker: WorkerRef): Unit
+  def dispatchIfPossible(peer: Peer): Unit
+
 /** Account-range peer dispatch (spec 016 C-A1, coordinator-characterization.md §3.2): the #1501 intake gate and the
   * downstream back-pressure that pause new dispatch; stateless/snapless peer tracking with its empty-proof strikes and
   * the pivot-refresh escalation it drives; the per-peer cooldowns (scaled down on a scarce pool); the per-peer
   * `responseBytes` budget; and the worker pool: the per-peer in-flight cap, worker creation and dispatch of the next
   * pending task. The coordinator core keeps the behaviour arms that call it.
   */
-private[actors] trait AccountPeerDispatch:
+private[actors] trait AccountPeerDispatch extends AccountPeerDispatchApi:
   self: AccountPeerDispatchState & AccountRangeEnv & AccountTaskLifecycleApi =>
 
   def downstreamBackpressureActive: Boolean = backpressureSources.nonEmpty

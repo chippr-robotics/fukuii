@@ -1469,8 +1469,40 @@ until `StateAccess` exists (FR-042).
       are left as they were (FR-034, no cleanups in a move PR).
     - Owed: the second-specialist review (prism) and forge's "no ETC behaviour change" sign-off. No vault review and
       no node run (characterization §7: none for C-A1); the Mordor restart mid-account comes after C-A4.
-- [ ] T063 [C-A2] `AccountTaskLifecycle`. Narrowing takes `StateIngest`, never `StateAccess`; lowers the baseline total.
+- [x] T063 [C-A2] `AccountTaskLifecycle`. Narrowing takes `StateIngest`, never `StateAccess`; lowers the baseline total.
   (T060: plus `drainActiveTasks`. A zero-reference slice: grep recorded, total unchanged.)
+  - **As built** (branch `refactor/snap-016-ca2-account-lifecycle`, three code commits and this docs commit; no sbt or
+    JVM run, CI compiles and tests). No `# moved:` type commit and no lift: A2's code names no Impl-nested type
+    (`WorkerRef` moved in C-A1), and every A2 member was already an indent-2 member. (1) Prerequisite:
+    `AccountTaskLifecycleState`, `AccountProgressApi` (`sendProgressSnapshot`, the core's) and `ContractWorkCarryApi`
+    (`identifyContractAccounts`, the core's until C-A4, named for that owner) are declared in the new
+    `actors/account/AccountTaskLifecycle.scala`, and `AccountPeerDispatchApi` (the 13 A1 members A2 calls) in
+    `AccountPeerDispatch.scala`, the file of its implementer (the C-B1 `ByteCodeDispatchApi` precedent); the two
+    module-only constants become `private lazy val`s (pure: yes, literals: `StateLogIntervalMs`, `peerCooldownNoProof`).
+    `sendProgressSnapshot` keeps its default in the Api (the `BfsQueueStorage.iterateRange` precedent). No constructor
+    parameter changes: the A2 bodies read only `ctx`, `log`, `snapSyncController` and `concurrency` from the
+    environment, all `AccountRangeEnv` members since C-A1. (2) The move commit takes 13 members byte-identical into
+    `AccountTaskLifecycle`: `drainActiveTasks`, `lastStateLogMs` (a private var, rule (d)), `StateLogIntervalMs`,
+    `peerCooldownNoProof`, `handleTaskComplete`, `updateTaskProgress`, `compareUnsigned32`, `incrementHash32`,
+    `isMaxHash`, `completeEmptyTaskRange`, `handleTaskFailed`, `requeueOrEscalate`, `tryRedispatchPendingTasks`. The
+    Impl gains `with AccountTaskLifecycle`; the core fields and methods the module reaches become public
+    (`completedTasks`, `accountsDownloaded`, `bytesDownloaded`, `consumedKeyspace`, `storingTasks`,
+    `sendProgressSnapshot`, `identifyContractAccounts`). (3) The narrowing commit: the self-type names
+    `AccountTaskLifecycleState & AccountRangeEnv & AccountPeerDispatchApi & AccountProgressApi & ContractWorkCarryApi`;
+    `AccountTaskLifecycle extends AccountTaskLifecycleApi`, so A1's Api member (`tryRedispatchPendingTasks`) is now
+    satisfied by the A2 module and the Impl drops its own `with AccountTaskLifecycleApi`; `AccountPeerDispatch extends
+    AccountPeerDispatchApi`; the Impl adds the State and the two core Api parents. No `# adopts:`, and `apply`,
+    `ChildFactories` and `ChildFactoriesSpec` are unchanged (the tasks.md exception).
+    - Counts against R14b: State 18 (= 18), Api 15 (= 15: `AccountPeerDispatchApi` 13, `AccountProgressApi` 1,
+      `ContractWorkCarryApi` 1). `AccountPeerDispatch` unchanged (17 / 1); `AccountRangeEnv` unchanged (10, no store).
+    - Storage total **619, unchanged** (zero-reference slice). The characterization §5 grep over
+      `actors/account/AccountTaskLifecycle.scala` prints `[]`; ARC stays at 29. `storage-baseline.json` is unchanged.
+    - Stub test (`# new-tests:`): `AccountTaskLifecycleSpec` (7 cases, in a `BehaviorTestKit`). No existing test changed.
+    - Left as they were (FR-034, no cleanups in a move PR): `AccountTaskLifecycleApi`'s scaladoc, in
+      `AccountPeerDispatch.scala`, still says the core provides it until C-A2; the fields the module reaches are now
+      public.
+    - Owed: the second-specialist review (prism) and forge's "no ETC behaviour change" sign-off. No vault review and
+      no node run (characterization §7: none for C-A2); the Mordor restart mid-account comes after C-A4.
 - [ ] T064 [C-A3] `AccountTrieAssembly` + `finalizing` (vault; T060: the first ARC slice that touches storage. It
   adopts `pathNodeStorage` → `pathNodes`, and `mptStorage` per D-T060-1, which must be decided first). Narrowing takes `StateIngest` (trie-node writes,
   StackTrie commit), never `StateAccess`; lowers the baseline total.
