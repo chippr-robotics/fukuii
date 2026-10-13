@@ -1350,7 +1350,7 @@ until `StateAccess` exists (FR-042).
       are outside `snap/`), so no baseline change.
     - Owed: the forge and vault reviews, and the Mordor recovery-start validation run. The live recovery-start check is
       deferred to the first natural trigger and to the C-B1/C-S* Mordor runs (user decision 2026-10-12).
-- [ ] T060d [SI] **D-T060-1: `StateIngest` members for the derived stores** (user decision 2026-10-12; before T064;
+- [x] T060d [SI] **D-T060-1: `StateIngest` members for the derived stores** (user decision 2026-10-12; before T064;
   a capability-mode PR, `# capability: StateIngest`, an extension). Members for the per-pivot `MptStorage` (a method),
   `SnapStorageDoneStorage`, `SnapSyncProgressStorage`, `HealingFrontierStorage` and `BfsQueueStorage`, handing out the
   same instances, built where they are today, so the change is behaviour-neutral. The member cap grows with a
@@ -1358,6 +1358,49 @@ until `StateAccess` exists (FR-042).
   healing stores are lazy vals of `HealingOrchestrator` today (a strict accessor would build them at construction), and
   a `getBackingStorage` forwarder returns a new `MptStorage` per call on the Hash scheme, so the core's per-pivot cache
   stays the only caller (forge).
+  - **Narrowed (user decision 2026-10-12, after a first attempt stopped):** `trieStore`, `snapProgress` and
+    `storageDone` only. The healing stores are deferred to **C-H1**. Two things block them today:
+    - the mirror rule cannot carry a lazy handle. SyncController must declare each handle in the core's initializer as a
+      plain `val` derived token for token as SNAPSyncController derives it. The healing stores are `HealingOrchestrator`'s
+      `private lazy val`s, so there is no such derivation. Copying one into SyncController would build a
+      `RocksDbBfsQueueStorage` (which holds a write counter) on every recovery start, and its initializer reads
+      `stateIngest`;
+    - the core cannot name them. They are `private` to the trait, and capability mode's token check rejects widening
+      them.
+    A small verify change at C-H1 admits by-name/lazy members (#1584, the mirror/lazy-handle limit).
+  - **As built** (branch `refactor/snap-016-stateingest-derived`, one commit with `# capability: StateIngest`, an
+    extension; no sbt or JVM run, CI compiles and tests).
+    - `StateIngest`: three members, 9 → 12, with a `justifications["capabilities.StateIngest.members"]` line.
+      `def trieStore(pivot: BigInt): MptStorage = stateTries.getBackingStorage(pivot)` (map
+      `stateStorage.getBackingStorage -> trieStore`, a pure forwarder); `snapProgress` (map
+      `snapProgressStorage -> snapProgress`, a `val` constructor parameter); `storageDone` (map
+      `storageDoneStorage -> storageDone`, a by-name parameter `storageDoneStorage: => SnapStorageDoneStorage` with a
+      forwarder `def`). `apply` and `Stores` take the two new parameters after `durability`.
+    - **Construction timing.** Unchanged in the core (line numbers at the base). `snapProgressStorage` is built at L206, before the capability
+      (L225), so a strict parameter hands out the built instance. `storageDoneStorage` is built at L241, after the
+      capability: a strict argument would capture `null`, so the parameter is by-name, and each `storageDone` read
+      returns the core's one field. The core's accessor appends `snapProgressStorage, storageDoneStorage`.
+    - **Caching.** `trieStore` returns a new `MptStorage` per call on the Hash scheme (ETC). Its only caller is the
+      core's per-pivot cache: `SnapResumePlanner.getOrCreateMptStorage` reads `stateIngest.trieStore(pivotBlockNumber)`
+      where it read `stateIngest.stateTries.getBackingStorage(pivotBlockNumber)` (the accessor-alias form). The cache
+      and its resets are unchanged. `StorageRecoveryActor` (outside `snap/`) keeps its own `getBackingStorage` call.
+    - **Recovery path.** SyncController's mirror (`startRecovery`, `(Some, Some)` arm) adds
+      `val snapProgressStorage = new SnapSyncProgressStorage(appStateStorage.dataSource)` and
+      `val storageDoneStorage: SnapStorageDoneStorage = new SnapStorageDoneStorage(flatSlotStorage.dataSource)`, the
+      core's derivations, and passes them. So each recovery start builds two more wrappers, as T060c did for
+      `PathNodeStorage`. Both are stateless: a data-source reference and a constant namespace (`SnapSyncProgressStorage`
+      extends `TransactionalKeyValueStorage`, which declares only abstract members). Neither does I/O at construction,
+      and recovery reads neither.
+    - Tests: the five test implementations of the trait (`ForwardingStateIngest` and the stubs in
+      `BytecodeRecoveryActorSpec`, `StorageRecoveryActorSpec`, `ByteCodeCoordinatorSpec`,
+      `ByteCodeResponseHandlingSpec`) implement the three members. `ForwardingStateIngest.trieStore` forwards to
+      `tries.getBackingStorage` as production does (`SnapResumePlannerSpec` reaches it). Every other new member throws
+      "not reached". No assertion changed.
+    - `verify.py`: OK. `[capability]` extension +3 members, new `apply` parameters `snapProgress`,
+      `storageDoneStorage`; SyncController mirrors the core; SnapResumePlanner has 1 substitution. Storage total 619,
+      unchanged: `SNAPSyncController.scala` 68 → 70 (the two accessor arguments), `SnapResumePlanner.scala`
+      94 → 92 (`stateIngest.stateTries` and `.getBackingStorage` leave; `stateIngest.trieStore(...)` is a call).
+    - Owed: forge (ETC Hash path: `trieStore` and the cache) and vault (store lifecycle) reviews.
 - [x] T061 [C-B1] ByteCode: `ByteCodeDispatch`, `ByteCodeResponseHandling` (the #1501 `skipPresent` check moves
   unchanged). Narrowing takes `StateIngest` (code writes, presence check), never `StateAccess`; lowers the T054
   baseline total.

@@ -54,6 +54,30 @@ held, plus a durability policy:
   later slice moves a caller that only needs part of a store (the coordinator narrowings, C-*). Each member added or
   changed needs a justification line against the cap in the routing doc (`.claude/agent-protocols/snap-sync.md`).
 
+**Note: derived-store members (spec 016 T060d, D-T060-1, user decision 2026-10-12).** The coordinators take stores that
+the core derives from the handles. A capability-mode extension adds three of them as members, which takes the cap from 9
+to 12 (`justifications["capabilities.StateIngest.members"]`):
+
+| Member | Hands out | Built |
+|---|---|---|
+| `trieStore(pivot: BigInt): MptStorage` | `stateTries.getBackingStorage(pivot)` (a pure forwarder) | per call; on the Hash scheme (ETC) each call is a new `MptStorage` |
+| `snapProgress: SnapSyncProgressStorage` | the core's `snapProgressStorage` (namespace `p`) | by the core, before the capability (a `val` parameter) |
+| `storageDone: SnapStorageDoneStorage` | the core's `storageDoneStorage` | by the core, after the capability (a by-name parameter, read on each call) |
+
+- **Timing decision.** Every member hands out the instance the core already builds, at the point where the core
+  builds it. Nothing is built earlier. `storageDone` is by-name, not strict, because a strict argument would capture
+  the core's field before it is initialized (`null`).
+- **Caching decision.** `trieStore` does not cache. The core's per-pivot cache (`getOrCreateMptStorage`, reset on
+  dormancy and restart) is its only caller, so one `MptStorage` per pivot is still shared by every coordinator. That
+  keeps one reference-count bookkeeping per pivot on ETC.
+- **Recovery path.** `SyncController`'s mirrored capability (D-T060-2) derives the two wrappers as the core does. Each
+  recovery start builds them; both are stateless (a data-source reference and a namespace constant) and do no I/O.
+- **Deferred to C-H1.** `HealingFrontierStorage` and `BfsQueueStorage` are not members yet. They are
+  `HealingOrchestrator`'s `private lazy val`s, built on first use. The gate's mirror rule cannot carry a lazy handle:
+  it would build a `RocksDbBfsQueueStorage`, which holds a write counter, on every recovery start. Naming them from
+  the core also needs a visibility change, which capability mode rejects. A small verify change at C-H1 admits
+  by-name/lazy members (#1584).
+
 ### 2. Chain-data handles stay on `StateIngest` (no header/chain sub-interface now)
 
 `chainReader` and `chainWriter` are chain-data handles (headers, pivot, best block), not trie state. We considered

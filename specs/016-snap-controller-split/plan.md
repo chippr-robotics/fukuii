@@ -418,7 +418,7 @@ decision 2026-10-11):** T055 does not change the spawn arguments; each C-* narro
 | 25 | **T060** coordinator characterization (docs) | docs | — | — | — |
 | 25a | **T060b** `verify.py` StateIngest-adoption allowance for C-* narrowings (characterization §6.3); decisions D-T060-1/2 recorded (done; adoption mode, capability extension, counter v2) | tooling | script + self-tests | prism | — |
 | 25b | **D-T060-2** recovery wiring: `SyncController` builds one `StateIngest` for the two recovery actors; `StateIngest` → `private[sync]` (`# adopts: StateIngest RecoveryActors`) | refactor | ~60 | prism; **forge** (both run on ETC at startup); vault | a bytecode- or storage-recovery start on Mordor |
-| 25c | **D-T060-1** `StateIngest` members for the per-pivot `MptStorage` and the derived stores (`# capability: StateIngest`, an extension; before C-A3) | refactor | ~80 | prism; **vault** (lazy healing stores, see Amendment 2026-10-12) | — |
+| 25c | **D-T060-1** `StateIngest` members for the per-pivot `MptStorage`, `snapProgress` and `storageDone` (`# capability: StateIngest`, an extension; before C-A3; healing stores deferred to C-H1, Amendment 2026-10-12) | refactor | ~80 | prism; **vault** (lazy healing stores, see Amendment 2026-10-12) | — |
 | 26 | **C-B1** | move | ~320 | prism; **vault** (T060: code-write path, recovery wiring) | Mordor bytecode phase or recovery start if D-T060-2 rewires `BytecodeRecoveryActor` |
 | 27–30 | **C-A1…A4** | move | ~1,350 | prism; **vault** on A3 and A4 | Mordor restart mid-account after A4 |
 | 31–34 | **C-S1…S4** | move | ~1,370 | prism; **vault** on S2 and S3 | Mordor + Platåberget restart mid-storage after S3; **C-S2: `[STORAGE-PERF]` parity on the same quiescent soak host against ~1.7M entries/h on the Sepolia Path-scheme storage phase, plus a same-host pre-wrap vs post-wrap A/B (SC-010, moved from T055 by user decision 2026-10-11)** |
@@ -742,6 +742,15 @@ marked changes.
   core's strict accessor would build them at construction, which changes when their column family / namespace is first
   touched. A per-pivot `getBackingStorage` forwarder returns a new `MptStorage` per call on the Hash scheme (ETC); the
   core's cache must stay the only caller per pivot (forge, vault).
+  - **Narrowed (user decision 2026-10-12, T060d as built):** the members are `trieStore(pivot)` (the forwarder; its only
+    caller is the core's per-pivot cache `getOrCreateMptStorage`), `snapProgress` and `storageDone`. `storageDone` is a
+    by-name `apply` parameter, because the core builds `storageDoneStorage` after the capability. The cap goes 9 → 12
+    and the storage total stays 619. The healing stores (`HealingFrontierStorage`, `BfsQueueStorage`) are deferred to
+    **C-H1**:
+    - the mirror rule needs each handle in the core's initializer as a plain `val` in SyncController, derived token
+      for token as SNAPSyncController derives it. The healing stores are `HealingOrchestrator`'s `private lazy val`s;
+    - the core cannot name them without a visibility change, which capability mode rejects.
+    A small verify change at C-H1 admits by-name/lazy members (#1584).
 - **T060b (verify.py).** Three additions, routing doc "Adoption mode (T060b)":
   - *Adoption mode.* `# adopts: StateIngest <Unit>` admits a C-* narrowing commit (or a standalone commit) that moves
     a coordinator onto `StateIngest`: its Impl constructor, `apply`, `new <X>Impl(...)`, `ChildFactories` method,
