@@ -65,19 +65,19 @@ import com.chipprbots.ethereum.utils.ByteStringUtils.ByteStringOps
   * @param snapSyncController
   *   Parent controller to notify of completion
   */
-private class AccountRangeCoordinatorImpl(
-    ctx: ActorContext[AccountRangeCoordinator.Command],
-    timers: TimerScheduler[AccountRangeCoordinator.Command],
+private[actors] class AccountRangeCoordinatorImpl(
+    val ctx: ActorContext[AccountRangeCoordinator.Command],
+    val timers: TimerScheduler[AccountRangeCoordinator.Command],
     initialStateRoot: ByteString,
-    networkPeerManager: org.apache.pekko.actor.typed.ActorRef[NetworkPeerManagerActor.Command],
-    requestTracker: SNAPRequestTracker,
+    val networkPeerManager: org.apache.pekko.actor.typed.ActorRef[NetworkPeerManagerActor.Command],
+    val requestTracker: SNAPRequestTracker,
     mptStorage: MptStorage,
-    concurrency: Int,
-    snapSyncController: org.apache.pekko.actor.typed.ActorRef[SNAPSyncController.Command],
+    val concurrency: Int,
+    val snapSyncController: org.apache.pekko.actor.typed.ActorRef[SNAPSyncController.Command],
     resumeProgress: Map[ByteString, ByteString] = Map.empty,
     initialMaxInFlightPerPeer: Int = 5,
-    initialResponseBytesConfig: Int = 524288,
-    minResponseBytesConfig: Int = 102400,
+    val initialResponseBytesConfig: Int = 524288,
+    val minResponseBytesConfig: Int = 102400,
     accountTrieEcOverride: Option[ExecutionContext] = None,
     storageScheme: StorageScheme = StorageScheme.Hash,
     pathNodeStorage: Option[PathNodeStorage] = None,
@@ -93,7 +93,7 @@ private class AccountRangeCoordinatorImpl(
     storageDone: Option[SnapStorageDoneStorage] = None,
     // Spec 014: shared admission gate, read synchronously before new contract work is produced (fresh account-range
     // dispatch and the carried replay). None = not wired (tests): only the mailbox-borne watermark signal applies.
-    intakeBudget: Option[SnapIntakeBudget] = None
+    val intakeBudget: Option[SnapIntakeBudget] = None
 ):
 
   import SNAPSyncController.PivotStateUnservable
@@ -173,7 +173,7 @@ private class AccountRangeCoordinatorImpl(
   // the 3-strike threshold drained sepolia's small peer pool between pivots, producing
   // eligible=0 stalls within each pivot window. 5 strikes gives peers more rope; mirrors
   // Nethermind's threshold; lines up with the bumped storage threshold.
-  private val EmptyResponseStrikeThreshold: Int = 5
+  private lazy val EmptyResponseStrikeThreshold: Int = 5
   private var pivotRefreshRequested = false
 
   private def isPeerStateless(peer: Peer): Boolean =
@@ -536,11 +536,11 @@ private class AccountRangeCoordinatorImpl(
   // Per-peer adaptive byte budgeting (ported from StorageRangeCoordinator).
   // Geth's snap handler supports up to 2MB responses. Starting at 512KB and probing upward
   // on responsive peers, scaling down on failures.
-  private val minResponseBytes: BigInt = BigInt(minResponseBytesConfig)
-  private val maxResponseBytes: BigInt = 2 * 1024 * 1024 // 2MB ceiling (Geth handler limit)
-  private val initialResponseBytes: BigInt = BigInt(initialResponseBytesConfig)
-  private val increaseFactor: Double = 1.25 // Scale up when 90%+ fill
-  private val decreaseFactor: Double = 0.5 // Scale down on failure/empty
+  private lazy val minResponseBytes: BigInt = BigInt(minResponseBytesConfig)
+  private lazy val maxResponseBytes: BigInt = 2 * 1024 * 1024 // 2MB ceiling (Geth handler limit)
+  private lazy val initialResponseBytes: BigInt = BigInt(initialResponseBytesConfig)
+  private lazy val increaseFactor: Double = 1.25 // Scale up when 90%+ fill
+  private lazy val decreaseFactor: Double = 0.5 // Scale down on failure/empty
 
   private val peerResponseBytesTarget = mutable.Map.empty[String, BigInt]
 
@@ -565,13 +565,13 @@ private class AccountRangeCoordinatorImpl(
 
   // Peer cooldown (best-effort): used for transient errors (timeouts, verification failures).
   private val peerCooldownUntilMs = mutable.Map[String, Long]()
-  private val peerCooldownDefault = 30.seconds
+  private lazy val peerCooldownDefault = 30.seconds
   // Peer-scarcity threshold and the shorter cooldown applied below it. On a 1-3 peer pool a fixed 30s cooldown after a
   // single timeout benches ~half the usable peers; two near-simultaneous timeouts can zero the eligible set for 30s.
   // Scaling the cooldown down to a few seconds when peers are scarce keeps the pipe fed without giving up the
   // back-off's purpose (briefly resting a peer that just failed). Abundant pools keep the full 30s.
-  private val peerScarcityThreshold = 3
-  private val peerCooldownScarce = 8.seconds
+  private lazy val peerScarcityThreshold = 3
+  private lazy val peerCooldownScarce = 8.seconds
   private def effectivePeerCooldown: FiniteDuration =
     if knownAvailablePeers.size <= peerScarcityThreshold then peerCooldownScarce else peerCooldownDefault
   // Short cooldown for "empty-without-proof" responses. These mean "I can't serve this
@@ -598,8 +598,8 @@ private class AccountRangeCoordinatorImpl(
   // Exponential backoff from 60s to 5min.
   private var consecutiveUnproductiveRefreshes: Int = 0
   private var lastPivotRefreshTimeMs: Long = 0L
-  private val minRefreshIntervalMs: Long = 60000L // 60s minimum between refreshes
-  private val maxRefreshIntervalMs: Long = 300000L // 5min ceiling
+  private lazy val minRefreshIntervalMs: Long = 60000L // 60s minimum between refreshes
+  private lazy val maxRefreshIntervalMs: Long = 300000L // 5min ceiling
 
   // Dedicated dispatcher for trie finalisation. Tests inject their own
   // `ExecutionContext`; production looks up `account-trie-dispatcher` from `pekko.conf`.
