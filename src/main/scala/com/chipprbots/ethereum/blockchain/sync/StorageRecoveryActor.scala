@@ -220,7 +220,8 @@ object StorageRecoveryActor:
                           requestTimeout = snapSyncConfig.timeout,
                           snapSyncController = srcAdapter,
                           initialResponseBytes = snapSyncConfig.storageInitialResponseBytes,
-                          minResponseBytes = snapSyncConfig.storageMinResponseBytes
+                          minResponseBytes = snapSyncConfig.storageMinResponseBytes,
+                          pathNodeStorage = stateIngest.pathNodes
                         )
                       )
                       .onFailure[Throwable](
