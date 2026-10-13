@@ -387,7 +387,7 @@ private[actors] class AccountRangeCoordinatorImpl(
   // as PR #1250's [STORAGE-STATE] (subsequently switched from modulo to time-based for the
   // same reason).
   private var lastStateLogMs: Long = 0L
-  private val StateLogIntervalMs: Long = 10_000L
+  private lazy val StateLogIntervalMs: Long = 10_000L
 
   val peerResponseBytesTarget = mutable.Map.empty[String, BigInt]
 
@@ -398,7 +398,7 @@ private[actors] class AccountRangeCoordinatorImpl(
   // was over-punitive here: in production we saw `cooling=5 eligible=11` snapshots,
   // i.e. ~30 % of the otherwise-eligible pool parked in cooldown most of the time.
   // A pivot refresh is what unsticks these peers, not waiting.
-  private val peerCooldownNoProof = 5.seconds
+  private lazy val peerCooldownNoProof = 5.seconds
 
   // FIFO fairness within same in-flight tier: tracks last dispatch time per peer so that
   // ties in inFlightForPeer sort are broken by least-recently-served order rather than
