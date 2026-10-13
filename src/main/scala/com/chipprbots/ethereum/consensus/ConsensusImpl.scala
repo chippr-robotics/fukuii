@@ -431,13 +431,32 @@ class ConsensusImpl(
   ): Unit =
     executedBlocks.lastOption.foreach { last =>
       val tip = last.block
+      // A block this batch executed that the index ALSO named at its height before execution is not a displaced block:
+      // it is the same canonical block, re-presented (a rewound fetcher re-serves the canonical prefix below the head,
+      // and a branch that leaves the chain above that prefix carries it here). Its undo record was applied when it
+      // first became canonical, its second commit was dropped as a duplicate, and it is canonical again in every arm
+      // below. Undoing it would take out reference counts the head's own state still holds: under basic pruning its
+      // nodes reach zero, sit on its death row, and are deleted `history` blocks later (#1592). So it is never
+      // abandoned, whatever else the arm decides. Inert in archive and in-memory pruning, which ignore abandons.
+      val executedIds = executedBlocks.iterator.map(b => (b.block.number.value, b.block.hash)).toSet
+      val (reExecuted, displaced) = oldCanonical.partition(executedIds)
+      log.info(
+        "REORG-SETTLE: fork={} oldHead={} tip={} oldCanonical={} executed={} overlap={} selectedByWeight={}",
+        fork.number,
+        oldBestNumber,
+        tip.number,
+        oldCanonical.size,
+        executedBlocks.size,
+        reExecuted.size,
+        selectedByWeight
+      )
       if !selectedByWeight then
         blockchainWriter.saveBestKnownBlocks(tip.hash, tip.number.value)
         // The head moved to the new branch, so the old head's blocks above the fork point left the canonical chain with
         // their reference-count changes applied: take them back out, and put back an already-executed side parent the
         // branch builds on (undone when it was executed as a side payload or dropped). Counts only; the index is
         // deliberately left as this arm always left it. Idempotent through the record's applied flag.
-        reorgState.abandonBlockStates(oldCanonical.map { case (n, h) => (n, h.value) })
+        reorgState.abandonBlockStates(displaced.map { case (n, h) => (n, h.value) })
         reorgState.readoptBlockStates(fork.parentSideChain.map { case (n, h) => (n, h.value) })
       else
         // Recomputed from the headers rather than read from BlockData: it is exactly what BlockExecution computes, and
@@ -453,7 +472,7 @@ class ConsensusImpl(
           // The old head's blocks left the canonical chain with their state changes applied: take them back out, or a
           // node only they replaced stays at zero references while the new chain uses it, and is pruned. The side
           // blocks the new branch builds on are canonical again (their changes were taken out when they were dropped).
-          reorgState.abandonBlockStates(oldCanonical.map { case (n, h) => (n, h.value) })
+          reorgState.abandonBlockStates(displaced.map { case (n, h) => (n, h.value) })
           reorgState.readoptBlockStates(fork.parentSideChain.map { case (n, h) => (n, h.value) })
         else
           val old = oldCanonical.toMap
@@ -473,8 +492,11 @@ class ConsensusImpl(
             newBest = None,
             reader = blockchainReader
           )
-          // The executed side blocks are committed but not canonical.
-          reorgState.abandonBlockStates(executedBlocks.map(b => (b.block.number.value, b.block.hash.value)))
+          // The executed side blocks are committed but not canonical. A re-presented canonical block among them is put
+          // back in the index just above, so it stays applied.
+          val sideBlocks =
+            executedBlocks.map(b => (b.block.number.value, b.block.hash)).filterNot(id => oldCanonical.contains(id))
+          reorgState.abandonBlockStates(sideBlocks.map { case (n, h) => (n, h.value) })
     }
 
   /** Where a branch whose parent is `parentHash` leaves the canonical chain.
