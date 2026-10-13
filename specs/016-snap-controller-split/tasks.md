@@ -1399,9 +1399,33 @@ until `StateAccess` exists (FR-042).
       changed.
     - Owed: the vault review (the `skipPresent` presence check and the code-write path now read through
       `StateIngest.bytecode`), and a Mordor SNAP through the bytecode phase or a bytecode-recovery start.
-- [ ] T062 [C-A1] `AccountPeerDispatch` (includes the #1501 intake gate; T060: plus `maybeRequestPivotRefresh`; a
+- [x] T062 [C-A1] `AccountPeerDispatch` (includes the #1501 intake gate; T060: plus `maybeRequestPivotRefresh`; a
   zero-reference slice, so the PR records the grep and the total is unchanged). Narrowing takes `StateIngest` where it touches
   storage, never `StateAccess`; lowers the baseline total.
+  - **As built** (branch `refactor/snap-016-ca1-account-dispatch`, four code commits and this docs commit; no sbt or
+    JVM run, CI compiles and tests). (1) `# moved:` `WorkerRef` from the Impl into the companion (`private[actors]`).
+    No lift: every A1 member was already an indent-2 member, and the intake-gate lines of the arms are calls.
+    (2) Prerequisite: `AccountRangeEnv`, `AccountPeerDispatchState` and `AccountTaskLifecycleApi` are declared in
+    `actors/account/`; the nine constructor parameters the module reads become `val`s (`ctx`, `timers`,
+    `networkPeerManager`, `requestTracker`, `concurrency`, `snapSyncController`, `initialResponseBytesConfig`,
+    `minResponseBytesConfig`, `intakeBudget`); the Impl goes `private` → `private[actors]`; the eleven module-only
+    constants become `private lazy val`s (pure: yes; literals, or `BigInt(<constructor val>)` for `minResponseBytes` /
+    `initialResponseBytes`). The storage parameters (`mptStorage`, `pathNodeStorage`, `storageDone`) are untouched.
+    (3) The move commit takes 37 members byte-identical into `AccountPeerDispatch` (24 methods, `workerSeq`,
+    `lastPivotRefreshTimeMs` and the eleven constants), the Impl closing `) extends AccountPeerDispatch` /
+    `with AccountRangeEnv:`. (4) The narrowing commit: the self-type names
+    `AccountPeerDispatchState & AccountRangeEnv & AccountTaskLifecycleApi`, the Impl adds the State and Api parents.
+    No `# adopts:`, and `apply`, `ChildFactories` and `ChildFactoriesSpec` are unchanged (the tasks.md exception).
+    - Counts against R14b: State 17 (= 17), Api 1 (= 1, `tryRedispatchPendingTasks`). `AccountRangeEnv` 10, reported
+      as a capability trait (G9), with no store.
+    - Storage total **619, unchanged** (zero-reference slice). The characterization §5 grep over
+      `actors/account/AccountPeerDispatch.scala` (and `AccountRangeEnv.scala`) prints `[]`; ARC stays at 29.
+      `storage-baseline.json` is unchanged.
+    - Stub test (`# new-tests:`): `AccountPeerDispatchSpec` (8 cases, in a `BehaviorTestKit`). No existing test changed.
+    - The fields the module reaches are now public; their `private[actors] so AccountRangeCoordinatorSpec ...` comments
+      are left as they were (FR-034, no cleanups in a move PR).
+    - Owed: the second-specialist review (prism) and forge's "no ETC behaviour change" sign-off. No vault review and
+      no node run (characterization §7: none for C-A1); the Mordor restart mid-account comes after C-A4.
 - [ ] T063 [C-A2] `AccountTaskLifecycle`. Narrowing takes `StateIngest`, never `StateAccess`; lowers the baseline total.
   (T060: plus `drainActiveTasks`. A zero-reference slice: grep recorded, total unchanged.)
 - [ ] T064 [C-A3] `AccountTrieAssembly` + `finalizing` (vault; T060: the first ARC slice that touches storage. It
