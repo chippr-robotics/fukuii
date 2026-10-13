@@ -5684,10 +5684,12 @@ counting them. <code>trieStore</code> cannot stand in for the first: it returns 
 the caching decision above keeps the core's cache its only caller. <code>storageDone</code> cannot stand in for the second: the spawn
 decides whether markers are read. It covers C-A3, C-A4, C-S2 and C-H1 (spec 016 tasks.md, "Amendment 2026-10-13");
 everything else those slices take adopts the capability (C-A3: <code>pathNodes</code>).
-Declaring a session value on a coordinator's Env is itself a storage reference, so a slice that adopts nothing may
-raise the ratchet total by exactly that declaration (and its import), and only with a fresh justification line naming
-it and the exact amount (user decision 2026-10-13, found at T065). C-A4 is the first instance: <code>storageDone</code> on
-<code>AccountRangeEnv</code>, +3, 609 → 612.</p>
+Declaring a session value on a coordinator's Env is itself a storage reference, so a slice may raise the ratchet total
+for it (user decision 2026-10-13, found at T065; tightened after the #1591 reviews), and only when: the value is one of
+the two above (<code>mptStorage</code>, <code>storageDone</code>; the list is closed, and another needs a new user decision); the rise is
+net of the slice's own adoptions, applied first; it equals exactly the Env file's count increase for the declaration
+and its import; and a fresh justification line names it and states the amount, keeping the previous line as history.
+C-A4 is the first instance: <code>storageDone</code> on <code>AccountRangeEnv</code>, +3, 609 → 612.</p>
 <h3 id="2-chain-data-handles-stay-on-stateingest-no-headerchain-sub-interface-now">2. Chain-data handles stay on <code>StateIngest</code> (no header/chain sub-interface now)<a class="headerlink" href="#2-chain-data-handles-stay-on-stateingest-no-headerchain-sub-interface-now" title="Permanent link">&para;</a></h3>
 <p><code>chainReader</code> and <code>chainWriter</code> are chain-data handles (headers, pivot, best block), not trie state. We considered
 splitting them into a separate header/chain capability and decided not to, for now:</p>
