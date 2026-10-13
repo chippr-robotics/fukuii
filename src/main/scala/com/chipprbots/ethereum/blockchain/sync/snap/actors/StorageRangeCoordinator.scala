@@ -55,7 +55,7 @@ private[actors] class StorageRangeCoordinatorImpl(
     initialStateRoot: ByteString,
     val networkPeerManager: org.apache.pekko.actor.typed.ActorRef[NetworkPeerManagerActor.Command],
     val requestTracker: SNAPRequestTracker,
-    mptStorage: MptStorage,
+    val mptStorage: MptStorage,
     flatSlotStorage: FlatSlotStorage,
     val maxAccountsPerBatch: Int,
     val maxInFlightRequests: Int,
@@ -78,9 +78,9 @@ private[actors] class StorageRangeCoordinatorImpl(
     // 256 → ~2 GiB ceiling, independent of chain size. Raise via sync.conf if the peer pool
     // can justify a larger working set; lower if running with smaller `-Xmx`.
     val maxConcurrentStorageAccounts: Int = 256,
-    snapProgressStorage: Option[SnapSyncProgressStorage] = None,
-    storageScheme: StorageScheme = StorageScheme.Hash,
-    pathNodeStorage: Option[PathNodeStorage] = None,
+    val snapProgressStorage: Option[SnapSyncProgressStorage] = None,
+    val storageScheme: StorageScheme = StorageScheme.Hash,
+    val pathNodeStorage: Option[PathNodeStorage] = None,
     // Persist a completion marker per fully-downloaded account (SnapStorageDoneStorage) so a resume re-queues only
     // unfinished storage tasks. Off by default: only SNAPSyncController's account-phase and recovery coordinators read
     // the markers back.
@@ -2096,6 +2096,13 @@ object StorageRangeCoordinator:
       generation: Long,
       outcome: Try[VerifiedStorageResponse]
   ) extends Command
+
+  /** One buffered storage-trie node write (Path scheme): what `PathNodeStorage.storageNodeUpsert` /
+    * `storageNodeRemoval` return, held in the coordinator's `trieNodeWrites` until `flushTrieNodeWrites` commits the
+    * batch. A name for the module state interface, so the module file needs no raw `DataSource` import (spec 016 C-S2);
+    * the raw type stays in this file, whose import is baselined.
+    */
+  private[actors] type TrieNodeWrite = DataUpdate
 
   /** A response that completed its request and waits to be applied. Mutable fields are touched only on the actor. */
   final private[actors] class PendingResponse(

@@ -8,7 +8,10 @@ import scala.concurrent.duration.FiniteDuration
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPRequestTracker
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController
 import com.chipprbots.ethereum.blockchain.sync.snap.SnapIntakeBudget
+import com.chipprbots.ethereum.blockchain.sync.snap.StorageScheme
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.StorageRangeCoordinator
+import com.chipprbots.ethereum.db.storage.MptStorage
+import com.chipprbots.ethereum.db.storage.SnapSyncProgressStorage
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor
 
 /** StorageRangeCoordinator's environment for its modules (spec 016 C-S1, characterization G9): the actor context, its
@@ -18,8 +21,12 @@ import com.chipprbots.ethereum.network.NetworkPeerManagerActor
   * parameters and immutable values only, so it is a capability-like trait, counted apart from the modules'
   * `<Module>State` (research.md R14b). The coordinator Impl implements it.
   *
-  * It holds no store: C-S1 touches no storage (coordinator-characterization.md §5), so the coordinator's storage
-  * parameters are not here. They move onto `StateIngest` in the first slice whose code uses them (C-S2, C-S3).
+  * Stores (spec 016 C-S2): the two session values the ordered apply reads, which stay explicit parameters under the
+  * named FR-042 exception (tasks.md, Coordinators, "Amendment 2026-10-13"): `mptStorage`, the core's pivot-bound
+  * `MptStorage` (the Hash-scheme trie flushes and prebuilt writes), and `snapProgressStorage`, the per-spawn `Option`
+  * that decides whether the storage cursor is persisted (`Some` for the controller's spawn, `None` for recovery's).
+  * Plus `storageScheme`, which picks the trie. The Path node store is not here: it moves onto `StateIngest` in the C-S2
+  * narrowing.
   */
 private[actors] trait StorageRangeEnv:
   def context: ActorContext[StorageRangeCoordinator.Command]
@@ -37,3 +44,6 @@ private[actors] trait StorageRangeEnv:
   def maxConcurrentStorageAccounts: Int
   def intakeBudget: Option[SnapIntakeBudget]
   def processing: StorageRangeCoordinator.ProcessingSettings
+  def mptStorage: MptStorage
+  def snapProgressStorage: Option[SnapSyncProgressStorage]
+  def storageScheme: StorageScheme
