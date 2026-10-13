@@ -50,21 +50,21 @@ import com.chipprbots.ethereum.utils.ByteStringUtils.ByteStringOps
   *   Parent controller
   */
 private[actors] class StorageRangeCoordinatorImpl(
-    context: ActorContext[StorageRangeCoordinator.Command],
+    val context: ActorContext[StorageRangeCoordinator.Command],
     timers: TimerScheduler[StorageRangeCoordinator.Command],
     initialStateRoot: ByteString,
-    networkPeerManager: org.apache.pekko.actor.typed.ActorRef[NetworkPeerManagerActor.Command],
-    requestTracker: SNAPRequestTracker,
+    val networkPeerManager: org.apache.pekko.actor.typed.ActorRef[NetworkPeerManagerActor.Command],
+    val requestTracker: SNAPRequestTracker,
     mptStorage: MptStorage,
     flatSlotStorage: FlatSlotStorage,
-    maxAccountsPerBatch: Int,
-    maxInFlightRequests: Int,
-    requestTimeout: FiniteDuration,
-    snapSyncController: org.apache.pekko.actor.typed.ActorRef[SNAPSyncController.Command],
+    val maxAccountsPerBatch: Int,
+    val maxInFlightRequests: Int,
+    val requestTimeout: FiniteDuration,
+    val snapSyncController: org.apache.pekko.actor.typed.ActorRef[SNAPSyncController.Command],
     initialMaxInFlightPerPeer: Int = 5,
-    configInitialResponseBytes: Int = 1048576,
-    configMinResponseBytes: Int = 131072,
-    deferredMerkleization: Boolean = true,
+    val configInitialResponseBytes: Int = 1048576,
+    val configMinResponseBytes: Int = 131072,
+    val deferredMerkleization: Boolean = true,
     flatBatchEntryThreshold: Int = 1000,
     flatBatchEcOverride: Option[ExecutionContext] = None,
     // Back-pressure watermarks — overridable in tests so we don't have to enqueue 100K StorageTasks
@@ -77,7 +77,7 @@ private[actors] class StorageRangeCoordinatorImpl(
     // worst-case storage-processing footprint is `maxConcurrentStorageAccounts × 8 MiB`. Default
     // 256 → ~2 GiB ceiling, independent of chain size. Raise via sync.conf if the peer pool
     // can justify a larger working set; lower if running with smaller `-Xmx`.
-    maxConcurrentStorageAccounts: Int = 256,
+    val maxConcurrentStorageAccounts: Int = 256,
     snapProgressStorage: Option[SnapSyncProgressStorage] = None,
     storageScheme: StorageScheme = StorageScheme.Hash,
     pathNodeStorage: Option[PathNodeStorage] = None,
@@ -87,10 +87,10 @@ private[actors] class StorageRangeCoordinatorImpl(
     recordStorageDone: Boolean = false,
     // Spec 014: shared admission gate. This coordinator acknowledges received tasks and publishes its queue depth so the
     // producers can wait synchronously instead of through the mailbox-borne watermark signal. None = not wired (tests).
-    intakeBudget: Option[SnapIntakeBudget] = None,
+    val intakeBudget: Option[SnapIntakeBudget] = None,
     // #1533: where StorageRanges responses are verified (see "Off-actor response processing"). Inline = everything on
     // this actor, the pre-#1533 behaviour and the default for direct construction; `apply` reads the node config.
-    processing: StorageRangeCoordinator.ProcessingSettings = StorageRangeCoordinator.ProcessingSettings.Inline,
+    val processing: StorageRangeCoordinator.ProcessingSettings = StorageRangeCoordinator.ProcessingSettings.Inline,
     // Tests: run the processing jobs on this ExecutionContext instead of an owned worker pool.
     processingEcOverride: Option[ExecutionContext] = None
 ):
@@ -160,7 +160,7 @@ private[actors] class StorageRangeCoordinatorImpl(
   // Global consecutive task failure counter: triggers ForceCompleteStorage when all SNAP peers
   // stop serving storage data. Resets to zero on any successful slot download.
   private[actors] var consecutiveTaskFailures: Int = 0
-  private val maxConsecutiveTaskFailures: Int = 100
+  private lazy val maxConsecutiveTaskFailures: Int = 100
 
   // Idempotency guard: ForceCompleteStorage may arrive 10× simultaneously if SNAPSyncController
   // queues multiple stagnation-check responses before the first ForceCompleted reply comes back.
@@ -175,7 +175,7 @@ private[actors] class StorageRangeCoordinatorImpl(
   // the eligible peers were parked here. Halving the cooldown keeps storage dispatch
   // closer to the request budget the SNAP server can actually sustain.
   private val peerCooldownUntilMs = mutable.Map[String, Long]()
-  private val peerCooldownDefault = 5.seconds
+  private lazy val peerCooldownDefault = 5.seconds
 
   // Liveness score per peer (see SnapPeerHealth). The 5 s cooldown above handles a transient hiccup; this handles a peer
   // that never answers. A peer with `timeoutThreshold` consecutive timeouts and no success is penalised (2 min, doubling
@@ -204,7 +204,7 @@ private[actors] class StorageRangeCoordinatorImpl(
   // Reference clients use 5 (Nethermind) or unlimited+throughput-tracker (Geth); 3 was
   // overly aggressive for our policy.
   private val emptyResponseStrikes = mutable.Map.empty[String, Int]
-  private val EmptyResponseStrikeThreshold: Int = 5
+  private lazy val EmptyResponseStrikeThreshold: Int = 5
   private var pivotRefreshRequested = false
 
   // Contract completion tracking for progress estimation.
@@ -219,15 +219,15 @@ private[actors] class StorageRangeCoordinatorImpl(
   // doubles from 60s up to 5 minutes. Resets to 0 when we receive actual storage slots.
   private var consecutiveUnproductiveRefreshes: Int = 0
   private var lastPivotRefreshTimeMs: Long = 0
-  private val minRefreshIntervalMs: Long = 60000L // 1 minute minimum between refreshes
-  private val maxRefreshIntervalMs: Long = 300000L // 5 minutes maximum backoff
+  private lazy val minRefreshIntervalMs: Long = 60000L // 1 minute minimum between refreshes
+  private lazy val maxRefreshIntervalMs: Long = 300000L // 5 minutes maximum backoff
 
   // No-activity timeout: detects stalls caused by "ghost" peers in knownAvailablePeers
   // that disconnected without being removed and thus never get marked stateless.
   // When tasks are pending, nothing is in-flight, and no dispatch/response has occurred
   // for this duration, we treat it as all-stateless and request a pivot refresh.
   private var lastDispatchOrResponseMs: Long = System.currentTimeMillis()
-  private val noActivityTimeoutMs: Long = 120000L // 2 minutes
+  private lazy val noActivityTimeoutMs: Long = 120000L // 2 minutes
 
   // Post-pivot-refresh cooldown: after a pivot refresh, peers need time to sync to the new root.
   // Dispatching immediately causes all peers to return empty → marked stateless → another pivot
@@ -245,7 +245,7 @@ private[actors] class StorageRangeCoordinatorImpl(
   // pending but zero eligible peers and zero active requests exist. At threshold, requests a
   // pivot refresh as an escape valve — same pattern as TrieNodeHealingCoordinator BUG-M3 fix.
   private var storageIdleChecks: Int = 0
-  private val storageIdleEscapeThreshold: Int = 5
+  private lazy val storageIdleEscapeThreshold: Int = 5
 
   private def isPostRefreshCooldownActive: Boolean =
     System.currentTimeMillis() < postRefreshCooldownUntilMs
@@ -306,8 +306,8 @@ private[actors] class StorageRangeCoordinatorImpl(
   // Threshold: trigger when ≤1 peer eligible AND pool has ≥4 total peers.
   // Backoff: uses the existing minRefreshIntervalMs/maxRefreshIntervalMs schedule, so it
   // cannot churn faster than allStateless recovery.
-  private val lowEligibleMaxCount: Int = 1
-  private val lowEligibleMinPoolSize: Int = 4
+  private lazy val lowEligibleMaxCount: Int = 1
+  private lazy val lowEligibleMinPoolSize: Int = 4
 
   private def maybeRequestPivotRefresh(): Unit = if !pivotRefreshRequested then
     val allStateless = knownAvailablePeers.nonEmpty &&
@@ -397,7 +397,7 @@ private[actors] class StorageRangeCoordinatorImpl(
   // permanently degrading to batch=1 for the lifetime of the sync.
   private val peerBatchSize = mutable.Map.empty[String, Int]
   private val peerBatchSuccessStreak = mutable.Map.empty[String, Int]
-  private val batchRecoveryStreak = 3 // Consecutive successes before scaling up
+  private lazy val batchRecoveryStreak = 3 // Consecutive successes before scaling up
 
   private def batchSizeFor(peer: Peer): Int =
     peerBatchSize.getOrElseUpdate(peer.id.value, maxAccountsPerBatch)
@@ -538,11 +538,12 @@ private[actors] class StorageRangeCoordinatorImpl(
   // Per-peer adaptive byte budgeting (ported from ByteCodeCoordinator).
   // Geth's snap handler supports up to 2MB responses. Starting at 512KB and probing upward
   // on responsive peers, scaling down on failures.
-  private val minResponseBytes: BigInt = configMinResponseBytes // Configurable floor (avoid excessive small requests)
-  private val maxResponseBytes: BigInt = 2 * 1024 * 1024 // 2MB ceiling (Geth handler limit)
-  private val initialResponseBytes: BigInt = configInitialResponseBytes // Configurable starting point
-  private val increaseFactor: Double = 1.25 // Scale up when 90%+ fill
-  private val decreaseFactor: Double = 0.5 // Scale down on failure/empty
+  private lazy val minResponseBytes: BigInt =
+    configMinResponseBytes // Configurable floor (avoid excessive small requests)
+  private lazy val maxResponseBytes: BigInt = 2 * 1024 * 1024 // 2MB ceiling (Geth handler limit)
+  private lazy val initialResponseBytes: BigInt = configInitialResponseBytes // Configurable starting point
+  private lazy val increaseFactor: Double = 1.25 // Scale up when 90%+ fill
+  private lazy val decreaseFactor: Double = 0.5 // Scale down on failure/empty
 
   private val peerResponseBytesTarget = mutable.Map.empty[String, BigInt]
 
@@ -2229,7 +2230,7 @@ private[actors] class StorageRangeCoordinatorImpl(
   // chains into it), so modulo-based throttling produced log floods that overflowed the live
   // monitor pipe; time-based throttling is robust against call-rate spikes.
   private var lastStateLogMs: Long = 0L
-  private val StateLogIntervalMs: Long = 30_000L
+  private lazy val StateLogIntervalMs: Long = 30_000L
 
   private def tryRedispatchPendingTasks(): Unit =
     if tasks.nonEmpty && !isPostRefreshCooldownActive && !pivotRefreshRequested then redispatchEligible()
