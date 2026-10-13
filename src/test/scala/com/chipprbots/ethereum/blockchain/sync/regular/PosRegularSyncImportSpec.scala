@@ -246,9 +246,8 @@ class PosRegularSyncImportSpec extends ScalaTestWithActorTestKit with AnyFlatSpe
     stop()
 
   "BlockImporter on a PoW chain (the ETC/Mordor/Gorgoroth wiring)" should
-    "handle the same post-rewind batch exactly as before: the whole batch, prefix included, re-executed" taggedAs (
+    "drop the canonical prefix of a post-rewind batch and execute only the head's extension (#1592)" taggedAs (
       UnitTest,
-      SyncTest,
       ConsensusTest
     ) in new ImporterFixture(postMerge = false):
       start()
@@ -257,8 +256,12 @@ class PosRegularSyncImportSpec extends ScalaTestWithActorTestKit with AnyFlatSpe
       servePick(batch)
 
       fetcher.expectMessageType[BlockFetcher.PickBlocks](importTimeout)
-      // Heavier by difficulty, so weight selects it and ConsensusImpl.reorganise re-executes every block of it.
-      executedNumbers shouldBe batch.map(_.number.value)
+      // Until #1592 this pinned the whole batch, prefix included, as re-executed: weight selected it and
+      // ConsensusImpl.reorganise re-ran N-65..N against N-66's state (pruned under basic pruning at history 64), and
+      // settleHead then abandoned those same canonical blocks. core-geth's insertChain skips known canonical blocks
+      // below the head; so does the importer now, and only N+1..N+10 reach consensus, through importToTop. Not tagged
+      // SyncTest, so it runs in testEssential.
+      executedNumbers shouldBe ahead.take(10).map(_.number.value)
       blockchainReader.getBestBlockNumber shouldBe head.number.value + 10
       stop()
 
