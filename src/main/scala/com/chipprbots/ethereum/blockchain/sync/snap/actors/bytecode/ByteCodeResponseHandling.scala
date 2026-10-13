@@ -191,8 +191,9 @@ private[actors] trait ByteCodeResponseHandling:
 
   private def storeBytecodesWithHashes(codesByHash: Seq[(ByteString, ByteString)]): Either[String, Unit] =
     try
-      val updates = codesByHash.foldLeft(stateIngest.bytecode.emptyBatchUpdate) { case (batchUpdate, (codeHash, code)) =>
-        batchUpdate.and(stateIngest.bytecode.put(codeHash, code))
+      val updates = codesByHash.foldLeft(stateIngest.bytecode.emptyBatchUpdate) {
+        case (batchUpdate, (codeHash, code)) =>
+          batchUpdate.and(stateIngest.bytecode.put(codeHash, code))
       }
 
       updates.commit()
