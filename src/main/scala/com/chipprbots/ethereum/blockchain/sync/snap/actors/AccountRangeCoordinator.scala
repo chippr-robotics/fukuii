@@ -7,7 +7,6 @@ import java.nio.file.Files
 import java.nio.file.Path
 
 import org.apache.pekko.actor.typed.Behavior
-import org.apache.pekko.actor.typed.SupervisorStrategy
 import org.apache.pekko.actor.typed.scaladsl.ActorContext
 import org.apache.pekko.actor.typed.scaladsl.Behaviors
 import org.apache.pekko.actor.typed.scaladsl.TimerScheduler
@@ -27,6 +26,7 @@ import com.google.common.hash.PrimitiveSink
 
 import com.chipprbots.ethereum.blockchain.sync.ProgressMilestones
 import com.chipprbots.ethereum.blockchain.sync.snap.*
+import com.chipprbots.ethereum.blockchain.sync.snap.actors.account.*
 import com.chipprbots.ethereum.db.storage.MptStorage
 import com.chipprbots.ethereum.db.storage.PathNodeStorage
 import com.chipprbots.ethereum.db.storage.SnapStorageDoneStorage
@@ -94,7 +94,8 @@ private[actors] class AccountRangeCoordinatorImpl(
     // Spec 014: shared admission gate, read synchronously before new contract work is produced (fresh account-range
     // dispatch and the carried replay). None = not wired (tests): only the mailbox-borne watermark signal applies.
     val intakeBudget: Option[SnapIntakeBudget] = None
-):
+) extends AccountPeerDispatch
+    with AccountRangeEnv:
 
   import SNAPSyncController.PivotStateUnservable
   import AccountRangeCoordinator.*
@@ -102,15 +103,15 @@ private[actors] class AccountRangeCoordinatorImpl(
   // `ctx.log` is thread-confined and must NOT be captured inside the trie-finalisation Future
   // (see `finalizeTrie`). For the actor-thread code below we use `ctx.log`; the Future uses
   // `futureLog` (a plain SLF4J logger) instead.
-  private val log = ctx.log
+  val log = ctx.log
   private val futureLog = org.slf4j.LoggerFactory.getLogger(classOf[AccountRangeCoordinatorImpl])
 
   // Mutable state root — updated in-place when the controller refreshes the pivot.
-  private var stateRoot: ByteString = initialStateRoot
+  var stateRoot: ByteString = initialStateRoot
 
   // Per-peer concurrency budget — dynamically adjusted by SNAPSyncController via UpdateMaxInFlightPerPeer.
   // Part of global per-peer request budgeting (Geth-aligned: total 5 per peer across all coordinators).
-  private var maxInFlightPerPeer: Int = initialMaxInFlightPerPeer
+  var maxInFlightPerPeer: Int = initialMaxInFlightPerPeer
 
   // Downstream-queue back-pressure (#1232 follow-up). Either StorageRangeCoordinator OR
   // ByteCodeCoordinator can independently signal that its pending queue has crossed the
@@ -118,32 +119,13 @@ private[actors] class AccountRangeCoordinatorImpl(
   // mark, and only resume once they have ALL released. We track each source by name so the two
   // signals don't interfere — releasing storage shouldn't accidentally unpause when bytecodes are
   // still over their mark, etc. Package-private for tests.
-  private[actors] val backpressureSources: mutable.Set[String] = mutable.Set.empty[String]
-  private def downstreamBackpressureActive: Boolean = backpressureSources.nonEmpty
-  // The intake gate (spec 014): pending storage/bytecode work at its ceiling, or heap pressure. Read synchronously, so
-  // unlike `backpressureSources` it never lags behind a busy mailbox.
-  private def intakeGateClosed: Boolean = intakeBudget.exists(!_.intakeAllowed)
-
-  /** The intake gate has no release message (unlike the storage/bytecode watermarks, which send
-    * `*QueuePressure(false)`): the bytecode ceiling and the heap watchdog close it silently and it re-opens when the
-    * downstream queues drain. Poll it while it holds dispatch so the account side resumes on its own, not only when a
-    * peer is re-announced or a response lands.
-    */
-  private def armIntakeGateRecheck(): Unit =
-    if !timers.isTimerActive(RecheckIntakeGate) then
-      timers.startSingleTimer(RecheckIntakeGate, RecheckIntakeGate, AccountRangeCoordinator.IntakeGateRecheckInterval)
-  // Dispatch is paused on purpose: a downstream queue is over its high-water mark, or the controller set the per-peer
-  // budget to 0. Neither is a stall, so neither may feed the stall watchdog or the pivot-refresh escalation.
-  private def dispatchDeliberatelyPaused: Boolean =
-    downstreamBackpressureActive || intakeGateClosed || maxInFlightPerPeer <= 0
-  // Kept for spec compatibility; reflects whether the storage source is currently engaged.
-  private[actors] def storageBackpressureActive: Boolean = backpressureSources.contains("storage")
+  val backpressureSources: mutable.Set[String] = mutable.Set.empty[String]
 
   // Stateless peer tracking: peers CONFIRMED unable to serve the current state root after
   // crossing the strike threshold below. Cleared on PivotRefreshed because the new root may
   // be inside the peer's serve window.
   // `private[actors]` so AccountRangeCoordinatorSpec can drive the state via TestActorRef.
-  private[actors] val statelessPeers = mutable.Set[com.chipprbots.ethereum.network.PeerId]()
+  val statelessPeers = mutable.Set[com.chipprbots.ethereum.network.PeerId]()
   // Snapless peer tracking (#1197): peers whose SNAP handler returns
   // `AccountRangePacket{Accounts: nil, Proof: nil}` indicating `chain.Snapshots()` is
   // structurally unavailable. CONFIRMED after EmptyResponseStrikeThreshold consecutive
@@ -152,7 +134,7 @@ private[actors] class AccountRangeCoordinatorImpl(
   // core-geth `--syncmode full` rationale: a peer with no snapshot tree won't grow one.
   // Bytecode + trie-node healing coordinators are unaffected — those code paths use
   // direct DB lookups that don't depend on the snapshot tree.
-  private[actors] val snaplessPeers = mutable.Set[com.chipprbots.ethereum.network.PeerId]()
+  val snaplessPeers = mutable.Set[com.chipprbots.ethereum.network.PeerId]()
   // Strike counter for empty-with-empty-proof responses (the only signal that drives
   // statelessPeers + snaplessPeers entry today). The previous policy promoted a peer on
   // the FIRST such response, which on sepolia 2026-05-13 carpet-bombed the peer pool
@@ -168,120 +150,8 @@ private[actors] class AccountRangeCoordinatorImpl(
   //   * any successful response from peer → recordPeerSuccess clears strikes
   //   * PivotRefreshed → clear strikes (peer deserves a clean slate on the new root)
   //   * PeerUnavailable → clear strikes (and the peer entry from statelessPeers too)
-  private[actors] val emptyResponseStrikes = mutable.Map.empty[com.chipprbots.ethereum.network.PeerId, Int]
-  // Raised 3 → 5 on 2026-05-14: even with PR #1255 clearing snapless on PivotRefreshed,
-  // the 3-strike threshold drained sepolia's small peer pool between pivots, producing
-  // eligible=0 stalls within each pivot window. 5 strikes gives peers more rope; mirrors
-  // Nethermind's threshold; lines up with the bumped storage threshold.
-  private lazy val EmptyResponseStrikeThreshold: Int = 5
-  private var pivotRefreshRequested = false
-
-  private def isPeerStateless(peer: Peer): Boolean =
-    statelessPeers.contains(peer.id)
-
-  private def isPeerSnapless(peer: Peer): Boolean =
-    snaplessPeers.contains(peer.id)
-
-  private def markPeerStateless(peer: Peer, reason: String): Unit =
-    val isEmptyProofSignal = reason.contains("Missing proof for empty account range")
-    // Only empty-proof signals drive strikes; already-confirmed peers stay confirmed
-    // (further strikes are noise).
-    if isEmptyProofSignal && !snaplessPeers.contains(peer.id) then
-      val priorStrikes = emptyResponseStrikes.getOrElse(peer.id, 0)
-      val strikes = priorStrikes + 1
-      emptyResponseStrikes(peer.id) = strikes
-
-      if strikes < EmptyResponseStrikeThreshold then
-        log.info(
-          s"Peer ${peer.id.value} empty-proof strike $strikes/$EmptyResponseStrikeThreshold for root " +
-            s"${stateRoot.take(4).toHex} (reason: $reason). Still eligible for dispatch."
-        )
-      else
-        // Threshold reached — promote to confirmed snapless + stateless. Snapless is sticky
-        // (root-independent, survives PivotRefreshed per #1197); stateless clears on the next
-        // PivotRefreshed.
-        val wasSnapless = snaplessPeers.contains(peer.id)
-        val wasStateless = statelessPeers.contains(peer.id)
-        snaplessPeers.add(peer.id)
-        statelessPeers.add(peer.id)
-        if !wasSnapless then
-          com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncMetrics.incrementSnaplessPeerConfirmed()
-        if !wasStateless then
-          com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncMetrics.incrementStatelessPeerConfirmed()
-        log.info(
-          s"Peer ${peer.id.value} marked SNAPLESS after $strikes consecutive empty-proof responses " +
-            s"— will skip for GetAccountRange this session. Bytecode/healing remain available. " +
-            s"(${statelessPeers.size}/${knownAvailablePeers.size} peers stateless for root ${stateRoot.take(4).toHex})"
-        )
-        maybeRequestPivotRefresh()
-
-  /** Reset the strike counter for a peer that has just produced a useful response (real accounts OR a boundary proof).
-    * Cheap to over-invoke; the goal is "any forward progress from this peer wipes prior strikes."
-    */
-  private def recordPeerSuccess(peerId: com.chipprbots.ethereum.network.PeerId): Unit =
-    emptyResponseStrikes.remove(peerId)
-
-  private def maybeRequestPivotRefresh(): Unit =
-    if !pivotRefreshRequested then
-      // Snapless peers (no snapshot tree at all) cannot be rescued by a pivot refresh — the
-      // refresh would just yield another empty response from the same peer at the new root.
-      // Compute "all stateless" against the *non-snapless* subset only (#1197).
-      val nonSnapless = knownAvailablePeers.filterNot(p => snaplessPeers.contains(p.id))
-      if nonSnapless.isEmpty && knownAvailablePeers.nonEmpty then
-        // Every peer in the pool is snapless. A pivot refresh won't recover the SAME peers
-        // (they have no snapshot tree regardless of root), but escalating PivotStateUnservable
-        // lets the controller take action — e.g. disconnect the snapless peer and wait for a
-        // peer with a snapshot tree. Without escalation the coordinator is permanently stuck.
-        pivotRefreshRequested = true
-        lastPivotRefreshTimeMs = System.currentTimeMillis()
-        consecutiveUnproductiveRefreshes += 1
-        log.warn(
-          s"All ${knownAvailablePeers.size} known peers are SNAPLESS (no snapshot tree). " +
-            "SNAP-range download cannot make progress on this peer pool. " +
-            s"Requesting pivot refresh from controller (attempt=$consecutiveUnproductiveRefreshes). " +
-            "Bytecode and trie-node healing remain functional."
-        )
-        snapSyncController ! PivotStateUnservable(
-          rootHash = stateRoot,
-          reason = "all peers snapless (no snapshot tree) for AccountRange root",
-          consecutiveEmptyResponses = knownAvailablePeers.size,
-          cause = SNAPSyncController.UnservableCause.Snapless
-        )
-      else
-        // If all NON-snapless peers are stateless, the current root has aged out of the
-        // serve window — pivot refresh might rescue them.
-        val allStateless = nonSnapless.nonEmpty &&
-          nonSnapless.forall(p => statelessPeers.contains(p.id))
-        if allStateless then
-          // Exponential backoff: don't hammer the controller with rapid refresh requests
-          val now = System.currentTimeMillis()
-          val backoffMs = math.min(
-            minRefreshIntervalMs * (1L << math.min(consecutiveUnproductiveRefreshes, 3)),
-            maxRefreshIntervalMs
-          )
-          val elapsed = now - lastPivotRefreshTimeMs
-          if lastPivotRefreshTimeMs > 0 && elapsed < backoffMs then
-            log.info(
-              s"All ${statelessPeers.size} peers stateless but backing off pivot refresh " +
-                s"(${elapsed / 1000}s / ${backoffMs / 1000}s elapsed, attempt=${consecutiveUnproductiveRefreshes + 1}). " +
-                "Will retry after backoff."
-            )
-            // Schedule a re-check after the remaining backoff period
-            ctx.scheduleOnce((backoffMs - elapsed).millis, ctx.self, CheckCompletion)
-          else
-            pivotRefreshRequested = true
-            lastPivotRefreshTimeMs = now
-            consecutiveUnproductiveRefreshes += 1
-            log.warn(
-              s"All ${statelessPeers.size} known peers are stateless for root ${stateRoot.take(4).toHex}. " +
-                s"Requesting pivot refresh from controller (attempt=$consecutiveUnproductiveRefreshes, backoff=${backoffMs / 1000}s)."
-            )
-            snapSyncController ! PivotStateUnservable(
-              rootHash = stateRoot,
-              reason = "all peers stateless for AccountRange root",
-              consecutiveEmptyResponses = statelessPeers.size,
-              cause = SNAPSyncController.UnservableCause.Stateless
-            )
+  val emptyResponseStrikes = mutable.Map.empty[com.chipprbots.ethereum.network.PeerId, Int]
+  var pivotRefreshRequested = false
 
   // Task management — resume ranges from saved positions (core-geth parity).
   // On restart, each range resumes from its saved `next` position instead of starting from 0x00.
@@ -339,20 +209,16 @@ private[actors] class AccountRangeCoordinatorImpl(
   // Priority queue: dequeue the task with the SMALLEST remaining keyspace first.
   // This focuses workers on nearly-complete ranges, ensuring at least some ranges
   // finish before peers stop responding (instead of spreading work evenly across all 16).
-  private[actors] val pendingTasks = mutable.PriorityQueue[AccountTask](remainingTasks*)(
+  val pendingTasks = mutable.PriorityQueue[AccountTask](remainingTasks*)(
     Ordering.by[AccountTask, BigInt](_.remainingKeyspace).reverse
   )
   // requestId -> (task, worker, peer)
-  private[actors] val activeTasks = mutable.Map[BigInt, (AccountTask, WorkerRef, Peer)]()
+  val activeTasks = mutable.Map[BigInt, (AccountTask, WorkerRef, Peer)]()
   private val completedTasks = mutable.ArrayBuffer[AccountTask]()
 
   // Worker pool
-  private[actors] val workers = mutable.ArrayBuffer[WorkerRef]()
-  private[actors] val idleWorkers = mutable.LinkedHashSet.empty[WorkerRef]
-
-  // Monotonically increasing counter for unique worker child names. Workers can be removed and
-  // re-created; using the set size would produce duplicate names when replacements are spawned.
-  private var workerSeq: Int = 0
+  val workers = mutable.ArrayBuffer[WorkerRef]()
+  val idleWorkers = mutable.LinkedHashSet.empty[WorkerRef]
 
   // #1184: dispatch-stalled detector — silent peers (no FIN/RST) leave activeTasks slots
   // held forever; the worker→TaskFailed cascade depends on a response that never arrives.
@@ -360,7 +226,7 @@ private[actors] class AccountRangeCoordinatorImpl(
   // `activeTasks.nonEmpty && (now - lastDispatchOrResponseMs) > noActivityTimeoutMs`, drain.
   // 90 s threshold fires before the controller's 180 s `Account stall detected` watchdog,
   // so the coordinator self-heals without burning a pivot-refresh budget slot.
-  private[actors] var lastDispatchOrResponseMs: Long = System.currentTimeMillis()
+  var lastDispatchOrResponseMs: Long = System.currentTimeMillis()
   private val noActivityTimeoutMs: Long = 90_000L
   private val dispatchStallCheckInterval: FiniteDuration = 30.seconds
   // (Was `stallCheckTask: Option[Cancellable]` — now a keyed timer owned by `Behaviors.withTimers`,
@@ -372,10 +238,6 @@ private[actors] class AccountRangeCoordinatorImpl(
   // Reset to 0 whenever a dispatch succeeds (activeTasks.nonEmpty after tryRedispatch) or the
   // queue drains naturally (pendingTasks.isEmpty).
   private var pendingButIdleTicks: Int = 0
-
-  /** Count in-flight requests for a given peer (pipelining support). */
-  private def inFlightForPeer(peer: Peer): Int =
-    activeTasks.values.count(_._3.id == peer.id)
 
   /** Drain stale in-flight requests back to the pending queue (#1184). Sends `WorkerRequestCancelled` to each affected
     * worker — the worker is responsible for cancelling its own `SNAPRequestTracker` entry and resetting `currentTask`,
@@ -516,15 +378,7 @@ private[actors] class AccountRangeCoordinatorImpl(
 
   // Track last known available peers so we can re-dispatch after task failures
   // without waiting for the next PeerAvailable message.
-  private val knownAvailablePeers = mutable.Set[Peer]()
-
-  /** Number of active (non-stateless, non-snapless, non-cooling-down) snap-capable peers. Returns the actual count — no
-    * floor — so the progress log truthfully reports 0 when all peers are demoted (the case that drives the account
-    * stall). Previously this had `.max(1)` which masked the stall: progress log said "1 peers" while dispatch was
-    * starving on zero eligible peers. See PR-1 of `this-is-the-same-fluttering-eagle.md`.
-    */
-  private def activePeerCount: Int =
-    knownAvailablePeers.count(p => !isPeerStateless(p) && !isPeerSnapless(p) && !isPeerCoolingDown(p))
+  val knownAvailablePeers = mutable.Set[Peer]()
 
   // Periodic state-dump cadence — at most one INFO snapshot every 30 seconds. Time-based
   // throttling (not modulo) so a call-rate spike doesn't overflow the log pipe. Same pattern
@@ -533,47 +387,10 @@ private[actors] class AccountRangeCoordinatorImpl(
   private var lastStateLogMs: Long = 0L
   private val StateLogIntervalMs: Long = 10_000L
 
-  // Per-peer adaptive byte budgeting (ported from StorageRangeCoordinator).
-  // Geth's snap handler supports up to 2MB responses. Starting at 512KB and probing upward
-  // on responsive peers, scaling down on failures.
-  private lazy val minResponseBytes: BigInt = BigInt(minResponseBytesConfig)
-  private lazy val maxResponseBytes: BigInt = 2 * 1024 * 1024 // 2MB ceiling (Geth handler limit)
-  private lazy val initialResponseBytes: BigInt = BigInt(initialResponseBytesConfig)
-  private lazy val increaseFactor: Double = 1.25 // Scale up when 90%+ fill
-  private lazy val decreaseFactor: Double = 0.5 // Scale down on failure/empty
-
-  private val peerResponseBytesTarget = mutable.Map.empty[String, BigInt]
-
-  private def responseBytesTargetFor(peer: Peer): BigInt =
-    peerResponseBytesTarget
-      .getOrElseUpdate(peer.id.value, initialResponseBytes)
-      .max(minResponseBytes)
-      .min(maxResponseBytes)
-
-  private def adjustResponseBytesOnSuccess(peer: Peer, requested: BigInt, received: BigInt): Unit =
-    if requested > 0 && received * 10 >= requested * 9 && requested < maxResponseBytes then
-      val next = (requested.toDouble * increaseFactor).toLong
-      peerResponseBytesTarget.update(peer.id.value, BigInt(next).min(maxResponseBytes))
-
-  private def adjustResponseBytesOnFailure(peer: Peer, reason: String): Unit =
-    val cur = responseBytesTargetFor(peer)
-    val next = (cur.toDouble * decreaseFactor).toLong
-    peerResponseBytesTarget.update(peer.id.value, BigInt(next).max(minResponseBytes))
-    log.debug(
-      s"Reducing account responseBytes target for peer ${peer.id.value}: $cur -> ${peerResponseBytesTarget(peer.id.value)} ($reason)"
-    )
+  val peerResponseBytesTarget = mutable.Map.empty[String, BigInt]
 
   // Peer cooldown (best-effort): used for transient errors (timeouts, verification failures).
-  private val peerCooldownUntilMs = mutable.Map[String, Long]()
-  private lazy val peerCooldownDefault = 30.seconds
-  // Peer-scarcity threshold and the shorter cooldown applied below it. On a 1-3 peer pool a fixed 30s cooldown after a
-  // single timeout benches ~half the usable peers; two near-simultaneous timeouts can zero the eligible set for 30s.
-  // Scaling the cooldown down to a few seconds when peers are scarce keeps the pipe fed without giving up the
-  // back-off's purpose (briefly resting a peer that just failed). Abundant pools keep the full 30s.
-  private lazy val peerScarcityThreshold = 3
-  private lazy val peerCooldownScarce = 8.seconds
-  private def effectivePeerCooldown: FiniteDuration =
-    if knownAvailablePeers.size <= peerScarcityThreshold then peerCooldownScarce else peerCooldownDefault
+  val peerCooldownUntilMs = mutable.Map[String, Long]()
   // Short cooldown for "empty-without-proof" responses. These mean "I can't serve this
   // state root" — the peer is healthy, just doesn't have a snapshot at our pivot. 30s
   // was over-punitive here: in production we saw `cooling=5 eligible=11` snapshots,
@@ -584,22 +401,11 @@ private[actors] class AccountRangeCoordinatorImpl(
   // FIFO fairness within same in-flight tier: tracks last dispatch time per peer so that
   // ties in inFlightForPeer sort are broken by least-recently-served order rather than
   // mutable.Set hash order (which is stable/deterministic and permanently starves some peers).
-  private val lastDispatchTimeMs = mutable.Map.empty[String, Long]
-
-  private def isPeerCoolingDown(peer: Peer): Boolean =
-    peerCooldownUntilMs.get(peer.id.value).exists(_ > System.currentTimeMillis())
-
-  private def recordPeerCooldown(peer: Peer, reason: String, duration: FiniteDuration): Unit =
-    val until = System.currentTimeMillis() + duration.toMillis
-    peerCooldownUntilMs.put(peer.id.value, until)
-    log.info(s"[ACCOUNT-COOLDOWN] peer ${peer.id.value.take(8)} cooling ${duration.toSeconds}s: $reason")
+  val lastDispatchTimeMs = mutable.Map.empty[String, Long]
 
   // Pivot refresh backoff: prevents rapid-fire pivot refresh requests when all peers are stateless.
   // Exponential backoff from 60s to 5min.
-  private var consecutiveUnproductiveRefreshes: Int = 0
-  private var lastPivotRefreshTimeMs: Long = 0L
-  private lazy val minRefreshIntervalMs: Long = 60000L // 60s minimum between refreshes
-  private lazy val maxRefreshIntervalMs: Long = 300000L // 5min ceiling
+  var consecutiveUnproductiveRefreshes: Int = 0
 
   // Dedicated dispatcher for trie finalisation. Tests inject their own
   // `ExecutionContext`; production looks up `account-trie-dispatcher` from `pekko.conf`.
@@ -1206,106 +1012,6 @@ private[actors] class AccountRangeCoordinatorImpl(
       Behaviors.same
     }
 
-  // Cap total workers to activePeerCount * maxInFlightPerPeer — enough to saturate all peers.
-  // Dynamic: use current SNAP peer count instead of the creation-time concurrency value, so
-  // coordinators started with 1 peer can scale up to 30 workers when 6 peers arrive post-pivot.
-  // go-ethereum assigns to ALL idle peers simultaneously with no coordinator-level cap.
-  private def maxWorkers: Int =
-    math.max(concurrency, knownAvailablePeers.count(!isPeerStateless(_))) * maxInFlightPerPeer
-
-  private def createWorker(): WorkerRef =
-    workerSeq += 1
-    val worker: WorkerRef = ctx.spawn(
-      Behaviors
-        .supervise(
-          AccountRangeWorker(
-            coordinator = ctx.self,
-            networkPeerManager = networkPeerManager,
-            requestTracker = requestTracker
-          )
-        )
-        .onFailure[Throwable](SupervisorStrategy.restart.withLimit(5, 1.minute)),
-      s"account-range-worker-$workerSeq",
-      org.apache.pekko.actor.typed.Props.empty.withDispatcherFromConfig("sync-dispatcher")
-    )
-    // Typed death watch — delivers WorkerTerminated(worker) to our mailbox if the worker stops.
-    ctx.watchWith(worker, WorkerTerminated(worker))
-    workers += worker
-    idleWorkers += worker
-    log.debug(s"Created worker ${worker.path.name}, total workers: ${workers.size}")
-    worker
-
-  private def markWorkerIdle(worker: WorkerRef): Unit =
-    if workers.contains(worker) then idleWorkers += worker
-
-  /** Dispatch up to maxInFlightPerPeer tasks to the given peer (pipelining). Mirrors
-    * ByteCodeCoordinator.dispatchIfPossible — the proven pattern for SNAP sync.
-    *
-    * No-op while any downstream coordinator (storage OR bytecode) is over its high-water mark. Workers already in
-    * flight always run to completion, so existing work continues to drain, but we stop producing new tasks (which would
-    * in turn enqueue more storage / bytecode work) until every signalling downstream has released.
-    */
-  private def dispatchIfPossible(peer: Peer): Unit =
-    if pendingTasks.nonEmpty && intakeGateClosed then armIntakeGateRecheck()
-    if pendingTasks.nonEmpty && !downstreamBackpressureActive && !intakeGateClosed then
-      var inflight = inFlightForPeer(peer)
-      var noWorkerAvailable = false
-      while !noWorkerAvailable && pendingTasks.nonEmpty && inflight < maxInFlightPerPeer do
-        val workerOpt: Option[WorkerRef] =
-          idleWorkers.headOption.orElse {
-            if workers.size < maxWorkers then Some(createWorker()) else None
-          }
-
-        workerOpt match
-          case Some(worker) =>
-            dispatchNextTaskToWorker(worker, peer)
-            inflight += 1
-          case None =>
-            noWorkerAvailable = true
-
-  /** Internal: record a back-pressure transition from one named downstream and re-engage dispatch once every signalling
-    * source has released. ANY-OF semantics: pause while at least one source is engaged; resume only when the set is
-    * fully empty.
-    */
-  private def applyBackpressureChange(source: String, paused: Boolean): Unit =
-    val wasActive = downstreamBackpressureActive
-    if paused then backpressureSources += source else backpressureSources -= source
-    val nowActive = downstreamBackpressureActive
-    if wasActive == nowActive then
-      // Either a duplicate transition for the same source or a partial release that left another
-      // source still engaged. No state change worth logging at INFO.
-      log.debug(
-        s"Back-pressure source '$source' set paused=$paused; active sources now: ${backpressureSources.mkString(",")}"
-      )
-    else if nowActive then
-      log.info(
-        s"Downstream back-pressure ENGAGED (source=$source) — pausing new account-range dispatches. " +
-          s"${pendingTasks.size} pending, ${activeTasks.size} in flight (will complete normally)."
-      )
-    else
-      log.info(
-        s"Downstream back-pressure RELEASED (source=$source was the last engaged source) — resuming. " +
-          s"${pendingTasks.size} pending."
-      )
-      tryRedispatchPendingTasks()
-      knownAvailablePeers.filterNot(isPeerStateless).foreach(dispatchIfPossible)
-
-  private def dispatchNextTaskToWorker(worker: WorkerRef, peer: Peer): Unit =
-    if pendingTasks.nonEmpty then
-      // Mark worker busy
-      idleWorkers -= worker
-
-      val task = pendingTasks.dequeue().copy(pending = true)
-
-      val requestId = requestTracker.generateRequestId()
-      activeTasks.put(requestId, (task, worker, peer))
-      val responseBytes = responseBytesTargetFor(peer)
-
-      worker ! FetchAccountRange(task, peer, requestId, responseBytes)
-      // #1184: progress signal — used by CheckDispatchStalled.
-      lastDispatchOrResponseMs = System.currentTimeMillis()
-      lastDispatchTimeMs.update(peer.id.value, lastDispatchOrResponseMs)
-
   // How many accounts to insert per chunk before yielding to the actor mailbox.
   // SnapHashTrie inserts are O(depth) memory + O(1) amortised compute (~2-20ms per 2000 accounts).
   private val storeChunkSize = 2000
@@ -1538,7 +1244,7 @@ private[actors] class AccountRangeCoordinatorImpl(
       pendingTasks.enqueue(task.copy(requeueCount = newCount))
     tryRedispatchPendingTasks()
 
-  private def tryRedispatchPendingTasks(): Unit =
+  def tryRedispatchPendingTasks(): Unit =
     if pendingTasks.nonEmpty then
       var eligiblePeers = knownAvailablePeers
         .filterNot(isPeerStateless)
