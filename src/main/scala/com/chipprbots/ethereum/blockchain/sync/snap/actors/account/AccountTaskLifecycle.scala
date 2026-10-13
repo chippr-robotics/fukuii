@@ -8,7 +8,7 @@ import scala.concurrent.duration.*
 import com.chipprbots.ethereum.blockchain.sync.snap.AccountTask
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController.PivotStateUnservable
-import com.chipprbots.ethereum.blockchain.sync.snap.actors.*
+import com.chipprbots.ethereum.blockchain.sync.snap.actors.AccountRangeCoordinator
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.AccountRangeCoordinator.CheckCompletion
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.AccountRangeCoordinator.StoreAccountChunk
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.AccountRangeCoordinator.WorkerRef
@@ -61,8 +61,9 @@ private[actors] trait ContractWorkCarryApi:
   * stale in-flight requests back to the queue, and the redispatch of pending tasks to every eligible peer with the
   * cooldown floor. The coordinator core keeps the behaviour arms that call it.
   */
-private[actors] trait AccountTaskLifecycle:
-  self: AccountRangeCoordinatorImpl =>
+private[actors] trait AccountTaskLifecycle extends AccountTaskLifecycleApi:
+  self: AccountTaskLifecycleState & AccountRangeEnv & AccountPeerDispatchApi & AccountProgressApi &
+    ContractWorkCarryApi =>
 
   /** Drain stale in-flight requests back to the pending queue (#1184). Sends `WorkerRequestCancelled` to each affected
     * worker — the worker is responsible for cancelling its own `SNAPRequestTracker` entry and resetting `currentTask`,

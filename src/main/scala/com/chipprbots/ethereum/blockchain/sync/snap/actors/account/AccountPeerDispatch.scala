@@ -75,7 +75,7 @@ private[actors] trait AccountPeerDispatchApi:
   * `responseBytes` budget; and the worker pool: the per-peer in-flight cap, worker creation and dispatch of the next
   * pending task. The coordinator core keeps the behaviour arms that call it.
   */
-private[actors] trait AccountPeerDispatch:
+private[actors] trait AccountPeerDispatch extends AccountPeerDispatchApi:
   self: AccountPeerDispatchState & AccountRangeEnv & AccountTaskLifecycleApi =>
 
   def downstreamBackpressureActive: Boolean = backpressureSources.nonEmpty
