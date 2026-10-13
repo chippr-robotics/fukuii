@@ -50,8 +50,8 @@ private[actors] trait ByteCodeQueueApi:
   * and the worker pool: assigning a pending task to an idle or new worker, the per-peer in-flight cap, and redispatch
   * to every known peer. The coordinator core keeps the behaviour arms that call it.
   */
-private[actors] trait ByteCodeDispatch:
-  self: ByteCodeCoordinatorImpl =>
+private[actors] trait ByteCodeDispatch extends ByteCodeDispatchApi:
+  self: ByteCodeDispatchState & ByteCodeEnv & ByteCodeQueueApi =>
 
   def nowMillis: Long = System.currentTimeMillis()
 

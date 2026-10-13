@@ -11,7 +11,7 @@ import scala.concurrent.duration.*
 
 import com.chipprbots.ethereum.blockchain.sync.snap.*
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.bytecode.*
-import com.chipprbots.ethereum.db.storage.EvmCodeStorage
+import com.chipprbots.ethereum.blockchain.sync.snap.controller.StateIngest
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor
 import com.chipprbots.ethereum.network.Peer
 import com.chipprbots.ethereum.network.p2p.messages.SNAP.ByteCodes
@@ -31,7 +31,7 @@ import com.chipprbots.ethereum.network.p2p.messages.SNAP.ByteCodes
 private[actors] class ByteCodeCoordinatorImpl(
     val context: ActorContext[ByteCodeCoordinator.Command],
     timers: TimerScheduler[ByteCodeCoordinator.Command],
-    val evmCodeStorage: EvmCodeStorage,
+    val stateIngest: StateIngest,
     val networkPeerManager: org.apache.pekko.actor.typed.ActorRef[NetworkPeerManagerActor.Command],
     val requestTracker: SNAPRequestTracker,
     batchSize: Int,
@@ -42,7 +42,12 @@ private[actors] class ByteCodeCoordinatorImpl(
     // Spec 014: shared admission gate (counts codeHashes, not batched tasks). None = not wired (tests).
     val intakeBudget: Option[com.chipprbots.ethereum.blockchain.sync.snap.SnapIntakeBudget] = None
 ) extends ByteCodeDispatch
-    with ByteCodeResponseHandling:
+    with ByteCodeResponseHandling
+    with ByteCodeEnv
+    with ByteCodeDispatchState
+    with ByteCodeResponseHandlingState
+    with ByteCodeQueueApi
+    with ByteCodeCompletionApi:
 
   import ByteCodeCoordinator.*
 
@@ -514,7 +519,7 @@ object ByteCodeCoordinator:
     )
 
   def apply(
-      evmCodeStorage: EvmCodeStorage,
+      stateIngest: StateIngest,
       networkPeerManager: org.apache.pekko.actor.typed.ActorRef[NetworkPeerManagerActor.Command],
       requestTracker: SNAPRequestTracker,
       batchSize: Int,
@@ -529,7 +534,7 @@ object ByteCodeCoordinator:
         new ByteCodeCoordinatorImpl(
           context,
           timers,
-          evmCodeStorage,
+          stateIngest,
           networkPeerManager,
           requestTracker,
           batchSize,

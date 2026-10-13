@@ -6,7 +6,6 @@ import scala.collection.mutable
 
 import com.chipprbots.ethereum.blockchain.sync.snap.ByteCodeTask
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController
-import com.chipprbots.ethereum.blockchain.sync.snap.actors.*
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.ByteCodeCoordinator.ActiveByteCodeRequest
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.ByteCodeCoordinator.ByteCodeWorkerRelease
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.ByteCodeCoordinator.ValidatedByteCodes
@@ -38,7 +37,7 @@ private[actors] trait ByteCodeCompletionApi:
   * `AddByteCodeTasks` arms: the #1501 `skipPresent` check and the dedup pass.
   */
 private[actors] trait ByteCodeResponseHandling:
-  self: ByteCodeCoordinatorImpl =>
+  self: ByteCodeResponseHandlingState & ByteCodeEnv & ByteCodeDispatchApi & ByteCodeCompletionApi =>
 
   private lazy val maxFailuresPerHash: Int = 50
 
@@ -192,8 +191,8 @@ private[actors] trait ByteCodeResponseHandling:
 
   private def storeBytecodesWithHashes(codesByHash: Seq[(ByteString, ByteString)]): Either[String, Unit] =
     try
-      val updates = codesByHash.foldLeft(evmCodeStorage.emptyBatchUpdate) { case (batchUpdate, (codeHash, code)) =>
-        batchUpdate.and(evmCodeStorage.put(codeHash, code))
+      val updates = codesByHash.foldLeft(stateIngest.bytecode.emptyBatchUpdate) { case (batchUpdate, (codeHash, code)) =>
+        batchUpdate.and(stateIngest.bytecode.put(codeHash, code))
       }
 
       updates.commit()
@@ -210,7 +209,7 @@ private[actors] trait ByteCodeResponseHandling:
     // Bytecode is content-addressed and hash-checked on write, so one already in EvmCodeStorage is done: skip it.
     // This lookup used to run on the controller thread (2.5M RocksDB reads per Sepolia resume — the mailbox lag
     // that delayed the back-pressure signal by minutes, spec 014); here it costs this coordinator, not the controller.
-    if skipPresent then received.filter(h => evmCodeStorage.get(h).isEmpty) else received
+    if skipPresent then received.filter(h => stateIngest.bytecode.get(h).isEmpty) else received
 
   /** Filter and deduplicate codeHashes. Input is already Bloom-filtered by AccountRangeCoordinator (~0.01% FPR), so
     * this is a final dedup pass over ~2M entries (not 73.5M). Bug 20 fix.

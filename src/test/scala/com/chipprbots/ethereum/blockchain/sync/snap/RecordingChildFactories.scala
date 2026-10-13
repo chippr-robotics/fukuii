@@ -20,6 +20,7 @@ import com.chipprbots.ethereum.blockchain.sync.snap.actors.ByteCodeCoordinator.B
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.StorageRangeCoordinator
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.TrieNodeHealingCoordinator
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.ChildFactories
+import com.chipprbots.ethereum.blockchain.sync.snap.controller.StateIngest
 import com.chipprbots.ethereum.db.storage.AppStateStorage
 import com.chipprbots.ethereum.db.storage.BfsQueueStorage
 import com.chipprbots.ethereum.db.storage.EvmCodeStorage
@@ -355,7 +356,7 @@ final class RecordingChildFactories(
     stub(ChildStopped.Healing, healingInbox)
 
   override def byteCodeCoordinator(
-      evmCodeStorage: EvmCodeStorage,
+      stateIngest: StateIngest,
       networkPeerManager: ActorRef[NetworkPeerManagerActor.Command],
       requestTracker: SNAPRequestTracker,
       batchSize: Int,
@@ -367,7 +368,7 @@ final class RecordingChildFactories(
   ): Behavior[ByteCodeCoordinator.Command] =
     byteCodeSpawns.incrementAndGet()
     spawns ! ChildSpawn.ByteCode(
-      evmCodeStorage,
+      stateIngest.bytecode,
       networkPeerManager,
       requestTracker,
       batchSize,
