@@ -656,7 +656,7 @@ private[snap] trait HealingOrchestrator
             Behaviors
               .supervise(
                 childFactories.byteCodeCoordinator(
-                  evmCodeStorage = stateIngest.bytecode,
+                  stateIngest = stateIngest,
                   networkPeerManager = networkPeerManager,
                   requestTracker = requestTracker,
                   batchSize = ByteCodeTask.DEFAULT_BATCH_SIZE,

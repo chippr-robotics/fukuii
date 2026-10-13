@@ -128,7 +128,7 @@ private[snap] trait DownloadSupervisor extends AccountRangeStartApi with ByteCod
           Behaviors
             .supervise(
               childFactories.byteCodeCoordinator(
-                evmCodeStorage = stateIngest.bytecode,
+                stateIngest = stateIngest,
                 networkPeerManager = networkPeerManager,
                 requestTracker = requestTracker,
                 batchSize = ByteCodeTask.DEFAULT_BATCH_SIZE,
@@ -830,7 +830,7 @@ private[snap] trait DownloadSupervisor extends AccountRangeStartApi with ByteCod
           Behaviors
             .supervise(
               childFactories.byteCodeCoordinator(
-                evmCodeStorage = stateIngest.bytecode,
+                stateIngest = stateIngest,
                 networkPeerManager = networkPeerManager,
                 requestTracker = requestTracker,
                 batchSize = ByteCodeTask.DEFAULT_BATCH_SIZE,

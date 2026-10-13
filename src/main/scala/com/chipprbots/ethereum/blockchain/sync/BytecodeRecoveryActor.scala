@@ -190,7 +190,7 @@ object BytecodeRecoveryActor:
                     Behaviors
                       .supervise(
                         snap.actors.ByteCodeCoordinator(
-                          evmCodeStorage = stateIngest.bytecode,
+                          stateIngest = stateIngest,
                           networkPeerManager = networkPeerManager,
                           requestTracker = requestTracker,
                           batchSize = snap.ByteCodeTask.DEFAULT_BATCH_SIZE,

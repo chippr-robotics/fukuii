@@ -1348,7 +1348,8 @@ until `StateAccess` exists (FR-042).
     - `verify.py` (#1583's): OK. `[adopts]` BytecodeRecoveryActor 9 lists / 5 substitutions, StorageRecoveryActor 9 / 6,
       SyncController 6 / 0, StateIngest visibility widened on 2 lines. Storage total 635, unchanged (the recovery actors
       are outside `snap/`), so no baseline change.
-    - Owed: the forge and vault reviews, and the Mordor recovery-start validation run.
+    - Owed: the forge and vault reviews, and the Mordor recovery-start validation run. The live recovery-start check is
+      deferred to the first natural trigger and to the C-B1/C-S* Mordor runs (user decision 2026-10-12).
 - [ ] T060d [SI] **D-T060-1: `StateIngest` members for the derived stores** (user decision 2026-10-12; before T064;
   a capability-mode PR, `# capability: StateIngest`, an extension). Members for the per-pivot `MptStorage` (a method),
   `SnapStorageDoneStorage`, `SnapSyncProgressStorage`, `HealingFrontierStorage` and `BfsQueueStorage`, handing out the
@@ -1357,7 +1358,7 @@ until `StateAccess` exists (FR-042).
   healing stores are lazy vals of `HealingOrchestrator` today (a strict accessor would build them at construction), and
   a `getBackingStorage` forwarder returns a new `MptStorage` per call on the Hash scheme, so the core's per-pivot cache
   stays the only caller (forge).
-- [ ] T061 [C-B1] ByteCode: `ByteCodeDispatch`, `ByteCodeResponseHandling` (the #1501 `skipPresent` check moves
+- [x] T061 [C-B1] ByteCode: `ByteCodeDispatch`, `ByteCodeResponseHandling` (the #1501 `skipPresent` check moves
   unchanged). Narrowing takes `StateIngest` (code writes, presence check), never `StateAccess`; lowers the T054
   baseline total.
   - T060: needs T060b (done) and D-T060-2 (T060c merged first). Runs in adoption mode,
@@ -1368,6 +1369,36 @@ until `StateAccess` exists (FR-042).
     - Adopts `evmCodeStorage` → `bytecode`. Projected total 678 → 662 under counter v1, 635 → 619 under counter v2
       (the baseline since T060b); the T060b dry run measured it.
     - Baselines: State 9 + 7, Api 1 + 9 (R14b). Add vault.
+  - **As built** (branch `refactor/snap-016-cb1-bytecode`, six commits; no sbt or JVM run, CI compiles and tests).
+    (1) `# moved:` `WorkerRef`, `ActiveByteCodeRequest` and `ValidatedByteCodes` from the Impl into the companion
+    (`private[actors]`; a case class is not a member a module trait may hold, FR-016 (d), so `ValidatedByteCodes`
+    goes there too). (2) Lift: the `skipPresent` line becomes `skipPresentCodeHashes(received, skipPresent)`, verbatim,
+    bound at the same point of the `AddByteCodeTasks` arm. (3) Prerequisite: `ByteCodeEnv`, the two `<Module>State`
+    traits and the three Api traits are declared in `actors/bytecode/` (the adoption commit edits existing files only
+    and adds no import but the capability's); the constructor values the modules read become `val`s; the Impl goes
+    `private` → `private[actors]`; the six module-only constants become `private lazy val`s (pure: yes, literal
+    initializers: `maxFailuresPerHash`, `min`/`max`/`initialResponseBytes`, `increaseFactor`, `decreaseFactor`).
+    (4) The move commit takes 25 members byte-identical into `ByteCodeDispatch` (19, with `workerSeq`) and
+    `ByteCodeResponseHandling` (6, with the lifted check), the Impl closing `) extends ByteCodeDispatch` /
+    `with ByteCodeResponseHandling:`. (5) The narrowing commit, `# adopts: StateIngest ByteCodeCoordinator`: the
+    self-types name `ByteCodeDispatchState & ByteCodeEnv & ByteCodeQueueApi` and
+    `ByteCodeResponseHandlingState & ByteCodeEnv & ByteCodeDispatchApi & ByteCodeCompletionApi`; `evmCodeStorage`
+    → `stateIngest` in the Impl constructor, `apply`, `new`, `ChildFactories.byteCodeCoordinator`, the three spawn
+    sites and `BytecodeRecoveryActor`; three call sites read `stateIngest.bytecode`. `ChildFactoriesSpec` unchanged.
+    (6) Docs.
+    - Counts against R14b: `ByteCodeDispatch` State 9 (= 9), Api 1 (= 1, `pendingHashCount`);
+      `ByteCodeResponseHandling` State 7 (= 7), Api 8 (R14b 9: the seven `ByteCodeDispatchApi` calls and
+      `checkCompletion`; R14b's `active` was a name match on the `case Some(active)` binding). `ByteCodeEnv` 9,
+      reported as a capability trait (G9): `context`, `log`, `networkPeerManager`, `requestTracker`,
+      `cooldownConfig`, `snapSyncController`, `intakeBudget`, `stateIngest`, `maxWorkers`.
+    - Storage total **635 → 619** (counter v2), the projection: `ByteCodeCoordinator.scala` 10 → 0,
+      `actors/bytecode/ByteCodeResponseHandling.scala` 0 → 4 (3 `stateIngest.bytecode`, the batch `.commit()`),
+      `ChildFactories` 75 → 71, `DownloadSupervisor` 56 → 52, `HealingOrchestrator` 45 → 43.
+    - Stub tests (`# new-tests:`): `ByteCodeDispatchSpec` (5 cases) and `ByteCodeResponseHandlingSpec` (7 cases).
+      `ByteCodeCoordinatorSpec`'s spawn helper and `RecordingChildFactories`' override take `stateIngest`; no assertion
+      changed.
+    - Owed: the vault review (the `skipPresent` presence check and the code-write path now read through
+      `StateIngest.bytecode`), and a Mordor SNAP through the bytecode phase or a bytecode-recovery start.
 - [ ] T062 [C-A1] `AccountPeerDispatch` (includes the #1501 intake gate; T060: plus `maybeRequestPivotRefresh`; a
   zero-reference slice, so the PR records the grep and the total is unchanged). Narrowing takes `StateIngest` where it touches
   storage, never `StateAccess`; lowers the baseline total.

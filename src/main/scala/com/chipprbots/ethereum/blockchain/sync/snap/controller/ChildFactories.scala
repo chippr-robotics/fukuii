@@ -210,7 +210,7 @@ trait ChildFactories:
     )
 
   def byteCodeCoordinator(
-      evmCodeStorage: EvmCodeStorage,
+      stateIngest: StateIngest,
       networkPeerManager: TypedActorRef[NetworkPeerManagerActor.Command],
       requestTracker: SNAPRequestTracker,
       batchSize: Int,
@@ -221,7 +221,7 @@ trait ChildFactories:
       intakeBudget: Option[SnapIntakeBudget] = None
   ): Behavior[ByteCodeCoordinator.Command] =
     ByteCodeCoordinator(
-      evmCodeStorage = evmCodeStorage,
+      stateIngest = stateIngest,
       networkPeerManager = networkPeerManager,
       requestTracker = requestTracker,
       batchSize = batchSize,
