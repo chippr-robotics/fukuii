@@ -894,23 +894,6 @@ private[actors] class StorageRangeCoordinatorImpl(
   // force-complete starts a new `processingGeneration`: unapplied responses are re-queued (refresh) or abandoned
   // (force-complete), and results of the old generation are dropped — nothing is written for a superseded root.
 
-  /** A response that completed its request and waits to be applied. Mutable fields are touched only on the actor. */
-  final private[actors] class PendingResponse(
-      val seq: Long,
-      val generation: Long,
-      val peer: Peer,
-      val tasks: Seq[StorageTask],
-      val requestedBytes: BigInt,
-      val response: StorageRanges,
-      val bytes: Long,
-      val receivedAtNs: Long
-  ):
-    var verified: Option[VerifiedStorageResponse] = None
-    var ready: Boolean = false
-    var submitted: Boolean = false
-    // The peer disconnected after answering: apply its data, but do not dispatch to it again.
-    var peerGone: Boolean = false
-
   /** Responses in arrival order, applied from the head only. Package-private for tests. */
   private[actors] val pendingResponses = mutable.Queue.empty[PendingResponse]
   private[actors] var pendingResponseBytes: Long = 0L
@@ -2595,6 +2578,23 @@ object StorageRangeCoordinator:
       generation: Long,
       outcome: Try[VerifiedStorageResponse]
   ) extends Command
+
+  /** A response that completed its request and waits to be applied. Mutable fields are touched only on the actor. */
+  final private[actors] class PendingResponse(
+      val seq: Long,
+      val generation: Long,
+      val peer: Peer,
+      val tasks: Seq[StorageTask],
+      val requestedBytes: BigInt,
+      val response: StorageRanges,
+      val bytes: Long,
+      val receivedAtNs: Long
+  ):
+    var verified: Option[VerifiedStorageResponse] = None
+    var ready: Boolean = false
+    var submitted: Boolean = false
+    // The peer disconnected after answering: apply its data, but do not dispatch to it again.
+    var peerGone: Boolean = false
 
   private val ZeroSlotHash: ByteString = ByteString(Array.fill(32)(0.toByte))
 
