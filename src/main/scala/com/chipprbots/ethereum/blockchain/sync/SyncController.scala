@@ -37,6 +37,8 @@ import com.chipprbots.ethereum.db.storage.FastSyncStateStorage
 import com.chipprbots.ethereum.db.storage.FlatSlotStorage
 import com.chipprbots.ethereum.db.storage.MptStorage
 import com.chipprbots.ethereum.db.storage.PathNodeStorage
+import com.chipprbots.ethereum.db.storage.SnapStorageDoneStorage
+import com.chipprbots.ethereum.db.storage.SnapSyncProgressStorage
 import com.chipprbots.ethereum.db.storage.StateStorage
 import com.chipprbots.ethereum.domain.Blockchain
 import com.chipprbots.ethereum.domain.BlockchainReader
@@ -1914,6 +1916,8 @@ object SyncController:
               Some(new PathNodeStorage(flatSlotStorage.dataSource))
             else None
           val validatorFactory: MptStorage => StateValidator = new StateValidator(_)
+          val snapProgressStorage = new SnapSyncProgressStorage(appStateStorage.dataSource)
+          val storageDoneStorage: SnapStorageDoneStorage = new SnapStorageDoneStorage(flatSlotStorage.dataSource)
           val stateIngest: StateIngest = StateIngest(
             appStateStorage,
             stateStorage,
@@ -1923,7 +1927,9 @@ object SyncController:
             blockchainReader,
             blockchainWriter,
             validatorFactory,
-            StateIngest.Durability.Default
+            StateIngest.Durability.Default,
+            snapProgressStorage,
+            storageDoneStorage
           )
 
           if snapSyncConfig.parallelRecoveryScan then

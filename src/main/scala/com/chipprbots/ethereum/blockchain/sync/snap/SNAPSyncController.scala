@@ -231,7 +231,9 @@ private class SNAPSyncControllerImpl(
     blockchainReader,
     blockchainWriter,
     validatorFactory,
-    StateIngest.Durability.Default
+    StateIngest.Durability.Default,
+    snapProgressStorage,
+    storageDoneStorage
   )
 
   // Storage-task completion markers (prefixed keys in the app-state column family): written by StorageRangeCoordinator

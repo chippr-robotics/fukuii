@@ -6,6 +6,8 @@ import com.chipprbots.ethereum.db.storage.EvmCodeStorage
 import com.chipprbots.ethereum.db.storage.FlatSlotStorage
 import com.chipprbots.ethereum.db.storage.MptStorage
 import com.chipprbots.ethereum.db.storage.PathNodeStorage
+import com.chipprbots.ethereum.db.storage.SnapStorageDoneStorage
+import com.chipprbots.ethereum.db.storage.SnapSyncProgressStorage
 import com.chipprbots.ethereum.db.storage.StateStorage
 import com.chipprbots.ethereum.domain.BlockchainReader
 import com.chipprbots.ethereum.domain.BlockchainWriter
@@ -33,3 +35,11 @@ final private[snap] class ForwardingStateIngest(
   def chainWriter: BlockchainWriter = writer
   def validatorFactory: MptStorage => StateValidator = validators
   def durability: StateIngest.Durability = StateIngest.Durability.Default
+  // The derived stores (spec 016 T060d): `trieStore` forwards as the production capability does; no module reaches the
+  // other two through the capability yet, so they fail loudly.
+  def trieStore(pivot: BigInt): MptStorage = tries.getBackingStorage(pivot)
+  def snapProgress: SnapSyncProgressStorage = notReached("snapProgress")
+  def storageDone: SnapStorageDoneStorage = notReached("storageDone")
+
+  private def notReached(member: String): Nothing =
+    throw new UnsupportedOperationException(s"module stub read StateIngest.$member")

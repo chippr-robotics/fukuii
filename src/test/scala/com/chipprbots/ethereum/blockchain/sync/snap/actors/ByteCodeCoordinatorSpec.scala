@@ -19,6 +19,8 @@ import com.chipprbots.ethereum.db.storage.EvmCodeStorage
 import com.chipprbots.ethereum.db.storage.FlatSlotStorage
 import com.chipprbots.ethereum.db.storage.MptStorage
 import com.chipprbots.ethereum.db.storage.PathNodeStorage
+import com.chipprbots.ethereum.db.storage.SnapStorageDoneStorage
+import com.chipprbots.ethereum.db.storage.SnapSyncProgressStorage
 import com.chipprbots.ethereum.db.storage.StateStorage
 import com.chipprbots.ethereum.domain.BlockchainReader
 import com.chipprbots.ethereum.domain.BlockchainWriter
@@ -87,6 +89,9 @@ class ByteCodeCoordinatorSpec extends ScalaTestWithActorTestKit() with AnyFlatSp
       def chainWriter: BlockchainWriter = notReached("chainWriter")
       def validatorFactory: MptStorage => StateValidator = notReached("validatorFactory")
       def durability: StateIngest.Durability = StateIngest.Durability.Default
+      def trieStore(pivot: BigInt): MptStorage = notReached("trieStore")
+      def snapProgress: SnapSyncProgressStorage = notReached("snapProgress")
+      def storageDone: SnapStorageDoneStorage = notReached("storageDone")
 
   private def notReached(member: String): Nothing =
     throw new UnsupportedOperationException(s"ByteCodeCoordinator read StateIngest.$member")

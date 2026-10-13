@@ -104,7 +104,7 @@ private[snap] trait SnapResumePlanner
 
   def getOrCreateMptStorage(pivotBlockNumber: BigInt): MptStorage =
     mptStorage.getOrElse {
-      val storage = stateIngest.stateTries.getBackingStorage(pivotBlockNumber)
+      val storage = stateIngest.trieStore(pivotBlockNumber)
       mptStorage = Some(storage)
       ctx.log.info(s"Created writable MptStorage for pivot block $pivotBlockNumber")
       storage
