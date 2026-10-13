@@ -368,7 +368,7 @@ decision 2026-10-11):** T055 does not change the spawn arguments; each C-* narro
 | C-B1 | ByteCode → `actors/bytecode/ByteCodeDispatch.scala`, `ByteCodeResponseHandling.scala` | cooldown, response bytes, assign/dispatch/redispatch; `handleByteCodesResponse`, `validateReturnedCodes`, `storeBytecodesWithHashes`, `filterAndDedupeCodeHashes`, the #1501 `skipPresent` check (T060: it is a line of the `AddByteCodeTasks` arm, so it moves only after a lift commit carves it into a method; otherwise it stays in the core) | one PR (coordinator is 870 lines); adopts `bytecode` (gated by D-T060-2) | ~320 |
 | C-A1 | Account → `actors/account/AccountPeerDispatch.scala` | stateless/snapless marking (with `maybeRequestPivotRefresh`, T060), cooldown, response bytes, `inFlightForPeer`, `dispatchIfPossible`, backpressure + #1501 intake gate | `[ACCOUNT-COOLDOWN]`, `[ACCOUNT-IDLE]`; zero-reference (T060) | ~300 |
 | C-A2 | Account → `actors/account/AccountTaskLifecycle.scala` | `handleTaskComplete`/`Failed`, `requeueOrEscalate`, redispatch, `drainActiveTasks` (T060), 32-byte hash math, `completeEmptyTaskRange`; `classifyIdleStall` stays with the core's `CheckDispatchStalled` arm (T060) | site of "stale-pivot empty ranges as scarcity"; zero-reference (T060) | ~320 |
-| C-A3 | Account → `actors/account/AccountTrieAssembly.scala` | `getOrCreateTaskStackTrie`, `handleStoreAccountChunk`, `finalizeTrie`, `finalizing` behaviour | StackTrie resume (#1487) | ~300 |
+| C-A3 | Account → `actors/account/AccountTrieAssembly.scala` | `getOrCreateTaskStackTrie`, `handleStoreAccountChunk`, `finalizeTrie`, `finalizing` behaviour | StackTrie resume (#1487); adopts `pathNodes`, `mptStorage` stays explicit (Amendment 2026-10-13) | ~300 |
 | C-A4 | Account → `actors/account/ContractWorkCarry.scala` | `identifyContractAccounts`, task-file writing, `syncTaskFiles`, `replayCarriedChunk`, `readContractFile`, `readUniqueCodeHashes`; `copyPrefix` stays in the companion: only core vals call it (T060) | **vault**; #1453/#1487/#1498 and #1501 invariants | ~350 |
 | C-S1 | Storage → `actors/storage/StoragePeerDispatch.scala` | stateless, `SnapPeerHealth` (with `handleTimeout`, T060), cooldown, batch sizing, response bytes, `selectFloorPeer` use, `redispatchEligible` | `[STORAGE-PEER-HEALTH]`, `[STORAGE-FLOOR]`; zero-reference in substance (T060) | ~480 |
 | C-S2 | Storage → `actors/storage/StorageOrderedApply.scala` | `ReadyStorageChunk` ordering, `drainOrderedStorageChunks`, `applyReadyStorageChunk`, per-account trie get/commit/**reset**, `flushTrieNodeWrites`, `writePrebuiltTrie` (#1533, T060) | **vault**; site of the "pivot refresh discards in-flight tries" task; `flushTrieNodeWrites` writes through `pns.dataSource.update` (raw, T060) | ~360 |
@@ -761,3 +761,21 @@ marked changes.
   - *Counter version 2.* The ratchet no longer counts the coordinators' reviewed false positives and does count
     `storageDone`: 678 (v1) = 635 (v2), re-baselined with a justification line. C-B1's projection is 635 → 619
     (678 → 662 under v1).
+
+## Amendment 2026-10-13: session values stay explicit parameters (FR-042 exception)
+
+User decision of 2026-10-13, after T064 (C-A3) stopped before code. Nothing above that is not marked changes.
+
+- **The finding.** `StateIngest` has no parameterless member for a coordinator's `mptStorage`. The spawn sites pass the
+  core's per-pivot cached instance (`getOrCreateMptStorage`), while `trieStore(pivot)` returns a new `MptStorage` per
+  call on the Hash scheme (ETC) and must keep the core's cache as its only caller (D-T060-1 as built). Substituting it
+  would change the store a coordinator writes to, and the adoption gate maps a dropped parameter only to a
+  parameterless member. ARC's `storageDone` is a per-spawn `Option` (`Option.when(recordStorageDone)(...)`), which
+  `stateIngest.storageDone` cannot express.
+- **The decision.** The pivot-bound `MptStorage` and the per-spawn `Option[SnapStorageDoneStorage]` are session values,
+  not capabilities. They stay explicit `apply` parameters (Impl constructor, `ChildFactories`, spawn sites), reached by
+  the module traits through the coordinator's `<Coordinator>Env`, and the ratchet keeps counting them. Everything else
+  adopts `StateIngest`. It is a named FR-042 exception covering C-A3, C-A4, C-S2 and C-H1 (tasks.md, Coordinators,
+  "Amendment 2026-10-13"); SC-009 reads with it. ADR INF-006 decision 1 has a note.
+- **C-A3 as built (T064).** Adopts `pathNodeStorage` → `pathNodes`; `mptStorage` and `storageDone` unchanged. Total
+  619 → 609 (the characterization's 606 for this route, plus the explicit `mptStorage` in `AccountRangeEnv`).

@@ -69,13 +69,17 @@ private[actors] trait AccountPeerDispatchApi:
   def markWorkerIdle(worker: WorkerRef): Unit
   def dispatchIfPossible(peer: Peer): Unit
 
+/** What `AccountTrieAssembly` (C-A3) calls in `AccountPeerDispatch`: the active peer count its progress log reports. */
+private[actors] trait AccountActivePeersApi:
+  def activePeerCount: Int
+
 /** Account-range peer dispatch (spec 016 C-A1, coordinator-characterization.md §3.2): the #1501 intake gate and the
   * downstream back-pressure that pause new dispatch; stateless/snapless peer tracking with its empty-proof strikes and
   * the pivot-refresh escalation it drives; the per-peer cooldowns (scaled down on a scarce pool); the per-peer
   * `responseBytes` budget; and the worker pool: the per-peer in-flight cap, worker creation and dispatch of the next
   * pending task. The coordinator core keeps the behaviour arms that call it.
   */
-private[actors] trait AccountPeerDispatch extends AccountPeerDispatchApi:
+private[actors] trait AccountPeerDispatch extends AccountPeerDispatchApi with AccountActivePeersApi:
   self: AccountPeerDispatchState & AccountRangeEnv & AccountTaskLifecycleApi =>
 
   def downstreamBackpressureActive: Boolean = backpressureSources.nonEmpty
