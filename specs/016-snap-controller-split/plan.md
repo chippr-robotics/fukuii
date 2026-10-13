@@ -779,9 +779,12 @@ User decision of 2026-10-13, after T064 (C-A3) stopped before code. Nothing abov
   "Amendment 2026-10-13"); SC-009 reads with it. ADR INF-006 decision 1 has a note.
 - **C-A3 as built (T064).** Adopts `pathNodeStorage` → `pathNodes`; `mptStorage` and `storageDone` unchanged. Total
   619 → 609 (the characterization's 606 for this route, plus the explicit `mptStorage` in `AccountRangeEnv`).
-- **The Env declaration cost (user decision 2026-10-13, found at T065).** A slice whose code reads a session value the
-  Env does not yet declare, and that adopts nothing, cannot keep the total: the declaration (and its import) counts.
-  Such a slice may raise the total by exactly its session-value Env declaration, and only with a fresh
-  `justifications["storage_refs.total"]` line naming it and the exact amount. Nothing else may raise the total.
+- **The Env declaration cost (user decision 2026-10-13, found at T065; tightened after the #1591 reviews).** Declaring
+  a session value on a coordinator's Env counts (the declaration and its import). A slice may raise the total for it
+  only if: the value is on the closed list (`mptStorage`, pivot-bound; `storageDone`, the per-spawn `Option`; any
+  other needs a new user decision); the rise is computed net of the slice's own adoptions, applied first; the rise
+  equals exactly the Env file's count increase for that declaration and its import; and a fresh
+  `justifications["storage_refs.total"]` line names it and states the amount, the previous line kept as
+  `justifications["storage_refs.total.history"]`. Nothing else may raise the total (tasks.md, Coordinators).
 - **C-A4 as built (T065).** No adoptable store: the replay's `storageDone` and `mptStorage` are the two session
   values. `AccountRangeEnv` declares `storageDone` (+3); total 609 → 612, justified.

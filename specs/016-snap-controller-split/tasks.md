@@ -1180,14 +1180,25 @@ The ratchet keeps counting both (they are still storage references), so a slice 
 what it adopts; the PR says so. SC-009 ("storage only through `StateIngest`") reads with this exception. Recorded in
 plan.md ("Amendment 2026-10-13") and ADR INF-006 (decision 1, note).
 
-**The Env declaration cost (user decision 2026-10-13, found at T065).** Declaring a session value on the coordinator's
-`<Coordinator>Env` is itself counted (the declaration and its import). A slice whose moved code reads a session value
-the Env does not yet declare may therefore raise the total, by exactly that declaration and nothing else, and only with
-a fresh `justifications["storage_refs.total"]` line in `storage-baseline.json` that names it as the session-value Env
-declaration cost under this exception and states the exact amount (+N). Any other rise is still forbidden. Instances:
+**The Env declaration cost (user decision 2026-10-13, found at T065; tightened after the #1591 reviews).** Declaring a
+session value on the coordinator's `<Coordinator>Env` is itself counted (the declaration and its import). A slice whose
+moved code reads a session value the Env does not yet declare may raise the total only under all of these:
+- **Closed list.** Only the two session values above qualify: the pivot-bound `mptStorage: MptStorage` and the
+  per-spawn `storageDone: Option[SnapStorageDoneStorage]`. Any other store is not a session value unless a new user
+  decision names it.
+- **Net of adoptions.** The slice first applies every adoption it can (each store that maps to a `StateIngest`
+  member). The rise is the total after those adoptions, net of them; a slice whose adoptions cover the declaration
+  does not rise at all.
+- **Bounded amount.** The rise equals, exactly, the increase in the Env file's own count from that declaration and its
+  import (+N). Nothing else in the slice may raise the total.
+- **Fresh justification.** `storage-baseline.json` carries a fresh `justifications["storage_refs.total"]` line that
+  names the declaration as the session-value Env declaration cost under this exception and states +N. The previous
+  line is kept as its own history entry (`justifications["storage_refs.total.history"]`), not overwritten.
+Any other rise is still forbidden. Instances:
 - C-A4 (T065): `AccountRangeEnv` declares `storageDone: Option[SnapStorageDoneStorage]` (+3: the name, the type and
-  its import); total 609 → 612. C-A4 adopts nothing to offset it (none of its stores maps to a parameterless
-  `StateIngest` member).
+  its import; `AccountRangeEnv.scala` 3 → 6); total 609 → 612. C-A4 adopts nothing to offset it (none of its stores
+  maps to a parameterless `StateIngest` member), so the net rise is the whole +3. The T060b counter-v2 justification
+  it replaced is kept as `justifications["storage_refs.total.history"]`.
 
 - [x] T060 Coordinator characterization (docs PR): a var × method matrix and Command × behaviour table for ARC, SRC,
   TNHC and BCC, using the research.md method. Confirm or amend the C-* boundaries in plan.md, and derive each
