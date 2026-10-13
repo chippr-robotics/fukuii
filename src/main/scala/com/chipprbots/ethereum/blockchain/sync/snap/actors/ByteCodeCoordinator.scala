@@ -49,9 +49,6 @@ private class ByteCodeCoordinatorImpl(
 
   private val log = context.log
 
-  // Typed leaf worker (Group W1).
-  private type WorkerRef = org.apache.pekko.actor.typed.ActorRef[ByteCodeWorker.Command]
-
   // Per-peer concurrency budget — dynamically adjusted by SNAPSyncController via UpdateMaxInFlightPerPeer.
   // Shadows cooldownConfig.maxInFlightPerPeer so budget updates don't require config mutation.
   private var maxInFlightPerPeer: Int = cooldownConfig.maxInFlightPerPeer
@@ -99,13 +96,6 @@ private class ByteCodeCoordinatorImpl(
 
   // Task management
   private[actors] val pendingTasks = mutable.Queue[ByteCodeTask]()
-  final private[actors] case class ActiveByteCodeRequest(
-      task: ByteCodeTask,
-      worker: WorkerRef,
-      peer: Peer,
-      requestedBytes: BigInt,
-      startedAtMillis: Long
-  )
 
   private[actors] val activeTasks = mutable.Map.empty[BigInt, ActiveByteCodeRequest] // requestId -> active request
 
@@ -632,11 +622,6 @@ private class ByteCodeCoordinatorImpl(
                 )
                 checkCompletion()
 
-  final private case class ValidatedByteCodes(
-      matchedHashes: Set[ByteString],
-      codesByHashInOrder: Vector[(ByteString, ByteString)]
-  )
-
   private def validateReturnedCodes(
       requestedHashes: Seq[ByteString],
       returnedCodes: Seq[ByteString]
@@ -815,6 +800,22 @@ object ByteCodeCoordinator:
     * transitions from working to idle state without waiting for the 30s timeout.
     */
   case class ByteCodeWorkerRelease(requestId: BigInt) extends WorkerMessage
+
+  // Typed leaf worker (Group W1).
+  private[actors] type WorkerRef = org.apache.pekko.actor.typed.ActorRef[ByteCodeWorker.Command]
+
+  final private[actors] case class ActiveByteCodeRequest(
+      task: ByteCodeTask,
+      worker: WorkerRef,
+      peer: Peer,
+      requestedBytes: BigInt,
+      startedAtMillis: Long
+  )
+
+  final private[actors] case class ValidatedByteCodes(
+      matchedHashes: Set[ByteString],
+      codesByHashInOrder: Vector[(ByteString, ByteString)]
+  )
 
   // ── Reply / progress types ─────────────────────────────────────────────────
 
