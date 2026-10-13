@@ -30,19 +30,19 @@ import com.chipprbots.ethereum.network.p2p.messages.SNAP.ByteCodes
   * All mutable state lives on the private `Impl` class; the single behavior `Impl.active()` threads no state through
   * its parameters (the coordinator has one operating phase).
   */
-private class ByteCodeCoordinatorImpl(
-    context: ActorContext[ByteCodeCoordinator.Command],
+private[actors] class ByteCodeCoordinatorImpl(
+    val context: ActorContext[ByteCodeCoordinator.Command],
     timers: TimerScheduler[ByteCodeCoordinator.Command],
-    evmCodeStorage: EvmCodeStorage,
-    networkPeerManager: org.apache.pekko.actor.typed.ActorRef[NetworkPeerManagerActor.Command],
-    requestTracker: SNAPRequestTracker,
+    val evmCodeStorage: EvmCodeStorage,
+    val networkPeerManager: org.apache.pekko.actor.typed.ActorRef[NetworkPeerManagerActor.Command],
+    val requestTracker: SNAPRequestTracker,
     batchSize: Int,
-    cooldownConfig: ByteCodeCoordinator.ByteCodePeerCooldownConfig,
-    snapSyncController: org.apache.pekko.actor.typed.ActorRef[SNAPSyncController.Command],
+    val cooldownConfig: ByteCodeCoordinator.ByteCodePeerCooldownConfig,
+    val snapSyncController: org.apache.pekko.actor.typed.ActorRef[SNAPSyncController.Command],
     backpressureHighWatermark: Int,
     backpressureLowWatermark: Int,
     // Spec 014: shared admission gate (counts codeHashes, not batched tasks). None = not wired (tests).
-    intakeBudget: Option[com.chipprbots.ethereum.blockchain.sync.snap.SnapIntakeBudget] = None
+    val intakeBudget: Option[com.chipprbots.ethereum.blockchain.sync.snap.SnapIntakeBudget] = None
 ):
 
   import ByteCodeCoordinator.*
@@ -79,7 +79,7 @@ private class ByteCodeCoordinatorImpl(
   // Per-hash failure tracking: prevents infinite re-queuing of hashes no peer can serve.
   // After maxFailuresPerHash attempts across all peers, the hash is skipped with a warning.
   private val hashFailureCounts = mutable.Map.empty[ByteString, Int]
-  private val maxFailuresPerHash: Int = 50
+  private lazy val maxFailuresPerHash: Int = 50
 
   // Track known available peers for redispatch when activeTasks is empty.
   // tryRedispatchPendingTasks() previously derived peers from activeTasks.values, leaving it
@@ -137,11 +137,11 @@ private class ByteCodeCoordinatorImpl(
 
   // ByteCodes request tuning (Nethermind-style): use a per-peer dynamic byte budget, clamped hard to 2 MiB.
   // We send many hashes and rely on the peer-side `responseBytes` soft limit to bound work.
-  private val minResponseBytes: BigInt = 50 * 1024
-  private val maxResponseBytes: BigInt = 2 * 1024 * 1024
-  private val initialResponseBytes: BigInt = 512 * 1024
-  private val increaseFactor: Double = 1.25
-  private val decreaseFactor: Double = 0.5
+  private lazy val minResponseBytes: BigInt = 50 * 1024
+  private lazy val maxResponseBytes: BigInt = 2 * 1024 * 1024
+  private lazy val initialResponseBytes: BigInt = 512 * 1024
+  private lazy val increaseFactor: Double = 1.25
+  private lazy val decreaseFactor: Double = 0.5
 
   private val peerResponseBytesTarget = mutable.Map.empty[com.chipprbots.ethereum.network.PeerId, BigInt]
 
