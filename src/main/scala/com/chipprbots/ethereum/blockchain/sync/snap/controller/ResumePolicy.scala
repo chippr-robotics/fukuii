@@ -37,9 +37,10 @@ private[snap] object ResumePolicy:
     * Rejected (`Left`), as a range layout mismatch:
     *   - no cursors at all (filling would mark the whole keyspace done);
     *   - a key outside this layout (another concurrency's ranges);
-    *   - a keyset that is exactly another concurrency's layout. The layout for `k` ranges is a subset of the layout for
-    *     `n` ranges when `k` divides `n` (the 8-range keys are among the 16-range keys), so without this an 8 -> 16
-    *     concurrency change would mark half the keyspace done. A strict subset of size `k` can only equal layout `k`.
+    *   - a keyset that fits a smaller layout `k < n` (all its keys are among layout `k`'s). The layout for `k` ranges
+    *     is a subset of the layout for `n` ranges when `k` divides `n` (the 8-range keys are among the 16-range keys),
+    *     so without this an 8 -> 16 change would mark half the keyspace done, and 15 of 16 cursors at concurrency 32
+    *     would mark 17 never-downloaded ranges done.
     */
   private[snap] def fillResumeLayout(
       cursors: Map[ByteString, ByteString],
@@ -56,11 +57,18 @@ private[snap] object ResumePolicy:
         s"range layout mismatch: ${keys.diff(expected).size} of ${keys.size} saved cursors are outside the " +
           s"${expected.size}-range layout at concurrency $concurrency"
       )
-    else if AccountTask.createInitialTasks(ByteString.empty, keys.size).map(_.last).toSet == keys then
-      Left(
-        s"range layout mismatch: the ${keys.size} saved cursors are the ${keys.size}-range layout, not the " +
-          s"${expected.size}-range layout at concurrency $concurrency"
-      )
     else
-      val missing = layout.filterNot(t => keys.contains(t.last))
-      Right((cursors ++ missing.map(t => t.last -> t.last), missing))
+      // A smaller layout that holds every saved key: the record may be that concurrency's (or one of its ranges'
+      // refinements), and filling would mark never-downloaded ranges done. E.g. 15 of the 16-range keys at
+      // concurrency 32 (#1597 F2). A subset of layout `k` needs `k >= keys.size`.
+      (keys.size until concurrency).find { k =>
+        keys.subsetOf(AccountTask.createInitialTasks(ByteString.empty, k).map(_.last).toSet)
+      } match
+        case Some(k) =>
+          Left(
+            s"range layout mismatch: the ${keys.size} saved cursors fit the $k-range layout, not the " +
+              s"${expected.size}-range layout at concurrency $concurrency"
+          )
+        case None =>
+          val missing = layout.filterNot(t => keys.contains(t.last))
+          Right((cursors ++ missing.map(t => t.last -> t.last), missing))

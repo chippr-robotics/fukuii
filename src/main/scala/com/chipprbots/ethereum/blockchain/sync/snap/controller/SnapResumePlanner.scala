@@ -54,6 +54,11 @@ private[snap] trait TaskFileSweepApi:
   def accountsCompleteTaskFilePaths: Set[String]
   def sweepSupersededTaskFiles(keep: Set[String], reason: String): Unit
 
+  /** The account resume checkpoint was removed (SNAP complete): stop holding a record ignored for a range layout
+    * mismatch (#1597). Also on `AccountResumeSelectionApi`; one implementation in `SnapResumePlanner`.
+    */
+  def releaseHeldResumeCheckpoint(): Unit
+
 private[snap] trait StorageDoneMarkersApi:
   def clearStorageDoneMarkers(reason: String): Unit
 
@@ -560,28 +565,29 @@ private[snap] trait SnapResumePlanner
     // finished ranges, #1597) is ignored for this run but NOT dropped: see `heldResumeCheckpoint`.
     if preservedRangeProgress.isEmpty then
       stateIngest.appState.getSnapAccountResumeCheckpoint().foreach { json =>
-        // Rejected: (reason, Some(files) = keep the record and its files, None = drop the record).
-        type Rejected = (String, Option[ContractTaskFiles])
+        // Rejected: (reason, Some(record) = keep the record and its files, None = drop the record).
+        type Rejected = (String, Option[AccountResumeCheckpoint])
         type Accepted = (AccountResumeCheckpoint, Map[ByteString, ByteString], Seq[AccountTask])
         val decision: Either[Rejected, Accepted] =
           AccountResumeCheckpoint
             .decode(json)
             .left
-            .map(why => (why, Option.empty[ContractTaskFiles]))
+            .map(why => (why, Option.empty[AccountResumeCheckpoint]))
             .flatMap { cp =>
               val drift = (currentPivot - cp.pivotBlock).abs
               if drift > MaxPreservedPivotDistance then
-                Left((s"pivot drifted $drift blocks (>$MaxPreservedPivotDistance)", Option.empty[ContractTaskFiles]))
+                val why = s"pivot drifted $drift blocks (>$MaxPreservedPivotDistance)"
+                Left((why, Option.empty[AccountResumeCheckpoint]))
               else
                 SNAPSyncController
                   .fillResumeLayout(cp.cursors, effectiveConcurrency)
                   .left
-                  .map(why => (why, Option(cp.taskFiles)))
+                  .map(why => (why, Option(cp)))
                   .flatMap { case (cursors, filled) =>
                     SNAPSyncController
                       .checkResumable(cursors, cp.taskFiles, effectiveConcurrency)
                       .left
-                      .map(why => (why, Option.empty[ContractTaskFiles]))
+                      .map(why => (why, Option.empty[AccountResumeCheckpoint]))
                       .map(_ => (cp, cursors, filled))
                   }
             }
@@ -601,14 +607,16 @@ private[snap] trait SnapResumePlanner
             preservedRangeProgress = cursors
             preservedTaskFiles = Some(cp.taskFiles)
             preservedAtPivotBlock = Some(cp.pivotBlock)
-          case Left((why, Some(heldFiles))) =>
+          case Left((why, Some(held))) =>
             ctx.log.warn(
-              s"Ignoring account resume checkpoint for this run: $why. The record, its task files " +
-                s"(${heldFiles.storageCount} storage-task entries, ${heldFiles.codeHashesCount} codeHashes) and the " +
-                "storage-task completion markers are KEPT for a later run at the matching layout: until the account " +
-                "phase completes, this run's checkpoints stay in memory only and the record is not overwritten."
+              s"Ignoring account resume checkpoint for this run: $why. The record (pivot ${held.pivotBlock}), its " +
+                s"task files (${held.taskFiles.storageCount} storage-task entries, " +
+                s"${held.taskFiles.codeHashesCount} codeHashes) and the storage-task completion markers are KEPT " +
+                "for a later run at the matching layout: until the account phase completes, this run's checkpoints " +
+                "stay in memory only and the record is not overwritten."
             )
-            heldResumeCheckpoint = Some(heldFiles)
+            heldResumeCheckpoint = Some(held.taskFiles)
+            heldResumePivot = Some(held.pivotBlock)
           case Left((why, None)) =>
             ctx.log.warn(s"Ignoring account resume checkpoint: $why. The account phase does not resume from it.")
             stateIngest.appState.removeSnapAccountResumeCheckpoint().commit()
@@ -677,7 +685,27 @@ private[snap] trait SnapResumePlanner
         preservedAtPivotBlock = None
         preservedTaskFiles = None
         snapProgressStorage.clearProgress(rootHash.value)
-        stateIngest.appState.removeSnapAccountResumeCheckpoint().commit()
+        // The cursors that drifted are this run's (in memory). A held record is a different, older record under the
+        // same key (#1597): keep it while its own pivot is within the cap; once it is too stale to resume, release
+        // the hold and drop it like any drifted record.
+        val heldStillResumable =
+          heldResumeCheckpoint.isDefined &&
+            heldResumePivot.forall(p => (currentPivot - p).abs <= MaxPreservedPivotDistance)
+        if heldStillResumable then
+          ctx.log.info(
+            s"Keeping the held account resume checkpoint (pivot ${heldResumePivot.fold("?")(_.toString)}, " +
+              s"within the cap of current pivot $currentPivot)"
+          )
+        else
+          if heldResumeCheckpoint.isDefined then
+            ctx.log.warn(
+              s"Releasing the held account resume checkpoint: its pivot " +
+                s"${heldResumePivot.fold("?")(_.toString)} drifted more than $MaxPreservedPivotDistance blocks " +
+                s"from current pivot $currentPivot; dropping it"
+            )
+            heldResumeCheckpoint = None
+            heldResumePivot = None
+          stateIngest.appState.removeSnapAccountResumeCheckpoint().commit()
         Map.empty
       case None =>
         Map.empty
@@ -715,7 +743,9 @@ private[snap] trait SnapResumePlanner
 
     (resumeProgress, carriedTaskFiles)
 
-  def releaseHeldResumeCheckpoint(): Unit = heldResumeCheckpoint = None
+  def releaseHeldResumeCheckpoint(): Unit =
+    heldResumeCheckpoint = None
+    heldResumePivot = None
 
   // Storage-file path of the last persisted checkpoint for which superseded task files were already swept.
   private var lastSweptForRecord: Option[String] = None
@@ -725,6 +755,8 @@ private[snap] trait SnapResumePlanner
   // storage-task completion markers, and never sweeps these files. Released where the record is removed at accounts
   // complete (`releaseHeldResumeCheckpoint`).
   private var heldResumeCheckpoint: Option[ContractTaskFiles] = None
+  // Pivot of the held record: the drift cap still applies to it (#1597 F1).
+  private var heldResumePivot: Option[BigInt] = None
 
   /** A `commonSyncingArms` arm lifted into a class member (spec 016 T053c, CQ-SNAP-016-36), body unchanged:
     * `AccountRangeProgressCmd`, the account coordinator's progress snapshot: the superseded-generation and

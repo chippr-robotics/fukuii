@@ -166,6 +166,8 @@ private[snap] class StubSnapFinalizationState(
     throw new IllegalStateException(s"no state for pivot $pivotBlockNumber")
   def accountsCompleteTaskFilePaths: Set[String] = notUsed("accountsCompleteTaskFilePaths")
   def sweepSupersededTaskFiles(keep: Set[String], reason: String): Unit = notUsed("sweepSupersededTaskFiles")
+  var heldResumeReleases: Int = 0
+  def releaseHeldResumeCheckpoint(): Unit = heldResumeReleases += 1
   var healedCodeDrops: Int = 0
   val healedCodeQueued: mutable.ArrayBuffer[Seq[ByteString]] = mutable.ArrayBuffer.empty
   def dropHealedCodeNowPresent(): Unit = healedCodeDrops += 1
