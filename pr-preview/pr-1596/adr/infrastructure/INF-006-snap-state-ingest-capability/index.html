@@ -5692,7 +5692,7 @@ the three above (<code>mptStorage</code>, <code>storageDone</code>, <code>snapPr
 decision); the rise is net of the slice's own adoptions, applied first; it equals exactly the Env file's count increase
 for the declaration and its import; and a fresh justification line names it and states the amount, keeping the previous
 line as history. C-S2 declares <code>mptStorage</code> and <code>snapProgressStorage</code> on <code>StorageRangeEnv</code> (+6) after adopting
-<code>pathNodes</code> (−15): 609 → 600, no rise. (C-A4, PR #1591, held: <code>storageDone</code> on <code>AccountRangeEnv</code>, +3.)</p>
+<code>pathNodes</code> (−15): 612 → 603, no rise. C-A4 was the first instance: <code>storageDone</code> on <code>AccountRangeEnv</code>, +3, 609 → 612.</p>
 <h3 id="2-chain-data-handles-stay-on-stateingest-no-headerchain-sub-interface-now">2. Chain-data handles stay on <code>StateIngest</code> (no header/chain sub-interface now)<a class="headerlink" href="#2-chain-data-handles-stay-on-stateingest-no-headerchain-sub-interface-now" title="Permanent link">&para;</a></h3>
 <p><code>chainReader</code> and <code>chainWriter</code> are chain-data handles (headers, pivot, best block), not trie state. We considered
 splitting them into a separate header/chain capability and decided not to, for now:</p>
