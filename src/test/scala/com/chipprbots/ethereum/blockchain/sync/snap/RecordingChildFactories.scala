@@ -258,7 +258,7 @@ final class RecordingChildFactories(
       maxConcurrentStorageAccounts: Int,
       snapProgressStorage: Option[SnapSyncProgressStorage],
       storageScheme: StorageScheme,
-      pathNodeStorage: Option[PathNodeStorage],
+      stateIngest: StateIngest,
       recordStorageDone: Boolean,
       intakeBudget: Option[SnapIntakeBudget]
   ): Behavior[StorageRangeCoordinator.Command] =
@@ -284,7 +284,7 @@ final class RecordingChildFactories(
       maxConcurrentStorageAccounts,
       snapProgressStorage,
       storageScheme,
-      pathNodeStorage,
+      stateIngest.pathNodes,
       recordStorageDone,
       intakeBudget
     )

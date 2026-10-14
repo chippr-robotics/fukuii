@@ -15,10 +15,19 @@ import org.scalatest.flatspec.AnyFlatSpecLike
 import org.scalatest.matchers.should.Matchers
 
 import com.chipprbots.ethereum.blockchain.sync.snap.*
+import com.chipprbots.ethereum.blockchain.sync.snap.controller.StateIngest
 import com.chipprbots.ethereum.crypto.kec256
 import com.chipprbots.ethereum.db.dataSource.EphemDataSource
+import com.chipprbots.ethereum.db.storage.AppStateStorage
+import com.chipprbots.ethereum.db.storage.EvmCodeStorage
 import com.chipprbots.ethereum.db.storage.FlatSlotStorage
+import com.chipprbots.ethereum.db.storage.MptStorage
 import com.chipprbots.ethereum.db.storage.PathNodeStorage
+import com.chipprbots.ethereum.db.storage.SnapStorageDoneStorage
+import com.chipprbots.ethereum.db.storage.SnapSyncProgressStorage
+import com.chipprbots.ethereum.db.storage.StateStorage
+import com.chipprbots.ethereum.domain.BlockchainReader
+import com.chipprbots.ethereum.domain.BlockchainWriter
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor
 import com.chipprbots.ethereum.network.Peer
 import com.chipprbots.ethereum.network.p2p.messages.SNAP.StorageRanges
@@ -94,7 +103,7 @@ class StorageRangeCoordinatorOffActorSpec extends ScalaTestWithActorTestKit() wi
           deferredMerkleization = false, // production default: the storage trie is built and written
           flatBatchEcOverride = Some(ExecutionContext.parasitic),
           storageScheme = scheme,
-          pathNodeStorage = Some(pathNodes),
+          stateIngest = pathNodesIngest(pathNodes),
           processing = processing,
           processingEcOverride = if useOwnedPool then None else Some(ec)
         )
@@ -103,6 +112,26 @@ class StorageRangeCoordinatorOffActorSpec extends ScalaTestWithActorTestKit() wi
     }
     val kit = BehaviorTestKit(behavior)
     Fixture(captured, kit, ec, tracker, pathNodes, mpt)
+
+  // The coordinator's StateIngest (spec 016 C-S2): the coordinator reads only `pathNodes` (the fixture's Path node
+  // store) from it; every other member throws.
+  private def pathNodesIngest(store: PathNodeStorage): StateIngest =
+    new StateIngest:
+      def appState: AppStateStorage = notReached("appState")
+      def stateTries: StateStorage = notReached("stateTries")
+      def flatSlots: FlatSlotStorage = notReached("flatSlots")
+      def pathNodes: Option[PathNodeStorage] = Some(store)
+      def bytecode: EvmCodeStorage = notReached("bytecode")
+      def chainReader: BlockchainReader = notReached("chainReader")
+      def chainWriter: BlockchainWriter = notReached("chainWriter")
+      def validatorFactory: MptStorage => StateValidator = notReached("validatorFactory")
+      def durability: StateIngest.Durability = StateIngest.Durability.Default
+      def trieStore(pivot: BigInt): MptStorage = notReached("trieStore")
+      def snapProgress: SnapSyncProgressStorage = notReached("snapProgress")
+      def storageDone: SnapStorageDoneStorage = notReached("storageDone")
+
+  private def notReached(member: String): Nothing =
+    throw new UnsupportedOperationException(s"StorageRangeCoordinator read StateIngest.$member")
 
   private def drainSelf(kit: BehaviorTestKit[StorageRangeCoordinator.Command]): Unit =
     while kit.selfInbox().hasMessages do kit.runOne()

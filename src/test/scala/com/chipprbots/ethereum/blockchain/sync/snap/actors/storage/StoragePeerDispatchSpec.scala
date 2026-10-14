@@ -22,9 +22,13 @@ import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController
 import com.chipprbots.ethereum.blockchain.sync.snap.SnapIntakeBudget
 import com.chipprbots.ethereum.blockchain.sync.snap.SnapPeerHealth
 import com.chipprbots.ethereum.blockchain.sync.snap.SnapTrie
+import com.chipprbots.ethereum.blockchain.sync.snap.StorageScheme
 import com.chipprbots.ethereum.blockchain.sync.snap.StorageTask
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.StorageRangeCoordinator
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.StorageRangeCoordinator.PendingResponse
+import com.chipprbots.ethereum.blockchain.sync.snap.controller.StateIngest
+import com.chipprbots.ethereum.db.storage.MptStorage
+import com.chipprbots.ethereum.db.storage.SnapSyncProgressStorage
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor
 import com.chipprbots.ethereum.network.Peer
 import com.chipprbots.ethereum.network.PeerActor
@@ -84,6 +88,10 @@ private[actors] class StubStoragePeerDispatchState(
   val deferredMerkleization: Boolean = true
   val maxConcurrentStorageAccounts: Int = 256
   val processing: StorageRangeCoordinator.ProcessingSettings = StorageRangeCoordinator.ProcessingSettings.Inline
+  val storageScheme: StorageScheme = StorageScheme.Hash
+  val snapProgressStorage: Option[SnapSyncProgressStorage] = None
+  def mptStorage: MptStorage = throw new UnsupportedOperationException("StoragePeerDispatch read mptStorage")
+  def stateIngest: StateIngest = throw new UnsupportedOperationException("StoragePeerDispatch read stateIngest")
 
   // StorageRangeCoreApi
   def progress: Double = 0.5

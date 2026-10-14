@@ -57,6 +57,13 @@ private[actors] trait StoragePeerDispatchState:
 private[actors] trait StorageRangeCoreApi:
   def progress: Double
 
+/** What other SRC modules call in `StoragePeerDispatch` when a peer served bad data (spec 016 C-S2): the short cooldown
+  * and the response-budget shrink. A separate trait, so the C-S1 interfaces stay as recorded.
+  */
+private[actors] trait StoragePeerFeedbackApi:
+  def recordPeerCooldown(peer: Peer, reason: String): Unit
+  def adjustResponseBytesOnFailure(peer: Peer, reason: String): Unit
+
 /** Storage-range peer dispatch (spec 016 C-S1, coordinator-characterization.md §3.3): stateless-peer tracking with its
   * empty-response strikes and the pivot-refresh escalation it drives (all-stateless, low-eligible and stalled-dispatch
   * triggers, with backoff); the post-refresh dispatch cooldown; the per-peer adaptive batch size and `responseBytes`
@@ -66,7 +73,7 @@ private[actors] trait StorageRangeCoreApi:
   * cooldown, the `SnapPeerHealth` demotion, the re-queue and the force-complete threshold). The coordinator core keeps
   * the behaviour arms that call it.
   */
-private[actors] trait StoragePeerDispatch:
+private[actors] trait StoragePeerDispatch extends StoragePeerFeedbackApi:
   this: StoragePeerDispatchState & StorageRangeEnv & StorageRangeCoreApi =>
 
   private lazy val maxConsecutiveTaskFailures: Int = 100

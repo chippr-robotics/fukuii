@@ -1166,7 +1166,9 @@ until `StateAccess` exists (FR-042).
 found at T064; applies to C-A3, C-A4, C-S2, C-H1 and every later C-* slice that takes these stores).** A coordinator's
 pivot-bound trie store (`mptStorage: MptStorage`, the core's per-pivot cached instance from `getOrCreateMptStorage`)
 and its per-spawn `storageDone: Option[SnapStorageDoneStorage]` (`Option.when(recordStorageDone)(storageDoneStorage)`
-at the spawn site) are **session values, not capabilities**. They stay explicit `apply` parameters, in the Impl
+at the spawn site), and SRC's per-spawn `snapProgressStorage: Option[SnapSyncProgressStorage]` (`Some` from the
+controller's spawn, the `None` default from recovery's; added by the user decision of 2026-10-13, found at T067), are
+**session values, not capabilities**. They stay explicit `apply` parameters, in the Impl
 constructor, `ChildFactories` and the spawn sites, and the module traits reach them through the coordinator's
 `<Coordinator>Env`. Everything else adopts `StateIngest`. Why:
 - `StateIngest` has no parameterless member that hands out the cached `MptStorage`. `trieStore(pivot)` returns a new
@@ -1174,18 +1176,22 @@ constructor, `ChildFactories` and the spawn sites, and the module traits reach t
   coordinator calling it would flush the StackTrie (or apply storage, or heal) through a different instance, a
   behaviour change. `verify.py`'s adoption mode also maps a dropped parameter only to a parameterless member;
 - `stateIngest.storageDone` is the core's store, not the spawn's `Option`: whether markers are read is decided per
-  spawn (`recordStorageDone`).
+  spawn (`recordStorageDone`);
+- `stateIngest.snapProgress` is the core's store, not the spawn's `Option`: whether the storage cursor is persisted is
+  decided per spawn (recovery persists none). The types also differ, so the adoption gate cannot map it, and a plain
+  store would start cursor writes in recovery.
 
-The ratchet keeps counting both (they are still storage references), so a slice that keeps them lowers the total only by
+The ratchet keeps counting all three (they are still storage references), so a slice that keeps them lowers the total only by
 what it adopts; the PR says so. SC-009 ("storage only through `StateIngest`") reads with this exception. Recorded in
 plan.md ("Amendment 2026-10-13") and ADR INF-006 (decision 1, note).
 
 **The Env declaration cost (user decision 2026-10-13, found at T065; tightened after the #1591 reviews).** Declaring a
 session value on the coordinator's `<Coordinator>Env` is itself counted (the declaration and its import). A slice whose
 moved code reads a session value the Env does not yet declare may raise the total only under all of these:
-- **Closed list.** Only the two session values above qualify: the pivot-bound `mptStorage: MptStorage` and the
-  per-spawn `storageDone: Option[SnapStorageDoneStorage]`. Any other store is not a session value unless a new user
-  decision names it.
+- **Closed list.** Only the session values above qualify: the pivot-bound `mptStorage: MptStorage`, the per-spawn
+  `storageDone: Option[SnapStorageDoneStorage]` and SRC's per-spawn `snapProgressStorage:
+  Option[SnapSyncProgressStorage]` (added by the user decision of 2026-10-13, found at T067). Any other store is not a
+  session value unless a new user decision names it.
 - **Net of adoptions.** The slice first applies every adoption it can (each store that maps to a `StateIngest`
   member). The rise is the total after those adoptions, net of them; a slice whose adoptions cover the declaration
   does not rise at all.
@@ -1197,8 +1203,13 @@ moved code reads a session value the Env does not yet declare may raise the tota
 Any other rise is still forbidden. Instances:
 - C-A4 (T065): `AccountRangeEnv` declares `storageDone: Option[SnapStorageDoneStorage]` (+3: the name, the type and
   its import; `AccountRangeEnv.scala` 3 → 6); total 609 → 612. C-A4 adopts nothing to offset it (none of its stores
-  maps to a parameterless `StateIngest` member), so the net rise is the whole +3. The T060b counter-v2 justification
-  it replaced is kept as `justifications["storage_refs.total.history"]`.
+  maps to a parameterless `StateIngest` member), so the net rise is the whole +3.
+- C-S2 (T067): `StorageRangeEnv` declares `mptStorage: MptStorage` and `snapProgressStorage:
+  Option[SnapSyncProgressStorage]` (+6: each name, its type and its import; `StorageRangeEnv.scala` 0 → 6). C-S2's
+  adoption (`pathNodeStorage` → `pathNodes`) gives −15 first, so the total falls, 612 → 597 → 603 (rebased onto
+  C-A4), and does not rise.
+  The fresh justification line states both steps; the T060b counter-v2 line it replaced is kept as
+  `justifications["storage_refs.total.history"]`.
 
 - [x] T060 Coordinator characterization (docs PR): a var × method matrix and Command × behaviour table for ARC, SRC,
   TNHC and BCC, using the research.md method. Confirm or amend the C-* boundaries in plan.md, and derive each
@@ -1692,7 +1703,7 @@ Any other rise is still forbidden. Instances:
       fields).
     - Owed: the second-specialist review (prism) and forge's "no ETC behaviour change" sign-off (SRC runs on ETC). No
       vault review and no node run (characterization §7: none for C-S1; no storage path changes).
-- [ ] T067 [C-S2] `StorageOrderedApply` (vault; T060: plus `writePrebuiltTrie`. It adopts `pathNodeStorage`, and
+- [x] T067 [C-S2] `StorageOrderedApply` (vault; T060: plus `writePrebuiltTrie`. It adopts `pathNodeStorage`, and
   `mptStorage`/`snapProgressStorage` per D-T060-1. `flushTrieNodeWrites` writes via `pns.dataSource.update`, a raw
   call that a per-batch `StateIngest` member could replace; decide at T067). Narrowing takes `StateIngest` (the batched storage-trie node-write
   path, `flushTrieNodeWrites`), never `StateAccess`; lowers the baseline total.
@@ -1707,6 +1718,66 @@ Any other rise is still forbidden. Instances:
     - in addition, an A/B on that same host (pre-wrap build vs post-wrap build, same chain, same starting state)
       shows no regression. If the pre-wrap build cannot reproduce ~1.7M/h, the fresh same-host pre-wrap measurement
       becomes the baseline, and the PR says so.
+  - **Stop and decisions (2026-10-13).** The first attempt stopped before any code, on two findings. (1) The storage
+    recovery spawn (`StorageRecoveryActor`) relied on `pathNodeStorage`'s `None` default, and the adoption gate rejects
+    a call that relied on a dropped default and starts passing `stateIngest` (confirmed on a scratch commit). (2)
+    `snapProgressStorage` is an `Option[SnapSyncProgressStorage]` chosen per spawn; `StateIngest.snapProgress` is a plain
+    store (the gate's type check fails, and adopting it would start cursor writes in recovery), and it was not on the
+    session-value list. User decisions: (1) option A, a plain prerequisite commit in which the recovery spawn passes
+    `pathNodeStorage = stateIngest.pathNodes` explicitly (its `storageScheme` and `snapProgressStorage` stay at their
+    defaults; whether recovery's coordinator should run the node's scheme is a separate question, filed for beacon);
+    (2) `snapProgressStorage` joins the closed session-value list (Coordinators, "Amendment 2026-10-13" and "The Env
+    declaration cost"). The raw `pns.dataSource.update` stays (amendment A-S2); `flatSlotStorage` stays for C-S3.
+  - **As built** (branch `refactor/snap-016-cs2-storage-apply`, five code commits and this docs commit; no sbt or JVM
+    run, CI compiles and tests). (1) `# moved: ReadyStorageChunk, ByteStringOrdering`: the two Impl-nested types go to
+    the companion (`ByteStringOrdering` widens from `private` to `private[actors]`: the core, C-S2 and C-S3 use it).
+    (2) Plain prerequisite: `StorageRecoveryActor` passes `pathNodeStorage = stateIngest.pathNodes` (Hash scheme: the
+    same `None`; Path scheme: recovery's coordinator holds a `Some` it never reads, because its `storageScheme` is the
+    `Hash` default). (3) Prerequisite: `StorageOrderedApplyState` and `StorageApplyCoreApi` are declared in the new
+    `actors/storage/StorageOrderedApply.scala`, `StoragePeerFeedbackApi` (`recordPeerCooldown`,
+    `adjustResponseBytesOnFailure`) in `StoragePeerDispatch.scala`, a separate trait so C-S1's interfaces do not change;
+    `StorageRangeEnv` gains `mptStorage`, `snapProgressStorage` and `storageScheme`, those parameters (and
+    `pathNodeStorage`, for the temporary self-type) become `val`s; the companion gains `type TrieNodeWrite =
+    DataUpdate`, so the State's `trieNodeWrites` needs no raw `DataSource` import in the module file (verify rule 2);
+    the C-S1 stub state gains the three env members. (4) The move commit takes 10 members byte-identical into
+    `StorageOrderedApply`: `clearStorageOrderingState`, `getOrCreateAccountTrie`, `commitAccountTrie`,
+    `commitPrebuiltRoot`, `resetAccountTrie` (loses `private`: the core calls it), `flushTrieNodeWrites`,
+    `writePrebuiltTrie`, `applyOrderedStorageChunk`, `drainOrderedStorageChunks`, `applyReadyStorageChunk`. No field
+    moves (every one is shared with the core, C-S1, C-S3 or C-S4, or is a concrete `val` kept by rule (d)); the core
+    members the module reaches become public. (5) The narrowing commit, `# adopts: StateIngest
+    StorageRangeCoordinator`: the self-type names `StorageOrderedApplyState & StorageRangeEnv & StorageApplyCoreApi &
+    StoragePeerFeedbackApi`; the Impl adds the State and core Api parents; `StoragePeerDispatch` extends
+    `StoragePeerFeedbackApi`. `pathNodeStorage: Option[PathNodeStorage] = None` → `stateIngest: StateIngest` in the
+    Impl constructor, `apply`, `new`, `ChildFactories.storageRangeCoordinator`, both `DownloadSupervisor` spawn sites
+    and the `StorageRecoveryActor` spawn (all `stateIngest = stateIngest`); the three reads use `stateIngest.pathNodes`
+    (`// adopt-map: pathNodeStorage -> pathNodes`); `StorageRangeEnv` gains `stateIngest`. `ChildFactoriesSpec`
+    unchanged.
+    - Node-write hot path (for vault and SC-010): the instances, the `trieNodeWrites` buffer and the flush points are
+      unchanged (one batch per applied response, before a flat batch or a persisted cursor, at the end of every
+      message, at stop). `stateIngest.pathNodes` is read where `pathNodeStorage` was: once per trie creation (the
+      `SnapPathTrie` callbacks capture `pns`), once per flush, once per prebuilt write; never per node, and no new
+      allocation. The per-node callback now reads `trieNodeWrites` through the State accessor instead of the Impl's
+      private field: one interface getter call per node, monomorphic in production, which the JIT inlines. A hoist into
+      a captured local would remove it at bytecode level but is a body change in a move PR; SC-010 parity decides.
+    - Counts: `StorageOrderedApply` State 13 (R14b 11, plus `tasks`, written as `this.tasks.enqueue`, which the
+      matrix's name match missed, and `zeroSlotHash`, an immutable `val` kept by rule (d)), Api 7 (= R14b: 5 core, 2
+      `StoragePeerDispatch`). `StoragePeerDispatch` 24 / 1 unchanged. `StorageRangeEnv` 15 → 19 (G9): `mptStorage`,
+      `snapProgressStorage`, `storageScheme`, `stateIngest`.
+    - Storage total **612 → 603** (rebased onto C-A4, whose +3 took the total from 609 to 612) (counter v2): the adoption −15, then the session-value Env declarations +6 exactly
+      (Coordinators, "The Env declaration cost"). `StorageRangeCoordinator.scala` 66 → 46, `actors/storage/
+      StorageOrderedApply.scala` 0 → 13, `actors/storage/StorageRangeEnv.scala` 0 → 6, `ChildFactories` 67 → 63,
+      `DownloadSupervisor` 50 → 46. `storage-baseline.json` records it with a fresh justification line (the T060b line
+      kept as history).
+    - Tests (`# new-tests:`): `StorageOrderedApplySpec` (9 cases, a plain `AnyFlatSpec`: the bodies need no actor
+      context): a whole chunk, the out-of-order buffer and its drain, the boundary-repeat rejection, the ordering-state
+      clear, the trie reset, an empty chunk against its claimed root, a Hash-scheme trie reaching `mptStorage`, Path
+      node writes buffered and committed in one flush, an empty flush. `StorageRangeCoordinatorSpec` and
+      `StorageRangeCoordinatorOffActorSpec` pass a local `StateIngest` (`pathNodes` `None`, and the fixture's store,
+      respectively); `RecordingChildFactories` records `stateIngest.pathNodes` in the unchanged
+      `ChildSpawn.StorageRange.pathNodeStorage`; the C-S1 stub state gains the four env members. No assertion changed.
+    - Owed: **SC-010 `[STORAGE-PERF]` parity (the merge gate above, not run)**; vault (the node-write path, the alias,
+      the recovery prerequisite), forge ("no ETC behaviour change": the Hash-scheme path and the recovery spawn), beacon
+      (the Path-scheme writes), and the second-specialist review (prism).
 - [ ] T068 [C-S3] `StorageDoneMarkers` (vault; T060: adopts `flatSlotStorage` → `flatSlots`. `storageDoneStorage` is a
   core val under rule (d)). Narrowing takes `StateIngest` (flat slots, done markers), never
   `StateAccess`; lowers the baseline total. The PR quotes spec 010 R2a and shows each clause still holds. Run Mordor and

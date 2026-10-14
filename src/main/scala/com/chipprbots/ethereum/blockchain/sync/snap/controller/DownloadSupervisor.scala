@@ -169,7 +169,7 @@ private[snap] trait DownloadSupervisor extends AccountRangeStartApi with ByteCod
                 maxConcurrentStorageAccounts = snapSyncConfig.maxConcurrentStorageAccounts,
                 snapProgressStorage = Some(snapProgressStorage),
                 storageScheme = snapSyncConfig.storageScheme,
-                pathNodeStorage = stateIngest.pathNodes,
+                stateIngest = stateIngest,
                 recordStorageDone = recordStorageDone,
                 intakeBudget = Some(intakeBudget)
               )
@@ -883,7 +883,7 @@ private[snap] trait DownloadSupervisor extends AccountRangeStartApi with ByteCod
                 maxConcurrentStorageAccounts = snapSyncConfig.maxConcurrentStorageAccounts,
                 snapProgressStorage = Some(snapProgressStorage),
                 storageScheme = snapSyncConfig.storageScheme,
-                pathNodeStorage = stateIngest.pathNodes,
+                stateIngest = stateIngest,
                 recordStorageDone = recordStorageDone,
                 intakeBudget = Some(intakeBudget)
               )
