@@ -348,7 +348,10 @@ private class AccountRangeCoordinatorImpl(
   )
   // requestId -> (task, worker, peer)
   private[actors] val activeTasks = mutable.Map[BigInt, (AccountTask, WorkerRef, Peer)]()
-  private val completedTasks = mutable.ArrayBuffer[AccountTask]()
+  // Seeded with the ranges already complete on resume (#1597): every snapshot builds its cursor map from pending,
+  // active, storing and completed tasks, so a skipped range left out of here dropped out of every later checkpoint, and
+  // the next restart saw one cursor fewer than the layout and rejected the whole record.
+  private val completedTasks = mutable.ArrayBuffer[AccountTask](skippedTasks*)
 
   // Worker pool
   private[actors] val workers = mutable.ArrayBuffer[WorkerRef]()
