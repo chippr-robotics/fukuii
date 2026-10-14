@@ -327,6 +327,7 @@ private[snap] trait SnapFinalization extends FinalizationApi with ChainDownloadS
       // SNAP is done: no account resume can follow. Drop the checkpoint and every superseded contract task file,
       // keeping only the files the accounts-complete recovery path was handed (conservative; they are not re-read).
       stateIngest.appState.removeSnapAccountResumeCheckpoint().commit()
+      releaseHeldResumeCheckpoint()
       sweepSupersededTaskFiles(keep = accountsCompleteTaskFilePaths, reason = "SNAP complete")
 
       // Phase 1 of the handshake: tell the parent that pivot/state is anchored. Parent starts RegularSync.

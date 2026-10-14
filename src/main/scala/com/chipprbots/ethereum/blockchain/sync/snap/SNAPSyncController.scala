@@ -1412,7 +1412,7 @@ object SNAPSyncController:
   export controller.PivotPolicy.{healPivotAfterExcluded, pivotPassesFreshnessFloor, unservablePivotTarget}
   export controller.HealPolicy.{bytecodeRecoveryComplete, healRepegSuppressedByLocalWalk}
   export controller.HealPolicy.{lastHealingServeRootBlockToRecord, shouldSkipHealingAfterDownloads, staleReferenceHead}
-  export controller.ResumePolicy.{checkResumable, taskFilePaths}
+  export controller.ResumePolicy.{checkResumable, fillResumeLayout, taskFilePaths}
   export controller.SnapPeerPolicy.{servesSnapState, snapExclusionReason, SnapExclusionAtGenesis}
   export controller.SnapPeerPolicy.{SnapExclusionLogIntervalMs, SnapExclusionMinLogIntervalMs}
   export controller.FinalizationPolicy.{chainBackfillDeferredToFinalization, EmptyHeaderBackoff}

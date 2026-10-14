@@ -664,6 +664,7 @@ private[snap] trait DownloadSupervisor extends AccountRangeStartApi with ByteCod
         // otherwise be loaded by a later fresh SNAP cycle (e.g. a re-snap after clearSnapSyncDone) and skip accounts.
         stateRoot.foreach(root => snapProgressStorage.clearProgress(root.value))
         stateIngest.appState.removeSnapAccountResumeCheckpoint().commit()
+        releaseHeldResumeCheckpoint()
         preservedRangeProgress = Map.empty
         preservedAtPivotBlock = None
         preservedTaskFiles = None

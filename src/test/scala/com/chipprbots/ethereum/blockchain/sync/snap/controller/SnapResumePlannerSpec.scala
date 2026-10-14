@@ -28,6 +28,7 @@ import org.scalatest.matchers.should.Matchers
 import com.chipprbots.ethereum.Fixtures
 import com.chipprbots.ethereum.blockchain.sync.SyncProtocol
 import com.chipprbots.ethereum.blockchain.sync.snap.AccountResumeCheckpoint
+import com.chipprbots.ethereum.blockchain.sync.snap.AccountTask
 import com.chipprbots.ethereum.blockchain.sync.snap.ContractTaskFiles
 import com.chipprbots.ethereum.blockchain.sync.snap.GatedTaskFileReplay
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPRequestTracker
@@ -668,5 +669,155 @@ class SnapResumePlannerSpec extends ScalaTestWithActorTestKit(ManualTime.config)
     h.module.preservedRangeProgress shouldBe checkpointCursors
     h.module.appStateStorage.getSnapAccountResumeCheckpoint() shouldBe None
     Files.exists(stale) shouldBe true
+    deleteDir(dir)
+  }
+
+  // ── #1597: the account resume checkpoint reader ──
+
+  /** Task files under the swept name prefixes that hold their counted entries (`checkResumable` validates them). */
+  private def validTaskFiles(dir: Path, tag: String): ContractTaskFiles =
+    ContractTaskFiles(
+      storagePath = Files.write(dir.resolve(s"fukuii-contract-storage-$tag"), Array.fill[Byte](3 * 64)(1)).toString,
+      storageCount = 3L,
+      codeHashesPath = Files.write(dir.resolve(s"fukuii-unique-codehashes-$tag"), Array.fill[Byte](2 * 32)(2)).toString,
+      codeHashesCount = 2L
+    )
+
+  private def layoutCursors(concurrency: Int): Map[ByteString, ByteString] =
+    AccountTask.createInitialTasks(ByteString.empty, concurrency).map(t => t.last -> t.next).toMap
+
+  it should "complete a 15-of-16 checkpoint to the full layout and resume from it with its task files (#1597)" taggedAs UnitTest in {
+    val dir = tempDir("snap-resume-planner-1597-fill")
+    val h = new Harness(SNAPSyncConfig(taskFileDir = Some(dir)))
+    val files = validTaskFiles(dir, "held")
+    val missing = AccountTask.createInitialTasks(ByteString.empty, 16)(4)
+    val fifteen = layoutCursors(16) - missing.last
+    val json = AccountResumeCheckpoint.encode(AccountResumeCheckpoint(savedRoot, BigInt(1_000), fifteen, files))
+    h.module.appStateStorage.putSnapAccountResumeCheckpoint(json).commit()
+
+    var selected: (Map[ByteString, ByteString], Option[ContractTaskFiles]) = (Map.empty, None)
+    h.call(m => selected = m.selectAccountResume(TrieRoot(savedRoot), 16, BigInt(1_100)))
+
+    selected._1.size shouldBe 16
+    selected._1(missing.last) shouldBe missing.last // filled as complete
+    selected._1 - missing.last shouldBe fifteen
+    selected._2 shouldBe Some(files)
+    h.module.preservedRangeProgress shouldBe selected._1
+    h.module.appStateStorage.getSnapAccountResumeCheckpoint() shouldBe Some(json)
+    deleteDir(dir)
+  }
+
+  it should "ignore an 8-range checkpoint at concurrency 16 but keep the record, its task files and the markers (#1597)" taggedAs UnitTest in {
+    val dir = tempDir("snap-resume-planner-1597-held")
+    val h = new Harness(SNAPSyncConfig(taskFileDir = Some(dir)))
+    val held = validTaskFiles(dir, "held")
+    val json = AccountResumeCheckpoint.encode(AccountResumeCheckpoint(savedRoot, BigInt(1_000), layoutCursors(8), held))
+    h.module.appStateStorage.putSnapAccountResumeCheckpoint(json).commit()
+    val account = ByteString(Array.fill[Byte](32)(3))
+    val storageRoot = ByteString(Array.fill[Byte](32)(4))
+    h.module.storageDoneStorage.markDone(Seq(account -> storageRoot)).commit()
+
+    var selected: (Map[ByteString, ByteString], Option[ContractTaskFiles]) = (Map.empty, None)
+    h.call(m => selected = m.selectAccountResume(TrieRoot(savedRoot), 16, BigInt(1_100)))
+
+    // Not resumed: a fresh account phase at the configured layout, nothing carried.
+    selected._1 shouldBe empty
+    selected._2 shouldBe None
+    // Left in place for a run at the matching layout.
+    h.module.appStateStorage.getSnapAccountResumeCheckpoint() shouldBe Some(json)
+    h.module.storageDoneStorage.isDone(account, storageRoot) shouldBe true
+
+    // This run's durable snapshot neither overwrites the record (fixed key) nor sweeps the record's files.
+    val own = validTaskFiles(dir, "own")
+    h.module.pivotBlock = Some(BigInt(1_100))
+    h.module.stateRoot = Some(TrieRoot(savedRoot))
+    h.module.launchedAccountGeneration = 1L
+    val snapshot = AccountRangeProgressCmd(layoutCursors(16), Some(own), durable = true, generation = 1L)
+    checkpoint(h, snapshot) shouldBe Behaviors.same
+    h.call(m => m.sweepSupersededTaskFiles(keep = Set.empty, reason = "test"))
+    h.module.appStateStorage.getSnapAccountResumeCheckpoint() shouldBe Some(json)
+    Seq(held.storagePath, held.codeHashesPath).map(p => Files.exists(Path.of(p))) shouldBe Seq(true, true)
+
+    // Once the record is retired (accounts complete), the hold is released and checkpoints persist again.
+    h.call(m => m.releaseHeldResumeCheckpoint())
+    checkpoint(h, snapshot) shouldBe Behaviors.same
+    h.module.appStateStorage.getSnapAccountResumeCheckpoint().map(AccountResumeCheckpoint.decode) shouldBe Some(
+      Right(AccountResumeCheckpoint(savedRoot, BigInt(1_100), layoutCursors(16), own))
+    )
+    deleteDir(dir)
+  }
+
+  it should "still drop a checkpoint whose task files are short, and clear the markers (#1597)" taggedAs UnitTest in {
+    val dir = tempDir("snap-resume-planner-1597-drop")
+    val h = new Harness(SNAPSyncConfig(taskFileDir = Some(dir)))
+    val short = validTaskFiles(dir, "short").copy(storageCount = 100L)
+    val json =
+      AccountResumeCheckpoint.encode(AccountResumeCheckpoint(savedRoot, BigInt(1_000), layoutCursors(16), short))
+    h.module.appStateStorage.putSnapAccountResumeCheckpoint(json).commit()
+    val account = ByteString(Array.fill[Byte](32)(3))
+    val storageRoot = ByteString(Array.fill[Byte](32)(4))
+    h.module.storageDoneStorage.markDone(Seq(account -> storageRoot)).commit()
+
+    var selected: (Map[ByteString, ByteString], Option[ContractTaskFiles]) = (Map.empty, None)
+    h.call(m => selected = m.selectAccountResume(TrieRoot(savedRoot), 16, BigInt(1_100)))
+
+    selected._2 shouldBe None
+    h.module.appStateStorage.getSnapAccountResumeCheckpoint() shouldBe None
+    h.module.storageDoneStorage.isDone(account, storageRoot) shouldBe false
+    deleteDir(dir)
+  }
+
+  it should "hold, not fill, 15 of the 16-range cursors at concurrency 32 (#1597 F2)" taggedAs UnitTest in {
+    val dir = tempDir("snap-resume-planner-1597-refine")
+    val h = new Harness(SNAPSyncConfig(taskFileDir = Some(dir)))
+    val files = validTaskFiles(dir, "held")
+    val fifteen = layoutCursors(16) - AccountTask.createInitialTasks(ByteString.empty, 16)(4).last
+    val json = AccountResumeCheckpoint.encode(AccountResumeCheckpoint(savedRoot, BigInt(1_000), fifteen, files))
+    h.module.appStateStorage.putSnapAccountResumeCheckpoint(json).commit()
+
+    var selected: (Map[ByteString, ByteString], Option[ContractTaskFiles]) = (Map.empty, None)
+    h.call(m => selected = m.selectAccountResume(TrieRoot(savedRoot), 32, BigInt(1_100)))
+
+    selected._1 shouldBe empty
+    selected._2 shouldBe None
+    h.module.appStateStorage.getSnapAccountResumeCheckpoint() shouldBe Some(json)
+    deleteDir(dir)
+  }
+
+  it should "keep a held record when this run's cursors drift past the cap, and drop it once it is stale too (#1597 F1)" taggedAs UnitTest in {
+    val dir = tempDir("snap-resume-planner-1597-held-drift")
+    val h = new Harness(SNAPSyncConfig(taskFileDir = Some(dir)))
+    val held = validTaskFiles(dir, "held")
+    val json =
+      AccountResumeCheckpoint.encode(AccountResumeCheckpoint(savedRoot, BigInt(30_000), layoutCursors(8), held))
+    h.module.appStateStorage.putSnapAccountResumeCheckpoint(json).commit()
+
+    var selected: (Map[ByteString, ByteString], Option[ContractTaskFiles]) = (Map.empty, None)
+    h.call(m => selected = m.selectAccountResume(TrieRoot(savedRoot), 16, BigInt(1_000)))
+    selected._1 shouldBe empty
+    h.module.appStateStorage.getSnapAccountResumeCheckpoint() shouldBe Some(json)
+
+    // This run's own cursors, tracked in memory at pivot 1,000; the next launch is 50,001 blocks later.
+    h.module.preservedRangeProgress = layoutCursors(16)
+    h.module.preservedAtPivotBlock = Some(BigInt(1_000))
+    h.call(m => selected = m.selectAccountResume(TrieRoot(savedRoot), 16, BigInt(51_001)))
+    selected._1 shouldBe empty
+    h.module.preservedRangeProgress shouldBe empty
+    // The held record (pivot 30,000) is within the cap of 51,001: kept.
+    h.module.appStateStorage.getSnapAccountResumeCheckpoint() shouldBe Some(json)
+
+    // Again, now far past the held record's own pivot too: the hold is released and the record dropped.
+    h.module.preservedRangeProgress = layoutCursors(16)
+    h.module.preservedAtPivotBlock = Some(BigInt(51_001))
+    h.call(m => selected = m.selectAccountResume(TrieRoot(savedRoot), 16, BigInt(110_000)))
+    h.module.appStateStorage.getSnapAccountResumeCheckpoint() shouldBe None
+    // Released: this run's durable checkpoints persist again.
+    val own = validTaskFiles(dir, "own")
+    h.module.pivotBlock = Some(BigInt(110_000))
+    h.module.stateRoot = Some(TrieRoot(savedRoot))
+    h.module.launchedAccountGeneration = 1L
+    checkpoint(h, AccountRangeProgressCmd(layoutCursors(16), Some(own), durable = true, generation = 1L)) shouldBe
+      Behaviors.same
+    h.module.appStateStorage.getSnapAccountResumeCheckpoint() shouldBe defined
     deleteDir(dir)
   }

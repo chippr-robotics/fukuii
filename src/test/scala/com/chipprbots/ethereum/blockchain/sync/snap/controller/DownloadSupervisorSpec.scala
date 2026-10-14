@@ -213,6 +213,8 @@ private[snap] class StubDownloadSupervisorState(
   ): (Map[ByteString, ByteString], Option[ContractTaskFiles]) =
     resumeSelections += ((rootHash, effectiveConcurrency, currentPivot))
     resumeSelection
+  var heldResumeReleases: Int = 0
+  def releaseHeldResumeCheckpoint(): Unit = heldResumeReleases += 1
 
   private def notUsed(what: String): Nothing =
     throw new UnsupportedOperationException(s"$what is not reached by DownloadSupervisorSpec")

@@ -865,7 +865,8 @@ class AccountRangeCoordinatorSpec extends ScalaTestWithActorTestKit() with AnyFl
       carried: Option[ContractTaskFiles],
       dir: java.nio.file.Path,
       generation: Long,
-      storageDone: Option[SnapStorageDoneStorage] = None
+      storageDone: Option[SnapStorageDoneStorage] = None,
+      concurrency: Int = 1
   ): org.apache.pekko.actor.typed.ActorRef[AccountRangeCoordinator.Command] =
     testKit.spawn(
       AccountRangeCoordinator(
@@ -873,7 +874,7 @@ class AccountRangeCoordinatorSpec extends ScalaTestWithActorTestKit() with AnyFl
         networkPeerManager = networkPeerManager,
         requestTracker = new SNAPRequestTracker()(classicSystem.scheduler),
         mptStorage = new TestMptStorage(),
-        concurrency = 1,
+        concurrency = concurrency,
         snapSyncController = controller,
         resumeProgress = resumeProgress,
         accountTrieEcOverride = Some(classicSystem.dispatcher),
@@ -1124,6 +1125,102 @@ class AccountRangeCoordinatorSpec extends ScalaTestWithActorTestKit() with AnyFl
       .checkResumable(cp.cursors, files.copy(codeHashesPath = dir.resolve("gone").toString), 1)
       .isLeft shouldBe
       true
+  }
+
+  // ── #1597: a range completed before a restart must stay in every later checkpoint ──
+
+  "A resumed AccountRangeCoordinator (#1597)" should "keep a range that was complete before a restart in every later checkpoint, across two restarts" taggedAs UnitTest in {
+    val dir = java.nio.file.Files.createTempDirectory("arc-1597-")
+    val carried = previousTaskFiles(dir, counted = 3, codeCounted = 2)
+    val layout2 = AccountTask.createInitialTasks(ByteString.empty, 2).map(_.last)
+    val doneLast = layout2(0)
+    val partialLast = layout2(1)
+    val partialCursor = ByteString(Array.fill(32)(0xc0.toByte)) // inside the upper range [0x80.., 0xff..]
+    // The lower range finished before the first restart (cursor at its end); the upper one is mid-range.
+    val cursors = Map(doneLast -> doneLast, partialLast -> partialCursor)
+
+    def restart(resume: Map[ByteString, ByteString], files: ContractTaskFiles, generation: Long) =
+      val controller = testKit.createTestProbe[SNAPSyncController.Command]()
+      val coord = spawnResumed(
+        kec256(ByteString(s"1597-root-$generation")),
+        testKit.createTestProbe[NetworkPeerManagerActor.Command]().ref,
+        controller.ref,
+        resume,
+        Some(files),
+        dir,
+        generation,
+        concurrency = 2
+      )
+      fish(controller) { case m: SNAPSyncController.IncrementalContractData => m }
+      testKit.stop(coord)
+      fish(controller) { case m: SNAPSyncController.AccountRangeProgressCmd if m.durable => m }
+
+    // Restart 1: the skipped (complete) range is still in the checkpoint. Before the fix it was missing: 1 cursor.
+    val snap1 = restart(cursors, carried, 1)
+    snap1.progress shouldBe cursors
+    SNAPSyncController.checkResumable(snap1.progress, snap1.taskFiles.get, concurrency = 2) shouldBe Right(())
+
+    // Restart 2, through the persisted checkpoint: the record has the full layout (nothing to fill) and is accepted.
+    val json = AccountResumeCheckpoint.encode(
+      AccountResumeCheckpoint(kec256(ByteString("1597-root-1")), BigInt(100), snap1.progress, snap1.taskFiles.get)
+    )
+    val reloaded = AccountResumeCheckpoint.decode(json).fold(e => fail(e), identity)
+    SNAPSyncController.fillResumeLayout(reloaded.cursors, concurrency = 2) shouldBe Right((reloaded.cursors, Seq.empty))
+    val snap2 = restart(reloaded.cursors, reloaded.taskFiles, 2)
+    snap2.progress shouldBe cursors
+    snap2.progress.size shouldBe 2
+    SNAPSyncController.checkResumable(snap2.progress, snap2.taskFiles.get, concurrency = 2) shouldBe Right(())
+  }
+
+  "SNAPSyncController.fillResumeLayout (#1597)" should "fill the missing ranges of a strict subset of the layout as complete" taggedAs UnitTest in {
+    val dir = java.nio.file.Files.createTempDirectory("arc-1597-fill-")
+    val files = previousTaskFiles(dir, counted = 3, codeCounted = 2)
+    val layout16 = AccountTask.createInitialTasks(ByteString.empty, 16)
+    val full = layout16.map(t => t.last -> t.next).toMap
+    val missing = layout16(4)
+    // The live Sepolia shape: 15 cursors, the range finished before an earlier restart is gone.
+    val fifteen = full - missing.last
+
+    SNAPSyncController.checkResumable(fifteen, files, concurrency = 16).isLeft shouldBe true
+    SNAPSyncController.fillResumeLayout(fifteen, concurrency = 16) match
+      case Right((filled, added)) =>
+        added.map(_.last) shouldBe Seq(missing.last)
+        filled.size shouldBe 16
+        filled(missing.last) shouldBe missing.last // done: next == last
+        filled - missing.last shouldBe fifteen // every saved cursor unchanged
+        SNAPSyncController.checkResumable(filled, files, concurrency = 16) shouldBe Right(())
+      case Left(why) => fail(why)
+
+    // Any strict subset that is not another layout is filled the same way.
+    val two = Map(layout16(0).last -> layout16(0).next, layout16(15).last -> layout16(15).next)
+    SNAPSyncController.fillResumeLayout(two, concurrency = 16).map(_._2.size) shouldBe Right(14)
+
+    // A complete layout passes through untouched.
+    SNAPSyncController.fillResumeLayout(full, concurrency = 16) shouldBe Right((full, Seq.empty))
+  }
+
+  it should "reject another concurrency's layout, keys outside the layout and an empty record" taggedAs UnitTest in {
+    val layout16Keys = AccountTask.createInitialTasks(ByteString.empty, 16).map(_.last).toSet
+    val layout8 = AccountTask.createInitialTasks(ByteString.empty, 8).map(t => t.last -> t.next).toMap
+    // The trap: the 8-range keys are a strict subset of the 16-range keys. Filling would mark half the keyspace done.
+    layout8.keySet.subsetOf(layout16Keys) shouldBe true
+    SNAPSyncController.fillResumeLayout(layout8, concurrency = 16).isLeft shouldBe true
+    // The 1-range layout ({0xff..}) is also a subset of every layout.
+    SNAPSyncController.fillResumeLayout(Map(AccountTask.MaxHash32 -> midCursor), concurrency = 16).isLeft shouldBe true
+    // 16 -> 8: keys outside the 8-range layout.
+    val layout16 = AccountTask.createInitialTasks(ByteString.empty, 16).map(t => t.last -> t.next).toMap
+    SNAPSyncController.fillResumeLayout(layout16, concurrency = 8).isLeft shouldBe true
+    // 15 of the 16-range keys at concurrency 32: they fit the 16-range layout, a strict subset of the 32-range one, so
+    // filling would mark 17 never-downloaded ranges done (#1597 F2). The same 15 at concurrency 16 are still filled.
+    val fifteenOf16 = layout16 - AccountTask.createInitialTasks(ByteString.empty, 16)(4).last
+    fifteenOf16.keySet.subsetOf(AccountTask.createInitialTasks(ByteString.empty, 32).map(_.last).toSet) shouldBe true
+    SNAPSyncController.fillResumeLayout(fifteenOf16, concurrency = 32).isLeft shouldBe true
+    SNAPSyncController.fillResumeLayout(fifteenOf16, concurrency = 16).map(_._2.size) shouldBe Right(1)
+    SNAPSyncController.fillResumeLayout(layout16, concurrency = 32).isLeft shouldBe true
+    // One stray key next to otherwise valid cursors.
+    val stray = ByteString(Array.fill(32)(0x01.toByte))
+    SNAPSyncController.fillResumeLayout((layout16 - AccountTask.MaxHash32) + (stray -> stray), 16).isLeft shouldBe true
+    SNAPSyncController.fillResumeLayout(Map.empty, concurrency = 16).isLeft shouldBe true
   }
 
   // ── Review nits N2 / N4 ──
