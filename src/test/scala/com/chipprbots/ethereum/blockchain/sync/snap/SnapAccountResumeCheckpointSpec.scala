@@ -3,8 +3,11 @@ package com.chipprbots.ethereum.blockchain.sync.snap
 import java.nio.file.Files
 import java.nio.file.Path
 
+import org.apache.pekko.actor.testkit.typed.scaladsl.FishingOutcomes
 import org.apache.pekko.actor.testkit.typed.scaladsl.ScalaTestWithActorTestKit
 import org.apache.pekko.util.ByteString
+
+import scala.concurrent.duration.*
 
 import org.scalatest.flatspec.AnyFlatSpecLike
 import org.scalatest.matchers.should.Matchers
@@ -109,4 +112,60 @@ class SnapAccountResumeCheckpointSpec
 
     entry.account.carriedTaskFiles shouldBe None
     f.appStateStorage.getSnapAccountResumeCheckpoint() shouldBe None
+  }
+
+  it should "hold, not fill, 15 of the 16-range cursors at concurrency 32 (they fit the 16-range layout)" taggedAs UnitTest in {
+    val f = new SnapControllerFixture(testKit)
+    val dir = Files.createTempDirectory("snap-1597-refine-")
+    val files = taskFiles(dir, 3)
+    val layout16 = AccountTask.createInitialTasks(ByteString.empty, 16)
+    val fifteen = layout16.map(t => t.last -> t.next).toMap - layout16(4).last
+    val json = seedCheckpoint(f, fifteen, files)
+
+    val entry = f.enterAccountSync(SNAPSyncConfig(accountConcurrency = 32, taskFileDir = Some(dir)), height = Height)
+
+    // Filling would have marked 17 never-downloaded 32-layout ranges done.
+    entry.account.concurrency shouldBe 32
+    entry.account.resumeProgress shouldBe empty
+    entry.account.carriedTaskFiles shouldBe None
+    f.appStateStorage.getSnapAccountResumeCheckpoint() shouldBe Some(json)
+  }
+
+  it should "keep a held record when this run's own cursors drift past the cap, while the record itself is within it" taggedAs UnitTest in {
+    val f = new SnapControllerFixture(testKit)
+    val dir = Files.createTempDirectory("snap-1597-held-drift-")
+    val files = taskFiles(dir, 3)
+    val layout8 = AccountTask.createInitialTasks(ByteString.empty, 8).map(t => t.last -> t.next).toMap
+    // Held record at pivot 30,000: within the cap of both this run's first pivot (936) and the next one (51,000).
+    val json = AccountResumeCheckpoint.encode(
+      AccountResumeCheckpoint(SnapControllerFixture.root(0x22), BigInt(30_000), layout8, files)
+    )
+    f.appStateStorage.putSnapAccountResumeCheckpoint(json).commit()
+
+    val entry = f.enterAccountSync(SNAPSyncConfig(taskFileDir = Some(dir)), height = Height)
+    entry.account.resumeProgress shouldBe empty
+
+    // This run's own cursors, tracked in memory at its pivot (936).
+    entry.snap ! SNAPSyncController.AccountRangeProgressCmd(
+      AccountTask.createInitialTasks(ByteString.empty, 16).map(t => t.last -> t.next).toMap,
+      generation = entry.account.progressGeneration
+    )
+    // Restart at pivot 51,000: more than 50,000 blocks from 936, so the in-memory cursors are discarded.
+    f.pollWith(entry.snap, f.peersAt(height = 51_064))
+    val newPivot = BigInt(51_064) - SNAPSyncConfig().pivotBlockOffset
+    entry.snap ! SNAPSyncController.DelayedRestart("#1597 F1")
+    f.parent.fishForMessage(10.seconds) {
+      case SNAPSyncController.StartRegularSyncBootstrap(`newPivot`) => FishingOutcomes.complete
+      case _                                                        => FishingOutcomes.continueAndIgnore
+    }
+    entry.snap ! SNAPSyncController.BootstrapComplete(
+      Some(f.storeHeaderAt(newPivot, SnapControllerFixture.root(0x33)))
+    )
+    val relaunched = f.expectSpawn[ChildSpawn.AccountRange]
+    f.awaitProcessed(entry.snap)
+
+    relaunched.resumeProgress shouldBe empty
+    // Before #1597 F1 the drift branch removed the record unconditionally.
+    f.appStateStorage.getSnapAccountResumeCheckpoint() shouldBe Some(json)
+    Files.exists(Path.of(files.storagePath)) shouldBe true
   }

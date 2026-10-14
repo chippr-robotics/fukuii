@@ -444,6 +444,8 @@ private class SNAPSyncControllerImpl(
   // storage-task completion markers, and never sweeps these files. Cleared where the record is removed: at accounts
   // complete and at SNAP complete.
   private var heldResumeCheckpoint: Option[ContractTaskFiles] = None
+  // Pivot of the held record: the drift cap still applies to it (#1597 F1).
+  private var heldResumePivot: Option[BigInt] = None
 
   /** Task files handed to accounts-complete recovery (never swept while referenced). */
   private def accountsCompleteTaskFilePaths: Set[String] =
@@ -1696,6 +1698,7 @@ private class SNAPSyncControllerImpl(
           stateRoot.foreach(root => snapProgressStorage.clearProgress(root.value))
           appStateStorage.removeSnapAccountResumeCheckpoint().commit()
           heldResumeCheckpoint = None
+          heldResumePivot = None
           preservedRangeProgress = Map.empty
           preservedAtPivotBlock = None
           preservedTaskFiles = None
@@ -3740,28 +3743,29 @@ private class SNAPSyncControllerImpl(
     // finished ranges, #1597) is ignored for this run but NOT dropped: see `heldResumeCheckpoint`.
     if preservedRangeProgress.isEmpty then
       appStateStorage.getSnapAccountResumeCheckpoint().foreach { json =>
-        // Rejected: (reason, Some(files) = keep the record and its files, None = drop the record).
-        type Rejected = (String, Option[ContractTaskFiles])
+        // Rejected: (reason, Some(record) = keep the record and its files, None = drop the record).
+        type Rejected = (String, Option[AccountResumeCheckpoint])
         type Accepted = (AccountResumeCheckpoint, Map[ByteString, ByteString], Seq[AccountTask])
         val decision: Either[Rejected, Accepted] =
           AccountResumeCheckpoint
             .decode(json)
             .left
-            .map(why => (why, Option.empty[ContractTaskFiles]))
+            .map(why => (why, Option.empty[AccountResumeCheckpoint]))
             .flatMap { cp =>
               val drift = (currentPivot - cp.pivotBlock).abs
               if drift > MaxPreservedPivotDistance then
-                Left((s"pivot drifted $drift blocks (>$MaxPreservedPivotDistance)", Option.empty[ContractTaskFiles]))
+                val why = s"pivot drifted $drift blocks (>$MaxPreservedPivotDistance)"
+                Left((why, Option.empty[AccountResumeCheckpoint]))
               else
                 SNAPSyncController
                   .fillResumeLayout(cp.cursors, effectiveConcurrency)
                   .left
-                  .map(why => (why, Option(cp.taskFiles)))
+                  .map(why => (why, Option(cp)))
                   .flatMap { case (cursors, filled) =>
                     SNAPSyncController
                       .checkResumable(cursors, cp.taskFiles, effectiveConcurrency)
                       .left
-                      .map(why => (why, Option.empty[ContractTaskFiles]))
+                      .map(why => (why, Option.empty[AccountResumeCheckpoint]))
                       .map(_ => (cp, cursors, filled))
                   }
             }
@@ -3781,14 +3785,16 @@ private class SNAPSyncControllerImpl(
             preservedRangeProgress = cursors
             preservedTaskFiles = Some(cp.taskFiles)
             preservedAtPivotBlock = Some(cp.pivotBlock)
-          case Left((why, Some(heldFiles))) =>
+          case Left((why, Some(held))) =>
             ctx.log.warn(
-              s"Ignoring account resume checkpoint for this run: $why. The record, its task files " +
-                s"(${heldFiles.storageCount} storage-task entries, ${heldFiles.codeHashesCount} codeHashes) and the " +
-                "storage-task completion markers are KEPT for a later run at the matching layout: until the account " +
-                "phase completes, this run's checkpoints stay in memory only and the record is not overwritten."
+              s"Ignoring account resume checkpoint for this run: $why. The record (pivot ${held.pivotBlock}), its " +
+                s"task files (${held.taskFiles.storageCount} storage-task entries, " +
+                s"${held.taskFiles.codeHashesCount} codeHashes) and the storage-task completion markers are KEPT " +
+                "for a later run at the matching layout: until the account phase completes, this run's checkpoints " +
+                "stay in memory only and the record is not overwritten."
             )
-            heldResumeCheckpoint = Some(heldFiles)
+            heldResumeCheckpoint = Some(held.taskFiles)
+            heldResumePivot = Some(held.pivotBlock)
           case Left((why, None)) =>
             ctx.log.warn(s"Ignoring account resume checkpoint: $why. The account phase does not resume from it.")
             appStateStorage.removeSnapAccountResumeCheckpoint().commit()
@@ -3857,7 +3863,27 @@ private class SNAPSyncControllerImpl(
         preservedAtPivotBlock = None
         preservedTaskFiles = None
         snapProgressStorage.clearProgress(rootHash.value)
-        appStateStorage.removeSnapAccountResumeCheckpoint().commit()
+        // The cursors that drifted are this run's (in memory). A held record is a different, older record under the
+        // same key (#1597): keep it while its own pivot is within the cap; once it is too stale to resume, release
+        // the hold and drop it like any drifted record.
+        val heldStillResumable =
+          heldResumeCheckpoint.isDefined &&
+            heldResumePivot.forall(p => (currentPivot - p).abs <= MaxPreservedPivotDistance)
+        if heldStillResumable then
+          ctx.log.info(
+            s"Keeping the held account resume checkpoint (pivot ${heldResumePivot.fold("?")(_.toString)}, " +
+              s"within the cap of current pivot $currentPivot)"
+          )
+        else
+          if heldResumeCheckpoint.isDefined then
+            ctx.log.warn(
+              s"Releasing the held account resume checkpoint: its pivot " +
+                s"${heldResumePivot.fold("?")(_.toString)} drifted more than $MaxPreservedPivotDistance blocks " +
+                s"from current pivot $currentPivot; dropping it"
+            )
+            heldResumeCheckpoint = None
+            heldResumePivot = None
+          appStateStorage.removeSnapAccountResumeCheckpoint().commit()
         Map.empty
       case None =>
         Map.empty
@@ -5655,6 +5681,7 @@ private class SNAPSyncControllerImpl(
       // keeping only the files the accounts-complete recovery path was handed (conservative; they are not re-read).
       appStateStorage.removeSnapAccountResumeCheckpoint().commit()
       heldResumeCheckpoint = None
+      heldResumePivot = None
       sweepSupersededTaskFiles(keep = accountsCompleteTaskFilePaths, reason = "SNAP complete")
 
       // Phase 1 of the handshake: tell the parent that pivot/state is anchored. Parent starts RegularSync.
@@ -6247,9 +6274,10 @@ object SNAPSyncController:
     * Rejected (`Left`), as a range layout mismatch:
     *   - no cursors at all (filling would mark the whole keyspace done);
     *   - a key outside this layout (another concurrency's ranges);
-    *   - a keyset that is exactly another concurrency's layout. The layout for `k` ranges is a subset of the layout for
-    *     `n` ranges when `k` divides `n` (the 8-range keys are among the 16-range keys), so without this an 8 -> 16
-    *     concurrency change would mark half the keyspace done. A strict subset of size `k` can only equal layout `k`.
+    *   - a keyset that fits a smaller layout `k < n` (all its keys are among layout `k`'s). The layout for `k` ranges
+    *     is a subset of the layout for `n` ranges when `k` divides `n` (the 8-range keys are among the 16-range keys),
+    *     so without this an 8 -> 16 change would mark half the keyspace done, and 15 of 16 cursors at concurrency 32
+    *     would mark 17 never-downloaded ranges done.
     */
   private[snap] def fillResumeLayout(
       cursors: Map[ByteString, ByteString],
@@ -6266,14 +6294,21 @@ object SNAPSyncController:
         s"range layout mismatch: ${keys.diff(expected).size} of ${keys.size} saved cursors are outside the " +
           s"${expected.size}-range layout at concurrency $concurrency"
       )
-    else if AccountTask.createInitialTasks(ByteString.empty, keys.size).map(_.last).toSet == keys then
-      Left(
-        s"range layout mismatch: the ${keys.size} saved cursors are the ${keys.size}-range layout, not the " +
-          s"${expected.size}-range layout at concurrency $concurrency"
-      )
     else
-      val missing = layout.filterNot(t => keys.contains(t.last))
-      Right((cursors ++ missing.map(t => t.last -> t.last), missing))
+      // A smaller layout that holds every saved key: the record may be that concurrency's (or one of its ranges'
+      // refinements), and filling would mark never-downloaded ranges done. E.g. 15 of the 16-range keys at
+      // concurrency 32 (#1597 F2). A subset of layout `k` needs `k >= keys.size`.
+      (keys.size until concurrency).find { k =>
+        keys.subsetOf(AccountTask.createInitialTasks(ByteString.empty, k).map(_.last).toSet)
+      } match
+        case Some(k) =>
+          Left(
+            s"range layout mismatch: the ${keys.size} saved cursors fit the $k-range layout, not the " +
+              s"${expected.size}-range layout at concurrency $concurrency"
+          )
+        case None =>
+          val missing = layout.filterNot(t => keys.contains(t.last))
+          Right((cursors ++ missing.map(t => t.last -> t.last), missing))
 
   /** Progress updates emitted by worker coordinators.
     *

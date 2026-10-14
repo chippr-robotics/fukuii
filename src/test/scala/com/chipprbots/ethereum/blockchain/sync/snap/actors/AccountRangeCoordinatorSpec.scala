@@ -1178,6 +1178,13 @@ class AccountRangeCoordinatorSpec extends ScalaTestWithActorTestKit() with AnyFl
     // 16 -> 8: keys outside the 8-range layout.
     val layout16 = AccountTask.createInitialTasks(ByteString.empty, 16).map(t => t.last -> t.next).toMap
     SNAPSyncController.fillResumeLayout(layout16, concurrency = 8).isLeft shouldBe true
+    // 15 of the 16-range keys at concurrency 32: they fit the 16-range layout, a strict subset of the 32-range one, so
+    // filling would mark 17 never-downloaded ranges done (#1597 F2). The same 15 at concurrency 16 are still filled.
+    val fifteenOf16 = layout16 - AccountTask.createInitialTasks(ByteString.empty, 16)(4).last
+    fifteenOf16.keySet.subsetOf(AccountTask.createInitialTasks(ByteString.empty, 32).map(_.last).toSet) shouldBe true
+    SNAPSyncController.fillResumeLayout(fifteenOf16, concurrency = 32).isLeft shouldBe true
+    SNAPSyncController.fillResumeLayout(fifteenOf16, concurrency = 16).map(_._2.size) shouldBe Right(1)
+    SNAPSyncController.fillResumeLayout(layout16, concurrency = 32).isLeft shouldBe true
     // One stray key next to otherwise valid cursors.
     val stray = ByteString(Array.fill(32)(0x01.toByte))
     SNAPSyncController.fillResumeLayout((layout16 - AccountTask.MaxHash32) + (stray -> stray), 16).isLeft shouldBe true
