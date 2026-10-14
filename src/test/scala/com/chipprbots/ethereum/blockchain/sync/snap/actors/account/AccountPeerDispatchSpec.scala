@@ -30,6 +30,7 @@ import com.chipprbots.ethereum.blockchain.sync.snap.actors.AccountRangeCoordinat
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.AccountRangeWorker
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.StateIngest
 import com.chipprbots.ethereum.db.storage.MptStorage
+import com.chipprbots.ethereum.db.storage.SnapStorageDoneStorage
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor
 import com.chipprbots.ethereum.network.Peer
 import com.chipprbots.ethereum.network.PeerActor
@@ -83,6 +84,8 @@ private[actors] class StubAccountPeerDispatchState(
   val storageScheme: StorageScheme = StorageScheme.Hash
   def mptStorage: MptStorage = throw new UnsupportedOperationException("AccountPeerDispatch read mptStorage")
   def stateIngest: StateIngest = throw new UnsupportedOperationException("AccountPeerDispatch read stateIngest")
+  def storageDone: Option[SnapStorageDoneStorage] =
+    throw new UnsupportedOperationException("AccountPeerDispatch read storageDone")
 
   // AccountTaskLifecycleApi
   var redispatchCalls: Int = 0

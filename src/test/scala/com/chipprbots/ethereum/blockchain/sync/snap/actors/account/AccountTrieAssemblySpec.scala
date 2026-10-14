@@ -122,6 +122,8 @@ private[actors] class StubAccountTrieAssemblyState(
   val minResponseBytesConfig: Int = 102400
   val intakeBudget: Option[SnapIntakeBudget] = None
   val resumeProgress: Map[ByteString, ByteString] = Map.empty
+  def storageDone: Option[SnapStorageDoneStorage] =
+    throw new UnsupportedOperationException("AccountTrieAssembly read storageDone")
   val stateIngest: StateIngest = new StateIngest:
     def appState: AppStateStorage = notReached("appState")
     def stateTries: StateStorage = notReached("stateTries")

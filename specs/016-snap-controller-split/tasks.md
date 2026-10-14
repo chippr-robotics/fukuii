@@ -1158,8 +1158,8 @@ green.
 baseline total** (the storage-reference total over `snap/controller/`, `snap/actors/` and the core, FR-043), and the PR records
 the new total in the baseline file. Its own coordinator file's figure normally falls too, but the gate is the total:
 per-file counts may move between files. The one exception is a slice whose moved code holds no storage reference at
-all: the PR says so, with the grep, and the total stays unchanged. It never rises. The "no `StateAccess`
-under `snap/`" dependency check is delivered by spec 017 (DC-4); it extends the T054 ratchet tooling and is vacuous
+all: the PR says so, with the grep, and the total stays unchanged. It never rises, except by a session-value Env
+declaration ("Amendment 2026-10-13", below). The "no `StateAccess` under `snap/`" dependency check is delivered by spec 017 (DC-4); it extends the T054 ratchet tooling and is vacuous
 until `StateAccess` exists (FR-042).
 
 **Amendment 2026-10-13: session values stay explicit parameters (named FR-042 exception; user decision 2026-10-13,
@@ -1179,6 +1179,26 @@ constructor, `ChildFactories` and the spawn sites, and the module traits reach t
 The ratchet keeps counting both (they are still storage references), so a slice that keeps them lowers the total only by
 what it adopts; the PR says so. SC-009 ("storage only through `StateIngest`") reads with this exception. Recorded in
 plan.md ("Amendment 2026-10-13") and ADR INF-006 (decision 1, note).
+
+**The Env declaration cost (user decision 2026-10-13, found at T065; tightened after the #1591 reviews).** Declaring a
+session value on the coordinator's `<Coordinator>Env` is itself counted (the declaration and its import). A slice whose
+moved code reads a session value the Env does not yet declare may raise the total only under all of these:
+- **Closed list.** Only the two session values above qualify: the pivot-bound `mptStorage: MptStorage` and the
+  per-spawn `storageDone: Option[SnapStorageDoneStorage]`. Any other store is not a session value unless a new user
+  decision names it.
+- **Net of adoptions.** The slice first applies every adoption it can (each store that maps to a `StateIngest`
+  member). The rise is the total after those adoptions, net of them; a slice whose adoptions cover the declaration
+  does not rise at all.
+- **Bounded amount.** The rise equals, exactly, the increase in the Env file's own count from that declaration and its
+  import (+N). Nothing else in the slice may raise the total.
+- **Fresh justification.** `storage-baseline.json` carries a fresh `justifications["storage_refs.total"]` line that
+  names the declaration as the session-value Env declaration cost under this exception and states +N. The previous
+  line is kept as its own history entry (`justifications["storage_refs.total.history"]`), not overwritten.
+Any other rise is still forbidden. Instances:
+- C-A4 (T065): `AccountRangeEnv` declares `storageDone: Option[SnapStorageDoneStorage]` (+3: the name, the type and
+  its import; `AccountRangeEnv.scala` 3 → 6); total 609 → 612. C-A4 adopts nothing to offset it (none of its stores
+  maps to a parameterless `StateIngest` member), so the net rise is the whole +3. The T060b counter-v2 justification
+  it replaced is kept as `justifications["storage_refs.total.history"]`.
 
 - [x] T060 Coordinator characterization (docs PR): a var × method matrix and Command × behaviour table for ARC, SRC,
   TNHC and BCC, using the research.md method. Confirm or amend the C-* boundaries in plan.md, and derive each
@@ -1579,10 +1599,56 @@ plan.md ("Amendment 2026-10-13") and ADR INF-006 (decision 1, note).
     - Owed: the vault review (the trie-node write path and the StackTrie commit above), the second-specialist review
       (prism) and forge's "no ETC behaviour change" sign-off (the Hash-scheme path is ETC's). Node run: the Mordor
       restart mid-account comes after C-A4 (T065).
-- [ ] T065 [C-A4] `ContractWorkCarry` (vault; T060: adopts `storageDone` per D-T060-1, superseded by the Coordinators
+- [x] T065 [C-A4] `ContractWorkCarry` (vault; T060: adopts `storageDone` per D-T060-1, superseded by the Coordinators
   "Amendment 2026-10-13": `storageDone` and `mptStorage` stay explicit parameters. The task-file stream vals stay in
   the core under rule (d)). Narrowing takes `StateIngest`, never `StateAccess`; lowers the baseline
   total. Run a Mordor restart mid-account. The #1487/#1498/#1501 replay invariants are unchanged.
+  - **Stop and decision.** The first attempt stopped before code: under the 2026-10-13 exception the replay reaches
+    `storageDone` through `AccountRangeEnv`, whose declaration raises the total by 3, and C-A4 adopts nothing to offset
+    it. User decision 2026-10-13: the Env route (the replay moves intact into the module), the rise justified, and the
+    Amendment gains "The Env declaration cost" (above). The alternative, lifting the `storageDone` uses into core
+    methods, would have left the marker skip outside the module vault reviews.
+  - **As built** (branch `refactor/snap-016-ca4-contract-carry`, four code commits and this docs commit; no sbt or
+    JVM run, CI compiles and tests). (1) `# moved:` `ContractEntrySize` from the Impl into the companion
+    (`private[actors]`): the core initializer `carriedStorageCount` reads it, so it cannot be a trait `lazy val`.
+    No lift: every A4 member was already an indent-2 member. (2) Prerequisite: `ContractWorkCarryState` (13) is
+    declared in the new `actors/account/ContractWorkCarry.scala`, and `AccountIntakeGateApi`
+    (`downstreamBackpressureActive`, `intakeGateClosed`) in `AccountPeerDispatch.scala`, a separate trait (the
+    `AccountActivePeersApi` precedent); `AccountRangeEnv` gains `storageDone`, so that constructor parameter becomes a
+    `val`; the C-A1/C-A2/C-A3 stub states gain it; `storage-baseline.json` records 612 with the justification.
+    (3) The move commit takes 10 members byte-identical into `ContractWorkCarry`: `replayStorageOffset`,
+    `replayCodeHashesOffset`, `replaySkippedFinished`, `replayQueuedStorage` (private vars, rule (d)), `replayDone`,
+    `syncTaskFiles`, `replayCarriedChunk`, `identifyContractAccounts`, `readContractFile`, `readUniqueCodeHashes`. The
+    Impl gains `with ContractWorkCarry`; the moved members the core calls lose `private` (`replayDone`,
+    `syncTaskFiles`, `replayCarriedChunk`); the core members the module reaches become public (`carriedStorageCount`,
+    `carriedCodeHashesCount`, `contractStorageFos`, `uniqueCodeHashesFos`, `codeHashBloom`); the core drops the
+    `RandomAccessFile`, `Account` and `MerklePatriciaTrie` imports. (4) The narrowing commit: the self-type names
+    `ContractWorkCarryState & AccountRangeEnv & AccountIntakeGateApi`; `ContractWorkCarry extends ContractWorkCarryApi
+    with ContractTaskFilesApi`, so the Impl drops its own `with` for each and adds `with ContractWorkCarryState`;
+    `AccountPeerDispatch` also extends `AccountIntakeGateApi`. No `# adopts:`; `apply`, `ChildFactories`, the spawn
+    site and `ChildFactoriesSpec` are unchanged.
+    - Replay path (for vault): the same `storageDone` and `mptStorage` instances (the constructor's), the same order
+      (empty roots dropped, the marker skip on both schemes, then the Hash-scheme root-presence check), the same
+      chunking, pause and pacing timers, intake reservation, `replayed = true` message and closing `CheckCompletion`;
+      the task-file writes, flushes and fsyncs are unchanged. The #1487/#1498/#1501 replay invariants are unchanged.
+    - Counts: `ContractWorkCarry` State 13 (R14b 4, "about 15 with the task-file I/O vals": the three counts and
+      `codeHashBloom`, plus the two carried counts and the seven task-file handles and streams), Api 2 (= R14b).
+      `AccountPeerDispatch` 17 / 1, `AccountTaskLifecycle` 18 / 15 and `AccountTrieAssembly` 20 / 7 unchanged.
+      `AccountRangeEnv` 15 → 16 (G9): `storageDone`.
+    - No adoptable store (verify.py's counter v2 over the moved bodies): `storageDone.fold(...)`,
+      `mptStorage.multiGetNodes(...)` and `storageDone.isEmpty` in `replayCarriedChunk`; `identifyContractAccounts`,
+      `syncTaskFiles` and the two readers hold none (`.createStorageTask` and `replayQueuedStorage` are allow-listed).
+      Both stores are session values under the exception.
+    - Storage total **609 → 612** (counter v2), justified: `AccountRangeCoordinator.scala` 17 → 14,
+      `actors/account/ContractWorkCarry.scala` 0 → 3 (the three references above),
+      `actors/account/AccountRangeEnv.scala` 3 → 6 (`storageDone: Option[SnapStorageDoneStorage]` and its import).
+    - Tests (`# new-tests:`): `ContractWorkCarrySpec` (7 cases, in a `BehaviorTestKit` with real temporary task files:
+      identification and the codeHash dedup, a response without contracts, the replay's marker skip and Hash-scheme
+      presence check, the Path scheme without a trie-store read, the intake-gate hold and resume, two-chunk pacing,
+      `syncTaskFiles`). The C-A1/C-A2/C-A3 stubs gain `storageDone`. No assertion changed.
+    - Owed: the vault review (the carried replay above), the second-specialist review (prism), forge's "no ETC
+      behaviour change" sign-off (the Hash-scheme presence check is ETC's path), and the **Mordor restart
+      mid-account** (from the CI artifact jar, user).
 - [x] T066 [C-S1] `StoragePeerDispatch` (T060: plus `handleTimeout`. Zero-reference in substance: its 2 matches are
   `ForceCompleteStorage`, which T060b allow-lists. Grep recorded, total unchanged). Narrowing takes `StateIngest` where it touches storage, never `StateAccess`;
   lowers the baseline total.

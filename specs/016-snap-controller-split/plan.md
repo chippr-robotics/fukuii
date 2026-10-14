@@ -369,7 +369,7 @@ decision 2026-10-11):** T055 does not change the spawn arguments; each C-* narro
 | C-A1 | Account → `actors/account/AccountPeerDispatch.scala` | stateless/snapless marking (with `maybeRequestPivotRefresh`, T060), cooldown, response bytes, `inFlightForPeer`, `dispatchIfPossible`, backpressure + #1501 intake gate | `[ACCOUNT-COOLDOWN]`, `[ACCOUNT-IDLE]`; zero-reference (T060) | ~300 |
 | C-A2 | Account → `actors/account/AccountTaskLifecycle.scala` | `handleTaskComplete`/`Failed`, `requeueOrEscalate`, redispatch, `drainActiveTasks` (T060), 32-byte hash math, `completeEmptyTaskRange`; `classifyIdleStall` stays with the core's `CheckDispatchStalled` arm (T060) | site of "stale-pivot empty ranges as scarcity"; zero-reference (T060) | ~320 |
 | C-A3 | Account → `actors/account/AccountTrieAssembly.scala` | `getOrCreateTaskStackTrie`, `handleStoreAccountChunk`, `finalizeTrie`, `finalizing` behaviour | StackTrie resume (#1487); adopts `pathNodes`, `mptStorage` stays explicit (Amendment 2026-10-13) | ~300 |
-| C-A4 | Account → `actors/account/ContractWorkCarry.scala` | `identifyContractAccounts`, task-file writing, `syncTaskFiles`, `replayCarriedChunk`, `readContractFile`, `readUniqueCodeHashes`; `copyPrefix` stays in the companion: only core vals call it (T060) | **vault**; #1453/#1487/#1498 and #1501 invariants | ~350 |
+| C-A4 | Account → `actors/account/ContractWorkCarry.scala` | `identifyContractAccounts`, task-file writing, `syncTaskFiles`, `replayCarriedChunk`, `readContractFile`, `readUniqueCodeHashes`; `copyPrefix` stays in the companion: only core vals call it (T060) | **vault**; #1453/#1487/#1498 and #1501 invariants; `storageDone` and `mptStorage` stay explicit, total +3 for the Env declaration (Amendment 2026-10-13) | ~350 |
 | C-S1 | Storage → `actors/storage/StoragePeerDispatch.scala` | stateless, `SnapPeerHealth` (with `handleTimeout`, T060), cooldown, batch sizing, response bytes, `selectFloorPeer` use, `redispatchEligible` | `[STORAGE-PEER-HEALTH]`, `[STORAGE-FLOOR]`; zero-reference in substance (T060) | ~480 |
 | C-S2 | Storage → `actors/storage/StorageOrderedApply.scala` | `ReadyStorageChunk` ordering, `drainOrderedStorageChunks`, `applyReadyStorageChunk`, per-account trie get/commit/**reset**, `flushTrieNodeWrites`, `writePrebuiltTrie` (#1533, T060) | **vault**; site of the "pivot refresh discards in-flight tries" task; `flushTrieNodeWrites` writes through `pns.dataSource.update` (raw, T060) | ~360 |
 | C-S3 | Storage → `actors/storage/StorageDoneMarkers.scala` | `recordFlatBatchDone`, `stageDoneMarker`, `takeDoneMarkersFor`, `stageFlatSlotChunk`, `flushPendingFlatBatch`, `recordCompletedTask` | **vault**; spec 010 R2a is kept word for word (a record is never durable before its flat slots) | ~170 |
@@ -779,3 +779,12 @@ User decision of 2026-10-13, after T064 (C-A3) stopped before code. Nothing abov
   "Amendment 2026-10-13"); SC-009 reads with it. ADR INF-006 decision 1 has a note.
 - **C-A3 as built (T064).** Adopts `pathNodeStorage` → `pathNodes`; `mptStorage` and `storageDone` unchanged. Total
   619 → 609 (the characterization's 606 for this route, plus the explicit `mptStorage` in `AccountRangeEnv`).
+- **The Env declaration cost (user decision 2026-10-13, found at T065; tightened after the #1591 reviews).** Declaring
+  a session value on a coordinator's Env counts (the declaration and its import). A slice may raise the total for it
+  only if: the value is on the closed list (`mptStorage`, pivot-bound; `storageDone`, the per-spawn `Option`; any
+  other needs a new user decision); the rise is computed net of the slice's own adoptions, applied first; the rise
+  equals exactly the Env file's count increase for that declaration and its import; and a fresh
+  `justifications["storage_refs.total"]` line names it and states the amount, the previous line kept as
+  `justifications["storage_refs.total.history"]`. Nothing else may raise the total (tasks.md, Coordinators).
+- **C-A4 as built (T065).** No adoptable store: the replay's `storageDone` and `mptStorage` are the two session
+  values. `AccountRangeEnv` declares `storageDone` (+3); total 609 → 612, justified.

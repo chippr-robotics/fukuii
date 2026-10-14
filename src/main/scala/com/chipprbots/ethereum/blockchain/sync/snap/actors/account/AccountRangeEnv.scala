@@ -12,6 +12,7 @@ import com.chipprbots.ethereum.blockchain.sync.snap.StorageScheme
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.AccountRangeCoordinator
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.StateIngest
 import com.chipprbots.ethereum.db.storage.MptStorage
+import com.chipprbots.ethereum.db.storage.SnapStorageDoneStorage
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor
 
 /** AccountRangeCoordinator's environment for its modules (spec 016 C-A1, characterization G9): the actor context, its
@@ -27,6 +28,10 @@ import com.chipprbots.ethereum.network.NetworkPeerManagerActor
   * `mptStorage`, the pivot-bound trie store the Hash-scheme StackTrie flushes to. `mptStorage` stays an explicit
   * parameter, not a `StateIngest` member: it is a session value (the core's per-pivot instance), the named FR-042
   * exception recorded at T064. The Path-scheme node store comes from `stateIngest.pathNodes`.
+  *
+  * C-A4 (spec 016 T065) adds `storageDone`, the storage-task completion markers the carried replay reads to skip tasks
+  * already finished. It is the per-spawn `Option.when(recordStorageDone)(storageDoneStorage)`, a session value like
+  * `mptStorage`, so it stays an explicit parameter (the same FR-042 exception, Coordinators "Amendment 2026-10-13").
   */
 private[actors] trait AccountRangeEnv:
   def ctx: ActorContext[AccountRangeCoordinator.Command]
@@ -44,3 +49,4 @@ private[actors] trait AccountRangeEnv:
   def storageScheme: StorageScheme
   def mptStorage: MptStorage
   def stateIngest: StateIngest
+  def storageDone: Option[SnapStorageDoneStorage]
