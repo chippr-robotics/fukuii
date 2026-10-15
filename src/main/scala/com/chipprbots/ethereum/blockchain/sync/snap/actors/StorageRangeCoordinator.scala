@@ -101,6 +101,7 @@ private[actors] class StorageRangeCoordinatorImpl(
     processingEcOverride: Option[ExecutionContext] = None
 ) extends StoragePeerDispatch
     with StorageOrderedApply
+    with StorageDoneMarkers
     with StorageRangeEnv
     with StoragePeerDispatchState
     with StorageRangeCoreApi
@@ -448,14 +449,14 @@ private[actors] class StorageRangeCoordinatorImpl(
   // and overwrite), the bookkeeping just doesn't double-count.
 
   /** Pending (accountHash, sortedSlots) pairs awaiting flush. Package-private for unit tests. */
-  private[actors] val pendingFlatBatchAccounts =
+  val pendingFlatBatchAccounts =
     mutable.ArrayBuffer.empty[(ByteString, Seq[(ByteString, ByteString)])]
 
   /** Total slot entries currently buffered in `pendingFlatBatchAccounts`. Package-private for unit tests. */
-  private[actors] var pendingFlatBatchEntries: Int = 0
+  var pendingFlatBatchEntries: Int = 0
 
   /** Number of in-flight async flat-batch flushes — used to gate completion. Package-private for unit tests. */
-  private[actors] var inFlightFlatBatches: Int = 0
+  var inFlightFlatBatches: Int = 0
 
   // ── Storage-task completion markers (a resume skips finished tasks; see SnapStorageDoneStorage) ──
   //
@@ -470,108 +471,27 @@ private[actors] class StorageRangeCoordinatorImpl(
   // A batch that fails disables markers for the rest of this coordinator's life: its slots are lost and any staged
   // account could have had a chunk in it. Losing a staged marker (crash before its batch commits) only means the task
   // is downloaded again after a restart — today's behaviour.
-  private val storageDoneStorage: Option[SnapStorageDoneStorage] =
+  val storageDoneStorage: Option[SnapStorageDoneStorage] =
     Option.when(recordStorageDone)(new SnapStorageDoneStorage(flatSlotStorage.dataSource))
 
   /** Fully-downloaded `(accountHash, storageRoot, lastSlotBatch)` whose marker is not written yet. Package-private for
     * tests.
     */
-  private[actors] val pendingDoneMarkers = mutable.ArrayBuffer.empty[(ByteString, ByteString, Long)]
+  val pendingDoneMarkers = mutable.ArrayBuffer.empty[(ByteString, ByteString, Long)]
 
   /** Set once a flat batch failed: this coordinator writes no further markers. Package-private for tests. */
-  private[actors] var doneMarkersDisabled: Boolean = false
+  var doneMarkersDisabled: Boolean = false
 
   /** Sequence number of the last submitted flat batch (1-based). */
-  private var flatBatchSeq: Long = 0L
+  var flatBatchSeq: Long = 0L
 
-  /** Every flat batch with a sequence number <= this has committed. Package-private for tests. */
-  private[actors] var flatBatchesDoneThrough: Long = 0L
-  private val flatBatchesDoneAhead = mutable.Set.empty[Long]
-
-  private def recordFlatBatchDone(seq: Long): Unit =
-    if seq > flatBatchesDoneThrough then
-      flatBatchesDoneAhead += seq
-      while flatBatchesDoneAhead.remove(flatBatchesDoneThrough + 1) do flatBatchesDoneThrough += 1
-
-  /** Stage the completion marker of an account whose data was just fully handed to storage. */
-  def stageDoneMarker(accountHash: ByteString, storageRoot: ByteString): Unit =
-    if storageDoneStorage.isDefined && !doneMarkersDisabled then
-      pendingDoneMarkers += ((accountHash, storageRoot, flatBatchSeq + 1))
-
-  /** Remove and return the staged markers that may ride in batch `batchSeq` (see the rule above). */
-  private def takeDoneMarkersFor(batchSeq: Long): Seq[(ByteString, ByteString)] =
-    if storageDoneStorage.isEmpty || doneMarkersDisabled || pendingDoneMarkers.isEmpty then Seq.empty
-    else
-      val (ride, wait) = pendingDoneMarkers.partition { case (_, _, lastSlotBatch) =>
-        flatBatchesDoneThrough >= lastSlotBatch ||
-        (batchSeq == lastSlotBatch && flatBatchesDoneThrough >= lastSlotBatch - 1)
-      }
-      pendingDoneMarkers.clear()
-      pendingDoneMarkers ++= wait
-      ride.map { case (account, root, _) => (account, root) }.toList
+  val flatBatchesDoneAhead = mutable.Set.empty[Long]
 
   /** Dedicated dispatcher for flat-batch RocksDB commits. Tests can inject their own ExecutionContext to keep timing
     * deterministic; production looks up `storage-writer-dispatcher` from the actor system.
     */
-  private val flatBatchEc: ExecutionContext =
+  val flatBatchEc: ExecutionContext =
     flatBatchEcOverride.getOrElse(context.system.classicSystem.dispatchers.lookup("storage-writer-dispatcher"))
-
-  /** Append a per-response chunk of verified slots to the flat-slot accumulator. The streaming storage-trie path
-    * commits the trie incrementally inside `SnapHashTrie`; flat-slot writes remain batched (sorted within each chunk)
-    * and are flushed to RocksDB off-actor once the accumulator hits `flatBatchEntryThreshold` or the actor stops.
-    */
-  def stageFlatSlotChunk(
-      accountHash: ByteString,
-      slots: Seq[(ByteString, ByteString)]
-  ): Unit =
-    if slots.nonEmpty then
-      val sorted = slots.sortBy(_._1)(ByteStringOrdering)
-      pendingFlatBatchAccounts += ((accountHash, sorted))
-      pendingFlatBatchEntries += sorted.size
-      if pendingFlatBatchEntries >= flatBatchEntryThreshold then flushPendingFlatBatch()
-
-  /** Hand the current accumulator off to the storage-writer dispatcher and reset it. The Future builds the combined
-    * `DataSourceBatchUpdate` and commits it in one RocksDB write batch, then notifies the actor with
-    * `FlatBatchFlushComplete` (or `FlatBatchFlushFailed`). The completion message carries `forStateRoot` so the actor
-    * can drop bookkeeping for batches that pre-date a pivot refresh.
-    */
-  private def flushPendingFlatBatch(): Unit =
-    // A completion marker that rides in this batch vouches for its account's trie nodes: write them first.
-    flushTrieNodeWrites()
-    val batchSeq = flatBatchSeq + 1
-    val doneMarkers = takeDoneMarkersFor(batchSeq)
-    if pendingFlatBatchAccounts.nonEmpty || doneMarkers.nonEmpty then
-      val batchAccounts = pendingFlatBatchAccounts.toList // immutable snapshot
-      val entries = pendingFlatBatchEntries
-      val forStateRoot = stateRoot
-      pendingFlatBatchAccounts.clear()
-      pendingFlatBatchEntries = 0
-      inFlightFlatBatches += 1
-      flatBatchSeq = batchSeq
-
-      val selfRef = self
-      val storage = flatSlotStorage // capture for Future
-      val doneStorage = storageDoneStorage
-      val ec = flatBatchEc
-      import scala.concurrent.{Future, blocking}
-      Future {
-        blocking {
-          val startMs = System.currentTimeMillis()
-          var combined: DataSourceBatchUpdate = storage.emptyBatchUpdate
-          batchAccounts.foreach { case (accountHash, slots) =>
-            combined = combined.and(storage.putSlotsBatch(accountHash, slots))
-          }
-          // Same WriteBatch as the slots: the markers commit atomically with them, never before.
-          if doneMarkers.nonEmpty then doneStorage.foreach(d => combined = combined.and(d.markDone(doneMarkers)))
-          combined.commit()
-          System.currentTimeMillis() - startMs
-        }
-      }(ec).onComplete {
-        case scala.util.Success(elapsedMs) =>
-          selfRef ! FlatBatchFlushComplete(forStateRoot, entries, elapsedMs, batchSeq)
-        case scala.util.Failure(e) =>
-          selfRef ! FlatBatchFlushFailed(forStateRoot, entries, e.getMessage)
-      }(ec)
 
   // ========================================
   // Off-actor response processing (#1533)
@@ -707,15 +627,6 @@ private[actors] class StorageRangeCoordinatorImpl(
     pendingResponseBytes = 0L
     processingGeneration += 1
     dropped
-
-  /** Aggregate-counter sink for completed StorageTask objects. Previously this appended into an unbounded
-    * `mutable.ArrayBuffer[StorageTask]` (one of the leak vectors behind the May 13 sepolia OOM at ~22M completed
-    * tasks). All downstream consumers — progress %, SyncStatistics.tasksCompleted, the completion check — only ever
-    * read the count, never the task data itself.
-    */
-  def recordCompletedTask(task: StorageTask): Unit =
-    val _ = task // explicitly unused; kept in the signature to make call-site intent unambiguous
-    completedTaskCount += 1L
 
   /** Emit a StorageQueuePressure transition if the pending-task queue depth has just crossed a watermark. Called after
     * every enqueue and dequeue. Forwarded to AccountRangeCoordinator via SNAPSyncController so account workers stop
