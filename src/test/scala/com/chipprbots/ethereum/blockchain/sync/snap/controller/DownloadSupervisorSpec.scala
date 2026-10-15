@@ -717,7 +717,7 @@ class DownloadSupervisorSpec extends ScalaTestWithActorTestKit(ManualTime.config
     h.module.stagnationSchedules shouldBe 1
   }
 
-  it should "persist the storage and codeHashes handoff paths and counts from the coordinator's file-info replies (#1603)" taggedAs UnitTest in {
+  it should "persist the storage and codeHashes handoff paths and counts from the coordinator's task-file infos (#1603)" taggedAs UnitTest in {
     val h = new Harness()
     val storageFile = java.nio.file.Paths.get("fukuii-contract-storage-1603.bin")
     val codeHashesFile = java.nio.file.Paths.get("fukuii-unique-codehashes-1603.bin")
@@ -745,16 +745,16 @@ class DownloadSupervisorSpec extends ScalaTestWithActorTestKit(ManualTime.config
     infos should contain(s"Persisted codeHashes file path for recovery: $codeHashesFile (7 entries)")
   }
 
-  it should "log a WARN naming the path that was not persisted when a file-info ask fails or times out (#1603)" taggedAs UnitTest in {
+  it should "log a WARN naming the path that was not persisted when the coordinator could not flush a task file (#1603)" taggedAs UnitTest in {
     val h = new Harness()
 
     h.call(m =>
       m.accountRangeSyncCompleteArms(
-        StorageFileInfoReply(Failure(new java.util.concurrent.TimeoutException("ask timed out")))
+        StorageFileInfoReply(Failure(new java.io.IOException("No space left on device")))
       )
     )
     h.call(m =>
-      m.accountRangeSyncCompleteArms(CodeHashesFileInfoReply(Failure(new RuntimeException("coordinator stopped"))))
+      m.accountRangeSyncCompleteArms(CodeHashesFileInfoReply(Failure(new java.io.IOException("Stream Closed"))))
     )
 
     h.module.appStateStorage.getSnapSyncStorageFilePath() shouldBe None
@@ -765,9 +765,9 @@ class DownloadSupervisorSpec extends ScalaTestWithActorTestKit(ManualTime.config
     val storageWarns = warns.filter(_.startsWith("Storage file path NOT persisted for recovery"))
     val codeHashesWarns = warns.filter(_.startsWith("CodeHashes file path NOT persisted for recovery"))
     storageWarns should have size 1
-    storageWarns.head should include("TimeoutException: ask timed out")
+    storageWarns.head should include("IOException: No space left on device")
     codeHashesWarns should have size 1
-    codeHashesWarns.head should include("RuntimeException: coordinator stopped")
+    codeHashesWarns.head should include("IOException: Stream Closed")
   }
 
   it should "complete the bytecode and storage phases, boost storage while it runs, and skip a force-complete during account sync" taggedAs UnitTest in {

@@ -811,6 +811,24 @@ private[actors] class AccountRangeCoordinatorImpl(
             // they operate on their own state roots. This saves 50s-25min of serial blocking.
             snapSyncController ! SNAPSyncController.AccountRangeSyncComplete
 
+            // #1603: hand the controller both task-file infos from this handler, so it can persist them for
+            // accounts-complete recovery. Same sender and receiver, so they arrive right after
+            // AccountRangeSyncComplete; and they are sent before trie finalization, after which this coordinator
+            // stops (an ask from the controller could time out against a stopped coordinator). Each file is flushed
+            // first, as the AccountGet*FileInfo handlers do; a flush failure reaches the controller as a Failure.
+            snapSyncController ! SNAPSyncController.StorageFileInfoReply(
+              scala.util.Try {
+                contractStorageOut.flush()
+                StorageFileInfoResponse(contractStorageFile, contractStorageCount)
+              }
+            )
+            snapSyncController ! SNAPSyncController.CodeHashesFileInfoReply(
+              scala.util.Try {
+                uniqueCodeHashesOut.flush()
+                CodeHashesFileInfoResponse(uniqueCodeHashesFile, uniqueCodeHashesCount)
+              }
+            )
+
             log.info(s"Starting async trie finalization for $accountsDownloaded accounts...")
             // Notify controller so progress monitor shows finalization status
             snapSyncController ! SNAPSyncController.ProgressAccountsFinalizingTrie

@@ -28,8 +28,8 @@ import com.chipprbots.ethereum.testing.Tags.*
   *   - the two backpressure signals: forwarded to the account coordinator;
   *   - `IncrementalContractData` with both coordinators: the bytecode tasks (with the `replayed` flag as `skipPresent`)
   *     and the storage tasks are forwarded, the running bytecode estimate accumulates, and no credit is released;
-  *   - `AccountRangeSyncComplete`: the persisted flag, the retired resume checkpoint, the file-info asks, the NoMore
-  *     signals and budget changes in their order, the phase change, and the duplicate being ignored;
+  *   - `AccountRangeSyncComplete`: the persisted flag, the retired resume checkpoint, no file-info ask (#1603), the
+  *     NoMore signals and budget changes in their order, the phase change, and the duplicate being ignored;
   *   - the phase-completion arms in `AccountRangeSync`: bytecode completion persists and boosts the storage budget
   *     (only while storage is incomplete); storage completion persists; a force-complete outside the two late phases is
   *     ignored; and a second completion of a phase falls through to the catch-all.
@@ -310,44 +310,45 @@ class SNAPDownloadArmsCharacterizationSpec
         StorageRangeCoordinator.NoMoreStorageTasks,
         StorageRangeCoordinator.UpdateMaxInFlightPerPeer(3)
       )
-      // The two file-info asks for crash recovery, in order (the stub child does not answer them).
-      f.accountBefore(id).map {
-        case _: AccountRangeCoordinator.AccountGetStorageFileInfo    => "storage-file-info"
-        case _: AccountRangeCoordinator.AccountGetCodeHashesFileInfo => "code-hashes-file-info"
-        case other                                                   => other.toString
-      } shouldBe Seq("storage-file-info", "code-hashes-file-info")
+      // No file-info ask (#1603): the account coordinator sends both task-file infos itself, before it can stop.
+      f.accountBefore(id) shouldBe empty
       f.stops.expectNoMessage(300.millis)
     }
 
-  it should "persist the storage and codeHashes handoff paths and counts once the coordinator answers the file-info " +
-    "asks (#1603)" taggedAs UnitTest in {
+  it should "persist the storage and codeHashes handoff paths and counts the account coordinator sends after " +
+    "AccountRangeSyncComplete, without asking it (#1603)" taggedAs UnitTest in {
       val f = new SnapControllerFixture(testKit)
       val snap = f.enterGenesisAccountSync()
       drainDownloadChildren(f, snap)
+      f.appStateStorage.putSnapAccountResumeCheckpoint("1603").commit()
       val storageFile = java.nio.file.Paths.get("fukuii-contract-storage-1603.bin")
       val codeHashesFile = java.nio.file.Paths.get("fukuii-unique-codehashes-1603.bin")
 
       Using.resource(new SnapLogCapture) { log =>
+        // What the account coordinator's completion handler sends, in its order. The stub account child never answers
+        // anything, like a coordinator that stops right after trie finalization: nothing here depends on it.
         snap ! SNAPSyncController.AccountRangeSyncComplete
-        val storageAsk =
-          f.fish[AccountRangeCoordinator.Command, AccountRangeCoordinator.AccountGetStorageFileInfo](f.accountInbox)
-        val codeHashesAsk =
-          f.fish[AccountRangeCoordinator.Command, AccountRangeCoordinator.AccountGetCodeHashesFileInfo](f.accountInbox)
-
-        // Answer one ask at a time and wait for its log line, so the two replies cannot race each other.
-        storageAsk.replyTo ! AccountRangeCoordinator.StorageFileInfoResponse(storageFile, 42L)
-        log.awaitLine(s"Persisted storage file path for recovery: $storageFile (42 entries)")
-        codeHashesAsk.replyTo ! AccountRangeCoordinator.CodeHashesFileInfoResponse(codeHashesFile, 7L)
-        log.awaitLine(s"Persisted codeHashes file path for recovery: $codeHashesFile (7 entries)")
+        snap ! SNAPSyncController.StorageFileInfoReply(
+          scala.util.Success(AccountRangeCoordinator.StorageFileInfoResponse(storageFile, 42L))
+        )
+        snap ! SNAPSyncController.CodeHashesFileInfoReply(
+          scala.util.Success(AccountRangeCoordinator.CodeHashesFileInfoResponse(codeHashesFile, 7L))
+        )
         f.awaitProcessed(snap)
+        log.contains(s"Persisted storage file path for recovery: $storageFile (42 entries)") shouldBe true
+        log.contains(s"Persisted codeHashes file path for recovery: $codeHashesFile (7 entries)") shouldBe true
         log.contains("NOT persisted for recovery") shouldBe false
       }
 
+      f.appStateStorage.isSnapSyncAccountsComplete() shouldBe true
       f.appStateStorage.getSnapSyncStorageFilePath() shouldBe Some(storageFile.toString)
       f.appStateStorage.getSnapSyncStorageFileCount() shouldBe Some(42L)
       f.appStateStorage.getSnapSyncCodeHashesPath() shouldBe Some(codeHashesFile.toString)
       f.appStateStorage.getSnapSyncCodeHashesCount() shouldBe Some(7L)
       f.appStateStorage.getSnapAccountResumeCheckpoint() shouldBe None
+      // The controller asked the account coordinator for nothing.
+      val id = f.sendFence(snap)
+      f.accountBefore(id) shouldBe empty
       f.stops.expectNoMessage(300.millis)
     }
 

@@ -1243,6 +1243,33 @@ class AccountRangeCoordinatorSpec extends ScalaTestWithActorTestKit() with AnyFl
     testKit.stop(coord)
   }
 
+  it should "send both task-file infos right after AccountRangeSyncComplete, before it can stop (#1603)" taggedAs UnitTest in {
+    // A fully-complete range completes and finalises right away, after which the controller stops the coordinator. The
+    // infos are sent from the completion handler itself, so stopping the coordinator at once cannot lose either.
+    val controller = testKit.createTestProbe[SNAPSyncController.Command]()
+    val coord = arcProps(
+      stateRoot = kec256(ByteString("1603-root")),
+      networkPeerManager = testKit.createTestProbe[NetworkPeerManagerActor.Command]().ref,
+      requestTracker = new SNAPRequestTracker()(classicSystem.scheduler),
+      mptStorage = new TestMptStorage(),
+      concurrency = 1,
+      snapSyncController = controller.ref,
+      resumeProgress = Map(AccountTask.MaxHash32 -> AccountTask.MaxHash32)
+    )
+    fish(controller) { case SNAPSyncController.AccountRangeSyncComplete => SNAPSyncController.AccountRangeSyncComplete }
+    testKit.stop(coord)
+
+    // The next two messages, in this order, with no ask from the controller.
+    val storage = controller.expectMessageType[SNAPSyncController.StorageFileInfoReply]
+    val codeHashes = controller.expectMessageType[SNAPSyncController.CodeHashesFileInfoReply]
+    storage.result.isSuccess shouldBe true
+    storage.result.get.filePath.getFileName.toString should startWith("fukuii-contract-storage-")
+    storage.result.get.count shouldBe 0L
+    codeHashes.result.isSuccess shouldBe true
+    codeHashes.result.get.filePath.getFileName.toString should startWith("fukuii-unique-codehashes-")
+    codeHashes.result.get.count shouldBe 0L
+  }
+
   "Superseded task files (N4)" should "be deleted only after a newer checkpoint exists, and a crash before that still resumes" taggedAs UnitTest in {
     val dir = java.nio.file.Files.createTempDirectory("arc-sweep-")
     // Source files named like real coordinator files, so the sweep recognises them.

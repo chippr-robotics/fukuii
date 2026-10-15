@@ -615,8 +615,8 @@ private[snap] trait DownloadSupervisor extends AccountRangeStartApi with ByteCod
   /** A `commonSyncingArms` arm lifted into a class member (spec 016 lift before M11b, CQ-SNAP-016-32):
     * `AccountRangeSyncComplete`: the storage-phase entry, with the handoff-file persistence and the `preserved*` clear.
     * `commonSyncingArms` delegates to it at the arm's original position, so the arm order is unchanged. Since #1603 it
-    * also takes the two file-info replies (`StorageFileInfoReply`, `CodeHashesFileInfoReply`) the entry asks for, so
-    * the handoff paths are persisted, and logged, on the actor thread.
+    * also takes the two task-file infos (`StorageFileInfoReply`, `CodeHashesFileInfoReply`) the account coordinator
+    * sends right after `AccountRangeSyncComplete`, so the handoff paths are persisted, and logged, on the actor thread.
     */
   private[snap] lazy val accountRangeSyncCompleteArms: PartialFunction[Command, Behavior[Command]] = {
     case AccountRangeSyncComplete =>
@@ -629,31 +629,16 @@ private[snap] trait DownloadSupervisor extends AccountRangeStartApi with ByteCod
         // Persist accounts-complete flag for crash recovery (Step 7)
         stateIngest.appState.putSnapSyncAccountsComplete(true).commit()
 
-        // Persist temp file paths for crash recovery (non-blocking ask). The coordinator flushes each file before it
-        // replies; the replies are piped back to this actor as StorageFileInfoReply / CodeHashesFileInfoReply and
-        // persisted on the actor thread below (#1603: the Future callbacks used to call ctx.log off-thread, which
-        // throws, and dropped a failed ask silently). If an ask fails, recovery does a full restart, which is
-        // acceptable since account trie data survives.
-        accountRangeCoordinator.foreach { coordinator =>
-          import org.apache.pekko.actor.typed.scaladsl.AskPattern.*
-          import org.apache.pekko.util.Timeout
-          given timeout: Timeout = Timeout(5.seconds)
-          given typedScheduler: org.apache.pekko.actor.typed.Scheduler = ctx.system.scheduler
-          ctx.pipeToSelf(
-            coordinator.ask[actors.AccountRangeCoordinator.StorageFileInfoResponse](replyTo =>
-              actors.AccountRangeCoordinator.AccountGetStorageFileInfo(replyTo)
-            )
-          )(result => StorageFileInfoReply(result))
-          ctx.pipeToSelf(
-            coordinator.ask[actors.AccountRangeCoordinator.CodeHashesFileInfoResponse](replyTo =>
-              actors.AccountRangeCoordinator.AccountGetCodeHashesFileInfo(replyTo)
-            )
-          )(result => CodeHashesFileInfoReply(result))
-        }
+        // The temp file paths for crash recovery are not asked for here (#1603). The account coordinator sends them
+        // itself, as StorageFileInfoReply and CodeHashesFileInfoReply, right after this message and from the same
+        // handler (so they arrive after it, and before the coordinator can stop after trie finalization). They are
+        // persisted on the actor thread by the arms below. If a file info is missing, recovery restarts the accounts
+        // phase, which is acceptable since account trie data survives.
 
         // Clear persisted range progress — account phase is done, no need to resume it. The resume checkpoint is
-        // removed here unconditionally: if the file-info ask above times out, a lingering all-complete record could
-        // otherwise be loaded by a later fresh SNAP cycle (e.g. a re-snap after clearSnapSyncDone) and skip accounts.
+        // removed here unconditionally: if the storage file info is never persisted, a lingering all-complete record
+        // could otherwise be loaded by a later fresh SNAP cycle (e.g. a re-snap after clearSnapSyncDone) and skip
+        // accounts.
         stateRoot.foreach(root => snapProgressStorage.clearProgress(root.value))
         stateIngest.appState.removeSnapAccountResumeCheckpoint().commit()
         releaseHeldResumeCheckpoint()
@@ -695,11 +680,12 @@ private[snap] trait DownloadSupervisor extends AccountRangeStartApi with ByteCod
         checkAllDownloadsComplete()
       Behaviors.same
 
-    // The two file-info replies asked for above (#1603), persisted on the actor thread with the same batches as
-    // before. A failed or timed-out ask is reported, naming the path that was not persisted.
+    // The two task-file infos the account coordinator sends after AccountRangeSyncComplete (#1603), persisted on the
+    // actor thread with the same batches as before. A failure (the coordinator could not flush the file) is reported,
+    // naming the path that was not persisted.
     case StorageFileInfoReply(Success(info)) =>
       // Retire the account resume checkpoint with the storage-file handoff too (idempotent; it is also removed
-      // unconditionally when the asks are sent, so an ask timeout/failure cannot leave a stale all-complete record).
+      // unconditionally on AccountRangeSyncComplete, so a missing file info cannot leave a stale all-complete record).
       stateIngest.appState
         .putSnapSyncStorageFilePath(info.filePath.toString)
         .and(stateIngest.appState.putSnapSyncStorageFileCount(Some(info.count)))
@@ -710,7 +696,7 @@ private[snap] trait DownloadSupervisor extends AccountRangeStartApi with ByteCod
 
     case StorageFileInfoReply(Failure(e)) =>
       ctx.log.warn(
-        "Storage file path NOT persisted for recovery: the file-info ask to the account coordinator failed " +
+        "Storage file path NOT persisted for recovery: the account coordinator could not report it " +
           s"(${e.getClass.getSimpleName}: ${e.getMessage}). A restart before storage completes restarts the " +
           "accounts phase."
       )
@@ -726,7 +712,7 @@ private[snap] trait DownloadSupervisor extends AccountRangeStartApi with ByteCod
 
     case CodeHashesFileInfoReply(Failure(e)) =>
       ctx.log.warn(
-        "CodeHashes file path NOT persisted for recovery: the file-info ask to the account coordinator failed " +
+        "CodeHashes file path NOT persisted for recovery: the account coordinator could not report it " +
           s"(${e.getClass.getSimpleName}: ${e.getMessage}). A restart before bytecode completes restarts the " +
           "accounts phase."
       )

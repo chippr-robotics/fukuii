@@ -1246,9 +1246,10 @@ object SNAPSyncController:
   private[snap] case object PollHandshakedPeers extends Command
   case object AccountRangeSyncComplete extends Command
 
-  /** The account coordinator's replies to the two file-info asks sent on `AccountRangeSyncComplete` (#1603), piped back
-    * to the controller with `pipeToSelf` so the handoff paths are persisted and logged on the actor thread. A `Failure`
-    * is a timed-out or failed ask: the path is not persisted and the controller logs a WARN naming it.
+  /** The account coordinator's two task-file infos (#1603). It sends them right after `AccountRangeSyncComplete`, from
+    * the same handler and before it can stop, having flushed each file. The controller persists the handoff paths and
+    * counts on the actor thread. A `Failure` (the coordinator could not flush the file) is not persisted and the
+    * controller logs a WARN naming the path.
     */
   final private[snap] case class StorageFileInfoReply(
       result: scala.util.Try[actors.AccountRangeCoordinator.StorageFileInfoResponse]
