@@ -213,6 +213,7 @@ them, with the genuine handle uses in brackets; **SI** = `StateIngest` members t
   `added_ok` would reject a new `private def xArms: PartialFunction[...] =` line in a `# moved:` commit, so C-H0 must not
   carry that trailer. In the current file `activeBehavior` (L713–1534, 821 lines) has 26 arms, three of them for
   `VerificationBFSComplete` (two guarded). They are listed in Appendix A, ready for C-H0's arm-order table.
+  *As built (T070):* seven arm groups, table in research.md R4c, pinned by `TrieNodeHealingDispatchTableSpec`.
 - **Structural note (Impl-nested Commands).** Seven TNHC message classes are declared **inside the Impl** (L571–613:
   `FlushComplete`, `FrontierRebuilt`, `VerificationBFSComplete`, `FrontierRebuildComplete`, `FrontierWalkFailed`,
   `RestartResumeVerification`, `RestartFullRebuild`), together with `HealingStagnationCheck` (L173) and the helper
@@ -221,6 +222,8 @@ them, with the genuine handle uses in brackets; **SI** = `StateIngest` members t
   `case class` that moves to the companion keeps its pattern matching and equality, but forge/prism should confirm that
   no `isInstanceOf` relies on the path. This touches the `Command` ADT's file but not its wire format: the messages are
   actor-local and never leave the process.
+  *As built (T070):* all ten moved in one `# moved:` commit, widened to `private[actors]`; no `isInstanceOf` or
+  `getClass` in the file.
 - **`evmCodeStorage: Option[EvmCodeStorage] = None`** (TNHC `apply` and constructor). Production always passes
   `Some(stateIngest.bytecode)`. `HealingTrieFixtures`' builder has its own `evmCodeStorage: Option[...] = None` and
   forwards it (L90, L122), so the healing tests run with the healed-code check off. A non-optional `stateIngest` would turn that check on in every healing test. The narrowing therefore needs
