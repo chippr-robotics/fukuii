@@ -661,6 +661,12 @@ private class SNAPSyncControllerImpl(
         case AccountRangeSyncComplete =>
           ctx.log.warn("Unexpected AccountRangeSyncComplete in idle — dropped")
           Behaviors.same
+        case _: StorageFileInfoReply =>
+          ctx.log.warn("Unexpected StorageFileInfoReply in idle — dropped, storage file path not persisted")
+          Behaviors.same
+        case _: CodeHashesFileInfoReply =>
+          ctx.log.warn("Unexpected CodeHashesFileInfoReply in idle — dropped, codeHashes file path not persisted")
+          Behaviors.same
         case ByteCodeSyncComplete =>
           ctx.log.warn("Unexpected ByteCodeSyncComplete in idle — dropped")
           Behaviors.same
@@ -1239,6 +1245,18 @@ object SNAPSyncController:
   // OQ-3: drives the periodic GetHandshakedPeers poll (replaces NPMA's HandshakedPeers broadcast).
   private[snap] case object PollHandshakedPeers extends Command
   case object AccountRangeSyncComplete extends Command
+
+  /** The account coordinator's two task-file infos (#1603). It sends them right after `AccountRangeSyncComplete`, from
+    * the same handler and before it can stop, having flushed each file. The controller persists the handoff paths and
+    * counts on the actor thread. A `Failure` (the coordinator could not flush the file) is not persisted and the
+    * controller logs a WARN naming the path.
+    */
+  final private[snap] case class StorageFileInfoReply(
+      result: scala.util.Try[actors.AccountRangeCoordinator.StorageFileInfoResponse]
+  ) extends Command
+  final private[snap] case class CodeHashesFileInfoReply(
+      result: scala.util.Try[actors.AccountRangeCoordinator.CodeHashesFileInfoResponse]
+  ) extends Command
   case object ByteCodeSyncComplete extends Command
   case object StorageRangeSyncComplete extends Command
   case object StorageRangeSyncForceCompleted extends Command
