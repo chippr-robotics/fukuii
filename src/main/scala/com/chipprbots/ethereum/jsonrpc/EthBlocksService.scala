@@ -59,6 +59,26 @@ object EthBlocksService:
       blobGasUsedRatio: Seq[Double]
   )
 
+  /** Gas-weighted percentile of effective priority fees within one block (go-ethereum `eth/gasprice/feehistory.go`).
+    *
+    * Transactions are ordered by tip ascending; for each percentile `p` the result is the tip of the first transaction
+    * whose cumulative gas reaches `blockGasUsed * p / 100`, or the highest tip if none does. A block without
+    * transactions yields zeros.
+    *
+    * @param txs
+    *   (effective priority fee per gas, gas used) for each transaction in the block
+    */
+  def percentileRewards(txs: Seq[(BigInt, BigInt)], blockGasUsed: BigInt, percentiles: Seq[Double]): Seq[BigInt] =
+    if txs.isEmpty then percentiles.map(_ => BigInt(0))
+    else
+      val sorted = txs.sortBy(_._1)
+      val cumulativeGas = sorted.map(_._2).scanLeft(BigInt(0))(_ + _).tail
+      percentiles.map { p =>
+        val threshold = (BigDecimal(blockGasUsed) * BigDecimal(p) / BigDecimal(100)).toBigInt
+        val idx = cumulativeGas.indexWhere(_ >= threshold)
+        sorted(if idx < 0 then sorted.size - 1 else idx)._1
+      }
+
   case class MaxPriorityFeePerGasRequest()
   case class MaxPriorityFeePerGasResponse(maxPriorityFeePerGas: BigInt)
 
@@ -369,9 +389,25 @@ class EthBlocksService(
         .getOrElse(0.0)
     }.toSeq
 
-    val rewards = req.rewardPercentiles.map { _ =>
-      (oldestBlock.toLong to newestBlockNum.toLong).map { _ =>
-        req.rewardPercentiles.getOrElse(Seq.empty).map(_ => BigInt(0))
+    val rewards = req.rewardPercentiles.map { percentiles =>
+      (oldestBlock.toLong to newestBlockNum.toLong).map { num =>
+        val txTipsAndGas: Seq[(BigInt, BigInt)] = blockchainReader
+          .getBlockHeaderByNumber(num)
+          .flatMap(header => blockchainReader.getBlockByHash(header.hash).map(block => (header, block)))
+          .flatMap { case (header, block) =>
+            blockchainReader.getReceiptsByHash(header.hash).map { receipts =>
+              val cumulative = receipts.map(_.cumulativeGasUsed)
+              val perTxGas = cumulative.zip(BigInt(0) +: cumulative).map((cum, prev) => cum - prev)
+              val baseFee = header.baseFee.getOrElse(BigInt(0))
+              block.body.transactionList.zip(perTxGas).map { case (stx, gas) =>
+                val tip = (Transaction.effectiveGasPrice(stx.tx, header.baseFee) - baseFee).max(0)
+                (tip, gas)
+              }
+            }
+          }
+          .getOrElse(Seq.empty)
+        val blockGasUsed = blockchainReader.getBlockHeaderByNumber(num).map(_.gasUsed.value).getOrElse(BigInt(0))
+        percentileRewards(txTipsAndGas, blockGasUsed, percentiles)
       }.toSeq
     }
 

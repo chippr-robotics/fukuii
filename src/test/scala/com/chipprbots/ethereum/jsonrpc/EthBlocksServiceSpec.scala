@@ -527,6 +527,27 @@ class EthBlocksServiceSpec
     result.receipts shouldEqual fullyRetained
     result.blocks shouldEqual fullyRetained
 
+  it should "compute eth_feeHistory rewards as gas-weighted percentiles of effective tips" taggedAs (
+    UnitTest,
+    RPCTest
+  ) in {
+    // hive rpc-compat fee-history vector: one tx with a 1 wei tip, percentiles [95, 99]
+    EthBlocksService.percentileRewards(Seq((BigInt(1), BigInt(21000))), BigInt(21000), Seq(95.0, 99.0)) shouldBe
+      Seq(BigInt(1), BigInt(1))
+
+    // tips are sorted ascending and picked by cumulative gas
+    val txs = Seq((BigInt(5), BigInt(100)), (BigInt(1), BigInt(100)), (BigInt(3), BigInt(100)))
+    EthBlocksService.percentileRewards(txs, BigInt(300), Seq(0.0, 50.0, 95.0, 100.0)) shouldBe
+      Seq(BigInt(1), BigInt(3), BigInt(5), BigInt(5))
+
+    // a large tx dominates the upper percentiles
+    val skewed = Seq((BigInt(1), BigInt(10)), (BigInt(9), BigInt(990)))
+    EthBlocksService.percentileRewards(skewed, BigInt(1000), Seq(1.0, 2.0)) shouldBe Seq(BigInt(1), BigInt(9))
+
+    // an empty block yields zeros, one per percentile
+    EthBlocksService.percentileRewards(Seq.empty, BigInt(0), Seq(25.0, 75.0)) shouldBe Seq(BigInt(0), BigInt(0))
+  }
+
   class TestSetup() extends EphemBlockchainTestSetup:
     val blockGenerator: PoWBlockGenerator = mock[PoWBlockGenerator]
     val appStateStorage: AppStateStorage = mock[AppStateStorage]
