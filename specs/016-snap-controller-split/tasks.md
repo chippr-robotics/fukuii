@@ -1797,10 +1797,11 @@ Any other rise is still forbidden. Instances:
     `recordFlatBatchDone`, `stageDoneMarker`, `takeDoneMarkersFor`, `stageFlatSlotChunk`, `flushPendingFlatBatch`,
     `recordCompletedTask`. `recordFlatBatchDone`, `takeDoneMarkersFor` and `flushPendingFlatBatch` lose `private` (the
     core's arms and `onPostStop` call them); the core fields the module reaches become public. `flushPendingFlatBatch`
-    names `DataSourceBatchUpdate`, and a new module file may not import a raw type (verify rule 2), so the module
-    imports the alias under that name (`import ...StorageRangeCoordinator.FlatSlotBatch as DataSourceBatchUpdate`):
-    the body stays byte-identical (the alternative, a prerequisite commit retyping the body's annotation, was a body
-    change before a move). (3) The narrowing commit, `# adopts: StateIngest StorageRangeCoordinator`: the self-type
+    names `DataSourceBatchUpdate`, and a new module file may not import a raw type (verify rule 2), so the move commit
+    imported the alias under that name (`import ...StorageRangeCoordinator.FlatSlotBatch as DataSourceBatchUpdate`)
+    and the body stayed byte-identical (the alternative, a prerequisite commit retyping the body's annotation, was a
+    body change before a move). The prism review found the rename misleading (it reads as the raw type), so a
+    post-move commit imports `FlatSlotBatch` plainly and types the one annotation `FlatSlotBatch`. (3) The narrowing commit, `# adopts: StateIngest StorageRangeCoordinator`: the self-type
     names `StorageDoneMarkersState & StorageRangeEnv & StorageTrieFlushApi`; the Impl adds the State parent;
     `StorageOrderedApply` extends `StorageTrieFlushApi`, and its `flushTrieNodeWrites` loses `private[actors]` (a
     public abstract member cannot be implemented with weaker access). `flatSlotStorage: FlatSlotStorage` is dropped
@@ -1849,13 +1850,14 @@ Any other rise is still forbidden. Instances:
       rule (d) keeps in the core and R14b's matrix of mutable fields does not list), Api 1 (= R14b,
       `StorageTrieFlushApi`). `StorageOrderedApply` 13 / 7 and `StoragePeerDispatch` 24 / 1 unchanged.
       `StorageRangeEnv` 19 → 20 (G9): `flatBatchEntryThreshold`; no store joins it.
-    - Storage total **603 → 592** (counter v2), a fall with no exception: the adoption −16 (the parameter and its type
+    - Storage total **603 → 590** (counter v2), a fall with no exception: the adoption −16 (the parameter and its type
       at the Impl, `apply` and the factory, the `new` call's and the factory's forwarding, the two `DownloadSupervisor`
       arguments, the core's and `ChildFactories`' `FlatSlotStorage` imports; the four reads count once each, as
-      before); kept +5: State's `storageDoneStorage` declaration and its import (+3, the first storage-typed State
-      member among the coordinator modules, a rule (d) core val, not a session value), the `FlatSlotBatch` alias (+1)
-      and the module's rename import of it (+1). `StorageRangeCoordinator.scala` 46 → 32,
-      `actors/storage/StorageDoneMarkers.scala` 0 → 12, `ChildFactories` 63 → 58, `DownloadSupervisor` 46 → 42.
+      before); kept +4: State's `storageDoneStorage` declaration and its import (+3, the first storage-typed State
+      member among the coordinator modules, a rule (d) core val, not a session value) and the `FlatSlotBatch` alias
+      (+1); the module's plain `FlatSlotBatch` import and retyped annotation name no storage type (−1 against the
+      moved reference). `StorageRangeCoordinator.scala` 46 → 32,
+      `actors/storage/StorageDoneMarkers.scala` 0 → 10, `ChildFactories` 63 → 58, `DownloadSupervisor` 46 → 42.
       `storage-baseline.json` records it with a fresh justification line (the C-S2 line kept at the head of the history
       entry).
     - Tests (`# new-tests:`): `StorageDoneMarkersSpec` (9 cases, a plain `AnyFlatSpec`; the flat batch runs on
@@ -1863,6 +1865,9 @@ Any other rise is still forbidden. Instances:
       the threshold (trie flush first, slots in the store, the completion message), an empty flush, a marker in its
       own slots' batch, a marker held while an earlier batch is uncommitted and written alone once both are, the
       contiguous watermark, the per-batch marker selection, no markers when off or disabled, the completed-task count.
+      `StorageDoneMarkersFlushSpec` (2 cases, post-review, `# new-tests:`): the trie nodes are flushed while the slots
+      are still uncommitted (the stub's `onTrieFlush` hook reads the store at that instant), and a commit that throws
+      reaches `self` as `FlatBatchFlushFailed`, not as a completion (a store whose writes fail on demand).
       `StorageRangeCoordinatorSpec` and `StorageRangeCoordinatorOffActorSpec` hand their flat-slot store to their local
       `StateIngest` (whose `flatSlots` threw before); `RecordingChildFactories` records `stateIngest.flatSlots` in the
       unchanged `ChildSpawn.StorageRange.flatSlotStorage`; the C-S1 and C-S2 stub states gain the env member. No

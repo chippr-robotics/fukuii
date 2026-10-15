@@ -37,10 +37,11 @@ import com.chipprbots.ethereum.testing.Tags.UnitTest
 
 /** Everything `StorageDoneMarkers` needs, as a stub (spec 016 FR-016 (b), C-S3): its `StorageDoneMarkersState`, the
   * coordinator's `StorageRangeEnv` (with a `StateIngest` whose only live member is `flatSlots`) and the
-  * `StorageTrieFlushApi` it calls in the ordered apply. State is plain fields; the trie-node flushes are counted. The
-  * flat batch runs on `ExecutionContext.parasitic`, so it commits, and its completion message reaches `self` (a
-  * `TestInbox`), before the call returns. The core's flush-complete arm is not here: a case that needs a batch to count
-  * as committed calls `recordFlatBatchDone` itself, as that arm does.
+  * `StorageTrieFlushApi` it calls in the ordered apply. State is plain fields; the trie-node flushes are counted, and
+  * `onTrieFlush` lets a case observe the flat store at the instant of a flush. The flat batch runs on
+  * `ExecutionContext.parasitic`, so it commits, and its completion message reaches `self` (a `TestInbox`), before the
+  * call returns. The core's flush-complete arm is not here: a case that needs a batch to count as committed calls
+  * `recordFlatBatchDone` itself, as that arm does.
   */
 private[actors] class StubStorageDoneMarkersState(
     val self: ActorRef[StorageRangeCoordinator.Command],
@@ -101,7 +102,11 @@ private[actors] class StubStorageDoneMarkersState(
   // StorageTrieFlushApi (counted)
   var trieFlushes: Int = 0
 
-  def flushTrieNodeWrites(): Unit = trieFlushes += 1
+  var onTrieFlush: () => Unit = () => ()
+
+  def flushTrieNodeWrites(): Unit =
+    onTrieFlush()
+    trieFlushes += 1
 
   private def notReached(member: String): Nothing =
     throw new UnsupportedOperationException(s"StorageDoneMarkers read $member")

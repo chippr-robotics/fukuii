@@ -9,7 +9,7 @@ import com.chipprbots.ethereum.blockchain.sync.snap.StorageTask
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.StorageRangeCoordinator.ByteStringOrdering
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.StorageRangeCoordinator.FlatBatchFlushComplete
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.StorageRangeCoordinator.FlatBatchFlushFailed
-import com.chipprbots.ethereum.blockchain.sync.snap.actors.StorageRangeCoordinator.FlatSlotBatch as DataSourceBatchUpdate
+import com.chipprbots.ethereum.blockchain.sync.snap.actors.StorageRangeCoordinator.FlatSlotBatch
 import com.chipprbots.ethereum.db.storage.SnapStorageDoneStorage
 
 /** The coordinator state `StorageDoneMarkers` reads and writes (spec 016 C-S3, research.md R14b). The core's behaviour
@@ -109,7 +109,7 @@ private[actors] trait StorageDoneMarkers:
       Future {
         blocking {
           val startMs = System.currentTimeMillis()
-          var combined: DataSourceBatchUpdate = storage.emptyBatchUpdate
+          var combined: FlatSlotBatch = storage.emptyBatchUpdate
           batchAccounts.foreach { case (accountHash, slots) =>
             combined = combined.and(storage.putSlotsBatch(accountHash, slots))
           }
