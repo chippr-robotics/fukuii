@@ -60,8 +60,8 @@ import com.chipprbots.ethereum.testing.TestMptStorage
   *   - ARC and SRC take initial and min from configuration (lazy vals); TNHC hard-codes them. The grow and shrink
   *     factors (1.25, 0.5), the 90% rule, the 2 MiB ceiling and the rounding (`toDouble * factor` then `toLong`) are
   *     the same in all three.
-  *   - Growth is computed from the `requested` argument, not from the stored target, in all three (a stored value
-  *     below the request is overwritten upward).
+  *   - Growth is computed from the `requested` argument, not from the stored target, in all three (a stored value below
+  *     the request is overwritten upward).
   *   - ARC exposes `responseBytesTargetFor` publicly, SRC keeps it private and TNHC keeps everything private: the
   *     window is observed through the map (ARC, SRC) and the sent requests (TNHC).
   *   - TNHC reaches the window from two failure sites (`request timeout`, `empty healing response`) and one success
@@ -95,6 +95,20 @@ class ResponseWindowGoldenSpec extends ScalaTestWithActorTestKit with AnyFlatSpe
     logger.setLevel(Level.DEBUG)
     logger.setAdditive(false)
 
+    // `logback-test.xml` pins some loggers under the package explicitly (the TrieNodeHealingCoordinator at INFO), and an
+    // explicit level beats the parent's, so a DEBUG line from the actor would be dropped. Raise every explicitly
+    // levelled logger under the package, and the coordinator's own names whether or not they are configured, to DEBUG.
+    private val snapPrefix = "com.chipprbots.ethereum.blockchain.sync.snap"
+    private val coordinatorNames =
+      Seq("TrieNodeHealingCoordinator", "TrieNodeHealingCoordinator$", "TrieNodeHealingCoordinator$Impl")
+        .map(n => s"$snapPrefix.actors.$n")
+    private val raised: List[(LogbackLogger, Level)] =
+      (logger.getLoggerContext.getLoggerList.asScala.toList
+        .filter(l => l.getName.startsWith(snapPrefix + ".") && l.getLevel != null) ++
+        coordinatorNames.map(n => LoggerFactory.getLogger(n).asInstanceOf[LogbackLogger])).distinct
+        .map(l => (l, l.getLevel))
+    raised.foreach { case (l, _) => l.setLevel(Level.DEBUG) }
+
     /** The captured window-shrink lines of one peer (the peer id is unique per case, so parallel suites cannot mix). */
     def reductions(p: Peer): List[(Level, String)] =
       events.asScala.toList.filter { case (_, m) =>
@@ -117,6 +131,7 @@ class ResponseWindowGoldenSpec extends ScalaTestWithActorTestKit with AnyFlatSpe
     override def close(): Unit =
       logger.detachAppender(appender)
       appender.stop()
+      raised.foreach { case (l, previous) => l.setLevel(previous) }
       logger.setLevel(previousLevel)
       logger.setAdditive(previousAdditive)
 
@@ -177,9 +192,18 @@ class ResponseWindowGoldenSpec extends ScalaTestWithActorTestKit with AnyFlatSpe
       def stored(p: Peer): Option[BigInt] = module.peerResponseBytesTarget.get(p.id.value)
       def seed(p: Peer, value: BigInt): Unit = module.peerResponseBytesTarget(p.id.value) = value
 
+  /** A storage whose raw-node flush fails. The healing actor flushes healed nodes on a Future and only a successful one
+    * sends `FlushComplete`; until it does, `flushing` stays set and `HealingCheckCompletion` cannot start the
+    * verification BFS, which would walk the (absent) root and send further `GetTrieNodes` into the window under test.
+    * Failing here, by construction, makes that so rather than leaving it to what a test blob happens to decode to.
+    */
+  final private class FlushFailsStorage extends TestMptStorage:
+    override def storeRawNodes(rawNodes: Seq[(ByteString, Array[Byte])]): Unit =
+      throw new IllegalStateException("response-window golden: the flush is meant to fail, see FlushFailsStorage")
+
   /** The cases ARC and SRC share. `failures` is the (before, after) pair of each of the consecutive failures from a
-    * fresh peer; `growth` the stored target after each consecutive full-size success from a fresh peer;
-    * `threshold` the smallest `received` that is at least 90% of `initial`.
+    * fresh peer; `growth` the stored target after each consecutive full-size success from a fresh peer; `threshold` the
+    * smallest `received` that is at least 90% of `initial`.
     */
   private def registerModuleCases(
       name: String,
@@ -216,7 +240,9 @@ class ResponseWindowGoldenSpec extends ScalaTestWithActorTestKit with AnyFlatSpe
           w.stored(p) shouldBe Some(after)
         }
         failures.last._2 shouldBe min
-        cap.reductions(p) shouldBe failures.map { case (before, after) => reduction(p, before, after, "timeout") }.toList
+        cap.reductions(p) shouldBe failures.map { case (before, after) =>
+          reduction(p, before, after, "timeout")
+        }.toList
       finally cap.close()
     }
 
@@ -281,6 +307,13 @@ class ResponseWindowGoldenSpec extends ScalaTestWithActorTestKit with AnyFlatSpe
       finally cap.close()
     }
 
+    it should "grow with no floor: a small request that is filled is multiplied, not raised to the minimum" taggedAs UnitTest in {
+      val w = newWindow()
+      val p = peer(s"$name-no-floor")
+      w.success(p, requested = BigInt(1000), received = BigInt(1000))
+      w.stored(p) shouldBe Some(BigInt(1250))
+    }
+
     it should "keep each peer's target separate" taggedAs UnitTest in {
       val w = newWindow()
       val a = peer(s"$name-peer-a")
@@ -337,10 +370,11 @@ class ResponseWindowGoldenSpec extends ScalaTestWithActorTestKit with AnyFlatSpe
       stateRoot = stateRoot,
       networkPeerManager = network.ref,
       requestTracker = tracker,
-      mptStorage = new TestMptStorage(),
+      mptStorage = new FlushFailsStorage(),
       batchSize = 1,
       snapSyncController = controller.ref
     )
+    // Not needed for dispatch (the root is passed to the constructor); kept as the entry the other healing specs use.
     coordinator ! TrieNodeHealingCoordinator.StartTrieNodeHealing(stateRoot)
     coordinator ! TrieNodeHealingCoordinator.HealingPeerAvailable(healer)
 
@@ -354,7 +388,7 @@ class ResponseWindowGoldenSpec extends ScalaTestWithActorTestKit with AnyFlatSpe
     def nextRequest(): SNAP.GetTrieNodes =
       network.expectMessageType[NetworkPeerManagerActor.SendMessageCmd](10.seconds).message match
         case enc: SNAP.GetTrieNodes.GetTrieNodesEnc => enc.underlyingMsg
-        case other => throw new AssertionError(s"expected a GetTrieNodes, got $other")
+        case other                                  => throw new AssertionError(s"expected a GetTrieNodes, got $other")
 
     def respond(requestId: BigInt, nodes: Seq[ByteString]): Unit =
       coordinator ! TrieNodeHealingCoordinator.TrieNodesResponseMsg(SNAP.TrieNodes(requestId, nodes))
@@ -416,5 +450,22 @@ class ResponseWindowGoldenSpec extends ScalaTestWithActorTestKit with AnyFlatSpe
       // The fifth request is answered empty: the other failure site, with its own reason.
       h.respond(requests(4).requestId, Seq.empty)
       cap.await("Reducing healing responseBytes") shouldBe line(51200, 51200, "empty healing response")
+    finally cap.close()
+  }
+
+  it should "count a response whose nodes match no request as empty: halve, with the empty-response reason" taggedAs UnitTest in {
+    val cap = new LevelCapture
+    try
+      val h = new Healing("tnhc-mismatch")
+      val id = h.healer.id.value
+      h.queue(0, Seq(ByteString("requested-node")))
+      val request = h.nextRequest()
+      request.responseBytes shouldBe BigInt(524288)
+      h.respond(request.requestId, Seq(ByteString("a-node-nobody-asked-for")))
+      cap.await("Reducing healing responseBytes") shouldBe
+        ((
+          Level.DEBUG,
+          s"Reducing healing responseBytes target for peer $id: 524288 -> 262144 (empty healing response)"
+        ))
     finally cap.close()
   }
