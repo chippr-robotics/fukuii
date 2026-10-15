@@ -214,7 +214,6 @@ object StorageRecoveryActor:
                           networkPeerManager = networkPeerManager,
                           requestTracker = requestTracker,
                           mptStorage = mptStorage,
-                          flatSlotStorage = stateIngest.flatSlots,
                           maxAccountsPerBatch = snapSyncConfig.storageBatchSize,
                           maxInFlightRequests = snapSyncConfig.storageConcurrency,
                           requestTimeout = snapSyncConfig.timeout,

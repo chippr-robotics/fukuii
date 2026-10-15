@@ -92,6 +92,7 @@ private[actors] class StubStoragePeerDispatchState(
   val snapProgressStorage: Option[SnapSyncProgressStorage] = None
   def mptStorage: MptStorage = throw new UnsupportedOperationException("StoragePeerDispatch read mptStorage")
   def stateIngest: StateIngest = throw new UnsupportedOperationException("StoragePeerDispatch read stateIngest")
+  val flatBatchEntryThreshold: Int = 1000
 
   // StorageRangeCoreApi
   def progress: Double = 0.5

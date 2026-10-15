@@ -95,7 +95,6 @@ class StorageRangeCoordinatorOffActorSpec extends ScalaTestWithActorTestKit() wi
           networkPeerManager = testKit.createTestProbe[NetworkPeerManagerActor.Command]().ref,
           requestTracker = tracker,
           mptStorage = mpt,
-          flatSlotStorage = new FlatSlotStorage(EphemDataSource()),
           maxAccountsPerBatch = 1, // one request per account, so responses can be reordered
           maxInFlightRequests = maxInFlightRequests,
           requestTimeout = 30.seconds,
@@ -103,7 +102,7 @@ class StorageRangeCoordinatorOffActorSpec extends ScalaTestWithActorTestKit() wi
           deferredMerkleization = false, // production default: the storage trie is built and written
           flatBatchEcOverride = Some(ExecutionContext.parasitic),
           storageScheme = scheme,
-          stateIngest = pathNodesIngest(pathNodes),
+          stateIngest = pathNodesIngest(pathNodes, new FlatSlotStorage(EphemDataSource())),
           processing = processing,
           processingEcOverride = if useOwnedPool then None else Some(ec)
         )
@@ -113,13 +112,13 @@ class StorageRangeCoordinatorOffActorSpec extends ScalaTestWithActorTestKit() wi
     val kit = BehaviorTestKit(behavior)
     Fixture(captured, kit, ec, tracker, pathNodes, mpt)
 
-  // The coordinator's StateIngest (spec 016 C-S2): the coordinator reads only `pathNodes` (the fixture's Path node
-  // store) from it; every other member throws.
-  private def pathNodesIngest(store: PathNodeStorage): StateIngest =
+  // The coordinator's StateIngest (spec 016 C-S2, C-S3): the coordinator reads only `pathNodes` (the fixture's Path
+  // node store) and `flatSlots` (the fixture's flat-slot store) from it; every other member throws.
+  private def pathNodesIngest(store: PathNodeStorage, flatSlotStore: FlatSlotStorage): StateIngest =
     new StateIngest:
       def appState: AppStateStorage = notReached("appState")
       def stateTries: StateStorage = notReached("stateTries")
-      def flatSlots: FlatSlotStorage = notReached("flatSlots")
+      def flatSlots: FlatSlotStorage = flatSlotStore
       def pathNodes: Option[PathNodeStorage] = Some(store)
       def bytecode: EvmCodeStorage = notReached("bytecode")
       def chainReader: BlockchainReader = notReached("chainReader")
