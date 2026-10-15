@@ -32,6 +32,12 @@ private[actors] trait StorageDoneMarkersState:
   def flatBatchesDoneAhead: mutable.Set[Long]
   def flatBatchEc: ExecutionContext
 
+/** What the response processing (C-S4) calls in `StorageDoneMarkers`: the completed-task count, for a task it skips or
+  * gives up on. A separate trait, so the C-S3 interfaces stay as recorded.
+  */
+private[actors] trait StorageCompletedTaskApi:
+  def recordCompletedTask(task: StorageTask): Unit
+
 /** Storage-range flat-slot writes and completion markers (spec 016 C-S3, coordinator-characterization.md §3.3): the
   * flat-slot accumulator (`stageFlatSlotChunk`) and its off-actor batch commit on the storage-writer dispatcher
   * (`flushPendingFlatBatch`), the per-account completion markers that ride in those batches (`stageDoneMarker`,

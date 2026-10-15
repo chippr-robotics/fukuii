@@ -155,7 +155,7 @@ private[actors] class StorageRangeCoordinatorImpl(
 
   // Number of parallel subtasks to create per large-storage contract.
   // Matches go-ethereum storageConcurrency = 16 (sync.go:108).
-  private val storageConcurrency: Int = 16
+  private lazy val storageConcurrency: Int = 16
 
   // ========================================
   // Storage Queue Backpressure (#1232 follow-up — sepolia OOM)
@@ -262,7 +262,7 @@ private[actors] class StorageRangeCoordinatorImpl(
   // from "can't serve this state". If we keep re-queuing forever, sync can livelock.
   // Track empty responses per (accountHash,next,last) and skip after a small threshold.
   private val emptyResponsesByTask = mutable.HashMap.empty[StorageTaskKey, Int]
-  private val maxEmptyResponsesPerTask: Int = 5
+  private lazy val maxEmptyResponsesPerTask: Int = 5
 
   // Platåberget soak v6 (2026-09-28): an account whose account-range record was fetched at an
   // OLDER pivot carries a stale `storageRoot` — no peer, however honest, can ever produce a
@@ -294,7 +294,7 @@ private[actors] class StorageRangeCoordinatorImpl(
   // generic verification-failure branch) neither recordPeerCooldown nor adjustResponseBytesOnFailure
   // is called for it.
   private[actors] val staleRootFailuresByAccount: mutable.Map[ByteString, Vector[StaleRootFailure]] = mutable.Map.empty
-  private val maxStaleRootFailuresPerAccount: Int = 3
+  private lazy val maxStaleRootFailuresPerAccount: Int = 3
   private def isStaleLocalRootSignature(error: String): Boolean =
     error == "complete-range hash mismatch" || error == "root node missing from proof"
 

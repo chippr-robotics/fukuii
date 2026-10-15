@@ -55,6 +55,20 @@ private[actors] trait StorageApplyCoreApi:
 private[actors] trait StorageTrieFlushApi:
   def flushTrieNodeWrites(): Unit
 
+/** What the response processing (C-S4) calls in the ordered apply: hand a verified chunk to the ordering gate, and
+  * discard an account's partial trie when it gives up on the account. A separate trait, so the C-S2 interfaces stay as
+  * recorded.
+  */
+private[actors] trait StorageChunkApplyApi:
+  def applyOrderedStorageChunk(
+      peer: Peer,
+      task: StorageTask,
+      accountSlots: Seq[(ByteString, ByteString)],
+      proofForThisTask: Seq[ByteString],
+      prebuilt: Option[PrebuiltStorageTrie] = None
+  ): Unit
+  def resetAccountTrie(accountHash: ByteString): Unit
+
 /** Storage-range ordered apply (spec 016 C-S2, coordinator-characterization.md §3.3): the range-ascending ordering gate
   * (buffer an out-of-order chunk, drain the ones now in line), applying one in-order chunk (the boundary-repeat dedup,
   * streaming the slots into the account's trie or writing the trie a worker built whole (#1533), staging the flat-slot
