@@ -117,6 +117,8 @@ class SNAPSyncingDispatchTableSpec
     "ScheduledTrieWalk" -> ScheduledTrieWalk,
     "PollHandshakedPeers" -> PollHandshakedPeers,
     "AccountRangeSyncComplete" -> AccountRangeSyncComplete,
+    "StorageFileInfoReply" -> StorageFileInfoReply(scala.util.Failure(new RuntimeException("s0d table"))),
+    "CodeHashesFileInfoReply" -> CodeHashesFileInfoReply(scala.util.Failure(new RuntimeException("s0d table"))),
     "ByteCodeSyncComplete" -> ByteCodeSyncComplete,
     "StorageRangeSyncComplete" -> StorageRangeSyncComplete,
     "StorageRangeSyncForceCompleted" -> StorageRangeSyncForceCompleted,

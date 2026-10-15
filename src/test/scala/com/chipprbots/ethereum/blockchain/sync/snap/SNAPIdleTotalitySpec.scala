@@ -38,7 +38,7 @@ import com.chipprbots.ethereum.testing.Tags.*
   * and those four are sent only after `Start`, so they cannot reach it in practice (CHASE-QUEUE CQ-SNAP-016-14). A fix
   * PR that adds the arms flips these four entries on purpose.
   *
-  * The subtype count comes from `Tuple.Size` rather than `constValueTuple` of the labels, because the labels tuple (75
+  * The subtype count comes from `Tuple.Size` rather than `constValueTuple` of the labels, because the labels tuple (77
   * entries) is deeper than the build's `-Xmax-inlines:64`.
   */
 class SNAPIdleTotalitySpec
@@ -107,6 +107,8 @@ class SNAPIdleTotalitySpec
     ScheduledTrieWalk,
     PollHandshakedPeers,
     AccountRangeSyncComplete,
+    StorageFileInfoReply(scala.util.Failure(new RuntimeException("idle totality"))),
+    CodeHashesFileInfoReply(scala.util.Failure(new RuntimeException("idle totality"))),
     ByteCodeSyncComplete,
     StorageRangeSyncComplete,
     StorageRangeSyncForceCompleted,

@@ -17,6 +17,8 @@ import org.apache.pekko.util.ByteString
 import scala.collection.mutable
 import scala.concurrent.ExecutionContext
 import scala.concurrent.duration.*
+import scala.util.Failure
+import scala.util.Success
 
 import org.scalatest.flatspec.AnyFlatSpecLike
 import org.scalatest.matchers.should.Matchers
@@ -713,6 +715,59 @@ class DownloadSupervisorSpec extends ScalaTestWithActorTestKit(ManualTime.config
     storage.hasMessages shouldBe false
     h.module.stagnationResets should have size 1
     h.module.stagnationSchedules shouldBe 1
+  }
+
+  it should "persist the storage and codeHashes handoff paths and counts from the coordinator's file-info replies (#1603)" taggedAs UnitTest in {
+    val h = new Harness()
+    val storageFile = java.nio.file.Paths.get("fukuii-contract-storage-1603.bin")
+    val codeHashesFile = java.nio.file.Paths.get("fukuii-unique-codehashes-1603.bin")
+    h.module.appStateStorage.putSnapAccountResumeCheckpoint("1603").commit()
+
+    h.call(m =>
+      m.accountRangeSyncCompleteArms(
+        StorageFileInfoReply(Success(AccountRangeCoordinator.StorageFileInfoResponse(storageFile, 42L)))
+      )
+    )
+    h.call(m =>
+      m.accountRangeSyncCompleteArms(
+        CodeHashesFileInfoReply(Success(AccountRangeCoordinator.CodeHashesFileInfoResponse(codeHashesFile, 7L)))
+      )
+    )
+
+    h.module.appStateStorage.getSnapSyncStorageFilePath() shouldBe Some(storageFile.toString)
+    h.module.appStateStorage.getSnapSyncStorageFileCount() shouldBe Some(42L)
+    h.module.appStateStorage.getSnapSyncCodeHashesPath() shouldBe Some(codeHashesFile.toString)
+    h.module.appStateStorage.getSnapSyncCodeHashesCount() shouldBe Some(7L)
+    // The storage batch still retires the account resume checkpoint.
+    h.module.appStateStorage.getSnapAccountResumeCheckpoint() shouldBe None
+    val infos = h.kit.logEntries().filter(_.level == org.slf4j.event.Level.INFO).map(_.message)
+    infos should contain(s"Persisted storage file path for recovery: $storageFile (42 entries)")
+    infos should contain(s"Persisted codeHashes file path for recovery: $codeHashesFile (7 entries)")
+  }
+
+  it should "log a WARN naming the path that was not persisted when a file-info ask fails or times out (#1603)" taggedAs UnitTest in {
+    val h = new Harness()
+
+    h.call(m =>
+      m.accountRangeSyncCompleteArms(
+        StorageFileInfoReply(Failure(new java.util.concurrent.TimeoutException("ask timed out")))
+      )
+    )
+    h.call(m =>
+      m.accountRangeSyncCompleteArms(CodeHashesFileInfoReply(Failure(new RuntimeException("coordinator stopped"))))
+    )
+
+    h.module.appStateStorage.getSnapSyncStorageFilePath() shouldBe None
+    h.module.appStateStorage.getSnapSyncStorageFileCount() shouldBe None
+    h.module.appStateStorage.getSnapSyncCodeHashesPath() shouldBe None
+    h.module.appStateStorage.getSnapSyncCodeHashesCount() shouldBe None
+    val warns = h.kit.logEntries().filter(_.level == org.slf4j.event.Level.WARN).map(_.message)
+    val storageWarns = warns.filter(_.startsWith("Storage file path NOT persisted for recovery"))
+    val codeHashesWarns = warns.filter(_.startsWith("CodeHashes file path NOT persisted for recovery"))
+    storageWarns should have size 1
+    storageWarns.head should include("TimeoutException: ask timed out")
+    codeHashesWarns should have size 1
+    codeHashesWarns.head should include("RuntimeException: coordinator stopped")
   }
 
   it should "complete the bytecode and storage phases, boost storage while it runs, and skip a force-complete during account sync" taggedAs UnitTest in {

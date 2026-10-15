@@ -319,6 +319,38 @@ class SNAPDownloadArmsCharacterizationSpec
       f.stops.expectNoMessage(300.millis)
     }
 
+  it should "persist the storage and codeHashes handoff paths and counts once the coordinator answers the file-info " +
+    "asks (#1603)" taggedAs UnitTest in {
+      val f = new SnapControllerFixture(testKit)
+      val snap = f.enterGenesisAccountSync()
+      drainDownloadChildren(f, snap)
+      val storageFile = java.nio.file.Paths.get("fukuii-contract-storage-1603.bin")
+      val codeHashesFile = java.nio.file.Paths.get("fukuii-unique-codehashes-1603.bin")
+
+      Using.resource(new SnapLogCapture) { log =>
+        snap ! SNAPSyncController.AccountRangeSyncComplete
+        val storageAsk =
+          f.fish[AccountRangeCoordinator.Command, AccountRangeCoordinator.AccountGetStorageFileInfo](f.accountInbox)
+        val codeHashesAsk =
+          f.fish[AccountRangeCoordinator.Command, AccountRangeCoordinator.AccountGetCodeHashesFileInfo](f.accountInbox)
+
+        // Answer one ask at a time and wait for its log line, so the two replies cannot race each other.
+        storageAsk.replyTo ! AccountRangeCoordinator.StorageFileInfoResponse(storageFile, 42L)
+        log.awaitLine(s"Persisted storage file path for recovery: $storageFile (42 entries)")
+        codeHashesAsk.replyTo ! AccountRangeCoordinator.CodeHashesFileInfoResponse(codeHashesFile, 7L)
+        log.awaitLine(s"Persisted codeHashes file path for recovery: $codeHashesFile (7 entries)")
+        f.awaitProcessed(snap)
+        log.contains("NOT persisted for recovery") shouldBe false
+      }
+
+      f.appStateStorage.getSnapSyncStorageFilePath() shouldBe Some(storageFile.toString)
+      f.appStateStorage.getSnapSyncStorageFileCount() shouldBe Some(42L)
+      f.appStateStorage.getSnapSyncCodeHashesPath() shouldBe Some(codeHashesFile.toString)
+      f.appStateStorage.getSnapSyncCodeHashesCount() shouldBe Some(7L)
+      f.appStateStorage.getSnapAccountResumeCheckpoint() shouldBe None
+      f.stops.expectNoMessage(300.millis)
+    }
+
   // ── Phase completion (AccountRangeSync) ───────────────────────────────────────────────────────
 
   "SNAPSyncController's phase-completion arms in AccountRangeSync" should
