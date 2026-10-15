@@ -261,7 +261,6 @@ private[actors] class StorageRangeCoordinatorImpl(
   // Some peers legitimately return empty slotSets+proofs in cases we can't easily distinguish
   // from "can't serve this state". If we keep re-queuing forever, sync can livelock.
   // Track empty responses per (accountHash,next,last) and skip after a small threshold.
-  private case class StorageTaskKey(accountHash: ByteString, next: ByteString, last: ByteString)
   private val emptyResponsesByTask = mutable.HashMap.empty[StorageTaskKey, Int]
   private val maxEmptyResponsesPerTask: Int = 5
 
@@ -294,7 +293,6 @@ private[actors] class StorageRangeCoordinatorImpl(
   // serving entirely correct, current data; our own expectation is what's wrong — so (unlike the
   // generic verification-failure branch) neither recordPeerCooldown nor adjustResponseBytesOnFailure
   // is called for it.
-  private[actors] case class StaleRootFailure(peerId: String, root: ByteString)
   private[actors] val staleRootFailuresByAccount: mutable.Map[ByteString, Vector[StaleRootFailure]] = mutable.Map.empty
   private val maxStaleRootFailuresPerAccount: Int = 3
   private def isStaleLocalRootSignature(error: String): Boolean =
@@ -1705,6 +1703,10 @@ object StorageRangeCoordinator:
         if diff != 0 then result = diff
         i += 1
       if result != 0 then result else a.length - b.length
+
+  private[actors] case class StorageTaskKey(accountHash: ByteString, next: ByteString, last: ByteString)
+
+  private[actors] case class StaleRootFailure(peerId: String, root: ByteString)
 
   private val ZeroSlotHash: ByteString = ByteString(Array.fill(32)(0.toByte))
 
