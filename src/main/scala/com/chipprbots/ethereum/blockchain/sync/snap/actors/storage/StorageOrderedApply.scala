@@ -48,6 +48,13 @@ private[actors] trait StorageApplyCoreApi:
   def stageDoneMarker(accountHash: ByteString, storageRoot: ByteString): Unit
   def recordCompletedTask(task: StorageTask): Unit
 
+/** What the done markers (C-S3) call in the ordered apply: the storage-trie node flush, which writes an account's trie
+  * nodes before a flat batch that may carry its completion marker. A separate trait, so the C-S2 interfaces stay as
+  * recorded.
+  */
+private[actors] trait StorageTrieFlushApi:
+  def flushTrieNodeWrites(): Unit
+
 /** Storage-range ordered apply (spec 016 C-S2, coordinator-characterization.md §3.3): the range-ascending ordering gate
   * (buffer an out-of-order chunk, drain the ones now in line), applying one in-order chunk (the boundary-repeat dedup,
   * streaming the slots into the account's trie or writing the trie a worker built whole (#1533), staging the flat-slot

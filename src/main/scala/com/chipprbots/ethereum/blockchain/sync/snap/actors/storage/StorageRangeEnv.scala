@@ -28,6 +28,8 @@ import com.chipprbots.ethereum.network.NetworkPeerManagerActor
   * that decides whether the storage cursor is persisted (`Some` for the controller's spawn, `None` for recovery's).
   * Plus `storageScheme`, which picks the trie. The Path node store is not here: the modules reach it as
   * `stateIngest.pathNodes` (`StateIngest`, adopted in C-S2).
+  *
+  * Flat-slot writes (spec 016 C-S3): `flatBatchEntryThreshold`, the accumulator size that submits a flat batch.
   */
 private[actors] trait StorageRangeEnv:
   def context: ActorContext[StorageRangeCoordinator.Command]
@@ -49,3 +51,4 @@ private[actors] trait StorageRangeEnv:
   def snapProgressStorage: Option[SnapSyncProgressStorage]
   def storageScheme: StorageScheme
   def stateIngest: StateIngest
+  def flatBatchEntryThreshold: Int

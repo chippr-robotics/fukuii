@@ -62,7 +62,7 @@ private[actors] class StorageRangeCoordinatorImpl(
     val networkPeerManager: org.apache.pekko.actor.typed.ActorRef[NetworkPeerManagerActor.Command],
     val requestTracker: SNAPRequestTracker,
     val mptStorage: MptStorage,
-    flatSlotStorage: FlatSlotStorage,
+    val flatSlotStorage: FlatSlotStorage,
     val maxAccountsPerBatch: Int,
     val maxInFlightRequests: Int,
     val requestTimeout: FiniteDuration,
@@ -71,7 +71,7 @@ private[actors] class StorageRangeCoordinatorImpl(
     val configInitialResponseBytes: Int = 1048576,
     val configMinResponseBytes: Int = 131072,
     val deferredMerkleization: Boolean = true,
-    flatBatchEntryThreshold: Int = 1000,
+    val flatBatchEntryThreshold: Int = 1000,
     flatBatchEcOverride: Option[ExecutionContext] = None,
     // Back-pressure watermarks — overridable in tests so we don't have to enqueue 100K StorageTasks
     // just to verify the pause/resume transition. Production defaults match the values quoted in
@@ -1751,6 +1751,13 @@ object StorageRangeCoordinator:
     * the raw type stays in this file, whose import is baselined.
     */
   private[actors] type TrieNodeWrite = DataUpdate
+
+  /** The batch the flat-slot writes and the completion markers commit in (`FlatSlotStorage.putSlotsBatch`,
+    * `SnapStorageDoneStorage.markDone`, joined with `and`). A name for the module file, so it needs no raw `DataSource`
+    * import (spec 016 C-S3): it imports this alias under the raw type's own name, which keeps the moved bodies
+    * byte-identical. The raw type stays in this file, whose import is baselined.
+    */
+  private[actors] type FlatSlotBatch = DataSourceBatchUpdate
 
   /** A response that completed its request and waits to be applied. Mutable fields are touched only on the actor. */
   final private[actors] class PendingResponse(

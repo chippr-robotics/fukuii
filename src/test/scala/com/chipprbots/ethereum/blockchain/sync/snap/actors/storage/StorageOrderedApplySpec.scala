@@ -105,6 +105,7 @@ private[actors] class StubStorageOrderedApplyState(
     def trieStore(pivot: BigInt): MptStorage = notReached("StateIngest.trieStore")
     def snapProgress: SnapSyncProgressStorage = notReached("StateIngest.snapProgress")
     def storageDone: SnapStorageDoneStorage = notReached("StateIngest.storageDone")
+  val flatBatchEntryThreshold: Int = 1000
 
   // StorageApplyCoreApi (recorded; recordSubtaskCompletion counts as the core does)
   val stagedFlat: mutable.ArrayBuffer[(ByteString, Seq[(ByteString, ByteString)])] = mutable.ArrayBuffer.empty
