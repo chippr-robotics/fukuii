@@ -772,45 +772,7 @@ class BlockExecution(
       world: InMemoryWorldStateProxy,
       accessRecorder: Option[BlockAccessRecorder] = None
   )(implicit blockchainConfig: BlockchainConfig): Either[String, (InMemoryWorldStateProxy, Seq[ByteString])] =
-    if !blockchainConfig.isPragueTimestamp(block.header.unixTimestamp) then return Right((world, Nil))
-
-    val evmConfig = EvmConfig.forBlock(block.header.number.value, block.header.unixTimestamp, blockchainConfig)
-    var w = world
-    val outputs = scala.collection.mutable.ListBuffer.empty[ByteString]
-
-    // EIP-7685: Execute system calls to request contracts and collect output.
-    // EIP-6110 DEPOSIT contract has no system call — deposits are parsed from logs.
-    // Prague: EIP-7002 (withdrawals) and EIP-7251 (consolidations). Amsterdam adds the two EIP-8282 builder
-    // predeploys. The SYSTEM_ADDRESS call is not optional bookkeeping: each predeploy's dequeue path clears the
-    // per-block slots its user path dirtied (for the builder deposit contract, slots 0x01 and 0x03), so skipping
-    // the call leaves those slots set and forks the storage root -> account RLP -> STATE ROOT.
-    //
-    // GAS: on an Amsterdam block every system call, the pre-existing EIP-7002/7251 ones included, gets EIP-8037's
-    // state-gas reservoir BESIDE its unchanged 30,000,000 execution grant (see `systemCallContext`). The queue
-    // predeploys are bounded loops that never read GAS, so for them it changes nothing; that is asserted, not assumed:
-    // `AmsterdamBuilderRequestsSpec` runs the fixture's real withdrawal and consolidation bytecode over a non-empty
-    // queue on both sides of the fork and requires byte-identical requests and storage.
-    var failure: Option[String] = None
-    for (queueAddr, requestType) <- BlockExecution.systemCallTargets(block.header.unixTimestamp)
-    do
-      val code = w.getCode(queueAddr)
-      if failure.isEmpty && code.nonEmpty then
-        // EIP-7928: execution-specs `process_checked_system_transaction` checks the code on an untracked state, then
-        // makes the call, which reads the target as any call does. All four share block access index n + 1.
-        accessRecorder.foreach(BlockExecution.recordSystemCallTarget(w, queueAddr, _))
-        val context =
-          BlockExecution.systemCallContext(block.header, w, queueAddr, ByteString.empty, evmConfig, accessRecorder)
-        val vm = new com.chipprbots.ethereum.vm.VM[InMemoryWorldStateProxy, InMemoryWorldStateProxyStorage]
-        val result = vm.run(context)
-        result.error match
-          case Some(err) =>
-            failure = Some(s"SYSTEM_CONTRACT_CALL_FAILED: system call to $queueAddr failed: $err")
-          case None =>
-            w = InMemoryWorldStateProxy.persistState(result.world)
-            // EIP-7685 request bytes = single-byte type prefix || raw system-call returndata.
-            // Empty returndata (no queued requests) means no bytes are emitted for this type.
-            if result.returnData.nonEmpty then outputs += ByteString(Array(requestType.toByte)) ++ result.returnData
-    failure.toLeft((w, outputs.toSeq))
+    BlockExecution.requestSystemCalls(block.header, world, accessRecorder)
 
   /** EIP-6110: Parse `DepositEvent(bytes,bytes,bytes,bytes,bytes)` logs emitted by the beacon deposit contract during
     * block execution and return one request entry: 0x00 || (pubkey || wc || amount || signature || index) per deposit,
@@ -830,7 +792,64 @@ class BlockExecution(
   def collectDepositRequests(receipts: Seq[Receipt])(implicit
       blockchainConfig: BlockchainConfig
   ): Either[String, Option[ByteString]] =
-    import BlockExecution.*
+    BlockExecution.depositRequests(receipts)
+
+object BlockExecution:
+
+  /** The body of `BlockExecution.processPragueSystemCallsChecked` (see there), on a header rather than a block, so that
+    * eth_simulateV1 runs the very same EIP-7002 / EIP-7251 / EIP-8282 system calls a real block does
+    * ([[SimulatedBlockSystemCalls]]). Moved here unchanged; block execution delegates to it.
+    */
+  private[ledger] def requestSystemCalls(
+      header: BlockHeader,
+      world: InMemoryWorldStateProxy,
+      accessRecorder: Option[BlockAccessRecorder]
+  )(implicit blockchainConfig: BlockchainConfig): Either[String, (InMemoryWorldStateProxy, Seq[ByteString])] =
+    if !blockchainConfig.isPragueTimestamp(header.unixTimestamp) then return Right((world, Nil))
+
+    val evmConfig = EvmConfig.forBlock(header.number.value, header.unixTimestamp, blockchainConfig)
+    var w = world
+    val outputs = scala.collection.mutable.ListBuffer.empty[ByteString]
+
+    // EIP-7685: Execute system calls to request contracts and collect output.
+    // EIP-6110 DEPOSIT contract has no system call — deposits are parsed from logs.
+    // Prague: EIP-7002 (withdrawals) and EIP-7251 (consolidations). Amsterdam adds the two EIP-8282 builder
+    // predeploys. The SYSTEM_ADDRESS call is not optional bookkeeping: each predeploy's dequeue path clears the
+    // per-block slots its user path dirtied (for the builder deposit contract, slots 0x01 and 0x03), so skipping
+    // the call leaves those slots set and forks the storage root -> account RLP -> STATE ROOT.
+    //
+    // GAS: on an Amsterdam block every system call, the pre-existing EIP-7002/7251 ones included, gets EIP-8037's
+    // state-gas reservoir BESIDE its unchanged 30,000,000 execution grant (see `systemCallContext`). The queue
+    // predeploys are bounded loops that never read GAS, so for them it changes nothing; that is asserted, not assumed:
+    // `AmsterdamBuilderRequestsSpec` runs the fixture's real withdrawal and consolidation bytecode over a non-empty
+    // queue on both sides of the fork and requires byte-identical requests and storage.
+    var failure: Option[String] = None
+    for (queueAddr, requestType) <- BlockExecution.systemCallTargets(header.unixTimestamp)
+    do
+      val code = w.getCode(queueAddr)
+      if failure.isEmpty && code.nonEmpty then
+        // EIP-7928: execution-specs `process_checked_system_transaction` checks the code on an untracked state, then
+        // makes the call, which reads the target as any call does. All four share block access index n + 1.
+        accessRecorder.foreach(BlockExecution.recordSystemCallTarget(w, queueAddr, _))
+        val context =
+          BlockExecution.systemCallContext(header, w, queueAddr, ByteString.empty, evmConfig, accessRecorder)
+        val vm = new com.chipprbots.ethereum.vm.VM[InMemoryWorldStateProxy, InMemoryWorldStateProxyStorage]
+        val result = vm.run(context)
+        result.error match
+          case Some(err) =>
+            failure = Some(s"SYSTEM_CONTRACT_CALL_FAILED: system call to $queueAddr failed: $err")
+          case None =>
+            w = InMemoryWorldStateProxy.persistState(result.world)
+            // EIP-7685 request bytes = single-byte type prefix || raw system-call returndata.
+            // Empty returndata (no queued requests) means no bytes are emitted for this type.
+            if result.returnData.nonEmpty then outputs += ByteString(Array(requestType.toByte)) ++ result.returnData
+    failure.toLeft((w, outputs.toSeq))
+
+  /** The body of `BlockExecution.collectDepositRequests` (see there), shared with eth_simulateV1. Moved here unchanged.
+    */
+  private[ledger] def depositRequests(receipts: Seq[Receipt])(implicit
+      blockchainConfig: BlockchainConfig
+  ): Either[String, Option[ByteString]] =
     val depositContract = depositContractFor(blockchainConfig)
     val deposits = for
       receipt <- receipts
@@ -846,8 +865,6 @@ class BlockExecution(
         if bodies.isEmpty then None
         else Some(bodies.foldLeft(ByteString(Array(DepositRequestType.toByte)))(_ ++ _))
       }
-
-object BlockExecution:
 
   val SystemAddress: Address = Address("0xfffffffffffffffffffffffffffffffffffffffe")
 

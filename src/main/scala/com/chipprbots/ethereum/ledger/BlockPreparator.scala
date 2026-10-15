@@ -270,7 +270,8 @@ class BlockPreparator(
         evmConfig,
         authExecutionGas,
         authStateGas,
-        extraWarmAddresses
+        extraWarmAddresses,
+        overrides.skipExecutionGasCap
       )
     // Apply the eth_simulateV1 overrides, if this call carries any
     var ctx = context
@@ -424,7 +425,9 @@ class BlockPreparator(
       .clearTouchedAccounts
 
   /** Public facade for eth_simulateV1: executes one transaction as block import does, under this call's overrides —
-    * precompile relocations for movePrecompileToAddress, traceTransfers, and the blobBaseFee block override.
+    * precompile relocations for movePrecompileToAddress, traceTransfers, the blobBaseFee block override and, with
+    * `validation` off, the lifted EIP-8037 execution-gas cap. On an Amsterdam block the simulator passes the call's
+    * EIP-7928 `accessRecorder`, exactly as block execution does for a transaction.
     *
     * The overrides are passed down this call's stack as an immutable [[SimulationOverrides]] and exist nowhere else:
     * block import, other eth_simulateV1 calls and StxLedger, which share this preparator and run concurrently, never
@@ -437,15 +440,17 @@ class BlockPreparator(
       world: InMemoryWorldStateProxy,
       precompileRelocations: Map[Address, Address] = Map.empty,
       traceTransfers: Boolean = false,
-      blobBaseFeeOverride: Option[BigInt] = None
+      blobBaseFeeOverride: Option[BigInt] = None,
+      skipExecutionGasCap: Boolean = false,
+      accessRecorder: Option[BlockAccessRecorder] = None
   )(implicit blockchainConfig: BlockchainConfig): TxResult =
     executeTransactionWithOverrides(
       stx,
       senderAddress,
       blockHeader,
       world,
-      SimulationOverrides(precompileRelocations, traceTransfers, blobBaseFeeOverride),
-      accessRecorder = None,
+      SimulationOverrides(precompileRelocations, traceTransfers, blobBaseFeeOverride, skipExecutionGasCap),
+      accessRecorder = accessRecorder,
       tracer = None
     )
 
@@ -512,7 +517,8 @@ class BlockPreparator(
         // EIP-2780: the authorizations are charged one by one as they are applied, against the top frame's meter —
         // which is why they need the frame's gas split before the frame exists. The accounts whose first write the
         // transaction already paid for: the sender (TX_BASE) and a value-bearing recipient (TX_VALUE_COST).
-        val (executionGrant, reservoir) = ProgramContext.evmGasAllocation(stx, senderAddress, evmConfigForTx)
+        val (executionGrant, reservoir) =
+          ProgramContext.evmGasAllocation(stx, senderAddress, evmConfigForTx, overrides.skipExecutionGasCap)
         val paidWrites = Set(senderAddress) ++ (if sct.value > 0 then sct.receivingAddress.toSet else Set.empty)
         val applied = applyAmsterdamAuthorizations(
           sct.authorizationList,
