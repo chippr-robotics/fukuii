@@ -44,7 +44,10 @@ object TestingJsonMethodsImplicits extends JsonMethodsImplicits:
             Left(InvalidParams("testing_buildBlockV1 expects [parentBlockHash, payloadAttributes, transactions]"))
 
       override def encodeJson(t: BuildBlockResponse): JValue =
-        val payload = EngineApiController.blockToExecutionPayload(t.block)
+        // Amsterdam: the ExecutionPayloadV4 carries the RLP block access list, which the block itself does not (its
+        // header holds only the hash) — the same argument engine_getPayloadV6 passes. None before Amsterdam, where
+        // the payload encodes exactly as before.
+        val payload = EngineApiController.blockToExecutionPayload(t.block, t.blockAccessList)
         val blockValue = EngineApiController.computeBlockValue(t.block, t.receipts)
         val base = List(
           "executionPayload" -> payload,
@@ -143,6 +146,11 @@ object TestingJsonMethodsImplicits extends JsonMethodsImplicits:
             case None | Some(JNull) | Some(JNothing) => Right(None)
             case Some(JString(s))                    => extractHash(s).map(Some(_))
             case Some(_) => Left(InvalidParams("parentBeaconBlockRoot must be a 32-byte hex string"))
+          // PayloadAttributesV4 (Amsterdam). go-ethereum's testing API takes the same engine.PayloadAttributes and hands
+          // both to the miner (eth/catalyst/api_testing.go). Decoded whatever the timestamp: the builder reads the slot
+          // only for an Amsterdam block and the service applies the target only there, so earlier forks build as before.
+          slotNumber <- decodeOptionalUint64(fields, "slotNumber")
+          targetGasLimit <- decodeOptionalUint64(fields, "targetGasLimit")
         yield PayloadAttributes(
           // Timestamp is a uint64 QUANTITY. `.toLong` is the representation PayloadAttributes
           // already uses; comparisons against it elsewhere go through Timestamp() so that values
@@ -151,9 +159,27 @@ object TestingJsonMethodsImplicits extends JsonMethodsImplicits:
           prevRandao = prevRandao,
           suggestedFeeRecipient = feeRecipient,
           withdrawals = withdrawals,
-          parentBeaconBlockRoot = beaconRoot
+          parentBeaconBlockRoot = beaconRoot,
+          slotNumber = slotNumber,
+          targetGasLimit = targetGasLimit
         )
       case _ => Left(InvalidParams("payloadAttributes must be an object"))
+
+  private val MaxUint64: BigInt = (BigInt(1) << 64) - 1
+
+  /** An optional uint64 QUANTITY: None when absent or null; -32602 when present but not a quantity or wider than 64
+    * bits.
+    */
+  private def decodeOptionalUint64(fields: Map[String, JValue], key: String): Either[JsonRpcError, Option[BigInt]] =
+    fields.get(key) match
+      case None | Some(JNull) | Some(JNothing) => Right(None)
+      case Some(v) =>
+        extractQuantity(v).left
+          .map(_ => InvalidParams(s"payloadAttributes.$key must be a QUANTITY"))
+          .flatMap { n =>
+            if n >= 0 && n <= MaxUint64 then Right(Some(n))
+            else Left(InvalidParams(s"payloadAttributes.$key does not fit 64 bits"))
+          }
 
   private def decodeWithdrawal(json: JObject): Either[JsonRpcError, Withdrawal] =
     val fields = json.obj.toMap
