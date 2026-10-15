@@ -1900,9 +1900,12 @@ Any other rise is still forbidden. Instances:
   default turns the healed-code check off, so the narrowing needs `Option[StateIngest]` or a flag. `RecordingChildFactories`
   keeps `ChildSpawn.Healing`'s fields for the protected pin. Add vault, and a Mordor heal restart). Narrowing takes `StateIngest` (healed nodes and code), never `StateAccess`;
   lowers the baseline total. Check SC-002.
-- [ ] T075b [C-X0] Test-only golden of the response-size window for ARC, SRC and TNHC: initial target, grow on a ≥90%
+- [x] T075b [C-X0] Test-only golden of the response-size window for ARC, SRC and TNHC: initial target, grow on a ≥90%
   fill, shrink on failure, min/max clamps, and the exact DEBUG log text with its per-coordinator label. It lands
-  before C-X.
+  before C-X. Built as `ResponseWindowGoldenSpec`. Finding for C-X: the three bodies are identical (factors 1.25 and
+  0.5, the 90% rule, the 2 MiB ceiling, rounding); they differ only in the log label (`account`, `storage`, `healing`)
+  and in where initial/min come from (ARC and SRC: configuration, defaults 524288/102400 and 1048576/131072; TNHC:
+  hard-coded 524288/51200), so the extraction takes initial and min as parameters too.
 - [ ] T076 [C-X] `AdaptiveResponseBytes` for ARC, SRC and TNHC (identical bodies, log label as a parameter).
   ByteCode is untouched.
 
