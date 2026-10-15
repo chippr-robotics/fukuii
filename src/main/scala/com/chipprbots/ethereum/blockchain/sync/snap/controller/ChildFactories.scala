@@ -29,7 +29,6 @@ import com.chipprbots.ethereum.blockchain.sync.snap.actors.TrieNodeHealingCoordi
 import com.chipprbots.ethereum.db.storage.AppStateStorage
 import com.chipprbots.ethereum.db.storage.BfsQueueStorage
 import com.chipprbots.ethereum.db.storage.EvmCodeStorage
-import com.chipprbots.ethereum.db.storage.FlatSlotStorage
 import com.chipprbots.ethereum.db.storage.HealingFrontierStorage
 import com.chipprbots.ethereum.db.storage.MptStorage
 import com.chipprbots.ethereum.db.storage.PathNodeStorage
@@ -99,7 +98,6 @@ trait ChildFactories:
       networkPeerManager: TypedActorRef[NetworkPeerManagerActor.Command],
       requestTracker: SNAPRequestTracker,
       mptStorage: MptStorage,
-      flatSlotStorage: FlatSlotStorage,
       maxAccountsPerBatch: Int,
       maxInFlightRequests: Int,
       requestTimeout: FiniteDuration,
@@ -124,7 +122,6 @@ trait ChildFactories:
       networkPeerManager = networkPeerManager,
       requestTracker = requestTracker,
       mptStorage = mptStorage,
-      flatSlotStorage = flatSlotStorage,
       maxAccountsPerBatch = maxAccountsPerBatch,
       maxInFlightRequests = maxInFlightRequests,
       requestTimeout = requestTimeout,

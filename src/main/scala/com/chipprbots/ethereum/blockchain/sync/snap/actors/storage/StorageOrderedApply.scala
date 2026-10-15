@@ -63,7 +63,7 @@ private[actors] trait StorageTrieFlushApi:
   * storage-trie node writes (`flushTrieNodeWrites`). The coordinator core keeps the behaviour arms that call it, and
   * flushes the node buffer after every message.
   */
-private[actors] trait StorageOrderedApply:
+private[actors] trait StorageOrderedApply extends StorageTrieFlushApi:
   this: StorageOrderedApplyState & StorageRangeEnv & StorageApplyCoreApi & StoragePeerFeedbackApi =>
 
   /** Discard the ordering-gate state for one account: its cursor, last-applied-slot marker, and any buffered (verified
@@ -155,7 +155,7 @@ private[actors] trait StorageOrderedApply:
     * them (a flat batch that may carry completion markers, a persisted storage cursor), after each applied response,
     * and at the end of every message.
     */
-  private[actors] def flushTrieNodeWrites(): Unit =
+  def flushTrieNodeWrites(): Unit =
     if trieNodeWrites.nonEmpty then
       val startNs = System.nanoTime()
       val updates = trieNodeWrites.toList

@@ -72,7 +72,6 @@ class StorageRangeCoordinatorSpec
         networkPeerManager = networkPeerManager,
         requestTracker = requestTracker,
         mptStorage = mptStorage,
-        flatSlotStorage = flatSlotStorage,
         maxAccountsPerBatch = maxAccountsPerBatch,
         maxInFlightRequests = maxInFlightRequests,
         requestTimeout = requestTimeout,
@@ -80,17 +79,17 @@ class StorageRangeCoordinatorSpec
         initialMaxInFlightPerPeer = initialMaxInFlightPerPeer,
         backpressureHighWatermark = backpressureHighWatermark,
         backpressureLowWatermark = backpressureLowWatermark,
-        stateIngest = hashSchemeIngest
+        stateIngest = hashSchemeIngest(flatSlotStorage)
       )
     )
 
-  // The coordinator's StateIngest (spec 016 C-S2): these tests run the Hash scheme, so the coordinator reads only
-  // `pathNodes` (None) from it; every other member throws.
-  private def hashSchemeIngest: StateIngest =
+  // The coordinator's StateIngest (spec 016 C-S2, C-S3): these tests run the Hash scheme, so the coordinator reads only
+  // `pathNodes` (None) and `flatSlots` (the test's flat-slot store) from it; every other member throws.
+  private def hashSchemeIngest(flatSlotStore: FlatSlotStorage): StateIngest =
     new StateIngest:
       def appState: AppStateStorage = notReached("appState")
       def stateTries: StateStorage = notReached("stateTries")
-      def flatSlots: FlatSlotStorage = notReached("flatSlots")
+      def flatSlots: FlatSlotStorage = flatSlotStore
       def pathNodes: Option[PathNodeStorage] = None
       def bytecode: EvmCodeStorage = notReached("bytecode")
       def chainReader: BlockchainReader = notReached("chainReader")
@@ -146,7 +145,6 @@ class StorageRangeCoordinatorSpec
           networkPeerManager = testKit.createTestProbe[NetworkPeerManagerActor.Command]().ref,
           requestTracker = new SNAPRequestTracker()(classicSystem.scheduler),
           mptStorage = new TestMptStorage(),
-          flatSlotStorage = flatSlotStorage,
           maxAccountsPerBatch = maxAccountsPerBatch,
           maxInFlightRequests = maxInFlightRequests,
           requestTimeout = requestTimeout,
@@ -156,7 +154,7 @@ class StorageRangeCoordinatorSpec
           backpressureHighWatermark = backpressureHighWatermark,
           backpressureLowWatermark = backpressureLowWatermark,
           deferredMerkleization = deferredMerkleization,
-          stateIngest = hashSchemeIngest,
+          stateIngest = hashSchemeIngest(flatSlotStorage),
           recordStorageDone = recordStorageDone
         )
         captured.start()

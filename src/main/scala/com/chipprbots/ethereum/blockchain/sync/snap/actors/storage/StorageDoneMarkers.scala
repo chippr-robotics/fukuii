@@ -6,7 +6,6 @@ import scala.collection.mutable
 import scala.concurrent.ExecutionContext
 
 import com.chipprbots.ethereum.blockchain.sync.snap.StorageTask
-import com.chipprbots.ethereum.blockchain.sync.snap.actors.*
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.StorageRangeCoordinator.ByteStringOrdering
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.StorageRangeCoordinator.FlatBatchFlushComplete
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.StorageRangeCoordinator.FlatBatchFlushFailed
@@ -14,8 +13,8 @@ import com.chipprbots.ethereum.blockchain.sync.snap.actors.StorageRangeCoordinat
 import com.chipprbots.ethereum.db.storage.SnapStorageDoneStorage
 
 /** The coordinator state `StorageDoneMarkers` reads and writes (spec 016 C-S3, research.md R14b). The core's behaviour
-  * arms (the flush-complete, flush-failed and periodic-flush arms, `onPostStop`, `isComplete`, progress) or the peer
-  * dispatch touch every one of them too, or rule (d) keeps them in the core (`pendingFlatBatchAccounts`,
+  * arms (flush complete, flush failed, the periodic marker flush), `onPostStop`, `isComplete`, the progress reply or
+  * the peer dispatch touch them too, or rule (d) keeps them in the core (`pendingFlatBatchAccounts`,
   * `pendingDoneMarkers`, `flatBatchesDoneAhead`, and the immutable `storageDoneStorage` and `flatBatchEc`), so the Impl
   * keeps them as fields. The four `var`s are the ones the module writes; `doneMarkersDisabled` is set only by the
   * core's flush-failed arm.
@@ -42,7 +41,7 @@ private[actors] trait StorageDoneMarkersState:
   * final synchronous flush.
   */
 private[actors] trait StorageDoneMarkers:
-  this: StorageRangeCoordinatorImpl =>
+  this: StorageDoneMarkersState & StorageRangeEnv & StorageTrieFlushApi =>
 
   /** Every flat batch with a sequence number <= this has committed. Package-private for tests. */
   private[actors] var flatBatchesDoneThrough: Long = 0L
@@ -103,7 +102,7 @@ private[actors] trait StorageDoneMarkers:
       flatBatchSeq = batchSeq
 
       val selfRef = self
-      val storage = flatSlotStorage // capture for Future
+      val storage = stateIngest.flatSlots // capture for Future
       val doneStorage = storageDoneStorage
       val ec = flatBatchEc
       import scala.concurrent.{Future, blocking}

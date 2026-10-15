@@ -17,7 +17,6 @@ import com.chipprbots.ethereum.blockchain.sync.snap.actors.storage.*
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.StateIngest
 import com.chipprbots.ethereum.db.dataSource.DataSourceBatchUpdate
 import com.chipprbots.ethereum.db.dataSource.DataUpdate
-import com.chipprbots.ethereum.db.storage.FlatSlotStorage
 import com.chipprbots.ethereum.db.storage.MptStorage
 import com.chipprbots.ethereum.db.storage.SnapStorageDoneStorage
 import com.chipprbots.ethereum.db.storage.SnapSyncProgressStorage
@@ -31,6 +30,7 @@ import com.chipprbots.ethereum.utils.ByteStringUtils.ByteStringOps
 // per-spawn cursor store) stay explicit parameters: session values, not capabilities (the named FR-042 exception, user
 // decisions 2026-10-13).
 // adopt-map: pathNodeStorage -> pathNodes
+// `flatSlotStorage` (C-S3, T068) maps to `flatSlots` by the capability's own map entry in StateIngest.scala.
 
 /** StorageRangeCoordinator manages storage range download workers and orchestrates the storage sync phase.
   *
@@ -62,7 +62,6 @@ private[actors] class StorageRangeCoordinatorImpl(
     val networkPeerManager: org.apache.pekko.actor.typed.ActorRef[NetworkPeerManagerActor.Command],
     val requestTracker: SNAPRequestTracker,
     val mptStorage: MptStorage,
-    val flatSlotStorage: FlatSlotStorage,
     val maxAccountsPerBatch: Int,
     val maxInFlightRequests: Int,
     val requestTimeout: FiniteDuration,
@@ -106,7 +105,8 @@ private[actors] class StorageRangeCoordinatorImpl(
     with StoragePeerDispatchState
     with StorageRangeCoreApi
     with StorageOrderedApplyState
-    with StorageApplyCoreApi:
+    with StorageApplyCoreApi
+    with StorageDoneMarkersState:
 
   import StorageRangeCoordinator.*
 
@@ -472,7 +472,7 @@ private[actors] class StorageRangeCoordinatorImpl(
   // account could have had a chunk in it. Losing a staged marker (crash before its batch commits) only means the task
   // is downloaded again after a restart — today's behaviour.
   val storageDoneStorage: Option[SnapStorageDoneStorage] =
-    Option.when(recordStorageDone)(new SnapStorageDoneStorage(flatSlotStorage.dataSource))
+    Option.when(recordStorageDone)(new SnapStorageDoneStorage(stateIngest.flatSlots.dataSource))
 
   /** Fully-downloaded `(accountHash, storageRoot, lastSlotBatch)` whose marker is not written yet. Package-private for
     * tests.
@@ -698,9 +698,9 @@ private[actors] class StorageRangeCoordinatorImpl(
     pendingDoneMarkers.clear()
     if pendingFlatBatchAccounts.nonEmpty || doneMarkers.nonEmpty then
       try
-        var combined: DataSourceBatchUpdate = flatSlotStorage.emptyBatchUpdate
+        var combined: DataSourceBatchUpdate = stateIngest.flatSlots.emptyBatchUpdate
         pendingFlatBatchAccounts.foreach { case (accountHash, slots) =>
-          combined = combined.and(flatSlotStorage.putSlotsBatch(accountHash, slots))
+          combined = combined.and(stateIngest.flatSlots.putSlotsBatch(accountHash, slots))
         }
         if doneMarkers.nonEmpty then storageDoneStorage.foreach(d => combined = combined.and(d.markDone(doneMarkers)))
         combined.commit()
@@ -1830,7 +1830,6 @@ object StorageRangeCoordinator:
       networkPeerManager: org.apache.pekko.actor.typed.ActorRef[NetworkPeerManagerActor.Command],
       requestTracker: SNAPRequestTracker,
       mptStorage: MptStorage,
-      flatSlotStorage: FlatSlotStorage,
       maxAccountsPerBatch: Int,
       maxInFlightRequests: Int,
       requestTimeout: FiniteDuration,
@@ -1867,7 +1866,6 @@ object StorageRangeCoordinator:
           networkPeerManager = networkPeerManager,
           requestTracker = requestTracker,
           mptStorage = mptStorage,
-          flatSlotStorage = flatSlotStorage,
           maxAccountsPerBatch = maxAccountsPerBatch,
           maxInFlightRequests = maxInFlightRequests,
           requestTimeout = requestTimeout,
