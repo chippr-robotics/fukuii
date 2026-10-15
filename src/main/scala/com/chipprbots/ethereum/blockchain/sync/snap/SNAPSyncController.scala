@@ -1247,8 +1247,8 @@ object SNAPSyncController:
   case object AccountRangeSyncComplete extends Command
 
   /** The account coordinator's replies to the two file-info asks sent on `AccountRangeSyncComplete` (#1603), piped back
-    * to the controller with `pipeToSelf` so the handoff paths are persisted and logged on the actor thread. A
-    * `Failure` is a timed-out or failed ask: the path is not persisted and the controller logs a WARN naming it.
+    * to the controller with `pipeToSelf` so the handoff paths are persisted and logged on the actor thread. A `Failure`
+    * is a timed-out or failed ask: the path is not persisted and the controller logs a WARN naming it.
     */
   final private[snap] case class StorageFileInfoReply(
       result: scala.util.Try[actors.AccountRangeCoordinator.StorageFileInfoResponse]

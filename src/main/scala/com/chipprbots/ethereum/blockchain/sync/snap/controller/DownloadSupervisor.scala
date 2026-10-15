@@ -615,8 +615,8 @@ private[snap] trait DownloadSupervisor extends AccountRangeStartApi with ByteCod
   /** A `commonSyncingArms` arm lifted into a class member (spec 016 lift before M11b, CQ-SNAP-016-32):
     * `AccountRangeSyncComplete`: the storage-phase entry, with the handoff-file persistence and the `preserved*` clear.
     * `commonSyncingArms` delegates to it at the arm's original position, so the arm order is unchanged. Since #1603 it
-    * also takes the two file-info replies (`StorageFileInfoReply`, `CodeHashesFileInfoReply`) the entry asks for, so the
-    * handoff paths are persisted, and logged, on the actor thread.
+    * also takes the two file-info replies (`StorageFileInfoReply`, `CodeHashesFileInfoReply`) the entry asks for, so
+    * the handoff paths are persisted, and logged, on the actor thread.
     */
   private[snap] lazy val accountRangeSyncCompleteArms: PartialFunction[Command, Behavior[Command]] = {
     case AccountRangeSyncComplete =>
