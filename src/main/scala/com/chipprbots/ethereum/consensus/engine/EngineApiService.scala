@@ -1300,8 +1300,8 @@ class EngineApiService(
   ): Either[String, BuiltBlock] =
     // The one way into sealProposerBlock. An Amsterdam header carries the beacon slot (EIP-7843), which only the
     // attributes can supply, and SLOTNUM reads it while the block executes: without it nothing can be sealed.
-    // engine_forkchoiceUpdated refuses such attributes before it gets here; this also covers testing_buildBlockV1,
-    // whose attributes carry no slot, and anything added later.
+    // engine_forkchoiceUpdated refuses such attributes before it gets here; this also covers a testing_buildBlockV1 /
+    // testing_commitBlockV1 call that omits `slotNumber`, and anything added later.
     if amsterdamSlotMissing(attrs) then
       log.error(
         "Proposer build on block {} at Amsterdam timestamp {} refused: {}",

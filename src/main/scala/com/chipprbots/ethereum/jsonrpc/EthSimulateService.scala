@@ -13,6 +13,7 @@ import com.chipprbots.ethereum.consensus.validators.std.MptListValidator
 import com.chipprbots.ethereum.crypto.kec256
 import com.chipprbots.ethereum.db.dataSource.EphemDataSource
 import com.chipprbots.ethereum.db.storage.EvmCodeStorage
+import com.chipprbots.ethereum.db.storage.MptStorage
 import com.chipprbots.ethereum.db.storage.StateStorage
 import com.chipprbots.ethereum.domain.*
 import com.chipprbots.ethereum.domain.BlockHeader.HeaderExtraFields.*
@@ -24,6 +25,8 @@ import com.chipprbots.ethereum.rlp
 import com.chipprbots.ethereum.utils.BlockchainConfig
 import com.chipprbots.ethereum.utils.ByteUtils
 import com.chipprbots.ethereum.utils.Logger
+import com.chipprbots.ethereum.vm.AmsterdamGas
+import com.chipprbots.ethereum.vm.BlockAccessRecorder
 import com.chipprbots.ethereum.vm.EvmConfig
 
 object EthSimulateService:
@@ -121,6 +124,51 @@ object EthSimulateService:
 
   val MaxBlockStateCalls = 256
 
+  /** EIP-2681: the largest account nonce, 2^64 - 1. */
+  val MaxNonce: BigInt = BigInt("18446744073709551615")
+
+  /** The calls of one simulated block, executed: the world after them, per-call results, the transactions, their
+    * senders and receipts, and three gas counters. `receiptGasUsed` is the sum of the receipts' gas (what the global
+    * gas budget is charged); `executionGasUsed` and `stateGasUsed` are EIP-8037's two block dimensions, whose maximum
+    * is an Amsterdam header's `gasUsed`. Before Amsterdam the execution counter equals the receipt sum and state is 0.
+    */
+  final private case class ExecutedCalls(
+      world: InMemoryWorldStateProxy,
+      callResults: Seq[SimulateCallResult],
+      transactions: Seq[SignedTransaction],
+      senders: Seq[Address],
+      receipts: Seq[Receipt],
+      receiptGasUsed: BigInt,
+      executionGasUsed: BigInt,
+      stateGasUsed: BigInt
+  )
+
+  /** The simulation's trie-node store: the read-only store, except that a trie update never removes the nodes it
+    * replaced. The read-only store keeps a simulation's new nodes in an in-memory buffer, and an update that replaces
+    * one deletes it from that buffer, so a world from before a later persist could no longer be read. The EIP-7928
+    * access list compares each block access index's starting world with its ending world AFTER the index ran, so the
+    * starting world must stay readable. Nodes are content-addressed: keeping them changes no root and no hash. Nothing
+    * reaches the database either way; the wrapped store is the read-only one.
+    */
+  final private class RetainingMptStorage(underlying: MptStorage) extends MptStorage:
+    override def get(nodeId: Array[Byte]): com.chipprbots.ethereum.mpt.MptNode = underlying.get(nodeId)
+    override def updateNodesInStorage(
+        newRoot: Option[com.chipprbots.ethereum.mpt.MptNode],
+        toRemove: Seq[com.chipprbots.ethereum.mpt.MptNode]
+    ): Option[com.chipprbots.ethereum.mpt.MptNode] = underlying.updateNodesInStorage(newRoot, Nil)
+    override def persist(): Unit = underlying.persist()
+    override def multiGetNodes(hashes: Seq[Array[Byte]]): Seq[Option[com.chipprbots.ethereum.mpt.MptNode]] =
+      underlying.multiGetNodes(hashes)
+
+  /** EIP-55 mixed-case checksum encoding, as go-ethereum's `Address.Hex()` prints addresses in error messages. */
+  private[jsonrpc] def checksumAddress(address: Address): String =
+    val hex = address.bytes.toArray.map(b => f"${b & 0xff}%02x").mkString
+    val hash = kec256(hex.getBytes("US-ASCII")).map(b => f"${b & 0xff}%02x").mkString
+    "0x" + hex
+      .zip(hash)
+      .map { case (c, h) => if c.isLetter && Character.digit(h, 16) >= 8 then c.toUpper else c }
+      .mkString
+
 class EthSimulateService(
     val blockchain: BlockchainImpl,
     val blockchainReader: BlockchainReader,
@@ -173,7 +221,7 @@ class EthSimulateService(
     val evmConfig = EvmConfig.forBlock(baseBlock.header.number.value, baseBlock.header.unixTimestamp, blockchainConfig)
     var world = InMemoryWorldStateProxy(
       evmCodeStorage = evmCodeStorage,
-      mptStorage = blockchain.getReadOnlyMptStorage(),
+      mptStorage = new RetainingMptStorage(blockchain.getReadOnlyMptStorage()),
       getBlockHashByNumber =
         (n: BigInt) => simulatedBlockHashes.get(n).orElse(blockchainReader.getBlockHeaderByNumber(n).map(_.hash.value)),
       accountStartNonce = blockchainConfig.accountStartNonce,
@@ -273,7 +321,10 @@ class EthSimulateService(
     Right(EthSimulateResponse(blockResults.toSeq, req.returnFullTransactions))
   }
 
-  /** Build, execute, and finalize a single simulated block. Returns (finalHeader, world, blockResult, gasUsed). */
+  /** Build, execute, and finalize a single simulated block. Returns (finalHeader, world, blockResult, gasUsed), where
+    * gasUsed is the sum of the calls' `gasUsed`, what the global gas budget is charged ("Each call subtracts the
+    * `gasUsed` of its call result from this limit"). Before Amsterdam that equals the header's gasUsed.
+    */
   private def buildAndFinalizeBlock(
       parentHeader: BlockHeader,
       blockOverrides: Option[BlockOverrides],
@@ -292,11 +343,18 @@ class EthSimulateService(
     // Build simulated block header
     val simHeader = buildBlockHeader(parentHeader, blockOverrides, validation)
 
-    // Apply EIP-4788: store parent beacon block root in system contract
-    if blockchainConfig.isCancunTimestamp(simHeader.unixTimestamp) then world = applyEip4788(simHeader, world)
+    // Amsterdam (ETH only; no ETC chain schedules it): the block is processed as a real Amsterdam block is, and its
+    // EIP-7928 access list is built from that processing (execution-apis eth_simulateV1 notes, "Block access list").
+    val amsterdam = blockchainConfig.isAmsterdamTimestamp(simHeader.unixTimestamp)
+    val accessList = Option.when(amsterdam)(new BlockAccessListBuilder)
 
-    // Apply EIP-2935: store parent block hash in history storage
-    if blockchainConfig.isPragueTimestamp(simHeader.unixTimestamp) then world = applyEip2935(simHeader, world)
+    // Before Amsterdam, unchanged: the EIP-4788 / EIP-2935 direct storage writes, then the state overrides.
+    if !amsterdam then
+      // Apply EIP-4788: store parent beacon block root in system contract
+      if blockchainConfig.isCancunTimestamp(simHeader.unixTimestamp) then world = applyEip4788(simHeader, world)
+
+      // Apply EIP-2935: store parent block hash in history storage
+      if blockchainConfig.isPragueTimestamp(simHeader.unixTimestamp) then world = applyEip2935(simHeader, world)
 
     // Apply state overrides and build precompile relocations
     var precompileRelocations = existingRelocations
@@ -308,6 +366,16 @@ class EthSimulateService(
         case Left(err) => break(Left(err))
     }
 
+    // Amsterdam: "State overrides [...] are applied to the pre-state before the pre-execution system calls run. They
+    // are not recorded in the block access list at any index." So the overridden world is index 0's starting point,
+    // and the EIP-4788 / EIP-2935 calls run as the real block's system calls, recording at index 0.
+    if amsterdam then
+      val beforePreamble = InMemoryWorldStateProxy.persistState(world)
+      val preambleReads = new BlockAccessRecorder
+      val afterPreamble = SimulatedBlockSystemCalls.amsterdamPreamble(simHeader, beforePreamble, Some(preambleReads))
+      accessList.foreach(_.addIndex(0L, preambleReads, beforePreamble, afterPreamble))
+      world = afterPreamble
+
     // Execute calls (pass through any blob base fee override from blockOverrides)
     val execResult = executeCalls(
       calls,
@@ -318,14 +386,31 @@ class EthSimulateService(
       nonceMap,
       precompileRelocations,
       globalGasOffset,
-      blockOverrides.flatMap(_.blobBaseFee)
+      blockOverrides.flatMap(_.blobBaseFee),
+      accessList
     )
-    execResult match
-      case Left(err) => break(Left(err))
-      case _         =>
-    val (newWorld, callResults, txs, txSenders, receipts, gasUsed) = execResult.toOption.get
+    val executed = execResult match
+      case Left(err)     => break(Left(err))
+      case Right(result) => result
+    val txs = executed.transactions
+    val receipts = executed.receipts
 
-    world = newWorld
+    world = executed.world
+
+    // Amsterdam: the post-execution phase of a real block, at block access index n + 1 — the EIP-7002 / EIP-7251 /
+    // EIP-8282 request system calls (there are no withdrawals: blockOverrides carries none here) — and the
+    // requestsHash computed from what they and the EIP-6110 deposit logs return.
+    val amsterdamRequestsHash: Option[ByteString] =
+      if !amsterdam then None
+      else
+        val postExecutionReads = new BlockAccessRecorder
+        SimulatedBlockSystemCalls.requests(simHeader, world, receipts, Some(postExecutionReads)) match
+          case Left(err) => break(Left(JsonRpcError.LogicError(err)))
+          case Right((afterRequests, requests)) =>
+            val persisted = InMemoryWorldStateProxy.persistState(afterRequests)
+            accessList.foreach(_.addIndex(calls.size + 1L, postExecutionReads, world, persisted))
+            world = persisted
+            Some(BlockExecution.computeRequestsHash(requests))
 
     // Pre-merge: pay the static block reward (5/3/2 ETH per Byzantium/Constantinople)
     // to the miner. Geth's eth_simulateV1 reflects the reward in the simulated
@@ -370,22 +455,30 @@ class EthSimulateService(
     // Build final header with computed roots and blob gas
     val finalExtraFields = simHeader.extraFields match
       case p: HefPostPrague => p.copy(blobGasUsed = blobGasUsed)
-      // Amsterdam: simulating on top of an Amsterdam block gives `simHeader` a 23-field shape, and
-      // without this case the header keeps the BASE block's blobGasUsed instead of the simulated one.
-      case a: BlockHeader.HeaderExtraFields.HefPostAmsterdam => a.copy(blobGasUsed = blobGasUsed)
-      case other                                             => other
+      // Amsterdam: the simulated block's own blobGasUsed, its EIP-7928 access list hash and its EIP-7685 requestsHash.
+      case a: BlockHeader.HeaderExtraFields.HefPostAmsterdam =>
+        a.copy(
+          blobGasUsed = blobGasUsed,
+          blockAccessListHash = accessList.fold(a.blockAccessListHash)(_.build.hash),
+          requestsHash = amsterdamRequestsHash.getOrElse(a.requestsHash)
+        )
+      case other => other
+    // EIP-8037: an Amsterdam header's gasUsed is the larger of the block's execution gas and state gas, not the receipts'
+    // sum ("Gas after Amsterdam"). Before Amsterdam the execution counter IS the receipts' sum.
+    val headerGasUsed =
+      if amsterdam then executed.executionGasUsed.max(executed.stateGasUsed) else executed.receiptGasUsed
     val finalHeader = simHeader.copy(
       stateRoot = TrieRoot(stateRoot),
       transactionsRoot = TrieRoot(transactionsRoot),
       receiptsRoot = TrieRoot(receiptsRoot),
       logsBloom = com.chipprbots.ethereum.domain.BloomFilter(logsBloom),
-      gasUsed = GasAmount(gasUsed),
+      gasUsed = GasAmount(headerGasUsed),
       extraFields = finalExtraFields
     )
 
     // Update call results with correct block hash and number
     val blockHash = finalHeader.hash.value
-    val updatedCallResults = callResults.zipWithIndex.map { case (cr, _) =>
+    val updatedCallResults = executed.callResults.zipWithIndex.map { case (cr, _) =>
       cr.copy(logs =
         cr.logs.map(
           _.copy(
@@ -402,8 +495,8 @@ class EthSimulateService(
     val withdrawalsOpt: Option[Seq[com.chipprbots.ethereum.domain.Withdrawal]] =
       if finalHeader.withdrawalsRoot.isDefined then Some(Seq.empty) else None
     val body = BlockBody(txs, Nil, withdrawalsOpt)
-    val blockResult = SimulateBlockResult(finalHeader, body, txs, txSenders, updatedCallResults, receipts)
-    Right((finalHeader, world, blockResult, gasUsed))
+    val blockResult = SimulateBlockResult(finalHeader, body, txs, executed.senders, updatedCallResults, receipts)
+    Right((finalHeader, world, blockResult, executed.receiptGasUsed))
   }
 
   private def validateBlockOrdering(
@@ -500,11 +593,12 @@ class EthSimulateService(
       if blockchainConfig.isAmsterdamTimestamp(ts) then
         // The 23-field Amsterdam header (EIP-7928 blockAccessListHash, EIP-7843 slotNumber). A Prague-shaped header
         // here gave a simulated Amsterdam block 21 fields, so its hash was not an Amsterdam hash, and SLOTNUM read
-        // `slotNumber` from a header that has none. Two of the fields are not computed:
-        //   - blockAccessListHash is the empty list's hash. eth_simulateV1 does not record an access list here, just as
-        //     `requestsHash` below is the empty requests hash rather than one computed from the simulated block.
-        //   - slotNumber is 0. A simulated block has no beacon slot. go-ethereum's simulator leaves the header's
-        //     SlotNumber unset, so SLOTNUM reads 0 there too.
+        // `slotNumber` from a header that has none.
+        //   - blockAccessListHash and requestsHash are placeholders here; buildAndFinalizeBlock replaces both with the
+        //     values computed from the simulated execution.
+        //   - slotNumber is "Previous block's `slotNumber` + 1" (execution-apis #881; go-ethereum `makeHeaders`), so
+        //     SLOTNUM reads it too. The spec omits it when the parent has none, a 22-field header this domain type
+        //     cannot carry: a simulated first Amsterdam block on a pre-Amsterdam parent keeps slot 0 instead.
         HefPostAmsterdam(
           baseFee,
           EmptyWithdrawalsRoot,
@@ -513,7 +607,7 @@ class EthSimulateService(
           parentBeaconBlockRoot,
           EmptyRequestsHash,
           BlockAccessList.EmptyHash,
-          slotNumber = BigInt(0)
+          slotNumber = parentHeader.slotNumber.fold(BigInt(0))(_ + 1)
         )
       else if blockchainConfig.isPragueTimestamp(ts) then
         HefPostPrague(
@@ -665,17 +759,24 @@ class EthSimulateService(
       nonceMap: mutable.Map[Address, BigInt],
       precompileRelocations: Map[Address, Address],
       globalGasOffset: BigInt,
-      blobBaseFeeOverride: Option[BigInt]
-  ): Either[
-    JsonRpcError,
-    (InMemoryWorldStateProxy, Seq[SimulateCallResult], Seq[SignedTransaction], Seq[Address], Seq[Receipt], BigInt)
-  ] = boundary {
+      blobBaseFeeOverride: Option[BigInt],
+      // EIP-7928: the block's access-list builder, on an Amsterdam block only. Call i records at index i + 1.
+      accessList: Option[BlockAccessListBuilder]
+  ): Either[JsonRpcError, ExecutedCalls] = boundary {
     var world = initialWorld
     val callResults = mutable.ArrayBuffer[SimulateCallResult]()
     val txs = mutable.ArrayBuffer[SignedTransaction]()
     val senders = mutable.ArrayBuffer[Address]()
     val receipts = mutable.ArrayBuffer[Receipt]()
     var accumGas = BigInt(0)
+    // EIP-8037's two block dimensions, before refunds; failed and reverted calls count too.
+    var accumExecutionGas = BigInt(0)
+    var accumStateGas = BigInt(0)
+    val amsterdam = blockchainConfig.isAmsterdamTimestamp(blockHeader.unixTimestamp)
+    // EIP-7708: from Amsterdam the protocol itself logs every ether transfer (from 0xff…fe, into the receipts), so
+    // `traceTransfers` adds no 0xeeee… logs and "the flag has no effect" (execution-apis #881; go-ethereum
+    // `simulate.go`). Blocks before Amsterdam in the same simulation keep the synthetic logs.
+    val traceTransfersInBlock = traceTransfers && !amsterdam
     val baseFee = blockHeader.baseFee.getOrElse(BigInt(0))
     // Block-level logIndex counter — geth numbers logs globally across all calls
     // in the block, including synthetic Transfer logs emitted for traceTransfers.
@@ -692,7 +793,16 @@ class EthSimulateService(
       // Build transaction — default gas = min of remaining global 50M pool and remaining block gas
       val DefaultSimGasLimit = BigInt(50000000)
       val remainingGlobalGas = DefaultSimGasLimit - globalGasOffset - accumGas
-      val remainingBlockGas = blockHeader.gasLimit.value - accumGas
+      val remainingBlockGas =
+        if !amsterdam then blockHeader.gasLimit.value - accumGas
+        else
+          // "Gas after Amsterdam": the block's gas used so far is max(execution, state), not the receipts' sum.
+          // Without validation the default is the smaller remaining dimension; with it, go-ethereum
+          // `GasPool.Available`: the remaining state gas when at least TX_MAX_GAS_LIMIT of execution gas remains.
+          val remainingExecution = blockHeader.gasLimit.value - accumExecutionGas
+          val remainingState = blockHeader.gasLimit.value - accumStateGas
+          if validation && remainingExecution >= AmsterdamGas.TxMaxGasLimit then remainingState
+          else remainingExecution.min(remainingState)
       val gasLimit = call.gas.getOrElse(remainingGlobalGas.min(remainingBlockGas).max(BigInt(0)))
       val value = call.value.getOrElse(BigInt(0))
       val payload = call.input.getOrElse(ByteString.empty)
@@ -701,8 +811,22 @@ class EthSimulateService(
       val maxFeePerGas = call.maxFeePerGas.getOrElse(BigInt(0))
       val gasPrice = call.gasPrice.orElse(call.maxFeePerGas).getOrElse(BigInt(0))
 
+      // EIP-2681 "Nonce limit" (execution-apis #881, go-ethereum #35842): a sender whose account nonce is 2^64 - 1
+      // ends the simulation whether or not validation is on; the nonce never wraps to zero.
+      val stateNonce = world.getAccount(sender).map(_.nonce.toBigInt).getOrElse(BigInt(0))
+      if stateNonce == MaxNonce then
+        break(
+          Left(
+            JsonRpcError(
+              JsonRpcError.InternalError.code,
+              s"nonce has max value: address ${checksumAddress(sender)}, nonce: $MaxNonce",
+              None
+            )
+          )
+        )
+
       // Check nonce overflow (uint64 max) — returns -32603 (InternalError)
-      val MaxUint64 = BigInt("18446744073709551615") // 0xffffffffffffffff
+      val MaxUint64 = MaxNonce // 0xffffffffffffffff
       if senderNonce > MaxUint64 || (validation && senderNonce == MaxUint64) then
         break(Left(JsonRpcError.InternalError))
 
@@ -831,6 +955,9 @@ class EthSimulateService(
       val fakeSignature = com.chipprbots.ethereum.crypto.ECDSASignature(BigInt(0), BigInt(0), BigInt(0))
       val stx = SignedTransaction(tx, fakeSignature)
 
+      // EIP-7928: the state this call's block access index starts from.
+      val worldBeforeCall = world
+
       // Ensure sender account exists with sufficient balance
       var senderAccount = world.getAccount(sender).getOrElse(Account.empty(blockchainConfig.accountStartNonce))
       // Note: the call's nonce only affects the transaction hash/encoding. The account's
@@ -845,16 +972,25 @@ class EthSimulateService(
       world = world.saveAccount(sender, senderAccount)
 
       // Execute transaction
-      val TxResult(newWorld, gasUsed, logs, returnData, vmError, _, _) =
+      val accessRecorder = accessList.map(_ => new BlockAccessRecorder)
+      val TxResult(newWorld, gasUsed, logs, returnData, vmError, txExecutionGas, txStateGas) =
         blockPreparator.executeTransactionForSimulation(
           stx,
           sender,
           blockHeader,
           world,
           precompileRelocations,
-          traceTransfers,
-          blobBaseFeeOverride
+          traceTransfersInBlock,
+          blobBaseFeeOverride,
+          // "With `validation` disabled, a call can use its whole `gasLimit` as execution gas" (EIP-8037's
+          // TX_MAX_GAS_LIMIT cap does not apply). A no-op before Amsterdam, where there is no cap to lift.
+          skipExecutionGasCap = !validation,
+          accessRecorder = accessRecorder
         )
+      for
+        builder <- accessList
+        recorder <- accessRecorder
+      do builder.addIndex(callIdx + 1L, recorder, worldBeforeCall, newWorld)
 
       world = newWorld
 
@@ -871,7 +1007,7 @@ class EthSimulateService(
       // EVM logs include synthetic Transfer logs (address 0xeeee...eeee) emitted by
       // CALL/SELFDESTRUCT when traceTransfers is on. Those are API-only and must NOT
       // appear in the receipt (they would change logsBloom + receiptsRoot).
-      val realLogs = if traceTransfers then logs.filter(_.loggerAddress != EthTransferAddress) else logs
+      val realLogs = if traceTransfersInBlock then logs.filter(_.loggerAddress != EthTransferAddress) else logs
 
       // Build receipt — receipts use real logs only
       val outcome = if vmError.isDefined then FailureOutcome else SuccessOutcome
@@ -889,6 +1025,8 @@ class EthSimulateService(
         case _                            => legacyReceipt
 
       accumGas += gasUsed
+      accumExecutionGas += txExecutionGas
+      accumStateGas += txStateGas
       txs += stx
       senders += sender
       receipts += receipt
@@ -902,7 +1040,7 @@ class EthSimulateService(
       // execution order. The EVM's CALL opcode already emits the inner transfer
       // logs as part of `logs`.
       val topLevelTransferLog =
-        if traceTransfers && value > 0 && vmError.isEmpty then
+        if traceTransfersInBlock && value > 0 && vmError.isEmpty then
           Some(
             com.chipprbots.ethereum.domain.TxLogEntry(
               loggerAddress = EthTransferAddress,
@@ -928,7 +1066,7 @@ class EthSimulateService(
       // the synthetic log at logIndex == failed-call-count. Real EVM logs from
       // each call still increment the counter once per emitted entry.
       val phantomBumps =
-        if traceTransfers && value > 0 && vmError.isDefined then 1 else 0
+        if traceTransfersInBlock && value > 0 && vmError.isDefined then 1 else 0
 
       val txLogs = apiLogEntries.map { txLog =>
         val l = TxLog(
@@ -991,7 +1129,18 @@ class EthSimulateService(
           )
       callResults += callResult
 
-    Right((world, callResults.toSeq, txs.toSeq, senders.toSeq, receipts.toSeq, accumGas))
+    Right(
+      ExecutedCalls(
+        world,
+        callResults.toSeq,
+        txs.toSeq,
+        senders.toSeq,
+        receipts.toSeq,
+        receiptGasUsed = accumGas,
+        executionGasUsed = accumExecutionGas,
+        stateGasUsed = accumStateGas
+      )
+    )
   }
 
   /** EIP-4788: Store the parent beacon block root in the beacon root system contract */

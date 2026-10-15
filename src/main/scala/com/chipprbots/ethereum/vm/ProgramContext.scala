@@ -16,7 +16,7 @@ object ProgramContext:
       world: W,
       evmConfig: EvmConfig
   ): ProgramContext[W, S] =
-    apply(stx, blockHeader, senderAddress, world, evmConfig, BigInt(0), BigInt(0), Set.empty[Address])
+    apply(stx, blockHeader, senderAddress, world, evmConfig, BigInt(0), BigInt(0), Set.empty[Address], false)
 
   /** The top-level frame's gas: `(execution-gas grant, state-gas reservoir)` after the intrinsic cost.
     *
@@ -30,7 +30,14 @@ object ProgramContext:
     * Shared with `BlockPreparator`, whose EIP-2780 authorization processing charges against this same meter before the
     * frame exists; one definition keeps the two from drifting apart.
     */
-  def evmGasAllocation(stx: SignedTransaction, senderAddress: Address, evmConfig: EvmConfig): (BigInt, BigInt) =
+  def evmGasAllocation(
+      stx: SignedTransaction,
+      senderAddress: Address,
+      evmConfig: EvmConfig,
+      // eth_simulateV1 with `validation` off only (go-ethereum `Message.SkipExecutionGasCapCheck`): the whole gas left
+      // after the intrinsic cost is execution gas and the reservoir is empty. Every consensus path leaves it false.
+      skipExecutionGasCap: Boolean = false
+  ): (BigInt, BigInt) =
     import stx.tx
     val authListSize = tx match
       case sct: SetCodeTransaction => sct.authorizationList.size
@@ -45,7 +52,7 @@ object ProgramContext:
       senderAddress
     )
     val evmGas = tx.gasLimit.value - intrinsicGas
-    if !evmConfig.amsterdamEnabled then (evmGas, BigInt(0))
+    if !evmConfig.amsterdamEnabled || skipExecutionGasCap then (evmGas, BigInt(0))
     else
       // `.max(0)` is defensive only: EIP-8037 makes a transaction whose intrinsic gas exceeds
       // TX_MAX_GAS_LIMIT invalid, so a negative budget should never reach here.
@@ -65,11 +72,13 @@ object ProgramContext:
       authStateGas: BigInt,
       // EIP-7702: every authority the caller recovered while processing the list. Warm for the whole transaction,
       // and — under Amsterdam — part of the warm set the top frame's delegation-target access is priced against.
-      authorityWarmAddresses: Set[Address]
+      authorityWarmAddresses: Set[Address],
+      // See `evmGasAllocation`. True for eth_simulateV1 without validation only.
+      skipExecutionGasCap: Boolean
   ): ProgramContext[W, S] =
     import stx.tx
     val accessList = Transaction.accessList(tx)
-    val (gasLimit, stateGasReservoir) = evmGasAllocation(stx, senderAddress, evmConfig)
+    val (gasLimit, stateGasReservoir) = evmGasAllocation(stx, senderAddress, evmConfig, skipExecutionGasCap)
 
     // EIP-2780 pre-execution phase: the state-dependent charges, applied after the transaction is already
     // deemed valid but before the first EVM frame is entered. Running out of gas here does NOT invalidate

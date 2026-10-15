@@ -61,7 +61,9 @@ object TestingService:
       receipts: Seq[Receipt],
       // None => pre-Prague, the `executionRequests` field must be absent from the response entirely.
       executionRequests: Option[Seq[ByteString]],
-      blobsBundle: BlobsBundleData
+      blobsBundle: BlobsBundleData,
+      // EIP-7928: the canonical RLP of the access list the build produced. Some for an Amsterdam block, None before.
+      blockAccessList: Option[ByteString] = None
   )
 
   final case class CommitBlockRequest(
@@ -101,7 +103,7 @@ class TestingService(
           val requests =
             if blockchainConfig.isPragueTimestamp(built.block.header.unixTimestamp) then Some(built.executionRequests)
             else None
-          BuildBlockResponse(built.block, built.receipts, requests, bundle)
+          BuildBlockResponse(built.block, built.receipts, requests, bundle, built.blockAccessList.map(_.toBytes))
         })
 
   /** testing_commitBlockV1 — build on the canonical head, insert, and advance the head.
@@ -124,6 +126,9 @@ class TestingService(
           // which calls InMemoryWorldStateProxy.persistState against the writable backing.
           blockchainWriter.storeBlock(block).commit()
           blockchainWriter.storeReceipts(hash, built.receipts).commit()
+          // EIP-7928: keep the list the header commits to, as engine_newPayload does for an Amsterdam block, so
+          // engine_getPayloadBodies*V2 and eth/71 can serve the committed block. None before Amsterdam.
+          built.blockAccessList.foreach(bal => blockchainWriter.storeBlockAccessList(hash, bal).commit())
           forkChoiceManager.applyForkChoiceState(
             ForkChoiceState(
               headBlockHash = hash.value,
@@ -170,10 +175,22 @@ class TestingService(
       // HIVE_TARGET_GAS_LIMIT=60000000 explicitly "so all clients build the same next-block gas
       // limit"), so a proposer that simply inherits the parent's gas limit produces a different
       // block hash on every fixture. The engine path moves toward the same ceiling (enginePayloadGasLimit).
+      //
+      // From Amsterdam, PayloadAttributesV4's `targetGasLimit`, when given, replaces that configured target, exactly
+      // as go-ethereum's miner does (`prepareWork`, which the testing API reaches with `TargetGasLimit` from the
+      // attributes) and as engine_forkchoiceUpdatedV4 does here (enginePayloadGasLimit). The Amsterdam rpc-compat
+      // vectors name 200,000,000 — the parent's own limit — so building toward the configured 60,000,000 instead would
+      // change the gas limit, and with it every hash, of each built block.
+      val target =
+        attrs.targetGasLimit
+          .filter(_ => blockchainConfig.isAmsterdamTimestamp(Timestamp(attrs.timestamp)))
+          // core.CalcGasLimit raises a desired limit below the minimum first, as enginePayloadGasLimit does.
+          .map(_.max(com.chipprbots.ethereum.consensus.validators.BlockHeaderValidator.MinGasLimit))
+          .getOrElse(gasLimitTarget)
       val gasLimit = engineApiService.proposerGasLimit(
         parent.header,
         parent.header.number.value + 1,
-        Some(gasLimitTarget)
+        Some(target)
       )
       engineApiService
         .buildBlockOnParent(
