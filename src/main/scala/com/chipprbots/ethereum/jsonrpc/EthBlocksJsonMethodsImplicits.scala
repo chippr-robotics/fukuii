@@ -90,9 +90,16 @@ object EthBlocksJsonMethodsImplicits extends JsonMethodsImplicits:
     // Post-Prague (EIP-7685) fields
     val requestsHashField = block.requestsHash.map(v => "requestsHash" -> encodeAsHex(v)).toList
 
+    // Post-Amsterdam (EIP-7928, EIP-7843) fields: present only for a 23-field header, so pre-Amsterdam and ETC blocks
+    // encode exactly as before. execution-apis' Block schema and go-ethereum's RPCMarshalHeader emit both.
+    val blockAccessListHashField =
+      block.blockAccessListHash.map(v => "blockAccessListHash" -> encodeAsHex(v)).toList
+    val slotNumberField = block.slotNumber.map(v => "slotNumber" -> encodeAsHex(v)).toList
+
     JObject(
       baseFields ::: totalDifficultyField ::: baseFeeField ::: withdrawalsRootField ::: withdrawalsField :::
-        blobGasUsedField ::: excessBlobGasField ::: parentBeaconBlockRootField ::: requestsHashField
+        blobGasUsedField ::: excessBlobGasField ::: parentBeaconBlockRootField ::: requestsHashField :::
+        blockAccessListHashField ::: slotNumberField
     )
 
   // Encoder for BaseBlockResponse (which is typically BlockResponse)

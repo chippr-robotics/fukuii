@@ -67,6 +67,11 @@ case class BlockResponse(
     excessBlobGas: Option[BigInt],
     parentBeaconBlockRoot: Option[ByteString],
     requestsHash: Option[ByteString],
+    // Amsterdam (23-field header): EIP-7928 `blockAccessListHash` and EIP-7843 `slotNumber`. None for every other
+    // header — ETC and pre-Amsterdam ETH — so the encoder emits neither key there. Read from the header itself rather
+    // than gated on the chain config: a header carries them iff it is an Amsterdam header (BlockHeader.scala).
+    blockAccessListHash: Option[ByteString],
+    slotNumber: Option[BigInt],
     /** Whether the JSON encoder should emit `totalDifficulty`. The factory methods below default it to true, so any
       * construction site not explicitly opting out keeps pre-existing behaviour; only the ETH-family eth_ read path
       * sets it false. No default here: the case class's synthetic apply and the explicit overloads below cannot both
@@ -147,6 +152,8 @@ object BlockResponse:
       excessBlobGas = block.header.excessBlobGas,
       parentBeaconBlockRoot = block.header.parentBeaconBlockRoot.map(_.value),
       requestsHash = block.header.requestsHash,
+      blockAccessListHash = block.header.blockAccessListHash,
+      slotNumber = block.header.slotNumber,
       emitTotalDifficulty = emitTotalDifficulty
     )
 
