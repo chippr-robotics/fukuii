@@ -124,7 +124,6 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
   // Task management — each task has a pathset (for GetTrieNodes) and a hash (for verification).
   // ArrayDeque (circular buffer) gives O(1) amortized head/tail operations (#1167). The previous
   // immutable `Seq` did O(n) on every `:+` and head-drop — quadratic at healing scale.
-  private case class HealingEntry(pathset: Seq[ByteString], hash: ByteString)
   private val pendingTasks: mutable.ArrayDeque[HealingEntry] = mutable.ArrayDeque.empty
   // Thread-safe mirror of pendingTasks.size, refreshed by emitHealingFrontierGauges() on the actor
   // thread. The frontier-rebuild BFS walk runs on healingWriterEc and reads this (never pendingTasks
@@ -170,7 +169,6 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
   // healing can stall silently. After 5 consecutive 2-minute ticks with no active requests
   // and no progress (10 minutes total), force-complete healing.
   // Reference: Besu markAsStalled() is a TODO no-op; this is a fukuii-specific liveness guarantee.
-  private case object HealingStagnationCheck extends Command
   private var consecutiveIdleChecks: Int = 0
   private var lastPulseHealedCount: Int = 0
   // FIX-STAGNATION-LIMIT: Track consecutive 2-min cycles with zero healed nodes (even when active).
@@ -204,12 +202,6 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
   private var childrenDiscoveredTotal: Long = 0
 
   // Active request tracking: maps requestId -> (tasks, peer, requestedBytes, sentAtMs)
-  private case class ActiveRequest(
-      tasks: Seq[HealingEntry],
-      peer: Peer,
-      requestedBytes: BigInt,
-      sentAtMs: Long = System.currentTimeMillis()
-  )
   private val activeRequests = mutable.Map[BigInt, ActiveRequest]()
 
   // Concurrency: per-peer limit (like StorageRangeCoordinator) + global safety cap
@@ -564,46 +556,6 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
   // flush path, AFTER `mptStorage.persist()` durably commits the buffered nodes (T012 record-after-persist). A crash
   // before the flush drops the in-memory candidate ⇒ safe descend. Records are written iff `prunedEnabled`.
   private val pendingSubtreeRecords = mutable.Set[ByteString]()
-
-  // Internal messages — sent only via `selfRef ! …` from Future continuations / timers, so they must be Commands so
-  // the Typed behavior can receive them. They were plain `Any` messages under Classic.
-  // Internal message for async flush completion
-  private case class FlushComplete(count: Int) extends Command
-
-  // Internal message for async frontier rebuild completion (crash-recovery BFS or verification BFS)
-  private case class FrontierRebuilt(entries: Seq[HealingEntry]) extends Command
-  // Sent by startVerificationBFS when the BFS Future completes — gates verificationPassComplete.
-  // Carries the root the walk was LAUNCHED against (`walkRoot`), exactly as `FrontierRebuildComplete` does. A pivot
-  // re-peg does not cancel an in-flight verification walk, so its completion can land after `stateRoot` moved; the
-  // handler must not credit a clean walk of the OLD root as verification of the NEW one. This is decisive for the
-  // per-block-hot system-contract storage tries (EIP-4788/2935/8282): they differ between every pair of roots, while
-  // the cold bulk of the state is shared, so an old-root "clean" signal says nothing about them.
-  // `missingEmitted` is the number of missing nodes the walk found. A pass that found ANY is not a clean pass even if
-  // every one of them has been healed by the time it ends: the walk never descended below a node that was missing when
-  // it reached it, so the healed node's present children (and their subtrees) were not verified.
-  private case class VerificationBFSComplete(walkRoot: ByteString, missingEmitted: Long) extends Command
-
-  // Layer 2: the full-state rebuild BFS finished — the persisted frontier is now a COMPLETE snapshot.
-  // Sent after the final FrontierRebuilt so the completeness marker is set only once every node is persisted.
-  // spec 006 C1/D3/FR-004: carries the rebuild's outcome so the handler can decide early completion soundly.
-  //   missingEmitted = the walk's frontierCount (number of missing nodes emitted); 0 ⇒ found everything present.
-  //   walkRoot       = the root the finished walk traversed (captured at launch); compared against the live
-  //                    stateRoot to exclude a stale completion after a pivot refresh (F-E).
-  private case class FrontierRebuildComplete(missingEmitted: Long, walkRoot: ByteString) extends Command
-
-  // A frontier walk Future died with an exception. Resets the walk flags WITHOUT setting any
-  // completion marker, so the watchdog / HealingCheckCompletion gates can start a fresh walk.
-  // Without this, an exception skips onComplete() and verificationBFSRunning stays true forever,
-  // permanently blocking every future walk (including the watchdog) until restart.
-  private case object FrontierWalkFailed extends Command
-
-  // Routes the HEAL-RESTART resume decision back onto the actor thread. The crash-recovery Future (in
-  // StartTrieNodeHealing) reads the persisted frontier off-thread, then sends ONE of these so the
-  // verificationBFSRunning mutation + walk launch happen on the actor dispatcher (Typed: no off-thread state
-  // mutation). Under Classic the Future called start*BFS directly — safe only because verificationBFSRunning was
-  // @volatile. Now @volatile is gone, so the launch must be marshalled back to the actor thread.
-  private case class RestartResumeVerification(root: ByteString, rootPath: ByteString) extends Command
-  private case class RestartFullRebuild(root: ByteString, rootPath: ByteString) extends Command
 
   /** spec 005 C3b/D2/T009/T012: write the staged heal-side subtree-complete records whose node-bytes were just durably
     * committed by a flush. `toRecord` is the already-computed (on the actor thread) intersection of this flush's hashes
@@ -2768,6 +2720,57 @@ object TrieNodeHealingCoordinator:
   case class TrieNodesResponseMsg(response: TrieNodes) extends WorkerMessage with Command
   case class HealingRequestTimeout(requestId: BigInt) extends WorkerMessage with Command
   case object HealingCheckIdle extends WorkerMessage
+
+  // spec 016 C-H0: the Impl's actor-local messages and helper types, moved here from the Impl so the C-H1..C-H5
+  // modules can name them (a module cannot name an Impl member type). None of them leaves the process.
+  private[actors] case class HealingEntry(pathset: Seq[ByteString], hash: ByteString)
+  private[actors] case class ActiveRequest(
+      tasks: Seq[HealingEntry],
+      peer: Peer,
+      requestedBytes: BigInt,
+      sentAtMs: Long = System.currentTimeMillis()
+  )
+  private[actors] case object HealingStagnationCheck extends Command
+
+  // Internal messages — sent only via `selfRef ! …` from Future continuations / timers, so they must be Commands so
+  // the Typed behavior can receive them. They were plain `Any` messages under Classic.
+  // Internal message for async flush completion
+  private[actors] case class FlushComplete(count: Int) extends Command
+
+  // Internal message for async frontier rebuild completion (crash-recovery BFS or verification BFS)
+  private[actors] case class FrontierRebuilt(entries: Seq[HealingEntry]) extends Command
+  // Sent by startVerificationBFS when the BFS Future completes — gates verificationPassComplete.
+  // Carries the root the walk was LAUNCHED against (`walkRoot`), exactly as `FrontierRebuildComplete` does. A pivot
+  // re-peg does not cancel an in-flight verification walk, so its completion can land after `stateRoot` moved; the
+  // handler must not credit a clean walk of the OLD root as verification of the NEW one. This is decisive for the
+  // per-block-hot system-contract storage tries (EIP-4788/2935/8282): they differ between every pair of roots, while
+  // the cold bulk of the state is shared, so an old-root "clean" signal says nothing about them.
+  // `missingEmitted` is the number of missing nodes the walk found. A pass that found ANY is not a clean pass even if
+  // every one of them has been healed by the time it ends: the walk never descended below a node that was missing when
+  // it reached it, so the healed node's present children (and their subtrees) were not verified.
+  private[actors] case class VerificationBFSComplete(walkRoot: ByteString, missingEmitted: Long) extends Command
+
+  // Layer 2: the full-state rebuild BFS finished — the persisted frontier is now a COMPLETE snapshot.
+  // Sent after the final FrontierRebuilt so the completeness marker is set only once every node is persisted.
+  // spec 006 C1/D3/FR-004: carries the rebuild's outcome so the handler can decide early completion soundly.
+  //   missingEmitted = the walk's frontierCount (number of missing nodes emitted); 0 ⇒ found everything present.
+  //   walkRoot       = the root the finished walk traversed (captured at launch); compared against the live
+  //                    stateRoot to exclude a stale completion after a pivot refresh (F-E).
+  private[actors] case class FrontierRebuildComplete(missingEmitted: Long, walkRoot: ByteString) extends Command
+
+  // A frontier walk Future died with an exception. Resets the walk flags WITHOUT setting any
+  // completion marker, so the watchdog / HealingCheckCompletion gates can start a fresh walk.
+  // Without this, an exception skips onComplete() and verificationBFSRunning stays true forever,
+  // permanently blocking every future walk (including the watchdog) until restart.
+  private[actors] case object FrontierWalkFailed extends Command
+
+  // Routes the HEAL-RESTART resume decision back onto the actor thread. The crash-recovery Future (in
+  // StartTrieNodeHealing) reads the persisted frontier off-thread, then sends ONE of these so the
+  // verificationBFSRunning mutation + walk launch happen on the actor dispatcher (Typed: no off-thread state
+  // mutation). Under Classic the Future called start*BFS directly — safe only because verificationBFSRunning was
+  // @volatile. Now @volatile is gone, so the launch must be marshalled back to the actor thread.
+  private[actors] case class RestartResumeVerification(root: ByteString, rootPath: ByteString) extends Command
+  private[actors] case class RestartFullRebuild(root: ByteString, rootPath: ByteString) extends Command
 
   /** Default cap on the frontier-rebuild walk's FIFO `visited` set: 4M entries ≈ 480-640 MB (a 32-byte ByteString key +
     * wrapper + LinkedHashMap entry is ~120-150 B, not the 80 B an "≈320 MB" estimate assumed). Insertion-order
