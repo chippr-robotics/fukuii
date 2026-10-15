@@ -1778,10 +1778,101 @@ Any other rise is still forbidden. Instances:
     - Owed: **SC-010 `[STORAGE-PERF]` parity (the merge gate above, not run)**; vault (the node-write path, the alias,
       the recovery prerequisite), forge ("no ETC behaviour change": the Hash-scheme path and the recovery spawn), beacon
       (the Path-scheme writes), and the second-specialist review (prism).
-- [ ] T068 [C-S3] `StorageDoneMarkers` (vault; T060: adopts `flatSlotStorage` → `flatSlots`. `storageDoneStorage` is a
+- [x] T068 [C-S3] `StorageDoneMarkers` (vault; T060: adopts `flatSlotStorage` → `flatSlots`. `storageDoneStorage` is a
   core val under rule (d)). Narrowing takes `StateIngest` (flat slots, done markers), never
   `StateAccess`; lowers the baseline total. The PR quotes spec 010 R2a and shows each clause still holds. Run Mordor and
   Platåberget restarts mid-storage.
+  - **No stop.** None of the C-S2 stop conditions arose: `flatSlotStorage` has no default anywhere (Impl, `apply`,
+    `ChildFactories`), every spawn site already passed `flatSlotStorage = stateIngest.flatSlots` and `stateIngest =
+    stateIngest`, `FlatSlotStorage` is exactly `StateIngest.flatSlots`'s type (the capability's own map entry), and
+    `storageDoneStorage` is a derived val, not a parameter, so no store joins the session-value list.
+  - **As built** (branch `refactor/snap-016-cs3-storage-done`, three code commits and this docs commit; no sbt or JVM
+    run, CI compiles and tests). (1) Prerequisite: `StorageDoneMarkersState` is declared in the new
+    `actors/storage/StorageDoneMarkers.scala`, `StorageTrieFlushApi` (`flushTrieNodeWrites`) in
+    `StorageOrderedApply.scala`, a separate trait so C-S2's interfaces do not change (the `StoragePeerFeedbackApi`
+    precedent); `StorageRangeEnv` gains `flatBatchEntryThreshold`; that parameter and `flatSlotStorage` (for the
+    temporary self-type) become `val`s; the companion gains `type FlatSlotBatch = DataSourceBatchUpdate`; the C-S1 and
+    C-S2 stub states gain the env member. (2) The move commit takes 7 members byte-identical into `StorageDoneMarkers`:
+    `flatBatchesDoneThrough` (a literal-initialised var only this module touches, so a var of the trait),
+    `recordFlatBatchDone`, `stageDoneMarker`, `takeDoneMarkersFor`, `stageFlatSlotChunk`, `flushPendingFlatBatch`,
+    `recordCompletedTask`. `recordFlatBatchDone`, `takeDoneMarkersFor` and `flushPendingFlatBatch` lose `private` (the
+    core's arms and `onPostStop` call them); the core fields the module reaches become public. `flushPendingFlatBatch`
+    names `DataSourceBatchUpdate`, and a new module file may not import a raw type (verify rule 2), so the module
+    imports the alias under that name (`import ...StorageRangeCoordinator.FlatSlotBatch as DataSourceBatchUpdate`):
+    the body stays byte-identical (the alternative, a prerequisite commit retyping the body's annotation, was a body
+    change before a move). (3) The narrowing commit, `# adopts: StateIngest StorageRangeCoordinator`: the self-type
+    names `StorageDoneMarkersState & StorageRangeEnv & StorageTrieFlushApi`; the Impl adds the State parent;
+    `StorageOrderedApply` extends `StorageTrieFlushApi`, and its `flushTrieNodeWrites` loses `private[actors]` (a
+    public abstract member cannot be implemented with weaker access). `flatSlotStorage: FlatSlotStorage` is dropped
+    from the Impl constructor, `apply`, `new`, `ChildFactories.storageRangeCoordinator` and its forwarding, both
+    `DownloadSupervisor` spawn sites and the `StorageRecoveryActor` spawn (`stateIngest` was already a parameter since
+    C-S2, so nothing is added); the four reads use `stateIngest.flatSlots` (the `storageDoneStorage` initializer,
+    `onPostStop`'s final flush twice, `flushPendingFlatBatch`'s capture for the Future). `storageDoneStorage` stays a
+    core val (rule (d)), `Option.when(recordStorageDone)(new SnapStorageDoneStorage(stateIngest.flatSlots.dataSource))`,
+    and the module reaches it through State; it is not replaced by `stateIngest.storageDone` (the controller's store,
+    not gated by this spawn's `recordStorageDone`). `StorageApplyCoreApi` still declares `stageFlatSlotChunk`,
+    `stageDoneMarker` and `recordCompletedTask`; the Impl now satisfies them through the module's concrete members, so
+    C-S2's recorded interface is left as it is. `ChildFactoriesSpec` unchanged.
+    - Flat-slot and marker write path (for vault): unchanged. The accumulator, the threshold, the batch sequence, the
+      marker rule, one `WriteBatch` per flat batch (slots and markers joined with `and`, committed on `flatBatchEc`, the
+      storage-writer dispatcher), the trie-node flush before it, and `onPostStop`'s synchronous tail. How often:
+      `stageFlatSlotChunk` once per applied chunk (no store access); a flat batch per `flatBatchEntryThreshold` entries
+      (1000 by default), plus the 10 s `FlushStorageDoneMarkers` pulse (with markers on), completion, pivot refresh and
+      force-complete; one marker write per fully downloaded account, inside a flat batch. `stateIngest.flatSlots` is
+      read once per submitted batch, on the actor thread (`val storage = ...`, captured by the Future as before, never
+      read inside it), once at stop and once at construction (with markers on); never per slot or per marker. No new allocation: `flatSlots` is a field read on
+      the capability, and the module's State and Env reads are interface getter calls (monomorphic in production) per
+      chunk or per batch, not per slot.
+    - Spec 010 R2a, quoted, clause by clause: "**R2a — crash consistency.** A record never becomes durable before that
+      data:"
+      - "It is written in the same RocksDB WriteBatch as the account's last flat slots, or in a later batch once every
+        numbered flat batch up to the one carrying those slots has committed. It never waits on batches submitted after
+        it." Holds: `stageDoneMarker` (byte-identical) records `flatBatchSeq + 1` as the marker's last slot batch;
+        `takeDoneMarkersFor` (byte-identical) lets it ride only when `flatBatchesDoneThrough >= lastSlotBatch`, or in
+        batch `lastSlotBatch` itself once every earlier batch has committed, and compares with nothing later;
+        `flushPendingFlatBatch` (byte-identical) joins the riding markers to the slots with `and` and commits once;
+        `recordFlatBatchDone` (byte-identical) advances the watermark only over contiguous batches, called from the
+        core's unchanged `FlatBatchFlushComplete` arm. The markers and slots still share one data source, so one
+        `WriteBatch`: `storageDoneStorage` is built over `stateIngest.flatSlots.dataSource`, and the slots are written
+        through `stateIngest.flatSlots`, the same instance every spawn site passed before. `onPostStop`'s synchronous
+        tail (core, unchanged but for the store read) applies the same rule with the next sequence number.
+      - "A failed batch turns records off for that coordinator." Holds: the core's `FlatBatchFlushFailed` arm
+        (unchanged) sets `doneMarkersDisabled` and clears `pendingDoneMarkers`; the moved `stageDoneMarker` and
+        `takeDoneMarkersFor` read that same field through State.
+      - "Give-up, max-empty skip, force-complete and root-mismatch completions are never recorded." Holds:
+        `stageDoneMarker` has one caller, `applyReadyStorageChunk` (C-S2, unchanged), at `if rootVerified then
+        stageDoneMarker(...)` on the every-subtask-applied path; `giveUpOnAccountForHealing`, the max-empty skip, the
+        abandoned and force-complete paths never call it (at most `recordCompletedTask`, a counter).
+      - "A crash before the record lands costs one re-download, which is what happens today." Holds: a staged marker
+        lives only in `pendingDoneMarkers` until its batch commits; `onPostStop` still drops the ones that may not ride.
+    - Counts: `StorageDoneMarkers` State 11 (R14b 9, plus `storageDoneStorage` and `flatBatchEc`, immutable vals that
+      rule (d) keeps in the core and R14b's matrix of mutable fields does not list), Api 1 (= R14b,
+      `StorageTrieFlushApi`). `StorageOrderedApply` 13 / 7 and `StoragePeerDispatch` 24 / 1 unchanged.
+      `StorageRangeEnv` 19 → 20 (G9): `flatBatchEntryThreshold`; no store joins it.
+    - Storage total **603 → 592** (counter v2), a fall with no exception: the adoption −16 (the parameter and its type
+      at the Impl, `apply` and the factory, the `new` call's and the factory's forwarding, the two `DownloadSupervisor`
+      arguments, the core's and `ChildFactories`' `FlatSlotStorage` imports; the four reads count once each, as
+      before); kept +5: State's `storageDoneStorage` declaration and its import (+3, the first storage-typed State
+      member among the coordinator modules, a rule (d) core val, not a session value), the `FlatSlotBatch` alias (+1)
+      and the module's rename import of it (+1). `StorageRangeCoordinator.scala` 46 → 32,
+      `actors/storage/StorageDoneMarkers.scala` 0 → 12, `ChildFactories` 63 → 58, `DownloadSupervisor` 46 → 42.
+      `storage-baseline.json` records it with a fresh justification line (the C-S2 line kept at the head of the history
+      entry).
+    - Tests (`# new-tests:`): `StorageDoneMarkersSpec` (9 cases, a plain `AnyFlatSpec`; the flat batch runs on
+      `ExecutionContext.parasitic` and reports to a `TestInbox`): a chunk kept sorted below the threshold, a batch at
+      the threshold (trie flush first, slots in the store, the completion message), an empty flush, a marker in its
+      own slots' batch, a marker held while an earlier batch is uncommitted and written alone once both are, the
+      contiguous watermark, the per-batch marker selection, no markers when off or disabled, the completed-task count.
+      `StorageRangeCoordinatorSpec` and `StorageRangeCoordinatorOffActorSpec` hand their flat-slot store to their local
+      `StateIngest` (whose `flatSlots` threw before); `RecordingChildFactories` records `stateIngest.flatSlots` in the
+      unchanged `ChildSpawn.StorageRange.flatSlotStorage`; the C-S1 and C-S2 stub states gain the env member. No
+      assertion changed.
+    - Left as they were (FR-034, no cleanups in a move PR): the moved `takeDoneMarkersFor` scaladoc's "the rule above"
+      now points at the crash-consistency comment in the core (at `storageDoneStorage`), and the newly public fields
+      keep their "Package-private for unit tests" scaladoc.
+    - Owed: vault (the marker and flat-slot write path, the alias, the State member), forge ("no ETC behaviour change":
+      the Hash-scheme path and the recovery spawn), beacon (Path scheme), the second-specialist review (prism), and the
+      **Mordor and Platåberget restarts mid-storage** (characterization §7), run by the orchestrator.
 - [ ] T069 [C-S4] `StorageResponseProcessing` (T060: plus #1533's off-actor pipeline. Proof verification is pure,
   with no store read, so this is zero-reference in substance: grep recorded, total unchanged). Narrowing takes `StateIngest` (proof verification reads), never
   `StateAccess`; lowers the baseline total.
