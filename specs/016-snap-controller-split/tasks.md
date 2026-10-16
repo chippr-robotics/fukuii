@@ -2104,9 +2104,12 @@ Any other rise is still forbidden. Instances:
       bytes are (spec 005 D3, record-after-persist); a crash in between re-heals or re-descends, never skips. The
       completeness marker stays a `commitSync()` write. Byte-identical bodies, same threads, same instances.
     - **Instance and cost.** `stateIngest.healingFrontier` forwards, by-name, to `HealingOrchestrator`'s lazy
-      `healingFrontierStorageOpt`, the instance the spawn passed before; its first read moves from the spawn (the
-      controller's thread) to the coordinator's construction (`prunedEnabled`, the coordinator's thread at setup);
-      building the store does no I/O and the lazy val is thread-safe. Each read is an interface call, a thunk and a
+      `healingFrontierStorageOpt`, the instance the spawn passed before. Its first read moves off the spawn (the
+      controller's thread). With `prunedHealVerification` on and the Hash scheme it is the coordinator's construction
+      (`prunedEnabled`, on the coordinator's thread at setup; the `&&` short-circuits otherwise). Otherwise it is the
+      coordinator's first read on its own thread (the `[HEAL-RESTART]` arm, a `persistFrontier` or another core read),
+      or a flush's unpersist on the healing-writer thread. Building the store does no I/O, and the lazy val is
+      thread-safe. Each read is an interface call, a thunk and a
       lazy-val read where it was a field read: per call of the mirror methods, never per node in the module; the core's
       per-child `exists(_.isSubtreeComplete(c))` in the inline child discovery (C-H5's code) pays it per child, beside a
       RocksDB get, and the frontier walk captures the store once (`prunedStore`). A hoist is a body change, left to
@@ -2121,9 +2124,14 @@ Any other rise is still forbidden. Instances:
       it with a fresh justification line.
     - Tests (`# new-tests:`): `FrontierPersistenceSpec` (6 cases, a plain `AnyFlatSpec`; an `EphemDataSource` frontier
       store, a recording trie store, the async flush on `ExecutionContext.parasitic`): the mirror gate; the sync flush's
-      order (store, persist, records, none present at persist) and the unpersist; no records with pruning off, no write
-      on an empty buffer; the async flush's `FlushComplete`, single flight and `flushing` left for the core; the clear
-      of pending and in-flight entries and the marker; the backpressure mirror and the bounded drain wait.
+      record-after-persist and the unpersist; no records with pruning off, no write on an empty buffer; the async
+      flush's `FlushComplete`, single flight and `flushing` left for the core; the clear of pending and in-flight
+      entries and the marker; the backpressure mirror (its last case only calls the drain wait). Review follow-up
+      (`# new-tests:`, a new suite because the test-hunk guard forbids assertion edits to a suite that exists at the
+      parent commit, the C-S3 `StorageDoneMarkersFlushSpec` precedent): `FrontierPersistenceOrderSpec` (4 cases): on
+      both flushes, at `persist()` no subtree record yet and every flushed node still a frontier entry, then the records
+      and the unpersist (a mutation that unpersists before `persist()` fails it); the drain wait, no wait or log below
+      the high-water mark, the INFO pause and WARN safety-timeout lines above it (0 ms timeout).
       `HealingTrieFixtures.healingIngest` builds the coordinator's `StateIngest` (`healingFrontier` the spec's store,
       every other member throws); `TrieNodeHealingDispatchTableSpec` passes `healingIngest(None)`;
       `RecordingChildFactories` records `stateIngest.healingFrontier` in the unchanged

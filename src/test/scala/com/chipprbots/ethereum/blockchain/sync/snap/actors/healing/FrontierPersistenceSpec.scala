@@ -114,9 +114,10 @@ private class StubFrontierPersistenceState(
 /** Spec 016 C-H1 stub test (FR-016 (b)): `FrontierPersistence` mixed into a stub of its state and environment, with an
   * in-memory frontier store (`EphemDataSource`) and a recording trie store. It pins the Layer-2 mirror (persist on
   * enqueue, unpersist after a durable flush, clear on invalidation, each gated by `frontierPersistenceEnabled`), the
-  * healed-node flush order (store the nodes, persist, then the spec 005 subtree-complete records, then the unpersist),
-  * the asynchronous flush's message and its single-flight guard, the gauge mirror and the backpressure wait's bounded
-  * return. The flush runs on `ExecutionContext.parasitic`, so its Future completes inline.
+  * healed-node flush's record-after-persist (no spec 005 subtree-complete record at `persist()`), the asynchronous
+  * flush's message and its single-flight guard, and the gauge mirror. The flush runs on `ExecutionContext.parasitic`,
+  * so its Future completes inline. The unpersist-after-persist order and the drain wait's two paths are pinned in
+  * `FrontierPersistenceOrderSpec` (review follow-up); the last case here only calls the drain wait.
   */
 class FrontierPersistenceSpec extends AnyFlatSpec with Matchers:
 

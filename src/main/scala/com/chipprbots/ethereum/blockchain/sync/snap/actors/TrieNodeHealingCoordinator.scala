@@ -306,8 +306,9 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
   // effective ONLY when the config flag is on AND the node uses Hash addressing (the subtree-complete record keys on
   // the bare keccak hash — well-defined only under Hash scheme; under Path the nodes are nibble-path-keyed). Off OR
   // Path scheme ⇒ the unchanged full-trie walk (`startVerificationBFS`), byte-identical to today. A healing frontier
-  // store must also be present for any record read/write — `prunedEnabled` is necessary but `healingFrontierStorage`
-  // is the actual record sink, so each record site additionally guards on it being defined.
+  // store must also be present for any record read/write — `prunedEnabled` is necessary but
+  // `stateIngest.healingFrontier` is the actual record sink, so each record site additionally guards on it being
+  // defined.
   val prunedEnabled: Boolean =
     prunedHealVerification && storageScheme == StorageScheme.Hash && stateIngest.healingFrontier.isDefined
 
@@ -737,9 +738,10 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
         // (~99.9% shared), so every node healed against the old root stays valid under `newStateRoot` and the
         // post-re-peg delta only SHRINKS. The ONLY state cleared on this path is in-memory frontier (pendingTasks /
         // pendingHashSet / activeRequests, below) plus the OPTIONAL frontier-mirror CF via clearPersistedFrontier(),
-        // which operates solely on `healingFrontierStorage` (CF 'g' — frontier mirror + completeness/subtree records)
-        // and NEVER touches the trie-node store `mptStorage`. If a future edit makes a re-peg drop trie nodes it is a
-        // consensus bug (a referenced node could go missing under the new root → false completion / import fault).
+        // which operates solely on `stateIngest.healingFrontier` (CF 'g' — frontier mirror + completeness/subtree
+        // records) and NEVER touches the trie-node store `mptStorage`. If a future edit makes a re-peg drop trie nodes
+        // it is a consensus bug (a referenced node could go missing under the new root → false completion / import
+        // fault).
         clearPersistedFrontier() // Layer 2: old-root frontier is stale after refresh — reseed (below) repopulates it
         clearHealedPathsSet() // spec 003 C1/F5: old-root healed paths are stale — clear before next gate
         pendingTasks.clear() // Will be re-populated by root reseed + inline discovery / trie walk from controller
