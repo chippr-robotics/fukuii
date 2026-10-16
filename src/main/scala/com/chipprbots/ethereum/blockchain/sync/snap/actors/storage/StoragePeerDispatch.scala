@@ -64,6 +64,20 @@ private[actors] trait StoragePeerFeedbackApi:
   def recordPeerCooldown(peer: Peer, reason: String): Unit
   def adjustResponseBytesOnFailure(peer: Peer, reason: String): Unit
 
+/** What the response processing (C-S4) calls in `StoragePeerDispatch` as it handles a served or empty response: the
+  * stateless strikes and their clearing, the per-peer batch size and `responseBytes` budget, and the pipelined dispatch
+  * to the answering peer. A separate trait, so the C-S1 interfaces stay as recorded.
+  */
+private[actors] trait StorageResponsePeerApi:
+  def recordPeerAnswered(peerId: String): Unit
+  def recordPeerSuccess(peerId: String): Unit
+  def markPeerStateless(peer: Peer): Unit
+  def batchSizeFor(peer: Peer): Int
+  def reduceBatchSize(peer: Peer): Unit
+  def maybeIncreaseBatchSize(peer: Peer, servedCount: Int, requestedCount: Int): Unit
+  def adjustResponseBytesOnSuccess(peer: Peer, requested: BigInt, received: BigInt): Unit
+  def dispatchIfPossible(peer: Peer): Unit
+
 /** Storage-range peer dispatch (spec 016 C-S1, coordinator-characterization.md §3.3): stateless-peer tracking with its
   * empty-response strikes and the pivot-refresh escalation it drives (all-stateless, low-eligible and stalled-dispatch
   * triggers, with backoff); the post-refresh dispatch cooldown; the per-peer adaptive batch size and `responseBytes`
@@ -73,7 +87,7 @@ private[actors] trait StoragePeerFeedbackApi:
   * cooldown, the `SnapPeerHealth` demotion, the re-queue and the force-complete threshold). The coordinator core keeps
   * the behaviour arms that call it.
   */
-private[actors] trait StoragePeerDispatch extends StoragePeerFeedbackApi:
+private[actors] trait StoragePeerDispatch extends StoragePeerFeedbackApi with StorageResponsePeerApi:
   this: StoragePeerDispatchState & StorageRangeEnv & StorageRangeCoreApi =>
 
   private lazy val maxConsecutiveTaskFailures: Int = 100

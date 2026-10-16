@@ -55,6 +55,20 @@ private[actors] trait StorageApplyCoreApi:
 private[actors] trait StorageTrieFlushApi:
   def flushTrieNodeWrites(): Unit
 
+/** What the response processing (C-S4) calls in the ordered apply: hand a verified chunk to the ordering gate, and
+  * discard an account's partial trie when it gives up on the account. A separate trait, so the C-S2 interfaces stay as
+  * recorded.
+  */
+private[actors] trait StorageChunkApplyApi:
+  def applyOrderedStorageChunk(
+      peer: Peer,
+      task: StorageTask,
+      accountSlots: Seq[(ByteString, ByteString)],
+      proofForThisTask: Seq[ByteString],
+      prebuilt: Option[PrebuiltStorageTrie] = None
+  ): Unit
+  def resetAccountTrie(accountHash: ByteString): Unit
+
 /** Storage-range ordered apply (spec 016 C-S2, coordinator-characterization.md §3.3): the range-ascending ordering gate
   * (buffer an out-of-order chunk, drain the ones now in line), applying one in-order chunk (the boundary-repeat dedup,
   * streaming the slots into the account's trie or writing the trie a worker built whole (#1533), staging the flat-slot
@@ -63,7 +77,7 @@ private[actors] trait StorageTrieFlushApi:
   * storage-trie node writes (`flushTrieNodeWrites`). The coordinator core keeps the behaviour arms that call it, and
   * flushes the node buffer after every message.
   */
-private[actors] trait StorageOrderedApply extends StorageTrieFlushApi:
+private[actors] trait StorageOrderedApply extends StorageTrieFlushApi with StorageChunkApplyApi:
   this: StorageOrderedApplyState & StorageRangeEnv & StorageApplyCoreApi & StoragePeerFeedbackApi =>
 
   /** Discard the ordering-gate state for one account: its cursor, last-applied-slot marker, and any buffered (verified
@@ -196,7 +210,7 @@ private[actors] trait StorageOrderedApply extends StorageTrieFlushApi:
     * re-derives an explicit cursor (the minimum `next` among survivors) for chunks it re-queues, so this fallback is
     * only exercised for chunks that out-race that re-derivation.
     */
-  private[actors] def applyOrderedStorageChunk(
+  def applyOrderedStorageChunk(
       peer: Peer,
       task: StorageTask,
       accountSlots: Seq[(ByteString, ByteString)],
