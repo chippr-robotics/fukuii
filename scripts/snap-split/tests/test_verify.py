@@ -2462,6 +2462,37 @@ class AdoptionModeTests(unittest.TestCase):
         self.assertIn(f"[adopts] {BCC}: 3 adopted declaration/call list(s), 1 substitution(s)", out)
         self.assertIn("[counts] ByteCodeResponseHandling: State=ByteCodeResponseHandlingState(1)", out)
 
+    # ---- companion-qualified defaults (spec 016 C-H1): `apply` sits in the companion and writes `X`, ChildFactories
+    # writes `<Coordinator>.X`; both name the same constant
+    def qualified_fixture(self, cf_default):
+        def q(t):
+            head, obj = t.split("object ByteCodeCoordinator:\n")
+            assert "backpressureHighWatermark: Int = 50000," in obj
+            obj = obj.replace("backpressureHighWatermark: Int = 50000,", "backpressureHighWatermark: Int = DefaultHighWatermark,")
+            return (head + "object ByteCodeCoordinator:\n\n  val DefaultHighWatermark: Int = 50000\n  val OtherMark: Int = 7\n"
+                    + obj)
+        c = lambda t: t.replace("backpressureHighWatermark: Int = 50000,", f"backpressureHighWatermark: Int = {cf_default},")
+        f = adopt_fixture(files={**ADOPT_FILES, BCC: q(BCC_BASE), CF: c(CF_BASE)})
+        self.recovery_first(f)
+        adopt_commit(f, {**CB1, BCC: q(BCC_AFTER), CF: c(CF_AFTER), BRA: BRA_CB1})
+        return f
+
+    def test_companion_qualified_default_matches_apply(self):
+        self.ok(self.qualified_fixture("ByteCodeCoordinator.DefaultHighWatermark"))
+
+    def test_other_qualified_default_still_differs(self):
+        for d in ("ByteCodeCoordinator.OtherMark", "Elsewhere.DefaultHighWatermark", "50000"):
+            out = self.bad(self.qualified_fixture(d), "adopts")
+            self.assertIn("`byteCodeCoordinator` default of `backpressureHighWatermark` differs from `apply`'s", out, d)
+
+    def test_qualified_default_unit(self):
+        members = V().companion_members("package x\n\nobject C:\n  val A: Int = 1\n  def b(): Int = 2\n\nclass D\n", "C")
+        self.assertEqual(members, {"A", "b"})
+        self.assertEqual(V().qualified_default(("C", ".", "A"), "C", members), ("A",))
+        self.assertEqual(V().qualified_default(("C", ".", "Z"), "C", members), ("C", ".", "Z"))
+        self.assertEqual(V().qualified_default(("E", ".", "A"), "C", members), ("E", ".", "A"))
+        self.assertIsNone(V().qualified_default(None, "C", members))
+
     # ---- negatives: logic hidden in the adoption
     def neg(self, changes, check="adopts", msg=ADOPT_MSG, recovery=True, fixture=None, **bl):
         f = fixture or adopt_fixture()
@@ -2849,6 +2880,137 @@ class CapabilityExtensionTests(unittest.TestCase):
         self.commit(f, {CAP: self.EXT_CAP.replace("  def bytecode: EvmCodeStorage\n", "  def bytecode: Option[EvmCodeStorage]\n"),
                         CORE: self.EXT_CORE, SC: self.EXT_SC})
         self.assertIn("changes existing member `bytecode", self.bad(f, "capability"))
+
+
+class LazyHandleTests(unittest.TestCase):
+    """#1584 (spec 016 C-H1): a capability extension whose new members are fed, by-name, by a controller trait's lazy
+    healing handles (HealingOrchestrator's frontier store and BFS queue). The handle widens to `private[snap]` or is the
+    Option lift of a removed lazy val; SyncController's mirror declares it `None` and does not read the member."""
+    ok = VerifyTests.ok
+    bad = VerifyTests.bad
+
+    HO_LAZY = """package x.controller
+
+private[snap] trait HealingOrchestrator:
+  self: HealingOrchestratorState & SnapControllerEnv =>
+
+  private lazy val healingFrontierStorageOpt: Option[HealingFrontierStorage] =
+    if snapSyncConfig.healingFrontierPersistence then Some(new HealingFrontierStorage(stateIngest.flatSlots.dataSource))
+    else None
+
+  private lazy val bfsQueueStorage: BfsQueueStorage =
+    new RocksDbBfsQueueStorage(stateIngest.flatSlots.dataSource, Namespaces.BfsQueueNamespace)
+
+  def heal(): Unit =
+    ctx.spawn(
+      childFactories.trieNodeHealingCoordinator(
+        healingFrontierStorage = healingFrontierStorageOpt,
+        bfsQueueStorageOpt = Some(bfsQueueStorage)
+      ),
+      "heal"
+    )
+"""
+    HO_AFTER = (HO_LAZY
+                .replace("  private lazy val healingFrontierStorageOpt:", "  private[snap] lazy val healingFrontierStorageOpt:")
+                .replace("  private lazy val bfsQueueStorage: BfsQueueStorage =\n    new RocksDbBfsQueueStorage(stateIngest.flatSlots.dataSource, Namespaces.BfsQueueNamespace)\n",
+                         "  private[snap] lazy val bfsQueueStorageOpt: Option[BfsQueueStorage] =\n"
+                         "    Some(new RocksDbBfsQueueStorage(stateIngest.flatSlots.dataSource, Namespaces.BfsQueueNamespace))\n")
+                .replace("healingFrontierStorage = healingFrontierStorageOpt,", "healingFrontierStorage = stateIngest.healingFrontier,")
+                .replace("bfsQueueStorageOpt = Some(bfsQueueStorage)\n", "bfsQueueStorageOpt = stateIngest.bfsQueue\n"))
+    CAP_AFTER = (SI_SYNC
+                 .replace("// capability-map: validatorFactory -> validatorFactory\n",
+                          "// capability-map: validatorFactory -> validatorFactory\n"
+                          "// capability-map: healingFrontierStorageOpt -> healingFrontier\n"
+                          "// capability-map: bfsQueueStorageOpt -> bfsQueue\n")
+                 .replace("  def durability: StateIngest.Durability\n",
+                          "  def durability: StateIngest.Durability\n  def healingFrontier: Option[HealingFrontierStorage]\n"
+                          "  def bfsQueue: Option[BfsQueueStorage]\n")
+                 .replace("      durability: Durability\n  ): StateIngest =",
+                          "      durability: Durability,\n      healingFrontierStorageOpt: => Option[HealingFrontierStorage],\n"
+                          "      bfsQueueStorageOpt: => Option[BfsQueueStorage]\n  ): StateIngest =")
+                 .replace("validatorFactory, durability)\n",
+                          "validatorFactory, durability, healingFrontierStorageOpt, bfsQueueStorageOpt)\n")
+                 .replace("      val durability: Durability\n  ) extends StateIngest\n",
+                          "      val durability: Durability,\n      healingFrontierStorageOpt: => Option[HealingFrontierStorage],\n"
+                          "      bfsQueueStorageOpt: => Option[BfsQueueStorage]\n  ) extends StateIngest:\n"
+                          "    def healingFrontier: Option[HealingFrontierStorage] = healingFrontierStorageOpt\n"
+                          "    def bfsQueue: Option[BfsQueueStorage] = bfsQueueStorageOpt\n"))
+    CORE_AFTER = SI_CORE.replace("    StateIngest.Durability.Default\n  )\n",
+                                 "    StateIngest.Durability.Default,\n    healingFrontierStorageOpt,\n    bfsQueueStorageOpt\n  )\n")
+    SC_NONE = ("      val healingFrontierStorageOpt: Option[HealingFrontierStorage] = None\n"
+               "      val bfsQueueStorageOpt: Option[BfsQueueStorage] = None\n")
+    SC_LAZY = (SC_AFTER
+               .replace("        StateIngest.Durability.Default\n      )\n",
+                        "        StateIngest.Durability.Default,\n        healingFrontierStorageOpt,\n        bfsQueueStorageOpt\n      )\n")
+               .replace("      val stateIngest: StateIngest", SC_NONE + "      val stateIngest: StateIngest"))
+    MSG = "refactor(snap): StateIngest healing stores (#1401)\n\n# capability: StateIngest\n"
+    JUST = {"capabilities.StateIngest.members": "C-H1: healingFrontier and bfsQueue, the healing stores, by-name from lazy vals",
+            "storage_refs.total": "C-H1 capability: the core's accessor names the two lazy healing handles (+2)"}
+
+    def fixture(self, ho=None):
+        files = {**ADOPT_FILES, CAP: SI_SYNC, SC: SC_AFTER, BRA: BRA_AFTER, HO: ho or self.HO_LAZY}
+        f = Fixture(branch="refactor/snap-016-ingest-healing", core_base=files[CORE],
+                    extra={**{k: v for k, v in files.items() if k != CORE}, BASELINE: adopt_baseline(files)})
+        f.files = files
+        return f
+
+    def commit(self, f, **over):
+        changes = {CAP: self.CAP_AFTER, CORE: self.CORE_AFTER, SC: self.SC_LAZY, HO: self.HO_AFTER}
+        for k, v in over.items():
+            changes[{"cap": CAP, "core": CORE, "sc": SC, "ho": HO}[k]] = v
+        adopt_commit(f, changes, msg=self.MSG, just=self.JUST, members=11)
+
+    def test_lazy_healing_handles_shaped_like_c_h1_pass(self):
+        f = self.fixture()
+        self.commit(f)
+        out = self.ok(f)
+        self.assertIn(f"[capability] lazy healing handle `healingFrontierStorageOpt` ({HO}) feeds by-name "
+                      "`healingFrontierStorageOpt` -> `stateIngest.healingFrontier`", out)
+        self.assertIn(f"[capability] {HO}: `healingFrontierStorageOpt` widens from `private` to `private[snap]`", out)
+        self.assertIn(f"[capability] {HO}: `bfsQueueStorage` lifts into `bfsQueueStorageOpt`; `Some(bfsQueueStorage)` "
+                      "stands as `stateIngest.bfsQueue`", out)
+        self.assertIn(f"[capability] {HO}: 2 substitution(s)", out)
+        self.assertIn(f"[capability] {SC}: mirrors the core's `stateIngest`", out)
+
+    def test_strict_parameter_fed_by_a_lazy_handle_fails(self):
+        f = self.fixture()
+        cap = self.CAP_AFTER.replace("      healingFrontierStorageOpt: => Option[HealingFrontierStorage],\n      bfsQueueStorageOpt: => Option[BfsQueueStorage]\n  ): StateIngest =",
+                                     "      healingFrontierStorageOpt: Option[HealingFrontierStorage],\n      bfsQueueStorageOpt: => Option[BfsQueueStorage]\n  ): StateIngest =")
+        self.commit(f, cap=cap)
+        self.assertIn("is fed by the lazy val `healingFrontierStorageOpt`", self.bad(f, "capability"))
+
+    def test_lazy_handle_changed_beyond_widening_fails(self):
+        f = self.fixture()
+        self.commit(f, ho=self.HO_AFTER.replace("if snapSyncConfig.healingFrontierPersistence then", "if true then"))
+        self.assertIn("changes the lazy healing handle `healingFrontierStorageOpt` beyond widening", self.bad(f, "capability"))
+
+    def test_option_lift_with_another_initializer_fails(self):
+        f = self.fixture()
+        self.commit(f, ho=self.HO_AFTER.replace("Namespaces.BfsQueueNamespace))", "Namespaces.Other))"))
+        self.assertIn("the Option lift replaces exactly one", self.bad(f, "capability"))
+
+    def test_other_use_of_the_lifted_handle_fails(self):
+        # only `Some(g)` stands as the member: any other use of the removed lazy val is a change
+        f = self.fixture(ho=self.HO_LAZY + "\n  def size(): Int = bfsQueueStorage.size\n")
+        self.commit(f, ho=self.HO_AFTER + "\n  def size(): Int = bfsQueueStorageOpt.get.size\n")
+        self.assertIn(f"{HO}: change is not a mapped handle substitution", self.bad(f, "capability"))
+
+    def test_mirror_building_a_healing_store_fails(self):
+        f = self.fixture()
+        sc = self.SC_LAZY.replace("val healingFrontierStorageOpt: Option[HealingFrontierStorage] = None",
+                                  "val healingFrontierStorageOpt: Option[HealingFrontierStorage] = "
+                                  "Some(new HealingFrontierStorage(flatSlotStorage.dataSource))")
+        self.commit(f, sc=sc)
+        self.assertIn("mirrored as `val healingFrontierStorageOpt: Option [ HealingFrontierStorage ] = None`",
+                      self.bad(f, "capability"))
+
+    def test_mirror_reading_a_healing_member_fails(self):
+        f = self.fixture()
+        sc = self.SC_LAZY.replace("      runningRecovery(bytecodeActor, snapSyncConfig, stateIngest)",
+                                  "      stateIngest.healingFrontier.foreach(_.clearComplete())\n"
+                                  "      runningRecovery(bytecodeActor, snapSyncConfig, stateIngest)")
+        self.commit(f, sc=sc)
+        self.assertIn("reads `stateIngest.healingFrontier`, which its capability mirrors as `None`", self.bad(f, "capability"))
 
 
 class CounterV2Tests(unittest.TestCase):

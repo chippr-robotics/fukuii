@@ -117,6 +117,17 @@ unless stated.
     accessor, so it changes in the same commit, under the mirror rule below. A call site already on the capability may
     move to a new method member: `stateIngest.stateTries.getBackingStorage(n)` becomes `stateIngest.trieStore(n)` (the
     accessor-alias form of the map entry). Member growth needs a fresh `justifications["capabilities.StateIngest.members"]`.
+  - **Lazy healing handles (spec 016 C-H1, #1584, the mirror/lazy-handle limit).** In an extension, a handle the core's
+    accessor passes that is a `lazy val` of the core or a `snap/controller` file (declared once; today
+    HealingOrchestrator's `healingFrontierStorageOpt` and `bfsQueueStorageOpt`) must feed a by-name `apply` parameter
+    (`p: => T`, `T` exactly the handle's declared type) and have a bare `capability-map:` line; a strict parameter would
+    build the store when the capability is built. In its file, the handle's declaration may only widen `private` to
+    `private[snap]` (so the core can name it), or be the **Option lift** of a removed `private lazy val g: T = e` into
+    `private[snap] lazy val h: Option[T] = Some(e)`: then each `Some(g)` in that file may stand as
+    `stateIngest.<member>`, and any other use of `g` fails the token check (the instance and its first build are the
+    same). SyncController's mirror declares such a handle `val h: <its declared type> = None` when the type is an
+    `Option` (recovery never spawns the healing coordinator, so its capability hands out none, and builds nothing), and
+    SyncController may not read `stateIngest.<member>` for it. The adoption mode's mirror check applies the same rule.
 - **Adoption mode (T060b).** A coordinator narrowing (C-*) moves the coordinator from raw storage parameters onto
   `StateIngest`. The commit trailer `# adopts: StateIngest <Unit>` (on `refactor/snap-016-*` only; not with `# moved:`
   or `# capability:`) selects the check. `<Unit>` is a coordinator (`ByteCodeCoordinator`, `AccountRangeCoordinator`,
@@ -132,6 +143,9 @@ unless stated.
     `capability-map:` entry (so `evmCodeStorage` maps to `bytecode` with no line). For a coordinator, the three
     declarations drop the same parameters, and the `ChildFactories` method keeps `apply`'s parameter list exactly
     (names, defaults, the `stateIngest` type), so `ChildFactoriesSpec` (protected, unchanged) holds by construction.
+    A default compares equal when one side writes a companion member unqualified (`DefaultVisitedCap`, in `apply`)
+    and the other qualified by the coordinator's companion (`TrieNodeHealingCoordinator.DefaultVisitedCap`, in
+    `ChildFactories`): the same constant (spec 016 C-H1).
   - **Calls** to those declarations, positional or named (`new <X>Impl(...)`, `X(...)`, `childFactories.x(...)`, the
     spawn sites in `DownloadSupervisor` and `HealingOrchestrator`, the recovery actors' coordinator calls): the
     dropped parameters' arguments go, all or none, and one `stateIngest` argument takes the first one's place. A
