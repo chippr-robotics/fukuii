@@ -19,6 +19,7 @@ import org.bouncycastle.util.encoders.Hex
 import com.chipprbots.ethereum.blockchain.sync.snap.*
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.healing.*
+import com.chipprbots.ethereum.blockchain.sync.snap.controller.StateIngest
 import com.chipprbots.ethereum.crypto.kec256
 import com.chipprbots.ethereum.db.storage.BfsEntry
 import com.chipprbots.ethereum.db.storage.BfsQueueStorage
@@ -32,6 +33,9 @@ import com.chipprbots.ethereum.network.NetworkPeerManagerActor
 import com.chipprbots.ethereum.network.Peer
 import com.chipprbots.ethereum.network.p2p.messages.SNAP.GetTrieNodes
 import com.chipprbots.ethereum.network.p2p.messages.SNAP.TrieNodes
+
+// The adoption map for the snap-split verify adoption mode (spec 016 C-H1): the dropped parameter and its member.
+// adopt-map: healingFrontierStorage -> healingFrontier
 
 /** TrieNodeHealingCoordinator manages the healing phase of SNAP sync.
   *
@@ -53,7 +57,7 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
     snapSyncController: org.apache.pekko.actor.typed.ActorRef[SNAPSyncController.Command],
     concurrency: Int,
     visitedCap: Int = TrieNodeHealingCoordinator.DefaultVisitedCap,
-    val healingFrontierStorage: Option[HealingFrontierStorage] = None,
+    val stateIngest: StateIngest,
     healingWriterEcOverride: Option[ExecutionContext] = None,
     healingReaderEcOverride: Option[ExecutionContext] = None,
     traversalParallelism: Int = TrieNodeHealingCoordinator.DefaultBfsParallelism,
@@ -105,7 +109,8 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
     // heal-root re-peg (moving-root delta heal) is suppressed while it is set; None (bare construction) never suppresses.
     walkLocalOnly: Option[java.util.concurrent.atomic.AtomicBoolean] = None
 ) extends FrontierPersistence
-    with TrieNodeHealingEnv:
+    with TrieNodeHealingEnv
+    with FrontierPersistenceState:
 
   import TrieNodeHealingCoordinator.*
 
@@ -304,7 +309,7 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
   // store must also be present for any record read/write — `prunedEnabled` is necessary but `healingFrontierStorage`
   // is the actual record sink, so each record site additionally guards on it being defined.
   val prunedEnabled: Boolean =
-    prunedHealVerification && storageScheme == StorageScheme.Hash && healingFrontierStorage.isDefined
+    prunedHealVerification && storageScheme == StorageScheme.Hash && stateIngest.healingFrontier.isDefined
 
   // spec 005 C8/FR-009: observability for the IN-FLIGHT pruned verification run — count of present subtrees pruned
   // (descend-and-stop hits) and the run start time, set when the verification entry takes the pruned path and read by
@@ -555,7 +560,7 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
         )
         val selfRef = self
         val ec = healingWriterEc
-        val frontierStore = healingFrontierStorage
+        val frontierStore = stateIngest.healingFrontier
         import scala.concurrent.Future
         import scala.util.control.NonFatal
         Future {
@@ -961,7 +966,7 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
       // so the snapshot marker is only ever written when persistence is enabled (FR-005 parity; the marker also gates
       // the spec-003 scoped path, which must stay dark by default).
       if frontierPersistenceEnabled then
-        healingFrontierStorage.foreach { store =>
+        stateIngest.healingFrontier.foreach { store =>
           store.markComplete()
           log.info("[HEAL-RESTART] Full-state rebuild complete — persisted frontier marked as a complete snapshot")
         }
@@ -1229,7 +1234,7 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
           // verification path — VerificationBFSComplete routes through HealingCheckCompletion, so this is
           // equivalent to (and cleaner than) writing the marker inside VerificationBFSComplete.
           if verificationPassComplete then
-            healingFrontierStorage.foreach { store =>
+            stateIngest.healingFrontier.foreach { store =>
               // spec 005 C2/C4/T007/T012: GENUINE zero-missing closure of the whole trie from `stateRoot` — the
               // verification BFS just confirmed zero missing descendants (verificationPassComplete && isComplete) and
               // `flushRawNodesSync()` above durably committed every healed node-byte. ONLY now (subtree bytes durable)
@@ -1261,7 +1266,7 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
           // at gate time (live reads), and all five operands are cheap local reads.
           val useScoped =
             scopedHealVerification && // F1: scoping not disabled
-              healingFrontierStorage.exists(_.isComplete) && // F2/F6: full-coverage precondition proven
+              stateIngest.healingFrontier.exists(_.isComplete) && // F2/F6: full-coverage precondition proven
               healedPathsThisRound.nonEmpty && // F3: scope present (not restart-lost / pre-first-heal)
               !healedPathsOverflowed && // F4: within the configured bound (FR-011)
               healedPathsRoot == stateRoot // F5: same root the scope was healed against (FR-009)
@@ -1838,7 +1843,7 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
     // emitted — pruning narrows the walk only where completeness is durably proven, never where it is merely assumed.
     // Returns true when the child was pruned (caller must NOT enqueue it). Increments the pruned-subtree counter on a
     // hit. `markIfNew` has already de-duplicated the child, so each pruned subtree is counted once per walk.
-    val prunedStore: Option[HealingFrontierStorage] = if prunedEnabled then healingFrontierStorage else None
+    val prunedStore: Option[HealingFrontierStorage] = if prunedEnabled then stateIngest.healingFrontier else None
     def pruneIfSubtreeComplete(childHash: ByteString): Boolean =
       prunedStore.exists { store =>
         val recorded = store.isSubtreeComplete(childHash)
@@ -2200,7 +2205,7 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
     else
       log.info(
         s"[HEAL-VERIFY-PRUNED] Pruning disabled (flag=$prunedHealVerification scheme=$storageScheme " +
-          s"store=${healingFrontierStorage.isDefined}) — full-trie verification on root " +
+          s"store=${stateIngest.healingFrontier.isDefined}) — full-trie verification on root " +
           s"${Hex.toHexString(root.take(4).toArray)}"
       )
     startFrontierBFS(
@@ -2398,7 +2403,7 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
           // it conservatively false — no record is staged, the walk descends — never a false "closed".
           val subtreeClosed =
             subtreeRoots.forall(c =>
-              isNodeInStorage(c, Seq.empty) && healingFrontierStorage.exists(_.isSubtreeComplete(c))
+              isNodeInStorage(c, Seq.empty) && stateIngest.healingFrontier.exists(_.isSubtreeComplete(c))
             )
           if subtreeClosed then
             pendingSubtreeRecords += nodeHash
@@ -2728,7 +2733,7 @@ object TrieNodeHealingCoordinator:
       snapSyncController: org.apache.pekko.actor.typed.ActorRef[SNAPSyncController.Command],
       concurrency: Int = 16,
       visitedCap: Int = DefaultVisitedCap,
-      healingFrontierStorage: Option[HealingFrontierStorage] = None,
+      stateIngest: StateIngest,
       healingWriterEcOverride: Option[ExecutionContext] = None,
       healingReaderEcOverride: Option[ExecutionContext] = None,
       traversalParallelism: Int = DefaultBfsParallelism,
@@ -2770,7 +2775,7 @@ object TrieNodeHealingCoordinator:
           snapSyncController = snapSyncController,
           concurrency = concurrency,
           visitedCap = visitedCap,
-          healingFrontierStorage = healingFrontierStorage,
+          stateIngest = stateIngest,
           healingWriterEcOverride = healingWriterEcOverride,
           healingReaderEcOverride = healingReaderEcOverride,
           traversalParallelism = traversalParallelism,

@@ -9,7 +9,6 @@ import scala.concurrent.ExecutionContext
 import scala.concurrent.blocking
 
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncMetrics
-import com.chipprbots.ethereum.blockchain.sync.snap.actors.*
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.TrieNodeHealingCoordinator.ActiveRequest
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.TrieNodeHealingCoordinator.FlushComplete
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.TrieNodeHealingCoordinator.HealingEntry
@@ -41,7 +40,7 @@ private[actors] trait FrontierPersistenceState:
   * coordinator core keeps the behaviour arms that call it (`frontierPersistenceArms` handles `FlushComplete`).
   */
 private[actors] trait FrontierPersistence:
-  this: TrieNodeHealingCoordinatorImpl =>
+  this: FrontierPersistenceState & TrieNodeHealingEnv =>
 
 // --- Layer 2: persisted frontier (sync.snap-sync.healing-frontier-persistence) ---
   // When `healingFrontierStorage` is defined, the outstanding frontier is mirrored to a dedicated RocksDB
@@ -55,7 +54,7 @@ private[actors] trait FrontierPersistence:
     */
   def persistFrontier(entries: Seq[HealingEntry]): Unit =
     if frontierPersistenceEnabled then
-      healingFrontierStorage.foreach { store =>
+      stateIngest.healingFrontier.foreach { store =>
         if entries.nonEmpty then store.update(Nil, entries.map(e => e.hash -> e.pathset)).commit()
       }
 
@@ -64,7 +63,7 @@ private[actors] trait FrontierPersistence:
     */
   private def unpersistFrontier(hashes: Seq[ByteString]): Unit =
     if frontierPersistenceEnabled then
-      healingFrontierStorage.foreach { store =>
+      stateIngest.healingFrontier.foreach { store =>
         if hashes.nonEmpty then store.update(hashes, Nil).commit()
       }
 
@@ -77,7 +76,7 @@ private[actors] trait FrontierPersistence:
     // Reaching this method therefore always means a genuine invalidation (differing-root refresh or
     // abandonment), so dropping the completeness marker below is always correct.
     if frontierPersistenceEnabled then
-      healingFrontierStorage.foreach { store =>
+      stateIngest.healingFrontier.foreach { store =>
         val outstanding =
           pendingTasks.iterator.map(_.hash).toSeq ++ activeRequests.values.iterator
             .flatMap(_.tasks.iterator.map(_.hash))
@@ -139,7 +138,7 @@ private[actors] trait FrontierPersistence:
     */
   private def writeDurableSubtreeRecords(toRecord: Seq[ByteString]): Unit =
     if prunedEnabled && toRecord.nonEmpty then
-      healingFrontierStorage.foreach { store =>
+      stateIngest.healingFrontier.foreach { store =>
         toRecord.foreach(store.markSubtreeComplete)
         log.debug(s"[HEAL-VERIFY-PRUNED] Seeded ${toRecord.size} heal-closed subtree-complete records (post-flush)")
       }

@@ -29,7 +29,6 @@ import com.chipprbots.ethereum.blockchain.sync.snap.actors.TrieNodeHealingCoordi
 import com.chipprbots.ethereum.db.storage.AppStateStorage
 import com.chipprbots.ethereum.db.storage.BfsQueueStorage
 import com.chipprbots.ethereum.db.storage.EvmCodeStorage
-import com.chipprbots.ethereum.db.storage.HealingFrontierStorage
 import com.chipprbots.ethereum.db.storage.MptStorage
 import com.chipprbots.ethereum.db.storage.PathNodeStorage
 import com.chipprbots.ethereum.db.storage.SnapStorageDoneStorage
@@ -152,7 +151,7 @@ trait ChildFactories:
       snapSyncController: TypedActorRef[SNAPSyncController.Command],
       concurrency: Int = 16,
       visitedCap: Int = TrieNodeHealingCoordinator.DefaultVisitedCap,
-      healingFrontierStorage: Option[HealingFrontierStorage] = None,
+      stateIngest: StateIngest,
       healingWriterEcOverride: Option[ExecutionContext] = None,
       healingReaderEcOverride: Option[ExecutionContext] = None,
       traversalParallelism: Int = TrieNodeHealingCoordinator.DefaultBfsParallelism,
@@ -183,7 +182,7 @@ trait ChildFactories:
       snapSyncController = snapSyncController,
       concurrency = concurrency,
       visitedCap = visitedCap,
-      healingFrontierStorage = healingFrontierStorage,
+      stateIngest = stateIngest,
       healingWriterEcOverride = healingWriterEcOverride,
       healingReaderEcOverride = healingReaderEcOverride,
       traversalParallelism = traversalParallelism,

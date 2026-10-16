@@ -72,6 +72,7 @@ class TrieNodeHealingDispatchTableSpec extends ScalaTestWithActorTestKit() with 
           batchSize = 16,
           snapSyncController = TestInbox[SNAPSyncController.Command]().ref,
           concurrency = 4,
+          stateIngest = HealingTrieFixtures.healingIngest(None),
           healingWriterEcOverride = Some(neverRuns),
           healingReaderEcOverride = Some(neverRuns)
         )

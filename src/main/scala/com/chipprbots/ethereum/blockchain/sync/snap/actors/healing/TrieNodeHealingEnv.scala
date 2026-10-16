@@ -3,6 +3,7 @@ package com.chipprbots.ethereum.blockchain.sync.snap.actors.healing
 import org.apache.pekko.actor.typed.ActorRef
 
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.TrieNodeHealingCoordinator
+import com.chipprbots.ethereum.blockchain.sync.snap.controller.StateIngest
 import com.chipprbots.ethereum.db.storage.MptStorage
 
 /** TrieNodeHealingCoordinator's environment for its modules (spec 016 C-H1, characterization G9): its logger and
@@ -13,8 +14,8 @@ import com.chipprbots.ethereum.db.storage.MptStorage
   *
   * Stores: `mptStorage`, the core's pivot-bound `MptStorage` that the healed-node flushes write to, a session value
   * that stays an explicit parameter under the named FR-042 exception (tasks.md, Coordinators, "Amendment 2026-10-13").
-  * The healing frontier store is not here: the modules will reach it as `stateIngest.healingFrontier`
-  * (`StateIngest`, adopted in C-H1).
+  * The healing frontier store is not here: the modules reach it as `stateIngest.healingFrontier` (`StateIngest`,
+  * adopted in C-H1).
   */
 private[actors] trait TrieNodeHealingEnv:
   def log: org.slf4j.Logger
@@ -26,3 +27,4 @@ private[actors] trait TrieNodeHealingEnv:
   def frontierHighWater: Int
   def frontierLowWater: Int
   def frontierBackpressureMaxWaitMs: Long
+  def stateIngest: StateIngest
