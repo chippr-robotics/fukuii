@@ -48,12 +48,12 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
     initialStateRoot: ByteString,
     networkPeerManager: org.apache.pekko.actor.typed.ActorRef[NetworkPeerManagerActor.Command],
     requestTracker: SNAPRequestTracker,
-    mptStorage: MptStorage,
+    val mptStorage: MptStorage,
     batchSize: Int,
     snapSyncController: org.apache.pekko.actor.typed.ActorRef[SNAPSyncController.Command],
     concurrency: Int,
     visitedCap: Int = TrieNodeHealingCoordinator.DefaultVisitedCap,
-    healingFrontierStorage: Option[HealingFrontierStorage] = None,
+    val healingFrontierStorage: Option[HealingFrontierStorage] = None,
     healingWriterEcOverride: Option[ExecutionContext] = None,
     healingReaderEcOverride: Option[ExecutionContext] = None,
     traversalParallelism: Int = TrieNodeHealingCoordinator.DefaultBfsParallelism,
@@ -62,9 +62,9 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
     bfsQueueStorageOpt: Option[BfsQueueStorage] = None,
     storageScheme: StorageScheme = StorageScheme.Hash,
     pathNodeStorageOpt: Option[PathNodeStorage] = None,
-    frontierHighWater: Int = TrieNodeHealingCoordinator.DefaultFrontierHighWater,
-    frontierLowWater: Int = TrieNodeHealingCoordinator.DefaultFrontierLowWater,
-    frontierBackpressureMaxWaitMs: Long = TrieNodeHealingCoordinator.FrontierBackpressureMaxWaitMs,
+    val frontierHighWater: Int = TrieNodeHealingCoordinator.DefaultFrontierHighWater,
+    val frontierLowWater: Int = TrieNodeHealingCoordinator.DefaultFrontierLowWater,
+    val frontierBackpressureMaxWaitMs: Long = TrieNodeHealingCoordinator.FrontierBackpressureMaxWaitMs,
     scopedHealVerification: Boolean = true,
     scopedHealMaxPaths: Int = TrieNodeHealingCoordinator.DefaultScopedHealMaxPaths,
     // spec 005 (Pruned descend-and-stop verification). When true AND `storageScheme == Hash`, the completeness walk
@@ -80,14 +80,14 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
     // features must stay dark unless `healing-frontier-persistence` is explicitly enabled (default off), preserving
     // FR-005 byte-for-byte parity with pre-spec-005 behavior. The spec-005 subtree records (markSubtreeComplete /
     // isSubtreeComplete / the descend-and-stop oracle) are gated on `prunedEnabled`, NOT on this flag.
-    frontierPersistenceEnabled: Boolean = false,
+    val frontierPersistenceEnabled: Boolean = false,
     // spec 004 (Decoupled Heal Serve-Root). When true, the GetTrieNodes fetch targets `serveRoot` (an advancing
     // newest-servable root) instead of the walk root `stateRoot`; when false, the fetch uses `stateRoot` (coupled,
     // byte-identical to pre-spec-004). Completeness is ALWAYS judged against `stateRoot`, regardless of this flag.
-    decoupledHealServeRoot: Boolean = false,
+    val decoupledHealServeRoot: Boolean = false,
     // FR-006 surfacing threshold: after this many unsatisfied attempts with no serve-root advance, surface (log +
     // metric). Never force-completes.
-    decoupledHealMaxAttemptsNoRefresh: Int = TrieNodeHealingCoordinator.DefaultDecoupledHealMaxAttemptsNoRefresh,
+    val decoupledHealMaxAttemptsNoRefresh: Int = TrieNodeHealingCoordinator.DefaultDecoupledHealMaxAttemptsNoRefresh,
     // spec 009 (Moving-Root Delta Heal). When true, the heal completes toward AND fetches against ONE current served
     // root: requestNextBatch (T005) collapses the fetch root to the completeness root `stateRoot`, and
     // StartTrieNodeHealing (T006) seeds an absent heal root as a frontier task and fetches it instead of handing off to
