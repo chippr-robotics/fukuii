@@ -1878,9 +1878,107 @@ Any other rise is still forbidden. Instances:
     - Owed: vault (the marker and flat-slot write path, the alias, the State member), forge ("no ETC behaviour change":
       the Hash-scheme path and the recovery spawn), beacon (Path scheme), the second-specialist review (prism), and the
       **Mordor and Platåberget restarts mid-storage** (characterization §7), run by the orchestrator.
-- [ ] T069 [C-S4] `StorageResponseProcessing` (T060: plus #1533's off-actor pipeline. Proof verification is pure,
-  with no store read, so this is zero-reference in substance: grep recorded, total unchanged). Narrowing takes `StateIngest` (proof verification reads), never
-  `StateAccess`; lowers the baseline total.
+- [x] T069 [C-S4] `StorageResponseProcessing` (T060: plus #1533's off-actor pipeline. Proof verification is pure,
+  with no store read, so this is zero-reference in substance: grep recorded, total unchanged). ~~Narrowing takes
+  `StateIngest` (proof verification reads), never `StateAccess`; lowers the baseline total.~~ Amended by the
+  characterization (A-S4b) and confirmed at T069: the moved code reads no store, so the narrowing takes nothing and the
+  total is unchanged (the C-S1 shape).
+  - **No stop.** None of the stop conditions arose: no parameter, default or spawn site changes (nothing is adopted, so
+    `apply`, `ChildFactories`, both `DownloadSupervisor` spawns and the `StorageRecoveryActor` spawn are untouched), no
+    `Option` store is involved, no store joins the session-value list (the module reaches `mptStorage`,
+    `snapProgressStorage` and `stateIngest` not at all), and the #1533 threading is unchanged (below).
+  - **The wording conflict, decided.** T069 said both "zero-reference, total unchanged" and "narrowing takes
+    `StateIngest` (proof verification reads); lowers the total". The code settles it for the first: `verifyStorageChunk`
+    and `verifyServedSlots` (companion, unchanged) read only the response's slots and proof nodes, and SRC has no storage
+    parameter that only C-S4 reads, so the adoption gate would have no dropped parameter to map. No `# adopts:`
+    trailer, `storage-baseline.json` unchanged (the C-S1 precedent, not C-S3's: C-S3 had a store to adopt).
+  - **As built** (branch `refactor/snap-016-cs4-storage-response`, four code commits and this docs commit; `sbt compile`,
+    `scalafmtAll` and targeted `testOnly` run locally, see the PR). (1) `# moved: StorageTaskKey, StaleRootFailure`: the
+    two Impl-nested case classes go to the companion so the State trait can name `emptyResponsesByTask`'s key and
+    `staleRootFailuresByAccount`'s element (`StorageTaskKey` widens from `private` to `private[actors]`, the
+    `ByteStringOrdering` precedent; no test names either). (2) Prerequisite: `StorageResponseProcessingState` is declared in
+    the new `actors/storage/StorageResponseProcessing.scala`, and three narrow Api traits next to their implementers so the
+    recorded C-S1..S3 interfaces do not change (the `StoragePeerFeedbackApi` precedent): `StorageResponsePeerApi` (8) in
+    `StoragePeerDispatch.scala`, `StorageChunkApplyApi` (`applyOrderedStorageChunk` with its `prebuilt = None` default,
+    `resetAccountTrie`) in `StorageOrderedApply.scala`, `StorageCompletedTaskApi` (`recordCompletedTask`) in
+    `StorageDoneMarkers.scala`; `storageConcurrency`, `maxEmptyResponsesPerTask` and `maxStaleRootFailuresPerAccount`
+    become `private lazy val`s (pure: integer literals). `StorageRangeEnv` needs nothing: every constructor value the
+    bodies read is already a member. (3) The move commit takes 19 members byte-identical into `StorageResponseProcessing`:
+    the three constants, `isStaleLocalRootSignature`, `giveUpOnAccountForHealing`, `nextResponseSeq` and
+    `inlineVerifyNanos` (literal-initialised vars only this module touches, so private vars of the trait),
+    `enqueueResponse`, `submitProcessingJobs`, `drainProcessedResponses`, `logStoragePerf`, `abandonPendingResponses`,
+    `processingPoolShutDown`, `shutdownProcessingPool`, `handleResponse`, `processStorageRanges` (with its nested
+    `handleProofOfAbsence` / `handleEmptyResponse`), `processServedTasks`, `createStorageSubTasks`,
+    `recordSubtaskCompletion`. `handleResponse`, `submitProcessingJobs`, `drainProcessedResponses`,
+    `abandonPendingResponses` and `shutdownProcessingPool` lose `private` (core arms, `onPostStop`, `PreRestart`); the
+    core fields the module reaches become public (`emptyResponsesByTask`, `staleRootFailuresByAccount`,
+    `abandonedAccounts`, `staleRootFailureEvents`, `processingGeneration`, `processingPool`, `processingEc`); the core
+    drops its `scala.concurrent.Future` import. `processingPool` and `processingEc` stay core vals (rule (d)): A-S4a
+    assigned them to C-S4, but a module trait cannot hold a concrete non-lazy val, and a lazy pool would be created by
+    the stop-time `shutdownProcessingPool` (a behaviour change); the module reaches them through State, the C-S3
+    `flatBatchEc` precedent. (4) The narrowing commit (no `# adopts:`): the self-type names
+    `StorageResponseProcessingState & StorageRangeEnv & StorageResponsePeerApi & StoragePeerFeedbackApi &
+    StorageChunkApplyApi & StorageTrieFlushApi & StorageCompletedTaskApi`; the Impl adds the State parent; the three
+    siblings extend their new Api, and `applyOrderedStorageChunk` loses `private[actors]` (the C-S3
+    `flushTrieNodeWrites` precedent). `StorageApplyCoreApi` still declares `createStorageSubTasks` and
+    `recordSubtaskCompletion`; the Impl now satisfies them through this module, so C-S2's recorded interface is left as
+    it is. `apply`, `ChildFactories` and `ChildFactoriesSpec` unchanged.
+    - **The companion wildcard (a judgement call).** The module imports the companion as `StorageRangeCoordinator.*`,
+      not member by member as C-S1..S3 do. A named `import ...StorageRangeCoordinator.verifyStorageChunk` matches the
+      ratchet's `.xStorageY` member-access pattern and counted as one storage reference (591 > the 590 ceiling, measured
+      on the first version of the move commit), a false positive of the kind counter v2 allow-lists
+      (`verifyStorageRange`, the call it wraps, is on `STORAGE_NAME_ALLOW_V2`). The wildcard reproduces exactly the scope
+      the bodies were written in (the Impl's own `import StorageRangeCoordinator.*`); the members the bodies reach are
+      listed in the move commit. Allow-listing `verifyStorageChunk` is a counter change, left for the next tooling pass
+      (follow-up below), the C-S3 `FlatSlotBatch` alias being the precedent for a local import workaround.
+    - **Off-actor pipeline hot path (#1533, for vault).** Threads: unchanged. On the actor thread: `handleResponse`
+      (index the response once, `validateStorageRanges`, `completeRequest`, the `activeTasks` removal), `enqueueResponse`
+      (the `PendingResponse`, its sequence number and generation), `submitProcessingJobs` (captures the job's tasks and
+      response, the skip set from `abandonedAccounts`, the prebuild scheme and `self` before the `Future`), the core's
+      `StorageResponseProcessed` arm (the running-job count, the generation check that drops a superseded result, the
+      job's `verified` and `ready`), `drainProcessedResponses` and everything it applies, and every RocksDB write (the
+      trie-node flush after each applied response). On `processingEc` (the owned daemon pool, the test override, or
+      `ExecutionContext.parasitic` in inline mode): only `verifyServedSlots`, a pure function of its captured arguments.
+      The completion callback runs on `parasitic` and only posts `StorageResponseProcessed` to the mailbox. Ordering:
+      unchanged; jobs are submitted oldest first up to `processing.maxInFlightJobs`, and `drainProcessedResponses`
+      applies strictly from the head of `pendingResponses`, so a job that finishes early waits for the responses before
+      it and the ordering gate sees chunks in arrival order. Generation drop: unchanged; `abandonPendingResponses` (pivot
+      refresh, force-complete, stop) bumps `processingGeneration`, and the core arm ignores a result of an older one.
+      Allocation: none added. The one bytecode-level change is that the module now reads the queue, the abandoned set,
+      `processingEc`, `processingGeneration`, the job counters and `trieWriteNanos` through State getters (interface
+      calls, monomorphic in production), once per enqueued, submitted or drained response, never per slot or per node;
+      `inlineVerifyNanos` and `nextResponseSeq` are now fields of the trait instead of the Impl (same object, same
+      thread). The pool is still built at construction and shut down by `onPostStop` and `PreRestart`.
+    - Counts: `StorageResponseProcessing` State 21 (R14b 19, plus `processingPool` and `processingEc`, immutable vals
+      that rule (d) keeps in the core and R14b's matrix of mutable fields does not list), Api 14 (= R14b:
+      `StorageResponsePeerApi` 8 and `StoragePeerFeedbackApi` 2 by `StoragePeerDispatch`, `StorageChunkApplyApi` 2 and
+      `StorageTrieFlushApi` 1 by `StorageOrderedApply`, `StorageCompletedTaskApi` 1 by `StorageDoneMarkers`).
+      `StoragePeerDispatch` 24 / 1, `StorageOrderedApply` 13 / 7 and `StorageDoneMarkers` 11 / 1 unchanged.
+      `StorageRangeEnv` 20, unchanged (G9). Lines: `StorageRangeCoordinator.scala` 1,914 → 1,471,
+      `StorageResponseProcessing.scala` 507 (characterization estimate 476).
+    - Storage total **590, unchanged** (zero-reference slice). The characterization §5 grep over the moved members prints
+      `.setStoragePendingTries` ×2 and `requestTracker.validateStorageRanges`, all on `STORAGE_NAME_ALLOW_V2`, the
+      baseline's counter; `StorageResponseProcessing.scala` measures 0 (no row), `StorageRangeCoordinator.scala` stays 32.
+      `storage-baseline.json` is unchanged.
+    - Tests (`# new-tests:`): `StorageResponseProcessingSpec` (11 cases, a plain `AnyFlatSpec`; the jobs run on
+      `ExecutionContext.parasitic` and report to a `TestInbox`): the job cap and its result message, the worker's skip
+      set and the prebuild when merkleization is not deferred, the head-only drain in arrival order with one trie flush
+      per response, no redispatch to a peer gone after answering, the generation bump, the worker's result vs inline
+      verification, the stale-local-root give-up (3 failures, 2 peers, queued siblings dropped, no peer penalty), empty
+      strikes and the skip at 5, proof-of-absence through the ordering gate, the 16-way subtask split and the
+      per-account subtask count, the pool shutdown. No existing test changed: `StorageRangeCoordinatorSpec` and
+      `StorageRangeCoordinatorOffActorSpec` reach the moved members through the Impl as before, and the sibling stub
+      states implement what their modules require, which did not grow.
+    - Left as they were (FR-034, no cleanups in a move PR): `giveUpOnAccountForHealing`'s scaladoc points at
+      `staleRootFailuresByAccount`'s doc, which stays in the core with the field; the #1533 rationale block stays above
+      the queue fields in the core; the moved `maxEmptyResponsesPerTask` and `maxStaleRootFailuresPerAccount` sit in the
+      trait without the field-block comments that explain them.
+    - Follow-up (tooling, not this slice): add `verifyStorageChunk` (the pure companion wrapper of
+      `MerkleProofVerifier.verifyStorageRange`) to `STORAGE_NAME_ALLOW_V2`, so a module may import it by name; C-H3 and
+      C-H5 may meet the same import shape.
+    - Owed: the second-specialist review (prism), forge's "no ETC behaviour change" sign-off (SRC runs on ETC), and vault
+      on the hot-path note above (#1533). No node run is required by characterization §7 for C-S4 (no storage path
+      changes).
 - [x] T070 [C-H0] Split TNHC `activeBehavior` into per-concern partial functions, with an arm-order table as in T036.
   (T060: a plain restructure commit with no `# moved:` trailer, like P4 and the lift PRs. 25 arms + catch-all, listed
   in characterization Appendix A. Then a `# moved:` commit of the 8 Impl-nested messages and the helper classes to the
