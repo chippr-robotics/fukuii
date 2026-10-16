@@ -8,7 +8,6 @@ import scala.concurrent.Future
 
 import com.chipprbots.ethereum.blockchain.sync.snap.SnapTrie
 import com.chipprbots.ethereum.blockchain.sync.snap.StorageTask
-import com.chipprbots.ethereum.blockchain.sync.snap.actors.*
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.StorageRangeCoordinator.*
 import com.chipprbots.ethereum.network.Peer
 import com.chipprbots.ethereum.network.p2p.messages.SNAP.StorageRanges
@@ -54,7 +53,8 @@ private[actors] trait StorageResponseProcessingState:
   * force-complete) and the stop and restart signals.
   */
 private[actors] trait StorageResponseProcessing:
-  this: StorageRangeCoordinatorImpl =>
+  this: StorageResponseProcessingState & StorageRangeEnv & StorageResponsePeerApi & StoragePeerFeedbackApi &
+    StorageChunkApplyApi & StorageTrieFlushApi & StorageCompletedTaskApi =>
 
   // Number of parallel subtasks to create per large-storage contract.
   // Matches go-ethereum storageConcurrency = 16 (sync.go:108).

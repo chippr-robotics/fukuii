@@ -77,7 +77,7 @@ private[actors] trait StorageChunkApplyApi:
   * storage-trie node writes (`flushTrieNodeWrites`). The coordinator core keeps the behaviour arms that call it, and
   * flushes the node buffer after every message.
   */
-private[actors] trait StorageOrderedApply extends StorageTrieFlushApi:
+private[actors] trait StorageOrderedApply extends StorageTrieFlushApi with StorageChunkApplyApi:
   this: StorageOrderedApplyState & StorageRangeEnv & StorageApplyCoreApi & StoragePeerFeedbackApi =>
 
   /** Discard the ordering-gate state for one account: its cursor, last-applied-slot marker, and any buffered (verified
@@ -210,7 +210,7 @@ private[actors] trait StorageOrderedApply extends StorageTrieFlushApi:
     * re-derives an explicit cursor (the minimum `next` among survivors) for chunks it re-queues, so this fallback is
     * only exercised for chunks that out-race that re-derivation.
     */
-  private[actors] def applyOrderedStorageChunk(
+  def applyOrderedStorageChunk(
       peer: Peer,
       task: StorageTask,
       accountSlots: Seq[(ByteString, ByteString)],

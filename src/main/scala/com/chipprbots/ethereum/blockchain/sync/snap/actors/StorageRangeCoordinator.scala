@@ -106,7 +106,8 @@ private[actors] class StorageRangeCoordinatorImpl(
     with StorageRangeCoreApi
     with StorageOrderedApplyState
     with StorageApplyCoreApi
-    with StorageDoneMarkersState:
+    with StorageDoneMarkersState
+    with StorageResponseProcessingState:
 
   import StorageRangeCoordinator.*
 

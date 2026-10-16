@@ -87,7 +87,7 @@ private[actors] trait StorageResponsePeerApi:
   * cooldown, the `SnapPeerHealth` demotion, the re-queue and the force-complete threshold). The coordinator core keeps
   * the behaviour arms that call it.
   */
-private[actors] trait StoragePeerDispatch extends StoragePeerFeedbackApi:
+private[actors] trait StoragePeerDispatch extends StoragePeerFeedbackApi with StorageResponsePeerApi:
   this: StoragePeerDispatchState & StorageRangeEnv & StorageRangeCoreApi =>
 
   private lazy val maxConsecutiveTaskFailures: Int = 100

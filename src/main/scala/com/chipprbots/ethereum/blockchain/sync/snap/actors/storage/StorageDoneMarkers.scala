@@ -46,7 +46,7 @@ private[actors] trait StorageCompletedTaskApi:
   * call it (flush complete and failed, the periodic marker flush, completion and pivot refresh) and `onPostStop`'s
   * final synchronous flush.
   */
-private[actors] trait StorageDoneMarkers:
+private[actors] trait StorageDoneMarkers extends StorageCompletedTaskApi:
   this: StorageDoneMarkersState & StorageRangeEnv & StorageTrieFlushApi =>
 
   /** Every flat batch with a sequence number <= this has committed. Package-private for tests. */
