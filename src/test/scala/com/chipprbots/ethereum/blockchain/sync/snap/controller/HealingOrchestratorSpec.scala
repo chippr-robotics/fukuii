@@ -36,8 +36,11 @@ import com.chipprbots.ethereum.blockchain.sync.snap.actors.ByteCodeCoordinator
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.TrieNodeHealingCoordinator
 import com.chipprbots.ethereum.db.dataSource.EphemDataSource
 import com.chipprbots.ethereum.db.storage.AppStateStorage
+import com.chipprbots.ethereum.db.storage.BfsQueueStorage
 import com.chipprbots.ethereum.db.storage.EvmCodeStorage
 import com.chipprbots.ethereum.db.storage.FlatSlotStorage
+import com.chipprbots.ethereum.db.storage.HealingFrontierStorage
+import com.chipprbots.ethereum.db.storage.InMemoryBfsQueueStorage
 import com.chipprbots.ethereum.db.storage.MptStorage
 import com.chipprbots.ethereum.db.storage.PathNodeStorage
 import com.chipprbots.ethereum.db.storage.StateStorage
@@ -117,6 +120,11 @@ private[snap] class StubHealingOrchestratorState(
   def peerEventBus: ActorRef[PeerEventBusActor.Command] = notUsed("peerEventBus")
   var pathNodeStorageOpt: Option[PathNodeStorage] = None
 
+  // The healing stores the healing spawn reads through `stateIngest` (spec 016 C-H1); in production they are the
+  // controller's `HealingOrchestrator` lazy vals, here plain stores over the stub's data source.
+  lazy val healingFrontierStore: Option[HealingFrontierStorage] = Some(new HealingFrontierStorage(dataSource))
+  lazy val bfsQueueStore: Option[BfsQueueStorage] = Some(new InMemoryBfsQueueStorage())
+
   // StateIngest (spec 016 T055): forwards to the stores above, read on each call.
   val stateIngest: StateIngest = new ForwardingStateIngest(
     appStateStorage,
@@ -126,7 +134,9 @@ private[snap] class StubHealingOrchestratorState(
     evmCodeStorage,
     blockchainReader,
     blockchainWriter,
-    validatorFactory
+    validatorFactory,
+    healingFrontierStore,
+    bfsQueueStore
   )
 
   // CoordinatorHandles

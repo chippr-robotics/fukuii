@@ -28,8 +28,10 @@ import com.chipprbots.ethereum.blockchain.sync.snap.actors.StorageRangeCoordinat
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.StateIngest
 import com.chipprbots.ethereum.db.dataSource.EphemDataSource
 import com.chipprbots.ethereum.db.storage.AppStateStorage
+import com.chipprbots.ethereum.db.storage.BfsQueueStorage
 import com.chipprbots.ethereum.db.storage.EvmCodeStorage
 import com.chipprbots.ethereum.db.storage.FlatSlotStorage
+import com.chipprbots.ethereum.db.storage.HealingFrontierStorage
 import com.chipprbots.ethereum.db.storage.MptStorage
 import com.chipprbots.ethereum.db.storage.PathNodeStorage
 import com.chipprbots.ethereum.db.storage.SnapStorageDoneStorage
@@ -105,6 +107,8 @@ private[actors] class StubStorageOrderedApplyState(
     def trieStore(pivot: BigInt): MptStorage = notReached("StateIngest.trieStore")
     def snapProgress: SnapSyncProgressStorage = notReached("StateIngest.snapProgress")
     def storageDone: SnapStorageDoneStorage = notReached("StateIngest.storageDone")
+    def healingFrontier: Option[HealingFrontierStorage] = notReached("StateIngest.healingFrontier")
+    def bfsQueue: Option[BfsQueueStorage] = notReached("StateIngest.bfsQueue")
   val flatBatchEntryThreshold: Int = 1000
 
   // StorageApplyCoreApi (recorded; recordSubtaskCompletion counts as the core does)

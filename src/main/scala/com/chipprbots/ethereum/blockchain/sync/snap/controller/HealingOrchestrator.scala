@@ -315,9 +315,10 @@ private[snap] trait HealingOrchestrator
 
   /** Layer 2: shared, lazily-built persisted-frontier handle for the healing coordinator. `None` (the default,
     * `healing-frontier-persistence = false`) keeps Layer-1 behaviour — no CF writes, always full DFS on restart. Reuses
-    * the node's existing RocksDB DataSource (via `flatSlotStorage`); the CF auto-creates on open.
+    * the node's existing RocksDB DataSource (via `flatSlotStorage`); the CF auto-creates on open. Handed to the healing
+    * spawn as `stateIngest.healingFrontier` (spec 016 C-H1), by-name, so it is still built on the first spawn.
     */
-  private lazy val healingFrontierStorageOpt: Option[HealingFrontierStorage] =
+  private[snap] lazy val healingFrontierStorageOpt: Option[HealingFrontierStorage] =
     // #4 (restored, spec-005): the pruned post-heal verification also needs the frontier store
     // (prunedHealVerification default true) — without it the first verification reverts to a full
     // ~90M-node trie walk. Dropped by #1384's stale base.
@@ -325,8 +326,11 @@ private[snap] trait HealingOrchestrator
       Some(new HealingFrontierStorage(stateIngest.flatSlots.dataSource))
     else None
 
-  private lazy val bfsQueueStorage: BfsQueueStorage =
-    new RocksDbBfsQueueStorage(stateIngest.flatSlots.dataSource, Namespaces.BfsQueueNamespace)
+  // The frontier-rebuild BFS queue, always `Some` (the coordinator falls back to an in-memory queue only on `None`).
+  // Handed to the healing spawn as `stateIngest.bfsQueue` (spec 016 C-H1), by-name, so it is still built on the first
+  // spawn.
+  private[snap] lazy val bfsQueueStorageOpt: Option[BfsQueueStorage] =
+    Some(new RocksDbBfsQueueStorage(stateIngest.flatSlots.dataSource, Namespaces.BfsQueueNamespace))
 
   /** spec 016 M6a: the healing-coordinator spawn shared by both healing routes, `startStateHealing` and
     * `startStateHealingWithInterleave`. It opens the pivot's trie store, spawns the supervised coordinator with the
@@ -350,14 +354,14 @@ private[snap] trait HealingOrchestrator
               snapSyncController = ctx.self,
               concurrency = snapSyncConfig.healingConcurrency,
               visitedCap = snapSyncConfig.healingVisitedCap,
-              healingFrontierStorage = healingFrontierStorageOpt,
+              healingFrontierStorage = stateIngest.healingFrontier,
               // #1319/spec-002 (restored): gate the coordinator's frontier-mirror writes +
               // completeness markers ON, matching store presence (dropped by #1384's stale base).
               frontierPersistenceEnabled = snapSyncConfig.healingFrontierPersistence,
               traversalParallelism = snapSyncConfig.healingTraversalParallelism,
               healingMinParallelism = snapSyncConfig.healingMinParallelism,
               healingReservedCores = snapSyncConfig.healingReservedCores,
-              bfsQueueStorageOpt = Some(bfsQueueStorage),
+              bfsQueueStorageOpt = stateIngest.bfsQueue,
               storageScheme = snapSyncConfig.storageScheme,
               pathNodeStorageOpt = stateIngest.pathNodes,
               frontierHighWater = snapSyncConfig.healingFrontierHighWater,
