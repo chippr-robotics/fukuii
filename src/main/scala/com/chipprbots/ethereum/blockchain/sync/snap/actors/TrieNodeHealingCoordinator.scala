@@ -64,7 +64,7 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
     healingMinParallelism: Int = TrieNodeHealingCoordinator.DefaultMinParallelism,
     healingReservedCores: Int = TrieNodeHealingCoordinator.DefaultReservedCores,
     bfsQueueStorageOpt: Option[BfsQueueStorage] = None,
-    storageScheme: StorageScheme = StorageScheme.Hash,
+    val storageScheme: StorageScheme = StorageScheme.Hash,
     pathNodeStorageOpt: Option[PathNodeStorage] = None,
     val frontierHighWater: Int = TrieNodeHealingCoordinator.DefaultFrontierHighWater,
     val frontierLowWater: Int = TrieNodeHealingCoordinator.DefaultFrontierLowWater,
@@ -121,7 +121,7 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
   // Thread-confined `context.log` is unsafe inside Future/BFS bodies that run off the actor dispatcher. Off-thread
   // logging (the HEAL-RESTART resume Future, startFrontierBFS Future, and rebuildFrontierBFS/processSubRange which
   // execute on healingWriterEc/healingReaderEc) uses this plain SLF4J logger instead. Actor-thread handlers use `log`.
-  private val asyncLog: org.slf4j.Logger =
+  val asyncLog: org.slf4j.Logger =
     org.slf4j.LoggerFactory.getLogger(classOf[TrieNodeHealingCoordinatorImpl])
 
   // Mutable state root — updated in-place when the controller refreshes the pivot (HealingPivotRefreshed).

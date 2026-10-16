@@ -17,6 +17,7 @@ import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
 
 import com.chipprbots.ethereum.blockchain.sync.snap.StateValidator
+import com.chipprbots.ethereum.blockchain.sync.snap.StorageScheme
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.TrieNodeHealingCoordinator
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.TrieNodeHealingCoordinator.ActiveRequest
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.TrieNodeHealingCoordinator.FlushComplete
@@ -77,7 +78,9 @@ private class StubFrontierOrderState(val healingWriterEc: ExecutionContext)
       s"${classOf[FrontierPersistenceOrderSpec].getName}.stub-${java.util.UUID.randomUUID()}"
     )
   val selfInbox: TestInbox[TrieNodeHealingCoordinator.Command] = TestInbox[TrieNodeHealingCoordinator.Command]()
+  val asyncLog: org.slf4j.Logger = log
   val self: ActorRef[TrieNodeHealingCoordinator.Command] = selfInbox.ref
+  val storageScheme: StorageScheme = StorageScheme.Hash
   val mptStorage: OrderRecordingMptStorage = new OrderRecordingMptStorage(Some(frontierStore))
   val frontierPersistenceEnabled: Boolean = true
   val decoupledHealServeRoot: Boolean = false

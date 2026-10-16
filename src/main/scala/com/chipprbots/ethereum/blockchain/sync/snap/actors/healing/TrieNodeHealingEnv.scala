@@ -2,15 +2,19 @@ package com.chipprbots.ethereum.blockchain.sync.snap.actors.healing
 
 import org.apache.pekko.actor.typed.ActorRef
 
+import com.chipprbots.ethereum.blockchain.sync.snap.StorageScheme
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.TrieNodeHealingCoordinator
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.StateIngest
 import com.chipprbots.ethereum.db.storage.MptStorage
 
-/** TrieNodeHealingCoordinator's environment for its modules (spec 016 C-H1, characterization G9): its logger and
-  * `self`, and the constructor's settings the frontier persistence reads (the Layer-2 mirror gate, the spec 004
-  * unservable threshold that the gauges report, the frontier backpressure marks). Constructor parameters and immutable
-  * values only, so it is a capability-like trait, counted apart from the modules' `<Module>State` (research.md R14b).
-  * The coordinator Impl implements it.
+/** TrieNodeHealingCoordinator's environment for its modules (spec 016 C-H1, characterization G9): its loggers and
+  * `self`, and the constructor's settings the modules read (the Layer-2 mirror gate, the spec 004 unservable threshold
+  * that the gauges report, the frontier backpressure marks; the storage scheme the frontier walk reads and de-dups by,
+  * C-H2). Constructor parameters and immutable values only, so it is a capability-like trait, counted apart from the
+  * modules' `<Module>State` (research.md R14b). The coordinator Impl implements it.
+  *
+  * `log` is the actor's context logger, for the actor thread only; `asyncLog` is the plain SLF4J logger the off-thread
+  * bodies use (the frontier walk on the healing writer and reader dispatchers, C-H2).
   *
   * Stores: `mptStorage`, the core's pivot-bound `MptStorage` that the healed-node flushes write to, a session value
   * that stays an explicit parameter under the named FR-042 exception (tasks.md, Coordinators, "Amendment 2026-10-13").
@@ -19,8 +23,10 @@ import com.chipprbots.ethereum.db.storage.MptStorage
   */
 private[actors] trait TrieNodeHealingEnv:
   def log: org.slf4j.Logger
+  def asyncLog: org.slf4j.Logger
   def self: ActorRef[TrieNodeHealingCoordinator.Command]
   def mptStorage: MptStorage
+  def storageScheme: StorageScheme
   def frontierPersistenceEnabled: Boolean
   def decoupledHealServeRoot: Boolean
   def decoupledHealMaxAttemptsNoRefresh: Int
