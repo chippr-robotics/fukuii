@@ -2027,9 +2027,123 @@ Any other rise is still forbidden. Instances:
     - Owed: the second-specialist review (prism) and forge's "no ETC behaviour change" sign-off (TNHC runs on ETC);
       `scalafmtCheckAll` was not run locally (no JVM on the soak host), so the autofix job may reformat. No vault review
       and no node run (characterization §7: none for C-H0; no storage path changes).
-- [ ] T071 [C-H1] `FrontierPersistence` (vault; T060: the first TNHC slice that touches storage. It adopts `mptStorage`
+- [x] T071 [C-H1] `FrontierPersistence` (vault; T060: the first TNHC slice that touches storage. It adopts `mptStorage`
   and `healingFrontierStorage` per D-T060-1). Narrowing takes `StateIngest` (frontier and BFS stores), never
   `StateAccess`; lowers the baseline total. Run a Mordor heal restart.
+  - **Stop and decision.** The first attempt stopped before any code. `mptStorage` was already settled: the Coordinators
+    "Amendment 2026-10-13" names C-H1, so it stays an explicit session value (reached through the Env at the declaration
+    cost). `healingFrontierStorage` had no `StateIngest` member (T060d deferred the healing stores): adopting it needed
+    the #1584 verify change for a by-name member fed by `HealingOrchestrator`'s lazy val, a separate `# capability:` PR
+    (verify forbids `# capability:` with `# adopts:` or `# moved:`, and every snap/ commit of a capability range carries
+    it), and a decision on recovery's mirror. Orchestrator decision 2026-10-15 under the user's standing D-T060-1 (route
+    (a)): both healing stores become members in one extension (`healingFrontier: Option[HealingFrontierStorage]`,
+    `bfsQueue: Option[BfsQueueStorage]`, by-name from the lazy vals), recovery's capability hands out `None` for both,
+    and C-H1 adopts `healingFrontier`. Three PRs, stacked.
+  - **As built, PR 1 (tooling)** (branch `test/snap-016-verify-lazy-members`, two commits, `# test-files: none`; no
+    JVM). (1) Lazy healing handles in a capability extension (#1584): a core accessor argument that is a `lazy val` of
+    the core or a snap/controller file feeds a by-name `apply` parameter of exactly its type (a strict one would build
+    the store with the capability); its declaration only widens `private` → `private[snap]`, or is the **Option lift**
+    of a removed `private lazy val g: T = e` into `private[snap] lazy val h: Option[T] = Some(e)`, after which each
+    `Some(g)` in that file may stand as `stateIngest.<member>`; SyncController's mirror declares such a handle `val h:
+    <its type> = None` and may not read the member. (2) Found on the C-H1 narrowing: the adoption check compared the
+    `ChildFactories` defaults with `apply`'s token by token, and TNHC's `apply` (in its companion) writes
+    `DefaultVisitedCap` where `ChildFactories` writes `TrieNodeHealingCoordinator.DefaultVisitedCap` (nine such
+    defaults; the same constants, so `ChildFactoriesSpec` passes). A `<Coordinator>.X` default now drops its qualifier
+    when `X` is a member of the companion; nothing else is normalized. Self-tests: 10 new (7 `LazyHandleTests`, 3
+    adoption cases), 246 in all, OK. Replay of the 56 merged refactor/test snap-016 ranges: byte-identical.
+  - **As built, PR 2 (capability)** (branch `refactor/snap-016-ch1a-stateingest-healing`, one `# capability:
+    StateIngest` commit and a docs commit). `StateIngest` 12 → 14: `healingFrontier` and `bfsQueue`, by-name `apply`
+    parameters `healingFrontierStorageOpt` and `bfsQueueStorageOpt` with pure forwarders (map lines
+    `healingFrontierStorageOpt -> healingFrontier`, `bfsQueueStorageOpt -> bfsQueue`). `HealingOrchestrator`:
+    `healingFrontierStorageOpt` widens to `private[snap]`; `bfsQueueStorage: BfsQueueStorage = new
+    RocksDbBfsQueueStorage(...)` lifts into `bfsQueueStorageOpt: Option[BfsQueueStorage] = Some(new ...)` (its only use
+    was the spawn's `Some(bfsQueueStorage)`); the healing spawn passes `stateIngest.healingFrontier` and
+    `stateIngest.bfsQueue`. The core's accessor appends the two handles; SyncController's mirror declares both `None`.
+    Same instances, built at the same first read (the spawn). Tests: the anonymous test `StateIngest`s and
+    `ForwardingStateIngest` gain the two members (failing loudly; `ForwardingStateIngest` takes them by-name with a
+    failing default), and `HealingOrchestratorSpec`'s stub hands in a frontier store and an in-memory queue. Storage
+    total 590 → 592 (+2, justified: the core's accessor names the two handles; `HealingOrchestrator` stays 43).
+  - **As built, PR 3 (C-H1)** (branch `refactor/snap-016-ch1-frontier-persistence`, three code commits and this docs
+    commit). No `# moved:` type commit: C-H0 moved the Impl-nested types, and every C-H1 member was already an indent-2
+    member. (1) Prerequisite: `FrontierPersistenceState` (11) in the new `actors/healing/FrontierPersistence.scala` and
+    `TrieNodeHealingEnv` (9: `log`, `self`, `mptStorage`, `frontierPersistenceEnabled`, `decoupledHealServeRoot`,
+    `decoupledHealMaxAttemptsNoRefresh`, `frontierHighWater`, `frontierLowWater`, `frontierBackpressureMaxWaitMs`) in
+    the new `actors/healing/TrieNodeHealingEnv.scala`; the eight constructor parameters the module reads (and
+    `healingFrontierStorage`, for the temporary self-type) become `val`s. No Api trait: the module calls nothing in the
+    core. (2) The move commit takes 8 members byte-identical into `FrontierPersistence`: `persistFrontier`,
+    `unpersistFrontier`, `clearPersistedFrontier`, `emitHealingFrontierGauges`, `awaitFrontierDrain`,
+    `writeDurableSubtreeRecords`, `flushRawNodesSync`, `flushRawNodesAsync` (with the Layer-2 section comment). No field
+    moves (every one is shared, or a rule (d) core val: `pendingBackpressure`, `prunedEnabled`, `healingWriterEc`). Six
+    lose `private` (the core calls them); `unpersistFrontier` and `writeDurableSubtreeRecords` stay `private`. The core
+    members the module reaches become public; the core drops `scala.concurrent.blocking`. The self-type is `this:`
+    (`flushRawNodesAsync` reads `self`). (3) The narrowing commit, `# adopts: StateIngest TrieNodeHealingCoordinator`:
+    self-type `FrontierPersistenceState & TrieNodeHealingEnv`; the Impl adds `with FrontierPersistenceState`;
+    `TrieNodeHealingEnv` gains `stateIngest`. `healingFrontierStorage: Option[HealingFrontierStorage] = None` →
+    `stateIngest: StateIngest` in the Impl constructor (a `val`), `apply`, `new`,
+    `ChildFactories.trieNodeHealingCoordinator` and the `HealingOrchestrator` spawn; eight core reads and four module
+    reads use `stateIngest.healingFrontier` (`// adopt-map: healingFrontierStorage -> healingFrontier`). `mptStorage`,
+    `bfsQueueStorageOpt` (C-H2), `pathNodeStorageOpt` (C-H3) and `evmCodeStorage` (C-H5) are unchanged.
+    `ChildFactoriesSpec` unchanged.
+    - **For T075.** TNHC now takes a plain `stateIngest: StateIngest`, not `Option[StateIngest]` (the adoption gate
+      supports only the plain form). C-H5's `evmCodeStorage` adoption, whose `None` test default turns the healed-code
+      check off (characterization §3.4), therefore needs the `healedCodeCheck: Boolean` route, or keeps
+      `evmCodeStorage` explicit; an `Option[StateIngest]` is no longer open.
+    - **Verify range.** Each PR is verified against its parent branch. From staging, this branch fails until PR 2
+      merges: the range then mixes PR 2's `# capability:` commit with move and adopts commits, which verify forbids in
+      one range.
+    - **Frontier write path (for vault).** *When:* `persistFrontier` on every new enqueue (`queueNodes`, inline child
+      discovery, the pivot reseed), one `update(Nil, entries).commit()` per call; `unpersistFrontier` once per
+      healed-node flush; `clearPersistedFrontier` on a differing-root refresh or an abandonment, one batch delete then
+      `clearComplete()`; all three gated on `frontierPersistenceEnabled` (default off), so with persistence off CF `g`
+      holds only the spec 005 subtree records and the completeness marker. *Batching:* one RocksDB batch per call, as
+      before; healed nodes are buffered (`rawNodeBuffer`, 1000) and flushed as one `storeRawNodes` + `persist()`.
+      *Durability ordering relative to node writes:* each flush (sync at completion, async on
+      `healing-writer-dispatcher` otherwise) runs `mptStorage.storeRawNodes`, `mptStorage.persist()`, then the staged
+      subtree-complete records (`markSubtreeComplete`, WAL-ordered `update`), then the frontier unpersist. A healed node
+      leaves the frontier only after its bytes are persisted, and a subtree record is written only after the subtree's
+      bytes are (spec 005 D3, record-after-persist); a crash in between re-heals or re-descends, never skips. The
+      completeness marker stays a `commitSync()` write. Byte-identical bodies, same threads, same instances.
+    - **Instance and cost.** `stateIngest.healingFrontier` forwards, by-name, to `HealingOrchestrator`'s lazy
+      `healingFrontierStorageOpt`, the instance the spawn passed before. Its first read moves off the spawn (the
+      controller's thread). With `prunedHealVerification` on and the Hash scheme it is the coordinator's construction
+      (`prunedEnabled`, on the coordinator's thread at setup; the `&&` short-circuits otherwise). Otherwise it is the
+      coordinator's first read on its own thread (the `[HEAL-RESTART]` arm, a `persistFrontier` or another core read),
+      or a flush's unpersist on the healing-writer thread. Building the store does no I/O, and the lazy val is
+      thread-safe. Each read is an interface call, a thunk and a
+      lazy-val read where it was a field read: per call of the mirror methods, never per node in the module; the core's
+      per-child `exists(_.isSubtreeComplete(c))` in the inline child discovery (C-H5's code) pays it per child, beside a
+      RocksDB get, and the frontier walk captures the store once (`prunedStore`). A hoist is a body change, left to
+      C-H5.
+    - Counts: `FrontierPersistence` State 11 (R14b 9, plus `prunedEnabled` and `healingWriterEc`, immutable vals rule
+      (d) keeps in the core), Api 0 (= R14b). `TrieNodeHealingEnv` 10 (G9), one store (`mptStorage`).
+    - Storage total **592 → 582** (counter v2): the adoption −13 (TNHC −6 net of the move, `ChildFactories` 58 → 53,
+      `HealingOrchestrator` 43 → 41), then `TrieNodeHealingEnv`'s `mptStorage` declaration and import, +3 exactly (the
+      session-value Env declaration cost; covered by the adoption). `TrieNodeHealingCoordinator.scala` 70 → 53,
+      `actors/healing/FrontierPersistence.scala` 0 → 11 (the characterization's 11),
+      `actors/healing/TrieNodeHealingEnv.scala` 0 → 3. Across the three PRs, 590 → 582. `storage-baseline.json` records
+      it with a fresh justification line.
+    - Tests (`# new-tests:`): `FrontierPersistenceSpec` (6 cases, a plain `AnyFlatSpec`; an `EphemDataSource` frontier
+      store, a recording trie store, the async flush on `ExecutionContext.parasitic`): the mirror gate; the sync flush's
+      record-after-persist and the unpersist; no records with pruning off, no write on an empty buffer; the async
+      flush's `FlushComplete`, single flight and `flushing` left for the core; the clear of pending and in-flight
+      entries and the marker; the backpressure mirror (its last case only calls the drain wait). Review follow-up
+      (`# new-tests:`, a new suite because the test-hunk guard forbids assertion edits to a suite that exists at the
+      parent commit, the C-S3 `StorageDoneMarkersFlushSpec` precedent): `FrontierPersistenceOrderSpec` (4 cases): on
+      both flushes, at `persist()` no subtree record yet and every flushed node still a frontier entry, then the records
+      and the unpersist (a mutation that unpersists before `persist()` fails it); the drain wait, no wait or log below
+      the high-water mark, the INFO pause and WARN safety-timeout lines above it (0 ms timeout).
+      `HealingTrieFixtures.healingIngest` builds the coordinator's `StateIngest` (`healingFrontier` the spec's store,
+      every other member throws); `TrieNodeHealingDispatchTableSpec` passes `healingIngest(None)`;
+      `RecordingChildFactories` records `stateIngest.healingFrontier` in the unchanged
+      `ChildSpawn.Healing.healingFrontierStorage`. No assertion changed.
+    - Build: `sbt compile` and `Test/compile` green; scalafmtAll applied. `testOnly` over the healing suites
+      (`FrontierPersistenceSpec`, the dispatch table, `TrieNodeHealingCoordinatorSpec`, the resume, rebuild, pruned,
+      scoped, decoupled, moving-root, seeding and path-presence specs), `HealingOrchestratorSpec`,
+      `SNAPSyncControllerPinSpec`, `ChildFactoriesSpec`, `StateIngestDurabilitySpec`, `DownloadSupervisorSpec`: green.
+      Not run: `testEssential`.
+    - Owed: vault (the frontier write path above, the lazy healing members), forge ("no ETC behaviour change": the
+      Hash-scheme subtree records and the healed-node flush are ETC's path), beacon (Path scheme), the second-specialist
+      review (prism), and the **Mordor heal restart** (characterization §7), run by the orchestrator.
 - [ ] T072 [C-H2] `FrontierRebuildBfs` (T060: adopts `bfsQueueStorageOpt` per D-T060-1; add vault). Narrowing takes `StateIngest` (presence reads), never `StateAccess`; lowers the
   baseline total.
 - [ ] T073 [C-H3] `HealVerification` (vault; T060: plus `readPathVerifiedRlp`/`Node`. Adopts `pathNodeStorageOpt` →

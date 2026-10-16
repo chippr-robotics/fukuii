@@ -354,7 +354,7 @@ private[snap] trait HealingOrchestrator
               snapSyncController = ctx.self,
               concurrency = snapSyncConfig.healingConcurrency,
               visitedCap = snapSyncConfig.healingVisitedCap,
-              healingFrontierStorage = stateIngest.healingFrontier,
+              stateIngest = stateIngest,
               // #1319/spec-002 (restored): gate the coordinator's frontier-mirror writes +
               // completeness markers ON, matching store presence (dropped by #1384's stale base).
               frontierPersistenceEnabled = snapSyncConfig.healingFrontierPersistence,
