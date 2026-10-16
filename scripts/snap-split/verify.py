@@ -3126,6 +3126,29 @@ def shadow_problems(path: str, new: str, sites, scope: str = "file") -> list[str
     return probs
 
 
+def companion_members(text: str, obj: str) -> set[str]:
+    """Names declared as members (indent 2) of the top-level `object <obj>:` in `text`."""
+    out, inside = set(), False
+    for l in code_lines(text):
+        if re.match(r"^(?:(?:" + MODIFIER + r")\s+)*object\s+" + re.escape(obj) + r"\b", l):
+            inside = True
+            continue
+        if inside and l.strip() and indent_of(l) == 0:
+            inside = False
+        if inside and (m := re.match(r"^  (?:(?:" + MODIFIER + r")\s+|lazy\s+|inline\s+)*(?:val|def|var)\s+(\w+)", l)):
+            out.add(m.group(1))
+    return out
+
+
+def qualified_default(tokens, obj: str, members: set[str]):
+    """A default's tokens with `<obj>.` dropped from a reference to one of its companion members: `apply`, declared in
+    the companion, writes `DefaultVisitedCap` where ChildFactories writes `TrieNodeHealingCoordinator.DefaultVisitedCap`
+    (spec 016 C-H1). Both name the same constant, so ChildFactoriesSpec's comparison by value holds."""
+    if tokens and len(tokens) >= 3 and tokens[0] == obj and tokens[1] == "." and tokens[2] in members:
+        return tuple(tokens[2:])
+    return tuple(tokens) if tokens is not None else None
+
+
 class AdoptDecl:
     """One adoptable declaration's old and new parameter lists, as validated by `Adoption.declare`."""
 
@@ -3346,8 +3369,9 @@ class Adoption:
         if an != fn:
             self.err(f"{CHILD_FACTORIES}: `{lower_camel(coord)}` parameters {fn} must be `{coord}.apply`'s, in order: {an}")
         else:
+            members = companion_members(self.new(coordinator_file(coord)), coord)
             for a, b in zip(apply_d.new, fac_d.new):
-                if a[2] != b[2]:
+                if qualified_default(a[2], coord, members) != qualified_default(b[2], coord, members):
                     self.err(f"{CHILD_FACTORIES}: `{lower_camel(coord)}` default of `{a[0]}` differs from `apply`'s "
                              "(ChildFactoriesSpec compares them by position)")
                 if a[0] == ADOPT_ACCESSOR and a[1] != b[1]:

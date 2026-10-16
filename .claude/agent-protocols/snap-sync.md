@@ -143,6 +143,9 @@ unless stated.
     `capability-map:` entry (so `evmCodeStorage` maps to `bytecode` with no line). For a coordinator, the three
     declarations drop the same parameters, and the `ChildFactories` method keeps `apply`'s parameter list exactly
     (names, defaults, the `stateIngest` type), so `ChildFactoriesSpec` (protected, unchanged) holds by construction.
+    A default compares equal when one side writes a companion member unqualified (`DefaultVisitedCap`, in `apply`)
+    and the other qualified by the coordinator's companion (`TrieNodeHealingCoordinator.DefaultVisitedCap`, in
+    `ChildFactories`): the same constant (spec 016 C-H1).
   - **Calls** to those declarations, positional or named (`new <X>Impl(...)`, `X(...)`, `childFactories.x(...)`, the
     spawn sites in `DownloadSupervisor` and `HealingOrchestrator`, the recovery actors' coordinator calls): the
     dropped parameters' arguments go, all or none, and one `stateIngest` argument takes the first one's place. A

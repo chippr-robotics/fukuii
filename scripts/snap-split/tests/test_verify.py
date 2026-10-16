@@ -2462,6 +2462,37 @@ class AdoptionModeTests(unittest.TestCase):
         self.assertIn(f"[adopts] {BCC}: 3 adopted declaration/call list(s), 1 substitution(s)", out)
         self.assertIn("[counts] ByteCodeResponseHandling: State=ByteCodeResponseHandlingState(1)", out)
 
+    # ---- companion-qualified defaults (spec 016 C-H1): `apply` sits in the companion and writes `X`, ChildFactories
+    # writes `<Coordinator>.X`; both name the same constant
+    def qualified_fixture(self, cf_default):
+        def q(t):
+            head, obj = t.split("object ByteCodeCoordinator:\n")
+            assert "backpressureHighWatermark: Int = 50000," in obj
+            obj = obj.replace("backpressureHighWatermark: Int = 50000,", "backpressureHighWatermark: Int = DefaultHighWatermark,")
+            return (head + "object ByteCodeCoordinator:\n\n  val DefaultHighWatermark: Int = 50000\n  val OtherMark: Int = 7\n"
+                    + obj)
+        c = lambda t: t.replace("backpressureHighWatermark: Int = 50000,", f"backpressureHighWatermark: Int = {cf_default},")
+        f = adopt_fixture(files={**ADOPT_FILES, BCC: q(BCC_BASE), CF: c(CF_BASE)})
+        self.recovery_first(f)
+        adopt_commit(f, {**CB1, BCC: q(BCC_AFTER), CF: c(CF_AFTER), BRA: BRA_CB1})
+        return f
+
+    def test_companion_qualified_default_matches_apply(self):
+        self.ok(self.qualified_fixture("ByteCodeCoordinator.DefaultHighWatermark"))
+
+    def test_other_qualified_default_still_differs(self):
+        for d in ("ByteCodeCoordinator.OtherMark", "Elsewhere.DefaultHighWatermark", "50000"):
+            out = self.bad(self.qualified_fixture(d), "adopts")
+            self.assertIn("`byteCodeCoordinator` default of `backpressureHighWatermark` differs from `apply`'s", out, d)
+
+    def test_qualified_default_unit(self):
+        members = V().companion_members("package x\n\nobject C:\n  val A: Int = 1\n  def b(): Int = 2\n\nclass D\n", "C")
+        self.assertEqual(members, {"A", "b"})
+        self.assertEqual(V().qualified_default(("C", ".", "A"), "C", members), ("A",))
+        self.assertEqual(V().qualified_default(("C", ".", "Z"), "C", members), ("C", ".", "Z"))
+        self.assertEqual(V().qualified_default(("E", ".", "A"), "C", members), ("E", ".", "A"))
+        self.assertIsNone(V().qualified_default(None, "C", members))
+
     # ---- negatives: logic hidden in the adoption
     def neg(self, changes, check="adopts", msg=ADOPT_MSG, recovery=True, fixture=None, **bl):
         f = fixture or adopt_fixture()
