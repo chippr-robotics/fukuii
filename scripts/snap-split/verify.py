@@ -785,12 +785,19 @@ class Verifier:
             self.err(c, "capability", prob)
         self.info(c, f"[capability] {name} in {paths[0]}: accessor `{spec.accessor}`, {len(spec.maps)} map entries, "
                      f"{len(spec.members)} members" + (" (extension)" if base_spec else ""))
+        lazy = {}
         if base_spec:
             self.capability_extension(c, spec, base_spec)
+            lazy, lprobs = lazy_handles(g, c, spec)  # #1584 rule (a)
+            for prob in lprobs:
+                self.err(c, "capability", prob)
+            for h, info in sorted(lazy.items()):
+                self.info(c, f"[capability] lazy healing handle `{h}` ({info['file']}) feeds by-name `{info['param']}` -> "
+                             f"`{spec.accessor}.{info['member']}`")
             sc_text = g.show(c, SYNC_CONTROLLER) or ""
             if changed.get(SYNC_CONTROLLER) != "M" and accessor_init(sc_text):
                 # SyncController's own capability (D-T060-2) must keep mirroring the core's accessor
-                probs = mirror_accessor(SYNC_CONTROLLER, sc_text, sc_text, g.show(c, RATCHET_FILES[0]) or "", spec)[0]
+                probs = mirror_accessor(SYNC_CONTROLLER, sc_text, sc_text, g.show(c, RATCHET_FILES[0]) or "", spec, lazy)[0]
                 for prob in probs:
                     self.err(c, "capability", prob)
         for f, st in sorted(changed.items()):
@@ -799,7 +806,7 @@ class Verifier:
             if base_spec and f == SYNC_CONTROLLER and st == "M":
                 old, new = g.show(p, f) or "", g.show(c, f) or ""
                 if accessor_init(new) or accessor_init(old):
-                    probs, do, dn, _eq = mirror_accessor(f, old, new, g.show(c, RATCHET_FILES[0]) or "", spec)
+                    probs, do, dn, _eq = mirror_accessor(f, old, new, g.show(c, RATCHET_FILES[0]) or "", spec, lazy)
                     for prob in probs:
                         self.err(c, "capability", prob)
                     probs, subs = substitution_check(f, old, new, None, do, dn)
@@ -824,10 +831,18 @@ class Verifier:
                 drop_old, drop_new = self.capability_core(c, f, spec, old, new, base_spec)
             elif is_module(f):
                 drop_old = self.removed_state_handles(c, f, old, new)
+            extra = []
+            if lazy:  # #1584 rule (b)
+                lp, lo, ln, extra, notes = lazy_handle_edits(f, old, new, lazy, spec.accessor)
+                for prob in lp:
+                    self.err(c, "capability", prob)
+                for note in notes:
+                    self.info(c, f"[capability] {f}: {note}")
+                drop_old, drop_new = set(drop_old) | lo, set(drop_new) | ln
             for e in sorted(import_entries(new) - import_entries(old)):
                 if is_wild_or_given_import(e):
                     self.err(c, "capability", f"{f}: adds wildcard or given import `{e}`: a capability commit adds named imports only")
-            probs, subs = substitution_check(f, old, new, spec, drop_old, drop_new)
+            probs, subs = substitution_check(f, old, new, spec, drop_old, drop_new, extra)
             for prob in probs:
                 self.err(c, "capability", prob)
             if not probs:
@@ -2491,7 +2506,7 @@ def core_init_extension_problem(toks: list[str], old_toks: list[str], spec: "Cap
 
 
 def substitution_check(path: str, old: str, new: str, cap: "CapabilitySpec | None", drop_old=frozenset(),
-                       drop_new=frozenset()) -> tuple[list[str], int]:
+                       drop_new=frozenset(), extra=()) -> tuple[list[str], int]:
     """Whole-file token alignment of `old` and `new` (comments, whitespace and import statements ignored, plus the
     excised lines), where a mapped handle sequence in `old` may stand as `<accessor>.<member>` in `new`, and the
     statement skeleton (which tokens start a statement line, at which indentation) is the same. Returns (problems,
@@ -2499,7 +2514,7 @@ def substitution_check(path: str, old: str, new: str, cap: "CapabilitySpec | Non
     ot = drop_lines(scala_tokens(old), set(drop_old) | import_lines(old))
     nt = drop_lines(scala_tokens(new), set(drop_new) | import_lines(new))
     return align_tokens(path, ot, nt, old, new, list(cap.maps.items()) if cap else [],
-                        getattr(cap, "alias_maps", list)() if cap else [])
+                        (getattr(cap, "alias_maps", list)() if cap else []) + list(extra))
 
 
 def align_tokens(path: str, ot: list, nt: list, old: str, new: str, map_items, extra_maps=(), sites=None) -> tuple[list[str], int]:
@@ -2793,11 +2808,13 @@ def accessor_init(text: str):
     return out
 
 
-def mirror_accessor(path: str, old: str, new: str, core: str, spec: "CapabilitySpec"):
+def mirror_accessor(path: str, old: str, new: str, core: str, spec: "CapabilitySpec", lazy: dict | None = None):
     """SyncController's own `stateIngest` (D-T060-2): one declaration whose initializer is token-identical to the core's,
-    plus declarations of the handles it names that the file lacks, each derived exactly as the core derives it. Returns
-    (problems, drop_old, drop_new, handle -> member)."""
+    plus declarations of the handles it names that the file lacks, each derived exactly as the core derives it. A lazy
+    healing handle (`lazy`, from `lazy_handles`; #1584) of an `Option` type is instead declared `val h: <its type> =
+    None`, and SyncController may not read its member. Returns (problems, drop_old, drop_new, handle -> member)."""
     probs, drop_old, drop_new, equiv = [], set(), set(), {}
+    lazy = lazy or {}
     core_acc = [a for a in accessor_init(core) if a[1] is not None]
     if len(core_acc) != 1:
         return [f"{path}: SNAPSyncController must declare `{ADOPT_ACCESSOR}` exactly once to mirror it, found {len(core_acc)}"], \
@@ -2833,6 +2850,17 @@ def mirror_accessor(path: str, old: str, new: str, core: str, spec: "CapabilityS
                 continue  # an existing declaration of the handle: unchanged code
             binit = top_level_initializer(strip_result_type(VIS_RE.sub("", bdecl)))
             got = tuple(t.t for t in scala_tokens(binit)) if binit is not None else None
+            if h in lazy:
+                parts = val_parts(bdecl)
+                want_t = lazy[h]["type"]
+                if parts is None or parts[1] != "val" or parts[0] or parts[3] != ("None",) or parts[2] != want_t \
+                        or want_t[:2] != ("Option", "["):
+                    probs.append(f"{path}: adds `{bdecl[:80]}`; the core's `{h}` is a lazy healing handle, mirrored as "
+                                 f"`val {h}: {' '.join(want_t)} = None` (an `Option`: recovery builds no healing store)")
+                elif ";" in bdecl:
+                    probs.append(f"{path}: `{bdecl[:80]}` shares its line with another statement")
+                drop_new |= bls
+                continue
             if not re.match(r"^(?:(?:" + MODIFIER + r")\s+)*val\s+" + re.escape(h) + r"\b", bdecl):
                 probs.append(f"{path}: adds `{bdecl[:80]}`; a mirrored handle is a plain `val` (not `def`, `lazy val` or "
                              "`var`: one instance, built with the capability)")
@@ -2844,7 +2872,154 @@ def mirror_accessor(path: str, old: str, new: str, core: str, spec: "CapabilityS
         for bls, bdecl in ob:
             if bdecl not in [d for _l, d in nb]:
                 probs.append(f"{path}: changes or removes `{bdecl[:80]}`")
+    if lazy:
+        nt = [t.t for t in scala_tokens(new)]
+        for h, info in sorted(lazy.items()):
+            m = info["member"]
+            if any(nt[k:k + 3] == [ADOPT_ACCESSOR, ".", m] for k in range(len(nt) - 2)):
+                probs.append(f"{path}: reads `{ADOPT_ACCESSOR}.{m}`, which its capability mirrors as `None` (`{h}` is a lazy "
+                             "healing handle of the core): recovery builds and reads no healing store")
     return probs, drop_old, drop_new, equiv
+
+
+# --------------------------------------------------------------------------- lazy healing handles (C-H1, #1584)
+#
+# The mirror/lazy-handle limit (#1584): a capability extension may add a member whose production value is a `lazy val`
+# of a controller trait (HealingOrchestrator's healing stores). Building the capability must not build the store, and
+# recovery's mirrored capability must not build one either. In a `# capability:` extension:
+#   (a) a handle the core's accessor passes that is declared as a `lazy val` in the core or a snap/controller file (one
+#       declaration) feeds a by-name `apply` parameter (`p: => T`, T exactly the handle's declared type): a strict one
+#       would build the store with the capability. The capability's forwarder then reads the lazy val on each call;
+#   (b) in its file the handle's declaration may only widen `private` to `private[snap]` (the core must name it), or it
+#       is the Option lift of a removed `private lazy val g: T = e` into `private[snap] lazy val h: Option[T] = Some(e)`,
+#       where each `Some(g)` in that file then stands as `<accessor>.<member>`: the same instance, built on the same
+#       first read. Any other use of `g` fails the token check;
+#   (c) SyncController's mirror declares such a handle `val h: <its declared type> = None` when the type is an
+#       `Option` (recovery never spawns the healing coordinator, so its capability hands out none), and may not read
+#       that member.
+
+VAL_DECL_RE = re.compile(r"^((?:(?:" + MODIFIER + r")\s+)*)(lazy\s+val|val)\s+(\w+)\s*:\s*(.+)$")
+
+
+def val_parts(decl: str):
+    """(modifiers, "val" | "lazy val", type tokens, initializer tokens, name) of a flattened `<mods> [lazy] val name: T =
+    e`, or None (no type, no initializer)."""
+    init = top_level_initializer(decl)
+    if init is None:
+        return None
+    head = decl[: len(decl) - len(init)].rstrip()
+    if not head.endswith("="):
+        return None
+    m = VAL_DECL_RE.match(head[:-1].strip())
+    if not m:
+        return None
+    return (m.group(1).split(), re.sub(r"\s+", " ", m.group(2)), tuple(t.t for t in scala_tokens(m.group(4))),
+            tuple(t.t for t in scala_tokens(init)), m.group(3))
+
+
+def wraps_in(toks: tuple, fn: str, brackets: str = "()"):
+    """The argument tokens if `toks` is exactly `fn(<arg>)` (or `fn[<arg>]`, one balanced group), else None."""
+    if toks[:2] != (fn, brackets[0]) or toks[-1:] != (brackets[1],):
+        return None
+    depth = 0
+    for k, t in enumerate(toks[1:], 1):
+        depth += t in ("(", "[", "{")
+        depth -= t in (")", "]", "}")
+        if depth == 0 and k != len(toks) - 1:
+            return None
+    return toks[2:-1]
+
+
+def lazy_handles(g: "Git", rev: str, spec: "CapabilitySpec") -> tuple[dict, list[str]]:
+    """Rule (a): the handles the core's `stateIngest` initializer passes that are `lazy val`s of the core or a
+    snap/controller file at `rev`, as {handle: {file, member, type, param}}, and the problems found."""
+    core = g.show(rev, RATCHET_FILES[0]) or ""
+    acc = [a for a in accessor_init(core) if a[1] is not None]
+    if len(acc) != 1 or "(" not in acc[0][1] or acc[0][1][-1:] != (")",):
+        return {}, []
+    want = acc[0][1]
+    args = group_items(list(want[want.index("(") + 1: -1]))
+    texts = {f: g.show(rev, f) or "" for f in [RATCHET_FILES[0]] + g.tree_files(rev, [f"{SNAP}/controller"])}
+    out, probs = {}, []
+    for (p, ptype), arg in zip(spec.apply_params, args):
+        if len(arg) != 1 or not IDENT_RE.match(arg[0]):
+            continue
+        h = arg[0]
+        decls = [(f, d) for f, t in texts.items() for _ls, d in decl_blocks(t, h)]
+        lazies = [(f, parts) for f, d in decls if (parts := val_parts(d)) and parts[1] == "lazy val" and parts[4] == h]
+        if not lazies:
+            continue
+        f, parts = lazies[0]
+        if len(decls) != 1:
+            probs.append(f"`{h}` (the core's argument for `{p}`) is a `lazy val` declared {len(decls)} times in the core and "
+                         "snap/controller: a lazy healing handle is declared once")
+            continue
+        pt = tuple(t.t for t in scala_tokens(ptype))
+        if pt[:1] != ("=>",):
+            probs.append(f"{spec.path}: `apply` parameter `{p}: {ptype}` is fed by the lazy val `{h}` ({f}); make it by-name "
+                         f"(`{p}: => {' '.join(parts[2])}`), or building the capability builds the store")
+            continue
+        if pt[1:] != parts[2]:
+            probs.append(f"{spec.path}: `apply` parameter `{p}: {ptype}` does not have the type of the lazy val `{h}` "
+                         f"(`{' '.join(parts[2])}`, {f})")
+            continue
+        member = spec.aliases.get(h)
+        if member is None:
+            probs.append(f"{spec.path}: the lazy healing handle `{h}` needs a bare `// capability-map: {h} -> <member>` line")
+            continue
+        out[h] = {"file": f, "member": member, "type": parts[2], "param": p}
+    return out, probs
+
+
+def lazy_handle_edits(path: str, old: str, new: str, lazy: dict, accessor: str):
+    """Rule (b) for one changed file: (problems, drop_old, drop_new, extra maps, notes)."""
+    probs, drop_old, drop_new, extra, notes = [], set(), set(), [], []
+    for h, info in sorted(lazy.items()):
+        if info["file"] != path:
+            continue
+        nb, ob = decl_blocks(new, h), decl_blocks(old, h)
+        if len(nb) != 1 or len(ob) > 1:
+            probs.append(f"{path}: the lazy healing handle `{h}` is declared {len(ob)} time(s) before and {len(nb)} after")
+            continue
+        nls, nd = nb[0]
+        np_ = val_parts(nd)
+        if ob:
+            ols, od = ob[0]
+            if od == nd:
+                continue
+            op = val_parts(od)
+            if op and np_ and op[1:] == np_[1:] and op[0] == ["private"] and np_[0] == ["private[snap]"]:
+                drop_old |= ols
+                drop_new |= nls
+                notes.append(f"`{h}` widens from `private` to `private[snap]` (the core names it)")
+            else:
+                probs.append(f"{path}: changes the lazy healing handle `{h}` beyond widening `private` to `private[snap]`: "
+                             f"`{od[:70]}` -> `{nd[:70]}`")
+            continue
+        inner_t = wraps_in(np_[2], "Option", "[]") if np_ else None
+        inner_e = wraps_in(np_[3], "Some") if np_ else None
+        if np_ is None or np_[0] != ["private[snap]"] or inner_t is None or inner_e is None:
+            probs.append(f"{path}: adds the lazy healing handle `{nd[:80]}`; a new one is the Option lift "
+                         f"`private[snap] lazy val {h}: Option[T] = Some(e)` of a removed `private lazy val g: T = e`")
+            continue
+        cands = []
+        for gname in sorted(set(re.findall(r"\blazy\s+val\s+(\w+)", strip_comments(old)))):
+            if gname == h or decl_blocks(new, gname):
+                continue
+            for gls, gd in decl_blocks(old, gname):
+                gp = val_parts(gd)
+                if gp and gp[0] == ["private"] and gp[1] == "lazy val" and gp[2] == inner_t and gp[3] == inner_e:
+                    cands.append((gname, gls))
+        if len(cands) != 1:
+            probs.append(f"{path}: `{h}` = `Some(...)` lifts {len(cands)} removed `private lazy val`s of type "
+                         f"`{' '.join(inner_t)}` with that initializer; the Option lift replaces exactly one")
+            continue
+        gname, gls = cands[0]
+        drop_old |= gls
+        drop_new |= nls
+        extra.append((("Some", "(", gname, ")"), (accessor, ".", info["member"])))
+        notes.append(f"`{gname}` lifts into `{h}`; `Some({gname})` stands as `{accessor}.{info['member']}`")
+    return probs, drop_old, drop_new, extra, notes
 
 
 PREDEF_NAMES = frozenset({
@@ -3297,7 +3472,8 @@ class Adoption:
             free = [((h,), (ADOPT_ACCESSOR, ".", m)) for (h,), m in equiv.items()]
         if role == "synccontroller":
             core = self.g.show(self.c, RATCHET_FILES[0]) or ""
-            probs, do, dn, equiv = mirror_accessor(f, old, new, core, self.spec)
+            lazy, _lprobs = lazy_handles(self.g, self.c, self.spec)
+            probs, do, dn, equiv = mirror_accessor(f, old, new, core, self.spec, lazy)
             for prob in probs:
                 self.err(prob)
             drop_old |= do
