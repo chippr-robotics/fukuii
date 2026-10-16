@@ -32,9 +32,11 @@ import com.chipprbots.ethereum.consensus.engine.ForkChoiceManager
 import com.chipprbots.ethereum.consensus.mess.MESSConfig
 import com.chipprbots.ethereum.consensus.validators.Validators
 import com.chipprbots.ethereum.db.storage.AppStateStorage
+import com.chipprbots.ethereum.db.storage.BfsQueueStorage
 import com.chipprbots.ethereum.db.storage.EvmCodeStorage
 import com.chipprbots.ethereum.db.storage.FastSyncStateStorage
 import com.chipprbots.ethereum.db.storage.FlatSlotStorage
+import com.chipprbots.ethereum.db.storage.HealingFrontierStorage
 import com.chipprbots.ethereum.db.storage.MptStorage
 import com.chipprbots.ethereum.db.storage.PathNodeStorage
 import com.chipprbots.ethereum.db.storage.SnapStorageDoneStorage
@@ -1918,6 +1920,10 @@ object SyncController:
           val validatorFactory: MptStorage => StateValidator = new StateValidator(_)
           val snapProgressStorage = new SnapSyncProgressStorage(appStateStorage.dataSource)
           val storageDoneStorage: SnapStorageDoneStorage = new SnapStorageDoneStorage(flatSlotStorage.dataSource)
+          // The healing stores (spec 016 C-H1): recovery never spawns the healing coordinator, so its capability hands
+          // out none (the core's are HealingOrchestrator's lazy vals, never built here).
+          val healingFrontierStorageOpt: Option[HealingFrontierStorage] = None
+          val bfsQueueStorageOpt: Option[BfsQueueStorage] = None
           val stateIngest: StateIngest = StateIngest(
             appStateStorage,
             stateStorage,
@@ -1929,7 +1935,9 @@ object SyncController:
             validatorFactory,
             StateIngest.Durability.Default,
             snapProgressStorage,
-            storageDoneStorage
+            storageDoneStorage,
+            healingFrontierStorageOpt,
+            bfsQueueStorageOpt
           )
 
           if snapSyncConfig.parallelRecoveryScan then

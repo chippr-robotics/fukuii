@@ -78,6 +78,25 @@ to 12 (`justifications["capabilities.StateIngest.members"]`):
   the core also needs a visibility change, which capability mode rejects. A small verify change at C-H1 admits
   by-name/lazy members (#1584).
 
+**Note: healing-store members (spec 016 C-H1, D-T060-1 route (a), decided 2026-10-15).** The deferred healing stores
+become members, which takes the cap from 12 to 14:
+
+| Member | Hands out | Built |
+|---|---|---|
+| `healingFrontier: Option[HealingFrontierStorage]` | `HealingOrchestrator`'s `healingFrontierStorageOpt` (`Some` only with frontier persistence or pruned heal verification) | lazily, on the first read (the healing spawn), as before; a by-name parameter fed by the lazy val |
+| `bfsQueue: Option[BfsQueueStorage]` | `HealingOrchestrator`'s `bfsQueueStorageOpt` (always `Some`; the old `bfsQueueStorage` lifted into an `Option`) | the same |
+
+- **Timing decision.** Building the capability builds neither store; each read forwards to the lazy val, so the one
+  instance is built where the healing spawn built it before. The two lazy vals widen from `private` to
+  `private[snap]` so the core can name them.
+- **Recovery path.** `SyncController`'s mirrored capability hands out `None` for both (`val ... = None`): recovery never
+  spawns the healing coordinator, so it builds no healing store, and in particular no `RocksDbBfsQueueStorage` with
+  its write counter. SyncController does not read either member.
+- **Gate.** `verify.py`'s lazy-handle rules (#1584): a lazy handle feeds a by-name parameter of its own type, its
+  declaration only widens (or is the Option lift above), and the mirror declares it `None`.
+- **Ratchet.** The core's accessor names the two handles, +2 (590 to 592); the coordinator adoptions C-H1
+  (`healingFrontierStorage`) and C-H2 (`bfsQueueStorageOpt`) take it back.
+
 **Note: session values stay explicit parameters (spec 016 T064, user decision 2026-10-13).** A named exception to
 "storage only through `StateIngest`" (FR-042). A coordinator's pivot-bound `MptStorage` (the core's per-pivot cached
 instance) and ARC's per-spawn `Option[SnapStorageDoneStorage]` are session values, not capabilities: they stay explicit

@@ -233,7 +233,9 @@ private class SNAPSyncControllerImpl(
     validatorFactory,
     StateIngest.Durability.Default,
     snapProgressStorage,
-    storageDoneStorage
+    storageDoneStorage,
+    healingFrontierStorageOpt,
+    bfsQueueStorageOpt
   )
 
   // Storage-task completion markers (prefixed keys in the app-state column family): written by StorageRangeCoordinator

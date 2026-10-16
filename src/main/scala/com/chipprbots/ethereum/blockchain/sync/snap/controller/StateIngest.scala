@@ -2,8 +2,10 @@ package com.chipprbots.ethereum.blockchain.sync.snap.controller
 
 import com.chipprbots.ethereum.blockchain.sync.snap.StateValidator
 import com.chipprbots.ethereum.db.storage.AppStateStorage
+import com.chipprbots.ethereum.db.storage.BfsQueueStorage
 import com.chipprbots.ethereum.db.storage.EvmCodeStorage
 import com.chipprbots.ethereum.db.storage.FlatSlotStorage
+import com.chipprbots.ethereum.db.storage.HealingFrontierStorage
 import com.chipprbots.ethereum.db.storage.MptStorage
 import com.chipprbots.ethereum.db.storage.PathNodeStorage
 import com.chipprbots.ethereum.db.storage.SnapStorageDoneStorage
@@ -25,6 +27,8 @@ import com.chipprbots.ethereum.domain.BlockchainWriter
 // capability-map: stateStorage.getBackingStorage -> trieStore
 // capability-map: snapProgressStorage -> snapProgress
 // capability-map: storageDoneStorage -> storageDone
+// capability-map: healingFrontierStorageOpt -> healingFrontier
+// capability-map: bfsQueueStorageOpt -> bfsQueue
 
 /** SNAP's state-ingest capability (spec 016 T055, FR-040/041/044/045; ADR INF-006).
   *
@@ -43,9 +47,11 @@ import com.chipprbots.ethereum.domain.BlockchainWriter
   *   - verification: [[validatorFactory]];
   *   - derived stores (spec 016 T060d, D-T060-1): [[trieStore]] (the per-pivot trie store), [[snapProgress]] (download
   *     progress, namespace `p`), [[storageDone]] (storage-task completion markers). They hand out what the core hands
-  *     out today, built where it builds them. The healing stores (`HealingFrontierStorage`, `BfsQueueStorage`) are not
-  *     members yet: they are `HealingOrchestrator`'s lazy vals, and the gate cannot mirror a lazy handle (decided at
-  *     C-H1, #1584).
+  *     out today, built where it builds them;
+  *   - healing stores (spec 016 C-H1, D-T060-1, #1584): [[healingFrontier]] (the persisted healing frontier and the
+  *     subtree-complete records, CF `g`) and [[bfsQueue]] (the frontier-rebuild BFS queue). They are
+  *     `HealingOrchestrator`'s lazy vals, handed in by-name, so building the capability builds neither; the first read
+  *     (the healing spawn) builds each, as the spawn did before.
   *
   * '''Verification reads are ingest.''' SNAP reads what it needs to decide what to write, and those reads belong here,
   * not to `StateAccess`: proof checks (the coordinators' `MerkleProofVerifier` over the trie store), healing presence
@@ -129,6 +135,17 @@ private[sync] trait StateIngest:
     */
   def storageDone: SnapStorageDoneStorage
 
+  /** The persisted healing frontier and subtree-complete records (CF `g`): `HealingOrchestrator`'s
+    * `healingFrontierStorageOpt`, `Some` only when frontier persistence or pruned heal verification is on. A by-name
+    * parameter of `apply`, fed by that lazy val, so each read returns its one instance, built on the first read.
+    */
+  def healingFrontier: Option[HealingFrontierStorage]
+
+  /** The frontier-rebuild BFS queue (namespace `BfsQueueNamespace`): `HealingOrchestrator`'s `bfsQueueStorageOpt`. A
+    * by-name parameter of `apply`, fed by that lazy val, as [[healingFrontier]] is.
+    */
+  def bfsQueue: Option[BfsQueueStorage]
+
 private[sync] object StateIngest:
 
   /** Durability policies for ingest writes (FR-045). `Default` is today's behaviour: the WAL on for every write, plain
@@ -149,7 +166,9 @@ private[sync] object StateIngest:
       validatorFactory: MptStorage => StateValidator,
       durability: Durability,
       snapProgress: SnapSyncProgressStorage,
-      storageDoneStorage: => SnapStorageDoneStorage
+      storageDoneStorage: => SnapStorageDoneStorage,
+      healingFrontierStorageOpt: => Option[HealingFrontierStorage],
+      bfsQueueStorageOpt: => Option[BfsQueueStorage]
   ): StateIngest =
     new Stores(
       appState,
@@ -162,13 +181,15 @@ private[sync] object StateIngest:
       validatorFactory,
       durability,
       snapProgress,
-      storageDoneStorage
+      storageDoneStorage,
+      healingFrontierStorageOpt,
+      bfsQueueStorageOpt
     )
 
   /** A final class of constructor `val`s and pure forwarders: the controller makes one at construction. Every member is
-    * a field read, except [[trieStore]] (a call on `stateTries`) and [[storageDone]] (a read of the core's store
-    * through the by-name parameter). It is the only production implementation, so each call through the trait has one
-    * receiver class.
+    * a field read, except [[trieStore]] (a call on `stateTries`) and [[storageDone]], [[healingFrontier]] and
+    * [[bfsQueue]] (a read of the core's store through the by-name parameter). It is the only production implementation,
+    * so each call through the trait has one receiver class.
     */
   final private class Stores(
       val appState: AppStateStorage,
@@ -181,7 +202,11 @@ private[sync] object StateIngest:
       val validatorFactory: MptStorage => StateValidator,
       val durability: Durability,
       val snapProgress: SnapSyncProgressStorage,
-      storageDoneStorage: => SnapStorageDoneStorage
+      storageDoneStorage: => SnapStorageDoneStorage,
+      healingFrontierStorageOpt: => Option[HealingFrontierStorage],
+      bfsQueueStorageOpt: => Option[BfsQueueStorage]
   ) extends StateIngest:
     def trieStore(pivot: BigInt): MptStorage = stateTries.getBackingStorage(pivot)
     def storageDone: SnapStorageDoneStorage = storageDoneStorage
+    def healingFrontier: Option[HealingFrontierStorage] = healingFrontierStorageOpt
+    def bfsQueue: Option[BfsQueueStorage] = bfsQueueStorageOpt
