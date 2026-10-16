@@ -58,7 +58,6 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
     traversalParallelism: Int = TrieNodeHealingCoordinator.DefaultBfsParallelism,
     healingMinParallelism: Int = TrieNodeHealingCoordinator.DefaultMinParallelism,
     healingReservedCores: Int = TrieNodeHealingCoordinator.DefaultReservedCores,
-    bfsQueueStorageOpt: Option[BfsQueueStorage] = None,
     val storageScheme: StorageScheme = StorageScheme.Hash,
     pathNodeStorageOpt: Option[PathNodeStorage] = None,
     val frontierHighWater: Int = TrieNodeHealingCoordinator.DefaultFrontierHighWater,
@@ -106,7 +105,9 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
 ) extends FrontierPersistence
     with FrontierRebuildBfs
     with TrieNodeHealingEnv
-    with FrontierPersistenceState:
+    with FrontierPersistenceState
+    with FrontierRebuildBfsState
+    with PathVerifiedReadApi:
 
   import TrieNodeHealingCoordinator.*
 
@@ -258,7 +259,7 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
   val HealingTraversalParallelism: Int = traversalParallelism
   val HealingMinParallelism: Int = healingMinParallelism
   val HealingReservedCores: Int = healingReservedCores
-  val bfsQueue: BfsQueueStorage = bfsQueueStorageOpt.getOrElse(new InMemoryBfsQueueStorage())
+  val bfsQueue: BfsQueueStorage = stateIngest.bfsQueue.getOrElse(new InMemoryBfsQueueStorage())
   // Track last known available peers for re-dispatch after failures
   private val knownAvailablePeers = mutable.Set[Peer]()
 
@@ -2287,7 +2288,6 @@ object TrieNodeHealingCoordinator:
       traversalParallelism: Int = DefaultBfsParallelism,
       healingMinParallelism: Int = DefaultMinParallelism,
       healingReservedCores: Int = DefaultReservedCores,
-      bfsQueueStorageOpt: Option[BfsQueueStorage] = None,
       storageScheme: StorageScheme = StorageScheme.Hash,
       pathNodeStorageOpt: Option[PathNodeStorage] = None,
       frontierHighWater: Int = DefaultFrontierHighWater,
@@ -2329,7 +2329,6 @@ object TrieNodeHealingCoordinator:
           traversalParallelism = traversalParallelism,
           healingMinParallelism = healingMinParallelism,
           healingReservedCores = healingReservedCores,
-          bfsQueueStorageOpt = bfsQueueStorageOpt,
           storageScheme = storageScheme,
           pathNodeStorageOpt = pathNodeStorageOpt,
           frontierHighWater = frontierHighWater,

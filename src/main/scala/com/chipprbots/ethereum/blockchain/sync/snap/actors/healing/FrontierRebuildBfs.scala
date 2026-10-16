@@ -14,7 +14,6 @@ import org.bouncycastle.util.encoders.Hex
 
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncMetrics
 import com.chipprbots.ethereum.blockchain.sync.snap.StorageScheme
-import com.chipprbots.ethereum.blockchain.sync.snap.actors.*
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.GcPressureSampler
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.TrieNodeHealingCoordinator
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.TrieNodeHealingCoordinator.Command
@@ -64,7 +63,7 @@ private[actors] trait PathVerifiedReadApi:
   * handle its output (`frontierRebuildArms`) and the verification launchers that reuse it.
   */
 private[actors] trait FrontierRebuildBfs:
-  this: TrieNodeHealingCoordinatorImpl =>
+  this: FrontierRebuildBfsState & TrieNodeHealingEnv & PathVerifiedReadApi & FrontierDrainApi =>
 
   /** Rebuild the healing frontier from locally-stored trie nodes using level-order BFS.
     *
