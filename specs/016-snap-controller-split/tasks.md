@@ -1881,11 +1881,54 @@ Any other rise is still forbidden. Instances:
 - [ ] T069 [C-S4] `StorageResponseProcessing` (T060: plus #1533's off-actor pipeline. Proof verification is pure,
   with no store read, so this is zero-reference in substance: grep recorded, total unchanged). Narrowing takes `StateIngest` (proof verification reads), never
   `StateAccess`; lowers the baseline total.
-- [ ] T070 [C-H0] Split TNHC `activeBehavior` into per-concern partial functions, with an arm-order table as in T036.
+- [x] T070 [C-H0] Split TNHC `activeBehavior` into per-concern partial functions, with an arm-order table as in T036.
   (T060: a plain restructure commit with no `# moved:` trailer, like P4 and the lift PRs. 25 arms + catch-all, listed
   in characterization Appendix A. Then a `# moved:` commit of the 8 Impl-nested messages and the helper classes to the
   companion.)
   (Restructure only, no narrowing; the baseline total must not rise.)
+  - **As built** (branch `refactor/snap-016-ch0-heal-arms`, two code commits, one test commit and this docs commit; no
+    sbt or JVM run, CI compiles and tests). (1) Restructure, no trailer: `activeBehavior` becomes
+    `Behaviors.receiveMessage[Command]` over an `orElse` chain of seven `private[actors] lazy val` partial functions on
+    the Impl, in the order of each group's first arm: `healLifecycleArms` (core: #1 `StartTrieNodeHealing`, #9
+    `HealingForceComplete`, #10 `HealingPivotRefreshed`, #21 `HealingStagnationCheck`, #22 `HealingGetProgress`),
+    `frontierRebuildArms` (C-H2: #2, #3, #4, #25), `healResponseArms` (C-H5: #5, #13, #15), `healDispatchArms` (C-H4:
+    #6, #7, #8, #11, #12, #23), `frontierPersistenceArms` (C-H1: #14), `healVerificationArms` (C-H3: #16–#20, #24) and
+    `unhandledCommandArms` (#26, the catch-all, last). Counts 5 + 4 + 3 + 6 + 1 + 6 + 1 = 26. Every arm body is
+    byte-identical at the same indentation (`--color-moved` shows each as moved); inside a group the arms keep their
+    source order. The arm-order table is research.md **R4c** (arm, staging line, pattern, guard, main calls by module,
+    group, C-H0 line). Why first-match is unchanged although the groups interleave in the source: the only Command with
+    more than one arm is `VerificationBFSComplete` (#17 `walkRoot != stateRoot`, #18 `missingEmitted > 0`, #19
+    unguarded), and the only wildcard is the catch-all; every other arm matches its own case class or object. The three
+    `VerificationBFSComplete` arms sit together, in order, in `healVerificationArms`, and the catch-all is last. The
+    guards are pure comparisons. (2) `# moved: HealingEntry, ActiveRequest, HealingStagnationCheck, FlushComplete,
+    FrontierRebuilt, VerificationBFSComplete, FrontierRebuildComplete, FrontierWalkFailed, RestartResumeVerification,
+    RestartFullRebuild`: the seven internal messages (with their comment block, verbatim), the stagnation pulse's
+    message and the two helper classes go to the companion, byte-identical. Ten symbols, not the "8" above: the 8 are
+    the seven messages plus `HealingStagnationCheck`, and `HealingEntry`/`ActiveRequest` are the helper classes
+    (characterization §3.4 lists all ten); step 2 rejects a removed member that the trailer does not list. Visibility
+    widens from `private` to `private[actors]` (the Impl is not the object's companion class, so a `private` object
+    member would be invisible to it; the C-S2 `ByteStringOrdering` precedent). The Impl's `import
+    TrieNodeHealingCoordinator.*` covers every use site; no `isInstanceOf`/`getClass` in the file. The comments above
+    `pendingTasks`, the stagnation vars and `activeRequests` also describe those fields and stay. (3) Test
+    (`# new-tests:`): `TrieNodeHealingDispatchTableSpec` (3 cases, `BehaviorTestKit` on the real Impl, an execution
+    context that never runs a task so the walk and flush Futures never start): per sample of all 24 Commands (four of
+    `VerificationBFSComplete`, one per guard outcome), exactly the expected group is defined (none for
+    `HealingTaskFailed`) and the catch-all is defined everywhere; every sample but `HealingTaskFailed` is handled
+    (`HealingTaskFailed` returns `Behaviors.unhandled`); each `VerificationBFSComplete` sample runs the arm its guards
+    select (#17, #17, #18, #19), read from the arm's own log line. It follows the move commit because the internal
+    messages were Impl-private before it. No existing test changed.
+    - Judgement calls (R4c "Placements"): `HealingStagnationCheck` is lifecycle (the liveness pulse touches H1, H3 and
+      H4); `HealingServeRootRefresh` is dispatch (fetch root only) and `HealingPivotRefreshed` lifecycle (walk root);
+      `FrontierRebuilt` goes with the rebuild (it is the BFS's output) though it calls H5's `queueNodes`. The groups
+      name a concern, not a destination: the arms stay in the core through C-H5 (Appendix A), and a slice that wants a
+      group in its module moves the whole `lazy val`.
+    - Left as it was (FR-034): the catch-all's comment still calls `Command` non-sealed; it is `sealed` in the
+      companion. Logged here, not fixed in a restructure.
+    - Storage total **603, unchanged** (no code left the file; comments are not counted). `storage-baseline.json`
+      unchanged. No narrowing, so no counts.
+    - Owed: the second-specialist review (prism) and forge's "no ETC behaviour change" sign-off (TNHC runs on ETC);
+      `scalafmtCheckAll` was not run locally (no JVM on the soak host), so the autofix job may reformat. No vault review
+      and no node run (characterization §7: none for C-H0; no storage path changes).
 - [ ] T071 [C-H1] `FrontierPersistence` (vault; T060: the first TNHC slice that touches storage. It adopts `mptStorage`
   and `healingFrontierStorage` per D-T060-1). Narrowing takes `StateIngest` (frontier and BFS stores), never
   `StateAccess`; lowers the baseline total. Run a Mordor heal restart.

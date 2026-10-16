@@ -124,7 +124,6 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
   // Task management — each task has a pathset (for GetTrieNodes) and a hash (for verification).
   // ArrayDeque (circular buffer) gives O(1) amortized head/tail operations (#1167). The previous
   // immutable `Seq` did O(n) on every `:+` and head-drop — quadratic at healing scale.
-  private case class HealingEntry(pathset: Seq[ByteString], hash: ByteString)
   private val pendingTasks: mutable.ArrayDeque[HealingEntry] = mutable.ArrayDeque.empty
   // Thread-safe mirror of pendingTasks.size, refreshed by emitHealingFrontierGauges() on the actor
   // thread. The frontier-rebuild BFS walk runs on healingWriterEc and reads this (never pendingTasks
@@ -170,7 +169,6 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
   // healing can stall silently. After 5 consecutive 2-minute ticks with no active requests
   // and no progress (10 minutes total), force-complete healing.
   // Reference: Besu markAsStalled() is a TODO no-op; this is a fukuii-specific liveness guarantee.
-  private case object HealingStagnationCheck extends Command
   private var consecutiveIdleChecks: Int = 0
   private var lastPulseHealedCount: Int = 0
   // FIX-STAGNATION-LIMIT: Track consecutive 2-min cycles with zero healed nodes (even when active).
@@ -204,12 +202,6 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
   private var childrenDiscoveredTotal: Long = 0
 
   // Active request tracking: maps requestId -> (tasks, peer, requestedBytes, sentAtMs)
-  private case class ActiveRequest(
-      tasks: Seq[HealingEntry],
-      peer: Peer,
-      requestedBytes: BigInt,
-      sentAtMs: Long = System.currentTimeMillis()
-  )
   private val activeRequests = mutable.Map[BigInt, ActiveRequest]()
 
   // Concurrency: per-peer limit (like StorageRangeCoordinator) + global safety cap
@@ -565,46 +557,6 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
   // before the flush drops the in-memory candidate ⇒ safe descend. Records are written iff `prunedEnabled`.
   private val pendingSubtreeRecords = mutable.Set[ByteString]()
 
-  // Internal messages — sent only via `selfRef ! …` from Future continuations / timers, so they must be Commands so
-  // the Typed behavior can receive them. They were plain `Any` messages under Classic.
-  // Internal message for async flush completion
-  private case class FlushComplete(count: Int) extends Command
-
-  // Internal message for async frontier rebuild completion (crash-recovery BFS or verification BFS)
-  private case class FrontierRebuilt(entries: Seq[HealingEntry]) extends Command
-  // Sent by startVerificationBFS when the BFS Future completes — gates verificationPassComplete.
-  // Carries the root the walk was LAUNCHED against (`walkRoot`), exactly as `FrontierRebuildComplete` does. A pivot
-  // re-peg does not cancel an in-flight verification walk, so its completion can land after `stateRoot` moved; the
-  // handler must not credit a clean walk of the OLD root as verification of the NEW one. This is decisive for the
-  // per-block-hot system-contract storage tries (EIP-4788/2935/8282): they differ between every pair of roots, while
-  // the cold bulk of the state is shared, so an old-root "clean" signal says nothing about them.
-  // `missingEmitted` is the number of missing nodes the walk found. A pass that found ANY is not a clean pass even if
-  // every one of them has been healed by the time it ends: the walk never descended below a node that was missing when
-  // it reached it, so the healed node's present children (and their subtrees) were not verified.
-  private case class VerificationBFSComplete(walkRoot: ByteString, missingEmitted: Long) extends Command
-
-  // Layer 2: the full-state rebuild BFS finished — the persisted frontier is now a COMPLETE snapshot.
-  // Sent after the final FrontierRebuilt so the completeness marker is set only once every node is persisted.
-  // spec 006 C1/D3/FR-004: carries the rebuild's outcome so the handler can decide early completion soundly.
-  //   missingEmitted = the walk's frontierCount (number of missing nodes emitted); 0 ⇒ found everything present.
-  //   walkRoot       = the root the finished walk traversed (captured at launch); compared against the live
-  //                    stateRoot to exclude a stale completion after a pivot refresh (F-E).
-  private case class FrontierRebuildComplete(missingEmitted: Long, walkRoot: ByteString) extends Command
-
-  // A frontier walk Future died with an exception. Resets the walk flags WITHOUT setting any
-  // completion marker, so the watchdog / HealingCheckCompletion gates can start a fresh walk.
-  // Without this, an exception skips onComplete() and verificationBFSRunning stays true forever,
-  // permanently blocking every future walk (including the watchdog) until restart.
-  private case object FrontierWalkFailed extends Command
-
-  // Routes the HEAL-RESTART resume decision back onto the actor thread. The crash-recovery Future (in
-  // StartTrieNodeHealing) reads the persisted frontier off-thread, then sends ONE of these so the
-  // verificationBFSRunning mutation + walk launch happen on the actor dispatcher (Typed: no off-thread state
-  // mutation). Under Classic the Future called start*BFS directly — safe only because verificationBFSRunning was
-  // @volatile. Now @volatile is gone, so the launch must be marshalled back to the actor thread.
-  private case class RestartResumeVerification(root: ByteString, rootPath: ByteString) extends Command
-  private case class RestartFullRebuild(root: ByteString, rootPath: ByteString) extends Command
-
   /** spec 005 C3b/D2/T009/T012: write the staged heal-side subtree-complete records whose node-bytes were just durably
     * committed by a flush. `toRecord` is the already-computed (on the actor thread) intersection of this flush's hashes
     * with `pendingSubtreeRecords`. This MUST be called ONLY after `mptStorage.persist()` returns (the subtree bytes are
@@ -710,7 +662,27 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
           target(ctx, signal)
     )(activeBehavior())
 
-  private def activeBehavior(): Behavior[Command] = Behaviors.receiveMessage[Command] {
+  /** Spec 016 C-H0 (T070): `activeBehavior`'s 26 arms, grouped by concern into partial functions (research.md R4c).
+    * Each group keeps its arms in their original relative order. Every arm except the three `VerificationBFSComplete`
+    * arms and the catch-all matches its own Command type and no other, so the first arm that matches a message is the
+    * same arm as before for every message: the three `VerificationBFSComplete` arms sit together in
+    * `healVerificationArms`, and the catch-all comes last. Groups are chained in the order of their first arm.
+    */
+  private def activeBehavior(): Behavior[Command] =
+    Behaviors.receiveMessage[Command](
+      healLifecycleArms
+        .orElse(frontierRebuildArms)
+        .orElse(healResponseArms)
+        .orElse(healDispatchArms)
+        .orElse(frontierPersistenceArms)
+        .orElse(healVerificationArms)
+        .orElse(unhandledCommandArms)
+    )
+
+  /** Heal lifecycle (stays in the core): start, force-complete, walk-root re-peg, the 2-minute stagnation pulse and the
+    * progress query. Arms #1, #9, #10, #21, #22 of the spec 016 C-H0 arm-order table (research.md R4c).
+    */
+  private[actors] lazy val healLifecycleArms: PartialFunction[Command, Behavior[Command]] = {
     case StartTrieNodeHealing(root) =>
       val emptyPath = ByteString(com.chipprbots.ethereum.mpt.HexPrefix.encode(Array.empty[Byte], isLeaf = false))
       if isNodeInStorage(root, Seq(emptyPath)) then
@@ -843,145 +815,6 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
 
       Behaviors.same
 
-    case FrontierRebuilt(entries) =>
-      if entries.isEmpty then
-        log.warn(
-          "[HEAL-FRONTIER] Empty frontier batch received — trie may already be fully healed or storage is corrupt"
-        )
-      else log.info(s"[HEAL-FRONTIER] ${entries.size} missing nodes identified — queuing for healing")
-      queueNodes(entries.map(e => (e.pathset, e.hash)))
-      lastHealedAtMs = System.currentTimeMillis()
-      tryRedispatchPendingTasks()
-
-      Behaviors.same
-
-    case FrontierRebuildComplete(missingEmitted, walkRoot) =>
-      // The full-state rebuild BFS walked the entire trie; every still-missing node is now persisted.
-      // Mark the snapshot complete so a future restart may resume it instead of re-walking (Layer 2).
-      verificationBFSRunning = false // rebuild walk finished — release the single-flight gate
-      // spec 002/005 marker: gated on frontier persistence (default off). With it off, `FrontierRebuildComplete` is
-      // never reached via the resume path anyway (that path requires `frontierStore` defined), but guard defensively
-      // so the snapshot marker is only ever written when persistence is enabled (FR-005 parity; the marker also gates
-      // the spec-003 scoped path, which must stay dark by default).
-      if frontierPersistenceEnabled then
-        healingFrontierStorage.foreach { store =>
-          store.markComplete()
-          log.info("[HEAL-RESTART] Full-state rebuild complete — persisted frontier marked as a complete snapshot")
-        }
-      // spec 006 C2/D2/FR-001/FR-002/FR-003: on a genuinely CLEAN rebuild, declare completion after this
-      // single walk instead of waiting for the dead-pulse watchdog to force-start a redundant second
-      // (verification) walk over the identical trie (~16-20h on ETC mainnet). The rebuild walk fully
-      // recurses into account-leaf storageRoots (the BUG-1 gap the verification walk was built for), so on
-      // a clean rebuild it IS the full traversal the verification would re-run. Declare early IFF every
-      // conjunct holds — each excludes a specific false-completion path (research D2 + adversarial verdict):
-      //   missingEmitted == 0    — the deciding walk found nothing missing (no gap discovered).
-      //   totalNodesHealed == 0  — nothing healed during the walk (excludes heal-during-walk mutation;
-      //                            conservative `== 0`, D5; cumulative counter preserved across pivots).
-      //   isComplete             — pendingTasks.isEmpty && activeRequests.isEmpty: no outstanding frontier
-      //                            or in-flight request (excludes outstanding work).
-      //   !flushing              — no async raw-node write/flush in flight (mirrors the HealingCheckCompletion
-      //                            gate's flush guard; never mark complete ahead of durable state).
-      //   !trieWalkInProgress    — the controller's interleave trie walk is not running. Defense-in-depth: makes
-      //                            the early precondition EXACTLY match the HealingCheckCompletion gate, so
-      //                            guard-passes ⇒ gate-passes (no benign "guard fires, gate blocks, watchdog
-      //                            suppressed" interleave case on the re-heal path). First-heal: always false.
-      //   walkRoot == stateRoot  — LOAD-BEARING (D4/FR-005): a HealingPivotRefreshed to a new root does NOT
-      //                            cancel this in-flight walk, so a stale completion can land against a new
-      //                            stateRoot; this excludes that stale-root completion. Explicit guard — does
-      //                            NOT rely on the incidental "pivot re-seeds pendingTasks" property.
-      // Route via `self ! HealingCheckCompletion` (NOT a direct StateHealingComplete) so the marker write
-      // and the StateHealingComplete send flow through the single existing chokepoint (D1, byte-parity).
-      // verificationPassComplete = true also suppresses the dead-pulse watchdog (no walk #2, FR-006). The
-      // else (do nothing new) is byte-identical to today — the node idles and the watchdog runs walk #2.
-      if missingEmitted == 0 && totalNodesHealed == 0 && isComplete && !flushing && !trieWalkInProgress &&
-        walkRoot == stateRoot
-      then
-        verificationPassComplete = true
-        self ! HealingCheckCompletion
-        log.info(
-          "[HEAL-RESTART] Clean rebuild (0 missing, 0 healed, current root) — declaring completion after one " +
-            "walk via HealingCheckCompletion; skipping the redundant verification walk (spec 006)"
-        )
-
-      // Path scheme: a heal response can land while this walk is still flagged running, in which case its
-      // HealingCheckCompletion was skipped (`!verificationBFSRunning`) and nothing else re-triggers it until the
-      // dead-pulse watchdog (minutes). Re-evaluate now that the flag is clear. Hash scheme: unchanged.
-      if storageScheme == StorageScheme.Path && missingEmitted > 0 then self ! HealingCheckCompletion
-
-      Behaviors.same
-
-    case FrontierWalkFailed =>
-      verificationBFSRunning = false
-      trieWalkInProgress = false
-      log.warn(
-        "[HEAL-BFS] Frontier walk failed — flags reset; verification will be retried by " +
-          "HealingCheckCompletion or the dead-pulse watchdog (no completion marker was set)"
-      )
-
-      Behaviors.same
-
-    case QueueMissingNodes(nodes) =>
-      log.info(s"Queuing ${nodes.size} missing nodes for healing")
-      queueNodes(nodes)
-      // Immediately dispatch to any known available peers
-      tryRedispatchPendingTasks()
-
-      Behaviors.same
-
-    case HealingPeerAvailable(peer) =>
-      // NB-7: Skip peers already in statelessPeers — they returned empty TrieNodes for this root and
-      // will do so again until the pivot refreshes. Re-adding them on every 1s scheduler tick wastes
-      // active request slots and creates a rapid [SNAP/1 enabled] + [stateless] log cycle.
-      if statelessPeers.contains(peer.id.value) then
-        log.debug(
-          "Ignoring HealingPeerAvailable for stateless peer {} — will re-admit on next pivot refresh",
-          peer.id.value.take(8)
-        )
-      else
-        // Evict stale entry for same physical node (reconnection creates new PeerId)
-        knownAvailablePeers.filterInPlace(_.remoteAddress != peer.remoteAddress)
-        knownAvailablePeers += peer
-        dispatchIfPossible(peer)
-
-      Behaviors.same
-
-    case HealingPeerUnavailable(peerId) =>
-      // Peer disconnected — remove from available set and immediately re-queue its in-flight
-      // tasks so other peers can pick them up without waiting for the 30s request timeout.
-      // Mirrors AccountRangeCoordinator.PeerUnavailable (go-ethereum revertRequests pattern).
-      knownAvailablePeers.filterInPlace(_.id.value != peerId)
-      val inFlight = activeRequests.filter { case (_, req) => req.peer.id.value == peerId }.keys.toSeq
-      if inFlight.nonEmpty then
-        log.debug(s"Peer $peerId disconnected — re-queuing ${inFlight.size} in-flight healing request(s)")
-        inFlight.foreach { reqId =>
-          activeRequests.remove(reqId).foreach { req =>
-            requestTracker.completeRequest(reqId, 0)
-            req.tasks.foreach { task =>
-              if !pendingHashSet.contains(task.hash) then
-                pendingHashSet += task.hash
-                pendingTasks += task
-            }
-          }
-        }
-      tryRedispatchPendingTasks()
-
-      Behaviors.same
-
-    case UpdateMaxInFlightPerPeer(newLimit) =>
-      // Floor the per-peer budget at MinInFlightPerPeer so a single slow peer can never throttle the
-      // whole residual dispatch to one outstanding request. The controller pushes 1 by default
-      // (healing-max-inflight-per-peer), which serialised the residual onto whichever peer happened to
-      // hold the lone slot; with a 2-peer-eligible residual that is enough to stall. Flooring keeps at
-      // least MinInFlightPerPeer requests pipelined per peer so the residual fans out across the pool.
-      val floored = newLimit.max(TrieNodeHealingCoordinator.MinInFlightPerPeer)
-      if floored != newLimit then
-        log.info(s"Healing per-peer budget: $maxInFlightPerPeer -> $floored (floored from requested $newLimit)")
-      else log.info(s"Healing per-peer budget: $maxInFlightPerPeer -> $floored")
-      maxInFlightPerPeer = floored
-      if floored > 0 then tryRedispatchPendingTasks()
-
-      Behaviors.same
-
     case HealingForceComplete =>
       // spec 004 T016/C5/SC-002: under decoupling, HealingForceComplete must NEVER declare completion while any
       // task is unsatisfied. Its original purpose — abandon pending tasks because the pivot aged beyond the SNAP
@@ -1101,6 +934,330 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
 
       Behaviors.same
 
+    case HealingStagnationCheck =>
+      emitHealingFrontierGauges() // refresh backlog/in-flight gauges even when idle
+      // Periodic soft-exile auto-clear (mirrors the Account/Storage "fresh slate on the next round" intent,
+      // but on every 2-min tick rather than only on pivot refresh): peers rotate and a peer that returned
+      // empty for the current root earlier may now be in its serve window. While there is residual work and
+      // peers exist but the stateless set has eaten into the eligible pool, wipe the stateless set + strikes
+      // so every connected SNAP peer is retried. Pure peer-pool management — does not touch any task/store
+      // state. The strike threshold keeps a genuinely useless peer out within the 2-min window; this re-arms
+      // it for the next. Without this the residual heal was stuck retrying only the 2 not-yet-exiled peers.
+      if pendingTasks.nonEmpty && statelessPeers.nonEmpty && knownAvailablePeers.nonEmpty && !pivotRefreshRequested then
+        log.info(
+          s"[HEAL] Auto-clearing ${statelessPeers.size} stateless peer(s) + ${emptyResponseStrikes.size} strike(s) " +
+            s"on periodic tick — retrying all ${knownAvailablePeers.size} known peers for the residual frontier " +
+            s"(pending=${pendingTasks.size})."
+        )
+        statelessPeers.clear()
+        emptyResponseStrikes.clear()
+        tryRedispatchPendingTasks(allowCooldownFloor = true) // periodic tick: anti-starvation floor permitted
+      val recentHealed = totalNodesHealed - lastPulseHealedCount
+      val healTotal = completedTaskCount.toLong + pendingTasks.size.toLong + activeRequests.size.toLong
+      val healPct = if healTotal > 0 then ((completedTaskCount.toDouble / healTotal) * 100).toInt else 0
+      // walkRunning must reflect ANY active frontier walk (inline trie walk OR the BFS
+      // rebuild/verification Future) — the same OR the watchdog gates use. Rendering only
+      // trieWalkInProgress reported walkRunning=false during a live BFS rebuild, which misled
+      // operators (and matched the pre-fix watchdog bug that double-started walks).
+      val anyWalkRunning = trieWalkInProgress || verificationBFSRunning
+      log.info(
+        s"[HEAL-PULSE] $healPct% (est) | healed=$totalNodesHealed (+$recentHealed last 2min) | " +
+          s"pending=${pendingTasks.size} active=${activeRequests.size} peers=${knownAvailablePeers.size} | " +
+          s"rate=${healRate.toInt} nodes/s walkRunning=$anyWalkRunning pivotRefreshPending=$pivotRefreshRequested"
+      )
+      val (newM, crossed) =
+        com.chipprbots.ethereum.blockchain.sync.ProgressMilestones
+          .crossed(completedTaskCount.toLong, healTotal, healingMilestonePct)
+      healingMilestonePct = newM
+      crossed.foreach { m =>
+        log.info(
+          s"[HEAL-MILESTONE] $m% (est) — ${completedTaskCount} healed | ${healRate.toInt} nodes/s"
+        )
+      }
+      lastPulseHealedCount = totalNodesHealed
+
+      // FIX-BUG2-WATCHDOG: Dead-loop safety net — fires when the coordinator has no walk, no
+      // verification BFS, no pending tasks, no active requests, and zero healing progress.
+      // Primary fix is startVerificationBFS in HealingCheckCompletion and HealingPivotRefreshed;
+      // this watchdog catches any residual edge case (e.g. stale state after pivot race).
+      if !trieWalkInProgress && !verificationBFSRunning &&
+        pendingTasks.isEmpty && activeRequests.isEmpty &&
+        recentHealed == 0 && !pivotRefreshRequested && !verificationPassComplete
+      then
+        consecutiveDeadPulses += 1
+        log.warn(
+          s"[HEAL-WATCHDOG] Dead pulse $consecutiveDeadPulses/3: " +
+            s"walkRunning=false verifyRunning=false pending=0 active=0 healed=0 in last 2min"
+        )
+        if consecutiveDeadPulses >= 3 then
+          log.warn("[HEAL-WATCHDOG] 3 consecutive dead pulses — force-starting verification BFS")
+          consecutiveDeadPulses = 0
+          val emptyPath = ByteString(com.chipprbots.ethereum.mpt.HexPrefix.encode(Array.empty[Byte], isLeaf = false))
+          startVerificationBFS(stateRoot, emptyPath)
+      else if recentHealed > 0 || pendingTasks.nonEmpty || activeRequests.nonEmpty ||
+        trieWalkInProgress || verificationBFSRunning
+      then consecutiveDeadPulses = 0
+
+      // BUG-S4 watchdog: if pivotRefreshRequested=true for >15 min, SNAPSyncController is stuck
+      // in refreshPivotInPlace's no-peer retry loop (Path A: 30s interval, HealingPivotRefreshed
+      // never sent). Safe to reset: stateRoot stays valid; stagnation re-fires if still stuck.
+      if pivotRefreshRequested then
+        val waitedMs = System.currentTimeMillis() - pivotRefreshRequestedAt
+        if waitedMs > PivotRefreshWatchdogMs then
+          log.warn(
+            s"[HEAL] Pivot refresh watchdog: pivotRefreshRequested=true for ${waitedMs / 1000}s — " +
+              s"SNAPSyncController refresh stalled (no-peer retry loop). Resetting and resuming dispatch."
+          )
+          pivotRefreshRequested = false
+          tryRedispatchPendingTasks(allowCooldownFloor = true) // periodic tick: anti-starvation floor permitted
+
+      // FIX-STAGNATION-LIMIT: Track consecutive zero-progress cycles (independent of active count).
+      // After MaxConsecutiveStagnations, notify controller to restart with fresh pivot.
+      // Catches the case where active > 0 but all responses are empty (stale root, ETH mainnet peers).
+      if recentHealed == 0 && pendingTasks.nonEmpty && !pivotRefreshRequested then
+        consecutiveStagnations += 1
+        log.warn(
+          s"[HEAL-STAGNATION] Zero progress in last 2min — stagnation $consecutiveStagnations/$MaxConsecutiveStagnations. " +
+            s"healed=$totalNodesHealed pending=${pendingTasks.size} peers=${knownAvailablePeers.size}"
+        )
+        if consecutiveStagnations >= MaxConsecutiveStagnations then
+          log.warn(
+            s"[HEAL-STAGNATION] $MaxConsecutiveStagnations consecutive zero-progress cycles — " +
+              s"notifying controller to restart healing with fresh pivot"
+          )
+          snapSyncController ! SNAPSyncController.HealingStagnated(totalNodesHealed.toLong, pendingTasks.size.toLong)
+          consecutiveStagnations = 0
+          // NB-11: Suppress further stagnation counting until the pivot refresh arrives (HealingPivotRefreshed
+          // resets this flag). Prevents redundant HealingStagnated fires while bootstrap is in-flight.
+          pivotRefreshRequested = true
+          pivotRefreshRequestedAt = System.currentTimeMillis()
+      else if recentHealed > 0 then consecutiveStagnations = 0
+
+      if pendingTasks.nonEmpty && activeRequests.isEmpty && !pivotRefreshRequested then
+        consecutiveIdleChecks += 1
+        if consecutiveIdleChecks >= 5 then
+          val pendingCount = pendingTasks.size
+          log.warn(
+            s"[HEAL] No active requests for ${consecutiveIdleChecks * 2} minutes with " +
+              s"$pendingCount pending tasks and ${knownAvailablePeers.size} known peers. " +
+              s"Clearing stateless/cooldown peer state and retrying before abandoning."
+          )
+          // Clear all peer-failure state so the next healing round gets fresh dispatch eligibility.
+          // All peers were marked stateless because they returned empty TrieNodes responses for the
+          // current root (e.g. v1.12.20 core-geth, ETH mainnet peers without ETC state). A new peer
+          // (e.g. v1.13.0 core-geth with SNAP serving fixes) may now be connected and able to serve.
+          // Without this clear, eligiblePeers stays empty forever — HealingAllPeersStateless can't
+          // fire because fresh peers keep arriving, keeping knownAvailablePeers.size > statelessPeers.size.
+          statelessPeers.clear()
+          emptyResponseStrikes.clear()
+          peerCooldownUntilMs.clear()
+          consecutiveIdleChecks = 0 // Reset so we don't immediately force-complete on the next tick
+          log.info(
+            s"[HEAL] Stateless/cooldown peer state cleared. Attempting dispatch to ${knownAvailablePeers.size} peers."
+          )
+          tryRedispatchPendingTasks(allowCooldownFloor = true) // periodic tick: anti-starvation floor permitted
+        else tryRedispatchPendingTasks(allowCooldownFloor = true) // periodic tick: anti-starvation floor permitted
+      else consecutiveIdleChecks = 0
+
+      Behaviors.same
+
+    case HealingGetProgress(replyTo) =>
+      val activeTaskCount = activeRequests.values.map(_.tasks.size).sum
+      val stats = HealingStatistics(
+        totalNodes = totalNodesHealed,
+        totalBytes = totalBytesReceived,
+        pendingTasks = pendingTasks.size,
+        activeTasks = activeTaskCount,
+        completedTasks = completedTaskCount,
+        nodesPerSecond = calculateNodesPerSecond(),
+        kilobytesPerSecond = calculateKilobytesPerSecond(),
+        progress = calculateProgress()
+      )
+      replyTo ! stats
+
+      Behaviors.same
+  }
+
+  /** Frontier-rebuild BFS results and the crash-recovery full rebuild (C-H2 `FrontierRebuildBfs`). Arms #2, #3, #4, #25
+    * (research.md R4c).
+    */
+  private[actors] lazy val frontierRebuildArms: PartialFunction[Command, Behavior[Command]] = {
+    case FrontierRebuilt(entries) =>
+      if entries.isEmpty then
+        log.warn(
+          "[HEAL-FRONTIER] Empty frontier batch received — trie may already be fully healed or storage is corrupt"
+        )
+      else log.info(s"[HEAL-FRONTIER] ${entries.size} missing nodes identified — queuing for healing")
+      queueNodes(entries.map(e => (e.pathset, e.hash)))
+      lastHealedAtMs = System.currentTimeMillis()
+      tryRedispatchPendingTasks()
+
+      Behaviors.same
+
+    case FrontierRebuildComplete(missingEmitted, walkRoot) =>
+      // The full-state rebuild BFS walked the entire trie; every still-missing node is now persisted.
+      // Mark the snapshot complete so a future restart may resume it instead of re-walking (Layer 2).
+      verificationBFSRunning = false // rebuild walk finished — release the single-flight gate
+      // spec 002/005 marker: gated on frontier persistence (default off). With it off, `FrontierRebuildComplete` is
+      // never reached via the resume path anyway (that path requires `frontierStore` defined), but guard defensively
+      // so the snapshot marker is only ever written when persistence is enabled (FR-005 parity; the marker also gates
+      // the spec-003 scoped path, which must stay dark by default).
+      if frontierPersistenceEnabled then
+        healingFrontierStorage.foreach { store =>
+          store.markComplete()
+          log.info("[HEAL-RESTART] Full-state rebuild complete — persisted frontier marked as a complete snapshot")
+        }
+      // spec 006 C2/D2/FR-001/FR-002/FR-003: on a genuinely CLEAN rebuild, declare completion after this
+      // single walk instead of waiting for the dead-pulse watchdog to force-start a redundant second
+      // (verification) walk over the identical trie (~16-20h on ETC mainnet). The rebuild walk fully
+      // recurses into account-leaf storageRoots (the BUG-1 gap the verification walk was built for), so on
+      // a clean rebuild it IS the full traversal the verification would re-run. Declare early IFF every
+      // conjunct holds — each excludes a specific false-completion path (research D2 + adversarial verdict):
+      //   missingEmitted == 0    — the deciding walk found nothing missing (no gap discovered).
+      //   totalNodesHealed == 0  — nothing healed during the walk (excludes heal-during-walk mutation;
+      //                            conservative `== 0`, D5; cumulative counter preserved across pivots).
+      //   isComplete             — pendingTasks.isEmpty && activeRequests.isEmpty: no outstanding frontier
+      //                            or in-flight request (excludes outstanding work).
+      //   !flushing              — no async raw-node write/flush in flight (mirrors the HealingCheckCompletion
+      //                            gate's flush guard; never mark complete ahead of durable state).
+      //   !trieWalkInProgress    — the controller's interleave trie walk is not running. Defense-in-depth: makes
+      //                            the early precondition EXACTLY match the HealingCheckCompletion gate, so
+      //                            guard-passes ⇒ gate-passes (no benign "guard fires, gate blocks, watchdog
+      //                            suppressed" interleave case on the re-heal path). First-heal: always false.
+      //   walkRoot == stateRoot  — LOAD-BEARING (D4/FR-005): a HealingPivotRefreshed to a new root does NOT
+      //                            cancel this in-flight walk, so a stale completion can land against a new
+      //                            stateRoot; this excludes that stale-root completion. Explicit guard — does
+      //                            NOT rely on the incidental "pivot re-seeds pendingTasks" property.
+      // Route via `self ! HealingCheckCompletion` (NOT a direct StateHealingComplete) so the marker write
+      // and the StateHealingComplete send flow through the single existing chokepoint (D1, byte-parity).
+      // verificationPassComplete = true also suppresses the dead-pulse watchdog (no walk #2, FR-006). The
+      // else (do nothing new) is byte-identical to today — the node idles and the watchdog runs walk #2.
+      if missingEmitted == 0 && totalNodesHealed == 0 && isComplete && !flushing && !trieWalkInProgress &&
+        walkRoot == stateRoot
+      then
+        verificationPassComplete = true
+        self ! HealingCheckCompletion
+        log.info(
+          "[HEAL-RESTART] Clean rebuild (0 missing, 0 healed, current root) — declaring completion after one " +
+            "walk via HealingCheckCompletion; skipping the redundant verification walk (spec 006)"
+        )
+
+      // Path scheme: a heal response can land while this walk is still flagged running, in which case its
+      // HealingCheckCompletion was skipped (`!verificationBFSRunning`) and nothing else re-triggers it until the
+      // dead-pulse watchdog (minutes). Re-evaluate now that the flag is clear. Hash scheme: unchanged.
+      if storageScheme == StorageScheme.Path && missingEmitted > 0 then self ! HealingCheckCompletion
+
+      Behaviors.same
+
+    case FrontierWalkFailed =>
+      verificationBFSRunning = false
+      trieWalkInProgress = false
+      log.warn(
+        "[HEAL-BFS] Frontier walk failed — flags reset; verification will be retried by " +
+          "HealingCheckCompletion or the dead-pulse watchdog (no completion marker was set)"
+      )
+
+      Behaviors.same
+
+    case RestartFullRebuild(root, rootPath) =>
+      // Marshalled back from the HEAL-RESTART crash-recovery Future so the walk launch runs on the actor thread.
+      // spec 006 C1/D3/FR-004: forward the walk's missing-node count (missingEmitted) and the root this walk
+      // traversed (`root`, captured here) so the FrontierRebuildComplete handler can decide early completion and
+      // exclude a stale completion after a pivot refresh (walkRoot == stateRoot guard).
+      startFrontierBFS(
+        root,
+        rootPath,
+        isStor = false,
+        (missingEmitted: Long) => self ! FrontierRebuildComplete(missingEmitted, root)
+      )
+      Behaviors.same
+  }
+
+  /** Missing-node intake and peer responses (C-H5 `HealResponseProcessing`). Arms #5, #13, #15 (research.md R4c). */
+  private[actors] lazy val healResponseArms: PartialFunction[Command, Behavior[Command]] = {
+    case QueueMissingNodes(nodes) =>
+      log.info(s"Queuing ${nodes.size} missing nodes for healing")
+      queueNodes(nodes)
+      // Immediately dispatch to any known available peers
+      tryRedispatchPendingTasks()
+
+      Behaviors.same
+
+    case TrieNodesResponseMsg(response) =>
+      handleResponse(response)
+
+      Behaviors.same
+
+    case HealingTaskComplete(requestId, result) =>
+      result match
+        case Right(count) =>
+          totalNodesHealed += count
+          log.info(s"Healing task completed: $count nodes")
+          self ! HealingCheckCompletion
+        case Left(error) =>
+          log.warn(s"Healing task failed: $error")
+
+      Behaviors.same
+  }
+
+  /** Peer pool, per-peer budget, serve root, resume and request timeouts (C-H4 `HealDispatch`). Arms #6, #7, #8, #11,
+    * #12, #23 (research.md R4c).
+    */
+  private[actors] lazy val healDispatchArms: PartialFunction[Command, Behavior[Command]] = {
+    case HealingPeerAvailable(peer) =>
+      // NB-7: Skip peers already in statelessPeers — they returned empty TrieNodes for this root and
+      // will do so again until the pivot refreshes. Re-adding them on every 1s scheduler tick wastes
+      // active request slots and creates a rapid [SNAP/1 enabled] + [stateless] log cycle.
+      if statelessPeers.contains(peer.id.value) then
+        log.debug(
+          "Ignoring HealingPeerAvailable for stateless peer {} — will re-admit on next pivot refresh",
+          peer.id.value.take(8)
+        )
+      else
+        // Evict stale entry for same physical node (reconnection creates new PeerId)
+        knownAvailablePeers.filterInPlace(_.remoteAddress != peer.remoteAddress)
+        knownAvailablePeers += peer
+        dispatchIfPossible(peer)
+
+      Behaviors.same
+
+    case HealingPeerUnavailable(peerId) =>
+      // Peer disconnected — remove from available set and immediately re-queue its in-flight
+      // tasks so other peers can pick them up without waiting for the 30s request timeout.
+      // Mirrors AccountRangeCoordinator.PeerUnavailable (go-ethereum revertRequests pattern).
+      knownAvailablePeers.filterInPlace(_.id.value != peerId)
+      val inFlight = activeRequests.filter { case (_, req) => req.peer.id.value == peerId }.keys.toSeq
+      if inFlight.nonEmpty then
+        log.debug(s"Peer $peerId disconnected — re-queuing ${inFlight.size} in-flight healing request(s)")
+        inFlight.foreach { reqId =>
+          activeRequests.remove(reqId).foreach { req =>
+            requestTracker.completeRequest(reqId, 0)
+            req.tasks.foreach { task =>
+              if !pendingHashSet.contains(task.hash) then
+                pendingHashSet += task.hash
+                pendingTasks += task
+            }
+          }
+        }
+      tryRedispatchPendingTasks()
+
+      Behaviors.same
+
+    case UpdateMaxInFlightPerPeer(newLimit) =>
+      // Floor the per-peer budget at MinInFlightPerPeer so a single slow peer can never throttle the
+      // whole residual dispatch to one outstanding request. The controller pushes 1 by default
+      // (healing-max-inflight-per-peer), which serialised the residual onto whichever peer happened to
+      // hold the lone slot; with a 2-peer-eligible residual that is enough to stall. Flooring keeps at
+      // least MinInFlightPerPeer requests pipelined per peer so the residual fans out across the pool.
+      val floored = newLimit.max(TrieNodeHealingCoordinator.MinInFlightPerPeer)
+      if floored != newLimit then
+        log.info(s"Healing per-peer budget: $maxInFlightPerPeer -> $floored (floored from requested $newLimit)")
+      else log.info(s"Healing per-peer budget: $maxInFlightPerPeer -> $floored")
+      maxInFlightPerPeer = floored
+      if floored > 0 then tryRedispatchPendingTasks()
+
+      Behaviors.same
+
     case HealingServeRootRefresh(newServeRoot) =>
       // spec 004 T009/C2: advance the SERVE root ONLY. This is the narrow, side-effect-free counterpart to
       // HealingPivotRefreshed: it MUST NOT touch the walk root (`stateRoot`), the frontier (`pendingTasks` /
@@ -1169,11 +1326,17 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
 
       Behaviors.same
 
-    case TrieNodesResponseMsg(response) =>
-      handleResponse(response)
-
+    case HealingRequestTimeout(requestId) =>
+      // Timeout delivered via actor mailbox (BUG-H4 fix): runs on actor thread,
+      // safe to read/write activeRequests and pendingTasks.
+      activeRequests.get(requestId) match
+        case Some(req) => handleTimeout(requestId, req.tasks, req.peer)
+        case None      => // Response already arrived — stale timeout, nothing to do
       Behaviors.same
+  }
 
+  /** Async raw-node flush completion (C-H1 `FrontierPersistence`). Arm #14 (research.md R4c). */
+  private[actors] lazy val frontierPersistenceArms: PartialFunction[Command, Behavior[Command]] = {
     case FlushComplete(count) =>
       flushing = false
       log.info(s"Async flush complete: $count healed nodes written to disk (total: $totalNodesHealed)")
@@ -1182,18 +1345,14 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
       self ! HealingCheckCompletion
 
       Behaviors.same
+  }
 
-    case HealingTaskComplete(requestId, result) =>
-      result match
-        case Right(count) =>
-          totalNodesHealed += count
-          log.info(s"Healing task completed: $count nodes")
-          self ! HealingCheckCompletion
-        case Left(error) =>
-          log.warn(s"Healing task failed: $error")
-
-      Behaviors.same
-
+  /** The completion gate, the verification-walk results and the crash-recovery verification launch (C-H3
+    * `HealVerification`). Arms #16–#20, #24 (research.md R4c). The three `VerificationBFSComplete` arms (#17 stale
+    * root, #18 dirty pass, #19 clean pass) are the only Command with more than one arm; they stay together, in this
+    * order, so their guards fall through exactly as before.
+    */
+  private[actors] lazy val healVerificationArms: PartialFunction[Command, Behavior[Command]] = {
     case HealingCheckCompletion =>
       if isComplete && !flushing && !trieWalkInProgress && !verificationBFSRunning then
         // FIX-BUG1-VERIFY: gate: skip verification when no inline healing was done.
@@ -1354,175 +1513,14 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
 
       Behaviors.same
 
-    case HealingStagnationCheck =>
-      emitHealingFrontierGauges() // refresh backlog/in-flight gauges even when idle
-      // Periodic soft-exile auto-clear (mirrors the Account/Storage "fresh slate on the next round" intent,
-      // but on every 2-min tick rather than only on pivot refresh): peers rotate and a peer that returned
-      // empty for the current root earlier may now be in its serve window. While there is residual work and
-      // peers exist but the stateless set has eaten into the eligible pool, wipe the stateless set + strikes
-      // so every connected SNAP peer is retried. Pure peer-pool management — does not touch any task/store
-      // state. The strike threshold keeps a genuinely useless peer out within the 2-min window; this re-arms
-      // it for the next. Without this the residual heal was stuck retrying only the 2 not-yet-exiled peers.
-      if pendingTasks.nonEmpty && statelessPeers.nonEmpty && knownAvailablePeers.nonEmpty && !pivotRefreshRequested then
-        log.info(
-          s"[HEAL] Auto-clearing ${statelessPeers.size} stateless peer(s) + ${emptyResponseStrikes.size} strike(s) " +
-            s"on periodic tick — retrying all ${knownAvailablePeers.size} known peers for the residual frontier " +
-            s"(pending=${pendingTasks.size})."
-        )
-        statelessPeers.clear()
-        emptyResponseStrikes.clear()
-        tryRedispatchPendingTasks(allowCooldownFloor = true) // periodic tick: anti-starvation floor permitted
-      val recentHealed = totalNodesHealed - lastPulseHealedCount
-      val healTotal = completedTaskCount.toLong + pendingTasks.size.toLong + activeRequests.size.toLong
-      val healPct = if healTotal > 0 then ((completedTaskCount.toDouble / healTotal) * 100).toInt else 0
-      // walkRunning must reflect ANY active frontier walk (inline trie walk OR the BFS
-      // rebuild/verification Future) — the same OR the watchdog gates use. Rendering only
-      // trieWalkInProgress reported walkRunning=false during a live BFS rebuild, which misled
-      // operators (and matched the pre-fix watchdog bug that double-started walks).
-      val anyWalkRunning = trieWalkInProgress || verificationBFSRunning
-      log.info(
-        s"[HEAL-PULSE] $healPct% (est) | healed=$totalNodesHealed (+$recentHealed last 2min) | " +
-          s"pending=${pendingTasks.size} active=${activeRequests.size} peers=${knownAvailablePeers.size} | " +
-          s"rate=${healRate.toInt} nodes/s walkRunning=$anyWalkRunning pivotRefreshPending=$pivotRefreshRequested"
-      )
-      val (newM, crossed) =
-        com.chipprbots.ethereum.blockchain.sync.ProgressMilestones
-          .crossed(completedTaskCount.toLong, healTotal, healingMilestonePct)
-      healingMilestonePct = newM
-      crossed.foreach { m =>
-        log.info(
-          s"[HEAL-MILESTONE] $m% (est) — ${completedTaskCount} healed | ${healRate.toInt} nodes/s"
-        )
-      }
-      lastPulseHealedCount = totalNodesHealed
-
-      // FIX-BUG2-WATCHDOG: Dead-loop safety net — fires when the coordinator has no walk, no
-      // verification BFS, no pending tasks, no active requests, and zero healing progress.
-      // Primary fix is startVerificationBFS in HealingCheckCompletion and HealingPivotRefreshed;
-      // this watchdog catches any residual edge case (e.g. stale state after pivot race).
-      if !trieWalkInProgress && !verificationBFSRunning &&
-        pendingTasks.isEmpty && activeRequests.isEmpty &&
-        recentHealed == 0 && !pivotRefreshRequested && !verificationPassComplete
-      then
-        consecutiveDeadPulses += 1
-        log.warn(
-          s"[HEAL-WATCHDOG] Dead pulse $consecutiveDeadPulses/3: " +
-            s"walkRunning=false verifyRunning=false pending=0 active=0 healed=0 in last 2min"
-        )
-        if consecutiveDeadPulses >= 3 then
-          log.warn("[HEAL-WATCHDOG] 3 consecutive dead pulses — force-starting verification BFS")
-          consecutiveDeadPulses = 0
-          val emptyPath = ByteString(com.chipprbots.ethereum.mpt.HexPrefix.encode(Array.empty[Byte], isLeaf = false))
-          startVerificationBFS(stateRoot, emptyPath)
-      else if recentHealed > 0 || pendingTasks.nonEmpty || activeRequests.nonEmpty ||
-        trieWalkInProgress || verificationBFSRunning
-      then consecutiveDeadPulses = 0
-
-      // BUG-S4 watchdog: if pivotRefreshRequested=true for >15 min, SNAPSyncController is stuck
-      // in refreshPivotInPlace's no-peer retry loop (Path A: 30s interval, HealingPivotRefreshed
-      // never sent). Safe to reset: stateRoot stays valid; stagnation re-fires if still stuck.
-      if pivotRefreshRequested then
-        val waitedMs = System.currentTimeMillis() - pivotRefreshRequestedAt
-        if waitedMs > PivotRefreshWatchdogMs then
-          log.warn(
-            s"[HEAL] Pivot refresh watchdog: pivotRefreshRequested=true for ${waitedMs / 1000}s — " +
-              s"SNAPSyncController refresh stalled (no-peer retry loop). Resetting and resuming dispatch."
-          )
-          pivotRefreshRequested = false
-          tryRedispatchPendingTasks(allowCooldownFloor = true) // periodic tick: anti-starvation floor permitted
-
-      // FIX-STAGNATION-LIMIT: Track consecutive zero-progress cycles (independent of active count).
-      // After MaxConsecutiveStagnations, notify controller to restart with fresh pivot.
-      // Catches the case where active > 0 but all responses are empty (stale root, ETH mainnet peers).
-      if recentHealed == 0 && pendingTasks.nonEmpty && !pivotRefreshRequested then
-        consecutiveStagnations += 1
-        log.warn(
-          s"[HEAL-STAGNATION] Zero progress in last 2min — stagnation $consecutiveStagnations/$MaxConsecutiveStagnations. " +
-            s"healed=$totalNodesHealed pending=${pendingTasks.size} peers=${knownAvailablePeers.size}"
-        )
-        if consecutiveStagnations >= MaxConsecutiveStagnations then
-          log.warn(
-            s"[HEAL-STAGNATION] $MaxConsecutiveStagnations consecutive zero-progress cycles — " +
-              s"notifying controller to restart healing with fresh pivot"
-          )
-          snapSyncController ! SNAPSyncController.HealingStagnated(totalNodesHealed.toLong, pendingTasks.size.toLong)
-          consecutiveStagnations = 0
-          // NB-11: Suppress further stagnation counting until the pivot refresh arrives (HealingPivotRefreshed
-          // resets this flag). Prevents redundant HealingStagnated fires while bootstrap is in-flight.
-          pivotRefreshRequested = true
-          pivotRefreshRequestedAt = System.currentTimeMillis()
-      else if recentHealed > 0 then consecutiveStagnations = 0
-
-      if pendingTasks.nonEmpty && activeRequests.isEmpty && !pivotRefreshRequested then
-        consecutiveIdleChecks += 1
-        if consecutiveIdleChecks >= 5 then
-          val pendingCount = pendingTasks.size
-          log.warn(
-            s"[HEAL] No active requests for ${consecutiveIdleChecks * 2} minutes with " +
-              s"$pendingCount pending tasks and ${knownAvailablePeers.size} known peers. " +
-              s"Clearing stateless/cooldown peer state and retrying before abandoning."
-          )
-          // Clear all peer-failure state so the next healing round gets fresh dispatch eligibility.
-          // All peers were marked stateless because they returned empty TrieNodes responses for the
-          // current root (e.g. v1.12.20 core-geth, ETH mainnet peers without ETC state). A new peer
-          // (e.g. v1.13.0 core-geth with SNAP serving fixes) may now be connected and able to serve.
-          // Without this clear, eligiblePeers stays empty forever — HealingAllPeersStateless can't
-          // fire because fresh peers keep arriving, keeping knownAvailablePeers.size > statelessPeers.size.
-          statelessPeers.clear()
-          emptyResponseStrikes.clear()
-          peerCooldownUntilMs.clear()
-          consecutiveIdleChecks = 0 // Reset so we don't immediately force-complete on the next tick
-          log.info(
-            s"[HEAL] Stateless/cooldown peer state cleared. Attempting dispatch to ${knownAvailablePeers.size} peers."
-          )
-          tryRedispatchPendingTasks(allowCooldownFloor = true) // periodic tick: anti-starvation floor permitted
-        else tryRedispatchPendingTasks(allowCooldownFloor = true) // periodic tick: anti-starvation floor permitted
-      else consecutiveIdleChecks = 0
-
-      Behaviors.same
-
-    case HealingGetProgress(replyTo) =>
-      val activeTaskCount = activeRequests.values.map(_.tasks.size).sum
-      val stats = HealingStatistics(
-        totalNodes = totalNodesHealed,
-        totalBytes = totalBytesReceived,
-        pendingTasks = pendingTasks.size,
-        activeTasks = activeTaskCount,
-        completedTasks = completedTaskCount,
-        nodesPerSecond = calculateNodesPerSecond(),
-        kilobytesPerSecond = calculateKilobytesPerSecond(),
-        progress = calculateProgress()
-      )
-      replyTo ! stats
-
-      Behaviors.same
-
-    case HealingRequestTimeout(requestId) =>
-      // Timeout delivered via actor mailbox (BUG-H4 fix): runs on actor thread,
-      // safe to read/write activeRequests and pendingTasks.
-      activeRequests.get(requestId) match
-        case Some(req) => handleTimeout(requestId, req.tasks, req.peer)
-        case None      => // Response already arrived — stale timeout, nothing to do
-      Behaviors.same
-
     case RestartResumeVerification(root, rootPath) =>
       // Marshalled back from the HEAL-RESTART crash-recovery Future so the walk launch runs on the actor thread.
       startVerificationBFS(root, rootPath)
       Behaviors.same
+  }
 
-    case RestartFullRebuild(root, rootPath) =>
-      // Marshalled back from the HEAL-RESTART crash-recovery Future so the walk launch runs on the actor thread.
-      // spec 006 C1/D3/FR-004: forward the walk's missing-node count (missingEmitted) and the root this walk
-      // traversed (`root`, captured here) so the FrontierRebuildComplete handler can decide early completion and
-      // exclude a stale completion after a pivot refresh (walkRoot == stateRoot guard).
-      startFrontierBFS(
-        root,
-        rootPath,
-        isStor = false,
-        (missingEmitted: Long) => self ! FrontierRebuildComplete(missingEmitted, root)
-      )
-      Behaviors.same
-
+  /** The catch-all (arm #26). Total, so it must stay last in `activeBehavior`'s chain. */
+  private[actors] lazy val unhandledCommandArms: PartialFunction[Command, Behavior[Command]] = {
     // Defensive: `Command` is non-sealed (cross-file constraint via Messages.scala), so the compiler cannot prove
     // exhaustiveness. No production sender emits an un-handled Command; treat any as unhandled. HealingStagnated
     // (outbound to SSC) is NOT a Command, so it can never arrive here.
@@ -2722,6 +2720,57 @@ object TrieNodeHealingCoordinator:
   case class TrieNodesResponseMsg(response: TrieNodes) extends WorkerMessage with Command
   case class HealingRequestTimeout(requestId: BigInt) extends WorkerMessage with Command
   case object HealingCheckIdle extends WorkerMessage
+
+  // spec 016 C-H0: the Impl's actor-local messages and helper types, moved here from the Impl so the C-H1..C-H5
+  // modules can name them (a module cannot name an Impl member type). None of them leaves the process.
+  private[actors] case class HealingEntry(pathset: Seq[ByteString], hash: ByteString)
+  private[actors] case class ActiveRequest(
+      tasks: Seq[HealingEntry],
+      peer: Peer,
+      requestedBytes: BigInt,
+      sentAtMs: Long = System.currentTimeMillis()
+  )
+  private[actors] case object HealingStagnationCheck extends Command
+
+  // Internal messages — sent only via `selfRef ! …` from Future continuations / timers, so they must be Commands so
+  // the Typed behavior can receive them. They were plain `Any` messages under Classic.
+  // Internal message for async flush completion
+  private[actors] case class FlushComplete(count: Int) extends Command
+
+  // Internal message for async frontier rebuild completion (crash-recovery BFS or verification BFS)
+  private[actors] case class FrontierRebuilt(entries: Seq[HealingEntry]) extends Command
+  // Sent by startVerificationBFS when the BFS Future completes — gates verificationPassComplete.
+  // Carries the root the walk was LAUNCHED against (`walkRoot`), exactly as `FrontierRebuildComplete` does. A pivot
+  // re-peg does not cancel an in-flight verification walk, so its completion can land after `stateRoot` moved; the
+  // handler must not credit a clean walk of the OLD root as verification of the NEW one. This is decisive for the
+  // per-block-hot system-contract storage tries (EIP-4788/2935/8282): they differ between every pair of roots, while
+  // the cold bulk of the state is shared, so an old-root "clean" signal says nothing about them.
+  // `missingEmitted` is the number of missing nodes the walk found. A pass that found ANY is not a clean pass even if
+  // every one of them has been healed by the time it ends: the walk never descended below a node that was missing when
+  // it reached it, so the healed node's present children (and their subtrees) were not verified.
+  private[actors] case class VerificationBFSComplete(walkRoot: ByteString, missingEmitted: Long) extends Command
+
+  // Layer 2: the full-state rebuild BFS finished — the persisted frontier is now a COMPLETE snapshot.
+  // Sent after the final FrontierRebuilt so the completeness marker is set only once every node is persisted.
+  // spec 006 C1/D3/FR-004: carries the rebuild's outcome so the handler can decide early completion soundly.
+  //   missingEmitted = the walk's frontierCount (number of missing nodes emitted); 0 ⇒ found everything present.
+  //   walkRoot       = the root the finished walk traversed (captured at launch); compared against the live
+  //                    stateRoot to exclude a stale completion after a pivot refresh (F-E).
+  private[actors] case class FrontierRebuildComplete(missingEmitted: Long, walkRoot: ByteString) extends Command
+
+  // A frontier walk Future died with an exception. Resets the walk flags WITHOUT setting any
+  // completion marker, so the watchdog / HealingCheckCompletion gates can start a fresh walk.
+  // Without this, an exception skips onComplete() and verificationBFSRunning stays true forever,
+  // permanently blocking every future walk (including the watchdog) until restart.
+  private[actors] case object FrontierWalkFailed extends Command
+
+  // Routes the HEAL-RESTART resume decision back onto the actor thread. The crash-recovery Future (in
+  // StartTrieNodeHealing) reads the persisted frontier off-thread, then sends ONE of these so the
+  // verificationBFSRunning mutation + walk launch happen on the actor dispatcher (Typed: no off-thread state
+  // mutation). Under Classic the Future called start*BFS directly — safe only because verificationBFSRunning was
+  // @volatile. Now @volatile is gone, so the launch must be marshalled back to the actor thread.
+  private[actors] case class RestartResumeVerification(root: ByteString, rootPath: ByteString) extends Command
+  private[actors] case class RestartFullRebuild(root: ByteString, rootPath: ByteString) extends Command
 
   /** Default cap on the frontier-rebuild walk's FIFO `visited` set: 4M entries ≈ 480-640 MB (a 32-byte ByteString key +
     * wrapper + LinkedHashMap entry is ~120-150 B, not the 80 B an "≈320 MB" estimate assumed). Insertion-order

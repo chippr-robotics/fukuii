@@ -645,6 +645,77 @@ by #75. The six `peerEventArms` types have no arm outside #7.
 4. **Three arms write `currentPhase` while running** (#42, #55/#56, #64/#66). The phase is read once per message,
    before dispatch, as the old guards were, so a phase written by one message affects only the next.
 
+### R4c. [016] T070 (C-H0): TNHC `activeBehavior` arm order
+
+Read on `staging@1703820a7` (0.9.84), before C-H0. `TrieNodeHealingCoordinatorImpl.activeBehavior` (L713–1532) has
+**26 arms**: 25 Command arms and the catch-all. Arms are numbered in source order (`#`), with the staging line, the
+pattern, the dispatch guard, the C-H0 group and the line at the C-H0 head (after the move commit). The module column
+is the owning module of the arm's main calls (characterization Appendix A); every arm stays in the core through C-H5.
+
+**The invariant C-H0 proves.** For every Command, the first arm that matches after the split is the same arm as
+before. Order matters only between arms that can match the same message. In `activeBehavior` those are the three
+`VerificationBFSComplete` arms (#17–#19, the only Command with more than one arm) and the catch-all (#26, the only
+wildcard). No other pair of arms can match one message: each matches its own case class or case object. So the split
+preserves first-match iff #17–#19 stay together and in order in one partial function and #26 stays last. The two
+guards (#17 `walkRoot != stateRoot`, #18 `missingEmitted > 0`) are pure comparisons, so evaluating them inside the
+composed partial function changes nothing.
+
+**Dispatch after C-H0** (`activeBehavior` = `Behaviors.receiveMessage[Command]` over an `orElse` chain of seven
+`private[actors] lazy val` partial functions on the Impl, in the order of each group's first arm):
+
+1. `healLifecycleArms` (core): #1, #9, #10, #21, #22.
+2. `frontierRebuildArms` (C-H2): #2, #3, #4, #25.
+3. `healResponseArms` (C-H5): #5, #13, #15.
+4. `healDispatchArms` (C-H4): #6, #7, #8, #11, #12, #23.
+5. `frontierPersistenceArms` (C-H1): #14.
+6. `healVerificationArms` (C-H3): #16–#20, #24.
+7. `unhandledCommandArms`: #26 (DEBUG "received unhandled command", `Behaviors.unhandled`).
+
+Inside each group the arms keep their source order. `TrieNodeHealingDispatchTableSpec` pins the table: per Command
+sample, exactly the group below is defined (none for `HealingTaskFailed`); every sample except `HealingTaskFailed` is
+handled; each `VerificationBFSComplete` guard outcome runs the arm below.
+
+| # | Line (staging) | Pattern | Dispatch guard | Main calls (module) | C-H0 group | Line (C-H0) |
+|---|---|---|---|---|---|---|
+| 1 | L714 | `StartTrieNodeHealing` | — | H5 `isNodeInStorage`, H1 `persistFrontier`, H4 redispatch; the HEAL-RESTART Future | `healLifecycleArms` | L686 |
+| 2 | L846 | `FrontierRebuilt` | — | H5 `queueNodes`, H4 redispatch (the BFS's output) | `frontierRebuildArms` | L1085 |
+| 3 | L858 | `FrontierRebuildComplete` | — | rebuild completion, spec 006 early completion | `frontierRebuildArms` | L1097 |
+| 4 | L913 | `FrontierWalkFailed` (object) | — | resets the walk flags | `frontierRebuildArms` | L1152 |
+| 5 | L923 | `QueueMissingNodes` | — | H5 `queueNodes`, H4 redispatch | `healResponseArms` | L1178 |
+| 6 | L931 | `HealingPeerAvailable` | — | H4 `dispatchIfPossible` | `healDispatchArms` | L1207 |
+| 7 | L948 | `HealingPeerUnavailable` | — | re-queue in-flight, H4 redispatch | `healDispatchArms` | L1224 |
+| 8 | L970 | `UpdateMaxInFlightPerPeer` | — | H4 redispatch | `healDispatchArms` | L1246 |
+| 9 | L985 | `HealingForceComplete` (object) | — | H1 `clearPersistedFrontier`, H5 `clearHealedPathsSet`; returns `stopped` | `healLifecycleArms` | L818 |
+| 10 | L1021 | `HealingPivotRefreshed` | — | the walk-root re-peg: H1, H3, H5 | `healLifecycleArms` | L854 |
+| 11 | L1104 | `HealingServeRootRefresh` | — | H4 `shortRootLabel`, redispatch (the fetch root) | `healDispatchArms` | L1261 |
+| 12 | L1149 | `HealingResumeDispatch` (object) | — | H4 redispatch | `healDispatchArms` | L1306 |
+| 13 | L1172 | `TrieNodesResponseMsg` | — | H5 `handleResponse` | `healResponseArms` | L1186 |
+| 14 | L1177 | `FlushComplete` | — | H1 `flushRawNodesAsync` | `frontierPersistenceArms` | L1340 |
+| 15 | L1186 | `HealingTaskComplete` | — | `totalNodesHealed`, `self ! HealingCheckCompletion` | `healResponseArms` | L1191 |
+| 16 | L1197 | `HealingCheckCompletion` (object) | — | the completion gate: H3 verification launch, H1 flush | `healVerificationArms` | L1356 |
+| 17 | L1269 | `VerificationBFSComplete` | `walkRoot != stateRoot` (stale root) | H3 `reverifyCurrentRoot` | `healVerificationArms` | L1428 |
+| 18 | L1292 | `VerificationBFSComplete` | `missingEmitted > 0` (dirty pass) | H3 `reverifyCurrentRoot`, H4 redispatch | `healVerificationArms` | L1451 |
+| 19 | L1307 | `VerificationBFSComplete` | — (clean pass) | `verificationPassComplete`, H4 redispatch | `healVerificationArms` | L1466 |
+| 20 | L1352 | `WalkStateChanged` | — | `trieWalkInProgress` | `healVerificationArms` | L1511 |
+| 21 | L1357 | `HealingStagnationCheck` (object) | — | the 2-minute pulse: H1 gauges, H3, H4; `HealingStagnated` | `healLifecycleArms` | L937 |
+| 22 | L1484 | `HealingGetProgress` | — | core progress helpers | `healLifecycleArms` | L1064 |
+| 23 | L1500 | `HealingRequestTimeout` | — | H4 `handleTimeout` | `healDispatchArms` | L1329 |
+| 24 | L1508 | `RestartResumeVerification` | — | H3 `startVerificationBFS` | `healVerificationArms` | L1516 |
+| 25 | L1513 | `RestartFullRebuild` | — | H2 `startFrontierBFS` | `frontierRebuildArms` | L1162 |
+| 26 | L1529 | `other` (catch-all) | — | — | `unhandledCommandArms` | L1527 |
+
+`HealingTaskFailed` has no arm (Appendix A) and still reaches #26. The C-H0 group is the arm's concern, not its
+future home: the arms stay in the core, and a C-H* slice that wants an arm group in its module moves the whole
+`lazy val`, byte-identical.
+
+**Placements decided at C-H0.** `HealingStagnationCheck` (#21) is the coordinator's liveness pulse (it touches H1,
+H3 and H4 and sends `HealingStagnated`), so it is lifecycle, not dispatch. `HealingServeRootRefresh` (#11) moves the
+fetch root only, never the walk, so it is dispatch; `HealingPivotRefreshed` (#10) moves the walk root, so it is
+lifecycle. `FrontierRebuilt` (#2) is the BFS's output and goes with the rebuild, although its body calls H5's
+`queueNodes`; `QueueMissingNodes` (#5), the controller's intake, goes with the response arms. `HealingTaskComplete`
+(#15) is response bookkeeping. `RestartResumeVerification` (#24) launches a verification walk (H3);
+`RestartFullRebuild` (#25) launches a rebuild walk (H2).
+
 ## R5. Child-actor and worker ownership
 
 Controller-owned typed refs (all `var Option[ActorRef]`): `accountRangeCoordinator` L260, `bytecodeCoordinator` L263, `storageRangeCoordinator` L265, `trieNodeHealingCoordinator` L268, `chainDownloader` L272. Workers (AccountRangeWorker, ByteCodeWorker, StorageRangeWorker, TrieNodeHealingWorker) are spawned by their coordinators, never by the controller. No `ctx.watch`; supervision via `Behaviors.supervise` at each spawn.
