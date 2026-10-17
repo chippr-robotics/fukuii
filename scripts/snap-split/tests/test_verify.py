@@ -3026,6 +3026,14 @@ class CounterV2Tests(unittest.TestCase):
         self.assertEqual(V().storage_ref_count(text, counter=1), 7)  # 6 false positives + mptStorage
         self.assertEqual(V().storage_ref_count(text, counter=2), 2)  # storageDone + mptStorage
 
+    def test_v2_drops_qualified_verify_storage_chunk(self):
+        # The pure per-account proof check (C-S4 follow-up): a module importing it by name, or calling it qualified,
+        # names no store.
+        text = ("import com.chipprbots.ethereum.blockchain.sync.snap.actors.StorageRangeCoordinator.verifyStorageChunk\n"
+                "  val r = StorageRangeCoordinator.verifyStorageChunk(task, slots, proof)\n  mptStorage.get(k)\n")
+        self.assertEqual(V().storage_ref_count(text, counter=1), 3)
+        self.assertEqual(V().storage_ref_count(text, counter=2), 1)
+
     def ratchet(self, counter, just):
         f = adopt_fixture()
         adopt_commit(f, {}, msg="test: re-baseline\n", counter=counter, just=just)
