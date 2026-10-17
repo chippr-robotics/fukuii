@@ -10,7 +10,11 @@ Design constraints and Gates sections are binding on that later work. **Revised 
 direction: the hot-tier engine is **not fixed to libmdbx**; it is chosen by a measured bake-off (GT-1) against the
 requirements in DC-13; networked engines (ClickHouse, ScyllaDB) are evaluated for a **cold tier** rather than the hot
 path; the sizing target is **gigablock** execution; and **ETC is brought along** onto the unified layout (user decision,
-replaces the former GT-3).
+replaces the former GT-3). **Revised again 2026-10-17 (read-serving)** after an external assessment of fukuii's
+suitability for G-SIB-scale risk analysis, traces and concurrent reads was checked against the code (research §16):
+a read-serving track (Track R), the enterprise analytics user story (US-8), the deployment topology (DC-16), the
+`dbLock` close-fence and the fixed-width `UInt256` pulled forward as named tasks (T-010, T-011), and Erigon and Reth
+added as comparators in the GT-1 harness (FR-028).
 
 **Sequence**: spec 016 (SNAP split, `StateIngest`) → spec 017 (`StateAccess`, witnesses) → **this spec** → spec 019
 (zkVM guest). **Implementation starts after spec 017 completes** (user decision, 2026-10-17). Phase 0 (measurement,
@@ -54,6 +58,14 @@ is the bottleneck every high-throughput client has had to remove (research §14)
 10⁵–10⁶ state reads and 10⁴–10⁵ state writes. Every one of today's costs multiplies: trie walks per read, node rewrites
 per write, a serial state root, and a lock that lets any of them stall the whole node. No embedded engine choice fixes
 that on its own; the data model and the concurrency model do, and the engine must not get in their way (DC-13).
+
+**Under read load.** Enterprise users (risk engines, compliance, auditors) ask for `debug_trace*` over blocks and
+ranges, `eth_getLogs` over long ranges and `eth_call` at volume, concurrently with import. Today the process-wide
+`dbLock` means an import or a flush stall blocks every one of those reads (F1); trace re-execution allocates a `BigInt`
+per EVM arithmetic op (`UInt256` over `BigInt`, 485 `BigInt` references in `vm/`); trace and log results are serialised
+through json4s (reflection-based) in 40 of 60 `jsonrpc/` files; and nothing bounds trace concurrency separately from
+import. An external assessment claimed the opposite on each point; research §16 checks it against the tree. The
+storage work removes the lock; the read-serving track (Track R) removes the rest.
 
 **For the zkVM work.** Spec 019 compiles spec 017's `StatelessExecutor` for a bare-metal target. That closure must stay
 free of any storage engine (017 DC-15). Today it is: the host/guest boundary is the witness. This spec must keep it so
@@ -124,6 +136,11 @@ The user named ScyllaDB and ClickHouse as patterns to consider. The evaluation (
   as the first assessed adapter; the node is complete without any cold store.
 - G-9 RocksDB removed from the build one minor release after the new engine becomes the default, with operator
   migration guidance for both chains.
+- G-10 A read-serving path that never blocks import and never is blocked by it: bounded, dedicated executors for
+  `debug_trace*` and heavy reads, compile-time-derived streaming codecs for trace and log output, and a fixed-width
+  `UInt256` so trace re-execution does not allocate per arithmetic op.
+- G-11 Measured, not asserted: the GT-1 harness has an RPC read-load arm that compares fukuii with Geth, Besu, Erigon
+  and Reth on the same hardware, and no external throughput claim is made before it has run.
 
 ## Non-goals
 
@@ -150,7 +167,8 @@ The user named ScyllaDB and ClickHouse as patterns to consider. The evaluation (
 
 ## Scope
 
-Three tracks. Track E and Track F are strictly ordered; Track H runs beside Track F behind its own seam.
+Four tracks. Track E and Track F are strictly ordered; Track H runs beside Track F behind its own seam; Track R (read
+serving) runs beside all of them and gates none.
 
 **Track E — the hot-tier engine, behind the contract (G-1, G-2, G-3, G-9).**
 
@@ -197,8 +215,26 @@ Three tracks. Track E and Track F are strictly ordered; Track H runs beside Trac
 14. Era/era1 export as the file-based cold format for history (ties to spec 013 §5.6 and #1483), independent of any
     database.
 
+**Track R — the read-serving path (G-10, G-11).** Independent of the engine choice; may start after Phase 0.
+
+15. **Bounded read executors.** `debug_trace*`, `eth_getLogs` over ranges, `eth_call`/`eth_simulateV1` and witness
+    regeneration (017 DC-16) run on dedicated executors with fixed thread counts, bounded queues and per-request
+    timeouts, separate from block import's execution context and from the RPC dispatcher; a full queue rejects with an
+    explicit error. Per-method concurrency caps are configuration.
+16. **Streaming, compile-time codecs for large results.** Trace and log responses are encoded by circe codecs derived
+    at compile time (no reflection) and streamed over fs2 as they are produced, never materialised as one tree; json4s
+    is retired from the trace and log paths first and from `jsonrpc/` as a whole by the end of the track.
+17. **Fixed-width `UInt256`.** `UInt256` is reimplemented over fixed-width limbs (four `Long`s or equivalent) with no
+    `BigInt` on the arithmetic path, byte-identical to the current implementation on every ethereum/tests vector and the
+    017 differential set. This is EVM code: it follows the consensus-change protocol (`beacon` for ETH, `forge` for
+    ETC) and lands behind the usual oracles. It also satisfies spec 019 FR-003b. If `/speckit-plan` finds it large
+    enough, it is split into its own spec; the requirement stays here.
+18. **History reads for analytics.** Archive and long-window reads needed by traces over history are served from
+    changesets plus the cold tier (Track H, OQ-3), with the documented error beyond what is configured.
+
 Track F cannot start before Track E's SC-001 is green on both chains; item 9 must be green before item 7 is enabled by
-default; Track H never gates Track E or F.
+default; Track H never gates Track E or F; Track R items 15 and 16 never gate E or F and item 17 is gated only by its
+own consensus review.
 
 ## Gates *(mandatory; nothing past a gate proceeds until it reports)*
 
@@ -213,8 +249,12 @@ candidate. The workload replays a fixed Platåberget range and a fixed Mordor ra
 F (accounts and slots by hashed key, path-keyed nodes, changesets) at 1×, 10× and 30× today's block gas (synthetic
 gigablocks built by concatenating consecutive blocks' state deltas), with a concurrent read probe and a bounded set of
 long readers. Each candidate reports the DC-13 figures and the DC-12 figures. The report ranks candidates and names the
-constraints each imposes (binding maturity, platform support, build steps, memory accounting, size on disk). The user
-decides the engine; ADR INF-007 records it. A candidate that cannot be bound from JDK 25 in a day of effort is dropped
+constraints each imposes (binding maturity, platform support, build steps, memory accounting, size on disk). The harness
+has an **RPC read-load arm** (FR-028): `debug_traceBlockByNumber` with callTracer and prestateTracer,
+`debug_traceTransaction`, `eth_getLogs` over 1k/100k/1M-block ranges and `eth_call` at concurrency 1/8/64, run against
+fukuii and against Geth, Besu, Erigon and Reth on the same hardware and the same synced range, with and without a
+concurrent import load; it reports p50/p99 latency, throughput, and import-time interference. The user decides the
+engine; ADR INF-007 records it. A candidate that cannot be bound from JDK 25 in a day of effort is dropped
 with the attempt recorded, not carried.
 
 **GT-2 — Constitution amendment.** The constitution names "RocksDB for storage" among the core libraries and requires
@@ -343,6 +383,20 @@ block state bytes), database size, RSS and cgroup `memory.current`, and SNAP `[S
 H slice reports the same figures. No slice merges on a claim it did not measure (constitution III and the working
 discipline's evidence standard).
 
+**DC-15 — Read serving never blocks import and is never blocked by it.** Every heavy read (`debug_trace*`, range
+`eth_getLogs`, `eth_call`/`eth_simulateV1`, witness regeneration) runs on a bounded, dedicated executor (fixed threads,
+bounded queue, per-request timeout) that shares no thread pool and no lock with block import; a full queue rejects
+with an explicit error rather than queueing indefinitely. Large results are streamed as produced through
+compile-time-derived codecs, never materialised as one tree. The GT-1 RPC arm (FR-028) measures interference in both
+directions: import p99 under read load, and read p99 under import load; both must stay within the SC-015 bounds. Until
+Track R lands, the spec makes no claim about fukuii's read scalability (research §16).
+
+**DC-16 — The node is the source, not the query engine.** fukuii's job under enterprise load is to be a correct,
+deterministic, stable-latency source. The topology the specs assume, and the operator docs describe, is: one or more
+validating nodes; snapshot-seeded read replicas (spec 013) that follow them; an indexer or cold tier (Track H) that
+answers analytical queries. No single node is specified to serve "millions of concurrent requests", and no SC is
+written against that. Track R makes one node serve its share well; Track H and spec 013 make the fleet possible.
+
 ## User Scenarios & Testing *(mandatory)*
 
 ### User Story 1 — An operator imports blocks with no stall (Priority: P1)
@@ -451,6 +505,29 @@ GT-3.
 
 **Independent Test**: the same query on a node with and without the adapter; identical results within the shared range.
 
+### User Story 8 — An enterprise risk engine traces and audits against fukuii (Priority: P2)
+
+A regulated institution runs fukuii as the deterministic source behind a risk and compliance pipeline: continuous
+`debug_traceBlockByNumber` with callTracer and prestateTracer on every new block, periodic `eth_getLogs` over long
+ranges, and bursts of `eth_call` risk checks, while the node keeps importing at head. Traces stream, heavy requests
+are bounded and rejected explicitly when the budget is full, import latency does not move, and historical traces
+beyond the hot window come from the cold tier when configured.
+
+**Why this priority**: it is the workload the external assessment (research §16) described, and the one Track R and
+Track H exist to serve. P2 because consensus and sync (P1) come first and because the topology (DC-16), not one node,
+carries the full load.
+
+**Independent Test**: the GT-1 RPC arm (FR-028) with concurrent import; SC-015; US-7 for the cold-tier range.
+
+**Acceptance Scenarios**:
+
+1. **Given** 64 concurrent `debug_traceBlockByNumber` requests during import, **When** measured, **Then** import p99
+   stays within the SC-015 bound and no request waits on a storage write.
+2. **Given** a trace queue at capacity, **When** another request arrives, **Then** it is rejected with the documented
+   error within the timeout, never queued indefinitely.
+3. **Given** a 1M-block `eth_getLogs` range with the cold tier configured, **When** requested, **Then** the result
+   streams and matches an archive reference client for the fixture range.
+
 ### Edge Cases
 
 - A read transaction held across an actor message or an `await` (DC-5): a compile error where DC-12's types see it,
@@ -536,6 +613,19 @@ GT-3.
   not cover, returning the documented error for such ranges when no cold store is configured.
 - **FR-026** The typed transaction API of DC-12 (`ReadTxn`, `WriteTxn`, bounded `Resource`s, opaque key types,
   compile-time-derived codecs) MUST be the API every engine adapter, including the harness's, implements.
+- **FR-027** Heavy reads (`debug_trace*`, range `eth_getLogs`, `eth_call`/`eth_simulateV1`, witness regeneration) MUST
+  run on bounded, dedicated executors with fixed threads, bounded queues, per-request timeouts and per-method
+  concurrency caps, sharing no pool or lock with block import; a full queue MUST reject with an explicit error (DC-15).
+- **FR-028** The GT-1 harness MUST include an RPC read-load arm comparing fukuii with Geth, Besu, Erigon and Reth on
+  the same hardware and synced range, with and without concurrent import, reporting p50/p99 latency, throughput and
+  import interference; no external throughput or concurrency claim MAY be published before it has run (G-11).
+- **FR-029** Trace and log responses MUST be encoded by compile-time-derived codecs and streamed as produced; json4s
+  MUST be removed from the trace and log paths in Track R and from `jsonrpc/` by the end of the track.
+- **FR-030** `UInt256` MUST be reimplemented fixed-width with no `BigInt` on the arithmetic path, byte-identical on
+  every ethereum/tests vector and the 017 differential set, under the consensus-change protocol (`beacon`, `forge`);
+  the change MUST be measured on `[IMPORT-TIMING]` and on trace re-execution time. It satisfies spec 019 FR-003b.
+- **FR-031** The `dbLock` close-fence (DC-4) MUST ship as its own PR on the RocksDB engine as soon as GT-0 has reported,
+  independent of the engine decision (T-010); it is the one Track E change that does not wait for GT-1.
 
 ### Key Entities
 
@@ -595,6 +685,14 @@ GT-3.
 - **SC-014** With no cold store configured, every RPC method answers exactly as today within the pruning window and the
   node passes rpc-compat (40) and graphql (2) unchanged; with the ClickHouse adapter, `eth_getLogs` over a range beyond
   the hot tier returns results identical to an archive geth for the fixture range.
+- **SC-015** On the GT-1 RPC arm with 64 concurrent `debug_traceBlockByNumber` requests during import: import p99 is
+  within 10% of its no-load figure; no read waits on a storage write (SC-004 holds under read load); trace p99 is
+  within 2× its no-import figure; a request beyond the queue bound is rejected within its timeout. Figures are
+  published beside Geth, Besu, Erigon and Reth on the same hardware; no target relative to them is set until the first
+  run exists.
+- **SC-016** After FR-030, trace re-execution of the fixture blocks allocates no `BigInt` on the arithmetic path
+  (allocation profile), every ethereum/tests vector and the 017 differential set are byte-identical, and
+  `[IMPORT-TIMING]` improves or is within the 10% budget.
 
 ## Assumptions
 
@@ -630,8 +728,12 @@ GT-3.
   retire; changesets make the in-memory reference-count cache redundant.
 - **OQ-6** Relaxed commit mode for `StateIngest`: the engine-specific "metadata-safe, last transactions may be lost"
   mode is the recommended default; the fully unsynced mode only if GT-0/GT-1 show it matters and SNAP resume covers it.
-- **OQ-7** Does the lock fix (research §8, alternative 2) ship as a standalone PR on RocksDB before Track E, if GT-0
-  attributes most of the read wait to `dbLock`? Recommended: yes, it is small and it is a real fix for today's nodes.
+- **OQ-7** *(decided 2026-10-17, user)* The lock fix (research §8, alternative 2) ships as its own PR on RocksDB as soon
+  as GT-0 has reported, whatever the attribution (FR-031, T-010); GT-0 still runs so the before/after is recorded.
+- **OQ-13** Whether the fixed-width `UInt256` (FR-030, T-011) is executed inside this spec or split into its own
+  consensus spec at `/speckit-plan`; the requirement and the oracles are the same either way.
+- **OQ-14** Which trace fixtures the GT-1 RPC arm uses: a fixed Sepolia range with known heavy contracts (recommended)
+  plus a Mordor range, so both chains have figures.
 - **OQ-8** Engine and page-cache sizing guidance for operators who run a CL client on the same 16 GiB host; and the
   host class the gigablock profile assumes.
 - **OQ-9** Whether the flat stores carry a per-key "last modified block" to make 017's state-history window (DC-16,
@@ -673,3 +775,13 @@ GT-3.
 - **T-008 (Track E)** The segment store for immutable chain data (FR-022), behaviour-neutral, golden-bytes kept.
 - **T-009 (Track F item 11)** The parallel state root with sparse trie cache (FR-023), behind a flag until SC-001 and
   SC-012 are green; `beacon` and `forge` before implementation.
+- **T-010 (standalone fix PR, after GT-0 reports; FR-031)** Replace `RocksDbDataSource.dbLock` with a close-fence (an
+  open/closed state plus in-flight count); SC-004-style saturating-write test; `vault` owns, `eye` validates on
+  Mordor and Platåberget. Ships on the RocksDB engine, independent of GT-1.
+- **T-011 (consensus protocol; FR-030)** Fixed-width `UInt256`: `beacon` and `forge` impact analysis first, then the
+  implementation, ethereum/tests on both chains, the 017 differential set, allocation profile, `[IMPORT-TIMING]`.
+  Decide at `/speckit-plan` whether it stays here or becomes its own spec (OQ-13).
+- **T-012 (Track R)** Bounded read executors and per-method caps (FR-027); circe streaming codecs for traces and logs
+  (FR-029); `conduit` owns, `flow` reviews the streams, `prism` reviews.
+- **T-013 (Phase 0, GT-1)** The RPC read-load arm of the harness (FR-028), with the four comparator clients provisioned
+  on the same hardware and the fixture ranges of OQ-14.
