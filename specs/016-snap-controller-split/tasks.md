@@ -2343,10 +2343,98 @@ Any other rise is still forbidden. Instances:
       `HealingOrchestratorSpec`. Not run: `testEssential`.
     - Owed: forge ("no ETC behaviour change": the Hash scheme's dispatch is ETC's path), the second-specialist review
       (prism). No vault review (no storage) and no node run (characterization §7) for this slice.
-- [ ] T075 [C-H5] `HealResponseProcessing` (T060: plus `isNodeInStorage`. It adopts `evmCodeStorage`, whose `None` test
+- [x] T075 [C-H5] `HealResponseProcessing` (T060: plus `isNodeInStorage`. It adopts `evmCodeStorage`, whose `None` test
   default turns the healed-code check off, so the narrowing needs `Option[StateIngest]` or a flag. `RecordingChildFactories`
   keeps `ChildSpawn.Healing`'s fields for the protected pin. Add vault, and a Mordor heal restart). Narrowing takes `StateIngest` (healed nodes and code), never `StateAccess`;
   lowers the baseline total. Check SC-002.
+  - **No stop.** The healed-code check takes the `healedCodeCheck: Boolean` route that characterization §3.4 and T071's
+    "For T075" note name (`Option[StateIngest]` is closed: TNHC takes a plain `stateIngest`, and verify rejects the
+    `Option` form). Keeping `evmCodeStorage` explicit would put it on the Env as a session value, which is not on the
+    closed list, and would not lower the total. The adopted store is the instance the spawn already passed
+    (`stateIngest.bytecode`), so no construction or first read moves; no dropped default at a spawn site (the
+    production spawn passed the store, the test shim keeps its `Option` and hands it to its `StateIngest`); no store
+    joins the session-value list; no durability change (the check only reads).
+  - **As built** (branch `refactor/snap-016-ch5-heal-response`, three code commits and this docs commit). (1)
+    Prerequisite: `HealResponseProcessingState` (23) declared in the new `actors/healing/HealResponseProcessing.scala`;
+    `HealCompletionApi` moves there unchanged from `HealVerification.scala` (an Api lives with its provider, the C-H3
+    `PathVerifiedReadApi` / `FrontierDrainApi` precedent; prism's C-H3 note); `HealDispatchApi` (7) in
+    `HealDispatch.scala`, which `HealDispatch` now extends; `FrontierWriteApi` (`persistFrontier`, `flushRawNodesAsync`)
+    in `FrontierPersistence.scala`, which `FrontierPersistence` now extends; `TrieNodeHealingEnv` gains
+    `scopedHealMaxPaths` (the parameter becomes a `val`) and `healedCodeCheck` (the five healing spec stubs gain both);
+    `EmptyResponseStrikeThreshold` and `healedCodeHashesThisResponse` become `private lazy val` (pure: a literal and an
+    empty collection). And the flag split, the slice's one forced plain-commit logic edit: `evmCodeStorage:
+    Option[EvmCodeStorage] = None` becomes `val healedCodeCheck: Boolean = false` plus a plain `val evmCodeStorage:
+    EvmCodeStorage` (Impl, `apply`, `ChildFactories`; the spawn passes `healedCodeCheck = true` and
+    `stateIngest.bytecode`), and `recordHealedCodeHash`'s `evmCodeStorage.foreach { codes => ... }` becomes `if
+    healedCodeCheck then ... evmCodeStorage.get(...)`. The adoption check cannot carry either edit (an `# adopts:` commit
+    adds only `stateIngest`, and a dropped parameter's type must equal its member's), so the prerequisite does, verified
+    on its own (`verify.py` OK at that commit). The shim maps its `Option` to the flag and an unread ephemeral store;
+    the dispatch-table spec's direct construction passes that store until the narrowing; `RecordingChildFactories`
+    records `Option.when(healedCodeCheck)(evmCodeStorage)`. (2) The move commit (`# moved:` 12 names) takes
+    `healedCodeHashesThisResponse`, `childrenDiscoveredTotal`, `clearHealedPathsSet`, `EmptyResponseStrikeThreshold`,
+    `queueNodes`, `handleResponse`, `processActiveResponse`, `isComplete`, `recordHealedCodeHash`,
+    `flushHealedCodeHashes`, `discoverMissingChildren` and `isNodeInStorage`, byte-identical with their comments. Four
+    lose `private` (the core calls them; `isComplete` was public); the seven core fields the module reaches become
+    public; the core drops its `domain.Account` import. (3) The narrowing commit, `# adopts: StateIngest
+    TrieNodeHealingCoordinator`: self-type `HealResponseProcessingState & TrieNodeHealingEnv & FrontierGaugesApi &
+    FrontierWriteApi & HealDispatchApi & PathVerifiedRlpApi`; the module extends `HealCompletionApi`; the Impl adds
+    `with HealResponseProcessingState` and drops `with HealCompletionApi`. `evmCodeStorage` is dropped from the Impl
+    constructor, `apply`, `new`, `ChildFactories.trieNodeHealingCoordinator` (and its import) and the
+    `HealingOrchestrator` spawn; the module's one read becomes `stateIngest.bytecode.get` (the bare `capability-map:
+    evmCodeStorage -> bytecode`; verify's `[adopts]` reports "drops evmCodeStorage -> stateIngest.bytecode").
+    - **Judgement calls.** (a) The flag route and its placement in the prerequisite (above); `healedCodeCheck`'s
+      default is `false`, the old `None`'s meaning, and only the production spawn turns it on. A tooling follow-up
+      could let an adoption commit pair a `<flag>: Boolean = false` add with an `Option` drop, so the logic edit is
+      checked; not needed now. (b) `HealCompletionApi` moves to its provider; `isNodeInStorage` gets no Api (its other
+      callers are core arms, through the Impl, C-H4 judgement (d)). (c) The dispatch members get one `HealDispatchApi`
+      and the two frontier writes one `FrontierWriteApi`, each in the provider's file, rather than module self-types
+      (the `FrontierDrainApi` precedent). (d) `EmptyResponseStrikeThreshold` and `healedCodeHashesThisResponse` move as
+      `private lazy val`s (the C-H4 constants precedent) rather than staying as State members; `childrenDiscoveredTotal`
+      moves as a private `var` (literal initializer). (e) `scopedHealMaxPaths` and `healedCodeCheck` go on the Env
+      (constructor settings), not State. (f) `calculateProgress`, `calculateNodesPerSecond`, `calculateKilobytesPerSecond`
+      stay in the core (the progress arm's), so `completedTaskCount` and `totalBytesReceived` are State `var`s.
+    - **Bytecode store path (for vault, forge and beacon).** *Instance:* `stateIngest.bytecode`, SNAPSyncController's
+      env `evmCodeStorage`, the value the spawn wrapped in `Some` before; the coordinator reads the capability's member
+      per healed account leaf (a field read). *Read:* the same `get` (never the execution cache), on the actor thread,
+      only with the check on; no write. *Both schemes:* the check is scheme-independent, so Hash (ETC/Mordor) and Path
+      run the same code; the `HealedCodeHashes` report is still one message per response, before that response's
+      `ProgressNodesHealed`. With the flag off (bare construction, tests) the store is never read.
+    - Counts: `HealResponseProcessing` State 23 (= R14b), Api 11 in 4 traits (= R14b: `FrontierGaugesApi` 1,
+      `FrontierWriteApi` 2, `HealDispatchApi` 7, `PathVerifiedRlpApi` 1). `TrieNodeHealingEnv` 20 (G9: +
+      `scopedHealMaxPaths`, `healedCodeCheck`), one store (`mptStorage`).
+    - Storage total **558 → 544** (counter v2), a fall with no exception: the adoption −14 (TNHC −7: constructor,
+      `apply`, `new` argument and import; `ChildFactories` 43 → 38; `HealingOrchestrator` 37 → 35).
+      `TrieNodeHealingCoordinator.scala` 31 → 17, `actors/healing/HealResponseProcessing.scala` 0 → 7 (the
+      characterization's 12 less the five `isNodeInStorage` false positives: `mptStorage` ×3, `stateIngest.pathNodes`,
+      `.writeStorageNode`, `stateIngest.healingFrontier`, `stateIngest.bytecode`). `storage-baseline.json` records it
+      with a fresh justification line (C-H3's moved to the history).
+    - **SC-002 (checked, not met yet).** "After the last coordinator slice, no coordinator file exceeds about 1,000
+      lines." At this head: `TrieNodeHealingCoordinator.scala` 1,532 (1,941 before C-H5),
+      `StorageRangeCoordinator.scala` 1,471, `AccountRangeCoordinator.scala` 1,147, `ByteCodeCoordinator.scala` 548.
+      C-X (T076) removes only the three response-window copies (tens of lines), so SC-002 will not hold after it
+      either: three cores keep their arms, lifecycle and fields above the bound. A user decision (amend SC-002, or plan
+      further C-* slices, e.g. moving arm groups) before R1.
+    - Tests (`# new-tests:`): `HealResponseProcessingSpec` (10 cases, `ScalaTestWithActorTestKit`; the stub State,
+      Env and recording interfaces, inboxes for `self` and the controller, a `TestMptStorage`, an ephemeral frontier
+      store and `PathNodeStorage`): the hash-matched accept and dropped mismatch, the re-queue and its
+      `noteUnservableAttempt`, the feedback order; an untracked response; the spec 003 capture, overflow latch and
+      cross-root count, then `clearHealedPathsSet`; the strikes and the fifth-strike stateless mark, eviction and
+      `HealingAllPeersStateless`; the Path write at the task path and both alias kinds; a branch's absent child queued
+      and persisted; the storage-root seed and the healed-code report on (absent reported first, held not) and off
+      (store never read); the spec 005 seed; `queueNodes`' de-dup and `isComplete`; presence by hash and by verified
+      path. `HealingTrieFixtures.healingIngest` gains `codeStore` (default `None`, `bytecode` throws);
+      `RecordingChildFactories` records `Option.when(healedCodeCheck)(stateIngest.bytecode)` in the unchanged
+      `ChildSpawn.Healing.evmCodeStorage`. No assertion changed.
+    - Build: `sbt compile-all` green on each code commit (prerequisite, move, narrowing); scalafmtAll applied (scaladoc
+      reflow and one blank line, folded into the commit that wrote each line; the moved bodies unchanged). `testOnly`
+      over 30 suites, 189 tests, all green (`HealResponseProcessingSpec` 10, the healing module specs, the
+      `TrieNodeHealing*` specs, the pruned, decoupled, scoped, path-presence, seeding, resume and early-completion specs,
+      `HealedAccountCodeSpec`, `ChildFactoriesSpec`, `SNAPSyncControllerPinSpec`, `HealingOrchestratorSpec`). Not run:
+      `testEssential`.
+    - Owed: vault (the healed-code read), forge ("no ETC behaviour change": the Hash scheme's response processing, the
+      spec 005 seed and the healed-code check are ETC's path), beacon (the Path-scheme healed-node write and presence
+      reads), the second-specialist review (prism), and the **Mordor heal restart** (characterization §7), run by the
+      orchestrator.
 - [x] T075b [C-X0] Test-only golden of the response-size window for ARC, SRC and TNHC: initial target, grow on a ≥90%
   fill, shrink on failure, min/max clamps, and the exact DEBUG log text with its per-coordinator label. It lands
   before C-X. Built as `ResponseWindowGoldenSpec`. Finding for C-X: the three bodies are identical (factors 1.25 and
