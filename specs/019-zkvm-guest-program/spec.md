@@ -364,6 +364,10 @@ reproduces them bit for bit.
   Answered by SP-1b.
 - **OQ-1c** Approach B target language: C (portable, every zkVM SDK ships a C toolchain and `zkvm_accelerators.h` is a
   C header) or LLVM IR? Default: C.
+- **OQ-1d** Which TASTy version the translator targets. TASTy follows the compiler minor; the LTS audit of 2026-10-17
+  (`docs/reports/LTS_TOOLCHAIN_AUDIT_2026-10.md`, R-1) recommends the repo move from Scala 3.3 LTS to 3.9 LTS before
+  spec 017. The translator and `tasty-query` pin must match the repo's compiler at SP-1b time; do not build it against
+  3.3's TASTy if the migration is scheduled.
 - **OQ-2** Which zkVMs to target first. Prefer the ones Ere already integrates and that the roadmap's benchmarks use.
 - **OQ-3** Whether exceptions can be kept in the guest, or the shared code must adopt an exception-free subset.
   Under B the answer is "no exceptions"; under A it is SP-1a's finding.

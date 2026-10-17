@@ -9,6 +9,7 @@ This directory contains test reports, implementation summaries, and analysis doc
 
 ### Analysis Reports
 - **[Static Analysis Inventory](STATIC_ANALYSIS_INVENTORY.md)** - Static analysis results and findings
+- **[LTS Toolchain Audit 2026-10](LTS_TOOLCHAIN_AUDIT_2026-10.md)** - Scala / sbt / JDK LTS status and the direct dependency chain, with recommendations R-1..R-7
 
 ### SNAP Sync
 - **[SNAP Resolution](SNAP-Resolution.md)** - SNAP sync resolution notes
