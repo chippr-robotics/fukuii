@@ -490,7 +490,7 @@ That makes it the right probe for the adoption shape. Proposed sequence:
 | 14 | C-H3 (T073, adopts `pathNodeStorageOpt`) | — | vault (already) | — |
 | 15 | C-H4 (T074): zero-reference | — | — | — |
 | 16 | C-H5 (T075, adopts `evmCodeStorage` as `Option`) | — | **add vault** (healed-code presence check) | Mordor heal restart recommended (the healed-code check is on the ETC path) |
-| 17 | C-X0, C-X (T075b, T076) | — | — | — |
+| 17 | C-X0, C-X (T075b, T076; done: zero-reference, total unchanged at 544) | — | — | — |
 
 Every coordinator runs on ETC (Hash scheme) as well as on ETH, so every C-* PR needs forge's "no ETC behaviour
 change" sign-off. Beacon reviews C-S2 and C-H3/C-H5, the Path-scheme node writes and reads.
