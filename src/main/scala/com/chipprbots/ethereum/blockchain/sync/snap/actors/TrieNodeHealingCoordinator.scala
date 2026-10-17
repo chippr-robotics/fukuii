@@ -17,7 +17,6 @@ import com.chipprbots.ethereum.blockchain.sync.snap.*
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.healing.*
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.StateIngest
-import com.chipprbots.ethereum.crypto.kec256
 import com.chipprbots.ethereum.db.storage.BfsQueueStorage
 import com.chipprbots.ethereum.db.storage.EvmCodeStorage
 import com.chipprbots.ethereum.db.storage.InMemoryBfsQueueStorage
@@ -104,6 +103,7 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
     walkLocalOnly: Option[java.util.concurrent.atomic.AtomicBoolean] = None
 ) extends FrontierPersistence
     with FrontierRebuildBfs
+    with HealVerification
     with TrieNodeHealingEnv
     with FrontierPersistenceState
     with FrontierRebuildBfsState
@@ -122,7 +122,7 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
     org.slf4j.LoggerFactory.getLogger(classOf[TrieNodeHealingCoordinatorImpl])
 
   // Mutable state root — updated in-place when the controller refreshes the pivot (HealingPivotRefreshed).
-  private var stateRoot: ByteString = initialStateRoot
+  var stateRoot: ByteString = initialStateRoot
 
   // Task management — each task has a pathset (for GetTrieNodes) and a hash (for verification).
   // ArrayDeque (circular buffer) gives O(1) amortized head/tail operations (#1167). The previous
@@ -178,7 +178,7 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
   // After MaxConsecutiveStagnations, notify controller to restart with fresh pivot.
   private var consecutiveStagnations: Int = 0
   private val MaxConsecutiveStagnations: Int = 3
-  private var trieWalkInProgress: Boolean = false
+  var trieWalkInProgress: Boolean = false
   // Verification BFS state: gates StateHealingComplete and catches storage sub-trie gaps (Fix BUG-1/BUG-2).
   // verificationPassComplete = true only after a BFS traversal finds zero missing nodes.
   // verificationBFSRunning = true while ANY frontier walk Future (crash-recovery rebuild OR
@@ -188,7 +188,7 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
   // a running rebuild (observed live 2026-06-11): two walks interleaving on the shared bfsQueue,
   // both producing garbage coverage. @volatile: set from the walk's EC thread, read on the actor
   // thread by the watchdog/completion/pivot gates.
-  private var verificationPassComplete: Boolean = false
+  var verificationPassComplete: Boolean = false
   // Consecutive verification walks discarded because the heal root moved under them; reset by any walk of the current
   // root that completes. Bounded so a root that outruns the walk cannot livelock the heal.
   private var consecutiveStaleDiscards: Int = 0
@@ -294,9 +294,9 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
   // verification is launched, scopedVerificationActive is set with its start time and seed count so the
   // VerificationBFSComplete handler can emit the [HEAL-VERIFY-SCOPED] completion log + duration gauge.
   // Cleared (None) on the full-root path so the completion handler does not mis-attribute a full-root run.
-  private var scopedVerificationStartMs: Long = 0L
-  private var scopedVerificationSeedCount: Int = 0
-  private var scopedVerificationActive: Boolean = false
+  var scopedVerificationStartMs: Long = 0L
+  var scopedVerificationSeedCount: Int = 0
+  var scopedVerificationActive: Boolean = false
 
   // --- spec 005 (Pruned descend-and-stop verification, D5/T005) ---
   // Single scheme gate consulted at the verification entry and inside the per-child descent oracle: pruning is
@@ -312,8 +312,8 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
   // spec 005 C8/FR-009: observability for the IN-FLIGHT pruned verification run — count of present subtrees pruned
   // (descend-and-stop hits) and the run start time, set when the verification entry takes the pruned path and read by
   // the VerificationBFSComplete handler to emit the [HEAL-VERIFY-PRUNED] completion log + duration/pruned-count gauges.
-  private var prunedVerificationActive: Boolean = false
-  private var prunedVerificationStartMs: Long = 0L
+  var prunedVerificationActive: Boolean = false
+  var prunedVerificationStartMs: Long = 0L
   // Pruned-subtree hits accumulated across the BFS sub-ranges of the current verification walk. AtomicLong because the
   // oracle fires on `healingReaderEc` sub-range threads (parallel levels). Reset at the start of each pruned walk.
   val prunedSubtreeCount: java.util.concurrent.atomic.AtomicLong =
@@ -1774,96 +1774,8 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
     val elapsedSec = (System.currentTimeMillis() - startTime) / 1000.0
     if elapsedSec > 0 then (totalBytesReceived / 1024.0) / elapsedSec else 0.0
 
-  private def isComplete: Boolean =
+  def isComplete: Boolean =
     pendingTasks.isEmpty && activeRequests.isEmpty
-
-  /** Discard the verdict of the last verification pass and walk the CURRENT root again. Used when that pass was run
-    * against a superseded root or found missing nodes. Starts the walk directly (not via HealingCheckCompletion): the
-    * gate's `totalNodesHealed == 0` arm would declare completion without any walk. When work is still pending or a
-    * flush is in flight the normal gate re-verifies once it drains (`verificationPassComplete == false` forces a walk).
-    */
-  private def reverifyCurrentRoot(): Unit =
-    scopedVerificationActive = false
-    prunedVerificationActive = false
-    verificationPassComplete = false
-    if isComplete && !flushing && !trieWalkInProgress && !verificationBFSRunning then
-      startVerificationBFS(
-        stateRoot,
-        ByteString(com.chipprbots.ethereum.mpt.HexPrefix.encode(Array.empty[Byte], isLeaf = false))
-      )
-    else self ! HealingCheckCompletion
-
-  /** Start a verification BFS (see [[startFrontierBFS]]).
-    *
-    * Traverses all locally-held trie nodes starting at `root` / `rootPath` and queues any missing descendants as
-    * `FrontierRebuilt` messages. Sends `VerificationBFSComplete` when done.
-    *
-    * Needed because `discoverMissingChildren` skips storage roots that are already in local storage without recursing
-    * into their children — a storage sub-trie with a locally-held root can still have gaps deeper in the tree (RUN10:
-    * account 888157b2 had 11 missing storage nodes after StateHeal declared completion). BFS catches every missing
-    * descendant in O(levels × chunk_reads) instead of O(total_nodes) point-reads.
-    */
-  private def startVerificationBFS(root: ByteString, rootPath: ByteString): Unit =
-    verificationBFSRunning = true
-    val selfRef = self
-    // spec 003 C6/T016: full-root path — clear the scoped engagement gauge so a dashboard can
-    // distinguish the two paths, and mark the in-flight run as NOT scoped for the completion handler.
-    scopedVerificationActive = false
-    SNAPSyncMetrics.setHealingScopedVerification(0L)
-    // spec 005 C2/C8/T024: this full-root walk is the SAME traversal whether or not pruning is engaged — the
-    // descend-and-stop oracle (pruneIfSubtreeComplete) is inert unless `prunedEnabled`. Reset the per-run pruned
-    // counter and record engagement so the completion handler can emit the [HEAL-VERIFY-PRUNED] savings, and surface
-    // the engaged/disabled path here at the verification entry (FR-009/FR-007).
-    prunedSubtreeCount.set(0L)
-    prunedVerificationActive = prunedEnabled
-    prunedVerificationStartMs = System.currentTimeMillis()
-    SNAPSyncMetrics.setHealingPrunedVerification(if prunedEnabled then 1L else 0L)
-    SNAPSyncMetrics.setHealingPrunedSubtrees(0L)
-    if prunedEnabled then
-      log.info(
-        s"[HEAL-VERIFY-PRUNED] Pruned (descend-and-stop) verification engaged on root " +
-          s"${Hex.toHexString(root.take(4).toArray)} — present, recorded-complete subtrees are pruned " +
-          s"(O(missing-frontier)); present-but-unrecorded and missing nodes are descended"
-      )
-    else
-      log.info(
-        s"[HEAL-VERIFY-PRUNED] Pruning disabled (flag=$prunedHealVerification scheme=$storageScheme " +
-          s"store=${stateIngest.healingFrontier.isDefined}) — full-trie verification on root " +
-          s"${Hex.toHexString(root.take(4).toArray)}"
-      )
-    startFrontierBFS(
-      root,
-      rootPath,
-      isStor = false,
-      (missing: Long) => selfRef ! VerificationBFSComplete(root, missing)
-    )
-
-  /** Launch a SCOPED verification BFS seeded from the healed-paths set (spec 003 C3/FR-002/FR-006). Each healed node's
-    * subtree is re-walked to completion; any missing descendant is emitted via `FrontierRebuilt`. Sends
-    * `VerificationBFSComplete` on done — the SAME completion path the full-root verification uses, so completion flows
-    * through the single `verificationPassComplete` chokepoint (no new completion message, no new marker set-point).
-    * Each `HealingEntry` maps to `(hash, pathset, pathset.size > 1)`: a `pathset.size > 1` entry is a storage-trie seed
-    * `(storageRootHash, Seq(accountHash32, compactStoragePath), isStorage = true)`, mirroring
-    * `discoverMissingChildren`'s `pathset.size > 1` storage test. Reuses `verificationBFSRunning`, the shared
-    * `bfsQueue`, and `startFrontierBFS`.
-    */
-  private def startScopedVerification(seeds: Seq[HealingEntry]): Unit =
-    verificationBFSRunning = true
-    val selfRef = self
-    // spec 003 C6/T016: record the in-flight scoped run for the completion log + duration gauge, and
-    // emit the engagement signal on entry.
-    scopedVerificationActive = true
-    scopedVerificationSeedCount = seeds.size
-    scopedVerificationStartMs = System.currentTimeMillis()
-    log.info(
-      s"[HEAL-VERIFY-SCOPED] Scoped verification engaged — ${seeds.size} healed subtrees " +
-        s"(root ${Hex.toHexString(stateRoot.take(4).toArray)}); skipping full-root re-walk"
-    )
-    SNAPSyncMetrics.setHealingScopedVerification(1L)
-    SNAPSyncMetrics.setHealingScopedSubtrees(seeds.size.toLong)
-    val bfsSeeds = seeds.map(e => (e.hash, e.pathset, e.pathset.size > 1))
-    val walkRoot = stateRoot
-    startFrontierBFS(bfsSeeds, (missing: Long) => selfRef ! VerificationBFSComplete(walkRoot, missing))
 
   /** Remember `account`'s codeHash for the controller if it names code this node does not hold. */
   private def recordHealedCodeHash(account: Account): Unit =
@@ -2040,53 +1952,6 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
             s"[HEAL] Cannot decode healed node for child discovery: ${e.getMessage}. " +
               s"Skipping — trie walk will find these nodes."
           )
-
-  /** Path scheme only: the bytes stored at the task's OWN path in [[PathNodeStorage]], returned ONLY when their
-    * keccak256 equals `hash` — otherwise `None`.
-    *
-    * `pathset` is the same shape `HealingEntry` / `GetTrieNodes` use, HP/compact-encoded: `Seq(compactPath)` for an
-    * account-trie node, `Seq(accountHash32, compactStoragePath)` for a storage-trie node. It is decoded to the nibble
-    * path `PathNodeStorage.readAccountNode` / `readStorageNode` take (they HP-encode it back to the RocksDB key).
-    *
-    * Why the hash comparison is mandatory: `PathNodeStorage` keeps exactly ONE node per path slot, and a re-peg REUSES
-    * paths — a node healed against the previous root can sit at the very path the new root needs, with DIFFERENT
-    * content. "Something is stored at this path" is therefore NOT presence; only "the bytes at this path are the bytes
-    * whose keccak256 the parent references" is. A stale node, or the right bytes at the wrong path, both fall through
-    * to `None` and get re-fetched (an idempotent overwrite).
-    *
-    * Also `None`: no `PathNodeStorage` configured, nothing stored at the path, or a pathset of an unexpected shape (no
-    * path context ⇒ conservatively absent, never present).
-    */
-  private def readPathVerifiedRlp(hash: ByteString, pathset: Seq[ByteString]): Option[Array[Byte]] =
-    import com.chipprbots.ethereum.mpt.HexPrefix
-    pathNodeStorageOpt.flatMap { pns =>
-      val stored: Option[Array[Byte]] = pathset match
-        case Seq(compactPath) =>
-          pns.readAccountNode(HexPrefix.decode(compactPath.toArray)._1)
-        case Seq(accountHash, compactPath) =>
-          pns.readStorageNode(accountHash, HexPrefix.decode(compactPath.toArray)._1)
-        case _ => None
-      stored.filter(rlp => ByteString.fromArrayUnsafe(kec256(rlp)) == hash)
-    }
-
-  /** `readPathVerifiedRlp` plus decode, for the frontier-rebuild walk, which must traverse the node's children. Bytes
-    * that hash correctly but do not decode are reported absent (so they are re-fetched and overwritten) and logged: it
-    * should be unreachable — a node referenced by a valid trie decodes — but must never be counted present.
-    */
-  def readPathVerifiedNode(
-      hash: ByteString,
-      pathset: Seq[ByteString]
-  ): Option[com.chipprbots.ethereum.mpt.MptNode] =
-    readPathVerifiedRlp(hash, pathset).flatMap { rlp =>
-      try Some(MptStorage.decodeNode(rlp, hash.toArray))
-      catch
-        case scala.util.control.NonFatal(e) =>
-          asyncLog.warn(
-            s"[HEAL-BFS] Path-scheme node ${Hex.toHexString(hash.take(4).toArray)} hashes correctly at its path but " +
-              s"does not decode (${e.getMessage}) — treating as missing so it is re-fetched"
-          )
-          None
-    }
 
   /** Presence check that gates healing queue/skip decisions.
     *
