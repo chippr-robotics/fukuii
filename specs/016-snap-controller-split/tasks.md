@@ -2441,8 +2441,49 @@ Any other rise is still forbidden. Instances:
   0.5, the 90% rule, the 2 MiB ceiling, rounding); they differ only in the log label (`account`, `storage`, `healing`)
   and in where initial/min come from (ARC and SRC: configuration, defaults 524288/102400 and 1048576/131072; TNHC:
   hard-coded 524288/51200), so the extraction takes initial and min as parameters too.
-- [ ] T076 [C-X] `AdaptiveResponseBytes` for ARC, SRC and TNHC (identical bodies, log label as a parameter).
+- [x] T076 [C-X] `AdaptiveResponseBytes` for ARC, SRC and TNHC (identical bodies, log label as a parameter).
   ByteCode is untouched.
+  - **As built** (branch `refactor/snap-016-cx-adaptive-response-bytes`, two code commits and this docs commit, on
+    staging after C-H5's squash). (1) `snap/AdaptiveResponseBytes.scala` (72 lines, where plan.md's source tree puts
+    it, next to `SnapIntakeBudget`, outside the module directories): `final class AdaptiveResponseBytes(label,
+    initial, min, targets, log)` with `targetFor`, `onSuccess`, `onFailure`; the 2 MiB ceiling and the 1.25/0.5
+    factors are companion constants. The bodies are the module bodies verbatim. Plus its unit spec. (2) Adoption: each
+    module (`AccountPeerDispatch`, `StoragePeerDispatch`, `HealDispatch`) drops its five lazy-val constants and the
+    three bodies for one `private lazy val responseWindow` and three one-line forwarders with the old names and
+    visibility. Parameters: ARC `"account"`, `BigInt(initialResponseBytesConfig)`, `BigInt(minResponseBytesConfig)`;
+    SRC `"storage"`, `BigInt(configInitialResponseBytes)`, `BigInt(configMinResponseBytes)`; TNHC `"healing"`, 512 KiB,
+    50 KiB.
+  - **Commit shape.** Plain refactor commits, no `# moved:` / `# adopts:` / `# capability:` (the C-H0, T070
+    precedent): three copies collapse to one, so a move's identical-body check cannot apply, and no module file
+    loses its last impl mention, so there is no narrowing. verify runs FR-016 (a)/(d), the test-hunk guard (the new
+    suite named in `# new-tests:`), the protected paths and the storage ratchet on them.
+  - **Judgement calls.** (a) A parameterised class composed in, not a mixin with abstract label/initial/min members:
+    the module traits gain no abstract members, so no stub, State, Api or Env changes. (b) The window owns no state:
+    `targets` is the coordinator's own `peerResponseBytesTarget` (still a core val, still cleared by the core on a
+    pivot change) and `log` is the coordinator's Env logger, so the DEBUG line keeps its logger name as well as its
+    text (a class logger would have passed the golden, which filters by package, but changed the logger in
+    production). (c) `private lazy val`, not `val`: FR-016 (d) forbids a concrete member `val`, and `lazy` keeps the
+    first read of the Env values at first use, as the old lazy constants did. (d) SRC's `responseBytesTargetFor` stays
+    `private`; ARC's and TNHC's stay public (their Api traits declare them). (e) SRC's implicit `Int -> BigInt` is
+    made explicit; same value.
+  - Counts: unchanged (no State, Api or Env member added or removed). Storage total unchanged at **544** (no storage
+    reference involved).
+  - Lines: the three module files 392 -> 384 (ARC `AccountPeerDispatch`), 562 -> 553 (SRC `StoragePeerDispatch`) and
+    361 -> 348 (`HealDispatch`): -73 / +43, net **-30**; with the new 72-line file
+    (half of it scaladoc) the slice is **+42 net** in `src/main`, against plan.md's estimate of -60.
+  - **SC-002 after C-X (unchanged by this slice).** C-X touches the module files, not the coordinator cores, so the
+    four coordinator files are exactly as after C-H5: `TrieNodeHealingCoordinator.scala` 1,532,
+    `StorageRangeCoordinator.scala` 1,471, `AccountRangeCoordinator.scala` 1,147, `ByteCodeCoordinator.scala` 548.
+    Three exceed the ~1,000 bound; the decision (amend SC-002 or plan further C-* slices) is the user's, before R1.
+  - Tests (`# new-tests:`): `AdaptiveResponseBytesSpec` (9 cases, Tier 1): seeding, read-side clamps without rewrite,
+    the exact 90% boundary, no growth below it / for a zero request / at the ceiling, rounding and the growth cap,
+    halving with rounding and the floor, the seed-before-halve of an unseen peer, the DEBUG line's level, logger and
+    text, and no line on success. `ResponseWindowGoldenSpec` unchanged (21 cases) and green; no stub suite edited.
+  - Build: `sbt compile-all` green; `scalafmtAll` changed nothing. `testOnly` over 15 suites, 234 tests, all green
+    (`ResponseWindowGoldenSpec`, `AdaptiveResponseBytesSpec`, `AccountPeerDispatchSpec`, `StoragePeerDispatchSpec`,
+    `HealDispatchSpec`, the `AccountRange*`, `StorageRange*` and `TrieNodeHealing*` specs). Not run: `testEssential`.
+  - Owed: the second-specialist review (prism); forge's "no ETC behaviour change" note (the window runs on ETC's
+    Hash-scheme path too). No vault review and no node run (no storage, characterization row 17).
 
 ## R1 — Renames and final check
 

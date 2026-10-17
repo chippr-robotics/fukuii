@@ -5,6 +5,7 @@ import org.apache.pekko.util.ByteString
 import scala.collection.mutable
 import scala.concurrent.duration.*
 
+import com.chipprbots.ethereum.blockchain.sync.snap.AdaptiveResponseBytes
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPRequestTracker
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController
 import com.chipprbots.ethereum.blockchain.sync.snap.SnapPeerHealth
@@ -282,34 +283,24 @@ private[actors] trait StoragePeerDispatch extends StoragePeerFeedbackApi with St
 
   private var storageMilestonePct: Int = -1
 
-  // Per-peer adaptive byte budgeting (ported from ByteCodeCoordinator).
-  // Geth's snap handler supports up to 2MB responses. Starting at 512KB and probing upward
-  // on responsive peers, scaling down on failures.
-  private lazy val minResponseBytes: BigInt =
-    configMinResponseBytes // Configurable floor (avoid excessive small requests)
-  private lazy val maxResponseBytes: BigInt = 2 * 1024 * 1024 // 2MB ceiling (Geth handler limit)
-  private lazy val initialResponseBytes: BigInt = configInitialResponseBytes // Configurable starting point
-  private lazy val increaseFactor: Double = 1.25 // Scale up when 90%+ fill
-  private lazy val decreaseFactor: Double = 0.5 // Scale down on failure/empty
+  // Per-peer adaptive byte budgeting: the shared window (spec 016 C-X) over this coordinator's map and logger.
+  // Geth's snap handler supports up to 2MB responses; start at the configured target (floor: the configured minimum,
+  // avoiding excessive small requests), probe upward on responsive peers, scale down on failures.
+  private lazy val responseWindow: AdaptiveResponseBytes =
+    new AdaptiveResponseBytes(
+      "storage",
+      BigInt(configInitialResponseBytes),
+      BigInt(configMinResponseBytes),
+      peerResponseBytesTarget,
+      log
+    )
 
-  private def responseBytesTargetFor(peer: Peer): BigInt =
-    peerResponseBytesTarget
-      .getOrElseUpdate(peer.id.value, initialResponseBytes)
-      .max(minResponseBytes)
-      .min(maxResponseBytes)
+  private def responseBytesTargetFor(peer: Peer): BigInt = responseWindow.targetFor(peer)
 
   def adjustResponseBytesOnSuccess(peer: Peer, requested: BigInt, received: BigInt): Unit =
-    if requested > 0 && received * 10 >= requested * 9 && requested < maxResponseBytes then
-      val next = (requested.toDouble * increaseFactor).toLong
-      peerResponseBytesTarget.update(peer.id.value, BigInt(next).min(maxResponseBytes))
+    responseWindow.onSuccess(peer, requested, received)
 
-  def adjustResponseBytesOnFailure(peer: Peer, reason: String): Unit =
-    val cur = responseBytesTargetFor(peer)
-    val next = (cur.toDouble * decreaseFactor).toLong
-    peerResponseBytesTarget.update(peer.id.value, BigInt(next).max(minResponseBytes))
-    log.debug(
-      s"Reducing storage responseBytes target for peer ${peer.id.value}: $cur -> ${peerResponseBytesTarget(peer.id.value)} ($reason)"
-    )
+  def adjustResponseBytesOnFailure(peer: Peer, reason: String): Unit = responseWindow.onFailure(peer, reason)
 
   private def requestNextRanges(peer: Peer): Option[BigInt] =
     val min = ByteString(Array.fill(32)(0.toByte))

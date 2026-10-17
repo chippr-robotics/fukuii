@@ -7,6 +7,7 @@ import scala.concurrent.duration.*
 
 import org.bouncycastle.util.encoders.Hex
 
+import com.chipprbots.ethereum.blockchain.sync.snap.AdaptiveResponseBytes
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPRequestTracker
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncMetrics
@@ -138,31 +139,17 @@ private[actors] trait HealDispatch extends HealDispatchApi:
         )
         SNAPSyncMetrics.setHealingUnservableTasks(unservable.toLong)
 
-  // Per-peer adaptive byte budgeting
-  private lazy val minResponseBytes: BigInt = 50 * 1024
-  private lazy val maxResponseBytes: BigInt = 2 * 1024 * 1024
-  private lazy val initialResponseBytes: BigInt = 512 * 1024
-  private lazy val increaseFactor: Double = 1.25
-  private lazy val decreaseFactor: Double = 0.5
+  // Per-peer adaptive byte budgeting: the shared window (spec 016 C-X) over this coordinator's map and logger,
+  // with healing's fixed initial target (512 KiB) and floor (50 KiB).
+  private lazy val responseWindow: AdaptiveResponseBytes =
+    new AdaptiveResponseBytes("healing", BigInt(512 * 1024), BigInt(50 * 1024), peerResponseBytesTarget, log)
 
-  def responseBytesTargetFor(peer: Peer): BigInt =
-    peerResponseBytesTarget
-      .getOrElseUpdate(peer.id.value, initialResponseBytes)
-      .max(minResponseBytes)
-      .min(maxResponseBytes)
+  def responseBytesTargetFor(peer: Peer): BigInt = responseWindow.targetFor(peer)
 
   def adjustResponseBytesOnSuccess(peer: Peer, requested: BigInt, received: BigInt): Unit =
-    if requested > 0 && received * 10 >= requested * 9 && requested < maxResponseBytes then
-      val next = (requested.toDouble * increaseFactor).toLong
-      peerResponseBytesTarget.update(peer.id.value, BigInt(next).min(maxResponseBytes))
+    responseWindow.onSuccess(peer, requested, received)
 
-  def adjustResponseBytesOnFailure(peer: Peer, reason: String): Unit =
-    val cur = responseBytesTargetFor(peer)
-    val next = (cur.toDouble * decreaseFactor).toLong
-    peerResponseBytesTarget.update(peer.id.value, BigInt(next).max(minResponseBytes))
-    log.debug(
-      s"Reducing healing responseBytes target for peer ${peer.id.value}: $cur -> ${peerResponseBytesTarget(peer.id.value)} ($reason)"
-    )
+  def adjustResponseBytesOnFailure(peer: Peer, reason: String): Unit = responseWindow.onFailure(peer, reason)
 
   private lazy val peerCooldownDefault = 30.seconds
 
