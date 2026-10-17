@@ -81,6 +81,7 @@ private class StubFrontierPersistenceState(
   val log: org.slf4j.Logger = org.slf4j.LoggerFactory.getLogger(classOf[FrontierPersistenceSpec])
   val asyncLog: org.slf4j.Logger = log
   val storageScheme: StorageScheme = StorageScheme.Hash
+  val prunedHealVerification: Boolean = true
   val selfInbox: TestInbox[TrieNodeHealingCoordinator.Command] = TestInbox[TrieNodeHealingCoordinator.Command]()
   val self: ActorRef[TrieNodeHealingCoordinator.Command] = selfInbox.ref
   val mptStorage: RecordingMptStorage = new RecordingMptStorage(frontierStore)

@@ -10,8 +10,9 @@ import com.chipprbots.ethereum.db.storage.MptStorage
 /** TrieNodeHealingCoordinator's environment for its modules (spec 016 C-H1, characterization G9): its loggers and
   * `self`, and the constructor's settings the modules read (the Layer-2 mirror gate, the spec 004 unservable threshold
   * that the gauges report, the frontier backpressure marks; the storage scheme the frontier walk reads and de-dups by,
-  * C-H2). Constructor parameters and immutable values only, so it is a capability-like trait, counted apart from the
-  * modules' `<Module>State` (research.md R14b). The coordinator Impl implements it.
+  * C-H2; the spec 005 pruned-verification flag the verification entry logs, C-H3). Constructor parameters and immutable
+  * values only, so it is a capability-like trait, counted apart from the modules' `<Module>State` (research.md R14b).
+  * The coordinator Impl implements it.
   *
   * `log` is the actor's context logger, for the actor thread only; `asyncLog` is the plain SLF4J logger the off-thread
   * bodies use (the frontier walk on the healing writer and reader dispatchers, C-H2).
@@ -27,6 +28,7 @@ private[actors] trait TrieNodeHealingEnv:
   def self: ActorRef[TrieNodeHealingCoordinator.Command]
   def mptStorage: MptStorage
   def storageScheme: StorageScheme
+  def prunedHealVerification: Boolean
   def frontierPersistenceEnabled: Boolean
   def decoupledHealServeRoot: Boolean
   def decoupledHealMaxAttemptsNoRefresh: Int

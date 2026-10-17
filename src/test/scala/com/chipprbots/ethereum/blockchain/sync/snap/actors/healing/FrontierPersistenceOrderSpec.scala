@@ -81,6 +81,7 @@ private class StubFrontierOrderState(val healingWriterEc: ExecutionContext)
   val asyncLog: org.slf4j.Logger = log
   val self: ActorRef[TrieNodeHealingCoordinator.Command] = selfInbox.ref
   val storageScheme: StorageScheme = StorageScheme.Hash
+  val prunedHealVerification: Boolean = true
   val mptStorage: OrderRecordingMptStorage = new OrderRecordingMptStorage(Some(frontierStore))
   val frontierPersistenceEnabled: Boolean = true
   val decoupledHealServeRoot: Boolean = false

@@ -59,7 +59,7 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
     healingMinParallelism: Int = TrieNodeHealingCoordinator.DefaultMinParallelism,
     healingReservedCores: Int = TrieNodeHealingCoordinator.DefaultReservedCores,
     val storageScheme: StorageScheme = StorageScheme.Hash,
-    pathNodeStorageOpt: Option[PathNodeStorage] = None,
+    val pathNodeStorageOpt: Option[PathNodeStorage] = None,
     val frontierHighWater: Int = TrieNodeHealingCoordinator.DefaultFrontierHighWater,
     val frontierLowWater: Int = TrieNodeHealingCoordinator.DefaultFrontierLowWater,
     val frontierBackpressureMaxWaitMs: Long = TrieNodeHealingCoordinator.FrontierBackpressureMaxWaitMs,
@@ -70,7 +70,7 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
     // fresh node's first verification O(missing-frontier). Off OR Path scheme ⇒ the unchanged full-trie walk. Consensus
     // safety rests on the never-false-prune invariant: prune iff present AND recorded-complete (records written only
     // AFTER the subtree's bytes are durably committed). See `prunedEnabled`.
-    prunedHealVerification: Boolean = true,
+    val prunedHealVerification: Boolean = true,
     // spec 002/003 (frontier persistence + resume + completeness marker). Gates the LAYER-2 frontier MIRROR writes
     // (persistFrontier/unpersistFrontier/clearPersistedFrontier), the [HEAL-RESTART] resume-from-persisted-frontier
     // path, and the spec-002 `markComplete()` snapshot marker. Decoupled from store PRESENCE: spec 005 makes the store
