@@ -370,7 +370,6 @@ private[snap] trait HealingOrchestrator
               decoupledHealMaxAttemptsNoRefresh = snapSyncConfig.decoupledHealMaxAttemptsNoRefresh,
               movingRootDeltaHeal = snapSyncConfig.movingRootDeltaHeal,
               healedCodeCheck = true,
-              evmCodeStorage = stateIngest.bytecode,
               walkLocalOnly = Some(healingWalkLocalOnly)
             )
           )

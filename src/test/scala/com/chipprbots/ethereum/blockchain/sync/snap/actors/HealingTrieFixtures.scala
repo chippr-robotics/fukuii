@@ -9,7 +9,6 @@ import scala.concurrent.ExecutionContext
 import com.chipprbots.ethereum.blockchain.sync.snap.*
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.StateIngest
 import com.chipprbots.ethereum.crypto.kec256
-import com.chipprbots.ethereum.db.dataSource.EphemDataSource
 import com.chipprbots.ethereum.db.storage.AppStateStorage
 import com.chipprbots.ethereum.db.storage.BfsQueueStorage
 import com.chipprbots.ethereum.db.storage.EvmCodeStorage
@@ -54,23 +53,25 @@ import com.chipprbots.ethereum.testing.TestMptStorage
   */
 object HealingTrieFixtures:
 
-  /** The healing coordinator's `StateIngest` (spec 016 C-H1, C-H2, C-H3): through it the coordinator reads only
+  /** The healing coordinator's `StateIngest` (spec 016 C-H1, C-H2, C-H3, C-H5): through it the coordinator reads only
     * `healingFrontier`, the spec's frontier store (or `None`), `bfsQueue`, the spec's BFS queue (or `None`, the
-    * coordinator's in-memory fallback), and `pathNodes`, the spec's Path-scheme node store (or `None`, the Hash
-    * scheme); every other member throws, so a test that reaches one is a change in what healing reads through the
-    * capability.
+    * coordinator's in-memory fallback), `pathNodes`, the spec's Path-scheme node store (or `None`, the Hash scheme),
+    * and `bytecode`, the spec's code store, read only with the healed-code check on (`None`: the check is off and the
+    * member throws); every other member throws, so a test that reaches one is a change in what healing reads through
+    * the capability.
     */
   def healingIngest(
       frontier: Option[HealingFrontierStorage],
       bfsQueueStore: Option[BfsQueueStorage] = None,
-      pathNodeStore: Option[PathNodeStorage] = None
+      pathNodeStore: Option[PathNodeStorage] = None,
+      codeStore: Option[EvmCodeStorage] = None
   ): StateIngest =
     new StateIngest:
       def appState: AppStateStorage = notReached("appState")
       def stateTries: StateStorage = notReached("stateTries")
       def flatSlots: FlatSlotStorage = notReached("flatSlots")
       def pathNodes: Option[PathNodeStorage] = pathNodeStore
-      def bytecode: EvmCodeStorage = notReached("bytecode")
+      def bytecode: EvmCodeStorage = codeStore.getOrElse(notReached("bytecode"))
       def chainReader: BlockchainReader = notReached("chainReader")
       def chainWriter: BlockchainWriter = notReached("chainWriter")
       def validatorFactory: MptStorage => StateValidator = notReached("validatorFactory")
@@ -80,12 +81,6 @@ object HealingTrieFixtures:
       def storageDone: SnapStorageDoneStorage = notReached("storageDone")
       def healingFrontier: Option[HealingFrontierStorage] = frontier
       def bfsQueue: Option[BfsQueueStorage] = bfsQueueStore
-
-  /** A bytecode store for a coordinator built with the healed-code check off, which never reads it (spec 016 C-H5
-    * prerequisite: the coordinator's store parameter is no longer an `Option`; the check's on/off is
-    * `healedCodeCheck`).
-    */
-  def unreadCodeStore: EvmCodeStorage = new EvmCodeStorage(EphemDataSource())
 
   private def notReached(member: String): Nothing =
     throw new UnsupportedOperationException(s"TrieNodeHealingCoordinator read StateIngest.$member")
@@ -146,7 +141,7 @@ object HealingTrieFixtures:
         snapSyncController = snapSyncController,
         concurrency = concurrency,
         visitedCap = visitedCap,
-        stateIngest = healingIngest(healingFrontierStorage, bfsQueueStorageOpt, pathNodeStorageOpt),
+        stateIngest = healingIngest(healingFrontierStorage, bfsQueueStorageOpt, pathNodeStorageOpt, evmCodeStorage),
         healingWriterEcOverride = healingWriterEcOverride,
         healingReaderEcOverride = healingReaderEcOverride,
         traversalParallelism = traversalParallelism,
@@ -164,7 +159,6 @@ object HealingTrieFixtures:
         decoupledHealMaxAttemptsNoRefresh = decoupledHealMaxAttemptsNoRefresh,
         movingRootDeltaHeal = movingRootDeltaHeal,
         healedCodeCheck = evmCodeStorage.isDefined,
-        evmCodeStorage = evmCodeStorage.getOrElse(unreadCodeStore),
         walkLocalOnly = walkLocalOnly
       )
     )

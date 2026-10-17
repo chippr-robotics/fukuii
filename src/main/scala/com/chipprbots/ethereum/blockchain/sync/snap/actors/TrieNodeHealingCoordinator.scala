@@ -18,7 +18,6 @@ import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.healing.*
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.StateIngest
 import com.chipprbots.ethereum.db.storage.BfsQueueStorage
-import com.chipprbots.ethereum.db.storage.EvmCodeStorage
 import com.chipprbots.ethereum.db.storage.InMemoryBfsQueueStorage
 import com.chipprbots.ethereum.db.storage.MptStorage
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor
@@ -89,12 +88,11 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
     // via the spawn sites. The content-hash store gate and the finalizeSnapSync anchor guard are byte-untouched on BOTH
     // paths — under the flag the gate matches BY CONSTRUCTION (fetch root == completeness root), never by weakening it.
     val movingRootDeltaHeal: Boolean = false,
-    // The healed-code check. When true, a healed account leaf whose codeHash is not in `evmCodeStorage` is reported to
-    // the controller (SNAPSyncController.HealedCodeHashes) so the bytecode is fetched before SNAP finalises. The
-    // production spawn passes true; false (bare construction, most specs) reports nothing and never reads the store.
+    // The healed-code check. When true, a healed account leaf whose codeHash is not in `stateIngest.bytecode` is
+    // reported to the controller (SNAPSyncController.HealedCodeHashes) so the bytecode is fetched before SNAP
+    // finalises. The production spawn passes true; false (bare construction, most specs) reports nothing and never
+    // reads the store.
     val healedCodeCheck: Boolean = false,
-    // Where contract bytecode lives: the store the healed-code check reads (only while `healedCodeCheck` is on).
-    val evmCodeStorage: EvmCodeStorage,
     // Shared with the controller. True while a frontier walk is running and nothing is pending or in flight, i.e. the
     // heal needs no peers and any re-peg of the heal root can only invalidate the walk. The controller's proactive
     // heal-root re-peg (moving-root delta heal) is suppressed while it is set; None (bare construction) never suppresses.
@@ -109,7 +107,7 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
     with FrontierRebuildBfsState
     with HealVerificationState
     with HealDispatchState
-    with HealCompletionApi:
+    with HealResponseProcessingState:
 
   import TrieNodeHealingCoordinator.*
 
@@ -1484,7 +1482,6 @@ object TrieNodeHealingCoordinator:
       // spec 009 (Moving-Root Delta Heal) — plumbing only; no behavior reads it yet (see impl ctor).
       movingRootDeltaHeal: Boolean = false,
       healedCodeCheck: Boolean = false,
-      evmCodeStorage: EvmCodeStorage,
       walkLocalOnly: Option[java.util.concurrent.atomic.AtomicBoolean] = None
   ): Behavior[Command] =
     Behaviors.setup { context =>
@@ -1518,7 +1515,6 @@ object TrieNodeHealingCoordinator:
           decoupledHealMaxAttemptsNoRefresh = decoupledHealMaxAttemptsNoRefresh,
           movingRootDeltaHeal = movingRootDeltaHeal,
           healedCodeCheck = healedCodeCheck,
-          evmCodeStorage = evmCodeStorage,
           walkLocalOnly = walkLocalOnly
         ).start()
       }

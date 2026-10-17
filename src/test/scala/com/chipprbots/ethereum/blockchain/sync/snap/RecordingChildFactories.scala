@@ -316,7 +316,6 @@ final class RecordingChildFactories(
       decoupledHealMaxAttemptsNoRefresh: Int,
       movingRootDeltaHeal: Boolean,
       healedCodeCheck: Boolean,
-      evmCodeStorage: EvmCodeStorage,
       walkLocalOnly: Option[AtomicBoolean]
   ): Behavior[TrieNodeHealingCoordinator.Command] =
     healingSpawns.incrementAndGet()
@@ -348,7 +347,7 @@ final class RecordingChildFactories(
       decoupledHealServeRoot,
       decoupledHealMaxAttemptsNoRefresh,
       movingRootDeltaHeal,
-      Option.when(healedCodeCheck)(evmCodeStorage),
+      Option.when(healedCodeCheck)(stateIngest.bytecode),
       walkLocalOnly
     )
     stub(ChildStopped.Healing, healingInbox)

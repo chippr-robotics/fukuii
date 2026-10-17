@@ -8,7 +8,6 @@ import org.bouncycastle.util.encoders.Hex
 
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController
 import com.chipprbots.ethereum.blockchain.sync.snap.StorageScheme
-import com.chipprbots.ethereum.blockchain.sync.snap.actors.*
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.TrieNodeHealingCoordinator.ActiveRequest
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.TrieNodeHealingCoordinator.HealingCheckCompletion
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.TrieNodeHealingCoordinator.HealingEntry
@@ -51,8 +50,8 @@ private[actors] trait HealResponseProcessingState:
   def prunedEnabled: Boolean
   def pendingSubtreeRecords: mutable.Set[ByteString]
 
-/** What `reverifyCurrentRoot` calls in the core: `isComplete`, nothing pending and nothing in flight (C-H5's member,
-  * still in the core).
+/** What `reverifyCurrentRoot` calls: `isComplete`, nothing pending and nothing in flight. `HealResponseProcessing`
+  * provides it (spec 016 C-H5).
   */
 private[actors] trait HealCompletionApi:
   def isComplete: Boolean
@@ -68,10 +67,11 @@ private[actors] trait HealCompletionApi:
   * coordinator core keeps the behaviour arms that call it (`healResponseArms`, the lifecycle arms, the completion
   * gate).
   */
-private[actors] trait HealResponseProcessing:
-  this: TrieNodeHealingCoordinatorImpl =>
+private[actors] trait HealResponseProcessing extends HealCompletionApi:
+  this: HealResponseProcessingState & TrieNodeHealingEnv & FrontierGaugesApi & FrontierWriteApi & HealDispatchApi &
+    PathVerifiedRlpApi =>
 
-  // codeHashes of account leaves healed in the response being processed whose bytecode is not in `evmCodeStorage`.
+  // codeHashes of account leaves healed in the response being processed whose bytecode is not in `stateIngest.bytecode`.
   // Filled by discoverMissingChildren, drained and sent to the controller once per response.
   private lazy val healedCodeHashesThisResponse: mutable.LinkedHashSet[ByteString] = mutable.LinkedHashSet.empty
 
@@ -294,7 +294,7 @@ private[actors] trait HealResponseProcessing:
   private def recordHealedCodeHash(account: Account): Unit =
     if healedCodeCheck then
       val codeHash = account.codeHash
-      if codeHash != Account.EmptyCodeHash && evmCodeStorage.get(codeHash.value).isEmpty then
+      if codeHash != Account.EmptyCodeHash && stateIngest.bytecode.get(codeHash.value).isEmpty then
         healedCodeHashesThisResponse += codeHash.value
 
   private def flushHealedCodeHashes(): Unit =
